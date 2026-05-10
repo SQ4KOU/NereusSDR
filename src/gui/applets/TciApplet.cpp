@@ -506,16 +506,23 @@ void TciApplet::onClientDisconnected(QWebSocket* socket)
 
 void TciApplet::onEnableToggled(bool on)
 {
-    if (!on || !m_server) {
+    if (!m_server) {
         return;
     }
-    // Read the persisted port preference; default 50001.
-    const quint16 port = static_cast<quint16>(
-        AppSettings::instance()
-            .value(QStringLiteral("TciServerPort"), QStringLiteral("50001"))
-            .toString().toUShort());
-    if (!m_server->start(port)) {
-        qCWarning(lcTci) << "TciApplet: failed to start TCI server on port" << port;
+    // Phase 3J-1 review P2.4: handle both enable (on=true → start) and
+    // disable (on=false → stop) so the TciApplet enable button is a
+    // true live toggle — not a one-way latch.
+    if (on) {
+        // Read the persisted port preference; default 50001.
+        const quint16 port = static_cast<quint16>(
+            AppSettings::instance()
+                .value(QStringLiteral("TciServerPort"), QStringLiteral("50001"))
+                .toString().toUShort());
+        if (!m_server->start(port)) {
+            qCWarning(lcTci) << "TciApplet: failed to start TCI server on port" << port;
+        }
+    } else {
+        m_server->stop();
     }
 }
 

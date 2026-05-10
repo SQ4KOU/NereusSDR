@@ -445,7 +445,15 @@ void SetupDialog::buildTree()
     // ── CAT & Network ─────────────────────────────────────────────────────────
     QTreeWidgetItem* cat = addCategory("CAT & Network");
     add(cat, "Serial Ports", new CatSerialPortsPage);
-    add(cat, "TCI Server",   new CatTciServerPage);
+    {
+        // Phase 3J-1 review P2.4: forward CatTciServerPage::tciServerEnableToggled
+        // through SetupDialog so wireSetupDialog() can connect it to the live
+        // TciServer::start() / stop() path in MainWindow.
+        auto* tciPage = new CatTciServerPage;
+        connect(tciPage, &CatTciServerPage::tciServerEnableToggled,
+                this,    &SetupDialog::tciServerEnableToggled);
+        add(cat, "TCI Server", tciPage);
+    }
     add(cat, "TCP/IP CAT",   new CatTcpIpPage);
     add(cat, "MIDI Control", new CatMidiControlPage);
 

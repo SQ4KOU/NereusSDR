@@ -143,9 +143,15 @@ void CatTciServerPage::buildServerGroup()
     m_enableCheck->setChecked(
         s.value(QStringLiteral("TciServerEnabled"), QStringLiteral("False")).toString()
         == QStringLiteral("True"));
-    connect(m_enableCheck, &QCheckBox::toggled, this, [](bool on) {
+    connect(m_enableCheck, &QCheckBox::toggled, this, [this](bool on) {
         AppSettings::instance().setValue(QStringLiteral("TciServerEnabled"),
                                           on ? QStringLiteral("True") : QStringLiteral("False"));
+        // Phase 3J-1 review P2.4: emit signal so MainWindow can live-wire
+        // start/stop without requiring a disconnect/reconnect cycle.  The port
+        // comes from the current spinbox value (already persisted in AppSettings
+        // by the spinbox valueChanged handler above).
+        const quint16 port = static_cast<quint16>(m_portSpin->value());
+        emit tciServerEnableToggled(on, port);
     });
     form->addRow(QString(), m_enableCheck);
 

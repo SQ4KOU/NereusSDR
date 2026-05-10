@@ -3863,6 +3863,28 @@ void MainWindow::wireSetupDialog(SetupDialog* dialog)
     // Task 3.6: ANAN-8000DLE volts/amps live-apply.
     connect(dialog, &SetupDialog::anan8000DleVoltsAmpsChanged,
             this,   &MainWindow::setVoltsAmpsVisible);
+
+#ifdef HAVE_WEBSOCKETS
+    // Phase 3J-1 review P2.4: live-wire Setup → Network → TCI Server enable
+    // checkbox to the running TciServer.  Previously the checkbox only wrote
+    // AppSettings; the server required a manual restart to pick up the change.
+    // Now toggling the checkbox immediately starts or stops the server.
+    //
+    // Auto-connect (QueuedConnection for cross-dialog safety): when `on` is
+    // true, start on the persisted port; when false, stop.  If the server is
+    // already in the requested state the calls are no-ops (double-start
+    // returns false; stop() on a non-running server returns immediately).
+    if (m_tciServer) {
+        connect(dialog, &SetupDialog::tciServerEnableToggled,
+                this, [this](bool on, quint16 port) {
+                    if (on) {
+                        m_tciServer->start(port);
+                    } else {
+                        m_tciServer->stop();
+                    }
+                });
+    }
+#endif // HAVE_WEBSOCKETS
 }
 
 void MainWindow::wireSliceToSpectrum()

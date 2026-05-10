@@ -44,6 +44,11 @@ signals:
     // on the TxApplet.
     void cfcDialogRequested();
 
+    // Phase 3J-1 review P2.4: forwarded from CatTciServerPage — enable checkbox
+    // toggled.  MainWindow connects this to call TciServer::start() / stop()
+    // so the server goes live immediately without a disconnect/reconnect cycle.
+    void tciServerEnableToggled(bool on, quint16 port);
+
     // Task 3.6: forwarded from GeneralOptionsPage — CPU meter rate spinbox.
     // MainWindow::setCpuTimerIntervalHz() is the handler.
     void cpuMeterRateChanged(int hz);

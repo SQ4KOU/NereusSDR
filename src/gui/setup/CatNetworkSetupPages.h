@@ -48,6 +48,17 @@ class CatTciServerPage : public SetupPage {
 public:
     explicit CatTciServerPage(QWidget* parent = nullptr);
 
+signals:
+    // Emitted when the operator toggles the Enable TCI Server checkbox.
+    // Phase 3J-1 review P2.4: MainWindow::wireSetupDialog connects this to
+    // the live start/stop path so the server starts or stops immediately
+    // without a disconnect/reconnect cycle.
+    // `on`   — true: start the server on the persisted port.
+    // `port` — the port currently shown in the Port spinbox (persisted at emit
+    //          time; MainWindow should re-read AppSettings or accept the value
+    //          directly to avoid a race with a concurrent port-spinbox change).
+    void tciServerEnableToggled(bool on, quint16 port);
+
 private:
     // Group 1: Server
     QCheckBox*   m_enableCheck{nullptr};
