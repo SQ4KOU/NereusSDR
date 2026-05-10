@@ -1,5 +1,41 @@
 # Changelog
 
+## [Unreleased] — Phase 3J-1 TCI Server (Thetis port)
+
+### Added
+- TCI WebSocket server on port 50001 (loopback bind, Thetis-faithful default)
+- 6 group boxes in Setup → Network → TCI Server: Server / Compatibility / IQ Stream / Audio Stream / Sensors / VFO Quirks
+- 17 AppSettings keys (TciServerEnabled, TciServerPort, plus 12 compat/quirk flags, plus 3 audio config)
+- TciApplet (Container #0 stack): header row with status dot + port + client count + Setup button; Slice A row + TX row with level meters and `[-60..0]` dB gain sliders; footer with Show clients link
+- ClientChainApplet (Container #0 stack): per-client rows with TX badge, peer/name, subscription badges, last command, drop counter, disconnect button; 1 Hz auto-refresh
+- Bottom status-bar `m_tciIndicator` live-wired with 4 states (Off / On / On·N / On·N ▸TX) per design doc §8.4; click opens Setup
+- Tools → TCI Server menu action enabled
+- View → Network Applets submenu with TCI Server + TCI Clients toggles (default-checked)
+- Init burst (`sendInitialisationData` + `sendInitialRadioState`) ports ~98 wire frames byte-for-byte
+- 62 dispatch commands across 8 families (VFO, mode/filter, TRX, DSP, audio stream, IQ stream, stubs, bespoke _ex)
+- Three-priority send queue per client (Urgent / Binary / Control) with bounded-depth oldest-drop
+- 3-layer VFO coalescer (Layer 3 implemented; Layers 1+2 subsumed by Qt event loop)
+- Audio binary RX pipeline with WDSP resampler lifecycle per-(client, slice)
+- TX audio binary inbound with single-client mutex
+- IQ binary stream pipeline with IQSwap + AlwaysStreamIQ flag effects
+- TciSensorManager with 4 wire formats + interval aggregation (RX/TX 200ms default timers)
+- 17 ctest binaries covering matrix runner, dispatch seam, lifecycle, init burst (smoke + typo divergence + golden), priority queues, VFO coalescer, sensor formats, audio + IQ roundtrip, TX mutex, resampler lifecycle, volume math, server lifecycle, server ping, silent-error invariant
+
+### Stubbed (placeholder for follow-up)
+- spot_add / spot_delete / spot_simulate_click / spot_clear — Phase 3J-2
+- cw_macros_speed_up/down / cw_msg — Phase 3M-2 (CW TX)
+- shutdown_ex (security: no auto-exit without operator confirmation)
+- audio_start / audio_stop (Phase 16+ resampler lifecycle landed in Task 16.3.b)
+- iq_start / iq_stop (Phase 18 per-client subscription landed)
+
+### Known divergences from Thetis (design doc §7)
+1. **Init burst typo fix** at TCIServer.cs:2374-2375: Thetis sends duplicate `if:1,1,...;` × 2 (copy-paste bug). NereusSDR emits the intended `if:1,0,...; if:1,1,...;` cross-product.
+2. **Qt6 QWebSocketServer** replaces Thetis's hand-rolled RFC 6455 framing at TCIServer.cs:1499-1596 + 2976-3072.
+3. **Slice A/B/C/D in UI; trx:N in wire format.** Mapping at TciProtocol layer boundary.
+4. **UTF-8 outbound text** on all platforms. Diverges from Thetis-on-Windows `Encoding.Default` (Windows-1252). ASCII content (>99% of wire) is byte-identical.
+5. **Single-class ClientChainApplet** (vs AetherSDR's split into ClientChainApplet + ClientChainWidget). Reduces test surface.
+6. **MinimumRequiredRxSensorInterval aggregation surfaced** in Setup UI (Thetis aggregates internally without UI). Operator transparency.
+
 ## [0.4.1-rc3] - 2026-05-09
 
 > [!NOTE]
