@@ -474,6 +474,63 @@ void TciServer::onNewConnection()
         // (ws->request() is available after the WebSocket handshake; the
         // User-Agent HTTP header maps to session->userAgent).
         session->connectedAt.start();
+
+        // Phase 26 review finding #3: apply AudioTciPage AppSettings defaults
+        // at connect time so that a client that never sends explicit audio
+        // config commands inherits the operator's configured preferences.
+        //
+        // Each key can still be overridden by the client sending an explicit
+        // audio_samplerate:N; / audio_stream_* command (Finding #1 interceptor
+        // runs after this and wins).
+        //
+        // TciSliceA_OutputSampleRate / TciSliceB_OutputSampleRate: per-slice
+        // defaults.  Phase 3J-1 serves only rx=0 (Slice A), so apply Slice A
+        // rate regardless of which slice the client ultimately requests.
+        // Slice B rate applied when the session subscribes to rx=1 (Phase 3F+).
+        //
+        // TciAudioStreamSampleType: stored as "Int16"/"Int24"/"Int32"/"Float32"
+        // (capitalised, per AudioTciPage combo items); convert to the int enum
+        // matching TciBinaryFrame header format (0=int16, 1=int24, 2=int32, 3=float32).
+        //
+        // TciAudioStreamSamples: shared key with CatTciServerPage; range [100..2048].
+        //
+        // TciTxStreamBufferingMs: TX-side buffering; stored in the session for
+        // future TxChannel feed latency tuning.  No TciClientSession field for
+        // TX buffering yet — documented here for Phase 3J-2 wiring.
+        {
+            auto& s = AppSettings::instance();
+
+            // Slice A output sample rate.
+            const int sliceARateSaved = s.value(
+                QStringLiteral("TciSliceA_OutputSampleRate"),
+                QStringLiteral("48000")).toString().toInt();
+            if (sliceARateSaved > 0) {
+                session->audioSampleRate = sliceARateSaved;
+            }
+
+            // Audio stream sample type.
+            const QString typeSaved = s.value(
+                QStringLiteral("TciAudioStreamSampleType"),
+                QStringLiteral("Float32")).toString().toLower();
+            if (typeSaved == QStringLiteral("int16"))       { session->audioSampleType = 0; }
+            else if (typeSaved == QStringLiteral("int24"))  { session->audioSampleType = 1; }
+            else if (typeSaved == QStringLiteral("int32"))  { session->audioSampleType = 2; }
+            else                                             { session->audioSampleType = 3; }  // float32 default
+
+            // Audio stream block size.
+            const int samplesSaved = s.value(
+                QStringLiteral("TciAudioStreamSamples"), 2048).toInt();
+            if (samplesSaved >= 100 && samplesSaved <= 2048) {
+                session->audioStreamSamples = samplesSaved;
+            }
+
+            // TciTxStreamBufferingMs — no TciClientSession field yet; log only.
+            // TODO Phase 3J-2: add txStreamBufferingMs to TciClientSession and
+            // wire into the TX audio drain path so the operator-configured
+            // pre-buffer is honored.
+            (void)s.value(QStringLiteral("TciTxStreamBufferingMs"), 50).toInt();
+        }
+
         m_clients.insert(ws, session);
 
         connect(ws, &QWebSocket::textMessageReceived,

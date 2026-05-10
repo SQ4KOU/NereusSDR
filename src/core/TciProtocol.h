@@ -51,6 +51,17 @@ namespace NereusSDR {
 // | TciUseRx1VfoaForRx2Vfoa              | bool   | False   | VFO quirk
 // | TciCopyRx2VfobToVfoa                 | bool   | False   | VFO quirk
 //
+// Additional keys introduced by AudioTciPage (Phase 3J-1 Task 2.7):
+// | TciSliceA_OutputSampleRate           | int    | 48000   | Slice A default audio rate (applied at connect-time)
+// | TciSliceB_OutputSampleRate           | int    | 48000   | Slice B default audio rate (applied at connect-time for rx=1)
+// | TciAudioStreamSampleType             | string | Float32 | Default sample type (Int16/Int24/Int32/Float32)
+// | TciTxStreamBufferingMs               | int    | 50      | TX pre-buffer latency [10..200 ms] — Phase 3J-2 effect-site
+//
+// TciSliceA/B_OutputSampleRate and TciAudioStreamSampleType are applied to
+// each new TciClientSession in TciServer::onNewConnection() and can be
+// overridden per-client via explicit audio_samplerate: / audio_stream_*
+// commands (TciServer interceptor in onTextMessageReceived, finding #1).
+//
 // Phases 5+ wire these into compat-flag handling. Phase 20 surfaces them in
 // Setup → Network → TCI Server. See design doc Section 10.
 // ─────────────────────────────────────────────────────────────────────────
