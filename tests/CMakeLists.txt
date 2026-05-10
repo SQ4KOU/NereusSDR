@@ -4000,3 +4000,10 @@ target_compile_definitions(tst_tci_matrix_runner PRIVATE
 # blind: no Qt6WebSockets dependency.
 # TestMockRadioModel.cpp provides the moc vtable for the QObject-derived mock.
 nereus_add_test(tst_tci_dispatch_seam TestMockRadioModel.cpp)
+
+# ── Phase 3J-1 Task 4.1: TciProtocol init burst smoke ──────────────────────
+# Verifies buildInitBurst() returns non-empty, first entry starts with
+# "protocol:", and last entry equals "ready;". Strict byte-for-byte assertions
+# live in Phase 4 Task 4.3 golden file. Transport-blind: no Qt6WebSockets
+# dependency.
+nereus_add_test(tst_tci_init_burst_smoke TestMockRadioModel.cpp)

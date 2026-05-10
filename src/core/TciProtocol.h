@@ -95,6 +95,11 @@ private:
     // Phase 5+ adds individual cases via the matrix runner.
     QString handleQueryCommand(const QString& name);
 
+    // From Thetis TCIServer.cs:2546 [v2.10.3.13] — sendInitialRadioState body.
+    // Phase 4 Task 4.2 fills the body (~75-87 wire lines per Sweep D).
+    // Returns empty list for now so buildInitBurst() can call without conditional.
+    QStringList buildInitialRadioStateLines() const;
+
     QObject* m_radio{nullptr};
     QStringList m_pendingNotifications;
     int m_setDispatchCount{0};

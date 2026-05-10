@@ -15,6 +15,7 @@
 //                AI-assisted transformation via Anthropic Claude Code.
 
 #include "TciProtocol.h"
+#include "AppSettings.h"
 
 namespace NereusSDR {
 
@@ -76,10 +77,80 @@ QString TciProtocol::takePendingNotification()
     return m_pendingNotifications.takeFirst();
 }
 
+// From Thetis TCIServer.cs:2512-2552 [v2.10.3.13] — sendInitialisationData
+// emits 8 wrapper lines + buildInitialRadioState() + ready;.
 QStringList TciProtocol::buildInitBurst() const
 {
-    // Phase 4 Task 4.1 replaces with the 8-line wrapper from
-    // Thetis TCIServer.cs:2512-2552 [v2.10.3.13].
+    QStringList lines;
+    auto& s = AppSettings::instance();
+
+    // From Thetis TCIServer.cs:2515-2520 [v2.10.3.13]
+    //MW0LGE_22 emulate ee3 protocol
+    const bool emulateEsdr3 = s.value(QStringLiteral("TciEmulateExpertSDR3Protocol"),
+                                      QStringLiteral("False")).toString()
+                              == QStringLiteral("True");
+    const QString protocolName = emulateEsdr3
+        ? QStringLiteral("ExpertSDR3")
+        : QStringLiteral("Thetis");
+    lines << QStringLiteral("protocol:%1,2.0;").arg(protocolName);
+
+    // From Thetis TCIServer.cs:2523-2528 [v2.10.3.13]
+    //MW0LGE_22 emulate sunsdr
+    const bool emulateSunSdr = s.value(QStringLiteral("TciEmulateSunSDR2Pro"),
+                                       QStringLiteral("False")).toString()
+                               == QStringLiteral("True");
+    // NereusSDR divergence: HardwareSpecific.Model has no NereusSDR equivalent;
+    // hardcode "NereusSDR" until Phase 4 Task 4.2 wires RadioModel state.
+    const QString deviceName = emulateSunSdr
+        ? QStringLiteral("SunSDR2PRO")
+        : QStringLiteral("NereusSDR");
+    lines << QStringLiteral("device:%1;").arg(deviceName);
+
+    // From Thetis TCIServer.cs:2529 [v2.10.3.13]
+    lines << QStringLiteral("receive_only:false;");
+
+    // From Thetis TCIServer.cs:2530 [v2.10.3.13] — locked at 2 per design doc §1.2;
+    // Slice C/D are NereusSDR-internal and not exposed via TCI in Phase 3J-1.
+    lines << QStringLiteral("trx_count:2;");
+
+    // From Thetis TCIServer.cs:2531 [v2.10.3.13]
+    lines << QStringLiteral("channels_count:2;");
+
+    // From Thetis TCIServer.cs:2533 [v2.10.3.13] — sendVFOLimits(0, MaxFreq*1e6).
+    // Phase 4 Task 4.1 hardcodes 64 MHz; Task 4.2 wires RadioModel state.
+    lines << QStringLiteral("vfo_limits:0,64000000;");
+
+    // From Thetis TCIServer.cs:2535-2536 [v2.10.3.13] — sendIFLimits(-halfSample, halfSample).
+    // halfSample = SampleRateRX1 / 2. Phase 4 Task 4.1 hardcodes 96000 (192 kHz / 2);
+    // Task 4.2 wires RadioModel state.
+    lines << QStringLiteral("if_limits:-96000,96000;");
+
+    // From Thetis TCIServer.cs:2538-2544 [v2.10.3.13]
+    // MW0LGE_22b modulations are upper in sun, so replicate
+    const bool cwluBecomesCw = s.value(QStringLiteral("TciCwluBecomesCw"),
+                                       QStringLiteral("False")).toString()
+                               == QStringLiteral("True");
+    const QString cwSuffix = cwluBecomesCw
+        ? QStringLiteral("cwl,cwu,cw")
+        : QStringLiteral("cwl,cwu");
+    const QString modList = QStringLiteral("am,sam,dsb,lsb,usb,nfm,fm,digl,digu,%1")
+                                .arg(cwSuffix).toUpper();
+    lines << QStringLiteral("modulations_list:%1;").arg(modList);
+
+    // From Thetis TCIServer.cs:2546 [v2.10.3.13] — sendInitialRadioState body.
+    // Phase 4 Task 4.2 fills the body (~75-87 wire lines per Sweep D).
+    lines.append(buildInitialRadioStateLines());
+
+    // From Thetis TCIServer.cs:2548 [v2.10.3.13]
+    lines << QStringLiteral("ready;");
+
+    return lines;
+}
+
+// Phase 4 Task 4.2 implements the body. Returns empty list for now so
+// buildInitBurst can call this without conditional logic.
+QStringList TciProtocol::buildInitialRadioStateLines() const
+{
     return {};
 }
 
