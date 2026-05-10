@@ -438,6 +438,8 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
 // From Thetis TCIServer.cs:2334-2348 [v2.10.3.13] — sendDDS format string.
 QString TciProtocol::buildDdsLine(int rx, qint64 hz)
 {
+    // ddsFreq += GetDSPcwPitchShiftToZero(rx+1); //MW0LGE [2.9.0.7]
+    //   [original inline comment from TCIServer.cs:2344 — cw pitch shift deferred to Phase 6+]
     return QStringLiteral("dds:%1,%2;").arg(rx).arg(hz);
 }
 
@@ -1240,7 +1242,7 @@ QString TciProtocol::handleModulationCommand(const QStringList& args)
     if (args.size() >= 2) {
         // Set path — canonicalize mode string.
         // From Thetis TCIServer.cs:3847-3911 [v2.10.3.13] — switch on args[1].ToLower().
-        //MW0LGE change if needed [2.10.3.6]MW0LGE fixes #365  [original inline comment from TCIServer.cs:3869]
+        //change if needed [2.10.3.6]MW0LGE fixes #365  [original inline comment from TCIServer.cs:3869]
         // Note: nfm and fm are aliases for DSPMode.FM (TCIServer.cs:3865-3866).
         // Unknown modes map to DSPMode.FIRST, which is treated as a no-op
         // (TCIServer.cs:3909-3913 [v2.10.3.13] — silent drop).
