@@ -16,6 +16,7 @@
 
 #include "TciProtocol.h"
 #include "AppSettings.h"
+#include "LogCategories.h"
 #include "TciVolume.h"
 
 namespace NereusSDR {
@@ -949,7 +950,20 @@ QString TciProtocol::handleSetCommand(const QString& name, const QStringList& ar
     // From Thetis TCIServer.cs:5070 [v2.10.3.13] — mon_volume case in set switch.
     if (name == QStringLiteral("mon_volume"))                { return handleMonVolumeCommand(args); }
 
-    // Phase 11+ adds more cases.
+    // Phase 12: Spot + CW stubs.
+    // From Thetis TCIServer.cs:5049 [v2.10.3.13] — spot case in set switch.
+    if (name == QStringLiteral("spot"))                   { return handleSpotCommand(args); }
+    // From Thetis TCIServer.cs:5052 [v2.10.3.13] — spot_delete case in set switch.
+    if (name == QStringLiteral("spot_delete"))            { return handleSpotDeleteCommand(args); }
+    // From Thetis TCIServer.cs:5082 [v2.10.3.13] — spot_simulate_click case in set switch.
+    if (name == QStringLiteral("spot_simulate_click"))    { return handleSpotSimulateClickCommand(args); }
+    // From Thetis TCIServer.cs:4989 [v2.10.3.13] — cw_macros_speed_up case in set switch.
+    if (name == QStringLiteral("cw_macros_speed_up"))     { return handleCwMacrosSpeedUpCommand(args); }
+    // From Thetis TCIServer.cs:4992 [v2.10.3.13] — cw_macros_speed_down case in set switch.
+    if (name == QStringLiteral("cw_macros_speed_down"))   { return handleCwMacrosSpeedDownCommand(args); }
+    // From Thetis TCIServer.cs:5001 [v2.10.3.13] — cw_msg case in set switch.
+    if (name == QStringLiteral("cw_msg"))                 { return handleCwMsgCommand(args); }
+
     return {};
 }
 
@@ -985,6 +999,12 @@ QString TciProtocol::handleQueryCommand(const QString& name)
     // From Thetis TCIServer.cs:5154 [v2.10.3.13] — mon_volume query case.
     if (name == QStringLiteral("mon_volume")) {
         return handleMonVolumeQueryCommand();
+    }
+
+    // Phase 12: Spot + CW stubs (query side).
+    // From Thetis TCIServer.cs:5184 [v2.10.3.13] — spot_clear case in 1-arg query switch.
+    if (name == QStringLiteral("spot_clear")) {
+        return handleSpotClearCommand();
     }
 
     return {};
@@ -2329,6 +2349,67 @@ QString TciProtocol::handleIqStartStopCommand(const QStringList& args, bool enab
     (void)args.at(0).trimmed().toInt(&ok);
     // Intentionally no notification — per-client subscription model deferred to Phase 18.
     (void)enable;
+    return {};
+}
+
+// ── Phase 12: Spot + CW command stubs ──────────────────────────────────────
+// All stubs log at lcTci info level and return empty. Real handlers land
+// post-Phase 3J-1: spot_* in Phase 3J-2 (Spots epic); cw_macros_speed_up/down +
+// cw_msg in Phase 3M-2 (CW TX epic).
+
+// From Thetis TCIServer.cs:5049 [v2.10.3.13] — spot case.
+// Phase 12 STUB: log + return empty. Real handler lands in Phase 3J-2.
+QString TciProtocol::handleSpotCommand(const QStringList& args)
+{
+    qCInfo(lcTci) << "TCI stub: spot received with" << args.size() << "args (Phase 12 stub)";
+    return {};
+}
+
+// From Thetis TCIServer.cs:5052 [v2.10.3.13] — spot_delete case.
+// Phase 12 STUB: log + return empty. Real handler lands in Phase 3J-2.
+QString TciProtocol::handleSpotDeleteCommand(const QStringList& args)
+{
+    qCInfo(lcTci) << "TCI stub: spot_delete received with" << args.size() << "args (Phase 12 stub)";
+    return {};
+}
+
+// From Thetis TCIServer.cs:5082 [v2.10.3.13] — spot_simulate_click case.
+// Phase 12 STUB: log + return empty. Real handler lands in Phase 3J-2.
+QString TciProtocol::handleSpotSimulateClickCommand(const QStringList& args)
+{
+    qCInfo(lcTci) << "TCI stub: spot_simulate_click received with" << args.size() << "args (Phase 12 stub)";
+    return {};
+}
+
+// From Thetis TCIServer.cs:5184 [v2.10.3.13] — spot_clear case in 1-arg query switch.
+// Phase 12 STUB: log + return empty. Real handler lands in Phase 3J-2.
+QString TciProtocol::handleSpotClearCommand()
+{
+    qCInfo(lcTci) << "TCI stub: spot_clear received (Phase 12 stub)";
+    return {};
+}
+
+// From Thetis TCIServer.cs:4989 [v2.10.3.13] — cw_macros_speed_up case.
+// Phase 12 STUB: log + return empty. Real handler lands in Phase 3M-2.
+QString TciProtocol::handleCwMacrosSpeedUpCommand(const QStringList& args)
+{
+    qCInfo(lcTci) << "TCI stub: cw_macros_speed_up received with" << args.size() << "args (Phase 12 stub)";
+    return {};
+}
+
+// From Thetis TCIServer.cs:4992 [v2.10.3.13] — cw_macros_speed_down case.
+// Phase 12 STUB: log + return empty. Real handler lands in Phase 3M-2.
+QString TciProtocol::handleCwMacrosSpeedDownCommand(const QStringList& args)
+{
+    qCInfo(lcTci) << "TCI stub: cw_macros_speed_down received with" << args.size() << "args (Phase 12 stub)";
+    return {};
+}
+
+// From Thetis TCIServer.cs:5001 [v2.10.3.13] — cw_msg case.
+// Phase 12 STUB: log + return empty. Real handler lands in Phase 3M-2.
+QString TciProtocol::handleCwMsgCommand(const QStringList& args)
+{
+    qCInfo(lcTci) << "TCI stub: cw_msg received with" << args.size() << "args (Phase 12 stub)";
     return {};
 }
 

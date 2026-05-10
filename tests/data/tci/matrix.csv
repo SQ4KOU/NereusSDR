@@ -71,3 +71,10 @@ iq_samplerate_set_192000,iq_samplerate:192000;,,iq_samplerate:192000;,TCIServer.
 iq_samplerate_query_after_set,iq_samplerate:192000;;iq_samplerate;,iq_samplerate:192000;,,TCIServer.cs:5175 [v2.10.3.13],1-arg query case in query switch; sendIQSampleRate(getPublishedIQSampleRate()) [v2.10.3.13]; uses ;; chain
 iq_start_stub,iq_start:0;,,,TCIServer.cs:5022 [v2.10.3.13],STUB: per-client IQ stream subscription deferred to Phase 18 (binary IQ pipeline); no notification emitted (silent but valid)
 iq_stop_stub,iq_stop:0;,,,TCIServer.cs:5025 [v2.10.3.13],STUB: matched iq_start stub; no notification emitted (silent but valid)
+spot_stub,spot:KG4VCF\,14250000;,,,TCIServer.cs:5049 [v2.10.3.13],STUB; Phase 3J-2 wires real spot add
+spot_delete_stub,spot_delete:KG4VCF;,,,TCIServer.cs:5052 [v2.10.3.13],STUB; Phase 3J-2 wires real spot delete
+spot_simulate_click_stub,spot_simulate_click:KG4VCF\,14250000;,,,TCIServer.cs:5082 [v2.10.3.13],STUB; Phase 3J-2 wires real click broadcast
+spot_clear_stub,spot_clear;,,,TCIServer.cs:5184 [v2.10.3.13],STUB; 1-arg query in query switch; Phase 3J-2 wires real clear
+cw_macros_speed_up_stub,cw_macros_speed_up:1;,,,TCIServer.cs:4989 [v2.10.3.13],STUB; Phase 3M-2 wires real keyer speed
+cw_macros_speed_down_stub,cw_macros_speed_down:1;,,,TCIServer.cs:4992 [v2.10.3.13],STUB; Phase 3M-2 wires real keyer speed
+cw_msg_stub,cw_msg:CQ DE KG4VCF;,,,TCIServer.cs:5001 [v2.10.3.13],STUB; Phase 3M-2 wires real CW message send

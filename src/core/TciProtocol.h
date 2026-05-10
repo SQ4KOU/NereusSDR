@@ -234,6 +234,23 @@ private:
     //       directly without the Thetis pan-slider calibration (deferred to Phase 20).
     QString handleRxBalanceCommand(const QStringList& args);
 
+    // ── Phase 12: Spot + CW stubs ────────────────────────────────────────────
+    // All return empty + log at lcTci info; real handlers in Phase 3J-2/3M-2.
+    // From Thetis TCIServer.cs:5049 [v2.10.3.13] — spot case in set switch.
+    QString handleSpotCommand(const QStringList& args);
+    // From Thetis TCIServer.cs:5052 [v2.10.3.13] — spot_delete case in set switch.
+    QString handleSpotDeleteCommand(const QStringList& args);
+    // From Thetis TCIServer.cs:5082 [v2.10.3.13] — spot_simulate_click case in set switch.
+    QString handleSpotSimulateClickCommand(const QStringList& args);
+    // From Thetis TCIServer.cs:5184 [v2.10.3.13] — spot_clear case in 1-arg query switch.
+    QString handleSpotClearCommand();
+    // From Thetis TCIServer.cs:4989 [v2.10.3.13] — cw_macros_speed_up case in set switch.
+    QString handleCwMacrosSpeedUpCommand(const QStringList& args);
+    // From Thetis TCIServer.cs:4992 [v2.10.3.13] — cw_macros_speed_down case in set switch.
+    QString handleCwMacrosSpeedDownCommand(const QStringList& args);
+    // From Thetis TCIServer.cs:5001 [v2.10.3.13] — cw_msg case in set switch.
+    QString handleCwMsgCommand(const QStringList& args);
+
     // ── IQ stream family handlers (Phase 11) ─────────────────────────────────
     // From Thetis TCIServer.cs:5016-5026 [v2.10.3.13] — set-switch IQ cases.
     // Plan corrections: "iq_stream" is not a real Thetis case (skipped);
