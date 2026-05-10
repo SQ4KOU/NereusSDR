@@ -21,6 +21,7 @@
 #include "LogCategories.h"
 
 #include <QHostAddress>
+#include <QTimer>
 #include <QWebSocket>
 #include <QWebSocketServer>
 #include <QDateTime>
@@ -40,6 +41,21 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
     : QObject(parent)
     , m_model(model)
 {
+    m_pingTimer = new QTimer(this);  // parented — destroyed with server
+
+    // From Thetis TCIServer.cs:6001-6003 [v2.10.3.13] — PingFrameTimer callback
+    // fires sendPingFrame("Thetis") for each connected client.
+    // Per Thetis TCIServer.cs:2650-2654 inline comment: ping frames are every 20s
+    // per RFC 6455; we don't expect a Pong back within any timeout — we use the
+    // ping itself to surface a dead socket via Qt's automatic write-error path.
+    connect(m_pingTimer, &QTimer::timeout, this, [this]() {
+        for (auto it = m_clients.begin(); it != m_clients.end(); ++it) {
+            // From Thetis TCIServer.cs:2784 [v2.10.3.13] — sendPingFrame enqueue.
+            // Qt6's QWebSocket::ping handles RFC 6455 frame construction and
+            // socket-state-based error suppression internally.
+            it.key()->ping(QByteArrayLiteral("Thetis"));
+        }
+    });
 }
 
 TciServer::~TciServer()
@@ -87,6 +103,15 @@ bool TciServer::start(quint16 port)
 
     qCInfo(lcTci) << "TciServer: listening on" << m_server->serverPort();
     emit serverStarted(m_server->serverPort());
+
+    // From Thetis TCIServer.cs:2650-2654 [v2.10.3.13] — 20s server-driven ping
+    // with payload "Thetis", per RFC 6455 keepalive semantics.
+    // Thetis: "per websock spec ping frames are every 20 seconds. Ideally we
+    // should receive something back within 20 seconds, but just use it to cause
+    // exception on socket if client has dc'ed without telling us with a
+    // disconnect frame."
+    // Detects dead clients via Qt's automatic close-on-write-error path.
+    m_pingTimer->start(m_pingIntervalMs);
     return true;
 }
 
@@ -98,6 +123,8 @@ bool TciServer::start(quint16 port)
 void TciServer::stop()
 {
     if (!m_server) { return; }
+
+    m_pingTimer->stop();
 
     // Disconnect all connected clients.  We disconnect the socket's signals
     // from this object first to prevent onClientDisconnected() re-entry during
@@ -217,6 +244,22 @@ void TciServer::onBinaryMessageReceived(const QByteArray& data)
     if (!ws) { return; }
     (void)data;
     // TODO Phase 17: dispatch to handleBinaryFrame for TX audio + IQ inbound.
+}
+
+// ── setPingIntervalMs() ──────────────────────────────────────────────────────
+//
+// From Thetis TCIServer.cs:2650 [v2.10.3.13] — Thetis hardcodes 20000ms
+// (1000 * 20); we expose a setter for testability.
+// If the ping timer is already running, apply the new interval immediately
+// so that test-driven calls to setPingIntervalMs(200) take effect without
+// requiring a stop/start cycle.
+
+void TciServer::setPingIntervalMs(int ms)
+{
+    m_pingIntervalMs = ms;
+    if (m_pingTimer->isActive()) {
+        m_pingTimer->setInterval(ms);
+    }
 }
 
 } // namespace NereusSDR

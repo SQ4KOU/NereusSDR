@@ -3974,6 +3974,10 @@ target_compile_definitions(tst_p1_bank16_pursignal_run PRIVATE NEREUS_BUILD_TEST
 if(Qt6WebSockets_FOUND)
     nereus_add_test(tst_tci_server_lifecycle)
     target_link_libraries(tst_tci_server_lifecycle PRIVATE Qt6::WebSockets)
+
+    # Phase 3J-1 Task 2.2: server-driven 20s ping with payload "Thetis"
+    nereus_add_test(tst_tci_server_ping)
+    target_link_libraries(tst_tci_server_ping PRIVATE Qt6::WebSockets)
 endif()
 
 # ── Phase 3J-1 Task 1.1: TCI verification matrix runner ──────────────────────

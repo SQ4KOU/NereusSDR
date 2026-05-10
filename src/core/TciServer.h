@@ -37,6 +37,7 @@
 
 class QWebSocketServer;
 class QWebSocket;
+class QTimer;
 
 namespace NereusSDR {
 
@@ -70,6 +71,12 @@ public:
     bool    isRunning()   const;
     quint16 port()        const;
     int     clientCount() const { return m_clients.size(); }
+
+    // Override the ping interval (milliseconds) for testability.
+    // Default 20000ms matches Thetis TCIServer.cs:2650 [v2.10.3.13] (1000 * 20).
+    // Call before or after start(); if the timer is already running the new
+    // interval takes effect immediately.
+    void setPingIntervalMs(int ms);
 
 signals:
     // Emitted after the server begins listening.  port is the actual bound port
@@ -105,6 +112,12 @@ private:
     RadioModel*        m_model;
     QWebSocketServer*  m_server{nullptr};
     QHash<QWebSocket*, std::shared_ptr<TciClientSession>> m_clients;
+
+    QTimer* m_pingTimer{nullptr};
+
+    // From Thetis TCIServer.cs:2650 [v2.10.3.13] — 1000 * 20 = 20000ms.
+    // Thetis comment: "per websock spec ping frames are every 20 seconds."
+    int m_pingIntervalMs{20000};
 };
 
 } // namespace NereusSDR
