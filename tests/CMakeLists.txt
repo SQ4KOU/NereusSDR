@@ -4007,3 +4007,9 @@ nereus_add_test(tst_tci_dispatch_seam TestMockRadioModel.cpp)
 # live in Phase 4 Task 4.3 golden file. Transport-blind: no Qt6WebSockets
 # dependency.
 nereus_add_test(tst_tci_init_burst_smoke TestMockRadioModel.cpp)
+
+# ── Phase 3J-1 Task 4.2: typo-divergence test ────────────────────────────────
+# Verifies that our init burst emits BOTH if:1,0,...; AND if:1,1,...; (the
+# intended cross-product), whereas Thetis TCIServer.cs:2374-2375 [v2.10.3.13]
+# mistakenly calls sendIF(1,1) twice. Exactly one if:1,1 line must be present.
+nereus_add_test(tst_tci_init_burst_typo_divergence TestMockRadioModel.cpp)
