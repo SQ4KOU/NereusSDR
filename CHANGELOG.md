@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.4.1-rc3] - 2026-05-09
+
+> [!NOTE]
+> **Bench diagnostic build.** rc2 bench data on the friend's ANAN-10E showed feedback ADC envelope still stuck at 0.0003 (-70 dBFS, ADC noise floor) despite the bank-16 ps_run fix landing. Either the friend isn't running rc2 (Gatekeeper / install path issue), or the chain `PS-A click → cmd-state → setPsEnabledWithFanOut → emit psEnabledChanged → cross-thread queued setPuresignalRun` is breaking somewhere we can't see without explicit logging. This rc adds two diagnostic log lines so the next bench bundle definitively answers both questions.
+
+### Added (diagnostic — will be removed before final v0.4.1)
+- **Startup banner.** `qInfo("NereusSDR <ver> (v0.4.1-rc3 bench - bank-16 ps_run flush + setPuresignalRun diagnostic) starting")` at the top of main.cpp's QApplication construction. Confirms which RC the bundle was captured from (system-info.json's appVersion only carries the base "0.4.1" without the rc tag).
+- **`P1RadioConnection::setPuresignalRun` entry log.** `qCInfo(lcConnection) << "P1: setPuresignalRun(" << run << ") previous=" << m_puresignalRun;` Confirms whether the cross-thread queued call from `PureSignal::psEnabledChanged` actually reaches the connection thread when the user clicks PS-A. If this log line is missing from the next bench bundle, the chain is broken at the signal/slot wiring; if it appears with `(true)`, the wire-byte path is working as coded and the remaining issue is on the radio side.
+
+## [0.4.1-rc2] - 2026-05-09
+
+> [!NOTE]
+> **Bench follow-up to rc1.** rc1 fixed the codec dispatch (PsccPump now activates correctly on Hermes-class boards) but exposed a second bug: `P1CodecStandard`'s bank 16 was a stub that wrote only C0 and zero-filled C1-C4. Thetis emits `puresignal_run` on TWO banks (bank 11 C2 bit 6 AND bank 16 C2 bit 6); without the bank-16 bit, the radio FPGA fires the bookkeeping but the PA-loopback physical path stays disengaged on every Hermes-class board. HL2's codec was fixed for this on 2026-05-07 (PR #212 follow-up) but the same fix never propagated to `P1CodecStandard`, which is why HL2 PS worked while Hermes / ANAN-10 / ANAN-10E / ANAN-100 / ANAN-100B all stayed broken even after rc1 landed.
+>
+> Bench data from a friend's ANAN-10E running rc1: `PsccPump` pumped 1361 blocks straight with TX envelope 0.20 (-14 dBFS) but feedback envelope stuck at 0.0003 (-70 dBFS — ADC noise floor); calcc reached `LCOLLECT` (state=4) but never converged because the FB ADC was deaf to the PA. After rc2, the FPGA loopback engages and the FB ADC sees the PA output at the expected -30 to -40 dB below TX.
+
+### Fixed
+- **`P1CodecStandard` bank 16 missing `puresignal_run` bit.** Pre-fix the bank-16 compose was `out[0] = C0base | 0x24; return;` — only C0 written. Now writes the full 5 bytes per Thetis `networkproto1.c:657-666 [v2.10.3.13]`: `C0 = 0x24`, `C1 = 0` (BPF2 not yet plumbed), `C2 = (puresignal_run & 1) << 6`, `C3 = 0`, `C4 = 0`. Mirrors the same fix that landed in `P1CodecHl2` on 2026-05-07. Affects every P1 board dispatching through `P1CodecStandard`: HERMES, ANAN10, ANAN100, ANAN10E, ANAN100B, AnvelinaPro3 in P1 mode.
+
+### Tests
+- `tst_p1_bank16_pursignal_run` (8 tests) — pins the `puresignal_run` bit emission on bank 16 C2 bit 6, for both Hermes-class and HermesII-class dispatch through `P1CodecStandard`. Includes no-clobber guards on other C2 bits.
+
+## [0.4.1-rc1] - 2026-05-09
+
+> [!NOTE]
+> **PureSignal hotfix.** PureSignal correction never landed on Hermes / ANAN-10 / ANAN-10E / ANAN-100 / ANAN-100B / AnvelinaPro3-on-P1 in v0.4.0 because `RadioModel` never pushed the connected hardware `HPSDRModel` into `ReceiverManager`, leaving the per-board codec dispatcher stuck on the safe Atlas default. The codec emitted an empty `PsDdcConfig`, `PsccPump` never activated, and calcc never received feedback samples. HL2 (P1CodecHl2) and G2 / G2-1K / 100D / 200D / 7000DLE / 8000DLE on P2 (P2CodecOrionMkII / P2CodecSaturn) were unaffected because their codecs ignore the model parameter — only `P1CodecStandard` and its `P1CodecAnvelinaPro3` subclass read it.
+>
+> **Step-att hygiene also fixed.** `setAttenuator` and `setPreamp` now flush bank 11 on the next EP2 frame (≤2.6 ms instead of ~22 ms worst case), matching peer-setter parity. `StepAttenuatorController` cross-thread connection pushes now marshal via `QMetaObject::invokeMethod` (closes a latent ARM64 thread-safety hazard).
+
+### Fixed
+- **PureSignal correction never lands on Hermes-class P1 boards.** `RadioModel::connectToRadio` now fans the connected `HPSDRModel` into both `TransmitModel` and `ReceiverManager` via the new `applyHpsdrModel()` helper. Without the `ReceiverManager` push, `P1CodecStandard::applyPureSignalDdcConfig` fell through its model switch's default branch and emitted an empty `PsDdcConfig` — keeping `PsccPump` inactive (its `wantActive` gate requires `ddcEnable` bit 0 set, `syncEnable` bit 1 set, and matching ps_rates — all zero in an empty cfg). Affects: HERMES, ANAN10, ANAN10E, ANAN100, ANAN100B, AnvelinaPro3 (P1 mode). HL2 / RedPitaya / G2 / G2-1K / 100D / 200D / 7000DLE / 8000DLE unaffected.
+- **`setAttenuator` + `setPreamp` missing bank-11 flush flag.** Both setters now set `m_forceBank11Next = true` before their state writes, matching the Codex P2 pattern used by every other bank-11 setter (`setMicTipRing` / `setMicBoost` / `setLineIn` / `setUserDigOut` / `setMicPTTDisabled` / `setPuresignalRun`). RX step-att and preamp UI changes now land within ≤2.6 ms instead of ~22 ms worst case.
+- **`StepAttenuatorController` cross-thread connection pushes.** The three RX-side `m_connection->setAttenuator()` / `m_connection->setPreamp()` call sites (in `setAttenuation`, `setPreampMode`, and `applyAttToHardware`) now marshal via `QMetaObject::invokeMethod` so connection-thread state mutations happen on the connection thread. Latent ARM64 thread-safety hazard; previously worked on x86/x64 by accident due to atomic aligned-int writes. The four TX-side (`setTxStepAttenuation`) sites already followed this pattern.
+
+### Tests
+- `tst_radio_model_hpsdr_model_push` (5 tests) — pins the `applyHpsdrModel` fan-out contract.
+- `tst_p1_step_att_flush_flag` (8 tests) — pins the bank-11 flush-flag pattern on `setAttenuator` + `setPreamp`.
+- `tst_step_att_cross_thread` (2 tests) — pins the `QMetaObject::invokeMethod` cross-thread marshalling on `setAttenuation` + `setPreampMode`.
+
 ## [0.4.0] - 2026-05-08
 
 > [!NOTE]

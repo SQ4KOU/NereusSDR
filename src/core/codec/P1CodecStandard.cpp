@@ -188,9 +188,39 @@ void P1CodecStandard::composeCcForBank(int bank, const CodecContext& ctx,
         // Source: networkproto1.c:650-654 [@501e3f5]
         case 15: out[0] = C0base | 0x22; return;
 
-        // Bank 16 — BPF2
-        // Source: networkproto1.c:658-665 [@501e3f5]
-        case 16: out[0] = C0base | 0x24; return;
+        // Bank 16 — BPF2 + xvtr_enable + puresignal_run
+        // Source: Thetis ChannelMaster/networkproto1.c:657-666 [v2.10.3.13]:
+        //   case 16: // BPF2
+        //       C0 |= 0x24;
+        //       C1 = (BPF2 HPF/LPF/preamp bits + rx2_gnd<<7);
+        //       C2 = (xvtr_enable & 1) | ((prn->puresignal_run & 1) << 6);
+        //       C3 = 0;
+        //       C4 = 0;
+        //
+        // v0.4.1-rc2 bench-fix (J.J. KG4VCF, 2026-05-09): pre-fix this was a
+        // stub (C0 only, C1-C4 = 0).  Bench evidence from a friend's ANAN-10E
+        // running v0.4.1-rc1 showed PsccPump pumping 1361 blocks straight
+        // with TX envelope 0.20 (-14 dBFS) but feedback envelope stuck at
+        // 0.0003 (-70 dBFS, ADC noise floor); calcc reached LCOLLECT
+        // (state=4) but never converged.  Thetis emits ps_run on BOTH bank
+        // 11 C2 bit 6 AND bank 16 C2 bit 6 — without the bank-16 bit, the
+        // FPGA fires the cmaster.cs bookkeeping but the PA-loopback
+        // physical path stays disengaged on Hermes-class boards.  Same fix
+        // landed in P1CodecHl2 on 2026-05-07 (PR #212 follow-up bench-fix);
+        // this is the parity propagation to P1CodecStandard.
+        //
+        // BPF2 (HL2's secondary BPF board / Hermes-class HPF2) state isn't
+        // tracked in NereusSDR yet — emit C1 = 0 (no BPF2 routing) until
+        // BPF2 support lands.  xvtr_enable is also not yet plumbed —
+        // emit 0.  Only the ps_run bit is wired here; that's what the
+        // FPGA needs for PS feedback to engage.
+        case 16:
+            out[0] = C0base | 0x24;
+            out[1] = 0;     // BPF2 filter bits — not plumbed in NereusSDR yet
+            out[2] = quint8(ctx.p1PuresignalRun ? 0x40 : 0x00);  // ps_run only
+            out[3] = 0;
+            out[4] = 0;
+            return;
 
         // Bank 17 — AnvelinaPro3 extra OC pins
         // Source: networkproto1.c:668-669 [@501e3f5] — "HPSDRModel_ANVELINAPRO3 only"
@@ -699,7 +729,7 @@ PsDdcConfig P1CodecStandard::psDdcConfigHermesIIClass(
             cfg.cntrl1      = 0;
             cfg.cntrl2      = 0;
         } else { // transmitting and PS is ON
-            // From console.cs:8510-8519 [v2.10.3.13]
+            // From console.cs:8520-8529 [v2.10.3.13]:
             //   else // transmitting and PS is ON
             //   {
             //       P1_DDCConfig = 5;
@@ -710,12 +740,44 @@ PsDdcConfig P1CodecStandard::psDdcConfigHermesIIClass(
             //       cntrl1 = 4;
             //       cntrl2 = 0;
             //   }
+            //
+            // rc4 bench-fix (J.J. KG4VCF, 2026-05-09): SOURCE SAYS cntrl1=4
+            // but WIRE OBSERVATION shows working Thetis on a friend's
+            // ANAN-10E (HermesII) sends cntrl1=0 every PS-MOX frame.
+            // Wire-pcap diff:
+            //   Thetis (Windows i7-6700K, working): bank-4 cntrl1 = {0: 1514}
+            //                                       ps_run on banks 11/16: always 1
+            //                                       mox=1 frames: 181 (TX active)
+            //                                       PS reduces IMD (works)
+            //   NereusSDR (cntrl1=4 during PS-MOX): bank-4 cntrl1 = {0: 1862, 4: 520}
+            //                                       PS predistortion ineffective
+            //                                       (calcc converges to phase-
+            //                                        rotation map, IMD unchanged)
+            //
+            // The friend's Thetis runtime sends cntrl1=0 despite
+            // v2.10.3.13 source at console.cs:8527 saying =4.  Likely
+            // explanation: SetADC_cntrl_P1 (console.cs:7336) reads
+            // rx_adc_ctrl_P1 separately and overwrites the cntrl1=4
+            // value UpdateDDCs() pushed.  We did not locate the exact
+            // Thetis override site; what is definitive is the byte the
+            // radio actually receives from working Thetis on this exact
+            // radio.
+            //
+            // HermesII has only ONE physical ADC.  cntrl1 is a 2-bits-
+            // per-DDC ADC selector for boards with multiple ADCs.  For
+            // HermesII the per-DDC ADC select is meaningless, but
+            // sending cntrl1=4 (bit 2 set) appears to interact with
+            // HermesII firmware in a way that confuses the PA-loopback
+            // path or the PS feedback DDC routing (observed: calcc
+            // produces a wrong-shape correction map; PS predistortion
+            // has no effect on TX spectrum).  Sending cntrl1=0 matches
+            // the working Thetis wire and is the empirical fix.
             cfg.p1DdcConfig = 5;
             cfg.ddcEnable   = DDC0;
             cfg.syncEnable  = DDC1;
             cfg.rate[0]     = ps_rate;
             cfg.rate[1]     = ps_rate;
-            cfg.cntrl1      = 4;
+            cfg.cntrl1      = 0;  // EMPIRICAL: matches working Thetis wire on ANAN-10E
             cfg.cntrl2      = 0;
 
             // Phase 3M-4 mi0bot audit: PS DDC pair indices for HermesII /

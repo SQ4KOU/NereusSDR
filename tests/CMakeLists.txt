@@ -3897,3 +3897,51 @@ nereus_add_test(tst_transmit_model_hl2_audio_volume)
 # Source: Thetis display.cs:5008/5210-5316/5453-5475/5512-5685/5725-5760
 #         [v2.10.3.13].
 nereus_add_test(tst_imd_overlay)
+
+# ── v0.4.1 hotfix: RadioModel pushes hardware HPSDRModel to ReceiverManager ──
+# 5 tests pinning the contract that RadioModel propagates m_hardwareProfile.
+# model into BOTH TransmitModel and ReceiverManager. The ReceiverManager
+# push was missing in v0.4.0 → P1CodecStandard saw the default HPSDR enum
+# value, fell through its model switch's default branch, and emitted an
+# empty PsDdcConfig — keeping PsccPump inactive on every Hermes / ANAN-10 /
+# ANAN-10E / ANAN-100 / ANAN-100B / AnvelinaPro3-on-P1. HL2 / G2 / Saturn
+# were unaffected because their codecs ignore the model parameter.
+nereus_add_test(tst_radio_model_hpsdr_model_push)
+target_compile_definitions(tst_radio_model_hpsdr_model_push PRIVATE NEREUS_BUILD_TESTS)
+
+# ── v0.4.1 hotfix: setAttenuator + setPreamp bank-11 flush-flag parity ───────
+# 7 tests pinning the Codex P2 flush-flag pattern on the two bank-11 setters
+# that v0.4.0 missed (peer setters setMicTipRing / setMicBoost / setLineIn /
+# setUserDigOut / setMicPTTDisabled / setPuresignalRun all set
+# m_forceBank11Next = true before their idempotent guards). Without the
+# flush flag, RX step-att and preamp changes wait up to ~22 ms for the next
+# natural bank-11 visit in the round-robin instead of landing within ≤2.6 ms.
+nereus_add_test(tst_p1_step_att_flush_flag)
+target_compile_definitions(tst_p1_step_att_flush_flag PRIVATE NEREUS_BUILD_TESTS)
+
+# ── v0.4.1 hotfix: StepAttenuatorController cross-thread connection pushes ───
+# 2 tests pinning the contract that controller.setAttenuation() and
+# controller.setPreampMode() marshal to the connection thread via
+# QMetaObject::invokeMethod, NOT direct method calls. Direct cross-thread
+# slot calls bypass Qt's queued dispatch, write connection-thread-owned
+# state from the wrong thread, and (on weaker memory models like ARM64)
+# can delay or pair the write with stale reads. The other invokeMethod
+# call sites in StepAttenuatorController (setTxStepAttenuation paths at
+# lines 364/469/535/557) already follow this pattern; this test pins
+# parity for the RX-side setters that v0.4.0 missed.
+nereus_add_test(tst_step_att_cross_thread)
+target_compile_definitions(tst_step_att_cross_thread PRIVATE NEREUS_BUILD_TESTS)
+
+# ── v0.4.1 hotfix: P1CodecStandard bank 16 ps_run wire (smoking gun) ─────────
+# 5 tests pinning that P1CodecStandard's bank 16 emits the puresignal_run bit
+# on C2 bit 6 — the same fix that landed in P1CodecHl2 on 2026-05-07 (PR #212
+# follow-up bench-fix) but never propagated to P1CodecStandard. Without this
+# bit, the radio FPGA fires the cmaster.cs bookkeeping but the PA-loopback
+# physical path stays disengaged on Hermes-class boards (Hermes / ANAN-10 /
+# ANAN-10E / ANAN-100 / ANAN-100B), causing calcc to reach LCOLLECT but never
+# see usable feedback samples. Verified against bench bundle from a friend's
+# ANAN-10E running v0.4.1-rc1: TX envelope 0.20 (-14 dBFS) but FB envelope
+# 0.0003 (-70 dBFS, ADC noise floor) for 1361 pumped blocks straight.
+# Thetis source: networkproto1.c:657-666 [v2.10.3.13] case 16.
+nereus_add_test(tst_p1_bank16_pursignal_run)
+target_compile_definitions(tst_p1_bank16_pursignal_run PRIVATE NEREUS_BUILD_TESTS)

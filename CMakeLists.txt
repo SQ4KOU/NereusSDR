@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.20)
-project(NereusSDR VERSION 0.4.0 LANGUAGES C CXX)
+project(NereusSDR VERSION 0.4.1 LANGUAGES C CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -132,6 +132,18 @@ endif()
 set(CMAKE_POLICY_VERSION_MINIMUM 3.5 CACHE STRING "Minimum CMake policy version for vendored subprojects" FORCE)
 
 FetchContent_MakeAvailable(portaudio)
+
+# PortAudio's Windows host APIs (pa_win_ds.c, pa_win_wasapi.c, pa_win_wdmks.c)
+# call windows.h's min / max macros directly. The global NOMINMAX above
+# strips those macros, leading to MinGW link errors against libportaudio.a.
+# Undef NOMINMAX for portaudio_static only — same surgical pattern used for
+# wdsp_static in third_party/wdsp/CMakeLists.txt.
+if(WIN32 AND TARGET portaudio_static)
+    target_compile_options(portaudio_static PRIVATE
+        $<$<C_COMPILER_ID:MSVC>:/UNOMINMAX>
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-UNOMINMAX>
+    )
+endif()
 
 # --------------------------------------------------------------------------
 # FFTW3 (for client-side FFT — spectrum and waterfall)

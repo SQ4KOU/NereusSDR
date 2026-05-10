@@ -88,6 +88,15 @@ if(WIN32)
         _CRT_SECURE_NO_WARNINGS
         _USE_MATH_DEFINES
     )
+    # The top-level CMakeLists sets NOMINMAX globally so windows.h does not
+    # define min/max macros that collide with std::min / std::max in C++ TUs.
+    # WDSP's vendored C source (RXA.c, cfcomp.c, emnr.c, snb.c, ssql.c, ...)
+    # uses those macros directly and has no std::min/std::max collision risk.
+    # Undef NOMINMAX for the wdsp_static target only so windows.h restores them.
+    target_compile_options(wdsp_static PRIVATE
+        $<$<C_COMPILER_ID:MSVC>:/UNOMINMAX>
+        $<$<C_COMPILER_ID:GNU,Clang,AppleClang>:-UNOMINMAX>
+    )
 else()
     target_link_libraries(wdsp_static PRIVATE pthread m)
     target_compile_definitions(wdsp_static PRIVATE _GNU_SOURCE)
