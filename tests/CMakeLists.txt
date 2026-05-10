@@ -3967,3 +3967,13 @@ target_compile_definitions(tst_step_att_cross_thread PRIVATE NEREUS_BUILD_TESTS)
 # Thetis source: networkproto1.c:657-666 [v2.10.3.13] case 16.
 nereus_add_test(tst_p1_bank16_pursignal_run)
 target_compile_definitions(tst_p1_bank16_pursignal_run PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3J-1 Task 1.1: TCI verification matrix runner ──────────────────────
+# Loads tests/data/tci/matrix.csv and feeds each row's command into
+# TciProtocol::handleCommand(), asserting the response + notification queue
+# match the expected columns. Passes vacuously until Phase 5 adds data rows.
+# SETUP:Key=Value;;command convention: SETUP: segments apply AppSettings
+# preconditions before the actual command (final ";;" segment) is dispatched.
+nereus_add_test(tst_tci_matrix_runner)
+target_compile_definitions(tst_tci_matrix_runner PRIVATE
+    NEREUS_TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")
