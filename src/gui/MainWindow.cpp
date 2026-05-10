@@ -405,6 +405,36 @@ MainWindow::MainWindow(QWidget* parent)
     : QMainWindow(parent)
     , m_radioModel(new RadioModel(this))
 {
+    // ── Phase 23 (bench fix 2026-05-10): TCI Server BEFORE buildUI ───────────
+    // TciApplet + ClientChainApplet are constructed by populateDefaultMeter()
+    // (called from buildUI), gated on `if (m_tciServer)`. The original Phase
+    // 23 wiring constructed TciServer AFTER buildUI, so the gate evaluated
+    // false and the applets never appeared in the right-side panel.
+    // RadioModel is already constructed via the member initializer list, so
+    // it's safe to instantiate TciServer here. Auto-start is deferred to
+    // after buildUI so the indicator + applets are ready to receive signals.
+#ifdef HAVE_WEBSOCKETS
+    {
+        m_tciServer = new TciServer(m_radioModel, this);
+        connect(m_tciServer, &TciServer::serverStarted,
+                this, [this](quint16) { m_tciServerRunning = true;  updateTciIndicator(); });
+        connect(m_tciServer, &TciServer::serverStopped,
+                this, [this]()        { m_tciServerRunning = false; updateTciIndicator(); });
+        connect(m_tciServer, &TciServer::clientConnected,
+                this, [this](QWebSocket*) { ++m_tciClientCount; updateTciIndicator(); });
+        connect(m_tciServer, &TciServer::clientDisconnected,
+                this, [this](QWebSocket*) {
+                    if (m_tciClientCount > 0) { --m_tciClientCount; }
+                    updateTciIndicator();
+                });
+        connect(m_tciServer, &TciServer::txAudioActiveClientChanged,
+                this, [this](QWebSocket* owner) {
+                    m_tciHasTxClient = (owner != nullptr);
+                    updateTciIndicator();
+                });
+    }
+#endif
+
     buildUI();
     buildMenuBar();
 
@@ -675,10 +705,12 @@ MainWindow::MainWindow(QWidget* parent)
 #endif
 
     // ── Phase 23: TCI Server instantiation ───────────────────────────────────
-    // Constructed after RadioModel is fully built so TciServer can hold a
-    // valid m_radioModel pointer. Auto-starts when TciServerEnabled=True.
+    // Phase 23 (bench fix 2026-05-10): TciServer instance is now created in
+    // the constructor BEFORE buildUI (above) so populateDefaultMeter's applet
+    // gate sees a non-null m_tciServer. Auto-start happens HERE (post-UI) so
+    // serverStarted/serverStopped signals find the applets + indicator wired.
 #ifdef HAVE_WEBSOCKETS
-    {
+    if (m_tciServer) {
         auto& s = AppSettings::instance();
         const bool enabled = s.value(QStringLiteral("TciServerEnabled"),
                                      QStringLiteral("False")).toString()
@@ -686,23 +718,6 @@ MainWindow::MainWindow(QWidget* parent)
         const quint16 port = static_cast<quint16>(
             s.value(QStringLiteral("TciServerPort"),
                     QStringLiteral("50001")).toString().toUShort());
-        m_tciServer = new TciServer(m_radioModel, this);
-        connect(m_tciServer, &TciServer::serverStarted,
-                this, [this](quint16) { m_tciServerRunning = true;  updateTciIndicator(); });
-        connect(m_tciServer, &TciServer::serverStopped,
-                this, [this]()        { m_tciServerRunning = false; updateTciIndicator(); });
-        connect(m_tciServer, &TciServer::clientConnected,
-                this, [this](QWebSocket*) { ++m_tciClientCount; updateTciIndicator(); });
-        connect(m_tciServer, &TciServer::clientDisconnected,
-                this, [this](QWebSocket*) {
-                    if (m_tciClientCount > 0) { --m_tciClientCount; }
-                    updateTciIndicator();
-                });
-        connect(m_tciServer, &TciServer::txAudioActiveClientChanged,
-                this, [this](QWebSocket* owner) {
-                    m_tciHasTxClient = (owner != nullptr);
-                    updateTciIndicator();
-                });
         if (enabled) {
             m_tciServer->start(port);
         }
