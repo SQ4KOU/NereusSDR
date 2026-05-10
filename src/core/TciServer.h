@@ -32,6 +32,7 @@
 #include <QHash>
 #include <QObject>
 #include <QPointer>
+#include <QSet>
 #include <array>
 #include <memory>
 
@@ -45,6 +46,7 @@ class QTimer;
 namespace NereusSDR {
 
 class RadioModel;
+class RxChannel;
 class TciProtocol;
 
 // TCI WebSocket server — exposes radio state over the ExpertSDR3 TCI protocol.
@@ -248,6 +250,17 @@ private:
     // Handle for the WdspEngine::initializedChanged connection so we can
     // disconnect it if TciServer is destroyed before WDSP initializes.
     QMetaObject::Connection m_wdspInitConn;
+
+    // Phase 26 review finding #4: track connected RxChannel audio-tap sources
+    // so stop() can explicitly sever Qt::DirectConnection slots before any
+    // TciServer state is torn down.  A DirectConnection from the DSP thread
+    // could race with destruction if the signal fires after m_clients is
+    // cleared but before the TciServer stack frame is gone.
+    //
+    // QSet of raw pointers — we do NOT own these; they are owned by WdspEngine.
+    // stop() iterates and calls QObject::disconnect(rxCh, nullptr, this, nullptr).
+    // The set is cleared last so the disconnect calls are always valid.
+    QSet<RxChannel*> m_audioTapSources;
 
     // ── Phase 17: TX audio single-client mutex ───────────────────────────────
     //

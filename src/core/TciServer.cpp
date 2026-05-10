@@ -289,6 +289,9 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                     connect(rxCh, &RxChannel::audioFrameReady,
                             this, &TciServer::onAudioFrameReady,
                             Qt::DirectConnection);
+                    // Phase 26 review finding #4: track so stop() can
+                    // explicitly disconnect before tearing down TciServer state.
+                    m_audioTapSources.insert(rxCh);
                     qCInfo(lcTci) << "TciServer: RX audio tap connected to RxChannel 0";
                 }
             };
@@ -408,6 +411,24 @@ bool TciServer::start(quint16 port)
 void TciServer::stop()
 {
     if (!m_server) { return; }
+
+    // Phase 26 review finding #4: explicitly sever DSP-thread signal connections
+    // BEFORE stopping timers and clearing client state.  The audio tap from
+    // RxChannel::audioFrameReady uses Qt::DirectConnection, meaning the slot
+    // runs on the DSP thread.  If the DSP thread emits after we clear m_clients
+    // (below) but before TciServer's vtable is gone, the slot accesses freed
+    // memory.  Disconnecting here closes that window.
+    //
+    // RadioModel::rawIqData uses Qt::QueuedConnection so its slot is marshalled
+    // to the main thread and cannot race with destruction, but we disconnect it
+    // here for symmetry and safety.
+    if (m_model) {
+        QObject::disconnect(m_model, nullptr, this, nullptr);
+    }
+    for (RxChannel* rxCh : std::as_const(m_audioTapSources)) {
+        QObject::disconnect(rxCh, nullptr, this, nullptr);
+    }
+    m_audioTapSources.clear();
 
     m_pingTimer->stop();
     m_drainTimer->stop();        // Phase 14: stop drain before disconnecting clients
