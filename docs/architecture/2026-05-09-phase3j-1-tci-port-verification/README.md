@@ -99,4 +99,3 @@ Each row corresponds to a single Thetis behavior exercised by the
 | tx_profiles_ex_query | tx_profiles_ex; | tx_profiles_ex:Default; |  | TCIServer.cs:5187 [v2.10.3.13] | 1-arg query in query switch returns CSV of available profiles; handleTXProfiles at TCIServer.cs:4748 [v2.10.3.13] |
 | calibration_ex_rx0 | calibration_ex:0; |  | calibration_ex:0,0.000000,0.000000,0.000000,0.000000,0.000000; | TCIServer.cs:5124 [v2.10.3.13] | 1-arg set (rx only); handleCalibration at TCIServer.cs:4776 [v2.10.3.13]; CalibrationChanged queries 5 floats at TCIServer.cs:1152 [v2.10.3.13]; F6 C-locale per sendCalibration at TCIServer.cs:4766 [v2.10.3.13] |
 | shutdown_ex_stub | shutdown_ex; |  |  | TCIServer.cs:5190 [v2.10.3.13] | STUB; logs warning + returns empty (does NOT actually shut down server); handleShutdown at TCIServer.cs:4752 [v2.10.3.13]; maintainer-policy decision deferred to Phase 24+ |
-
