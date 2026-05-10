@@ -31,9 +31,11 @@
 
 #include <QHash>
 #include <QObject>
+#include <array>
 #include <memory>
 
 #include "TciClientSession.h"
+#include "core/audio/AudioRingSpsc.h"
 
 class QWebSocketServer;
 class QWebSocket;
@@ -113,6 +115,16 @@ private slots:
     // Binary-frame handler — Phase 17 wires TX audio + IQ inbound here.
     void onBinaryMessageReceived(const QByteArray& data);
 
+    // Phase 16 Task 16.3 (sub-commit c): RX audio tap.
+    // Connected to RxChannel::audioFrameReady with Qt::DirectConnection so the
+    // slot fires on the audio/DSP thread. The slot interleaves L/R and pushes
+    // bytes into m_audioRing[slice] using tryPushCopy (non-blocking; safe for RT).
+    //
+    // RxChannel::audioFrameReady(int slice, const float* L, const float* R,
+    //                             int n, int srcRate)
+    void onAudioFrameReady(int slice, const float* L, const float* R,
+                           int n, int srcRate);
+
     // Phase 16 Task 16.3 (sub-commit b): audio subscription + resampler lifecycle.
     // Intercepts audio_start:N; / audio_stop:N; commands in onTextMessageReceived
     // BEFORE handing to TciProtocol (which has no concept of client sessions).
@@ -146,6 +158,29 @@ private:
     // From Thetis TCIServer.cs:2650 [v2.10.3.13] — 1000 * 20 = 20000ms.
     // Thetis comment: "per websock spec ping frames are every 20 seconds."
     int m_pingIntervalMs{20000};
+
+    // Phase 16 Task 16.3 (sub-commit c): per-slice RX audio ring buffers.
+    // The audio thread (DSP worker) pushes interleaved stereo F32 samples via
+    // onAudioFrameReady() using tryPushCopy (non-blocking).  The 5ms drain
+    // timer on the main thread pops bytes and sends TCI binary frames.
+    //
+    // Capacity 131072 bytes = ~341ms of 48kHz stereo F32 (48000 * 2ch * 4B = 384kB/s).
+    // This gives ~341ms headroom against a 5ms drain period — well above the
+    // ratio needed to absorb event-loop latency spikes.
+    //
+    // kMaxTciRxSlices: we support slice 0 and slice 1 (RX1 + RX2).
+    static constexpr int kMaxTciRxSlices = 2;
+    std::array<AudioRingSpsc<131072>, kMaxTciRxSlices> m_audioRing;
+
+    // Scratch buffer for deinterleaving + resampling in the drain loop.
+    // Max samples per drain tick = audioStreamSamples (default 2048) * channels (2).
+    // We size for the largest legal audioStreamSamples (2048) * 2 channels.
+    static constexpr int kMaxDrainSamples = 2048 * 2;
+    std::array<float, kMaxDrainSamples> m_drainScratch{};
+
+    // Handle for the WdspEngine::initializedChanged connection so we can
+    // disconnect it if TciServer is destroyed before WDSP initializes.
+    QMetaObject::Connection m_wdspInitConn;
 };
 
 } // namespace NereusSDR

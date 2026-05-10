@@ -20,8 +20,11 @@
 #include "TciClientSession.h"
 #include "TciProtocol.h"
 #include "TciSendQueue.h"
+#include "TciBinaryFrame.h"
 #include "LogCategories.h"
 #include "models/RadioModel.h"
+#include "WdspEngine.h"
+#include "RxChannel.h"
 
 // Phase 16 Task 16.3 (sub-commit b): WDSP RESAMPLEF lifecycle.
 // resample.h declares create_resampleF / destroy_resampleF / xresampleF, and
@@ -122,7 +125,110 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             // Sync the legacy framesDropped field for Phase 22 ClientChainApplet.
             session->framesDropped = session->sendQueue.dropCount();
         }
+
+        // Phase 16 Task 16.3 (sub-commit c): RX audio drain.
+        // For each client that has audio subscriptions, read from the per-slice
+        // AudioRingSpsc, optionally resample, encode as a TCI binary frame, and
+        // send directly via sendBinaryMessage.
+        //
+        // From Thetis TCIServer.cs:5444-5512 [v2.10.3.13] — the sendRXAudioStream
+        // loop reads samples, resamples, encodes, and calls sendBinaryFrame.
+        // NereusSDR replicates this per drain-tick rather than in a dedicated thread.
+        for (auto cit = m_clients.begin(); cit != m_clients.end(); ++cit) {
+            QWebSocket* ws = cit.key();
+            auto& session  = cit.value();
+
+            for (int rx : session->audioStreamEnabled) {
+                if (rx < 0 || rx >= kMaxTciRxSlices) { continue; }
+
+                // Number of interleaved float samples to pop each tick.
+                // audioStreamSamples is per-channel; multiply by channels.
+                const int channels = session->audioStreamChannels;  // 1 or 2
+                const int perChSamples = session->audioStreamSamples;  // default 2048
+                const int totalSamples = perChSamples * channels;
+                const int wantBytes = totalSamples * static_cast<int>(sizeof(float));
+
+                if (m_audioRing[rx].usedBytes() < static_cast<size_t>(wantBytes)) {
+                    continue;  // not enough data yet; wait for next tick
+                }
+
+                // Pop from the ring into the scratch buffer.
+                // Scratch is sized for kMaxDrainSamples = 2048*2 floats.
+                const int maxScratch = kMaxDrainSamples;
+                if (totalSamples > maxScratch) { continue; }  // safety
+
+                const qint64 got = m_audioRing[rx].popInto(
+                    reinterpret_cast<uint8_t*>(m_drainScratch.data()),
+                    wantBytes);
+                if (got < wantBytes) { continue; }
+
+                // Resample if the client requested a rate other than 48000 Hz.
+                // Phase 16: xresampleFV resamples in-place using the per-session
+                // per-slice RESAMPLEF instance created in handleAudioSubscribe.
+                const float* samples = m_drainScratch.data();
+                int outSamples = totalSamples;
+
+                auto rIt = session->audioResamplers.find(rx);
+                if (rIt != session->audioResamplers.end() &&
+                    session->audioSampleRate != 48000) {
+                    // Allocate a temporary output buffer on the stack.
+                    // Max output = totalSamples * max_ratio (48000/8000 = 6).
+                    static constexpr int kMaxOutSamples = kMaxDrainSamples * 8;
+                    static thread_local std::array<float, kMaxOutSamples> outBuf{};
+                    xresampleFV(m_drainScratch.data(), outBuf.data(),
+                                totalSamples, &outSamples, rIt.value());
+                    samples = outBuf.data();
+                }
+
+                // Encode + send binary frame.
+                // From Thetis TCIServer.cs:5510 [v2.10.3.13]:
+                //   sendBinaryFrame(buildStreamPayload(receiver, sampleRate,
+                //       sampleType, interleaved.Length, RX_AUDIO_STREAM,
+                //       channels, encoded));
+                const QByteArray frame = TciBinaryFrame::buildStreamPayload(
+                    rx,
+                    session->audioSampleRate,
+                    session->audioSampleType,
+                    outSamples,         // flat count (length field in header)
+                    static_cast<int>(TciStreamType::RxAudioStream),
+                    channels,
+                    samples);
+
+                ws->sendBinaryMessage(frame);
+            }
+        }
     });
+
+    // Phase 16 Task 16.3 (sub-commit c): hook the RX audio tap from RxChannel.
+    // WdspEngine may not be initialized yet at construction time. We connect
+    // once it is, then hook audioFrameReady with Qt::DirectConnection so the
+    // slot runs on the DSP thread and can push into AudioRingSpsc non-blockingly.
+    if (m_model) {
+        WdspEngine* wdsp = m_model->wdspEngine();
+        if (wdsp) {
+            auto hookAudioTap = [this, wdsp]() {
+                RxChannel* rxCh = wdsp->rxChannel(0);
+                if (rxCh) {
+                    connect(rxCh, &RxChannel::audioFrameReady,
+                            this, &TciServer::onAudioFrameReady,
+                            Qt::DirectConnection);
+                    qCInfo(lcTci) << "TciServer: RX audio tap connected to RxChannel 0";
+                }
+            };
+
+            if (wdsp->isInitialized()) {
+                hookAudioTap();
+            } else {
+                m_wdspInitConn = connect(wdsp, &WdspEngine::initializedChanged,
+                                         this, [this, hookAudioTap](bool init) {
+                    if (init) {
+                        hookAudioTap();
+                        disconnect(m_wdspInitConn);
+                    }
+                });
+            }
+        }
+    }
 }
 
 TciServer::~TciServer()
@@ -382,6 +488,50 @@ void TciServer::cleanupResamplers(std::shared_ptr<TciClientSession>& session)
     }
     session->audioResamplers.clear();
     session->audioStreamEnabled.clear();
+}
+
+// ── onAudioFrameReady() ──────────────────────────────────────────────────────
+//
+// Phase 16 Task 16.3 (sub-commit c): RX audio tap slot.
+// Connected via Qt::DirectConnection — runs on the WDSP DSP thread, not the
+// main thread. MUST NOT touch Qt objects (QWebSocket, QTimer, m_clients) —
+// those are main-thread owned. Only writes to m_audioRing[slice] which is a
+// lock-free AudioRingSpsc safe for one producer (DSP thread) + one consumer
+// (main thread drain timer).
+//
+// From Thetis RxChannel.cpp:1479-1492 [v2.10.3.13] — the audioFrameReady
+// signal fires post-DSP with outI (L) and outQ (R) as scratch float arrays
+// of length n at srcRate Hz (always 48000 for WDSP RX output).
+//
+// Uses tryPushCopy (non-blocking) so the DSP thread never blocks. Overflow
+// (ring full) silently drops the oldest portion — audible as a dropout rather
+// than a deadlock.
+void TciServer::onAudioFrameReady(int slice, const float* L, const float* R,
+                                   int n, int srcRate)
+{
+    (void)srcRate;  // always 48000 per kWdspRxOutputRate in RxChannel.cpp
+
+    if (slice < 0 || slice >= kMaxTciRxSlices) { return; }
+    if (!L || !R || n <= 0) { return; }
+
+    // Interleave L[i], R[i] into a local scratch then push into the ring.
+    // We use a stack-local buffer to avoid heap alloc on the audio thread.
+    // Max n = audioStreamSamples (2048) per the WDSP buffer size contract;
+    // stereo interleaved = 2 * 2048 = 4096 floats max.
+    constexpr int kInterleaveMax = 2 * 2048;
+    float interleaved[kInterleaveMax];
+    const int total = std::min(n * 2, kInterleaveMax);
+    const int count = total / 2;
+    for (int i = 0; i < count; ++i) {
+        interleaved[2 * i]     = L[i];
+        interleaved[2 * i + 1] = R[i];
+    }
+
+    // tryPushCopy: drops the newest bytes on overflow (partial write).
+    // Audio ring is single-producer (DSP thread) / single-consumer (main thread).
+    m_audioRing[slice].tryPushCopy(
+        reinterpret_cast<const uint8_t*>(interleaved),
+        total * static_cast<int>(sizeof(float)));
 }
 
 // ── onTextMessageReceived() ──────────────────────────────────────────────────
