@@ -628,6 +628,21 @@ void TciServer::onNewConnection()
 
         qCInfo(lcTci) << "TciServer: client connected from" << session->peer;
         emit clientConnected(ws);
+
+        // From Thetis TCIServer.cs:2713 [v2.10.3.13] — sendInitialisationData()
+        // is called immediately after upgradeToWebSocket() completes. Without
+        // this, real TCI clients (N1MM Logger+, Log4OM, RUMlog-TCI, ESDR3) see
+        // a silent connection and either stay in a "waiting" state or close.
+        // Bench-discovered 2026-05-10 against websocat — Phase 2 Task 2.1
+        // wired the session lifecycle but never invoked buildInitBurst()
+        // (Phase 4 Task 4.1+4.2 built the burst but no commit wired it to
+        // the connect path).
+        if (m_protocol) {
+            const QStringList burst = m_protocol->buildInitBurst();
+            for (const QString& line : burst) {
+                session->sendQueue.push(TciSendQueue::Priority::Control, line);
+            }
+        }
     }
 }
 
