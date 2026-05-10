@@ -1822,6 +1822,12 @@ nereus_add_test(tst_tx_applet_vox_toggle)
 # (Renamed from tst_tx_applet_lev_eq_proc.cpp during the post-bench cleanup.)
 nereus_add_test(tst_tx_applet_lev_eq_cfc)
 
+# ── Phase 3M-VAX-toggle: TxApplet mic-source badge 3-way ────────────────────
+# The badge above the gauges previously read "PC mic" or "Radio mic".
+# Phase 3M-VAX-toggle extends it to a 3-way switch so MicSource::Vax
+# renders "VAX" both on micSourceChanged and on syncFromModel.
+nereus_add_test(tst_tx_applet_mic_source_badge)
+
 # ── Phase 3M-3a-ii post-bench cleanup: PhoneCwApplet PROC button + slider ──
 # Verifies the PROC controls inherited un-wired from 3I-3 (NyiOverlay-marked):
 # PhoneCwProcButton bidirectional with TransmitModel.cpdrOn; PhoneCwProcSlider
