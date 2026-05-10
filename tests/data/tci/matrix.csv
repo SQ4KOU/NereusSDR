@@ -8,5 +8,11 @@ compat_always_stream_iq_on,SETUP:TciAlwaysStreamIq=True;;noop;,,,TCIServer.cs:54
 compat_send_initial_freq_state_off,SETUP:TciSendInitialFrequencyStateOnConnect=False;;noop;,,,TCIServer.cs:6223 [v2.10.3.13],placeholder; init burst golden covers the gate (skips DDS/IF/VFO/tx_frequency when False)
 compat_rate_limit_set,SETUP:TciRateLimitMsgsPerSec=10;;noop;,,,TCIServer.cs:6108 [v2.10.3.13],placeholder; effect-site is per-client send loop; updated when Phase 14 lands priority send queues
 compat_forget_rx2_vfob_on_disconnect,SETUP:TciForgetRx2VfoBOnDisconnect=True;;noop;,,,TCIServer.cs:6230 [v2.10.3.13],placeholder; effect-site is per-client disconnect; not directly testable via matrix runner — Phase 24 (CatApplet/AudioTciPage) revisit
-compat_use_rx1_vfoa_for_rx2_vfoa,SETUP:TciUseRx1VfoaForRx2Vfoa=True;;noop;,,,TCIServer.cs:3732 [v2.10.3.13],placeholder; effect-site is VFO read handler; updated when Phase 6 lands the vfo command
-compat_copy_rx2_vfob_to_vfoa,SETUP:TciCopyRx2VfobToVfoa=True;;noop;,,,TCIServer.cs:6240 [v2.10.3.13],placeholder; effect-site is VFO write handler; updated when Phase 6 lands the vfo command
+compat_use_rx1_vfoa_for_rx2_vfoa,SETUP:TciUseRx1VfoaForRx2Vfoa=True;;noop;,,,TCIServer.cs:3732 [v2.10.3.13],placeholder; Phase 6 wired vfo handler but skipped this quirk (deferred to Phase 6+ refinement when RadioModel state arrives)
+compat_copy_rx2_vfob_to_vfoa,SETUP:TciCopyRx2VfobToVfoa=True;;noop;,,,TCIServer.cs:6240 [v2.10.3.13],placeholder; Phase 6 wired vfo handler but skipped this quirk (deferred to Phase 6+ refinement when RadioModel state arrives)
+vfo_set_rx0_chan0,vfo:0\,0\,14250000;,,vfo:0\,0\,14250000;,TCIServer.cs:3753 [v2.10.3.13],set+broadcast — VFOAFreq write (rx=0 chan=0)
+vfo_query_after_set,vfo:0\,0\,14250000;;vfo:0\,0;,vfo:0\,0\,14250000;,,TCIServer.cs:3793 [v2.10.3.13],set then query returns same value — uses ;; chain (set dispatched first; query response asserted)
+vfo_set_rx0_chan1,vfo:0\,1\,7100000;,,vfo:0\,1\,7100000;,TCIServer.cs:3759 [v2.10.3.13],set RX0 chan1 (VFOBFreq) + broadcast
+vfo_lock_set_rx0_chan0,vfo_lock:0\,0\,true;,,vfo_lock:0\,0\,true;,TCIServer.cs:3298 [v2.10.3.13],3-arg set distinct from lock; sendVFOLock at TCIServer.cs:1926 [v2.10.3.13]
+lock_set_rx0,lock:0\,true;,,lock:0\,true;,TCIServer.cs:3277 [v2.10.3.13],2-arg set drops chan arg per Thetis sendLock at TCIServer.cs:1921 [v2.10.3.13]
+trailing_semicolon_strip,vfo:0\,0\,14250000,,vfo:0\,0\,14250000;,,TCIServer.cs:4913 [v2.10.3.13],parser strips trailing ; — set still works without it

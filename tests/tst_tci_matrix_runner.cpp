@@ -11,14 +11,21 @@
 // CSV format (set by Phase 1 Task 1.1):
 //   command,input,expected_response,expected_notifications,thetis_cite,notes
 //
+// CSV escape convention (Phase 6+):
+//   Commas inside a cell value are escaped as \, (backslash-comma). The
+//   smartSplit() helper below unescapes them so cells like
+//   vfo:0\,0\,14250000; are parsed correctly. Rows without \, parse
+//   identically to plain split(',') — backslash-free rows are unchanged.
+//
 // SETUP: prefix convention:
 //   The "input" cell may contain one or more SETUP: directives followed
 //   by the actual command, all separated by ";;". Example:
-//     SETUP:TciVfoAHz=14200000;;vfo:0:0:14200000;
+//     SETUP:TciVfoAHz=14200000;;vfo:0,0,14200000;
 //   Each SETUP:Key=Value segment is applied to AppSettings before the
-//   command is dispatched. The last ";;"-separated segment is the actual
-//   command. This lets matrix rows set pre-conditions without needing a
-//   separate setup slot or persistent fixture state.
+//   command is dispatched. Non-SETUP early segments are dispatched as
+//   commands (notifications drained after each), enabling set;;query
+//   chain patterns. The last segment is the command whose response
+//   and notifications are asserted on.
 //
 // Actual data rows are added per phase (Phase 5 onward). Until then the
 // CSV is header-only and this test passes vacuously.
@@ -45,6 +52,37 @@ class TestTciMatrixRunner : public QObject {
         QString notes;
     };
 
+    // Phase 6: CSV cell splitter that handles \, escaped commas.
+    // A backslash followed by a comma produces a literal comma in the cell.
+    // A plain comma ends the cell. A lone backslash before any other character
+    // passes the character through verbatim (no other escapes defined).
+    static QStringList smartSplit(const QString& line)
+    {
+        QStringList parts;
+        QString current;
+        bool prevBackslash = false;
+        for (const QChar c : line) {
+            if (prevBackslash) {
+                // Previous char was backslash — current char is escaped.
+                current.append(c);
+                prevBackslash = false;
+            } else if (c == QLatin1Char('\\')) {
+                prevBackslash = true;
+            } else if (c == QLatin1Char(',')) {
+                parts.append(current);
+                current.clear();
+            } else {
+                current.append(c);
+            }
+        }
+        // Trailing backslash with no following char: pass it through.
+        if (prevBackslash) {
+            current.append(QLatin1Char('\\'));
+        }
+        parts.append(current);
+        return parts;
+    }
+
 private:
     QList<Row> loadMatrix()
     {
@@ -56,7 +94,8 @@ private:
         ts.readLine();   // skip header
         QList<Row> rows;
         while (!ts.atEnd()) {
-            const QStringList parts = ts.readLine().split(QLatin1Char(','));
+            // Phase 6: use smartSplit to handle \, escaped commas in cells.
+            const QStringList parts = smartSplit(ts.readLine());
             if (parts.size() < 6) {
                 continue;
             }
@@ -73,16 +112,29 @@ private slots:
         for (const auto& r : loadMatrix()) {
             mock.resetToBaseline();
 
-            // SETUP: prefix handling for AppSettings preconditions.
-            // Multiple SETUP: directives plus the actual command are separated
-            // by ";;" within the input cell. Apply each SETUP: key/value pair
-            // to AppSettings, then dispatch the final segment as the command.
+            // SETUP: prefix handling for AppSettings preconditions plus
+            // command-chain support (Phase 6).
+            // Multiple segments separated by ";;" within the input cell:
+            //   - SETUP:Key=Value  → applied to AppSettings.
+            //   - Any other string → dispatched as a command; response and
+            //     notifications are drained and discarded so they don't leak
+            //     into the final assertion.
+            // The last ";;"-separated segment is the command under test.
             QStringList parts = r.input.split(QStringLiteral(";;"));
             for (int i = 0; i < parts.size() - 1; ++i) {
                 if (parts[i].startsWith(QStringLiteral("SETUP:"))) {
                     const QString kv = parts[i].mid(6);
                     const int eq = kv.indexOf(QLatin1Char('='));
                     AppSettings::instance().setValue(kv.left(eq), kv.mid(eq + 1));
+                } else {
+                    // Phase 6: dispatch non-SETUP early segments as commands
+                    // so set;;query chain patterns work (e.g. vfo:0,0,14250000;;vfo:0,0;).
+                    p.handleCommand(parts[i]);
+                    // Drain notifications from the early segment so they don't
+                    // accumulate into the final assertion.
+                    while (p.hasPendingNotification()) {
+                        p.takePendingNotification();
+                    }
                 }
             }
 

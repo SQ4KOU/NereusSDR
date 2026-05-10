@@ -851,22 +851,195 @@ void TciProtocol::resetDispatchCounters()
 }
 
 // From Thetis TCIServer.cs:4924-5128 [v2.10.3.13] — 60-case set-command switch.
-// Phase 5+ adds individual cases via the matrix runner.
+// Phase 6 adds vfo, vfo_lock, lock cases; remaining cases land Phase 7+.
 QString TciProtocol::handleSetCommand(const QString& name, const QStringList& args)
 {
-    (void)name;
-    (void)args;
     ++m_setDispatchCount;
+
+    // From Thetis TCIServer.cs:4929-4931 [v2.10.3.13] — vfo case (set switch).
+    // handleVFOMessage at TCIServer.cs:3724 [v2.10.3.13] dispatches by args.Length:
+    //   args.Length == 3 → set; args.Length == 2 → query (unicast response).
+    if (name == QStringLiteral("vfo")) {
+        return handleVfoCommand(args);
+    }
+
+    // From Thetis TCIServer.cs:4962-4964 [v2.10.3.13] — lock case (set switch).
+    // 2-arg form drops channel per sendLock at TCIServer.cs:1921-1925 [v2.10.3.13].
+    if (name == QStringLiteral("lock")) {
+        return handleLockCommand(args);
+    }
+
+    // From Thetis TCIServer.cs:4965-4967 [v2.10.3.13] — vfo_lock case (set switch).
+    if (name == QStringLiteral("vfo_lock")) {
+        return handleVfoLockCommand(args);
+    }
+
+    // Phase 7+ adds more cases.
     return {};
 }
 
 // From Thetis TCIServer.cs:5134-5197 [v2.10.3.13] — 21-case query-command switch.
-// Phase 5+ adds individual cases via the matrix runner.
+// Phase 6: vfo, lock, vfo_lock have no 1-arg query cases in Thetis query switch;
+// they self-dispatch (set vs. query) by args.size() inside handleSetCommand.
+// Phase 7+ adds remaining query cases.
 QString TciProtocol::handleQueryCommand(const QString& name)
 {
     (void)name;
     ++m_queryDispatchCount;
     return {};
+}
+
+// ── VFO family handlers (Phase 6) ───────────────────────────────────────────
+
+// From Thetis TCIServer.cs:3724-3833 [v2.10.3.13] — handleVFOMessage.
+// 3-arg path: set VFO frequency; enqueue broadcast notification.
+// 2-arg path: query VFO frequency; return as direct response (Phase 6 stub —
+//   Thetis routes through VFOChange → sendTextFrame broadcast; Phase 14 adds
+//   priority-queue coalescing; for Phase 6 we return the value directly).
+// UseRX1VFOaForRX2VFOa quirk (TCIServer.cs:3732 [v2.10.3.13]) deferred to
+// Phase 6+ refinement (compat placeholder row notes this).
+QString TciProtocol::handleVfoCommand(const QStringList& args)
+{
+    if (args.size() < 2) {
+        return {};
+    }
+    bool ok1 = false;
+    bool ok2 = false;
+    const int rx = args.at(0).trimmed().toInt(&ok1);
+    const int chan = args.at(1).trimmed().toInt(&ok2);
+    if (!ok1 || !ok2) {
+        return {};
+    }
+
+    if (args.size() >= 3) {
+        // 3-arg set path.
+        // From Thetis TCIServer.cs:3746-3793 [v2.10.3.13] — set VFOAFreq/VFOBFreq.
+        bool ok3 = false;
+        const qint64 hz = args.at(2).trimmed().toLongLong(&ok3);
+        if (!ok3) {
+            return {};
+        }
+        // Write to mock via QMetaObject::invokeMethod (DirectConnection — test thread).
+        // Production RadioModel exposes setVfoHz as Q_INVOKABLE too (Phase 17+).
+        QMetaObject::invokeMethod(m_radio, "setVfoHz",
+                                  Qt::DirectConnection,
+                                  Q_ARG(int, rx),
+                                  Q_ARG(int, chan),
+                                  Q_ARG(qint64, hz));
+        // Broadcast notification — Phase 14 adds priority-queue coalescing.
+        // From Thetis sendVFO at TCIServer.cs:2061-2093 [v2.10.3.13] — format string.
+        m_pendingNotifications << QStringLiteral("vfo:%1,%2,%3;").arg(rx).arg(chan).arg(hz);
+        return {};
+    }
+
+    // 2-arg query path.
+    // From Thetis TCIServer.cs:3793-3833 [v2.10.3.13] — reads VFOAFreq/VFOBFreq.
+    qint64 hz = 0;
+    QMetaObject::invokeMethod(m_radio, "vfoHz",
+                              Qt::DirectConnection,
+                              Q_RETURN_ARG(qint64, hz),
+                              Q_ARG(int, rx),
+                              Q_ARG(int, chan));
+    // From Thetis sendVFO at TCIServer.cs:2093 [v2.10.3.13] — format string.
+    return QStringLiteral("vfo:%1,%2,%3;").arg(rx).arg(chan).arg(hz);
+}
+
+// From Thetis TCIServer.cs:3284-3302 [v2.10.3.13] — handleVFOLock.
+// 3-arg path: set vfo_lock state; enqueue broadcast notification.
+// 2-arg path: query vfo_lock state; return as direct response.
+QString TciProtocol::handleVfoLockCommand(const QStringList& args)
+{
+    if (args.size() < 2) {
+        return {};
+    }
+    bool ok1 = false;
+    bool ok2 = false;
+    const int rx = args.at(0).trimmed().toInt(&ok1);
+    const int chan = args.at(1).trimmed().toInt(&ok2);
+    if (!ok1 || !ok2) {
+        return {};
+    }
+
+    if (args.size() >= 3) {
+        // 3-arg set path.
+        // From Thetis TCIServer.cs:3298 [v2.10.3.13] — trySetVFOLockState.
+        const QString boolStr = args.at(2).trimmed().toLower();
+        if (boolStr != QStringLiteral("true") && boolStr != QStringLiteral("false")) {
+            return {};
+        }
+        const bool locked = (boolStr == QStringLiteral("true"));
+        QMetaObject::invokeMethod(m_radio, "setVfoLock",
+                                  Qt::DirectConnection,
+                                  Q_ARG(int, rx),
+                                  Q_ARG(int, chan),
+                                  Q_ARG(bool, locked));
+        // From Thetis sendVFOLock at TCIServer.cs:1926-1930 [v2.10.3.13] — format.
+        m_pendingNotifications << QStringLiteral("vfo_lock:%1,%2,%3;")
+                                      .arg(rx).arg(chan)
+                                      .arg(locked ? QStringLiteral("true") : QStringLiteral("false"));
+        return {};
+    }
+
+    // 2-arg query path.
+    // From Thetis TCIServer.cs:3292-3293 [v2.10.3.13] — tryGetVFOLockState + sendVFOLock.
+    bool locked = false;
+    QMetaObject::invokeMethod(m_radio, "vfoLock",
+                              Qt::DirectConnection,
+                              Q_RETURN_ARG(bool, locked),
+                              Q_ARG(int, rx),
+                              Q_ARG(int, chan));
+    // From Thetis sendVFOLock at TCIServer.cs:1926-1930 [v2.10.3.13] — format.
+    return QStringLiteral("vfo_lock:%1,%2,%3;")
+        .arg(rx).arg(chan)
+        .arg(locked ? QStringLiteral("true") : QStringLiteral("false"));
+}
+
+// From Thetis TCIServer.cs:3265-3283 [v2.10.3.13] — handleLock.
+// 2-arg path: set lock state; enqueue broadcast notification.
+// 1-arg path: query lock state; return as direct response.
+// Note: drops channel arg — sendLock at TCIServer.cs:1921-1925 [v2.10.3.13]
+// emits lock:rx,bool; (no channel).
+QString TciProtocol::handleLockCommand(const QStringList& args)
+{
+    if (args.size() < 1) {
+        return {};
+    }
+    bool ok1 = false;
+    const int rx = args.at(0).trimmed().toInt(&ok1);
+    if (!ok1) {
+        return {};
+    }
+
+    if (args.size() >= 2) {
+        // 2-arg set path.
+        // From Thetis TCIServer.cs:3277-3282 [v2.10.3.13] — VFOALock/VFOBLock write.
+        const QString boolStr = args.at(1).trimmed().toLower();
+        if (boolStr != QStringLiteral("true") && boolStr != QStringLiteral("false")) {
+            return {};
+        }
+        const bool locked = (boolStr == QStringLiteral("true"));
+        QMetaObject::invokeMethod(m_radio, "setLock",
+                                  Qt::DirectConnection,
+                                  Q_ARG(int, rx),
+                                  Q_ARG(bool, locked));
+        // From Thetis sendLock at TCIServer.cs:1921-1925 [v2.10.3.13] — format.
+        m_pendingNotifications << QStringLiteral("lock:%1,%2;")
+                                      .arg(rx)
+                                      .arg(locked ? QStringLiteral("true") : QStringLiteral("false"));
+        return {};
+    }
+
+    // 1-arg query path.
+    // From Thetis TCIServer.cs:3271-3273 [v2.10.3.13] — sendLock(rx, VFOALock/VFOBLock).
+    bool locked = false;
+    QMetaObject::invokeMethod(m_radio, "lock",
+                              Qt::DirectConnection,
+                              Q_RETURN_ARG(bool, locked),
+                              Q_ARG(int, rx));
+    // From Thetis sendLock at TCIServer.cs:1921-1925 [v2.10.3.13] — format.
+    return QStringLiteral("lock:%1,%2;")
+        .arg(rx)
+        .arg(locked ? QStringLiteral("true") : QStringLiteral("false"));
 }
 
 } // namespace NereusSDR

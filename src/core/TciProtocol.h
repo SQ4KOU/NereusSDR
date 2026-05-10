@@ -95,6 +95,21 @@ private:
     // Phase 5+ adds individual cases via the matrix runner.
     QString handleQueryCommand(const QString& name);
 
+    // ── VFO family handlers (Phase 6) ─────────────────────────────────────────
+    // From Thetis TCIServer.cs:3724-3833 [v2.10.3.13] — handleVFOMessage.
+    // Dispatches set (3 args) or query (2 args) by args.size().
+    // UseRX1VFOaForRX2VFOa quirk deferred to Phase 6+ refinement.
+    QString handleVfoCommand(const QStringList& args);
+
+    // From Thetis TCIServer.cs:3284-3302 [v2.10.3.13] — handleVFOLock.
+    // 3 args = set; 2 args = query (returns vfo_lock:rx,chan,bool; as response).
+    QString handleVfoLockCommand(const QStringList& args);
+
+    // From Thetis TCIServer.cs:3265-3283 [v2.10.3.13] — handleLock.
+    // 2 args = set; 1 arg = query (returns lock:rx,bool; as response).
+    // Drops channel arg per sendLock at TCIServer.cs:1921-1925 [v2.10.3.13].
+    QString handleLockCommand(const QStringList& args);
+
     // From Thetis TCIServer.cs:2363-2510 [v2.10.3.13] — sendInitialRadioState body.
     // Phase 4 Task 4.2 fills the body (up to 97 wire lines per Sweep D).
     // Each build<Foo>Line helper is a pure static function: takes value args,
