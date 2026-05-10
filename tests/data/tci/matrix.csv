@@ -78,3 +78,11 @@ spot_clear_stub,spot_clear;,,,TCIServer.cs:5184 [v2.10.3.13],STUB; 1-arg query i
 cw_macros_speed_up_stub,cw_macros_speed_up:1;,,,TCIServer.cs:4989 [v2.10.3.13],STUB; Phase 3M-2 wires real keyer speed
 cw_macros_speed_down_stub,cw_macros_speed_down:1;,,,TCIServer.cs:4992 [v2.10.3.13],STUB; Phase 3M-2 wires real keyer speed
 cw_msg_stub,cw_msg:CQ DE KG4VCF;,,,TCIServer.cs:5001 [v2.10.3.13],STUB; Phase 3M-2 wires real CW message send
+rx_enable_set_rx0_off,rx_enable:0\,false;,,rx_enable:0\,false;,TCIServer.cs:5010 [v2.10.3.13],set rx0 disabled (stored; MOX-gating deferred to Phase 17); sendRXEnable at TCIServer.cs:2279 [v2.10.3.13]
+rx_enable_query_after_set,rx_enable:0\,false;;rx_enable:0;,rx_enable:0\,false;,,TCIServer.cs:4413 [v2.10.3.13],query returns rx0 stored enable state; uses ;; chain
+rx_ctun_ex_set_rx0,rx_ctun_ex:0\,true;,,rx_ctun_ex:0\,true;,TCIServer.cs:5118 [v2.10.3.13],set CTUN on rx0; handleCTUN at TCIServer.cs:4696 [v2.10.3.13]; sendCTUN at TCIServer.cs:4690 [v2.10.3.13]
+tx_profile_ex_set,tx_profile_ex:Default;,,tx_profile_ex:Default;,TCIServer.cs:5121 [v2.10.3.13],set TX profile by name; handleTXProfile at TCIServer.cs:4732 [v2.10.3.13]; sendTXProfile at TCIServer.cs:4715 [v2.10.3.13]
+tx_profile_ex_query,tx_profile_ex;,tx_profile_ex:Default;,,TCIServer.cs:5193 [v2.10.3.13],1-arg query in query switch returns active TX profile name; tmpArgs=string[0] path
+tx_profiles_ex_query,tx_profiles_ex;,tx_profiles_ex:Default;,,TCIServer.cs:5187 [v2.10.3.13],1-arg query in query switch returns CSV of available profiles; handleTXProfiles at TCIServer.cs:4748 [v2.10.3.13]
+calibration_ex_rx0,calibration_ex:0;,,calibration_ex:0\,0.000000\,0.000000\,0.000000\,0.000000\,0.000000;,TCIServer.cs:5124 [v2.10.3.13],1-arg set (rx only); handleCalibration at TCIServer.cs:4776 [v2.10.3.13]; CalibrationChanged queries 5 floats at TCIServer.cs:1152 [v2.10.3.13]; F6 C-locale per sendCalibration at TCIServer.cs:4766 [v2.10.3.13]
+shutdown_ex_stub,shutdown_ex;,,,TCIServer.cs:5190 [v2.10.3.13],STUB; logs warning + returns empty (does NOT actually shut down server); handleShutdown at TCIServer.cs:4752 [v2.10.3.13]; maintainer-policy decision deferred to Phase 24+

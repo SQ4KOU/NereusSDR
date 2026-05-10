@@ -40,7 +40,15 @@
 //           setAfLinear/afLinear, setMonLinear/monLinear.
 // Phase 11: 44 accessors total — added 1 IQ-stream accessor pair:
 //           setIqSampleRate/iqSampleRate.
-// Aim: ~50 accessors total by end of Phase 14. Each commit that adds
+// Phase 13: 55 accessors total — added 11 bespoke-_ex accessors:
+//           setRxEnable/rxEnable (per-slice bool, default true),
+//           setRxCtun/rxCtun (per-slice bool, default false),
+//           setTxProfile/txProfile (global string, default "Default"),
+//           txProfilesList (returns QStringList{"Default"}),
+//           setCalibration/calibrationMeter/calibrationDisplay/
+//           calibrationXvtr/calibrationSixMeter/calibrationTxDisplay
+//           (5 doubles per slice, default 0.0).
+// Aim: ~60 accessors total by end of Phase 14. Each commit that adds
 // accessors should note the addition in the commit message.
 
 #pragma once
@@ -417,6 +425,92 @@ public:
     Q_INVOKABLE void setIqSampleRate(int sr) { m_iqSampleRate = sr; }
     Q_INVOKABLE int iqSampleRate() const { return m_iqSampleRate; }
 
+    // ── Phase 13: bespoke _ex command accessors ───────────────────────────────
+
+    // RX enable per slice (default true — rx0 is always enabled in Thetis).
+    // From Thetis TCIServer.cs:4413-4450 [v2.10.3.13] — handleRXEnable.
+    // rx_enable set: rx==0 always on; rx==1 sets RX2Enabled.
+    // rx_enable query: rx==0 → !MOX; rx==1 → RX2Enabled && !MOX.
+    // NereusSDR simplification: MOX-gating deferred to Phase 17; stored directly.
+    Q_INVOKABLE void setRxEnable(int slice, bool on)
+    {
+        if (slice >= 0 && slice < 2) { m_rxEnable[slice] = on; }
+    }
+    Q_INVOKABLE bool rxEnable(int slice) const
+    {
+        return (slice >= 0 && slice < 2) ? m_rxEnable[slice] : true;
+    }
+
+    // CTUN (Center Tune) enable per slice.
+    // From Thetis TCIServer.cs:4696-4710 [v2.10.3.13] — handleCTUN.
+    // rx_ctun_ex set: 2-arg (rx, bool) — SetCTUN(rx+1, enable).
+    // rx_ctun_ex query: 1-arg (rx) → sendCTUN(rx, GetCTUN(rx+1)).
+    // sendCTUN at TCIServer.cs:4690-4694 [v2.10.3.13]: "rx_ctun_ex:rx,bool;"
+    Q_INVOKABLE void setRxCtun(int slice, bool on)
+    {
+        if (slice >= 0 && slice < 2) { m_rxCtun[slice] = on; }
+    }
+    Q_INVOKABLE bool rxCtun(int slice) const
+    {
+        return (slice >= 0 && slice < 2) ? m_rxCtun[slice] : false;
+    }
+
+    // TX profile name (global, not per-slice).
+    // From Thetis TCIServer.cs:4732-4748 [v2.10.3.13] — handleTXProfile.
+    // tx_profile_ex set (2-arg path via set switch): profile name in args[0].
+    // tx_profile_ex query (1-arg path via query switch): returns current name.
+    // sendTXProfile at TCIServer.cs:4715-4720 [v2.10.3.13]: "tx_profile_ex:name;"
+    Q_INVOKABLE void setTxProfile(const QString& name) { m_txProfile = name; }
+    Q_INVOKABLE QString txProfile() const { return m_txProfile; }
+
+    // TX profiles list — available profile names.
+    // From Thetis TCIServer.cs:4748-4752 [v2.10.3.13] — handleTXProfiles.
+    // tx_profiles_ex query (1-arg path): returns CSV list of profiles.
+    // sendTXProfiles at TCIServer.cs:4721-4731 [v2.10.3.13]: comma-joined.
+    // NereusSDR stub: always returns {"Default"} (MicProfileManager integration deferred).
+    Q_INVOKABLE QStringList txProfilesList() const
+    {
+        return QStringList{QStringLiteral("Default")};
+    }
+
+    // Calibration values per slice (5 doubles: meter, display, xvtr, sixMeter, txDisplay).
+    // From Thetis TCIServer.cs:1152-1170 [v2.10.3.13] — CalibrationChanged.
+    // calibration_ex set (1-arg path): rx only — queries calibration from radio and emits.
+    // sendCalibration at TCIServer.cs:4766-4775 [v2.10.3.13]: F6 C-locale per value.
+    // NereusSDR: setCalibration stores all 5 doubles for that slice; CalibrationChanged
+    //   path in handler reads them back and emits via buildCalibrationExLine.
+    Q_INVOKABLE void setCalibration(int slice, double meter, double display,
+                                    double xvtr, double sixMeter, double txDisplay)
+    {
+        if (slice >= 0 && slice < 2) {
+            m_calibration[slice][0] = meter;
+            m_calibration[slice][1] = display;
+            m_calibration[slice][2] = xvtr;
+            m_calibration[slice][3] = sixMeter;
+            m_calibration[slice][4] = txDisplay;
+        }
+    }
+    Q_INVOKABLE double calibrationMeter(int slice) const
+    {
+        return (slice >= 0 && slice < 2) ? m_calibration[slice][0] : 0.0;
+    }
+    Q_INVOKABLE double calibrationDisplay(int slice) const
+    {
+        return (slice >= 0 && slice < 2) ? m_calibration[slice][1] : 0.0;
+    }
+    Q_INVOKABLE double calibrationXvtr(int slice) const
+    {
+        return (slice >= 0 && slice < 2) ? m_calibration[slice][2] : 0.0;
+    }
+    Q_INVOKABLE double calibrationSixMeter(int slice) const
+    {
+        return (slice >= 0 && slice < 2) ? m_calibration[slice][3] : 0.0;
+    }
+    Q_INVOKABLE double calibrationTxDisplay(int slice) const
+    {
+        return (slice >= 0 && slice < 2) ? m_calibration[slice][4] : 0.0;
+    }
+
     // Reset all state to baseline (zeros/empty). Called before each matrix row.
     void resetToBaseline()
     {
@@ -458,6 +552,11 @@ public:
         m_monLinear = 50;
         // Phase 11: IQ stream state resets.
         m_iqSampleRate = 192000;
+        // Phase 13: bespoke _ex state resets.
+        m_rxEnable   = { true, true };  // rx0 always on per Thetis default
+        m_rxCtun     = {};
+        m_txProfile  = QStringLiteral("Default");
+        m_calibration = {};  // all 5 doubles per slice reset to 0.0
     }
 
 private:
@@ -501,6 +600,11 @@ private:
     int     m_monLinear{50};
     // Phase 11: IQ stream state.
     int     m_iqSampleRate{192000};
+    // Phase 13: bespoke _ex state.
+    std::array<bool, 2>    m_rxEnable{true, true};   // default ON
+    std::array<bool, 2>    m_rxCtun{};
+    QString                m_txProfile{QStringLiteral("Default")};
+    std::array<std::array<double, 5>, 2> m_calibration{};  // [slice][meter,display,xvtr,6m,txdisp]
 };
 
 } // namespace NereusSDR

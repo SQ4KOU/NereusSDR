@@ -950,6 +950,16 @@ QString TciProtocol::handleSetCommand(const QString& name, const QStringList& ar
     // From Thetis TCIServer.cs:5070 [v2.10.3.13] — mon_volume case in set switch.
     if (name == QStringLiteral("mon_volume"))                { return handleMonVolumeCommand(args); }
 
+    // Phase 13: bespoke _ex commands.
+    // From Thetis TCIServer.cs:5010 [v2.10.3.13] — rx_enable case in set switch.
+    if (name == QStringLiteral("rx_enable"))     { return handleRxEnableCommand(args); }
+    // From Thetis TCIServer.cs:5118 [v2.10.3.13] — rx_ctun_ex case in set switch.
+    if (name == QStringLiteral("rx_ctun_ex"))    { return handleRxCtunExCommand(args); }
+    // From Thetis TCIServer.cs:5121 [v2.10.3.13] — tx_profile_ex case in set switch.
+    if (name == QStringLiteral("tx_profile_ex")) { return handleTxProfileExSetCommand(args); }
+    // From Thetis TCIServer.cs:5124 [v2.10.3.13] — calibration_ex case in set switch.
+    if (name == QStringLiteral("calibration_ex")) { return handleCalibrationExCommand(args); }
+
     // Phase 12: Spot + CW stubs.
     // From Thetis TCIServer.cs:5049 [v2.10.3.13] — spot case in set switch.
     if (name == QStringLiteral("spot"))                   { return handleSpotCommand(args); }
@@ -1005,6 +1015,21 @@ QString TciProtocol::handleQueryCommand(const QString& name)
     // From Thetis TCIServer.cs:5184 [v2.10.3.13] — spot_clear case in 1-arg query switch.
     if (name == QStringLiteral("spot_clear")) {
         return handleSpotClearCommand();
+    }
+
+    // Phase 13: bespoke _ex query cases.
+    // From Thetis TCIServer.cs:5187 [v2.10.3.13] — tx_profiles_ex case in 1-arg query switch.
+    if (name == QStringLiteral("tx_profiles_ex")) {
+        return handleTxProfilesExQueryCommand();
+    }
+    // From Thetis TCIServer.cs:5193 [v2.10.3.13] — tx_profile_ex case in 1-arg query switch.
+    // Thetis passes tmpArgs=string[0] to handleTXProfile (zero-length → query path).
+    if (name == QStringLiteral("tx_profile_ex")) {
+        return handleTxProfileExQueryCommand();
+    }
+    // From Thetis TCIServer.cs:5190 [v2.10.3.13] — shutdown_ex case in 1-arg query switch.
+    if (name == QStringLiteral("shutdown_ex")) {
+        return handleShutdownExCommand();
     }
 
     return {};
@@ -2349,6 +2374,167 @@ QString TciProtocol::handleIqStartStopCommand(const QStringList& args, bool enab
     (void)args.at(0).trimmed().toInt(&ok);
     // Intentionally no notification — per-client subscription model deferred to Phase 18.
     (void)enable;
+    return {};
+}
+
+// ── Phase 13: Bespoke _ex command handlers ─────────────────────────────────
+
+// Porting from Thetis TCIServer.cs:4413-4450 [v2.10.3.13] — handleRXEnable.
+// Original C# logic:
+//   1-arg path: if rx==0 → sendRXEnable(rx, !MOX); rx==1 → sendRXEnable(rx, RX2Enabled && !MOX).
+//   2-arg path: if rx==0 → always on (no-op); if rx==1 → RX2Enabled = enable.
+// NereusSDR simplification: MOX-gating on query deferred to Phase 17;
+//   stored enable state returned directly. rx0 always stays true on set.
+// sendRXEnable at TCIServer.cs:2279-2283 [v2.10.3.13]: "rx_enable:rx,bool;"
+QString TciProtocol::handleRxEnableCommand(const QStringList& args)
+{
+    if (args.size() < 1) { return {}; }
+    bool ok = false;
+    const int rx = args.at(0).trimmed().toInt(&ok);
+    if (!ok || rx < 0 || rx > 1) { return {}; }
+
+    if (args.size() == 1) {
+        // Query path.
+        // From Thetis TCIServer.cs:4438-4445 [v2.10.3.13] — sendRXEnable per rx.
+        bool en = true;
+        QMetaObject::invokeMethod(m_radio, "rxEnable", Qt::DirectConnection,
+                                  Q_RETURN_ARG(bool, en), Q_ARG(int, rx));
+        return buildRxEnableLine(rx, en);
+    }
+
+    if (args.size() >= 2) {
+        // Set path.
+        // From Thetis TCIServer.cs:4422-4433 [v2.10.3.13] — set RX2Enabled (rx==1 only).
+        // rx==0 is always enabled in Thetis; Phase 13 stores it but never forces off.
+        const bool en = args.at(1).trimmed().toLower() == QStringLiteral("true");
+        QMetaObject::invokeMethod(m_radio, "setRxEnable", Qt::DirectConnection,
+                                  Q_ARG(int, rx), Q_ARG(bool, en));
+        m_pendingNotifications << buildRxEnableLine(rx, en);
+        return {};
+    }
+
+    return {};
+}
+
+// Porting from Thetis TCIServer.cs:4696-4710 [v2.10.3.13] — handleCTUN.
+// Original C# logic:
+//   args.Length < 1 || > 2 → return.
+//   args.Length == 1 → get: enable = GetCTUN(rx+1); sendCTUN(rx, enable).
+//   args.Length == 2 → set: SetCTUN(rx+1, enable).
+// sendCTUN at TCIServer.cs:4690-4694 [v2.10.3.13]: "rx_ctun_ex:rx,bool;"
+QString TciProtocol::handleRxCtunExCommand(const QStringList& args)
+{
+    if (args.size() < 1 || args.size() > 2) { return {}; }
+    bool ok = false;
+    const int rx = args.at(0).trimmed().toInt(&ok);
+    if (!ok || rx < 0 || rx > 1) { return {}; }
+
+    if (args.size() == 1) {
+        // Query path.
+        bool en = false;
+        QMetaObject::invokeMethod(m_radio, "rxCtun", Qt::DirectConnection,
+                                  Q_RETURN_ARG(bool, en), Q_ARG(int, rx));
+        return buildRxCtunExLine(rx, en);
+    }
+
+    // Set path.
+    const bool en = args.at(1).trimmed().toLower() == QStringLiteral("true");
+    QMetaObject::invokeMethod(m_radio, "setRxCtun", Qt::DirectConnection,
+                              Q_ARG(int, rx), Q_ARG(bool, en));
+    m_pendingNotifications << buildRxCtunExLine(rx, en);
+    return {};
+}
+
+// Porting from Thetis TCIServer.cs:4732-4748 [v2.10.3.13] — handleTXProfile (set path).
+// Original C# logic: args.Length > 1 → return; args.Length == 1 → SafeTXProfileSet(args[0]).
+// Set path in switch at TCIServer.cs:5121 [v2.10.3.13] — args has 1 element (the name).
+// sendTXProfile at TCIServer.cs:4715-4720 [v2.10.3.13]: "tx_profile_ex:name;"
+QString TciProtocol::handleTxProfileExSetCommand(const QStringList& args)
+{
+    if (args.size() != 1) { return {}; }
+    const QString name = args.at(0).trimmed();
+    if (name.isEmpty()) { return {}; }
+    QMetaObject::invokeMethod(m_radio, "setTxProfile", Qt::DirectConnection,
+                              Q_ARG(QString, name));
+    m_pendingNotifications << buildTxProfileExLine(name);
+    return {};
+}
+
+// Porting from Thetis TCIServer.cs:4732-4748 [v2.10.3.13] — handleTXProfile (query path).
+// Original C# logic: args.Length == 0 → get TXProfile; sendTXProfile(prof).
+// Query path in switch at TCIServer.cs:5193 [v2.10.3.13]: tmpArgs=string[0] (empty array).
+// sendTXProfile at TCIServer.cs:4715-4720 [v2.10.3.13]: "tx_profile_ex:name;"
+QString TciProtocol::handleTxProfileExQueryCommand()
+{
+    QString prof;
+    QMetaObject::invokeMethod(m_radio, "txProfile", Qt::DirectConnection,
+                              Q_RETURN_ARG(QString, prof));
+    return buildTxProfileExLine(prof);
+}
+
+// Porting from Thetis TCIServer.cs:4748-4752 [v2.10.3.13] — handleTXProfiles.
+// Original C# logic: calls sendTXProfiles().
+// sendTXProfiles at TCIServer.cs:4721-4731 [v2.10.3.13]: returns early if IsSetupFormNull;
+//   else builds CSV of profile strings and emits "tx_profiles_ex:name1,name2,...;"
+// NereusSDR: queries mock for profile list (stub returns {"Default"}).
+// Query path in switch at TCIServer.cs:5187 [v2.10.3.13].
+QString TciProtocol::handleTxProfilesExQueryCommand()
+{
+    QStringList profiles;
+    QMetaObject::invokeMethod(m_radio, "txProfilesList", Qt::DirectConnection,
+                              Q_RETURN_ARG(QStringList, profiles));
+    if (profiles.isEmpty()) {
+        profiles << QStringLiteral("Default");
+    }
+    return buildTxProfilesExLine(profiles);
+}
+
+// Porting from Thetis TCIServer.cs:4776-4782 [v2.10.3.13] — handleCalibration.
+// Original C# logic:
+//   args.Length != 1 → return (ignores 0-arg and 2+-arg inputs).
+//   args.Length == 1 → parse rx, call CalibrationChanged(rx).
+// CalibrationChanged at TCIServer.cs:1152-1170 [v2.10.3.13]:
+//   queries 5 floats from radio (meter_offset, display_offset, xvtr_gain_offset,
+//   offset_6m, tx_display_offset) and emits sendCalibration.
+// sendCalibration at TCIServer.cs:4766-4775 [v2.10.3.13]:
+//   "calibration_ex:rx,meter,display,xvtr,six_meter,tx_display;" (F6 C-locale each).
+// Note: this is NOT a 6-arg client write; client sends rx only and the server
+//   pushes back the radio's calibration values. The plan doc was incorrect.
+// Set switch case at TCIServer.cs:5124 [v2.10.3.13].
+QString TciProtocol::handleCalibrationExCommand(const QStringList& args)
+{
+    if (args.size() != 1) { return {}; }
+    bool ok = false;
+    const int rx = args.at(0).trimmed().toInt(&ok);
+    if (!ok || rx < 0 || rx > 1) { return {}; }
+
+    // From Thetis TCIServer.cs:1152-1170 [v2.10.3.13] — CalibrationChanged queries each value.
+    double meter = 0.0;
+    double display = 0.0;
+    double xvtr = 0.0;
+    double sixMeter = 0.0;
+    double txDisplay = 0.0;
+    QMetaObject::invokeMethod(m_radio, "calibrationMeter",     Qt::DirectConnection,
+                              Q_RETURN_ARG(double, meter),    Q_ARG(int, rx));
+    QMetaObject::invokeMethod(m_radio, "calibrationDisplay",   Qt::DirectConnection,
+                              Q_RETURN_ARG(double, display),  Q_ARG(int, rx));
+    QMetaObject::invokeMethod(m_radio, "calibrationXvtr",      Qt::DirectConnection,
+                              Q_RETURN_ARG(double, xvtr),     Q_ARG(int, rx));
+    QMetaObject::invokeMethod(m_radio, "calibrationSixMeter",  Qt::DirectConnection,
+                              Q_RETURN_ARG(double, sixMeter), Q_ARG(int, rx));
+    QMetaObject::invokeMethod(m_radio, "calibrationTxDisplay", Qt::DirectConnection,
+                              Q_RETURN_ARG(double, txDisplay),Q_ARG(int, rx));
+    m_pendingNotifications << buildCalibrationExLine(rx, meter, display, xvtr, sixMeter, txDisplay);
+    return {};
+}
+
+// From Thetis TCIServer.cs:5190 [v2.10.3.13] — shutdown_ex case in 1-arg query switch.
+// handleShutdown at TCIServer.cs:4752-4765 [v2.10.3.13]: BeginInvoke → console.Close().
+// STUB: logs warning + returns empty. Actual shutdown wiring is a maintainer-policy
+//   decision; Phase 24+ may implement it. TCI clients must not be able to close NereusSDR.
+QString TciProtocol::handleShutdownExCommand()
+{
+    qCWarning(lcTci) << "TCI client requested shutdown_ex; ignored — Phase 13 stub (maintainer-policy decision)";
     return {};
 }
 

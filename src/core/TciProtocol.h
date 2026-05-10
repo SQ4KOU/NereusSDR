@@ -234,6 +234,56 @@ private:
     //       directly without the Thetis pan-slider calibration (deferred to Phase 20).
     QString handleRxBalanceCommand(const QStringList& args);
 
+    // ── Phase 13: Bespoke _ex command handlers ───────────────────────────────
+    // From Thetis TCIServer.cs:5010 [v2.10.3.13] — rx_enable case in set switch.
+    // handleRXEnable at TCIServer.cs:4413-4450 [v2.10.3.13]:
+    //   1-arg = query (rx → emit rx_enable:rx,bool;)
+    //   2-arg = set (rx, bool).
+    // rx==0 is always enabled in Thetis; rx==1 sets RX2Enabled.
+    // NereusSDR: MOX-gating of query result deferred to Phase 17; stored directly.
+    // sendRXEnable at TCIServer.cs:2279-2283 [v2.10.3.13]: "rx_enable:rx,bool;"
+    QString handleRxEnableCommand(const QStringList& args);
+
+    // From Thetis TCIServer.cs:5118 [v2.10.3.13] — rx_ctun_ex case in set switch.
+    // handleCTUN at TCIServer.cs:4696-4710 [v2.10.3.13]:
+    //   1-arg = query (rx → sendCTUN(rx, GetCTUN(rx+1)))
+    //   2-arg = set (rx, bool → SetCTUN(rx+1, enable)).
+    // sendCTUN at TCIServer.cs:4690-4694 [v2.10.3.13]: "rx_ctun_ex:rx,bool;"
+    QString handleRxCtunExCommand(const QStringList& args);
+
+    // From Thetis TCIServer.cs:5121 [v2.10.3.13] — tx_profile_ex case in set switch.
+    // handleTXProfile at TCIServer.cs:4732-4748 [v2.10.3.13]:
+    //   args.Length == 0 → query (get active TX profile name, sendTXProfile).
+    //   args.Length == 1 → set (SafeTXProfileSet(args[0])).
+    //   args.Length > 1 → ignored.
+    // sendTXProfile at TCIServer.cs:4715-4720 [v2.10.3.13]: "tx_profile_ex:name;"
+    // Set form: dispatched from handleSetCommand (args.size()==1 after colon split).
+    // Query form: dispatched from handleQueryCommand (1-arg query switch: tmpArgs=[]).
+    QString handleTxProfileExSetCommand(const QStringList& args);
+    QString handleTxProfileExQueryCommand();
+
+    // From Thetis TCIServer.cs:5187 [v2.10.3.13] — tx_profiles_ex case in 1-arg query switch.
+    // handleTXProfiles at TCIServer.cs:4748-4752 [v2.10.3.13] → sendTXProfiles.
+    // sendTXProfiles at TCIServer.cs:4721-4731 [v2.10.3.13]: CSV of profile names.
+    QString handleTxProfilesExQueryCommand();
+
+    // From Thetis TCIServer.cs:5124 [v2.10.3.13] — calibration_ex case in set switch.
+    // handleCalibration at TCIServer.cs:4776-4782 [v2.10.3.13]:
+    //   args.Length != 1 → return (ignores 0 or 2+ args).
+    //   args.Length == 1 → parse rx, call CalibrationChanged(rx).
+    // CalibrationChanged at TCIServer.cs:1152-1170 [v2.10.3.13]: queries 5 floats
+    //   from radio model and emits sendCalibration(rx, meter, display, xvtr, 6m, txDisp).
+    // sendCalibration at TCIServer.cs:4766-4775 [v2.10.3.13]: F6 C-locale per value.
+    // Note: this is NOT a client-supplied 6-arg write; client sends rx only and the
+    //   server pushes back the radio's calibration values (query-like semantics).
+    QString handleCalibrationExCommand(const QStringList& args);
+
+    // From Thetis TCIServer.cs:5190 [v2.10.3.13] — shutdown_ex case in 1-arg query switch.
+    // handleShutdown at TCIServer.cs:4752-4765 [v2.10.3.13]: BeginInvoke → console.Close().
+    // STUB: logs warning + returns empty. Actual shutdown wiring deferred to Phase 24+
+    //   (maintainer-policy decision: TCI client must not be able to close the app).
+    QString handleShutdownExCommand();
+
     // ── Phase 12: Spot + CW stubs ────────────────────────────────────────────
     // All return empty + log at lcTci info; real handlers in Phase 3J-2/3M-2.
     // From Thetis TCIServer.cs:5049 [v2.10.3.13] — spot case in set switch.
