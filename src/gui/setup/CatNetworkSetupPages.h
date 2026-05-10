@@ -4,6 +4,7 @@
 
 #include <QCheckBox>
 #include <QComboBox>
+#include <QFormLayout>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -37,8 +38,9 @@ private:
 
 // ---------------------------------------------------------------------------
 // CAT > TCI Server
-// Enable toggle, bind IP, port spinner, status label, connected clients label.
-// All controls are NYI / disabled.
+// 6 group boxes: Server / Compatibility / IQ Stream / Audio Stream /
+//   Sensors / VFO Quirks.  All 17 AppSettings keys bound.
+// Phase 20 (Phase 3J-1): Setup → Network → TCI Server page rewrite.
 // ---------------------------------------------------------------------------
 class CatTciServerPage : public SetupPage {
     Q_OBJECT
@@ -47,13 +49,46 @@ public:
     explicit CatTciServerPage(QWidget* parent = nullptr);
 
 private:
-    QCheckBox* m_enableCheck{nullptr};
-    QLineEdit* m_bindIpEdit{nullptr};
-    QSpinBox*  m_portSpin{nullptr};
-    QLabel*    m_statusLabel{nullptr};
-    QLabel*    m_clientsLabel{nullptr};
+    // Group 1: Server
+    QCheckBox*   m_enableCheck{nullptr};
+    QLabel*      m_bindIpLabel{nullptr};
+    QSpinBox*    m_portSpin{nullptr};
+    QPushButton* m_portDefaultBtn{nullptr};
+    QCheckBox*   m_sendInitialStateCheck{nullptr};
+    QSpinBox*    m_rateLimitSpin{nullptr};
+    QPushButton* m_showLogBtn{nullptr};
+    QLabel*      m_statusLabel{nullptr};
+
+    // Group 2: Compatibility
+    QCheckBox*   m_emulateExpertSdr3Check{nullptr};
+    QCheckBox*   m_emulateSunSdr2Check{nullptr};
+    QCheckBox*   m_cwluBecomesCwCheck{nullptr};
+    QCheckBox*   m_cwBecomesCwuCheck{nullptr};
+
+    // Group 3: IQ Stream
+    QCheckBox*   m_iqSwapCheck{nullptr};
+    QCheckBox*   m_alwaysStreamIqCheck{nullptr};
+
+    // Group 4: Audio Stream
+    QSpinBox*    m_audioBlockSpin{nullptr};
+    QComboBox*   m_txChannelCombo{nullptr};
+
+    // Group 5: Sensors
+    QSpinBox*    m_rxSensorSpin{nullptr};
+    QSpinBox*    m_txSensorSpin{nullptr};
+
+    // Group 6: VFO Quirks
+    QCheckBox*   m_forgetRx2VfoBCheck{nullptr};
+    QCheckBox*   m_useRx1VfoaForRx2Check{nullptr};
+    QCheckBox*   m_copyRx2VfobToVfoaCheck{nullptr};
 
     void buildUI();
+    void buildServerGroup();
+    void buildCompatibilityGroup();
+    void buildIqStreamGroup();
+    void buildAudioStreamGroup();
+    void buildSensorsGroup();
+    void buildVfoQuirksGroup();
 };
 
 // ---------------------------------------------------------------------------
