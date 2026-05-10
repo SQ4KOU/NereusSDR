@@ -561,6 +561,18 @@ QString TciServer::activeTxClientPeer() const
     return it.value()->peer;
 }
 
+// ── activeTxAudioClient() ────────────────────────────────────────────────────
+//
+// Phase 22: returns the raw QWebSocket* of the active TX audio client,
+// or nullptr when no client holds the TX mutex.
+// Not inlined in the header because moc compilation units may include
+// TciClientSession.h which forward-declares QWebSocket, preventing
+// QPointer<QWebSocket>::data() from instantiating.
+QWebSocket* TciServer::activeTxAudioClient() const
+{
+    return m_txAudioActiveClient.data();
+}
+
 // ── handleAudioSubscribe() ────────────────────────────────────────────────────
 //
 // Phase 16 Task 16.3 (sub-commit b): creates a RESAMPLEF instance for the

@@ -726,6 +726,7 @@ set(GUI_SOURCES
     src/gui/applets/CatApplet.cpp
     src/gui/applets/TunerApplet.cpp
     src/gui/applets/TciApplet.cpp
+    src/gui/applets/ClientChainApplet.cpp
 )
 
 # --------------------------------------------------------------------------

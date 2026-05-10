@@ -90,6 +90,17 @@ public:
     // Used by Phase 22 ClientChainApplet for per-client TX badge display.
     QString activeTxClientPeer() const;
 
+    // Phase 22: ClientChainApplet enumerates clients per refresh tick.
+    // Returns a snapshot of the client map. Const-correct; lifetimes managed
+    // by TciServer (do NOT cache pointers across event-loop boundaries).
+    QHash<QWebSocket*, std::shared_ptr<TciClientSession>> clients() const { return m_clients; }
+
+    // Phase 22: returns the raw QWebSocket* of the active TX audio client,
+    // or nullptr when no client holds the TX mutex.  Used by ClientChainApplet
+    // to match the socket pointer from clients() for TX badge rendering.
+    // QPointer::data() is safe here — caller is on the main thread.
+    QWebSocket* activeTxAudioClient() const;
+
     // Test-only: return the number of bytes currently pending in the server-wide
     // TX audio ring.  Used by tst_tci_tx_mutex to verify frames landed without
     // needing a real TxChannel.
