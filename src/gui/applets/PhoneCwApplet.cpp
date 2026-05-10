@@ -1179,7 +1179,7 @@ void PhoneCwApplet::syncFromModel()
         m_updatingFromModel = false;
     }
 
-    // VAX button (Phase 3M-VAX-toggle) — bidirectional sync to
+    // VAX button (Phase 3M-VAX-toggle): bidirectional sync to
     // TransmitModel::micSource.
     if (m_vaxBtn) {
         TransmitModel& tx = m_model->transmitModel();
