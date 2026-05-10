@@ -9,7 +9,6 @@
 # column prefix up to the first colon (e.g. "vfo:0:0:14200000;" -> "vfo").
 # Rows whose command has no colon are grouped under "other".
 
-import csv
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -35,6 +34,63 @@ TABLE_HEADER = """\
 """
 
 
+def smart_split(line: str, delimiter: str = ',') -> list[str]:
+    """Split a CSV line on delimiter, respecting backslash escapes (\\, -> ,).
+
+    The matrix.csv uses \\, to embed commas in TCI command fields such as
+    vfo:0\\,0\\,14250000; so that the CSV parser does not treat them as column
+    separators.  Python's csv module has no escape-char=\\\\ mode that also
+    suppresses quoting, so we implement the split manually.
+
+    This mirrors the C++ smartSplit logic used by tst_tci_matrix_runner.cpp
+    to parse the same CSV at test time.
+    """
+    parts: list[str] = []
+    current: list[str] = []
+    prev_backslash = False
+    for ch in line:
+        if prev_backslash:
+            current.append(ch)
+            prev_backslash = False
+        elif ch == '\\':
+            prev_backslash = True
+        elif ch == delimiter:
+            parts.append(''.join(current))
+            current = []
+        else:
+            current.append(ch)
+    if prev_backslash:
+        current.append('\\')  # trailing lone backslash
+    parts.append(''.join(current))
+    return parts
+
+
+COLUMN_NAMES = [
+    "command", "input", "expected_response",
+    "expected_notifications", "thetis_cite", "notes",
+]
+
+
+def parse_matrix_csv(path: Path) -> tuple[list[str], list[dict[str, str]]]:
+    """Parse matrix.csv using smart_split, return (header, rows)."""
+    lines = path.read_text(encoding="utf-8").splitlines()
+    if not lines:
+        return [], []
+    header = smart_split(lines[0])
+    rows: list[dict[str, str]] = []
+    for raw in lines[1:]:
+        raw = raw.rstrip('\r\n')
+        if not raw:
+            continue
+        values = smart_split(raw)
+        # Pad short rows; truncate long rows to header width.
+        while len(values) < len(header):
+            values.append("")
+        row = dict(zip(header, values[:len(header)]))
+        rows.append(row)
+    return header, rows
+
+
 def command_family(command: str) -> str:
     """Infer the command family from the command column."""
     colon = command.find(":")
@@ -53,9 +109,7 @@ def main() -> None:
         print(f"ERROR: matrix CSV not found at {MATRIX_PATH}", file=sys.stderr)
         sys.exit(1)
 
-    with MATRIX_PATH.open(newline="", encoding="utf-8") as f:
-        reader = csv.DictReader(f)
-        rows = list(reader)
+    _header, rows = parse_matrix_csv(MATRIX_PATH)
 
     timestamp = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
     print(HEADER.format(timestamp=timestamp), end="")
