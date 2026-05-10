@@ -1830,6 +1830,14 @@ nereus_add_test(tst_tx_applet_lev_eq_cfc)
 # label mirrors slider; NyiOverlay markers absent.
 nereus_add_test(tst_phone_applet_proc)
 
+# ── Phase 3M-VAX-toggle: PhoneCwApplet VAX button wiring ────────────────────
+# Verifies the [VAX] button on the Phone tab now drives MicSource via
+# TransmitModel::toggleVaxSource: left-click toggles Vax, second click
+# restores the previous non-VAX source, external model changes sync the
+# checked state, and right-click emits openSetupRequested("Audio", "TX Input")
+# so MainWindow opens Setup -> Audio -> TX Input.
+nereus_add_test(tst_phone_applet_vax_toggle)
+
 # ── Phase 3M-3a-i Batch 3 Task A.1: TxEqDialog scaffold ───────────────────
 # Verifies the modeless 10-band TX EQ dialog launched from the [EQ]
 # right-click and Tools → TX Equalizer menu.  Confirms construction,
