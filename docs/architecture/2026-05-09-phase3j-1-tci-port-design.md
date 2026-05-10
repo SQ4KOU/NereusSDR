@@ -1,9 +1,9 @@
-# TCI Port Design (PR-A)
+# TCI Port Design (Phase 3J-1)
 
 **Status:** Draft (pending user spec review)
 **Author:** J.J. Boyd (KG4VCF)
 **Date:** 2026-05-09
-**Master plan phase:** 3J (TCI portion only; CAT/MIDI in PR-B/C/D)
+**Master plan phase:** 3J (TCI portion only; CAT/MIDI in Phase 3K-1/2/3)
 **Related:** [docs/MASTER-PLAN.md](../MASTER-PLAN.md), [CONTRIBUTING.md](../../CONTRIBUTING.md)
 
 ## Source versions reviewed
@@ -16,7 +16,7 @@
 
 ## Executive summary
 
-PR-A ports Thetis TCI (Transceiver Control Interface) to NereusSDR with **full Thetis parity** as a ship-blocker requirement. The implementation uses a **hybrid approach**: AetherSDR's Qt6 transport layer (`QWebSocketServer` + multi-client lifecycle) is ported verbatim, while the protocol layer (`TciProtocol`) is written from scratch reading Thetis source 1:1.
+Phase 3J-1 ports Thetis TCI (Transceiver Control Interface) to NereusSDR with **full Thetis parity** as a ship-blocker requirement. The implementation uses a **hybrid approach**: AetherSDR's Qt6 transport layer (`QWebSocketServer` + multi-client lifecycle) is ported verbatim, while the protocol layer (`TciProtocol`) is written from scratch reading Thetis source 1:1.
 
 Five user-locked decisions and one architectural divergence shape this PR:
 
@@ -28,7 +28,7 @@ Five user-locked decisions and one architectural divergence shape this PR:
 
 NereusSDR's slice architecture (Slice A/B/C/D, replacing RX1/RX2) maps to Thetis's `trx:N` wire format at the protocol layer boundary. UI shows Slice A/B/etc; the wire keeps Thetis-strict `trx_count:2;` by default.
 
-PR-A scope: TCI server, protocol layer, two new applets (TciApplet + ClientChainApplet), Setup page rewrite, banner status badge, menu integration. Spots are deferred to PR-A2; CW TX commands are stubbed for 3M-2; CAT TCP/serial/MIDI follow as PR-B/C/D.
+Phase 3J-1 scope: TCI server, protocol layer, two new applets (TciApplet + ClientChainApplet), Setup page rewrite, banner status badge, menu integration. Spots are deferred to Phase 3J-2; CW TX commands are stubbed for 3M-2; CAT TCP/serial/MIDI follow as Phase 3K-1/2/3.
 
 ---
 
@@ -85,7 +85,7 @@ NereusSDR uses Slice A/B/C/D for multi-pan multi-slice support. Thetis hardcodes
 | Slice C | `trx:2` | NereusSDR extension (internal-only) |
 | Slice D | `trx:3` | NereusSDR extension (internal-only) |
 
-The init burst sends `trx_count:2;` hardcoded for strict Thetis client compat (locked decision). Slice C/D exist internally but are NOT exposed via TCI in PR-A. Future advanced-user toggle to opt into `trx_count:4;` is out of scope.
+The init burst sends `trx_count:2;` hardcoded for strict Thetis client compat (locked decision). Slice C/D exist internally but are NOT exposed via TCI in Phase 3J-1. Future advanced-user toggle to opt into `trx_count:4;` is out of scope.
 
 ---
 
@@ -163,7 +163,7 @@ Layout (NereusSDR-native, follows existing applet patterns from `RxApplet`/`TxAp
 - **Footer**: client count + "Show clients →" link to ClientChainApplet
 - **Disabled state**: collapses to single "Enable Server" button + setup hint
 
-When 3F multi-pan ships, the row stack expands to Slice B/C/D as those slices become active. Inline subscription badges per slice (e.g. "IQ:2 Audio:1") are out of scope for PR-A; full per-client details live in ClientChainApplet.
+When 3F multi-pan ships, the row stack expands to Slice B/C/D as those slices become active. Inline subscription badges per slice (e.g. "IQ:2 Audio:1") are out of scope for Phase 3J-1; full per-client details live in ClientChainApplet.
 
 Wires through `AppSettings` keys: `TciServerEnabled`, `TciServerPort`. Apply on toggle (calls `TciServer::start/stop` queued to TCI thread).
 
@@ -200,13 +200,13 @@ Existing `CatTciServerPage` (currently a placeholder) becomes the full-fat Theti
 5. **Sensors**: RX/TX intervals [30..1000] default 200, with `MinimumRequiredRxSensorInterval` aggregation note
 6. **VFO Quirks**: 3 Thetis chk* checkboxes (Forget RX2 VFO B, Use RX1 VFO A for RX2, Copy RX2 VFO B to VFO A)
 
-Plus a placeholder noting Spots controls deferred to PR-A2.
+Plus a placeholder noting Spots controls deferred to Phase 3J-2.
 
 Existing file is 99+267 LOC; rewrite lands at ~120+500 LOC.
 
 ### 2.6 Edit: `src/gui/applets/CatApplet.{h,cpp}` — strip TCI button row
 
-Existing CatApplet has a TCI button row. Per Q5, that row moves to the new TciApplet. CatApplet stays focused on CAT (PR-B/C scope).
+Existing CatApplet has a TCI button row. Per Q5, that row moves to the new TciApplet. CatApplet stays focused on CAT (Phase 3K-1/C scope).
 
 Net change: ~30 LOC removed, no additions.
 
@@ -216,18 +216,18 @@ Current file is 19+18 LOC, pure placeholder. Becomes the audio-side wiring (samp
 
 ### 2.8 Stub: `SpotData` hook in `TciProtocol`
 
-PR-A2 (AetherSDR Spots port) lands later. PR-A pre-creates the empty `handleSpotAdd/Remove/Clear/SimulateClick` handlers and wires the `spot_simulate_click` Thetis-only handler. PR-A2 fills bodies, not wiring.
+Phase 3J-2 (AetherSDR Spots port) lands later. Phase 3J-1 pre-creates the empty `handleSpotAdd/Remove/Clear/SimulateClick` handlers and wires the `spot_simulate_click` Thetis-only handler. Phase 3J-2 fills bodies, not wiring.
 
 ### 2.9 Edit: Banner & menu integration (live-wire existing scaffolding)
 
-NereusSDR already has cold-wired TCI status scaffolding in MainWindow.cpp. PR-A brings it to life rather than building new widgets.
+NereusSDR already has cold-wired TCI status scaffolding in MainWindow.cpp. Phase 3J-1 brings it to life rather than building new widgets.
 
-| Existing scaffolding | PR-A wires it to |
+| Existing scaffolding | Phase 3J-1 wires it to |
 |---|---|
 | `m_tciIndicator` @ MainWindow.cpp:3179 (stacked label "TCI" / "Off") | Live bottom-label updates from TciServer signals; format `Off` / `On` / `On · N` / `On · N ▸TX`; color dim/green/cyan/orange; tooltip shows bind/clients/TX-source; click opens Setup → Network → TCI Server |
 | `m_tciSep` @ :3181 (separator) | No change. Existing drop-priority logic at MainWindow.cpp:4318 already pairs CAT/TCI together for narrow-window collapse |
 | `tciAction` @ :2848 (Tools → TCI Server… disabled "NYI — Phase 3J") | Remove `setEnabled(false)` + NYI tooltip; wire to Setup → Network → TCI Server jump |
-| `addContainerToggle("CAT / TCI", …)` @ :2795 (commented) | Replace with View → Network Applets ▶ submenu (TCI Server + TCI Clients toggles, both default-enabled per Q5; CAT/MIDI greyed for PR-B/C/D placeholders) |
+| `addContainerToggle("CAT / TCI", …)` @ :2795 (commented) | Replace with View → Network Applets ▶ submenu (TCI Server + TCI Clients toggles, both default-enabled per Q5; CAT/MIDI greyed for Phase 3K-1/2/3 placeholders) |
 
 The `makeIndicator()` factory at MainWindow.cpp:3152 produces a stacked 2-line label widget (top 11px #607080, bottom 11px #404858, min-width 60px). Same pattern used by CAT/PSU/PA tiles. Live state changes the bottom-label text and color.
 
@@ -292,9 +292,9 @@ Two timers on the TCI thread.
 
 **Server-wide interval aggregation**: effective interval is the minimum any client requests (`MinimumRequiredRxSensorInterval` per Sweep E). Configurable in setup page; surfaced visibly in setup-page note.
 
-### 3.7 Spot hooks (PR-A2 stub)
+### 3.7 Spot hooks (Phase 3J-2 stub)
 
-`TciProtocol` owns `SpotsModel* m_spots = nullptr` placeholder. Four handlers stubbed (`spot_add`, `spot_remove`, `spot_clear`, `spot_simulate_click`) returning `ok`. PR-A2 fills model and handler bodies.
+`TciProtocol` owns `SpotsModel* m_spots = nullptr` placeholder. Four handlers stubbed (`spot_add`, `spot_remove`, `spot_clear`, `spot_simulate_click`) returning `ok`. Phase 3J-2 fills model and handler bodies.
 
 ---
 
@@ -315,7 +315,7 @@ Treated as ship-blocker per user mandate.
 - **CI gate** fails the PR if any matrix row regresses
 - Recovery: there is no recovery in code. Failure means PR doesn't merge
 
-Matrix lives at `docs/architecture/2026-05-09-tci-port-verification/README.md`; row-by-row sign-off.
+Matrix lives at `docs/architecture/2026-05-09-phase3j-1-tci-port-verification/README.md`; row-by-row sign-off.
 
 ### 4.3 Connection lifecycle
 
@@ -331,14 +331,14 @@ Three priority send queues per client (Urgent / Binary / Control+Coalesced) per 
 - **RX audio + RX IQ**: bounded queue depth, oldest-drop on overflow. Drop counter exposed in ClientChainApplet ("12 frames dropped").
 - **TX audio busy**: silent drop of the second client's frames per locked Decision 4.
 
-### 4.5 CW stub responses (PR-A only)
+### 4.5 CW stub responses (Phase 3J-1 only)
 
 CW TX wires up in 3M-2. Stubs return `ok` and log:
 
 - `cw_macros_speed_up` / `cw_macros_speed_down`: stub returns `ok`, emits notification with unchanged speed value
 - `cw_msg`: stub returns `ok`, logs at info level
 
-Each stub gets a `// TODO: 3M-2` comment + tracking issue. CWLUbecomesCW remains wired in PR-A because it affects mode reporting strings, not CW keying.
+Each stub gets a `// TODO: 3M-2` comment + tracking issue. CWLUbecomesCW remains wired in Phase 3J-1 because it affects mode reporting strings, not CW keying.
 
 ### 4.6 Startup ordering
 
@@ -361,7 +361,7 @@ Each stub gets a `// TODO: 3M-2` comment + tracking issue. CWLUbecomesCW remains
 
 Source of truth for parity. ~100 rows: 60 set commands + 21 query commands + ~13 dual-mode + binary frames + sensors + init burst + compat flag combinations. Per-row: command name, Thetis source line, sample input, expected response (byte-for-byte), expected notifications, manual sign-off.
 
-Lives at `docs/architecture/2026-05-09-tci-port-verification/README.md`. Operator signs off row-by-row with `wscat` or N1MM before PR-A ships.
+Lives at `docs/architecture/2026-05-09-phase3j-1-tci-port-verification/README.md`. Operator signs off row-by-row with `wscat` or N1MM before Phase 3J-1 ships.
 
 ### 5.2 Unit tests (fast, run per-handler-family TDD)
 
@@ -404,7 +404,7 @@ Manual checklist in matrix README:
 - **RUMlog-TCI** (macOS): retune, mode, basic sensor
 - **WSJT-X** (Linux, if it grows TCI mode by ship time): rig control via TCI
 
-Pass each before PR-A merges.
+Pass each before Phase 3J-1 merges.
 
 ### 5.6 Pre-commit hooks (every commit)
 
@@ -414,7 +414,7 @@ Existing: `verify-thetis-headers.py`, `verify-inline-tag-preservation.py`, `chec
 
 ## 6. PR plan + sequencing
 
-### 6.1 PR-A: TCI from Thetis (this design)
+### 6.1 Phase 3J-1: TCI from Thetis (this design)
 
 **Scope**: Full Thetis TCI parity. Hybrid transport (AetherSDR) + protocol (Thetis-faithful). New TciApplet + ClientChainApplet default-enabled. CatTciServerPage rewritten. Banner status badge + menu integration. Init burst golden file in CI. Verification matrix signed off.
 
@@ -432,7 +432,7 @@ Existing: `verify-thetis-headers.py`, `verify-inline-tag-preservation.py`, `chec
 - macOS, Linux, Windows CI all green
 
 **Hooks pre-created** for downstream PRs:
-- `TciProtocol::m_spots = nullptr` placeholder for PR-A2
+- `TciProtocol::m_spots = nullptr` placeholder for Phase 3J-2
 - Spot handlers stubbed (`spot_add`, `spot_remove`, `spot_clear`, `spot_simulate_click`) returning `ok`
 - `SpotData` POD struct defined in TciProtocol.h
 - `// TODO: 3M-2` comments on every CW stub
@@ -440,19 +440,19 @@ Existing: `verify-thetis-headers.py`, `verify-inline-tag-preservation.py`, `chec
 
 **Estimated size**: ~6,500 LOC new + ~700 LOC edits.
 
-### 6.2 PR-A2: AetherSDR Spots port (deferred)
+### 6.2 Phase 3J-2: AetherSDR Spots port (deferred)
 
-DX cluster + RBN clients + spot overlay on spectrum. Fills `SpotsModel` placeholder. Wires the 4 spot TCI handlers PR-A stubbed. Own brainstorm + design + plan cycle.
+DX cluster + RBN clients + spot overlay on spectrum. Fills `SpotsModel` placeholder. Wires the 4 spot TCI handlers Phase 3J-1 stubbed. Own brainstorm + design + plan cycle.
 
-### 6.3 PR-B: CAT TCP / rigctld
+### 6.3 Phase 3K-1: CAT TCP / rigctld
 
 4-channel rigctld TCP server. FlexRadio-dialect CAT command set. 127.0.0.1:4532 default.
 
-### 6.4 PR-C: CAT serial / PTY
+### 6.4 Phase 3K-2: CAT serial / PTY
 
-Virtual PTY pairs (Linux/macOS) + Windows com0com. Same parser as PR-B reused.
+Virtual PTY pairs (Linux/macOS) + Windows com0com. Same parser as Phase 3K-1 reused.
 
-### 6.5 PR-D: MIDI
+### 6.5 Phase 3K-3: MIDI
 
 MIDI control surface bindings. Mirrors Thetis MIDI2Cat user model.
 
@@ -494,7 +494,7 @@ Mockups at `.superpowers/brainstorm/13064-1778362843/content/`:
 
 ### 8.1 Setup page layout
 
-Six group boxes 1:1 with Thetis `grpTCIServer`: Server / Compatibility / IQ Stream / Audio Stream / Sensors / VFO Quirks. Spots placeholder at bottom signals PR-A2 scope. Bind read-only at `127.0.0.1` per locked Q7.
+Six group boxes 1:1 with Thetis `grpTCIServer`: Server / Compatibility / IQ Stream / Audio Stream / Sensors / VFO Quirks. Spots placeholder at bottom signals Phase 3J-2 scope. Bind read-only at `127.0.0.1` per locked Q7.
 
 ### 8.2 TciApplet
 
@@ -507,8 +507,8 @@ Per-client rows with TX badge, peer + name, subscription badges, last command + 
 ### 8.4 Banner & menus
 
 - **Bottom status-bar TCI indicator** (existing `m_tciIndicator` @ MainWindow.cpp:3179): live-wired from TciServer signals. Bottom label format `Off` / `On` / `On · N` / `On · N ▸TX` with color discipline matching PsaIndicator (dim/green/cyan/orange). Tooltip shows bind/clients/TX-source. Click opens Setup → Network → TCI Server. Drop-priority pairs with CAT in narrow-window collapse (existing logic at :4318).
-- **View → Network Applets ▶** submenu: TCI Server + TCI Clients toggles, both default-enabled. CAT/MIDI items greyed for PR-B/C/D placeholders. Replaces the commented-out `addContainerToggle("CAT / TCI", …)` at :2795.
-- **Tools → TCI Server…** action (existing `tciAction` @ :2848): currently disabled with "NYI — Phase 3J" tooltip; PR-A enables it and wires the click to Setup → Network → TCI Server jump.
+- **View → Network Applets ▶** submenu: TCI Server + TCI Clients toggles, both default-enabled. CAT/MIDI items greyed for Phase 3K-1/2/3 placeholders. Replaces the commented-out `addContainerToggle("CAT / TCI", …)` at :2795.
+- **Tools → TCI Server…** action (existing `tciAction` @ :2848): currently disabled with "NYI — Phase 3J" tooltip; Phase 3J-1 enables it and wires the click to Setup → Network → TCI Server jump.
 
 Mockup reference: `banner-bottom-existing.html` (4 live states + scaffolding-mapping table).
 
@@ -516,7 +516,7 @@ Mockup reference: `banner-bottom-existing.html` (4 live states + scaffolding-map
 
 ## 9. Open follow-ups
 
-Non-blocking. Tracked here for plan-stage discussion or post-PR-A enhancement.
+Non-blocking. Tracked here for plan-stage discussion or post-Phase 3J-1 enhancement.
 
 - Per-slice subscription badges in TciApplet rows (e.g. "IQ:2 Audio:1") — currently deferred to ClientChainApplet detail
 - Advanced-user toggle to opt into `trx_count:4;` in init burst (exposes Slice C/D over TCI; default off for client compat)
@@ -526,7 +526,7 @@ Non-blocking. Tracked here for plan-stage discussion or post-PR-A enhancement.
 
 ---
 
-## 10. Appendix: AppSettings keys introduced by PR-A
+## 10. Appendix: AppSettings keys introduced by Phase 3J-1
 
 All keys persisted to `~/.config/NereusSDR/NereusSDR.settings` via `AppSettings` (NOT `QSettings`). PascalCase per project convention.
 
