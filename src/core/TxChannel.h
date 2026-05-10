@@ -313,6 +313,7 @@ warren@wpratt.com
 
 #pragma once
 
+#include <QByteArray>
 #include <QObject>
 #include <QString>
 #include <QTimer>
@@ -827,18 +828,23 @@ public:
     // `srcRate`            — source sample rate from the TCI binary header
     //                        (informational for Phase 17; resampling deferred)
     //
-    // Audio thread safety: must only be called from the audio thread (or the
-    // drain thread in TciServer that runs on the main event loop when the
-    // drain timer fires).  In current Phase 17 architecture the drain timer
-    // is main-thread, TxChannel runs on TxWorkerThread — the accumulated ring
-    // buffer is read by driveOneTxBlock which is driven by TxWorkerThread.
-    // Phase 17 simplified scope: resampling and full rate-conversion deferred.
+    // Phase 3J-1 review P1.1: feedTxAudioFromTci is now a public slot so that
+    // TciServer can dispatch it across the thread boundary using
+    // QMetaObject::invokeMethod with Qt::QueuedConnection.  TxChannel lives on
+    // TxWorkerThread; calling this from the main thread (where the WS binary
+    // handler fires) would race the worker pump.  QueuedConnection routes the
+    // call onto TxChannel's owning thread before any WDSP state is touched.
+    //
+    // Signature uses QByteArray + int parameters (all value types) so that the
+    // queued-connection argument copies are safe — raw float* cannot be captured
+    // across the queue boundary because the decoding buffer may be freed before
+    // the slot fires.
     //
     // Phase 3J-1 Task 17.1 — NereusSDR-original entry point.
     // No Thetis equivalent directly; Thetis dequeues from m_txAudioQueue in
     // a separate thread (TCIServer.cs:5586-5600 TryDequeueTxAudio).
-    void feedTxAudioFromTci(const float* interleavedStereo, int frames,
-                            int channels, int srcRate);
+    Q_INVOKABLE void feedTxAudioFromTci(const QByteArray& interleavedStereoBytes,
+                                        int frames, int channels, int srcRate);
 
     // ── Anti-VOX detector audio feed (3M-3a-iv Task 3) ──────────────────────
     //

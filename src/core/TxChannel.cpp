@@ -1925,6 +1925,14 @@ void TxChannel::sendAntiVoxData(const float* interleaved, int nsamples)
 // audio from the TCI binary pipeline and dispatches it in m_inputBufferSize
 // blocks through driveOneTxBlock().
 //
+// Phase 3J-1 review P1.1: signature changed from `const float*, frames` to
+// `QByteArray, frames` so the slot can be safely invoked with
+// Qt::QueuedConnection from the main thread (where TciServer's WS handler
+// fires) to TxWorkerThread (where TxChannel runs).  The QByteArray is a
+// value-type that Qt copies into the queued event — no raw-pointer lifetime
+// hazard across the thread boundary.  The float* view is reconstructed inside
+// the slot body via reinterpret_cast<const float*>(bytes.constData()).
+//
 // Phase 3J-1 Task 17.1 — NereusSDR-original entry point.
 //
 // Thetis dequeues TCIQueuedTxAudio in a separate thread and writes to the
@@ -1932,19 +1940,24 @@ void TxChannel::sendAntiVoxData(const float* interleaved, int nsamples)
 // NereusSDR consolidates this into a single call that accumulates and drains
 // in the same drain tick where the data arrived.
 //
-// `interleavedStereo`  — L0,R0,L1,R1,... (channels==2) or L0,L1,... (channels==1)
-// `frames`             — number of multi-channel frames (total floats / channels)
-// `channels`           — 1 or 2; mono frames are replicated to stereo
-// `srcRate`            — source rate from TCI header (informational; resampling deferred)
+// `interleavedStereoBytes` — raw float bytes: L0,R0,L1,R1,... (ch==2) or
+//                            L0,L1,... (ch==1); size == frames * channels * 4
+// `frames`                 — number of multi-channel frames
+// `channels`               — 1 or 2; mono frames are replicated to stereo
+// `srcRate`                — source rate from TCI header (informational; deferred)
 // ---------------------------------------------------------------------------
-void TxChannel::feedTxAudioFromTci(const float* interleavedStereo, int frames,
-                                    int channels, int srcRate)
+void TxChannel::feedTxAudioFromTci(const QByteArray& interleavedStereoBytes,
+                                    int frames, int channels, int srcRate)
 {
     (void)srcRate;  // Phase 17 simplified scope: no rate conversion
 
-    if (!interleavedStereo || frames <= 0 || channels < 1 || channels > 2) {
+    const int expectedBytes = frames * channels * static_cast<int>(sizeof(float));
+    if (interleavedStereoBytes.size() < expectedBytes || frames <= 0
+            || channels < 1 || channels > 2) {
         return;
     }
+    const float* interleavedStereo =
+        reinterpret_cast<const float*>(interleavedStereoBytes.constData());
 
     // driveOneTxBlock expects MONO float samples (one per frame) — it sets
     // I = samples[i], Q = 0 for each frame.  Extract the L channel from the

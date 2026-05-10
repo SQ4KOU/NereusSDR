@@ -1324,19 +1324,37 @@ void TciServer::onBinaryMessageReceived(const QByteArray& data)
             static_cast<qint64>(decodedValueCount) * static_cast<qint64>(sizeof(float)));
     }
 
-    // ── Drain to TxChannel if available ──────────────────────────────────────
+    // ── Dispatch to TxChannel via cross-thread queued invoke ─────────────────
     //
-    // Phase 17 simplified: if TxChannel is available, feed the decoded
-    // (and clamped) samples directly — bypassing the ring so the block
-    // reaches driveOneTxBlock without an extra copy.  Remove the corresponding
-    // bytes from the ring to avoid double-processing on future drain ticks.
+    // Phase 3J-1 review P1.1: TxChannel lives on TxWorkerThread; calling
+    // feedTxAudioFromTci directly from this (main-thread) handler would race
+    // the worker pump.  We use QMetaObject::invokeMethod with
+    // Qt::QueuedConnection so the slot fires on TxChannel's owning thread.
+    //
+    // The decoded samples are packed into a QByteArray (value type) before the
+    // invoke so the argument is safely deep-copied into the queued event — a
+    // raw float* would be dangling by the time the event is processed.
+    //
+    // When m_model is null (unit tests with no TxChannel) we skip the invoke
+    // and leave the bytes in m_txAudioRing so peekTxRingSize() assertions work.
     if (m_model && frames > 0) {
         WdspEngine* wdsp = m_model->wdspEngine();
         if (wdsp && wdsp->isInitialized()) {
             TxChannel* txCh = wdsp->txChannel(0);
             if (txCh) {
-                txCh->feedTxAudioFromTci(decoded.data(), frames, channels, sampleRate);
-                // Drop the bytes we just pushed to the ring (we fed directly above).
+                const QByteArray payloadCopy(
+                    reinterpret_cast<const char*>(decoded.data()),
+                    static_cast<qsizetype>(decoded.size()) * static_cast<qsizetype>(sizeof(float)));
+
+                QMetaObject::invokeMethod(txCh, "feedTxAudioFromTci",
+                                          Qt::QueuedConnection,
+                                          Q_ARG(QByteArray, payloadCopy),
+                                          Q_ARG(int, frames),
+                                          Q_ARG(int, channels),
+                                          Q_ARG(int, sampleRate));
+
+                // Drop the bytes we staged in the ring — the queued invoke will
+                // drain via driveOneTxBlock on the worker thread.
                 m_txAudioRing.dropOldest(
                     static_cast<size_t>(decodedValueCount) * sizeof(float));
             }
