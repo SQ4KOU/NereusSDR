@@ -15,7 +15,6 @@
 //                AI-assisted transformation via Anthropic Claude Code.
 
 #include "TciProtocol.h"
-#include "LogCategories.h"
 
 namespace NereusSDR {
 
