@@ -1,3 +1,9 @@
+// no-port-check: NereusSDR-original test file. The Thetis source citations
+// in the test bodies are traceability markers that confirm which Thetis
+// lines define the expected byte values being asserted — no Thetis test
+// code is ported here. The production code under test (TciBinaryFrame) is
+// the ported code and carries the full attribution in its own files.
+
 // tests/tst_tci_binary_frame.cpp  (NereusSDR)
 // NereusSDR-original — no Thetis upstream port in this test file.
 //

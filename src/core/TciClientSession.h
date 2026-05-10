@@ -31,6 +31,7 @@
 #ifdef HAVE_WEBSOCKETS
 
 #include <QtCore/QElapsedTimer>
+#include <QtCore/QHash>
 #include <QtCore/QSet>
 #include <QtCore/QString>
 
@@ -86,6 +87,17 @@ struct TciClientSession {
 
     // From Thetis TCIServer.cs:767 [v2.10.3.13] — m_audioStreamEnabled HashSet<int>
     QSet<int> audioStreamEnabled;
+
+    // Phase 16 Task 16.3 (sub-commit b): per-slice WDSP RESAMPLEF instance.
+    // Created lazily on audio_start, destroyed on audio_stop + disconnect.
+    // Key = rx index (slice).  void* avoids pulling WDSP resample.h into
+    // TciClientSession.h; TciServer manages create/destroy via
+    // handleAudioSubscribe / handleAudioUnsubscribe / cleanupResamplers.
+    //
+    // From Thetis TCIServer.cs:789 [v2.10.3.13] — m_rxAudioResamplers
+    // Dictionary<int, Resampler> replaced by QHash<int, void*> (opaque ptr
+    // to RESAMPLEF struct allocated via create_resampleF / create_resampleFV).
+    QHash<int, void*> audioResamplers;
 
     // ── Audio stream configuration ───────────────────────────────────────────
     // From Thetis TCIServer.cs:779 [v2.10.3.13] — m_audioSampleRate = 48000

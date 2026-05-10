@@ -23,6 +23,23 @@
 #include "LogCategories.h"
 #include "models/RadioModel.h"
 
+// Phase 16 Task 16.3 (sub-commit b): WDSP RESAMPLEF lifecycle.
+// resample.h declares create_resampleF / destroy_resampleF / xresampleF, and
+// the RESAMPLEF typedef.  The void*-opaque FV wrappers (create_resampleFV /
+// xresampleFV / destroy_resampleFV) live in resample.c:342-360 [WDSP TAPR v1.29]
+// but are NOT declared in resample.h — they are forward-declared here.
+//
+// create_resampleFV(in_rate, out_rate) calls create_resampleF(1, 0, 0, 0, in_rate,
+// out_rate), so size=0 + null buffers are safe at construction time; xresampleFV
+// sets in/out/size per-call.  Verified by reading resample.c:342-360.
+extern "C" {
+#include "resample.h"
+// FV wrappers are not declared in resample.h — forward-declare them:
+void* create_resampleFV(int in_rate, int out_rate);
+void  xresampleFV(float* input, float* output, int numsamps, int* outsamps, void* ptr);
+void  destroy_resampleFV(void* ptr);
+}
+
 #include <QHostAddress>
 #include <QTimer>
 #include <QWebSocket>
@@ -184,7 +201,13 @@ void TciServer::stop()
     // Disconnect all connected clients.  We disconnect the socket's signals
     // from this object first to prevent onClientDisconnected() re-entry during
     // the explicit close() calls.
+    //
+    // Phase 16 Task 16.3 (sub-commit b): destroy all RESAMPLEF instances for
+    // each session before clearing the client table. cleanupResamplers is called
+    // here so resamplers are destroyed even if QWebSocket::disconnected never
+    // fires (e.g. on forceful server shutdown).
     for (auto it = m_clients.begin(); it != m_clients.end(); ++it) {
+        cleanupResamplers(it.value());
         QWebSocket* ws = it.key();
         ws->disconnect(this);
         ws->close();
@@ -262,8 +285,103 @@ void TciServer::onClientDisconnected()
     qCInfo(lcTci) << "TciServer: client disconnected from" << it.value()->peer;
     emit clientDisconnected(ws);
 
+    // Phase 16 Task 16.3 (sub-commit b): destroy all RESAMPLEF instances for
+    // this client before removing the session from the map.
+    cleanupResamplers(it.value());
+
     m_clients.erase(it);
     ws->deleteLater();
+}
+
+// ── totalResamplerInstances() ─────────────────────────────────────────────────
+//
+// Phase 16 Task 16.3 (sub-commit b): sums audioResamplers.size() across all
+// connected sessions. Exposed for lifecycle test assertions and future
+// diagnostic tooling (Phase 22 ClientChainApplet).
+int TciServer::totalResamplerInstances() const
+{
+    int total = 0;
+    for (auto it = m_clients.cbegin(); it != m_clients.cend(); ++it) {
+        total += it.value()->audioResamplers.size();
+    }
+    return total;
+}
+
+// ── handleAudioSubscribe() ────────────────────────────────────────────────────
+//
+// Phase 16 Task 16.3 (sub-commit b): creates a RESAMPLEF instance for the
+// given (session, rx) pair if one doesn't already exist.  Idempotent.
+//
+// From Thetis TCIServer.cs — audio_start handler stores the rx in
+// m_audioStreamEnabled (a HashSet<int>) and instantiates a Resampler from
+// its m_rxAudioResamplers Dictionary [v2.10.3.13]. NereusSDR maps this to
+// create_resampleFV (the void*-opaque exported wrapper in resample.c:342-344
+// [WDSP TAPR v1.29]) which calls create_resampleF(run=1, size=0, in=0, out=0,
+// in_rate, out_rate).  The size=0/null buffers are fine because xresampleFV
+// sets in/out/size per-call — verified by reading resample.c:342-360.
+void TciServer::handleAudioSubscribe(std::shared_ptr<TciClientSession>& session, int rx)
+{
+    if (session->audioStreamEnabled.contains(rx)) {
+        return;  // idempotent — Thetis HashSet.Add returns false on duplicate
+    }
+    session->audioStreamEnabled.insert(rx);
+
+    if (!session->audioResamplers.contains(rx)) {
+        const int inRate  = 48000;                        // WDSP RX output is always 48 kHz
+        const int outRate = session->audioSampleRate;     // negotiated client rate (default 48000)
+        // create_resampleFV(in_rate, out_rate) — from resample.c:342-344 [WDSP v1.29]:
+        //   return (void *)create_resampleF(1, 0, 0, 0, in_rate, out_rate);
+        // size=0 + null buffers are intentional; xresampleFV sets them per-call.
+        void* resampler = create_resampleFV(inRate, outRate);
+        if (resampler) {
+            session->audioResamplers.insert(rx, resampler);
+            qCInfo(lcTci) << "TciServer: audio resampler created for rx" << rx
+                          << "peer" << session->peer
+                          << "in_rate" << inRate << "out_rate" << outRate;
+        } else {
+            qCWarning(lcTci) << "TciServer: create_resampleFV failed for rx" << rx
+                             << "in_rate" << inRate << "out_rate" << outRate;
+        }
+    }
+}
+
+// ── handleAudioUnsubscribe() ──────────────────────────────────────────────────
+//
+// Phase 16 Task 16.3 (sub-commit b): destroys the RESAMPLEF for the given
+// (session, rx) pair and removes it from the subscription set.  Idempotent.
+//
+// From Thetis TCIServer.cs — audio_stop handler removes the rx from
+// m_audioStreamEnabled and disposes the corresponding Resampler [v2.10.3.13].
+void TciServer::handleAudioUnsubscribe(std::shared_ptr<TciClientSession>& session, int rx)
+{
+    if (!session->audioStreamEnabled.contains(rx)) {
+        return;  // idempotent
+    }
+    session->audioStreamEnabled.remove(rx);
+
+    auto rIt = session->audioResamplers.find(rx);
+    if (rIt != session->audioResamplers.end()) {
+        // destroy_resampleFV — from resample.c:358-360 [WDSP v1.29]:
+        //   destroy_resampleF((RESAMPLEF)ptr);
+        destroy_resampleFV(rIt.value());
+        session->audioResamplers.erase(rIt);
+        qCInfo(lcTci) << "TciServer: audio resampler destroyed for rx" << rx
+                      << "peer" << session->peer;
+    }
+}
+
+// ── cleanupResamplers() ───────────────────────────────────────────────────────
+//
+// Phase 16 Task 16.3 (sub-commit b): destroys all RESAMPLEF instances for the
+// given session. Called from onClientDisconnected and stop() to prevent leaks.
+void TciServer::cleanupResamplers(std::shared_ptr<TciClientSession>& session)
+{
+    for (auto rIt = session->audioResamplers.begin();
+         rIt != session->audioResamplers.end(); ++rIt) {
+        destroy_resampleFV(rIt.value());
+    }
+    session->audioResamplers.clear();
+    session->audioStreamEnabled.clear();
 }
 
 // ── onTextMessageReceived() ──────────────────────────────────────────────────
@@ -278,6 +396,37 @@ void TciServer::onTextMessageReceived(const QString& msg)
     auto& session = it.value();
     session->lastCommand   = msg;
     session->lastCommandAt = QDateTime::currentMSecsSinceEpoch();
+
+    // Phase 16 Task 16.3 (sub-commit b): intercept audio_start/audio_stop for
+    // per-client subscription state and WDSP resampler lifecycle. This runs
+    // BEFORE TciProtocol dispatch because TciProtocol is transport-blind and
+    // has no concept of per-client sessions.
+    //
+    // From Thetis TCIServer.cs:4406-4440 [v2.10.3.13] — audio_start / audio_stop
+    // parse the rx index and update m_audioStreamEnabled per-listener.
+    // NereusSDR mirrors: parse rx from stripped command, delegate to
+    // handleAudioSubscribe / handleAudioUnsubscribe which manage the QHash.
+    {
+        QString trimmed = msg.trimmed();
+        if (trimmed.endsWith(QLatin1Char(';'))) {
+            trimmed.chop(1);
+        }
+        const QString kAudioStart = QStringLiteral("audio_start:");
+        const QString kAudioStop  = QStringLiteral("audio_stop:");
+        if (trimmed.startsWith(kAudioStart)) {
+            bool ok = false;
+            const int rx = trimmed.mid(kAudioStart.size()).trimmed().toInt(&ok);
+            if (ok && rx >= 0 && rx <= 1) {
+                handleAudioSubscribe(session, rx);
+            }
+        } else if (trimmed.startsWith(kAudioStop)) {
+            bool ok = false;
+            const int rx = trimmed.mid(kAudioStop.size()).trimmed().toInt(&ok);
+            if (ok && rx >= 0 && rx <= 1) {
+                handleAudioUnsubscribe(session, rx);
+            }
+        }
+    }
 
     // From design doc §1 + Sweep B silent-error invariant:
     // handleCommand returns the synchronous response (empty for unknown

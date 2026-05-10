@@ -3990,6 +3990,16 @@ endif()
 # Transport-blind: no Qt6WebSockets dependency.
 nereus_add_test(tst_tci_binary_frame)
 
+# ── Phase 3J-1 Task 16.3 (sub-commit b): WDSP resampler lifecycle ─────────────
+# Verifies per-(client, slice) create_resampleFV lifecycle:
+#   subscribe → 1; second client subscribes same slice → 2;
+#   first unsubscribes → 1; server stop → 0.
+# Gated on Qt6WebSockets_FOUND (TciServer requires HAVE_WEBSOCKETS).
+if(Qt6WebSockets_FOUND)
+    nereus_add_test(tst_tci_resampler_lifecycle)
+    target_link_libraries(tst_tci_resampler_lifecycle PRIVATE Qt6::WebSockets)
+endif()
+
 # ── Phase 3J-1 Task 1.1: TCI verification matrix runner ──────────────────────
 # Loads tests/data/tci/matrix.csv and feeds each row's command into
 # TciProtocol::handleCommand(), asserting the response + notification queue

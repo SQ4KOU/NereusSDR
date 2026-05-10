@@ -73,6 +73,10 @@ public:
     quint16 port()        const;
     int     clientCount() const { return m_clients.size(); }
 
+    // Phase 16 Task 16.3 (sub-commit b): sum of audioResamplers.size() across
+    // all connected sessions.  Exposed for lifecycle test assertions.
+    int totalResamplerInstances() const;
+
     // Override the ping interval (milliseconds) for testability.
     // Default 20000ms matches Thetis TCIServer.cs:2650 [v2.10.3.13] (1000 * 20).
     // Call before or after start(); if the timer is already running the new
@@ -108,6 +112,17 @@ private slots:
 
     // Binary-frame handler — Phase 17 wires TX audio + IQ inbound here.
     void onBinaryMessageReceived(const QByteArray& data);
+
+    // Phase 16 Task 16.3 (sub-commit b): audio subscription + resampler lifecycle.
+    // Intercepts audio_start:N; / audio_stop:N; commands in onTextMessageReceived
+    // BEFORE handing to TciProtocol (which has no concept of client sessions).
+    // From Thetis TCIServer.cs:4406-4440 [v2.10.3.13] — audio_start/stop handlers.
+    void handleAudioSubscribe(std::shared_ptr<TciClientSession>& session, int rx);
+    void handleAudioUnsubscribe(std::shared_ptr<TciClientSession>& session, int rx);
+
+    // Destroys all RESAMPLEF instances for the given session and clears the map.
+    // Called from onClientDisconnected and stop().
+    void cleanupResamplers(std::shared_ptr<TciClientSession>& session);
 
 private:
     RadioModel*        m_model;
