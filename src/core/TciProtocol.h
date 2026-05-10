@@ -23,6 +23,8 @@
 #include <QString>
 #include <QStringList>
 
+#include "TciVolume.h"
+
 namespace NereusSDR {
 
 // ─────────────────────────────────────────────────────────────────────────
@@ -233,6 +235,72 @@ private:
     //       [v2.10.3.13] is NOT replicated in Phase 9 stub; NereusSDR stores F2 dB
     //       directly without the Thetis pan-slider calibration (deferred to Phase 20).
     QString handleRxBalanceCommand(const QStringList& args);
+
+    // ── Audio stream family handlers (Phase 10) ───────────────────────────────
+    // From Thetis TCIServer.cs:5019-5041 [v2.10.3.13] — set-switch audio cases.
+    // Corrections vs. plan: "audio_stream" → "audio_start"/"audio_stop";
+    //   "audio_gain" does not exist in Thetis — the actual case is "volume";
+    //   "line_out_*" do not have NereusSDR equivalents — skipped.
+
+    // From Thetis TCIServer.cs:5019 [v2.10.3.13] — audio_samplerate set case.
+    // handleAudioSampleRate at TCIServer.cs:5740-5795 [v2.10.3.13]:
+    //   1-arg set. Accepts 8000/12000/24000/48000; ignores other values but still
+    //   echoes current rate. Phase 10 simplified: no default-samples adjustment
+    //   (m_audioStreamSamplesExplicitlySet tracking deferred to Phase 16).
+    //   Query: TCIServer.cs:5178 [v2.10.3.13] — sendAudioSampleRate(m_audioSampleRate).
+    QString handleAudioSampleRateCommand(const QStringList& args);
+    // From Thetis TCIServer.cs:5178 [v2.10.3.13] — audio_samplerate query case.
+    QString handleAudioSampleRateQueryCommand();
+
+    // From Thetis TCIServer.cs:5034 [v2.10.3.13] — audio_stream_sample_type set case.
+    // handleAudioStreamSampleType at TCIServer.cs:5908-5933 [v2.10.3.13]:
+    //   1-arg set. Accepts "int16"/"int24"/"int32"/"float32"; defaults to float32
+    //   for unknown values (Thetis default: case "float32": default:).
+    //   No 1-arg query case in Thetis query switch — set-only.
+    QString handleAudioStreamSampleTypeCommand(const QStringList& args);
+
+    // From Thetis TCIServer.cs:5037 [v2.10.3.13] — audio_stream_channels set case.
+    // handleAudioStreamChannels at TCIServer.cs:5935-5949 [v2.10.3.13]:
+    //   1-arg set. Accepts 1 (mono) or 2 (stereo); ignores other values.
+    //   No 1-arg query case in Thetis query switch — set-only.
+    QString handleAudioStreamChannelsCommand(const QStringList& args);
+
+    // From Thetis TCIServer.cs:5040 [v2.10.3.13] — audio_stream_samples set case.
+    // handleAudioStreamSamples at TCIServer.cs:5951-5983 [v2.10.3.13]:
+    //   1-arg set. Range [100..2048] — values outside range silently ignored and
+    //   current value echoed. Phase 10: upper clamp returns 2048 in echo.
+    //   No 1-arg query case in Thetis query switch — set-only.
+    QString handleAudioStreamSamplesCommand(const QStringList& args);
+
+    // From Thetis TCIServer.cs:5028-5032 [v2.10.3.13] — audio_start / audio_stop cases.
+    // handleAudioStart at TCIServer.cs:5891-5906 [v2.10.3.13]:
+    //   Manages per-receiver audio stream subscription (m_audioStreamEnabled).
+    //   STUBBED in Phase 10 — no per-client subscription model yet.
+    //   Phase 16 wires per-client subscription tracking and streaming callbacks.
+    //   Returns empty; enqueues no notification.
+    QString handleAudioStartCommand(const QStringList& args, bool enable);
+
+    // From Thetis TCIServer.cs:5064 [v2.10.3.13] — volume set case.
+    // handleVolume at TCIServer.cs:4150-4161 [v2.10.3.13]:
+    //   1-arg set (double dB). Converts via dbToLinearVolume and writes AF.
+    //   sendVolume at TCIServer.cs:2173-2179 [v2.10.3.13]: F1 C-locale; guards
+    //   on -60 <= db <= 0 before sending.
+    //   Query: TCIServer.cs:5148 [v2.10.3.13] — sendVolume(linearToDbVolume(AF)).
+    QString handleVolumeCommand(const QStringList& args);
+
+    // From Thetis TCIServer.cs:5148 [v2.10.3.13] — volume query case.
+    QString handleVolumeQueryCommand();
+
+    // From Thetis TCIServer.cs:5070 [v2.10.3.13] — mon_volume set case.
+    // handleMONVolume at TCIServer.cs:4133-4148 [v2.10.3.13]:
+    //   1-arg set (double dB). Converts via dbToLinearVolume and writes TXAF.
+    //   sendMONVolume at TCIServer.cs:2180-2186 [v2.10.3.13]: F1 C-locale; same
+    //   -60..0 guard as sendVolume.
+    //   Query: TCIServer.cs:5154 [v2.10.3.13] — sendMONVolume(linearToDbVolume(TXAF)).
+    QString handleMonVolumeCommand(const QStringList& args);
+
+    // From Thetis TCIServer.cs:5154 [v2.10.3.13] — mon_volume query case.
+    QString handleMonVolumeQueryCommand();
 
     // From Thetis TCIServer.cs:2363-2510 [v2.10.3.13] — sendInitialRadioState body.
     // Phase 4 Task 4.2 fills the body (up to 97 wire lines per Sweep D).

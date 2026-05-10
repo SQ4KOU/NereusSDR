@@ -922,7 +922,25 @@ QString TciProtocol::handleSetCommand(const QString& name, const QStringList& ar
     // From Thetis TCIServer.cs:5109 [v2.10.3.13] — rx_balance case in set switch.
     if (name == QStringLiteral("rx_balance"))      { return handleRxBalanceCommand(args); }
 
-    // Phase 10+ adds more cases.
+    // Phase 10: audio stream family.
+    // From Thetis TCIServer.cs:5019 [v2.10.3.13] — audio_samplerate case in set switch.
+    if (name == QStringLiteral("audio_samplerate"))          { return handleAudioSampleRateCommand(args); }
+    // From Thetis TCIServer.cs:5034 [v2.10.3.13] — audio_stream_sample_type case.
+    if (name == QStringLiteral("audio_stream_sample_type"))  { return handleAudioStreamSampleTypeCommand(args); }
+    // From Thetis TCIServer.cs:5037 [v2.10.3.13] — audio_stream_channels case.
+    if (name == QStringLiteral("audio_stream_channels"))     { return handleAudioStreamChannelsCommand(args); }
+    // From Thetis TCIServer.cs:5040 [v2.10.3.13] — audio_stream_samples case.
+    if (name == QStringLiteral("audio_stream_samples"))      { return handleAudioStreamSamplesCommand(args); }
+    // From Thetis TCIServer.cs:5028 [v2.10.3.13] — audio_start case (STUB Phase 10).
+    if (name == QStringLiteral("audio_start"))               { return handleAudioStartCommand(args, true); }
+    // From Thetis TCIServer.cs:5031 [v2.10.3.13] — audio_stop case (STUB Phase 10).
+    if (name == QStringLiteral("audio_stop"))                { return handleAudioStartCommand(args, false); }
+    // From Thetis TCIServer.cs:5064 [v2.10.3.13] — volume case in set switch.
+    if (name == QStringLiteral("volume"))                    { return handleVolumeCommand(args); }
+    // From Thetis TCIServer.cs:5070 [v2.10.3.13] — mon_volume case in set switch.
+    if (name == QStringLiteral("mon_volume"))                { return handleMonVolumeCommand(args); }
+
+    // Phase 11+ adds more cases.
     return {};
 }
 
@@ -938,6 +956,20 @@ QString TciProtocol::handleQueryCommand(const QString& name)
     // From Thetis TCIServer.cs:5145 [v2.10.3.13] — case "mute" in 1-arg query switch.
     if (name == QStringLiteral("mute")) {
         return handleMuteQueryCommand();
+    }
+
+    // Phase 10: audio stream / volume query cases.
+    // From Thetis TCIServer.cs:5178 [v2.10.3.13] — audio_samplerate query case.
+    if (name == QStringLiteral("audio_samplerate")) {
+        return handleAudioSampleRateQueryCommand();
+    }
+    // From Thetis TCIServer.cs:5148 [v2.10.3.13] — volume query case.
+    if (name == QStringLiteral("volume")) {
+        return handleVolumeQueryCommand();
+    }
+    // From Thetis TCIServer.cs:5154 [v2.10.3.13] — mon_volume query case.
+    if (name == QStringLiteral("mon_volume")) {
+        return handleMonVolumeQueryCommand();
     }
 
     return {};
@@ -2009,6 +2041,206 @@ QString TciProtocol::handleRxBalanceCommand(const QStringList& args)
     }
 
     return {};
+}
+
+// ── Audio stream family handlers (Phase 10) ────────────────────────────────
+
+// From Thetis TCIServer.cs:5740-5795 [v2.10.3.13] — handleAudioSampleRate.
+// 1-arg set. Accepts 8000/12000/24000/48000; ignores other values (echoes
+// current rate either way). Phase 10 simplified: default-samples adjustment
+// (m_audioStreamSamplesExplicitlySet path) deferred to Phase 16.
+// Notification format: audio_samplerate:<int>; (sendAudioSampleRate).
+QString TciProtocol::handleAudioSampleRateCommand(const QStringList& args)
+{
+    if (args.size() != 1) { return {}; }
+    bool ok = false;
+    const int sr = args.at(0).trimmed().toInt(&ok);
+    if (!ok) { return {}; }
+
+    // From Thetis TCIServer.cs:5750 [v2.10.3.13] — valid-rate gate.
+    const bool valid = (sr == 8000 || sr == 12000 || sr == 24000 || sr == 48000);
+    if (valid) {
+        QMetaObject::invokeMethod(m_radio, "setAudioSampleRate",
+                                  Qt::DirectConnection,
+                                  Q_ARG(int, sr));
+    }
+
+    int current = 48000;
+    QMetaObject::invokeMethod(m_radio, "audioSampleRate",
+                              Qt::DirectConnection,
+                              Q_RETURN_ARG(int, current));
+    // From Thetis TCIServer.cs:5792 [v2.10.3.13] — sendAudioSampleRate(audioSampleRate).
+    m_pendingNotifications << buildAudioSampleRateLine(current);
+    return {};
+}
+
+// From Thetis TCIServer.cs:5178-5179 [v2.10.3.13] — audio_samplerate query case.
+// sendAudioSampleRate(m_audioSampleRate).
+QString TciProtocol::handleAudioSampleRateQueryCommand()
+{
+    int sr = 48000;
+    QMetaObject::invokeMethod(m_radio, "audioSampleRate",
+                              Qt::DirectConnection,
+                              Q_RETURN_ARG(int, sr));
+    return buildAudioSampleRateLine(sr);
+}
+
+// From Thetis TCIServer.cs:5908-5933 [v2.10.3.13] — handleAudioStreamSampleType.
+// 1-arg set. Valid values: "int16", "int24", "int32", "float32".
+// Unknown value defaults to "float32" (Thetis: case "float32": default:).
+// Notification format: audio_stream_sample_type:<string>;
+QString TciProtocol::handleAudioStreamSampleTypeCommand(const QStringList& args)
+{
+    if (args.size() != 1) { return {}; }
+    const QString raw = args.at(0).trimmed().toLower();
+
+    QString canonical;
+    if (raw == QStringLiteral("int16")) {
+        canonical = QStringLiteral("int16");
+    } else if (raw == QStringLiteral("int24")) {
+        canonical = QStringLiteral("int24");
+    } else if (raw == QStringLiteral("int32")) {
+        canonical = QStringLiteral("int32");
+    } else {
+        // From Thetis TCIServer.cs:5924-5927 [v2.10.3.13] — float32 default.
+        canonical = QStringLiteral("float32");
+    }
+    QMetaObject::invokeMethod(m_radio, "setAudioStreamSampleType",
+                              Qt::DirectConnection,
+                              Q_ARG(QString, canonical));
+    m_pendingNotifications << buildAudioStreamSampleTypeLine(canonical);
+    return {};
+}
+
+// From Thetis TCIServer.cs:5935-5949 [v2.10.3.13] — handleAudioStreamChannels.
+// 1-arg set. Accepts 1 (mono) or 2 (stereo); ignores other values but echoes current.
+// Notification format: audio_stream_channels:<int>;
+QString TciProtocol::handleAudioStreamChannelsCommand(const QStringList& args)
+{
+    if (args.size() != 1) { return {}; }
+    bool ok = false;
+    const int n = args.at(0).trimmed().toInt(&ok);
+    if (!ok) { return {}; }
+
+    // From Thetis TCIServer.cs:5941-5943 [v2.10.3.13] — channels == 1 || channels == 2 gate.
+    if (n == 1 || n == 2) {
+        QMetaObject::invokeMethod(m_radio, "setAudioStreamChannels",
+                                  Qt::DirectConnection,
+                                  Q_ARG(int, n));
+    }
+    int current = 2;
+    QMetaObject::invokeMethod(m_radio, "audioStreamChannels",
+                              Qt::DirectConnection,
+                              Q_RETURN_ARG(int, current));
+    m_pendingNotifications << buildAudioStreamChannelsLine(current);
+    return {};
+}
+
+// From Thetis TCIServer.cs:5951-5983 [v2.10.3.13] — handleAudioStreamSamples.
+// 1-arg set. Range [100..2048]. Values outside range: ignored, current echoed.
+// Notification format: audio_stream_samples:<int>;
+QString TciProtocol::handleAudioStreamSamplesCommand(const QStringList& args)
+{
+    if (args.size() != 1) { return {}; }
+    bool ok = false;
+    const int n = args.at(0).trimmed().toInt(&ok);
+    if (!ok) { return {}; }
+
+    // From Thetis TCIServer.cs:5957 [v2.10.3.13] — samples >= 100 && samples <= 2048 gate.
+    if (n >= 100 && n <= 2048) {
+        QMetaObject::invokeMethod(m_radio, "setAudioStreamSamples",
+                                  Qt::DirectConnection,
+                                  Q_ARG(int, n));
+    }
+    int current = 2048;
+    QMetaObject::invokeMethod(m_radio, "audioStreamSamples",
+                              Qt::DirectConnection,
+                              Q_RETURN_ARG(int, current));
+    m_pendingNotifications << buildAudioStreamSamplesLine(current);
+    return {};
+}
+
+// From Thetis TCIServer.cs:5891-5906 [v2.10.3.13] — handleAudioStart.
+// STUBBED in Phase 10: per-client audio stream subscription tracking
+// (m_audioStreamEnabled Set<int>) deferred to Phase 16. Returns empty;
+// enqueues no notification. The stub accepts the required 1-arg form and
+// validates the receiver int silently — unknown commands still produce nothing.
+QString TciProtocol::handleAudioStartCommand(const QStringList& args, bool enable)
+{
+    // Phase 16 will wire per-client m_audioStreamEnabled.Add/Remove(receiver)
+    // and call m_server->RefreshStreamRunState(). For now, accept valid args
+    // and return empty so the silent-error invariant still holds for bad inputs.
+    if (args.size() != 1) { return {}; }
+    bool ok = false;
+    (void)args.at(0).trimmed().toInt(&ok);
+    // Intentionally no notification — subscription model deferred to Phase 16.
+    (void)enable;
+    return {};
+}
+
+// From Thetis TCIServer.cs:4150-4161 [v2.10.3.13] — handleVolume (set path).
+// 1-arg set (double dB). Converts via tciDbToLinearVolume and stores AF.
+// sendVolume guards: -60 <= db <= 0 before emitting.
+// Notification format: volume:<F1 dB>; (sendVolume at TCIServer.cs:2173-2179).
+QString TciProtocol::handleVolumeCommand(const QStringList& args)
+{
+    if (args.size() != 1) { return {}; }
+    bool ok = false;
+    // From Thetis TCIServer.cs:4154 [v2.10.3.13] — double.TryParse.
+    const double db = args.at(0).trimmed().toDouble(&ok);
+    if (!ok) { return {}; }
+    // From Thetis TCIServer.cs:4155 [v2.10.3.13] — AF = dbToLinearVolume(dBLevel).
+    const int linear = tciDbToLinearVolume(db);
+    QMetaObject::invokeMethod(m_radio, "setAfLinear",
+                              Qt::DirectConnection,
+                              Q_ARG(int, linear));
+    // From Thetis TCIServer.cs:2173-2179 [v2.10.3.13] — sendVolume guards on -60..0.
+    // Use linearToDbVolume round-trip to produce the canonical value.
+    m_pendingNotifications << buildVolumeLine(tciLinearToDbVolume(linear));
+    return {};
+}
+
+// From Thetis TCIServer.cs:5148-5149 [v2.10.3.13] — volume query case.
+// sendVolume(linearToDbVolume(AF)) → direct unicast response.
+QString TciProtocol::handleVolumeQueryCommand()
+{
+    int linear = 50;
+    QMetaObject::invokeMethod(m_radio, "afLinear",
+                              Qt::DirectConnection,
+                              Q_RETURN_ARG(int, linear));
+    return buildVolumeLine(tciLinearToDbVolume(linear));
+}
+
+// From Thetis TCIServer.cs:4133-4148 [v2.10.3.13] — handleMONVolume (set path).
+// 1-arg set (double dB). Converts via tciDbToLinearVolume and stores TXAF.
+// sendMONVolume guards: -60 <= db <= 0 before emitting.
+// Notification format: mon_volume:<F1 dB>; (sendMONVolume at TCIServer.cs:2180-2186).
+QString TciProtocol::handleMonVolumeCommand(const QStringList& args)
+{
+    if (args.size() != 1) { return {}; }
+    bool ok = false;
+    // From Thetis TCIServer.cs:4138 [v2.10.3.13] — double.TryParse.
+    const double db = args.at(0).trimmed().toDouble(&ok);
+    if (!ok) { return {}; }
+    // From Thetis TCIServer.cs:4141 [v2.10.3.13] — TXAF = dbToLinearVolume(dBLevel).
+    const int linear = tciDbToLinearVolume(db);
+    QMetaObject::invokeMethod(m_radio, "setMonLinear",
+                              Qt::DirectConnection,
+                              Q_ARG(int, linear));
+    // From Thetis TCIServer.cs:2180-2186 [v2.10.3.13] — sendMONVolume guards on -60..0.
+    m_pendingNotifications << buildMonVolumeLine(tciLinearToDbVolume(linear));
+    return {};
+}
+
+// From Thetis TCIServer.cs:5154-5155 [v2.10.3.13] — mon_volume query case.
+// sendMONVolume(linearToDbVolume(TXAF)) → direct unicast response.
+QString TciProtocol::handleMonVolumeQueryCommand()
+{
+    int linear = 50;
+    QMetaObject::invokeMethod(m_radio, "monLinear",
+                              Qt::DirectConnection,
+                              Q_RETURN_ARG(int, linear));
+    return buildMonVolumeLine(tciLinearToDbVolume(linear));
 }
 
 } // namespace NereusSDR

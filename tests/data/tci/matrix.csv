@@ -56,3 +56,14 @@ xit_offset_set_neg300,xit_offset:0\,-300;,,xit_offset:0\,-300;,TCIServer.cs:4947
 rx_balance_set_rx0_chan0,rx_balance:0\,0\,12.50;,,rx_balance:0\,0\,12.50;,TCIServer.cs:5109 [v2.10.3.13],balance set F2 (rx=0 chan=0); handleRxBalance at TCIServer.cs:4631 [v2.10.3.13]; sendRxBalance at TCIServer.cs:2187 [v2.10.3.13]
 rx_balance_set_rx0_chan1,rx_balance:0\,1\,-15.00;,,rx_balance:0\,1\,-15.00;,TCIServer.cs:5109 [v2.10.3.13],balance set F2 (rx=0 chan=1) negative value
 rx_balance_query_after_set,rx_balance:0\,0\,12.50;;rx_balance:0\,0;,rx_balance:0\,0\,12.50;,,TCIServer.cs:4641 [v2.10.3.13],query-after-set confirms rx_balance 2-arg query form (uses ;; chain)
+audio_samplerate_set_48000,audio_samplerate:48000;,,audio_samplerate:48000;,TCIServer.cs:5740 [v2.10.3.13],set audio sample rate; valid value echoes current; sendAudioSampleRate at TCIServer.cs:5372 [v2.10.3.13]
+audio_samplerate_query_after_set,audio_samplerate:48000;;audio_samplerate;,audio_samplerate:48000;,,TCIServer.cs:5178 [v2.10.3.13],1-arg query in query switch; sendAudioSampleRate(m_audioSampleRate)
+audio_stream_sample_type_set_float32,audio_stream_sample_type:float32;,,audio_stream_sample_type:float32;,TCIServer.cs:5908 [v2.10.3.13],set sample type float32; handleAudioStreamSampleType at TCIServer.cs:5908 [v2.10.3.13]
+audio_stream_channels_set_stereo,audio_stream_channels:2;,,audio_stream_channels:2;,TCIServer.cs:5935 [v2.10.3.13],set channel count 2 (stereo); valid value echoed; handleAudioStreamChannels at TCIServer.cs:5935 [v2.10.3.13]
+audio_stream_samples_set_2048,audio_stream_samples:2048;,,audio_stream_samples:2048;,TCIServer.cs:5951 [v2.10.3.13],set block size 2048 samples (upper bound); handleAudioStreamSamples at TCIServer.cs:5951 [v2.10.3.13]
+audio_stream_samples_clamp_above,audio_stream_samples:5000;,,audio_stream_samples:2048;,TCIServer.cs:5951 [v2.10.3.13],value 5000 > 2048 is ignored; current (default 2048) echoed — upper-bound clamp behavior
+volume_set_negative_30,volume:-30.0;,,volume:-30.0;,TCIServer.cs:4150 [v2.10.3.13],set AF volume -30 dB; handleVolume at TCIServer.cs:4150 [v2.10.3.13]; sendVolume at TCIServer.cs:2173 [v2.10.3.13] (F1 C-locale)
+volume_query_after_set,volume:-30.0;;volume;,volume:-30.0;,,TCIServer.cs:5148 [v2.10.3.13],query returns current AF volume in F1 dB; uses ;; chain
+mon_volume_set_zero,mon_volume:0.0;,,mon_volume:0.0;,TCIServer.cs:4133 [v2.10.3.13],set monitor volume 0 dB; handleMONVolume at TCIServer.cs:4133 [v2.10.3.13]; sendMONVolume at TCIServer.cs:2180 [v2.10.3.13]
+audio_start_stub,audio_start:0;,,,TCIServer.cs:5891 [v2.10.3.13],STUB: per-client audio stream subscription deferred to Phase 16; no notification emitted (silent but valid)
+audio_stop_stub,audio_stop:0;,,,TCIServer.cs:5891 [v2.10.3.13],STUB: matched audio_start stub; no notification emitted (silent but valid)

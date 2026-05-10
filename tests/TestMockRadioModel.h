@@ -32,7 +32,13 @@
 //           setRitEnable/ritEnable, setRitOffset/ritOffset,
 //           setXitEnable/xitEnable, setXitOffset/xitOffset,
 //           setRxBalance/rxBalance.
-// Aim: ~40 accessors total by end of Phase 14. Each commit that adds
+// Phase 10: 43 accessors total — added 6 audio-stream / volume accessors:
+//           setAudioSampleRate/audioSampleRate,
+//           setAudioStreamSampleType/audioStreamSampleType,
+//           setAudioStreamChannels/audioStreamChannels,
+//           setAudioStreamSamples/audioStreamSamples,
+//           setAfLinear/afLinear, setMonLinear/monLinear.
+// Aim: ~50 accessors total by end of Phase 14. Each commit that adds
 // accessors should note the addition in the commit message.
 
 #pragma once
@@ -361,6 +367,46 @@ public:
         return 0.0;
     }
 
+    // ── Phase 10: Audio stream config accessors ───────────────────────────────
+
+    // Audio sample rate (Hz). Range: typically 8000/12000/24000/48000.
+    // From Thetis TCIServer.cs:5740 [v2.10.3.13] — handleAudioSampleRate.
+    // Q_INVOKABLE: called via QMetaObject::invokeMethod from TciProtocol.
+    Q_INVOKABLE void setAudioSampleRate(int sr) { m_audioSampleRate = sr; }
+    Q_INVOKABLE int audioSampleRate() const { return m_audioSampleRate; }
+
+    // Audio stream sample type: "float32" | "int16" | "int24" | "int32".
+    // From Thetis TCIServer.cs:5908 [v2.10.3.13] — handleAudioStreamSampleType.
+    // Q_INVOKABLE: called via QMetaObject::invokeMethod from TciProtocol.
+    Q_INVOKABLE void setAudioStreamSampleType(const QString& t) { m_audioStreamSampleType = t; }
+    Q_INVOKABLE QString audioStreamSampleType() const { return m_audioStreamSampleType; }
+
+    // Audio stream channel count: 1 (mono) or 2 (stereo).
+    // From Thetis TCIServer.cs:5935 [v2.10.3.13] — handleAudioStreamChannels.
+    // Q_INVOKABLE: called via QMetaObject::invokeMethod from TciProtocol.
+    Q_INVOKABLE void setAudioStreamChannels(int n) { m_audioStreamChannels = n; }
+    Q_INVOKABLE int audioStreamChannels() const { return m_audioStreamChannels; }
+
+    // Audio stream block size in samples. Range [100..2048].
+    // From Thetis TCIServer.cs:5951 [v2.10.3.13] — handleAudioStreamSamples.
+    // Q_INVOKABLE: called via QMetaObject::invokeMethod from TciProtocol.
+    Q_INVOKABLE void setAudioStreamSamples(int n) { m_audioStreamSamples = n; }
+    Q_INVOKABLE int audioStreamSamples() const { return m_audioStreamSamples; }
+
+    // AF (RX audio) gain stored as linear int [0..100].
+    // Wire boundary converts via tciLinearToDbVolume / tciDbToLinearVolume
+    // (Thetis TCIServer.cs:4110-4132 [v2.10.3.13]).
+    // From Thetis TCIServer.cs:4150-4160 [v2.10.3.13] — handleVolume.
+    // Q_INVOKABLE: called via QMetaObject::invokeMethod from TciProtocol.
+    Q_INVOKABLE void setAfLinear(int v) { m_afLinear = v; }
+    Q_INVOKABLE int afLinear() const { return m_afLinear; }
+
+    // MON (TX monitor) volume stored as linear int [0..100].
+    // From Thetis TCIServer.cs:4133-4148 [v2.10.3.13] — handleMONVolume.
+    // Q_INVOKABLE: called via QMetaObject::invokeMethod from TciProtocol.
+    Q_INVOKABLE void setMonLinear(int v) { m_monLinear = v; }
+    Q_INVOKABLE int monLinear() const { return m_monLinear; }
+
     // Reset all state to baseline (zeros/empty). Called before each matrix row.
     void resetToBaseline()
     {
@@ -393,6 +439,13 @@ public:
         m_xitEnable = false;
         m_xitOffset = 0;
         m_rxBalance = {};
+        // Phase 10: audio stream / volume state resets.
+        m_audioSampleRate = 48000;
+        m_audioStreamSampleType = QStringLiteral("float32");
+        m_audioStreamChannels = 2;
+        m_audioStreamSamples = 2048;
+        m_afLinear  = 50;
+        m_monLinear = 50;
     }
 
 private:
@@ -427,6 +480,13 @@ private:
     bool m_xitEnable{false};
     int  m_xitOffset{0};
     std::array<std::array<double, 2>, 2> m_rxBalance{};
+    // Phase 10: audio stream / volume state.
+    int     m_audioSampleRate{48000};
+    QString m_audioStreamSampleType{QStringLiteral("float32")};
+    int     m_audioStreamChannels{2};
+    int     m_audioStreamSamples{2048};
+    int     m_afLinear{50};
+    int     m_monLinear{50};
 };
 
 } // namespace NereusSDR

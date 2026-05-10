@@ -3994,6 +3994,13 @@ nereus_add_test(tst_tci_matrix_runner TestMockRadioModel.cpp)
 target_compile_definitions(tst_tci_matrix_runner PRIVATE
     NEREUS_TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")
 
+# ── Phase 3J-1 Task 10: TCI volume dB math (pure logic, no WebSockets) ───────
+# Tests tciLinearToDbVolume / tciDbToLinearVolume from TciVolume.h.
+# Port of Thetis TCIServer.cs:4110-4132 [v2.10.3.13] linearToDbVolume /
+# dbToLinearVolume. Test-impl bundle — both TciVolume.h and this test land
+# in the same commit.
+nereus_add_test(tst_tci_volume_db)
+
 # ── Phase 3J-1 Task 3.1: TciProtocol dispatch seam ────────────────────────────
 # Verifies two-switch routing: query path (no ':'), set path (with ':'), silent-
 # error invariant for unknown commands, and trailing-';' stripping. Transport-
