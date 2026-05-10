@@ -4013,3 +4013,15 @@ nereus_add_test(tst_tci_init_burst_smoke TestMockRadioModel.cpp)
 # intended cross-product), whereas Thetis TCIServer.cs:2374-2375 [v2.10.3.13]
 # mistakenly calls sendIF(1,1) twice. Exactly one if:1,1 line must be present.
 nereus_add_test(tst_tci_init_burst_typo_divergence TestMockRadioModel.cpp)
+
+# ── Phase 3J-1 Task 4.3: init burst golden file + CI assertion ────────────────
+# Compares buildInitBurst() output against the synthetic golden file at
+# tests/data/tci/init_burst_anan_g2_rx1.txt (SYNTHETIC — replace before merge
+# with a real ANAN-G2 capture per Phase 26 Task 26.4).
+# Strict-protocol prefixes (protocol: trx_count: channels_count:
+# modulations_list: receive_only: ready;) are compared byte-for-byte.
+# Radio-identifying fields (device: vfo: dds: if: tx_frequency:
+# tx_frequency_thetis:) are compared loosely (prefix-only).
+nereus_add_test(tst_tci_init_burst_golden TestMockRadioModel.cpp)
+target_compile_definitions(tst_tci_init_burst_golden PRIVATE
+    NEREUS_TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")
