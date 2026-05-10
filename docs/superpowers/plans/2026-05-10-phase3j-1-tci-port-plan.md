@@ -45,11 +45,11 @@
 11. **`STANDARD_GUI_VERIFY` macro** (referenced by every GUI phase):
     ```bash
     # 1. Build
-    cmake --build /Users/j.j.boyd/NereusSDR/.claude/worktrees/exciting-nash-ac2b41/build -j$(sysctl -n hw.ncpu 2>/dev/null || nproc)
+    cmake --build /Users/j.j.boyd/NereusSDR/.worktrees/phase3j-1-tci-server-port/build -j$(sysctl -n hw.ncpu 2>/dev/null || nproc)
     # 2. Kill + relaunch
     pkill -9 -f NereusSDR && sleep 2
-    # macOS:    open /Users/j.j.boyd/NereusSDR/.claude/worktrees/exciting-nash-ac2b41/build/NereusSDR.app
-    # Linux:    /Users/j.j.boyd/NereusSDR/.claude/worktrees/exciting-nash-ac2b41/build/NereusSDR &
+    # macOS:    open /Users/j.j.boyd/NereusSDR/.worktrees/phase3j-1-tci-server-port/build/NereusSDR.app
+    # Linux:    /Users/j.j.boyd/NereusSDR/.worktrees/phase3j-1-tci-server-port/build/NereusSDR &
     # Windows:  start "" "C:\path\to\worktree\build\NereusSDR.exe"
     sleep 3
     # 3. Verify binary is from this worktree
@@ -87,7 +87,7 @@ Capture once at session start: `sed -n '1,40p' "/Users/j.j.boyd/Thetis/Project F
 - [ ] **Set `NEREUS_THETIS_DIR=/Users/j.j.boyd/Thetis`** so the `verify-inline-tag-preservation.py` pre-commit hook can find Thetis source. Add to `.envrc` if direnv is in use, or document in CONTRIBUTING.md as required setup. Without this, the hook silently SKIPS (caught during the design-doc commit) and dropped author tags will not be flagged locally — only in CI.
 - [ ] Verify clean build:
   ```bash
-  cmake --build /Users/j.j.boyd/NereusSDR/.claude/worktrees/exciting-nash-ac2b41/build -j$(sysctl -n hw.ncpu 2>/dev/null || nproc)
+  cmake --build /Users/j.j.boyd/NereusSDR/.worktrees/phase3j-1-tci-server-port/build -j$(sysctl -n hw.ncpu 2>/dev/null || nproc)
   ```
 - [ ] Commit:
   ```
@@ -606,7 +606,7 @@ This task chunks into 3 logical sub-commits (single task, three commits — impl
 
 ### Task 26.1: Run full ctest suite
 
-- [ ] `ctest --test-dir /Users/j.j.boyd/NereusSDR/.claude/worktrees/exciting-nash-ac2b41/build --output-on-failure`. ALL green. Investigate any regression.
+- [ ] `ctest --test-dir /Users/j.j.boyd/NereusSDR/.worktrees/phase3j-1-tci-server-port/build --output-on-failure`. ALL green. Investigate any regression.
 
 ### Task 26.2: Single comprehensive code review
 
