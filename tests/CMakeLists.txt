@@ -4065,6 +4065,14 @@ nereus_add_test(tst_tci_vfo_coalescer)
 # in the same commit.
 nereus_add_test(tst_tci_volume_db)
 
+# ── Phase 3J-1 Task 19.1: TciSensorManager wire formats + interval aggregation ──
+# Tests the 4 formatXxx helpers and minimumRequiredInterval from TciSensorManager.h.
+# Port of Thetis TCIServer.cs:2314-2332 [v2.10.3.13] sendRxSensors /
+# sendRxChannelSensors / sendTxSensors and clsTCISensorManager clampIntervalMs /
+# MinimumRequiredRxSensorInterval / MinimumRequiredTxSensorInterval.
+# Pure logic: no WebSockets dependency.
+nereus_add_test(tst_tci_sensor_formats)
+
 # ── Phase 3J-1 Task 3.1: TciProtocol dispatch seam ────────────────────────────
 # Verifies two-switch routing: query path (no ':'), set path (with ':'), silent-
 # error invariant for unknown commands, and trailing-';' stripping. Transport-

@@ -21,6 +21,7 @@
 #include "TciProtocol.h"
 #include "TciSendQueue.h"
 #include "TciBinaryFrame.h"
+#include "TciSensorManager.h"
 #include "LogCategories.h"
 #include "models/RadioModel.h"
 #include "WdspEngine.h"
@@ -201,6 +202,80 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         }
     });
 
+    // Phase 19: RX sensor broadcast timer.
+    //
+    // From Thetis TCIServer.cs:2554-2566 [v2.10.3.13] — setRxSensorsEnabled
+    // creates a System.Threading.Timer(RxSensorsTimerCallback, null, 0, intervalMs)
+    // when enabled is true.
+    //
+    // NereusSDR equivalent: a QTimer on the main thread. Default interval 200 ms
+    // matches Thetis clsTCISensorManager._rxIntervalMs (TCIServer.cs:491 [v2.10.3.13]).
+    // Timer is started in start() and stopped in stop() so it fires only when the
+    // server is running.
+    //
+    // Phase 19 stub: emits placeholder rx_sensors:0,-100.0; to each subscribed
+    // client. Phase 24+ wires real RadioModel meter signals here.
+    m_rxSensorTimer = new QTimer(this);
+    m_rxSensorTimer->setInterval(200);  // default 200ms; updated by rx_sensors_enable:true,<ms>;
+    connect(m_rxSensorTimer, &QTimer::timeout, this, [this]() {
+        // From Thetis RxSensorsTimerCallback (TCIServer.cs:2587-2616 [v2.10.3.13]):
+        // iterate listeners, call sendRxSensors / sendRxChannelSensors for each
+        // enabled listener.
+        //
+        // NereusSDR Phase 19 stub: emit placeholder -100.0 dBm to all clients
+        // whose rxSensorsEnabled is true. Real S-meter readings wired in Phase 24+.
+        for (auto it = m_clients.begin(); it != m_clients.end(); ++it) {
+            auto& session = it.value();
+            if (!session->rxSensorsEnabled) { continue; }
+
+            // Phase 19 placeholder reading.
+            // From Thetis: sendRxSensors(0, rx1Main_sig) (TCIServer.cs:2600 [v2.10.3.13])
+            const QString frame = TciSensorManager::formatRxSensors(0, -100.0);
+            session->sendQueue.push(TciSendQueue::Priority::Control, frame);
+
+            // Also emit the channel form (dual-emit pattern).
+            // From Thetis: sendRxChannelSensors(0, 0, sig, avg, peak) (TCIServer.cs:2601 [v2.10.3.13])
+            const QString chanFrame = TciSensorManager::formatRxChannelSensors(0, 0, -100.0);
+            session->sendQueue.push(TciSendQueue::Priority::Control, chanFrame);
+
+            const QString chanExFrame = TciSensorManager::formatRxChannelSensorsEx(0, 0, -100.0, -100.0, -100.0);
+            session->sendQueue.push(TciSendQueue::Priority::Control, chanExFrame);
+        }
+    });
+
+    // Phase 19: TX sensor broadcast timer.
+    //
+    // From Thetis TCIServer.cs:2569-2581 [v2.10.3.13] — setTxSensorsEnabled
+    // creates a System.Threading.Timer(TxSensorsTimerCallback, null, 0, intervalMs)
+    // when enabled is true.
+    //
+    // NereusSDR equivalent: a QTimer on the main thread. Default interval 200 ms
+    // matches Thetis clsTCISensorManager._txIntervalMs (TCIServer.cs:492 [v2.10.3.13]).
+    // Timer is started in start() and stopped in stop(). Phase 24+ gates on MOX
+    // state (m_txAudioActiveClient / RadioModel::moxChanged).
+    //
+    // Phase 19 stub: always-on; emits placeholder tx_sensors:0,-100.0,0.0,0.0,1.0;
+    // to each subscribed client. TODO Phase 24+: gate on MOX + wire real TX meters.
+    m_txSensorTimer = new QTimer(this);
+    m_txSensorTimer->setInterval(200);  // default 200ms; updated by tx_sensors_enable:true,<ms>;
+    connect(m_txSensorTimer, &QTimer::timeout, this, [this]() {
+        // From Thetis TxSensorsTimerCallback (TCIServer.cs:2618-2628 [v2.10.3.13]):
+        // iterate listeners, call sendTxSensors for each enabled listener.
+        //
+        // NereusSDR Phase 19 stub: emit placeholder readings to all clients
+        // whose txSensorsEnabled is true.
+        for (auto it = m_clients.begin(); it != m_clients.end(); ++it) {
+            auto& session = it.value();
+            if (!session->txSensorsEnabled) { continue; }
+
+            // Phase 19 placeholder: mic -100 dBm, power 0 W, SWR 1.0.
+            // From Thetis: sendTxSensors(0, micLevelDbm, powerWatts, peakPowerWatts, swr)
+            // (TCIServer.cs:2625 [v2.10.3.13])
+            const QString frame = TciSensorManager::formatTxSensors(0, -100.0, 0.0, 0.0, 1.0);
+            session->sendQueue.push(TciSendQueue::Priority::Control, frame);
+        }
+    });
+
     // Phase 16 Task 16.3 (sub-commit c): hook the RX audio tap from RxChannel.
     // WdspEngine may not be initialized yet at construction time. We connect
     // once it is, then hook audioFrameReady with Qt::DirectConnection so the
@@ -313,6 +388,15 @@ bool TciServer::start(quint16 port)
     // Phase 14: start the outbound drain timer (stops again in stop()).
     m_drainTimer->start();
 
+    // Phase 19: start sensor broadcast timers.
+    // From Thetis: RxSensorsTimerCallback / TxSensorsTimerCallback are started
+    // by setRxSensorsEnabled / setTxSensorsEnabled per-listener
+    // (TCIServer.cs:2566, 2581 [v2.10.3.13]).  NereusSDR uses server-wide
+    // timers that check per-client rxSensorsEnabled / txSensorsEnabled flags
+    // on each tick — simpler with the Qt architecture.
+    m_rxSensorTimer->start();
+    m_txSensorTimer->start();
+
     return true;
 }
 
@@ -326,7 +410,9 @@ void TciServer::stop()
     if (!m_server) { return; }
 
     m_pingTimer->stop();
-    m_drainTimer->stop();  // Phase 14: stop drain before disconnecting clients
+    m_drainTimer->stop();        // Phase 14: stop drain before disconnecting clients
+    m_rxSensorTimer->stop();     // Phase 19: stop sensor broadcast timers
+    m_txSensorTimer->stop();
 
     // Phase 17: release TX audio mutex — no client is active after stop().
     m_txAudioActiveClient = nullptr;
@@ -661,6 +747,113 @@ void TciServer::onTextMessageReceived(const QString& msg)
             if (ok && rx >= 0 && rx <= 1) {
                 if (session->iqStreamEnabled.remove(rx)) {
                     qCInfo(lcTci) << "TciServer: IQ stream unsubscribed rx" << rx
+                                  << "peer" << session->peer;
+                }
+            }
+        }
+
+        // Phase 19: sensor subscription — intercept rx_sensors_enable and
+        // tx_sensors_enable before passing to TciProtocol dispatch.
+        //
+        // From Thetis TCIServer.cs:4449-4469 [v2.10.3.13] —
+        // handleRxSensorsEnable / handleTxSensorsEnable.
+        //
+        // Wire format:
+        //   rx_sensors_enable:true;          — enable with current interval
+        //   rx_sensors_enable:true,200;      — enable at 200ms
+        //   rx_sensors_enable:false;         — disable
+        //   tx_sensors_enable:true[,ms];
+        //   tx_sensors_enable:false;
+        //
+        // From Thetis: args[0] = true/false, args[1] (optional) = intervalMs.
+        // If intervalMs is not parseable, the command is silently ignored
+        // (matches Thetis handleRxSensorsEnable return-on-parse-fail).
+        {
+            const QString kRxSensEnable = QStringLiteral("rx_sensors_enable:");
+            const QString kTxSensEnable = QStringLiteral("tx_sensors_enable:");
+
+            // Shared helper: parses "true|false[,intervalMs]" and returns
+            // false if parsing should be aborted (parse fail per Thetis).
+            // From Thetis TCIServer.cs:4449-4469 [v2.10.3.13] — both
+            // handleRxSensorsEnable and handleTxSensorsEnable share the
+            // same parse shape: args[0]=bool, args[1]=optional int.
+            auto parseSensorEnable = [](const QStringList& parts,
+                                        int currentInterval,
+                                        bool& outEnabled,
+                                        int& outInterval) -> bool {
+                if (parts.size() < 1 || parts.size() > 2) { return false; }
+                const QString enableStr = parts.at(0).trimmed();
+                if (enableStr.compare(QLatin1String("true"), Qt::CaseInsensitive) == 0) {
+                    outEnabled = true;
+                } else if (enableStr.compare(QLatin1String("false"), Qt::CaseInsensitive) == 0) {
+                    outEnabled = false;
+                } else {
+                    return false;  // not a valid bool — ignore per Thetis
+                }
+                outInterval = currentInterval;
+                if (parts.size() == 2) {
+                    bool ok = false;
+                    const int parsed = parts.at(1).trimmed().toInt(&ok);
+                    if (!ok) { return false; }  // intervalMs parse fail — ignore per Thetis
+                    outInterval = parsed;
+                }
+                return true;
+            };
+
+            if (trimmed.startsWith(kRxSensEnable)) {
+                // From Thetis TCIServer.cs:4449-4459 [v2.10.3.13] — handleRxSensorsEnable.
+                const QStringList parts = trimmed.mid(kRxSensEnable.size())
+                                              .split(QLatin1Char(','));
+                bool enabled   = false;
+                int intervalMs = session->rxSensorIntervalMs;
+                if (parseSensorEnable(parts, intervalMs, enabled, intervalMs)) {
+                    session->rxSensorsEnabled   = enabled;
+                    session->rxSensorIntervalMs = intervalMs;
+
+                    // Update the server-wide RX sensor timer interval to the
+                    // minimum required across all clients (per Thetis server-level
+                    // MinimumRequiredRxSensorInterval, TCIServer.cs:7571-7589).
+                    QList<int> intervals;
+                    for (auto sit = m_clients.cbegin(); sit != m_clients.cend(); ++sit) {
+                        if (sit.value()->rxSensorsEnabled) {
+                            intervals.append(sit.value()->rxSensorIntervalMs);
+                        }
+                    }
+                    const int newInterval = TciSensorManager::minimumRequiredInterval(intervals);
+                    if (m_rxSensorTimer->interval() != newInterval) {
+                        m_rxSensorTimer->setInterval(newInterval);
+                    }
+
+                    qCInfo(lcTci) << "TciServer: rx_sensors_enable" << enabled
+                                  << "intervalMs" << intervalMs
+                                  << "peer" << session->peer;
+                }
+            } else if (trimmed.startsWith(kTxSensEnable)) {
+                // From Thetis TCIServer.cs:4460-4469 [v2.10.3.13] — handleTxSensorsEnable.
+                const QStringList parts = trimmed.mid(kTxSensEnable.size())
+                                              .split(QLatin1Char(','));
+                bool enabled   = false;
+                int intervalMs = session->txSensorIntervalMs;
+                if (parseSensorEnable(parts, intervalMs, enabled, intervalMs)) {
+                    session->txSensorsEnabled   = enabled;
+                    session->txSensorIntervalMs = intervalMs;
+
+                    // Update the server-wide TX sensor timer interval to the
+                    // minimum required across all clients (per Thetis server-level
+                    // MinimumRequiredTxSensorInterval, TCIServer.cs:7591-7603).
+                    QList<int> intervals;
+                    for (auto sit = m_clients.cbegin(); sit != m_clients.cend(); ++sit) {
+                        if (sit.value()->txSensorsEnabled) {
+                            intervals.append(sit.value()->txSensorIntervalMs);
+                        }
+                    }
+                    const int newInterval = TciSensorManager::minimumRequiredInterval(intervals);
+                    if (m_txSensorTimer->interval() != newInterval) {
+                        m_txSensorTimer->setInterval(newInterval);
+                    }
+
+                    qCInfo(lcTci) << "TciServer: tx_sensors_enable" << enabled
+                                  << "intervalMs" << intervalMs
                                   << "peer" << session->peer;
                 }
             }

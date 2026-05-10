@@ -245,6 +245,22 @@ private:
     // both run on the Qt event loop that owns TciServer).  No additional locking.
     QPointer<QWebSocket> m_txAudioActiveClient;
 
+    // ── Phase 19: sensor broadcast timers ────────────────────────────────────
+    //
+    // From Thetis TCIServer.cs:2554-2581 [v2.10.3.13] — setRxSensorsEnabled /
+    // setTxSensorsEnabled create System.Threading.Timer instances for their
+    // respective callbacks.
+    //
+    // NereusSDR uses QTimers owned by TciServer (main-thread event loop).
+    // Default interval 200 ms matches Thetis clsTCISensorManager._rxIntervalMs
+    // / _txIntervalMs defaults (TCIServer.cs:491-492 [v2.10.3.13]).
+    //
+    // RX timer: always-on once start() is called; emits placeholder rx_sensors
+    //   frames to subscribed clients (real readings wired in Phase 24+).
+    // TX timer: always-on for Phase 19 stub; Phase 24+ gates on MOX state.
+    QTimer* m_rxSensorTimer{nullptr};   // 200ms default; broadcasts rx_sensors to subscribed clients
+    QTimer* m_txSensorTimer{nullptr};   // 200ms default; MOX-gated (Phase 24+ wires real gate)
+
     // ── Phase 17: server-wide TX audio ring buffer ───────────────────────────
     //
     // Inbound TX binary frames from the active client are decoded and pushed

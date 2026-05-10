@@ -146,6 +146,29 @@ struct TciClientSession {
     // Separate from framesDropped (outbound) to keep semantics clean.
     // Phase 22 ClientChainApplet reads both: "outbound: N" + "TX: M dropped".
     int     txFramesDropped{0};
+
+    // ── Phase 19: per-client sensor subscriptions ────────────────────────────
+    // From Thetis TCIServer.cs:684-790 [v2.10.3.13] — per-listener
+    // m_sensorManager.RxSensorsEnabled / TxSensorsEnabled flags.
+    //
+    // NereusSDR flattens clsTCISensorManager's per-listener state into two
+    // bools + interval fields on the session struct. TciServer intercepts
+    // rx_sensors_enable:true[,intervalMs]; / tx_sensors_enable:true|false[,intervalMs];
+    // commands to toggle these flags before passing to TciProtocol dispatch.
+    //
+    // From Thetis handleRxSensorsEnable (TCIServer.cs:4449-4459 [v2.10.3.13]).
+    bool rxSensorsEnabled{false};
+
+    // From Thetis handleTxSensorsEnable (TCIServer.cs:4460-4469 [v2.10.3.13]).
+    bool txSensorsEnabled{false};
+
+    // From Thetis clsTCISensorManager._rxIntervalMs default 200 ms
+    // (TCIServer.cs:491 [v2.10.3.13]).
+    int rxSensorIntervalMs{200};
+
+    // From Thetis clsTCISensorManager._txIntervalMs default 200 ms
+    // (TCIServer.cs:492 [v2.10.3.13]).
+    int txSensorIntervalMs{200};
 };
 
 } // namespace NereusSDR
