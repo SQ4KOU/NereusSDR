@@ -409,6 +409,7 @@ set(CORE_SOURCES
     src/core/RadioDiscovery.cpp
     src/core/RadioConnection.cpp
     src/core/TciProtocol.cpp
+    src/core/TciServer.cpp
     src/core/codec/AlexFilterMap.cpp
     src/core/codec/P1CodecStandard.cpp
     src/core/codec/P1CodecAnvelinaPro3.cpp

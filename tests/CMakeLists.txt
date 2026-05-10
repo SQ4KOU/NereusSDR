@@ -3968,6 +3968,14 @@ target_compile_definitions(tst_step_att_cross_thread PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_p1_bank16_pursignal_run)
 target_compile_definitions(tst_p1_bank16_pursignal_run PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3J-1 Task 2.1: TciServer + ClientSession lifecycle ─────────────────
+# 3 tests: start/listen/signal, double-start rejection, stop/clear.
+# Gated on Qt6WebSockets_FOUND — TciServer.h/.cpp are #ifdef HAVE_WEBSOCKETS.
+if(Qt6WebSockets_FOUND)
+    nereus_add_test(tst_tci_server_lifecycle)
+    target_link_libraries(tst_tci_server_lifecycle PRIVATE Qt6::WebSockets)
+endif()
+
 # ── Phase 3J-1 Task 1.1: TCI verification matrix runner ──────────────────────
 # Loads tests/data/tci/matrix.csv and feeds each row's command into
 # TciProtocol::handleCommand(), asserting the response + notification queue
