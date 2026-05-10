@@ -169,12 +169,23 @@ QByteArray TciBinaryFrame::encodeSamples(const float* samples, int sampleCount,
         default:                     bytesPerSample = 4; break;
     }
 
-    QByteArray data(sampleCount * bytesPerSample, '\0');
+    const qsizetype dataSize =
+        static_cast<qsizetype>(sampleCount) * static_cast<qsizetype>(bytesPerSample);
+    if (dataSize <= 0 || dataSize > INT_MAX) {
+        return {};
+    }
+
+    QByteArray data(static_cast<int>(dataSize), '\0');
     char* buf = data.data();
 
     // From Thetis cs:5272-5277 — FLOAT32 fast path: Buffer.BlockCopy(samples, 0, data, 0, data.Length)
     if (static_cast<TciSampleType>(sampleType) == TciSampleType::Float32) {
-        std::memcpy(buf, samples, sampleCount * sizeof(float));
+        const qsizetype floatBytes =
+            static_cast<qsizetype>(sampleCount) * static_cast<qsizetype>(sizeof(float));
+        if (floatBytes <= 0 || floatBytes > INT_MAX) {
+            return {};
+        }
+        std::memcpy(buf, samples, static_cast<size_t>(floatBytes));
         return data;
     }
 
