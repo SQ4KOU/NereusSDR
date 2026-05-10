@@ -22,3 +22,10 @@ modulation_set_rx1_cwl,modulation:1\,cwl;,,modulation:1\,CWL;,TCIServer.cs:3897 
 modulation_set_rx0_nfm_alias_fm,modulation:0\,nfm;,,modulation:0\,FM;,TCIServer.cs:3865 [v2.10.3.13],nfm and fm both alias to DSPMode.FM
 rx_filter_band_set_rx0,rx_filter_band:0\,200\,2900;,,rx_filter_band:0\,200\,2900;,TCIServer.cs:4393 [v2.10.3.13],3-arg set filter band
 rx_filter_band_query_after_set,rx_filter_band:0\,200\,2900;;rx_filter_band:0;,rx_filter_band:0\,200\,2900;,,TCIServer.cs:4377 [v2.10.3.13],query returns current filter band (uses ;; chain)
+trx_set_rx0_on,trx:0\,true;,,trx:0\,true;,TCIServer.cs:3536 [v2.10.3.13],set MOX on; broadcast — Phase 8 simplified (TX mutex deferred to Phase 17)
+trx_query_after_on,trx:0\,true;;trx:0;,trx:0\,true;,,TCIServer.cs:3557 [v2.10.3.13],query returns MOX state via sendMOX (without ;tci suffix)
+trx_set_rx0_off,trx:0\,false;,,trx:0\,false;,TCIServer.cs:3536 [v2.10.3.13],set MOX off; broadcast
+split_enable_set_rx0,split_enable:0\,true;,,split_enable:0\,true;,TCIServer.cs:3091 [v2.10.3.13],sendSplit format at TCIServer.cs:1878 [v2.10.3.13]
+mute_set_on,mute:true;,,mute:true;,TCIServer.cs:4051 [v2.10.3.13],global mute set (MUT+MUT2); sendMute format at TCIServer.cs:2160 [v2.10.3.13]
+mute_query_after_set,mute:true;;mute;,mute:true;,,TCIServer.cs:5145 [v2.10.3.13],first 1-arg query in branch — mute case in query switch
+rx_mute_set_rx0,rx_mute:0\,true;,,rx_mute:0\,true;,TCIServer.cs:4069 [v2.10.3.13],per-rx mute; sendMuteRX format at TCIServer.cs:2165 [v2.10.3.13]

@@ -22,6 +22,9 @@
 // Phase 7: 14 accessors total — added setFilterBand/filterLow/filterHigh;
 //           Q_INVOKABLE on setMode/mode/setFilterBand/filterLow/filterHigh
 //           so TciProtocol modulation + rx_filter_band handlers dispatch correctly.
+// Phase 8: 19 accessors total — added setSplit/split/setGlobalMute/globalMute/
+//           setRxMute/rxMute; Q_INVOKABLE on all six so TciProtocol trx-family
+//           handlers dispatch correctly. mox/setMox upgraded to Q_INVOKABLE.
 // Aim: ~30 accessors total by end of Phase 14. Each commit that adds
 // accessors should note the addition in the commit message.
 
@@ -109,8 +112,54 @@ public:
         return 0;
     }
 
-    void setMox(bool on) { m_mox = on; }
-    bool mox() const { return m_mox; }
+    // MOX (TX active) state. Q_INVOKABLE: called via QMetaObject::invokeMethod
+    // from TciProtocol trx handler (Phase 8).
+    // From Thetis TCIServer.cs:3468 [v2.10.3.13] — handleTrxMessage rx + mox parse.
+    Q_INVOKABLE void setMox(bool on) { m_mox = on; }
+    Q_INVOKABLE bool mox() const { return m_mox; }
+
+    // Split state per slice (0-based).
+    // From Thetis TCIServer.cs:3091 [v2.10.3.13] — handleSplitEnableMessage.
+    // Q_INVOKABLE: called via QMetaObject::invokeMethod from TciProtocol split_enable handler.
+    Q_INVOKABLE void setSplit(int slice, bool on)
+    {
+        if (slice >= 0 && slice < 2) {
+            m_split[slice] = on;
+        }
+    }
+
+    Q_INVOKABLE bool split(int slice) const
+    {
+        if (slice >= 0 && slice < 2) {
+            return m_split[slice];
+        }
+        return false;
+    }
+
+    // Global mute state (both MUT and MUT2 in Thetis).
+    // From Thetis TCIServer.cs:4051 [v2.10.3.13] — handleMute set/query.
+    // Named globalMute to avoid collision with future per-slice mute.
+    // Q_INVOKABLE: called via QMetaObject::invokeMethod from TciProtocol mute handler.
+    Q_INVOKABLE void setGlobalMute(bool on) { m_globalMute = on; }
+    Q_INVOKABLE bool globalMute() const { return m_globalMute; }
+
+    // Per-RX mute state (0-based slice index).
+    // From Thetis TCIServer.cs:4069 [v2.10.3.13] — handleMuteRX set/query.
+    // Q_INVOKABLE: called via QMetaObject::invokeMethod from TciProtocol rx_mute handler.
+    Q_INVOKABLE void setRxMute(int slice, bool on)
+    {
+        if (slice >= 0 && slice < 2) {
+            m_rxMute[slice] = on;
+        }
+    }
+
+    Q_INVOKABLE bool rxMute(int slice) const
+    {
+        if (slice >= 0 && slice < 2) {
+            return m_rxMute[slice];
+        }
+        return false;
+    }
 
     // VFO lock state for a given slice (0-based) and channel (0=A,1=B).
     // From Thetis TCIServer.cs:3284-3302 [v2.10.3.13] — handleVFOLock args dispatch.
@@ -159,6 +208,10 @@ public:
         // Phase 7: common SSB filter defaults (200 Hz low, 2900 Hz high).
         m_filterLow  = { 200, 200 };
         m_filterHigh = { 2900, 2900 };
+        // Phase 8: TRX family state resets.
+        m_split = {};
+        m_globalMute = false;
+        m_rxMute = {};
     }
 
 private:
@@ -172,6 +225,10 @@ private:
     // Phase 7: filter band state (rx_filter_band command).
     std::array<int, 2> m_filterLow{200, 200};
     std::array<int, 2> m_filterHigh{2900, 2900};
+    // Phase 8: TRX family state.
+    std::array<bool, 2> m_split{};
+    bool m_globalMute{false};
+    std::array<bool, 2> m_rxMute{};
 };
 
 } // namespace NereusSDR

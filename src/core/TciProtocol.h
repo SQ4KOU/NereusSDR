@@ -125,6 +125,34 @@ private:
     //   args.size() == 1 → query (rx)
     QString handleRxFilterBandCommand(const QStringList& args);
 
+    // ── TRX family handlers (Phase 8) ─────────────────────────────────────────
+    // From Thetis TCIServer.cs:4932 [v2.10.3.13] — trx case in set switch.
+    // handleTrxMessage at TCIServer.cs:3459-3559 [v2.10.3.13]:
+    //   args.size() >= 2 → set (rx, mox[, "tci"]); SIMPLIFIED — TX mutex deferred to Phase 17.
+    //   args.size() == 1 → query (rx) → sendMOX(rx, MOX, m_txUsesTCIAudio).
+    //   Phase 8 emits trx:rx,bool; without ",tci" suffix.
+    QString handleTrxCommand(const QStringList& args);
+
+    // From Thetis TCIServer.cs:4935 [v2.10.3.13] — split_enable case in set switch.
+    // handleSplitEnableMessage at TCIServer.cs:3091-3127 [v2.10.3.13]:
+    //   args.size() == 2 → set (rx, bool); args.size() == 1 → query.
+    //   SplitFromCATorTCIcancelsQSPLIT at TCIServer.cs:3107 [v2.10.3.13] deferred to Phase 17.
+    QString handleSplitEnableCommand(const QStringList& args);
+
+    // From Thetis TCIServer.cs:5061 [v2.10.3.13] — mute case in set switch.
+    // handleMute at TCIServer.cs:4051-4067 [v2.10.3.13]:
+    //   set: 1-arg (bool) sets global mute (MUT + MUT2).
+    QString handleMuteSetCommand(const QStringList& args);
+
+    // From Thetis TCIServer.cs:5145 [v2.10.3.13] — mute case in 1-arg query switch.
+    // handleMute(null, false) — queries MUT || MUT2 → sendMute(...).
+    QString handleMuteQueryCommand();
+
+    // From Thetis TCIServer.cs:5067 [v2.10.3.13] — rx_mute case in set switch.
+    // handleMuteRX at TCIServer.cs:4069-4090 [v2.10.3.13]:
+    //   args.size() == 2 → set (rx, bool); args.size() == 1 → query.
+    QString handleRxMuteCommand(const QStringList& args);
+
     // From Thetis TCIServer.cs:2363-2510 [v2.10.3.13] — sendInitialRadioState body.
     // Phase 4 Task 4.2 fills the body (up to 97 wire lines per Sweep D).
     // Each build<Foo>Line helper is a pure static function: takes value args,

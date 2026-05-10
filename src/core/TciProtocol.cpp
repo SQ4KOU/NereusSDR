@@ -878,18 +878,34 @@ QString TciProtocol::handleSetCommand(const QString& name, const QStringList& ar
     if (name == QStringLiteral("modulation"))     { return handleModulationCommand(args); }
     if (name == QStringLiteral("rx_filter_band")) { return handleRxFilterBandCommand(args); }
 
-    // Phase 8+ adds more cases.
+    // Phase 8: TRX family.
+    // From Thetis TCIServer.cs:4932 [v2.10.3.13] — trx case in set switch.
+    if (name == QStringLiteral("trx"))          { return handleTrxCommand(args); }
+    // From Thetis TCIServer.cs:4935 [v2.10.3.13] — split_enable case in set switch.
+    if (name == QStringLiteral("split_enable")) { return handleSplitEnableCommand(args); }
+    // From Thetis TCIServer.cs:5061 [v2.10.3.13] — mute case in set switch.
+    if (name == QStringLiteral("mute"))         { return handleMuteSetCommand(args); }
+    // From Thetis TCIServer.cs:5067 [v2.10.3.13] — rx_mute case in set switch.
+    if (name == QStringLiteral("rx_mute"))      { return handleRxMuteCommand(args); }
+
+    // Phase 9+ adds more cases.
     return {};
 }
 
 // From Thetis TCIServer.cs:5134-5197 [v2.10.3.13] — 21-case query-command switch.
 // Phase 6: vfo, lock, vfo_lock have no 1-arg query cases in Thetis query switch;
 // they self-dispatch (set vs. query) by args.size() inside handleSetCommand.
-// Phase 7+ adds remaining query cases.
+// Phase 8: adds the first 1-arg query case (mute).
 QString TciProtocol::handleQueryCommand(const QString& name)
 {
-    (void)name;
     ++m_queryDispatchCount;
+
+    // Phase 8 — first 1-arg query case.
+    // From Thetis TCIServer.cs:5145 [v2.10.3.13] — case "mute" in 1-arg query switch.
+    if (name == QStringLiteral("mute")) {
+        return handleMuteQueryCommand();
+    }
+
     return {};
 }
 
@@ -1167,6 +1183,206 @@ QString TciProtocol::handleRxFilterBandCommand(const QStringList& args)
     }
 
     return {};
+}
+
+// ── TRX family handlers (Phase 8) ─────────────────────────────────────────────
+
+// From Thetis TCIServer.cs:3459-3559 [v2.10.3.13] — handleTrxMessage.
+// Phase 8 SIMPLIFIED scope: rx + mox parse only. Broadcasts trx:rx,bool;.
+// DEFERRED to Phase 17 (TX audio): the m_txUsesTCIAudio / m_tciPttActive
+// mutex acquire/release + shouldIgnoreTrxForCurrentCwBreakIn + VFOATX/VFOBTX
+// gating + RX2Enabled gating. Phase 17 must restore the full handler body.
+//
+// 1-arg query path (TCIServer.cs:3555-3558 [v2.10.3.13]):
+//   sendMOX(rx, console.ThreadSafeTCIAccessor.MOX, m_txUsesTCIAudio);
+//   Phase 8: emits trx:rx,bool; without ",tci" suffix (m_txUsesTCIAudio = false always).
+QString TciProtocol::handleTrxCommand(const QStringList& args)
+{
+    if (args.size() < 1) {
+        return {};
+    }
+    bool ok = false;
+    const int rx = args.at(0).trimmed().toInt(&ok);
+    if (!ok) {
+        return {};
+    }
+
+    if (args.size() >= 2) {
+        // Set path — parse mox bool.
+        // From Thetis TCIServer.cs:3468-3470 [v2.10.3.13] — bMox parse.
+        const QString boolStr = args.at(1).trimmed().toLower();
+        if (boolStr != QStringLiteral("true") && boolStr != QStringLiteral("false")) {
+            return {};
+        }
+        const bool mox = (boolStr == QStringLiteral("true"));
+        // Phase 8: store via setMox. In Phase 17 this becomes TCIPTT + VFOATX/VFOBTX logic.
+        QMetaObject::invokeMethod(m_radio, "setMox",
+                                  Qt::DirectConnection,
+                                  Q_ARG(bool, mox));
+        // From Thetis sendMOX at TCIServer.cs:2121-2131 [v2.10.3.13] — broadcast format.
+        // Phase 8: signalTCI=false → no ",tci" suffix.
+        m_pendingNotifications << QStringLiteral("trx:%1,%2;")
+                                      .arg(rx)
+                                      .arg(mox ? QStringLiteral("true") : QStringLiteral("false"));
+        return {};
+    }
+
+    // 1-arg query path.
+    // From Thetis TCIServer.cs:3555-3558 [v2.10.3.13] — sendMOX(rx, MOX, m_txUsesTCIAudio).
+    // Phase 8: m_txUsesTCIAudio is always false → no ",tci" suffix on the response.
+    bool mox = false;
+    QMetaObject::invokeMethod(m_radio, "mox",
+                              Qt::DirectConnection,
+                              Q_RETURN_ARG(bool, mox));
+    // From Thetis sendMOX at TCIServer.cs:2121-2131 [v2.10.3.13] — format string.
+    return QStringLiteral("trx:%1,%2;")
+        .arg(rx)
+        .arg(mox ? QStringLiteral("true") : QStringLiteral("false"));
+}
+
+// From Thetis TCIServer.cs:3091-3127 [v2.10.3.13] — handleSplitEnableMessage.
+// 2-arg path (set): parse rx + bool → write VFOSplit → broadcast split_enable:rx,bool;.
+// 1-arg path (query): read VFOSplit → return split_enable:rx,bool; as direct response.
+// SplitFromCATorTCIcancelsQSPLIT at TCIServer.cs:3107 [v2.10.3.13] deferred (no
+// quickSplit state on mock; Phase 17 wires when QuickSplitEnabled arrives).
+//
+// From Thetis sendSplit at TCIServer.cs:1876-1880 [v2.10.3.13] — format:
+//   "split_enable:" + rx + "," + bSplit.ToString().ToLower() + ";".
+QString TciProtocol::handleSplitEnableCommand(const QStringList& args)
+{
+    if (args.size() < 1) {
+        return {};
+    }
+    bool ok = false;
+    const int rx = args.at(0).trimmed().toInt(&ok);
+    if (!ok) {
+        return {};
+    }
+
+    if (args.size() >= 2) {
+        // Set path — parse split bool.
+        // From Thetis TCIServer.cs:3098-3121 [v2.10.3.13] — VFOSplit write.
+        const QString boolStr = args.at(1).trimmed().toLower();
+        if (boolStr != QStringLiteral("true") && boolStr != QStringLiteral("false")) {
+            return {};
+        }
+        const bool split = (boolStr == QStringLiteral("true"));
+        QMetaObject::invokeMethod(m_radio, "setSplit",
+                                  Qt::DirectConnection,
+                                  Q_ARG(int, rx),
+                                  Q_ARG(bool, split));
+        // From Thetis sendSplit at TCIServer.cs:1878 [v2.10.3.13] — broadcast format.
+        m_pendingNotifications << QStringLiteral("split_enable:%1,%2;")
+                                      .arg(rx)
+                                      .arg(split ? QStringLiteral("true") : QStringLiteral("false"));
+        return {};
+    }
+
+    // 1-arg query path.
+    // From Thetis TCIServer.cs:3123-3127 [v2.10.3.13] — sendSplit(rx, VFOSplit).
+    bool split = false;
+    QMetaObject::invokeMethod(m_radio, "split",
+                              Qt::DirectConnection,
+                              Q_RETURN_ARG(bool, split),
+                              Q_ARG(int, rx));
+    // From Thetis sendSplit at TCIServer.cs:1878 [v2.10.3.13] — format string.
+    return QStringLiteral("split_enable:%1,%2;")
+        .arg(rx)
+        .arg(split ? QStringLiteral("true") : QStringLiteral("false"));
+}
+
+// From Thetis TCIServer.cs:4051-4067 [v2.10.3.13] — handleMute (set path, hasArgs=true).
+// 1-arg form (args.size() == 1): parse bool → set MUT + MUT2 (global mute).
+// Called from set switch (TCIServer.cs:5061-5064 [v2.10.3.13]).
+//
+// From Thetis sendMute at TCIServer.cs:2158-2162 [v2.10.3.13] — format:
+//   "mute:" + mute.ToString().ToLower() + ";".
+QString TciProtocol::handleMuteSetCommand(const QStringList& args)
+{
+    if (args.size() < 1) {
+        return {};
+    }
+    const QString boolStr = args.at(0).trimmed().toLower();
+    if (boolStr != QStringLiteral("true") && boolStr != QStringLiteral("false")) {
+        return {};
+    }
+    const bool muted = (boolStr == QStringLiteral("true"));
+    // From Thetis TCIServer.cs:4059-4060 [v2.10.3.13] — MUT = mute; MUT2 = mute.
+    QMetaObject::invokeMethod(m_radio, "setGlobalMute",
+                              Qt::DirectConnection,
+                              Q_ARG(bool, muted));
+    // From Thetis sendMute at TCIServer.cs:2160 [v2.10.3.13] — broadcast format.
+    m_pendingNotifications << QStringLiteral("mute:%1;")
+                                  .arg(muted ? QStringLiteral("true") : QStringLiteral("false"));
+    return {};
+}
+
+// From Thetis TCIServer.cs:5145 [v2.10.3.13] — mute case in 1-arg query switch.
+// handleMute(null, false) → queries MUT || MUT2 → sendMute(...).
+// Phase 8: globalMute() models MUT || MUT2 as a single flag per Thetis.
+//
+// From Thetis sendMute at TCIServer.cs:2160 [v2.10.3.13] — format:
+//   "mute:" + mute.ToString().ToLower() + ";".
+QString TciProtocol::handleMuteQueryCommand()
+{
+    bool muted = false;
+    // From Thetis TCIServer.cs:4064 [v2.10.3.13] — MUT || MUT2 read.
+    QMetaObject::invokeMethod(m_radio, "globalMute",
+                              Qt::DirectConnection,
+                              Q_RETURN_ARG(bool, muted));
+    // From Thetis sendMute at TCIServer.cs:2160 [v2.10.3.13] — format string.
+    return QStringLiteral("mute:%1;")
+        .arg(muted ? QStringLiteral("true") : QStringLiteral("false"));
+}
+
+// From Thetis TCIServer.cs:4069-4090 [v2.10.3.13] — handleMuteRX.
+// 2-arg path (set): parse rx + bool → write MUT (rx==0) or MUT2 (rx==1).
+// 1-arg path (query): read MUT or MUT2 → return rx_mute:rx,bool; as direct response.
+// Called from set switch (TCIServer.cs:5067-5070 [v2.10.3.13]).
+//
+// From Thetis sendMuteRX at TCIServer.cs:2163-2167 [v2.10.3.13] — format:
+//   "rx_mute:" + rx + "," + mute.ToString().ToLower() + ";".
+QString TciProtocol::handleRxMuteCommand(const QStringList& args)
+{
+    if (args.size() < 1) {
+        return {};
+    }
+    bool ok = false;
+    const int rx = args.at(0).trimmed().toInt(&ok);
+    if (!ok) {
+        return {};
+    }
+
+    if (args.size() >= 2) {
+        // Set path.
+        // From Thetis TCIServer.cs:4078-4083 [v2.10.3.13] — MUT / MUT2 write.
+        const QString boolStr = args.at(1).trimmed().toLower();
+        if (boolStr != QStringLiteral("true") && boolStr != QStringLiteral("false")) {
+            return {};
+        }
+        const bool muted = (boolStr == QStringLiteral("true"));
+        QMetaObject::invokeMethod(m_radio, "setRxMute",
+                                  Qt::DirectConnection,
+                                  Q_ARG(int, rx),
+                                  Q_ARG(bool, muted));
+        // From Thetis sendMuteRX at TCIServer.cs:2165 [v2.10.3.13] — broadcast format.
+        m_pendingNotifications << QStringLiteral("rx_mute:%1,%2;")
+                                      .arg(rx)
+                                      .arg(muted ? QStringLiteral("true") : QStringLiteral("false"));
+        return {};
+    }
+
+    // 1-arg query path.
+    // From Thetis TCIServer.cs:4085-4088 [v2.10.3.13] — sendMuteRX(rx, MUT / MUT2).
+    bool muted = false;
+    QMetaObject::invokeMethod(m_radio, "rxMute",
+                              Qt::DirectConnection,
+                              Q_RETURN_ARG(bool, muted),
+                              Q_ARG(int, rx));
+    // From Thetis sendMuteRX at TCIServer.cs:2165 [v2.10.3.13] — format string.
+    return QStringLiteral("rx_mute:%1,%2;")
+        .arg(rx)
+        .arg(muted ? QStringLiteral("true") : QStringLiteral("false"));
 }
 
 } // namespace NereusSDR
