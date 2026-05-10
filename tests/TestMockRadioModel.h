@@ -19,6 +19,9 @@
 // Phase 6: 11 accessors total — added setVfoLock/vfoLock/setLock/lock;
 //           Q_INVOKABLE on setVfoHz/vfoHz/setVfoLock/vfoLock/setLock/lock
 //           so TciProtocol dispatch uses invokeMethod (no header dependency).
+// Phase 7: 14 accessors total — added setFilterBand/filterLow/filterHigh;
+//           Q_INVOKABLE on setMode/mode/setFilterBand/filterLow/filterHigh
+//           so TciProtocol modulation + rx_filter_band handlers dispatch correctly.
 // Aim: ~30 accessors total by end of Phase 14. Each commit that adds
 // accessors should note the addition in the commit message.
 
@@ -55,7 +58,8 @@ public:
     }
 
     // Set the DSP mode string for a given slice (e.g. "USB", "LSB", "CW").
-    void setMode(int slice, const QString& mode)
+    // Q_INVOKABLE: called via QMetaObject::invokeMethod from TciProtocol modulation handler.
+    Q_INVOKABLE void setMode(int slice, const QString& mode)
     {
         if (slice >= 0 && slice < 2) {
             m_mode[slice] = mode;
@@ -63,12 +67,46 @@ public:
     }
 
     // Get the DSP mode string for a given slice.
-    QString mode(int slice) const
+    // Q_INVOKABLE: called via QMetaObject::invokeMethod from TciProtocol modulation handler.
+    Q_INVOKABLE QString mode(int slice) const
     {
         if (slice >= 0 && slice < 2) {
             return m_mode[slice];
         }
         return {};
+    }
+
+    // Set the filter band (low/high Hz) for a given slice.
+    // From Thetis TCIServer.cs:4393-4399 [v2.10.3.13] — handleRxFilterBand set path.
+    // Q_INVOKABLE: called via QMetaObject::invokeMethod from TciProtocol rx_filter_band handler.
+    Q_INVOKABLE void setFilterBand(int slice, int lowHz, int highHz)
+    {
+        if (slice >= 0 && slice < 2) {
+            m_filterLow[slice]  = lowHz;
+            m_filterHigh[slice] = highHz;
+        }
+    }
+
+    // Get the filter low cutoff Hz for a given slice.
+    // From Thetis TCIServer.cs:4380-4384 [v2.10.3.13] — handleRxFilterBand query path.
+    // Q_INVOKABLE: called via QMetaObject::invokeMethod from TciProtocol rx_filter_band handler.
+    Q_INVOKABLE int filterLow(int slice) const
+    {
+        if (slice >= 0 && slice < 2) {
+            return m_filterLow[slice];
+        }
+        return 0;
+    }
+
+    // Get the filter high cutoff Hz for a given slice.
+    // From Thetis TCIServer.cs:4380-4384 [v2.10.3.13] — handleRxFilterBand query path.
+    // Q_INVOKABLE: called via QMetaObject::invokeMethod from TciProtocol rx_filter_band handler.
+    Q_INVOKABLE int filterHigh(int slice) const
+    {
+        if (slice >= 0 && slice < 2) {
+            return m_filterHigh[slice];
+        }
+        return 0;
     }
 
     void setMox(bool on) { m_mox = on; }
@@ -118,6 +156,9 @@ public:
         m_mox = false;
         m_vfoLock = {};
         m_lock = {};
+        // Phase 7: common SSB filter defaults (200 Hz low, 2900 Hz high).
+        m_filterLow  = { 200, 200 };
+        m_filterHigh = { 2900, 2900 };
     }
 
 private:
@@ -128,6 +169,9 @@ private:
     // Phase 6: VFO lock state (vfo_lock command) and main lock (lock command).
     std::array<std::array<bool, 2>, 2> m_vfoLock{};
     std::array<bool, 2> m_lock{};
+    // Phase 7: filter band state (rx_filter_band command).
+    std::array<int, 2> m_filterLow{200, 200};
+    std::array<int, 2> m_filterHigh{2900, 2900};
 };
 
 } // namespace NereusSDR

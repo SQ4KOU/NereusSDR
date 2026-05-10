@@ -1,8 +1,8 @@
 command,input,expected_response,expected_notifications,thetis_cite,notes
 compat_emulate_esdr3_on,SETUP:TciEmulateExpertSDR3Protocol=True;;noop;,,,TCIServer.cs:2515 [v2.10.3.13],placeholder; verified end-to-end by init burst golden (protocol: line flips Thetis -> ExpertSDR3) — query handler not exposed by Thetis
 compat_emulate_sunsdr2pro_on,SETUP:TciEmulateSunSDR2Pro=True;;noop;,,,TCIServer.cs:2523 [v2.10.3.13],placeholder; verified end-to-end by init burst golden (device: line flips to SunSDR2PRO) — query handler not exposed by Thetis
-compat_cwlu_becomes_cw_on,SETUP:TciCwluBecomesCw=True;;noop;,,,TCIServer.cs:2540 [v2.10.3.13],placeholder; init burst golden covers the modulations_list trailing CW; Phase 7 mode handler covers runtime mode reporting
-compat_cw_becomes_cwu_above_10mhz_on,SETUP:TciCwBecomesCwuAbove10mhz=True;;noop;,,,TCIServer.cs:3873 [v2.10.3.13],placeholder; effect-site is mode handler; updated when Phase 7 lands the modulation case (W2PA #559)
+compat_cwlu_becomes_cw_on,SETUP:TciCwluBecomesCw=True;;noop;,,,TCIServer.cs:2540 [v2.10.3.13],placeholder; init burst golden covers the modulations_list trailing CW; Phase 7 wired modulation handler but DEFERRED CWLUbecomesCW transform (send-side) — covered by init burst golden today + Phase 11/12 follow-up
+compat_cw_becomes_cwu_above_10mhz_on,SETUP:TciCwBecomesCwuAbove10mhz=True;;noop;,,,TCIServer.cs:3873 [v2.10.3.13],placeholder; Phase 7 wired modulation handler but DEFERRED CWbecomesCWUabove10mhz transform (needs VFOATX/VFOBTX accessors) (W2PA #559)
 compat_iq_swap_off,SETUP:TciIqSwap=False;;noop;,,,TCIServer.cs:6111 [v2.10.3.13],placeholder; effect-site is binary IQ frame builder; updated when Phase 18 lands IQ stream
 compat_always_stream_iq_on,SETUP:TciAlwaysStreamIq=True;;noop;,,,TCIServer.cs:5401 [v2.10.3.13],placeholder; effect-site is wantsIQStream early-out; updated when Phase 11 lands IQ subscription handlers
 compat_send_initial_freq_state_off,SETUP:TciSendInitialFrequencyStateOnConnect=False;;noop;,,,TCIServer.cs:6223 [v2.10.3.13],placeholder; init burst golden covers the gate (skips DDS/IF/VFO/tx_frequency when False)
@@ -16,3 +16,9 @@ vfo_set_rx0_chan1,vfo:0\,1\,7100000;,,vfo:0\,1\,7100000;,TCIServer.cs:3759 [v2.1
 vfo_lock_set_rx0_chan0,vfo_lock:0\,0\,true;,,vfo_lock:0\,0\,true;,TCIServer.cs:3298 [v2.10.3.13],3-arg set distinct from lock; sendVFOLock at TCIServer.cs:1926 [v2.10.3.13]
 lock_set_rx0,lock:0\,true;,,lock:0\,true;,TCIServer.cs:3277 [v2.10.3.13],2-arg set drops chan arg per Thetis sendLock at TCIServer.cs:1921 [v2.10.3.13]
 trailing_semicolon_strip,vfo:0\,0\,14250000,,vfo:0\,0\,14250000;,,TCIServer.cs:4913 [v2.10.3.13],parser strips trailing ; — set still works without it
+modulation_set_rx0_usb,modulation:0\,usb;,,modulation:0\,USB;,TCIServer.cs:3853 [v2.10.3.13],set USB; uppercase per // MW0LGE_22b mods are uppcase on the sun (TCIServer.cs:2155)
+modulation_query_after_set,modulation:0\,usb;;modulation:0;,modulation:0\,USB;,,TCIServer.cs:3933 [v2.10.3.13],query returns current mode uppercase (uses ;; chain)
+modulation_set_rx1_cwl,modulation:1\,cwl;,,modulation:1\,CWL;,TCIServer.cs:3897 [v2.10.3.13],CWL mode set on rx1
+modulation_set_rx0_nfm_alias_fm,modulation:0\,nfm;,,modulation:0\,FM;,TCIServer.cs:3865 [v2.10.3.13],nfm and fm both alias to DSPMode.FM
+rx_filter_band_set_rx0,rx_filter_band:0\,200\,2900;,,rx_filter_band:0\,200\,2900;,TCIServer.cs:4393 [v2.10.3.13],3-arg set filter band
+rx_filter_band_query_after_set,rx_filter_band:0\,200\,2900;;rx_filter_band:0;,rx_filter_band:0\,200\,2900;,,TCIServer.cs:4377 [v2.10.3.13],query returns current filter band (uses ;; chain)

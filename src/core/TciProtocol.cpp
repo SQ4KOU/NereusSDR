@@ -874,7 +874,11 @@ QString TciProtocol::handleSetCommand(const QString& name, const QStringList& ar
         return handleVfoLockCommand(args);
     }
 
-    // Phase 7+ adds more cases.
+    // Phase 7: mode/filter family.
+    if (name == QStringLiteral("modulation"))     { return handleModulationCommand(args); }
+    if (name == QStringLiteral("rx_filter_band")) { return handleRxFilterBandCommand(args); }
+
+    // Phase 8+ adds more cases.
     return {};
 }
 
@@ -1040,6 +1044,129 @@ QString TciProtocol::handleLockCommand(const QStringList& args)
     return QStringLiteral("lock:%1,%2;")
         .arg(rx)
         .arg(locked ? QStringLiteral("true") : QStringLiteral("false"));
+}
+
+// ── Mode / filter family handlers (Phase 7) ─────────────────────────────────
+
+// From Thetis TCIServer.cs:4926 [v2.10.3.13] — modulation case in set switch.
+// handleModulationMessage at TCIServer.cs:3837-3940 [v2.10.3.13] dispatches by args.size():
+//   args.size() == 2 → set (parse mode string, set DSPMode + enqueue notification)
+//   args.size() == 1 → query (return current mode uppercase)
+// CWLUbecomesCW transform at TCIServer.cs:2148-2153 [v2.10.3.13] is DEFERRED
+//   (send-side, Phase 11/12 follow-up — wiring requires touching buildModulationLine).
+// CWbecomesCWUabove10mhz transform at TCIServer.cs:3868-3895 [v2.10.3.13] is DEFERRED
+//   (needs VFOATX/VFOBTX accessors on TestMockRadioModel — future phase).
+QString TciProtocol::handleModulationCommand(const QStringList& args)
+{
+    if (args.size() < 1) {
+        return {};
+    }
+    bool ok = false;
+    const int rx = args.at(0).trimmed().toInt(&ok);
+    if (!ok) {
+        return {};
+    }
+
+    if (args.size() == 1) {
+        // Query path — return current mode uppercase.
+        // From Thetis TCIServer.cs:3933-3940 [v2.10.3.13] — query dispatch.
+        QString currentMode;
+        QMetaObject::invokeMethod(m_radio, "mode", Qt::DirectConnection,
+                                  Q_RETURN_ARG(QString, currentMode),
+                                  Q_ARG(int, rx));
+        return QStringLiteral("modulation:%1,%2;").arg(rx).arg(currentMode.toUpper());
+    }
+
+    if (args.size() >= 2) {
+        // Set path — canonicalize mode string.
+        // From Thetis TCIServer.cs:3847-3911 [v2.10.3.13] — switch on args[1].ToLower().
+        //MW0LGE change if needed [2.10.3.6]MW0LGE fixes #365  [original inline comment from TCIServer.cs:3869]
+        // Note: nfm and fm are aliases for DSPMode.FM (TCIServer.cs:3865-3866).
+        // Unknown modes map to DSPMode.FIRST, which is treated as a no-op
+        // (TCIServer.cs:3909-3913 [v2.10.3.13] — silent drop).
+        const QString modeIn = args.at(1).trimmed().toLower();
+        QString modeOut;
+        if      (modeIn == QStringLiteral("lsb"))  { modeOut = QStringLiteral("LSB"); }
+        else if (modeIn == QStringLiteral("usb"))  { modeOut = QStringLiteral("USB"); }
+        else if (modeIn == QStringLiteral("dsb"))  { modeOut = QStringLiteral("DSB"); }
+        else if (modeIn == QStringLiteral("am"))   { modeOut = QStringLiteral("AM"); }
+        else if (modeIn == QStringLiteral("sam"))  { modeOut = QStringLiteral("SAM"); }
+        else if (modeIn == QStringLiteral("nfm") || modeIn == QStringLiteral("fm")) {
+            // nfm and fm both alias to DSPMode.FM per TCIServer.cs:3865-3866 [v2.10.3.13].
+            modeOut = QStringLiteral("FM");
+        }
+        else if (modeIn == QStringLiteral("cw")) {
+            // CWbecomesCWUabove10mhz transform at TCIServer.cs:3868-3895 [v2.10.3.13] is
+            // DEFERRED — `cw` → CWL until VFOATX/VFOBTX state arrives.
+            modeOut = QStringLiteral("CWL");
+        }
+        else if (modeIn == QStringLiteral("cwl"))  { modeOut = QStringLiteral("CWL"); }
+        else if (modeIn == QStringLiteral("cwu"))  { modeOut = QStringLiteral("CWU"); }
+        else if (modeIn == QStringLiteral("digl")) { modeOut = QStringLiteral("DIGL"); }
+        else if (modeIn == QStringLiteral("digu")) { modeOut = QStringLiteral("DIGU"); }
+        else {
+            // Unknown mode — silent drop per Thetis DSPMode.FIRST default
+            // at TCIServer.cs:3909-3913 [v2.10.3.13].
+            return {};
+        }
+
+        QMetaObject::invokeMethod(m_radio, "setMode", Qt::DirectConnection,
+                                  Q_ARG(int, rx), Q_ARG(QString, modeOut));
+        // MW0LGE_22b mods are uppcase on the sun, replicate
+        // From Thetis TCIServer.cs:2155 [v2.10.3.13] — sendMode format string.
+        m_pendingNotifications << QStringLiteral("modulation:%1,%2;").arg(rx).arg(modeOut);
+        return {};
+    }
+
+    return {};
+}
+
+// From Thetis TCIServer.cs:5085 [v2.10.3.13] — rx_filter_band case in set switch.
+// handleRxFilterBand at TCIServer.cs:4366-4413 [v2.10.3.13] dispatches by args.size():
+//   args.size() == 3 → set (rx, low, high — all int)
+//     calls UpdateRX1Filters/UpdateRX2Filters at TCIServer.cs:4393-4399 [v2.10.3.13].
+//   args.size() == 1 → query (rx)
+//     reads RX1FilterLow/High or RX2FilterLow/High at TCIServer.cs:4380-4384 [v2.10.3.13].
+QString TciProtocol::handleRxFilterBandCommand(const QStringList& args)
+{
+    if (args.size() < 1) {
+        return {};
+    }
+    bool ok = false;
+    const int rx = args.at(0).trimmed().toInt(&ok);
+    if (!ok) {
+        return {};
+    }
+
+    if (args.size() == 1) {
+        // Query path.
+        // From Thetis TCIServer.cs:4380-4384 [v2.10.3.13] — RX1FilterLow/High read.
+        int low = 0, high = 0;
+        QMetaObject::invokeMethod(m_radio, "filterLow", Qt::DirectConnection,
+                                  Q_RETURN_ARG(int, low), Q_ARG(int, rx));
+        QMetaObject::invokeMethod(m_radio, "filterHigh", Qt::DirectConnection,
+                                  Q_RETURN_ARG(int, high), Q_ARG(int, rx));
+        return QStringLiteral("rx_filter_band:%1,%2,%3;").arg(rx).arg(low).arg(high);
+    }
+
+    if (args.size() >= 3) {
+        // Set path.
+        // From Thetis TCIServer.cs:4393-4399 [v2.10.3.13] — UpdateRX1Filters/UpdateRX2Filters.
+        bool ok2 = false, ok3 = false;
+        const int low  = args.at(1).trimmed().toInt(&ok2);
+        const int high = args.at(2).trimmed().toInt(&ok3);
+        if (!ok2 || !ok3) {
+            return {};
+        }
+        QMetaObject::invokeMethod(m_radio, "setFilterBand", Qt::DirectConnection,
+                                  Q_ARG(int, rx), Q_ARG(int, low), Q_ARG(int, high));
+        // From Thetis sendFilterBand at TCIServer.cs:2349-2353 [v2.10.3.13] — format string.
+        m_pendingNotifications << QStringLiteral("rx_filter_band:%1,%2,%3;")
+                                      .arg(rx).arg(low).arg(high);
+        return {};
+    }
+
+    return {};
 }
 
 } // namespace NereusSDR

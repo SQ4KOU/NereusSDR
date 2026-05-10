@@ -110,6 +110,21 @@ private:
     // Drops channel arg per sendLock at TCIServer.cs:1921-1925 [v2.10.3.13].
     QString handleLockCommand(const QStringList& args);
 
+    // ── Mode / filter family handlers (Phase 7) ───────────────────────────────
+    // From Thetis TCIServer.cs:4926 [v2.10.3.13] — modulation case in set switch.
+    // handleModulationMessage at TCIServer.cs:3837 [v2.10.3.13] dispatches by args.size():
+    //   args.size() == 2 → set (parse mode string, set DSPMode + enqueue notification)
+    //   args.size() == 1 → query (return current mode uppercase)
+    // CWLUbecomesCW (TCIServer.cs:2148-2153 [v2.10.3.13]) DEFERRED (Phase 11/12 follow-up).
+    // CWbecomesCWUabove10mhz (TCIServer.cs:3868-3895 [v2.10.3.13]) DEFERRED (needs VFOATX/VFOBTX).
+    QString handleModulationCommand(const QStringList& args);
+
+    // From Thetis TCIServer.cs:5085 [v2.10.3.13] — rx_filter_band case in set switch.
+    // handleRxFilterBand at TCIServer.cs:4366-4413 [v2.10.3.13] dispatches by args.size():
+    //   args.size() == 3 → set (rx, low, high — all int)
+    //   args.size() == 1 → query (rx)
+    QString handleRxFilterBandCommand(const QStringList& args);
+
     // From Thetis TCIServer.cs:2363-2510 [v2.10.3.13] — sendInitialRadioState body.
     // Phase 4 Task 4.2 fills the body (up to 97 wire lines per Sweep D).
     // Each build<Foo>Line helper is a pure static function: takes value args,
