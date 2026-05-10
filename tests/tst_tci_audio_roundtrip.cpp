@@ -20,7 +20,6 @@
 #include <vector>
 
 #include "core/TciServer.h"
-#include "core/TciBinaryFrame.h"
 
 using namespace NereusSDR;
 
