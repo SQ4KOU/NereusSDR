@@ -31,6 +31,7 @@
 
 #include <QHash>
 #include <QObject>
+#include <QPointer>
 #include <array>
 #include <memory>
 
@@ -78,6 +79,21 @@ public:
     // Phase 16 Task 16.3 (sub-commit b): sum of audioResamplers.size() across
     // all connected sessions.  Exposed for lifecycle test assertions.
     int totalResamplerInstances() const;
+
+    // Phase 17: TX audio mutex status — 0 or 1 active TX clients.
+    // Used by Phase 22 ClientChainApplet to render the TX badge.
+    // Returns 1 when m_txAudioActiveClient is set and still connected;
+    // 0 otherwise.
+    int activeTxClientCount() const;
+
+    // Phase 17: peer string of the active TX client, or empty when none.
+    // Used by Phase 22 ClientChainApplet for per-client TX badge display.
+    QString activeTxClientPeer() const;
+
+    // Test-only: return the number of bytes currently pending in the server-wide
+    // TX audio ring.  Used by tst_tci_tx_mutex to verify frames landed without
+    // needing a real TxChannel.
+    int peekTxRingSize() const { return static_cast<int>(m_txAudioRing.usedBytes()); }
 
     // Override the ping interval (milliseconds) for testability.
     // Default 20000ms matches Thetis TCIServer.cs:2650 [v2.10.3.13] (1000 * 20).
@@ -194,6 +210,36 @@ private:
     // Handle for the WdspEngine::initializedChanged connection so we can
     // disconnect it if TciServer is destroyed before WDSP initializes.
     QMetaObject::Connection m_wdspInitConn;
+
+    // ── Phase 17: TX audio single-client mutex ───────────────────────────────
+    //
+    // Only ONE client may be the active TX audio source at a time.
+    // Mirrors Thetis TCIServer.cs:7625-7651 [v2.10.3.13] —
+    // TryAcquireActiveTxAudioListener / ReleaseActiveTxAudioListener.
+    //
+    // QPointer<QWebSocket> automatically nulls itself when the socket is
+    // destroyed (on disconnect), so stale-pointer reads are safe:
+    //   m_txAudioActiveClient.isNull()  →  client disconnected, mutex free.
+    //
+    // Access is main-thread only (onTextMessageReceived + onBinaryMessageReceived
+    // both run on the Qt event loop that owns TciServer).  No additional locking.
+    QPointer<QWebSocket> m_txAudioActiveClient;
+
+    // ── Phase 17: server-wide TX audio ring buffer ───────────────────────────
+    //
+    // Inbound TX binary frames from the active client are decoded and pushed
+    // here by onBinaryMessageReceived (main thread).  TxChannel::feedTxAudioFromTci
+    // drains this ring per audio-thread tick.
+    //
+    // Capacity 131072 bytes ≈ 16384 stereo float32 frames ≈ 341 ms at 48 kHz.
+    // Matches the RX m_audioRing capacity so the same reasoning applies:
+    // well above the drain headroom required against typical event-loop jitter.
+    //
+    // Phase 17 NereusSDR-original — Thetis keeps per-client m_txAudioQueue
+    // (Queue<TCIQueuedTxAudio>) at TCIServer.cs:762-764 [v2.10.3.13].
+    // NereusSDR uses a server-wide SPSC ring because only one client can
+    // own the TX mutex at a time.
+    AudioRingSpsc<131072> m_txAudioRing;
 };
 
 } // namespace NereusSDR

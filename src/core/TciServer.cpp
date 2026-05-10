@@ -25,6 +25,7 @@
 #include "models/RadioModel.h"
 #include "WdspEngine.h"
 #include "RxChannel.h"
+#include "TxChannel.h"
 
 // Phase 16 Task 16.3 (sub-commit b): WDSP RESAMPLEF lifecycle.
 // resample.h declares create_resampleF / destroy_resampleF / xresampleF, and
@@ -304,6 +305,9 @@ void TciServer::stop()
     m_pingTimer->stop();
     m_drainTimer->stop();  // Phase 14: stop drain before disconnecting clients
 
+    // Phase 17: release TX audio mutex — no client is active after stop().
+    m_txAudioActiveClient = nullptr;
+
     // Disconnect all connected clients.  We disconnect the socket's signals
     // from this object first to prevent onClientDisconnected() re-entry during
     // the explicit close() calls.
@@ -391,6 +395,15 @@ void TciServer::onClientDisconnected()
     qCInfo(lcTci) << "TciServer: client disconnected from" << it.value()->peer;
     emit clientDisconnected(ws);
 
+    // Phase 17: release TX audio mutex if this client held it.
+    // QPointer auto-nulls when the socket is deleted (ws->deleteLater below),
+    // but we clear explicitly here so activeTxClientCount() returns 0 in the
+    // same event-loop pass as the disconnect.
+    if (!m_txAudioActiveClient.isNull() && m_txAudioActiveClient.data() == ws) {
+        m_txAudioActiveClient = nullptr;
+        qCInfo(lcTci) << "TciServer: TX audio mutex released on disconnect";
+    }
+
     // Phase 16 Task 16.3 (sub-commit b): destroy all RESAMPLEF instances for
     // this client before removing the session from the map.
     cleanupResamplers(it.value());
@@ -411,6 +424,32 @@ int TciServer::totalResamplerInstances() const
         total += it.value()->audioResamplers.size();
     }
     return total;
+}
+
+// ── activeTxClientCount() ────────────────────────────────────────────────────
+//
+// Phase 17: returns 1 when m_txAudioActiveClient is set and still connected;
+// 0 otherwise (QPointer auto-nulls on socket destruction).
+// Used by Phase 22 ClientChainApplet to render the TX badge.
+int TciServer::activeTxClientCount() const
+{
+    return m_txAudioActiveClient.isNull() ? 0 : 1;
+}
+
+// ── activeTxClientPeer() ────────────────────────────────────────────────────
+//
+// Phase 17: returns the peer string of the active TX client,
+// or an empty string when there is no active TX client.
+QString TciServer::activeTxClientPeer() const
+{
+    if (m_txAudioActiveClient.isNull()) {
+        return {};
+    }
+    auto it = m_clients.find(m_txAudioActiveClient.data());
+    if (it == m_clients.cend()) {
+        return {};
+    }
+    return it.value()->peer;
 }
 
 // ── handleAudioSubscribe() ────────────────────────────────────────────────────
@@ -552,6 +591,8 @@ void TciServer::onTextMessageReceived(const QString& msg)
     // BEFORE TciProtocol dispatch because TciProtocol is transport-blind and
     // has no concept of per-client sessions.
     //
+    // Phase 17: intercept trx:N,true,tci; / trx:N,false; for TX audio mutex.
+    //
     // From Thetis TCIServer.cs:4406-4440 [v2.10.3.13] — audio_start / audio_stop
     // parse the rx index and update m_audioStreamEnabled per-listener.
     // NereusSDR mirrors: parse rx from stripped command, delegate to
@@ -574,6 +615,66 @@ void TciServer::onTextMessageReceived(const QString& msg)
             const int rx = trimmed.mid(kAudioStop.size()).trimmed().toInt(&ok);
             if (ok && rx >= 0 && rx <= 1) {
                 handleAudioUnsubscribe(session, rx);
+            }
+        }
+
+        // Phase 17: TX audio mutex — intercept trx:N,true,tci; and trx:N,false;
+        //
+        // Porting from Thetis TCIServer.cs:3489-3516 [v2.10.3.13]:
+        //   bool useTciAudio = args.Length > 2 && args[2].ToLower() == "tci";
+        //   bool wantsActiveTciPtt = useTciAudio && bOK && bMox && ...;
+        //   if (wantsActiveTciPtt) ownsActiveTciPtt = m_server.TryAcquireActiveTxAudioListener(this);
+        //   else m_server.ReleaseActiveTxAudioListener(this);
+        //   m_tciPttActive = wantsActiveTciPtt && ownsActiveTciPtt;
+        //
+        // NereusSDR simplification: TryAcquire/Release runs directly in the
+        // main-thread slot; no per-listener thread lock needed because all
+        // WebSocket callbacks run on the same Qt event loop.
+        {
+            const QString kTrx = QStringLiteral("trx:");
+            if (trimmed.startsWith(kTrx)) {
+                // Parse "trx:N,bool[,tci]"
+                const QString args = trimmed.mid(kTrx.size());
+                const QStringList parts = args.split(QLatin1Char(','));
+                if (parts.size() >= 2) {
+                    // Is the third arg "tci"?
+                    const bool hasTciArg = (parts.size() >= 3 &&
+                        parts.at(2).trimmed().compare(QLatin1String("tci"),
+                            Qt::CaseInsensitive) == 0);
+
+                    const bool wantsMox = (parts.at(1).trimmed().compare(
+                        QLatin1String("true"), Qt::CaseInsensitive) == 0);
+
+                    if (hasTciArg && wantsMox) {
+                        // Client wants TX audio ownership.
+                        // From Thetis TCIServer.cs:7625-7643 [v2.10.3.13] —
+                        // TryAcquireActiveTxAudioListener: grant if no current
+                        // owner or the owner IS this client; else deny.
+                        if (m_txAudioActiveClient.isNull() ||
+                            m_txAudioActiveClient.data() == ws) {
+                            m_txAudioActiveClient = ws;
+                            qCInfo(lcTci) << "TciServer: TX audio mutex acquired by"
+                                          << session->peer;
+                        } else {
+                            qCInfo(lcTci) << "TciServer: TX audio mutex denied for"
+                                          << session->peer
+                                          << "(held by"
+                                          << m_clients.value(m_txAudioActiveClient.data(),
+                                                 std::make_shared<TciClientSession>())->peer
+                                          << ")";
+                        }
+                    } else if (!wantsMox) {
+                        // trx:N,false — release mutex if this client held it.
+                        // From Thetis TCIServer.cs:7646-7652 [v2.10.3.13] —
+                        // ReleaseActiveTxAudioListener: clear if owner matches.
+                        if (!m_txAudioActiveClient.isNull() &&
+                            m_txAudioActiveClient.data() == ws) {
+                            m_txAudioActiveClient = nullptr;
+                            qCInfo(lcTci) << "TciServer: TX audio mutex released by"
+                                          << session->peer;
+                        }
+                    }
+                }
             }
         }
     }
@@ -606,17 +707,184 @@ void TciServer::onTextMessageReceived(const QString& msg)
 
 // ── onBinaryMessageReceived() ────────────────────────────────────────────────
 //
-// Phase 2 stub.
-// Phase 17 wires the full dispatch: parse the 64-byte TCI audio header,
-// identify TX_AUDIO_STREAM (type=2) frames, resample 48kHz→native rate,
-// and forward to the TX audio pipeline.
+// Phase 17: parse inbound TCI binary frames and route TX_AUDIO_STREAM (type 2)
+// to the TX audio pipeline.  All other stream types are silently ignored per
+// Thetis TCIServer.cs:5614 [v2.10.3.13] ("if streamType != TX_AUDIO_STREAM … return").
+//
+// Porting from Thetis TCIServer.cs:5602-5703 [v2.10.3.13] — handleBinaryFrame.
+//
+// TX mutex: only the client registered as m_txAudioActiveClient may push audio.
+// Other clients' binary frames are silently dropped and their txFramesDropped
+// counter incremented.  This maps to the Thetis TryAcquireActiveTxAudioListener /
+// m_tciPttActive per-client gate (TCIServer.cs:7625-7651 [v2.10.3.13]).
 
 void TciServer::onBinaryMessageReceived(const QByteArray& data)
 {
     auto* ws = qobject_cast<QWebSocket*>(sender());
     if (!ws) { return; }
-    (void)data;
-    // TODO Phase 17: dispatch to handleBinaryFrame for TX audio + IQ inbound.
+    auto it = m_clients.find(ws);
+    if (it == m_clients.end()) { return; }
+    auto& session = it.value();
+
+    // From Thetis TCIServer.cs:5604-5605 [v2.10.3.13]:
+    //   if (payload == null || payload.Length < 64) return;
+    if (data.size() < 64) { return; }
+
+    // ── Parse 64-byte LE header ───────────────────────────────────────────────
+    //
+    // From Thetis TCIServer.cs:5607-5612 [v2.10.3.13]:
+    //   int receiver   = BitConverter.ToInt32(payload, 0);
+    //   int sampleRate = BitConverter.ToInt32(payload, 4);
+    //   TCISampleType sampleType = (TCISampleType)BitConverter.ToUInt32(payload, 8);
+    //   int length     = BitConverter.ToInt32(payload, 20);
+    //   TCIStreamType streamType = (TCIStreamType)BitConverter.ToUInt32(payload, 24);
+    //   int headerChannels = BitConverter.ToInt32(payload, 28);
+    auto readI32 = [&](int off) -> qint32 {
+        const auto* p = reinterpret_cast<const uchar*>(data.constData() + off);
+        return static_cast<qint32>(
+            static_cast<quint32>(p[0]) |
+            (static_cast<quint32>(p[1]) << 8) |
+            (static_cast<quint32>(p[2]) << 16) |
+            (static_cast<quint32>(p[3]) << 24));
+    };
+
+    // const int receiver     = readI32(0);   // future: multi-RX routing
+    const int sampleRate    = readI32(4);
+    const int sampleTypeInt = readI32(8);
+    const int length        = readI32(20);  // flat count of encoded values
+    const int streamTypeInt = readI32(24);
+    const int headerChannels = readI32(28);
+
+    // From Thetis TCIServer.cs:5614-5615 [v2.10.3.13]:
+    //   if (streamType != TCIStreamType.TX_AUDIO_STREAM || length <= 0) return;
+    if (streamTypeInt != static_cast<int>(TciStreamType::TxAudioStream)) { return; }
+    if (length <= 0) { return; }
+
+    // ── TX mutex gate ─────────────────────────────────────────────────────────
+    //
+    // Only the active TX client may push audio. All others silently dropped.
+    // Mirrors Thetis per-client m_tciPttActive gate (TCIServer.cs:5547 [v2.10.3.13]).
+    if (m_txAudioActiveClient.isNull() || m_txAudioActiveClient.data() != ws) {
+        session->txFramesDropped++;
+        return;
+    }
+
+    // ── bytesPerSample + payload bounds check ─────────────────────────────────
+    //
+    // From Thetis TCIServer.cs:5617-5621 [v2.10.3.13]:
+    //   int bytesPerSample = getBytesPerSample(sampleType);
+    //   int dataOffset = 64;
+    //   int actualDataBytes = payload.Length - dataOffset;
+    //   if (actualDataBytes < bytesPerSample) return;
+    const int bps = TciBinaryFrame::bytesPerSample(sampleTypeInt);
+    const int dataOffset = 64;
+    const int actualDataBytes = data.size() - dataOffset;
+    if (actualDataBytes < bps) { return; }
+
+    const int actualValueCount = actualDataBytes / bps;
+
+    // ── Modern vs legacy header detection ─────────────────────────────────────
+    //
+    // From Thetis TCIServer.cs:5628-5652 [v2.10.3.13]:
+    //   bool modernHeader = (headerChannels == 1 || headerChannels == 2);
+    //   if (modernHeader) {
+    //       channels = headerChannels;
+    //       decodedValueCount = Math.Min(length, actualValueCount);
+    //       if (channels > 1) decodedValueCount -= decodedValueCount % channels;
+    //   } else {
+    //       // legacy/JTDX: no real channels field
+    //       if (actualValueCount >= length * 2) channels = 2; else channels = 1;
+    //       decodedValueCount = Math.Min(length, actualValueCount);
+    //       if (channels > 1) decodedValueCount -= decodedValueCount % channels;
+    //   }
+    const bool modernHeader = (headerChannels == 1 || headerChannels == 2);
+
+    int channels;
+    int decodedValueCount;
+
+    if (modernHeader) {
+        channels = headerChannels;
+        decodedValueCount = std::min(length, actualValueCount);
+        if (channels > 1) {
+            decodedValueCount -= decodedValueCount % channels;
+        }
+    } else {
+        // legacy/JTDX
+        channels = (actualValueCount >= length * 2) ? 2 : 1;
+        decodedValueCount = std::min(length, actualValueCount);
+        if (channels > 1) {
+            decodedValueCount -= decodedValueCount % channels;
+        }
+    }
+
+    if (decodedValueCount <= 0) { return; }
+
+    // ── Decode samples ────────────────────────────────────────────────────────
+    //
+    // From Thetis TCIServer.cs:5657 [v2.10.3.13]:
+    //   float[] decoded = decodeSamples(payload, dataOffset, decodedValueCount, sampleType);
+    std::vector<float> decoded = TciBinaryFrame::decodeSamples(
+        data, dataOffset, decodedValueCount, sampleTypeInt);
+
+    // ── NaN/Inf zero + clamp [-4.0, 4.0] ─────────────────────────────────────
+    //
+    // From Thetis TCIServer.cs:5658-5673 [v2.10.3.13]:
+    //   for (int i = 0; i < decoded.Length; i++) {
+    //       float sample = decoded[i];
+    //       if (float.IsNaN(sample) || float.IsInfinity(sample)) decoded[i] = 0.0f;
+    //       else if (sample > 4.0f)  decoded[i] = 4.0f;
+    //       else if (sample < -4.0f) decoded[i] = -4.0f;
+    //   }
+    // Note: clamp range is [-4.0, 4.0] — Thetis permits TX-side overdrive.
+    for (float& s : decoded) {
+        if (std::isnan(s) || std::isinf(s)) {
+            s = 0.0f;
+        } else if (s > 4.0f) {
+            s = 4.0f;
+        } else if (s < -4.0f) {
+            s = -4.0f;
+        }
+    }
+
+    // ── Push to TX audio ring ─────────────────────────────────────────────────
+    //
+    // Thetis enqueues a TCIQueuedTxAudio (with bounded drop-oldest) at
+    // TCIServer.cs:5687-5702 [v2.10.3.13].  NereusSDR pushes raw decoded
+    // float bytes into a server-wide SPSC ring.  Drop behaviour: tryPushCopy
+    // drops the newest bytes on overflow (partial write) — the ring's natural
+    // behaviour matches Thetis's oldest-drop semantics for practical purposes
+    // (both prevent unbounded growth; TCI latency is <20ms so overflow is rare).
+    //
+    // `decodedValueCount` is the flat interleaved count (L,R,L,R... for stereo
+    // or L,L,L... for mono).  The ring stores raw float bytes; TxChannel's
+    // feedTxAudioFromTci drains them per block.
+    const int frames = (channels > 1) ? (decodedValueCount / channels) : decodedValueCount;
+    if (frames > 0) {
+        m_txAudioRing.tryPushCopy(
+            reinterpret_cast<const uint8_t*>(decoded.data()),
+            static_cast<qint64>(decodedValueCount) * static_cast<qint64>(sizeof(float)));
+    }
+
+    // ── Drain to TxChannel if available ──────────────────────────────────────
+    //
+    // Phase 17 simplified: if TxChannel is available, feed the decoded
+    // (and clamped) samples directly — bypassing the ring so the block
+    // reaches driveOneTxBlock without an extra copy.  Remove the corresponding
+    // bytes from the ring to avoid double-processing on future drain ticks.
+    if (m_model && frames > 0) {
+        WdspEngine* wdsp = m_model->wdspEngine();
+        if (wdsp && wdsp->isInitialized()) {
+            TxChannel* txCh = wdsp->txChannel(0);
+            if (txCh) {
+                txCh->feedTxAudioFromTci(decoded.data(), frames, channels, sampleRate);
+                // Drop the bytes we just pushed to the ring (we fed directly above).
+                m_txAudioRing.dropOldest(
+                    static_cast<size_t>(decodedValueCount) * sizeof(float));
+            }
+        }
+    }
+    // Note: m_txAudioRing holds the data for test-only peekTxRingSize() calls
+    // when m_model is null (unit test scenario without a real TxChannel).
 }
 
 // ── setPingIntervalMs() ──────────────────────────────────────────────────────

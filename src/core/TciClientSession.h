@@ -139,6 +139,13 @@ struct TciClientSession {
     // drain timer so Phase 22 ClientChainApplet can read it without touching
     // the queue directly.
     int     framesDropped{0};
+
+    // Phase 17: inbound TX audio drop counter.
+    // Incremented when this client sends a binary TX_AUDIO_STREAM frame but
+    // does not hold the TX audio mutex (m_txAudioActiveClient != this).
+    // Separate from framesDropped (outbound) to keep semantics clean.
+    // Phase 22 ClientChainApplet reads both: "outbound: N" + "TX: M dropped".
+    int     txFramesDropped{0};
 };
 
 } // namespace NereusSDR

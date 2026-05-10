@@ -1919,6 +1919,69 @@ void TxChannel::sendAntiVoxData(const float* interleaved, int nsamples)
 }
 
 // ---------------------------------------------------------------------------
+// feedTxAudioFromTci()  — Phase 3J-1 Task 17.1
+//
+// Accepts an arbitrary-length block of interleaved stereo (or mono) float
+// audio from the TCI binary pipeline and dispatches it in m_inputBufferSize
+// blocks through driveOneTxBlock().
+//
+// Phase 3J-1 Task 17.1 — NereusSDR-original entry point.
+//
+// Thetis dequeues TCIQueuedTxAudio in a separate thread and writes to the
+// WDSP ring via TryDequeueTxAudio (TCIServer.cs:5586-5600 [v2.10.3.13]).
+// NereusSDR consolidates this into a single call that accumulates and drains
+// in the same drain tick where the data arrived.
+//
+// `interleavedStereo`  — L0,R0,L1,R1,... (channels==2) or L0,L1,... (channels==1)
+// `frames`             — number of multi-channel frames (total floats / channels)
+// `channels`           — 1 or 2; mono frames are replicated to stereo
+// `srcRate`            — source rate from TCI header (informational; resampling deferred)
+// ---------------------------------------------------------------------------
+void TxChannel::feedTxAudioFromTci(const float* interleavedStereo, int frames,
+                                    int channels, int srcRate)
+{
+    (void)srcRate;  // Phase 17 simplified scope: no rate conversion
+
+    if (!interleavedStereo || frames <= 0 || channels < 1 || channels > 2) {
+        return;
+    }
+
+    // driveOneTxBlock expects MONO float samples (one per frame) — it sets
+    // I = samples[i], Q = 0 for each frame.  Extract the L channel from the
+    // interleaved stereo (or mono) TCI stream into the accumulation buffer.
+    // The WDSP TX chain is mono-in; both L and R carry the same TCI audio.
+    //
+    // Ensure the accumulation buffer is sized to at least m_inputBufferSize
+    // mono floats. Lazy-allocate once.
+    const int blockFrames = m_inputBufferSize;  // e.g. 64
+    if (static_cast<int>(m_tciTxAccum.size()) < blockFrames) {
+        m_tciTxAccum.assign(static_cast<size_t>(blockFrames), 0.0f);
+        m_tciTxAccumSize = 0;
+    }
+
+    // Process each incoming frame: write L-channel mono sample into
+    // accumulator, dispatch full blocks.
+    for (int f = 0; f < frames; ++f) {
+        // Extract L channel (mono: frame[f]; stereo: frame[2f])
+        const float l = (channels == 2)
+                        ? interleavedStereo[2 * f]
+                        : interleavedStereo[f];
+
+        m_tciTxAccum[static_cast<size_t>(m_tciTxAccumSize)] = l;
+        ++m_tciTxAccumSize;
+
+        if (m_tciTxAccumSize >= blockFrames) {
+            // Full block ready — dispatch through driveOneTxBlock.
+            // driveOneTxBlock(const float* samples, int frames) maps
+            // samples[i] → I, 0 → Q per frame for fexchange0.
+            driveOneTxBlock(m_tciTxAccum.data(), blockFrames);
+            m_tciTxAccumSize = 0;
+        }
+    }
+    // Partial block remains in m_tciTxAccum; completed on next call.
+}
+
+// ---------------------------------------------------------------------------
 // setDexpRun()  — Phase 3M-3a-iii Task 1
 //
 // Enable or disable DEXP audio-domain expansion (the master "noise gate" gate).

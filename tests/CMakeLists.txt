@@ -4013,6 +4013,15 @@ if(Qt6WebSockets_FOUND)
     target_link_libraries(tst_tci_audio_roundtrip PRIVATE Qt6::WebSockets)
 endif()
 
+# ── Phase 3J-1 Task 17.1: TX audio binary pipeline + single-client mutex ──────
+# Tests: TX mutex acquire/release, active-client-frame-lands, non-active-client-
+# frame-dropped (ring invariant).
+# Gated on Qt6WebSockets_FOUND (TciServer requires HAVE_WEBSOCKETS).
+if(Qt6WebSockets_FOUND)
+    nereus_add_test(tst_tci_tx_mutex)
+    target_link_libraries(tst_tci_tx_mutex PRIVATE Qt6::WebSockets)
+endif()
+
 # ── Phase 3J-1 Task 1.1: TCI verification matrix runner ──────────────────────
 # Loads tests/data/tci/matrix.csv and feeds each row's command into
 # TciProtocol::handleCommand(), asserting the response + notification queue

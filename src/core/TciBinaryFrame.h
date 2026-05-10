@@ -56,6 +56,7 @@ mw0lge@grange-lane.co.uk
 #pragma once
 
 #include <QtCore/QByteArray>
+#include <vector>
 
 namespace NereusSDR {
 
@@ -130,6 +131,30 @@ public:
     // (i.e. channels * framesPerChannel for interleaved stereo).
     static QByteArray encodeSamples(const float* samples, int sampleCount,
                                     int sampleType);
+
+    // From Thetis TCIServer.cs:5307-5337 [v2.10.3.13] — decodeSamples.
+    //
+    // Decodes `sampleCount` values from `payload` starting at `dataOffset`
+    // bytes, returning them as a vector of floats.  Symmetric inverse of
+    // encodeSamples.  Per-type decoding:
+    //   Float32 — direct memcpy of IEEE-754 representation.
+    //   Int16   — read 2 LE bytes as signed int16, divide by 32768.0f.
+    //   Int24   — read 3 LE bytes, sign-extend from bit 23, divide by 8388608.0f.
+    //   Int32   — read 4 LE bytes as signed int32, divide by 2147483648.0f.
+    //
+    // `dataOffset` is the byte offset within `payload` where sample data begins
+    // (64 for TCI binary frames — after the fixed header).
+    // `sampleCount` is the total number of decoded floats to produce.
+    // Unknown sampleType is treated as Float32.
+    static std::vector<float> decodeSamples(const QByteArray& payload,
+                                             int dataOffset, int sampleCount,
+                                             int sampleType);
+
+    // Returns the byte width per encoded sample for the given sampleType.
+    // Used by handleBinaryFrame to compute actualValueCount from the raw
+    // payload byte count.
+    // From Thetis TCIServer.cs:5617 [v2.10.3.13] — getBytesPerSample.
+    static int bytesPerSample(int sampleType);
 };
 
 } // namespace NereusSDR

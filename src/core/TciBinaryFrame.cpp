@@ -61,6 +61,7 @@ mw0lge@grange-lane.co.uk
 #include <climits>
 #include <cmath>
 #include <cstring>
+#include <vector>
 
 namespace NereusSDR {
 
@@ -230,6 +231,119 @@ QByteArray TciBinaryFrame::encodeSamples(const float* samples, int sampleCount,
     }
 
     return data;
+}
+
+// ── bytesPerSample ────────────────────────────────────────────────────────────
+//
+// From Thetis TCIServer.cs:5617 [v2.10.3.13] — getBytesPerSample.
+// Returns the byte width for each encoded sample value of the given type.
+// Used by handleBinaryFrame to compute the actual value count from raw payload
+// byte length: actualValueCount = actualDataBytes / bytesPerSample(sampleType).
+int TciBinaryFrame::bytesPerSample(int sampleType)
+{
+    switch (static_cast<TciSampleType>(sampleType)) {
+        case TciSampleType::Int16:   return 2;
+        case TciSampleType::Int24:   return 3;
+        case TciSampleType::Int32:   return 4;
+        case TciSampleType::Float32: return 4;
+        default:                     return 4;  // Float32 fallthrough
+    }
+}
+
+// ── decodeSamples ─────────────────────────────────────────────────────────────
+//
+// From Thetis TCIServer.cs:5307-5337 [v2.10.3.13] — decodeSamples.
+// Symmetric inverse of encodeSamples. Direct port of:
+//
+//   float[] samples = new float[length];
+//   int offset = dataOffset;
+//   for (int i = 0; i < length; i++) {
+//       switch (sampleType) {
+//           case INT16:
+//               samples[i] = BitConverter.ToInt16(payload, offset) / 32768.0f;
+//               offset += 2; break;
+//           case INT24:
+//               int s24 = payload[offset] | (payload[offset+1]<<8) | (payload[offset+2]<<16);
+//               if ((s24 & 0x800000) != 0) s24 |= unchecked((int)0xFF000000);
+//               samples[i] = s24 / 8388608.0f; offset += 3; break;
+//           case INT32:
+//               samples[i] = BitConverter.ToInt32(payload, offset) / 2147483648.0f;
+//               offset += 4; break;
+//           case FLOAT32: default:
+//               samples[i] = BitConverter.ToSingle(payload, offset);
+//               offset += 4; break;
+//       }
+//   }
+//   return samples;
+std::vector<float> TciBinaryFrame::decodeSamples(const QByteArray& payload,
+                                                   int dataOffset, int sampleCount,
+                                                   int sampleType)
+{
+    if (sampleCount <= 0 || dataOffset < 0) {
+        return {};  // From Thetis cs:5309 — return new float[length] (empty for length<=0)
+    }
+
+    std::vector<float> samples(static_cast<size_t>(sampleCount), 0.0f);
+    const auto* bytes = reinterpret_cast<const unsigned char*>(payload.constData());
+    const int payloadSize = payload.size();
+    int offset = dataOffset;
+
+    for (int i = 0; i < sampleCount; ++i) {
+        switch (static_cast<TciSampleType>(sampleType)) {
+            case TciSampleType::Int16: {
+                // From Thetis cs:5316:
+                //   samples[i] = BitConverter.ToInt16(payload, offset) / 32768.0f;
+                if (offset + 2 > payloadSize) { break; }
+                const qint16 s16 = static_cast<qint16>(
+                    static_cast<quint16>(bytes[offset]) |
+                    (static_cast<quint16>(bytes[offset + 1]) << 8));
+                samples[static_cast<size_t>(i)] = s16 / 32768.0f;
+                offset += 2;
+                break;
+            }
+            case TciSampleType::Int24: {
+                // From Thetis cs:5319-5322:
+                //   int s24 = payload[offset] | (payload[offset+1]<<8) | (payload[offset+2]<<16);
+                //   if ((s24 & 0x800000) != 0) s24 |= unchecked((int)0xFF000000);
+                //   samples[i] = s24 / 8388608.0f;
+                if (offset + 3 > payloadSize) { break; }
+                qint32 s24 = static_cast<qint32>(bytes[offset])
+                           | (static_cast<qint32>(bytes[offset + 1]) << 8)
+                           | (static_cast<qint32>(bytes[offset + 2]) << 16);
+                if (s24 & 0x800000) {
+                    s24 |= static_cast<qint32>(0xFF000000u);
+                }
+                samples[static_cast<size_t>(i)] = s24 / 8388608.0f;
+                offset += 3;
+                break;
+            }
+            case TciSampleType::Int32: {
+                // From Thetis cs:5325-5326:
+                //   samples[i] = BitConverter.ToInt32(payload, offset) / 2147483648.0f;
+                if (offset + 4 > payloadSize) { break; }
+                qint32 s32 = static_cast<qint32>(bytes[offset])
+                           | (static_cast<qint32>(bytes[offset + 1]) << 8)
+                           | (static_cast<qint32>(bytes[offset + 2]) << 16)
+                           | (static_cast<qint32>(bytes[offset + 3]) << 24);
+                samples[static_cast<size_t>(i)] = s32 / 2147483648.0f;
+                offset += 4;
+                break;
+            }
+            case TciSampleType::Float32:
+            default: {
+                // From Thetis cs:5330-5331:
+                //   samples[i] = BitConverter.ToSingle(payload, offset);
+                if (offset + 4 > payloadSize) { break; }
+                float v = 0.0f;
+                std::memcpy(&v, bytes + offset, 4);
+                samples[static_cast<size_t>(i)] = v;
+                offset += 4;
+                break;
+            }
+        }
+    }
+
+    return samples;
 }
 
 } // namespace NereusSDR

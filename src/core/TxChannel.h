@@ -813,6 +813,33 @@ public:
     double antiVoxRate()        const noexcept { return m_antiVoxRate; }
     double antiVoxDetectorTau() const noexcept { return m_antiVoxTauSec; }
 
+    // ── TCI TX audio injection (Phase 3J-1 Task 17.1) ────────────────────────
+    //
+    // Injects an arbitrary-length block of interleaved stereo float audio
+    // from the TCI binary pipeline into the TX channel.  The audio is
+    // accumulated in an internal ring buffer and dispatched in m_inputBufferSize
+    // blocks to driveOneTxBlock().  This is the TCI equivalent of the mic-input
+    // path; it replaces mic input for the duration of TCI PTT.
+    //
+    // `interleavedStereo`  — L0,R0,L1,R1,... float array (or mono if channels==1)
+    // `frames`             — number of stereo frames (total floats / channels)
+    // `channels`           — 1 (mono → duplicated to L+R) or 2 (stereo)
+    // `srcRate`            — source sample rate from the TCI binary header
+    //                        (informational for Phase 17; resampling deferred)
+    //
+    // Audio thread safety: must only be called from the audio thread (or the
+    // drain thread in TciServer that runs on the main event loop when the
+    // drain timer fires).  In current Phase 17 architecture the drain timer
+    // is main-thread, TxChannel runs on TxWorkerThread — the accumulated ring
+    // buffer is read by driveOneTxBlock which is driven by TxWorkerThread.
+    // Phase 17 simplified scope: resampling and full rate-conversion deferred.
+    //
+    // Phase 3J-1 Task 17.1 — NereusSDR-original entry point.
+    // No Thetis equivalent directly; Thetis dequeues from m_txAudioQueue in
+    // a separate thread (TCIServer.cs:5586-5600 TryDequeueTxAudio).
+    void feedTxAudioFromTci(const float* interleavedStereo, int frames,
+                            int channels, int srcRate);
+
     // ── Anti-VOX detector audio feed (3M-3a-iv Task 3) ──────────────────────
     //
     // Push one block of interleaved L/R float audio into the WDSP DEXP
@@ -2902,6 +2929,21 @@ private:
     int     m_pendingAudioLow  = 0;
     int     m_pendingAudioHigh = 0;
     DSPMode m_pendingMode      = DSPMode::USB;
+
+    // ── TCI TX audio accumulator (Phase 3J-1 Task 17.1) ─────────────────────
+    //
+    // feedTxAudioFromTci() accumulates incoming TCI binary frames here.
+    // driveOneTxBlock() expects exactly m_inputBufferSize float frames per call;
+    // TCI frames arrive in arbitrary sizes (Thetis default 2048 complex samples
+    // per TCIQueuedTxAudio at TCIServer.cs:5677-5684 [v2.10.3.13]).
+    //
+    // Ring capacity: 131072 bytes ≈ 131072 / 4 = 32768 floats = 16384 stereo
+    // frames.  At 48 kHz that's ~341 ms of headroom — enough to buffer several
+    // TCI frames between drain ticks.
+    //
+    // Phase 3J-1 Task 17.1 — NereusSDR-original.
+    std::vector<float> m_tciTxAccum;  // accumulation buffer for partial blocks
+    int                m_tciTxAccumSize{0};  // valid frames in m_tciTxAccum
 };
 
 } // namespace NereusSDR
