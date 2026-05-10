@@ -1782,6 +1782,11 @@ public slots:
     /// must never be active on that board.
     void setMicSource(MicSource source);
 
+    /// Returns the most recent non-VAX source the user has selected.
+    /// Tracked automatically by setMicSource() whenever a non-VAX source
+    /// is written. Default Pc on first run.
+    MicSource previousNonVaxMicSource() const noexcept { return m_previousNonVaxMicSource; }
+
     // ── Mic source lock guard (3M-1b L.3) ────────────────────────────────────
     //
     // NereusSDR-native. When lock is true, setMicSource(MicSource::Radio)
@@ -1806,6 +1811,11 @@ public slots:
 
     /// Return true when the mic-source lock is active (hasMicJack == false).
     bool isMicSourceLocked() const noexcept { return m_micSourceLocked; }
+
+    /// Quick toggle wired to the PhoneCwApplet VAX button. on=true sets
+    /// MicSource::Vax. on=false restores previousNonVaxMicSource() (which
+    /// the lock guard in setMicSource will coerce to Pc on HL2).
+    void toggleVaxSource(bool on);
 
     // ── PC Mic session-state setters (3M-1b I.2) ─────────────────────────────
     /// Set the PortAudio host API index for PC Mic capture.  Idempotent.
@@ -2252,6 +2262,7 @@ private:
     // silently coerces to Pc.  Runtime capability constraint; not persisted.
     MicSource m_micSource{MicSource::Pc};
     bool      m_micSourceLocked{false};  // L.3: set by RadioModel per hasMicJack
+    MicSource m_previousNonVaxMicSource{MicSource::Pc};
 
     // ── PC Mic session state (3M-1b I.2) ─────────────────────────────────
     // NereusSDR-native transient session state. AppSettings persistence

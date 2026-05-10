@@ -2948,6 +2948,14 @@ target_compile_definitions(tst_vax_tx_mic_source PRIVATE NEREUS_BUILD_TESTS)
 # post-connect writes don't touch preconnect, first-run defaults to Pc.
 nereus_add_test(tst_transmit_model_mic_source_preconnect)
 
+# ── Phase 3M-VAX-toggle: TransmitModel previousNonVaxMicSource + toggleVaxSource ──
+# Verifies the model-layer plumbing for the PhoneCwApplet VAX button:
+# previous-source tracking on every non-VAX setMicSource write, toggleVaxSource
+# slot (Vax on -> sets Vax; off -> restores previous), HL2 lock interaction
+# (Radio previous coerces to Pc), and Mic_Source_PreVax persistence (per-MAC
+# + preconnect fallback, mirroring the existing Mic_Source two-key pattern).
+nereus_add_test(tst_transmit_model_vax_toggle)
+
 # ── Phase 3M-1b Task F.4: RadioConnection::micFrameDecoded signal ─────────────
 # Verifies the micFrameDecoded Qt signal added to the RadioConnection base class.
 # Uses TestRadioConnection minimal concrete subclass (stubs all pure-virtuals).
