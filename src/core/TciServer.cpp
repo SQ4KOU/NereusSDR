@@ -19,6 +19,7 @@
 #include "TciServer.h"
 #include "TciClientSession.h"
 #include "TciProtocol.h"
+#include "TciSendQueue.h"
 #include "LogCategories.h"
 #include "models/RadioModel.h"
 
@@ -59,6 +60,34 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             // Qt6's QWebSocket::ping handles RFC 6455 frame construction and
             // socket-state-based error suppression internally.
             it.key()->ping(QByteArrayLiteral("Thetis"));
+        }
+    });
+
+    // Phase 14: shared outbound drain timer.
+    // Each tick drains each client's TciSendQueue in priority order, capped
+    // at kDrainMaxPerTick frames per client to avoid starving the event loop
+    // when one client is flooded.
+    //
+    // Interval 5ms: Thetis uses a sender thread blocked on
+    // m_outboundFrameEvent.WaitOne(20) (TCIServer.cs:1770 [v2.10.3.13]),
+    // which wakes immediately on enqueue or after 20ms.  A 5ms timer drains
+    // promptly without the per-thread overhead and stays well within TCI's
+    // 20ms latency budget.
+    m_drainTimer = new QTimer(this);
+    m_drainTimer->setInterval(5);   // 5ms drain tick; see rationale above
+    connect(m_drainTimer, &QTimer::timeout, this, [this]() {
+        constexpr int kDrainMaxPerTick = 64;
+        for (auto it = m_clients.begin(); it != m_clients.end(); ++it) {
+            QWebSocket* ws    = it.key();
+            auto&       session = it.value();
+            QString frame;
+            int drained = 0;
+            while (drained < kDrainMaxPerTick && session->sendQueue.tryPop(&frame)) {
+                ws->sendTextMessage(frame);
+                ++drained;
+            }
+            // Sync the legacy framesDropped field for Phase 22 ClientChainApplet.
+            session->framesDropped = session->sendQueue.dropCount();
         }
     });
 }
@@ -117,6 +146,10 @@ bool TciServer::start(quint16 port)
     // disconnect frame."
     // Detects dead clients via Qt's automatic close-on-write-error path.
     m_pingTimer->start(m_pingIntervalMs);
+
+    // Phase 14: start the outbound drain timer (stops again in stop()).
+    m_drainTimer->start();
+
     return true;
 }
 
@@ -130,6 +163,7 @@ void TciServer::stop()
     if (!m_server) { return; }
 
     m_pingTimer->stop();
+    m_drainTimer->stop();  // Phase 14: stop drain before disconnecting clients
 
     // Disconnect all connected clients.  We disconnect the socket's signals
     // from this object first to prevent onClientDisconnected() re-entry during
@@ -233,21 +267,24 @@ void TciServer::onTextMessageReceived(const QString& msg)
     // handleCommand returns the synchronous response (empty for unknown
     // commands per Sweep B; non-empty for queries that have a reply).
     // Response goes only to the originating client (unicast).
+    //
+    // Phase 14: push into the per-client TciSendQueue instead of calling
+    // sendTextMessage directly. The drain timer pumps frames from the queue
+    // in priority order. Coalescing (Thetis m_outboundCoalescedFrames at
+    // TCIServer.cs:769-774 [v2.10.3.13]) lands in Phase 15.
     const QString response = m_protocol->handleCommand(msg);
     if (!response.isEmpty()) {
-        ws->sendTextMessage(response);
+        session->sendQueue.push(TciSendQueue::Priority::Control, response);
     }
 
     // From design doc §1: notifications drain after each handleCommand and
     // broadcast to ALL clients (including the originator), mirroring Thetis's
     // outbound-frame fan-out at TCIServer.cs:1662-1791 [v2.10.3.13].
-    // Phase 14 refactors this to per-client priority queues with coalescing;
-    // for Phase 3 a direct iteration suffices because notifications are
-    // currently always empty (Phase 5+ enqueues real notifications).
+    // Phase 14: push into each client's queue instead of direct sendTextMessage.
     while (m_protocol->hasPendingNotification()) {
         const QString notif = m_protocol->takePendingNotification();
         for (auto sit = m_clients.cbegin(); sit != m_clients.cend(); ++sit) {
-            sit.key()->sendTextMessage(notif);
+            sit.value()->sendQueue.push(TciSendQueue::Priority::Control, notif);
         }
     }
 }

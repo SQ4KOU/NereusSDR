@@ -116,6 +116,14 @@ private:
 
     QTimer* m_pingTimer{nullptr};
 
+    // Phase 14: shared drain timer; fires every 5ms and pumps queued frames
+    // from each client's TciSendQueue in priority order (Urgent > Binary >
+    // Control), capped at kDrainMaxPerTick frames per client per tick.
+    // Mirrors Thetis's per-client sender thread + AutoResetEvent (WaitOne 20ms)
+    // at TCIServer.cs:1754-1795 [v2.10.3.13]; NereusSDR uses a single shared
+    // timer on the event loop instead of per-client threads.
+    QTimer* m_drainTimer{nullptr};
+
     // From design doc §1 — TciServer owns one TciProtocol; it is the shared
     // dispatch engine across all clients (single-instance, transport-blind).
     std::unique_ptr<TciProtocol> m_protocol;

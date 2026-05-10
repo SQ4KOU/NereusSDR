@@ -34,6 +34,8 @@
 #include <QtCore/QSet>
 #include <QtCore/QString>
 
+#include "TciSendQueue.h"
+
 class QWebSocket;
 
 namespace NereusSDR {
@@ -106,12 +108,25 @@ struct TciClientSession {
     // From Thetis TCIServer.cs:788 [v2.10.3.13] — m_seenModernTxAudioNegotiation
     bool seenModernTxAudioNegotiation{false};
 
+    // ── Outbound priority send queue (Phase 14) ──────────────────────────────
+    // Per-client TciSendQueue replaces direct QWebSocket::sendTextMessage
+    // calls in TciServer's broadcast/unicast paths. The per-client drain
+    // timer in TciServer pumps frames in priority order (Urgent > Binary >
+    // Control), capped at 64 frames per tick, matching the Thetis sender
+    // thread + AutoResetEvent at TCIServer.cs:1754-1795 [v2.10.3.13].
+    // Coalesced-key map (Thetis m_outboundCoalescedFrames) is Phase 15.
+    TciSendQueue sendQueue{1024};   // 1024 frames per priority bucket
+
     // ── ClientChainApplet display state (NereusSDR-original) ────────────────
     // No Thetis equivalent — drives the per-client row in the future
     // ClientChainApplet (Phase 13).
     QString lastCommand;
     qint64  lastCommandAt{0};   // QDateTime::currentMSecsSinceEpoch() at last command
-    int     framesDropped{0};   // backpressure drop counter — Phase 14 wires this
+
+    // Backpressure drop counter. Synced from sendQueue.dropCount() by the
+    // drain timer so Phase 22 ClientChainApplet can read it without touching
+    // the queue directly.
+    int     framesDropped{0};
 };
 
 } // namespace NereusSDR

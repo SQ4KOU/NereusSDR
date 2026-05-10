@@ -3994,6 +3994,12 @@ nereus_add_test(tst_tci_matrix_runner TestMockRadioModel.cpp)
 target_compile_definitions(tst_tci_matrix_runner PRIVATE
     NEREUS_TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")
 
+# ── Phase 3J-1 Task 14.1: TciSendQueue priority queues (pure logic, no WebSockets) ──
+# Verifies: drain order (Urgent > Binary > Control > FIFO within tier),
+# bounded-overflow oldest-drop semantics, and multi-thread push/pop safety.
+# Transport-blind: no Qt6WebSockets dependency.
+nereus_add_test(tst_tci_priority_queues)
+
 # ── Phase 3J-1 Task 10: TCI volume dB math (pure logic, no WebSockets) ───────
 # Tests tciLinearToDbVolume / tciDbToLinearVolume from TciVolume.h.
 # Port of Thetis TCIServer.cs:4110-4132 [v2.10.3.13] linearToDbVolume /
