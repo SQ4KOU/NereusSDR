@@ -25,7 +25,14 @@
 // Phase 8: 19 accessors total — added setSplit/split/setGlobalMute/globalMute/
 //           setRxMute/rxMute; Q_INVOKABLE on all six so TciProtocol trx-family
 //           handlers dispatch correctly. mox/setMox upgraded to Q_INVOKABLE.
-// Aim: ~30 accessors total by end of Phase 14. Each commit that adds
+// Phase 9: 37 accessors total — added 18 DSP-family accessors:
+//           setRxNb/rxNb, setRxBin/rxBin, setRxApf/rxApf, setRxNf/rxNf,
+//           setRxAnf/rxAnf, setRxNr/rxNr/rxNrIndex, setAgcMode/agcMode,
+//           setAgcGain/agcGain, setSqlEnable/sqlEnable, setSqlLevel/sqlLevel,
+//           setRitEnable/ritEnable, setRitOffset/ritOffset,
+//           setXitEnable/xitEnable, setXitOffset/xitOffset,
+//           setRxBalance/rxBalance.
+// Aim: ~40 accessors total by end of Phase 14. Each commit that adds
 // accessors should note the addition in the commit message.
 
 #pragma once
@@ -197,6 +204,163 @@ public:
         return false;
     }
 
+    // ── Phase 9: DSP family accessors ─────────────────────────────────────────
+
+    // NB (Noise Blanker) enable per slice.
+    // From Thetis TCIServer.cs:3192-3207 [v2.10.3.13] — handleRxNbEnable.
+    Q_INVOKABLE void setRxNb(int slice, bool on)
+    {
+        if (slice >= 0 && slice < 2) { m_rxNb[slice] = on; }
+    }
+    Q_INVOKABLE bool rxNb(int slice) const
+    {
+        return (slice >= 0 && slice < 2) ? m_rxNb[slice] : false;
+    }
+
+    // BIN (Binaural) enable per slice.
+    // From Thetis TCIServer.cs:3208-3223 [v2.10.3.13] — handleRxBinEnable.
+    Q_INVOKABLE void setRxBin(int slice, bool on)
+    {
+        if (slice >= 0 && slice < 2) { m_rxBin[slice] = on; }
+    }
+    Q_INVOKABLE bool rxBin(int slice) const
+    {
+        return (slice >= 0 && slice < 2) ? m_rxBin[slice] : false;
+    }
+
+    // APF (Audio Peak Filter) enable per slice.
+    // From Thetis TCIServer.cs:3224-3247 [v2.10.3.13] — handleRxApfEnable.
+    Q_INVOKABLE void setRxApf(int slice, bool on)
+    {
+        if (slice >= 0 && slice < 2) { m_rxApf[slice] = on; }
+    }
+    Q_INVOKABLE bool rxApf(int slice) const
+    {
+        return (slice >= 0 && slice < 2) ? m_rxApf[slice] : false;
+    }
+
+    // NF (Notch Filter / TNF) enable per slice.
+    // From Thetis TCIServer.cs:3249-3264 [v2.10.3.13] — handleRxNfEnable.
+    Q_INVOKABLE void setRxNf(int slice, bool on)
+    {
+        if (slice >= 0 && slice < 2) { m_rxNf[slice] = on; }
+    }
+    Q_INVOKABLE bool rxNf(int slice) const
+    {
+        return (slice >= 0 && slice < 2) ? m_rxNf[slice] : false;
+    }
+
+    // ANF (Automatic Notch Filter) enable per slice.
+    // From Thetis TCIServer.cs:4521-4541 [v2.10.3.13] — handleAnfEnable.
+    Q_INVOKABLE void setRxAnf(int slice, bool on)
+    {
+        if (slice >= 0 && slice < 2) { m_rxAnf[slice] = on; }
+    }
+    Q_INVOKABLE bool rxAnf(int slice) const
+    {
+        return (slice >= 0 && slice < 2) ? m_rxAnf[slice] : false;
+    }
+
+    // NR (Noise Reduction) enable + nr_index per slice.
+    // From Thetis TCIServer.cs:4488-4519 [v2.10.3.13] — handleNrEnable.
+    // nr_index 1..4 (0 = off per Thetis SelectNR(rx+1, false, 0)).
+    Q_INVOKABLE void setRxNr(int slice, bool on, int nrIndex)
+    {
+        if (slice >= 0 && slice < 2) {
+            m_rxNr[slice]      = on;
+            m_rxNrIndex[slice] = nrIndex;
+        }
+    }
+    Q_INVOKABLE bool rxNr(int slice) const
+    {
+        return (slice >= 0 && slice < 2) ? m_rxNr[slice] : false;
+    }
+    Q_INVOKABLE int rxNrIndex(int slice) const
+    {
+        return (slice >= 0 && slice < 2) ? m_rxNrIndex[slice] : 1;
+    }
+
+    // AGC mode string per slice. Canonical values: "off","long","slow","fast","custom","normal".
+    // From Thetis TCIServer.cs:4658-4671 [v2.10.3.13] — handleAgcMode.
+    Q_INVOKABLE void setAgcMode(int slice, const QString& mode)
+    {
+        if (slice >= 0 && slice < 2) { m_agcMode[slice] = mode; }
+    }
+    Q_INVOKABLE QString agcMode(int slice) const
+    {
+        return (slice >= 0 && slice < 2) ? m_agcMode[slice] : QStringLiteral("normal");
+    }
+
+    // AGC gain (dB) per slice. Range [-20, 120] per TCIServer.cs:4686 [v2.10.3.13].
+    // From Thetis TCIServer.cs:4673-4689 [v2.10.3.13] — handleAgcGain.
+    Q_INVOKABLE void setAgcGain(int slice, int gain)
+    {
+        if (slice >= 0 && slice < 2) { m_agcGain[slice] = gain; }
+    }
+    Q_INVOKABLE int agcGain(int slice) const
+    {
+        return (slice >= 0 && slice < 2) ? m_agcGain[slice] : 0;
+    }
+
+    // Squelch enable per slice.
+    // From Thetis TCIServer.cs:3301-3316 [v2.10.3.13] — handleSqlEnable.
+    Q_INVOKABLE void setSqlEnable(int slice, bool on)
+    {
+        if (slice >= 0 && slice < 2) { m_sqlEnable[slice] = on; }
+    }
+    Q_INVOKABLE bool sqlEnable(int slice) const
+    {
+        return (slice >= 0 && slice < 2) ? m_sqlEnable[slice] : false;
+    }
+
+    // Squelch level (dBm) per slice. Range [-140, 0] per TCIServer.cs:3330 [v2.10.3.13].
+    // From Thetis TCIServer.cs:3317-3333 [v2.10.3.13] — handleSqlLevel.
+    Q_INVOKABLE void setSqlLevel(int slice, int level)
+    {
+        if (slice >= 0 && slice < 2) { m_sqlLevel[slice] = level; }
+    }
+    Q_INVOKABLE int sqlLevel(int slice) const
+    {
+        return (slice >= 0 && slice < 2) ? m_sqlLevel[slice] : 0;
+    }
+
+    // RIT (Receive Incremental Tuning) — GLOBAL, not per-slice.
+    // From Thetis TCIServer.cs:3128-3143 [v2.10.3.13] — handleRITEnableMessage.
+    Q_INVOKABLE void setRitEnable(bool on) { m_ritEnable = on; }
+    Q_INVOKABLE bool ritEnable() const { return m_ritEnable; }
+
+    // RIT offset in Hz — GLOBAL.
+    // From Thetis TCIServer.cs:3160-3175 [v2.10.3.13] — handleRITOffsetMessage.
+    Q_INVOKABLE void setRitOffset(int hz) { m_ritOffset = hz; }
+    Q_INVOKABLE int ritOffset() const { return m_ritOffset; }
+
+    // XIT (Transmit Incremental Tuning) — GLOBAL, not per-slice.
+    // From Thetis TCIServer.cs:3144-3159 [v2.10.3.13] — handleXITEnableMessage.
+    Q_INVOKABLE void setXitEnable(bool on) { m_xitEnable = on; }
+    Q_INVOKABLE bool xitEnable() const { return m_xitEnable; }
+
+    // XIT offset in Hz — GLOBAL.
+    // From Thetis TCIServer.cs:3176-3191 [v2.10.3.13] — handleXITOffsetMessage.
+    Q_INVOKABLE void setXitOffset(int hz) { m_xitOffset = hz; }
+    Q_INVOKABLE int xitOffset() const { return m_xitOffset; }
+
+    // RX balance (F2 dB) per (slice, channel).
+    // From Thetis TCIServer.cs:4631-4656 [v2.10.3.13] — handleRxBalance.
+    // Phase 9: stored directly as F2 dB; Thetis pan-slider transform deferred.
+    Q_INVOKABLE void setRxBalance(int slice, int chan, double balance)
+    {
+        if (slice >= 0 && slice < 2 && chan >= 0 && chan < 2) {
+            m_rxBalance[slice][chan] = balance;
+        }
+    }
+    Q_INVOKABLE double rxBalance(int slice, int chan) const
+    {
+        if (slice >= 0 && slice < 2 && chan >= 0 && chan < 2) {
+            return m_rxBalance[slice][chan];
+        }
+        return 0.0;
+    }
+
     // Reset all state to baseline (zeros/empty). Called before each matrix row.
     void resetToBaseline()
     {
@@ -212,6 +376,23 @@ public:
         m_split = {};
         m_globalMute = false;
         m_rxMute = {};
+        // Phase 9: DSP family state resets.
+        m_rxNb = {};
+        m_rxBin = {};
+        m_rxApf = {};
+        m_rxNf = {};
+        m_rxAnf = {};
+        m_rxNr = {};
+        m_rxNrIndex = { 1, 1 };
+        m_agcMode = { QStringLiteral("normal"), QStringLiteral("normal") };
+        m_agcGain = {};
+        m_sqlEnable = {};
+        m_sqlLevel = {};
+        m_ritEnable = false;
+        m_ritOffset = 0;
+        m_xitEnable = false;
+        m_xitOffset = 0;
+        m_rxBalance = {};
     }
 
 private:
@@ -229,6 +410,23 @@ private:
     std::array<bool, 2> m_split{};
     bool m_globalMute{false};
     std::array<bool, 2> m_rxMute{};
+    // Phase 9: DSP family state.
+    std::array<bool, 2> m_rxNb{};
+    std::array<bool, 2> m_rxBin{};
+    std::array<bool, 2> m_rxApf{};
+    std::array<bool, 2> m_rxNf{};
+    std::array<bool, 2> m_rxAnf{};
+    std::array<bool, 2> m_rxNr{};
+    std::array<int, 2>  m_rxNrIndex{1, 1};
+    std::array<QString, 2> m_agcMode{QStringLiteral("normal"), QStringLiteral("normal")};
+    std::array<int, 2> m_agcGain{};
+    std::array<bool, 2> m_sqlEnable{};
+    std::array<int, 2> m_sqlLevel{};
+    bool m_ritEnable{false};
+    int  m_ritOffset{0};
+    bool m_xitEnable{false};
+    int  m_xitOffset{0};
+    std::array<std::array<double, 2>, 2> m_rxBalance{};
 };
 
 } // namespace NereusSDR

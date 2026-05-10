@@ -888,7 +888,41 @@ QString TciProtocol::handleSetCommand(const QString& name, const QStringList& ar
     // From Thetis TCIServer.cs:5067 [v2.10.3.13] — rx_mute case in set switch.
     if (name == QStringLiteral("rx_mute"))      { return handleRxMuteCommand(args); }
 
-    // Phase 9+ adds more cases.
+    // Phase 9: DSP family.
+    // From Thetis TCIServer.cs:4950 [v2.10.3.13] — rx_nb_enable case in set switch.
+    if (name == QStringLiteral("rx_nb_enable"))    { return handleRxNbEnableCommand(args); }
+    // From Thetis TCIServer.cs:4953 [v2.10.3.13] — rx_bin_enable case in set switch.
+    if (name == QStringLiteral("rx_bin_enable"))   { return handleRxBinEnableCommand(args); }
+    // From Thetis TCIServer.cs:4956 [v2.10.3.13] — rx_apf_enable case in set switch.
+    if (name == QStringLiteral("rx_apf_enable"))   { return handleRxApfEnableCommand(args); }
+    // From Thetis TCIServer.cs:4959 [v2.10.3.13] — rx_nf_enable case in set switch.
+    if (name == QStringLiteral("rx_nf_enable"))    { return handleRxNfEnableCommand(args); }
+    // From Thetis TCIServer.cs:5103 [v2.10.3.13] — rx_anf_enable case in set switch.
+    if (name == QStringLiteral("rx_anf_enable"))   { return handleRxAnfEnableCommand(args); }
+    // From Thetis TCIServer.cs:5097 [v2.10.3.13] — rx_nr_enable case in set switch.
+    if (name == QStringLiteral("rx_nr_enable"))    { return handleRxNrEnableCommand(args); }
+    // From Thetis TCIServer.cs:5100 [v2.10.3.13] — rx_nr_enable_ex case in set switch.
+    if (name == QStringLiteral("rx_nr_enable_ex")) { return handleRxNrEnableExCommand(args); }
+    // From Thetis TCIServer.cs:5112 [v2.10.3.13] — agc_mode case in set switch.
+    if (name == QStringLiteral("agc_mode"))        { return handleAgcModeCommand(args); }
+    // From Thetis TCIServer.cs:5115 [v2.10.3.13] — agc_gain case in set switch.
+    if (name == QStringLiteral("agc_gain"))        { return handleAgcGainCommand(args); }
+    // From Thetis TCIServer.cs:4968 [v2.10.3.13] — sql_enable case in set switch.
+    if (name == QStringLiteral("sql_enable"))      { return handleSqlEnableCommand(args); }
+    // From Thetis TCIServer.cs:4971 [v2.10.3.13] — sql_level case in set switch.
+    if (name == QStringLiteral("sql_level"))       { return handleSqlLevelCommand(args); }
+    // From Thetis TCIServer.cs:4938 [v2.10.3.13] — rit_enable case in set switch.
+    if (name == QStringLiteral("rit_enable"))      { return handleRitEnableCommand(args); }
+    // From Thetis TCIServer.cs:4944 [v2.10.3.13] — rit_offset case in set switch.
+    if (name == QStringLiteral("rit_offset"))      { return handleRitOffsetCommand(args); }
+    // From Thetis TCIServer.cs:4941 [v2.10.3.13] — xit_enable case in set switch.
+    if (name == QStringLiteral("xit_enable"))      { return handleXitEnableCommand(args); }
+    // From Thetis TCIServer.cs:4947 [v2.10.3.13] — xit_offset case in set switch.
+    if (name == QStringLiteral("xit_offset"))      { return handleXitOffsetCommand(args); }
+    // From Thetis TCIServer.cs:5109 [v2.10.3.13] — rx_balance case in set switch.
+    if (name == QStringLiteral("rx_balance"))      { return handleRxBalanceCommand(args); }
+
+    // Phase 10+ adds more cases.
     return {};
 }
 
@@ -1383,6 +1417,598 @@ QString TciProtocol::handleRxMuteCommand(const QStringList& args)
     return QStringLiteral("rx_mute:%1,%2;")
         .arg(rx)
         .arg(muted ? QStringLiteral("true") : QStringLiteral("false"));
+}
+
+// ── DSP family handlers (Phase 9) ─────────────────────────────────────────────
+
+// From Thetis TCIServer.cs:4950 [v2.10.3.13] — rx_nb_enable case in set switch.
+// handleRxNbEnable at TCIServer.cs:3192-3207 [v2.10.3.13]:
+//   1-arg = query → sendRxNbEnable; 2-arg = set → SetSelectedNB(rx+1, en?1:0).
+// sendRxNbEnable format at TCIServer.cs:1901-1905 [v2.10.3.13]:
+//   "rx_nb_enable:" + rx + "," + enabled.ToLower() + ";"
+QString TciProtocol::handleRxNbEnableCommand(const QStringList& args)
+{
+    if (args.size() < 1) { return {}; }
+    bool ok = false;
+    const int rx = args.at(0).trimmed().toInt(&ok);
+    if (!ok || rx < 0 || rx > 1) { return {}; }
+
+    if (args.size() == 1) {
+        // Query path.
+        bool en = false;
+        QMetaObject::invokeMethod(m_radio, "rxNb", Qt::DirectConnection,
+                                  Q_RETURN_ARG(bool, en), Q_ARG(int, rx));
+        return QStringLiteral("rx_nb_enable:%1,%2;")
+            .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
+    }
+
+    if (args.size() >= 2) {
+        // Set path.
+        const bool en = args.at(1).trimmed().toLower() == QStringLiteral("true");
+        QMetaObject::invokeMethod(m_radio, "setRxNb", Qt::DirectConnection,
+                                  Q_ARG(int, rx), Q_ARG(bool, en));
+        m_pendingNotifications << QStringLiteral("rx_nb_enable:%1,%2;")
+            .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
+        return {};
+    }
+
+    return {};
+}
+
+// From Thetis TCIServer.cs:4953 [v2.10.3.13] — rx_bin_enable case in set switch.
+// handleRxBinEnable at TCIServer.cs:3208-3223 [v2.10.3.13]:
+//   1-arg = query → sendRxBinEnable; 2-arg = set → SetBin(rx+1, en).
+// sendRxBinEnable format at TCIServer.cs:1906-1910 [v2.10.3.13]:
+//   "rx_bin_enable:" + rx + "," + enabled.ToLower() + ";"
+QString TciProtocol::handleRxBinEnableCommand(const QStringList& args)
+{
+    if (args.size() < 1) { return {}; }
+    bool ok = false;
+    const int rx = args.at(0).trimmed().toInt(&ok);
+    if (!ok || rx < 0 || rx > 1) { return {}; }
+
+    if (args.size() == 1) {
+        bool en = false;
+        QMetaObject::invokeMethod(m_radio, "rxBin", Qt::DirectConnection,
+                                  Q_RETURN_ARG(bool, en), Q_ARG(int, rx));
+        return QStringLiteral("rx_bin_enable:%1,%2;")
+            .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
+    }
+
+    if (args.size() >= 2) {
+        const bool en = args.at(1).trimmed().toLower() == QStringLiteral("true");
+        QMetaObject::invokeMethod(m_radio, "setRxBin", Qt::DirectConnection,
+                                  Q_ARG(int, rx), Q_ARG(bool, en));
+        m_pendingNotifications << QStringLiteral("rx_bin_enable:%1,%2;")
+            .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
+        return {};
+    }
+
+    return {};
+}
+
+// From Thetis TCIServer.cs:4956 [v2.10.3.13] — rx_apf_enable case in set switch.
+// handleRxApfEnable at TCIServer.cs:3224-3247 [v2.10.3.13]:
+//   1-arg = query → sendRxApfEnable; 2-arg = set → SetupForm.RX1/RX2APFEnable.
+//   Thetis gates on !IsSetupFormNull (TCIServer.cs:3229 [v2.10.3.13]) — DEFERRED to Phase 20.
+// sendRxApfEnable format at TCIServer.cs:1911-1915 [v2.10.3.13]:
+//   "rx_apf_enable:" + rx + "," + enabled.ToLower() + ";"
+QString TciProtocol::handleRxApfEnableCommand(const QStringList& args)
+{
+    if (args.size() < 1) { return {}; }
+    bool ok = false;
+    const int rx = args.at(0).trimmed().toInt(&ok);
+    if (!ok || rx < 0 || rx > 1) { return {}; }
+
+    if (args.size() == 1) {
+        bool en = false;
+        QMetaObject::invokeMethod(m_radio, "rxApf", Qt::DirectConnection,
+                                  Q_RETURN_ARG(bool, en), Q_ARG(int, rx));
+        return QStringLiteral("rx_apf_enable:%1,%2;")
+            .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
+    }
+
+    if (args.size() >= 2) {
+        const bool en = args.at(1).trimmed().toLower() == QStringLiteral("true");
+        QMetaObject::invokeMethod(m_radio, "setRxApf", Qt::DirectConnection,
+                                  Q_ARG(int, rx), Q_ARG(bool, en));
+        m_pendingNotifications << QStringLiteral("rx_apf_enable:%1,%2;")
+            .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
+        return {};
+    }
+
+    return {};
+}
+
+// From Thetis TCIServer.cs:4959 [v2.10.3.13] — rx_nf_enable case in set switch.
+// handleRxNfEnable at TCIServer.cs:3249-3264 [v2.10.3.13]:
+//   1-arg = query → sendRxNfEnable(rx, GetMNF(rx+1)); 2-arg = set → TNFActive = en.
+// sendRxNfEnable format at TCIServer.cs:1916-1920 [v2.10.3.13]:
+//   "rx_nf_enable:" + rx + "," + enabled.ToLower() + ";"
+QString TciProtocol::handleRxNfEnableCommand(const QStringList& args)
+{
+    if (args.size() < 1) { return {}; }
+    bool ok = false;
+    const int rx = args.at(0).trimmed().toInt(&ok);
+    if (!ok || rx < 0 || rx > 1) { return {}; }
+
+    if (args.size() == 1) {
+        bool en = false;
+        QMetaObject::invokeMethod(m_radio, "rxNf", Qt::DirectConnection,
+                                  Q_RETURN_ARG(bool, en), Q_ARG(int, rx));
+        return QStringLiteral("rx_nf_enable:%1,%2;")
+            .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
+    }
+
+    if (args.size() >= 2) {
+        const bool en = args.at(1).trimmed().toLower() == QStringLiteral("true");
+        QMetaObject::invokeMethod(m_radio, "setRxNf", Qt::DirectConnection,
+                                  Q_ARG(int, rx), Q_ARG(bool, en));
+        m_pendingNotifications << QStringLiteral("rx_nf_enable:%1,%2;")
+            .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
+        return {};
+    }
+
+    return {};
+}
+
+// From Thetis TCIServer.cs:5103 [v2.10.3.13] — rx_anf_enable case in set switch.
+// handleAnfEnable at TCIServer.cs:4521-4541 [v2.10.3.13]:
+//   1-arg = query → sendAnfEnable(rx, GetANF(rx+1)); 2-arg = set → SetANF(rx+1, en).
+// sendAnfEnable format at TCIServer.cs:4482-4487 [v2.10.3.13]:
+//   "rx_anf_enable:" + rx + "," + enabled.ToLower() + ";"
+QString TciProtocol::handleRxAnfEnableCommand(const QStringList& args)
+{
+    if (args.size() < 1) { return {}; }
+    bool ok = false;
+    const int rx = args.at(0).trimmed().toInt(&ok);
+    if (!ok || rx < 0 || rx > 1) { return {}; }
+
+    if (args.size() == 1) {
+        bool en = false;
+        QMetaObject::invokeMethod(m_radio, "rxAnf", Qt::DirectConnection,
+                                  Q_RETURN_ARG(bool, en), Q_ARG(int, rx));
+        return QStringLiteral("rx_anf_enable:%1,%2;")
+            .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
+    }
+
+    if (args.size() >= 2) {
+        const bool en = args.at(1).trimmed().toLower() == QStringLiteral("true");
+        QMetaObject::invokeMethod(m_radio, "setRxAnf", Qt::DirectConnection,
+                                  Q_ARG(int, rx), Q_ARG(bool, en));
+        m_pendingNotifications << QStringLiteral("rx_anf_enable:%1,%2;")
+            .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
+        return {};
+    }
+
+    return {};
+}
+
+// From Thetis TCIServer.cs:5097 [v2.10.3.13] — rx_nr_enable case in set switch.
+// handleNrEnable(args, false) at TCIServer.cs:4488-4519 [v2.10.3.13].
+// Basic (non-extended) form:
+//   1-arg = query → sendNrEnable(rx, en, false, nr) with nr from GetSelectedNR(rx+1).
+//   2-arg = set (rx, bool) → SelectNR(rx+1, false, en?1:0).
+//   nr range checked 1..4; set defaults nr=1 (TCIServer.cs:4494 [v2.10.3.13]).
+// sendNrEnable non-extended format at TCIServer.cs:4472-4480 [v2.10.3.13]:
+//   "rx_nr_enable:" + rx + "," + enabled.ToLower() + ";"
+QString TciProtocol::handleRxNrEnableCommand(const QStringList& args)
+{
+    if (args.size() < 1) { return {}; }
+    bool ok = false;
+    const int rx = args.at(0).trimmed().toInt(&ok);
+    if (!ok || rx < 0 || rx > 1) { return {}; }
+
+    if (args.size() == 1) {
+        // Query path: also emit the _ex form per Thetis (both forms sent on query).
+        // TCIServer.cs:4501-4502 [v2.10.3.13]: sendNrEnable(rx, en, false, nr); sendNrEnable(rx, en, true, nr);
+        // Phase 9 returns the basic form as the direct response; ex-form added to notifications.
+        bool en = false;
+        int nrIndex = 1;
+        QMetaObject::invokeMethod(m_radio, "rxNr", Qt::DirectConnection,
+                                  Q_RETURN_ARG(bool, en), Q_ARG(int, rx));
+        QMetaObject::invokeMethod(m_radio, "rxNrIndex", Qt::DirectConnection,
+                                  Q_RETURN_ARG(int, nrIndex), Q_ARG(int, rx));
+        const QString enStr = en ? QStringLiteral("true") : QStringLiteral("false");
+        // Also enqueue the extended form (Thetis emits both on query).
+        m_pendingNotifications << QStringLiteral("rx_nr_enable_ex:%1,%2,%3;")
+            .arg(rx).arg(enStr).arg(nrIndex);
+        return QStringLiteral("rx_nr_enable:%1,%2;").arg(rx).arg(enStr);
+    }
+
+    if (args.size() >= 2) {
+        const bool en = args.at(1).trimmed().toLower() == QStringLiteral("true");
+        // Default nr=1 for basic form (TCIServer.cs:4494 [v2.10.3.13]).
+        QMetaObject::invokeMethod(m_radio, "setRxNr", Qt::DirectConnection,
+                                  Q_ARG(int, rx), Q_ARG(bool, en), Q_ARG(int, 1));
+        m_pendingNotifications << QStringLiteral("rx_nr_enable:%1,%2;")
+            .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
+        return {};
+    }
+
+    return {};
+}
+
+// From Thetis TCIServer.cs:5100 [v2.10.3.13] — rx_nr_enable_ex case in set switch.
+// handleNrEnable(args, true) at TCIServer.cs:4488-4519 [v2.10.3.13].
+// Extended form:
+//   1-arg = query → same dual-emit as basic but returns extended form.
+//   3-arg = set (rx, bool, nr_index) → SelectNR(rx+1, false, en?nr:0); nr in [1..4].
+// sendNrEnable extended format at TCIServer.cs:4472-4480 [v2.10.3.13]:
+//   "rx_nr_enable_ex:" + rx + "," + enabled.ToLower() + "," + nr + ";"
+QString TciProtocol::handleRxNrEnableExCommand(const QStringList& args)
+{
+    if (args.size() < 1) { return {}; }
+    bool ok = false;
+    const int rx = args.at(0).trimmed().toInt(&ok);
+    if (!ok || rx < 0 || rx > 1) { return {}; }
+
+    if (args.size() == 1) {
+        bool en = false;
+        int nrIndex = 1;
+        QMetaObject::invokeMethod(m_radio, "rxNr", Qt::DirectConnection,
+                                  Q_RETURN_ARG(bool, en), Q_ARG(int, rx));
+        QMetaObject::invokeMethod(m_radio, "rxNrIndex", Qt::DirectConnection,
+                                  Q_RETURN_ARG(int, nrIndex), Q_ARG(int, rx));
+        const QString enStr = en ? QStringLiteral("true") : QStringLiteral("false");
+        // Also enqueue the basic form (Thetis emits both on query).
+        m_pendingNotifications << QStringLiteral("rx_nr_enable:%1,%2;")
+            .arg(rx).arg(enStr);
+        return QStringLiteral("rx_nr_enable_ex:%1,%2,%3;").arg(rx).arg(enStr).arg(nrIndex);
+    }
+
+    if (args.size() >= 3) {
+        const bool en = args.at(1).trimmed().toLower() == QStringLiteral("true");
+        bool ok2 = false;
+        int nrIndex = args.at(2).trimmed().toInt(&ok2);
+        if (!ok2) { return {}; }
+        // nr range check: 1..4 per TCIServer.cs:4509 [v2.10.3.13].
+        if (nrIndex < 1 || nrIndex > 4) { return {}; }
+        QMetaObject::invokeMethod(m_radio, "setRxNr", Qt::DirectConnection,
+                                  Q_ARG(int, rx), Q_ARG(bool, en), Q_ARG(int, nrIndex));
+        m_pendingNotifications << QStringLiteral("rx_nr_enable_ex:%1,%2,%3;")
+            .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"))
+            .arg(nrIndex);
+        return {};
+    }
+
+    return {};
+}
+
+// From Thetis TCIServer.cs:5112 [v2.10.3.13] — agc_mode case in set switch.
+// handleAgcMode at TCIServer.cs:4658-4671 [v2.10.3.13]:
+//   1-arg = query → sendAgcMode(rx, GetAGCMode(rx+1)).
+//   2-arg = set → SetAGCMode(rx+1, tciModeToAgcMode(args[1])).
+// agcModeToTciMode / tciModeToAgcMode at TCIServer.cs:2192-2235 [v2.10.3.13]:
+//   FIXD→"off", LONG→"long", SLOW→"slow", FAST→"fast", CUSTOM→"custom", MED→"normal".
+//   Input aliases: "off"/"fixd"/"fixed"→"off"; "normal"/"med"/"medium"→"normal".
+//   Unknown input → "normal" (AGCMode.MED default).
+// sendAgcMode format at TCIServer.cs:2236-2240 [v2.10.3.13]:
+//   "agc_mode:" + rx + "," + agcModeToTciMode(mode) + ";"
+QString TciProtocol::handleAgcModeCommand(const QStringList& args)
+{
+    if (args.size() < 1) { return {}; }
+    bool ok = false;
+    const int rx = args.at(0).trimmed().toInt(&ok);
+    if (!ok || rx < 0 || rx > 1) { return {}; }
+
+    if (args.size() == 1) {
+        QString mode;
+        QMetaObject::invokeMethod(m_radio, "agcMode", Qt::DirectConnection,
+                                  Q_RETURN_ARG(QString, mode), Q_ARG(int, rx));
+        return QStringLiteral("agc_mode:%1,%2;").arg(rx).arg(mode);
+    }
+
+    if (args.size() >= 2) {
+        // tciModeToAgcMode canonicalization per TCIServer.cs:2212-2234 [v2.10.3.13].
+        const QString modeIn = args.at(1).trimmed().toLower();
+        QString modeCanon;
+        if      (modeIn == QStringLiteral("off")    ||
+                 modeIn == QStringLiteral("fixd")   ||
+                 modeIn == QStringLiteral("fixed"))     { modeCanon = QStringLiteral("off"); }
+        else if (modeIn == QStringLiteral("long"))      { modeCanon = QStringLiteral("long"); }
+        else if (modeIn == QStringLiteral("slow"))      { modeCanon = QStringLiteral("slow"); }
+        else if (modeIn == QStringLiteral("fast"))      { modeCanon = QStringLiteral("fast"); }
+        else if (modeIn == QStringLiteral("custom"))    { modeCanon = QStringLiteral("custom"); }
+        else if (modeIn == QStringLiteral("normal") ||
+                 modeIn == QStringLiteral("med")    ||
+                 modeIn == QStringLiteral("medium"))    { modeCanon = QStringLiteral("normal"); }
+        else {
+            // Unknown input defaults to AGCMode.MED → "normal"
+            // per TCIServer.cs:2232-2234 [v2.10.3.13] default: return AGCMode.MED.
+            modeCanon = QStringLiteral("normal");
+        }
+        QMetaObject::invokeMethod(m_radio, "setAgcMode", Qt::DirectConnection,
+                                  Q_ARG(int, rx), Q_ARG(QString, modeCanon));
+        m_pendingNotifications << QStringLiteral("agc_mode:%1,%2;").arg(rx).arg(modeCanon);
+        return {};
+    }
+
+    return {};
+}
+
+// From Thetis TCIServer.cs:5115 [v2.10.3.13] — agc_gain case in set switch.
+// handleAgcGain at TCIServer.cs:4673-4689 [v2.10.3.13]:
+//   1-arg = query → sendAgcGain(rx, GetAgcT(rx+1)).
+//   2-arg = set → gain clamped to [-20, 120] → SetAgcT(rx+1, gain).
+// sendAgcGain format at TCIServer.cs:2241-2245 [v2.10.3.13]:
+//   "agc_gain:" + rx + "," + gain + ";"
+QString TciProtocol::handleAgcGainCommand(const QStringList& args)
+{
+    if (args.size() < 1) { return {}; }
+    bool ok = false;
+    const int rx = args.at(0).trimmed().toInt(&ok);
+    if (!ok || rx < 0 || rx > 1) { return {}; }
+
+    if (args.size() == 1) {
+        int gain = 0;
+        QMetaObject::invokeMethod(m_radio, "agcGain", Qt::DirectConnection,
+                                  Q_RETURN_ARG(int, gain), Q_ARG(int, rx));
+        return QStringLiteral("agc_gain:%1,%2;").arg(rx).arg(gain);
+    }
+
+    if (args.size() >= 2) {
+        bool ok2 = false;
+        int gain = args.at(1).trimmed().toInt(&ok2);
+        if (!ok2) { return {}; }
+        // Clamp per TCIServer.cs:4686 [v2.10.3.13]: Math.Max(-20, Math.Min(120, gain)).
+        gain = std::max(-20, std::min(120, gain));
+        QMetaObject::invokeMethod(m_radio, "setAgcGain", Qt::DirectConnection,
+                                  Q_ARG(int, rx), Q_ARG(int, gain));
+        m_pendingNotifications << QStringLiteral("agc_gain:%1,%2;").arg(rx).arg(gain);
+        return {};
+    }
+
+    return {};
+}
+
+// From Thetis TCIServer.cs:4968 [v2.10.3.13] — sql_enable case in set switch.
+// handleSqlEnable at TCIServer.cs:3301-3316 [v2.10.3.13]:
+//   1-arg = query → sendSqlEnable(rx, GetSqlMode(rx+1) != SquelchState.OFF).
+//   2-arg = set → SetSqlMode(rx+1, en ? SQL : OFF).
+// sendSqlEnable format at TCIServer.cs:1931-1935 [v2.10.3.13]:
+//   "sql_enable:" + rx + "," + enabled.ToLower() + ";"
+QString TciProtocol::handleSqlEnableCommand(const QStringList& args)
+{
+    if (args.size() < 1) { return {}; }
+    bool ok = false;
+    const int rx = args.at(0).trimmed().toInt(&ok);
+    if (!ok || rx < 0 || rx > 1) { return {}; }
+
+    if (args.size() == 1) {
+        bool en = false;
+        QMetaObject::invokeMethod(m_radio, "sqlEnable", Qt::DirectConnection,
+                                  Q_RETURN_ARG(bool, en), Q_ARG(int, rx));
+        return QStringLiteral("sql_enable:%1,%2;")
+            .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
+    }
+
+    if (args.size() >= 2) {
+        const bool en = args.at(1).trimmed().toLower() == QStringLiteral("true");
+        QMetaObject::invokeMethod(m_radio, "setSqlEnable", Qt::DirectConnection,
+                                  Q_ARG(int, rx), Q_ARG(bool, en));
+        m_pendingNotifications << QStringLiteral("sql_enable:%1,%2;")
+            .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
+        return {};
+    }
+
+    return {};
+}
+
+// From Thetis TCIServer.cs:4971 [v2.10.3.13] — sql_level case in set switch.
+// handleSqlLevel at TCIServer.cs:3317-3333 [v2.10.3.13]:
+//   1-arg = query → sendSqlLevel(rx, GetSql(rx+1)).
+//   2-arg = set → level clamped to [-140, 0] → SetSql(rx+1, level).
+// sendSqlLevel format at TCIServer.cs:1936-1940 [v2.10.3.13]:
+//   "sql_level:" + rx + "," + level + ";"
+QString TciProtocol::handleSqlLevelCommand(const QStringList& args)
+{
+    if (args.size() < 1) { return {}; }
+    bool ok = false;
+    const int rx = args.at(0).trimmed().toInt(&ok);
+    if (!ok || rx < 0 || rx > 1) { return {}; }
+
+    if (args.size() == 1) {
+        int level = 0;
+        QMetaObject::invokeMethod(m_radio, "sqlLevel", Qt::DirectConnection,
+                                  Q_RETURN_ARG(int, level), Q_ARG(int, rx));
+        return QStringLiteral("sql_level:%1,%2;").arg(rx).arg(level);
+    }
+
+    if (args.size() >= 2) {
+        bool ok2 = false;
+        int level = args.at(1).trimmed().toInt(&ok2);
+        if (!ok2) { return {}; }
+        // Clamp per TCIServer.cs:3330 [v2.10.3.13]: Math.Max(-140, Math.Min(0, level)).
+        level = std::max(-140, std::min(0, level));
+        QMetaObject::invokeMethod(m_radio, "setSqlLevel", Qt::DirectConnection,
+                                  Q_ARG(int, rx), Q_ARG(int, level));
+        m_pendingNotifications << QStringLiteral("sql_level:%1,%2;").arg(rx).arg(level);
+        return {};
+    }
+
+    return {};
+}
+
+// From Thetis TCIServer.cs:4938 [v2.10.3.13] — rit_enable case in set switch.
+// handleRITEnableMessage at TCIServer.cs:3128-3143 [v2.10.3.13]:
+//   1-arg = query → sendRITEnable(rx, RITOn).
+//   2-arg = set → RITOn = en (gated rx==0||rx==1, effectively global).
+// sendRITEnable format at TCIServer.cs:1881-1885 [v2.10.3.13]:
+//   "rit_enable:" + rx + "," + enabled.ToLower() + ";"
+// NOTE: RIT is GLOBAL in Thetis; rx arg is cosmetic per TCIServer.cs:3136 [v2.10.3.13].
+QString TciProtocol::handleRitEnableCommand(const QStringList& args)
+{
+    if (args.size() < 1) { return {}; }
+    bool ok = false;
+    const int rx = args.at(0).trimmed().toInt(&ok);
+    if (!ok) { return {}; }
+    // Per TCIServer.cs:3136 [v2.10.3.13]: if (rx == 0 || rx == 1) — gate on valid rx.
+    if (rx < 0 || rx > 1) { return {}; }
+
+    if (args.size() == 1) {
+        bool en = false;
+        QMetaObject::invokeMethod(m_radio, "ritEnable", Qt::DirectConnection,
+                                  Q_RETURN_ARG(bool, en));
+        return QStringLiteral("rit_enable:%1,%2;")
+            .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
+    }
+
+    if (args.size() >= 2) {
+        const bool en = args.at(1).trimmed().toLower() == QStringLiteral("true");
+        QMetaObject::invokeMethod(m_radio, "setRitEnable", Qt::DirectConnection,
+                                  Q_ARG(bool, en));
+        m_pendingNotifications << QStringLiteral("rit_enable:%1,%2;")
+            .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
+        return {};
+    }
+
+    return {};
+}
+
+// From Thetis TCIServer.cs:4944 [v2.10.3.13] — rit_offset case in set switch.
+// handleRITOffsetMessage at TCIServer.cs:3160-3175 [v2.10.3.13]:
+//   1-arg = query → sendRITOffset(rx, RITValue).
+//   2-arg = set → RITValue = offset (global per TCIServer.cs:3169 [v2.10.3.13]).
+// sendRITOffset format at TCIServer.cs:1891-1895 [v2.10.3.13]:
+//   "rit_offset:" + rx + "," + offset + ";"
+QString TciProtocol::handleRitOffsetCommand(const QStringList& args)
+{
+    if (args.size() < 1) { return {}; }
+    bool ok = false;
+    const int rx = args.at(0).trimmed().toInt(&ok);
+    if (!ok || rx < 0 || rx > 1) { return {}; }
+
+    if (args.size() == 1) {
+        int offset = 0;
+        QMetaObject::invokeMethod(m_radio, "ritOffset", Qt::DirectConnection,
+                                  Q_RETURN_ARG(int, offset));
+        return QStringLiteral("rit_offset:%1,%2;").arg(rx).arg(offset);
+    }
+
+    if (args.size() >= 2) {
+        bool ok2 = false;
+        const int offset = args.at(1).trimmed().toInt(&ok2);
+        if (!ok2) { return {}; }
+        QMetaObject::invokeMethod(m_radio, "setRitOffset", Qt::DirectConnection,
+                                  Q_ARG(int, offset));
+        m_pendingNotifications << QStringLiteral("rit_offset:%1,%2;").arg(rx).arg(offset);
+        return {};
+    }
+
+    return {};
+}
+
+// From Thetis TCIServer.cs:4941 [v2.10.3.13] — xit_enable case in set switch.
+// handleXITEnableMessage at TCIServer.cs:3144-3159 [v2.10.3.13]:
+//   1-arg = query → sendXITEnable(rx, XITOn).
+//   2-arg = set → XITOn = en (global, same rx-gating as RIT).
+// sendXITEnable format at TCIServer.cs:1886-1890 [v2.10.3.13]:
+//   "xit_enable:" + rx + "," + enabled.ToLower() + ";"
+QString TciProtocol::handleXitEnableCommand(const QStringList& args)
+{
+    if (args.size() < 1) { return {}; }
+    bool ok = false;
+    const int rx = args.at(0).trimmed().toInt(&ok);
+    if (!ok || rx < 0 || rx > 1) { return {}; }
+
+    if (args.size() == 1) {
+        bool en = false;
+        QMetaObject::invokeMethod(m_radio, "xitEnable", Qt::DirectConnection,
+                                  Q_RETURN_ARG(bool, en));
+        return QStringLiteral("xit_enable:%1,%2;")
+            .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
+    }
+
+    if (args.size() >= 2) {
+        const bool en = args.at(1).trimmed().toLower() == QStringLiteral("true");
+        QMetaObject::invokeMethod(m_radio, "setXitEnable", Qt::DirectConnection,
+                                  Q_ARG(bool, en));
+        m_pendingNotifications << QStringLiteral("xit_enable:%1,%2;")
+            .arg(rx).arg(en ? QStringLiteral("true") : QStringLiteral("false"));
+        return {};
+    }
+
+    return {};
+}
+
+// From Thetis TCIServer.cs:4947 [v2.10.3.13] — xit_offset case in set switch.
+// handleXITOffsetMessage at TCIServer.cs:3176-3191 [v2.10.3.13]:
+//   1-arg = query → sendXITOffset(rx, XITValue).
+//   2-arg = set → XITValue = offset (global per TCIServer.cs:3185 [v2.10.3.13]).
+// sendXITOffset format at TCIServer.cs:1896-1900 [v2.10.3.13]:
+//   "xit_offset:" + rx + "," + offset + ";"
+QString TciProtocol::handleXitOffsetCommand(const QStringList& args)
+{
+    if (args.size() < 1) { return {}; }
+    bool ok = false;
+    const int rx = args.at(0).trimmed().toInt(&ok);
+    if (!ok || rx < 0 || rx > 1) { return {}; }
+
+    if (args.size() == 1) {
+        int offset = 0;
+        QMetaObject::invokeMethod(m_radio, "xitOffset", Qt::DirectConnection,
+                                  Q_RETURN_ARG(int, offset));
+        return QStringLiteral("xit_offset:%1,%2;").arg(rx).arg(offset);
+    }
+
+    if (args.size() >= 2) {
+        bool ok2 = false;
+        const int offset = args.at(1).trimmed().toInt(&ok2);
+        if (!ok2) { return {}; }
+        QMetaObject::invokeMethod(m_radio, "setXitOffset", Qt::DirectConnection,
+                                  Q_ARG(int, offset));
+        m_pendingNotifications << QStringLiteral("xit_offset:%1,%2;").arg(rx).arg(offset);
+        return {};
+    }
+
+    return {};
+}
+
+// From Thetis TCIServer.cs:5109 [v2.10.3.13] — rx_balance case in set switch.
+// handleRxBalance at TCIServer.cs:4631-4656 [v2.10.3.13]:
+//   2-arg = query (rx, chan) → sendRxBalance(rx, chan, 40.0-(pan*0.8)).
+//   3-arg = set (rx, chan, balance) → balance clamped [-40,40]; pan = round((40-bal)/0.8).
+// sendRxBalance format at TCIServer.cs:2187-2191 [v2.10.3.13]:
+//   "rx_balance:" + rx + "," + chan + "," + balance.ToString("F2", CultureInfo.InvariantCulture) + ";"
+// NOTE: Thetis pan-slider calibration (40-x*0.8 transform at TCIServer.cs:4644-4652
+//       [v2.10.3.13]) NOT replicated in Phase 9 stub — NereusSDR stores F2 dB directly.
+//       Clamp to [-40.0, 40.0] per TCIServer.cs:4650 [v2.10.3.13] IS replicated.
+//       Full Thetis pan math deferred to Phase 20 (SetupForm / mixer integration).
+QString TciProtocol::handleRxBalanceCommand(const QStringList& args)
+{
+    if (args.size() < 2) { return {}; }
+    bool ok1 = false, ok2 = false;
+    const int rx   = args.at(0).trimmed().toInt(&ok1);
+    const int chan = args.at(1).trimmed().toInt(&ok2);
+    if (!ok1 || !ok2 || rx < 0 || rx > 1 || chan < 0 || chan > 1) { return {}; }
+
+    if (args.size() == 2) {
+        // Query path.
+        double bal = 0.0;
+        QMetaObject::invokeMethod(m_radio, "rxBalance", Qt::DirectConnection,
+                                  Q_RETURN_ARG(double, bal),
+                                  Q_ARG(int, rx), Q_ARG(int, chan));
+        return QStringLiteral("rx_balance:%1,%2,%3;")
+            .arg(rx).arg(chan)
+            .arg(QString::number(bal, 'f', 2));
+    }
+
+    if (args.size() >= 3) {
+        // Set path. Parse as double; clamp to [-40.0, 40.0] per TCIServer.cs:4650.
+        bool ok3 = false;
+        double bal = args.at(2).trimmed().toDouble(&ok3);
+        if (!ok3) { return {}; }
+        bal = std::max(-40.0, std::min(40.0, bal));
+        QMetaObject::invokeMethod(m_radio, "setRxBalance", Qt::DirectConnection,
+                                  Q_ARG(int, rx), Q_ARG(int, chan), Q_ARG(double, bal));
+        m_pendingNotifications << QStringLiteral("rx_balance:%1,%2,%3;")
+            .arg(rx).arg(chan)
+            .arg(QString::number(bal, 'f', 2));
+        return {};
+    }
+
+    return {};
 }
 
 } // namespace NereusSDR

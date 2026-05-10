@@ -153,6 +153,87 @@ private:
     //   args.size() == 2 → set (rx, bool); args.size() == 1 → query.
     QString handleRxMuteCommand(const QStringList& args);
 
+    // ── DSP family handlers (Phase 9) ─────────────────────────────────────────
+    // From Thetis TCIServer.cs:4950 [v2.10.3.13] — rx_nb_enable case in set switch.
+    // handleRxNbEnable at TCIServer.cs:3192-3207 [v2.10.3.13] — 1-arg query, 2-arg set.
+    QString handleRxNbEnableCommand(const QStringList& args);
+
+    // From Thetis TCIServer.cs:4953 [v2.10.3.13] — rx_bin_enable case in set switch.
+    // handleRxBinEnable at TCIServer.cs:3208-3223 [v2.10.3.13] — 1-arg query, 2-arg set.
+    QString handleRxBinEnableCommand(const QStringList& args);
+
+    // From Thetis TCIServer.cs:4956 [v2.10.3.13] — rx_apf_enable case in set switch.
+    // handleRxApfEnable at TCIServer.cs:3224-3247 [v2.10.3.13] — 1-arg query, 2-arg set.
+    // NOTE: Thetis gates on !IsSetupFormNull; Phase 9 stub omits that gate
+    //       (SetupForm integration deferred to Phase 20).
+    QString handleRxApfEnableCommand(const QStringList& args);
+
+    // From Thetis TCIServer.cs:4959 [v2.10.3.13] — rx_nf_enable case in set switch.
+    // handleRxNfEnable at TCIServer.cs:3249-3264 [v2.10.3.13] — 1-arg query, 2-arg set.
+    QString handleRxNfEnableCommand(const QStringList& args);
+
+    // From Thetis TCIServer.cs:5103 [v2.10.3.13] — rx_anf_enable case in set switch.
+    // handleAnfEnable at TCIServer.cs:4521-4541 [v2.10.3.13] — 1-arg query, 2-arg set.
+    QString handleRxAnfEnableCommand(const QStringList& args);
+
+    // From Thetis TCIServer.cs:5097 [v2.10.3.13] — rx_nr_enable case in set switch.
+    // handleNrEnable(args, false) at TCIServer.cs:4488-4519 [v2.10.3.13].
+    // Basic form: 2-arg set (rx, bool), 1-arg query → sendNrEnable(rx, en, false, nr).
+    QString handleRxNrEnableCommand(const QStringList& args);
+
+    // From Thetis TCIServer.cs:5100 [v2.10.3.13] — rx_nr_enable_ex case in set switch.
+    // handleNrEnable(args, true) at TCIServer.cs:4488-4519 [v2.10.3.13].
+    // Extended form: 3-arg set (rx, bool, nr_index), 1-arg query → sendNrEnable(rx, en, true, nr).
+    QString handleRxNrEnableExCommand(const QStringList& args);
+
+    // From Thetis TCIServer.cs:5112 [v2.10.3.13] — agc_mode case in set switch.
+    // handleAgcMode at TCIServer.cs:4658-4671 [v2.10.3.13] — 1-arg query, 2-arg set.
+    // agcModeToTciMode / tciModeToAgcMode at TCIServer.cs:2192-2235 [v2.10.3.13]:
+    //   FIXD→"off", LONG→"long", SLOW→"slow", FAST→"fast", CUSTOM→"custom", MED→"normal".
+    //   Incoming aliases: "off"/"fixd"/"fixed" → "off"; "normal"/"med"/"medium" → "normal".
+    //   Unknown input defaults to "normal" (AGCMode.MED) per Thetis default: return AGCMode.MED.
+    QString handleAgcModeCommand(const QStringList& args);
+
+    // From Thetis TCIServer.cs:5115 [v2.10.3.13] — agc_gain case in set switch.
+    // handleAgcGain at TCIServer.cs:4673-4689 [v2.10.3.13] — 1-arg query, 2-arg set.
+    // Gain clamped to [-20, 120] per TCIServer.cs:4686 [v2.10.3.13].
+    QString handleAgcGainCommand(const QStringList& args);
+
+    // From Thetis TCIServer.cs:4968 [v2.10.3.13] — sql_enable case in set switch.
+    // handleSqlEnable at TCIServer.cs:3301-3316 [v2.10.3.13] — 1-arg query, 2-arg set.
+    QString handleSqlEnableCommand(const QStringList& args);
+
+    // From Thetis TCIServer.cs:4971 [v2.10.3.13] — sql_level case in set switch.
+    // handleSqlLevel at TCIServer.cs:3317-3333 [v2.10.3.13] — 1-arg query, 2-arg set.
+    // Level clamped to [-140, 0] per TCIServer.cs:3330 [v2.10.3.13].
+    QString handleSqlLevelCommand(const QStringList& args);
+
+    // From Thetis TCIServer.cs:4938 [v2.10.3.13] — rit_enable case in set switch.
+    // handleRITEnableMessage at TCIServer.cs:3128-3143 [v2.10.3.13] — 1-arg query, 2-arg set.
+    // RIT is GLOBAL; rx arg accepted but only gates on rx==0||rx==1 per Thetis.
+    QString handleRitEnableCommand(const QStringList& args);
+
+    // From Thetis TCIServer.cs:4944 [v2.10.3.13] — rit_offset case in set switch.
+    // handleRITOffsetMessage at TCIServer.cs:3160-3175 [v2.10.3.13] — 1-arg query, 2-arg set.
+    QString handleRitOffsetCommand(const QStringList& args);
+
+    // From Thetis TCIServer.cs:4941 [v2.10.3.13] — xit_enable case in set switch.
+    // handleXITEnableMessage at TCIServer.cs:3144-3159 [v2.10.3.13] — 1-arg query, 2-arg set.
+    // XIT is GLOBAL; same rx-gating as RIT.
+    QString handleXitEnableCommand(const QStringList& args);
+
+    // From Thetis TCIServer.cs:4947 [v2.10.3.13] — xit_offset case in set switch.
+    // handleXITOffsetMessage at TCIServer.cs:3176-3191 [v2.10.3.13] — 1-arg query, 2-arg set.
+    QString handleXitOffsetCommand(const QStringList& args);
+
+    // From Thetis TCIServer.cs:5109 [v2.10.3.13] — rx_balance case in set switch.
+    // handleRxBalance at TCIServer.cs:4631-4656 [v2.10.3.13] — 2-arg query, 3-arg set.
+    // F2 C-locale float. Balance clamped to [-40.0, 40.0] per TCIServer.cs:4650 [v2.10.3.13].
+    // NOTE: Thetis internal pan = (40-bal)/0.8 transform at TCIServer.cs:4644-4652
+    //       [v2.10.3.13] is NOT replicated in Phase 9 stub; NereusSDR stores F2 dB
+    //       directly without the Thetis pan-slider calibration (deferred to Phase 20).
+    QString handleRxBalanceCommand(const QStringList& args);
+
     // From Thetis TCIServer.cs:2363-2510 [v2.10.3.13] — sendInitialRadioState body.
     // Phase 4 Task 4.2 fills the body (up to 97 wire lines per Sweep D).
     // Each build<Foo>Line helper is a pure static function: takes value args,
