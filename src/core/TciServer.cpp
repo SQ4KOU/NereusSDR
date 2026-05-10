@@ -734,12 +734,25 @@ void TciServer::onTextMessageReceived(const QString& msg)
             const int rx = trimmed.mid(kAudioStart.size()).trimmed().toInt(&ok);
             if (ok && rx >= 0 && rx <= 1) {
                 handleAudioSubscribe(session, rx);
+                // Phase 26 review finding #2: send confirmation echo.
+                // From Thetis TCIServer.cs:5891-5906 [v2.10.3.13] —
+                // handleAudioStart calls sendAudioStartStop(rx, true) after
+                // adding rx to m_audioStreamEnabled.  Confirmation verb matches
+                // the incoming command verb exactly.
+                session->sendQueue.push(TciSendQueue::Priority::Control,
+                    QStringLiteral("audio_start:%1;").arg(rx));
             }
         } else if (trimmed.startsWith(kAudioStop)) {
             bool ok = false;
             const int rx = trimmed.mid(kAudioStop.size()).trimmed().toInt(&ok);
             if (ok && rx >= 0 && rx <= 1) {
                 handleAudioUnsubscribe(session, rx);
+                // Phase 26 review finding #2: send confirmation echo.
+                // From Thetis TCIServer.cs:5891-5906 [v2.10.3.13] —
+                // handleAudioStart calls sendAudioStartStop(rx, false) after
+                // removing rx from m_audioStreamEnabled.
+                session->sendQueue.push(TciSendQueue::Priority::Control,
+                    QStringLiteral("audio_stop:%1;").arg(rx));
             }
         } else if (trimmed.startsWith(kIqStart)) {
             // Phase 18 Task 18.1: promote iq_start:N; stub to real per-client
@@ -754,6 +767,12 @@ void TciServer::onTextMessageReceived(const QString& msg)
                     qCInfo(lcTci) << "TciServer: IQ stream subscribed rx" << rx
                                   << "peer" << session->peer;
                 }
+                // Phase 26 review finding #2: send confirmation echo.
+                // From Thetis TCIServer.cs:5797-5813 [v2.10.3.13] —
+                // handleIQStart calls sendIQStartStop(rx, true) after updating
+                // m_iqStreamEnabled.
+                session->sendQueue.push(TciSendQueue::Priority::Control,
+                    QStringLiteral("iq_start:%1;").arg(rx));
             }
         } else if (trimmed.startsWith(kIqStop)) {
             bool ok = false;
@@ -763,6 +782,90 @@ void TciServer::onTextMessageReceived(const QString& msg)
                     qCInfo(lcTci) << "TciServer: IQ stream unsubscribed rx" << rx
                                   << "peer" << session->peer;
                 }
+                // Phase 26 review finding #2: send confirmation echo.
+                // From Thetis TCIServer.cs:5797-5813 [v2.10.3.13] —
+                // handleIQStart calls sendIQStartStop(rx, false) after removing
+                // from m_iqStreamEnabled.
+                session->sendQueue.push(TciSendQueue::Priority::Control,
+                    QStringLiteral("iq_stop:%1;").arg(rx));
+            }
+        }
+
+        // Phase 26 review finding #1: audio config commands must write the
+        // per-client session struct so the drain loop picks up negotiated
+        // parameters.  TciProtocol handlers update the shared RadioModel (for
+        // backward-compat with protocol-level tests) but cannot see per-client
+        // state; this interceptor is the authoritative write path.
+        //
+        // From Thetis TCIServer.cs:5740-5795 [v2.10.3.13] — handleAudioSampleRate.
+        // From Thetis TCIServer.cs:5908-5934 [v2.10.3.13] — handleAudioStreamSampleType.
+        // From Thetis TCIServer.cs:5935-5949 [v2.10.3.13] — handleAudioStreamChannels.
+        // From Thetis TCIServer.cs:5951-5982 [v2.10.3.13] — handleAudioStreamSamples.
+        {
+            const QString kAudioSampleRate      = QStringLiteral("audio_samplerate:");
+            const QString kAudioStreamSamples   = QStringLiteral("audio_stream_samples:");
+            const QString kAudioStreamChannels  = QStringLiteral("audio_stream_channels:");
+            const QString kAudioStreamSampleType = QStringLiteral("audio_stream_sample_type:");
+
+            if (trimmed.startsWith(kAudioSampleRate)) {
+                // From Thetis TCIServer.cs:5740-5795 [v2.10.3.13]:
+                // Accepts any int (hardware-rate coupling is commented out upstream;
+                // "Thetis: // we can't change the H/W sample rate here").
+                bool ok = false;
+                const int sr = trimmed.mid(kAudioSampleRate.size()).trimmed().toInt(&ok);
+                if (ok && sr > 0) {
+                    session->audioSampleRate = sr;
+                    qCInfo(lcTci) << "TciServer: session audioSampleRate set to" << sr
+                                  << "peer" << session->peer;
+                    // Recreate the resampler for any active audio subscriptions,
+                    // since the target rate has changed.  Destroy old, rebuild.
+                    for (int rx : session->audioStreamEnabled) {
+                        auto rIt = session->audioResamplers.find(rx);
+                        if (rIt != session->audioResamplers.end()) {
+                            destroy_resampleFV(rIt.value());
+                            session->audioResamplers.erase(rIt);
+                        }
+                        void* newResampler = create_resampleFV(48000, sr);
+                        if (newResampler) {
+                            session->audioResamplers.insert(rx, newResampler);
+                        }
+                    }
+                }
+            } else if (trimmed.startsWith(kAudioStreamSamples)) {
+                // From Thetis TCIServer.cs:5951-5982 [v2.10.3.13]:
+                // Range [100..2048]; values outside range silently ignored.
+                bool ok = false;
+                const int n = trimmed.mid(kAudioStreamSamples.size()).trimmed().toInt(&ok);
+                if (ok && n >= 100 && n <= 2048) {
+                    session->audioStreamSamples = n;
+                    session->audioStreamSamplesExplicitlySet = true;
+                    qCInfo(lcTci) << "TciServer: session audioStreamSamples set to" << n
+                                  << "peer" << session->peer;
+                }
+            } else if (trimmed.startsWith(kAudioStreamChannels)) {
+                // From Thetis TCIServer.cs:5935-5949 [v2.10.3.13]:
+                // Accepts 1 (mono) or 2 (stereo); ignores other values.
+                bool ok = false;
+                const int n = trimmed.mid(kAudioStreamChannels.size()).trimmed().toInt(&ok);
+                if (ok && (n == 1 || n == 2)) {
+                    session->audioStreamChannels = n;
+                    qCInfo(lcTci) << "TciServer: session audioStreamChannels set to" << n
+                                  << "peer" << session->peer;
+                }
+            } else if (trimmed.startsWith(kAudioStreamSampleType)) {
+                // From Thetis TCIServer.cs:5908-5934 [v2.10.3.13]:
+                // Valid: "int16", "int24", "int32", "float32".  Defaults to float32.
+                // int enum encoding: 0=int16, 1=int24, 2=int32, 3=float32.
+                const QString typeStr = trimmed.mid(kAudioStreamSampleType.size()).trimmed().toLower();
+                int typeInt = 3;  // float32 default (matches TciClientSession default)
+                if (typeStr == QStringLiteral("int16"))   { typeInt = 0; }
+                else if (typeStr == QStringLiteral("int24"))  { typeInt = 1; }
+                else if (typeStr == QStringLiteral("int32"))  { typeInt = 2; }
+                else if (typeStr == QStringLiteral("float32")) { typeInt = 3; }
+                session->audioSampleType = typeInt;
+                qCInfo(lcTci) << "TciServer: session audioSampleType set to" << typeStr
+                              << "(" << typeInt << ")"
+                              << "peer" << session->peer;
             }
         }
 
