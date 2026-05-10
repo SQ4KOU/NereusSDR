@@ -537,10 +537,17 @@ void TciServer::onNewConnection()
             auto& s = AppSettings::instance();
 
             // Slice A output sample rate.
+            // Phase 3J-1 review P1.2: clamp persisted rate to [8000, 384000]
+            // (same bounds as the runtime audio_samplerate: interceptor) so a
+            // manually-edited settings file cannot inject an out-of-range value
+            // that overflows the drain-path resampler output buffer.
+            constexpr int kMinAudioSampleRateSettings = 8000;
+            constexpr int kMaxAudioSampleRateSettings = 384000;
             const int sliceARateSaved = s.value(
                 QStringLiteral("TciSliceA_OutputSampleRate"),
                 QStringLiteral("48000")).toString().toInt();
-            if (sliceARateSaved > 0) {
+            if (sliceARateSaved >= kMinAudioSampleRateSettings
+                    && sliceARateSaved <= kMaxAudioSampleRateSettings) {
                 session->audioSampleRate = sliceARateSaved;
             }
 
@@ -902,11 +909,32 @@ void TciServer::onTextMessageReceived(const QString& msg)
 
             if (trimmed.startsWith(kAudioSampleRate)) {
                 // From Thetis TCIServer.cs:5740-5795 [v2.10.3.13]:
-                // Accepts any int (hardware-rate coupling is commented out upstream;
-                // "Thetis: // we can't change the H/W sample rate here").
+                // Thetis comment: "// we can't change the H/W sample rate here"
+                // — it echoes back whatever the client requests.
+                //
+                // Phase 3J-1 review P1.2: bound the accepted range to [8000,
+                // 384000].  The drain path uses a fixed-size output buffer sized
+                // for kMaxDrainSamples * 8 = 2048*2*8 = 32768 floats, which gives
+                // exactly 8x upsample headroom (384000 / 48000 = 8).  A client
+                // that sends audio_samplerate:1000000; would overflow that buffer
+                // (1000000/48000 ≈ 20.8x) with no guard.  Silently ignore values
+                // outside [8000, 384000] — do NOT echo confirmation for out-of-
+                // range values (callers like WSJT-X re-send until they see the
+                // echo; rejecting out-of-range is the safe failure mode).
+                //
+                // kMinAudioSampleRate 8000: lowest practical monaural rate;
+                //   matches WDSP resample lower-bound.
+                // kMaxAudioSampleRate 384000: highest HPSDR audio rate; 8x input.
+                constexpr int kMinAudioSampleRate = 8000;
+                constexpr int kMaxAudioSampleRate = 384000;
+
                 bool ok = false;
                 const int sr = trimmed.mid(kAudioSampleRate.size()).trimmed().toInt(&ok);
-                if (ok && sr > 0) {
+                if (!ok || sr < kMinAudioSampleRate || sr > kMaxAudioSampleRate) {
+                    qCWarning(lcTci) << "TciServer: rejecting out-of-range audio_samplerate="
+                                     << (ok ? sr : -1) << "peer" << session->peer;
+                    // Do not write session->audioSampleRate; do not echo confirmation.
+                } else {
                     session->audioSampleRate = sr;
                     qCInfo(lcTci) << "TciServer: session audioSampleRate set to" << sr
                                   << "peer" << session->peer;
