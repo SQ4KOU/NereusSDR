@@ -1,1 +1,12 @@
 command,input,expected_response,expected_notifications,thetis_cite,notes
+compat_emulate_esdr3_on,SETUP:TciEmulateExpertSDR3Protocol=True;;noop;,,,TCIServer.cs:2515 [v2.10.3.13],placeholder; verified end-to-end by init burst golden (protocol: line flips Thetis -> ExpertSDR3) — query handler not exposed by Thetis
+compat_emulate_sunsdr2pro_on,SETUP:TciEmulateSunSDR2Pro=True;;noop;,,,TCIServer.cs:2523 [v2.10.3.13],placeholder; verified end-to-end by init burst golden (device: line flips to SunSDR2PRO) — query handler not exposed by Thetis
+compat_cwlu_becomes_cw_on,SETUP:TciCwluBecomesCw=True;;noop;,,,TCIServer.cs:2540 [v2.10.3.13],placeholder; init burst golden covers the modulations_list trailing CW; Phase 7 mode handler covers runtime mode reporting
+compat_cw_becomes_cwu_above_10mhz_on,SETUP:TciCwBecomesCwuAbove10mhz=True;;noop;,,,TCIServer.cs:3873 [v2.10.3.13],placeholder; effect-site is mode handler; updated when Phase 7 lands the modulation case (W2PA #559)
+compat_iq_swap_off,SETUP:TciIqSwap=False;;noop;,,,TCIServer.cs:6111 [v2.10.3.13],placeholder; effect-site is binary IQ frame builder; updated when Phase 18 lands IQ stream
+compat_always_stream_iq_on,SETUP:TciAlwaysStreamIq=True;;noop;,,,TCIServer.cs:5401 [v2.10.3.13],placeholder; effect-site is wantsIQStream early-out; updated when Phase 11 lands IQ subscription handlers
+compat_send_initial_freq_state_off,SETUP:TciSendInitialFrequencyStateOnConnect=False;;noop;,,,TCIServer.cs:6223 [v2.10.3.13],placeholder; init burst golden covers the gate (skips DDS/IF/VFO/tx_frequency when False)
+compat_rate_limit_set,SETUP:TciRateLimitMsgsPerSec=10;;noop;,,,TCIServer.cs:6108 [v2.10.3.13],placeholder; effect-site is per-client send loop; updated when Phase 14 lands priority send queues
+compat_forget_rx2_vfob_on_disconnect,SETUP:TciForgetRx2VfoBOnDisconnect=True;;noop;,,,TCIServer.cs:6230 [v2.10.3.13],placeholder; effect-site is per-client disconnect; not directly testable via matrix runner — Phase 24 (CatApplet/AudioTciPage) revisit
+compat_use_rx1_vfoa_for_rx2_vfoa,SETUP:TciUseRx1VfoaForRx2Vfoa=True;;noop;,,,TCIServer.cs:3732 [v2.10.3.13],placeholder; effect-site is VFO read handler; updated when Phase 6 lands the vfo command
+compat_copy_rx2_vfob_to_vfoa,SETUP:TciCopyRx2VfobToVfoa=True;;noop;,,,TCIServer.cs:6240 [v2.10.3.13],placeholder; effect-site is VFO write handler; updated when Phase 6 lands the vfo command
