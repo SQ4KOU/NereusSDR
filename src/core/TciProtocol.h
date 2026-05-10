@@ -575,6 +575,24 @@ private:
     static QString buildStartStopLine(bool powerOn);
 
     QObject* m_radio{nullptr};
+
+    // Notification queue drained by TciServer after each handleCommand call.
+    //
+    // Thread-safety contract: ALL writes to m_pendingNotifications MUST happen
+    // on the TciProtocol's owning thread (currently the main thread). All reads
+    // (hasPendingNotification + takePendingNotification) come from the same
+    // thread via the 5ms drain timer in TciServer.
+    //
+    // If a future phase adds cross-thread emitters (e.g. a RadioModel slot
+    // auto-queued from a worker thread to a TciProtocol slot), that slot writes
+    // m_pendingNotifications and would need either:
+    //   (a) Qt::QueuedConnection routing to TciProtocol's owning thread (recommended), OR
+    //   (b) a QMutex around all reads and writes here.
+    // See m_vfoCoalescer for the QMutex pattern if option (b) is needed.
+    //
+    // Phase 26 review finding #9: pinned explicitly so the contract is visible
+    // at the declaration site and does not silently break when new signals are
+    // wired from worker threads in Phase 24+.
     QStringList m_pendingNotifications;
     // Phase 15: coalescer for rapid VFO updates (Layer 3 of Thetis 3-layer
     // throttle at TCIServer.cs:1722-1727 [v2.10.3.13]). Layers 1+2 subsumed

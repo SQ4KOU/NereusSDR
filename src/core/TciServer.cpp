@@ -1109,12 +1109,16 @@ void TciServer::onTextMessageReceived(const QString& msg)
                             // Phase 23: notify indicator / MainWindow.
                             emit txAudioActiveClientChanged(ws);
                         } else {
+                            // Phase 26 review finding #10: m_clients.value(key, make_shared<>())
+                            // allocates a default TciClientSession just to read its peer field.
+                            // Use explicit find + fallback string instead — zero allocation path.
+                            auto heldIt = m_clients.find(m_txAudioActiveClient.data());
+                            const QString heldBy = (heldIt != m_clients.end())
+                                ? heldIt.value()->peer
+                                : QStringLiteral("(unknown)");
                             qCInfo(lcTci) << "TciServer: TX audio mutex denied for"
                                           << session->peer
-                                          << "(held by"
-                                          << m_clients.value(m_txAudioActiveClient.data(),
-                                                 std::make_shared<TciClientSession>())->peer
-                                          << ")";
+                                          << "(held by" << heldBy << ")";
                         }
                     } else if (!wantsMox) {
                         // trx:N,false — release mutex if this client held it.
