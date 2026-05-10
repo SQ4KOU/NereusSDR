@@ -3984,6 +3984,12 @@ if(Qt6WebSockets_FOUND)
     target_link_libraries(tst_tci_silent_error_invariant PRIVATE Qt6::WebSockets)
 endif()
 
+# ── Phase 3J-1 Task 16.3 (sub-commit a): TciBinaryFrame encode ───────────────
+# Tests buildStreamPayload + encodeSamples byte-for-byte parity with
+# Thetis TCIServer.cs:5240-5305 [v2.10.3.13].
+# Transport-blind: no Qt6WebSockets dependency.
+nereus_add_test(tst_tci_binary_frame)
+
 # ── Phase 3J-1 Task 1.1: TCI verification matrix runner ──────────────────────
 # Loads tests/data/tci/matrix.csv and feeds each row's command into
 # TciProtocol::handleCommand(), asserting the response + notification queue
