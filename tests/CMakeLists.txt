@@ -3978,6 +3978,10 @@ if(Qt6WebSockets_FOUND)
     # Phase 3J-1 Task 2.2: server-driven 20s ping with payload "Thetis"
     nereus_add_test(tst_tci_server_ping)
     target_link_libraries(tst_tci_server_ping PRIVATE Qt6::WebSockets)
+
+    # Phase 3J-1 Task 3.2: silent-error invariant
+    nereus_add_test(tst_tci_silent_error_invariant)
+    target_link_libraries(tst_tci_silent_error_invariant PRIVATE Qt6::WebSockets)
 endif()
 
 # ── Phase 3J-1 Task 1.1: TCI verification matrix runner ──────────────────────

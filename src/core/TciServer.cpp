@@ -18,7 +18,9 @@
 
 #include "TciServer.h"
 #include "TciClientSession.h"
+#include "TciProtocol.h"
 #include "LogCategories.h"
+#include "models/RadioModel.h"
 
 #include <QHostAddress>
 #include <QTimer>
@@ -40,6 +42,9 @@ namespace NereusSDR {
 TciServer::TciServer(RadioModel* model, QObject* parent)
     : QObject(parent)
     , m_model(model)
+    // From design doc §1 — TciServer owns one TciProtocol; it is the shared
+    // dispatch engine across all clients (single-instance, transport-blind).
+    , m_protocol(std::make_unique<TciProtocol>(model, this))
 {
     m_pingTimer = new QTimer(this);  // parented — destroyed with server
 
@@ -212,10 +217,6 @@ void TciServer::onClientDisconnected()
 }
 
 // ── onTextMessageReceived() ──────────────────────────────────────────────────
-//
-// Phase 2 stub — records the command for ClientChainApplet display.
-// Phase 3 Task 3.2 replaces the TODO below with TciProtocol dispatch +
-// per-client broadcast notification forwarding.
 
 void TciServer::onTextMessageReceived(const QString& msg)
 {
@@ -224,11 +225,31 @@ void TciServer::onTextMessageReceived(const QString& msg)
     auto it = m_clients.find(ws);
     if (it == m_clients.end()) { return; }
 
-    it.value()->lastCommand   = msg;
-    it.value()->lastCommandAt = QDateTime::currentMSecsSinceEpoch();
+    auto& session = it.value();
+    session->lastCommand   = msg;
+    session->lastCommandAt = QDateTime::currentMSecsSinceEpoch();
 
-    // TODO Phase 3 Task 3.2: dispatch via TciProtocol::handleCommand and
-    // broadcast change notifications to all other connected clients.
+    // From design doc §1 + Sweep B silent-error invariant:
+    // handleCommand returns the synchronous response (empty for unknown
+    // commands per Sweep B; non-empty for queries that have a reply).
+    // Response goes only to the originating client (unicast).
+    const QString response = m_protocol->handleCommand(msg);
+    if (!response.isEmpty()) {
+        ws->sendTextMessage(response);
+    }
+
+    // From design doc §1: notifications drain after each handleCommand and
+    // broadcast to ALL clients (including the originator), mirroring Thetis's
+    // outbound-frame fan-out at TCIServer.cs:1662-1791 [v2.10.3.13].
+    // Phase 14 refactors this to per-client priority queues with coalescing;
+    // for Phase 3 a direct iteration suffices because notifications are
+    // currently always empty (Phase 5+ enqueues real notifications).
+    while (m_protocol->hasPendingNotification()) {
+        const QString notif = m_protocol->takePendingNotification();
+        for (auto sit = m_clients.cbegin(); sit != m_clients.cend(); ++sit) {
+            sit.key()->sendTextMessage(notif);
+        }
+    }
 }
 
 // ── onBinaryMessageReceived() ────────────────────────────────────────────────

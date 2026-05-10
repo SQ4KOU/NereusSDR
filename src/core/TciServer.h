@@ -42,6 +42,7 @@ class QTimer;
 namespace NereusSDR {
 
 class RadioModel;
+class TciProtocol;
 
 // TCI WebSocket server — exposes radio state over the ExpertSDR3 TCI protocol.
 //
@@ -114,6 +115,10 @@ private:
     QHash<QWebSocket*, std::shared_ptr<TciClientSession>> m_clients;
 
     QTimer* m_pingTimer{nullptr};
+
+    // From design doc §1 — TciServer owns one TciProtocol; it is the shared
+    // dispatch engine across all clients (single-instance, transport-blind).
+    std::unique_ptr<TciProtocol> m_protocol;
 
     // From Thetis TCIServer.cs:2650 [v2.10.3.13] — 1000 * 20 = 20000ms.
     // Thetis comment: "per websock spec ping frames are every 20 seconds."
