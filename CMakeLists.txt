@@ -475,6 +475,7 @@ set(CORE_SOURCES
     src/core/PotaClient.cpp
     src/core/DxClusterClient.cpp
     src/core/WsjtxClient.cpp
+    src/core/FreeDVReporterClient.cpp
 )
 
 # CoreAudioHalBus — macOS-only IAudioBus implementation bridging to the

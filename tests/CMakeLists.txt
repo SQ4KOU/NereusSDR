@@ -3982,3 +3982,16 @@ nereus_add_test(tst_dx_cluster_parser)
 # skipsLowConfidence, extractsCallsign (data-driven, 7 rows). Source:
 # AetherSDR src/core/WsjtxClient.cpp [@0cd4559].
 nereus_add_test(tst_wsjtx_decoder)
+
+# ── Phase 3J-2 Task B5: FreeDVReporterClient Engine.IO/Socket.IO parser ─────
+# Pins the contract that FreeDVReporterClient implements the Engine.IO v4 /
+# Socket.IO v4 framing used by qso.freedv.org. 7 tests cover the Engine.IO
+# Open handshake + view-only auth payload, Ping/Pong reply, Socket.IO
+# Connect ACK transitioning to connected, and the four data events that
+# drive the station model and (via NereusSDR dual-feed) the spot stream:
+# new_connection -> stationAdded, freq_change -> stationUpdated +
+# spotReceived, rx_report -> spotReceived, remove_connection ->
+# stationRemoved. Hybrid source: wire protocol from freedv-gui
+# src/reporting/FreeDVReporter.cpp [@77e793a]; Qt6 structural pattern from
+# AetherSDR src/core/FreeDvClient.cpp [@0cd4559].
+nereus_add_test(tst_freedv_reporter_socketio)
