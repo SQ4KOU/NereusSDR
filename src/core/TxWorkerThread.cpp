@@ -48,6 +48,19 @@
 //                 docs/superpowers/plans/2026-05-07-phase3m-3a-iv-antivox-feed.md
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation
 //                 via Anthropic Claude Code.
+//   2026-05-11 — Phase 3R Task K2 — mode-aware TxPath enum scaffolding.
+//                 Added the TxPath enum (Wdsp / Rade), the
+//                 std::atomic<TxPath> m_currentTxPath member (default
+//                 Wdsp), the setCurrentTxPath cross-thread queued slot,
+//                 a one-shot info-log on the first RADE entry, and an
+//                 early-return at the top of dispatchOneBlock when the
+//                 path is Rade.  The full RADE-path integration (mic
+//                 feed -> 80 Hz HPF -> 48-16 resampler ->
+//                 RadeChannel::txEncode) is deferred to K-bench
+//                 follow-up; this commit only pins the scaffolding so
+//                 future work can wire the mic source without touching
+//                 the run-loop again.  J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file.  The Thetis cmbuffs.c /
@@ -269,6 +282,42 @@ void TxWorkerThread::dispatchOneBlock()
         return;
     }
 
+    // ── Phase 3R Task K2: mode-aware path early-return ─────────────────
+    //
+    // RadioModel updates m_currentTxPath on every MOX-on transition
+    // based on the active slice's DSPMode.  When the slice is in
+    // DSPMode::RADE the worker must NOT run the WDSP TXA chain (the
+    // RADE neural codec generates its own baseband I/Q via
+    // RadeChannel::txEncode -> txModemReady, which K4 wires into the
+    // radio's TX buffer).
+    //
+    // K2 ships scaffolding only: the early-return is in place but the
+    // mic feed into RadeChannel is NOT yet wired (see K-bench TODO
+    // below).  The branch logs once on first hit so we can confirm the
+    // path swap takes effect; subsequent hits are silent so the audio
+    // pump stays log-light at the real-time deadline.
+    const TxPath path = m_currentTxPath.load(std::memory_order_acquire);
+    if (path == TxPath::Rade) {
+        // K-bench TODO: replace this no-op with the RADE TX path:
+        //   1. m_micSource has already drained one block of mic samples
+        //      into m_in (by the run loop above tickForTest()).
+        //   2. Apply the 80 Hz HPF (K3 RadeTxHpf80).
+        //   3. Resample 48 -> 16 kHz mono (K3 RadeTx48to16).
+        //   4. Pass to RadeChannel::txEncode(QByteArray speechSamples).
+        //   5. RadeChannel emits txModemReady, which K4 connects to
+        //      RadioConnection::sendTxIq on the main thread.
+        // For now we just skip the WDSP TXA tick so RADE-mode TX does
+        // NOT produce a WDSP-baseband on the air.
+        static std::atomic<bool> s_loggedOnce{false};
+        bool expected = false;
+        if (s_loggedOnce.compare_exchange_strong(expected, true)) {
+            qCInfo(lcTxWorker) << "dispatchOneBlock: TX path is RADE; "
+                                  "scaffolded only, full integration "
+                                  "pending K-bench follow-up";
+        }
+        return;
+    }
+
     // PC mic override — mirrors Thetis cmaster.c:379 [v2.10.3.13]:
     //   asioIN(pcm->in[stream]);
     // ASIO is the OS-mic source; in NereusSDR this is the PortAudio /
@@ -483,5 +532,33 @@ void TxWorkerThread::setAntiVoxDetectorTau(double seconds)
     if (m_txChannel == nullptr) { return; }
     m_txChannel->setAntiVoxDetectorTau(seconds);
 }
+
+// ---------------------------------------------------------------------------
+// setCurrentTxPath()  — Phase 3R Task K2
+//
+// Cross-thread queued slot.  Stored with release ordering so the
+// matching acquire-load at the top of dispatchOneBlock() picks up the
+// new value on the next tick.  Idempotent: setting to the current
+// value is a cheap no-op store (the atomic API does no comparison
+// short-circuit, but the cost is one write versus one compare-then-
+// write, which is the same cache traffic).
+//
+// Thread affinity: caller is RadioModel on the main thread (via the
+// MoxController moxStateChanged hook in RadioModel::connectToRadio
+// extension); the load runs on the TX worker thread inside
+// dispatchOneBlock.  release/acquire ordering correctly handles
+// cross-thread visibility.
+// ---------------------------------------------------------------------------
+void TxWorkerThread::setCurrentTxPath(TxPath path)
+{
+    m_currentTxPath.store(path, std::memory_order_release);
+}
+
+#ifdef NEREUS_BUILD_TESTS
+TxWorkerThread::TxPath TxWorkerThread::currentTxPathForTest() const
+{
+    return m_currentTxPath.load(std::memory_order_acquire);
+}
+#endif
 
 } // namespace NereusSDR

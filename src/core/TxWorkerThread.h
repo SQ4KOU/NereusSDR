@@ -91,6 +91,26 @@ class TxWorkerThread : public QThread {
     Q_OBJECT
 
 public:
+    // ── Phase 3R Task K2: mode-aware TX path enum ───────────────────────
+    //
+    // The TxPath enum selects which DSP backend the worker dispatches
+    // each block through.  RadioModel updates the path on every MOX-on
+    // boundary based on the active slice's DSPMode (USB/LSB/AM/etc.
+    // -> Wdsp; RADE -> Rade).
+    //
+    // K2 ships only the scaffolding (enum + atomic + setter slot +
+    // one-shot info-log on entry to the RADE branch).  The full real-
+    // time integration (mic feed -> 80 Hz HPF -> 48-16 resampler ->
+    // RadeChannel::txEncode -> RadeChannel::txModemReady ->
+    // RadioConnection::sendTxIq) lands at K-bench time when ANAN/HL2
+    // hardware is available to verify the real-time deadline.
+    enum class TxPath {
+        Wdsp = 0,   // Existing path: TxChannel + WDSP TXA chain.
+        Rade = 1    // NereusSDR-native: bypass TXA, route through
+                    // RadeChannel.  Run loop currently logs and skips
+                    // the WDSP tick; K-bench wires the mic feed in.
+    };
+
     explicit TxWorkerThread(QObject* parent = nullptr);
     ~TxWorkerThread() override;
 
@@ -119,9 +139,26 @@ public:
     /// successful waitForBlock by the caller), applies PC mic override
     /// if active, dispatches fexchange0.
     void tickForTest();
+
+    /// Phase 3R Task K2 test seam — observe the current path without
+    /// taking on a QSignalSpy or wiring a real MoxController.  The
+    /// production code reads the atomic via acquire-load inside the
+    /// run-loop body; tests use this accessor to assert the swap
+    /// after setCurrentTxPath().
+    TxPath currentTxPathForTest() const;
 #endif
 
 public slots:
+    // ── Phase 3R Task K2: mode-aware TX path setter ─────────────────────
+    //
+    // Cross-thread queued slot.  RadioModel posts a Wdsp/Rade swap on
+    // every MOX-on transition based on the active slice's DSPMode.
+    // The atomic is read with acquire-load at the top of dispatchOneBlock
+    // (the run-loop body) so the path takes effect on the next tick.
+    //
+    // Idempotent: setting to the current value is a cheap no-op store.
+    void setCurrentTxPath(TxPath path);
+
     // ── Anti-VOX queued slots (3M-3a-iv) ─────────────────────────────────
     //
     // These four slots form the worker-thread proxy for anti-VOX state and
@@ -215,6 +252,21 @@ private:
     // gate fires AFTER the buffer copy, so the outer atomic saves the
     // conversion + memcpy entirely.
     std::atomic<bool> m_antiVoxRun{false};
+
+    // ── Phase 3R Task K2: mode-aware TX path ────────────────────────────
+    //
+    // Tracks whether the next block should flow through the WDSP TXA
+    // chain (Wdsp, default) or skip it for the RADE neural codec
+    // (Rade).  Written from any thread via setCurrentTxPath()
+    // (Qt::QueuedConnection from MoxController on main thread), read
+    // at the top of dispatchOneBlock() on the worker thread.
+    //
+    // release/acquire ordering is the standard pattern for a Qt-side
+    // member updated from one thread and consumed by another: the
+    // writer publishes the new value with release, the reader picks
+    // it up with acquire, and the C++ memory model guarantees no
+    // tearing or stale read.
+    std::atomic<TxPath> m_currentTxPath{TxPath::Wdsp};
 };
 
 } // namespace NereusSDR

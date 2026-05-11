@@ -2742,6 +2742,14 @@ target_compile_definitions(tst_audio_engine_pull_tx_mic PRIVATE NEREUS_BUILD_TES
 nereus_add_test(tst_tx_worker_thread)
 target_compile_definitions(tst_tx_worker_thread PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3R Task K2: TxWorkerThread::TxPath enum scaffolding ──
+# Pins the contract of the lightweight TxPath enum + std::atomic
+# m_currentTxPath member + setCurrentTxPath cross-thread slot that
+# K-bench will use to route DSPMode::RADE slices through RadeChannel
+# rather than the WDSP TXA chain.
+nereus_add_test(tst_tx_worker_rade_path_enum)
+target_compile_definitions(tst_tx_worker_rade_path_enum PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3M-1c TX pump v3 — TxMicSource (Thetis Inbound/cm_main port) ──
 # Verifies the ring + semaphore primitives that source the worker's
 # cadence from radio mic frames.  Test cases (8):

@@ -3381,6 +3381,36 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 qCInfo(lcDsp) << "TX pump: TxWorkerThread started"
                               << "blockFrames=" << TxWorkerThread::kBlockFrames
                               << "(semaphore-wake, mic-frame-driven — 3M-1c v3)";
+
+                // ── Phase 3R Task K2: mode-aware path swap on MOX-on ──
+                //
+                // On every MOX-on transition, read the active slice's
+                // DSPMode and post a TxPath swap to the worker.  DSPMode
+                // == RADE -> TxPath::Rade (scaffolded; full integration
+                // K-bench).  Anything else -> TxPath::Wdsp (the existing
+                // path).  The moxStateChanged signal fires exactly once
+                // per MOX transition at the END of the timer walk
+                // (MoxController.h:863-865 [v2.10.3.13 conceptual]); the
+                // RX path doesn't need a corresponding TxPath flip
+                // because dispatchOneBlock is gated on the worker pump
+                // running anyway.
+                if (m_moxController != nullptr && m_txWorker) {
+                    TxWorkerThread* worker = m_txWorker.get();
+                    connect(m_moxController, &MoxController::moxStateChanged,
+                            this, [this, worker](bool active) {
+                                if (!active) {
+                                    return;   // released; pump will idle anyway
+                                }
+                                const DSPMode mode = m_activeSlice
+                                    ? m_activeSlice->dspMode()
+                                    : DSPMode::USB;
+                                const TxWorkerThread::TxPath path =
+                                    (mode == DSPMode::RADE)
+                                        ? TxWorkerThread::TxPath::Rade
+                                        : TxWorkerThread::TxPath::Wdsp;
+                                worker->setCurrentTxPath(path);
+                            });
+                }
             }
 
             qCInfo(lcDsp) << "L.1: mic sources constructed (hasMicJack=" << hasMicJack
