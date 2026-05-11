@@ -2663,10 +2663,13 @@ void MainWindow::buildMenuBar()
     // =========================================================================
     QMenu* modeMenu = menuBar()->addMenu(QStringLiteral("&Mode"));
 
-    // 12 modes in display order (spec order): LSB, USB, DSB, CWL, CWU, AM,
-    // SAM, FM, DIGL, DIGU, DRM, SPEC.
-    // Maps to DSPMode enum values from WdspTypes.h.
+    // 12 Thetis-faithful modes + the NereusSDR-native RADE extension
+    // (Phase 3R L3).  Display order: LSB, USB, DSB, CWL, CWU, AM,
+    // SAM, FM, DIGL, DIGU, DRM, SPEC, RADE.  Maps to DSPMode enum
+    // values from WdspTypes.h.
     // From Thetis dsp.cs DSPMode enum — enum values used directly, not indices.
+    // RADE is the NereusSDR-native 13th entry (DSPMode::RADE = 12,
+    // not a WDSP mode; routes the slice through RadeChannel).
     const struct { const char* label; DSPMode mode; } modes[] = {
         { "LSB",  DSPMode::LSB  },
         { "USB",  DSPMode::USB  },
@@ -2680,12 +2683,13 @@ void MainWindow::buildMenuBar()
         { "DIGU", DSPMode::DIGU },
         { "DRM",  DSPMode::DRM  },
         { "SPEC", DSPMode::SPEC },
+        { "RADE", DSPMode::RADE },  // Phase 3R L3 — NereusSDR-native
     };
 
     m_modeActionGroup = new QActionGroup(this);
     m_modeActionGroup->setExclusive(true);
 
-    for (int i = 0; i < 12; ++i) {
+    for (int i = 0; i < 13; ++i) {
         DSPMode mode = modes[i].mode;
         QAction* act = modeMenu->addAction(QString::fromUtf8(modes[i].label),
                                            this, [this, mode]() {
@@ -2708,8 +2712,9 @@ void MainWindow::buildMenuBar()
                 DSPMode::LSB, DSPMode::USB, DSPMode::DSB, DSPMode::CWL,
                 DSPMode::CWU, DSPMode::AM,  DSPMode::SAM,  DSPMode::FM,
                 DSPMode::DIGL, DSPMode::DIGU, DSPMode::DRM, DSPMode::SPEC,
+                DSPMode::RADE,  // Phase 3R L3 — index 12
             };
-            for (int i = 0; i < 12; ++i) {
+            for (int i = 0; i < 13; ++i) {
                 if (m_modeActions[i]) {
                     m_modeActions[i]->setChecked(displayOrder[i] == mode);
                 }

@@ -387,8 +387,9 @@ private:
     QAction*      m_apfAction = nullptr;
     QAction*      m_binAction = nullptr;
 
-    // Mode menu actions (12 modes, mutual exclusion via QActionGroup)
-    QAction*      m_modeActions[12]  = {};
+    // Mode menu actions (13 modes: 12 Thetis + NereusSDR-native RADE
+    // from Phase 3R L3; mutual exclusion via QActionGroup).
+    QAction*      m_modeActions[13]  = {};
     QActionGroup* m_modeActionGroup  = nullptr;
 
     // AGC menu action group (Task 12)

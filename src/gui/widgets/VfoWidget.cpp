@@ -711,6 +711,40 @@ void VfoWidget::updateSnrVisibility()
     if (m_snrValue) { m_snrValue->setVisible(isRade); }
 }
 
+// Phase 3R L3 — paint the Mode tab button (m_tabButtons[2]) with the
+// RADE purple accent (#a78bfa) when the active mode is RADE.  All
+// other modes use the default vfoTabBtnStyle() (cyan accent kAccent).
+// The mode tab button is the user-visible "chip" for the current mode:
+// its label is set to SliceModel::modeName(mode) in setMode().  When
+// RADE is active the chip switches to purple as a visual cue that the
+// signal chain has swapped from WDSP to the RADE neural codec.
+void VfoWidget::updateModeTabAccent()
+{
+    if (m_tabButtons.size() <= 2 || !m_tabButtons[2]) {
+        return;
+    }
+    if (m_currentMode == DSPMode::RADE) {
+        // RADE accent style — same structure as vfoTabBtnStyle() but
+        // with the cyan kAccent replaced by the purple #a78bfa.  Both
+        // the unchecked text colour and the checked underline pick up
+        // the purple so the chip remains visually distinct whether
+        // the Mode tab page is expanded or collapsed.
+        m_tabButtons[2]->setStyleSheet(QStringLiteral(
+            "QPushButton {"
+            "  background: transparent; border: none;"
+            "  color: #a78bfa; font-size: 12px; font-weight: bold;"
+            "  padding: 2px 6px;"
+            "}"
+            "QPushButton:checked {"
+            "  color: #a78bfa;"
+            "  border-bottom: 2px solid #a78bfa;"
+            "}"));
+    } else {
+        // Restore the default tab style for any non-RADE mode.
+        m_tabButtons[2]->setStyleSheet(vfoTabBtnStyle());
+    }
+}
+
 void VfoWidget::onSnrChanged(double db)
 {
     if (!m_snrValue) {
@@ -1356,14 +1390,18 @@ void VfoWidget::buildModeTab()
         // rather than a combo box. No single Thetis control has an equivalent tooltip.
         m_modeCmb->setToolTip(QStringLiteral("Select demodulation mode"));
         // From Thetis enums.cs DSPMode — common modes
-        // 11 modes — parity with RxApplet; order follows Thetis enums.cs DSPMode enum
+        // 11 Thetis-faithful modes + the NereusSDR-native RADE
+        // extension (DSPMode::RADE = 12, see WdspTypes.h).  Phase 3R
+        // L3 added the RADE entry so users can switch into the
+        // FreeDV RADE neural codec from the floating VFO flag.
         m_modeCmb->addItems({
             QStringLiteral("LSB"), QStringLiteral("USB"),
             QStringLiteral("AM"), QStringLiteral("CWL"),
             QStringLiteral("CWU"), QStringLiteral("FM"),
             QStringLiteral("DIGU"), QStringLiteral("DIGL"),
             QStringLiteral("SAM"), QStringLiteral("DSB"),
-            QStringLiteral("DRM")
+            QStringLiteral("DRM"),
+            QStringLiteral("RADE")  // Phase 3R L3 — NereusSDR-native
         });
         m_modeCmb->setCurrentText(QStringLiteral("USB"));
         m_modeCmb->setStyleSheet(
@@ -1384,6 +1422,8 @@ void VfoWidget::buildModeTab()
                 if (m_tabButtons.size() > 2) {
                     m_tabButtons[2]->setText(text);
                 }
+                updateSnrVisibility();        // Phase 3R L1 — paint SNR row
+                updateModeTabAccent();        // Phase 3R L3 — purple accent
                 emit modeChanged(mode);
             }
         });
@@ -1745,6 +1785,7 @@ void VfoWidget::setMode(DSPMode mode)
     rebuildFilterButtons(mode);
     applyModeVisibility(mode);    // S1.9 — model-driven mode change
     updateSnrVisibility();        // Phase 3R L1 — show SNR row only in RADE
+    updateModeTabAccent();        // Phase 3R L3 — purple accent in RADE
     m_updatingFromModel = false;
 }
 

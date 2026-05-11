@@ -510,6 +510,7 @@ private:
     void buildSmeterRow();
     void buildSnrRow();        // Phase 3R L1 — RADE SNR display
     void updateSnrVisibility();  // Phase 3R L1 — show/hide based on mode
+    void updateModeTabAccent();  // Phase 3R L3 — RADE purple chip accent
     void buildTabBar();
     void buildAudioTab();
     void buildDspTab();

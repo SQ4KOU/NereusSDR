@@ -4274,6 +4274,21 @@ nereus_add_test(tst_vfo_widget_snr)
 #                                           RadeChannel::resetTx.
 nereus_add_test(tst_rade_applet)
 
+# ── Phase 3R Task L3: Mode menu + VFO chip RADE entry ────────────────────────
+# Pins the RADE entry in the user-facing mode selectors.  Two
+# surfaces are covered (MainWindow Mode menu is too heavy for a
+# unit test and is covered by the existing tst_dspmode_rade
+# round-trip plus the L3 manual verification matrix).
+# Cases:
+#   vfoModeComboHasRadeEntry             - VFO flag mode combo lists RADE.
+#   vfoModeComboChangesToRade            - selecting RADE emits
+#                                          modeChanged(DSPMode::RADE).
+#   vfoModeTabLabelShowsRadeWhenActive   - tab #2 label paints "RADE".
+#   vfoModeTabChipPurpleInRade           - tab #2 stylesheet contains
+#                                          the RADE purple accent
+#                                          (#a78bfa) when RADE active.
+nereus_add_test(tst_mode_menu_rade)
+
 # ── Phase 3J-2 Task E1: SpectrumWidget spot overlay render ─────────────────
 # Pins the contract that drawSpotMarkers places spot labels with
 # collision-avoiding multi-level stacking, overflows into +N cluster
