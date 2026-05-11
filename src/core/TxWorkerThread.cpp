@@ -269,6 +269,30 @@ void TxWorkerThread::dispatchOneBlock()
         return;
     }
 
+    // ── Phase 3J-1 bench fix (2026-05-10): TCI audio source gate ───────────
+    //
+    // When a TCI client holds the TX audio mutex (trx:N,true,tci;) the
+    // binary-frame pipeline runs WDSP via feedTxAudioFromTci's internal
+    // 64-frame driveOneTxBlock dispatches (32 per WSJT-X 2048-frame message).
+    // That delivers exactly the radio's wire rate of 48 kHz samples to
+    // sendTxIq — perfect on its own.
+    //
+    // If we ALSO dispatch from the worker pump (mic-source path at 750
+    // blocks/sec from RadioMicSource / PC mic / VAX), we add a second 48 kHz
+    // stream into the same TX I/Q ring.  The ring (~84 ms at 48 kHz) over-
+    // flows almost immediately; ~half of each cycle gets dropped on push
+    // and the on-air output is a chopped mix of TCI audio and mic silence
+    // — WSJT-X FT8 tones do not survive the corruption.
+    //
+    // Skip the worker's own dispatch entirely when the gate is set.  The
+    // TCI path's feedTxAudioFromTci processed-on-this-same-thread keeps
+    // calling driveOneTxBlock during this skipped window; m_running stays
+    // true via the existing MoxController::txReady wiring so sendTxIq still
+    // fires from the TCI dispatches.
+    if (m_txChannel->isTciAudioActive()) {
+        return;
+    }
+
     // PC mic override — mirrors Thetis cmaster.c:379 [v2.10.3.13]:
     //   asioIN(pcm->in[stream]);
     // ASIO is the OS-mic source; in NereusSDR this is the PortAudio /

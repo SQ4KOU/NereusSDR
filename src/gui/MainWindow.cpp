@@ -431,6 +431,17 @@ MainWindow::MainWindow(QWidget* parent)
                 this, [this](QWebSocket* owner) {
                     m_tciHasTxClient = (owner != nullptr);
                     updateTciIndicator();
+                    // Phase 3J-1 bench fix (2026-05-10): gate the TxWorkerThread
+                    // mic-source pump while TCI is providing audio so it does
+                    // not race feedTxAudioFromTci's dispatch.  See
+                    // TxChannel::m_tciAudioActive doc-comment for the full
+                    // narrative on why the two-source race corrupts on-air
+                    // audio at the I/Q ring buffer.
+                    if (auto* wdsp = m_radioModel ? m_radioModel->wdspEngine() : nullptr) {
+                        if (auto* txCh = wdsp->txChannel(1)) {
+                            txCh->setTciAudioActive(owner != nullptr);
+                        }
+                    }
                 });
     }
 #endif

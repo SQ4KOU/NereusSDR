@@ -846,6 +846,26 @@ public:
     Q_INVOKABLE void feedTxAudioFromTci(const QByteArray& interleavedStereoBytes,
                                         int frames, int channels, int srcRate);
 
+    // ── Phase 3J-1 bench fix (2026-05-10): TCI audio source gate ──────────
+    //
+    // Set to true when a TCI client acquires the TX audio mutex
+    // (trx:N,true,tci;) and back to false on release / disconnect.  Read by
+    // TxWorkerThread::dispatchOneBlock to short-circuit its own
+    // driveOneTxBlockFromInterleaved dispatch, leaving the TCI binary
+    // pipeline (feedTxAudioFromTci → driveOneTxBlock) as the sole source
+    // of WDSP TX audio for the duration of TCI PTT.
+    //
+    // Atomic so the worker thread's load sees the main-thread store
+    // immediately; no signal/slot or queued event involved.
+    /// Set the TCI audio gate.  Thread-safe (atomic).
+    void setTciAudioActive(bool active) {
+        m_tciAudioActive.store(active, std::memory_order_release);
+    }
+    /// Query the TCI audio gate.  Thread-safe (atomic).
+    bool isTciAudioActive() const {
+        return m_tciAudioActive.load(std::memory_order_acquire);
+    }
+
     // ── Anti-VOX detector audio feed (3M-3a-iv Task 3) ──────────────────────
     //
     // Push one block of interleaved L/R float audio into the WDSP DEXP
@@ -2620,6 +2640,24 @@ private:
     // gates on m_running for power-saving when neither MOX nor VOX
     // is in play; this flag re-enables pumping for VOX detection.
     std::atomic<bool> m_voxListening{false};
+
+    // ── Phase 3J-1 bench fix (2026-05-10): TCI audio source gate ───────────
+    // When a TCI client holds the TX audio mutex (trx:N,true,tci;) the
+    // binary-frame pipeline drives WDSP via feedTxAudioFromTci's internal
+    // driveOneTxBlock calls.  Without this flag, the TxWorkerThread mic-source
+    // pump ALSO calls driveOneTxBlockFromInterleaved (with silence from the
+    // null/PC/VAX mic source), producing two competing fexchange0 dispatches
+    // per cycle and overrunning the TX I/Q ring at 2x the radio's wire rate —
+    // half of each cycle gets dropped, the audio chops into burst-and-silence
+    // segments, and WSJT-X / SunSDR FT8 tones don't survive the corruption.
+    //
+    // When this flag is true the worker's dispatchOneBlock returns early
+    // (before pumpDexp / driveOneTxBlockFromInterleaved), so the TCI path
+    // is the only audio source feeding the radio for the duration of TCI PTT.
+    //
+    // Set/cleared by MainWindow on TciServer::txAudioActiveClientChanged.
+    // Cleared automatically on client disconnect via the same signal.
+    std::atomic<bool> m_tciAudioActive{false};
 
     // ── Phase 3M-3a-iii Task 17 — DEXP pushvox bridge ────────────────────────
     //
