@@ -1053,6 +1053,12 @@ signals:
     void radeSyncChanged(int sliceId, bool synced);
     void radeSnrChanged(int sliceId, float snrDb);
 
+    // Phase 3R Task L2: RADE carrier-frequency offset re-emit. Wired
+    // alongside the I5 trio for the RadeApplet freq-offset readout.
+    // No model-side de-dup: the codec already coalesces by emitting
+    // only on actual offset change.
+    void radeFreqOffsetChanged(int sliceId, float hz);
+
 private slots:
     void onConnectionStateChanged(NereusSDR::ConnectionState state);
 

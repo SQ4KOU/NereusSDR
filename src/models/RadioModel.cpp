@@ -1457,6 +1457,14 @@ void RadioModel::wireRadeChannel(int sliceId, RadeChannel* channel,
             [this, sliceId](const QString& callsign, const QString& grid) {
                 onRadeTextDecoded(sliceId, callsign, grid);
             });
+    // Phase 3R L2: freq-offset re-emit for the RadeApplet readout. The
+    // codec emits only on actual offset change so no model-side de-dup
+    // is needed; the captured sliceId routes the per-channel emission
+    // into the multi-slice signal surface.
+    connect(channel, &RadeChannel::freqOffsetChanged, this,
+            [this, sliceId](float hz) {
+                emit radeFreqOffsetChanged(sliceId, hz);
+            });
 
     // Phase 3R Task J4: route decoded RADE speech into AudioEngine's
     // speakers bus through the same rxBlockReady entry point WDSP's

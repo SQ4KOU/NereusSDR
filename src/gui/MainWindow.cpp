@@ -291,6 +291,7 @@ warren@wpratt.com
 #include "core/PureSignal.h"
 #include "core/TwoToneController.h"
 #include "applets/PhoneCwApplet.h"
+#include "applets/RadeApplet.h"
 #include "applets/EqApplet.h"
 #include "applets/VaxApplet.h"
 #include "applets/DigitalApplet.h"
@@ -1972,6 +1973,14 @@ void MainWindow::populateDefaultMeter()
     // PhoneCwApplet — Phone + CW pages, NYI
     m_phoneCwApplet = new PhoneCwApplet(m_radioModel, nullptr);
     panel->addApplet(m_phoneCwApplet);
+
+    // RadeApplet — Phase 3R L2.  Sits alongside PhoneCwApplet but is
+    // visible only when the active slice's mode is DSPMode::RADE.  The
+    // initial mode is set in the dspModeChanged lambda below; for the
+    // default startup mode (USB) the applet starts hidden.
+    m_radeApplet = new RadeApplet(m_radioModel, nullptr);
+    panel->addApplet(m_radeApplet);
+    m_radeApplet->setVisible(false);
 
     // Ghost applets — hidden per docs/superpowers/plans/2026-05-01-ui-polish-right-panel.md §Task 6.
     // These applets are entirely placeholder-only today (no wired controls).
@@ -3849,8 +3858,19 @@ void MainWindow::wireSliceToSpectrum()
             m_spectrumWidget->setTxMode(mode);
         }
         vfo->setMode(mode);
-        // Switch PhoneCwApplet page based on active mode
+        // Phase 3R L2: gate RADE applet visibility on mode == RADE.  Hide
+        // the PhoneCwApplet when RADE is active (the two are mutually
+        // exclusive surfaces — RADE has its own profile + control
+        // surface, the Phone/CW page does not apply).
+        const bool isRade = (mode == DSPMode::RADE);
+        if (m_radeApplet) {
+            m_radeApplet->setVisible(isRade);
+        }
         if (m_phoneCwApplet) {
+            m_phoneCwApplet->setVisible(!isRade);
+        }
+        // Switch PhoneCwApplet page based on active mode
+        if (m_phoneCwApplet && !isRade) {
             switch (mode) {
                 case DSPMode::CWL:
                 case DSPMode::CWU:

@@ -476,6 +476,10 @@ private:
     // TxCfcDialog instance owned by TxApplet (m_cfcDialog).
     class TxApplet* m_txApplet{nullptr};
     class PhoneCwApplet* m_phoneCwApplet{nullptr};
+    // Phase 3R L2 — RADE-mode applet, visible only when the active slice
+    // is in DSPMode::RADE.  Sits alongside PhoneCwApplet in the panel
+    // stack and is shown/hidden in the same dspModeChanged lambda.
+    class RadeApplet* m_radeApplet{nullptr};
     class EqApplet* m_eqApplet{nullptr};
     class VaxApplet* m_vaxApplet{nullptr};
 

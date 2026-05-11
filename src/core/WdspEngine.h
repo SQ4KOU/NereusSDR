@@ -112,6 +112,9 @@ class TstPsFeedbackChannel;
 // needs to flip m_initialized = true so the RxChannel seed at the head of
 // the test does not bail out on the !m_initialized guard.
 class TestSliceModelRadeSwap;
+// Phase 3R Task L2: same friendship for the RadeApplet UI test which
+// constructs a real RadioModel + RadeChannel fixture.
+class TestRadeApplet;
 #endif
 
 namespace NereusSDR {
@@ -451,6 +454,8 @@ private:
     friend class ::TstPsFeedbackChannel;
     // Phase 3R Task J3: same friendship for the SliceModel RADE mode-swap test.
     friend class ::TestSliceModelRadeSwap;
+    // Phase 3R Task L2: same friendship for the RadeApplet UI test.
+    friend class ::TestRadeApplet;
 #endif
 };
 

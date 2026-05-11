@@ -4257,6 +4257,23 @@ nereus_add_test(tst_dspmode_rade)
 #   snrHiddenInNonRadeMode    - USB hides row; RADE shows it.
 nereus_add_test(tst_vfo_widget_snr)
 
+# ── Phase 3R Task L2: RadeApplet ────────────────────────────────────────────
+# Pins the RadeApplet UI contract:
+#   constructsWithRadioModel              - builds against a primed
+#                                           RadioModel + RadeChannel.
+#   profileComboPopulatesFromMicProfileManager - combo holds the live
+#                                           profileNames() list.
+#   profileComboDefaultsToRade            - "RADE" preset (K1) is the
+#                                           initial selection.
+#   onSnrChangedUpdatesSnrLabel           - radeSnrChanged updates text.
+#   onSyncChangedUpdatesIndicatorColor    - radeSyncChanged drives the
+#                                           LED stylesheet.
+#   onTextDecodedShowsCallsign            - rade_text decode appears
+#                                           in the last-decoded label.
+#   resetButtonClickInvokesResetTx        - button click dispatches to
+#                                           RadeChannel::resetTx.
+nereus_add_test(tst_rade_applet)
+
 # ── Phase 3J-2 Task E1: SpectrumWidget spot overlay render ─────────────────
 # Pins the contract that drawSpotMarkers places spot labels with
 # collision-avoiding multi-level stacking, overflows into +N cluster
