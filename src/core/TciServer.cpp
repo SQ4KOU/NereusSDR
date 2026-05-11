@@ -1441,7 +1441,13 @@ void TciServer::onBinaryMessageReceived(const QByteArray& data)
     if (m_model && frames > 0) {
         WdspEngine* wdsp = m_model->wdspEngine();
         if (wdsp && wdsp->isInitialized()) {
-            TxChannel* txCh = wdsp->txChannel(0);
+            // TX channel uses WDSP channel ID 1 (== WDSP.id(kind=1=TX, instance=0))
+            // per Thetis dsp.cs:926-944 [v2.10.3.13].  Created by
+            // RadioModel::connectToRadio at src/models/RadioModel.cpp:1792-1798
+            // with channelId=1.  Calling txChannel(0) returns nullptr because
+            // ID 0 is the RX channel slot in WdspEngine::m_txChannels (the map
+            // is keyed by raw WDSP channel ID, not by TX-instance index).
+            TxChannel* txCh = wdsp->txChannel(1);
             if (txCh) {
                 const QByteArray payloadCopy(
                     reinterpret_cast<const char*>(decoded.data()),
