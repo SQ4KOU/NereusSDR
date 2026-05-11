@@ -529,6 +529,7 @@ set(MODEL_SOURCES
     src/models/SpotTableModel.cpp
     src/models/BandFilterProxy.cpp
     src/models/FreeDVStationModel.cpp
+    src/models/RxDecodeModel.cpp
 )
 
 set(GUI_SOURCES

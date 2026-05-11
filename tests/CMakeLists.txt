@@ -4141,3 +4141,19 @@ nereus_add_test(tst_spot_table_model)
 #   DegreesToRadians_ / RadiansToDegrees_) [@77e793a]. Third task of
 #   Phase D (Models).
 nereus_add_test(tst_freedv_station_model)
+
+# ── Phase 3J-2 Task D4: RxDecodeModel (bounded ring buffer) ─────────────────
+# Pins the contract that RxDecodeModel holds a QVector<RxDecode> bounded
+# at maxSize (default 200), emits decodeAdded on each addDecode() call,
+# evicts the oldest entry when size exceeds maxSize, and emits cleared
+# on clear(). Verifies mixed-source ingestion (rade_text + WSJT-X).
+# Asserted via QSignalSpy: initialState (empty on construction),
+# addDecodeEmits (signal fires + decodes() grows by 1),
+# ringBufferDropsOldest (250 adds with maxSize=200 leaves CALL50..CALL249),
+# clearEmits (cleared signal fires + decodes() empty),
+# addsFromMultipleSources (rade_text + WSJT-X coexist preserving order).
+# Source: NEW NereusSDR-native model. No upstream equivalent.
+# Distinguishes "what my radio just heard" from network/cluster spots
+# in SpotModel. Per design doc Phase D Task D4 + Section 2 (three-model
+# split). Fourth task of Phase D (Models).
+nereus_add_test(tst_rx_decode_model)
