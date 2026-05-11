@@ -92,6 +92,7 @@
 #include "core/safety/BandPlanGuard.h"
 
 #include <QDateTime>
+#include <QHash>
 #include <QObject>
 #include <QString>
 #include <QList>
@@ -161,6 +162,13 @@ class FreeDVStationModel;
 class RxDecodeModel;
 struct DxSpot;
 struct FreeDVStation;
+
+// Phase 3R Task I5: forward declaration for the RadeChannel codec wrapper.
+// RadioModel does not own the channel (J2 / J3 create one per slice as
+// mode flips to RADE), but exposes wireRadeChannel(sliceId, channel, slice)
+// to attach the channel's snrChanged / syncChanged / rxTextDecoded
+// signals into the slot graph.
+class RadeChannel;
 
 // RadioModel is the central data model for a connected radio.
 // It owns the RadioConnection (on a worker thread), ReceiverManager,
@@ -397,6 +405,34 @@ public:
     PotaClient*           pota()                const { return m_pota.get(); }
     FreeDVReporterClient* freeDvReporter()      const { return m_freeDvReporter.get(); }
     PskReporterClient*    pskReporter()         const { return m_pskReporter.get(); }
+
+    // ── Phase 3R Task I5: RadeChannel slot-graph wiring ─────────────────────
+    //
+    // wireRadeChannel attaches a freshly-created RadeChannel into RadioModel's
+    // slot graph. Phase J calls this from createRadeChannel (J2) / mode-swap
+    // (J3) after constructing the channel.
+    //
+    // The channel's per-channel signals (snrChanged / syncChanged /
+    // rxTextDecoded) do not carry a slice ID; the wiring adapts each through
+    // a captured-sliceId lambda so the receiving RadioModel slots know which
+    // slice to apply the event to.
+    //
+    // Routing:
+    //   RadeChannel::snrChanged       -> onRadeSnrChanged     -> SliceModel::setSnrDb
+    //                                                         -> radeSnrChanged re-emit
+    //   RadeChannel::syncChanged      -> onRadeSyncChanged    -> radeSyncChanged
+    //                                                            (only on transition)
+    //   RadeChannel::rxTextDecoded    -> onRadeTextDecoded    -> RxDecodeModel::addDecode
+    //
+    // Null channel or null slice is a safe no-op.
+    void wireRadeChannel(int sliceId, NereusSDR::RadeChannel* channel,
+                         NereusSDR::SliceModel* slice);
+
+    // Reads the latest RADE sync state for the given slice ID. Returns
+    // false when the slice has no recorded sync state (e.g. RADE was
+    // never wired for that slice). Surface for the future Phase L
+    // RadeApplet status indicator + status-bar SYNC badge.
+    bool radeSynced(int sliceId) const;
 
     // 3M-1a G.1: expose TxChannel view so TxApplet and G.4 TUNE function
     // can call setTuneTone / setRunning without depending on WdspEngine.
@@ -846,6 +882,38 @@ public slots:
     // Cite: Thetis console.cs:29978-30157 [v2.10.3.13] — chkTUN_CheckedChanged.
     void setTune(bool on);
 
+    // ── Phase 3R Task I5: RadeChannel signal-graph slots ────────────────────
+    //
+    // Public slots so Qt's auto-connection queues them correctly when the
+    // emitting RadeChannel ever moves to a worker thread (J2/J3 currently
+    // keep it on the main thread; the public-slot declaration is forward-
+    // safe regardless).
+    //
+    // All three accept an int sliceId so a single RadioModel can route
+    // multiple per-slice RadeChannels through one set of slots. The
+    // wireRadeChannel helper captures the slice ID in a lambda at wire
+    // time and adapts the channel's per-channel signals into these.
+
+    // Forwards a decoded callsign (+ optional grid) into RxDecodeModel as
+    // a single decode row. mode="RADE", source="rade_text". Grid is
+    // appended to the payload only when non-empty (I4 Option B does not
+    // carry grid; the field is present for future text-channel revs).
+    void onRadeTextDecoded(int sliceId, const QString& callsign,
+                           const QString& grid);
+
+    // Tracks per-slice RADE decoder sync state. Emits radeSyncChanged
+    // only on actual transitions: repeated identical values collapse to
+    // a single emit (de-duplication keeps the future status-bar
+    // indicator from flickering on repeated sync=true reports from the
+    // codec).
+    void onRadeSyncChanged(int sliceId, bool synced);
+
+    // Forwards the codec's SNR estimate to the slice's snrDb property
+    // (D5 added SliceModel::setSnrDb). Cast-up float->double at the
+    // boundary; the slice setter no-ops on identical numeric values
+    // so repeated identical SNR updates do not spam UI repaint.
+    void onRadeSnrChanged(int sliceId, float snrDb);
+
 signals:
     void infoChanged();
     // Phase 3Q-1: parametrized — state passed so UI consumers can act without
@@ -969,6 +1037,21 @@ signals:
     //
     // NereusSDR-original glue (no Thetis equivalent needed).
     void txFilterRequest(int audioLowHz, int audioHighHz, NereusSDR::DSPMode mode);
+
+    // ── Phase 3R Task I5: RadeChannel slot-graph re-emit signals ─────────────
+    //
+    // Re-emitted after RadioModel internalises the corresponding
+    // RadeChannel signal. UI consumers (RadeApplet, status bar SYNC
+    // badge, future SNR readout in VfoWidget) subscribe here rather
+    // than to the per-channel RadeChannel directly, so they survive
+    // mode-swap / channel-rebuild cycles without re-wiring.
+    //
+    // radeSyncChanged fires only on actual transitions (de-duplicated
+    // by onRadeSyncChanged via m_radeSyncedSlices). radeSnrChanged
+    // fires on every onRadeSnrChanged invocation: no de-dup here,
+    // the slice setter's NaN-aware short-circuit handles repaint thrash.
+    void radeSyncChanged(int sliceId, bool synced);
+    void radeSnrChanged(int sliceId, float snrDb);
 
 private slots:
     void onConnectionStateChanged(NereusSDR::ConnectionState state);
@@ -1583,6 +1666,18 @@ private:
     // Monotonic index passed to SpotModel::applySpotStatus on every adapter
     // dispatch. Increments once per emitted spot regardless of source.
     int m_nextSpotIndex{0};
+
+    // ── Phase 3R Task I5: per-slice RADE sync state cache ───────────────────
+    //
+    // Latest RADE decoder sync state per slice ID, updated by
+    // onRadeSyncChanged on every transition. radeSynced(sliceId) reads
+    // this; a missing key reads as false (slice never had RADE wired).
+    //
+    // Stored on RadioModel rather than SliceModel so future UI surfaces
+    // can iterate sync state across all slices without recursing into
+    // each slice's WDSP channel pointer. The dedup logic in
+    // onRadeSyncChanged also lives here for the same reason.
+    QHash<int, bool> m_radeSyncedSlices;
 };
 
 } // namespace NereusSDR

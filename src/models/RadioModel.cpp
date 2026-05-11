@@ -308,6 +308,11 @@ warren@wpratt.com
 #include "models/FreeDVStationModel.h"
 #include "models/RxDecodeModel.h"
 
+// Phase 3R Task I5: RadeChannel signal-graph wiring. Forward-declared in
+// RadioModel.h; the .cpp pulls the full type for the connect() calls in
+// wireRadeChannel().
+#include "core/RadeChannel.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -1413,6 +1418,115 @@ void RadioModel::removeSlice(int index)
 
     delete slice;
     emit sliceRemoved(index);
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Phase 3R Task I5: RadeChannel signal-graph wiring.
+// ─────────────────────────────────────────────────────────────────────────
+//
+// Phase J (mode swap to RADE) constructs a RadeChannel per slice and
+// calls wireRadeChannel(sliceId, channel, slice) to plumb the channel's
+// signals into the per-slice slot graph below. The channel's signals
+// (snrChanged / syncChanged / rxTextDecoded) do not carry a slice ID;
+// the wiring captures the slice ID at wire time so the receiving slot
+// knows which slice to apply the update to.
+
+void RadioModel::wireRadeChannel(int sliceId, RadeChannel* channel,
+                                 SliceModel* slice)
+{
+    if (channel == nullptr || slice == nullptr) {
+        // Defensive no-op. Phase J always passes valid pointers in
+        // production; tests use this branch to exercise wireWithNull.
+        return;
+    }
+
+    // Adapt the channel's per-channel signals to the per-slice-ID
+    // RadioModel slots. Captured-sliceId lambdas attach the slice
+    // identity at wire time. The slot bodies look the slice up via
+    // sliceAt(sliceId) so a stale capture (slice removed between
+    // emit and dispatch) lands as a safe no-op.
+    connect(channel, &RadeChannel::snrChanged, this,
+            [this, sliceId](float snr) {
+                onRadeSnrChanged(sliceId, snr);
+            });
+    connect(channel, &RadeChannel::syncChanged, this,
+            [this, sliceId](bool synced) {
+                onRadeSyncChanged(sliceId, synced);
+            });
+    connect(channel, &RadeChannel::rxTextDecoded, this,
+            [this, sliceId](const QString& callsign, const QString& grid) {
+                onRadeTextDecoded(sliceId, callsign, grid);
+            });
+
+    // The slice pointer is currently unused at wire time. Slot bodies
+    // dereference via sliceAt(sliceId), which is the safer route because
+    // it handles the slice-was-deleted race naturally. The parameter
+    // remains in the signature so Phase J's call sites read with the
+    // intended slice context.
+    Q_UNUSED(slice);
+}
+
+bool RadioModel::radeSynced(int sliceId) const
+{
+    return m_radeSyncedSlices.value(sliceId, false);
+}
+
+void RadioModel::onRadeTextDecoded(int sliceId, const QString& callsign,
+                                   const QString& grid)
+{
+    if (!m_rxDecodeModel) {
+        return;
+    }
+    RxDecode decode;
+    decode.callsign = callsign;
+    decode.mode     = QStringLiteral("RADE");
+    decode.source   = QStringLiteral("rade_text");
+    decode.utcTime  = QDateTime::currentDateTimeUtc();
+
+    // Pull the slice's current frequency for the freqMhz column when
+    // the slice still exists. A removed slice is a safe no-op: freqMhz
+    // defaults to 0.0 in the RxDecode struct.
+    if (auto* slice = sliceAt(sliceId)) {
+        decode.freqMhz = slice->frequency() / 1.0e6;
+    }
+
+    // I4 Option B (the third_party/rade callsign-over-EOO channel)
+    // does not carry a grid square; RadeText emits textDecoded with
+    // callsign only. Phase L wires RadeText::textDecoded(callsign)
+    // through the channel as rxTextDecoded(callsign, "") (empty
+    // grid). Future text-channel revs may add grid; the payload
+    // string accommodates both forms.
+    if (!grid.isEmpty()) {
+        decode.payload = QStringLiteral("%1 %2").arg(callsign, grid);
+    } else {
+        decode.payload = callsign;
+    }
+
+    m_rxDecodeModel->addDecode(decode);
+}
+
+void RadioModel::onRadeSyncChanged(int sliceId, bool synced)
+{
+    // Dedup repeated identical values. Without this guard the status-bar
+    // SYNC indicator would flicker on every codec sync-state poll even
+    // when nothing changed.
+    const bool prior = m_radeSyncedSlices.value(sliceId, false);
+    if (prior == synced) {
+        return;
+    }
+    m_radeSyncedSlices[sliceId] = synced;
+    emit radeSyncChanged(sliceId, synced);
+}
+
+void RadioModel::onRadeSnrChanged(int sliceId, float snrDb)
+{
+    // Forward to the slice's snrDb Q_PROPERTY (D5). SliceModel::setSnrDb
+    // is NaN-aware: NaN -> NaN no-ops, numeric -> identical-numeric
+    // no-ops, so no extra dedup is needed here.
+    if (auto* slice = sliceAt(sliceId)) {
+        slice->setSnrDb(static_cast<double>(snrDb));
+    }
+    emit radeSnrChanged(sliceId, snrDb);
 }
 
 void RadioModel::setActiveSlice(int index)

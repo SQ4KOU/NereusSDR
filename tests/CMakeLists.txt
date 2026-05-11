@@ -4315,3 +4315,31 @@ nereus_add_test(tst_resampler)
 # the full OFDM round-trip is exercised separately by the upstream
 # third_party/rade/src/rade_callsign_test.c executable.
 nereus_add_test(tst_rade_text)
+
+# ── Phase 3R Task I5: RadeChannel -> RadioModel slot graph wiring ─────────
+# Pins the six contracts RadioModel::wireRadeChannel(sliceId, channel, slice)
+# must satisfy when Phase J creates a RadeChannel per slice:
+#   wireRadeChannelConnectsSnrToSlice    RadeChannel::snrChanged forwards
+#                                        through onRadeSnrChanged to
+#                                        SliceModel::setSnrDb (cast-up
+#                                        float -> double).
+#   wireRadeChannelEmitsRadioModelSync   RadeChannel::syncChanged updates
+#                                        m_radeSyncedSlices and re-emits
+#                                        RadioModel::radeSyncChanged.
+#   repeatedSyncEmitsOnlyOnceUntilChange Idempotent: three sync=true
+#                                        emissions collapse to one
+#                                        RadioModel::radeSyncChanged emit.
+#   rxTextDecodedAddsRxDecodeRow         RadeChannel::rxTextDecoded
+#                                        constructs an RxDecode row with
+#                                        mode=RADE, source=rade_text,
+#                                        payload="<call> <grid>" and
+#                                        pushes it to RxDecodeModel.
+#   rxTextWithEmptyGridStoresCallsignOnly Grid-less decode (the I4 Option B
+#                                        callsign-over-EOO channel does
+#                                        not carry grid) collapses the
+#                                        payload to bare callsign.
+#   wiringWithNullChannelIsNoOp          Null channel / null slice
+#                                        arguments do not crash.
+# Source: NereusSDR-native test pattern; no upstream port. The slot
+# contract under test was established by the I5 plan spec.
+nereus_add_test(tst_rade_channel_model_wiring)
