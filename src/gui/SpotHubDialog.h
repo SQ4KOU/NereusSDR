@@ -44,12 +44,44 @@
 //                                    has no PSK Reporter tab).
 //                                    AI tooling: Anthropic Claude
 //                                    Code.
+//   2026-05-11  J.J. Boyd / KG4VCF  Phase 3J-2 Task F2. Per-source
+//                                    tab content (uniform template):
+//                                    connection-control grid +
+//                                    auto-start toggle + start/stop
+//                                    button + status label +
+//                                    raw-event console. Cluster /
+//                                    RBN / WSJT-X / SpotCollector /
+//                                    POTA / FreeDV port verbatim
+//                                    from AetherSDR
+//                                    `DxClusterDialog.cpp:637-1596
+//                                    [@0cd4559]`; PSK Reporter is
+//                                    NereusSDR-native (no upstream)
+//                                    and uses the same uniform shape
+//                                    with `pskCallEdit` /
+//                                    `pskGridEdit` identity inputs.
+//                                    AppSettings keys preserved
+//                                    verbatim except for the
+//                                    NereusSDR-only `PskReporter*`
+//                                    family. Member declarations
+//                                    moved from `DxClusterDialog`
+//                                    private section into
+//                                    `SpotHubDialog` private section
+//                                    in one consolidated block; each
+//                                    sub-group is delimited by the
+//                                    same source-tab comment. AI
+//                                    tooling: Anthropic Claude Code.
 
 #pragma once
 
 #include <QDialog>
 
 class QTabWidget;
+class QLineEdit;
+class QSpinBox;
+class QPushButton;
+class QLabel;
+class QCheckBox;
+class QPlainTextEdit;
 
 namespace NereusSDR {
 
@@ -138,6 +170,76 @@ private:
     PskReporterClient*    m_pskClient{nullptr};
     SpotModel*            m_spotModel{nullptr};
     DxccColorProvider*    m_dxccProvider{nullptr};
+
+    // From AetherSDR src/gui/DxClusterDialog.h:141-199 [@0cd4559].
+    // Per-source member pointers needed by F2 tab builders. Each
+    // sub-block matches one tab; objectName() values are set in the
+    // .cpp to make the widgets discoverable in the smoke tests.
+
+    // Cluster tab
+    QLineEdit*      m_hostEdit{nullptr};
+    QSpinBox*       m_portSpin{nullptr};
+    QLineEdit*      m_callEdit{nullptr};
+    QPushButton*    m_connectBtn{nullptr};
+    QPushButton*    m_autoConnectBtn{nullptr};
+    QLabel*         m_statusLabel{nullptr};
+    QPlainTextEdit* m_console{nullptr};
+    QLineEdit*      m_cmdEdit{nullptr};
+    QPushButton*    m_sendBtn{nullptr};
+
+    // RBN tab
+    QLineEdit*      m_rbnHostEdit{nullptr};
+    QSpinBox*       m_rbnPortSpin{nullptr};
+    QLineEdit*      m_rbnCallEdit{nullptr};
+    QPushButton*    m_rbnConnectBtn{nullptr};
+    QPushButton*    m_rbnAutoConnectBtn{nullptr};
+    QLabel*         m_rbnStatusLabel{nullptr};
+    QPlainTextEdit* m_rbnConsole{nullptr};
+    QLineEdit*      m_rbnCmdEdit{nullptr};
+    QPushButton*    m_rbnSendBtn{nullptr};
+
+    // WSJT-X tab
+    QLineEdit*      m_wsjtxAddrEdit{nullptr};
+    QSpinBox*       m_wsjtxPortSpin{nullptr};
+    QPushButton*    m_wsjtxStartBtn{nullptr};
+    QPushButton*    m_wsjtxAutoStartBtn{nullptr};
+    QLabel*         m_wsjtxStatusLabel{nullptr};
+    QPlainTextEdit* m_wsjtxConsole{nullptr};
+    QCheckBox*      m_wsjtxFilterCQ{nullptr};
+    QCheckBox*      m_wsjtxFilterPOTA{nullptr};
+    QCheckBox*      m_wsjtxFilterCallingMe{nullptr};
+    QPushButton*    m_wsjtxColorCQ{nullptr};
+    QPushButton*    m_wsjtxColorPOTA{nullptr};
+    QPushButton*    m_wsjtxColorCallingMe{nullptr};
+    QPushButton*    m_wsjtxColorDefault{nullptr};
+
+    // SpotCollector tab
+    QSpinBox*       m_scPortSpin{nullptr};
+    QPushButton*    m_scStartBtn{nullptr};
+    QPushButton*    m_scAutoStartBtn{nullptr};
+    QLabel*         m_scStatusLabel{nullptr};
+    QPlainTextEdit* m_scConsole{nullptr};
+
+    // POTA tab
+    QSpinBox*       m_potaIntervalSpin{nullptr};
+    QPushButton*    m_potaStartBtn{nullptr};
+    QPushButton*    m_potaAutoStartBtn{nullptr};
+    QLabel*         m_potaStatusLabel{nullptr};
+    QPlainTextEdit* m_potaConsole{nullptr};
+
+    // FreeDV tab
+    QPushButton*    m_freedvStartBtn{nullptr};
+    QPushButton*    m_freedvAutoStartBtn{nullptr};
+    QLabel*         m_freedvStatusLabel{nullptr};
+    QPlainTextEdit* m_freedvConsole{nullptr};
+
+    // PSK Reporter tab (NereusSDR-native, no upstream).
+    QLineEdit*      m_pskCallEdit{nullptr};
+    QLineEdit*      m_pskGridEdit{nullptr};
+    QPushButton*    m_pskStartBtn{nullptr};
+    QPushButton*    m_pskAutoStartBtn{nullptr};
+    QLabel*         m_pskStatusLabel{nullptr};
+    QPlainTextEdit* m_pskConsole{nullptr};
 };
 
 } // namespace NereusSDR
