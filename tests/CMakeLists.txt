@@ -4022,3 +4022,18 @@ nereus_add_test(tst_psk_reporter_protocol)
 #   rejectsEmptyOrInvalidCallsign. Source: AetherSDR
 # src/core/CtyDatParser.{h,cpp} [@0cd4559].
 nereus_add_test(tst_cty_dat_parser)
+
+# ── Phase 3J-2 Task C2: AdifParser (.adi / .adif log parser) ───────────────
+# Pins the contract that AdifParser parses ADIF (Amateur Data
+# Interchange Format) log files into QVector<QsoRecord> (callsign
+# + band + modeGroup). Five tests:
+#   parsesSampleAdif (10 QSO bundled fixture, first/last callsigns
+#   resolve, SSB -> PHONE / CW -> CW group normalisation),
+#   emitsFinishedSignal (QSignalSpy waits parseFileAsync ->
+#   finished(QVector<QsoRecord>)),
+#   skipsHeaderSection (no <adif_ver> / <programid> leakage),
+#   handlesCaseInsensitiveTags (mixed-case <CALL> / <Call> /
+#   <call> + <EOR> / <eor> / <Eor> all parse),
+#   rejectsMalformedAdif (garbage bytes -> empty vector).
+# Source: AetherSDR src/core/AdifParser.{h,cpp} [@0cd4559].
+nereus_add_test(tst_adif_parser)
