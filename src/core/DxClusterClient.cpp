@@ -178,7 +178,13 @@ void DxClusterClient::onDisconnected()
     }
 
     if (!m_intentionalDisconnect) {
-        int delay = std::min(InitialReconnectDelayMs * (1 << m_reconnectAttempts),
+        // From AetherSDR src/core/DxClusterClient.cpp:124-128 [@0cd4559] — original
+        // pattern is `1 << m_reconnectAttempts`. NereusSDR fix: clamp shift count
+        // to avoid signed-int UB. The backoff saturates at MaxReconnectDelayMs
+        // well before 30 attempts, so capping has no behavioral effect on a
+        // healthy connection.
+        const int shiftBits = std::min(m_reconnectAttempts, 30);
+        int delay = std::min(InitialReconnectDelayMs * (1 << shiftBits),
                              MaxReconnectDelayMs);
         qCDebug(lcSpots) << "DxClusterClient: reconnecting in" << delay << "ms";
         m_reconnectTimer->start(delay);

@@ -282,7 +282,13 @@ void FreeDVReporterClient::onWsDisconnected()
     }
 
     // Auto-reconnect with exponential backoff.
-    int delay = std::min(InitialReconnectDelayMs * (1 << m_reconnectAttempts),
+    // From AetherSDR src/core/FreeDvClient.cpp:107-113 [@0cd4559] — original
+    // pattern is `1 << m_reconnectAttempts`. NereusSDR fix: clamp shift count
+    // to avoid signed-int UB. The backoff saturates at MaxReconnectDelayMs
+    // well before 30 attempts, so capping has no behavioral effect on a
+    // healthy connection.
+    const int shiftBits = std::min(m_reconnectAttempts, 30);
+    int delay = std::min(InitialReconnectDelayMs * (1 << shiftBits),
                          MaxReconnectDelayMs);
     qCDebug(lcSpots) << "FreeDVReporterClient: disconnected, reconnecting in" << delay << "ms";
     emit rawLineReceived(QString("--- Disconnected, reconnecting in %1s ---").arg(delay / 1000));
