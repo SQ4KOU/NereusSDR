@@ -75,7 +75,6 @@
 //                                    AI tooling: Anthropic Claude Code.
 
 #include "PskReporterClient.h"
-#include "LogCategories.h"
 
 #include <QDateTime>
 #include <QHostInfo>

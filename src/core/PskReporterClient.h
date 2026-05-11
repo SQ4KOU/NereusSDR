@@ -76,7 +76,6 @@
 #include <QString>
 #include <QHostAddress>
 #include <QVector>
-#include <atomic>
 
 #include "DxSpot.h"
 
