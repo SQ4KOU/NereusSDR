@@ -873,6 +873,40 @@ if(WDSP_FOUND)
 endif()
 
 # --------------------------------------------------------------------------
+# RADE neural codec for FreeDV digital voice (Phase 3R)
+# License: BSD 2-Clause (radae_nopy at b2891023f3aecdf8b1793618000b1be6bcb2c4d1)
+# See docs/architecture/phase3j2-3r-spots-and-rade-design.md Section 5
+#
+# radae_nopy's CMakeLists.txt fetches and builds Opus from xiph at first
+# build via ExternalProject_Add (cmake/BuildOpus.cmake). This adds 90-180
+# seconds to the first clean configure/build cycle; incremental builds
+# are unchanged. Opus build needs autoconf, automake, libtool, and a
+# POSIX make on the build host.
+#
+# rade_api.h transitively includes opus_types.h and nnet.h from the
+# Opus source tree (under build_opus-prefix/src/build_opus). Upstream
+# adds these via directory-scope include_directories() in BuildOpus.cmake,
+# which only reaches sources compiled inside the rade subdirectory.
+# We re-expose them as target-scope include dirs on NereusSDRObjs so
+# any future NereusSDR consumer that #includes "rade_api.h" can resolve
+# the transitive Opus headers.
+# --------------------------------------------------------------------------
+add_subdirectory(third_party/rade)
+
+if(NOT TARGET rade)
+    message(FATAL_ERROR "RADE library target 'rade' not found after add_subdirectory(third_party/rade)")
+endif()
+
+target_link_libraries(NereusSDRObjs PUBLIC rade)
+target_include_directories(NereusSDRObjs PUBLIC
+    ${CMAKE_SOURCE_DIR}/third_party/rade/src
+    ${CMAKE_BINARY_DIR}/third_party/rade/build_opus-prefix/src/build_opus/include
+    ${CMAKE_BINARY_DIR}/third_party/rade/build_opus-prefix/src/build_opus/dnn
+    ${CMAKE_BINARY_DIR}/third_party/rade/build_opus-prefix/src/build_opus/celt
+    ${CMAKE_BINARY_DIR}/third_party/rade/build_opus-prefix/src/build_opus
+)
+
+# --------------------------------------------------------------------------
 # DeepFilterNet3 DFNR — pre-built neural noise reduction library (MIT/Apache-2.0)
 # Sub-epic C-1. Library is built by ./setup-deepfilter.sh (external to CMake
 # because the Rust build is slow + needs rustc). If the lib is absent at
