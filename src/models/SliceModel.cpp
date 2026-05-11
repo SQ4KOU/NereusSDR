@@ -1566,6 +1566,30 @@ void SliceModel::setVaxChannel(int ch)
     emit vaxChannelChanged(ch);
 }
 
+// ── Phase 3J-2 Task D5: per-slice live SNR (NereusSDR-native) ──
+//
+// Emits snrDbChanged only on actual value change:
+//   NaN    -> NaN              : no emission (signal stays absent)
+//   x      -> identical x      : no emission (no change)
+//   NaN    -> numeric          : emission (signal-acquired event)
+//   numeric -> NaN             : emission (signal-lost event)
+//   x      -> y (x != y)       : emission (normal update)
+//
+// NaN-aware comparison is required because IEEE NaN != NaN at the
+// hardware level, so a naive equality check would treat NaN -> NaN as
+// a change and spam emissions on every block when no signal is present.
+void SliceModel::setSnrDb(double db)
+{
+    const bool dbNan   = qIsNaN(db);
+    const bool prevNan = qIsNaN(m_snrDb);
+
+    if (dbNan && prevNan) { return; }                                // both NaN: no change
+    if (!dbNan && !prevNan && qFuzzyCompare(db, m_snrDb)) { return; }// both numeric and equal
+
+    m_snrDb = db;
+    emit snrDbChanged(db);
+}
+
 void SliceModel::loadFromSettings()
 {
     auto& s = AppSettings::instance();

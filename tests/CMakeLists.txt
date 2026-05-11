@@ -4157,3 +4157,21 @@ nereus_add_test(tst_freedv_station_model)
 # in SpotModel. Per design doc Phase D Task D4 + Section 2 (three-model
 # split). Fourth task of Phase D (Models).
 nereus_add_test(tst_rx_decode_model)
+
+# ── Phase 3J-2 Task D5: SliceModel snrDb Q_PROPERTY ─────────────────────────
+# Pins the contract that SliceModel exposes a snrDb Q_PROPERTY with NaN
+# default, emits snrDbChanged only on actual value change, and treats
+# NaN->NaN as no-change (no emission) per the design doc. RadeChannel
+# (Phase R) will populate this when slice mode is RADE; VfoWidget
+# (Phase L1) binds snrDbChanged to paint the SNR row in the flag.
+# Cases:
+#   initialSnrIsNaN          - default value is NaN (no SNR available)
+#   setSnrDbEmitsOnChange    - non-NaN write fires signal + updates getter
+#   setSnrDbNoEmitOnSameValue - identical numeric write = no re-emission
+#   setSnrDbNoEmitOnNaNToNaN - NaN -> NaN is a no-op (no emission)
+#   setSnrDbEmitOnNaNToValue - NaN -> 5.0 emits (signal-acquired event)
+#   setSnrDbEmitOnValueToNaN - 5.0 -> NaN emits (signal-lost event)
+# Source: NEW NereusSDR-native extension to SliceModel. No upstream
+# equivalent. Per design doc Phase D Task D5 + Phase L Task L1.
+# Fifth task of Phase D (Models).
+nereus_add_test(tst_slice_model_snr)
