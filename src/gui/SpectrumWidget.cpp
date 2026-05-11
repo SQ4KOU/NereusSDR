@@ -129,6 +129,8 @@
 
 #include <QDateTime>
 #include <QTimeZone>
+#include <QMap>
+#include <QMenu>
 #include <QPainter>
 #include <QPainterPath>
 #include <QResizeEvent>
@@ -2581,6 +2583,14 @@ void SpectrumWidget::paintEvent(QPaintEvent* event)
     drawGrid(p, specRect);
     drawSpectrum(p, specRect);
     drawWaterfall(p, wfRect);
+    // Phase 3J-2 Task E1: spot overlay between spectrum/waterfall and the
+    // VFO marker so the spot label tick + pill sit on top of the trace
+    // but below the slice/VFO marker chrome. Mirrors AetherSDR
+    // SpectrumWidget.cpp:3787 [@0cd4559] paint ordering
+    // (drawSpotMarkers between drawTnfMarkers and drawSliceMarkers).
+    if (m_showSpots) {
+        drawSpotMarkers(p, specRect);
+    }
     drawVfoMarker(p, specRect, wfRect);
     drawOffScreenIndicator(p, specRect, wfRect);
 
@@ -4512,6 +4522,214 @@ std::pair<int,int> SpectrumWidget::txAudioToIq(int audioLow, int audioHigh,
 // ---------------------------------------------------------------------------
 // drawTxFilterOverlay()
 //
+// ---------------------------------------------------------------------------
+// Spot overlay setter + render + cluster popup (Phase 3J-2 Task E1).
+// Port of AetherSDR src/gui/SpectrumWidget.cpp:4303-4672 [@0cd4559].
+// Algorithm preserved verbatim. NereusSDR divergences are local to the
+// coordinate helpers (NereusSDR uses hzToX(double hz, QRect) over Hz-units
+// and m_centerHz / m_bandwidthHz; AetherSDR's mhzToX(mhz) uses MHz units
+// and m_centerMhz / m_bandwidthMhz). Visibility test and tick / label /
+// cluster geometry mirror upstream byte-for-byte.
+// ---------------------------------------------------------------------------
+
+// From AetherSDR src/gui/SpectrumWidget.cpp:4303-4307 [@0cd4559]
+void SpectrumWidget::setSpotMarkers(const QVector<SpotMarker>& markers)
+{
+    m_spotMarkers = markers;
+    update();
+}
+
+// From AetherSDR src/gui/SpectrumWidget.cpp:4497-4633 [@0cd4559]
+void SpectrumWidget::drawSpotMarkers(QPainter& p, const QRect& specRect)
+{
+    if (m_spotMarkers.isEmpty()) {
+        m_spotClickRects.clear();
+        m_spotClusters.clear();
+        return;
+    }
+
+    QFont spotFont = p.font();
+    spotFont.setPixelSize(m_spotFontSize);
+    spotFont.setBold(true);
+    p.setFont(spotFont);
+    const QFontMetrics fm(spotFont);
+
+    // Starting Y position based on percentage setting
+    const int startY = specRect.top() + specRect.height() * m_spotStartPct / 100;
+    const int th = fm.height() + 2;
+    const int maxBottom = startY + th * m_spotMaxLevels;
+
+    // Track label positions to avoid overlap and for click detection
+    QVector<QRect> placed;
+    m_spotClickRects.clear();
+    m_spotClusters.clear();
+
+    // Track which spots overflow (can't be placed within max levels)
+    // Key: x pixel position (quantized to label width), Value: list of overflowed spots
+    QMap<int, QVector<SpotMarker>> overflowGroups;
+    constexpr int ClusterBinWidth = 40;  // pixels — spots within this range cluster together
+
+    for (const auto& spot : m_spotMarkers) {
+        // NereusSDR coordinate mapping: hzToX(double hz, QRect) takes Hz.
+        // AetherSDR upstream uses mhzToX(spot.freqMhz). Multiply by 1e6.
+        const int x = hzToX(spot.freqMhz * 1.0e6, specRect);
+        if (x < 0 || x > width()) continue;
+
+        // Color priority: override → DXCC → spot-provided → default cyan
+        QColor col(0x00, 0xb4, 0xd8);  // default cyan
+        if (m_spotOverrideColors) {
+            col = m_spotColor;
+        } else if (spot.dxccColor.isValid()) {
+            col = spot.dxccColor;
+        } else if (!spot.color.isEmpty() && spot.color.startsWith('#')) {
+            QColor parsed(spot.color);
+            if (parsed.isValid()) col = parsed;
+        }
+
+        // Draw callsign label
+        const QString label = spot.callsign;
+        const int tw = fm.horizontalAdvance(label) + 6;
+
+        // Start at configured position, nudge down to avoid overlap.
+        // Re-scan from the start after each nudge to handle cases where
+        // nudging past label A lands on top of label B.
+        QRect labelRect(x - tw / 2, startY, tw, th);
+        bool collision = true;
+        while (collision) {
+            collision = false;
+            for (const auto& r : placed) {
+                if (labelRect.intersects(r)) {
+                    labelRect.moveTop(r.bottom() + 1);
+                    collision = true;
+                    break;
+                }
+            }
+        }
+        // Overflow — collect for cluster badge
+        if (labelRect.bottom() > maxBottom) {
+            int bin = x / ClusterBinWidth;
+            overflowGroups[bin].append(spot);
+            continue;
+        }
+
+        // Draw vertical tick line from bottom of spectrum up to the label
+        p.setPen(QPen(QColor(col.red(), col.green(), col.blue(), 120), 1, Qt::DotLine));
+        p.drawLine(x, specRect.bottom(), x, labelRect.bottom());
+
+        placed.append(labelRect);
+        int mIdx = static_cast<int>(&spot - &m_spotMarkers[0]);
+        m_spotClickRects.append({labelRect, spot.freqMhz, mIdx});
+
+        // Background pill — only draw when override background is enabled (#768)
+        if (m_spotOverrideBg) {
+            int bgAlpha = m_spotBgOpacity * 255 / 100;
+            QColor bgCol = m_spotBgColor;
+            bgCol.setAlpha(bgAlpha);
+            p.setPen(Qt::NoPen);
+            p.setBrush(bgCol);
+            p.drawRoundedRect(labelRect, 3, 3);
+        }
+
+        // Text
+        p.setPen(col);
+        p.drawText(labelRect, Qt::AlignCenter, label);
+    }
+
+    // Draw cluster badges for overflow groups
+    if (!overflowGroups.isEmpty()) {
+        QFont badgeFont = spotFont;
+        badgeFont.setPixelSize(m_spotFontSize - 2);
+        p.setFont(badgeFont);
+        const QFontMetrics bfm(badgeFont);
+
+        for (auto it = overflowGroups.constBegin(); it != overflowGroups.constEnd(); ++it) {
+            const auto& spots = it.value();
+            if (spots.isEmpty()) continue;
+
+            // Position badge at average x of the group, at maxBottom
+            int avgX = 0;
+            for (const auto& s : spots) {
+                avgX += hzToX(s.freqMhz * 1.0e6, specRect);
+            }
+            avgX /= spots.size();
+
+            const QString badgeText = QString("+%1").arg(spots.size());
+            const int bw = bfm.horizontalAdvance(badgeText) + 10;
+            QRect badgeRect(avgX - bw / 2, maxBottom + 2, bw, th);
+
+            // Nudge horizontally to avoid overlapping other badges/labels
+            for (const auto& r : placed) {
+                if (badgeRect.intersects(r)) {
+                    badgeRect.moveLeft(r.right() + 3);
+                }
+            }
+            placed.append(badgeRect);
+
+            // Draw badge with distinct style
+            p.setPen(Qt::NoPen);
+            p.setBrush(QColor(0x30, 0x50, 0x70, 200));
+            p.drawRoundedRect(badgeRect, 3, 3);
+
+            p.setPen(QColor(0xff, 0xc0, 0x40));  // amber text
+            p.drawText(badgeRect, Qt::AlignCenter, badgeText);
+
+            // Store for click detection
+            SpotCluster cluster;
+            cluster.rect = badgeRect;
+            cluster.spots = spots;
+            m_spotClusters.append(cluster);
+        }
+
+        p.setFont(spotFont);  // restore spot font
+    }
+
+    p.setFont(QFont());  // restore default
+}
+
+// From AetherSDR src/gui/SpectrumWidget.cpp:4635-4672 [@0cd4559]
+void SpectrumWidget::showSpotClusterPopup(const SpotCluster& cluster, const QPoint& globalPos)
+{
+    auto* menu = new QMenu(this);
+    menu->setStyleSheet(
+        "QMenu {"
+        "  background: #0f0f1a;"
+        "  border: 1px solid #305070;"
+        "  padding: 4px;"
+        "}"
+        "QMenu::item {"
+        "  color: #c8d8e8;"
+        "  padding: 4px 12px;"
+        "  font-size: 12px;"
+        "}"
+        "QMenu::item:selected {"
+        "  background: #1a3a5a;"
+        "  color: #00b4d8;"
+        "}");
+
+    for (const auto& spot : cluster.spots) {
+        QString text = QString("%1  %2 kHz")
+            .arg(spot.callsign, -10)
+            .arg(spot.freqMhz * 1000.0, 0, 'f', 1);
+        if (!spot.mode.isEmpty()) {
+            text += "  " + spot.mode;
+        }
+        auto* action = menu->addAction(text);
+        connect(action, &QAction::triggered, this, [this, spot] {
+            // NereusSDR signal contract: frequencyClicked(double hz).
+            // AetherSDR emits MHz; multiply by 1e6 to match the Hz signature.
+            const double freqHz = spot.freqMhz * 1.0e6;
+            emit frequencyClicked(freqHz);
+            if (spot.source == "Memory") {
+                emit spotTriggered(spot.index);
+            }
+        });
+    }
+
+    menu->popup(globalPos);
+    // QMenu self-deletes on close with WA_DeleteOnClose
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+}
+
 // Plan 4 D9 (Cluster E).  Panadapter TX filter band fill + border lines +
 // inline label.  Always drawn when m_txFilterVisible is set (called from the
 // main paint sequence regardless of MOX state — Thetis shows the TX filter
@@ -4983,6 +5201,36 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* event)
     if (event->button() != Qt::LeftButton) {
         QWidget::mousePressEvent(event);
         return;
+    }
+
+    // Phase 3J-2 Task E1: spot label / cluster badge hit-test.
+    // Click on a spot label → tune to that frequency and notify spot
+    // sources via spotTriggered(index). Click on a cluster badge (+N)
+    // → show popup menu of the collapsed spots.
+    // From AetherSDR src/gui/SpectrumWidget.cpp:1623-1644 [@0cd4559]
+    if (m_showSpots) {
+        const QPoint pos(mx, my);
+        for (const auto& hr : m_spotClickRects) {
+            if (hr.rect.contains(pos)) {
+                // NereusSDR signal contract: frequencyClicked(double hz).
+                // AetherSDR emits MHz; multiply by 1e6 to match Hz signature.
+                emit frequencyClicked(hr.freqMhz * 1.0e6);
+                // Notify the radio that a spot was clicked (#341)
+                if (hr.markerIndex >= 0 && hr.markerIndex < m_spotMarkers.size()) {
+                    emit spotTriggered(m_spotMarkers[hr.markerIndex].index);
+                }
+                event->accept();
+                return;
+            }
+        }
+        // Click on a cluster badge → show popup with collapsed spots
+        for (const auto& cluster : m_spotClusters) {
+            if (cluster.rect.contains(pos)) {
+                showSpotClusterPopup(cluster, mapToGlobal(pos));
+                event->accept();
+                return;
+            }
+        }
     }
 
     // 1. dBm scale strip — right edge. Arrow row adjusts ref level,
@@ -5843,6 +6091,13 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
             p.fillRect(0, specH, w, kDividerH, QColor(0x30, 0x40, 0x50));
             drawFreqScale(p, QRect(0, specH + kDividerH, w - effectiveStripW(), kFreqScaleH));
             drawTimeScale(p, wfRectFull);
+            // Phase 3J-2 Task E1: spot overlay before VFO marker so labels
+            // sit below the slice marker chrome. Mirrors the CPU paintEvent
+            // ordering and AetherSDR SpectrumWidget.cpp:3787 [@0cd4559]
+            // (drawSpotMarkers between trace and drawSliceMarkers).
+            if (m_showSpots) {
+                drawSpotMarkers(p, specRect);
+            }
             drawVfoMarker(p, specRect, wfRect);
             drawOffScreenIndicator(p, specRect, wfRect);
 

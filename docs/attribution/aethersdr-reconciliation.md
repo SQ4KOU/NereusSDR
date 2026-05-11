@@ -427,6 +427,56 @@ row 0; default cap of 500 spots. `BandFilterProxy` is a
 | `src/models/BandFilterProxy.h` | `src/gui/DxClusterDialog.h:62-75` | Port-citation header names AetherSDR `src/gui/DxClusterDialog.h:62-75`. Phase 3J-2 Task D2. Class skeleton ported byte-for-byte; namespace AetherSDR -> NereusSDR. Public surface (`setBandVisible(QString, bool)`, `isBandVisible(QString) const`) and protected `filterAcceptsRow` override preserved verbatim. Internal `QSet<QString> m_hiddenBands` membership semantics preserved verbatim (band added to set -> hidden; absent -> visible). NereusSDR divergence: extracted from inline-in-dialog-header to standalone `src/models/` file so the SpotHubDialog (Phase F) can reuse it. Inline cite at `BandFilterProxy` class (`:62-75`). | "BandFilterProxy ported from AetherSDR `src/gui/DxClusterDialog.h:62-75` + `src/gui/DxClusterDialog.cpp:208-226` [@0cd4559]. Class lived inline in AetherSDR's dialog header upstream; extracted to a standalone `src/models/` file so the SpotHubDialog (Phase F) can reuse it. Public surface, protected `filterAcceptsRow` override, and `QSet<QString>` membership semantics preserved verbatim." |
 | `src/models/BandFilterProxy.cpp` | `src/gui/DxClusterDialog.cpp:208-226` | Port-citation header names AetherSDR `src/gui/DxClusterDialog.cpp:208-226`. Phase 3J-2 Task D2. Inline cites at `setBandVisible` (`:208-215`, toggles `m_hiddenBands.insert(band)` / `.remove(band)` based on visibility flag and calls `invalidateFilter()`), and `filterAcceptsRow` (`:217-226`, empty `m_hiddenBands` -> always accept fast path; otherwise looks up `SpotTableModel::ColBand` `DisplayRole` for the source row; empty band string -> always show; otherwise membership check `!m_hiddenBands.contains(band)`). Empty-set fast path, empty-band always-show fall-through, and the membership-check semantics preserved verbatim. No NereusSDR-side logic divergences; the proxy is pure filter logic with no logging or settings interactions. | "Same as `BandFilterProxy.h` above. `setBandVisible` (toggles `QSet` membership and reinvalidates the filter) and `filterAcceptsRow` (empty-set fast path, empty-band always-show, otherwise membership check against `SpotTableModel::ColBand` `DisplayRole`) are byte-for-byte from upstream. No logging or settings interactions." |
 
+### Phase 3J-2 Task E1 - SpectrumWidget drawSpotMarkers + click hit-test
+
+Added 2026-05-11. First task of Phase E (panadapter spot overlay).
+Extends the existing `src/gui/SpectrumWidget.{h,cpp}` (NereusSDR's
+multi-source Thetis + AetherSDR widget; see Bucket C entries) with the
+upstream spot-overlay subsystem: three nested structs (`SpotMarker`,
+`SpotCluster`, `SpotHitRect`), the public setter / config API
+(`setSpotMarkers`, `setShowSpots`, `setSpotFontSize`, `setSpotMaxLevels`,
+`setSpotStartPct`, `setSpotOverrideColors`, `setSpotOverrideBg`,
+`setSpotColor`, `setSpotBgColor`, `setSpotBgOpacity`), the new
+`spotTriggered(int)` signal, the `drawSpotMarkers` render method, and
+the `showSpotClusterPopup` cluster-badge popup. The widget's existing
+`paintEvent` (CPU path) and GPU overlay rebuild block both gain a
+`drawSpotMarkers` call between the spectrum / waterfall layers and the
+VFO marker, mirroring AetherSDR's ordering. `mousePressEvent` gains a
+spot-label + cluster-badge hit-test before the existing dBm-strip /
+divider / freq-scale / filter-edge / pan-drag chain.
+
+| NereusSDR file | AetherSDR counterpart | Evidence | Specific mod-history wording |
+|---|---|---|---|
+| `src/gui/SpectrumWidget.h` (E1 extension) | `src/gui/SpectrumWidget.h:283-294, 297-300, 302-311, 327, 387-388, 635-651` | Three nested structs preserved verbatim: `SpotMarker` (10 fields: `index`, `callsign`, `freqMhz`, `color`, `mode`, `dxccColor`, `source`, `spotterCallsign`, `comment`, `timestampMs`), `SpotCluster` (`rect`, `spots`), `SpotHitRect` (`rect`, `freqMhz`, `markerIndex`). Public setter / config surface (`setSpotMarkers`, `setShowSpots`, `setSpotFontSize`, `setSpotMaxLevels`, `setSpotStartPct`, `setSpotOverrideColors`, `setSpotOverrideBg`, `setSpotColor`, `setSpotBgColor`, `setSpotBgOpacity`) preserved verbatim. New `spotTriggered(int)` signal added beside the existing `frequencyClicked(double hz)` signal. Private member defaults preserved verbatim: `m_showSpots{true}`, `m_spotFontSize{16}`, `m_spotMaxLevels{3}`, `m_spotStartPct{50}`, `m_spotOverrideColors{false}`, `m_spotOverrideBg{true}`, `m_spotColor{Qt::yellow}`, `m_spotBgColor{Qt::black}`, `m_spotBgOpacity{48}`. Private method declarations `drawSpotMarkers(QPainter&, QRect)` and `showSpotClusterPopup(SpotCluster, QPoint)` mirror upstream. NereusSDR-only additions: three `*ForTest()` const accessors (`spotMarkersForTest`, `spotClickRectsForTest`, `spotClustersForTest`) plus a `drawSpotMarkersForTest` shim so `tests/tst_spot_overlay_render` can assert geometry without granting friend access. Inline cites at the three struct definitions, the public-surface block, the signal, the private method declarations, and the private member variable declarations. | "Spot-overlay subsystem added to the existing `SpectrumWidget.{h,cpp}` per Phase 3J-2 Task E1, porting AetherSDR `src/gui/SpectrumWidget.{h,cpp}` [@0cd4559] (drawSpotMarkers + showSpotClusterPopup at `:4497-4633` and `:4635-4672`; struct definitions at `:283-300, 635-639`; public surface at `:302-311`; signal at `:327`). Three structs, public surface, signal, and private member defaults preserved verbatim. NereusSDR additions: three `*ForTest()` const accessors and one `drawSpotMarkersForTest` shim for unit tests; the `frequencyClicked(double hz)` signal stays in Hz units (the cluster popup and click hit-test multiply `freqMhz * 1e6` to match the existing Hz wire signature)." |
+| `src/gui/SpectrumWidget.cpp` (E1 extension) | `src/gui/SpectrumWidget.cpp:1623-1644, 3787, 4303-4307, 4497-4633, 4635-4672` | Five new method bodies: `setSpotMarkers` (`:4303-4307`, replaces `m_spotMarkers` and triggers `update()` instead of upstream's `markOverlayDirty()` because NereusSDR's overlay cache invalidation hooks aren't wired in for the spot path on initial port), `drawSpotMarkers` (`:4497-4633`, full collision-avoiding multi-level stacker + overflow cluster + tick + pill + label algorithm), and `showSpotClusterPopup` (`:4635-4672`, popup menu with formatted spot lines). Per-method coordinate-helper substitution: AetherSDR `mhzToX(spot.freqMhz)` becomes NereusSDR `hzToX(spot.freqMhz * 1.0e6, specRect)` to match NereusSDR's Hz-based coordinate helper. Click handler `emit frequencyClicked(spot.freqMhz)` becomes `emit frequencyClicked(spot.freqMhz * 1.0e6)` to match NereusSDR's Hz-based signal signature. Default cyan colour (`#00b4d8`), DXCC color priority chain, override-color fallback, override-background pill alpha math (`m_spotBgOpacity * 255 / 100`), vertical dotted-tick pen (1px dotted, RGB from spot color + alpha 120), maxBottom = startY + th * m_spotMaxLevels overflow threshold, 40-px `ClusterBinWidth` for overflow grouping, cluster badge styling (`QColor(0x30,0x50,0x70,200)` filled, `QColor(0xff,0xc0,0x40)` amber text), and popup menu stylesheet (`#0f0f1a` background, `#305070` border, `#c8d8e8` text, `#1a3a5a` hover) preserved verbatim from upstream. CPU `paintEvent` paint sequence gains `drawSpotMarkers(p, specRect)` between `drawWaterfall` and `drawVfoMarker` (mirrors upstream paint ordering at `:3787` placing the spot overlay between TNF and slice markers). GPU overlay rebuild block gains the same call site. `mousePressEvent` gains the spot click hit-test loop (`:1623-1644`) right after the `event->button() != Qt::LeftButton` guard, before the dBm-strip / divider / freq-scale / filter-edge / pan-drag chain. New `<QMap>` + `<QMenu>` includes added alongside existing Qt headers. | "Same as `SpectrumWidget.h` above. Five new method bodies (`setSpotMarkers`, `drawSpotMarkers`, `showSpotClusterPopup` + their call-site wires in `paintEvent` / GPU overlay rebuild / `mousePressEvent`). Color-priority chain, multi-level vertical stacker with re-scan-from-top on collision, overflow into `+N` cluster badges at `maxBottom + 2`, 40-px ClusterBinWidth, vertical dotted tick, optional background pill, cluster badge styling, and popup menu stylesheet preserved verbatim from AetherSDR `src/gui/SpectrumWidget.cpp:4497-4633` [@0cd4559]. NereusSDR coordinate-helper substitution: `mhzToX(freqMhz)` becomes `hzToX(freqMhz * 1e6, specRect)`; the `frequencyClicked` click handler multiplies `freqMhz * 1e6` so the existing Hz-based signal contract continues to work. `setSpotMarkers` uses `update()` instead of upstream's `markOverlayDirty()` because NereusSDR's overlay-cache invalidation hooks aren't wired for the spot path on initial port (full wire-up lands when SpotHub setup wires `setShowSpots` + the per-source colour toggles)." |
+
+Companion test file `tests/tst_spot_overlay_render.cpp` (NOT listed in
+Bucket A, mirroring the precedent of every other Phase 3J-2 test:
+`tst_spot_model`, `tst_spot_table_model`, `tst_dx_cluster_client`,
+`tst_pota_client`, `tst_wsjtx_decoder`, `tst_freedv_reporter_client`,
+`tst_psk_reporter_client`, `tst_cty_dat_parser`, `tst_adif_parser`,
+`tst_dxcc_worked_status`, `tst_dxcc_color_provider`,
+`tst_freedv_station_model`, `tst_rx_decode_model`, `tst_slice_model_snr`).
+Six tests pinning the upstream algorithm contract:
+`emptyOverlayDrawsNothing` (empty `m_spotMarkers` -> zero click rects +
+zero clusters), `singleSpotDrawsOneLabel` (one in-range spot -> one
+click rect with correct `freqMhz` + `markerIndex`),
+`overlappingSpotsStackVertically` (3 collisions at the same Hz -> 3
+click rects with strictly increasing `top()`),
+`overflowSpotsBecomeClusterBadge` (8 spots with `setSpotMaxLevels(2)`
+-> 2 click rects + 1 cluster of 6), `clickRectAtSpotXTuneable` (rect
+center hit-test contains the marker x), `rejectsBeyondVisibleRange`
+(spots outside `m_centerHz ± bandwidthHz/2` dropped, only in-range
+spot produces a click rect). Test seam is the public
+`drawSpotMarkersForTest(QPainter&, QRect)` shim + the three `*ForTest()`
+const accessors so the tests can inspect post-render state without
+granting `friend` access. Render path renders into an offscreen
+`QImage` via a `QPainter`. Fixture callsigns (`TEST1..TEST9`,
+`OVR1..OVR8`, `TESTLO`, `TESTHI`) are fabricated so the collision and
+overflow paths can be exercised deterministically without real amateur
+callsigns; `no-port-check` header set with the precedent list (B2-B6,
+C1-C4, D1-D5).
+
 ---
 
 ## Bucket B — False AetherSDR citations (126 files)

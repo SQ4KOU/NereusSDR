@@ -4175,3 +4175,20 @@ nereus_add_test(tst_rx_decode_model)
 # equivalent. Per design doc Phase D Task D5 + Phase L Task L1.
 # Fifth task of Phase D (Models).
 nereus_add_test(tst_slice_model_snr)
+
+# ── Phase 3J-2 Task E1: SpectrumWidget spot overlay render ─────────────────
+# Pins the contract that drawSpotMarkers places spot labels with
+# collision-avoiding multi-level stacking, overflows into +N cluster
+# badges at maxBottom + 2 (40 px ClusterBinWidth), and exposes
+# click-to-tune hit-test rectangles via spotClickRectsForTest() plus
+# cluster badge rectangles via spotClustersForTest(). Six tests:
+#   emptyOverlayDrawsNothing - empty marker vector emits zero rects
+#   singleSpotDrawsOneLabel - one in-range spot -> one click rect
+#   overlappingSpotsStackVertically - 3 collisions stack down (y0<y1<y2)
+#   overflowSpotsBecomeClusterBadge - 8 spots, max 2 levels -> 1 cluster of 6
+#   clickRectAtSpotXTuneable - rect center contains hit point
+#   rejectsBeyondVisibleRange - spots outside m_centerHz +/- bw/2 dropped
+# Source: AetherSDR src/gui/SpectrumWidget.cpp:4497-4633 [@0cd4559]
+# (drawSpotMarkers + showSpotClusterPopup). First task of Phase E
+# (panadapter spot overlay).
+nereus_add_test(tst_spot_overlay_render)
