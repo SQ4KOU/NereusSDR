@@ -402,6 +402,12 @@ public:
     // --- Slice coupling (for mode container binding only) ---
     void setSlice(SliceModel* slice);
 
+    // --- Test seams for SNR row (Phase 3R L1) ---
+    // Exposed so tst_vfo_widget_snr can verify text/colour/visibility
+    // contracts without depending on geometry-sensitive layout queries.
+    QLabel* snrLabelForTest()      const { return m_snrLabel; }
+    QLabel* snrValueLabelForTest() const { return m_snrValue; }
+
     // --- Stage C2: FilterPresetStore coupling ---
     // When set, rebuildFilterButtons reads user overrides from the store and
     // the right-click context menu on each filter button opens the edit dialog.
@@ -502,6 +508,8 @@ private:
     void buildHeaderRow();
     void buildFrequencyRow();
     void buildSmeterRow();
+    void buildSnrRow();        // Phase 3R L1 — RADE SNR display
+    void updateSnrVisibility();  // Phase 3R L1 — show/hide based on mode
     void buildTabBar();
     void buildAudioTab();
     void buildDspTab();
@@ -570,6 +578,18 @@ private:
 
     // --- S-meter row ---
     VfoLevelBar* m_levelBar{nullptr};
+
+    // --- SNR row (Phase 3R L1) ---
+    // Surfaces SliceModel::snrDb (set by RadeChannel via I5 routing).
+    // Two labels: "SNR" (static text) + value ("+N dB" / " -   - ").
+    // Row visibility tracks m_currentMode == DSPMode::RADE.
+    QLabel* m_snrLabel{nullptr};
+    QLabel* m_snrValue{nullptr};
+    QWidget* m_snrRow{nullptr};  // parent row for show/hide
+    // Slot wired to SliceModel::snrDbChanged. Updates m_snrValue text
+    // + stylesheet color (grey/yellow/green) based on NaN-state and the
+    // 5 dB threshold.
+    void onSnrChanged(double db);
 
     // --- Tab bar ---
     QList<QPushButton*> m_tabButtons;

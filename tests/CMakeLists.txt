@@ -4243,6 +4243,20 @@ nereus_add_test(tst_slice_model_snr)
 # RadeChannel from I1-I3 instead of WDSP's RxChannel.
 nereus_add_test(tst_dspmode_rade)
 
+# ── Phase 3R Task L1: VfoWidget SNR row ─────────────────────────────────────
+# Pins the contract that VfoWidget surfaces the active slice's snrDb
+# Q_PROPERTY (set by RadeChannel via I5 routing) as a dim-grey /
+# yellow / green text row, visible only when the slice's mode is
+# DSPMode::RADE. NereusSDR-native UI extension; no upstream
+# equivalent.
+# Cases:
+#   nanShowsDashesInGrey      - NaN -> " -   - " in #7a8088
+#   lowSnrShowsYellow         - 3.0 dB -> "+3 dB" in #e6c200
+#   goodSnrShowsGreen         - 12.0 dB -> "+12 dB" in #4caf50
+#   negativeSnrFormats        - -1.0 dB -> "-1 dB" (no double-sign)
+#   snrHiddenInNonRadeMode    - USB hides row; RADE shows it.
+nereus_add_test(tst_vfo_widget_snr)
+
 # ── Phase 3J-2 Task E1: SpectrumWidget spot overlay render ─────────────────
 # Pins the contract that drawSpotMarkers places spot labels with
 # collision-avoiding multi-level stacking, overflows into +N cluster

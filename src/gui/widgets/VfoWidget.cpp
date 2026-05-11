@@ -417,6 +417,7 @@ void VfoWidget::buildUI()
     buildHeaderRow();
     buildFrequencyRow();
     buildSmeterRow();
+    buildSnrRow();       // Phase 3R L1 — hidden unless mode == RADE
     buildTabBar();
 
     // Tab content stacked widget — HIDDEN by default (compact flag)
@@ -654,6 +655,90 @@ void VfoWidget::buildSmeterRow()
     m_levelBar = new VfoLevelBar(this);
     m_levelBar->setValue(float(m_smeterDbm));  // seed with cached value (default -127)
     static_cast<QVBoxLayout*>(layout())->addWidget(m_levelBar);
+}
+
+// Phase 3R L1 — SNR row for RADE mode.
+//
+// Layout: ["SNR" label] <stretch> [value label "+N dB" / " -   - "]
+//
+// Hidden when m_currentMode is not DSPMode::RADE (SNR is only meaningful
+// for the RADE neural codec; LSB/USB/CW/etc. produce no SNR estimate).
+// The slice's snrDb Q_PROPERTY (D5) is the data source; RadeChannel
+// (I5 routing) populates it via SliceModel::setSnrDb. setSlice() wires
+// the snrDbChanged connection.
+//
+// Colours:
+//   NaN          -> #7a8088 (dim grey, "no sync / no data" placeholder)
+//   db <  5.0 dB -> #e6c200 (yellow, marginal copy)
+//   db >= 5.0 dB -> #4caf50 (green, solid copy)
+void VfoWidget::buildSnrRow()
+{
+    m_snrRow = new QWidget(this);
+    auto* rowLayout = new QHBoxLayout(m_snrRow);
+    rowLayout->setContentsMargins(0, 0, 0, 0);
+    rowLayout->setSpacing(4);
+
+    m_snrLabel = new QLabel(QStringLiteral("SNR"), m_snrRow);
+    m_snrLabel->setStyleSheet(
+        QStringLiteral("QLabel { color: #7a8088; font-size: 11px; "
+                       "font-weight: bold; background: transparent; }"));
+
+    // Default placeholder text shown when no SNR is available (RadeChannel
+    // not yet emitting / slice in NaN state). The doubled spaces between
+    // the dashes make the placeholder readable as "no value" at a glance.
+    m_snrValue = new QLabel(QStringLiteral(" -   - "), m_snrRow);
+    m_snrValue->setStyleSheet(
+        QStringLiteral("QLabel { color: #7a8088; font-size: 11px; "
+                       "font-weight: bold; background: transparent; }"));
+
+    rowLayout->addWidget(m_snrLabel);
+    rowLayout->addStretch(1);
+    rowLayout->addWidget(m_snrValue);
+
+    static_cast<QVBoxLayout*>(layout())->addWidget(m_snrRow);
+
+    // Hidden by default — only RADE mode reveals the row.
+    m_snrRow->setVisible(false);
+    m_snrLabel->setVisible(false);
+    m_snrValue->setVisible(false);
+}
+
+void VfoWidget::updateSnrVisibility()
+{
+    const bool isRade = (m_currentMode == DSPMode::RADE);
+    if (m_snrRow)   { m_snrRow->setVisible(isRade); }
+    if (m_snrLabel) { m_snrLabel->setVisible(isRade); }
+    if (m_snrValue) { m_snrValue->setVisible(isRade); }
+}
+
+void VfoWidget::onSnrChanged(double db)
+{
+    if (!m_snrValue) {
+        return;
+    }
+    if (qIsNaN(db)) {
+        m_snrValue->setText(QStringLiteral(" -   - "));
+        m_snrValue->setStyleSheet(
+            QStringLiteral("QLabel { color: #7a8088; font-size: 11px; "
+                           "font-weight: bold; background: transparent; }"));
+        return;
+    }
+    // Integer-rounded, signed display ("+3 dB", "-1 dB", "+12 dB").
+    const int rounded = static_cast<int>(std::lround(db));
+    // QString::asprintf %+d emits "+N" for non-negative and "-N" for negative
+    // (single sign char, no double-sign drift).
+    const QString text = QString::asprintf("%+d dB", rounded);
+    m_snrValue->setText(text);
+
+    // Threshold 5 dB: below = yellow (marginal copy), >= 5 = green (solid copy).
+    // The threshold is a NereusSDR UX choice; RADE's published acquisition
+    // floor is ~-2 dB so anything above ~5 dB is comfortably copyable.
+    const QString colour = (db < 5.0) ? QStringLiteral("#e6c200")
+                                      : QStringLiteral("#4caf50");
+    m_snrValue->setStyleSheet(
+        QStringLiteral("QLabel { color: %1; font-size: 11px; "
+                       "font-weight: bold; background: transparent; }")
+            .arg(colour));
 }
 
 void VfoWidget::buildTabBar()
@@ -1659,6 +1744,7 @@ void VfoWidget::setMode(DSPMode mode)
     }
     rebuildFilterButtons(mode);
     applyModeVisibility(mode);    // S1.9 — model-driven mode change
+    updateSnrVisibility();        // Phase 3R L1 — show SNR row only in RADE
     m_updatingFromModel = false;
 }
 
@@ -2047,6 +2133,18 @@ void VfoWidget::setSlice(SliceModel* slice)
         connect(slice, &SliceModel::activeNrChanged,
                 this, &VfoWidget::onActiveNrChanged);
         onActiveNrChanged(slice->activeNr());
+    }
+
+    // Phase 3R L1: SNR row binding. RadeChannel pushes snrDb via the
+    // I5 signal-graph (RadeChannel::snrChanged -> RadioModel::onRadeSnrChanged
+    // -> SliceModel::setSnrDb). The slice's snrDbChanged is the
+    // edge-triggered source we paint from. Seed with the current value
+    // so a slice rebinding after a previous SNR update shows the right
+    // text immediately.
+    if (slice) {
+        connect(slice, &SliceModel::snrDbChanged,
+                this, &VfoWidget::onSnrChanged);
+        onSnrChanged(slice->snrDb());
     }
 
     // VAX selector — bidirectional wiring (Phase 3O Sub-Phase 8 Task 8.2)
