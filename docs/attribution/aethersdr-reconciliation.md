@@ -848,6 +848,116 @@ then decode round-trip" contract is bench-verified at the Phase
 3R N2 matrix because it requires both ends of the codec working
 end-to-end on real radio hardware.
 
+### Phase 3R Task I4 - RadeText (callsign-over-EOO wrapper)
+
+The Phase 3R plan originally called for I4 to port `freedv-gui`
+`src/pipeline/rade_text.{h,c}` verbatim and wrap it with a Qt6
+shell, mirroring how I1/I2/I3 ported `RADEReceiveStep` /
+`RADETransmitStep`. The review that opened I4 surfaced two
+problems with that path:
+
+1. **freedv-gui's `rade_text.c` is not self-contained.** It
+   transitively pulls in roughly 1500 lines of codec2
+   dependencies (`gp_interleaver.{h,c}`, `ldpc_codes.{h,c}` +
+   12 LDPC tables, `mpdecode_core.{h,c}`, `ofdm_internal.h` and
+   transitive headers, `ulog.h`) that are not currently in the
+   NereusSDR tree. Pulling them in would expand the third-party
+   surface meaningfully and require a separate vendoring +
+   provenance pass.
+2. **The actual call surface is the EOO (End-Of-Over) soft-bit
+   channel, not a free-form feature stream.** freedv-gui's
+   `RADEReceiveStep.cpp:225` calls
+   `rade_text_rx(textPtr_, eooOut_, rade_n_eoo_bits(dv_) / 2)`
+   and `freedv_interface.cpp:709` calls
+   `rade_text_generate_tx_string(...)` followed by
+   `rade_tx_set_eoo_bits(rade, eooSyms)`. Both sides sit on the
+   EOO channel, not the feature stream the plan's narrative
+   implied.
+
+Given that the already-vendored `third_party/rade` library
+exposes a working callsign-over-EOO channel via
+`rade_tx_set_eoo_callsign` /
+`rade_rx_get_eoo_callsign` (declared at
+`third_party/rade/src/rade_api.h:120-145` [@b289102] and
+implemented at `third_party/rade/src/rade_api_nopy.c:159-201`
+[@b289102]) with no extra dependencies, NereusSDR uses that
+surface instead of porting freedv-gui's `rade_text.c`.
+
+Consequently `src/core/RadeText.{h,cpp}` is **NereusSDR-native**:
+no AetherSDR derivation (AetherSDR does not surface the EOO text
+channel; the `rxTextDecoded` signal on AetherSDR's `RADEEngine`
+is a stub) and **no freedv-gui derivation** (the underlying RADE
+C library is what does the encode / decode work, and the wrapper
+on top is original NereusSDR code). The file is therefore NOT a
+Bucket A entry here and NOT a row in
+`docs/attribution/FREEDV-GUI-PROVENANCE.md`. The underlying
+RADE library is BSD-2-Clause and is already attributed via
+`third_party/rade/LICENSE` and the `third_party/rade/` vendor
+block in the root `CMakeLists.txt`.
+
+Trade-offs vs the freedv-gui `rade_text.c` path the plan
+originally targeted:
+
+- **No LDPC FEC** on the callsign bits. The RADE EOO channel is
+  bare 7-bit ASCII; the freedv-gui channel runs an LDPC code
+  over the bits, which is more robust at low SNR.
+- **No CRC** on the message; per-message integrity is a future
+  enhancement.
+- **No grid square.** The RADE EOO channel exposes at most
+  `RADE_EOO_CALLSIGN_MAX = 8` characters via the convenience
+  API. The full 180-bit EOO frame has room for more, but a
+  grid-square channel would need a separate format-design pass
+  over the leftover bits and is deferred to a future task.
+
+**Important deviation from the I1 prose at lines 681-687 above:**
+the I1 forward stub prose anticipated that I4 would add
+`src/core/RadeText.h` (and a sibling `.cpp`) to **this Bucket A
+table**. That expectation no longer holds: the I4 review (above)
+concluded the realistic implementation is a NereusSDR-native
+wrapper around `third_party/rade`'s native API, not a port of
+freedv-gui's `rade_text.c` (or any AetherSDR surface). The two
+files are therefore deliberately **NOT listed in the Bucket A
+table** for any task. They have no AetherSDR counterpart and
+no upstream-license posture beyond the BSD-2-Clause of the
+RADE library they call.
+
+Files added in this task (NereusSDR-native; no Bucket A row):
+
+- `src/core/RadeText.h`: public API surface (`setOurCallsign`
+  / `ourCallsign` / `pushTxCallsign(struct rade*)` /
+  `processRxEooBits(const float*, int)` / `textDecoded(QString)`
+  signal). NereusSDR-native shape designed around the
+  third_party/rade callsign-over-EOO API. The class owns no
+  rade state; callers pass the active `struct rade*` from
+  `RadeChannel` when encoding, and pass raw EOO soft-decision
+  bits when decoding.
+- `src/core/RadeText.cpp`: two short forwarders to
+  `rade_tx_set_eoo_callsign` (with upper-case + truncation to
+  `RADE_EOO_CALLSIGN_MAX`) and `rade_rx_get_eoo_callsign` (with
+  empty-string filter on the decoded value). Inline cites
+  point at the third_party/rade API at `rade_api.h:120-145`
+  [@b289102] and `rade_api_nopy.c:159-201` [@b289102].
+
+The companion `RadeChannel.h` is unchanged: `m_textChannel`
+remains a forward-declared `std::unique_ptr<RadeText>` member
+whose destructor is well-defined now that `RadeText` is a
+real class. Wire-up into `RadeChannel::processIq` (the
+`has_eoo_out` branch of `rade_rx`) and
+`RadeChannel::txEncode` (the MOX-on branch that calls
+`rade_tx_set_eoo_callsign` followed by `rade_tx_eoo`) is
+deferred to **Phase L** per the plan.
+
+Companion test file `tests/tst_rade_text.cpp` pins five
+contracts: `constructsAndIsEmpty`,
+`setOurCallsignStoresValue`, `pushTxNullRadeIsNoOp`,
+`pushTxEmptyCallsignIsNoOp`,
+`roundTripDecodesEncodedCallsign`. The headline test does a
+bit-level round-trip (no OFDM mod/demod) because the wrapper
+only sits on `set_eoo_callsign` /
+`get_eoo_callsign`; the full OFDM round-trip is exercised
+separately by the upstream
+`third_party/rade/src/rade_callsign_test.c` executable.
+
 ---
 
 ## Bucket B — False AetherSDR citations (126 files)

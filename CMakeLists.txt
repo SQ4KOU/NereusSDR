@@ -423,6 +423,7 @@ set(CORE_SOURCES
     src/core/RxChannel.cpp
     src/core/TxChannel.cpp
     src/core/RadeChannel.cpp
+    src/core/RadeText.cpp
     src/core/Resampler.cpp
     src/core/PsFeedbackChannel.cpp
     src/core/PureSignal.cpp

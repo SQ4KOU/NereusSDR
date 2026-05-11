@@ -4292,3 +4292,26 @@ nereus_add_test(tst_rade_channel)
 # convenience helpers. Approximate sample-count checks because r8brain
 # CDSPResampler24 has nontrivial internal latency.
 nereus_add_test(tst_resampler)
+
+# ── Phase 3R Task I4: RadeText (callsign-over-EOO wrapper) ────────────────
+# Pins the five contracts of the thin Qt6 wrapper around the
+# third_party/rade callsign-over-EOO channel
+# (rade_tx_set_eoo_callsign / rade_rx_get_eoo_callsign, declared in
+# third_party/rade/src/rade_api.h:120-145 [@b289102]):
+#   constructsAndIsEmpty             fresh wrapper has empty ourCallsign
+#   setOurCallsignStoresValue        getter returns the value the setter
+#                                    stashed; lower / upper / empty all
+#                                    round-trip unchanged
+#   pushTxNullRadeIsNoOp             pushTxCallsign(nullptr) is safe
+#                                    (RadeChannel's m_rade is null
+#                                    between stop() and start())
+#   pushTxEmptyCallsignIsNoOp        pushTxCallsign on an empty stash
+#                                    must not clobber rade_tx.eoo_bits
+#   roundTripDecodesEncodedCallsign  setOurCallsign + pushTxCallsign +
+#                                    processRxEooBits emits
+#                                    textDecoded("KG4VCF") once
+# The headline test does a bit-level round-trip (no OFDM mod/demod)
+# because the wrapper only sits on set_eoo_callsign / get_eoo_callsign;
+# the full OFDM round-trip is exercised separately by the upstream
+# third_party/rade/src/rade_callsign_test.c executable.
+nereus_add_test(tst_rade_text)
