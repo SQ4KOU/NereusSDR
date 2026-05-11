@@ -313,6 +313,13 @@ warren@wpratt.com
 // wireRadeChannel().
 #include "core/RadeChannel.h"
 
+// Phase 3R K-bench: Resampler used to upsample RADE's 24 kHz baseband
+// to the connection's TX I/Q rate (P1=48 kHz, P2=192 kHz).
+// TxWorkerThread is already included above (line 268) for the existing
+// TX pump wiring; K-bench reuses that include for setRadeChannel +
+// the radeMicBlockReady signal.
+#include "core/Resampler.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -1631,52 +1638,137 @@ void RadioModel::wireRadeChannel(int sliceId, RadeChannel* channel,
                 });
     }
 
-    // ── Phase 3R Task K4: TX modem output plumbing ──────────────────────
+    // ── Phase 3R K-bench: TX modem output plumbing (filled in) ──────────
     //
     // RadeChannel::txModemReady carries the RADE neural codec's
-    // encoded baseband samples (24 kHz stereo Int16 per the I1
-    // contract at RadeChannel.h:250-252).  The K-bench follow-up
-    // will route the actual bytes to the radio's TX buffer via
-    // m_connection->sendTxIq (the unified P1/P2 I/Q TX API at
-    // RadioConnection.h:193); both P1 (EP2 TX I/Q layout) and P2
-    // (port 1029 TX I/Q layout) implementations forward the floats
-    // to the connection thread for UDP send.
+    // encoded baseband at 24 kHz stereo float32 (per the I3 emission
+    // path at RadeChannel.cpp:670-677 [Phase 3R I3] — the upsampler
+    // duplicates the 8 kHz RADE_COMP real-leg to both L and R).  The
+    // K-bench follow-up routes those bytes to the radio's TX buffer
+    // through three stages:
     //
-    // K4 establishes the connect so the signal graph is closed
-    // end-to-end; the lambda body itself currently logs the first
-    // emission, Q_UNUSEDs the bytes, and returns.  K-bench fills in:
-    //   * Int16 -> float32 conversion (1/32768.0f scale)
-    //   * Optional resample 24 kHz -> connection rate
-    //   * m_connection->sendTxIq(samples, frameCount)
+    //   1. Extract L channel as mono real-valued modem baseband.
+    //      (L == R post-processMonoToStereo; either is fine.)
+    //   2. Upsample 24 kHz -> txSampleRate via m_radeTxResampler.
+    //      P1 = 48 kHz (2x); P2 = 192 kHz (8x).  Built lazily on
+    //      first emission once m_connection->txSampleRate() is
+    //      known; rebuilt if the rate changes across reconnects.
+    //   3. Build interleaved I/Q with Q=0 and call
+    //      m_connection->sendTxIq.  This produces a DSB-style
+    //      modulation: the modem audio rides on both the upper and
+    //      lower sideband of the tune frequency.  Constructing a
+    //      proper analytic (Hilbert-transformed) baseband to get
+    //      true USB/LSB is a follow-up DSP refinement.  The
+    //      receiver-side correlator in RADE syncs on its kernel
+    //      regardless of sideband presentation, so DSB still
+    //      decodes; the RADE_U vs RADE_L distinction matters more
+    //      for spectrum-cleanliness than for link-up.
     //
     // The connect uses the default direct connection because
-    // RadeChannel currently lives on RadioModel's thread (Phase 3R
-    // J2/J3); if future work moves RadeChannel to a worker thread,
-    // upgrade this connect to Qt::QueuedConnection so the lambda
-    // dispatches on the main thread where m_connection is touched.
-    // The lambda body Q_UNUSEDs both `iq` and `sliceId` for now;
-    // K-bench replaces the body with the actual sendTxIq call, at
-    // which point the `this` capture becomes load-bearing again
-    // (m_connection is read on the main thread).  The receiver
-    // context (third arg `this`) is still required for proper
-    // disconnect-on-destroy semantics, so leave it untouched.
+    // RadeChannel lives on RadioModel's thread (Phase 3R J2/J3).  The
+    // receiver context (third arg `this`) ensures disconnect-on-
+    // destroy + main-thread dispatch.  m_connection->sendTxIq is
+    // documented audio-safe (SPSC ring with atomic stores, no
+    // mutex), so calling it directly from main thread to the
+    // connection-thread-affined m_connection is safe — the same
+    // pattern TxChannel::driveOneTxBlockFromInterleaved already uses.
     connect(channel, &RadeChannel::txModemReady, this,
-            [sliceId](const QByteArray& iq) {
-                static std::atomic<int> s_loggedOnce{0};
-                if (s_loggedOnce.fetch_add(1, std::memory_order_relaxed) == 0) {
-                    qCInfo(lcRade)
-                        << "RadioModel: RADE txModemReady received"
-                        << iq.size() << "bytes for slice" << sliceId
-                        << "(routing to RadioConnection::sendTxIq is "
-                           "K-bench scope; currently dormant).";
+            [this, sliceId](const QByteArray& iq) {
+                if (m_connection == nullptr) {
+                    return;
                 }
-                // K-bench TODO: replace the dormant body with:
-                //   if (!m_connection) return;
-                //   const int frames = iq.size() / 4;  // stereo Int16
-                //   // Convert Int16 -> float32 interleaved...
-                //   m_connection->sendTxIq(samples, frames);
-                Q_UNUSED(iq);
-                Q_UNUSED(sliceId);
+                constexpr int kBytesPerStereoFrame =
+                    2 * static_cast<int>(sizeof(float));
+                const int bytes = iq.size();
+                if (bytes <= 0
+                    || (bytes % kBytesPerStereoFrame) != 0) {
+                    return;
+                }
+                const int frames24k = bytes / kBytesPerStereoFrame;
+                const float* stereo =
+                    reinterpret_cast<const float*>(iq.constData());
+
+                // Step 1: extract L channel as mono modem baseband.
+                m_radeTxMonoScratch.resize(
+                    static_cast<size_t>(frames24k));
+                for (int i = 0; i < frames24k; ++i) {
+                    m_radeTxMonoScratch[static_cast<size_t>(i)] =
+                        stereo[2 * i + 0];
+                }
+
+                // Step 2: lazy-build the 24 -> hwRate resampler.  Rebuild
+                // if the rate changed (reconnect to a different proto).
+                const int hwRate = m_connection->txSampleRate();
+                if (hwRate <= 0) {
+                    return;
+                }
+                if (m_radeTxResampler == nullptr
+                    || m_radeTxResamplerHwRate != hwRate) {
+                    m_radeTxResampler = std::make_unique<Resampler>(
+                        24000.0, static_cast<double>(hwRate),
+                        /*maxBlockSamples=*/4096);
+                    m_radeTxResamplerHwRate = hwRate;
+                    qCInfo(lcRade)
+                        << "RadioModel: built RADE TX 24 ->" << hwRate
+                        << "upsampler for slice" << sliceId;
+                }
+
+                // Resampler::process returns a QByteArray of float32
+                // mono PCM at the destination rate.
+                QByteArray upsampled = m_radeTxResampler->process(
+                    m_radeTxMonoScratch.data(), frames24k);
+                const int outBytes = upsampled.size();
+                if (outBytes <= 0
+                    || (outBytes % static_cast<int>(sizeof(float))) != 0) {
+                    return;
+                }
+                const int outFrames =
+                    outBytes / static_cast<int>(sizeof(float));
+                const float* mono =
+                    reinterpret_cast<const float*>(upsampled.constData());
+
+                // Step 3: build interleaved I/Q (I = mono, Q = 0).
+                m_radeTxIqScratch.resize(
+                    static_cast<size_t>(outFrames) * 2);
+                for (int i = 0; i < outFrames; ++i) {
+                    m_radeTxIqScratch[static_cast<size_t>(2 * i + 0)] =
+                        mono[i];
+                    m_radeTxIqScratch[static_cast<size_t>(2 * i + 1)] =
+                        0.0f;
+                }
+                m_connection->sendTxIq(m_radeTxIqScratch.data(),
+                                       outFrames);
+            });
+
+    // ── Phase 3R K-bench: TX mic-feed plumbing ──────────────────────────
+    //
+    // TxWorkerThread emits radeMicBlockReady(QByteArray int16 mono 16k)
+    // every pump tick when m_currentTxPath == TxPath::Rade.  Route
+    // that into the channel's txEncode slot.  RadeChannel lives on
+    // the main thread (where this RadioModel does), so Qt's
+    // AutoConnection resolves to QueuedConnection (the worker emits
+    // from its own thread).  Setting the worker's m_radeChannel
+    // pointer makes the TxPath::Rade branch aware of the channel
+    // identity for diagnostic purposes; the actual mic-block transport
+    // is via the queued signal/slot which does its own thread-safe
+    // delivery.
+    //
+    // On unwire (channel destroyed by mode swap), Qt auto-disconnects
+    // the queued signal/slot (sender or receiver QObject destruction
+    // tears down the connection); the worker's m_radeChannel pointer
+    // is separately cleared via a channel->destroyed lambda below so
+    // a stale pointer can't leak into a subsequent TxPath::Rade tick.
+    if (m_txWorker) {
+        m_txWorker->setRadeChannel(channel);
+        connect(m_txWorker.get(), &TxWorkerThread::radeMicBlockReady,
+                channel, &RadeChannel::txEncode,
+                Qt::QueuedConnection);
+    }
+    connect(channel, &QObject::destroyed, this,
+            [this]() {
+                if (m_txWorker) {
+                    m_txWorker->setRadeChannel(nullptr);
+                }
             });
 
     // The slice pointer is currently unused at wire time. Slot bodies

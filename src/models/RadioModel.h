@@ -170,6 +170,11 @@ struct FreeDVStation;
 // signals into the slot graph.
 class RadeChannel;
 
+// Phase 3R K-bench forward decl: Resampler is used by RadioModel to
+// upsample RadeChannel's 24 kHz baseband output to the radio's TX
+// I/Q wire rate before m_connection->sendTxIq.  Lives in core/Resampler.h.
+class Resampler;
+
 // RadioModel is the central data model for a connected radio.
 // It owns the RadioConnection (on a worker thread), ReceiverManager,
 // and all sub-models. It routes signals between components.
@@ -1661,6 +1666,21 @@ private:
     // happens inside stopPump, but reset only after the worker is torn
     // down so the consumer side is fully disconnected).
     std::unique_ptr<class TxMicSource> m_txMicSource;
+
+    // Phase 3R K-bench: RADE TX 24 -> txSampleRate upsampler.  Lazily
+    // constructed on first txModemReady arrival once we know the
+    // connection's txSampleRate() (P1 = 48 kHz; P2 = 192 kHz; per
+    // RadioConnection.h:408 default + P2RadioConnection.h:265).
+    // m_radeTxResamplerHwRate stores the rate the resampler was
+    // built against so a reconnect at a different rate triggers a
+    // rebuild rather than silently producing wrong-rate audio.
+    //
+    // m_radeTxMonoScratch / m_radeTxIqScratch are reused per emission
+    // to avoid per-call allocations.  Both are sized once on first use.
+    std::unique_ptr<Resampler> m_radeTxResampler;
+    int                        m_radeTxResamplerHwRate{0};
+    std::vector<float>         m_radeTxMonoScratch;
+    std::vector<float>         m_radeTxIqScratch;
 
     // Stage C2 — filter preset user-override store.
     // Constructed in RadioModel ctor; QObject child so dtor cleans up.

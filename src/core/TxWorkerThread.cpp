@@ -61,6 +61,18 @@
 //                 future work can wire the mic source without touching
 //                 the run-loop again.  J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-05-11 — Phase 3R K-bench — RADE TX pump completion.  Replaced
+//                 the K2 early-return-with-log RADE branch with the
+//                 real-time pump (HPF -> 48-16 resample -> int16
+//                 conversion -> radeMicBlockReady signal).  Added
+//                 setRadeChannel cross-thread setter + std::atomic
+//                 m_radeChannel member, three scratch buffers
+//                 (m_radeMicFloat / m_radeMic16k / m_radeMicInt16),
+//                 the radeMicBlockReady(QByteArray) signal, the
+//                 RadeTxHpf80 + RadeTx48to16 K3 helpers as members,
+//                 and a radeChannelForTest accessor.  J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file.  The Thetis cmbuffs.c /
@@ -71,6 +83,7 @@
 #include "TxWorkerThread.h"
 
 #include "AudioEngine.h"
+#include "RadeChannel.h"
 #include "TxChannel.h"
 #include "audio/TxMicSource.h"
 
@@ -78,6 +91,7 @@
 #include <QLoggingCategory>
 
 #include <algorithm>
+#include <cmath>
 
 Q_LOGGING_CATEGORY(lcTxWorker, "nereus.tx.worker")
 
@@ -93,6 +107,14 @@ TxWorkerThread::TxWorkerThread(QObject* parent)
     //   m_pcMicBuf == kBlockFrames floats        (mono, AudioEngine API)
     m_in.assign(static_cast<size_t>(kBlockFrames) * 2, 0.0);
     m_pcMicBuf.assign(static_cast<size_t>(kBlockFrames), 0.0f);
+
+    // Phase 3R K-bench: RADE TX scratch.  Sized for one pump tick at
+    // 48 kHz in / 16 kHz out.  m_radeMic16k has headroom (kBlockFrames
+    // floats) so the first warm-up ticks where r8brain may emit more
+    // than its steady-state output count do not overflow.
+    m_radeMicFloat.assign(static_cast<size_t>(kBlockFrames), 0.0f);
+    m_radeMic16k.assign(static_cast<size_t>(kBlockFrames), 0.0f);
+    m_radeMicInt16.assign(static_cast<size_t>(kBlockFrames), 0);
 }
 
 TxWorkerThread::~TxWorkerThread()
@@ -115,6 +137,26 @@ void TxWorkerThread::setAudioEngine(AudioEngine* engine)
 void TxWorkerThread::setMicSource(TxMicSource* src)
 {
     m_micSource = src;
+}
+
+// ---------------------------------------------------------------------------
+// setRadeChannel — Phase 3R K-bench
+//
+// Stores the channel pointer with release ordering so the matching
+// acquire-load in dispatchOneBlock's RADE branch picks it up on the
+// next pump tick.  Idempotent.  Null clears (the RADE branch then
+// drops the block).
+//
+// Thread affinity: invoked from the main thread via
+// RadioModel::wireRadeChannel.  TxWorkerThread the QObject itself
+// lives on the main thread (only m_txChannel is moveToThread'd into
+// the worker), so a direct call from main is fine.  The acquire-load
+// in dispatchOneBlock runs on the worker thread; release/acquire
+// ordering correctly handles the cross-thread visibility.
+// ---------------------------------------------------------------------------
+void TxWorkerThread::setRadeChannel(RadeChannel* channel)
+{
+    m_radeChannel.store(channel, std::memory_order_release);
 }
 
 void TxWorkerThread::startPump()
@@ -282,39 +324,75 @@ void TxWorkerThread::dispatchOneBlock()
         return;
     }
 
-    // ── Phase 3R Task K2: mode-aware path early-return ─────────────────
+    // ── Phase 3R K-bench: mode-aware path RADE pump ────────────────────
     //
     // RadioModel updates m_currentTxPath on every MOX-on transition
     // based on the active slice's DSPMode.  When the slice is in
-    // DSPMode::RADE_U or DSPMode::RADE_L the worker must NOT run the
-    // WDSP TXA chain (the RADE neural codec generates its own baseband
-    // I/Q via RadeChannel::txEncode -> txModemReady, which K4 wires
-    // into the radio's TX buffer).
+    // DSPMode::RADE_U or DSPMode::RADE_L the worker bypasses the WDSP
+    // TXA chain entirely and routes the mic block through the RADE
+    // neural codec: HPF -> 48 -> 16 kHz resample -> float -> int16 ->
+    // radeMicBlockReady signal (queued to RadeChannel::txEncode on
+    // main thread).  RadeChannel then emits txModemReady to the
+    // RadioModel hook which converts to I/Q + drives
+    // RadioConnection::sendTxIq.
     //
-    // K2 ships scaffolding only: the early-return is in place but the
-    // mic feed into RadeChannel is NOT yet wired (see K-bench TODO
-    // below).  The branch logs once on first hit so we can confirm the
-    // path swap takes effect; subsequent hits are silent so the audio
-    // pump stays log-light at the real-time deadline.
+    // No early-return-with-log scaffolding; the pump runs every tick.
     const TxPath path = m_currentTxPath.load(std::memory_order_acquire);
     if (path == TxPath::Rade) {
-        // K-bench TODO: replace this no-op with the RADE TX path:
-        //   1. m_micSource has already drained one block of mic samples
-        //      into m_in (by the run loop above tickForTest()).
-        //   2. Apply the 80 Hz HPF (K3 RadeTxHpf80).
-        //   3. Resample 48 -> 16 kHz mono (K3 RadeTx48to16).
-        //   4. Pass to RadeChannel::txEncode(QByteArray speechSamples).
-        //   5. RadeChannel emits txModemReady, which K4 connects to
-        //      RadioConnection::sendTxIq on the main thread.
-        // For now we just skip the WDSP TXA tick so RADE-mode TX does
-        // NOT produce a WDSP-baseband on the air.
-        static std::atomic<bool> s_loggedOnce{false};
-        bool expected = false;
-        if (s_loggedOnce.compare_exchange_strong(expected, true)) {
-            qCInfo(lcTxWorker) << "dispatchOneBlock: TX path is RADE; "
-                                  "scaffolded only, full integration "
-                                  "pending K-bench follow-up";
+        // Step 1: extract the I channel from m_in.  m_in is interleaved
+        // I/Q doubles (Q=0) drained by run() / tickForTest from
+        // m_micSource.
+        for (int i = 0; i < kBlockFrames; ++i) {
+            m_radeMicFloat[static_cast<size_t>(i)] =
+                static_cast<float>(m_in[static_cast<size_t>(2 * i)]);
         }
+
+        // Step 2: 80 Hz Butterworth HPF in place (K3 RadeTxHpf80).
+        m_radeHpf.process(m_radeMicFloat.data(), kBlockFrames);
+
+        // Step 3: 48 kHz -> 16 kHz r8brain CDSPResampler24.
+        // r8brain may emit zero on warm-up; later ticks emit roughly
+        // kBlockFrames * 16 / 48 = 21-22 samples per call.
+        const int out16k = m_radeResampler.process(
+            m_radeMicFloat.data(), kBlockFrames,
+            m_radeMic16k.data(),   kBlockFrames);
+
+        if (out16k <= 0) {
+            // Warm-up tick: no samples produced.  Drop and exit; the
+            // next block fills more of the resampler's filterbank.
+            return;
+        }
+
+        // Step 4: float -> int16 conversion.  RadeChannel::txEncode
+        // takes int16 mono at 16 kHz (per the I3 contract at
+        // RadeChannel.h:258-261 [Phase 3R I3]).
+        m_radeMicInt16.resize(static_cast<size_t>(out16k));
+        for (int i = 0; i < out16k; ++i) {
+            const float s = m_radeMic16k[static_cast<size_t>(i)];
+            const float scaled = s * 32767.0f
+                                  + (s >= 0.0f ? 0.5f : -0.5f);
+            int v = static_cast<int>(scaled);
+            if (v >  32767) { v =  32767; }
+            if (v < -32768) { v = -32768; }
+            m_radeMicInt16[static_cast<size_t>(i)] =
+                static_cast<int16_t>(v);
+        }
+
+        // Step 5: wrap the int16 samples in a QByteArray and emit.
+        // The connect at RadioModel::wireRadeChannel is queued
+        // (Qt::QueuedConnection) so the bytes are copied into the
+        // event loop's queue and dispatched to RadeChannel::txEncode
+        // on the main thread.
+        //
+        // RadeChannel::txEncode is a no-op when the channel is not
+        // started (its m_active flag gates the body), so emitting
+        // when m_radeChannel.load() == nullptr would simply be lost;
+        // we still emit so QSignalSpy in tests can observe the pump
+        // running independently of the channel wiring state.
+        const QByteArray payload(
+            reinterpret_cast<const char*>(m_radeMicInt16.data()),
+            out16k * static_cast<int>(sizeof(int16_t)));
+        emit radeMicBlockReady(payload);
         return;
     }
 
@@ -558,6 +636,11 @@ void TxWorkerThread::setCurrentTxPath(TxPath path)
 TxWorkerThread::TxPath TxWorkerThread::currentTxPathForTest() const
 {
     return m_currentTxPath.load(std::memory_order_acquire);
+}
+
+RadeChannel* TxWorkerThread::radeChannelForTest() const
+{
+    return m_radeChannel.load(std::memory_order_acquire);
 }
 #endif
 

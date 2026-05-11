@@ -104,15 +104,21 @@ good RADE-decoding station) on the same band.
 quality is rated equivalent to a freedv-gui transmission on the
 same hardware.
 
-**Status:** [~] Deferred. K-bench follow-up required.
+**Status:** [ ] Untested  [ ] Passed YYYY-MM-DD by NAME  [ ] Failed YYYY-MM-DD by NAME (issue: #N)
 
-**Known limitations:** The TX path through TxWorkerThread is
-scaffolded (TxPath enum + HPF + 48-to-16 resampler helpers landed in
-commits 34a9f14c / 181d3ee5 / 7beacdc5), but full real-time
-integration into the semaphore-wake TX pump is **deferred** to a
-K-bench follow-up after on-air verification on ANAN-G2. Tick
-**Deferred** on the initial v0.5.0 bench pass; reopen when the
-K-bench integration lands and bench-pass on that PR.
+**Known limitations:** The TX path through TxWorkerThread is now
+end-to-end wired (TxPath enum + HPF + 48-to-16 resampler helpers
+landed in commits 34a9f14c / 181d3ee5 / 7beacdc5; the K-bench
+follow-up filled in the dispatchOneBlock RADE pump body, the
+TxWorkerThread::radeMicBlockReady signal, the queued connection
+into RadeChannel::txEncode, and the txModemReady -> 24 -> hwRate
+upsampler -> RadioConnection::sendTxIq lambda on RadioModel).
+**The TX path produces a DSB-style modulation** (I = real-valued
+modem baseband, Q = 0). RADE's correlator syncs on its kernel
+regardless of sideband presentation so the link decodes either
+way, but a proper analytic (Hilbert-transformed) baseband to get
+true USB/LSB matching the RADE_U / RADE_L mode selection is a
+follow-up DSP refinement and is NOT a blocker for this row.
 
 ---
 
@@ -443,6 +449,8 @@ Document but do not block v0.5.0 final.
 
 Verification owner: J.J. Boyd (KG4VCF). v0.5.0 final is not tagged
 until every non-deferred row above is Passed and every cross-cutting
-check is ticked. Deferred rows (Row 2 K-bench, Row 9 HL2, Row 12
-multi-slice) must each carry a tracking issue or follow-up plan
-documented in the v0.5.0 release notes.
+check is ticked. Deferred rows (Row 9 HL2, Row 12 multi-slice) must
+each carry a tracking issue or follow-up plan documented in the
+v0.5.0 release notes. Row 2 was deferred at the v0.5.0-rc1 cut and
+flipped back to Untested after the K-bench follow-up landed (full
+real-time integration into TxWorkerThread's semaphore-wake TX pump).

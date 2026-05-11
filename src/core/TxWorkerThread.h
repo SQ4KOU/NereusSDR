@@ -29,15 +29,20 @@
 
 #pragma once
 
+#include <QByteArray>
 #include <QThread>
 #include <QVector>
 
 #include <atomic>
+#include <memory>
 #include <vector>
+
+#include "core/audio/RadeTxFilters.h"
 
 namespace NereusSDR {
 
 class AudioEngine;
+class RadeChannel;
 class TxChannel;
 class TxMicSource;
 
@@ -120,6 +125,17 @@ public:
     void setAudioEngine(AudioEngine* engine);
     void setMicSource(TxMicSource* src);
 
+    /// Phase 3R K-bench: set / clear the RadeChannel the worker emits
+    /// RADE mic blocks toward when m_currentTxPath == Rade.  Wired by
+    /// RadioModel::wireRadeChannel on mode swap into RADE_U / RADE_L
+    /// (and cleared via the channel's destroyed() signal on swap out).
+    /// Null clears.  Idempotent.  Storing nullptr while
+    /// m_currentTxPath == Rade leaves the RADE branch as a silent
+    /// no-op (the worker drops the block); this is the correct
+    /// behaviour during the brief window between RadeChannel destroy
+    /// and the matching path-flip back to Wdsp.
+    void setRadeChannel(RadeChannel* channel);
+
     /// Start the worker.  Internally calls QThread::start().  Idempotent.
     void startPump();
 
@@ -146,7 +162,28 @@ public:
     /// run-loop body; tests use this accessor to assert the swap
     /// after setCurrentTxPath().
     TxPath currentTxPathForTest() const;
+
+    /// Phase 3R K-bench test seam — observe the active RADE channel
+    /// pointer without exposing the production member.  Tests verify
+    /// setRadeChannel round-trip + null-clear via this accessor.
+    RadeChannel* radeChannelForTest() const;
 #endif
+
+signals:
+    /// Phase 3R K-bench: RADE TX mic block — emitted by the RADE
+    /// branch of dispatchOneBlock when the worker has processed one
+    /// pump tick's worth of mic samples through the HPF + 48->16
+    /// resampler.  Carries an int16 mono QByteArray ready for
+    /// RadeChannel::txEncode (16 kHz, the LPCNet feature extractor's
+    /// native rate).  Empty payload during r8brain warm-up is normal;
+    /// downstream slot is a no-op on empty input.
+    ///
+    /// RadioModel wires this signal to RadeChannel::txEncode via
+    /// Qt::QueuedConnection because RadeChannel lives on the main
+    /// thread (RadioModel's affinity) while this worker lives on a
+    /// dedicated QThread.  The queued delivery serialises across the
+    /// thread boundary without holding any audio-thread lock.
+    void radeMicBlockReady(const QByteArray& speech16k);
 
 public slots:
     // ── Phase 3R Task K2: mode-aware TX path setter ─────────────────────
@@ -229,6 +266,38 @@ private:
     TxChannel*    m_txChannel{nullptr};   // not owned
     AudioEngine*  m_audioEngine{nullptr}; // not owned
     TxMicSource*  m_micSource{nullptr};   // not owned
+
+    // Phase 3R K-bench: active RADE channel.  Not owned (lifecycle is
+    // WdspEngine::m_radeChannels via unique_ptr; SliceModel triggers
+    // create/destroy on DSPMode swap into / out of RADE_U / RADE_L).
+    // Accessed only on the worker thread inside dispatchOneBlock's
+    // RADE branch and from setRadeChannel; the setter is wired as a
+    // queued slot when invoked cross-thread (default AutoConnection
+    // auto-resolves correctly because TxWorkerThread itself remains
+    // on the main thread — only m_txChannel is moveToThread'd into
+    // the worker; see RadioModel.cpp:3570 [3M-1c v3]).
+    std::atomic<RadeChannel*> m_radeChannel{nullptr};
+
+    // Phase 3R K-bench: DSP helpers for the RADE TX pump.  Owned per-
+    // worker so their stateful internals (biquad z1/z2, r8brain
+    // CDSPResampler24 filterbank) survive across pump ticks.  Reset
+    // on RADE entry happens implicitly: the HPF transients decay
+    // within ~10 ms (well under the first emit), and r8brain's
+    // warm-up latency is roughly 3 blocks at the 48 -> 16 kHz ratio
+    // — both are acceptable artefacts on TX onset.
+    RadeTxHpf80     m_radeHpf;
+    RadeTx48to16    m_radeResampler;
+
+    // Scratch buffers for the RADE branch.  Sized once in the ctor.
+    // m_radeMicFloat: 64 mono floats drained from m_in's I channel.
+    // m_radeMic16k:   up to ceil(64 * 16/48) = 22 floats post-resample
+    //                (sized to 64 for headroom on the first few blocks
+    //                while r8brain catches up).
+    // m_radeMicInt16: int16 conversion of the above; ready for the
+    //                RadeChannel::txEncode QByteArray payload.
+    std::vector<float>   m_radeMicFloat;
+    std::vector<float>   m_radeMic16k;
+    std::vector<int16_t> m_radeMicInt16;
 
     // Worker-thread scratch — interleaved I/Q double buffer drained from
     // m_micSource each tick.  Sized 2 * kBlockFrames doubles.

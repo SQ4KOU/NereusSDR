@@ -4548,3 +4548,24 @@ nereus_add_test(tst_rade_text)
 # Source: NereusSDR-native test pattern; no upstream port. The slot
 # contract under test was established by the I5 plan spec.
 nereus_add_test(tst_rade_channel_model_wiring)
+
+# ── Phase 3R K-bench: RADE TX end-to-end pump ─────────────────────────────
+# Pins the K2-K4 follow-up contracts that turn the deferred RADE TX
+# scaffolding into a real pump:
+#   setRadeChannelStoresPointer       TxWorkerThread::setRadeChannel
+#                                     accessor round-trip + null-clear.
+#   radePumpEmitsAfterWarmup          tickForTest with TxPath::Rade
+#                                     pushes mic blocks through HPF +
+#                                     48->16 r8brain + float->int16 +
+#                                     emits radeMicBlockReady with at
+#                                     least one non-empty payload.
+#   wdspPathStillReachesSendTxIq      With TxPath::Wdsp the worker still
+#                                     drives the WDSP TXA chain.  RADE
+#                                     branch must be opt-in.
+#   txModemReadyRoutesToSendTxIq      RadioModel::wireRadeChannel's
+#                                     txModemReady lambda routes the
+#                                     RADE baseband through 24 ->
+#                                     txSampleRate upsample into
+#                                     RadioConnection::sendTxIq.
+nereus_add_test(tst_rade_tx_pump)
+target_compile_definitions(tst_rade_tx_pump PRIVATE NEREUS_BUILD_TESTS)
