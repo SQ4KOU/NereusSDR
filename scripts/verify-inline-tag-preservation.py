@@ -130,6 +130,23 @@ def load_corpus() -> tuple[list[str], list[str]]:
               f"Run scripts/discover-deskhpsdr-author-tags.py to populate it.",
               file=sys.stderr)
 
+    # freedv-gui corpus (optional, parallel to deskhpsdr).
+    # Populated by scripts/discover-freedv-author-tags.py once Phase 3J-2 + 3R
+    # starts porting from drowe67/freedv-gui.
+    freedv_path = REPO / "docs" / "attribution" / "freedv-gui-author-tags.json"
+    if freedv_path.is_file():
+        try:
+            fdv_data = _json.loads(freedv_path.read_text())
+            callsigns.update(fdv_data.get("callsign_tags", {}).keys())
+            named.update(fdv_data.get("named_tags", {}).keys())
+        except Exception as exc:
+            print(f"WARN: failed to load freedv-gui corpus: {exc}",
+                  file=sys.stderr)
+    else:
+        print(f"WARN: freedv-gui corpus {freedv_path} not found. "
+              f"Run scripts/discover-freedv-author-tags.py to populate it.",
+              file=sys.stderr)
+
     return (sorted(callsigns), sorted(named))
 
 
