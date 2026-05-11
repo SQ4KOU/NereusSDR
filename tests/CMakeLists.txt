@@ -4283,3 +4283,12 @@ nereus_add_test(tst_mainwindow_tools_spot_hub)
 # follows freedv-gui src/pipeline/RADE{Receive,Transmit}Step.{h,cpp}
 # [@77e793a]. I1 ships skeleton bodies only; no DSP yet.
 nereus_add_test(tst_rade_channel)
+
+# Phase 3R Task I2a pins the Resampler wrapper around r8brain-free-src
+# (vendored MIT, third_party/r8brain/ at SHA 5c44bebe). The Resampler
+# port from AetherSDR src/core/Resampler.{h,cpp} [@0cd4559] is byte-for-
+# byte aside from the namespace rename. 5 tests: identity 24k->24k,
+# downsample 24k->8k, mono-to-stereo / stereo-to-mono / stereo-to-stereo
+# convenience helpers. Approximate sample-count checks because r8brain
+# CDSPResampler24 has nontrivial internal latency.
+nereus_add_test(tst_resampler)

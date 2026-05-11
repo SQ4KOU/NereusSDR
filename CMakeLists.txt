@@ -423,6 +423,7 @@ set(CORE_SOURCES
     src/core/RxChannel.cpp
     src/core/TxChannel.cpp
     src/core/RadeChannel.cpp
+    src/core/Resampler.cpp
     src/core/PsFeedbackChannel.cpp
     src/core/PureSignal.cpp
     src/core/PsccPump.cpp
@@ -925,6 +926,19 @@ target_include_directories(NereusSDRObjs PUBLIC
     ${CMAKE_BINARY_DIR}/third_party/rade/build_opus-prefix/src/build_opus/celt
     ${CMAKE_BINARY_DIR}/third_party/rade/build_opus-prefix/src/build_opus
 )
+
+# --------------------------------------------------------------------------
+# r8brain-free-src high-quality polyphase resampler (Phase 3R Task I2)
+# License: MIT (see third_party/r8brain/LICENSE.txt)
+# Vendored at SHA 5c44bebe9c477d47b1dc7037fcaae2794ff2b4e1 (2026-03-12).
+#
+# r8brain is header-only; the OBJECT library exists to anchor the
+# function-local statics in CDSPRealFFT.h to one translation unit and
+# to expose the include directory to NereusSDR sources that #include
+# "CDSPResampler.h".
+# --------------------------------------------------------------------------
+add_subdirectory(third_party/r8brain)
+target_link_libraries(NereusSDRObjs PUBLIC r8brain)
 
 # --------------------------------------------------------------------------
 # DeepFilterNet3 DFNR — pre-built neural noise reduction library (MIT/Apache-2.0)

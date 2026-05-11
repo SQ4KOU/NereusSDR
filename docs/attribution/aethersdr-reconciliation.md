@@ -703,6 +703,54 @@ I2 will extend this suite with the real RX-path tests (DSP body,
 sync indicator, snrChanged emission); I3 with TX-path tests; I4
 with embedded-text-channel tests.
 
+### Phase 3R Task I2a - Resampler port (r8brain wrapper)
+
+The 17-line I1 stub `src/core/Resampler.h` is replaced with a
+byte-for-byte port of AetherSDR's `Resampler.{h,cpp}` [@0cd4559].
+The class wraps `r8b::CDSPResampler24` (from the vendored
+`third_party/r8brain/` MIT library, SHA `5c44beb`) and exposes
+mono / stereo convenience helpers (`process`, `processStereoToMono`,
+`processMonoToStereo`, `processStereoToStereo`) over `float`-format
+`QByteArray` buffers. AetherSDR has no per-file copyright header,
+so per HOW-TO-PORT.md rule 6 the NereusSDR header carries a
+project-level attribution block instead of copying a verbatim header
+that does not exist upstream.
+
+| NereusSDR file | AetherSDR counterpart | Evidence | Specific mod-history wording |
+|---|---|---|---|
+| `src/core/Resampler.h` | `src/core/Resampler.h` [@0cd4559] | Byte-for-byte port aside from namespace rename `AetherSDR` -> `NereusSDR`. Class shape (ctor accepts `srcRate` / `dstRate` / `maxBlockSamples=4096`; four public methods `process` / `processStereoToMono` / `processMonoToStereo` / `processStereoToStereo`; two public accessors `srcRate()` / `dstRate()`), member set (`m_srcRate` / `m_dstRate` / `std::unique_ptr<r8b::CDSPResampler24> m_resampler` / `std::vector<double> m_inBuf`), the `r8b::CDSPResampler24` forward declaration, and the thread-safety note all match AetherSDR line-for-line. | "Phase 3R Task I2a. Full port of AetherSDR `src/core/Resampler.{h,cpp}` [@0cd4559]. Replaces the 17-line I1 stub. Namespace renamed AetherSDR -> NereusSDR; otherwise byte-for-byte." |
+| `src/core/Resampler.cpp` | `src/core/Resampler.cpp` [@0cd4559] | Byte-for-byte port aside from namespace rename. Each public method body carries an inline `// From AetherSDR src/core/Resampler.cpp:N-M [@0cd4559]` cite at the function head: ctor (`:7-13`), dtor (`:15`), `process` (`:17-38`), `processStereoToMono` (`:40-61`), `processMonoToStereo` (`:63-87`), `processStereoToStereo` (`:89-111`). The float32 <-> double conversion loops, the 0.5 stereo-downmix factor, the `Qt::Uninitialized` allocation, and the `int outLen <= 0 \|\| !outPtr` failure-path return are reproduced verbatim. | "Phase 3R Task I2a. Full port of AetherSDR `src/core/Resampler.cpp` [@0cd4559]. Namespace renamed AetherSDR -> NereusSDR; the r8brain header is now resolved against `third_party/r8brain/` (added in the same commit)." |
+
+Companion test file `tests/tst_resampler.cpp` (not listed in the
+Bucket A core table; matches the test-as-companion precedent).
+Five tests pin the I2a Resampler port:
+
+- `identity24kTo24k`: a 1:1 rate wrapper feeding 96000 mono samples
+  produces ~96000 output samples within 5% (r8brain's polyphase
+  FIR has a small startup latency that washes out at 4-second
+  block sizes).
+- `downsample24kTo8k`: a 3:1 ratio feeding 96000 input samples
+  produces ~32000 output samples within 10% (the FIR-kernel
+  startup latency at this ratio is ~2400 samples at the output
+  rate, about 7-8%).
+- `monoToStereoDoubles`: `processMonoToStereo` produces exactly
+  `2 * monoFloats` floats for the same input fed through
+  `process` (the stereo helper duplicates each output sample to
+  L+R).
+- `stereoToMonoHalves`: `processStereoToMono` produces the same
+  sample count as a `process()` run with mono-equivalent input
+  (the helper downmixes stereo to mono *before* resampling).
+- `stereoToStereoRoundTrips`: `processStereoToStereo` produces
+  exactly `2 *` the float count of `processStereoToMono` for
+  the same input (the helper downmixes, resamples, and
+  duplicates).
+
+The companion file `third_party/r8brain/` carries its own MIT
+license at `third_party/r8brain/LICENSE.txt` and a `VERSION.txt`
+pinning the upstream URL, SHA, and vendoring date. A separate
+provenance registry at `docs/attribution/R8BRAIN-PROVENANCE.md`
+mirrors the FREEDV-GUI / RNNOISE / DESKHPSDR pattern.
+
 ---
 
 ## Bucket B — False AetherSDR citations (126 files)
