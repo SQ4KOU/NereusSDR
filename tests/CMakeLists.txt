@@ -3995,3 +3995,17 @@ nereus_add_test(tst_wsjtx_decoder)
 # src/reporting/FreeDVReporter.cpp [@77e793a]; Qt6 structural pattern from
 # AetherSDR src/core/FreeDvClient.cpp [@0cd4559].
 nereus_add_test(tst_freedv_reporter_socketio)
+
+# ── Phase 3J-2 Task B6: PskReporterClient IPFIX protocol parser ────────────
+# Pins the contract that PskReporterClient implements PSK Reporter's
+# IPFIX (RFC 5101) v0.1 framing used by report.pskreporter.info:
+# 16-byte IPFIX header (version=10, length, exportTime, sequenceNumber,
+# observationDomain), 36-byte RX template, 52-byte TX template, 4-byte
+# aligned RX/TX data sets, length-prefixed strings, 5-byte BE frequency,
+# signed SNR byte. 7 tests: header layout, RX template+data set,
+# sender-record size formula from upstream, sender-record field
+# encoding (callsign / freq / SNR / mode / infoSource / flowTime),
+# datagram-with-sender layout, parser round-trip emits spotReceived,
+# setIdentity affects outgoing packets. Source: freedv-gui
+# src/reporting/pskreporter.cpp [@77e793a].
+nereus_add_test(tst_psk_reporter_protocol)
