@@ -4037,3 +4037,18 @@ nereus_add_test(tst_cty_dat_parser)
 #   rejectsMalformedAdif (garbage bytes -> empty vector).
 # Source: AetherSDR src/core/AdifParser.{h,cpp} [@0cd4559].
 nereus_add_test(tst_adif_parser)
+
+# ── Phase 3J-2 Task C3: DxccWorkedStatus (worked-status tracker) ───────────
+# Pins the contract that DxccWorkedStatus tracks per-entity /
+# per-band / per-modeGroup worked status from QsoRecord rows
+# (typically produced by AdifParser). Six tests:
+#   newPrefixIsNewDxcc (unknown primary prefix -> NewDxcc),
+#   sameEntitySameBandSameModeIsWorked (already-worked combo ->
+#   Worked), sameEntityNewBandIsNewBand (known entity, fresh band
+#   -> NewBand), sameEntityNewModeIsNewMode (known entity + band,
+#   fresh modeGroup -> NewMode), clearResetsAll (clear()
+#   resets totalQsos / entityCount / query path),
+#   totalQsoCounting (load() accumulates totalQsos across input
+#   rows; entityCount reflects unique-entity tally). Source:
+#   AetherSDR src/core/DxccWorkedStatus.{h,cpp} [@0cd4559].
+nereus_add_test(tst_dxcc_worked_status)

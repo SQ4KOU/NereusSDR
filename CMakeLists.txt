@@ -479,6 +479,7 @@ set(CORE_SOURCES
     src/core/PskReporterClient.cpp
     src/core/CtyDatParser.cpp
     src/core/AdifParser.cpp
+    src/core/DxccWorkedStatus.cpp
 )
 
 # CoreAudioHalBus — macOS-only IAudioBus implementation bridging to the
