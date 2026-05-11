@@ -29,8 +29,8 @@ This single PR ships two phases: **3J-2 (Spot system + FreeDV Reporter + PSK Rep
 
 **Phase 3R:**
 
-- Vendored RADE library in `third_party/rade/` (peterbmarks/radae_nopy at pinned commit, sub-vendored libopus pinned to the commit `freedv-gui/cmake/BuildRADE.cmake` uses).
-- Sibling RADE neural-net model file at `resources/rade/model.f32` (~13 MB).
+- Vendored RADE library in `third_party/rade/` (peterbmarks/radae_nopy at pinned commit `b2891023`, sub-vendored libopus fetched at first build via radae_nopy's stock `BuildOpus.cmake` per Task A2 finding).
+- **Neural-net weights are compiled directly into librade** (per Task A2b finding): `radae_nopy/src/rade_{dec,enc}_data.c` ship the weights as `static const float[]` arrays. The `rade_open(model_file, ...)` parameter is upstream-API-compat-only and ignored at runtime. No external `.f32` file to bundle, install, or distribute. Adds about 9 MB to the librade static-link size; absorbed in A2.
 - New `RadeChannel` Qt6 wrapper modeled on `AetherSDR/src/core/RADEEngine.{h,cpp}` [@0cd4559] for structure (Qt class, signals/slots, threading, lifecycle, sample-rate plumbing); every DSP-touching line cross-checked against `freedv-gui/src/pipeline/RADE{Receive,Transmit}Step.{h,cpp}` and `rade_text.{h,c}` [@77e793a]. Owns the `rade*` codec handle, `LPCNetEncState*` (TX features), `FARGANState*` (RX vocoder), four r8brain resamplers (24↔16 / 24↔8 between speech and modem rates), TX/RX accumulation FIFOs, and the `rade_text` channel for embedded callsign + grid in voice frames.
 - New "RADE" entry in mode dispatch as a true peer of SSB/AM/CW/FM/DigU/DigL.
 - VFO flag SNR row, mode-aware (populated by `RadeChannel::snrChanged` for RADE; future digital modes wire the same `SliceModel::setSnrDb` slot).
@@ -338,30 +338,31 @@ Per CLAUDE.md: cross-thread comms via auto-queued signals; no mutex in the audio
 - No new runtime system deps. librade and libopus link into the app bundle.
 - First clean build adds ~90-180 seconds. Incremental builds unchanged.
 
-### Model file
+### Model file (REVISED per Task A2b finding 2026-05-10)
 
-- Location in tree: `resources/rade/model.f32` (~13 MB float32 weights). NOT a Qt resource  -  would bloat the binary by 13 MB per platform. Sibling data file.
-- Load path resolution at startup, in `RadeChannel::loadModel()`:
-  - macOS app bundle: `applicationDirPath() + "/../Resources/rade/model.f32"`
-  - Linux installed: `QStandardPaths::AppDataLocation + "/rade/model.f32"` with `/usr/share/NereusSDR/rade/` as fallback
-  - Windows installed: `applicationDirPath() + "/resources/rade/model.f32"`
-  - Dev builds: `<source_root>/resources/rade/model.f32` if `applicationDirPath()` lookup fails
-- Missing-model fallback: log `qCWarning(lcRade) << "model.f32 missing"`, leave `RadeChannel` in a disabled state, grey out the RADE entry in the Mode menu with tooltip explaining the missing path. App still runs; only RADE mode unavailable.
+The C-port we vendored embeds the neural-net weights directly into the static library. No external model file needs to be bundled, downloaded, or installed.
+
+- `radae_nopy/src/rade_dec_data.c` (~222k lines) and `radae_nopy/src/rade_enc_data.c` (~227k lines) contain the encoder + decoder weights as `static const float[]` arrays that link into `librade`.
+- `radae_nopy/src/rade_api_nopy.c::rade_open()` accepts a `model_file` parameter for upstream-API compatibility but emits `"rade_open: model_file=%s (ignored, using built-in weights)"` and ignores it.
+- `RadeChannel::start()` will pass an empty string (or `nullptr`) to `rade_open()`. No filesystem lookup, no `QStandardPaths` resolution, no missing-file fallback path needed. RADE mode is always available wherever NereusSDR runs.
+- librade size impact: ~9 MB bigger static-link size on every platform (absorbed in A2).
+- Future-proofing: if we ever swap to the Python upstream `drowe67/radae` (PyTorch runtime weights), the original sibling-resource design will need to be re-introduced. Documented here so future maintainers know why `RadeChannel::start()` ignores its `modelPath` arg.
 
 ### CMake glue
 
 - `add_subdirectory(third_party/rade)` after the existing `third_party/wdsp` line.
-- `target_link_libraries(NereusSDR_core PRIVATE rade opus)`.
-- `target_include_directories(NereusSDR_core PRIVATE ${RADE_SOURCE_DIR}/src)` so `RadeChannel` sees `rade_api.h`.
-- New test targets for `test_rade_channel`, `test_rade_text` link against `rade`.
+- `target_link_libraries(NereusSDRObjs PUBLIC rade)` (the actual main object library is `NereusSDRObjs`, not `NereusSDR_core` as originally assumed; see Task A2 finding).
+- `target_include_directories(NereusSDRObjs PUBLIC ${CMAKE_SOURCE_DIR}/third_party/rade/src ...)` plus four additional radae_nopy include dirs for transitive headers (Opus types, NN data) so `RadeChannel` sees `rade_api.h` and friends.
+- New test targets for `test_rade_channel`, `test_rade_text` inherit through `NereusSDRObjs`.
+- Three small patches to `third_party/rade/cmake/BuildOpus.cmake` for Ninja support: `BUILD_COMMAND make` (not `$(MAKE)`), `BUILD_BYPRODUCTS` declared, `PATCH_COMMAND ${CMAKE_CURRENT_LIST_DIR}/..` (not `${CMAKE_SOURCE_DIR}`). All documented inline + in the A2 commit message; upstreamable to radae_nopy as a small PR.
 
 ### Installer / packaging manifests
 
-- **Linux AppImage** (`packaging/linux/build-appimage.sh`): copy `resources/rade/model.f32` into `AppDir/usr/share/NereusSDR/rade/model.f32`. Add `librade.so` and `libopus.so` to `AppDir/usr/lib/`.
-- **macOS DMG** (`packaging/macos/build-dmg.sh`): bundle into `NereusSDR.app/Contents/Resources/rade/model.f32`. Universal-binary build flag `BUILD_OSX_UNIVERSAL=ON`. Codesign + notarize includes the new dylibs.
-- **Windows portable ZIP + NSIS installer**: `resources\rade\model.f32` next to the exe. NSIS installer copies to `$INSTDIR\resources\rade\`. Include `rade.dll` and `opus.dll` next to `NereusSDR.exe`.
+- **Linux AppImage** (`packaging/linux/build-appimage.sh`): bundle `librade.so` to `AppDir/usr/lib/`. No model-file step (weights embedded).
+- **macOS DMG** (`packaging/macos/build-dmg.sh`): librade.dylib gets embedded in `NereusSDR.app/Contents/Frameworks/` and codesigned + notarized. Universal-binary build flag `BUILD_OSX_UNIVERSAL=ON`. No model-file step.
+- **Windows portable ZIP + NSIS installer**: `rade.dll` next to `NereusSDR.exe`. No model-file step.
 
-Release artifact size impact: roughly +15 MB per platform (model + librade + libopus).
+Release artifact size impact: roughly +9 MB per platform (librade with embedded weights). libopus is statically baked into librade by radae_nopy's BuildOpus.cmake, no separate libopus.so/dylib/dll to ship.
 
 ### CI implications
 
@@ -525,7 +526,7 @@ All unit + integration tests on every PR via existing GitHub Actions CMake workf
 
 - **`radae_nopy` license unverified.** Verify upfront as the first port step. If GPL-incompatible, fall back to `ExternalProject_Add` (slower CI, network-dependent).
 - **RADE library build complexity** (Python3 + Opus + librade across three platforms). Smoke-test the build on Linux + macOS + Windows CI in the first commit; treat as a CI gate.
-- **Model file shipping** in three platform installers across three relative paths. Implement model-file fallback UX (grey-out RADE mode + tooltip) so missing file degrades gracefully.
+- ~~**Model file shipping** in three platform installers~~ NO LONGER A RISK per Task A2b finding: weights are compiled into librade. The "missing model" UX path is moot for the C-port we chose.
 - **FreeDV Reporter as single point of failure.** Server URL is a setting (operator can point at private relay). Auto-reconnect with exponential backoff caps at 60s.
 - **Spot dedup edge cases.** Add dedup layer at SpotModel adapter  -  `(callsign, freqMhz rounded to 100 Hz, source)` tuple with 10s window suppresses same-source dupes; cross-source kept (spotter info is meaningful).
 - **DxccColorProvider performance under load.** ~4260 lookups/sec at worst (142 spots × 30 fps). Lock-free reads after parse. Profile once with realistic ADIF; cache `(callsign, band)` → color if hot.
@@ -619,8 +620,9 @@ Estimated 4-6 weeks of focused work. First ~2 days are the build-system gate.
   - Full RX + TX with embedded rade_text callsign+grid channel.
   - VFO flag SNR row, mode-aware. RadeApplet in the right column.
   - New "RADE" MicProfileManager preset (flat EQ + Leveler on by default).
-  - Vendored radae_nopy + libopus in third_party/rade/. Model file ships
-    as a sibling resource (resources/rade/model.f32, ~13 MB).
+  - Vendored radae_nopy + libopus in third_party/rade/. Neural-net
+    weights compiled into librade (no external model file). Adds about
+    9 MB to the binary on every platform.
 ```
 
 ## Appendix: Pre-port checklist for freedv-gui
