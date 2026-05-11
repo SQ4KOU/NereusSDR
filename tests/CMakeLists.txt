@@ -4176,6 +4176,14 @@ nereus_add_test(tst_rx_decode_model)
 # Fifth task of Phase D (Models).
 nereus_add_test(tst_slice_model_snr)
 
+# ── Phase 3R Task J1: DSPMode::RADE enum entry ──────────────────────────────
+# Pins the SliceModel::modeName / modeFromName round-trip for the new
+# DSPMode::RADE = 12 value.  RADE is a NereusSDR-native extension to
+# the WDSP-derived DSPMode enum (WDSP has no knowledge of RADE); the
+# value signals that the slice's signal chain runs through the
+# RadeChannel from I1-I3 instead of WDSP's RxChannel.
+nereus_add_test(tst_dspmode_rade)
+
 # ── Phase 3J-2 Task E1: SpectrumWidget spot overlay render ─────────────────
 # Pins the contract that drawSpotMarkers places spot labels with
 # collision-avoiding multi-level stacking, overflows into +N cluster

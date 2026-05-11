@@ -155,6 +155,12 @@ namespace NereusSDR {
 
 // Demodulation mode. Values match WDSP's internal mode enum.
 // From Thetis dsp.cs DSPMode
+//
+// NereusSDR-native extension: RADE = 12 is NOT a WDSP mode.  WDSP has
+// no knowledge of RADE; the value signals that the slice's signal
+// chain runs through the RADE neural codec (RadeChannel from Phase 3R
+// I1-I3) instead of WDSP's RxChannel.  Phase 3R Task J3 swaps the
+// underlying channel on the transition into and out of this mode.
 enum class DSPMode : int {
     LSB  = 0,
     USB  = 1,
@@ -167,7 +173,9 @@ enum class DSPMode : int {
     SPEC = 8,
     DIGL = 9,
     SAM  = 10,
-    DRM  = 11
+    DRM  = 11,
+    // Phase 3R Task J1.  NereusSDR-native extension; not a WDSP mode.
+    RADE = 12
 };
 
 // AGC operating mode. Values match WDSP wcpAGC enum.

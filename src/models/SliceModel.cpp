@@ -908,6 +908,15 @@ std::pair<int, int> SliceModel::defaultFilterForMode(DSPMode mode)
     case DSPMode::DRM:
         // DRM: wide filter similar to AM
         return {-5000, 5000};
+    case DSPMode::RADE:
+        // Phase 3R Task J1.  RADE is a NereusSDR-native channel-swap mode;
+        // the RadeChannel codec operates on the full DDC bandwidth.  The
+        // RXA filter is unused while the mode is active (Phase 3R Task J3
+        // tears down the RxChannel on the transition into RADE), so the
+        // value here only seeds the cached filter band that the UI shows
+        // when the user flips back out of RADE.  An AM-class wide window
+        // is a sensible neutral default.
+        return {-5000, 5000};
     }
     // Fallback
     return {100, 3000};
@@ -992,6 +1001,10 @@ QList<std::pair<int, int>> SliceModel::presetsForMode(DSPMode mode)
     case DSPMode::DRM:
         // DRM: wide digital AM-like filters
         return { {-10000,10000}, {-5000,5000} };
+    case DSPMode::RADE:
+        // Phase 3R Task J1.  See defaultFilterForMode(DSPMode::RADE) for the
+        // RADE-mode filter-band rationale.  Single neutral wide preset.
+        return { {-5000, 5000} };
     }
     // Fallback
     return { {100, 3000} };
@@ -1066,6 +1079,8 @@ QString SliceModel::modeName(DSPMode mode)
     case DSPMode::DIGL: return QStringLiteral("DIGL");
     case DSPMode::SAM:  return QStringLiteral("SAM");
     case DSPMode::DRM:  return QStringLiteral("DRM");
+    // Phase 3R Task J1.  NereusSDR-native; not a WDSP mode.
+    case DSPMode::RADE: return QStringLiteral("RADE");
     }
     return QStringLiteral("USB");
 }
@@ -1084,6 +1099,8 @@ DSPMode SliceModel::modeFromName(const QString& name)
     if (name == QLatin1String("DIGL")) return DSPMode::DIGL;
     if (name == QLatin1String("SAM"))  return DSPMode::SAM;
     if (name == QLatin1String("DRM"))  return DSPMode::DRM;
+    // Phase 3R Task J1.  NereusSDR-native; not a WDSP mode.
+    if (name == QLatin1String("RADE")) return DSPMode::RADE;
     return DSPMode::USB;
 }
 
