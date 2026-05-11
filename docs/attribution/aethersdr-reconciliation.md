@@ -477,6 +477,36 @@ overflow paths can be exercised deterministically without real amateur
 callsigns; `no-port-check` header set with the precedent list (B2-B6,
 C1-C4, D1-D5).
 
+### Phase 3J-2 Task F1 - SpotHubDialog shell with 9-tab strip
+
+Added 2026-05-11. First task of Phase F (Hub dialog). Ports the
+shell of AetherSDR's `src/gui/DxClusterDialog.{h,cpp}` [@0cd4559] -
+the constructor, the top-level `QTabWidget` with 9 tabs in upstream
+order (Cluster / RBN / WSJT-X / SpotCollector / POTA / FreeDV /
+PSK Reporter / Spot List / Display), and the seventeen signal
+declarations forwarded from the per-source sub-tabs. Each
+`build<Source>Tab()` is a stub adding a placeholder QLabel. F2
+(per-source tabs), F3 (Spot List), and F4 (Display) build the
+content. Renamed `DxClusterDialog` -> `SpotHubDialog` to match the
+expanded scope (Cluster + RBN + 5 other ingest sources + Spot List
++ Display).
+
+| NereusSDR file | AetherSDR counterpart | Evidence | Specific mod-history wording |
+|---|---|---|---|
+| `src/gui/SpotHubDialog.h` | `src/gui/DxClusterDialog.h:79-215` | Port-citation header names AetherSDR `src/gui/DxClusterDialog.{h,cpp}` (shell only). Phase 3J-2 Task F1. Constructor signature mirrors upstream's six-client + DxccColorProvider arg layout. NereusSDR divergences: (1) replaces upstream's trailing `RadioModel* radioModel` argument with `SpotModel* spots` (the TCI-keyed spot sink from Task D1); routing of `tuneRequested(double)` into the active RadioModel happens in MainWindow when the dialog is instantiated. (2) Replaces upstream's `HAVE_WEBSOCKETS`-gated `FreeDvClient` with the always-built `FreeDVReporterClient` (Task B5; same Engine.IO / Socket.IO contract, no compile-time gating). (3) Adds a `PskReporterClient* pskClient` argument and a PSK Reporter tab between FreeDV and Spot List (NereusSDR Task B6; upstream has no PSK Reporter tab). Seventeen signals declared: `settingsChanged`, `connectRequested(QString,quint16,QString)`, `disconnectRequested`, `rbnConnectRequested(QString,quint16,QString)`, `rbnDisconnectRequested`, `wsjtxStartRequested(QString,quint16)`, `wsjtxStopRequested`, `spotCollectorStartRequested(quint16)`, `spotCollectorStopRequested`, `potaStartRequested(int)`, `potaStopRequested`, `freedvStartRequested`, `freedvStopRequested`, `pskStartRequested`, `pskStopRequested`, `tuneRequested(double)`, `spotsClearedAll`. Inline cite at the class definition. | "SpotHub dialog ported from AetherSDR `src/gui/DxClusterDialog.{h,cpp}` [@0cd4559]. Class renamed to `SpotHubDialog` to match expanded scope. Constructor mirrors upstream's six-client + DxccColorProvider arg layout but replaces upstream's trailing `RadioModel*` with `SpotModel*` (Task D1) and adds a `PskReporterClient*` argument plus a corresponding PSK Reporter tab between FreeDV and Spot List. FreeDV tab is always built (no `HAVE_WEBSOCKETS` gate). Tab order: Cluster / RBN / WSJT-X / SpotCollector / POTA / FreeDV / PSK Reporter / Spot List / Display. F1 ships the shell only; each `build*Tab()` is a stub adding a placeholder QLabel. F2-F4 fill in content." |
+| `src/gui/SpotHubDialog.cpp` | `src/gui/DxClusterDialog.cpp:230-273` | Port-citation header names AetherSDR `src/gui/DxClusterDialog.cpp` (shell only). Phase 3J-2 Task F1. Constructor body (`SpotHubDialog::SpotHubDialog`) follows upstream `:230-273`: `setWindowTitle("SpotHub")`, `setMinimumSize(680, 560)`, `resize(760, 640)`, root `QVBoxLayout` with `setSpacing(0)` + `setContentsMargins(4, 4, 4, 4)`, `QTabWidget` with verbatim panel-border + tab-color stylesheet (`QTabWidget::pane { border: 1px solid #203040; }`, `QTabBar::tab { background: #1a1a2e; color: #808890; border: 1px solid #203040; padding: 6px 16px; margin-right: 2px; }`, `QTabBar::tab:selected { background: #0f0f1a; color: #00b4d8; border-bottom: none; }`), then nine `build*Tab(tabs)` calls in upstream order with the PSK tab inserted between FreeDV and Spot List. F1 ships nine stub bodies; each `build*Tab` creates a `QWidget` page with a `QVBoxLayout` containing one `QLabel` placeholder, then calls `tabs->addTab(page, "<Source>")`. NereusSDR divergences: spot-batch timer, per-source connection / spot / log wiring, log-file tailing, and the 17 inline lambdas that forward `rawLineReceived` / `spotReceived` / `connected` / `disconnected` / `connectionError` signals into UI state are deferred to F2 (per-source tabs), F3 (Spot List), and F4 (Display). FreeDV tab is unconditional in NereusSDR (upstream gated on `HAVE_WEBSOCKETS`). | "Same as `SpotHubDialog.h` above. Constructor body, window-title / sizing, root `QVBoxLayout` + content-margin / spacing, `QTabWidget` panel-border + tab-color stylesheet (background `#1a1a2e`, selected `#0f0f1a` + accent `#00b4d8`, panel border `#203040`), and the nine `build*Tab(tabs)` invocations are byte-for-byte from upstream. F1 stub bodies add a placeholder QLabel per tab; F2-F4 replace them. Per-source connect / disconnect / spot / log lambdas, spot-batch timer, and log-file tailing are deferred to F2 / F3 / F4." |
+
+Companion test file `tests/tst_spothub_dialog_smoke.cpp` (not listed in
+Bucket A, mirroring the precedent of every Phase 3J-2 test).
+Three tests pinning the F1 contract: `dialogConstructs` (all six
+clients + SpotModel + DxccColorProvider supplied, dialog non-null),
+`hasNineTabs` (`findChild<QTabWidget*>` returns a tab strip with
+exactly 9 tabs), `tabOrderMatchesAetherSdr` (tab labels at indices
+0-8 match Cluster / RBN / WSJT / SpotCollector / POTA / FreeDV /
+PSK / Spot List / Display in upstream order). `no-port-check`
+header set because the test constructs fixture clients only and has
+no callsign or wire-payload fixtures.
+
 ---
 
 ## Bucket B — False AetherSDR citations (126 files)

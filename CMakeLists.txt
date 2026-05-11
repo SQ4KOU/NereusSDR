@@ -594,6 +594,8 @@ set(GUI_SOURCES
     src/gui/widgets/StationBlock.h
     src/gui/NetworkDiagnosticsDialog.cpp
     src/gui/NetworkDiagnosticsDialog.h
+    src/gui/SpotHubDialog.cpp
+    src/gui/SpotHubDialog.h
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainer.cpp
     src/gui/containers/ContainerManager.cpp

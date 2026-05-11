@@ -4192,3 +4192,18 @@ nereus_add_test(tst_slice_model_snr)
 # (drawSpotMarkers + showSpotClusterPopup). First task of Phase E
 # (panadapter spot overlay).
 nereus_add_test(tst_spot_overlay_render)
+
+# ── Phase 3J-2 Task F1: SpotHubDialog tab-strip smoke ──────────────────────
+# Pins the contract that SpotHubDialog (the AetherSDR DxClusterDialog
+# port) constructs successfully when handed all 6 spot-ingest clients
+# + SpotModel + DxccColorProvider, that its top-level QTabWidget
+# exposes exactly 9 tabs, and that the tab labels appear in AetherSDR's
+# upstream order. Three tests:
+#   dialogConstructs       - clients supplied, dialog non-null
+#   hasNineTabs            - top-level QTabWidget has exactly 9 tabs
+#   tabOrderMatchesAetherSdr - Cluster/RBN/WSJT/SpotCollector/POTA/
+#                              FreeDV/PSK/Spot List/Display order
+# Source: AetherSDR src/gui/DxClusterDialog.{h,cpp} [@0cd4559] (shell
+# only; tab content lands in F2-F4). First task of Phase F (Hub
+# dialog).
+nereus_add_test(tst_spothub_dialog_smoke)
