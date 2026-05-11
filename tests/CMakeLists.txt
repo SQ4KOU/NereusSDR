@@ -4068,3 +4068,25 @@ nereus_add_test(tst_dxcc_worked_status)
 #   (W1AW on 20m PHONE -> colorWorked dim grey). Source:
 #   AetherSDR src/core/DxccColorProvider.{h,cpp} [@0cd4559].
 nereus_add_test(tst_dxcc_color_provider)
+
+# ── Phase 3J-2 Task D1: SpotModel (TCI-keyed spot sink) ────────────────────
+# Pins the contract that SpotModel is a QMap<int, SpotData> sink
+# keyed by monotonic spot index, with a TCI-keyed update API:
+#   void applySpotStatus(int index, const QMap<QString,QString>& kvs);
+# recognising 12 keys (callsign, rx_freq, tx_freq, mode, color,
+# background_color, source, spotter_callsign, comment, timestamp,
+# lifetime_seconds, priority) and decoding the TCI 0x7F (DEL)
+# wire-format quirk to a single ASCII space in callsign and comment.
+# Six signals: spotAdded / spotUpdated / spotRemoved / spotsCleared /
+# spotsRefreshed / spotTriggered. Seven tests:
+#   initialState (empty model reports zero spots), applySpotStatusAddsNew
+#   (first applySpotStatus for an index emits spotAdded), applySpotStatusUpdatesExisting
+#   (subsequent applySpotStatus emits spotUpdated and preserves prior
+#   fields not in the update), appliesAllTwelveKeys (every recognised
+#   key round-trips), decodes0x7FAsSpace (TCI wire-format quirk decoded
+#   in callsign + comment), removeSpotEmitsSignal (removeSpot emits
+#   spotRemoved and erases the row), clearEmitsSignal (clear emits
+#   spotsCleared once and empties the map). Source: AetherSDR
+#   src/models/SpotModel.{h,cpp} [@0cd4559]. First task of Phase D
+#   (Models).
+nereus_add_test(tst_spot_model)

@@ -525,6 +525,7 @@ set(MODEL_SOURCES
     src/models/MeterModel.cpp
     src/models/TransmitModel.cpp
     src/models/FilterPresetStore.cpp
+    src/models/SpotModel.cpp
 )
 
 set(GUI_SOURCES
