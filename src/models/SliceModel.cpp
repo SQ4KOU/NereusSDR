@@ -167,31 +167,41 @@ void SliceModel::setDspMode(DSPMode mode)
 
     // ── Phase 3R Task J3: mode-aware channel swap ─────────────────────────
     //
-    // RADE is a NereusSDR-native DSPMode (J1) whose signal chain runs
-    // through RadeChannel (third_party/rade neural codec) instead of
-    // WDSP's RxChannel.  On the transition into or out of DSPMode::RADE
-    // we swap the underlying signal-chain channel.  The swap is driven
-    // entirely off the local mode-change condition; non-RADE-to-non-RADE
-    // mode changes (e.g. USB -> LSB) are untouched and continue to use
-    // the WDSP RxChannel created at connect time.
+    // RADE_U / RADE_L are NereusSDR-native DSPModes (J1) whose signal
+    // chain runs through RadeChannel (third_party/rade neural codec)
+    // instead of WDSP's RxChannel.  On the transition into or out of
+    // either RADE sideband we swap the underlying signal-chain channel.
+    // The swap is driven entirely off the local mode-change condition;
+    // non-RADE-to-non-RADE mode changes (e.g. USB -> LSB) are untouched
+    // and continue to use the WDSP RxChannel created at connect time.
+    //
+    // RADE_U <-> RADE_L is also a channel swap (destroy and recreate),
+    // matching the standing J3 pattern that "mode change implies channel
+    // swap".  This is simpler than reusing the channel and re-calling
+    // setSideband, and keeps the lifecycle bookkeeping uniform.
     //
     // Reach the WdspEngine via the parent RadioModel rather than holding
     // a direct pointer on SliceModel; this keeps the construction graph
     // unchanged (slices are parented to RadioModel; see RadioModel.cpp:
     // 1374 [Phase 3R J3] new SliceModel(this)).
     if (modeChanged) {
+        const auto isRade = [](DSPMode m) {
+            return m == DSPMode::RADE_U || m == DSPMode::RADE_L;
+        };
         auto* radio = qobject_cast<RadioModel*>(parent());
         if (radio != nullptr) {
             WdspEngine* engine = radio->wdspEngine();
             if (engine != nullptr) {
                 const int channelId = m_sliceIndex;
+                const bool oldIsRade = isRade(oldMode);
+                const bool newIsRade = isRade(mode);
 
-                if (oldMode == DSPMode::RADE && mode != DSPMode::RADE) {
+                if (oldIsRade && !newIsRade) {
                     // RADE -> any WDSP mode: tear down the RadeChannel
                     // and recreate the WDSP RxChannel for this slice.
                     engine->destroyRadeChannel(channelId);
                     engine->createRxChannel(channelId);
-                } else if (oldMode != DSPMode::RADE && mode == DSPMode::RADE) {
+                } else if (!oldIsRade && newIsRade) {
                     // Any WDSP mode -> RADE: tear down the RxChannel and
                     // create a new RadeChannel.  Wire its signals into
                     // RadioModel's slot graph (per-slice lambdas owned
@@ -200,6 +210,7 @@ void SliceModel::setDspMode(DSPMode mode)
                     engine->destroyRxChannel(channelId);
                     RadeChannel* radeCh = engine->createRadeChannel(channelId);
                     if (radeCh != nullptr) {
+                        radeCh->setSideband(mode == DSPMode::RADE_U);
                         radio->wireRadeChannel(channelId, radeCh, this);
                         const QString modelPath = radeModelPath();
                         if (!radeCh->start(modelPath)) {
@@ -207,6 +218,25 @@ void SliceModel::setDspMode(DSPMode mode)
                                 << "SliceModel" << m_sliceIndex
                                 << "setDspMode(RADE): RadeChannel.start() failed for"
                                 << modelPath
+                                << "- channel-swap proceeds but RADE will not decode";
+                        }
+                    }
+                } else if (oldIsRade && newIsRade) {
+                    // RADE_U <-> RADE_L: destroy + recreate the
+                    // RadeChannel so the sideband flag is set fresh on
+                    // a clean instance.  Matches the J3 pattern of
+                    // "mode change implies channel swap".
+                    engine->destroyRadeChannel(channelId);
+                    RadeChannel* radeCh = engine->createRadeChannel(channelId);
+                    if (radeCh != nullptr) {
+                        radeCh->setSideband(mode == DSPMode::RADE_U);
+                        radio->wireRadeChannel(channelId, radeCh, this);
+                        const QString modelPath = radeModelPath();
+                        if (!radeCh->start(modelPath)) {
+                            qCWarning(lcDsp)
+                                << "SliceModel" << m_sliceIndex
+                                << "setDspMode(RADE U<->L): RadeChannel.start() "
+                                   "failed for" << modelPath
                                 << "- channel-swap proceeds but RADE will not decode";
                         }
                     }
@@ -980,15 +1010,18 @@ std::pair<int, int> SliceModel::defaultFilterForMode(DSPMode mode)
     case DSPMode::DRM:
         // DRM: wide filter similar to AM
         return {-5000, 5000};
-    case DSPMode::RADE:
-        // Phase 3R Task J1.  RADE is a NereusSDR-native channel-swap mode;
-        // the RadeChannel codec operates on the full DDC bandwidth.  The
-        // RXA filter is unused while the mode is active (Phase 3R Task J3
-        // tears down the RxChannel on the transition into RADE), so the
-        // value here only seeds the cached filter band that the UI shows
-        // when the user flips back out of RADE.  An AM-class wide window
-        // is a sensible neutral default.
-        return {-5000, 5000};
+    case DSPMode::RADE_U:
+        // Phase 3R Task J1.  RADE Upper sideband: the modem occupies
+        // ~650..2350 Hz (1700 Hz wide, centered at +1500 Hz).  This is
+        // the SSB-style passband that the panadapter filter window
+        // displays and that the TX I/Q routing confines the RADE
+        // baseband energy to.  The earlier +/-5000 Hz AM-class window
+        // was a placeholder; the filter IS visible on the panadapter
+        // AND defines the IF/baseband passband for the modem energy.
+        return {650, 2350};
+    case DSPMode::RADE_L:
+        // Phase 3R Task J1.  RADE Lower sideband: mirror of RADE-U.
+        return {-2350, -650};
     }
     // Fallback
     return {100, 3000};
@@ -1073,10 +1106,14 @@ QList<std::pair<int, int>> SliceModel::presetsForMode(DSPMode mode)
     case DSPMode::DRM:
         // DRM: wide digital AM-like filters
         return { {-10000,10000}, {-5000,5000} };
-    case DSPMode::RADE:
-        // Phase 3R Task J1.  See defaultFilterForMode(DSPMode::RADE) for the
-        // RADE-mode filter-band rationale.  Single neutral wide preset.
-        return { {-5000, 5000} };
+    case DSPMode::RADE_U:
+        // Phase 3R Task J1.  RADE Upper sideband: single fixed-bandwidth
+        // preset matching the 1700 Hz modem passband.  No F1-F10
+        // variants; RADE has a fixed bandwidth per sideband.
+        return { {650, 2350} };
+    case DSPMode::RADE_L:
+        // Phase 3R Task J1.  RADE Lower sideband: mirror of RADE-U.
+        return { {-2350, -650} };
     }
     // Fallback
     return { {100, 3000} };
@@ -1151,8 +1188,10 @@ QString SliceModel::modeName(DSPMode mode)
     case DSPMode::DIGL: return QStringLiteral("DIGL");
     case DSPMode::SAM:  return QStringLiteral("SAM");
     case DSPMode::DRM:  return QStringLiteral("DRM");
-    // Phase 3R Task J1.  NereusSDR-native; not a WDSP mode.
-    case DSPMode::RADE: return QStringLiteral("RADE");
+    // Phase 3R Task J1.  NereusSDR-native; not WDSP modes.  Split
+    // into upper/lower sidebands like USB/LSB.
+    case DSPMode::RADE_U: return QStringLiteral("RADE-U");
+    case DSPMode::RADE_L: return QStringLiteral("RADE-L");
     }
     return QStringLiteral("USB");
 }
@@ -1171,8 +1210,13 @@ DSPMode SliceModel::modeFromName(const QString& name)
     if (name == QLatin1String("DIGL")) return DSPMode::DIGL;
     if (name == QLatin1String("SAM"))  return DSPMode::SAM;
     if (name == QLatin1String("DRM"))  return DSPMode::DRM;
-    // Phase 3R Task J1.  NereusSDR-native; not a WDSP mode.
-    if (name == QLatin1String("RADE")) return DSPMode::RADE;
+    // Phase 3R Task J1.  NereusSDR-native; not WDSP modes.
+    if (name == QLatin1String("RADE-U")) return DSPMode::RADE_U;
+    if (name == QLatin1String("RADE-L")) return DSPMode::RADE_L;
+    // Legacy migration: pre-fix builds persisted the singular "RADE"
+    // string before the sideband split landed.  Map it to RADE_U so
+    // existing per-MAC persisted slice modes keep working on upgrade.
+    if (name == QLatin1String("RADE")) return DSPMode::RADE_U;
     return DSPMode::USB;
 }
 

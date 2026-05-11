@@ -8,7 +8,7 @@
 //
 // K2 adds the lightweight enum + std::atomic member + cross-thread
 // setter slot that future K-bench work will use to route a slice
-// in DSPMode::RADE through RadeChannel rather than TxChannel's WDSP
+// in DSPMode::RADE_U / RADE_L through RadeChannel rather than the WDSP
 // TXA chain.  This commit pins only the contract:
 //
 //   * TxPath has exactly two values, Wdsp and Rade.

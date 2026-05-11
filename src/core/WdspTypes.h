@@ -156,11 +156,15 @@ namespace NereusSDR {
 // Demodulation mode. Values match WDSP's internal mode enum.
 // From Thetis dsp.cs DSPMode
 //
-// NereusSDR-native extension: RADE = 12 is NOT a WDSP mode.  WDSP has
-// no knowledge of RADE; the value signals that the slice's signal
-// chain runs through the RADE neural codec (RadeChannel from Phase 3R
-// I1-I3) instead of WDSP's RxChannel.  Phase 3R Task J3 swaps the
-// underlying channel on the transition into and out of this mode.
+// NereusSDR-native extension: RADE_U = 12 and RADE_L = 13 are NOT WDSP
+// modes.  WDSP has no knowledge of RADE; the values signal that the
+// slice's signal chain runs through the RADE neural codec (RadeChannel
+// from Phase 3R I1-I3) instead of WDSP's RxChannel.  Phase 3R Task J3
+// swaps the underlying channel on the transition into and out of either
+// RADE sideband.  Like USB/LSB, RADE has upper/lower sideband variants:
+// RADE_U occupies the +650..+2350 Hz baseband; RADE_L mirrors it on
+// the negative side (-2350..-650 Hz).  The 1700 Hz wide passband
+// matches the RADE modem footprint centered at +/-1500 Hz.
 enum class DSPMode : int {
     LSB  = 0,
     USB  = 1,
@@ -174,8 +178,12 @@ enum class DSPMode : int {
     DIGL = 9,
     SAM  = 10,
     DRM  = 11,
-    // Phase 3R Task J1.  NereusSDR-native extension; not a WDSP mode.
-    RADE = 12
+    // Phase 3R Task J1.  NereusSDR-native extension; not WDSP modes.
+    // RADE_U / RADE_L are sideband variants of the FreeDV RADE neural
+    // codec; split from a single "RADE" value after bench testing
+    // revealed the codec needs upper/lower variants like USB/LSB.
+    RADE_U = 12,
+    RADE_L = 13
 };
 
 // AGC operating mode. Values match WDSP wcpAGC enum.

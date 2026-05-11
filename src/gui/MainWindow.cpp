@@ -1988,9 +1988,10 @@ void MainWindow::populateDefaultMeter()
     panel->addApplet(m_phoneCwApplet);
 
     // RadeApplet — Phase 3R L2.  Sits alongside PhoneCwApplet but is
-    // visible only when the active slice's mode is DSPMode::RADE.  The
-    // initial mode is set in the dspModeChanged lambda below; for the
-    // default startup mode (USB) the applet starts hidden.
+    // visible only when the active slice's mode is DSPMode::RADE_U or
+    // DSPMode::RADE_L.  The initial mode is set in the dspModeChanged
+    // lambda below; for the default startup mode (USB) the applet
+    // starts hidden.
     m_radeApplet = new RadeApplet(m_radioModel, nullptr);
     panel->addApplet(m_radeApplet);
     m_radeApplet->setVisible(false);
@@ -2676,33 +2677,36 @@ void MainWindow::buildMenuBar()
     // =========================================================================
     QMenu* modeMenu = menuBar()->addMenu(QStringLiteral("&Mode"));
 
-    // 12 Thetis-faithful modes + the NereusSDR-native RADE extension
-    // (Phase 3R L3).  Display order: LSB, USB, DSB, CWL, CWU, AM,
-    // SAM, FM, DIGL, DIGU, DRM, SPEC, RADE.  Maps to DSPMode enum
-    // values from WdspTypes.h.
+    // 12 Thetis-faithful modes + the NereusSDR-native RADE-U / RADE-L
+    // entries (Phase 3R L3).  Display order: LSB, USB, DSB, CWL, CWU,
+    // AM, SAM, FM, DIGL, DIGU, DRM, SPEC, RADE-U, RADE-L.  Maps to
+    // DSPMode enum values from WdspTypes.h.
     // From Thetis dsp.cs DSPMode enum — enum values used directly, not indices.
-    // RADE is the NereusSDR-native 13th entry (DSPMode::RADE = 12,
-    // not a WDSP mode; routes the slice through RadeChannel).
+    // RADE-U / RADE-L are NereusSDR-native entries (DSPMode::RADE_U = 12,
+    // DSPMode::RADE_L = 13; not WDSP modes; routes the slice through
+    // RadeChannel).  Like USB/LSB, RADE has upper/lower sideband
+    // variants with mirrored 1700 Hz passbands.
     const struct { const char* label; DSPMode mode; } modes[] = {
-        { "LSB",  DSPMode::LSB  },
-        { "USB",  DSPMode::USB  },
-        { "DSB",  DSPMode::DSB  },
-        { "CWL",  DSPMode::CWL  },
-        { "CWU",  DSPMode::CWU  },
-        { "AM",   DSPMode::AM   },
-        { "SAM",  DSPMode::SAM  },
-        { "FM",   DSPMode::FM   },
-        { "DIGL", DSPMode::DIGL },
-        { "DIGU", DSPMode::DIGU },
-        { "DRM",  DSPMode::DRM  },
-        { "SPEC", DSPMode::SPEC },
-        { "RADE", DSPMode::RADE },  // Phase 3R L3 — NereusSDR-native
+        { "LSB",    DSPMode::LSB    },
+        { "USB",    DSPMode::USB    },
+        { "DSB",    DSPMode::DSB    },
+        { "CWL",    DSPMode::CWL    },
+        { "CWU",    DSPMode::CWU    },
+        { "AM",     DSPMode::AM     },
+        { "SAM",    DSPMode::SAM    },
+        { "FM",     DSPMode::FM     },
+        { "DIGL",   DSPMode::DIGL   },
+        { "DIGU",   DSPMode::DIGU   },
+        { "DRM",    DSPMode::DRM    },
+        { "SPEC",   DSPMode::SPEC   },
+        { "RADE-U", DSPMode::RADE_U },  // Phase 3R L3, NereusSDR-native upper
+        { "RADE-L", DSPMode::RADE_L },  // Phase 3R L3, NereusSDR-native lower
     };
 
     m_modeActionGroup = new QActionGroup(this);
     m_modeActionGroup->setExclusive(true);
 
-    for (int i = 0; i < 13; ++i) {
+    for (int i = 0; i < 14; ++i) {
         DSPMode mode = modes[i].mode;
         QAction* act = modeMenu->addAction(QString::fromUtf8(modes[i].label),
                                            this, [this, mode]() {
@@ -2725,9 +2729,10 @@ void MainWindow::buildMenuBar()
                 DSPMode::LSB, DSPMode::USB, DSPMode::DSB, DSPMode::CWL,
                 DSPMode::CWU, DSPMode::AM,  DSPMode::SAM,  DSPMode::FM,
                 DSPMode::DIGL, DSPMode::DIGU, DSPMode::DRM, DSPMode::SPEC,
-                DSPMode::RADE,  // Phase 3R L3 — index 12
+                DSPMode::RADE_U,  // Phase 3R L3, index 12
+                DSPMode::RADE_L,  // Phase 3R L3, index 13
             };
-            for (int i = 0; i < 13; ++i) {
+            for (int i = 0; i < 14; ++i) {
                 if (m_modeActions[i]) {
                     m_modeActions[i]->setChecked(displayOrder[i] == mode);
                 }
@@ -3876,11 +3881,13 @@ void MainWindow::wireSliceToSpectrum()
             m_spectrumWidget->setTxMode(mode);
         }
         vfo->setMode(mode);
-        // Phase 3R L2: gate RADE applet visibility on mode == RADE.  Hide
-        // the PhoneCwApplet when RADE is active (the two are mutually
-        // exclusive surfaces — RADE has its own profile + control
-        // surface, the Phone/CW page does not apply).
-        const bool isRade = (mode == DSPMode::RADE);
+        // Phase 3R L2: gate RADE applet visibility on either RADE
+        // sideband (RADE_U or RADE_L).  Hide the PhoneCwApplet when
+        // RADE is active (the two are mutually exclusive surfaces:
+        // RADE has its own profile + control surface, the Phone/CW
+        // page does not apply).
+        const bool isRade = (mode == DSPMode::RADE_U
+                             || mode == DSPMode::RADE_L);
         if (m_radeApplet) {
             m_radeApplet->setVisible(isRade);
         }

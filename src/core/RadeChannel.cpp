@@ -371,6 +371,21 @@ bool RadeChannel::isSynced() const
     return m_synced;
 }
 
+// NereusSDR-native hook: sideband selection for RADE_U / RADE_L.
+// Stored on the channel at the v0.5.0 sideband-split fix-up; not yet
+// consumed by the I/Q routing layer.  K-bench follow-up will wire the
+// stored value into any future spectral mirroring at the TX modulator
+// stage.
+void RadeChannel::setSideband(bool upper)
+{
+    m_sidebandUpper = upper;
+}
+
+bool RadeChannel::sidebandUpper() const
+{
+    return m_sidebandUpper;
+}
+
 int RadeChannel::radeRxCallCountForTest() const
 {
     return m_radeRxCallCount;

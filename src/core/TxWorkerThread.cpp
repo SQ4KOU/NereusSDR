@@ -286,10 +286,10 @@ void TxWorkerThread::dispatchOneBlock()
     //
     // RadioModel updates m_currentTxPath on every MOX-on transition
     // based on the active slice's DSPMode.  When the slice is in
-    // DSPMode::RADE the worker must NOT run the WDSP TXA chain (the
-    // RADE neural codec generates its own baseband I/Q via
-    // RadeChannel::txEncode -> txModemReady, which K4 wires into the
-    // radio's TX buffer).
+    // DSPMode::RADE_U or DSPMode::RADE_L the worker must NOT run the
+    // WDSP TXA chain (the RADE neural codec generates its own baseband
+    // I/Q via RadeChannel::txEncode -> txModemReady, which K4 wires
+    // into the radio's TX buffer).
     //
     // K2 ships scaffolding only: the early-return is in place but the
     // mic feed into RadeChannel is NOT yet wired (see K-bench TODO

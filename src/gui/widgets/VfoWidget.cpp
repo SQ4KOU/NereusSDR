@@ -661,11 +661,12 @@ void VfoWidget::buildSmeterRow()
 //
 // Layout: ["SNR" label] <stretch> [value label "+N dB" / " -   - "]
 //
-// Hidden when m_currentMode is not DSPMode::RADE (SNR is only meaningful
-// for the RADE neural codec; LSB/USB/CW/etc. produce no SNR estimate).
-// The slice's snrDb Q_PROPERTY (D5) is the data source; RadeChannel
-// (I5 routing) populates it via SliceModel::setSnrDb. setSlice() wires
-// the snrDbChanged connection.
+// Hidden when m_currentMode is not a RADE sideband (DSPMode::RADE_U or
+// DSPMode::RADE_L).  SNR is only meaningful for the RADE neural codec;
+// LSB/USB/CW/etc. produce no SNR estimate.  The slice's snrDb
+// Q_PROPERTY (D5) is the data source; RadeChannel (I5 routing)
+// populates it via SliceModel::setSnrDb. setSlice() wires the
+// snrDbChanged connection.
 //
 // Colours:
 //   NaN          -> #7a8088 (dim grey, "no sync / no data" placeholder)
@@ -705,25 +706,29 @@ void VfoWidget::buildSnrRow()
 
 void VfoWidget::updateSnrVisibility()
 {
-    const bool isRade = (m_currentMode == DSPMode::RADE);
+    const bool isRade = (m_currentMode == DSPMode::RADE_U
+                         || m_currentMode == DSPMode::RADE_L);
     if (m_snrRow)   { m_snrRow->setVisible(isRade); }
     if (m_snrLabel) { m_snrLabel->setVisible(isRade); }
     if (m_snrValue) { m_snrValue->setVisible(isRade); }
 }
 
 // Phase 3R L3 — paint the Mode tab button (m_tabButtons[2]) with the
-// RADE purple accent (#a78bfa) when the active mode is RADE.  All
-// other modes use the default vfoTabBtnStyle() (cyan accent kAccent).
-// The mode tab button is the user-visible "chip" for the current mode:
-// its label is set to SliceModel::modeName(mode) in setMode().  When
-// RADE is active the chip switches to purple as a visual cue that the
-// signal chain has swapped from WDSP to the RADE neural codec.
+// RADE purple accent (#a78bfa) when the active mode is either RADE
+// sideband (RADE_U or RADE_L).  All other modes use the default
+// vfoTabBtnStyle() (cyan accent kAccent).  The mode tab button is the
+// user-visible "chip" for the current mode: its label is set to
+// SliceModel::modeName(mode) in setMode().  When RADE is active the
+// chip switches to purple as a visual cue that the signal chain has
+// swapped from WDSP to the RADE neural codec.
 void VfoWidget::updateModeTabAccent()
 {
     if (m_tabButtons.size() <= 2 || !m_tabButtons[2]) {
         return;
     }
-    if (m_currentMode == DSPMode::RADE) {
+    const bool isRade = (m_currentMode == DSPMode::RADE_U
+                         || m_currentMode == DSPMode::RADE_L);
+    if (isRade) {
         // RADE accent style — same structure as vfoTabBtnStyle() but
         // with the cyan kAccent replaced by the purple #a78bfa.  Both
         // the unchecked text colour and the checked underline pick up
@@ -1390,10 +1395,11 @@ void VfoWidget::buildModeTab()
         // rather than a combo box. No single Thetis control has an equivalent tooltip.
         m_modeCmb->setToolTip(QStringLiteral("Select demodulation mode"));
         // From Thetis enums.cs DSPMode — common modes
-        // 11 Thetis-faithful modes + the NereusSDR-native RADE
-        // extension (DSPMode::RADE = 12, see WdspTypes.h).  Phase 3R
-        // L3 added the RADE entry so users can switch into the
-        // FreeDV RADE neural codec from the floating VFO flag.
+        // 11 Thetis-faithful modes + the NereusSDR-native RADE-U /
+        // RADE-L entries (DSPMode::RADE_U = 12, RADE_L = 13, see
+        // WdspTypes.h).  Phase 3R L3 added the RADE entries so users
+        // can switch into either sideband of the FreeDV RADE neural
+        // codec from the floating VFO flag.
         m_modeCmb->addItems({
             QStringLiteral("LSB"), QStringLiteral("USB"),
             QStringLiteral("AM"), QStringLiteral("CWL"),
@@ -1401,7 +1407,8 @@ void VfoWidget::buildModeTab()
             QStringLiteral("DIGU"), QStringLiteral("DIGL"),
             QStringLiteral("SAM"), QStringLiteral("DSB"),
             QStringLiteral("DRM"),
-            QStringLiteral("RADE")  // Phase 3R L3 — NereusSDR-native
+            QStringLiteral("RADE-U"),  // Phase 3R L3, NereusSDR-native upper
+            QStringLiteral("RADE-L")   // Phase 3R L3, NereusSDR-native lower
         });
         m_modeCmb->setCurrentText(QStringLiteral("USB"));
         m_modeCmb->setStyleSheet(

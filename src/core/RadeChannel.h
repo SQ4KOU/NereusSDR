@@ -219,6 +219,14 @@ public:
     bool isActive() const;
     bool isSynced() const;
 
+    // Hook for sideband selection (RADE_U vs RADE_L).  Stored only at
+    // the v0.5.0 fix-up that split the original single RADE entry into
+    // upper/lower variants; not yet consumed by the I/Q routing layer.
+    // K-bench
+    // follow-up will wire the stored value into any future spectral
+    // mirroring at the TX modulator stage.  Default is upper.
+    bool sidebandUpper() const;
+
     // Test seam. Returns the number of times rade_rx() has been invoked
     // since start(). Used by tst_rade_channel to verify the RX
     // accumulator pumps the codec only when a full rade_nin()-sized
@@ -237,6 +245,11 @@ public:
     int txFeatureAccumSizeForTest() const;
 
 public slots:
+    // Sideband selection hook.  Set true for RADE_U (upper) and false
+    // for RADE_L (lower).  Stored on the channel; not yet consumed by
+    // the I/Q routing layer.  Default state (no caller) is upper.
+    void setSideband(bool upper);
+
     // RX path: feed I/Q from the receiver. RADE expects baseband
     // RADE_COMP at the codec's sample rate; the conversion path
     // lands at I2.
@@ -297,6 +310,13 @@ private:
     bool                 m_active{false};
     bool                 m_synced{false};
     bool                 m_farganWarmedUp{false};
+
+    // RADE-U / RADE-L sideband flag.  True for upper (RADE_U, default),
+    // false for lower (RADE_L).  Set via setSideband() in SliceModel's
+    // mode-swap path; not yet consumed by the I/Q routing layer at
+    // v0.5.0.  K-bench follow-up will wire this into any future
+    // spectral mirroring at the TX modulator stage.
+    bool                 m_sidebandUpper{true};
 
     // Test seam counter: incremented every time rade_rx() runs in
     // processIq(). Cleared on start().

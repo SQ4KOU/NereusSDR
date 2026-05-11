@@ -74,6 +74,9 @@ private slots:
     void txEncodeEmitsModemSamples();
     void resetTxClearsAccumulators();
     void txWhileInactiveIsNoOp();
+
+    // v0.5.0 RADE U/L sideband-split fix-up.
+    void sidebandRoundTripsViaSetter();
 };
 
 void TestRadeChannel::initialState()
@@ -417,6 +420,26 @@ void TestRadeChannel::txWhileInactiveIsNoOp()
     QCOMPARE(modemSpy.count(), 0);
     QCOMPARE(ch.radeTxCallCountForTest(), 0);
     QCOMPARE(ch.txFeatureAccumSizeForTest(), 0);
+}
+
+// v0.5.0 RADE U/L sideband-split fix-up: setSideband stores the flag
+// and sidebandUpper() returns it.  The default value is upper (true),
+// matching the RADE_U enum value 12 (= the lower-numbered, default
+// sideband, mirroring the USB-default convention in this codebase).
+// The flag is not yet consumed by the I/Q routing layer at v0.5.0;
+// this test pins the storage contract that K-bench follow-up will
+// consume.
+void TestRadeChannel::sidebandRoundTripsViaSetter()
+{
+    RadeChannel ch;
+    // Default: upper.
+    QVERIFY(ch.sidebandUpper());
+
+    ch.setSideband(false);
+    QVERIFY(!ch.sidebandUpper());
+
+    ch.setSideband(true);
+    QVERIFY(ch.sidebandUpper());
 }
 
 QTEST_GUILESS_MAIN(TestRadeChannel)

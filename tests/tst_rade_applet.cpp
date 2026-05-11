@@ -53,7 +53,7 @@ class TestRadeApplet : public QObject {
             const int idx = radio.addSlice();
             Q_ASSERT(idx == 0);
             slice = radio.sliceAt(0);
-            slice->setDspMode(DSPMode::RADE);  // installs a RadeChannel via J3
+            slice->setDspMode(DSPMode::RADE_U);  // installs a RadeChannel via J3
 
             // MicProfileManager only loads its factory profile bundle
             // after a real connection lands (RadioModel.cpp:1893-1906

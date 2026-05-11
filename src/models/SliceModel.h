@@ -773,7 +773,8 @@ signals:
 
 private:
     // Phase 3R Task J3 - resolves the RadeChannel model-path argument
-    // used when setDspMode transitions into DSPMode::RADE.  Lookup
+    // used when setDspMode transitions into DSPMode::RADE_U or
+    // DSPMode::RADE_L.  Lookup
     // chain: AppSettings "Rade/ModelPath" if set AND the file exists;
     // otherwise the literal "dummy" sentinel.  Librade has weights
     // compiled in per Phase A2b finding, so the model_file argument is

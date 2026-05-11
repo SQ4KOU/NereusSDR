@@ -48,11 +48,11 @@
 - **Vendored r8brain-free-src** at `third_party/r8brain/`: MIT-licensed 24-bit polyphase resampler. Used by the RADE 48-to-16 kHz TX audio chain and reserved for future general resampling needs.
 - **`RadeChannel`** (`src/core/wdsp/RadeChannel.h`): peer-mode DSP channel for `DSPMode::RADE`. RX path live: decodes I/Q to speech via librade, drives SliceModel `snrDb` for the VFO flag, emits `rxSpeechReady` into AudioEngine. TX path scaffolded: full real-time integration into TxWorkerThread's semaphore-wake TX pump deferred to K-bench follow-up. Hybrid port: AetherSDR for the Qt6 channel structure + freedv-gui for the DSP pipeline truth.
 - **`RadeText`** (`src/core/wdsp/RadeText.h`): thin Qt6 wrapper over third_party/rade's native callsign-over-EOO API. Task I4 Option B decision per upstream review BLOCKED: this approach avoided porting freedv-gui's `rade_text.c` plus roughly 1500 lines of codec2 dependencies.
-- **Mode dispatch** (in WdspEngine): new `DSPMode::RADE` enum entry. On mode change to or from RADE, WdspEngine swaps RxChannel for RadeChannel (destroy-and-recreate by design; band changes inside RADE keep the channel alive).
+- **Mode dispatch** (in WdspEngine): new `DSPMode::RADE_U = 12` and `DSPMode::RADE_L = 13` enum entries. Like USB/LSB, RADE has upper/lower sideband variants with mirrored 1700 Hz passbands (RADE-U: 650..2350 Hz; RADE-L: -2350..-650 Hz). On mode change to or from either RADE sideband, WdspEngine swaps RxChannel for RadeChannel (destroy-and-recreate by design; band changes inside RADE keep the channel alive). A RADE-U <-> RADE-L transition is also a destroy-and-recreate so the channel's sideband flag is set fresh on a clean instance.
 - **TX scaffolding** (commits 34a9f14c / 181d3ee5 / 7beacdc5): new `TxPath` enum on TxWorkerThread for mode-aware TX path selection; dedicated 80 Hz `RadeTxHpf80` HPF; `RadeTx48to16` 48-to-16 kHz polyphase resampler (uses r8brain); modem-output connect plumbing. **Full real-time integration into the semaphore-wake TX pump is deferred** to a K-bench follow-up after on-air RX verification on ANAN-G2 (tracked by Row 2 of the Phase 3R bench matrix).
 - **VFO flag SNR row** (`VfoWidget`): mode-aware; visible only when the active slice is in RADE mode. Text colour codes per the L1 spec (grey/yellow/green by SliceModel::snrDb thresholds).
 - **`RadeApplet`** (`src/gui/applets/RadeApplet.h`): right-column applet auto-docked when RADE is the active mode. Profile combo (defaults to RADE), sync indicator (colour tracks RadeChannel state), Reset Vocoder button (calls `RadeChannel::resetTx`).
-- **Mode menu** gains a RADE entry. Selecting Mode > RADE sets the active slice to `DSPMode::RADE`.
+- **Mode menu** gains RADE-U and RADE-L entries (14 entries total). Selecting Mode > RADE-U sets the active slice to `DSPMode::RADE_U`; selecting Mode > RADE-L sets `DSPMode::RADE_L`.
 - **`MicProfileManager`** ships a new RADE factory profile: Leveler enabled; ALC + CFC + CESSB + Phase Rotator all bypassed. Auto-selected on mode entry to RADE. Profile count 21 -> 22 (the existing 21 ported-from-Thetis profiles are untouched).
 
 ### Changed
@@ -60,10 +60,11 @@
 - `MicProfileManager` factory profile count 21 -> 22 (added RADE).
 - `RxDecodeModel` now sources from RADE callsign-over-EOO decodes in addition to WSJT-X UDP decodes.
 - `SpectrumWidget` extended with `loadSpotDisplaySettings` and spot test seams.
-- `WdspEngine` lifecycle extended to swap channels on `DSPMode::RADE` entry/exit.
+- `WdspEngine` lifecycle extended to swap channels on `DSPMode::RADE_U` / `DSPMode::RADE_L` entry/exit and on the U <-> L sideband flip.
 - `SliceModel` gains a `snrDb` Q_PROPERTY for the VFO flag SNR row.
 - `RadioModel` constructor and connect path expanded to own the 7 spot clients + 4 new models; `restoreSpotClientAutoStartState` runs on launch.
 - `MainWindow` Tools menu gains 2 entries; Ctrl+Shift+S / Ctrl+Shift+R hotkeys reserved.
+- **RADE split into RADE-U / RADE-L.** Pre-fix Phase 3R landed a single `DSPMode::RADE = 12` entry with a placeholder +/-5000 Hz AM-class filter. Bench testing revealed two issues: (1) the placeholder filter is wildly off from RADE's actual 1700 Hz modem footprint, and (2) RADE needs sideband variants like USB/LSB. Split into `RADE_U = 12` (650..2350 Hz passband, default) and `RADE_L = 13` (-2350..-650 Hz, mirrored). The filter window IS visible on the panadapter and defines the SSB-style passband the RADE modem energy occupies. Legacy persisted "RADE" string from pre-fix builds migrates to RADE_U on load.
 
 ### Deferred / known limitations
 

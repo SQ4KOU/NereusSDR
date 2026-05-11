@@ -583,7 +583,8 @@ private:
     // --- SNR row (Phase 3R L1) ---
     // Surfaces SliceModel::snrDb (set by RadeChannel via I5 routing).
     // Two labels: "SNR" (static text) + value ("+N dB" / " -   - ").
-    // Row visibility tracks m_currentMode == DSPMode::RADE.
+    // Row visibility tracks m_currentMode being either RADE sideband
+    // (DSPMode::RADE_U or DSPMode::RADE_L).
     QLabel* m_snrLabel{nullptr};
     QLabel* m_snrValue{nullptr};
     QWidget* m_snrRow{nullptr};  // parent row for show/hide

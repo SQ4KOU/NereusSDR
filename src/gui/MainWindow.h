@@ -387,9 +387,10 @@ private:
     QAction*      m_apfAction = nullptr;
     QAction*      m_binAction = nullptr;
 
-    // Mode menu actions (13 modes: 12 Thetis + NereusSDR-native RADE
-    // from Phase 3R L3; mutual exclusion via QActionGroup).
-    QAction*      m_modeActions[13]  = {};
+    // Mode menu actions (14 modes: 12 Thetis + NereusSDR-native
+    // RADE-U / RADE-L from Phase 3R L3; mutual exclusion via
+    // QActionGroup).
+    QAction*      m_modeActions[14]  = {};
     QActionGroup* m_modeActionGroup  = nullptr;
 
     // AGC menu action group (Task 12)
@@ -478,8 +479,9 @@ private:
     class TxApplet* m_txApplet{nullptr};
     class PhoneCwApplet* m_phoneCwApplet{nullptr};
     // Phase 3R L2 — RADE-mode applet, visible only when the active slice
-    // is in DSPMode::RADE.  Sits alongside PhoneCwApplet in the panel
-    // stack and is shown/hidden in the same dspModeChanged lambda.
+    // is in DSPMode::RADE_U or DSPMode::RADE_L.  Sits alongside
+    // PhoneCwApplet in the panel stack and is shown/hidden in the same
+    // dspModeChanged lambda.
     class RadeApplet* m_radeApplet{nullptr};
     class EqApplet* m_eqApplet{nullptr};
     class VaxApplet* m_vaxApplet{nullptr};

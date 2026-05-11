@@ -6,7 +6,7 @@
 // the FreeDV RADE neural voice codec port (Phase 3R); the channel
 // itself lives in src/core/RadeChannel.{h,cpp} (Tasks I1-I3).  This
 // applet surfaces the RadeChannel control + status to the user when
-// the active slice's mode is DSPMode::RADE.
+// the active slice's mode is DSPMode::RADE_U or DSPMode::RADE_L.
 //
 // Modification history (NereusSDR):
 //   2026-05-11 - Created for Phase 3R Task L2 by J.J. Boyd (KG4VCF),
@@ -45,10 +45,11 @@ struct RxDecode;
 //     active slice's RadeChannel.  Disabled if the slice has no
 //     RadeChannel (mode != RADE) at click time.
 //
-// Visibility is gated on the active slice's DSPMode == RADE: when the
-// user switches the active slice out of RADE the applet should be
-// hidden by the parent panel.  MainWindow tracks the mode-change in
-// the same lambda that flips PhoneCwApplet between Phone/CW/FM pages.
+// Visibility is gated on the active slice's DSPMode being either RADE
+// sideband (RADE_U or RADE_L): when the user switches the active slice
+// out of a RADE mode the applet should be hidden by the parent panel.
+// MainWindow tracks the mode-change in the same lambda that flips
+// PhoneCwApplet between Phone/CW/FM pages.
 class RadeApplet : public AppletWidget {
     Q_OBJECT
 

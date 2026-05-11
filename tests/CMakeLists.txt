@@ -2745,8 +2745,8 @@ target_compile_definitions(tst_tx_worker_thread PRIVATE NEREUS_BUILD_TESTS)
 # ── Phase 3R Task K2: TxWorkerThread::TxPath enum scaffolding ──
 # Pins the contract of the lightweight TxPath enum + std::atomic
 # m_currentTxPath member + setCurrentTxPath cross-thread slot that
-# K-bench will use to route DSPMode::RADE slices through RadeChannel
-# rather than the WDSP TXA chain.
+# K-bench will use to route DSPMode::RADE_U / RADE_L slices through
+# RadeChannel rather than the WDSP TXA chain.
 nereus_add_test(tst_tx_worker_rade_path_enum)
 target_compile_definitions(tst_tx_worker_rade_path_enum PRIVATE NEREUS_BUILD_TESTS)
 
@@ -4235,26 +4235,30 @@ nereus_add_test(tst_rx_decode_model)
 # Fifth task of Phase D (Models).
 nereus_add_test(tst_slice_model_snr)
 
-# ── Phase 3R Task J1: DSPMode::RADE enum entry ──────────────────────────────
+# ── Phase 3R Task J1: DSPMode::RADE_U / RADE_L enum entries ──────────────────
 # Pins the SliceModel::modeName / modeFromName round-trip for the new
-# DSPMode::RADE = 12 value.  RADE is a NereusSDR-native extension to
-# the WDSP-derived DSPMode enum (WDSP has no knowledge of RADE); the
-# value signals that the slice's signal chain runs through the
-# RadeChannel from I1-I3 instead of WDSP's RxChannel.
+# DSPMode::RADE_U = 12 and DSPMode::RADE_L = 13 values, plus the
+# legacy "RADE" singular string migration to RADE_U.  RADE is a
+# NereusSDR-native extension to the WDSP-derived DSPMode enum (WDSP
+# has no knowledge of RADE); the values signal that the slice's
+# signal chain runs through the RadeChannel from I1-I3 instead of
+# WDSP's RxChannel.  Like USB/LSB, RADE has upper/lower sideband
+# variants with mirrored 1700 Hz passbands.
 nereus_add_test(tst_dspmode_rade)
 
 # ── Phase 3R Task L1: VfoWidget SNR row ─────────────────────────────────────
 # Pins the contract that VfoWidget surfaces the active slice's snrDb
 # Q_PROPERTY (set by RadeChannel via I5 routing) as a dim-grey /
 # yellow / green text row, visible only when the slice's mode is
-# DSPMode::RADE. NereusSDR-native UI extension; no upstream
-# equivalent.
+# either RADE sideband (DSPMode::RADE_U or DSPMode::RADE_L).
+# NereusSDR-native UI extension; no upstream equivalent.
 # Cases:
 #   nanShowsDashesInGrey      - NaN -> " -   - " in #7a8088
 #   lowSnrShowsYellow         - 3.0 dB -> "+3 dB" in #e6c200
 #   goodSnrShowsGreen         - 12.0 dB -> "+12 dB" in #4caf50
 #   negativeSnrFormats        - -1.0 dB -> "-1 dB" (no double-sign)
-#   snrHiddenInNonRadeMode    - USB hides row; RADE shows it.
+#   snrHiddenInNonRadeMode    - USB hides row; RADE_U shows it.
+#   snrVisibleInRadeLower     - RADE_L also shows the row.
 nereus_add_test(tst_vfo_widget_snr)
 
 # ── Phase 3R Task L2: RadeApplet ────────────────────────────────────────────
@@ -4275,18 +4279,26 @@ nereus_add_test(tst_vfo_widget_snr)
 nereus_add_test(tst_rade_applet)
 
 # ── Phase 3R Task L3: Mode menu + VFO chip RADE entry ────────────────────────
-# Pins the RADE entry in the user-facing mode selectors.  Two
-# surfaces are covered (MainWindow Mode menu is too heavy for a
-# unit test and is covered by the existing tst_dspmode_rade
-# round-trip plus the L3 manual verification matrix).
+# Pins the RADE entries (upper + lower sidebands) in the user-facing
+# mode selectors.  Two surfaces are covered (MainWindow Mode menu is
+# too heavy for a unit test and is covered by the existing
+# tst_dspmode_rade round-trip plus the L3 manual verification
+# matrix).
 # Cases:
-#   vfoModeComboHasRadeEntry             - VFO flag mode combo lists RADE.
-#   vfoModeComboChangesToRade            - selecting RADE emits
-#                                          modeChanged(DSPMode::RADE).
-#   vfoModeTabLabelShowsRadeWhenActive   - tab #2 label paints "RADE".
-#   vfoModeTabChipPurpleInRade           - tab #2 stylesheet contains
+#   vfoModeComboHasRadeUpperEntry        - VFO flag mode combo lists RADE-U.
+#   vfoModeComboHasRadeLowerEntry        - VFO flag mode combo lists RADE-L.
+#   vfoModeComboChangesToRadeUpper       - selecting RADE-U emits
+#                                          modeChanged(DSPMode::RADE_U).
+#   vfoModeComboChangesToRadeLower       - selecting RADE-L emits
+#                                          modeChanged(DSPMode::RADE_L).
+#   vfoModeTabLabelShowsRadeUpperWhenActive - tab #2 label paints "RADE-U".
+#   vfoModeTabLabelShowsRadeLowerWhenActive - tab #2 label paints "RADE-L".
+#   vfoModeTabChipPurpleInRadeUpper      - tab #2 stylesheet contains
 #                                          the RADE purple accent
-#                                          (#a78bfa) when RADE active.
+#                                          (#a78bfa) when RADE-U active.
+#   vfoModeTabChipPurpleInRadeLower      - tab #2 stylesheet contains
+#                                          the RADE purple accent when
+#                                          RADE-L active.
 nereus_add_test(tst_mode_menu_rade)
 
 # ── Phase 3J-2 Task E1: SpectrumWidget spot overlay render ─────────────────

@@ -6,14 +6,16 @@
 // equivalent. Pins the contract that VfoWidget surfaces the active
 // slice's snrDb Q_PROPERTY (set by RadeChannel via I5 routing) as a
 // dim-grey / yellow / green text row. Row visibility tracks the
-// slice's current DSPMode: only shown when mode == DSPMode::RADE.
+// slice's current DSPMode: only shown when mode is either RADE
+// sideband (DSPMode::RADE_U or DSPMode::RADE_L).
 //
 // Cases:
 //   nanShowsDashesInGrey      - default snrDb=NaN paints " -   - " in dim grey
 //   lowSnrShowsYellow         - snrDb=3.0 paints "+3 dB" in yellow (#e6c200)
 //   goodSnrShowsGreen         - snrDb=12.0 paints "+12 dB" in green (#4caf50)
 //   negativeSnrFormats        - snrDb=-1.0 paints "-1 dB" (no double-sign)
-//   snrHiddenInNonRadeMode    - mode=USB hides row; mode=RADE shows it.
+//   snrHiddenInNonRadeMode    - mode=USB hides row; mode=RADE_U shows it.
+//   snrVisibleInRadeLower     - mode=RADE_L also shows the row.
 
 #include <QtTest>
 #include <QSignalSpy>
@@ -36,17 +38,18 @@ private slots:
     void goodSnrShowsGreen();
     void negativeSnrFormats();
     void snrHiddenInNonRadeMode();
+    void snrVisibleInRadeLower();
 };
 
 namespace {
 
-// Helper: build a VfoWidget bound to a SliceModel and put it in RADE mode.
-// The widget is constructed parentless so QTest can show() it without
-// dragging in MainWindow/SpectrumWidget.
+// Helper: build a VfoWidget bound to a SliceModel and put it in RADE_U
+// mode.  The widget is constructed parentless so QTest can show() it
+// without dragging in MainWindow/SpectrumWidget.
 void seedRadeMode(VfoWidget* vfo, SliceModel* slice) {
-    slice->setDspMode(DSPMode::RADE);
+    slice->setDspMode(DSPMode::RADE_U);
     vfo->setSlice(slice);
-    vfo->setMode(DSPMode::RADE);
+    vfo->setMode(DSPMode::RADE_U);
 }
 
 } // namespace
@@ -125,9 +128,29 @@ void TestVfoWidgetSnr::snrHiddenInNonRadeMode() {
     QVERIFY(!valueLabel->isVisibleTo(&vfo));
     QVERIFY(!nameLabel->isVisibleTo(&vfo));
 
-    // Switch the slice to RADE: row becomes visible.
-    slice.setDspMode(DSPMode::RADE);
-    vfo.setMode(DSPMode::RADE);
+    // Switch the slice to RADE_U: row becomes visible.
+    slice.setDspMode(DSPMode::RADE_U);
+    vfo.setMode(DSPMode::RADE_U);
+    QVERIFY(valueLabel->isVisibleTo(&vfo));
+    QVERIFY(nameLabel->isVisibleTo(&vfo));
+}
+
+void TestVfoWidgetSnr::snrVisibleInRadeLower() {
+    SliceModel slice;
+    VfoWidget vfo;
+
+    // RADE_L (lower sideband) also reveals the SNR row.  Both RADE
+    // sidebands share the same SNR semantics; the neural codec
+    // produces the same SNR estimate regardless of which sideband
+    // it serves.
+    slice.setDspMode(DSPMode::RADE_L);
+    vfo.setSlice(&slice);
+    vfo.setMode(DSPMode::RADE_L);
+
+    QLabel* valueLabel = vfo.snrValueLabelForTest();
+    QLabel* nameLabel  = vfo.snrLabelForTest();
+    QVERIFY(valueLabel != nullptr);
+    QVERIFY(nameLabel  != nullptr);
     QVERIFY(valueLabel->isVisibleTo(&vfo));
     QVERIFY(nameLabel->isVisibleTo(&vfo));
 }

@@ -3541,8 +3541,11 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                                 const DSPMode mode = m_activeSlice
                                     ? m_activeSlice->dspMode()
                                     : DSPMode::USB;
+                                const bool isRade =
+                                    (mode == DSPMode::RADE_U
+                                     || mode == DSPMode::RADE_L);
                                 const TxWorkerThread::TxPath path =
-                                    (mode == DSPMode::RADE)
+                                    isRade
                                         ? TxWorkerThread::TxPath::Rade
                                         : TxWorkerThread::TxPath::Wdsp;
                                 worker->setCurrentTxPath(path);

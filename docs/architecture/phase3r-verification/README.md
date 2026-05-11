@@ -152,9 +152,9 @@ MicProfileManager workflow).
 
 **Hardware:** ANAN-G2 with RX active on a quiet band.
 
-**Reproducer:**
+**Reproducer (sub-row 4a: USB <-> RADE-U):**
 1. Active slice in SSB (USB) mode; tune to a quiet frequency.
-2. Switch to RADE via the Mode menu. Confirm:
+2. Switch to RADE-U via the Mode menu. Confirm:
    - WdspEngine logs `RxChannel destroy` + `RadeChannel create`.
    - Audio path stays alive (no extended silence beyond a single
      frame).
@@ -168,8 +168,32 @@ MicProfileManager workflow).
    than a single frame (approximately 21 ms at 48 kHz with the
    default buffer size).
 
-**Expected:** Channel swap is clean; no resource leaks; no audio
-glitches beyond a frame; 10x round-trip is stable.
+**Reproducer (sub-row 4b: LSB <-> RADE-L):**
+1. Active slice in SSB (LSB) mode; tune to a quiet frequency.
+2. Switch to RADE-L via the Mode menu. Confirm:
+   - WdspEngine logs `RxChannel destroy` + `RadeChannel create`.
+   - VFO flag SNR row appears; tab #2 paints with the RADE purple
+     accent (#a78bfa).
+   - Panadapter filter window shows the -2350 to -650 Hz passband
+     (mirrored from RADE-U).
+3. Switch back to LSB. Confirm the standard SSB filter band
+   returns; VFO flag SNR row disappears.
+
+**Reproducer (sub-row 4c: RADE-U <-> RADE-L):**
+1. Active slice in RADE-U.
+2. Switch to RADE-L via the Mode menu. Confirm:
+   - WdspEngine logs `RadeChannel destroy` + `RadeChannel create`
+     (the U <-> L flip is also a destroy-and-recreate per the J3
+     standing pattern; the channel pointer should differ before
+     and after).
+   - Panadapter filter window mirrors from +650..+2350 Hz to
+     -2350..-650 Hz.
+   - VFO flag SNR row stays visible; tab #2 still purple.
+3. Switch back to RADE-U. Confirm the mirror flips again.
+
+**Expected:** Channel swap is clean across all three sub-rows; no
+resource leaks; no audio glitches beyond a frame; 10x round-trip is
+stable. Filter band mirrors correctly between U and L.
 
 **Status:** [ ] Untested  [ ] Passed YYYY-MM-DD by NAME  [ ] Failed YYYY-MM-DD by NAME (issue: #N)
 
@@ -211,17 +235,21 @@ recommended for live SNR colour transitions).
 
 **Reproducer:**
 1. Active slice in SSB mode. Confirm the VFO flag has NO SNR row.
-2. Switch to RADE mode. Confirm the SNR row appears, even when no
+2. Switch to RADE-U mode. Confirm the SNR row appears, even when no
    signal is present (shows N/A or 0 dB).
-3. When RADE signal is acquired, the SNR text should colour-code
+3. Switch to RADE-L mode. Confirm the SNR row stays visible (both
+   RADE sidebands surface the same SNR estimate from the neural
+   codec).
+4. When RADE signal is acquired, the SNR text should colour-code
    per the L1 spec in the design doc:
    - Grey when below the green threshold (typical sub 0 dB SNR).
    - Yellow at the mid-band (e.g. 0 to 6 dB).
    - Green above the high threshold (e.g. > 6 dB).
-4. Switch back to SSB; confirm the SNR row disappears.
+5. Switch back to SSB; confirm the SNR row disappears.
 
-**Expected:** SNR row is mode-aware (visible only in RADE); colour
-transitions follow the L1 spec.
+**Expected:** SNR row is mode-aware (visible in either RADE
+sideband, hidden everywhere else); colour transitions follow the
+L1 spec.
 
 **Status:** [ ] Untested  [ ] Passed YYYY-MM-DD by NAME  [ ] Failed YYYY-MM-DD by NAME (issue: #N)
 
@@ -238,18 +266,21 @@ file a feedback issue instead of a Failed row.
 **Reproducer:**
 1. Active slice in SSB mode. Confirm the RadeApplet is NOT visible
    (the right-column applet stack shows the standard set).
-2. Switch to RADE mode. Confirm the RadeApplet appears in the
+2. Switch to RADE-U mode. Confirm the RadeApplet appears in the
    right column.
-3. Verify the profile combo defaults to RADE; verify changing the
+3. Switch to RADE-L mode. Confirm the RadeApplet stays visible
+   (both RADE sidebands share the same applet surface; the applet
+   gates on either sideband).
+4. Verify the profile combo defaults to RADE; verify changing the
    combo to a non-RADE profile is allowed (operator override) but
    triggers a tooltip warning that bypass logic is no longer
    matching the recommended preset.
-4. Verify the sync indicator colour tracks the RadeChannel state
+5. Verify the sync indicator colour tracks the RadeChannel state
    (green = sync, red = no sync).
-5. Click the Reset Vocoder button. Verify the RadeChannel emits
+6. Click the Reset Vocoder button. Verify the RadeChannel emits
    `resetTx` (visible in debug log) and audio continues without
    crashing.
-6. Switch back to SSB. Confirm the RadeApplet disappears.
+7. Switch back to SSB. Confirm the RadeApplet disappears.
 
 **Expected:** Mode-aware visibility; profile combo round-trip;
 sync indicator live-tracks; Reset Vocoder fires resetTx.
@@ -260,26 +291,35 @@ sync indicator live-tracks; Reset Vocoder fires resetTx.
 
 ---
 
-## Row 8: Mode menu RADE entry
+## Row 8: Mode menu RADE entries
 
 **Hardware:** Software only.
 
 **Reproducer:**
 1. Open the Mode menu in the menu bar.
-2. Confirm RADE appears as a top-level entry below the standard
-   SSB / CW / AM / FM / DIGU / DIGL / PSK / RTTY etc. list.
-3. Click Mode > RADE. Confirm the active slice transitions to
-   `DSPMode::RADE` (verify via the VFO flag mode label).
-4. Click any other mode; confirm RADE clears.
+2. Confirm the menu lists 14 entries total: 12 Thetis-faithful
+   modes (LSB, USB, DSB, CWL, CWU, AM, SAM, FM, DIGL, DIGU, DRM,
+   SPEC) plus RADE-U and RADE-L as the two trailing
+   NereusSDR-native entries.
+3. Click Mode > RADE-U. Confirm the active slice transitions to
+   `DSPMode::RADE_U` (verify via the VFO flag mode label which
+   should read "RADE-U").
+4. Click Mode > RADE-L. Confirm the active slice transitions to
+   `DSPMode::RADE_L` (label reads "RADE-L"); the mode-action
+   exclusivity should uncheck RADE-U and check RADE-L.
+5. Click any other mode; confirm both RADE entries clear.
 
-**Expected:** Mode menu surfaces the RADE entry; selecting it sets
-`DSPMode::RADE` on the active slice.
+**Expected:** Mode menu surfaces both RADE entries; selecting
+RADE-U sets `DSPMode::RADE_U`; selecting RADE-L sets
+`DSPMode::RADE_L`; QActionGroup exclusivity ensures only one mode
+is checked at a time.
 
 **Status:** [ ] Untested  [ ] Passed YYYY-MM-DD by NAME  [ ] Failed YYYY-MM-DD by NAME (issue: #N)
 
-**Known limitations:** RADE is a single-band-plan mode (USB
-convention); selecting it on a band without a RADE convention slot
-is allowed but unlikely to yield decodes.
+**Known limitations:** RADE has a fixed 1700 Hz bandwidth per
+sideband (650..2350 Hz for RADE-U, mirrored for RADE-L). Selecting
+RADE on a band without a RADE-convention slot is allowed but
+unlikely to yield decodes.
 
 ---
 
