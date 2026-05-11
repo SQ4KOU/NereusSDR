@@ -84,6 +84,49 @@
 //                                    reportingFrequencyAsKhz setting
 //                                    is deferred to G3. AI tooling:
 //                                    Anthropic Claude Code.
+//   2026-05-11  J.J. Boyd / KG4VCF  Phase 3J-2 Task G3. Menu bar with
+//                                    Show / Filter / Idle longer than
+//                                    + per-column filters + idle
+//                                    auto-delete sweep + row context
+//                                    menu (QRZ / HamQTH / HamCall
+//                                    lookups + Copy callsign / locator
+//                                    + Send QSY) + double-click tune.
+//                                    Per-column visibility persists to
+//                                    AppSettings under
+//                                    FreeDvReporter/VisibleColumns as a
+//                                    14-bit bitmask. Per-column filters
+//                                    use the 6 comparison operators
+//                                    from upstream
+//                                    (freedv_reporter.h:50-58
+//                                    [@77e793a]: FILTER_GTE / FILTER_GT
+//                                    / FILTER_EQ / FILTER_NEQ /
+//                                    FILTER_LT / FILTER_LTE) with the
+//                                    same numeric-column whitelist (km
+//                                    / hdg / freq / SNR) from
+//                                    isNumericColumn_ at
+//                                    freedv_reporter.cpp:2538-2541
+//                                    [@77e793a]. Idle sweep walks the
+//                                    FreeDVStationModel's stations()
+//                                    map every 30 s (test seam
+//                                    setIdleSweepIntervalMsForTest
+//                                    drops to 10 ms) and removes any
+//                                    station whose lastUpdate predates
+//                                    the threshold; threshold persists
+//                                    to FreeDvReporter/IdleTimeout
+//                                    Minutes with 0 = Never. Row
+//                                    context menu and double-click QSY
+//                                    are NereusSDR-architectural
+//                                    divergences vs upstream's
+//                                    hover-driven popup (tempCallsign_
+//                                    state captured by AdjustToolTip
+//                                    at freedv_reporter.cpp:1534-1541
+//                                    [@77e793a]); the NereusSDR
+//                                    versions resolve the row by
+//                                    QModelIndex passed to
+//                                    customContextMenuRequested /
+//                                    doubleClicked, which works without
+//                                    a tooltip layer. AI tooling:
+//                                    Anthropic Claude Code.
 //   2026-05-11  J.J. Boyd / KG4VCF  Phase 3J-2 Task G2. Filter / QSY /
 //                                    message bar landed. New widgets:
 //                                    band-filter combo + Track-frequency
@@ -123,16 +166,24 @@
 
 #include <QColor>
 #include <QHash>
+#include <QPair>
 #include <QPointer>
 #include <QString>
+#include <QStringList>
 #include <QUrl>
+#include <QVariant>
 #include <QWidget>
 
+class QAction;
+class QActionGroup;
 class QComboBox;
 class QHBoxLayout;
 class QItemSelection;
 class QLineEdit;
+class QMenu;
 class QMenuBar;
+class QModelIndex;
+class QPoint;
 class QPushButton;
 class QRadioButton;
 class QSortFilterProxyModel;
@@ -145,6 +196,7 @@ namespace NereusSDR {
 class FreeDVReporterClient;
 class FreeDVReporterTableModel;
 class FreeDVReporterBandFilterProxy;
+class FreeDVReporterColumnFilterProxy;
 class FreeDVReporterRowHighlightDelegate;
 class FreeDVStationModel;
 struct FreeDVStation;
@@ -169,6 +221,19 @@ enum FreeDVReporterColumn : int {
     kSnrCol           = 12,
     kLastUpdateDateCol = 13,
     kFreeDVReporterColumnCount = 14,
+};
+
+// Per-column filter operators. Values ported verbatim from
+//   freedv-gui src/gui/dialogs/freedv_reporter.h:50-58 [@77e793a]
+//   so a future shared on-disk format stays bit-compatible with upstream.
+enum FreeDVReporterFilterOp : int {
+    kFilterGte  = 0,   // >=
+    kFilterGt   = 1,   // >
+    kFilterEq   = 2,   // ==
+    kFilterNeq  = 3,   // !=
+    kFilterLt   = 4,   // <
+    kFilterLte  = 5,   // <=
+    kFilterNone = -1,  // no filter
 };
 
 // FreeDV Reporter dialog window.
@@ -200,6 +265,15 @@ public:
     // Production button click invokes openWebsite() which delegates
     // to websiteUrl() + QDesktopServices::openUrl.
     QUrl websiteUrl() const;
+
+    // G3: test seams - drive the per-column filter, idle sweep, row
+    //   context menu, and callsign-URL formatters from unit tests.
+    void setColumnFilterForTest(int column, int op, const QVariant& value);
+    void clearColumnFilterForTest(int column);
+    void setIdleTimeoutMinutesForTest(int minutes);
+    void setIdleSweepIntervalMsForTest(int ms);
+    QMenu* buildRowContextMenuForTest(int proxyRow);
+    QString qrzUrlForCallsignForTest(const QString& callsign) const;
 
 signals:
     // G2: QSY request - connected externally to FreeDVReporterClient
@@ -240,9 +314,26 @@ private slots:
     void onMessageClearClicked();
     void onMessageDropdownActivated(int index);
 
+    // G3: menu-bar / context-menu / sweep slot wiring.
+    void onShowColumnToggled(QAction* action);
+    void onIdleLongerThanTriggered(QAction* action);
+    void onColumnHeaderRightClicked(const QPoint& pos);
+    void onRowContextMenuRequested(const QPoint& pos);
+    void onRowDoubleClicked(const QModelIndex& proxyIdx);
+    void onIdleSweepTick();
+
 private:
     void buildUi();
     void buildBottomBar();
+    void buildMenuBar();
+    void rebuildColumnFilterSubmenu(int column);
+    void promptForColumnFilterValue(int column, int op);
+    void setColumnFilter(int column, int op, const QVariant& value);
+    void clearColumnFilter(int column);
+    void applyVisibleColumnsFromSettings();
+    void persistVisibleColumns();
+    void persistColumnFilters();
+    void loadColumnFiltersFromSettings();
     void applyHighlightForStation(const QString& sid,
                                   const NereusSDR::FreeDVStation& info);
     void setHighlight(const QString& sid, const QColor& bg);
@@ -263,11 +354,32 @@ private:
     FreeDVStationModel*               m_stationModel{nullptr};
     QPointer<FreeDVReporterClient>    m_client;  // reserved for H2 QSY wiring
 
-    QMenuBar*                         m_menuBar{nullptr};       // G3 placeholder
+    QMenuBar*                         m_menuBar{nullptr};
     QTableView*                       m_table{nullptr};
     FreeDVReporterTableModel*         m_tableModel{nullptr};
     FreeDVReporterBandFilterProxy*    m_bandProxy{nullptr};
+    FreeDVReporterColumnFilterProxy*  m_columnFilterProxy{nullptr};
     FreeDVReporterRowHighlightDelegate* m_rowDelegate{nullptr};
+
+    // G3 menu state. m_showMenu carries 14 checkable QActions (one per
+    // column, action->data() == column index). m_filterMenu carries 14
+    // submenus, one per column; each submenu rebuilds its 6-operator +
+    // Clear set on aboutToShow so the checked operator stays in sync
+    // with the persisted state. m_idleMenu holds the 4 exclusive
+    // timeout actions in m_idleGroup.
+    QMenu*                            m_showMenu{nullptr};
+    QMenu*                            m_filterMenu{nullptr};
+    QMenu*                            m_idleMenu{nullptr};
+    QActionGroup*                     m_idleGroup{nullptr};
+    QList<QAction*>                   m_showActions;        // one per column
+    QList<QMenu*>                     m_filterSubmenus;     // one per column
+    QHash<int, QPair<int, QVariant>>  m_columnFilters;      // col -> (op, value)
+
+    // G3 idle sweep. m_idleTimer fires every m_idleSweepIntervalMs;
+    // m_idleTimeoutMinutes is the threshold (0 = Never).
+    QTimer*                           m_idleTimer{nullptr};
+    int                               m_idleTimeoutMinutes{120};
+    int                               m_idleSweepIntervalMs{30000};
 
     // G2 bottom-bar widgets.
     QWidget*      m_bottomBarHost{nullptr};

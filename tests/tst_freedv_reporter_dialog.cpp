@@ -28,12 +28,16 @@
 //     (TX-red / RX-green / msg-color row-tint priority chain) [@77e793a]
 
 #include <QtTest>
+#include <QAction>
+#include <QActionGroup>
 #include <QApplication>
 #include <QComboBox>
 #include <QDateTime>
 #include <QColor>
 #include <QHeaderView>
 #include <QLineEdit>
+#include <QList>
+#include <QMenu>
 #include <QMenuBar>
 #include <QPushButton>
 #include <QRadioButton>
@@ -74,6 +78,24 @@ private slots:
     void messageSaveAppendsToMru();
     void messageClearEmitsEmptyAndClearsEdit();
     void openWebsiteOpensQsoFreedvOrgUrl();
+
+    // G3 - Show / Filter / Idle longer than menus + filters + idle sweep
+    void menuBarHasThreeMenus();
+    void showMenuHasFourteenCheckableActions();
+    void showMenuChecksMatchUpstreamDefaults();
+    void togglingShowMenuActionHidesColumn();
+    void visibleColumnsPersistToAppSettings();
+    void filterMenuHasFourteenSubmenus();
+    void filterMenuColumnSubmenuHasSixOperatorsAndClear();
+    void applyingFilterReducesVisibleRows();
+    void clearingFilterRestoresRows();
+    void bandFilterAndColumnFilterCompose();
+    void idleLongerThanMenuHasFourExclusiveActions();
+    void idleSweepRemovesStationsOlderThanThreshold();
+    void idleNeverDoesNotRemove();
+    void rightClickOnRowOpensContextMenu();
+    void qrzUrlAccessorReturnsExpectedFormat();
+    void doubleClickOnRowEmitsTuneRequested();
 };
 
 // Build a FreeDVStation with sensible defaults and let callers override.
@@ -519,6 +541,561 @@ void TestFreeDVReporterDialog::openWebsiteOpensQsoFreedvOrgUrl() {
     // actually invoking QDesktopServices::openUrl in the unit test.
     const QUrl url = dlg->websiteUrl();
     QCOMPARE(url, QUrl(QStringLiteral("https://qso.freedv.org")));
+
+    delete dlg;
+    delete model;
+}
+
+// =====================================================================
+// G3: Show / Filter / Idle longer than menus, per-column filters,
+//     idle auto-delete, row context menu, double-click QSY
+// =====================================================================
+
+void TestFreeDVReporterDialog::menuBarHasThreeMenus() {
+    auto* model = new FreeDVStationModel;
+    auto* dlg = new FreeDVReporterDialog(model, nullptr, nullptr);
+    auto* mb = dlg->findChild<QMenuBar*>();
+    QVERIFY(mb != nullptr);
+
+    // Three top-level menus: Show / Filter / Idle longer than. Mirrors
+    // freedv-gui freedv_reporter.cpp:395-431 [@77e793a] where the same
+    // three logical groupings are appended (the upstream wxMenuBar puts
+    // Show + Filter at the top, with "Idle more than" as a submenu of
+    // Filter; the task spec promotes Idle to a top-level menu).
+    QList<QMenu*> topLevel;
+    for (QAction* a : mb->actions()) {
+        if (a->menu() != nullptr) {
+            topLevel.append(a->menu());
+        }
+    }
+    QCOMPARE(topLevel.size(), 3);
+    QStringList titles;
+    for (QMenu* m : topLevel) {
+        titles.append(m->title());
+    }
+    QVERIFY(titles.contains(QStringLiteral("Show")));
+    QVERIFY(titles.contains(QStringLiteral("Filter")));
+    QVERIFY(titles.contains(QStringLiteral("Idle longer than")));
+
+    delete dlg;
+    delete model;
+}
+
+void TestFreeDVReporterDialog::showMenuHasFourteenCheckableActions() {
+    auto* model = new FreeDVStationModel;
+    auto* dlg = new FreeDVReporterDialog(model, nullptr, nullptr);
+    auto* mb = dlg->findChild<QMenuBar*>();
+    QVERIFY(mb != nullptr);
+
+    QMenu* showMenu = nullptr;
+    for (QAction* a : mb->actions()) {
+        if (a->menu() != nullptr && a->menu()->title() == QStringLiteral("Show")) {
+            showMenu = a->menu();
+            break;
+        }
+    }
+    QVERIFY(showMenu != nullptr);
+
+    // 14 actions, one per column, each checkable. Mirrors
+    // freedv-gui freedv_reporter.cpp:398-413 [@77e793a] (vector of 14
+    // {col_id, label} pairs, each Append'd with wxITEM_CHECK).
+    QList<QAction*> actions = showMenu->actions();
+    int checkableCount = 0;
+    for (QAction* a : actions) {
+        if (a->isCheckable()) {
+            checkableCount++;
+        }
+    }
+    QCOMPARE(checkableCount, 14);
+
+    delete dlg;
+    delete model;
+}
+
+void TestFreeDVReporterDialog::showMenuChecksMatchUpstreamDefaults() {
+    // Clear any persisted state so this test starts from upstream defaults.
+    AppSettings::instance().remove(QStringLiteral("FreeDvReporter/VisibleColumns"));
+
+    auto* model = new FreeDVStationModel;
+    auto* dlg = new FreeDVReporterDialog(model, nullptr, nullptr);
+    auto* mb = dlg->findChild<QMenuBar*>();
+    QVERIFY(mb != nullptr);
+
+    QMenu* showMenu = nullptr;
+    for (QAction* a : mb->actions()) {
+        if (a->menu() != nullptr && a->menu()->title() == QStringLiteral("Show")) {
+            showMenu = a->menu();
+            break;
+        }
+    }
+    QVERIFY(showMenu != nullptr);
+
+    // Upstream default has all 14 columns visible (the column-visibility
+    // vector is filled with `true` for every missing slot, see
+    // freedv_reporter.cpp:251-255 [@77e793a]). NereusSDR mirrors that.
+    int checkedCount = 0;
+    for (QAction* a : showMenu->actions()) {
+        if (a->isCheckable() && a->isChecked()) {
+            checkedCount++;
+        }
+    }
+    QCOMPARE(checkedCount, 14);
+
+    AppSettings::instance().remove(QStringLiteral("FreeDvReporter/VisibleColumns"));
+    delete dlg;
+    delete model;
+}
+
+void TestFreeDVReporterDialog::togglingShowMenuActionHidesColumn() {
+    AppSettings::instance().remove(QStringLiteral("FreeDvReporter/VisibleColumns"));
+
+    auto* model = new FreeDVStationModel;
+    auto* dlg = new FreeDVReporterDialog(model, nullptr, nullptr);
+    auto* mb = dlg->findChild<QMenuBar*>();
+    auto* table = dlg->findChild<QTableView*>();
+    QVERIFY(mb != nullptr);
+    QVERIFY(table != nullptr);
+
+    QMenu* showMenu = nullptr;
+    for (QAction* a : mb->actions()) {
+        if (a->menu() != nullptr && a->menu()->title() == QStringLiteral("Show")) {
+            showMenu = a->menu();
+            break;
+        }
+    }
+    QVERIFY(showMenu != nullptr);
+
+    // Uncheck SNR (column index 12). Expect setColumnHidden(12, true).
+    // From freedv-gui freedv_reporter.cpp:843-859 [@77e793a]
+    //   (OnShowColumn flips visibility and calls col->SetHidden).
+    QList<QAction*> actions = showMenu->actions();
+    QAction* snrAction = nullptr;
+    for (QAction* a : actions) {
+        if (a->data().toInt() == 12) {
+            snrAction = a;
+            break;
+        }
+    }
+    QVERIFY(snrAction != nullptr);
+    QVERIFY(snrAction->isChecked());
+    // trigger() on a checkable action toggles isChecked() and emits
+    // triggered() with the new state. Default = true, so trigger()
+    // takes it to false and the QActionGroup::triggered slot fires
+    // onShowColumnToggled with the action now at isChecked() == false.
+    snrAction->trigger();
+
+    QVERIFY(!snrAction->isChecked());
+    QVERIFY(table->isColumnHidden(12));
+
+    AppSettings::instance().remove(QStringLiteral("FreeDvReporter/VisibleColumns"));
+    delete dlg;
+    delete model;
+}
+
+void TestFreeDVReporterDialog::visibleColumnsPersistToAppSettings() {
+    AppSettings::instance().remove(QStringLiteral("FreeDvReporter/VisibleColumns"));
+
+    // First dialog: hide SNR column (index 12).
+    {
+        auto* model = new FreeDVStationModel;
+        auto* dlg = new FreeDVReporterDialog(model, nullptr, nullptr);
+        auto* mb = dlg->findChild<QMenuBar*>();
+        QMenu* showMenu = nullptr;
+        for (QAction* a : mb->actions()) {
+            if (a->menu() && a->menu()->title() == QStringLiteral("Show")) {
+                showMenu = a->menu();
+                break;
+            }
+        }
+        QVERIFY(showMenu != nullptr);
+        for (QAction* a : showMenu->actions()) {
+            if (a->data().toInt() == 12) {
+                // trigger() flips isChecked() from default true to false.
+                a->trigger();
+                break;
+            }
+        }
+        delete dlg;
+        delete model;
+    }
+
+    // Second dialog: expect SNR column to come up hidden.
+    {
+        auto* model = new FreeDVStationModel;
+        auto* dlg = new FreeDVReporterDialog(model, nullptr, nullptr);
+        auto* table = dlg->findChild<QTableView*>();
+        QVERIFY(table != nullptr);
+        QVERIFY(table->isColumnHidden(12));
+
+        auto* mb = dlg->findChild<QMenuBar*>();
+        QMenu* showMenu = nullptr;
+        for (QAction* a : mb->actions()) {
+            if (a->menu() && a->menu()->title() == QStringLiteral("Show")) {
+                showMenu = a->menu();
+                break;
+            }
+        }
+        QAction* snrAction = nullptr;
+        for (QAction* a : showMenu->actions()) {
+            if (a->data().toInt() == 12) {
+                snrAction = a;
+                break;
+            }
+        }
+        QVERIFY(snrAction != nullptr);
+        QVERIFY(!snrAction->isChecked());
+
+        delete dlg;
+        delete model;
+    }
+
+    AppSettings::instance().remove(QStringLiteral("FreeDvReporter/VisibleColumns"));
+}
+
+void TestFreeDVReporterDialog::filterMenuHasFourteenSubmenus() {
+    auto* model = new FreeDVStationModel;
+    auto* dlg = new FreeDVReporterDialog(model, nullptr, nullptr);
+    auto* mb = dlg->findChild<QMenuBar*>();
+    QVERIFY(mb != nullptr);
+
+    QMenu* filterMenu = nullptr;
+    for (QAction* a : mb->actions()) {
+        if (a->menu() && a->menu()->title() == QStringLiteral("Filter")) {
+            filterMenu = a->menu();
+            break;
+        }
+    }
+    QVERIFY(filterMenu != nullptr);
+
+    // One submenu per column = 14.
+    int submenuCount = 0;
+    for (QAction* a : filterMenu->actions()) {
+        if (a->menu() != nullptr) {
+            submenuCount++;
+        }
+    }
+    QCOMPARE(submenuCount, 14);
+
+    delete dlg;
+    delete model;
+}
+
+void TestFreeDVReporterDialog::filterMenuColumnSubmenuHasSixOperatorsAndClear() {
+    auto* model = new FreeDVStationModel;
+    auto* dlg = new FreeDVReporterDialog(model, nullptr, nullptr);
+    auto* mb = dlg->findChild<QMenuBar*>();
+    QVERIFY(mb != nullptr);
+
+    QMenu* filterMenu = nullptr;
+    for (QAction* a : mb->actions()) {
+        if (a->menu() && a->menu()->title() == QStringLiteral("Filter")) {
+            filterMenu = a->menu();
+            break;
+        }
+    }
+    QVERIFY(filterMenu != nullptr);
+
+    // Pick the SNR submenu (col 12); same shape applies to every column.
+    QMenu* snrSubmenu = nullptr;
+    for (QAction* a : filterMenu->actions()) {
+        if (a->menu() && a->data().toInt() == 12) {
+            snrSubmenu = a->menu();
+            break;
+        }
+    }
+    QVERIFY(snrSubmenu != nullptr);
+
+    // 6 operators + Clear filter = 7 actions. From
+    // freedv-gui freedv_reporter.cpp:1726-1771 [@77e793a]
+    //   (FILTER_GTE / FILTER_GT / FILTER_EQ / FILTER_NEQ / FILTER_LT /
+    //   FILTER_LTE + Clear Column Filter).
+    int actionCount = 0;
+    for (QAction* a : snrSubmenu->actions()) {
+        if (!a->isSeparator()) {
+            actionCount++;
+        }
+    }
+    QCOMPARE(actionCount, 7);
+
+    delete dlg;
+    delete model;
+}
+
+void TestFreeDVReporterDialog::applyingFilterReducesVisibleRows() {
+    AppSettings::instance().remove(QStringLiteral("FreeDvReporter/VisibleColumns"));
+    AppSettings::instance().remove(QStringLiteral("FreeDvReporter/ColumnFilters"));
+
+    auto* model = new FreeDVStationModel;
+    auto* dlg = new FreeDVReporterDialog(model, nullptr, nullptr);
+    auto* table = dlg->findChild<QTableView*>();
+    QVERIFY(table != nullptr);
+
+    // 5 stations with different SNR values: -10, -3, 0, 5, 12.
+    int snrs[] = {-10, -3, 0, 5, 12};
+    for (int i = 0; i < 5; ++i) {
+        QString sid = QStringLiteral("sid-%1").arg(i);
+        FreeDVStation s = makeStation(sid, QStringLiteral("K%1").arg(i));
+        s.snrVal = snrs[i];
+        model->onStationAdded(sid, s);
+    }
+    QCOMPARE(table->model()->rowCount(), 5);
+
+    // Apply SNR >= 5. Should leave 2 rows (snr 5 and 12).
+    dlg->setColumnFilterForTest(12, 0 /* FILTER_GTE */, QStringLiteral("5"));
+    QCOMPARE(table->model()->rowCount(), 2);
+
+    AppSettings::instance().remove(QStringLiteral("FreeDvReporter/ColumnFilters"));
+    delete dlg;
+    delete model;
+}
+
+void TestFreeDVReporterDialog::clearingFilterRestoresRows() {
+    auto* model = new FreeDVStationModel;
+    auto* dlg = new FreeDVReporterDialog(model, nullptr, nullptr);
+    auto* table = dlg->findChild<QTableView*>();
+    QVERIFY(table != nullptr);
+
+    int snrs[] = {-10, -3, 0, 5, 12};
+    for (int i = 0; i < 5; ++i) {
+        QString sid = QStringLiteral("sid-%1").arg(i);
+        FreeDVStation s = makeStation(sid, QStringLiteral("K%1").arg(i));
+        s.snrVal = snrs[i];
+        model->onStationAdded(sid, s);
+    }
+    dlg->setColumnFilterForTest(12, 0, QStringLiteral("5"));
+    QCOMPARE(table->model()->rowCount(), 2);
+
+    // Clear filter. Should restore all 5 rows.
+    dlg->clearColumnFilterForTest(12);
+    QCOMPARE(table->model()->rowCount(), 5);
+
+    // Clean up persisted filter so it does not leak into later tests.
+    AppSettings::instance().remove(QStringLiteral("FreeDvReporter/ColumnFilters"));
+    delete dlg;
+    delete model;
+}
+
+void TestFreeDVReporterDialog::bandFilterAndColumnFilterCompose() {
+    AppSettings::instance().remove(QStringLiteral("FreeDvReporter/ColumnFilters"));
+
+    auto* model = new FreeDVStationModel;
+    auto* dlg = new FreeDVReporterDialog(model, nullptr, nullptr);
+    auto* combo = dlg->findChild<QComboBox*>(QStringLiteral("bandFilterCombo"));
+    auto* table = dlg->findChild<QTableView*>();
+    QVERIFY(combo != nullptr);
+    QVERIFY(table != nullptr);
+
+    // 4 stations:
+    //   sid-a 20m SNR 8     (passes both filters)
+    //   sid-b 20m SNR -5    (band ok, SNR filter rejects)
+    //   sid-c 40m SNR 8     (SNR ok, band filter rejects)
+    //   sid-d 40m SNR -5    (rejected by both)
+    FreeDVStation a = makeStationOnFreq("sid-a", "K1A", 14236000);
+    a.snrVal = 8;
+    model->onStationAdded("sid-a", a);
+
+    FreeDVStation b = makeStationOnFreq("sid-b", "K1B", 14236000);
+    b.snrVal = -5;
+    model->onStationAdded("sid-b", b);
+
+    FreeDVStation c = makeStationOnFreq("sid-c", "K1C", 7074000);
+    c.snrVal = 8;
+    model->onStationAdded("sid-c", c);
+
+    FreeDVStation d = makeStationOnFreq("sid-d", "K1D", 7074000);
+    d.snrVal = -5;
+    model->onStationAdded("sid-d", d);
+
+    // Apply 20m band + SNR >= 5. Only sid-a should remain.
+    const int idx = combo->findText(QStringLiteral("20m"));
+    QVERIFY(idx > 0);
+    combo->setCurrentIndex(idx);
+    dlg->setColumnFilterForTest(12, 0, QStringLiteral("5"));
+
+    QCOMPARE(table->model()->rowCount(), 1);
+    QCOMPARE(table->model()->index(0, 0).data().toString(), QStringLiteral("K1A"));
+
+    AppSettings::instance().remove(QStringLiteral("FreeDvReporter/ColumnFilters"));
+    delete dlg;
+    delete model;
+}
+
+void TestFreeDVReporterDialog::idleLongerThanMenuHasFourExclusiveActions() {
+    auto* model = new FreeDVStationModel;
+    auto* dlg = new FreeDVReporterDialog(model, nullptr, nullptr);
+    auto* mb = dlg->findChild<QMenuBar*>();
+    QVERIFY(mb != nullptr);
+
+    QMenu* idleMenu = nullptr;
+    for (QAction* a : mb->actions()) {
+        if (a->menu() && a->menu()->title() == QStringLiteral("Idle longer than")) {
+            idleMenu = a->menu();
+            break;
+        }
+    }
+    QVERIFY(idleMenu != nullptr);
+
+    // 4 actions: 30 minutes / 1 hour / 2 hours / Never. From task spec
+    // (upstream offers Disabled / 30 / 60 / 90 / 120 / Custom...; the
+    // NereusSDR menu is the trimmed 4-item set with "Never" as the
+    // explicit disabled option).
+    QList<QAction*> actions;
+    for (QAction* a : idleMenu->actions()) {
+        if (!a->isSeparator()) {
+            actions.append(a);
+        }
+    }
+    QCOMPARE(actions.size(), 4);
+
+    // All four checkable; exactly one checked at a time (QActionGroup
+    // setExclusive(true)).
+    int checkableCount = 0;
+    int checkedCount = 0;
+    for (QAction* a : actions) {
+        if (a->isCheckable()) {
+            checkableCount++;
+        }
+        if (a->isChecked()) {
+            checkedCount++;
+        }
+    }
+    QCOMPARE(checkableCount, 4);
+    QCOMPARE(checkedCount, 1);
+
+    delete dlg;
+    delete model;
+}
+
+void TestFreeDVReporterDialog::idleSweepRemovesStationsOlderThanThreshold() {
+    AppSettings::instance().remove(QStringLiteral("FreeDvReporter/ColumnFilters"));
+
+    auto* model = new FreeDVStationModel;
+    auto* dlg = new FreeDVReporterDialog(model, nullptr, nullptr);
+    auto* table = dlg->findChild<QTableView*>();
+    QVERIFY(table != nullptr);
+
+    // Set the idle threshold to 30 minutes via the test seam.
+    dlg->setIdleTimeoutMinutesForTest(30);
+    // Crank the sweep interval down to 10 ms.
+    dlg->setIdleSweepIntervalMsForTest(10);
+
+    // 2 stations:
+    //   sid-fresh - lastUpdate = now. Should NOT be removed.
+    //   sid-stale - lastUpdate = 35 minutes ago. Should be removed.
+    FreeDVStation fresh = makeStation("sid-fresh", "K1FRESH");
+    fresh.lastUpdate = QDateTime::currentDateTime();
+    model->onStationAdded("sid-fresh", fresh);
+
+    FreeDVStation stale = makeStation("sid-stale", "K1STALE");
+    stale.lastUpdate = QDateTime::currentDateTime().addSecs(-35 * 60);
+    model->onStationAdded("sid-stale", stale);
+
+    QCOMPARE(table->model()->rowCount(), 2);
+
+    // Let the sweep timer fire at least once.
+    QTest::qWait(50);
+
+    QCOMPARE(table->model()->rowCount(), 1);
+    QCOMPARE(table->model()->index(0, 0).data().toString(), QStringLiteral("K1FRESH"));
+
+    delete dlg;
+    delete model;
+}
+
+void TestFreeDVReporterDialog::idleNeverDoesNotRemove() {
+    AppSettings::instance().remove(QStringLiteral("FreeDvReporter/ColumnFilters"));
+
+    auto* model = new FreeDVStationModel;
+    auto* dlg = new FreeDVReporterDialog(model, nullptr, nullptr);
+    auto* table = dlg->findChild<QTableView*>();
+    QVERIFY(table != nullptr);
+
+    // "Never" = 0 minutes via the test seam.
+    dlg->setIdleTimeoutMinutesForTest(0);
+    dlg->setIdleSweepIntervalMsForTest(10);
+
+    FreeDVStation stale = makeStation("sid-stale", "K1STALE");
+    stale.lastUpdate = QDateTime::currentDateTime().addSecs(-24 * 60 * 60);  // 24h ago
+    model->onStationAdded("sid-stale", stale);
+
+    QCOMPARE(table->model()->rowCount(), 1);
+
+    QTest::qWait(50);
+
+    // Still 1 row - "Never" disables the sweep regardless of station age.
+    QCOMPARE(table->model()->rowCount(), 1);
+
+    delete dlg;
+    delete model;
+}
+
+void TestFreeDVReporterDialog::rightClickOnRowOpensContextMenu() {
+    AppSettings::instance().remove(QStringLiteral("FreeDvReporter/ColumnFilters"));
+
+    auto* model = new FreeDVStationModel;
+    auto* dlg = new FreeDVReporterDialog(model, nullptr, nullptr);
+
+    model->onStationAdded("sid-x",
+        makeStationOnFreq("sid-x", "K1XX", 14236000));
+
+    // Build the context menu via the test seam without actually showing
+    // it (popup needs a screen pointer + main event loop, which is more
+    // hassle than the menu's structural surface).
+    QMenu* menu = dlg->buildRowContextMenuForTest(0);
+    QVERIFY(menu != nullptr);
+
+    // 5 visible actions + 2 separators expected: QRZ / HamQTH / HamCall /
+    // Copy callsign / Copy locator / Send QSY to this station. From task
+    // spec.
+    QStringList labels;
+    for (QAction* a : menu->actions()) {
+        if (!a->isSeparator()) {
+            labels.append(a->text());
+        }
+    }
+    QVERIFY(labels.contains(QStringLiteral("Look up on QRZ.com")));
+    QVERIFY(labels.contains(QStringLiteral("Look up on HamQTH")));
+    QVERIFY(labels.contains(QStringLiteral("Look up on HamCall")));
+    QVERIFY(labels.contains(QStringLiteral("Copy callsign")));
+    QVERIFY(labels.contains(QStringLiteral("Copy locator")));
+    QVERIFY(labels.contains(QStringLiteral("Send QSY to this station")));
+
+    delete menu;
+    delete dlg;
+    delete model;
+}
+
+void TestFreeDVReporterDialog::qrzUrlAccessorReturnsExpectedFormat() {
+    auto* model = new FreeDVStationModel;
+    auto* dlg = new FreeDVReporterDialog(model, nullptr, nullptr);
+
+    // From freedv-gui freedv_reporter.cpp:1846-1851 [@77e793a]
+    //   (`https://www.qrz.com/db/%s` template).
+    QCOMPARE(dlg->qrzUrlForCallsignForTest("KG4VCF"),
+             QStringLiteral("https://www.qrz.com/db/KG4VCF"));
+
+    delete dlg;
+    delete model;
+}
+
+void TestFreeDVReporterDialog::doubleClickOnRowEmitsTuneRequested() {
+    AppSettings::instance().remove(QStringLiteral("FreeDvReporter/ColumnFilters"));
+
+    auto* model = new FreeDVStationModel;
+    auto* dlg = new FreeDVReporterDialog(model, nullptr, nullptr);
+    auto* table = dlg->findChild<QTableView*>();
+    QVERIFY(table != nullptr);
+
+    model->onStationAdded("sid-d",
+        makeStationOnFreq("sid-d", "K1DBL", 14236000));
+
+    QSignalSpy spy(dlg, &FreeDVReporterDialog::tuneRequested);
+    // Programmatically emit the doubleClicked signal on row 0.
+    const QModelIndex idx = table->model()->index(0, 0);
+    emit table->doubleClicked(idx);
+
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.first().at(0).toULongLong(), quint64(14236000));
 
     delete dlg;
     delete model;

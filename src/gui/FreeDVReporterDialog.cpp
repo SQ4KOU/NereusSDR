@@ -43,6 +43,34 @@
 //                                    Anthropic Claude Code.
 //   2026-05-11  J.J. Boyd / KG4VCF  Phase 3J-2 Task G2. Filter / QSY /
 //                                    message bar implementation.
+//   2026-05-11  J.J. Boyd / KG4VCF  Phase 3J-2 Task G3. Menu bar + per-
+//                                    column filters + idle sweep + row
+//                                    context menu + double-click QSY.
+//                                    Ports the Show / Filter / Idle
+//                                    construction from upstream
+//                                    freedv_reporter.cpp:395-448
+//                                    [@77e793a]; the filter-operator
+//                                    submenu shape from :1710-1775; the
+//                                    callsign lookup menu from
+//                                    :579-602; the row double-click
+//                                    QSY trigger from :1463-1477;
+//                                    isNumericColumn_ from :2538-2541;
+//                                    the column-filter comparator
+//                                    pipeline from :2603-2671.
+//                                    Inserts a second QSortFilterProxy
+//                                    Model (m_columnFilterProxy) on top
+//                                    of m_bandProxy so the band filter
+//                                    and the per-column filter compose
+//                                    naturally without rewriting
+//                                    m_bandProxy's filterAcceptsRow.
+//                                    Idle sweep is a QTimer on the
+//                                    dialog, not a per-station record
+//                                    walked from a global 1 s tick the
+//                                    way upstream does
+//                                    (m_deleteTimer at :499-500
+//                                    [@77e793a]); both shapes end up
+//                                    calling the same FreeDVStationModel
+//                                    ::onStationRemoved entry point.
 
 #include "FreeDVReporterDialog.h"
 
@@ -53,17 +81,26 @@
 #include "models/FreeDVStationModel.h"
 
 #include <QAbstractTableModel>
+#include <QAction>
+#include <QActionGroup>
+#include <QClipboard>
 #include <QComboBox>
+#include <QDateTime>
 #include <QDesktopServices>
 #include <QDoubleValidator>
+#include <QGuiApplication>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QInputDialog>
 #include <QItemSelectionModel>
 #include <QLabel>
 #include <QLineEdit>
 #include <QLocale>
+#include <QMenu>
 #include <QMenuBar>
+#include <QModelIndex>
 #include <QPainter>
+#include <QPoint>
 #include <QPushButton>
 #include <QRadioButton>
 #include <QSortFilterProxyModel>
@@ -476,6 +513,122 @@ private:
 };
 
 // =====================================================================
+// FreeDVReporterColumnFilterProxy
+//
+// Second-tier proxy sitting on top of FreeDVReporterBandFilterProxy.
+// Reads its filter dictionary from FreeDVReporterDialog::m_columnFilters
+// and tests every row against the active per-column operator(s).
+//
+// Composes naturally with the band proxy: any row hidden by either layer
+// stays hidden in the table view; a row must clear both layers to be
+// visible.
+//
+// From freedv-gui freedv_reporter.cpp:2603-2671 [@77e793a]
+//   (FreeDVReporterDataModel::isFiltered_ inner block that walks the
+//   columnFilterOperators_ / columnFilterValues_ vectors).
+// =====================================================================
+class FreeDVReporterColumnFilterProxy : public QSortFilterProxyModel {
+public:
+    explicit FreeDVReporterColumnFilterProxy(QObject* parent = nullptr)
+        : QSortFilterProxyModel(parent) {}
+
+    void setFilters(const QHash<int, QPair<int, QVariant>>* filters) {
+        m_filters = filters;
+        invalidateFilter();
+    }
+    void refresh() { invalidateFilter(); }
+
+protected:
+    bool filterAcceptsRow(int sourceRow, const QModelIndex& sourceParent)
+        const override {
+        if (!m_filters || m_filters->isEmpty()) {
+            return true;
+        }
+        for (auto it = m_filters->constBegin(); it != m_filters->constEnd(); ++it) {
+            const int col = it.key();
+            const int op = it.value().first;
+            const QVariant val = it.value().second;
+            if (op == kFilterNone) {
+                continue;
+            }
+            const QModelIndex cellIdx =
+                sourceModel()->index(sourceRow, col, sourceParent);
+            if (!cellIdx.isValid()) {
+                continue;
+            }
+
+            int cmp = 0;
+            if (isNumericColumn(col)) {
+                // From freedv-gui freedv_reporter.cpp:2612-2650 [@77e793a]
+                //   (parse filter value as a double, compare against the
+                //   row's raw numeric).
+                bool okFilter = false;
+                const double filterNum = val.toString().toDouble(&okFilter);
+                if (!okFilter) {
+                    continue;
+                }
+                double rowNum = 0.0;
+                switch (col) {
+                    case kDistanceCol:
+                        rowNum = cellIdx.data(Qt::EditRole).toDouble();
+                        break;
+                    case kHeadingCol:
+                        rowNum = cellIdx.data(Qt::DisplayRole).toString()
+                                     .left(3).toDouble();
+                        break;
+                    case kSnrCol:
+                        rowNum = cellIdx.data(Qt::EditRole).toDouble();
+                        break;
+                    case kFrequencyCol:
+                        // Display unit is MHz - match the upstream
+                        //   "Filter value is entered in the same display
+                        //   units as the column" comment.
+                        rowNum = cellIdx.data(Qt::EditRole).toDouble() / 1.0e6;
+                        break;
+                    default:
+                        break;
+                }
+                if (rowNum < filterNum) cmp = -1;
+                else if (rowNum > filterNum) cmp = 1;
+                else cmp = 0;
+            } else {
+                // Case-insensitive string compare on the display text.
+                //   From freedv-gui freedv_reporter.cpp:2654-2655 [@77e793a]
+                //   (wxString::CmpNoCase).
+                const QString rowText = cellIdx.data(Qt::DisplayRole).toString();
+                cmp = QString::compare(rowText, val.toString(),
+                                       Qt::CaseInsensitive);
+            }
+
+            bool passes = false;
+            switch (op) {
+                case kFilterGte: passes = (cmp >= 0); break;
+                case kFilterGt:  passes = (cmp > 0); break;
+                case kFilterEq:  passes = (cmp == 0); break;
+                case kFilterNeq: passes = (cmp != 0); break;
+                case kFilterLt:  passes = (cmp < 0); break;
+                case kFilterLte: passes = (cmp <= 0); break;
+                default:         passes = true; break;
+            }
+            if (!passes) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+private:
+    // From freedv-gui freedv_reporter.cpp:2538-2541 [@77e793a]
+    //   (isNumericColumn_ whitelist).
+    static bool isNumericColumn(int col) {
+        return col == kDistanceCol || col == kHeadingCol
+            || col == kFrequencyCol || col == kSnrCol;
+    }
+
+    const QHash<int, QPair<int, QVariant>>* m_filters{nullptr};
+};
+
+// =====================================================================
 // FreeDVReporterDialog
 // =====================================================================
 
@@ -517,19 +670,26 @@ void FreeDVReporterDialog::buildUi() {
     outer->setContentsMargins(0, 0, 0, 0);
     outer->setSpacing(0);
 
-    // G3 placeholder. The Show / Filter / Idle-longer-than menus wire
-    // in here. Built now so MainWindow's single-instance pointer can
-    // findChild<QMenuBar*>() in tests.
+    // G3: Show / Filter / Idle-longer-than menus built by buildMenuBar.
     m_menuBar = new QMenuBar(this);
     outer->setMenuBar(m_menuBar);
 
     m_tableModel = new FreeDVReporterTableModel(this);
     m_bandProxy  = new FreeDVReporterBandFilterProxy(this);
     m_bandProxy->setSourceModel(m_tableModel);
+
+    // G3: chain a second proxy on top of the band proxy so the
+    //   per-column filters compose with the band filter without
+    //   rewriting m_bandProxy's filterAcceptsRow. Composition order:
+    //   tableModel -> bandProxy -> columnFilterProxy -> view.
+    m_columnFilterProxy = new FreeDVReporterColumnFilterProxy(this);
+    m_columnFilterProxy->setSourceModel(m_bandProxy);
+    m_columnFilterProxy->setFilters(&m_columnFilters);
+
     m_rowDelegate = new FreeDVReporterRowHighlightDelegate(this);
 
     m_table = new QTableView(this);
-    m_table->setModel(m_bandProxy);
+    m_table->setModel(m_columnFilterProxy);
     m_table->setItemDelegate(m_rowDelegate);
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -537,8 +697,31 @@ void FreeDVReporterDialog::buildUi() {
     m_table->setSortingEnabled(true);
     m_table->setAlternatingRowColors(false);
     m_table->verticalHeader()->setVisible(false);
-    m_table->horizontalHeader()->setSectionsMovable(true);  // G3 surfaces this
+    m_table->horizontalHeader()->setSectionsMovable(true);
     m_table->horizontalHeader()->setStretchLastSection(true);
+
+    // G3: right-click on a column header opens the Filter submenu for
+    //   that column. Mirrors freedv-gui's OnColumnHeaderRightClick
+    //   wiring at freedv_reporter.cpp:619 [@77e793a].
+    m_table->horizontalHeader()->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_table->horizontalHeader(),
+            &QHeaderView::customContextMenuRequested,
+            this, &FreeDVReporterDialog::onColumnHeaderRightClicked);
+
+    // G3: right-click on a row opens the lookup / copy / QSY menu;
+    //   mirrors freedv-gui's OnItemRightClick at :617 [@77e793a] but
+    //   wired off the table view rather than the hover-driven
+    //   tempCallsign_ state machine.
+    m_table->setContextMenuPolicy(Qt::CustomContextMenu);
+    connect(m_table, &QWidget::customContextMenuRequested,
+            this, &FreeDVReporterDialog::onRowContextMenuRequested);
+
+    // G3: double-click on a row emits tuneRequested(freqHz). From
+    //   freedv-gui freedv_reporter.cpp:1463-1477 [@77e793a]
+    //   (OnItemDoubleClick reads model->getFrequency and forwards to
+    //   rigFrequencyController->setFrequency).
+    connect(m_table, &QTableView::doubleClicked,
+            this, &FreeDVReporterDialog::onRowDoubleClicked);
 
     // Per-column minimum widths from freedv-gui createColumn_
     //   (freedv_reporter.cpp:75-182 [@77e793a]). Upstream calls
@@ -571,6 +754,27 @@ void FreeDVReporterDialog::buildUi() {
     // resolves widgets by objectName().
     buildBottomBar();
     outer->addWidget(m_bottomBarHost);
+
+    // G3: build the menu bar after the table so menu actions can
+    //   reference the table directly.
+    buildMenuBar();
+
+    // G3: load any persisted column filters AFTER the menu has been
+    //   built so the per-column submenu check states are coherent.
+    loadColumnFiltersFromSettings();
+
+    // G3: apply persisted column visibility AFTER the table and the
+    //   Show menu both exist.
+    applyVisibleColumnsFromSettings();
+
+    // G3: idle sweep timer. Default 30 s sweep interval. Threshold
+    //   m_idleTimeoutMinutes is reloaded from AppSettings during
+    //   buildMenuBar() when the idle-longer-than action group is
+    //   constructed.
+    m_idleTimer = new QTimer(this);
+    connect(m_idleTimer, &QTimer::timeout,
+            this, &FreeDVReporterDialog::onIdleSweepTick);
+    m_idleTimer->start(m_idleSweepIntervalMs);
 
     // Connect table-selection signal so the QSY button enables only
     // when exactly one station is selected. Mirrors freedv-gui's
@@ -1022,6 +1226,546 @@ void FreeDVReporterDialog::refreshMessageDropdown(const QStringList& msgs) {
     // No default selection - the user explicitly picks an MRU entry to
     //   copy it into m_msgEdit.
     m_msgDropdown->setCurrentIndex(-1);
+}
+
+// =====================================================================
+// G3: menu-bar construction
+//
+// Three top-level menus on m_menuBar:
+//   Show              - per-column visibility checkmarks
+//   Filter            - per-column comparison operators
+//   Idle longer than  - 30 min / 1 hour / 2 hours / Never
+//
+// Ported from freedv-gui freedv_reporter.cpp:391-448 [@77e793a]
+//   (wxMenuBar construction). NereusSDR-architectural divergences:
+//   1. Upstream nests "Idle more than (minutes)..." as a submenu of the
+//      Filter menu (:431); the task spec promotes it to a top-level menu.
+//   2. Upstream's Filter menu only contains the idle submenu plus
+//      column-filter wiring driven from the column-header right-click.
+//      NereusSDR mirrors the column right-click but also exposes a
+//      Filter menu with 14 per-column submenus so menu users (no mouse,
+//      keyboard-only) have the same access.
+//   3. Upstream offers Disabled / 30 / 60 / 90 / 120 / Custom for the
+//      idle threshold (:427); the task spec trims to 30 / 60 / 120 /
+//      Never.
+// =====================================================================
+
+namespace {
+
+// Per-column display labels for the Show menu and the Filter menu's
+// 14 submenus. Ported verbatim from freedv-gui freedv_reporter.cpp
+// :398-413 [@77e793a].
+const char* const kColumnDisplayNames[kFreeDVReporterColumnCount] = {
+    "Callsign",
+    "Locator",
+    "Distance",
+    "Heading",
+    "Version",
+    "Frequency",
+    "TX Mode",
+    "Status",
+    "User Message",
+    "Last TX Date",
+    "Last RX Callsign",
+    "Last RX Mode",
+    "SNR",
+    "Last Update",
+};
+
+// Comparison-operator labels for the Filter submenus. From
+// freedv-gui freedv_reporter.cpp:1729-1736 [@77e793a]
+//   (opItems[] array). NereusSDR keeps the same ordering and labels.
+struct OperatorEntry {
+    int op;
+    const char* label;
+};
+const OperatorEntry kFilterOperators[] = {
+    {kFilterGte, ">= (Greater or equal to)"},
+    {kFilterGt,  ">  (Greater than)"},
+    {kFilterEq,  "=  (Equal to)"},
+    {kFilterNeq, "!= (Not equal to)"},
+    {kFilterLt,  "<  (Less than)"},
+    {kFilterLte, "<= (Less or equal to)"},
+};
+
+}  // namespace
+
+void FreeDVReporterDialog::buildMenuBar() {
+    // -----------------------------------------------------------------
+    // Show menu - 14 checkable actions, one per column.
+    //
+    // From freedv-gui freedv_reporter.cpp:395-425 [@77e793a]
+    //   (showMenu_ wxMenu + per-column wxITEM_CHECK Append calls).
+    // -----------------------------------------------------------------
+    m_showMenu = m_menuBar->addMenu(QStringLiteral("Show"));
+    m_showActions.clear();
+    auto* showGroup = new QActionGroup(this);
+    showGroup->setExclusive(false);
+    for (int col = 0; col < kFreeDVReporterColumnCount; ++col) {
+        auto* action = m_showMenu->addAction(
+            QString::fromLatin1(kColumnDisplayNames[col]));
+        action->setCheckable(true);
+        action->setChecked(true);
+        action->setData(col);
+        showGroup->addAction(action);
+        m_showActions.append(action);
+    }
+    connect(showGroup, &QActionGroup::triggered,
+            this, &FreeDVReporterDialog::onShowColumnToggled);
+
+    // -----------------------------------------------------------------
+    // Filter menu - 14 submenus, one per column. Each submenu carries 6
+    //   operator actions + a Clear filter action. Mirrors the upstream
+    //   right-click popup at freedv_reporter.cpp:1710-1775 [@77e793a],
+    //   but exposed from the menu bar too.
+    // -----------------------------------------------------------------
+    m_filterMenu = m_menuBar->addMenu(QStringLiteral("Filter"));
+    m_filterSubmenus.clear();
+    for (int col = 0; col < kFreeDVReporterColumnCount; ++col) {
+        auto* sub = m_filterMenu->addMenu(
+            QString::fromLatin1(kColumnDisplayNames[col]));
+        sub->menuAction()->setData(col);
+        m_filterSubmenus.append(sub);
+        rebuildColumnFilterSubmenu(col);
+    }
+
+    // -----------------------------------------------------------------
+    // Idle longer than menu - 4 exclusive actions. From task spec.
+    //   30 min / 1 hour / 2 hours / Never. Default is 2 hours per
+    //   upstream's freedvReporterMaxIdleMinutes default of 120
+    //   (ReportingConfiguration.cpp [@77e793a]).
+    // -----------------------------------------------------------------
+    m_idleMenu = m_menuBar->addMenu(QStringLiteral("Idle longer than"));
+    m_idleGroup = new QActionGroup(this);
+    m_idleGroup->setExclusive(true);
+
+    struct IdleEntry { int minutes; const char* label; };
+    const IdleEntry kIdleEntries[] = {
+        {30,  "30 minutes"},
+        {60,  "1 hour"},
+        {120, "2 hours"},
+        {0,   "Never"},
+    };
+
+    // Load saved threshold (default 120 minutes per task spec).
+    const int savedMinutes = AppSettings::instance()
+        .value(QStringLiteral("FreeDvReporter/IdleTimeoutMinutes"),
+               QStringLiteral("120")).toString().toInt();
+    m_idleTimeoutMinutes = savedMinutes;
+
+    for (const IdleEntry& e : kIdleEntries) {
+        auto* action = m_idleMenu->addAction(QString::fromLatin1(e.label));
+        action->setCheckable(true);
+        action->setData(e.minutes);
+        if (e.minutes == m_idleTimeoutMinutes) {
+            action->setChecked(true);
+        }
+        m_idleGroup->addAction(action);
+    }
+    // If no entry matched (e.g. a third-party-edited settings file
+    // contains 45), force the closest match to be the default 2-hour
+    // bucket and rewrite the persisted value.
+    if (m_idleGroup->checkedAction() == nullptr) {
+        for (QAction* a : m_idleGroup->actions()) {
+            if (a->data().toInt() == 120) {
+                a->setChecked(true);
+                m_idleTimeoutMinutes = 120;
+                break;
+            }
+        }
+    }
+    connect(m_idleGroup, &QActionGroup::triggered,
+            this, &FreeDVReporterDialog::onIdleLongerThanTriggered);
+}
+
+void FreeDVReporterDialog::rebuildColumnFilterSubmenu(int column) {
+    // Re-populate the per-column submenu. Called once at construction
+    // for every column, then re-called whenever the active filter for
+    // that column changes (so the checked operator stays current).
+    if (column < 0 || column >= m_filterSubmenus.size()) {
+        return;
+    }
+    QMenu* sub = m_filterSubmenus.at(column);
+    sub->clear();
+
+    int currentOp = kFilterNone;
+    if (m_columnFilters.contains(column)) {
+        currentOp = m_columnFilters.value(column).first;
+    }
+
+    // From freedv-gui freedv_reporter.cpp:1738-1759 [@77e793a]
+    //   (opItems for-loop building a check-style menu item per operator).
+    for (const OperatorEntry& e : kFilterOperators) {
+        auto* opAction = sub->addAction(QString::fromLatin1(e.label));
+        opAction->setCheckable(true);
+        opAction->setChecked(currentOp == e.op);
+        // Capture by value: column index + operator code.
+        const int col = column;
+        const int op = e.op;
+        connect(opAction, &QAction::triggered, this,
+                [this, col, op]() { promptForColumnFilterValue(col, op); });
+    }
+
+    sub->addSeparator();
+    auto* clearAction = sub->addAction(QStringLiteral("Clear filter"));
+    clearAction->setEnabled(currentOp != kFilterNone);
+    // From freedv-gui freedv_reporter.cpp:1762-1771 [@77e793a]
+    //   (clearItem Bind clearing the column filter).
+    connect(clearAction, &QAction::triggered, this,
+            [this, column]() { clearColumnFilter(column); });
+}
+
+void FreeDVReporterDialog::promptForColumnFilterValue(int column, int op) {
+    // From freedv-gui freedv_reporter.cpp:1747-1758 [@77e793a]
+    //   (wxTextEntryDialog prompts for the comparison value).
+    QString existingText;
+    if (m_columnFilters.contains(column)) {
+        existingText = m_columnFilters.value(column).second.toString();
+    }
+    const QString label = QStringLiteral("Filter %1: enter value")
+        .arg(QString::fromLatin1(kColumnDisplayNames[column]));
+    bool ok = false;
+    const QString text = QInputDialog::getText(
+        this,
+        QStringLiteral("Set Column Filter"),
+        label,
+        QLineEdit::Normal,
+        existingText,
+        &ok);
+    if (!ok) {
+        // User cancelled; do not modify the filter map. Re-build the
+        // submenu so the check stamp drops back to whatever was active
+        // before (the user's click checked the action visually until
+        // this point).
+        rebuildColumnFilterSubmenu(column);
+        return;
+    }
+    setColumnFilter(column, op, text);
+}
+
+void FreeDVReporterDialog::setColumnFilter(int column, int op,
+                                           const QVariant& value) {
+    if (op == kFilterNone) {
+        clearColumnFilter(column);
+        return;
+    }
+    m_columnFilters.insert(column, qMakePair(op, value));
+    if (m_columnFilterProxy) {
+        m_columnFilterProxy->refresh();
+    }
+    rebuildColumnFilterSubmenu(column);
+    persistColumnFilters();
+}
+
+void FreeDVReporterDialog::clearColumnFilter(int column) {
+    m_columnFilters.remove(column);
+    if (m_columnFilterProxy) {
+        m_columnFilterProxy->refresh();
+    }
+    rebuildColumnFilterSubmenu(column);
+    persistColumnFilters();
+}
+
+void FreeDVReporterDialog::applyVisibleColumnsFromSettings() {
+    // From the task spec: 14-bit bitmask under
+    //   AppSettings/FreeDvReporter/VisibleColumns. Default 0x3FFF
+    //   (all 14 bits set) to match upstream's default of every
+    //   column visible (freedv_reporter.cpp:251-255 [@77e793a]).
+    const QString raw = AppSettings::instance()
+        .value(QStringLiteral("FreeDvReporter/VisibleColumns"),
+               QStringLiteral("16383")).toString();
+    bool ok = false;
+    int mask = raw.toInt(&ok);
+    if (!ok) {
+        mask = 0x3FFF;
+    }
+    for (int col = 0; col < kFreeDVReporterColumnCount; ++col) {
+        const bool visible = (mask & (1 << col)) != 0;
+        if (col < m_showActions.size()) {
+            m_showActions.at(col)->setChecked(visible);
+        }
+        if (m_table) {
+            m_table->setColumnHidden(col, !visible);
+        }
+    }
+}
+
+void FreeDVReporterDialog::persistVisibleColumns() {
+    int mask = 0;
+    for (int col = 0; col < m_showActions.size(); ++col) {
+        if (m_showActions.at(col)->isChecked()) {
+            mask |= (1 << col);
+        }
+    }
+    AppSettings::instance().setValue(
+        QStringLiteral("FreeDvReporter/VisibleColumns"),
+        QString::number(mask));
+}
+
+void FreeDVReporterDialog::persistColumnFilters() {
+    // Encode as "<col>:<op>:<value-base64>\n..." so commas / colons /
+    //   newlines in the value text round-trip safely. Future read path
+    //   in loadColumnFiltersFromSettings() rebuilds the QHash.
+    QStringList encoded;
+    for (auto it = m_columnFilters.constBegin();
+         it != m_columnFilters.constEnd(); ++it) {
+        const int col = it.key();
+        const int op = it.value().first;
+        const QString val = it.value().second.toString();
+        const QString valB64 = QString::fromLatin1(
+            val.toUtf8().toBase64());
+        encoded.append(QStringLiteral("%1:%2:%3").arg(col).arg(op).arg(valB64));
+    }
+    AppSettings::instance().setValue(
+        QStringLiteral("FreeDvReporter/ColumnFilters"),
+        encoded.join(QLatin1Char('\n')));
+}
+
+void FreeDVReporterDialog::loadColumnFiltersFromSettings() {
+    const QString raw = AppSettings::instance()
+        .value(QStringLiteral("FreeDvReporter/ColumnFilters"),
+               QString()).toString();
+    if (raw.isEmpty()) {
+        return;
+    }
+    const QStringList rows = raw.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+    for (const QString& row : rows) {
+        const QStringList parts = row.split(QLatin1Char(':'));
+        if (parts.size() < 3) {
+            continue;
+        }
+        bool okCol = false;
+        bool okOp = false;
+        const int col = parts.at(0).toInt(&okCol);
+        const int op = parts.at(1).toInt(&okOp);
+        if (!okCol || !okOp) {
+            continue;
+        }
+        const QByteArray valBytes = QByteArray::fromBase64(
+            parts.at(2).toLatin1());
+        const QString val = QString::fromUtf8(valBytes);
+        m_columnFilters.insert(col, qMakePair(op, QVariant(val)));
+        rebuildColumnFilterSubmenu(col);
+    }
+    if (m_columnFilterProxy) {
+        m_columnFilterProxy->refresh();
+    }
+}
+
+// =====================================================================
+// G3: slot wiring
+// =====================================================================
+
+void FreeDVReporterDialog::onShowColumnToggled(QAction* action) {
+    if (!action || !m_table) {
+        return;
+    }
+    const int col = action->data().toInt();
+    const bool visible = action->isChecked();
+    m_table->setColumnHidden(col, !visible);
+    persistVisibleColumns();
+}
+
+void FreeDVReporterDialog::onIdleLongerThanTriggered(QAction* action) {
+    if (!action) {
+        return;
+    }
+    const int minutes = action->data().toInt();
+    m_idleTimeoutMinutes = minutes;
+    AppSettings::instance().setValue(
+        QStringLiteral("FreeDvReporter/IdleTimeoutMinutes"),
+        QString::number(minutes));
+    // Trigger an immediate sweep so the new threshold takes effect
+    // without waiting for the next timer tick.
+    onIdleSweepTick();
+}
+
+void FreeDVReporterDialog::onColumnHeaderRightClicked(const QPoint& pos) {
+    if (!m_table) {
+        return;
+    }
+    auto* header = m_table->horizontalHeader();
+    if (!header) {
+        return;
+    }
+    const int section = header->logicalIndexAt(pos);
+    if (section < 0 || section >= kFreeDVReporterColumnCount) {
+        return;
+    }
+    // Open the corresponding Filter submenu at the click position.
+    //   From freedv-gui freedv_reporter.cpp:1710-1775 [@77e793a]
+    //   (OnColumnHeaderRightClick builds a wxMenu inline and Popups it).
+    if (section < m_filterSubmenus.size()) {
+        QMenu* sub = m_filterSubmenus.at(section);
+        sub->popup(header->mapToGlobal(pos));
+    }
+}
+
+void FreeDVReporterDialog::onRowContextMenuRequested(const QPoint& pos) {
+    if (!m_table) {
+        return;
+    }
+    const QModelIndex idx = m_table->indexAt(pos);
+    if (!idx.isValid()) {
+        return;
+    }
+    QMenu* menu = buildRowContextMenuForTest(idx.row());
+    if (!menu) {
+        return;
+    }
+    // popup auto-deletes via the WA_DeleteOnClose attribute set in
+    //   buildRowContextMenuForTest.
+    menu->popup(m_table->viewport()->mapToGlobal(pos));
+}
+
+void FreeDVReporterDialog::onRowDoubleClicked(const QModelIndex& proxyIdx) {
+    if (!proxyIdx.isValid() || !m_table) {
+        return;
+    }
+    // Resolve the frequency column on the same proxy row.
+    const QModelIndex freqIdx = m_table->model()->index(
+        proxyIdx.row(), kFrequencyCol);
+    const quint64 freqHz = freqIdx.data(Qt::EditRole).toULongLong();
+    if (freqHz == 0) {
+        return;
+    }
+    // From freedv-gui freedv_reporter.cpp:1463-1477 [@77e793a]
+    //   (OnItemDoubleClick -> rigFrequencyController->setFrequency).
+    //   NereusSDR emits tuneRequested instead of QSY broadcast - the
+    //   task spec calls out that double-click is a local tune only.
+    emit tuneRequested(freqHz);
+}
+
+void FreeDVReporterDialog::onIdleSweepTick() {
+    if (!m_stationModel || m_idleTimeoutMinutes <= 0) {
+        return;
+    }
+    // From freedv-gui freedv_reporter.cpp:2581-2601 [@77e793a]
+    //   (isFiltered_ idle-time check). NereusSDR walks the model's
+    //   QHash<sid, FreeDVStation> snapshot and calls onStationRemoved
+    //   for each station that has not updated within the threshold;
+    //   that path mirrors the wire-level remove_connection event.
+    const QHash<QString, FreeDVStation> stations = m_stationModel->stations();
+    const QDateTime cutoff = QDateTime::currentDateTime()
+        .addSecs(-static_cast<qint64>(m_idleTimeoutMinutes) * 60);
+    QStringList toRemove;
+    for (auto it = stations.constBegin(); it != stations.constEnd(); ++it) {
+        const FreeDVStation& s = it.value();
+        // Pick the most recent activity timestamp.
+        //   Upstream uses lastTxDate if valid, else connectTime
+        //   (freedv_reporter.cpp:2590-2597 [@77e793a]). NereusSDR uses
+        //   lastUpdate because that's what the FreeDVReporterClient
+        //   stamps on every event (D2 client port).
+        const QDateTime ref = s.lastUpdate.isValid()
+            ? s.lastUpdate
+            : s.connectTime;
+        if (ref.isValid() && ref < cutoff) {
+            toRemove.append(it.key());
+        }
+    }
+    for (const QString& sid : toRemove) {
+        m_stationModel->onStationRemoved(sid);
+    }
+}
+
+// =====================================================================
+// G3: test seams
+// =====================================================================
+
+void FreeDVReporterDialog::setColumnFilterForTest(int column, int op,
+                                                   const QVariant& value) {
+    setColumnFilter(column, op, value);
+}
+
+void FreeDVReporterDialog::clearColumnFilterForTest(int column) {
+    clearColumnFilter(column);
+}
+
+void FreeDVReporterDialog::setIdleTimeoutMinutesForTest(int minutes) {
+    m_idleTimeoutMinutes = minutes;
+    if (m_idleGroup) {
+        for (QAction* a : m_idleGroup->actions()) {
+            a->setChecked(a->data().toInt() == minutes);
+        }
+    }
+}
+
+void FreeDVReporterDialog::setIdleSweepIntervalMsForTest(int ms) {
+    m_idleSweepIntervalMs = ms;
+    if (m_idleTimer) {
+        m_idleTimer->stop();
+        m_idleTimer->start(m_idleSweepIntervalMs);
+    }
+}
+
+QMenu* FreeDVReporterDialog::buildRowContextMenuForTest(int proxyRow) {
+    if (!m_table || proxyRow < 0) {
+        return nullptr;
+    }
+    auto* model = m_table->model();
+    if (!model || proxyRow >= model->rowCount()) {
+        return nullptr;
+    }
+    const QString callsign = model->index(proxyRow, kCallsignCol)
+        .data(Qt::DisplayRole).toString();
+    const QString locator = model->index(proxyRow, kGridSquareCol)
+        .data(Qt::DisplayRole).toString();
+    const QString sid = model->index(proxyRow, 0).data(Qt::UserRole).toString();
+    const quint64 freqHz = model->index(proxyRow, kFrequencyCol)
+        .data(Qt::EditRole).toULongLong();
+
+    auto* menu = new QMenu(this);
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+
+    // From freedv-gui freedv_reporter.cpp:579-602 [@77e793a]
+    //   (callsignPopupMenu_ with QRZ / HamQTH / HamCall lookup items).
+    auto* qrzAction = menu->addAction(QStringLiteral("Look up on QRZ.com"));
+    connect(qrzAction, &QAction::triggered, this, [callsign]() {
+        QDesktopServices::openUrl(
+            QUrl(QStringLiteral("https://www.qrz.com/db/%1").arg(callsign)));
+    });
+
+    auto* hamQthAction = menu->addAction(QStringLiteral("Look up on HamQTH"));
+    connect(hamQthAction, &QAction::triggered, this, [callsign]() {
+        QDesktopServices::openUrl(
+            QUrl(QStringLiteral("https://www.hamqth.com/%1").arg(callsign)));
+    });
+
+    auto* hamCallAction = menu->addAction(QStringLiteral("Look up on HamCall"));
+    connect(hamCallAction, &QAction::triggered, this, [callsign]() {
+        QDesktopServices::openUrl(
+            QUrl(QStringLiteral("https://hamcall.net/call?callsign=%1")
+                     .arg(callsign)));
+    });
+
+    menu->addSeparator();
+
+    auto* copyCallAction = menu->addAction(QStringLiteral("Copy callsign"));
+    connect(copyCallAction, &QAction::triggered, this, [callsign]() {
+        QGuiApplication::clipboard()->setText(callsign);
+    });
+
+    auto* copyLocatorAction = menu->addAction(QStringLiteral("Copy locator"));
+    connect(copyLocatorAction, &QAction::triggered, this, [locator]() {
+        QGuiApplication::clipboard()->setText(locator);
+    });
+
+    menu->addSeparator();
+
+    auto* qsyAction = menu->addAction(QStringLiteral("Send QSY to this station"));
+    qsyAction->setEnabled(!sid.isEmpty() && freqHz > 0);
+    connect(qsyAction, &QAction::triggered, this, [this, sid, freqHz]() {
+        emit qsyRequested(sid, freqHz, QString());
+    });
+
+    return menu;
+}
+
+QString FreeDVReporterDialog::qrzUrlForCallsignForTest(
+    const QString& callsign) const {
+    // From freedv-gui freedv_reporter.cpp:1846-1851 [@77e793a]
+    //   (OnQRZLookup formats "https://www.qrz.com/db/%s").
+    return QStringLiteral("https://www.qrz.com/db/%1").arg(callsign);
 }
 
 }  // namespace NereusSDR
