@@ -526,6 +526,8 @@ set(MODEL_SOURCES
     src/models/TransmitModel.cpp
     src/models/FilterPresetStore.cpp
     src/models/SpotModel.cpp
+    src/models/SpotTableModel.cpp
+    src/models/BandFilterProxy.cpp
 )
 
 set(GUI_SOURCES

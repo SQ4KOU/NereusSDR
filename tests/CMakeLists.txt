@@ -4090,3 +4090,24 @@ nereus_add_test(tst_dxcc_color_provider)
 #   src/models/SpotModel.{h,cpp} [@0cd4559]. First task of Phase D
 #   (Models).
 nereus_add_test(tst_spot_model)
+
+# ── Phase 3J-2 Task D2: SpotTableModel + BandFilterProxy ───────────────────
+# Pins the contract that SpotTableModel is a QAbstractTableModel with
+# 8 columns (Time, Freq, DxCall, Comment, Spotter, Band, Mode, Source)
+# bounded at 500 spots; BandFilterProxy is a QSortFilterProxyModel
+# that hides spots whose band is in m_hiddenBands. Eight tests:
+#   initialState (empty model reports zero rows + 8 columns),
+#   addSpotIncrementsRowCount (addSpot grows the row count by one),
+#   columnCountIsEight (ColCount sentinel == 8), dataRoundTrip
+#   (DxCall column for a freshly-added spot returns the inserted
+#   callsign), freqAtRowMatchesSource (freqAtRow(row) returns the
+#   inserted freqMhz), setMaxSpotsBounds (with maxSpots=3, adding
+#   10 spots leaves rowCount() == 3), bandFilterHidesMatchingBand
+#   (proxy sees both spots until setBandVisible("20m", false), then
+#   only the 40m spot survives), bandFilterShowsAfterUnhide (toggling
+#   visibility back to true restores the row). Source: AetherSDR
+#   src/gui/DxClusterDialog.h:33-75 + src/gui/DxClusterDialog.cpp:75-226
+#   [@0cd4559]; both classes lived inline in the dialog header upstream
+#   and were extracted to standalone src/models/ files so the SpotHubDialog
+#   (Phase F) can reuse them. Second task of Phase D (Models).
+nereus_add_test(tst_spot_table_model)
