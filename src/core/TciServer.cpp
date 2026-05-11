@@ -336,13 +336,28 @@ void TciServer::hookAudioAndIqTaps()
             if (wdsp->isInitialized()) {
                 hookAudioTap();
             } else {
+                // Phase 3J-1 bench fix (2026-05-10): use Qt::QueuedConnection so
+                // this lambda fires on the next event-loop tick rather than
+                // synchronously during emit.  Two listeners are registered on
+                // WdspEngine::initializedChanged:
+                //   (1) TciServer (this one, registered at MainWindow ctor time)
+                //   (2) RadioModel::connectToRadio at RadioModel.cpp:1525 — its
+                //       lambda calls m_wdspEngine->createRxChannel(0, ...).
+                // (1) is registered FIRST and with the default AutoConnection
+                // (== DirectConnection on same thread) would fire synchronously
+                // BEFORE (2), at which point wdsp->rxChannel(0) is still null —
+                // the audio tap then silently no-ops and never re-arms, leaving
+                // the TCI audio drain with nothing to feed.  Forcing this
+                // listener onto the queued path lets (2) complete inside the
+                // synchronous emit, after which our singleShot-style queued
+                // lambda finds the freshly-created RxChannel and hooks it.
                 m_wdspInitConn = connect(wdsp, &WdspEngine::initializedChanged,
                                          this, [this, hookAudioTap](bool init) {
                     if (init) {
                         hookAudioTap();
                         disconnect(m_wdspInitConn);
                     }
-                });
+                }, Qt::QueuedConnection);
             }
         }
     }
