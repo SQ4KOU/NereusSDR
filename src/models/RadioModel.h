@@ -804,6 +804,81 @@ public slots:
     // Cite: Thetis console.cs:29978-30157 [v2.10.3.13] — chkTUN_CheckedChanged.
     void setTune(bool on);
 
+    // ── Phase 3J-1 follow-up: TCI Q_INVOKABLE shims (bench wire-up) ──────────
+    //
+    // TciProtocol calls into RadioModel by *method name string* via
+    // QMetaObject::invokeMethod(...).  For Qt to resolve those names, the
+    // methods must be marked Q_INVOKABLE (or be slots, or Q_PROPERTY
+    // READ/WRITE — Q_INVOKABLE is the explicit choice here).
+    //
+    // Phase 6 wired the call sites in TciProtocol.cpp but added the matching
+    // Q_INVOKABLE shims only on TestMockRadioModel.  The matrix runner asserts
+    // byte-for-byte parity against the mock, so all 80+ matrix rows pass — but
+    // when a real client (WSJT-X / ESDR3 / SunSDR) connects against the live
+    // RadioModel, every set/query silently no-ops because the meta-object has
+    // no entry under those names.
+    //
+    // This block adds the WSJT-X minimum: PTT (trx), VFO (vfo), mode
+    // (modulation), and split_enable.  Subsequent commits will fill the long
+    // tail (DSP toggles, AGC, SQL, RIT/XIT, balance, audio configs,
+    // calibration).
+    //
+    // Signatures MUST match the Q_ARG / Q_RETURN_ARG types at each call site
+    // in src/core/TciProtocol.cpp:
+    //   handleVfo       (line 1086 set / 1104 query)
+    //   handleModulation(line 1236 query / 1275 set)
+    //   handleTrx       (line 1365 set  / 1380 query)
+    //   handleSplit     (line 1416 set  / 1430 query)
+    //
+    // Connection type: TciProtocol invokes with Qt::DirectConnection (test
+    // thread) but the runtime TciServer pumps from the main thread (same
+    // thread as RadioModel), so DirectConnection is fine for production too.
+
+    /// Set MOX (PTT).  Routes to MoxController if installed, else
+    /// TransmitModel.  Mirrors AppMod::PttSource:TCI in Thetis.
+    /// From Thetis TCIServer.cs:3454-3500 [v2.10.3.13] — handleTrx, set path.
+    Q_INVOKABLE void setMox(bool on);
+
+    /// Query MOX (PTT).  Returns the current MOX latch state.
+    /// From Thetis TCIServer.cs:3555-3558 [v2.10.3.13] — sendMOX.
+    Q_INVOKABLE bool mox() const;
+
+    /// Set VFO frequency for receiver `rx`, channel `chan` (0=A, 1=B).
+    /// NereusSDR has one frequency per slice; `chan==1` (VFO B) is silently
+    /// ignored because the second VFO concept maps to a separate slice, not
+    /// to a per-slice secondary frequency.
+    /// From Thetis TCIServer.cs:3719-3793 [v2.10.3.13] — handleVfo, set path.
+    Q_INVOKABLE void setVfoHz(int rx, int chan, qint64 hz);
+
+    /// Query VFO frequency for receiver `rx`, channel `chan`.  Returns
+    /// the slice frequency regardless of `chan` (see setVfoHz note).
+    /// From Thetis TCIServer.cs:3793-3833 [v2.10.3.13] — handleVfo, query path.
+    Q_INVOKABLE qint64 vfoHz(int rx, int chan) const;
+
+    /// Set demodulation mode for receiver `rx`.  `modeStr` is uppercase
+    /// (LSB, USB, CWL, CWU, AM, FM, DIGL, DIGU, etc.).
+    /// CWbecomesCWUabove10mhz transform from [2.10.3.6]MW0LGE fixes #365
+    /// (TCIServer.cs:3868-3895) is DEFERRED — `cw` maps to CWL until VFOATX /
+    /// VFOBTX state plumbing arrives.
+    //[2.10.3.6]MW0LGE fixes #365  [original inline tag from TCIServer.cs:3868]
+    /// From Thetis TCIServer.cs:3835-3942 [v2.10.3.13] — handleModulation, set.
+    Q_INVOKABLE void setMode(int rx, QString modeStr);
+
+    /// Query demodulation mode for receiver `rx`.  Returns uppercase name.
+    /// From Thetis TCIServer.cs:3942-3954 [v2.10.3.13] — handleModulation, query.
+    Q_INVOKABLE QString mode(int rx) const;
+
+    /// Set split-TX enable for receiver `rx`.  NereusSDR does not yet
+    /// implement per-slice split; this shim accepts the value, broadcasts the
+    /// confirmation notification (handled by TciProtocol), but does not yet
+    /// change radio state.  WSJT-X "Split Operation: None/Fake It" is the
+    /// supported configuration until proper split lands in Phase 3F.
+    /// From Thetis TCIServer.cs:3091-3127 [v2.10.3.13] — handleSplitEnableMessage.
+    Q_INVOKABLE void setSplit(int rx, bool on);
+
+    /// Query split-TX state.  Currently returns false (see setSplit note).
+    Q_INVOKABLE bool split(int rx) const;
+
 signals:
     void infoChanged();
     // Phase 3Q-1: parametrized — state passed so UI consumers can act without

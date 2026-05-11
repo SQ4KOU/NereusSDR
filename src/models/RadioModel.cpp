@@ -5899,6 +5899,106 @@ void RadioModel::setTune(bool on)
 }
 
 // ---------------------------------------------------------------------------
+// ── Phase 3J-1 follow-up: TCI Q_INVOKABLE shims (bench wire-up) ──────────────
+//
+// These methods are invoked by name from src/core/TciProtocol.cpp via
+// QMetaObject::invokeMethod(...) when WSJT-X / ESDR3 / SunSDR clients drive
+// the TCI server.  Phase 6 wired the call sites against TestMockRadioModel
+// (which has matching Q_INVOKABLE methods); these production shims close the
+// gap so real clients actuate the radio.
+//
+// Scope (WSJT-X minimum): PTT (trx), VFO (vfo), mode (modulation),
+// split_enable.  Long tail (DSP toggles, AGC, SQL, RIT/XIT, balance, audio
+// stream config, calibration) lands in a separate follow-up commit.
+// ---------------------------------------------------------------------------
+
+void RadioModel::setMox(bool on)
+{
+    // Route through MoxController when installed — that path enforces the
+    // BandPlanGuard MoxCheck callback, fans out hardwareFlipped, and runs the
+    // Codex P2 safety-effects-before-idempotent-guard ordering.  Without a
+    // controller we fall back to the TransmitModel latch (matches the
+    // pre-controller path Thetis uses during early construction).
+    if (m_moxController) {
+        m_moxController->setMox(on);
+    } else {
+        m_transmitModel.setMox(on);
+    }
+}
+
+bool RadioModel::mox() const
+{
+    if (m_moxController) {
+        return m_moxController->isMox();
+    }
+    return m_transmitModel.isMox();
+}
+
+void RadioModel::setVfoHz(int rx, int chan, qint64 hz)
+{
+    // NereusSDR has one frequency per slice.  VFO B (chan==1) maps to a
+    // separate slice in this model, so per-slice VFO B writes are silently
+    // ignored — TCI clients that drive VFO B should target a second slice.
+    if (chan != 0) {
+        return;
+    }
+    SliceModel* slice = sliceAt(rx);
+    if (!slice) {
+        return;
+    }
+    slice->setFrequency(static_cast<double>(hz));
+}
+
+qint64 RadioModel::vfoHz(int rx, int chan) const
+{
+    // Both chan==0 and chan==1 return the slice frequency.  See setVfoHz note
+    // — VFO B per slice is not modeled, so reads return the same value.
+    (void)chan;
+    const SliceModel* slice = sliceAt(rx);
+    if (!slice) {
+        return 0;
+    }
+    return static_cast<qint64>(slice->frequency());
+}
+
+void RadioModel::setMode(int rx, QString modeStr)
+{
+    SliceModel* slice = sliceAt(rx);
+    if (!slice) {
+        return;
+    }
+    const DSPMode mode = SliceModel::modeFromName(modeStr);
+    slice->setDspMode(mode);
+}
+
+QString RadioModel::mode(int rx) const
+{
+    const SliceModel* slice = sliceAt(rx);
+    if (!slice) {
+        return QString();
+    }
+    return SliceModel::modeName(slice->dspMode());
+}
+
+void RadioModel::setSplit(int rx, bool on)
+{
+    // Per-slice split-TX is not yet modeled in NereusSDR; arriving here means
+    // TciProtocol parsed `split_enable:rx,true;` and dispatched it.  We accept
+    // the value silently — TciProtocol still broadcasts the confirmation
+    // notification so WSJT-X sees the round-trip — but the radio does not
+    // change state.  Wire this up properly when Phase 3F multi-panadapter
+    // lands the per-slice VFO B / split TX model.
+    (void)rx;
+    (void)on;
+}
+
+bool RadioModel::split(int rx) const
+{
+    (void)rx;
+    return false;
+}
+
+// ---------------------------------------------------------------------------
 // completeTuneOff — Thetis-faithful TUN-off completion (issue #177).
 //
 // Invoked from a QTimer::singleShot(m_tuneOffSettleMs) chained off
