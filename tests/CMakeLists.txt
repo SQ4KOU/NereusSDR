@@ -4009,3 +4009,16 @@ nereus_add_test(tst_freedv_reporter_socketio)
 # setIdentity affects outgoing packets. Source: freedv-gui
 # src/reporting/pskreporter.cpp [@77e793a].
 nereus_add_test(tst_psk_reporter_protocol)
+
+# ── Phase 3J-2 Task C1: CtyDatParser (AD1C / K1EA cty.dat lookup) ──────────
+# Pins the contract that CtyDatParser loads the AD1C cty.dat country
+# file at the repo root, builds a longest-prefix table + exact-match
+# table, and resolves callsigns to DXCC entities (primary prefix +
+# entity name + continent + CQ zone + ITU zone). 6 tests:
+#   loadsRealCtyDat, resolvesUSACallsign (W1AW -> K / United States),
+#   resolvesJapanCallsign (JA1ABC -> JA / Japan),
+#   resolvesAustraliaCallsign (VK6APH -> VK / Australia),
+#   resolvesEnglandCallsign (G3OCA -> G / England),
+#   rejectsEmptyOrInvalidCallsign. Source: AetherSDR
+# src/core/CtyDatParser.{h,cpp} [@0cd4559].
+nereus_add_test(tst_cty_dat_parser)

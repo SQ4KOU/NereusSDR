@@ -477,6 +477,7 @@ set(CORE_SOURCES
     src/core/WsjtxClient.cpp
     src/core/FreeDVReporterClient.cpp
     src/core/PskReporterClient.cpp
+    src/core/CtyDatParser.cpp
 )
 
 # CoreAudioHalBus — macOS-only IAudioBus implementation bridging to the
