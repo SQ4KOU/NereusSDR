@@ -3960,3 +3960,14 @@ nereus_add_test(tst_spot_collector_parser)
 # parsesPotaJsonResponse, dedupsAcrossPolls, rejectsMalformedJson.
 # Source: AetherSDR src/core/PotaClient.cpp [@0cd4559].
 nereus_add_test(tst_pota_client)
+
+# ── Phase 3J-2 Task B3: DxClusterClient telnet parser ───────────────────────
+# Pins the contract that DxClusterClient parses the standard DX cluster
+# "DX de" telnet line format, detects multi-flavor login prompts
+# (login: / call: / callsign: / "Please enter your call" / "your call"),
+# strips telnet IAC bytes, and tags RBN-suffixed spotters as source="RBN".
+# 7 tests: parsesStandardDxLine, detectsLoginPrompts (data-driven, 8 rows),
+# stripsTelnetIAC, tagsRbnSpottersByPrefix, tagsRbnSpottersBySuffix,
+# rejectsMalformedLine. Source: AetherSDR src/core/DxClusterClient.cpp
+# [@0cd4559].
+nereus_add_test(tst_dx_cluster_parser)

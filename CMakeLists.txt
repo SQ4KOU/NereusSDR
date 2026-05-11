@@ -473,6 +473,7 @@ set(CORE_SOURCES
     src/core/safety/safety_constants.cpp
     src/core/SpotCollectorClient.cpp
     src/core/PotaClient.cpp
+    src/core/DxClusterClient.cpp
 )
 
 # CoreAudioHalBus — macOS-only IAudioBus implementation bridging to the
