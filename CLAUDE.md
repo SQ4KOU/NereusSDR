@@ -127,6 +127,9 @@ Before reading any Thetis source file (`../Thetis/...`), state out loud:
     grep -l "<nereussdr-path>" docs/attribution/THETIS-PROVENANCE.md
     ```
    If the file is not registered, the port is a **new attribution event**.
+   For freedv-gui ports specifically: also run
+   `grep -l "<nereussdr-path>" docs/attribution/FREEDV-GUI-PROVENANCE.md`
+   to check provenance status.
 4. **Plan**: if (3) returned nothing, you will add the verbatim upstream
    header AND a PROVENANCE row in the same commit that introduces the
    ported logic. Use `docs/attribution/HOW-TO-PORT.md` for the format.
@@ -140,12 +143,14 @@ This applies equally to:
 - Edits to NereusSDR-original files that **add** new ported logic
   (e.g. wiring in a new Thetis-derived constant or formula).
 - Ports from non-Thetis upstreams (`../mi0bot-Thetis/`, `../AetherSDR/`,
-  WDSP) — same protocol, different PROVENANCE table / variant.
+  `../freedv-gui/`, WDSP). Same protocol, different PROVENANCE table /
+  variant.
 
 Verifier scripts (`scripts/verify-thetis-headers.py`,
-`scripts/check-new-ports.py`) are the safety net (Ring 3, in CI). The
-local pre-commit hook installed via `scripts/install-hooks.sh` runs the
-same scripts pre-push (Ring 2). The primary control is this checklist.
+`scripts/verify-freedv-headers.py`, `scripts/check-new-ports.py`) are the
+safety net (Ring 3, in CI). The local pre-commit hook installed via
+`scripts/install-hooks.sh` runs the same scripts pre-push (Ring 2). The
+primary control is this checklist.
 
 ### What Counts As "Guessing" (NEVER Do These)
 
@@ -225,6 +230,23 @@ constants, protocol handling, DSP flow, feature behavior).
 │           ├── RXA.c         ← RX channel pipeline
 │           ├── TXA.c         ← TX channel pipeline
 │           └── ...
+```
+
+### freedv-gui Source Layout Quick Reference
+
+```
+../freedv-gui/
+├── src/
+│   ├── reporting/                  ← FreeDVReporter + pskreporter
+│   │   ├── FreeDVReporter.{h,cpp}
+│   │   └── pskreporter.{h,cpp}
+│   ├── pipeline/                   ← RADE pipeline + EQ + AGC steps
+│   │   ├── RADEReceiveStep.{h,cpp}
+│   │   ├── RADETransmitStep.{h,cpp}
+│   │   ├── rade_text.{h,c}
+│   │   ├── EqualizerStep.{h,cpp}
+│   │   └── AgcStep.{h,cpp}
+│   └── gui/dialogs/freedv_reporter.{h,cpp}  ← 14-col live station view
 ```
 
 ---
@@ -572,3 +594,8 @@ preferences. OpenHPSDR radios don't store per-slice state.
    * **Clone to `../Thetis/` relative to NereusSDR root**
 3. **WDSP** — `https://github.com/TAPR/OpenHPSDR-wdsp`
    * DSP engine: all signal processing functions
+4. **freedv-gui** - `https://github.com/drowe67/freedv-gui`
+   * RADE codec wrappers (RADEReceiveStep, RADETransmitStep, rade_text)
+   * FreeDV Reporter Socket.IO client (qso.freedv.org)
+   * PSK Reporter UDP client
+   * **Clone to `../freedv-gui/` relative to NereusSDR root**
