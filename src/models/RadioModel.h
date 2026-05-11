@@ -406,6 +406,28 @@ public:
     FreeDVReporterClient* freeDvReporter()      const { return m_freeDvReporter.get(); }
     PskReporterClient*    pskReporter()         const { return m_pskReporter.get(); }
 
+    // ── Phase 3J-2 + 3R M3: spot-client auto-start state restore ────────────
+    //
+    // Reads each per-source AutoConnect / AutoStart key from AppSettings
+    // and, when True, calls the corresponding start method with the
+    // persisted identity / port / interval params. Designed to be called
+    // once at launch from MainWindow (sibling to tryAutoReconnect for the
+    // radio connection itself).
+    //
+    // Keys consulted (all flat PascalCase, matching SpotHubDialog F2):
+    //   DxClusterAutoConnect   -> connectToCluster(host, port, callsign)
+    //   RbnAutoConnect         -> same shape, different host default
+    //   WsjtxAutoStart         -> startListening(address, port)
+    //   SpotCollectorAutoStart -> startListening(port)
+    //   PotaAutoStart          -> startPolling(intervalSec)
+    //   FreeDvAutoStart        -> startConnection() (identity / URL
+    //                              already plumbed by RadioModel ctor)
+    //   PskReporterAutoStart   -> no-op (PSK Reporter is send-only)
+    //
+    // Safe to call multiple times. Each client's start method already
+    // guards against double-start.
+    void restoreSpotClientAutoStartState();
+
     // ── Phase 3R Task I5: RadeChannel slot-graph wiring ─────────────────────
     //
     // wireRadeChannel attaches a freshly-created RadeChannel into RadioModel's

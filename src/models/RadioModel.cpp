@@ -1312,6 +1312,87 @@ void RadioModel::onPskReporterSpotReceived(const DxSpot& spot)
                                  kvsFromSpot(spot, lifetime, color));
 }
 
+// ── Phase 3J-2 + 3R M3: spot-client auto-start state restore ───────────────
+//
+// Reads each per-source AutoConnect / AutoStart key from AppSettings and,
+// when True, calls the corresponding start method with the persisted
+// identity / port / interval params. MainWindow invokes this once at
+// startup after RadioModel is fully wired (sibling to tryAutoReconnect
+// for the radio connection itself).
+//
+// Key shape mirrors SpotHubDialog F2 (flat PascalCase, e.g.
+// DxClusterAutoConnect / DxClusterHost / DxClusterPort / DxClusterCallsign).
+// FreeDV Reporter identity / server URL is already plumbed by RadioModel's
+// constructor (RadioModel.cpp:936-953); the restore here only needs to
+// flip the WebSocket on. PSK Reporter is send-only; restore is a no-op.
+//
+// NereusSDR-original. AetherSDR splits this work between MainWindow's
+// startup and per-source dialog handlers; the NereusSDR shape consolidates
+// the read-and-start loop onto RadioModel so MainWindow's startup path
+// stays a single call site.
+void RadioModel::restoreSpotClientAutoStartState()
+{
+    auto& s = AppSettings::instance();
+    auto isTrue = [&s](const QString& key) {
+        return s.value(key, QStringLiteral("False")).toString()
+               == QStringLiteral("True");
+    };
+
+    // DxCluster
+    if (m_dxCluster && isTrue(QStringLiteral("DxClusterAutoConnect"))) {
+        m_dxCluster->connectToCluster(
+            s.value(QStringLiteral("DxClusterHost"),
+                    QStringLiteral("dxc.nc7j.com")).toString(),
+            static_cast<quint16>(
+                s.value(QStringLiteral("DxClusterPort"), 7300).toInt()),
+            s.value(QStringLiteral("DxClusterCallsign")).toString());
+    }
+
+    // RBN (same DxClusterClient class, different keys / default host).
+    if (m_rbn && isTrue(QStringLiteral("RbnAutoConnect"))) {
+        m_rbn->connectToCluster(
+            s.value(QStringLiteral("RbnHost"),
+                    QStringLiteral("telnet.reversebeacon.net")).toString(),
+            static_cast<quint16>(
+                s.value(QStringLiteral("RbnPort"), 7000).toInt()),
+            s.value(QStringLiteral("RbnCallsign")).toString());
+    }
+
+    // WSJT-X (UDP bind on the configured address / port).
+    if (m_wsjtx && isTrue(QStringLiteral("WsjtxAutoStart"))) {
+        m_wsjtx->startListening(
+            s.value(QStringLiteral("WsjtxAddress"),
+                    QStringLiteral("224.0.0.1")).toString(),
+            static_cast<quint16>(
+                s.value(QStringLiteral("WsjtxPort"), 2237).toInt()));
+    }
+
+    // SpotCollector (UDP bind).
+    if (m_spotCollector
+        && isTrue(QStringLiteral("SpotCollectorAutoStart"))) {
+        m_spotCollector->startListening(
+            static_cast<quint16>(
+                s.value(QStringLiteral("SpotCollectorPort"), 9999).toInt()));
+    }
+
+    // POTA (HTTPS poll loop).
+    if (m_pota && isTrue(QStringLiteral("PotaAutoStart"))) {
+        m_pota->startPolling(
+            s.value(QStringLiteral("PotaPollInterval"), 30).toInt());
+    }
+
+    // FreeDV Reporter (WebSocket connect; identity / URL already plumbed
+    // in ctor at lines 936-953).
+    if (m_freeDvReporter && isTrue(QStringLiteral("FreeDvAutoStart"))) {
+        m_freeDvReporter->startConnection();
+    }
+
+    // PSK Reporter: send-only. The AutoStart flag is persisted by the
+    // F2 dialog for UI consistency but has no corresponding "start"
+    // action here; the client transmits reportDecode batches once it
+    // receives WSJT-X spots through the in-process signal graph.
+}
+
 bool RadioModel::isConnected() const
 {
     return m_connection && m_connection->isConnected();

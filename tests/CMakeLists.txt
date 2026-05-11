@@ -4420,6 +4420,28 @@ nereus_add_test(tst_spot_settings_round_trip)
 # F4 producer side is already pinned by tst_spothub_dialog_smoke.
 nereus_add_test(tst_spothub_display_knobs)
 
+# ── Phase 3J-2 + 3R M3: spot-client auto-connect / auto-start restore ──────
+# Pins the launch-time restore path:
+#   RadioModel::restoreSpotClientAutoStartState reads each persisted
+#   "<Source>AutoConnect" / "<Source>AutoStart" key from AppSettings
+#   and, when True, calls the corresponding start method with the
+#   persisted identity / port / interval params. MainWindow invokes
+#   this once at startup after the RadioModel is fully wired (sibling
+#   to the existing tryAutoReconnect singleShot for the radio
+#   connection).
+# 10 tests:
+#   dxClusterAutoConnectFiresStartCall / FalseDoesNotFire
+#   rbnAutoConnectFiresStartCall
+#   wsjtxAutoStartFiresListenCall / FalseDoesNotFire
+#   spotCollectorAutoStartFiresListenCall
+#   potaAutoStartFiresPollingCall / FalseDoesNotFire
+#   freeDvReporterAutoConnectFalseDoesNotFire / IsNonDestructive
+#   pskReporterAutoStartTrueIsNoOp (PSK Reporter is send-only;
+#     auto-start has no meaningful action.)
+# Source: NereusSDR-native. The clients themselves are AetherSDR ports,
+# but the restore driver is a NereusSDR addition for Phase 3J-2 + 3R M3.
+nereus_add_test(tst_spot_auto_start)
+
 # ── Phase 3R Task I1: RadeChannel skeleton (hybrid port) ───────────────────
 # Pins the three lifecycle contracts the Phase 3R Task I2/I3/I4 DSP work
 # layers onto:

@@ -654,6 +654,19 @@ MainWindow::MainWindow(QWidget* parent)
     // before any signal/slot activity (e.g. discovery radioDiscovered).
     QTimer::singleShot(0, this, &MainWindow::tryAutoReconnect);
 
+    // Phase 3J-2 + 3R M3: restore each spot client's auto-connect /
+    // auto-start state. Sibling to tryAutoReconnect above; deferred via
+    // singleShot(0, ...) so the QTcpSocket / QUdpSocket / QWebSocket
+    // owned by each client see a fully-spun event loop before any
+    // network I/O fires. Each client guards against double-start so
+    // re-invocation is harmless (e.g. if a future code path also calls
+    // this after a profile switch).
+    QTimer::singleShot(0, this, [this] {
+        if (m_radioModel) {
+            m_radioModel->restoreSpotClientAutoStartState();
+        }
+    });
+
     // Phase 3O Sub-Phase 11/12 — VAX first-run / startup rescan.
     // The Setup → Audio → VAX page (AudioVaxPage) is now live; users
     // who skip the first-run dialog can reach cable binding via
