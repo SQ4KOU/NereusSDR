@@ -55,6 +55,7 @@
 #include <QSortFilterProxyModel>
 #include <QSet>
 #include <QString>
+#include <QtVersion>
 
 namespace NereusSDR {
 
@@ -75,6 +76,20 @@ public:
 
 protected:
     bool filterAcceptsRow(int sourceRow, const QModelIndex& sourceParent) const override;
+
+    // Qt 6.13 deprecated invalidateFilter() in favor of
+    // beginFilterChange() / endFilterChange(Direction::Rows). Both APIs
+    // exist in Qt 6.10+. NereusSDR has no explicit Qt minimum in
+    // CMakeLists.txt, so we keep a fallback to invalidateFilter on
+    // older Qt builds. NereusSDR-only compat shim; not an upstream port.
+    void invalidateFilterCompat() {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
+        beginFilterChange();
+        endFilterChange(QSortFilterProxyModel::Direction::Rows);
+#else
+        invalidateFilter();
+#endif
+    }
 
 private:
     QSet<QString> m_hiddenBands;

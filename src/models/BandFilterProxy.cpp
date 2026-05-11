@@ -54,7 +54,7 @@ void BandFilterProxy::setBandVisible(const QString& band, bool visible)
         m_hiddenBands.remove(band);
     else
         m_hiddenBands.insert(band);
-    invalidateFilter();
+    invalidateFilterCompat();
 }
 
 // NereusSDR Task F3 extension. Mirrors setBandVisible but populates
@@ -66,7 +66,7 @@ void BandFilterProxy::setSourceVisible(const QString& source, bool visible)
         m_hiddenSources.remove(source);
     else
         m_hiddenSources.insert(source);
-    invalidateFilter();
+    invalidateFilterCompat();
 }
 
 // From AetherSDR src/gui/DxClusterDialog.cpp:217-226 [@0cd4559] +

@@ -109,6 +109,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
+#include <QtVersion>
 
 namespace NereusSDR {
 
@@ -477,17 +478,31 @@ public:
         }
         m_band = band;
         m_haveBand = true;
-        invalidateFilter();
+        invalidateFilterCompat();
     }
     void setShowAll() {
         if (!m_haveBand) {
             return;
         }
         m_haveBand = false;
-        invalidateFilter();
+        invalidateFilterCompat();
     }
 
 protected:
+    // Qt 6.13 deprecated invalidateFilter() in favor of
+    // beginFilterChange() / endFilterChange(Direction::Rows). Both APIs
+    // exist in Qt 6.10+. NereusSDR has no explicit Qt minimum in
+    // CMakeLists.txt, so we keep a fallback to invalidateFilter on
+    // older Qt builds. NereusSDR-only compat shim; not an upstream port.
+    void invalidateFilterCompat() {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
+        beginFilterChange();
+        endFilterChange(QSortFilterProxyModel::Direction::Rows);
+#else
+        invalidateFilter();
+#endif
+    }
+
     bool filterAcceptsRow(int sourceRow, const QModelIndex& sourceParent)
         const override {
         if (!m_haveBand) {
@@ -534,11 +549,25 @@ public:
 
     void setFilters(const QHash<int, QPair<int, QVariant>>* filters) {
         m_filters = filters;
-        invalidateFilter();
+        invalidateFilterCompat();
     }
-    void refresh() { invalidateFilter(); }
+    void refresh() { invalidateFilterCompat(); }
 
 protected:
+    // Qt 6.13 deprecated invalidateFilter() in favor of
+    // beginFilterChange() / endFilterChange(Direction::Rows). Both APIs
+    // exist in Qt 6.10+. NereusSDR has no explicit Qt minimum in
+    // CMakeLists.txt, so we keep a fallback to invalidateFilter on
+    // older Qt builds. NereusSDR-only compat shim; not an upstream port.
+    void invalidateFilterCompat() {
+#if QT_VERSION >= QT_VERSION_CHECK(6, 10, 0)
+        beginFilterChange();
+        endFilterChange(QSortFilterProxyModel::Direction::Rows);
+#else
+        invalidateFilter();
+#endif
+    }
+
     bool filterAcceptsRow(int sourceRow, const QModelIndex& sourceParent)
         const override {
         if (!m_filters || m_filters->isEmpty()) {
