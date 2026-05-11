@@ -73,6 +73,7 @@
 #include <QLabel>
 #include <QAction>
 #include <QActionGroup>
+#include <QPointer>
 #include <QTimer>
 
 class QProgressDialog;
@@ -95,6 +96,9 @@ class MeterPoller;
 class TitleBar;
 class VaxFirstRunDialog;
 class PsForm;
+// Phase 3J-2 H1: Tools menu modeless singletons.
+class SpotHubDialog;
+class FreeDVReporterDialog;
 
 class RxDashboard;
 class StationBlock;
@@ -158,6 +162,11 @@ private slots:
     // Lazy-constructs on first invocation; subsequent calls show + raise the
     // existing instance so geometry persists across opens.
     void openPureSignalDialog();
+    // Phase 3J-2 H1: open the modeless Spot Hub / FreeDV Reporter dialogs
+    // (Tools menu). Same lazy-construction pattern as openPureSignalDialog;
+    // both dialogs are single-instance for the lifetime of MainWindow.
+    void openSpotHub();
+    void openFreeDVReporter();
     // Phase 3M-4 bench-fix: gate m_psaIndicator visibility on
     // caps.hasPureSignal && PureSignal::isAutoCalEnabled.  Called from
     // PureSignal::autoCalEnabledChanged + RadioModel::pureSignalCoordinator-
@@ -248,6 +257,17 @@ private:
     // lifetime of MainWindow.  Hidden on close, never destroyed.
     PsForm* m_psForm{nullptr};
     QAction* m_actPureSignal{nullptr};
+
+    // Phase 3J-2 H1: Tools > Spot Hub... and Tools > FreeDV Reporter...
+    // modeless singleton dialogs. Lazy-constructed on first
+    // openSpotHub() / openFreeDVReporter() call; lives for the lifetime
+    // of MainWindow. QPointer guards against the QDialog being deleted
+    // out from under MainWindow (Qt::WA_DeleteOnClose is left at the
+    // default false in the dialogs themselves so close-then-reopen
+    // preserves geometry / table state). Both members are accessed by
+    // the H1 test seam below.
+    QPointer<SpotHubDialog>        m_spotHubDialog;
+    QPointer<FreeDVReporterDialog> m_freeDVReporterDialog;
 
     // Status bar widgets (double-height AetherSDR design, 46px)
     QLabel* m_connStatusLabel{nullptr};

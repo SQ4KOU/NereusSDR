@@ -281,6 +281,11 @@ warren@wpratt.com
 #include "applets/RxApplet.h"
 #include "applets/TxApplet.h"
 #include "applets/TxEqDialog.h"
+// Phase 3J-2 H1: Tools menu modeless singletons (Spot Hub + FreeDV Reporter).
+#include "SpotHubDialog.h"
+#include "FreeDVReporterDialog.h"
+#include "models/SpotModel.h"
+#include "core/FreeDVReporterClient.h"
 #include "PsForm.h"
 #include "PsaIndicatorWidget.h"
 #include "core/PureSignal.h"
@@ -351,6 +356,7 @@ warren@wpratt.com
 #include <QJsonObject>
 #include <QVersionNumber>
 #include <QPointer>
+#include <QShortcut>
 
 #include <cstdlib>
 
@@ -2800,7 +2806,35 @@ void MainWindow::buildMenuBar()
     // =========================================================================
     QMenu* toolsMenu = menuBar()->addMenu(QStringLiteral("&Tools"));
 
-    // TX Equalizer — modeless singleton dialog (Phase 3M-3a-i Batch 3 A.1).
+    // Phase 3J-2 H1: Spot Hub (DX cluster / RBN / POTA / WSJT-X / FreeDV /
+    // PSK Reporter). Modeless singleton dialog; lazy-constructed in
+    // openSpotHub() with all 7 clients + SpotModel + DxccColorProvider
+    // injected from RadioModel.
+    {
+        QAction* spotHubAction = toolsMenu->addAction(QStringLiteral("Spot &Hub..."));
+        spotHubAction->setObjectName(QStringLiteral("actSpotHub"));
+        spotHubAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+S")));
+        spotHubAction->setToolTip(QStringLiteral(
+            "Open the Spot Hub dialog (DX cluster, RBN, POTA, WSJT-X, "
+            "FreeDV Reporter, PSK Reporter, Spot Collector)."));
+        connect(spotHubAction, &QAction::triggered, this, &MainWindow::openSpotHub);
+    }
+
+    // Phase 3J-2 H1: FreeDV Reporter live station map.
+    // Modeless singleton dialog; lazy-constructed in openFreeDVReporter()
+    // with FreeDVStationModel + FreeDVReporterClient from RadioModel.
+    {
+        QAction* fdvAction = toolsMenu->addAction(QStringLiteral("&FreeDV Reporter..."));
+        fdvAction->setObjectName(QStringLiteral("actFreeDVReporter"));
+        fdvAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+R")));
+        fdvAction->setToolTip(QStringLiteral(
+            "Open the FreeDV Reporter dialog (live stations on qso.freedv.org)."));
+        connect(fdvAction, &QAction::triggered, this, &MainWindow::openFreeDVReporter);
+    }
+
+    toolsMenu->addSeparator();
+
+    // TX Equalizer: modeless singleton dialog (Phase 3M-3a-i Batch 3 A.1).
     {
         QAction* txEqAction = toolsMenu->addAction(QStringLiteral("TX &Equalizer..."));
         txEqAction->setToolTip(QStringLiteral(
@@ -2918,6 +2952,21 @@ void MainWindow::buildMenuBar()
         AboutDialog dlg(this);
         dlg.exec();
     });
+
+    // Phase 3J-2 H1: Ctrl+Shift+K clears all rows in SpotModel. Mirrors the
+    // "Clear All Spots" button on SpotHubDialog's Display tab so the user
+    // can wipe stale spots without opening the dialog. Application-scoped
+    // QShortcut so it fires regardless of which child widget has focus.
+    {
+        auto* clearSpotsShortcut = new QShortcut(
+            QKeySequence(QStringLiteral("Ctrl+Shift+K")), this);
+        clearSpotsShortcut->setContext(Qt::ApplicationShortcut);
+        connect(clearSpotsShortcut, &QShortcut::activated, this, [this]() {
+            if (m_radioModel && m_radioModel->spotModel()) {
+                m_radioModel->spotModel()->clear();
+            }
+        });
+    }
 }
 
 void MainWindow::buildStatusBar()
@@ -4821,6 +4870,98 @@ void MainWindow::openPureSignalDialog()
     m_psForm->show();
     m_psForm->raise();
     m_psForm->activateWindow();
+}
+
+// Phase 3J-2 H1: open the modeless SpotHubDialog.
+//
+// Lazy-constructs on first invocation, wiring all 7 spot-ingest clients
+// + SpotModel + DxccColorProvider from RadioModel (Task H2 made these
+// accessible via getters). Subsequent calls show + raise the existing
+// instance so geometry, table sort state, and per-tab settings persist
+// across opens. QPointer guards the pointer in case the dialog is ever
+// deleted by some external path; lazy reconstruction is then automatic.
+//
+// Mirrors the modeless-singleton pattern at AetherSDR
+// src/gui/MainWindow.cpp openDxClusterDialog() [@0cd4559].
+void MainWindow::openSpotHub()
+{
+    if (!m_radioModel) { return; }
+    if (!m_spotHubDialog) {
+        m_spotHubDialog = new SpotHubDialog(
+            m_radioModel->dxCluster(),
+            m_radioModel->rbn(),
+            m_radioModel->wsjtx(),
+            m_radioModel->spotCollector(),
+            m_radioModel->pota(),
+            m_radioModel->freeDvReporter(),
+            m_radioModel->pskReporter(),
+            m_radioModel->spotModel(),
+            m_radioModel->dxccColorProvider(),
+            this);
+        // Bridge spotsClearedAll (Display tab's "Clear All Spots" button)
+        // to SpotModel::clear so the global QShortcut and the dialog
+        // button share one truth-source.
+        connect(m_spotHubDialog.data(), &SpotHubDialog::spotsClearedAll,
+                m_radioModel->spotModel(), &SpotModel::clear);
+        // Spot List double-click tuneRequested(double Mhz) drives the
+        // active slice. SliceModel::setFrequency takes Hz (double), so
+        // multiply by 1e6 to convert MHz to Hz.
+        connect(m_spotHubDialog.data(), &SpotHubDialog::tuneRequested,
+                this, [this](double freqMhz) {
+                    if (auto* slice = m_radioModel->activeSlice()) {
+                        slice->setFrequency(freqMhz * 1.0e6);
+                    }
+                });
+    }
+    m_spotHubDialog->show();
+    m_spotHubDialog->raise();
+    m_spotHubDialog->activateWindow();
+}
+
+// Phase 3J-2 H1: open the modeless FreeDVReporterDialog.
+//
+// Lazy-constructs on first invocation, wiring FreeDVStationModel +
+// FreeDVReporterClient from RadioModel. Same singleton + show / raise
+// pattern as openSpotHub.
+//
+// Wires three downstream connections:
+//   qsyRequested -> FreeDVReporterClient::requestQSY (network QSY)
+//   messageSendRequested -> FreeDVReporterClient::updateMessage
+//   tuneRequested -> active SliceModel::setFrequency (local QSY)
+//
+// The dialog already calls setAttribute(Qt::WA_DeleteOnClose, false)
+// in its own ctor so close + reopen preserves state.
+void MainWindow::openFreeDVReporter()
+{
+    if (!m_radioModel) { return; }
+    if (!m_freeDVReporterDialog) {
+        m_freeDVReporterDialog = new FreeDVReporterDialog(
+            m_radioModel->freeDvStationModel(),
+            m_radioModel->freeDvReporter(),
+            this);
+        // QSY: dialog -> reporter client -> network broadcast.
+        connect(m_freeDVReporterDialog.data(),
+                &FreeDVReporterDialog::qsyRequested,
+                m_radioModel->freeDvReporter(),
+                &FreeDVReporterClient::requestQSY);
+        // Message update: dialog -> reporter client.
+        connect(m_freeDVReporterDialog.data(),
+                &FreeDVReporterDialog::messageSendRequested,
+                m_radioModel->freeDvReporter(),
+                &FreeDVReporterClient::updateMessage);
+        // Local QSY: dialog -> active slice tune. tuneRequested signature
+        // is quint64 Hz so no MHz conversion needed.
+        connect(m_freeDVReporterDialog.data(),
+                &FreeDVReporterDialog::tuneRequested,
+                this, [this](quint64 freqHz) {
+                    if (auto* slice = m_radioModel->activeSlice()) {
+                        slice->setFrequency(static_cast<double>(freqHz));
+                    }
+                });
+    }
+    m_freeDVReporterDialog->show();
+    m_freeDVReporterDialog->raise();
+    m_freeDVReporterDialog->activateWindow();
 }
 
 // Phase 3M-4 bench-fix: PSA bottom-banner indicator visibility

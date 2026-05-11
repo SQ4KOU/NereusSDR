@@ -4249,3 +4249,20 @@ nereus_add_test(tst_freedv_reporter_dialog)
 # upstream RadioModel applies spot status only via TCI parsing, not
 # per-client adapter slots, so the wiring shape is NereusSDR-specific.
 nereus_add_test(tst_radio_model_spot_wiring)
+
+# ── Phase 3J-2 Task H1: Tools menu Spot Hub + FreeDV Reporter wiring ───────
+# Pins the contract that MainWindow::openSpotHub and
+# MainWindow::openFreeDVReporter can construct their respective dialogs
+# from the RadioModel accessor surface alone (no extra wiring or
+# adapter layers). MainWindow itself is too heavy to instantiate in a
+# unit test (see tst_mainwindow_status_bar_safety for the established
+# isolate-the-logic pattern), so this suite pins the surrounding
+# contracts instead: dialog ctor signatures match RadioModel accessor
+# return types, SpotModel::clear (Ctrl+Shift+K) empties every row,
+# SpotHubDialog::spotsClearedAll routes into SpotModel::clear, and the
+# three FreeDVReporterDialog signals (qsyRequested,
+# messageSendRequested, tuneRequested) carry the right argument shape
+# for MainWindow's open-slot lambda. End-to-end menu wiring is
+# verified by the manual bench-test matrix.
+# Source: NereusSDR-native test pattern; ports are at H2.
+nereus_add_test(tst_mainwindow_tools_spot_hub)
