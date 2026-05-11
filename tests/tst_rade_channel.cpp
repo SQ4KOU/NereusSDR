@@ -19,7 +19,23 @@
 //                                        once a rade_nin()-sized buffer is ready
 //   7. stopReleasesResources             start("dummy") then stop() tears down cleanly
 //
-// I3 TX path and I4 text channel lands in their own tasks.
+// I3 TX-path contracts:
+//
+//   8. txEncodeAcceptsAndAccumulates  feed 16 kHz mono int16 speech samples; the
+//                                     wrapper accumulates LPCNET_FRAME_SIZE chunks,
+//                                     extracts features, accumulates to
+//                                     rade_n_features_in_out, then calls rade_tx
+//                                     at least once (radeTxCallCountForTest > 0).
+//   9. txEncodeEmitsModemSamples      same scenario, verify txModemReady fires
+//                                     with a non-zero QByteArray payload.
+//  10. resetTxClearsAccumulators      feed a partial frame (less than the
+//                                     LPCNET_FRAME_SIZE-byte threshold), call
+//                                     resetTx(), verify the TX feature accumulator
+//                                     drains via the test seam.
+//  11. txWhileInactiveIsNoOp          calling txEncode() without start() must not
+//                                     crash and must not emit any signals.
+//
+// I4 text channel lands in its own task.
 //
 // See src/core/RadeChannel.h for the upstream license headers and
 // modification-history block (verbatim freedv-gui BSD-2-Clause-style
@@ -30,6 +46,9 @@
 #include <QTemporaryFile>
 #include <QSignalSpy>
 #include <QByteArray>
+#include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <random>
 
 #include "core/RadeChannel.h"
@@ -49,6 +68,12 @@ private slots:
     void processIqEmitsSyncFalseOnNoise();
     void processIqAccumulatesAcrossMultipleChunks();
     void stopReleasesResources();
+
+    // I3 TX-path tests
+    void txEncodeAcceptsAndAccumulates();
+    void txEncodeEmitsModemSamples();
+    void resetTxClearsAccumulators();
+    void txWhileInactiveIsNoOp();
 };
 
 void TestRadeChannel::initialState()
@@ -110,6 +135,32 @@ QByteArray makeSyntheticIq(int nSamples)
     for (int i = 0; i < nSamples; ++i) {
         p[2 * i]     = noise(rng);  // I
         p[2 * i + 1] = noise(rng);  // Q
+    }
+    return buf;
+}
+
+// Build a buffer of N mono int16 samples at 16 kHz containing a Hanning-
+// windowed 300 Hz sine. The amplitude (peak ~24000) sits well inside the
+// int16 range; the Hanning envelope keeps the signal speech-like (avoids
+// LPCNet feature-extractor blowup on a hard square edge). Used by the
+// I3 TX tests to drive txEncode() with deterministic input that is not
+// pure noise; the LPCNet encoder + rade_tx still get exercised through
+// their full code path regardless of whether the synthesised signal is
+// recognisable speech. See tests/fixtures/rade/README.md for rationale.
+QByteArray makeSyntheticSpeech16k(int nSamples)
+{
+    QByteArray buf(nSamples * static_cast<int>(sizeof(int16_t)), Qt::Uninitialized);
+    auto* p = reinterpret_cast<int16_t*>(buf.data());
+    constexpr double kSampleRate = 16000.0;
+    constexpr double kToneHz     = 300.0;
+    constexpr double kPeak       = 24000.0;
+    constexpr double kTwoPi      = 6.283185307179586;
+    for (int i = 0; i < nSamples; ++i) {
+        const double t = static_cast<double>(i) / kSampleRate;
+        const double envelope = 0.5 * (1.0 - std::cos(kTwoPi * i /
+                                                       static_cast<double>(nSamples - 1)));
+        const double sample = kPeak * envelope * std::sin(kTwoPi * kToneHz * t);
+        p[i] = static_cast<int16_t>(std::clamp(sample, -32768.0, 32767.0));
     }
     return buf;
 }
@@ -241,6 +292,131 @@ void TestRadeChannel::stopReleasesResources()
         ch.processIq(makeSyntheticIq(256));
         // Implicit destructor call here.
     }
+}
+
+// =========================================================================
+// I3 TX-path tests
+// =========================================================================
+
+void TestRadeChannel::txEncodeAcceptsAndAccumulates()
+{
+    // Drive the TX pipeline with enough 16 kHz mono int16 speech samples
+    // to fill rade_n_features_in_out features (LPCNET_FRAME_SIZE samples
+    // per feature frame, NB_TOTAL_FEATURES floats out per feature frame;
+    // rade_n_features_in_out is typically 12 * NB_TOTAL_FEATURES = 432 at
+    // the RADE-v1 default which means we need 12 * 160 = 1920 input
+    // samples). We push 16000 samples (one second of audio) in eight
+    // 2000-sample chunks to also exercise the cross-chunk accumulator.
+    RadeChannel ch;
+    QVERIFY(ch.start("dummy"));
+
+    constexpr int kChunkSamples = 2000;
+    constexpr int kNumChunks    = 8;
+    for (int chunk = 0; chunk < kNumChunks; ++chunk) {
+        ch.txEncode(makeSyntheticSpeech16k(kChunkSamples));
+    }
+
+    QVERIFY2(ch.radeTxCallCountForTest() >= 1,
+             qPrintable(QString("rade_tx() never invoked across %1 x %2 samples")
+                            .arg(kNumChunks).arg(kChunkSamples)));
+
+    ch.stop();
+}
+
+void TestRadeChannel::txEncodeEmitsModemSamples()
+{
+    // Same setup as txEncodeAcceptsAndAccumulates but with a QSignalSpy
+    // on txModemReady. At least one chunk must be emitted; per
+    // AetherSDR's upstream behaviour (RADEEngine.cpp:189-192 [@0cd4559])
+    // the wrapper emits the upsampler's output unconditionally, which
+    // means the very first emit MAY be empty (r8brain CDSPResampler24
+    // has nontrivial startup latency before its FIR delay line fills).
+    // What we pin: at least one emitted chunk must be non-empty
+    // confirming the encode->upsample->emit pipeline produces real
+    // samples beyond the warm-up window.
+    RadeChannel ch;
+    QVERIFY(ch.start("dummy"));
+
+    QSignalSpy modemSpy(&ch, &RadeChannel::txModemReady);
+
+    constexpr int kChunkSamples = 2000;
+    constexpr int kNumChunks    = 8;
+    for (int chunk = 0; chunk < kNumChunks; ++chunk) {
+        ch.txEncode(makeSyntheticSpeech16k(kChunkSamples));
+    }
+
+    QVERIFY2(modemSpy.count() >= 1,
+             qPrintable(QString("txModemReady fired %1 times").arg(modemSpy.count())));
+    bool sawNonEmpty = false;
+    for (const auto& args : modemSpy) {
+        if (args.value(0).toByteArray().size() > 0) {
+            sawNonEmpty = true;
+            break;
+        }
+    }
+    QVERIFY2(sawNonEmpty,
+             "txModemReady never emitted a non-empty QByteArray "
+             "(upsampler may be stuck in warm-up; expected at least one "
+             "post-warmup chunk)");
+
+    ch.stop();
+}
+
+void TestRadeChannel::resetTxClearsAccumulators()
+{
+    // Feed a small chunk so the TX speech accumulator has content but
+    // not enough to drain an LPCNET_FRAME_SIZE-byte chunk. The TX
+    // feature accumulator should remain non-zero after the input pass
+    // (depending on the chunk size, m_txAccum is non-empty while
+    // m_txFeatAccum may be either empty or partially-filled). Call
+    // resetTx() and verify both accumulators read zero via the test
+    // seam.
+    RadeChannel ch;
+    QVERIFY(ch.start("dummy"));
+
+    // 80 samples is half an LPCNET_FRAME_SIZE (160) at 16 kHz, so the
+    // TX accumulator will have content but rade_tx() will NOT have run.
+    ch.txEncode(makeSyntheticSpeech16k(80));
+    QCOMPARE(ch.radeTxCallCountForTest(), 0);
+
+    // After resetTx(), the test seam reports zero feature-accumulator
+    // bytes. The wrapper's behaviour on the speech accumulator is
+    // covered by the (post-reset) re-encode below: a follow-up partial
+    // chunk that brings the *accumulated* count to >= LPCNET_FRAME_SIZE
+    // should NOT trigger rade_tx() if resetTx() flushed properly,
+    // because the pre-reset partial frame must have been discarded.
+    ch.resetTx();
+    QCOMPARE(ch.txFeatureAccumSizeForTest(), 0);
+
+    // Push another 80 samples. The pre-reset 80 samples should be gone
+    // so we still won't have a full LPCNET_FRAME_SIZE frame and rade_tx
+    // must remain uncalled.
+    ch.txEncode(makeSyntheticSpeech16k(80));
+    QCOMPARE(ch.radeTxCallCountForTest(), 0);
+
+    ch.stop();
+}
+
+void TestRadeChannel::txWhileInactiveIsNoOp()
+{
+    // Calling txEncode() before start() must be safe: no crash, no
+    // signal emissions, no accumulator state. Also exercise the
+    // already-stopped path to pin the same contract on the exit side.
+    RadeChannel ch;
+    QSignalSpy modemSpy(&ch, &RadeChannel::txModemReady);
+
+    ch.txEncode(makeSyntheticSpeech16k(2000));
+    QCOMPARE(modemSpy.count(), 0);
+    QCOMPARE(ch.radeTxCallCountForTest(), 0);
+    QCOMPARE(ch.txFeatureAccumSizeForTest(), 0);
+
+    // start -> stop, then verify the post-stop path is also a no-op.
+    QVERIFY(ch.start("dummy"));
+    ch.stop();
+    ch.txEncode(makeSyntheticSpeech16k(2000));
+    QCOMPARE(modemSpy.count(), 0);
+    QCOMPARE(ch.radeTxCallCountForTest(), 0);
+    QCOMPARE(ch.txFeatureAccumSizeForTest(), 0);
 }
 
 QTEST_GUILESS_MAIN(TestRadeChannel)

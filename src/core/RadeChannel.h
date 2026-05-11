@@ -129,6 +129,27 @@
 //                 the new test suite can pin when rade_rx() is
 //                 invoked relative to the rade_nin() accumulator
 //                 threshold. AI tooling: Anthropic Claude Code.
+//   2026-05-11  J.J. Boyd / KG4VCF  Phase 3R Task I3. TX path port
+//                 from AetherSDR src/core/RADEEngine.cpp:134-198
+//                 (feedTxAudio body) [@0cd4559] cross-checked against
+//                 freedv-gui src/pipeline/RADETransmitStep.cpp
+//                 :216-247 (restartVocoder / reset) [@77e793a].
+//                 NereusSDR divergence vs AetherSDR: txEncode accepts
+//                 16 kHz mono int16 speech samples directly (the
+//                 WdspEngine TX pump already feeds 16 kHz mono per the
+//                 plan), so AetherSDR's 24 kHz stereo float -> 16 kHz
+//                 mono int16 down-conversion at feedTxAudio:139-152 is
+//                 dropped; the input bytes go straight into m_txAccum
+//                 as int16. The LPCNet feature extraction, the
+//                 12-frame feature accumulation, the rade_tx call,
+//                 and the 8 kHz RADE_COMP real-leg -> 24 kHz stereo
+//                 float32 upsample all follow AetherSDR line-for-line.
+//                 Added test seams radeTxCallCountForTest() and
+//                 txFeatureAccumSizeForTest() + m_radeTxCallCount so
+//                 the test suite can pin when rade_tx() is invoked
+//                 relative to the rade_n_features_in_out() threshold
+//                 and verify resetTx() actually flushes feature state.
+//                 AI tooling: Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -196,6 +217,17 @@ public:
     // chunk is buffered.
     int radeRxCallCountForTest() const;
 
+    // Test seam. Returns the number of times rade_tx() has been invoked
+    // since start(). Used by tst_rade_channel to verify the TX
+    // accumulator pumps the codec only once rade_n_features_in_out()
+    // features are buffered.
+    int radeTxCallCountForTest() const;
+
+    // Test seam. Returns the byte size of the TX feature accumulator.
+    // Used by tst_rade_channel to verify resetTx() actually flushes
+    // state on MOX release.
+    int txFeatureAccumSizeForTest() const;
+
 public slots:
     // RX path: feed I/Q from the receiver. RADE expects baseband
     // RADE_COMP at the codec's sample rate; the conversion path
@@ -250,6 +282,10 @@ private:
     // Test seam counter: incremented every time rade_rx() runs in
     // processIq(). Cleared on start().
     int                  m_radeRxCallCount{0};
+
+    // Test seam counter: incremented every time rade_tx() runs in
+    // txEncode(). Cleared on start() and on resetTx().
+    int                  m_radeTxCallCount{0};
 
     // Resampler chain. The AetherSDR client owns four resamplers
     // (24kHz<->8kHz for the modem leg and 24kHz<->16kHz for the

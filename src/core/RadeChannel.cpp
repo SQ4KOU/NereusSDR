@@ -121,6 +121,33 @@
 //                 baseband directly. txEncode / resetTx slot bodies
 //                 remain TODO-marked for I3.
 //                 AI tooling: Anthropic Claude Code.
+//   2026-05-11  J.J. Boyd / KG4VCF  Phase 3R Task I3. TX path body
+//                 lands. txEncode() ports the feedTxAudio body at
+//                 AetherSDR src/core/RADEEngine.cpp:134-198 [@0cd4559]
+//                 with one NereusSDR-architectural divergence: the
+//                 input is already 16 kHz mono int16 (the WdspEngine
+//                 TX pump feeds mic samples at that rate per the
+//                 plan), so AetherSDR's 24 kHz stereo float -> 16 kHz
+//                 mono int16 conversion at :139-152 is dropped and
+//                 the input bytes append straight into m_txAccum.
+//                 The LPCNet feature extraction
+//                 (lpcnet_compute_single_frame_features over
+//                 LPCNET_FRAME_SIZE chunks), the NB_TOTAL_FEATURES
+//                 feature accumulator, the rade_n_features_in_out-
+//                 bounded drain to rade_tx, the RADE_COMP real-leg
+//                 take, and the 8 kHz mono -> 24 kHz stereo upsample
+//                 via m_up8to24 all follow AetherSDR line-for-line.
+//                 resetTx() flushes m_txAccum + m_txFeatAccum +
+//                 m_radeTxCallCount per AetherSDR :126-132 [@0cd4559]
+//                 cross-checked against freedv-gui
+//                 RADETransmitStep::reset (:242-247 [@77e793a]).
+//                 Test seams radeTxCallCountForTest /
+//                 txFeatureAccumSizeForTest expose m_radeTxCallCount
+//                 and m_txFeatAccum.size() so the I3 test suite can
+//                 pin when rade_tx() is invoked relative to the
+//                 rade_n_features_in_out() threshold and verify
+//                 resetTx() actually flushes the feature accumulator.
+//                 AI tooling: Anthropic Claude Code.
 // =================================================================
 
 #include "core/RadeChannel.h"
@@ -260,6 +287,7 @@ bool RadeChannel::start(const QString& modelPath)
     m_rxOutAccum.clear();
     m_synced = false;
     m_radeRxCallCount = 0;
+    m_radeTxCallCount = 0;
 
     // From AetherSDR src/core/RADEEngine.cpp:68-72 [@0cd4559]
     const int n_features = rade_n_features_in_out(m_rade);
@@ -315,6 +343,7 @@ void RadeChannel::stop()
     m_synced = false;
     m_farganWarmedUp = false;
     m_radeRxCallCount = 0;
+    m_radeTxCallCount = 0;
 
     qCInfo(lcRade) << "RadeChannel: stopped";
 }
@@ -334,6 +363,16 @@ bool RadeChannel::isSynced() const
 int RadeChannel::radeRxCallCountForTest() const
 {
     return m_radeRxCallCount;
+}
+
+int RadeChannel::radeTxCallCountForTest() const
+{
+    return m_radeTxCallCount;
+}
+
+int RadeChannel::txFeatureAccumSizeForTest() const
+{
+    return static_cast<int>(m_txFeatAccum.size());
 }
 
 // From AetherSDR src/core/RADEEngine.cpp:200-303 (feedRxAudio body)
@@ -515,26 +554,122 @@ void RadeChannel::processIq(const QByteArray& iqSamples)
     }
 }
 
-// I3 will fill in the TX path body. Until then the slot is a no-op so
-// the wrapper builds + tests run.
+// From AetherSDR src/core/RADEEngine.cpp:134-198 (feedTxAudio body)
+// [@0cd4559], cross-checked against freedv-gui
+// src/pipeline/RADETransmitStep.cpp:150-260 [@77e793a].
+//
+// Pipeline:
+//   1. NereusSDR divergence vs AetherSDR: input is already 16 kHz mono
+//      int16 per the wrapper's contract (the WdspEngine TX pump feeds
+//      mic samples at 16 kHz mono). AetherSDR's :139-152 step that
+//      downmixes 24 kHz stereo float -> 16 kHz mono int16 is therefore
+//      dropped; the input bytes are appended directly to m_txAccum.
+//   2. Drain m_txAccum in LPCNET_FRAME_SIZE-sample chunks. For each
+//      chunk, call lpcnet_compute_single_frame_features to produce
+//      NB_TOTAL_FEATURES floats. Append to m_txFeatAccum.
+//   3. While m_txFeatAccum holds >= rade_n_features_in_out() floats,
+//      drain a chunk and call rade_tx, producing rade_n_tx_out()
+//      RADE_COMP samples at 8 kHz.
+//   4. Convert RADE_COMP -> 8 kHz mono float32 by taking the .real
+//      component (AetherSDR :184-187).
+//   5. Upsample 8 kHz mono float32 -> 24 kHz stereo float32 via
+//      m_up8to24->processMonoToStereo.
+//   6. Emit txModemReady with the stereo 24 kHz float32 chunk.
 void RadeChannel::txEncode(const QByteArray& speechSamples)
 {
-    // TODO Phase 3R I3: implement DSP body. Will follow AetherSDR
-    // src/core/RADEEngine.cpp:130-200 (feedTxAudio body) [@0cd4559]
-    // cross-checked against freedv-gui RADETransmitStep::execute
-    // (src/pipeline/RADETransmitStep.cpp:150-260 [@77e793a]).
-    Q_UNUSED(speechSamples);
+    if (!m_active || !m_rade || !m_lpcnetEnc) {
+        return;
+    }
+    if (speechSamples.isEmpty()) {
+        return;
+    }
+
+    // Step 1: append the int16 mono 16 kHz input straight into the
+    // TX accumulator. NereusSDR divergence vs AetherSDR (which
+    // converts 24 kHz stereo float -> 16 kHz mono int16 at :139-152);
+    // our input is already in the LPCNet-ready format.
+    m_txAccum.append(speechSamples);
+
+    // Step 2: process LPCNet 10 ms frames (LPCNET_FRAME_SIZE = 160
+    // samples at 16 kHz). From AetherSDR src/core/RADEEngine.cpp
+    // :154-170 [@0cd4559].
+    while (static_cast<qsizetype>(m_txAccum.size() / sizeof(int16_t)) >=
+           qsizetype(LPCNET_FRAME_SIZE)) {
+        QByteArray sampleArray =
+            m_txAccum.left(LPCNET_FRAME_SIZE * sizeof(int16_t));
+        const int16_t* samples =
+            reinterpret_cast<const int16_t*>(sampleArray.constData());
+        m_txAccum.remove(0, sampleArray.size());
+
+        // Extract features for one 10 ms frame. The opus header
+        // declares the pcm argument as const opus_int16*, but
+        // AetherSDR casts away const for historical reasons; we
+        // mirror that cast to stay byte-for-byte compatible.
+        float features[NB_TOTAL_FEATURES];
+        lpcnet_compute_single_frame_features(
+            m_lpcnetEnc,
+            const_cast<int16_t*>(samples),
+            features,
+            0 /*arch=auto*/);
+
+        // Accumulate NB_TOTAL_FEATURES floats per frame.
+        m_txFeatAccum.append(reinterpret_cast<const char*>(features),
+                             NB_TOTAL_FEATURES * sizeof(float));
+
+        // Step 3: drain rade_n_features_in_out-sized chunks.
+        // From AetherSDR src/core/RADEEngine.cpp:172-193 [@0cd4559].
+        const int n_features_in = rade_n_features_in_out(m_rade);
+        const int n_tx_out      = rade_n_tx_out(m_rade);
+        while (static_cast<qsizetype>(m_txFeatAccum.size() / sizeof(float)) >=
+               qsizetype(n_features_in)) {
+            std::vector<RADE_COMP> tx_out(n_tx_out);
+
+            rade_tx(m_rade,
+                    tx_out.data(),
+                    reinterpret_cast<float*>(m_txFeatAccum.data()));
+            ++m_radeTxCallCount;
+
+            m_txFeatAccum.remove(0, n_features_in * sizeof(float));
+
+            // Step 4: convert RADE_COMP -> 8 kHz mono float32 by
+            // taking the real component. From AetherSDR
+            // src/core/RADEEngine.cpp:183-187 [@0cd4559].
+            QByteArray modem8k(n_tx_out * static_cast<int>(sizeof(float)),
+                               Qt::Uninitialized);
+            auto* out = reinterpret_cast<float*>(modem8k.data());
+            for (int i = 0; i < n_tx_out; ++i) {
+                out[i] = tx_out[i].real;
+            }
+
+            // Step 5: upsample 8 kHz mono -> 24 kHz stereo float32.
+            // From AetherSDR src/core/RADEEngine.cpp:189-190 [@0cd4559].
+            QByteArray stereo24k = m_up8to24->processMonoToStereo(
+                out, n_tx_out);
+
+            // Step 6: emit the encoded modem chunk. From AetherSDR
+            // src/core/RADEEngine.cpp:192 [@0cd4559].
+            emit txModemReady(stereo24k);
+        }
+    }
 }
 
-// From AetherSDR src/core/RADEEngine.cpp:126-132 [@0cd4559]
-//   I3 stub at I2: clears the TX accumulators in advance of the
-//   real LPCNet encoder reset that lands when txEncode() is wired
-//   up. Clearing in I2 is harmless (the accumulators are zero-sized
-//   until I3 starts populating them).
+// From AetherSDR src/core/RADEEngine.cpp:126-132 (resetTx body)
+// [@0cd4559], cross-checked against freedv-gui
+// src/pipeline/RADETransmitStep.cpp:242-247 (RADETransmitStep::reset)
+// [@77e793a]. Clears the speech and feature accumulators on MOX
+// release so a partial frame from the previous over does not bleed
+// into the next over. AetherSDR clears m_txAccum + m_txFeatAccum;
+// freedv-gui additionally resets its input/output FIFOs and zeros
+// featureListIdx_. Our QByteArray accumulators are the equivalent
+// surface; the LPCNet encoder itself is stateful but does not have
+// a documented reset entry-point in the librade build, so we leave
+// the encoder state alone (matching AetherSDR; the next start()
+// fully reallocates the encoder anyway).
 void RadeChannel::resetTx()
 {
     m_txAccum.clear();
     m_txFeatAccum.clear();
+    m_radeTxCallCount = 0;
 }
 
 }  // namespace NereusSDR

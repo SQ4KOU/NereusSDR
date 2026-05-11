@@ -792,6 +792,62 @@ pinning the upstream URL, SHA, and vendoring date. A separate
 provenance registry at `docs/attribution/R8BRAIN-PROVENANCE.md`
 mirrors the FREEDV-GUI / RNNOISE / DESKHPSDR pattern.
 
+### Phase 3R Task I3 - RadeChannel TX path
+
+The I1/I2 skeleton + RX-only `txEncode` no-op is replaced with the
+TX-path port from AetherSDR `RADEEngine.cpp:134-198` (the
+`feedTxAudio` body) [@0cd4559]. The companion `resetTx` body at
+AetherSDR `RADEEngine.cpp:126-132` lands at the same time. Each
+block is cross-checked against freedv-gui `RADETransmitStep.cpp`
+:216-247 (the `restartVocoder` EOO-queue and `reset()` FIFO-flush
+paths) [@77e793a]; the divergence between AetherSDR's QByteArray
+accumulator model and freedv-gui's pre-allocated FIFO + worker
+thread model is called out inline in the .cpp comments at each
+step, as is the one NereusSDR-architectural divergence: input is
+already 16 kHz mono int16 from the WdspEngine TX pump per the plan,
+so AetherSDR's 24 kHz stereo float -> 16 kHz mono int16 conversion
+at `:139-152` is dropped and the input bytes append straight into
+`m_txAccum`. The LPCNet feature extractor, the 12-frame feature
+accumulator drained at `rade_n_features_in_out`-byte boundaries,
+the `rade_tx` call, the RADE_COMP real-leg take, and the
+8 kHz mono -> 24 kHz stereo float32 upsample via `m_up8to24` all
+follow AetherSDR line-for-line.
+
+| NereusSDR file | AetherSDR counterpart | Evidence | Specific mod-history wording |
+|---|---|---|---|
+| `src/core/RadeChannel.cpp` (I3 delta) | `src/core/RADEEngine.cpp:126-132, 134-198` [@0cd4559] | The `txEncode()` body now mirrors `feedTxAudio` at `RADEEngine.cpp:134-198`: input append into `m_txAccum` (NereusSDR divergence: AetherSDR's 24 kHz stereo float -> 16 kHz mono int16 conversion at :139-152 is dropped because the input is already in the LPCNet-ready format); LPCNET_FRAME_SIZE drain loop calling `lpcnet_compute_single_frame_features(m_lpcnetEnc, samples, features, 0)` with the `const_cast<int16_t*>(samples)` cast mirrored byte-for-byte; NB_TOTAL_FEATURES feature accumulator; `rade_n_features_in_out`-bounded drain loop calling `rade_tx(m_rade, tx_out.data(), reinterpret_cast<float*>(m_txFeatAccum.data()))`; RADE_COMP `.real`-component take into an `n_tx_out`-byte float32 mono buffer; `m_up8to24->processMonoToStereo` upsample to 24 kHz stereo float32; `emit txModemReady(stereo24k)` unconditional (the empty-buffer-during-warm-up case is upstream behaviour). `resetTx()` mirrors `RADEEngine.cpp:126-132`: clear `m_txAccum`, clear `m_txFeatAccum`, additionally zero `m_radeTxCallCount` (NereusSDR-added test-seam counter). The test seam `radeTxCallCountForTest()` returns `m_radeTxCallCount`, incremented each time `rade_tx` runs. The test seam `txFeatureAccumSizeForTest()` returns `m_txFeatAccum.size()`. | "Phase 3R Task I3. TX path body lands. txEncode() ports the feedTxAudio body at AetherSDR `src/core/RADEEngine.cpp:134-198` [@0cd4559] with one NereusSDR-architectural divergence: the input is already 16 kHz mono int16 (the WdspEngine TX pump feeds mic samples at that rate per the plan), so AetherSDR's 24 kHz stereo float -> 16 kHz mono int16 conversion at :139-152 is dropped and the input bytes append straight into m_txAccum. The LPCNet feature extraction (lpcnet_compute_single_frame_features over LPCNET_FRAME_SIZE chunks), the NB_TOTAL_FEATURES feature accumulator, the rade_n_features_in_out-bounded drain to rade_tx, the RADE_COMP real-leg take, and the 8 kHz mono -> 24 kHz stereo upsample via m_up8to24 all follow AetherSDR line-for-line. resetTx() flushes m_txAccum + m_txFeatAccum + m_radeTxCallCount per AetherSDR :126-132 [@0cd4559] cross-checked against freedv-gui `RADETransmitStep::reset` (:242-247 [@77e793a])." |
+
+Companion `RadeChannel.h` delta: adds `m_radeTxCallCount` (test
+seam counter) and the public accessors `radeTxCallCountForTest()`
+and `txFeatureAccumSizeForTest()`. No AetherSDR-side equivalent;
+NereusSDR-architectural additions tied to the I3 test suite.
+
+Companion test file `tests/tst_rade_channel.cpp` (the I1/I2 file
+is extended in-place with 4 new TX-path tests):
+`txEncodeAcceptsAndAccumulates` pins that 8 chunks x 2000 samples
+of synthetic 16 kHz mono speech drives at least one `rade_tx`
+call; `txEncodeEmitsModemSamples` pins that at least one emitted
+`txModemReady` chunk carries a non-empty payload (r8brain's
+upsampler has nontrivial startup latency so the very first emit
+may be empty - upstream behaviour at AetherSDR
+`RADEEngine.cpp:189-192` [@0cd4559] is "emit unconditionally");
+`resetTxClearsAccumulators` pins that `resetTx()` flushes the TX
+feature accumulator and the speech accumulator (verified via the
+`txFeatureAccumSizeForTest` seam plus the "post-reset partial
+chunk does not bridge to a full LPCNet frame" pin);
+`txWhileInactiveIsNoOp` pins that pre-start and post-stop
+`txEncode` calls are no-ops (no signals, no crash).
+
+A synthetic in-test fixture (`makeSyntheticSpeech16k`: 1 second
+of a Hanning-windowed 300 Hz sine at 16 kHz mono int16) drives
+the TX path tests; the on-disk mirror at
+`tests/fixtures/rade/tx_test_speech.bin` documents the input
+bytewise for external pipeline replay. The fixture-generation
+rationale lives at `tests/fixtures/rade/README.md`. The "encode
+then decode round-trip" contract is bench-verified at the Phase
+3R N2 matrix because it requires both ends of the codec working
+end-to-end on real radio hardware.
+
 ---
 
 ## Bucket B — False AetherSDR citations (126 files)
