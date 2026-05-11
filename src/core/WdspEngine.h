@@ -108,6 +108,10 @@ class TestWdspEngineTxChannel;
 class TstWdspEngineDexpInit;
 // Phase 3M-4 Task 4: same pattern for the PsFeedbackChannel lifecycle test.
 class TstPsFeedbackChannel;
+// Phase 3R Task J3: same pattern for the SliceModel RADE mode-swap test;
+// needs to flip m_initialized = true so the RxChannel seed at the head of
+// the test does not bail out on the !m_initialized guard.
+class TestSliceModelRadeSwap;
 #endif
 
 namespace NereusSDR {
@@ -445,6 +449,8 @@ private:
     friend class ::TstWdspEngineDexpInit;
     // Phase 3M-4 Task 4: same friendship for the PsFeedbackChannel test.
     friend class ::TstPsFeedbackChannel;
+    // Phase 3R Task J3: same friendship for the SliceModel RADE mode-swap test.
+    friend class ::TestSliceModelRadeSwap;
 #endif
 };
 

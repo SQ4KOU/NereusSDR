@@ -772,6 +772,17 @@ signals:
     void snrDbChanged(double db);
 
 private:
+    // Phase 3R Task J3 - resolves the RadeChannel model-path argument
+    // used when setDspMode transitions into DSPMode::RADE.  Lookup
+    // chain: AppSettings "Rade/ModelPath" if set AND the file exists;
+    // otherwise the literal "dummy" sentinel.  Librade has weights
+    // compiled in per Phase A2b finding, so the model_file argument is
+    // logged then discarded in rade_open() and the sentinel form is
+    // the conventional way to "ignore the model_file argument and use
+    // the built-in weights".  AetherSDR RADEEngine.cpp:34 [@0cd4559]
+    // hard-codes the same literal for the same reason.
+    QString radeModelPath() const;
+
     double  m_frequency{14225000.0};     // Default: 14.225 MHz (20m USB)
     DSPMode m_dspMode{DSPMode::USB};
     int     m_filterLow{100};            // USB default from Thetis F5

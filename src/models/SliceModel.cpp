@@ -114,7 +114,14 @@
 
 #include "Band.h"
 #include "core/AppSettings.h"
+#include "core/LogCategories.h"
+#include "core/RadeChannel.h"
+#include "core/WdspEngine.h"
 #include "core/accessories/AlexController.h"
+#include "models/RadioModel.h"
+
+#include <QFile>
+#include <QStandardPaths>
 
 #include <algorithm>
 
@@ -154,8 +161,59 @@ void SliceModel::setFrequency(double freq)
 
 void SliceModel::setDspMode(DSPMode mode)
 {
-    bool modeChanged = (m_dspMode != mode);
+    const bool modeChanged = (m_dspMode != mode);
+    const DSPMode oldMode = m_dspMode;
     m_dspMode = mode;
+
+    // ── Phase 3R Task J3: mode-aware channel swap ─────────────────────────
+    //
+    // RADE is a NereusSDR-native DSPMode (J1) whose signal chain runs
+    // through RadeChannel (third_party/rade neural codec) instead of
+    // WDSP's RxChannel.  On the transition into or out of DSPMode::RADE
+    // we swap the underlying signal-chain channel.  The swap is driven
+    // entirely off the local mode-change condition; non-RADE-to-non-RADE
+    // mode changes (e.g. USB -> LSB) are untouched and continue to use
+    // the WDSP RxChannel created at connect time.
+    //
+    // Reach the WdspEngine via the parent RadioModel rather than holding
+    // a direct pointer on SliceModel; this keeps the construction graph
+    // unchanged (slices are parented to RadioModel; see RadioModel.cpp:
+    // 1374 [Phase 3R J3] new SliceModel(this)).
+    if (modeChanged) {
+        auto* radio = qobject_cast<RadioModel*>(parent());
+        if (radio != nullptr) {
+            WdspEngine* engine = radio->wdspEngine();
+            if (engine != nullptr) {
+                const int channelId = m_sliceIndex;
+
+                if (oldMode == DSPMode::RADE && mode != DSPMode::RADE) {
+                    // RADE -> any WDSP mode: tear down the RadeChannel
+                    // and recreate the WDSP RxChannel for this slice.
+                    engine->destroyRadeChannel(channelId);
+                    engine->createRxChannel(channelId);
+                } else if (oldMode != DSPMode::RADE && mode == DSPMode::RADE) {
+                    // Any WDSP mode -> RADE: tear down the RxChannel and
+                    // create a new RadeChannel.  Wire its signals into
+                    // RadioModel's slot graph (per-slice lambdas owned
+                    // by RadioModel::wireRadeChannel) and start the
+                    // channel with the configured model path.
+                    engine->destroyRxChannel(channelId);
+                    RadeChannel* radeCh = engine->createRadeChannel(channelId);
+                    if (radeCh != nullptr) {
+                        radio->wireRadeChannel(channelId, radeCh, this);
+                        const QString modelPath = radeModelPath();
+                        if (!radeCh->start(modelPath)) {
+                            qCWarning(lcDsp)
+                                << "SliceModel" << m_sliceIndex
+                                << "setDspMode(RADE): RadeChannel.start() failed for"
+                                << modelPath
+                                << "- channel-swap proceeds but RADE will not decode";
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     // Apply default filter for the new mode
     // From Thetis console.cs:5180-5575 — InitFilterPresets, F5 per mode
@@ -170,6 +228,20 @@ void SliceModel::setDspMode(DSPMode mode)
     if (filterChanged) {
         emit this->filterChanged(m_filterLow, m_filterHigh);
     }
+}
+
+// Phase 3R Task J3 - see SliceModel.h declaration for the design rationale.
+QString SliceModel::radeModelPath() const
+{
+    auto& s = AppSettings::instance();
+    const QString configured =
+        s.value(QStringLiteral("Rade/ModelPath"), QString()).toString();
+    if (!configured.isEmpty() && QFile::exists(configured)) {
+        return configured;
+    }
+    // From AetherSDR RADEEngine.cpp:34 [@0cd4559] - librade convention
+    // "use the built-in weights, ignore the model_file argument".
+    return QStringLiteral("dummy");
 }
 
 // ---------------------------------------------------------------------------

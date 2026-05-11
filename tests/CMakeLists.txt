@@ -2255,6 +2255,21 @@ nereus_add_test(tst_wdsp_engine_dexp_init)
 # this test pins the C++-side lifecycle only and does not call into WDSP.
 nereus_add_test(tst_wdsp_engine_rade_lifecycle)
 
+# ── Phase 3R Task J3: SliceModel mode-aware channel swap ────────────────────
+# Pins the setDspMode RADE <-> WDSP swap contract:
+#   - switching to RADE destroys the slice's RxChannel and creates a
+#     RadeChannel for the same slice ID;
+#   - switching from RADE back to a WDSP mode tears down the RadeChannel
+#     and recreates the RxChannel;
+#   - the new RadeChannel is started with the "dummy" librade sentinel
+#     when no AppSettings "Rade/ModelPath" is configured (librade has
+#     weights compiled in per Phase A2b);
+#   - setDspMode(currentMode) is a no-op (no signal, no channel churn).
+# Uses the WdspEngine friend-access trick (NEREUS_BUILD_TESTS) to set
+# m_initialized = true so the createRxChannel seed at the head of the
+# test does not bail out on its !m_initialized guard.
+nereus_add_test(tst_slice_model_rade_swap)
+
 # ── Phase 3M-1a Task C.2: TxChannel 31-stage TXA pipeline skeleton ────────────
 # Verifies:
 #   Stage::kStageCount == 31 (authoritative from wdsp/TXA.c:31-479 [v2.10.3.13]);
