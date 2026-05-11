@@ -3953,3 +3953,10 @@ target_compile_definitions(tst_p1_bank16_pursignal_run PRIVATE NEREUS_BUILD_TEST
 # rejectsMalformedLine. Source: AetherSDR
 # src/core/SpotCollectorClient.cpp [@0cd4559].
 nereus_add_test(tst_spot_collector_parser)
+
+# ── Phase 3J-2 Task B2: PotaClient JSON parser + dedup ──────────────────────
+# Pins the contract that PotaClient parses api.pota.app/spot/activator
+# JSON responses and dedups across consecutive polls via spotId. 3 tests:
+# parsesPotaJsonResponse, dedupsAcrossPolls, rejectsMalformedJson.
+# Source: AetherSDR src/core/PotaClient.cpp [@0cd4559].
+nereus_add_test(tst_pota_client)

@@ -5,6 +5,12 @@
 // Phase 3J-2 Task B1. Pins the contract that SpotCollectorClient parses
 // the standard DXLab "DX de" UDP line format and tags RBN-suffixed
 // spotters as source="RBN".
+//
+// no-port-check: VK6APH appears in a fabricated DX-cluster line used as
+// a test fixture (RBN-suffixed spotter regression). It is not a Thetis
+// derivation and does not require a PROVENANCE entry. The
+// SpotCollectorClient code itself is registered in
+// docs/attribution/aethersdr-reconciliation.md (Phase 3J-2 Task B1).
 
 #include <QtTest>
 
