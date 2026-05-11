@@ -41,22 +41,36 @@
 //   2026-05-11  J.J. Boyd / KG4VCF  Phase 3J-2 Task G1. Initial shell
 //                                    port. Implementation. AI tooling:
 //                                    Anthropic Claude Code.
+//   2026-05-11  J.J. Boyd / KG4VCF  Phase 3J-2 Task G2. Filter / QSY /
+//                                    message bar implementation.
 
 #include "FreeDVReporterDialog.h"
 
+#include "core/AppSettings.h"
 #include "core/FreeDVReporterClient.h"
 #include "core/FreeDVStation.h"
+#include "models/Band.h"
 #include "models/FreeDVStationModel.h"
 
 #include <QAbstractTableModel>
+#include <QComboBox>
+#include <QDesktopServices>
+#include <QDoubleValidator>
 #include <QHBoxLayout>
 #include <QHeaderView>
+#include <QItemSelectionModel>
+#include <QLabel>
+#include <QLineEdit>
 #include <QLocale>
 #include <QMenuBar>
 #include <QPainter>
+#include <QPushButton>
+#include <QRadioButton>
+#include <QSortFilterProxyModel>
 #include <QStyledItemDelegate>
 #include <QTableView>
 #include <QTimer>
+#include <QUrl>
 #include <QVBoxLayout>
 
 namespace NereusSDR {
@@ -195,6 +209,23 @@ public:
         if (role == Qt::TextAlignmentRole) {
             // Per-cell alignment mirrors per-header alignment.
             return headerData(index.column(), Qt::Horizontal, Qt::TextAlignmentRole);
+        }
+        if (role == Qt::EditRole) {
+            // G2: surface raw values for sort + filter.
+            //   Col kFrequencyCol -> quint64 Hz (consumed by band filter
+            //     proxy). Col kSnrCol -> int snrVal (consumed by sort).
+            //   Other columns fall through to the display string so
+            //   sort-by-display stays sensible.
+            switch (index.column()) {
+                case kFrequencyCol: return QVariant::fromValue(s.frequencyHz);
+                case kSnrCol:       return s.snrVal;
+                case kDistanceCol:  return s.distanceKm;
+                default:            return data(index, Qt::DisplayRole);
+            }
+        }
+        if (role == Qt::UserRole) {
+            // G2: per-row sid lookup for the bottom-bar QSY button.
+            return s.sid;
         }
         return {};
     }
@@ -353,8 +384,11 @@ public:
                const QModelIndex& index) const override {
         QStyleOptionViewItem opt(option);
         initStyleOption(&opt, index);
-        // Resolve the sid for this row, then check the highlight map.
-        const QString sid = m_sidByRow.value(index.row());
+        // Resolve the sid for this row via Qt::UserRole, which the
+        // FreeDVReporterTableModel surfaces for every cell. Works
+        // through the QSortFilterProxyModel too since the proxy
+        // forwards data() calls to the source.
+        const QString sid = index.data(Qt::UserRole).toString();
         const QColor bg = m_highlight.value(sid);
         if (bg.isValid()) {
             painter->save();
@@ -372,19 +406,73 @@ public:
             m_highlight.remove(sid);
         }
     }
-    void setSidOrder(const QList<QString>& sids) {
-        m_sidByRow.clear();
-        for (int r = 0; r < sids.size(); ++r) {
-            m_sidByRow.insert(r, sids.at(r));
-        }
-    }
     QColor highlightFor(const QString& sid) const {
         return m_highlight.value(sid);
     }
 
 private:
     QHash<QString, QColor>       m_highlight;
-    QHash<int, QString>          m_sidByRow;
+};
+
+// =====================================================================
+// FreeDVReporterBandFilterProxy
+//
+// QSortFilterProxyModel sitting between the QTableView and the
+// FreeDVReporterTableModel. Hides any row whose station frequency
+// (col 5 EditRole, raw quint64 Hz) does not fall inside the band the
+// user picked in m_bandFilter.
+//
+// NereusSDR-architectural divergence from upstream. freedv-gui sets
+// `reportData->isVisible = false` on each per-sid record and re-emits
+// row-changed events into the wxDataViewModel (freedv_reporter.cpp
+// :3215-3217 [@77e793a]). Qt's MV separation lets us drop the
+// per-record isVisible bookkeeping entirely and run the filter
+// declaratively in filterAcceptsRow.
+// =====================================================================
+class FreeDVReporterBandFilterProxy : public QSortFilterProxyModel {
+public:
+    explicit FreeDVReporterBandFilterProxy(QObject* parent = nullptr)
+        : QSortFilterProxyModel(parent) {}
+
+    void setSelectedBand(Band band) {
+        if (m_band == band && m_haveBand) {
+            return;
+        }
+        m_band = band;
+        m_haveBand = true;
+        invalidateFilter();
+    }
+    void setShowAll() {
+        if (!m_haveBand) {
+            return;
+        }
+        m_haveBand = false;
+        invalidateFilter();
+    }
+
+protected:
+    bool filterAcceptsRow(int sourceRow, const QModelIndex& sourceParent)
+        const override {
+        if (!m_haveBand) {
+            return true;
+        }
+        // Frequency lives in EditRole on the source model's col 5.
+        const QModelIndex freqIdx =
+            sourceModel()->index(sourceRow, kFrequencyCol, sourceParent);
+        const quint64 hz = freqIdx.data(Qt::EditRole).toULongLong();
+        if (hz == 0) {
+            // Unknown frequency: only "All" matches.
+            return false;
+        }
+        // Band::bandFromFrequency maps Hz to the enclosing amateur band;
+        // see src/models/Band.cpp.
+        const Band rowBand = bandFromFrequency(static_cast<double>(hz));
+        return rowBand == m_band;
+    }
+
+private:
+    Band m_band{Band::GEN};
+    bool m_haveBand{false};
 };
 
 // =====================================================================
@@ -436,10 +524,12 @@ void FreeDVReporterDialog::buildUi() {
     outer->setMenuBar(m_menuBar);
 
     m_tableModel = new FreeDVReporterTableModel(this);
+    m_bandProxy  = new FreeDVReporterBandFilterProxy(this);
+    m_bandProxy->setSourceModel(m_tableModel);
     m_rowDelegate = new FreeDVReporterRowHighlightDelegate(this);
 
     m_table = new QTableView(this);
-    m_table->setModel(m_tableModel);
+    m_table->setModel(m_bandProxy);
     m_table->setItemDelegate(m_rowDelegate);
     m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
     m_table->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -477,12 +567,171 @@ void FreeDVReporterDialog::buildUi() {
 
     outer->addWidget(m_table, 1);
 
-    // G2 placeholder. The filter / QSY / message bar wires in here.
-    m_bottomControls = new QHBoxLayout;
-    m_bottomControls->setContentsMargins(4, 4, 4, 4);
-    auto* bottomWrap = new QWidget(this);
-    bottomWrap->setLayout(m_bottomControls);
-    outer->addWidget(bottomWrap);
+    // Bottom bar built by buildBottomBar(); the test seam findChild<>()
+    // resolves widgets by objectName().
+    buildBottomBar();
+    outer->addWidget(m_bottomBarHost);
+
+    // Connect table-selection signal so the QSY button enables only
+    // when exactly one station is selected. Mirrors freedv-gui's
+    //   m_buttonSendQSY->Enable(false) default + refreshQSYButtonState
+    //   on selection change (freedv_reporter.cpp:1137-1158, 2192
+    //   [@77e793a]).
+    connect(m_table->selectionModel(), &QItemSelectionModel::selectionChanged,
+            this, &FreeDVReporterDialog::onTableSelectionChanged);
+}
+
+void FreeDVReporterDialog::buildBottomBar() {
+    // Container widget holds two horizontal rows stacked vertically:
+    //   Row 1: band filter combo, track-frequency radios, QSY freq edit,
+    //          Send QSY button, Open Website, OK.
+    //   Row 2: message MRU dropdown, message edit, Send / Save / Clear.
+    // From freedv-gui freedv_reporter.cpp:300-388 [@77e793a]
+    //   (wxBoxSizer-based reportingSettingsSizer + statusMessageSizer).
+    m_bottomBarHost = new QWidget(this);
+    auto* hostLayout = new QVBoxLayout(m_bottomBarHost);
+    hostLayout->setContentsMargins(4, 4, 4, 4);
+    hostLayout->setSpacing(4);
+
+    // -----------------------------------------------------------------
+    // Row 1: filter + QSY + Open Website + OK
+    // -----------------------------------------------------------------
+    auto* row1 = new QHBoxLayout;
+    row1->setContentsMargins(0, 0, 0, 0);
+
+    row1->addWidget(new QLabel(QStringLiteral("Band:"), m_bottomBarHost));
+
+    m_bandFilter = new QComboBox(m_bottomBarHost);
+    m_bandFilter->setObjectName(QStringLiteral("bandFilterCombo"));
+    // Band list per task spec: "All" + 12 ham bands. Upstream's combo
+    //   has 13 entries too (freedv_reporter.cpp:324-338 [@77e793a]) but
+    //   collapses 6m+ into ">= 6 m" + "Other". NereusSDR surfaces 6m
+    //   and 2m explicitly since the radios in our target list (HL2,
+    //   ANAN-G2) both reach those bands natively.
+    static const char* const kBandNames[] = {
+        "All", "160m", "80m", "60m", "40m", "30m", "20m", "17m",
+        "15m", "12m", "10m", "6m", "2m"
+    };
+    for (const char* name : kBandNames) {
+        m_bandFilter->addItem(QString::fromLatin1(name));
+    }
+    // Default = All ("FreeDvReporter/BandFilter" persisted preference).
+    const QString savedBand = AppSettings::instance()
+        .value(QStringLiteral("FreeDvReporter/BandFilter"),
+               QStringLiteral("All")).toString();
+    const int savedIdx = m_bandFilter->findText(savedBand);
+    m_bandFilter->setCurrentIndex(savedIdx > 0 ? savedIdx : 0);
+    onBandFilterChanged(m_bandFilter->currentIndex());
+    connect(m_bandFilter,
+            QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &FreeDVReporterDialog::onBandFilterChanged);
+    row1->addWidget(m_bandFilter);
+
+    row1->addWidget(new QLabel(QStringLiteral("Track frequency:"),
+                               m_bottomBarHost));
+    m_trackBandRadio = new QRadioButton(QStringLiteral("Band"), m_bottomBarHost);
+    m_trackBandRadio->setObjectName(QStringLiteral("trackBandRadio"));
+    // From freedv-gui freedv_reporter.cpp:353-358 [@77e793a]
+    //   (m_trackFreqBand created with wxRB_GROUP + initial value not
+    //   touched here, but setBandFilter() at :367 + ::247 default = Band).
+    m_trackBandRadio->setChecked(true);
+    row1->addWidget(m_trackBandRadio);
+
+    m_trackFreqRadio = new QRadioButton(QStringLiteral("Exact freq"),
+                                        m_bottomBarHost);
+    m_trackFreqRadio->setObjectName(QStringLiteral("trackFreqRadio"));
+    row1->addWidget(m_trackFreqRadio);
+
+    row1->addSpacing(8);
+    row1->addWidget(new QLabel(QStringLiteral("Frequency (MHz):"),
+                               m_bottomBarHost));
+    m_qsyFreq = new QLineEdit(m_bottomBarHost);
+    m_qsyFreq->setObjectName(QStringLiteral("qsyFreqEdit"));
+    m_qsyFreq->setMaximumWidth(120);
+    // Accept up to 4 decimal places. Range 0 to 9,999.9999 MHz: sanity
+    //   bound only; the real wire shape consumed by
+    //   FreeDVReporterClient::requestQSY is quint64 Hz.
+    auto* freqValidator = new QDoubleValidator(0.0, 9999.9999, 4, m_qsyFreq);
+    freqValidator->setNotation(QDoubleValidator::StandardNotation);
+    m_qsyFreq->setValidator(freqValidator);
+    row1->addWidget(m_qsyFreq);
+
+    m_qsySendButton = new QPushButton(QStringLiteral("Send QSY"),
+                                      m_bottomBarHost);
+    m_qsySendButton->setObjectName(QStringLiteral("qsySendButton"));
+    // From freedv-gui freedv_reporter.cpp:312 [@77e793a]
+    //   (m_buttonSendQSY->Enable(false) - disabled until a station row
+    //   gets selected).
+    m_qsySendButton->setEnabled(false);
+    connect(m_qsySendButton, &QPushButton::clicked,
+            this, &FreeDVReporterDialog::onQsySendClicked);
+    row1->addWidget(m_qsySendButton);
+
+    row1->addStretch(1);
+
+    m_openWebsiteButton = new QPushButton(QStringLiteral("Open Website"),
+                                          m_bottomBarHost);
+    m_openWebsiteButton->setObjectName(QStringLiteral("openWebsiteButton"));
+    connect(m_openWebsiteButton, &QPushButton::clicked,
+            this, &FreeDVReporterDialog::onOpenWebsiteClicked);
+    row1->addWidget(m_openWebsiteButton);
+
+    m_closeButton = new QPushButton(QStringLiteral("OK"), m_bottomBarHost);
+    m_closeButton->setObjectName(QStringLiteral("closeButton"));
+    m_closeButton->setDefault(true);
+    // Upstream labels this button "Close" with wxID_OK
+    //   (freedv_reporter.cpp:306 [@77e793a]); NereusSDR uses "OK" per
+    //   the task spec since both names map to the same close() action.
+    connect(m_closeButton, &QPushButton::clicked, this, &QWidget::close);
+    row1->addWidget(m_closeButton);
+
+    hostLayout->addLayout(row1);
+
+    // -----------------------------------------------------------------
+    // Row 2: message MRU + edit + Send / Save / Clear
+    // -----------------------------------------------------------------
+    auto* row2 = new QHBoxLayout;
+    row2->setContentsMargins(0, 0, 0, 0);
+
+    row2->addWidget(new QLabel(QStringLiteral("Msg"), m_bottomBarHost));
+
+    m_msgDropdown = new QComboBox(m_bottomBarHost);
+    m_msgDropdown->setObjectName(QStringLiteral("msgDropdown"));
+    m_msgDropdown->setMaximumWidth(28);
+    // Down-arrow only - the user picks a stored MRU entry which copies
+    // into m_msgEdit. From freedv-gui freedv_reporter.cpp:374-376
+    //   [@77e793a] (m_statusMessage wxComboCtrl with a MsgListPopup
+    //   that surfaces the saved list and forwards onto the text field).
+    refreshMessageDropdown(loadSavedMessages());
+    connect(m_msgDropdown,
+            QOverload<int>::of(&QComboBox::activated),
+            this, &FreeDVReporterDialog::onMessageDropdownActivated);
+    row2->addWidget(m_msgDropdown);
+
+    m_msgEdit = new QLineEdit(m_bottomBarHost);
+    m_msgEdit->setObjectName(QStringLiteral("msgEdit"));
+    m_msgEdit->setPlaceholderText(QStringLiteral("Status message"));
+    row2->addWidget(m_msgEdit, 1);
+
+    m_msgSendButton = new QPushButton(QStringLiteral("Send"), m_bottomBarHost);
+    m_msgSendButton->setObjectName(QStringLiteral("msgSendButton"));
+    connect(m_msgSendButton, &QPushButton::clicked,
+            this, &FreeDVReporterDialog::onMessageSendClicked);
+    row2->addWidget(m_msgSendButton);
+
+    m_msgSaveButton = new QPushButton(QStringLiteral("Save"), m_bottomBarHost);
+    m_msgSaveButton->setObjectName(QStringLiteral("msgSaveButton"));
+    connect(m_msgSaveButton, &QPushButton::clicked,
+            this, &FreeDVReporterDialog::onMessageSaveClicked);
+    row2->addWidget(m_msgSaveButton);
+
+    m_msgClearButton = new QPushButton(QStringLiteral("Clear"), m_bottomBarHost);
+    m_msgClearButton->setObjectName(QStringLiteral("msgClearButton"));
+    connect(m_msgClearButton, &QPushButton::clicked,
+            this, &FreeDVReporterDialog::onMessageClearClicked);
+    row2->addWidget(m_msgClearButton);
+
+    hostLayout->addLayout(row2);
 }
 
 void FreeDVReporterDialog::onStationAdded(const QString& sid, const FreeDVStation& info) {
@@ -588,29 +837,9 @@ void FreeDVReporterDialog::setHighlight(const QString& sid, const QColor& bg) {
 }
 
 void FreeDVReporterDialog::refreshDelegateSidOrder() {
-    // Walk the table model's current row order and tell the delegate
-    // which sid lives at each row.
-    QList<QString> sids;
-    sids.reserve(m_tableModel->rowCount());
-    for (int r = 0; r < m_tableModel->rowCount(); ++r) {
-        const QString call = m_tableModel->data(m_tableModel->index(r, kCallsignCol),
-                                                Qt::DisplayRole).toString();
-        // Look up sid by walking the station model's hash; cheap for
-        // the < 200-station typical population. G2 will replace this
-        // with a sid-keyed iteration once we surface that field.
-        QString sidForRow;
-        if (m_stationModel) {
-            const auto map = m_stationModel->stations();
-            for (auto it = map.constBegin(); it != map.constEnd(); ++it) {
-                if (it.value().callsign == call) {
-                    sidForRow = it.key();
-                    break;
-                }
-            }
-        }
-        sids.append(sidForRow);
-    }
-    m_rowDelegate->setSidOrder(sids);
+    // G2: replaced by Qt::UserRole sid lookup inside the delegate.
+    //   Kept as an empty hook in case G3 wants to drive sort indicators
+    //   or similar per-row metadata refreshes from add / update events.
 }
 
 void FreeDVReporterDialog::setHighlightClearMsForTest(int ms) {
@@ -628,6 +857,171 @@ QColor FreeDVReporterDialog::rowHighlightColorForTest(const QString& sid) const 
         return {};
     }
     return m_rowDelegate->highlightFor(sid);
+}
+
+// =====================================================================
+// G2: bottom-bar slot implementations
+// =====================================================================
+
+QUrl FreeDVReporterDialog::websiteUrl() const {
+    // From freedv-gui freedv_reporter.cpp:1094-1099 [@77e793a]
+    //   (OnOpenWebsite uses appConfiguration.freedvReporterHostname
+    //   prefixed with "https://"; default hostname is qso.freedv.org
+    //   per ReportingConfiguration.cpp:113 [@77e793a]).
+    return QUrl(QStringLiteral("https://qso.freedv.org"));
+}
+
+void FreeDVReporterDialog::onBandFilterChanged(int index) {
+    if (!m_bandProxy || !m_bandFilter) {
+        return;
+    }
+    if (index <= 0) {
+        // "All" -> proxy passes every row through.
+        m_bandProxy->setShowAll();
+    } else {
+        // Item text is "160m" / "80m" / ... / "2m"; Band::bandFromName
+        //   parses those into the corresponding Band enum (160m -> Band160m).
+        const QString text = m_bandFilter->itemText(index);
+        const Band b = bandFromName(text);
+        m_bandProxy->setSelectedBand(b);
+    }
+    // Persist the choice. AppSettings stores strings so the combo item
+    //   text is the natural key.
+    AppSettings::instance().setValue(
+        QStringLiteral("FreeDvReporter/BandFilter"),
+        m_bandFilter->itemText(index));
+}
+
+void FreeDVReporterDialog::onTableSelectionChanged(
+    const QItemSelection& /*selected*/, const QItemSelection& /*deselected*/) {
+    if (!m_qsySendButton || !m_table) {
+        return;
+    }
+    const QModelIndexList rows = m_table->selectionModel()->selectedRows();
+    // From freedv-gui freedv_reporter.cpp:2186-2192 [@77e793a]
+    //   (refreshQSYButtonState enables only when a single row is
+    //   selected AND we are connected to the server).
+    m_qsySendButton->setEnabled(rows.size() == 1);
+}
+
+QString FreeDVReporterDialog::currentSelectedSid() const {
+    if (!m_table) {
+        return {};
+    }
+    const QModelIndexList rows = m_table->selectionModel()->selectedRows();
+    if (rows.size() != 1) {
+        return {};
+    }
+    return rows.first().data(Qt::UserRole).toString();
+}
+
+void FreeDVReporterDialog::onQsySendClicked() {
+    if (!m_qsyFreq) {
+        return;
+    }
+    const QString sid = currentSelectedSid();
+    if (sid.isEmpty()) {
+        return;
+    }
+    // Parse MHz from the line edit, convert to Hz. Empty or zero input
+    //   leaves the request as a no-op; the upstream button always uses
+    //   the radio's own reportingFrequency (freedv_reporter.cpp:1085
+    //   [@77e793a]) so 0 Hz here would also be a sentinel for "use the
+    //   current TX freq".
+    bool ok = false;
+    const double mhz = QLocale::c().toDouble(m_qsyFreq->text(), &ok);
+    if (!ok || mhz <= 0.0) {
+        return;
+    }
+    const quint64 freqHz = static_cast<quint64>(mhz * 1.0e6 + 0.5);
+    emit qsyRequested(sid, freqHz, QString());
+    emit tuneRequested(freqHz);
+}
+
+void FreeDVReporterDialog::onOpenWebsiteClicked() {
+    QDesktopServices::openUrl(websiteUrl());
+}
+
+void FreeDVReporterDialog::onMessageSendClicked() {
+    if (!m_msgEdit) {
+        return;
+    }
+    emit messageSendRequested(m_msgEdit->text());
+}
+
+void FreeDVReporterDialog::onMessageSaveClicked() {
+    if (!m_msgEdit) {
+        return;
+    }
+    const QString text = m_msgEdit->text().trimmed();
+    if (text.isEmpty()) {
+        return;
+    }
+    QStringList msgs = loadSavedMessages();
+    msgs.removeAll(text);    // dedup; most-recent goes to the front
+    msgs.prepend(text);
+    // From freedv-gui freedv_reporter.cpp - upstream caps the saved
+    //   message list at the configured popup-list count. Task spec
+    //   says N=10, so cap here.
+    constexpr int kMruLimit = 10;
+    while (msgs.size() > kMruLimit) {
+        msgs.removeLast();
+    }
+    saveSavedMessages(msgs);
+    refreshMessageDropdown(msgs);
+}
+
+void FreeDVReporterDialog::onMessageClearClicked() {
+    if (!m_msgEdit) {
+        return;
+    }
+    m_msgEdit->clear();
+    // Empty text = clear remote message per upstream
+    //   (OnStatusTextClear in freedv_reporter.cpp; the wire-level
+    //   wrapper FreeDVReporter::updateMessage sends an empty string).
+    emit messageSendRequested(QString());
+}
+
+void FreeDVReporterDialog::onMessageDropdownActivated(int index) {
+    if (!m_msgDropdown || !m_msgEdit) {
+        return;
+    }
+    if (index < 0 || index >= m_msgDropdown->count()) {
+        return;
+    }
+    m_msgEdit->setText(m_msgDropdown->itemText(index));
+}
+
+QStringList FreeDVReporterDialog::loadSavedMessages() const {
+    const QString raw = AppSettings::instance()
+        .value(QStringLiteral("FreeDvReporter/SavedMessages"),
+               QString()).toString();
+    if (raw.isEmpty()) {
+        return {};
+    }
+    // Stored as newline-joined per the task-spec convention; an
+    //   embedded comma in a message would otherwise corrupt the
+    //   round-trip via QVariant.toString()'s default ", " join.
+    return raw.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+}
+
+void FreeDVReporterDialog::saveSavedMessages(const QStringList& msgs) const {
+    AppSettings::instance().setValue(
+        QStringLiteral("FreeDvReporter/SavedMessages"),
+        msgs.join(QLatin1Char('\n')));
+}
+
+void FreeDVReporterDialog::refreshMessageDropdown(const QStringList& msgs) {
+    if (!m_msgDropdown) {
+        return;
+    }
+    m_msgDropdown->clear();
+    for (const QString& m : msgs) {
+        m_msgDropdown->addItem(m);
+    }
+    // No default selection - the user explicitly picks an MRU entry to
+    //   copy it into m_msgEdit.
+    m_msgDropdown->setCurrentIndex(-1);
 }
 
 }  // namespace NereusSDR

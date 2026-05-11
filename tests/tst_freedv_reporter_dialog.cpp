@@ -29,13 +29,20 @@
 
 #include <QtTest>
 #include <QApplication>
-#include <QTableView>
-#include <QHeaderView>
-#include <QMenuBar>
-#include <QSignalSpy>
+#include <QComboBox>
 #include <QDateTime>
 #include <QColor>
+#include <QHeaderView>
+#include <QLineEdit>
+#include <QMenuBar>
+#include <QPushButton>
+#include <QRadioButton>
+#include <QSignalSpy>
+#include <QStandardPaths>
+#include <QTableView>
+#include <QUrl>
 
+#include "core/AppSettings.h"
 #include "gui/FreeDVReporterDialog.h"
 #include "models/FreeDVStationModel.h"
 #include "core/FreeDVStation.h"
@@ -55,6 +62,18 @@ private slots:
     void rxReportTurnsRowGreen();
     void highlightClearsAfterSixSeconds();
     void stationRemovedDeletesRow();
+
+    // G2 - filter / QSY / message bar
+    void bandFilterComboHasThirteenEntries();
+    void bandFilterAllShowsAllRows();
+    void bandFilterTwentyMetersHidesOtherBandRows();
+    void qsyButtonDisabledWhenNoSelection();
+    void qsyButtonEnabledWhenRowSelected();
+    void qsyButtonEmitsRequestWithParsedFreq();
+    void messageSendEmitsCurrentText();
+    void messageSaveAppendsToMru();
+    void messageClearEmitsEmptyAndClearsEdit();
+    void openWebsiteOpensQsoFreedvOrgUrl();
 };
 
 // Build a FreeDVStation with sensible defaults and let callers override.
@@ -275,6 +294,231 @@ void TestFreeDVReporterDialog::stationRemovedDeletesRow() {
     QCOMPARE(table->model()->rowCount(), 1);
     model->onStationRemoved("sid-go");
     QCOMPARE(table->model()->rowCount(), 0);
+
+    delete dlg;
+    delete model;
+}
+
+// =====================================================================
+// G2: filter / QSY / message bar
+// =====================================================================
+
+// Build a station at a specific frequency for band filter testing.
+static FreeDVStation makeStationOnFreq(const QString& sid, const QString& callsign,
+                                       quint64 freqHz) {
+    FreeDVStation s = makeStation(sid, callsign);
+    s.frequencyHz = freqHz;
+    return s;
+}
+
+void TestFreeDVReporterDialog::bandFilterComboHasThirteenEntries() {
+    auto* model = new FreeDVStationModel;
+    auto* dlg = new FreeDVReporterDialog(model, nullptr, nullptr);
+    auto* combo = dlg->findChild<QComboBox*>(QStringLiteral("bandFilterCombo"));
+    QVERIFY(combo != nullptr);
+    // Task spec: All + 12 bands (160 / 80 / 60 / 40 / 30 / 20 / 17 / 15 /
+    //   12 / 10 / 6 / 2) = 13 entries. Cite at construction site.
+    QCOMPARE(combo->count(), 13);
+
+    delete dlg;
+    delete model;
+}
+
+void TestFreeDVReporterDialog::bandFilterAllShowsAllRows() {
+    auto* model = new FreeDVStationModel;
+    auto* dlg = new FreeDVReporterDialog(model, nullptr, nullptr);
+    auto* combo = dlg->findChild<QComboBox*>(QStringLiteral("bandFilterCombo"));
+    auto* table = dlg->findChild<QTableView*>();
+    QVERIFY(combo != nullptr);
+    QVERIFY(table != nullptr);
+
+    // 3 stations across 3 different bands: 80m / 20m / 6m.
+    model->onStationAdded("sid-80",
+        makeStationOnFreq("sid-80", "K1A", 3573000));    // 80m FT8 freq
+    model->onStationAdded("sid-20",
+        makeStationOnFreq("sid-20", "K1B", 14236000));   // 20m FreeDV freq
+    model->onStationAdded("sid-6",
+        makeStationOnFreq("sid-6", "K1C", 50313000));    // 6m FT8 freq
+
+    // Combo is on "All" by default.
+    QCOMPARE(combo->currentIndex(), 0);
+    QCOMPARE(table->model()->rowCount(), 3);
+
+    delete dlg;
+    delete model;
+}
+
+void TestFreeDVReporterDialog::bandFilterTwentyMetersHidesOtherBandRows() {
+    auto* model = new FreeDVStationModel;
+    auto* dlg = new FreeDVReporterDialog(model, nullptr, nullptr);
+    auto* combo = dlg->findChild<QComboBox*>(QStringLiteral("bandFilterCombo"));
+    auto* table = dlg->findChild<QTableView*>();
+    QVERIFY(combo != nullptr);
+    QVERIFY(table != nullptr);
+
+    model->onStationAdded("sid-80",
+        makeStationOnFreq("sid-80", "K1A", 3573000));
+    model->onStationAdded("sid-20",
+        makeStationOnFreq("sid-20", "K1B", 14236000));
+    model->onStationAdded("sid-6",
+        makeStationOnFreq("sid-6", "K1C", 50313000));
+
+    // Find the "20m" item and select it.
+    const int idx = combo->findText(QStringLiteral("20m"));
+    QVERIFY(idx > 0);
+    combo->setCurrentIndex(idx);
+
+    QCOMPARE(table->model()->rowCount(), 1);
+    QCOMPARE(table->model()->index(0, 0).data().toString(), QStringLiteral("K1B"));
+
+    delete dlg;
+    delete model;
+}
+
+void TestFreeDVReporterDialog::qsyButtonDisabledWhenNoSelection() {
+    auto* model = new FreeDVStationModel;
+    auto* dlg = new FreeDVReporterDialog(model, nullptr, nullptr);
+    auto* qsyBtn = dlg->findChild<QPushButton*>(QStringLiteral("qsySendButton"));
+    QVERIFY(qsyBtn != nullptr);
+    // From freedv-gui freedv_reporter.cpp:312 [@77e793a] -
+    //   m_buttonSendQSY->Enable(false) is the constructor default.
+    QVERIFY(!qsyBtn->isEnabled());
+
+    delete dlg;
+    delete model;
+}
+
+void TestFreeDVReporterDialog::qsyButtonEnabledWhenRowSelected() {
+    auto* model = new FreeDVStationModel;
+    auto* dlg = new FreeDVReporterDialog(model, nullptr, nullptr);
+    auto* qsyBtn = dlg->findChild<QPushButton*>(QStringLiteral("qsySendButton"));
+    auto* table = dlg->findChild<QTableView*>();
+    QVERIFY(qsyBtn != nullptr);
+    QVERIFY(table != nullptr);
+
+    model->onStationAdded("sid-go",
+        makeStationOnFreq("sid-go", "K1XX", 14236000));
+
+    // Programmatically select row 0.
+    table->selectRow(0);
+
+    QVERIFY(qsyBtn->isEnabled());
+
+    delete dlg;
+    delete model;
+}
+
+void TestFreeDVReporterDialog::qsyButtonEmitsRequestWithParsedFreq() {
+    auto* model = new FreeDVStationModel;
+    auto* dlg = new FreeDVReporterDialog(model, nullptr, nullptr);
+    auto* qsyBtn = dlg->findChild<QPushButton*>(QStringLiteral("qsySendButton"));
+    auto* qsyFreq = dlg->findChild<QLineEdit*>(QStringLiteral("qsyFreqEdit"));
+    auto* table = dlg->findChild<QTableView*>();
+    QVERIFY(qsyBtn != nullptr);
+    QVERIFY(qsyFreq != nullptr);
+    QVERIFY(table != nullptr);
+
+    model->onStationAdded("sid-target",
+        makeStationOnFreq("sid-target", "K1TGT", 14236000));
+    table->selectRow(0);
+
+    qsyFreq->setText(QStringLiteral("14.230"));
+
+    QSignalSpy spy(dlg, &FreeDVReporterDialog::qsyRequested);
+    qsyBtn->click();
+
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.first().at(0).toString(), QStringLiteral("sid-target"));
+    QCOMPARE(spy.first().at(1).toULongLong(), quint64(14230000));
+
+    delete dlg;
+    delete model;
+}
+
+void TestFreeDVReporterDialog::messageSendEmitsCurrentText() {
+    auto* model = new FreeDVStationModel;
+    auto* dlg = new FreeDVReporterDialog(model, nullptr, nullptr);
+    auto* msgEdit = dlg->findChild<QLineEdit*>(QStringLiteral("msgEdit"));
+    auto* sendBtn = dlg->findChild<QPushButton*>(QStringLiteral("msgSendButton"));
+    QVERIFY(msgEdit != nullptr);
+    QVERIFY(sendBtn != nullptr);
+
+    msgEdit->setText(QStringLiteral("CQ TEST"));
+
+    QSignalSpy spy(dlg, &FreeDVReporterDialog::messageSendRequested);
+    sendBtn->click();
+
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.first().at(0).toString(), QStringLiteral("CQ TEST"));
+
+    delete dlg;
+    delete model;
+}
+
+void TestFreeDVReporterDialog::messageSaveAppendsToMru() {
+    // Clear AppSettings entry first so this test starts clean.
+    AppSettings::instance().remove(QStringLiteral("FreeDvReporter/SavedMessages"));
+
+    auto* model = new FreeDVStationModel;
+    auto* dlg = new FreeDVReporterDialog(model, nullptr, nullptr);
+    auto* msgEdit = dlg->findChild<QLineEdit*>(QStringLiteral("msgEdit"));
+    auto* saveBtn = dlg->findChild<QPushButton*>(QStringLiteral("msgSaveButton"));
+    auto* msgDropdown = dlg->findChild<QComboBox*>(QStringLiteral("msgDropdown"));
+    QVERIFY(msgEdit != nullptr);
+    QVERIFY(saveBtn != nullptr);
+    QVERIFY(msgDropdown != nullptr);
+
+    msgEdit->setText(QStringLiteral("CQ DX"));
+    saveBtn->click();
+
+    bool found = false;
+    for (int i = 0; i < msgDropdown->count(); ++i) {
+        if (msgDropdown->itemText(i) == QStringLiteral("CQ DX")) {
+            found = true;
+            break;
+        }
+    }
+    QVERIFY(found);
+
+    // Round-trips through AppSettings.
+    const QString stored = AppSettings::instance()
+        .value(QStringLiteral("FreeDvReporter/SavedMessages")).toString();
+    QVERIFY(stored.contains(QStringLiteral("CQ DX")));
+
+    AppSettings::instance().remove(QStringLiteral("FreeDvReporter/SavedMessages"));
+    delete dlg;
+    delete model;
+}
+
+void TestFreeDVReporterDialog::messageClearEmitsEmptyAndClearsEdit() {
+    auto* model = new FreeDVStationModel;
+    auto* dlg = new FreeDVReporterDialog(model, nullptr, nullptr);
+    auto* msgEdit = dlg->findChild<QLineEdit*>(QStringLiteral("msgEdit"));
+    auto* clearBtn = dlg->findChild<QPushButton*>(QStringLiteral("msgClearButton"));
+    QVERIFY(msgEdit != nullptr);
+    QVERIFY(clearBtn != nullptr);
+
+    msgEdit->setText(QStringLiteral("some old message"));
+
+    QSignalSpy spy(dlg, &FreeDVReporterDialog::messageSendRequested);
+    clearBtn->click();
+
+    QVERIFY(msgEdit->text().isEmpty());
+    QCOMPARE(spy.count(), 1);
+    QVERIFY(spy.first().at(0).toString().isEmpty());
+
+    delete dlg;
+    delete model;
+}
+
+void TestFreeDVReporterDialog::openWebsiteOpensQsoFreedvOrgUrl() {
+    auto* model = new FreeDVStationModel;
+    auto* dlg = new FreeDVReporterDialog(model, nullptr, nullptr);
+
+    // Test seam: read the URL the Open Website button targets without
+    // actually invoking QDesktopServices::openUrl in the unit test.
+    const QUrl url = dlg->websiteUrl();
+    QCOMPARE(url, QUrl(QStringLiteral("https://qso.freedv.org")));
 
     delete dlg;
     delete model;

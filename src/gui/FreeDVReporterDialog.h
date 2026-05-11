@@ -84,6 +84,40 @@
 //                                    reportingFrequencyAsKhz setting
 //                                    is deferred to G3. AI tooling:
 //                                    Anthropic Claude Code.
+//   2026-05-11  J.J. Boyd / KG4VCF  Phase 3J-2 Task G2. Filter / QSY /
+//                                    message bar landed. New widgets:
+//                                    band-filter combo + Track-frequency
+//                                    radio pair + QSY freq edit + Send
+//                                    QSY button + Open Website / OK
+//                                    buttons (top row), MRU dropdown +
+//                                    message edit + Send / Save / Clear
+//                                    (bottom row). New signals
+//                                    qsyRequested / messageSendRequested
+//                                    / tuneRequested. Band filtering is
+//                                    a QSortFilterProxyModel that maps
+//                                    each row's frequency through
+//                                    Band::bandFromFrequency() and
+//                                    compares to the combo selection.
+//                                    NereusSDR-architectural divergences
+//                                    vs freedv-gui:
+//                                    (1) NereusSDR exposes a 13-entry
+//                                        band filter (All + 12 ham
+//                                        bands), while upstream's
+//                                        wxComboBox is also 13 entries
+//                                        but rolls 6m+up into ">= 6 m"
+//                                        and adds a separate "Other"
+//                                        slot (freedv_reporter.cpp
+//                                        :324-338 [@77e793a]). The
+//                                        13-count is preserved.
+//                                    (2) QSY frequency is typed by the
+//                                        user in MHz (task spec); the
+//                                        upstream button always uses
+//                                        the radio's own current
+//                                        reportingFrequency
+//                                        (freedv_reporter.cpp:1085
+//                                        [@77e793a]). H2 routes this
+//                                        signal externally.
+//                                    AI tooling: Anthropic Claude Code.
 
 #pragma once
 
@@ -91,10 +125,17 @@
 #include <QHash>
 #include <QPointer>
 #include <QString>
+#include <QUrl>
 #include <QWidget>
 
+class QComboBox;
 class QHBoxLayout;
+class QItemSelection;
+class QLineEdit;
 class QMenuBar;
+class QPushButton;
+class QRadioButton;
+class QSortFilterProxyModel;
 class QTableView;
 class QTimer;
 class QVBoxLayout;
@@ -103,6 +144,7 @@ namespace NereusSDR {
 
 class FreeDVReporterClient;
 class FreeDVReporterTableModel;
+class FreeDVReporterBandFilterProxy;
 class FreeDVReporterRowHighlightDelegate;
 class FreeDVStationModel;
 struct FreeDVStation;
@@ -153,6 +195,31 @@ public:
     // updateHighlights() in freedv_reporter.cpp:1304-1339 [@77e793a].
     QColor rowHighlightColorForTest(const QString& sid) const;
 
+    // G2: test seam for the Open Website button. Replaces actually
+    // calling QDesktopServices::openUrl from inside a unit test.
+    // Production button click invokes openWebsite() which delegates
+    // to websiteUrl() + QDesktopServices::openUrl.
+    QUrl websiteUrl() const;
+
+signals:
+    // G2: QSY request - connected externally to FreeDVReporterClient
+    //   ::requestQSY (wire shape from freedv-gui FreeDVReporter.cpp
+    //   requestQSY at :104-119 [@77e793a]). MainWindow does the
+    //   connect in H2.
+    void qsyRequested(const QString& targetSid, quint64 freqHz,
+                      const QString& message);
+
+    // G2: Status message - connected externally to FreeDVReporterClient
+    //   ::updateMessage (wire shape from freedv-gui FreeDVReporter.cpp
+    //   updateMessage at :122-130 [@77e793a]). Empty text clears the
+    //   remote message per upstream.
+    void messageSendRequested(const QString& text);
+
+    // G2: Optional - emitted when user double-clicks a row or hits
+    //   Send QSY so MainWindow can tune the active slice to the
+    //   target freq. Same shape as SpotHubDialog::tuneRequested.
+    void tuneRequested(quint64 freqHz);
+
 private slots:
     // FreeDVStationModel signal handlers. Each forwards into the
     // private QAbstractTableModel adapter and into applyHighlightFor
@@ -162,21 +229,60 @@ private slots:
     void onStationRemoved(const QString& sid);
     void onCleared();
 
+    // G2: bottom-bar action handlers.
+    void onBandFilterChanged(int index);
+    void onTableSelectionChanged(const QItemSelection& selected,
+                                 const QItemSelection& deselected);
+    void onQsySendClicked();
+    void onOpenWebsiteClicked();
+    void onMessageSendClicked();
+    void onMessageSaveClicked();
+    void onMessageClearClicked();
+    void onMessageDropdownActivated(int index);
+
 private:
     void buildUi();
+    void buildBottomBar();
     void applyHighlightForStation(const QString& sid,
                                   const NereusSDR::FreeDVStation& info);
     void setHighlight(const QString& sid, const QColor& bg);
     void refreshDelegateSidOrder();
 
+    // G2: AppSettings serialization helpers for the MRU message list.
+    // Stored under "FreeDvReporter/SavedMessages" as a newline-joined
+    // string per the task-spec convention.
+    QStringList loadSavedMessages() const;
+    void        saveSavedMessages(const QStringList& msgs) const;
+    void        refreshMessageDropdown(const QStringList& msgs);
+
+    // G2: resolve the sid of the currently selected table row, mapped
+    // back through the band-filter proxy. Returns empty if no row is
+    // selected.
+    QString currentSelectedSid() const;
+
     FreeDVStationModel*               m_stationModel{nullptr};
-    QPointer<FreeDVReporterClient>    m_client;  // reserved for G2 QSY wiring
+    QPointer<FreeDVReporterClient>    m_client;  // reserved for H2 QSY wiring
 
     QMenuBar*                         m_menuBar{nullptr};       // G3 placeholder
     QTableView*                       m_table{nullptr};
     FreeDVReporterTableModel*         m_tableModel{nullptr};
+    FreeDVReporterBandFilterProxy*    m_bandProxy{nullptr};
     FreeDVReporterRowHighlightDelegate* m_rowDelegate{nullptr};
-    QHBoxLayout*                      m_bottomControls{nullptr}; // G2 placeholder
+
+    // G2 bottom-bar widgets.
+    QWidget*      m_bottomBarHost{nullptr};
+    QComboBox*    m_bandFilter{nullptr};
+    QRadioButton* m_trackBandRadio{nullptr};
+    QRadioButton* m_trackFreqRadio{nullptr};
+    QLineEdit*    m_qsyFreq{nullptr};
+    QPushButton*  m_qsySendButton{nullptr};
+    QPushButton*  m_openWebsiteButton{nullptr};
+    QPushButton*  m_closeButton{nullptr};
+    QComboBox*    m_msgDropdown{nullptr};
+    QLineEdit*    m_msgEdit{nullptr};
+    QPushButton*  m_msgSendButton{nullptr};
+    QPushButton*  m_msgSaveButton{nullptr};
+    QPushButton*  m_msgClearButton{nullptr};
 
     // Per-sid clear timers. Each fires once m_highlightClearMs ms
     // after the TX / RX event, clearing the row tint. Replaces
