@@ -4052,3 +4052,19 @@ nereus_add_test(tst_adif_parser)
 #   rows; entityCount reflects unique-entity tally). Source:
 #   AetherSDR src/core/DxccWorkedStatus.{h,cpp} [@0cd4559].
 nereus_add_test(tst_dxcc_worked_status)
+
+# ── Phase 3J-2 Task C4: DxccColorProvider (DXCC stack integrator) ──────────
+# Pins the contract that DxccColorProvider combines CtyDatParser +
+# DxccWorkedStatus + AdifParser to resolve a (callsign, freqMhz,
+# mode) spot to one of 4 configurable colors plus a default
+# unknown sentinel. Six tests:
+#   initialStateReturnsDefaultColor (no cty.dat load -> Unknown
+#   -> invalid QColor), loadsCtyDatAndAdif (importFinished
+#   emitted with qsoCount=10, entityCount=5 against the bundled
+#   sample fixture), resolvesNewDxccColor (CT1ABC / Portugal not
+#   in fixture -> colorNewDxcc bright red), resolvesNewBandColor
+#   (W1AW on 15m -> colorNewBand orange), resolvesNewModeColor
+#   (W1AW on 40m CW -> colorNewMode gold), resolvesWorkedColor
+#   (W1AW on 20m PHONE -> colorWorked dim grey). Source:
+#   AetherSDR src/core/DxccColorProvider.{h,cpp} [@0cd4559].
+nereus_add_test(tst_dxcc_color_provider)
