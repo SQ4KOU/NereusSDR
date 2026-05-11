@@ -596,6 +596,8 @@ set(GUI_SOURCES
     src/gui/NetworkDiagnosticsDialog.h
     src/gui/SpotHubDialog.cpp
     src/gui/SpotHubDialog.h
+    src/gui/FreeDVReporterDialog.cpp
+    src/gui/FreeDVReporterDialog.h
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainer.cpp
     src/gui/containers/ContainerManager.cpp

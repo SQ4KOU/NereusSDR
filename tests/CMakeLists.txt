@@ -4211,3 +4211,23 @@ nereus_add_test(tst_spot_overlay_render)
 # Source: AetherSDR src/gui/DxClusterDialog.{h,cpp} [@0cd4559]; Display
 # tab content lands in F4.
 nereus_add_test(tst_spothub_dialog_smoke)
+
+# ── Phase 3J-2 Task G1: FreeDVReporterDialog shell + 14-col table ─────────
+# Pins the contract that FreeDVReporterDialog (the freedv-gui
+# freedv_reporter.{h,cpp} port) constructs successfully when handed a
+# FreeDVStationModel, that its embedded QTableView reports the 14-column
+# layout drawn from upstream's createColumn_ switch (column labels,
+# alignment, exact column count), and that the per-row TX-red /
+# RX-green highlight tones flip on / off in response to
+# FreeDVStationModel::stationUpdated. 10 tests total:
+#   G1 (10): dialogConstructs, tableHasFourteenColumns,
+#            tableColumnHeadersMatchUpstream,
+#            tableColumnAlignmentsMatchUpstream,
+#            populatesFiveStationsToFiveRows,
+#            snrColumnFormatsMinusNinetyNineAsDash,
+#            txReportTurnsRowRed, rxReportTurnsRowGreen,
+#            highlightClearsAfterSixSeconds, stationRemovedDeletesRow
+# Source: freedv-gui src/gui/dialogs/freedv_reporter.{h,cpp} [@77e793a].
+# Filter / QSY / message bar (G2) and menu bar with Show / Filter /
+# Idle-longer-than menus (G3) follow in later tasks.
+nereus_add_test(tst_freedv_reporter_dialog)
