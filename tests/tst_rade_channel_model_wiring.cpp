@@ -71,6 +71,17 @@ public:
                                   const QString& grid) {
         emit rxTextDecoded(callsign, grid);
     }
+    // Phase 3R K4: TX modem output emission seam.
+    void emitTxModemReadyForTest(const QByteArray& iq) {
+        emit txModemReady(iq);
+    }
+    // Phase 3R K4: expose isSignalConnected (protected on QObject)
+    // so the test can verify wireRadeChannel actually wired the
+    // txModemReady signal.
+    bool isTxModemReadyConnectedForTest() const {
+        return isSignalConnected(
+            QMetaMethod::fromSignal(&RadeChannel::txModemReady));
+    }
 };
 
 }  // namespace
@@ -85,6 +96,8 @@ private slots:
     void rxTextDecodedAddsRxDecodeRow();
     void rxTextWithEmptyGridStoresCallsignOnly();
     void wiringWithNullChannelIsNoOp();
+    // Phase 3R K4: TX modem output plumbing.
+    void txModemReadyEmissionDoesNotCrash();
 };
 
 void TestRadeChannelModelWiring::wireRadeChannelConnectsSnrToSlice()
@@ -229,6 +242,51 @@ void TestRadeChannelModelWiring::wiringWithNullChannelIsNoOp()
     // not dereference it.
     TestableRadeChannel channel;
     model.wireRadeChannel(sliceId, &channel, nullptr);
+}
+
+// Phase 3R K4: txModemReady emission must reach the RadioModel hook
+// without crashing AND the wire helper must actually establish the
+// connect (verified via Qt's signal-receiver count via a transient
+// blocker).  The hook currently logs once and Q_UNUSEDs the bytes
+// (full I/Q TX routing is K-bench scope); this test pins both the
+// "doesn't crash" contract and the "connect exists" contract so a
+// future bench fill-in can build on a stable signal graph.
+void TestRadeChannelModelWiring::txModemReadyEmissionDoesNotCrash()
+{
+    RadioModel model;
+    const int sliceId = model.addSlice();
+    SliceModel* slice = model.sliceAt(sliceId);
+    QVERIFY(slice != nullptr);
+
+    TestableRadeChannel channel;
+
+    // Snapshot the channel's connection count before wire.  Qt's
+    // isSignalConnected() returns true once any slot listens.
+    // Before wireRadeChannel, nothing is connected; after, at least
+    // the K4 lambda is.  Both checks go through a thin test-only
+    // friend accessor on TestableRadeChannel because
+    // QObject::isSignalConnected is protected.
+    QVERIFY2(!channel.isTxModemReadyConnectedForTest(),
+             "txModemReady should have no listeners before wireRadeChannel");
+
+    model.wireRadeChannel(sliceId, &channel, slice);
+
+    QVERIFY2(channel.isTxModemReadyConnectedForTest(),
+             "wireRadeChannel must connect a listener to txModemReady (K4)");
+
+    // Emit a 480-frame stereo Int16 payload (480 * 4 = 1920 bytes;
+    // matches the 24 kHz stereo Int16 shape documented at
+    // RadeChannel.h:250-252 [Phase 3R I1]).
+    QByteArray iq(1920, '\0');
+    channel.emitTxModemReadyForTest(iq);
+
+    // Empty payload: hook must still no-op cleanly.
+    channel.emitTxModemReadyForTest(QByteArray());
+
+    // If we reached this line without crashing, the connect plumbing
+    // is in place.  The full I/Q route to RadioConnection::sendTxIq
+    // lands at K-bench time.
+    QVERIFY(true);
 }
 
 QTEST_GUILESS_MAIN(TestRadeChannelModelWiring)

@@ -1487,6 +1487,54 @@ void RadioModel::wireRadeChannel(int sliceId, RadeChannel* channel,
                 });
     }
 
+    // ── Phase 3R Task K4: TX modem output plumbing ──────────────────────
+    //
+    // RadeChannel::txModemReady carries the RADE neural codec's
+    // encoded baseband samples (24 kHz stereo Int16 per the I1
+    // contract at RadeChannel.h:250-252).  The K-bench follow-up
+    // will route the actual bytes to the radio's TX buffer via
+    // m_connection->sendTxIq (the unified P1/P2 I/Q TX API at
+    // RadioConnection.h:193); both P1 (EP2 TX I/Q layout) and P2
+    // (port 1029 TX I/Q layout) implementations forward the floats
+    // to the connection thread for UDP send.
+    //
+    // K4 establishes the connect so the signal graph is closed
+    // end-to-end; the lambda body itself currently logs the first
+    // emission, Q_UNUSEDs the bytes, and returns.  K-bench fills in:
+    //   * Int16 -> float32 conversion (1/32768.0f scale)
+    //   * Optional resample 24 kHz -> connection rate
+    //   * m_connection->sendTxIq(samples, frameCount)
+    //
+    // The connect uses the default direct connection because
+    // RadeChannel currently lives on RadioModel's thread (Phase 3R
+    // J2/J3); if future work moves RadeChannel to a worker thread,
+    // upgrade this connect to Qt::QueuedConnection so the lambda
+    // dispatches on the main thread where m_connection is touched.
+    // The lambda body Q_UNUSEDs both `iq` and `sliceId` for now;
+    // K-bench replaces the body with the actual sendTxIq call, at
+    // which point the `this` capture becomes load-bearing again
+    // (m_connection is read on the main thread).  The receiver
+    // context (third arg `this`) is still required for proper
+    // disconnect-on-destroy semantics, so leave it untouched.
+    connect(channel, &RadeChannel::txModemReady, this,
+            [sliceId](const QByteArray& iq) {
+                static std::atomic<int> s_loggedOnce{0};
+                if (s_loggedOnce.fetch_add(1, std::memory_order_relaxed) == 0) {
+                    qCInfo(lcRade)
+                        << "RadioModel: RADE txModemReady received"
+                        << iq.size() << "bytes for slice" << sliceId
+                        << "(routing to RadioConnection::sendTxIq is "
+                           "K-bench scope; currently dormant).";
+                }
+                // K-bench TODO: replace the dormant body with:
+                //   if (!m_connection) return;
+                //   const int frames = iq.size() / 4;  // stereo Int16
+                //   // Convert Int16 -> float32 interleaved...
+                //   m_connection->sendTxIq(samples, frames);
+                Q_UNUSED(iq);
+                Q_UNUSED(sliceId);
+            });
+
     // The slice pointer is currently unused at wire time. Slot bodies
     // dereference via sliceAt(sliceId), which is the safer route because
     // it handles the slice-was-deleted race naturally. The parameter

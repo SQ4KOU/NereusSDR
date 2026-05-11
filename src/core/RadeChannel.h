@@ -154,10 +154,18 @@
 
 #pragma once
 
+#include <QLoggingCategory>
 #include <QObject>
 #include <QByteArray>
 #include <QString>
 #include <memory>
+
+// Forward-declare the lcRade logging category so other translation
+// units (notably RadioModel.cpp's wireRadeChannel extension at K4)
+// can qCInfo/qCWarning into "nereus.rade" without duplicating the
+// Q_LOGGING_CATEGORY definition.  The definition lives in
+// RadeChannel.cpp; this declaration just publishes the symbol.
+Q_DECLARE_LOGGING_CATEGORY(lcRade)
 
 // Forward declarations for the upstream RADE / LPCNet / FARGAN handles.
 // We keep them as `struct ...*` and `void*` here per the AetherSDR
