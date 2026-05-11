@@ -176,6 +176,16 @@ Q_LOGGING_CATEGORY(lcRade, "nereus.rade")
 
 namespace NereusSDR {
 
+// Custom deleter for the opaque FARGANState handle held by
+// std::unique_ptr<void, FarganDeleter> on RadeChannel. Resolves the
+// FARGANState type at the cpp-side include scope so the opus header
+// does not bleed into RadeChannel.h. NereusSDR-only refactor of
+// AetherSDR's raw-void* m_fargan pattern at RADEEngine.h:8-12 [@0cd4559]
+// to comply with the project's "no raw new/delete" rule (CLAUDE.md).
+void RadeChannel::FarganDeleter::operator()(void* p) const noexcept {
+    delete static_cast<FARGANState*>(p);
+}
+
 namespace {
 
 // AetherSDR treats "dummy" as the librade convention for "ignore the
@@ -265,10 +275,12 @@ bool RadeChannel::start(const QString& modelPath)
 
     // RX: FARGAN vocoder (features -> speech). AetherSDR keeps the
     // FARGAN state as a void* opaque pointer in the header to keep
-    // the opus headers out of the include surface; we follow.
+    // the opus headers out of the include surface; we follow, but
+    // wrap in unique_ptr<void, FarganDeleter> per CLAUDE.md's
+    // "no raw new/delete" rule. RAII handles teardown in stop().
     auto* fargan = new FARGANState;
     fargan_init(fargan);
-    m_fargan = fargan;
+    m_fargan.reset(fargan);
     m_farganWarmedUp = false;
 
     // From AetherSDR src/core/RADEEngine.cpp:58-61 [@0cd4559] plus
@@ -317,10 +329,9 @@ void RadeChannel::stop()
         lpcnet_encoder_destroy(m_lpcnetEnc);
         m_lpcnetEnc = nullptr;
     }
-    if (m_fargan) {
-        delete static_cast<FARGANState*>(m_fargan);
-        m_fargan = nullptr;
-    }
+    // RAII: unique_ptr<void, FarganDeleter> handles deletion of the
+    // FARGANState through the cpp-scope deleter.
+    m_fargan.reset();
     if (m_rade) {
         rade_close(m_rade);
         m_rade = nullptr;
@@ -408,7 +419,7 @@ void RadeChannel::processIq(const QByteArray& iqSamples)
         return;
     }
 
-    auto* fargan = static_cast<FARGANState*>(m_fargan);
+    auto* fargan = static_cast<FARGANState*>(m_fargan.get());
 
     // Step 1: deinterleave 24 kHz interleaved I/Q float input.
     // The QByteArray holds an integer number of (I, Q) float pairs.

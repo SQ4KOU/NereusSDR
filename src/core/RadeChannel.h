@@ -275,13 +275,24 @@ signals:
     void rxTextDecoded(const QString& callsign, const QString& grid);
 
 private:
+    // Custom deleter for the opaque FARGANState handle so we can hold it
+    // in unique_ptr<void, FarganDeleter> without dragging the opus
+    // FARGAN header into the include surface. The operator() resolves
+    // to `delete static_cast<FARGANState*>(p)` in RadeChannel.cpp where
+    // fargan.h is included. NereusSDR-only refactor of AetherSDR's
+    // raw-void* pattern at RADEEngine.h:8-12 [@0cd4559] to comply with
+    // the project's "no raw new/delete" rule (CLAUDE.md).
+    struct FarganDeleter {
+        void operator()(void* p) const noexcept;
+    };
+
     // Upstream RADE / LPCNet / FARGAN handles. Opaque here; the .cpp
     // resolves struct rade / LPCNetEncState / FARGANState* (held as
     // void* per AetherSDR's pattern so the opus FARGAN header does
     // not need to be visible at the include site).
     struct rade*         m_rade{nullptr};
     LPCNetEncState*      m_lpcnetEnc{nullptr};
-    void*                m_fargan{nullptr};
+    std::unique_ptr<void, FarganDeleter> m_fargan;
 
     bool                 m_active{false};
     bool                 m_synced{false};
