@@ -2750,6 +2750,14 @@ target_compile_definitions(tst_tx_worker_thread PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_tx_worker_rade_path_enum)
 target_compile_definitions(tst_tx_worker_rade_path_enum PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3R Task K3: RADE TX DSP helpers ──
+# RadeTxHpf80 (80 Hz Butterworth HPF biquad) + RadeTx48to16
+# (48 kHz -> 16 kHz mono downsampler around r8brain).  Both are
+# standalone DSP units; K-bench will wire them into TxWorkerThread's
+# RADE branch.  Unit-tested here in isolation to pin the DSP
+# correctness contract.
+nereus_add_test(tst_rade_tx_filters)
+
 # ── Phase 3M-1c TX pump v3 — TxMicSource (Thetis Inbound/cm_main port) ──
 # Verifies the ring + semaphore primitives that source the worker's
 # cadence from radio mic frames.  Test cases (8):
