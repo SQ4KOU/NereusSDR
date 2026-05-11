@@ -4380,6 +4380,23 @@ nereus_add_test(tst_radio_model_spot_wiring)
 # Source: NereusSDR-native test pattern; ports are at H2.
 nereus_add_test(tst_mainwindow_tools_spot_hub)
 
+# ── Phase 3J-2 + 3R M1: spot-system AppSettings round-trip ─────────────────
+# Pins the key contract for the ~40 AppSettings keys introduced by the
+# Phase 3J-2 spot ingest clients (B-phase), the SpotHubDialog (F-phase
+# per-source identity / auto-X / colors / Display knobs), the FreeDV
+# Reporter dialog (G-phase saved messages / visible columns / idle
+# timeout / column filters / band filter), H2's per-source
+# lifetime / color resolution on RadioModel, and the Phase 3R RADE
+# wrapper. AppSettings is fully dynamic (no key registry), so this
+# file is the single enforcement point for the documented key list and
+# their documented defaults. The legacyMinutesKeyFallback test pins the
+# DxClusterSpotLifetime -> DxClusterSpotLifetimeSec * 60 migration the
+# SpotHubDialog F4 Display tab implements at SpotHubDialog.cpp:1727-1730.
+# Source: NereusSDR-native test file; AppSettings is the Thetis
+# database.cs port, but the keys exercised here are all NereusSDR
+# additions for Phase 3J-2 + 3R.
+nereus_add_test(tst_spot_settings_round_trip)
+
 # ── Phase 3R Task I1: RadeChannel skeleton (hybrid port) ───────────────────
 # Pins the three lifecycle contracts the Phase 3R Task I2/I3/I4 DSP work
 # layers onto:
