@@ -4539,6 +4539,46 @@ void SpectrumWidget::setSpotMarkers(const QVector<SpotMarker>& markers)
     update();
 }
 
+// Phase 3J-2 + 3R M2: refresh every Spot Display knob from AppSettings.
+// The producer side lives on SpotHubDialog F4 (buildDisplayTab,
+// SpotHubDialog.cpp:1619-2010); every knob change writes to AppSettings
+// and emits settingsChanged. MainWindow::openSpotHub wires that signal
+// to this method so the live overlay tracks the dialog. Defaults
+// duplicate the F4 read-side at SpotHubDialog.cpp:1714-1730.
+//
+// NereusSDR-original. AetherSDR splits these reads across a freestanding
+// SpotSettingsDialog and a refreshSpots() lambda on MainWindow; the
+// NereusSDR shape collapses both into a single helper on the consumer
+// widget, called once on construction (when MainWindow wires the panel)
+// and again whenever the dialog raises settingsChanged.
+void SpectrumWidget::loadSpotDisplaySettings()
+{
+    auto& s = AppSettings::instance();
+    setShowSpots(
+        s.value(QStringLiteral("IsSpotsEnabled"),
+                QStringLiteral("True")).toString() == QStringLiteral("True"));
+    setSpotFontSize(s.value(QStringLiteral("SpotFontSize"), 16).toInt());
+    setSpotMaxLevels(s.value(QStringLiteral("SpotsMaxLevel"), 3).toInt());
+    setSpotStartPct(
+        s.value(QStringLiteral("SpotsStartingHeightPercentage"), 50).toInt());
+    setSpotOverrideColors(
+        s.value(QStringLiteral("IsSpotsOverrideColorsEnabled"),
+                QStringLiteral("False")).toString()
+            == QStringLiteral("True"));
+    setSpotOverrideBg(
+        s.value(QStringLiteral("IsSpotsOverrideBackgroundColorsEnabled"),
+                QStringLiteral("True")).toString()
+            == QStringLiteral("True"));
+    setSpotColor(QColor(
+        s.value(QStringLiteral("SpotsOverrideColor"),
+                QStringLiteral("#FFFF00")).toString()));
+    setSpotBgColor(QColor(
+        s.value(QStringLiteral("SpotsOverrideBgColor"),
+                QStringLiteral("#000000")).toString()));
+    setSpotBgOpacity(
+        s.value(QStringLiteral("SpotsBackgroundOpacity"), 48).toInt());
+}
+
 // From AetherSDR src/gui/SpectrumWidget.cpp:4497-4633 [@0cd4559]
 void SpectrumWidget::drawSpotMarkers(QPainter& p, const QRect& specRect)
 {

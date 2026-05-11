@@ -977,6 +977,12 @@ public:
     void setSpotBgColor(const QColor& c) { m_spotBgColor = c; update(); }
     void setSpotBgOpacity(int pct) { m_spotBgOpacity = pct; update(); }
 
+    // Phase 3J-2 + 3R M2: refresh every Display tab knob from AppSettings.
+    // Wired to SpotHubDialog::settingsChanged in MainWindow::openSpotHub
+    // so the live spectrum overlay tracks the dialog. Defaults match the
+    // F4 buildDisplayTab read-side at SpotHubDialog.cpp:1714-1730.
+    void loadSpotDisplaySettings();
+
     // Test seams (Phase 3J-2 Task E1). Public read-only views into the
     // private state drawSpotMarkers() rebuilds each frame; the test
     // suite asserts contract by inspecting these vectors after a
@@ -987,6 +993,18 @@ public:
     void  drawSpotMarkersForTest(QPainter& p, const QRect& specRect) {
         drawSpotMarkers(p, specRect);
     }
+
+    // Phase 3J-2 + 3R M2 test seams. Read-only views into the Spot
+    // Display knob state so the M2 round-trip test can pin the
+    // loadSpotDisplaySettings push-path without driving a paint cycle.
+    int    spotFontSizeForTest()        const { return m_spotFontSize; }
+    int    spotMaxLevelsForTest()       const { return m_spotMaxLevels; }
+    int    spotStartPctForTest()        const { return m_spotStartPct; }
+    int    spotBgOpacityForTest()       const { return m_spotBgOpacity; }
+    bool   spotOverrideColorsForTest()  const { return m_spotOverrideColors; }
+    bool   spotOverrideBgForTest()      const { return m_spotOverrideBg; }
+    QColor spotColorForTest()           const { return m_spotColor; }
+    QColor spotBgColorForTest()         const { return m_spotBgColor; }
 
 signals:
     // Phase 3Q-8: emitted on a left-click while not Connected.

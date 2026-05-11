@@ -4397,6 +4397,29 @@ nereus_add_test(tst_mainwindow_tools_spot_hub)
 # additions for Phase 3J-2 + 3R.
 nereus_add_test(tst_spot_settings_round_trip)
 
+# ── Phase 3J-2 + 3R M2: SpotHub Display tab knobs end-to-end ───────────────
+# Pins the consumer side of the Display tab loop introduced by
+# SpotHubDialog F4 (commit 2026-05-11):
+#   F4 already writes every knob change to AppSettings and emits
+#   SpotHubDialog::settingsChanged.
+#   M2 adds SpectrumWidget::loadSpotDisplaySettings which reads
+#   every Display tab key (IsSpotsEnabled / SpotFontSize / SpotsMaxLevel
+#   / SpotsStartingHeightPercentage / IsSpotsOverrideColorsEnabled
+#   / IsSpotsOverrideBackgroundColorsEnabled / SpotsOverrideColor /
+#   SpotsOverrideBgColor / SpotsBackgroundOpacity) and pushes each
+#   value into the corresponding SpectrumWidget setter. MainWindow's
+#   openSpotHub() wires SpotHubDialog::settingsChanged to that helper
+#   so the live spectrum overlay refreshes when the operator drags a
+#   slider in the dialog.
+# 4 tests:
+#   loadSpotDisplaySettingsAppliesPersistedShowSpots
+#   loadSpotDisplaySettingsDefaultsShowSpotsTrue
+#   loadSpotDisplaySettingsAppliesAllNumericKnobs
+#   loadSpotDisplaySettingsAppliesColors
+# Source: NereusSDR-native; the consumer hook is M2-local. SpotHubDialog
+# F4 producer side is already pinned by tst_spothub_dialog_smoke.
+nereus_add_test(tst_spothub_display_knobs)
+
 # ── Phase 3R Task I1: RadeChannel skeleton (hybrid port) ───────────────────
 # Pins the three lifecycle contracts the Phase 3R Task I2/I3/I4 DSP work
 # layers onto:

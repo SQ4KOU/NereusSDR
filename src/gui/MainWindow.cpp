@@ -4937,6 +4937,27 @@ void MainWindow::openSpotHub()
                         slice->setFrequency(freqMhz * 1.0e6);
                     }
                 });
+        // Phase 3J-2 + 3R M2: Display tab knob round-trip.
+        // SpotHubDialog F4 writes every knob change to AppSettings and
+        // emits settingsChanged. SpectrumWidget::loadSpotDisplaySettings
+        // pulls the new values back out and pushes them into the spot
+        // overlay setters in one go. Mirrors AetherSDR's refreshSpots
+        // lambda (src/models/RadioModel.cpp [@0cd4559]) but the
+        // NereusSDR shape lives on the widget so the test seam is local
+        // (see tst_spothub_display_knobs).
+        connect(m_spotHubDialog.data(), &SpotHubDialog::settingsChanged,
+                this, [this] {
+                    if (m_spectrumWidget) {
+                        m_spectrumWidget->loadSpotDisplaySettings();
+                    }
+                });
+        // First-time seed: pick up any settings that were persisted
+        // before the dialog was ever opened. Without this, the spectrum
+        // overlay would only reflect the AppSettings defaults until the
+        // operator first opened the dialog and changed a knob.
+        if (m_spectrumWidget) {
+            m_spectrumWidget->loadSpotDisplaySettings();
+        }
     }
     m_spotHubDialog->show();
     m_spotHubDialog->raise();
