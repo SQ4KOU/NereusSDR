@@ -1438,6 +1438,22 @@ void TransmitModel::loadFromSettings(const QString& mac)
     }
     setMicSource(micSource);
 
+    // ── Mic source previous (PhoneCwApplet VAX-toggle restore target) ─────
+    // Lookup order matches Mic_Source: per-MAC -> preconnect -> default Pc.
+    const QString perMacPreVaxStr = s.value(pfx + QLatin1String("Mic_Source_PreVax"),
+                                             QString()).toString();
+    QString preVaxStr;
+    if (perMacPreVaxStr.isEmpty()) {
+        preVaxStr = AppSettings::instance().value(
+            QStringLiteral("tx/preconnect/Mic_Source_PreVax"),
+            QStringLiteral("Pc")).toString();
+    } else {
+        preVaxStr = perMacPreVaxStr;
+    }
+    m_previousNonVaxMicSource = (preVaxStr == QLatin1String("Radio"))
+                                    ? MicSource::Radio
+                                    : MicSource::Pc;
+
     // ── Two-tone test properties (3M-1c B.2) ──────────────────────────────
     // Defaults per design spec §4.4 (option C):
     //   Freq1=700, Freq2=1900 — match Thetis Designer + btnTwoToneF_defaults.
@@ -1721,6 +1737,14 @@ void TransmitModel::persistToSettings(const QString& mac) const
             default:               micSourceStr = QStringLiteral("Pc");    break;
         }
         s.setValue(pfx + QLatin1String("Mic_Source"), micSourceStr);
+    }
+
+    // Mic_Source_PreVax mirrors Mic_Source persistence; tracked by setMicSource.
+    {
+        QString preVaxStr = (m_previousNonVaxMicSource == MicSource::Radio)
+                                ? QStringLiteral("Radio")
+                                : QStringLiteral("Pc");
+        s.setValue(pfx + QLatin1String("Mic_Source_PreVax"), preVaxStr);
     }
 
     // ── Two-tone test properties (3M-1c B.2) ──────────────────────────────
@@ -2340,6 +2364,24 @@ void TransmitModel::setMicSource(MicSource source)
 
     if (source == m_micSource) { return; }  // idempotent guard
     m_micSource = source;
+
+    // Capture every non-Vax write as the "previous" source so toggling
+    // VAX off restores the user's most recent explicit choice. Updates
+    // both the per-MAC and preconnect persistence keys to mirror the
+    // Mic_Source two-key pattern.
+    if (source != MicSource::Vax && source != m_previousNonVaxMicSource) {
+        m_previousNonVaxMicSource = source;
+        QString preVaxStr = (source == MicSource::Radio)
+                                ? QStringLiteral("Radio")
+                                : QStringLiteral("Pc");
+        if (m_persistMac.isEmpty()) {
+            AppSettings::instance().setValue(
+                QStringLiteral("tx/preconnect/Mic_Source_PreVax"), preVaxStr);
+        } else {
+            persistOne(QStringLiteral("Mic_Source_PreVax"), preVaxStr);
+        }
+    }
+
     QString persistStr;
     switch (source) {
         case MicSource::Radio: persistStr = QStringLiteral("Radio"); break;
@@ -2348,14 +2390,14 @@ void TransmitModel::setMicSource(MicSource source)
         default:               persistStr = QStringLiteral("Pc");    break;
     }
     if (m_persistMac.isEmpty()) {
-        // Pre-connect fallback (eager-borg-d64bed, 2026-05-06).  When the
+        // Pre-connect fallback (eager-borg-d64bed, 2026-05-06). When the
         // user clicks the radio button in Setup -> Audio -> TX Input
         // before connecting to a radio, persistOne early-returns (no MAC
         // bound yet) so the choice would normally be lost on app restart.
         // Write to a global "tx/preconnect/Mic_Source" key instead;
         // loadFromSettings reads it as a fallback when the per-MAC key is
         // absent so the choice carries forward to whatever radio they
-        // connect next.  Per-MAC values always take precedence over the
+        // connect next. Per-MAC values always take precedence over the
         // preconnect key once written.
         AppSettings::instance().setValue(
             QStringLiteral("tx/preconnect/Mic_Source"), persistStr);
@@ -2363,6 +2405,15 @@ void TransmitModel::setMicSource(MicSource source)
         persistOne(QStringLiteral("Mic_Source"), persistStr);  // L.2 auto-persist
     }
     emit micSourceChanged(source);
+}
+
+void TransmitModel::toggleVaxSource(bool on)
+{
+    if (on) {
+        setMicSource(MicSource::Vax);
+    } else {
+        setMicSource(m_previousNonVaxMicSource);
+    }
 }
 
 // ── Mic source lock guard (3M-1b L.3) ────────────────────────────────────────

@@ -1822,6 +1822,12 @@ nereus_add_test(tst_tx_applet_vox_toggle)
 # (Renamed from tst_tx_applet_lev_eq_proc.cpp during the post-bench cleanup.)
 nereus_add_test(tst_tx_applet_lev_eq_cfc)
 
+# ── Phase 3M-VAX-toggle: TxApplet mic-source badge 3-way ────────────────────
+# The badge above the gauges previously read "PC mic" or "Radio mic".
+# Phase 3M-VAX-toggle extends it to a 3-way switch so MicSource::Vax
+# renders "VAX" both on micSourceChanged and on syncFromModel.
+nereus_add_test(tst_tx_applet_mic_source_badge)
+
 # ── Phase 3M-3a-ii post-bench cleanup: PhoneCwApplet PROC button + slider ──
 # Verifies the PROC controls inherited un-wired from 3I-3 (NyiOverlay-marked):
 # PhoneCwProcButton bidirectional with TransmitModel.cpdrOn; PhoneCwProcSlider
@@ -1829,6 +1835,14 @@ nereus_add_test(tst_tx_applet_lev_eq_cfc)
 # ptbCPDR console.Designer.cs:6042-6043 [v2.10.3.13]); numeric "X dB" value
 # label mirrors slider; NyiOverlay markers absent.
 nereus_add_test(tst_phone_applet_proc)
+
+# ── Phase 3M-VAX-toggle: PhoneCwApplet VAX button wiring ────────────────────
+# Verifies the [VAX] button on the Phone tab now drives MicSource via
+# TransmitModel::toggleVaxSource: left-click toggles Vax, second click
+# restores the previous non-VAX source, external model changes sync the
+# checked state, and right-click emits openSetupRequested("Audio", "TX Input")
+# so MainWindow opens Setup -> Audio -> TX Input.
+nereus_add_test(tst_phone_applet_vax_toggle)
 
 # ── Phase 3M-3a-i Batch 3 Task A.1: TxEqDialog scaffold ───────────────────
 # Verifies the modeless 10-band TX EQ dialog launched from the [EQ]
@@ -2947,6 +2961,14 @@ target_compile_definitions(tst_vax_tx_mic_source PRIVATE NEREUS_BUILD_TESTS)
 # load with no per-MAC uses fallback, per-MAC overrides preconnect,
 # post-connect writes don't touch preconnect, first-run defaults to Pc.
 nereus_add_test(tst_transmit_model_mic_source_preconnect)
+
+# ── Phase 3M-VAX-toggle: TransmitModel previousNonVaxMicSource + toggleVaxSource ──
+# Verifies the model-layer plumbing for the PhoneCwApplet VAX button:
+# previous-source tracking on every non-VAX setMicSource write, toggleVaxSource
+# slot (Vax on -> sets Vax; off -> restores previous), HL2 lock interaction
+# (Radio previous coerces to Pc), and Mic_Source_PreVax persistence (per-MAC
+# + preconnect fallback, mirroring the existing Mic_Source two-key pattern).
+nereus_add_test(tst_transmit_model_vax_toggle)
 
 # ── Phase 3M-1b Task F.4: RadioConnection::micFrameDecoded signal ─────────────
 # Verifies the micFrameDecoded Qt signal added to the RadioConnection base class.
