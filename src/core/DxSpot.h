@@ -16,9 +16,18 @@
 //                                    Added "source" comment to list the
 //                                    full set of expected source labels.
 //                                    AI tooling: Anthropic Claude Code.
+//   2026-05-10  J.J. Boyd / KG4VCF  Phase 3J-2 Task B4. Added
+//                                    Q_DECLARE_METATYPE so DxSpot can flow
+//                                    through QSignalSpy in the
+//                                    tst_wsjtx_decoder test (the WSJT-X
+//                                    parser tests are the first ones that
+//                                    spy on `spotReceived(DxSpot)` rather
+//                                    than calling a parser seam
+//                                    synchronously).
 
 #pragma once
 
+#include <QMetaType>
 #include <QString>
 #include <QTime>
 
@@ -38,3 +47,5 @@ struct DxSpot {
 };
 
 }  // namespace NereusSDR
+
+Q_DECLARE_METATYPE(NereusSDR::DxSpot)

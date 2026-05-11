@@ -3971,3 +3971,14 @@ nereus_add_test(tst_pota_client)
 # rejectsMalformedLine. Source: AetherSDR src/core/DxClusterClient.cpp
 # [@0cd4559].
 nereus_add_test(tst_dx_cluster_parser)
+
+# ── Phase 3J-2 Task B4: WsjtxClient binary protocol parser ──────────────────
+# Pins the contract that WsjtxClient parses big-endian QDataStream Status
+# (type 1) + Decode (type 2) messages per the WSJT-X UDP protocol,
+# dispatches the right callsign from each WSJT-X message family
+# (CQ / CQ DX / CQ POTA / CQ continent / directed +report / R-report /
+# RR73), and computes spot frequency as dial + delta. 6 tests:
+# parsesStatusUpdatesDialFreq, parsesDecodeEmitsSpot, skipsNonNewDecodes,
+# skipsLowConfidence, extractsCallsign (data-driven, 7 rows). Source:
+# AetherSDR src/core/WsjtxClient.cpp [@0cd4559].
+nereus_add_test(tst_wsjtx_decoder)
