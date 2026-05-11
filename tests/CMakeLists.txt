@@ -4111,3 +4111,33 @@ nereus_add_test(tst_spot_model)
 #   and were extracted to standalone src/models/ files so the SpotHubDialog
 #   (Phase F) can reuse them. Second task of Phase D (Models).
 nereus_add_test(tst_spot_table_model)
+
+# ── Phase 3J-2 Task D3: FreeDVStationModel (live station map) ──────────────
+# Pins the contract that FreeDVStationModel is a QHash<QString sid,
+# FreeDVStation> sink keyed by Socket.IO session ID, with four public
+# slots (onStationAdded / onStationUpdated / onStationRemoved / clear)
+# and four signals (stationAdded / stationUpdated / stationRemoved /
+# cleared). setOurGridSquare(grid) drives the haversine distance +
+# initial-bearing computation so each FreeDVStation row carries
+# distanceKm + headingDeg suitable for the FreeDVReporterDialog
+# (Phase G) Distance / Heading columns. Seven tests:
+#   initialState (empty model reports zero stations),
+#   onStationAddedEmits (first onStationAdded for a sid emits
+#   stationAdded and grows the map by one), onStationUpdatedReplaces
+#   (subsequent onStationUpdated emits stationUpdated and the new
+#   FreeDVStation value overwrites the old), onStationRemovedDeletes
+#   (onStationRemoved emits stationRemoved and erases the row),
+#   clearEmitsCleared (clear emits cleared once and empties the map),
+#   distanceComputedFromGrid (with our grid set to FN42 / Boston-ish
+#   and a station added at JO31 / Frankfurt-ish, the stored
+#   distanceKm lands in the 5500-7000 km great-circle band and the
+#   headingDeg lands in [0, 360]), stationBySidLookup (sid -> callsign
+#   round-trips, unknown sid returns a default-constructed
+#   FreeDVStation). Source: NEW model with no AetherSDR equivalent
+#   (gap-fill from the Phase 3J-2 design doc Section 4 Flow 2);
+#   distance / heading math ported from freedv-gui's
+#   src/gui/dialogs/freedv_reporter.cpp:2312-2410 (calculateDistance_ /
+#   calculateLatLonFromGridSquare_ / calculateBearingInDegrees_ /
+#   DegreesToRadians_ / RadiansToDegrees_) [@77e793a]. Third task of
+#   Phase D (Models).
+nereus_add_test(tst_freedv_station_model)

@@ -528,6 +528,7 @@ set(MODEL_SOURCES
     src/models/SpotModel.cpp
     src/models/SpotTableModel.cpp
     src/models/BandFilterProxy.cpp
+    src/models/FreeDVStationModel.cpp
 )
 
 set(GUI_SOURCES
