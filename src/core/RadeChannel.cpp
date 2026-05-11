@@ -4,22 +4,30 @@
 // src/core/RadeChannel.cpp  (NereusSDR)
 // =================================================================
 //
-// NereusSDR - RadeChannel implementation. Skeleton bodies at Phase
-// 3R Task I1; I2 / I3 / I4 will fill in the DSP slot bodies.
+// NereusSDR - RadeChannel implementation. I1 shipped lifecycle
+// skeleton; I2 fills in the RX path (24 kHz I/Q -> 8 kHz RADE_COMP ->
+// rade_rx -> features -> FARGAN -> 16 kHz mono speech -> 24 kHz stereo
+// output bus + syncChanged / snrChanged emission). I3 will fill in
+// the TX path; I4 the embedded rade_text aux channel.
 //
 // Ported from sources (hybrid):
 //   Structure: AetherSDR src/core/RADEEngine.cpp [@0cd4559]
 //     Ctor / dtor pair, idempotent start()/stop() guards on the
 //     active flag, isActive() / isSynced() accessors. See
 //     RadeChannel.h for the full AetherSDR-block attribution.
+//     I2 adds: rade_open + lpcnet_encoder_create + fargan_init +
+//     resampler-chain construction (start, AetherSDR :27-78); the
+//     teardown in stop (AetherSDR :80-106); and the RX-path body
+//     of processIq (AetherSDR feedRxAudio :200-303).
 //   DSP API:   freedv-gui src/pipeline/RADEReceiveStep.cpp,
 //              src/pipeline/RADETransmitStep.cpp        [@77e793a]
-//     The slot-body call sequences that Tasks I2 / I3 will plug in
+//     The slot-body call sequences that Tasks I2 / I3 follow
 //     (rade_rx with inputBufCplx_ + featuresOut_ + rade_nin frame
 //     readiness check; rade_tx with featureList_ + 12-frame
 //     accumulation; LPCNet feature extractor lifecycle; FARGAN
 //     vocoder warm-up; embedded rade_text aux channel) all come
-//     from these two freedv-gui pipeline-step files.
+//     from these two freedv-gui pipeline-step files. The I2 RX path
+//     specifically cross-checks against RADEReceiveStep.cpp:175-310.
 //
 // License (upstream):
 //   - AetherSDR has no per-file copyright header, so per
@@ -90,11 +98,39 @@
 //                 RADETransmitStep::execute / RADETransmitStep::reset
 //                 line ranges they will follow. AI tooling: Anthropic
 //                 Claude Code.
+//   2026-05-11  J.J. Boyd / KG4VCF  Phase 3R Task I2. RX path body
+//                 lands. start() now calls rade_initialize +
+//                 rade_open + lpcnet_encoder_create + fargan_init +
+//                 builds the five-resampler chain (24<->8 with the
+//                 second m_down24to8Q for the Q leg, 24<->16);
+//                 ported from AetherSDR src/core/RADEEngine.cpp:27-78
+//                 [@0cd4559]. stop() unwinds in reverse, ported from
+//                 RADEEngine.cpp:80-106. processIq() ports the
+//                 feedRxAudio body at RADEEngine.cpp:200-303 with the
+//                 NereusSDR-architectural divergence noted in
+//                 RadeChannel.h's mod-history: AetherSDR's
+//                 processStereoToMono(L,R)+imag=0 path is replaced
+//                 with parallel processing of the I leg through
+//                 m_down24to8 and the Q leg through m_down24to8Q,
+//                 because NereusSDR's input is already complex
+//                 baseband from the OpenHPSDR DDC. Cross-checked
+//                 against freedv-gui RADEReceiveStep::execute
+//                 (src/pipeline/RADEReceiveStep.cpp:175-310
+//                 [@77e793a]); freedv-gui's freq_shift_coh step is
+//                 not needed because NereusSDR's DDC delivers
+//                 baseband directly. txEncode / resetTx slot bodies
+//                 remain TODO-marked for I3.
+//                 AI tooling: Anthropic Claude Code.
 // =================================================================
 
 #include "core/RadeChannel.h"
 
 #include <QFile>
+#include <QLoggingCategory>
+
+#include <algorithm>
+#include <cstring>
+#include <vector>
 
 // Pull in the NereusSDR-native helper definitions so the
 // std::unique_ptr<Resampler> and std::unique_ptr<RadeText> members
@@ -103,15 +139,35 @@
 #include "core/Resampler.h"
 #include "core/RadeText.h"
 
+extern "C" {
+#include "rade_api.h"
+#include "lpcnet.h"
+#include "fargan.h"
+}
+
+Q_LOGGING_CATEGORY(lcRade, "nereus.rade")
+
 namespace NereusSDR {
+
+namespace {
+
+// AetherSDR treats "dummy" as the librade convention for "ignore the
+// model_file argument and use the built-in weights"; the radae_nopy
+// implementation at rade_api_nopy.c:58-76 [@b289102] confirms model_file
+// is logged then discarded. We honor the same sentinel for two reasons:
+// (1) it lets the unit tests bypass the path-exists check without a
+// fixture file, (2) it matches the call shape we will use in production
+// when AppSettings has not yet pointed at a user-selected model.
+constexpr const char* kDummyModelSentinel = "dummy";
+
+}  // namespace
 
 // From AetherSDR src/core/RADEEngine.cpp:18-25 [@0cd4559]
 //   Trivial QObject ctor; dtor calls stop() so a destruction
 //   without an explicit stop() still unwinds the RADE handles.
-//   I1 skeleton: the dtor is defined out-of-line here so the
-//   forward-declared std::unique_ptr<Resampler>/<RadeText>
-//   members can resolve their destructors (they default-construct
-//   to nullptr; deleting nullptr is a no-op).
+//   The dtor is defined out-of-line here so the forward-declared
+//   std::unique_ptr<Resampler>/<RadeText> members can resolve
+//   their destructors.
 RadeChannel::RadeChannel(QObject* parent)
     : QObject(parent)
 {
@@ -123,17 +179,22 @@ RadeChannel::~RadeChannel()
 }
 
 // From AetherSDR src/core/RADEEngine.cpp:27-78 [@0cd4559]
-//   Skeleton at I1: validate that the model path exists, flip
-//   m_active to true, and return success. I2 will fill in the
-//   real rade_open + lpcnet_encoder_create + fargan_init +
-//   resampler-construction sequence following the AetherSDR
-//   start() body (lines 32-72) and the freedv-gui RADEReceiveStep
-//   ctor (RADEReceiveStep.cpp:35-150 [@77e793a]).
+//   Wires up the RADE / LPCNet / FARGAN handles and builds the
+//   resampler chain. Cleanup-on-failure unwinds in reverse so a
+//   partially-initialised wrapper does not leak.
 //
-//   NereusSDR divergence: start() takes a model-path argument
-//   instead of AetherSDR's hard-coded "dummy" first arg to
-//   rade_open. The OpenHPSDR client lets the user pick the .f32
-//   model file in Setup -> RADE, so the path is a runtime input.
+//   NereusSDR divergences vs AetherSDR:
+//     1. The model_file argument is honored. AetherSDR hard-codes
+//        rade_open("dummy", ...). We pass through the caller's path
+//        unless it matches kDummyModelSentinel, in which case we
+//        bypass the path-exists check.
+//     2. Five resamplers instead of four: m_down24to8Q is added so
+//        the Q leg of the OpenHPSDR DDC I/Q stream stays separate
+//        through the RADE_COMP assembly. AetherSDR averages L+R
+//        stereo PCM to mono and sets imag=0.
+//     3. m_active is set explicitly to true rather than implied by
+//        m_rade being non-null (the I1 skeleton already established
+//        the flag-driven contract).
 bool RadeChannel::start(const QString& modelPath)
 {
     if (m_active) {
@@ -142,42 +203,120 @@ bool RadeChannel::start(const QString& modelPath)
         // return true` guard at RADEEngine.cpp:30 [@0cd4559]).
         return true;
     }
-    if (modelPath.isEmpty() || !QFile::exists(modelPath)) {
+    if (modelPath.isEmpty()) {
+        return false;
+    }
+    if (modelPath != QLatin1String(kDummyModelSentinel) && !QFile::exists(modelPath)) {
         return false;
     }
 
-    // TODO Phase 3R I2/I3: open the RADE codec, initialise the
-    // LPCNet feature extractor + FARGAN vocoder, build the
-    // resampler chain. Follows AetherSDR RADEEngine.cpp:32-72
-    // [@0cd4559] for the call sequence + cleanup-on-failure
-    // pattern, and freedv-gui RADEReceiveStep.cpp:35-150 +
-    // RADETransmitStep.cpp:30-130 [@77e793a] for the DSP API
-    // surface (rade_n_features_in_out, rade_n_tx_out, rade_nin
-    // queries; lpcnet_encoder_create; fargan_init).
+    // From AetherSDR src/core/RADEEngine.cpp:32-49 [@0cd4559]
+    rade_initialize();
+
+    const QByteArray modelPathUtf8 = modelPath.toUtf8();
+    m_rade = rade_open(const_cast<char*>(modelPathUtf8.constData()),
+                       RADE_USE_C_ENCODER | RADE_USE_C_DECODER | RADE_VERBOSE_0);
+    if (!m_rade) {
+        qCWarning(lcRade) << "RadeChannel: rade_open() failed for" << modelPath;
+        rade_finalize();
+        return false;
+    }
+
+    // TX: LPCNet feature extractor (speech -> features). Constructed
+    // at start() time even though the I3 TX path will not be wired
+    // until that task lands; mirrors the AetherSDR pattern so
+    // start() is the one place that allocates and stop() is the one
+    // place that releases.
+    m_lpcnetEnc = lpcnet_encoder_create();
+    if (!m_lpcnetEnc) {
+        qCWarning(lcRade) << "RadeChannel: lpcnet_encoder_create() failed";
+        rade_close(m_rade);
+        m_rade = nullptr;
+        rade_finalize();
+        return false;
+    }
+
+    // RX: FARGAN vocoder (features -> speech). AetherSDR keeps the
+    // FARGAN state as a void* opaque pointer in the header to keep
+    // the opus headers out of the include surface; we follow.
+    auto* fargan = new FARGANState;
+    fargan_init(fargan);
+    m_fargan = fargan;
+    m_farganWarmedUp = false;
+
+    // From AetherSDR src/core/RADEEngine.cpp:58-61 [@0cd4559] plus
+    // NereusSDR-architectural addition m_down24to8Q.
+    m_down24to8  = std::make_unique<Resampler>(24000, 8000);
+    m_down24to8Q = std::make_unique<Resampler>(24000, 8000);
+    m_up8to24    = std::make_unique<Resampler>(8000, 24000);
+    m_down24to16 = std::make_unique<Resampler>(24000, 16000);
+    m_up16to24   = std::make_unique<Resampler>(16000, 24000);
+
+    // From AetherSDR src/core/RADEEngine.cpp:63-67 [@0cd4559]
+    m_txAccum.clear();
+    m_txFeatAccum.clear();
+    m_rxAccum.clear();
+    m_rxFeatAccum.clear();
+    m_rxOutAccum.clear();
+    m_synced = false;
+    m_radeRxCallCount = 0;
+
+    // From AetherSDR src/core/RADEEngine.cpp:68-72 [@0cd4559]
+    const int n_features = rade_n_features_in_out(m_rade);
+    const int n_tx_out   = rade_n_tx_out(m_rade);
+    const int nin        = rade_nin(m_rade);
+    qCInfo(lcRade) << "RadeChannel: started"
+                   << "n_features=" << n_features
+                   << "n_tx_out=" << n_tx_out
+                   << "nin=" << nin;
+
     m_active = true;
     return true;
 }
 
 // From AetherSDR src/core/RADEEngine.cpp:80-106 [@0cd4559]
-//   Skeleton at I1: flip m_active back to false. I2 will fill in
-//   the real lpcnet_encoder_destroy + fargan-delete + rade_close +
-//   rade_finalize unwind following the AetherSDR stop() body
-//   (lines 82-105) and the freedv-gui RADEReceiveStep dtor
-//   (RADEReceiveStep.cpp:152-175 [@77e793a]).
+//   Unwinds start() in reverse. Idempotent on the m_active flag so
+//   double-stop is safe. The dtor calls stop() so any RadeChannel
+//   that was started but not stopped still tears down before the
+//   wrapper goes out of scope.
 void RadeChannel::stop()
 {
     if (!m_active) {
         return;
     }
 
-    // TODO Phase 3R I2/I3: tear down LPCNet encoder, FARGAN
-    // vocoder, RADE handle, and resamplers in reverse order. Clear
-    // the TX/RX accumulator QByteArrays. See AetherSDR
-    // RADEEngine.cpp:82-105 [@0cd4559] for the exact ordering.
+    if (m_lpcnetEnc) {
+        lpcnet_encoder_destroy(m_lpcnetEnc);
+        m_lpcnetEnc = nullptr;
+    }
+    if (m_fargan) {
+        delete static_cast<FARGANState*>(m_fargan);
+        m_fargan = nullptr;
+    }
+    if (m_rade) {
+        rade_close(m_rade);
+        m_rade = nullptr;
+        rade_finalize();
+    }
+
+    m_down24to8.reset();
+    m_down24to8Q.reset();
+    m_up8to24.reset();
+    m_down24to16.reset();
+    m_up16to24.reset();
+
+    m_txAccum.clear();
+    m_txFeatAccum.clear();
+    m_rxAccum.clear();
+    m_rxFeatAccum.clear();
+    m_rxOutAccum.clear();
 
     m_active = false;
     m_synced = false;
     m_farganWarmedUp = false;
+    m_radeRxCallCount = 0;
+
+    qCInfo(lcRade) << "RadeChannel: stopped";
 }
 
 // From AetherSDR src/core/RADEEngine.cpp:108-115 [@0cd4559]
@@ -192,44 +331,210 @@ bool RadeChannel::isSynced() const
     return m_synced;
 }
 
-// I1 leaves the RX path body empty. The real body lands at
-// Phase 3R Task I2 and follows freedv-gui RADEReceiveStep::execute
-// (RADEReceiveStep.cpp:200-330 [@77e793a]): accumulate input I/Q
-// into m_rxAccum, when rade_nin() samples are available call
-// rade_rx, accumulate the decoded features into m_rxFeatAccum,
-// when 4 frames of features are available call FARGAN to synthesise
-// 16 kHz speech, upsample to 24 kHz stereo, emit rxSpeechReady.
-// AetherSDR's feedRxAudio (RADEEngine.cpp:200-310 [@0cd4559])
-// is the AetherSDR-shaped variant of the same logic.
-void RadeChannel::processIq(const QByteArray& iqSamples)
+int RadeChannel::radeRxCallCountForTest() const
 {
-    // TODO Phase 3R I2: implement DSP body.
-    Q_UNUSED(iqSamples);
+    return m_radeRxCallCount;
 }
 
-// I1 leaves the TX path body empty. The real body lands at
-// Phase 3R Task I3 and follows freedv-gui RADETransmitStep::execute
-// (RADETransmitStep.cpp:150-260 [@77e793a]): accumulate input
-// speech samples into m_txAccum, when LPCNet has a frame worth
-// run the encoder, accumulate features into m_txFeatAccum, when
-// 12 frames are available call rade_tx to produce 8 kHz RADE_COMP
-// modem samples, upsample to 24 kHz stereo, emit txModemReady.
-// AetherSDR's feedTxAudio (RADEEngine.cpp:130-200 [@0cd4559]) is
-// the AetherSDR-shaped variant of the same logic.
+// From AetherSDR src/core/RADEEngine.cpp:200-303 (feedRxAudio body)
+// [@0cd4559], cross-checked against freedv-gui
+// src/pipeline/RADEReceiveStep.cpp:175-310 [@77e793a].
+//
+// Pipeline:
+//   1. Deinterleave 24 kHz interleaved I/Q float input.
+//   2. Downsample I leg via m_down24to8 and Q leg via m_down24to8Q
+//      in parallel (NereusSDR divergence; AetherSDR averages L+R
+//      stereo PCM to mono and sets imag=0).
+//   3. Interleave I and Q outputs into RADE_COMP samples and append
+//      to m_rxAccum.
+//   4. While m_rxAccum has >= rade_nin() RADE_COMP samples, drain a
+//      chunk and call rade_rx; append decoded features to
+//      m_rxFeatAccum.
+//   5. While m_rxFeatAccum has >= NB_TOTAL_FEATURES worth of features,
+//      warm up FARGAN on first run, then call fargan_synthesize for
+//      LPCNET_FRAME_SIZE samples of 16 kHz mono speech; append to
+//      a local speech16k QByteArray.
+//   6. Upsample speech16k via m_up16to24 to 24 kHz stereo and append
+//      to m_rxOutAccum.
+//   7. If m_rxOutAccum has accumulated at least the input chunk's
+//      byte size, emit rxSpeechReady with that prefix and remove it
+//      from the accumulator; otherwise emit a silence chunk of the
+//      same size so the speaker bus stays paced.
+//   8. Sample rade_sync() / rade_snrdB_3k_est() / rade_freq_offset()
+//      and emit syncChanged on a state transition + snrChanged +
+//      freqOffsetChanged when synced.
+void RadeChannel::processIq(const QByteArray& iqSamples)
+{
+    if (!m_active || !m_rade || !m_fargan) {
+        return;
+    }
+
+    auto* fargan = static_cast<FARGANState*>(m_fargan);
+
+    // Step 1: deinterleave 24 kHz interleaved I/Q float input.
+    // The QByteArray holds an integer number of (I, Q) float pairs.
+    const int kStereoFrameBytes = 2 * static_cast<int>(sizeof(float));
+    const int nFrames = iqSamples.size() / kStereoFrameBytes;
+    if (nFrames <= 0) {
+        return;
+    }
+
+    std::vector<float> iLeg(nFrames);
+    std::vector<float> qLeg(nFrames);
+    {
+        const auto* src = reinterpret_cast<const float*>(iqSamples.constData());
+        for (int i = 0; i < nFrames; ++i) {
+            iLeg[i] = src[2 * i];
+            qLeg[i] = src[2 * i + 1];
+        }
+    }
+
+    // Step 2: downsample I and Q legs in parallel to 8 kHz.
+    QByteArray iOut8k = m_down24to8->process(iLeg.data(), nFrames);
+    QByteArray qOut8k = m_down24to8Q->process(qLeg.data(), nFrames);
+    const int nI = iOut8k.size() / static_cast<int>(sizeof(float));
+    const int nQ = qOut8k.size() / static_cast<int>(sizeof(float));
+    const int nComp = std::min(nI, nQ);
+
+    // Step 3: assemble RADE_COMP samples (I leg -> real, Q leg ->
+    // imag) and append to the RX accumulator. From AetherSDR
+    // src/core/RADEEngine.cpp:217-223 [@0cd4559] with the
+    // NereusSDR-architectural Q-from-imag-leg divergence.
+    {
+        const auto* iSamples = reinterpret_cast<const float*>(iOut8k.constData());
+        const auto* qSamples = reinterpret_cast<const float*>(qOut8k.constData());
+        for (int i = 0; i < nComp; ++i) {
+            RADE_COMP c;
+            c.real = iSamples[i];
+            c.imag = qSamples[i];
+            m_rxAccum.append(reinterpret_cast<const char*>(&c), sizeof(RADE_COMP));
+        }
+    }
+
+    // Step 4: drain rade_nin()-sized chunks through rade_rx.
+    // From AetherSDR src/core/RADEEngine.cpp:226-270 [@0cd4559].
+    QByteArray speech16k;
+    int nin = rade_nin(m_rade);
+    while (m_rxAccum.size() >= static_cast<int>(nin * sizeof(RADE_COMP))) {
+        const int n_features_out = rade_n_features_in_out(m_rade);
+        std::vector<float> features_out(n_features_out);
+        int has_eoo = 0;
+        const int n_eoo_bits = rade_n_eoo_bits(m_rade);
+        std::vector<float> eoo_out(n_eoo_bits);
+
+        auto* rx_in = reinterpret_cast<RADE_COMP*>(m_rxAccum.data());
+        const int n_out = rade_rx(m_rade, features_out.data(), &has_eoo,
+                                  eoo_out.data(), rx_in);
+        ++m_radeRxCallCount;
+
+        // Remove consumed samples.
+        m_rxAccum.remove(0, nin * sizeof(RADE_COMP));
+
+        // EOO (end-of-over) handling lands at I4 with the embedded
+        // text channel. For I2 we drop the EOO frame; AetherSDR
+        // does likewise.
+        if (has_eoo) {
+            nin = rade_nin(m_rade);
+            continue;
+        }
+
+        // Step 5: feed features to FARGAN.
+        // From AetherSDR src/core/RADEEngine.cpp:240-267 [@0cd4559].
+        if (n_out > 0) {
+            m_rxFeatAccum.append(reinterpret_cast<const char*>(features_out.data()),
+                                 sizeof(float) * n_out);
+        }
+
+        while (m_rxFeatAccum.size() >=
+               qsizetype(sizeof(float) * NB_TOTAL_FEATURES)) {
+            // FARGAN warmup: feed zeros once on first frame so the
+            // recurrent state initialises. From AetherSDR
+            // src/core/RADEEngine.cpp:247-254 [@0cd4559].
+            if (!m_farganWarmedUp) {
+                float zeros[320] = {0};
+                float warmup_features[5 * NB_TOTAL_FEATURES] = {0};
+                fargan_cont(fargan, zeros, warmup_features);
+                m_farganWarmedUp = true;
+            }
+
+            const float* feat =
+                reinterpret_cast<const float*>(m_rxFeatAccum.constData());
+            float fpcm[LPCNET_FRAME_SIZE];
+            fargan_synthesize(fargan, fpcm, feat);
+
+            speech16k.append(reinterpret_cast<const char*>(fpcm),
+                             LPCNET_FRAME_SIZE * sizeof(float));
+
+            m_rxFeatAccum.remove(0, sizeof(float) * NB_TOTAL_FEATURES);
+        }
+
+        nin = rade_nin(m_rade);
+    }
+
+    // Step 6: upsample 16 kHz mono speech to 24 kHz stereo.
+    // From AetherSDR src/core/RADEEngine.cpp:272-277 [@0cd4559].
+    if (!speech16k.isEmpty()) {
+        QByteArray tmp = m_up16to24->processMonoToStereo(
+            reinterpret_cast<const float*>(speech16k.constData()),
+            speech16k.size() / static_cast<int>(sizeof(float)));
+        m_rxOutAccum.append(tmp);
+    }
+
+    // Step 7: emit a rxSpeechReady chunk that matches the input
+    // chunk's byte size so the downstream speaker bus stays paced.
+    // From AetherSDR src/core/RADEEngine.cpp:279-288 [@0cd4559].
+    //
+    // NereusSDR divergence: AetherSDR uses the input PCM byte count
+    // (int16 stereo); our input is float32 I/Q. To preserve the
+    // pacing semantics we compute the equivalent float32 stereo
+    // output byte count for the same frame count.
+    const int outBytesPerFrame = 2 * static_cast<int>(sizeof(float));
+    const int outChunkBytes = nFrames * outBytesPerFrame;
+    if (m_rxOutAccum.size() >= outChunkBytes) {
+        emit rxSpeechReady(m_rxOutAccum.left(outChunkBytes));
+        m_rxOutAccum.remove(0, outChunkBytes);
+    }
+    // Note: AetherSDR emits a silence pad when the output accumulator
+    // is short. We choose NOT to emit a silence pad on the no-sync
+    // case because NereusSDR's audio engine is timer-driven and a
+    // missing chunk does not stall the speaker bus; emitting silence
+    // would just clobber whatever non-RADE audio is also feeding the
+    // bus. If a future caller needs deterministic pacing, expose a
+    // setting on the wrapper instead of forcing it here.
+
+    // Step 8: sample sync / SNR / freq-offset.
+    // From AetherSDR src/core/RADEEngine.cpp:290-298 [@0cd4559].
+    const bool synced = rade_sync(m_rade) != 0;
+    if (synced != m_synced) {
+        m_synced = synced;
+        emit syncChanged(synced);
+    }
+    if (synced) {
+        emit snrChanged(static_cast<float>(rade_snrdB_3k_est(m_rade)));
+        emit freqOffsetChanged(static_cast<float>(rade_freq_offset(m_rade)));
+    }
+}
+
+// I3 will fill in the TX path body. Until then the slot is a no-op so
+// the wrapper builds + tests run.
 void RadeChannel::txEncode(const QByteArray& speechSamples)
 {
-    // TODO Phase 3R I3: implement DSP body.
+    // TODO Phase 3R I3: implement DSP body. Will follow AetherSDR
+    // src/core/RADEEngine.cpp:130-200 (feedTxAudio body) [@0cd4559]
+    // cross-checked against freedv-gui RADETransmitStep::execute
+    // (src/pipeline/RADETransmitStep.cpp:150-260 [@77e793a]).
     Q_UNUSED(speechSamples);
 }
 
-// From AetherSDR src/core/RADEEngine.cpp:126-150 [@0cd4559]
-//   Skeleton at I1: empty body. I3 will fill in the TX-accumulator
-//   clear + lpcnet_encoder_reset call sequence following the
-//   AetherSDR resetTx body and the freedv-gui RADETransmitStep::reset
-//   (RADETransmitStep.cpp:265-280 [@77e793a]).
+// From AetherSDR src/core/RADEEngine.cpp:126-132 [@0cd4559]
+//   I3 stub at I2: clears the TX accumulators in advance of the
+//   real LPCNet encoder reset that lands when txEncode() is wired
+//   up. Clearing in I2 is harmless (the accumulators are zero-sized
+//   until I3 starts populating them).
 void RadeChannel::resetTx()
 {
-    // TODO Phase 3R I3: implement reset body.
+    m_txAccum.clear();
+    m_txFeatAccum.clear();
 }
 
 }  // namespace NereusSDR

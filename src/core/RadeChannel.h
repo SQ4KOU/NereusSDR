@@ -116,6 +116,19 @@
 //                 only at I1; isActive()/isSynced() pin the lifecycle
 //                 contract the I2/I3/I4 implementations layer onto.
 //                 AI tooling: Anthropic Claude Code.
+//   2026-05-11  J.J. Boyd / KG4VCF  Phase 3R Task I2. RX path port
+//                 from AetherSDR src/core/RADEEngine.cpp:27-78 (start),
+//                 :80-106 (stop), :200-303 (feedRxAudio body) [@0cd4559]
+//                 cross-checked against freedv-gui
+//                 src/pipeline/RADEReceiveStep.cpp:175-310 [@77e793a].
+//                 Added second downsampler m_down24to8Q so I/Q input
+//                 from the OpenHPSDR DDC stays complex through the
+//                 RADE_COMP assembly (vs AetherSDR's stereo-PCM
+//                 downmix to mono + imag=0). Added test seam
+//                 radeRxCallCountForTest() + m_radeRxCallCount so
+//                 the new test suite can pin when rade_rx() is
+//                 invoked relative to the rade_nin() accumulator
+//                 threshold. AI tooling: Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -177,6 +190,12 @@ public:
     bool isActive() const;
     bool isSynced() const;
 
+    // Test seam. Returns the number of times rade_rx() has been invoked
+    // since start(). Used by tst_rade_channel to verify the RX
+    // accumulator pumps the codec only when a full rade_nin()-sized
+    // chunk is buffered.
+    int radeRxCallCountForTest() const;
+
 public slots:
     // RX path: feed I/Q from the receiver. RADE expects baseband
     // RADE_COMP at the codec's sample rate; the conversion path
@@ -228,12 +247,27 @@ private:
     bool                 m_synced{false};
     bool                 m_farganWarmedUp{false};
 
+    // Test seam counter: incremented every time rade_rx() runs in
+    // processIq(). Cleared on start().
+    int                  m_radeRxCallCount{0};
+
     // Resampler chain. The AetherSDR client owns four resamplers
     // (24kHz<->8kHz for the modem leg and 24kHz<->16kHz for the
     // LPCNet/FARGAN leg). NereusSDR's TX-side input is 16 kHz mono
     // (per txEncode's contract), but the RX-side output is still
     // 24 kHz stereo for the speaker bus, so we keep the full set.
+    //
+    // NereusSDR divergence: AetherSDR takes stereo DAX audio and
+    // averages L+R into a single mono leg via processStereoToMono
+    // before feeding RADE_COMP with imag=0. Our processIq receives
+    // I/Q from the OpenHPSDR DDC, which is already complex baseband,
+    // so we run two parallel downsamplers (m_down24to8 for the I leg,
+    // m_down24to8Q for the Q leg) and interleave the outputs back
+    // into RADE_COMP pairs. The TX-side modem-up leg and the LPCNet
+    // leg remain single-resampler because LPCNet operates on real
+    // mono speech and the modem TX output is also real mono.
     std::unique_ptr<Resampler> m_down24to8;
+    std::unique_ptr<Resampler> m_down24to8Q;
     std::unique_ptr<Resampler> m_up8to24;
     std::unique_ptr<Resampler> m_down24to16;
     std::unique_ptr<Resampler> m_up16to24;

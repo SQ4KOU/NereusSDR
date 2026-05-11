@@ -703,6 +703,47 @@ I2 will extend this suite with the real RX-path tests (DSP body,
 sync indicator, snrChanged emission); I3 with TX-path tests; I4
 with embedded-text-channel tests.
 
+### Phase 3R Task I2 - RadeChannel RX path
+
+The I1 skeleton `start()` / `stop()` bodies and the empty `processIq`
+slot are now filled in with the RX-path port from AetherSDR
+`RADEEngine.cpp:27-78` (start), `:80-106` (stop), and `:200-303`
+(`feedRxAudio` body) [@0cd4559]. Each block is cross-checked against
+freedv-gui `RADEReceiveStep.cpp:175-310` [@77e793a]; the divergences
+between the two upstreams (mono short + freq_shift_coh in freedv-gui
+vs stereo + L+R-averaged in AetherSDR) and the NereusSDR-architectural
+divergence (true I/Q complex baseband via two parallel resamplers)
+are called out inline in the .cpp comments at each step.
+
+| NereusSDR file | AetherSDR counterpart | Evidence | Specific mod-history wording |
+|---|---|---|---|
+| `src/core/RadeChannel.cpp` (I2 delta) | `src/core/RADEEngine.cpp:27-78, 80-106, 200-303` [@0cd4559] | The `start()` body now mirrors `RADEEngine.cpp:27-78` step-for-step: `rade_initialize`; `rade_open(model_path, RADE_USE_C_ENCODER \| RADE_USE_C_DECODER \| RADE_VERBOSE_0)`; cleanup-on-failure (`rade_finalize`); `lpcnet_encoder_create`; cleanup-on-failure (`rade_close` + `rade_finalize`); `new FARGANState`; `fargan_init`; resampler chain construction (`m_down24to8`, `m_up8to24`, `m_down24to16`, `m_up16to24` matching AetherSDR plus the NereusSDR-added `m_down24to8Q`); accumulator clear; `rade_n_features_in_out` / `rade_n_tx_out` / `rade_nin` log line. `stop()` mirrors `RADEEngine.cpp:80-106` in reverse: `lpcnet_encoder_destroy`; `delete static_cast<FARGANState*>`; `rade_close` + `rade_finalize`; resampler `reset()` calls; accumulator clears; m_active / m_synced / m_farganWarmedUp flag clears. `processIq()` mirrors the `feedRxAudio` body at `RADEEngine.cpp:200-303`: I/Q deinterleave (NereusSDR divergence: AetherSDR averages L+R), parallel I+Q downsample to 8 kHz, RADE_COMP assembly (NereusSDR divergence: imag=Q instead of imag=0), `rade_nin`-bounded drain loop calling `rade_rx`, `n_features_in_out`-bounded feature accumulator, FARGAN warmup with `float zeros[320]` + `float warmup_features[5 * NB_TOTAL_FEATURES]` on first frame, FARGAN synthesise per LPCNET_FRAME_SIZE chunk, 16 kHz mono -> 24 kHz stereo upsample, `rxSpeechReady` emit pacing (NereusSDR divergence: no silence-pad on the no-sync branch), `rade_sync`/`rade_snrdB_3k_est`/`rade_freq_offset` sample-and-emit. The test seam `radeRxCallCountForTest()` returns `m_radeRxCallCount`, incremented each time `rade_rx` runs. | "Phase 3R Task I2. RX path body lands. start() now calls rade_initialize + rade_open + lpcnet_encoder_create + fargan_init + builds the five-resampler chain (24<->8 with the second m_down24to8Q for the Q leg, 24<->16); ported from AetherSDR `src/core/RADEEngine.cpp:27-78` [@0cd4559]. stop() unwinds in reverse, ported from RADEEngine.cpp:80-106. processIq() ports the feedRxAudio body at RADEEngine.cpp:200-303 with the NereusSDR-architectural divergence noted in RadeChannel.h's mod-history: AetherSDR's processStereoToMono(L,R)+imag=0 path is replaced with parallel processing of the I leg through m_down24to8 and the Q leg through m_down24to8Q, because NereusSDR's input is already complex baseband from the OpenHPSDR DDC. Cross-checked against freedv-gui `RADEReceiveStep::execute` (src/pipeline/RADEReceiveStep.cpp:175-310 [@77e793a]); freedv-gui's freq_shift_coh step is not needed because NereusSDR's DDC delivers baseband directly." |
+
+Companion `RadeChannel.h` delta: adds `m_down24to8Q` (the second
+`std::unique_ptr<Resampler>` for the I/Q-parallel downsample),
+`m_radeRxCallCount` (test seam counter), and the
+`radeRxCallCountForTest()` public accessor. No AetherSDR-side
+equivalent; NereusSDR-architectural additions tied to the
+I/Q-baseband divergence and the I2 test suite.
+
+Companion test file `tests/tst_rade_channel.cpp` (the I1 file is
+extended in-place with 4 new RX-path tests): `startInitializesRade`
+pins the `"dummy"` sentinel + idempotent start + nonexistent-path
+rejection; `processIqEmitsSyncFalseOnNoise` feeds 8 chunks x 4096
+samples of deterministic noise and verifies no sustained sync, no
+spurious `syncChanged(true)`, no `rxSpeechReady` emission, and at
+least one `rade_rx` invocation; `processIqAccumulatesAcrossMultipleChunks`
+pins the accumulator threshold (no `rade_rx` calls until the
+`rade_nin`-bounded buffer fills); `stopReleasesResources` exercises
+multiple start/stop cycles and a destructor-only teardown.
+
+A synthetic in-test fixture (deterministic noise via `std::mt19937`
+seed `0xC0DEC0DE`) is used because a real RADE I/Q capture requires
+the I3 TX path to encode known speech (blocked at I2 time). The
+fixture-generation rationale lives at `tests/fixtures/rade/README.md`.
+The synced + decoded-speech contract is bench-verified at the Phase 3R
+N2 matrix.
+
 ### Phase 3R Task I2a - Resampler port (r8brain wrapper)
 
 The 17-line I1 stub `src/core/Resampler.h` is replaced with a
