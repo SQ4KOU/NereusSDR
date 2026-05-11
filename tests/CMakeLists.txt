@@ -4266,3 +4266,20 @@ nereus_add_test(tst_radio_model_spot_wiring)
 # verified by the manual bench-test matrix.
 # Source: NereusSDR-native test pattern; ports are at H2.
 nereus_add_test(tst_mainwindow_tools_spot_hub)
+
+# ── Phase 3R Task I1: RadeChannel skeleton (hybrid port) ───────────────────
+# Pins the three lifecycle contracts the Phase 3R Task I2/I3/I4 DSP work
+# layers onto:
+#   initialState                  fresh wrapper is !isActive() && !isSynced()
+#   startStop                     start(<real path>) flips isActive() true;
+#                                 stop() flips it back
+#   modelLoadFailureDisables      start(<nonexistent>) returns false without
+#                                 mutating state
+# The wrapper itself is a hybrid port: structure (class layout, Q_OBJECT
+# signals/slots, member ownership, dtor placement for forward-declared
+# unique_ptr types) follows AetherSDR src/core/RADEEngine.{h,cpp}
+# [@0cd4559]; the DSP API surface that I2/I3 will plug in (rade_open,
+# rade_n_features_in_out, LPCNet feature extractor, FARGAN vocoder)
+# follows freedv-gui src/pipeline/RADE{Receive,Transmit}Step.{h,cpp}
+# [@77e793a]. I1 ships skeleton bodies only; no DSP yet.
+nereus_add_test(tst_rade_channel)

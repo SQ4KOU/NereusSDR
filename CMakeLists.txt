@@ -422,6 +422,7 @@ set(CORE_SOURCES
     src/core/WdspEngine.cpp
     src/core/RxChannel.cpp
     src/core/TxChannel.cpp
+    src/core/RadeChannel.cpp
     src/core/PsFeedbackChannel.cpp
     src/core/PureSignal.cpp
     src/core/PsccPump.cpp

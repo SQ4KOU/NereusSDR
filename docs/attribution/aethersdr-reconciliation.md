@@ -641,6 +641,68 @@ Spots button is present and labeled "Clear"),
 emits `settingsChanged()` via QSignalSpy). All 28 tests pass (3
 F1 + 12 F2 + 6 F3 + 7 F4).
 
+### Phase 3R Task I1 - RADE codec wrapper skeleton
+
+NereusSDR's RADE (Radio Autoencoder) v1 codec wrapper is a hybrid
+port. Class layout, Q_OBJECT shape, signal/slot surface, member
+ownership pattern, and out-of-line destructor placement (so the
+forward-declared `std::unique_ptr<Resampler>` / `<RadeText>` members
+can resolve their destructors) follow AetherSDR's `RADEEngine`. The
+DSP API surface that Tasks I2 / I3 / I4 will plug in (rade_open call
+shape, LPCNet feature extractor lifecycle, FARGAN vocoder warm-up,
+embedded rade_text aux channel) follows freedv-gui's `RADEReceiveStep`
+and `RADETransmitStep` pipeline classes; that lineage is recorded
+separately in `docs/attribution/FREEDV-GUI-PROVENANCE.md`. The
+NereusSDR file's header carries the verbatim freedv-gui
+BSD-2-Clause-style header per the freedv-gui PROVENANCE rule + the
+AetherSDR project-level attribution per HOW-TO-PORT.md rule 6
+(AetherSDR has no per-file copyright headers; the project URL and
+primary author are referenced at NereusSDR-block level instead of
+copying a verbatim block that does not exist upstream).
+
+| NereusSDR file | AetherSDR counterpart | Evidence | Specific mod-history wording |
+|---|---|---|---|
+| `src/core/RadeChannel.h` | `src/core/RADEEngine.h` [@0cd4559] | Class layout (Q_OBJECT subclass, `explicit RadeChannel(QObject* parent)` ctor, public `start` / `stop` / `isActive` / `isSynced` lifecycle, three slots `processIq` / `txEncode` / `resetTx`, signals `rxSpeechReady` / `txModemReady` / `syncChanged` / `snrChanged` / `freqOffsetChanged`), opaque-pointer ownership of the rade / LPCNet / FARGAN handles (`struct rade*`, `LPCNetEncState*`, `void* m_fargan`), member-name set (`m_rade`, `m_lpcnetEnc`, `m_fargan`, `m_farganWarmedUp`, `m_synced`, the four `std::unique_ptr<Resampler>` members `m_down24to8` / `m_up8to24` / `m_down24to16` / `m_up16to24`, and the four `QByteArray` accumulators `m_txAccum` / `m_txFeatAccum` / `m_rxAccum` / `m_rxFeatAccum`) match AetherSDR's `RADEEngine.h` line-for-line. NereusSDR-architectural additions: `start()` takes a model-path argument (OpenHPSDR requires runtime model selection rather than AetherSDR's hard-coded `"dummy"` first arg to `rade_open`); the `processIq` slot accepts I/Q from the receiver instead of `feedRxAudio` accepting DAX audio; `txEncode` accepts 16 kHz mono mic samples; new signal `rxTextDecoded(callsign, grid)` exposes the embedded rade_text aux channel that AetherSDR does not surface; new `m_active` flag separates "wrapper started" from "rade handle non-null" so the lifecycle pins (`!isActive()` after construction, `isActive()` after `start()`, `!isActive()` after `stop()`) hold even before I2 wires in the real RADE handle. | "Structural template (class layout, Q_OBJECT shape, signal/slot surface, member ownership, out-of-line dtor placement so forward-declared unique_ptr types resolve) ported from AetherSDR `src/core/RADEEngine.{h,cpp}` [@0cd4559]. DSP API surface that I2/I3/I4 will plug in is freedv-gui's `RADEReceiveStep` / `RADETransmitStep`; see `docs/attribution/FREEDV-GUI-PROVENANCE.md`. NereusSDR divergences vs AetherSDR: `start()` takes a model-path argument (OpenHPSDR runtime model selection vs AetherSDR's hard-coded `"dummy"`); slot surface re-shaped for receiver I/Q + mic-bus mono input; `rxTextDecoded` signal added for the I4 embedded text channel; `m_active` flag separates wrapper lifecycle from rade-handle existence so the I1 skeleton tests pin a deterministic contract even before I2 wires in the real RADE handle." |
+| `src/core/RadeChannel.cpp` | `src/core/RADEEngine.cpp` [@0cd4559] | Ctor / dtor pair (default constructor, dtor calls `stop()` to unwind RADE handles on destruction without an explicit `stop()`) follows `RADEEngine.cpp:18-25`. `start()` skeleton mirrors `RADEEngine.cpp:27-78` (idempotent guard on the active flag, early return on bad input, success path flips the active flag and returns true; the real rade_open / lpcnet_encoder_create / fargan_init / resampler construction lands at I2). `stop()` skeleton mirrors `RADEEngine.cpp:80-106` (idempotent guard on the active flag, the real destroy / close / finalize unwind lands at I2). `isActive()` / `isSynced()` accessors mirror `RADEEngine.cpp:108-124` verbatim. `processIq` / `txEncode` / `resetTx` slot bodies are TODO-marked for I2 / I3 with explicit cites to the AetherSDR + freedv-gui call sequences they will follow. NereusSDR divergences: `start()` validates the model-path file exists rather than ignoring it; the active-flag check inside the early-return guard replaces AetherSDR's `if (m_rade) return true` check (the rade handle is null in I1 because the wrapper has no I2 DSP body to allocate it). | "Skeleton port. Lifecycle bodies (ctor/dtor pair, `start()` path-exists check + active-flag flip, `stop()` active-flag unflip + state-vars clear, accessors) ported from AetherSDR `src/core/RADEEngine.cpp:18-124` [@0cd4559]. DSP-bearing slot bodies (`processIq` / `txEncode` / `resetTx`) are TODO-marked for Phase 3R Tasks I2 / I3 with inline cites to the AetherSDR `feedRxAudio` / `feedTxAudio` / `resetTx` bodies and the freedv-gui `RADEReceiveStep::execute` / `RADETransmitStep::execute` / `RADETransmitStep::reset` they will follow. NereusSDR divergences vs AetherSDR: `start()` validates the model-path file exists rather than ignoring the argument the way AetherSDR's hard-coded `\"dummy\"` does; the active-flag guard replaces AetherSDR's `if (m_rade) return true` check because the rade handle stays null until I2." |
+
+Two NereusSDR-native helper headers also land in I1 to keep
+`std::unique_ptr<Resampler>` / `<RadeText>` destruction well-defined
+in `RadeChannel.cpp`:
+
+- `src/core/Resampler.h` - forward stub for the resampler class
+  (full implementation lands at Phase 3R Task I2/I3; will wrap
+  r8brain or the freedv-gui equivalent and mirror AetherSDR
+  `src/core/Resampler.{h,cpp}` [@0cd4559]).
+- `src/core/RadeText.h` - forward stub for the embedded text channel
+  wrapper (full implementation lands at Phase 3R Task I4; will wrap
+  `third_party/rade/src/rade_text.c` [@77e793a] and follow freedv-gui
+  `src/pipeline/rade_text.{c,h}`).
+
+Both stubs are NereusSDR-native scaffolding (no upstream counterpart),
+carry the `no-port-check:` opt-out marker in their first comment so
+the new-ports detector does not flag them, and are deliberately
+NOT listed in this Bucket A table - the table is for genuine
+AetherSDR derivations, and these two files are pre-port placeholders
+for code that will become AetherSDR derivations in I2/I3/I4. They
+will be added to Bucket A in those tasks.
+
+Companion test file `tests/tst_rade_channel.cpp` (not listed in the
+Bucket A core table; matches the F1/F2/F3/F4 test-as-companion
+precedent). Three tests pin the I1 lifecycle skeleton:
+
+- `initialState`: a fresh `RadeChannel` reports `!isActive()` and
+  `!isSynced()`.
+- `startStop`: `start(<temp-file-path>)` returns `true`, flips
+  `isActive()` true; `stop()` flips it back. Uses a `QTemporaryFile`
+  fixture so the path-exists precondition holds without depending on
+  a checked-in test fixture file.
+- `modelLoadFailureDisablesChannel`: `start("/nonexistent/path.f32")`
+  returns `false` without mutating `isActive()`.
+
+I2 will extend this suite with the real RX-path tests (DSP body,
+sync indicator, snrChanged emission); I3 with TX-path tests; I4
+with embedded-text-channel tests.
+
 ---
 
 ## Bucket B — False AetherSDR citations (126 files)
