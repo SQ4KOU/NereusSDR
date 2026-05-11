@@ -142,6 +142,23 @@ double calculateDistanceKm(const QString& gridSquare1, const QString& gridSquare
     return EARTH_RADIUS * c;
 }
 
+// From freedv-gui src/gui/dialogs/freedv_reporter.cpp:2676-2681 [@77e793a]
+//
+// Translation: wxString return becomes QString. 16-direction cardinal
+// table (N / NNE / NE / ENE / E / ESE / SE / SSE / S / SSW / SW / WSW /
+// W / WNW / NW / NNW) ported verbatim; the rounding formula
+// (degrees / 360 * 16 + 0.5) % 16 is unchanged so an input of 360 deg
+// wraps back to index 0 (N) the same way upstream wraps it.
+QString getCardinalDirection(int degrees)
+{
+    int cardinalDirectionNumber( static_cast<int>( ( ( degrees / 360.0 ) * 16 ) + 0.5 )  % 16 );
+    static const char* const cardinalDirectionTexts[] = {
+        "N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE",
+        "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"
+    };
+    return QString::fromLatin1(cardinalDirectionTexts[cardinalDirectionNumber]);
+}
+
 // From freedv-gui src/gui/dialogs/freedv_reporter.cpp:2376-2399 [@77e793a]
 double calculateBearingInDegrees(const QString& gridSquare1, const QString& gridSquare2)
 {
@@ -237,10 +254,15 @@ void FreeDVStationModel::applyDistanceHeading(FreeDVStation& info) const
     if (m_ourGrid.size() < 4 || info.gridSquare.size() < 4) {
         info.distanceKm = 0.0;
         info.headingDeg = 0.0;
+        info.headingCardinal.clear();
         return;
     }
     info.distanceKm = calculateDistanceKm(m_ourGrid, info.gridSquare);
     info.headingDeg = calculateBearingInDegrees(m_ourGrid, info.gridSquare);
+    // From freedv-gui src/gui/dialogs/freedv_reporter.cpp:3202+3388 [@77e793a]
+    // (refreshAllRows + add-station paths call GetCardinalDirection_ on
+    // the bearing integer to populate the per-row "Hdg" cell).
+    info.headingCardinal = getCardinalDirection(static_cast<int>(info.headingDeg + 0.5));
 }
 
 } // namespace NereusSDR

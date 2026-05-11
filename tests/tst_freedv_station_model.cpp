@@ -21,6 +21,9 @@ private slots:
     void clearEmitsCleared();
     void distanceComputedFromGrid();
     void stationBySidLookup();
+    void applyDistanceHeadingStampsCardinal();
+    void cardinalEmptyWhenGridSquareEmpty();
+    void cardinalEmptyWhenOurGridEmpty();
 };
 
 static FreeDVStation makeStation(const QString& sid, const QString& call, const QString& grid) {
@@ -95,6 +98,45 @@ void TestFreeDVStationModel::stationBySidLookup() {
     m.onStationAdded("sid42", makeStation("sid42", "VK3FOO", "QF22"));
     QCOMPARE(m.stationBySid("sid42").callsign, QStringLiteral("VK3FOO"));
     QCOMPARE(m.stationBySid("nonexistent").callsign, QString());
+}
+
+void TestFreeDVStationModel::applyDistanceHeadingStampsCardinal() {
+    FreeDVStationModel m;
+
+    // Our grid EM00 (centered at lat 30.5, lon -99). Station 1 sits at
+    // EM01 (lat 31.5, lon -99); same longitude, latitude one degree
+    // north. Bearing == 0 deg -> cardinal "N" per
+    // GetCardinalDirection_(int) in
+    // freedv-gui src/gui/dialogs/freedv_reporter.cpp:2676-2681 [@77e793a].
+    m.setOurGridSquare("EM00");
+    auto north = makeStation("sid-north", "K1NORTH", "EM01");
+    m.onStationAdded("sid-north", north);
+    QCOMPARE(m.stationBySid("sid-north").headingCardinal, QStringLiteral("N"));
+
+    // Station 2 sits at FM00 (lat 30.5, lon -79); same latitude, 20 deg
+    // east. Initial bearing computes to roughly 85 deg, which rounds
+    // to cardinal-index 4 -> "E" per the upstream 16-direction table.
+    auto east = makeStation("sid-east", "K1EAST", "FM00");
+    m.onStationAdded("sid-east", east);
+    QCOMPARE(m.stationBySid("sid-east").headingCardinal, QStringLiteral("E"));
+}
+
+void TestFreeDVStationModel::cardinalEmptyWhenGridSquareEmpty() {
+    FreeDVStationModel m;
+    m.setOurGridSquare("EM00");
+
+    auto noGrid = makeStation("sid-nogrid", "AA0AA", QString());
+    m.onStationAdded("sid-nogrid", noGrid);
+    QVERIFY(m.stationBySid("sid-nogrid").headingCardinal.isEmpty());
+}
+
+void TestFreeDVStationModel::cardinalEmptyWhenOurGridEmpty() {
+    FreeDVStationModel m;
+    // Do not call setOurGridSquare -> our grid stays empty.
+
+    auto s = makeStation("sid1", "AA0AA", "EM01");
+    m.onStationAdded("sid1", s);
+    QVERIFY(m.stationBySid("sid1").headingCardinal.isEmpty());
 }
 
 QTEST_GUILESS_MAIN(TestFreeDVStationModel)
