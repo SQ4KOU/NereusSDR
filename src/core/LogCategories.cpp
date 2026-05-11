@@ -20,6 +20,7 @@ Q_LOGGING_CATEGORY(lcSpectrum,   "nereus.spectrum", QtInfoMsg)
 Q_LOGGING_CATEGORY(lcContainer,  "nereus.container")
 Q_LOGGING_CATEGORY(lcMeter,      "nereus.meter")
 Q_LOGGING_CATEGORY(lcMmio,       "nereus.mmio")
+Q_LOGGING_CATEGORY(lcSpots,      "nereus.spots")
 
 // --- LogManager ---
 
@@ -54,6 +55,8 @@ LogManager::LogManager()
           QStringLiteral("Meter widget rendering, polling, and item lifecycle"), false },
         { QStringLiteral("nereus.mmio"),     QStringLiteral("MMIO"),
           QStringLiteral("Multi-Meter I/O endpoints, transports, parsers"), false },
+        { QStringLiteral("nereus.spots"),    QStringLiteral("Spots"),
+          QStringLiteral("DX spot ingest (cluster, RBN, SpotCollector, WSJT-X)"), false },
     };
 }
 

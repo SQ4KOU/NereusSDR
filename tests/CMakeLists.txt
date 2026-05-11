@@ -3945,3 +3945,11 @@ target_compile_definitions(tst_step_att_cross_thread PRIVATE NEREUS_BUILD_TESTS)
 # Thetis source: networkproto1.c:657-666 [v2.10.3.13] case 16.
 nereus_add_test(tst_p1_bank16_pursignal_run)
 target_compile_definitions(tst_p1_bank16_pursignal_run PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3J-2 Task B1: SpotCollectorClient DX-line parser ──────────────────
+# Pins the contract that SpotCollectorClient parses the standard DXLab
+# "DX de" UDP line format and tags RBN-suffixed spotters (-# suffix) as
+# source="RBN". 3 tests: parsesStandardDxLine, parsesRbnSuffixedSpotter,
+# rejectsMalformedLine. Source: AetherSDR
+# src/core/SpotCollectorClient.cpp [@0cd4559].
+nereus_add_test(tst_spot_collector_parser)
