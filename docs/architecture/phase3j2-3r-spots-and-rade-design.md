@@ -319,6 +319,16 @@ Per CLAUDE.md: cross-thread comms via auto-queued signals; no mutex in the audio
 
 ## 5. Build & packaging
 
+### Vendoring decision (verified 2026-05-10)
+- radae_nopy commit pinned: `b2891023f3aecdf8b1793618000b1be6bcb2c4d1` ([@b289102])
+- License: BSD 2-Clause (Copyright 2026, Peter B Marks) - GPL-compatible: YES
+- Source URL: https://github.com/peterbmarks/radae_nopy
+- Verified sub-vendored licenses (all GPL-compatible):
+  - `src/kiss_fft.c`, `src/kiss_fftr.c`, `src/_kiss_fft_guts.h`: BSD 3-Clause (Mark Borgerding, 2003-2010)
+  - `src/lpcnet_demo.c`: BSD 2-Clause (Mozilla, 2018)
+  - `cmake/BuildOpus.cmake` pulls Opus from xiph at build time (BSD 3-Clause, well-known GPL-compatible)
+- Decision: vendor in `third_party/rade/` per Option A (submodule or vendor-copy). No fallback to `ExternalProject_Add` needed.
+
 ### `third_party/rade/`
 
 - Source: `peterbmarks/radae_nopy` cloned at a pinned commit (recorded in `third_party/rade/VERSION.txt` and on the row in `FREEDV-GUI-PROVENANCE.md`). The "no-Python" fork is the C/C++ build path freedv-gui uses.
