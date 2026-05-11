@@ -1458,6 +1458,35 @@ void RadioModel::wireRadeChannel(int sliceId, RadeChannel* channel,
                 onRadeTextDecoded(sliceId, callsign, grid);
             });
 
+    // Phase 3R Task J4: route decoded RADE speech into AudioEngine's
+    // speakers bus through the same rxBlockReady entry point WDSP's
+    // RxChannel uses (via RxDspWorker).  RadeChannel emits a QByteArray
+    // of interleaved float32 stereo PCM (24 kHz from the RX path
+    // upsampler at RadeChannel.cpp:513-520 [Phase 3R I2]); AudioEngine
+    // expects (const float*, int frames) of interleaved stereo float
+    // (AudioEngine.h:306 rxBlockReady), so the adapter lambda below
+    // reinterprets the byte buffer and calls through.  The byte count
+    // must be a multiple of (2 * sizeof(float)) = 8; partial blocks are
+    // dropped rather than risk a half-frame push past MasterMixer.
+    if (m_audioEngine != nullptr) {
+        connect(channel, &RadeChannel::rxSpeechReady, this,
+                [this, sliceId](const QByteArray& pcm) {
+                    if (m_audioEngine == nullptr) {
+                        return;
+                    }
+                    constexpr int kBytesPerStereoFrame =
+                        2 * static_cast<int>(sizeof(float));
+                    const int bytes = pcm.size();
+                    if (bytes <= 0 || (bytes % kBytesPerStereoFrame) != 0) {
+                        return;
+                    }
+                    const int frames = bytes / kBytesPerStereoFrame;
+                    const float* samples =
+                        reinterpret_cast<const float*>(pcm.constData());
+                    m_audioEngine->rxBlockReady(sliceId, samples, frames);
+                });
+    }
+
     // The slice pointer is currently unused at wire time. Slot bodies
     // dereference via sliceAt(sliceId), which is the safer route because
     // it handles the slice-was-deleted race naturally. The parameter

@@ -2270,6 +2270,14 @@ nereus_add_test(tst_wdsp_engine_rade_lifecycle)
 # test does not bail out on its !m_initialized guard.
 nereus_add_test(tst_slice_model_rade_swap)
 
+# ── Phase 3R Task J4: RADE audio routing into AudioEngine ───────────────────
+# Pins the contract that RadioModel::wireRadeChannel adds an audio
+# connection alongside the I5 signal graph: emitting
+# RadeChannel::rxSpeechReady with a float32 stereo PCM block must
+# reach AudioEngine's speakers bus through rxBlockReady.  FakeAudioBus
+# stand-in counts pushes to detect the route.
+nereus_add_test(tst_audio_engine_rade)
+
 # ── Phase 3M-1a Task C.2: TxChannel 31-stage TXA pipeline skeleton ────────────
 # Verifies:
 #   Stage::kStageCount == 31 (authoritative from wdsp/TXA.c:31-479 [v2.10.3.13]);
