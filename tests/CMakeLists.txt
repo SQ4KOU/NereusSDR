@@ -795,6 +795,13 @@ target_compile_definitions(tst_radio_model_drive_path PRIVATE NEREUS_BUILD_TESTS
 # btnTXProfileSave_Click / btnTXProfileDelete_Click handlers).
 nereus_add_test(tst_mic_profile_manager)
 
+# ── Phase 3R Task K1: MicProfileManager "RADE" factory preset ──
+# Verifies the NereusSDR-native "RADE" factory profile is seeded on
+# first launch and that its EQ-off / Leveler-on / ALC-off /
+# CFC-CESSB-PhRot-off bypass philosophy applies cleanly to the
+# TransmitModel via setActiveProfile.
+nereus_add_test(tst_mic_profile_rade)
+
 # ── Phase 3M-3a-ii Batch 4: MicProfileManager CFC/CPDR/CESSB/PhRot round-trip ──
 # Verifies the 41 new bundle keys (Phase Rotator + CFC + CPDR + CESSB)
 # round-trip through AppSettings byte-for-byte, including each of the
