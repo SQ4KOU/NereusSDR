@@ -2242,6 +2242,19 @@ nereus_add_test(tst_wdsp_engine_tx_channel)
 #   wdsp/dexp.c:230-239    - destroy_dexp impl: frees, but does NOT null pdexp[id].
 nereus_add_test(tst_wdsp_engine_dexp_init)
 
+# ── Phase 3R Task J2: WdspEngine RadeChannel lifecycle ──────────────────────
+# Pins the createRadeChannel / destroyRadeChannel / radeChannel(id) contract:
+#   - first create returns a non-null RadeChannel*;
+#   - duplicate create with the same id returns the existing channel
+#     (mirrors the createRxChannel pre-existence guard);
+#   - destroy makes the lookup return nullptr;
+#   - destroy on a never-created id is a safe no-op;
+#   - the RadeChannel is parented to the WdspEngine so QObject ownership
+#     cleans up correctly on engine destruction.
+# RADE is a NereusSDR-native channel type with no Thetis equivalent;
+# this test pins the C++-side lifecycle only and does not call into WDSP.
+nereus_add_test(tst_wdsp_engine_rade_lifecycle)
+
 # ── Phase 3M-1a Task C.2: TxChannel 31-stage TXA pipeline skeleton ────────────
 # Verifies:
 #   Stage::kStageCount == 31 (authoritative from wdsp/TXA.c:31-479 [v2.10.3.13]);
