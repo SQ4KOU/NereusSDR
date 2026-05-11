@@ -103,6 +103,67 @@
 //                                    pinned for the smoke-test
 //                                    harness. AI tooling: Anthropic
 //                                    Claude Code.
+//   2026-05-11  J.J. Boyd / KG4VCF  Phase 3J-2 Task F4. Display tab
+//                                    content. Folds AetherSDR's
+//                                    standalone
+//                                    `src/gui/SpotSettingsDialog.{h,cpp}
+//                                    [@0cd4559]` into the Display
+//                                    tab of SpotHubDialog (the
+//                                    upstream standalone dialog is
+//                                    retired in favour of one
+//                                    consolidated control surface).
+//                                    Two-column layout: LEFT 8 stat
+//                                    blocks (Total Spots / Unique
+//                                    Callsigns / Active Sources /
+//                                    cty.dat entries / ADIF QSOs /
+//                                    DXCC entities / New DXCC / New
+//                                    bands) plus a red "Clear All
+//                                    Spots" button at the bottom;
+//                                    RIGHT all knobs from upstream
+//                                    SpotSettingsDialog (Spots and
+//                                    Memories toggles + Levels /
+//                                    Position / Font Size / Spot
+//                                    Lifetime sliders + Override
+//                                    Colors toggle + color swatch +
+//                                    Override Background two toggles
+//                                    + color swatch + Background
+//                                    Opacity slider). Every knob
+//                                    change writes to AppSettings
+//                                    (verbatim key names from
+//                                    upstream: IsSpotsEnabled,
+//                                    SpotsMaxLevel,
+//                                    SpotsStartingHeightPercentage,
+//                                    SpotFontSize,
+//                                    DxClusterSpotLifetimeSec,
+//                                    IsSpotsOverrideColorsEnabled,
+//                                    IsSpotsOverrideBackgroundColors
+//                                    Enabled,
+//                                    IsSpotsOverrideToAutoBackground
+//                                    ColorEnabled,
+//                                    SpotsOverrideColor,
+//                                    SpotsOverrideBgColor,
+//                                    SpotsBackgroundOpacity,
+//                                    IsMemorySpotsEnabled) and
+//                                    emits settingsChanged() so
+//                                    MainWindow can refresh the
+//                                    spectrum spot overlay live.
+//                                    The Clear All Spots button
+//                                    calls SpotModel::clear() and
+//                                    emits spotsClearedAll(). NereusSDR
+//                                    divergence from upstream: stat
+//                                    blocks LHS replaces upstream's
+//                                    single "Total Spots" label
+//                                    (upstream `:272-276`); the
+//                                    additional Unique Callsigns /
+//                                    Active Sources / cty.dat /
+//                                    ADIF / DXCC entities / NewDxcc
+//                                    / NewBands labels read live
+//                                    from the SpotTableModel +
+//                                    DxccColorProvider (Tasks D2 +
+//                                    C4) and are NereusSDR-native.
+//                                    objectName() keys pinned for
+//                                    the smoke-test harness. AI
+//                                    tooling: Anthropic Claude Code.
 
 #pragma once
 
@@ -284,6 +345,20 @@ private:
     SpotTableModel* m_spotTableModel{nullptr};
     BandFilterProxy* m_spotProxyModel{nullptr};
     QTableView*     m_spotTable{nullptr};
+
+    // Display tab (F4). LEFT-column stat blocks are NereusSDR-native
+    // additions; RIGHT-column knobs port verbatim from AetherSDR
+    // src/gui/SpotSettingsDialog.{h,cpp} [@0cd4559]. The stat label
+    // pointers are held so the dialog can refresh them when the
+    // table model + DxccColorProvider emit count-change signals.
+    QLabel*      m_statTotalSpots{nullptr};
+    QLabel*      m_statUniqueCallsigns{nullptr};
+    QLabel*      m_statActiveSources{nullptr};
+    QLabel*      m_statCtyDatEntries{nullptr};
+    QLabel*      m_statAdifQsos{nullptr};
+    QLabel*      m_statDxccEntities{nullptr};
+    QLabel*      m_statNewDxcc{nullptr};
+    QLabel*      m_statNewBands{nullptr};
 };
 
 } // namespace NereusSDR

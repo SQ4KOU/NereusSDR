@@ -584,6 +584,63 @@ source pills DX/RBN/JT/COL/POT/FDR/PSK findable by
 MHz, double-clicks the proxy row, and asserts `tuneRequested(14.025)`
 emits once via QSignalSpy). All 21 tests pass (3 F1 + 12 F2 + 6 F3).
 
+### Phase 3J-2 Task F4 - SpotHubDialog Display tab
+
+Folds AetherSDR's standalone `src/gui/SpotSettingsDialog.{h,cpp}`
+into the Display tab of `SpotHubDialog` (the upstream standalone
+dialog is retired; the F4 Display tab is the single consolidated
+control surface). Two-column layout: LEFT column carries 8 live
+stat blocks (Total Spots / Unique Callsigns / Active Sources /
+cty.dat entries / ADIF QSOs / DXCC entities / New DXCC in feed /
+New bands in feed) plus a red "Clear All Spots" button at the
+bottom; RIGHT column ports every knob from upstream
+`SpotSettingsDialog.cpp:38-270 [@0cd4559]` (Spots toggle +
+Memories toggle + Levels slider + Position slider + Font Size
+slider + Spot Lifetime slider + Override Colors toggle and
+swatch + Override Background two toggles and swatch + Background
+Opacity slider). Each knob change writes to the same AppSettings
+key the upstream standalone dialog used (`IsSpotsEnabled`,
+`SpotsMaxLevel`, `SpotsStartingHeightPercentage`, `SpotFontSize`,
+`DxClusterSpotLifetimeSec`, `IsSpotsOverrideColorsEnabled`,
+`IsSpotsOverrideBackgroundColorsEnabled`,
+`IsSpotsOverrideToAutoBackgroundColorEnabled`,
+`SpotsOverrideColor`, `SpotsOverrideBgColor`,
+`SpotsBackgroundOpacity`, `IsMemorySpotsEnabled`) and emits
+`settingsChanged()` so MainWindow can refresh the live spectrum
+spot overlay (matches upstream `:50-55, :289` live-preview
+contract). The red "Clear All Spots" button calls
+`SpotModel::clear()` + `SpotTableModel::clear()` and emits
+`spotsClearedAll()` for MainWindow to propagate to the spectrum
+overlay (upstream had a `Clear All Spots` button at
+`SpotSettingsDialog.cpp:281-292 [@0cd4559]` that sent
+`spot clear` over the SmartSDR command channel; NereusSDR
+substitutes the in-process clear + signal emission since it does
+not use the SmartSDR wire). `GuardedSlider` widget reused from
+`src/gui/widgets/GuardedSlider.h` (already ported from upstream
+`src/gui/GuardedSlider.h [@0cd4559]`).
+
+| NereusSDR file | AetherSDR counterpart | Evidence | Specific mod-history wording |
+|---|---|---|---|
+| `src/gui/SpotHubDialog.h` (F4 extension) | `src/gui/SpotSettingsDialog.h:23-52 [@0cd4559]` | Adds eight private `QLabel*` member pointers (`m_statTotalSpots`, `m_statUniqueCallsigns`, `m_statActiveSources`, `m_statCtyDatEntries`, `m_statAdifQsos`, `m_statDxccEntities`, `m_statNewDxcc`, `m_statNewBands`) so the Display tab can refresh stat blocks on table-model row changes and DxccColorProvider import finishes. The knob widgets are NOT held as members (created and forgotten inside `buildDisplayTab`); upstream held them as members for the constant `setTotalSpots(int)` public setter, but that surface is replaced by the NereusSDR live-refresh wiring. NereusSDR divergence: upstream had a single `QLabel* m_totalSpotsLabel` (line 43); NereusSDR has eight stat labels (Total / Unique / Active Sources / cty.dat / ADIF / Entities / NewDxcc / NewBands). | "Display tab content (F4): eight new private `QLabel*` member pointers for the stat-block refresh path. NereusSDR-native: upstream `SpotSettingsDialog.h` held only one `m_totalSpotsLabel`; the Display tab grows that surface to eight live counts read from SpotTableModel + DxccColorProvider." |
+| `src/gui/SpotHubDialog.cpp` (F4 extension) | `src/gui/SpotSettingsDialog.cpp:38-292 [@0cd4559]` | Replaces the F1 placeholder stub for `buildDisplayTab` with the two-column Display tab. LEFT column: 8 stat blocks built via the `makeStatRow` helper, each with a fixed `objectName()` and a member-pointer assignment. Red "Clear All Spots" button at the bottom emits `spotsClearedAll()` and resets the count labels to 0. RIGHT column: every knob from upstream `SpotSettingsDialog.cpp:38-270 [@0cd4559]` ported verbatim: the load-persisted block at `:21-37` (with the lifetime-key migration `:34-37`); the `save` lambda contract `:50-55`; the green/red `kToggleStyle` `:63-65`; Spots toggle `:57-71`; Memories toggle `:74-89`; Levels slider `:91-106`; Position slider `:108-123`; Font Size slider `:125-140`; non-linear lifetime step table `:146-178` (10..55s in 5s, 5..55min in 5min, 1..24hr in 1hr, 45 indices); Override Colors toggle + swatch `:180-210`; Override Background two toggles + swatch `:212-252`; Background Opacity slider `:254-270`. AppSettings keys preserved verbatim. NereusSDR divergence: (1) eight stat blocks replace upstream's single Total Spots label at `:272-276`; (2) the Clear All Spots button at `:281-292` substitutes `SpotModel::clear()` + `SpotTableModel::clear()` for upstream's `m_model->sendCommand("spot clear")` (NereusSDR is in-process; no SmartSDR wire); (3) GuardedSlider is reused from the existing `src/gui/widgets/GuardedSlider.h` port. Live-refresh wiring hooks the SpotTableModel's `rowsInserted` / `rowsRemoved` / `modelReset` signals + the DxccColorProvider's `importFinished` signal to a `refreshStats` lambda that walks the table model for unique callsigns / New DXCC / New bands counts and polls the seven ingest clients for the Active Sources count. cty.dat entry count uses `DxccColorProvider::entityCount()` (the worked-status entity count, which is the closest publicly exposed proxy for cty.dat rows); if a dedicated cty.dat row count is needed later the integrator can grow a `ctyEntityCount()` accessor. | "Display tab content (F4): two-column layout. LEFT column has eight stat blocks driven by SpotTableModel + DxccColorProvider (NereusSDR-native, replaces upstream's single Total Spots label) plus a red Clear All Spots button that calls `SpotModel::clear` + `SpotTableModel::clear` + emits `spotsClearedAll()`. RIGHT column ports every knob from upstream SpotSettingsDialog.cpp:38-270 verbatim with the same AppSettings keys + `settingsChanged()` emission contract + non-linear lifetime step table + GuardedSlider widget. The standalone upstream SpotSettingsDialog is retired in favour of this folded Display tab." |
+
+Companion test file `tests/tst_spothub_dialog_smoke.cpp` extension
+(not listed in Bucket A, same precedent as F1 / F2 / F3). Seven
+new tests pinning the F4 contract: `displayTabHasStatBlocks` (all
+8 stat labels findable by objectName), `displayTabHasLevelsSlider`
+(Levels / Position / Font Size / BG Opacity sliders findable +
+range check), `displayTabHasLifetimeSlider` (lifetime slider
+findable + range matches the 45-step non-linear table),
+`displayTabHasOverrideColorButton` (Spots / Memories / Override
+Colors / Override BG / Auto toggle buttons + both color swatches
+findable), `displayTabHasClearAllSpotsButton` (the red Clear All
+Spots button is present and labeled "Clear"),
+`clearAllButtonEmitsSignal` (clicking it emits
+`spotsClearedAll()` once via QSignalSpy), and
+`knobChangeEmitsSettingsChanged` (changing the Levels slider
+emits `settingsChanged()` via QSignalSpy). All 28 tests pass (3
+F1 + 12 F2 + 6 F3 + 7 F4).
+
 ---
 
 ## Bucket B — False AetherSDR citations (126 files)

@@ -5,23 +5,35 @@
 //
 // NereusSDR - SpotHubDialog tab-strip smoke tests
 //
-// Phase 3J-2 Task F1 + F2 + F3. Pins the contract that SpotHubDialog
-// constructs successfully when handed all 6 spot-ingest clients
-// + the SpotModel + the DxccColorProvider, that its top-level
-// QTabWidget exposes exactly 9 tabs, that the tab labels appear
-// in AetherSDR's upstream order (Cluster, RBN, WSJT-X,
-// SpotCollector, POTA, FreeDV, PSK Reporter, Spot List, Display),
-// and (F2) that each per-source tab carries the uniform template:
-// connection-control widgets, auto-start toggle, start/stop button,
-// status line, and a raw-event console. WSJT-X carries the three
-// filter checkboxes and four color picker buttons. PSK Reporter
-// is NereusSDR-native and uses the same uniform shape.
+// Phase 3J-2 Task F1 + F2 + F3 + F4. Pins the contract that
+// SpotHubDialog constructs successfully when handed all 6
+// spot-ingest clients + the SpotModel + the DxccColorProvider,
+// that its top-level QTabWidget exposes exactly 9 tabs, that the
+// tab labels appear in AetherSDR's upstream order (Cluster, RBN,
+// WSJT-X, SpotCollector, POTA, FreeDV, PSK Reporter, Spot List,
+// Display), and (F2) that each per-source tab carries the uniform
+// template: connection-control widgets, auto-start toggle,
+// start/stop button, status line, and a raw-event console. WSJT-X
+// carries the three filter checkboxes and four color picker
+// buttons. PSK Reporter is NereusSDR-native and uses the same
+// uniform shape.
 //
 // F3 extends the contract with the Spot List tab: a QTableView
 // bound to BandFilterProxy(SpotTableModel), a row of 12 band-filter
 // pill buttons (160m..2m), a row of 7 source-filter pill buttons
 // (DX / RBN / JT / COL / POT / FDR / PSK), and a Clear button.
 // Row double-click on a populated table emits tuneRequested(double).
+//
+// F4 extends the contract with the Display tab: a left column of
+// 8 stat blocks (Total Spots / Unique Callsigns / Active Sources /
+// cty.dat entries / ADIF QSOs / DXCC entities / New DXCC / New
+// bands), a red "Clear All Spots" button (emits spotsClearedAll),
+// and a right column of knobs ported verbatim from AetherSDR's
+// standalone SpotSettingsDialog (Spots toggle / Memories toggle /
+// Levels slider / Position slider / Font Size slider / Spot
+// Lifetime slider / Override Colors toggle + swatch / Override BG
+// + Auto toggles + swatch / BG Opacity slider). Every knob change
+// writes to AppSettings and emits settingsChanged().
 
 #include <QtTest>
 #include <QTabWidget>
@@ -81,6 +93,16 @@ private slots:
     void spotListBandPillTogglesProxyFilter();
     void spotListSourcePillTogglesProxyFilter();
     void doubleClickOnSpotRowEmitsTuneRequested();
+
+    // F4: Display tab (stat blocks + Clear All Spots + knobs from
+    // AetherSDR's standalone SpotSettingsDialog folded inline).
+    void displayTabHasStatBlocks();
+    void displayTabHasLevelsSlider();
+    void displayTabHasLifetimeSlider();
+    void displayTabHasOverrideColorButton();
+    void displayTabHasClearAllSpotsButton();
+    void clearAllButtonEmitsSignal();
+    void knobChangeEmitsSettingsChanged();
 };
 
 static SpotHubDialog* makeDialog() {
@@ -361,6 +383,105 @@ void TestSpotHubDialogSmoke::doubleClickOnSpotRowEmitsTuneRequested() {
     emit table->doubleClicked(idx);
     QCOMPARE(spy.count(), 1);
     QCOMPARE(spy.at(0).at(0).toDouble(), 14.025);
+    delete dlg;
+}
+
+// ── F4: Display tab ────────────────────────────────────────────────
+
+void TestSpotHubDialogSmoke::displayTabHasStatBlocks() {
+    auto* dlg = makeDialog();
+    // Eight stat blocks per the F4 design (Section 7 of design doc).
+    // Each is a QLabel whose objectName is fixed for the test harness.
+    static const char* names[] = {
+        "displayStatTotalSpots",
+        "displayStatUniqueCallsigns",
+        "displayStatActiveSources",
+        "displayStatCtyDatEntries",
+        "displayStatAdifQsos",
+        "displayStatDxccEntities",
+        "displayStatNewDxcc",
+        "displayStatNewBands",
+    };
+    for (const char* n : names) {
+        QVERIFY2(dlg->findChild<QLabel*>(n) != nullptr,
+                 qPrintable(QString("missing stat block: %1").arg(n)));
+    }
+    delete dlg;
+}
+
+void TestSpotHubDialogSmoke::displayTabHasLevelsSlider() {
+    auto* dlg = makeDialog();
+    auto* levels = dlg->findChild<QSlider*>("displayLevelsSlider");
+    QVERIFY(levels != nullptr);
+    QCOMPARE(levels->minimum(), 1);
+    QCOMPARE(levels->maximum(), 10);
+    auto* position = dlg->findChild<QSlider*>("displayPositionSlider");
+    QVERIFY(position != nullptr);
+    QCOMPARE(position->minimum(), 0);
+    QCOMPARE(position->maximum(), 100);
+    auto* fontSize = dlg->findChild<QSlider*>("displayFontSizeSlider");
+    QVERIFY(fontSize != nullptr);
+    QCOMPARE(fontSize->minimum(), 8);
+    QCOMPARE(fontSize->maximum(), 32);
+    auto* bgOpacity = dlg->findChild<QSlider*>("displayBgOpacitySlider");
+    QVERIFY(bgOpacity != nullptr);
+    QCOMPARE(bgOpacity->minimum(), 0);
+    QCOMPARE(bgOpacity->maximum(), 100);
+    delete dlg;
+}
+
+void TestSpotHubDialogSmoke::displayTabHasLifetimeSlider() {
+    auto* dlg = makeDialog();
+    auto* life = dlg->findChild<QSlider*>("displayLifetimeSlider");
+    QVERIFY(life != nullptr);
+    // Non-linear lifetime steps: 10s..55s (5s steps) = 10 entries,
+    // 5min..55min (5min steps) = 11 entries, 1hr..24hr (1hr steps)
+    // = 24 entries. Total = 45. Range minimum is 0 (index-based).
+    QCOMPARE(life->minimum(), 0);
+    QCOMPARE(life->maximum(), 10 + 11 + 24 - 1);
+    delete dlg;
+}
+
+void TestSpotHubDialogSmoke::displayTabHasOverrideColorButton() {
+    auto* dlg = makeDialog();
+    QVERIFY(dlg->findChild<QPushButton*>("displaySpotsToggle") != nullptr);
+    QVERIFY(dlg->findChild<QPushButton*>("displayMemoriesToggle") != nullptr);
+    QVERIFY(dlg->findChild<QPushButton*>("displayOverrideColorsToggle") != nullptr);
+    QVERIFY(dlg->findChild<QPushButton*>("displayColorSwatch") != nullptr);
+    QVERIFY(dlg->findChild<QPushButton*>("displayOverrideBgToggle") != nullptr);
+    QVERIFY(dlg->findChild<QPushButton*>("displayOverrideBgAutoToggle") != nullptr);
+    QVERIFY(dlg->findChild<QPushButton*>("displayBgColorSwatch") != nullptr);
+    delete dlg;
+}
+
+void TestSpotHubDialogSmoke::displayTabHasClearAllSpotsButton() {
+    auto* dlg = makeDialog();
+    auto* clearBtn = dlg->findChild<QPushButton*>("displayClearAllSpotsBtn");
+    QVERIFY(clearBtn != nullptr);
+    QVERIFY(clearBtn->text().contains("Clear", Qt::CaseInsensitive));
+    delete dlg;
+}
+
+void TestSpotHubDialogSmoke::clearAllButtonEmitsSignal() {
+    auto* dlg = makeDialog();
+    auto* clearBtn = dlg->findChild<QPushButton*>("displayClearAllSpotsBtn");
+    QVERIFY(clearBtn != nullptr);
+    QSignalSpy spy(dlg, &SpotHubDialog::spotsClearedAll);
+    clearBtn->click();
+    QCOMPARE(spy.count(), 1);
+    delete dlg;
+}
+
+void TestSpotHubDialogSmoke::knobChangeEmitsSettingsChanged() {
+    auto* dlg = makeDialog();
+    auto* levels = dlg->findChild<QSlider*>("displayLevelsSlider");
+    QVERIFY(levels != nullptr);
+    QSignalSpy spy(dlg, &SpotHubDialog::settingsChanged);
+    // Toggle the levels slider away from its current value to trigger
+    // a value change. Choose a known-good value within the 1..10 range.
+    int newVal = (levels->value() == 5) ? 4 : 5;
+    levels->setValue(newVal);
+    QVERIFY(spy.count() >= 1);
     delete dlg;
 }
 

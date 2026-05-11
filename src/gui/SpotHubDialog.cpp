@@ -68,16 +68,53 @@
 //                                    <source> for source pills
 //                                    (NereusSDR-native). AI tooling:
 //                                    Anthropic Claude Code.
+//   2026-05-11  J.J. Boyd / KG4VCF  Phase 3J-2 Task F4. Display tab
+//                                    content. Folds AetherSDR's
+//                                    standalone
+//                                    `src/gui/SpotSettingsDialog.{h,cpp}
+//                                    [@0cd4559]` into the Display
+//                                    tab. Two columns: LEFT 8 stat
+//                                    blocks + red Clear All Spots
+//                                    button; RIGHT all knobs from
+//                                    upstream SpotSettingsDialog
+//                                    (Spots / Memories toggles,
+//                                    Levels / Position / Font Size /
+//                                    Lifetime sliders, Override
+//                                    Colors / Override BG / Auto
+//                                    toggles, two color swatch
+//                                    pickers, BG Opacity slider).
+//                                    Each knob change writes to
+//                                    AppSettings (verbatim keys
+//                                    from upstream
+//                                    `SpotSettingsDialog.cpp:22-37
+//                                    [@0cd4559]`) and emits
+//                                    `settingsChanged()`. Clear
+//                                    button calls `SpotModel::clear()`
+//                                    and emits `spotsClearedAll()`.
+//                                    GuardedSlider is reused from
+//                                    `src/gui/widgets/GuardedSlider.h`
+//                                    (already ported from upstream
+//                                    `src/gui/GuardedSlider.h
+//                                    [@0cd4559]`). Non-linear
+//                                    lifetime steps (10s..55s in 5s,
+//                                    5min..55min in 5min, 1hr..24hr
+//                                    in 1hr; 45 indices total)
+//                                    preserved verbatim from upstream
+//                                    `:146-178`. AI tooling:
+//                                    Anthropic Claude Code.
 
 #include "SpotHubDialog.h"
 
 #include "core/AppSettings.h"
 #include "core/DxClusterClient.h"
+#include "core/DxccColorProvider.h"
+#include "core/DxSpot.h"
 #include "core/FreeDVReporterClient.h"
 #include "core/PotaClient.h"
 #include "core/PskReporterClient.h"
 #include "core/SpotCollectorClient.h"
 #include "core/WsjtxClient.h"
+#include "gui/widgets/GuardedSlider.h"
 #include "models/BandFilterProxy.h"
 #include "models/SpotModel.h"
 #include "models/SpotTableModel.h"
@@ -94,11 +131,15 @@
 #include <QMetaObject>
 #include <QPlainTextEdit>
 #include <QPushButton>
+#include <QSet>
 #include <QSlider>
 #include <QSpinBox>
 #include <QTabWidget>
 #include <QTableView>
 #include <QVBoxLayout>
+#include <QVector>
+
+#include <cmath>
 
 namespace NereusSDR {
 
@@ -1563,14 +1604,499 @@ void SpotHubDialog::buildSpotListTab(QTabWidget* tabs)
     tabs->addTab(page, "Spot List");
 }
 
-// F4 stub - Display tab. F4 (Task F4) fills in the DXCC
-// color-coding controls + global spot rendering toggles
-// (font size, overlay levels, override colors, etc.).
+// Display tab - F4. Two-column layout. LEFT (NereusSDR-native): 8
+// live stat blocks driven by SpotTableModel + DxccColorProvider
+// counts, with a red "Clear All Spots" button at the bottom that
+// calls SpotModel::clear() and emits spotsClearedAll(). RIGHT
+// (verbatim port): all knobs from AetherSDR
+// src/gui/SpotSettingsDialog.cpp:38-292 [@0cd4559] (Spots /
+// Memories toggles + Levels / Position / Font Size / Spot Lifetime
+// sliders + Override Colors / Override Background + Auto +
+// swatches + BG Opacity slider). Every knob change writes to the
+// upstream AppSettings keys (`SpotSettingsDialog.cpp:22-37
+// [@0cd4559]`) and emits settingsChanged() so MainWindow can
+// refresh the live spectrum spot overlay.
 void SpotHubDialog::buildDisplayTab(QTabWidget* tabs)
 {
     auto* page = new QWidget;
-    auto* lay = new QVBoxLayout(page);
-    lay->addWidget(new QLabel("Display tab content lands in Task F4.", page));
+    auto* root = new QHBoxLayout(page);
+    root->setSpacing(12);
+
+    auto& s = AppSettings::instance();
+
+    // ── LEFT column: stat blocks + Clear All Spots ────────────────
+    // NereusSDR-native: upstream's standalone dialog had a single
+    // "Total Spots" line at `SpotSettingsDialog.cpp:272-276
+    // [@0cd4559]`. The Display tab expands this to 8 stat blocks
+    // reading live from SpotTableModel + DxccColorProvider so the
+    // operator sees a consolidated view across all ingest sources.
+    auto* leftCol = new QVBoxLayout;
+    leftCol->setSpacing(4);
+
+    auto* statsTitle = new QLabel("Statistics");
+    statsTitle->setStyleSheet("QLabel { color: #00b4d8; font-weight: bold; }");
+    leftCol->addWidget(statsTitle);
+
+    auto makeStatRow = [leftCol](const QString& label, const QString& objName) -> QLabel* {
+        auto* row = new QHBoxLayout;
+        row->setSpacing(6);
+        auto* lbl = new QLabel(label + ":");
+        lbl->setStyleSheet("QLabel { color: #808890; }");
+        lbl->setMinimumWidth(120);
+        row->addWidget(lbl);
+        auto* value = new QLabel("0");
+        value->setObjectName(objName);
+        value->setStyleSheet("QLabel { color: #c8d8e8; font-weight: bold; }");
+        row->addWidget(value);
+        row->addStretch();
+        leftCol->addLayout(row);
+        return value;
+    };
+
+    m_statTotalSpots      = makeStatRow("Total Spots",      "displayStatTotalSpots");
+    m_statUniqueCallsigns = makeStatRow("Unique Callsigns", "displayStatUniqueCallsigns");
+    m_statActiveSources   = makeStatRow("Active Sources",   "displayStatActiveSources");
+    m_statCtyDatEntries   = makeStatRow("cty.dat entries",  "displayStatCtyDatEntries");
+    m_statAdifQsos        = makeStatRow("ADIF QSOs",        "displayStatAdifQsos");
+    m_statDxccEntities    = makeStatRow("DXCC entities",    "displayStatDxccEntities");
+    m_statNewDxcc         = makeStatRow("New DXCC in feed", "displayStatNewDxcc");
+    m_statNewBands        = makeStatRow("New bands in feed","displayStatNewBands");
+
+    leftCol->addStretch();
+
+    // Red "Clear All Spots" button. From upstream
+    // SpotSettingsDialog.cpp:281-292 [@0cd4559] but colored red per
+    // F4 spec and emitting spotsClearedAll() so MainWindow can
+    // propagate the clear to the live spectrum overlay.
+    auto* clearAllBtn = new QPushButton("Clear All Spots");
+    clearAllBtn->setObjectName("displayClearAllSpotsBtn");
+    clearAllBtn->setFixedHeight(28);
+    clearAllBtn->setStyleSheet(
+        "QPushButton { background: #b03030; color: white; font-weight: bold; "
+        "border: 1px solid #802020; padding: 4px 10px; border-radius: 3px; }"
+        "QPushButton:hover { background: #c84040; }"
+        "QPushButton:pressed { background: #902020; }");
+    connect(clearAllBtn, &QPushButton::clicked, this, [this] {
+        if (m_spotModel) {
+            m_spotModel->clear();
+        }
+        if (m_spotTableModel) {
+            m_spotTableModel->clear();
+        }
+        if (m_statTotalSpots) {
+            m_statTotalSpots->setText("0");
+        }
+        if (m_statUniqueCallsigns) {
+            m_statUniqueCallsigns->setText("0");
+        }
+        if (m_statNewDxcc) {
+            m_statNewDxcc->setText("0");
+        }
+        if (m_statNewBands) {
+            m_statNewBands->setText("0");
+        }
+        emit spotsClearedAll();
+    });
+    leftCol->addWidget(clearAllBtn);
+
+    root->addLayout(leftCol, 1);
+
+    // ── RIGHT column: knobs ───────────────────────────────────────
+    // Port verbatim from AetherSDR
+    // src/gui/SpotSettingsDialog.cpp:38-270 [@0cd4559]. The
+    // standalone upstream dialog is retired in favour of this
+    // folded Display tab; the knob grid layout, stylesheets,
+    // AppSettings keys, and non-linear lifetime step table are
+    // preserved byte-for-byte.
+
+    // From AetherSDR SpotSettingsDialog.cpp:21-37 [@0cd4559]:
+    // load persisted state for the knobs.
+    bool spotsEnabled       = s.value("IsSpotsEnabled", "True").toString() == "True";
+    bool memoriesEnabled    = s.value("IsMemorySpotsEnabled", "False").toString() == "True";
+    bool overrideColors     = s.value("IsSpotsOverrideColorsEnabled", "False").toString() == "True";
+    bool overrideBg         = s.value("IsSpotsOverrideBackgroundColorsEnabled", "True").toString() == "True";
+    bool overrideBgAutoMode = s.value("IsSpotsOverrideToAutoBackgroundColorEnabled", "True").toString() == "True";
+    int  levelsVal   = s.value("SpotsMaxLevel", 3).toInt();
+    int  positionVal = s.value("SpotsStartingHeightPercentage", 50).toInt();
+    int  fontSizeVal = s.value("SpotFontSize", 16).toInt();
+    QColor spotColor(s.value("SpotsOverrideColor", "#FFFF00").toString());
+    QColor bgColor  (s.value("SpotsOverrideBgColor", "#000000").toString());
+    int  bgOpacityVal = s.value("SpotsBackgroundOpacity", 48).toInt();
+    // Migrate from old minutes key to new seconds key. Preserved
+    // verbatim from upstream SpotSettingsDialog.cpp:34-37 [@0cd4559].
+    int lifetimeSec = s.value("DxClusterSpotLifetimeSec", 0).toInt();
+    if (lifetimeSec <= 0) {
+        lifetimeSec = s.value("DxClusterSpotLifetime", 30).toInt() * 60;
+    }
+
+    auto* rightCol = new QVBoxLayout;
+    rightCol->setSpacing(4);
+
+    auto* knobsTitle = new QLabel("Spot Settings");
+    knobsTitle->setStyleSheet("QLabel { color: #00b4d8; font-weight: bold; }");
+    rightCol->addWidget(knobsTitle);
+
+    auto* grid = new QGridLayout;
+    grid->setColumnStretch(1, 1);
+    grid->setSpacing(4);
+    int row = 0;
+
+    auto save = [this](const QString& key, const QVariant& val) {
+        auto& settings = AppSettings::instance();
+        settings.setValue(key, val);
+        settings.save();
+        emit settingsChanged();
+    };
+
+    // Upstream stylesheet fragment for the green/red toggle pair.
+    // From SpotSettingsDialog.cpp:63-65 [@0cd4559].
+    static constexpr const char* kToggleStyle =
+        "QPushButton { background: #206030; color: white; "
+        "border: 1px solid #305040; padding: 3px; }"
+        "QPushButton:!checked { background: #603020; }";
+
+    // Spots: Enabled/Disabled. Upstream :57-71 [@0cd4559].
+    grid->addWidget(new QLabel("Spots:"), row, 0);
+    auto* spotsToggle = new QPushButton(spotsEnabled ? "Enabled" : "Disabled");
+    spotsToggle->setObjectName("displaySpotsToggle");
+    spotsToggle->setCheckable(true);
+    spotsToggle->setChecked(spotsEnabled);
+    spotsToggle->setFixedWidth(80);
+    spotsToggle->setStyleSheet(kToggleStyle);
+    connect(spotsToggle, &QPushButton::toggled, this,
+            [spotsToggle, save](bool on) {
+        spotsToggle->setText(on ? "Enabled" : "Disabled");
+        save("IsSpotsEnabled", on ? "True" : "False");
+    });
+    grid->addWidget(spotsToggle, row++, 1, Qt::AlignLeft);
+
+    // Memories: Enabled/Disabled. Upstream :74-89 [@0cd4559].
+    grid->addWidget(new QLabel("Memories:"), row, 0);
+    auto* memoriesToggle = new QPushButton(memoriesEnabled ? "Enabled" : "Disabled");
+    memoriesToggle->setObjectName("displayMemoriesToggle");
+    memoriesToggle->setCheckable(true);
+    memoriesToggle->setChecked(memoriesEnabled);
+    memoriesToggle->setFixedWidth(80);
+    memoriesToggle->setToolTip(
+        "Show radio memory channels as a spot-like feed on the panadapter.");
+    memoriesToggle->setStyleSheet(kToggleStyle);
+    connect(memoriesToggle, &QPushButton::toggled, this,
+            [memoriesToggle, save](bool on) {
+        memoriesToggle->setText(on ? "Enabled" : "Disabled");
+        save("IsMemorySpotsEnabled", on ? "True" : "False");
+    });
+    grid->addWidget(memoriesToggle, row++, 1, Qt::AlignLeft);
+
+    // Levels slider. Upstream :91-106 [@0cd4559].
+    grid->addWidget(new QLabel("Levels:"), row, 0);
+    auto* levelsRow = new QHBoxLayout;
+    auto* levelsSlider = new GuardedSlider(Qt::Horizontal);
+    levelsSlider->setObjectName("displayLevelsSlider");
+    levelsSlider->setRange(1, 10);
+    levelsSlider->setValue(levelsVal);
+    auto* levelsValueLbl = new QLabel(QString::number(levelsVal));
+    levelsValueLbl->setFixedWidth(24);
+    levelsValueLbl->setAlignment(Qt::AlignRight);
+    levelsRow->addWidget(levelsSlider);
+    levelsRow->addWidget(levelsValueLbl);
+    connect(levelsSlider, &QSlider::valueChanged, this,
+            [levelsValueLbl, save](int v) {
+        levelsValueLbl->setText(QString::number(v));
+        save("SpotsMaxLevel", QString::number(v));
+    });
+    grid->addLayout(levelsRow, row++, 1);
+
+    // Position slider. Upstream :108-123 [@0cd4559].
+    grid->addWidget(new QLabel("Position:"), row, 0);
+    auto* posRow = new QHBoxLayout;
+    auto* positionSlider = new GuardedSlider(Qt::Horizontal);
+    positionSlider->setObjectName("displayPositionSlider");
+    positionSlider->setRange(0, 100);
+    positionSlider->setValue(positionVal);
+    auto* positionValueLbl = new QLabel(QString::number(positionVal));
+    positionValueLbl->setFixedWidth(24);
+    positionValueLbl->setAlignment(Qt::AlignRight);
+    posRow->addWidget(positionSlider);
+    posRow->addWidget(positionValueLbl);
+    connect(positionSlider, &QSlider::valueChanged, this,
+            [positionValueLbl, save](int v) {
+        positionValueLbl->setText(QString::number(v));
+        save("SpotsStartingHeightPercentage", QString::number(v));
+    });
+    grid->addLayout(posRow, row++, 1);
+
+    // Font Size slider. Upstream :125-140 [@0cd4559].
+    grid->addWidget(new QLabel("Font Size:"), row, 0);
+    auto* fontRow = new QHBoxLayout;
+    auto* fontSizeSlider = new GuardedSlider(Qt::Horizontal);
+    fontSizeSlider->setObjectName("displayFontSizeSlider");
+    fontSizeSlider->setRange(8, 32);
+    fontSizeSlider->setValue(fontSizeVal);
+    auto* fontSizeValueLbl = new QLabel(QString::number(fontSizeVal));
+    fontSizeValueLbl->setFixedWidth(24);
+    fontSizeValueLbl->setAlignment(Qt::AlignRight);
+    fontRow->addWidget(fontSizeSlider);
+    fontRow->addWidget(fontSizeValueLbl);
+    connect(fontSizeSlider, &QSlider::valueChanged, this,
+            [fontSizeValueLbl, save](int v) {
+        fontSizeValueLbl->setText(QString::number(v));
+        save("SpotFontSize", QString::number(v));
+    });
+    grid->addLayout(fontRow, row++, 1);
+
+    // Spot Lifetime slider (non-linear). Upstream :142-178
+    // [@0cd4559]. Steps: 10..55s (5s), 5..55min (5min), 1..24hr
+    // (1hr); 45 indices total.
+    grid->addWidget(new QLabel("Spot Lifetime:"), row, 0);
+    auto* lifeRow = new QHBoxLayout;
+
+    static QVector<int> lifeSteps;
+    if (lifeSteps.isEmpty()) {
+        for (int sec = 10; sec <= 55; sec += 5) {
+            lifeSteps.append(sec);
+        }
+        for (int m = 5; m <= 55; m += 5) {
+            lifeSteps.append(m * 60);
+        }
+        for (int h = 1; h <= 24; h++) {
+            lifeSteps.append(h * 3600);
+        }
+    }
+    auto formatLifetime = [](int secs) -> QString {
+        if (secs < 60) {
+            return QString("%1 sec").arg(secs);
+        }
+        if (secs < 3600) {
+            return QString("%1 min%2").arg(secs / 60).arg(secs / 60 == 1 ? "" : "s");
+        }
+        int hrs = secs / 3600;
+        if (hrs == 24) {
+            return QStringLiteral("1 day");
+        }
+        return QString("%1 hr%2").arg(hrs).arg(hrs == 1 ? "" : "s");
+    };
+    // Find closest step index for the persisted seconds value.
+    int lifeIdx = 0;
+    for (int i = 0; i < lifeSteps.size(); ++i) {
+        if (std::abs(lifeSteps[i] - lifetimeSec) < std::abs(lifeSteps[lifeIdx] - lifetimeSec)) {
+            lifeIdx = i;
+        }
+    }
+
+    auto* lifetimeSlider = new GuardedSlider(Qt::Horizontal);
+    lifetimeSlider->setObjectName("displayLifetimeSlider");
+    lifetimeSlider->setRange(0, lifeSteps.size() - 1);
+    lifetimeSlider->setValue(lifeIdx);
+    auto* lifetimeValueLbl = new QLabel(formatLifetime(lifeSteps[lifeIdx]));
+    lifetimeValueLbl->setFixedWidth(90);
+    lifetimeValueLbl->setAlignment(Qt::AlignRight);
+    lifeRow->addWidget(lifetimeSlider);
+    lifeRow->addWidget(lifetimeValueLbl);
+    connect(lifetimeSlider, &QSlider::valueChanged, this,
+            [save, lifetimeValueLbl, formatLifetime](int idx) {
+        int secs = lifeSteps.value(idx, 1800);
+        lifetimeValueLbl->setText(formatLifetime(secs));
+        save("DxClusterSpotLifetimeSec", QString::number(secs));
+    });
+    grid->addLayout(lifeRow, row++, 1);
+
+    // Override Colors + color swatch. Upstream :180-210 [@0cd4559].
+    grid->addWidget(new QLabel("Override Colors:"), row, 0);
+    auto* colorRow = new QHBoxLayout;
+    auto* overrideColorsToggle = new QPushButton(overrideColors ? "Enabled" : "Disabled");
+    overrideColorsToggle->setObjectName("displayOverrideColorsToggle");
+    overrideColorsToggle->setCheckable(true);
+    overrideColorsToggle->setChecked(overrideColors);
+    overrideColorsToggle->setFixedWidth(80);
+    overrideColorsToggle->setStyleSheet(kToggleStyle);
+    connect(overrideColorsToggle, &QPushButton::toggled, this,
+            [overrideColorsToggle, save](bool on) {
+        overrideColorsToggle->setText(on ? "Enabled" : "Disabled");
+        save("IsSpotsOverrideColorsEnabled", on ? "True" : "False");
+    });
+    colorRow->addWidget(overrideColorsToggle);
+
+    auto* colorSwatch = new QPushButton;
+    colorSwatch->setObjectName("displayColorSwatch");
+    colorSwatch->setFixedSize(24, 24);
+    colorSwatch->setStyleSheet(swatchStyle(spotColor));
+    connect(colorSwatch, &QPushButton::clicked, this,
+            [this, colorSwatch, save] {
+        QColor current(AppSettings::instance().value("SpotsOverrideColor", "#FFFF00").toString());
+        QColor c = QColorDialog::getColor(current, this, "Spot Text Color");
+        if (c.isValid()) {
+            colorSwatch->setStyleSheet(swatchStyle(c));
+            save("SpotsOverrideColor", c.name());
+        }
+    });
+    colorRow->addWidget(colorSwatch);
+    colorRow->addStretch();
+    grid->addLayout(colorRow, row++, 1);
+
+    // Override Background + Auto + swatch. Upstream :212-252
+    // [@0cd4559].
+    grid->addWidget(new QLabel("Override Background:"), row, 0);
+    auto* bgRow = new QHBoxLayout;
+    auto* overrideBgToggle = new QPushButton("Enabled");
+    overrideBgToggle->setObjectName("displayOverrideBgToggle");
+    overrideBgToggle->setCheckable(true);
+    overrideBgToggle->setChecked(overrideBg);
+    overrideBgToggle->setFixedWidth(70);
+    overrideBgToggle->setStyleSheet(kToggleStyle);
+    auto* overrideBgAutoToggle = new QPushButton("Auto");
+    overrideBgAutoToggle->setObjectName("displayOverrideBgAutoToggle");
+    overrideBgAutoToggle->setCheckable(true);
+    overrideBgAutoToggle->setChecked(overrideBgAutoMode);
+    overrideBgAutoToggle->setFixedWidth(50);
+    overrideBgAutoToggle->setStyleSheet(kToggleStyle);
+    connect(overrideBgToggle, &QPushButton::toggled, this,
+            [save](bool on) {
+        save("IsSpotsOverrideBackgroundColorsEnabled", on ? "True" : "False");
+    });
+    connect(overrideBgAutoToggle, &QPushButton::toggled, this,
+            [save](bool on) {
+        save("IsSpotsOverrideToAutoBackgroundColorEnabled", on ? "True" : "False");
+    });
+    bgRow->addWidget(overrideBgToggle);
+    bgRow->addWidget(overrideBgAutoToggle);
+
+    auto* bgColorSwatch = new QPushButton;
+    bgColorSwatch->setObjectName("displayBgColorSwatch");
+    bgColorSwatch->setFixedSize(24, 24);
+    bgColorSwatch->setStyleSheet(swatchStyle(bgColor));
+    connect(bgColorSwatch, &QPushButton::clicked, this,
+            [this, bgColorSwatch, save] {
+        QColor current(AppSettings::instance().value("SpotsOverrideBgColor", "#000000").toString());
+        QColor c = QColorDialog::getColor(current, this, "Spot Background Color");
+        if (c.isValid()) {
+            bgColorSwatch->setStyleSheet(swatchStyle(c));
+            save("SpotsOverrideBgColor", c.name());
+        }
+    });
+    bgRow->addWidget(bgColorSwatch);
+    bgRow->addStretch();
+    grid->addLayout(bgRow, row++, 1);
+
+    // Background Opacity slider. Upstream :254-270 [@0cd4559].
+    grid->addWidget(new QLabel("Background Opacity:"), row, 0);
+    auto* opacRow = new QHBoxLayout;
+    auto* bgOpacitySlider = new GuardedSlider(Qt::Horizontal);
+    bgOpacitySlider->setObjectName("displayBgOpacitySlider");
+    bgOpacitySlider->setRange(0, 100);
+    bgOpacitySlider->setValue(bgOpacityVal);
+    auto* bgOpacityValueLbl = new QLabel(QString::number(bgOpacityVal));
+    bgOpacityValueLbl->setFixedWidth(24);
+    bgOpacityValueLbl->setAlignment(Qt::AlignRight);
+    opacRow->addWidget(bgOpacitySlider);
+    opacRow->addWidget(bgOpacityValueLbl);
+    connect(bgOpacitySlider, &QSlider::valueChanged, this,
+            [bgOpacityValueLbl, save](int v) {
+        bgOpacityValueLbl->setText(QString::number(v));
+        save("SpotsBackgroundOpacity", QString::number(v));
+    });
+    grid->addLayout(opacRow, row++, 1);
+
+    rightCol->addLayout(grid);
+    rightCol->addStretch();
+
+    root->addLayout(rightCol, 1);
+
+    // ── Live stat refresh wiring (NereusSDR-native) ───────────────
+    // Refresh the LEFT-column stat blocks whenever the table model
+    // emits a row change or the DxccColorProvider finishes an
+    // import. The unique-callsign count is computed by walking the
+    // SpotTableModel's source spots (cheap; bounded at 500). The
+    // Active Sources counter polls the seven ingest clients'
+    // isConnected / isListening / isPolling methods. New DXCC and
+    // New bands counts walk the table model's spots and ask the
+    // DxccColorProvider for the status of each.
+    auto refreshStats = [this] {
+        if (m_statTotalSpots && m_spotTableModel) {
+            m_statTotalSpots->setText(QString::number(m_spotTableModel->rowCount()));
+        }
+        if (m_statUniqueCallsigns && m_spotTableModel) {
+            QSet<QString> unique;
+            const int n = m_spotTableModel->rowCount();
+            for (int r = 0; r < n; ++r) {
+                QModelIndex idx = m_spotTableModel->index(r, SpotTableModel::ColDxCall);
+                unique.insert(m_spotTableModel->data(idx, Qt::DisplayRole).toString().trimmed().toUpper());
+            }
+            unique.remove(QString());
+            m_statUniqueCallsigns->setText(QString::number(unique.size()));
+        }
+        if (m_statActiveSources) {
+            int active = 0;
+            constexpr int kTotal = 7;
+            if (m_clusterClient       && m_clusterClient->isConnected())      ++active;
+            if (m_rbnClient           && m_rbnClient->isConnected())          ++active;
+            if (m_wsjtxClient         && m_wsjtxClient->isListening())        ++active;
+            if (m_spotCollectorClient && m_spotCollectorClient->isListening()) ++active;
+            if (m_potaClient          && m_potaClient->isPolling())           ++active;
+            if (m_freedvClient        && m_freedvClient->isConnected())       ++active;
+            if (m_pskClient           && m_pskClient->isListening())          ++active;
+            m_statActiveSources->setText(QString("%1/%2").arg(active).arg(kTotal));
+        }
+        if (m_statCtyDatEntries) {
+            // CtyDatParser is held inside DxccColorProvider but not
+            // publicly exposed; the integrator's `entityCount()`
+            // currently reports DxccWorkedStatus entities (loaded
+            // entities, not cty.dat rows). Use the entityCount
+            // method as the closest proxy and document that this
+            // tracks DXCC entities resolved by the worked-status
+            // table, not raw cty.dat rows. If a dedicated cty.dat
+            // count is needed later, the integrator can grow a
+            // ctyEntityCount accessor.
+            int n = m_dxccProvider ? m_dxccProvider->entityCount() : 0;
+            m_statCtyDatEntries->setText(QString::number(n));
+        }
+        if (m_statAdifQsos) {
+            int n = m_dxccProvider ? m_dxccProvider->qsoCount() : 0;
+            m_statAdifQsos->setText(QString::number(n));
+        }
+        if (m_statDxccEntities) {
+            int n = m_dxccProvider ? m_dxccProvider->entityCount() : 0;
+            m_statDxccEntities->setText(QString::number(n));
+        }
+        if ((m_statNewDxcc || m_statNewBands) && m_dxccProvider && m_spotTableModel) {
+            int newDxcc = 0;
+            int newBands = 0;
+            const int n = m_spotTableModel->rowCount();
+            for (int r = 0; r < n; ++r) {
+                QModelIndex callIdx = m_spotTableModel->index(r, SpotTableModel::ColDxCall);
+                QModelIndex modeIdx = m_spotTableModel->index(r, SpotTableModel::ColMode);
+                QString call = m_spotTableModel->data(callIdx, Qt::DisplayRole).toString();
+                double freq = m_spotTableModel->freqAtRow(r);
+                QString mode = m_spotTableModel->data(modeIdx, Qt::DisplayRole).toString();
+                DxccStatus status = m_dxccProvider->statusForSpot(call, freq, mode);
+                if (status == DxccStatus::NewDxcc) {
+                    ++newDxcc;
+                } else if (status == DxccStatus::NewBand) {
+                    ++newBands;
+                }
+            }
+            if (m_statNewDxcc)  m_statNewDxcc->setText(QString::number(newDxcc));
+            if (m_statNewBands) m_statNewBands->setText(QString::number(newBands));
+        }
+    };
+
+    // Initial refresh + on-change refresh hooks. The table model
+    // emits rowsInserted / modelReset / rowsRemoved through the
+    // QAbstractItemModel base; wiring those keeps the stat blocks
+    // honest. nullptr-guarded for the test fixture path.
+    refreshStats();
+    if (m_spotTableModel) {
+        connect(m_spotTableModel, &QAbstractTableModel::rowsInserted, this,
+                [refreshStats] { refreshStats(); });
+        connect(m_spotTableModel, &QAbstractTableModel::rowsRemoved, this,
+                [refreshStats] { refreshStats(); });
+        connect(m_spotTableModel, &QAbstractTableModel::modelReset, this,
+                [refreshStats] { refreshStats(); });
+    }
+    if (m_dxccProvider) {
+        connect(m_dxccProvider, &DxccColorProvider::importFinished, this,
+                [refreshStats] { refreshStats(); });
+    }
+
     tabs->addTab(page, "Display");
 }
 
