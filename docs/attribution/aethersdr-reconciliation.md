@@ -543,6 +543,47 @@ button naming convention, and either the `*Connect*` (cluster/rbn)
 or `*Start*` (other) primary action button name). All 15 tests pass
 (3 F1 + 12 F2).
 
+### Phase 3J-2 Task F3 - SpotHubDialog Spot List tab
+
+Builds on F2 by replacing the F1 stub for `buildSpotListTab` with the
+merged 8-column QTableView bound to a `BandFilterProxy` wrapped
+around a dialog-owned `SpotTableModel`. The tab adds a row of 12
+band-filter pills (160m..2m), a row of 7 source-filter pills (DX /
+RBN / JT / COL / POT / FDR / PSK), a spot-count label, and a Clear
+button. Double-click on any row emits `tuneRequested(double)` for
+MainWindow to route to the active slice. Every ingest client's
+`spotReceived(DxSpot)` signal is wired to `m_spotTableModel->addSpot`
+so the table shows the cross-source merge.
+
+Ported from AetherSDR `src/gui/DxClusterDialog.cpp:1599-1717
+[@0cd4559]` (the `buildSpotListTab` function) with three NereusSDR-
+side divergences. Also extends `src/models/BandFilterProxy.{h,cpp}`
+with a `setSourceVisible(source, visible)` / `isSourceVisible`
+API mirroring the band filter; `filterAcceptsRow` now applies
+both band and source predicates with AND semantics.
+
+| NereusSDR file | AetherSDR counterpart | Evidence | Specific mod-history wording |
+|---|---|---|---|
+| `src/gui/SpotHubDialog.h` (F3 extension) | `src/gui/DxClusterDialog.h:200-209` | Adds three private member pointers (`m_spotTableModel`, `m_spotProxyModel`, `m_spotTable`) for the Spot List tab. Adds forward declarations for `QTableView`, `SpotTableModel`, `BandFilterProxy`. The existing `tuneRequested(double)` signal from F1 is reused. NereusSDR divergence: upstream pinned `m_spotModel` / `m_proxyModel` / `m_spotTable` to the Cluster tab only; in NereusSDR they aggregate all seven ingest clients. | "Spot List tab content (F3): three new member pointers (`m_spotTableModel`, `m_spotProxyModel`, `m_spotTable`) and forward declarations for `QTableView`, `SpotTableModel`, `BandFilterProxy`. NereusSDR-specific: the table model is fed by every ingest client (cross-source merge), not just Cluster as in upstream." |
+| `src/gui/SpotHubDialog.cpp` (F3 extension) | `src/gui/DxClusterDialog.cpp:1599-1717` | Replaces the F1 placeholder stub with the merged 8-column QTableView bound to a `BandFilterProxy(SpotTableModel)`. Column widths preserved verbatim from upstream `:1675-1682` (Time 50, Freq 80, DxCall 90, Mode 45, Comment 200, Spotter 80, Band 45, Source 55). Table stylesheet (`kSpotTableStyle` file-scope constant) preserved verbatim from upstream `:1652-1672`: dark `#0a0a14` background, cyan `#00b4d8` header text, `#1a3a5a` selection background, gridline `#1a2a3a`. Double-click handler at `:1688-1693` ported verbatim: `mapToSource` -> `freqAtRow(srcIdx.row())` -> `emit tuneRequested(freq)` if `freq > 0.0`. Bottom row (`:1697-1714`): spot count label connected to `rowsInserted` + Clear button calling `m_spotTableModel->clear()`. NereusSDR divergences: (1) band filter row uses 12 checkable `QPushButton` pills (`kFilterPillStyle`) instead of upstream's 11 `QCheckBox` controls; the extra pill is `2m` (upstream stopped at 6m even though SpotTableModel's `bandForFreq` already produces "2m"); (2) new source filter row with 7 pills (DX/RBN/JT/COL/POT/FDR/PSK) driving the new `BandFilterProxy::setSourceVisible` (NereusSDR-native); (3) every ingest client's `spotReceived(DxSpot)` is wired through a `wireClient` template-lambda into `m_spotTableModel->addSpot` so the table shows the cross-source merge (upstream only fed Cluster spots into it). AppSettings keys: `SpotBandFilter_<band>` preserved verbatim (defaults to `"True"`); `SpotSourceFilter_<label>` added per pill label (NereusSDR-native; defaults to `"True"`). Source-pill labels (DX/RBN/JT/COL/POT/FDR/PSK) map to the upstream source strings emitted by each client (`Cluster`/`RBN`/`WSJT-X`/`SpotCollector`/`POTA`/`FreeDV`/`PSK`) via the local `SourcePill { label, source }` struct. Adds new `kFilterPillStyle` and `kSpotTableStyle` file-scope `constexpr` stylesheet fragments. | "Spot List tab content (F3): replaces the F1 placeholder stub with the merged 8-column QTableView bound to BandFilterProxy(SpotTableModel). Column widths, table stylesheet, double-click handler, and bottom-row spot count + Clear button preserved verbatim from upstream. Three NereusSDR divergences: (1) band filters become 12 checkable QPushButton pills instead of 11 QCheckBoxes (adds 2m); (2) new source-filter pill row drives BandFilterProxy::setSourceVisible (NereusSDR-native); (3) all seven ingest clients feed spots into the table (upstream only fed Cluster). AppSettings keys: SpotBandFilter_<band> verbatim; SpotSourceFilter_<label> added (native)." |
+| `src/models/BandFilterProxy.h` (F3 extension) | n/a (NereusSDR-native extension) | Adds `setSourceVisible(source, visible)` / `isSourceVisible(source)` public API mirroring the band filter, plus the private `QSet<QString> m_hiddenSources`. AetherSDR upstream's `BandFilterProxy` filters bands only (`DxClusterDialog.h:62-75 [@0cd4559]`); source filtering is NereusSDR-specific because the F3 Spot List tab adds a source-filter pill row that upstream does not have. | "F3 extension: new `setSourceVisible` / `isSourceVisible` API mirrors band filter. NereusSDR-native, no AetherSDR equivalent (upstream BandFilterProxy filters bands only)." |
+| `src/models/BandFilterProxy.cpp` (F3 extension) | n/a (NereusSDR-native extension) | Implements `setSourceVisible` (toggles `m_hiddenSources` QSet membership + calls `invalidateFilter`), updates `filterAcceptsRow` to apply both band and source predicates with AND semantics. Empty band / source strings always show (matches upstream convention for unknown band values). Source column lookup uses `SpotTableModel::ColSource` DisplayRole. | "F3 extension: `setSourceVisible` toggles m_hiddenSources + invalidateFilter; filterAcceptsRow applies band AND source predicates with AND semantics. Empty source always shows. NereusSDR-native, no AetherSDR equivalent." |
+
+Companion test file `tests/tst_spothub_dialog_smoke.cpp` extension
+(not listed in Bucket A, same precedent as F1 / F2). Six new tests
+pinning the F3 contract: `spotListTabHasTableView` (table + Clear
+button + count label findable by objectName),
+`spotListTabHasTwelveBandPills` (12 band pills 160m..2m findable by
+`spotListBandPill_<band>`), `spotListTabHasSevenSourcePills` (7
+source pills DX/RBN/JT/COL/POT/FDR/PSK findable by
+`spotListSourcePill_<label>`), `spotListBandPillTogglesProxyFilter`
+(toggling the 20m pill toggles `BandFilterProxy::isBandVisible("20m")`),
+`spotListSourcePillTogglesProxyFilter` (toggling the DX pill toggles
+`isSourceVisible("Cluster")`), and
+`doubleClickOnSpotRowEmitsTuneRequested` (adds a DxSpot at 14.025
+MHz, double-clicks the proxy row, and asserts `tuneRequested(14.025)`
+emits once via QSignalSpy). All 21 tests pass (3 F1 + 12 F2 + 6 F3).
+
 ---
 
 ## Bucket B — False AetherSDR citations (126 files)

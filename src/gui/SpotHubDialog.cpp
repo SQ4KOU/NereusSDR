@@ -35,6 +35,39 @@
 //                                    uses to assert content shape.
 //                                    AI tooling: Anthropic Claude
 //                                    Code.
+//   2026-05-11  J.J. Boyd / KG4VCF  Phase 3J-2 Task F3. Spot List
+//                                    tab. Port of AetherSDR
+//                                    `DxClusterDialog.cpp:1599-1717
+//                                    [@0cd4559]`: QTableView bound
+//                                    to BandFilterProxy(SpotTableModel)
+//                                    + filter row + bottom
+//                                    spot-count + Clear button +
+//                                    double-click emit
+//                                    tuneRequested(double).
+//                                    Wires every client's
+//                                    spotReceived(DxSpot) into the
+//                                    table model so the merged
+//                                    8-column view sees all sources.
+//                                    NereusSDR divergences from
+//                                    upstream: (1) band filters
+//                                    become checkable QPushButton
+//                                    "pills" instead of upstream
+//                                    QCheckBoxes (matches dialog
+//                                    pill aesthetic); (2) band list
+//                                    extends upstream's 11 (160m..
+//                                    6m) to 12 (160m..2m) so every
+//                                    band SpotTableModel can produce
+//                                    has a control; (3) adds a
+//                                    second row of 7 source pills
+//                                    (DX / RBN / JT / COL / POT /
+//                                    FDR / PSK) driving the new
+//                                    BandFilterProxy::setSourceVisible.
+//                                    AppSettings keys preserved:
+//                                    SpotBandFilter_<band> for band
+//                                    pills; new SpotSourceFilter_
+//                                    <source> for source pills
+//                                    (NereusSDR-native). AI tooling:
+//                                    Anthropic Claude Code.
 
 #include "SpotHubDialog.h"
 
@@ -45,6 +78,9 @@
 #include "core/PskReporterClient.h"
 #include "core/SpotCollectorClient.h"
 #include "core/WsjtxClient.h"
+#include "models/BandFilterProxy.h"
+#include "models/SpotModel.h"
+#include "models/SpotTableModel.h"
 
 #include <QCheckBox>
 #include <QColor>
@@ -52,6 +88,7 @@
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QHeaderView>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMetaObject>
@@ -60,6 +97,7 @@
 #include <QSlider>
 #include <QSpinBox>
 #include <QTabWidget>
+#include <QTableView>
 #include <QVBoxLayout>
 
 namespace NereusSDR {
@@ -105,6 +143,49 @@ constexpr const char* kConsoleStyle =
 constexpr const char* kCmdEditStyle =
     "QLineEdit { background: #1a1a2e; color: #c8d8e8; "
     "border: 1px solid #203040; padding: 3px; font-family: monospace; }";
+
+// F3 (NereusSDR-native). Pill buttons for the band + source filter
+// rows on the Spot List tab. Checked = pill lit (cyan accent), filter
+// passes that band/source. Unchecked = dim, filter hides it.
+constexpr const char* kFilterPillStyle =
+    "QPushButton {"
+    "  background: #1a1a2e;"
+    "  color: #808890;"
+    "  border: 1px solid #203040;"
+    "  border-radius: 9px;"
+    "  padding: 2px 8px;"
+    "  font-size: 11px;"
+    "  font-weight: bold;"
+    "  min-width: 24px;"
+    "}"
+    "QPushButton:checked {"
+    "  background: #00b4d8;"
+    "  color: #0f0f1a;"
+    "  border-color: #008ba8;"
+    "}"
+    "QPushButton:hover { border-color: #c8d8e8; }";
+
+constexpr const char* kSpotTableStyle =
+    "QTableView {"
+    "  background: #0a0a14;"
+    "  alternate-background-color: #0f0f1e;"
+    "  color: #c8d8e8;"
+    "  gridline-color: #1a2a3a;"
+    "  border: 1px solid #203040;"
+    "  font-size: 11px;"
+    "}"
+    "QTableView::item:selected {"
+    "  background: #1a3a5a;"
+    "  color: #e0f0ff;"
+    "}"
+    "QHeaderView::section {"
+    "  background: #1a1a2e;"
+    "  color: #00b4d8;"
+    "  border: 1px solid #203040;"
+    "  padding: 3px 6px;"
+    "  font-weight: bold;"
+    "  font-size: 11px;"
+    "}";
 
 QString swatchStyle(const QColor& c) {
     return QString(
@@ -1269,15 +1350,216 @@ void SpotHubDialog::buildPskTab(QTabWidget* tabs)
     tabs->addTab(page, "PSK Reporter");
 }
 
-// F3 stub - Spot List tab. F3 (Task F3) fills in the merged
-// 8-column table view (SpotTableModel + BandFilterProxy from Phase
-// 3J-2 Task D2) + band filter checkboxes + spot-count display +
-// clear-all button.
+// From AetherSDR src/gui/DxClusterDialog.cpp:1599-1717 [@0cd4559]
+// + NereusSDR Task F3 extensions documented below.
+//
+// Spot List tab: hosts the merged 8-column QTableView bound to a
+// BandFilterProxy wrapped around a SpotTableModel that aggregates
+// every source's spots. Top row: 12 band pills (160m..2m) + 7 source
+// pills (DX/RBN/JT/COL/POT/FDR/PSK). Bottom row: spot count + Clear.
+// Double-click on any row emits tuneRequested(double) for MainWindow
+// to forward to the active slice.
+//
+// NereusSDR divergences from upstream:
+//   (1) Upstream uses 11 QCheckBox band filters (160m..6m). F3
+//       widens to 12 (adds 2m) and turns each filter into a
+//       checkable QPushButton "pill" so the row matches the
+//       SpotHub dialog's pill aesthetic.
+//   (2) Upstream filters bands only. F3 adds a second pill row for
+//       sources (7 pills mapping to the 7 ingest clients) driving
+//       BandFilterProxy::setSourceVisible (NereusSDR-native
+//       extension to the proxy, see BandFilterProxy.{h,cpp}).
+//   (3) Upstream's spotModel/proxyModel/spotTable lived on the
+//       dialog as Cluster-tab-scoped members. In NereusSDR they
+//       are populated by every client (Cluster + RBN + WSJT-X +
+//       SpotCollector + POTA + FreeDV + PSK Reporter) so the Spot
+//       List shows the cross-source merge. spotReceived(DxSpot)
+//       signals from all seven clients land here.
+//   (4) AppSettings keys preserved verbatim for bands
+//       (SpotBandFilter_<band>) and added for sources
+//       (SpotSourceFilter_<source>; NereusSDR-native).
 void SpotHubDialog::buildSpotListTab(QTabWidget* tabs)
 {
     auto* page = new QWidget;
-    auto* lay = new QVBoxLayout(page);
-    lay->addWidget(new QLabel("Spot List tab content lands in Task F3.", page));
+    auto* layout = new QVBoxLayout(page);
+    layout->setSpacing(4);
+
+    auto& s = AppSettings::instance();
+
+    // Model + proxy. m_spotTableModel is bounded at 500 by default
+    // (see SpotTableModel.h); BandFilterProxy filters by band and
+    // source. AetherSDR upstream pinned this to the Cluster tab
+    // only; NereusSDR aggregates every ingest source.
+    m_spotTableModel = new SpotTableModel(this);
+    m_spotTableModel->setObjectName("spotListTableModel");
+    m_spotProxyModel = new BandFilterProxy(this);
+    m_spotProxyModel->setObjectName("spotListProxyModel");
+    m_spotProxyModel->setSourceModel(m_spotTableModel);
+    m_spotProxyModel->setSortRole(Qt::UserRole);
+
+    // ── Band pill row ───────────────────────────────────────────────
+    // NereusSDR-native: pill row replaces upstream's
+    // DxClusterDialog.cpp:1605-1641 checkbox row. 12 pills (upstream
+    // had 11, plus 2m).
+    auto* bandRow = new QHBoxLayout;
+    bandRow->setSpacing(3);
+    auto* bandLabel = new QLabel("Bands:");
+    bandLabel->setStyleSheet("QLabel { color: #808080; font-size: 11px; }");
+    bandLabel->setFixedWidth(40);
+    bandRow->addWidget(bandLabel);
+
+    static constexpr const char* bands[] = {
+        "160m", "80m", "60m", "40m", "30m", "20m",
+        "17m", "15m", "12m", "10m", "6m", "2m"
+    };
+    for (const char* band : bands) {
+        auto* pill = new QPushButton(band);
+        pill->setObjectName(QString("spotListBandPill_%1").arg(band));
+        pill->setCheckable(true);
+        pill->setStyleSheet(kFilterPillStyle);
+        const QString key = QString("SpotBandFilter_%1").arg(band);
+        bool on = s.value(key, "True").toString() == "True";
+        pill->setChecked(on);
+        if (!on)
+            m_spotProxyModel->setBandVisible(QString(band), false);
+        connect(pill, &QPushButton::toggled, this, [this, b = QString(band), key](bool checked) {
+            m_spotProxyModel->setBandVisible(b, checked);
+            auto& settings = AppSettings::instance();
+            settings.setValue(key, checked ? "True" : "False");
+            settings.save();
+        });
+        bandRow->addWidget(pill);
+    }
+    bandRow->addStretch();
+    layout->addLayout(bandRow);
+
+    // ── Source pill row ─────────────────────────────────────────────
+    // NereusSDR-native (no upstream equivalent). 7 pills mapping to
+    // the 7 ingest clients. Each pill's text is the short label
+    // (DX / RBN / JT / COL / POT / FDR / PSK); the filter value is
+    // the upstream source string emitted by the client (Cluster /
+    // RBN / WSJT-X / SpotCollector / POTA / FreeDV / PSK).
+    struct SourcePill {
+        const char* label;
+        const char* source;  // matches DxSpot::source emitted by clients
+    };
+    static constexpr SourcePill sources[] = {
+        {"DX",  "Cluster"},
+        {"RBN", "RBN"},
+        {"JT",  "WSJT-X"},
+        {"COL", "SpotCollector"},
+        {"POT", "POTA"},
+        {"FDR", "FreeDV"},
+        {"PSK", "PSK"},
+    };
+    auto* srcRow = new QHBoxLayout;
+    srcRow->setSpacing(3);
+    auto* srcLabel = new QLabel("Sources:");
+    srcLabel->setStyleSheet("QLabel { color: #808080; font-size: 11px; }");
+    srcLabel->setFixedWidth(40);
+    srcRow->addWidget(srcLabel);
+    for (const auto& src : sources) {
+        auto* pill = new QPushButton(src.label);
+        pill->setObjectName(QString("spotListSourcePill_%1").arg(src.label));
+        pill->setCheckable(true);
+        pill->setStyleSheet(kFilterPillStyle);
+        const QString key = QString("SpotSourceFilter_%1").arg(src.label);
+        bool on = s.value(key, "True").toString() == "True";
+        pill->setChecked(on);
+        const QString sourceStr(src.source);
+        if (!on)
+            m_spotProxyModel->setSourceVisible(sourceStr, false);
+        connect(pill, &QPushButton::toggled, this, [this, sourceStr, key](bool checked) {
+            m_spotProxyModel->setSourceVisible(sourceStr, checked);
+            auto& settings = AppSettings::instance();
+            settings.setValue(key, checked ? "True" : "False");
+            settings.save();
+        });
+        srcRow->addWidget(pill);
+    }
+    srcRow->addStretch();
+    layout->addLayout(srcRow);
+
+    // ── Table view ──────────────────────────────────────────────────
+    // From AetherSDR DxClusterDialog.cpp:1643-1696 [@0cd4559].
+    m_spotTable = new QTableView;
+    m_spotTable->setObjectName("spotListTable");
+    m_spotTable->setModel(m_spotProxyModel);
+    m_spotTable->setSortingEnabled(true);
+    m_spotTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    m_spotTable->setSelectionMode(QAbstractItemView::SingleSelection);
+    m_spotTable->setAlternatingRowColors(true);
+    m_spotTable->verticalHeader()->setVisible(false);
+    m_spotTable->verticalHeader()->setDefaultSectionSize(20);
+    m_spotTable->horizontalHeader()->setStretchLastSection(true);
+    m_spotTable->setStyleSheet(kSpotTableStyle);
+
+    m_spotTable->setColumnWidth(SpotTableModel::ColTime, 50);
+    m_spotTable->setColumnWidth(SpotTableModel::ColFreq, 80);
+    m_spotTable->setColumnWidth(SpotTableModel::ColDxCall, 90);
+    m_spotTable->setColumnWidth(SpotTableModel::ColMode, 45);
+    m_spotTable->setColumnWidth(SpotTableModel::ColComment, 200);
+    m_spotTable->setColumnWidth(SpotTableModel::ColSpotter, 80);
+    m_spotTable->setColumnWidth(SpotTableModel::ColBand, 45);
+    m_spotTable->setColumnWidth(SpotTableModel::ColSource, 55);
+
+    // No default sort - insertion order is newest-first.
+    m_spotTable->horizontalHeader()->setSortIndicatorShown(false);
+
+    // Double-click to tune. From upstream DxClusterDialog.cpp:1688-1693.
+    connect(m_spotTable, &QTableView::doubleClicked, this, [this](const QModelIndex& idx) {
+        auto srcIdx = m_spotProxyModel->mapToSource(idx);
+        double freq = m_spotTableModel->freqAtRow(srcIdx.row());
+        if (freq > 0.0)
+            emit tuneRequested(freq);
+    });
+
+    layout->addWidget(m_spotTable, 1);
+
+    // ── Bottom row: spot count + Clear ──────────────────────────────
+    // From upstream DxClusterDialog.cpp:1697-1714.
+    auto* bottomRow = new QHBoxLayout;
+    auto* countLabel = new QLabel("0 spots");
+    countLabel->setObjectName("spotListCountLabel");
+    countLabel->setStyleSheet("QLabel { color: #808080; font-size: 11px; }");
+    connect(m_spotTableModel, &QAbstractTableModel::rowsInserted,
+            this, [this, countLabel] {
+        countLabel->setText(QString("%1 spots").arg(m_spotTableModel->rowCount()));
+    });
+    bottomRow->addWidget(countLabel);
+    bottomRow->addStretch();
+
+    auto* clearBtn = new QPushButton("Clear");
+    clearBtn->setObjectName("spotListClearBtn");
+    clearBtn->setFixedWidth(60);
+    connect(clearBtn, &QPushButton::clicked, this, [this, countLabel] {
+        m_spotTableModel->clear();
+        countLabel->setText("0 spots");
+    });
+    bottomRow->addWidget(clearBtn);
+    layout->addLayout(bottomRow);
+
+    // ── Wire every client's spotReceived(DxSpot) into the table ─────
+    // NereusSDR aggregates all sources into one merged view (upstream
+    // pinned this to the Cluster tab only). nullptr-guarded for the
+    // test fixture path.
+    auto wireClient = [this](auto* client) {
+        if (!client) return;
+        using ClientType = std::remove_pointer_t<decltype(client)>;
+        QObject::connect(client, &ClientType::spotReceived,
+                         this, [this](const DxSpot& spot) {
+                             if (m_spotTableModel)
+                                 m_spotTableModel->addSpot(spot);
+                         });
+    };
+    wireClient(m_clusterClient);
+    wireClient(m_rbnClient);
+    wireClient(m_wsjtxClient);
+    wireClient(m_spotCollectorClient);
+    wireClient(m_potaClient);
+    wireClient(m_freedvClient);
+    wireClient(m_pskClient);
+
     tabs->addTab(page, "Spot List");
 }
 

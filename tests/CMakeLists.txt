@@ -4193,17 +4193,21 @@ nereus_add_test(tst_slice_model_snr)
 # (panadapter spot overlay).
 nereus_add_test(tst_spot_overlay_render)
 
-# ── Phase 3J-2 Task F1: SpotHubDialog tab-strip smoke ──────────────────────
+# ── Phase 3J-2 Task F1+F2+F3: SpotHubDialog tab-strip smoke ────────────────
 # Pins the contract that SpotHubDialog (the AetherSDR DxClusterDialog
-# port) constructs successfully when handed all 6 spot-ingest clients
+# port) constructs successfully when handed all 7 spot-ingest clients
 # + SpotModel + DxccColorProvider, that its top-level QTabWidget
-# exposes exactly 9 tabs, and that the tab labels appear in AetherSDR's
-# upstream order. Three tests:
-#   dialogConstructs       - clients supplied, dialog non-null
-#   hasNineTabs            - top-level QTabWidget has exactly 9 tabs
-#   tabOrderMatchesAetherSdr - Cluster/RBN/WSJT/SpotCollector/POTA/
-#                              FreeDV/PSK/Spot List/Display order
-# Source: AetherSDR src/gui/DxClusterDialog.{h,cpp} [@0cd4559] (shell
-# only; tab content lands in F2-F4). First task of Phase F (Hub
-# dialog).
+# exposes exactly 9 tabs, that the tab labels appear in AetherSDR's
+# upstream order, that each per-source tab carries the uniform template
+# (F2), and that the Spot List tab hosts the merged 8-column table with
+# band + source pill filters (F3). 21 tests total:
+#   F1 (3): dialogConstructs, hasNineTabs, tabOrderMatchesAetherSdr
+#   F2 (12): per-source tab content + everySourceTabHasUniformTemplate
+#   F3 (6): spotListTabHasTableView, spotListTabHasTwelveBandPills,
+#           spotListTabHasSevenSourcePills,
+#           spotListBandPillTogglesProxyFilter,
+#           spotListSourcePillTogglesProxyFilter,
+#           doubleClickOnSpotRowEmitsTuneRequested
+# Source: AetherSDR src/gui/DxClusterDialog.{h,cpp} [@0cd4559]; Display
+# tab content lands in F4.
 nereus_add_test(tst_spothub_dialog_smoke)

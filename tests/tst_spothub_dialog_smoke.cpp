@@ -5,7 +5,7 @@
 //
 // NereusSDR - SpotHubDialog tab-strip smoke tests
 //
-// Phase 3J-2 Task F1 + F2. Pins the contract that SpotHubDialog
+// Phase 3J-2 Task F1 + F2 + F3. Pins the contract that SpotHubDialog
 // constructs successfully when handed all 6 spot-ingest clients
 // + the SpotModel + the DxccColorProvider, that its top-level
 // QTabWidget exposes exactly 9 tabs, that the tab labels appear
@@ -16,6 +16,12 @@
 // status line, and a raw-event console. WSJT-X carries the three
 // filter checkboxes and four color picker buttons. PSK Reporter
 // is NereusSDR-native and uses the same uniform shape.
+//
+// F3 extends the contract with the Spot List tab: a QTableView
+// bound to BandFilterProxy(SpotTableModel), a row of 12 band-filter
+// pill buttons (160m..2m), a row of 7 source-filter pill buttons
+// (DX / RBN / JT / COL / POT / FDR / PSK), and a Clear button.
+// Row double-click on a populated table emits tuneRequested(double).
 
 #include <QtTest>
 #include <QTabWidget>
@@ -26,16 +32,21 @@
 #include <QCheckBox>
 #include <QPlainTextEdit>
 #include <QSlider>
+#include <QTableView>
+#include <QSignalSpy>
 
 #include "gui/SpotHubDialog.h"
 #include "core/DxClusterClient.h"
+#include "core/DxSpot.h"
 #include "core/WsjtxClient.h"
 #include "core/SpotCollectorClient.h"
 #include "core/PotaClient.h"
 #include "core/FreeDVReporterClient.h"
 #include "core/PskReporterClient.h"
 #include "core/DxccColorProvider.h"
+#include "models/BandFilterProxy.h"
 #include "models/SpotModel.h"
+#include "models/SpotTableModel.h"
 
 using namespace NereusSDR;
 
@@ -61,6 +72,15 @@ private slots:
     // skeleton (auto-start toggle, start/stop button, status label,
     // raw-event console).
     void everySourceTabHasUniformTemplate();
+
+    // F3: Spot List tab (QTableView + band pills + source pills +
+    // Clear button + double-click-to-tune).
+    void spotListTabHasTableView();
+    void spotListTabHasTwelveBandPills();
+    void spotListTabHasSevenSourcePills();
+    void spotListBandPillTogglesProxyFilter();
+    void spotListSourcePillTogglesProxyFilter();
+    void doubleClickOnSpotRowEmitsTuneRequested();
 };
 
 static SpotHubDialog* makeDialog() {
@@ -237,6 +257,110 @@ void TestSpotHubDialogSmoke::everySourceTabHasUniformTemplate() {
         QVERIFY2(dlg->findChild<QPlainTextEdit*>(consoleName) != nullptr,
                  qPrintable(QString("missing console for %1").arg(src.prefix)));
     }
+    delete dlg;
+}
+
+void TestSpotHubDialogSmoke::spotListTabHasTableView() {
+    auto* dlg = makeDialog();
+    QVERIFY(dlg->findChild<QTableView*>("spotListTable") != nullptr);
+    QVERIFY(dlg->findChild<QPushButton*>("spotListClearBtn") != nullptr);
+    QVERIFY(dlg->findChild<QLabel*>("spotListCountLabel") != nullptr);
+    delete dlg;
+}
+
+void TestSpotHubDialogSmoke::spotListTabHasTwelveBandPills() {
+    auto* dlg = makeDialog();
+    static const char* bands[] = {
+        "160m", "80m", "60m", "40m", "30m", "20m",
+        "17m", "15m", "12m", "10m", "6m", "2m"
+    };
+    for (const char* b : bands) {
+        QString name = QString("spotListBandPill_%1").arg(b);
+        QVERIFY2(dlg->findChild<QPushButton*>(name) != nullptr,
+                 qPrintable(QString("missing band pill: %1").arg(name)));
+    }
+    delete dlg;
+}
+
+void TestSpotHubDialogSmoke::spotListTabHasSevenSourcePills() {
+    auto* dlg = makeDialog();
+    static const char* sources[] = {
+        "DX", "RBN", "JT", "COL", "POT", "FDR", "PSK"
+    };
+    for (const char* s : sources) {
+        QString name = QString("spotListSourcePill_%1").arg(s);
+        QVERIFY2(dlg->findChild<QPushButton*>(name) != nullptr,
+                 qPrintable(QString("missing source pill: %1").arg(name)));
+    }
+    delete dlg;
+}
+
+void TestSpotHubDialogSmoke::spotListBandPillTogglesProxyFilter() {
+    auto* dlg = makeDialog();
+    auto* proxy = dlg->findChild<BandFilterProxy*>("spotListProxyModel");
+    QVERIFY(proxy != nullptr);
+    auto* pill20 = dlg->findChild<QPushButton*>("spotListBandPill_20m");
+    QVERIFY(pill20 != nullptr);
+    QVERIFY(pill20->isCheckable());
+    // Default state - all bands visible
+    QVERIFY(proxy->isBandVisible("20m"));
+    // Toggle off
+    pill20->setChecked(false);
+    emit pill20->toggled(false);
+    QVERIFY(!proxy->isBandVisible("20m"));
+    // Toggle back on
+    pill20->setChecked(true);
+    emit pill20->toggled(true);
+    QVERIFY(proxy->isBandVisible("20m"));
+    delete dlg;
+}
+
+void TestSpotHubDialogSmoke::spotListSourcePillTogglesProxyFilter() {
+    auto* dlg = makeDialog();
+    auto* proxy = dlg->findChild<BandFilterProxy*>("spotListProxyModel");
+    QVERIFY(proxy != nullptr);
+    auto* pillDx = dlg->findChild<QPushButton*>("spotListSourcePill_DX");
+    QVERIFY(pillDx != nullptr);
+    QVERIFY(pillDx->isCheckable());
+    // The DX pill maps to the "Cluster" source string emitted by
+    // DxClusterClient. Default state - all sources visible.
+    QVERIFY(proxy->isSourceVisible("Cluster"));
+    pillDx->setChecked(false);
+    emit pillDx->toggled(false);
+    QVERIFY(!proxy->isSourceVisible("Cluster"));
+    pillDx->setChecked(true);
+    emit pillDx->toggled(true);
+    QVERIFY(proxy->isSourceVisible("Cluster"));
+    delete dlg;
+}
+
+void TestSpotHubDialogSmoke::doubleClickOnSpotRowEmitsTuneRequested() {
+    auto* dlg = makeDialog();
+    auto* model = dlg->findChild<SpotTableModel*>("spotListTableModel");
+    auto* proxy = dlg->findChild<BandFilterProxy*>("spotListProxyModel");
+    auto* table = dlg->findChild<QTableView*>("spotListTable");
+    QVERIFY(model != nullptr);
+    QVERIFY(proxy != nullptr);
+    QVERIFY(table != nullptr);
+    // Add a known spot.
+    DxSpot s;
+    s.dxCall = "K1ABC";
+    s.spotterCall = "W2XYZ";
+    s.comment = "CW";
+    s.freqMhz = 14.025;
+    s.utcTime = QTime(12, 34);
+    s.source = "Cluster";
+    model->addSpot(s);
+    QVERIFY(model->rowCount() == 1);
+    QVERIFY(proxy->rowCount() == 1);
+    // doubleClicked is the upstream trigger. Emit it via the proxy
+    // index to exercise the mapToSource + freqAtRow path.
+    QSignalSpy spy(dlg, &SpotHubDialog::tuneRequested);
+    QModelIndex idx = proxy->index(0, SpotTableModel::ColFreq);
+    QVERIFY(idx.isValid());
+    emit table->doubleClicked(idx);
+    QCOMPARE(spy.count(), 1);
+    QCOMPARE(spy.at(0).at(0).toDouble(), 14.025);
     delete dlg;
 }
 

@@ -70,6 +70,39 @@
 //                                    sub-group is delimited by the
 //                                    same source-tab comment. AI
 //                                    tooling: Anthropic Claude Code.
+//   2026-05-11  J.J. Boyd / KG4VCF  Phase 3J-2 Task F3. Spot List
+//                                    tab content. Port of AetherSDR
+//                                    `DxClusterDialog.cpp:1599-1717
+//                                    [@0cd4559]`: QTableView bound
+//                                    to BandFilterProxy(SpotTableModel)
+//                                    + band filter row + bottom
+//                                    spot-count + Clear button +
+//                                    double-click to emit
+//                                    tuneRequested(double).
+//                                    Three NereusSDR divergences:
+//                                    (1) band filters become
+//                                    QPushButton "pills" (checkable)
+//                                    instead of upstream QCheckBoxes
+//                                    to match the SpotHub dialog's
+//                                    pill aesthetic; (2) band list
+//                                    extends from upstream's 11
+//                                    (160m..6m) to 12 (160m..2m) so
+//                                    every band the SpotTableModel
+//                                    can produce gets a control;
+//                                    (3) adds a second row of 7
+//                                    source-filter pills (DX / RBN /
+//                                    JT / COL / POT / FDR / PSK) on
+//                                    top of the band-filter row,
+//                                    driving the new
+//                                    BandFilterProxy::setSourceVisible.
+//                                    Three new member pointers
+//                                    (m_spotTableModel,
+//                                    m_spotProxyModel, m_spotTable)
+//                                    join the existing per-source
+//                                    block. objectName() keys
+//                                    pinned for the smoke-test
+//                                    harness. AI tooling: Anthropic
+//                                    Claude Code.
 
 #pragma once
 
@@ -82,6 +115,7 @@ class QPushButton;
 class QLabel;
 class QCheckBox;
 class QPlainTextEdit;
+class QTableView;
 
 namespace NereusSDR {
 
@@ -92,6 +126,8 @@ class PotaClient;
 class FreeDVReporterClient;
 class PskReporterClient;
 class SpotModel;
+class SpotTableModel;
+class BandFilterProxy;
 class DxccColorProvider;
 
 // From AetherSDR src/gui/DxClusterDialog.h:79-215 [@0cd4559]
@@ -240,6 +276,14 @@ private:
     QPushButton*    m_pskAutoStartBtn{nullptr};
     QLabel*         m_pskStatusLabel{nullptr};
     QPlainTextEdit* m_pskConsole{nullptr};
+
+    // Spot List tab (F3). From AetherSDR DxClusterDialog.h:200-209
+    // [@0cd4559] but the underlying types come from NereusSDR's
+    // standalone src/models/ port (Task D2) and the SpotTableModel
+    // backs all sources rather than just the Cluster tab.
+    SpotTableModel* m_spotTableModel{nullptr};
+    BandFilterProxy* m_spotProxyModel{nullptr};
+    QTableView*     m_spotTable{nullptr};
 };
 
 } // namespace NereusSDR
