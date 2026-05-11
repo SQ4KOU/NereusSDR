@@ -325,6 +325,7 @@ warren@wpratt.com
 #include <vector>
 
 #include "WdspTypes.h"
+#include "audio/AudioRingSpsc.h"  // m_tciInputRing — TCI TX audio buffer (3J-1 bench fix)
 #include "dsp/ChannelConfig.h"
 #include "dsp/TxChannelState.h"
 #include "wdsp_api.h"  // NEREUS_STDCALL macro for s_pushVoxCallback (Task 17)
@@ -865,6 +866,17 @@ public:
     bool isTciAudioActive() const {
         return m_tciAudioActive.load(std::memory_order_acquire);
     }
+
+    /// Pull up to `frames` float audio samples from the TCI input ring into
+    /// `dst`.  Returns the number of samples actually pulled (0 if the ring
+    /// is empty).  Called from TxWorkerThread::dispatchOneBlock on the
+    /// worker thread when isTciAudioActive() is true — gives the worker a
+    /// 64-frame-block-rate consumer for the burst-rate producer in
+    /// feedTxAudioFromTci.  See m_tciInputRing doc-comment for the
+    /// burst-vs-steady-state rationale.
+    ///
+    /// SPSC contract: only TxWorkerThread calls this method.
+    int pullTciAudio(float* dst, int frames);
 
     // ── Anti-VOX detector audio feed (3M-3a-iv Task 3) ──────────────────────
     //
@@ -2658,6 +2670,43 @@ private:
     // Set/cleared by MainWindow on TciServer::txAudioActiveClientChanged.
     // Cleared automatically on client disconnect via the same signal.
     std::atomic<bool> m_tciAudioActive{false};
+
+    // ── Phase 3J-1 bench fix (2026-05-10): TCI TX audio ring ────────────────
+    //
+    // SPSC ring buffer that bridges the burst-rate TCI producer
+    // (feedTxAudioFromTci pushes 2048 frames per WSJT-X message in
+    // microseconds) to the steady-rate consumer (TxWorkerThread pulls 64
+    // frames every ~1.33 ms to match the HL2 wire rate of 48 kHz).
+    //
+    // Without this ring, feedTxAudioFromTci dispatched driveOneTxBlock
+    // synchronously — 32 fexchange0+sendTxIq calls back-to-back per WSJT-X
+    // message.  That delivered the right average rate to the radio (48 kHz)
+    // but overran the downstream TX I/Q ring (P1RadioConnection
+    // kTxIqBufSamples = 4032, ~84 ms headroom) because each WSJT-X burst
+    // arrived in <1 ms and pushed 2048 samples instantly.  After ~7 bursts
+    // the I/Q ring overflowed and TX audio dropped — the radio keyed but
+    // transmitted only fragments, then mostly silence.
+    //
+    // With this ring (~680 ms headroom at 48 kHz), feedTxAudioFromTci just
+    // queues the burst.  TxWorkerThread::dispatchOneBlock pulls one 64-frame
+    // block per worker iteration when the gate is set, splicing the pulled
+    // samples into m_in exactly the same way the PC/VAX mic override paths
+    // splice their data.  Producer-vs-consumer rate is balanced by the
+    // worker's natural drain timing, and the downstream TX I/Q ring never
+    // sees a burst — only a steady 64-frame trickle that matches the
+    // radio's wire rate.
+    //
+    // Capacity 131072 bytes == 32768 floats (mono, MSB+LSB Float32) ==
+    // 32768 frames at 48 kHz ≈ 682 ms.  Power of two so the AudioRingSpsc
+    // bit-mask wrap works.
+    //
+    // SPSC discipline: feedTxAudioFromTci (queued event on TxWorkerThread)
+    // is the producer; pullTciAudio (worker run loop on TxWorkerThread) is
+    // the consumer.  Both run on the same thread but at different points in
+    // the loop — feedTxAudioFromTci is called via sendPostedEvents BEFORE
+    // dispatchOneBlock each iteration, so the producer always wins the
+    // ordering race.  Same-thread is the strongest possible SPSC contract.
+    AudioRingSpsc<131072> m_tciInputRing;
 
     // ── Phase 3M-3a-iii Task 17 — DEXP pushvox bridge ────────────────────────
     //

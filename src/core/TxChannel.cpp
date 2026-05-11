@@ -1959,39 +1959,66 @@ void TxChannel::feedTxAudioFromTci(const QByteArray& interleavedStereoBytes,
     const float* interleavedStereo =
         reinterpret_cast<const float*>(interleavedStereoBytes.constData());
 
-    // driveOneTxBlock expects MONO float samples (one per frame) — it sets
-    // I = samples[i], Q = 0 for each frame.  Extract the L channel from the
-    // interleaved stereo (or mono) TCI stream into the accumulation buffer.
-    // The WDSP TX chain is mono-in; both L and R carry the same TCI audio.
+    // ── Phase 3J-1 bench fix (2026-05-10): ring-buffer push instead of
+    //    synchronous dispatch.
     //
-    // Ensure the accumulation buffer is sized to at least m_inputBufferSize
-    // mono floats. Lazy-allocate once.
-    const int blockFrames = m_inputBufferSize;  // e.g. 64
-    if (static_cast<int>(m_tciTxAccum.size()) < blockFrames) {
-        m_tciTxAccum.assign(static_cast<size_t>(blockFrames), 0.0f);
-        m_tciTxAccumSize = 0;
+    // Original implementation dispatched 32 driveOneTxBlock calls back-to-back
+    // per WSJT-X 2048-frame message.  Each call ran fexchange0 + sendTxIq
+    // synchronously, pushing 2048 samples into the P1RadioConnection TX I/Q
+    // ring (4032-sample capacity) in <1 ms.  After ~7 messages the ring
+    // overflowed and on-air TX audio dropped to fragments.
+    //
+    // New implementation extracts the L channel (mono — WDSP TXA is mono-in,
+    // dual-mono stereo carries the same audio in both channels) and pushes
+    // it into m_tciInputRing.  TxWorkerThread::dispatchOneBlock pulls one
+    // 64-frame block per worker iteration via pullTciAudio, splicing it into
+    // m_in like the PC/VAX mic override paths.  The worker's natural block
+    // rate (~750/sec, matching the HL2 wire rate of 48 kHz) drains the
+    // ring without bursts, so the downstream TX I/Q ring never overflows.
+    //
+    // The ring has ~680 ms of headroom (32768 floats), easily absorbing a
+    // WSJT-X message's worth of audio (2048 frames == ~43 ms) plus several
+    // messages of producer-consumer jitter.
+    if (m_tciTxAccum.size() < static_cast<size_t>(frames)) {
+        m_tciTxAccum.resize(static_cast<size_t>(frames));
     }
-
-    // Process each incoming frame: write L-channel mono sample into
-    // accumulator, dispatch full blocks.
     for (int f = 0; f < frames; ++f) {
         // Extract L channel (mono: frame[f]; stereo: frame[2f])
         const float l = (channels == 2)
                         ? interleavedStereo[2 * f]
                         : interleavedStereo[f];
-
-        m_tciTxAccum[static_cast<size_t>(m_tciTxAccumSize)] = l;
-        ++m_tciTxAccumSize;
-
-        if (m_tciTxAccumSize >= blockFrames) {
-            // Full block ready — dispatch through driveOneTxBlock.
-            // driveOneTxBlock(const float* samples, int frames) maps
-            // samples[i] → I, 0 → Q per frame for fexchange0.
-            driveOneTxBlock(m_tciTxAccum.data(), blockFrames);
-            m_tciTxAccumSize = 0;
-        }
+        m_tciTxAccum[static_cast<size_t>(f)] = l;
     }
-    // Partial block remains in m_tciTxAccum; completed on next call.
+
+    // Push the whole burst into the ring.  tryPushCopy is non-blocking and
+    // refuses partial writes — if the ring is full the entire frame is
+    // dropped (audible as a brief dropout) but alignment stays correct.
+    m_tciInputRing.tryPushCopy(
+        reinterpret_cast<const uint8_t*>(m_tciTxAccum.data()),
+        static_cast<qint64>(frames) * static_cast<qint64>(sizeof(float)));
+}
+
+// ── pullTciAudio ─────────────────────────────────────────────────────────────
+//
+// Phase 3J-1 bench fix (2026-05-10): worker-side consumer for the TCI input
+// ring.  Pulls up to `frames` mono float samples into `dst`.  Returns the
+// number of samples actually pulled (0 if the ring is empty — caller should
+// zero-fill the remaining slots).
+//
+// Called from TxWorkerThread::dispatchOneBlock when isTciAudioActive() is
+// true.  Both producer (feedTxAudioFromTci, queued event on this same
+// thread) and consumer (this method, worker run loop) run on
+// TxWorkerThread, so the SPSC contract is trivially satisfied — the worker
+// run loop's sendPostedEvents drains the producer's queued events BEFORE
+// each dispatchOneBlock call.
+
+int TxChannel::pullTciAudio(float* dst, int frames)
+{
+    if (!dst || frames <= 0) { return 0; }
+    const qint64 wantBytes = static_cast<qint64>(frames) * static_cast<qint64>(sizeof(float));
+    const qint64 gotBytes  = m_tciInputRing.popInto(
+        reinterpret_cast<uint8_t*>(dst), wantBytes);
+    return static_cast<int>(gotBytes / static_cast<qint64>(sizeof(float)));
 }
 
 // ---------------------------------------------------------------------------
