@@ -122,6 +122,7 @@
 #include <QCheckBox>
 #include <QColor>
 #include <QColorDialog>
+#include <QDateTime>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -136,6 +137,7 @@
 #include <QSpinBox>
 #include <QTabWidget>
 #include <QTableView>
+#include <QTimer>
 #include <QVBoxLayout>
 #include <QVector>
 
@@ -287,6 +289,11 @@ SpotHubDialog::SpotHubDialog(DxClusterClient* clusterClient,
     // Reporter tab between FreeDV and Spot List (Task F2 wires its
     // content). FreeDV tab is unconditional in NereusSDR; upstream
     // gated it on HAVE_WEBSOCKETS.
+    // Post-3J-2 UX fix: a NereusSDR-native Settings tab takes the
+    // first position so the operator enters callsign + grid + FreeDV
+    // status message once and Save propagates to every per-source
+    // legacy key plus the canonical User/* keys.
+    buildSettingsTab(tabs);
     buildClusterTab(tabs);
     buildRbnTab(tabs);
     buildWsjtxTab(tabs);
@@ -298,6 +305,249 @@ SpotHubDialog::SpotHubDialog(DxClusterClient* clusterClient,
     buildDisplayTab(tabs);
 
     root->addWidget(tabs);
+}
+
+// NereusSDR-native (no AetherSDR upstream). Post-3J-2 UX fix: the
+// Settings tab takes the first position in the dialog and provides
+// one place for the operator to enter callsign + Maidenhead grid +
+// FreeDV status message. The Save button:
+//
+//   1. Validates: callsign non-empty, grid is 4 or 6 chars.
+//   2. Writes canonical keys: User/Callsign, User/GridSquare,
+//      FreeDvReporter/Message. These are what every NereusSDR module
+//      that needs operator identity reads first.
+//   3. Propagates to legacy per-source keys for backward compat:
+//      DxClusterCallsign, RbnCallsign, PskReporterCallsign,
+//      FreeDvReporter/Callsign, FreeDvReporter/GridSquare. Existing
+//      per-source-tab readers (Cluster / RBN / PSK) keep reading
+//      their per-source keys; this propagation keeps them in sync
+//      with the central Settings entry.
+//   4. Calls setIdentity() on the live FreeDVReporterClient +
+//      PskReporterClient instances (if non-null) so a connection that
+//      is already up picks up the new identity without disconnect.
+//   5. Stamps User/IdentityLastSaved with the current timestamp and
+//      flashes a green "Saved" label for 2 seconds.
+//
+// Closes the user-reported "FreeDV Reporter not connecting" bug: the
+// auto-start path used to fire startConnection() without ever calling
+// setIdentity(), so the WebSocket connected anonymously and the
+// server dropped it. The fix is two-fold: (a) the Settings tab gives
+// the user one place to enter identity, (b)
+// RadioModel::restoreSpotClientAutoStartState now re-applies identity
+// from the User/* fall-back chain before calling startConnection(),
+// and skips the call entirely when no identity is configured.
+void SpotHubDialog::buildSettingsTab(QTabWidget* tabs)
+{
+    auto* page = new QWidget;
+    auto* layout = new QVBoxLayout(page);
+    layout->setSpacing(8);
+
+    auto& s = AppSettings::instance();
+
+    // ── Identity group ────────────────────────────────────────────
+    auto* idGroup = new QGroupBox("Operator Identity");
+    idGroup->setObjectName("settingsIdentityGroup");
+    auto* idLayout = new QVBoxLayout(idGroup);
+    idLayout->setSpacing(4);
+
+    auto* helpLabel = new QLabel(
+        "These values feed every spot source (DX cluster, RBN, WSJT-X "
+        "registration, SpotCollector, POTA spot author, FreeDV Reporter, "
+        "PSK Reporter). Change here once; per-source tabs read these "
+        "defaults.");
+    helpLabel->setWordWrap(true);
+    helpLabel->setStyleSheet("QLabel { color: #8aa8c0; font-size: 11px; }");
+    idLayout->addWidget(helpLabel);
+
+    auto* grid = new QGridLayout;
+    grid->setColumnStretch(1, 1);
+    int row = 0;
+
+    grid->addWidget(new QLabel("Callsign:"), row, 0);
+    m_settingsCallEdit = new QLineEdit(
+        s.value("User/Callsign").toString());
+    m_settingsCallEdit->setObjectName("settingsCallEdit");
+    m_settingsCallEdit->setPlaceholderText("your callsign (4 to 12 chars)");
+    m_settingsCallEdit->setMaxLength(12);
+    m_settingsCallEdit->setStyleSheet(kLineEditStyle);
+    grid->addWidget(m_settingsCallEdit, row, 1);
+    row++;
+
+    grid->addWidget(new QLabel("Grid Square:"), row, 0);
+    m_settingsGridEdit = new QLineEdit(
+        s.value("User/GridSquare").toString());
+    m_settingsGridEdit->setObjectName("settingsGridEdit");
+    m_settingsGridEdit->setPlaceholderText("4 or 6 character Maidenhead (e.g. EM73 or EM73XY)");
+    m_settingsGridEdit->setMaxLength(6);
+    m_settingsGridEdit->setStyleSheet(kLineEditStyle);
+    grid->addWidget(m_settingsGridEdit, row, 1);
+    row++;
+
+    grid->addWidget(new QLabel("FreeDV Status Message:"), row, 0);
+    m_settingsFreedvMsgEdit = new QLineEdit(
+        s.value("FreeDvReporter/Message").toString());
+    m_settingsFreedvMsgEdit->setObjectName("settingsFreedvMsgEdit");
+    m_settingsFreedvMsgEdit->setPlaceholderText(
+        "shown next to your station on the FreeDV Reporter map");
+    m_settingsFreedvMsgEdit->setMaxLength(200);
+    m_settingsFreedvMsgEdit->setStyleSheet(kLineEditStyle);
+    grid->addWidget(m_settingsFreedvMsgEdit, row, 1);
+    row++;
+
+    idLayout->addLayout(grid);
+    layout->addWidget(idGroup);
+
+    // ── Apply Identity Now group ──────────────────────────────────
+    auto* applyGroup = new QGroupBox("Apply Identity Now");
+    applyGroup->setObjectName("settingsApplyGroup");
+    auto* applyLayout = new QVBoxLayout(applyGroup);
+    applyLayout->setSpacing(4);
+
+    auto* btnRow = new QHBoxLayout;
+    m_settingsSaveBtn = new QPushButton("Save && Propagate");
+    m_settingsSaveBtn->setObjectName("settingsSaveBtn");
+    m_settingsSaveBtn->setStyleSheet(kStartBtnStyle);
+    m_settingsSaveBtn->setFixedWidth(180);
+    btnRow->addWidget(m_settingsSaveBtn);
+
+    m_settingsErrorLabel = new QLabel;
+    m_settingsErrorLabel->setObjectName("settingsErrorLabel");
+    m_settingsErrorLabel->setStyleSheet(
+        "QLabel { color: #ff4444; font-size: 11px; }");
+    btnRow->addWidget(m_settingsErrorLabel, 1);
+
+    m_settingsSavedLabel = new QLabel;
+    m_settingsSavedLabel->setObjectName("settingsSavedLabel");
+    m_settingsSavedLabel->setStyleSheet(
+        "QLabel { color: #4caf50; font-weight: bold; }");
+    btnRow->addWidget(m_settingsSavedLabel);
+
+    applyLayout->addLayout(btnRow);
+    layout->addWidget(applyGroup);
+
+    // Save button slot. Validates, persists, propagates, applies to
+    // live clients, stamps timestamp, and flashes "Saved".
+    connect(m_settingsSaveBtn, &QPushButton::clicked, this, [this] {
+        const QString call = m_settingsCallEdit->text().trimmed().toUpper();
+        const QString gridSquare =
+            m_settingsGridEdit->text().trimmed().toUpper();
+        const QString message = m_settingsFreedvMsgEdit->text().trimmed();
+
+        m_settingsErrorLabel->clear();
+        m_settingsSavedLabel->clear();
+
+        // Validate callsign.
+        if (call.isEmpty()) {
+            m_settingsErrorLabel->setText("Callsign is required.");
+            return;
+        }
+        if (call.length() < 3 || call.length() > 12) {
+            m_settingsErrorLabel->setText(
+                "Callsign must be 3 to 12 characters.");
+            return;
+        }
+        // Validate Maidenhead grid: 4 or 6 chars, alpha+digit pattern
+        // (e.g. EM73 or EM73XY). Reject anything else.
+        if (gridSquare.length() != 4 && gridSquare.length() != 6) {
+            m_settingsErrorLabel->setText(
+                "Grid must be 4 or 6 character Maidenhead (e.g. EM73 or EM73XY).");
+            return;
+        }
+
+        auto& settings = AppSettings::instance();
+        // Canonical keys.
+        settings.setValue("User/Callsign", call);
+        settings.setValue("User/GridSquare", gridSquare);
+        settings.setValue("FreeDvReporter/Message", message);
+        settings.setValue("User/IdentityLastSaved",
+                          QDateTime::currentDateTime().toString(Qt::ISODate));
+
+        // Propagate to legacy per-source keys. Existing per-source-tab
+        // readers (Cluster / RBN / PSK Reporter) keep reading their
+        // per-source key on construction; propagation keeps them in
+        // sync with the central Settings entry.
+        settings.setValue("DxClusterCallsign", call);
+        settings.setValue("RbnCallsign", call);
+        settings.setValue("PskReporterCallsign", call);
+        settings.setValue("PskReporterGrid", gridSquare);
+        settings.setValue("FreeDvReporter/Callsign", call);
+        settings.setValue("FreeDvReporter/GridSquare", gridSquare);
+
+        settings.save();
+
+        // Push to live clients if non-null. A connection that is
+        // already up picks up the new identity without disconnect.
+        // Version string comes from CMake (NEREUSSDR_VERSION); the
+        // FreeDV / PSK Reporter pools want a versioned client tag.
+        const QString version =
+            QStringLiteral("NereusSDR/") + QStringLiteral(NEREUSSDR_VERSION);
+        if (m_freedvClient) {
+            m_freedvClient->setIdentity(call, gridSquare, message, version);
+        }
+        if (m_pskClient) {
+            m_pskClient->setIdentity(call, gridSquare, version);
+        }
+
+        // Flash "Saved" for 2 seconds.
+        m_settingsSavedLabel->setText("Saved");
+        QTimer::singleShot(2000, this, [this] {
+            if (m_settingsSavedLabel) {
+                m_settingsSavedLabel->clear();
+            }
+        });
+
+        // Refresh the current-identity summary line.
+        if (m_settingsCurrentLabel) {
+            m_settingsCurrentLabel->setText(
+                QString("Current identity: %1 / %2 - last saved %3")
+                    .arg(call, gridSquare,
+                         QDateTime::currentDateTime().toString(
+                             "yyyy-MM-dd HH:mm")));
+        }
+        // Update the FreeDV tab's identity-status label too so the
+        // user sees the change without switching tabs.
+        if (m_freedvIdentityLabel) {
+            m_freedvIdentityLabel->setText(QString(
+                "Identity: <b>%1</b> / <b>%2</b> (set in Settings tab)")
+                .arg(call, gridSquare));
+            m_freedvIdentityLabel->setStyleSheet(
+                "QLabel { color: #4caf50; }");
+        }
+    });
+
+    // ── Current identity summary ──────────────────────────────────
+    const QString persistedCall =
+        s.value("User/Callsign").toString();
+    const QString persistedGrid =
+        s.value("User/GridSquare").toString();
+    const QString persistedSaved =
+        s.value("User/IdentityLastSaved").toString();
+    QString summary;
+    if (persistedCall.isEmpty()) {
+        summary = "No identity saved yet. Fill in the fields above and click Save.";
+    } else {
+        summary = QString("Current identity: %1 / %2")
+                      .arg(persistedCall, persistedGrid);
+        if (!persistedSaved.isEmpty()) {
+            // Try to reformat the ISO timestamp into a human-friendly
+            // form; fall back to the raw string if parsing fails.
+            QDateTime ts = QDateTime::fromString(persistedSaved, Qt::ISODate);
+            if (ts.isValid()) {
+                summary += QString(" - last saved %1")
+                               .arg(ts.toString("yyyy-MM-dd HH:mm"));
+            }
+        }
+    }
+    m_settingsCurrentLabel = new QLabel(summary);
+    m_settingsCurrentLabel->setObjectName("settingsCurrentLabel");
+    m_settingsCurrentLabel->setStyleSheet(
+        "QLabel { color: #808890; font-size: 11px; }");
+    m_settingsCurrentLabel->setWordWrap(true);
+    layout->addWidget(m_settingsCurrentLabel);
+
+    layout->addStretch();
+
+    tabs->addTab(page, "Settings");
 }
 
 // From AetherSDR src/gui/DxClusterDialog.cpp:637-803 [@0cd4559].
@@ -343,7 +593,11 @@ void SpotHubDialog::buildClusterTab(QTabWidget* tabs)
     row++;
 
     grid->addWidget(new QLabel("Callsign:"), row, 0);
-    m_callEdit = new QLineEdit(s.value("DxClusterCallsign").toString());
+    // Post-3J-2 UX fix: fall back to User/Callsign (the canonical key
+    // written by the Settings tab) when DxClusterCallsign is empty.
+    m_callEdit = new QLineEdit(
+        s.value("DxClusterCallsign",
+                s.value("User/Callsign").toString()).toString());
     m_callEdit->setObjectName("clusterCallEdit");
     m_callEdit->setPlaceholderText("your callsign");
     m_callEdit->setStyleSheet(kLineEditStyle);
@@ -486,9 +740,15 @@ void SpotHubDialog::buildRbnTab(QTabWidget* tabs)
     layout->setSpacing(8);
 
     auto& s = AppSettings::instance();
+    // Post-3J-2 UX fix: extend the existing RbnCallsign ->
+    // DxClusterCallsign fallback chain with one more hop to the
+    // canonical User/Callsign key written by the Settings tab.
     QString defaultCall = s.value("RbnCallsign").toString();
     if (defaultCall.isEmpty()) {
         defaultCall = s.value("DxClusterCallsign").toString();
+    }
+    if (defaultCall.isEmpty()) {
+        defaultCall = s.value("User/Callsign").toString();
     }
 
     auto* connGroup = new QGroupBox("RBN Connection");
@@ -1172,6 +1432,36 @@ void SpotHubDialog::buildFreeDvTab(QTabWidget* tabs)
 
     auto& s = AppSettings::instance();
 
+    // Post-3J-2 UX fix: identity-status row. FreeDV Reporter needs a
+    // callsign + grid to connect; without it the WebSocket session
+    // gets dropped by the server. The Settings tab is the single
+    // source of identity, but the user is looking at the FreeDV tab
+    // when they want to know what is going on, so a status label
+    // surfaces the resolved identity here.
+    {
+        const QString call = s.value("FreeDvReporter/Callsign",
+            s.value("User/Callsign").toString()).toString();
+        const QString gridSquare = s.value("FreeDvReporter/GridSquare",
+            s.value("User/GridSquare").toString()).toString();
+        m_freedvIdentityLabel = new QLabel;
+        m_freedvIdentityLabel->setObjectName("freedvIdentityLabel");
+        m_freedvIdentityLabel->setTextFormat(Qt::RichText);
+        m_freedvIdentityLabel->setWordWrap(true);
+        if (call.isEmpty() || gridSquare.isEmpty()) {
+            m_freedvIdentityLabel->setText(
+                "<b style='color:#e6c200;'>No identity set.</b> "
+                "Go to the <b>Settings</b> tab and fill in your callsign "
+                "and grid square before starting FreeDV Reporter.");
+        } else {
+            m_freedvIdentityLabel->setText(QString(
+                "Identity: <b>%1</b> / <b>%2</b> (set in Settings tab)")
+                .arg(call, gridSquare));
+            m_freedvIdentityLabel->setStyleSheet(
+                "QLabel { color: #4caf50; }");
+        }
+        layout->addWidget(m_freedvIdentityLabel);
+    }
+
     auto* connGroup = new QGroupBox("FreeDV QSO Reporter");
     auto* connLayout = new QVBoxLayout(connGroup);
     connLayout->setSpacing(4);
@@ -1196,6 +1486,10 @@ void SpotHubDialog::buildFreeDvTab(QTabWidget* tabs)
     m_freedvAutoStartBtn->setCheckable(true);
     m_freedvAutoStartBtn->setChecked(s.value("FreeDvAutoStart", "False").toString() == "True");
     m_freedvAutoStartBtn->setStyleSheet(kAutoToggleStyle);
+    m_freedvAutoStartBtn->setToolTip(
+        "Identity (callsign and grid square) must be set in the "
+        "Settings tab first. Auto-Start with an empty identity is "
+        "skipped at launch time and the connection is not attempted.");
     connect(m_freedvAutoStartBtn, &QPushButton::toggled, this, [this](bool on) {
         m_freedvAutoStartBtn->setText(on ? "Auto-Start: ON" : "Auto-Start: OFF");
         auto& settings = AppSettings::instance();
@@ -1219,6 +1513,24 @@ void SpotHubDialog::buildFreeDvTab(QTabWidget* tabs)
     connect(m_freedvStartBtn, &QPushButton::clicked, this, [this] {
         if (m_freedvClient && m_freedvClient->isConnected()) {
             emit freedvStopRequested();
+            return;
+        }
+        // Post-3J-2 UX fix: refuse to start with an empty identity.
+        // Attempting startConnection() with no callsign produces an
+        // anonymous WebSocket session that the qso.freedv.org server
+        // drops. Surface the missing identity in the status label.
+        auto& settings = AppSettings::instance();
+        const QString call = settings.value("FreeDvReporter/Callsign",
+            settings.value("User/Callsign").toString()).toString();
+        const QString gridSquare = settings.value("FreeDvReporter/GridSquare",
+            settings.value("User/GridSquare").toString()).toString();
+        if (call.isEmpty() || gridSquare.isEmpty()) {
+            if (m_freedvStatusLabel) {
+                m_freedvStatusLabel->setText(
+                    "Identity missing - set callsign and grid in Settings tab.");
+                m_freedvStatusLabel->setStyleSheet(
+                    "QLabel { color: #e6c200; font-size: 11px; }");
+            }
             return;
         }
         emit freedvStartRequested();
@@ -1294,9 +1606,20 @@ void SpotHubDialog::buildPskTab(QTabWidget* tabs)
     grid->setColumnStretch(1, 1);
     int row = 0;
 
+    // Post-3J-2 UX fix: extend the existing PskReporterCallsign ->
+    // DxClusterCallsign fallback chain with one more hop to the
+    // canonical User/Callsign key written by the Settings tab. Same
+    // shape for grid: PskReporterGrid -> User/GridSquare.
     QString defaultCall = s.value("PskReporterCallsign").toString();
     if (defaultCall.isEmpty()) {
         defaultCall = s.value("DxClusterCallsign").toString();
+    }
+    if (defaultCall.isEmpty()) {
+        defaultCall = s.value("User/Callsign").toString();
+    }
+    QString defaultGrid = s.value("PskReporterGrid").toString();
+    if (defaultGrid.isEmpty()) {
+        defaultGrid = s.value("User/GridSquare").toString();
     }
 
     grid->addWidget(new QLabel("Callsign:"), row, 0);
@@ -1308,7 +1631,7 @@ void SpotHubDialog::buildPskTab(QTabWidget* tabs)
     row++;
 
     grid->addWidget(new QLabel("Grid:"), row, 0);
-    m_pskGridEdit = new QLineEdit(s.value("PskReporterGrid").toString());
+    m_pskGridEdit = new QLineEdit(defaultGrid);
     m_pskGridEdit->setObjectName("pskGridEdit");
     m_pskGridEdit->setPlaceholderText("4-character or 6-character Maidenhead");
     m_pskGridEdit->setStyleSheet(kLineEditStyle);

@@ -1338,6 +1338,21 @@ void RadioModel::restoreSpotClientAutoStartState()
                == QStringLiteral("True");
     };
 
+    // Post-3J-2 UX fix: identity fall-back chain. The SpotHub Settings
+    // tab writes a canonical User/Callsign + User/GridSquare pair. Each
+    // per-source loader first checks its own legacy key, then falls
+    // back to the canonical key. Loaders that need identity skip the
+    // auto-start when no callsign is configured anywhere.
+    const QString userCallsign =
+        s.value(QStringLiteral("User/Callsign")).toString();
+    const QString userGrid =
+        s.value(QStringLiteral("User/GridSquare")).toString();
+    auto resolveCall = [&s, &userCallsign](const QString& perSourceKey) {
+        QString v = s.value(perSourceKey).toString();
+        if (v.isEmpty()) v = userCallsign;
+        return v;
+    };
+
     // DxCluster
     if (m_dxCluster && isTrue(QStringLiteral("DxClusterAutoConnect"))) {
         m_dxCluster->connectToCluster(
@@ -1345,7 +1360,7 @@ void RadioModel::restoreSpotClientAutoStartState()
                     QStringLiteral("dxc.nc7j.com")).toString(),
             static_cast<quint16>(
                 s.value(QStringLiteral("DxClusterPort"), 7300).toInt()),
-            s.value(QStringLiteral("DxClusterCallsign")).toString());
+            resolveCall(QStringLiteral("DxClusterCallsign")));
     }
 
     // RBN (same DxClusterClient class, different keys / default host).
@@ -1355,7 +1370,7 @@ void RadioModel::restoreSpotClientAutoStartState()
                     QStringLiteral("telnet.reversebeacon.net")).toString(),
             static_cast<quint16>(
                 s.value(QStringLiteral("RbnPort"), 7000).toInt()),
-            s.value(QStringLiteral("RbnCallsign")).toString());
+            resolveCall(QStringLiteral("RbnCallsign")));
     }
 
     // WSJT-X (UDP bind on the configured address / port).
@@ -1383,14 +1398,54 @@ void RadioModel::restoreSpotClientAutoStartState()
 
     // FreeDV Reporter (WebSocket connect; identity / URL already plumbed
     // in ctor at lines 936-953).
+    //
+    // Post-3J-2 UX fix: re-resolve identity from the User/* fall-back
+    // chain and call setIdentity() before startConnection(). The ctor
+    // only reads FreeDvReporter/Callsign + FreeDvReporter/GridSquare;
+    // if those are empty but the user has set User/Callsign via the
+    // Settings tab, the connection used to fire anonymously and the
+    // qso.freedv.org server would drop it. Now: (1) re-apply identity
+    // from User/* if the per-source keys are empty, (2) skip the
+    // connect entirely when no callsign is configured anywhere.
     if (m_freeDvReporter && isTrue(QStringLiteral("FreeDvAutoStart"))) {
-        m_freeDvReporter->startConnection();
+        const QString freedvCall = resolveCall(
+            QStringLiteral("FreeDvReporter/Callsign"));
+        QString freedvGrid =
+            s.value(QStringLiteral("FreeDvReporter/GridSquare")).toString();
+        if (freedvGrid.isEmpty()) freedvGrid = userGrid;
+        if (freedvCall.isEmpty() || freedvGrid.isEmpty()) {
+            qWarning("RadioModel: FreeDV Reporter auto-start skipped - "
+                     "no identity configured. Set callsign and grid in "
+                     "SpotHub > Settings tab.");
+        } else {
+            const QString message =
+                s.value(QStringLiteral("FreeDvReporter/Message")).toString();
+            m_freeDvReporter->setIdentity(
+                freedvCall, freedvGrid, message,
+                QStringLiteral("NereusSDR"));
+            m_freeDvReporter->startConnection();
+        }
     }
 
     // PSK Reporter: send-only. The AutoStart flag is persisted by the
     // F2 dialog for UI consistency but has no corresponding "start"
     // action here; the client transmits reportDecode batches once it
-    // receives WSJT-X spots through the in-process signal graph.
+    // receives WSJT-X spots through the in-process signal graph. The
+    // identity is still refreshed here so reportDecode batches go out
+    // under the operator's callsign (post-3J-2 UX fix), again using
+    // the User/* fall-back chain when the legacy PskReporter/ keys are
+    // empty.
+    if (m_pskReporter) {
+        const QString pskCall = resolveCall(
+            QStringLiteral("PskReporter/Callsign"));
+        QString pskGrid =
+            s.value(QStringLiteral("PskReporter/GridSquare")).toString();
+        if (pskGrid.isEmpty()) pskGrid = userGrid;
+        if (!pskCall.isEmpty()) {
+            m_pskReporter->setIdentity(pskCall, pskGrid,
+                                       QStringLiteral("NereusSDR"));
+        }
+    }
 }
 
 bool RadioModel::isConnected() const

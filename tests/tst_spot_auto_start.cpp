@@ -213,10 +213,12 @@ private slots:
 
     void freeDvReporterAutoConnectIsNonDestructive()
     {
-        // AutoConnect=True with no extra config (RadioModel ctor already
-        // pulled identity from AppSettings). The call must not crash and
-        // must not interfere with the other clients.
+        // AutoConnect=True with identity pre-populated so the safety
+        // gate doesn't skip the call. The call must not crash and must
+        // not interfere with the other clients.
         testSettings().setValue("FreeDvAutoStart", "True");
+        testSettings().setValue("User/Callsign", QStringLiteral("KG4VCF"));
+        testSettings().setValue("User/GridSquare", QStringLiteral("EM73"));
 
         RadioModel model;
         model.restoreSpotClientAutoStartState();
@@ -225,6 +227,46 @@ private slots:
         QVERIFY(model.dxCluster() != nullptr);
         QVERIFY(model.rbn() != nullptr);
         QVERIFY(model.wsjtx() != nullptr);
+    }
+
+    // Post-3J-2: identity-aware FreeDV auto-start. The earlier landing
+    // unconditionally fired startConnection() whenever FreeDvAutoStart
+    // was True, producing anonymous reports (callsign empty) and the
+    // user-reported "FreeDV Reporter not connecting" symptom. The
+    // Settings tab puts a single source of identity in front of the
+    // user; the restore path now refuses to start the WebSocket when
+    // no identity is configured.
+
+    void freeDvAutoStartSkipsWhenIdentityMissing()
+    {
+        // AutoStart=True but no callsign anywhere.
+        testSettings().setValue("FreeDvAutoStart", "True");
+
+        RadioModel model;
+        model.restoreSpotClientAutoStartState();
+
+        // No identity --> client must not start.
+        QVERIFY(!model.freeDvReporter()->isConnected());
+    }
+
+    void freeDvAutoStartFallsBackToUserCallsign()
+    {
+        // User/Callsign is set, FreeDvReporter/Callsign is not.
+        testSettings().setValue("FreeDvAutoStart", "True");
+        testSettings().setValue("User/Callsign", QStringLiteral("KG4VCF"));
+        testSettings().setValue("User/GridSquare", QStringLiteral("EM73"));
+
+        RadioModel model;
+        model.restoreSpotClientAutoStartState();
+
+        // The client's identity field should reflect User/Callsign
+        // because the restore path re-applied setIdentity from the
+        // User/* fallback. Test seam is callsignForTest (returns the
+        // stored m_callsign).
+        QCOMPARE(model.freeDvReporter()->callsignForTest(),
+                 QString("KG4VCF"));
+        QCOMPARE(model.freeDvReporter()->gridSquareForTest(),
+                 QString("EM73"));
     }
 
     // ── PSK Reporter ────────────────────────────────────────────────────

@@ -4322,11 +4322,12 @@ nereus_add_test(tst_spot_overlay_render)
 # Pins the contract that SpotHubDialog (the AetherSDR DxClusterDialog
 # port) constructs successfully when handed all 7 spot-ingest clients
 # + SpotModel + DxccColorProvider, that its top-level QTabWidget
-# exposes exactly 9 tabs, that the tab labels appear in AetherSDR's
-# upstream order, that each per-source tab carries the uniform template
-# (F2), and that the Spot List tab hosts the merged 8-column table with
-# band + source pill filters (F3). 21 tests total:
-#   F1 (3): dialogConstructs, hasNineTabs, tabOrderMatchesAetherSdr
+# exposes exactly 10 tabs (post-3J-2 NereusSDR-native Settings tab at
+# index 0 plus the 9 AetherSDR upstream tabs), that the tab labels
+# appear in the documented order, that each per-source tab carries the
+# uniform template (F2), and that the Spot List tab hosts the merged
+# 8-column table with band + source pill filters (F3). 21 tests total:
+#   F1 (3): dialogConstructs, hasTenTabs, tabOrderMatchesAetherSdr
 #   F2 (12): per-source tab content + everySourceTabHasUniformTemplate
 #   F3 (6): spotListTabHasTableView, spotListTabHasTwelveBandPills,
 #           spotListTabHasSevenSourcePills,
@@ -4334,8 +4335,25 @@ nereus_add_test(tst_spot_overlay_render)
 #           spotListSourcePillTogglesProxyFilter,
 #           doubleClickOnSpotRowEmitsTuneRequested
 # Source: AetherSDR src/gui/DxClusterDialog.{h,cpp} [@0cd4559]; Display
-# tab content lands in F4.
+# tab content lands in F4. Settings tab is NereusSDR-native (no
+# upstream); see tst_spothub_settings_tab for its content contract.
 nereus_add_test(tst_spothub_dialog_smoke)
+
+# ── Post-3J-2: SpotHub Settings tab (operator identity) ────────────────────
+# Pins the contract that SpotHubDialog now exposes a Settings tab in
+# the first position with QLineEdit fields for callsign + grid + FreeDV
+# status message, a Save button that writes to the canonical User/* +
+# FreeDvReporter/Message keys AND propagates to the per-source legacy
+# keys (DxClusterCallsign / RbnCallsign / PskReporterCallsign /
+# FreeDvReporter/Callsign / FreeDvReporter/GridSquare), validation that
+# rejects empty callsigns and invalid Maidenhead grids, the FreeDV tab
+# identity-status label (green when identity is set / yellow warning
+# when missing), and the per-source tabs falling back to User/Callsign
+# when their per-source key is empty.
+# Source: NereusSDR-native. AetherSDR upstream scatters identity
+# fields across each per-source tab with no central entry point;
+# the Settings tab is a NereusSDR UX correction.
+nereus_add_test(tst_spothub_settings_tab)
 
 # ── Phase 3J-2 Task G1: FreeDVReporterDialog shell + 14-col table ─────────
 # Pins the contract that FreeDVReporterDialog (the freedv-gui

@@ -103,6 +103,33 @@
 //                                    pinned for the smoke-test
 //                                    harness. AI tooling: Anthropic
 //                                    Claude Code.
+//   2026-05-11  J.J. Boyd / KG4VCF  Post-3J-2 UX fix. Adds a
+//                                    Settings tab at index 0 as the
+//                                    single source of operator
+//                                    identity (callsign + grid +
+//                                    FreeDV status message). Save
+//                                    button writes to canonical
+//                                    User/Callsign + User/GridSquare
+//                                    + FreeDvReporter/Message keys
+//                                    and propagates to the per-source
+//                                    legacy keys
+//                                    (DxClusterCallsign / RbnCallsign
+//                                    / PskReporterCallsign /
+//                                    FreeDvReporter/Callsign /
+//                                    FreeDvReporter/GridSquare).
+//                                    Per-source tabs (Cluster / RBN /
+//                                    PSK Reporter) now fall back to
+//                                    User/Callsign when their
+//                                    per-source key is empty. FreeDV
+//                                    tab gains an identity-status
+//                                    label (green = set, yellow = no
+//                                    identity). Closes the
+//                                    user-reported "FreeDV Reporter
+//                                    not connecting" bug: the auto-
+//                                    start used to fire with an empty
+//                                    callsign, producing anonymous
+//                                    connection attempts. AI tooling:
+//                                    Anthropic Claude Code.
 //   2026-05-11  J.J. Boyd / KG4VCF  Phase 3J-2 Task F4. Display tab
 //                                    content. Folds AetherSDR's
 //                                    standalone
@@ -245,6 +272,10 @@ signals:
     void spotsClearedAll();
 
 private:
+    // NereusSDR-native Settings tab (first position) for central
+    // operator identity. Post-3J-2 UX fix.
+    void buildSettingsTab(QTabWidget* tabs);
+
     // Shell-only stubs in F1. F2-F4 fill these out.
     void buildClusterTab(QTabWidget* tabs);
     void buildRbnTab(QTabWidget* tabs);
@@ -267,6 +298,25 @@ private:
     PskReporterClient*    m_pskClient{nullptr};
     SpotModel*            m_spotModel{nullptr};
     DxccColorProvider*    m_dxccProvider{nullptr};
+
+    // Settings tab (NereusSDR-native, post-3J-2 UX fix). Held so the
+    // Save button slot can re-read the QLineEdit text and write to
+    // AppSettings + propagate to live FreeDVReporterClient +
+    // PskReporterClient identity. The error label surfaces validation
+    // failures (empty callsign / invalid Maidenhead grid); the saved
+    // label flashes "Saved" briefly after a successful Save.
+    QLineEdit*      m_settingsCallEdit{nullptr};
+    QLineEdit*      m_settingsGridEdit{nullptr};
+    QLineEdit*      m_settingsFreedvMsgEdit{nullptr};
+    QPushButton*    m_settingsSaveBtn{nullptr};
+    QLabel*         m_settingsErrorLabel{nullptr};
+    QLabel*         m_settingsSavedLabel{nullptr};
+    QLabel*         m_settingsCurrentLabel{nullptr};
+
+    // FreeDV tab identity-status label (NereusSDR-native, post-3J-2).
+    // Green when identity is configured; yellow warning when missing
+    // and the user needs to visit the Settings tab.
+    QLabel*         m_freedvIdentityLabel{nullptr};
 
     // From AetherSDR src/gui/DxClusterDialog.h:141-199 [@0cd4559].
     // Per-source member pointers needed by F2 tab builders. Each

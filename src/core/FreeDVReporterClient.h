@@ -166,6 +166,14 @@ public:
     void handleEngineIOForTest(const QString& msg) { handleEngineIO(msg); }
     void handleSocketIOForTest(const QString& msg) { handleSocketIO(msg); }
 
+    // Identity accessors for the auto-start identity-aware tests. The
+    // SpotHub Settings tab plus RadioModel::restoreSpotClientAutoStartState
+    // resolve the operator's callsign / grid from User/* fallback chains
+    // and call setIdentity() before startConnection(); tst_spot_auto_start
+    // pins that round-trip via these accessors.
+    QString callsignForTest() const { return m_callsign; }
+    QString gridSquareForTest() const { return m_gridSquare; }
+
 signals:
     // Connection lifecycle
     void connected();

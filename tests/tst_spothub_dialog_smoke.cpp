@@ -8,15 +8,18 @@
 // Phase 3J-2 Task F1 + F2 + F3 + F4. Pins the contract that
 // SpotHubDialog constructs successfully when handed all 6
 // spot-ingest clients + the SpotModel + the DxccColorProvider,
-// that its top-level QTabWidget exposes exactly 9 tabs, that the
-// tab labels appear in AetherSDR's upstream order (Cluster, RBN,
-// WSJT-X, SpotCollector, POTA, FreeDV, PSK Reporter, Spot List,
-// Display), and (F2) that each per-source tab carries the uniform
-// template: connection-control widgets, auto-start toggle,
-// start/stop button, status line, and a raw-event console. WSJT-X
-// carries the three filter checkboxes and four color picker
-// buttons. PSK Reporter is NereusSDR-native and uses the same
-// uniform shape.
+// that its top-level QTabWidget exposes exactly 10 tabs, that the
+// tab labels appear in NereusSDR's adjusted order (Settings as the
+// first tab; then Cluster, RBN, WSJT-X, SpotCollector, POTA, FreeDV,
+// PSK Reporter, Spot List, Display from upstream), and (F2) that each
+// per-source tab carries the uniform template: connection-control
+// widgets, auto-start toggle, start/stop button, status line, and a
+// raw-event console. WSJT-X carries the three filter checkboxes and
+// four color picker buttons. PSK Reporter is NereusSDR-native and uses
+// the same uniform shape. The Settings tab (first position) is a
+// NereusSDR addition for central operator identity and is verified by
+// `tst_spothub_settings_tab.cpp` rather than the per-source uniform
+// template test.
 //
 // F3 extends the contract with the Spot List tab: a QTableView
 // bound to BandFilterProxy(SpotTableModel), a row of 12 band-filter
@@ -66,7 +69,7 @@ class TestSpotHubDialogSmoke : public QObject {
     Q_OBJECT
 private slots:
     void dialogConstructs();
-    void hasNineTabs();
+    void hasTenTabs();
     void tabOrderMatchesAetherSdr();
 
     // F2: per-source tab content (uniform template).
@@ -126,11 +129,11 @@ void TestSpotHubDialogSmoke::dialogConstructs() {
     delete dlg;
 }
 
-void TestSpotHubDialogSmoke::hasNineTabs() {
+void TestSpotHubDialogSmoke::hasTenTabs() {
     auto* dlg = makeDialog();
     auto* tabs = dlg->findChild<QTabWidget*>();
     QVERIFY(tabs != nullptr);
-    QCOMPARE(tabs->count(), 9);
+    QCOMPARE(tabs->count(), 10);
     delete dlg;
 }
 
@@ -138,15 +141,19 @@ void TestSpotHubDialogSmoke::tabOrderMatchesAetherSdr() {
     auto* dlg = makeDialog();
     auto* tabs = dlg->findChild<QTabWidget*>();
     QVERIFY(tabs != nullptr);
-    QVERIFY(tabs->tabText(0).contains("Cluster", Qt::CaseInsensitive));
-    QVERIFY(tabs->tabText(1).contains("RBN", Qt::CaseInsensitive));
-    QVERIFY(tabs->tabText(2).contains("WSJT", Qt::CaseInsensitive));
-    QVERIFY(tabs->tabText(3).contains("SpotCollector", Qt::CaseInsensitive));
-    QVERIFY(tabs->tabText(4).contains("POTA", Qt::CaseInsensitive));
-    QVERIFY(tabs->tabText(5).contains("FreeDV", Qt::CaseInsensitive));
-    QVERIFY(tabs->tabText(6).contains("PSK", Qt::CaseInsensitive));
-    QVERIFY(tabs->tabText(7).contains("Spot List", Qt::CaseInsensitive));
-    QVERIFY(tabs->tabText(8).contains("Display", Qt::CaseInsensitive));
+    // NereusSDR-native Settings tab is in position 0; the AetherSDR
+    // upstream order (Cluster, RBN, WSJT, SpotCollector, POTA, FreeDV,
+    // PSK, Spot List, Display) is preserved starting at index 1.
+    QVERIFY(tabs->tabText(0).contains("Settings", Qt::CaseInsensitive));
+    QVERIFY(tabs->tabText(1).contains("Cluster", Qt::CaseInsensitive));
+    QVERIFY(tabs->tabText(2).contains("RBN", Qt::CaseInsensitive));
+    QVERIFY(tabs->tabText(3).contains("WSJT", Qt::CaseInsensitive));
+    QVERIFY(tabs->tabText(4).contains("SpotCollector", Qt::CaseInsensitive));
+    QVERIFY(tabs->tabText(5).contains("POTA", Qt::CaseInsensitive));
+    QVERIFY(tabs->tabText(6).contains("FreeDV", Qt::CaseInsensitive));
+    QVERIFY(tabs->tabText(7).contains("PSK", Qt::CaseInsensitive));
+    QVERIFY(tabs->tabText(8).contains("Spot List", Qt::CaseInsensitive));
+    QVERIFY(tabs->tabText(9).contains("Display", Qt::CaseInsensitive));
     delete dlg;
 }
 
