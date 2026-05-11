@@ -293,6 +293,21 @@ warren@wpratt.com
 #include "core/wdsp_api.h"
 #include "gui/SpectrumWidget.h"
 
+// ── Phase 3J-2 H2: spot-system ownership ────────────────────────────────
+#include "core/DxClusterClient.h"
+#include "core/WsjtxClient.h"
+#include "core/SpotCollectorClient.h"
+#include "core/PotaClient.h"
+#include "core/FreeDVReporterClient.h"
+#include "core/PskReporterClient.h"
+#include "core/DxccColorProvider.h"
+#include "core/DxSpot.h"
+#include "core/FreeDVStation.h"
+#include "models/SpotModel.h"
+#include "models/SpotTableModel.h"  // for SpotTableModel::extractMode (mode guess)
+#include "models/FreeDVStationModel.h"
+#include "models/RxDecodeModel.h"
+
 #include <algorithm>
 #include <cmath>
 
@@ -879,6 +894,96 @@ RadioModel::RadioModel(QObject* parent)
     // user-override layer persisted in AppSettings (keys: "filters/<mode>/<slot>/…").
     m_filterPresetStore = new FilterPresetStore(this);
 
+    // ── Phase 3J-2 H2: spot-system construction + wiring ──────────────────────
+    //
+    // View models first so the per-source adapter slots have live sinks the
+    // moment a client emits spotReceived. Then construct each ingest client
+    // with identity / endpoint defaults from AppSettings; startConnection()
+    // is left to the M3 follow-up (the AutoConnect key family wires that).
+    //
+    // The unique_ptrs all pass `this` as the QObject parent so the dtor
+    // ordering (Qt child cleanup, reverse construction order on the
+    // unique_ptr stack) drains the network sockets before the model leaves
+    // scope. No raw new / delete anywhere in this block.
+    auto& s = AppSettings::instance();
+
+    m_spotModel           = std::make_unique<SpotModel>(this);
+    m_freeDvStationModel  = std::make_unique<FreeDVStationModel>(this);
+    m_rxDecodeModel       = std::make_unique<RxDecodeModel>(/*maxSize*/ 200, this);
+    m_dxccColorProvider   = std::make_unique<DxccColorProvider>(this);
+
+    // DX cluster: host / port / callsign defaults from AppSettings
+    // ("DxCluster/{Host,Port,Callsign}"). startConnection() is deferred to
+    // M3. The same DxClusterClient class drives both this and m_rbn (which
+    // tags every spot with source="RBN" because the spotter callsign has
+    // an "-#" suffix; see DxClusterClient.h Modification-history block).
+    m_dxCluster = std::make_unique<DxClusterClient>(this);
+
+    // Reverse Beacon Network: second DxClusterClient instance pointing at
+    // telnet.reversebeacon.net by default. Identity / port read from
+    // "Rbn/{Host,Port,Callsign}".
+    m_rbn = std::make_unique<DxClusterClient>(this);
+
+    m_wsjtx          = std::make_unique<WsjtxClient>(this);
+    m_spotCollector  = std::make_unique<SpotCollectorClient>(this);
+    m_pota           = std::make_unique<PotaClient>(this);
+
+    m_freeDvReporter = std::make_unique<FreeDVReporterClient>(this);
+    m_freeDvReporter->setIdentity(
+        s.value(QStringLiteral("FreeDvReporter/Callsign"),
+                QString()).toString(),
+        s.value(QStringLiteral("FreeDvReporter/GridSquare"),
+                QString()).toString(),
+        s.value(QStringLiteral("FreeDvReporter/Message"),
+                QString()).toString(),
+        QStringLiteral("NereusSDR"));
+    {
+        const QString serverUrl = s.value(
+            QStringLiteral("FreeDvReporter/ServerUrl"),
+            QStringLiteral("wss://qso.freedv.org/socket.io/?EIO=4&transport=websocket")
+        ).toString();
+        if (!serverUrl.isEmpty()) {
+            m_freeDvReporter->setServerUrl(serverUrl);
+        }
+    }
+
+    m_pskReporter = std::make_unique<PskReporterClient>(this);
+    m_pskReporter->setIdentity(
+        s.value(QStringLiteral("PskReporter/Callsign"),
+                QString()).toString(),
+        s.value(QStringLiteral("PskReporter/GridSquare"),
+                QString()).toString(),
+        QStringLiteral("NereusSDR"));
+
+    // Per-source adapter slots. Auto-connection (sender + receiver both on
+    // the main thread) gives DirectConnection, so the spot lands in
+    // SpotModel synchronously on the emitter's call.
+    connect(m_dxCluster.get(),      &DxClusterClient::spotReceived,
+            this, &RadioModel::onClusterSpotReceived);
+    connect(m_rbn.get(),            &DxClusterClient::spotReceived,
+            this, &RadioModel::onRbnSpotReceived);
+    connect(m_wsjtx.get(),          &WsjtxClient::spotReceived,
+            this, &RadioModel::onWsjtxSpotReceived);
+    connect(m_spotCollector.get(),  &SpotCollectorClient::spotReceived,
+            this, &RadioModel::onSpotCollectorSpotReceived);
+    connect(m_pota.get(),           &PotaClient::spotReceived,
+            this, &RadioModel::onPotaSpotReceived);
+    connect(m_freeDvReporter.get(), &FreeDVReporterClient::spotReceived,
+            this, &RadioModel::onFreeDvReporterSpotReceived);
+    connect(m_pskReporter.get(),    &PskReporterClient::spotReceived,
+            this, &RadioModel::onPskReporterSpotReceived);
+
+    // FreeDV Reporter station signals drive FreeDVStationModel directly.
+    // The model's onStationAdded/Updated/Removed slots stamp distance + heading
+    // when our grid is set, then re-emit so the dialog and any other
+    // subscribers see the enriched FreeDVStation.
+    connect(m_freeDvReporter.get(), &FreeDVReporterClient::stationAdded,
+            m_freeDvStationModel.get(), &FreeDVStationModel::onStationAdded);
+    connect(m_freeDvReporter.get(), &FreeDVReporterClient::stationUpdated,
+            m_freeDvStationModel.get(), &FreeDVStationModel::onStationUpdated);
+    connect(m_freeDvReporter.get(), &FreeDVReporterClient::stationRemoved,
+            m_freeDvStationModel.get(), &FreeDVStationModel::onStationRemoved);
+
     // 3M-1a (Codex review on PR #144): wire RF-Power-slider movements to
     // the radio's drive byte.  Without this, the slider updates UI/model
     // state but `CmdHighPriority` byte 345 stays stale — users move the
@@ -1028,6 +1133,178 @@ RadioModel::~RadioModel()
     teardownConnection();
     qDeleteAll(m_slices);
     qDeleteAll(m_panadapters);
+}
+
+// ── Phase 3J-2 H2: spot-adapter slot implementations ────────────────────────
+//
+// Each per-source slot translates a DxSpot into the QMap<QString,QString>
+// kvs shape SpotModel::applySpotStatus consumes (TCI-style sink). The kvs
+// keys come from the plan task spec; SpotModel's applySpotStatus dispatches
+// 12 known keys verbatim and stores callsign / rx_freq / tx_freq / mode /
+// color / background_color / source / spotter_callsign / comment /
+// timestamp / lifetime_seconds / priority. Each adapter reads its own
+// <Source>SpotLifetimeSec AppSettings key (default 1800 s for slow sources
+// like cluster / SpotCollector, 120 s for WSJT-X-style real-time decodes
+// per AetherSDR DxClusterDialog.cpp:1201 [@0cd4559]) and pre-stamps the
+// per-source <Source>SpotColor.
+//
+// Mode hint: SpotTableModel::extractMode parses comments for known mode
+// tokens (CW / SSB / USB / LSB / AM / FM / FT8 / FT4 / JS8 / RTTY / PSK /
+// PSK31 / PSK63 / OLIVIA / JT65 / JT9 / SAM / NFM / DIGU / DIGL). When the
+// client already supplied DxSpot::source (which it does for all seven
+// clients in NereusSDR), the per-source label trumps the comment heuristic
+// for the kvs `source` key.
+//
+// The kvs map is the canonical TCI shape; the in-house adapter writes
+// match AetherSDR TciProtocol.cpp:972-976 [@0cd4559] (the upstream
+// reference for the same key set).
+
+namespace {
+
+// Build a kvs map shared across all seven adapter slots. The source label
+// is taken from the DxSpot rather than the slot, because the FreeDV
+// Reporter dual-feed (FreeDVReporterClient.h:124-128 [@77e793a-derived])
+// synthesizes spots whose source field is already pre-stamped, and the
+// DxClusterClient port (DxClusterClient.h:36-44, NereusSDR addition)
+// promotes "Cluster" to "RBN" when the spotter callsign carries the
+// -# suffix.
+QMap<QString, QString> kvsFromSpot(const NereusSDR::DxSpot& spot,
+                                   int defaultLifetimeSec,
+                                   const QString& defaultColor)
+{
+    using NereusSDR::SpotTableModel;
+    QMap<QString, QString> kvs;
+    kvs[QStringLiteral("callsign")]         = spot.dxCall;
+    kvs[QStringLiteral("rx_freq")]          = QString::number(spot.freqMhz, 'f', 4);
+    kvs[QStringLiteral("tx_freq")]          = QString::number(spot.freqMhz, 'f', 4);
+    {
+        const QString mode = SpotTableModel::extractMode(spot.comment);
+        if (!mode.isEmpty()) {
+            kvs[QStringLiteral("mode")] = mode;
+        }
+    }
+    kvs[QStringLiteral("source")]           = spot.source;
+    kvs[QStringLiteral("spotter_callsign")] = spot.spotterCall;
+    kvs[QStringLiteral("comment")]          = spot.comment;
+    kvs[QStringLiteral("timestamp")]        = QString::number(
+        QDateTime::currentSecsSinceEpoch());
+    {
+        const int life = spot.lifetimeSec > 0
+                           ? spot.lifetimeSec
+                           : defaultLifetimeSec;
+        kvs[QStringLiteral("lifetime_seconds")] = QString::number(life);
+    }
+    if (!spot.color.isEmpty()) {
+        kvs[QStringLiteral("color")] = spot.color;
+    } else if (!defaultColor.isEmpty()) {
+        kvs[QStringLiteral("color")] = defaultColor;
+    }
+    return kvs;
+}
+
+}  // namespace
+
+void RadioModel::onClusterSpotReceived(const DxSpot& spot)
+{
+    if (!m_spotModel) { return; }
+    auto& s = AppSettings::instance();
+    const int lifetime = s.value(QStringLiteral("DxClusterSpotLifetimeSec"),
+                                 1800).toInt();
+    const QString color = s.value(QStringLiteral("DxClusterSpotColor"),
+                                  QStringLiteral("#D2B48C")).toString();
+    m_spotModel->applySpotStatus(m_nextSpotIndex++,
+                                 kvsFromSpot(spot, lifetime, color));
+}
+
+void RadioModel::onRbnSpotReceived(const DxSpot& spot)
+{
+    if (!m_spotModel) { return; }
+    auto& s = AppSettings::instance();
+    const int lifetime = s.value(QStringLiteral("RbnSpotLifetimeSec"),
+                                 1800).toInt();
+    const QString color = s.value(QStringLiteral("RbnSpotColor"),
+                                  QStringLiteral("#4488FF")).toString();
+    m_spotModel->applySpotStatus(m_nextSpotIndex++,
+                                 kvsFromSpot(spot, lifetime, color));
+}
+
+void RadioModel::onWsjtxSpotReceived(const DxSpot& spot)
+{
+    if (!m_spotModel) { return; }
+    auto& s = AppSettings::instance();
+    // WSJT-X spots are real-time and dense; AetherSDR's
+    // DxClusterDialog.cpp:1201 [@0cd4559] defaults to 120 s lifetime for
+    // the dialog's UI, so reuse that here.
+    const int lifetime = s.value(QStringLiteral("WsjtxSpotLifetimeSec"),
+                                 120).toInt();
+    const QString color = s.value(QStringLiteral("WsjtxSpotColor"),
+                                  QStringLiteral("#00FF00")).toString();
+    m_spotModel->applySpotStatus(m_nextSpotIndex++,
+                                 kvsFromSpot(spot, lifetime, color));
+
+    // RxDecodeModel dual-feed: every WSJT-X decode also lands in the
+    // "what my radio just heard" sink. WsjtxClient does not emit a separate
+    // decodeReceived signal; the spotReceived payload is the source for
+    // both sinks (see WsjtxClient.cpp:218-240 [v3J-2-B4]: single emit).
+    if (m_rxDecodeModel) {
+        RxDecode dec;
+        dec.callsign = spot.dxCall;
+        dec.freqMhz  = spot.freqMhz;
+        dec.snr      = spot.snr;
+        dec.mode     = SpotTableModel::extractMode(spot.comment);
+        dec.source   = QStringLiteral("WSJT-X");
+        dec.utcTime  = QDateTime::currentDateTimeUtc();
+        dec.payload  = spot.comment;
+        m_rxDecodeModel->addDecode(dec);
+    }
+}
+
+void RadioModel::onSpotCollectorSpotReceived(const DxSpot& spot)
+{
+    if (!m_spotModel) { return; }
+    auto& s = AppSettings::instance();
+    const int lifetime = s.value(QStringLiteral("SpotCollectorSpotLifetimeSec"),
+                                 1800).toInt();
+    const QString color = s.value(QStringLiteral("SpotCollectorSpotColor"),
+                                  QStringLiteral("#B0C4DE")).toString();
+    m_spotModel->applySpotStatus(m_nextSpotIndex++,
+                                 kvsFromSpot(spot, lifetime, color));
+}
+
+void RadioModel::onPotaSpotReceived(const DxSpot& spot)
+{
+    if (!m_spotModel) { return; }
+    auto& s = AppSettings::instance();
+    const int lifetime = s.value(QStringLiteral("PotaSpotLifetimeSec"),
+                                 3600).toInt();
+    const QString color = s.value(QStringLiteral("PotaSpotColor"),
+                                  QStringLiteral("#FFFF00")).toString();
+    m_spotModel->applySpotStatus(m_nextSpotIndex++,
+                                 kvsFromSpot(spot, lifetime, color));
+}
+
+void RadioModel::onFreeDvReporterSpotReceived(const DxSpot& spot)
+{
+    if (!m_spotModel) { return; }
+    auto& s = AppSettings::instance();
+    const int lifetime = s.value(QStringLiteral("FreeDvSpotLifetimeSec"),
+                                 1800).toInt();
+    const QString color = s.value(QStringLiteral("FreeDvSpotColor"),
+                                  QStringLiteral("#FF8C00")).toString();
+    m_spotModel->applySpotStatus(m_nextSpotIndex++,
+                                 kvsFromSpot(spot, lifetime, color));
+}
+
+void RadioModel::onPskReporterSpotReceived(const DxSpot& spot)
+{
+    if (!m_spotModel) { return; }
+    auto& s = AppSettings::instance();
+    const int lifetime = s.value(QStringLiteral("PskReporterSpotLifetimeSec"),
+                                 1800).toInt();
+    const QString color = s.value(QStringLiteral("PskReporterSpotColor"),
+                                  QStringLiteral("#FF00FF")).toString();
+    m_spotModel->applySpotStatus(m_nextSpotIndex++,
+                                 kvsFromSpot(spot, lifetime, color));
 }
 
 bool RadioModel::isConnected() const

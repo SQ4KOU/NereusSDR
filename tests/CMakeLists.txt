@@ -4231,3 +4231,21 @@ nereus_add_test(tst_spothub_dialog_smoke)
 # Filter / QSY / message bar (G2) and menu bar with Show / Filter /
 # Idle-longer-than menus (G3) follow in later tasks.
 nereus_add_test(tst_freedv_reporter_dialog)
+
+# ── Phase 3J-2 Task H2: RadioModel spot-client + view-model wiring ─────────
+# Pins the contract that RadioModel owns the seven spot-ingest clients
+# (DxCluster + RBN + WSJT-X + SpotCollector + POTA + FreeDV Reporter +
+# PSK Reporter), the three view models (SpotModel + FreeDVStationModel +
+# RxDecodeModel), and the DxccColorProvider, and that every client's
+# spotReceived(DxSpot) signal flows through a per-source adapter slot
+# into SpotModel::applySpotStatus. 13 tests total:
+#   accessor surface (5): spotModel, freeDvStationModel, rxDecodeModel,
+#                         dxccColorProvider, all-six-clients
+#   per-source adapters (8): dxCluster, rbn, wsjtx, wsjtx-decode-feed,
+#                            pota, spotCollector, freeDvReporter,
+#                            pskReporter
+#   freeDv station model (1): stationAdded -> stationCount round-trip
+# Source: NereusSDR-native. The plan task is Phase 3J-2 H2; AetherSDR's
+# upstream RadioModel applies spot status only via TCI parsing, not
+# per-client adapter slots, so the wiring shape is NereusSDR-specific.
+nereus_add_test(tst_radio_model_spot_wiring)

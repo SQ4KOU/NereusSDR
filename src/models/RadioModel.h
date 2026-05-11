@@ -142,6 +142,26 @@ class TxWorkerThread;
 // Stage C2 filter preset editor — user-override layer over Thetis defaults.
 class FilterPresetStore;
 
+// Phase 3J-2 H2: spot-system forward declarations. RadioModel owns the
+// seven spot-ingest clients (DxCluster, RBN, WSJT-X, SpotCollector,
+// POTA, FreeDV Reporter, PSK Reporter), the three view models
+// (SpotModel, FreeDVStationModel, RxDecodeModel), and the
+// DxccColorProvider. Each client's spotReceived(DxSpot) signal lands
+// in a per-source adapter slot that builds the QMap<QString,QString>
+// kvs SpotModel::applySpotStatus expects.
+class DxClusterClient;
+class WsjtxClient;
+class SpotCollectorClient;
+class PotaClient;
+class FreeDVReporterClient;
+class PskReporterClient;
+class DxccColorProvider;
+class SpotModel;
+class FreeDVStationModel;
+class RxDecodeModel;
+struct DxSpot;
+struct FreeDVStation;
+
 // RadioModel is the central data model for a connected radio.
 // It owns the RadioConnection (on a worker thread), ReceiverManager,
 // and all sub-models. It routes signals between components.
@@ -355,6 +375,28 @@ public:
     // FilterPresetsSetupPage can read/write user-customised presets.
     // Constructed once in RadioModel ctor; lifetime is RadioModel's lifetime.
     FilterPresetStore* filterPresetStore() const { return m_filterPresetStore; }
+
+    // ── Phase 3J-2 H2: spot-system accessors ────────────────────────────────
+    // RadioModel owns the seven spot-ingest clients, three view models, and
+    // the DxccColorProvider as std::unique_ptr members. Each accessor returns
+    // a non-owning pointer; lifetime is RadioModel's lifetime. MainWindow
+    // (H1) consumes these to instantiate SpotHubDialog + FreeDVReporterDialog
+    // with shared model pointers, and the M3 follow-up task wires the
+    // `<Source>/AutoConnect` AppSettings keys to actually start each client.
+    //
+    // Constructed in RadioModel ctor with identity / endpoint defaults from
+    // AppSettings; startConnection() is NOT called at construction time.
+    SpotModel*            spotModel()           const { return m_spotModel.get(); }
+    FreeDVStationModel*   freeDvStationModel()  const { return m_freeDvStationModel.get(); }
+    RxDecodeModel*        rxDecodeModel()       const { return m_rxDecodeModel.get(); }
+    DxccColorProvider*    dxccColorProvider()   const { return m_dxccColorProvider.get(); }
+    DxClusterClient*      dxCluster()           const { return m_dxCluster.get(); }
+    DxClusterClient*      rbn()                 const { return m_rbn.get(); }
+    WsjtxClient*          wsjtx()               const { return m_wsjtx.get(); }
+    SpotCollectorClient*  spotCollector()       const { return m_spotCollector.get(); }
+    PotaClient*           pota()                const { return m_pota.get(); }
+    FreeDVReporterClient* freeDvReporter()      const { return m_freeDvReporter.get(); }
+    PskReporterClient*    pskReporter()         const { return m_pskReporter.get(); }
 
     // 3M-1a G.1: expose TxChannel view so TxApplet and G.4 TUNE function
     // can call setTuneTone / setRunning without depending on WdspEngine.
@@ -961,6 +1003,27 @@ private slots:
     // reassigned anywhere in baseline Thetis — effectively no-op.
     void pumpAudioVolume(double audioVolume);
 
+    // ── Phase 3J-2 H2: per-source spot-adapter slots ────────────────────────
+    //
+    // Each ingest client emits spotReceived(DxSpot); the adapter slot
+    // translates that into the QMap<QString,QString> kvs shape
+    // SpotModel::applySpotStatus expects (TCI-style sink). Per-source
+    // lifetime and color defaults are read from AppSettings under the
+    // <Source>SpotLifetimeSec / <Source>SpotColor key family.
+    //
+    // The WSJT-X adapter is special: it also pushes to RxDecodeModel so the
+    // "what my radio just heard" feed tracks live decodes (NereusSDR design;
+    // freedv-gui has no equivalent feed). WsjtxClient does not have a
+    // separate decodeReceived signal; the single spotReceived signal is the
+    // source for both sinks.
+    void onClusterSpotReceived(const NereusSDR::DxSpot& spot);
+    void onRbnSpotReceived(const NereusSDR::DxSpot& spot);
+    void onWsjtxSpotReceived(const NereusSDR::DxSpot& spot);
+    void onSpotCollectorSpotReceived(const NereusSDR::DxSpot& spot);
+    void onPotaSpotReceived(const NereusSDR::DxSpot& spot);
+    void onFreeDvReporterSpotReceived(const NereusSDR::DxSpot& spot);
+    void onPskReporterSpotReceived(const NereusSDR::DxSpot& spot);
+
 private:
     // Phase 3Q-1: drives the RadioModel-level connection state machine.
     // Guards against redundant transitions (no emit if state unchanged).
@@ -1491,6 +1554,35 @@ private:
     // Stage C2 — filter preset user-override store.
     // Constructed in RadioModel ctor; QObject child so dtor cleans up.
     FilterPresetStore* m_filterPresetStore{nullptr};
+
+    // ── Phase 3J-2 H2: spot-system ownership ────────────────────────────────
+    //
+    // RadioModel becomes the wiring hub for Phase 3J-2's spot system. View
+    // models are constructed first (the adapter slots below depend on
+    // m_spotModel + m_rxDecodeModel + m_freeDvStationModel being live), then
+    // the ingest clients. Each client emits spotReceived(DxSpot); a per-
+    // source adapter slot translates that into the kvs map
+    // SpotModel::applySpotStatus expects.
+    //
+    // None of the clients start their network I/O at construction time;
+    // startConnection() / startListening() / startPolling() is the M3
+    // follow-up task. H2 only wires the in-process signal graph.
+    std::unique_ptr<SpotModel>            m_spotModel;
+    std::unique_ptr<FreeDVStationModel>   m_freeDvStationModel;
+    std::unique_ptr<RxDecodeModel>        m_rxDecodeModel;
+    std::unique_ptr<DxccColorProvider>    m_dxccColorProvider;
+
+    std::unique_ptr<DxClusterClient>      m_dxCluster;      // DX cluster (DxSpider / AR-Cluster / CC-Cluster)
+    std::unique_ptr<DxClusterClient>      m_rbn;            // Reverse Beacon Network (RBN-suffixed spotter)
+    std::unique_ptr<WsjtxClient>          m_wsjtx;
+    std::unique_ptr<SpotCollectorClient>  m_spotCollector;
+    std::unique_ptr<PotaClient>           m_pota;
+    std::unique_ptr<FreeDVReporterClient> m_freeDvReporter;
+    std::unique_ptr<PskReporterClient>    m_pskReporter;
+
+    // Monotonic index passed to SpotModel::applySpotStatus on every adapter
+    // dispatch. Increments once per emitted spot regardless of source.
+    int m_nextSpotIndex{0};
 };
 
 } // namespace NereusSDR
