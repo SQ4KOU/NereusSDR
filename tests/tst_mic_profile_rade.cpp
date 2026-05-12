@@ -101,8 +101,12 @@ private slots:
         QVERIFY(mgr.setActiveProfile(QStringLiteral("RADE"), &tm));
 
         QCOMPARE(tm.txLevelerOn(), true);
-        QCOMPARE(tm.txLevelerMaxGain(), 15);
-        QCOMPARE(tm.txLevelerDecay(), 100);
+        // 2026-05-12: bench feedback dropped Lev_MaxGain 15->6 dB and
+        // Lev_Decay 100->300 ms on the RADE preset (see
+        // MicProfileManager.cpp:748-755) to stop AGC pumping that was
+        // distorting the modem characteristics.  Test updated to match.
+        QCOMPARE(tm.txLevelerMaxGain(), 6);
+        QCOMPARE(tm.txLevelerDecay(), 300);
     }
 
     // ALC is a TXA-chain stage that does not apply to RADE (the modem

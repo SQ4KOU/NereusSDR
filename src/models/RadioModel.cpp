@@ -1873,7 +1873,18 @@ void RadioModel::wireRadeChannel(int sliceId, RadeChannel* channel,
     // which broke TUNE in RADE (TUNE writes PostGen + relies on
     // the modulator stage running). This reframe makes TUNE and
     // RADE TX share the same modulator path.
-    if (m_txWorker) {
+    //
+    // 2026-05-12 (PR #238 review P1 #4 follow-up): wire the
+    // txModemReady -> WDSP-modulator lambda UNCONDITIONALLY.  The
+    // lambda body checks `m_txWorker` on every fire (line below),
+    // so a wireRadeChannel call that lands before m_txWorker is
+    // created (test harness, or any sequence where the slice mode
+    // flips into RADE before connect time) still produces a live
+    // connection that comes online as soon as m_txWorker is.  The
+    // earlier `if (m_txWorker)` outer gate made the connect a
+    // permanent no-op in that ordering, which the parity tests
+    // (tst_rade_channel_model_wiring) caught.
+    {
         connect(channel, &RadeChannel::txModemReady, this,
                 [this](const QByteArray& iq) {
                     // BENCH DEBUG: one-shot first-fire log so we can

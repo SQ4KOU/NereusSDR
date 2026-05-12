@@ -63,12 +63,26 @@ public:
     }
 };
 
-// Pre-built 2-frame interleaved-stereo float32 PCM block (16 bytes).
-// Matches the kTestSamples shape in tst_audio_engine_rx_leak_during_mox.
-QByteArray make2FrameStereoFloatPcm() {
-    const float samples[4] = { 0.10f, 0.20f, -0.30f, -0.40f };
-    return QByteArray(reinterpret_cast<const char*>(samples),
-                      static_cast<int>(sizeof(samples)));
+// Build an N-frame interleaved-stereo float32 PCM block at 24 kHz
+// (the rate RadeChannel emits on rxSpeechReady).  Bench-fix path in
+// RadioModel::wireRadeChannel upsamples 24 -> 48 kHz before pushing
+// to AudioEngine; the lazy-built per-leg Resampler has a 4096-sample
+// internal window, so the first push of a tiny block produces zero
+// output frames ("resampler warmup") and never reaches the speakers
+// bus.  Sizing the test block to 1024 frames (~42 ms) clears the
+// warmup on the first call and gives the test something to count.
+QByteArray makeStereoFloatPcm(int frames) {
+    QByteArray buf;
+    buf.resize(frames * 2 * static_cast<int>(sizeof(float)));
+    auto* dst = reinterpret_cast<float*>(buf.data());
+    for (int i = 0; i < frames; ++i) {
+        // Cheap deterministic content: small sine-ish ramp.  Magnitude
+        // stays inside the speakers-bus float32 range.
+        const float v = 0.1f * static_cast<float>((i % 17) - 8) / 8.0f;
+        dst[2 * i + 0] = v;
+        dst[2 * i + 1] = v;
+    }
+    return buf;
 }
 
 } // namespace
@@ -114,9 +128,17 @@ private slots:
         const int baselinePushes = speakersRaw->pushCount();
         QCOMPARE(baselinePushes, 0);
 
-        // Drive the audio path.
-        const QByteArray pcm = make2FrameStereoFloatPcm();
-        channel.emitRxSpeechReadyForTest(pcm);
+        // Drive the audio path.  r8brain CDSPResampler24 ships with
+        // ReqAtten=206.91 dB by default — a very long filter with
+        // latency in the thousands of input samples (same caveat
+        // tst_rade_tx_pump:170-178 documents).  Pump 4 emissions of
+        // 1024 stereo frames at 24 kHz to fully clear the warmup
+        // window and guarantee at least one 48 kHz output block
+        // reaches the speakers bus on subsequent calls.
+        const QByteArray pcm = makeStereoFloatPcm(1024);
+        for (int rep = 0; rep < 4; ++rep) {
+            channel.emitRxSpeechReadyForTest(pcm);
+        }
 
         QVERIFY2(speakersRaw->pushCount() > baselinePushes,
                  "wireRadeChannel must connect RadeChannel::rxSpeechReady "
