@@ -90,9 +90,10 @@ private slots:
     // ── Contract 1: SpotHubDialog constructible from RadioModel ───────────
     //
     // If this test compiles, it proves the SpotHubDialog ctor signature
-    // (7 clients + SpotModel + DxccColorProvider + parent) lines up
-    // byte-for-byte with the RadioModel accessor return types. The
-    // MainWindow::openSpotHub() slot uses exactly this call shape.
+    // (7 clients + SpotModel + SpotTableModel + DxccColorProvider +
+    // parent) lines up byte-for-byte with the RadioModel accessor return
+    // types. The MainWindow::openSpotHub() slot uses exactly this call
+    // shape.
 
     void spotHubDialogConstructibleFromRadioModel()
     {
@@ -106,6 +107,7 @@ private slots:
             model.freeDvReporter(),
             model.pskReporter(),
             model.spotModel(),
+            model.spotTableModel(),
             model.dxccColorProvider(),
             nullptr);
         // No QVERIFY needed - reaching this line means the ctor
@@ -169,6 +171,7 @@ private slots:
             model.freeDvReporter(),
             model.pskReporter(),
             model.spotModel(),
+            model.spotTableModel(),
             model.dxccColorProvider(),
             nullptr);
         QObject::connect(&dlg, &SpotHubDialog::spotsClearedAll,
@@ -201,6 +204,7 @@ private slots:
             model.freeDvReporter(),
             model.pskReporter(),
             model.spotModel(),
+            model.spotTableModel(),
             model.dxccColorProvider(),
             nullptr);
         QSignalSpy spy(&dlg, &SpotHubDialog::tuneRequested);

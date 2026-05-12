@@ -165,20 +165,33 @@ void SliceModel::setDspMode(DSPMode mode)
     const DSPMode oldMode = m_dspMode;
     m_dspMode = mode;
 
-    // ── Phase 3R Task J3: mode-aware channel swap ─────────────────────────
+    // ── Phase 3R J3 + K-bench: RADE channel-additive lifecycle ────────────
     //
-    // RADE_U / RADE_L are NereusSDR-native DSPModes (J1) whose signal
-    // chain runs through RadeChannel (third_party/rade neural codec)
-    // instead of WDSP's RxChannel.  On the transition into or out of
-    // either RADE sideband we swap the underlying signal-chain channel.
-    // The swap is driven entirely off the local mode-change condition;
-    // non-RADE-to-non-RADE mode changes (e.g. USB -> LSB) are untouched
-    // and continue to use the WDSP RxChannel created at connect time.
+    // RADE_U / RADE_L are NereusSDR-native DSPModes (J1).  Original J3
+    // design destroyed the WDSP RxChannel and replaced it with a
+    // RadeChannel on entry into RADE.  K-bench reframed the RX pipeline
+    // (RxDspWorker.cpp:160-191) so RADE is now ADDITIVE rather than
+    // replacement:
+    //   - WDSP RxChannel stays alive in EVERY mode.  WDSP serves as
+    //     the SSB demod front-end and produces decoded audio that
+    //     feeds the S-meter / spectrum / AGC every tick.
+    //   - RadeChannel is created ALONGSIDE RxChannel in RADE_U /
+    //     RADE_L, consumes WDSP's decoded audio (downsampled to
+    //     24 kHz), and owns the speaker path while active.
+    //   - The WDSP-facing mode is mapped at the RxChannel boundary
+    //     (RxChannel::wdspModeFor): RADE_U -> USB, RADE_L -> LSB.
+    //     Without that mapping, raw enum 12/13 would land in WDSP's
+    //     mode enum (review finding 2026-05-12, PR #238).
     //
-    // RADE_U <-> RADE_L is also a channel swap (destroy and recreate),
-    // matching the standing J3 pattern that "mode change implies channel
-    // swap".  This is simpler than reusing the channel and re-calling
-    // setSideband, and keeps the lifecycle bookkeeping uniform.
+    // So the swap logic below is now only about RadeChannel
+    // create/destroy.  RxChannel is created once at connect time
+    // (RadioModel) and stays alive.
+    //
+    // RADE_U <-> RADE_L is still a destroy-and-recreate of RadeChannel
+    // because the sideband flag is set on construction; the RxChannel
+    // is untouched (RxChannel::setMode below will retune USB <-> LSB
+    // via the wdspModeFor mapping when it fires from the
+    // dspModeChanged signal).
     //
     // Reach the WdspEngine via the parent RadioModel rather than holding
     // a direct pointer on SliceModel; this keeps the construction graph
@@ -212,50 +225,50 @@ void SliceModel::setDspMode(DSPMode mode)
                 const bool oldIsRade = isRade(oldMode);
                 const bool newIsRade = isRade(mode);
 
+                auto wireAndStartRade = [&](RadeChannel* radeCh,
+                                            const char* context) {
+                    if (radeCh == nullptr) return;
+                    radeCh->setSideband(mode == DSPMode::RADE_U);
+                    radio->wireRadeChannel(channelId, radeCh, this);
+                    const QString modelPath = radeModelPath();
+                    if (!radeCh->start(modelPath)) {
+                        qCWarning(lcDsp)
+                            << "SliceModel" << m_sliceIndex
+                            << context
+                            << ": RadeChannel.start() failed for"
+                            << modelPath
+                            << "- channel-swap proceeds but RADE will"
+                               " not decode";
+                    }
+                };
+
                 if (oldIsRade && !newIsRade) {
                     // RADE -> any WDSP mode: tear down the RadeChannel
-                    // and recreate the WDSP RxChannel for this slice.
+                    // only.  K-bench: WDSP RxChannel was running the
+                    // whole time as the demod front-end; leave it
+                    // alone.  WDSP-facing mode will retune from
+                    // USB/LSB (the wdspModeFor mapping) to the new
+                    // mode via the dspModeChanged -> rxCh->setMode
+                    // path in RadioModel.cpp:5202-5206.
                     engine->destroyRadeChannel(channelId);
-                    engine->createRxChannel(channelId);
                 } else if (!oldIsRade && newIsRade) {
-                    // Any WDSP mode -> RADE: tear down the RxChannel and
-                    // create a new RadeChannel.  Wire its signals into
-                    // RadioModel's slot graph (per-slice lambdas owned
-                    // by RadioModel::wireRadeChannel) and start the
-                    // channel with the configured model path.
-                    engine->destroyRxChannel(channelId);
-                    RadeChannel* radeCh = engine->createRadeChannel(channelId);
-                    if (radeCh != nullptr) {
-                        radeCh->setSideband(mode == DSPMode::RADE_U);
-                        radio->wireRadeChannel(channelId, radeCh, this);
-                        const QString modelPath = radeModelPath();
-                        if (!radeCh->start(modelPath)) {
-                            qCWarning(lcDsp)
-                                << "SliceModel" << m_sliceIndex
-                                << "setDspMode(RADE): RadeChannel.start() failed for"
-                                << modelPath
-                                << "- channel-swap proceeds but RADE will not decode";
-                        }
-                    }
+                    // Any WDSP mode -> RADE: create RadeChannel
+                    // alongside the still-running RxChannel.  Wire
+                    // its signals into RadioModel's per-slice slot
+                    // graph and start it with the configured model
+                    // path.  WDSP-facing mode will map to USB/LSB
+                    // via the dspModeChanged path.
+                    wireAndStartRade(engine->createRadeChannel(channelId),
+                                     "setDspMode(RADE)");
                 } else if (oldIsRade && newIsRade) {
                     // RADE_U <-> RADE_L: destroy + recreate the
-                    // RadeChannel so the sideband flag is set fresh on
-                    // a clean instance.  Matches the J3 pattern of
-                    // "mode change implies channel swap".
+                    // RadeChannel so the sideband flag is set fresh
+                    // on a clean instance.  RxChannel is untouched;
+                    // the dspModeChanged path retunes it USB <-> LSB
+                    // through wdspModeFor.
                     engine->destroyRadeChannel(channelId);
-                    RadeChannel* radeCh = engine->createRadeChannel(channelId);
-                    if (radeCh != nullptr) {
-                        radeCh->setSideband(mode == DSPMode::RADE_U);
-                        radio->wireRadeChannel(channelId, radeCh, this);
-                        const QString modelPath = radeModelPath();
-                        if (!radeCh->start(modelPath)) {
-                            qCWarning(lcDsp)
-                                << "SliceModel" << m_sliceIndex
-                                << "setDspMode(RADE U<->L): RadeChannel.start() "
-                                   "failed for" << modelPath
-                                << "- channel-swap proceeds but RADE will not decode";
-                        }
-                    }
+                    wireAndStartRade(engine->createRadeChannel(channelId),
+                                     "setDspMode(RADE U<->L)");
                 }
             }
         }

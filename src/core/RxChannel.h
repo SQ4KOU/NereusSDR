@@ -274,6 +274,15 @@ public:
     DSPMode mode() const { return static_cast<DSPMode>(m_mode.load()); }
     void setMode(DSPMode mode);
 
+    // Translate a slice-facing DSPMode to the value that WDSP's SetRXAMode
+    // should receive. RADE_U / RADE_L are NereusSDR-native (WdspTypes.h
+    // :159-186); WDSP has no knowledge of them. The Phase 3R K-bench RX
+    // pipeline runs WDSP as the demod front-end in RADE modes so RADE_U
+    // -> USB and RADE_L -> LSB. All other modes pass through unchanged.
+    // Static so tests can assert the mapping without constructing a
+    // RxChannel.
+    static DSPMode wdspModeFor(DSPMode mode);
+
     // --- Bandpass filter ---
 
     void setFilterFreqs(double lowHz, double highHz);

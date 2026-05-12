@@ -4,32 +4,43 @@
 // tests/tst_slice_model_rade_swap.cpp  (NereusSDR)
 // =================================================================
 //
-// Phase 3R Task J3 unit tests: SliceModel::setDspMode mode-aware
-// channel swap between RxChannel (WDSP) and RadeChannel (third_party/rade
-// neural codec).
+// Phase 3R Task J3 + K-bench unit tests: SliceModel::setDspMode
+// channel-additive lifecycle and the RxChannel::wdspModeFor mapping
+// at the WDSP API boundary.
+//
+// K-bench contract (replaces original J3 destroy-and-replace design):
+//   - The WDSP RxChannel for the slice is created once at connect
+//     time and stays alive in every mode (USB, LSB, RADE_U, RADE_L,
+//     …).  WDSP serves as the SSB demod front-end and produces
+//     decoded audio that drives S-meter / spectrum / AGC every tick.
+//   - RadeChannel is created ALONGSIDE RxChannel in RADE_U /
+//     RADE_L only.  It consumes WDSP's decoded audio (downsampled
+//     to 24 kHz, real=audio, imag=0) and owns the speaker path
+//     while active.
+//   - The WDSP-facing mode is mapped at the RxChannel boundary:
+//     RxChannel::wdspModeFor(RADE_U) -> USB,
+//     RxChannel::wdspModeFor(RADE_L) -> LSB.
+//     The slice-facing mode (what RxChannel::mode() returns and
+//     what RxChannel emits on modeChanged) is the original RADE_U /
+//     RADE_L; only the int passed to SetRXAMode is mapped.
 //
 // On the transition into either RADE sideband (DSPMode::RADE_U or
 // DSPMode::RADE_L), setDspMode:
-//   1. Destroys the slice's existing RxChannel via WdspEngine.
-//   2. Creates a new RadeChannel via WdspEngine.
-//   3. Calls RadeChannel::setSideband(true) for RADE_U or
-//      setSideband(false) for RADE_L so the channel knows which
-//      sideband it serves.
-//   4. Calls RadioModel::wireRadeChannel(sliceId, channel, slice) to
-//      plumb the channel's signals into the per-slice slot graph.
-//   5. Starts the RadeChannel with the configured model path (or the
-//      "dummy" librade sentinel if no path is set).
+//   1. Creates a new RadeChannel via WdspEngine (RxChannel left
+//      alone).
+//   2. Calls RadeChannel::setSideband(true) for RADE_U or
+//      setSideband(false) for RADE_L.
+//   3. Calls RadioModel::wireRadeChannel(sliceId, channel, slice).
+//   4. Starts the RadeChannel with the configured model path (or
+//      the "dummy" librade sentinel if no path is set).
 //
 // On the reverse transition out of either RADE sideband, setDspMode:
 //   1. Destroys the slice's RadeChannel.
-//   2. Recreates the RxChannel with default args.
+//   2. (RxChannel is NOT touched - it was alive the whole time.)
 //
 // On a RADE_U <-> RADE_L transition (sideband flip), setDspMode:
 //   1. Destroys the slice's RadeChannel.
 //   2. Creates a fresh RadeChannel with the new sideband flag.
-//   This matches the standing J3 "mode change implies channel swap"
-//   pattern; it is simpler than reusing the channel and re-calling
-//   setSideband, and keeps the lifecycle bookkeeping uniform.
 //
 // The tests below reach the WdspEngine via the friend-access trick
 // (NEREUS_BUILD_TESTS) to set m_initialized = true synchronously so
@@ -37,16 +48,16 @@
 // createRadeChannel does NOT require m_initialized (it is pure C++
 // object management, no WDSP-side state).
 //
-// Test cases (8):
-//   1. switchToRadeUpperDestroysRxChannel
-//   2. switchToRadeLowerDestroysRxChannel
-//   3. switchFromRadeUpperReinstatesRxChannel
-//   4. switchFromRadeLowerReinstatesRxChannel
+// Test cases (9):
+//   1. switchToRadeUpperKeepsRxChannelAndAddsRadeChannel
+//   2. switchToRadeLowerKeepsRxChannelAndAddsRadeChannel
+//   3. switchFromRadeUpperKeepsRxChannelAndDropsRadeChannel
+//   4. switchFromRadeLowerKeepsRxChannelAndDropsRadeChannel
 //   5. switchToRadeUpperSetsSidebandFlag
 //   6. switchToRadeLowerSetsSidebandFlag
-//   7. switchRadeUpperToLowerFlipsSideband  (recreate path verified
-//      via post-state, not pointer identity)
+//   7. switchRadeUpperToLowerFlipsSidebandKeepsRxChannel
 //   8. switchToSameModeIsNoOp
+//   9. wdspModeForMapsRadeToSsb
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -57,12 +68,20 @@
 //                 sidebands + the U <-> L recreate path.  J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-05-12 - Rewritten against K-bench RADE-additive contract:
+//                 RxChannel stays alive in every mode; RadeChannel
+//                 is created alongside; WDSP-facing mode is mapped
+//                 RADE_U->USB / RADE_L->LSB at the RxChannel
+//                 boundary.  Closes PR #238 review P1 #1 + #2.
+//                 J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
 #include <QSignalSpy>
 
 #include "core/RadeChannel.h"
+#include "core/RxChannel.h"
 #include "core/WdspEngine.h"
 #include "core/WdspTypes.h"
 #include "models/RadioModel.h"
@@ -90,8 +109,8 @@ class TestSliceModelRadeSwap : public QObject {
             engine = radio.wdspEngine();
             engine->m_initialized = true;  // friend access (NEREUS_BUILD_TESTS)
 
-            // Seed slice 0 with a default RxChannel so the from-USB
-            // transition has something to tear down.
+            // Seed slice 0 with a default RxChannel so the K-bench
+            // contract has a channel to keep alive across mode swaps.
             engine->createRxChannel(0);
 
             const int sliceIdx = radio.addSlice();
@@ -103,11 +122,12 @@ class TestSliceModelRadeSwap : public QObject {
 
 private slots:
 
-    // ── Test 1: switchToRadeUpperDestroysRxChannel ─────────────────────
+    // ── Test 1: switchToRadeUpperKeepsRxChannelAndAddsRadeChannel ──────
     //
-    // After setDspMode(RADE_U), the slice's RxChannel is gone and a
-    // RadeChannel exists in its place.
-    void switchToRadeUpperDestroysRxChannel() {
+    // K-bench: setDspMode(RADE_U) creates a RadeChannel ALONGSIDE the
+    // RxChannel.  RxChannel is not destroyed (WDSP keeps demodulating
+    // for S-meter / spectrum / AGC and feeds audio to RADE).
+    void switchToRadeUpperKeepsRxChannelAndAddsRadeChannel() {
         RadioFixture fx;
 
         QVERIFY(fx.engine->rxChannel(0) != nullptr);
@@ -115,16 +135,17 @@ private slots:
 
         fx.slice->setDspMode(DSPMode::RADE_U);
 
-        QVERIFY2(fx.engine->rxChannel(0) == nullptr,
-                 "setDspMode(RADE_U) must destroy the slice's RxChannel");
+        QVERIFY2(fx.engine->rxChannel(0) != nullptr,
+                 "K-bench: RxChannel must stay alive across RADE entry "
+                 "(WDSP is the SSB demod front-end feeding RADE)");
         QVERIFY2(fx.engine->radeChannel(0) != nullptr,
-                 "setDspMode(RADE_U) must create a RadeChannel for the slice");
+                 "setDspMode(RADE_U) must create a RadeChannel alongside RxChannel");
     }
 
-    // ── Test 2: switchToRadeLowerDestroysRxChannel ─────────────────────
+    // ── Test 2: switchToRadeLowerKeepsRxChannelAndAddsRadeChannel ──────
     //
     // Same as Test 1 but for the lower-sideband variant.
-    void switchToRadeLowerDestroysRxChannel() {
+    void switchToRadeLowerKeepsRxChannelAndAddsRadeChannel() {
         RadioFixture fx;
 
         QVERIFY(fx.engine->rxChannel(0) != nullptr);
@@ -132,45 +153,53 @@ private slots:
 
         fx.slice->setDspMode(DSPMode::RADE_L);
 
-        QVERIFY2(fx.engine->rxChannel(0) == nullptr,
-                 "setDspMode(RADE_L) must destroy the slice's RxChannel");
+        QVERIFY2(fx.engine->rxChannel(0) != nullptr,
+                 "K-bench: RxChannel must stay alive across RADE entry");
         QVERIFY2(fx.engine->radeChannel(0) != nullptr,
-                 "setDspMode(RADE_L) must create a RadeChannel for the slice");
+                 "setDspMode(RADE_L) must create a RadeChannel alongside RxChannel");
     }
 
-    // ── Test 3: switchFromRadeUpperReinstatesRxChannel ─────────────────
+    // ── Test 3: switchFromRadeUpperKeepsRxChannelAndDropsRadeChannel ───
     //
-    // After a round trip into RADE_U and back to a WDSP mode (USB), the
-    // RadeChannel is gone and the RxChannel is back.
-    void switchFromRadeUpperReinstatesRxChannel() {
+    // K-bench: round trip into RADE_U and back to USB destroys the
+    // RadeChannel but RxChannel was never touched.
+    void switchFromRadeUpperKeepsRxChannelAndDropsRadeChannel() {
         RadioFixture fx;
+
+        RxChannel* rxBefore = fx.engine->rxChannel(0);
+        QVERIFY(rxBefore != nullptr);
 
         fx.slice->setDspMode(DSPMode::RADE_U);
         QVERIFY(fx.engine->radeChannel(0) != nullptr);
-        QVERIFY(fx.engine->rxChannel(0) == nullptr);
+        QVERIFY2(fx.engine->rxChannel(0) == rxBefore,
+                 "RADE entry must not destroy or replace the RxChannel");
 
         fx.slice->setDspMode(DSPMode::USB);
         QVERIFY2(fx.engine->radeChannel(0) == nullptr,
                  "setDspMode(<non-RADE>) must destroy the slice's RadeChannel");
-        QVERIFY2(fx.engine->rxChannel(0) != nullptr,
-                 "setDspMode(<non-RADE>) must recreate the slice's RxChannel");
+        QVERIFY2(fx.engine->rxChannel(0) == rxBefore,
+                 "K-bench: same RxChannel instance persists across the round trip");
     }
 
-    // ── Test 4: switchFromRadeLowerReinstatesRxChannel ─────────────────
+    // ── Test 4: switchFromRadeLowerKeepsRxChannelAndDropsRadeChannel ───
     //
     // Same as Test 3 but for the lower-sideband variant.
-    void switchFromRadeLowerReinstatesRxChannel() {
+    void switchFromRadeLowerKeepsRxChannelAndDropsRadeChannel() {
         RadioFixture fx;
+
+        RxChannel* rxBefore = fx.engine->rxChannel(0);
+        QVERIFY(rxBefore != nullptr);
 
         fx.slice->setDspMode(DSPMode::RADE_L);
         QVERIFY(fx.engine->radeChannel(0) != nullptr);
-        QVERIFY(fx.engine->rxChannel(0) == nullptr);
+        QVERIFY2(fx.engine->rxChannel(0) == rxBefore,
+                 "RADE entry must not destroy or replace the RxChannel");
 
         fx.slice->setDspMode(DSPMode::LSB);
         QVERIFY2(fx.engine->radeChannel(0) == nullptr,
                  "setDspMode(<non-RADE>) must destroy the slice's RadeChannel");
-        QVERIFY2(fx.engine->rxChannel(0) != nullptr,
-                 "setDspMode(<non-RADE>) must recreate the slice's RxChannel");
+        QVERIFY2(fx.engine->rxChannel(0) == rxBefore,
+                 "K-bench: same RxChannel instance persists across the round trip");
     }
 
     // ── Test 5: switchToRadeUpperSetsSidebandFlag ──────────────────────
@@ -203,34 +232,34 @@ private slots:
                  "setDspMode(RADE_L) must set RadeChannel::sidebandUpper()=false");
     }
 
-    // ── Test 7: switchRadeUpperToLowerFlipsSideband ────────────────────
+    // ── Test 7: switchRadeUpperToLowerFlipsSidebandKeepsRxChannel ──────
     //
-    // RADE_U <-> RADE_L is a destroy-and-recreate (the standing J3
-    // pattern "mode change implies channel swap").  We verify the
-    // recreate via the post-condition: after the flip, the channel's
-    // sidebandUpper() must reflect the new mode.  Pointer-identity
-    // is not a reliable witness because the allocator may reuse the
-    // same memory location after the unique_ptr destructor runs.
-    void switchRadeUpperToLowerFlipsSideband() {
+    // RADE_U <-> RADE_L is a destroy-and-recreate of the RadeChannel
+    // (sideband flag is set on construction).  RxChannel stays
+    // alive (K-bench).  Recreate verified via post-state because the
+    // allocator may reuse the same memory location.
+    void switchRadeUpperToLowerFlipsSidebandKeepsRxChannel() {
         RadioFixture fx;
+
+        RxChannel* rxBefore = fx.engine->rxChannel(0);
+        QVERIFY(rxBefore != nullptr);
 
         fx.slice->setDspMode(DSPMode::RADE_U);
         QVERIFY(fx.engine->radeChannel(0) != nullptr);
         QVERIFY(fx.engine->radeChannel(0)->sidebandUpper());
+        QVERIFY2(fx.engine->rxChannel(0) == rxBefore,
+                 "RADE_U entry must not touch the RxChannel");
 
-        // RADE_U -> RADE_L: sideband flag must flip to lower.  This
-        // implies the channel was destroyed and recreated (or the
-        // setSideband path was re-invoked); either way the new state
-        // is the contract that matters to the caller.
+        // RADE_U -> RADE_L: sideband flag must flip to lower.
         fx.slice->setDspMode(DSPMode::RADE_L);
         RadeChannel* afterDown = fx.engine->radeChannel(0);
         QVERIFY(afterDown != nullptr);
         QVERIFY2(!afterDown->sidebandUpper(),
                  "RADE_U -> RADE_L must flip the sideband flag to lower");
-        // The recreate path also restarts the channel (start("dummy")):
-        // the post-swap channel should report isActive() == true.
         QVERIFY2(afterDown->isActive(),
                  "After RADE_U -> RADE_L the new RadeChannel must be active");
+        QVERIFY2(fx.engine->rxChannel(0) == rxBefore,
+                 "RADE_U <-> RADE_L must not touch the RxChannel");
 
         // And back the other way: RADE_L -> RADE_U flips sideband to
         // upper.  Same recreate contract.
@@ -241,6 +270,8 @@ private slots:
                  "RADE_L -> RADE_U must flip the sideband flag to upper");
         QVERIFY2(afterUp->isActive(),
                  "After RADE_L -> RADE_U the new RadeChannel must be active");
+        QVERIFY2(fx.engine->rxChannel(0) == rxBefore,
+                 "RADE_L <-> RADE_U must not touch the RxChannel");
     }
 
     // ── Test 8: switchToSameModeIsNoOp ─────────────────────────────────
@@ -261,6 +292,32 @@ private slots:
         QCOMPARE(modeSpy.count(), 0);
         QCOMPARE(fx.engine->rxChannel(0), before);
         QVERIFY(fx.engine->radeChannel(0) == nullptr);
+    }
+
+    // ── Test 9: wdspModeForMapsRadeToSsb ───────────────────────────────
+    //
+    // K-bench: RxChannel::wdspModeFor maps RADE_U -> USB and
+    // RADE_L -> LSB at the WDSP API boundary so SetRXAMode never sees
+    // a raw enum 12/13 (review finding 2026-05-12, PR #238).  All
+    // other modes pass through unchanged.
+    void wdspModeForMapsRadeToSsb() {
+        // RADE sidebands map to their SSB equivalents.
+        QCOMPARE(RxChannel::wdspModeFor(DSPMode::RADE_U), DSPMode::USB);
+        QCOMPARE(RxChannel::wdspModeFor(DSPMode::RADE_L), DSPMode::LSB);
+
+        // Standard WDSP modes are pass-through.
+        QCOMPARE(RxChannel::wdspModeFor(DSPMode::LSB),  DSPMode::LSB);
+        QCOMPARE(RxChannel::wdspModeFor(DSPMode::USB),  DSPMode::USB);
+        QCOMPARE(RxChannel::wdspModeFor(DSPMode::DSB),  DSPMode::DSB);
+        QCOMPARE(RxChannel::wdspModeFor(DSPMode::CWL),  DSPMode::CWL);
+        QCOMPARE(RxChannel::wdspModeFor(DSPMode::CWU),  DSPMode::CWU);
+        QCOMPARE(RxChannel::wdspModeFor(DSPMode::FM),   DSPMode::FM);
+        QCOMPARE(RxChannel::wdspModeFor(DSPMode::AM),   DSPMode::AM);
+        QCOMPARE(RxChannel::wdspModeFor(DSPMode::DIGU), DSPMode::DIGU);
+        QCOMPARE(RxChannel::wdspModeFor(DSPMode::SPEC), DSPMode::SPEC);
+        QCOMPARE(RxChannel::wdspModeFor(DSPMode::DIGL), DSPMode::DIGL);
+        QCOMPARE(RxChannel::wdspModeFor(DSPMode::SAM),  DSPMode::SAM);
+        QCOMPARE(RxChannel::wdspModeFor(DSPMode::DRM),  DSPMode::DRM);
     }
 };
 
