@@ -5194,7 +5194,19 @@ void MainWindow::openSpotHub()
         if (auto* psk = m_radioModel->pskReporter()) {
             connect(m_spotHubDialog.data(),
                     &SpotHubDialog::pskStartRequested,
-                    psk, [psk]() {
+                    psk, [psk](const QString& call,
+                               const QString& grid) {
+                        // 2026-05-12 bench fix (PR #238 review P2):
+                        // apply the freshly-validated identity to the
+                        // live client BEFORE arming the timer.  Without
+                        // this call, the client keeps the (often empty)
+                        // identity set at RadioModel construction time
+                        // and emits IPFIX datagrams with empty receiver
+                        // fields.  pskreporter.cpp:148-169 [@77e793a].
+                        psk->setIdentity(
+                            call, grid,
+                            QStringLiteral("NereusSDR ") +
+                                QStringLiteral(NEREUSSDR_VERSION));
                         psk->setAutoSendIntervalSec(
                             PskReporterClient::kReportingIntervalSec);
                     });

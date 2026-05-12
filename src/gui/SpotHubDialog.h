@@ -284,7 +284,15 @@ signals:
     void potaStopRequested();
     void freedvStartRequested();
     void freedvStopRequested();
-    void pskStartRequested();
+    // 2026-05-12 bench fix (review P1 / P2 — PR #238): carry the
+    // freshly-validated callsign + grid from the PSK tab so the
+    // MainWindow handler can apply them to the live PskReporterClient
+    // via setIdentity() BEFORE arming the auto-send timer.  Previously
+    // pskStartRequested was no-arg and RadioModel held a stale
+    // identity (the one set at construction from PskReporter/* slash
+    // keys), so a user who only filled in the PSK tab and clicked
+    // Start would emit IPFIX datagrams with empty receiver fields.
+    void pskStartRequested(const QString& callsign, const QString& gridSquare);
     void pskStopRequested();
     // Forwarded from the Spot List click-to-tune + the spot overlay.
     void tuneRequested(double freqMhz);

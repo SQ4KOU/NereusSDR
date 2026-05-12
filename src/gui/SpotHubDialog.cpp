@@ -495,10 +495,19 @@ void SpotHubDialog::buildSettingsTab(QTabWidget* tabs)
         // readers (Cluster / RBN / PSK Reporter) keep reading their
         // per-source key on construction; propagation keeps them in
         // sync with the central Settings entry.
+        //
+        // 2026-05-12 (PR #238 review P2): PSK Reporter keys unified
+        // on the slash-key family RadioModel reads
+        // (RadioModel.cpp:1000-1004, :1575-1582).  Flat-key writes
+        // were orphaned (nothing read them on restore), so a user
+        // who saved identity via Save & Propagate, restarted the
+        // app, and clicked PSK Start without re-entering the PSK
+        // tab would emit IPFIX datagrams with empty receiver
+        // fields.  Flat keys retained for DxCluster / Rbn (unrelated).
         settings.setValue("DxClusterCallsign", call);
         settings.setValue("RbnCallsign", call);
-        settings.setValue("PskReporterCallsign", call);
-        settings.setValue("PskReporterGrid", gridSquare);
+        settings.setValue("PskReporter/Callsign", call);
+        settings.setValue("PskReporter/GridSquare", gridSquare);
         settings.setValue("FreeDvReporter/Callsign", call);
         settings.setValue("FreeDvReporter/GridSquare", gridSquare);
 
@@ -1998,18 +2007,28 @@ void SpotHubDialog::buildPskTab(QTabWidget* tabs)
     grid->setColumnStretch(1, 1);
     int row = 0;
 
-    // Post-3J-2 UX fix: extend the existing PskReporterCallsign ->
-    // DxClusterCallsign fallback chain with one more hop to the
-    // canonical User/Callsign key written by the Settings tab. Same
-    // shape for grid: PskReporterGrid -> User/GridSquare.
-    QString defaultCall = s.value("PskReporterCallsign").toString();
+    // 2026-05-12 (PR #238 review P2): canonical PSK identity lives
+    // under the slash-key family RadioModel reads.  Fallback chain:
+    //   PskReporter/Callsign -> PskReporterCallsign (legacy flat) ->
+    //   DxClusterCallsign -> User/Callsign.
+    //   PskReporter/GridSquare -> PskReporterGrid (legacy flat) ->
+    //   User/GridSquare.
+    // Flat keys retained as fallback to migrate existing installs
+    // that pre-date the unified key scheme.
+    QString defaultCall = s.value("PskReporter/Callsign").toString();
+    if (defaultCall.isEmpty()) {
+        defaultCall = s.value("PskReporterCallsign").toString();
+    }
     if (defaultCall.isEmpty()) {
         defaultCall = s.value("DxClusterCallsign").toString();
     }
     if (defaultCall.isEmpty()) {
         defaultCall = s.value("User/Callsign").toString();
     }
-    QString defaultGrid = s.value("PskReporterGrid").toString();
+    QString defaultGrid = s.value("PskReporter/GridSquare").toString();
+    if (defaultGrid.isEmpty()) {
+        defaultGrid = s.value("PskReporterGrid").toString();
+    }
     if (defaultGrid.isEmpty()) {
         defaultGrid = s.value("User/GridSquare").toString();
     }
@@ -2082,11 +2101,19 @@ void SpotHubDialog::buildPskTab(QTabWidget* tabs)
             m_pskStatusLabel->setStyleSheet("QLabel { color: #ff4444; font-size: 11px; }");
             return;
         }
+        // 2026-05-12 bench fix (PR #238 review P2): persist under the
+        // SAME slash-key family RadioModel reads on construction and
+        // session restore (RadioModel.cpp:1000-1004, :1575-1582 — keys
+        // `PskReporter/Callsign` + `PskReporter/GridSquare`).  The
+        // earlier flat keys `PskReporterCallsign` / `PskReporterGrid`
+        // were write-only orphans no one read; first-time PSK-tab
+        // users restarted with the PSK client still holding the empty
+        // identity set at RadioModel construction.
         auto& settings = AppSettings::instance();
-        settings.setValue("PskReporterCallsign", call);
-        settings.setValue("PskReporterGrid", gridSquare);
+        settings.setValue("PskReporter/Callsign", call);
+        settings.setValue("PskReporter/GridSquare", gridSquare);
         settings.save();
-        emit pskStartRequested();
+        emit pskStartRequested(call, gridSquare);
     });
     btnRow->addWidget(m_pskStartBtn);
     connLayout->addLayout(btnRow);
@@ -2113,7 +2140,8 @@ void SpotHubDialog::buildPskTab(QTabWidget* tabs)
     // shows the 5-minute cadence inherited from freedv-gui
     // main.cpp:2597 [@77e793a].
     connect(this, &SpotHubDialog::pskStartRequested,
-            this, [this]() {
+            this, [this](const QString& /*call*/,
+                         const QString& /*grid*/) {
         if (m_pskStatusLabel) {
             m_pskStatusLabel->setText(
                 "Auto-send every 5 minutes");

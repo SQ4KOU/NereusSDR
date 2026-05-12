@@ -214,9 +214,20 @@ void FreeDVStationModel::setOurGridSquare(const QString& grid)
     }
     m_ourGrid = grid;
 
-    // Re-stamp every existing station with new distance/heading.
+    // Re-stamp every existing station with new distance/heading AND
+    // emit stationUpdated so subscribers (FreeDVReporterDialog) repaint
+    // the Distance / Hdg columns live.
+    //
+    // 2026-05-12 bench fix (PR #238 review P2): without the per-station
+    // emit, an open Reporter dialog keeps showing zeroed Distance / Hdg
+    // until each station receives a network update or the dialog is
+    // rebuilt — Save & Propagate looks broken from the user's
+    // perspective.  Reuses the existing stationUpdated path
+    // (FreeDVReporterDialog.cpp:772-780) instead of introducing a new
+    // bulk-refresh signal.
     for (auto it = m_stations.begin(); it != m_stations.end(); ++it) {
         applyDistanceHeading(it.value());
+        emit stationUpdated(it.key(), it.value());
     }
 }
 
