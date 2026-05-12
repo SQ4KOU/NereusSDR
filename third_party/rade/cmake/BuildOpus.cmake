@@ -126,7 +126,14 @@ ExternalProject_Add(build_opus
     # dnn/ via the upstream Windows-native script; (2) apply the
     # NereusSDR opus-nnet.h.diff that adds RADE_EXPORT visibility tags
     # to nnet.h. Both are required before configure.
-    PATCH_COMMAND ${CMAKE_COMMAND} -E chdir <SOURCE_DIR>/dnn cmd /c download_model.bat ${_opus_model_sha}
+    #
+    # The download_model.bat invocation runs from <SOURCE_DIR> (NOT
+    # <SOURCE_DIR>/dnn) because the tarball's internal paths all begin
+    # with "dnn/" — extracting from <SOURCE_DIR>/dnn would land files
+    # at <SOURCE_DIR>/dnn/dnn/... and CMake configure would fail
+    # looking for dnn/fargan_data.h. This matches upstream autogen.bat
+    # which also runs the bat from the source root.
+    PATCH_COMMAND ${CMAKE_COMMAND} -E chdir <SOURCE_DIR> cmd /c dnn\\download_model.bat ${_opus_model_sha}
         COMMAND ${PATCH_EXECUTABLE} <SOURCE_DIR>/dnn/nnet.h -i ${CMAKE_CURRENT_LIST_DIR}/../src/opus-nnet.h.diff
     CMAKE_ARGS
         -DCMAKE_BUILD_TYPE=Release
