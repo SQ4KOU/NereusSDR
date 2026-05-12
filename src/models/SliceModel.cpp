@@ -858,8 +858,20 @@ void SliceModel::setRttyShiftHz(int hz)
 // DIGL: centered on -digl_click_tune_offset (-2210 Hz from Thetis console.cs:14671)
 std::pair<int, int> SliceModel::defaultFilterForMode(DSPMode mode)
 {
-    // From Thetis display.cs:1023
-    static constexpr int kCwPitch = 600;
+    // Phase 3J-1 closeout Item 6 (2026-05-12): read CW pitch from
+    // AppSettings instead of hardcoding 600.  Operator-configurable in
+    // Thetis (Setup → Keyboard / DSP → CW pitch slider; default 600 Hz);
+    // the dedicated NereusSDR setter lands with Phase 3M-2 CW TX, but the
+    // read path needs to be in place now so the filter center moves with
+    // the setting once that UI ships.  Range matches Thetis udCWPitch
+    // (Setup.designer.cs CW pitch up-down: 100..2000 Hz).
+    //
+    // From Thetis display.cs:1023 [v2.10.3.13] — cw_pitch default 600.
+    auto& s = AppSettings::instance();
+    int cwPitch = s.value(QStringLiteral("CWPitch"), 600).toInt();
+    if (cwPitch < 100)  { cwPitch = 100;  }
+    if (cwPitch > 2000) { cwPitch = 2000; }
+    const int kCwPitch = cwPitch;
     // From Thetis console.cs:14636
     static constexpr int kDiguOffset = 1500;
     // From Thetis console.cs:14671
@@ -947,8 +959,14 @@ std::pair<int, int> SliceModel::defaultFilterForMode(DSPMode mode)
 // RxApplet's 10-button filter grid; VfoWidget uses commonPresetsForMode() (a subset).
 QList<std::pair<int, int>> SliceModel::presetsForMode(DSPMode mode)
 {
-    // From Thetis display.cs:1023 [v2.10.3.13]
-    static constexpr int kCwPitch    = 600;
+    // Phase 3J-1 closeout Item 6 (2026-05-12): read CW pitch from
+    // AppSettings — see defaultFilterForMode() above for the full
+    // rationale.  Default 600 Hz from Thetis display.cs:1023.
+    auto& s = AppSettings::instance();
+    int cwPitch = s.value(QStringLiteral("CWPitch"), 600).toInt();
+    if (cwPitch < 100)  { cwPitch = 100;  }
+    if (cwPitch > 2000) { cwPitch = 2000; }
+    const int kCwPitch = cwPitch;
     // From Thetis console.cs:14636 [v2.10.3.13]
     static constexpr int kDiguOffset = 1500;
     // From Thetis console.cs:14671 [v2.10.3.13]
@@ -1037,8 +1055,14 @@ QList<std::pair<int, int>> SliceModel::commonPresetsForMode(DSPMode mode)
         return {{-2400,-100}, {-2700,-100}, {-2900,-100}, {-3000,-100}, {-3200,-100}};
     case DSPMode::CWU:
     case DSPMode::CWL: {
-        // From Thetis display.cs:1023 [v2.10.3.13]
-        static constexpr int kCwPitch = 600;
+        // Phase 3J-1 closeout Item 6 (2026-05-12): read CW pitch from
+        // AppSettings.  See defaultFilterForMode() for the full rationale.
+        // From Thetis display.cs:1023 [v2.10.3.13] — default 600.
+        auto& s = AppSettings::instance();
+        int cwPitch = s.value(QStringLiteral("CWPitch"), 600).toInt();
+        if (cwPitch < 100)  { cwPitch = 100;  }
+        if (cwPitch > 2000) { cwPitch = 2000; }
+        const int kCwPitch = cwPitch;
         const int sign = (mode == DSPMode::CWL) ? -1 : 1;
         return { {sign*(kCwPitch-50),  sign*(kCwPitch+50)},
                  {sign*(kCwPitch-100), sign*(kCwPitch+100)},

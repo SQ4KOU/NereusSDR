@@ -283,7 +283,20 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
     const QString audioSampleType   = QStringLiteral("float32");
     const int audioStreamChannels   = 2;       // stereo
     const int audioStreamSamples    = 2048;    // per design doc §10 default
-    const int txStreamBufferingMs   = 50;      // per Thetis default
+
+    // Phase 3J-1 closeout Item 5 (2026-05-12): honor the
+    // TciTxStreamBufferingMs AppSetting written by the Setup → Audio TCI
+    // page.  Previously hardcoded to 50; the spin-box wrote a key the
+    // server ignored, so the operator's chosen pre-buffer never reached
+    // TCI clients.  Range [10..200] matches AudioTciPage's spin-box and
+    // Thetis's `udTCIStreamAudioBufferingTime` constraint
+    // (Setup.designer.cs:58610-58620 [v2.10.3.13]).  Default 50 ms
+    // matches Thetis's m_txStreamAudioBufferingMs default
+    // (TCIServer.cs:790 [v2.10.3.13]).
+    int txStreamBufferingMs =
+        s.value(QStringLiteral("TciTxStreamBufferingMs"), 50).toInt();
+    if (txStreamBufferingMs < 10)  { txStreamBufferingMs = 10; }
+    if (txStreamBufferingMs > 200) { txStreamBufferingMs = 200; }
 
     // Mute / volume / MON defaults.
     // linearToDbVolume(AF=100): ((100-0)/(100-0))*(0-(-60))+(-60) = 0.0 dB.
