@@ -3045,6 +3045,27 @@ private:
     // Phase 3J-1 Task 17.1 — NereusSDR-original.
     std::vector<float> m_tciTxAccum;  // accumulation buffer for partial blocks
     int                m_tciTxAccumSize{0};  // valid frames in m_tciTxAccum
+
+    // ── TCI TX-path resampler (Phase 3J-1 closeout Item 8, 2026-05-12) ──────
+    //
+    // FreeDV / Quisk / JTDX-at-12k send TX_AUDIO_STREAM at non-48 kHz rates
+    // (Thetis accepts 8000 / 12000 / 24000 / 48000 per TCIServer.cs:5750
+    // [v2.10.3.13]).  WDSP TXA input is always 48 kHz, so any non-48k input
+    // must be resampled before feeding the ring.
+    //
+    // From Thetis cmaster.cs:1411-1444 [v2.10.3.13]:
+    //   m_tciTxResampler = WDSP.create_resampleFV(inputRate, targetRate);
+    //   ... xresampleFV(input, output, numIn, out int numOut, m_tciTxResampler);
+    //   ... WDSP.destroy_resampleFV(m_tciTxResampler);
+    // Lazy-created on the first frame with srcRate != 48000; destroyed and
+    // recreated whenever the input rate changes mid-stream (FreeDV mode
+    // change can flip 8k <-> 24k).  Destroyed in clearTciAudio() on cycle
+    // stop and in the destructor.
+    //
+    // void* opaque ptr — RESAMPLEF, see resample.c:342-360 [WDSP TAPR v1.29].
+    void* m_tciTxResampler{nullptr};
+    int   m_tciTxResamplerInputRate{0};  // last create_resampleFV in_rate
+    std::vector<float> m_tciTxResampleOut;  // scratch output buffer
 };
 
 } // namespace NereusSDR

@@ -372,6 +372,15 @@ extern "C" {
 struct _dexp;
 typedef struct _dexp *DEXP;
 extern DEXP pdexp[];
+
+// Phase 3J-1 closeout Item 8 (2026-05-12): TCI TX-path resampler.
+// The void*-opaque FV wrappers (create_resampleFV / xresampleFV /
+// destroy_resampleFV) live in resample.c:342-360 [WDSP TAPR v1.29]
+// but are NOT declared in resample.h.  Same forward declaration pattern
+// as TciServer.cpp:44-46 for the RX path.
+void* create_resampleFV(int in_rate, int out_rate);
+void  xresampleFV(float* input, float* output, int numsamps, int* outsamps, void* ptr);
+void  destroy_resampleFV(void* ptr);
 }
 #endif
 
@@ -1949,8 +1958,6 @@ void TxChannel::sendAntiVoxData(const float* interleaved, int nsamples)
 void TxChannel::feedTxAudioFromTci(const QByteArray& interleavedStereoBytes,
                                     int frames, int channels, int srcRate)
 {
-    (void)srcRate;  // Phase 17 simplified scope: no rate conversion
-
     const int expectedBytes = frames * channels * static_cast<int>(sizeof(float));
     if (interleavedStereoBytes.size() < expectedBytes || frames <= 0
             || channels < 1 || channels > 2) {
@@ -1990,12 +1997,78 @@ void TxChannel::feedTxAudioFromTci(const QByteArray& interleavedStereoBytes,
         m_tciTxAccum[static_cast<size_t>(f)] = l;
     }
 
-    // Push the whole burst into the ring.  tryPushCopy is non-blocking and
-    // refuses partial writes — if the ring is full the entire frame is
-    // dropped (audible as a brief dropout) but alignment stays correct.
-    m_tciInputRing.tryPushCopy(
-        reinterpret_cast<const uint8_t*>(m_tciTxAccum.data()),
-        static_cast<qint64>(frames) * static_cast<qint64>(sizeof(float)));
+    // ── Phase 3J-1 closeout Item 8 (2026-05-12): resample non-48k input.
+    //
+    // FreeDV / Quisk / JTDX-at-12k send TX_AUDIO_STREAM at non-48 kHz
+    // rates.  WDSP TXA input is always 48 kHz, so anything else must be
+    // resampled before the ring push.  From Thetis cmaster.cs:1411-1444
+    // [v2.10.3.13]:
+    //     m_tciTxResampler = WDSP.create_resampleFV(inputRate, targetRate);
+    //     xresampleFV(input, output, numIn, &numOut, m_tciTxResampler);
+    //     // ...destroy + recreate when inputRate changes...
+    //
+    // 48000 Hz input passes through unchanged (matches WDSP TXA rate, no
+    // resampler ever created — this is the WSJT-X happy path).
+    //
+    // The resampler is destroyed in clearTciAudio() on TX cycle stop, so a
+    // FreeDV mode change between cycles (8 kHz <-> 24 kHz) gets a fresh
+    // instance.  Within a cycle, mid-stream rate changes are also handled:
+    // a rate change destroys the existing instance and recreates with the
+    // new rate.
+    constexpr int kWdspTxaInputRate = 48000;
+    const float* monoSource = m_tciTxAccum.data();
+    int outFrames = frames;
+
+#ifdef HAVE_WDSP
+    if (srcRate > 0 && srcRate != kWdspTxaInputRate) {
+        // Recreate the resampler if the input rate changed (or first call).
+        if (m_tciTxResampler && m_tciTxResamplerInputRate != srcRate) {
+            destroy_resampleFV(m_tciTxResampler);
+            m_tciTxResampler = nullptr;
+            m_tciTxResamplerInputRate = 0;
+        }
+        if (!m_tciTxResampler) {
+            m_tciTxResampler = create_resampleFV(srcRate, kWdspTxaInputRate);
+            m_tciTxResamplerInputRate = srcRate;
+        }
+        if (m_tciTxResampler) {
+            // Output buffer: worst case is upsample 8 kHz -> 48 kHz (6x).
+            // Allocate 8x to leave headroom for resampler transient slop.
+            // resize() is amortized cheap because the vector grows once and
+            // sticks at the high-water mark for the rest of the TX cycle.
+            // (std::max)(...) parentheses bypass the WDSP linux_port.h `max`
+            // macro that would otherwise be substituted before name lookup.
+            const int srcRateClamped = (srcRate < 1) ? 1 : srcRate;
+            const size_t outCapacity =
+                static_cast<size_t>(frames) *
+                (static_cast<size_t>(kWdspTxaInputRate) /
+                 static_cast<size_t>(srcRateClamped) + 1) + 16;
+            if (m_tciTxResampleOut.size() < outCapacity) {
+                m_tciTxResampleOut.resize(outCapacity);
+            }
+            int producedOut = 0;
+            xresampleFV(m_tciTxAccum.data(),
+                        m_tciTxResampleOut.data(),
+                        frames,
+                        &producedOut,
+                        m_tciTxResampler);
+            monoSource = m_tciTxResampleOut.data();
+            outFrames  = producedOut;
+        }
+    }
+#else
+    (void)srcRate;
+#endif
+
+    // Push the (possibly resampled) burst into the ring.  tryPushCopy is
+    // non-blocking and refuses partial writes — if the ring is full the
+    // entire frame is dropped (audible as a brief dropout) but alignment
+    // stays correct.
+    if (outFrames > 0) {
+        m_tciInputRing.tryPushCopy(
+            reinterpret_cast<const uint8_t*>(monoSource),
+            static_cast<qint64>(outFrames) * static_cast<qint64>(sizeof(float)));
+    }
 }
 
 // ── pullTciAudio ─────────────────────────────────────────────────────────────
@@ -2044,6 +2117,20 @@ void TxChannel::clearTciAudio()
         // keep draining
     }
     m_tciTxAccumSize = 0;
+
+    // Phase 3J-1 closeout Item 8 (2026-05-12): tear down the TCI TX-path
+    // resampler so the next cycle starts with a fresh instance.  A client
+    // that disconnects and reconnects (or a FreeDV mode change between
+    // cycles) may bring up a different srcRate; recreating on first use
+    // keeps the state machine simple.  Matches Thetis cmaster.cs:1364-1369
+    // [v2.10.3.13] -- resetTCITxState destroys m_tciTxResampler on cycle stop.
+#ifdef HAVE_WDSP
+    if (m_tciTxResampler) {
+        destroy_resampleFV(m_tciTxResampler);
+        m_tciTxResampler = nullptr;
+        m_tciTxResamplerInputRate = 0;
+    }
+#endif
 }
 
 // ---------------------------------------------------------------------------
