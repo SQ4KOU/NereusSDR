@@ -64,6 +64,12 @@ signals:
     // manual disable/enable cycle.
     void tciServerBindOrPortChanged(const QString& bindAddress, quint16 port);
 
+    // Phase 3J-1 closeout Item 2 (2026-05-12): forwarded from CatTciServerPage —
+    // "Show Log..." button clicked.  MainWindow lazy-constructs the TciLogWindow
+    // and connects it to TciServer::messageLogged so the window outlives this
+    // dialog closing.
+    void tciShowLogRequested();
+
     // Task 3.6: forwarded from GeneralOptionsPage — CPU meter rate spinbox.
     // MainWindow::setCpuTimerIntervalHz() is the handler.
     void cpuMeterRateChanged(int hz);

@@ -162,6 +162,17 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             int drained = 0;
             while (drained < kDrainMaxPerTick && session->sendQueue.tryPop(&frame)) {
                 ws->sendTextMessage(frame);
+                // Phase 3J-1 closeout Item 2 (2026-05-12): firehose for
+                // TciLogWindow.  Strip the trailing ';' for the log view.
+                {
+                    QString logLine = frame;
+                    if (logLine.endsWith(QLatin1Char(';'))) {
+                        logLine.chop(1);
+                    }
+                    emit messageLogged(QStringLiteral("out"), session->peer,
+                                       logLine,
+                                       QDateTime::currentMSecsSinceEpoch());
+                }
                 ++drained;
             }
             // Sync the legacy framesDropped field for Phase 22 ClientChainApplet.
@@ -968,6 +979,18 @@ void TciServer::onTextMessageReceived(const QString& msg)
     auto& session = it.value();
     session->lastCommand   = msg;
     session->lastCommandAt = QDateTime::currentMSecsSinceEpoch();
+
+    // Phase 3J-1 closeout Item 2 (2026-05-12): firehose for TciLogWindow.
+    // Strip the trailing ';' for readability in the log view.  Peer comes
+    // from the session struct populated in onNewConnection.
+    {
+        QString logLine = msg;
+        if (logLine.endsWith(QLatin1Char(';'))) {
+            logLine.chop(1);
+        }
+        emit messageLogged(QStringLiteral("in"), session->peer, logLine,
+                           session->lastCommandAt);
+    }
 
     // Phase 16 Task 16.3 (sub-commit b): intercept audio_start/audio_stop for
     // per-client subscription state and WDSP resampler lifecycle. This runs

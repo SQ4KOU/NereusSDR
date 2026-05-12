@@ -4104,3 +4104,10 @@ nereus_add_test(tst_tci_init_burst_typo_divergence TestMockRadioModel.cpp)
 nereus_add_test(tst_tci_init_burst_golden TestMockRadioModel.cpp)
 target_compile_definitions(tst_tci_init_burst_golden PRIVATE
     NEREUS_TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")
+
+# ── Phase 3J-1 closeout Item 2: TciLogWindow append + filter + clear + pause ──
+# Verifies the log view widget honors direction filter, pause toggle, and
+# clear button.  Headless: never show()s the dialog -- Qt's off-screen
+# platform exercises QPlainTextEdit just fine.  Source comes from NereusSDRObjs
+# (which the macro already links) so no extra source arg is needed.
+nereus_add_test(tst_tci_log_window)

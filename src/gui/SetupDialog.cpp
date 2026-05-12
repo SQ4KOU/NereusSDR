@@ -472,6 +472,10 @@ void SetupDialog::buildTree()
                 this,    &SetupDialog::tciServerEnableToggled);
         connect(tciPage, &CatTciServerPage::tciServerBindOrPortChanged,
                 this,    &SetupDialog::tciServerBindOrPortChanged);
+        // Phase 3J-1 closeout Item 2 (2026-05-12): forward showLogRequested up
+        // to MainWindow so the log window outlives this dialog's close.
+        connect(tciPage, &CatTciServerPage::showLogRequested,
+                this,    &SetupDialog::tciShowLogRequested);
         add(cat, "TCI Server", tciPage);
     }
     add(cat, "TCP/IP CAT",   new CatTcpIpPage);

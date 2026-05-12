@@ -110,6 +110,8 @@ class PsaIndicatorWidget;
 class TciServer;
 class TciApplet;
 class ClientChainApplet;
+// Phase 3J-1 closeout Item 2 (2026-05-12): TciLogWindow viewer.
+class TciLogWindow;
 
 class MainWindow : public QMainWindow {
     Q_OBJECT
@@ -486,6 +488,15 @@ private:
     TciServer*         m_tciServer{nullptr};
     TciApplet*         m_tciApplet{nullptr};
     ClientChainApplet* m_clientChainApplet{nullptr};
+
+    // Phase 3J-1 closeout Item 2 (2026-05-12): TCI message log viewer.
+    // Lazy-constructed on the first "Show Log..." click from the Setup
+    // dialog; persistent thereafter for the lifetime of MainWindow so the
+    // window survives Setup close/reopen.  Connected to
+    // TciServer::messageLogged via Qt::QueuedConnection so emit-side never
+    // blocks the server.  Nullptr until first show.
+    TciLogWindow* m_tciLogWindow{nullptr};
+    void showTciLogWindow();
 
     // Bottom label of the TCI indicator tile — captured from makeIndicator()
     // so updateTciIndicator() can change color + text without a findChild scan.

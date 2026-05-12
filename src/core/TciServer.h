@@ -175,6 +175,24 @@ signals:
     // Emitted when the server fails to bind.
     void errorOccurred(const QString& errStr);
 
+    // Phase 3J-1 closeout Item 2 (2026-05-12): per-message firehose for the
+    // Setup -> CAT/Network/TCI "Show Log..." viewer.  Emitted from
+    // onTextMessageReceived (direction="in") and from each per-client drain
+    // sendTextMessage (direction="out").  TX_CHRONO timing frames at
+    // ~47/sec are intentionally NOT emitted -- they would flood the log
+    // and aren't useful for diagnosing TCI protocol issues.
+    //   direction: "in"  -> client -> server
+    //              "out" -> server -> client
+    //   peer:      "host:port" of the relevant client; empty string for
+    //              broadcast emissions where the per-client peer isn't
+    //              singular (presently no such case -- always one peer).
+    //   text:      the TCI line minus the trailing ';' separator
+    //   epochMs:   QDateTime::currentMSecsSinceEpoch() at emit time
+    void messageLogged(const QString& direction,
+                       const QString& peer,
+                       const QString& text,
+                       qint64 epochMs);
+
 private slots:
     // From AetherSDR src/core/TciServer.cpp:247-273 [@0cd4559] — accept loop
     void onNewConnection();

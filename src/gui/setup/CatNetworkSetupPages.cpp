@@ -261,11 +261,18 @@ void CatTciServerPage::buildServerGroup()
     });
     form->addRow(tr("Rate limit:"), m_rateLimitSpin);
 
-    // Show Log button — placeholder; log window wired in Phase 24+
+    // Show Log button — Phase 3J-1 closeout Item 2 (2026-05-12) wires the
+    // click through SetupDialog up to MainWindow, which owns the lazy-
+    // constructed TciLogWindow.  Enabled only while the server is running
+    // (refreshTciStatusDisplay toggles this from setTciServer's hookups).
     m_showLogBtn = new QPushButton(tr("Show Log..."), group);
     m_showLogBtn->setStyleSheet(QString::fromLatin1(Style::kButtonStyle));
-    m_showLogBtn->setToolTip(tr("Open the TCI server message log window (not yet available)."));
+    m_showLogBtn->setToolTip(tr("Open the TCI server message log window. "
+                                 "Available while the server is running."));
     m_showLogBtn->setEnabled(false);
+    connect(m_showLogBtn, &QPushButton::clicked, this, [this] {
+        emit showLogRequested();
+    });
     form->addRow(QString(), m_showLogBtn);
 
     // Status line — read-only; updated by TciServer in Phase 21+
@@ -783,6 +790,14 @@ void CatTciServerPage::refreshTciStatusDisplay()
                 tr("<span style='color:#D04040'>●</span> Stopped"));
         }
         m_statusLabel->setTextFormat(Qt::RichText);
+    }
+
+    // Phase 3J-1 closeout Item 2 (2026-05-12): Show Log button is only
+    // useful while the server is running -- before then there is no
+    // TciServer to subscribe the log window to.  Disabled state is the
+    // initial cold-start condition set in buildServerGroup().
+    if (m_showLogBtn) {
+        m_showLogBtn->setEnabled(m_tciServerRunning);
     }
 }
 

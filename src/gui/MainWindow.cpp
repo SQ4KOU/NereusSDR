@@ -300,6 +300,7 @@ warren@wpratt.com
 #  include "applets/TciApplet.h"
 #  include "applets/ClientChainApplet.h"
 #  include "core/TciServer.h"
+#  include "setup/TciLogWindow.h"  // Phase 3J-1 closeout Item 2 (2026-05-12)
 #endif
 #include "SpectrumOverlayPanel.h"
 #include "SetupDialog.h"
@@ -3952,6 +3953,13 @@ void MainWindow::wireSetupDialog(SetupDialog* dialog)
                     m_tciServer->stop();
                     m_tciServer->start(bindAddr, port);
                 });
+        // Phase 3J-1 closeout Item 2 (2026-05-12): "Show Log..." button.
+        // The window is owned by MainWindow (lazy-constructed) so it
+        // outlives this dialog closing -- WSJT-X sessions can take an
+        // hour to settle and the operator wants the log window pinned.
+        connect(dialog, &SetupDialog::tciShowLogRequested,
+                this,   &MainWindow::showTciLogWindow);
+
         // Phase 3J-1 bench fix (2026-05-11): forward the TciServer reference
         // into the dialog so CatTciServerPage's Server group box title +
         // Status label update live as clients connect/disconnect and the
@@ -3961,6 +3969,35 @@ void MainWindow::wireSetupDialog(SetupDialog* dialog)
     }
 #endif // HAVE_WEBSOCKETS
 }
+
+#ifdef HAVE_WEBSOCKETS
+// Phase 3J-1 closeout Item 2 (2026-05-12): lazy-construct the TciLogWindow
+// on first request, connect it to TciServer::messageLogged, and show it.
+// Subsequent clicks just raise the existing window.  The window is owned
+// by MainWindow so it survives Setup dialog close/reopen.
+//
+// Qt::QueuedConnection on the signal hookup ensures the TciServer's
+// emit-side never blocks while the log view processes the entry --
+// important during a busy WSJT-X session where ~10 frames/sec arrive
+// from each direction.
+void MainWindow::showTciLogWindow()
+{
+    if (!m_tciServer) {
+        return;  // No-op in builds without HAVE_WEBSOCKETS or before init.
+    }
+    if (!m_tciLogWindow) {
+        m_tciLogWindow = new TciLogWindow(this);
+        connect(m_tciServer, &TciServer::messageLogged,
+                m_tciLogWindow, &TciLogWindow::appendEntry,
+                Qt::QueuedConnection);
+    }
+    m_tciLogWindow->show();
+    m_tciLogWindow->raise();
+    m_tciLogWindow->activateWindow();
+}
+#else
+void MainWindow::showTciLogWindow() {}  // no-op in non-WebSocket builds
+#endif // HAVE_WEBSOCKETS
 
 void MainWindow::wireSliceToSpectrum()
 {

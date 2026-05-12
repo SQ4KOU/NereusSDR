@@ -85,6 +85,12 @@ signals:
     // a specific NIC IPv4, "::", "::1", or a specific NIC IPv6).
     void tciServerBindOrPortChanged(const QString& bindAddress, quint16 port);
 
+    // Phase 3J-1 closeout Item 2 (2026-05-12): operator clicked "Show Log...".
+    // SetupDialog forwards this up to MainWindow, which owns the lazy-
+    // constructed TciLogWindow so the window survives the Setup dialog
+    // closing.
+    void showLogRequested();
+
 private:
     // Group 1: Server
     QGroupBox*   m_serverGroup{nullptr};  // reference for live title updates
