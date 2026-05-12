@@ -9,7 +9,15 @@
 #      Upstream assumes standalone build (CMAKE_SOURCE_DIR == radae_nopy
 #      root). When nested via add_subdirectory, CMAKE_SOURCE_DIR is the
 #      parent project root; CMAKE_CURRENT_LIST_DIR works in both modes.
-# All three are noted at their site as well. See Task A2 of
+#   4. Windows branch: build Opus via its native CMakeLists.txt instead
+#      of autotools. cmd.exe can't run ./autogen.sh and the default
+#      Windows CI runner image has no autoconf/automake/libtool. Opus
+#      ships both autogen.bat + dnn/download_model.bat (Windows-native
+#      model download via PowerShell) AND a full CMakeLists.txt with
+#      OPUS_DRED and OPUS_OSCE options, so the Windows path uses CMake
+#      to bypass autotools entirely. Linux + non-universal macOS keep
+#      the autotools chain.
+# All four are noted at their site as well. See Task A2 of
 # docs/architecture/phase3j2-3r-spots-and-rade-design.md.
 
 message(STATUS "Will build opus with FARGAN")
@@ -80,6 +88,69 @@ add_dependencies(opus libopus.a)
 set_target_properties(opus PROPERTIES
     IMPORTED_LOCATION "${CMAKE_CURRENT_BINARY_DIR}/libopus${CMAKE_STATIC_LIBRARY_SUFFIX}"
 )
+
+elseif(WIN32)
+
+# NereusSDR vendored patch (Windows): bypass autotools, use Opus's
+# native CMake build. cmd.exe can't run ./autogen.sh and the default
+# Windows CI runner image has no autoconf/automake/libtool. Opus's
+# CMakeLists.txt at the pinned commit (940d4e5af6) supports
+# OPUS_DRED + OPUS_OSCE (the FARGAN/DRED neural enhancers RADE needs),
+# and dnn/download_model.bat fetches the model via PowerShell instead
+# of wget. See patch (4) at the top of this file.
+
+# Model hash must stay in sync with autogen.sh in the pinned Opus
+# commit (verify: gh api repos/xiph/opus/contents/autogen.sh?ref=940d4e5).
+set(_opus_model_sha "4ed9445b96698bad25d852e912b41495ddfa30c8dbc8a55f9cde5826ed793453")
+
+# Git for Windows (preinstalled on the Actions windows-latest image)
+# bundles patch.exe under usr/bin. Add hints so find_program locates
+# it even when Git's usr/bin is not on PATH (it isn't, by default —
+# only Git's cmd/ dir is on the runner's PATH).
+find_program(PATCH_EXECUTABLE
+    NAMES patch
+    HINTS
+        "C:/Program Files/Git/usr/bin"
+        "C:/Program Files (x86)/Git/usr/bin"
+    REQUIRED)
+
+# CMake-built Opus (no BUILD_IN_SOURCE) puts the static lib in a
+# separate build tree under build_opus-prefix/src/build_opus-build/.
+set(_opus_binary_dir ${CMAKE_CURRENT_BINARY_DIR}/build_opus-prefix/src/build_opus-build)
+set(_opus_static_lib ${_opus_binary_dir}/${CMAKE_STATIC_LIBRARY_PREFIX}opus${CMAKE_STATIC_LIBRARY_SUFFIX})
+
+ExternalProject_Add(build_opus
+    DOWNLOAD_EXTRACT_TIMESTAMP NO
+    URL ${OPUS_URL}
+    # Two-step patch: (1) fetch DRED/OSCE model tarball + extract into
+    # dnn/ via the upstream Windows-native script; (2) apply the
+    # NereusSDR opus-nnet.h.diff that adds RADE_EXPORT visibility tags
+    # to nnet.h. Both are required before configure.
+    PATCH_COMMAND ${CMAKE_COMMAND} -E chdir <SOURCE_DIR>/dnn cmd /c download_model.bat ${_opus_model_sha}
+        COMMAND ${PATCH_EXECUTABLE} <SOURCE_DIR>/dnn/nnet.h -i ${CMAKE_CURRENT_LIST_DIR}/../src/opus-nnet.h.diff
+    CMAKE_ARGS
+        -DCMAKE_BUILD_TYPE=Release
+        -DOPUS_DRED=ON
+        -DOPUS_OSCE=ON
+        -DOPUS_BUILD_SHARED_LIBRARY=OFF
+        -DOPUS_BUILD_PROGRAMS=OFF
+        -DOPUS_BUILD_TESTING=OFF
+        -DOPUS_INSTALL_PKG_CONFIG_MODULE=OFF
+        -DOPUS_INSTALL_CMAKE_CONFIG_MODULE=OFF
+    BUILD_BYPRODUCTS ${_opus_static_lib}
+    INSTALL_COMMAND ""
+)
+
+ExternalProject_Get_Property(build_opus SOURCE_DIR)
+add_library(opus STATIC IMPORTED)
+add_dependencies(opus build_opus)
+
+set_target_properties(opus PROPERTIES
+    IMPORTED_LOCATION "${_opus_static_lib}"
+    IMPORTED_IMPLIB   "${_opus_static_lib}"
+)
+
+include_directories(${SOURCE_DIR}/dnn ${SOURCE_DIR}/celt ${SOURCE_DIR}/include ${SOURCE_DIR})
 
 else(APPLE AND BUILD_OSX_UNIVERSAL)
 
