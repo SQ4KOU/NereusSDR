@@ -55,7 +55,7 @@
 #include <QSortFilterProxyModel>
 #include <QSet>
 #include <QString>
-#include <QtVersion>
+#include <QtGlobal>
 
 namespace NereusSDR {
 

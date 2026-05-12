@@ -109,7 +109,7 @@
 #include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
-#include <QtVersion>
+#include <QtGlobal>
 
 namespace NereusSDR {
 
