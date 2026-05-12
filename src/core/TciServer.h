@@ -269,7 +269,18 @@ private slots:
     void sendTxChronoFrame(QWebSocket* client);
 
 private:
-    RadioModel*        m_model;
+    // Phase 3J-1 closeout Item 9 (2026-05-12): QPointer instead of raw
+    // pointer.  TciServer outlives in normal operation, but during
+    // MainWindow's child destruction (deleteChildren walk) RadioModel
+    // may die before TciServer if it was added as a child first.  When
+    // ~TciServer -> stop() then runs QObject::disconnect(m_model, ...)
+    // on the dangling raw pointer, the QObject::d pointer dereference
+    // segfaults (crash report 2026-05-12 15:29 at TciServer.cpp:579).
+    // QPointer auto-nulls on the watched object's destruction, so the
+    // existing `if (m_model)` guard now actually does what it looks
+    // like it does.  No other access pattern changes -- QPointer has
+    // implicit conversion to T* for member access.
+    QPointer<RadioModel> m_model;
     QWebSocketServer*  m_server{nullptr};
     QHash<QWebSocket*, std::shared_ptr<TciClientSession>> m_clients;
 
