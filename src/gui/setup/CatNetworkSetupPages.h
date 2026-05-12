@@ -5,10 +5,14 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QFormLayout>
+#include <QGroupBox>
 #include <QLabel>
 #include <QLineEdit>
+#include <QPointer>
 #include <QPushButton>
 #include <QSpinBox>
+
+namespace NereusSDR { class TciServer; }
 
 namespace NereusSDR {
 
@@ -48,6 +52,20 @@ class CatTciServerPage : public SetupPage {
 public:
     explicit CatTciServerPage(QWidget* parent = nullptr);
 
+    // ── Phase 3J-1 bench fix (2026-05-11): live status hookup ──────────────
+    //
+    // Connect the TciServer reference so the Server group box title shows
+    // the live client count (`TCI Server (N clients)`) and the Status label
+    // reflects running/stopped state.  Modeled on Thetis
+    // Setup.cs:9491-9494 [v2.10.3.13] — TCIClientsConnectedChange setter
+    // updates `grpTCIServer.Text`.
+    //
+    // Pass nullptr to detach (e.g. when the server is destroyed); the page
+    // tracks the pointer via QPointer so a stale connection is harmless.
+    //
+    // Idempotent: re-calls with the same pointer just refresh the snapshot.
+    void setTciServer(class NereusSDR::TciServer* server);
+
 signals:
     // Emitted when the operator toggles the Enable TCI Server checkbox.
     // Phase 3J-1 review P2.4: MainWindow::wireSetupDialog connects this to
@@ -61,6 +79,7 @@ signals:
 
 private:
     // Group 1: Server
+    QGroupBox*   m_serverGroup{nullptr};  // reference for live title updates
     QCheckBox*   m_enableCheck{nullptr};
     QLabel*      m_bindIpLabel{nullptr};
     QSpinBox*    m_portSpin{nullptr};
@@ -69,6 +88,16 @@ private:
     QSpinBox*    m_rateLimitSpin{nullptr};
     QPushButton* m_showLogBtn{nullptr};
     QLabel*      m_statusLabel{nullptr};
+
+    // Phase 3J-1 bench fix: live status state.  Updated by setTciServer
+    // signal-connected lambdas.  m_clientCount tracks via increment on
+    // clientConnected and decrement on clientDisconnected (TciServer
+    // exposes connect/disconnect signals but not a count getter — local
+    // tracking is the canonical pattern).
+    QPointer<class NereusSDR::TciServer> m_tciServerRef;
+    bool m_tciServerRunning{false};
+    int  m_tciClientCount{0};
+    void refreshTciStatusDisplay();
 
     // Group 2: Compatibility
     QCheckBox*   m_emulateExpertSdr3Check{nullptr};

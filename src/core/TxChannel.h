@@ -878,6 +878,14 @@ public:
     /// SPSC contract: only TxWorkerThread calls this method.
     int pullTciAudio(float* dst, int frames);
 
+    /// Drain the TCI input ring.  Called on TX cycle stop
+    /// (TciServer::stopTxChrono) so the next cycle starts with a clean
+    /// ring instead of inheriting any leftover audio that the worker
+    /// hadn't pulled before the cycle ended.  Safe to call from main
+    /// thread (TciServer's TX_CHRONO start/stop hooks run there) because
+    /// the worker stops pulling once m_tciAudioActive flips false.
+    void clearTciAudio();
+
     // ── Anti-VOX detector audio feed (3M-3a-iv Task 3) ──────────────────────
     //
     // Push one block of interleaved L/R float audio into the WDSP DEXP

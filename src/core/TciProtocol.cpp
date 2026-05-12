@@ -102,8 +102,21 @@ QStringList TciProtocol::buildInitBurst() const
 
     // From Thetis TCIServer.cs:2515-2520 [v2.10.3.13]
     //MW0LGE_22 emulate ee3 protocol
+    //
+    // Phase 3J-1 bench fix (2026-05-11): default to True (was False).  WSJT-X
+    // and Hamlib's TCI driver gate TCI-audio mode on recognising the server
+    // identifier — they enable TCI audio ONLY when the server advertises as
+    // ExpertSDR3 / SunSDR2PRO.  An unknown identifier (e.g. "Thetis" alone,
+    // or "NereusSDR") makes WSJT-X fall back to non-TCI audio: the radio
+    // keys via the trx command but WSJT-X never streams TX_AUDIO_STREAM
+    // frames, and it sends `trx:0,true;` (without the `,tci` suffix)
+    // because it never entered TCI-audio mode.  Bench-verified symptom
+    // exactly matched.  These keys also get wiped by the AppSettings
+    // unknown-key purge on save, so the user's explicit "True" setting
+    // doesn't survive a normal app exit — defaulting to True works around
+    // both issues.
     const bool emulateEsdr3 = s.value(QStringLiteral("TciEmulateExpertSDR3Protocol"),
-                                      QStringLiteral("False")).toString()
+                                      QStringLiteral("True")).toString()
                               == QStringLiteral("True");
     const QString protocolName = emulateEsdr3
         ? QStringLiteral("ExpertSDR3")
@@ -112,8 +125,11 @@ QStringList TciProtocol::buildInitBurst() const
 
     // From Thetis TCIServer.cs:2523-2528 [v2.10.3.13]
     //MW0LGE_22 emulate sunsdr
+    //
+    // Phase 3J-1 bench fix (2026-05-11): default to True (see
+    // TciEmulateExpertSDR3Protocol comment above for the full rationale).
     const bool emulateSunSdr = s.value(QStringLiteral("TciEmulateSunSDR2Pro"),
-                                       QStringLiteral("False")).toString()
+                                       QStringLiteral("True")).toString()
                                == QStringLiteral("True");
     // NereusSDR divergence: HardwareSpecific.Model has no NereusSDR equivalent;
     // hardcode "NereusSDR" until Phase 4 Task 4.2 wires RadioModel state.
@@ -1365,11 +1381,70 @@ QString TciProtocol::handleTrxCommand(const QStringList& args)
         QMetaObject::invokeMethod(m_radio, "setMox",
                                   Qt::DirectConnection,
                                   Q_ARG(bool, mox));
-        // From Thetis sendMOX at TCIServer.cs:2121-2131 [v2.10.3.13] — broadcast format.
-        // Phase 8: signalTCI=false → no ",tci" suffix.
-        m_pendingNotifications << QStringLiteral("trx:%1,%2;")
-                                      .arg(rx)
-                                      .arg(mox ? QStringLiteral("true") : QStringLiteral("false"));
+
+        // ── Phase 3J-1 bench fix (2026-05-10): emit MoxChange-style broadcast
+        //    sequence so WSJT-X recognises that TX has actually engaged.
+        //
+        // Bench discovery: WSJT-X sends trx:0,true,tci;, the server acquires
+        // the TX mutex, and the radio keys — but WSJT-X then sits silent for
+        // 11 seconds (the full FT8 TX window) without sending a single
+        // TX_AUDIO_STREAM binary frame.  Diagnostic capture showed our only
+        // outbound text was the immediate trx echo from this set-path
+        // handler, with the ",tci" suffix.  WSJT-X ignores that.
+        //
+        // Source-first audit of Thetis TCIServer.cs:3459-3559 [v2.10.3.13]:
+        // handleTrxMessage does NOT broadcast any notification itself.  It
+        // sets m_txUsesTCIAudio + m_tciPttActive + TCIPTT properties and
+        // RETURNS.  The console PTT loop (console.cs:25461-25465
+        // [v2.10.3.13]) polls _tci_ptt, sets PTTMode.TCI + chkMOX.Checked
+        // = true.  When MOX actually changes, the console fires its
+        // MoxChange delegate (TCIServer.cs:1410-1438 [v2.10.3.13]) which
+        // sends `tx_enable:other_rx,false;` then `sendMOX(0, true)` →
+        // `trx:0,true;` (no ",tci" suffix — sendMOX defaults
+        // signalTCI=false).  WSJT-X waits for THAT broadcast (no suffix)
+        // before streaming audio.
+        //
+        // The proper Thetis-faithful fix is to wire MoxController::moxChanged
+        // → TciServer broadcast hook.  For Phase 3J-1 bench-unblock we
+        // emit the MoxChange-style frames synchronously here — the trx
+        // command's setMox call propagates to MOX-engage via the same
+        // path Thetis uses, so the relative ordering of broadcast vs
+        // actual MOX engage is close enough for WSJT-X.
+        //
+        // From Thetis TCIServer.cs:1414-1437 [v2.10.3.13] — MoxChange:
+        //   if (newMox) {
+        //       if (rx == 1) {
+        //           if (RX2Enabled) sendTXEnable(1, false);  // disable RX2 TX
+        //       } else {
+        //           sendTXEnable(0, false);                  // disable RX1 TX
+        //       }
+        //   } else {
+        //       /* symmetric release — sendTXEnable back to true */
+        //   }
+        //   sendMOX(rx - 1, newMox);  // signalTCI default false → no suffix
+        //
+        // Single-RX scope: RX2Enabled=false, so the rx==1 branch (TX on RX1
+        // in 1-indexed Thetis === rx=0 in our 0-indexed) emits NO
+        // tx_enable line.  Only the trx broadcast (no suffix) is needed
+        // for WSJT-X.  For multi-RX in Phase 3F we'll add the
+        // tx_enable:other,false; branch.
+        if (rx == 0) {
+            // Single-RX TX path: only the trx broadcast (no tx_enable in
+            // this MoxChange branch because RX2 is not enabled in
+            // Phase 3J-1 scope).
+            m_pendingNotifications << QStringLiteral("trx:%1,%2;")
+                                          .arg(rx)
+                                          .arg(mox ? QStringLiteral("true") : QStringLiteral("false"));
+        } else {
+            // rx==1 (TXing RX2): also disable RX1's tx_enable per
+            // TCIServer.cs:1421-1422 [v2.10.3.13] (`sendTXEnable(0, false)`
+            // when not rx==1).
+            m_pendingNotifications << QStringLiteral("tx_enable:0,%1;")
+                                          .arg(mox ? QStringLiteral("false") : QStringLiteral("true"));
+            m_pendingNotifications << QStringLiteral("trx:%1,%2;")
+                                          .arg(rx)
+                                          .arg(mox ? QStringLiteral("true") : QStringLiteral("false"));
+        }
         return {};
     }
 

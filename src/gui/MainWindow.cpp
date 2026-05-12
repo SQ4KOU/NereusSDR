@@ -3909,6 +3909,12 @@ void MainWindow::wireSetupDialog(SetupDialog* dialog)
                         m_tciServer->stop();
                     }
                 });
+        // Phase 3J-1 bench fix (2026-05-11): forward the TciServer reference
+        // into the dialog so CatTciServerPage's Server group box title +
+        // Status label update live as clients connect/disconnect and the
+        // server starts/stops.  Mirrors Thetis Setup.cs:9491-9494
+        // [v2.10.3.13] — TCIClientsConnectedChange updates `grpTCIServer.Text`.
+        dialog->setTciServer(m_tciServer);
     }
 #endif // HAVE_WEBSOCKETS
 }

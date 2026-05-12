@@ -186,6 +186,19 @@ void SetupDialog::selectPage(const QString& label)
     }
 }
 
+// Phase 3J-1 bench fix (2026-05-11): forward TciServer reference to the
+// CatTciServerPage so the Server group box title + Status label update
+// live as clients connect/disconnect and the server starts/stops.
+//
+// Idempotent and nullptr-safe — see CatTciServerPage::setTciServer() for
+// the QPointer + disconnect-old-then-connect-new pattern.
+void SetupDialog::setTciServer(NereusSDR::TciServer* server)
+{
+    if (m_tciServerPage) {
+        m_tciServerPage->setTciServer(server);
+    }
+}
+
 // ── Tree builder ──────────────────────────────────────────────────────────────
 
 void SetupDialog::buildTree()
@@ -450,6 +463,7 @@ void SetupDialog::buildTree()
         // through SetupDialog so wireSetupDialog() can connect it to the live
         // TciServer::start() / stop() path in MainWindow.
         auto* tciPage = new CatTciServerPage;
+        m_tciServerPage = tciPage;  // saved so setTciServer() can forward
         connect(tciPage, &CatTciServerPage::tciServerEnableToggled,
                 this,    &SetupDialog::tciServerEnableToggled);
         add(cat, "TCI Server", tciPage);

@@ -46,6 +46,7 @@ void  xresampleFV(float* input, float* output, int numsamps, int* outsamps, void
 void  destroy_resampleFV(void* ptr);
 }
 
+#include <QElapsedTimer>
 #include <QHostAddress>
 #include <QTimer>
 #include <QWebSocket>
@@ -70,6 +71,44 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
     // dispatch engine across all clients (single-instance, transport-blind).
     , m_protocol(std::make_unique<TciProtocol>(model, this))
 {
+    // ── Phase 3J-1 bench fix (2026-05-11): seed TCI compat-flag defaults ────
+    //
+    // WSJT-X / JTDX / Hamlib's TCI driver gate TCI-audio mode on the server
+    // identifier — they enable TCI audio ONLY when the server advertises as
+    // ExpertSDR3 protocol + SunSDR2PRO device.  An unknown identifier
+    // (Thetis / NereusSDR) makes WSJT-X fall back to non-TCI audio: the
+    // radio keys via the trx command but WSJT-X never streams TX_AUDIO_STREAM
+    // binary frames, and sends `trx:0,true;` (no `,tci` suffix) because it
+    // never entered TCI-audio mode.
+    //
+    // These compat flags exist as Setup → CAT/Network/TCI checkboxes for
+    // users who explicitly want the Thetis/NereusSDR identifier (some Thetis-
+    // native loggers prefer it).  But the SAFE default for the most-common
+    // client (WSJT-X) is ON.  Seed defaults to "True" on first launch if the
+    // keys are absent — this ensures the settings persist to disk (so the
+    // user's UI toggle has something concrete to flip) AND that an
+    // unconfigured install works with WSJT-X out of the box.
+    //
+    // Idempotent: only seeds when key is absent; explicit user "False"
+    // setting (toggled off in UI) is respected.
+    {
+        auto& s = AppSettings::instance();
+        bool seeded = false;
+        if (!s.contains(QStringLiteral("TciEmulateExpertSDR3Protocol"))) {
+            s.setValue(QStringLiteral("TciEmulateExpertSDR3Protocol"), QStringLiteral("True"));
+            seeded = true;
+        }
+        if (!s.contains(QStringLiteral("TciEmulateSunSDR2Pro"))) {
+            s.setValue(QStringLiteral("TciEmulateSunSDR2Pro"), QStringLiteral("True"));
+            seeded = true;
+        }
+        if (seeded) {
+            qCInfo(lcTci) << "TciServer: seeded TCI compat-flag defaults "
+                             "(ExpertSDR3 + SunSDR2PRO emulation) — required for "
+                             "WSJT-X TCI-audio mode";
+        }
+    }
+
     m_pingTimer = new QTimer(this);  // parented — destroyed with server
 
     // From Thetis TCIServer.cs:6001-6003 [v2.10.3.13] — PingFrameTimer callback
@@ -240,6 +279,38 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
 
             const QString chanExFrame = TciSensorManager::formatRxChannelSensorsEx(0, 0, -100.0, -100.0, -100.0);
             session->sendQueue.push(TciSendQueue::Priority::Control, chanExFrame);
+        }
+    });
+
+    // ── Phase 3J-1 bench fix (2026-05-10): TX_CHRONO timer ────────────────────
+    //
+    // Ported from AetherSDR src/core/TciServer.cpp (verified working with
+    // WSJT-X).  One TCI TX block is 2048 floats == 1024 stereo frames at
+    // 48 kHz == 21.333 ms.  A fixed 21 ms QTimer runs ~1.6% fast and warps
+    // digital-mode tones, so we poll more frequently (5 ms) and emit frames
+    // from a monotonic elapsed-time accumulator.
+    m_txChronoTimer = new QTimer(this);
+    m_txChronoTimer->setTimerType(Qt::PreciseTimer);
+    m_txChronoTimer->setInterval(5);  // kTxChronoPollMs — poll faster than period
+    connect(m_txChronoTimer, &QTimer::timeout, this, [this]() {
+        // Local copy guards against onClientDisconnected nulling the pointer
+        // between the check and the send (race with main-thread disconnect).
+        QWebSocket* client = m_txChronoClient.data();
+        if (!client) { m_txChronoTimer->stop(); return; }
+
+        if (!m_txChronoClock.isValid()) {
+            m_txChronoClock.start();
+            return;
+        }
+
+        // kTxChronoPeriodNs = 1024 stereo frames * 1e9 / 48000 Hz
+        constexpr qint64 kTxChronoPeriodNs = (1024LL * 1000000000LL) / 48000LL;
+        m_txChronoAccumNs += m_txChronoClock.nsecsElapsed();
+        m_txChronoClock.restart();
+
+        while (m_txChronoAccumNs >= kTxChronoPeriodNs) {
+            sendTxChronoFrame(client);
+            m_txChronoAccumNs -= kTxChronoPeriodNs;
         }
     });
 
@@ -686,6 +757,8 @@ void TciServer::onClientDisconnected()
         qCInfo(lcTci) << "TciServer: TX audio mutex released on disconnect";
         // Phase 23: notify indicator / MainWindow.
         emit txAudioActiveClientChanged(nullptr);
+        // Phase 3J-1 bench fix: stop TX_CHRONO frames on client disconnect.
+        stopTxChrono();
     }
 
     // Phase 16 Task 16.3 (sub-commit b): destroy all RESAMPLEF instances for
@@ -1209,6 +1282,12 @@ void TciServer::onTextMessageReceived(const QString& msg)
                                           << session->peer;
                             // Phase 23: notify indicator / MainWindow.
                             emit txAudioActiveClientChanged(ws);
+                            // Phase 3J-1 bench fix (2026-05-10): start
+                            // TX_CHRONO timing frames so WSJT-X begins
+                            // streaming TX_AUDIO_STREAM binary frames.
+                            // Parse rx from "trx:N,..." first arg.
+                            const int trxIdx = parts.at(0).trimmed().toInt();
+                            startTxChrono(ws, trxIdx);
                         } else {
                             // Phase 26 review finding #10: m_clients.value(key, make_shared<>())
                             // allocates a default TciClientSession just to read its peer field.
@@ -1232,6 +1311,8 @@ void TciServer::onTextMessageReceived(const QString& msg)
                                           << session->peer;
                             // Phase 23: notify indicator / MainWindow.
                             emit txAudioActiveClientChanged(nullptr);
+                            // Phase 3J-1 bench fix: stop TX_CHRONO frames.
+                            stopTxChrono();
                         }
                     }
                 }
@@ -1501,6 +1582,90 @@ void TciServer::injectAudioFrameForTest(int slice, const float* L, const float* 
                                          int n, int srcRate)
 {
     onAudioFrameReady(slice, L, R, n, srcRate);
+}
+
+// ── TX_CHRONO frame senders ──────────────────────────────────────────────────
+//
+// Phase 3J-1 bench fix (2026-05-10): WSJT-X (and JTDX, FlDigi-TCI, etc.) only
+// stream TX_AUDIO_STREAM binary frames in response to TX_CHRONO timing frames
+// that the server sends.  Without these, the client engages PTT, the server
+// acquires the mutex, the radio keys, but the client never streams any audio
+// — exactly the bench symptom we hit and that the user diagnosed.
+//
+// Ported from AetherSDR src/core/TciServer.cpp (verified working with
+// WSJT-X 2.7.x).  AetherSDR comment: "WSJT-X only sends TX audio in response
+// to TX_CHRONO (type=3) frames."  Also matches Thetis TCIServer.cs:5530-5533
+// [v2.10.3.13] which calls
+//   sendBinaryFrame(buildStreamPayload(receiver, sampleRate, sampleType,
+//                                       requestLength, TCIStreamType.TX_CHRONO,
+//                                       channels, Array.Empty<byte>()));
+// (header-only frame; payload is empty).
+
+void TciServer::startTxChrono(QWebSocket* client, int trx)
+{
+    if (!client || !m_txChronoTimer) {
+        return;
+    }
+    m_txChronoClient = client;
+    m_txChronoTrx    = trx;
+    m_txChronoClock.start();
+    m_txChronoAccumNs = 0;
+    m_txChronoTimer->start();
+    // Send an immediate frame so the client can begin streaming audio
+    // without waiting for the first 21 ms period to elapse.  AetherSDR
+    // does the same (src/core/TciServer.cpp:1117).
+    sendTxChronoFrame(client);
+    qCInfo(lcTci) << "TciServer: TX_CHRONO started for trx" << trx
+                  << "client" << static_cast<const void*>(client);
+}
+
+void TciServer::stopTxChrono()
+{
+    if (m_txChronoTimer && m_txChronoTimer->isActive()) {
+        m_txChronoTimer->stop();
+    }
+    m_txChronoClient = nullptr;
+    m_txChronoClock.invalidate();
+    m_txChronoAccumNs = 0;
+
+    // Phase 3J-1 bench fix (2026-05-10): drain the TCI input ring on
+    // cycle stop so the next TX cycle starts with a clean buffer.
+    // Without this, leftover audio from the just-ended cycle sits in the
+    // ring; the next cycle's worker pull plays that stale tail FIRST,
+    // throwing off FT8's strict 15 s timing cadence.  Worker has already
+    // stopped pulling (m_tciAudioActive flipped false on mutex release),
+    // so this is safe to call from the main thread.
+    if (m_model) {
+        if (auto* wdsp = m_model->wdspEngine()) {
+            if (auto* txCh = wdsp->txChannel(1)) {
+                txCh->clearTciAudio();
+            }
+        }
+    }
+
+    qCInfo(lcTci) << "TciServer: TX_CHRONO stopped";
+}
+
+void TciServer::sendTxChronoFrame(QWebSocket* client)
+{
+    if (!client) { return; }
+    // From Thetis TCIServer.cs:5530-5533 [v2.10.3.13] —
+    // sendBinaryFrame(buildStreamPayload(receiver, sampleRate, sampleType,
+    //   requestLength, TCIStreamType.TX_CHRONO, channels, Array.Empty<byte>())).
+    //
+    // length = 2048 matches AetherSDR (verified working with WSJT-X) and
+    // corresponds to 1024 stereo float pairs == 21.33 ms at 48 kHz.  Both
+    // operands are passed verbatim — buildStreamPayload with samples=nullptr
+    // produces the 64-byte header-only frame Thetis sends as TX_CHRONO.
+    const QByteArray frame = TciBinaryFrame::buildStreamPayload(
+        /*receiver=*/m_txChronoTrx,
+        /*sampleRate=*/48000,
+        /*sampleType=*/3,           // Float32
+        /*length=*/2048,
+        /*streamType=*/3,           // TX_CHRONO
+        /*channels=*/2,
+        /*samples=*/nullptr);       // header-only — no payload
+    client->sendBinaryMessage(frame);
 }
 
 // ── onRawIqDataReceived() ─────────────────────────────────────────────────────

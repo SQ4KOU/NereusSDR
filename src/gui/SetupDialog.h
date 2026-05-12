@@ -24,6 +24,8 @@ class PaWattMeterPage;
 class PaValuesPage;
 struct BoardCapabilities;
 struct RadioInfo;
+class TciServer;
+class CatTciServerPage;
 
 // Main settings dialog with tree-based navigation.
 // Left pane: QTreeWidget with top-level category items.
@@ -35,6 +37,13 @@ public:
 
     // Navigate to a page by its label text (e.g. "AGC/ALC").
     void selectPage(const QString& label);
+
+    // Phase 3J-1 bench fix (2026-05-11): wire the live TciServer state into
+    // the CatTciServerPage's Server group box title and Status label.  Pass
+    // nullptr to detach (e.g. server destroyed).  The dialog forwards to the
+    // page's setTciServer(); the page tracks via QPointer so the connection
+    // is safe across server lifecycle changes.
+    void setTciServer(class NereusSDR::TciServer* server);
 
 signals:
     // Phase 3M-3a-ii Batch 6 (Task 3): forwarded from CfcSetupPage's
@@ -79,6 +88,10 @@ private:
     RadioModel*      m_model   = nullptr;
     QTreeWidget*     m_tree    = nullptr;
     QStackedWidget*  m_stack   = nullptr;
+
+    // Phase 3J-1 bench fix (2026-05-11): store the TciServer page reference
+    // so setTciServer() can forward to it without a tree-walk lookup.
+    CatTciServerPage* m_tciServerPage = nullptr;
 
     // Phase 8 of #167: PA category nav-tree root + 3 child items, plus
     // the page widgets themselves so applyPaVisibility() can toggle each.

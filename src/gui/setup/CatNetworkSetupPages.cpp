@@ -7,6 +7,9 @@
 #include "CatNetworkSetupPages.h"
 #include "gui/StyleConstants.h"
 #include "core/AppSettings.h"
+#ifdef HAVE_WEBSOCKETS
+#include "core/TciServer.h"
+#endif
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -129,6 +132,7 @@ void CatTciServerPage::buildUI()
 void CatTciServerPage::buildServerGroup()
 {
     auto* group = new QGroupBox(tr("Server"), this);
+    m_serverGroup = group;  // saved so refreshTciStatusDisplay() can update title
     group->setStyleSheet(QString::fromLatin1(Style::kGroupBoxStyle));
     auto* form = new QFormLayout(group);
     form->setSpacing(6);
@@ -259,8 +263,12 @@ void CatTciServerPage::buildCompatibilityGroup()
     m_emulateExpertSdr3Check->setToolTip(
         tr("Enables TCI protocol extensions that ExpertSDR3-compatible apps expect. "
            "Disable if connecting to standard TCI clients."));
+    // Phase 3J-1 bench fix (2026-05-11): default True — must agree with
+    // runtime default in TciProtocol::buildInitBurst.  WSJT-X / Hamlib gate
+    // TCI-audio mode on the ExpertSDR3 protocol identifier; defaulting OFF
+    // breaks WSJT-X TX audio out-of-box.
     m_emulateExpertSdr3Check->setChecked(
-        s.value(QStringLiteral("TciEmulateExpertSDR3Protocol"), QStringLiteral("False")).toString()
+        s.value(QStringLiteral("TciEmulateExpertSDR3Protocol"), QStringLiteral("True")).toString()
         == QStringLiteral("True"));
     connect(m_emulateExpertSdr3Check, &QCheckBox::toggled, this, [](bool on) {
         AppSettings::instance().setValue(QStringLiteral("TciEmulateExpertSDR3Protocol"),
@@ -275,8 +283,11 @@ void CatTciServerPage::buildCompatibilityGroup()
     m_emulateSunSdr2Check->setToolTip(
         tr("Reports device identity as SunSDR2 PRO in TCI handshake. "
            "Required by some apps that check the device field."));
+    // Phase 3J-1 bench fix (2026-05-11): default True — must agree with
+    // runtime default in TciProtocol::buildInitBurst.  See ExpertSDR3
+    // comment above for the full compat rationale.
     m_emulateSunSdr2Check->setChecked(
-        s.value(QStringLiteral("TciEmulateSunSDR2Pro"), QStringLiteral("False")).toString()
+        s.value(QStringLiteral("TciEmulateSunSDR2Pro"), QStringLiteral("True")).toString()
         == QStringLiteral("True"));
     connect(m_emulateSunSdr2Check, &QCheckBox::toggled, this, [](bool on) {
         AppSettings::instance().setValue(QStringLiteral("TciEmulateSunSDR2Pro"),
@@ -546,6 +557,97 @@ void CatTciServerPage::buildVfoQuirksGroup()
     form->addRow(QString(), m_copyRx2VfobToVfoaCheck);
 
     contentLayout()->addWidget(group);
+}
+
+// ---------------------------------------------------------------------------
+// CatTciServerPage live-status hookup
+//
+// Phase 3J-1 bench fix (2026-05-11): the Server group box title and Status
+// label reflect the live TciServer state (running + client count) so the
+// operator can see at a glance whether the server is up and how many TCI
+// clients are connected.  Modeled on Thetis Setup.cs:9491-9494
+// [v2.10.3.13] — TCIClientsConnectedChange setter updates
+// `grpTCIServer.Text = "TCI Server (N clients)"`.
+//
+// Client count is tracked locally via clientConnected/clientDisconnected
+// signal increments — TciServer exposes the signals but not a count getter,
+// and the local counter is the canonical pattern (MainWindow uses the same
+// approach for m_tciClientCount).
+// ---------------------------------------------------------------------------
+
+void CatTciServerPage::setTciServer(NereusSDR::TciServer* server)
+{
+#ifdef HAVE_WEBSOCKETS
+    // Disconnect any previous hookup so re-calls don't accumulate slots.
+    if (m_tciServerRef) {
+        disconnect(m_tciServerRef.data(), nullptr, this, nullptr);
+    }
+    m_tciServerRef = server;
+    m_tciServerRunning = (server != nullptr) && server->isRunning();
+    m_tciClientCount = 0;  // reset; we'll learn the count from signal flow
+
+    if (server) {
+        connect(server, &NereusSDR::TciServer::serverStarted,
+                this, [this](quint16) {
+                    m_tciServerRunning = true;
+                    m_tciClientCount = 0;
+                    refreshTciStatusDisplay();
+                });
+        connect(server, &NereusSDR::TciServer::serverStopped,
+                this, [this]() {
+                    m_tciServerRunning = false;
+                    m_tciClientCount = 0;
+                    refreshTciStatusDisplay();
+                });
+        connect(server, &NereusSDR::TciServer::clientConnected,
+                this, [this](QWebSocket*) {
+                    ++m_tciClientCount;
+                    refreshTciStatusDisplay();
+                });
+        connect(server, &NereusSDR::TciServer::clientDisconnected,
+                this, [this](QWebSocket*) {
+                    if (m_tciClientCount > 0) { --m_tciClientCount; }
+                    refreshTciStatusDisplay();
+                });
+    }
+    refreshTciStatusDisplay();
+#else
+    Q_UNUSED(server);
+#endif
+}
+
+void CatTciServerPage::refreshTciStatusDisplay()
+{
+    // Group box title: "Server"  →  "Server (N clients)"  when running.
+    // Stays plain "Server" when stopped so the title doesn't lie about
+    // active state.  Matches Thetis Setup.cs:9491-9494 [v2.10.3.13] —
+    // `grpTCIServer.Text = "TCI Server (" + value + " clients)"`.
+    if (m_serverGroup) {
+        if (m_tciServerRunning) {
+            m_serverGroup->setTitle(
+                tr("Server (%1 %2)")
+                    .arg(m_tciClientCount)
+                    .arg(m_tciClientCount == 1 ? tr("client") : tr("clients")));
+        } else {
+            m_serverGroup->setTitle(tr("Server"));
+        }
+    }
+
+    // Status label.  Use a coloured dot prefix for at-a-glance state:
+    //   ● red   = stopped
+    //   ● green = running (with client count appended)
+    if (m_statusLabel) {
+        if (m_tciServerRunning) {
+            m_statusLabel->setText(
+                tr("<span style='color:#3DD068'>●</span> Running (%1 %2)")
+                    .arg(m_tciClientCount)
+                    .arg(m_tciClientCount == 1 ? tr("client") : tr("clients")));
+        } else {
+            m_statusLabel->setText(
+                tr("<span style='color:#D04040'>●</span> Stopped"));
+        }
+        m_statusLabel->setTextFormat(Qt::RichText);
+    }
 }
 
 // ---------------------------------------------------------------------------

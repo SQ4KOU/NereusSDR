@@ -219,6 +219,26 @@ private slots:
     // / m_iqTapConnected true) this method is a no-op.
     void hookAudioAndIqTaps();
 
+    // ── Phase 3J-1 bench fix (2026-05-10): TX_CHRONO frame senders ───────────
+    //
+    // Start/stop the TX_CHRONO timer when a TCI client acquires/releases the
+    // TX audio mutex.  See m_txChronoTimer doc-comment for the full
+    // narrative on why this is required for WSJT-X compatibility.
+
+    /// Start the TX_CHRONO timer.  Sends an immediate frame so the client
+    /// can begin TX audio without waiting for the first 21 ms period.
+    void startTxChrono(QWebSocket* client, int trx);
+
+    /// Stop the TX_CHRONO timer and clear m_txChronoClient.  Safe to call
+    /// even when the timer isn't running.
+    void stopTxChrono();
+
+    /// Emit a single header-only TX_CHRONO frame to `client`.
+    /// From Thetis TCIServer.cs:5530-5533 [v2.10.3.13] —
+    /// sendBinaryFrame(buildStreamPayload(receiver, sampleRate, sampleType,
+    /// requestLength, TCIStreamType.TX_CHRONO, channels, Array.Empty<byte>())).
+    void sendTxChronoFrame(QWebSocket* client);
+
 private:
     RadioModel*        m_model;
     QWebSocketServer*  m_server{nullptr};
@@ -311,6 +331,36 @@ private:
     // TX timer: always-on for Phase 19 stub; Phase 24+ gates on MOX state.
     QTimer* m_rxSensorTimer{nullptr};   // 200ms default; broadcasts rx_sensors to subscribed clients
     QTimer* m_txSensorTimer{nullptr};   // 200ms default; MOX-gated (Phase 24+ wires real gate)
+
+    // ── Phase 3J-1 bench fix (2026-05-10): TX_CHRONO timing frames ───────────
+    //
+    // WSJT-X (and most TCI clients) only stream TX_AUDIO_STREAM binary frames
+    // in response to TX_CHRONO (streamType=3) timing frames sent by the
+    // server.  Without these, WSJT-X sits silent during a TX cycle even after
+    // engaging PTT and acquiring the TX audio mutex — exactly the bench
+    // symptom we hit.
+    //
+    // Ported from AetherSDR src/core/TciServer.cpp [verified working with
+    // WSJT-X].  AetherSDR comment: "WSJT-X only sends TX audio in response to
+    // TX_CHRONO (type=3) frames."  Also matches Thetis TCIServer.cs:5530-5533
+    // [v2.10.3.13] — sendBinaryFrame(buildStreamPayload(..., TX_CHRONO, ...))
+    // with Array.Empty<byte>() payload (header-only).
+    //
+    // Timing: 1024 stereo frames per period at 48 kHz == ~21.33 ms.  A fixed
+    // 21 ms QTimer runs ~1.6% fast and warps digital-mode tones over a typical
+    // FT8 12.6 s slot, so we poll more frequently (5 ms) and emit frames from
+    // a monotonic elapsed-time accumulator — same approach as AetherSDR.
+    //
+    // m_txChronoTimer is created in start() and runs only while the TX audio
+    // mutex is held (started on trx:N,true,tci; / stopped on trx:N,false; or
+    // client disconnect).  m_txChronoClient mirrors m_txAudioActiveClient so
+    // the timer slot can null-guard without re-reading the mutex pointer
+    // (which can change mid-tick on a fast-reconnect).
+    QTimer* m_txChronoTimer{nullptr};
+    QPointer<QWebSocket> m_txChronoClient;
+    QElapsedTimer m_txChronoClock;
+    qint64 m_txChronoAccumNs{0};
+    int m_txChronoTrx{0};
 
     // ── Phase 17: server-wide TX audio ring buffer ───────────────────────────
     //

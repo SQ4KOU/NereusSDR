@@ -894,14 +894,39 @@ std::pair<int, int> SliceModel::defaultFilterForMode(DSPMode mode)
         // From Thetis console.cs:5459 — F5: -5000 to 5000
         return {-5000, 5000};
     case DSPMode::DIGU:
-        // From Thetis console.cs:5333 — F5: (offset-500) to (offset+500)
-        return {kDiguOffset - 500, kDiguOffset + 500};
+        // Phase 3J-1 bench fix (2026-05-11): use F1 (3 kHz wide) as the
+        // mode-change default instead of F5 (1 kHz).  Thetis's F5 hardcoded
+        // default is correct only because Thetis users widen the filter
+        // ONCE manually and the per-band-per-mode `LastFilter` persistence
+        // remembers it.  Our setDspMode reapplies the default on EVERY mode
+        // change (which TCI clients trigger on every band switch), so a
+        // 1 kHz default chops FT8/FT4 signals — the user sees the
+        // panadapter filter overlay snap to ~1 kHz wide every time WSJT-X
+        // changes the VFO band.  F1 (kDiguOffset ± 1500 = 0..3000 Hz) is
+        // the widest DIGU preset and covers the full FT8/FT4/JS8 audio
+        // range.
+        //
+        // Long-term: NereusSDR-side per-band-per-mode filter persistence
+        // (mirroring Thetis preset[m].LastFilter at console.cs:14653-14671
+        // [v2.10.3.13]) lands in a follow-up; for Phase 3J-1 the wider
+        // default unblocks WSJT-X TCI usage.
+        //
+        // From Thetis console.cs:5320-5322 [v2.10.3.13] — DIGU F1 preset:
+        //   preset[m].SetFilter(Filter.F1, digu_click_tune_offset - 1500,
+        //                       digu_click_tune_offset + 1500, "3.0k");
+        return {kDiguOffset - 1500, kDiguOffset + 1500};
     case DSPMode::SPEC:
         // SPEC mode: passthrough, wide filter
         return {-5000, 5000};
     case DSPMode::DIGL:
-        // From Thetis console.cs:5291 — F5: -(offset+500) to -(offset-500)
-        return {-(kDiglOffset + 500), -(kDiglOffset - 500)};
+        // Phase 3J-1 bench fix (2026-05-11): use F1 (3 kHz wide) as the
+        // mode-change default — see DIGU case above for the full rationale.
+        // F1 for DIGL spans -(offset+1500) to -(offset-1500).
+        //
+        // From Thetis console.cs:5278-5280 [v2.10.3.13] — DIGL F1 preset:
+        //   preset[m].SetFilter(Filter.F1, -(digl_click_tune_offset + 1500),
+        //                       -(digl_click_tune_offset - 1500), "3.0k");
+        return {-(kDiglOffset + 1500), -(kDiglOffset - 1500)};
     case DSPMode::SAM:
         // From Thetis console.cs:5501 — F5: -5000 to 5000
         return {-5000, 5000};

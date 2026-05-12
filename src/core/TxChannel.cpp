@@ -2021,6 +2021,31 @@ int TxChannel::pullTciAudio(float* dst, int frames)
     return static_cast<int>(gotBytes / static_cast<qint64>(sizeof(float)));
 }
 
+// ── clearTciAudio ────────────────────────────────────────────────────────────
+//
+// Phase 3J-1 bench fix (2026-05-10): drain the TCI input ring on cycle stop.
+// Without this, leftover audio from the previous WSJT-X TX cycle stays
+// queued in the ring; on the next cycle's worker pull it gets played
+// FIRST (~0.1-0.5 s of stale tail audio before the new cycle's audio
+// catches up).  For FT8's strict 15 s timing slot the stale tail can
+// throw off the entire transmission cadence.
+//
+// Implementation: use the existing popInto API to drain into a scratch
+// buffer in chunks until empty.  Called only from the main thread on
+// the TX cycle stop transition (TciServer::stopTxChrono), and the
+// worker has already stopped pulling at that point (m_tciAudioActive
+// flipped false on mutex release).  No SPSC contention.
+
+void TxChannel::clearTciAudio()
+{
+    constexpr int kDrainScratchBytes = 4096;
+    uint8_t scratch[kDrainScratchBytes];
+    while (m_tciInputRing.popInto(scratch, kDrainScratchBytes) > 0) {
+        // keep draining
+    }
+    m_tciTxAccumSize = 0;
+}
+
 // ---------------------------------------------------------------------------
 // setDexpRun()  — Phase 3M-3a-iii Task 1
 //
