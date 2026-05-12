@@ -657,60 +657,215 @@ void VfoWidget::buildSmeterRow()
     static_cast<QVBoxLayout*>(layout())->addWidget(m_levelBar);
 }
 
-// Phase 3R L1 — SNR row for RADE mode.
+// Phase 3R K-bench (bench feedback) — verbatim port from AetherSDR
+// src/gui/VfoWidget.cpp:553-560 + 3406-3445 [@0cd4559]. Single label
+// pattern that combines RADE active state, sync indicator (filled vs
+// empty circle), SNR value, and freq offset all on one strip line:
 //
-// Layout: ["SNR" label] <stretch> [value label "+N dB" / " -   - "]
+//   Active + synced:   "RADE [●] 12dB +500Hz"   (yellow/green dot per SNR)
+//   Active + nosync:   "RADE [○] ---"           (grey dot, em-dash value)
+//   Not active:        hidden, text cleared
 //
-// Hidden when m_currentMode is not a RADE sideband (DSPMode::RADE_U or
-// DSPMode::RADE_L).  SNR is only meaningful for the RADE neural codec;
-// LSB/USB/CW/etc. produce no SNR estimate.  The slice's snrDb
-// Q_PROPERTY (D5) is the data source; RadeChannel (I5 routing)
-// populates it via SliceModel::setSnrDb. setSlice() wires the
-// snrDbChanged connection.
-//
-// Colours:
-//   NaN          -> #7a8088 (dim grey, "no sync / no data" placeholder)
-//   db <  5.0 dB -> #e6c200 (yellow, marginal copy)
-//   db >= 5.0 dB -> #4caf50 (green, solid copy)
+// Hidden whenever the slice's mode is NOT RADE_U / RADE_L. setSlice()
+// + dspModeChanged path calls setRadeActive(on) on every mode swap.
+// I5's snrDbChanged + RadioModel's radeSyncChanged push values via
+// setRadeSnr / setRadeSynced.
 void VfoWidget::buildSnrRow()
 {
+    // From AetherSDR VfoWidget.cpp:553-560 [@0cd4559]. NereusSDR
+    // divergence: lives on its own row in the vertical layout (rather
+    // than inline with the freqRow as in AetherSDR) so the existing
+    // m_levelBar S-meter row above stays at full width.
     m_snrRow = new QWidget(this);
     auto* rowLayout = new QHBoxLayout(m_snrRow);
     rowLayout->setContentsMargins(0, 0, 0, 0);
     rowLayout->setSpacing(4);
 
-    m_snrLabel = new QLabel(QStringLiteral("SNR"), m_snrRow);
-    m_snrLabel->setStyleSheet(
-        QStringLiteral("QLabel { color: #7a8088; font-size: 11px; "
-                       "font-weight: bold; background: transparent; }"));
+    // Single combined status label.  m_snrLabel is kept as the
+    // strip-element pointer for test-seam compatibility (older
+    // unit tests dereference it); m_snrValue is unused going forward
+    // but kept for API stability.
+    m_snrLabel = new QLabel(m_snrRow);
+    m_snrLabel->setFixedHeight(16);
+    m_snrLabel->setTextFormat(Qt::RichText);
+    m_snrLabel->setStyleSheet(QStringLiteral(
+        "QLabel { color: #00b4d8; font-size: 10px; font-weight: bold;"
+        " background: transparent; border: none; padding: 0; margin: 0; }"));
+    m_snrLabel->hide();
 
-    // Default placeholder text shown when no SNR is available (RadeChannel
-    // not yet emitting / slice in NaN state). The doubled spaces between
-    // the dashes make the placeholder readable as "no value" at a glance.
-    m_snrValue = new QLabel(QStringLiteral(" -   - "), m_snrRow);
-    m_snrValue->setStyleSheet(
-        QStringLiteral("QLabel { color: #7a8088; font-size: 11px; "
-                       "font-weight: bold; background: transparent; }"));
+    // m_snrValue is now a no-op placeholder.  Older tests that
+    // dereference it still get a non-null QLabel so they don't crash;
+    // newer tests should target m_snrLabel directly.
+    m_snrValue = new QLabel(m_snrRow);
+    m_snrValue->hide();
 
     rowLayout->addWidget(m_snrLabel);
     rowLayout->addStretch(1);
-    rowLayout->addWidget(m_snrValue);
 
     static_cast<QVBoxLayout*>(layout())->addWidget(m_snrRow);
 
-    // Hidden by default — only RADE mode reveals the row.
-    m_snrRow->setVisible(false);
-    m_snrLabel->setVisible(false);
-    m_snrValue->setVisible(false);
+    // Row container stays mounted (so the layout reserves its slot)
+    // but the visible label is hidden until setRadeActive(true) fires.
+    m_snrRow->setVisible(true);
+}
+
+// 2026-05-11 bench: unified RADE status row renderer.
+// Combines the cached callsign (m_lastRadeCallsign), sync indicator
+// (m_lastRadeSynced -> ●/○), and SNR (m_lastRadeSnrDb -> dB string +
+// color) into the single m_snrLabel text.  The prefix is the
+// callsign when known, falling back to the literal "RADE" otherwise.
+// Layout per JJ bench design 2026-05-11 (layout X):
+//   "<call> ● <snr>dB"    when synced AND SNR known
+//   "<call> ● ---"        when synced AND no SNR snapshot
+//   "<call> ○ ---"        when not synced (sticky callsign from last over)
+//   "RADE ● <snr>dB"      when synced, SNR known, no callsign yet
+//   "RADE ○ ---"          initial / not-yet-synced fallback
+// Color rules from AetherSDR VfoWidget.cpp:3424-3432 [@0cd4559]:
+//   < 5 dB  -> #e0e040 (yellow, marginal copy)
+//   >= 5 dB -> #00ff88 (green, solid copy)
+//   hollow / no SNR -> #505050 (grey)
+static QString radePrefixForCallsign(const QString& callsign)
+{
+    return callsign.isEmpty() ? QStringLiteral("RADE") : callsign;
+}
+
+void VfoWidget::setRadeActive(bool on)
+{
+    m_radeActive = on;
+    if (m_snrLabel) {
+        m_snrLabel->setVisible(on);
+        if (!on) {
+            m_snrLabel->setText(QString());
+            // Drop the cached callsign + SNR + sync on deactivate so the
+            // next RADE engage starts from a clean "RADE ○ ---" state.
+            m_lastRadeCallsign.clear();
+            m_lastRadeSnrDb = std::numeric_limits<float>::quiet_NaN();
+            m_lastRadeSynced = false;
+            return;
+        }
+    }
+    // Activate path -- composed render below picks up the (empty)
+    // callsign + (NaN) SNR + (false) sync caches and paints the
+    // initial "RADE ○ ---" hollow-circle state.
+    if (m_snrLabel) {
+        const QString prefix = radePrefixForCallsign(m_lastRadeCallsign);
+        m_snrLabel->setText(
+            QString("%1 <font color='#505050'>○</font> ---").arg(prefix));
+    }
+}
+
+// From AetherSDR VfoWidget.cpp:3415-3422 [@0cd4559] — setRadeSynced.
+// 2026-05-11 bench: cache the sync state and re-render so a subsequent
+// setRadeCallsign / setRadeSnrLabel call composes on top of the
+// correct circle glyph.
+void VfoWidget::setRadeSynced(bool synced)
+{
+    m_lastRadeSynced = synced;
+    if (!m_radeActive || !m_snrLabel) {
+        return;
+    }
+    // If we don't have an SNR snapshot yet, paint the "<prefix> ●/○ ---"
+    // state.  When SNR is known, setRadeSnrLabel below has the richer
+    // colorized render path.
+    if (std::isnan(m_lastRadeSnrDb)) {
+        const QString prefix = radePrefixForCallsign(m_lastRadeCallsign);
+        const QString color = synced ? QStringLiteral("#00ff88")
+                                     : QStringLiteral("#505050");
+        const QString glyph = synced ? QStringLiteral("●")
+                                     : QStringLiteral("○");
+        m_snrLabel->setText(
+            QString("%1 <font color='%2'>%3</font> ---")
+                .arg(prefix, color, glyph));
+    } else {
+        // Re-render through the SNR path with the cached value to pick
+        // up the new sync glyph.
+        setRadeSnrLabel(m_lastRadeSnrDb);
+    }
+}
+
+// From AetherSDR VfoWidget.cpp:3424-3432 [@0cd4559] — setRadeSnr.
+// 2026-05-11 bench: prefix is the cached callsign when known, falling
+// back to "RADE".  Sync glyph from cached m_lastRadeSynced; the
+// AetherSDR default of treating any setRadeSnrLabel call as "synced"
+// is preserved by setting m_lastRadeSynced=true here (a fresh SNR
+// snapshot from the RADE decoder implies sync).
+void VfoWidget::setRadeSnrLabel(float snrDb)
+{
+    if (std::isnan(snrDb)) {
+        return;
+    }
+    m_lastRadeSnrDb = snrDb;
+    // A fresh SNR snapshot implies the decoder is producing samples,
+    // which the AetherSDR setter at line 3424 implicitly treats as
+    // "synced" by always painting the filled ● glyph.  Pin that here
+    // so a setRadeSnrLabel call after a stale setRadeSynced(false)
+    // still shows ●.  setRadeSynced(false) called LATER will overwrite
+    // m_lastRadeSynced back to false.
+    m_lastRadeSynced = true;
+    if (!m_radeActive || !m_snrLabel) {
+        return;
+    }
+    const QString prefix = radePrefixForCallsign(m_lastRadeCallsign);
+    const QString color = (snrDb < 5.0f) ? QStringLiteral("#e0e040")
+                                         : QStringLiteral("#00ff88");
+    m_snrLabel->setText(
+        QString("%1 <font color='%2'>●</font> %3dB")
+            .arg(prefix, color)
+            .arg(static_cast<int>(snrDb)));
+}
+
+// From AetherSDR VfoWidget.cpp:3434-3445 [@0cd4559] — setRadeFreqOffset.
+// Appends "+<Hz>Hz" or "-<Hz>Hz" to the existing label text.  Caller
+// pattern: setRadeSnr() runs first (sets up "...dB" suffix), then
+// setRadeFreqOffset() appends the offset.
+void VfoWidget::setRadeFreqOffset(float hz)
+{
+    if (!m_radeActive || !m_snrLabel) {
+        return;
+    }
+    QString current = m_snrLabel->text();
+    int dbPos = current.indexOf(QStringLiteral("dB"));
+    if (dbPos > 0) {
+        QString base = current.left(dbPos + 2);
+        QString sign = (hz >= 0) ? QStringLiteral("+") : QString();
+        m_snrLabel->setText(
+            QString("%1 %2%3Hz").arg(base, sign).arg(static_cast<int>(hz)));
+    }
+}
+
+// 2026-05-11 bench: receive the EOO-decoded speaker callsign and
+// rebuild the SNR row so the prefix shows the callsign instead of
+// the literal "RADE".  See radePrefixForCallsign + the per-state
+// repaint paths in setRadeSynced / setRadeSnrLabel for full
+// composition semantics.  Empty callsign clears the cache (no-op
+// for a never-set field) and falls back to the "RADE" prefix.
+void VfoWidget::setRadeCallsign(const QString& callsign)
+{
+    if (m_lastRadeCallsign == callsign) {
+        return;
+    }
+    m_lastRadeCallsign = callsign;
+    if (!m_radeActive || !m_snrLabel) {
+        return;
+    }
+    // Re-render through whichever path matches the current state.
+    // setRadeSnrLabel covers the synced-with-SNR case; setRadeSynced
+    // covers the sync-without-SNR case; the deactivate path is the
+    // not-active case which we already early-returned out of.
+    if (!std::isnan(m_lastRadeSnrDb)) {
+        setRadeSnrLabel(m_lastRadeSnrDb);
+    } else {
+        setRadeSynced(m_lastRadeSynced);
+    }
 }
 
 void VfoWidget::updateSnrVisibility()
 {
+    // AetherSDR-style: active state follows slice mode.  Setting
+    // m_radeActive=false hides the label and clears stale text.
     const bool isRade = (m_currentMode == DSPMode::RADE_U
                          || m_currentMode == DSPMode::RADE_L);
-    if (m_snrRow)   { m_snrRow->setVisible(isRade); }
-    if (m_snrLabel) { m_snrLabel->setVisible(isRade); }
-    if (m_snrValue) { m_snrValue->setVisible(isRade); }
+    setRadeActive(isRade);
 }
 
 // Phase 3R L3 — paint the Mode tab button (m_tabButtons[2]) with the
@@ -752,32 +907,14 @@ void VfoWidget::updateModeTabAccent()
 
 void VfoWidget::onSnrChanged(double db)
 {
-    if (!m_snrValue) {
-        return;
-    }
+    // Delegate to setRadeSnrLabel which renders the AetherSDR-style
+    // combined "RADE ● Ndb" status string on m_snrLabel. NaN bypasses
+    // the update; the label stays at its last-known state until
+    // setRadeSynced(false) or setRadeActive(false) overrides it.
     if (qIsNaN(db)) {
-        m_snrValue->setText(QStringLiteral(" -   - "));
-        m_snrValue->setStyleSheet(
-            QStringLiteral("QLabel { color: #7a8088; font-size: 11px; "
-                           "font-weight: bold; background: transparent; }"));
         return;
     }
-    // Integer-rounded, signed display ("+3 dB", "-1 dB", "+12 dB").
-    const int rounded = static_cast<int>(std::lround(db));
-    // QString::asprintf %+d emits "+N" for non-negative and "-N" for negative
-    // (single sign char, no double-sign drift).
-    const QString text = QString::asprintf("%+d dB", rounded);
-    m_snrValue->setText(text);
-
-    // Threshold 5 dB: below = yellow (marginal copy), >= 5 = green (solid copy).
-    // The threshold is a NereusSDR UX choice; RADE's published acquisition
-    // floor is ~-2 dB so anything above ~5 dB is comfortably copyable.
-    const QString colour = (db < 5.0) ? QStringLiteral("#e6c200")
-                                      : QStringLiteral("#4caf50");
-    m_snrValue->setStyleSheet(
-        QStringLiteral("QLabel { color: %1; font-size: 11px; "
-                       "font-weight: bold; background: transparent; }")
-            .arg(colour));
+    setRadeSnrLabel(static_cast<float>(db));
 }
 
 void VfoWidget::buildTabBar()

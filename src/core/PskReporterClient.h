@@ -128,6 +128,24 @@ public:
     // Polling cadence. 0 disables auto-send (manual `send()` only).
     void setAutoSendIntervalSec(int sec);
 
+    // Source-first port from freedv-gui semantics: PSK Reporter is
+    // "enabled" iff the auto-send timer is running.  Callers (e.g.
+    // RadioModel decode fan-outs) gate their reportDecode() calls on
+    // this so queueing only happens while the operator has explicitly
+    // started the reporter — matches freedv-gui main.cpp:2575-2582
+    // [@77e793a] where PskReporter is only added to m_reporters[] if
+    // pskReporterEnabled is true.
+    bool isAutoSendActive() const;
+
+    // From freedv-gui main.cpp:2597 [@77e793a]:
+    //   m_pskReporterTimer.Start(5 * 60 * 1000);  // 5 minutes
+    // PSK Reporter's IPFIX server (report.pskreporter.info:4739)
+    // accepts datagrams at most every 5 minutes per reporter; more
+    // frequent transmissions get silently dropped.  freedv-gui
+    // hardcodes 5 minutes; NereusSDR exposes it as a named constant
+    // so the Start button can use the upstream cadence verbatim.
+    static constexpr int kReportingIntervalSec = 300;
+
     // Test seams. These mirror the upstream PskReporter::reportCommon_
     // (pskreporter.cpp:282-372 [@77e793a]) and
     // PskReporter::encodeSenderRecords_ (pskreporter.cpp:261-280

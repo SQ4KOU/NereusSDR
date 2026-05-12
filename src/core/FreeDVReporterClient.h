@@ -151,6 +151,37 @@ public:
                     const QString& message);
     void updateMessage(const QString& message);
 
+    // From freedv-gui src/reporting/FreeDVReporter.cpp:653-668 + 670-686 [@77e793a]
+    // emit freq_change / tx_report Socket.IO events so the
+    // reporter server lists our station's current freq and TX state.
+    // Without these, NereusSDR shows as connected but never broadcasts
+    // its operating frequency or transmit indicator — user bench-
+    // reported 2026-05-11.
+    void setFrequency(quint64 freqHz);
+    void setTransmitting(bool tx, const QString& mode = QString());
+
+    // From freedv-gui src/reporting/FreeDVReporter.cpp:167-185 [@77e793a]
+    // (hideFromView / showOurselves) + :704-729 (hideFromViewImpl_ /
+    // showOurselvesImpl_). Toggles the server-side "hidden" flag for our
+    // station. When hidden, our row does not appear on the public
+    // dashboard but our connection stays alive (we still receive the
+    // station list). Emits Socket.IO "hide_self" or "show_self" events
+    // with no payload. On show-after-hide, re-emits freq_change /
+    // tx_report / message_update so the server knows our current state.
+    // The hidden state is also re-asserted in onConnectionSuccessful
+    // after a reconnect, matching freedv-gui FreeDVReporter.cpp:424-433
+    // [@77e793a].
+    void setHiddenFromView(bool hidden);
+
+    // From freedv-gui src/reporting/FreeDVReporter.cpp:addReceiveRecord
+    // [@77e793a]: emit a Socket.IO "rx_report" event so other operators
+    // see that we're decoding their station. Carries the source
+    // station's callsign, the mode we're decoding ("RADE"), and the
+    // SNR we measured. Called whenever RadeChannel decodes a new
+    // callsign from the EOO text channel + updates SNR.
+    void sendRxReport(const QString& callsign,
+                      const QString& mode, int snrDb);
+
     // Read-side query for FreeDVStationModel + tests.
     QHash<QString, FreeDVStation> stations() const { return m_stations; }
 
@@ -249,6 +280,16 @@ private:
     QString m_statusMessage;
     QString m_version;
     QString m_serverUrl;
+
+    // Cached last-emitted state. freedv-gui FreeDVReporter.cpp:667 / :684-685
+    // / :701 [@77e793a] saves these in freqChangeImpl_ / transmitImpl_ /
+    // sendMessageImpl_ so onFreeDVReporterConnectionSuccessful_ at :430-432
+    // can re-push them after a reconnect (or after show_self toggles us
+    // back from hidden).
+    quint64 m_lastFrequency{0};
+    QString m_lastTxMode;
+    bool    m_lastTxState{false};
+    bool    m_hiddenFromView{false};
 
     // Defaults from freedv-gui (FreeDVReporter.h:51 [@77e793a]) and
     // AetherSDR (FreeDvClient.h:81-84 [@0cd4559]).

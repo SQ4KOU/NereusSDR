@@ -188,6 +188,22 @@ void SliceModel::setDspMode(DSPMode mode)
         const auto isRade = [](DSPMode m) {
             return m == DSPMode::RADE_U || m == DSPMode::RADE_L;
         };
+
+        // 2026-05-12 bench: clear last RADE-decoded speaker callsign
+        // when leaving the *current* RADE sideband.  Two cases now
+        // covered (refined from 2026-05-11 design which kept the
+        // callsign sticky on U <-> L swap):
+        //   1. RADE -> non-RADE: leaving RADE entirely.
+        //   2. RADE_U <-> RADE_L: still in RADE, but the channel is
+        //      destroyed and recreated below so the decoder state is
+        //      no longer associated with the old caller's transmission.
+        // Trigger: oldMode was a RADE sideband AND mode actually changed
+        // (we're already inside the modeChanged guard).
+        if (isRade(oldMode) && !m_lastRadeRxCallsign.isEmpty()) {
+            m_lastRadeRxCallsign.clear();
+            emit lastRadeRxCallsignChanged(m_lastRadeRxCallsign);
+        }
+
         auto* radio = qobject_cast<RadioModel*>(parent());
         if (radio != nullptr) {
             WdspEngine* engine = radio->wdspEngine();
@@ -1721,6 +1737,21 @@ void SliceModel::setSnrDb(double db)
 
     m_snrDb = db;
     emit snrDbChanged(db);
+}
+
+// ── 2026-05-11 bench: last RADE-decoded speaker callsign ────────────────────
+//
+// Sticky-while-in-RADE / clears-on-mode-off-RADE semantics per the
+// bench design discussion (option A + D).  setDspMode in this file
+// also clears the field when transitioning out of RADE_U/RADE_L; this
+// setter is the write side for incoming decodes.
+void SliceModel::setLastRadeRxCallsign(const QString& callsign)
+{
+    if (m_lastRadeRxCallsign == callsign) {
+        return;
+    }
+    m_lastRadeRxCallsign = callsign;
+    emit lastRadeRxCallsignChanged(callsign);
 }
 
 void SliceModel::loadFromSettings()

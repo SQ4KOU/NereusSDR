@@ -180,10 +180,25 @@ public:
             switch (section) {
                 case kCallsignCol:       return QStringLiteral("Callsign");
                 case kGridSquareCol:     return QStringLiteral("Locator");
-                case kDistanceCol:       return QStringLiteral("km");
+                case kDistanceCol:
+                    // Phase 3R K-bench (bench feedback): switch header
+                    // between km / mi based on the SpotHub FreeDV
+                    // tab's "Display distances in miles" checkbox.
+                    return AppSettings::instance()
+                                   .value("FreeDvReporter/DistanceMiles",
+                                          "False").toString() == "True"
+                               ? QStringLiteral("mi")
+                               : QStringLiteral("km");
                 case kHeadingCol:        return QStringLiteral("Hdg");
                 case kVersionCol:        return QStringLiteral("Version");
-                case kFrequencyCol:      return QStringLiteral("MHz");
+                case kFrequencyCol:
+                    // From freedv-gui freedv_reporter.cpp:108 [@77e793a]
+                    // (reportingFrequencyAsKhz column-name switch).
+                    return AppSettings::instance()
+                                   .value("FreeDvReporter/FrequencyAsKhz",
+                                          "False").toString() == "True"
+                               ? QStringLiteral("kHz")
+                               : QStringLiteral("MHz");
                 case kTxModeCol:         return QStringLiteral("Mode");
                 case kStatusCol:         return QStringLiteral("Status");
                 case kUserMessageCol:    return QStringLiteral("Msg");
@@ -324,11 +339,22 @@ public:
 
 private:
     // From freedv-gui freedv_reporter.cpp:3180-3194 [@77e793a].
-    // Upstream uses wxNumberFormatter::ToString(freqHz/1e6, 4); the
-    // QLocale-based formatter matches that 4-decimal rendering.
+    // Upstream branches on reportingFrequencyAsKhz: kHz mode renders
+    // `freqHz / 1000.0` with 1 decimal place (e.g. 14236.0 kHz); MHz
+    // mode renders `freqHz / 1.0e6` with 4 decimal places (e.g.
+    // 14.2360 MHz). The toggle is exposed in the SpotHub FreeDV
+    // Preferences group.
     static QString formatFrequencyMhz(quint64 frequencyHz) {
         if (frequencyHz == 0) {
             return QStringLiteral(" - ");
+        }
+        const bool asKhz =
+            AppSettings::instance()
+                .value("FreeDvReporter/FrequencyAsKhz", "False").toString()
+            == "True";
+        if (asKhz) {
+            const double khz = static_cast<double>(frequencyHz) / 1.0e3;
+            return QLocale::system().toString(khz, 'f', 1);
         }
         const double mhz = static_cast<double>(frequencyHz) / 1.0e6;
         return QLocale::system().toString(mhz, 'f', 4);
@@ -358,7 +384,15 @@ private:
         if (distanceKm <= 0.0) {
             return QStringLiteral(" - ");
         }
-        return QString::number(static_cast<int>(distanceKm + 0.5));
+        // Phase 3R K-bench (bench feedback): user-selectable
+        // miles/km display, matching freedv-gui's `useMetricUnits`
+        // setting. 1 km = 0.621371 mi.
+        const bool miles =
+            AppSettings::instance()
+                .value("FreeDvReporter/DistanceMiles", "False").toString()
+            == "True";
+        const double value = miles ? distanceKm * 0.621371 : distanceKm;
+        return QString::number(static_cast<int>(value + 0.5));
     }
 
     // From freedv-gui freedv_reporter.cpp:3196-3210 [@77e793a]
@@ -372,8 +406,31 @@ private:
         if (headingDeg <= 0.0 && cardinal.isEmpty()) {
             return QStringLiteral(" - ");
         }
-        const QString deg = QStringLiteral("%1").arg(static_cast<int>(headingDeg + 0.5),
-                                                     3, 10, QLatin1Char('0'));
+        // Phase 3R K-bench (bench feedback): switch render mode based
+        // on the SpotHub FreeDV tab's "Cardinal" checkbox, mirroring
+        // freedv-gui's reportingDirectionAsCardinal setting.
+        //   cardinal-mode ON  -> "NE"        (just the compass label)
+        //   cardinal-mode OFF -> "045°"      (numeric bearing, no card)
+        //   default (cur)     -> "045° NE"   (both, as we had pre-fix)
+        const bool cardinalMode =
+            AppSettings::instance()
+                .value(QStringLiteral("FreeDvReporter/DirectionAsCardinal"),
+                       QStringLiteral("Combined"))
+                .toString() == QStringLiteral("Cardinal");
+        const bool numericMode =
+            AppSettings::instance()
+                .value(QStringLiteral("FreeDvReporter/DirectionAsCardinal"),
+                       QStringLiteral("Combined"))
+                .toString() == QStringLiteral("Numeric");
+        const QString deg = QStringLiteral("%1").arg(
+            static_cast<int>(headingDeg + 0.5),
+            3, 10, QLatin1Char('0'));
+        if (cardinalMode && !cardinal.isEmpty()) {
+            return cardinal;
+        }
+        if (numericMode) {
+            return deg + QStringLiteral("°");
+        }
         if (cardinal.isEmpty()) {
             return deg + QStringLiteral("°");
         }
@@ -428,12 +485,28 @@ public:
         // forwards data() calls to the source.
         const QString sid = index.data(Qt::UserRole).toString();
         const QColor bg = m_highlight.value(sid);
+
         if (bg.isValid()) {
-            painter->save();
-            painter->fillRect(opt.rect, bg);
-            painter->restore();
+            // 1) Store the highlight color into opt.backgroundBrush so
+            //    QFusionStyle's PE_PanelItemViewItem fills with it
+            //    *before* the (potential) selection overlay.
+            // 2) Re-point QPalette::Highlight at the same color so that
+            //    for selected rows, the selection overlay coincides
+            //    with the highlight color instead of overwriting it
+            //    with the system accent. Result: TX/RX/Msg row colors
+            //    win over selection ink, matching freedv-gui's
+            //    wxDataViewListCtrl behaviour where reportData->
+            //    backgroundColor stays visible regardless of selection
+            //    (freedv_reporter.cpp:3026 [@77e793a]).
+            opt.backgroundBrush = QBrush(bg);
+            opt.palette.setBrush(QPalette::Highlight, QBrush(bg));
+            // Keep the highlighted-text color readable on the colored
+            // background. The three highlight colors are bright enough
+            // that white text reads well on all of them.
+            opt.palette.setBrush(QPalette::HighlightedText,
+                                 QBrush(Qt::white));
         }
-        QStyledItemDelegate::paint(painter, option, index);
+        QStyledItemDelegate::paint(painter, opt, index);
     }
 
     // Highlight map mutators - the dialog drives these on stationUpdated.
@@ -478,13 +551,28 @@ public:
         }
         m_band = band;
         m_haveBand = true;
+        m_exactMode = false;
         invalidateFilterCompat();
     }
     void setShowAll() {
-        if (!m_haveBand) {
+        if (!m_haveBand && !m_exactMode) {
             return;
         }
         m_haveBand = false;
+        m_exactMode = false;
+        invalidateFilterCompat();
+    }
+
+    // Phase 3R K-bench (bench feedback): "Exact freq" filter mode.
+    // Operator's VFO Hz + tolerance; only stations within +/- tolerance
+    // of the VFO pass. Tolerance default 3 kHz matches freedv-gui's
+    // EXACT_FREQ_TOLERANCE_HZ. Use setExactFrequency to enable;
+    // setShowAll / setSelectedBand reverts.
+    void setExactFrequency(quint64 freqHz, quint64 toleranceHz = 3000) {
+        m_exactMode = true;
+        m_haveBand = false;
+        m_exactFreqHz = freqHz;
+        m_exactTolHz = toleranceHz;
         invalidateFilterCompat();
     }
 
@@ -505,7 +593,7 @@ protected:
 
     bool filterAcceptsRow(int sourceRow, const QModelIndex& sourceParent)
         const override {
-        if (!m_haveBand) {
+        if (!m_haveBand && !m_exactMode) {
             return true;
         }
         // Frequency lives in EditRole on the source model's col 5.
@@ -513,8 +601,14 @@ protected:
             sourceModel()->index(sourceRow, kFrequencyCol, sourceParent);
         const quint64 hz = freqIdx.data(Qt::EditRole).toULongLong();
         if (hz == 0) {
-            // Unknown frequency: only "All" matches.
-            return false;
+            return false;  // Unknown freq: only "All" matches
+        }
+        if (m_exactMode) {
+            // |station_freq - vfo_freq| < tolerance
+            const quint64 diff = (hz > m_exactFreqHz)
+                                     ? (hz - m_exactFreqHz)
+                                     : (m_exactFreqHz - hz);
+            return diff <= m_exactTolHz;
         }
         // Band::bandFromFrequency maps Hz to the enclosing amateur band;
         // see src/models/Band.cpp.
@@ -523,8 +617,11 @@ protected:
     }
 
 private:
-    Band m_band{Band::GEN};
-    bool m_haveBand{false};
+    Band     m_band{Band::GEN};
+    bool     m_haveBand{false};
+    bool     m_exactMode{false};
+    quint64  m_exactFreqHz{0};
+    quint64  m_exactTolHz{3000};
 };
 
 // =====================================================================
@@ -777,6 +874,83 @@ void FreeDVReporterDialog::buildUi() {
         header->resizeSection(c, kMinWidths[c]);
     }
 
+    // Restore persisted per-column widths over the defaults. Stored as a
+    // comma-joined width-per-column string under
+    // "FreeDvReporter/ColumnWidths". Mirrors freedv-gui's per-column
+    // SetWidth restore in OnInitDialog (freedv_reporter.cpp:189-203
+    // [@77e793a]).
+    {
+        const QString widthsCsv = AppSettings::instance()
+            .value(QStringLiteral("FreeDvReporter/ColumnWidths"), QString())
+            .toString();
+        const QStringList widthsList =
+            widthsCsv.split(QLatin1Char(','), Qt::SkipEmptyParts);
+        for (int c = 0;
+             c < kFreeDVReporterColumnCount && c < widthsList.size(); ++c) {
+            bool ok = false;
+            const int w = widthsList[c].toInt(&ok);
+            if (ok && w > 10) {
+                header->resizeSection(c, w);
+            }
+        }
+    }
+
+    // Restore persisted sort column + order. Default = FREQUENCY_COL
+    // ascending, matching freedv-gui FreeDVConfiguration.cpp:52-53
+    // [@77e793a] (reporterWindowCurrentSort default 5, currentSortDirection
+    // default true).
+    {
+        const int savedSortCol = AppSettings::instance()
+            .value(QStringLiteral("FreeDvReporter/SortColumn"),
+                   QString::number(kFrequencyCol)).toInt();
+        const bool savedSortAsc = AppSettings::instance()
+            .value(QStringLiteral("FreeDvReporter/SortAscending"),
+                   QStringLiteral("True")).toString()
+            == QStringLiteral("True");
+        if (savedSortCol >= 0 && savedSortCol < kFreeDVReporterColumnCount) {
+            m_table->sortByColumn(savedSortCol,
+                                  savedSortAsc ? Qt::AscendingOrder
+                                               : Qt::DescendingOrder);
+        }
+    }
+
+    // Wire the persist connections AFTER initial restore so the resize /
+    // sort calls above don't loop back into AppSettings.
+    //
+    // Sort persistence: mirrors freedv-gui freedv_reporter.cpp:1057-1060
+    // / :1109-1112 [@77e793a] (OnSortChanged stores GetModelColumn /
+    // IsSortOrderAscending into reporterWindowCurrentSort{,Direction}).
+    connect(header, &QHeaderView::sortIndicatorChanged, this,
+            [](int logicalIndex, Qt::SortOrder order) {
+                auto& s = AppSettings::instance();
+                s.setValue(QStringLiteral("FreeDvReporter/SortColumn"),
+                           QString::number(logicalIndex));
+                s.setValue(QStringLiteral("FreeDvReporter/SortAscending"),
+                           order == Qt::AscendingOrder ? QStringLiteral("True")
+                                                       : QStringLiteral("False"));
+                s.save();
+            });
+
+    // Column-width persistence: fires on user drag-resize. Loops once
+    // through the header to capture all current widths as a CSV. (No
+    // upstream parity cite -- freedv-gui's wxDataViewListCtrl
+    // SetColumnsOrder/GetColumnsOrder handles its own per-column widths
+    // through the wx config layer; Qt's QHeaderView::sectionResized is
+    // the analogous hook.)
+    connect(header, &QHeaderView::sectionResized, this,
+            [this](int, int, int) {
+                auto* hdr = m_table->horizontalHeader();
+                QStringList widths;
+                widths.reserve(kFreeDVReporterColumnCount);
+                for (int c = 0; c < kFreeDVReporterColumnCount; ++c) {
+                    widths << QString::number(hdr->sectionSize(c));
+                }
+                auto& s = AppSettings::instance();
+                s.setValue(QStringLiteral("FreeDvReporter/ColumnWidths"),
+                           widths.join(QLatin1Char(',')));
+                s.save();
+            });
+
     outer->addWidget(m_table, 1);
 
     // Bottom bar built by buildBottomBar(); the test seam findChild<>()
@@ -875,6 +1049,24 @@ void FreeDVReporterDialog::buildBottomBar() {
     m_trackFreqRadio->setObjectName(QStringLiteral("trackFreqRadio"));
     row1->addWidget(m_trackFreqRadio);
 
+    // Phase 3R K-bench (bench feedback): wire the radio toggles so
+    // switching between Band and Exact-freq immediately re-applies the
+    // filter using the latest cached VFO frequency.
+    auto reapplyFilterMode = [this](bool /*checked*/) {
+        if (m_currentVfoHz != 0) {
+            setActiveFrequency(m_currentVfoHz);
+        } else if (m_trackFreqRadio && m_trackFreqRadio->isChecked()
+                   && m_bandProxy) {
+            // No VFO known but user picked exact-freq — block everything
+            // until a setActiveFrequency call lands.
+            m_bandProxy->setExactFrequency(0, 0);
+        }
+    };
+    connect(m_trackBandRadio, &QRadioButton::toggled,
+            this, reapplyFilterMode);
+    connect(m_trackFreqRadio, &QRadioButton::toggled,
+            this, reapplyFilterMode);
+
     row1->addSpacing(8);
     row1->addWidget(new QLabel(QStringLiteral("Frequency (MHz):"),
                                m_bottomBarHost));
@@ -944,6 +1136,20 @@ void FreeDVReporterDialog::buildBottomBar() {
     m_msgEdit = new QLineEdit(m_bottomBarHost);
     m_msgEdit->setObjectName(QStringLiteral("msgEdit"));
     m_msgEdit->setPlaceholderText(QStringLiteral("Status message"));
+    // Phase 3R K-bench (bench feedback): pre-fill with the saved
+    // message from AppSettings so the dialog always shows the
+    // currently-broadcast message. Without this, users would see an
+    // empty line edit even though the client is actively reporting
+    // a stored message to qso.freedv.org.
+    {
+        const QString saved =
+            AppSettings::instance()
+                .value(QStringLiteral("FreeDvReporter/Message"), QString())
+                .toString();
+        if (!saved.isEmpty()) {
+            m_msgEdit->setText(saved);
+        }
+    }
     row2->addWidget(m_msgEdit, 1);
 
     m_msgSendButton = new QPushButton(QStringLiteral("Send"), m_bottomBarHost);
@@ -1125,6 +1331,34 @@ void FreeDVReporterDialog::onBandFilterChanged(int index) {
         m_bandFilter->itemText(index));
 }
 
+void FreeDVReporterDialog::setActiveFrequency(quint64 freqHz) {
+    if (!m_bandProxy) {
+        return;
+    }
+    m_currentVfoHz = freqHz;
+    if (m_trackFreqRadio && m_trackFreqRadio->isChecked()) {
+        // Exact-freq mode: only stations within +/- 3 kHz of VFO.
+        m_bandProxy->setExactFrequency(freqHz, 3000);
+    } else if (m_trackBandRadio && m_trackBandRadio->isChecked()) {
+        // Band-tracking mode: snap the band combo to the VFO's band.
+        const Band b = bandFromFrequency(static_cast<double>(freqHz));
+        const QString name = bandLabel(b);
+        if (m_bandFilter) {
+            const int idx = m_bandFilter->findText(name);
+            if (idx > 0 && idx != m_bandFilter->currentIndex()) {
+                m_bandFilter->setCurrentIndex(idx);
+                // onBandFilterChanged is wired to the combo's
+                // currentIndexChanged signal and runs setSelectedBand
+                // on the proxy, so we don't need a direct call here.
+            } else if (idx <= 0) {
+                // Unknown band (XVTR / WWV) — fall back to "All".
+                m_bandFilter->setCurrentIndex(0);
+            }
+        }
+    }
+    // Neither radio checked: leave the combo alone.
+}
+
 void FreeDVReporterDialog::onTableSelectionChanged(
     const QItemSelection& /*selected*/, const QItemSelection& /*deselected*/) {
     if (!m_qsySendButton || !m_table) {
@@ -1202,6 +1436,16 @@ void FreeDVReporterDialog::onMessageSaveClicked() {
     }
     saveSavedMessages(msgs);
     refreshMessageDropdown(msgs);
+
+    // Phase 3R K-bench (bench feedback): also persist this message as
+    // the ACTIVE status message under FreeDvReporter/Message so it
+    // survives across app reloads. setIdentity() reads this key at
+    // startup; without this write the saved MRU entry was reachable
+    // via the dropdown but the "currently broadcasting" message
+    // reverted to whatever was there before.
+    AppSettings::instance().setValue(
+        QStringLiteral("FreeDvReporter/Message"), text);
+    AppSettings::instance().save();
 }
 
 void FreeDVReporterDialog::onMessageClearClicked() {

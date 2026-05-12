@@ -102,7 +102,8 @@ void DxClusterClient::connectToCluster(const QString& host, quint16 port, const 
     m_intentionalDisconnect = false;
     m_readBuffer.clear();
 
-    qCDebug(lcSpots) << "DxClusterClient: connecting to" << host << ":" << port;
+    qCInfo(lcSpots) << "DxClusterClient: connecting to" << host << ":" << port
+                    << "callsign=" << callsign;
     m_socket->connectToHost(host, port);
 
     // Connection timeout
@@ -146,7 +147,7 @@ void DxClusterClient::sendCommand(const QString& cmd)
 // From AetherSDR src/core/DxClusterClient.cpp:93-112 [@0cd4559]
 void DxClusterClient::onConnected()
 {
-    qCDebug(lcSpots) << "DxClusterClient: TCP connected to" << m_host;
+    qCInfo(lcSpots) << "DxClusterClient: TCP connected to" << m_host;
     m_connected = true;
     m_reconnectAttempts = 0;
 
@@ -249,12 +250,15 @@ void DxClusterClient::onReadyRead()
             // No newline yet — check for login prompt (may not end with \n)
             if (!m_loggedIn) {
                 QString partial = QString::fromLatin1(m_readBuffer).trimmed();
+                qCInfo(lcSpots) << "DxClusterClient: partial buffer (no newline yet)"
+                                << "len=" << partial.length()
+                                << "tail=" << partial.right(40);
                 if (isLoginPrompt(partial)) {
-                    qCDebug(lcSpots) << "DxClusterClient: login prompt detected (no newline):" << partial;
+                    qCInfo(lcSpots) << "DxClusterClient: login prompt detected (no newline):" << partial;
                     m_readBuffer.clear();
                     m_socket->write((m_callsign + "\r\n").toLatin1());
                     m_loggedIn = true;
-                    qCDebug(lcSpots) << "DxClusterClient: sent callsign" << m_callsign;
+                    qCInfo(lcSpots) << "DxClusterClient: sent callsign" << m_callsign;
                 }
             }
             break;
@@ -283,10 +287,10 @@ void DxClusterClient::handleLine(const QString& line)
 {
     // Login prompt detection (line-based)
     if (!m_loggedIn && isLoginPrompt(line)) {
-        qCDebug(lcSpots) << "DxClusterClient: login prompt:" << line;
+        qCInfo(lcSpots) << "DxClusterClient: login prompt (line):" << line;
         m_socket->write((m_callsign + "\r\n").toLatin1());
         m_loggedIn = true;
-        qCDebug(lcSpots) << "DxClusterClient: sent callsign" << m_callsign;
+        qCInfo(lcSpots) << "DxClusterClient: sent callsign" << m_callsign;
         return;
     }
 
@@ -339,24 +343,52 @@ bool DxClusterClient::isLoginPrompt(const QString& line) const
 // "RBN-" prefix some clusters use, case-insensitive).
 bool DxClusterClient::parseDxSpotLine(const QString& line, DxSpot& spot) const
 {
-    static const QRegularExpression rx(
+    // Format A — classic "DX de" header (AR-Cluster, some CC-Cluster):
+    //   "DX de W3LPL:     14025.0  JA1ABC       CW big signal       1824Z"
+    // From AetherSDR src/core/DxClusterClient.cpp:236-260 [@0cd4559].
+    static const QRegularExpression rxClassic(
         R"(^DX\s+de\s+(\S+?):\s+(\d+\.?\d*)\s+(\S+)\s+(.*?)\s+(\d{4})Z)",
         QRegularExpression::CaseInsensitiveOption);
 
-    auto match = rx.match(line);
-    if (!match.hasMatch()) {
-        return false;
+    // Format B — DXSpider standard output (NG7M-1, many other DXSpider
+    // nodes; not parsed by upstream AetherSDR):
+    //   "14310.0 VK2IO/P     12-May-2026 0449Z WWFF VKFF-5514     <OH0M>"
+    // Tokens: FREQ_KHZ CALL DD-MMM-YYYY HHMMZ COMMENT... <SPOTTER>
+    // 2026-05-12 bench: NG7M-1 (DXSpider V1.57) is the default cluster
+    // host shipped in SpotHubDialog defaults; without this fallback
+    // every spot from the default cluster gets dropped on the floor
+    // even though the TCP + login path works.
+    static const QRegularExpression rxDxspider(
+        R"(^(\d+\.?\d*)\s+(\S+)\s+\d{1,2}-\w+-\d{4}\s+(\d{4})Z\s+(.*?)\s+<(\S+)>)",
+        QRegularExpression::CaseInsensitiveOption);
+
+    QString freqStr;
+    QString timeStr;
+
+    auto match = rxClassic.match(line);
+    if (match.hasMatch()) {
+        spot.spotterCall = match.captured(1);
+        freqStr          = match.captured(2);
+        spot.dxCall      = match.captured(3);
+        spot.comment     = match.captured(4).trimmed();
+        timeStr          = match.captured(5);
+    } else {
+        match = rxDxspider.match(line);
+        if (!match.hasMatch()) {
+            return false;
+        }
+        freqStr          = match.captured(1);
+        spot.dxCall      = match.captured(2);
+        timeStr          = match.captured(3);
+        spot.comment     = match.captured(4).trimmed();
+        spot.spotterCall = match.captured(5);
     }
 
-    spot.spotterCall = match.captured(1);
-    double freqKhz   = match.captured(2).toDouble();
-    spot.freqMhz     = freqKhz / 1000.0;
-    spot.dxCall      = match.captured(3);
-    spot.comment     = match.captured(4).trimmed();
+    const double freqKhz = freqStr.toDouble();
+    spot.freqMhz = freqKhz / 1000.0;
 
-    QString timeStr = match.captured(5);
-    int hh = timeStr.left(2).toInt();
-    int mm = timeStr.mid(2, 2).toInt();
+    const int hh = timeStr.left(2).toInt();
+    const int mm = timeStr.mid(2, 2).toInt();
     spot.utcTime = QTime(hh, mm);
 
     if (!(spot.freqMhz > 0.0 && !spot.dxCall.isEmpty())) {

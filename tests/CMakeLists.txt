@@ -2489,6 +2489,22 @@ target_compile_definitions(tst_radio_model_set_tune PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_tx_channel_real_mic_router)
 target_compile_definitions(tst_tx_channel_real_mic_router PRIVATE NEREUS_BUILD_TESTS)
 
+# ── Phase 3R K-bench: TxChannel RADE_U/L -> USB/LSB mapping ──────────────
+# Reproducer for user-reported "RADE-U + MOX = no RF" symptom from
+# bench-test session.  WDSP's SetTXAMode only accepts modes 0..11
+# (LSB..DRM); RADE_U=12 / RADE_L=13 are NereusSDR-native dispatch values
+# that must be mapped to USB/LSB before reaching the WDSP modulator.
+# Test seam lastWdspTxModeForTest() returns the mapped value; the carry
+# m_mode preserves the original RADE_U/L for NereusSDR-side dispatch.
+# 6 test cases:
+#   radeUpperMapsToUsb
+#   radeLowerMapsToLsb
+#   usbPassesThroughUnchanged
+#   lsbPassesThroughUnchanged
+#   allOtherModesPassThroughUnchanged (10 modes)
+#   radeSwitchBackToUsbResetsMapping (state-machine sequence)
+nereus_add_test(tst_tx_channel_rade_mode_mapping)
+
 # ── Phase 3M-1b Task D.2: TxChannel per-mode TXA config setters ──────────────
 # Tests setTxMode(DSPMode), setTxBandpass(int, int), and setSubAmMode(int).
 #

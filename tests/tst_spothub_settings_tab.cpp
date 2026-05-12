@@ -50,6 +50,7 @@
 #include "core/DxccColorProvider.h"
 #include "gui/SpotHubDialog.h"
 #include "models/SpotModel.h"
+#include "models/SpotTableModel.h"
 
 using namespace NereusSDR;
 
@@ -72,10 +73,11 @@ SpotHubDialog* makeDialog()
     auto* freedv = new FreeDVReporterClient;
     auto* psk = new PskReporterClient;
     auto* spots = new SpotModel;
+    auto* spotTable = new SpotTableModel;
     auto* dxcc = new DxccColorProvider;
 
     return new SpotHubDialog(cluster, rbn, wsjtx, spotCollector, pota,
-                             freedv, psk, spots, dxcc, nullptr);
+                             freedv, psk, spots, spotTable, dxcc, nullptr);
 }
 
 } // namespace

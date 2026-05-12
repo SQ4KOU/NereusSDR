@@ -430,6 +430,20 @@ int RadeChannel::txFeatureAccumSizeForTest() const
 //      freqOffsetChanged when synced.
 void RadeChannel::processIq(const QByteArray& iqSamples)
 {
+    // BENCH DEBUG: one-shot logs to confirm RX I/Q reaches the codec
+    // through the queued-invocation path from RxDspWorker.
+    static int s_rxProcessIqCount = 0;
+    if (s_rxProcessIqCount < 3) {
+        qCInfo(lcRade).noquote()
+            << QString("RadeChannel::processIq #%1 bytes=%2 active=%3 "
+                       "rade=%4 fargan=%5")
+                .arg(s_rxProcessIqCount + 1)
+                .arg(iqSamples.size())
+                .arg(m_active)
+                .arg(m_rade != nullptr)
+                .arg(m_fargan != nullptr);
+        ++s_rxProcessIqCount;
+    }
     if (!m_active || !m_rade || !m_fargan) {
         return;
     }
@@ -570,13 +584,37 @@ void RadeChannel::processIq(const QByteArray& iqSamples)
     // Step 8: sample sync / SNR / freq-offset.
     // From AetherSDR src/core/RADEEngine.cpp:290-298 [@0cd4559].
     const bool synced = rade_sync(m_rade) != 0;
+
+    // BENCH DEBUG: log SNR + sync state every 100 rade_rx calls so we
+    // can see whether the codec's internal detector is seeing anything
+    // on the air even when sync isn't held. Helps distinguish:
+    //   (a) signal present but at wrong sideband / freq (SNR fluctuates)
+    //   (b) no signal at all (SNR stays at floor / NaN)
+    static int s_radeRxTickCount = 0;
+    if (++s_radeRxTickCount % 100 == 1) {
+        const float snr = static_cast<float>(rade_snrdB_3k_est(m_rade));
+        const float foff = static_cast<float>(rade_freq_offset(m_rade));
+        qCInfo(lcRade).noquote()
+            << QString("RadeChannel: tick=%1 synced=%2 SNR=%3 dB "
+                       "freqOff=%4 Hz sideband=%5")
+                .arg(s_radeRxTickCount)
+                .arg(synced ? "YES" : "no")
+                .arg(snr, 0, 'f', 1)
+                .arg(foff, 0, 'f', 0)
+                .arg(m_sidebandUpper ? "USB" : "LSB");
+    }
+
     if (synced != m_synced) {
         m_synced = synced;
+        qCInfo(lcRade) << "RadeChannel: rade_sync transition ->"
+                       << (synced ? "SYNCED" : "UNSYNCED");
         emit syncChanged(synced);
     }
     if (synced) {
-        emit snrChanged(static_cast<float>(rade_snrdB_3k_est(m_rade)));
-        emit freqOffsetChanged(static_cast<float>(rade_freq_offset(m_rade)));
+        const float snr = static_cast<float>(rade_snrdB_3k_est(m_rade));
+        const float foff = static_cast<float>(rade_freq_offset(m_rade));
+        emit snrChanged(snr);
+        emit freqOffsetChanged(foff);
     }
 }
 
@@ -603,6 +641,21 @@ void RadeChannel::processIq(const QByteArray& iqSamples)
 //   6. Emit txModemReady with the stereo 24 kHz float32 chunk.
 void RadeChannel::txEncode(const QByteArray& speechSamples)
 {
+    // BENCH DEBUG: one-shot first-receive log + gate-rejection trace so
+    // we can see (a) whether the queued radeMicBlockReady is reaching
+    // txEncode at all, and (b) why it might bail out (m_active /
+    // m_rade / m_lpcnetEnc null after start()).
+    static int s_txEncodeFirstLogged = 0;
+    if (s_txEncodeFirstLogged < 3) {
+        qCInfo(lcRade)
+            << "txEncode call #" << (s_txEncodeFirstLogged + 1)
+            << "bytes=" << speechSamples.size()
+            << "active=" << m_active
+            << "rade=" << (m_rade != nullptr)
+            << "lpcnet=" << (m_lpcnetEnc != nullptr);
+        ++s_txEncodeFirstLogged;
+    }
+
     if (!m_active || !m_rade || !m_lpcnetEnc) {
         return;
     }

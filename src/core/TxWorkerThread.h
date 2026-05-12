@@ -30,6 +30,7 @@
 #pragma once
 
 #include <QByteArray>
+#include <QMutex>
 #include <QThread>
 #include <QVector>
 
@@ -196,6 +197,34 @@ public slots:
     // Idempotent: setting to the current value is a cheap no-op store.
     void setCurrentTxPath(TxPath path);
 
+    // ── Phase 3R K-bench (source-first reframe): RADE mic substitute ────
+    //
+    // RadioModel's txModemReady lambda calls this after extracting the
+    // real component of RadeChannel's modem output and upsampling
+    // 24 -> 48 kHz mono float. The worker copies the bytes under a
+    // small mutex (RADE TX is ~24 kHz upstream so contention is
+    // minimal) and drains them into m_in's I channel from dispatch-
+    // OneBlock's RADE branch. Empty payload is treated as silence.
+    //
+    // Cross-thread queued slot (RadeChannel lives on the main thread,
+    // worker thread differs). Invoked via QMetaObject::invokeMethod
+    // with Qt::QueuedConnection from the wireRadeChannel lambda.
+    void setRadeAudioBlock(const QByteArray& audio48k);
+
+    // ── Phase 3R K-bench: RADE pre-encoder mic processing config ────────
+    //
+    // Per K1 design + user bench feedback: mic input must be gain-staged
+    // AND leveled BEFORE reaching the RADE encoder. Earlier scaffolding
+    // fed raw mic at peak ~0.02 (-34 dBFS) into RADE, well below the
+    // ~-9 dBFS target the codec expects.
+    //
+    // Config is pushed from RadioModel as TransmitModel properties
+    // change (micGainDb, txLevelerOn / MaxGain / Decay). Atomic stores
+    // so the worker thread reads the latest values lock-free at each
+    // dispatchOneBlock tick.
+    void setRadeMicGainDb(int dB);
+    void setRadeLeveler(bool on, int maxGainDb, int decayMs);
+
     // ── Anti-VOX queued slots (3M-3a-iv) ─────────────────────────────────
     //
     // These four slots form the worker-thread proxy for anti-VOX state and
@@ -298,6 +327,25 @@ private:
     std::vector<float>   m_radeMicFloat;
     std::vector<float>   m_radeMic16k;
     std::vector<int16_t> m_radeMicInt16;
+
+    // Phase 3R K-bench (source-first reframe): RADE-side mic-input
+    // substitution. setRadeAudioBlock appends 48 kHz mono float32
+    // samples here under m_radeAudioOverrideMutex; dispatchOneBlock's
+    // RADE branch drains up to kBlockFrames samples per tick. Mutex
+    // is fine for this low-rate path (~24 kHz upstream; emits arrive
+    // every ~25 ms during RADE TX, contention is negligible).
+    QMutex      m_radeAudioOverrideMutex;
+    QByteArray  m_radeAudioOverride;
+
+    // Phase 3R K-bench: RADE pre-encoder mic processing state.
+    // Mic gain dB is read live from TransmitModel via setRadeMicGainDb;
+    // leveler state is similarly pushed from RadioModel. The peak
+    // envelope tracker is worker-local state (no cross-thread writes).
+    std::atomic<int>  m_radeMicGainDb{0};       // dB, default 0 (no gain)
+    std::atomic<bool> m_radeLevelerOn{true};    // default ON per K1
+    std::atomic<int>  m_radeLevelerMaxGainDb{15};  // K1 default
+    std::atomic<int>  m_radeLevelerDecayMs{100};   // K1 default
+    float             m_radeLevelerPeakEnv{0.0f};  // one-pole peak tracker
 
     // Worker-thread scratch — interleaved I/Q double buffer drained from
     // m_micSource each tick.  Sized 2 * kBlockFrames doubles.

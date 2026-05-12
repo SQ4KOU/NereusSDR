@@ -744,9 +744,18 @@ const std::vector<FactoryProfile>& factoryProfiles()
             {QStringLiteral("TXEQEnabled"),    QStringLiteral("False")},
             {QStringLiteral("TXEQPreamp"),     QStringLiteral("0")},
             {QStringLiteral("ALC_MaximumGain"), QStringLiteral("0")},
-            // Leveler / CFC / CESSB / PhRot left at defaultProfileValues()
-            // (Lev_On=True, CFC/CESSB/PhRot all false) so this override
-            // table stays compact.
+            // Phase 3R K-bench: bench feedback — Lev_MaxGain=15 dB and
+            // Lev_Decay=100 ms (defaultProfileValues' WebRTC-AGC-derived
+            // values) cause audible AGC pumping on RADE TX. RADE's modem
+            // wants nearly-constant amplitude; aggressive AGC distorts
+            // the modem characteristics. Override to gentler defaults:
+            //   Lev_MaxGain = 6 dB   — modest boost ceiling
+            //   Lev_Decay   = 300 ms — slower release, less pumping
+            {QStringLiteral("Lev_MaxGain"),    QStringLiteral("6")},
+            {QStringLiteral("Lev_Decay"),      QStringLiteral("300")},
+            // Leveler stays on (Lev_On=True from defaults). CFC / CESSB
+            // / PhRot left at defaultProfileValues() (all false) so this
+            // override table stays compact.
         });
 
     static const std::vector<FactoryProfile> kProfiles = {

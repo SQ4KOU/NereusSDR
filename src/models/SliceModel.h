@@ -271,6 +271,18 @@ class SliceModel : public QObject {
     // (Phase L1) binds snrDbChanged to paint the SNR row in the flag.
     Q_PROPERTY(double snrDb           READ snrDb           WRITE setSnrDb           NOTIFY snrDbChanged)
 
+    // ── 2026-05-11 bench: last RADE-decoded speaker callsign ────────────────
+    // Sourced from RadeChannel::rxTextDecoded (the EOO aux text channel
+    // embedded in the RADE modem). Updated by
+    // RadioModel::onRadeTextDecoded; cleared by setDspMode when the
+    // slice leaves RADE_U/RADE_L (A+D semantics per JJ bench design
+    // discussion 2026-05-11: sticky while in RADE, clears on
+    // mode-off-RADE). Empty string means "no callsign decoded yet on
+    // this slice in the current RADE session." Drives the VFO flag
+    // SNR row label.
+    Q_PROPERTY(QString lastRadeRxCallsign READ lastRadeRxCallsign
+               WRITE setLastRadeRxCallsign NOTIFY lastRadeRxCallsignChanged)
+
 public:
     /// Type alias so RxChannelState/TxChannelState can reference SliceModel::Mode
     /// (matches the design contract; underlying type is the canonical DSPMode enum).
@@ -667,6 +679,11 @@ public:
     double snrDb() const { return m_snrDb; }
     void setSnrDb(double db);
 
+    // ── 2026-05-11 bench: last RADE-decoded speaker callsign ────────────────
+    // See Q_PROPERTY comment above for full semantics.
+    QString lastRadeRxCallsign() const { return m_lastRadeRxCallsign; }
+    void setLastRadeRxCallsign(const QString& callsign);
+
 public slots:
     // Phase 3P-I-a T13 — refresh cached antenna values from AlexController
     // for the given band. Called by RadioModel on
@@ -770,6 +787,9 @@ signals:
 
     // ── Phase 3J-2 Task D5: live SNR (NereusSDR-native) ──
     void snrDbChanged(double db);
+
+    // ── 2026-05-11 bench: RADE speaker callsign ──
+    void lastRadeRxCallsignChanged(const QString& callsign);
 
 private:
     // Phase 3R Task J3 - resolves the RadeChannel model-path argument
@@ -905,6 +925,12 @@ private:
     // (Phase R) when slice mode is RADE; future digital modes wire the
     // same setSnrDb slot.
     double m_snrDb{std::numeric_limits<double>::quiet_NaN()};
+
+    // 2026-05-11 bench: last RADE-decoded speaker callsign.  Empty
+    // string is the "no decode yet" sentinel; setLastRadeRxCallsign
+    // emits lastRadeRxCallsignChanged only on actual change so the VFO
+    // flag does not redraw on every EOO repeat decode of the same call.
+    QString m_lastRadeRxCallsign;
 };
 
 } // namespace NereusSDR

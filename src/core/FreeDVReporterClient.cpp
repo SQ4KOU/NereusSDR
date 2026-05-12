@@ -246,6 +246,9 @@ void FreeDVReporterClient::updateMessage(const QString& message)
     // From freedv-gui src/reporting/FreeDVReporter.cpp:122-130 [@77e793a]
     // (the inner sendMessageImpl_ at :688-702).
     m_statusMessage = message;
+    qCInfo(lcSpots) << "FreeDVReporterClient::updateMessage:"
+                    << message
+                    << "(connected=" << m_connected.load() << ")";
     if (!m_connected.load()) return;
 
     QJsonObject obj;
@@ -256,6 +259,113 @@ void FreeDVReporterClient::updateMessage(const QString& message)
     arr.append(obj);
     sendText(QStringLiteral("42")
              + QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact)));
+}
+
+void FreeDVReporterClient::setFrequency(quint64 freqHz)
+{
+    // From freedv-gui src/reporting/FreeDVReporter.cpp:653-668 [@77e793a]
+    // (freqChangeImpl_). Emit a Socket.IO "freq_change" event with our
+    // current operating frequency so the reporter server lists it next
+    // to our station.
+    //
+    // Cache the value regardless of connected state so a reconnect or a
+    // show_self toggle can re-push it. Matches freedv-gui's
+    // `lastFrequency_ = frequency` at :667 [@77e793a].
+    m_lastFrequency = freqHz;
+    if (!m_connected.load()) return;
+
+    QJsonObject obj;
+    // qint64 cast: QJSON has no native uint64; freqHz fits safely in
+    // qint64 for any HF/VHF frequency we'd encounter.
+    obj["freq"] = qint64(freqHz);
+
+    QJsonArray arr;
+    arr.append(QStringLiteral("freq_change"));
+    arr.append(obj);
+    sendText(QStringLiteral("42")
+             + QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact)));
+}
+
+void FreeDVReporterClient::sendRxReport(const QString& callsign,
+                                        const QString& mode, int snrDb)
+{
+    // From freedv-gui src/reporting/FreeDVReporter.cpp addReceiveRecord
+    // [@77e793a]. Emits a Socket.IO "rx_report" event so qso.freedv.org
+    // marks our row as decoding the source station. NereusSDR fires
+    // this from RadioModel when RadeChannel decodes a callsign + has
+    // a valid SNR estimate.
+    if (!m_connected.load() || callsign.isEmpty()) {
+        return;
+    }
+
+    QJsonObject obj;
+    obj["callsign"] = callsign;
+    obj["mode"] = mode;
+    obj["snr"] = snrDb;
+
+    QJsonArray arr;
+    arr.append(QStringLiteral("rx_report"));
+    arr.append(obj);
+    sendText(QStringLiteral("42")
+             + QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact)));
+}
+
+void FreeDVReporterClient::setTransmitting(bool tx, const QString& mode)
+{
+    // From freedv-gui src/reporting/FreeDVReporter.cpp:670-686 [@77e793a]
+    // (transmitImpl_). Emit a Socket.IO "tx_report" event so the
+    // reporter server marks our station as TXing (red row in the
+    // reporter dialog) or RXing.
+    //
+    // Cache regardless of connected state so a reconnect or show_self
+    // toggle can re-push it. Matches freedv-gui's `mode_ = mode; tx_ = tx`
+    // at :684-685 [@77e793a].
+    m_lastTxMode = mode;
+    m_lastTxState = tx;
+    if (!m_connected.load()) return;
+
+    QJsonObject obj;
+    obj["mode"] = mode;
+    obj["transmitting"] = tx;
+
+    QJsonArray arr;
+    arr.append(QStringLiteral("tx_report"));
+    arr.append(obj);
+    sendText(QStringLiteral("42")
+             + QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact)));
+}
+
+void FreeDVReporterClient::setHiddenFromView(bool hidden)
+{
+    // From freedv-gui src/reporting/FreeDVReporter.cpp:167-185 [@77e793a]
+    // (hideFromView / showOurselves) and the inner :704-729
+    // (hideFromViewImpl_ / showOurselvesImpl_). Toggles the server-side
+    // "hidden" flag for our station via the Socket.IO "hide_self" /
+    // "show_self" events (no payload). On the hide-to-show transition,
+    // the server has forgotten our state, so we re-emit freq_change /
+    // tx_report / message_update -- matching upstream :726-728.
+    m_hiddenFromView = hidden;
+    if (!m_connected.load()) return;
+
+    QJsonArray arr;
+    arr.append(hidden ? QStringLiteral("hide_self")
+                      : QStringLiteral("show_self"));
+    sendText(QStringLiteral("42")
+             + QString::fromUtf8(QJsonDocument(arr).toJson(QJsonDocument::Compact)));
+
+    if (!hidden) {
+        // Re-emit cached state after show_self. From freedv-gui
+        // FreeDVReporter.cpp:726-728 [@77e793a].
+        if (m_lastFrequency != 0) {
+            setFrequency(m_lastFrequency);
+        }
+        if (!m_lastTxMode.isEmpty()) {
+            setTransmitting(m_lastTxState, m_lastTxMode);
+        }
+        if (!m_statusMessage.isEmpty()) {
+            updateMessage(m_statusMessage);
+        }
+    }
 }
 
 // ── WebSocket slots ─────────────────────────────────────────────────────
@@ -363,16 +473,57 @@ void FreeDVReporterClient::handleEngineIO(const QString& raw)
         m_pingIntervalMs = obj.value(QStringLiteral("pingInterval")).toInt(25000);
         m_pingTimer->start(m_pingIntervalMs);
 
-        // Send Socket.IO Connect with view-only auth.
-        // "40" = Engine.IO Message (4) + Socket.IO Connect (0).
+        // Send Socket.IO Connect with view OR report auth depending on
+        // whether we have a callsign + grid identity to publish.
+        //
         // Wire payload from freedv-gui FreeDVReporter.cpp:295-309
-        // [@77e793a] view-mode branch:
-        //   {"role":"view","protocol_version":2}
-        // (NereusSDR is always view-only at present; reporter mode is
-        // a 3M-x follow-up.)
+        // [@77e793a]:
+        //   isValidForReporting() == false -> {"role":"view", proto}
+        //   isValidForReporting() == true  -> {"role":"report",
+        //                                      "callsign":..., "grid_square":...,
+        //                                      "version":..., "rx_only":bool,
+        //                                      "os":..., "protocol_version":2}
+        //
+        // Phase 3R K-bench (bench feedback): the NereusSDR FreeDV
+        // Reporter client originally shipped view-only with the
+        // comment "reporter mode is a 3M-x follow-up". That meant our
+        // station never appeared on qso.freedv.org. This commit
+        // upgrades view -> report when setIdentity() has been called
+        // with a non-empty callsign + grid pair.
         QJsonObject auth;
-        auth["role"] = QStringLiteral("view");
+        const bool canReport =
+            !m_callsign.isEmpty() && !m_gridSquare.isEmpty();
+        if (canReport) {
+            auth["role"] = QStringLiteral("report");
+            auth["callsign"] = m_callsign;
+            auth["grid_square"] = m_gridSquare;
+            auth["version"] = m_version.isEmpty()
+                                  ? QStringLiteral("NereusSDR")
+                                  : m_version;
+            // rx_only: NereusSDR can TX RADE per Phase 3R K-bench, so
+            // default to false. Future enhancement: expose this as a
+            // user setting (e.g. for SWL-only ops).
+            auth["rx_only"] = false;
+            // os: NereusSDR is cross-platform; report the host OS so
+            // other operators can see what we're running.
+#if defined(Q_OS_MACOS)
+            auth["os"] = QStringLiteral("macOS");
+#elif defined(Q_OS_WIN)
+            auth["os"] = QStringLiteral("Windows");
+#elif defined(Q_OS_LINUX)
+            auth["os"] = QStringLiteral("Linux");
+#else
+            auth["os"] = QStringLiteral("Unknown");
+#endif
+        } else {
+            auth["role"] = QStringLiteral("view");
+        }
         auth["protocol_version"] = 2;
+        qCInfo(lcSpots).noquote()
+            << "FreeDVReporterClient: auth payload role="
+            << auth["role"].toString()
+            << "callsign=" << m_callsign
+            << "grid=" << m_gridSquare;
         sendText(QStringLiteral("40") + QString::fromUtf8(
             QJsonDocument(auth).toJson(QJsonDocument::Compact)));
         return;
@@ -408,9 +559,39 @@ void FreeDVReporterClient::handleSocketIO(const QString& payload)
         // Socket.IO Connect ACK -- "0{"sid":"..."}"
         m_connected.store(true);
         m_reconnectAttempts = 0;
-        qCDebug(lcSpots) << "FreeDVReporterClient: Socket.IO connected";
+        qCInfo(lcSpots) << "FreeDVReporterClient: Socket.IO connected, "
+                           "msg=" << m_statusMessage
+                        << "hidden=" << m_hiddenFromView;
         emit rawLineReceived(QStringLiteral("Connected to ") + m_serverUrl);
         emit connected();
+
+        // Phase 3R K-bench (2026-05-11 bench): upstream relies on the
+        // server emitting `connection_successful` and then pushes
+        // cached freq/tx/message inside that handler
+        // (FreeDVReporter.cpp:424-433 [@77e793a]). The qso.freedv.org
+        // server has been observed to skip that event for role=report
+        // sessions on the bench, leaving the cached message unsent.
+        // Push it here too, on the Socket.IO Connect ACK, so the
+        // dashboard always sees our message. Idempotent if the
+        // connection_successful event does later fire and re-pushes.
+        if (m_hiddenFromView) {
+            QJsonArray arr;
+            arr.append(QStringLiteral("hide_self"));
+            sendText(QStringLiteral("42")
+                     + QString::fromUtf8(
+                         QJsonDocument(arr).toJson(QJsonDocument::Compact)));
+        } else if (!m_statusMessage.isEmpty()) {
+            QJsonObject obj;
+            obj["message"] = m_statusMessage;
+            QJsonArray arr;
+            arr.append(QStringLiteral("message_update"));
+            arr.append(obj);
+            sendText(QStringLiteral("42")
+                     + QString::fromUtf8(
+                         QJsonDocument(arr).toJson(QJsonDocument::Compact)));
+            qCInfo(lcSpots) << "FreeDVReporterClient: pushed cached message"
+                            << m_statusMessage << "on Socket.IO ACK";
+        }
         return;
     }
 
@@ -591,7 +772,59 @@ void FreeDVReporterClient::onConnectionSuccessful(const QJsonObject& data)
     // From freedv-gui src/reporting/FreeDVReporter.cpp:408-434 [@77e793a]
     // (onFreeDVReporterConnectionSuccessful_).
     Q_UNUSED(data);
-    qCDebug(lcSpots) << "FreeDVReporterClient: connection_successful";
+    qCInfo(lcSpots) << "FreeDVReporterClient: connection_successful"
+                    << "hidden=" << m_hiddenFromView;
+
+    // freedv-gui :424-433 [@77e793a]: branch on `hidden_`. If hidden,
+    // assert hide_self (no other state push -- server doesn't need our
+    // freq/tx/message while we're hidden). Otherwise re-emit
+    // freq_change + tx_report + message_update so the dashboard row
+    // reflects our current state.
+    if (m_hiddenFromView) {
+        QJsonArray arr;
+        arr.append(QStringLiteral("hide_self"));
+        sendText(QStringLiteral("42")
+                 + QString::fromUtf8(
+                     QJsonDocument(arr).toJson(QJsonDocument::Compact)));
+        qCInfo(lcSpots) << "FreeDVReporterClient: asserted hide_self";
+        return;
+    }
+
+    // Re-push cached state. Matches freedv-gui :430-432 [@77e793a]
+    // (freqChangeImpl_ + transmitImpl_ + sendMessageImpl_).
+    if (m_lastFrequency != 0) {
+        QJsonObject obj;
+        obj["freq"] = qint64(m_lastFrequency);
+        QJsonArray arr;
+        arr.append(QStringLiteral("freq_change"));
+        arr.append(obj);
+        sendText(QStringLiteral("42")
+                 + QString::fromUtf8(
+                     QJsonDocument(arr).toJson(QJsonDocument::Compact)));
+    }
+    if (!m_lastTxMode.isEmpty()) {
+        QJsonObject obj;
+        obj["mode"] = m_lastTxMode;
+        obj["transmitting"] = m_lastTxState;
+        QJsonArray arr;
+        arr.append(QStringLiteral("tx_report"));
+        arr.append(obj);
+        sendText(QStringLiteral("42")
+                 + QString::fromUtf8(
+                     QJsonDocument(arr).toJson(QJsonDocument::Compact)));
+    }
+    if (!m_statusMessage.isEmpty()) {
+        QJsonObject obj;
+        obj["message"] = m_statusMessage;
+        QJsonArray arr;
+        arr.append(QStringLiteral("message_update"));
+        arr.append(obj);
+        sendText(QStringLiteral("42")
+                 + QString::fromUtf8(
+                     QJsonDocument(arr).toJson(QJsonDocument::Compact)));
+        qCInfo(lcSpots) << "FreeDVReporterClient: pushed message"
+                        << m_statusMessage;
+    }
 }
 
 void FreeDVReporterClient::onBulkUpdate(const QJsonArray& pairs)

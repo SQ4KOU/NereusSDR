@@ -66,6 +66,7 @@
 // Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
 
 #include <atomic>
+#include <memory>
 
 #include <QObject>
 #include <QVector>
@@ -74,6 +75,8 @@ namespace NereusSDR {
 
 class WdspEngine;
 class AudioEngine;
+class RadeChannel;
+class Resampler;
 
 // RxDspWorker runs the per-receiver I/Q → WDSP → audio processing step
 // on a dedicated DSP thread, off the GUI main thread.
@@ -157,6 +160,18 @@ public slots:
     // the worker thread before the WDSP channel is destroyed.
     void resetAccumulator();
 
+    // Phase 3R K-bench: set the active RadeChannel for I/Q routing.
+    // When non-null AND WDSP rxChannel(0) returns null (slice is in
+    // RADE mode), processIqBatch decimates each chunk to 24 kHz I/Q
+    // and posts it to radeCh->processIq via Qt::QueuedConnection
+    // (RadeChannel lives on the main thread). RadioModel pushes this
+    // pointer from wireRadeChannel (set) and the channel's destroyed
+    // signal (clear).
+    //
+    // Cross-thread queued slot. Atomic raw pointer write; ownership
+    // remains with WdspEngine::m_radeChannels.
+    void setRadeChannel(RadeChannel* channel);
+
 signals:
     // Emitted at the end of every processIqBatch invocation, on the
     // DSP thread. Used by tests to observe that work happens off the
@@ -233,6 +248,25 @@ private:
     // fires regardless of whether it matches the kDefault* defaults.
     int m_lastEmittedInSize{-1};
     int m_lastEmittedOutSize{-1};
+
+    // Phase 3R K-bench: RADE RX path. m_radeChannel is the active
+    // RadeChannel for slice 0; when non-null AND m_wdspEngine has no
+    // RxChannel for slice 0, processIqBatch routes I/Q through the
+    // decimators below to RadeChannel::processIq instead of WDSP.
+    //
+    // The decimators run at the configured radio rate (m_sampleRate,
+    // typically 48 / 96 / 192 kHz) and produce 24 kHz I/Q matching
+    // RadeChannel's processIq expectation. Built lazily on first use
+    // and rebuilt if m_sampleRate changes. Two parallel resamplers
+    // (one per leg) so the I and Q channels stay aligned.
+    std::atomic<RadeChannel*>   m_radeChannel{nullptr};
+    std::unique_ptr<Resampler>  m_radeRxDownsamplerI;
+    std::unique_ptr<Resampler>  m_radeRxDownsamplerQ;
+    double                      m_radeRxDownsamplerSrcRate{0.0};
+    // Scratch for the float-mono I/Q presented to RadeChannel::processIq
+    // as interleaved stereo float32 at 24 kHz (matching RadeChannel's
+    // input convention from RadeChannel::processIq).
+    QByteArray                  m_radeRxIqScratch;
 };
 
 } // namespace NereusSDR

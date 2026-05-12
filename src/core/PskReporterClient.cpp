@@ -363,6 +363,10 @@ void PskReporterClient::setAutoSendIntervalSec(int sec) {
     m_autoSendTimer->start(sec * 1000);
 }
 
+bool PskReporterClient::isAutoSendActive() const {
+    return m_autoSendTimer != nullptr && m_autoSendTimer->isActive();
+}
+
 QByteArray PskReporterClient::buildDatagramForTest() {
     return buildDatagramLocked();
 }

@@ -246,10 +246,30 @@ public:
                            FreeDVReporterClient* freedvClient,
                            PskReporterClient* pskClient,
                            SpotModel* spotModel,
+                           SpotTableModel* spotTableModel,
                            DxccColorProvider* dxccProvider,
                            QWidget* parent = nullptr);
 
+    // 2026-05-12 bench fix (Gap #6).  Spot List ↔ panadapter hover
+    // sync.  setHoveredPanadapterSpot(spotIdx) is called from
+    // MainWindow when the user mouses over a spot label on the
+    // panadapter — finds the row in the Spot List matching that
+    // SpotModel::SpotData::index (by callsign + freq + source) and
+    // selects it.  -1 clears.  Companion signal
+    // spotListHoverChanged(spotIdx) lives in the signals block below.
+public slots:
+    void setHoveredPanadapterSpot(int spotIdx);
+
+public:
+
 signals:
+    // 2026-05-12 bench fix (Gap #6 companion).  Fired when the user
+    // mouses over a Spot List row.  spotIdx is the matching
+    // SpotModel::SpotData::index (resolved by callsign+freq+source);
+    // -1 means "no row under cursor."  MainWindow forwards this to
+    // SpectrumWidget::setHoverSpotIndexExternal for the halo paint.
+    void spotListHoverChanged(int spotIdx);
+
     // Forwarded from per-source tab controls in F2.
     void settingsChanged();
     void connectRequested(const QString& host, quint16 port, const QString& callsign);
@@ -270,6 +290,17 @@ signals:
     void tuneRequested(double freqMhz);
     // Forwarded from the Display tab's "Clear All Spots" button.
     void spotsClearedAll();
+
+    // 2026-05-12 bench fix: emitted after the Settings tab's Save &
+    // Propagate button writes User/Callsign / User/GridSquare /
+    // FreeDvReporter/Message to AppSettings.  MainWindow listens so
+    // it can push the new grid into FreeDVStationModel::setOurGridSquare
+    // — otherwise the dialog's distance/heading columns stay zeroed
+    // because the station model's m_ourGrid never updates without
+    // an explicit setter call.
+    void identitySaved(const QString& callsign,
+                       const QString& gridSquare,
+                       const QString& message);
 
 private:
     // NereusSDR-native Settings tab (first position) for central
@@ -297,6 +328,7 @@ private:
     FreeDVReporterClient* m_freedvClient{nullptr};
     PskReporterClient*    m_pskClient{nullptr};
     SpotModel*            m_spotModel{nullptr};
+    SpotTableModel*       m_spotTableModel{nullptr};
     DxccColorProvider*    m_dxccProvider{nullptr};
 
     // Settings tab (NereusSDR-native, post-3J-2 UX fix). Held so the
@@ -392,7 +424,11 @@ private:
     // [@0cd4559] but the underlying types come from NereusSDR's
     // standalone src/models/ port (Task D2) and the SpotTableModel
     // backs all sources rather than just the Cluster tab.
-    SpotTableModel* m_spotTableModel{nullptr};
+    //
+    // 2026-05-12 bench fix: m_spotTableModel moved to the section
+    // above (declared next to m_spotModel) — its ownership now lives
+    // on RadioModel so spots populate from app start.  Keeping only
+    // the dialog-owned proxy + view here.
     BandFilterProxy* m_spotProxyModel{nullptr};
     QTableView*     m_spotTable{nullptr};
 

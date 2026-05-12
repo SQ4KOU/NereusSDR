@@ -254,6 +254,17 @@ public:
     // 6 s default so the unit test does not block on wall-clock time.
     void setHighlightClearMsForTest(int ms);
 
+    // Phase 3R K-bench (bench feedback): push the operator's active VFO
+    // frequency into the filter pipeline. Behavior depends on the
+    // Track-frequency radio state:
+    //   Band radio:  the Band combo auto-selects to match the VFO's
+    //                amateur band; only stations on that band show.
+    //   Freq radio:  exact-freq mode — only stations within ~3 kHz of
+    //                the VFO show.
+    //   (Neither set — combo is "All"): no automatic filter.
+    // Called from RadioModel when slice.frequencyChanged fires.
+    void setActiveFrequency(quint64 freqHz);
+
     // Test seam: read back the row highlight color for a given sid.
     // Returns an invalid QColor when no highlight is active. Mirrors
     // the upstream `reportData->backgroundColor` cell after
@@ -386,6 +397,9 @@ private:
     QComboBox*    m_bandFilter{nullptr};
     QRadioButton* m_trackBandRadio{nullptr};
     QRadioButton* m_trackFreqRadio{nullptr};
+    // Phase 3R K-bench: cached active VFO Hz so radio-toggle handlers
+    // can re-apply the new filter mode using the latest frequency.
+    quint64       m_currentVfoHz{0};
     QLineEdit*    m_qsyFreq{nullptr};
     QPushButton*  m_qsySendButton{nullptr};
     QPushButton*  m_openWebsiteButton{nullptr};

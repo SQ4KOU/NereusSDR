@@ -159,6 +159,67 @@ void TxWorkerThread::setRadeChannel(RadeChannel* channel)
     m_radeChannel.store(channel, std::memory_order_release);
 }
 
+// ---------------------------------------------------------------------------
+// setRadeAudioBlock — Phase 3R K-bench (source-first reframe)
+//
+// Append the next 48 kHz mono float32 RADE audio block to the
+// override buffer. dispatchOneBlock's RADE branch drains up to
+// kBlockFrames samples per tick into m_in's I channel before
+// running the WDSP TXA modulator.
+//
+// Called from RadioModel's txModemReady lambda after extracting
+// the real component of RadeChannel's stereo output and upsampling
+// 24 -> 48 kHz mono. The default Qt::AutoConnection resolves to
+// Qt::QueuedConnection because RadeChannel lives on the main thread
+// and TxWorkerThread (as a QThread instance) processes its event
+// queue between mic-block drains via the sendPostedEvents pump in
+// run(). The mutex serialises against the worker thread's drain
+// inside dispatchOneBlock.
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// setRadeMicGainDb / setRadeLeveler — Phase 3R K-bench
+//
+// Cross-thread setters pushed from RadioModel as TransmitModel
+// properties change. Atomic stores; the worker reads with relaxed
+// load each dispatchOneBlock tick.
+// ---------------------------------------------------------------------------
+void TxWorkerThread::setRadeMicGainDb(int dB)
+{
+    m_radeMicGainDb.store(dB, std::memory_order_relaxed);
+}
+
+void TxWorkerThread::setRadeLeveler(bool on, int maxGainDb, int decayMs)
+{
+    m_radeLevelerOn.store(on,         std::memory_order_relaxed);
+    m_radeLevelerMaxGainDb.store(maxGainDb, std::memory_order_relaxed);
+    m_radeLevelerDecayMs.store(decayMs, std::memory_order_relaxed);
+}
+
+void TxWorkerThread::setRadeAudioBlock(const QByteArray& audio48k)
+{
+    // BENCH DEBUG: one-shot first-receive log so we can verify the
+    // RadioModel txModemReady lambda is reaching the worker.
+    static int s_radeAudioFirstRecvLogged = 0;
+    if (s_radeAudioFirstRecvLogged < 3) {
+        qCInfo(lcTxWorker)
+            << "setRadeAudioBlock recv #" << (s_radeAudioFirstRecvLogged + 1)
+            << "bytes=" << audio48k.size();
+        ++s_radeAudioFirstRecvLogged;
+    }
+
+    QMutexLocker lk(&m_radeAudioOverrideMutex);
+    m_radeAudioOverride.append(audio48k);
+    // Bound the buffer to keep latency low if the producer outruns the
+    // consumer (e.g. user holding MOX with no actual mic input — RADE
+    // still emits silence frames). 1 second @ 48 kHz mono float =
+    // 192 KB.
+    constexpr int kMaxBytes = 48000 * 1 * static_cast<int>(sizeof(float));
+    if (m_radeAudioOverride.size() > kMaxBytes) {
+        m_radeAudioOverride.remove(
+            0, m_radeAudioOverride.size() - kMaxBytes);
+    }
+}
+
 void TxWorkerThread::startPump()
 {
     if (isRunning()) {
@@ -339,12 +400,183 @@ void TxWorkerThread::dispatchOneBlock()
     // No early-return-with-log scaffolding; the pump runs every tick.
     const TxPath path = m_currentTxPath.load(std::memory_order_acquire);
     if (path == TxPath::Rade) {
-        // Step 1: extract the I channel from m_in.  m_in is interleaved
-        // I/Q doubles (Q=0) drained by run() / tickForTest from
-        // m_micSource.
-        for (int i = 0; i < kBlockFrames; ++i) {
-            m_radeMicFloat[static_cast<size_t>(i)] =
-                static_cast<float>(m_in[static_cast<size_t>(2 * i)]);
+        // ── Phase 3R K-bench (source-first reframe) ──────────────────────
+        //
+        // RADE TX runs THROUGH the WDSP TXA modulator stage, NOT around
+        // it. freedv-gui's RADETransmitStep.cpp:196-200 [@77e793a] takes
+        // ONLY the real component of rade_tx's RADE_COMP output and
+        // feeds it as mono audio; the radio's hardware SSB modulator
+        // handles USB/LSB. NereusSDR's equivalent: WDSP's TXA modulator
+        // (in USB or LSB mode per TxChannel::setTxMode's RADE_U/L ->
+        // USB/LSB mapping).
+        //
+        // Flow:
+        //   1. Drain mic block (m_in already populated by run()).
+        //   2. HPF + 48 -> 16 kHz resample (RADE input).
+        //   3. emit radeMicBlockReady -> RadeChannel::txEncode (queued
+        //      to main thread). RadeChannel runs rade_tx and emits
+        //      txModemReady (24 kHz stereo float).
+        //   4. RadioModel's wireRadeChannel lambda extracts the real
+        //      component, upsamples 24 -> 48 kHz, and pushes the result
+        //      back to TxWorkerThread via setRadeAudioBlock().
+        //   5. Below the override switch (continuing into the WDSP
+        //      path), m_in's I channel is REPLACED with the latest
+        //      RADE audio block when path == Rade. The WDSP TXA chain
+        //      then modulates it as ordinary SSB voice.
+        //
+        // Earlier scaffolding (K2 early-return + K4 direct sendTxIq
+        // with I=mono, Q=0) produced DSB modulation and bypassed the
+        // WDSP modulator, which broke TUNE in RADE mode (TUNE writes
+        // PostGen + relies on the modulator stage running). This
+        // version runs the full WDSP TXA chain so TUNE and RADE TX
+        // share the same modulator path.
+
+        // Step 1: gather the actual mic samples for RADE encoding.
+        //
+        // The user's selected mic source (PC mic, VAX, or radio mic)
+        // determines where speech comes from. The PC/VAX override
+        // paths below the RADE branch are gated on path != Rade now,
+        // so they no longer write to m_in — we must pull the correct
+        // source HERE for the RADE encoder input.
+        //
+        // Priority order matches the existing PC/VAX paths below:
+        //   1. VAX TX bus (shared-memory HAL bridge).
+        //   2. PC mic (PortAudio/QAudio capture).
+        //   3. Radio mic (already in m_in from m_micSource->drainBlock).
+        //
+        // Empty pulls and short-pulls are zero-filled so silent ticks
+        // produce silent RADE output (no leaked radio mic).
+        if (m_audioEngine != nullptr
+            && m_audioEngine->isVaxMicOverrideActive()) {
+            const int got = m_audioEngine->pullVaxTxMic(
+                m_pcMicBuf.data(), kBlockFrames);
+            const int n = std::clamp(got, 0, kBlockFrames);
+            for (int i = 0; i < n; ++i) {
+                m_radeMicFloat[static_cast<size_t>(i)] =
+                    m_pcMicBuf[static_cast<size_t>(i)];
+            }
+            for (int i = n; i < kBlockFrames; ++i) {
+                m_radeMicFloat[static_cast<size_t>(i)] = 0.0f;
+            }
+        } else if (m_audioEngine != nullptr
+                   && m_audioEngine->isPcMicOverrideActive()) {
+            const int got = m_audioEngine->pullTxMic(
+                m_pcMicBuf.data(), kBlockFrames);
+            const int n = std::clamp(got, 0, kBlockFrames);
+            for (int i = 0; i < n; ++i) {
+                m_radeMicFloat[static_cast<size_t>(i)] =
+                    m_pcMicBuf[static_cast<size_t>(i)];
+            }
+            for (int i = n; i < kBlockFrames; ++i) {
+                m_radeMicFloat[static_cast<size_t>(i)] = 0.0f;
+            }
+        } else {
+            // Radio mic — extract I channel from m_in (populated by
+            // run() / tickForTest from m_micSource->drainBlock).
+            for (int i = 0; i < kBlockFrames; ++i) {
+                m_radeMicFloat[static_cast<size_t>(i)] =
+                    static_cast<float>(m_in[static_cast<size_t>(2 * i)]);
+            }
+        }
+
+        // ── Phase 3R K-bench: pre-RADE mic gain + leveler ──────────────
+        //
+        // Per K1 design + bench feedback: raw mic at typical line level
+        // is ~-30 dBFS, well below RADE's ~-9 dBFS sweet spot. Apply
+        // user mic gain (dB) + one-pole peak-tracking AGC (Lev_MaxGain
+        // dB ceiling, Lev_Decay ms release) here BEFORE handing audio
+        // to the RADE encoder. Mirrors freedv-gui's WebRTC-AGC -9 dBFS
+        // target pre-codec stage.
+        //
+        // Why not the WDSP TXA Leveler stage? It runs AFTER our RADE
+        // audio substitution (further down dispatchOneBlock), which
+        // means WDSP would level the RADE modem signal itself —
+        // destroying the modem's amplitude characteristics. The K1
+        // RADE profile must therefore disable WDSP TXA Leveler;
+        // NereusSDR-side leveling here is the substitute.
+        {
+            // Step A: apply linear mic gain (m_micGainDb dB -> linear).
+            const int gainDb = m_radeMicGainDb.load(std::memory_order_relaxed);
+            const float gainLin = std::pow(10.0f, gainDb / 20.0f);
+            if (std::abs(gainLin - 1.0f) > 1e-4f) {
+                for (int i = 0; i < kBlockFrames; ++i) {
+                    m_radeMicFloat[static_cast<size_t>(i)] *= gainLin;
+                }
+            }
+
+            // Step B: one-pole peak-tracking AGC.
+            // Target peak ~= -9 dBFS = 10^(-9/20) ≈ 0.3548.
+            // Attack: instant (peak goes up immediately so transients
+            //         don't clip mid-block).
+            // Release: per Lev_Decay ms (K1 default 100 ms).
+            // Max gain: per Lev_MaxGain dB (K1 default 15 dB).
+            if (m_radeLevelerOn.load(std::memory_order_relaxed)) {
+                constexpr float kTargetPeak = 0.3548f;  // -9 dBFS
+                const int decayMs = m_radeLevelerDecayMs.load(
+                    std::memory_order_relaxed);
+                const int maxGdb  = m_radeLevelerMaxGainDb.load(
+                    std::memory_order_relaxed);
+                const float blockTimeMs =
+                    1000.0f * kBlockFrames / 48000.0f;  // ~1.33 ms
+                const float release = std::exp(
+                    -blockTimeMs / std::max(1.0f,
+                                            static_cast<float>(decayMs)));
+
+                float blockPeak = 0.0f;
+                for (int i = 0; i < kBlockFrames; ++i) {
+                    const float a = std::abs(
+                        m_radeMicFloat[static_cast<size_t>(i)]);
+                    if (a > blockPeak) { blockPeak = a; }
+                }
+                if (blockPeak > m_radeLevelerPeakEnv) {
+                    m_radeLevelerPeakEnv = blockPeak;  // instant attack
+                } else {
+                    m_radeLevelerPeakEnv =
+                        m_radeLevelerPeakEnv * release
+                        + blockPeak * (1.0f - release);
+                }
+                if (m_radeLevelerPeakEnv > 1e-5f) {
+                    const float maxGainLin =
+                        std::pow(10.0f, maxGdb / 20.0f);
+                    const float desiredGain =
+                        kTargetPeak / m_radeLevelerPeakEnv;
+                    const float clampedGain =
+                        std::min(desiredGain, maxGainLin);
+                    if (std::abs(clampedGain - 1.0f) > 1e-4f) {
+                        for (int i = 0; i < kBlockFrames; ++i) {
+                            m_radeMicFloat[static_cast<size_t>(i)] *=
+                                clampedGain;
+                        }
+                    }
+                }
+            }
+        }
+
+        // BENCH DEBUG: one-shot log to see what mic source RADE is
+        // using and the peak amplitude of the first few blocks AFTER
+        // gain + leveler. Should be ~-9 dBFS (0.35) for steady speech.
+        static int s_radeMicSourceLogged = 0;
+        if (s_radeMicSourceLogged < 3) {
+            float peak = 0.0f;
+            for (int i = 0; i < kBlockFrames; ++i) {
+                const float a = std::abs(
+                    m_radeMicFloat[static_cast<size_t>(i)]);
+                if (a > peak) { peak = a; }
+            }
+            const char* src =
+                (m_audioEngine && m_audioEngine->isVaxMicOverrideActive())
+                    ? "VAX"
+                    : (m_audioEngine
+                       && m_audioEngine->isPcMicOverrideActive())
+                          ? "PC"
+                          : "Radio";
+            qCInfo(lcTxWorker)
+                << "RADE mic block #" << (s_radeMicSourceLogged + 1)
+                << "source=" << src
+                << "peak(post-gain+lev)=" << peak
+                << "(gain=" << m_radeMicGainDb.load() << "dB lev="
+                << m_radeLevelerOn.load() << ")";
+            ++s_radeMicSourceLogged;
         }
 
         // Step 2: 80 Hz Butterworth HPF in place (K3 RadeTxHpf80).
@@ -357,43 +589,70 @@ void TxWorkerThread::dispatchOneBlock()
             m_radeMicFloat.data(), kBlockFrames,
             m_radeMic16k.data(),   kBlockFrames);
 
-        if (out16k <= 0) {
-            // Warm-up tick: no samples produced.  Drop and exit; the
-            // next block fills more of the resampler's filterbank.
-            return;
-        }
+        if (out16k > 0) {
+            // Step 4: float -> int16 conversion. RadeChannel::txEncode
+            // takes int16 mono at 16 kHz (per the I3 contract at
+            // RadeChannel.h:258-261 [Phase 3R I3]).
+            m_radeMicInt16.resize(static_cast<size_t>(out16k));
+            for (int i = 0; i < out16k; ++i) {
+                const float s = m_radeMic16k[static_cast<size_t>(i)];
+                const float scaled = s * 32767.0f
+                                      + (s >= 0.0f ? 0.5f : -0.5f);
+                int v = static_cast<int>(scaled);
+                if (v >  32767) { v =  32767; }
+                if (v < -32768) { v = -32768; }
+                m_radeMicInt16[static_cast<size_t>(i)] =
+                    static_cast<int16_t>(v);
+            }
 
-        // Step 4: float -> int16 conversion.  RadeChannel::txEncode
-        // takes int16 mono at 16 kHz (per the I3 contract at
-        // RadeChannel.h:258-261 [Phase 3R I3]).
-        m_radeMicInt16.resize(static_cast<size_t>(out16k));
-        for (int i = 0; i < out16k; ++i) {
-            const float s = m_radeMic16k[static_cast<size_t>(i)];
-            const float scaled = s * 32767.0f
-                                  + (s >= 0.0f ? 0.5f : -0.5f);
-            int v = static_cast<int>(scaled);
-            if (v >  32767) { v =  32767; }
-            if (v < -32768) { v = -32768; }
-            m_radeMicInt16[static_cast<size_t>(i)] =
-                static_cast<int16_t>(v);
+            // Step 5: wrap the int16 samples in a QByteArray and emit
+            // (queued connection to RadeChannel::txEncode on main
+            // thread; queues until txEncode runs).
+            const QByteArray payload(
+                reinterpret_cast<const char*>(m_radeMicInt16.data()),
+                out16k * static_cast<int>(sizeof(int16_t)));
+            // BENCH DEBUG: one-shot first-emit log so the bench operator
+            // can confirm the worker's RADE pump is actually firing.
+            static int s_radeMicFirstEmitLogged = 0;
+            if (s_radeMicFirstEmitLogged < 3) {
+                qCInfo(lcTxWorker)
+                    << "RADE pump emit #" << (s_radeMicFirstEmitLogged + 1)
+                    << "payload bytes=" << payload.size()
+                    << "(16k samples=" << out16k << ")";
+                ++s_radeMicFirstEmitLogged;
+            }
+            emit radeMicBlockReady(payload);
         }
+        // r8brain warm-up tick (out16k == 0) just skips the RADE encode;
+        // the WDSP TXA chain still runs below with whatever RADE audio
+        // is currently queued in m_radeAudioOverride (silence if empty).
 
-        // Step 5: wrap the int16 samples in a QByteArray and emit.
-        // The connect at RadioModel::wireRadeChannel is queued
-        // (Qt::QueuedConnection) so the bytes are copied into the
-        // event loop's queue and dispatched to RadeChannel::txEncode
-        // on the main thread.
-        //
-        // RadeChannel::txEncode is a no-op when the channel is not
-        // started (its m_active flag gates the body), so emitting
-        // when m_radeChannel.load() == nullptr would simply be lost;
-        // we still emit so QSignalSpy in tests can observe the pump
-        // running independently of the channel wiring state.
-        const QByteArray payload(
-            reinterpret_cast<const char*>(m_radeMicInt16.data()),
-            out16k * static_cast<int>(sizeof(int16_t)));
-        emit radeMicBlockReady(payload);
-        return;
+        // Step 6: substitute RADE-encoded audio for the mic block in
+        // m_in's I channel before falling through to the WDSP TXA
+        // chain. m_radeAudioOverride is populated by RadioModel's
+        // txModemReady lambda via setRadeAudioBlock (queued).
+        {
+            QMutexLocker lk(&m_radeAudioOverrideMutex);
+            const int avail = static_cast<int>(m_radeAudioOverride.size())
+                              / static_cast<int>(sizeof(float));
+            const int take = std::min(avail, kBlockFrames);
+            const float* src = reinterpret_cast<const float*>(
+                m_radeAudioOverride.constData());
+            for (int i = 0; i < take; ++i) {
+                m_in[static_cast<size_t>(2 * i + 0)] =
+                    static_cast<double>(src[i]);
+                m_in[static_cast<size_t>(2 * i + 1)] = 0.0;
+            }
+            for (int i = take; i < kBlockFrames; ++i) {
+                m_in[static_cast<size_t>(2 * i + 0)] = 0.0;
+                m_in[static_cast<size_t>(2 * i + 1)] = 0.0;
+            }
+            if (take > 0) {
+                m_radeAudioOverride.remove(
+                    0, take * static_cast<int>(sizeof(float)));
+            }
+        }
+        // Fall through to the WDSP TXA chain below.
     }
 
     // PC mic override — mirrors Thetis cmaster.c:379 [v2.10.3.13]:
@@ -411,7 +670,16 @@ void TxWorkerThread::dispatchOneBlock()
     // user expects "the PC mic" — if the bus stalls, what they hear on
     // the air is silence, not their radio's hand mic on top of dead
     // audio).  Q channel always stays zero (real-only TX input).
-    if (m_audioEngine != nullptr && m_audioEngine->isVaxMicOverrideActive()) {
+    //
+    // Phase 3R K-bench: when path == Rade the RADE branch above has
+    // already written RADE-encoded audio into m_in. Skip the PC/VAX
+    // overrides; otherwise live mic samples would clobber the RADE
+    // baseband and produce a mic + RADE chimera on the air. The
+    // RADE pump on the input side already drained the mic block to
+    // feed RadeChannel::txEncode (Step 1 above); the WDSP TXA chain
+    // below must see ONLY the RADE audio.
+    if (path != TxPath::Rade
+        && m_audioEngine != nullptr && m_audioEngine->isVaxMicOverrideActive()) {
         // VAX TX override (eager-borg-d64bed, 2026-05-06).  Mirrors the
         // PC mic override path below, but pulls from the VAX TX shared-
         // memory bus that the HAL plugin populates from a 3rd-party
@@ -430,7 +698,8 @@ void TxWorkerThread::dispatchOneBlock()
             m_in[static_cast<size_t>(2 * i + 0)] = 0.0;
             m_in[static_cast<size_t>(2 * i + 1)] = 0.0;
         }
-    } else if (m_audioEngine != nullptr && m_audioEngine->isPcMicOverrideActive()) {
+    } else if (path != TxPath::Rade
+               && m_audioEngine != nullptr && m_audioEngine->isPcMicOverrideActive()) {
         const int got = m_audioEngine->pullTxMic(m_pcMicBuf.data(), kBlockFrames);
         const int n   = std::clamp(got, 0, kBlockFrames);
         for (int i = 0; i < n; ++i) {

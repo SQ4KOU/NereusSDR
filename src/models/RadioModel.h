@@ -158,6 +158,7 @@ class FreeDVReporterClient;
 class PskReporterClient;
 class DxccColorProvider;
 class SpotModel;
+class SpotTableModel;
 class FreeDVStationModel;
 class RxDecodeModel;
 struct DxSpot;
@@ -400,6 +401,13 @@ public:
     // Constructed in RadioModel ctor with identity / endpoint defaults from
     // AppSettings; startConnection() is NOT called at construction time.
     SpotModel*            spotModel()           const { return m_spotModel.get(); }
+    // 2026-05-12 bench fix: moved from SpotHubDialog ownership so the
+    // table stays populated from app start regardless of whether the
+    // dialog is open.  Spots from auto-connected sources were
+    // previously dropped on the floor until the user opened Tools →
+    // Spot Hub for the first time (the SpotTableModel didn't exist
+    // before then), forcing a manual disconnect+reconnect to repopulate.
+    SpotTableModel*       spotTableModel()      const { return m_spotTableModel.get(); }
     FreeDVStationModel*   freeDvStationModel()  const { return m_freeDvStationModel.get(); }
     RxDecodeModel*        rxDecodeModel()       const { return m_rxDecodeModel.get(); }
     DxccColorProvider*    dxccColorProvider()   const { return m_dxccColorProvider.get(); }
@@ -940,6 +948,18 @@ public slots:
     // boundary; the slice setter no-ops on identical numeric values
     // so repeated identical SNR updates do not spam UI repaint.
     void onRadeSnrChanged(int sliceId, float snrDb);
+
+    // 2026-05-12 bench: throttled FreeDV Reporter freq publish.  See
+    // m_freedvFreqDwellTimer member declaration for the policy.  Called
+    // from the slice.frequencyChanged subscriber at line ~4945 in
+    // RadioModel.cpp.  Caller passes the new VFO Hz; this method either
+    // publishes immediately (initial baseline / band-jump fast-path /
+    // MOX force) or restarts the dwell timer for a deferred publish.
+    void publishFreedvFrequencyDwelled(quint64 hz);
+    // Force-publish the current pending freq right now and reset the
+    // dwell.  Called from MoxController::txAboutToBegin so a TX engage
+    // never leaves the reporter showing a stale freq.
+    void flushFreedvFrequencyDwell();
 
 signals:
     void infoChanged();
@@ -1682,6 +1702,17 @@ private:
     std::vector<float>         m_radeTxMonoScratch;
     std::vector<float>         m_radeTxIqScratch;
 
+    // Phase 3R K-bench (bench feedback): RADE RX speakers-side
+    // upsamplers. RadeChannel emits 24 kHz stereo float; AudioEngine
+    // expects 48 kHz. Without these upsamplers the speech plays at
+    // 2x speed ("chipmunk sounding"). One Resampler per leg so each
+    // channel sees a self-consistent stream.
+    std::unique_ptr<Resampler> m_radeRxSpeechL;
+    std::unique_ptr<Resampler> m_radeRxSpeechR;
+    std::vector<float>         m_radeRxLScratch;
+    std::vector<float>         m_radeRxRScratch;
+    std::vector<float>         m_radeRxInterleaved48k;
+
     // Stage C2 — filter preset user-override store.
     // Constructed in RadioModel ctor; QObject child so dtor cleans up.
     FilterPresetStore* m_filterPresetStore{nullptr};
@@ -1699,6 +1730,7 @@ private:
     // startConnection() / startListening() / startPolling() is the M3
     // follow-up task. H2 only wires the in-process signal graph.
     std::unique_ptr<SpotModel>            m_spotModel;
+    std::unique_ptr<SpotTableModel>       m_spotTableModel;
     std::unique_ptr<FreeDVStationModel>   m_freeDvStationModel;
     std::unique_ptr<RxDecodeModel>        m_rxDecodeModel;
     std::unique_ptr<DxccColorProvider>    m_dxccColorProvider;
@@ -1726,6 +1758,46 @@ private:
     // each slice's WDSP channel pointer. The dedup logic in
     // onRadeSyncChanged also lives here for the same reason.
     QHash<int, bool> m_radeSyncedSlices;
+
+    // 2026-05-12 bench: per-slice timestamp of the most recent sync
+    // FALLING edge (true -> false transition).  Used by onRadeSyncChanged
+    // to debounce the "clear cached speaker callsign on sync rise"
+    // behaviour: only count a rising edge as a "new transmission /
+    // new speaker" event if sync was down for >= kRadeSyncDropClearDebounceMs.
+    // Brief flickers (< debounce) keep the previous over's callsign on
+    // the VFO flag.  Per bench design refinement 2026-05-12 (option B
+    // debounce-by-sync-loss-duration).
+    QHash<int, QDateTime> m_radeSyncDropAt;
+    static constexpr int kRadeSyncDropClearDebounceMs = 2000;
+
+    // 2026-05-12 bench: FreeDV Reporter freq-publish throttle.
+    //
+    // Spinning the VFO would otherwise fire a Socket.IO freq_change
+    // event on every sub-Hz movement (mouse wheel cadence) -- the
+    // qso.freedv.org server gets DoS'd and other operators see the
+    // dashboard flicker.  Throttle policy (per JJ bench design
+    // 2026-05-12):
+    //
+    //   1. Trailing dwell: restart a single-shot timer on every freq
+    //      change; only publish when the timer expires
+    //      (kFreedvFreqDwellMs = 7000 ms).  Spinning across a band
+    //      publishes exactly once, 7 s after the user stops.
+    //   2. Band-jump fast-path: if the new freq is >= kFreedvFreqJumpHz
+    //      (100 kHz) from the last *published* freq, bypass the dwell
+    //      and publish immediately -- band changes don't lag.
+    //   3. MOX force-publish: TX engage flushes any pending dwell so
+    //      the reporter never shows "TXing on stale freq."
+    //
+    // Driven by publishFreedvFrequencyDwelled() called from
+    // SliceModel::frequencyChanged.  m_freedvLastPublishedHz is the
+    // baseline for the band-jump comparison.  Initial publish on
+    // Socket.IO ACK bypasses this and uses setFrequency() directly so
+    // the first packet establishes the baseline.
+    QTimer*  m_freedvFreqDwellTimer{nullptr};
+    quint64  m_freedvLastPublishedHz{0};
+    quint64  m_freedvPendingHz{0};
+    static constexpr int     kFreedvFreqDwellMs = 7000;
+    static constexpr quint64 kFreedvFreqJumpHz  = 100'000;
 };
 
 } // namespace NereusSDR

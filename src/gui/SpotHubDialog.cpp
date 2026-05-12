@@ -122,6 +122,7 @@
 #include <QCheckBox>
 #include <QColor>
 #include <QColorDialog>
+#include <QComboBox>
 #include <QDateTime>
 #include <QGridLayout>
 #include <QGroupBox>
@@ -172,6 +173,9 @@ constexpr const char* kStartBtnStyle =
 
 constexpr const char* kStatusIdleStyle =
     "QLabel { color: #808080; font-size: 11px; }";
+
+constexpr const char* kStatusActiveStyle =
+    "QLabel { color: #00b4d8; font-size: 11px; font-weight: bold; }";
 
 constexpr const char* kConsoleStyle =
     "QPlainTextEdit {"
@@ -256,6 +260,7 @@ SpotHubDialog::SpotHubDialog(DxClusterClient* clusterClient,
                              FreeDVReporterClient* freedvClient,
                              PskReporterClient* pskClient,
                              SpotModel* spotModel,
+                             SpotTableModel* spotTableModel,
                              DxccColorProvider* dxccProvider,
                              QWidget* parent)
     : QDialog(parent),
@@ -267,6 +272,7 @@ SpotHubDialog::SpotHubDialog(DxClusterClient* clusterClient,
       m_freedvClient(freedvClient),
       m_pskClient(pskClient),
       m_spotModel(spotModel),
+      m_spotTableModel(spotTableModel),
       m_dxccProvider(dxccProvider)
 {
     setWindowTitle("SpotHub");
@@ -350,6 +356,27 @@ void SpotHubDialog::buildSettingsTab(QTabWidget* tabs)
     auto* idLayout = new QVBoxLayout(idGroup);
     idLayout->setSpacing(4);
 
+    // 2026-05-12 bench: first-time-setup banner.  Shown only when
+    // User/Callsign is empty so existing users don't see a stale
+    // prompt.  Without this an operator on a fresh install would just
+    // see "Disconnected" on every spot tab with no UI clue that a
+    // callsign is required.
+    const bool needsFirstRunPrompt =
+        s.value("User/Callsign").toString().trimmed().isEmpty();
+    if (needsFirstRunPrompt) {
+        auto* firstRunBanner = new QLabel(
+            "First-time setup — enter your callsign and grid square "
+            "below.  Spot sources stay disconnected until your "
+            "callsign is set.");
+        firstRunBanner->setObjectName("settingsFirstRunBanner");
+        firstRunBanner->setWordWrap(true);
+        firstRunBanner->setStyleSheet(
+            "QLabel { color: #ffcc66; background: #2a2010; "
+            "border: 1px solid #806020; padding: 6px; "
+            "border-radius: 3px; font-weight: bold; }");
+        idLayout->addWidget(firstRunBanner);
+    }
+
     auto* helpLabel = new QLabel(
         "These values feed every spot source (DX cluster, RBN, WSJT-X "
         "registration, SpotCollector, POTA spot author, FreeDV Reporter, "
@@ -367,7 +394,8 @@ void SpotHubDialog::buildSettingsTab(QTabWidget* tabs)
     m_settingsCallEdit = new QLineEdit(
         s.value("User/Callsign").toString());
     m_settingsCallEdit->setObjectName("settingsCallEdit");
-    m_settingsCallEdit->setPlaceholderText("your callsign (4 to 12 chars)");
+    m_settingsCallEdit->setPlaceholderText(
+        "Enter Callsign Here (4-12 chars — required to publish spots)");
     m_settingsCallEdit->setMaxLength(12);
     m_settingsCallEdit->setStyleSheet(kLineEditStyle);
     grid->addWidget(m_settingsCallEdit, row, 1);
@@ -377,7 +405,8 @@ void SpotHubDialog::buildSettingsTab(QTabWidget* tabs)
     m_settingsGridEdit = new QLineEdit(
         s.value("User/GridSquare").toString());
     m_settingsGridEdit->setObjectName("settingsGridEdit");
-    m_settingsGridEdit->setPlaceholderText("4 or 6 character Maidenhead (e.g. EM73 or EM73XY)");
+    m_settingsGridEdit->setPlaceholderText(
+        "Enter Grid Here (Maidenhead — e.g. EM73 or EM73XY)");
     m_settingsGridEdit->setMaxLength(6);
     m_settingsGridEdit->setStyleSheet(kLineEditStyle);
     grid->addWidget(m_settingsGridEdit, row, 1);
@@ -487,6 +516,11 @@ void SpotHubDialog::buildSettingsTab(QTabWidget* tabs)
         if (m_pskClient) {
             m_pskClient->setIdentity(call, gridSquare, version);
         }
+        // 2026-05-12 bench fix: notify MainWindow so it can push the
+        // new grid into FreeDVStationModel.  Without this the Reporter
+        // dialog's Distance / Hdg columns stay zeroed because the
+        // station model never learns our grid.
+        emit identitySaved(call, gridSquare, message);
 
         // Flash "Saved" for 2 seconds.
         m_settingsSavedLabel->setText("Saved");
@@ -599,7 +633,8 @@ void SpotHubDialog::buildClusterTab(QTabWidget* tabs)
         s.value("DxClusterCallsign",
                 s.value("User/Callsign").toString()).toString());
     m_callEdit->setObjectName("clusterCallEdit");
-    m_callEdit->setPlaceholderText("your callsign");
+    m_callEdit->setPlaceholderText(
+        "Enter Callsign Here (set under Settings tab)");
     m_callEdit->setStyleSheet(kLineEditStyle);
     grid->addWidget(m_callEdit, row, 1);
     row++;
@@ -656,6 +691,53 @@ void SpotHubDialog::buildClusterTab(QTabWidget* tabs)
     });
     btnRow->addWidget(m_connectBtn);
     connLayout->addLayout(btnRow);
+
+    // 2026-05-12 bench fix: wire DxClusterClient state signals to the
+    // status label + Connect button so the UI reflects the actual TCP
+    // state.  Parallels the FreeDV wires at line 1561+.  Without this
+    // block the Connect button stays at its constructor-time text and
+    // the status label stays "Disconnected" even after a successful
+    // login.
+    if (m_clusterClient) {
+        connect(m_clusterClient, &DxClusterClient::connected,
+                this, [this]() {
+                    if (m_statusLabel) {
+                        m_statusLabel->setText("Connected");
+                        m_statusLabel->setStyleSheet(kStatusActiveStyle);
+                    }
+                    if (m_connectBtn) {
+                        m_connectBtn->setText("Disconnect");
+                    }
+                    if (m_cmdEdit) m_cmdEdit->setEnabled(true);
+                    if (m_sendBtn) m_sendBtn->setEnabled(true);
+                });
+        connect(m_clusterClient, &DxClusterClient::disconnected,
+                this, [this]() {
+                    if (m_statusLabel) {
+                        m_statusLabel->setText("Disconnected");
+                        m_statusLabel->setStyleSheet(kStatusIdleStyle);
+                    }
+                    if (m_connectBtn) {
+                        m_connectBtn->setText("Connect");
+                    }
+                    if (m_cmdEdit) m_cmdEdit->setEnabled(false);
+                    if (m_sendBtn) m_sendBtn->setEnabled(false);
+                });
+        connect(m_clusterClient, &DxClusterClient::connectionError,
+                this, [this](const QString& error) {
+                    if (m_statusLabel) {
+                        m_statusLabel->setText(QString("Error: %1").arg(error));
+                        m_statusLabel->setStyleSheet(
+                            "QLabel { color: #e6c200; font-size: 11px; }");
+                    }
+                });
+        // Stream raw cluster lines into the console widget so the user
+        // sees the welcome banner + spots scrolling as they arrive.
+        connect(m_clusterClient, &DxClusterClient::rawLineReceived,
+                this, [this](const QString& line) {
+                    if (m_console) m_console->appendPlainText(line);
+                });
+    }
 
     layout->addWidget(connGroup);
 
@@ -779,7 +861,8 @@ void SpotHubDialog::buildRbnTab(QTabWidget* tabs)
     grid->addWidget(new QLabel("Callsign:"), row, 0);
     m_rbnCallEdit = new QLineEdit(defaultCall);
     m_rbnCallEdit->setObjectName("rbnCallEdit");
-    m_rbnCallEdit->setPlaceholderText("your callsign");
+    m_rbnCallEdit->setPlaceholderText(
+        "Enter Callsign Here (set under Settings tab)");
     m_rbnCallEdit->setStyleSheet(kLineEditStyle);
     grid->addWidget(m_rbnCallEdit, row, 1);
     row++;
@@ -854,6 +937,44 @@ void SpotHubDialog::buildRbnTab(QTabWidget* tabs)
     });
     btnRow->addWidget(m_rbnConnectBtn);
     connLayout->addLayout(btnRow);
+
+    // 2026-05-12 bench fix: wire RBN state signals to UI.  Mirrors the
+    // DxCluster wire block at the top of this file — same DxClusterClient
+    // class, just a different instance pointing at the RBN telnet server.
+    if (m_rbnClient) {
+        connect(m_rbnClient, &DxClusterClient::connected,
+                this, [this]() {
+                    if (m_rbnStatusLabel) {
+                        m_rbnStatusLabel->setText("Connected");
+                        m_rbnStatusLabel->setStyleSheet(kStatusActiveStyle);
+                    }
+                    if (m_rbnConnectBtn) m_rbnConnectBtn->setText("Disconnect");
+                    if (m_rbnCmdEdit) m_rbnCmdEdit->setEnabled(true);
+                    if (m_rbnSendBtn) m_rbnSendBtn->setEnabled(true);
+                });
+        connect(m_rbnClient, &DxClusterClient::disconnected,
+                this, [this]() {
+                    if (m_rbnStatusLabel) {
+                        m_rbnStatusLabel->setText("Disconnected");
+                        m_rbnStatusLabel->setStyleSheet(kStatusIdleStyle);
+                    }
+                    if (m_rbnConnectBtn) m_rbnConnectBtn->setText("Connect");
+                    if (m_rbnCmdEdit) m_rbnCmdEdit->setEnabled(false);
+                    if (m_rbnSendBtn) m_rbnSendBtn->setEnabled(false);
+                });
+        connect(m_rbnClient, &DxClusterClient::connectionError,
+                this, [this](const QString& error) {
+                    if (m_rbnStatusLabel) {
+                        m_rbnStatusLabel->setText(QString("Error: %1").arg(error));
+                        m_rbnStatusLabel->setStyleSheet(
+                            "QLabel { color: #e6c200; font-size: 11px; }");
+                    }
+                });
+        connect(m_rbnClient, &DxClusterClient::rawLineReceived,
+                this, [this](const QString& line) {
+                    if (m_rbnConsole) m_rbnConsole->appendPlainText(line);
+                });
+    }
 
     layout->addWidget(connGroup);
 
@@ -1012,6 +1133,36 @@ void SpotHubDialog::buildWsjtxTab(QTabWidget* tabs)
     });
     btnRow->addWidget(m_wsjtxStartBtn);
     connLayout->addLayout(btnRow);
+
+    // 2026-05-12 bench fix: wire WSJT-X listening/stopped signals to UI.
+    // Without this Start fires wsjtxStartRequested → startListening
+    // (UDP socket bind), but the user sees the button stay "Start" and
+    // the status label stay "Stopped" — looks dead.
+    if (m_wsjtxClient) {
+        connect(m_wsjtxClient, &WsjtxClient::listening,
+                this, [this]() {
+                    if (m_wsjtxStatusLabel) {
+                        m_wsjtxStatusLabel->setText(
+                            QString("Listening on %1:%2")
+                                .arg(m_wsjtxAddrEdit->text().trimmed(),
+                                     QString::number(m_wsjtxPortSpin->value())));
+                        m_wsjtxStatusLabel->setStyleSheet(kStatusActiveStyle);
+                    }
+                    if (m_wsjtxStartBtn) m_wsjtxStartBtn->setText("Stop");
+                });
+        connect(m_wsjtxClient, &WsjtxClient::stopped,
+                this, [this]() {
+                    if (m_wsjtxStatusLabel) {
+                        m_wsjtxStatusLabel->setText("Stopped");
+                        m_wsjtxStatusLabel->setStyleSheet(kStatusIdleStyle);
+                    }
+                    if (m_wsjtxStartBtn) m_wsjtxStartBtn->setText("Start");
+                });
+        connect(m_wsjtxClient, &WsjtxClient::rawLineReceived,
+                this, [this](const QString& line) {
+                    if (m_wsjtxConsole) m_wsjtxConsole->appendPlainText(line);
+                });
+    }
 
     layout->addWidget(connGroup);
 
@@ -1266,6 +1417,34 @@ void SpotHubDialog::buildSpotCollectorTab(QTabWidget* tabs)
     btnRow->addWidget(m_scStartBtn);
     connLayout->addLayout(btnRow);
 
+    // 2026-05-12 bench fix: wire SpotCollector listening/stopped signals
+    // to UI.  Same shape as the POTA and WSJT-X wires; click does nothing
+    // visible without these.
+    if (m_spotCollectorClient) {
+        connect(m_spotCollectorClient, &SpotCollectorClient::listening,
+                this, [this]() {
+                    if (m_scStatusLabel) {
+                        m_scStatusLabel->setText(
+                            QString("Listening on port %1")
+                                .arg(m_scPortSpin->value()));
+                        m_scStatusLabel->setStyleSheet(kStatusActiveStyle);
+                    }
+                    if (m_scStartBtn) m_scStartBtn->setText("Stop");
+                });
+        connect(m_spotCollectorClient, &SpotCollectorClient::stopped,
+                this, [this]() {
+                    if (m_scStatusLabel) {
+                        m_scStatusLabel->setText("Stopped");
+                        m_scStatusLabel->setStyleSheet(kStatusIdleStyle);
+                    }
+                    if (m_scStartBtn) m_scStartBtn->setText("Start");
+                });
+        connect(m_spotCollectorClient, &SpotCollectorClient::rawLineReceived,
+                this, [this](const QString& line) {
+                    if (m_scConsole) m_scConsole->appendPlainText(line);
+                });
+    }
+
     layout->addWidget(connGroup);
 
     auto* consoleLabel = new QLabel("SpotCollector Spots");
@@ -1374,6 +1553,35 @@ void SpotHubDialog::buildPotaTab(QTabWidget* tabs)
     });
     btnRow->addWidget(m_potaStartBtn);
     connLayout->addLayout(btnRow);
+
+    // 2026-05-12 bench fix: wire POTA started/stopped signals to UI.
+    // Without this, clicking Start does fire potaStartRequested -> the
+    // polling actually begins (proven by pota.log entries) but the
+    // user sees no UI change: button stays "Start" and status stays
+    // "Stopped".  Looks like the button is dead.
+    if (m_potaClient) {
+        connect(m_potaClient, &PotaClient::started,
+                this, [this]() {
+                    if (m_potaStatusLabel) {
+                        m_potaStatusLabel->setText("Polling api.pota.app");
+                        m_potaStatusLabel->setStyleSheet(kStatusActiveStyle);
+                    }
+                    if (m_potaStartBtn) m_potaStartBtn->setText("Stop");
+                });
+        connect(m_potaClient, &PotaClient::stopped,
+                this, [this]() {
+                    if (m_potaStatusLabel) {
+                        m_potaStatusLabel->setText("Stopped");
+                        m_potaStatusLabel->setStyleSheet(kStatusIdleStyle);
+                    }
+                    if (m_potaStartBtn) m_potaStartBtn->setText("Start");
+                });
+        // Console stream so the user sees activity as polls happen.
+        connect(m_potaClient, &PotaClient::rawLineReceived,
+                this, [this](const QString& line) {
+                    if (m_potaConsole) m_potaConsole->appendPlainText(line);
+                });
+    }
 
     layout->addWidget(connGroup);
 
@@ -1499,9 +1707,20 @@ void SpotHubDialog::buildFreeDvTab(QTabWidget* tabs)
     btnRow->addWidget(m_freedvAutoStartBtn);
     btnRow->addStretch();
 
-    m_freedvStatusLabel = new QLabel("Stopped");
+    // Phase 3R K-bench (bench feedback): seed initial state from the
+    // client's connection state. Without this, the label shows
+    // "Stopped" until the next connected() signal fires — and if the
+    // client was already connected when SpotHub opened (auto-start
+    // ran at app launch), the signal already fired before the dialog
+    // existed, leaving the label permanently stuck.
+    const bool freedvAlreadyConnected =
+        m_freedvClient && m_freedvClient->isConnected();
+    m_freedvStatusLabel =
+        new QLabel(freedvAlreadyConnected ? "Connected" : "Stopped");
     m_freedvStatusLabel->setObjectName("freedvStatusLabel");
-    m_freedvStatusLabel->setStyleSheet(kStatusIdleStyle);
+    m_freedvStatusLabel->setStyleSheet(freedvAlreadyConnected
+                                           ? kStatusActiveStyle
+                                           : kStatusIdleStyle);
     btnRow->addWidget(m_freedvStatusLabel);
     btnRow->addStretch();
 
@@ -1538,7 +1757,180 @@ void SpotHubDialog::buildFreeDvTab(QTabWidget* tabs)
     btnRow->addWidget(m_freedvStartBtn);
     connLayout->addLayout(btnRow);
 
+    // Phase 3R K-bench: wire connection-state signals so the status
+    // label + Start/Stop button reflect reality. Without this, the
+    // dialog stays at its constructor-time snapshot ("Stopped") even
+    // after the client successfully connects to qso.freedv.org.
+    if (m_freedvClient) {
+        connect(m_freedvClient, &FreeDVReporterClient::connected,
+                this, [this]() {
+                    if (m_freedvStatusLabel) {
+                        m_freedvStatusLabel->setText("Connected");
+                        m_freedvStatusLabel->setStyleSheet(kStatusActiveStyle);
+                    }
+                    if (m_freedvStartBtn) {
+                        m_freedvStartBtn->setText("Stop");
+                    }
+                });
+        connect(m_freedvClient, &FreeDVReporterClient::disconnected,
+                this, [this]() {
+                    if (m_freedvStatusLabel) {
+                        m_freedvStatusLabel->setText("Stopped");
+                        m_freedvStatusLabel->setStyleSheet(kStatusIdleStyle);
+                    }
+                    if (m_freedvStartBtn) {
+                        m_freedvStartBtn->setText("Start");
+                    }
+                });
+        connect(m_freedvClient, &FreeDVReporterClient::connectionError,
+                this, [this](const QString& error) {
+                    if (m_freedvStatusLabel) {
+                        m_freedvStatusLabel->setText(QString("Error: %1").arg(error));
+                        m_freedvStatusLabel->setStyleSheet(
+                            "QLabel { color: #e6c200; font-size: 11px; }");
+                    }
+                });
+    }
+
     layout->addWidget(connGroup);
+
+    // Phase 3R K-bench (bench feedback): preference toggles. Two small
+    // checkboxes that gate (a) "display distance in miles" for the
+    // FreeDV Reporter dialog's km/Hdg column, ported from freedv-gui
+    // freedv_reporter.cpp `m_useMetricUnits` [@77e793a]; and (b)
+    // "Report decodes to PSK Reporter", a cross-feed convenience that
+    // mirrors freedv-gui's "Report to PSK Reporter" setting.
+    {
+        auto* prefsGroup = new QGroupBox("Preferences");
+        auto* prefsLayout = new QVBoxLayout(prefsGroup);
+        prefsLayout->setSpacing(4);
+
+        // Display in miles toggle.
+        auto* milesChk = new QCheckBox("Display distances in miles");
+        milesChk->setObjectName("freedvDistanceMilesChk");
+        milesChk->setToolTip(
+            "When checked, the FreeDV Reporter dialog's distance column "
+            "shows miles instead of kilometers. Mirrors freedv-gui's "
+            "metric/imperial toggle.");
+        milesChk->setChecked(
+            s.value("FreeDvReporter/DistanceMiles", "False").toString()
+            == "True");
+        connect(milesChk, &QCheckBox::toggled, this, [](bool on) {
+            auto& settings = AppSettings::instance();
+            settings.setValue("FreeDvReporter/DistanceMiles",
+                              on ? "True" : "False");
+            settings.save();
+        });
+        prefsLayout->addWidget(milesChk);
+
+        // Report to PSK Reporter toggle.
+        auto* pskChk = new QCheckBox("Report decodes to PSK Reporter");
+        pskChk->setObjectName("freedvReportToPskChk");
+        pskChk->setToolTip(
+            "When checked, RADE decodes also push to PSK Reporter (in "
+            "addition to the FreeDV Reporter dashboard). Off by default "
+            "to avoid duplicate spotting on operators who already run "
+            "their own PSK Reporter feed.");
+        pskChk->setChecked(
+            s.value("FreeDvReporter/ReportToPsk", "False").toString()
+            == "True");
+        connect(pskChk, &QCheckBox::toggled, this, [](bool on) {
+            auto& settings = AppSettings::instance();
+            settings.setValue("FreeDvReporter/ReportToPsk",
+                              on ? "True" : "False");
+            settings.save();
+        });
+        prefsLayout->addWidget(pskChk);
+
+        // Direction display 3-way combo, mirroring freedv-gui's
+        // reportingDirectionAsCardinal toggle. NereusSDR exposes a
+        // 3-way choice because the existing "045° NE" combined form
+        // was a NereusSDR-native compromise; the upstream is binary.
+        auto* dirRow = new QHBoxLayout;
+        dirRow->setSpacing(4);
+        auto* dirLabel = new QLabel("Heading display:");
+        dirRow->addWidget(dirLabel);
+        auto* dirCombo = new QComboBox;
+        dirCombo->setObjectName("freedvDirectionCombo");
+        dirCombo->addItem("Numeric + cardinal (045° NE)",
+                          QStringLiteral("Combined"));
+        dirCombo->addItem("Cardinal only (NE)",
+                          QStringLiteral("Cardinal"));
+        dirCombo->addItem("Numeric only (045°)",
+                          QStringLiteral("Numeric"));
+        dirCombo->setToolTip(
+            "Heading column rendering in the FreeDV Reporter dialog. "
+            "Mirrors freedv-gui's reportingDirectionAsCardinal setting "
+            "with an extra combined option matching NereusSDR's "
+            "default pre-bench rendering.");
+        const QString savedDir =
+            s.value("FreeDvReporter/DirectionAsCardinal",
+                    QStringLiteral("Combined")).toString();
+        for (int i = 0; i < dirCombo->count(); ++i) {
+            if (dirCombo->itemData(i).toString() == savedDir) {
+                dirCombo->setCurrentIndex(i);
+                break;
+            }
+        }
+        connect(dirCombo, &QComboBox::currentIndexChanged, this,
+                [dirCombo](int idx) {
+                    auto& settings = AppSettings::instance();
+                    settings.setValue(
+                        "FreeDvReporter/DirectionAsCardinal",
+                        dirCombo->itemData(idx).toString());
+                    settings.save();
+                });
+        dirRow->addWidget(dirCombo);
+        dirRow->addStretch(1);
+        prefsLayout->addLayout(dirRow);
+
+        // Frequency display: MHz vs kHz, mirroring freedv-gui's
+        // reportingFrequencyAsKhz setting.
+        auto* khzChk = new QCheckBox("Display frequencies in kHz");
+        khzChk->setObjectName("freedvFrequencyKhzChk");
+        khzChk->setToolTip(
+            "When checked, the FreeDV Reporter dialog's MHz column "
+            "shows kHz instead. Mirrors freedv-gui's "
+            "reportingFrequencyAsKhz setting.");
+        khzChk->setChecked(
+            s.value("FreeDvReporter/FrequencyAsKhz", "False").toString()
+            == "True");
+        connect(khzChk, &QCheckBox::toggled, this, [](bool on) {
+            auto& settings = AppSettings::instance();
+            settings.setValue("FreeDvReporter/FrequencyAsKhz",
+                              on ? "True" : "False");
+            settings.save();
+        });
+        prefsLayout->addWidget(khzChk);
+
+        // Hide from view: when checked, the reporter server keeps our
+        // session but doesn't list us on the dashboard. Useful for SWLs
+        // who want to RX-report without appearing as an active station.
+        // Mirrors freedv-gui's reportingHidden setting / hide_from_view
+        // event.
+        auto* hideChk = new QCheckBox("Hide my station from the dashboard");
+        hideChk->setObjectName("freedvHideFromViewChk");
+        hideChk->setToolTip(
+            "When checked, we still report RX decodes to the server but "
+            "our row stays hidden from the public dashboard. Mirrors "
+            "freedv-gui's 'Hide from view' setting.");
+        hideChk->setChecked(
+            s.value("FreeDvReporter/Hidden", "False").toString() == "True");
+        connect(hideChk, &QCheckBox::toggled, this,
+                [this](bool on) {
+                    auto& settings = AppSettings::instance();
+                    settings.setValue("FreeDvReporter/Hidden",
+                                      on ? "True" : "False");
+                    settings.save();
+                    // Push live to the connected client if available.
+                    if (m_freedvClient && m_freedvClient->isConnected()) {
+                        m_freedvClient->setHiddenFromView(on);
+                    }
+                });
+        prefsLayout->addWidget(hideChk);
+
+        layout->addWidget(prefsGroup);
+    }
 
     auto* consoleRow = new QHBoxLayout;
     auto* consoleLabel = new QLabel("FreeDV Spots");
@@ -1625,7 +2017,8 @@ void SpotHubDialog::buildPskTab(QTabWidget* tabs)
     grid->addWidget(new QLabel("Callsign:"), row, 0);
     m_pskCallEdit = new QLineEdit(defaultCall);
     m_pskCallEdit->setObjectName("pskCallEdit");
-    m_pskCallEdit->setPlaceholderText("your callsign");
+    m_pskCallEdit->setPlaceholderText(
+        "Enter Callsign Here (set under Settings tab)");
     m_pskCallEdit->setStyleSheet(kLineEditStyle);
     grid->addWidget(m_pskCallEdit, row, 1);
     row++;
@@ -1711,6 +2104,32 @@ void SpotHubDialog::buildPskTab(QTabWidget* tabs)
     m_pskConsole->setStyleSheet(kConsoleStyle);
     layout->addWidget(m_pskConsole, 1);
 
+    // 2026-05-12 bench fix: PSK Start/Stop UI feedback.  PSK Reporter
+    // is send-only with no listening/stopped signal pair (see
+    // pskreporter.h:65-68 [@77e793a]); flip the button text + status
+    // label inline when the user clicks Start/Stop so the UI doesn't
+    // look dead.  The actual auto-send timer is armed in MainWindow's
+    // openSpotHub wire which calls setAutoSendIntervalSec.  Status
+    // shows the 5-minute cadence inherited from freedv-gui
+    // main.cpp:2597 [@77e793a].
+    connect(this, &SpotHubDialog::pskStartRequested,
+            this, [this]() {
+        if (m_pskStatusLabel) {
+            m_pskStatusLabel->setText(
+                "Auto-send every 5 minutes");
+            m_pskStatusLabel->setStyleSheet(kStatusActiveStyle);
+        }
+        if (m_pskStartBtn) m_pskStartBtn->setText("Stop");
+    });
+    connect(this, &SpotHubDialog::pskStopRequested,
+            this, [this]() {
+        if (m_pskStatusLabel) {
+            m_pskStatusLabel->setText("Stopped");
+            m_pskStatusLabel->setStyleSheet(kStatusIdleStyle);
+        }
+        if (m_pskStartBtn) m_pskStartBtn->setText("Start");
+    });
+
     tabs->addTab(page, "PSK Reporter");
 }
 
@@ -1750,15 +2169,16 @@ void SpotHubDialog::buildSpotListTab(QTabWidget* tabs)
 
     auto& s = AppSettings::instance();
 
-    // Model + proxy. m_spotTableModel is bounded at 500 by default
-    // (see SpotTableModel.h); BandFilterProxy filters by band and
-    // source. AetherSDR upstream pinned this to the Cluster tab
-    // only; NereusSDR aggregates every ingest source.
-    m_spotTableModel = new SpotTableModel(this);
-    m_spotTableModel->setObjectName("spotListTableModel");
+    // Proxy only — the SpotTableModel itself is owned by RadioModel
+    // and passed in via the constructor (2026-05-12 bench fix:
+    // ownership moved so the table populates from app start, not
+    // from first-time dialog open).  BandFilterProxy filters the
+    // shared source model by band + visible sources.
     m_spotProxyModel = new BandFilterProxy(this);
     m_spotProxyModel->setObjectName("spotListProxyModel");
-    m_spotProxyModel->setSourceModel(m_spotTableModel);
+    if (m_spotTableModel) {
+        m_spotProxyModel->setSourceModel(m_spotTableModel);
+    }
     m_spotProxyModel->setSortRole(Qt::UserRole);
 
     // ── Band pill row ───────────────────────────────────────────────
@@ -1878,6 +2298,50 @@ void SpotHubDialog::buildSpotListTab(QTabWidget* tabs)
             emit tuneRequested(freq);
     });
 
+    // 2026-05-12 bench fix (Gap #6 — list → panadapter hover sync).
+    // Enable mouse tracking so the table's `entered` signal fires on
+    // every cell the mouse moves over without requiring a click.
+    // Map the proxy row back through the SpotModel by matching
+    // callsign + freq + source, then emit spotListHoverChanged so
+    // MainWindow can forward to SpectrumWidget::setHoverSpotIndexExternal
+    // which paints the halo around the matching panadapter label.
+    m_spotTable->setMouseTracking(true);
+    connect(m_spotTable, &QTableView::entered,
+            this, [this](const QModelIndex& idx) {
+        if (!idx.isValid() || !m_spotProxyModel || !m_spotTableModel
+            || !m_spotModel) {
+            emit spotListHoverChanged(-1);
+            return;
+        }
+        const QModelIndex srcIdx = m_spotProxyModel->mapToSource(idx);
+        const int row = srcIdx.row();
+        const double rowFreqMhz = m_spotTableModel->freqAtRow(row);
+        const QString rowCall = m_spotTableModel->data(
+            m_spotTableModel->index(row, SpotTableModel::ColDxCall),
+            Qt::DisplayRole).toString();
+        const QString rowSource = m_spotTableModel->data(
+            m_spotTableModel->index(row, SpotTableModel::ColSource),
+            Qt::DisplayRole).toString();
+        // Walk SpotModel for the matching entry.  -1 if not found
+        // (table row is older than the SpotModel cache or was
+        // expired).
+        int foundIndex = -1;
+        const auto& spots = m_spotModel->spots();
+        for (auto it = spots.constBegin(); it != spots.constEnd(); ++it) {
+            const SpotData& sd = it.value();
+            const double sdFreq = (sd.rxFreqMhz > 0.0)
+                                      ? sd.rxFreqMhz
+                                      : sd.txFreqMhz;
+            if (std::abs(sdFreq - rowFreqMhz) > 0.001) continue;
+            if (sd.callsign.compare(rowCall, Qt::CaseInsensitive) != 0) continue;
+            if (!sd.source.isEmpty()
+                && sd.source.compare(rowSource, Qt::CaseInsensitive) != 0) continue;
+            foundIndex = sd.index;
+            break;
+        }
+        emit spotListHoverChanged(foundIndex);
+    });
+
     layout->addWidget(m_spotTable, 1);
 
     // ── Bottom row: spot count + Clear ──────────────────────────────
@@ -1903,26 +2367,14 @@ void SpotHubDialog::buildSpotListTab(QTabWidget* tabs)
     bottomRow->addWidget(clearBtn);
     layout->addLayout(bottomRow);
 
-    // ── Wire every client's spotReceived(DxSpot) into the table ─────
-    // NereusSDR aggregates all sources into one merged view (upstream
-    // pinned this to the Cluster tab only). nullptr-guarded for the
-    // test fixture path.
-    auto wireClient = [this](auto* client) {
-        if (!client) return;
-        using ClientType = std::remove_pointer_t<decltype(client)>;
-        QObject::connect(client, &ClientType::spotReceived,
-                         this, [this](const DxSpot& spot) {
-                             if (m_spotTableModel)
-                                 m_spotTableModel->addSpot(spot);
-                         });
-    };
-    wireClient(m_clusterClient);
-    wireClient(m_rbnClient);
-    wireClient(m_wsjtxClient);
-    wireClient(m_spotCollectorClient);
-    wireClient(m_potaClient);
-    wireClient(m_freedvClient);
-    wireClient(m_pskClient);
+    // 2026-05-12 bench fix: client spotReceived → SpotTableModel
+    // wiring lives in RadioModel ctor now (alongside the per-source
+    // on*SpotReceived → SpotModel adapters), so the table populates
+    // from app start regardless of whether this dialog is open.
+    // Previously the wires lived here, which meant auto-connected
+    // sources flowed past with nothing listening until the user
+    // opened the dialog — forcing a manual disconnect+reconnect to
+    // repopulate.
 
     tabs->addTab(page, "Spot List");
 }
@@ -2320,6 +2772,49 @@ void SpotHubDialog::buildDisplayTab(QTabWidget* tabs)
     grid->addLayout(opacRow, row++, 1);
 
     rightCol->addLayout(grid);
+
+    // 2026-05-12 bench fix (Gap #7 — per-source panadapter visibility).
+    // Seven checkboxes, one per spot source, that toggle whether that
+    // source's spots paint on the panadapter overlay.  The Spot List
+    // table is unaffected (per-source visibility on the list lives
+    // elsewhere if at all).  Setting persists per source.
+    auto* visTitle = new QLabel("Show on panadapter");
+    visTitle->setStyleSheet("QLabel { color: #00b4d8; font-weight: bold; "
+                            "margin-top: 8px; }");
+    rightCol->addWidget(visTitle);
+
+    static const QVector<QPair<QString, QString>> kSourceChecks = {
+        {QStringLiteral("Cluster"),       QStringLiteral("DX Cluster")},
+        {QStringLiteral("RBN"),           QStringLiteral("RBN")},
+        {QStringLiteral("WSJT-X"),        QStringLiteral("WSJT-X")},
+        {QStringLiteral("SpotCollector"), QStringLiteral("SpotCollector")},
+        {QStringLiteral("POTA"),          QStringLiteral("POTA")},
+        {QStringLiteral("FreeDV"),        QStringLiteral("FreeDV")},
+        {QStringLiteral("PSK"),           QStringLiteral("PSK Reporter")},
+    };
+    auto* visGrid = new QGridLayout;
+    visGrid->setColumnStretch(1, 1);
+    for (int i = 0; i < kSourceChecks.size(); ++i) {
+        const QString& source = kSourceChecks[i].first;
+        const QString& label  = kSourceChecks[i].second;
+        const QString key = QStringLiteral("SpotSourceVisible/") + source;
+        const bool on = s.value(key, "True").toString() == "True";
+        auto* cb = new QCheckBox(label);
+        cb->setObjectName(QStringLiteral("displaySourceShow_") + source);
+        cb->setChecked(on);
+        connect(cb, &QCheckBox::toggled, this,
+                [save, key, source, this](bool on) {
+            save(key, on ? "True" : "False");
+            // settingsChanged emit (inside `save`) triggers MainWindow's
+            // loadSpotDisplaySettings which now also pulls per-source
+            // visibility into the SpectrumWidget.
+            Q_UNUSED(source);
+            Q_UNUSED(this);
+        });
+        visGrid->addWidget(cb, i, 0);
+    }
+    rightCol->addLayout(visGrid);
+
     rightCol->addStretch();
 
     root->addLayout(rightCol, 1);
@@ -2421,6 +2916,67 @@ void SpotHubDialog::buildDisplayTab(QTabWidget* tabs)
     }
 
     tabs->addTab(page, "Display");
+}
+
+// 2026-05-12 bench fix (Gap #6 — Spot List ↔ panadapter hover sync).
+//
+// Panadapter → list direction.  SpectrumWidget emits
+// spotHoverIndexChanged(spotIdx) when the mouse hovers a spot label;
+// MainWindow forwards into here.  spotIdx is SpotModel::SpotData::index
+// (the per-spot counter the model assigns in applySpotStatus).  Map
+// that back to a row in m_spotTableModel by matching the SpotData's
+// callsign + freqMhz + source against the table's DxSpot rows.  When
+// found, select that row (which also scrolls it into view via the
+// view's autoscroll-on-selection-change default).
+//
+// -1 sentinel clears the selection ("mouse is no longer over a spot").
+void SpotHubDialog::setHoveredPanadapterSpot(int spotIdx)
+{
+    if (!m_spotTable || !m_spotTableModel) {
+        return;
+    }
+    if (spotIdx < 0) {
+        m_spotTable->clearSelection();
+        return;
+    }
+    if (!m_spotModel) {
+        return;
+    }
+    const auto& spots = m_spotModel->spots();
+    const auto it = spots.constFind(spotIdx);
+    if (it == spots.constEnd()) {
+        return;
+    }
+    const SpotData& sd = it.value();
+    const double spotFreqMhz = (sd.rxFreqMhz > 0.0)
+                                   ? sd.rxFreqMhz
+                                   : sd.txFreqMhz;
+    // Scan the table for a row whose DxSpot matches by callsign +
+    // freq (1 kHz tolerance) + source.
+    for (int row = 0; row < m_spotTableModel->rowCount(); ++row) {
+        const double rowFreq = m_spotTableModel->freqAtRow(row);
+        if (std::abs(rowFreq - spotFreqMhz) > 0.001) { continue; }
+        const QModelIndex callIdx = m_spotTableModel->index(
+            row, SpotTableModel::ColDxCall);
+        const QString rowCall = m_spotTableModel->data(callIdx, Qt::DisplayRole).toString();
+        if (rowCall.compare(sd.callsign, Qt::CaseInsensitive) != 0) { continue; }
+        const QModelIndex sourceIdx = m_spotTableModel->index(
+            row, SpotTableModel::ColSource);
+        const QString rowSource = m_spotTableModel->data(sourceIdx, Qt::DisplayRole).toString();
+        if (!sd.source.isEmpty() && rowSource.compare(sd.source, Qt::CaseInsensitive) != 0) {
+            continue;
+        }
+        // Found — select via the proxy so the view scrolls correctly.
+        const QModelIndex proxyIdx = m_spotProxyModel
+            ? m_spotProxyModel->mapFromSource(m_spotTableModel->index(row, 0))
+            : m_spotTableModel->index(row, 0);
+        if (proxyIdx.isValid()) {
+            m_spotTable->setCurrentIndex(proxyIdx);
+            m_spotTable->scrollTo(proxyIdx,
+                                   QAbstractItemView::EnsureVisible);
+        }
+        return;
+    }
 }
 
 } // namespace NereusSDR

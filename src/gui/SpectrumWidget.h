@@ -156,6 +156,7 @@ mw0lge@grange-lane.co.uk
 #include <QColor>
 #include <QPoint>
 #include <QMap>
+#include <QHash>
 #include <QTimer>
 #include <QPropertyAnimation>
 
@@ -966,6 +967,28 @@ public:
     };
 
     void setSpotMarkers(const QVector<SpotMarker>& markers);
+    // 2026-05-12 bench fix (Gap #6 — Spot List hover sync).  Driven
+    // by SpotHubDialog when the user mouses over a row so the
+    // matching marker on the panadapter highlights.  -1 clears.
+    void setHoverSpotIndexExternal(int idx) {
+        if (m_hoverSpotIndexExternal != idx) {
+            m_hoverSpotIndexExternal = idx;
+            update();
+        }
+    }
+    // 2026-05-12 bench fix (Gap #7).  Per-source panadapter overlay
+    // visibility.  Missing key == visible (default).  Source strings
+    // match SpotMarker::source: "Cluster", "RBN", "WSJT-X",
+    // "SpotCollector", "POTA", "FreeDV", "PSK", "Memory".
+    void setSpotSourceVisible(const QString& source, bool visible) {
+        const bool current = m_spotSourceVisible.value(source, true);
+        if (current == visible) { return; }
+        m_spotSourceVisible.insert(source, visible);
+        update();
+    }
+    bool isSpotSourceVisible(const QString& source) const {
+        return m_spotSourceVisible.value(source, true);
+    }
     void setShowSpots(bool on) { m_showSpots = on; update(); }
     bool showSpots() const { return m_showSpots; }
     void setSpotFontSize(int px) { m_spotFontSize = px; update(); }
@@ -1019,6 +1042,19 @@ signals:
     // sources (Memory, DX cluster, RBN, etc.) can react.
     // From AetherSDR src/gui/SpectrumWidget.h:327 [@0cd4559]
     void spotTriggered(int spotIndex);
+
+    // 2026-05-12 bench fix (Gap #3 from adversarial audit).  Emitted
+    // from the right-click context menu's "Remove Spot" action so the
+    // SpotModel can purge the spot.  Mirrors AetherSDR
+    // SpectrumWidget.h:357 [@0cd4559].
+    void spotRemoveRequested(int spotIndex);
+
+    // 2026-05-12 bench fix (Gap #6).  Fires when the mouse enters or
+    // leaves a spot label hit-rect.  -1 indicates "no spot under
+    // cursor" (use to clear the Spot List highlight).  Drives the
+    // panadapter <-> Spot List hover sync.
+    void spotHoverIndexChanged(int spotIndex);
+
     // Emitted when user drags a filter edge
     void filterEdgeDragged(int lowHz, int highHz);
     // Emitted when pan center changes (drag, auto-scroll)
@@ -1054,6 +1090,7 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
+    void leaveEvent(QEvent* event) override;
 
 private:
     // ---- Phase 3Q-8: disconnect overlay state ----
@@ -1484,6 +1521,25 @@ private:
     QColor m_spotColor{Qt::yellow};
     QColor m_spotBgColor{Qt::black};
     int    m_spotBgOpacity{48};
+
+    // 2026-05-12 bench fix (Gap #6).  m_hoverSpotIndex: which spot
+    // label the mouse is currently over (SpotMarker::index, -1 if
+    // none).  Emitted via spotHoverIndexChanged so the Spot List can
+    // highlight the matching row.  m_hoverSpotIndexExternal: opposite
+    // direction — set by setHoverSpotIndexExternal() when the user
+    // hovers a row in the Spot List, drives a halo around the label
+    // in drawSpotMarkers.
+    int    m_hoverSpotIndex{-1};
+    int    m_hoverSpotIndexExternal{-1};
+
+    // 2026-05-12 bench fix (Gap #7).  Per-source visibility mask for
+    // the panadapter overlay.  Keys are SpotMarker::source strings
+    // ("Cluster", "RBN", "WSJT-X", "SpotCollector", "POTA", "FreeDV",
+    // "PSK", "Memory"); missing keys default to visible.  Used by
+    // drawSpotMarkers to skip the per-marker draw when the source's
+    // panadapter visibility toggle is off.  SpotHubDialog Display tab
+    // drives this via setSpotSourceVisible.
+    QHash<QString, bool> m_spotSourceVisible;
 
     // ---- Task 2.3: Spectrum text overlay state ----
 

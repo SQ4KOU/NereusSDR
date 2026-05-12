@@ -920,9 +920,35 @@ RadioModel::RadioModel(QObject* parent)
     auto& s = AppSettings::instance();
 
     m_spotModel           = std::make_unique<SpotModel>(this);
+    // 2026-05-12 bench fix: SpotTableModel ownership moved from
+    // SpotHubDialog so it stays populated from app start.  Prior
+    // behaviour: the table only existed once the user opened
+    // Tools → Spot Hub, so spots from auto-connected sources were
+    // dropped on the floor until the dialog was open AND a fresh
+    // connect happened.  Symptom: "auto-start spots don't appear
+    // until I disconnect+reconnect every source."
+    m_spotTableModel      = std::make_unique<SpotTableModel>(this);
     m_freeDvStationModel  = std::make_unique<FreeDVStationModel>(this);
     m_rxDecodeModel       = std::make_unique<RxDecodeModel>(/*maxSize*/ 200, this);
     m_dxccColorProvider   = std::make_unique<DxccColorProvider>(this);
+
+    // 2026-05-12 bench fix: seed FreeDVStationModel::setOurGridSquare
+    // from the User/GridSquare AppSettings key.  Without this the
+    // model's m_ourGrid stays empty and applyDistanceHeading
+    // short-circuits at `m_ourGrid.size() < 4`, zeroing every
+    // station's distance + heading in the FreeDV Reporter dialog.
+    // Both User/* and the legacy FreeDvReporter/GridSquare are
+    // checked so existing users with the per-source key set don't
+    // need to re-enter into Settings.
+    {
+        QString grid = s.value(QStringLiteral("User/GridSquare")).toString();
+        if (grid.isEmpty()) {
+            grid = s.value(QStringLiteral("FreeDvReporter/GridSquare")).toString();
+        }
+        if (!grid.isEmpty()) {
+            m_freeDvStationModel->setOurGridSquare(grid);
+        }
+    }
 
     // DX cluster: host / port / callsign defaults from AppSettings
     // ("DxCluster/{Host,Port,Callsign}"). startConnection() is deferred to
@@ -948,7 +974,7 @@ RadioModel::RadioModel(QObject* parent)
                 QString()).toString(),
         s.value(QStringLiteral("FreeDvReporter/Message"),
                 QString()).toString(),
-        QStringLiteral("NereusSDR"));
+        QStringLiteral("NereusSDR ") + QStringLiteral(NEREUSSDR_VERSION));
     {
         const QString serverUrl = s.value(
             QStringLiteral("FreeDvReporter/ServerUrl"),
@@ -959,13 +985,24 @@ RadioModel::RadioModel(QObject* parent)
         }
     }
 
+    // 2026-05-12 bench: FreeDV Reporter freq-publish throttle timer.
+    // Single-shot, restarted on every slice frequency change.  Expiry
+    // (kFreedvFreqDwellMs = 7 s) calls flushFreedvFrequencyDwell which
+    // emits the cached pending freq.  See member declaration in
+    // RadioModel.h for the full throttle policy.
+    m_freedvFreqDwellTimer = new QTimer(this);
+    m_freedvFreqDwellTimer->setSingleShot(true);
+    m_freedvFreqDwellTimer->setInterval(kFreedvFreqDwellMs);
+    connect(m_freedvFreqDwellTimer, &QTimer::timeout,
+            this, &RadioModel::flushFreedvFrequencyDwell);
+
     m_pskReporter = std::make_unique<PskReporterClient>(this);
     m_pskReporter->setIdentity(
         s.value(QStringLiteral("PskReporter/Callsign"),
                 QString()).toString(),
         s.value(QStringLiteral("PskReporter/GridSquare"),
                 QString()).toString(),
-        QStringLiteral("NereusSDR"));
+        QStringLiteral("NereusSDR ") + QStringLiteral(NEREUSSDR_VERSION));
 
     // Per-source adapter slots. Auto-connection (sender + receiver both on
     // the main thread) gives DirectConnection, so the spot lands in
@@ -985,6 +1022,32 @@ RadioModel::RadioModel(QObject* parent)
     connect(m_pskReporter.get(),    &PskReporterClient::spotReceived,
             this, &RadioModel::onPskReporterSpotReceived);
 
+    // 2026-05-12 bench fix: also feed the shared SpotTableModel from
+    // app start so the Spot List tab populates regardless of whether
+    // SpotHubDialog is open.  Was previously per-dialog in
+    // SpotHubDialog::buildSpotListTab's `wireClient` lambdas; moving
+    // it here means auto-connected sources fill the table before the
+    // user even opens the dialog.  Direct lambda capture of the
+    // table model pointer keeps the addSpot call same-thread (both
+    // emitter and receiver live on the main thread).
+    auto wireSpotTable = [this](auto* client) {
+        if (!client) { return; }
+        using ClientType = std::remove_pointer_t<decltype(client)>;
+        connect(client, &ClientType::spotReceived,
+                this, [this](const DxSpot& spot) {
+                    if (m_spotTableModel) {
+                        m_spotTableModel->addSpot(spot);
+                    }
+                });
+    };
+    wireSpotTable(m_dxCluster.get());
+    wireSpotTable(m_rbn.get());
+    wireSpotTable(m_wsjtx.get());
+    wireSpotTable(m_spotCollector.get());
+    wireSpotTable(m_pota.get());
+    wireSpotTable(m_freeDvReporter.get());
+    wireSpotTable(m_pskReporter.get());
+
     // FreeDV Reporter station signals drive FreeDVStationModel directly.
     // The model's onStationAdded/Updated/Removed slots stamp distance + heading
     // when our grid is set, then re-emit so the dialog and any other
@@ -995,6 +1058,44 @@ RadioModel::RadioModel(QObject* parent)
             m_freeDvStationModel.get(), &FreeDVStationModel::onStationUpdated);
     connect(m_freeDvReporter.get(), &FreeDVReporterClient::stationRemoved,
             m_freeDvStationModel.get(), &FreeDVStationModel::onStationRemoved);
+
+    // Phase 3R K-bench: push current freq + TX state when the FreeDV
+    // Reporter connects. Without this, the reporter knows our identity
+    // (callsign / grid / message from setIdentity) but never our
+    // operating frequency — we appear on the dashboard at freq=0 until
+    // the user moves the VFO and triggers the frequencyChanged push.
+    connect(m_freeDvReporter.get(), &FreeDVReporterClient::connected,
+            this, [this]() {
+                qCInfo(lcDsp) << "FreeDVReporter: connected signal fired";
+                if (!m_freeDvReporter || !m_activeSlice) {
+                    qCWarning(lcDsp)
+                        << "FreeDVReporter connected but"
+                        << (m_freeDvReporter ? "no active slice"
+                                             : "client gone");
+                    return;
+                }
+                const quint64 freqHz =
+                    static_cast<quint64>(m_activeSlice->frequency());
+                qCInfo(lcDsp) << "FreeDVReporter: pushing initial freq="
+                              << freqHz << "Hz";
+                m_freeDvReporter->setFrequency(freqHz);
+                // 2026-05-12 bench: seed the dwell-throttle baseline so
+                // subsequent slice.frequencyChanged calls measure delta
+                // against the connect-time freq.  Without this seed the
+                // first VFO move would always trigger the fast-path
+                // (delta from 0 -> band freq is huge), bypassing the
+                // dwell on what is usually a deliberate first tune.
+                m_freedvLastPublishedHz = freqHz;
+                if (m_freedvFreqDwellTimer) {
+                    m_freedvFreqDwellTimer->stop();
+                }
+                const DSPMode m = m_activeSlice->dspMode();
+                const QString modeStr =
+                    (m == DSPMode::RADE_U || m == DSPMode::RADE_L)
+                        ? QStringLiteral("RADEV1")
+                        : QString();
+                m_freeDvReporter->setTransmitting(false, modeStr);
+            });
 
     // 3M-1a (Codex review on PR #144): wire RF-Power-slider movements to
     // the radio's drive byte.  Without this, the slider updates UI/model
@@ -1269,6 +1370,26 @@ void RadioModel::onWsjtxSpotReceived(const DxSpot& spot)
         dec.payload  = spot.comment;
         m_rxDecodeModel->addDecode(dec);
     }
+
+    // 2026-05-12 bench fix: source-first port from freedv-gui.  Every
+    // WSJT-X decode also gets queued into PSK Reporter, matching
+    // upstream main.cpp:1959-1966 [@77e793a] where addReceiveRecord
+    // fires on every reporter in m_reporters[] (PSK + FreeDV + CSV).
+    // Gated on PskReporterClient::isAutoSendActive() (the 5-min auto-
+    // send timer being armed) — analogous to freedv-gui only putting
+    // PskReporter in m_reporters[] when pskReporterEnabled is true.
+    // Mode string comes from the WSJT-X spot comment field (FT8/FT4/
+    // JS8/JT9/etc.) parsed by SpotTableModel::extractMode.
+    if (m_pskReporter && m_pskReporter->isAutoSendActive()
+        && !spot.dxCall.isEmpty()) {
+        const QString mode =
+            SpotTableModel::extractMode(spot.comment);
+        m_pskReporter->reportDecode(
+            spot.dxCall,
+            mode.isEmpty() ? QStringLiteral("FT8") : mode,
+            spot.freqMhz,
+            spot.snr);
+    }
 }
 
 void RadioModel::onSpotCollectorSpotReceived(const DxSpot& spot)
@@ -1427,21 +1548,29 @@ void RadioModel::restoreSpotClientAutoStartState()
         } else {
             const QString message =
                 s.value(QStringLiteral("FreeDvReporter/Message")).toString();
+            const QString versionStr =
+                QStringLiteral("NereusSDR ")
+                    + QStringLiteral(NEREUSSDR_VERSION);
+            qCInfo(lcDsp)
+                << "FreeDVReporter: starting connection with identity"
+                << "callsign=" << freedvCall
+                << "grid=" << freedvGrid
+                << "msg=" << message
+                << "version=" << versionStr;
             m_freeDvReporter->setIdentity(
-                freedvCall, freedvGrid, message,
-                QStringLiteral("NereusSDR"));
+                freedvCall, freedvGrid, message, versionStr);
             m_freeDvReporter->startConnection();
         }
     }
 
-    // PSK Reporter: send-only. The AutoStart flag is persisted by the
-    // F2 dialog for UI consistency but has no corresponding "start"
-    // action here; the client transmits reportDecode batches once it
-    // receives WSJT-X spots through the in-process signal graph. The
-    // identity is still refreshed here so reportDecode batches go out
-    // under the operator's callsign (post-3J-2 UX fix), again using
-    // the User/* fall-back chain when the legacy PskReporter/ keys are
-    // empty.
+    // PSK Reporter: send-only.  Identity refreshed from User/* fall-
+    // back chain.  2026-05-12 bench fix: if PskReporterAutoStart is
+    // True, arm the 5-minute auto-send timer now — source-first port
+    // from freedv-gui main.cpp:2575-2597 [@77e793a] which adds
+    // PskReporter to m_reporters[] AND starts m_pskReporterTimer at
+    // audio start time.  Previously the AutoStart flag persisted but
+    // had no effect (it only set identity), so users with auto-start
+    // checked would never see any spots reach pskreporter.info.
     if (m_pskReporter) {
         const QString pskCall = resolveCall(
             QStringLiteral("PskReporter/Callsign"));
@@ -1450,7 +1579,14 @@ void RadioModel::restoreSpotClientAutoStartState()
         if (pskGrid.isEmpty()) pskGrid = userGrid;
         if (!pskCall.isEmpty()) {
             m_pskReporter->setIdentity(pskCall, pskGrid,
-                                       QStringLiteral("NereusSDR"));
+                                       QStringLiteral("NereusSDR ") + QStringLiteral(NEREUSSDR_VERSION));
+            if (isTrue(QStringLiteral("PskReporterAutoStart"))) {
+                m_pskReporter->setAutoSendIntervalSec(
+                    PskReporterClient::kReportingIntervalSec);
+                qCInfo(lcDsp)
+                    << "PskReporter: auto-start armed (5-min interval)"
+                    << "callsign=" << pskCall;
+            }
         }
     }
 }
@@ -1622,6 +1758,19 @@ void RadioModel::wireRadeChannel(int sliceId, RadeChannel* channel,
     if (m_audioEngine != nullptr) {
         connect(channel, &RadeChannel::rxSpeechReady, this,
                 [this, sliceId](const QByteArray& pcm) {
+                    // BENCH DEBUG: one-shot logs to confirm RADE is
+                    // producing decoded speech that reaches the audio
+                    // engine. Without sync the codec emits nothing,
+                    // so absence of this log means RADE never decoded.
+                    static int s_rxSpeechFirstLog = 0;
+                    if (s_rxSpeechFirstLog < 3) {
+                        qCInfo(lcRade)
+                            << "rxSpeechReady fire #"
+                            << (s_rxSpeechFirstLog + 1)
+                            << "sliceId=" << sliceId
+                            << "bytes=" << pcm.size();
+                        ++s_rxSpeechFirstLog;
+                    }
                     if (m_audioEngine == nullptr) {
                         return;
                     }
@@ -1631,114 +1780,163 @@ void RadioModel::wireRadeChannel(int sliceId, RadeChannel* channel,
                     if (bytes <= 0 || (bytes % kBytesPerStereoFrame) != 0) {
                         return;
                     }
-                    const int frames = bytes / kBytesPerStereoFrame;
-                    const float* samples =
+                    const int frames24k = bytes / kBytesPerStereoFrame;
+                    const float* stereo24k =
                         reinterpret_cast<const float*>(pcm.constData());
-                    m_audioEngine->rxBlockReady(sliceId, samples, frames);
+
+                    // Phase 3R K-bench (bench feedback): RadeChannel
+                    // emits at 24 kHz stereo float32 but AudioEngine's
+                    // speakers bus runs at 48 kHz. Pushing 24 kHz
+                    // samples without upsampling makes the audio play
+                    // at 2x speed ("chipmunk sounding"). Upsample
+                    // 24 -> 48 kHz here, one resampler per leg, so
+                    // AudioEngine's MasterMixer sees the expected
+                    // 48 kHz rate.
+                    if (!m_radeRxSpeechL
+                        || !m_radeRxSpeechR) {
+                        m_radeRxSpeechL =
+                            std::make_unique<Resampler>(
+                                24000.0, 48000.0, 4096);
+                        m_radeRxSpeechR =
+                            std::make_unique<Resampler>(
+                                24000.0, 48000.0, 4096);
+                    }
+                    // Deinterleave stereo -> two mono buffers (RADE
+                    // emits L==R dual-mono anyway, but keep both legs
+                    // separate so the upsampler sees a self-consistent
+                    // stream per channel).
+                    m_radeRxLScratch.resize(
+                        static_cast<size_t>(frames24k));
+                    m_radeRxRScratch.resize(
+                        static_cast<size_t>(frames24k));
+                    for (int i = 0; i < frames24k; ++i) {
+                        m_radeRxLScratch[static_cast<size_t>(i)] =
+                            stereo24k[2 * i + 0];
+                        m_radeRxRScratch[static_cast<size_t>(i)] =
+                            stereo24k[2 * i + 1];
+                    }
+                    QByteArray upL = m_radeRxSpeechL->process(
+                        m_radeRxLScratch.data(), frames24k);
+                    QByteArray upR = m_radeRxSpeechR->process(
+                        m_radeRxRScratch.data(), frames24k);
+                    const int upBytes = std::min(upL.size(),
+                                                 upR.size());
+                    const int frames48k =
+                        upBytes / static_cast<int>(sizeof(float));
+                    if (frames48k <= 0) {
+                        return;  // resampler warmup
+                    }
+                    // Re-interleave at 48 kHz.
+                    m_radeRxInterleaved48k.resize(
+                        static_cast<size_t>(frames48k) * 2);
+                    const float* l = reinterpret_cast<const float*>(
+                        upL.constData());
+                    const float* r = reinterpret_cast<const float*>(
+                        upR.constData());
+                    for (int i = 0; i < frames48k; ++i) {
+                        m_radeRxInterleaved48k[
+                            static_cast<size_t>(2 * i + 0)] = l[i];
+                        m_radeRxInterleaved48k[
+                            static_cast<size_t>(2 * i + 1)] = r[i];
+                    }
+                    m_audioEngine->rxBlockReady(
+                        sliceId, m_radeRxInterleaved48k.data(),
+                        frames48k);
                 });
     }
 
-    // ── Phase 3R K-bench: TX modem output plumbing (filled in) ──────────
+    // ── Phase 3R K-bench (source-first reframe): TX modem audio ────────
     //
     // RadeChannel::txModemReady carries the RADE neural codec's
-    // encoded baseband at 24 kHz stereo float32 (per the I3 emission
-    // path at RadeChannel.cpp:670-677 [Phase 3R I3] — the upsampler
-    // duplicates the 8 kHz RADE_COMP real-leg to both L and R).  The
-    // K-bench follow-up routes those bytes to the radio's TX buffer
-    // through three stages:
+    // encoded baseband at 24 kHz stereo float32 (the upsampler
+    // duplicates the 8 kHz RADE_COMP real-leg to both L and R).
     //
+    // Source-first per freedv-gui src/pipeline/RADETransmitStep.cpp:
+    // 196-200 [@77e793a]: take ONLY the real component of rade_tx's
+    // output and treat it as audio. freedv-gui hands it to the
+    // soundcard; the radio's external SSB modulator does USB/LSB.
+    // NereusSDR's analogue is the WDSP TXA modulator (in USB or LSB
+    // mode per TxChannel::setTxMode's RADE_U/L -> USB/LSB mapping).
+    //
+    // Pipeline:
     //   1. Extract L channel as mono real-valued modem baseband.
-    //      (L == R post-processMonoToStereo; either is fine.)
-    //   2. Upsample 24 kHz -> txSampleRate via m_radeTxResampler.
-    //      P1 = 48 kHz (2x); P2 = 192 kHz (8x).  Built lazily on
-    //      first emission once m_connection->txSampleRate() is
-    //      known; rebuilt if the rate changes across reconnects.
-    //   3. Build interleaved I/Q with Q=0 and call
-    //      m_connection->sendTxIq.  This produces a DSB-style
-    //      modulation: the modem audio rides on both the upper and
-    //      lower sideband of the tune frequency.  Constructing a
-    //      proper analytic (Hilbert-transformed) baseband to get
-    //      true USB/LSB is a follow-up DSP refinement.  The
-    //      receiver-side correlator in RADE syncs on its kernel
-    //      regardless of sideband presentation, so DSB still
-    //      decodes; the RADE_U vs RADE_L distinction matters more
-    //      for spectrum-cleanliness than for link-up.
+    //   2. Upsample 24 -> 48 kHz mono float32 (mic-input rate).
+    //   3. Push to TxWorkerThread::setRadeAudioBlock which
+    //      substitutes for the live mic in dispatchOneBlock's
+    //      RADE branch. The WDSP TXA chain (with K1's RADE mic
+    //      profile bypassing speech processing) modulates to
+    //      proper SSB I/Q. sendTxIq runs via the normal WDSP
+    //      path.
     //
-    // The connect uses the default direct connection because
-    // RadeChannel lives on RadioModel's thread (Phase 3R J2/J3).  The
-    // receiver context (third arg `this`) ensures disconnect-on-
-    // destroy + main-thread dispatch.  m_connection->sendTxIq is
-    // documented audio-safe (SPSC ring with atomic stores, no
-    // mutex), so calling it directly from main thread to the
-    // connection-thread-affined m_connection is safe — the same
-    // pattern TxChannel::driveOneTxBlockFromInterleaved already uses.
-    connect(channel, &RadeChannel::txModemReady, this,
-            [this, sliceId](const QByteArray& iq) {
-                if (m_connection == nullptr) {
-                    return;
-                }
-                constexpr int kBytesPerStereoFrame =
-                    2 * static_cast<int>(sizeof(float));
-                const int bytes = iq.size();
-                if (bytes <= 0
-                    || (bytes % kBytesPerStereoFrame) != 0) {
-                    return;
-                }
-                const int frames24k = bytes / kBytesPerStereoFrame;
-                const float* stereo =
-                    reinterpret_cast<const float*>(iq.constData());
+    // Earlier K4 scaffolding (direct sendTxIq with I=mono / Q=0)
+    // produced DSB modulation and bypassed the WDSP modulator,
+    // which broke TUNE in RADE (TUNE writes PostGen + relies on
+    // the modulator stage running). This reframe makes TUNE and
+    // RADE TX share the same modulator path.
+    if (m_txWorker) {
+        connect(channel, &RadeChannel::txModemReady, this,
+                [this](const QByteArray& iq) {
+                    // BENCH DEBUG: one-shot first-fire log so we can
+                    // confirm rade_tx is actually producing output.
+                    static int s_radeTxModemFirstLogged = 0;
+                    if (s_radeTxModemFirstLogged < 3) {
+                        qCInfo(lcRade)
+                            << "txModemReady fire #"
+                            << (s_radeTxModemFirstLogged + 1)
+                            << "bytes=" << iq.size();
+                        ++s_radeTxModemFirstLogged;
+                    }
+                    if (!m_txWorker) {
+                        return;
+                    }
+                    constexpr int kBytesPerStereoFrame =
+                        2 * static_cast<int>(sizeof(float));
+                    const int bytes = iq.size();
+                    if (bytes <= 0
+                        || (bytes % kBytesPerStereoFrame) != 0) {
+                        return;
+                    }
+                    const int frames24k = bytes / kBytesPerStereoFrame;
+                    const float* stereo =
+                        reinterpret_cast<const float*>(iq.constData());
 
-                // Step 1: extract L channel as mono modem baseband.
-                m_radeTxMonoScratch.resize(
-                    static_cast<size_t>(frames24k));
-                for (int i = 0; i < frames24k; ++i) {
-                    m_radeTxMonoScratch[static_cast<size_t>(i)] =
-                        stereo[2 * i + 0];
-                }
+                    // Step 1: extract L channel as mono modem baseband.
+                    m_radeTxMonoScratch.resize(
+                        static_cast<size_t>(frames24k));
+                    for (int i = 0; i < frames24k; ++i) {
+                        m_radeTxMonoScratch[static_cast<size_t>(i)] =
+                            stereo[2 * i + 0];
+                    }
 
-                // Step 2: lazy-build the 24 -> hwRate resampler.  Rebuild
-                // if the rate changed (reconnect to a different proto).
-                const int hwRate = m_connection->txSampleRate();
-                if (hwRate <= 0) {
-                    return;
-                }
-                if (m_radeTxResampler == nullptr
-                    || m_radeTxResamplerHwRate != hwRate) {
-                    m_radeTxResampler = std::make_unique<Resampler>(
-                        24000.0, static_cast<double>(hwRate),
-                        /*maxBlockSamples=*/4096);
-                    m_radeTxResamplerHwRate = hwRate;
-                    qCInfo(lcRade)
-                        << "RadioModel: built RADE TX 24 ->" << hwRate
-                        << "upsampler for slice" << sliceId;
-                }
+                    // Step 2: lazy-build the 24 -> 48 kHz upsampler
+                    // (TxWorkerThread's WDSP TXA chain runs at 48 kHz
+                    // mic rate; m_radeTxResampler now feeds mic-input
+                    // not the radio wire).
+                    if (m_radeTxResampler == nullptr
+                        || m_radeTxResamplerHwRate != 48000) {
+                        m_radeTxResampler = std::make_unique<Resampler>(
+                            24000.0, 48000.0,
+                            /*maxBlockSamples=*/4096);
+                        m_radeTxResamplerHwRate = 48000;
+                    }
 
-                // Resampler::process returns a QByteArray of float32
-                // mono PCM at the destination rate.
-                QByteArray upsampled = m_radeTxResampler->process(
-                    m_radeTxMonoScratch.data(), frames24k);
-                const int outBytes = upsampled.size();
-                if (outBytes <= 0
-                    || (outBytes % static_cast<int>(sizeof(float))) != 0) {
-                    return;
-                }
-                const int outFrames =
-                    outBytes / static_cast<int>(sizeof(float));
-                const float* mono =
-                    reinterpret_cast<const float*>(upsampled.constData());
+                    QByteArray upsampled = m_radeTxResampler->process(
+                        m_radeTxMonoScratch.data(), frames24k);
+                    if (upsampled.isEmpty()) {
+                        return;  // resampler warm-up
+                    }
 
-                // Step 3: build interleaved I/Q (I = mono, Q = 0).
-                m_radeTxIqScratch.resize(
-                    static_cast<size_t>(outFrames) * 2);
-                for (int i = 0; i < outFrames; ++i) {
-                    m_radeTxIqScratch[static_cast<size_t>(2 * i + 0)] =
-                        mono[i];
-                    m_radeTxIqScratch[static_cast<size_t>(2 * i + 1)] =
-                        0.0f;
-                }
-                m_connection->sendTxIq(m_radeTxIqScratch.data(),
-                                       outFrames);
-            });
+                    // Step 3: hand off to the worker. Default Qt::
+                    // AutoConnection resolves to QueuedConnection (the
+                    // worker thread differs from this main thread);
+                    // setRadeAudioBlock copies under its own mutex.
+                    QMetaObject::invokeMethod(
+                        m_txWorker.get(),
+                        "setRadeAudioBlock",
+                        Qt::QueuedConnection,
+                        Q_ARG(QByteArray, upsampled));
+                });
+    }
 
     // ── Phase 3R K-bench: TX mic-feed plumbing ──────────────────────────
     //
@@ -1764,10 +1962,22 @@ void RadioModel::wireRadeChannel(int sliceId, RadeChannel* channel,
                 channel, &RadeChannel::txEncode,
                 Qt::QueuedConnection);
     }
+
+    // Phase 3R K-bench: tell RxDspWorker about the RadeChannel so it can
+    // route incoming I/Q (decimated to 24 kHz) to RadeChannel::processIq
+    // when WDSP RxChannel(0) is absent. Without this, RADE RX hears
+    // silence — the I/Q from the radio gets dropped in RxDspWorker's
+    // rxCh==null path.
+    if (m_dspWorker) {
+        m_dspWorker->setRadeChannel(channel);
+    }
     connect(channel, &QObject::destroyed, this,
             [this]() {
                 if (m_txWorker) {
                     m_txWorker->setRadeChannel(nullptr);
+                }
+                if (m_dspWorker) {
+                    m_dspWorker->setRadeChannel(nullptr);
                 }
             });
 
@@ -1801,6 +2011,17 @@ void RadioModel::onRadeTextDecoded(int sliceId, const QString& callsign,
     // defaults to 0.0 in the RxDecode struct.
     if (auto* slice = sliceAt(sliceId)) {
         decode.freqMhz = slice->frequency() / 1.0e6;
+
+        // 2026-05-11 bench: also pin the speaker callsign on the slice
+        // so the VFO flag can paint "<call> ● <snr>dB" instead of just
+        // "RADE ● <snr>dB".  Sticky semantics: stays until the next
+        // EOO decode replaces it OR setDspMode leaves RADE_U/RADE_L
+        // (clear-on-mode-off-RADE).  Bench design 2026-05-11 (option
+        // A + D).  Empty callsign no-ops via SliceModel's idempotent
+        // setter so a repeat EOO of the same call does not re-emit.
+        if (!callsign.isEmpty()) {
+            slice->setLastRadeRxCallsign(callsign);
+        }
     }
 
     // I4 Option B (the third_party/rade callsign-over-EOO channel)
@@ -1816,6 +2037,46 @@ void RadioModel::onRadeTextDecoded(int sliceId, const QString& callsign,
     }
 
     m_rxDecodeModel->addDecode(decode);
+
+    // Phase 3R K-bench (bench feedback): pull current SNR snapshot
+    // once for both reporters below.
+    int snrDb = 0;
+    double freqMhz = 0.0;
+    if (auto* slice = sliceAt(sliceId)) {
+        const double snr = slice->snrDb();
+        if (!std::isnan(snr)) {
+            snrDb = static_cast<int>(snr);
+        }
+        freqMhz = slice->frequency() / 1.0e6;
+    }
+
+    // Push to FreeDV Reporter so qso.freedv.org marks our row as
+    // decoding this station. freedv-gui's addReceiveRecord truncates
+    // SNR to (int) so we do the same. From freedv-gui
+    // src/reporting/FreeDVReporter.cpp [@77e793a].
+    if (m_freeDvReporter && m_freeDvReporter->isConnected()) {
+        // Wire mode "RADEV1" matches freedv-gui's FREEDV_MODE_RADE string
+        // (freedv-gui src/freedv_interface.cpp:63 [@77e793a]).
+        m_freeDvReporter->sendRxReport(
+            callsign, QStringLiteral("RADEV1"), snrDb);
+    }
+
+    // 2026-05-12 bench fix: source-first port from freedv-gui.  Drop
+    // the prior NereusSDR-specific FreeDvReporter/ReportToPsk gate
+    // (which double-gated the cross-feed even when the user had
+    // started PSK Reporter explicitly).  Match freedv-gui main.cpp:
+    // 1959-1966 [@77e793a] which feeds every decode to every reporter
+    // in m_reporters[] unconditionally; "enabled" is represented by
+    // whether the reporter is in the list at all.  Our equivalent:
+    // gate on PskReporterClient::isAutoSendActive(), which is true
+    // iff the 5-minute auto-send timer has been armed by the Start
+    // button (or PskReporterAutoStart restore).  When inactive we
+    // skip the queue write so reports don't accumulate behind the
+    // user's back.
+    if (m_pskReporter && m_pskReporter->isAutoSendActive()) {
+        m_pskReporter->reportDecode(
+            callsign, QStringLiteral("RADE"), freqMhz, snrDb);
+    }
 }
 
 void RadioModel::onRadeSyncChanged(int sliceId, bool synced)
@@ -1828,6 +2089,55 @@ void RadioModel::onRadeSyncChanged(int sliceId, bool synced)
         return;
     }
     m_radeSyncedSlices[sliceId] = synced;
+
+    // 2026-05-12 bench: clear cached speaker callsign on sync rising
+    // edge IF sync was down for >= kRadeSyncDropClearDebounceMs (option
+    // B debounce per bench design refinement).
+    //
+    // Rationale: between transmissions on a typical RADE QSO sync
+    // drops for >=1-2 sec; when sync re-acquires we know a *new*
+    // transmission has started but the new speaker's EOO has not
+    // arrived yet (EOO decode takes 5-15 sec). Showing the previous
+    // speaker's callsign during that window misattributes the new
+    // transmission. Clearing flips the VFO flag back to "RADE ●"
+    // until the new EOO lands.
+    //
+    // The debounce filters spurious sync flicker on marginal copy
+    // (sub-second drops during a fade) so the user does not lose the
+    // callsign mid-over.
+    //
+    // On falling edge (synced -> false): just record the timestamp.
+    // On rising edge (false -> synced): consult the timestamp and
+    // clear if elapsed >= debounce.
+    if (!synced) {
+        // Falling edge: record drop timestamp for the next rising edge.
+        m_radeSyncDropAt[sliceId] = QDateTime::currentDateTimeUtc();
+    } else {
+        // Rising edge: if we have a drop timestamp AND it's been long
+        // enough, treat this as a "new transmission" event and clear
+        // the slice's cached speaker callsign.
+        const auto it = m_radeSyncDropAt.constFind(sliceId);
+        if (it != m_radeSyncDropAt.constEnd() && it.value().isValid()) {
+            const qint64 elapsedMs =
+                it.value().msecsTo(QDateTime::currentDateTimeUtc());
+            if (elapsedMs >= kRadeSyncDropClearDebounceMs) {
+                if (auto* slice = sliceAt(sliceId)) {
+                    if (!slice->lastRadeRxCallsign().isEmpty()) {
+                        slice->setLastRadeRxCallsign(QString());
+                        qCInfo(lcDsp)
+                            << "RADE slice" << sliceId
+                            << "sync re-acquired after" << elapsedMs
+                            << "ms (>= " << kRadeSyncDropClearDebounceMs
+                            << "ms debounce) — cleared speaker callsign";
+                    }
+                }
+            }
+        }
+        // Clear the drop timestamp now that we've consumed it. The
+        // next falling edge will record a fresh one.
+        m_radeSyncDropAt.remove(sliceId);
+    }
+
     emit radeSyncChanged(sliceId, synced);
 }
 
@@ -1840,6 +2150,82 @@ void RadioModel::onRadeSnrChanged(int sliceId, float snrDb)
         slice->setSnrDb(static_cast<double>(snrDb));
     }
     emit radeSnrChanged(sliceId, snrDb);
+}
+
+// ── 2026-05-12 bench: FreeDV Reporter freq-publish throttle ─────────────────
+//
+// Spinning the VFO across a band fires SliceModel::frequencyChanged on
+// every sub-Hz movement.  Without throttling the FreeDVReporterClient
+// would emit a Socket.IO freq_change packet per tick (potentially 100+
+// per second on mouse-wheel acceleration), DoS'ing qso.freedv.org and
+// making other operators' dashboards flicker.
+//
+// Policy (per bench design 2026-05-12):
+//   - Trailing dwell: restart kFreedvFreqDwellMs (7000 ms) single-shot
+//     timer on every call.  Timer expiry calls flushFreedvFrequencyDwell
+//     which publishes m_freedvPendingHz.  Spinning publishes exactly
+//     once after the user stops.
+//   - Band-jump fast-path: |new - lastPublished| >= kFreedvFreqJumpHz
+//     (100 kHz) bypasses the dwell and publishes immediately.  Band
+//     changes don't lag the dashboard.
+//   - MOX engage: flushFreedvFrequencyDwell() is also called from the
+//     MoxController::txAboutToBegin subscriber so the reporter never
+//     shows "TXing on stale freq" if the user keys mid-dwell.
+//
+// Caller (slice.frequencyChanged subscriber) has already verified the
+// reporter is non-null and connected.
+void RadioModel::publishFreedvFrequencyDwelled(quint64 hz)
+{
+    if (!m_freeDvReporter || !m_freeDvReporter->isConnected()) {
+        return;
+    }
+    m_freedvPendingHz = hz;
+
+    // Band-jump fast-path.  Compute delta against the *last published*
+    // freq, not the most-recent-pending freq, so a slow ramp through
+    // 100 kHz of band (e.g. dragging the VFO 5 kHz at a time) still
+    // honours the dwell once it has crossed the threshold once.
+    const quint64 last = m_freedvLastPublishedHz;
+    const quint64 delta = (hz > last) ? (hz - last) : (last - hz);
+    if (last == 0 || delta >= kFreedvFreqJumpHz) {
+        m_freeDvReporter->setFrequency(hz);
+        m_freedvLastPublishedHz = hz;
+        if (m_freedvFreqDwellTimer) {
+            m_freedvFreqDwellTimer->stop();
+        }
+        qCDebug(lcDsp) << "FreeDVReporter: fast-path published"
+                       << hz << "Hz (delta=" << delta << ")";
+        return;
+    }
+
+    // Trailing dwell: cache + (re)start the timer.  Expiry publishes.
+    if (m_freedvFreqDwellTimer) {
+        m_freedvFreqDwellTimer->start();  // restart the single-shot
+    }
+    qCDebug(lcDsp) << "FreeDVReporter: dwell-deferred"
+                   << hz << "Hz (delta=" << delta << ")";
+}
+
+void RadioModel::flushFreedvFrequencyDwell()
+{
+    if (!m_freeDvReporter || !m_freeDvReporter->isConnected()) {
+        return;
+    }
+    if (m_freedvPendingHz == 0
+        || m_freedvPendingHz == m_freedvLastPublishedHz) {
+        return;
+    }
+    m_freeDvReporter->setFrequency(m_freedvPendingHz);
+    qCInfo(lcDsp) << "FreeDVReporter: dwell-published"
+                  << m_freedvPendingHz << "Hz"
+                  << "(delta from prior published="
+                  << static_cast<qint64>(m_freedvPendingHz)
+                       - static_cast<qint64>(m_freedvLastPublishedHz)
+                  << "Hz)";
+    m_freedvLastPublishedHz = m_freedvPendingHz;
+    if (m_freedvFreqDwellTimer) {
+        m_freedvFreqDwellTimer->stop();
+    }
 }
 
 void RadioModel::setActiveSlice(int index)
@@ -2235,6 +2621,15 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         // Thetis cmaster.c create_rcvr: 64 * input_rate / 48000. WDSP
         // decimates input_rate -> 48000 internally and outputs 64 samples
         // per fexchange2 call.
+        //
+        // Phase 3R K-bench: ALWAYS create the WDSP RxChannel even when
+        // slice is in RADE mode. WDSP feeds the S-meter, spectrum, AGC,
+        // and ADC-overload detector — all of which the user expects to
+        // keep working in RADE mode. The earlier gate that skipped this
+        // creation killed the S-meter in RADE mode (bench-reported).
+        // The audio-output side (AudioEngine push) is gated in
+        // RxDspWorker: when the slice is in RADE the WDSP-decoded
+        // audio is discarded and RADE owns the speaker path.
         RxChannel* rxCh = m_wdspEngine->createRxChannel(0, wdspInSize, 4096,
                                                          wdspInputRate, 48000, 48000);
 
@@ -3005,6 +3400,16 @@ void RadioModel::connectToRadio(const RadioInfo& info)
             connect(m_moxController, &MoxController::txAboutToBegin,
                     this, &RadioModel::pushTxModeAndBandpass);
 
+            // 2026-05-12 bench: flush any pending FreeDV Reporter freq
+            // dwell on MOX engage.  Without this, a user who tunes
+            // (starts the 7 s dwell) and immediately keys would TX on
+            // the new freq while the reporter dashboard still shows
+            // them on the old one for up to 7 s.  Flushing here pubs
+            // the cached pending freq before the radio actually starts
+            // transmitting.
+            connect(m_moxController, &MoxController::txAboutToBegin,
+                    this, &RadioModel::flushFreedvFrequencyDwell);
+
             // ── Phase 3M-3a-iii Task 17 (bench fix) ───────────────────────────
             //
             // TxChannel::voxActiveChanged → MoxController::onVoxActive.
@@ -3666,6 +4071,161 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                               << "blockFrames=" << TxWorkerThread::kBlockFrames
                               << "(semaphore-wake, mic-frame-driven — 3M-1c v3)";
 
+                // ── Phase 3R K-bench: pre-RADE mic gain + leveler wiring ──
+                //
+                // Push the current TransmitModel state to the worker so
+                // the RADE branch can apply mic gain + leveler in real
+                // time. Subsequent property changes propagate via
+                // queued signal/slot.
+                if (m_txWorker) {
+                    TxWorkerThread* w = m_txWorker.get();
+                    w->setRadeMicGainDb(m_transmitModel.micGainDb());
+                    w->setRadeLeveler(m_transmitModel.txLevelerOn(),
+                                      m_transmitModel.txLevelerMaxGain(),
+                                      m_transmitModel.txLevelerDecay());
+                    qCInfo(lcDsp)
+                        << "RADE pre-encode init: micGain="
+                        << m_transmitModel.micGainDb() << "dB"
+                        << "lev_on=" << m_transmitModel.txLevelerOn()
+                        << "lev_max=" << m_transmitModel.txLevelerMaxGain()
+                        << "lev_decay=" << m_transmitModel.txLevelerDecay();
+                    // micGainDb has no Qt signal of its own; piggy-back on
+                    // the existing micPreampChanged signal which fires on
+                    // setMicPreamp(dB) and on profile loads. Lambda
+                    // forwards the dB value through to the worker.
+                    connect(&m_transmitModel, &TransmitModel::micPreampChanged,
+                            w, [w, this](int /*dB*/) {
+                                w->setRadeMicGainDb(
+                                    m_transmitModel.micGainDb());
+                            });
+                    connect(&m_transmitModel, &TransmitModel::txLevelerOnChanged,
+                            w, [w, this](bool /*on*/) {
+                                w->setRadeLeveler(
+                                    m_transmitModel.txLevelerOn(),
+                                    m_transmitModel.txLevelerMaxGain(),
+                                    m_transmitModel.txLevelerDecay());
+                            });
+                    connect(&m_transmitModel,
+                            &TransmitModel::txLevelerMaxGainChanged,
+                            w, [w, this](int /*dB*/) {
+                                w->setRadeLeveler(
+                                    m_transmitModel.txLevelerOn(),
+                                    m_transmitModel.txLevelerMaxGain(),
+                                    m_transmitModel.txLevelerDecay());
+                            });
+                    connect(&m_transmitModel,
+                            &TransmitModel::txLevelerDecayChanged,
+                            w, [w, this](int /*ms*/) {
+                                w->setRadeLeveler(
+                                    m_transmitModel.txLevelerOn(),
+                                    m_transmitModel.txLevelerMaxGain(),
+                                    m_transmitModel.txLevelerDecay());
+                            });
+                }
+
+                // ── Phase 3R K-bench: retroactive RADE wire-up ─────────
+                //
+                // loadSliceState (called at line ~2179) runs BEFORE both
+                // m_wdspEngine init AND m_txWorker creation. If the
+                // persisted slice mode is RADE_U or RADE_L:
+                //
+                //   (a) SliceModel::setDspMode ran with engine==nullptr,
+                //       so NO RadeChannel was ever created. The mode
+                //       swap branch silently no-op'd.
+                //   (b) wireRadeChannel was therefore never called, so
+                //       NEITHER the non-TxWorker nor the TxWorker
+                //       connects exist.
+                //   (c) User-visible symptom: app starts in RADE mode
+                //       but TX/RX silently does nothing until the user
+                //       toggles to SSB then back to RADE, which triggers
+                //       a fresh setDspMode with engine available.
+                //
+                // Fix: now that m_wdspEngine + m_txWorker are alive AND
+                // the active slice already carries the RADE DSPMode,
+                // synthesize the work setDspMode would have done. Create
+                // RadeChannel, configure sideband + start, and call
+                // wireRadeChannel which establishes all the connects.
+                if (m_activeSlice && m_wdspEngine) {
+                    const DSPMode mode = m_activeSlice->dspMode();
+                    if (mode == DSPMode::RADE_U || mode == DSPMode::RADE_L) {
+                        const int sliceId = m_activeSlice->sliceIndex();
+                        RadeChannel* radeCh =
+                            m_wdspEngine->radeChannel(sliceId);
+                        if (radeCh == nullptr) {
+                            qCInfo(lcDsp)
+                                << "RADE: creating channel" << sliceId
+                                << "at WDSP-init time (persisted mode"
+                                   "was RADE; setDspMode's create branch"
+                                   "had no engine)";
+                            radeCh = m_wdspEngine->createRadeChannel(sliceId);
+                            if (radeCh != nullptr) {
+                                radeCh->setSideband(
+                                    mode == DSPMode::RADE_U);
+                                wireRadeChannel(sliceId, radeCh,
+                                                m_activeSlice);
+                                // start() reads Rade/ModelPath
+                                // AppSettings or falls back to "dummy"
+                                // sentinel (librade has weights baked
+                                // in per Phase A2b finding).
+                                const QString modelPath =
+                                    AppSettings::instance()
+                                        .value("Rade/ModelPath",
+                                               QString())
+                                        .toString();
+                                radeCh->start(
+                                    modelPath.isEmpty()
+                                        ? QStringLiteral("dummy")
+                                        : modelPath);
+                            }
+                        } else {
+                            // RadeChannel already exists (mode-swap
+                            // path created it). The non-TxWorker
+                            // connects also exist. Re-wire only the
+                            // TxWorker-side bits.
+                            qCInfo(lcDsp)
+                                << "RADE: retroactive TxWorker wire-up"
+                                   "for slice" << sliceId;
+                            m_txWorker->setRadeChannel(radeCh);
+                            connect(m_txWorker.get(),
+                                    &TxWorkerThread::radeMicBlockReady,
+                                    radeCh, &RadeChannel::txEncode,
+                                    Qt::QueuedConnection);
+                            if (m_dspWorker) {
+                                m_dspWorker->setRadeChannel(radeCh);
+                            }
+                        }
+                    }
+                }
+
+                // ── Phase 3R K-bench: FreeDV Reporter TX-state push ──
+                //
+                // Mirror MOX state to the FreeDV Reporter so other
+                // operators see our TX indicator (red row in their
+                // reporter dialog). Mode string follows freedv-gui's
+                // convention: "RADE" when in either RADE_U or RADE_L,
+                // empty for non-RADE modes (the reporter only cares
+                // about RADE/FreeDV-mode TX events).
+                if (m_moxController != nullptr && m_freeDvReporter) {
+                    connect(m_moxController, &MoxController::moxStateChanged,
+                            this, [this](bool active) {
+                                if (!m_freeDvReporter
+                                    || !m_freeDvReporter->isConnected()) {
+                                    return;
+                                }
+                                QString mode;
+                                if (m_activeSlice) {
+                                    const DSPMode m = m_activeSlice->dspMode();
+                                    if (m == DSPMode::RADE_U
+                                        || m == DSPMode::RADE_L) {
+                                        // freedv-gui FREEDV_MODE_RADE
+                                        // wire string [@77e793a]
+                                        mode = QStringLiteral("RADEV1");
+                                    }
+                                }
+                                m_freeDvReporter->setTransmitting(active, mode);
+                            });
+                }
+
                 // ── Phase 3R Task K2: mode-aware path swap on MOX-on ──
                 //
                 // On every MOX-on transition, read the active slice's
@@ -3722,6 +4282,54 @@ void RadioModel::connectToRadio(const RadioInfo& info)
             // SetupTxFilters() preamble.  NereusSDR consolidates into
             // one helper called at three triggers (this is trigger #1 of 3).
             pushTxModeAndBandpass();
+
+            // Bench 2026-05-11: initial audioVolume seed — first MOX
+            // produced no modulation until a TUN press primed the path.
+            //
+            // Root cause: m_lastAudioVolume defaults to 0.  pumpAudioVolume
+            // (the Audio.RadioVolume setter analogue at
+            // RadioModel.cpp:6458) only runs when audioVolumeChanged fires,
+            // which only happens inside setPowerUsingTargetDbm.  At fresh
+            // launch nothing calls setPowerUsingTargetDbm until either (a)
+            // the user moves the power slider, or (b) TUNE engages, so the
+            // wire drive byte and TXFixedGain IQ scalar both stay at 0
+            // through the first MOX.  TUNE inadvertently primes this
+            // because TUNE-on calls setPowerUsingTargetDbm(bFromTune=true)
+            // and TUNE-off restores via setPowerUsingTargetDbm(bFromTune=
+            // false).  Same bug class as sub-bug 2 above — Thetis does
+            // not need an explicit seed because chkPower / txtVFOAFreq_
+            // LostFocus already drove the chain at construction time on
+            // managed-thread startup; NereusSDR's Qt signal model means
+            // the construction-time setPower(default) emit is dropped
+            // because connection / paProfile aren't ready yet.
+            //
+            // Seed by reading the user's persisted power slider value via
+            // the bFromTune=false / bSetPower=true path — same code path
+            // the drive-slider lambda at RadioModel.cpp:1093 takes when
+            // the user moves the slider.  Emits audioVolumeChanged,
+            // pumpAudioVolume runs, wire byte and IQ gain land non-zero
+            // before the first MOX engage.
+            //
+            // Source-first cite: same chain as RadioModel.cpp:1093 —
+            // setPowerUsingTargetDbm is a port of Thetis's NetworkIO.
+            // SetOutputPower + cmaster.CMSetTXOutputLevel
+            // (audio.cs:262-271 + NetworkIO.cs:201-211 + cmaster.cs:
+            // 1115-1119 [v2.10.3.13]).
+            if (m_paProfileManager && m_activeSlice) {
+                const PaProfile* prof = m_paProfileManager->activeProfile();
+                if (prof) {
+                    const Band currentBand =
+                        bandFromFrequency(m_activeSlice->frequency());
+                    (void)m_transmitModel.setPowerUsingTargetDbm(
+                        *prof, currentBand, /*bSetPower=*/true,
+                        /*bFromTune=*/false, /*bTwoTone=*/false,
+                        m_hardwareProfile.model);
+                    qCInfo(lcDsp)
+                        << "Initial audioVolume seed pumped — first MOX "
+                           "drive byte / IQ scalar now non-zero without "
+                           "requiring TUN priming";
+                }
+            }
         };  // end of txSetup lambda
         txSetup();
 
@@ -4052,6 +4660,29 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
             m_dspWorker, &RxDspWorker::processIqBatch,
             Qt::QueuedConnection);
     m_dspThread->start();
+
+    // Phase 3R K-bench: retroactive RADE RX wire-up.
+    //
+    // Same lifecycle gotcha as the TxWorker retroactive create at
+    // line ~3700: wireRadeChannel ran earlier (at WDSP-init time)
+    // when m_dspWorker was still nullptr, so its
+    //   if (m_dspWorker) { m_dspWorker->setRadeChannel(channel); }
+    // block silently no-op'd. m_dspWorker is alive now; push the
+    // current RadeChannel pointer so RxDspWorker can route I/Q to
+    // RadeChannel::processIq on the RADE branch.
+    if (m_activeSlice && m_wdspEngine) {
+        const DSPMode mode = m_activeSlice->dspMode();
+        if (mode == DSPMode::RADE_U || mode == DSPMode::RADE_L) {
+            RadeChannel* radeCh =
+                m_wdspEngine->radeChannel(m_activeSlice->sliceIndex());
+            if (radeCh != nullptr) {
+                qCInfo(lcDsp)
+                    << "RADE: retroactive RxDspWorker wire-up for"
+                       "slice" << m_activeSlice->sliceIndex();
+                m_dspWorker->setRadeChannel(radeCh);
+            }
+        }
+    }
 
     // Phase 3Q-6: forward frame ticks to RadioModel::frameReceived() so
     // TitleBar::ConnectionSegment can pulse its activity LED. Using a
@@ -4499,6 +5130,20 @@ void RadioModel::wireSliceSignals()
         int rxIdx = slice->receiverIndex();
         if (rxIdx >= 0) {
             m_receiverManager->setReceiverFrequency(rxIdx, static_cast<quint64>(freq));
+        }
+
+        // Phase 3R K-bench: push the new freq to the FreeDV Reporter so
+        // our station's listed freq tracks the VFO. Without this, the
+        // reporter server has only the connect-time freq (or zero) and
+        // we never appear on-band to other operators. Mirrors freedv-
+        // gui's freqChangeImpl_ trigger pattern.
+        //
+        // 2026-05-12 bench: route through the dwell throttle so a VFO
+        // spin doesn't DoS qso.freedv.org with one packet per wheel
+        // tick.  7 s trailing dwell + 100 kHz band-jump fast-path; see
+        // publishFreedvFrequencyDwelled() body for the full policy.
+        if (m_freeDvReporter && m_freeDvReporter->isConnected()) {
+            publishFreedvFrequencyDwelled(static_cast<quint64>(freq));
         }
         // TX follows RX (simplex), with XIT offset applied.
         // XIT offsets the TX NCO without moving the RX DDC — mirroring Thetis

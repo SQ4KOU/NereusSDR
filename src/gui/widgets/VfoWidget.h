@@ -309,6 +309,7 @@ warren@wpratt.com
 #include <QLineEdit>
 #include <QPointer>
 
+#include <limits>
 #include <optional>
 
 namespace NereusSDR {
@@ -588,10 +589,43 @@ private:
     QLabel* m_snrLabel{nullptr};
     QLabel* m_snrValue{nullptr};
     QWidget* m_snrRow{nullptr};  // parent row for show/hide
+    bool     m_radeActive{false};
+
+    // 2026-05-11 bench: cached EOO-decoded speaker callsign + last SNR
+    // + last sync state so setRadeCallsign / setRadeSnrLabel /
+    // setRadeSynced can each repaint the SNR row without losing the
+    // other two pieces.  Empty m_lastRadeCallsign = unknown speaker;
+    // NaN m_lastRadeSnr = no SNR snapshot yet.
+    QString m_lastRadeCallsign;
+    float   m_lastRadeSnrDb{std::numeric_limits<float>::quiet_NaN()};
+    bool    m_lastRadeSynced{false};
+
     // Slot wired to SliceModel::snrDbChanged. Updates m_snrValue text
     // + stylesheet color (grey/yellow/green) based on NaN-state and the
     // 5 dB threshold.
     void onSnrChanged(double db);
+
+    // From AetherSDR VfoWidget.cpp:3406-3445 [@0cd4559] — RADE status
+    // label setters. The single m_snrLabel combines active-state
+    // (visibility), sync indicator (filled/hollow circle), SNR value
+    // (color-coded), and freq offset (appended).
+public:
+    void setRadeActive(bool on);
+    void setRadeSynced(bool synced);
+    void setRadeSnrLabel(float snrDb);
+    void setRadeFreqOffset(float hz);
+
+    // 2026-05-11 bench: cache + render the EOO-decoded speaker callsign
+    // in the RADE status row.  When non-empty, the prefix "RADE" is
+    // replaced with the callsign so the user sees who they are
+    // copying (e.g. "KK7GWY ● 12dB").  Empty string clears the cache
+    // and the row falls back to "RADE ● 12dB".  Sourced from
+    // SliceModel::lastRadeRxCallsignChanged.  All three setters above
+    // (active/synced/snr) re-render through repaintRadeRow() so the
+    // callsign survives subsequent SNR pushes.
+    void setRadeCallsign(const QString& callsign);
+
+private:
 
     // --- Tab bar ---
     QList<QPushButton*> m_tabButtons;
