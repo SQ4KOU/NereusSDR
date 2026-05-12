@@ -111,7 +111,34 @@ void RxDspWorker::setSampleRate(double rate)
 
 void RxDspWorker::setRadeChannel(RadeChannel* channel)
 {
+    // Disconnect the previous receiver before swapping the pointer.
+    // Qt's queued-connection delivery is safe across QObject
+    // destruction on its own (~QObject + removePostedEvents handle
+    // pending calls under the connection-list lock), but an explicit
+    // disconnect tightens the contract and avoids stale slot calls
+    // if the previous channel outlives this swap.
+    if (auto* prev = m_radeChannel.load(std::memory_order_acquire)) {
+        disconnect(this, &RxDspWorker::radeIqReady,
+                   prev, &RadeChannel::processIq);
+    }
+
     m_radeChannel.store(channel, std::memory_order_release);
+
+    if (channel != nullptr) {
+        // Cross-thread queued connection: RxDspWorker lives on the
+        // DSP thread, RadeChannel lives on the main thread (created
+        // by WdspEngine, parent owned by RadioModel).  Replacing the
+        // earlier QMetaObject::invokeMethod(raw_ptr, ...,
+        // Qt::QueuedConnection) with a Qt-native signal/slot
+        // connection closes the UAF gap PR #238 review P1 #3
+        // flagged: queued events for a destroyed receiver are
+        // dropped under Qt's connection-list lock, instead of
+        // calling into freed memory.
+        connect(this, &RxDspWorker::radeIqReady,
+                channel, &RadeChannel::processIq,
+                Qt::QueuedConnection);
+    }
+
     qCInfo(lcDsp).noquote() << QString("RxDspWorker::setRadeChannel(%1)")
                                    .arg(reinterpret_cast<quintptr>(channel),
                                         0, 16);
@@ -244,10 +271,17 @@ void RxDspWorker::processIqBatch(int receiverIndex,
                         dst[2 * i + 0] = srcAudio[i];   // real = audio
                         dst[2 * i + 1] = 0.0f;          // imag = 0
                     }
-                    // Post to RadeChannel on the main thread.
-                    QMetaObject::invokeMethod(
-                        radeCh, "processIq", Qt::QueuedConnection,
-                        Q_ARG(QByteArray, m_radeRxIqScratch));
+                    // Post to RadeChannel on the main thread via the
+                    // queued radeIqReady signal connection (set in
+                    // setRadeChannel).  Using signal/slot instead of
+                    // QMetaObject::invokeMethod(raw_ptr, ...) closes
+                    // the use-after-free gap PR #238 review P1 #3
+                    // flagged: Qt drops queued slot calls under the
+                    // connection-list lock when the receiver
+                    // QObject is destroyed.  radeCh is still loaded
+                    // above as a cheap gate so we skip the
+                    // downsample work when no channel is wired.
+                    emit radeIqReady(m_radeRxIqScratch);
                 }
             }
 

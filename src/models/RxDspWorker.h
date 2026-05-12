@@ -216,6 +216,28 @@ signals:
     // correct size is emitted instead.
     void antiVoxSampleReady(int sliceId, const QVector<float>& interleaved, int sampleCount);
 
+    // Phase 3R K-bench: per-batch RADE feed.  Emitted from the DSP
+    // thread with a 24 kHz interleaved-float32 I/Q buffer (real=audio,
+    // imag=0) that mirrors the freedv-gui / AetherSDR RADE input
+    // shape.  Connected to RadeChannel::processIq via
+    // Qt::QueuedConnection inside setRadeChannel().
+    //
+    // Why a signal instead of QMetaObject::invokeMethod on a raw
+    // pointer (the original K-bench shape):  invokeMethod(raw_ptr,
+    // ..., Qt::QueuedConnection) packs the raw pointer into a
+    // QMetaCallEvent posted to the target's thread; Qt does not
+    // dis-arm those events when the target QObject is destroyed
+    // out from under us, so a teardown that races the DSP thread
+    // can deliver a queued slot call to a freed RadeChannel
+    // (use-after-free).  Replacing the invoke with a connected
+    // signal moves the lifetime contract into Qt's metaobject
+    // system: ~QObject auto-disconnects and removePostedEvents
+    // drops in-flight slot calls under a connection-list lock, so
+    // a worker that emits during teardown is safe.
+    //
+    // (review finding 2026-05-12, PR #238 — P1 #3).
+    void radeIqReady(QByteArray iq);
+
 private:
     WdspEngine*      m_wdspEngine{nullptr};
     AudioEngine*     m_audioEngine{nullptr};
