@@ -461,14 +461,23 @@ TciServer::~TciServer()
 //
 // From AetherSDR src/core/TciServer.cpp:159-181 [@0cd4559] — transport pattern.
 // NereusSDR diverges from AetherSDR in two ways:
-//   1. Bind address: QHostAddress::LocalHost (AetherSDR uses QHostAddress::Any).
-//      Per design doc Q7 lock-in — TCI is a local-process IPC bus; binding to
-//      Any would expose the unfinished server to the LAN without auth.
+//   1. Bind address: default QHostAddress::LocalHost, but the
+//      bindAddress overload accepts any valid address (Phase 3J-1 closeout
+//      Item 1).  The Setup → CAT/Network/TCI bind-interface dropdown
+//      writes the operator's choice into AppSettings, and MainWindow
+//      resolves it to QHostAddress before calling this overload.
+//      Loopback remains the safe default for operators who don't touch
+//      the new dropdown.
 //   2. double-start contract: return false + log warning (AetherSDR returns
 //      m_server->isListening(), treating double-start as idempotent-true).
 //      NereusSDR rejects double-start so the caller can detect misuse early.
 
 bool TciServer::start(quint16 port)
+{
+    return start(QHostAddress(QHostAddress::LocalHost), port);
+}
+
+bool TciServer::start(const QHostAddress& bindAddress, quint16 port)
 {
     if (m_server) {
         qCWarning(lcTci) << "TciServer::start called while already listening on port"
@@ -481,9 +490,14 @@ bool TciServer::start(quint16 port)
         QWebSocketServer::NonSecureMode, this);
 
     // From AetherSDR src/core/TciServer.cpp:168-174 [@0cd4559] — listen + error path.
-    // QHostAddress::LocalHost per design doc Q7 (diverges from AetherSDR's ::Any).
-    if (!m_server->listen(QHostAddress::LocalHost, port)) {
-        qCWarning(lcTci) << "TciServer: failed to listen on port" << port
+    // Phase 3J-1 closeout Item 1: bindAddress comes from the operator's
+    // Setup choice (default 127.0.0.1).  Any/0.0.0.0 exposes the TCI
+    // server to the LAN — there is no authentication in TCI 2.0 — so the
+    // Setup UI surfaces a tooltip warning when a non-loopback option is
+    // selected.
+    if (!m_server->listen(bindAddress, port)) {
+        qCWarning(lcTci) << "TciServer: failed to listen on"
+                         << bindAddress.toString() << "port" << port
                          << m_server->errorString();
         const QString errStr = m_server->errorString();
         delete m_server;

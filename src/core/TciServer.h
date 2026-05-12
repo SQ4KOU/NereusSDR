@@ -29,7 +29,9 @@
 #pragma once
 #ifdef HAVE_WEBSOCKETS
 
+#include <QElapsedTimer>
 #include <QHash>
+#include <QHostAddress>
 #include <QObject>
 #include <QPointer>
 #include <QSet>
@@ -69,7 +71,16 @@ public:
     // Start listening on the given port.  Pass 0 to let the OS assign a port.
     // Returns true if the server started listening; false on failure or if
     // the server is already running (double-start is rejected).
+    //
+    // Default bind address is loopback (127.0.0.1).  Phase 3J-1 closeout
+    // Item 1 (2026-05-12) adds the overload that takes an explicit
+    // QHostAddress so the operator can bind to a specific NIC or to all
+    // IPv4 interfaces (0.0.0.0).  The Setup → CAT/Network/TCI bind-
+    // interface dropdown writes `TciServerBindAddress` to AppSettings;
+    // MainWindow reads it and passes the resolved QHostAddress to this
+    // overload at start time.
     bool start(quint16 port = 50001);
+    bool start(const QHostAddress& bindAddress, quint16 port);
 
     // Stop the server and disconnect all clients.
     void stop();

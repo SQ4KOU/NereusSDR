@@ -462,10 +462,16 @@ void SetupDialog::buildTree()
         // Phase 3J-1 review P2.4: forward CatTciServerPage::tciServerEnableToggled
         // through SetupDialog so wireSetupDialog() can connect it to the live
         // TciServer::start() / stop() path in MainWindow.
+        //
+        // Phase 3J-1 closeout Item 1 (2026-05-12): same pattern for the new
+        // tciServerBindOrPortChanged signal so MainWindow can live-restart the
+        // server when the operator picks a different bind interface or port.
         auto* tciPage = new CatTciServerPage;
         m_tciServerPage = tciPage;  // saved so setTciServer() can forward
         connect(tciPage, &CatTciServerPage::tciServerEnableToggled,
                 this,    &SetupDialog::tciServerEnableToggled);
+        connect(tciPage, &CatTciServerPage::tciServerBindOrPortChanged,
+                this,    &SetupDialog::tciServerBindOrPortChanged);
         add(cat, "TCI Server", tciPage);
     }
     add(cat, "TCP/IP CAT",   new CatTcpIpPage);

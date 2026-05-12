@@ -19,6 +19,7 @@
 #include <QFile>
 #include <QTextStream>
 #include "core/TciProtocol.h"
+#include "core/AppSettings.h"
 #include "TestMockRadioModel.h"
 
 using namespace NereusSDR;
@@ -28,11 +29,29 @@ class TestTciInitBurstGolden : public QObject {
 private:
     static QStringList loadGolden();
     static bool isStrictPrefix(const QString& line);
+    // Phase 3J-1 closeout Item 1 (2026-05-12): pin AppSettings to the
+    // exact "capture conditions" documented in the golden file header
+    // so the test is independent of the user's persisted settings.
+    // Without this, the bench-fix flip of TciEmulateExpertSDR3Protocol +
+    // TciEmulateSunSDR2Pro defaults to True (commit ccb1c5fb — required
+    // for WSJT-X to enter TCI audio mode) would silently invalidate the
+    // golden comparison.
+    static void pinAppSettingsToGoldenCaptureConditions();
 private slots:
     void burst_line_count_matches_golden();
     void burst_strict_prefixes_match_golden_byte_for_byte();
     void burst_loose_prefixes_match_by_kind();
 };
+
+void TestTciInitBurstGolden::pinAppSettingsToGoldenCaptureConditions()
+{
+    auto& s = AppSettings::instance();
+    s.setValue(QStringLiteral("TciEmulateExpertSDR3Protocol"), QStringLiteral("False"));
+    s.setValue(QStringLiteral("TciEmulateSunSDR2Pro"),         QStringLiteral("False"));
+    s.setValue(QStringLiteral("TciCwluBecomesCw"),             QStringLiteral("False"));
+    s.setValue(QStringLiteral("TciSendInitialFrequencyStateOnConnect"), QStringLiteral("True"));
+    s.setValue(QStringLiteral("TciTxStreamBufferingMs"),       QStringLiteral("50"));
+}
 
 QStringList TestTciInitBurstGolden::loadGolden()
 {
@@ -69,6 +88,7 @@ bool TestTciInitBurstGolden::isStrictPrefix(const QString& line)
 
 void TestTciInitBurstGolden::burst_line_count_matches_golden()
 {
+    pinAppSettingsToGoldenCaptureConditions();
     TestMockRadioModel mock;
     TciProtocol p(&mock);
     const QStringList ours = p.buildInitBurst();
@@ -80,6 +100,7 @@ void TestTciInitBurstGolden::burst_line_count_matches_golden()
 
 void TestTciInitBurstGolden::burst_strict_prefixes_match_golden_byte_for_byte()
 {
+    pinAppSettingsToGoldenCaptureConditions();
     TestMockRadioModel mock;
     TciProtocol p(&mock);
     const QStringList ours = p.buildInitBurst();
@@ -96,6 +117,7 @@ void TestTciInitBurstGolden::burst_strict_prefixes_match_golden_byte_for_byte()
 
 void TestTciInitBurstGolden::burst_loose_prefixes_match_by_kind()
 {
+    pinAppSettingsToGoldenCaptureConditions();
     TestMockRadioModel mock;
     TciProtocol p(&mock);
     const QStringList ours = p.buildInitBurst();

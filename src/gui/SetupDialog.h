@@ -58,6 +58,12 @@ signals:
     // so the server goes live immediately without a disconnect/reconnect cycle.
     void tciServerEnableToggled(bool on, quint16 port);
 
+    // Phase 3J-1 closeout Item 1 (2026-05-12): forwarded from CatTciServerPage —
+    // bind-interface dropdown or port spinbox changed.  MainWindow restarts the
+    // server live if it's running so the new bind/port takes effect without a
+    // manual disable/enable cycle.
+    void tciServerBindOrPortChanged(const QString& bindAddress, quint16 port);
+
     // Task 3.6: forwarded from GeneralOptionsPage — CPU meter rate spinbox.
     // MainWindow::setCpuTimerIntervalHz() is the handler.
     void cpuMeterRateChanged(int hz);

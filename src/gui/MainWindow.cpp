@@ -729,8 +729,21 @@ MainWindow::MainWindow(QWidget* parent)
         const quint16 port = static_cast<quint16>(
             s.value(QStringLiteral("TciServerPort"),
                     QStringLiteral("50001")).toString().toUShort());
+        // Phase 3J-1 closeout Item 1 (2026-05-12): bind-interface dropdown.
+        // Default to loopback so a fresh install only exposes TCI to localhost;
+        // operator opts into LAN exposure via Setup → CAT & Network → TCI Server.
+        const QString bindStr = s.value(QStringLiteral("TciServerBindAddress"),
+                                        QStringLiteral("127.0.0.1")).toString();
+        QHostAddress bindAddr;
+        if (!bindAddr.setAddress(bindStr)) {
+            // Malformed AppSettings value — fall back to loopback rather than
+            // refusing to start the server.  populateBindAddressCombo() ensures
+            // only valid strings get persisted, but a hand-edited XML file
+            // shouldn't crash startup.
+            bindAddr = QHostAddress(QHostAddress::LocalHost);
+        }
         if (enabled) {
-            m_tciServer->start(port);
+            m_tciServer->start(bindAddr, port);
         }
     }
 #endif
@@ -3904,10 +3917,40 @@ void MainWindow::wireSetupDialog(SetupDialog* dialog)
         connect(dialog, &SetupDialog::tciServerEnableToggled,
                 this, [this](bool on, quint16 port) {
                     if (on) {
-                        m_tciServer->start(port);
+                        // Re-read bind address from AppSettings so the start
+                        // honors whatever the operator last picked in the
+                        // bind-interface dropdown.  CatTciServerPage persists
+                        // TciServerBindAddress on every combo change.
+                        auto& s = AppSettings::instance();
+                        const QString bindStr = s.value(
+                            QStringLiteral("TciServerBindAddress"),
+                            QStringLiteral("127.0.0.1")).toString();
+                        QHostAddress bindAddr;
+                        if (!bindAddr.setAddress(bindStr)) {
+                            bindAddr = QHostAddress(QHostAddress::LocalHost);
+                        }
+                        m_tciServer->start(bindAddr, port);
                     } else {
                         m_tciServer->stop();
                     }
+                });
+        // Phase 3J-1 closeout Item 1 (2026-05-12): live-restart on bind /
+        // port change.  CatTciServerPage emits this whenever the operator
+        // picks a different interface from the dropdown or edits the port
+        // spinbox.  If the server is running, restart it in place; if
+        // stopped, the new values are already in AppSettings for next
+        // start.  Mirrors the enable-toggled pattern above.
+        connect(dialog, &SetupDialog::tciServerBindOrPortChanged,
+                this, [this](const QString& bindStr, quint16 port) {
+                    if (!m_tciServer->isRunning()) {
+                        return;
+                    }
+                    QHostAddress bindAddr;
+                    if (!bindAddr.setAddress(bindStr)) {
+                        bindAddr = QHostAddress(QHostAddress::LocalHost);
+                    }
+                    m_tciServer->stop();
+                    m_tciServer->start(bindAddr, port);
                 });
         // Phase 3J-1 bench fix (2026-05-11): forward the TciServer reference
         // into the dialog so CatTciServerPage's Server group box title +

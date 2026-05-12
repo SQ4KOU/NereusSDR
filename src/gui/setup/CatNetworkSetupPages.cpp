@@ -7,6 +7,8 @@
 #include "CatNetworkSetupPages.h"
 #include "gui/StyleConstants.h"
 #include "core/AppSettings.h"
+
+#include <QNetworkInterface>
 #ifdef HAVE_WEBSOCKETS
 #include "core/TciServer.h"
 #endif
@@ -159,13 +161,43 @@ void CatTciServerPage::buildServerGroup()
     });
     form->addRow(QString(), m_enableCheck);
 
-    // Bind address — locked to 127.0.0.1 (Q7 design decision: loopback-only)
-    // From Thetis setup.designer.cs:57984-57990 [v2.10.3.13] — lblTCIBindIP
-    m_bindIpLabel = new QLabel(QStringLiteral("127.0.0.1"), group);
-    m_bindIpLabel->setStyleSheet(QString::fromLatin1(Style::kSecondaryLabelStyle));
-    m_bindIpLabel->setToolTip(tr("Bind address is locked to loopback (127.0.0.1). "
-                                  "TCI apps must run on the same machine as NereusSDR."));
-    form->addRow(tr("Bind address:"), m_bindIpLabel);
+    // ── Bind address dropdown ───────────────────────────────────────────────
+    //
+    // Phase 3J-1 closeout Item 1 (2026-05-12): replaces the read-only
+    // "127.0.0.1" label with an interface-aware dropdown.  Operator can
+    // pick:
+    //   - "Loopback only (127.0.0.1)" — default; safest
+    //   - "Any IPv4 interface (0.0.0.0)" — exposes server to LAN
+    //   - A specific detected NIC (e.g. "en0 — 192.168.1.50")
+    //   - IPv6 equivalents
+    //
+    // Functional parity with Thetis Setup.cs:22410-22473 [v2.10.3.13]
+    // `txtTCIServerBindIPPort` (which uses a free-text "IP:port" field
+    // accepting any valid IPv4/IPv6 via `IPAddress.TryParse`).  UX
+    // diverges per CLAUDE.md feedback_source_first_ui_vs_dsp.md — Qt
+    // widgets are NereusSDR-native; a dropdown with validated, NIC-aware
+    // choices is the better UX for our platform.
+    m_bindAddressCombo = new QComboBox(group);
+    m_bindAddressCombo->setStyleSheet(QString::fromLatin1(Style::kComboStyle));
+    m_bindAddressCombo->setToolTip(tr(
+        "Network interface the TCI server binds to. "
+        "Loopback (127.0.0.1) accepts connections only from this machine. "
+        "Any interface (0.0.0.0) accepts from anywhere on your LAN. "
+        "TCI has no authentication — choose a specific LAN IP or 0.0.0.0 "
+        "only if your network is trusted."));
+    populateBindAddressCombo();
+    connect(m_bindAddressCombo,
+            QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int idx) {
+        if (idx < 0) { return; }
+        const QString addr = m_bindAddressCombo->itemData(idx).toString();
+        AppSettings::instance().setValue(QStringLiteral("TciServerBindAddress"), addr);
+        // Emit the combined bind+port change signal so MainWindow can live-
+        // restart the server if it's running.
+        emit tciServerBindOrPortChanged(addr,
+            static_cast<quint16>(m_portSpin ? m_portSpin->value() : 50001));
+    });
+    form->addRow(tr("Bind interface:"), m_bindAddressCombo);
 
     // Port spinbox + Default button
     // From Thetis setup.designer.cs:57991-57998 [v2.10.3.13] — udTCIPort (default 50001)
@@ -176,8 +208,13 @@ void CatTciServerPage::buildServerGroup()
                                "Default is 50001. Requires server restart to take effect."));
     m_portSpin->setValue(
         s.value(QStringLiteral("TciServerPort"), 50001).toInt());
-    connect(m_portSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [](int v) {
+    connect(m_portSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [this](int v) {
         AppSettings::instance().setValue(QStringLiteral("TciServerPort"), v);
+        // Phase 3J-1 closeout Item 1: emit combined bind+port so the
+        // running server picks up a port change without a manual toggle.
+        const QString addr = AppSettings::instance().value(
+            QStringLiteral("TciServerBindAddress"), QStringLiteral("127.0.0.1")).toString();
+        emit tciServerBindOrPortChanged(addr, static_cast<quint16>(v));
     });
 
     m_portDefaultBtn = new QPushButton(tr("Default"), group);
@@ -574,6 +611,105 @@ void CatTciServerPage::buildVfoQuirksGroup()
 // and the local counter is the canonical pattern (MainWindow uses the same
 // approach for m_tciClientCount).
 // ---------------------------------------------------------------------------
+
+// ── populateBindAddressCombo ─────────────────────────────────────────────────
+//
+// Phase 3J-1 closeout Item 1 (2026-05-12): enumerate bindable interfaces
+// via QNetworkInterface::allInterfaces() and add one combo entry per
+// detected non-loopback IPv4 (and IPv6) NIC, plus the well-known options:
+//   - Loopback only (127.0.0.1)         ← default
+//   - Any IPv4 interface (0.0.0.0)
+//   - <detected non-loopback IPv4 NICs>
+//   - Loopback IPv6 (::1)
+//   - Any IPv6 interface (::)
+//   - <detected non-loopback IPv6 NICs>
+//
+// Each entry's data() carries the bindable address string used by
+// QHostAddress::setAddress and persisted as `TciServerBindAddress`.
+// Selection is restored from AppSettings if it matches any entry's
+// data; otherwise falls back to Loopback (the safe default that
+// requires no LAN trust).
+//
+// Functional behavior matches Thetis Setup.cs:22460 [v2.10.3.13]
+// `IPAddress.TryParse` — any valid IPv4 or IPv6 the operator can type
+// into Thetis is also pickable here, but only addresses that actually
+// exist on a NIC at the moment of page-construct are surfaced.
+void CatTciServerPage::populateBindAddressCombo()
+{
+    if (!m_bindAddressCombo) { return; }
+    m_bindAddressCombo->clear();
+
+    // Well-known IPv4 options first.
+    m_bindAddressCombo->addItem(
+        tr("Loopback only (127.0.0.1)"),
+        QStringLiteral("127.0.0.1"));
+    m_bindAddressCombo->addItem(
+        tr("Any IPv4 interface (0.0.0.0) — exposes to LAN"),
+        QStringLiteral("0.0.0.0"));
+
+    // Enumerate detected NICs.  Skip loopback (already in the well-known
+    // list) and skip down/disabled interfaces.  For IPv6, also skip link-
+    // local addresses (scope-id-dependent, fragile across networks).
+    const auto interfaces = QNetworkInterface::allInterfaces();
+    for (const auto& iface : interfaces) {
+        const auto flags = iface.flags();
+        if (!flags.testFlag(QNetworkInterface::IsRunning)) { continue; }
+        if (flags.testFlag(QNetworkInterface::IsLoopBack)) { continue; }
+        for (const auto& entry : iface.addressEntries()) {
+            const QHostAddress ip = entry.ip();
+            if (ip.isNull()) { continue; }
+            if (ip.protocol() == QAbstractSocket::IPv4Protocol) {
+                const QString label = QStringLiteral("%1 — %2")
+                    .arg(iface.name(), ip.toString());
+                m_bindAddressCombo->addItem(label, ip.toString());
+            }
+        }
+    }
+
+    // IPv6 well-known options.
+    m_bindAddressCombo->addItem(
+        tr("Loopback IPv6 (::1)"),
+        QStringLiteral("::1"));
+    m_bindAddressCombo->addItem(
+        tr("Any IPv6 interface (::) — exposes to LAN"),
+        QStringLiteral("::"));
+
+    // Enumerate non-link-local IPv6 NICs (link-local addresses include a
+    // scope-id and don't bind cleanly without the index suffix; skip them
+    // for the initial Phase 3J-1 scope).
+    for (const auto& iface : interfaces) {
+        const auto flags = iface.flags();
+        if (!flags.testFlag(QNetworkInterface::IsRunning)) { continue; }
+        if (flags.testFlag(QNetworkInterface::IsLoopBack)) { continue; }
+        for (const auto& entry : iface.addressEntries()) {
+            const QHostAddress ip = entry.ip();
+            if (ip.isNull()) { continue; }
+            if (ip.protocol() == QAbstractSocket::IPv6Protocol) {
+                if (ip.isLinkLocal()) { continue; }
+                const QString label = QStringLiteral("%1 — %2")
+                    .arg(iface.name(), ip.toString());
+                m_bindAddressCombo->addItem(label, ip.toString());
+            }
+        }
+    }
+
+    // Restore selection from AppSettings (default Loopback).
+    const QString stored = AppSettings::instance().value(
+        QStringLiteral("TciServerBindAddress"),
+        QStringLiteral("127.0.0.1")).toString();
+    const int restoreIdx = m_bindAddressCombo->findData(stored);
+    if (restoreIdx >= 0) {
+        m_bindAddressCombo->setCurrentIndex(restoreIdx);
+    } else {
+        // Stored address not currently available (NIC unplugged?).
+        // Fall back to Loopback and re-persist so we don't fight a
+        // stale value the next time the page opens.
+        m_bindAddressCombo->setCurrentIndex(0);  // Loopback
+        AppSettings::instance().setValue(
+            QStringLiteral("TciServerBindAddress"),
+            QStringLiteral("127.0.0.1"));
+    }
+}
 
 void CatTciServerPage::setTciServer(NereusSDR::TciServer* server)
 {

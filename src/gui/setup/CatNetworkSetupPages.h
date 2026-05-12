@@ -77,17 +77,34 @@ signals:
     //          directly to avoid a race with a concurrent port-spinbox change).
     void tciServerEnableToggled(bool on, quint16 port);
 
+    // Phase 3J-1 closeout Item 1 (2026-05-12): bind-interface or port
+    // changed.  MainWindow restarts the server live if it's running, so
+    // the new address/port takes effect without manual toggle.  When the
+    // server is stopped, the values just go into AppSettings for next
+    // start.  bindAddress is the resolved string ("127.0.0.1", "0.0.0.0",
+    // a specific NIC IPv4, "::", "::1", or a specific NIC IPv6).
+    void tciServerBindOrPortChanged(const QString& bindAddress, quint16 port);
+
 private:
     // Group 1: Server
     QGroupBox*   m_serverGroup{nullptr};  // reference for live title updates
     QCheckBox*   m_enableCheck{nullptr};
-    QLabel*      m_bindIpLabel{nullptr};
+    QComboBox*   m_bindAddressCombo{nullptr};  // dropdown of bindable interfaces (Phase 3J-1 Item 1)
     QSpinBox*    m_portSpin{nullptr};
     QPushButton* m_portDefaultBtn{nullptr};
     QCheckBox*   m_sendInitialStateCheck{nullptr};
     QSpinBox*    m_rateLimitSpin{nullptr};
     QPushButton* m_showLogBtn{nullptr};
     QLabel*      m_statusLabel{nullptr};
+
+    // Phase 3J-1 closeout Item 1 (2026-05-12): bind-interface helpers.
+    // populateBindAddressCombo() reads QNetworkInterface::allInterfaces() at
+    // page-construct time and adds one entry per detected non-loopback IPv4
+    // (and IPv6) NIC, plus the well-known options (Loopback / Any IPv4 /
+    // Any IPv6).  Each entry's user-data is the bindable address string
+    // ("127.0.0.1", "0.0.0.0", "192.168.1.50", "::", "::1", etc.) that
+    // matches the AppSettings TciServerBindAddress key format.
+    void populateBindAddressCombo();
 
     // Phase 3J-1 bench fix: live status state.  Updated by setTciServer
     // signal-connected lambdas.  m_clientCount tracks via increment on
