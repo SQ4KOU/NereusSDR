@@ -274,11 +274,17 @@ void TestFreeDVReporterDialog::rxReportTurnsRowGreen() {
     model->onStationUpdated("sid-rx", s);
 
     QColor bg = dlg->rowHighlightColorForTest("sid-rx");
-    // Green-dominant tone per freedv_reporter.cpp:1318-1322 @77e793a
-    // (`backgroundColor = parent_->rxRowBackgroundColor`).
+    // RX tint is the slate-teal "dim cool" tone (#2e4750 = 46/71/80
+    // RGB).  Updated 2026-05-13 per PR #238 bench feedback to be a
+    // muted blue-dominant tint instead of the original neon green
+    // (#3faf55) — upstream uses cyan-leaning #379baf (also blue
+    // dominant) at freedv_reporter.cpp:91-95 [@77e793a].  Assertion
+    // pins "this is a cool / blue-dominant cell, not warm or
+    // green-dominant" so any future palette tweak that swings the
+    // hue back to red/green will trip this regression.
     QVERIFY(bg.isValid());
-    QVERIFY(bg.green() > bg.red());
-    QVERIFY(bg.green() > bg.blue());
+    QVERIFY(bg.blue() > bg.red());
+    QVERIFY(bg.blue() >= bg.green());
 
     delete dlg;
     delete model;
