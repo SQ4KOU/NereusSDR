@@ -277,6 +277,8 @@ warren@wpratt.com
 #include "models/SliceModel.h"
 #include "gui/widgets/FilterPresetEditDialog.h"
 
+#include <QCoreApplication>
+#include <QEvent>
 #include <QGuiApplication>
 #include <QPainter>
 #include <QMouseEvent>
@@ -292,6 +294,41 @@ warren@wpratt.com
 #include <algorithm>
 
 namespace NereusSDR {
+
+// 2026-05-13 bench fix (PR #238): QStackedWidget subclass that reports
+// the CURRENT page's sizeHint instead of the maximum across all pages.
+//
+// The flag wants to shrink to fit the active tab only (not the tallest
+// tab — that's an explicit user directive from 2026-04-23).  The
+// original implementation marked hidden pages with
+// QSizePolicy::Ignored to hide them from the stack's size
+// calculation.  Unfortunately Ignored short-circuits hint propagation
+// for the page's CHILDREN too: when rebuildFilterButtons grew the
+// filter-preset grid inside the active page, the container's sizeHint
+// kept returning (0, 0) and the flag SHRANK on adjustSize instead of
+// growing.  Diagnostic at 2026-05-13 confirmed the (0,0) read.
+//
+// Subclassing is the canonical Qt fix: sizeHint() / minimumSizeHint()
+// return only the currently-shown widget's hint.  Hidden pages don't
+// need the Ignored policy any more (they don't contribute to the
+// stack hint at all), so the hint chain stays clean and content
+// changes inside the active page propagate up normally.
+class CurrentPageSizedStack : public QStackedWidget {
+public:
+    using QStackedWidget::QStackedWidget;
+    QSize sizeHint() const override {
+        if (auto* w = currentWidget()) {
+            return w->sizeHint();
+        }
+        return QStackedWidget::sizeHint();
+    }
+    QSize minimumSizeHint() const override {
+        if (auto* w = currentWidget()) {
+            return w->minimumSizeHint();
+        }
+        return QStackedWidget::minimumSizeHint();
+    }
+};
 
 // File-local style helpers — §A2 exception: each diverges from canonical
 // Style:: on font-size (13px vs 10px), border colour (#304050 vs #205070),
@@ -420,9 +457,12 @@ void VfoWidget::buildUI()
     buildSnrRow();       // Phase 3R L1 — hidden unless mode == RADE
     buildTabBar();
 
-    // Tab content stacked widget — HIDDEN by default (compact flag)
-    // From AetherSDR VfoWidget.cpp:545 — m_tabStack->hide()
-    m_tabStack = new QStackedWidget(this);
+    // Tab content stacked widget — HIDDEN by default (compact flag).
+    // From AetherSDR VfoWidget.cpp:545 — m_tabStack->hide().
+    // CurrentPageSizedStack subclass shrinks the stack to the active
+    // page's sizeHint (instead of the max-of-all default), so the
+    // flag shrinks to fit the active tab.  See class comment above.
+    m_tabStack = new CurrentPageSizedStack(this);
     buildAudioTab();
     buildDspTab();
     buildModeTab();
@@ -447,15 +487,16 @@ void VfoWidget::buildUI()
     m_tabStack->hide();  // Hidden by default — click tab to expand
     m_activeTab = -1;    // No tab active initially
 
-    // Per user directive 2026-04-23: flag height should shrink to fit the
-    // ACTIVE tab only (not the tallest tab). QStackedWidget defaults to
-    // sizing by the tallest child; we override by marking hidden pages as
-    // QSizePolicy::Ignored so the stack reports the size of the active page.
-    // The tab-switcher in buildTabBar calls adjustStackSize() to re-apply.
-    for (int i = 0; i < m_tabStack->count(); ++i) {
-        m_tabStack->widget(i)->setSizePolicy(
-            QSizePolicy::Ignored, QSizePolicy::Ignored);
-    }
+    // Per user directive 2026-04-23: flag height shrinks to fit the
+    // ACTIVE tab only (not the tallest tab).  CurrentPageSizedStack
+    // subclass (declared at the top of this file) overrides sizeHint
+    // / minimumSizeHint to return only the current page's hints, so
+    // we no longer need to fiddle with each page's sizePolicy
+    // (Ignored on the prior implementation broke hint propagation
+    // for content INSIDE the active page — see PR #238 v5 fix and
+    // the class comment).  Pages keep their default Preferred/Preferred
+    // policy and the stack's overridden hint takes care of the
+    // active-page-only sizing.
 
     setLayout(mainLayout);
     adjustSize();
@@ -981,14 +1022,12 @@ void VfoWidget::buildTabBar()
                 for (auto* b : m_tabButtons) { b->setChecked(false); }
             } else {
                 m_activeTab = i;
-                // Mark all pages Ignored except the active one, so the
-                // QStackedWidget sizes to the ACTIVE page only (not to
-                // the tallest page). Per user directive 2026-04-23.
-                for (int j = 0; j < m_tabStack->count(); ++j) {
-                    m_tabStack->widget(j)->setSizePolicy(
-                        j == i ? QSizePolicy::Preferred : QSizePolicy::Ignored,
-                        j == i ? QSizePolicy::Preferred : QSizePolicy::Ignored);
-                }
+                // CurrentPageSizedStack (this file's QStackedWidget
+                // subclass) returns only the active page's sizeHint,
+                // so no per-page sizePolicy fiddling is needed —
+                // setCurrentIndex alone is enough.  See PR #238 v5
+                // fix and the subclass comment for why the prior
+                // Ignored-policy approach was removed.
                 m_tabStack->setCurrentIndex(i);
                 m_tabStack->show();
                 for (int j = 0; j < m_tabButtons.size(); ++j) {
@@ -1765,19 +1804,43 @@ void VfoWidget::buildXRitTab()
 
 void VfoWidget::rebuildFilterButtons(DSPMode mode)
 {
-    // Remove old layout and buttons
-    if (m_filterBtnContainer->layout()) {
-        QLayoutItem* item;
-        while ((item = m_filterBtnContainer->layout()->takeAt(0)) != nullptr) {
-            delete item->widget();
+    // 2026-05-13 bench fix (PR #238 v7 — actual root cause): the
+    // previous "delete layout + new QGridLayout(parent)" pattern
+    // produced a container whose sizeHint permanently returned
+    // (0, 0) — diagnostic logs showed this regardless of button
+    // count.  Suspected cause: a Qt quirk around deleted-then-
+    // immediately-recreated layouts on the same widget where the
+    // new layout doesn't register as the widget's layout cleanly.
+    //
+    // v7: keep the SAME QGridLayout across rebuilds.  Just clear
+    // its child widgets via takeAt() and add the new buttons.
+    // The layout-as-widget-property association never breaks, so
+    // sizeHint propagation stays intact.
+    auto* grid = qobject_cast<QGridLayout*>(m_filterBtnContainer->layout());
+    if (!grid) {
+        grid = new QGridLayout(m_filterBtnContainer);
+        grid->setSpacing(2);
+        grid->setContentsMargins(0, 0, 0, 0);
+    } else {
+        // Remove existing buttons from the existing grid.
+        while (QLayoutItem* item = grid->takeAt(0)) {
+            if (QWidget* w = item->widget()) {
+                w->deleteLater();
+            }
             delete item;
         }
-        delete m_filterBtnContainer->layout();
     }
-
-    auto* grid = new QGridLayout(m_filterBtnContainer);
-    grid->setSpacing(2);
-    grid->setContentsMargins(0, 0, 0, 0);
+    // 2026-05-12 bench fix (PR #238): pin the column count so a
+    // single-preset mode (RADE_U / RADE_L) doesn't collapse to a
+    // 1×1 grid and stretch its lone button across the full
+    // container width.  QGridLayout infers columns from populated
+    // cells; without explicit stretches a single addWidget(btn,0,0)
+    // leaves the grid 1 column wide.  Same kCols=3 used by the
+    // for-loop below.  Mirrors the matching fix in RxApplet's
+    // m_filterGrid.
+    grid->setColumnStretch(0, 1);
+    grid->setColumnStretch(1, 1);
+    grid->setColumnStretch(2, 1);
 
     // Stage C2: prefer FilterPresetStore (user overrides over Thetis defaults).
     // Fall back to SliceModel::presetsForMode if no store is available.
@@ -1891,8 +1954,93 @@ void VfoWidget::rebuildFilterButtons(DSPMode mode)
 
         grid->addWidget(btn, i / kCols, i % kCols);
     }
+    // grid is already the layout of m_filterBtnContainer (either
+    // installed during initial construction via the QGridLayout
+    // constructor with the parent arg, or reused on subsequent
+    // rebuilds via the qobject_cast at the top of this function).
+    // No setLayout call needed.
 
-    m_filterBtnContainer->setLayout(grid);
+    // 2026-05-12 bench fix (PR #238 v2): force the entire flag
+    // layout chain to re-resolve after the rebuild.  v1 invalidated
+    // grid -> container -> parentTab and called adjustSize(), but
+    // that skipped m_tabStack (a QStackedWidget) which caches its
+    // sizeHint from the active page.  Hidden pages in the stack
+    // are QSizePolicy::Ignored (buildUI lines 455-458, 988-990),
+    // so the stack ONLY consults the active page's hint — and that
+    // hint stays stale unless explicitly invalidated.  Result:
+    // transitioning RADE -> SSB (1 button cleared, 10 added) left
+    // the flag at the 1-row height with the new 4-row SSB grid
+    // clipped at the top.
+    //
+    // Five-step invalidate chain that actually works:
+    //   1. grid->invalidate()              — new grid is dirty
+    //   2. m_filterBtnContainer->update    — propagate up one level
+    //   3. parentTab->updateGeometry()     — propagate to mode tab
+    //   4. m_tabStack->updateGeometry()    — invalidate stack cache
+    //   5. layout()->invalidate+activate   — invalidate VfoWidget's
+    //                                         own QVBoxLayout
+    //   6. adjustSize()                    — commit new frame
+    // 2026-05-12 bench fix (PR #238 v3): force the flag to resize
+    // after rebuilding the preset buttons.  v1 (column stretches)
+    // and v2 (per-level adjustSize) both failed because
+    // adjustSize() on a layout-managed widget gets overridden by
+    // the parent layout's next pass, and Qt's layout
+    // invalidations are POSTED EVENTS that don't fire until the
+    // next event-loop tick — so by the time the final adjustSize
+    // ran on `this`, every ancestor still had its stale cached
+    // sizeHint.
+    //
+    // v3: invalidate bottom-up via updateGeometry (just marks the
+    // cache dirty at each level), then drain the queued
+    // QEvent::LayoutRequest events synchronously with
+    // sendPostedEvents BEFORE the final adjustSize.  The drain
+    // forces Qt to re-poll every level's sizeHint with the
+    // rebuilt content; adjustSize then reads the FRESH hint and
+    // commits the new frame.  No hide/show flash, no per-level
+    // adjustSize, no event-loop deferral.
+    // 2026-05-13 bench fix (PR #238 v8 — final): drain queued
+    // LayoutRequest events with nullptr receiver so the
+    // sizeHint chain is fresh when adjustSize reads it.
+    //
+    // grid->addWidget() in the loop above queues LayoutRequest
+    // events on m_filterBtnContainer (the grid's parent widget),
+    // not on VfoWidget itself.  An earlier attempt used
+    // `sendPostedEvents(this, …)` which only drains events posted
+    // to `this` — so the container-level requests stayed queued
+    // and adjustSize() read stale hints.  Passing nullptr as the
+    // receiver drains LayoutRequest for every widget tree-wide,
+    // which is what we want.
+    //
+    // adjustSize() then commits the new flag frame.  Together
+    // with the layout-reuse refactor at the top of this function
+    // (v7) and the CurrentPageSizedStack subclass (v6), this is
+    // the third and final piece of the layout-resize chain.
+    // 2026-05-13 bench fix (PR #238 v9): belt-and-suspenders.
+    // Even with the layout-reuse refactor (v7) and the
+    // LayoutRequest drain (v8) the FLAG's sizeHint sometimes
+    // under-reports the actual height needed for the filter
+    // buttons (seen at the bench when the user has the mode tab
+    // open and switches between modes with very different button
+    // counts).  Force a minimum height on m_filterBtnContainer
+    // computed from the actual button geometry so the parent
+    // layout chain MUST reserve the right amount of space
+    // regardless of what sizeHint() returns.
+    //
+    //   rows  = ceil(count / kCols)
+    //   minH  = rows * btnH + (rows - 1) * spacing
+    //
+    // With kCols=3, kBtnH=22, spacing=2:
+    //   RADE 1 btn  -> 1 row -> minH = 22
+    //   LSB  10 btns -> 4 rows -> minH = 4*22 + 3*2 = 94
+    {
+        constexpr int kBtnH    = 22;
+        constexpr int kSpacing = 2;
+        const int rows = count > 0 ? (count + kCols - 1) / kCols : 0;
+        const int minH = rows > 0 ? rows * kBtnH + (rows - 1) * kSpacing : 0;
+        m_filterBtnContainer->setMinimumHeight(minH);
+    }
+    QCoreApplication::sendPostedEvents(nullptr, QEvent::LayoutRequest);
+    adjustSize();
 }
 
 // ---- Stage C2: FilterPresetStore coupling ----

@@ -5327,6 +5327,33 @@ void RadioModel::wireSliceSignals()
         // not transmitting and the next MOX would still use the previous
         // mode's TXA setup.
         pushTxModeAndBandpass();
+
+        // 2026-05-12 bench fix (PR #238): snap TX BW to the RADE
+        // modem audio passband on entry into RADE_U / RADE_L.  RADE's
+        // baseband occupies 650-2350 Hz (1700 Hz wide centered at
+        // 1500 Hz); the SSB modulator must pass only that window or
+        // wider AF leaks onto the wire and degrades the modem.  On
+        // exit from RADE, restore the standing default 100-3900 Hz
+        // for voice SSB so the user doesn't get stuck on a narrow
+        // window after switching back.  This pre-emptively matches
+        // the per-mode TX filter Thetis applies via SetTXFilters
+        // (console.cs:33937 [v2.10.3.13]) for the RADE case
+        // NereusSDR adds; non-RADE modes keep whatever the user had.
+        if (mode == DSPMode::RADE_U || mode == DSPMode::RADE_L) {
+            m_transmitModel.setFilterLow(650);
+            m_transmitModel.setFilterHigh(2350);
+        } else {
+            // Leaving RADE: only restore the standing voice default
+            // if the current filter is the RADE-narrow window;
+            // otherwise leave the user's choice alone so a custom
+            // voice SSB BW (e.g. 200-2700 for ESSB) persists.
+            if (m_transmitModel.filterLow() == 650
+                && m_transmitModel.filterHigh() == 2350) {
+                m_transmitModel.setFilterLow(100);
+                m_transmitModel.setFilterHigh(3900);
+            }
+        }
+
         scheduleSettingsSave();
     });
 

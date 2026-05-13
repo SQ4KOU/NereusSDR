@@ -492,6 +492,21 @@ void RxApplet::buildUi()
         m_filterGrid = new QGridLayout(m_filterContainer);
         m_filterGrid->setContentsMargins(0, 0, 0, 0);
         m_filterGrid->setSpacing(2);
+        // 2026-05-12 bench fix (PR #238): pin the column count so a
+        // single-preset mode (RADE_U / RADE_L: only the 1.7 K
+        // preset is valid) doesn't collapse to a 1-column grid
+        // and stretch its lone button across the full container
+        // width.  QGridLayout infers columns from populated cells,
+        // so without these stretches an addWidget(btn, 0, 0)
+        // call with nothing in cols 1-2 leaves the grid 1 column
+        // wide and the button fills the row.  Setting equal
+        // stretch on all three cols keeps each button at ~1/3
+        // the container width regardless of how many presets
+        // the active mode declares.  Same kCols (3) used by
+        // rebuildFilterButtons further down.
+        m_filterGrid->setColumnStretch(0, 1);
+        m_filterGrid->setColumnStretch(1, 1);
+        m_filterGrid->setColumnStretch(2, 1);
         // Seed from the slice's actual mode so a restore-from-AppSettings
         // launch (e.g. LSB / DIGL) shows the correct preset grid before the
         // first dspModeChanged event fires.  Falls back to USB if no slice
@@ -504,8 +519,16 @@ void RxApplet::buildUi()
     // From AetherSDR RxApplet.cpp lines 504-513
     {
         m_filterPassband = new FilterPassbandWidget(this);
-        m_filterPassband->setMinimumHeight(40);
-        m_filterPassband->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+        // 2026-05-12 bench fix (PR #238): pin a fixed height so the
+        // passband visualization keeps its aspect when neighboring
+        // rows shrink.  Earlier Expanding vertical policy let it
+        // absorb the freed-up space when the filter-preset grid
+        // shrank from 4 rows (10 SSB presets) to 1 row (RADE's
+        // single 1.7K preset), stretching the passband widget to
+        // ~4× its intended height.  Fixed vertical avoids that
+        // re-flow whiplash.
+        m_filterPassband->setFixedHeight(48);
+        m_filterPassband->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
         connect(m_filterPassband, &FilterPassbandWidget::filterChanged,
                 this, [this](int lo, int hi) {
             if (m_slice) { m_slice->setFilter(lo, hi); }
@@ -1100,6 +1123,17 @@ void RxApplet::rebuildFilterButtons(DSPMode mode)
         m_filterBtns.append(btn);
         m_filterGrid->addWidget(btn, i / kCols, i % kCols);
     }
+
+    // 2026-05-12 bench fix (PR #238): force the grid to re-resolve
+    // its size hints after the rebuild.  Without this, transitioning
+    // RADE -> SSB (1 button cleared, 10 added) left the button row
+    // squished until the user collapsed + reopened the flag — the
+    // container was still sized for the 1-button layout when the
+    // 10 new buttons were inserted.  invalidate() marks the layout
+    // dirty; updateGeometry() propagates the new size hint up the
+    // parent chain so the flag's QVBoxLayout reflows.
+    if (m_filterGrid) m_filterGrid->invalidate();
+    if (m_filterContainer) m_filterContainer->updateGeometry();
 }
 
 void RxApplet::applyFilterPreset(int low, int high)
