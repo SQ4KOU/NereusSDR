@@ -265,6 +265,21 @@ private:
 
     QHash<QString, FreeDVStation> m_stations;  // sid -> station
 
+    // 2026-05-12 (PR #238 bench follow-up): rx_report spot dedup.
+    // Source-first from AetherSDR MainWindow.cpp:635-660 [@0cd4559]
+    // (isDuplicateSpot lambda).  qso.freedv.org fans every TX out
+    // to every receiver that decodes it, so a single VA3WTB
+    // transmission to 20 receivers generated 20 rx_report events
+    // -> 20 separate panadapter spots, all at the same freq.
+    // Dedup by (dxCall, freqMhz within 1 Hz) within a 60 s window
+    // so each TX produces at most one spot per minute regardless
+    // of how many stations heard it.
+    struct DedupEntry {
+        double  freqMhz;
+        qint64  addedMs;
+    };
+    QHash<QString, DedupEntry>    m_spotDedup;  // dxCall -> entry
+
     std::atomic<bool> m_connected{false};
     bool    m_intentionalDisconnect{false};
     int     m_reconnectAttempts{0};

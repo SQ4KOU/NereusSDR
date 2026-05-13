@@ -652,9 +652,22 @@ void VfoWidget::buildFrequencyRow()
 
 void VfoWidget::buildSmeterRow()
 {
+    auto* vboxLayout = static_cast<QVBoxLayout*>(layout());
+
+    // 2026-05-12 bench fix: 4 px spacer between the frequency
+    // border and the S-meter tick strip so the "S1 3 5 7 9 +20 +40"
+    // tick labels don't visually collide with the cyan frequency-
+    // display border.  The default 2 px QVBoxLayout::setSpacing()
+    // applied in buildUI() left the tick labels appearing to sit
+    // inside the freq box; the user reported "S NUMBERS ARE
+    // OVERLAPPING WITH THE FREQUENCY READOUT AFTER ADDITION OF
+    // THE RADE SNR" during bench testing of PR #238.  A localized
+    // QSpacerItem keeps the rest of the row spacing at 2 px.
+    vboxLayout->addSpacing(4);
+
     m_levelBar = new VfoLevelBar(this);
     m_levelBar->setValue(float(m_smeterDbm));  // seed with cached value (default -127)
-    static_cast<QVBoxLayout*>(layout())->addWidget(m_levelBar);
+    vboxLayout->addWidget(m_levelBar);
 }
 
 // Phase 3R K-bench (bench feedback) — verbatim port from AetherSDR

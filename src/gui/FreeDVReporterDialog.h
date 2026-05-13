@@ -416,6 +416,15 @@ private:
     // (freedv_reporter.cpp:1289-1322 [@77e793a]).
     QHash<QString, QTimer*>           m_clearTimers;
     int                               m_highlightClearMs;
+
+    // 2026-05-12 (PR #238 follow-up): match upstream's periodic
+    // recheck cadence so a row whose lastRxDate / lastUpdate aged
+    // past the timeout cleans up even when no new rx_report /
+    // tx_report event arrives.  Walks the FreeDVStationModel snapshot
+    // every kColoringRecheckMs (1 s, source-first from
+    // freedv_reporter.cpp:1289-1340) and recomputes the highlight
+    // for each station.
+    QTimer*                           m_coloringTimer{nullptr};
 };
 
 }  // namespace NereusSDR

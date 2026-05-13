@@ -132,15 +132,50 @@ namespace NereusSDR {
 //   to AppSettings and let the user restore upstream cyan if they
 //   prefer.
 // =====================================================================
-static const QColor kTxBackgroundColor(0xfc, 0x45, 0x00);  // red-orange
-static const QColor kRxBackgroundColor(0x3f, 0xaf, 0x55);  // green
-static const QColor kMsgBackgroundColor(0xe5, 0x8b, 0xe5); // pink
+// 2026-05-12 bench fix (PR #238): muted palette per user feedback.
+// Upstream defaults at freedv-gui ReportingConfiguration.cpp:91-95
+// [@77e793a] use saturated tones (TX=#fc4500, RX=#379baf,
+// Msg=#E58BE5).  Iterated three times with the bench operator:
+//   v1 - upstream-bright       (too neon)
+//   v2 - mid-muted              (still too hot)
+//   v3 - dim tint (current)     (target: barely-there hint at hue,
+//                                 mostly the dark UI showing through)
+// The v3 values sit ~30 % brightness and ~35 % saturation — enough
+// hue intent that warm/cool/violet stay distinguishable, but the
+// row looks tinted rather than filled.  Same priority chain as
+// upstream: Msg > TX > RX, so even if Msg + TX overlap the user
+// reads the latest event.
+//   TX:  dim rust   (warm; "this station is keying")
+//   RX:  dim slate  (cool; "this station is hearing someone")
+//   Msg: dim mauve  (violet; "message updated")
+static const QColor kTxBackgroundColor(0x5e, 0x39, 0x33);  // dim rust
+static const QColor kRxBackgroundColor(0x2e, 0x47, 0x50);  // dim slate
+static const QColor kMsgBackgroundColor(0x4d, 0x3d, 0x4d); // dim mauve
 
 // Default highlight-clear interval. Production matches the task spec's
 // hard-coded 6 s; the test seam drops this to 50 ms.
 // TODO: Phase 3J-2 G3 makes this configurable via AppSettings, matching
 // upstream's freedv_reporter_tx_rx_highlight_time setting.
 static constexpr int kDefaultHighlightClearMs = 6000;
+
+// 2026-05-12 (PR #238 follow-up): source-first from
+// freedv-gui src/gui/dialogs/freedv_reporter.cpp:67-69 [@77e793a].
+// Upstream uses two RX-coloring windows: a LONG window for
+// "station decoded a peer callsign" (cyan stays visible for the full
+// timeout) and a SHORT window for "station updated mode/freq but
+// has no peer callsign yet" (briefer cyan flash so the row settles
+// quickly when nothing is actually being decoded).  Messaging gets
+// its own short timeout.
+static constexpr int kRxColoringLongMs  = 20'000;  // upstream RX_COLORING_LONG_TIMEOUT_SEC
+static constexpr int kRxColoringShortMs =  5'000;  // upstream RX_COLORING_SHORT_TIMEOUT_SEC
+static constexpr int kMsgColoringMs     =  5'000;  // upstream MSG_COLORING_TIMEOUT_SEC
+
+// Periodic-recheck cadence.  Upstream walks the full station table
+// once per second from its render-update timer to age out the
+// coloring (freedv_reporter.cpp:1289-1340).  We do the same here so
+// a row whose lastRxDate / lastUpdate aged past the timeout cleans
+// up even when no new rx_report / tx_report event arrives.
+static constexpr int kColoringRecheckMs = 1'000;
 
 // =====================================================================
 // FreeDVReporterTableModel
@@ -337,6 +372,29 @@ public:
         return m_indexBySid.value(sid, -1);
     }
 
+    // 2026-05-12 bench fix (PR #238): the row-highlight delegate
+    // state lives outside the model (in
+    // FreeDVReporterRowHighlightDelegate::m_highlight) so changing
+    // a highlight has no data-changed signal that the QTableView
+    // can use to schedule a repaint.  Calling viewport()->update()
+    // by itself wasn't enough on macOS Cocoa builds — the view
+    // optimized the repaint away because no underlying data
+    // changed, and the tints only appeared when the user clicked
+    // a row (forcing a selection-change repaint).
+    //
+    // This hook lets the dialog explicitly emit dataChanged for a
+    // sid's row after touching the highlight hash so Qt schedules
+    // a guaranteed repaint of every cell in that row.  The role
+    // hint stays empty (== "all roles") to be safe across delegate
+    // styles that may key cache on different roles.
+    void notifyRowChangedForSid(const QString& sid) {
+        const int row = rowForSid(sid);
+        if (row < 0 || row >= m_rows.size()) return;
+        const QModelIndex topLeft     = index(row, 0);
+        const QModelIndex bottomRight = index(row, columnCount() - 1);
+        emit dataChanged(topLeft, bottomRight);
+    }
+
 private:
     // From freedv-gui freedv_reporter.cpp:3180-3194 [@77e793a].
     // Upstream branches on reportingFrequencyAsKhz: kHz mode renders
@@ -487,17 +545,17 @@ public:
         const QColor bg = m_highlight.value(sid);
 
         if (bg.isValid()) {
-            // 1) Store the highlight color into opt.backgroundBrush so
-            //    QFusionStyle's PE_PanelItemViewItem fills with it
-            //    *before* the (potential) selection overlay.
-            // 2) Re-point QPalette::Highlight at the same color so that
-            //    for selected rows, the selection overlay coincides
-            //    with the highlight color instead of overwriting it
-            //    with the system accent. Result: TX/RX/Msg row colors
-            //    win over selection ink, matching freedv-gui's
-            //    wxDataViewListCtrl behaviour where reportData->
-            //    backgroundColor stays visible regardless of selection
-            //    (freedv_reporter.cpp:3026 [@77e793a]).
+            // 2026-05-12 bench fix (PR #238): force-fill the cell
+            // rectangle BEFORE the base class paints so the tint is
+            // unconditionally visible.  Earlier code only set
+            // opt.backgroundBrush + opt.palette.Highlight, which on
+            // some macOS Cocoa builds gets overdrawn by the system
+            // style's own PE_PanelItemViewItem fill (the brush hint
+            // is ignored on platforms where the native style paints
+            // its own cell chrome).  Filling here gives a guaranteed
+            // base layer; the brush + palette hints stay so any
+            // style that DOES honor them paints consistently.
+            painter->fillRect(opt.rect, bg);
             opt.backgroundBrush = QBrush(bg);
             opt.palette.setBrush(QPalette::Highlight, QBrush(bg));
             // Keep the highlighted-text color readable on the colored
@@ -505,6 +563,13 @@ public:
             // that white text reads well on all of them.
             opt.palette.setBrush(QPalette::HighlightedText,
                                  QBrush(Qt::white));
+            // Override the normal-state text color too, since the
+            // base paint will use QPalette::Text (not Highlight) on
+            // unselected rows.  Without this the tint shows but text
+            // disappears against a dark cyan/orange background on
+            // some themes.
+            opt.palette.setBrush(QPalette::Text, QBrush(Qt::white));
+            opt.palette.setBrush(QPalette::WindowText, QBrush(Qt::white));
         }
         QStyledItemDelegate::paint(painter, opt, index);
     }
@@ -784,6 +849,27 @@ FreeDVReporterDialog::FreeDVReporterDialog(FreeDVStationModel* stationModel,
             onStationAdded(it.key(), it.value());
         }
     }
+
+    // 2026-05-12 (PR #238 follow-up): periodic coloring recheck.
+    // Source-first from freedv-gui freedv_reporter.cpp:1289-1340
+    // [@77e793a] — upstream's render-update timer walks every
+    // station once per second to recompute the highlight from
+    // current-time vs lastRxDate / lastUpdate.  Event-driven recompute
+    // alone isn't enough: a row whose lastRxDate ages past the
+    // timeout has no triggering event to clear its highlight.  The
+    // periodic walk also picks up rows whose state changed via a
+    // freq_change / message_update / hide_self event without
+    // an accompanying rx_report.
+    m_coloringTimer = new QTimer(this);
+    m_coloringTimer->setInterval(kColoringRecheckMs);
+    connect(m_coloringTimer, &QTimer::timeout, this, [this] {
+        if (!m_stationModel) return;
+        const auto current = m_stationModel->stations();
+        for (auto it = current.constBegin(); it != current.constEnd(); ++it) {
+            applyHighlightForStation(it.key(), it.value());
+        }
+    });
+    m_coloringTimer->start();
 }
 
 FreeDVReporterDialog::~FreeDVReporterDialog() {
@@ -811,6 +897,21 @@ void FreeDVReporterDialog::buildUi() {
     m_columnFilterProxy = new FreeDVReporterColumnFilterProxy(this);
     m_columnFilterProxy->setSourceModel(m_bandProxy);
     m_columnFilterProxy->setFilters(&m_columnFilters);
+
+    // 2026-05-12 bench fix (PR #238): SNR / Frequency / Distance
+    // columns surface raw numeric values via Qt::EditRole on the
+    // source model (FreeDVReporterTableModel::data at the
+    // role == EditRole branch); flipping the proxy's sort role
+    // from the default DisplayRole (strings) to EditRole makes
+    // those columns sort numerically.  Without this, "Sort by SNR"
+    // ordered the string form: "-3" sorted ABOVE "+12" because
+    // the literal "-" comes before the digit "1" in lexical
+    // order.  EditRole-as-sort-role is a per-proxy setting and
+    // string columns (callsign, mode, status, ...) fall back to
+    // DisplayRole via the model's switch default at
+    // FreeDVReporterTableModel::data:305, so they keep sorting
+    // alphabetically.
+    m_columnFilterProxy->setSortRole(Qt::EditRole);
 
     m_rowDelegate = new FreeDVReporterRowHighlightDelegate(this);
 
@@ -1211,31 +1312,45 @@ void FreeDVReporterDialog::onCleared() {
 
 void FreeDVReporterDialog::applyHighlightForStation(const QString& sid,
                                                     const FreeDVStation& info) {
-    // From freedv-gui freedv_reporter.cpp:1289-1322 [@77e793a]
-    // (priority chain: messaging > transmitting > receiving valid
-    // callsign > receiving without valid callsign > default). NereusSDR
-    // simplifies the four upstream branches to three (TX, RX, Msg) and
-    // drops the "lastRxCallsign empty -> short timeout" subcase since
-    // G1 does not yet receive that distinction over the wire (a freq
-    // change clears lastRxCallsign upstream; we'll wire that explicitly
-    // in G2 once the FreeDVReporterClient gains the freq_change ->
-    // station-update relay).
+    // Source-first from freedv-gui freedv_reporter.cpp:1289-1340
+    // [@77e793a] — the four-branch priority chain:
+    //   messaging > transmitting > receiving valid callsign >
+    //   receiving without valid callsign > default.
+    //
+    // 2026-05-12 (PR #238 follow-up): restored the previously-dropped
+    // SHORT_TIMEOUT branch ("isReceivingNotValidCallsign") so a row
+    // that just received a mode-only rx_report (callsign="" but mode
+    // set — the more common shape qso.freedv.org delivers in
+    // practice) still lights up cyan for 5 s.  Without this, RX
+    // highlighting effectively never fired during bench testing —
+    // most stations were updating in a mode-only-no-callsign state
+    // that was being filtered out as "not receiving" by the
+    // !lastRxCallsign.isEmpty() guard.
+    const QDateTime now = QDateTime::currentDateTime();
+
     const bool isTransmitting = info.transmitting;
-    const bool isReceiving =
+
+    const bool isReceivingValidCallsign =
         info.lastRxDate.isValid()
         && !info.lastRxCallsign.isEmpty()
-        && info.lastRxDate.msecsTo(QDateTime::currentDateTime()) < m_highlightClearMs;
+        && info.lastRxDate.msecsTo(now) < kRxColoringLongMs;
+
+    const bool isReceivingNotValidCallsign =
+        info.lastRxDate.isValid()
+        && info.lastRxCallsign.isEmpty()
+        && info.lastRxDate.msecsTo(now) < kRxColoringShortMs;
+
     const bool isMessaging =
         !info.userMessage.isEmpty()
         && info.lastUpdate.isValid()
-        && info.lastUpdate.msecsTo(QDateTime::currentDateTime()) < m_highlightClearMs;
+        && info.lastUpdate.msecsTo(now) < kMsgColoringMs;
 
     QColor bg;
     if (isMessaging) {
         bg = kMsgBackgroundColor;
     } else if (isTransmitting) {
         bg = kTxBackgroundColor;
-    } else if (isReceiving) {
+    } else if (isReceivingValidCallsign || isReceivingNotValidCallsign) {
         bg = kRxBackgroundColor;
     }
     setHighlight(sid, bg);
@@ -1271,6 +1386,15 @@ void FreeDVReporterDialog::setHighlight(const QString& sid, const QColor& bg) {
         }
     }
     if (m_table) {
+        // 2026-05-12 bench fix (PR #238): emit dataChanged for the
+        // affected row so the view schedules a guaranteed repaint.
+        // viewport()->update() alone was being optimized away by the
+        // Qt view framework on macOS — the user had to click a row
+        // to force a selection-change repaint before the new tint
+        // became visible.
+        if (m_tableModel) {
+            m_tableModel->notifyRowChangedForSid(sid);
+        }
         m_table->viewport()->update();
     }
 }
@@ -1337,8 +1461,16 @@ void FreeDVReporterDialog::setActiveFrequency(quint64 freqHz) {
     }
     m_currentVfoHz = freqHz;
     if (m_trackFreqRadio && m_trackFreqRadio->isChecked()) {
-        // Exact-freq mode: only stations within +/- 3 kHz of VFO.
-        m_bandProxy->setExactFrequency(freqHz, 3000);
+        // Exact-freq mode: strict Hz equality, matching upstream
+        // freedv-gui freedv_reporter.cpp:2578 [@77e793a]
+        // (`freq != filteredFrequency_`).  Earlier 3 kHz tolerance
+        // surfaced "other freqs leak in on the same band" during
+        // bench testing — operators on 7.182 MHz showed up when
+        // the VFO sat at 7.183 MHz (1 kHz delta).  qso.freedv.org
+        // publishes the dial frequency as a uint64 so the
+        // operator's own VFO and the reported frequency are both
+        // in 1 Hz units and exact comparison is meaningful.
+        m_bandProxy->setExactFrequency(freqHz, 0);
     } else if (m_trackBandRadio && m_trackBandRadio->isChecked()) {
         // Band-tracking mode: snap the band combo to the VFO's band.
         const Band b = bandFromFrequency(static_cast<double>(freqHz));

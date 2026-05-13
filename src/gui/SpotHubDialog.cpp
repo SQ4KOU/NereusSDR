@@ -525,6 +525,27 @@ void SpotHubDialog::buildSettingsTab(QTabWidget* tabs)
         if (m_pskClient) {
             m_pskClient->setIdentity(call, gridSquare, version);
         }
+        // 2026-05-12 bench fix #2: propagate the new identity into
+        // each per-source tab's QLineEdit so the user sees the
+        // change in every editable field, not just the Settings tab.
+        // The tabs read AppSettings only on construction; without
+        // this push, the Cluster / RBN / PSK callsign fields keep
+        // their stale value until the dialog is closed and reopened.
+        // Edits are guarded against null (some builds may construct
+        // the dialog without certain source tabs in the future).
+        if (m_callEdit) {
+            m_callEdit->setText(call);
+        }
+        if (m_rbnCallEdit) {
+            m_rbnCallEdit->setText(call);
+        }
+        if (m_pskCallEdit) {
+            m_pskCallEdit->setText(call);
+        }
+        if (m_pskGridEdit) {
+            m_pskGridEdit->setText(gridSquare);
+        }
+
         // 2026-05-12 bench fix: notify MainWindow so it can push the
         // new grid into FreeDVStationModel.  Without this the Reporter
         // dialog's Distance / Hdg columns stay zeroed because the

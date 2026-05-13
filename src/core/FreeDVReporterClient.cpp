@@ -700,21 +700,80 @@ void FreeDVReporterClient::onFreqChange(const QJsonObject& data)
 
 void FreeDVReporterClient::onRxReport(const QJsonObject& data)
 {
-    // From freedv-gui src/reporting/FreeDVReporter.cpp:505-553 [@77e793a]
-    // (onFreeDVReporterReceiveReport_).
+    // From freedv-gui src/reporting/FreeDVReporter.cpp:505 [@77e793a]
+    // + src/gui/dialogs/freedv_reporter.cpp:3651-3723 [@77e793a].
+    //
+    // Upstream rx_report payload keys (from FreeDVReporter.cpp:505-514):
+    //   sid, last_update, receiver_callsign, receiver_grid_square,
+    //   callsign (= received callsign), snr, mode.
+    //
+    // Upstream onReceiveUpdateFn_ (freedv_reporter.cpp:3693-3723)
+    // treats `callsign == "" && rxMode == ""` as a FREQUENCY CHANGE
+    // sentinel: clear lastRxDate, lastRxCallsign, lastRxMode, snr.
+    // Otherwise stamp lastRxDate = now and write the (possibly empty)
+    // callsign + mode + snr.  This empty-callsign-but-mode-set case
+    // is what feeds the row-coloring SHORT_TIMEOUT branch
+    // (freedv_reporter.cpp:1296-1299): a station that just changed
+    // mode briefly highlights cyan even before it decodes a peer
+    // callsign.  Without this distinction, our coloring never lights
+    // up when qso.freedv.org delivers a mode-only update.
     QString sid = data.value(QStringLiteral("sid")).toString();
     if (sid.isEmpty()) return;
 
     if (m_stations.contains(sid)) {
         auto& info = m_stations[sid];
-        info.lastRxCallsign = data.value(QStringLiteral("callsign")).toString();
-        info.lastRxMode     = data.value(QStringLiteral("mode")).toString();
-        // SNR may be int or real (freedv-gui :518-530); QJsonValue::toDouble
-        // covers both.
-        info.snrVal         = static_cast<int>(std::round(
-                                  data.value(QStringLiteral("snr")).toDouble()));
-        info.snrText        = QString::number(info.snrVal);
-        info.lastRxDate     = QDateTime::currentDateTimeUtc();
+        const QString recvCall = data.value(QStringLiteral("callsign")).toString();
+        const QString recvMode = data.value(QStringLiteral("mode")).toString();
+
+        // 2026-05-12 (PR #238 bench follow-up): diagnostic so the
+        // user can verify the wire is actually carrying decoded
+        // callsigns.  freedv_reporter.cpp:3651-3723 upstream stores
+        // `receivedCallsign` verbatim — if this log shows empty
+        // strings continuously, the band is quiet (no one is
+        // decoding anyone) and the "Last RX Callsign" column will
+        // legitimately stay blank.
+        qCInfo(lcSpots).noquote()
+            << QStringLiteral("FreeDV rx_report sid=%1 stationCall=%2 "
+                              "decodedCall='%3' mode='%4' snr=%5")
+                   .arg(sid.left(8),
+                        info.callsign,
+                        recvCall,
+                        recvMode)
+                   .arg(data.value(QStringLiteral("snr")).toDouble(), 0, 'f', 1);
+
+        if (recvCall.isEmpty() && recvMode.isEmpty()) {
+            // Frequency-change sentinel.  Clear RX state so the row
+            // stops painting cyan and the table column blanks out.
+            info.lastRxCallsign.clear();
+            info.lastRxMode.clear();
+            info.snrVal  = 0;
+            info.snrText.clear();
+            info.lastRxDate = QDateTime();  // invalid -> kills RX highlight
+        } else {
+            // 2026-05-12 bench-fix (PR #238): only overwrite the
+            // callsign cell when the wire actually carries one.
+            // qso.freedv.org sends mode-only rx_report keep-alives
+            // (callsign="" mode="<mode>") during ongoing decode;
+            // upstream stores those as empty + lets the freq-change
+            // sentinel be the only clear path, but that flickers
+            // the "Last RX Callsign" column to empty every few
+            // seconds during a transmission so the user can't read
+            // who's being decoded until the EOO arrives.  Keep the
+            // last-known callsign sticky here so the column stays
+            // populated for the full TX.  Sentinel-cleared above
+            // still wipes it cleanly on freq change.
+            if (!recvCall.isEmpty()) {
+                info.lastRxCallsign = recvCall;
+            }
+            info.lastRxMode     = recvMode;
+            // SNR may be int or real (freedv-gui :518-530);
+            // QJsonValue::toDouble covers both.
+            info.snrVal         = static_cast<int>(std::round(
+                                      data.value(QStringLiteral("snr")).toDouble()));
+            info.snrText        = QString::number(info.snrVal);
+            info.lastRxDate     = QDateTime::currentDateTimeUtc();
+        }
+
         info.lastUpdate     = QDateTime::fromString(
             data.value(QStringLiteral("last_update")).toString(), Qt::ISODate);
         emit stationUpdated(sid, info);
@@ -728,7 +787,8 @@ void FreeDVReporterClient::onRxReport(const QJsonObject& data)
 void FreeDVReporterClient::onTxReport(const QJsonObject& data)
 {
     // From freedv-gui src/reporting/FreeDVReporter.cpp:470-503 [@77e793a]
-    // (onFreeDVReporterTransmitReport_).
+    // + src/gui/dialogs/freedv_reporter.cpp:3580-3645 [@77e793a]
+    // (onFreeDVReporterTransmitReport_ + onTransmitUpdateFn_).
     QString sid = data.value(QStringLiteral("sid")).toString();
     if (sid.isEmpty()) return;
 
@@ -736,11 +796,41 @@ void FreeDVReporterClient::onTxReport(const QJsonObject& data)
     auto& info = m_stations[sid];
     info.txMode       = data.value(QStringLiteral("mode")).toString();
     info.transmitting = data.value(QStringLiteral("transmitting")).toBool();
+
+    // 2026-05-12 (PR #238 bench follow-up): match upstream
+    // freedv_reporter.cpp:3610-3617 — the Status column flips
+    // "Active" <-> "TX" on each tx_report so the user sees who's
+    // currently keyed even before the row coloring fires.  "RX Only"
+    // stations are left as-is (upstream guards with status !=
+    // _(RX_ONLY_STATUS) at line 3619).
+    if (info.status != QStringLiteral("RX Only")) {
+        info.status = info.transmitting
+            ? QStringLiteral("TX")
+            : QStringLiteral("Active");
+    }
+
     if (info.transmitting) {
         info.lastTxDate = QDateTime::currentDateTimeUtc();
     }
     info.lastUpdate = QDateTime::fromString(
         data.value(QStringLiteral("last_update")).toString(), Qt::ISODate);
+
+    // 2026-05-12 (PR #238 bench follow-up): diagnostic so the user
+    // can confirm tx_report events are actually arriving.  If
+    // "transmitting" never flips to true in this log while a known
+    // station is on the air, either the server isn't routing tx
+    // events to us (subscription / hide-self / filter issue) or
+    // upstream's parse failed (wrong types — see the
+    // yyjson_is_bool guard at FreeDVReporter.cpp:490).
+    qCInfo(lcSpots).noquote()
+        << QStringLiteral("FreeDV tx_report sid=%1 call=%2 "
+                          "transmitting=%3 mode='%4'")
+               .arg(sid.left(8),
+                    info.callsign,
+                    info.transmitting ? QStringLiteral("TRUE")
+                                      : QStringLiteral("FALSE"),
+                    info.txMode);
+
     emit stationUpdated(sid, info);
 }
 
@@ -916,6 +1006,27 @@ void FreeDVReporterClient::emitSpotFromRxReport(const QJsonObject& data)
     QString grid         = data.value(QStringLiteral("receiver_grid_square")).toString();
 
     if (txCall.isEmpty()) return;
+
+    // 2026-05-12 (PR #238 bench follow-up): dedup the multi-receiver
+    // fan-out so a single TX seen by 20 different listening stations
+    // doesn't spawn 20 panadapter labels at the same freq.
+    // Source-first from AetherSDR MainWindow.cpp:635-660 [@0cd4559]
+    // (isDuplicateSpot).  Window matches AetherSDR's 60 s FreeDV
+    // default for spots without an explicit lifetimeSec.
+    constexpr qint64 kSpotDedupWindowMs = 60'000;
+    constexpr double kSpotDedupFreqTolMhz = 0.001;  // 1 Hz; same as AetherSDR
+    const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+    auto dedupIt = m_spotDedup.constFind(txCall);
+    if (dedupIt != m_spotDedup.constEnd()) {
+        const bool sameFreq = qAbs(dedupIt->freqMhz - freqMhz)
+                                  < kSpotDedupFreqTolMhz;
+        const bool fresh    = (nowMs - dedupIt->addedMs)
+                                  < kSpotDedupWindowMs;
+        if (sameFreq && fresh) {
+            return;  // suppress duplicate
+        }
+    }
+    m_spotDedup.insert(txCall, DedupEntry{freqMhz, nowMs});
 
     DxSpot spot;
     spot.dxCall      = txCall;

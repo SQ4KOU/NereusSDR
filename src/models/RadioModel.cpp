@@ -1059,6 +1059,71 @@ RadioModel::RadioModel(QObject* parent)
     connect(m_freeDvReporter.get(), &FreeDVReporterClient::stationRemoved,
             m_freeDvStationModel.get(), &FreeDVStationModel::onStationRemoved);
 
+    // 2026-05-12 (PR #238 bench follow-up): VFO-flag "active talker"
+    // wire from FreeDV Reporter.
+    //
+    // The flag's RADE row shows a decoded peer callsign.  Primary
+    // source is librade's EOO frame (RadeChannel::rxTextDecoded ->
+    // onRadeTextDecoded -> slice->setLastRadeRxCallsign), which only
+    // fires on a clean EOO at end-of-TX so the flag stays empty
+    // until the speaker keys down.  Fallback source is qso.freedv.org's
+    // tx_report event stream: any station that flips
+    // transmitting=true on our currently-tuned dial frequency
+    // surfaces on the flag immediately, replacing whatever was
+    // there before.  This is the "latest transmitter wins"
+    // pattern the bench operator asked for during PR #238
+    // testing — "show who's actively on the channel right now".
+    //
+    // 2026-05-12 v2: removed the "don't overwrite if already set"
+    // guard from v1.  v1 was sticky-on-first-write — if station A
+    // transmitted first, the flag pinned to A and never updated
+    // when station B started keying.  v2 lets every
+    // transmitting=true event win so the flag tracks who's
+    // actually on the air, not who first claimed the channel.
+    // EOO decodes likewise overwrite (they ALSO go through
+    // setLastRadeRxCallsign), so the latest authoritative source
+    // is always on the flag.
+    //
+    // 2026-05-12 v2: tolerance bumped 1500 -> 3000 Hz to forgive
+    // small VFO offsets between the remote operator's published
+    // dial freq and our local VFO.  Different rigs round
+    // differently and ±1.5 kHz was missing legitimate same-channel
+    // pairs at the bench.
+    //
+    // Sticky semantics: once set, the callsign stays until
+    // overwritten or setDspMode leaves RADE.  setDspMode's
+    // RADE -> non-RADE branch clears m_lastRadeRxCallsign at
+    // SliceModel.cpp:215-218.
+    connect(m_freeDvReporter.get(), &FreeDVReporterClient::stationUpdated,
+            this, [this](const QString& /*sid*/, const FreeDVStation& info) {
+                if (!info.transmitting || info.callsign.isEmpty()) return;
+                if (info.frequencyHz == 0) return;
+                SliceModel* slice = m_activeSlice;
+                if (!slice) return;
+                const auto m = slice->dspMode();
+                if (m != DSPMode::RADE_U && m != DSPMode::RADE_L) {
+                    return;  // Flag SNR row is only visible in RADE.
+                }
+                const qint64 deltaHz =
+                    qAbs(static_cast<qint64>(info.frequencyHz)
+                         - static_cast<qint64>(slice->frequency()));
+                constexpr qint64 kFreqMatchToleranceHz = 3000;
+                if (deltaHz > kFreqMatchToleranceHz) return;
+                // Latest-wins: always replace, regardless of whether
+                // a previous fallback / EOO callsign is present.
+                // SliceModel's idempotent setter early-returns when
+                // the new value matches the old, so re-publishing
+                // the same callsign is a no-op.
+                slice->setLastRadeRxCallsign(info.callsign);
+                qCInfo(lcDsp).noquote()
+                    << QStringLiteral("FreeDV-Reporter flag fallback: "
+                                      "set callsign=%1 on slice (freq=%2 Hz, "
+                                      "deltaHz=%3)")
+                           .arg(info.callsign)
+                           .arg(slice->frequency())
+                           .arg(deltaHz);
+            });
+
     // Phase 3R K-bench: push current freq + TX state when the FreeDV
     // Reporter connects. Without this, the reporter knows our identity
     // (callsign / grid / message from setIdentity) but never our
