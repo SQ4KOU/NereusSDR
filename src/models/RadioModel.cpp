@@ -1146,6 +1146,13 @@ RadioModel::RadioModel(QObject* parent)
                 qCInfo(lcDsp) << "FreeDVReporter: pushing initial freq="
                               << freqHz << "Hz";
                 m_freeDvReporter->setFrequency(freqHz);
+
+                // Phase 3J-1 closeout follow-up (2026-05-12): hide our
+                // station from the dashboard unless we connected while
+                // already in RADE.  Otherwise we'd flash visible for
+                // one tick on connect before the dspModeChanged handler
+                // hides us.
+                updateFreedvReporterVisibility();
                 // 2026-05-12 bench: seed the dwell-throttle baseline so
                 // subsequent slice.frequencyChanged calls measure delta
                 // against the connect-time freq.  Without this seed the
@@ -1392,8 +1399,12 @@ void RadioModel::onClusterSpotReceived(const DxSpot& spot)
                                  1800).toInt();
     const QString color = s.value(QStringLiteral("DxClusterSpotColor"),
                                   QStringLiteral("#D2B48C")).toString();
-    m_spotModel->applySpotStatus(m_nextSpotIndex++,
-                                 kvsFromSpot(spot, lifetime, color));
+    // Phase 3J-1 closeout follow-up (2026-05-12): route through SpotModel
+    // dedup so re-emits of the same callsign / freq from the cluster +
+    // overlapping RBN feeds don't spam the list.  60 s window default;
+    // cluster lifetime stays at 30 min so the spot persists in the UI.
+    const int idx = m_spotModel->dedupIndexFor(spot.dxCall, spot.freqMhz);
+    m_spotModel->applySpotStatus(idx, kvsFromSpot(spot, lifetime, color));
 }
 
 void RadioModel::onRbnSpotReceived(const DxSpot& spot)
@@ -1404,8 +1415,8 @@ void RadioModel::onRbnSpotReceived(const DxSpot& spot)
                                  1800).toInt();
     const QString color = s.value(QStringLiteral("RbnSpotColor"),
                                   QStringLiteral("#4488FF")).toString();
-    m_spotModel->applySpotStatus(m_nextSpotIndex++,
-                                 kvsFromSpot(spot, lifetime, color));
+    const int idx = m_spotModel->dedupIndexFor(spot.dxCall, spot.freqMhz);
+    m_spotModel->applySpotStatus(idx, kvsFromSpot(spot, lifetime, color));
 }
 
 void RadioModel::onWsjtxSpotReceived(const DxSpot& spot)
@@ -1419,8 +1430,8 @@ void RadioModel::onWsjtxSpotReceived(const DxSpot& spot)
                                  120).toInt();
     const QString color = s.value(QStringLiteral("WsjtxSpotColor"),
                                   QStringLiteral("#00FF00")).toString();
-    m_spotModel->applySpotStatus(m_nextSpotIndex++,
-                                 kvsFromSpot(spot, lifetime, color));
+    const int idx = m_spotModel->dedupIndexFor(spot.dxCall, spot.freqMhz);
+    m_spotModel->applySpotStatus(idx, kvsFromSpot(spot, lifetime, color));
 
     // RxDecodeModel dual-feed: every WSJT-X decode also lands in the
     // "what my radio just heard" sink. WsjtxClient does not emit a separate
@@ -1467,8 +1478,8 @@ void RadioModel::onSpotCollectorSpotReceived(const DxSpot& spot)
                                  1800).toInt();
     const QString color = s.value(QStringLiteral("SpotCollectorSpotColor"),
                                   QStringLiteral("#B0C4DE")).toString();
-    m_spotModel->applySpotStatus(m_nextSpotIndex++,
-                                 kvsFromSpot(spot, lifetime, color));
+    const int idx = m_spotModel->dedupIndexFor(spot.dxCall, spot.freqMhz);
+    m_spotModel->applySpotStatus(idx, kvsFromSpot(spot, lifetime, color));
 }
 
 void RadioModel::onPotaSpotReceived(const DxSpot& spot)
@@ -1479,8 +1490,8 @@ void RadioModel::onPotaSpotReceived(const DxSpot& spot)
                                  3600).toInt();
     const QString color = s.value(QStringLiteral("PotaSpotColor"),
                                   QStringLiteral("#FFFF00")).toString();
-    m_spotModel->applySpotStatus(m_nextSpotIndex++,
-                                 kvsFromSpot(spot, lifetime, color));
+    const int idx = m_spotModel->dedupIndexFor(spot.dxCall, spot.freqMhz);
+    m_spotModel->applySpotStatus(idx, kvsFromSpot(spot, lifetime, color));
 }
 
 void RadioModel::onFreeDvReporterSpotReceived(const DxSpot& spot)
@@ -1491,8 +1502,8 @@ void RadioModel::onFreeDvReporterSpotReceived(const DxSpot& spot)
                                  1800).toInt();
     const QString color = s.value(QStringLiteral("FreeDvSpotColor"),
                                   QStringLiteral("#FF8C00")).toString();
-    m_spotModel->applySpotStatus(m_nextSpotIndex++,
-                                 kvsFromSpot(spot, lifetime, color));
+    const int idx = m_spotModel->dedupIndexFor(spot.dxCall, spot.freqMhz);
+    m_spotModel->applySpotStatus(idx, kvsFromSpot(spot, lifetime, color));
 }
 
 void RadioModel::onPskReporterSpotReceived(const DxSpot& spot)
@@ -1503,8 +1514,8 @@ void RadioModel::onPskReporterSpotReceived(const DxSpot& spot)
                                  1800).toInt();
     const QString color = s.value(QStringLiteral("PskReporterSpotColor"),
                                   QStringLiteral("#FF00FF")).toString();
-    m_spotModel->applySpotStatus(m_nextSpotIndex++,
-                                 kvsFromSpot(spot, lifetime, color));
+    const int idx = m_spotModel->dedupIndexFor(spot.dxCall, spot.freqMhz);
+    m_spotModel->applySpotStatus(idx, kvsFromSpot(spot, lifetime, color));
 }
 
 // ── Phase 3J-2 + 3R M3: spot-client auto-start state restore ───────────────
@@ -2312,6 +2323,31 @@ void RadioModel::flushFreedvFrequencyDwell()
     if (m_freedvFreqDwellTimer) {
         m_freedvFreqDwellTimer->stop();
     }
+}
+
+// Phase 3J-1 closeout follow-up (2026-05-12): show/hide our station on
+// the FreeDV Reporter dashboard based on the active slice's mode.
+// FreeDV Reporter is a tracker FOR FreeDV operators -- a station running
+// SSB or WSJT-X has no business appearing in that list.  Mirrors freedv-
+// gui's connect-and-hide-when-not-on-FreeDV behavior (FreeDVReporter.cpp
+// :167-185 + :704-729 [@77e793a] -- hideFromView / showOurselves).
+//
+// Connection stays alive so we can still see other FreeDV stations on
+// the dashboard (FreeDVReporterDialog UI works) and report decodes via
+// sendRxReport when our RadeChannel pulls an EOO callsign.
+void RadioModel::updateFreedvReporterVisibility()
+{
+    if (!m_freeDvReporter) { return; }
+
+    const SliceModel* slice = activeSlice();
+    const bool inRade = slice
+        && (slice->dspMode() == DSPMode::RADE_U
+         || slice->dspMode() == DSPMode::RADE_L);
+
+    // setHiddenFromView no-ops on the network side when the requested
+    // state matches the server's view, so this is safe to call on every
+    // mode change without flooding qso.freedv.org with hide/show events.
+    m_freeDvReporter->setHiddenFromView(!inRade);
 }
 
 void RadioModel::setActiveSlice(int index)
@@ -5286,6 +5322,11 @@ void RadioModel::wireSliceSignals()
     // filter/filter-type) and rebuild the WDSP channel if any setting changed.
     // dspChangeMeasured is emitted with elapsed ms when a rebuild occurs.
     connect(slice, &SliceModel::dspModeChanged, this, [this](DSPMode mode) {
+        // Phase 3J-1 closeout follow-up (2026-05-12): re-evaluate FreeDV
+        // Reporter visibility on every mode change.  Show our station on
+        // the dashboard only when we're in RADE_U / RADE_L.
+        updateFreedvReporterVisibility();
+
         RxChannel* rxCh = m_wdspEngine->rxChannel(0);
         if (rxCh) {
             rxCh->setMode(mode);

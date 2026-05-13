@@ -1181,6 +1181,21 @@ public slots:
     // never leaves the reporter showing a stale freq.
     void flushFreedvFrequencyDwell();
 
+    // Phase 3J-1 closeout follow-up (2026-05-12): FreeDV Reporter is a
+    // dashboard for FreeDV / RADE operators.  Our station should be
+    // visible there only when we're actually using RADE (RADE_U or
+    // RADE_L) -- not when we're on SSB / WSJT-X / CW.  Mirrors
+    // freedv-gui's connect-and-hide-when-not-on-FreeDV behavior; we stay
+    // connected so we can still see other FreeDV stations and report
+    // their decodes via sendRxReport, but our own row stays hidden on
+    // the public dashboard unless we're TX-capable in RADE.
+    //
+    // Wired on:
+    //   - active slice's dspModeChanged (mode switch during operation)
+    //   - active slice swap (different slice becomes active)
+    //   - FreeDVReporterClient::connected (initial state after connect)
+    void updateFreedvReporterVisibility();
+
 signals:
     void infoChanged();
     // Phase 3Q-1: parametrized — state passed so UI consumers can act without
