@@ -130,12 +130,63 @@ namespace NereusSDR {
 SliceModel::SliceModel(QObject* parent)
     : QObject(parent)
 {
+    setupRadeIdleClearTimer();
 }
 
 SliceModel::SliceModel(int sliceId, QObject* parent)
     : QObject(parent)
     , m_sliceIndex(sliceId)
 {
+    setupRadeIdleClearTimer();
+}
+
+// 2026-05-12 bench: RADE idle-clear timer setup.
+//
+// One-time construction during SliceModel ctor.  Reads
+// RadeIdleClearMs from AppSettings (default 20 s, clamp 5..120 s).
+// Single-shot QTimer; expiry lambda clears callsign + SNR back to
+// the "no decode yet" sentinels.  Timer is parented to `this` so
+// destruction is automatic; safe to leave running across mode swaps
+// because the expiry only clears state that's already cleared in
+// those paths.
+void SliceModel::setupRadeIdleClearTimer()
+{
+    auto& s = AppSettings::instance();
+    int ms = s.value(QStringLiteral("RadeIdleClearMs"), 20000).toInt();
+    if (ms < 5000)   { ms = 5000;   }
+    if (ms > 120000) { ms = 120000; }
+    m_radeIdleClearMs = ms;
+
+    m_radeIdleClearTimer = new QTimer(this);
+    m_radeIdleClearTimer->setSingleShot(true);
+    m_radeIdleClearTimer->setInterval(m_radeIdleClearMs);
+    connect(m_radeIdleClearTimer, &QTimer::timeout, this, [this]() {
+        // Clear callsign back to empty.  Renderer (VfoWidget) falls
+        // back to the "RADE" literal prefix when callsign is empty,
+        // so no "NaN" or empty cell on screen.
+        if (!m_lastRadeRxCallsign.isEmpty()) {
+            m_lastRadeRxCallsign.clear();
+            emit lastRadeRxCallsignChanged(m_lastRadeRxCallsign);
+        }
+        // Clear SNR to NaN.  VfoWidget renders NaN as "---" (not
+        // the literal string "NaN") in the SNR column.
+        if (!qIsNaN(m_snrDb)) {
+            m_snrDb = std::numeric_limits<double>::quiet_NaN();
+            emit snrDbChanged(m_snrDb);
+        }
+    });
+}
+
+// Restart the idle timer when fresh activity arrives.  Only runs the
+// timer while in a RADE sideband -- SSB / WSJT-X paths don't care
+// about RADE idle and would burn cycles on an irrelevant timer.
+void SliceModel::restartRadeIdleClearTimer()
+{
+    if (!m_radeIdleClearTimer) { return; }
+    if (m_dspMode != DSPMode::RADE_U && m_dspMode != DSPMode::RADE_L) {
+        return;
+    }
+    m_radeIdleClearTimer->start();  // restarts even if already running
 }
 
 SliceModel::~SliceModel() = default;
@@ -215,6 +266,15 @@ void SliceModel::setDspMode(DSPMode mode)
         if (isRade(oldMode) && !m_lastRadeRxCallsign.isEmpty()) {
             m_lastRadeRxCallsign.clear();
             emit lastRadeRxCallsignChanged(m_lastRadeRxCallsign);
+        }
+
+        // 2026-05-12 bench: stop the idle-clear timer when leaving
+        // RADE.  The clear above already happened; letting the timer
+        // fire would just re-emit lastRadeRxCallsignChanged("") and
+        // snrDbChanged(NaN) needlessly.  Also stop on RADE_U <-> RADE_L
+        // swaps for the same reason.
+        if (isRade(oldMode) && m_radeIdleClearTimer) {
+            m_radeIdleClearTimer->stop();
         }
 
         auto* radio = qobject_cast<RadioModel*>(parent());
@@ -1882,6 +1942,14 @@ void SliceModel::setSnrDb(double db)
 
     m_snrDb = db;
     emit snrDbChanged(db);
+
+    // 2026-05-12 bench: heard fresh activity -> restart the idle
+    // timer.  Only counts when the new SNR is numeric (NaN -> NaN was
+    // already filtered above; numeric -> NaN means "we just cleared",
+    // which shouldn't extend the activity window).
+    if (!dbNan) {
+        restartRadeIdleClearTimer();
+    }
 }
 
 // ── 2026-05-11 bench: last RADE-decoded speaker callsign ────────────────────
@@ -1897,6 +1965,15 @@ void SliceModel::setLastRadeRxCallsign(const QString& callsign)
     }
     m_lastRadeRxCallsign = callsign;
     emit lastRadeRxCallsignChanged(callsign);
+
+    // 2026-05-12 bench: heard fresh EOO callsign decode -> restart
+    // the idle timer.  Empty -> non-empty is real activity; clears
+    // back to empty (from timer expiry or mode-off-RADE) don't
+    // restart -- letting the timer keep counting from the last
+    // genuine activity.
+    if (!callsign.isEmpty()) {
+        restartRadeIdleClearTimer();
+    }
 }
 
 void SliceModel::loadFromSettings()
