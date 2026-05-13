@@ -422,6 +422,9 @@ set(CORE_SOURCES
     src/core/WdspEngine.cpp
     src/core/RxChannel.cpp
     src/core/TxChannel.cpp
+    src/core/RadeChannel.cpp
+    src/core/RadeText.cpp
+    src/core/Resampler.cpp
     src/core/PsFeedbackChannel.cpp
     src/core/PureSignal.cpp
     src/core/PsccPump.cpp
@@ -460,6 +463,8 @@ set(CORE_SOURCES
     src/core/accessories/PennyLaneController.cpp
     src/core/audio/MasterMixer.cpp
     src/core/audio/PcMicSource.cpp
+    src/core/audio/RadeTxFilters.cpp
+    src/core/audio/RadeTxFilters.h
     src/core/audio/RadioMicSource.cpp
     src/core/audio/VaxTxMicSource.cpp
     src/core/audio/CompositeTxMicRouter.cpp
@@ -471,6 +476,16 @@ set(CORE_SOURCES
     src/core/safety/SwrProtectionController.cpp
     src/core/safety/TxInhibitMonitor.cpp
     src/core/safety/safety_constants.cpp
+    src/core/SpotCollectorClient.cpp
+    src/core/PotaClient.cpp
+    src/core/DxClusterClient.cpp
+    src/core/WsjtxClient.cpp
+    src/core/FreeDVReporterClient.cpp
+    src/core/PskReporterClient.cpp
+    src/core/CtyDatParser.cpp
+    src/core/AdifParser.cpp
+    src/core/DxccWorkedStatus.cpp
+    src/core/DxccColorProvider.cpp
 )
 
 # CoreAudioHalBus — macOS-only IAudioBus implementation bridging to the
@@ -515,6 +530,11 @@ set(MODEL_SOURCES
     src/models/MeterModel.cpp
     src/models/TransmitModel.cpp
     src/models/FilterPresetStore.cpp
+    src/models/SpotModel.cpp
+    src/models/SpotTableModel.cpp
+    src/models/BandFilterProxy.cpp
+    src/models/FreeDVStationModel.cpp
+    src/models/RxDecodeModel.cpp
 )
 
 set(GUI_SOURCES
@@ -579,6 +599,10 @@ set(GUI_SOURCES
     src/gui/widgets/StationBlock.h
     src/gui/NetworkDiagnosticsDialog.cpp
     src/gui/NetworkDiagnosticsDialog.h
+    src/gui/SpotHubDialog.cpp
+    src/gui/SpotHubDialog.h
+    src/gui/FreeDVReporterDialog.cpp
+    src/gui/FreeDVReporterDialog.h
     src/gui/containers/ContainerWidget.cpp
     src/gui/containers/FloatingContainer.cpp
     src/gui/containers/ContainerManager.cpp
@@ -710,6 +734,7 @@ set(GUI_SOURCES
     src/gui/applets/TxEqDialog.cpp
     src/gui/applets/TxCfcDialog.cpp
     src/gui/applets/PhoneCwApplet.cpp
+    src/gui/applets/RadeApplet.cpp
     src/gui/applets/EqApplet.cpp
     src/gui/applets/VaxApplet.cpp
     src/gui/applets/FmApplet.cpp
@@ -871,6 +896,53 @@ if(WDSP_FOUND)
     target_link_libraries(NereusSDRObjs PUBLIC wdsp_static)
     target_compile_definitions(NereusSDRObjs PUBLIC HAVE_WDSP)
 endif()
+
+# --------------------------------------------------------------------------
+# RADE neural codec for FreeDV digital voice (Phase 3R)
+# License: BSD 2-Clause (radae_nopy at b2891023f3aecdf8b1793618000b1be6bcb2c4d1)
+# See docs/architecture/phase3j2-3r-spots-and-rade-design.md Section 5
+#
+# radae_nopy's CMakeLists.txt fetches and builds Opus from xiph at first
+# build via ExternalProject_Add (cmake/BuildOpus.cmake). This adds 90-180
+# seconds to the first clean configure/build cycle; incremental builds
+# are unchanged. Opus build needs autoconf, automake, libtool, and a
+# POSIX make on the build host.
+#
+# rade_api.h transitively includes opus_types.h and nnet.h from the
+# Opus source tree (under build_opus-prefix/src/build_opus). Upstream
+# adds these via directory-scope include_directories() in BuildOpus.cmake,
+# which only reaches sources compiled inside the rade subdirectory.
+# We re-expose them as target-scope include dirs on NereusSDRObjs so
+# any future NereusSDR consumer that #includes "rade_api.h" can resolve
+# the transitive Opus headers.
+# --------------------------------------------------------------------------
+add_subdirectory(third_party/rade)
+
+if(NOT TARGET rade)
+    message(FATAL_ERROR "RADE library target 'rade' not found after add_subdirectory(third_party/rade)")
+endif()
+
+target_link_libraries(NereusSDRObjs PUBLIC rade)
+target_include_directories(NereusSDRObjs PUBLIC
+    ${CMAKE_SOURCE_DIR}/third_party/rade/src
+    ${CMAKE_BINARY_DIR}/third_party/rade/build_opus-prefix/src/build_opus/include
+    ${CMAKE_BINARY_DIR}/third_party/rade/build_opus-prefix/src/build_opus/dnn
+    ${CMAKE_BINARY_DIR}/third_party/rade/build_opus-prefix/src/build_opus/celt
+    ${CMAKE_BINARY_DIR}/third_party/rade/build_opus-prefix/src/build_opus
+)
+
+# --------------------------------------------------------------------------
+# r8brain-free-src high-quality polyphase resampler (Phase 3R Task I2)
+# License: MIT (see third_party/r8brain/LICENSE.txt)
+# Vendored at SHA 5c44bebe9c477d47b1dc7037fcaae2794ff2b4e1 (2026-03-12).
+#
+# r8brain is header-only; the OBJECT library exists to anchor the
+# function-local statics in CDSPRealFFT.h to one translation unit and
+# to expose the include directory to NereusSDR sources that #include
+# "CDSPResampler.h".
+# --------------------------------------------------------------------------
+add_subdirectory(third_party/r8brain)
+target_link_libraries(NereusSDRObjs PUBLIC r8brain)
 
 # --------------------------------------------------------------------------
 # DeepFilterNet3 DFNR — pre-built neural noise reduction library (MIT/Apache-2.0)

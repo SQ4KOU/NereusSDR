@@ -156,6 +156,7 @@ mw0lge@grange-lane.co.uk
 #include <QColor>
 #include <QPoint>
 #include <QMap>
+#include <QHash>
 #include <QTimer>
 #include <QPropertyAnimation>
 
@@ -925,6 +926,109 @@ public slots:
     // From AetherSDR SpectrumWidget.cpp:740-756 [@0cd4559]
     void clearWaterfallHistory();
 
+public:
+    // ── Spot overlay (Phase 3J-2 Task E1) ─────────────────────────────────
+    // Public structs + setters re-declared under a fresh `public:` access
+    // specifier so MOC doesn't try to interpret the nested struct as a
+    // slot declaration (the enclosing block above is `public slots:`).
+    //
+    // Spot marker descriptor pushed into the panadapter overlay. Mirrors
+    // AetherSDR's SpotMarker struct (SpectrumWidget.h:283-294 [@0cd4559])
+    // verbatim so the upstream drawSpotMarkers() algorithm ports unchanged.
+    // From AetherSDR src/gui/SpectrumWidget.h:283-294 [@0cd4559]
+    struct SpotMarker {
+        int    index{-1};
+        QString callsign;
+        double freqMhz{0.0};
+        QString color;       // #AARRGGBB or empty for default
+        QString mode;
+        QColor  dxccColor;   // DXCC-aware color from DxccColorProvider (#330)
+        QString source;
+        QString spotterCallsign;
+        QString comment;
+        qint64  timestampMs{0};
+    };
+
+    // Cluster badge descriptor for spots that overflowed the level cap.
+    // From AetherSDR src/gui/SpectrumWidget.h:297-300 [@0cd4559]
+    struct SpotCluster {
+        QRect rect;
+        QVector<SpotMarker> spots;
+    };
+
+    // Click hit-test rectangle bound to a single SpotMarker. The rect is
+    // the label box drawn by drawSpotMarkers; freqMhz is the click-to-tune
+    // target; markerIndex points back into m_spotMarkers for tooltip data.
+    // From AetherSDR src/gui/SpectrumWidget.h:635-639 [@0cd4559]
+    struct SpotHitRect {
+        QRect  rect;
+        double freqMhz{0.0};
+        int    markerIndex{-1};
+    };
+
+    void setSpotMarkers(const QVector<SpotMarker>& markers);
+    // 2026-05-12 bench fix (Gap #6 — Spot List hover sync).  Driven
+    // by SpotHubDialog when the user mouses over a row so the
+    // matching marker on the panadapter highlights.  -1 clears.
+    void setHoverSpotIndexExternal(int idx) {
+        if (m_hoverSpotIndexExternal != idx) {
+            m_hoverSpotIndexExternal = idx;
+            update();
+        }
+    }
+    // 2026-05-12 bench fix (Gap #7).  Per-source panadapter overlay
+    // visibility.  Missing key == visible (default).  Source strings
+    // match SpotMarker::source: "Cluster", "RBN", "WSJT-X",
+    // "SpotCollector", "POTA", "FreeDV", "PSK", "Memory".
+    void setSpotSourceVisible(const QString& source, bool visible) {
+        const bool current = m_spotSourceVisible.value(source, true);
+        if (current == visible) { return; }
+        m_spotSourceVisible.insert(source, visible);
+        update();
+    }
+    bool isSpotSourceVisible(const QString& source) const {
+        return m_spotSourceVisible.value(source, true);
+    }
+    void setShowSpots(bool on) { m_showSpots = on; update(); }
+    bool showSpots() const { return m_showSpots; }
+    void setSpotFontSize(int px) { m_spotFontSize = px; update(); }
+    void setSpotMaxLevels(int n) { m_spotMaxLevels = n; update(); }
+    void setSpotStartPct(int pct) { m_spotStartPct = pct; update(); }
+    void setSpotOverrideColors(bool on) { m_spotOverrideColors = on; update(); }
+    void setSpotOverrideBg(bool on) { m_spotOverrideBg = on; update(); }
+    void setSpotColor(const QColor& c) { m_spotColor = c; update(); }
+    void setSpotBgColor(const QColor& c) { m_spotBgColor = c; update(); }
+    void setSpotBgOpacity(int pct) { m_spotBgOpacity = pct; update(); }
+
+    // Phase 3J-2 + 3R M2: refresh every Display tab knob from AppSettings.
+    // Wired to SpotHubDialog::settingsChanged in MainWindow::openSpotHub
+    // so the live spectrum overlay tracks the dialog. Defaults match the
+    // F4 buildDisplayTab read-side at SpotHubDialog.cpp:1714-1730.
+    void loadSpotDisplaySettings();
+
+    // Test seams (Phase 3J-2 Task E1). Public read-only views into the
+    // private state drawSpotMarkers() rebuilds each frame; the test
+    // suite asserts contract by inspecting these vectors after a
+    // synthetic render pass.
+    const QVector<SpotMarker>&   spotMarkersForTest()   const { return m_spotMarkers; }
+    const QVector<SpotHitRect>&  spotClickRectsForTest() const { return m_spotClickRects; }
+    const QVector<SpotCluster>&  spotClustersForTest()  const { return m_spotClusters; }
+    void  drawSpotMarkersForTest(QPainter& p, const QRect& specRect) {
+        drawSpotMarkers(p, specRect);
+    }
+
+    // Phase 3J-2 + 3R M2 test seams. Read-only views into the Spot
+    // Display knob state so the M2 round-trip test can pin the
+    // loadSpotDisplaySettings push-path without driving a paint cycle.
+    int    spotFontSizeForTest()        const { return m_spotFontSize; }
+    int    spotMaxLevelsForTest()       const { return m_spotMaxLevels; }
+    int    spotStartPctForTest()        const { return m_spotStartPct; }
+    int    spotBgOpacityForTest()       const { return m_spotBgOpacity; }
+    bool   spotOverrideColorsForTest()  const { return m_spotOverrideColors; }
+    bool   spotOverrideBgForTest()      const { return m_spotOverrideBg; }
+    QColor spotColorForTest()           const { return m_spotColor; }
+    QColor spotBgColorForTest()         const { return m_spotBgColor; }
+
 signals:
     // Phase 3Q-8: emitted on a left-click while not Connected.
     // MainWindow wires this to showConnectionPanel().
@@ -932,6 +1036,25 @@ signals:
 
     // Emitted when user clicks on spectrum/waterfall to tune
     void frequencyClicked(double hz);
+    // Phase 3J-2 Task E1: emitted when the user clicks a spot label
+    // (or selects a spot from a cluster badge popup). spotIndex is the
+    // SpotMarker::index that was bound to the clicked label so spot
+    // sources (Memory, DX cluster, RBN, etc.) can react.
+    // From AetherSDR src/gui/SpectrumWidget.h:327 [@0cd4559]
+    void spotTriggered(int spotIndex);
+
+    // 2026-05-12 bench fix (Gap #3 from adversarial audit).  Emitted
+    // from the right-click context menu's "Remove Spot" action so the
+    // SpotModel can purge the spot.  Mirrors AetherSDR
+    // SpectrumWidget.h:357 [@0cd4559].
+    void spotRemoveRequested(int spotIndex);
+
+    // 2026-05-12 bench fix (Gap #6).  Fires when the mouse enters or
+    // leaves a spot label hit-rect.  -1 indicates "no spot under
+    // cursor" (use to clear the Spot List highlight).  Drives the
+    // panadapter <-> Spot List hover sync.
+    void spotHoverIndexChanged(int spotIndex);
+
     // Emitted when user drags a filter edge
     void filterEdgeDragged(int lowHz, int highHz);
     // Emitted when pan center changes (drag, auto-scroll)
@@ -967,6 +1090,7 @@ protected:
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
+    void leaveEvent(QEvent* event) override;
 
 private:
     // ---- Phase 3Q-8: disconnect overlay state ----
@@ -1050,6 +1174,22 @@ private:
 
     void drawVfoMarker(QPainter& p, const QRect& specRect, const QRect& wfRect);
     void drawCursorInfo(QPainter& p, const QRect& specRect);
+
+    // ---- Spot overlay (Phase 3J-2 Task E1) ----
+    // From AetherSDR src/gui/SpectrumWidget.cpp:4497-4633 [@0cd4559]
+    // Algorithm preserved verbatim:
+    //  - Color priority: override -> DXCC -> spot color -> default cyan.
+    //  - Multi-level vertical stacking with collision-induced nudge-down.
+    //  - Re-scan from top after each nudge (handles cascade overlaps).
+    //  - Overflow into +N cluster badges at maxBottom + 2; cluster bin
+    //    width = 40 px.
+    //  - Vertical dotted tick from spectrum bottom to label.
+    //  - Optional background pill with configurable opacity.
+    //  - Click-to-tune via frequencyClicked(hz) signal (NereusSDR Hz units;
+    //    AetherSDR emits MHz, the call site multiplies by 1e6).
+    //  - Cluster badge popup menu with formatted spot lines.
+    void drawSpotMarkers(QPainter& p, const QRect& specRect);
+    void showSpotClusterPopup(const SpotCluster& cluster, const QPoint& globalPos);
 
     // ---- TX filter overlay (Plan 4 D9, Cluster E) ----
     // drawTxFilterOverlay: panadapter band fill + border lines + label.
@@ -1365,6 +1505,41 @@ private:
 
     // ---- Overlay menu ----
     SpectrumOverlayMenu* m_overlayMenu{nullptr};
+
+    // ---- Spot overlay state (Phase 3J-2 Task E1) ----
+    // Backing store + per-frame click-rect / cluster vectors. Defaults
+    // match AetherSDR src/gui/SpectrumWidget.h:634-651 [@0cd4559].
+    QVector<SpotMarker>  m_spotMarkers;
+    QVector<SpotHitRect> m_spotClickRects;
+    QVector<SpotCluster> m_spotClusters;
+    bool   m_showSpots{true};
+    int    m_spotFontSize{16};
+    int    m_spotMaxLevels{3};
+    int    m_spotStartPct{50};       // % down from top of spectrum
+    bool   m_spotOverrideColors{false};
+    bool   m_spotOverrideBg{true};
+    QColor m_spotColor{Qt::yellow};
+    QColor m_spotBgColor{Qt::black};
+    int    m_spotBgOpacity{48};
+
+    // 2026-05-12 bench fix (Gap #6).  m_hoverSpotIndex: which spot
+    // label the mouse is currently over (SpotMarker::index, -1 if
+    // none).  Emitted via spotHoverIndexChanged so the Spot List can
+    // highlight the matching row.  m_hoverSpotIndexExternal: opposite
+    // direction — set by setHoverSpotIndexExternal() when the user
+    // hovers a row in the Spot List, drives a halo around the label
+    // in drawSpotMarkers.
+    int    m_hoverSpotIndex{-1};
+    int    m_hoverSpotIndexExternal{-1};
+
+    // 2026-05-12 bench fix (Gap #7).  Per-source visibility mask for
+    // the panadapter overlay.  Keys are SpotMarker::source strings
+    // ("Cluster", "RBN", "WSJT-X", "SpotCollector", "POTA", "FreeDV",
+    // "PSK", "Memory"); missing keys default to visible.  Used by
+    // drawSpotMarkers to skip the per-marker draw when the source's
+    // panadapter visibility toggle is off.  SpotHubDialog Display tab
+    // drives this via setSpotSourceVisible.
+    QHash<QString, bool> m_spotSourceVisible;
 
     // ---- Task 2.3: Spectrum text overlay state ----
 

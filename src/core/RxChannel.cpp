@@ -366,11 +366,33 @@ void RxChannel::setMode(DSPMode mode)
     m_mode.store(val);
 
 #ifdef HAVE_WDSP
+    // Phase 3R K-bench: RADE_U / RADE_L are NereusSDR-native modes
+    // (WdspTypes.h:159-186) that WDSP has no knowledge of. The RX
+    // pipeline keeps WDSP alive as the demod front-end in RADE
+    // modes (RxDspWorker.cpp:160-191 — "WDSP always runs ... RADE
+    // post-SSB-demod fork"), so map RADE_U -> USB and RADE_L -> LSB
+    // here before passing to SetRXAMode. The slice-facing mode()
+    // accessor and the modeChanged signal both still report the
+    // user-requested DSPMode; only the WDSP API call is mapped.
+    // Without this mapping, raw enum 12/13 lands in WDSP's mode
+    // enum and triggers undefined behavior (review finding
+    // 2026-05-12, PR #238).
     // From Thetis wdsp-integration.md section 4.2
-    SetRXAMode(m_channelId, val);
+    SetRXAMode(m_channelId, static_cast<int>(wdspModeFor(mode)));
 #endif
 
     emit modeChanged(mode);
+}
+
+DSPMode RxChannel::wdspModeFor(DSPMode mode)
+{
+    // NereusSDR-native: WdspTypes.h:181-186 reserves RADE_U / RADE_L
+    // as non-WDSP slice modes. The RX K-bench pipeline runs WDSP as
+    // the SSB demod front-end in both, so the WDSP-facing equivalent
+    // is USB for RADE_U and LSB for RADE_L.
+    if (mode == DSPMode::RADE_U) return DSPMode::USB;
+    if (mode == DSPMode::RADE_L) return DSPMode::LSB;
+    return mode;
 }
 
 // ---------------------------------------------------------------------------

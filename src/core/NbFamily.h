@@ -245,6 +245,14 @@ private:
     const int m_sampleRate;
     const int m_bufferSize;
 
+    // 2026-05-13 (Linux CI #238): true when m_channelId is outside
+    // WDSP's [0, MAX_CHANNELS) range so all WDSP calls (in ctor, dtor,
+    // and runtime setters) must be skipped.  Test fixtures construct
+    // NbFamily with channelId >= MAX_CHANNELS for software-only
+    // isolation; production always uses 0-1 so this stays false in
+    // production.  Final because it's pinned at construction.
+    const bool m_skipWdsp;
+
     std::atomic<NbMode> m_mode{NbMode::Off};
     std::atomic<bool>   m_snbEnabled{false};
     NbTuning            m_tuning{};

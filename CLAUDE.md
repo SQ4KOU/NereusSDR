@@ -127,6 +127,9 @@ Before reading any Thetis source file (`../Thetis/...`), state out loud:
     grep -l "<nereussdr-path>" docs/attribution/THETIS-PROVENANCE.md
     ```
    If the file is not registered, the port is a **new attribution event**.
+   For freedv-gui ports specifically: also run
+   `grep -l "<nereussdr-path>" docs/attribution/FREEDV-GUI-PROVENANCE.md`
+   to check provenance status.
 4. **Plan**: if (3) returned nothing, you will add the verbatim upstream
    header AND a PROVENANCE row in the same commit that introduces the
    ported logic. Use `docs/attribution/HOW-TO-PORT.md` for the format.
@@ -140,12 +143,14 @@ This applies equally to:
 - Edits to NereusSDR-original files that **add** new ported logic
   (e.g. wiring in a new Thetis-derived constant or formula).
 - Ports from non-Thetis upstreams (`../mi0bot-Thetis/`, `../AetherSDR/`,
-  WDSP) — same protocol, different PROVENANCE table / variant.
+  `../freedv-gui/`, WDSP). Same protocol, different PROVENANCE table /
+  variant.
 
 Verifier scripts (`scripts/verify-thetis-headers.py`,
-`scripts/check-new-ports.py`) are the safety net (Ring 3, in CI). The
-local pre-commit hook installed via `scripts/install-hooks.sh` runs the
-same scripts pre-push (Ring 2). The primary control is this checklist.
+`scripts/verify-freedv-headers.py`, `scripts/check-new-ports.py`) are the
+safety net (Ring 3, in CI). The local pre-commit hook installed via
+`scripts/install-hooks.sh` runs the same scripts pre-push (Ring 2). The
+primary control is this checklist.
 
 ### What Counts As "Guessing" (NEVER Do These)
 
@@ -227,6 +232,23 @@ constants, protocol handling, DSP flow, feature behavior).
 │           └── ...
 ```
 
+### freedv-gui Source Layout Quick Reference
+
+```
+../freedv-gui/
+├── src/
+│   ├── reporting/                  ← FreeDVReporter + pskreporter
+│   │   ├── FreeDVReporter.{h,cpp}
+│   │   └── pskreporter.{h,cpp}
+│   ├── pipeline/                   ← RADE pipeline + EQ + AGC steps
+│   │   ├── RADEReceiveStep.{h,cpp}
+│   │   ├── RADETransmitStep.{h,cpp}
+│   │   ├── rade_text.{h,c}
+│   │   ├── EqualizerStep.{h,cpp}
+│   │   └── AgcStep.{h,cpp}
+│   └── gui/dialogs/freedv_reporter.{h,cpp}  ← 14-col live station view
+```
+
 ---
 
 ## AI Agent Guidelines
@@ -301,7 +323,7 @@ WDSP source is in `third_party/wdsp/` (TAPR v1.29 + linux_port.h for cross-platf
 FFTW3: system package on Linux/macOS, pre-built DLL on Windows (`third_party/fftw3/`).
 First run generates FFTW wisdom (~15 min). Cached in `~/.config/NereusSDR/` for subsequent launches.
 
-Current version: **0.4.0** (set in `CMakeLists.txt`; tagged pre-releases use `vX.Y.Z-rcN` suffix).
+Current version: **0.4.1** (set in `CMakeLists.txt`; tagged pre-releases use `vX.Y.Z-rcN` suffix). The pending Phase 3J-2 + 3R + bench-fix work targets the next 0.4.x release; the exact version is picked by the `/release` skill at release time.
 
 ---
 
@@ -342,6 +364,27 @@ Key source directories: `src/core/` (protocol, audio, DSP), `src/models/`
 * `HGauge` — horizontal bar gauge widget
 * `ComboStyle` — styled combo box shared across applets
 * `ColorSwatchButton` (`src/gui/ColorSwatchButton.h`) — reusable color picker button: QPushButton subclass, QColorDialog with alpha, `colorChanged(QColor)` signal, static `colorToHex` / `colorFromHex` helpers for AppSettings `"#RRGGBBAA"` round-trip. Added in 3G-8; used by 9 call sites across the Display setup pages (S11/S13 trace colours, W10 waterfall low colour, G6 band edge, G9–G13 grid/text/zero-line colours).
+
+**Phase 3J-2 (Spot system) classes (pending next 0.4.x release):**
+
+* `SpotModel` (`src/models/SpotModel.h`): TCI-keyed sink for all spot sources (ported from AetherSDR). Owns the canonical SpotData ring + emits `spotReceived` / `spotExpired`. Per-source dedup window (10 s, configurable).
+* `SpotTableModel` (`src/models/SpotTableModel.h`): QAbstractTableModel backing the Spot List tab (extracted from AetherSDR DxClusterDialog).
+* `BandFilterProxy` (`src/models/BandFilterProxy.h`): QSortFilterProxyModel for band + source pill filtering.
+* `FreeDVStationModel` (`src/models/FreeDVStationModel.h`): NereusSDR-native 14-field live station map driven by FreeDVReporterClient.
+* `RxDecodeModel` (`src/models/RxDecodeModel.h`): local decode ring buffer; sources WSJT-X UDP + RADE callsign-over-EOO decodes.
+* `DxClusterClient` / `WsjtxClient` / `SpotCollectorClient` / `PotaClient` / `FreeDVReporterClient` / `PskReporterClient` (`src/core/`): 6 spot-source clients (RBN handled through DxClusterClient on the RBN telnet host).
+* `CtyDatParser` / `AdifParser` / `DxccWorkedStatus` / `DxccColorProvider` (`src/core/`): 4-tier DXCC color resolver stack (ported from AetherSDR).
+* `SpotHubDialog` (`src/gui/SpotHubDialog.h`): modeless 9-tab dialog (Tools > Spot Hub, Ctrl+Shift+S) with per-source tabs + unified Spot List + Display knobs (ported from AetherSDR's DxClusterDialog pattern).
+* `FreeDVReporterDialog` (`src/gui/FreeDVReporterDialog.h`): modeless 14-column live station view (Tools > FreeDV Reporter, Ctrl+Shift+R) with TX/RX highlights, QSY, status messages, idle auto-removal (Qt6 port from freedv-gui's wx UI).
+
+**Phase 3R (RADE mode) classes (pending next 0.4.x release):**
+
+* `RadeChannel` (`src/core/wdsp/RadeChannel.h`): peer-mode DSP channel for `DSPMode::RADE`. RX path decodes I/Q to speech via librade; TX path scaffolded (full real-time integration deferred to K-bench follow-up). Hybrid port: AetherSDR for Qt6 channel structure + freedv-gui for DSP pipeline truth.
+* `RadeText` (`src/core/wdsp/RadeText.h`): thin Qt6 wrapper over third_party/rade's native callsign-over-EOO API. Task I4 Option B decision avoided porting freedv-gui's rade_text.c + roughly 1500 lines of codec2 deps.
+* `RadeApplet` (`src/gui/applets/RadeApplet.h`): right-column applet auto-docked when RADE is the active mode. Profile combo + sync indicator + Reset Vocoder button.
+* `Resampler` / `RadeTxHpf80` / `RadeTx48to16` (`src/core/audio/`): TX-path helpers (HPF + 48-to-16 kHz polyphase resampler). Used by TxWorkerThread's RADE TxPath (scaffolded; K-bench follow-up pending).
+* `MicProfileManager` (existing): gains a new RADE factory profile (22 total, was 21). Leveler enabled; ALC + CFC + CESSB + Phase Rotator all bypassed. Auto-selected on mode entry to RADE.
+* `SliceModel` (existing): gains `snrDb` Q_PROPERTY for the VFO flag SNR row, mode-aware visibility (RADE only).
 
 **Thread Architecture:**
 
@@ -488,6 +531,10 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | [phase3g6a-plan.md](docs/architecture/phase3g6a-plan.md) | 3G-6 (one-shot): Full Thetis Parity + MMIO | **Complete** |
 | [phase3g8-rx1-display-parity-plan.md](docs/architecture/phase3g8-rx1-display-parity-plan.md) | 3G-8: RX1 Display Parity (47 Spectrum/Waterfall/Grid controls, Band enum, per-band grid, GPU polish) | **Complete** |
 | [phase3g8-verification/README.md](docs/architecture/phase3g8-verification/README.md) | 3G-8: 47-control manual verification matrix | Matrix drafted |
+| [phase3j2-3r-spots-and-rade-design.md](docs/architecture/phase3j2-3r-spots-and-rade-design.md) | 3J-2 + 3R: Spot system + FreeDV Reporter + PSK Reporter + RADE peer mode design spec | **Complete (pending next 0.4.x release)** |
+| [phase3j2-3r-spots-and-rade-plan.md](docs/architecture/phase3j2-3r-spots-and-rade-plan.md) | 3J-2 + 3R: implementation plan (50+ commits landed in the pending 0.4.x release) | **Complete (pending next 0.4.x release)** |
+| [phase3j2-verification/README.md](docs/architecture/phase3j2-verification/README.md) | 3J-2: 11-row bench verification matrix (DX cluster, RBN, WSJT-X, SpotCollector, POTA, FreeDV Reporter, PSK Reporter, DXCC coloring, panadapter collisions, auto-connect, Display knobs) | Matrix drafted |
+| [phase3r-verification/README.md](docs/architecture/phase3r-verification/README.md) | 3R: 12-row bench verification matrix (RADE RX, RADE TX K-bench-gated, preset routing, mode dispatch, UI surfaces, HL2 gated, PA safety, DEXP/VOX, multi-slice deferred) | Matrix drafted |
 | [phase3f-multi-panadapter-plan.md](docs/architecture/phase3f-multi-panadapter-plan.md) | 3F: Multi-Panadapter + DDC Assignment | Planning (after 3I-4) |
 
 ### Protocol Reference (`docs/protocols/`)
@@ -506,9 +553,22 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | 1B: Thetis Analysis | Dual-thread DSP (RX1/RX2), pre-allocated receivers, one-way protocol, skin system |
 | 1C: WDSP Analysis | 256 API functions, channel-based DSP, fexchange2() for I/Q, PureSignal feedback loop |
 
-### Current Phase: post-v0.4.0 (shipped 2026-05-08). Next major epic: 3M-2 CW TX.
+### Current Phase: Phase 3J-2 + 3R + bench-fix tail (pending next 0.4.x release). Next major epic: 3M-2 CW TX.
 
-**v0.4.0 shipped 2026-05-08** with five major pieces of work landing together:
+**Pending next 0.4.x release (2026-05-11 → 2026-05-12)** with two major epics landing together:
+
+* **Phase 3J-2 (Spot system + FreeDV Reporter + PSK Reporter).** 7 spot-source clients (DX cluster + RBN + WSJT-X UDP + SpotCollector + POTA + FreeDV Reporter + PSK Reporter), SpotHubDialog (Tools > Spot Hub, Ctrl+Shift+S, 9 tabs: per-source + Spot List + Display), FreeDVReporterDialog (Tools > FreeDV Reporter, Ctrl+Shift+R, 14-col live view with TX/RX highlights + QSY + idle auto-remove), DXCC color provider (cty.dat + ADIF 4-tier resolver), panadapter spot overlay with collision-avoidance multi-level stacking + `+N` cluster badges, Display tab knobs round-tripping through AppSettings, auto-connect restore on launch. Bench verification matrix: `docs/architecture/phase3j2-verification/README.md` (11 rows).
+* **Phase 3R (RADE as a true peer mode).** Vendored radae_nopy + Opus under `third_party/rade/` (BSD-2-Clause; neural weights compiled into librade, no external model file); `DSPMode::RADE` enum entry; RadeChannel RX path live; RadeChannel TX path scaffolded (TxPath enum + HPF + 48-to-16 resampler helpers; full real-time integration into TxWorkerThread's semaphore-wake TX pump deferred to K-bench follow-up); Task I4 Option B (use third_party/rade's native callsign-over-EOO API instead of porting freedv-gui's rade_text.c + roughly 1500 lines of codec2 deps); VFO flag mode-aware SNR row; RadeApplet; Mode menu RADE entry; MicProfileManager "RADE" factory profile (22 total, was 21; Leveler on, ALC/CFC/CESSB/PhRot bypassed); RxDecodeModel sources from both WSJT-X + RADE decodes. Bench verification matrix: `docs/architecture/phase3r-verification/README.md` (12 rows; Rows 9/12 deferred (Row 2 RADE TX shipped end-to-end)).
+
+**Build + packaging:** `third_party/rade/` (radae_nopy SHA b289102) and `third_party/r8brain/` (24-bit polyphase resampler, MIT) added to vendored dependency set. CMake glue builds RADE + Opus + LPCNet via ExternalProject. Approximately 9 MB added to the binary on every platform.
+
+**Deferred / known limitations for the pending 0.4.x release:**
+
+* RADE TX real-time integration into TxWorkerThread (K-bench follow-up after on-air RX verification).
+* HL2 RADE bench verification (gated on HL2 ATT/filter audit closure).
+* RADE multi-slice (RADE on A while SSB on B); Phase 3F future.
+
+**Prior context (v0.4.0, shipped 2026-05-08)** with five major pieces of work landing together:
 
 * **3M-4 PureSignal arrives.** Feedback DDC plumbing on Protocol 1 and Protocol 2, `calcc.c` + `iqc.c` vendored verbatim from Thetis, `PureSignal` coordinator class, `PsccPump` driver, per-board `PsDdcConfig`, `PsForm` modeless dialog (Tools → PureSignal), `AmpView` modeless dialog, two-tone IMD overlay on the spectrum, `PsaIndicatorWidget` bottom-banner FB+PS pair. Enabled on every supported P1 and P2 SKU including HL2 (with HL2-specific negative-ATT support, AutoAtt convergence, ATT-on-TX master force-enable, psSampleRate=0 sentinel resolution) and plain Hermes. NereusSDR-only PureSignal Setup pages retired in favour of the Thetis-parity PsForm dialog.
 * **Display + DSP-Options refactor.** WDSP `avenger()` and `detector()` ported (Thetis-faithful frame averaging + bin-to-pixel reduction). New Setup → DSP page (18 controls, RX/TX combo split, in-place filter resize, Filter Impulse Cache, per-mode buffer/filter/filter-type live-apply). Spectrum: full Thetis-faithful FFT slider with 7 windows + live bin width, K-based auto-zoom, NF-aware grid, Hz/bin auto-zoom override, SpectrumPeaksPage with PeakBlobDetector + ActivePeakHoldTrace, source-first port of Thetis `processNoiseFloor`. New Multimeter page with configurable MeterPoller. SettingsSchemaVersion v5 migrates DSP-Options Buffer/Filter Size to per-direction.
@@ -520,7 +580,7 @@ preferences. OpenHPSDR radios don't store per-slice state.
 
 **Prior context (v0.3.2, shipped 2026-05-05):** 3M-3a-iii DEXP/VOX speech processing end-to-end, HL2 mi0bot RF/Tune Power slider parity, Setup → PA full Thetis parity + PA over-drive safety hotfix kernel, persistence and stability tail. **Prior context (v0.3.1, shipped 2026-05-03):** 3M-1 SSB TX (PR #152), Phase 3Q connection workflow refactor + chrome layer (PR #158), 3M-3a-i TX EQ + Leveler + ALC, 3M-3a-ii CFC + CPDR + CESSB + Phase Rotator (MicProfileManager 91 keys, 19/21 factory profiles ported verbatim), ParametricEq widget port (PR #159), Plan 4 ui-polish-foundation epic (PR #166). HL2 ATT/filter safety audit closed. Pre-emphasis de-scoped from 3M-3a-ii to 3M-3b (FM-mode follow-up).
 
-**Next on the TX epic: 3M-2 CW TX.** Sidetone, firmware keyer, QSK/break-in. Absorbs the HL2 CWX bit-3 follow-up (`networkproto1.c:1247-1252 [@c26a8a4]`; desk-review B3, "HL2 firmware uses bit 3 of I-low byte for CWX PTT, non-HL2 boards don't"). After 3M-2: 3M-3b (FM pre-emphasis), then 3F multi-panadapter (which finally exercises `RadioModel::setActiveRxCountLive` + the aamix anti-VOX path) and the longer-tail 3H / 3J / 3K phases.
+**Next on the TX epic: 3M-2 CW TX.** Sidetone, firmware keyer, QSK/break-in. Absorbs the HL2 CWX bit-3 follow-up (`networkproto1.c:1247-1252 [@c26a8a4]`; desk-review B3, "HL2 firmware uses bit 3 of I-low byte for CWX PTT, non-HL2 boards don't"). After 3M-2: 3M-3b (FM pre-emphasis), the RADE TX K-bench follow-up (real-time integration into TxWorkerThread), then 3F multi-panadapter (which finally exercises `RadioModel::setActiveRxCountLive` + the aamix anti-VOX path + unblocks RADE-on-A while SSB-on-B multi-slice) and the longer-tail 3H / 3J-1 (TCI server) / 3K phases.
 
 | Phase | Goal | Status |
 | --- | --- | --- |
@@ -551,6 +611,8 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | **3M-3a-i: TX EQ + Leveler + ALC** | TxChannel WDSP wrappers (10 EQ + 5 Lev + 7 ALC setters) + TransmitModel schema + MicProfileManager bundles 27 new keys (was 23 → now 50) + 20 Thetis factory profiles ported verbatim from `database.cs` + AgcAlcSetupPage TX Leveler/TX ALC sections + TxApplet `[LEV] [EQ] [PROC]` toggle row + TxEqDialog modeless editor (10 sliders + freq spinboxes + preamp + Nc / Mp / Ctfmode / Wintype + profile combo) + SpeechProcessorPage TX dashboard (3 status rows + 3 cross-link buttons). 13 GPG-signed commits, 8 new test executables, 246/246 ctest green. PR #TBD. | **Complete (pending bench)** |
 | **3M-3a-ii: CFC + CPDR + CESSB + Phase Rotator** | TxChannel WDSP wrappers (6 CFC + 2 CPDR + 1 CESSB + 3 PhRot setters); cfcomp.c synced to Thetis v2.10.3.13 for 7-arg `SetTXACFCOMPprofile` (Qg/Qe ceiling-Q skirts, MW0LGE Samphire dual-license preserved); TransmitModel +15 properties (PhRot enabled/freq/stages/reverse, CFC enabled/post-EQ/precomp/postEqGain + 10×F/COMP/POST-EQ band arrays, paraEqData blob, global CPDR on, CPDR level-dB, CESSB on); MicProfileManager bundles **+41 keys** (was 50 → 91) with **155 verbatim overrides** across 19 of 21 factory profiles ported from `database.cs:9282-9418 [v2.10.3.13]` (incl. AM 10k unique `PhRotStages=9`); CfcSetupPage rewrite (PhRot + CFC + CESSB groups + open-dialog signal); SpeechProcessorPage live-status bindings; TxApplet `[CFC]` button + right-click → `TxCfcDialog` modeless editor (profile combo + Save/SaveAs/Delete/Reset + 2 globals + 30 per-band spinboxes for F/COMP/POST-EQ); PhoneCwApplet PROC button/slider wired to `cpdrOn`/`cpdrLevelDb` (0..2 → 0..20 dB) — duplicate `[PROC]` button removed from TxApplet to dedup (JJ caught 2026-04-30; saved as `feedback_survey_before_adding_controls`). 17 GPG-signed commits, 7 new test executables (TxChannel setters/TM properties/profile round-trip/profile live-path/CfcSetupPage/TxCfcDialog/PhoneCwApplet PROC), 253/253 ctest green. **TxCfcDialog landed scalar-complete but spartan** — full Thetis-faithful `ucParametricEq` widget port (3396-line `ucParametricEq.cs` UserControl, used by both CFC and EQ dialogs) is queued as a separate sub-PR; hand-off design doc at `docs/architecture/phase3m-3a-ii-cfc-eq-parametriceq-handoff.md`. **Pre-emphasis de-scoped** to 3M-3b (FM-mode work) per master design §7.2 ("run as written"). PR #TBD. | **Complete (pending bench)** |
 | **3M-3a-iv: Anti-VOX Cancellation Feed + grpAntiVOX UI parity** | Closes the gap left in 3M-3a-iii where the anti-VOX gain control was plumbed end-to-end but `SendAntiVOXData` was never called, leaving `antivox_data` zero and the cancellation silent. 4 new WDSP wrappers (`SetAntiVOXSize` / `Rate` / `DetectorTau` / `SendData`) on `TxChannel`. `RxDspWorker` emits `antiVoxSampleReady` per chunk + `bufferSizesChanged` from `setBufferSizes`. `TxWorkerThread` queued slots `onAntiVoxSamplesReady` / `setAntiVoxBlockGeometry` / `setAntiVoxDetectorTau` / `setAntiVoxRun` (new wrapper that flips `m_antiVoxRun` atomic gate). `MoxController::setAntiVoxTau(int ms)` slot with NaN-sentinel idempotency, ms->s scaling. **Independent run flag refactor (post-review M2 fix):** `TransmitModel::antiVoxRun` Q_PROPERTY (bool, default false, persisted per-MAC under `AntiVox_Enable`), `MoxController::setAntiVoxRun(bool)` slot + `antiVoxRunRequested(bool)` signal with first-call-emit guard. `TransmitModel::antiVoxTauMs` Q_PROPERTY (range 1-500 ms, default 20, persisted per-MAC under `AntiVox_Tau_Ms`). **Post-bench Option A refactor (NereusSDR-architectural divergence):** dropped `TransmitModel::antiVoxSourceVax`, `MoxController::setAntiVoxSourceVax`, `antiVoxSourceWhatRequested` signal, the `chkAntiVoxSource` UI, and the rejected-VAX scaffolding. Thetis chkAntiVoxSource (RX vs VAC at `setup.designer.cs:44646-44657 [v2.10.3.13]`) does not map to NereusSDR's architecture: VAX is a digital-mode app bus with no mic-feedback path, so the audio output device is the only valid cancellation reference. Replaced with a static "Source: Audio Output Device(s)" info row whose tooltip cites the divergence. Existing users with `AntiVox_Source_VAX` persisted leave it as a harmless orphan (no migration). Tap-point signpost comments added at `RxDspWorker.cpp` and `AudioEngine.h` for the future radio-speaker output work (anti-VOX tap relocates from `RxDspWorker` to post-mixer when per-bus processing diverges). **grpAntiVOX UI** on Setup → Transmit → DEXP/VOX: `chkAntiVoxEnable` ("Anti-VOX Enable"), `udAntiVoxGain` ("Gain (dB)"), `udAntiVoxTau` ("Tau (ms)"), tooltips verbatim from Thetis `setup.designer.cs:44631-44760 [v2.10.3.13]`. WdspEngine constant fix: anti-VOX tau default `0.01` → `0.02` to match Thetis `udAntiVoxTau.Value=20`. Single-RX direct pump (no aamix); aamix port deferred to 3F multi-pan. Bench-verification matrix at `docs/architecture/phase3m-3a-iv-verification/README.md` (5 rows × ANAN-G2 + HL2). Full divergence rationale at `docs/architecture/phase3m-3a-iv-antivox-feed-design.md` §18. PR #TBD. | **Complete (pending bench)** |
+| **3J-2: Spot System + FreeDV Reporter + PSK Reporter (pending next 0.4.x release)** | **DX cluster + RBN + WSJT-X UDP + SpotCollector + POTA + FreeDV Reporter + PSK Reporter spot ingest. SpotHubDialog (9 tabs, AetherSDR-faithful). FreeDVReporterDialog (14-col live view, TX/RX highlights, QSY support, idle auto-delete). Panadapter spot overlay with collision-avoidance multi-level stacking + cluster badges. DXCC color priority via cty.dat + ADIF worked-status. Tools menu (Ctrl+Shift+S / Ctrl+Shift+R / Ctrl+Shift+K). Auto-connect on launch. Display knob persistence.** | **Complete (pending bench)** |
+| **3R: RADE as a True Peer Mode (pending next 0.4.x release)** | **Vendored radae_nopy (BSD-2-Clause SHA b289102) + Opus (LPCNet/FARGAN) at `third_party/rade/` (~9 MB embedded weights, no external model file). `DSPMode::RADE` enum + RadeChannel RX path live; RadeChannel TX path scaffolded (TxPath enum + RadeTxHpf80 + RadeTx48to16 + modem-output connect plumbing; K-bench follow-up). Task I4 Option B: native callsign-over-EOO API via thin RadeText wrapper (avoids ~1500 lines of codec2 deps). Mode dispatch swaps RxChannel <-> RadeChannel; band changes inside RADE keep channel alive. VFO flag mode-aware SNR row (grey/yellow/green). RadeApplet (profile combo + sync indicator + Reset Vocoder). Mode menu RADE entry. MicProfileManager RADE factory profile (22 total). RxDecodeModel sources from WSJT-X + RADE.** | **Complete (pending bench; HL2 row + RADE TX K-bench deferred)** |
 | 3M-2: CW TX (was 3I-CW) | Sidetone, firmware keyer, QSK/break-in. Deferred until after 3M-3 ships AND the HL2 ATT/filter audit closes (so an HL2 can be CW-bench'd safely). Absorbs the HL2 CWX bit-3 follow-up (`networkproto1.c:1247-1252 [@c26a8a4]` — desk-review B3). | Planned |
 | 3M-4: PureSignal (was 3I-PS) | Feedback DDC, calcc/IQC engine, PSForm, AmpView | Planned |
 | 3F: Multi-Panadapter | DDC assignment (incl. PS states), FFTRouter, PanadapterStack, enable RX2 | Planned |
@@ -572,3 +634,15 @@ preferences. OpenHPSDR radios don't store per-slice state.
    * **Clone to `../Thetis/` relative to NereusSDR root**
 3. **WDSP** — `https://github.com/TAPR/OpenHPSDR-wdsp`
    * DSP engine: all signal processing functions
+4. **freedv-gui** - `https://github.com/drowe67/freedv-gui`
+   * RADE codec wrappers (RADEReceiveStep, RADETransmitStep, rade_text)
+   * FreeDV Reporter Socket.IO client (qso.freedv.org)
+   * PSK Reporter UDP client
+   * **Clone to `../freedv-gui/` relative to NereusSDR root**
+5. **radae_nopy (peterbmarks)** - `https://github.com/peterbmarks/radae_nopy`
+   * RADE C library (BSD-2-Clause) vendored at SHA b289102 into `third_party/rade/`
+   * Neural-net weights compiled into librade; no external model file ships
+   * Native callsign-over-EOO API consumed via `RadeText` wrapper (Task I4 Option B per Phase 3R)
+6. **r8brain-free-src** - `https://github.com/avaneev/r8brain-free-src`
+   * MIT-licensed 24-bit polyphase resampler vendored at `third_party/r8brain/`
+   * Used by the RADE 48-to-16 kHz TX audio chain and reserved for future general resampling needs

@@ -114,7 +114,14 @@
 
 #include "Band.h"
 #include "core/AppSettings.h"
+#include "core/LogCategories.h"
+#include "core/RadeChannel.h"
+#include "core/WdspEngine.h"
 #include "core/accessories/AlexController.h"
+#include "models/RadioModel.h"
+
+#include <QFile>
+#include <QStandardPaths>
 
 #include <algorithm>
 
@@ -154,8 +161,118 @@ void SliceModel::setFrequency(double freq)
 
 void SliceModel::setDspMode(DSPMode mode)
 {
-    bool modeChanged = (m_dspMode != mode);
+    const bool modeChanged = (m_dspMode != mode);
+    const DSPMode oldMode = m_dspMode;
     m_dspMode = mode;
+
+    // ── Phase 3R J3 + K-bench: RADE channel-additive lifecycle ────────────
+    //
+    // RADE_U / RADE_L are NereusSDR-native DSPModes (J1).  Original J3
+    // design destroyed the WDSP RxChannel and replaced it with a
+    // RadeChannel on entry into RADE.  K-bench reframed the RX pipeline
+    // (RxDspWorker.cpp:160-191) so RADE is now ADDITIVE rather than
+    // replacement:
+    //   - WDSP RxChannel stays alive in EVERY mode.  WDSP serves as
+    //     the SSB demod front-end and produces decoded audio that
+    //     feeds the S-meter / spectrum / AGC every tick.
+    //   - RadeChannel is created ALONGSIDE RxChannel in RADE_U /
+    //     RADE_L, consumes WDSP's decoded audio (downsampled to
+    //     24 kHz), and owns the speaker path while active.
+    //   - The WDSP-facing mode is mapped at the RxChannel boundary
+    //     (RxChannel::wdspModeFor): RADE_U -> USB, RADE_L -> LSB.
+    //     Without that mapping, raw enum 12/13 would land in WDSP's
+    //     mode enum (review finding 2026-05-12, PR #238).
+    //
+    // So the swap logic below is now only about RadeChannel
+    // create/destroy.  RxChannel is created once at connect time
+    // (RadioModel) and stays alive.
+    //
+    // RADE_U <-> RADE_L is still a destroy-and-recreate of RadeChannel
+    // because the sideband flag is set on construction; the RxChannel
+    // is untouched (RxChannel::setMode below will retune USB <-> LSB
+    // via the wdspModeFor mapping when it fires from the
+    // dspModeChanged signal).
+    //
+    // Reach the WdspEngine via the parent RadioModel rather than holding
+    // a direct pointer on SliceModel; this keeps the construction graph
+    // unchanged (slices are parented to RadioModel; see RadioModel.cpp:
+    // 1374 [Phase 3R J3] new SliceModel(this)).
+    if (modeChanged) {
+        const auto isRade = [](DSPMode m) {
+            return m == DSPMode::RADE_U || m == DSPMode::RADE_L;
+        };
+
+        // 2026-05-12 bench: clear last RADE-decoded speaker callsign
+        // when leaving the *current* RADE sideband.  Two cases now
+        // covered (refined from 2026-05-11 design which kept the
+        // callsign sticky on U <-> L swap):
+        //   1. RADE -> non-RADE: leaving RADE entirely.
+        //   2. RADE_U <-> RADE_L: still in RADE, but the channel is
+        //      destroyed and recreated below so the decoder state is
+        //      no longer associated with the old caller's transmission.
+        // Trigger: oldMode was a RADE sideband AND mode actually changed
+        // (we're already inside the modeChanged guard).
+        if (isRade(oldMode) && !m_lastRadeRxCallsign.isEmpty()) {
+            m_lastRadeRxCallsign.clear();
+            emit lastRadeRxCallsignChanged(m_lastRadeRxCallsign);
+        }
+
+        auto* radio = qobject_cast<RadioModel*>(parent());
+        if (radio != nullptr) {
+            WdspEngine* engine = radio->wdspEngine();
+            if (engine != nullptr) {
+                const int channelId = m_sliceIndex;
+                const bool oldIsRade = isRade(oldMode);
+                const bool newIsRade = isRade(mode);
+
+                auto wireAndStartRade = [&](RadeChannel* radeCh,
+                                            const char* context) {
+                    if (radeCh == nullptr) return;
+                    radeCh->setSideband(mode == DSPMode::RADE_U);
+                    radio->wireRadeChannel(channelId, radeCh, this);
+                    const QString modelPath = radeModelPath();
+                    if (!radeCh->start(modelPath)) {
+                        qCWarning(lcDsp)
+                            << "SliceModel" << m_sliceIndex
+                            << context
+                            << ": RadeChannel.start() failed for"
+                            << modelPath
+                            << "- channel-swap proceeds but RADE will"
+                               " not decode";
+                    }
+                };
+
+                if (oldIsRade && !newIsRade) {
+                    // RADE -> any WDSP mode: tear down the RadeChannel
+                    // only.  K-bench: WDSP RxChannel was running the
+                    // whole time as the demod front-end; leave it
+                    // alone.  WDSP-facing mode will retune from
+                    // USB/LSB (the wdspModeFor mapping) to the new
+                    // mode via the dspModeChanged -> rxCh->setMode
+                    // path in RadioModel.cpp:5202-5206.
+                    engine->destroyRadeChannel(channelId);
+                } else if (!oldIsRade && newIsRade) {
+                    // Any WDSP mode -> RADE: create RadeChannel
+                    // alongside the still-running RxChannel.  Wire
+                    // its signals into RadioModel's per-slice slot
+                    // graph and start it with the configured model
+                    // path.  WDSP-facing mode will map to USB/LSB
+                    // via the dspModeChanged path.
+                    wireAndStartRade(engine->createRadeChannel(channelId),
+                                     "setDspMode(RADE)");
+                } else if (oldIsRade && newIsRade) {
+                    // RADE_U <-> RADE_L: destroy + recreate the
+                    // RadeChannel so the sideband flag is set fresh
+                    // on a clean instance.  RxChannel is untouched;
+                    // the dspModeChanged path retunes it USB <-> LSB
+                    // through wdspModeFor.
+                    engine->destroyRadeChannel(channelId);
+                    wireAndStartRade(engine->createRadeChannel(channelId),
+                                     "setDspMode(RADE U<->L)");
+                }
+            }
+        }
+    }
 
     // Apply default filter for the new mode
     // From Thetis console.cs:5180-5575 — InitFilterPresets, F5 per mode
@@ -170,6 +287,20 @@ void SliceModel::setDspMode(DSPMode mode)
     if (filterChanged) {
         emit this->filterChanged(m_filterLow, m_filterHigh);
     }
+}
+
+// Phase 3R Task J3 - see SliceModel.h declaration for the design rationale.
+QString SliceModel::radeModelPath() const
+{
+    auto& s = AppSettings::instance();
+    const QString configured =
+        s.value(QStringLiteral("Rade/ModelPath"), QString()).toString();
+    if (!configured.isEmpty() && QFile::exists(configured)) {
+        return configured;
+    }
+    // From AetherSDR RADEEngine.cpp:34 [@0cd4559] - librade convention
+    // "use the built-in weights, ignore the model_file argument".
+    return QStringLiteral("dummy");
 }
 
 // ---------------------------------------------------------------------------
@@ -908,6 +1039,18 @@ std::pair<int, int> SliceModel::defaultFilterForMode(DSPMode mode)
     case DSPMode::DRM:
         // DRM: wide filter similar to AM
         return {-5000, 5000};
+    case DSPMode::RADE_U:
+        // Phase 3R Task J1.  RADE Upper sideband: the modem occupies
+        // ~650..2350 Hz (1700 Hz wide, centered at +1500 Hz).  This is
+        // the SSB-style passband that the panadapter filter window
+        // displays and that the TX I/Q routing confines the RADE
+        // baseband energy to.  The earlier +/-5000 Hz AM-class window
+        // was a placeholder; the filter IS visible on the panadapter
+        // AND defines the IF/baseband passband for the modem energy.
+        return {650, 2350};
+    case DSPMode::RADE_L:
+        // Phase 3R Task J1.  RADE Lower sideband: mirror of RADE-U.
+        return {-2350, -650};
     }
     // Fallback
     return {100, 3000};
@@ -992,6 +1135,14 @@ QList<std::pair<int, int>> SliceModel::presetsForMode(DSPMode mode)
     case DSPMode::DRM:
         // DRM: wide digital AM-like filters
         return { {-10000,10000}, {-5000,5000} };
+    case DSPMode::RADE_U:
+        // Phase 3R Task J1.  RADE Upper sideband: single fixed-bandwidth
+        // preset matching the 1700 Hz modem passband.  No F1-F10
+        // variants; RADE has a fixed bandwidth per sideband.
+        return { {650, 2350} };
+    case DSPMode::RADE_L:
+        // Phase 3R Task J1.  RADE Lower sideband: mirror of RADE-U.
+        return { {-2350, -650} };
     }
     // Fallback
     return { {100, 3000} };
@@ -1066,6 +1217,10 @@ QString SliceModel::modeName(DSPMode mode)
     case DSPMode::DIGL: return QStringLiteral("DIGL");
     case DSPMode::SAM:  return QStringLiteral("SAM");
     case DSPMode::DRM:  return QStringLiteral("DRM");
+    // Phase 3R Task J1.  NereusSDR-native; not WDSP modes.  Split
+    // into upper/lower sidebands like USB/LSB.
+    case DSPMode::RADE_U: return QStringLiteral("RADE-U");
+    case DSPMode::RADE_L: return QStringLiteral("RADE-L");
     }
     return QStringLiteral("USB");
 }
@@ -1084,6 +1239,13 @@ DSPMode SliceModel::modeFromName(const QString& name)
     if (name == QLatin1String("DIGL")) return DSPMode::DIGL;
     if (name == QLatin1String("SAM"))  return DSPMode::SAM;
     if (name == QLatin1String("DRM"))  return DSPMode::DRM;
+    // Phase 3R Task J1.  NereusSDR-native; not WDSP modes.
+    if (name == QLatin1String("RADE-U")) return DSPMode::RADE_U;
+    if (name == QLatin1String("RADE-L")) return DSPMode::RADE_L;
+    // Legacy migration: pre-fix builds persisted the singular "RADE"
+    // string before the sideband split landed.  Map it to RADE_U so
+    // existing per-MAC persisted slice modes keep working on upgrade.
+    if (name == QLatin1String("RADE")) return DSPMode::RADE_U;
     return DSPMode::USB;
 }
 
@@ -1564,6 +1726,45 @@ void SliceModel::setVaxChannel(int ch)
         QString::number(ch));
 
     emit vaxChannelChanged(ch);
+}
+
+// ── Phase 3J-2 Task D5: per-slice live SNR (NereusSDR-native) ──
+//
+// Emits snrDbChanged only on actual value change:
+//   NaN    -> NaN              : no emission (signal stays absent)
+//   x      -> identical x      : no emission (no change)
+//   NaN    -> numeric          : emission (signal-acquired event)
+//   numeric -> NaN             : emission (signal-lost event)
+//   x      -> y (x != y)       : emission (normal update)
+//
+// NaN-aware comparison is required because IEEE NaN != NaN at the
+// hardware level, so a naive equality check would treat NaN -> NaN as
+// a change and spam emissions on every block when no signal is present.
+void SliceModel::setSnrDb(double db)
+{
+    const bool dbNan   = qIsNaN(db);
+    const bool prevNan = qIsNaN(m_snrDb);
+
+    if (dbNan && prevNan) { return; }                                // both NaN: no change
+    if (!dbNan && !prevNan && qFuzzyCompare(db, m_snrDb)) { return; }// both numeric and equal
+
+    m_snrDb = db;
+    emit snrDbChanged(db);
+}
+
+// ── 2026-05-11 bench: last RADE-decoded speaker callsign ────────────────────
+//
+// Sticky-while-in-RADE / clears-on-mode-off-RADE semantics per the
+// bench design discussion (option A + D).  setDspMode in this file
+// also clears the field when transitioning out of RADE_U/RADE_L; this
+// setter is the write side for incoming decodes.
+void SliceModel::setLastRadeRxCallsign(const QString& callsign)
+{
+    if (m_lastRadeRxCallsign == callsign) {
+        return;
+    }
+    m_lastRadeRxCallsign = callsign;
+    emit lastRadeRxCallsignChanged(callsign);
 }
 
 void SliceModel::loadFromSettings()
