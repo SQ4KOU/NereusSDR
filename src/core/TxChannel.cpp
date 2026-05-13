@@ -558,6 +558,15 @@ void TxChannel::registerVoxCallback()
     }
     s_voxKeyInstance = this;
 #ifdef HAVE_WDSP
+    // 2026-05-13 (Linux CI #238): bounds-check m_channelId against
+    // WDSP's MAX_CHANNELS (=32 in comm.h) BEFORE indexing txa[] / pdexp[].
+    // Test fixtures (e.g. tst_dsp_options_per_mode_apply tx_no_engine_*)
+    // construct TxChannel with channelId=97 for isolation; on macOS arm64
+    // the OOB read happens to land in mapped zero memory so the null-
+    // guards below evaluate true and the function returns harmlessly.
+    // On Linux x64 the same OOB landed in unmapped memory / read garbage
+    // pointers and segfaulted.
+    if (m_channelId < 0 || m_channelId >= MAX_CHANNELS) return;
     // Phase 3M-1c TX pump v3: pdexp[ch] + txa.rsmpin.p null-guards.  Test
     // builds construct TxChannel directly without going through
     // WdspEngine::createTxChannel → OpenChannel(type=1), so neither
@@ -589,11 +598,19 @@ void TxChannel::registerVoxCallback()
 void TxChannel::unregisterVoxCallback()
 {
 #ifdef HAVE_WDSP
+    // 2026-05-13 (Linux CI #238): bounds-check m_channelId against
+    // WDSP's MAX_CHANNELS BEFORE indexing txa[] / pdexp[].  Mirror of
+    // registerVoxCallback's check — same Linux OOB segfault path for
+    // test fixtures that use out-of-range channel IDs.
+    const bool channelInRange =
+        (m_channelId >= 0 && m_channelId < MAX_CHANNELS);
     // Same null-guard pair as registerVoxCallback (and all DEXP setters in
     // this file).  Test builds never drove OpenChannel(type=1) so pdexp[]
     // is null and the WDSP unregister would crash; production builds
     // always have a live DEXP at dtor time.
-    if (txa[m_channelId].rsmpin.p == nullptr) {
+    if (!channelInRange) {
+        // Skip WDSP call; still clear the lookup pointer below.
+    } else if (txa[m_channelId].rsmpin.p == nullptr) {
         // Skip WDSP call; still clear the lookup pointer below.
     } else if (pdexp[m_channelId] == nullptr) {
         // Skip WDSP call; still clear the lookup pointer below.
