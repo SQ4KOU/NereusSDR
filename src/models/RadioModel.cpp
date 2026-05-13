@@ -7494,6 +7494,362 @@ bool RadioModel::split(int rx) const
 }
 
 // ---------------------------------------------------------------------------
+// Phase 3J-1 closeout Item 3 (2026-05-12): TCI Q_INVOKABLE long tail.
+//
+// Each shim routes a TciProtocol::invokeMethod call to the right model
+// state.  Most are 1:1 with a SliceModel Q_PROPERTY (locked/muted/etc.);
+// some are radio-global (RIT/XIT/AfLinear/etc.); a handful are stubs that
+// store-and-return until their underlying feature lands (rxBin/rxApf/etc.).
+//
+// All slice-indexed shims sanity-check sliceAt(rx) and silently no-op on
+// out-of-range so a misbehaving client can't crash NereusSDR.  Getters
+// return sensible defaults (false / 0 / "" / 0.0) when the slice doesn't
+// exist, matching the TestMockRadioModel convention.
+// ---------------------------------------------------------------------------
+
+// ── VFO Lock ────────────────────────────────────────────────────────────────
+void RadioModel::setVfoLock(int rx, int chan, bool locked)
+{
+    (void)chan;  // NereusSDR collapses VFOALock/VFOBLock to slice-level locked
+    if (auto* s = sliceAt(rx)) { s->setLocked(locked); }
+}
+bool RadioModel::vfoLock(int rx, int chan) const
+{
+    (void)chan;
+    if (const auto* s = sliceAt(rx)) { return s->locked(); }
+    return false;
+}
+void RadioModel::setLock(int rx, bool locked)
+{
+    if (auto* s = sliceAt(rx)) { s->setLocked(locked); }
+}
+bool RadioModel::lock(int rx) const
+{
+    if (const auto* s = sliceAt(rx)) { return s->locked(); }
+    return false;
+}
+
+// ── Mute ────────────────────────────────────────────────────────────────────
+void RadioModel::setGlobalMute(bool on) { m_tciGlobalMute = on; }
+bool RadioModel::globalMute() const     { return m_tciGlobalMute; }
+void RadioModel::setRxMute(int rx, bool on)
+{
+    if (auto* s = sliceAt(rx)) { s->setMuted(on); }
+}
+bool RadioModel::rxMute(int rx) const
+{
+    if (const auto* s = sliceAt(rx)) { return s->muted(); }
+    return false;
+}
+
+// ── Filter ──────────────────────────────────────────────────────────────────
+void RadioModel::setFilterBand(int rx, int lowHz, int highHz)
+{
+    if (auto* s = sliceAt(rx)) {
+        s->setFilterLow(lowHz);
+        s->setFilterHigh(highHz);
+    }
+}
+int RadioModel::filterLow(int rx) const
+{
+    if (const auto* s = sliceAt(rx)) { return s->filterLow(); }
+    return 0;
+}
+int RadioModel::filterHigh(int rx) const
+{
+    if (const auto* s = sliceAt(rx)) { return s->filterHigh(); }
+    return 0;
+}
+
+// ── AGC mode ────────────────────────────────────────────────────────────────
+void RadioModel::setAgcMode(int rx, const QString& mode)
+{
+    auto* s = sliceAt(rx);
+    if (!s) { return; }
+    const QString upper = mode.toUpper();
+    AGCMode m = AGCMode::Med;
+    if      (upper == QLatin1String("OFF"))    { m = AGCMode::Off;    }
+    else if (upper == QLatin1String("LONG"))   { m = AGCMode::Long;   }
+    else if (upper == QLatin1String("SLOW"))   { m = AGCMode::Slow;   }
+    else if (upper == QLatin1String("MED")
+          || upper == QLatin1String("MEDIUM")) { m = AGCMode::Med;    }
+    else if (upper == QLatin1String("FAST"))   { m = AGCMode::Fast;   }
+    else if (upper == QLatin1String("CUSTOM")) { m = AGCMode::Custom; }
+    s->setAgcMode(m);
+}
+QString RadioModel::agcMode(int rx) const
+{
+    const auto* s = sliceAt(rx);
+    if (!s) { return QString(); }
+    switch (s->agcMode()) {
+        case AGCMode::Off:    return QStringLiteral("OFF");
+        case AGCMode::Long:   return QStringLiteral("LONG");
+        case AGCMode::Slow:   return QStringLiteral("SLOW");
+        case AGCMode::Med:    return QStringLiteral("MED");
+        case AGCMode::Fast:   return QStringLiteral("FAST");
+        case AGCMode::Custom: return QStringLiteral("CUSTOM");
+    }
+    return QStringLiteral("MED");
+}
+
+// ── AGC gain (threshold) ────────────────────────────────────────────────────
+void RadioModel::setAgcGain(int rx, int gain)
+{
+    if (auto* s = sliceAt(rx)) { s->setAgcThreshold(gain); }
+}
+int RadioModel::agcGain(int rx) const
+{
+    if (const auto* s = sliceAt(rx)) { return s->agcThreshold(); }
+    return 0;
+}
+
+// ── Squelch ─────────────────────────────────────────────────────────────────
+void RadioModel::setSqlEnable(int rx, bool on)
+{
+    if (auto* s = sliceAt(rx)) { s->setSsqlEnabled(on); }
+}
+bool RadioModel::sqlEnable(int rx) const
+{
+    if (const auto* s = sliceAt(rx)) { return s->ssqlEnabled(); }
+    return false;
+}
+void RadioModel::setSqlLevel(int rx, int level)
+{
+    if (auto* s = sliceAt(rx)) { s->setSsqlThresh(static_cast<double>(level)); }
+}
+int RadioModel::sqlLevel(int rx) const
+{
+    if (const auto* s = sliceAt(rx)) {
+        return static_cast<int>(s->ssqlThresh());
+    }
+    return 0;
+}
+
+// ── RIT / XIT (active slice) ────────────────────────────────────────────────
+void RadioModel::setRitEnable(bool on)
+{
+    if (auto* s = activeSlice()) { s->setRitEnabled(on); }
+}
+bool RadioModel::ritEnable() const
+{
+    if (const auto* s = activeSlice()) { return s->ritEnabled(); }
+    return false;
+}
+void RadioModel::setRitOffset(int hz)
+{
+    if (auto* s = activeSlice()) { s->setRitHz(hz); }
+}
+int RadioModel::ritOffset() const
+{
+    if (const auto* s = activeSlice()) { return s->ritHz(); }
+    return 0;
+}
+void RadioModel::setXitEnable(bool on)
+{
+    if (auto* s = activeSlice()) { s->setXitEnabled(on); }
+}
+bool RadioModel::xitEnable() const
+{
+    if (const auto* s = activeSlice()) { return s->xitEnabled(); }
+    return false;
+}
+void RadioModel::setXitOffset(int hz)
+{
+    if (auto* s = activeSlice()) { s->setXitHz(hz); }
+}
+int RadioModel::xitOffset() const
+{
+    if (const auto* s = activeSlice()) { return s->xitHz(); }
+    return 0;
+}
+
+// ── RX balance / audio pan ──────────────────────────────────────────────────
+void RadioModel::setRxBalance(int rx, int chan, double balance)
+{
+    (void)chan;
+    if (auto* s = sliceAt(rx)) { s->setAudioPan(balance); }
+}
+double RadioModel::rxBalance(int rx, int chan) const
+{
+    (void)chan;
+    if (const auto* s = sliceAt(rx)) { return s->audioPan(); }
+    return 0.0;
+}
+
+// ── CTUN (stub until model lands) ───────────────────────────────────────────
+void RadioModel::setRxCtun(int rx, bool on)
+{
+    if (rx >= 0 && rx < kTciStubSliceMax) { m_tciStubRxCtun[rx] = on; }
+}
+bool RadioModel::rxCtun(int rx) const
+{
+    if (rx >= 0 && rx < kTciStubSliceMax) { return m_tciStubRxCtun[rx]; }
+    return false;
+}
+
+// ── NB / NR / ANF ───────────────────────────────────────────────────────────
+void RadioModel::setRxNb(int rx, bool on)
+{
+    if (auto* s = sliceAt(rx)) {
+        s->setNbMode(on ? NbMode::NB : NbMode::Off);
+    }
+}
+bool RadioModel::rxNb(int rx) const
+{
+    if (const auto* s = sliceAt(rx)) { return s->nbMode() != NbMode::Off; }
+    return false;
+}
+void RadioModel::setRxNr(int rx, bool on, int nrIndex)
+{
+    auto* s = sliceAt(rx);
+    if (!s) { return; }
+    if (!on) {
+        s->setActiveNr(NrSlot::Off);
+        return;
+    }
+    NrSlot slot = NrSlot::NR1;
+    switch (nrIndex) {
+        case 0: slot = NrSlot::NR1;  break;
+        case 1: slot = NrSlot::NR2;  break;
+        case 2: slot = NrSlot::NR3;  break;
+        case 3: slot = NrSlot::NR4;  break;
+        case 4: slot = NrSlot::DFNR; break;
+        case 5: slot = NrSlot::BNR;  break;
+        case 6: slot = NrSlot::MNR;  break;
+        default: slot = NrSlot::NR1; break;
+    }
+    s->setActiveNr(slot);
+}
+bool RadioModel::rxNr(int rx) const
+{
+    if (const auto* s = sliceAt(rx)) { return s->activeNr() != NrSlot::Off; }
+    return false;
+}
+int RadioModel::rxNrIndex(int rx) const
+{
+    if (const auto* s = sliceAt(rx)) {
+        switch (s->activeNr()) {
+            case NrSlot::Off:  return 0;
+            case NrSlot::NR1:  return 0;
+            case NrSlot::NR2:  return 1;
+            case NrSlot::NR3:  return 2;
+            case NrSlot::NR4:  return 3;
+            case NrSlot::DFNR: return 4;
+            case NrSlot::BNR:  return 5;
+            case NrSlot::MNR:  return 6;
+        }
+    }
+    return 0;
+}
+// ANF: NereusSDR doesn't expose a separate ANF state -- Thetis's auto-notch
+// is a WDSP RXA stage independent of the NR slot system.  Stub until ANF
+// gets its own Q_PROPERTY on SliceModel.
+void RadioModel::setRxAnf(int rx, bool on)
+{
+    if (rx >= 0 && rx < kTciStubSliceMax) {
+        m_tciStubRxApf[rx] = on;  // reuse: ANF stored alongside APF semantically
+    }
+}
+bool RadioModel::rxAnf(int rx) const
+{
+    if (rx >= 0 && rx < kTciStubSliceMax) { return m_tciStubRxApf[rx]; }
+    return false;
+}
+
+// ── Stub DSP toggles (no model state yet) ───────────────────────────────────
+void RadioModel::setRxBin(int rx, bool on)
+{
+    if (rx >= 0 && rx < kTciStubSliceMax) { m_tciStubRxBin[rx] = on; }
+}
+bool RadioModel::rxBin(int rx) const
+{
+    if (rx >= 0 && rx < kTciStubSliceMax) { return m_tciStubRxBin[rx]; }
+    return false;
+}
+void RadioModel::setRxApf(int rx, bool on)
+{
+    if (rx >= 0 && rx < kTciStubSliceMax) { m_tciStubRxApf[rx] = on; }
+}
+bool RadioModel::rxApf(int rx) const
+{
+    if (rx >= 0 && rx < kTciStubSliceMax) { return m_tciStubRxApf[rx]; }
+    return false;
+}
+void RadioModel::setRxNf(int rx, bool on)
+{
+    if (rx >= 0 && rx < kTciStubSliceMax) { m_tciStubRxNf[rx] = on; }
+}
+bool RadioModel::rxNf(int rx) const
+{
+    if (rx >= 0 && rx < kTciStubSliceMax) { return m_tciStubRxNf[rx]; }
+    return false;
+}
+void RadioModel::setRxEnable(int rx, bool on)
+{
+    if (rx >= 0 && rx < kTciStubSliceMax) { m_tciStubRxEnable[rx] = on; }
+}
+bool RadioModel::rxEnable(int rx) const
+{
+    if (rx >= 0 && rx < kTciStubSliceMax) { return m_tciStubRxEnable[rx]; }
+    return false;
+}
+
+// ── Volume (radio-global) ───────────────────────────────────────────────────
+void RadioModel::setAfLinear(int v)   { m_tciAfLinear  = v; }
+int  RadioModel::afLinear() const     { return m_tciAfLinear; }
+void RadioModel::setMonLinear(int v)  { m_tciMonLinear = v; }
+int  RadioModel::monLinear() const    { return m_tciMonLinear; }
+
+// ── IQ rate ─────────────────────────────────────────────────────────────────
+void RadioModel::setIqSampleRate(int sr) { m_tciIqSampleRate = sr; }
+int  RadioModel::iqSampleRate() const    { return m_tciIqSampleRate; }
+
+// ── Audio stream config (parity-only; TciServer intercepts) ─────────────────
+void RadioModel::setAudioSampleRate(int sr)          { m_tciAudioSampleRate = sr; }
+int  RadioModel::audioSampleRate() const             { return m_tciAudioSampleRate; }
+void RadioModel::setAudioStreamSampleType(const QString& t) { m_tciAudioStreamSampleType = t; }
+QString RadioModel::audioStreamSampleType() const    { return m_tciAudioStreamSampleType; }
+void RadioModel::setAudioStreamChannels(int n)       { m_tciAudioStreamChannels = n; }
+int  RadioModel::audioStreamChannels() const         { return m_tciAudioStreamChannels; }
+void RadioModel::setAudioStreamSamples(int n)        { m_tciAudioStreamSamples = n; }
+int  RadioModel::audioStreamSamples() const          { return m_tciAudioStreamSamples; }
+
+// ── TX profile (MicProfileManager) ──────────────────────────────────────────
+// MicProfileManager::setActiveProfile takes (name, TransmitModel*) -- pass
+// our owned m_transmitModel reference so the profile's settings actually
+// fan out to the model + WDSP.
+void RadioModel::setTxProfile(const QString& name)
+{
+    if (m_micProfileMgr) {
+        m_micProfileMgr->setActiveProfile(name, &m_transmitModel);
+    }
+}
+QString RadioModel::txProfile() const
+{
+    if (m_micProfileMgr) {
+        return m_micProfileMgr->activeProfileName();
+    }
+    return QString();
+}
+QStringList RadioModel::txProfilesList() const
+{
+    if (m_micProfileMgr) {
+        return m_micProfileMgr->profileNames();
+    }
+    return {};
+}
+
+// ── Calibration (getter-only stubs) ─────────────────────────────────────────
+// No calibration model exists yet.  All getters return 0.0 = "no calibration
+// applied".  Real implementation lands when CalibrationModel + per-slice
+// persistence are added.
+double RadioModel::calibrationMeter(int rx) const     { (void)rx; return 0.0; }
+double RadioModel::calibrationDisplay(int rx) const   { (void)rx; return 0.0; }
+double RadioModel::calibrationXvtr(int rx) const      { (void)rx; return 0.0; }
+double RadioModel::calibrationSixMeter(int rx) const  { (void)rx; return 0.0; }
+double RadioModel::calibrationTxDisplay(int rx) const { (void)rx; return 0.0; }
+
+// ---------------------------------------------------------------------------
 // completeTuneOff — Thetis-faithful TUN-off completion (issue #177).
 //
 // Invoked from a QTimer::singleShot(m_tuneOffSettleMs) chained off

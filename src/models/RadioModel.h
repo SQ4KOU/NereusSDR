@@ -992,6 +992,151 @@ public slots:
     /// Query split-TX state.  Currently returns false (see setSplit note).
     Q_INVOKABLE bool split(int rx) const;
 
+    // ── Phase 3J-1 closeout Item 3 (2026-05-12): TCI Q_INVOKABLE long tail ──
+    //
+    // ~56 additional shims that TciProtocol calls via QMetaObject::invokeMethod.
+    // Without these the matrix test (against TestMockRadioModel) passes but
+    // ESDR3 / N1MM / Log4OM / SunSDR-native clients hit silent no-ops on the
+    // production RadioModel.  Each shim is documented with what it does
+    // semantically (mock parity) and what underlying state it writes (real
+    // model side).  Stubs are explicitly labeled "stub until <feature> lands".
+
+    // VFO lock — routes to SliceModel::locked.  TCI carries two-chan-per-rx
+    // semantics from Thetis (VFOALock + VFOBLock); NereusSDR collapses them
+    // because per-slice VFO B isn't modeled.  Both chan==0 and chan==1
+    // read/write the same slice-level locked flag.
+    Q_INVOKABLE void setVfoLock(int rx, int chan, bool locked);
+    Q_INVOKABLE bool vfoLock(int rx, int chan) const;
+    Q_INVOKABLE void setLock(int rx, bool locked);
+    Q_INVOKABLE bool lock(int rx) const;
+
+    // Mute — routes to SliceModel::muted (per-slice) and a new RadioModel
+    // member m_globalMute (global).  Global mute is broadcast-only state;
+    // when global mute is on, all slices' audio is suppressed downstream.
+    Q_INVOKABLE void setGlobalMute(bool on);
+    Q_INVOKABLE bool globalMute() const;
+    Q_INVOKABLE void setRxMute(int rx, bool on);
+    Q_INVOKABLE bool rxMute(int rx) const;
+
+    // Filter — routes to SliceModel::filterLow / filterHigh.  setFilterBand
+    // sets BOTH cutoffs atomically.
+    Q_INVOKABLE void setFilterBand(int rx, int lowHz, int highHz);
+    Q_INVOKABLE int  filterLow(int rx) const;
+    Q_INVOKABLE int  filterHigh(int rx) const;
+
+    // AGC mode — routes to SliceModel::agcMode (enum).  Mock uses uppercase
+    // strings: "OFF" / "LONG" / "SLOW" / "MED" / "FAST" / "CUSTOM".
+    Q_INVOKABLE void    setAgcMode(int rx, const QString& mode);
+    Q_INVOKABLE QString agcMode(int rx) const;
+
+    // AGC gain (threshold) — routes to SliceModel::agcThreshold (-20..120).
+    Q_INVOKABLE void setAgcGain(int rx, int gain);
+    Q_INVOKABLE int  agcGain(int rx) const;
+
+    // Squelch — routes to SliceModel::ssqlEnabled / ssqlThresh.  TCI level
+    // is int (-140..0 dBm); SliceModel::ssqlThresh is double in same units.
+    Q_INVOKABLE void setSqlEnable(int rx, bool on);
+    Q_INVOKABLE bool sqlEnable(int rx) const;
+    Q_INVOKABLE void setSqlLevel(int rx, int level);
+    Q_INVOKABLE int  sqlLevel(int rx) const;
+
+    // RIT / XIT — routes to SliceModel::ritEnabled/ritHz/xitEnabled/xitHz on
+    // the active slice.  Thetis treats these as radio-global (single VFO
+    // pair); NereusSDR collapses to active-slice for symmetry with mode/mox.
+    Q_INVOKABLE void setRitEnable(bool on);
+    Q_INVOKABLE bool ritEnable() const;
+    Q_INVOKABLE void setRitOffset(int hz);
+    Q_INVOKABLE int  ritOffset() const;
+    Q_INVOKABLE void setXitEnable(bool on);
+    Q_INVOKABLE bool xitEnable() const;
+    Q_INVOKABLE void setXitOffset(int hz);
+    Q_INVOKABLE int  xitOffset() const;
+
+    // RX balance / audio pan — routes to SliceModel::audioPan.  TCI uses
+    // double in [-1, 1]; SliceModel matches.  chan arg is ignored (single
+    // pan per slice, not per VFO).
+    Q_INVOKABLE void   setRxBalance(int rx, int chan, double balance);
+    Q_INVOKABLE double rxBalance(int rx, int chan) const;
+
+    // CTUN — per-slice stub (no CTUN model state yet; spectrum-widget owns
+    // the interaction mode).  Stored in m_tciStubRxCtun, set-and-read only
+    // until a CTUN model lands.
+    Q_INVOKABLE void setRxCtun(int rx, bool on);
+    Q_INVOKABLE bool rxCtun(int rx) const;
+
+    // ── DSP toggles (NbMode + activeNr based) ────────────────────────────
+    // setRxNb: maps bool to NbMode (true -> last-non-None mode; false -> None).
+    Q_INVOKABLE void setRxNb(int rx, bool on);
+    Q_INVOKABLE bool rxNb(int rx) const;
+    // setRxNr: maps (bool, int nrIndex) to activeNr enum slot.
+    Q_INVOKABLE void setRxNr(int rx, bool on, int nrIndex);
+    Q_INVOKABLE bool rxNr(int rx) const;
+    Q_INVOKABLE int  rxNrIndex(int rx) const;
+    // setRxAnf: maps bool to "activeNr == ANF" semantics (ANF is one of the
+    // NrSlot values).
+    Q_INVOKABLE void setRxAnf(int rx, bool on);
+    Q_INVOKABLE bool rxAnf(int rx) const;
+
+    // ── Stub categories: SliceModel doesn't expose these as Q_PROPERTYs yet ─
+    // Each stub stores the requested value in a small per-slice array so
+    // round-trip (set then get) returns the operator's last value.  Real
+    // wiring to WDSP comes when the underlying feature lands.
+    Q_INVOKABLE void setRxBin(int rx, bool on);
+    Q_INVOKABLE bool rxBin(int rx) const;
+    Q_INVOKABLE void setRxApf(int rx, bool on);
+    Q_INVOKABLE bool rxApf(int rx) const;
+    Q_INVOKABLE void setRxNf(int rx, bool on);
+    Q_INVOKABLE bool rxNf(int rx) const;
+    Q_INVOKABLE void setRxEnable(int rx, bool on);
+    Q_INVOKABLE bool rxEnable(int rx) const;
+
+    // ── Volume (linear int) ──────────────────────────────────────────────
+    // setAfLinear: TCI sends 0..32767; we store and let the audio path read.
+    // monLinear: TX monitor volume; same range.  These are NereusSDR-global
+    // (not per-slice) -- matches Thetis console.cs handleAFVolume.
+    Q_INVOKABLE void setAfLinear(int v);
+    Q_INVOKABLE int  afLinear() const;
+    Q_INVOKABLE void setMonLinear(int v);
+    Q_INVOKABLE int  monLinear() const;
+
+    // ── IQ sample rate ───────────────────────────────────────────────────
+    // setIqSampleRate: TCI echoes the rate back per Thetis pattern; the
+    // radio hardware doesn't actually change rate from a TCI command.
+    Q_INVOKABLE void setIqSampleRate(int sr);
+    Q_INVOKABLE int  iqSampleRate() const;
+
+    // ── Audio stream config ──────────────────────────────────────────────
+    // Per-client state lives in TciClientSession; TciServer intercepts these
+    // commands BEFORE the invokeMethod fires, so the production shims here
+    // are dead-code parity with the mock.  Kept for symmetry + matrix-test
+    // compatibility.  They store last-seen value but no other side effect.
+    Q_INVOKABLE void    setAudioSampleRate(int sr);
+    Q_INVOKABLE int     audioSampleRate() const;
+    Q_INVOKABLE void    setAudioStreamSampleType(const QString& t);
+    Q_INVOKABLE QString audioStreamSampleType() const;
+    Q_INVOKABLE void    setAudioStreamChannels(int n);
+    Q_INVOKABLE int     audioStreamChannels() const;
+    Q_INVOKABLE void    setAudioStreamSamples(int n);
+    Q_INVOKABLE int     audioStreamSamples() const;
+
+    // ── TX profile (via MicProfileManager) ───────────────────────────────
+    // setTxProfile: name lookup against the operator's profile library.
+    // txProfilesList: enumerates installed profiles.
+    Q_INVOKABLE void        setTxProfile(const QString& name);
+    Q_INVOKABLE QString     txProfile() const;
+    Q_INVOKABLE QStringList txProfilesList() const;
+
+    // ── Calibration (getter-only stubs returning 0.0) ────────────────────
+    // No calibration model in RadioModel yet.  Mock semantics: set/get pair;
+    // production has setters absent (caller side never sets these), so
+    // getters return 0.0.  Real calibration data would live in a future
+    // CalibrationModel + per-slice persistence.
+    Q_INVOKABLE double calibrationMeter(int rx) const;
+    Q_INVOKABLE double calibrationDisplay(int rx) const;
+    Q_INVOKABLE double calibrationXvtr(int rx) const;
+    Q_INVOKABLE double calibrationSixMeter(int rx) const;
+    Q_INVOKABLE double calibrationTxDisplay(int rx) const;
+
     // ── Phase 3R Task I5: RadeChannel signal-graph slots ────────────────────
     //
     // Public slots so Qt's auto-connection queues them correctly when the
@@ -1646,6 +1791,33 @@ private:
     // Thread.Sleep(space_mox_delay); // default 0 // from PSDR MW0LGE  [console.cs:29603]
     //[2.10.3.6]MW0LGE att_fixes  [original inline comment from console.cs:29647-29659]
     MoxController* m_moxController{nullptr};
+
+    // Phase 3J-1 closeout Item 3 (2026-05-12): TCI Q_INVOKABLE long-tail
+    // state.  See setGlobalMute / setAfLinear / setIqSampleRate / etc. for
+    // semantics.  Defaults chosen to match TestMockRadioModel initial
+    // values so the production path passes the existing matrix tests.
+    //
+    // Per-slice stub state for DSP toggles SliceModel doesn't yet expose
+    // as Q_PROPERTYs: rxBin / rxApf / rxNf / rxEnable.  Sized to the max
+    // RX count NereusSDR supports today (4 for the four-DDC SKUs); the
+    // setter clamps the index so an out-of-range slice silently no-ops.
+    static constexpr int kTciStubSliceMax = 4;
+    bool        m_tciGlobalMute{false};
+    int         m_tciAfLinear{0};
+    int         m_tciMonLinear{0};
+    int         m_tciIqSampleRate{0};
+    // Audio-stream config: per-client semantics live in TciClientSession;
+    // these mirror "last value any client sent" for matrix-test parity.
+    int         m_tciAudioSampleRate{48000};
+    int         m_tciAudioStreamChannels{2};
+    int         m_tciAudioStreamSamples{2048};
+    QString     m_tciAudioStreamSampleType{QStringLiteral("Float32")};
+    // Per-slice DSP toggle stubs (set-and-read only; not wired to WDSP).
+    std::array<bool, kTciStubSliceMax> m_tciStubRxBin{};
+    std::array<bool, kTciStubSliceMax> m_tciStubRxApf{};
+    std::array<bool, kTciStubSliceMax> m_tciStubRxNf{};
+    std::array<bool, kTciStubSliceMax> m_tciStubRxCtun{};
+    std::array<bool, kTciStubSliceMax> m_tciStubRxEnable{ {true, false, false, false} };
 
     // Non-owning view of the WDSP TX channel (channel ID = 1 = WDSP.id(1, 0)).
     // WdspEngine owns the channel via m_txChannels. This pointer is valid only

@@ -2053,6 +2053,14 @@ nereus_add_test(tst_app_settings_migration)
 # docs/architecture/2026-05-12-phase3j-1-loose-ends-plan.md Item 7.
 nereus_add_test(tst_app_settings_arbitrary_key_persistence)
 
+# ── Phase 3J-1 closeout Item 3 (2026-05-12): production Q_INVOKABLE shims ───
+# 18 category-level tests invoking the new RadioModel shims via
+# QMetaObject::invokeMethod (the same path TciProtocol uses in production),
+# verifying each routes to the right SliceModel property / RadioModel field.
+# Matrix-test parity against TestMockRadioModel is covered separately by
+# tst_tci_matrix_runner -- this file pins the PRODUCTION-side wiring.
+nereus_add_test(tst_tci_radio_model_shims)
+
 # ── Task 5.1: SettingsSchemaVersion + v0.3.0 migration ────────────────────────
 # 5 tests: retired keys removed on v<3 → v3 migration, idempotency, fresh-install
 # (no version key), no-op when already at v3, version-zero path.

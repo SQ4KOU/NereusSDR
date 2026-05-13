@@ -122,9 +122,34 @@ history. Auto-scroll, pause, clear, filter-by-direction.
 
 ---
 
-### Item 3 — RadioModel Q_INVOKABLE long tail
+### Item 3 — RadioModel Q_INVOKABLE long tail [CLOSED 2026-05-12]
 
-**Goal:** Provide working production paths for the ~67 named methods that
+**Closeout summary:** 56 production shims added in `RadioModel.h/.cpp`
+covering VFO lock, mute (per-slice + global), filter, AGC mode/gain,
+squelch, RIT/XIT, balance, CTUN, NB/NR/ANF, RX enable, AF/MON linear
+volumes, IQ sample rate, audio stream config, TX profile, and 5
+calibration getters.  Real-state shims route to SliceModel
+Q_PROPERTYs (locked / muted / filterLow/High / agcMode / agcThreshold /
+ssqlEnabled / ssqlThresh / audioPan / ritEnabled/Hz / xitEnabled/Hz /
+nbMode / activeNr) or to `RadioModel::activeSlice()` for radio-global
+RIT/XIT.  Stub shims (CTUN / rxBin / rxApf / rxNf / rxEnable / rxAnf /
+afLinear / monLinear / iqSampleRate / audio-stream config) store and
+return the last-set value via small per-slice arrays or RadioModel
+fields, keeping the operator's "I set X to 7" expectation true even
+when the underlying WDSP feature isn't wired yet.  Calibration getters
+return 0.0 ("no calibration applied") until a CalibrationModel lands.
+TX profile shims route to MicProfileManager via setActiveProfile +
+activeProfileName + profileNames.
+
+**Verification:** new `tst_tci_radio_model_shims` (18 category-level
+tests) invokes each shim category via `QMetaObject::invokeMethod` and
+asserts the underlying model state changed -- same dispatch path
+TciProtocol uses in production.  Out-of-range-slice safety also pinned
+(silently no-ops, no segfault).  Matrix parity against TestMockRadio
+Model remains covered by `tst_tci_matrix_runner`.
+
+**Original goal (kept for history):**
+Provide working production paths for the ~67 named methods that
 `TciProtocol.cpp` calls via `QMetaObject::invokeMethod(m_radio, "...", ...)`.
 Today only the WSJT-X minimum is wired: `setMox`/`mox`, `setVfoHz`/`vfoHz`,
 `setMode`/`mode`, `setSplit`/`split`. The remaining names silently no-op
