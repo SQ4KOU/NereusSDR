@@ -725,14 +725,13 @@ void FreeDVReporterClient::onRxReport(const QJsonObject& data)
         const QString recvCall = data.value(QStringLiteral("callsign")).toString();
         const QString recvMode = data.value(QStringLiteral("mode")).toString();
 
-        // 2026-05-12 (PR #238 bench follow-up): diagnostic so the
-        // user can verify the wire is actually carrying decoded
-        // callsigns.  freedv_reporter.cpp:3651-3723 upstream stores
-        // `receivedCallsign` verbatim — if this log shows empty
-        // strings continuously, the band is quiet (no one is
-        // decoding anyone) and the "Last RX Callsign" column will
-        // legitimately stay blank.
-        qCInfo(lcSpots).noquote()
+        // Per-event tracer (off by default; enable via
+        // QT_LOGGING_RULES="nereus.spots.debug=true").  Captures
+        // wire-shape data for bench triage of "Last RX Callsign"
+        // column update timing — freedv_reporter.cpp:3651-3723
+        // upstream stores receivedCallsign verbatim, so empty
+        // strings here mean the band is quiet, not a parser bug.
+        qCDebug(lcSpots).noquote()
             << QStringLiteral("FreeDV rx_report sid=%1 stationCall=%2 "
                               "decodedCall='%3' mode='%4' snr=%5")
                    .arg(sid.left(8),
@@ -815,14 +814,13 @@ void FreeDVReporterClient::onTxReport(const QJsonObject& data)
     info.lastUpdate = QDateTime::fromString(
         data.value(QStringLiteral("last_update")).toString(), Qt::ISODate);
 
-    // 2026-05-12 (PR #238 bench follow-up): diagnostic so the user
-    // can confirm tx_report events are actually arriving.  If
-    // "transmitting" never flips to true in this log while a known
-    // station is on the air, either the server isn't routing tx
-    // events to us (subscription / hide-self / filter issue) or
-    // upstream's parse failed (wrong types — see the
-    // yyjson_is_bool guard at FreeDVReporter.cpp:490).
-    qCInfo(lcSpots).noquote()
+    // Per-event tracer (off by default; enable via
+    // QT_LOGGING_RULES="nereus.spots.debug=true").  Captures
+    // tx_report state-transition events for bench triage of "row
+    // not turning red" reports.  No keepalive: upstream fires
+    // tx_report only on transmitting=true<->false transitions
+    // (FreeDVReporter.cpp:470-503).
+    qCDebug(lcSpots).noquote()
         << QStringLiteral("FreeDV tx_report sid=%1 call=%2 "
                           "transmitting=%3 mode='%4'")
                .arg(sid.left(8),

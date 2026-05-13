@@ -139,9 +139,11 @@ void RxDspWorker::setRadeChannel(RadeChannel* channel)
                 Qt::QueuedConnection);
     }
 
-    qCInfo(lcDsp).noquote() << QString("RxDspWorker::setRadeChannel(%1)")
-                                   .arg(reinterpret_cast<quintptr>(channel),
-                                        0, 16);
+    // Lifecycle tracer (off by default; enable with
+    // QT_LOGGING_RULES="nereus.dsp.debug=true").
+    qCDebug(lcDsp).noquote() << QString("RxDspWorker::setRadeChannel(%1)")
+                                    .arg(reinterpret_cast<quintptr>(channel),
+                                         0, 16);
 }
 
 void RxDspWorker::processIqBatch(int receiverIndex,
@@ -218,9 +220,13 @@ void RxDspWorker::processIqBatch(int receiverIndex,
             // the mono audio source.
             RadeChannel* radeCh =
                 m_radeChannel.load(std::memory_order_acquire);
+            // One-shot tracer (off by default; enable with
+            // QT_LOGGING_RULES="nereus.dsp.debug=true") to confirm
+            // the RADE RX fork is reaching the codec during bench
+            // shakedown.
             static int s_rxRadeDiagCount = 0;
             if (radeCh != nullptr && s_rxRadeDiagCount < 3) {
-                qCInfo(lcDsp).noquote()
+                qCDebug(lcDsp).noquote()
                     << QString("RxDspWorker RADE fork #%1: radeCh=%2 "
                                "outSize=%3 (audio rate=48kHz)")
                         .arg(s_rxRadeDiagCount + 1)

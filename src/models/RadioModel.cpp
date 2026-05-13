@@ -1115,7 +1115,9 @@ RadioModel::RadioModel(QObject* parent)
                 // the new value matches the old, so re-publishing
                 // the same callsign is a no-op.
                 slice->setLastRadeRxCallsign(info.callsign);
-                qCInfo(lcDsp).noquote()
+                // Off by default; enable for bench triage with
+                //   QT_LOGGING_RULES="nereus.dsp.debug=true"
+                qCDebug(lcDsp).noquote()
                     << QStringLiteral("FreeDV-Reporter flag fallback: "
                                       "set callsign=%1 on slice (freq=%2 Hz, "
                                       "deltaHz=%3)")
@@ -1823,13 +1825,17 @@ void RadioModel::wireRadeChannel(int sliceId, RadeChannel* channel,
     if (m_audioEngine != nullptr) {
         connect(channel, &RadeChannel::rxSpeechReady, this,
                 [this, sliceId](const QByteArray& pcm) {
-                    // BENCH DEBUG: one-shot logs to confirm RADE is
-                    // producing decoded speech that reaches the audio
-                    // engine. Without sync the codec emits nothing,
-                    // so absence of this log means RADE never decoded.
+                    // One-shot first-fire tracer (off by default;
+                    // enable with
+                    //   QT_LOGGING_RULES="nereus.rade.debug=true").
+                    // Useful for confirming RADE actually decoded
+                    // anything during a bench session — without
+                    // sync the codec emits nothing, so absence
+                    // means "RADE never decoded", not "audio path
+                    // broken".
                     static int s_rxSpeechFirstLog = 0;
                     if (s_rxSpeechFirstLog < 3) {
-                        qCInfo(lcRade)
+                        qCDebug(lcRade)
                             << "rxSpeechReady fire #"
                             << (s_rxSpeechFirstLog + 1)
                             << "sliceId=" << sliceId
@@ -1952,11 +1958,15 @@ void RadioModel::wireRadeChannel(int sliceId, RadeChannel* channel,
     {
         connect(channel, &RadeChannel::txModemReady, this,
                 [this](const QByteArray& iq) {
-                    // BENCH DEBUG: one-shot first-fire log so we can
-                    // confirm rade_tx is actually producing output.
+                    // One-shot first-fire tracer (off by default;
+                    // enable with
+                    //   QT_LOGGING_RULES="nereus.rade.debug=true").
+                    // Useful during bench TX shakedown to confirm
+                    // rade_tx is actually producing modem output
+                    // when the operator keys up.
                     static int s_radeTxModemFirstLogged = 0;
                     if (s_radeTxModemFirstLogged < 3) {
-                        qCInfo(lcRade)
+                        qCDebug(lcRade)
                             << "txModemReady fire #"
                             << (s_radeTxModemFirstLogged + 1)
                             << "bytes=" << iq.size();
