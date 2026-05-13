@@ -25,6 +25,7 @@
 #include "LogCategories.h"
 #include "models/RadioModel.h"
 #include "WdspEngine.h"
+#include "wdsp_api.h"   // Phase 3J-1 closeout Item 15 (2026-05-12) — GetTXAMeter direct call
 #include "RxChannel.h"
 #include "TxChannel.h"
 #include "AppSettings.h"  // Phase 18: TciIqSwap + TciAlwaysStreamIq flags
@@ -304,23 +305,37 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         // iterate listeners, call sendRxSensors / sendRxChannelSensors for each
         // enabled listener.
         //
-        // NereusSDR Phase 19 stub: emit placeholder -100.0 dBm to all clients
-        // whose rxSensorsEnabled is true. Real S-meter readings wired in Phase 24+.
+        // Phase 3J-1 closeout Item 15 (2026-05-12): pull real S-meter dBm from
+        // WDSP via RxChannel::getMeter(RxMeterType::SignalAvg).  Matches
+        // Thetis's CalculateRXMeter rx1Main_sig at dsp.cs:932-942 [v2.10.3.13]
+        // (RXA_S_AV == SignalAvg).  Same value MeterPoller emits to VfoWidget
+        // -- single source of truth for the S-meter.  Falls back to -140 dBm
+        // (WDSP noise floor convention) if WDSP isn't initialized or the
+        // channel doesn't exist yet.
+        double rx1Dbm = -140.0;
+        if (m_model) {
+            if (auto* wdsp = m_model->wdspEngine()) {
+                if (auto* rx = wdsp->rxChannel(0)) {
+                    rx1Dbm = rx->getMeter(RxMeterType::SignalAvg);
+                }
+            }
+        }
+
         for (auto it = m_clients.begin(); it != m_clients.end(); ++it) {
             auto& session = it.value();
             if (!session->rxSensorsEnabled) { continue; }
 
-            // Phase 19 placeholder reading.
             // From Thetis: sendRxSensors(0, rx1Main_sig) (TCIServer.cs:2600 [v2.10.3.13])
-            const QString frame = TciSensorManager::formatRxSensors(0, -100.0);
+            const QString frame = TciSensorManager::formatRxSensors(0, rx1Dbm);
             session->sendQueue.push(TciSendQueue::Priority::Control, frame);
 
             // Also emit the channel form (dual-emit pattern).
             // From Thetis: sendRxChannelSensors(0, 0, sig, avg, peak) (TCIServer.cs:2601 [v2.10.3.13])
-            const QString chanFrame = TciSensorManager::formatRxChannelSensors(0, 0, -100.0);
+            const QString chanFrame = TciSensorManager::formatRxChannelSensors(0, 0, rx1Dbm);
             session->sendQueue.push(TciSendQueue::Priority::Control, chanFrame);
 
-            const QString chanExFrame = TciSensorManager::formatRxChannelSensorsEx(0, 0, -100.0, -100.0, -100.0);
+            const QString chanExFrame =
+                TciSensorManager::formatRxChannelSensorsEx(0, 0, rx1Dbm, rx1Dbm, rx1Dbm);
             session->sendQueue.push(TciSendQueue::Priority::Control, chanExFrame);
         }
     });
@@ -376,16 +391,46 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         // From Thetis TxSensorsTimerCallback (TCIServer.cs:2618-2628 [v2.10.3.13]):
         // iterate listeners, call sendTxSensors for each enabled listener.
         //
-        // NereusSDR Phase 19 stub: emit placeholder readings to all clients
-        // whose txSensorsEnabled is true.
+        // Phase 3J-1 closeout Item 14 (2026-05-12): MOX gate.  Thetis only
+        // emits TX sensors while the radio is keyed; the all-on default
+        // floods listeners with spurious zero-power frames at idle and
+        // wastes 5 frames/sec × clients of bandwidth.  Gate on
+        // RadioStatus::isTransmitting (covers MOX from any PTT source, not
+        // just TCI-mutex-holder).  No-clients fast-path also skips work.
+        if (!m_model || !m_model->radioStatus().isTransmitting()) {
+            return;
+        }
+
+        // Phase 3J-1 closeout Item 15 (2026-05-12): pull real readings:
+        //   mic level:   WDSP TXA MicAvg (dBm convention matches RX side)
+        //   fwd watts:   RadioStatus::forwardPowerWatts (from PA-meter loop)
+        //   peak watts:  RadioStatus::forwardPowerWatts (no separate peak
+        //                tracker in NereusSDR yet; emit current = peak)
+        //   SWR:         RadioStatus::swrRatio (1.0 minimum)
+        // From Thetis cmaster/dsp.cs:999-1029 [v2.10.3.13] CalculateTXMeter
+        // (TXA_MIC_AV) and console.cs PA-meter loop powerChanged.
+        // TxChannel doesn't expose a getMeter() overload like RxChannel
+        // does -- callers go through GetTXAMeter directly (see MeterPoller
+        // pattern at MeterPoller.cpp:321-323).  Channel ID 1 == WDSP.id(1,0)
+        // per Thetis dsp.cs:926-944.  Only call when the TX channel exists
+        // to avoid a WDSP nullptr deref against an unallocated stage.
+        double micDbm = -140.0;
+        if (auto* wdsp = m_model->wdspEngine()) {
+            if (wdsp->txChannel(1) != nullptr) {
+                micDbm = GetTXAMeter(1, static_cast<int>(TxMeterType::MicAvg));
+            }
+        }
+        const double fwdWatts  = m_model->radioStatus().forwardPowerWatts();
+        const double swrRatio  = m_model->radioStatus().swrRatio();
+
         for (auto it = m_clients.begin(); it != m_clients.end(); ++it) {
             auto& session = it.value();
             if (!session->txSensorsEnabled) { continue; }
 
-            // Phase 19 placeholder: mic -100 dBm, power 0 W, SWR 1.0.
             // From Thetis: sendTxSensors(0, micLevelDbm, powerWatts, peakPowerWatts, swr)
             // (TCIServer.cs:2625 [v2.10.3.13])
-            const QString frame = TciSensorManager::formatTxSensors(0, -100.0, 0.0, 0.0, 1.0);
+            const QString frame = TciSensorManager::formatTxSensors(
+                0, micDbm, fwdWatts, fwdWatts, swrRatio);
             session->sendQueue.push(TciSendQueue::Priority::Control, frame);
         }
     });
