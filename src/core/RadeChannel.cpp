@@ -197,6 +197,15 @@ namespace {
 // when AppSettings has not yet pointed at a user-selected model.
 constexpr const char* kDummyModelSentinel = "dummy";
 
+// r8brain CDSPResampler24's per-process() input-size ceiling. The
+// resampler pre-allocates internal buffers at construction; a single
+// process() call with more samples than this overruns those buffers
+// and triggers glibc heap-corruption on Linux (Ubuntu 24.04 with
+// _FORTIFY_SOURCE).  See RadeChannel::start() for the full history,
+// and RadeChannel::processIq() for the chunking guard that splits
+// oversized inputs into ≤ kRadeResamplerMaxBlock pieces.
+constexpr int kRadeResamplerMaxBlock = 16384;
+
 }  // namespace
 
 // From AetherSDR src/core/RADEEngine.cpp:18-25 [@0cd4559]
@@ -297,7 +306,14 @@ bool RadeChannel::start(const QString& modelPath)
     // RADE-v1 default — 2880 input @ 24 kHz, well under 16384), so
     // the bumped headroom is purely defensive. Same root cause as
     // the tst_resampler heap corruption fixed in the same commit.
-    constexpr int kRadeResamplerMaxBlock = 16384;
+    //
+    // 2026-05-13 (Linux CI #238): processIq below now chunks inputs
+    // against kRadeResamplerMaxBlock so an oversized input (e.g.
+    // tst_rade_channel's 24000-sample stress chunk) no longer
+    // overruns the r8brain internal buffer.  Production callers
+    // (RxDspWorker) never produce chunks larger than the DSP block
+    // size (≤ 2048), but the chunked path is purely defensive and
+    // keeps the wrapper safe against any future caller.
     m_down24to8  = std::make_unique<Resampler>(24000, 8000,  kRadeResamplerMaxBlock);
     m_down24to8Q = std::make_unique<Resampler>(24000, 8000,  kRadeResamplerMaxBlock);
     m_up8to24    = std::make_unique<Resampler>(8000,  24000, kRadeResamplerMaxBlock);
@@ -482,8 +498,27 @@ void RadeChannel::processIq(const QByteArray& iqSamples)
     }
 
     // Step 2: downsample I and Q legs in parallel to 8 kHz.
-    QByteArray iOut8k = m_down24to8->process(iLeg.data(), nFrames);
-    QByteArray qOut8k = m_down24to8Q->process(qLeg.data(), nFrames);
+    //
+    // 2026-05-13 (Linux CI #238 bug 3): chunk against the resampler's
+    // pre-allocated input buffer ceiling (kRadeResamplerMaxBlock).
+    // r8brain's CDSPResampler24 overruns its internal buffers if a
+    // single process() call exceeds the maxBlockSamples it was
+    // constructed with -- harmless garbage read on macOS arm64,
+    // glibc heap-corruption / segfault on Linux x64 (Ubuntu 24.04
+    // _FORTIFY_SOURCE).  Production callers (RxDspWorker emits
+    // ≤ 2048-sample chunks) never hit this, but the test fixture
+    // tst_rade_channel::processIqAccumulatesAcrossMultipleChunks
+    // intentionally pushes a 24 000-sample chunk to verify the
+    // accumulator drain path.  Splitting the input keeps the
+    // resampler's state continuous (r8brain handles per-call edges
+    // via its delay-line) so output is identical to a single call.
+    QByteArray iOut8k;
+    QByteArray qOut8k;
+    for (int offset = 0; offset < nFrames; offset += kRadeResamplerMaxBlock) {
+        const int chunk = std::min(kRadeResamplerMaxBlock, nFrames - offset);
+        iOut8k.append(m_down24to8->process(iLeg.data() + offset, chunk));
+        qOut8k.append(m_down24to8Q->process(qLeg.data() + offset, chunk));
+    }
     const int nI = iOut8k.size() / static_cast<int>(sizeof(float));
     const int nQ = qOut8k.size() / static_cast<int>(sizeof(float));
     const int nComp = std::min(nI, nQ);
