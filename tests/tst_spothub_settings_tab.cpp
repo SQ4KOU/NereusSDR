@@ -157,20 +157,20 @@ private slots:
         QVERIFY(gridEdit != nullptr);
         QVERIFY(saveBtn  != nullptr);
 
-        callEdit->setText("W2XYZ");
-        gridEdit->setText("FN20XY");
+        callEdit->setText("NOCALL");
+        gridEdit->setText("AA00AA");
         saveBtn->click();
 
         // Canonical keys
         QCOMPARE(testSettings().value("User/Callsign").toString(),
-                 QString("W2XYZ"));
+                 QString("NOCALL"));
         QCOMPARE(testSettings().value("User/GridSquare").toString(),
-                 QString("FN20XY"));
+                 QString("AA00AA"));
         // Per-source propagation
         QCOMPARE(testSettings().value("DxClusterCallsign").toString(),
-                 QString("W2XYZ"));
+                 QString("NOCALL"));
         QCOMPARE(testSettings().value("RbnCallsign").toString(),
-                 QString("W2XYZ"));
+                 QString("NOCALL"));
         // 2026-05-12 (PR #238 P2 PSK fix): PSK Reporter Save & Propagate
         // now writes the slash-key family RadioModel reads on
         // construction + session restore (PskReporter/Callsign,
@@ -178,13 +178,13 @@ private slots:
         // PskReporterCallsign / PskReporterGrid were write-only
         // orphans nothing read.
         QCOMPARE(testSettings().value("PskReporter/Callsign").toString(),
-                 QString("W2XYZ"));
+                 QString("NOCALL"));
         QCOMPARE(testSettings().value("PskReporter/GridSquare").toString(),
-                 QString("FN20XY"));
+                 QString("AA00AA"));
         QCOMPARE(testSettings().value("FreeDvReporter/Callsign").toString(),
-                 QString("W2XYZ"));
+                 QString("NOCALL"));
         QCOMPARE(testSettings().value("FreeDvReporter/GridSquare").toString(),
-                 QString("FN20XY"));
+                 QString("AA00AA"));
         delete dlg;
     }
 
