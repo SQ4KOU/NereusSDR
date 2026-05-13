@@ -285,11 +285,24 @@ bool RadeChannel::start(const QString& modelPath)
 
     // From AetherSDR src/core/RADEEngine.cpp:58-61 [@0cd4559] plus
     // NereusSDR-architectural addition m_down24to8Q.
-    m_down24to8  = std::make_unique<Resampler>(24000, 8000);
-    m_down24to8Q = std::make_unique<Resampler>(24000, 8000);
-    m_up8to24    = std::make_unique<Resampler>(8000, 24000);
-    m_down24to16 = std::make_unique<Resampler>(24000, 16000);
-    m_up16to24   = std::make_unique<Resampler>(16000, 24000);
+    //
+    // 2026-05-12 (PR #238 follow-up): maxBlockSamples bumped from the
+    // 4096 default to 16384 because r8brain's CDSPResampler24 pre-
+    // allocates internal buffers sized for the value at construction;
+    // a process() call with > maxBlockSamples in one shot overruns
+    // those buffers and trips glibc's heap-corruption sentinel on
+    // Linux CI (Ubuntu 24.04 glibc 2.39 with _FORTIFY_SOURCE).
+    // RadeChannel accumulates 24 kHz I/Q until rade_nin() worth of
+    // 8 kHz samples are ready (typically ~960 samples at the
+    // RADE-v1 default — 2880 input @ 24 kHz, well under 16384), so
+    // the bumped headroom is purely defensive. Same root cause as
+    // the tst_resampler heap corruption fixed in the same commit.
+    constexpr int kRadeResamplerMaxBlock = 16384;
+    m_down24to8  = std::make_unique<Resampler>(24000, 8000,  kRadeResamplerMaxBlock);
+    m_down24to8Q = std::make_unique<Resampler>(24000, 8000,  kRadeResamplerMaxBlock);
+    m_up8to24    = std::make_unique<Resampler>(8000,  24000, kRadeResamplerMaxBlock);
+    m_down24to16 = std::make_unique<Resampler>(24000, 16000, kRadeResamplerMaxBlock);
+    m_up16to24   = std::make_unique<Resampler>(16000, 24000, kRadeResamplerMaxBlock);
 
     // From AetherSDR src/core/RADEEngine.cpp:63-67 [@0cd4559]
     m_txAccum.clear();

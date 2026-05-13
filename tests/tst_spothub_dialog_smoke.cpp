@@ -366,12 +366,17 @@ void TestSpotHubDialogSmoke::spotListSourcePillTogglesProxyFilter() {
 
 void TestSpotHubDialogSmoke::doubleClickOnSpotRowEmitsTuneRequested() {
     auto* dlg = makeDialog();
-    auto* model = dlg->findChild<SpotTableModel*>("spotListTableModel");
     auto* proxy = dlg->findChild<BandFilterProxy*>("spotListProxyModel");
     auto* table = dlg->findChild<QTableView*>("spotListTable");
-    QVERIFY(model != nullptr);
     QVERIFY(proxy != nullptr);
     QVERIFY(table != nullptr);
+    // 2026-05-12 (PR #238 follow-up): SpotTableModel was moved out of
+    // SpotHubDialog ownership and into RadioModel (so auto-connect
+    // spot clients can feed the table before the dialog is opened
+    // for the first time).  findChild<> on dlg therefore can't see
+    // the model — pull it through the proxy's sourceModel() instead.
+    auto* model = qobject_cast<SpotTableModel*>(proxy->sourceModel());
+    QVERIFY(model != nullptr);
     // Add a known spot.
     DxSpot s;
     s.dxCall = "K1ABC";

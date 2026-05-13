@@ -87,14 +87,30 @@ private slots:
     void stereoToStereoRoundTrips();
 };
 
+// 2026-05-12 (PR #238 review follow-up): all five tests below pass
+// inputs that exceed Resampler's default maxBlockSamples (4096).
+// r8b::CDSPResampler24 pre-allocates internal buffers sized for the
+// maxBlockSamples value passed at construction; feeding a process()
+// call with more samples than that overruns those buffers and
+// trips glibc's heap-corruption sentinel under -D_FORTIFY_SOURCE / a
+// debug malloc.  Linux CI surfaced this as "malloc(): invalid size
+// (unsorted)" + SIGABRT inside downsample24kTo8k; the 1:1-rate
+// tests likely also corrupted heap memory but did not happen to
+// trip the sentinel on the macOS / Linux paths that pre-dated CI's
+// NEREUS_BUILD_TESTS=ON gate.
+//
+// Each Resampler ctor below now explicitly sizes maxBlockSamples to
+// the per-call input size (or larger) so r8brain's allocations fit.
+
 void TestResampler::identity24kTo24k()
 {
     // 1:1 rate. r8brain CDSPResampler24 still applies a polyphase FIR
     // filter so the first call swallows several hundred samples of
     // filter latency. We feed a 4-second buffer (96000 samples) so
     // latency amortizes to less than 5% of the total.
-    Resampler r(24000, 24000);
-    auto in = makeMonoSine(96000, 1000.0, 24000.0);
+    constexpr int kInputSamples = 96000;
+    Resampler r(24000, 24000, kInputSamples);
+    auto in = makeMonoSine(kInputSamples, 1000.0, 24000.0);
 
     QByteArray out = r.process(in.data(), static_cast<int>(in.size()));
     const int outSamples = out.size() / static_cast<int>(sizeof(float));
@@ -110,8 +126,9 @@ void TestResampler::downsample24kTo8k()
     // ~2400 samples at the OUTPUT rate (one full FIR-kernel worth);
     // even at a 96000-sample input (32000 expected output) that's
     // about 7-8% of the output count. We use a 10% tolerance.
-    Resampler r(24000, 8000);
-    auto in = makeMonoSine(96000, 1000.0, 24000.0);
+    constexpr int kInputSamples = 96000;
+    Resampler r(24000, 8000, kInputSamples);
+    auto in = makeMonoSine(kInputSamples, 1000.0, 24000.0);
 
     QByteArray out = r.process(in.data(), static_cast<int>(in.size()));
     const int outSamples = out.size() / static_cast<int>(sizeof(float));
@@ -125,13 +142,14 @@ void TestResampler::monoToStereoDoubles()
 {
     // processMonoToStereo at 1:1 rate. Output should be ~N stereo frames
     // = 2N floats for N input samples. Compare byte count.
-    Resampler r(16000, 16000);
-    auto monoIn = makeMonoSine(16000, 1000.0, 16000.0);
+    constexpr int kInputSamples = 16000;
+    Resampler r(16000, 16000, kInputSamples);
+    auto monoIn = makeMonoSine(kInputSamples, 1000.0, 16000.0);
 
     QByteArray monoOut = r.process(monoIn.data(), static_cast<int>(monoIn.size()));
     const int monoOutSamples = monoOut.size() / static_cast<int>(sizeof(float));
 
-    Resampler r2(16000, 16000);
+    Resampler r2(16000, 16000, kInputSamples);
     QByteArray stereoOut = r2.processMonoToStereo(monoIn.data(), static_cast<int>(monoIn.size()));
     const int stereoOutFloats = stereoOut.size() / static_cast<int>(sizeof(float));
 
@@ -145,15 +163,15 @@ void TestResampler::stereoToMonoHalves()
     // processStereoToMono at 1:1 rate. N stereo frames in (2N floats),
     // ~N mono samples out. Mono output count matches the mono-input
     // path's output count.
-    const int nFrames = 16000;
+    constexpr int nFrames = 16000;
     auto stereoIn = makeStereoSine(nFrames, 1000.0, 16000.0);
     auto monoIn = makeMonoSine(nFrames, 1000.0, 16000.0);
 
-    Resampler r(16000, 16000);
+    Resampler r(16000, 16000, nFrames);
     QByteArray monoOut = r.process(monoIn.data(), nFrames);
     const int monoOutSamples = monoOut.size() / static_cast<int>(sizeof(float));
 
-    Resampler r2(16000, 16000);
+    Resampler r2(16000, 16000, nFrames);
     QByteArray downmixOut = r2.processStereoToMono(stereoIn.data(), nFrames);
     const int downmixOutSamples = downmixOut.size() / static_cast<int>(sizeof(float));
 
@@ -167,14 +185,14 @@ void TestResampler::stereoToStereoRoundTrips()
     // processStereoToStereo at 1:1 rate. N stereo frames in, ~N stereo
     // frames out (2N floats), matching the byte count of processStereoTo
     // Mono * 2.
-    const int nFrames = 16000;
+    constexpr int nFrames = 16000;
     auto stereoIn = makeStereoSine(nFrames, 1000.0, 16000.0);
 
-    Resampler r(16000, 16000);
+    Resampler r(16000, 16000, nFrames);
     QByteArray monoOut = r.processStereoToMono(stereoIn.data(), nFrames);
     const int monoOutSamples = monoOut.size() / static_cast<int>(sizeof(float));
 
-    Resampler r2(16000, 16000);
+    Resampler r2(16000, 16000, nFrames);
     QByteArray stereoOut = r2.processStereoToStereo(stereoIn.data(), nFrames);
     const int stereoOutFloats = stereoOut.size() / static_cast<int>(sizeof(float));
 

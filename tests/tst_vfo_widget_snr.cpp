@@ -5,17 +5,28 @@
 // NEW NereusSDR-native UI extension to VfoWidget. No upstream
 // equivalent. Pins the contract that VfoWidget surfaces the active
 // slice's snrDb Q_PROPERTY (set by RadeChannel via I5 routing) as a
-// dim-grey / yellow / green text row. Row visibility tracks the
+// single combined-status RichText label.  Row visibility tracks the
 // slice's current DSPMode: only shown when mode is either RADE
 // sideband (DSPMode::RADE_U or DSPMode::RADE_L).
 //
+// 2026-05-12 (PR #238 review follow-up): rewritten against the
+// 2026-05-11 bench-design RADE status-row refactor that merged the
+// separate name + value labels into a single m_snrLabel rendering
+// "<prefix> ● <snr>dB" RichText.  The old separate m_snrValue label
+// is retained only as a hidden no-op placeholder for API stability;
+// the live status text now lives on m_snrLabel.  Color thresholds
+// also moved to match AetherSDR VfoWidget.cpp:3424-3432 [@0cd4559]:
+//   < 5 dB  -> #e0e040 (yellow)
+//   >= 5 dB -> #00ff88 (green)
+//   hollow  -> #505050 (grey)
+//
 // Cases:
-//   nanShowsDashesInGrey      - default snrDb=NaN paints " -   - " in dim grey
-//   lowSnrShowsYellow         - snrDb=3.0 paints "+3 dB" in yellow (#e6c200)
-//   goodSnrShowsGreen         - snrDb=12.0 paints "+12 dB" in green (#4caf50)
-//   negativeSnrFormats        - snrDb=-1.0 paints "-1 dB" (no double-sign)
-//   snrHiddenInNonRadeMode    - mode=USB hides row; mode=RADE_U shows it.
-//   snrVisibleInRadeLower     - mode=RADE_L also shows the row.
+//   nanShowsHollowInitialState  - NaN snrDb paints "<prefix> ○ ---" in grey
+//   lowSnrShowsYellow           - snrDb=3.0 paints "RADE ● 3dB" in yellow
+//   goodSnrShowsGreen           - snrDb=12.0 paints "RADE ● 12dB" in green
+//   negativeSnrFormats          - snrDb=-1.0 paints "RADE ● -1dB" in yellow
+//   snrHiddenInNonRadeMode      - mode=USB hides row; mode=RADE_U shows it
+//   snrVisibleInRadeLower       - mode=RADE_L also shows the row
 
 #include <QtTest>
 #include <QSignalSpy>
@@ -33,7 +44,7 @@ using namespace NereusSDR;
 class TestVfoWidgetSnr : public QObject {
     Q_OBJECT
 private slots:
-    void nanShowsDashesInGrey();
+    void nanShowsHollowInitialState();
     void lowSnrShowsYellow();
     void goodSnrShowsGreen();
     void negativeSnrFormats();
@@ -45,7 +56,9 @@ namespace {
 
 // Helper: build a VfoWidget bound to a SliceModel and put it in RADE_U
 // mode.  The widget is constructed parentless so QTest can show() it
-// without dragging in MainWindow/SpectrumWidget.
+// without dragging in MainWindow/SpectrumWidget.  setMode(RADE_U)
+// drives updateSnrVisibility() -> setRadeActive(true) so the SNR
+// label becomes paintable.
 void seedRadeMode(VfoWidget* vfo, SliceModel* slice) {
     slice->setDspMode(DSPMode::RADE_U);
     vfo->setSlice(slice);
@@ -54,19 +67,25 @@ void seedRadeMode(VfoWidget* vfo, SliceModel* slice) {
 
 } // namespace
 
-void TestVfoWidgetSnr::nanShowsDashesInGrey() {
+void TestVfoWidgetSnr::nanShowsHollowInitialState() {
     SliceModel slice;
     VfoWidget vfo;
     seedRadeMode(&vfo, &slice);
 
-    // Initial slice snrDb is NaN. The value label should show the
-    // placeholder " -   - " in dim grey.
+    // Initial slice snrDb is NaN.  setRadeSnrLabel(NaN) early-returns
+    // (VfoWidget.cpp:794-796) so the label stays at the
+    // setRadeActive(true) initial paint: "RADE ○ ---" in grey.
     slice.setSnrDb(std::numeric_limits<double>::quiet_NaN());
 
-    QLabel* label = vfo.snrValueLabelForTest();
+    QLabel* label = vfo.snrLabelForTest();
     QVERIFY(label != nullptr);
-    QVERIFY(label->text().contains(QChar('-')));
-    QVERIFY(label->styleSheet().contains(QStringLiteral("#7a8088")));
+    QVERIFY2(label->text().contains(QStringLiteral("---")),
+             qPrintable(QStringLiteral("expected '---' placeholder, got: %1")
+                            .arg(label->text())));
+    // Hollow-circle ○ paints with the grey #505050 color marker.
+    QVERIFY2(label->text().contains(QStringLiteral("#505050")),
+             qPrintable(QStringLiteral("expected grey #505050 marker, got: %1")
+                            .arg(label->text())));
 }
 
 void TestVfoWidgetSnr::lowSnrShowsYellow() {
@@ -76,10 +95,16 @@ void TestVfoWidgetSnr::lowSnrShowsYellow() {
 
     slice.setSnrDb(3.0);
 
-    QLabel* label = vfo.snrValueLabelForTest();
+    QLabel* label = vfo.snrLabelForTest();
     QVERIFY(label != nullptr);
-    QCOMPARE(label->text(), QStringLiteral("+3 dB"));
-    QVERIFY(label->styleSheet().contains(QStringLiteral("#e6c200")));
+    QVERIFY2(label->text().contains(QStringLiteral("3dB")),
+             qPrintable(QStringLiteral("expected '3dB' in label, got: %1")
+                            .arg(label->text())));
+    // Below the 5 dB threshold -> yellow #e0e040 (AetherSDR
+    // VfoWidget.cpp:3424-3432 [@0cd4559]).
+    QVERIFY2(label->text().contains(QStringLiteral("#e0e040")),
+             qPrintable(QStringLiteral("expected yellow #e0e040 marker, got: %1")
+                            .arg(label->text())));
 }
 
 void TestVfoWidgetSnr::goodSnrShowsGreen() {
@@ -89,10 +114,15 @@ void TestVfoWidgetSnr::goodSnrShowsGreen() {
 
     slice.setSnrDb(12.0);
 
-    QLabel* label = vfo.snrValueLabelForTest();
+    QLabel* label = vfo.snrLabelForTest();
     QVERIFY(label != nullptr);
-    QCOMPARE(label->text(), QStringLiteral("+12 dB"));
-    QVERIFY(label->styleSheet().contains(QStringLiteral("#4caf50")));
+    QVERIFY2(label->text().contains(QStringLiteral("12dB")),
+             qPrintable(QStringLiteral("expected '12dB' in label, got: %1")
+                            .arg(label->text())));
+    // >= 5 dB -> green #00ff88.
+    QVERIFY2(label->text().contains(QStringLiteral("#00ff88")),
+             qPrintable(QStringLiteral("expected green #00ff88 marker, got: %1")
+                            .arg(label->text())));
 }
 
 void TestVfoWidgetSnr::negativeSnrFormats() {
@@ -102,37 +132,38 @@ void TestVfoWidgetSnr::negativeSnrFormats() {
 
     slice.setSnrDb(-1.0);
 
-    QLabel* label = vfo.snrValueLabelForTest();
+    QLabel* label = vfo.snrLabelForTest();
     QVERIFY(label != nullptr);
-    // Negative values format with single leading "-" (Qt's %+d handles
-    // this naturally; no manual sign concatenation).
-    QCOMPARE(label->text(), QStringLiteral("-1 dB"));
-    // Negative SNR is below the 5 dB threshold so it stays yellow.
-    QVERIFY(label->styleSheet().contains(QStringLiteral("#e6c200")));
+    // Negative SNR formats with a single leading "-"; integer-truncate
+    // (static_cast<int>) per VfoWidget::setRadeSnrLabel:814.
+    QVERIFY2(label->text().contains(QStringLiteral("-1dB")),
+             qPrintable(QStringLiteral("expected '-1dB' in label, got: %1")
+                            .arg(label->text())));
+    // Negative SNR is below the 5 dB threshold -> yellow.
+    QVERIFY2(label->text().contains(QStringLiteral("#e0e040")),
+             qPrintable(QStringLiteral("expected yellow #e0e040 marker, got: %1")
+                            .arg(label->text())));
 }
 
 void TestVfoWidgetSnr::snrHiddenInNonRadeMode() {
     SliceModel slice;
     VfoWidget vfo;
 
-    // Start in USB. Row must be hidden because SNR is only meaningful
-    // for the RADE neural codec.
+    // Start in USB.  Row label must be hidden because SNR is only
+    // meaningful for the RADE neural codec.  updateSnrVisibility ->
+    // setRadeActive(false) -> m_snrLabel->hide().
     slice.setDspMode(DSPMode::USB);
     vfo.setSlice(&slice);
     vfo.setMode(DSPMode::USB);
 
-    QLabel* valueLabel = vfo.snrValueLabelForTest();
-    QLabel* nameLabel  = vfo.snrLabelForTest();
-    QVERIFY(valueLabel != nullptr);
-    QVERIFY(nameLabel  != nullptr);
-    QVERIFY(!valueLabel->isVisibleTo(&vfo));
-    QVERIFY(!nameLabel->isVisibleTo(&vfo));
+    QLabel* label = vfo.snrLabelForTest();
+    QVERIFY(label != nullptr);
+    QVERIFY(!label->isVisibleTo(&vfo));
 
     // Switch the slice to RADE_U: row becomes visible.
     slice.setDspMode(DSPMode::RADE_U);
     vfo.setMode(DSPMode::RADE_U);
-    QVERIFY(valueLabel->isVisibleTo(&vfo));
-    QVERIFY(nameLabel->isVisibleTo(&vfo));
+    QVERIFY(label->isVisibleTo(&vfo));
 }
 
 void TestVfoWidgetSnr::snrVisibleInRadeLower() {
@@ -147,12 +178,9 @@ void TestVfoWidgetSnr::snrVisibleInRadeLower() {
     vfo.setSlice(&slice);
     vfo.setMode(DSPMode::RADE_L);
 
-    QLabel* valueLabel = vfo.snrValueLabelForTest();
-    QLabel* nameLabel  = vfo.snrLabelForTest();
-    QVERIFY(valueLabel != nullptr);
-    QVERIFY(nameLabel  != nullptr);
-    QVERIFY(valueLabel->isVisibleTo(&vfo));
-    QVERIFY(nameLabel->isVisibleTo(&vfo));
+    QLabel* label = vfo.snrLabelForTest();
+    QVERIFY(label != nullptr);
+    QVERIFY(label->isVisibleTo(&vfo));
 }
 
 QTEST_MAIN(TestVfoWidgetSnr)

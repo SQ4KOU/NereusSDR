@@ -171,8 +171,16 @@ private slots:
                  QString("W2XYZ"));
         QCOMPARE(testSettings().value("RbnCallsign").toString(),
                  QString("W2XYZ"));
-        QCOMPARE(testSettings().value("PskReporterCallsign").toString(),
+        // 2026-05-12 (PR #238 P2 PSK fix): PSK Reporter Save & Propagate
+        // now writes the slash-key family RadioModel reads on
+        // construction + session restore (PskReporter/Callsign,
+        // PskReporter/GridSquare).  Old flat keys
+        // PskReporterCallsign / PskReporterGrid were write-only
+        // orphans nothing read.
+        QCOMPARE(testSettings().value("PskReporter/Callsign").toString(),
                  QString("W2XYZ"));
+        QCOMPARE(testSettings().value("PskReporter/GridSquare").toString(),
+                 QString("FN20XY"));
         QCOMPARE(testSettings().value("FreeDvReporter/Callsign").toString(),
                  QString("W2XYZ"));
         QCOMPARE(testSettings().value("FreeDvReporter/GridSquare").toString(),
