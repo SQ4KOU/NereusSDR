@@ -2061,6 +2061,13 @@ nereus_add_test(tst_app_settings_arbitrary_key_persistence)
 # tst_tci_matrix_runner -- this file pins the PRODUCTION-side wiring.
 nereus_add_test(tst_tci_radio_model_shims)
 
+# ── Phase 3J-1 closeout Item 4 (2026-05-12): per-(band, mode) filter ────────
+# Pins the contract that SliceModel::setDspMode saves the current filter
+# under (currentBand, OLD mode) and restores from (currentBand, NEW mode)
+# instead of slamming defaultFilterForMode.  Mirrors Thetis preset[m].
+# LastFilter (console.cs:14653-14671 [v2.10.3.13]).
+nereus_add_test(tst_slice_filter_per_band_per_mode_persistence)
+
 # ── Task 5.1: SettingsSchemaVersion + v0.3.0 migration ────────────────────────
 # 5 tests: retired keys removed on v<3 → v3 migration, idempotency, fresh-install
 # (no version key), no-op when already at v3, version-zero path.

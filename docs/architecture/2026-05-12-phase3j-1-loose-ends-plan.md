@@ -203,9 +203,34 @@ Enumerated by `grep -nE 'invokeMethod' src/core/TciProtocol.cpp` (see PR
 
 ---
 
-### Item 4 — Per-band-per-mode `LastFilter` persistence
+### Item 4 — Per-band-per-mode `LastFilter` persistence [CLOSED 2026-05-12]
 
-**Goal:** When the user adjusts the filter for a band+mode combination,
+**Closeout summary:** new `bandModePrefix(slice, band, mode)` helper
+produces a `Slice<N>/Band<B>/Mode<M>/` key namespace.  `setDspMode` now
+saves the current filter under (currentBand, OLD mode) before the mode
+swap and restores from (currentBand, NEW mode) after, falling back to
+`defaultFilterForMode` only when no persisted value exists.
+`saveToSettings(band)` writes filter to both the legacy `(band)/` path
+(backward-compat with code that reads it directly) and the new
+`(band, mode)/` path; `restoreFromSettings(band)` prefers the
+(band, mode) path with legacy fallback.  Schema-stable: existing
+pre-Item-4 settings files keep working via the legacy fallback;
+forward writes go to both paths.  No version bump needed.
+
+DIGU/DIGL F1 (3 kHz) workaround from the 3J-1 bench fix is reverted to
+Thetis F5 (1.2 kHz) defaults now that persistence remembers the
+operator's first widening.  Matches upstream `console.cs:5286 / 5328
+[v2.10.3.13]` byte-for-byte.
+
+**Verification:** new `tst_slice_filter_per_band_per_mode_persistence`
+covers (a) mode-change roundtrip within a single band: USB 200/2900 ->
+DIGU defaults -> DIGU 1400/1700 -> USB 200/2900 restored -> DIGU
+1400/1700 restored; (b) unset-mode fallback to `defaultFilterForMode`;
+(c) per-band isolation: same mode on 20m and 40m maintains separate
+filter memories.  35/35 slice + TCI tests pass.
+
+**Original goal (kept for history):**
+When the user adjusts the filter for a band+mode combination,
 persist that filter. When a mode change occurs (whether from UI or from
 TCI `modulation:N,M;`), restore the persisted filter for the current
 band+mode instead of slamming a hardcoded default. Mirrors Thetis's
