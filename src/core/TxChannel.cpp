@@ -2042,13 +2042,23 @@ void TxChannel::feedTxAudioFromTci(const QByteArray& interleavedStereoBytes,
     if (m_tciTxAccum.size() < static_cast<size_t>(frames)) {
         m_tciTxAccum.resize(static_cast<size_t>(frames));
     }
+    // Phase 3J-1 closeout Item 11 (2026-05-12): apply the TciApplet
+    // "TX gain" slider as a pre-TXA scalar.  Orthogonal to WDSP Panel
+    // gain (mic slider).  Item 13: track block peak |sample| for the
+    // TciApplet TX level meter -- replaces the fake sine-wave animation.
+    const float tciTxGain = m_tciTxGainLinear.load(std::memory_order_acquire);
+    float blockPeak = 0.0f;
     for (int f = 0; f < frames; ++f) {
         // Extract L channel (mono: frame[f]; stereo: frame[2f])
-        const float l = (channels == 2)
-                        ? interleavedStereo[2 * f]
-                        : interleavedStereo[f];
+        const float raw = (channels == 2)
+                          ? interleavedStereo[2 * f]
+                          : interleavedStereo[f];
+        const float l = raw * tciTxGain;
         m_tciTxAccum[static_cast<size_t>(f)] = l;
+        const float a = std::fabs(l);
+        if (a > blockPeak) { blockPeak = a; }
     }
+    m_tciTxPeakAbs.store(blockPeak, std::memory_order_release);
 
     // ── Phase 3J-1 closeout Item 8 (2026-05-12): resample non-48k input.
     //

@@ -126,6 +126,21 @@ TciApplet::TciApplet(TciServer* server, QWidget* parent)
         m_refreshTimer->start();
     }
 
+    // Phase 3J-1 closeout Items 11+12 (2026-05-12): push persisted slider
+    // values into the audio path so the gains take effect at launch without
+    // the user having to wiggle the slider.  Both sliders default to 0 dB
+    // (linear 1.0, no attenuation) which matches the TciServer defaults --
+    // but persisted non-zero values must propagate or the slider's UI
+    // position would lie about what the audio path is doing.
+    if (m_server) {
+        if (m_sliceAGain) {
+            onSliceAGainChanged(m_sliceAGain->value());
+        }
+        if (m_txGain) {
+            onTxGainChanged(m_txGain->value());
+        }
+    }
+
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
 }
 
@@ -438,30 +453,35 @@ void TciApplet::refresh()
     // Update client count in case it changed via signals we missed while hidden.
     updateStatusWidgets();
 
-    // Phase 21 placeholder: animate a small mock level on the gauges when
-    // the server is running.  Real meter wiring deferred to Phase 24+.
+    // Phase 3J-1 closeout Item 13 (2026-05-12): replace fake sine-wave
+    // placeholder with real per-slice + per-TX peak readings.  Peak |sample|
+    // is updated atomically by the drain loop (RX) / feedTxAudioFromTci (TX)
+    // and read here every 200 ms.
+    //
+    // Conversion: 20*log10(peak) with floor at -60 dBFS to match the gauge
+    // range.  A silent audio bus reads exactly -60 (peak == 0 -> log -> -inf
+    // -> clamped).  This is the same dBFS convention HGauge uses elsewhere.
     if (!m_server || !m_server->isRunning()) {
+        if (m_sliceAGauge) { m_sliceAGauge->setValue(-60.0); }
+        if (m_txGauge)     { m_txGauge->setValue(-60.0); }
         return;
     }
 
-    const int clientCount = m_server->clientCount();
-    if (clientCount > 0) {
-        // Produce a gentle sine-like oscillation in [-20, -8] dBFS so the
-        // gauge isn't a static bar.  m_mockLevelPhase increments every tick.
-        ++m_mockLevelPhase;
-        const double angle = m_mockLevelPhase * 0.25;  // ~1 Hz at 200 ms tick
-        const double mockDb = -14.0 + 6.0 * std::sin(angle);
-        if (m_sliceAGauge) {
-            m_sliceAGauge->setValue(mockDb);
-        }
-    } else {
-        // No clients — hold gauges at floor.
-        if (m_sliceAGauge) {
-            m_sliceAGauge->setValue(-60.0);
-        }
-        if (m_txGauge) {
-            m_txGauge->setValue(-60.0);
-        }
+    auto peakToDbfs = [](float peak) -> double {
+        if (peak <= 1e-6f) { return -60.0; }
+        const double db = 20.0 * std::log10(static_cast<double>(peak));
+        if (db < -60.0) { return -60.0; }
+        if (db >  0.0)  { return  0.0; }
+        return db;
+    };
+
+    if (m_sliceAGauge) {
+        const float peak = m_server->sliceRxPeakAbs(0);  // slice "A" == rx 0
+        m_sliceAGauge->setValue(peakToDbfs(peak));
+    }
+    if (m_txGauge) {
+        const float peak = m_server->tciTxPeakAbs();
+        m_txGauge->setValue(peakToDbfs(peak));
     }
 }
 
@@ -540,6 +560,13 @@ void TciApplet::onShowClientsClicked()
     emit showClientsRequested();
 }
 
+// Phase 3J-1 closeout Item 12 (2026-05-12): wire slice-A gain slider to
+// the TciServer pre-resample scalar.  Math: dB -> linear via 10^(dB/20);
+// at dB == 0 the multiplier is exactly 1.0 (no-op fast path in the drain
+// loop).  Slider range is [-60, 0] so the multiplier is always in [0.001,
+// 1.0] -- attenuation only, no amplification (the slider can't add gain
+// the radio didn't already produce).  Independent of WDSP RXA Panel gain
+// (AF Gain on the speaker bus); this is a TCI-only trim.
 void TciApplet::onSliceAGainChanged(int dB)
 {
     if (m_sliceAGainLabel) {
@@ -548,9 +575,17 @@ void TciApplet::onSliceAGainChanged(int dB)
     auto& s = AppSettings::instance();
     s.setValue(QLatin1String(kKeySliceAGain), QString::number(dB));
     s.save();
-    // Phase 22+: wire gain value into TCI audio pipeline.
+
+    if (m_server) {
+        const float lin = std::pow(10.0f, dB / 20.0f);
+        m_server->setSliceRxGainLinear(0, lin);  // slice "A" == rx 0
+    }
 }
 
+// Phase 3J-1 closeout Item 11 (2026-05-12): wire TX gain slider to the
+// TciServer pre-TXA scalar.  See feedTxAudioFromTci in TxChannel.cpp for
+// the multiply site.  Orthogonal to WDSP Panel gain (mic slider in
+// PhoneCwApplet); both apply at different stages of the TXA chain.
 void TciApplet::onTxGainChanged(int dB)
 {
     if (m_txGainLabel) {
@@ -559,7 +594,11 @@ void TciApplet::onTxGainChanged(int dB)
     auto& s = AppSettings::instance();
     s.setValue(QLatin1String(kKeyTxGain), QString::number(dB));
     s.save();
-    // Phase 22+: wire TX gain into TCI audio pipeline.
+
+    if (m_server) {
+        const float lin = std::pow(10.0f, dB / 20.0f);
+        m_server->setTciTxGainLinear(lin);
+    }
 }
 
 } // namespace NereusSDR

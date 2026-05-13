@@ -2691,6 +2691,41 @@ private:
     // Cleared automatically on client disconnect via the same signal.
     std::atomic<bool> m_tciAudioActive{false};
 
+    // Phase 3J-1 closeout Item 11 (2026-05-12): pre-TXA scalar applied to
+    // TCI audio in feedTxAudioFromTci BEFORE the resample + ring push.
+    // Driven by the TciApplet "TX gain" slider via setTciTxGainLinear().
+    // Stored as a linear multiplier (10^(dB/20)); default 1.0 (0 dB, no
+    // attenuation, matches the slider's persisted default).
+    //
+    // Independent of WDSP Panel gain (mic slider).  Math: TCI audio gets
+    // `samples × tciTxGain` here, then the WDSP TXA chain multiplies by
+    // Panel gain at stage 2.  Two orthogonal knobs that both apply.
+    //
+    // Atomic so the GUI thread can write while the producer slot
+    // (feedTxAudioFromTci on TxWorkerThread) reads; no torn-store hazard
+    // on the float bit pattern because Qt 6 + C++20 guarantees
+    // std::atomic<float> is lock-free on every NereusSDR target.
+    std::atomic<float> m_tciTxGainLinear{1.0f};
+public:
+    void setTciTxGainLinear(float lin) {
+        m_tciTxGainLinear.store(lin, std::memory_order_release);
+    }
+
+    // Phase 3J-1 closeout Item 13 (2026-05-12): TX-audio peak sample,
+    // updated atomically by feedTxAudioFromTci AFTER the gain multiply +
+    // before the ring push.  Read by TciApplet's refresh timer to drive
+    // the TX level meter -- replaces the fake sine-wave placeholder.
+    //
+    // Single producer (feedTxAudioFromTci on TxWorkerThread), single
+    // consumer (TciApplet::refresh on GUI thread); each block-write
+    // overwrites the previous value, so old peaks decay naturally with
+    // sample-block cadence.  No accumulation needed.
+    float tciTxPeakAbs() const {
+        return m_tciTxPeakAbs.load(std::memory_order_acquire);
+    }
+private:
+    std::atomic<float> m_tciTxPeakAbs{0.0f};
+
     // ── Phase 3J-1 bench fix (2026-05-10): TCI TX audio ring ────────────────
     //
     // SPSC ring buffer that bridges the burst-rate TCI producer

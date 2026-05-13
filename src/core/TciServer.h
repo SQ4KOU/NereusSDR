@@ -315,6 +315,41 @@ private:
     static constexpr int kMaxTciRxSlices = 2;
     std::array<AudioRingSpsc<131072>, kMaxTciRxSlices> m_audioRing;
 
+    // Phase 3J-1 closeout Item 12 (2026-05-12): per-slice RX gain applied
+    // to the audio drained from m_audioRing BEFORE the resample + encode.
+    // Driven by the TciApplet "Slice A gain" slider (currently slice 0 only;
+    // future per-slice sliders would extend to slice 1).  Default 1.0
+    // (0 dB, no attenuation).  Independent of the radio's AF Gain (which
+    // affects WDSP RXA PanelGain1 / the speaker bus) -- this is a TCI-only
+    // trim on the audio going OUT to TCI clients.
+    std::array<std::atomic<float>, kMaxTciRxSlices> m_sliceRxGainLinear;
+
+    // Phase 3J-1 closeout Item 13 (2026-05-12): per-slice RX audio peak,
+    // updated after gain multiply in the drain loop and read by the
+    // TciApplet refresh timer to drive the slice-A level meter.  Replaces
+    // the placeholder sine-wave animation.
+    std::array<std::atomic<float>, kMaxTciRxSlices> m_sliceRxPeakAbs;
+public:
+    void setSliceRxGainLinear(int rx, float lin) {
+        if (rx >= 0 && rx < kMaxTciRxSlices) {
+            m_sliceRxGainLinear[rx].store(lin, std::memory_order_release);
+        }
+    }
+    float sliceRxPeakAbs(int rx) const {
+        if (rx >= 0 && rx < kMaxTciRxSlices) {
+            return m_sliceRxPeakAbs[rx].load(std::memory_order_acquire);
+        }
+        return 0.0f;
+    }
+
+    // Phase 3J-1 closeout Items 11+13 (2026-05-12): forwarders to TxChannel
+    // so TciApplet doesn't have to traverse RadioModel -> WdspEngine ->
+    // txChannel(1).  Safe before WDSP init; setter is a no-op, getter
+    // returns 0 if the TX channel isn't up yet.
+    void setTciTxGainLinear(float lin);
+    float tciTxPeakAbs() const;
+private:
+
     // Scratch buffer for deinterleaving + resampling in the drain loop.
     // Max samples per drain tick = audioStreamSamples (default 2048) * channels (2).
     // We size for the largest legal audioStreamSamples (2048) * 2 channels.

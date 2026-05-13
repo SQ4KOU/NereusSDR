@@ -71,6 +71,15 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
     // dispatch engine across all clients (single-instance, transport-blind).
     , m_protocol(std::make_unique<TciProtocol>(model, this))
 {
+    // Phase 3J-1 closeout Item 12 (2026-05-12): seed per-slice RX gain atomics
+    // to 1.0 (0 dB).  TciApplet pushes the persisted slice-A gain via
+    // setSliceRxGainLinear on construction; this default is the fallback
+    // before that hookup runs.
+    for (int rx = 0; rx < kMaxTciRxSlices; ++rx) {
+        m_sliceRxGainLinear[rx].store(1.0f, std::memory_order_release);
+        m_sliceRxPeakAbs[rx].store(0.0f, std::memory_order_release);
+    }
+
     // ── Phase 3J-1 bench fix (2026-05-11): seed TCI compat-flag defaults ────
     //
     // WSJT-X / JTDX / Hamlib's TCI driver gate TCI-audio mode on the server
@@ -214,6 +223,29 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                     reinterpret_cast<uint8_t*>(m_drainScratch.data()),
                     wantBytes);
                 if (got < wantBytes) { continue; }
+
+                // Phase 3J-1 closeout Item 12 (2026-05-12): apply per-slice
+                // TCI RX gain BEFORE resample (so the gain stays in the 48k
+                // domain and the resampler sees clean amplitude).  Item 13:
+                // track block peak |sample| for TciApplet's slice level meter
+                // -- replaces the fake sine-wave placeholder.
+                const float sliceGain =
+                    m_sliceRxGainLinear[rx].load(std::memory_order_acquire);
+                float blockPeak = 0.0f;
+                if (sliceGain != 1.0f) {
+                    for (int i = 0; i < totalSamples; ++i) {
+                        m_drainScratch[i] *= sliceGain;
+                        const float a = std::fabs(m_drainScratch[i]);
+                        if (a > blockPeak) { blockPeak = a; }
+                    }
+                } else {
+                    // No gain adjust -- just track peak without mutating samples.
+                    for (int i = 0; i < totalSamples; ++i) {
+                        const float a = std::fabs(m_drainScratch[i]);
+                        if (a > blockPeak) { blockPeak = a; }
+                    }
+                }
+                m_sliceRxPeakAbs[rx].store(blockPeak, std::memory_order_release);
 
                 // Resample if the client requested a rate other than 48000 Hz.
                 // Phase 16: xresampleFV resamples in-place using the per-session
@@ -1654,6 +1686,33 @@ void TciServer::startTxChrono(QWebSocket* client, int trx)
     sendTxChronoFrame(client);
     qCInfo(lcTci) << "TciServer: TX_CHRONO started for trx" << trx
                   << "client" << static_cast<const void*>(client);
+}
+
+// ── Phase 3J-1 closeout Items 11+13 (2026-05-12): TX gain + peak forwarders.
+//
+// TxChannel may not exist yet at call time (WDSP not initialized, or no
+// hardware connection).  The setter no-ops in that case; the getter
+// returns 0 so the TciApplet meter sits at the floor.
+
+void TciServer::setTciTxGainLinear(float lin)
+{
+    if (!m_model) { return; }
+    if (auto* wdsp = m_model->wdspEngine()) {
+        if (auto* tx = wdsp->txChannel(1)) {
+            tx->setTciTxGainLinear(lin);
+        }
+    }
+}
+
+float TciServer::tciTxPeakAbs() const
+{
+    if (!m_model) { return 0.0f; }
+    if (auto* wdsp = m_model->wdspEngine()) {
+        if (auto* tx = wdsp->txChannel(1)) {
+            return tx->tciTxPeakAbs();
+        }
+    }
+    return 0.0f;
 }
 
 void TciServer::stopTxChrono()
