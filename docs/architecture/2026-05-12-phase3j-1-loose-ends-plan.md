@@ -268,9 +268,36 @@ This removes the F1-default workaround we currently apply in
 
 ---
 
-### Item 7 — Settings-purge investigation
+### Item 7 — Settings-purge investigation [CLOSED 2026-05-12]
 
-**Goal:** Identify the mechanism by which the user's pre-edited
+**Investigation outcome (commit pending):**
+There is NO key-purge mechanism in the NereusSDR codebase.  Audit of
+`AppSettings::load` / `save` / `setValue` / `remove` and all
+`m_settings.remove(` callers (5 total) found that every removal path
+is explicitly scoped: `remove(key)` is per-key API, `forgetRadio` is
+`hardware/<mac>/`, `clearSavedRadios` is `radios/`, `clearHardware
+Values` is `hardware/<mac>/`.  None of these can touch top-level keys
+like `TciEmulateSunSDR2Pro`.  The user's memory note appears to refer
+to a removed code path or a misperception.
+
+The "keys vanished" symptom was almost certainly "keys were never
+persisted in the first place".  Pre-fix code read the keys via
+`value(..., "False")` and got the default; without a `setValue` write
+the keys never reached `m_settings`, so `save()` never wrote them, so
+the next launch saw no keys and returned the default again.  The
+seed-on-construct fix at `TciServer.cpp:107-114` writes both keys to
+`m_settings` on first launch, after which they persist.
+
+**Pinned via regression test:** `tst_app_settings_arbitrary_key_
+persistence` — 4 subtests covering arbitrary user key round-trip,
+TciEmulate* round-trip, empty-string-value round-trip (catches
+"empty == absent" parser quirks), and confirmation that scoped removal
+paths (`forgetRadio` / `clearHardwareValues`) don't touch unrelated
+top-level keys.  Any future regression that adds a filter to
+`AppSettings::save` or `load` will break this test.
+
+**Original goal (kept for history):**
+Identify the mechanism by which the user's pre-edited
 `TciEmulateSunSDR2Pro` and `TciEmulateExpertSDR3Protocol` keys vanished
 from the settings file. Our seed-on-construct workaround in
 `TciServer::TciServer` mitigates the symptom but doesn't address the root

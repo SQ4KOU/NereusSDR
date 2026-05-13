@@ -2045,6 +2045,14 @@ nereus_add_test(tst_connection_panel_state_pills)
 # NereusSDR-original; no Thetis attribution needed.
 nereus_add_test(tst_app_settings_migration)
 
+# ── Phase 3J-1 closeout Item 7 (2026-05-12): arbitrary-key persistence ───────
+# Pins the contract that AppSettings does NOT purge top-level keys on save/
+# reload, regardless of whether the key matches any "known schema".  Audit of
+# the load/save/setValue/remove code paths found zero filters; this test
+# prevents any future change from accidentally adding one.  Background in
+# docs/architecture/2026-05-12-phase3j-1-loose-ends-plan.md Item 7.
+nereus_add_test(tst_app_settings_arbitrary_key_persistence)
+
 # ── Task 5.1: SettingsSchemaVersion + v0.3.0 migration ────────────────────────
 # 5 tests: retired keys removed on v<3 → v3 migration, idempotency, fresh-install
 # (no version key), no-op when already at v3, version-zero path.
