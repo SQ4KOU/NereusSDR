@@ -567,6 +567,15 @@ void TxChannel::registerVoxCallback()
     }
     s_voxKeyInstance = this;
 #ifdef HAVE_WDSP
+    // 2026-05-13 (Linux CI #238): bounds-check m_channelId against
+    // WDSP's MAX_CHANNELS (=32 in comm.h) BEFORE indexing txa[] / pdexp[].
+    // Test fixtures (e.g. tst_dsp_options_per_mode_apply tx_no_engine_*)
+    // construct TxChannel with channelId=97 for isolation; on macOS arm64
+    // the OOB read happens to land in mapped zero memory so the null-
+    // guards below evaluate true and the function returns harmlessly.
+    // On Linux x64 the same OOB landed in unmapped memory / read garbage
+    // pointers and segfaulted.
+    if (m_channelId < 0 || m_channelId >= MAX_CHANNELS) return;
     // Phase 3M-1c TX pump v3: pdexp[ch] + txa.rsmpin.p null-guards.  Test
     // builds construct TxChannel directly without going through
     // WdspEngine::createTxChannel → OpenChannel(type=1), so neither
@@ -598,11 +607,19 @@ void TxChannel::registerVoxCallback()
 void TxChannel::unregisterVoxCallback()
 {
 #ifdef HAVE_WDSP
+    // 2026-05-13 (Linux CI #238): bounds-check m_channelId against
+    // WDSP's MAX_CHANNELS BEFORE indexing txa[] / pdexp[].  Mirror of
+    // registerVoxCallback's check — same Linux OOB segfault path for
+    // test fixtures that use out-of-range channel IDs.
+    const bool channelInRange =
+        (m_channelId >= 0 && m_channelId < MAX_CHANNELS);
     // Same null-guard pair as registerVoxCallback (and all DEXP setters in
     // this file).  Test builds never drove OpenChannel(type=1) so pdexp[]
     // is null and the WDSP unregister would crash; production builds
     // always have a live DEXP at dtor time.
-    if (txa[m_channelId].rsmpin.p == nullptr) {
+    if (!channelInRange) {
+        // Skip WDSP call; still clear the lookup pointer below.
+    } else if (txa[m_channelId].rsmpin.p == nullptr) {
         // Skip WDSP call; still clear the lookup pointer below.
     } else if (pdexp[m_channelId] == nullptr) {
         // Skip WDSP call; still clear the lookup pointer below.
@@ -1407,12 +1424,40 @@ void TxChannel::setStageRunning(Stage s, bool run)
 void TxChannel::setTxMode(DSPMode mode)
 {
     m_mode = mode;  // carry — always updated regardless of WDSP state
+
+    // Phase 3R K-bench: RADE_U / RADE_L are NereusSDR-native dispatch
+    // modes (DSPMode::RADE_U = 12, RADE_L = 13). WDSP's SetTXAMode only
+    // accepts the original Thetis-derived modes (LSB=0 .. DRM=11);
+    // passing 12 or 13 leaves the WDSP modulator stage in an invalid
+    // state and produces no I/Q output. Per the source-first reframe
+    // (freedv-gui treats RADE as audio + radio's external SSB modulator
+    // handles USB/LSB), NereusSDR must map RADE_U -> USB and RADE_L ->
+    // LSB before calling SetTXAMode so the WDSP modulator runs as if
+    // for ordinary SSB voice. RadeChannel-generated audio is then fed
+    // into the same TXA mic-input path.
+    //
+    // Computed unconditionally so the test seam reflects the mapping
+    // decision regardless of whether WDSP is wired (unit-test path
+    // skips the SetTXAMode call below but still pins the contract).
+    DSPMode wdspMode = mode;
+    if (mode == DSPMode::RADE_U) {
+        wdspMode = DSPMode::USB;
+    } else if (mode == DSPMode::RADE_L) {
+        wdspMode = DSPMode::LSB;
+    }
+    m_lastWdspTxMode = wdspMode;
+
+    // BENCH DEBUG: log every setTxMode call so we can verify the
+    // RADE_U/L -> USB/LSB mapping fires and no later code reverts it.
+    qCInfo(lcDsp) << "TxChannel::setTxMode in=" << static_cast<int>(mode)
+                  << "wdspMode=" << static_cast<int>(wdspMode);
+
 #ifdef HAVE_WDSP
     // From Thetis radio.cs:2670-2696 [v2.10.3.13]
     if (txa[m_channelId].rsmpin.p == nullptr) {
         return;  // channel not yet opened (unit-test path)
     }
-    SetTXAMode(m_channelId, static_cast<int>(mode));
+    SetTXAMode(m_channelId, static_cast<int>(wdspMode));
 #else
     Q_UNUSED(mode);
 #endif
@@ -1529,7 +1574,15 @@ void TxChannel::applyTxFilterForMode(int audioLowHz, int audioHighHz, DSPMode mo
     // Per deskhpsdr/transmitter.c:2136-2186 [@120188f] — tx_set_filter per-mode
     // IQ-space sign convention.  Same mapping as setTuneTone() lines 520-528.
     auto isLsbFamily = [](DSPMode m) {
-        return m == DSPMode::LSB || m == DSPMode::DIGL || m == DSPMode::CWL;
+        // Phase 3R K-bench: RADE_L rides an LSB carrier. Its slice
+        // filterLow/High are stored as signed negatives (-2350, -650)
+        // matching the LSB / DIGL / CWL convention; without including
+        // RADE_L here, applyTxFilterForMode would skip the negate-and-
+        // swap step and hand WDSP a negative-bandpass value while the
+        // modulator is in LSB mode, putting RADE audio on the wrong
+        // sideband (user bench-reported on 40m).
+        return m == DSPMode::LSB    || m == DSPMode::DIGL
+            || m == DSPMode::CWL    || m == DSPMode::RADE_L;
     };
     auto isSymmetric = [](DSPMode m) {
         return m == DSPMode::AM  || m == DSPMode::SAM

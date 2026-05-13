@@ -699,7 +699,19 @@ public:
     ///
     /// From Thetis radio.cs:2670-2696 [v2.10.3.13] — CurrentDSPMode setter
     /// (else-branch: WDSP.SetTXAMode(WDSP.id(thread, 0), value) for non-AM/SAM).
+    ///
+    /// Phase 3R K-bench: RADE_U / RADE_L are NereusSDR-native dispatch modes
+    /// (=12/13) outside WDSP's enum range (0..11). setTxMode internally maps
+    /// RADE_U -> USB and RADE_L -> LSB before calling SetTXAMode so the
+    /// WDSP modulator runs as if for ordinary SSB voice. RadeChannel audio
+    /// is then fed into the same TXA mic-input path.
     void setTxMode(DSPMode mode);
+
+    /// Test seam: returns the DSPMode last passed to SetTXAMode (the WDSP-
+    /// mapped value, not the carry m_mode which preserves RADE_U/L for
+    /// NereusSDR-side dispatch). Used by tst_tx_channel_rade_mode_mapping
+    /// to pin the RADE_U -> USB / RADE_L -> LSB contract.
+    DSPMode lastWdspTxModeForTest() const { return m_lastWdspTxMode; }
 
     /// Set the TXA channel's bandpass filter cutoff frequencies.
     ///
@@ -2948,6 +2960,7 @@ private:
 
     // Mode + filter carry
     DSPMode m_mode         {DSPMode::USB};   // carry; setTxMode also calls WDSP
+    DSPMode m_lastWdspTxMode{DSPMode::USB};  // test seam: RADE_U/L map -> USB/LSB
     int     m_filterLowHz  {200};            // carry; setTxBandpass also calls WDSP
     int     m_filterHighHz {2700};           // carry; setTxBandpass also calls WDSP
 

@@ -108,6 +108,13 @@ class TestWdspEngineTxChannel;
 class TstWdspEngineDexpInit;
 // Phase 3M-4 Task 4: same pattern for the PsFeedbackChannel lifecycle test.
 class TstPsFeedbackChannel;
+// Phase 3R Task J3: same pattern for the SliceModel RADE mode-swap test;
+// needs to flip m_initialized = true so the RxChannel seed at the head of
+// the test does not bail out on the !m_initialized guard.
+class TestSliceModelRadeSwap;
+// Phase 3R Task L2: same friendship for the RadeApplet UI test which
+// constructs a real RadioModel + RadeChannel fixture.
+class TestRadeApplet;
 #endif
 
 namespace NereusSDR {
@@ -115,6 +122,7 @@ namespace NereusSDR {
 class RxChannel;
 class TxChannel;
 class PsFeedbackChannel;
+class RadeChannel;
 
 // Central WDSP manager. Owns all RxChannel instances and manages
 // system-level initialization (FFTW wisdom, impulse cache).
@@ -202,6 +210,46 @@ public:
     // the radio data flow before calling — see RadioModel::setSampleRateLive
     // for the full Thetis-faithful sequence ported from setup.cs:7003-7159.
     bool setRxChannelRate(int channelId, int newRateHz);
+
+    // --- RADE Channel management (Phase 3R Task J2) ---
+    //
+    // RADE (Radio Autoencoder) is a neural-codec digital voice mode
+    // wrapped by RadeChannel (src/core/RadeChannel.{h,cpp}, Tasks I1-I3).
+    // It is NOT a WDSP channel: WDSP has no knowledge of RADE.  The
+    // lifecycle below is pure C++ object management - no OpenChannel /
+    // CloseChannel / WDSP-side initialization.  createRadeChannel does
+    // not require m_initialized = true.
+    //
+    // Channel-ID namespace: RadeChannel IDs share the integer space
+    // with createRxChannel / createTxChannel by convention (Phase 3R
+    // Task J3 maps each slice ID 0..N to one channel at a time).
+    // WdspEngine itself does not enforce that constraint - callers
+    // (J3's setDspMode swap) are responsible for sequencing
+    // destroy-old-RxChannel then create-new-RadeChannel and vice
+    // versa.
+
+    // Create a RadeChannel for the given slice ID.  The channel is
+    // parented to the WdspEngine so QObject ownership cleans up
+    // correctly on engine destruction.  Returns the channel pointer
+    // on success.  If a channel with the same id already exists,
+    // returns the existing pointer without constructing a new one
+    // (mirrors createRxChannel's pre-existence guard at the head of
+    // WdspEngine.cpp:368-371).
+    //
+    // The returned channel is NOT auto-started; the caller (J3 mode
+    // swap) is responsible for calling RadeChannel::start(modelPath)
+    // so it can supply the right model-path / sentinel handling.
+    RadeChannel* createRadeChannel(int channelId);
+
+    // Destroy a RadeChannel by ID.  Calls RadeChannel::stop() (which
+    // is idempotent for an already-stopped channel) before erasing
+    // the wrapper.  The pointer becomes invalid after this call.
+    // Idempotent: destroying a non-existent id is a safe no-op.
+    void destroyRadeChannel(int channelId);
+
+    // Look up an existing RadeChannel by ID.  Returns nullptr if no
+    // channel with that ID is registered.
+    RadeChannel* radeChannel(int channelId) const;
 
     // --- TX Channel management ---
 
@@ -338,6 +386,13 @@ private:
     // RX channels keyed by WDSP channel ID.
     std::map<int, std::unique_ptr<RxChannel>> m_rxChannels;
 
+    // RADE channels keyed by slice ID (Phase 3R Task J2).  Shares the
+    // integer namespace with m_rxChannels / m_txChannels by convention;
+    // callers (J3's setDspMode mode swap) are responsible for sequencing
+    // destroy-old then create-new on transitions.  std::map is chosen to
+    // match the existing RX channel container.
+    std::map<int, std::unique_ptr<RadeChannel>> m_radeChannels;
+
     // TX channels keyed by WDSP channel ID.
     // Each entry holds a TxChannel C++ wrapper around the 31-stage TXA
     // pipeline that WDSP constructs when OpenChannel(type=1) is called.
@@ -397,6 +452,10 @@ private:
     friend class ::TstWdspEngineDexpInit;
     // Phase 3M-4 Task 4: same friendship for the PsFeedbackChannel test.
     friend class ::TstPsFeedbackChannel;
+    // Phase 3R Task J3: same friendship for the SliceModel RADE mode-swap test.
+    friend class ::TestSliceModelRadeSwap;
+    // Phase 3R Task L2: same friendship for the RadeApplet UI test.
+    friend class ::TestRadeApplet;
 #endif
 };
 

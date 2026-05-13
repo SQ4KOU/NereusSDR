@@ -281,11 +281,25 @@ warren@wpratt.com
 #include "applets/RxApplet.h"
 #include "applets/TxApplet.h"
 #include "applets/TxEqDialog.h"
+// Phase 3J-2 H1: Tools menu modeless singletons (Spot Hub + FreeDV Reporter).
+#include "SpotHubDialog.h"
+#include "FreeDVReporterDialog.h"
+#include "models/SpotModel.h"
+#include "models/SpotTableModel.h"
+#include "models/FreeDVStationModel.h"
+#include "core/DxccColorProvider.h"
+#include "core/FreeDVReporterClient.h"
+#include "core/DxClusterClient.h"
+#include "core/WsjtxClient.h"
+#include "core/SpotCollectorClient.h"
+#include "core/PotaClient.h"
+#include "core/PskReporterClient.h"
 #include "PsForm.h"
 #include "PsaIndicatorWidget.h"
 #include "core/PureSignal.h"
 #include "core/TwoToneController.h"
 #include "applets/PhoneCwApplet.h"
+#include "applets/RadeApplet.h"
 #include "applets/EqApplet.h"
 #include "applets/VaxApplet.h"
 #include "applets/DigitalApplet.h"
@@ -358,6 +372,7 @@ warren@wpratt.com
 #include <QJsonObject>
 #include <QVersionNumber>
 #include <QPointer>
+#include <QShortcut>
 
 #include <cstdlib>
 
@@ -695,6 +710,19 @@ MainWindow::MainWindow(QWidget* parent)
     // before any signal/slot activity (e.g. discovery radioDiscovered).
     QTimer::singleShot(0, this, &MainWindow::tryAutoReconnect);
 
+    // Phase 3J-2 + 3R M3: restore each spot client's auto-connect /
+    // auto-start state. Sibling to tryAutoReconnect above; deferred via
+    // singleShot(0, ...) so the QTcpSocket / QUdpSocket / QWebSocket
+    // owned by each client see a fully-spun event loop before any
+    // network I/O fires. Each client guards against double-start so
+    // re-invocation is harmless (e.g. if a future code path also calls
+    // this after a profile switch).
+    QTimer::singleShot(0, this, [this] {
+        if (m_radioModel) {
+            m_radioModel->restoreSpotClientAutoStartState();
+        }
+    });
+
     // Phase 3O Sub-Phase 11/12 — VAX first-run / startup rescan.
     // The Setup → Audio → VAX page (AudioVaxPage) is now live; users
     // who skip the first-run dialog can reach cable binding via
@@ -883,6 +911,85 @@ void MainWindow::buildUI()
             [this]() {
         m_overlayPanel->setBoardCapabilities(m_radioModel->boardCapabilities());
     });
+
+    // ── 2026-05-12 bench fix: SpotModel → SpectrumWidget bridge ───────────
+    //
+    // The missing bridge — every spot ingestion path (Cluster / RBN /
+    // WSJT-X / SpotCollector / POTA / FreeDV / PSK Reporter) lands in
+    // RadioModel's per-source `on<Source>SpotReceived` slot which calls
+    // `m_spotModel->applySpotStatus(...)`.  SpotModel then emits
+    // spotAdded / spotUpdated / spotRemoved / spotsCleared.
+    //
+    // But upstream AetherSDR's `refreshSpots()` lambda on MainWindow —
+    // the thing that translates SpotData into SpectrumWidget::SpotMarker
+    // and calls `setSpotMarkers(...)` to repaint the panadapter overlay —
+    // never carried over in the port.  Result: SpotTableModel (the Spot
+    // List tab) fills correctly because it has its own per-source
+    // wireClient lambda; the panadapter, however, has been blind to
+    // every spot since Phase 3J-2 shipped.
+    //
+    // This block rebuilds the marker vector on every SpotModel change
+    // (full rebuild, not delta — the typical spot map is <500 entries
+    // with a 30-min lifetime).  DxCC-aware coloring uses the same
+    // DxccColorProvider the SpotTableModel queries.
+    if (auto* spotModel = m_radioModel->spotModel()) {
+        auto refreshSpots = [this]() {
+            if (!m_spectrumWidget || !m_radioModel) { return; }
+            auto* spotModel = m_radioModel->spotModel();
+            if (!spotModel) { return; }
+            auto* dxccColor = m_radioModel->dxccColorProvider();
+
+            const auto& spots = spotModel->spots();
+            QVector<SpectrumWidget::SpotMarker> markers;
+            markers.reserve(spots.size());
+            for (auto it = spots.constBegin(); it != spots.constEnd(); ++it) {
+                const SpotData& s = it.value();
+                SpectrumWidget::SpotMarker m;
+                m.index            = s.index;
+                m.callsign         = s.callsign;
+                // Prefer the RX (heard-on) frequency so cluster spots
+                // land on the actual TX freq of the DX station.  Fall
+                // back to txFreqMhz when only one is populated (e.g.
+                // POTA / RBN sometimes ship rxFreqMhz only).
+                m.freqMhz          = (s.rxFreqMhz > 0.0)
+                                         ? s.rxFreqMhz
+                                         : s.txFreqMhz;
+                m.color            = s.color;
+                m.mode             = s.mode;
+                m.source           = s.source;
+                m.spotterCallsign  = s.spotterCallsign;
+                m.comment          = s.comment;
+                m.timestampMs      = s.timestamp.isValid()
+                                         ? s.timestamp.toMSecsSinceEpoch()
+                                         : QDateTime::currentMSecsSinceEpoch();
+                if (dxccColor && dxccColor->isEnabled()
+                    && !m.callsign.isEmpty() && m.freqMhz > 0.0) {
+                    m.dxccColor = dxccColor->colorForSpot(
+                        m.callsign, m.freqMhz, m.mode);
+                }
+                markers.append(m);
+            }
+            m_spectrumWidget->setSpotMarkers(markers);
+        };
+
+        connect(spotModel, &SpotModel::spotAdded,
+                this, [refreshSpots](const SpotData&) { refreshSpots(); });
+        connect(spotModel, &SpotModel::spotUpdated,
+                this, [refreshSpots](const SpotData&) { refreshSpots(); });
+        connect(spotModel, &SpotModel::spotRemoved,
+                this, [refreshSpots](int) { refreshSpots(); });
+        connect(spotModel, &SpotModel::spotsCleared,
+                this, refreshSpots);
+        connect(spotModel, &SpotModel::spotsRefreshed,
+                this, refreshSpots);
+
+        // 2026-05-12 bench fix (Gap #3 follow-on).  Right-click → Remove
+        // Spot on the panadapter emits spotRemoveRequested(idx) → purge
+        // the spot from SpotModel → spotRemoved fires → refreshSpots
+        // above repaints the overlay without it.
+        connect(m_spectrumWidget, &SpectrumWidget::spotRemoveRequested,
+                spotModel, &SpotModel::removeSpot);
+    }
 
     // Zoom slider bar below spectrum
     auto* zoomBar = new QSlider(Qt::Horizontal, spectrumPane);
@@ -2048,6 +2155,15 @@ void MainWindow::populateDefaultMeter()
     m_phoneCwApplet = new PhoneCwApplet(m_radioModel, nullptr);
     panel->addApplet(m_phoneCwApplet);
 
+    // RadeApplet — Phase 3R L2.  Sits alongside PhoneCwApplet but is
+    // visible only when the active slice's mode is DSPMode::RADE_U or
+    // DSPMode::RADE_L.  The initial mode is set in the dspModeChanged
+    // lambda below; for the default startup mode (USB) the applet
+    // starts hidden.
+    m_radeApplet = new RadeApplet(m_radioModel, nullptr);
+    panel->addApplet(m_radeApplet);
+    m_radeApplet->setVisible(false);
+
     // Ghost applets — hidden per docs/superpowers/plans/2026-05-01-ui-polish-right-panel.md §Task 6.
     // These applets are entirely placeholder-only today (no wired controls).
     // Showing them is misleading — users click e.g. "Equalizer" and nothing happens.
@@ -2819,29 +2935,36 @@ void MainWindow::buildMenuBar()
     // =========================================================================
     QMenu* modeMenu = menuBar()->addMenu(QStringLiteral("&Mode"));
 
-    // 12 modes in display order (spec order): LSB, USB, DSB, CWL, CWU, AM,
-    // SAM, FM, DIGL, DIGU, DRM, SPEC.
-    // Maps to DSPMode enum values from WdspTypes.h.
+    // 12 Thetis-faithful modes + the NereusSDR-native RADE-U / RADE-L
+    // entries (Phase 3R L3).  Display order: LSB, USB, DSB, CWL, CWU,
+    // AM, SAM, FM, DIGL, DIGU, DRM, SPEC, RADE-U, RADE-L.  Maps to
+    // DSPMode enum values from WdspTypes.h.
     // From Thetis dsp.cs DSPMode enum — enum values used directly, not indices.
+    // RADE-U / RADE-L are NereusSDR-native entries (DSPMode::RADE_U = 12,
+    // DSPMode::RADE_L = 13; not WDSP modes; routes the slice through
+    // RadeChannel).  Like USB/LSB, RADE has upper/lower sideband
+    // variants with mirrored 1700 Hz passbands.
     const struct { const char* label; DSPMode mode; } modes[] = {
-        { "LSB",  DSPMode::LSB  },
-        { "USB",  DSPMode::USB  },
-        { "DSB",  DSPMode::DSB  },
-        { "CWL",  DSPMode::CWL  },
-        { "CWU",  DSPMode::CWU  },
-        { "AM",   DSPMode::AM   },
-        { "SAM",  DSPMode::SAM  },
-        { "FM",   DSPMode::FM   },
-        { "DIGL", DSPMode::DIGL },
-        { "DIGU", DSPMode::DIGU },
-        { "DRM",  DSPMode::DRM  },
-        { "SPEC", DSPMode::SPEC },
+        { "LSB",    DSPMode::LSB    },
+        { "USB",    DSPMode::USB    },
+        { "DSB",    DSPMode::DSB    },
+        { "CWL",    DSPMode::CWL    },
+        { "CWU",    DSPMode::CWU    },
+        { "AM",     DSPMode::AM     },
+        { "SAM",    DSPMode::SAM    },
+        { "FM",     DSPMode::FM     },
+        { "DIGL",   DSPMode::DIGL   },
+        { "DIGU",   DSPMode::DIGU   },
+        { "DRM",    DSPMode::DRM    },
+        { "SPEC",   DSPMode::SPEC   },
+        { "RADE-U", DSPMode::RADE_U },  // Phase 3R L3, NereusSDR-native upper
+        { "RADE-L", DSPMode::RADE_L },  // Phase 3R L3, NereusSDR-native lower
     };
 
     m_modeActionGroup = new QActionGroup(this);
     m_modeActionGroup->setExclusive(true);
 
-    for (int i = 0; i < 12; ++i) {
+    for (int i = 0; i < 14; ++i) {
         DSPMode mode = modes[i].mode;
         QAction* act = modeMenu->addAction(QString::fromUtf8(modes[i].label),
                                            this, [this, mode]() {
@@ -2864,8 +2987,10 @@ void MainWindow::buildMenuBar()
                 DSPMode::LSB, DSPMode::USB, DSPMode::DSB, DSPMode::CWL,
                 DSPMode::CWU, DSPMode::AM,  DSPMode::SAM,  DSPMode::FM,
                 DSPMode::DIGL, DSPMode::DIGU, DSPMode::DRM, DSPMode::SPEC,
+                DSPMode::RADE_U,  // Phase 3R L3, index 12
+                DSPMode::RADE_L,  // Phase 3R L3, index 13
             };
-            for (int i = 0; i < 12; ++i) {
+            for (int i = 0; i < 14; ++i) {
                 if (m_modeActions[i]) {
                     m_modeActions[i]->setChecked(displayOrder[i] == mode);
                 }
@@ -2971,7 +3096,35 @@ void MainWindow::buildMenuBar()
     // =========================================================================
     QMenu* toolsMenu = menuBar()->addMenu(QStringLiteral("&Tools"));
 
-    // TX Equalizer — modeless singleton dialog (Phase 3M-3a-i Batch 3 A.1).
+    // Phase 3J-2 H1: Spot Hub (DX cluster / RBN / POTA / WSJT-X / FreeDV /
+    // PSK Reporter). Modeless singleton dialog; lazy-constructed in
+    // openSpotHub() with all 7 clients + SpotModel + DxccColorProvider
+    // injected from RadioModel.
+    {
+        QAction* spotHubAction = toolsMenu->addAction(QStringLiteral("Spot &Hub..."));
+        spotHubAction->setObjectName(QStringLiteral("actSpotHub"));
+        spotHubAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+S")));
+        spotHubAction->setToolTip(QStringLiteral(
+            "Open the Spot Hub dialog (DX cluster, RBN, POTA, WSJT-X, "
+            "FreeDV Reporter, PSK Reporter, Spot Collector)."));
+        connect(spotHubAction, &QAction::triggered, this, &MainWindow::openSpotHub);
+    }
+
+    // Phase 3J-2 H1: FreeDV Reporter live station map.
+    // Modeless singleton dialog; lazy-constructed in openFreeDVReporter()
+    // with FreeDVStationModel + FreeDVReporterClient from RadioModel.
+    {
+        QAction* fdvAction = toolsMenu->addAction(QStringLiteral("&FreeDV Reporter..."));
+        fdvAction->setObjectName(QStringLiteral("actFreeDVReporter"));
+        fdvAction->setShortcut(QKeySequence(QStringLiteral("Ctrl+Shift+R")));
+        fdvAction->setToolTip(QStringLiteral(
+            "Open the FreeDV Reporter dialog (live stations on qso.freedv.org)."));
+        connect(fdvAction, &QAction::triggered, this, &MainWindow::openFreeDVReporter);
+    }
+
+    toolsMenu->addSeparator();
+
+    // TX Equalizer: modeless singleton dialog (Phase 3M-3a-i Batch 3 A.1).
     {
         QAction* txEqAction = toolsMenu->addAction(QStringLiteral("TX &Equalizer..."));
         txEqAction->setToolTip(QStringLiteral(
@@ -3090,6 +3243,21 @@ void MainWindow::buildMenuBar()
         AboutDialog dlg(this);
         dlg.exec();
     });
+
+    // Phase 3J-2 H1: Ctrl+Shift+K clears all rows in SpotModel. Mirrors the
+    // "Clear All Spots" button on SpotHubDialog's Display tab so the user
+    // can wipe stale spots without opening the dialog. Application-scoped
+    // QShortcut so it fires regardless of which child widget has focus.
+    {
+        auto* clearSpotsShortcut = new QShortcut(
+            QKeySequence(QStringLiteral("Ctrl+Shift+K")), this);
+        clearSpotsShortcut->setContext(Qt::ApplicationShortcut);
+        connect(clearSpotsShortcut, &QShortcut::activated, this, [this]() {
+            if (m_radioModel && m_radioModel->spotModel()) {
+                m_radioModel->spotModel()->clear();
+            }
+        });
+    }
 }
 
 void MainWindow::buildStatusBar()
@@ -4059,6 +4227,40 @@ void MainWindow::wireSliceToSpectrum()
     // Stage C2: wire FilterPresetStore so VFO flag filter buttons use user overrides.
     vfo->setFilterPresetStore(m_radioModel->filterPresetStore());
 
+    // Phase 3R K-bench: wire RadioModel's RADE signals to VfoWidget's
+    // AetherSDR-port label setters. Without this, the SNR label paints
+    // a value on the first sync and never reverts to "RADE ○ ---" when
+    // sync drops, leaving the user with a stale "-3 dB" readout when
+    // RADE has actually unlocked.
+    //   syncChanged(false) -> setRadeSynced(false) -> "RADE ○ ---"
+    //   syncChanged(true)  -> (next snrChanged fills in "RADE ● NdB")
+    //   freqOffsetChanged  -> appends "+Nhz" to existing label text
+    connect(m_radioModel, &RadioModel::radeSyncChanged, vfo,
+            [vfo](int /*sliceId*/, bool synced) {
+                if (!synced) {
+                    vfo->setRadeSynced(false);
+                }
+                // synced=true: snrChanged will paint "RADE ● NdB"
+                // shortly afterward, so no immediate label update
+                // needed here.
+            });
+    connect(m_radioModel, &RadioModel::radeFreqOffsetChanged, vfo,
+            [vfo](int /*sliceId*/, float hz) {
+                vfo->setRadeFreqOffset(hz);
+            });
+
+    // 2026-05-11 bench: wire EOO-decoded RADE speaker callsign to the
+    // VFO flag SNR row so "<call> ● <snr>dB" replaces "RADE ● <snr>dB"
+    // whenever we have a decoded callsign for the current slice.  Sticky
+    // until next decode replaces it; SliceModel clears the field when
+    // setDspMode leaves RADE_U/RADE_L (A + D semantics per bench design
+    // 2026-05-11).  Seed the current cached value once so a slice that
+    // already holds a decoded callsign (e.g. from before the user opened
+    // a panadapter container) paints correctly on first show.
+    vfo->setRadeCallsign(slice->lastRadeRxCallsign());
+    connect(slice, &SliceModel::lastRadeRxCallsignChanged,
+            vfo, &VfoWidget::setRadeCallsign);
+
     // --- Slice → spectrum display ---
 
     // VFO frequency change → move VFO marker
@@ -4146,7 +4348,25 @@ void MainWindow::wireSliceToSpectrum()
             m_spectrumWidget->setTxMode(mode);
         }
         vfo->setMode(mode);
-        // Switch PhoneCwApplet page based on active mode
+        // Phase 3R L2: gate RADE applet visibility on either RADE
+        // sideband (RADE_U or RADE_L).  Show RadeApplet IN ADDITION to
+        // PhoneCwApplet when in RADE mode — they were originally
+        // mutually exclusive in L2 but bench feedback showed PhoneCw
+        // hosts the mic gain slider which is critical for RADE TX
+        // (leveler can compensate but the user still needs a way to
+        // adjust mic preamp). Both applets coexist in RADE mode; the
+        // PhoneCwApplet's Phone page applies generically since RADE
+        // rides a USB/LSB carrier.
+        const bool isRade = (mode == DSPMode::RADE_U
+                             || mode == DSPMode::RADE_L);
+        if (m_radeApplet) {
+            m_radeApplet->setVisible(isRade);
+        }
+        if (m_phoneCwApplet) {
+            m_phoneCwApplet->setVisible(true);  // always visible
+        }
+        // Switch PhoneCwApplet page based on active mode. RADE rides
+        // a USB/LSB carrier so the Phone page is the correct surface.
         if (m_phoneCwApplet) {
             switch (mode) {
                 case DSPMode::CWL:
@@ -4158,6 +4378,7 @@ void MainWindow::wireSliceToSpectrum()
                     break;
                 default:
                     m_phoneCwApplet->showPage(0);  // Phone page
+                                                   // (incl. RADE_U / RADE_L)
                     break;
             }
         }
@@ -5176,6 +5397,280 @@ void MainWindow::openPureSignalDialog()
     m_psForm->show();
     m_psForm->raise();
     m_psForm->activateWindow();
+}
+
+// Phase 3J-2 H1: open the modeless SpotHubDialog.
+//
+// Lazy-constructs on first invocation, wiring all 7 spot-ingest clients
+// + SpotModel + DxccColorProvider from RadioModel (Task H2 made these
+// accessible via getters). Subsequent calls show + raise the existing
+// instance so geometry, table sort state, and per-tab settings persist
+// across opens. QPointer guards the pointer in case the dialog is ever
+// deleted by some external path; lazy reconstruction is then automatic.
+//
+// Mirrors the modeless-singleton pattern at AetherSDR
+// src/gui/MainWindow.cpp openDxClusterDialog() [@0cd4559].
+void MainWindow::openSpotHub()
+{
+    if (!m_radioModel) { return; }
+    if (!m_spotHubDialog) {
+        m_spotHubDialog = new SpotHubDialog(
+            m_radioModel->dxCluster(),
+            m_radioModel->rbn(),
+            m_radioModel->wsjtx(),
+            m_radioModel->spotCollector(),
+            m_radioModel->pota(),
+            m_radioModel->freeDvReporter(),
+            m_radioModel->pskReporter(),
+            m_radioModel->spotModel(),
+            m_radioModel->spotTableModel(),
+            m_radioModel->dxccColorProvider(),
+            this);
+        // Bridge spotsClearedAll (Display tab's "Clear All Spots" button)
+        // to SpotModel::clear so the global QShortcut and the dialog
+        // button share one truth-source.
+        connect(m_spotHubDialog.data(), &SpotHubDialog::spotsClearedAll,
+                m_radioModel->spotModel(), &SpotModel::clear);
+        // Spot List double-click tuneRequested(double Mhz) drives the
+        // active slice. SliceModel::setFrequency takes Hz (double), so
+        // multiply by 1e6 to convert MHz to Hz.
+        connect(m_spotHubDialog.data(), &SpotHubDialog::tuneRequested,
+                this, [this](double freqMhz) {
+                    if (auto* slice = m_radioModel->activeSlice()) {
+                        slice->setFrequency(freqMhz * 1.0e6);
+                    }
+                });
+        // Phase 3J-2 + 3R M2: Display tab knob round-trip.
+        // SpotHubDialog F4 writes every knob change to AppSettings and
+        // emits settingsChanged. SpectrumWidget::loadSpotDisplaySettings
+        // pulls the new values back out and pushes them into the spot
+        // overlay setters in one go. Mirrors AetherSDR's refreshSpots
+        // lambda (src/models/RadioModel.cpp [@0cd4559]) but the
+        // NereusSDR shape lives on the widget so the test seam is local
+        // (see tst_spothub_display_knobs).
+        connect(m_spotHubDialog.data(), &SpotHubDialog::settingsChanged,
+                this, [this] {
+                    if (m_spectrumWidget) {
+                        m_spectrumWidget->loadSpotDisplaySettings();
+                    }
+                });
+        // First-time seed: pick up any settings that were persisted
+        // before the dialog was ever opened. Without this, the spectrum
+        // overlay would only reflect the AppSettings defaults until the
+        // operator first opened the dialog and changed a knob.
+        if (m_spectrumWidget) {
+            m_spectrumWidget->loadSpotDisplaySettings();
+        }
+
+        // Phase 3R K-bench (bench feedback): wire the FreeDV tab's
+        // Start / Stop button signals to the actual client lifecycle.
+        // Previously the button emitted freedvStartRequested /
+        // freedvStopRequested but nothing handled the Stop side, so
+        // clicking Stop appeared to do nothing.
+        if (auto* fdv = m_radioModel->freeDvReporter()) {
+            connect(m_spotHubDialog.data(),
+                    &SpotHubDialog::freedvStartRequested,
+                    fdv, &FreeDVReporterClient::startConnection);
+            connect(m_spotHubDialog.data(),
+                    &SpotHubDialog::freedvStopRequested,
+                    fdv, &FreeDVReporterClient::stopConnection);
+        }
+
+        // 2026-05-12 bench fix: wire the remaining 10 SpotHubDialog
+        // lifecycle signals to their respective client methods.  Without
+        // these connects the per-tab Connect / Start / Stop buttons in
+        // SpotHubDialog emit signals into the void — the FreeDV pair
+        // above was wired but DX Cluster, RBN, WSJT-X, SpotCollector,
+        // and POTA buttons all silently no-op'd.  The auto-start path
+        // (RadioModel::restoreSpotClientAutoStartState) calls the same
+        // client methods directly and worked; only the manual-button
+        // path was broken.  Clients themselves are correct — proven by
+        // the spotReceived → spotModel wires at RadioModel.cpp:973-981.
+        if (auto* dxc = m_radioModel->dxCluster()) {
+            connect(m_spotHubDialog.data(),
+                    &SpotHubDialog::connectRequested,
+                    dxc, &DxClusterClient::connectToCluster);
+            connect(m_spotHubDialog.data(),
+                    &SpotHubDialog::disconnectRequested,
+                    dxc, &DxClusterClient::disconnect);
+        }
+        if (auto* rbn = m_radioModel->rbn()) {
+            connect(m_spotHubDialog.data(),
+                    &SpotHubDialog::rbnConnectRequested,
+                    rbn, &DxClusterClient::connectToCluster);
+            connect(m_spotHubDialog.data(),
+                    &SpotHubDialog::rbnDisconnectRequested,
+                    rbn, &DxClusterClient::disconnect);
+        }
+        if (auto* wsjtx = m_radioModel->wsjtx()) {
+            connect(m_spotHubDialog.data(),
+                    &SpotHubDialog::wsjtxStartRequested,
+                    wsjtx, &WsjtxClient::startListening);
+            connect(m_spotHubDialog.data(),
+                    &SpotHubDialog::wsjtxStopRequested,
+                    wsjtx, &WsjtxClient::stopListening);
+        }
+        if (auto* sc = m_radioModel->spotCollector()) {
+            connect(m_spotHubDialog.data(),
+                    &SpotHubDialog::spotCollectorStartRequested,
+                    sc, &SpotCollectorClient::startListening);
+            connect(m_spotHubDialog.data(),
+                    &SpotHubDialog::spotCollectorStopRequested,
+                    sc, &SpotCollectorClient::stopListening);
+        }
+        if (auto* pota = m_radioModel->pota()) {
+            connect(m_spotHubDialog.data(),
+                    &SpotHubDialog::potaStartRequested,
+                    pota, &PotaClient::startPolling);
+            connect(m_spotHubDialog.data(),
+                    &SpotHubDialog::potaStopRequested,
+                    pota, &PotaClient::stopPolling);
+        }
+
+        // 2026-05-12 bench fix: PSK Reporter Start button source-first
+        // port from freedv-gui.  The dialog emitted pskStartRequested
+        // but nothing in MainWindow handled it.
+        //
+        // From freedv-gui main.cpp:2597 [@77e793a]:
+        //   m_pskReporterTimer.Start(5 * 60 * 1000);
+        // and main.cpp:1609-1616 [@77e793a]:
+        //   if (timerId == ID_TIMER_PSKREPORTER) {
+        //       for (auto& obj : wxGetApp().m_reporters) obj->send();
+        //   }
+        // PSK Reporter is a send-only IPFIX client (pskreporter.h:65-68
+        // [@77e793a] — freqChange / transmit / inAnalogMode are no-ops).
+        // "Start" = arm the 5-minute auto-send timer.
+        //
+        // From freedv-gui main.cpp:2694 [@77e793a]:
+        //   m_pskReporterTimer.Stop();
+        // "Stop" = disarm the timer.  Any queued records flush on
+        // ~PskReporterClient when the client tears down (mirrors
+        // pskreporter.cpp:171-181 [@77e793a]).
+        if (auto* psk = m_radioModel->pskReporter()) {
+            connect(m_spotHubDialog.data(),
+                    &SpotHubDialog::pskStartRequested,
+                    psk, [psk](const QString& call,
+                               const QString& grid) {
+                        // 2026-05-12 bench fix (PR #238 review P2):
+                        // apply the freshly-validated identity to the
+                        // live client BEFORE arming the timer.  Without
+                        // this call, the client keeps the (often empty)
+                        // identity set at RadioModel construction time
+                        // and emits IPFIX datagrams with empty receiver
+                        // fields.  pskreporter.cpp:148-169 [@77e793a].
+                        psk->setIdentity(
+                            call, grid,
+                            QStringLiteral("NereusSDR ") +
+                                QStringLiteral(NEREUSSDR_VERSION));
+                        psk->setAutoSendIntervalSec(
+                            PskReporterClient::kReportingIntervalSec);
+                    });
+            connect(m_spotHubDialog.data(),
+                    &SpotHubDialog::pskStopRequested,
+                    psk, [psk]() {
+                        psk->setAutoSendIntervalSec(0);
+                    });
+        }
+
+        // 2026-05-12 bench fix: Save & Propagate writes User/GridSquare
+        // to AppSettings but the FreeDVStationModel only reads its
+        // m_ourGrid once at RadioModel construction.  Without this
+        // forward the Reporter dialog's Distance + Hdg columns stay
+        // zeroed until app restart.  Push the new grid into the model
+        // on every save so distance/heading recompute live.
+        connect(m_spotHubDialog.data(), &SpotHubDialog::identitySaved,
+                this, [this](const QString& /*call*/,
+                             const QString& grid,
+                             const QString& /*msg*/) {
+                    if (auto* sm = m_radioModel
+                            ? m_radioModel->freeDvStationModel()
+                            : nullptr) {
+                        if (!grid.isEmpty()) {
+                            sm->setOurGridSquare(grid);
+                        }
+                    }
+                });
+
+        // 2026-05-12 bench fix (Gap #6 — spot list ↔ panadapter hover sync).
+        // Bidirectional: panadapter hover highlights the Spot List row,
+        // Spot List hover paints a halo on the matching panadapter
+        // label.  Lazy-wired here because both widgets are needed; the
+        // dialog is constructed on first open.
+        if (m_spectrumWidget) {
+            connect(m_spectrumWidget, &SpectrumWidget::spotHoverIndexChanged,
+                    m_spotHubDialog.data(),
+                    &SpotHubDialog::setHoveredPanadapterSpot);
+            connect(m_spotHubDialog.data(),
+                    &SpotHubDialog::spotListHoverChanged,
+                    m_spectrumWidget,
+                    &SpectrumWidget::setHoverSpotIndexExternal);
+        }
+    }
+    m_spotHubDialog->show();
+    m_spotHubDialog->raise();
+    m_spotHubDialog->activateWindow();
+}
+
+// Phase 3J-2 H1: open the modeless FreeDVReporterDialog.
+//
+// Lazy-constructs on first invocation, wiring FreeDVStationModel +
+// FreeDVReporterClient from RadioModel. Same singleton + show / raise
+// pattern as openSpotHub.
+//
+// Wires three downstream connections:
+//   qsyRequested -> FreeDVReporterClient::requestQSY (network QSY)
+//   messageSendRequested -> FreeDVReporterClient::updateMessage
+//   tuneRequested -> active SliceModel::setFrequency (local QSY)
+//
+// The dialog already calls setAttribute(Qt::WA_DeleteOnClose, false)
+// in its own ctor so close + reopen preserves state.
+void MainWindow::openFreeDVReporter()
+{
+    if (!m_radioModel) { return; }
+    if (!m_freeDVReporterDialog) {
+        m_freeDVReporterDialog = new FreeDVReporterDialog(
+            m_radioModel->freeDvStationModel(),
+            m_radioModel->freeDvReporter(),
+            this);
+        // QSY: dialog -> reporter client -> network broadcast.
+        connect(m_freeDVReporterDialog.data(),
+                &FreeDVReporterDialog::qsyRequested,
+                m_radioModel->freeDvReporter(),
+                &FreeDVReporterClient::requestQSY);
+        // Message update: dialog -> reporter client.
+        connect(m_freeDVReporterDialog.data(),
+                &FreeDVReporterDialog::messageSendRequested,
+                m_radioModel->freeDvReporter(),
+                &FreeDVReporterClient::updateMessage);
+        // Local QSY: dialog -> active slice tune. tuneRequested signature
+        // is quint64 Hz so no MHz conversion needed.
+        connect(m_freeDVReporterDialog.data(),
+                &FreeDVReporterDialog::tuneRequested,
+                this, [this](quint64 freqHz) {
+                    if (auto* slice = m_radioModel->activeSlice()) {
+                        slice->setFrequency(static_cast<double>(freqHz));
+                    }
+                });
+
+        // Phase 3R K-bench (bench feedback): wire active slice VFO ->
+        // dialog so the Band/Exact-freq filter actually tracks. Push
+        // current value immediately + on every frequencyChanged.
+        if (auto* slice = m_radioModel->activeSlice()) {
+            m_freeDVReporterDialog->setActiveFrequency(
+                static_cast<quint64>(slice->frequency()));
+            connect(slice, &SliceModel::frequencyChanged,
+                    m_freeDVReporterDialog.data(),
+                    [this](double hz) {
+                        if (m_freeDVReporterDialog) {
+                            m_freeDVReporterDialog->setActiveFrequency(
+                                static_cast<quint64>(hz));
+                        }
+                    });
+        }
+    }
+    m_freeDVReporterDialog->show();
+    m_freeDVReporterDialog->raise();
+    m_freeDVReporterDialog->activateWindow();
 }
 
 // Phase 3M-4 bench-fix: PSA bottom-banner indicator visibility

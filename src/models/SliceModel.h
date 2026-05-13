@@ -125,6 +125,7 @@
 #include <QString>
 
 #include <atomic>
+#include <limits>
 #include <optional>
 #include <utility>
 
@@ -262,6 +263,25 @@ class SliceModel : public QObject {
     Q_PROPERTY(int    diguOffsetHz    READ diguOffsetHz    WRITE setDiguOffsetHz    NOTIFY diguOffsetHzChanged)
     Q_PROPERTY(int    rttyMarkHz      READ rttyMarkHz      WRITE setRttyMarkHz      NOTIFY rttyMarkHzChanged)
     Q_PROPERTY(int    rttyShiftHz     READ rttyShiftHz     WRITE setRttyShiftHz     NOTIFY rttyShiftHzChanged)
+
+    // ── Phase 3J-2 Task D5: per-slice live SNR (NereusSDR-native) ──
+    // NaN means "no SNR available" (mode without SNR estimate, or no
+    // decode in flight). RadeChannel populates this when slice mode is
+    // RADE; future digital modes wire the same setSnrDb slot. VfoWidget
+    // (Phase L1) binds snrDbChanged to paint the SNR row in the flag.
+    Q_PROPERTY(double snrDb           READ snrDb           WRITE setSnrDb           NOTIFY snrDbChanged)
+
+    // ── 2026-05-11 bench: last RADE-decoded speaker callsign ────────────────
+    // Sourced from RadeChannel::rxTextDecoded (the EOO aux text channel
+    // embedded in the RADE modem). Updated by
+    // RadioModel::onRadeTextDecoded; cleared by setDspMode when the
+    // slice leaves RADE_U/RADE_L (A+D semantics per JJ bench design
+    // discussion 2026-05-11: sticky while in RADE, clears on
+    // mode-off-RADE). Empty string means "no callsign decoded yet on
+    // this slice in the current RADE session." Drives the VFO flag
+    // SNR row label.
+    Q_PROPERTY(QString lastRadeRxCallsign READ lastRadeRxCallsign
+               WRITE setLastRadeRxCallsign NOTIFY lastRadeRxCallsignChanged)
 
 public:
     /// Type alias so RxChannelState/TxChannelState can reference SliceModel::Mode
@@ -651,6 +671,19 @@ public:
     int vaxChannel() const { return m_vaxChannel.load(std::memory_order_acquire); }
     void setVaxChannel(int ch);
 
+    // ── Phase 3J-2 Task D5: per-slice live SNR (NereusSDR-native) ──
+    // NaN sentinel means "no SNR available." setSnrDb() emits
+    // snrDbChanged only on actual change: NaN -> NaN is a no-op,
+    // numeric -> identical-numeric is a no-op, NaN -> numeric and
+    // numeric -> NaN both emit (signal-acquired / signal-lost events).
+    double snrDb() const { return m_snrDb; }
+    void setSnrDb(double db);
+
+    // ── 2026-05-11 bench: last RADE-decoded speaker callsign ────────────────
+    // See Q_PROPERTY comment above for full semantics.
+    QString lastRadeRxCallsign() const { return m_lastRadeRxCallsign; }
+    void setLastRadeRxCallsign(const QString& callsign);
+
 public slots:
     // Phase 3P-I-a T13 — refresh cached antenna values from AlexController
     // for the given band. Called by RadioModel on
@@ -752,7 +785,25 @@ signals:
     // ── Phase 3O VAX routing ──────────────────────────────────────────────────
     void vaxChannelChanged(int ch);
 
+    // ── Phase 3J-2 Task D5: live SNR (NereusSDR-native) ──
+    void snrDbChanged(double db);
+
+    // ── 2026-05-11 bench: RADE speaker callsign ──
+    void lastRadeRxCallsignChanged(const QString& callsign);
+
 private:
+    // Phase 3R Task J3 - resolves the RadeChannel model-path argument
+    // used when setDspMode transitions into DSPMode::RADE_U or
+    // DSPMode::RADE_L.  Lookup
+    // chain: AppSettings "Rade/ModelPath" if set AND the file exists;
+    // otherwise the literal "dummy" sentinel.  Librade has weights
+    // compiled in per Phase A2b finding, so the model_file argument is
+    // logged then discarded in rade_open() and the sentinel form is
+    // the conventional way to "ignore the model_file argument and use
+    // the built-in weights".  AetherSDR RADEEngine.cpp:34 [@0cd4559]
+    // hard-codes the same literal for the same reason.
+    QString radeModelPath() const;
+
     double  m_frequency{14225000.0};     // Default: 14.225 MHz (20m USB)
     DSPMode m_dspMode{DSPMode::USB};
     int     m_filterLow{100};            // USB default from Thetis F5
@@ -868,6 +919,18 @@ private:
 
     // ── Phase 3O VAX routing ──────────────────────────────────────────────────
     std::atomic<int> m_vaxChannel{0};  // 0=Off, 1..4=VAX N. Atomic for audio-thread-safe reads.
+
+    // ── Phase 3J-2 Task D5: live SNR (NereusSDR-native) ──
+    // Default NaN means "no SNR available." Populated by RadeChannel
+    // (Phase R) when slice mode is RADE; future digital modes wire the
+    // same setSnrDb slot.
+    double m_snrDb{std::numeric_limits<double>::quiet_NaN()};
+
+    // 2026-05-11 bench: last RADE-decoded speaker callsign.  Empty
+    // string is the "no decode yet" sentinel; setLastRadeRxCallsign
+    // emits lastRadeRxCallsignChanged only on actual change so the VFO
+    // flag does not redraw on every EOO repeat decode of the same call.
+    QString m_lastRadeRxCallsign;
 };
 
 } // namespace NereusSDR

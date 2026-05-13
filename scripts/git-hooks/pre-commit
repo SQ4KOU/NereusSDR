@@ -33,6 +33,15 @@ if ! python3 scripts/verify-thetis-headers.py; then
     exit 1
 fi
 
+echo "[pre-commit] verify-freedv-headers.py"
+if ! python3 scripts/verify-freedv-headers.py; then
+    echo
+    echo "[pre-commit] BLOCKED: freedv-gui header verifier failed."
+    echo "             Fix the headers, then re-stage and re-commit."
+    echo "             See docs/attribution/FREEDV-GUI-PROVENANCE.md."
+    exit 1
+fi
+
 echo "[pre-commit] check-new-ports.py (diff)"
 if ! CHECK_NEW_PORTS_BASE_REF="${CHECK_NEW_PORTS_BASE_REF:-origin/main}" \
      python3 scripts/check-new-ports.py; then

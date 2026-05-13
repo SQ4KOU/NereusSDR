@@ -100,12 +100,20 @@ bool AppSettings::isValidProfileName(const QString& profile)
 
 QString AppSettings::resolveConfigDir(const QString& profile)
 {
-#ifdef Q_OS_MAC
-    const QString root = QDir::homePath() + QStringLiteral("/Library/Preferences/NereusSDR");
-#else
-    const QString root = QStandardPaths::writableLocation(QStandardPaths::GenericConfigLocation)
+    // 2026-05-12 (PR #238 follow-up): both branches now resolve through
+    // QStandardPaths::writableLocation(GenericConfigLocation) so the
+    // TestSandboxInit.cpp `setTestModeEnabled(true)` redirect actually
+    // takes effect on every platform.  Previously the macOS branch
+    // hardcoded ~/Library/Preferences/NereusSDR which bypassed the
+    // test sandbox and let a test that called settings.save() (e.g.
+    // tst_spothub_settings_tab) overwrite the developer's real
+    // NereusSDR.settings file.  QStandardPaths returns the SAME
+    // path on macOS (~/Library/Preferences) when test mode is OFF,
+    // so production behavior is unchanged — only test isolation
+    // gets fixed.
+    const QString root = QStandardPaths::writableLocation(
+                             QStandardPaths::GenericConfigLocation)
                          + QStringLiteral("/NereusSDR");
-#endif
     if (!isValidProfileName(profile)) {
         return root;
     }

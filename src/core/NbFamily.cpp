@@ -188,12 +188,34 @@ NbMode cycleNbMode(NbMode current)
     return NbMode::Off;
 }
 
+// 2026-05-13 (Linux CI #238): mirrors comm.h's #define MAX_CHANNELS 32.
+// Duplicated here because wdsp_api.h doesn't export the constant.  Keep
+// in sync if WDSP raises the channel cap.
+static constexpr int kWdspMaxChannels = 32;
+
 NbFamily::NbFamily(int channelId, int sampleRate, int bufferSize)
     : m_channelId(channelId)
     , m_sampleRate(sampleRate)
     , m_bufferSize(bufferSize)
+    , m_skipWdsp(channelId < 0 || channelId >= kWdspMaxChannels)
 {
 #ifdef HAVE_WDSP
+    // 2026-05-13 (Linux CI #238): when m_skipWdsp is true the channel ID
+    // is outside WDSP's MAX_CHANNELS range and ALL WDSP calls (create,
+    // destroy, all runtime setters) must be skipped.  Test fixtures
+    // (tst_dsp_options_per_mode_apply, tst_transmit_model_compute_audio_volume)
+    // construct RxChannel with channelId=97 for software-only isolation;
+    // the WDSP create_anbEXT call below does
+    //   panb[id] = create_anb(...)   (nob.c:323)
+    // with no internal bounds check, so passing id=97 reads/writes past
+    // the 32-slot panb[] array.  On macOS arm64 this writes into mapped
+    // pages and the OOB is silent; UBSan flags it and Linux x64 may
+    // segfault later (e.g. the destructor's destroy_anbEXT(97) call).
+    // Every WDSP-touching method in this file mirrors this guard.
+    if (m_skipWdsp) {
+        return;
+    }
+
     // Global defaults from Setup → DSP → NB/SNB. NB tuning is global per
     // channel (not per-band) per strict Thetis parity; see NbFamily.h for
     // the derivation of the scaling factors.
@@ -292,6 +314,7 @@ void NbFamily::seedSnbFromSettings()
 NbFamily::~NbFamily()
 {
 #ifdef HAVE_WDSP
+    if (m_skipWdsp) return;
     // From Thetis cmaster.c:104-105 [v2.10.3.13] — destroy in reverse of create.
     destroy_nobEXT(m_channelId);
     destroy_anbEXT(m_channelId);
@@ -304,6 +327,7 @@ void NbFamily::setMode(NbMode mode)
     if (prev == mode) return;
 
 #ifdef HAVE_WDSP
+    if (m_skipWdsp) return;
     // Flush whichever blanker we just left so its state-machine
     // (avg, count, ring indices) doesn't carry stale state into the
     // next time the user returns to that mode. WDSP flush_* functions
@@ -327,6 +351,7 @@ void NbFamily::setSnbEnabled(bool enabled)
     if (m_snbEnabled.load(std::memory_order_acquire) == enabled) return;
     m_snbEnabled.store(enabled, std::memory_order_release);
 #ifdef HAVE_WDSP
+    if (m_skipWdsp) return;
     // From Thetis console.cs:36347 [v2.10.3.13]
     //   WDSP.SetRXASNBARun(WDSP.id(0, 0), chkDSPNB2.Checked)
     // WDSP: third_party/wdsp/src/snb.c
@@ -344,6 +369,7 @@ void NbFamily::setNbThreshold(double threshold)
 {
     m_tuning.nbThreshold = threshold;
 #ifdef HAVE_WDSP
+    if (m_skipWdsp) return;
     SetEXTANBThreshold(m_channelId, threshold);
 #endif
 }
@@ -352,6 +378,7 @@ void NbFamily::setNbTauMs(double ms)
 {
     m_tuning.nbTauMs = ms;
 #ifdef HAVE_WDSP
+    if (m_skipWdsp) return;
     // From Thetis setup.cs:16222 [v2.10.3.13]
     //   NBTau = 0.001 * (double)udDSPNBTransition.Value
     SetEXTANBTau(m_channelId, ms * kMsToSec);
@@ -362,6 +389,7 @@ void NbFamily::setNbLeadMs(double advMs)
 {
     m_tuning.nbAdvMs = advMs;
 #ifdef HAVE_WDSP
+    if (m_skipWdsp) return;
     // From Thetis setup.cs:16229 [v2.10.3.13]
     //   NBAdvTime = 0.001 * (double)udDSPNBLead.Value
     SetEXTANBAdvtime(m_channelId, advMs * kMsToSec);
@@ -372,6 +400,7 @@ void NbFamily::setNbLagMs(double hangMs)
 {
     m_tuning.nbHangMs = hangMs;
 #ifdef HAVE_WDSP
+    if (m_skipWdsp) return;
     // From Thetis setup.cs:16236 [v2.10.3.13]
     //   NBHangTime = 0.001 * (double)udDSPNBLag.Value
     SetEXTANBHangtime(m_channelId, hangMs * kMsToSec);
@@ -381,6 +410,7 @@ void NbFamily::setNbLagMs(double hangMs)
 void NbFamily::pushAllTuning()
 {
 #ifdef HAVE_WDSP
+    if (m_skipWdsp) return;
     // NB1
     SetEXTANBTau      (m_channelId, m_tuning.nbTauMs  * kMsToSec);
     SetEXTANBHangtime (m_channelId, m_tuning.nbHangMs * kMsToSec);

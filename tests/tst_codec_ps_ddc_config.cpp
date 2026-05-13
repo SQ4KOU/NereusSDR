@@ -322,7 +322,7 @@ private slots:
     // Thetis source: console.cs:8451-8521 [v2.10.3.13]
     // ====================================================================
 
-    // ANAN10E PS-on MOX → p1DdcConfig=5 (NOT 6 as in Hermes), cntrl1=4
+    // ANAN10E PS-on MOX → p1DdcConfig=5 (NOT 6 as in Hermes), cntrl1=0
     // Source: console.cs:8510-8519 [v2.10.3.13]
     void p1_standard_anan10e_psOn_mox() {
         P1CodecStandard codec;
@@ -334,7 +334,10 @@ private slots:
         QCOMPARE(int(cfg.syncEnable), int(DDC1));
         QCOMPARE(int(cfg.rate[0]), kPsRate);
         QCOMPARE(int(cfg.rate[1]), kPsRate);
-        QCOMPARE(int(cfg.cntrl1),  4);
+        // From Thetis wire authority - HermesII puresignal cntrl1=0, not 4.
+        // Production fix landed in main commit 1d7fa566 but the test update
+        // slipped through. Caught at the N5 end-of-epic ctest run.
+        QCOMPARE(int(cfg.cntrl1),  0);
         QCOMPARE(cfg.p1RxCount, 2);          // 2 not 4
         QCOMPARE(cfg.nDdc,      2);
     }

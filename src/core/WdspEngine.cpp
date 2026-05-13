@@ -56,6 +56,7 @@ warren@wpratt.com
 #include "RxChannel.h"
 #include "TxChannel.h"
 #include "PsFeedbackChannel.h"
+#include "RadeChannel.h"
 #include "AppSettings.h"
 #include "LogCategories.h"
 #include "wdsp_api.h"
@@ -461,6 +462,74 @@ RxChannel* WdspEngine::rxChannel(int channelId) const
 {
     auto it = m_rxChannels.find(channelId);
     if (it != m_rxChannels.end()) {
+        return it->second.get();
+    }
+    return nullptr;
+}
+
+// ─────────────────────────────────────────────────────────────────────────
+// Phase 3R Task J2: RadeChannel lifecycle.
+// ─────────────────────────────────────────────────────────────────────────
+//
+// RadeChannel is a NereusSDR-native wrapper around third_party/rade (the
+// librade neural codec).  It is NOT a WDSP channel - no OpenChannel /
+// CloseChannel calls, no m_initialized requirement.  The methods below
+// are structurally parallel to createRxChannel / destroyRxChannel /
+// rxChannel (WdspEngine.cpp:356-468) but the WDSP-side bookkeeping is
+// absent because WDSP has no concept of RADE.
+
+RadeChannel* WdspEngine::createRadeChannel(int channelId)
+{
+    // Pre-existence guard, structural parallel to the createRxChannel
+    // guard at WdspEngine.cpp:368-371: a second create call with the
+    // same id returns the existing channel rather than leaking a fresh
+    // construction.  Callers (J3 setDspMode swap) are responsible for
+    // sequencing destroy-then-create when intentional replacement is
+    // needed.
+    auto existing = m_radeChannels.find(channelId);
+    if (existing != m_radeChannels.end()) {
+        qCWarning(lcDsp) << "RadeChannel" << channelId
+                         << "already exists; returning existing pointer";
+        return existing->second.get();
+    }
+
+    // Parent the channel to `this` so QObject ownership cleans up the
+    // wrapper if WdspEngine is destroyed without an explicit
+    // destroyRadeChannel(id) call.  unique_ptr deletes the object first;
+    // the redundant Qt parent link is harmless because Qt's destructor
+    // checks for already-deleted children.
+    auto channel = std::make_unique<RadeChannel>(this);
+    RadeChannel* ptr = channel.get();
+
+    m_radeChannels.emplace(channelId, std::move(channel));
+    qCInfo(lcDsp) << "Created RADE channel" << channelId;
+    return ptr;
+}
+
+void WdspEngine::destroyRadeChannel(int channelId)
+{
+    auto it = m_radeChannels.find(channelId);
+    if (it == m_radeChannels.end()) {
+        // Idempotent: destroy on a never-created (or already-destroyed)
+        // id is a safe no-op.  Mirrors destroyRxChannel's early-return
+        // pattern at WdspEngine.cpp:438-443.
+        return;
+    }
+
+    // Stop the channel before erasing the wrapper.  RadeChannel::stop()
+    // is idempotent (the I1 implementation checks m_active and returns
+    // early if already stopped), so this is safe whether or not start()
+    // was ever called.
+    it->second->stop();
+
+    m_radeChannels.erase(it);
+    qCInfo(lcDsp) << "Destroyed RADE channel" << channelId;
+}
+
+RadeChannel* WdspEngine::radeChannel(int channelId) const
+{
+    auto it = m_radeChannels.find(channelId);
+    if (it != m_radeChannels.end()) {
         return it->second.get();
     }
     return nullptr;

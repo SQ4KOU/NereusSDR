@@ -795,6 +795,13 @@ target_compile_definitions(tst_radio_model_drive_path PRIVATE NEREUS_BUILD_TESTS
 # btnTXProfileSave_Click / btnTXProfileDelete_Click handlers).
 nereus_add_test(tst_mic_profile_manager)
 
+# ── Phase 3R Task K1: MicProfileManager "RADE" factory preset ──
+# Verifies the NereusSDR-native "RADE" factory profile is seeded on
+# first launch and that its EQ-off / Leveler-on / ALC-off /
+# CFC-CESSB-PhRot-off bypass philosophy applies cleanly to the
+# TransmitModel via setActiveProfile.
+nereus_add_test(tst_mic_profile_rade)
+
 # ── Phase 3M-3a-ii Batch 4: MicProfileManager CFC/CPDR/CESSB/PhRot round-trip ──
 # Verifies the 41 new bundle keys (Phase Rotator + CFC + CPDR + CESSB)
 # round-trip through AppSettings byte-for-byte, including each of the
@@ -2256,6 +2263,42 @@ nereus_add_test(tst_wdsp_engine_tx_channel)
 #   wdsp/dexp.c:230-239    - destroy_dexp impl: frees, but does NOT null pdexp[id].
 nereus_add_test(tst_wdsp_engine_dexp_init)
 
+# ── Phase 3R Task J2: WdspEngine RadeChannel lifecycle ──────────────────────
+# Pins the createRadeChannel / destroyRadeChannel / radeChannel(id) contract:
+#   - first create returns a non-null RadeChannel*;
+#   - duplicate create with the same id returns the existing channel
+#     (mirrors the createRxChannel pre-existence guard);
+#   - destroy makes the lookup return nullptr;
+#   - destroy on a never-created id is a safe no-op;
+#   - the RadeChannel is parented to the WdspEngine so QObject ownership
+#     cleans up correctly on engine destruction.
+# RADE is a NereusSDR-native channel type with no Thetis equivalent;
+# this test pins the C++-side lifecycle only and does not call into WDSP.
+nereus_add_test(tst_wdsp_engine_rade_lifecycle)
+
+# ── Phase 3R Task J3: SliceModel mode-aware channel swap ────────────────────
+# Pins the setDspMode RADE <-> WDSP swap contract:
+#   - switching to RADE destroys the slice's RxChannel and creates a
+#     RadeChannel for the same slice ID;
+#   - switching from RADE back to a WDSP mode tears down the RadeChannel
+#     and recreates the RxChannel;
+#   - the new RadeChannel is started with the "dummy" librade sentinel
+#     when no AppSettings "Rade/ModelPath" is configured (librade has
+#     weights compiled in per Phase A2b);
+#   - setDspMode(currentMode) is a no-op (no signal, no channel churn).
+# Uses the WdspEngine friend-access trick (NEREUS_BUILD_TESTS) to set
+# m_initialized = true so the createRxChannel seed at the head of the
+# test does not bail out on its !m_initialized guard.
+nereus_add_test(tst_slice_model_rade_swap)
+
+# ── Phase 3R Task J4: RADE audio routing into AudioEngine ───────────────────
+# Pins the contract that RadioModel::wireRadeChannel adds an audio
+# connection alongside the I5 signal graph: emitting
+# RadeChannel::rxSpeechReady with a float32 stereo PCM block must
+# reach AudioEngine's speakers bus through rxBlockReady.  FakeAudioBus
+# stand-in counts pushes to detect the route.
+nereus_add_test(tst_audio_engine_rade)
+
 # ── Phase 3M-1a Task C.2: TxChannel 31-stage TXA pipeline skeleton ────────────
 # Verifies:
 #   Stage::kStageCount == 31 (authoritative from wdsp/TXA.c:31-479 [v2.10.3.13]);
@@ -2459,6 +2502,22 @@ target_compile_definitions(tst_radio_model_set_tune PRIVATE NEREUS_BUILD_TESTS)
 # under NEREUS_BUILD_TESTS guard.
 nereus_add_test(tst_tx_channel_real_mic_router)
 target_compile_definitions(tst_tx_channel_real_mic_router PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3R K-bench: TxChannel RADE_U/L -> USB/LSB mapping ──────────────
+# Reproducer for user-reported "RADE-U + MOX = no RF" symptom from
+# bench-test session.  WDSP's SetTXAMode only accepts modes 0..11
+# (LSB..DRM); RADE_U=12 / RADE_L=13 are NereusSDR-native dispatch values
+# that must be mapped to USB/LSB before reaching the WDSP modulator.
+# Test seam lastWdspTxModeForTest() returns the mapped value; the carry
+# m_mode preserves the original RADE_U/L for NereusSDR-side dispatch.
+# 6 test cases:
+#   radeUpperMapsToUsb
+#   radeLowerMapsToLsb
+#   usbPassesThroughUnchanged
+#   lsbPassesThroughUnchanged
+#   allOtherModesPassThroughUnchanged (10 modes)
+#   radeSwitchBackToUsbResetsMapping (state-machine sequence)
+nereus_add_test(tst_tx_channel_rade_mode_mapping)
 
 # ── Phase 3M-1b Task D.2: TxChannel per-mode TXA config setters ──────────────
 # Tests setTxMode(DSPMode), setTxBandpass(int, int), and setSubAmMode(int).
@@ -2712,6 +2771,22 @@ target_compile_definitions(tst_audio_engine_pull_tx_mic PRIVATE NEREUS_BUILD_TES
 # Plan: docs/architecture/phase3m-1c-tx-pump-architecture-plan.md §5.4.
 nereus_add_test(tst_tx_worker_thread)
 target_compile_definitions(tst_tx_worker_thread PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3R Task K2: TxWorkerThread::TxPath enum scaffolding ──
+# Pins the contract of the lightweight TxPath enum + std::atomic
+# m_currentTxPath member + setCurrentTxPath cross-thread slot that
+# K-bench will use to route DSPMode::RADE_U / RADE_L slices through
+# RadeChannel rather than the WDSP TXA chain.
+nereus_add_test(tst_tx_worker_rade_path_enum)
+target_compile_definitions(tst_tx_worker_rade_path_enum PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Phase 3R Task K3: RADE TX DSP helpers ──
+# RadeTxHpf80 (80 Hz Butterworth HPF biquad) + RadeTx48to16
+# (48 kHz -> 16 kHz mono downsampler around r8brain).  Both are
+# standalone DSP units; K-bench will wire them into TxWorkerThread's
+# RADE branch.  Unit-tested here in isolation to pin the DSP
+# correctness contract.
+nereus_add_test(tst_rade_tx_filters)
 
 # ── Phase 3M-1c TX pump v3 — TxMicSource (Thetis Inbound/cm_main port) ──
 # Verifies the ring + semaphore primitives that source the worker's
@@ -4111,3 +4186,568 @@ target_compile_definitions(tst_tci_init_burst_golden PRIVATE
 # platform exercises QPlainTextEdit just fine.  Source comes from NereusSDRObjs
 # (which the macro already links) so no extra source arg is needed.
 nereus_add_test(tst_tci_log_window)
+
+# ── Phase 3J-2 Task B1: SpotCollectorClient DX-line parser ──────────────────
+# Pins the contract that SpotCollectorClient parses the standard DXLab
+# "DX de" UDP line format and tags RBN-suffixed spotters (-# suffix) as
+# source="RBN". 3 tests: parsesStandardDxLine, parsesRbnSuffixedSpotter,
+# rejectsMalformedLine. Source: AetherSDR
+# src/core/SpotCollectorClient.cpp [@0cd4559].
+nereus_add_test(tst_spot_collector_parser)
+
+# ── Phase 3J-2 Task B2: PotaClient JSON parser + dedup ──────────────────────
+# Pins the contract that PotaClient parses api.pota.app/spot/activator
+# JSON responses and dedups across consecutive polls via spotId. 3 tests:
+# parsesPotaJsonResponse, dedupsAcrossPolls, rejectsMalformedJson.
+# Source: AetherSDR src/core/PotaClient.cpp [@0cd4559].
+nereus_add_test(tst_pota_client)
+
+# ── Phase 3J-2 Task B3: DxClusterClient telnet parser ───────────────────────
+# Pins the contract that DxClusterClient parses the standard DX cluster
+# "DX de" telnet line format, detects multi-flavor login prompts
+# (login: / call: / callsign: / "Please enter your call" / "your call"),
+# strips telnet IAC bytes, and tags RBN-suffixed spotters as source="RBN".
+# 7 tests: parsesStandardDxLine, detectsLoginPrompts (data-driven, 8 rows),
+# stripsTelnetIAC, tagsRbnSpottersByPrefix, tagsRbnSpottersBySuffix,
+# rejectsMalformedLine. Source: AetherSDR src/core/DxClusterClient.cpp
+# [@0cd4559].
+nereus_add_test(tst_dx_cluster_parser)
+
+# ── Phase 3J-2 Task B4: WsjtxClient binary protocol parser ──────────────────
+# Pins the contract that WsjtxClient parses big-endian QDataStream Status
+# (type 1) + Decode (type 2) messages per the WSJT-X UDP protocol,
+# dispatches the right callsign from each WSJT-X message family
+# (CQ / CQ DX / CQ POTA / CQ continent / directed +report / R-report /
+# RR73), and computes spot frequency as dial + delta. 6 tests:
+# parsesStatusUpdatesDialFreq, parsesDecodeEmitsSpot, skipsNonNewDecodes,
+# skipsLowConfidence, extractsCallsign (data-driven, 7 rows). Source:
+# AetherSDR src/core/WsjtxClient.cpp [@0cd4559].
+nereus_add_test(tst_wsjtx_decoder)
+
+# ── Phase 3J-2 Task B5: FreeDVReporterClient Engine.IO/Socket.IO parser ─────
+# Pins the contract that FreeDVReporterClient implements the Engine.IO v4 /
+# Socket.IO v4 framing used by qso.freedv.org. 7 tests cover the Engine.IO
+# Open handshake + view-only auth payload, Ping/Pong reply, Socket.IO
+# Connect ACK transitioning to connected, and the four data events that
+# drive the station model and (via NereusSDR dual-feed) the spot stream:
+# new_connection -> stationAdded, freq_change -> stationUpdated +
+# spotReceived, rx_report -> spotReceived, remove_connection ->
+# stationRemoved. Hybrid source: wire protocol from freedv-gui
+# src/reporting/FreeDVReporter.cpp [@77e793a]; Qt6 structural pattern from
+# AetherSDR src/core/FreeDvClient.cpp [@0cd4559].
+nereus_add_test(tst_freedv_reporter_socketio)
+
+# ── Phase 3J-2 Task B6: PskReporterClient IPFIX protocol parser ────────────
+# Pins the contract that PskReporterClient implements PSK Reporter's
+# IPFIX (RFC 5101) v0.1 framing used by report.pskreporter.info:
+# 16-byte IPFIX header (version=10, length, exportTime, sequenceNumber,
+# observationDomain), 36-byte RX template, 52-byte TX template, 4-byte
+# aligned RX/TX data sets, length-prefixed strings, 5-byte BE frequency,
+# signed SNR byte. 7 tests: header layout, RX template+data set,
+# sender-record size formula from upstream, sender-record field
+# encoding (callsign / freq / SNR / mode / infoSource / flowTime),
+# datagram-with-sender layout, parser round-trip emits spotReceived,
+# setIdentity affects outgoing packets. Source: freedv-gui
+# src/reporting/pskreporter.cpp [@77e793a].
+nereus_add_test(tst_psk_reporter_protocol)
+
+# ── Phase 3J-2 Task C1: CtyDatParser (AD1C / K1EA cty.dat lookup) ──────────
+# Pins the contract that CtyDatParser loads the AD1C cty.dat country
+# file at the repo root, builds a longest-prefix table + exact-match
+# table, and resolves callsigns to DXCC entities (primary prefix +
+# entity name + continent + CQ zone + ITU zone). 6 tests:
+#   loadsRealCtyDat, resolvesUSACallsign (W1AW -> K / United States),
+#   resolvesJapanCallsign (JA1ABC -> JA / Japan),
+#   resolvesAustraliaCallsign (VK6APH -> VK / Australia),
+#   resolvesEnglandCallsign (G3OCA -> G / England),
+#   rejectsEmptyOrInvalidCallsign. Source: AetherSDR
+# src/core/CtyDatParser.{h,cpp} [@0cd4559].
+nereus_add_test(tst_cty_dat_parser)
+
+# ── Phase 3J-2 Task C2: AdifParser (.adi / .adif log parser) ───────────────
+# Pins the contract that AdifParser parses ADIF (Amateur Data
+# Interchange Format) log files into QVector<QsoRecord> (callsign
+# + band + modeGroup). Five tests:
+#   parsesSampleAdif (10 QSO bundled fixture, first/last callsigns
+#   resolve, SSB -> PHONE / CW -> CW group normalisation),
+#   emitsFinishedSignal (QSignalSpy waits parseFileAsync ->
+#   finished(QVector<QsoRecord>)),
+#   skipsHeaderSection (no <adif_ver> / <programid> leakage),
+#   handlesCaseInsensitiveTags (mixed-case <CALL> / <Call> /
+#   <call> + <EOR> / <eor> / <Eor> all parse),
+#   rejectsMalformedAdif (garbage bytes -> empty vector).
+# Source: AetherSDR src/core/AdifParser.{h,cpp} [@0cd4559].
+nereus_add_test(tst_adif_parser)
+
+# ── Phase 3J-2 Task C3: DxccWorkedStatus (worked-status tracker) ───────────
+# Pins the contract that DxccWorkedStatus tracks per-entity /
+# per-band / per-modeGroup worked status from QsoRecord rows
+# (typically produced by AdifParser). Six tests:
+#   newPrefixIsNewDxcc (unknown primary prefix -> NewDxcc),
+#   sameEntitySameBandSameModeIsWorked (already-worked combo ->
+#   Worked), sameEntityNewBandIsNewBand (known entity, fresh band
+#   -> NewBand), sameEntityNewModeIsNewMode (known entity + band,
+#   fresh modeGroup -> NewMode), clearResetsAll (clear()
+#   resets totalQsos / entityCount / query path),
+#   totalQsoCounting (load() accumulates totalQsos across input
+#   rows; entityCount reflects unique-entity tally). Source:
+#   AetherSDR src/core/DxccWorkedStatus.{h,cpp} [@0cd4559].
+nereus_add_test(tst_dxcc_worked_status)
+
+# ── Phase 3J-2 Task C4: DxccColorProvider (DXCC stack integrator) ──────────
+# Pins the contract that DxccColorProvider combines CtyDatParser +
+# DxccWorkedStatus + AdifParser to resolve a (callsign, freqMhz,
+# mode) spot to one of 4 configurable colors plus a default
+# unknown sentinel. Six tests:
+#   initialStateReturnsDefaultColor (no cty.dat load -> Unknown
+#   -> invalid QColor), loadsCtyDatAndAdif (importFinished
+#   emitted with qsoCount=10, entityCount=5 against the bundled
+#   sample fixture), resolvesNewDxccColor (CT1ABC / Portugal not
+#   in fixture -> colorNewDxcc bright red), resolvesNewBandColor
+#   (W1AW on 15m -> colorNewBand orange), resolvesNewModeColor
+#   (W1AW on 40m CW -> colorNewMode gold), resolvesWorkedColor
+#   (W1AW on 20m PHONE -> colorWorked dim grey). Source:
+#   AetherSDR src/core/DxccColorProvider.{h,cpp} [@0cd4559].
+nereus_add_test(tst_dxcc_color_provider)
+
+# ── Phase 3J-2 Task D1: SpotModel (TCI-keyed spot sink) ────────────────────
+# Pins the contract that SpotModel is a QMap<int, SpotData> sink
+# keyed by monotonic spot index, with a TCI-keyed update API:
+#   void applySpotStatus(int index, const QMap<QString,QString>& kvs);
+# recognising 12 keys (callsign, rx_freq, tx_freq, mode, color,
+# background_color, source, spotter_callsign, comment, timestamp,
+# lifetime_seconds, priority) and decoding the TCI 0x7F (DEL)
+# wire-format quirk to a single ASCII space in callsign and comment.
+# Six signals: spotAdded / spotUpdated / spotRemoved / spotsCleared /
+# spotsRefreshed / spotTriggered. Seven tests:
+#   initialState (empty model reports zero spots), applySpotStatusAddsNew
+#   (first applySpotStatus for an index emits spotAdded), applySpotStatusUpdatesExisting
+#   (subsequent applySpotStatus emits spotUpdated and preserves prior
+#   fields not in the update), appliesAllTwelveKeys (every recognised
+#   key round-trips), decodes0x7FAsSpace (TCI wire-format quirk decoded
+#   in callsign + comment), removeSpotEmitsSignal (removeSpot emits
+#   spotRemoved and erases the row), clearEmitsSignal (clear emits
+#   spotsCleared once and empties the map). Source: AetherSDR
+#   src/models/SpotModel.{h,cpp} [@0cd4559]. First task of Phase D
+#   (Models).
+nereus_add_test(tst_spot_model)
+
+# ── Phase 3J-2 Task D2: SpotTableModel + BandFilterProxy ───────────────────
+# Pins the contract that SpotTableModel is a QAbstractTableModel with
+# 8 columns (Time, Freq, DxCall, Comment, Spotter, Band, Mode, Source)
+# bounded at 500 spots; BandFilterProxy is a QSortFilterProxyModel
+# that hides spots whose band is in m_hiddenBands. Eight tests:
+#   initialState (empty model reports zero rows + 8 columns),
+#   addSpotIncrementsRowCount (addSpot grows the row count by one),
+#   columnCountIsEight (ColCount sentinel == 8), dataRoundTrip
+#   (DxCall column for a freshly-added spot returns the inserted
+#   callsign), freqAtRowMatchesSource (freqAtRow(row) returns the
+#   inserted freqMhz), setMaxSpotsBounds (with maxSpots=3, adding
+#   10 spots leaves rowCount() == 3), bandFilterHidesMatchingBand
+#   (proxy sees both spots until setBandVisible("20m", false), then
+#   only the 40m spot survives), bandFilterShowsAfterUnhide (toggling
+#   visibility back to true restores the row). Source: AetherSDR
+#   src/gui/DxClusterDialog.h:33-75 + src/gui/DxClusterDialog.cpp:75-226
+#   [@0cd4559]; both classes lived inline in the dialog header upstream
+#   and were extracted to standalone src/models/ files so the SpotHubDialog
+#   (Phase F) can reuse them. Second task of Phase D (Models).
+nereus_add_test(tst_spot_table_model)
+
+# ── Phase 3J-2 Task D3: FreeDVStationModel (live station map) ──────────────
+# Pins the contract that FreeDVStationModel is a QHash<QString sid,
+# FreeDVStation> sink keyed by Socket.IO session ID, with four public
+# slots (onStationAdded / onStationUpdated / onStationRemoved / clear)
+# and four signals (stationAdded / stationUpdated / stationRemoved /
+# cleared). setOurGridSquare(grid) drives the haversine distance +
+# initial-bearing computation so each FreeDVStation row carries
+# distanceKm + headingDeg suitable for the FreeDVReporterDialog
+# (Phase G) Distance / Heading columns. Seven tests:
+#   initialState (empty model reports zero stations),
+#   onStationAddedEmits (first onStationAdded for a sid emits
+#   stationAdded and grows the map by one), onStationUpdatedReplaces
+#   (subsequent onStationUpdated emits stationUpdated and the new
+#   FreeDVStation value overwrites the old), onStationRemovedDeletes
+#   (onStationRemoved emits stationRemoved and erases the row),
+#   clearEmitsCleared (clear emits cleared once and empties the map),
+#   distanceComputedFromGrid (with our grid set to FN42 / Boston-ish
+#   and a station added at JO31 / Frankfurt-ish, the stored
+#   distanceKm lands in the 5500-7000 km great-circle band and the
+#   headingDeg lands in [0, 360]), stationBySidLookup (sid -> callsign
+#   round-trips, unknown sid returns a default-constructed
+#   FreeDVStation). Source: NEW model with no AetherSDR equivalent
+#   (gap-fill from the Phase 3J-2 design doc Section 4 Flow 2);
+#   distance / heading math ported from freedv-gui's
+#   src/gui/dialogs/freedv_reporter.cpp:2312-2410 (calculateDistance_ /
+#   calculateLatLonFromGridSquare_ / calculateBearingInDegrees_ /
+#   DegreesToRadians_ / RadiansToDegrees_) [@77e793a]. Third task of
+#   Phase D (Models).
+nereus_add_test(tst_freedv_station_model)
+
+# ── Phase 3J-2 Task D4: RxDecodeModel (bounded ring buffer) ─────────────────
+# Pins the contract that RxDecodeModel holds a QVector<RxDecode> bounded
+# at maxSize (default 200), emits decodeAdded on each addDecode() call,
+# evicts the oldest entry when size exceeds maxSize, and emits cleared
+# on clear(). Verifies mixed-source ingestion (rade_text + WSJT-X).
+# Asserted via QSignalSpy: initialState (empty on construction),
+# addDecodeEmits (signal fires + decodes() grows by 1),
+# ringBufferDropsOldest (250 adds with maxSize=200 leaves CALL50..CALL249),
+# clearEmits (cleared signal fires + decodes() empty),
+# addsFromMultipleSources (rade_text + WSJT-X coexist preserving order).
+# Source: NEW NereusSDR-native model. No upstream equivalent.
+# Distinguishes "what my radio just heard" from network/cluster spots
+# in SpotModel. Per design doc Phase D Task D4 + Section 2 (three-model
+# split). Fourth task of Phase D (Models).
+nereus_add_test(tst_rx_decode_model)
+
+# ── Phase 3J-2 Task D5: SliceModel snrDb Q_PROPERTY ─────────────────────────
+# Pins the contract that SliceModel exposes a snrDb Q_PROPERTY with NaN
+# default, emits snrDbChanged only on actual value change, and treats
+# NaN->NaN as no-change (no emission) per the design doc. RadeChannel
+# (Phase R) will populate this when slice mode is RADE; VfoWidget
+# (Phase L1) binds snrDbChanged to paint the SNR row in the flag.
+# Cases:
+#   initialSnrIsNaN          - default value is NaN (no SNR available)
+#   setSnrDbEmitsOnChange    - non-NaN write fires signal + updates getter
+#   setSnrDbNoEmitOnSameValue - identical numeric write = no re-emission
+#   setSnrDbNoEmitOnNaNToNaN - NaN -> NaN is a no-op (no emission)
+#   setSnrDbEmitOnNaNToValue - NaN -> 5.0 emits (signal-acquired event)
+#   setSnrDbEmitOnValueToNaN - 5.0 -> NaN emits (signal-lost event)
+# Source: NEW NereusSDR-native extension to SliceModel. No upstream
+# equivalent. Per design doc Phase D Task D5 + Phase L Task L1.
+# Fifth task of Phase D (Models).
+nereus_add_test(tst_slice_model_snr)
+
+# ── Phase 3R Task J1: DSPMode::RADE_U / RADE_L enum entries ──────────────────
+# Pins the SliceModel::modeName / modeFromName round-trip for the new
+# DSPMode::RADE_U = 12 and DSPMode::RADE_L = 13 values, plus the
+# legacy "RADE" singular string migration to RADE_U.  RADE is a
+# NereusSDR-native extension to the WDSP-derived DSPMode enum (WDSP
+# has no knowledge of RADE); the values signal that the slice's
+# signal chain runs through the RadeChannel from I1-I3 instead of
+# WDSP's RxChannel.  Like USB/LSB, RADE has upper/lower sideband
+# variants with mirrored 1700 Hz passbands.
+nereus_add_test(tst_dspmode_rade)
+
+# ── Phase 3R Task L1: VfoWidget SNR row ─────────────────────────────────────
+# Pins the contract that VfoWidget surfaces the active slice's snrDb
+# Q_PROPERTY (set by RadeChannel via I5 routing) as a dim-grey /
+# yellow / green text row, visible only when the slice's mode is
+# either RADE sideband (DSPMode::RADE_U or DSPMode::RADE_L).
+# NereusSDR-native UI extension; no upstream equivalent.
+# Cases:
+#   nanShowsDashesInGrey      - NaN -> " -   - " in #7a8088
+#   lowSnrShowsYellow         - 3.0 dB -> "+3 dB" in #e6c200
+#   goodSnrShowsGreen         - 12.0 dB -> "+12 dB" in #4caf50
+#   negativeSnrFormats        - -1.0 dB -> "-1 dB" (no double-sign)
+#   snrHiddenInNonRadeMode    - USB hides row; RADE_U shows it.
+#   snrVisibleInRadeLower     - RADE_L also shows the row.
+nereus_add_test(tst_vfo_widget_snr)
+
+# ── Phase 3R Task L2: RadeApplet ────────────────────────────────────────────
+# Pins the RadeApplet UI contract:
+#   constructsWithRadioModel              - builds against a primed
+#                                           RadioModel + RadeChannel.
+#   profileComboPopulatesFromMicProfileManager - combo holds the live
+#                                           profileNames() list.
+#   profileComboDefaultsToRade            - "RADE" preset (K1) is the
+#                                           initial selection.
+#   onSnrChangedUpdatesSnrLabel           - radeSnrChanged updates text.
+#   onSyncChangedUpdatesIndicatorColor    - radeSyncChanged drives the
+#                                           LED stylesheet.
+#   onTextDecodedShowsCallsign            - rade_text decode appears
+#                                           in the last-decoded label.
+#   resetButtonClickInvokesResetTx        - button click dispatches to
+#                                           RadeChannel::resetTx.
+nereus_add_test(tst_rade_applet)
+
+# ── Phase 3R Task L3: Mode menu + VFO chip RADE entry ────────────────────────
+# Pins the RADE entries (upper + lower sidebands) in the user-facing
+# mode selectors.  Two surfaces are covered (MainWindow Mode menu is
+# too heavy for a unit test and is covered by the existing
+# tst_dspmode_rade round-trip plus the L3 manual verification
+# matrix).
+# Cases:
+#   vfoModeComboHasRadeUpperEntry        - VFO flag mode combo lists RADE-U.
+#   vfoModeComboHasRadeLowerEntry        - VFO flag mode combo lists RADE-L.
+#   vfoModeComboChangesToRadeUpper       - selecting RADE-U emits
+#                                          modeChanged(DSPMode::RADE_U).
+#   vfoModeComboChangesToRadeLower       - selecting RADE-L emits
+#                                          modeChanged(DSPMode::RADE_L).
+#   vfoModeTabLabelShowsRadeUpperWhenActive - tab #2 label paints "RADE-U".
+#   vfoModeTabLabelShowsRadeLowerWhenActive - tab #2 label paints "RADE-L".
+#   vfoModeTabChipPurpleInRadeUpper      - tab #2 stylesheet contains
+#                                          the RADE purple accent
+#                                          (#a78bfa) when RADE-U active.
+#   vfoModeTabChipPurpleInRadeLower      - tab #2 stylesheet contains
+#                                          the RADE purple accent when
+#                                          RADE-L active.
+nereus_add_test(tst_mode_menu_rade)
+
+# ── Phase 3J-2 Task E1: SpectrumWidget spot overlay render ─────────────────
+# Pins the contract that drawSpotMarkers places spot labels with
+# collision-avoiding multi-level stacking, overflows into +N cluster
+# badges at maxBottom + 2 (40 px ClusterBinWidth), and exposes
+# click-to-tune hit-test rectangles via spotClickRectsForTest() plus
+# cluster badge rectangles via spotClustersForTest(). Six tests:
+#   emptyOverlayDrawsNothing - empty marker vector emits zero rects
+#   singleSpotDrawsOneLabel - one in-range spot -> one click rect
+#   overlappingSpotsStackVertically - 3 collisions stack down (y0<y1<y2)
+#   overflowSpotsBecomeClusterBadge - 8 spots, max 2 levels -> 1 cluster of 6
+#   clickRectAtSpotXTuneable - rect center contains hit point
+#   rejectsBeyondVisibleRange - spots outside m_centerHz +/- bw/2 dropped
+# Source: AetherSDR src/gui/SpectrumWidget.cpp:4497-4633 [@0cd4559]
+# (drawSpotMarkers + showSpotClusterPopup). First task of Phase E
+# (panadapter spot overlay).
+nereus_add_test(tst_spot_overlay_render)
+
+# ── Phase 3J-2 Task F1+F2+F3: SpotHubDialog tab-strip smoke ────────────────
+# Pins the contract that SpotHubDialog (the AetherSDR DxClusterDialog
+# port) constructs successfully when handed all 7 spot-ingest clients
+# + SpotModel + DxccColorProvider, that its top-level QTabWidget
+# exposes exactly 10 tabs (post-3J-2 NereusSDR-native Settings tab at
+# index 0 plus the 9 AetherSDR upstream tabs), that the tab labels
+# appear in the documented order, that each per-source tab carries the
+# uniform template (F2), and that the Spot List tab hosts the merged
+# 8-column table with band + source pill filters (F3). 21 tests total:
+#   F1 (3): dialogConstructs, hasTenTabs, tabOrderMatchesAetherSdr
+#   F2 (12): per-source tab content + everySourceTabHasUniformTemplate
+#   F3 (6): spotListTabHasTableView, spotListTabHasTwelveBandPills,
+#           spotListTabHasSevenSourcePills,
+#           spotListBandPillTogglesProxyFilter,
+#           spotListSourcePillTogglesProxyFilter,
+#           doubleClickOnSpotRowEmitsTuneRequested
+# Source: AetherSDR src/gui/DxClusterDialog.{h,cpp} [@0cd4559]; Display
+# tab content lands in F4. Settings tab is NereusSDR-native (no
+# upstream); see tst_spothub_settings_tab for its content contract.
+nereus_add_test(tst_spothub_dialog_smoke)
+
+# ── Post-3J-2: SpotHub Settings tab (operator identity) ────────────────────
+# Pins the contract that SpotHubDialog now exposes a Settings tab in
+# the first position with QLineEdit fields for callsign + grid + FreeDV
+# status message, a Save button that writes to the canonical User/* +
+# FreeDvReporter/Message keys AND propagates to the per-source legacy
+# keys (DxClusterCallsign / RbnCallsign / PskReporterCallsign /
+# FreeDvReporter/Callsign / FreeDvReporter/GridSquare), validation that
+# rejects empty callsigns and invalid Maidenhead grids, the FreeDV tab
+# identity-status label (green when identity is set / yellow warning
+# when missing), and the per-source tabs falling back to User/Callsign
+# when their per-source key is empty.
+# Source: NereusSDR-native. AetherSDR upstream scatters identity
+# fields across each per-source tab with no central entry point;
+# the Settings tab is a NereusSDR UX correction.
+nereus_add_test(tst_spothub_settings_tab)
+
+# ── Phase 3J-2 Task G1: FreeDVReporterDialog shell + 14-col table ─────────
+# Pins the contract that FreeDVReporterDialog (the freedv-gui
+# freedv_reporter.{h,cpp} port) constructs successfully when handed a
+# FreeDVStationModel, that its embedded QTableView reports the 14-column
+# layout drawn from upstream's createColumn_ switch (column labels,
+# alignment, exact column count), and that the per-row TX-red /
+# RX-green highlight tones flip on / off in response to
+# FreeDVStationModel::stationUpdated. 10 tests total:
+#   G1 (10): dialogConstructs, tableHasFourteenColumns,
+#            tableColumnHeadersMatchUpstream,
+#            tableColumnAlignmentsMatchUpstream,
+#            populatesFiveStationsToFiveRows,
+#            snrColumnFormatsMinusNinetyNineAsDash,
+#            txReportTurnsRowRed, rxReportTurnsRowGreen,
+#            highlightClearsAfterSixSeconds, stationRemovedDeletesRow
+# Source: freedv-gui src/gui/dialogs/freedv_reporter.{h,cpp} [@77e793a].
+# Filter / QSY / message bar (G2) and menu bar with Show / Filter /
+# Idle-longer-than menus (G3) follow in later tasks.
+nereus_add_test(tst_freedv_reporter_dialog)
+
+# ── Phase 3J-2 Task H2: RadioModel spot-client + view-model wiring ─────────
+# Pins the contract that RadioModel owns the seven spot-ingest clients
+# (DxCluster + RBN + WSJT-X + SpotCollector + POTA + FreeDV Reporter +
+# PSK Reporter), the three view models (SpotModel + FreeDVStationModel +
+# RxDecodeModel), and the DxccColorProvider, and that every client's
+# spotReceived(DxSpot) signal flows through a per-source adapter slot
+# into SpotModel::applySpotStatus. 13 tests total:
+#   accessor surface (5): spotModel, freeDvStationModel, rxDecodeModel,
+#                         dxccColorProvider, all-six-clients
+#   per-source adapters (8): dxCluster, rbn, wsjtx, wsjtx-decode-feed,
+#                            pota, spotCollector, freeDvReporter,
+#                            pskReporter
+#   freeDv station model (1): stationAdded -> stationCount round-trip
+# Source: NereusSDR-native. The plan task is Phase 3J-2 H2; AetherSDR's
+# upstream RadioModel applies spot status only via TCI parsing, not
+# per-client adapter slots, so the wiring shape is NereusSDR-specific.
+nereus_add_test(tst_radio_model_spot_wiring)
+
+# ── Phase 3J-2 Task H1: Tools menu Spot Hub + FreeDV Reporter wiring ───────
+# Pins the contract that MainWindow::openSpotHub and
+# MainWindow::openFreeDVReporter can construct their respective dialogs
+# from the RadioModel accessor surface alone (no extra wiring or
+# adapter layers). MainWindow itself is too heavy to instantiate in a
+# unit test (see tst_mainwindow_status_bar_safety for the established
+# isolate-the-logic pattern), so this suite pins the surrounding
+# contracts instead: dialog ctor signatures match RadioModel accessor
+# return types, SpotModel::clear (Ctrl+Shift+K) empties every row,
+# SpotHubDialog::spotsClearedAll routes into SpotModel::clear, and the
+# three FreeDVReporterDialog signals (qsyRequested,
+# messageSendRequested, tuneRequested) carry the right argument shape
+# for MainWindow's open-slot lambda. End-to-end menu wiring is
+# verified by the manual bench-test matrix.
+# Source: NereusSDR-native test pattern; ports are at H2.
+nereus_add_test(tst_mainwindow_tools_spot_hub)
+
+# ── Phase 3J-2 + 3R M1: spot-system AppSettings round-trip ─────────────────
+# Pins the key contract for the ~40 AppSettings keys introduced by the
+# Phase 3J-2 spot ingest clients (B-phase), the SpotHubDialog (F-phase
+# per-source identity / auto-X / colors / Display knobs), the FreeDV
+# Reporter dialog (G-phase saved messages / visible columns / idle
+# timeout / column filters / band filter), H2's per-source
+# lifetime / color resolution on RadioModel, and the Phase 3R RADE
+# wrapper. AppSettings is fully dynamic (no key registry), so this
+# file is the single enforcement point for the documented key list and
+# their documented defaults. The legacyMinutesKeyFallback test pins the
+# DxClusterSpotLifetime -> DxClusterSpotLifetimeSec * 60 migration the
+# SpotHubDialog F4 Display tab implements at SpotHubDialog.cpp:1727-1730.
+# Source: NereusSDR-native test file; AppSettings is the Thetis
+# database.cs port, but the keys exercised here are all NereusSDR
+# additions for Phase 3J-2 + 3R.
+nereus_add_test(tst_spot_settings_round_trip)
+
+# ── Phase 3J-2 + 3R M2: SpotHub Display tab knobs end-to-end ───────────────
+# Pins the consumer side of the Display tab loop introduced by
+# SpotHubDialog F4 (commit 2026-05-11):
+#   F4 already writes every knob change to AppSettings and emits
+#   SpotHubDialog::settingsChanged.
+#   M2 adds SpectrumWidget::loadSpotDisplaySettings which reads
+#   every Display tab key (IsSpotsEnabled / SpotFontSize / SpotsMaxLevel
+#   / SpotsStartingHeightPercentage / IsSpotsOverrideColorsEnabled
+#   / IsSpotsOverrideBackgroundColorsEnabled / SpotsOverrideColor /
+#   SpotsOverrideBgColor / SpotsBackgroundOpacity) and pushes each
+#   value into the corresponding SpectrumWidget setter. MainWindow's
+#   openSpotHub() wires SpotHubDialog::settingsChanged to that helper
+#   so the live spectrum overlay refreshes when the operator drags a
+#   slider in the dialog.
+# 4 tests:
+#   loadSpotDisplaySettingsAppliesPersistedShowSpots
+#   loadSpotDisplaySettingsDefaultsShowSpotsTrue
+#   loadSpotDisplaySettingsAppliesAllNumericKnobs
+#   loadSpotDisplaySettingsAppliesColors
+# Source: NereusSDR-native; the consumer hook is M2-local. SpotHubDialog
+# F4 producer side is already pinned by tst_spothub_dialog_smoke.
+nereus_add_test(tst_spothub_display_knobs)
+
+# ── Phase 3J-2 + 3R M3: spot-client auto-connect / auto-start restore ──────
+# Pins the launch-time restore path:
+#   RadioModel::restoreSpotClientAutoStartState reads each persisted
+#   "<Source>AutoConnect" / "<Source>AutoStart" key from AppSettings
+#   and, when True, calls the corresponding start method with the
+#   persisted identity / port / interval params. MainWindow invokes
+#   this once at startup after the RadioModel is fully wired (sibling
+#   to the existing tryAutoReconnect singleShot for the radio
+#   connection).
+# 10 tests:
+#   dxClusterAutoConnectFiresStartCall / FalseDoesNotFire
+#   rbnAutoConnectFiresStartCall
+#   wsjtxAutoStartFiresListenCall / FalseDoesNotFire
+#   spotCollectorAutoStartFiresListenCall
+#   potaAutoStartFiresPollingCall / FalseDoesNotFire
+#   freeDvReporterAutoConnectFalseDoesNotFire / IsNonDestructive
+#   pskReporterAutoStartTrueIsNoOp (PSK Reporter is send-only;
+#     auto-start has no meaningful action.)
+# Source: NereusSDR-native. The clients themselves are AetherSDR ports,
+# but the restore driver is a NereusSDR addition for Phase 3J-2 + 3R M3.
+nereus_add_test(tst_spot_auto_start)
+
+# ── Phase 3R Task I1: RadeChannel skeleton (hybrid port) ───────────────────
+# Pins the three lifecycle contracts the Phase 3R Task I2/I3/I4 DSP work
+# layers onto:
+#   initialState                  fresh wrapper is !isActive() && !isSynced()
+#   startStop                     start(<real path>) flips isActive() true;
+#                                 stop() flips it back
+#   modelLoadFailureDisables      start(<nonexistent>) returns false without
+#                                 mutating state
+# The wrapper itself is a hybrid port: structure (class layout, Q_OBJECT
+# signals/slots, member ownership, dtor placement for forward-declared
+# unique_ptr types) follows AetherSDR src/core/RADEEngine.{h,cpp}
+# [@0cd4559]; the DSP API surface that I2/I3 will plug in (rade_open,
+# rade_n_features_in_out, LPCNet feature extractor, FARGAN vocoder)
+# follows freedv-gui src/pipeline/RADE{Receive,Transmit}Step.{h,cpp}
+# [@77e793a]. I1 ships skeleton bodies only; no DSP yet.
+nereus_add_test(tst_rade_channel)
+
+# Phase 3R Task I2a pins the Resampler wrapper around r8brain-free-src
+# (vendored MIT, third_party/r8brain/ at SHA 5c44bebe). The Resampler
+# port from AetherSDR src/core/Resampler.{h,cpp} [@0cd4559] is byte-for-
+# byte aside from the namespace rename. 5 tests: identity 24k->24k,
+# downsample 24k->8k, mono-to-stereo / stereo-to-mono / stereo-to-stereo
+# convenience helpers. Approximate sample-count checks because r8brain
+# CDSPResampler24 has nontrivial internal latency.
+nereus_add_test(tst_resampler)
+
+# ── Phase 3R Task I4: RadeText (callsign-over-EOO wrapper) ────────────────
+# Pins the five contracts of the thin Qt6 wrapper around the
+# third_party/rade callsign-over-EOO channel
+# (rade_tx_set_eoo_callsign / rade_rx_get_eoo_callsign, declared in
+# third_party/rade/src/rade_api.h:120-145 [@b289102]):
+#   constructsAndIsEmpty             fresh wrapper has empty ourCallsign
+#   setOurCallsignStoresValue        getter returns the value the setter
+#                                    stashed; lower / upper / empty all
+#                                    round-trip unchanged
+#   pushTxNullRadeIsNoOp             pushTxCallsign(nullptr) is safe
+#                                    (RadeChannel's m_rade is null
+#                                    between stop() and start())
+#   pushTxEmptyCallsignIsNoOp        pushTxCallsign on an empty stash
+#                                    must not clobber rade_tx.eoo_bits
+#   roundTripDecodesEncodedCallsign  setOurCallsign + pushTxCallsign +
+#                                    processRxEooBits emits
+#                                    textDecoded("KG4VCF") once
+# The headline test does a bit-level round-trip (no OFDM mod/demod)
+# because the wrapper only sits on set_eoo_callsign / get_eoo_callsign;
+# the full OFDM round-trip is exercised separately by the upstream
+# third_party/rade/src/rade_callsign_test.c executable.
+nereus_add_test(tst_rade_text)
+
+# ── Phase 3R Task I5: RadeChannel -> RadioModel slot graph wiring ─────────
+# Pins the six contracts RadioModel::wireRadeChannel(sliceId, channel, slice)
+# must satisfy when Phase J creates a RadeChannel per slice:
+#   wireRadeChannelConnectsSnrToSlice    RadeChannel::snrChanged forwards
+#                                        through onRadeSnrChanged to
+#                                        SliceModel::setSnrDb (cast-up
+#                                        float -> double).
+#   wireRadeChannelEmitsRadioModelSync   RadeChannel::syncChanged updates
+#                                        m_radeSyncedSlices and re-emits
+#                                        RadioModel::radeSyncChanged.
+#   repeatedSyncEmitsOnlyOnceUntilChange Idempotent: three sync=true
+#                                        emissions collapse to one
+#                                        RadioModel::radeSyncChanged emit.
+#   rxTextDecodedAddsRxDecodeRow         RadeChannel::rxTextDecoded
+#                                        constructs an RxDecode row with
+#                                        mode=RADE, source=rade_text,
+#                                        payload="<call> <grid>" and
+#                                        pushes it to RxDecodeModel.
+#   rxTextWithEmptyGridStoresCallsignOnly Grid-less decode (the I4 Option B
+#                                        callsign-over-EOO channel does
+#                                        not carry grid) collapses the
+#                                        payload to bare callsign.
+#   wiringWithNullChannelIsNoOp          Null channel / null slice
+#                                        arguments do not crash.
+# Source: NereusSDR-native test pattern; no upstream port. The slot
+# contract under test was established by the I5 plan spec.
+nereus_add_test(tst_rade_channel_model_wiring)
+
+# ── Phase 3R K-bench: RADE TX end-to-end pump ─────────────────────────────
+# Pins the K2-K4 follow-up contracts that turn the deferred RADE TX
+# scaffolding into a real pump:
+#   setRadeChannelStoresPointer       TxWorkerThread::setRadeChannel
+#                                     accessor round-trip + null-clear.
+#   radePumpEmitsAfterWarmup          tickForTest with TxPath::Rade
+#                                     pushes mic blocks through HPF +
+#                                     48->16 r8brain + float->int16 +
+#                                     emits radeMicBlockReady with at
+#                                     least one non-empty payload.
+#   wdspPathStillReachesSendTxIq      With TxPath::Wdsp the worker still
+#                                     drives the WDSP TXA chain.  RADE
+#                                     branch must be opt-in.
+#   txModemReadyRoutesToSendTxIq      RadioModel::wireRadeChannel's
+#                                     txModemReady lambda routes the
+#                                     RADE baseband through 24 ->
+#                                     txSampleRate upsample into
+#                                     RadioConnection::sendTxIq.
+nereus_add_test(tst_rade_tx_pump)
+target_compile_definitions(tst_rade_tx_pump PRIVATE NEREUS_BUILD_TESTS)

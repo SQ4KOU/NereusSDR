@@ -446,11 +446,18 @@ bool BandPlanGuard::isModeAllowedForTx(DSPMode mode) const noexcept
 {
     // 3M-1b ships SSB voice only. CW is 3M-2; AM/SAM/FM/DSB/DRM are 3M-3.
     // SPEC is never a TX mode.
+    //
+    // Phase 3R K-bench: RADE_U / RADE_L are digital voice modes that ride
+    // on USB/LSB carriers (TxChannel::setTxMode maps to USB/LSB before
+    // SetTXAMode per c1c1dce0). Band-plan etiquette is equivalent to
+    // DIGU/DIGL.
     switch (mode) {
         case DSPMode::LSB:
         case DSPMode::USB:
         case DSPMode::DIGL:
         case DSPMode::DIGU:
+        case DSPMode::RADE_U:
+        case DSPMode::RADE_L:
             return true;
         default:
             return false;

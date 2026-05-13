@@ -92,6 +92,7 @@
 #include "core/safety/BandPlanGuard.h"
 
 #include <QDateTime>
+#include <QHash>
 #include <QObject>
 #include <QString>
 #include <QList>
@@ -141,6 +142,39 @@ class PaProfileManager;
 class TxWorkerThread;
 // Stage C2 filter preset editor — user-override layer over Thetis defaults.
 class FilterPresetStore;
+
+// Phase 3J-2 H2: spot-system forward declarations. RadioModel owns the
+// seven spot-ingest clients (DxCluster, RBN, WSJT-X, SpotCollector,
+// POTA, FreeDV Reporter, PSK Reporter), the three view models
+// (SpotModel, FreeDVStationModel, RxDecodeModel), and the
+// DxccColorProvider. Each client's spotReceived(DxSpot) signal lands
+// in a per-source adapter slot that builds the QMap<QString,QString>
+// kvs SpotModel::applySpotStatus expects.
+class DxClusterClient;
+class WsjtxClient;
+class SpotCollectorClient;
+class PotaClient;
+class FreeDVReporterClient;
+class PskReporterClient;
+class DxccColorProvider;
+class SpotModel;
+class SpotTableModel;
+class FreeDVStationModel;
+class RxDecodeModel;
+struct DxSpot;
+struct FreeDVStation;
+
+// Phase 3R Task I5: forward declaration for the RadeChannel codec wrapper.
+// RadioModel does not own the channel (J2 / J3 create one per slice as
+// mode flips to RADE), but exposes wireRadeChannel(sliceId, channel, slice)
+// to attach the channel's snrChanged / syncChanged / rxTextDecoded
+// signals into the slot graph.
+class RadeChannel;
+
+// Phase 3R K-bench forward decl: Resampler is used by RadioModel to
+// upsample RadeChannel's 24 kHz baseband output to the radio's TX
+// I/Q wire rate before m_connection->sendTxIq.  Lives in core/Resampler.h.
+class Resampler;
 
 // RadioModel is the central data model for a connected radio.
 // It owns the RadioConnection (on a worker thread), ReceiverManager,
@@ -355,6 +389,85 @@ public:
     // FilterPresetsSetupPage can read/write user-customised presets.
     // Constructed once in RadioModel ctor; lifetime is RadioModel's lifetime.
     FilterPresetStore* filterPresetStore() const { return m_filterPresetStore; }
+
+    // ── Phase 3J-2 H2: spot-system accessors ────────────────────────────────
+    // RadioModel owns the seven spot-ingest clients, three view models, and
+    // the DxccColorProvider as std::unique_ptr members. Each accessor returns
+    // a non-owning pointer; lifetime is RadioModel's lifetime. MainWindow
+    // (H1) consumes these to instantiate SpotHubDialog + FreeDVReporterDialog
+    // with shared model pointers, and the M3 follow-up task wires the
+    // `<Source>/AutoConnect` AppSettings keys to actually start each client.
+    //
+    // Constructed in RadioModel ctor with identity / endpoint defaults from
+    // AppSettings; startConnection() is NOT called at construction time.
+    SpotModel*            spotModel()           const { return m_spotModel.get(); }
+    // 2026-05-12 bench fix: moved from SpotHubDialog ownership so the
+    // table stays populated from app start regardless of whether the
+    // dialog is open.  Spots from auto-connected sources were
+    // previously dropped on the floor until the user opened Tools →
+    // Spot Hub for the first time (the SpotTableModel didn't exist
+    // before then), forcing a manual disconnect+reconnect to repopulate.
+    SpotTableModel*       spotTableModel()      const { return m_spotTableModel.get(); }
+    FreeDVStationModel*   freeDvStationModel()  const { return m_freeDvStationModel.get(); }
+    RxDecodeModel*        rxDecodeModel()       const { return m_rxDecodeModel.get(); }
+    DxccColorProvider*    dxccColorProvider()   const { return m_dxccColorProvider.get(); }
+    DxClusterClient*      dxCluster()           const { return m_dxCluster.get(); }
+    DxClusterClient*      rbn()                 const { return m_rbn.get(); }
+    WsjtxClient*          wsjtx()               const { return m_wsjtx.get(); }
+    SpotCollectorClient*  spotCollector()       const { return m_spotCollector.get(); }
+    PotaClient*           pota()                const { return m_pota.get(); }
+    FreeDVReporterClient* freeDvReporter()      const { return m_freeDvReporter.get(); }
+    PskReporterClient*    pskReporter()         const { return m_pskReporter.get(); }
+
+    // ── Phase 3J-2 + 3R M3: spot-client auto-start state restore ────────────
+    //
+    // Reads each per-source AutoConnect / AutoStart key from AppSettings
+    // and, when True, calls the corresponding start method with the
+    // persisted identity / port / interval params. Designed to be called
+    // once at launch from MainWindow (sibling to tryAutoReconnect for the
+    // radio connection itself).
+    //
+    // Keys consulted (all flat PascalCase, matching SpotHubDialog F2):
+    //   DxClusterAutoConnect   -> connectToCluster(host, port, callsign)
+    //   RbnAutoConnect         -> same shape, different host default
+    //   WsjtxAutoStart         -> startListening(address, port)
+    //   SpotCollectorAutoStart -> startListening(port)
+    //   PotaAutoStart          -> startPolling(intervalSec)
+    //   FreeDvAutoStart        -> startConnection() (identity / URL
+    //                              already plumbed by RadioModel ctor)
+    //   PskReporterAutoStart   -> no-op (PSK Reporter is send-only)
+    //
+    // Safe to call multiple times. Each client's start method already
+    // guards against double-start.
+    void restoreSpotClientAutoStartState();
+
+    // ── Phase 3R Task I5: RadeChannel slot-graph wiring ─────────────────────
+    //
+    // wireRadeChannel attaches a freshly-created RadeChannel into RadioModel's
+    // slot graph. Phase J calls this from createRadeChannel (J2) / mode-swap
+    // (J3) after constructing the channel.
+    //
+    // The channel's per-channel signals (snrChanged / syncChanged /
+    // rxTextDecoded) do not carry a slice ID; the wiring adapts each through
+    // a captured-sliceId lambda so the receiving RadioModel slots know which
+    // slice to apply the event to.
+    //
+    // Routing:
+    //   RadeChannel::snrChanged       -> onRadeSnrChanged     -> SliceModel::setSnrDb
+    //                                                         -> radeSnrChanged re-emit
+    //   RadeChannel::syncChanged      -> onRadeSyncChanged    -> radeSyncChanged
+    //                                                            (only on transition)
+    //   RadeChannel::rxTextDecoded    -> onRadeTextDecoded    -> RxDecodeModel::addDecode
+    //
+    // Null channel or null slice is a safe no-op.
+    void wireRadeChannel(int sliceId, NereusSDR::RadeChannel* channel,
+                         NereusSDR::SliceModel* slice);
+
+    // Reads the latest RADE sync state for the given slice ID. Returns
+    // false when the slice has no recorded sync state (e.g. RADE was
+    // never wired for that slice). Surface for the future Phase L
+    // RadeApplet status indicator + status-bar SYNC badge.
+    bool radeSynced(int sliceId) const;
 
     // 3M-1a G.1: expose TxChannel view so TxApplet and G.4 TUNE function
     // can call setTuneTone / setRunning without depending on WdspEngine.
@@ -879,6 +992,50 @@ public slots:
     /// Query split-TX state.  Currently returns false (see setSplit note).
     Q_INVOKABLE bool split(int rx) const;
 
+    // ── Phase 3R Task I5: RadeChannel signal-graph slots ────────────────────
+    //
+    // Public slots so Qt's auto-connection queues them correctly when the
+    // emitting RadeChannel ever moves to a worker thread (J2/J3 currently
+    // keep it on the main thread; the public-slot declaration is forward-
+    // safe regardless).
+    //
+    // All three accept an int sliceId so a single RadioModel can route
+    // multiple per-slice RadeChannels through one set of slots. The
+    // wireRadeChannel helper captures the slice ID in a lambda at wire
+    // time and adapts the channel's per-channel signals into these.
+
+    // Forwards a decoded callsign (+ optional grid) into RxDecodeModel as
+    // a single decode row. mode="RADE", source="rade_text". Grid is
+    // appended to the payload only when non-empty (I4 Option B does not
+    // carry grid; the field is present for future text-channel revs).
+    void onRadeTextDecoded(int sliceId, const QString& callsign,
+                           const QString& grid);
+
+    // Tracks per-slice RADE decoder sync state. Emits radeSyncChanged
+    // only on actual transitions: repeated identical values collapse to
+    // a single emit (de-duplication keeps the future status-bar
+    // indicator from flickering on repeated sync=true reports from the
+    // codec).
+    void onRadeSyncChanged(int sliceId, bool synced);
+
+    // Forwards the codec's SNR estimate to the slice's snrDb property
+    // (D5 added SliceModel::setSnrDb). Cast-up float->double at the
+    // boundary; the slice setter no-ops on identical numeric values
+    // so repeated identical SNR updates do not spam UI repaint.
+    void onRadeSnrChanged(int sliceId, float snrDb);
+
+    // 2026-05-12 bench: throttled FreeDV Reporter freq publish.  See
+    // m_freedvFreqDwellTimer member declaration for the policy.  Called
+    // from the slice.frequencyChanged subscriber at line ~4945 in
+    // RadioModel.cpp.  Caller passes the new VFO Hz; this method either
+    // publishes immediately (initial baseline / band-jump fast-path /
+    // MOX force) or restarts the dwell timer for a deferred publish.
+    void publishFreedvFrequencyDwelled(quint64 hz);
+    // Force-publish the current pending freq right now and reset the
+    // dwell.  Called from MoxController::txAboutToBegin so a TX engage
+    // never leaves the reporter showing a stale freq.
+    void flushFreedvFrequencyDwell();
+
 signals:
     void infoChanged();
     // Phase 3Q-1: parametrized — state passed so UI consumers can act without
@@ -1003,6 +1160,27 @@ signals:
     // NereusSDR-original glue (no Thetis equivalent needed).
     void txFilterRequest(int audioLowHz, int audioHighHz, NereusSDR::DSPMode mode);
 
+    // ── Phase 3R Task I5: RadeChannel slot-graph re-emit signals ─────────────
+    //
+    // Re-emitted after RadioModel internalises the corresponding
+    // RadeChannel signal. UI consumers (RadeApplet, status bar SYNC
+    // badge, future SNR readout in VfoWidget) subscribe here rather
+    // than to the per-channel RadeChannel directly, so they survive
+    // mode-swap / channel-rebuild cycles without re-wiring.
+    //
+    // radeSyncChanged fires only on actual transitions (de-duplicated
+    // by onRadeSyncChanged via m_radeSyncedSlices). radeSnrChanged
+    // fires on every onRadeSnrChanged invocation: no de-dup here,
+    // the slice setter's NaN-aware short-circuit handles repaint thrash.
+    void radeSyncChanged(int sliceId, bool synced);
+    void radeSnrChanged(int sliceId, float snrDb);
+
+    // Phase 3R Task L2: RADE carrier-frequency offset re-emit. Wired
+    // alongside the I5 trio for the RadeApplet freq-offset readout.
+    // No model-side de-dup: the codec already coalesces by emitting
+    // only on actual offset change.
+    void radeFreqOffsetChanged(int sliceId, float hz);
+
 private slots:
     void onConnectionStateChanged(NereusSDR::ConnectionState state);
 
@@ -1035,6 +1213,27 @@ private slots:
     // where HighSWRScale is set to 1.0 once at console.cs:29194 and never
     // reassigned anywhere in baseline Thetis — effectively no-op.
     void pumpAudioVolume(double audioVolume);
+
+    // ── Phase 3J-2 H2: per-source spot-adapter slots ────────────────────────
+    //
+    // Each ingest client emits spotReceived(DxSpot); the adapter slot
+    // translates that into the QMap<QString,QString> kvs shape
+    // SpotModel::applySpotStatus expects (TCI-style sink). Per-source
+    // lifetime and color defaults are read from AppSettings under the
+    // <Source>SpotLifetimeSec / <Source>SpotColor key family.
+    //
+    // The WSJT-X adapter is special: it also pushes to RxDecodeModel so the
+    // "what my radio just heard" feed tracks live decodes (NereusSDR design;
+    // freedv-gui has no equivalent feed). WsjtxClient does not have a
+    // separate decodeReceived signal; the single spotReceived signal is the
+    // source for both sinks.
+    void onClusterSpotReceived(const NereusSDR::DxSpot& spot);
+    void onRbnSpotReceived(const NereusSDR::DxSpot& spot);
+    void onWsjtxSpotReceived(const NereusSDR::DxSpot& spot);
+    void onSpotCollectorSpotReceived(const NereusSDR::DxSpot& spot);
+    void onPotaSpotReceived(const NereusSDR::DxSpot& spot);
+    void onFreeDvReporterSpotReceived(const NereusSDR::DxSpot& spot);
+    void onPskReporterSpotReceived(const NereusSDR::DxSpot& spot);
 
 private:
     // Phase 3Q-1: drives the RadioModel-level connection state machine.
@@ -1563,9 +1762,117 @@ private:
     // down so the consumer side is fully disconnected).
     std::unique_ptr<class TxMicSource> m_txMicSource;
 
+    // Phase 3R K-bench: RADE TX 24 -> txSampleRate upsampler.  Lazily
+    // constructed on first txModemReady arrival once we know the
+    // connection's txSampleRate() (P1 = 48 kHz; P2 = 192 kHz; per
+    // RadioConnection.h:408 default + P2RadioConnection.h:265).
+    // m_radeTxResamplerHwRate stores the rate the resampler was
+    // built against so a reconnect at a different rate triggers a
+    // rebuild rather than silently producing wrong-rate audio.
+    //
+    // m_radeTxMonoScratch / m_radeTxIqScratch are reused per emission
+    // to avoid per-call allocations.  Both are sized once on first use.
+    std::unique_ptr<Resampler> m_radeTxResampler;
+    int                        m_radeTxResamplerHwRate{0};
+    std::vector<float>         m_radeTxMonoScratch;
+    std::vector<float>         m_radeTxIqScratch;
+
+    // Phase 3R K-bench (bench feedback): RADE RX speakers-side
+    // upsamplers. RadeChannel emits 24 kHz stereo float; AudioEngine
+    // expects 48 kHz. Without these upsamplers the speech plays at
+    // 2x speed ("chipmunk sounding"). One Resampler per leg so each
+    // channel sees a self-consistent stream.
+    std::unique_ptr<Resampler> m_radeRxSpeechL;
+    std::unique_ptr<Resampler> m_radeRxSpeechR;
+    std::vector<float>         m_radeRxLScratch;
+    std::vector<float>         m_radeRxRScratch;
+    std::vector<float>         m_radeRxInterleaved48k;
+
     // Stage C2 — filter preset user-override store.
     // Constructed in RadioModel ctor; QObject child so dtor cleans up.
     FilterPresetStore* m_filterPresetStore{nullptr};
+
+    // ── Phase 3J-2 H2: spot-system ownership ────────────────────────────────
+    //
+    // RadioModel becomes the wiring hub for Phase 3J-2's spot system. View
+    // models are constructed first (the adapter slots below depend on
+    // m_spotModel + m_rxDecodeModel + m_freeDvStationModel being live), then
+    // the ingest clients. Each client emits spotReceived(DxSpot); a per-
+    // source adapter slot translates that into the kvs map
+    // SpotModel::applySpotStatus expects.
+    //
+    // None of the clients start their network I/O at construction time;
+    // startConnection() / startListening() / startPolling() is the M3
+    // follow-up task. H2 only wires the in-process signal graph.
+    std::unique_ptr<SpotModel>            m_spotModel;
+    std::unique_ptr<SpotTableModel>       m_spotTableModel;
+    std::unique_ptr<FreeDVStationModel>   m_freeDvStationModel;
+    std::unique_ptr<RxDecodeModel>        m_rxDecodeModel;
+    std::unique_ptr<DxccColorProvider>    m_dxccColorProvider;
+
+    std::unique_ptr<DxClusterClient>      m_dxCluster;      // DX cluster (DxSpider / AR-Cluster / CC-Cluster)
+    std::unique_ptr<DxClusterClient>      m_rbn;            // Reverse Beacon Network (RBN-suffixed spotter)
+    std::unique_ptr<WsjtxClient>          m_wsjtx;
+    std::unique_ptr<SpotCollectorClient>  m_spotCollector;
+    std::unique_ptr<PotaClient>           m_pota;
+    std::unique_ptr<FreeDVReporterClient> m_freeDvReporter;
+    std::unique_ptr<PskReporterClient>    m_pskReporter;
+
+    // Monotonic index passed to SpotModel::applySpotStatus on every adapter
+    // dispatch. Increments once per emitted spot regardless of source.
+    int m_nextSpotIndex{0};
+
+    // ── Phase 3R Task I5: per-slice RADE sync state cache ───────────────────
+    //
+    // Latest RADE decoder sync state per slice ID, updated by
+    // onRadeSyncChanged on every transition. radeSynced(sliceId) reads
+    // this; a missing key reads as false (slice never had RADE wired).
+    //
+    // Stored on RadioModel rather than SliceModel so future UI surfaces
+    // can iterate sync state across all slices without recursing into
+    // each slice's WDSP channel pointer. The dedup logic in
+    // onRadeSyncChanged also lives here for the same reason.
+    QHash<int, bool> m_radeSyncedSlices;
+
+    // 2026-05-12 bench: per-slice timestamp of the most recent sync
+    // FALLING edge (true -> false transition).  Used by onRadeSyncChanged
+    // to debounce the "clear cached speaker callsign on sync rise"
+    // behaviour: only count a rising edge as a "new transmission /
+    // new speaker" event if sync was down for >= kRadeSyncDropClearDebounceMs.
+    // Brief flickers (< debounce) keep the previous over's callsign on
+    // the VFO flag.  Per bench design refinement 2026-05-12 (option B
+    // debounce-by-sync-loss-duration).
+    QHash<int, QDateTime> m_radeSyncDropAt;
+    static constexpr int kRadeSyncDropClearDebounceMs = 2000;
+
+    // 2026-05-12 bench: FreeDV Reporter freq-publish throttle.
+    //
+    // Spinning the VFO would otherwise fire a Socket.IO freq_change
+    // event on every sub-Hz movement (mouse wheel cadence) -- the
+    // qso.freedv.org server gets DoS'd and other operators see the
+    // dashboard flicker.  Throttle policy (per JJ bench design
+    // 2026-05-12):
+    //
+    //   1. Trailing dwell: restart a single-shot timer on every freq
+    //      change; only publish when the timer expires
+    //      (kFreedvFreqDwellMs = 7000 ms).  Spinning across a band
+    //      publishes exactly once, 7 s after the user stops.
+    //   2. Band-jump fast-path: if the new freq is >= kFreedvFreqJumpHz
+    //      (100 kHz) from the last *published* freq, bypass the dwell
+    //      and publish immediately -- band changes don't lag.
+    //   3. MOX force-publish: TX engage flushes any pending dwell so
+    //      the reporter never shows "TXing on stale freq."
+    //
+    // Driven by publishFreedvFrequencyDwelled() called from
+    // SliceModel::frequencyChanged.  m_freedvLastPublishedHz is the
+    // baseline for the band-jump comparison.  Initial publish on
+    // Socket.IO ACK bypasses this and uses setFrequency() directly so
+    // the first packet establishes the baseline.
+    QTimer*  m_freedvFreqDwellTimer{nullptr};
+    quint64  m_freedvLastPublishedHz{0};
+    quint64  m_freedvPendingHz{0};
+    static constexpr int     kFreedvFreqDwellMs = 7000;
+    static constexpr quint64 kFreedvFreqJumpHz  = 100'000;
 };
 
 } // namespace NereusSDR
