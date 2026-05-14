@@ -18,6 +18,18 @@ function(nereus_add_test name)
     # developer's NereusSDR.settings via P1FakeRadio-keyed test writes.
     add_executable(${name} ${name}.cpp TestSandboxInit.cpp ${ARGN})
     target_link_libraries(${name} PRIVATE NereusSDRObjs Qt6::Test)
+
+    # Reuse the NereusSDRObjs precompiled header (CMakeLists.txt §PCH).
+    # 451 test executables × per-target PCH compile would burn the wins;
+    # REUSE_FROM means the PCH is built once on NereusSDRObjs and shared
+    # across every test target. Save 5 to 10 minutes of test compile
+    # time on Linux CI. Gated on NEREUS_USE_PCH so users who turn the
+    # PCH off (e.g. for header-hygiene auditing) don't get a broken
+    # link.
+    if(NEREUS_USE_PCH)
+        target_precompile_headers(${name} REUSE_FROM NereusSDRObjs)
+    endif()
+
     add_test(NAME ${name} COMMAND ${name})
 endfunction()
 
@@ -2067,6 +2079,13 @@ nereus_add_test(tst_tci_radio_model_shims)
 # instead of slamming defaultFilterForMode.  Mirrors Thetis preset[m].
 # LastFilter (console.cs:14653-14671 [v2.10.3.13]).
 nereus_add_test(tst_slice_filter_per_band_per_mode_persistence)
+
+# ── Issue #241: settings file crash-safety + corruption recovery ─────────────
+# 8 tests covering atomic save (QSaveFile), .bak rotation, leading-NUL
+# corruption recovery, mid-stream XML parse-error recovery, no-.bak fallback
+# to defaults, missing-file = first-run (not corruption), diagnostics-reset
+# between load() calls, and no QSaveFile temp residue.
+nereus_add_test(tst_app_settings_corruption)
 
 # ── Task 5.1: SettingsSchemaVersion + v0.3.0 migration ────────────────────────
 # 5 tests: retired keys removed on v<3 → v3 migration, idempotency, fresh-install
