@@ -2045,6 +2045,13 @@ nereus_add_test(tst_connection_panel_state_pills)
 # NereusSDR-original; no Thetis attribution needed.
 nereus_add_test(tst_app_settings_migration)
 
+# ── Issue #241: settings file crash-safety + corruption recovery ─────────────
+# 8 tests covering atomic save (QSaveFile), .bak rotation, leading-NUL
+# corruption recovery, mid-stream XML parse-error recovery, no-.bak fallback
+# to defaults, missing-file = first-run (not corruption), diagnostics-reset
+# between load() calls, and no QSaveFile temp residue.
+nereus_add_test(tst_app_settings_corruption)
+
 # ── Task 5.1: SettingsSchemaVersion + v0.3.0 migration ────────────────────────
 # 5 tests: retired keys removed on v<3 → v3 migration, idempotency, fresh-install
 # (no version key), no-op when already at v3, version-zero path.
