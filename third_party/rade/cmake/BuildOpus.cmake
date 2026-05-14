@@ -89,7 +89,7 @@ set_target_properties(opus PROPERTIES
     IMPORTED_LOCATION "${CMAKE_CURRENT_BINARY_DIR}/libopus${CMAKE_STATIC_LIBRARY_SUFFIX}"
 )
 
-elseif(APPLE AND DEFINED CMAKE_OSX_ARCHITECTURES)
+elseif(APPLE AND CMAKE_OSX_ARCHITECTURES)
 
 # NereusSDR vendored patch (macOS single-arch cross-compile):
 # release.yml does NOT set BUILD_OSX_UNIVERSAL — each macOS row
@@ -104,6 +104,12 @@ elseif(APPLE AND DEFINED CMAKE_OSX_ARCHITECTURES)
 # Mirrors the per-arch CONFIGURE_COMMAND extension that the
 # `APPLE AND BUILD_OSX_UNIVERSAL` branch uses for its two
 # sub-builds. See Task A2 of phase3j2-3r-spots-and-rade-design.md.
+#
+# Gate uses bare `CMAKE_OSX_ARCHITECTURES` (truthy-test) rather than
+# `DEFINED CMAKE_OSX_ARCHITECTURES` so an empty-string value (ci.yml
+# does not pass -DCMAKE_OSX_ARCHITECTURES, leaving it defined-but-empty)
+# falls through to the plain autotools `else` branch instead of
+# hitting the FATAL_ERROR below.
 
 list(LENGTH CMAKE_OSX_ARCHITECTURES _osx_arch_count)
 if(_osx_arch_count GREATER 1)
