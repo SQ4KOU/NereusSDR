@@ -18,6 +18,18 @@ function(nereus_add_test name)
     # developer's NereusSDR.settings via P1FakeRadio-keyed test writes.
     add_executable(${name} ${name}.cpp TestSandboxInit.cpp ${ARGN})
     target_link_libraries(${name} PRIVATE NereusSDRObjs Qt6::Test)
+
+    # Reuse the NereusSDRObjs precompiled header (CMakeLists.txt §PCH).
+    # 451 test executables × per-target PCH compile would burn the wins;
+    # REUSE_FROM means the PCH is built once on NereusSDRObjs and shared
+    # across every test target. Save 5 to 10 minutes of test compile
+    # time on Linux CI. Gated on NEREUS_USE_PCH so users who turn the
+    # PCH off (e.g. for header-hygiene auditing) don't get a broken
+    # link.
+    if(NEREUS_USE_PCH)
+        target_precompile_headers(${name} REUSE_FROM NereusSDRObjs)
+    endif()
+
     add_test(NAME ${name} COMMAND ${name})
 endfunction()
 
