@@ -264,7 +264,7 @@ Adaptive blocks on, Keyframe 120, Accuracy "1 Normal", Frames per line 2.
 | Route probing | `src/core/RouteProbe` | §10.6, §10.7 |
 | Realtime audio scheduling | `src/core/RealtimeAudioPriority` | §4.3 |
 | Waterfall cadence | `src/core/WaterfallTicker` | §9.2 frames-per-line |
-| Qt WebSocket server, configurable bind | `src/core/TciServer.cpp:1267` | `NonSecureMode` only; no TLS anywhere in tree |
+| Qt WebSocket server, configurable bind | `src/core/TciServer.cpp:1296` | `NonSecureMode` only; no TLS anywhere in tree |
 | 3-priority send queue | `src/core/TciSendQueue.h` | Urgent / Binary / Control |
 | Opus, static, `OPUS_DRED` + `OPUS_OSCE` | `third_party/rade/cmake/BuildOpus.cmake` | |
 | r8brain polyphase resampler | `third_party/r8brain/` | |
@@ -1411,23 +1411,72 @@ settings sync.
 
 ### 10.2 Direct first, relay last
 
+> **Revised 2026-08-03** from the carrier-NAT research recorded in
+> `2026-08-02-remote-station-identity-and-pairing-design.md` section 9. Two
+> paragraphs that stood here previously were refuted and have been removed
+> rather than softened; both are named below so the deletion is auditable.
+
 | Tier | Path | Works when |
 | --- | --- | --- |
-| 1 | IPv6 host to host | Both ends have IPv6. No traversal machinery beyond the pinhole the outbound probe creates |
-| 2 | IPv4 host to host | Same LAN |
-| 3 | IPv4 server-reflexive, hole-punched | Both NATs use endpoint-independent mapping |
-| 4 | Relay | Everything else |
+| 0 | Cached candidates, or an address the operator typed | A previous session's candidates still resolve, or the operator has a stable address. Depends on no infrastructure at all |
+| 1 | IPv6 host to host | Both ends have global IPv6 **and the station side admits inbound after outbound**. Near-certain when the *client* is the constrained end; unproven when the station is |
+| 2 | IPv4 host to host | Same LAN, or an operator-configured port forward |
+| 3 | IPv4 server-reflexive, hole-punched | The station's NAT uses endpoint-independent mapping |
+| 4 | Relay over **DTLS/UDP 443**, datagrams capped at 1000 bytes | Outbound UDP is permitted, which is the normal case even under CGNAT |
+| 5 | Relay over **TLS/TCP 443** | UDP is blocked outright, or the path is MTU-broken. The guaranteed floor |
+| 6 | Operator-hosted relay, same two transports | Always, for an operator wanting independence from our infrastructure or lower RTT |
 
 This is ICE candidate ordering, and **IPv6 preference is not special-cased**:
 it falls out of IPv6 being a host candidate with high local preference, and
 host candidates outranking anything requiring NAT.
 
-**Structural luck:** the carriers that impose CGNAT (T-Mobile, Starlink) do so
-because they exhausted IPv4, which is the same reason they hand out IPv6.
+**Relay is two rungs, not one, and the distinction is load-bearing.** They have
+materially different latency behaviour and different failure conditions.
+Collapsing them into a single "relay" row invites an implementer to build one
+and call it done. Prefer the UDP rung: it preserves datagram semantics, so a
+single loss costs one frame rather than stalling the stream behind it.
 
-Tier 3 fails only against address-and-port-dependent (symmetric) mapping. Most
-carrier NAT is endpoint-independent because symmetric behaviour breaks games
-and VoIP.
+**The mechanism, which the earlier text had backwards.** *Relaying* is what
+defeats CGNAT, because a relay learns the peer's mapping from the packet it
+receives rather than predicting it, so mapping type is irrelevant to it. *TLS on
+443* is what defeats port-blocking firewalls and deep packet inspection. RFC
+8656 justifies TURN's TCP transport by firewalls that "block UDP entirely" and
+does not mention CGNAT anywhere.
+
+**Two claims removed here, and why.**
+
+**Removed: "Structural luck", which held that CGNAT carriers hand out IPv6 for
+the same reason they impose CGNAT, so the affected population is
+disproportionately likely to succeed at tier 1.** T-Mobile Home Internet hands
+its gateway a single /64 with no DHCPv6 prefix delegation (independently
+observed on MikroTik RouterOS in February 2024 and pfSense in 2024) and inbound
+IPv6 is reported filtered. Operational consequence: **a station behind a second
+router gets no routable IPv6 at all** and must sit directly on the gateway LAN.
+
+**Removed: "Most carrier NAT is endpoint-independent because symmetric
+behaviour breaks games and VoIP."** The argument is self-refuting. Third-party
+reviews put that same carrier at Xbox Strict and PlayStation Type 3, so gaming
+is broken on these connections and the carrier shipped it anyway. The
+measurement in its place: Richter et al. (ACM IMC 2016) found roughly 40%
+symmetric and 20% full cone among CGN-positive cellular ASes, explicitly noting
+major US cellular networks deploying symmetric mapping. Cellular is a coin flip.
+
+**What that correction does not license.** Nothing in the literature establishes
+that any specific consumer carrier *is* symmetric either. That behaviour has
+never been publicly measured for T-Mobile Home Internet, and the report usually
+cited for it describes port *rewriting*, which is a different property that ICE
+handles by reading the reflexive candidate. **Always attempt tier 3, never
+depend on it, and measure before writing it off.** Contemporary baseline for
+hole punching is 70% (Trautwein et al., 4.4M attempts across 85,000 networks),
+though the authors warn their method pre-filters the most restrictive NATs, so
+treat it as an upper bound. Fail over fast: among successful punches, 97.6%
+succeeded on the first attempt.
+
+**Try the tiers concurrently, not in series.** A strictly serial ladder requires
+predicting whether a given network permits UDP, which is exactly the prediction
+that cannot be made reliably. Race the candidates, take the first that answers,
+and keep upgrading in the background. See the identity design section 5.4 for
+the policy and for the path-switch mechanics this requires.
 
 ### 10.3 The rendezvous
 
@@ -1476,6 +1525,34 @@ use, and it works with any standard STUN and TURN server.
 audio is not coalesced into them (§7.2). Control on a reliable ordered channel,
 spectrum on an unreliable one, audio on its own RTP stream.
 
+**Hard constraint: cap every media datagram at 1000 bytes, and never assume a
+path MTU of 1200 or more.** Added 2026-08-03. The widely repeated claim that
+some carriers "block UDP" is most consistent with an MTU artifact rather than a
+policy block: every protocol reported failing is a large-datagram protocol
+(QUIC and HTTP/3, which RFC 9000 §14 requires to expand Initial packets to at
+least 1200 bytes; WireGuard at its 1420 default), while TCP works because MSS
+clamping is universal, and affected users routinely repair VPNs by lowering MTU
+to 1200 to 1400. Our own payloads are tiny: Opus at 24 kbit/s in 40 ms frames is
+roughly 120 bytes, and reduced spectrum at 30 fps is roughly 433 bytes. We sit
+an order of magnitude below any plausible floor, so a UDP relay should survive
+where QUIC cannot, **but only if the constraint is written down before someone
+reaches for a library that violates it.**
+
+**QUIC and MASQUE are disqualified as the primary media transport if and only if
+measurement shows the path dropping datagrams below roughly 1250 bytes.** State
+this as a conditional rather than a standing rejection. RFC 9221 gives QUIC
+unreliable DATAGRAM frames with no head-of-line blocking, post-handshake
+datagrams are not bound by the Initial floor, the traffic is
+wire-indistinguishable from HTTP/3 to deep packet inspection, and it brings
+connection migration, which is exactly what a cellular client changing towers
+mid-QSO needs. The MTU hypothesis is well supported and unverified; a permanent
+rejection cannot rest on a hypothesis we are simultaneously scheduling an
+experiment to test. See the identity design §9.3 and its §9.8 bench.
+
+**`libdatachannel` (DTLS plus SCTP) is therefore the recorded default** rather
+than merely the leading candidate, on the grounds above and subject to the
+licence gate below.
+
 **Open item, gated before the dependency lands:** `libdatachannel` is MPL-2.0
 and libjuice is LGPL. Both are very probably compatible with GPLv2-or-later,
 but this project's compliance bar requires verification, not probability. If it
@@ -1493,7 +1570,7 @@ literally that ships internet-reachable unencrypted TX keying for three phases.
 
 **The supporting claim was also overstated.** `git grep -n
 'NonSecureMode\|SecureMode\|QSslConfiguration\|setSslConfiguration' -- src`
-returns exactly one line: `src/core/TciServer.cpp:1267`, `NonSecureMode`. There
+returns exactly one line: `src/core/TciServer.cpp:1296`, `NonSecureMode`. There
 is no `QSslConfiguration`, no certificate handling, and no `wss` code path
 anywhere in the tree. "Close to free" omitted the actual work.
 
@@ -1519,6 +1596,24 @@ and LAN only, and R4 must not land on it.
 - **Client-finds-daemon discovery must be IPv6-capable** from the start.
   (`RadioDiscovery`'s IPv4 broadcast is radio-side and unaffected.)
 
+**Server-side requirement, added 2026-08-03.** Everything above is client-side,
+and the only documented real-world ICE failure on a major US carrier was caused
+by the *server* side. **The rendezvous, the STUN responder, and every relay must
+be dual-stack and reachable over IPv6, with published AAAA records.** A 2018
+discuss-webrtc report shows ICE on T-Mobile cellular failing with "Server and
+local address families are not compatible" against IPv4-only TURN
+infrastructure, compounded by the client discarding the 464XLAT CLAT address
+(192.0.0.4, RFC 7335) as not internet-capable while IPv4 was in fact working.
+Both faults were self-inflicted and cheap to avoid, and nothing in this section
+as previously written would have prevented either. **Handle the CLAT address
+explicitly rather than filtering it as non-routable.**
+
+**Prefer IPv6 for a measured reason, not only an architectural one.** RIPE Atlas
+measurement (Boswell et al., 224 probes across 43 networks, February 2024) puts
+NAT64 paths roughly 23% longer with about 17% higher RTT than native. That
+penalty lands on CW rather than on SSB, which is the same place every other
+latency cost in this design lands.
+
 ### 10.7 Reachability diagnostics
 
 The daemon reports its own situation. **This requires STUN, not just a local
@@ -1534,10 +1629,39 @@ server-reflexive address:
 | Local | Reflexive | Verdict |
 | --- | --- | --- |
 | RFC 1918 | equals the router's WAN, publicly routable | Port forwarding will work |
-| RFC 1918 | in `100.64.0.0/10` (RFC 6598) or otherwise not routable | Carrier NAT upstream; forwarding cannot work |
-| Global IPv6 present | n/a | Direct connection available |
+| RFC 1918 | **differs from every local interface address** | Carrier NAT upstream; forwarding cannot work |
+| Global IPv6 present | n/a | Direct connection may be available, subject to the inbound-filtering test below |
 
-`src/core/RouteProbe` already exists and should be reused.
+**Revised 2026-08-03. Do not use a `100.64.0.0/10` range check as the CGNAT
+detector.** An earlier revision did, and it would fail silently for exactly the
+population this page exists to serve. No primary source confirms that any
+specific consumer carrier hands out an address in that range; every such
+attribution traces to affiliate content restating the generic RFC 6598 rule,
+and the one first-hand gateway teardown located reports only the LAN side. The
+robust test is behavioural: **the reflexive address differs from every local
+interface address.** Keep the range check as a supplementary hint that can
+sharpen the wording, never as the decision.
+
+**Two probes to add**, both of which let the page say something no comparable
+product's diagnostics do:
+
+- **MTU probe.** "Your path drops UDP datagrams above N bytes" is directly
+  actionable and is the single most likely explanation for an operator whose
+  UDP-based tunnels mysteriously fail (§10.4).
+- **Outbound UDP reachability probe**, per port, including 443. Distinguishes
+  "UDP is blocked" from "large UDP datagrams are dropped", which no single test
+  otherwise separates and which have opposite remedies.
+
+**`src/core/RouteProbe` supplies only the left-hand column, and the earlier text
+overstated it.** Verified 2026-08-02: `probeLocalAddressFor()` asks the kernel
+which local source address it would use to reach a given peer, via a
+no-packet UDP `connectToHost` trick. It is **IPv4-only** (its own header says so)
+and it never learns the reflexive address. It is therefore precisely the
+"purely local check" this section opens by declaring insufficient. Reuse it for
+the local half, and note that **the reflexive half needs a STUN client that does
+not exist anywhere in the tree in any form.** `git grep -ril "stun\|libjuice\|
+datachannel" -- src third_party` returns nothing. That is the entire hard half
+of this feature and it should not be budgeted as a reuse.
 
 ---
 
@@ -1596,9 +1720,44 @@ Liveness source changes as the transport ladder is built:
 The daemon drops MOX through `MoxController` on whichever signal fires first,
 the same path `TxSliceArbiter` uses.
 
+**Correction, 2026-08-03: the consent-freshness mechanism above is described
+backwards, and getting it wrong in the other direction is dangerous.** The
+roughly 30 second figure is the consent *expiry* parameter, not the probe rate.
+The probes themselves go out every 4 to 6 seconds, **and that is what actually
+holds a hard carrier NAT mapping open.** RFC 8445 keepalives default to a 15
+second Tr and MUST NOT be set lower, which is already slower than the 10 second
+floor measured for cellular CGN UDP mappings, so consent freshness is the
+mechanism doing the work rather than a supplement to it. An implementer reading
+the original text would either add a redundant keepalive or, worse, widen an
+interval past a carrier mapping lifetime and lose the path silently while keyed.
+
+**Keepalive intervals must be measured, not assumed.** The available figures are
+generic and old: Richter et al. measured a 65 second median for cellular CGN UDP
+with a 10 second floor, from 2014-15 data collected by a tool retired in 2019,
+predating 5G standalone cores entirely. The identity design §9.8 schedules the
+measurement.
+
+**A continuously streaming session never triggers an idle keepalive at all.**
+Mapping expiry binds the control channel, a paused session, and
+reconnect-after-sleep. It does not bind the media path while media is flowing.
+Say so explicitly, because reasoning about keepalives as though they protect the
+audio stream leads to the wrong deadline everywhere.
+
+**Stuck PTT across a path switch is unspecified and is the highest-consequence
+failure in the product.** Once §10.2's tiers are raced and upgraded in the
+background, the media path changes during a live session, including during
+transmission. Three things need stating and none currently are: whether the
+fail-safe deadline is strictly shorter than the reconnect backoff; what the
+watchdog does when the ladder switches paths mid-transmission and observes the
+gap as a loss; and what happens when the path dies with MOX asserted and the
+relay being replaced *is* the path. A transmitter keyed indefinitely into an
+amplifier is a hardware and regulatory problem, not a UX one.
+
 **Reconnect timers must be cancellable** (§13).
 
-Requires a test, and the test is not optional.
+Requires a test, and the test is not optional. The test must include severing
+the path with MOX asserted **on each relay rung separately**, not only on a
+direct path.
 
 ON7OFF's product implements the same protection independently, which is
 reasonable evidence the requirement is correct.
