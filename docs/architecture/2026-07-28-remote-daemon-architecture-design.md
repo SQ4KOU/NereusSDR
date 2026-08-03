@@ -752,6 +752,35 @@ a documentation one:
 4. **Add `Q_PROPERTY(int sliceIndex READ sliceIndex CONSTANT)` to `SliceModel`**,
    or carry the handle out of band.
 
+**Verified mechanics, measured 2026-08-03 against a Qt6 probe built to mirror
+our real property shapes.** These were open questions in this section and the
+answers are not what the obvious API suggests. Each is a defect the
+implementation would otherwise ship.
+
+- **Key the wire on property NAME, never on metatype id.** Enum properties get
+  ids assigned dynamically above `QMetaType::User` (the probe observed 65537 and
+  65542), so they are not stable across builds. A format keyed on them passes
+  every test and desynchronises in the field after an unrelated recompile.
+- **Detect enums with the metatype's `IsEnumerationFlag`, not
+  `QMetaProperty::isEnumType()`.** `isEnumType()` returns **false** for our
+  enums because they are not `Q_ENUM`-registered, while `IsEnumerationFlag` is
+  set. An implementer reaching for the obvious call silently treats every enum
+  property as opaque.
+- **Enums round-trip as plain ints.** `QMetaProperty::write()` accepts an `int`
+  into an enum property and returns true, whether or not the enum carries
+  `Q_DECLARE_METATYPE`. No custom encoding is needed for them.
+- **Generic NOTIFY subscription works** by connecting every notify signal to one
+  slot and using `senderSignalIndex()` inside it to identify the property.
+  Confirmed against four signals; `notifySignalIndex()` matches the meta signal
+  index, so the signal-to-property map is direct.
+- **Read-only and CONSTANT properties reject writes cleanly**, returning false
+  rather than silently succeeding. **The mirror must check the return value**,
+  which is what makes the 28 no-WRITE properties detectable rather than
+  invisible.
+- **`QChar` needs attention in serialization.** It survives a JSON round trip as
+  a string, but `toInt()` on it yields the character code (65 for 'A'), so a
+  generic integer path would corrupt `SliceModel`'s slice letter.
+
 Echo suppression uses the existing `m_updatingFromModel` / `QSignalBlocker`
 pattern.
 
