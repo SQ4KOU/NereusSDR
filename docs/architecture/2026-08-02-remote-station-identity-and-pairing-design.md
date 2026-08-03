@@ -67,7 +67,7 @@ guest role becomes new permission checks, not a redesign.
 | Rendezvous implementation | Off-the-shelf `coturn` for STUN and TURN. We write only the small signalling service |
 | Self-hosting | Supported and documented, for **both** introduction and relay |
 | Server list | Ordered, client-side. The operator's own server first, the default behind it |
-| Relay posture | Last resort, switchable off, short-lived credentials, with background upgrade to direct |
+| Relay posture | Two rungs (DTLS/UDP 443 preferred, TLS/TCP 443 as the guaranteed floor), raced rather than serial, switchable off, short-lived credentials, rate-limited, media datagrams capped at 1000 bytes |
 | Manual address entry | First class. Hostname, IPv4, or bracketed IPv6, with optional port |
 | Station discovery on the LAN | New, multicast on both IP stacks, daemon announces and client listens |
 | Radio discovery | Unchanged. Same `RadioDiscovery` broadcast, now running on the daemon host |
@@ -233,29 +233,71 @@ Three mechanisms, all required:
 **Relay carries every packet.** Audio, spectrum, meters, control, microphone,
 in both directions. The content is opaque to it, but the bytes all pass through.
 
-Sizing, derived from parent section 10.3:
+**Two relay transports, not one.** These have materially different latency
+behaviour and different failure conditions, and collapsing them into a single
+"relay" tier hides the most consequential transport decision in the project:
 
-| Session shape | Relay egress | At 3 hours a day |
-| --- | --- | --- |
-| One pan, receive only | ~145 kbit/s | ~6 GB per month |
-| Four pans plus microphone | ~480 kbit/s | ~19 GB per month |
+- **DTLS over UDP 443**, media datagrams capped at 1000 bytes. Preferred.
+  Preserves datagram semantics, so a single loss costs one frame rather than
+  stalling the stream.
+- **TLS over TCP 443.** The guaranteed floor. Mandatory, always available, but
+  not the default. Prefer TLS to plain TCP for a mechanical reason Jitsi
+  documents: TURN over TLS performs a real TLS handshake, while ICE over TCP
+  uses a hard-coded handshake that some firewalls recognise and drop.
 
-A VPS including 1 to 2 TB of egress therefore carries on the order of a hundred
-regular users. Idle registered stations cost only their check-in.
+#### Sizing
 
-Policy:
+Egress counts both directions, station-bound microphone included:
 
-- **Last resort.** Direct is attempted first.
-- **Bounded wait, then background upgrade.** If direct has not come up within
-  **3 seconds by default, configurable**, the session falls back to relay so the
-  operator is not staring at a spinner, and the client keeps hunting for a direct
-  path and migrates to it silently when one appears. The status bar shows the
-  current path. The default is a starting point to be tuned against measurement,
-  alongside the keepalive interval in section 9.1.
+| Session shape | Relay egress | 3 hours a day | Left receiving 24/7 |
+| --- | --- | --- | --- |
+| One pan, receive only | ~145 kbit/s | ~6 GB per month | **~47 GB per month** |
+| Four pans plus microphone | ~520 kbit/s | ~21 GB per month | **~168 GB per month** |
+
+**State the usage assumption inline, because it swings the answer by more than
+an order of magnitude.** At three hours a day a 1 to 2 TB VPS carries on the
+order of a hundred regular users. A station left receiving continuously, which
+is entirely normal in this hobby, consumes 47 to 168 GB per month by itself,
+which is three to four relayed users per terabyte. The relay therefore needs an
+idle-disconnect policy, and the sizing claim must never be quoted without its
+assumption attached.
+
+Idle registered stations that are not carrying a session cost only their
+check-in.
+
+#### Policy
+
+- **Last resort in preference, raced in practice.** Attempt direct paths and
+  both relay transports **concurrently** and take the first that succeeds, then
+  keep upgrading in the background. A strictly serial ladder requires predicting
+  whether a given carrier permits UDP, which is exactly the prediction we cannot
+  make. NetBird documents racing both relay protocols simultaneously and using
+  whichever wins; Tailscale starts relayed and upgrades to direct, which is also
+  the right feel for a radio because audio arrives immediately and the path
+  silently improves. The contrast case is instructive: ZeroTier's own
+  documentation admits its agent can take "a few minutes" to realise it needs to
+  relay, which here would be minutes of dead air.
+- **Path switches must be seamless, and that is not free.** Racing and
+  background upgrade mean the path changes mid-session. Tailscale can do this
+  invisibly because it is a packet tunnel with its own sequencing; our
+  application-level media stream needs dual-receive across a switch window,
+  timestamp-based deduplication, and a defined jitter-buffer behaviour across
+  the discontinuity. Without that, every upgrade is an audible glitch.
 - **Switchable off** for operators who want direct or nothing.
 - **Short-lived credentials**, minted at connect time for an already-paired
   pair. A relay with static credentials is an open relay.
-- **Must work over TCP 443 with TLS**, not UDP only. See section 9.
+- **Per-session and global rate limits.** Syncthing's `strelaysrv` ships
+  `-per-session-rate` and `-global-rate` as precedent. The relay is the one
+  component where a misbehaving or malicious client can impose unbounded cost on
+  whoever is hosting it, and section 5.5 requires that outsiders host it.
+- **Bounded send buffer with application-level staleness drop.** When an uplink
+  momentarily dips below the media rate, a TCP socket queues silently rather
+  than dropping, and latency grows without bound until it recovers. This is the
+  failure that produces "the audio went thirty seconds behind and never caught
+  up". Drop stale frames rather than letting the socket buffer absorb them.
+- **`TCP_NODELAY` on every relay leg.** Classic, trivial, and exactly the kind
+  of omission that silently costs 40 ms.
+- **Media datagrams capped at 1000 bytes.** See section 9.3.
 
 ### 5.5 Self-hosting
 
@@ -354,65 +396,292 @@ answer to the same problem.
 
 ## 9. Carrier NAT, and a correction to the parent design
 
-**Parent section 10.2 is wrong on a point that matters.** It argues that most
-carrier NAT is endpoint-independent "because symmetric behaviour breaks games
-and VoIP", and concludes that hole punching usually succeeds. Field experience
-and published documentation both contradict this.
+Researched 2026-08-02 by a six-dimension literature sweep with adversarial
+verification of every claim. Sourcing is labelled throughout, because the honest
+finding here is that **the most decision-relevant fact has never been measured
+by anyone**, and an over-stated evidence base invites a later reviewer to
+discount this section wholesale, including the parts that are solid.
 
-**Field evidence.** The maintainer attempted Tailscale over T-Mobile to reach a
-FlexRadio and could not obtain a usable connection. The cause was the carrier's
-CGNAT posture, not bandwidth.
+### 9.0 The mechanism, which is the part most often gotten wrong
 
-**Published evidence.**
+**Relaying is what defeats CGNAT. TLS on 443 is what defeats port-blocking
+firewalls and deep packet inspection.** These are different problems with
+different solutions and conflating them produces the wrong ladder.
 
-- T-Mobile Home Internet blocks unsolicited inbound traffic **on IPv6 as well as
-  IPv4**, and its gateway exposes no firewall or port-forwarding controls. The
-  parent document's tier 1 assumption, that IPv6 is a clean path needing no
-  traversal machinery, does not hold there.
-- Its IPv4 path is double NAT, carrier CGNAT plus gateway NAT, producing strict
-  NAT in gaming terms with no port forwarding available.
-- Mobile carriers commonly use endpoint-dependent mapping, which is the
-  behaviour that defeats hole punching.
-- Tailscale's own documentation describes mobile CGNAT as very restrictive, with
-  short port timeouts and symmetric mapping, and notes that two devices on
-  different cellular networks will often be stuck on relay. Their relay runs
-  over HTTPS on TCP 443 specifically because UDP is filtered.
-- The parent's supporting argument is self-refuting on inspection: gaming **is**
-  broken on these connections, and the carrier shipped it anyway.
+A relay learns the client's mapping from the packet it receives, so it does not
+care whether that mapping is endpoint-independent or symmetric. RFC 8656
+justifies TURN's TCP transport by firewalls that "block UDP entirely" and does
+not mention CGNAT anywhere. No source located documents TURN over TLS 443
+specifically beating carrier NAT.
 
-### 9.1 What this changes
+The practical consequence: 443 belongs in the design as the **guaranteed floor**
+rather than the default, and a UDP relay should be attempted above it.
 
-1. **Relay is a first-class path, not a rare tier.** For a station behind such a
-   carrier it is the only path. It must be built and sized accordingly.
-2. **Relay must run over TCP 443 with TLS.** A UDP-only relay fails on exactly
-   the networks that need one.
-3. **Keepalive cadence is load-bearing.** Carrier NAT mappings expire far faster
-   than home-router mappings. A heartbeat tuned for a normal network will lose
-   the path silently. The interval must be derived from measurement, not
-   assumed, and it interacts with the parent's section 12.1 TX watchdog deadline.
-4. **Cached-address reconnect degrades for these stations.** A rotating carrier
-   prefix means the cached address is usually stale, so those operators depend
-   on the rendezvous far more than the parent assumes.
-5. **Reachability diagnostics must state the truth bluntly.** "Your carrier does
-   not permit direct connections, you will be relayed" is correct and useful.
-   Sending that operator to configure a port forward is worse than useless.
-   Parent section 10.7 already identifies this population as the target case.
-6. **Direction asymmetry must be documented for operators.** A client on a
-   restrictive carrier reaching a station on ordinary internet is the easy case,
-   because the client dials outward. A station behind a restrictive carrier is
-   the hard case. **The station's connection matters far more than the
-   client's**, and that guidance belongs in user documentation.
+### 9.1 What the parent design gets wrong
 
-### 9.2 Open measurement
+**Parent section 10.2's causal argument is self-refuting and must be deleted.**
+It reasons that most carrier NAT is endpoint-independent "because symmetric
+behaviour breaks games and VoIP". Third-party reviews put T-Mobile Home Internet
+at Xbox Strict and PlayStation Type 3. Gaming **is** broken on these connections
+and the carrier shipped it anyway. Replace the reasoning with the measurement:
+Richter et al. (ACM IMC 2016) found roughly 40% symmetric and 20% full cone
+among CGN-positive cellular ASes, explicitly noting major US cellular networks
+deploying symmetric mapping. Cellular is a coin flip, not a safe assumption in
+either direction.
 
-Whether a T-Mobile IPv6 pinhole opens for a **simultaneous** outbound from both
-ends is unknown. "Unsolicited inbound is blocked" does not by itself mean
-"blocked after we have sent outbound". If it opens, IPv6 hole punching may
-succeed on a carrier where port forwarding never can.
+**Parent section 10.2's "structural luck" paragraph must go too.** It argues
+that CGNAT carriers hand out IPv6 for the same reason they impose CGNAT, so the
+affected population is disproportionately likely to succeed at tier 1. T-Mobile
+Home Internet hands the gateway a single /64 with no DHCPv6 prefix delegation
+(independently observed on MikroTik RouterOS in February 2024 and on pfSense in
+2024). Operational consequence worth stating in the operator documentation: **a
+Pi behind a second router gets no routable IPv6 at all** and must sit directly
+on the gateway LAN.
 
-A STUN-based NAT classification from a T-Mobile connection answers this in well
-under an hour, and the answer directly sizes required relay capacity. **This
-should be run before the transport phase is planned.**
+### 9.2 What is established, and what is not
+
+**Established, high confidence:**
+
+- **T-Mobile Home Internet offers no inbound path.** Double NAT (gateway NATs
+  the LAN, then carrier CGNAT), no bridge or IP-passthrough mode, no port
+  forwarding, no UPnP, no NAT-PMP, no DMZ, no firewall controls. Verified across
+  three gateway generations, KVD21 through G4AR/G4SE to the current G5AR/G5SE,
+  against T-Mobile's own support pages. No firmware refresh has changed it.
+- **T-Mobile cellular is a different product and is the easy case.** It is
+  IPv6-only with 464XLAT (RFC 6877, co-authored by Cameron Byrne at T-Mobile
+  US). On the IPv6 path there is no carrier NAT at all. A client dialling out
+  from cellular to an ordinary-internet station is close to a solved problem.
+  Caveat recorded: the primary 464XLAT evidence is 2013 to 2016 and no 2024-2026
+  confirmation was located, so treat as high-plausibility and verify in ten
+  minutes rather than assuming.
+
+**NOT established, and previously asserted here in error:**
+
+- **Nobody has ever publicly measured T-Mobile Home Internet's NAT mapping
+  behaviour.** Not once. Every "symmetric" assertion traceable in the literature
+  is either about mobile CGNAT generically or inferred from console NAT-type
+  labels, which cannot measure the property. The nearest thing to direct
+  evidence, a Roon engineer's 2022 report that T-Mobile "doesn't preserve port
+  assignments", describes port **rewriting**, which is a different property from
+  mapping stability; ICE reads the rewritten port off the STUN reflexive
+  candidate rather than predicting it, and an endpoint-independent NAT is free
+  to rewrite ports and remain perfectly punchable. **Strip that inference and
+  the corpus contains zero evidence that this network is symmetric.** Always
+  attempt ICE, never depend on it, and measure before writing it off.
+- **That TMHI filters unsolicited inbound IPv6** is reported but unverified. The
+  commonly cited source is a T-Mobile Community page that renders as a marketing
+  shell to any fetch and whose title concerns a Netgear LTE router rather than
+  the 5G gateway. Treat as reported, unverified, and testable.
+
+### 9.3 The finding that changes the answer
+
+**"T-Mobile blocks UDP" is most consistent with an MTU artifact rather than a
+policy block.**
+
+Every protocol reported failing on this carrier is a large-datagram protocol:
+QUIC and HTTP/3, which RFC 9000 section 14 requires to expand Initial packets to
+at least 1200 bytes and forbids on paths that cannot carry that; WireGuard at
+its 1420 default; 4D's QUIC layer. TCP works because MSS clamping is universal.
+Affected users routinely fix VPNs by dropping MTU to 1200 to 1400.
+
+**Our media frames are 120 bytes of Opus and roughly 433 bytes of reduced
+spectrum**, an order of magnitude below any plausible floor. A DTLS over UDP
+relay with capped datagrams should therefore survive precisely where QUIC
+cannot.
+
+Consequences:
+
+1. **Cap all media datagrams at 1000 bytes** and never assume a path MTU of 1200
+   or more. This belongs in the parent's section 10.4.
+2. **Do not pre-emptively concede TCP's tail-latency penalty.** Giving up
+   datagram semantics buys nothing on a path where UDP would have worked.
+3. **QUIC and MASQUE are disqualified as the primary media transport if and only
+   if the MTU sweep shows the path dropping datagrams below roughly 1250 bytes.**
+   State it as a conditional, not a standing rejection: RFC 9221 gives QUIC
+   unreliable DATAGRAM frames with no head-of-line blocking, post-handshake
+   datagrams are not bound by the Initial floor, it is wire-indistinguishable
+   from HTTP/3 to DPI, and it brings connection migration, which addresses a
+   cellular client changing towers mid-QSO. The MTU hypothesis is well supported
+   but unverified, and a permanent rejection cannot rest on a hypothesis we are
+   simultaneously scheduling an experiment to test.
+
+### 9.4 Prior art, which is more useful than the carrier literature
+
+**FlexRadio SmartLink performs no hole punching at all.** Its documented and
+supported traversal is UPnP or manual port forwarding, full stop. Its servers
+carry no media: FlexRadio staff state "the Flex servers only initiate the
+connection but are not part of the communications path at all". Community
+members formally asked FlexRadio to add STUN in April 2022 and to add ICE in
+October 2024, the latter noting that SmartLink "relies on the ham being able to
+open ports in the firewall". Neither drew a commitment.
+
+**Therefore SmartLink's failure on T-Mobile is not evidence that hole punching
+fails there.** It is evidence that a product which never attempted hole punching
+cannot work when inbound ports are unavailable. ICE remains untested by this
+prior art and must be judged on its own merits. (Strictly this is a strong
+inference from documented absence rather than a packet capture.)
+
+**FlexRadio's own workaround is architecturally TURN.** Their staff-authored,
+explicitly unsupported escape route says "both the radio (server) and the user
+(client) must make their initial connections outbound to a common server in the
+cloud". The vendor with the strongest possible commercial incentive to avoid
+paying relay bandwidth concluded that relay is the fix. That is meaningful
+independent convergence.
+
+**Bandwidth comparison, corrected.** SmartLink's published minimum is 500 kbit/s
+up at the radio and 500 kbit/s down at the client, and SmartLink is itself a
+reduced-spectrum-plus-compressed-audio design rather than raw IQ. Our 145 to 520
+kbit/s sits in the **same class**, not thirty times below it. The thirty-times
+figure holds only against LAN-mode SmartSDR with DAX. SmartLink is our closest
+peer and therefore our most useful precedent, not a heavyweight strawman.
+
+**The rest of the field shows one pattern.** Icom RS-BA1 needs three inbound UDP
+ports forwarded at the station (50001 to 50003) while the client needs none.
+Kenwood KNS needs TCP 50000 plus UDP 33550 and states outright that a global IP
+address is required. RemoteHams RCForb needs TCP 843 and 4524 to 4525. Every ham
+remote product predating roughly 2020 assumes an inbound port, and every one of
+them fails on this carrier.
+
+**RemoteTX is the counterexample and our closest architectural twin:** a
+Raspberry Pi at the station dialling outbound to cloud servers, no port
+forwarding, no dynamic DNS, explicitly advertised as CGNAT-compatible, at a
+claimed 80 kbit/s. It proves the outbound-dialling model is commercially viable
+in this hobby. Its transport is entirely undisclosed, so it must **not** be
+cited as evidence that ICE or WebRTC works behind T-Mobile.
+
+**Copy from SmartLink:** the broker shape (authentication, directory, and
+reachability test, with media staying off the servers) and the green/red
+reachability indicator, which maps directly onto the parent's section 10.7
+diagnostics. **Avoid:** rendezvous with no relay tier, which is the entire
+reason a Flex behind this carrier is unreachable.
+
+**Nobody in amateur radio documents TURN over TLS 443, or publishes any ICE,
+STUN or TURN configuration at all.** No prior art to copy, and equally no field
+reports warning us off.
+
+### 9.5 What this changes in our design
+
+1. **Relay is a first-class path, not a rare tier**, and it is two rungs rather
+   than one (section 5.4).
+2. **Media datagrams capped at 1000 bytes** (section 9.3).
+3. **The rendezvous, the STUN responder, and every relay must be dual-stack with
+   published AAAA records.** The one documented real-world T-Mobile ICE failure
+   (discuss-webrtc, 2018) was caused by IPv4-only TURN infrastructure reporting
+   "Server and local address families are not compatible", compounded by the
+   client discarding the 464XLAT CLAT address (192.0.0.4, RFC 7335) as not
+   internet-capable while IPv4 was in fact working. Both faults were
+   self-inflicted and cheap to avoid. This is the highest-probability way we
+   reproduce a known bug, and the parent's section 10.6 is entirely client-side
+   and does not prevent it.
+4. **Prefer IPv6 explicitly on the client side.** RIPE Atlas measurement
+   (Boswell et al., 224 probes across 43 networks, February 2024) puts NAT64
+   paths roughly 23% longer with about 17% higher RTT than native. That lands on
+   CW, not on SSB.
+5. **Keepalive cadence is load-bearing and must be measured.** Carrier NAT
+   mappings expire far faster than home-router ones: Richter measured a 65 s
+   median for cellular CGN UDP with a 10 s floor, from 2014-15 data using a tool
+   retired in 2019, so even that is stale. Note the mechanism precisely, because
+   the parent's section 12.1 has it backwards: RFC 8445 keepalives default to a
+   15 s Tr and MUST NOT be lower, which is slower than a 10 s floor, so **RFC
+   7675 consent freshness at 4 to 6 s is what actually holds a hard NAT open**.
+   Consent's roughly 30 second figure is the expiry parameter, not the probe
+   rate. Also record that a continuously streaming session never triggers an
+   idle keepalive at all: mapping expiry binds the control channel, a paused
+   session, and reconnect-after-sleep, not the media path.
+6. **Replace the 100.64.0.0/10 range check** in the parent's section 10.7 with a
+   probe-based test (reflexive address differs from every local interface
+   address), keeping the range check only as a supplementary hint. No primary
+   source confirms this carrier's WAN address is in 100.64/10; every such
+   attribution traces to VPN-affiliate content restating the generic RFC 6598
+   rule. A range check that silently fails to fire would make the diagnostics
+   page confidently wrong for exactly the population it exists to serve.
+7. **Add MTU and outbound-UDP probes to the diagnostics**, so the page can say
+   something no competitor's does: "your path drops UDP datagrams above N bytes".
+8. **Direction asymmetry belongs in operator documentation.** A client on a
+   restrictive carrier reaching a station on ordinary internet is easy. A station
+   behind a restrictive carrier is hard. **The station's connection matters far
+   more than the client's.**
+9. **Tethered client operation is degraded, not broken.** T-Mobile's published
+   policy prioritises on-device data over tethered data under congestion. At
+   40 kbit/s up this will not starve us, but it inflates jitter and tail latency:
+   an SSB annoyance and a CW hazard.
+
+### 9.6 CW, stated more carefully than before
+
+An earlier revision of this section implied TCP relay disqualifies CW outright.
+That was too categorical, and there is directly relevant prior art.
+
+**RemoteRig already solves remote CW keying** with an adjustable jitter buffer
+for the keyer at the radio end, an operator-set key delay in milliseconds whose
+recommended starting value is the ping time between the ends, and **sidetone
+generated locally in the control box** rather than waiting for the radio's.
+Keying events are a handful of bytes at a few tens of events per second, so
+de-jittering them converts CW from a jitter problem into a fixed-offset problem.
+
+Three consequences:
+
+- The head-of-line-blocking argument disqualifies TCP for CW only when a stall
+  exceeds the keying buffer depth. At a 200 ms buffer a `TCP_RTO_MIN` stall does
+  not; at a 1 second tail-loss RTO it does. That is a numeric design question,
+  not a categorical bar.
+- **Keying events should be sent redundantly.** At our bitrate, transmitting
+  each key-down and key-up three times costs nothing and defeats single-loss
+  stalls outright.
+- **What cannot be fixed by any of this is QSK full break-in**, and hearing your
+  own transmission return. RemoteRig's documentation does not mention QSK, which
+  is telling. Separate "remote CW keying works with a delay buffer" from "QSK is
+  impossible at relay RTT". Both are true; only the second is a hard limit.
+
+### 9.7 Two hazards nobody had recorded
+
+**Stuck PTT on path loss during transmit.** This is the highest-consequence
+failure in the product and it is exactly what a relay drop mid-transmission
+produces. The parent's section 12.1 TX watchdog exists for it, but three things
+are unspecified: whether the fail-safe deadline is shorter than the reconnect
+backoff, what happens when the ladder switches paths mid-transmission and the
+watchdog observes the gap, and what the daemon does when the path dies with MOX
+asserted and the relay is the path being replaced. A transmitter keyed
+indefinitely into an amplifier is a hardware and regulatory problem.
+
+**The station's uplink is a separate axis from reachability, and nobody looked
+at it.** Every question in this section is about whether a packet can arrive.
+None asks whether a T-Mobile Home Internet uplink can carry 145 to 520 kbit/s
+continuously with bounded jitter, which is the actual product requirement for a
+station on that carrier. T-Mobile publishes upload as typically 12 to 55 Mbit/s
+and latency as typically 16 to 28 ms, which sounds like enormous headroom, but
+those are unloaded typicals, no jitter figure is published at all, and the
+service is deprioritised below phone customers by policy. Half a megabit is
+trivial in throughput and entirely non-trivial in tail latency on a shared,
+deprioritised, scheduled 5G uplink with grant-cycle and handover artifacts.
+
+**It is therefore possible for the transport ladder to work perfectly, the relay
+to be fine, and CW still to be unusable because the last-hop radio scheduler
+injects 100 ms of jitter at 8 pm.** That failure would look exactly like a
+transport problem and would be misdiagnosed as one.
+
+### 9.8 Open measurement, expanded to a bench
+
+A STUN classification alone cannot distinguish "UDP is blocked" from "large UDP
+datagrams are dropped", and the second is the more likely failure mode here.
+Running only the STUN test risks concluding UDP is unusable and committing to a
+TCP-only relay on the strength of an MTU problem we could have fixed with a
+datagram cap.
+
+**Run before the transport phase is planned**, ordered by value per minute:
+
+| # | Test | Settles | Effort |
+| --- | --- | --- | --- |
+| 1 | **MTU sweep**, IPv4 and IPv6: don't-fragment ping bisection, then UDP payloads of 100 to 1400 bytes to a VPS echo listener | Whether "blocks UDP" is really a large-datagram drop. Sets the datagram cap. Nobody in the surveyed literature has run it | 10 min |
+| 2 | **STUN classification** (RFC 5780): `stunclient --mode full` against two servers on different IPs, or `tailscale netcheck`. Repeat across a day and after a gateway reboot | Whether mapping is endpoint-independent, so whether ICE is real for a station on this carrier. The single highest-value unmeasured fact in the investigation | 20 min |
+| 3 | **Diagnose the original Tailscale failure** rather than assuming it: `tailscale netcheck` and `tailscale status` on the same line, checking specifically for the documented 100.64.0.0/10 overlay-versus-CGNAT address collision | Which of four live hypotheses actually caused the founding data point: traversal failure, relay unreachability, the address collision, or relay throughput exhaustion under SmartSDR's multi-megabit stream. Under the last, the experience does not generalise to our product at all | 20 min |
+| 4 | **Outbound UDP port and datagram-size sweep**: VPS listening on UDP 443, 3478, 50001 and a random high port; small then large datagrams to each | Whether the relay's UDP listener can live on 443, and whether 443 is treated differently from other UDP ports | 15 min |
+| 5 | **IPv6 simultaneous-open pinhole test**: Pi directly on the gateway LAN (no second router, since there is no prefix delegation), both ends sending outbound IPv6 UDP within the same 200 ms window coordinated over an existing TCP channel, with a one-sided control run | Whether the inbound IPv6 filter is stateful, which decides whether tier 1 exists for a station on this carrier | 45 min |
+| 6 | **NAT mapping lifetime**: open a UDP flow, go silent for N seconds, probe inbound on the same 5-tuple, bisecting N over 5 to 90 s. Repeat for TCP in minutes | The keepalive interval, which section 9.5 item 5 requires be measured rather than assumed. Feeds the parent's section 12.1 watchdog deadline | 1 hr, mostly waiting |
+| 7 | **Uplink jitter at the real media rate**: run 145 to 520 kbit/s from the Pi to a VPS for an hour at peak, logging one-way delay variation and loss | Whether the station's uplink can carry the product at all, independent of reachability (section 9.7) | 1 hr |
+| 8 | **Relay tail-latency A/B**, TLS/TCP 443 versus DTLS/UDP 443, keyed CW, `tc netem` at 0.5% loss, logging inter-packet p50/p95/p99/max | Whether TLS/443 is CW-viable in practice or SSB-only. No source anywhere measures relay behaviour below 500 kbit/s | 2 hr |
+
+Tests 1 through 3 take under an hour together and convert most of this section
+from hypothesis into measurement.
 
 ---
 
@@ -529,21 +798,51 @@ and both address paths.
 - Rendezvous outage with a session running, and with a new connection
 - Revocation dropping a live session
 - Station behind a restrictive carrier, both directions
-- **STUN classification of a T-Mobile connection** (section 9.2)
+- **The full section 9.8 measurement bench**, all eight tests
+- **Relay path switch mid-session**, asserting no audible discontinuity
+- **Stuck-PTT fail-safe**: sever the path with MOX asserted, on each relay rung
 
 ---
 
 ## 13. Open items
 
-1. **PAKE library selection and licence review** (section 10.1). Gates
+1. **The eight-test measurement bench** (section 9.8). Tests 1 to 3 take under
+   an hour together and convert most of section 9 from hypothesis into
+   measurement. Nothing in the transport phase should be planned before they
+   run, and test 3 in particular diagnoses a founding data point that is
+   currently load-bearing for two documents and has never been examined.
+2. **PAKE library selection and licence review** (section 10.1). Gates
    section 4.3.
-2. **`libdatachannel` licence review**, inherited from parent section 17 item 1.
+3. **`libdatachannel` licence review**, inherited from parent section 17 item 1.
    Gates the transport phase.
-3. **T-Mobile NAT classification** (section 9.2). Sizes relay capacity and
-   decides whether IPv6 hole punching is viable on restrictive carriers.
-4. **Keepalive interval** (section 9.1 item 3), to be measured rather than
-   assumed, and reconciled with the parent's TX watchdog deadline.
-5. **Where the settings copy in section 11 draws its boundary.** It depends on
+4. **Keepalive interval** (section 9.5 item 5), to be measured by bench test 6
+   rather than assumed, and reconciled with the parent's section 12.1 TX
+   watchdog deadline. Note the parent currently has the consent-freshness
+   mechanism backwards.
+5. **Whether the station uplink can carry the product at all** on a
+   deprioritised carrier connection (section 9.7). Bench test 7. This is a
+   separate axis from reachability and a failure here would be misdiagnosed as a
+   transport problem.
+6. **Stuck-PTT semantics across a mid-transmission path switch** (section 9.7).
+   Highest-consequence failure in the product, and the interaction between the
+   TX watchdog deadline, the reconnect backoff, and path racing is unspecified.
+7. **TURN, or a bespoke DERP-shaped relay?** Standard TURN comes free with any
+   ICE library and integrates with candidate racing. A bespoke relay is simpler
+   to operate and rate-limit but means implementing path selection ourselves and
+   giving up ICE relay candidates. Section 5.4 currently says "TURN over TLS, or
+   our own framing" and does not decide.
+8. **Mid-session path-switch mechanics** (section 5.4). Dual-receive window,
+   timestamp deduplication, and jitter-buffer behaviour across the
+   discontinuity are named as required and not specified.
+9. **Where the settings copy in section 11 draws its boundary.** It depends on
    parent section 6.3, which the parent itself records as not fully settled.
-6. **Default rendezvous hostname, certificate strategy, and operational
-   ownership.** Not a code question, but it blocks packaging.
+10. **Default rendezvous hostname, certificate strategy, and operational
+    ownership.** Not a code question, but it blocks packaging.
+11. **A documented VPS-tunnel escape hatch.** An operator-run outbound VPN or
+    `ssh -R` tunnel to a cheap VPS is the most widely deployed real-world
+    workaround in this hobby, requires zero relay code from us, works today, and
+    is what a technically capable operator will do anyway. The KiwiSDR community
+    uses exactly this. Worth documenting as an early-adopter unblock while the
+    relay tiers are built, and worth noting that Yggdrasil, Nebula and similar
+    all collapse into "self-hosted relay with extra dependencies" because each
+    still requires a peer with a reachable address.
