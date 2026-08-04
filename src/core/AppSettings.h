@@ -208,6 +208,43 @@ public:
     // to the default/empty profile in the resolvers above.
     static bool isValidProfileName(const QString& profile);
 
+    // ------------------------------------------------------------------
+    // Remote Daemon R2, Task 1 -- nereusd's own reserved profile.
+    //
+    // Before this task, nereusd's --profile silently resolved to the
+    // empty/default profile whenever the flag was omitted entirely,
+    // sharing the GUI client's own settings/log directory. That let R2's
+    // state-mirroring feature (SettingsProxy, R2 Task 15) pass its own
+    // verification while doing nothing at all: a "remote" GUI reading the
+    // same on-disk file the local daemon just wrote looks correct whether
+    // or not anything was actually mirrored over the wire. See
+    // docs/architecture/2026-08-03-remote-daemon-r2-r3-design-addendum.md
+    // §2.1. DaemonConfig.h's resolveDaemonProfileArgument() is where the
+    // --profile CLI argument resolves to this constant; an operator can
+    // still opt back into sharing by passing an explicit --profile "".
+    // (Unrelated to the "Phase 3I Task 15" cited just below -- both
+    // epics happened to number a task 15.)
+    // ------------------------------------------------------------------
+    static constexpr const char* kDaemonProfileName = "daemon";
+
+    // First-run marker for a freshly-reserved profile. R2 Task 15's Setup
+    // gate needs to tell "this profile's settings snapshot is empty
+    // because it is a legitimately fresh nereusd --profile daemon" apart
+    // from "the snapshot is empty because something is broken". The key
+    // is deliberately UNPREFIXED (no "daemon/" or "hardware/<mac>/"
+    // scoping) so it falls inside R2 Task 15's snapshot of top-level keys
+    // (see allKeys()). Callers must reference this constant rather than
+    // hardcode the string literal.
+    static constexpr const char* kDaemonProfileSeededKey = "DaemonProfileSeeded";
+
+    // Idempotent: writes kDaemonProfileSeededKey = "True" (and save()s)
+    // only the first time this is called against a given settings store,
+    // so it is safe to call unconditionally on every daemon startup.
+    // Instance-scoped rather than routed through the instance() singleton,
+    // so it is directly unit-testable via the AppSettings(filePath)
+    // constructor.
+    void seedDaemonProfileMarker();
+
     // -------------------------------------------------------------------------
     // Saved-radio management (Phase 3I Task 15).
     //

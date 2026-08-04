@@ -17,12 +17,25 @@
 // R1 merge-blocker fix round: sampleFileKeysAndParserKeysAgree pins the
 // shipped packaging/nereusd.conf.sample against the parser, because the
 // sample file documented keys the daemon did nothing with.
+//
+// Remote Daemon R2, Task 1: resolveDaemonProfileArgument() gained a
+// `wasSet` parameter and inverted its absent-flag default (nereusd's
+// own reserved profile instead of silently sharing the GUI's directory).
+// absentProfileArgumentResolvesToReservedDaemonProfile() below replaces
+// the old emptyProfileArgumentMeansNoProfile() slot, which pinned exactly
+// the contract this task inverts; explicitlyEmptyProfileArgumentStillShares()
+// pins the escape hatch that keeps the old behaviour reachable on purpose.
+// tests/tst_daemon_settings_profile.cpp is the fuller seam test for this
+// change (constants, the settings/log directory move, the first-run seed
+// marker); the slots here stay focused on resolveDaemonProfileArgument()'s
+// own argument-resolution contract.
 // =================================================================
 
 #include <QtTest>
 #include <QFile>
 #include <QTemporaryFile>
 #include <QTextStream>
+#include "core/AppSettings.h"
 #include "core/daemon/DaemonConfig.h"
 
 using namespace NereusSDR;
@@ -180,10 +193,26 @@ private slots:
         QCOMPARE(c.sliceCount, DaemonConfig::defaults().sliceCount);
     }
 
-    void emptyProfileArgumentMeansNoProfile()
+    // Remote Daemon R2, Task 1: absent (wasSet == false) now reserves
+    // nereusd's own profile instead of sharing the GUI's -- this is the
+    // exact contract inversion the pre-Task-1 emptyProfileArgumentMeans
+    // NoProfile() slot pinned in the other direction.
+    void absentProfileArgumentResolvesToReservedDaemonProfile()
     {
         QString err;
-        const QString profile = resolveDaemonProfileArgument(QString(), &err);
+        const QString profile = resolveDaemonProfileArgument(QString(), false, &err);
+        QVERIFY2(err.isEmpty(), qPrintable(err));
+        QCOMPARE(profile, QString(AppSettings::kDaemonProfileName));
+    }
+
+    // The escape hatch: an operator who explicitly types --profile ""
+    // (wasSet == true, value still empty) opts back into sharing the
+    // GUI's own settings/log directory -- exactly what every --profile
+    // argument did before this task.
+    void explicitlyEmptyProfileArgumentStillShares()
+    {
+        QString err;
+        const QString profile = resolveDaemonProfileArgument(QString(), true, &err);
         QVERIFY2(err.isEmpty(), qPrintable(err));
         QVERIFY(profile.isEmpty());
     }
@@ -191,7 +220,8 @@ private slots:
     void validProfileNameIsAccepted()
     {
         QString err;
-        const QString profile = resolveDaemonProfileArgument(QStringLiteral("hf"), &err);
+        const QString profile =
+            resolveDaemonProfileArgument(QStringLiteral("hf"), true, &err);
         QVERIFY2(err.isEmpty(), qPrintable(err));
         QCOMPARE(profile, QStringLiteral("hf"));
     }
@@ -200,7 +230,7 @@ private slots:
     {
         QString err;
         const QString profile =
-            resolveDaemonProfileArgument(QStringLiteral("with space"), &err);
+            resolveDaemonProfileArgument(QStringLiteral("with space"), true, &err);
         QVERIFY(!err.isEmpty());
         QVERIFY(profile.isEmpty());
     }

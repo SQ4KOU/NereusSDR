@@ -105,12 +105,33 @@ struct DaemonConfig {
 // analogous to main.cpp's --profile, which is exactly the trap that
 // produced task-9-report.md section 5.
 //
-// `requested` is the raw --profile value from QCommandLineParser (empty if
-// the option was not given). An empty value always succeeds and resolves
-// to an empty string, meaning "no profile, use the shared default
-// directory" -- this is a deliberate default, not an oversight; nereusd's
-// primary deployment (a single systemd-managed daemon on a Pi) has no
-// other process contending for that directory.
+// Remote Daemon R2, Task 1: the "share by default" behaviour this
+// function used to implement was itself a trap one layer up. A daemon
+// that silently reads and writes the GUI's own settings file lets R2's
+// state-mirroring feature (SettingsProxy, R2 Task 15) pass its own
+// verification while doing nothing at all -- a "remote" GUI would look
+// correct because it was reading the SAME on-disk file the local daemon
+// just wrote, not because anything was actually mirrored over the wire.
+// See docs/architecture/2026-08-03-remote-daemon-r2-r3-design-addendum.md
+// §2.1. The reserved profile below is the fix; sharing is now opt-in
+// instead of the silent default.
+//
+// `requested` is the raw --profile value from QCommandLineParser (empty
+// both when the option was not given and when it was given an empty
+// value -- QCommandLineOption has no default here, so
+// QCommandLineParser::value() cannot tell the two apart on its own).
+// `wasSet` is parser.isSet(profileOpt):
+//
+//   wasSet == false             -> returns AppSettings::kDaemonProfileName
+//     ("daemon"). No --profile on the command line at all now reserves
+//     nereusd's own profile rather than silently sharing the GUI's.
+//   wasSet == true, requested.isEmpty() -> returns an empty string,
+//     meaning "share the GUI's own directory". Explicitly typing
+//     --profile "" is the deliberate escape hatch for nereusd's primary
+//     deployment (a single systemd-managed daemon on a Pi with no GUI to
+//     collide with) -- opt-in now, not silent.
+//   wasSet == true, requested non-empty -> validated against
+//     AppSettings::isValidProfileName() as described below.
 //
 // A non-empty value must pass AppSettings::isValidProfileName(); on
 // failure, returns an empty string and *errorOut is set to a human-
@@ -126,6 +147,7 @@ struct DaemonConfig {
 // server_main.cpp's own comment on why the ordinary post-QCoreApplication
 // QCommandLineParser path is sufficient here, unlike main.cpp's pre-
 // QApplication argv scan).
-QString resolveDaemonProfileArgument(const QString& requested, QString* errorOut);
+QString resolveDaemonProfileArgument(const QString& requested, bool wasSet,
+                                     QString* errorOut);
 
 } // namespace NereusSDR

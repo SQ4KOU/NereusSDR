@@ -149,6 +149,24 @@ void AppSettings::initFilePath()
     m_filePath = resolveSettingsPath(s_profileOverride);
 }
 
+// Remote Daemon R2, Task 1 -- see the doc comment on
+// kDaemonProfileSeededKey (AppSettings.h) for why this exists. Mirrors
+// the immediate-save() pattern used elsewhere for rare, important,
+// one-shot writes (e.g. migrateVaxSchemaV1ToV2() below) rather than the
+// debounced scheduleSettingsSave() timer RadioModel uses for frequent
+// live changes: this writes at most once per settings store, so there is
+// nothing to coalesce, and the marker must reach disk immediately so it
+// is readable on the daemon's next launch even if this process is killed
+// a moment later.
+void AppSettings::seedDaemonProfileMarker()
+{
+    if (contains(QLatin1String(kDaemonProfileSeededKey))) {
+        return;
+    }
+    setValue(QLatin1String(kDaemonProfileSeededKey), QStringLiteral("True"));
+    save();
+}
+
 // ---------------------------------------------------------------------------
 // XML key encoding helpers
 //

@@ -183,9 +183,22 @@ int main(int argc, char* argv[])
     // fatal: unlike main.cpp, which warns and falls back to the shared
     // directory, a daemon provisioning mistake should stop the daemon
     // rather than silently share state with something else on the box.
+    //
+    // Remote Daemon R2, Task 1: `profileWasSet` (parser.isSet(), not
+    // parser.value()) is what lets resolveDaemonProfileArgument() tell "no
+    // --profile at all" apart from "--profile with an empty value" -- both
+    // are "" out of parser.value() once profileOpt above is declared with
+    // no default. The resolved profile string is threaded to BOTH
+    // AppSettings::setProfileOverride() below AND CoreInit::initialize()
+    // a few lines down, which is what keeps the log directory (resolved
+    // independently inside CoreInit.cpp via AppSettings::resolveConfigDir())
+    // moving together with the settings path instead of the two drifting
+    // apart. See DaemonConfig.h's resolveDaemonProfileArgument() for the
+    // full rationale.
     QString profileErr;
-    const QString profile =
-        NereusSDR::resolveDaemonProfileArgument(parser.value(profileOpt), &profileErr);
+    const bool profileWasSet = parser.isSet(profileOpt);
+    const QString profile = NereusSDR::resolveDaemonProfileArgument(
+        parser.value(profileOpt), profileWasSet, &profileErr);
     if (!profileErr.isEmpty()) {
         qCCritical(NereusSDR::lcApp) << profileErr;
         return 3;
@@ -194,10 +207,37 @@ int main(int argc, char* argv[])
         NereusSDR::AppSettings::setProfileOverride(profile);
     }
 
+    // Task 1: warn, never fail, when the resolved profile still lands on
+    // the same settings/log directory the GUI client uses. Sharing stays
+    // a supported configuration -- an operator opts into it explicitly
+    // with --profile "" -- but a collision is worth flagging loudly
+    // either way, the same way a mistyped --profile is (above), just
+    // non-fatally.
+    {
+        const QString resolvedDir = NereusSDR::AppSettings::resolveConfigDir(profile);
+        const QString sharedDir = NereusSDR::AppSettings::resolveConfigDir(QString());
+        if (resolvedDir == sharedDir) {
+            const char* producedBy = profileWasSet
+                ? "an explicitly empty --profile"
+                : "the reserved default profile (unexpected)";
+            qCWarning(NereusSDR::lcApp)
+                << "nereusd settings/log directory" << resolvedDir
+                << "is the SAME directory the GUI client uses" << sharedDir
+                << "-- produced by" << producedBy;
+        }
+    }
+
     if (!NereusSDR::CoreInit::initialize(profile)) {
         qCCritical(NereusSDR::lcApp) << "core initialisation failed";
         return 1;
     }
+
+    // Task 1: mark this settings store as having seen a nereusd first run,
+    // so R2 Task 15's Setup gate can later tell "this profile's settings
+    // snapshot is empty because it is a legitimately fresh daemon
+    // profile" apart from "the snapshot is empty because something is
+    // broken". Idempotent -- see AppSettings::seedDaemonProfileMarker().
+    NereusSDR::AppSettings::instance().seedDaemonProfileMarker();
 
     QString err;
     const NereusSDR::DaemonConfig cfg =

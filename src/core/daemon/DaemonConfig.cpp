@@ -124,12 +124,21 @@ bool DaemonConfig::validate(QString* errorOut) const
     return true;
 }
 
-QString resolveDaemonProfileArgument(const QString& requested, QString* errorOut)
+QString resolveDaemonProfileArgument(const QString& requested, bool wasSet, QString* errorOut)
 {
     if (errorOut) {
         errorOut->clear();
     }
+    if (!wasSet) {
+        // No --profile on the command line at all: reserve nereusd's own
+        // profile instead of silently sharing the GUI client's directory.
+        // See this function's declaration in DaemonConfig.h for the full
+        // rationale (Remote Daemon R2, Task 1).
+        return QString(AppSettings::kDaemonProfileName);
+    }
     if (requested.isEmpty()) {
+        // Explicit --profile "": the deliberate escape hatch back to the
+        // shared default directory.
         return {};
     }
     if (!AppSettings::isValidProfileName(requested)) {

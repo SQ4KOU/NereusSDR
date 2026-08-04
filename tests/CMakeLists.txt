@@ -6177,6 +6177,19 @@ nereus_add_test(tst_daemon_config)
 target_compile_definitions(tst_daemon_config PRIVATE
     NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
+# Remote Daemon R2, Task 1: nereusd used to share the GUI client's own
+# settings/log directory whenever --profile was omitted entirely, which
+# would have let R2's state-mirroring feature (SettingsProxy, Task 15)
+# pass its own verification while doing nothing (a "remote" GUI reading
+# the same on-disk file the local daemon just wrote looks correct either
+# way). Pins that an absent --profile now resolves to
+# AppSettings::kDaemonProfileName instead, that an explicit --profile ""
+# still shares on purpose, that the log directory moves together with the
+# settings path when the same resolved profile string drives both (as
+# src/server_main.cpp does), and the first-run seed marker Task 15's Setup
+# gate will read.
+nereus_add_test(tst_daemon_settings_profile)
+
 # R1 Task 10: DaemonApp connects the daemon to a radio (or runs discovery)
 # and creates min(cfg.sliceCount, connected-board-maxSlices) slices via
 # RadioModel's own addSlice() -- the same entry point connectToRadio()
