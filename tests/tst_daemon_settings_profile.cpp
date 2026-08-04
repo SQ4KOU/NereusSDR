@@ -134,6 +134,34 @@ private slots:
                  QStringLiteral("True"));
     }
 
+    // Review fix round 1: the assertions above only ever observe the final
+    // value "True", which an unconditional write would also produce --
+    // they cannot tell "wrote once, guard worked" apart from "wrote every
+    // call, guard doesn't exist". This slot proves the "only when absent"
+    // half of the contract directly: overwrite the key to a sentinel value
+    // seedDaemonProfileMarker() would never write, call it again, and
+    // assert the sentinel survived. That fails under an unconditional-write
+    // implementation and passes only when the second call is a genuine
+    // no-op.
+    void seedDaemonProfileMarkerDoesNotOverwriteAnExistingValue()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        AppSettings s(dir.filePath(QStringLiteral("NereusSDR.settings")));
+
+        s.seedDaemonProfileMarker();
+        QCOMPARE(s.value(QLatin1String(AppSettings::kDaemonProfileSeededKey)).toString(),
+                 QStringLiteral("True"));
+
+        // A value seedDaemonProfileMarker() itself would never write.
+        s.setValue(QLatin1String(AppSettings::kDaemonProfileSeededKey),
+                   QStringLiteral("SENTINEL"));
+
+        s.seedDaemonProfileMarker();
+        QCOMPARE(s.value(QLatin1String(AppSettings::kDaemonProfileSeededKey)).toString(),
+                 QStringLiteral("SENTINEL"));
+    }
+
     // The marker must survive a process restart -- that is the entire
     // point of a first-run flag -- so seeding must reach disk, not just
     // the in-memory map.
