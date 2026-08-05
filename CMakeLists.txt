@@ -679,6 +679,16 @@ set(CORE_SOURCES
     src/core/session/MirrorSchema.cpp
     src/core/session/MirrorPolicy.cpp
     src/core/session/StateMirror.cpp
+    # R2 Task 9: the slice-lifecycle half of the mirror. StateMirror forwards
+    # property deltas for objects it already knows about; ObjectRegistry is
+    # what tells a remote peer a slice appeared or vanished at all, by
+    # watching RadioModel::sliceAdded/sliceRemoved and calling
+    # StateMirror::watch()/unwatch() at the right moments. Includes
+    # models/RadioModel.h and models/SliceModel.h (unlike the three files
+    # above, which stay model-agnostic on purpose) because this class's job
+    # is inherently tied to those two signals; TxSliceArbiter.cpp is the
+    # existing precedent for src/core/ depending on src/models/ directly.
+    src/core/session/ObjectRegistry.cpp
 )
 
 # CoreAudioHalBus — macOS-only IAudioBus implementation bridging to the

@@ -6316,6 +6316,29 @@ nereus_add_test(tst_mirror_forwarder)
 # always has.
 nereus_add_test(tst_mirror_inbound)
 
+# Remote Daemon R2, Task 9 (slice lifecycle): ObjectRegistry watches
+# RadioModel::sliceAdded/sliceRemoved and calls StateMirror::watch()/
+# unwatch() at the right moments, emitting object.create (a full settled
+# snapshot, taken only once addSlice() has already run the TX arbiter
+# resync, the stream bind and wireSliceSignals) and object.destroy.
+#
+# The central hazard: RadioModel::removeSlice() calls slice->deleteLater()
+# BEFORE emitting sliceRemoved(), so the dying object is still fully alive
+# when the signal fires, and a same-event-loop-turn addSlice() can remint
+# the freed slice id while the corpse survives. ObjectRegistry keys its
+# live-object bookkeeping by QPointer<SliceModel> and detaches from
+# StateMirror synchronously inside the sliceRemoved handler -- never on
+# QObject::destroyed, which does not arrive until the event loop next
+# spins, by which point the corpse would still be watched under the key the
+# reused id needs. Also pins: a create for an id already considered live is
+# refused (protocol error, not a silent second create); removeSlice()'s
+# observable order (txSlice moves off the victim, then the victim's own
+# stream binding change, then object.destroy); and that neither of
+# RadioModel's two add-rejection paths (the allocator's bind-path refusal,
+# and addSliceOnPan()'s capacity check before addSlice() is even entered)
+# produces an object.create.
+nereus_add_test(tst_mirror_lifecycle)
+
 # R1 Task 10: DaemonApp connects the daemon to a radio (or runs discovery)
 # and creates min(cfg.sliceCount, connected-board-maxSlices) slices via
 # RadioModel's own addSlice() -- the same entry point connectToRadio()
