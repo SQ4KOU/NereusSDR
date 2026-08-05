@@ -152,6 +152,13 @@ bool TxSliceArbiter::requestHandoff(int sliceId)
     // client that click is a later task's job to forward to the daemon
     // as a command instead, not something to resolve locally against a
     // slice list the daemon does not know this process changed.
+    //
+    // Deliberately does not emit handoffBlocked, unlike every other
+    // `return false` path below (e.g. "Slice ID not found") -- this is
+    // not a rejected request, it is a request this class does not yet
+    // have anywhere to route. Emitting the existing signal would read as
+    // "your target slice was invalid," which is not true here and would
+    // misdirect whatever UI reacts to it.
     if (m_remote) { return false; }
 
     SliceModel* target = nullptr;

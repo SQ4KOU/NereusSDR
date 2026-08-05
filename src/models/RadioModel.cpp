@@ -3097,16 +3097,26 @@ double RadioModel::rxMeterOffsetDb() const
 void RadioModel::configureStreamPool(int userDdcCount, int maxSlices,
                                      int defaultRateHz)
 {
-    // Remote-daemon R2 Task 5: defense in depth alongside the
-    // bindSliceToStream role guard above. connectToRadio() already never
-    // reaches this call for Role::Remote (task 4's early return), so in
-    // production this is currently unreachable for Remote -- but a future
-    // caller (a station-capabilities apply outside connectToRadio, once
-    // task 8 lands) must not size a local allocator the daemon is the
-    // only one placing slices against. See design addendum
+    // Remote-daemon R2 Task 5: this guard and the bindSliceToStream role
+    // guard above are NOT symmetric defense-in-depth -- keeping this one
+    // sized-to-zero is what keeps that one merely inert instead of
+    // destructive. See bindSliceToStream's guard comment for the full
+    // mechanism: with this guard in place, addSlice() on a Role::Remote
+    // model always finds `poolReady == false` and its rollback branch
+    // never runs, which is why Slice A (and every later slice) survives
+    // unbound. The only place that sizes the pool despite this guard is
+    // configureStreamPoolForTest (RadioModel.h, inside the
+    // NEREUS_BUILD_TESTS block only as of review fix round 1 -- it must
+    // stay there and never be reachable from a production build).
+    //
+    // connectToRadio() already never reaches this call for Role::Remote
+    // (task 4's early return), so in production this is currently
+    // unreachable for Remote regardless -- but a future caller (a
+    // station-capabilities apply outside connectToRadio, once task 8
+    // lands) must not size a local allocator the daemon is the only one
+    // placing slices against. See design addendum
     // docs/architecture/2026-08-03-remote-daemon-r2-r3-design-addendum.md
-    // section 4.1, and configureStreamPoolForTest below for how a test
-    // sizes the pool despite this guard.
+    // section 4.1.
     if (role() == Role::Remote) { return; }
 
     configureStreamPoolImpl(userDdcCount, maxSlices, defaultRateHz);
@@ -4284,11 +4294,25 @@ bool RadioModel::bindSliceToStream(SliceModel* slice, double frequencyHz,
     // locally-computed placement, and on disagreement rolls the
     // operator's VFO back and reports the retune as rejected. See design
     // addendum docs/architecture/2026-08-03-remote-daemon-r2-r3-design-
-    // addendum.md section 4.1. Paired with the sizing guard in
-    // configureStreamPool: neither alone is enough -- sizing without this
-    // bind guard is one missed call site away from the same bug, and this
-    // bind guard without the sizing guard still leaves a sized allocator
-    // for some later path to place slices against.
+    // addendum.md section 4.1.
+    //
+    // Paired with the sizing guard in configureStreamPool below, but the
+    // pairing is NOT symmetric defense-in-depth -- it is directional, and
+    // review fix round 1 caught the direction that matters. If this bind
+    // guard is ever the only one standing (the pool gets sized for a
+    // Role::Remote model some other way -- today that can only happen
+    // from a NEREUS_BUILD_TESTS-only test seam, see
+    // configureStreamPoolForTest's comment), this early return makes
+    // addSlice()'s rollback branch below (`poolReady` true, bind refused)
+    // delete every newly-added slice and return -1 with NO
+    // sliceAddRejected explaining why, because this return fires ahead of
+    // that emit. That branch's own comment ("bindSliceToStream already
+    // emitted sliceAddRejected... this only has to undo the half-built
+    // slice") is then wrong for this specific path. addSlice() also
+    // carries its own independent `role() == Role::Local` check on that
+    // rollback now, so this is not the only thing preventing it -- but
+    // sizing the pool for Role::Remote is still the trigger condition to
+    // avoid, not a harmless redundancy.
     if (role() == Role::Remote) { return false; }
 
     // No pool yet (disconnected, or connectToRadio has not reached
@@ -4692,8 +4716,20 @@ int RadioModel::addSlice(const QString& initialPanId)
         !initialPanId.isEmpty() && slicesOnPan(initialPanId, slice).isEmpty();
 
     const bool poolReady = m_streamAllocator.streamCount() > 0;
+    // Review fix round 1, finding 1(c): `&& role() == Role::Local` is a
+    // second, independent guard against the same destructive interaction
+    // documented on bindSliceToStream's role check above -- if this
+    // model's pool were ever sized while Role::Remote (today only
+    // reachable from the NEREUS_BUILD_TESTS-only configureStreamPoolForTest
+    // seam, never from a production path), `poolReady` alone would be
+    // true and bindSliceToStream would still correctly refuse to bind,
+    // but taking this branch would silently delete the slice and return
+    // -1 with no sliceAddRejected explaining why (bindSliceToStream's
+    // role guard returns ahead of that emit). A Role::Remote model must
+    // behave the same way here regardless of how its pool got sized: the
+    // slice survives unbound, exactly as it does before any pool exists.
     if (!bindSliceToStream(slice, slice->frequency(), openingANewPan)
-        && poolReady) {
+        && poolReady && role() == Role::Local) {
         // bindSliceToStream already emitted sliceAddRejected with the
         // allocator's reason for this first-bind case, so the operator has
         // been told why; this only has to undo the half-built slice.

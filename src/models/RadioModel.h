@@ -1781,6 +1781,28 @@ public:
     void setHpsdrModelForTest(HPSDRModel m) {
         applyHpsdrModel(m);
     }
+
+    // Remote-daemon R2 Task 5 test seam: sizes m_streamAllocator via the
+    // same body configureStreamPool uses, bypassing that method's
+    // Role::Remote guard (see configureStreamPool's definition). A test
+    // proving bindSliceToStream's OWN role guard blocks a mutation needs
+    // a sized-but-Remote pool to do it against -- an unsized pool already
+    // makes bindSliceToStream return false through the pre-existing
+    // "pool not sized yet" path, which would pass even with no Task 5
+    // guard at all. See task-5-controller-notes.md.
+    //
+    // Review fix round 1, finding 1: this MUST stay inside the
+    // NEREUS_BUILD_TESTS block and never be reachable from a production
+    // build. Sizing a Role::Remote model's pool is exactly the state that
+    // makes bindSliceToStream's guard destructive rather than merely
+    // inert -- see that guard's comment in RadioModel.cpp for the full
+    // mechanism. When this method lived in the always-compiled public
+    // section, it was one accidental call site away from putting a
+    // shipping GUI binary into that state.
+    void configureStreamPoolForTest(int userDdcCount, int maxSlices,
+                                    int defaultRateHz) {
+        configureStreamPoolImpl(userDdcCount, maxSlices, defaultRateHz);
+    }
 #endif
 
     // TUN state, exported for H.3 UI polling and for issue #177 tests.
@@ -3111,19 +3133,6 @@ public:
     /// commands.
     void seedConnectFrequencyForTest(SliceModel* slice) {
         seedConnectFrequency(slice);
-    }
-
-    /// Remote-daemon R2 Task 5 test seam: sizes m_streamAllocator via the
-    /// same body configureStreamPool uses, bypassing that method's
-    /// Role::Remote guard (see configureStreamPool's definition). A test
-    /// proving bindSliceToStream's OWN role guard blocks a mutation needs
-    /// a sized-but-Remote pool to do it against -- an unsized pool already
-    /// makes bindSliceToStream return false through the pre-existing
-    /// "pool not sized yet" path, which would pass even with no Task 5
-    /// guard at all. See task-5-controller-notes.md.
-    void configureStreamPoolForTest(int userDdcCount, int maxSlices,
-                                    int defaultRateHz) {
-        configureStreamPoolImpl(userDdcCount, maxSlices, defaultRateHz);
     }
 
 private:

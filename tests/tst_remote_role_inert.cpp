@@ -35,6 +35,12 @@
 //   2026-08-04 -- New test file for remote-daemon R2 Task 4. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-08-05 -- Extended with four assertions for remote-daemon R2
+//                 Task 5 (the stream allocator, SliceModel's RADE
+//                 reach-through, TxSliceArbiter, and the spot-collector
+//                 auto-start restore -- design addendum section 4.1's
+//                 "four local authorities"). J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -208,9 +214,20 @@ private slots:
         SliceModel* slice = model.sliceById(sliceId);
         QVERIFY(slice != nullptr);
 
-        // Added AFTER addSlice() so the slice survives unbound (pool was
-        // unsized at add time -- the pre-existing "Slice A must survive"
-        // path, unrelated to this task's guard).
+        // This ordering is LOAD-BEARING (review fix round 1, finding 2 --
+        // an earlier version of this comment claimed the opposite).
+        // addSlice() must run BEFORE the pool is sized, and stay that way:
+        // sizing first and adding second would make addSlice()'s own
+        // `poolReady` rollback branch see bindSliceToStream refuse (via
+        // this task's role guard) against an already-sized pool, delete
+        // the slice, and return -1, which fails the QVERIFY(sliceId >= 0)
+        // above outright. Reversing these two lines is a direct way to
+        // watch that failure. Added in this order, the slice is created
+        // while the pool is still unsized -- the pre-existing "Slice A
+        // must survive" path -- and only afterwards does the pool get
+        // sized via the test-only bypass, leaving the slice unbound
+        // (streamIndex -1) for the mirrored-delta assertion below to act
+        // on.
         model.configureStreamPoolForTest(2, 2, 192000);
 
         const int    streamIndexBefore = slice->streamIndex();
@@ -227,6 +244,13 @@ private slots:
         QCOMPARE(slice->streamIndex(), streamIndexBefore);
         QCOMPARE(slice->shiftOffsetHz(), shiftBefore);
         QCOMPARE(slice->sampleRateHz(), rateBefore);
+        // Not independently discriminating in this specific scenario: the
+        // slice was never bound, so the frequencyChanged handler returns
+        // on `previousStream < 0` before the emit in both the guarded and
+        // the do-nothing case, and this QCOMPARE would pass either way.
+        // Kept as a regression guard on the assertion as a whole, not
+        // relied on alone -- the three field comparisons above are what
+        // actually fail against a do-nothing implementation.
         QCOMPARE(retuneRejectedSpy.count(), 0);
     }
 

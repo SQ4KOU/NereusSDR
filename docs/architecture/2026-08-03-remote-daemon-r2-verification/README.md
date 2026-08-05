@@ -6,11 +6,12 @@ Plan: `docs/architecture/2026-08-03-remote-daemon-r2-plan.md`
 
 **Status: seeded by Task 5, not yet a matrix.** Task 16 ("Local direct mode
 regression gate") is where the full row-by-row verification matrix for R2
-belongs (see plan Task 16 steps 3-4 and 8, which record the automated and
-bench-pending rows here). This file exists ahead of that task only because
-Task 5 step 5a requires recording one specific paragraph here now, while the
-context for it is fresh. Do not treat the section below as the matrix, and
-do not remove this status note until Task 16 actually populates one.
+belongs, including the bench rows this gate still needs (a live two-process
+run this task cannot perform -- see plan Task 16 steps 3-4 and 8). This file
+exists ahead of that task only because Task 5 step 5a requires recording one
+specific paragraph here now, while the context for it is fresh. Do not treat
+the section below as the matrix, and do not remove this status note until
+Task 16 actually populates one.
 
 ---
 
@@ -62,18 +63,5 @@ against loopback hosts / a local UDP port (never a real remote host --
 POTA's real-network `startPolling()` call is deliberately not exercised;
 see that test's header comment) and asserts the Local arm still attempts
 each start while the Remote arm produces silence on all three. This is
-regression coverage for the gate, not a substitute for the bench rows below.
-
-### Bench rows (PENDING -- Task 16's to run)
-
-The following need a real two-process (client + daemon) run to observe and
-are explicitly **not** executed by this task:
-
-1. With a daemon-side spot-collector caller eventually wired (open issue
-   1, not yet fixed), confirm the client, gated by Task 5, does not also
-   connect -- no double DX-cluster login, no double PSK Reporter upload,
-   observed on the wire or in each process's log.
-2. Confirm a Role::Remote GUI's Spot Hub / FreeDV Reporter panels show
-   *something* once a delivery path exists in a later phase (R2 itself
-   ships none -- panels are expected empty/inert in R2, and that expected-
-   empty state is what this row should actually confirm for R2).
+regression coverage for the gate, not a substitute for a live two-process
+bench run; Task 16 owns writing and running that row.
