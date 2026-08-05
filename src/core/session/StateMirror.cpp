@@ -10,9 +10,17 @@
 //                                    state forwarder. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-08-05  J.J. Boyd / KG4VCF  Remote daemon R2 Task 8: inbound apply
+//                                    (applyInbound, the per-model
+//                                    applyMirroredValue hook dispatch, and
+//                                    the m_applying forwarding guard). AI-
+//                                    assisted transformation via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "core/session/StateMirror.h"
+
+#include "core/session/MirrorPolicy.h"
 
 #include <QLoggingCategory>
 #include <QMetaMethod>
@@ -23,6 +31,39 @@ Q_LOGGING_CATEGORY(lcStateMirror, "nereus.mirror")
 namespace NereusSDR {
 
 namespace {
+
+// The R2 plan names four client command verbs Task 11 will dispatch
+// (requestSliceSampleRate, addSlice, removeSlice, addSliceOnPan). Only
+// sampleRateHz maps onto one of them today -- the other three read as
+// slice LIFECYCLE commands (create/destroy/place), not as replacements
+// for writing an EXISTING slice's placement fields directly. The other
+// six writable-but-Outbound SliceModel properties (chainIndex, ddcIndex,
+// streamIndex, shiftOffsetHz, widebandExtensionRequested, psPaused --
+// MirrorPolicy.cpp) are all codec-/coordinator-owned placement state with
+// no assigned verb yet, so their rejection says that honestly rather than
+// guessing at a name Task 11 has not chosen.
+struct VerbHint {
+    const char* className;
+    const char* property;
+    const char* verb;
+};
+constexpr VerbHint kVerbHints[] = {
+    { "SliceModel", "sampleRateHz", "requestSliceSampleRate" },
+};
+
+QString writableButOutboundReason(const QByteArray& shortClassName,
+                                  const QByteArray& property)
+{
+    for (const VerbHint& hint : kVerbHints) {
+        if (shortClassName == hint.className && property == hint.property) {
+            return QStringLiteral("daemon-authoritative; use %1 instead")
+                .arg(QString::fromLatin1(hint.verb));
+        }
+    }
+    return QStringLiteral(
+        "daemon-authoritative; not directly writable (no client command "
+        "assigned yet)");
+}
 
 // Resolved once. Renaming the slot without updating this string would
 // strand every watched object silently, so the lookup is loud on failure
@@ -223,6 +264,19 @@ QByteArray StateMirror::keyFor(const QObject* object) const
 
 void StateMirror::onWatchedPropertyChanged()
 {
+    // An inbound apply is in flight on THIS mirror: applyInbound() is still
+    // on the call stack, either writing the property this notify is FOR
+    // directly, or -- same-thread, synchronous, still nested inside that
+    // same write -- a side effect it triggered on a DIFFERENT watched
+    // object. RadioModel::addSlice()'s co-hosted-slice NB-mode/NB-tuning
+    // peer mirrors are exactly the second case: peer->setNbMode() fires
+    // nbModeChanged on the PEER object, not the one applyInbound() was
+    // asked to write. Checked before even asking which object fired, so
+    // both cases are covered by one flag regardless of source.
+    if (m_applying) {
+        return;
+    }
+
     QObject* source = sender();
     if (source == nullptr) {
         return;
@@ -319,6 +373,135 @@ QList<QPair<QByteArray, QList<MirrorUpdate>>> StateMirror::snapshotAll() const
         all.append(qMakePair(watch.key, snapshot(watch.key)));
     }
     return all;
+}
+
+// ── Inbound apply ────────────────────────────────────────────────────────
+
+MirrorApplyResult StateMirror::applyInbound(const QByteArray& objectKey,
+                                            const QByteArray& propertyName,
+                                            const QVariant& wireValue)
+{
+    MirrorApplyResult result;
+    result.objectKey = objectKey;
+    result.property = propertyName;
+
+    const int index = indexOfKey(objectKey);
+    if (index < 0 || m_watches.at(index).object == nullptr
+        || m_watches.at(index).schema == nullptr) {
+        result.reason = QStringLiteral("no such watched object");
+        return result;
+    }
+    const Watch& watch = m_watches.at(index);
+
+    const MirrorProperty* prop = watch.schema->byName(propertyName);
+    if (prop == nullptr) {
+        result.reason = QStringLiteral("no such mirrored property");
+        return result;
+    }
+    return applyInboundToProperty(watch, *prop, wireValue);
+}
+
+MirrorApplyResult StateMirror::applyInbound(const QByteArray& objectKey,
+                                            quint16 ordinal,
+                                            const QVariant& wireValue)
+{
+    MirrorApplyResult result;
+    result.objectKey = objectKey;
+
+    const int index = indexOfKey(objectKey);
+    if (index < 0 || m_watches.at(index).object == nullptr
+        || m_watches.at(index).schema == nullptr) {
+        result.reason = QStringLiteral("no such watched object");
+        return result;
+    }
+    const Watch& watch = m_watches.at(index);
+
+    const MirrorProperty* prop = watch.schema->byOrdinal(ordinal);
+    if (prop == nullptr) {
+        result.reason = QStringLiteral("no such mirrored property");
+        return result;
+    }
+    return applyInboundToProperty(watch, *prop, wireValue);
+}
+
+MirrorApplyResult StateMirror::applyInboundToProperty(const Watch& watch,
+                                                       const MirrorProperty& prop,
+                                                       const QVariant& wireValue)
+{
+    MirrorApplyResult result;
+    result.objectKey = watch.key;
+    result.property = prop.name;
+
+    // CONSTANT properties (sliceIndex, the mirror's object identity) have
+    // no NOTIFY, travel only in the connect-time snapshot, and must never
+    // be treated as a live write -- including through the hook below.
+    if (prop.isConstant) {
+        result.reason = QStringLiteral(
+            "constant; travels only in the connect-time snapshot, never inbound");
+        return result;
+    }
+
+    const QByteArray className = watch.schema->className();
+
+    if (prop.isWritable) {
+        // The standard path: a real Q_PROPERTY WRITE, gated by MirrorPolicy.
+        // Most of the mirrored surface (115 of 145 properties) is
+        // Bidirectional and passes; the seven SliceModel properties that
+        // carry WRITE but are daemon-authoritative (MirrorPolicy.cpp) are
+        // refused here, naming the client command to use instead where the
+        // R2 plan has assigned one.
+        if (!MirrorPolicy::inboundAllowed(className, prop.name)) {
+            result.reason = writableButOutboundReason(
+                MirrorSchema::shortClassName(className), prop.name);
+            return result;
+        }
+        m_applying = true;
+        const bool ok = watch.schema->write(prop, watch.object, wireValue);
+        m_applying = false;
+        if (!ok) {
+            result.reason = QStringLiteral(
+                "value could not be decoded for this property's type");
+            return result;
+        }
+        result.accepted = true;
+        return result;
+    }
+
+    // No WRITE at all. MirrorPolicy always classifies this Outbound --
+    // there is nothing standard for it to write through -- but that is not
+    // the final word: the target model gets one more chance to translate
+    // the intent through its own applyMirroredValue(name, value), called by
+    // name via QMetaObject::invokeMethod so this file never needs to
+    // #include a model header. Decoded through the same codec a normal
+    // WRITE would use, so the hook receives a properly narrowed, natively
+    // typed value rather than a raw wire one.
+    const QVariant native = MirrorSchema::decode(prop, wireValue);
+    if (!native.isValid()) {
+        result.reason = QStringLiteral(
+            "value could not be decoded for this property's type");
+        return result;
+    }
+
+    QString hookReason;
+    m_applying = true;
+    const bool invoked = QMetaObject::invokeMethod(
+        watch.object, "applyMirroredValue", Qt::DirectConnection,
+        Q_RETURN_ARG(QString, hookReason),
+        Q_ARG(QByteArray, prop.name),
+        Q_ARG(QVariant, native));
+    m_applying = false;
+
+    if (!invoked) {
+        result.reason = QStringLiteral(
+            "this model has no inbound hook for a property with no WRITE");
+        return result;
+    }
+    if (!hookReason.isEmpty()) {
+        result.reason = hookReason;
+        return result;
+    }
+    result.accepted = true;
+    return result;
 }
 
 } // namespace NereusSDR

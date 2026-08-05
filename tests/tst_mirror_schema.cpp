@@ -544,7 +544,7 @@ private slots:
             for (const MirrorProperty& p :
                  MirrorSchema::forMetaObject(mo).properties()) {
                 if (!MirrorPolicy::hasExplicitEntry(cls, p.name)) {
-                    // Name the SAFE default explicitly. 117 of the 145
+                    // Name the SAFE default explicitly. 115 of the 145
                     // entries are Bidirectional, so copying the nearest
                     // neighbour is both the path of least resistance and
                     // the wrong answer for anything that is not an

@@ -604,6 +604,33 @@ void SliceModel::setTxSlice(bool tx)
     }
 }
 
+// ── Remote Daemon R2 Task 8: inbound mirror hook ─────────────────────────────
+//
+// NereusSDR-original; no Thetis/AetherSDR equivalent. Each of the three
+// no-WRITE properties is refused for a DIFFERENT reason, named explicitly
+// rather than sharing one copy-pasted message, because a remote peer (or
+// whoever is reading Task 11's relayed error) needs to know WHICH owner to
+// go through instead.
+QString SliceModel::applyMirroredValue(const QByteArray& propertyName, const QVariant& /*value*/)
+{
+    if (propertyName == "active") {
+        return QStringLiteral(
+            "active is exclusive across a pan's slices and arbitrated by "
+            "RadioModel::setActiveSlice(); there is no per-slice remote-write path");
+    }
+    if (propertyName == "txSlice") {
+        return QStringLiteral(
+            "txSlice is arbitrated across slices by TxSliceArbiter; there is "
+            "no per-slice remote-write path");
+    }
+    if (propertyName == "band") {
+        return QStringLiteral("band is derived from frequency; write frequency instead");
+    }
+
+    return QStringLiteral("SliceModel::%1 has no inbound mirror translation")
+        .arg(QString::fromUtf8(propertyName));
+}
+
 // ── Phase 3F Sub-Epic A: multi-panadapter / multi-slice identity ────────────
 
 void SliceModel::setChainIndex(int idx)

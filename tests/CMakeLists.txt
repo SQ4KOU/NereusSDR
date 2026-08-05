@@ -6296,6 +6296,26 @@ nereus_add_test(tst_mirror_schema)
 # the wire at all. Inbound apply is Task 8; nothing here writes a model.
 nereus_add_test(tst_mirror_forwarder)
 
+# Remote Daemon R2, Task 8 (inbound half): StateMirror::applyInbound() applies
+# one write a remote peer sent for a watched object's property.
+#
+# A property with a real WRITE goes through MirrorPolicy::inboundAllowed()
+# then MirrorSchema::write(); the seven writable-but-Outbound SliceModel
+# properties are refused instead, sampleRateHz naming the client verb
+# (requestSliceSampleRate) the R2 plan assigns it. A property with NO WRITE
+# at all (TunerModel's whole ATU surface, SliceModel's active/txSlice/band,
+# RadioModel's name/model/version) routes to that model's own
+# applyMirroredValue(name, value) hook instead, a channel MirrorPolicy never
+# sees. Also pins that RadioModel::addSlice()'s two unconditional
+# co-hosted-slice peer mirrors (nbMode, and the mirrorNbTuning helper) still
+# run locally under an inbound apply -- the physical WDSP blanker they keep
+# in sync is shared per stream -- while producing no outbound delta for the
+# peer, and that the suppression is purely a StateMirror-side guard: no
+# behaviour in RadioModel.cpp changed to get it, so a purely local write
+# with no StateMirror involved mirrors to the co-hosted peer exactly as it
+# always has.
+nereus_add_test(tst_mirror_inbound)
+
 # R1 Task 10: DaemonApp connects the daemon to a radio (or runs discovery)
 # and creates min(cfg.sliceCount, connected-board-maxSlices) slices via
 # RadioModel's own addSlice() -- the same entry point connectToRadio()

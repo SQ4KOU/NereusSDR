@@ -241,6 +241,45 @@ bool TunerModel::hasDirectConnection() const
     return m_conn && m_conn->isConnected();
 }
 
+// ── Remote Daemon R2 Task 8: inbound mirror hook ────────────────────────────
+//
+// NereusSDR-original; no Thetis/AetherSDR equivalent (the ATU's remote-write
+// path is a Remote Daemon R2 concept). Three properties translate onto the
+// exact command slots below that a local TunerApplet already calls; the rest
+// are hardware telemetry TunerModel only ever learns from applyStatus(), and
+// are refused rather than assigned directly -- writing m_operate / m_bypass
+// / m_antA here instead of going through the command slots would silently
+// desync the model from what the tuner itself is doing, which is exactly
+// the class of bug applyStatus()-is-the-only-writer exists to prevent.
+QString TunerModel::applyMirroredValue(const QByteArray& propertyName, const QVariant& value)
+{
+    if (propertyName == "isOperate") {
+        setOperate(value.toBool());
+        return QString();
+    }
+    if (propertyName == "isBypass") {
+        setBypass(value.toBool());
+        return QString();
+    }
+    if (propertyName == "antennaA") {
+        const int ant = value.toInt();
+        // Same bound setAntennaA() itself enforces below. Checked here too
+        // so an out-of-range remote write is refused honestly rather than
+        // silently swallowed by setAntennaA()'s own guard and reported as
+        // applied.
+        if (ant < 1 || ant > 3) {
+            return QStringLiteral("antennaA must be 1, 2 or 3");
+        }
+        setAntennaA(ant);
+        return QString();
+    }
+
+    return QStringLiteral(
+        "TunerModel::%1 is hardware telemetry TunerModel only learns from "
+        "the tuner itself; there is no remote-write path")
+        .arg(QString::fromUtf8(propertyName));
+}
+
 // ── Commands ─────────────────────────────────────────────────────────────────
 
 // From AetherSDR src/models/TunerModel.cpp:setOperate [@0cd4559]

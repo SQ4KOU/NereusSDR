@@ -2149,6 +2149,24 @@ RadioModel::~RadioModel()
     qDeleteAll(m_panadapters);
 }
 
+// ── Remote Daemon R2 Task 8: inbound mirror hook ─────────────────────────────
+//
+// NereusSDR-original; no Thetis/AetherSDR equivalent. name/model/version are
+// hardware identity this model only ever learns from a connected radio's
+// discovery reply (m_name/m_model/m_version are assigned exactly once, above
+// in the connect path, never from anywhere a remote peer could reach).
+// connected falls through to the same generic refusal for the reason given
+// in the header: Task 3 already re-points it at m_connectionState and Task
+// 18 owns driving it, so this does not build a second path into it.
+QString RadioModel::applyMirroredValue(const QByteArray& propertyName, const QVariant& /*value*/)
+{
+    return QStringLiteral(
+        "RadioModel::%1 is hardware identity or connection-lifecycle state "
+        "this model only learns from the radio (or the session) itself; "
+        "there is no remote-write path")
+        .arg(QString::fromUtf8(propertyName));
+}
+
 // ── Phase 3J-2 H2: spot-adapter slot implementations ────────────────────────
 //
 // Each per-source slot translates a DxSpot into the QMap<QString,QString>
@@ -4824,6 +4842,19 @@ int RadioModel::addSlice(const QString& initialPanId)
     // a radio is attached. wireSliceSignals's own nbModeChanged connect (the
     // WDSP push) still only runs once m_connection exists, and stays there
     // untouched.
+    //
+    // Remote Daemon R2 Task 8: this connect is unconditional, so it also
+    // runs while StateMirror::applyInbound() is applying a remote peer's
+    // write to `slice`. peer->setNbMode(m) below must still happen (the
+    // co-hosted stream's single WDSP blanker needs both slices to agree
+    // regardless of who asked), but it must not be forwarded outbound as a
+    // delta the peer never asked for. No change was needed here to get
+    // that: StateMirror::onWatchedPropertyChanged() checks its own
+    // m_applying guard before it even asks WHICH object's notify woke it,
+    // so a peer's nbModeChanged fired from inside this lambda, while an
+    // apply is still on the call stack, is suppressed the same way the
+    // directly-written property's own echo is. See StateMirror.h/.cpp for
+    // the mechanism; nothing below is new.
     connect(slice, &SliceModel::nbModeChanged, this, [this, slice](NereusSDR::NbMode m) {
         if (m_mirroringNbMode) { return; }
         m_mirroringNbMode = true;
@@ -4863,6 +4894,13 @@ int RadioModel::addSlice(const QString& initialPanId)
     // Wired here rather than in wireSliceSignals for the same reason the
     // nbMode mirror above is: it is a contract between SliceModels, not a
     // push to hardware, so it must hold whether or not a radio is attached.
+    //
+    // Remote Daemon R2 Task 8: same reasoning as the nbMode mirror's Task 8
+    // comment above applies to every connect below that calls into this
+    // lambda -- (peer->*setter)(...) must still run under an inbound apply,
+    // and StateMirror's own m_applying guard (object-agnostic, checked
+    // before sender() is even read) is what keeps the peer's resulting
+    // notify from being forwarded outbound. Nothing here changed for it.
     auto mirrorNbTuning = [this, slice](auto getter, auto setter) {
         if (m_mirroringNbTuning) { return; }
         m_mirroringNbTuning = true;

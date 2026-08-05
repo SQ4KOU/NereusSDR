@@ -121,11 +121,13 @@
 #include "core/SampleRateCatalog.h"
 #include "core/WdspTypes.h"
 
+#include <QByteArray>
 #include <QList>
 #include <QObject>
 #include <QPointer>
 #include <QTimer>
 #include <QString>
+#include <QVariant>
 
 #include <atomic>
 #include <limits>
@@ -508,6 +510,20 @@ public:
     // Band::bandFromFrequency(), so this accessor cannot diverge from what
     // the frequency-driven bandChanged signal already announced.
     Band band() const { return m_currentBand; }
+
+    // Remote Daemon R2 Task 8: StateMirror::applyInbound()'s hook for
+    // SliceModel's three no-WRITE properties -- active, txSlice, band (a
+    // fourth, sliceIndex, is CONSTANT / ConstantSnapshot and is refused
+    // before ever reaching here; sliceLetter is excluded from the mirror
+    // entirely). All three are refused: active and txSlice are exclusive
+    // across MULTIPLE slices and arbitrated by RadioModel::setActiveSlice()
+    // and TxSliceArbiter respectively, not owned by any one SliceModel,
+    // and band is purely derived from frequency by
+    // Band::bandFromFrequency() (see the comment above). Writing any of
+    // them directly here would let a remote peer desync the invariant
+    // those owners maintain.
+    Q_INVOKABLE QString applyMirroredValue(const QByteArray& propertyName,
+                                           const QVariant& value);
 
     // Panadapter assignment (-1 = unassigned).
     // Legacy int handle. Retained for any pre-3F callers; the authoritative

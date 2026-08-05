@@ -104,6 +104,7 @@
 #include "core/safety/TxInhibitMonitor.h"
 #include "core/safety/BandPlanGuard.h"
 
+#include <QByteArray>
 #include <QDateTime>
 #include <QHash>
 #include <QObject>
@@ -112,6 +113,7 @@
 #include <QString>
 #include <QList>
 #include <QThread>
+#include <QVariant> // Remote Daemon R2 Task 8: applyMirroredValue(name, value)
 
 #include <limits>   // 2026-05-22 NaN sentinel for m_lastEmittedRxMeterOffsetDb
 
@@ -1300,6 +1302,21 @@ public:
     QString name() const { return m_name; }
     QString model() const { return m_model; }
     QString version() const { return m_version; }
+
+    // Remote Daemon R2 Task 8: StateMirror::applyInbound()'s hook for the
+    // three RadioModel properties above with no Q_PROPERTY WRITE (name,
+    // model, version -- see MirrorPolicy.cpp). `connected` is deliberately
+    // NOT handled here: Task 3 re-points it at m_connectionState and Task
+    // 18 drives it through the production setConnectionState() entry point
+    // it adds, so this builds no second path into it and simply falls
+    // through to the same generic refusal as the other three. All four are
+    // hardware identity or connection-lifecycle state RadioModel only ever
+    // learns from the connected radio (or Task 18's session) itself; there
+    // is no legitimate remote-write path for any of them, so this always
+    // refuses.
+    Q_INVOKABLE QString applyMirroredValue(const QByteArray& propertyName,
+                                           const QVariant& value);
+
     const HardwareProfile& hardwareProfile() const { return m_hardwareProfile; }
 
     // Returns the BoardCapabilities for the current (or last) board.

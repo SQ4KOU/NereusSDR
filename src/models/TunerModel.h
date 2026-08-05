@@ -26,8 +26,10 @@
 // =================================================================
 #pragma once
 #include <QObject>
+#include <QByteArray>
 #include <QMap>
 #include <QString>
+#include <QVariant>
 
 namespace NereusSDR {
 
@@ -83,6 +85,28 @@ public:
     // Apply key=value pairs from a TGXL status message.
     // From AetherSDR src/models/TunerModel.cpp:applyStatus [@0cd4559]
     void applyStatus(const QMap<QString, QString>& kvs);
+
+    // Remote Daemon R2 Task 8: StateMirror::applyInbound()'s hook for the
+    // 13 TunerModel properties above, none of which carries a Q_PROPERTY
+    // WRITE (applyStatus() is the only writer; they reflect what the
+    // hardware itself reports back). Called by name through
+    // QMetaObject::invokeMethod, so `propertyName` is one of the 13.
+    // `value` has already been decoded to the property's native type.
+    //
+    // isOperate/isBypass/antennaA translate the intent into the SAME
+    // command slot the local TunerApplet already drives (setOperate,
+    // setBypass, setAntennaA below) -- without this, the whole ATU is
+    // unreachable from a remote GUI, not just displayed stale. Every other
+    // property is hardware telemetry with no legitimate remote-write path
+    // and is refused.
+    //
+    // Returns an empty string when applied; otherwise a reason, leaving
+    // TunerModel's own state untouched (the command slots below no-op
+    // safely with no bound connection; this hook never assigns m_operate /
+    // m_bypass / m_antA directly -- applyStatus() is the only writer of
+    // those, exactly as it is for a local operator's command).
+    Q_INVOKABLE QString applyMirroredValue(const QByteArray& propertyName,
+                                           const QVariant& value);
 
 public slots:
     void autoTune();
