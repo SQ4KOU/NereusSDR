@@ -44,7 +44,26 @@
 | Wire encoding | Negotiated dense ordinal, JSON text on the reliable channel | Addendum 6 |
 | Spot-client ownership | Task 5 gates the client's collectors off as a **safety** measure. Which side owns each collector stays **open** | Task 5 step 5a |
 | Risk 9 issues | **Drafted into the tree, not filed.** The maintainer files them | Task 5 step 6 |
-| Hardware bench rows | Land every code task and run the automated suite green. Rows needing a radio are recorded **PENDING** with runnable steps | Tasks 16, 20 |
+| Hardware bench rows | **Run them on the ANAN-G2E only.** Maintainer authorised the G2E on 2026-08-05 and **explicitly excluded the ANAN-G2** | Tasks 16, 20 |
+
+### Bench hardware: the G2E, never the G2
+
+The maintainer authorised bench work against the **ANAN-G2E (HermesC10)** and
+**explicitly excluded the ANAN-G2**, which is a different radio on the same LAN.
+An earlier smoke run in this branch reached the G2 by accident, which is why this
+is written down rather than left in conversation.
+
+Before any bench row connects to anything:
+
+1. Run discovery and **list every responder with its MAC and board type**.
+2. The G2E identifies as `HPSDRHW::HermesC10`, discovery byte `0x14`. The G2 does
+   not. Pin the target by **MAC address**, not by "the first one found".
+3. **Confirm the MAC with the maintainer before the first connect**, then reuse
+   that pinned MAC for every later row.
+4. If discovery returns exactly one responder and it is not a G2E, **stop**. Do
+   not fall back to whatever answered.
+
+This applies to task 16 step 3 and every row of task 20 step 5.
 
 ## Task dependency graph
 
@@ -311,7 +330,7 @@ Three tasks changed local behaviour on purpose (3, 12, 13). This task owns provi
 
 - [ ] **Step 1:** `cmake --build build --target tests_models` then `ctest -L models --no-tests=error` (a real label), plus `ctest -R 'settings_mutator_funnel|app_settings|radio_store|spot_settings|connected_state_equivalence|p2_ddc|slice_meter_pump|meter_poller|settings_scope|settings_proxy' --no-tests=error`.
 - [ ] **Step 2:** Full `ctest --no-tests=error`. All green.
-- [ ] **Step 3: Bench, local direct mode, no daemon. Recorded PENDING, not executed.** This row needs a real radio and the implementing session has none, so write it into the verification README as a numbered, runnable procedure with an explicit PENDING status and do not mark it verified. Connect to a real radio. Verify: per-slice S-meter needles move and the **active slice's flag is written once per tick, not twice**; **set the analog S-Meter to Peak and to MaxBin and confirm the flag bar agrees with the needle** (task 12 step 7); the Multimeter delay slider still changes meter cadence; disconnect and reconnect cleanly, with the reordered state transition causing no visible change; saved radios survive a relaunch. Steps 1 and 2 are the automated half of this gate and **are** executed; a red result there still stops the phase.
+- [ ] **Step 3: Bench, local direct mode, no daemon. Run it on the ANAN-G2E.** Follow the "Bench hardware: the G2E, never the G2" procedure above: discover, list responders with MAC and board type, pin the G2E's MAC, confirm with the maintainer, connect. Record the result in the verification README against the pinned MAC. Connect to the G2E. Verify: per-slice S-meter needles move and the **active slice's flag is written once per tick, not twice**; **set the analog S-Meter to Peak and to MaxBin and confirm the flag bar agrees with the needle** (task 12 step 7); the Multimeter delay slider still changes meter cadence; disconnect and reconnect cleanly, with the reordered state transition causing no visible change; saved radios survive a relaunch. Steps 1 and 2 are the automated half of this gate and **are** executed; a red result there still stops the phase.
 - [ ] **Step 4:** Record in `docs/architecture/2026-08-03-remote-daemon-r2-verification/README.md`. Commit.
 
 ### Task 17: TLS certificate provisioning via libcrypto
@@ -360,9 +379,9 @@ Ctrl-C on `nereusd` is the first thing anyone does on a bench, and nothing curre
 - [ ] **Step 2:** Add `--station wss://host:port` and `--token`, plus one Setup field group carrying both. No connect screen, no discovery, no pairing UI.
 - [ ] **Step 3: Enumerate the gating sites before sizing. Roughly 77 across 14 files:** `connection()` 34, `wdspEngine()` 17, `audioEngine()` 17, `receiverManager()` 9. **`audioEngine()` and `receiverManager()` return non-null inert objects in remote role** (constructed unconditionally at `RadioModel.cpp:516-521`), so they fail **silently** rather than crashing, and a null-dereference assertion cannot catch them. The capability-driven gate is the only thing that does. Gate by **one mechanism**, not per-page. Produce the enumerated list as a plan artifact.
 - [ ] **Step 4:** Gate `NetworkDiagnosticsDialog` and the connection UI. **Also refuse MOX in `Role::Remote` through the existing `MoxController` pre-check callback** (installed at `RadioModel.cpp:9080`) with a reason naming R4. MOX is reached via `RadioModel::setMox` (`:12579`), not through `connection()` or `wdspEngine()`, so step 3's enumeration misses it, and it is the only operator control that would otherwise key a transmitter from a phase with no TX path.
-- [ ] **Step 5: The acceptance run. Recorded PENDING, not executed.** Needs a real radio on the daemon, which the implementing session does not have. Write it into the verification README as a numbered, runnable procedure with an explicit PENDING status per row. Two processes, one host, real radio on the daemon. Verify the token round-trip, then VFO, band, mode, filter, AGC, NR, NB, SNB, APF, squelch, RIT, XIT, antenna, add slice, remove slice, TX slice display, and Setup pages round-trip. Verify the per-slice S-meter is live. **Verify the panadapter is blank, the waterfall is blank, and the speakers are silent, and record that as expected.** Spot collectors are expected inert. **Execute now, without a radio, the subset that does not need one:** both processes launch, the `wss` handshake completes, the token round-trip succeeds, a bad token is refused, the snapshot arrives, and the Setup gate opens. Record which rows ran and which are PENDING; do not blur the two.
+- [ ] **Step 5: The acceptance run. Run it on the ANAN-G2E.** Follow the "Bench hardware: the G2E, never the G2" procedure above and reuse the MAC pinned at task 16 step 3. Two processes, one host, the G2E on the daemon. Verify the token round-trip, then VFO, band, mode, filter, AGC, NR, NB, SNB, APF, squelch, RIT, XIT, antenna, add slice, remove slice, TX slice display, and Setup pages round-trip. Verify the per-slice S-meter is live. **Verify the panadapter is blank, the waterfall is blank, and the speakers are silent, and record that as expected.** Spot collectors are expected inert. **Execute now, without a radio, the subset that does not need one:** both processes launch, the `wss` handshake completes, the token round-trip succeeds, a bad token is refused, the snapshot arrives, and the Setup gate opens. Record which rows ran and which are PENDING; do not blur the two.
 - [ ] **Step 6:** Scan the proxied-read-resolved-locally log from task 15 step 9 for keys that should have been Station.
-- [ ] **Step 7: Re-run the task 16 gate and confirm the task 17 release artifacts still build**, because tasks 17 and 20 both landed after that gate and both have large local blast radius. The automated half (task 16 steps 1 and 2) **is** re-run here. The task 16 step 3 bench stays PENDING and is carried into the README as a second occurrence, so the maintainer runs it once after this task rather than twice. Release artifacts are confirmed on the PR, not locally.
+- [ ] **Step 7: Re-run the task 16 gate and confirm the task 17 release artifacts still build**, because tasks 17 and 20 both landed after that gate and both have large local blast radius. The automated half (task 16 steps 1 and 2) is re-run here, and the task 16 step 3 bench is re-run here too, on the same pinned G2E MAC, because tasks 17 and 20 both landed after that gate. Release artifacts are confirmed on the PR, not locally.
 - [ ] **Step 8:** Record the matrix in the verification README. Full `ctest --no-tests=error`. Commit.
 
 ---
