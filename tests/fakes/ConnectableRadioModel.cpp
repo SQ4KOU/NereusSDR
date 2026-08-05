@@ -12,7 +12,8 @@ namespace NereusSDR::Test {
 
 ConnectableRadioModel::~ConnectableRadioModel() = default;
 
-std::unique_ptr<ConnectableRadioModel> ConnectableRadioModel::create(int timeoutMs)
+std::unique_ptr<ConnectableRadioModel> ConnectableRadioModel::create(
+    int timeoutMs, NereusSDR::RadioModel::Role role)
 {
     // ConnectableRadioModel's constructor is private (see the header), so
     // std::make_unique can't reach it from outside the class; new + wrap
@@ -23,7 +24,11 @@ std::unique_ptr<ConnectableRadioModel> ConnectableRadioModel::create(int timeout
     harness->m_fake->start();
 
     // Mirrors tst_p1_loopback_connection.cpp's makeInfo() -- see
-    // task-2-controller-notes.md "Wiring the fake".
+    // task-2-controller-notes.md "Wiring the fake". Built the same way
+    // for both roles: a Role::Remote model's connectToRadio() never reads
+    // any of it (its early return fires first), but building it
+    // unconditionally keeps this function's shape simple and gives
+    // radioInfo() a real value either way.
     harness->m_info.address         = harness->m_fake->localAddress();
     harness->m_info.port            = harness->m_fake->localPort();
     harness->m_info.boardType       = HPSDRHW::HermesLite;
@@ -32,7 +37,7 @@ std::unique_ptr<ConnectableRadioModel> ConnectableRadioModel::create(int timeout
     harness->m_info.firmwareVersion = 72;
     harness->m_info.name            = QStringLiteral("ConnectableRadioModel fake");
 
-    harness->m_model = std::make_unique<NereusSDR::RadioModel>();
+    harness->m_model = std::make_unique<NereusSDR::RadioModel>(role);
 
     // Arm the synchronous test-only WdspEngine init path BEFORE calling
     // connectToRadio(). Order matters: connectToRadio() wires its
@@ -42,9 +47,20 @@ std::unique_ptr<ConnectableRadioModel> ConnectableRadioModel::create(int timeout
     // happens. See WdspEngine::setSynchronousInitForTest()'s doc comment
     // for the full reasoning (including why a flag consulted inside
     // initialize() is required instead of pre-setting m_initialized).
+    // Harmless to arm for Role::Remote too: initialize() is never called
+    // on that path, so the flag just goes unread.
     harness->m_model->wdspEngine()->setSynchronousInitForTest(true);
 
     harness->m_model->connectToRadio(harness->m_info);
+
+    if (role == NereusSDR::RadioModel::Role::Remote) {
+        // Remote-daemon R2 Task 4: a Role::Remote model's connectToRadio()
+        // returns immediately behind RadioModel's own early guard -- it
+        // never reaches ConnectionState::Connected, so waiting for that
+        // below would just burn timeoutMs and report a false failure. The
+        // harness is already fully built; hand it back as-is.
+        return harness;
+    }
 
     NereusSDR::RadioModel* const model = harness->m_model.get();
     const bool reachedConnected = QTest::qWaitFor(

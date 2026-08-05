@@ -72,6 +72,7 @@
 #include "core/Rf2ksConnection.h"
 #include "core/TgxlConnection.h"
 #include "core/FaultLog.h"
+#include "core/session/IStationLink.h"
 #include "core/spectrum/ISpectrumSink.h"
 #include "core/TxInterlockPolicy.h"
 #include "core/TuneMemoryStore.h"
@@ -231,8 +232,39 @@ class RadioModel : public QObject {
                NOTIFY rfKitEnabledChanged)
 
 public:
+    // Remote-daemon R2 Task 4: which side of the wire this model's DSP
+    // lives on. Local (default; unchanged behavior) owns a
+    // RadioConnection and drives WdspEngine + AudioEngine from
+    // connectToRadio() exactly as it always has. Remote never enters
+    // connectToRadio()'s body -- see the early return there -- so it
+    // holds no socket and starts neither WdspEngine nor AudioEngine; it
+    // is the shape a GUI-only process needs to drive a daemon-owned radio
+    // over the wire (R2 Task 18's wss session) instead of dialing one up
+    // locally.
+    enum class Role { Local, Remote };
+
     explicit RadioModel(QObject* parent = nullptr);
+    // Remote-daemon R2 Task 4: explicit-role overload. Two constructors
+    // sharing a defaulted trailing QObject* stay unambiguous as long as
+    // the new one's first parameter is Role, so every existing
+    // RadioModel(parent) / RadioModel() call site (MainWindow.cpp,
+    // DaemonApp.cpp, every test) keeps resolving to the constructor above
+    // and keeps defaulting to Role::Local without any change on its end.
+    RadioModel(Role role, QObject* parent = nullptr);
     ~RadioModel() override;
+
+    // Remote-daemon R2 Task 4.
+    Role role() const { return m_role; }
+
+    // Remote-daemon R2 Task 4: non-owning attach point for the
+    // control-plane station-link seam (core/session/IStationLink.h). A
+    // later task's StateMirror uses this to push slice/meter/status state
+    // to, and apply command verbs from, a remote GUI when
+    // role() == Remote. Held the same non-owning way m_spectrumSink is:
+    // whoever constructs the link owns its lifetime, RadioModel never
+    // allocates or deletes it.
+    void attachStation(NereusSDR::IStationLink* link) { m_station = link; }
+    void detachStation() { m_station = nullptr; }
 
     // Sub-components
     RadioConnection*  connection()       { return m_connection; }
@@ -3332,6 +3364,14 @@ private:
     // Phase 3Q-1: RadioModel-level connection state machine.
     // Drives UI (TitleBar, ConnectionPanel, status bar, spectrum overlay).
     ConnectionState m_connectionState{ConnectionState::Disconnected};
+
+    // Remote-daemon R2 Task 4: set once at construction (see the Role
+    // constructor overload above), never mutated afterward.
+    Role m_role{Role::Local};
+
+    // Remote-daemon R2 Task 4: non-owning; see attachStation()/
+    // detachStation() above.
+    NereusSDR::IStationLink* m_station{nullptr};
 
     // Phase 3Q sub-PR-3: uptime tracking for NetworkDiagnosticsDialog.
     // Set to current time on Connected transition, cleared (default-constructed)

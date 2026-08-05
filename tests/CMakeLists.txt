@@ -6226,6 +6226,23 @@ nereus_add_test(tst_connected_state_equivalence
     fakes/ConnectableRadioModel.cpp)
 target_compile_definitions(tst_connected_state_equivalence PRIVATE NEREUS_BUILD_TESTS)
 
+# Remote Daemon R2, Task 4: RadioModel::Role, the station-link seam, and the
+# remote-inert guard. A Role::Remote model must never enter
+# connectToRadio()'s body -- no RadioConnection, no live WDSP RX channel, no
+# running AudioEngine -- because a later task's StateMirror drives it over
+# the wire instead. Drives both a Role::Local and a Role::Remote model
+# through connectToRadio() (via the Task 2 harness, extended here with a
+# Role parameter) and asserts opposite outcomes on the same four things, so
+# the test cannot pass against a no-op guard: a freshly constructed model
+# already satisfies every Remote-side assertion, since the constructor
+# allocates AudioEngine/WdspEngine but starts neither. Also pins that every
+# existing construction site keeps defaulting to Role::Local, and that
+# attachStation()/detachStation() hold their pointer non-owning.
+nereus_add_test(tst_remote_role_inert
+    fakes/P1FakeRadio.cpp
+    fakes/ConnectableRadioModel.cpp)
+target_compile_definitions(tst_remote_role_inert PRIVATE NEREUS_BUILD_TESTS)
+
 # R1 Task 10: DaemonApp connects the daemon to a radio (or runs discovery)
 # and creates min(cfg.sliceCount, connected-board-maxSlices) slices via
 # RadioModel's own addSlice() -- the same entry point connectToRadio()

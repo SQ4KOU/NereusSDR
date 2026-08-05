@@ -514,12 +514,27 @@ double scalePaTemperatureCelsius(quint16 /*adcRaw*/, HPSDRModel /*model*/)
 } // anonymous namespace
 
 RadioModel::RadioModel(QObject* parent)
+    : RadioModel(Role::Local, parent)
+{
+}
+
+// Remote-daemon R2 Task 4: the single-arg constructor above delegates here
+// with Role::Local, so this body (identical to the pre-Task-4 constructor
+// in every other respect) runs exactly once regardless of which overload
+// the caller used. m_role is assigned in the body rather than added to
+// the initializer list below: it is declared far below these four
+// pointer members (grouped with m_connectionState instead, for thematic
+// locality), and assigning it here avoids having to reorder either list
+// to match the other.
+RadioModel::RadioModel(Role role, QObject* parent)
     : QObject(parent)
     , m_discovery(new RadioDiscovery(this))
     , m_receiverManager(new ReceiverManager(this))
     , m_audioEngine(new AudioEngine(this))
     , m_wdspEngine(new WdspEngine(this))
 {
+    m_role = role;
+
     // Phase 3O: give AudioEngine a non-owning back-pointer to this model
     // so rxBlockReady() can look up per-slice mute / VAX state. Wired
     // immediately after construction; AudioEngine caches the pointer and
@@ -5757,6 +5772,27 @@ void RadioModel::removePanadapter(int index)
 
 void RadioModel::connectToRadio(const RadioInfo& info)
 {
+    // Remote-daemon R2 Task 4: a Role::Remote model has no RadioConnection,
+    // WdspEngine channel or AudioEngine to drive locally -- it exists so a
+    // GUI-only process can attach to a daemon-owned radio over the wire
+    // (R2 Task 18's wss session) instead of dialing one up itself. This
+    // early return is the mechanism: it fires before RadioConnection
+    // creation (m_connection = conn.release(), below in this function),
+    // before m_wdspEngine->initialize(), before m_audioEngine->start()
+    // (both inside the WdspEngine::initializedChanged lambda further
+    // down), before RxDspWorker construction, and before every per-slice
+    // wireSliceSignals() connect -- all of those live inside
+    // wireConnectionSignals(), which this function calls near its end and
+    // which this return means is simply never reached.
+    if (role() == Role::Remote) {
+        qCWarning(lcConnection) << "connectToRadio() called on a "
+                                    "Role::Remote RadioModel; ignoring. A "
+                                    "remote model has no local "
+                                    "RadioConnection to create -- attach a "
+                                    "station link instead.";
+        return;
+    }
+
     // Tear down any existing connection
     if (m_connection) {
         teardownConnection();

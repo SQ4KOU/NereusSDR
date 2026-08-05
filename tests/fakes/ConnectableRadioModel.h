@@ -27,6 +27,12 @@
 //              same way whether local or remote).
 //   Task 12 -- needs a genuinely live RxChannel off the connected model.
 //   Task 20 -- Setup-page realization sweep against a connected model.
+//
+// Remote-daemon R2 Task 4: create() now takes an optional RadioModel::Role
+// (defaults to Local, so every existing call site is unaffected). Passing
+// Role::Remote builds the model with that role instead of duplicating this
+// fixture's wiring in tst_remote_role_inert.cpp -- see create()'s doc
+// comment below for how the two roles diverge inside the factory.
 
 #pragma once
 
@@ -58,21 +64,34 @@ public:
     ConnectableRadioModel& operator=(const ConnectableRadioModel&) = delete;
     ~ConnectableRadioModel();
 
-    // Builds a P1FakeRadio and starts it, constructs a RadioModel, arms
-    // WdspEngine::setSynchronousInitForTest() on that model's engine
-    // BEFORE calling RadioModel::connectToRadio() (order matters -- see
-    // that method's doc comment), then pumps the Qt event loop (via
-    // QTest::qWaitFor) until RadioModel::connectionState() reaches
-    // ConnectionState::Connected or timeoutMs elapses.
+    // Builds a P1FakeRadio and starts it, constructs a RadioModel with the
+    // given role, arms WdspEngine::setSynchronousInitForTest() on that
+    // model's engine BEFORE calling RadioModel::connectToRadio() (order
+    // matters -- see that method's doc comment), then:
     //
-    // Returns nullptr on timeout. QVERIFY/QCOMPARE only fail the enclosing
-    // QtTest slot when used directly inside it -- their generated
-    // `return;` requires the function to return void -- so this factory
-    // reports failure through its return value instead of asserting
-    // internally, and leaves the QVERIFY(...) to the caller. On timeout,
-    // both the partially-connected model and the fake are torn down
-    // before returning null; nothing leaks.
-    static std::unique_ptr<ConnectableRadioModel> create(int timeoutMs = 10000);
+    //   role == Local  (default): pumps the Qt event loop (via
+    //     QTest::qWaitFor) until RadioModel::connectionState() reaches
+    //     ConnectionState::Connected or timeoutMs elapses. Returns nullptr
+    //     on timeout.
+    //
+    //   role == Remote: returns immediately after connectToRadio() with no
+    //     wait. A Role::Remote model's connectToRadio() is inert by design
+    //     (remote-daemon R2 Task 4's early-return guard) -- it never
+    //     touches WdspEngine, AudioEngine or the fake's socket, so it never
+    //     reaches Connected, and waiting for that would just burn
+    //     timeoutMs and report a false failure. timeoutMs is unused on
+    //     this path.
+    //
+    // QVERIFY/QCOMPARE only fail the enclosing QtTest slot when used
+    // directly inside it -- their generated `return;` requires the
+    // function to return void -- so this factory reports failure through
+    // its return value instead of asserting internally, and leaves the
+    // QVERIFY(...) to the caller. On a Local timeout, both the
+    // partially-connected model and the fake are torn down before
+    // returning null; nothing leaks.
+    static std::unique_ptr<ConnectableRadioModel> create(
+        int timeoutMs = 10000,
+        NereusSDR::RadioModel::Role role = NereusSDR::RadioModel::Role::Local);
 
     NereusSDR::RadioModel&       model()       { return *m_model; }
     const NereusSDR::RadioModel& model() const { return *m_model; }
