@@ -1469,7 +1469,23 @@ public:
     // RadioConnection, simulate band crossings, trigger the Connected
     // state handler, and override board capabilities. Production code
     // must never use these.
-    void injectConnectionForTest(RadioConnection* conn) { m_connection = conn; }
+    // Remote-daemon R2 Task 3: also drive m_connectionState, not just the
+    // pointer. isConnected() is storage-backed as of this task, and this
+    // seam does no signal wiring at all (no connectToRadio(), so
+    // connectionStateChanged never reaches onConnectionStateChanged), so a
+    // plain pointer assignment would leave m_connectionState stuck at
+    // Disconnected regardless of what the injected mock's own
+    // isConnected() reports. 24 test files across the suite rely on this
+    // seam standing in for a real connection; two of them (tst_p2_ddc_
+    // assignment_marshalling.cpp, tst_p2_ddc_mask_ownership.cpp) drive the
+    // isConnected() gate on the P2 DDC wire push (RadioModel.cpp:15412)
+    // through it, so keeping the two in lockstep here is what keeps those
+    // 24 sites working rather than just the pointer-consuming ones.
+    void injectConnectionForTest(RadioConnection* conn) {
+        m_connection = conn;
+        setConnectionState(conn != nullptr ? ConnectionState::Connected
+                                            : ConnectionState::Disconnected);
+    }
     // Install a real PureSignal coordinator without the full WDSP/connect
     // pipeline so codec-context tests can distinguish the auto-cal preference
     // from the cmd-state machine's effective PSEnabled state. RadioModel owns

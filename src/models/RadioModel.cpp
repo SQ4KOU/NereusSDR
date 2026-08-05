@@ -2475,7 +2475,17 @@ void RadioModel::restoreSpotClientAutoStartState()
 
 bool RadioModel::isConnected() const
 {
-    return m_connection && m_connection->isConnected();
+    // Storage-backed as of remote-daemon R2 Task 3 (was `m_connection &&
+    // m_connection->isConnected()`). A remote client that deliberately owns
+    // no RadioConnection (a StateMirror-driven GUI, from R2 onward) needs
+    // isConnected() to be settable from stored state alone, not derived
+    // from a pointer that will never exist on that side. m_connectionState
+    // is already the single source of truth connectionState() exposes
+    // (RadioModel.h:1433) and the sole thing setConnectionState() writes
+    // (:11743-11758), so this is a change of derivation, not of meaning.
+    // See docs/architecture/2026-08-03-remote-daemon-r2-r3-design-addendum.md
+    // section 5.
+    return m_connectionState == ConnectionState::Connected;
 }
 
 void RadioModel::setStepAttController(StepAttenuatorController* c)
@@ -11616,6 +11626,24 @@ void RadioModel::teardownConnection()
     // and spectrum silently drop on the second connect.
     m_receiverManager->reset();
 
+    // Phase 3Q polish, hoisted ahead of teardownWorkerThreadedConnection
+    // (remote-daemon R2 Task 3). The QObject::disconnect() call above
+    // already severed connectionStateChanged, so the model's state machine
+    // never naturally sees the RadioConnection's own eventual
+    // setState(Disconnected), no matter when this call runs. Force it
+    // here, proactively, so the panel strip + TitleBar + bottom status bar
+    // all flip to Disconnected after a user-initiated disconnect.
+    //
+    // Placement matters: this now runs BEFORE
+    // teardownWorkerThreadedConnection nulls m_connection, not after.
+    // isConnected() is storage-backed (m_connectionState) as of this task,
+    // so the old placement left a window, between the pointer going null
+    // and this call finally running, where m_connection was already gone
+    // but isConnected() still read stale-Connected. See design addendum
+    // docs/architecture/2026-08-03-remote-daemon-r2-r3-design-addendum.md
+    // section 5.
+    setConnectionState(ConnectionState::Disconnected);
+
     // Tear down the connection on its own worker thread via the shared
     // helper. See src/core/RadioConnectionTeardown.h for why this must
     // run on the worker — short version: the RadioConnection's QTimers
@@ -11639,13 +11667,6 @@ void RadioModel::teardownConnection()
     if (m_discovery) {
         m_discovery->holdOffScans(kPostDisconnectScanQuietMs);
     }
-
-    // Phase 3Q polish: above disconnect() severed connectionStateChanged
-    // before the RadioConnection's own setState(Disconnected) ran, so the
-    // model's state machine never sees the transition and sticks at
-    // Connected. Force it here so the panel strip + TitleBar + bottom
-    // status bar all flip to Disconnected after a Radio→Disconnect.
-    setConnectionState(ConnectionState::Disconnected);
 }
 
 // Phase 3G-9b — 7 smooth-default recipe values. See docs/architecture/waterfall-tuning.md.

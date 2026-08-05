@@ -6209,6 +6209,23 @@ nereus_add_test(tst_connectable_radio_model
     fakes/ConnectableRadioModel.cpp)
 target_compile_definitions(tst_connectable_radio_model PRIVATE NEREUS_BUILD_TESTS)
 
+# Remote Daemon R2, Task 3: make connected state storage-backed.
+# RadioModel::isConnected() used to derive from the connection pointer
+# (m_connection && m_connection->isConnected()), so a remote client that
+# deliberately owns no RadioConnection would report disconnected forever,
+# and maxSlices() short-circuits on that to 1. isConnected() is now
+# m_connectionState-backed, and setConnectionState(Disconnected) is hoisted
+# ahead of teardownWorkerThreadedConnection in teardownConnection() so
+# there is no window where m_connection is already null but isConnected()
+# still reads stale-Connected. Uses the Task 2 ConnectableRadioModel
+# harness to prove the new and old derivations agree across a REAL connect
+# and teardown, not just sampled before and after -- including the
+# disconnect transition observed from inside teardownConnection() itself.
+nereus_add_test(tst_connected_state_equivalence
+    fakes/P1FakeRadio.cpp
+    fakes/ConnectableRadioModel.cpp)
+target_compile_definitions(tst_connected_state_equivalence PRIVATE NEREUS_BUILD_TESTS)
+
 # R1 Task 10: DaemonApp connects the daemon to a radio (or runs discovery)
 # and creates min(cfg.sliceCount, connected-board-maxSlices) slices via
 # RadioModel's own addSlice() -- the same entry point connectToRadio()
