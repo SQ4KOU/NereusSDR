@@ -44,6 +44,17 @@
 // silently clobbering the existing watch, which would orphan it inside
 // StateMirror while this registry's own bookkeeping moved on.
 //
+// A gap closed in this task's first review round: the constructor only
+// wires the two connects above, so a slice RadioModel already holds BEFORE
+// this object is constructed is invisible until something calls
+// backfillExistingSlices() explicitly (see its own doc comment for why that
+// call cannot be made automatic). This is not hypothetical:
+// DaemonApp::start() (src/core/daemon/DaemonApp.cpp) already creates slices
+// with no StateMirror/ObjectRegistry anywhere in src/core/daemon/, so a
+// daemon that only builds the mirror pair once a remote client connects has
+// live slices waiting for it from the moment it starts, and a client that
+// connects to a long-running daemon must still learn about all of them.
+//
 // Scoped to slices only, matching this task's brief ("Task 9: Slice
 // lifecycle, tolerant of id reuse"). The other four mirrored model classes
 // (RadioModel, TransmitModel, TunerModel, PanadapterModel) are constructed
@@ -95,11 +106,43 @@ public:
     /// encoder, this class's own tests -- builds the identical string.
     static QByteArray keyForSlice(int sliceId);
 
+    /// Watches every slice `radioModel` already holds that this registry
+    /// does not yet know about, emitting objectCreated for each with a
+    /// full settled snapshot: exactly what onSliceAdded() would have
+    /// produced had this registry existed at the moment each of them was
+    /// added.
+    ///
+    /// NOT called automatically by the constructor. An objectCreated fired
+    /// from inside a constructor could reach no listener at all -- nothing
+    /// can connect to a QObject's signals before its constructor returns
+    /// control to the caller -- which would defeat the whole point for the
+    /// one consumer that matters: whatever forwards this signal onto a
+    /// wire (Task 18). Call this explicitly once the caller has finished
+    /// wiring its own listeners to objectCreated/objectDestroyed. If
+    /// RadioModel may already hold slices at construction time (true for
+    /// any daemon-lifetime construction after DaemonApp::start() has run),
+    /// call it right after that wiring, before doing anything else.
+    ///
+    /// Idempotent: a slice already in the live set (because a real
+    /// sliceAdded already ran for it, or an earlier call to this method
+    /// already caught it) is silently skipped, not re-created and not
+    /// logged as a protocol error. Re-encountering an id here is the
+    /// expected, normal case for a second or later call, unlike
+    /// onSliceAdded()'s duplicate guard, which treats it as a bug.
+    void backfillExistingSlices();
+
     /// True while this registry currently has `sliceId` watched (between
-    /// its create and its destroy).
+    /// its create and its destroy). Checks the stored QPointer is still
+    /// non-null, not just key presence: SliceModel is parented to
+    /// RadioModel, so if RadioModel is destroyed while this registry is
+    /// still alive, Qt's parent-child cleanup deletes every surviving
+    /// SliceModel directly, without RadioModel::removeSlice() ever running
+    /// and without a sliceRemoved signal -- m_live's keys would otherwise
+    /// go stale.
     bool isLive(int sliceId) const;
 
-    /// Currently-live slice ids, ascending.
+    /// Currently-live slice ids, ascending. Same QPointer-validity filter
+    /// as isLive().
     QList<int> liveSliceIds() const;
 
 signals:
@@ -121,7 +164,12 @@ public slots:
     /// Connected to RadioModel::sliceAdded. Public so a test can drive it
     /// directly (see tst_mirror_lifecycle.cpp's duplicate-create case);
     /// not meant to be called from production code other than via that
-    /// connection.
+    /// connection, and deliberately NOT the backfill mechanism either
+    /// (calling it in a loop over pre-existing slices would report every
+    /// one of them but the first as a protocol error). Use
+    /// backfillExistingSlices() for that instead; it shares this slot's
+    /// watch-plus-snapshot-plus-emit logic through the private helper
+    /// below without sharing its live-id guard's meaning.
     void onSliceAdded(int sliceId);
 
     /// Connected to RadioModel::sliceRemoved. See the class comment for why
@@ -130,6 +178,14 @@ public slots:
     void onSliceRemoved(int sliceId);
 
 private:
+    /// Shared by onSliceAdded() and backfillExistingSlices() once each has
+    /// decided `slice` is genuinely new: watch it, take the settled
+    /// snapshot, record it in m_live, emit objectCreated. Assumes `slice`
+    /// is non-null and not already in m_live; both callers check that in
+    /// their own way (one as a protocol error, one silently) before
+    /// reaching here.
+    void createForSlice(SliceModel* slice);
+
     QPointer<RadioModel> m_radioModel;
     QPointer<StateMirror> m_mirror;
 

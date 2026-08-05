@@ -285,6 +285,111 @@ private slots:
         QCOMPARE(idProp->value.toInt(), a);
     }
 
+    // ── Fix round 1: backfilling slices that predate the registry ──────
+
+    // DaemonApp::start() (src/core/daemon/DaemonApp.cpp) already creates
+    // slices directly through RadioModel::addSlice() with no
+    // StateMirror/ObjectRegistry anywhere in src/core/daemon/. A daemon
+    // that only builds the mirror pair once a remote client connects
+    // therefore has live slices waiting for it from the moment it starts,
+    // and the registry's constructor alone (two connect() calls, no
+    // enumeration) cannot see them. backfillExistingSlices() is the fix:
+    // this test constructs the registry AFTER three slices already exist
+    // and proves all three become properly watched, full-snapshot objects.
+    void backfillWatchesSlicesThatAlreadyExistedBeforeConstruction()
+    {
+        RadioModel model;
+        model.configureStreamPool(5, 5, 192000);
+        const int a = model.addSlice(QStringLiteral("pan-a"));
+        const int b = model.addSlice(QStringLiteral("pan-b"));
+        const int c = model.addSlice(QStringLiteral("pan-c"));
+        QVERIFY(a >= 0);
+        QVERIFY(b >= 0);
+        QVERIFY(c >= 0);
+
+        // The registry is constructed AFTER all three already exist: the
+        // exact ordering DaemonApp::start() creates today, and the one
+        // review round 1 found completely unhandled.
+        StateMirror mirror;
+        ObjectRegistry registry(&model, &mirror);
+        Log log(&mirror, &registry);
+        QVERIFY2(!registry.isLive(a) && !registry.isLive(b) && !registry.isLive(c),
+                 "construction alone must not retroactively watch anything; "
+                 "that is precisely the gap backfillExistingSlices() closes");
+        QVERIFY2(log.entries.isEmpty(),
+                 "nothing should have been announced before the backfill runs");
+
+        registry.backfillExistingSlices();
+
+        QCOMPARE(log.entries.size(), 3);
+        QVERIFY(registry.isLive(a));
+        QVERIFY(registry.isLive(b));
+        QVERIFY(registry.isLive(c));
+        QCOMPARE(registry.liveSliceIds(), (QList<int>{ a, b, c }));
+
+        // Each entry is a genuine create (not merely "something happened"),
+        // and each carries a FULL, settled property bag -- streamIndex is
+        // genuinely bound (configureStreamPool ran before any addSlice()),
+        // so its presence with the real bound value proves this is the same
+        // StateMirror::snapshot() path the live sliceAdded case uses, not a stub.
+        for (int id : { a, b, c }) {
+            const QByteArray key = ObjectRegistry::keyForSlice(id);
+            const int idx = log.indexOfCreate(key);
+            QVERIFY2(idx >= 0, qPrintable(key));
+            QCOMPARE(log.entries.at(idx).className, QByteArray("SliceModel"));
+            QCOMPARE(log.entries.at(idx).id, id);
+
+            SliceModel* slice = model.sliceById(id);
+            QVERIFY(slice != nullptr);
+            const MirrorUpdate* streamIdx = log.createSnapshotProperty(key, "streamIndex");
+            QVERIFY2(streamIdx != nullptr, qPrintable(key));
+            QCOMPARE(streamIdx->value.toInt(), slice->streamIndex());
+            QVERIFY(streamIdx->value.toInt() >= 0);
+
+            const MirrorUpdate* sliceIdxProp = log.createSnapshotProperty(key, "sliceIndex");
+            QVERIFY2(sliceIdxProp != nullptr, qPrintable(key));
+            QCOMPARE(sliceIdxProp->value.toInt(), id);
+        }
+
+        // Idempotent: a second call with nothing new must be a silent no-op.
+        log.entries.clear();
+        registry.backfillExistingSlices();
+        QVERIFY2(log.entries.isEmpty(), "a second backfill call must not re-create anything");
+        QCOMPARE(registry.liveSliceIds(), (QList<int>{ a, b, c }));
+
+        // The ordinary live path still works normally afterward: a slice
+        // added AFTER the backfill produces a normal create through
+        // onSliceAdded(), not through backfill logic.
+        const int d = model.addSlice(QStringLiteral("pan-d"));
+        QVERIFY(d >= 0);
+        QCOMPARE(log.entries.size(), 1);
+        QCOMPARE(log.entries.first().kind, LogEntry::Kind::Create);
+        QCOMPARE(log.entries.first().key, ObjectRegistry::keyForSlice(d));
+    }
+
+    // Symmetric with the duplicate-create guard: backfilling must not
+    // re-announce a slice a real sliceAdded() already caught, and must not
+    // treat that overlap as a protocol error the way onSliceAdded() would.
+    void backfillSkipsSlicesTheLiveSignalAlreadyCaught()
+    {
+        RadioModel model;
+        model.configureStreamPool(5, 5, 192000);
+        StateMirror mirror;
+        ObjectRegistry registry(&model, &mirror); // constructed FIRST this time
+        Log log(&mirror, &registry);
+
+        const int a = model.addSlice(); // real, live sliceAdded -> normal create
+        QCOMPARE(log.entries.size(), 1);
+        QVERIFY(registry.isLive(a));
+        log.entries.clear();
+
+        registry.backfillExistingSlices();
+
+        QVERIFY2(log.entries.isEmpty(),
+                 "a slice already watched via the live signal must not be "
+                 "re-announced by a later backfill call");
+    }
+
     // ── Step 4: a create for a live id is a protocol error ──────────────
 
     // RadioModel's own id allocator (addSlice() always scans for the

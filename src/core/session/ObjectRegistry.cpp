@@ -65,12 +65,29 @@ QByteArray ObjectRegistry::keyForSlice(int sliceId)
 
 bool ObjectRegistry::isLive(int sliceId) const
 {
-    return m_live.contains(sliceId);
+    const auto it = m_live.constFind(sliceId);
+    // A key can outlive its object's validity: SliceModel is parented to
+    // RadioModel (RadioModel.cpp, new SliceModel(this) inside addSlice()),
+    // so if RadioModel is destroyed while this registry is still alive,
+    // Qt's parent-child cleanup deletes every surviving SliceModel
+    // directly, without RadioModel::removeSlice() running and without a
+    // sliceRemoved signal to prompt onSliceRemoved() to clear the entry.
+    // StateMirror stays correct regardless (it has its own, independent
+    // QObject::destroyed cleanup), but this accessor would otherwise keep
+    // reporting a dead id as live.
+    return it != m_live.constEnd() && !it.value().isNull();
 }
 
 QList<int> ObjectRegistry::liveSliceIds() const
 {
-    return m_live.keys();
+    QList<int> ids;
+    ids.reserve(m_live.size());
+    for (auto it = m_live.constBegin(); it != m_live.constEnd(); ++it) {
+        if (!it.value().isNull()) {
+            ids.append(it.key());
+        }
+    }
+    return ids;
 }
 
 void ObjectRegistry::onSliceAdded(int sliceId)
@@ -105,6 +122,36 @@ void ObjectRegistry::onSliceAdded(int sliceId)
         return;
     }
 
+    createForSlice(slice);
+}
+
+void ObjectRegistry::backfillExistingSlices()
+{
+    if (!m_radioModel || !m_mirror) { return; }
+
+    // Every slice RadioModel already holds, regardless of when each of
+    // them was actually added relative to this registry's own
+    // construction. Order is RadioModel::slices()'s own list order, not
+    // necessarily ascending id (removeSlice() never renumbers survivors),
+    // but nothing here depends on that ordering.
+    for (SliceModel* slice : m_radioModel->slices()) {
+        if (slice == nullptr) { continue; }
+        if (m_live.contains(slice->sliceIndex())) {
+            // Already watched: a real sliceAdded() already ran for it (this
+            // registry existed before this particular slice did), or an
+            // earlier call to this same method already caught it. Expected
+            // and silent, unlike onSliceAdded()'s duplicate guard, which
+            // treats the same condition as a bug: re-entering this method
+            // is the whole point of it being idempotent.
+            continue;
+        }
+        createForSlice(slice);
+    }
+}
+
+void ObjectRegistry::createForSlice(SliceModel* slice)
+{
+    const int sliceId = slice->sliceIndex();
     const QByteArray key = keyForSlice(sliceId);
     if (!m_mirror->watch(key, slice)) {
         // StateMirror::watch() already logged the specific reason (not
@@ -120,13 +167,14 @@ void ObjectRegistry::onSliceAdded(int sliceId)
     const QByteArray className =
         MirrorSchema::shortClassName(MirrorSchema::forObject(slice).className());
 
-    // The FULL settled snapshot, taken now. addSlice() runs the TX arbiter
-    // resync, a frequency/mode seed from the active slice, the stream bind
-    // (setStreamIndex / setShiftOffsetHz, possibly moving another stream's
-    // centre) and wireSliceSignals, all BEFORE it ever emits sliceAdded.
-    // Watching begins only here, so none of those intermediate changes was
+    // The FULL settled snapshot, taken now. Whether `slice` just finished
+    // addSlice()'s TX arbiter resync, frequency/mode seed, stream bind and
+    // wireSliceSignals (the onSliceAdded() caller) or has been sitting
+    // fully wired for however long (the backfillExistingSlices() caller),
+    // this reads its CURRENT state, which is settled either way. Watching
+    // begins only here, so no intermediate construction-time change was
     // ever observed, and this create carries one settled state rather than
-    // a replay of the object's construction history.
+    // a replay of history.
     const QList<MirrorUpdate> snapshot = m_mirror->snapshot(key);
     emit objectCreated(key, className, sliceId, snapshot);
 }
