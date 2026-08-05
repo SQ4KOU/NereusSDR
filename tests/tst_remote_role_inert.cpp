@@ -38,15 +38,22 @@
 // =================================================================
 
 #include <QtTest/QtTest>
+#include <QSignalSpy>
 
 #include <memory>
 
+#include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/ConnectionState.h"
+#include "core/DxClusterClient.h"
+#include "core/TxSliceArbiter.h"
 #include "core/WdspEngine.h"
+#include "core/WdspTypes.h"
+#include "core/WsjtxClient.h"
 #include "core/session/IStationLink.h"
 #include "fakes/ConnectableRadioModel.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
 
 using namespace NereusSDR;
 using NereusSDR::Test::ConnectableRadioModel;
@@ -154,6 +161,201 @@ private slots:
         // Re-attach and let `model` be destroyed (end of scope) with the
         // link still attached, proving RadioModel does not delete it.
         model.attachStation(&link);
+    }
+
+    // =============================================================
+    // Remote-daemon R2 Task 5 -- the four local authorities that keep
+    // running behind a Role::Remote model's null connection and each
+    // fight the daemon (design addendum
+    // docs/architecture/2026-08-03-remote-daemon-r2-r3-design-addendum.md
+    // section 4.1). "Null connection means inert" is false: these four
+    // tests each drive one authority the way a future StateMirror
+    // inbound-apply (task 8) will -- by calling the same SliceModel /
+    // RadioModel entry point a local operator action uses -- and assert
+    // it does nothing on a Role::Remote model.
+    //
+    // The brief this task was dispatched from listed a fifth assertion,
+    // "SliceMeterPump is not constructed in Role::Remote". That class
+    // does not exist anywhere in this tree: it is task 12's own
+    // deliverable ("Create src/core/meters/SliceMeterPump.{h,cpp}"),
+    // task 12's dependency line names tasks 2 and 4 only (not this one),
+    // and task 12 step 4b is where its own Role::Remote guard is
+    // specified. The design addendum's own section 4.1 is titled "Four
+    // local authorities", not five, and enumerates exactly the four
+    // covered below. Writing a test (or a guard) for a class task 12
+    // has not created yet would be fabricating both. See
+    // task-5-report.md for the full evidence trail.
+    // =============================================================
+
+    // (a) The stream allocator. addSlice() wires an unconditional
+    // frequencyChanged handler (RadioModel.cpp, inside addSlice) that
+    // calls bindSliceToStream on every frequency change regardless of
+    // role. Sizing the pool FIRST via the test-only
+    // configureStreamPoolForTest seam matters: production
+    // configureStreamPool no-ops for Role::Remote (this task's step 2),
+    // so a test that never sizes the pool would already see
+    // bindSliceToStream's pre-existing "unsized pool" guard return false
+    // -- true with or without this task's role guard, proving nothing.
+    // Sizing first removes that confound: with no role guard at all, an
+    // unbound slice's first mirrored delta against a sized, empty pool
+    // succeeds (NewStream), which visibly changes streamIndex from -1.
+    void remoteMirroredFrequencyDeltaLeavesStreamBindingUntouched()
+    {
+        RadioModel model{RadioModel::Role::Remote};
+
+        const int sliceId = model.addSlice();
+        QVERIFY(sliceId >= 0);
+        SliceModel* slice = model.sliceById(sliceId);
+        QVERIFY(slice != nullptr);
+
+        // Added AFTER addSlice() so the slice survives unbound (pool was
+        // unsized at add time -- the pre-existing "Slice A must survive"
+        // path, unrelated to this task's guard).
+        model.configureStreamPoolForTest(2, 2, 192000);
+
+        const int    streamIndexBefore = slice->streamIndex();
+        const double shiftBefore       = slice->shiftOffsetHz();
+        const int    rateBefore        = slice->sampleRateHz();
+
+        QSignalSpy retuneRejectedSpy(&model, &RadioModel::sliceRetuneRejected);
+
+        // The mirrored delta: SliceModel::setFrequency is the same entry
+        // point a local VFO drag uses, and it is what a future StateMirror
+        // inbound-apply will call to reflect the daemon's own retune.
+        slice->setFrequency(slice->frequency() + 100000.0);
+
+        QCOMPARE(slice->streamIndex(), streamIndexBefore);
+        QCOMPARE(slice->shiftOffsetHz(), shiftBefore);
+        QCOMPARE(slice->sampleRateHz(), rateBefore);
+        QCOMPARE(retuneRejectedSpy.count(), 0);
+    }
+
+    // (b) SliceModel's one reach-through into the DSP engine.
+    // setDspMode does qobject_cast<RadioModel*>(parent()) and, on entry
+    // into a RADE sideband, calls WdspEngine::createRadeChannel, which
+    // carries no isInitialized guard (WdspEngine.cpp:685: "no
+    // m_initialized requirement"). A Role::Remote model's WdspEngine is
+    // constructed but never initialize()'d (task 4), so without a role
+    // guard here this would construct and start() a live RadeChannel --
+    // a real vocoder -- on a machine with no DSP role at all.
+    void remoteMirroredRadeModeDoesNotCreateRadeChannel()
+    {
+        RadioModel model{RadioModel::Role::Remote};
+
+        const int sliceId = model.addSlice();
+        QVERIFY(sliceId >= 0);
+        SliceModel* slice = model.sliceById(sliceId);
+        QVERIFY(slice != nullptr);
+
+        QVERIFY(model.wdspEngine()->radeChannel(slice->sliceIndex()) == nullptr);
+
+        // The mirrored transition: a future StateMirror inbound-apply
+        // reflects the daemon's dspMode the same way a local mode-button
+        // press does, through this same setter.
+        slice->setDspMode(DSPMode::RADE_U);
+
+        QVERIFY(model.wdspEngine()->radeChannel(slice->sliceIndex()) == nullptr);
+    }
+
+    // (c) TxSliceArbiter. addSlice() calls
+    // TxSliceArbiter::syncToSliceList() unconditionally, and on the
+    // first slice added (nothing yet flagged) its "initial bind" arm
+    // calls SliceModel::setTxSlice(true) -- which slice transmits is the
+    // daemon's decision, mirrored in later than this task, not a value a
+    // Role::Remote client should compute for itself.
+    void remoteAddSliceDoesNotClaimTxSlice()
+    {
+        RadioModel model{RadioModel::Role::Remote};
+
+        const int sliceId = model.addSlice();
+        QVERIFY(sliceId >= 0);
+        SliceModel* slice = model.sliceById(sliceId);
+        QVERIFY(slice != nullptr);
+
+        QVERIFY(!slice->isTxSlice());
+        QCOMPARE(model.txSliceArbiter()->txBoundSliceId(), -1);
+    }
+
+    // (d) The spot collectors. restoreSpotClientAutoStartState() is
+    // called once at GUI startup (MainWindow.cpp:771) with no dependence
+    // on connection state, so a Role::Remote GUI process would otherwise
+    // dial every auto-start-enabled spot source itself -- duplicating
+    // whatever the daemon also does, including logging into the same DX
+    // cluster and uploading to PSK Reporter under one callsign (design
+    // addendum risk 9). Proven WITHOUT touching the network: DxCluster /
+    // RBN point at 127.0.0.1 on a port nothing listens on, so the Local
+    // arm's connect attempt is refused on loopback (no packet ever
+    // leaves the machine) and observed via connectionError; WSJT-X binds
+    // a local UDP socket, observed via isListening(). See
+    // task-5-controller-notes.md "Step 5, the spot collectors" -- POTA is
+    // deliberately not exercised here because PotaClient::startPolling()
+    // fires an immediate synchronous poll against the real
+    // api.pota.app, which this task's "do not touch the network"
+    // constraint rules out; the three sources below already prove the
+    // gate is a single whole-function guard, not a per-source one.
+    void remoteRestoreSpotClientAutoStartStateStaysSilent()
+    {
+        auto& settings = AppSettings::instance();
+        settings.clear();
+
+        settings.setValue("DxClusterAutoConnect", "True");
+        settings.setValue("DxClusterHost", "127.0.0.1");
+        settings.setValue("DxClusterPort", 18291);
+        settings.setValue("DxClusterCallsign", "KG4VCF");
+
+        settings.setValue("RbnAutoConnect", "True");
+        settings.setValue("RbnHost", "127.0.0.1");
+        settings.setValue("RbnPort", 18292);
+        settings.setValue("RbnCallsign", "KG4VCF");
+
+        settings.setValue("WsjtxAutoStart", "True");
+        settings.setValue("WsjtxAddress", "127.0.0.1");
+        settings.setValue("WsjtxPort", 28291);
+
+        {
+            // Local arm: the restore must still run for real -- proves
+            // the guard this task adds is role-gated, not a blanket
+            // no-op that would silently regress local direct mode.
+            RadioModel local{RadioModel::Role::Local};
+            QSignalSpy dxErrorSpy(local.dxCluster(),
+                                  &DxClusterClient::connectionError);
+            QSignalSpy rbnErrorSpy(local.rbn(),
+                                   &DxClusterClient::connectionError);
+
+            local.restoreSpotClientAutoStartState();
+
+            QVERIFY(QTest::qWaitFor(
+                [&]() { return dxErrorSpy.count() > 0; }, 3000));
+            QVERIFY(QTest::qWaitFor(
+                [&]() { return rbnErrorSpy.count() > 0; }, 3000));
+            QVERIFY(local.wsjtx()->isListening());
+        }
+
+        {
+            // Remote arm: must produce silence -- no connect attempt (so
+            // no connectionError, ever, not even a refused one) and no
+            // UDP bind.
+            RadioModel remote{RadioModel::Role::Remote};
+            QSignalSpy dxErrorSpy(remote.dxCluster(),
+                                  &DxClusterClient::connectionError);
+            QSignalSpy rbnErrorSpy(remote.rbn(),
+                                   &DxClusterClient::connectionError);
+
+            remote.restoreSpotClientAutoStartState();
+
+            // Give a wrongly-not-guarded implementation's async connect
+            // time to fail, so absence is observed, not merely unproven
+            // yet.
+            QTest::qWait(500);
+
+            QCOMPARE(dxErrorSpy.count(), 0);
+            QCOMPARE(rbnErrorSpy.count(), 0);
+            QVERIFY(!remote.dxCluster()->isConnected());
+            QVERIFY(!remote.rbn()->isConnected());
+            QVERIFY(!remote.wsjtx()->isListening());
+        }
+
+        settings.clear();
     }
 };
 

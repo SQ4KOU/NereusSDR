@@ -51,6 +51,19 @@ public:
     /// flags on SliceModel instances.
     void setSliceList(QVector<SliceModel*>* slices);
 
+    /// Remote-daemon R2 Task 5: set by RadioModel at construction wiring
+    /// time (RadioModel::role() == Role::Remote), next to the
+    /// setMoxController / setSliceList injections above. TxSliceArbiter
+    /// has no route to RadioModel::role() of its own -- it holds only a
+    /// MoxController* and a QVector<SliceModel*>* -- so the role has to
+    /// be handed in explicitly. When true, syncToSliceList() and
+    /// requestHandoff() both no-op: which slice transmits is the
+    /// daemon's decision, mirrored in by a later task, not a value a
+    /// remote client should compute for itself. See design addendum
+    /// docs/architecture/2026-08-03-remote-daemon-r2-r3-design-
+    /// addendum.md section 4.1.
+    void setRemote(bool remote) { m_remote = remote; }
+
     /// Set the MAC address used as the per-radio AppSettings scope key for
     /// save()/load(). When unset (empty), save()/load() are no-ops.
     void setMacAddress(const QString& mac) { m_mac = mac; }
@@ -102,6 +115,7 @@ private:
     MoxController*            m_mox {nullptr};
     QVector<SliceModel*>*     m_slices {nullptr};  // non-owning pointer to RadioModel's list
     QString                   m_mac;               // per-radio AppSettings scope key
+    bool                      m_remote {false};    // Remote-daemon R2 Task 5
 };
 
 } // namespace NereusSDR

@@ -782,6 +782,14 @@ RadioModel::RadioModel(Role role, QObject* parent)
     m_txSliceArbiter = new TxSliceArbiter(this);
     m_txSliceArbiter->setSliceList(&m_slices);
     m_txSliceArbiter->setMoxController(m_moxController);
+    // Remote-daemon R2 Task 5: TxSliceArbiter has no route to role() of
+    // its own (it holds only a MoxController* and a slice-list pointer),
+    // so hand it in explicitly at the same construction-wiring point as
+    // the two injections above. See TxSliceArbiter::setRemote's doc
+    // comment. m_role, not role() -- the constructor parameter `role`
+    // (already copied into m_role above) shadows the role() accessor
+    // inside this function body.
+    m_txSliceArbiter->setRemote(m_role == Role::Remote);
 
     // RF-SAFETY: handing the transmitter to another slice moves the transmit
     // frequency, and with it the Alex TX low-pass. Push immediately rather
@@ -2357,6 +2365,19 @@ void RadioModel::onPskReporterSpotReceived(const DxSpot& spot)
 // stays a single call site.
 void RadioModel::restoreSpotClientAutoStartState()
 {
+    // Remote-daemon R2 Task 5: gated to Role::Local. This is a safety
+    // measure, not an ownership decision -- it exists only to stop a
+    // Role::Remote GUI process from independently dialing every
+    // auto-start-enabled spot source at startup, duplicating whatever
+    // the daemon side also does: two DX cluster logins, two PSK Reporter
+    // uploads under one callsign. Which side SHOULD own each collector
+    // (client vs. station) is an open question this task does not
+    // settle -- see docs/architecture/2026-08-03-remote-daemon-r2-open-
+    // issues.md and this task's verification README paragraph for the
+    // per-source breakdown. Do not read this gate as having decided
+    // that question; it has not.
+    if (role() != Role::Local) { return; }
+
     auto& s = AppSettings::instance();
     auto isTrue = [&s](const QString& key) {
         return s.value(key, QStringLiteral("False")).toString()
@@ -3075,6 +3096,24 @@ double RadioModel::rxMeterOffsetDb() const
 
 void RadioModel::configureStreamPool(int userDdcCount, int maxSlices,
                                      int defaultRateHz)
+{
+    // Remote-daemon R2 Task 5: defense in depth alongside the
+    // bindSliceToStream role guard above. connectToRadio() already never
+    // reaches this call for Role::Remote (task 4's early return), so in
+    // production this is currently unreachable for Remote -- but a future
+    // caller (a station-capabilities apply outside connectToRadio, once
+    // task 8 lands) must not size a local allocator the daemon is the
+    // only one placing slices against. See design addendum
+    // docs/architecture/2026-08-03-remote-daemon-r2-r3-design-addendum.md
+    // section 4.1, and configureStreamPoolForTest below for how a test
+    // sizes the pool despite this guard.
+    if (role() == Role::Remote) { return; }
+
+    configureStreamPoolImpl(userDdcCount, maxSlices, defaultRateHz);
+}
+
+void RadioModel::configureStreamPoolImpl(int userDdcCount, int maxSlices,
+                                         int defaultRateHz)
 {
     m_streamAllocator.configure(userDdcCount, maxSlices);
     m_streamAllocator.setDefaultSampleRateHz(defaultRateHz);
@@ -4232,6 +4271,25 @@ bool RadioModel::bindSliceToStream(SliceModel* slice, double frequencyHz,
                                    bool preferOwnStream)
 {
     if (!slice) { return false; }
+
+    // Remote-daemon R2 Task 5: the daemon owns the DDC allocator; a
+    // Role::Remote client must never place, retune or evict a stream of
+    // its own. Silent, matching the pool-not-sized return just below --
+    // this fires on every mirrored VFO delta once StateMirror lands
+    // (task 8), which is routine operation, not a misuse to warn about.
+    //
+    // Without this, addSlice()'s unconditional frequencyChanged handler
+    // runs bindSliceToStream on every mirrored delta once the pool is
+    // sized, overwrites streamIndex / shiftOffsetHz / sampleRateHz with a
+    // locally-computed placement, and on disagreement rolls the
+    // operator's VFO back and reports the retune as rejected. See design
+    // addendum docs/architecture/2026-08-03-remote-daemon-r2-r3-design-
+    // addendum.md section 4.1. Paired with the sizing guard in
+    // configureStreamPool: neither alone is enough -- sizing without this
+    // bind guard is one missed call site away from the same bug, and this
+    // bind guard without the sizing guard still leaves a sized allocator
+    // for some later path to place slices against.
+    if (role() == Role::Remote) { return false; }
 
     // No pool yet (disconnected, or connectToRadio has not reached
     // configureStreamPool). There is no DDC to bind to, and an unsized

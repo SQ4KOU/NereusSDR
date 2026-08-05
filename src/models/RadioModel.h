@@ -3008,7 +3008,10 @@ public:
     /// Returns false and emits sliceAddRejected when the hardware has no
     /// room. Returns false silently when the pool has not been sized yet
     /// (disconnected): there is no DDC to bind to, and a slice with
-    /// streamIndex() < 0 is unbound and feeds nothing.
+    /// streamIndex() < 0 is unbound and feeds nothing. Also returns false
+    /// silently for a Role::Remote model (remote-daemon R2 Task 5): the
+    /// daemon owns the allocator, so this model must never place, retune
+    /// or evict a stream of its own.
     /// `preferOwnStream` is forwarded to SliceStreamAllocator::placeSlice on a
     /// first bind, and says the caller wants an independent window rather than
     /// the cheapest placement. Set by the +PAN path; see that header for why a
@@ -3110,6 +3113,19 @@ public:
         seedConnectFrequency(slice);
     }
 
+    /// Remote-daemon R2 Task 5 test seam: sizes m_streamAllocator via the
+    /// same body configureStreamPool uses, bypassing that method's
+    /// Role::Remote guard (see configureStreamPool's definition). A test
+    /// proving bindSliceToStream's OWN role guard blocks a mutation needs
+    /// a sized-but-Remote pool to do it against -- an unsized pool already
+    /// makes bindSliceToStream return false through the pre-existing
+    /// "pool not sized yet" path, which would pass even with no Task 5
+    /// guard at all. See task-5-controller-notes.md.
+    void configureStreamPoolForTest(int userDdcCount, int maxSlices,
+                                    int defaultRateHz) {
+        configureStreamPoolImpl(userDdcCount, maxSlices, defaultRateHz);
+    }
+
 private:
     struct PlannedSlicePlacement {
         int sliceId{-1};
@@ -3127,6 +3143,12 @@ private:
     planStreamSampleRateChange(int streamIndex, int rateHz) const;
 
     void commitStreamSampleRateChange(const StreamRateChangePlan& plan);
+
+    /// Remote-daemon R2 Task 5: the actual sizing body, shared by
+    /// configureStreamPool (gated on Role::Local) and
+    /// configureStreamPoolForTest (unconditional). See both definitions.
+    void configureStreamPoolImpl(int userDdcCount, int maxSlices,
+                                 int defaultRateHz);
 
     // Sub-components (owned, main thread)
     RadioDiscovery*  m_discovery{nullptr};

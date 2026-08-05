@@ -288,7 +288,17 @@ void SliceModel::setDspMode(DSPMode mode)
         }
 
         auto* radio = qobject_cast<RadioModel*>(parent());
-        if (radio != nullptr) {
+        // Remote-daemon R2 Task 5: the only model-to-engine reach-through
+        // in src/models outside RadioModel itself. Gate BEFORE any
+        // channel creation, not merely before the resulting emit --
+        // WdspEngine::createRadeChannel carries no isInitialized guard,
+        // so a mirrored RADE mode delta on a Role::Remote model (whose
+        // WdspEngine is constructed but never initialize()'d) would
+        // otherwise construct and start() a live RadeChannel -- a real
+        // vocoder -- on a machine with no DSP role at all. See design
+        // addendum docs/architecture/2026-08-03-remote-daemon-r2-r3-
+        // design-addendum.md section 4.1.
+        if (radio != nullptr && radio->role() != RadioModel::Role::Remote) {
             WdspEngine* engine = radio->wdspEngine();
             if (engine != nullptr) {
                 const int channelId = m_sliceIndex;

@@ -54,6 +54,19 @@ SliceModel* TxSliceArbiter::txBoundSlice() const
 // ---------------------------------------------------------------------------
 void TxSliceArbiter::syncToSliceList()
 {
+    // Remote-daemon R2 Task 5: on a remote client which slice transmits
+    // is the daemon's decision, mirrored in by a later task, so this
+    // whole method -- the initial-bind arm's setTxSlice(true) at the
+    // bottom, and the defensive-normalisation arm's setTxSlice(false)
+    // calls -- is a no-op. Gated at the top rather than around each
+    // individual write so m_txBoundSliceId and the flags it names stay in
+    // agreement (txBoundSlice()'s documented invariant); guarding only
+    // the writes and letting the ID bookkeeping run regardless would
+    // leave m_txBoundSliceId naming a slice whose isTxSlice() reads
+    // false. See design addendum docs/architecture/
+    // 2026-08-03-remote-daemon-r2-r3-design-addendum.md section 4.1.
+    if (m_remote) { return; }
+
     if (!m_slices || m_slices->isEmpty()) {
         // No slices, so no binding to hold. The restored ID is left alone: it
         // may be carrying a value load() restored, and the first slice to
@@ -134,6 +147,13 @@ void TxSliceArbiter::syncToSliceList()
 
 bool TxSliceArbiter::requestHandoff(int sliceId)
 {
+    // Remote-daemon R2 Task 5: same reasoning as syncToSliceList() above.
+    // A local operator TX-slice click funnels through here; on a remote
+    // client that click is a later task's job to forward to the daemon
+    // as a command instead, not something to resolve locally against a
+    // slice list the daemon does not know this process changed.
+    if (m_remote) { return false; }
+
     SliceModel* target = nullptr;
     if (m_slices) {
         for (SliceModel* slice : *m_slices) {
