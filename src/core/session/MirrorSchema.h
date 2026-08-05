@@ -119,7 +119,21 @@ class MirrorSchema {
 public:
     /// Is this class part of the mirrored surface at all? An allowlist, so
     /// a model class added later is not mirrored until someone says so.
+    ///
+    /// Keys on the LEAF class name, so a subclass of a mirrored model is
+    /// NOT mirrorable. Deliberate (the ordinals are per-class and a
+    /// subclass would extend the property table, shifting nothing but
+    /// adding ordinals the peer's schema does not know), but it means a
+    /// test double written as `class FakeSlice : public SliceModel` cannot
+    /// be watched. It fails loudly rather than silently: watch() returns
+    /// false and logs. Tests 9, 10 and 16 use model doubles; use a real
+    /// SliceModel, or add the double's own name to kMirroredClasses.
     static bool isMirrorable(const QMetaObject* mo);
+
+    /// Short names of every mirrored class, so a guard test can check the
+    /// production allowlist and its own list against each other rather
+    /// than duplicating one into the other and hoping.
+    static QList<QByteArray> mirroredClassNames();
 
     /// The cached schema for a class. Non-mirrorable classes get a valid
     /// but empty schema rather than a null reference, so callers need no
@@ -158,6 +172,13 @@ public:
     /// Decode a wire value and write it into a live object. Returns false
     /// without touching the object if it is not of this class, the
     /// property carries no WRITE, or the value cannot be decoded.
+    ///
+    /// "Cannot be decoded" covers WIDTH only: an integer that does not
+    /// survive a round trip into the property's declared type is rejected
+    /// rather than truncated. It does NOT cover the value being sensible
+    /// for the property. Nothing here stops a remote peer setting a 40 kHz
+    /// filterLow or a negative ritHz; per-property domain validation is the
+    /// inbound apply's job, not the codec's.
     ///
     /// This is the codec only. Whether a remote peer is ALLOWED to write a
     /// given property is MirrorPolicy's question, and gating on it is the

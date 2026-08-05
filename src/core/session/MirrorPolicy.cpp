@@ -172,16 +172,30 @@ const MirrorPolicy::Entry kEntries[] = {
     { "SliceModel", "diguOffsetHz", MirrorDirection::Bidirectional },
     { "SliceModel", "rttyMarkHz", MirrorDirection::Bidirectional },
     { "SliceModel", "rttyShiftHz", MirrorDirection::Bidirectional },
-    // snrDb and lastRadeRxCallsign are daemon-produced telemetry that
-    // nonetheless carries WRITE (the RADE decoder sets them). They are
-    // classified Bidirectional because the R2 plan names exactly seven
-    // writable-but-outbound-only properties and neither is among them, so
-    // reclassifying either here would be inventing policy rather than
-    // implementing it. The exposure is cosmetic -- a remote write moves a
-    // display value that the next decoder tick overwrites -- but Task 8's
-    // reviewer may still want to revisit it.
-    { "SliceModel", "snrDb", MirrorDirection::Bidirectional },
-    { "SliceModel", "lastRadeRxCallsign", MirrorDirection::Bidirectional },
+    // snrDb and lastRadeRxCallsign are daemon-produced RADE telemetry that
+    // carries WRITE only so the decoder can set it. Outbound, and NOT
+    // because they are read-only in spirit: writing either has a real
+    // effect on station behaviour.
+    //
+    // Both setters restart the RADE idle-clear timer, not merely store:
+    // SliceModel::setSnrDb on any non-NaN write (SliceModel.cpp:2308) and
+    // setLastRadeRxCallsign on any non-empty write (:2332). A client
+    // writing either more often than the idle window would suppress the
+    // operator's idle clear indefinitely, pinning a stale callsign and SNR
+    // on the local VFO flag.
+    //
+    // And nothing would overwrite a fabricated value. lastRadeRxCallsign's
+    // only genuine writers are EOO decodes (RadioModel.cpp:1882, :5492),
+    // which arrive seconds after a remote station FINISHES transmitting,
+    // plus a clearing path (:5595). With no station on air there is no
+    // next decode, so a fabricated callsign simply stays on the flag --
+    // and that is the field an operator reads when logging a QSO.
+    //
+    // The R2 plan names seven writable properties that MUST be Outbound;
+    // that is a floor, not a cap. Twenty further read-only properties are
+    // Outbound here too.
+    { "SliceModel", "snrDb", MirrorDirection::Outbound },
+    { "SliceModel", "lastRadeRxCallsign", MirrorDirection::Outbound },
 
     // ---- TransmitModel (15 entries) ----
     { "TransmitModel", "mox", MirrorDirection::Bidirectional },

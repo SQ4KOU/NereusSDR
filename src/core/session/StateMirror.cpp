@@ -94,12 +94,27 @@ bool StateMirror::watch(const QByteArray& objectKey, QObject* object)
         return false;
     }
 
+    // The binding must be one-to-one in BOTH directions.
     const int existing = indexOfKey(objectKey);
     if (existing >= 0 && m_watches.at(existing).object != object) {
         // Two objects under one wire identity would give the remote GUI an
         // interleaving of both, with no way to tell which it was looking at.
         qCWarning(lcStateMirror)
             << "refusing to rebind key" << objectKey << "to a different object";
+        return false;
+    }
+
+    const int sameObject = indexOfObject(object);
+    if (sameObject >= 0 && m_watches.at(sameObject).key != objectKey) {
+        // One object under two keys is worse than useless. Every lookup
+        // here is first-match, so the second record would forward nothing
+        // while isWatching() reported true, unwatch() of the first key
+        // would disconnect the object wholesale and mute the second
+        // permanently, and destruction would remove only one record and
+        // leave the other holding a freed pointer for snapshot() to read.
+        qCWarning(lcStateMirror)
+            << "refusing to watch an object already bound to key"
+            << m_watches.at(sameObject).key << "under a second key" << objectKey;
         return false;
     }
 
@@ -164,13 +179,17 @@ void StateMirror::unwatchAll()
 
 void StateMirror::onWatchedObjectDestroyed(QObject* object)
 {
-    const int index = indexOfObject(object);
-    if (index < 0) {
-        return;
-    }
+    // Removes EVERY record naming this pointer, not just the first.
+    // watch() refuses to create a second one, so this should only ever
+    // remove a single record; it removes all of them anyway, because the
+    // cost of being wrong is a record holding a freed pointer that
+    // snapshot() would go on to read.
+    //
     // No detach() here: the object is already in ~QObject, which has
     // dropped its connections itself.
-    m_watches.removeAt(index);
+    m_watches.removeIf([object](const Watch& watch) {
+        return watch.object == object;
+    });
 }
 
 bool StateMirror::isWatching(const QByteArray& objectKey) const
@@ -287,6 +306,11 @@ QList<MirrorUpdate> StateMirror::snapshot(const QByteArray& objectKey) const
     return updates;
 }
 
+// O(n^2) in the watched-object count: each snapshot() re-resolves its key
+// through the linear indexOfKey. Irrelevant at the five-ish slices this
+// ever holds, and left simple on purpose, but Task 10 builds the
+// connect-time burst on this call, so if the watched set ever grows past
+// a handful, pass the index down instead of the key.
 QList<QPair<QByteArray, QList<MirrorUpdate>>> StateMirror::snapshotAll() const
 {
     QList<QPair<QByteArray, QList<MirrorUpdate>>> all;

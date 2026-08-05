@@ -30,6 +30,7 @@
 #include "core/session/MirrorPolicy.h"
 #include "core/session/MirrorSchema.h"
 #include "core/session/StateMirror.h"
+#include "models/Band.h"
 #include "models/MeterModel.h"
 #include "models/PanadapterModel.h"
 #include "models/SliceModel.h"
@@ -207,6 +208,41 @@ private slots:
                  "stopped doing so, this test no longer proves re-read");
     }
 
+    // Tasks 10 and 11 depend on this positively, not just as a caveat: one
+    // frequency write can legitimately produce TWO deltas, because
+    // SliceModel::setFrequency runs a Band::bandFromFrequency boundary
+    // check and emits bandChanged separately when the move crosses a band.
+    // A consumer that assumed one delta per operator action, or that
+    // rebuilt band from frequency itself, would drift.
+    void aBandCrossingFrequencyWriteAlsoForwardsBand()
+    {
+        SliceModel slice(0);
+        slice.setFrequency(14200000.0); // 20m
+        QCOMPARE(slice.band(), Band::Band20m);
+
+        StateMirror mirror;
+        QVERIFY(mirror.watch("slice:0", &slice));
+        Collector c(&mirror);
+
+        slice.setFrequency(7100000.0); // 40m: crosses a band boundary
+
+        QCOMPARE(c.countOf("frequency"), 1);
+        QCOMPARE(c.valueOf("frequency").toDouble(), 7100000.0);
+        QVERIFY2(c.sawProperty("band"),
+                 "a band-crossing frequency write must forward band too");
+        QCOMPARE(c.valueOf("band").toLongLong(),
+                 static_cast<qlonglong>(Band::Band40m));
+        QCOMPARE(slice.band(), Band::Band40m);
+
+        // ...and a move WITHIN one band forwards frequency alone, so the
+        // band delta really is driven by the crossing and not emitted
+        // unconditionally alongside every tune.
+        c.clear();
+        slice.setFrequency(7150000.0);
+        QCOMPARE(c.countOf("frequency"), 1);
+        QCOMPARE(c.countOf("band"), 0);
+    }
+
     void enumsAreForwardedAsTheirUnderlyingIntegers()
     {
         SliceModel slice(0);
@@ -316,6 +352,56 @@ private slots:
         }
         QVERIFY(!mirror.isWatching("slice:0"));
         QVERIFY(mirror.watchedKeys().isEmpty());
+    }
+
+    // One object under two keys must be refused outright.
+    //
+    // Accepting it appends two Watch records for one pointer, and every
+    // lookup is first-match, so the failures escalate: the second key
+    // forwards nothing while isWatching() reports true; unwatch() of the
+    // first key disconnects the object wholesale and leaves the second
+    // permanently mute; and destruction removes only the first record, so
+    // the second retains a dangling pointer that snapshot() then reads.
+    void oneObjectUnderTwoKeysIsRefused()
+    {
+        SliceModel slice(0);
+        StateMirror mirror;
+        QVERIFY(mirror.watch("radio", &slice));
+        QVERIFY2(!mirror.watch("radio:0", &slice),
+                 "the same object must not be watchable under a second key");
+        QCOMPARE(mirror.watchedKeys(), QList<QByteArray>{ "radio" });
+        QVERIFY(!mirror.isWatching("radio:0"));
+        QVERIFY(mirror.snapshot("radio:0").isEmpty());
+
+        // The original binding is untouched by the refusal.
+        Collector c(&mirror);
+        slice.setFrequency(14200000.0);
+        QCOMPARE(c.countOf("frequency"), 1);
+        QCOMPARE(c.flat.first().first, QByteArray("radio"));
+    }
+
+    // The use-after-free this guards. Without both halves of the fix, the
+    // second record survives destruction holding a freed pointer and
+    // snapshot() dereferences it. Run under ASan this is a hard failure;
+    // even without, watchedKeys() proves no record outlives the object.
+    void noWatchRecordSurvivesItsObject()
+    {
+        StateMirror mirror;
+        {
+            auto slice = std::make_unique<SliceModel>(0);
+            QVERIFY(mirror.watch("radio", slice.get()));
+            // Refused, but assert on the state rather than the return value
+            // so this still catches the leak if the refusal is ever relaxed.
+            mirror.watch("radio:0", slice.get());
+        }
+        QVERIFY2(mirror.watchedKeys().isEmpty(),
+                 "every record naming a destroyed object must be removed");
+        QVERIFY(!mirror.isWatching("radio"));
+        QVERIFY(!mirror.isWatching("radio:0"));
+        // Reads through any surviving record would touch freed memory.
+        QVERIFY(mirror.snapshot("radio").isEmpty());
+        QVERIFY(mirror.snapshot("radio:0").isEmpty());
+        QVERIFY(mirror.snapshotAll().isEmpty());
     }
 
     void unwatchAllClearsEveryRecord()

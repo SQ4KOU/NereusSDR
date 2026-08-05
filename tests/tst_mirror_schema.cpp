@@ -187,6 +187,42 @@ private slots:
         QCOMPARE(schema.read(*dsp, &slice).toLongLong(), wire);
     }
 
+    // QVariant::convert is NOT a range check on its own. Measured against
+    // this tree's Qt: LongLong(2^40) -> int returns TRUE and yields 0;
+    // LongLong(300) -> qint8 returns TRUE and yields 44; LongLong(-5) ->
+    // uint returns TRUE and yields 4294967291. So decode compares the round
+    // trip explicitly, and this pins that it does. Without it a remote peer
+    // could set filterLow to a truncated value that looks entirely
+    // plausible on the wire.
+    void integerDecodeRejectsValuesThePropertyCannotHold()
+    {
+        SliceModel slice(0);
+        const MirrorSchema& schema = MirrorSchema::forObject(&slice);
+
+        const MirrorProperty* low = schema.byName("filterLow");
+        QVERIFY(low != nullptr);
+        QCOMPARE(low->kind, MirrorWireKind::Int64);
+        QCOMPARE(low->metaType.id(), int(QMetaType::Int));
+
+        // In range: accepted, exactly.
+        QVERIFY(MirrorSchema::decode(*low, QVariant(qlonglong(-2700))).isValid());
+        QCOMPARE(MirrorSchema::decode(*low, QVariant(qlonglong(-2700))).toLongLong(),
+                 -2700LL);
+
+        // Out of range for int: rejected, NOT truncated to 0.
+        const qlonglong tooBig = qlonglong(1) << 40;
+        QVERIFY2(!MirrorSchema::decode(*low, QVariant(tooBig)).isValid(),
+                 "an out-of-range integer must be rejected, not truncated");
+
+        // ...and the rejection reaches the live-object path, so nothing is
+        // written.
+        const int before = slice.filterLow();
+        QVERIFY(!schema.write(*low, &slice, QVariant(tooBig)));
+        QCOMPARE(slice.filterLow(), before);
+        QVERIFY(schema.write(*low, &slice, QVariant(qlonglong(-2800))));
+        QCOMPARE(slice.filterLow(), -2800);
+    }
+
     // ── Step 3/4: the schema walk ─────────────────────────────────────────
 
     void ordinalsAreDenseAndDeclarationOrdered()
@@ -292,19 +328,37 @@ private slots:
     }
 
     // No property may reach the wire with a kind the codec cannot carry.
-    // sliceLetter is the only QChar in the surface and is excluded outright;
-    // this catches any future addition of an uncarryable type.
+    //
+    // Tests the KIND, not any particular type. An earlier version of this
+    // guard checked only for QChar and could never fire: sliceLetter, the
+    // one QChar in the surface, is excluded by MirrorSchema before it
+    // reaches this loop. Meanwhile a property of any OTHER uncarryable type
+    // (QStringList, QDateTime, a struct) gets kind Unsupported, is skipped
+    // by MirrorSchema::encode, and vanishes from every delta AND every
+    // snapshot with nothing but a qCWarning to show for it. The policy-entry
+    // guard does fire in that case, but its remediation is "add a line to
+    // kEntries[]", after which the property is silently absent forever.
+    //
+    // Kind is strictly stronger than the old check, because QChar maps to
+    // Unsupported too.
     void everyMirroredPropertyHasACarryableKind()
     {
         QStringList offenders;
         for (const QMetaObject* mo : mirroredMetaObjects()) {
             for (const MirrorProperty& p :
                  MirrorSchema::forMetaObject(mo).properties()) {
-                if (p.metaType.id() == QMetaType::QChar) {
-                    offenders << QStringLiteral("%1::%2 is QChar; the wire has "
-                                                "no QChar kind")
+                if (p.kind == MirrorWireKind::Unsupported) {
+                    offenders << QStringLiteral("%1::%2 has type %3, which the "
+                                                "wire cannot carry, so it would "
+                                                "be silently absent from every "
+                                                "delta and snapshot. Give it a "
+                                                "MirrorWireKind in "
+                                                "MirrorSchema::kindFor, or "
+                                                "exclude it deliberately via "
+                                                "kExcludedProperties")
                                      .arg(QString::fromLatin1(mo->className()),
-                                          QString::fromUtf8(p.name));
+                                          QString::fromUtf8(p.name),
+                                          QString::fromLatin1(p.metaType.name()));
                 }
             }
         }
@@ -323,6 +377,63 @@ private slots:
         QCOMPARE(declared.metaType().id(), int(QMetaType::QChar));
         // ...and the mirror does not carry it.
         QVERIFY(MirrorSchema::forObject(&slice).byName("sliceLetter") == nullptr);
+    }
+
+    // Every membership guard below iterates mirroredMetaObjects(), so a
+    // model class added to production but forgotten here would be covered
+    // by NOTHING. Cross-check the two lists against each other rather than
+    // trusting that a human kept them in step.
+    void testAndProductionAgreeOnTheMirroredClassList()
+    {
+        QStringList fromProduction;
+        for (const QByteArray& name : MirrorSchema::mirroredClassNames()) {
+            fromProduction << QString::fromUtf8(name);
+        }
+        QStringList fromTest;
+        for (const QMetaObject* mo : mirroredMetaObjects()) {
+            fromTest << QString::fromUtf8(
+                MirrorSchema::shortClassName(QByteArray(mo->className())));
+        }
+        fromProduction.sort();
+        fromTest.sort();
+
+        QVERIFY2(fromProduction == fromTest,
+                 qPrintable(QStringLiteral("kMirroredClasses in "
+                                           "MirrorSchema.cpp and "
+                                           "mirroredMetaObjects() in this test "
+                                           "have diverged.\n  production: %1\n"
+                                           "  test:       %2")
+                                .arg(fromProduction.join(QLatin1String(", ")),
+                                     fromTest.join(QLatin1String(", ")))));
+    }
+
+    // A CONSTANT property produces no NOTIFY, so it can never generate an
+    // outbound delta. Classifying one Bidirectional would let a remote peer
+    // write it while every OTHER connected client saw nothing change,
+    // desyncing them all with no way to notice.
+    void constantPropertiesAreClassifiedConstantSnapshotAndNothingElse()
+    {
+        QStringList offenders;
+        for (const QMetaObject* mo : mirroredMetaObjects()) {
+            const QByteArray cls(mo->className());
+            for (const MirrorProperty& p :
+                 MirrorSchema::forMetaObject(mo).properties()) {
+                const MirrorDirection dir = MirrorPolicy::directionFor(cls, p.name);
+                if (p.isConstant && dir != MirrorDirection::ConstantSnapshot) {
+                    offenders << QStringLiteral("%1::%2 has no NOTIFY but is "
+                                                "not ConstantSnapshot")
+                                     .arg(QString::fromLatin1(cls),
+                                          QString::fromUtf8(p.name));
+                }
+                if (!p.isConstant && dir == MirrorDirection::ConstantSnapshot) {
+                    offenders << QStringLiteral("%1::%2 is ConstantSnapshot but "
+                                                "declares a NOTIFY")
+                                     .arg(QString::fromLatin1(cls),
+                                          QString::fromUtf8(p.name));
+                }
+            }
+        }
+        QVERIFY2(offenders.isEmpty(), qPrintable(offenders.join(QLatin1String("\n"))));
     }
 
     void meterModelIsNotAMirroredClass()
@@ -433,9 +544,18 @@ private slots:
             for (const MirrorProperty& p :
                  MirrorSchema::forMetaObject(mo).properties()) {
                 if (!MirrorPolicy::hasExplicitEntry(cls, p.name)) {
+                    // Name the SAFE default explicitly. 117 of the 145
+                    // entries are Bidirectional, so copying the nearest
+                    // neighbour is both the path of least resistance and
+                    // the wrong answer for anything that is not an
+                    // operator control.
                     missing << QStringLiteral("%1::%2 has no MirrorPolicy "
                                               "entry; add one to "
-                                              "MirrorPolicy.cpp")
+                                              "MirrorPolicy.cpp. Default to "
+                                              "MirrorDirection::Outbound "
+                                              "unless this is an operator "
+                                              "control a remote GUI should "
+                                              "be able to write")
                                    .arg(QString::fromLatin1(cls),
                                         QString::fromUtf8(p.name));
                 }
@@ -528,6 +648,31 @@ private slots:
         QCOMPARE(MirrorPolicy::directionFor("SliceModel", "sliceIndex"),
                  MirrorDirection::ConstantSnapshot);
         QVERIFY(!MirrorPolicy::inboundAllowed("SliceModel", "sliceIndex"));
+    }
+
+    // Daemon-produced RADE telemetry that carries WRITE only so the decoder
+    // can set it. Outbound because writing either has a real effect on
+    // station behaviour, not because it is read-only in spirit: both
+    // setters restart the RADE idle-clear timer on any live write, so a
+    // client could pin a stale callsign and SNR on the operator's own VFO
+    // flag indefinitely, and lastRadeRxCallsign has no periodic writer to
+    // overwrite a fabricated value with.
+    void radeTelemetryIsOutbound()
+    {
+        SliceModel slice(0);
+        const MirrorSchema& schema = MirrorSchema::forObject(&slice);
+        for (const char* name : { "snrDb", "lastRadeRxCallsign" }) {
+            const MirrorProperty* p = schema.byName(name);
+            QVERIFY2(p != nullptr, name);
+            QVERIFY2(p->isWritable,
+                     qPrintable(QStringLiteral("%1 is expected to carry WRITE, "
+                                               "which is why an explicit "
+                                               "Outbound entry is needed")
+                                    .arg(name)));
+            QVERIFY2(MirrorPolicy::directionFor("SliceModel", name)
+                         == MirrorDirection::Outbound, name);
+            QVERIFY2(!MirrorPolicy::inboundAllowed("SliceModel", name), name);
+        }
     }
 
     void bandIsOutbound()

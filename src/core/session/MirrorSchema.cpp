@@ -23,6 +23,7 @@
 #include <QObject>
 #include <QString>
 
+#include <iterator>
 #include <memory>
 
 Q_LOGGING_CATEGORY(lcMirrorSchema, "nereus.mirror.schema")
@@ -170,6 +171,16 @@ QByteArray MirrorSchema::shortClassName(const QByteArray& className)
     return sep < 0 ? className : className.mid(sep + 2);
 }
 
+QList<QByteArray> MirrorSchema::mirroredClassNames()
+{
+    QList<QByteArray> names;
+    names.reserve(static_cast<int>(std::size(kMirroredClasses)));
+    for (const char* candidate : kMirroredClasses) {
+        names.append(shortClassName(QByteArray(candidate)));
+    }
+    return names;
+}
+
 bool MirrorSchema::isMirrorable(const QMetaObject* mo)
 {
     if (mo == nullptr) {
@@ -306,11 +317,27 @@ QVariant MirrorSchema::decode(const MirrorProperty& prop, const QVariant& wireVa
         return QVariant(wireValue.toString());
     case MirrorWireKind::Int64: {
         // Narrow back to the property's own declared type so
-        // QMetaProperty::write does not have to convert, and so an int
-        // property never silently accepts a value it cannot hold.
-        const QVariant narrowed = QVariant(wireValue.toLongLong());
-        QVariant typed(narrowed);
+        // QMetaProperty::write does not have to convert.
+        //
+        // QVariant::convert alone is NOT a range check. Measured against
+        // this tree's Qt: converting LongLong(2^40) to int returns TRUE and
+        // yields 0; LongLong(300) to qint8 returns TRUE and yields 44;
+        // LongLong(-5) to uint returns TRUE and yields 4294967291. So the
+        // round trip is compared explicitly, and a value the property
+        // cannot hold is rejected rather than silently truncated into a
+        // plausible-looking one. filterLow/filterHigh, stepHz, ritHz/xitHz,
+        // nr1Taps and snbOutputBandwidthHz all land here.
+        //
+        // This is a WIDTH check only. It says nothing about a value being
+        // semantically sensible for the property (a 40 kHz filterLow fits
+        // in an int perfectly well); per-property domain validation is
+        // Task 8's inbound apply, not the codec's.
+        const qlonglong wire = wireValue.toLongLong();
+        QVariant typed{ QVariant(wire) };
         if (!typed.convert(prop.metaType)) {
+            return QVariant();
+        }
+        if (typed.toLongLong() != wire) {
             return QVariant();
         }
         return typed;
