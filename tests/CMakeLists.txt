@@ -6257,6 +6257,45 @@ target_compile_definitions(tst_remote_role_inert PRIVATE NEREUS_BUILD_TESTS)
 # connectToRadio().
 nereus_add_test(tst_slice_mirror_identity)
 
+# Remote Daemon R2, Task 7: MirrorSchema (the meta-object walk that assigns
+# each mirrored Q_PROPERTY a dense session-scoped ordinal and a wire kind)
+# and MirrorPolicy (the default-deny direction table saying which of those a
+# remote GUI may write back).
+#
+# Carries the task's two spikes as permanent regression guards rather than
+# as throwaway probes:
+#   - connect(sender, QMetaMethod, receiver, QMetaMethod) into a
+#     ZERO-ARGUMENT slot, at notify arity 0, 1 and 2. Only arity 1 was ever
+#     verified before this task, and the existing precedent
+#     (MainWindow::wireSliceStatusOverlayTriggers) connects only the six
+#     properties in PanadapterApplet::statusOverlaySliceProperties(), none
+#     of which has a two-argument notifier. SliceModel::filterChanged(int,
+#     int) does, and it drives the whole filter surface.
+#   - QMetaType::IsEnumeration is set while QMetaProperty::isEnumType() is
+#     NOT, because these models' enums live in plain namespaces with no
+#     Q_NAMESPACE / Q_ENUM_NS (src/core/WdspTypes.h, src/models/Band.h).
+#     Classifying by isEnumType() would silently mis-encode twelve
+#     properties.
+#
+# The golden-list guard asserts MEMBERSHIP, never counts: the mirrored
+# property total has already moved twice inside this plan's own execution.
+# A count assertion turns a routine feature commit into a mysterious
+# failure; a membership assertion names the property needing an entry.
+nereus_add_test(tst_mirror_schema)
+
+# Remote Daemon R2, Task 7 (outbound half): StateMirror watches a model with
+# ONE zero-argument slot connected to every distinct NOTIFY in its schema,
+# maps senderSignalIndex() back to dirty ordinals, and re-reads each through
+# QMetaProperty::read instead of taking signal arguments.
+#
+# Re-reading is forced twice over: PanadapterModel::levelChanged() carries no
+# arguments yet names both dBmFloor and dBmCeiling, and SliceModel::
+# setDspMode rewrites both filter edges as a side effect while emitting
+# filterChanged separately. Also pins the snapshot path, which is the only
+# way a CONSTANT property (sliceIndex, the mirror's object identity) reaches
+# the wire at all. Inbound apply is Task 8; nothing here writes a model.
+nereus_add_test(tst_mirror_forwarder)
+
 # R1 Task 10: DaemonApp connects the daemon to a radio (or runs discovery)
 # and creates min(cfg.sliceCount, connected-board-maxSlices) slices via
 # RadioModel's own addSlice() -- the same entry point connectToRadio()

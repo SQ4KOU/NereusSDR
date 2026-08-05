@@ -666,6 +666,19 @@ set(CORE_SOURCES
     # on the same NereusCore target either way (see the add_library
     # call further down).
     src/core/daemon/DaemonApp.cpp
+    # R2 Task 7: the state-mirroring core. MirrorSchema walks Qt's
+    # meta-object system over the five mirrored model classes and gives
+    # each Q_PROPERTY a dense session-scoped ordinal plus a wire kind;
+    # MirrorPolicy is the default-deny direction table saying which of
+    # those a remote GUI may write back; StateMirror is the outbound
+    # forwarder that watches instances with one zero-argument slot per
+    # object and re-reads dirty properties rather than taking signal
+    # arguments. Core-side by construction: they reach the models only
+    # through QMetaObject, so nothing here includes a GUI header. No
+    # production caller yet -- Task 18 binds them onto a wss session.
+    src/core/session/MirrorSchema.cpp
+    src/core/session/MirrorPolicy.cpp
+    src/core/session/StateMirror.cpp
 )
 
 # CoreAudioHalBus — macOS-only IAudioBus implementation bridging to the
