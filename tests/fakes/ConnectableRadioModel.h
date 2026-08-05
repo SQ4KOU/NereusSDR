@@ -1,0 +1,99 @@
+// tests/fakes/ConnectableRadioModel.h
+//
+// no-port-check: NereusSDR-original test fixture. Wires together two
+// already-existing production classes (RadioModel, P1FakeRadio) for test
+// use; no Thetis logic is ported or reimplemented here.
+//
+// Remote-daemon R2 Task 2 -- a connectable RadioModel for tests.
+//
+// RadioModel::connectToRadio() has never been exercised by any test in
+// this suite (see tst_daemon_app.cpp's header comment): on a cold config
+// directory -- which tests/TestSandboxInit.cpp forces on every run -- it
+// blocks the calling thread inside a QEventLoop until WdspEngine finishes
+// generating FFTW wisdom, which takes minutes. WdspEngine::
+// setSynchronousInitForTest() (src/core/WdspEngine.h) closes that gap by
+// making initialize() skip spawning the "WisdomThread" QThread and instead
+// run finishInitialization() synchronously, so the RX/TX-channel-creation
+// lambda that RadioModel::connectToRadio() wires to WdspEngine::
+// initializedChanged() still fires at the right moment. See that method's
+// doc comment, tests/tst_connectable_radio_model.cpp, and
+// .superpowers/sdd/2026-08-03-remote-daemon-r2-plan/task-2-report.md for
+// the full story and the measured timing.
+//
+// ConnectableRadioModel packages that seam plus a P1FakeRadio loopback
+// fake into one reusable factory so tests 3, 12 and 20 (per the R2 plan)
+// don't each have to re-derive the wiring:
+//   Task 3  -- teardown-equivalence assertion (RadioModel torn down the
+//              same way whether local or remote).
+//   Task 12 -- needs a genuinely live RxChannel off the connected model.
+//   Task 20 -- Setup-page realization sweep against a connected model.
+
+#pragma once
+
+#include "core/ConnectionState.h"
+#include "core/HpsdrModel.h"
+#include "core/RadioDiscovery.h"
+#include "core/WdspEngine.h"
+#include "models/RadioModel.h"
+
+#include "P1FakeRadio.h"
+
+#include <memory>
+
+namespace NereusSDR::Test {
+
+// Owns a P1FakeRadio loopback fake and a RadioModel connected to it.
+//
+// Construct only via create() -- the default constructor is private so
+// callers can never observe a not-yet-connected (or failed-to-connect)
+// instance; create() returns nullptr instead of a half-built object.
+//
+// Non-copyable: owns two QObjects wired to a live loopback UDP pair and,
+// inside RadioModel, a worker QThread. Move is not provided either --
+// nothing in tasks 2/3/12/20 needs to relocate an already-built harness,
+// and std::unique_ptr<ConnectableRadioModel> covers ownership transfer.
+class ConnectableRadioModel {
+public:
+    ConnectableRadioModel(const ConnectableRadioModel&) = delete;
+    ConnectableRadioModel& operator=(const ConnectableRadioModel&) = delete;
+    ~ConnectableRadioModel();
+
+    // Builds a P1FakeRadio and starts it, constructs a RadioModel, arms
+    // WdspEngine::setSynchronousInitForTest() on that model's engine
+    // BEFORE calling RadioModel::connectToRadio() (order matters -- see
+    // that method's doc comment), then pumps the Qt event loop (via
+    // QTest::qWaitFor) until RadioModel::connectionState() reaches
+    // ConnectionState::Connected or timeoutMs elapses.
+    //
+    // Returns nullptr on timeout. QVERIFY/QCOMPARE only fail the enclosing
+    // QtTest slot when used directly inside it -- their generated
+    // `return;` requires the function to return void -- so this factory
+    // reports failure through its return value instead of asserting
+    // internally, and leaves the QVERIFY(...) to the caller. On timeout,
+    // both the partially-connected model and the fake are torn down
+    // before returning null; nothing leaks.
+    static std::unique_ptr<ConnectableRadioModel> create(int timeoutMs = 10000);
+
+    NereusSDR::RadioModel&       model()       { return *m_model; }
+    const NereusSDR::RadioModel& model() const { return *m_model; }
+    P1FakeRadio&                 fake()        { return *m_fake; }
+    const P1FakeRadio&           fake()  const { return *m_fake; }
+
+    // The RadioInfo passed to connectToRadio() -- board/protocol/MAC
+    // identity, for callers that want to assert against it directly
+    // rather than re-deriving it from fake().
+    const NereusSDR::RadioInfo& radioInfo() const { return m_info; }
+
+private:
+    ConnectableRadioModel() = default;
+
+    // Declaration order is destruction order (reverse): m_model is torn
+    // down (RadioModel::~RadioModel() -> teardownConnection()) BEFORE
+    // m_fake, so RadioModel's graceful-disconnect path still has a live
+    // fake to talk to. Keep m_fake declared first.
+    std::unique_ptr<P1FakeRadio>           m_fake;
+    std::unique_ptr<NereusSDR::RadioModel> m_model;
+    NereusSDR::RadioInfo                   m_info;
+};
+
+} // namespace NereusSDR::Test

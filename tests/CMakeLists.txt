@@ -6190,6 +6190,25 @@ target_compile_definitions(tst_daemon_config PRIVATE
 # gate will read.
 nereus_add_test(tst_daemon_settings_profile)
 
+# Remote Daemon R2, Task 2: a connectable RadioModel for tests.
+# RadioModel::connectToRadio() blocks on FFTW wisdom generation on a cold
+# config directory (which TestSandboxInit.cpp forces every run), so no test
+# in this suite had ever called it -- see tst_daemon_app.cpp's header
+# comment. WdspEngine::setSynchronousInitForTest() (WdspEngine.h) makes
+# initialize() skip spawning the WisdomThread and instead run
+# finishInitialization(false) synchronously, so connectToRadio()'s own
+# initializedChanged-driven RX/TX channel creation still fires at the right
+# moment. Pins the measured cost of that synchronous path (spike, must stay
+# well under TIMEOUT 120), that a RadioModel reaches ConnectionState::
+# Connected against a fakes/P1FakeRadio.cpp loopback fake, that no thread
+# named "WisdomThread" is ever live, and exposes ConnectableRadioModel
+# (tests/fakes/ConnectableRadioModel.{h,cpp}) as the reusable helper Tasks
+# 3, 12 and 20 build on.
+nereus_add_test(tst_connectable_radio_model
+    fakes/P1FakeRadio.cpp
+    fakes/ConnectableRadioModel.cpp)
+target_compile_definitions(tst_connectable_radio_model PRIVATE NEREUS_BUILD_TESTS)
+
 # R1 Task 10: DaemonApp connects the daemon to a radio (or runs discovery)
 # and creates min(cfg.sliceCount, connected-board-maxSlices) slices via
 # RadioModel's own addSlice() -- the same entry point connectToRadio()

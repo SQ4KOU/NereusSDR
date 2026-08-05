@@ -178,6 +178,58 @@ public:
     // Wisdom runs async — listen to initializedChanged for completion.
     bool initialize(const QString& configDir);
 
+#ifdef NEREUS_BUILD_TESTS
+    // Test-only seam (remote-daemon R2 Task 2). Arm this BEFORE calling
+    // initialize(). When set, initialize() skips spawning the WisdomThread
+    // entirely -- WDSPwisdom() is never called, so no cached/precomputed
+    // FFTW wisdom is produced or consulted -- and instead runs
+    // finishInitialization(/*wisdomWasRebuilt=*/false) synchronously on the
+    // calling thread, so initializedChanged(true) is emitted before
+    // initialize() returns.
+    //
+    // Why a flag consulted inside initialize() rather than a separate
+    // "pre-initialize" entry point called ahead of it: RadioModel::
+    // connectToRadio() connects its RX/TX-channel-creation lambda to
+    // initializedChanged() and only THEN calls initialize() unconditionally
+    // (RadioModel.cpp, near the "Block here while the wisdom worker
+    // finishes" comment). initialize() early-returns without emitting
+    // anything when m_initialized is already true (see the guard at the
+    // top of initialize()) -- so pre-setting m_initialized before
+    // connectToRadio() runs would make that later call a silent no-op and
+    // the lambda would never fire, leaving RX channel 0 and the TX channel
+    // never created even though the engine reports itself initialized.
+    // Arming this flag instead lets connectToRadio()'s own
+    // initialize(configDir) call take the fast synchronous path while
+    // still emitting the signal at the exact moment production code
+    // expects it, driving the real call sequence with only the FFTW
+    // planning substituted out.
+    //
+    // No production caller sets this. Default is false, matching today's
+    // behaviour exactly; initialize() is unmodified in every other respect.
+    void setSynchronousInitForTest(bool enable) { m_synchronousInitForTest = enable; }
+
+    // Test-only observability paired with the seam above. True once
+    // initialize() has entered the ASYNC branch that constructs the
+    // "WisdomThread" QThread (i.e. setSynchronousInitForTest(true) was not
+    // armed before this engine's one and only initialize() call). Sticky:
+    // nothing ever resets it back to false.
+    //
+    // The QThread built in the async branch (WdspEngine.cpp, the
+    // WDSPwisdom() worker) is a local variable, not a member -- it
+    // self-deletes via deleteLater() once WDSPwisdom() returns, and it is
+    // never parented into a QObject tree, so there is no handle a test can
+    // later query to ask "is a thread named WisdomThread still alive?".
+    // grep confirms WdspEngine.cpp is the ONLY place in the tree that ever
+    // constructs a QThread and names it "WisdomThread", so "this flag is
+    // false" and "no WisdomThread was ever constructed by this engine" are
+    // the same fact. Checking it is therefore equivalent to (and stronger
+    // than) an at-that-instant OS thread-table scan: it also catches the
+    // case where a wrongly-written seam spawned the thread and it had
+    // already finished and been deleted by the time a test got around to
+    // checking.
+    bool wisdomThreadSpawnedForTest() const { return m_wisdomThreadSpawnedForTest; }
+#endif
+
     // Shutdown WDSP: save impulse cache, destroy all channels, free resources.
     void shutdown();
 
@@ -637,6 +689,29 @@ private:
     // Used by finishInitialization() to skip loading a now-stale impulse
     // cache file (mirrors Thetis radio.cs:151-158 [v2.10.3.13] rebuilt guard).
     bool m_wisdomWasRebuilt{false};
+
+#ifdef NEREUS_BUILD_TESTS
+    // Backing field for setSynchronousInitForTest() (declared above,
+    // public, under the same guard). See that method's doc comment for
+    // why this has to be consulted inside initialize() rather than
+    // implemented as a separate pre-initialize entry point.
+    bool m_synchronousInitForTest{false};
+
+    // Backing field for wisdomThreadSpawnedForTest() (declared above,
+    // public, under the same guard). Set to true only at the WdspEngine.cpp
+    // callsite that constructs the async "WisdomThread" QThread.
+    bool m_wisdomThreadSpawnedForTest{false};
+#endif
+
+    // Normalise and create configDir: set m_configDir, mkpath it if
+    // missing, and ensure a trailing separator (WDSP appends
+    // "wdspWisdom00" directly to the path). Shared by initialize()'s
+    // production async-wisdom-thread path and the NEREUS_BUILD_TESTS
+    // synchronous test path below -- both need m_configDir set identically
+    // before finishInitialization() uses it to build the impulse-cache
+    // path. Extracted from initialize() (remote-daemon R2 Task 2) so
+    // neither path can drift from the other.
+    void prepareConfigDir(const QString& configDir);
 
     // Finish initialization after WDSPwisdom completes.
     // wisdomWasRebuilt: true when WDSPwisdom generated a new file this session.

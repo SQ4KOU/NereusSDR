@@ -135,14 +135,8 @@ static int estimateWisdomPercent(const char* status)
     return qBound(1, step * 100 / 14, 99);
 }
 
-bool WdspEngine::initialize(const QString& configDir)
+void WdspEngine::prepareConfigDir(const QString& configDir)
 {
-    if (m_initialized) {
-        qCWarning(lcDsp) << "WdspEngine already initialized";
-        return true;
-    }
-
-#ifdef HAVE_WDSP
     m_configDir = configDir;
 
     // Ensure config directory exists
@@ -155,6 +149,34 @@ bool WdspEngine::initialize(const QString& configDir)
     if (!m_configDir.endsWith(QLatin1Char('/')) && !m_configDir.endsWith(QLatin1Char('\\'))) {
         m_configDir += QLatin1Char('/');
     }
+}
+
+bool WdspEngine::initialize(const QString& configDir)
+{
+    if (m_initialized) {
+        qCWarning(lcDsp) << "WdspEngine already initialized";
+        return true;
+    }
+
+#ifdef HAVE_WDSP
+    prepareConfigDir(configDir);
+
+#ifdef NEREUS_BUILD_TESTS
+    if (m_synchronousInitForTest) {
+        // Test-only path (remote-daemon R2 Task 2): never spawns
+        // WisdomThread, never calls WDSPwisdom(). finishInitialization()
+        // still runs for real -- impulse cache init, PS feedback channel
+        // open, m_initialized=true, initializedChanged(true) emitted --
+        // so the engine is genuinely functional afterward, not merely
+        // flagged. See setSynchronousInitForTest()'s doc comment in
+        // WdspEngine.h for why this branch lives inside initialize()
+        // instead of a separate method called ahead of it.
+        qCInfo(lcDsp) << "WdspEngine: synchronous test-only init"
+                          " (WisdomThread not spawned)";
+        finishInitialization(/*wisdomWasRebuilt=*/false);
+        return true;
+    }
+#endif
 
     // Note: Thetis wisdom files are NOT reusable — FFTW wisdom is specific
     // to the exact FFTW build. Copying across builds hangs on import.
@@ -199,6 +221,15 @@ bool WdspEngine::initialize(const QString& configDir)
         WDSPwisdom(const_cast<char*>(configPath.constData()));
     });
     wisdomThread->setObjectName(QStringLiteral("WisdomThread"));
+
+#ifdef NEREUS_BUILD_TESTS
+    // Test-only observability (remote-daemon R2 Task 2): record that this
+    // engine instance took the async path and actually constructed the
+    // WisdomThread. See wisdomThreadSpawnedForTest()'s doc comment in
+    // WdspEngine.h. No production behaviour: this is a single bool write
+    // guarded out of non-test builds entirely.
+    m_wisdomThreadSpawnedForTest = true;
+#endif
 
     // Poll wisdom_get_status() for progress updates
     auto* pollTimer = new QTimer(this);
