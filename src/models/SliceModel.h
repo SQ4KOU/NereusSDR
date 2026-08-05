@@ -174,6 +174,31 @@ class SliceModel : public QObject {
     Q_PROPERTY(bool       active       READ isActive     NOTIFY activeChanged)
     Q_PROPERTY(bool       txSlice      READ isTxSlice    NOTIFY txSliceChanged)
 
+    // ── Remote Daemon R2 Task 6: mirrorable slice identity + band ───────────
+    // sliceIndex is the slice's stable id, assigned once by RadioModel::
+    // addSlice() and never renumbered by removeSlice() (RadioModel.cpp
+    // addSlice() / removeSlice() / sliceById()). It diverges from list
+    // position the moment a slice is removed from the middle of the list,
+    // which is exactly why StateMirror (Task 7) must key mirrored slices by
+    // this id and never by list position.
+    //
+    // MirrorPolicy requirement for Task 7: register sliceIndex as
+    // CONSTANT-snapshot. It carries no NOTIFY signal (the id never changes
+    // after construction), so a mirror strategy that only enumerates
+    // NOTIFY-bearing properties would silently skip it, and the remote GUI
+    // would never learn which slice it is looking at.
+    Q_PROPERTY(int sliceIndex READ sliceIndex CONSTANT)
+
+    // Current ham/SWL band, derived from m_currentBand and kept current by
+    // setFrequency's Band::bandFromFrequency() boundary check
+    // (SliceModel.cpp:211-214). Lets a remote GUI render per-band state
+    // without recomputing the band itself from frequency.
+    //
+    // MirrorPolicy requirement for Task 7: register band as Outbound
+    // (daemon to GUI only). The GUI never sets a slice's band directly; it
+    // only ever changes as a side effect of tuning frequency.
+    Q_PROPERTY(NereusSDR::Band band READ band NOTIFY bandChanged)
+
     // ── Phase 3F Sub-Epic A: multi-panadapter / multi-slice identity ────────────
     // Phase 3F: per-slice letter identifier A-E. Drives badge color via VfoWidget::sliceColor().
     // Read-only: derived from sliceIndex, so there is nothing to write and
@@ -476,6 +501,13 @@ public:
 
     int sliceIndex() const { return m_sliceIndex; }
     void setSliceIndex(int idx) { m_sliceIndex = idx; }
+
+    // Remote Daemon R2 Task 6: plain getter over m_currentBand for the
+    // Q_PROPERTY above. Deliberately does not compute or normalise
+    // anything; setFrequency is the only writer of m_currentBand, via
+    // Band::bandFromFrequency(), so this accessor cannot diverge from what
+    // the frequency-driven bandChanged signal already announced.
+    Band band() const { return m_currentBand; }
 
     // Panadapter assignment (-1 = unassigned).
     // Legacy int handle. Retained for any pre-3F callers; the authoritative

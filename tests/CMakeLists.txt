@@ -6243,6 +6243,20 @@ nereus_add_test(tst_remote_role_inert
     fakes/ConnectableRadioModel.cpp)
 target_compile_definitions(tst_remote_role_inert PRIVATE NEREUS_BUILD_TESTS)
 
+# Remote Daemon R2, Task 6: SliceModel gains two Q_PROPERTYs the future
+# StateMirror (Task 7) needs -- sliceIndex (CONSTANT, the stable per-slice
+# id RadioModel::addSlice/removeSlice already maintain but never exposed to
+# the meta-object system) and band (NOTIFY bandChanged, a plain getter over
+# the existing m_currentBand member). No live radio connection needed: a
+# plain RadioModel with configureStreamPool() sized reproduces the real
+# addSlice()/removeSlice() id-allocation policy (lowest free id, no
+# renumbering of survivors), which is what makes sliceIndex diverge from
+# list position after a mid-list removal -- the exact case a
+# position-keyed mirror would get wrong. Does not need NEREUS_BUILD_TESTS
+# or the P1FakeRadio/ConnectableRadioModel fakes; nothing here calls
+# connectToRadio().
+nereus_add_test(tst_slice_mirror_identity)
+
 # R1 Task 10: DaemonApp connects the daemon to a radio (or runs discovery)
 # and creates min(cfg.sliceCount, connected-board-maxSlices) slices via
 # RadioModel's own addSlice() -- the same entry point connectToRadio()
