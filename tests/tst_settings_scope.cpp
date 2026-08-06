@@ -1,0 +1,500 @@
+// Remote Daemon R2, Task 14 -- classifySettingsKey and its completeness
+// gate.
+//
+// The design's own risk register names the most likely half-working
+// outcome of the whole R2 settings epic: SettingsProxy (Task 15) passes
+// every test it ships with and never actually carries a Setup page,
+// because a key silently classified OperatorLocal when it should be
+// Station reads locally, writes locally, sticks in the widget, survives a
+// relaunch, and never reaches the station -- and looks, to every test
+// that only checks the happy path, like it works. The completeness sweep
+// below is the thing that catches that failure mode, and is the more
+// important half of this file.
+//
+// ---- Table-driven examples (knownExamples) --------------------------
+//
+// Pins the brief's own worked examples plus every FftPoolConfig key
+// (MainWindow.cpp:1512's "the four display AppSettings-sourced knobs"):
+// DisplayFftSize / DisplayFftWindow / DisplayHzPerBinTarget /
+// DisplaySpectrumFps are Station because MainWindow::refreshFftPoolConfig
+// (MainWindow.cpp:1477-1500) reads them to configure the daemon's actual
+// FFT production. Only DisplayFftSize is in the brief verbatim; the other
+// three are NOT swept by the completeness test below (MainWindow.cpp
+// lives outside all three scanned trees -- see completenessSweep()'s
+// header comment), so a regression on any of them would otherwise be
+// invisible to this file. Also pins hardware/oc/pennyExtCtrl (Station,
+// proving "oc" is a literal path segment and not a MAC-shaped guard) and
+// two of this task's own exemption-list judgement calls (audio/DspRate
+// Station vs audio/Speakers/DeviceName OperatorLocal; both are
+// core-touched, and only one of them is a DSP engine parameter -- see
+// completenessSweep()'s kCoreExemptPrefixes for the full reasoning).
+//
+// ---- Per-pan suffix (perPanSuffixIsStrippedBeforeMatching) -----------
+//
+// SpectrumWidget.cpp:577-584's settingsKey(base, panIndex) helper appends
+// "_<panIndex>" for pan 1+ and returns base unchanged for pan 0. Proves
+// the suffix is stripped (pan 1, pan 12) AND that stripping requires an
+// all-digit suffix, using a real key (TciSliceA_OutputSampleRate) whose
+// only underscore is followed by letters, not digits, as the negative
+// case -- a naive "strip after the last underscore" implementation would
+// mangle this one into "TciSliceA", losing "OutputSampleRate" and (by
+// coincidence, since "Tci" is a prefix rule) still passing this
+// particular assertion for the wrong reason, which is why the assertion
+// below checks equality against the UNSTRIPPED literal instead of just
+// checking the resulting scope.
+//
+// ---- Completeness sweep (completenessSweep) ---------------------------
+//
+// Extracts every key literal this tree passes directly to an AppSettings
+// accessor (value/setValue/contains/remove/stationValue/setStationValue/
+// hardwareValue/setHardwareValue) from src/core, src/models AND
+// src/gui/setup/ -- recursively. The brief cites the OC keys as living in
+// src/gui/setup/OcOutputsHfTab.cpp; that file does not exist at that
+// path, it is src/gui/setup/hardware/OcOutputsHfTab.cpp, one directory
+// deeper. Measured: src/gui/setup/ has 32 .cpp files at depth 1 and 47
+// recursive (94 .h+.cpp combined) -- a non-recursive scan would silently
+// miss 15 .cpp files, including every OC key, which is the exact family
+// Step 1 above hand-pins as a regression canary for this. The extraction
+// below uses QDirIterator::Subdirectories throughout, and
+// completenessSweep()'s own minimum-files-scanned guard asserts high
+// enough on the gui/setup subtree specifically to notice if it ever
+// stops recursing.
+//
+// Then asserts two things:
+//   (a) every key found in src/core or src/models classifies Station,
+//       except the small, individually-justified exemption list (mostly
+//       "audio/*": local sound hardware selection genuinely is a
+//       per-machine concern even though core/AudioEngine.cpp is the code
+//       that opens the device, on whichever machine happens to be
+//       running it -- see kCoreExemptPrefixes/kCoreExemptExact below for
+//       every entry and its citation);
+//   (b) -- the valuable half -- any key found in BOTH src/gui/setup/ and
+//       (src/core or src/models) classifies Station. This is the
+//       assertion that actually catches a misclassified key: extracting
+//       core/model keys and asserting they classify Station (a) is the
+//       easy direction, because nothing stops a key from being read only
+//       by core/models and never re-classified once a Setup page starts
+//       writing the same name.
+#include <QtTest>
+#include <QDir>
+#include <QDirIterator>
+#include <QFile>
+#include <QRegularExpression>
+#include <QSet>
+#include <QString>
+#include <QStringList>
+
+#include "core/settings/SettingsScope.h"
+
+using namespace NereusSDR;
+
+namespace {
+
+// ---------------------------------------------------------------------
+// Mechanical key extraction.
+//
+// Regex-over-source, not a real parser -- same tradeoff
+// tst_core_has_no_gui_includes.cpp makes for the #include boundary, and
+// for the same reason: a real C++ parse of this tree is not a
+// proportionate cost for a guard test. Two limits fall out of that
+// choice, both handled explicitly rather than silently mis-extracting:
+//
+//   1. Only a DIRECTLY quoted literal (bare "..." or wrapped in
+//      QStringLiteral(...)/QLatin1String(...)) is recognised as a key
+//      argument. A key built by concatenation at the call site (e.g.
+//      AudioDeviceConfig.cpp's `s.value(base + QStringLiteral("Gain"))`)
+//      is invisible to this scan. Every family built that way in this
+//      tree was read by hand while writing this file's rule table and
+//      the accompanying report; none of them changes either assertion's
+//      outcome below (they are either exempted "audio/*" families or
+//      already covered some other way), so this is a known, accepted gap
+//      rather than a silent one.
+//   2. hardwareValue(mac, key, ...) / setHardwareValue(mac, key, value)
+//      pass a MAC as the first argument and the bare per-radio key
+//      literal as the second; AppSettings::hardwareValue/setHardwareValue
+//      (AppSettings.cpp:974, :981) prepend "hardware/<mac>/" internally
+//      before the key ever reaches the canonical setValue()/value()
+//      funnel. Extracting the bare literal ("radioInfo/sampleRate")
+//      would test a string classifySettingsKey() is never actually asked
+//      to classify in production -- Task 15 only ever sees the fully
+//      qualified form via AppSettings::setChangeHook(). So every
+//      hardwareValue/setHardwareValue literal is reconstructed here with
+//      a synthetic "hardware/<mac>/" prefix before being added to the key
+//      set, mirroring what the real accessor does.
+//
+// Receiver is scoped to the three identifiers this tree actually binds
+// AppSettings::instance() to by reference ('s', 'settings', 'as' -- every
+// other binding seen is a one-shot non-reference result variable, e.g.
+// `QString addr = AppSettings::instance().value(...).toString()`, which
+// the direct-chain branch below already covers) or the direct
+// `AppSettings::instance()` chain. Without this scoping, `.value(`/
+// `.contains(`/`.remove(` alone match constructs having nothing to do
+// with AppSettings -- QJsonObject::value(), QMap<QString,QString>::value/
+// contains/remove -- and a codebase-wide sweep for just those method
+// names pulls in dozens of unrelated string literals (JSON field names
+// like "Baud"/"Format"/"Host" out of ExternalVariableEngine.cpp, PGXL/
+// TGXL frame keys like "fwd"/"swr"/"state" out of RadioModel.cpp and
+// TunerModel.cpp). The `\b` word boundaries matter: without them, `s`
+// alone matches the trailing letter of `kvs`/`settings2`/any other
+// identifier ending in "s".
+// Plain escaped literals rather than raw string literals (R"(...)"):
+// moc's own pre-parser choked on an embedded '"' inside a raw string here
+// ("missing ')' in macro usage"), even though every affected function is
+// a free function nowhere near the QObject-derived class below -- moc
+// scans the whole translation unit, not just the class. Matches
+// tst_core_has_no_gui_includes.cpp's own regex literals, which use the
+// same escaped style for the same reason.
+QRegularExpression firstArgKeyRegex()
+{
+    static const QRegularExpression re(
+        QStringLiteral(
+            "(?:\\bs\\b|\\bsettings\\b|\\bas\\b|AppSettings::instance\\(\\))"
+            "\\s*\\.\\s*(value|setValue|contains|remove|stationValue|setStationValue)\\s*\\(\\s*"
+            "(?:QStringLiteral|QLatin1String)?\\s*\\(?\\s*\"((?:[^\"\\\\]|\\\\.)*)\"\\s*\\)?"));
+    return re;
+}
+
+QRegularExpression secondArgKeyRegex()
+{
+    static const QRegularExpression re(
+        QStringLiteral(
+            "(?:\\bs\\b|\\bsettings\\b|\\bas\\b|AppSettings::instance\\(\\))"
+            "\\s*\\.\\s*(hardwareValue|setHardwareValue)\\s*\\([^,()]*(?:\\([^()]*\\))?[^,()]*,\\s*"
+            "(?:QStringLiteral|QLatin1String)?\\s*\\(?\\s*\"((?:[^\"\\\\]|\\\\.)*)\"\\s*\\)?"));
+    return re;
+}
+
+// True if a "//" appears on the same source line before matchStart --
+// good enough to reject AppSettings.h's own usage-example doc comment
+// (`//   s.setValue("LastConnectedRadioMac", ...)`, a literal that reads
+// as a real call site to a regex that cannot tell code from prose) without
+// the false-negative risk of also stripping block comments: an earlier
+// draft of this scan stripped /* ... */ spans with a second regex and it
+// silently swallowed real code in at least one large file (a stray '/'
+// '*' pairing well before the code, non-greedy match landing on the wrong
+// '*/'), which is a worse failure mode than the one false-positive comment
+// example this guards against.
+bool isLineCommented(const QString& text, qsizetype matchStart)
+{
+    const qsizetype lineStart = text.lastIndexOf(QLatin1Char('\n'), matchStart) + 1;
+    return text.indexOf(QStringLiteral("//"), lineStart) >= 0
+        && text.indexOf(QStringLiteral("//"), lineStart) < matchStart;
+}
+
+// One synthetic MAC segment stands in for every hardwareValue/
+// setHardwareValue call site: classifySettingsKey's "hardware/" prefix
+// rule does not (and per the brief's own pennyExtCtrl example, must not)
+// care what occupies that segment.
+const QString kSyntheticMac = QStringLiteral("hardware/00:11:22:33:44:55/");
+
+struct ScanResult {
+    QSet<QString> keys;
+    int filesScanned = 0;
+};
+
+ScanResult scanTree(const QString& absoluteDir)
+{
+    ScanResult result;
+    QDirIterator it(absoluteDir, {QStringLiteral("*.h"), QStringLiteral("*.cpp")},
+                    QDir::Files, QDirIterator::Subdirectories);
+    const QRegularExpression firstArg = firstArgKeyRegex();
+    const QRegularExpression secondArg = secondArgKeyRegex();
+    while (it.hasNext()) {
+        const QString path = it.next();
+        QFile f(path);
+        if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) { continue; }
+        ++result.filesScanned;
+        const QString text = QString::fromUtf8(f.readAll());
+
+        auto matches = firstArg.globalMatch(text);
+        while (matches.hasNext()) {
+            const QRegularExpressionMatch m = matches.next();
+            if (isLineCommented(text, m.capturedStart(0))) { continue; }
+            result.keys.insert(m.captured(2));
+        }
+
+        auto hwMatches = secondArg.globalMatch(text);
+        while (hwMatches.hasNext()) {
+            const QRegularExpressionMatch m = hwMatches.next();
+            if (isLineCommented(text, m.capturedStart(0))) { continue; }
+            result.keys.insert(kSyntheticMac + m.captured(2));
+        }
+    }
+    return result;
+}
+
+// ---------------------------------------------------------------------
+// Exemption list for assertion (a) -- core/models-touched keys that are
+// correctly OperatorLocal despite that. Each entry is a deliberate
+// finding, not a formality; see the report for the fuller writeup.
+//
+//   audio/*  (prefix, minus the two explicit-Station exceptions
+//   classifySettingsKey itself carries: audio/DspRate, audio/
+//   DspBlockSize) -- read and written from src/core: AudioEngine.cpp
+//   ensureSpeakersOpen/ensureTxInputOpen (AudioDeviceConfig::
+//   loadFromSettings("audio/Speakers"|"audio/TxInput")), setVacFeedbackParams
+//   (audio/VacFeedback/<ch>/*), AppSettings.cpp's migrateVaxSchemaV1ToV2
+//   (audio/Speakers/BitDepth seed, audio/FirstRunComplete,
+//   audio/OutputDevice legacy removal). Also written by the DAEMON
+//   itself: DaemonApp.cpp:220 sets audio/Speakers/DeviceName from
+//   nereusd.conf's audio_device. None of that makes it Station: it is
+//   local sound hardware selection on whichever machine is running the
+//   code that opens the device, and that machine's own sound card list
+//   is meaningless to any OTHER machine that key might sync to. The two
+//   exceptions are real DSP engine parameters (WDSP buffer/sample rate),
+//   not device selection, which is exactly why they are NOT in this
+//   exemption list -- they classify Station on their own.
+//
+//   tx/preconnect/*  and  tx/OwnerSlot  -- same shape as audio/*, one
+//   layer up the stack. TransmitModel.cpp:1436-1456/2403-2427 persists
+//   the pre-connect TX mic-source fallback ("the user clicks the radio
+//   button in Setup -> Audio -> TX Input before connecting to a radio");
+//   TransmitModel.cpp:387/397 persists which VaxSlot currently owns TX
+//   audio. Both are about which LOCAL audio input feeds the transmitter,
+//   the capture-side mirror of audio/Speakers/DeviceName, so the same
+//   reasoning applies.
+//
+//   DisplayGridStep, DisplayProfileApplied -- read by
+//   src/models/PanadapterModel (grid line spacing; a one-shot "have I
+//   applied the smooth-defaults display profile" migration flag). Both
+//   are cosmetic/bookkeeping for one client's own rendering, unrelated to
+//   the four FftPoolConfig knobs pinned Station in knownExamples() above.
+//
+//   LogCategory_*  -- src/core/LogCategories.cpp persists per-category
+//   qCDebug/qCInfo/qCWarning verbosity for whichever PROCESS is running:
+//   the daemon and the GUI each have their own log file (see
+//   tst_daemon_settings_profile.cpp's header), and a category relevant to
+//   one is frequently noise on the other, so this is correctly
+//   per-process rather than per-station.
+const QStringList kCoreExemptPrefixes = {
+    QStringLiteral("audio/"),
+    QStringLiteral("Audio/"),      // capital-A: LinuxBackendPreferred,
+                                    // Vax%1/NodeDescription -- a DIFFERENT,
+                                    // case-sensitive namespace from
+                                    // lowercase "audio/", same local-
+                                    // machine-audio reasoning.
+    QStringLiteral("tx/preconnect/"),
+    QStringLiteral("LogCategory_"),
+};
+
+const QSet<QString> kCoreExemptExact = {
+    QStringLiteral("tx/OwnerSlot"),
+    QStringLiteral("DisplayGridStep"),
+    QStringLiteral("DisplayProfileApplied"),
+};
+
+bool isCoreExempt(const QString& key)
+{
+    if (kCoreExemptExact.contains(key)) { return true; }
+    for (const QString& prefix : kCoreExemptPrefixes) {
+        if (key.startsWith(prefix)) { return true; }
+    }
+    return false;
+}
+
+} // namespace
+
+class TstSettingsScope : public QObject {
+    Q_OBJECT
+private slots:
+
+    // ---- Step 1: table-driven known examples --------------------------
+    void knownExamples_data()
+    {
+        QTest::addColumn<QString>("key");
+        QTest::addColumn<int>("expected"); // SettingsScope, as int
+
+        // Brief-mandated worked examples.
+        QTest::newRow("DisplayFftSize is Station (FftPoolConfig)")
+            << QStringLiteral("DisplayFftSize") << int(SettingsScope::Station);
+        QTest::newRow("DisplayNoiseFloorColor is OperatorLocal (rendering)")
+            << QStringLiteral("DisplayNoiseFloorColor") << int(SettingsScope::OperatorLocal);
+        QTest::newRow("TciServerPort is Station (server config)")
+            << QStringLiteral("TciServerPort") << int(SettingsScope::Station);
+        QTest::newRow("TciLogWindowGeometry is OperatorLocal (GUI dialog geometry)")
+            << QStringLiteral("TciLogWindowGeometry") << int(SettingsScope::OperatorLocal);
+        QTest::newRow("hardware/oc/pennyExtCtrl is Station (oc is a literal segment, not a MAC)")
+            << QStringLiteral("hardware/oc/pennyExtCtrl") << int(SettingsScope::Station);
+
+        // The other three FftPoolConfig knobs (MainWindow.cpp:1512's "the
+        // four display AppSettings-sourced knobs"). MainWindow.cpp is
+        // outside all three trees the completeness sweep scans, so these
+        // three are NOT covered by that sweep -- only by these rows.
+        QTest::newRow("DisplayFftWindow is Station (FftPoolConfig)")
+            << QStringLiteral("DisplayFftWindow") << int(SettingsScope::Station);
+        QTest::newRow("DisplayHzPerBinTarget is Station (FftPoolConfig)")
+            << QStringLiteral("DisplayHzPerBinTarget") << int(SettingsScope::Station);
+        QTest::newRow("DisplaySpectrumFps is Station (the straddle -- see SettingsScope.cpp)")
+            << QStringLiteral("DisplaySpectrumFps") << int(SettingsScope::Station);
+
+        // The "audio/" split: DspRate/DspBlockSize are real WDSP engine
+        // parameters (Station); Speakers/DeviceName is local sound
+        // hardware selection (OperatorLocal) even though both are
+        // core-touched under the same "audio/" prefix.
+        QTest::newRow("audio/DspRate is Station (WDSP engine parameter)")
+            << QStringLiteral("audio/DspRate") << int(SettingsScope::Station);
+        QTest::newRow("audio/DspBlockSize is Station (WDSP engine parameter)")
+            << QStringLiteral("audio/DspBlockSize") << int(SettingsScope::Station);
+        QTest::newRow("audio/Speakers/DeviceName is OperatorLocal (local sound device)")
+            << QStringLiteral("audio/Speakers/DeviceName") << int(SettingsScope::OperatorLocal);
+        QTest::newRow("tx/preconnect/Mic_Source is OperatorLocal (local mic device)")
+            << QStringLiteral("tx/preconnect/Mic_Source") << int(SettingsScope::OperatorLocal);
+
+        // A realistic fully-qualified hardwareValue-routed key (a real
+        // MAC-shaped segment this time, not "oc") -- proves the
+        // "hardware/" prefix rule Task 15 actually relies on, since every
+        // hardwareValue()/setHardwareValue() key it will ever see already
+        // carries this shape (AppSettings.cpp:974, :981).
+        QTest::newRow("hardware/<mac>/radioInfo/sampleRate is Station")
+            << QStringLiteral("hardware/00:1C:2D:05:37:2A/radioInfo/sampleRate")
+            << int(SettingsScope::Station);
+
+        QTest::newRow("Region is Station (band-plan/TX-legality is where the radio is)")
+            << QStringLiteral("Region") << int(SettingsScope::Station);
+        QTest::newRow("StationCallsign is Station")
+            << QStringLiteral("StationCallsign") << int(SettingsScope::Station);
+    }
+
+    void knownExamples()
+    {
+        QFETCH(QString, key);
+        QFETCH(int, expected);
+        QCOMPARE(int(classifySettingsKey(key)), expected);
+    }
+
+    // ---- Step 3: per-pan suffix stripping ------------------------------
+    void perPanSuffixIsStrippedBeforeMatching_data()
+    {
+        QTest::addColumn<QString>("suffixed");
+        QTest::addColumn<QString>("base");
+
+        QTest::newRow("Station key, pan 1")
+            << QStringLiteral("DisplayFftSize_1") << QStringLiteral("DisplayFftSize");
+        QTest::newRow("Station key, pan 12 (multi-digit)")
+            << QStringLiteral("DisplayFftSize_12") << QStringLiteral("DisplayFftSize");
+        QTest::newRow("OperatorLocal key, pan 3")
+            << QStringLiteral("DisplayNoiseFloorColor_3") << QStringLiteral("DisplayNoiseFloorColor");
+    }
+
+    void perPanSuffixIsStrippedBeforeMatching()
+    {
+        QFETCH(QString, suffixed);
+        QFETCH(QString, base);
+        QCOMPARE(int(classifySettingsKey(suffixed)), int(classifySettingsKey(base)));
+    }
+
+    // Negative case: a real key whose only underscore is followed by
+    // letters, not digits, must NOT be treated as pan-suffixed. Checked
+    // against the literal string classifySettingsKey would need to
+    // mis-strip to "TciSliceA" for this to accidentally pass for the
+    // wrong reason (both "TciSliceA" and "TciSliceA_OutputSampleRate"
+    // classify Station via the same "Tci" prefix, so a scope-only
+    // assertion here would not actually prove the suffix survived).
+    void nonDigitSuffixIsNotStripped()
+    {
+        const QString real = QStringLiteral("TciSliceA_OutputSampleRate");
+        QCOMPARE(int(classifySettingsKey(real)), int(SettingsScope::Station));
+        // If stripping fired here it would classify "TciSliceA" instead,
+        // which still resolves Station via the same prefix -- so also
+        // pin a key that would flip OperatorLocal->something-else-entirely
+        // under a wrong all-suffix-strip, to make a regression loud
+        // instead of silent: RfKit_Ant1_Label's only "trailing" digit
+        // sits before "_Label", not at the end, so an implementation that
+        // stripped from the FIRST underscore instead of the last would
+        // mangle it to "RfKit" and lose the antenna-label family. RfKit_
+        // is a Station prefix either way, so this specifically exercises
+        // "strip only a true trailing _<digits> run", not the resulting
+        // scope.
+        const QString label = QStringLiteral("RfKit_Ant1_Label");
+        QCOMPARE(int(classifySettingsKey(label)), int(SettingsScope::Station));
+    }
+
+    // ---- Step 4: the completeness sweep --------------------------------
+    void completenessSweep()
+    {
+        const QString root = QStringLiteral(NEREUS_SOURCE_DIR);
+        const ScanResult core = scanTree(root + QStringLiteral("/src/core"));
+        const ScanResult models = scanTree(root + QStringLiteral("/src/models"));
+        const ScanResult setup = scanTree(root + QStringLiteral("/src/gui/setup"));
+
+        // Minimum-files-scanned guard, copied in shape from
+        // tst_core_has_no_gui_includes.cpp:288-292 (its own comment: "A
+        // wrong NEREUS_SOURCE_DIR ... scans zero files ... and would
+        // otherwise report a false 'zero offenders' pass. Fail loudly
+        // instead of passing vacuously."). This test has the identical
+        // failure mode, plus a second one that guard did not: the
+        // gui/setup floor is set well above its 32-.cpp non-recursive
+        // depth-1 count specifically so a scan that silently stopped
+        // recursing (the brief's own OcOutputsHfTab.cpp path error, lived
+        // out mechanically) fails loudly here too, rather than quietly
+        // shrinking the key set it checks.
+        const int coreModelsScanned = core.filesScanned + models.filesScanned;
+        QVERIFY2(coreModelsScanned > 300,
+                 qPrintable(QStringLiteral(
+                     "only %1 core+models files scanned, NEREUS_SOURCE_DIR is probably wrong")
+                                .arg(coreModelsScanned)));
+        QVERIFY2(setup.filesScanned > 40,
+                 qPrintable(QStringLiteral(
+                     "only %1 src/gui/setup files scanned (32 is the non-recursive depth-1 "
+                     "count -- this scan has stopped recursing)")
+                                .arg(setup.filesScanned)));
+
+        QSet<QString> coreModelsKeys = core.keys;
+        coreModelsKeys.unite(models.keys);
+        QVERIFY2(coreModelsKeys.size() > 50,
+                 qPrintable(QStringLiteral("only %1 keys extracted from core+models, "
+                                            "the extraction regex probably broke")
+                                .arg(coreModelsKeys.size())));
+        QVERIFY2(setup.keys.size() > 50,
+                 qPrintable(QStringLiteral("only %1 keys extracted from src/gui/setup, "
+                                            "the extraction regex probably broke")
+                                .arg(setup.keys.size())));
+
+        // ---- (a) the easy direction: core/models keys classify Station,
+        // modulo the justified exemption list above. ----
+        QStringList notStation;
+        for (const QString& key : std::as_const(coreModelsKeys)) {
+            if (isCoreExempt(key)) { continue; }
+            if (classifySettingsKey(key) != SettingsScope::Station) {
+                notStation << key;
+            }
+        }
+        notStation.sort();
+        QVERIFY2(notStation.isEmpty(),
+                 qPrintable(QStringLiteral(
+                     "%1 core/models key(s) classify OperatorLocal and are not in the "
+                     "exemption list: %2")
+                                .arg(notStation.size())
+                                .arg(notStation.join(QStringLiteral(", ")))));
+
+        // ---- (b) the valuable half: a key touched by BOTH a Setup page
+        // and a core/models consumer must classify Station. No exemption
+        // list here on purpose -- a key a Setup page writes into the same
+        // namespace a core consumer reads is exactly the shape of the
+        // failure this test exists to catch. ----
+        QSet<QString> overlap = coreModelsKeys;
+        overlap.intersect(setup.keys);
+        QVERIFY2(overlap.size() > 5,
+                 qPrintable(QStringLiteral("only %1 overlap key(s) found between "
+                                            "core/models and src/gui/setup -- suspiciously "
+                                            "low, the extraction regex probably broke")
+                                .arg(overlap.size())));
+
+        QStringList overlapNotStation;
+        for (const QString& key : std::as_const(overlap)) {
+            if (classifySettingsKey(key) != SettingsScope::Station) {
+                overlapNotStation << key;
+            }
+        }
+        overlapNotStation.sort();
+        QVERIFY2(overlapNotStation.isEmpty(),
+                 qPrintable(QStringLiteral(
+                     "%1 key(s) appear in BOTH a Setup page and a core/models consumer "
+                     "but do not classify Station: %2")
+                                .arg(overlapNotStation.size())
+                                .arg(overlapNotStation.join(QStringLiteral(", ")))));
+    }
+};
+
+QTEST_MAIN(TstSettingsScope)
+#include "tst_settings_scope.moc"

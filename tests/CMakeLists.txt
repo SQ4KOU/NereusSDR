@@ -6434,6 +6434,29 @@ nereus_add_test(tst_slice_meter_pump
 # still strips its "hardware/<mac>/" prefix to bare keys.
 nereus_add_test(tst_settings_mutator_funnel)
 
+# Remote Daemon R2, Task 14: classifySettingsKey (src/core/settings/
+# SettingsScope.{h,cpp}) and its completeness gate. A pure function over
+# QStringView deciding whether an AppSettings key belongs to the station
+# (crosses the wire, Task 15) or to the operator's own machine (never
+# does). Table-driven examples pin the brief's worked cases plus every
+# FftPoolConfig key and this task's own "audio/" split judgement calls.
+# The completeness sweep extracts every key literal passed directly to an
+# AppSettings accessor from src/core, src/models AND src/gui/setup/ --
+# recursively, which matters: the brief cites the OC keys as living in
+# src/gui/setup/OcOutputsHfTab.cpp, a path that does not exist (it is
+# src/gui/setup/hardware/OcOutputsHfTab.cpp, one directory deeper, and a
+# non-recursive scan silently misses it and 14 other files). Asserts every
+# core/models key classifies Station modulo a small justified exemption
+# list (mostly "audio/*": local sound hardware selection, touched by core
+# because that is wherever the device actually opens, but not a station
+# fact), and -- the valuable half -- that any key found in BOTH a Setup
+# page and a core/models consumer classifies Station, which is the
+# assertion that actually catches a misclassified key silently reading
+# and writing locally forever.
+nereus_add_test(tst_settings_scope)
+target_compile_definitions(tst_settings_scope PRIVATE
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
 # R1 Task 10: DaemonApp connects the daemon to a radio (or runs discovery)
 # and creates min(cfg.sliceCount, connected-board-maxSlices) slices via
 # RadioModel's own addSlice() -- the same entry point connectToRadio()

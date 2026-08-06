@@ -713,6 +713,16 @@ set(CORE_SOURCES
     # TxSliceArbiter.cpp above for the existing precedent of src/core/
     # depending on src/models/ directly.
     src/core/meters/SliceMeterPump.cpp
+    # R2 Task 14: classifySettingsKey, the pure function deciding whether
+    # an AppSettings key belongs to the station (must round-trip over the
+    # wire) or to the operator's own machine (must never leave the local
+    # store). Task 15's SettingsProxy is the only planned caller so far.
+    # No I/O, no singleton, no dependency on AppSettings itself -- see the
+    # file's own header comment for the ordered rule table and
+    # tests/tst_settings_scope.cpp for the completeness sweep that
+    # extracts every key literal this tree passes to an AppSettings
+    # accessor and cross-checks this table against it.
+    src/core/settings/SettingsScope.cpp
 )
 
 # CoreAudioHalBus — macOS-only IAudioBus implementation bridging to the
