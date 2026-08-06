@@ -6,12 +6,23 @@
 //
 // The ordered rule table, first match wins:
 //   1. Explicit exceptions -- a key that would otherwise be caught by a
-//      prefix rule below but needs the opposite answer.
+//      prefix rule below but needs the opposite answer. Only the two
+//      TciLogWindow* entries qualify under that strict definition (both
+//      would match the "Tci" prefix rule in step 2 without this step
+//      running first). A key that matches no prefix at all belongs in
+//      step 3 below, even if it reads like an "exception" to some
+//      family's usual answer in prose.
 //   2. Prefixes -- a whole family that shares one scope regardless of
 //      what follows the prefix (checked with startsWith(), so ordering
 //      between prefixes only matters if one is a leading substring of
 //      another; none of the ones below are).
-//   3. Whole-key rules -- individual flat keys with no shared family.
+//   3. Whole-key rules -- individual flat keys with no shared prefix
+//      family, including several that are departures from what their
+//      surrounding family would otherwise suggest (the four FftPoolConfig
+//      knobs among the mostly-cosmetic "Display*" keys; audio/DspRate and
+//      audio/DspBlockSize among the mostly-local "audio/*" keys) -- see
+//      the two paragraphs below for why those six live here and not in
+//      step 1.
 //   4. Default: OperatorLocal. See SettingsScope.h's top comment for why
 //      the default is local, not Station.
 //
@@ -27,23 +38,25 @@
 //   (MainWindow.cpp:1477-1500, this exact quartet named at :1512-1539's
 //   "the four display AppSettings-sourced knobs" comment) reads to
 //   configure the daemon's actual FFT production rate/size/window/target
-//   bin width. Those four are explicit exceptions below, Station, and
-//   DisplaySpectrumFps carries its own paragraph (see below) because it
-//   is not simply "Station" in the same sense as the other three.
+//   bin width. Those four are whole-key rules below, Station -- NOT
+//   "explicit exceptions" in this file's strict sense, since no prefix
+//   rule claims "Display*" for step 1 to need to override. DisplaySpectrumFps
+//   carries its own paragraph (see below) because it is not simply
+//   "Station" in the same sense as the other three.
 //
 //   "audio/" -- almost every audio/* key is local sound hardware
 //   selection (AudioEngine.cpp's ensureSpeakersOpen/ensureTxInputOpen via
 //   AudioDeviceConfig::loadFromSettings("audio/Speakers"|"audio/TxInput"),
 //   VAX cable bookkeeping, the v0.3.0 audio/FirstRunComplete migration
 //   flag) and correctly falls through to the default below. audio/DspRate
-//   and audio/DspBlockSize are the two exceptions: real WDSP engine
+//   and audio/DspBlockSize are the two departures: real WDSP engine
 //   parameters (AudioEngine.cpp:1791-1808, read back by
 //   AudioAdvancedPage.cpp:145-170), not device selection, so they are
-//   Station. See tests/tst_settings_scope.cpp's kCoreExemptPrefixes for
-//   the fuller "audio/*" writeup, including that src/core/daemon/
-//   DaemonApp.cpp:220 also writes audio/Speakers/DeviceName directly
-//   (from nereusd.conf's audio_device) without that making it Station
-//   either -- it is still local sound hardware selection, just on
+//   Station whole-key rules below. See tests/tst_settings_scope.cpp's
+//   kCoreExemptPrefixes for the fuller "audio/*" writeup, including that
+//   src/core/daemon/DaemonApp.cpp:220 also writes audio/Speakers/DeviceName
+//   directly (from nereusd.conf's audio_device) without that making it
+//   Station either -- it is still local sound hardware selection, just on
 //   whichever machine happens to be running nereusd standalone.
 //
 // ---- The DisplaySpectrumFps straddle -----------------------------------
@@ -76,6 +89,21 @@
 //                                    completeness gate. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-08-06  J.J. Boyd / KG4VCF  Fix round 1 (review): moved six
+//                                    whole-key rules out of kExceptions
+//                                    into kWholeKeys (they match no
+//                                    prefix, so they were never really
+//                                    "exceptions" by this file's own
+//                                    definition); added a "radios/"
+//                                    prefix rule (hand-seeded, same
+//                                    reason "Slice" is); removed the
+//                                    "%1/" prefix rule (a test-only
+//                                    extraction artifact that had leaked
+//                                    into production code, now handled
+//                                    entirely inside the test); corrected
+//                                    a false claim in stripPanSuffix's
+//                                    comment. AI-assisted transformation
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include "core/settings/SettingsScope.h"
@@ -90,10 +118,22 @@ namespace {
 // From SpectrumWidget.cpp:577-584's settingsKey(base, panIndex) helper
 // (AetherSDR pattern): panIndex 0 returns base unchanged; panIndex N>0
 // returns "base_N". Strip a trailing "_<digits>" run before matching, so
-// a key means the same thing on every pan. No real key in this tree ends
-// in "_<digits>" for any other reason (verified against the full
-// extraction tst_settings_scope.cpp's completeness sweep performs), so
-// this cannot mis-strip an unrelated key.
+// a key means the same thing on every pan.
+//
+// A handful of OTHER index-suffixed key families exist in this tree,
+// built via .arg() and therefore invisible to the completeness sweep's
+// extraction (see tst_settings_scope.cpp's "Three limits" comment):
+// ContainerData_%1, ContainerItems_%1 (ContainerManager.cpp, container
+// id, a QUuid string), SpotBandFilter_%1, spotListBandPill_%1 (band name
+// like "20m"), SpotSourceFilter_%1, spotListSourcePill_%1 (source label).
+// None of these six are misclassified by this function whether or not
+// stripping happens to fire on a given instantiation: none of them, base
+// or suffixed, matches any rule below, so all six resolve OperatorLocal
+// regardless -- correctly, since all six are per-widget/per-filter local
+// UI state. This function's correctness does not depend on identifying
+// every index-suffixed family in the tree, only on not mis-stripping one
+// that WOULD otherwise match a rule; nothing in the current rule table
+// shares a base name with any of these six.
 QStringView stripPanSuffix(QStringView key)
 {
     const qsizetype underscore = key.lastIndexOf(QLatin1Char('_'));
@@ -115,27 +155,14 @@ struct Rule {
 };
 
 // ---- 1. Explicit exceptions ---------------------------------------------
+// Both entries below are the ONLY keys in this whole table that would be
+// caught by a prefix rule in step 2 if this step didn't run first.
 const Rule kExceptions[] = {
     // TCI's own log-viewer dialog (Tools -> ... -> TCI Server Log,
     // TciLogWindow.cpp): pure GUI chrome, escapes the "Tci" prefix rule
     // below on purpose.
     { "TciLogWindowGeometry", SettingsScope::OperatorLocal },
     { "TciLogWindowAutoScroll", SettingsScope::OperatorLocal },
-
-    // The "audio/" split -- see this file's header comment. Both are read
-    // by AudioAdvancedPage.cpp:145-170 (Setup -> Audio -> Advanced) and
-    // written by AudioEngine.cpp:1791-1808 (setDspSampleRate/
-    // setDspBlockSize).
-    { "audio/DspRate", SettingsScope::Station },
-    { "audio/DspBlockSize", SettingsScope::Station },
-
-    // The four FftPoolConfig knobs -- see this file's header comment.
-    // DisplaySpectrumFps is the straddle; the paragraph above this table
-    // is the authoritative record of that, not this one-line entry.
-    { "DisplayFftSize", SettingsScope::Station },
-    { "DisplayFftWindow", SettingsScope::Station },
-    { "DisplayHzPerBinTarget", SettingsScope::Station },
-    { "DisplaySpectrumFps", SettingsScope::Station },
 };
 
 // ---- 2. Prefixes ---------------------------------------------------------
@@ -194,6 +221,27 @@ const Rule kPrefixes[] = {
     // same scope as their successor.
     { "Vfo", SettingsScope::Station },
 
+    // Saved-radio list (name/IP/MAC/port/protocol/autoConnect/pinToMac/
+    // lastSeen/lastConnected/discoveryProfile). OperatorLocal, not
+    // Station: which radios are known/discoverable and which to
+    // auto-connect to is a client-side connection-management concern,
+    // not something nereusd needs. Confirmed by absence, not presence:
+    // grepping src/core/daemon/DaemonApp.cpp and DaemonConfig.cpp for
+    // "radios/"/savedRadio/lastConnected/discoveryProfile returns zero
+    // hits -- the daemon picks its target radio from nereusd.conf, never
+    // from this namespace. Hand-seeded like "Slice" above: every real
+    // call site is inside AppSettings.cpp's own lastConnected()/
+    // setLastConnected()/discoveryProfile()/setDiscoveryProfile() (and
+    // the radioKeyPrefix()/savedRadio()/saveRadio() family), calling
+    // value()/setValue()/remove() with no receiver prefix at all
+    // (implicit self-calls), which is outside what the completeness
+    // sweep's regex can see (see tst_settings_scope.cpp's "Three limits"
+    // comment) -- so nothing forces this rule to exist for either
+    // completeness assertion to pass; it is here because it is correct,
+    // not because a test demanded it. Explicit rather than left to the
+    // bare default so a future reader sees this was reviewed, not missed.
+    { "radios/", SettingsScope::OperatorLocal },
+
     // PGXL / TGXL / RF2K-S: physically attached to the station (the
     // amplifier/tuner sits at the radio site, not on an operator's
     // remote laptop). Connection config, pairing state, identity/nickname,
@@ -250,26 +298,27 @@ const Rule kPrefixes[] = {
     // RADE peer-mode DSP: neural vocoder model path and the EOO
     // idle-clear timer, both configuring the daemon-side RadeChannel.
     { "Rade", SettingsScope::Station }, // Rade/ModelPath, RadeIdleClearMs
-
-    // Alex/Apollo/OC per-band antenna-relay and filter config built by
-    // hand via QStringLiteral("%1/...").arg(base) where base is always
-    // AlexController::persistenceKey() ("hardware/<mac>/alex/antenna",
-    // AlexController.cpp:360-363) or ApolloController::persistenceKey()
-    // ("hardware/<mac>/apollo", ApolloController.h:141) -- i.e. this
-    // "%1" is ALWAYS itself "hardware/<mac>/...". The completeness
-    // sweep's regex extraction cannot resolve a runtime .arg() argument,
-    // so it sees the literal template text "%1/blockTxAnt2" etc.
-    // verbatim rather than the realized "hardware/<mac>/alex/antenna/
-    // blockTxAnt2" Task 15 will actually see. This rule exists ONLY to
-    // keep that mechanical extraction honest about what it found; it is
-    // dead code against any real key, because a real AppSettings key can
-    // never contain the literal two-character substring "%1" (Qt's
-    // QString::arg() always resolves it before the string is used).
-    { "%1/", SettingsScope::Station },
 };
 
 // ---- 3. Whole-key rules ---------------------------------------------------
 const Rule kWholeKeys[] = {
+    // The four FftPoolConfig knobs -- see this file's header comment for
+    // the full "Display" writeup and the DisplaySpectrumFps straddle
+    // paragraph. Not "explicit exceptions" (step 1): no "Display" prefix
+    // rule exists for these to escape.
+    { "DisplayFftSize", SettingsScope::Station },
+    { "DisplayFftWindow", SettingsScope::Station },
+    { "DisplayHzPerBinTarget", SettingsScope::Station },
+    { "DisplaySpectrumFps", SettingsScope::Station },
+
+    // The "audio/" split -- see this file's header comment. Both are read
+    // by AudioAdvancedPage.cpp:145-170 (Setup -> Audio -> Advanced) and
+    // written by AudioEngine.cpp:1791-1808 (setDspSampleRate/
+    // setDspBlockSize). Not "explicit exceptions" either: no "audio/"
+    // prefix rule exists for these to escape.
+    { "audio/DspRate", SettingsScope::Station },
+    { "audio/DspBlockSize", SettingsScope::Station },
+
     // Band-plan / TX-legality is a fact about where the RADIO is, not
     // where the operator's remote GUI happens to be sitting -- the
     // clearest possible case for Station in a genuinely remote session.
@@ -324,13 +373,21 @@ const Rule kWholeKeys[] = {
     // ---- Reviewed and deliberately pinned OperatorLocal --------------
     // Each of these has a name that reads as a TX-safety or station-
     // behaviour flag, which is exactly the shape of key this table
-    // exists to get right -- and each was checked, not guessed: grepping
-    // the full text of every one of them across src/core and src/models
-    // finds zero consumption outside the Setup page that defines it
-    // (TransmitSetupPages.cpp / GeneralOptionsPage.cpp). Pinned
-    // explicitly, rather than left to the bare default below, so that a
-    // future audit that DOES wire one of these into real enforcement
-    // trips over an explicit line to change instead of a silent default.
+    // exists to get right -- and each was checked, not guessed. Fix
+    // round 1 (review) confirmed this narrower and stronger than
+    // originally claimed: grepping the quoted literal for each of the
+    // five across src/core and src/models (not just the same-named
+    // identifier -- an earlier pass's cruder grep matched things like
+    // HPSDRHW::HermesLiteRxOnly, BoardCapabilities::isRxOnlySku, and the
+    // Alex.cs-ported RxOnlyAnt[] family, none of which are this setting)
+    // finds zero AppSettings accessor call sites anywhere outside the
+    // Setup page that defines each one (TransmitSetupPages.cpp /
+    // GeneralOptionsPage.cpp): all five are write-only settings with no
+    // runtime consumer at all, not settings with a consumer this table
+    // just doesn't happen to route to the daemon. Pinned explicitly,
+    // rather than left to the bare default below, so that a future
+    // audit that DOES wire one of these into real enforcement trips over
+    // an explicit line to change instead of a silent default.
     { "DisableHfPa", SettingsScope::OperatorLocal },
     { "ExtendedTxAllowed", SettingsScope::OperatorLocal },
     { "PreventTxOnDifferentBandToRx", SettingsScope::OperatorLocal },

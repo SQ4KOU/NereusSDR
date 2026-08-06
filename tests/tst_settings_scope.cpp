@@ -23,11 +23,13 @@
 // lives outside all three scanned trees -- see completenessSweep()'s
 // header comment), so a regression on any of them would otherwise be
 // invisible to this file. Also pins hardware/oc/pennyExtCtrl (Station,
-// proving "oc" is a literal path segment and not a MAC-shaped guard) and
-// two of this task's own exemption-list judgement calls (audio/DspRate
-// Station vs audio/Speakers/DeviceName OperatorLocal; both are
-// core-touched, and only one of them is a DSP engine parameter -- see
-// completenessSweep()'s kCoreExemptPrefixes for the full reasoning).
+// proving "oc" is a literal path segment and not a MAC-shaped guard),
+// radios/lastConnected (OperatorLocal, invisible to the sweep for a
+// different reason -- see "Three limits" below), and two of this task's
+// own exemption-list judgement calls (audio/DspRate Station vs
+// audio/Speakers/DeviceName OperatorLocal; both are core-touched, and
+// only one of them is a DSP engine parameter -- see completenessSweep()'s
+// kCoreExemptPrefixes for the full reasoning).
 //
 // ---- Per-pan suffix (perPanSuffixIsStrippedBeforeMatching) -----------
 //
@@ -51,14 +53,19 @@
 // src/gui/setup/ -- recursively. The brief cites the OC keys as living in
 // src/gui/setup/OcOutputsHfTab.cpp; that file does not exist at that
 // path, it is src/gui/setup/hardware/OcOutputsHfTab.cpp, one directory
-// deeper. Measured: src/gui/setup/ has 32 .cpp files at depth 1 and 47
-// recursive (94 .h+.cpp combined) -- a non-recursive scan would silently
-// miss 15 .cpp files, including every OC key, which is the exact family
-// Step 1 above hand-pins as a regression canary for this. The extraction
-// below uses QDirIterator::Subdirectories throughout, and
-// completenessSweep()'s own minimum-files-scanned guard asserts high
-// enough on the gui/setup subtree specifically to notice if it ever
-// stops recursing.
+// deeper. Measured: src/gui/setup/ has 32 .cpp files at depth 1 (and 32
+// .h files there too, 64 combined) versus 47 recursive .cpp (94 .h+.cpp
+// combined) -- a non-recursive scan would silently miss 15 .cpp files
+// (23 keys, including every OC key), which is the exact family Step 1
+// above hand-pins as a regression canary for this. scanTree()'s
+// QDirIterator glob below counts both .h and .cpp, so the failure this
+// scan needs to detect is the 64-file depth-1 total, not the 32-file
+// .cpp-only figure the brief quotes -- fix round 1 (review) caught an
+// earlier draft of this file's minimum-files-scanned guard checking a
+// threshold (40) between those two numbers, which is satisfied by the
+// non-recursive 64-file trap and therefore could not detect the one
+// regression it exists to catch; see the guard's own comment below for
+// the corrected floor and the reasoning.
 //
 // Then asserts two things:
 //   (a) every key found in src/core or src/models classifies Station,
@@ -69,12 +76,31 @@
 //       running it -- see kCoreExemptPrefixes/kCoreExemptExact below for
 //       every entry and its citation);
 //   (b) -- the valuable half -- any key found in BOTH src/gui/setup/ and
-//       (src/core or src/models) classifies Station. This is the
-//       assertion that actually catches a misclassified key: extracting
-//       core/model keys and asserting they classify Station (a) is the
-//       easy direction, because nothing stops a key from being read only
-//       by core/models and never re-classified once a Setup page starts
-//       writing the same name.
+//       (src/core or src/models) classifies Station. No exemption list
+//       here on purpose: a key a Setup page writes into the same
+//       namespace a core consumer reads is exactly the shape of the
+//       failure this test exists to catch.
+//
+// Fix round 1 (review) correction: (a) and (b) are not independent the
+// way that framing suggests. Both range over coreModelsKeys, (b) via
+// coreModelsKeys intersected with setup.keys; QVERIFY2 returns from the
+// slot on failure, so (a) always runs to completion first, and (b) is
+// only ever REACHED for a key (a) did not already reject -- which means
+// (b) can only independently catch something for a key that is BOTH in
+// the overlap AND in the exemption list (isCoreExempt), since that is
+// the only way (a) lets a key through without demanding Station from it.
+// Measured live population of that set, as shipped: exactly TWO keys,
+// audio/DspRate and audio/DspBlockSize (both currently classify Station
+// via explicit whole-key rules, so (b) does not actually fail for either
+// today). Every other member of the 27-key overlap set is non-exempt, so
+// a misclassification there is caught by (a) first and (b) never
+// executes for it. This does not make (b) pointless -- it is exactly the
+// check that would catch a FUTURE exemption accidentally covering a key
+// a Setup page also writes -- but its current reach is narrower than
+// "any overlapping key" and a reader should not assume otherwise. See
+// the sabotage-and-revert proof in the task report for a transcript
+// isolating (b)'s own failure message using exactly this two-key
+// population (audio/DspRate).
 #include <QtTest>
 #include <QDir>
 #include <QDirIterator>
@@ -96,8 +122,8 @@ namespace {
 // Regex-over-source, not a real parser -- same tradeoff
 // tst_core_has_no_gui_includes.cpp makes for the #include boundary, and
 // for the same reason: a real C++ parse of this tree is not a
-// proportionate cost for a guard test. Two limits fall out of that
-// choice, both handled explicitly rather than silently mis-extracting:
+// proportionate cost for a guard test. Three limits fall out of that
+// choice, all handled explicitly rather than silently mis-extracting:
 //
 //   1. Only a DIRECTLY quoted literal (bare "..." or wrapped in
 //      QStringLiteral(...)/QLatin1String(...)) is recognised as a key
@@ -108,7 +134,16 @@ namespace {
 //      the accompanying report; none of them changes either assertion's
 //      outcome below (they are either exempted "audio/*" families or
 //      already covered some other way), so this is a known, accepted gap
-//      rather than a silent one.
+//      rather than a silent one. Six further families realize to
+//      "<base>_%1"-style index/id-suffixed keys invisible for the same
+//      reason (ContainerData_%1/ContainerItems_%1 in
+//      ContainerManager.cpp, keyed on a QUuid container id;
+//      SpotBandFilter_%1/spotListBandPill_%1 keyed on a band label like
+//      "20m"; SpotSourceFilter_%1/spotListSourcePill_%1 keyed on a
+//      source label, all in SpotHubDialog.cpp) -- all six live outside
+//      even src/gui/setup/ (they're in src/gui/ directly), all six match
+//      no rule in the table either stripped or unstripped, so all six
+//      classify OperatorLocal regardless, correctly.
 //   2. hardwareValue(mac, key, ...) / setHardwareValue(mac, key, value)
 //      pass a MAC as the first argument and the bare per-radio key
 //      literal as the second; AppSettings::hardwareValue/setHardwareValue
@@ -120,7 +155,45 @@ namespace {
 //      qualified form via AppSettings::setChangeHook(). So every
 //      hardwareValue/setHardwareValue literal is reconstructed here with
 //      a synthetic "hardware/<mac>/" prefix before being added to the key
-//      set, mirroring what the real accessor does.
+//      set, mirroring what the real accessor does. The same
+//      reconstruction is applied to any first-argument literal that
+//      itself starts with the literal text "%1/" (AlexController.cpp/
+//      ApolloController.cpp build several keys by hand via
+//      QStringLiteral("%1/...").arg(base) where base is always
+//      persistenceKey() == "hardware/<mac>/alex/antenna" or
+//      "hardware/<mac>/apollo" -- AlexController.cpp:360-363,
+//      ApolloController.h:141) -- see reconstructFirstArgKey() below.
+//      Fix round 1 (review) moved this handling here from a
+//      classifySettingsKey rule that existed ONLY to satisfy this scan's
+//      own limitation: production code has no legitimate reason to
+//      special-case the literal substring "%1", since QString::arg()
+//      always resolves it before a real key is ever used, and a rule
+//      that did would classify a genuinely malformed key (a real .arg()
+//      call forgotten somewhere) Station -- the direction
+//      SettingsScope.h's own default-OperatorLocal rationale calls the
+//      less recoverable one.
+//   3. The receiver scoping below (see "Receiver is scoped...") cannot
+//      see an UNQUALIFIED call inside AppSettings.cpp's own member
+//      functions -- a bare value(key)/setValue(key,v)/remove(key) with
+//      no "s."/"settings."/"as."/"AppSettings::instance()." prefix at
+//      all, which compiles fine as an implicit self-call from inside the
+//      class's own methods. Fix round 1 (review) found 10 such call
+//      sites / 7 distinct literals in AppSettings.cpp: the "radios/*"
+//      pair (AppSettings.cpp:942 value, :948 remove, :950 setValue for
+//      "radios/lastConnected"; :957 value, :964 setValue for
+//      "radios/discoveryProfile") plus five one-shot v0.3.0 schema
+//      migration remove() calls inside ensureSettingsAtVersion()
+//      (AppSettings.cpp:1183-1186, :1199: "DisplayAverageMode",
+//      "DisplayPeakHold", "DisplayPeakHoldDelayMs",
+//      "DisplayReverseWaterfallScroll", "DisplayAverageAlpha" -- all
+//      legacy keys being deleted, not settings anything still reads).
+//      "radios/*" is now a hand-seeded prefix rule in
+//      SettingsScope.cpp (OperatorLocal, confirmed correct by grepping
+//      DaemonApp.cpp/DaemonConfig.cpp for zero hits -- the daemon never
+//      touches this namespace) and pinned in knownExamples_data() below,
+//      the same way "Slice" is hand-seeded for a different blind spot.
+//      The five migration removes are legacy/dead keys with no live
+//      classification decision to make and are not otherwise addressed.
 //
 // Receiver is scoped to the three identifiers this tree actually binds
 // AppSettings::instance() to by reference ('s', 'settings', 'as' -- every
@@ -182,10 +255,26 @@ bool isLineCommented(const QString& text, qsizetype matchStart)
 }
 
 // One synthetic MAC segment stands in for every hardwareValue/
-// setHardwareValue call site: classifySettingsKey's "hardware/" prefix
-// rule does not (and per the brief's own pennyExtCtrl example, must not)
-// care what occupies that segment.
+// setHardwareValue call site (and every "%1/"-prefixed literal, see
+// reconstructFirstArgKey() below): classifySettingsKey's "hardware/"
+// prefix rule does not (and per the brief's own pennyExtCtrl example,
+// must not) care what occupies that segment.
 const QString kSyntheticMac = QStringLiteral("hardware/00:11:22:33:44:55/");
+
+// A first-argument literal starting with "%1/" is AlexController.cpp/
+// ApolloController.cpp's hand-built "hardware/<mac>/..." shape with the
+// resolved prefix still a template placeholder (see "Three limits" item 2
+// above). Reconstruct it exactly like a hardwareValue() literal: strip
+// the 3-character "%1/" and prepend the same synthetic hardware/<mac>/
+// segment. A key with no such prefix is returned unchanged.
+QString reconstructFirstArgKey(const QString& key)
+{
+    static const QString kTemplatePrefix = QStringLiteral("%1/");
+    if (key.startsWith(kTemplatePrefix)) {
+        return kSyntheticMac + key.sliced(kTemplatePrefix.size());
+    }
+    return key;
+}
 
 struct ScanResult {
     QSet<QString> keys;
@@ -210,7 +299,7 @@ ScanResult scanTree(const QString& absoluteDir)
         while (matches.hasNext()) {
             const QRegularExpressionMatch m = matches.next();
             if (isLineCommented(text, m.capturedStart(0))) { continue; }
-            result.keys.insert(m.captured(2));
+            result.keys.insert(reconstructFirstArgKey(m.captured(2)));
         }
 
         auto hwMatches = secondArg.globalMatch(text);
@@ -266,6 +355,15 @@ ScanResult scanTree(const QString& absoluteDir)
 //   tst_daemon_settings_profile.cpp's header), and a category relevant to
 //   one is frequently noise on the other, so this is correctly
 //   per-process rather than per-station.
+//
+//   Not on this list: "radios/*". It is core-touched (AppSettings.cpp's
+//   own lastConnected()/setLastConnected()/discoveryProfile()/
+//   setDiscoveryProfile()), correctly classifies OperatorLocal, but is
+//   invisible to this scan for a completely different reason ("Three
+//   limits" item 3 above: unqualified self-calls, not a concatenated or
+//   .arg()-built key) -- so it never reaches this exemption check at all,
+//   and does not belong on a list of keys the sweep found and had to be
+//   told to ignore.
 const QStringList kCoreExemptPrefixes = {
     QStringLiteral("audio/"),
     QStringLiteral("Audio/"),      // capital-A: LinuxBackendPreferred,
@@ -353,6 +451,17 @@ private slots:
             << QStringLiteral("Region") << int(SettingsScope::Station);
         QTest::newRow("StationCallsign is Station")
             << QStringLiteral("StationCallsign") << int(SettingsScope::Station);
+
+        // radios/lastConnected: invisible to the completeness sweep
+        // (AppSettings.cpp's own lastConnected()/setLastConnected() call
+        // value()/setValue()/remove() with no receiver prefix at all --
+        // "Three limits" item 3 in this file's header comment), so nothing
+        // else in this suite forces an answer for it. OperatorLocal is
+        // correct (confirmed: DaemonApp.cpp/DaemonConfig.cpp never touch
+        // "radios/" at all -- the daemon picks its radio from
+        // nereusd.conf), and this row is what actually pins it.
+        QTest::newRow("radios/lastConnected is OperatorLocal (daemon never touches this namespace)")
+            << QStringLiteral("radios/lastConnected") << int(SettingsScope::OperatorLocal);
     }
 
     void knownExamples()
@@ -423,20 +532,38 @@ private slots:
         // otherwise report a false 'zero offenders' pass. Fail loudly
         // instead of passing vacuously."). This test has the identical
         // failure mode, plus a second one that guard did not: the
-        // gui/setup floor is set well above its 32-.cpp non-recursive
-        // depth-1 count specifically so a scan that silently stopped
-        // recursing (the brief's own OcOutputsHfTab.cpp path error, lived
-        // out mechanically) fails loudly here too, rather than quietly
-        // shrinking the key set it checks.
+        // gui/setup floor must clear the 64-file depth-1 total (32 .cpp
+        // + 32 .h -- scanTree() globs both), not the 32-file .cpp-only
+        // count the brief and this file's own header comment quote for a
+        // different purpose. Fix round 1 (review) found the original
+        // floor here (40) sitting BETWEEN those two numbers: a
+        // non-recursive scan of gui/setup returns exactly 64 files,
+        // which passed a ">40" guard while silently losing 23 keys
+        // (every hardware/.../alex/{hpf,lpf,bpf1}/* key and the whole OC
+        // family among them) with the overlap set unaffected (the lost
+        // keys are all setup-only), so assertion (b) stayed green with
+        // no signal at all -- the exact regression this guard exists to
+        // catch, undetected. 80 is 15% below the true recursive count
+        // (94) and 25% above the 64-file non-recursive trap.
         const int coreModelsScanned = core.filesScanned + models.filesScanned;
         QVERIFY2(coreModelsScanned > 300,
                  qPrintable(QStringLiteral(
                      "only %1 core+models files scanned, NEREUS_SOURCE_DIR is probably wrong")
                                 .arg(coreModelsScanned)));
-        QVERIFY2(setup.filesScanned > 40,
+        // Narrower floor on src/models alone: src/core's own 316 files
+        // already clear 300 by itself, so a total failure of the
+        // src/models scan (0 files) would still pass the combined floor
+        // above. src/models measures 35 files; 20 is comfortably below
+        // that without being fragile to normal file churn.
+        QVERIFY2(models.filesScanned > 20,
                  qPrintable(QStringLiteral(
-                     "only %1 src/gui/setup files scanned (32 is the non-recursive depth-1 "
-                     "count -- this scan has stopped recursing)")
+                     "only %1 src/models files scanned (out of ~35) -- "
+                     "the src/models half of this scan is probably broken")
+                                .arg(models.filesScanned)));
+        QVERIFY2(setup.filesScanned > 80,
+                 qPrintable(QStringLiteral(
+                     "only %1 src/gui/setup files scanned (64 is the non-recursive "
+                     "depth-1 total including headers -- this scan has stopped recursing)")
                                 .arg(setup.filesScanned)));
 
         QSet<QString> coreModelsKeys = core.keys;
@@ -471,7 +598,13 @@ private slots:
         // and a core/models consumer must classify Station. No exemption
         // list here on purpose -- a key a Setup page writes into the same
         // namespace a core consumer reads is exactly the shape of the
-        // failure this test exists to catch. ----
+        // failure this test exists to catch. See this file's header
+        // comment ("Fix round 1 (review) correction") for why this
+        // assertion's LIVE reach, given (a) above already ran to
+        // completion over the same coreModelsKeys, is narrower than "any
+        // overlapping key": only the exempt subset of the overlap can
+        // reach here with something to say that (a) did not already say
+        // first. ----
         QSet<QString> overlap = coreModelsKeys;
         overlap.intersect(setup.keys);
         QVERIFY2(overlap.size() > 5,
