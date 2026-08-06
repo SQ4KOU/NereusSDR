@@ -705,6 +705,14 @@ set(CORE_SOURCES
     # MirrorPolicy, which stay model-agnostic. No production caller yet --
     # Task 18 feeds a real wss session's inbound bytes into dispatch().
     src/core/session/SessionCommandDispatcher.cpp
+    # R2 Task 12: the per-slice S-meter gets a model home. Extracted from
+    # src/gui/meters/MeterPoller.cpp's pollSliceSMeters()/pollSMeter() so a
+    # headless nereusd -- which never links MeterPoller, a GUI class --
+    # also produces SliceModel::signalStrengthDbm for the mirror to carry.
+    # Owned directly by RadioModel (constructed only for Role::Local); see
+    # TxSliceArbiter.cpp above for the existing precedent of src/core/
+    # depending on src/models/ directly.
+    src/core/meters/SliceMeterPump.cpp
 )
 
 # CoreAudioHalBus — macOS-only IAudioBus implementation bridging to the

@@ -6398,6 +6398,26 @@ nereus_add_test(tst_session_verbs
     fakes/P1FakeRadio.cpp
     fakes/ConnectableRadioModel.cpp)
 
+# Remote Daemon R2, Task 12: the per-slice S-meter gets a model home.
+# SliceMeterPump (src/core/meters/) replaces MeterPoller::pollSliceSMeters()
+# -- GUI-only, so a headless nereusd could never produce a per-slice S-meter
+# reading -- with a core-side QTimer that writes SliceModel::
+# signalStrengthDbm directly. Pins: the property's shape (no WRITE, has a
+# NOTIFY, defaults to -140.0, emits once per distinct value); poll() against
+# an unconnected model (no WDSP channel leaves the default untouched;
+# RadioStatus::isTransmitting stops poll() from touching any slice, not
+# MeterPoller's narrower m_inTx); poll() against a REAL connected RxChannel
+# (fakes/ConnectableRadioModel) proving the rxMode()-driven source selector
+# actually reaches WDSP for SignalAverage (the no-selector default) and
+# SignalPeak, and passes the WdspEngine::getMaxBinDbm -400.0 "not active"
+# sentinel straight through for MaxBin; the interval clamp; and the
+# Role::Local / Role::Remote construction gate -- the fifth local-authority
+# assertion Task 5's brief could not write because this class did not exist
+# yet (see tst_remote_role_inert.cpp's own header comment).
+nereus_add_test(tst_slice_meter_pump
+    fakes/P1FakeRadio.cpp
+    fakes/ConnectableRadioModel.cpp)
+
 # R1 Task 10: DaemonApp connects the daemon to a radio (or runs discovery)
 # and creates min(cfg.sliceCount, connected-board-maxSlices) slices via
 # RadioModel's own addSlice() -- the same entry point connectToRadio()

@@ -292,6 +292,8 @@ warren@wpratt.com
 #include "meters/ItemGroup.h"
 #include "meters/MeterPoller.h"
 #include "meters/VfoDisplayItem.h"  // 3M-1c L.3 — TX badge routing
+// Remote Daemon R2 Task 12: source-selector wiring below (setSourceSelector).
+#include "core/meters/SliceMeterPump.h"
 #include "applets/AppletPanelWidget.h"
 #include "SMeterWidget.h"            // Task 41 (Phase 3P-II): SMeterWidget header wiring
 #include "applets/AmpApplet.h"
@@ -1062,17 +1064,16 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
         flagRef->updateAgcAutoVisuals(on, nf, slice->autoAgcOffset());
     });
 
-    // Per-slice S-meter. The unqualified MeterPoller::smeterUpdated is wired
-    // to Slice A's flag only (wireSliceToSpectrum), because the poller reads
-    // one channel; every other flag's level bar sat dead. Filter the
-    // slice-qualified signal for this flag's own slice.
-    if (m_meterPoller) {
-        const int myIdx = sliceIndex;
-        connect(m_meterPoller, &MeterPoller::sliceSmeterUpdated, newFlag,
-                [flagRef = QPointer<VfoWidget>(newFlag), myIdx](int idx, double dbm) {
-            if (flagRef && idx == myIdx) { flagRef->setSmeter(dbm); }
-        });
-    }
+    // Remote Daemon R2 Task 12: per-slice S-meter. SliceMeterPump
+    // (src/core/meters/, owned by RadioModel) writes this slice's own
+    // signalStrengthDbm directly, so the flag can listen to that property's
+    // own NOTIFY instead of filtering a shared MeterPoller signal by slice
+    // id (the previous sliceSmeterUpdated(int, double) mechanism, which
+    // this replaces). Seed the current value immediately so a newly
+    // created flag does not show a stale reading until the next poll tick,
+    // matching the seeding already done above for frequency/mode/filter/etc.
+    connect(slice, &SliceModel::signalStrengthDbmChanged, newFlag, &VfoWidget::setSmeter);
+    newFlag->setSmeter(slice->signalStrengthDbm());
     newFlag->setFilter(slice->filterLow(), slice->filterHigh());
     newFlag->setAgcMode(slice->agcMode());
     newFlag->setAfGain(slice->afGain());
@@ -2125,31 +2126,15 @@ void MainWindow::wireSpectrumSliceControls(SpectrumWidget* sw,
     });
 }
 
-// Keep the S-meter poller's channel list in step with the live slices.
-//
-// Slice id == WDSP RX channel id, so this is also the set of channels it reads
-// for the per-slice pass that drives each flag's level bar.
-//
-// Hung off sliceAdded / sliceRemoved, NOT off the pan-count hook. It first
-// lived inside ensureOverlayPanels, which only runs on
-// PanadapterStack::countChanged -- so adding a slice to an EXISTING pan never
-// refreshed the list and that slice's flag bar stayed dead. Bench-caught
-// 2026-07-26.
-void MainWindow::refreshMeterPollerSlices()
-{
-    if (!m_meterPoller || !m_radioModel) { return; }
-    QList<int> ids;
-    for (SliceModel* s : m_radioModel->slices()) {
-        if (s) { ids << s->sliceIndex(); }
-    }
-    m_meterPoller->setSliceChannels(ids);
-}
-
 void MainWindow::ensureOverlayPanels()
 {
     if (!m_panStack || !m_radioModel) { return; }
 
-    refreshMeterPollerSlices();
+    // Remote Daemon R2 Task 12: this used to call refreshMeterPollerSlices()
+    // here too (belt-and-braces alongside the sliceAdded/sliceRemoved
+    // connects removed from wirePanStatusOverlayTriggers's neighbourhood).
+    // SliceMeterPump re-reads RadioModel::slices() on every poll tick, so
+    // there is nothing to push from here either.
 
     // Drop entries whose pan (and therefore whose parent widget) is gone.
     for (auto it = m_overlayPanels.begin(); it != m_overlayPanels.end(); ) {
@@ -2779,13 +2764,11 @@ void MainWindow::buildUI()
     connect(m_radioModel, &RadioModel::connectionStateChanged, this,
             [this](NereusSDR::ConnectionState) { refreshPanNotchMinWidth(); });
 
-    // The S-meter poller's slice list keys off SLICE lifetime, not pan count.
-    // Adding a slice to an existing pan moves no pan count, so hanging this on
-    // countChanged alone left the new slice's flag bar dead.
-    connect(m_radioModel, &RadioModel::sliceAdded, this,
-            [this](int) { refreshMeterPollerSlices(); });
-    connect(m_radioModel, &RadioModel::sliceRemoved, this,
-            [this](int) { refreshMeterPollerSlices(); });
+    // Remote Daemon R2 Task 12: the S-meter poller's slice list used to be
+    // pushed here on every sliceAdded/sliceRemoved (refreshMeterPollerSlices,
+    // removed). SliceMeterPump (src/core/meters/) re-reads RadioModel::
+    // slices() itself on every poll tick instead, so there is nothing left
+    // to refresh from a slice-lifecycle signal.
     wirePanStatusOverlayTriggers();
     wirePanBadgeHandlers();
     wirePanNotchHandlers();
@@ -4304,9 +4287,11 @@ void MainWindow::buildUI()
     // wiring targets) reads m_rxChannel exclusively and that pointer never
     // moved after the seed, so the container meter showed RxChannel 0
     // whatever the operator was working. The per-flag mini S-meters do not
-    // have this bug: they already resolve their own channel per slice via
-    // MeterPoller::pollSliceSMeters() (wdspEngine()->rxChannel(sliceId)), so
-    // they are untouched here.
+    // have this bug: they already resolve their own channel per slice, now
+    // via SliceMeterPump (src/core/meters/, Remote Daemon R2 Task 12;
+    // formerly MeterPoller::pollSliceSMeters()) reading wdspEngine()->
+    // rxChannel(slice->sliceIndex()) directly on RadioModel, so they are
+    // untouched here.
     connect(m_radioModel, &RadioModel::activeSliceChanged, this, [this](int) {
         SliceModel* slice = m_radioModel->activeSlice();
         if (!slice) { return; }
@@ -4557,6 +4542,36 @@ void MainWindow::populateDefaultMeter()
         // sit in raw ADC dBFS instead of at-antenna dBm.
         m_meterPoller->setRxOffsetSource([rm = m_radioModel]() -> double {
             return rm ? rm->rxMeterOffsetDb() : 0.0;
+        });
+    }
+
+    // Remote Daemon R2 Task 12 step 7: give SliceMeterPump the SAME
+    // rxMode()-driven source selector pollSMeter() uses for the analog
+    // widget above, or the per-flag level bars and the analog needle
+    // diverge by the 3-15 dB MeterPoller.cpp's own pollSMeter() comment
+    // records (SignalPeak vs SignalAverage on a typical SSB signal) --
+    // this is the change Task 16's bench row exists to eyeball: set the
+    // analog S-Meter to Peak and to MaxBin and the flag bar must agree
+    // with the needle. Queries m_appletPanel->smeterWidget() fresh on
+    // every call rather than capturing the SMeterWidget* once, the same
+    // "re-read live state each tick" shape the rxOffsetSource lambda
+    // above uses for m_radioModel. sliceMeterPump() is null on a
+    // Role::Remote model (Task 12 step 4b); the guard below is what keeps
+    // this a no-op there instead of a null dereference.
+    if (SliceMeterPump* pump = m_radioModel->sliceMeterPump()) {
+        pump->setSourceSelector([this]() -> SliceMeterPump::MeterSource {
+            SMeterWidget* sm = m_appletPanel ? m_appletPanel->smeterWidget() : nullptr;
+            if (!sm) { return SliceMeterPump::MeterSource::SignalAverage; }
+            switch (sm->rxMode()) {
+            case SMeterWidget::RxMode::SMeter:
+            case SMeterWidget::RxMode::SMeterPeak:
+                return SliceMeterPump::MeterSource::SignalPeak;
+            case SMeterWidget::RxMode::MaxBin:
+                return SliceMeterPump::MeterSource::MaxBin;
+            case SMeterWidget::RxMode::SignalAverage:
+                break;
+            }
+            return SliceMeterPump::MeterSource::SignalAverage;
         });
     }
 
@@ -8125,12 +8140,16 @@ void MainWindow::wireSliceToSpectrum()
     // Position the VFO flag
     activeSpectrumWidget()->updateVfoPositions();
 
-    // --- S-meter → VfoWidget level bar ---
-    // MeterPoller emits smeterUpdated(double dbm) on each poll tick (100ms).
-    // VfoWidget::setSmeter drives the VfoLevelBar S-meter indicator.
-    if (m_meterPoller) {
-        connect(m_meterPoller, &MeterPoller::smeterUpdated, vfo, &VfoWidget::setSmeter);
-    }
+    // Remote Daemon R2 Task 12: the "S-meter -> VfoWidget level bar" connect
+    // that used to live here (MeterPoller::smeterUpdated -> vfo->setSmeter)
+    // is deleted, not merely moved -- it was redundant with, and always
+    // immediately overwritten within the same poll() tick by,
+    // createSliceFlag()'s own per-slice wiring below `vfo` (this slice IS
+    // Slice A; wireSliceToSpectrum obtains `vfo` from createSliceFlag()
+    // above). That wiring now connects SliceModel::signalStrengthDbmChanged
+    // directly, which already covers Slice A -- see createSliceFlag()'s
+    // comment for the full reasoning and for why the old sliceSmeterUpdated
+    // filter-by-id mechanism this also used to duplicate is gone too.
 
     // --- Wire RxApplet to active slice ---
     if (m_rxApplet) {

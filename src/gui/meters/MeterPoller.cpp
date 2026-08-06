@@ -17,6 +17,14 @@
 //                 accessors for MultimeterPage live wire-up.
 //                 Corresponds to Thetis udDisplayMeterDelay + udDisplayMeterAvg
 //                 (display.cs) [v2.10.3.13].
+//   2026-08-06: Remote Daemon R2 Task 12: pollSliceSMeters() / setSliceChannels()
+//                 / sliceSmeterUpdated / m_sliceChannels extracted to the new
+//                 core-side src/core/meters/SliceMeterPump.{h,cpp}, so a
+//                 headless nereusd (which never links this GUI-only class)
+//                 also produces the per-slice S-meter reading. smeterUpdated
+//                 removed with its only listener (MainWindow.cpp:8132);
+//                 pollSMeter() itself is unchanged. J.J. Boyd (KG4VCF), with
+//                 AI-assisted transformation via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -325,50 +333,21 @@ void MeterPoller::poll()
     }
 
     // Task 41 (Phase 3P-II): drive the analog SMeterWidget header.
-    // pollSMeter() also emits smeterUpdated with the SAME dBm value it
-    // pushes to the analog needle, so the VFO flag mini-bar and the
-    // analog SMeter always agree on source (both follow the analog
-    // widget's rxMode() selection).  Previously poll() emitted
-    // smeterUpdated with the SignalAvg value (line removed here)
-    // while pollSMeter set the analog widget from SignalPeak when in
-    // SMeter mode -- a 3-15 dB divergence depending on signal/noise.
+    //
+    // Remote Daemon R2 Task 12: the per-slice pass that used to run here
+    // (pollSliceSMeters(), emitting sliceSmeterUpdated for every flag) has
+    // moved to SliceMeterPump (src/core/meters/), a separate core-side
+    // QTimer owned by RadioModel -- GUI-only, this poller could never run
+    // for a headless nereusd, so the per-slice S-meter reading a remote
+    // GUI's mirror carries had no producer there. Every flag now listens
+    // to its own SliceModel::signalStrengthDbmChanged directly
+    // (MainWindow.cpp's createSliceFlag) instead of a signal from this
+    // class. pollSMeter() below is unchanged: it still drives the analog
+    // SMeterWidget header, and MainWindow wires the SAME rxMode()
+    // selector into SliceMeterPump so the flags and the analog needle
+    // never disagree on source.
     Q_UNUSED(smeterDbm);
     pollSMeter();
-    pollSliceSMeters();
-}
-
-// Drive the analog SMeterWidget with the WDSP source selected by its current
-// rxMode().
-//
-// Branches on SMeterWidget::rxMode() (Task 41, Phase 3P-II).
-//
-// Source mapping (Thetis Console/dsp.cs:952-957 [@501e3f5] inside
-// CalculateRXMeter; neighbouring ADC_REAL case at dsp.cs:959 carries a
-// //MW0LGE [2.9.0.7] inline tag that we preserve per GPL attribution):
-//   case MeterType.SIGNAL_STRENGTH:     RXA_S_PK  (peak S-unit reading)
-//   case MeterType.AVG_SIGNAL_STRENGTH: RXA_S_AV  (averaged S-unit reading)
-// MaxBin uses GetDetectMaxBin (wdsp/analyzer.c:830 [@501e3f5]) -- no direct
-// Thetis dsp.cs call site; the detector is always display-channel 0 in
-// single-panadapter builds.
-// Per-slice S-meter, one emit per slice per tick.
-//
-// Deliberately NOT part of pollSMeter(): that returns early without an analog
-// SMeterWidget or without m_rxChannel, and the flag level bars depend on
-// neither. Slices B+ had no S-meter at all before this -- the poller owns a
-// single m_rxChannel and emitted one unqualified smeterUpdated.
-//
-// SignalAvg only: the analog SMeter's peak / MaxBin modes are a property of
-// that one widget, while every flag bar wants the same averaged reading.
-void MeterPoller::pollSliceSMeters()
-{
-    if (!m_wdspEngine || m_sliceChannels.isEmpty()) { return; }
-    const double rxOffsetDb = m_rxOffsetSource ? m_rxOffsetSource() : 0.0;
-    for (int sliceId : m_sliceChannels) {
-        RxChannel* ch = m_wdspEngine->rxChannel(sliceId);
-        if (!ch) { continue; }
-        emit sliceSmeterUpdated(
-            sliceId, ch->getMeter(RxMeterType::SignalAvg) + rxOffsetDb);
-    }
 }
 
 void MeterPoller::pollSMeter()
@@ -437,15 +416,6 @@ void MeterPoller::pollSMeter()
         break;
     }
     sm->setLevel(dbm);
-
-    // Emit the SAME dBm value to the VFO flag mini-bar so it always
-    // tracks the analog meter's current source (peak / avg / MaxBin).
-    // Without this, the flag bar was hard-wired to SignalAvg in poll()
-    // and could disagree with the analog SMeter by 3-15 dB.  Done last
-    // so the analog widget sees the value first (matches the order
-    // VfoWidget::setSmeter listeners expect for cross-meter alignment).
-    emit smeterUpdated(static_cast<double>(dbm));
-
 }
 
 // Poll the four WDSP TX meters active in 3M-1a and push to meter widget targets.

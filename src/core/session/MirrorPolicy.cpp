@@ -65,7 +65,7 @@ namespace {
 // WRITE. Listing them keeps the table total, so the guard can name a
 // newly added property instead of silently accepting it.
 const MirrorPolicy::Entry kEntries[] = {
-    // ---- SliceModel (108 entries) ----
+    // ---- SliceModel (109 entries) ----
     { "SliceModel", "frequency", MirrorDirection::Bidirectional },
     { "SliceModel", "dspMode", MirrorDirection::Bidirectional },
     { "SliceModel", "filterLow", MirrorDirection::Bidirectional },
@@ -80,6 +80,16 @@ const MirrorPolicy::Entry kEntries[] = {
     { "SliceModel", "txSlice", MirrorDirection::Outbound },
     { "SliceModel", "sliceIndex", MirrorDirection::ConstantSnapshot },
     { "SliceModel", "band", MirrorDirection::Outbound },
+    // Task 12: per-slice S-meter reading. Outbound -- the daemon's
+    // SliceMeterPump produces the value; a remote client never writes it
+    // back. No WRITE accessor at all (unlike snrDb/lastRadeRxCallsign
+    // below, which carry WRITE and are refused via the writable-but-
+    // Outbound path instead), so an inbound value for THIS property can
+    // only ever reach the object through SliceModel::applyMirroredValue's
+    // hook -- the design doc's "Inbound-only telemetry" phrasing describes
+    // this same direction from the client's point of view; this table is
+    // the daemon's point of view, and Outbound is the correct entry here.
+    { "SliceModel", "signalStrengthDbm", MirrorDirection::Outbound },
     { "SliceModel", "chainIndex", MirrorDirection::Outbound },
     { "SliceModel", "ddcIndex", MirrorDirection::Outbound },
     { "SliceModel", "streamIndex", MirrorDirection::Outbound },

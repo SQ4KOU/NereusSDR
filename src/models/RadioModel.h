@@ -136,6 +136,11 @@ class AudioEngine;
 class WdspEngine;
 class RxDspWorker;
 class NoiseFloorTracker;
+// Remote Daemon R2 Task 12: per-slice S-meter QTimer (src/core/meters/).
+// Owned directly (constructed in the constructor body, Role::Local only);
+// see wdspEngine()'s neighbouring accessor below and RadioModel's own
+// constructor for the role gate.
+class SliceMeterPump;
 // Phase 3F Sub-Epic F Task 5: per-ADC wideband FFT engine. Forward decl
 // here; included in RadioModel.cpp so we don't pull fftw3.h into every
 // translation unit that touches RadioModel.h.
@@ -275,6 +280,15 @@ public:
     ReceiverManager*  receiverManager()  { return m_receiverManager; }
     AudioEngine*      audioEngine()      { return m_audioEngine; }
     WdspEngine*       wdspEngine()       { return m_wdspEngine; }
+
+    // Remote Daemon R2 Task 12: non-null only when role() == Role::Local.
+    // Constructed and start()ed in the constructor; never rebuilt. Unlike
+    // meterPoller()/containerManager() just above, there is no matching
+    // setSliceMeterPump(): those are GUI objects MainWindow builds and
+    // hands in non-owning after the fact, while RadioModel builds and owns
+    // this one itself (Qt-parented), so the headless daemon gets it with
+    // no GUI construction step at all.
+    SliceMeterPump* sliceMeterPump() const { return m_sliceMeterPump; }
 
     /// Phase 3F Sub-Epic F Task 5: per-ADC wideband FFT engine accessor.
     /// Returns nullptr if adcIndex out of range (valid: 0 or 1).  Used by
@@ -3215,6 +3229,9 @@ private:
     ReceiverManager* m_receiverManager{nullptr};
     AudioEngine*     m_audioEngine{nullptr};
     WdspEngine*      m_wdspEngine{nullptr};
+    // Remote Daemon R2 Task 12: constructed only for Role::Local (see the
+    // constructor body); stays nullptr for Role::Remote.
+    SliceMeterPump*  m_sliceMeterPump{nullptr};
 
     // Connection (owned, lives on m_connThread)
     RadioConnection* m_connection{nullptr};

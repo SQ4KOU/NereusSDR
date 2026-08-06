@@ -201,6 +201,23 @@ class SliceModel : public QObject {
     // only ever changes as a side effect of tuning frequency.
     Q_PROPERTY(NereusSDR::Band band READ band NOTIFY bandChanged)
 
+    // ── Remote Daemon R2 Task 12: per-slice S-meter reading ─────────────────
+    // Written by SliceMeterPump (src/core/meters/), a core-side QTimer that
+    // replaces the GUI-only MeterPoller::pollSliceSMeters() so a headless
+    // nereusd can produce this reading too. No WRITE clause on purpose: the
+    // pump is the sole local writer (via the plain setSignalStrengthDbm()
+    // method below, the same no-Q_PROPERTY-accessor pattern isActive()/
+    // setActive() and isTxSlice()/setTxSlice() already use), matching
+    // MeterPoller.cpp's own -140.0 "no reading yet" fallback convention.
+    //
+    // MirrorPolicy requirement: register as Outbound. The daemon produces
+    // the value; a remote client never writes it back. On a Role::Remote
+    // model, this property is instead written from the mirror's inbound
+    // path via applyMirroredValue() below -- the only one of that method's
+    // cases that actually accepts a value rather than refusing it.
+    Q_PROPERTY(double signalStrengthDbm READ signalStrengthDbm
+               NOTIFY signalStrengthDbmChanged)
+
     // ── Phase 3F Sub-Epic A: multi-panadapter / multi-slice identity ────────────
     // Phase 3F: per-slice letter identifier A-E. Drives badge color via VfoWidget::sliceColor().
     // Read-only: derived from sliceIndex, so there is nothing to write and
@@ -511,17 +528,37 @@ public:
     // the frequency-driven bandChanged signal already announced.
     Band band() const { return m_currentBand; }
 
+    // Remote Daemon R2 Task 12: per-slice S-meter reading, in dBm.
+    // Read-only telemetry -- see the Q_PROPERTY comment above for who
+    // writes it and why there is no WRITE accessor. Default -140.0 matches
+    // MeterPoller.cpp's smeterDbm fallback and TciServer.cpp's rx1Dbm
+    // fallback (both "no WDSP data yet").
+    double signalStrengthDbm() const { return m_signalStrengthDbm; }
+
+    // Plain public setter, deliberately NOT a Q_PROPERTY WRITE accessor --
+    // same shape as setActive()/setTxSlice() above. SliceMeterPump calls
+    // this directly once per slice per poll tick; on a Role::Remote model
+    // it is instead reached through applyMirroredValue() below, the mirror
+    // inbound-apply path a property with no WRITE accessor requires (see
+    // StateMirror.h's class comment). Emits signalStrengthDbmChanged only
+    // on actual change.
+    void setSignalStrengthDbm(double dbm);
+
     // Remote Daemon R2 Task 8: StateMirror::applyInbound()'s hook for
-    // SliceModel's three no-WRITE properties -- active, txSlice, band (a
-    // fourth, sliceIndex, is CONSTANT / ConstantSnapshot and is refused
-    // before ever reaching here; sliceLetter is excluded from the mirror
-    // entirely). All three are refused: active and txSlice are exclusive
-    // across MULTIPLE slices and arbitrated by RadioModel::setActiveSlice()
-    // and TxSliceArbiter respectively, not owned by any one SliceModel,
-    // and band is purely derived from frequency by
-    // Band::bandFromFrequency() (see the comment above). Writing any of
-    // them directly here would let a remote peer desync the invariant
-    // those owners maintain.
+    // SliceModel's no-WRITE properties -- active, txSlice, band, and (Task
+    // 12) signalStrengthDbm (a fifth, sliceIndex, is CONSTANT /
+    // ConstantSnapshot and is refused before ever reaching here;
+    // sliceLetter is excluded from the mirror entirely). active and
+    // txSlice are exclusive across MULTIPLE slices and arbitrated by
+    // RadioModel::setActiveSlice() and TxSliceArbiter respectively, not
+    // owned by any one SliceModel; band is purely derived from frequency
+    // by Band::bandFromFrequency() (see the comment above); all three are
+    // refused, naming the owner to use instead. signalStrengthDbm is the
+    // ONE case that accepts and applies the value rather than refusing it:
+    // it has no other owner to name, because on a Role::Remote model the
+    // mirror's inbound apply IS the value's sole legitimate writer (the
+    // local writer, SliceMeterPump, is never constructed on that role --
+    // see RadioModel's constructor).
     Q_INVOKABLE QString applyMirroredValue(const QByteArray& propertyName,
                                            const QVariant& value);
 
@@ -966,6 +1003,8 @@ signals:
     // Uses Band::bandFromFrequency(freq) to detect crossings; emits once per
     // distinct Band change. Consumed by MainWindow to notify PgxlConnection.
     void bandChanged(NereusSDR::Band newBand);
+    // Remote Daemon R2 Task 12: per-slice S-meter reading changed.
+    void signalStrengthDbmChanged(double dbm);
     void dspModeChanged(NereusSDR::DSPMode mode);
     void filterChanged(int low, int high);
     void agcModeChanged(NereusSDR::AGCMode mode);
@@ -1098,6 +1137,10 @@ private:
 
     double  m_frequency{14225000.0};     // Default: 14.225 MHz (20m USB)
     Band    m_currentBand{Band::Band20m}; // Phase 3P-II Task 64: tracks last emitted band
+    // Remote Daemon R2 Task 12: per-slice S-meter reading, dBm. -140.0
+    // matches MeterPoller.cpp's smeterDbm / TciServer.cpp's rx1Dbm "no WDSP
+    // data yet" fallback.
+    double  m_signalStrengthDbm{-140.0};
     DSPMode m_dspMode{DSPMode::USB};
     int     m_filterLow{100};            // USB default from Thetis F5
     int     m_filterHigh{3000};

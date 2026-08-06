@@ -289,6 +289,9 @@ warren@wpratt.com
 #include "core/AudioEngine.h"
 #include "core/WdspEngine.h"
 #include "core/RxChannel.h"
+// Remote Daemon R2 Task 12: per-slice S-meter pump, constructed below only
+// for Role::Local.
+#include "core/meters/SliceMeterPump.h"
 #include "core/AppSettings.h"
 #include "core/SampleRateCatalog.h"
 #include "core/LogCategories.h"
@@ -534,6 +537,27 @@ RadioModel::RadioModel(Role role, QObject* parent)
     , m_wdspEngine(new WdspEngine(this))
 {
     m_role = role;
+
+    // Remote Daemon R2 Task 12: construct and start the per-slice S-meter
+    // pump ONLY for Role::Local. m_wdspEngine above is constructed
+    // unconditionally regardless of role, so an unguarded pump here would
+    // run a 10 Hz timer against a channel-less engine on a Role::Remote
+    // model and clobber every mirrored needle with the -140.0 fallback the
+    // instant a future task wires a real inbound delta into
+    // SliceModel::signalStrengthDbm. On Role::Remote, that property is
+    // written exclusively through SliceModel::applyMirroredValue() -- the
+    // mirror's own inbound-apply path -- never locally.
+    //
+    // Started immediately rather than deferred to WdspEngine::
+    // initializedChanged the way MeterPoller::start() is (MainWindow.cpp):
+    // poll() already tolerates every pre-connect state (no slices, no
+    // channels) as a no-op, the same way MeterPoller::poll()'s own MMIO
+    // pass runs before any radio is connected (MeterPoller.cpp's start()
+    // doc comment).
+    if (m_role == Role::Local) {
+        m_sliceMeterPump = new SliceMeterPump(this, this);
+        m_sliceMeterPump->start();
+    }
 
     // Phase 3O: give AudioEngine a non-owning back-pointer to this model
     // so rxBlockReady() can look up per-slice mute / VAX state. Wired

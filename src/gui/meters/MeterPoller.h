@@ -17,6 +17,11 @@
 //                 reads TXA_OUT_PK / TXA_ALC_PK / TXA_ALC_AV / TXA_ALC_GAIN
 //                 via GetTXAMeter() when in TX mode.
 //                 Cite: Thetis dsp.cs:999-1050 [v2.10.3.13] CalculateTXMeter.
+//   2026-08-06: Remote Daemon R2 Task 12: pollSliceSMeters() / setSliceChannels()
+//                 / sliceSmeterUpdated / m_sliceChannels moved to the new
+//                 core-side src/core/meters/SliceMeterPump.{h,cpp}; smeterUpdated
+//                 removed with its only listener. J.J. Boyd (KG4VCF), with
+//                 AI-assisted transformation via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -64,7 +69,6 @@ mw0lge@grange-lane.co.uk
 #include <functional>  // std::function for setRxOffsetSource (RXOffset port)
 
 #include <QObject>
-#include <QList>
 #include <QPointer>
 #include <QTimer>
 #include <QVector>
@@ -220,38 +224,8 @@ public slots:
     // not mid-poll, matching Thetis's integer-tick dispatch via UpdateTimer.
     void setInTx(bool isTx);
 
-    /// Which slices to emit sliceSmeterUpdated for, by slice id.
-    ///
-    /// Slice id doubles as the WDSP RX channel id (the invariant Sub-Epic I
-    /// establishes), so this is also the list of channels polled. Pushed by
-    /// MainWindow on every slice add / remove; empty disables the per-slice
-    /// pass entirely and costs nothing.
-    void setSliceChannels(const QList<int>& sliceIds) { m_sliceChannels = sliceIds; }
-
-signals:
-    // Emitted on each poll tick with the current S-meter (SignalAvg) dBm value.
-    // Connect to VfoWidget::setSmeter to drive the VFO level bar.
-    //
-    // This is the ACTIVE slice's reading only -- it carries no slice id, and
-    // this poller owns a single m_rxChannel. Use sliceSmeterUpdated for a
-    // specific slice's flag.
-    void smeterUpdated(double dbm);
-
-    /// Per-slice S-meter, so every flag can show its own signal.
-    ///
-    /// Slices B+ had no S-meter at all: the poller reads one channel and the
-    /// unqualified signal above was connected to Slice A's flag, so every
-    /// other flag's bar sat dead. Emitted once per slice per tick for the
-    /// slices given to setSliceChannels().
-    void sliceSmeterUpdated(int sliceIndex, double dbm);
-
 private slots:
     void poll();
-
-private:
-    /// Emit sliceSmeterUpdated for each slice in m_sliceChannels. Independent
-    /// of pollSMeter's analog-widget and m_rxChannel guards.
-    void pollSliceSMeters();
 
 private slots:
 
@@ -279,9 +253,6 @@ private:
     QTimer m_timer;
     QPointer<RxChannel> m_rxChannel;
 
-    /// Slice ids to poll for the per-slice S-meter pass; see setSliceChannels.
-    /// Slice id == WDSP RX channel id, so these index rxChannel() directly.
-    QList<int> m_sliceChannels;
     // Non-owning TX channel pointer (H.2).  Valid only while WdspEngine has
     // opened the TX channel (after createTxChannel()).  Guarded in poll().
     // QPointer auto-clears when TxChannel is destroyed — matches m_rxChannel

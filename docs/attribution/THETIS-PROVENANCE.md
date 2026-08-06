@@ -218,6 +218,8 @@ Template variant (see `HEADER-TEMPLATES.md`):
 | src/gui/meters/MeterItem.h | Project Files/Source/Console/MeterManager.cs; Project Files/Source/Console/console.cs | 2258-2318; 19917-21616; 14827+; 32338+; 12612-12678 | port | multi-source | |
 | src/gui/meters/MeterPoller.cpp | Project Files/Source/Console/MeterManager.cs | full | port | thetis-samphire | 100ms UpdateInterval poll cadence; .h was in outbound audit; .cpp orphan pair |
 | src/gui/meters/MeterPoller.h | Project Files/Source/Console/MeterManager.cs | full | port | thetis-samphire | Reading enum / TX meters |
+| src/core/meters/SliceMeterPump.cpp | Project Files/Source/Console/MeterManager.cs | full | port | thetis-samphire | Remote Daemon R2 Task 12: per-slice S-meter reading, extracted from MeterPoller.cpp's pollSliceSMeters()/pollSMeter() into a core-side (no-GUI) QTimer owned by RadioModel, so a headless nereusd also produces SliceModel::signalStrengthDbm. Meter-type selection + RXOffset application carried forward from the same dsp.cs/console.cs cites MeterPoller.cpp already verifies (dsp.cs:954/957 [@501e3f5] CalculateRXMeter; console.cs:46821-46881 [v2.10.3.13] RXOffset) |
+| src/core/meters/SliceMeterPump.h | Project Files/Source/Console/MeterManager.cs | full | port | thetis-samphire | header mirrors .cpp |
 | src/gui/meters/MeterWidget.cpp | Project Files/Source/Console/MeterManager.cs | 21266; 31366-31368 | port | thetis-samphire | container fixed-aspect, per-item render gate |
 | src/gui/meters/MeterWidget.h | Project Files/Source/Console/MeterManager.cs | 31366-31368 | port | thetis-samphire | visibility filter |
 | src/gui/meters/ModeButtonItem.cpp | Project Files/Source/Console/MeterManager.cs | 9951+ | port | thetis-samphire | clsModeButtonBox |

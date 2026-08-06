@@ -286,11 +286,6 @@ private slots:
     /// own panId and its controls act on that pan.
     void ensureOverlayPanels();
 
-    /// Push the live slice-id list to MeterPoller so every flag's S-meter bar
-    /// is fed. Must be called on slice add/remove, not just on pan-count
-    /// change: a slice added to an existing pan moves no pan count.
-    void refreshMeterPollerSlices();
-
     /// TNF: push the global notch list at EVERY pan (design section 8.1).
     ///
     /// Under D1 the notch list is global, so each pan gets the same vector

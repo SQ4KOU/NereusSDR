@@ -613,15 +613,43 @@ void SliceModel::setTxSlice(bool tx)
     }
 }
 
+// Remote Daemon R2 Task 12: per-slice S-meter reading. Plain public
+// setter (not a Q_PROPERTY WRITE accessor) -- see SliceModel.h's comment
+// on setSignalStrengthDbm() for who calls this and why. qFuzzyIsNull on
+// the difference rather than qFuzzyCompare: the same "subtraction to
+// zero" pattern used elsewhere in this file (setShiftOffsetHz,
+// setAudioPan, setSsqlThresh, ...) for a value that can legitimately be
+// exactly 0.0 (qFuzzyCompare is documented UB when either argument is
+// zero).
+void SliceModel::setSignalStrengthDbm(double dbm)
+{
+    if (qFuzzyIsNull(m_signalStrengthDbm - dbm)) {
+        return;
+    }
+    m_signalStrengthDbm = dbm;
+    emit signalStrengthDbmChanged(dbm);
+}
+
 // ── Remote Daemon R2 Task 8: inbound mirror hook ─────────────────────────────
 //
-// NereusSDR-original; no Thetis/AetherSDR equivalent. Each of the three
-// no-WRITE properties is refused for a DIFFERENT reason, named explicitly
-// rather than sharing one copy-pasted message, because a remote peer (or
-// whoever is reading Task 11's relayed error) needs to know WHICH owner to
-// go through instead.
-QString SliceModel::applyMirroredValue(const QByteArray& propertyName, const QVariant& /*value*/)
+// NereusSDR-original; no Thetis/AetherSDR equivalent. Each of the no-WRITE
+// properties that gets REFUSED is refused for a DIFFERENT reason, named
+// explicitly rather than sharing one copy-pasted message, because a remote
+// peer (or whoever is reading Task 11's relayed error) needs to know WHICH
+// owner to go through instead. signalStrengthDbm (Task 12) is the one
+// exception: there is no other owner to name, because on a Role::Remote
+// model the mirror's inbound apply IS the value's sole legitimate writer.
+QString SliceModel::applyMirroredValue(const QByteArray& propertyName, const QVariant& value)
 {
+    if (propertyName == "signalStrengthDbm") {
+        // The only case here that ACCEPTS and applies the value instead of
+        // refusing it. `value` arrives already decoded to a native double
+        // by MirrorSchema::decode (see StateMirror::applyInboundToProperty
+        // -- the hook receives a properly narrowed, natively typed value,
+        // the same as a normal WRITE would). Empty return means accepted.
+        setSignalStrengthDbm(value.toDouble());
+        return QString();
+    }
     if (propertyName == "active") {
         // Fix round 1 review finding (Important 1): this used to name
         // RadioModel::setActiveSlice(), which a remote peer cannot reach

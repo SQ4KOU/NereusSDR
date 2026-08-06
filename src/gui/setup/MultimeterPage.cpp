@@ -86,6 +86,10 @@
 #include "gui/meters/MeterItem.h"
 #include "gui/meters/MeterPoller.h"
 #include "gui/meters/HistoryGraphItem.h"
+// Remote Daemon R2 Task 12: the delay spinbox also drives SliceMeterPump's
+// interval, or the operator's delay slider silently stops changing the
+// per-flag S-meter cadence while still changing MeterPoller's.
+#include "core/meters/SliceMeterPump.h"
 #include "gui/containers/ContainerManager.h"
 
 #include <QVBoxLayout>
@@ -233,6 +237,12 @@ void MultimeterPage::loadSettings()
         p->setIntervalMs(m_delayMs->value());
         p->setAverageWindow(m_avgWindow->value());
     }
+    // Remote Daemon R2 Task 12: same delay value, also applied to
+    // SliceMeterPump (null on a Role::Remote model -- see
+    // RadioModel::sliceMeterPump()'s doc comment).
+    if (auto* pump = model() ? model()->sliceMeterPump() : nullptr) {
+        pump->setIntervalMs(m_delayMs->value());
+    }
 
     // Task 3.2: apply persisted unit-mode + show-decimal to all live
     // MeterItems at setup-page open time.  connectSignals() hasn't run yet
@@ -257,12 +267,16 @@ void MultimeterPage::loadSettings()
 
 void MultimeterPage::connectSignals()
 {
-    // Polling delay — persists + applies live to MeterPoller
+    // Polling delay: persists + applies live to MeterPoller and (Remote
+    // Daemon R2 Task 12) SliceMeterPump.
     connect(m_delayMs, QOverload<int>::of(&QSpinBox::valueChanged), this,
         [this](int v) {
             AppSettings::instance().setValue(QStringLiteral("MultimeterDelayMs"), v);
             if (auto* p = model() ? model()->meterPoller() : nullptr) {
                 p->setIntervalMs(v);
+            }
+            if (auto* pump = model() ? model()->sliceMeterPump() : nullptr) {
+                pump->setIntervalMs(v);
             }
         });
 
