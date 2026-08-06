@@ -457,6 +457,23 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
     if (needsVerb && !o.value(QStringLiteral("id")).isDouble()) {
         return false;
     }
+    // Fix round 1 review finding (Important 2): range-check BEFORE the
+    // narrowing static_cast<quint32> in the switch below, the same
+    // discipline updateFromJson() and fieldFromJson() already apply to
+    // MirrorUpdate/SessionSchemaField's quint16 ordinal (this file, above:
+    // `ordinalRaw < 0.0 || ordinalRaw > 65535.0`, checked before the cast).
+    // Without this, {"id":-1} or {"id":1e30} would both pass the isDouble()
+    // gate above and then feed a floating-to-unsigned conversion of an
+    // unrepresentable value into static_cast<quint32>, which is undefined
+    // behaviour -- exactly what this file's own header comment promises
+    // untrusted input never triggers. One check covers both CommandInvoke
+    // and CommandResult, mirroring needsVerb's own single-check shape.
+    if (needsVerb) {
+        const double idRaw = o.value(QStringLiteral("id")).toDouble();
+        if (idRaw < 0.0 || idRaw > 4294967295.0) { // quint32 max
+            return false;
+        }
+    }
     if (kind == SessionMessageKind::CommandInvoke && !o.value(QStringLiteral("args")).isArray()) {
         return false;
     }

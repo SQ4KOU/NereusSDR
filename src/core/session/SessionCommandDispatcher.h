@@ -13,22 +13,29 @@
 // session's inbound bytes into dispatch() and relays commandResultReady()
 // back out.
 //
-// Four verbs, matching the R2 plan's Task 11 step 2 exactly (RadioModel.h,
-// this tree's HEAD at commit 998e7854):
+// Five verbs. Four matching the R2 plan's Task 11 step 2 exactly
+// (RadioModel.h, this tree's HEAD at commit 998e7854), plus a fifth added
+// in fix round 1 after review found the plan's own justification for
+// leaving it out ("active rides the ordinary delta path") was true
+// OUTBOUND only -- SliceModel::active has no WRITE at all, so a remote
+// peer had no path to move it (see SliceModel.cpp's applyMirroredValue,
+// which now names this verb instead of the unreachable
+// RadioModel::setActiveSlice()):
 //
 //   addSlice               -- RadioModel.h:775   int addSlice(QString)
 //   removeSlice             -- RadioModel.h:779   void removeSlice(int)
 //   requestSliceSampleRate  -- RadioModel.h:720   void requestSliceSampleRate(int, int)
 //   addSliceOnPan           -- RadioModel.h:813   Q_INVOKABLE void addSliceOnPan(QString)
+//   setActiveSliceById      -- RadioModel.h:804   bool setActiveSliceById(int)
 //
 // Nothing here writes a mirrored PROPERTY -- that is StateMirror::
-// applyInbound()'s job (Task 8). This class exists for the four RadioModel
-// entry points MirrorPolicy has no property to gate at all: creating or
-// destroying a slice is not a value change on an existing object, and
-// requestSliceSampleRate is the one case (MirrorPolicy.cpp's kVerbHints
-// table, StateMirror.cpp) where a mirrored property (SliceModel::
-// sampleRateHz) is deliberately Outbound-only specifically BECAUSE this
-// verb is how a client changes it.
+// applyInbound()'s job (Task 8). This class exists for the five RadioModel
+// entry points MirrorPolicy has no property to gate at all: creating,
+// destroying or activating a slice is not a value change on an existing
+// object's WRITE accessor, and requestSliceSampleRate is the one case
+// (StateMirror.cpp's kVerbHints table, :69) where a mirrored property
+// (SliceModel::sampleRateHz) is deliberately Outbound-only specifically
+// BECAUSE this verb is how a client changes it.
 //
 // ── THREADING ────────────────────────────────────────────────────────────
 //
@@ -84,6 +91,12 @@
 //                                    addSliceOnPan). AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-08-05  J.J. Boyd / KG4VCF  Remote daemon R2 Task 11 fix round 1:
+//                                    added setActiveSliceById (review
+//                                    Important 1 -- a remote operator's
+//                                    active-slice click had no path to the
+//                                    daemon). AI-assisted transformation
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -130,6 +143,7 @@ private:
     void handleRemoveSlice(const NereusSDR::SessionMessage& invoke);
     void handleRequestSliceSampleRate(const NereusSDR::SessionMessage& invoke);
     void handleAddSliceOnPan(const NereusSDR::SessionMessage& invoke);
+    void handleSetActiveSliceById(const NereusSDR::SessionMessage& invoke);
 
     void emitResult(const QByteArray& verb, quint32 commandId, bool accepted,
                     const QString& reason, const QList<QByteArray>& affectedKeys);

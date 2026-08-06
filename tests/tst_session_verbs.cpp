@@ -215,6 +215,23 @@ private slots:
                      &out),
                  "command.invoke with a non-numeric id must be rejected");
 
+        // Fix round 1 review finding (Important 2): a NUMERIC id that
+        // cannot be represented as a quint32 must also be rejected, before
+        // decode() ever reaches the narrowing static_cast<quint32> --
+        // otherwise this is a floating-to-unsigned conversion of an
+        // unrepresentable value, undefined behaviour on untrusted input.
+        // Mirrors the ordinal range check this same file already applies
+        // to MirrorUpdate/SessionSchemaField (updateFromJson/fieldFromJson,
+        // above).
+        QVERIFY2(!SessionMessages::decode(
+                     QByteArray(R"({"type":"command.invoke","verb":"addSlice","id":-1,"args":[]})"),
+                     &out),
+                 "a negative id must be rejected");
+        QVERIFY2(!SessionMessages::decode(
+                     QByteArray(R"({"type":"command.invoke","verb":"addSlice","id":1e30,"args":[]})"),
+                     &out),
+                 "an id past quint32's range must be rejected");
+
         // CommandResult: missing "verb"/"id"/"accepted"/"reason"/"affected".
         QVERIFY2(!SessionMessages::decode(QByteArray(R"({"type":"command.result"})"), &out),
                  "command.result with no verb at all must be rejected");
@@ -415,9 +432,18 @@ private slots:
                        { intArg("sliceId", a), intArg("rateHz", 768000) });
 
         // Must NOT complete synchronously: this is the one verb Task 11
-        // defers to a later RadioModel event-loop turn specifically so it
-        // cannot stall the session read path once it reaches
-        // RadioModel::setSampleRateLive's QThread::msleep calls.
+        // defers to a LATER turn of RadioModel's own event loop. Fix round
+        // 1 review finding (Minor 3): this does not make the ~40 ms of
+        // QThread::msleep inside RadioModel::setSampleRateLive disappear --
+        // the queued call is posted to the SAME thread the session read
+        // loop lives on (SessionCommandDispatcher.h's THREADING section),
+        // so that thread still stalls for the full duration, one event-loop
+        // turn later than it otherwise would have. What deferring buys is
+        // narrower: THIS dispatch() call returns immediately rather than
+        // blocking inline, so whatever is already queued ahead of the
+        // deferred call (including other already-dispatched commands) gets
+        // a chance to run first instead of queueing up behind an inline
+        // 40 ms block.
         QCOMPARE(harness.results.size(), 0);
 
         QTRY_COMPARE(harness.results.size(), 1);
@@ -495,14 +521,67 @@ private slots:
         harness.invoke("removeSlice", 2, {});                                 // no sliceId
         harness.invoke("requestSliceSampleRate", 3, { intArg("sliceId", 0) }); // no rateHz
         harness.invoke("addSliceOnPan", 4, {});                               // no panId
-        harness.invoke("bogusVerb", 5, {});                                   // unrecognised
+        harness.invoke("setActiveSliceById", 5, {});                         // no sliceId
+        harness.invoke("bogusVerb", 6, {});                                   // unrecognised
 
-        QCOMPARE(harness.results.size(), 5);
+        QCOMPARE(harness.results.size(), 6);
         for (const SessionMessage& r : harness.results) {
             QVERIFY2(!r.accepted, qPrintable(r.commandVerb));
             QVERIFY2(!r.reason.isEmpty(), qPrintable(r.commandVerb));
             QVERIFY(r.affectedKeys.isEmpty());
         }
+    }
+
+    // ── setActiveSliceById (fix round 1, review Important 1) ────────────
+
+    // Before this verb existed, a remote operator's active-slice click had
+    // no path to the daemon at all: SliceModel::active carries no WRITE, so
+    // StateMirror::applyInbound() always fell through to
+    // applyMirroredValue(), which refused outright. This test dispatches
+    // the new verb over the SAME LoopbackStationLink + SessionCommandDispatcher
+    // round trip every other verb in this file uses, and asserts the
+    // DAEMON-SIDE RadioModel's active slice actually moved -- not merely
+    // that a command.result came back accepted.
+    void setActiveSliceByIdCommandMovesTheDaemonSideActiveSliceAndRejectsUnknownIds()
+    {
+        RadioModel model;
+        model.configureStreamPool(5, 5, 192000);
+        DispatchHarness harness(&model);
+
+        const int a = model.addSlice();
+        const int b = model.addSlice();
+        QCOMPARE(model.activeSlice(), model.sliceById(a)); // first slice is active by default
+
+        harness.invoke("setActiveSliceById", 1, { intArg("sliceId", b) });
+        QCOMPARE(harness.results.size(), 1);
+        QVERIFY2(harness.results.at(0).accepted, qPrintable(harness.results.at(0).reason));
+        QCOMPARE(harness.results.at(0).commandVerb, QByteArray("setActiveSliceById"));
+        QCOMPARE(harness.results.at(0).commandId, quint32(1));
+
+        // The actual assertion this test exists for.
+        QCOMPARE(model.activeSlice(), model.sliceById(b));
+
+        // affectedKeys: the newly-active key plus the previously-active one.
+        QCOMPARE(harness.results.at(0).affectedKeys.size(), 2);
+        QVERIFY(harness.results.at(0).affectedKeys.contains(ObjectRegistry::keyForSlice(b)));
+        QVERIFY(harness.results.at(0).affectedKeys.contains(ObjectRegistry::keyForSlice(a)));
+
+        // Requesting the slice that is ALREADY active is a legitimate
+        // no-op accept (RadioModel::setActiveSlice()'s own change-guard),
+        // reported once, not as two copies of the same key.
+        harness.invoke("setActiveSliceById", 2, { intArg("sliceId", b) });
+        QCOMPARE(harness.results.size(), 2);
+        QVERIFY2(harness.results.at(1).accepted, qPrintable(harness.results.at(1).reason));
+        QCOMPARE(harness.results.at(1).affectedKeys,
+                 (QList<QByteArray>{ ObjectRegistry::keyForSlice(b) }));
+
+        // Unknown id: rejected with a reason, model unchanged.
+        harness.invoke("setActiveSliceById", 3, { intArg("sliceId", 999) });
+        QCOMPARE(harness.results.size(), 3);
+        QVERIFY(!harness.results.at(2).accepted);
+        QVERIFY2(!harness.results.at(2).reason.isEmpty(), "must carry a reason");
+        QVERIFY(harness.results.at(2).affectedKeys.isEmpty());
+        QCOMPARE(model.activeSlice(), model.sliceById(b)); // unchanged by the rejection
     }
 
     // ── activeSliceIdChanged ──────────────────────────────────────────────

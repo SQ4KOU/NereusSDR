@@ -39,14 +39,13 @@
 //                         still tell results apart.
 //   CommandResult      -- Task 11. What a CommandInvoke actually did.
 //                         `accepted` / `reason` mirror MirrorApplyResult's
-//                         own shape. `affectedKeys` is the object keys
-//                         ACTUALLY mutated, which is not always the same
-//                         set the invoke named:
-//                         SessionCommandDispatcher::handleRequestSliceSampleRate
-//                         (SessionCommandDispatcher.cpp) can retune every
-//                         slice on the radio for a request naming one, so
-//                         the result reports what happened, not what was
-//                         asked for.
+//                         own shape. `affectedKeys` names the object(s)
+//                         this result is about; its exact meaning is per-
+//                         verb, not a blanket "everything that changed"
+//                         guarantee -- see SessionMessage::affectedKeys
+//                         below for the precise contract and the one verb
+//                         (requestSliceSampleRate) where it really is a
+//                         full before/after diff.
 //
 // Encodes as JSON text, per the R2 design addendum section 6: "R2 encodes
 // as JSON text on the reliable control channel ... because the ordinal
@@ -165,10 +164,25 @@ struct SessionMessage {
     /// CommandResult only. Empty iff accepted.
     QString reason;
 
-    /// CommandResult only: the object keys ACTUALLY mutated, which is not
-    /// always what the invoke named as its target -- see the CommandResult
-    /// case in this file's header comment for why requestSliceSampleRate
-    /// specifically can name more keys than it was asked to touch.
+    /// CommandResult only: which object(s) this result is about. The exact
+    /// meaning is PER-VERB, not a blanket mutation-diff guarantee:
+    ///
+    ///   - requestSliceSampleRate: a full before/after diff -- EVERY slice
+    ///     whose sampleRateHz actually changed, which is not always the
+    ///     one slice the invoke named (co-hosted slices on the same DDC
+    ///     stream, or a Protocol 1 board's radio-wide RadioModel::
+    ///     setSampleRateLive escalation -- SessionCommandDispatcher::
+    ///     handleRequestSliceSampleRate, SessionCommandDispatcher.cpp).
+    ///   - addSlice / addSliceOnPan: the one newly-created slice.
+    ///   - removeSlice: the one removed slice. NOT a mutation diff: removal
+    ///     can leave RadioModel::requestDdcAssignment() moving a SURVIVING
+    ///     slice's ddcIndex/streamIndex, which this list does not name.
+    ///     Nothing is lost -- that survivor's change still reaches the
+    ///     client normally, as an ordinary Delta through StateMirror's
+    ///     existing outbound path -- this field is the command's own
+    ///     object-level outcome, not a substitute for that path.
+    ///   - setActiveSliceById: the newly-active slice, plus the previously-
+    ///     active one when it differs.
     QList<QByteArray> affectedKeys;
 };
 

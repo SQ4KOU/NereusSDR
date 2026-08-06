@@ -3076,17 +3076,6 @@ public:
     bool bindSliceToStream(SliceModel* slice, double frequencyHz,
                            bool preferOwnStream = false);
 
-    /// Remote-daemon R2 Task 11. Emits BOTH activeSliceChanged(index) (the
-    /// existing positional signal, unchanged) and activeSliceIdChanged(id)
-    /// (new), resolving `index` against m_slices to find the id. `index`
-    /// of -1 (no active slice, the removeSlice() case when the list would
-    /// otherwise be left empty) reports -1 on both signals rather than
-    /// resolving anything. The three existing `emit activeSliceChanged(...)`
-    /// call sites (addSlice, removeSlice, setActiveSlice) all route through
-    /// this instead, so the two signals can never disagree about which
-    /// slice is active.
-    void emitActiveSliceChanged(int index);
-
     /// Mirror a stream's liveness into ReceiverManager's active-receiver set,
     /// which is what decides whether that hardware DDC's samples are forwarded
     /// or dropped. Called from bindSliceToStream on both edges. Idempotent.
@@ -3181,6 +3170,23 @@ public:
     }
 
 private:
+    /// Remote-daemon R2 Task 11. Emits BOTH activeSliceChanged(index) (the
+    /// existing positional signal, unchanged) and activeSliceIdChanged(id)
+    /// (new), resolving `index` against m_slices to find the id. `index`
+    /// of -1 (no active slice, the removeSlice() case when the list would
+    /// otherwise be left empty) reports -1 on both signals rather than
+    /// resolving anything. The three existing `emit activeSliceChanged(...)`
+    /// call sites (addSlice, removeSlice, setActiveSlice) all route through
+    /// this instead, so the two signals can never disagree about which
+    /// slice is active. Fix round 1 review finding: this was originally
+    /// placed under the WRONG access specifier (a `public:` label two
+    /// sections above this one re-opens visibility without a matching
+    /// `private:` in between it and where this was first declared) --
+    /// moved here, under a genuine `private:`, so no external caller can
+    /// announce an active-slice change without m_activeSlice having
+    /// actually moved.
+    void emitActiveSliceChanged(int index);
+
     struct PlannedSlicePlacement {
         int sliceId{-1};
         int previousStream{-1};

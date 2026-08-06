@@ -12,6 +12,13 @@
 //                                    addSliceOnPan). AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-08-05  J.J. Boyd / KG4VCF  Remote daemon R2 Task 11 fix round 1:
+//                                    added setActiveSliceById (review
+//                                    Important 1) plus same-thread-
+//                                    invariant notes on the by-reference
+//                                    lambda captures (Minor 7). AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -74,6 +81,8 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleRequestSliceSampleRate(invoke);
     } else if (invoke.commandVerb == "addSliceOnPan") {
         handleAddSliceOnPan(invoke);
+    } else if (invoke.commandVerb == "setActiveSliceById") {
+        handleSetActiveSliceById(invoke);
     } else {
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("unrecognised command verb"), {});
@@ -106,7 +115,11 @@ void SessionCommandDispatcher::handleAddSlice(const SessionMessage& invoke)
     // ... The command result carries the reason"). A temporary connection
     // captures it; the call is synchronous, so the emission (if any)
     // happens before addSlice() returns and before this connection is torn
-    // down.
+    // down. The by-reference capture below is correct only under the
+    // class-level same-thread invariant: it relies on the connected signal
+    // firing synchronously, inside this call, before `rejectionReason`
+    // goes out of scope. A future thread split that made this connection
+    // cross-thread would auto-queue it and turn this into a dangling read.
     QString rejectionReason;
     const QMetaObject::Connection conn = connect(
         m_radioModel, &RadioModel::sliceAddRejected, this,
@@ -175,7 +188,10 @@ void SessionCommandDispatcher::handleAddSliceOnPan(const SessionMessage& invoke)
     // its addSlice() delegate can each produce: sliceAdded(id) on success,
     // sliceAddRejected(reason) either from the cap check itself or from
     // addSlice()'s own allocator rollback. Both connections are torn down
-    // immediately after the synchronous call returns.
+    // immediately after the synchronous call returns. As in handleAddSlice
+    // above, the by-reference captures below depend on the class-level
+    // same-thread invariant -- a cross-thread connection would auto-queue
+    // and read `newId`/`rejectionReason` after they are gone.
     int newId = -1;
     QString rejectionReason;
     const QMetaObject::Connection addedConn = connect(
@@ -262,7 +278,11 @@ void SessionCommandDispatcher::handleRequestSliceSampleRate(const SessionMessage
             // readable reason, the same pattern handleAddSlice's
             // sliceAddRejected capture uses. requestSliceSampleRate() is
             // synchronous, so the emission (if any) lands before it
-            // returns and before this connection is torn down.
+            // returns and before this connection is torn down. This
+            // by-reference capture is ALREADY running inside a queued
+            // lambda on RadioModel's thread (see this method's own
+            // deferral above), so it depends on the same same-thread
+            // invariant as handleAddSlice's capture, one level further in.
             QString rejectionReason;
             const QMetaObject::Connection conn = connect(
                 radioModel, &RadioModel::sliceRetuneRejected, self,
@@ -293,6 +313,60 @@ void SessionCommandDispatcher::handleRequestSliceSampleRate(const SessionMessage
             self->emitResult(verb, commandId, true, QString(), affected);
         },
         Qt::QueuedConnection);
+}
+
+// ── setActiveSliceById ───────────────────────────────────────────────────
+
+// Fix round 1 review finding (Important 1): before this verb existed, a
+// remote operator's active-slice click had no path to the daemon at all.
+// SliceModel::active carries no WRITE (SliceModel.h), so StateMirror::
+// applyInbound() always fell through to applyMirroredValue(), which
+// refused it outright (SliceModel.cpp) -- both inbound doors were shut.
+// This verb is the one that was missing.
+//
+// Mechanically identical to handleRemoveSlice above: resolve the id,
+// check the RadioModel entry point's own success/failure signal (here a
+// bool return rather than an existence probe plus a separate guard), and
+// report the resulting scope. RadioModel::setActiveSliceById() already
+// does its own "no such slice" check internally (sliceById(sliceId) ==
+// nullptr) and returns false, so this handler does not duplicate it --
+// unlike handleRemoveSlice, which has a SECOND rejection RadioModel
+// signals nothing about (the last-slice guard) and therefore does have to
+// duplicate.
+void SessionCommandDispatcher::handleSetActiveSliceById(const SessionMessage& invoke)
+{
+    QVariant sliceIdArg;
+    if (!findArgument(invoke.arguments, "sliceId", &sliceIdArg)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("missing sliceId argument"), {});
+        return;
+    }
+    const int sliceId = sliceIdArg.toInt();
+
+    // Captured BEFORE the call: this is the slice that is ABOUT to stop
+    // being active, and setActiveSliceById() (RadioModel.cpp) reassigns
+    // m_activeSlice as its very first side effect on success, so reading
+    // this afterward would already show the NEW slice.
+    SliceModel* const previouslyActive = m_radioModel->activeSlice();
+    const int previouslyActiveId =
+        (previouslyActive != nullptr) ? previouslyActive->sliceIndex() : -1;
+
+    if (!m_radioModel->setActiveSliceById(sliceId)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("no such slice"), {});
+        return;
+    }
+
+    // The newly-active key, plus the previously-active one when it is a
+    // DIFFERENT slice -- requesting the slice that was already active is a
+    // legitimate no-op accept (RadioModel::setActiveSlice()'s own
+    // change-guard makes it one), and reporting the same key twice would
+    // not describe two objects moving, just one.
+    QList<QByteArray> affected{ ObjectRegistry::keyForSlice(sliceId) };
+    if (previouslyActiveId >= 0 && previouslyActiveId != sliceId) {
+        affected.append(ObjectRegistry::keyForSlice(previouslyActiveId));
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), affected);
 }
 
 } // namespace NereusSDR

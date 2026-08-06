@@ -11,6 +11,15 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-08-05  J.J. Boyd / KG4VCF  Remote daemon R2 Task 11 fix round 1:
+//                                    applyMirroredValue's "active" rejection
+//                                    now names the reachable
+//                                    setActiveSliceById command verb instead
+//                                    of the unreachable RadioModel::
+//                                    setActiveSlice(). NereusSDR-original
+//                                    addition, no Thetis change. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 //=================================================================
@@ -614,9 +623,17 @@ void SliceModel::setTxSlice(bool tx)
 QString SliceModel::applyMirroredValue(const QByteArray& propertyName, const QVariant& /*value*/)
 {
     if (propertyName == "active") {
+        // Fix round 1 review finding (Important 1): this used to name
+        // RadioModel::setActiveSlice(), which a remote peer cannot reach
+        // (it is positional, not a session verb, and not even the
+        // preferred local entry point -- see its own doc comment).
+        // SessionCommandDispatcher's setActiveSliceById verb is the real,
+        // reachable path; name that instead, the same way StateMirror.cpp's
+        // kVerbHints table names requestSliceSampleRate for sampleRateHz.
         return QStringLiteral(
             "active is exclusive across a pan's slices and arbitrated by "
-            "RadioModel::setActiveSlice(); there is no per-slice remote-write path");
+            "RadioModel::setActiveSliceById(); use the setActiveSliceById "
+            "command verb instead of writing this property directly");
     }
     if (propertyName == "txSlice") {
         return QStringLiteral(
