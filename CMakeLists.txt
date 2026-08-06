@@ -689,6 +689,12 @@ set(CORE_SOURCES
     # is inherently tied to those two signals; TxSliceArbiter.cpp is the
     # existing precedent for src/core/ depending on src/models/ directly.
     src/core/session/ObjectRegistry.cpp
+    # R2 Task 10: the wire-message shapes (schema, object.create,
+    # object.destroy, delta, the snapshot-complete marker) and their JSON
+    # codec. Model-agnostic like MirrorSchema/MirrorPolicy -- it only knows
+    # about MirrorUpdate, never a model class -- so it stays out of the
+    # ObjectRegistry.cpp block above.
+    src/core/session/SessionMessages.cpp
 )
 
 # CoreAudioHalBus — macOS-only IAudioBus implementation bridging to the

@@ -16,6 +16,12 @@
 //                                    the m_applying forwarding guard). AI-
 //                                    assisted transformation via Anthropic
 //                                    Claude Code.
+//   2026-08-05  J.J. Boyd / KG4VCF  Remote daemon R2 Task 10: connect-time
+//                                    snapshot (attachSession), the
+//                                    outbound coalescer (MirrorCoalescer),
+//                                    and flushCoalescedDeltas. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include "core/session/StateMirror.h"
@@ -25,6 +31,8 @@
 #include <QLoggingCategory>
 #include <QMetaMethod>
 #include <QMetaObject>
+#include <QMutexLocker>
+#include <QSet>
 
 Q_LOGGING_CATEGORY(lcStateMirror, "nereus.mirror")
 
@@ -84,7 +92,95 @@ const QMetaMethod& watcherSlot()
     return slot;
 }
 
+// The property TABLE for a Schema message: every property the schema
+// walked, minus anything with no wire representation (MirrorWireKind::
+// Unsupported -- kept in MirrorSchema's own table so tst_mirror_schema's
+// membership guard can name it, per MirrorSchema.h, but useless to
+// declare to a client that will never receive a value for it). No
+// currently mirrored property actually falls in this bucket (MirrorSchema.h
+// section 6's "type surface is small" inventory), so this filter is
+// defensive for a future property type rather than live behaviour today.
+QList<SessionSchemaField> schemaFieldsFor(const MirrorSchema& schema)
+{
+    QList<SessionSchemaField> fields;
+    fields.reserve(schema.size());
+    for (const MirrorProperty& prop : schema.properties()) {
+        if (prop.kind == MirrorWireKind::Unsupported) {
+            continue;
+        }
+        fields.append(SessionSchemaField{ prop.ordinal, prop.name, prop.kind });
+    }
+    return fields;
+}
+
 } // namespace
+
+// ── MirrorCoalescer ─────────────────────────────────────────────────────
+
+void MirrorCoalescer::update(const QByteArray& objectKey, const MirrorUpdate& changed)
+{
+    QMutexLocker locker(&m_mutex);
+    auto valuesIt = m_values.find(objectKey);
+    if (valuesIt == m_values.end()) {
+        // First property to go dirty for this object since the last
+        // flush: record its arrival order, mirroring TciVfoCoalescer's
+        // own "first time we see this key" comment.
+        m_objectOrder.enqueue(objectKey);
+        valuesIt = m_values.insert(objectKey, {});
+        m_ordinalOrder.insert(objectKey, {});
+    }
+    QHash<quint16, MirrorUpdate>& perObject = valuesIt.value();
+    if (!perObject.contains(changed.ordinal)) {
+        m_ordinalOrder[objectKey].append(changed.ordinal);
+    }
+    // Latest-wins: REPLACE (or insert) the value for this ordinal. The
+    // insertion-order slot recorded above is untouched by a replacement,
+    // exactly like TciVfoCoalescer::update()'s own m_frames.insert().
+    perObject.insert(changed.ordinal, changed);
+}
+
+QList<QPair<QByteArray, QList<MirrorUpdate>>> MirrorCoalescer::flush()
+{
+    QMutexLocker locker(&m_mutex);
+    QList<QPair<QByteArray, QList<MirrorUpdate>>> out;
+    out.reserve(m_objectOrder.size());
+    while (!m_objectOrder.isEmpty()) {
+        const QByteArray key = m_objectOrder.dequeue();
+        const QList<quint16> ordinals = m_ordinalOrder.take(key);
+        const QHash<quint16, MirrorUpdate> values = m_values.take(key);
+        QList<MirrorUpdate> batch;
+        batch.reserve(ordinals.size());
+        for (quint16 ordinal : ordinals) {
+            batch.append(values.value(ordinal));
+        }
+        out.append(qMakePair(key, batch));
+    }
+    return out;
+}
+
+void MirrorCoalescer::clear()
+{
+    QMutexLocker locker(&m_mutex);
+    m_objectOrder.clear();
+    m_ordinalOrder.clear();
+    m_values.clear();
+}
+
+int MirrorCoalescer::pendingObjectCount() const
+{
+    QMutexLocker locker(&m_mutex);
+    return m_objectOrder.size();
+}
+
+int MirrorCoalescer::pendingPropertyCount() const
+{
+    QMutexLocker locker(&m_mutex);
+    int total = 0;
+    for (auto it = m_values.constBegin(); it != m_values.constEnd(); ++it) {
+        total += it.value().size();
+    }
+    return total;
+}
 
 StateMirror::StateMirror(QObject* parent)
     : QObject(parent)
@@ -329,6 +425,25 @@ void StateMirror::onWatchedPropertyChanged()
     if (updates.isEmpty()) {
         return;
     }
+
+    // Task 10: once a session has attached, every change also feeds the
+    // outbound coalescer, unconditionally -- this is the WHOLE mechanism
+    // behind flushCoalescedDeltas() being able to report the same value a
+    // live re-read would (see MirrorCoalescer's class comment), and it is
+    // what stops a change triggered synchronously from inside
+    // attachSession()'s own burst from reaching sessionMessageReady()
+    // ahead of the snapshot-complete marker: a Delta is only ever emitted
+    // from flushCoalescedDeltas(), never from here. Before the first
+    // attachSession() call, m_hasAttachedSession is false and this whole
+    // block is skipped -- the coalescer never sees a single update, which
+    // is what "the coalescer must not change any behaviour when no
+    // session is attached" rests on.
+    if (m_hasAttachedSession) {
+        for (const MirrorUpdate& update : updates) {
+            m_coalescer.update(key, update);
+        }
+    }
+
     emit propertiesChanged(key, updates);
 }
 
@@ -373,6 +488,71 @@ QList<QPair<QByteArray, QList<MirrorUpdate>>> StateMirror::snapshotAll() const
         all.append(qMakePair(watch.key, snapshot(watch.key)));
     }
     return all;
+}
+
+// ── Connect-time snapshot (Task 10) ─────────────────────────────────────
+
+void StateMirror::attachSession()
+{
+    m_hasAttachedSession = true;
+
+    // "clear the dirty set": discard anything pending from before this
+    // session existed to see it. The burst below reads every watched
+    // object's CURRENT state, so nothing queued here could tell a
+    // brand-new client anything its own object.create will not already
+    // say.
+    m_coalescer.clear();
+
+    // One schema message per DISTINCT class among what is currently
+    // watched, in first-watched order. shortClassName() matches
+    // ObjectRegistry::createForSlice()'s own choice: the wire-facing class
+    // name is always the short form ("SliceModel"), never the
+    // QMetaObject-qualified one ("NereusSDR::SliceModel").
+    QSet<QByteArray> announced;
+    for (const Watch& watch : m_watches) {
+        if (watch.object == nullptr || watch.schema == nullptr) {
+            continue;
+        }
+        const QByteArray shortName = MirrorSchema::shortClassName(watch.schema->className());
+        if (announced.contains(shortName)) {
+            continue;
+        }
+        announced.insert(shortName);
+        emit sessionMessageReady(SessionMessages::schema(shortName, schemaFieldsFor(*watch.schema)));
+    }
+
+    // One object.create per watched object, watch order, each carrying the
+    // FULL settled property bag -- reuses snapshot(), the same path Task 7
+    // proved reaches CONSTANT properties such as sliceIndex.
+    for (const Watch& watch : m_watches) {
+        if (watch.object == nullptr || watch.schema == nullptr) {
+            continue;
+        }
+        const QByteArray shortName = MirrorSchema::shortClassName(watch.schema->className());
+        emit sessionMessageReady(
+            SessionMessages::objectCreate(watch.key, shortName, snapshot(watch.key)));
+    }
+
+    emit sessionMessageReady(SessionMessages::snapshotComplete());
+
+    // "resume flushing": anything the burst itself caused to go dirty --
+    // a synchronous, same-thread reaction to one of the messages just
+    // emitted above, writing an object this mirror watches -- has been
+    // sitting in the coalescer the whole time (onWatchedPropertyChanged()
+    // never emits a Delta directly; see its own comment), never flushed
+    // because nothing called flushCoalescedDeltas() until here. Draining
+    // it now, as the LAST step, is what keeps it from being lost while
+    // guaranteeing it cannot be observed until after the marker above.
+    flushCoalescedDeltas();
+}
+
+int StateMirror::flushCoalescedDeltas()
+{
+    const QList<QPair<QByteArray, QList<MirrorUpdate>>> pending = m_coalescer.flush();
+    for (const auto& batch : pending) {
+        emit sessionMessageReady(SessionMessages::delta(batch.first, batch.second));
+    }
+    return pending.size();
 }
 
 // ── Inbound apply ────────────────────────────────────────────────────────

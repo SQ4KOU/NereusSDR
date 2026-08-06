@@ -6339,6 +6339,36 @@ nereus_add_test(tst_mirror_inbound)
 # produces an object.create.
 nereus_add_test(tst_mirror_lifecycle)
 
+# Remote Daemon R2, Task 10: the connect-time snapshot (StateMirror::
+# attachSession()) and the outbound coalescer (MirrorCoalescer).
+#
+# attachSession() sends, via the new sessionMessageReady() signal: one
+# schema message per DISTINCT watched class, one object.create per watched
+# object (full property bag, watch order), then the snapshot-complete
+# marker -- built on ObjectRegistry's backfillExistingSlices() (Task 9) to
+# put three ALREADY-EXISTING slices under watch before attaching, which is
+# what makes three object.create messages possible at all.
+#
+# The ordering guarantee under test: a property write triggered
+# SYNCHRONOUSLY by a receiver reacting to one of the burst's own messages
+# must not be lost and must not be observable ahead of the marker.
+# onWatchedPropertyChanged() routes every change into MirrorCoalescer once
+# a session has attached, and a Delta is emitted only from
+# flushCoalescedDeltas(), which attachSession() calls exactly once, as its
+# LAST step -- so nothing can jump the marker without a Delta emission
+# path existing outside that one call, which this file's sabotage-and-
+# revert history (see task-10-report.md) confirmed by temporarily adding
+# one and watching the ordering assertion fail.
+#
+# Also covers: MirrorCoalescer standalone (latest-wins-per-ordinal is
+# structural overwrite, not sort order; arrival order preserved per object
+# and across objects; clear() drops without flushing), local direct mode
+# is provably unaffected when attachSession() is never called
+# (propertiesChanged() unchanged from Tasks 7-8), and SessionMessages'
+# JSON codec round-trips all five message kinds and rejects malformed
+# wire input.
+nereus_add_test(tst_mirror_snapshot)
+
 # R1 Task 10: DaemonApp connects the daemon to a radio (or runs discovery)
 # and creates min(cfg.sliceCount, connected-board-maxSlices) slices via
 # RadioModel's own addSlice() -- the same entry point connectToRadio()
