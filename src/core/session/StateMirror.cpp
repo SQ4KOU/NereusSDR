@@ -503,13 +503,27 @@ void StateMirror::attachSession()
     // say.
     m_coalescer.clear();
 
+    // Copied out of m_watches before either loop below emits anything: a
+    // receiver may watch() or unwatch() synchronously in response to one
+    // of this burst's own messages, which would reallocate the live QList
+    // out from under a range-for iterator into it. The identical hazard,
+    // and the identical fix, already exist in onWatchedPropertyChanged()
+    // (see its own "Copied out of m_watches" comment) -- applied here for
+    // the same reason. schema and key are all either loop below actually
+    // needs; schema pointers are cache-lifetime stable regardless of what
+    // happens to m_watches (MirrorSchema::forMetaObject() never frees
+    // one), and the create loop resolves state through snapshot(key),
+    // which re-looks-up the CURRENT m_watches by key rather than
+    // dereferencing anything out of this copy.
+    const QList<Watch> watches = m_watches;
+
     // One schema message per DISTINCT class among what is currently
     // watched, in first-watched order. shortClassName() matches
     // ObjectRegistry::createForSlice()'s own choice: the wire-facing class
     // name is always the short form ("SliceModel"), never the
     // QMetaObject-qualified one ("NereusSDR::SliceModel").
     QSet<QByteArray> announced;
-    for (const Watch& watch : m_watches) {
+    for (const Watch& watch : watches) {
         if (watch.object == nullptr || watch.schema == nullptr) {
             continue;
         }
@@ -524,7 +538,7 @@ void StateMirror::attachSession()
     // One object.create per watched object, watch order, each carrying the
     // FULL settled property bag -- reuses snapshot(), the same path Task 7
     // proved reaches CONSTANT properties such as sliceIndex.
-    for (const Watch& watch : m_watches) {
+    for (const Watch& watch : watches) {
         if (watch.object == nullptr || watch.schema == nullptr) {
             continue;
         }
@@ -549,10 +563,53 @@ void StateMirror::attachSession()
 int StateMirror::flushCoalescedDeltas()
 {
     const QList<QPair<QByteArray, QList<MirrorUpdate>>> pending = m_coalescer.flush();
+    int emitted = 0;
     for (const auto& batch : pending) {
-        emit sessionMessageReady(SessionMessages::delta(batch.first, batch.second));
+        // Re-resolve against the LIVE watch list rather than trusting
+        // batch.second's values, which are only the PROVISIONAL ones
+        // MirrorCoalescer::update() was called with (see its class
+        // comment). Two things this single lookup closes together:
+        //
+        //   - A key no longer watched -- unwatched, or its object
+        //     destroyed, since the property went dirty -- resolves to
+        //     nothing here and the whole batch is dropped. No Delta
+        //     naming a dead object is possible.
+        //   - A key still watched gets each ordinal re-read fresh, so a
+        //     write that landed through applyInbound() (which suppresses
+        //     the notify that would otherwise have kept the coalescer's
+        //     own copy current -- see onWatchedPropertyChanged()'s
+        //     m_applying check) is not superseded by a stale pending
+        //     value from before it.
+        const int index = indexOfKey(batch.first);
+        if (index < 0) {
+            continue;
+        }
+        const Watch& watch = m_watches.at(index);
+        if (watch.object == nullptr || watch.schema == nullptr) {
+            continue;
+        }
+
+        QList<MirrorUpdate> fresh;
+        fresh.reserve(batch.second.size());
+        for (const MirrorUpdate& pendingUpdate : batch.second) {
+            const MirrorProperty* prop = watch.schema->byOrdinal(pendingUpdate.ordinal);
+            if (prop == nullptr) {
+                continue;
+            }
+            const QVariant value = watch.schema->read(*prop, watch.object);
+            if (!value.isValid()) {
+                continue;
+            }
+            fresh.append(MirrorUpdate{ prop->ordinal, prop->name, prop->kind, value });
+        }
+        if (fresh.isEmpty()) {
+            continue;
+        }
+
+        emit sessionMessageReady(SessionMessages::delta(batch.first, fresh));
+        ++emitted;
     }
-    return pending.size();
+    return emitted;
 }
 
 // ── Inbound apply ────────────────────────────────────────────────────────

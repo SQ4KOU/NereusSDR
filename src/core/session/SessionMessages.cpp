@@ -365,6 +365,33 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
         return false;
     }
 
+    // Structural fields a well-formed message of this kind MUST carry,
+    // checked for PRESENCE and TYPE before any of them is read. A missing
+    // field decodes to QJsonValue::Undefined, and Undefined's toString()/
+    // toArray() silently return an empty QString/QJsonArray -- exactly the
+    // shape a genuinely empty-but-present field would have, which is why
+    // reading through those conversions without checking first would
+    // silently coerce "absent" into "empty" rather than reject it. This is
+    // the far side of a socket a remote peer controls.
+    const bool needsKey = kind == SessionMessageKind::ObjectCreate
+        || kind == SessionMessageKind::ObjectDestroy || kind == SessionMessageKind::Delta;
+    if (needsKey && !o.value(QStringLiteral("key")).isString()) {
+        return false;
+    }
+    const bool needsClass = kind == SessionMessageKind::Schema
+        || kind == SessionMessageKind::ObjectCreate || kind == SessionMessageKind::ObjectDestroy;
+    if (needsClass && !o.value(QStringLiteral("class")).isString()) {
+        return false;
+    }
+    if (kind == SessionMessageKind::Schema && !o.value(QStringLiteral("fields")).isArray()) {
+        return false;
+    }
+    const bool needsProperties =
+        kind == SessionMessageKind::ObjectCreate || kind == SessionMessageKind::Delta;
+    if (needsProperties && !o.value(QStringLiteral("properties")).isArray()) {
+        return false;
+    }
+
     SessionMessage message;
     message.kind = kind;
 

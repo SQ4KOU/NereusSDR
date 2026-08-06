@@ -263,6 +263,157 @@ private slots:
         QCOMPARE(sink.indexOfFirst(SessionMessageKind::SnapshotComplete), 4);
     }
 
+    // ── flushCoalescedDeltas() re-reads live state (review round 1) ─────
+    //
+    // Review round 1 found the coalescer's stored value can go stale:
+    // applyInbound()'s m_applying guard (StateMirror.cpp) suppresses the
+    // notify a write produces, specifically so the write does not echo
+    // back to the peer that just sent it -- which means a property
+    // already pending in the coalescer can be changed AGAIN on the model
+    // without update() ever being called a second time for it.
+    // flushCoalescedDeltas() must report what the model holds AT FLUSH
+    // TIME, not whatever value was pending before the inbound write
+    // superseded it.
+
+    void flushReReadsLiveValueSoAnInboundApplyIsNotSupersededByAStalePendingOne()
+    {
+        SliceModel slice(0);
+        slice.setFrequency(14200000.0); // 20m, a known baseline, unwatched yet
+        StateMirror mirror;
+        QVERIFY(mirror.watch("slice:0", &slice));
+        mirror.attachSession();
+
+        Sink sink(&mirror);
+
+        // A daemon-local path (band-stack restore, TCI, restoreFromSettings)
+        // changes the property first: the coalescer pends this value.
+        slice.setFrequency(14250000.0); // still 20m
+
+        // Before that pending value is ever flushed, a GUI-originated
+        // write arrives through applyInbound(). m_applying suppresses the
+        // notify -- by design, Task 8 -- so the coalescer never learns the
+        // model moved again; its own stored entry is still 14250000.0.
+        const MirrorApplyResult result = mirror.applyInbound(
+            QByteArray("slice:0"), QByteArray("frequency"), QVariant(14300000.0));
+        QVERIFY2(result.accepted, "test setup: the inbound write must actually land");
+        QCOMPARE(slice.frequency(), 14300000.0);
+
+        const int emitted = mirror.flushCoalescedDeltas();
+        QCOMPARE(emitted, 1);
+        QCOMPARE(sink.entries.size(), 1);
+        QCOMPARE(sink.entries.first().kind, SessionMessageKind::Delta);
+
+        const MirrorUpdate* freq = nullptr;
+        for (const MirrorUpdate& u : sink.entries.first().updates) {
+            if (u.name == "frequency") {
+                freq = &u;
+            }
+        }
+        QVERIFY2(freq != nullptr, "the pending frequency property was lost entirely");
+        QVERIFY2(freq->value.toDouble() != 14250000.0,
+                 "must not report the STALE pre-applyInbound pending value");
+        QCOMPARE(freq->value.toDouble(), 14300000.0);
+    }
+
+    // ── flushCoalescedDeltas() drops entries for an unwatched key ───────
+    //
+    // Review round 1's second finding: unwatch() does not purge the
+    // coalescer, so a property that went dirty before its object was
+    // unwatched (or destroyed) must not survive to be reported as a Delta
+    // naming a key nothing is watching by the time it goes out. Both
+    // findings share one fix: flushCoalescedDeltas() re-resolves each
+    // pending (key, ordinal) against the LIVE watch list, so an unwatched
+    // key resolves to nothing.
+
+    void flushDropsPendingPropertiesForAKeyThatWasUnwatched()
+    {
+        SliceModel slice(0);
+        StateMirror mirror;
+        QVERIFY(mirror.watch("slice:0", &slice));
+        mirror.attachSession();
+
+        Sink sink(&mirror);
+        slice.setFrequency(14300000.0); // pends in the coalescer
+
+        mirror.unwatch("slice:0");
+        const int emitted = mirror.flushCoalescedDeltas();
+
+        QCOMPARE(emitted, 0);
+        QVERIFY2(sink.entries.isEmpty(),
+                 "a property that went dirty before its object was unwatched "
+                 "must not survive to be delivered as a delta naming a key "
+                 "nothing is watching");
+    }
+
+    // The control for the test above: the IDENTICAL sequence minus the
+    // unwatch() call must deliver normally, so the zero-message result
+    // above is evidence the unwatch() dropped something real, not merely
+    // that nothing was ever pending in the first place.
+    void flushDeliversPendingPropertiesForAStillWatchedKey()
+    {
+        SliceModel slice(0);
+        StateMirror mirror;
+        QVERIFY(mirror.watch("slice:0", &slice));
+        mirror.attachSession();
+
+        Sink sink(&mirror);
+        slice.setFrequency(14300000.0);
+
+        const int emitted = mirror.flushCoalescedDeltas();
+        QCOMPARE(emitted, 1);
+        QCOMPARE(sink.entries.size(), 1);
+        QCOMPARE(sink.entries.first().kind, SessionMessageKind::Delta);
+        QCOMPARE(sink.entries.first().objectKey, QByteArray("slice:0"));
+    }
+
+    // ── Reattach: complete fresh burst, nothing pre-attach survives ─────
+    //
+    // StateMirror.h's attachSession() doc comment promises this is safe
+    // to call again for a reconnecting client, and Task 19 will rely on
+    // it: a complete second burst, with no delta from before the second
+    // attach riding along afterward.
+    void reattachSendsACompleteFreshBurstAndDropsAnythingPendingFromBeforeIt()
+    {
+        RadioModel model;
+        SliceModel slice(0);
+        StateMirror mirror;
+        QVERIFY(mirror.watch("radio", &model));
+        QVERIFY(mirror.watch("slice:0", &slice));
+
+        Sink sink(&mirror);
+        mirror.attachSession(); // first burst
+        QCOMPARE(sink.countOf(SessionMessageKind::Schema), 2);
+        QCOMPARE(sink.countOf(SessionMessageKind::ObjectCreate), 2);
+        QCOMPARE(sink.countOf(SessionMessageKind::SnapshotComplete), 1);
+
+        slice.setFrequency(14300000.0); // pends; never flushed before the re-attach
+
+        sink.entries.clear(); // isolate the second attach's own output
+        mirror.attachSession(); // second burst
+
+        // Complete: the same shape as the first.
+        QCOMPARE(sink.countOf(SessionMessageKind::Schema), 2);
+        QCOMPARE(sink.countOf(SessionMessageKind::ObjectCreate), 2);
+        QCOMPARE(sink.countOf(SessionMessageKind::SnapshotComplete), 1);
+
+        // The pre-second-attach pending change must not survive as a
+        // standalone Delta riding along after the marker: attachSession()
+        // clears the coalescer before rebuilding, and the fresh create for
+        // slice:0 already carries the new frequency directly.
+        QCOMPARE(sink.countOf(SessionMessageKind::Delta), 0);
+
+        const int createIdx = sink.indexOfCreate("slice:0");
+        QVERIFY(createIdx >= 0);
+        bool sawFreq = false;
+        for (const MirrorUpdate& u : sink.entries.at(createIdx).updates) {
+            if (u.name == "frequency") {
+                sawFreq = true;
+                QCOMPARE(u.value.toDouble(), 14300000.0);
+            }
+        }
+        QVERIFY2(sawFreq, "the second burst's create must reflect current state");
+    }
+
     // ── Local direct mode is unaffected ─────────────────────────────────
 
     // propertiesChanged() -- the Task 7/8 forwarder -- must behave exactly
@@ -403,10 +554,69 @@ private slots:
         QVERIFY(!SessionMessages::decode(QByteArray("not json"), &out));
         QVERIFY(!SessionMessages::decode(QByteArray("{}"), &out)); // no "type"
         QVERIFY(!SessionMessages::decode(QByteArray(R"({"type":"nonsense"})"), &out));
+
+        // Unrecognised wire-kind token: fails at wireKindFromName(), before
+        // ever reaching the value-type-mismatch branch below.
         QVERIFY(!SessionMessages::decode(
             QByteArray(
                 R"({"type":"delta","key":"slice:0","properties":[{"ordinal":0,"name":"x","kind":"nope","value":1}]})"),
             &out));
+
+        // A value whose JSON type does not match its declared kind -- the
+        // branch the "nope" case above never reaches.
+        QVERIFY2(!SessionMessages::decode(
+                     QByteArray(
+                         R"({"type":"delta","key":"slice:0","properties":[{"ordinal":0,"name":"x","kind":"f64","value":"not a number"}]})"),
+                     &out),
+                 "a string value where f64 declares a number must be rejected");
+
+        // Out-of-range ordinals: negative, and past quint16's 65535 max.
+        QVERIFY2(!SessionMessages::decode(
+                     QByteArray(
+                         R"({"type":"delta","key":"slice:0","properties":[{"ordinal":-1,"name":"x","kind":"f64","value":1.0}]})"),
+                     &out),
+                 "a negative ordinal must be rejected");
+        QVERIFY2(!SessionMessages::decode(
+                     QByteArray(
+                         R"({"type":"delta","key":"slice:0","properties":[{"ordinal":70000,"name":"x","kind":"f64","value":1.0}]})"),
+                     &out),
+                 "an ordinal past quint16's range must be rejected");
+
+        // Missing structural fields: ABSENT, not merely empty -- a missing
+        // field must not silently decode as though it were present and
+        // empty. See decodeAcceptsGenuinelyEmptyStructuralFields for the
+        // legitimate empty-but-present case this must stay distinct from.
+        QVERIFY2(!SessionMessages::decode(QByteArray(R"({"type":"delta"})"), &out),
+                 "delta with no key at all must be rejected, not decoded with an empty key");
+        QVERIFY2(!SessionMessages::decode(QByteArray(R"({"type":"delta","key":"slice:0"})"), &out),
+                 "delta with no properties array at all must be rejected");
+        QVERIFY2(!SessionMessages::decode(
+                     QByteArray(R"({"type":"object.create","key":"slice:0","properties":[]})"), &out),
+                 "object.create with no class must be rejected");
+        QVERIFY2(!SessionMessages::decode(QByteArray(R"({"type":"schema","class":"SliceModel"})"), &out),
+                 "schema with no fields array at all must be rejected");
+        QVERIFY2(!SessionMessages::decode(QByteArray(R"({"type":"object.destroy"})"), &out),
+                 "object.destroy with no key must be rejected");
+
+        // Wrong TYPE for a structural field (a number instead of a string
+        // key) must be rejected the same way as an absent one.
+        QVERIFY2(!SessionMessages::decode(QByteArray(R"({"type":"delta","key":5,"properties":[]})"), &out),
+                 "a non-string key must be rejected");
+    }
+
+    // The companion to the "missing" cases above: a genuinely PRESENT but
+    // EMPTY key/array is a different, legal shape -- an empty properties
+    // array is exactly what a class with zero changed properties or zero
+    // declared fields would encode -- and decode() must still accept it.
+    void decodeAcceptsGenuinelyEmptyStructuralFields()
+    {
+        SessionMessage out;
+        QVERIFY(SessionMessages::decode(
+            QByteArray(R"({"type":"delta","key":"slice:0","properties":[]})"), &out));
+        QCOMPARE(out.updates.size(), 0);
+        QVERIFY(SessionMessages::decode(
+            QByteArray(R"({"type":"schema","class":"SliceModel","fields":[]})"), &out));
+        QCOMPARE(out.fields.size(), 0);
     }
 };
 

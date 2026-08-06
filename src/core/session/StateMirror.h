@@ -143,31 +143,47 @@ namespace NereusSDR {
 /// change touches the SAME ordinal (band) on several.
 ///
 /// Latest-wins is structural, not order-of-processing: a second update()
-/// for a key already pending OVERWRITES its stored value, so whichever
-/// call happened last in real time is what flush() reports -- never
-/// something flush() has to compute by comparing arrival timestamps
-/// itself. This is the coalescer half of the same discipline Task 7's
-/// re-read-on-notify established for the forwarder half: every value
-/// handed to update() already passed through StateMirror's
-/// onWatchedPropertyChanged(), which re-reads via QMetaProperty::read
-/// rather than trusting a signal argument, so the value overwritten into
-/// this map is already as fresh as a live re-read would produce. Under
-/// the single-thread precondition StateMirror::attachSession() documents,
-/// nothing can change a watched object between one update() call and the
-/// next without going through that same re-read path first -- so storing
-/// the latest update() call's value and re-reading the live object again
-/// at flush time are equivalent, and this class does the cheaper of the
-/// two.
+/// for a key already pending OVERWRITES its stored value, so the slot
+/// always holds whichever call happened most recently, with nothing for
+/// flush() to compute by comparing arrival timestamps itself.
+///
+/// That stored value is a PROVISIONAL marker, not the authoritative one a
+/// Delta ends up carrying on the wire. StateMirror::flushCoalescedDeltas()
+/// re-resolves each pending (objectKey, ordinal) against the LIVE watched
+/// object at flush time rather than trusting what is stored here, and
+/// that re-resolution is load-bearing, not defensive. A first version of
+/// this comment argued the stored value could not go stale, on the
+/// premise that nothing can change a watched object without going through
+/// onWatchedPropertyChanged()'s re-read first -- but applyInbound()'s
+/// m_applying guard (StateMirror.cpp) exists specifically to suppress
+/// that notify, so a remote peer's write does not echo straight back to
+/// itself. That means a property this coalescer already has pending CAN
+/// be changed again on the model without update() ever being called a
+/// second time for it, and reporting the stored value at flush would then
+/// hand a peer a value the daemon no longer holds. The same
+/// re-resolution against the live watch list is also what lets
+/// flushCoalescedDeltas() silently drop a key that was unwatched (or
+/// whose object was destroyed) before its pending property was ever
+/// flushed, instead of emitting a Delta naming an object the peer has
+/// already been told is gone. This class's own job stays narrow: record
+/// which (objectKey, ordinal) pairs are dirty, in arrival order, with a
+/// provisional value for convenience. Resolving that into what actually
+/// goes on the wire is StateMirror's job, not this class's.
 class MirrorCoalescer {
 public:
-    /// Marks `objectKey`'s `changed.ordinal` dirty, storing `changed` as
-    /// its latest value. A second call for the same (objectKey, ordinal)
-    /// before the next flush() overwrites the first.
+    /// Marks `objectKey`'s `changed.ordinal` dirty, storing `changed` as a
+    /// PROVISIONAL latest value (see the class comment for why flush()
+    /// does not simply hand this back out). A second call for the same
+    /// (objectKey, ordinal) before the next flush() overwrites the first.
     void update(const QByteArray& objectKey, const MirrorUpdate& changed);
 
     /// Every pending object, in the order each one FIRST went dirty since
     /// the last flush; within each object, its properties in the order
-    /// each ordinal FIRST went dirty. Clears all pending state.
+    /// each ordinal FIRST went dirty. Clears all pending state. The
+    /// MirrorUpdate values returned are the PROVISIONAL ones update() was
+    /// called with; StateMirror::flushCoalescedDeltas() is what
+    /// re-resolves them against the live model before anything reaches
+    /// the wire.
     QList<QPair<QByteArray, QList<MirrorUpdate>>> flush();
 
     /// Drops everything pending without returning it.
@@ -278,21 +294,30 @@ public:
     /// and sends a complete burst again.
     void attachSession();
 
-    /// Emits one Delta sessionMessageReady() per object with anything
-    /// pending in the outbound coalescer, then clears it. attachSession()
-    /// calls this itself as its last step; a periodic caller (Task 18's
-    /// flush timer, once a live session exists) is expected to call it
-    /// again on whatever cadence that session decides. Returns the number
-    /// of Delta messages emitted.
+    /// Drains the outbound coalescer and emits one Delta
+    /// sessionMessageReady() per object with anything pending. Returns the
+    /// number of Delta messages emitted. attachSession() calls this itself
+    /// as its last step; a periodic caller (Task 18's flush timer, once a
+    /// live session exists) is expected to call it again on whatever
+    /// cadence that session decides.
     ///
-    /// KNOWN LIMITATION for Task 18's wiring: unwatch() does not purge any
-    /// entry this coalescer already holds for the unwatched key. A slice
-    /// removed with an unflushed coalesced property still pending will
-    /// have that property emitted as a Delta -- referencing a key nothing
-    /// is watching by the time it goes out -- on whatever the NEXT flush
-    /// is. Harmless today (nothing calls this on a timer yet), but Task
-    /// 18's session, which will, needs to either flush before unwatching
-    /// or filter dead keys out of what this returns.
+    /// This is where a pending property's value is actually decided, by
+    /// re-resolving each (objectKey, ordinal) MirrorCoalescer::flush()
+    /// returns against `m_watches` rather than trusting the PROVISIONAL
+    /// value the coalescer stored (see MirrorCoalescer's class comment for
+    /// why that value can go stale -- applyInbound()'s m_applying guard is
+    /// the concrete case). Two things follow from doing the resolution
+    /// here instead:
+    ///
+    ///   - A key still watched yields whatever the live object holds
+    ///     RIGHT NOW, which is correct even if something changed it again,
+    ///     through applyInbound(), after it was marked dirty and before
+    ///     this call.
+    ///   - A key no longer watched -- unwatched, or its object destroyed,
+    ///     since it was marked dirty -- resolves to nothing at all, and
+    ///     that batch is silently dropped rather than sent. No Delta this
+    ///     method emits can ever name an object the peer was already told
+    ///     is gone (or was never told about at all).
     int flushCoalescedDeltas();
 
     /// True once attachSession() has run at least once. Local direct mode
