@@ -282,8 +282,10 @@ private:
 
     // RX meter cal offset (Thetis-faithful port).  Set via
     // setRxOffsetSource(); empty callable yields 0.0 dB (no offset).
-    // Polled once per pollSMeter() invocation, then reused for the
-    // poll() SignalPeak/SignalAvg loop and the smeterUpdated emit.
+    // Queried independently by poll()'s own SignalPeak/SignalAvg loop and
+    // by pollSMeter()'s analog-widget read (smeterUpdated, the signal this
+    // comment used to also name, was removed in Remote Daemon R2 Task 12
+    // fix round 1 -- see MeterPoller.cpp's modification history).
     // See setRxOffsetSource() doc for Thetis console.cs:46821 cite.
     std::function<double()> m_rxOffsetSource;
 };

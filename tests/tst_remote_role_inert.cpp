@@ -181,16 +181,23 @@ private slots:
     // it does nothing on a Role::Remote model.
     //
     // The brief this task was dispatched from listed a fifth assertion,
-    // "SliceMeterPump is not constructed in Role::Remote". That class
-    // does not exist anywhere in this tree: it is task 12's own
-    // deliverable ("Create src/core/meters/SliceMeterPump.{h,cpp}"),
-    // task 12's dependency line names tasks 2 and 4 only (not this one),
-    // and task 12 step 4b is where its own Role::Remote guard is
-    // specified. The design addendum's own section 4.1 is titled "Four
-    // local authorities", not five, and enumerates exactly the four
-    // covered below. Writing a test (or a guard) for a class task 12
-    // has not created yet would be fabricating both. See
-    // task-5-report.md for the full evidence trail.
+    // "SliceMeterPump is not constructed in Role::Remote". At the time
+    // this file was written, that class did not exist anywhere in this
+    // tree: it was task 12's own deliverable ("Create
+    // src/core/meters/SliceMeterPump.{h,cpp}"), task 12's dependency line
+    // named tasks 2 and 4 only (not this one), and task 12 step 4b was
+    // where its own Role::Remote guard was specified. The design
+    // addendum's own section 4.1 is titled "Four local authorities", not
+    // five, and enumerates exactly the four covered below. Writing a test
+    // (or a guard) for a class task 12 had not created yet would have
+    // been fabricating both. See task-5-report.md for the full evidence
+    // trail.
+    //
+    // Task 12 has since landed. The fifth assertion now lives in
+    // tests/tst_slice_meter_pump.cpp -- localRoleConstructsSliceMeterPump()
+    // and remoteRoleDoesNotConstructSliceMeterPump(), its own Group 4 --
+    // not here, so this file's four tests below stay exactly the four
+    // named above.
     // =============================================================
 
     // (a) The stream allocator. addSlice() wires an unconditional

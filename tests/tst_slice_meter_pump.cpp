@@ -144,28 +144,59 @@ private slots:
     // Step 4: "the pump stops while transmitting." RadioStatus::
     // isTransmitting() (not MeterPoller's m_inTx, which only ever sees MOX
     // asserted through MoxController) gates poll() before it looks at a
-    // single slice. Seeded with a real reading first so a wrongly-ungated
-    // poll() would visibly clobber it back toward -140.0 rather than the
-    // test vacuously re-confirming an unmoved default.
+    // single slice.
+    //
+    // Fix round 1 (reviewer finding): the original version of this test
+    // used an UNCONNECTED model, where wdspEngine()->rxChannel(id) is
+    // already null (see pollLeavesSliceAtDefaultWhenNoWdspChannelExists()
+    // above). poll()'s no-channel branch is a `continue` that leaves the
+    // slice untouched regardless of the TX gate, so that version passed
+    // whether or not isTransmitting() was ever checked -- deleting the
+    // gate, or moving it below the per-slice loop, would not have failed
+    // it. This version uses a REAL connected RxChannel
+    // (ConnectableRadioModel, the same harness group 3 below uses) and
+    // seeds a value no live SignalAvg reading could plausibly produce, so
+    // an ungated poll() would overwrite it with something near the
+    // channel's actual reading instead of leaving it alone -- the
+    // QCOMPARE below then fails loudly rather than passing by luck.
+    // Verified by sabotage-and-revert: commenting out the
+    // isTransmitting() early return in SliceMeterPump::poll() makes this
+    // test fail (the seeded value gets overwritten); restoring the early
+    // return makes it pass again. See task-12-report.md's fix-round
+    // section for the exact before/after output.
     void pollDoesNothingWhileTransmitting()
     {
-        RadioModel model{RadioModel::Role::Local};
+        std::unique_ptr<ConnectableRadioModel> harness = ConnectableRadioModel::create();
+        QVERIFY(harness != nullptr);
+        RadioModel& model = harness->model();
         SliceMeterPump* pump = model.sliceMeterPump();
         QVERIFY(pump != nullptr);
 
-        const int sliceId = model.addSlice();
-        SliceModel* slice = model.sliceById(sliceId);
+        SliceModel* slice = model.sliceById(0);
         QVERIFY(slice != nullptr);
+        RxChannel* ch = model.wdspEngine()->rxChannel(slice->sliceIndex());
+        QVERIFY(ch != nullptr);
+
+        // A dBm S-meter reading this far out of any real WDSP range --
+        // silence sits near -140, a strong signal maybe up to a few tens
+        // of dB -- so the live channel could never coincidentally match
+        // it. Confirmed explicitly rather than assumed, so a future
+        // change to WDSP's meter scaling can't quietly turn this into a
+        // vacuous pass.
+        const double seeded = 12345.0;
+        QVERIFY(ch->getMeter(RxMeterType::SignalAvg) + model.rxMeterOffsetDb() != seeded);
 
         // setSignalStrengthDbm is a plain public method (like setActive /
         // setTxSlice), not a QMetaProperty WRITE -- direct calls are the
         // normal way to seed it in a test.
-        slice->setSignalStrengthDbm(-42.0);
+        slice->setSignalStrengthDbm(seeded);
 
         model.radioStatus().setTransmitting(true);
         pump->poll();
 
-        QCOMPARE(slice->signalStrengthDbm(), -42.0);
+        QCOMPARE(slice->signalStrengthDbm(), seeded);
+
+        harness.reset();
     }
 
     // ── Group 3: poll() against a real connected RxChannel ──────────────────
@@ -176,6 +207,16 @@ private slots:
     // poll() returns -- no intervening QTest::qWait or event-loop turn --
     // so the two reads observe WDSP's accumulator at, for all practical
     // purposes, the same instant.
+    //
+    // Known low-probability flake (fix round 1 review, Minor): this
+    // QCOMPARE takes two independent getMeter() reads a few statements
+    // apart on the SAME live channel; if the audio/DSP thread happens to
+    // land a new block between them the accumulator can have moved by the
+    // time the second read runs. The window is microseconds against a
+    // ~21 ms block period at 48 kHz, so this is expected to be rare, not
+    // wrong -- if this ever fails in isolation on an otherwise-unrelated
+    // CI run, suspect this race FIRST, rerun once to confirm, and do not
+    // treat a single such failure as evidence of a real regression here.
     void pollWritesSignalAverageByDefaultForAConnectedSlice()
     {
         std::unique_ptr<ConnectableRadioModel> harness = ConnectableRadioModel::create();
@@ -203,6 +244,11 @@ private slots:
     // exactly matching MeterPoller::pollSMeter()'s SMeter/SMeterPeak
     // branch (RxMeterType::SignalPeak), not the fixed SignalAvg the old
     // pollSliceSMeters() always used.
+    //
+    // Carries the same low-probability two-independent-live-reads flake
+    // pollWritesSignalAverageByDefaultForAConnectedSlice() documents above
+    // -- if this fails in isolation, suspect that race before suspecting a
+    // regression in the source-selector wiring itself.
     void pollWritesSignalPeakWhenSelectorSaysSo()
     {
         std::unique_ptr<ConnectableRadioModel> harness = ConnectableRadioModel::create();
