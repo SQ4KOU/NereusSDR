@@ -70,6 +70,7 @@
 #include <QMap>
 #include <QDateTime>
 #include <QHostAddress>
+#include <functional>
 #include <optional>
 
 namespace NereusSDR {
@@ -127,11 +128,63 @@ public:
     // Return every top-level key currently in the settings store.
     // Used by the MMIO engine to group keys under the MmioEndpoints/
     // prefix at app startup.
+    //
+    // Remote Daemon R2, Task 13 -- six other consumers prefix-scan this
+    // as of this task: SettingsHygiene.cpp (x2), ExternalVariableEngine.cpp
+    // (x2), AudioEngine.cpp, and the GUI's AudioAdvancedPage.cpp (which
+    // runs in remote mode too). allKeys() is already the single funnel
+    // point (== m_settings.keys(), the same map setValue()/remove() write
+    // through), so all six are already positioned to pick up Task 15's
+    // delegation once it lands here -- no consumer changes were needed
+    // for this task.
     QStringList allKeys() const;
 
     // Remove ALL top-level keys from the in-memory store.
     // Intended for test isolation. Does NOT call save().
     void clear();
+
+    // ------------------------------------------------------------------
+    // Remote Daemon R2, Task 13 -- change-hook seam.
+    //
+    // Every mutation that reaches the top-level settings store funnels
+    // through setValue()/remove() now -- saveRadio, forgetRadio,
+    // clearSavedRadios, setLastConnected, setDiscoveryProfile,
+    // setHardwareValue, clearHardwareValues, and setModelOverride all
+    // call one of the two internally rather than touching the storage
+    // map directly. Installing a hook here therefore observes all of
+    // them through a single seam. Fires AFTER the in-memory store has
+    // already been updated, so a hook body that reads back via
+    // value()/contains()/hardwareValue() sees the new state. Fires once
+    // per key touched: a multi-field call like saveRadio() fires once
+    // per field it writes, not once per call, because a future
+    // delegation backend (SettingsProxy, Task 15) needs per-key
+    // granularity to mirror individual values, not a single "something
+    // changed" pulse.
+    //
+    // Deliberately does NOT fire for:
+    //   - clear(): a bulk test-isolation wipe with no single key to
+    //     report (see its doc comment above).
+    //   - load()'s corrupt-file recovery fallback: the same shape as
+    //     clear() (a wholesale reset, not a value change) triggered
+    //     internally rather than by a caller, and it runs at startup
+    //     before any caller could plausibly have installed a hook that
+    //     would mean anything yet. Treated identically to clear() so the
+    //     two bulk-wipe paths stay consistent with each other.
+    //   - plain reads (value(), hardwareValue(), hardwareValues(),
+    //     contains(), allKeys() on their own).
+    //   - stationValue()/setStationValue(): a separate map
+    //     (m_stationSettings) entirely outside this task's scope.
+    //
+    // AppSettings has no Q_OBJECT (see the class doc above), so this
+    // cannot be a Qt signal -- std::function is the mechanism the R2
+    // Task 13 brief specifies. Instance-scoped (a plain member, not a
+    // static), because AppSettings(filePath) is a real construction path
+    // every isolated test uses, and each instance's hook must stay
+    // independent of every other instance's.
+    //
+    // Pass an empty std::function (or nullptr) to stop observing.
+    // ------------------------------------------------------------------
+    void setChangeHook(std::function<void(const QString& key)> hook);
 
     // Per-station settings (nested under <StationName> element).
     QVariant stationValue(const QString& key, const QVariant& defaultValue = {}) const;
@@ -508,6 +561,11 @@ private:
     QMap<QString, QString> m_settings;
     QMap<QString, QString> m_stationSettings;
     QString m_stationName{"NereusSDR"};
+
+    // Remote Daemon R2, Task 13 -- see setChangeHook()'s doc comment
+    // above. Instance-scoped; empty (default-constructed) means "no
+    // observer", checked before every fire.
+    std::function<void(const QString& key)> m_changeHook;
 
     // Issue #241 — corruption-recovery diagnostics (cleared at the top of
     // every load()).

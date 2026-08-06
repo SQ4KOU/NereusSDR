@@ -6418,6 +6418,22 @@ nereus_add_test(tst_slice_meter_pump
     fakes/P1FakeRadio.cpp
     fakes/ConnectableRadioModel.cpp)
 
+# Remote Daemon R2, Task 13: AppSettings mutator funnel. Before this task
+# only setValue()/remove()/clear() touched the m_settings map directly;
+# everything else (setHardwareValue/hardwareValue/hardwareValues/
+# clearHardwareValues and the whole radios/* family) poked the map itself.
+# R2's SettingsProxy (Task 15) can only delegate reads/writes at a single
+# seam, so every one of those now calls setValue()/value()/remove()/
+# contains()/allKeys() internally, and a std::function<void(const
+# QString&)> change hook fires from inside setValue()/remove() -- which,
+# because of the funnel, covers every named mutator for free. Pins: the
+# hook fires for exactly the ten operations the brief names; it does NOT
+# fire for clear() (bulk test-isolation wipe, no single key to report) or
+# for a plain read; it is instance-scoped, not global; value() still
+# returns the caller's default for an unwritten key; hardwareValues()
+# still strips its "hardware/<mac>/" prefix to bare keys.
+nereus_add_test(tst_settings_mutator_funnel)
+
 # R1 Task 10: DaemonApp connects the daemon to a radio (or runs discovery)
 # and creates min(cfg.sliceCount, connected-board-maxSlices) slices via
 # RadioModel's own addSlice() -- the same entry point connectToRadio()

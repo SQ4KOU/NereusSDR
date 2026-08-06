@@ -594,6 +594,14 @@ void AppSettings::load()
     // Defaults path — leave both maps empty so first save() writes a fresh
     // factory-default file. The corrupt file (if rename succeeded) and the
     // .bak (if any) are untouched on disk for forensic inspection.
+    //
+    // Remote Daemon R2, Task 13: deliberately raw m_settings.clear(), not
+    // the public clear() method, and does not fire the change hook. This
+    // is a wholesale reset triggered by a recovery path, not a value
+    // change a delegation backend needs to mirror -- the same reasoning
+    // that excludes the public clear() from firing (see setChangeHook()'s
+    // doc comment in AppSettings.h), and load() runs at startup before
+    // any caller could plausibly have installed a hook yet regardless.
     m_settings.clear();
     m_stationSettings.clear();
 }
@@ -703,11 +711,17 @@ QVariant AppSettings::value(const QString& key, const QVariant& defaultValue) co
 void AppSettings::setValue(const QString& key, const QVariant& val)
 {
     m_settings.insert(key, val.toString());
+    if (m_changeHook) {
+        m_changeHook(key);
+    }
 }
 
 void AppSettings::remove(const QString& key)
 {
     m_settings.remove(key);
+    if (m_changeHook) {
+        m_changeHook(key);
+    }
 }
 
 bool AppSettings::contains(const QString& key) const
@@ -722,7 +736,16 @@ QStringList AppSettings::allKeys() const
 
 void AppSettings::clear()
 {
+    // Deliberately does not fire the change hook -- see the doc comment
+    // on setChangeHook() (AppSettings.h): a bulk test-isolation wipe has
+    // no single key to report, and is not one of the ten operations the
+    // R2 Task 13 brief lists as required to fire.
     m_settings.clear();
+}
+
+void AppSettings::setChangeHook(std::function<void(const QString& key)> hook)
+{
+    m_changeHook = std::move(hook);
 }
 
 QVariant AppSettings::stationValue(const QString& key, const QVariant& defaultValue) const
@@ -785,24 +808,24 @@ void AppSettings::saveRadio(const RadioInfo& info, bool pinToMac, bool autoConne
         : info.macAddress;
 
     const QString prefix = radioKeyPrefix(macKey);
-    m_settings.insert(prefix + QStringLiteral("name"),            info.name);
-    m_settings.insert(prefix + QStringLiteral("ipAddress"),       info.address.toString());
-    m_settings.insert(prefix + QStringLiteral("port"),            QString::number(info.port));
-    m_settings.insert(prefix + QStringLiteral("macAddress"),      info.macAddress);
-    m_settings.insert(prefix + QStringLiteral("boardType"),
-                      QString::number(static_cast<int>(info.boardType)));
-    m_settings.insert(prefix + QStringLiteral("protocol"),
-                      QString::number(static_cast<int>(info.protocol)));
-    m_settings.insert(prefix + QStringLiteral("firmwareVersion"), QString::number(info.firmwareVersion));
-    m_settings.insert(prefix + QStringLiteral("pinToMac"),        pinToMac   ? QStringLiteral("True") : QStringLiteral("False"));
-    m_settings.insert(prefix + QStringLiteral("autoConnect"),     autoConnect ? QStringLiteral("True") : QStringLiteral("False"));
-    m_settings.insert(prefix + QStringLiteral("lastSeen"),
-                      QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
+    setValue(prefix + QStringLiteral("name"),            info.name);
+    setValue(prefix + QStringLiteral("ipAddress"),       info.address.toString());
+    setValue(prefix + QStringLiteral("port"),            QString::number(info.port));
+    setValue(prefix + QStringLiteral("macAddress"),      info.macAddress);
+    setValue(prefix + QStringLiteral("boardType"),
+             QString::number(static_cast<int>(info.boardType)));
+    setValue(prefix + QStringLiteral("protocol"),
+             QString::number(static_cast<int>(info.protocol)));
+    setValue(prefix + QStringLiteral("firmwareVersion"), QString::number(info.firmwareVersion));
+    setValue(prefix + QStringLiteral("pinToMac"),        pinToMac   ? QStringLiteral("True") : QStringLiteral("False"));
+    setValue(prefix + QStringLiteral("autoConnect"),     autoConnect ? QStringLiteral("True") : QStringLiteral("False"));
+    setValue(prefix + QStringLiteral("lastSeen"),
+             QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
 
     // Model override (Phase 3I-RP). FIRST = no override.
     if (info.modelOverride != HPSDRModel::FIRST) {
-        m_settings.insert(prefix + QStringLiteral("modelOverride"),
-                          QString::number(static_cast<int>(info.modelOverride)));
+        setValue(prefix + QStringLiteral("modelOverride"),
+                 QString::number(static_cast<int>(info.modelOverride)));
     }
 }
 
@@ -810,10 +833,10 @@ void AppSettings::forgetRadio(const QString& macKey)
 {
     const QString prefix = radioKeyPrefix(macKey);
     // Remove all keys with this prefix
-    const QStringList keys = m_settings.keys();
+    const QStringList keys = allKeys();
     for (const QString& k : keys) {
         if (k.startsWith(prefix)) {
-            m_settings.remove(k);
+            remove(k);
         }
     }
 }
@@ -821,7 +844,7 @@ void AppSettings::forgetRadio(const QString& macKey)
 void AppSettings::clearSavedRadios()
 {
     // Remove all radios/<key>/<field> entries (but preserve lastConnected, discoveryProfile)
-    const QStringList keys = m_settings.keys();
+    const QStringList keys = allKeys();
     for (const QString& k : keys) {
         if (!k.startsWith(QStringLiteral("radios/"))) {
             continue;
@@ -829,7 +852,7 @@ void AppSettings::clearSavedRadios()
         // Only remove keys that have a per-radio sub-path (3 segments: radios/<mac>/<field>)
         const QString rest = k.mid(7); // strip "radios/"
         if (rest.contains(QLatin1Char('/'))) {
-            m_settings.remove(k);
+            remove(k);
         }
     }
 }
@@ -838,8 +861,9 @@ QList<SavedRadio> AppSettings::savedRadios() const
 {
     // Collect all distinct macKeys
     QSet<QString> macKeys;
-    for (auto it = m_settings.constBegin(); it != m_settings.constEnd(); ++it) {
-        const QString mk = macKeyFromSettingsKey(it.key());
+    const QStringList keys = allKeys();
+    for (const QString& k : keys) {
+        const QString mk = macKeyFromSettingsKey(k);
         if (!mk.isEmpty()) {
             macKeys.insert(mk);
         }
@@ -859,42 +883,42 @@ std::optional<SavedRadio> AppSettings::savedRadio(const QString& macKey) const
 {
     const QString prefix = radioKeyPrefix(macKey);
     const QString nameKey = prefix + QStringLiteral("name");
-    if (!m_settings.contains(nameKey)) {
+    if (!contains(nameKey)) {
         return std::nullopt;
     }
 
     SavedRadio sr;
 
     // RadioInfo fields
-    sr.info.name            = m_settings.value(prefix + QStringLiteral("name"));
-    sr.info.address         = QHostAddress(m_settings.value(prefix + QStringLiteral("ipAddress")));
+    sr.info.name            = value(prefix + QStringLiteral("name")).toString();
+    sr.info.address         = QHostAddress(value(prefix + QStringLiteral("ipAddress")).toString());
     sr.info.port            = static_cast<quint16>(
-                                m_settings.value(prefix + QStringLiteral("port"),
-                                                 QStringLiteral("1024")).toUInt());
-    sr.info.macAddress      = m_settings.value(prefix + QStringLiteral("macAddress"));
+                                value(prefix + QStringLiteral("port"),
+                                      QStringLiteral("1024")).toUInt());
+    sr.info.macAddress      = value(prefix + QStringLiteral("macAddress")).toString();
     sr.info.boardType       = static_cast<HPSDRHW>(
-                                m_settings.value(prefix + QStringLiteral("boardType"),
-                                                 QStringLiteral("999")).toInt());
+                                value(prefix + QStringLiteral("boardType"),
+                                      QStringLiteral("999")).toInt());
     sr.info.protocol        = static_cast<ProtocolVersion>(
-                                m_settings.value(prefix + QStringLiteral("protocol"),
-                                                 QStringLiteral("1")).toInt());
-    sr.info.firmwareVersion = m_settings.value(prefix + QStringLiteral("firmwareVersion"),
-                                               QStringLiteral("0")).toInt();
+                                value(prefix + QStringLiteral("protocol"),
+                                      QStringLiteral("1")).toInt());
+    sr.info.firmwareVersion = value(prefix + QStringLiteral("firmwareVersion"),
+                                    QStringLiteral("0")).toInt();
 
     // Saved-only flags
-    sr.pinToMac    = (m_settings.value(prefix + QStringLiteral("pinToMac"),
-                                       QStringLiteral("False")) == QStringLiteral("True"));
-    sr.autoConnect = (m_settings.value(prefix + QStringLiteral("autoConnect"),
-                                       QStringLiteral("False")) == QStringLiteral("True"));
+    sr.pinToMac    = (value(prefix + QStringLiteral("pinToMac"),
+                            QStringLiteral("False")).toString() == QStringLiteral("True"));
+    sr.autoConnect = (value(prefix + QStringLiteral("autoConnect"),
+                            QStringLiteral("False")).toString() == QStringLiteral("True"));
 
-    const QString lastSeenStr = m_settings.value(prefix + QStringLiteral("lastSeen"));
+    const QString lastSeenStr = value(prefix + QStringLiteral("lastSeen")).toString();
     if (!lastSeenStr.isEmpty()) {
         sr.lastSeen = QDateTime::fromString(lastSeenStr, Qt::ISODate);
     }
 
     // Model override (Phase 3I-RP)
-    const QString moStr = m_settings.value(prefix + QStringLiteral("modelOverride"),
-                                            QStringLiteral("-1"));
+    const QString moStr = value(prefix + QStringLiteral("modelOverride"),
+                                 QStringLiteral("-1")).toString();
     int moInt = moStr.toInt();
     if (moInt > static_cast<int>(HPSDRModel::FIRST) &&
         moInt < static_cast<int>(HPSDRModel::LAST)) {
@@ -906,30 +930,30 @@ std::optional<SavedRadio> AppSettings::savedRadio(const QString& macKey) const
 
 QString AppSettings::lastConnected() const
 {
-    return m_settings.value(QStringLiteral("radios/lastConnected"));
+    return value(QStringLiteral("radios/lastConnected")).toString();
 }
 
 void AppSettings::setLastConnected(const QString& macKey)
 {
     if (macKey.isEmpty()) {
-        m_settings.remove(QStringLiteral("radios/lastConnected"));
+        remove(QStringLiteral("radios/lastConnected"));
     } else {
-        m_settings.insert(QStringLiteral("radios/lastConnected"), macKey);
+        setValue(QStringLiteral("radios/lastConnected"), macKey);
     }
 }
 
 DiscoveryProfile AppSettings::discoveryProfile() const
 {
     // Default to SafeDefault (4)
-    const int v = m_settings.value(QStringLiteral("radios/discoveryProfile"),
-                                   QStringLiteral("4")).toInt();
+    const int v = value(QStringLiteral("radios/discoveryProfile"),
+                        QStringLiteral("4")).toInt();
     return static_cast<DiscoveryProfile>(v);
 }
 
 void AppSettings::setDiscoveryProfile(DiscoveryProfile p)
 {
-    m_settings.insert(QStringLiteral("radios/discoveryProfile"),
-                      QString::number(static_cast<int>(p)));
+    setValue(QStringLiteral("radios/discoveryProfile"),
+             QString::number(static_cast<int>(p)));
 }
 
 // ---------------------------------------------------------------------------
@@ -939,28 +963,27 @@ void AppSettings::setDiscoveryProfile(DiscoveryProfile p)
 void AppSettings::setHardwareValue(const QString& mac, const QString& key, const QVariant& value)
 {
     const QString fullKey = QStringLiteral("hardware/%1/%2").arg(mac, key);
-    m_settings.insert(fullKey, value.toString());
+    setValue(fullKey, value);
 }
 
 QVariant AppSettings::hardwareValue(const QString& mac, const QString& key,
                                      const QVariant& defaultValue) const
 {
     const QString fullKey = QStringLiteral("hardware/%1/%2").arg(mac, key);
-    auto it = m_settings.constFind(fullKey);
-    if (it != m_settings.constEnd()) {
-        return QVariant(it.value());
-    }
-    return defaultValue;
+    return value(fullKey, defaultValue);
 }
 
 QMap<QString, QVariant> AppSettings::hardwareValues(const QString& mac) const
 {
+    // Returns bare keys (prefix stripped): Task 15's snapshot() deliberately
+    // does the opposite (fully-qualified keys); do not unify the two.
     const QString prefix = QStringLiteral("hardware/%1/").arg(mac);
     QMap<QString, QVariant> result;
-    for (auto it = m_settings.constBegin(); it != m_settings.constEnd(); ++it) {
-        if (it.key().startsWith(prefix)) {
-            const QString bareKey = it.key().mid(prefix.size());
-            result.insert(bareKey, QVariant(it.value()));
+    const QStringList keys = allKeys();
+    for (const QString& k : keys) {
+        if (k.startsWith(prefix)) {
+            const QString bareKey = k.mid(prefix.size());
+            result.insert(bareKey, value(k));
         }
     }
     return result;
@@ -969,10 +992,10 @@ QMap<QString, QVariant> AppSettings::hardwareValues(const QString& mac) const
 void AppSettings::clearHardwareValues(const QString& mac)
 {
     const QString prefix = QStringLiteral("hardware/%1/").arg(mac);
-    const QStringList keys = m_settings.keys();
+    const QStringList keys = allKeys();
     for (const QString& k : keys) {
         if (k.startsWith(prefix)) {
-            m_settings.remove(k);
+            remove(k);
         }
     }
 }
@@ -984,8 +1007,8 @@ void AppSettings::clearHardwareValues(const QString& mac)
 HPSDRModel AppSettings::modelOverride(const QString& macKey) const
 {
     const QString prefix = radioKeyPrefix(macKey);
-    const QString val = m_settings.value(prefix + QStringLiteral("modelOverride"),
-                                          QStringLiteral("-1"));
+    const QString val = value(prefix + QStringLiteral("modelOverride"),
+                               QStringLiteral("-1")).toString();
     int v = val.toInt();
     if (v > static_cast<int>(HPSDRModel::FIRST) &&
         v < static_cast<int>(HPSDRModel::LAST)) {
@@ -997,8 +1020,8 @@ HPSDRModel AppSettings::modelOverride(const QString& macKey) const
 void AppSettings::setModelOverride(const QString& macKey, HPSDRModel model)
 {
     const QString prefix = radioKeyPrefix(macKey);
-    m_settings.insert(prefix + QStringLiteral("modelOverride"),
-                      QString::number(static_cast<int>(model)));
+    setValue(prefix + QStringLiteral("modelOverride"),
+             QString::number(static_cast<int>(model)));
 }
 
 // ---------------------------------------------------------------------------
