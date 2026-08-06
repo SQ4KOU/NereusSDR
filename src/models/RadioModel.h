@@ -2458,6 +2458,23 @@ signals:
     void txBoundReRouteRequested(QString proposedAntenna,
                                   QString existingAntenna);
     void activeSliceChanged(int index);
+
+    // Remote-daemon R2 Task 11. activeSliceChanged above is a LIST
+    // POSITION (see setActiveSlice's own doc comment: "still a LIST
+    // POSITION, unlike sliceById / removeSlice"), which diverges from the
+    // stable per-slice id after any mid-list removal -- exactly the trap
+    // setActiveSliceById exists to avoid for callers, except this signal
+    // itself had no id-based counterpart for LISTENERS. Fires alongside
+    // activeSliceChanged, from the same three sites, carrying the newly-
+    // active slice's SliceModel::sliceIndex() (its stable id) instead of
+    // its position; -1 when activeSliceChanged also reports -1 (no active
+    // slice). R2 does not consume this yet -- Task 11 adds it because the
+    // positional signal is a live trap for any future id-based listener,
+    // not because anything in this plan wires to it today. The positional
+    // signal is unchanged and unaffected; existing GUI code keeps binding
+    // to it exactly as before.
+    void activeSliceIdChanged(int sliceId);
+
     // Emitted once at the end of loadSliceState() after the slice has been
     // restored from AppSettings. Mirrors Thetis console.cs:27204 [v2.10.3.13]
     // chkPower_CheckedChanged calling txtVFOAFreq_LostFocus() as the
@@ -3058,6 +3075,17 @@ public:
     /// already owns a stream.
     bool bindSliceToStream(SliceModel* slice, double frequencyHz,
                            bool preferOwnStream = false);
+
+    /// Remote-daemon R2 Task 11. Emits BOTH activeSliceChanged(index) (the
+    /// existing positional signal, unchanged) and activeSliceIdChanged(id)
+    /// (new), resolving `index` against m_slices to find the id. `index`
+    /// of -1 (no active slice, the removeSlice() case when the list would
+    /// otherwise be left empty) reports -1 on both signals rather than
+    /// resolving anything. The three existing `emit activeSliceChanged(...)`
+    /// call sites (addSlice, removeSlice, setActiveSlice) all route through
+    /// this instead, so the two signals can never disagree about which
+    /// slice is active.
+    void emitActiveSliceChanged(int index);
 
     /// Mirror a stream's liveness into ReceiverManager's active-receiver set,
     /// which is what decides whether that hardware DDC's samples are forwarded

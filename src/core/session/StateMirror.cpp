@@ -22,6 +22,11 @@
 //                                    and flushCoalescedDeltas. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-08-05  J.J. Boyd / KG4VCF  Remote daemon R2 Task 11: m_applying
+//                                    save/restore fix (ApplyingGuard) for
+//                                    nested applyInbound() reentrancy. AI-
+//                                    assisted transformation via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "core/session/StateMirror.h"
@@ -40,16 +45,22 @@ namespace NereusSDR {
 
 namespace {
 
-// The R2 plan names four client command verbs Task 11 will dispatch
-// (requestSliceSampleRate, addSlice, removeSlice, addSliceOnPan). Only
-// sampleRateHz maps onto one of them today -- the other three read as
-// slice LIFECYCLE commands (create/destroy/place), not as replacements
-// for writing an EXISTING slice's placement fields directly. The other
-// six writable-but-Outbound SliceModel properties (chainIndex, ddcIndex,
-// streamIndex, shiftOffsetHz, widebandExtensionRequested, psPaused --
-// MirrorPolicy.cpp) are all codec-/coordinator-owned placement state with
-// no assigned verb yet, so their rejection says that honestly rather than
-// guessing at a name Task 11 has not chosen.
+// Task 11 dispatches four client command verbs (requestSliceSampleRate,
+// addSlice, removeSlice, addSliceOnPan; SessionCommandDispatcher.h). Only
+// sampleRateHz maps onto one of them -- the other three are slice
+// LIFECYCLE commands (create/destroy/place), not replacements for writing
+// an EXISTING slice's placement fields directly. The other six writable-
+// but-Outbound SliceModel properties (chainIndex, ddcIndex, streamIndex,
+// shiftOffsetHz, widebandExtensionRequested, psPaused -- MirrorPolicy.cpp)
+// are all codec-/coordinator-owned placement state that none of the four
+// verbs writes directly either: chainIndex/ddcIndex/streamIndex/
+// shiftOffsetHz are codec OUTPUTS, not inputs (nothing takes a "set this
+// slice's DDC" request; a client asks for a rate or a placement and the
+// allocator decides the rest), and widebandExtensionRequested/psPaused are
+// each driven by something other than an explicit client verb (pan zoom
+// state and the PureSignal coordinator, respectively -- SliceModel.h's own
+// property comments). All six stay honestly unassigned rather than
+// guessing at a name.
 struct VerbHint {
     const char* className;
     const char* property;
@@ -72,6 +83,50 @@ QString writableButOutboundReason(const QByteArray& shortClassName,
         "daemon-authoritative; not directly writable (no client command "
         "assigned yet)");
 }
+
+// Task 11 review finding (Task 8's own review round flagged this Minor at
+// the time, because nothing could re-enter applyInbound() yet -- Task 11's
+// command dispatch is what makes it reachable): m_applying was set true
+// and unconditionally cleared back to false around each of
+// applyInboundToProperty()'s two write paths below. That is only correct
+// for the OUTERMOST call. A command handler (SessionCommandDispatcher) can
+// run a RadioModel entry point whose synchronous side effects lead back
+// into a SECOND, nested applyInbound() call before the first one's write()
+// returns -- SessionCommandDispatcher::handleRequestSliceSampleRate is one
+// concrete shape, but the general hazard is any RadioModel call reachable
+// from a command that also touches a mirrored property through this class.
+// The nested call's own unconditional `m_applying = false` on return would
+// clear the OUTER call's flag while the outer write is still unwinding, so
+// any further notify produced by that SAME outer write -- after the nested
+// call returns but before the outer write() call itself does -- stops
+// being suppressed and leaks out as a delta the peer never asked for: an
+// echo of its own inbound write, or worse, of unrelated state the outer
+// write's cascade happened to touch afterward.
+//
+// The fix is the standard save/restore RAII shape: remember what
+// m_applying was BEFORE this call (false for an outermost call, true for a
+// nested one), set it true for the duration, and restore the REMEMBERED
+// value on the way out rather than hardcoding false. An outermost call
+// still leaves it false afterward (prev == false), and a nested call now
+// leaves it true afterward -- exactly what lets the outer call's own
+// cleanup, moments later, do the actual final reset.
+class ApplyingGuard {
+public:
+    explicit ApplyingGuard(bool& flag)
+        : m_flag(flag)
+        , m_previous(flag)
+    {
+        m_flag = true;
+    }
+    ~ApplyingGuard() { m_flag = m_previous; }
+
+    ApplyingGuard(const ApplyingGuard&) = delete;
+    ApplyingGuard& operator=(const ApplyingGuard&) = delete;
+
+private:
+    bool& m_flag;
+    bool m_previous;
+};
 
 // Resolved once. Renaming the slot without updating this string would
 // strand every watched object silently, so the lookup is loud on failure
@@ -692,9 +747,16 @@ MirrorApplyResult StateMirror::applyInboundToProperty(const Watch& watch,
                 MirrorSchema::shortClassName(className), prop.name);
             return result;
         }
-        m_applying = true;
-        const bool ok = watch.schema->write(prop, watch.object, wireValue);
-        m_applying = false;
+        bool ok = false;
+        {
+            // See ApplyingGuard's own comment (top of this file) for why
+            // this must save/restore rather than hardcode m_applying back
+            // to false: watch.schema->write() can synchronously re-enter
+            // applyInbound() through a command handler's RadioModel call,
+            // and the guard has to survive that nesting intact.
+            ApplyingGuard guard(m_applying);
+            ok = watch.schema->write(prop, watch.object, wireValue);
+        }
         if (!ok) {
             result.reason = QStringLiteral(
                 "value could not be decoded for this property's type");
@@ -720,13 +782,18 @@ MirrorApplyResult StateMirror::applyInboundToProperty(const Watch& watch,
     }
 
     QString hookReason;
-    m_applying = true;
-    const bool invoked = QMetaObject::invokeMethod(
-        watch.object, "applyMirroredValue", Qt::DirectConnection,
-        Q_RETURN_ARG(QString, hookReason),
-        Q_ARG(QByteArray, prop.name),
-        Q_ARG(QVariant, native));
-    m_applying = false;
+    bool invoked = false;
+    {
+        // Same reentrancy hazard as the writable path above: the hook may
+        // itself call a RadioModel entry point that leads back into
+        // applyInbound() before invokeMethod() returns.
+        ApplyingGuard guard(m_applying);
+        invoked = QMetaObject::invokeMethod(
+            watch.object, "applyMirroredValue", Qt::DirectConnection,
+            Q_RETURN_ARG(QString, hookReason),
+            Q_ARG(QByteArray, prop.name),
+            Q_ARG(QVariant, native));
+    }
 
     if (!invoked) {
         result.reason = QStringLiteral(

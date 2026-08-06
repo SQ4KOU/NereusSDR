@@ -1,0 +1,140 @@
+#pragma once
+// =================================================================
+// src/core/session/SessionCommandDispatcher.h  (NereusSDR)
+// =================================================================
+//
+// no-port-check: NereusSDR-original. Remote-daemon R2 Task 11.
+//
+// Turns a decoded CommandInvoke SessionMessage into the corresponding
+// RadioModel call, and reports back what ACTUALLY happened as a
+// CommandResult (SessionMessages.h). This is the production half of "in-
+// process dispatch" tst_session_verbs.cpp exercises over
+// tests/fakes/LoopbackStationLink.h; Task 18 is what feeds a real wss
+// session's inbound bytes into dispatch() and relays commandResultReady()
+// back out.
+//
+// Four verbs, matching the R2 plan's Task 11 step 2 exactly (RadioModel.h,
+// this tree's HEAD at commit 998e7854):
+//
+//   addSlice               -- RadioModel.h:775   int addSlice(QString)
+//   removeSlice             -- RadioModel.h:779   void removeSlice(int)
+//   requestSliceSampleRate  -- RadioModel.h:720   void requestSliceSampleRate(int, int)
+//   addSliceOnPan           -- RadioModel.h:813   Q_INVOKABLE void addSliceOnPan(QString)
+//
+// Nothing here writes a mirrored PROPERTY -- that is StateMirror::
+// applyInbound()'s job (Task 8). This class exists for the four RadioModel
+// entry points MirrorPolicy has no property to gate at all: creating or
+// destroying a slice is not a value change on an existing object, and
+// requestSliceSampleRate is the one case (MirrorPolicy.cpp's kVerbHints
+// table, StateMirror.cpp) where a mirrored property (SliceModel::
+// sampleRateHz) is deliberately Outbound-only specifically BECAUSE this
+// verb is how a client changes it.
+//
+// ── THREADING ────────────────────────────────────────────────────────────
+//
+// dispatch() must be called on RadioModel's own thread. Task 18's session
+// read loop -- whatever decodes bytes off the wss socket into a
+// SessionMessage and calls dispatch() -- therefore also runs on that same
+// thread, not a dedicated I/O thread. This is not a new constraint this
+// class invents: it is the same single-thread precondition StateMirror.h
+// already documents for attachSession() and for the m_applying inbound-
+// echo guard (StateMirror.cpp) -- both rely on Qt::AutoConnection
+// resolving to a direct call, which is only true while sender and
+// receiver share a thread. Splitting the session onto its own thread
+// later is Task 18's call to make, but if it does, every watched model,
+// StateMirror, ObjectRegistry AND this dispatcher all have to move
+// together, or all three invariants break at once.
+//
+// ── requestSliceSampleRate IS THE ONE ASYNCHRONOUS VERB ─────────────────
+//
+// RadioModel::requestSliceSampleRate can reach RadioModel::setSampleRateLive
+// (RadioModel.cpp), whose own doc comment measures at least 40 ms of
+// QThread::msleep across three calls. Since dispatch() runs on the model
+// thread (above), calling that synchronously from inside dispatch() would
+// stall the session read loop -- and therefore every OTHER inbound
+// message, command or otherwise -- for the duration. handleRequestSliceSampleRate
+// defers the actual RadioModel call to a LATER turn of that same thread's
+// event loop via QMetaObject::invokeMethod(..., Qt::QueuedConnection), so
+// dispatch() itself always returns immediately. Its CommandResult is only
+// emitted once that queued call has actually run -- see
+// commandResultReady()'s doc comment. The other three verbs have no such
+// hazard and both run AND report synchronously, within the dispatch() call
+// that requested them.
+//
+// ── SCOPE, NOT JUST SUCCESS ──────────────────────────────────────────────
+//
+// requestSliceSampleRate names one slice, but RadioModel can retune more
+// than that slice in response to it: co-hosted slices share one DDC
+// stream, so any rate change to that stream moves every slice on it, and
+// on a Protocol 1 board requestSliceSampleRate can escalate all the way to
+// RadioModel::setSampleRateLive's own 12-step, radio-wide sequence
+// (RadioModel.cpp, sampleRateIsRadioWide()/setStreamSampleRate) -- every
+// slice's sampleRateHz moves, not only the one named in the request.
+// handleRequestSliceSampleRate does not special-case either mechanism: it
+// snapshots every known slice's sampleRateHz before calling RadioModel,
+// calls it, and reports whichever slices' values actually differ
+// afterward as the CommandResult's affectedKeys. This is deliberately
+// protocol- and topology-agnostic -- it reports what happened, not why.
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-08-05  J.J. Boyd / KG4VCF  Remote daemon R2 Task 11: command
+//                                    dispatch (addSlice / removeSlice /
+//                                    requestSliceSampleRate /
+//                                    addSliceOnPan). AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
+// =================================================================
+
+#include <QByteArray>
+#include <QList>
+#include <QObject>
+#include <QPointer>
+
+#include "core/session/SessionMessages.h"
+
+namespace NereusSDR {
+
+class RadioModel;
+
+class SessionCommandDispatcher : public QObject {
+    Q_OBJECT
+
+public:
+    /// `radioModel` is watched via QPointer, not owned: this class outlives
+    /// or is outlived by it depending on which a future session's lifetime
+    /// (Task 18) ties to which, and neither ordering should crash.
+    explicit SessionCommandDispatcher(RadioModel* radioModel, QObject* parent = nullptr);
+
+    /// Decode `invoke`'s verb and act on it.
+    ///
+    /// A malformed request (`invoke.kind` is not CommandInvoke, no
+    /// RadioModel attached, or an unrecognised commandVerb) produces an
+    /// immediate, synchronous rejection via commandResultReady() before
+    /// this call returns. A well-formed command's result may also arrive
+    /// synchronously (addSlice, removeSlice, addSliceOnPan) or on a LATER
+    /// turn of RadioModel's event loop (requestSliceSampleRate -- see the
+    /// class comment). Callers must not assume commandResultReady() has
+    /// fired by the time dispatch() itself returns.
+    void dispatch(const NereusSDR::SessionMessage& invoke);
+
+signals:
+    /// Every CommandResult this dispatcher produces, in answer to some
+    /// earlier dispatch() call. Task 18 encodes and relays each one back
+    /// out over the wire, the same relationship StateMirror::
+    /// sessionMessageReady() already has to its own outbound stream.
+    void commandResultReady(const NereusSDR::SessionMessage& result);
+
+private:
+    void handleAddSlice(const NereusSDR::SessionMessage& invoke);
+    void handleRemoveSlice(const NereusSDR::SessionMessage& invoke);
+    void handleRequestSliceSampleRate(const NereusSDR::SessionMessage& invoke);
+    void handleAddSliceOnPan(const NereusSDR::SessionMessage& invoke);
+
+    void emitResult(const QByteArray& verb, quint32 commandId, bool accepted,
+                    const QString& reason, const QList<QByteArray>& affectedKeys);
+
+    QPointer<RadioModel> m_radioModel;
+};
+
+} // namespace NereusSDR

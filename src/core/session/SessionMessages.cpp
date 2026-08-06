@@ -10,6 +10,10 @@
 //                                    message shapes and JSON codec. AI-
 //                                    assisted transformation via Anthropic
 //                                    Claude Code.
+//   2026-08-05  J.J. Boyd / KG4VCF  Remote daemon R2 Task 11: CommandInvoke
+//                                    / CommandResult codec. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include "core/session/SessionMessages.h"
@@ -72,6 +76,31 @@ SessionMessage SessionMessages::snapshotComplete()
     return m;
 }
 
+SessionMessage SessionMessages::commandInvoke(const QByteArray& verb, quint32 commandId,
+                                              const QList<MirrorUpdate>& arguments)
+{
+    SessionMessage m;
+    m.kind = SessionMessageKind::CommandInvoke;
+    m.commandVerb = verb;
+    m.commandId = commandId;
+    m.arguments = arguments;
+    return m;
+}
+
+SessionMessage SessionMessages::commandResult(const QByteArray& verb, quint32 commandId,
+                                              bool accepted, const QString& reason,
+                                              const QList<QByteArray>& affectedKeys)
+{
+    SessionMessage m;
+    m.kind = SessionMessageKind::CommandResult;
+    m.commandVerb = verb;
+    m.commandId = commandId;
+    m.accepted = accepted;
+    m.reason = reason;
+    m.affectedKeys = affectedKeys;
+    return m;
+}
+
 // ── Kind name tables ─────────────────────────────────────────────────────
 
 namespace {
@@ -89,6 +118,8 @@ constexpr KindName kKindNames[] = {
     { SessionMessageKind::ObjectDestroy, "object.destroy" },
     { SessionMessageKind::Delta, "delta" },
     { SessionMessageKind::SnapshotComplete, "snapshot.complete" },
+    { SessionMessageKind::CommandInvoke, "command.invoke" },
+    { SessionMessageKind::CommandResult, "command.result" },
 };
 
 struct WireKindName {
@@ -342,6 +373,28 @@ QByteArray SessionMessages::encode(const SessionMessage& message)
     }
     case SessionMessageKind::SnapshotComplete:
         break;
+    case SessionMessageKind::CommandInvoke: {
+        o.insert(QStringLiteral("verb"), QString::fromUtf8(message.commandVerb));
+        o.insert(QStringLiteral("id"), static_cast<double>(message.commandId));
+        QJsonArray args;
+        for (const MirrorUpdate& u : message.arguments) {
+            args.append(updateToJson(u));
+        }
+        o.insert(QStringLiteral("args"), args);
+        break;
+    }
+    case SessionMessageKind::CommandResult: {
+        o.insert(QStringLiteral("verb"), QString::fromUtf8(message.commandVerb));
+        o.insert(QStringLiteral("id"), static_cast<double>(message.commandId));
+        o.insert(QStringLiteral("accepted"), message.accepted);
+        o.insert(QStringLiteral("reason"), message.reason);
+        QJsonArray affected;
+        for (const QByteArray& key : message.affectedKeys) {
+            affected.append(QString::fromUtf8(key));
+        }
+        o.insert(QStringLiteral("affected"), affected);
+        break;
+    }
     }
 
     return QJsonDocument(o).toJson(QJsonDocument::Compact);
@@ -391,6 +444,33 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
     if (needsProperties && !o.value(QStringLiteral("properties")).isArray()) {
         return false;
     }
+    // Task 11: CommandInvoke and CommandResult share "verb" and "id";
+    // everything else is kind-specific. Same presence-and-type discipline
+    // as every field above -- a missing "accepted" would otherwise decode
+    // through QJsonValue::toBool()'s false default, indistinguishable from
+    // a genuine, deliberate rejection.
+    const bool needsVerb =
+        kind == SessionMessageKind::CommandInvoke || kind == SessionMessageKind::CommandResult;
+    if (needsVerb && !o.value(QStringLiteral("verb")).isString()) {
+        return false;
+    }
+    if (needsVerb && !o.value(QStringLiteral("id")).isDouble()) {
+        return false;
+    }
+    if (kind == SessionMessageKind::CommandInvoke && !o.value(QStringLiteral("args")).isArray()) {
+        return false;
+    }
+    if (kind == SessionMessageKind::CommandResult) {
+        if (!o.value(QStringLiteral("accepted")).isBool()) {
+            return false;
+        }
+        if (!o.value(QStringLiteral("reason")).isString()) {
+            return false;
+        }
+        if (!o.value(QStringLiteral("affected")).isArray()) {
+            return false;
+        }
+    }
 
     SessionMessage message;
     message.kind = kind;
@@ -432,6 +512,37 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
         break;
     case SessionMessageKind::SnapshotComplete:
         break;
+    case SessionMessageKind::CommandInvoke: {
+        message.commandVerb = o.value(QStringLiteral("verb")).toString().toUtf8();
+        message.commandId = static_cast<quint32>(o.value(QStringLiteral("id")).toDouble());
+        const QJsonArray args = o.value(QStringLiteral("args")).toArray();
+        message.arguments.reserve(args.size());
+        for (const QJsonValue& v : args) {
+            MirrorUpdate u;
+            if (!updateFromJson(v, &u)) {
+                return false;
+            }
+            message.arguments.append(u);
+        }
+        break;
+    }
+    case SessionMessageKind::CommandResult: {
+        message.commandVerb = o.value(QStringLiteral("verb")).toString().toUtf8();
+        message.commandId = static_cast<quint32>(o.value(QStringLiteral("id")).toDouble());
+        message.accepted = o.value(QStringLiteral("accepted")).toBool();
+        message.reason = o.value(QStringLiteral("reason")).toString();
+        const QJsonArray affected = o.value(QStringLiteral("affected")).toArray();
+        message.affectedKeys.reserve(affected.size());
+        for (const QJsonValue& v : affected) {
+            // Same discipline as every other array element decoded in this
+            // file: reject rather than coerce a non-string entry.
+            if (!v.isString()) {
+                return false;
+            }
+            message.affectedKeys.append(v.toString().toUtf8());
+        }
+        break;
+    }
     }
 
     *out = message;

@@ -5008,7 +5008,7 @@ int RadioModel::addSlice(const QString& initialPanId)
         // AudioEngine::rxBlockReady (3M-1b E.4) reads this flag to gate the
         // per-slice RX-audio push during MOX.
         slice->setActive(true);
-        emit activeSliceChanged(0);
+        emitActiveSliceChanged(0);
     }
 
     // Wire this slice's DSP controls to its OWN WDSP channel.
@@ -5114,7 +5114,7 @@ void RadioModel::removeSlice(int sliceId)
         if (m_activeSlice) {
             m_activeSlice->setActive(true);
         }
-        emit activeSliceChanged(m_activeSlice ? 0 : -1);
+        emitActiveSliceChanged(m_activeSlice ? 0 : -1);
     }
 
     // Phase 3F Sub-Epic C Task 7: deleteLater() rather than delete to keep
@@ -5775,7 +5775,21 @@ void RadioModel::setActiveSlice(int index)
         }
         m_activeSlice = newActive;
         m_activeSlice->setActive(true);
-        emit activeSliceChanged(index);
+        emitActiveSliceChanged(index);
+    }
+}
+
+// Remote-daemon R2 Task 11. Resolves `index` to the slice actually sitting
+// there (if any) and emits both the existing positional signal and the new
+// id-based one from a single call site, so the three sites above can never
+// let the two disagree about which slice just became active.
+void RadioModel::emitActiveSliceChanged(int index)
+{
+    emit activeSliceChanged(index);
+    if (index >= 0 && index < m_slices.size() && m_slices.at(index) != nullptr) {
+        emit activeSliceIdChanged(m_slices.at(index)->sliceIndex());
+    } else {
+        emit activeSliceIdChanged(-1);
     }
 }
 

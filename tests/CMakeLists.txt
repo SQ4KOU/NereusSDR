@@ -6369,6 +6369,35 @@ nereus_add_test(tst_mirror_lifecycle)
 # wire input.
 nereus_add_test(tst_mirror_snapshot)
 
+# Remote Daemon R2, Task 11: command verbs and results. Exercises the
+# SessionMessages CommandInvoke/CommandResult codec plus a real
+# SessionCommandDispatcher round trip over the in-process
+# fakes/LoopbackStationLink.h fake -- there is no transport until Task 18,
+# so "over the wire" here means the codec and dispatch, not a socket.
+#
+# Central case: with A(0) B(1) C(2), removing B (dispatched as a
+# removeSlice command) leaves ids and positions diverged (C sits at id 2 /
+# position 1), and RadioModel::setActiveSliceById(2) must still select
+# slice C, not position 2 (which no longer exists). Also covers: addSlice /
+# addSliceOnPan accept and reject paths (the real sliceAddRejected reason
+# relayed verbatim); removeSlice refusing to take the last remaining slice;
+# requestSliceSampleRate deferred to a LATER RadioModel event-loop turn
+# (never runs synchronously inside dispatch()); the CommandResult's
+# affectedKeys reporting the ACTUAL scope of a rate change rather than the
+# requested one, both for slices co-hosting one DDC stream and for a
+# Protocol 1 board's radio-wide 12-step RadioModel::setSampleRateLive
+# escalation (fakes/ConnectableRadioModel.h, a real HermesLite/P1FakeRadio
+# connection); the new RadioModel::activeSliceIdChanged(int) signal firing
+# the resolved slice ID beside the existing positional activeSliceChanged,
+# without disturbing it; and StateMirror::applyInbound()'s m_applying guard
+# surviving a genuinely NESTED apply (one watched property's write
+# triggering a second, inner applyInbound() call before the first
+# returns) -- the Task 8 defect Task 11's command dispatch makes reachable.
+nereus_add_test(tst_session_verbs
+    fakes/LoopbackStationLink.cpp
+    fakes/P1FakeRadio.cpp
+    fakes/ConnectableRadioModel.cpp)
+
 # R1 Task 10: DaemonApp connects the daemon to a radio (or runs discovery)
 # and creates min(cfg.sliceCount, connected-board-maxSlices) slices via
 # RadioModel's own addSlice() -- the same entry point connectToRadio()

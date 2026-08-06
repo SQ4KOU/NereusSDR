@@ -695,6 +695,16 @@ set(CORE_SOURCES
     # about MirrorUpdate, never a model class -- so it stays out of the
     # ObjectRegistry.cpp block above.
     src/core/session/SessionMessages.cpp
+    # R2 Task 11: command verbs. Turns a decoded CommandInvoke SessionMessage
+    # into the corresponding RadioModel call (addSlice / removeSlice /
+    # requestSliceSampleRate / addSliceOnPan) and reports back what actually
+    # happened as a CommandResult. Includes models/RadioModel.h and
+    # models/SliceModel.h for the same reason ObjectRegistry.cpp does
+    # (comment above) -- this class's job is inherently tied to those
+    # concrete entry points, unlike SessionMessages/MirrorSchema/
+    # MirrorPolicy, which stay model-agnostic. No production caller yet --
+    # Task 18 feeds a real wss session's inbound bytes into dispatch().
+    src/core/session/SessionCommandDispatcher.cpp
 )
 
 # CoreAudioHalBus — macOS-only IAudioBus implementation bridging to the

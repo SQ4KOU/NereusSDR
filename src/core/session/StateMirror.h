@@ -67,6 +67,22 @@
 // object-agnostic check accomplishes both without RadioModel needing to
 // know a StateMirror exists.
 //
+// Task 11: the guard is SAVE/RESTORE, not set-true-then-hardcode-false.
+// applyInboundToProperty() (StateMirror.cpp) sets m_applying via a small
+// RAII guard that remembers what it was on entry and restores THAT value
+// on exit, rather than unconditionally clearing it to false. Task 8's own
+// review round flagged the unconditional form as Minor because nothing
+// could re-enter applyInbound() while it was in flight -- Task 11's
+// SessionCommandDispatcher is what makes that reachable: a command handler
+// can run a RadioModel entry point whose synchronous side effects lead
+// back into a SECOND, nested applyInbound() call before the first one's
+// write() returns. Hardcoding false on that inner call's exit would clear
+// the OUTER call's flag while the outer write is still unwinding, leaking
+// any further notify that same outer write produces afterward as an echo
+// the peer never asked for. Save/restore keeps an outermost call's own
+// behaviour identical (it remembers false and restores false) while
+// keeping a nested call from disturbing its caller's still-in-flight true.
+//
 // attachSession() (Task 10) is the CONNECT-TIME half: it sends whatever a
 // brand-new session needs to build a client-side mirror that agrees with
 // this daemon from the first message it receives -- a schema per distinct
@@ -108,6 +124,13 @@
 //                                    and flushCoalescedDeltas. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-08-05  J.J. Boyd / KG4VCF  Remote daemon R2 Task 11: m_applying
+//                                    save/restore fix (ApplyingGuard,
+//                                    StateMirror.cpp) for nested
+//                                    applyInbound() reentrancy, reachable
+//                                    once SessionCommandDispatcher exists.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -387,12 +410,16 @@ private:
 
     QList<Watch> m_watches;
 
-    /// True for the duration of one applyInbound() call. Checked first in
-    /// onWatchedPropertyChanged(), before that slot asks which object fired
-    /// it, so it suppresses every notify produced while true -- not only on
-    /// the property applyInbound() is writing, but on any other watched
-    /// object a same-thread, synchronous side effect of that write touches.
-    /// See the class-level comment.
+    /// True for the duration of one applyInbound() call, INCLUDING any call
+    /// nested inside it. Checked first in onWatchedPropertyChanged(),
+    /// before that slot asks which object fired it, so it suppresses every
+    /// notify produced while true -- not only on the property
+    /// applyInbound() is writing, but on any other watched object a same-
+    /// thread, synchronous side effect of that write touches. Set and
+    /// cleared only through ApplyingGuard (StateMirror.cpp), which
+    /// saves/restores rather than hardcoding false, so a nested apply
+    /// cannot clear its caller's still-in-flight guard. See the class-level
+    /// comment.
     bool m_applying = false;
 
     /// True from the first attachSession() call onward. Gates whether
