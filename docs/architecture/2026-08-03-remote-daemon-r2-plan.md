@@ -328,7 +328,15 @@ Mandatory before any proxy. `AppSettings.cpp` has 23 direct `m_settings` mutatio
 
 Three tasks changed local behaviour on purpose (3, 12, 13). This task owns proving nothing else did, and a red result stops the phase before libcrypto lands.
 
-- [ ] **Step 1:** `cmake --build build --target tests_models` then `ctest -L models --no-tests=error` (a real label), plus `ctest -R 'settings_mutator_funnel|app_settings|radio_store|spot_settings|connected_state_equivalence|p2_ddc|slice_meter_pump|meter_poller|settings_scope|settings_proxy' --no-tests=error`.
+- [ ] **Step 1:** `cmake --build build --target tests_models` then `ctest -L models --no-tests=error` (a real label), plus the targeted set below.
+
+  **Corrected 2026-08-06.** The regex this step originally named contained a component, `radio_store`, that matches **zero** tests in this tree, so the saved-radio coverage it was meant to pin would have been silently skipped. `--no-tests=error` does not catch that: it only fires when the *whole* selector matches nothing, and the other components matched. This is the same disease as the `-L settings` trap, one step milder. Measured at `10d1d35c`, the real names are `tst_connection_panel_saved_radios` (saved-radio round-trip) and `tst_settings_hygiene` (the station-value validator that prefix-scans `allKeys()`). Use:
+
+  ```
+  ctest --test-dir build -R 'settings_mutator_funnel|app_settings|connection_panel_saved_radios|settings_hygiene|spot_settings|connected_state_equivalence|p2_ddc|slice_meter_pump|meter_poller|settings_scope|settings_proxy' --no-tests=error
+  ```
+
+  **Before trusting it, print what it selected** with `ctest --test-dir build -N -R '<same regex>'` and confirm every component contributed at least one test. `settings_scope` and `settings_proxy` are created by tasks 14 and 15, so they legitimately match nothing until those land; every other component must match.
 - [ ] **Step 2:** Full `ctest --no-tests=error`. All green.
 - [ ] **Step 3: Bench, local direct mode, no daemon. Run it on the ANAN-G2E.** Follow the "Bench hardware: the G2E, never the G2" procedure above: discover, list responders with MAC and board type, pin the G2E's MAC, confirm with the maintainer, connect. Record the result in the verification README against the pinned MAC. Connect to the G2E. Verify: per-slice S-meter needles move and the **active slice's flag is written once per tick, not twice**; **set the analog S-Meter to Peak and to MaxBin and confirm the flag bar agrees with the needle** (task 12 step 7); the Multimeter delay slider still changes meter cadence; disconnect and reconnect cleanly, with the reordered state transition causing no visible change; saved radios survive a relaunch. Steps 1 and 2 are the automated half of this gate and **are** executed; a red result there still stops the phase.
 - [ ] **Step 4:** Record in `docs/architecture/2026-08-03-remote-daemon-r2-verification/README.md`. Commit.
