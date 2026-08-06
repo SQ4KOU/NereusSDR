@@ -129,14 +129,15 @@ public:
     // Used by the MMIO engine to group keys under the MmioEndpoints/
     // prefix at app startup.
     //
-    // Remote Daemon R2, Task 13 -- six other consumers prefix-scan this
-    // as of this task: SettingsHygiene.cpp (x2), ExternalVariableEngine.cpp
-    // (x2), AudioEngine.cpp, and the GUI's AudioAdvancedPage.cpp (which
-    // runs in remote mode too). allKeys() is already the single funnel
-    // point (== m_settings.keys(), the same map setValue()/remove() write
-    // through), so all six are already positioned to pick up Task 15's
-    // delegation once it lands here -- no consumer changes were needed
-    // for this task.
+    // Remote Daemon R2, Task 13 -- several other consumers across core
+    // and gui prefix-scan this to enumerate settings (including at least
+    // one GUI consumer that runs in remote mode too). allKeys() is
+    // already the single funnel point (== m_settings.keys(), the same
+    // map setValue()/remove() write through), so every consumer is
+    // already positioned to pick up Task 15's delegation once it lands
+    // here -- no consumer changes were needed for this task. Deliberately
+    // not enumerated by filename: that list is stale the first time a
+    // consumer is added or removed, and nothing here enforces it.
     QStringList allKeys() const;
 
     // Remove ALL top-level keys from the in-memory store.
@@ -161,6 +162,14 @@ public:
     // granularity to mirror individual values, not a single "something
     // changed" pulse.
     //
+    // A fire does NOT imply the value actually changed. setValue() fires
+    // even when writing a value identical to what was already stored,
+    // and remove() fires whether or not the key existed beforehand (for
+    // example, setLastConnected(QString()) on a store that never had
+    // "radios/lastConnected" still fires with that key). Harmless for an
+    // idempotent mirror; wrong for anything counting deltas, which must
+    // diff against the prior value itself.
+    //
     // Deliberately does NOT fire for:
     //   - clear(): a bulk test-isolation wipe with no single key to
     //     report (see its doc comment above).
@@ -174,6 +183,24 @@ public:
     //     contains(), allKeys() on their own).
     //   - stationValue()/setStationValue(): a separate map
     //     (m_stationSettings) entirely outside this task's scope.
+    //
+    // Re-entrancy is NOT guarded. A hook body that calls
+    // setValue()/remove()/saveRadio() (or anything else routed through
+    // those two) on the SAME instance re-enters this hook and will
+    // recurse without bound. A delegation backend applying an inbound
+    // remote write must suppress its own hook rather than relying on
+    // AppSettings to break the cycle -- see this project's CLAUDE.md,
+    // "GUI to Model Sync (No Feedback Loops)", for the same pattern
+    // applied elsewhere in this codebase. No suppression is implemented
+    // here on purpose: it would presume a Task 15 design nobody has
+    // written yet, and a naive one would silently swallow legitimate
+    // derived writes a hook body makes, trading a loud stack overflow
+    // for a quiet data-loss bug.
+    //
+    // The hook body runs synchronously, on whatever thread called the
+    // mutator. AppSettings has no internal locking; synchronizing a hook
+    // against an instance touched from more than one thread is entirely
+    // the caller's responsibility.
     //
     // AppSettings has no Q_OBJECT (see the class doc above), so this
     // cannot be a Qt signal -- std::function is the mechanism the R2

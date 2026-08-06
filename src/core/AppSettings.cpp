@@ -498,6 +498,13 @@ void AppSettings::load()
 
     if (mainRead == ReadResult::Ok) {
         const QString sanitized = sanitizeXmlForLoad(rawXml);
+        // Remote Daemon R2, Task 13: this bulk populate (and its .bak-
+        // recovery twin below) does not fire the change hook per key.
+        // Same reasoning as the corrupt-file m_settings.clear() fallback
+        // further down in this function: startup state establishment via
+        // a free function writing into m_settings/m_stationSettings by
+        // reference, not a series of individually-meaningful mutations
+        // through setValue().
         if (parseSettingsXml(sanitized, m_settings, m_stationSettings, m_stationName)) {
             logLoadedSummary(m_settings, m_stationSettings.size());
             return;
@@ -573,6 +580,8 @@ void AppSettings::load()
         const ReadResult bakRead = readFileForParse(bakPath, bakXml);
         if (bakRead == ReadResult::Ok) {
             const QString sanitized = sanitizeXmlForLoad(bakXml);
+            // Same "bulk populate, no hook fire" reasoning as the
+            // main-file parse above.
             if (parseSettingsXml(sanitized, m_settings, m_stationSettings, m_stationName)) {
                 m_recoveredFromBackup = true;
                 qWarning() << "Recovered settings from backup file" << bakPath;

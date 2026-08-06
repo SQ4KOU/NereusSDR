@@ -152,7 +152,8 @@ private slots:
         s.saveRadio(makeRadioInfo(mac), /*pinToMac=*/true, /*autoConnect=*/false);
 
         // 10 fields with a default (FIRST/no-override) modelOverride --
-        // that field is conditional and covered by hookFiresOnSetModelOverride.
+        // that field is conditional; the non-default case (an 11th fire)
+        // is covered by the second phase below.
         const QStringList expectedSuffixes = {
             QStringLiteral("name"), QStringLiteral("ipAddress"),
             QStringLiteral("port"), QStringLiteral("macAddress"),
@@ -165,6 +166,28 @@ private slots:
         for (const QString& suffix : expectedSuffixes) {
             QVERIFY2(log.contains(prefix + suffix), qPrintable(prefix + suffix));
         }
+
+        // Second phase: a non-default modelOverride makes saveRadio()'s
+        // conditional 11th field write fire too. Separate mac + a
+        // cleared log so this doesn't disturb the 10-field assertion
+        // above. hookFiresOnSetModelOverride (below) pins the standalone
+        // setModelOverride() path; this pins saveRadio()'s own
+        // conditional branch specifically, which is a different call
+        // site even though it writes the same key shape.
+        log.clear();
+        const QString macWithOverride = QStringLiteral("77:88:99:AA:BB:CC");
+        RadioInfo infoWithOverride = makeRadioInfo(macWithOverride);
+        infoWithOverride.modelOverride = HPSDRModel::ANAN_G2;
+        s.saveRadio(infoWithOverride, /*pinToMac=*/false, /*autoConnect=*/false);
+
+        QCOMPARE(log.size(), 11);
+        const QString overridePrefix = QStringLiteral("radios/%1/").arg(macWithOverride);
+        QVERIFY2(log.contains(overridePrefix + QStringLiteral("modelOverride")),
+                 qPrintable(overridePrefix + QStringLiteral("modelOverride")));
+
+        auto sr = s.savedRadio(macWithOverride);
+        QVERIFY(sr.has_value());
+        QCOMPARE(sr->info.modelOverride, HPSDRModel::ANAN_G2);
     }
 
     void hookFiresOnForgetRadio()
