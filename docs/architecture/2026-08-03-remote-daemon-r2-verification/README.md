@@ -366,3 +366,43 @@ already ran and are GREEN.
 623/623, zero failures across all three sweeps). Step 3 (bench) remains
 OPEN, owned by the maintainer, and is recorded above as a runnable
 procedure rather than executed by this task.
+
+### Controller correction to the Task 16 result, 2026-08-07
+
+The task's own full-suite run reported 623/623 with zero failures. **An
+independent controller re-run of the same binaries reported
+`tst_tx_mic_source` FAILED.** Both runs are accurate; the suite contains a
+load-dependent flake, so a single green full-suite run is not by itself
+sufficient evidence.
+
+Measured on macOS, 18 cores, at `22825c02`:
+
+- Serially: 10 consecutive runs of `tst_tx_mic_source`, all exit 0.
+- 18 concurrent instances: 15 failed.
+- 12 concurrent instances: 10 failed.
+
+The failure is real, not a teardown artifact:
+
+```
+FAIL!  : TestTxMicSource::concurrent_producerConsumer_noDataCorruption()
+         Compared doubles are not the same (fuzzy compare)
+   Actual   (drained[i])   : 512
+   Expected (produced[i])  : 0
+   Loc: [../tests/tst_tx_mic_source.cpp(299)]
+```
+
+The producer pushes one block then sleeps 50 microseconds; the ring is 512
+frames. Under CPU contention the consumer is descheduled long enough for the
+producer to lap the ring, so frames are overwritten before `drainBlock` reads
+them, and the test asserts strict sample-order preservation.
+
+**It is not a regression from this branch.**
+`git log 3349ccb8..HEAD -- tests/tst_tx_mic_source.cpp src/core/audio/TxMicSource.{h,cpp}`
+returns nothing, so neither the test nor the class was modified here. Chipped as
+a follow-up (`task_107045fb`) with the reproduction and a diagnosis.
+
+**The gate's verdict stands as GREEN for its stated purpose**, which is proving
+that the fifteen R2 tasks did not regress local direct mode. Every targeted test
+and every models-label test passed in both runs, and the single failure is a
+pre-existing timing-sensitive test in an unrelated subsystem. The 623/623 figure
+should be read as "623/623 on an unloaded machine", not as an unqualified pass.
