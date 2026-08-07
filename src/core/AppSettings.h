@@ -218,20 +218,33 @@ public:
     // ------------------------------------------------------------------
     // Remote Daemon R2, Task 15 -- the delegation seam.
     //
-    // Non-owning, nullptr default. When installed, value(), setValue(),
-    // contains() and remove() each start with the SAME one-branch guard:
-    // "if a backend is installed AND it claims this key
+    // Non-owning, nullptr default. When installed, value(), setValue()
+    // and contains() each start with the SAME one-branch guard: "if a
+    // backend is installed AND it claims this key
     // (ISettingsBackend::handlesKey()), delegate the whole call and
     // return -- otherwise fall through to the body these methods have
-    // always run." allKeys() is additive instead (unions its own
-    // m_settings.keys() with the backend's handledKeys()) since there is
-    // no single key for a guard clause to test. setRemoteBackend(nullptr)
-    // -- the default, and the state of every AppSettings instance nothing
-    // has opted into remote mode -- means every one of those guards is
-    // false on every call, so the local path below them is BYTE-IDENTICAL
-    // to what it was before this task: nothing between here and that
-    // fallback code changed, only a skipped conditional was added above
-    // it. tst_settings_proxy.cpp's nullBackendLeavesLocalPathByteIdentical
+    // always run." allKeys() is additive instead (unions its own local
+    // keys, MINUS any the backend now claims, with the backend's own
+    // handledKeys()) since there is no single key for a guard clause to
+    // test -- see its own .cpp comment for why the local half must
+    // exclude backend-claimed keys (fix round 1 (review), Important 1).
+    // remove() is the ONE exception to strict one-branch delegation: it
+    // still delegates to a claiming backend, but ALSO always clears any
+    // local m_settings leftover for that key, because removal (unlike a
+    // read, which must pick a single source of truth, or a write, which
+    // must never let local and station data cross) is safe to apply to
+    // both -- see remove()'s own .cpp comment (fix round 1 (review),
+    // Important 1) for why a purely-delegated remove() left "forget
+    // radio" unable to actually forget a key left over from a previous
+    // LOCAL session.
+    //
+    // setRemoteBackend(nullptr) -- the default, and the state of every
+    // AppSettings instance nothing has opted into remote mode -- means
+    // every one of these guards is false on every call, so the local
+    // path below them is BYTE-IDENTICAL to what it was before this task:
+    // nothing between here and that fallback code changed, only a
+    // skipped conditional was added above it.
+    // tst_settings_proxy.cpp's nullBackendLeavesLocalPathByteIdentical
     // pins this directly.
     //
     // ---- Reads never touch the network (a header invariant, asserted

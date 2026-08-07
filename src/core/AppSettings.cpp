@@ -745,9 +745,31 @@ void AppSettings::setValue(const QString& key, const QVariant& val)
 
 void AppSettings::remove(const QString& key)
 {
-    // Remote Daemon R2, Task 15 -- one-branch delegation (see value()).
+    // Remote Daemon R2, Task 15 -- delegation, but NOT strictly
+    // one-branch the way value()/setValue()/contains() are. Fix round 1
+    // (review, Important 1): a purely-delegated remove() left a STALE
+    // local m_settings entry (from a previous LOCAL session, before a
+    // backend was ever installed) completely unreachable once a backend
+    // claimed that key's family -- allKeys()'s own fix (above) makes such
+    // an entry correctly invisible to allKeys()/contains()/value(), but
+    // invisible is not the same as gone, and "forget radio"
+    // (clearHardwareValues()/forgetRadio(), both funnel through here)
+    // needs it actually gone, not just hidden while a backend happens to
+    // be installed. remove() is the one of the five delegated operations
+    // where touching BOTH targets is safe: unlike setValue() (which must
+    // NEVER touch m_settings for a backend-claimed key, or a remote-mode
+    // GUI's own local file would end up storing another station's data --
+    // see AppSettings.h's snapshot() doc comment), removing a key that
+    // is not locally present is a harmless no-op, so there is no
+    // symmetrical contamination risk here.
     if (m_remoteBackend && m_remoteBackend->handlesKey(key)) {
         m_remoteBackend->remove(key);
+        // Best-effort local cleanup, not a locally-observed value
+        // change -- deliberately does NOT fire m_changeHook, matching
+        // this delegated branch's existing contract (see value()'s own
+        // comment: "does not touch m_settings and does not fire
+        // m_changeHook") for anything reads/writes through this branch.
+        m_settings.remove(key);
         return;
     }
     m_settings.remove(key);
@@ -770,21 +792,46 @@ QStringList AppSettings::allKeys() const
     // Remote Daemon R2, Task 15 -- additive, not a guard clause: there is
     // no single key to ask handlesKey() about, so this unions the local
     // keys with whatever the backend currently holds real values for
-    // (ISettingsBackend::handledKeys()) instead of choosing one source
-    // over the other. m_remoteBackend == nullptr (today's only path
-    // outside a test, and every path before this task) takes the loop
-    // zero times, leaving the return value byte-identical to
-    // `m_settings.keys()`.
-    QStringList out = m_settings.keys();
-    if (m_remoteBackend) {
-        const QStringList remoteKeys = m_remoteBackend->handledKeys();
-        for (const QString& k : remoteKeys) {
-            if (!out.contains(k)) {
-                out.append(k);
-            }
+    // (ISettingsBackend::handledKeys()). m_remoteBackend == nullptr
+    // (today's only path outside a test, and every path before this
+    // task) takes the early return below, leaving the return value
+    // byte-identical to `m_settings.keys()`.
+    //
+    // Fix round 1 (review, Important 1): a local m_settings entry the
+    // backend now CLAIMS (handlesKey() true) MUST be excluded from the
+    // local half of the union. Before this fix the union only ever
+    // added, so a key left over in m_settings from a previous LOCAL
+    // session -- the ordinary case for an operator who has used the
+    // radio directly before going remote -- stayed listed here forever
+    // even though contains()/value() already delegate it away to the
+    // backend and report it absent. Two concrete breakages that produced:
+    // hardwareValues() (below) iterates allKeys() and calls value(k) for
+    // each match, so a stale local hardware/<mac>/* entry became a
+    // phantom map entry whose value() came back as the caller's invalid
+    // default instead of the key being absent from the result at all;
+    // and clearHardwareValues() (below) called remove(k), which
+    // delegates and never touches the stale local m_settings entry, so
+    // "forget radio" on a remote client left those keys on disk forever
+    // and they kept reappearing in allKeys(). A QSet does the membership
+    // test in O(1) rather than QStringList::contains()'s O(n) scan
+    // repeated for every remote key (the previous shape was O(n x m));
+    // hardwareValues() calls this on every Setup-page restore.
+    if (!m_remoteBackend) {
+        return m_settings.keys();
+    }
+    QSet<QString> out;
+    const QStringList localKeys = m_settings.keys();
+    out.reserve(localKeys.size());
+    for (const QString& k : localKeys) {
+        if (!m_remoteBackend->handlesKey(k)) {
+            out.insert(k);
         }
     }
-    return out;
+    const QStringList remoteKeys = m_remoteBackend->handledKeys();
+    for (const QString& k : remoteKeys) {
+        out.insert(k);
+    }
+    return out.values();
 }
 
 void AppSettings::clear()
@@ -1065,10 +1112,36 @@ QMap<QString, QVariant> AppSettings::hardwareValues(const QString& mac) const
 void AppSettings::clearHardwareValues(const QString& mac)
 {
     const QString prefix = QStringLiteral("hardware/%1/").arg(mac);
-    const QStringList keys = allKeys();
-    for (const QString& k : keys) {
+
+    // Fix round 1 (review, Important 1) -- scans m_settings.keys()
+    // DIRECTLY, not the backend-aware allKeys(). allKeys() now
+    // deliberately EXCLUDES a local entry the backend claims (see its
+    // own comment above), which is exactly the shape "forget radio"
+    // needs to find in order to delete: a STALE local leftover from a
+    // previous LOCAL session that is invisible through the normal read
+    // API but still physically present and still needs to actually go
+    // away. Using allKeys() here (the pre-fix shape) meant this loop
+    // could no longer even SEE such an entry to call remove() on it,
+    // so the entry stayed on disk forever despite an explicit "forget"
+    // action -- remove()'s own fix (below) can only do its job if this
+    // loop still hands it the key.
+    const QStringList localKeys = m_settings.keys();
+    for (const QString& k : localKeys) {
         if (k.startsWith(prefix)) {
             remove(k);
+        }
+    }
+
+    // Also clear anything the backend itself holds for this MAC that was
+    // never sitting in m_settings at all (e.g. a value that only ever
+    // arrived via a connect-time snapshot, with no local session ever
+    // having cached it first).
+    if (m_remoteBackend) {
+        const QStringList remoteKeys = m_remoteBackend->handledKeys();
+        for (const QString& k : remoteKeys) {
+            if (k.startsWith(prefix)) {
+                remove(k);
+            }
         }
     }
 }

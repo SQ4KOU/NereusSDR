@@ -115,6 +115,39 @@ void captureMessageHandler(QtMsgType type, const QMessageLogContext& context, co
     g_capturedLogLines.append(msg);
 }
 
+// Fix round 1 (review, Minor 9). valueNeverBlocksOrSpinsEventLoop()'s
+// timing proof would not catch a value() that called
+// QCoreApplication::processEvents() on an otherwise-empty queue -- that
+// returns near-instantly, so it would not blow the 200ms budget.
+// valueDoesNotProcessQueuedEvents() (below) targets that gap using this
+// marker: post a queued-connection invocation, call value(), then check
+// it is STILL undelivered.
+//
+// DISCLOSED LIMITATION, found while building this fix: this file runs
+// under QTEST_APPLESS_MAIN, which constructs no QCoreApplication at all.
+// Empirically verified (temporarily inserting each into value() and
+// reverting) that BOTH QCoreApplication::processEvents() (silently
+// no-ops -- the function checks QCoreApplication::instance() and returns
+// immediately when it is null) and QEventLoop::processEvents()/exec()
+// (also refuses, with a "QEventLoop: Cannot be used without
+// QCoreApplication" warning) are unable to deliver ANYTHING in this
+// specific test binary's environment -- so this test cannot actually
+// distinguish "value() correctly does nothing" from "value() tried to
+// pump the event queue and Qt silently declined" here. Kept anyway
+// because it exercises the real production code path and would catch a
+// regression in the one context that matters (a real GUI process, which
+// always has a live QCoreApplication/QApplication) -- restructuring this
+// whole file to QTEST_MAIN to close this gap for good would touch every
+// one of the other 50+ tests in it and was judged out of scope for a
+// Minor.
+class QueuedEventMarker : public QObject {
+    Q_OBJECT
+public:
+    bool delivered = false;
+public slots:
+    void mark() { delivered = true; }
+};
+
 } // namespace
 
 class TstSettingsProxy : public QObject {
@@ -232,6 +265,85 @@ private slots:
         QCOMPARE(s.allKeys().size(), 2);
     }
 
+    // ── Fix round 1 (review, Important 1): allKeys()/contains()/value() ───
+    // ── must agree, and clearHardwareValues() must actually delete a ──────
+    // ── stale local entry, not merely hide it ──────────────────────────────
+
+    void preExistingLocalHardwareKeyIsHiddenAndClearHardwareValuesActuallyDeletesIt()
+    {
+        // Reproduces the review's exact scenario: an operator who has used
+        // this radio LOCALLY before (so hardware/<mac>/* already sits in
+        // m_settings) then goes remote. Before this fix, allKeys() kept
+        // listing that entry forever (a pure union that only ever added)
+        // while contains()/value() already delegated it away and reported
+        // it absent -- a broken invariant hardwareValues() and
+        // clearHardwareValues() both depended on. This test fails against
+        // the pre-fix allKeys() (lists a key contains() denies) AND
+        // against the pre-fix remove() (clearHardwareValues() leaves the
+        // stale entry on disk, invisible but not deleted).
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings s(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+
+        const QString mac = QStringLiteral("aa:bb:cc:dd:ee:ff");
+        const QString fullKey = QStringLiteral("hardware/%1/radioInfo/sampleRate").arg(mac);
+
+        // "Operator has used this radio locally before": written with NO
+        // backend installed yet, straight into m_settings.
+        s.setHardwareValue(mac, QStringLiteral("radioInfo/sampleRate"), 192000);
+        QVERIFY(s.allKeys().contains(fullKey));
+
+        // Now go remote: install a backend that claims the same key
+        // family but starts with nothing of its own cached.
+        SettingsProxy proxy;
+        s.setRemoteBackend(&proxy);
+
+        QVERIFY2(!s.allKeys().contains(fullKey),
+                 "a local entry the backend now claims must not appear in allKeys()");
+        QVERIFY2(!s.contains(fullKey), "contains() already correctly delegated and denied this");
+        QVERIFY2(!s.value(fullKey).isValid(),
+                 "value() with no explicit default must come back invalid/absent, not the "
+                 "stale local number");
+
+        // "Forget radio" must ACTUALLY delete the stale local entry, not
+        // just leave it hidden while a backend happens to be installed.
+        s.clearHardwareValues(mac);
+
+        // Uninstall the backend and confirm it is REALLY gone -- if
+        // remove() had only delegated (the pre-fix behavior), the stale
+        // entry would reappear here.
+        s.setRemoteBackend(nullptr);
+        QVERIFY2(!s.allKeys().contains(fullKey),
+                 "clearHardwareValues() must actually delete the stale local m_settings "
+                 "entry, not merely leave it hidden while a backend happens to be installed");
+        QVERIFY(!s.contains(fullKey));
+    }
+
+    void singleKeyRemoveAlsoDeletesStaleLocalEntryDirectly()
+    {
+        // Narrower companion to the test above: remove() itself (not
+        // just clearHardwareValues(), which calls it in a loop) must
+        // clean up a stale local leftover for a backend-claimed key.
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings s(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        s.setValue(QStringLiteral("Slice0/Locked"), QStringLiteral("True"));
+
+        // The real backend, not the "hardware/"-only fake: handlesKey()
+        // uses classifySettingsKey(), and "Slice0/Locked" classifies
+        // Station, so this exercises a non-hardware/ Station family too.
+        SettingsProxy proxy;
+        s.setRemoteBackend(&proxy);
+        QVERIFY(!s.contains(QStringLiteral("Slice0/Locked"))); // already hidden (Important 1)
+
+        s.remove(QStringLiteral("Slice0/Locked"));
+
+        s.setRemoteBackend(nullptr);
+        QVERIFY2(!s.contains(QStringLiteral("Slice0/Locked")),
+                 "remove() must delete the stale local entry even for a single direct call, "
+                 "not only when reached via clearHardwareValues()'s loop");
+    }
+
     // ── ISettingsBackend.h's synchronous-read invariant ────────────────────
 
     void valueNeverBlocksOrSpinsEventLoop()
@@ -276,6 +388,29 @@ private slots:
                  qPrintable(QStringLiteral("4000 SettingsProxy::value() calls took %1 ms -- "
                                            "reads must be synchronous/cache-only")
                                 .arg(elapsedMs)));
+    }
+
+    void valueDoesNotProcessQueuedEvents()
+    {
+        // Fix round 1 (review, Minor 9). See QueuedEventMarker's own
+        // comment for why the timing proof above cannot catch a
+        // processEvents() call on an empty queue, and for this test's
+        // own disclosed limitation in the QTEST_APPLESS_MAIN environment.
+        SettingsProxy proxy;
+        proxy.applySnapshot(QMap<QString, QString>{
+            {QStringLiteral("hardware/aa:bb/k"), QStringLiteral("v")}});
+
+        QueuedEventMarker marker;
+        QMetaObject::invokeMethod(&marker, "mark", Qt::QueuedConnection);
+        QVERIFY2(!marker.delivered,
+                 "sanity: nothing has run this thread's event loop yet");
+
+        const QVariant v = proxy.value(QStringLiteral("hardware/aa:bb/k"), QVariant());
+        Q_UNUSED(v);
+
+        QVERIFY2(!marker.delivered,
+                 "value() must not process queued events -- a call that did would "
+                 "silently deliver this marker without an event loop ever running");
     }
 
     // ── Step 3: AppSettings::snapshot() -- fully-qualified extraction ─────
@@ -408,6 +543,35 @@ private slots:
         QVERIFY(!keys.contains(QStringLiteral("hardware/aa:bb/never")));
     }
 
+    void removeBeforeAnySnapshotDoesNotMarkProvenUnset()
+    {
+        // Fix round 1 (review, Minor 8). remove() used to mark
+        // PROVEN-unset unconditionally, even before this client had ever
+        // heard from the daemon at all -- violating the class comment's
+        // own "three-state read" definition (PROVEN UNSET requires at
+        // least one snapshot to have landed) and making Step 9's log
+        // ambiguous about what "ProvenUnset" actually means.
+        SettingsProxy proxy;
+        QVERIFY(!proxy.hasReceivedSnapshot());
+
+        proxy.remove(QStringLiteral("hardware/aa:bb/never-snapshotted"));
+
+        QVERIFY2(proxy.provenUnsetKeys().isEmpty(),
+                 "remove() before any snapshot must not claim PROVEN unset -- it is the "
+                 "NO-SNAPSHOT-YET state, exactly like an equivalent value() call");
+    }
+
+    void removeAfterSnapshotDoesMarkProvenUnset()
+    {
+        SettingsProxy proxy;
+        proxy.applySnapshot(QMap<QString, QString>{
+            {QStringLiteral("hardware/aa:bb/k1"), QStringLiteral("v1")}});
+
+        proxy.remove(QStringLiteral("hardware/aa:bb/k1"));
+
+        QVERIFY(proxy.provenUnsetKeys().contains(QStringLiteral("hardware/aa:bb/k1")));
+    }
+
     // ── Step 9: the proxied-read log ───────────────────────────────────────
 
     void proxiedReadLogHasScannableShape()
@@ -502,6 +666,81 @@ private slots:
 
         QCOMPARE(spy.count(), 0);
         QVERIFY(!proxy.contains(QStringLiteral("hardware/aa:bb/k")));
+    }
+
+    // ── Fix round 1 (review, Important 2): offline-drop tracking ───────────
+
+    void offlineWritesAndRemovesAreTrackedAsDropped()
+    {
+        SettingsProxy proxy;
+        QVERIFY(!proxy.ready());
+        QVERIFY(proxy.droppedWhileOffline().isEmpty());
+
+        proxy.setValue(QStringLiteral("hardware/aa:bb/k1"), QStringLiteral("mine"));
+        proxy.remove(QStringLiteral("hardware/aa:bb/k2"));
+
+        const QSet<QString> dropped = proxy.droppedWhileOffline();
+        QCOMPARE(dropped.size(), 2);
+        QVERIFY(dropped.contains(QStringLiteral("hardware/aa:bb/k1")));
+        QVERIFY(dropped.contains(QStringLiteral("hardware/aa:bb/k2")));
+    }
+
+    void onlineWritesAndRemovesAreNotTrackedAsDropped()
+    {
+        SettingsProxy proxy;
+        proxy.setReady(true);
+        proxy.setValue(QStringLiteral("hardware/aa:bb/k1"), QStringLiteral("mine"));
+        proxy.remove(QStringLiteral("hardware/aa:bb/k1"));
+
+        QVERIFY(proxy.droppedWhileOffline().isEmpty());
+    }
+
+    void reconnectSnapshotContradictsOverlappingOfflineEditsAndClearsWholeSet()
+    {
+        // Fix round 1 (review, Important 2). Before this fix, Step 8's
+        // "dropped, not queued" destroyed the information Task 19 needs
+        // at the moment of the drop -- nothing recorded WHICH keys had a
+        // pending edit while offline, so a reconnect could not
+        // distinguish "your offline edit was overwritten" from "the
+        // daemon changed this key while you were away".
+        SettingsProxy proxy;
+        QVERIFY(!proxy.ready());
+        proxy.setValue(QStringLiteral("hardware/aa:bb/k1"), QStringLiteral("mine"));
+        proxy.setValue(QStringLiteral("hardware/aa:bb/k2"), QStringLiteral("mine-too"));
+        QCOMPARE(proxy.droppedWhileOffline().size(), 2);
+        QVERIFY(proxy.keysContradictedByLastSnapshot().isEmpty());
+
+        // Reconnect: the fresh snapshot reports its OWN value for k1 (a
+        // genuine contradiction -- the daemon never saw this client's
+        // offline edit) and says nothing about k2 at all.
+        QMap<QString, QString> snap;
+        snap.insert(QStringLiteral("hardware/aa:bb/k1"), QStringLiteral("daemon-truth"));
+        proxy.setReady(true);
+        proxy.applySnapshot(snap);
+
+        QCOMPARE(proxy.keysContradictedByLastSnapshot(),
+                 QSet<QString>{QStringLiteral("hardware/aa:bb/k1")});
+        QVERIFY2(proxy.droppedWhileOffline().isEmpty(),
+                 "a fresh full snapshot clears the WHOLE pending set, not just the "
+                 "contradicted subset -- see the class comment for why");
+        QCOMPARE(proxy.value(QStringLiteral("hardware/aa:bb/k1"), QVariant()).toString(),
+                 QStringLiteral("daemon-truth"));
+    }
+
+    void keysContradictedByLastSnapshotIsRecomputedNotAccumulated()
+    {
+        SettingsProxy proxy;
+        proxy.setValue(QStringLiteral("hardware/aa:bb/k1"), QStringLiteral("mine"));
+        proxy.applySnapshot(QMap<QString, QString>{
+            {QStringLiteral("hardware/aa:bb/k1"), QStringLiteral("daemon-1")}});
+        QCOMPARE(proxy.keysContradictedByLastSnapshot().size(), 1);
+
+        // A SECOND snapshot, with nothing newly dropped in between, must
+        // report an EMPTY contradiction set -- not the first snapshot's
+        // stale result carried forward.
+        proxy.applySnapshot(QMap<QString, QString>{
+            {QStringLiteral("hardware/aa:bb/k1"), QStringLiteral("daemon-2")}});
+        QVERIFY(proxy.keysContradictedByLastSnapshot().isEmpty());
     }
 
     void removeRoutesToBackendAndEmitsOutboundWhileReady()
@@ -821,6 +1060,106 @@ private slots:
         QCOMPARE(spy.at(0).at(0).toString(), QStringLiteral("hardware/aa:bb/radioInfo/sampleRate"));
         QCOMPARE(spy.at(0).at(1).toInt(), 192000);
         QCOMPARE(spy.at(0).at(2).toString(), QStringLiteral("client-42"));
+    }
+
+    void bothBroadcastPathsEmitTheSameQVariantType()
+    {
+        // Fix round 1 (review, Minor 6). Before this fix,
+        // applyInboundWrite() emitted the CALLER's raw QVariant (an int,
+        // for a typical Task 18 decoder) while onLocalAppSettingsChange()
+        // emitted m_appSettings.value(key) (always QVariant(QString),
+        // since setValue() collapses everything to QString on the way
+        // in). Task 18 serialises this onto the wire, where 192000 and
+        // "192000" are different JSON -- the two paths must agree on
+        // what a client receives for the identical underlying change.
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings daemon(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        SettingsProxyServer server(daemon);
+        QSignalSpy spy(&server, &SettingsProxyServer::outboundValueChanged);
+
+        // Path 1: applyInboundWrite(), called with an int QVariant --
+        // exactly what a real JSON-decoding Task 18 would pass for a
+        // numeric field.
+        server.applyInboundWrite(QStringLiteral("hardware/aa:bb/radioInfo/sampleRate"), 192000,
+                                 QStringLiteral("client-1"));
+        QCOMPARE(spy.count(), 1);
+        const QVariant fromInboundPath = spy.at(0).at(1);
+        spy.clear();
+
+        // Path 2: a genuine local change, same underlying AppSettings
+        // storage, different code path (onLocalAppSettingsChange).
+        daemon.setValue(QStringLiteral("hardware/aa:bb/radioInfo/otherField"), 192000);
+        QCOMPARE(spy.count(), 1);
+        const QVariant fromLocalPath = spy.at(0).at(1);
+
+        QCOMPARE(fromInboundPath.typeId(), fromLocalPath.typeId());
+        QVERIFY2(fromInboundPath.typeId() != QMetaType::Int,
+                 "the broadcast must carry QVariant(QString) -- what AppSettings::value() "
+                 "actually returns -- not the caller's original int");
+        QCOMPARE(fromInboundPath.toString(), QStringLiteral("192000"));
+        QCOMPARE(fromInboundPath.toString(), fromLocalPath.toString());
+    }
+
+    // ── Fix round 1 (review, Important 3b): step-attenuator bounds check ──
+
+    void serverRejectsOutOfRangeStepAttenuatorValue()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings daemon(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        daemon.setHardwareValue(QStringLiteral("aa:bb"), QStringLiteral("options/stepAtt/rx1Value"), 10);
+        SettingsProxyServer server(daemon);
+        QSignalSpy spy(&server, &SettingsProxyServer::outboundValueChanged);
+
+        const QString key = QStringLiteral("hardware/aa:bb/options/stepAtt/rx1Value");
+
+        const SettingsApplyResult tooHigh = server.applyInboundWrite(key, 999, QStringLiteral("client-1"));
+        QVERIFY(!tooHigh.accepted);
+        QVERIFY(!tooHigh.reason.isEmpty());
+        QCOMPARE(tooHigh.restoredValue.toInt(), 10); // the daemon's own current value, untouched
+
+        const SettingsApplyResult tooLow = server.applyInboundWrite(key, -999, QStringLiteral("client-1"));
+        QVERIFY(!tooLow.accepted);
+
+        QCOMPARE(daemon.value(key).toInt(), 10); // still untouched
+        QCOMPARE(spy.count(), 0); // nothing broadcast for a rejected write
+    }
+
+    void serverAcceptsInRangeStepAttenuatorValueIncludingBoundaries()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings daemon(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        SettingsProxyServer server(daemon);
+        const QString key = QStringLiteral("hardware/aa:bb/options/stepAtt/rx1Value");
+
+        // HL2's own real minimum (-28, StepAttenuatorController.cpp:210-219)
+        // -- the boundary itself must be accepted, not just a value safely
+        // inside it.
+        const SettingsApplyResult low = server.applyInboundWrite(key, -28, QStringLiteral("client-1"));
+        QVERIFY(low.accepted);
+        QCOMPARE(daemon.value(key).toInt(), -28);
+
+        const SettingsApplyResult high = server.applyInboundWrite(key, 31, QStringLiteral("client-1"));
+        QVERIFY(high.accepted);
+        QCOMPARE(daemon.value(key).toInt(), 31);
+    }
+
+    void serverStepAttenuatorBoundsCheckIsScopedToThatOneKey()
+    {
+        // A different, arbitrary Station-scoped numeric key must NOT be
+        // caught by the step-attenuator gate -- the fix is a targeted,
+        // single-key check, not a general range-validation framework
+        // (explicitly out of scope -- see the class comment).
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings daemon(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        SettingsProxyServer server(daemon);
+
+        const SettingsApplyResult result = server.applyInboundWrite(
+            QStringLiteral("hardware/aa:bb/radioInfo/sampleRate"), 999999999, QStringLiteral("client-1"));
+        QVERIFY(result.accepted);
     }
 
     void serverRejectsInboundWriteForNonStationKey()

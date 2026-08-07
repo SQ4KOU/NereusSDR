@@ -12,6 +12,13 @@
 //                                    settings proxy. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-08-06  J.J. Boyd / KG4VCF  Fix round 1 (review): Important 2
+//                                    (droppedWhileOffline() /
+//                                    keysContradictedByLastSnapshot()),
+//                                    Minor 8 (remove() no longer marks
+//                                    proven-unset before any snapshot has
+//                                    landed). AI-assisted transformation
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include "core/settings/SettingsProxy.h"
@@ -78,11 +85,15 @@ void SettingsProxy::setValue(const QString& key, const QVariant& val)
     m_provenUnset.remove(key);
     if (m_ready) {
         emit outboundWriteRequested(key, val);
+    } else {
+        // Fix round 1 (review, Important 2). See the class comment's
+        // "Offline behaviour" paragraph: the cache above is still
+        // updated (the UI stays consistent) but nothing is emitted -- a
+        // dropped write, not a queued one -- and THIS is what records
+        // that the drop happened, so a later applySnapshot() can tell
+        // Task 19 which keys it might be overwriting.
+        m_droppedWhileOffline.insert(key);
     }
-    // See the class comment's "Offline behaviour" paragraph: while
-    // !m_ready, the cache above is still updated (the UI stays
-    // consistent) but nothing is emitted -- a dropped write, not a
-    // queued one.
 }
 
 bool SettingsProxy::contains(const QString& key) const
@@ -93,9 +104,21 @@ bool SettingsProxy::contains(const QString& key) const
 void SettingsProxy::remove(const QString& key)
 {
     m_cache.remove(key);
-    m_provenUnset.insert(key);
+    // Fix round 1 (review, Minor 8): only mark proven-unset once at
+    // least one snapshot has landed, matching value()'s own gating and
+    // the class comment's "three-state read" definition of PROVEN
+    // UNSET -- a remove() called before this client has ever heard from
+    // the daemon at all has nothing to base "proven" on; it is exactly
+    // the NO-SNAPSHOT-YET state, not a confirmed absence.
+    if (m_snapshotEverApplied) {
+        m_provenUnset.insert(key);
+    }
     if (m_ready) {
         emit outboundRemoveRequested(key);
+    } else {
+        // See setValue()'s matching branch and the class comment's
+        // "Offline behaviour" paragraph.
+        m_droppedWhileOffline.insert(key);
     }
 }
 
@@ -121,10 +144,24 @@ void SettingsProxy::applySnapshot(const QMap<QString, QString>& data)
     // own Step 3. A key this snapshot reports real content for
     // supersedes anything m_provenUnset previously recorded for it (the
     // daemon evidently has it now, whatever this cache believed before).
+    //
+    // Fix round 1 (review, Important 2): before merging, note which
+    // members of m_droppedWhileOffline this snapshot ALSO covers -- the
+    // daemon has its own authoritative value for those keys now, so
+    // whatever this client tried to set for them while offline did not
+    // reach it. See the class comment's "Offline behaviour" section for
+    // why m_droppedWhileOffline is cleared in full afterward regardless
+    // of which members were contradicted, not just the contradicted
+    // subset.
+    m_lastSnapshotContradictions.clear();
     for (auto it = data.constBegin(); it != data.constEnd(); ++it) {
+        if (m_droppedWhileOffline.contains(it.key())) {
+            m_lastSnapshotContradictions.insert(it.key());
+        }
         m_cache.insert(it.key(), it.value());
         m_provenUnset.remove(it.key());
     }
+    m_droppedWhileOffline.clear();
     m_snapshotEverApplied = true;
     emit snapshotApplied(data.size());
 }

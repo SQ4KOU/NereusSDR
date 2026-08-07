@@ -94,12 +94,60 @@
 //      is this protocol's own connect-time bookkeeping, so step 2 would
 //      never pick it up on its own.
 //
+// ---- Inbound-write validation is scope-only, with one named exception
+// ---- (fix round 1 review, Important 3) ----
+//
+// applyInboundWrite() checks classifySettingsKey() == Station and
+// nothing else about a write's VALUE, by design -- see its own doc
+// comment for why a general value-validation framework does not belong
+// here. A fix-round review found that the natural-sounding fallback,
+// SettingsHygiene (R2 design addendum section 6.4's "the daemon's
+// station-value validator"), is not actually wired into any write path
+// at all: it runs exactly once, after a successful connect
+// (RadioModel.cpp), never on a mutation; it only builds an advisory
+// QVector<Issue> rather than clamping or rejecting anything; and its two
+// subscribers are GUI diagnostics pages nereusd does not link. An
+// out-of-range Station value written over the wire today reaches
+// AppSettings with nothing between the socket and the applied state.
+//
+// ONE case gets a targeted, hardcoded bounds check anyway (.cpp,
+// isStepAttenuatorRxValueKey() / kStepAttUnionMinDb / kStepAttUnionMaxDb):
+// options/stepAtt/rx1Value, because StepAttenuatorController::setAttenuation()
+// (StepAttenuatorController.cpp:208-219) demonstrably clamps this exact
+// field on every LIVE write path, while
+// StepAttenuatorController::loadSettings() (:1052-1148), the path that
+// reads it back off disk, applies no clamp at all -- so a value written
+// straight to the settings store, which is exactly what an inbound
+// remote write does, reaches RF-relevant state (m_attDb) completely
+// unclamped until incidental correction. The clamp bound used here is a
+// conservative UNION across every board StepAttenuatorController.cpp's
+// BoardCapabilities table currently advertises ([0,31] for most boards,
+// [-28,31] for HL2, [0,0] where no attenuator is present), not a live
+// per-board lookup -- this class has no MAC-to-board-type resolution and
+// building one would be exactly the general framework this section
+// declines to build. Every other un-gated numeric Station value
+// (per-band ATT/preamp, sample rate catalogue entries not already
+// checked by resolveSampleRate, etc.) is explicitly OUT of this fix's
+// scope; the general gap is tracked as a hostile-value row in Task 20's
+// acceptance run, not solved piecemeal here.
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-08-06  J.J. Boyd / KG4VCF  Remote daemon R2 Task 15: daemon-side
 //                                    settings snapshot + inbound-apply
 //                                    server. AI-assisted transformation
 //                                    via Anthropic Claude Code.
+//   2026-08-06  J.J. Boyd / KG4VCF  Fix round 1 (review): Important 3
+//                                    (step-attenuator bounds check,
+//                                    corrected SettingsHygiene claim),
+//                                    Minor 5 (exception-safe
+//                                    m_applyingInboundWrite via
+//                                    QScopeGuard), Minor 6 (both
+//                                    broadcast paths now emit
+//                                    m_appSettings.value(key) so the
+//                                    QVariant type is consistent). AI-
+//                                    assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QMap>
@@ -173,11 +221,14 @@ public:
     /// (ISettingsBackend::handlesKey()), so reaching this path at all
     /// means a stale, buggy, or hostile client sent something outside
     /// the protocol; this is defense in depth, not the primary gate.
-    /// Value-bounds / range validation for a key that IS Station-scoped
-    /// is explicitly NOT this method's job -- that is SettingsHygiene's
-    /// existing, separate responsibility (the R2 design addendum section
-    /// 6.4 names it "the daemon's station-value validator"); duplicating
-    /// it here would give the tree two places that disagree eventually.
+    ///
+    /// General value-bounds / range validation for a key that IS
+    /// Station-scoped is explicitly NOT this method's job -- see the
+    /// class comment's "Inbound-write validation" section for why
+    /// SettingsHygiene is NOT that fallback despite the name suggesting
+    /// it (a fix-round review found it wired into no write path at all),
+    /// and for the one specific, targeted exception this method DOES
+    /// enforce (the step-attenuator rx1Value bounds check, .cpp).
     SettingsApplyResult applyInboundWrite(const QString& key, const QVariant& value,
                                           const QString& originTag);
 
@@ -201,15 +252,24 @@ private:
     /// first in onLocalAppSettingsChange(), before that method does
     /// anything else, so it suppresses the generic broadcast path for
     /// exactly the write currently in flight through applyInboundWrite()
-    /// -- see the class comment's two-path explanation. Save/restore
-    /// rather than hardcoded false on exit would only matter if
-    /// applyInboundWrite() could re-enter itself (it cannot: it makes
-    /// exactly one AppSettings::setValue() call and that call cannot
-    /// synchronously re-invoke applyInboundWrite()), so a plain bool set
-    /// true then false around the one call it guards is sufficient here,
-    /// unlike StateMirror's m_applying (StateMirror.h), which DOES need
+    /// -- see the class comment's two-path explanation. Re-entrancy is
+    /// not the concern a save/restore guard would need to solve here
+    /// (unlike StateMirror's m_applying, StateMirror.h, which DOES need
     /// save/restore because a command handler can nest a second
-    /// applyInbound() inside the first.
+    /// applyInbound() inside the first): applyInboundWrite() makes
+    /// exactly one AppSettings::setValue() call and that call cannot
+    /// synchronously re-invoke applyInboundWrite().
+    ///
+    /// Fix round 1 (review, Minor 5): the field is still set/cleared via
+    /// a QScopeGuard in the .cpp, not a bare `= true; ...; = false;`
+    /// pair -- the risk there was never re-entrancy, it was exception
+    /// safety. If AppSettings::setValue() (or anything the Task 13
+    /// change hook chain calls) ever threw, a bare pair would leave this
+    /// flag stuck at true for the object's ENTIRE remaining lifetime,
+    /// silently suppressing every subsequent genuine daemon-local
+    /// Station change's broadcast forever -- permanent silent data loss
+    /// on connected clients' views, not a crash, and far harder to
+    /// notice than one.
     bool m_applyingInboundWrite = false;
 };
 

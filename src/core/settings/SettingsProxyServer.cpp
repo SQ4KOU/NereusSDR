@@ -12,6 +12,16 @@
 //                                    settings snapshot + inbound-apply
 //                                    server. AI-assisted transformation
 //                                    via Anthropic Claude Code.
+//   2026-08-06  J.J. Boyd / KG4VCF  Fix round 1 (review): Important 3
+//                                    (step-attenuator bounds check on
+//                                    applyInboundWrite()), Minor 5
+//                                    (QScopeGuard around
+//                                    m_applyingInboundWrite), Minor 6
+//                                    (both broadcast paths emit
+//                                    m_appSettings.value(key), not the
+//                                    caller's raw QVariant). AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include "core/settings/SettingsProxyServer.h"
@@ -19,7 +29,32 @@
 #include "core/AppSettings.h"
 #include "core/settings/SettingsScope.h"
 
+#include <QScopeGuard>
+
 namespace NereusSDR {
+
+namespace {
+
+// Fix round 1 (review, Important 3b). See SettingsProxyServer.h's class
+// comment ("Inbound-write validation") for the full reasoning: this is a
+// conservative, HARDCODED union of every board's attenuator range
+// currently defined in BoardCapabilities.cpp (grep '.attenuator ='):
+// {0,31} for most boards, {-28,31} for HL2, {0,0} where no attenuator is
+// present -- so [-28, 31] covers every board this tree knows about
+// today. Deliberately NOT a live per-board lookup (this class has no
+// MAC-to-board-type resolution); it exists only to close the one gap the
+// review named, where NO gate at all sits between the socket and
+// StepAttenuatorController::m_attDb.
+constexpr int kStepAttUnionMinDb = -28;
+constexpr int kStepAttUnionMaxDb = 31;
+
+bool isStepAttenuatorRxValueKey(const QString& key)
+{
+    return key.startsWith(QStringLiteral("hardware/")) &&
+           key.endsWith(QStringLiteral("/options/stepAtt/rx1Value"));
+}
+
+} // namespace
 
 SettingsProxyServer::SettingsProxyServer(AppSettings& appSettings, QObject* parent)
     : QObject(parent)
@@ -98,17 +133,58 @@ SettingsApplyResult SettingsProxyServer::applyInboundWrite(const QString& key, c
         return result;
     }
 
+    // Fix round 1 (review, Important 3b). See the class comment's
+    // "Inbound-write validation" section and isStepAttenuatorRxValueKey()'s
+    // own comment above for why this ONE key gets a targeted check
+    // rather than a general framework.
+    if (isStepAttenuatorRxValueKey(key)) {
+        bool ok = false;
+        const int dB = value.toInt(&ok);
+        if (!ok || dB < kStepAttUnionMinDb || dB > kStepAttUnionMaxDb) {
+            SettingsApplyResult result;
+            result.accepted = false;
+            result.reason = QStringLiteral("step attenuator value out of range [%1, %2]")
+                                .arg(kStepAttUnionMinDb)
+                                .arg(kStepAttUnionMaxDb);
+            result.restoredValue = m_appSettings.value(key);
+            return result;
+        }
+    }
+
     // The anti-echo suppression this whole task exists to build. See the
     // class comment's "The hazard this class exists to not build"
     // section for the full mechanism: m_applyingInboundWrite is checked
     // FIRST in onLocalAppSettingsChange(), so the generic change-hook
     // path emits nothing for THIS write -- this method emits the one,
     // correctly-tagged broadcast for it explicitly, below.
-    m_applyingInboundWrite = true;
-    m_appSettings.setValue(key, value);
-    m_applyingInboundWrite = false;
+    //
+    // Fix round 1 (review, Minor 5): QScopeGuard, not a bare
+    // `= true; ...; = false;` pair -- see m_applyingInboundWrite's own
+    // doc comment (SettingsProxyServer.h) for why this is about
+    // exception safety, not re-entrancy. If AppSettings::setValue()
+    // (or anything the Task 13 hook chain calls) ever threw, a bare
+    // pair would leave the flag stuck true for this object's entire
+    // remaining lifetime. Scoped to a nested block so the guard fires
+    // (flag back to false) immediately after setValue() returns or
+    // unwinds, strictly before the emit below -- matching the original
+    // ordering, though nothing here actually depends on it.
+    {
+        m_applyingInboundWrite = true;
+        const auto clearApplyingGuard = qScopeGuard([this]() { m_applyingInboundWrite = false; });
+        m_appSettings.setValue(key, value);
+    }
 
-    emit outboundValueChanged(key, value, originTag);
+    // Fix round 1 (review, Minor 6): m_appSettings.value(key), not the
+    // caller's raw `value` parameter -- setValue()'s own contract
+    // collapses everything to QString on the way in
+    // (AppSettings.cpp:val.toString()), so the two broadcast paths must
+    // agree on what comes back out. Emitting the caller's original
+    // QVariant here (an int, in a typical caller) while
+    // onLocalAppSettingsChange() below emits value(key) (always
+    // QVariant(QString)) would serialise the SAME logical change as two
+    // different JSON shapes -- 192000 versus "192000" -- depending on
+    // which of the two paths happened to produce it.
+    emit outboundValueChanged(key, m_appSettings.value(key), originTag);
 
     SettingsApplyResult result;
     result.accepted = true;

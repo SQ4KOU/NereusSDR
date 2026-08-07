@@ -137,9 +137,31 @@
 // someone else's change). Reconnect is Task 19's job: it re-establishes
 // ready() and calls applySnapshot() again with a fresh snapshot, which
 // -- being a MERGE, not a replace -- naturally supersedes whatever this
-// client held locally for every key the fresh snapshot covers, and Task
-// 19 owns comparing before/after to report what a caller's offline edits
-// did not survive.
+// client held locally for every key the fresh snapshot covers.
+//
+// Fix round 1 (review, Important 2): "dropped, not queued" originally
+// destroyed the information Task 19 needs at the moment of the drop,
+// rather than merely deferring it -- nothing recorded WHICH keys had a
+// pending edit while offline, so a reconnect had no way to tell "your
+// offline edit was overwritten" apart from "the daemon changed this key
+// while you were away". m_droppedWhileOffline (a QSet<QString>,
+// droppedWhileOffline() below) is the minimum enabling state that
+// closes this: setValue()/remove() insert into it in their !ready()
+// branch. applySnapshot() is where it is read down: every key the fresh
+// snapshot ALSO covers is a genuine contradiction (the daemon has its
+// own authoritative value now, so whatever this client tried to set
+// while offline did not reach it) and is recorded into
+// keysContradictedByLastSnapshot() BEFORE the merge overwrites m_cache;
+// m_droppedWhileOffline itself is then cleared in full, regardless of
+// which members were contradicted -- a fresh full snapshot is new
+// ground truth over its own scope, and carrying stale per-key drop
+// bookkeeping across it would let a LATER, unrelated snapshot appear to
+// "contradict" an edit that was actually resolved (or superseded by a
+// newer local write) long before. This is intentionally NOT a value-level
+// diff (this class does not retain the pre-snapshot cached value
+// separately from what applySnapshot() merges over it) -- it is "this
+// key had a pending offline edit AND the snapshot has an opinion about
+// it", and Task 19 owns turning that into operator-facing language.
 //
 // ---- The Setup-dialog gate (Step 7) ----
 //
@@ -162,6 +184,39 @@
 // itself does not classify Station under SettingsScope.h's rules (it is
 // not a "setting" in that sense at all -- it is this protocol's own
 // bookkeeping) and would otherwise never reach this cache.
+//
+// Minor 10 (fix round 1 review): the asymmetry this creates is a DEAD
+// PATH today, not a bug -- handlesKey() claims the seed marker (so a
+// client-side setValue() on it would be cached and, if ready(), offered
+// outbound), but SettingsProxyServer::applyInboundWrite() rejects it on
+// arrival (it classifies OperatorLocal, and that method's gate is
+// classifySettingsKey() == Station with no special case of its own).
+// Nothing in this codebase ever calls setValue() on the seed marker from
+// a client, so this never actually fires; recorded here in case a future
+// caller does.
+//
+// ---- ready()==false is load-bearing beyond this class (record, not fix) ----
+//
+// Several model constructors -- SliceModel.cpp, NotchModel.cpp,
+// FilterPresetStore.cpp, TciServer.cpp -- do a contains()-then-seed
+// pattern against Station-classified key prefixes at construction time:
+// if AppSettings doesn't have a value yet, they write one. On a
+// remote-mode GUI those constructors run BEFORE any snapshot can
+// possibly have landed (the same RadioModel-construction-before-
+// handshake ordering FaultLog.h documents for reload()), so every one of
+// those seed-if-absent writes reaches setValue() while this class's
+// handlesKey() already routes the key here. What keeps them from
+// silently baking ship defaults into the STATION store is entirely
+// external to this class: ready() is false at that point, so the write
+// updates m_cache but is dropped, not sent -- the exact Step 8 path,
+// operating as an accidental safety net for a problem it was not
+// designed to solve. This is correct TODAY only because nothing sets
+// ready() before those constructors run. Task 20 needs to confirm that
+// ordering explicitly rather than inherit it as an assumption -- a
+// future change that flips ready() early (e.g. to unblock some other
+// gate) would silently start writing client-observed ship defaults into
+// the station store the first time any of those four classes
+// constructs.
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -237,6 +292,21 @@ public:
     // the seed marker is present). See the class comment.
     bool setupDialogAllowed() const;
 
+    // Fix round 1 (review, Important 2) -- see the class comment's
+    // "Offline behaviour" section for the full contract.
+
+    // Keys whose setValue()/remove() call was dropped (not queued)
+    // because !ready() at the time. Grows while offline; fully cleared
+    // by the NEXT applySnapshot() call, regardless of which members that
+    // snapshot actually covered.
+    QSet<QString> droppedWhileOffline() const { return m_droppedWhileOffline; }
+
+    // The subset of droppedWhileOffline() -- as it stood immediately
+    // before the MOST RECENT applySnapshot() call -- that snapshot also
+    // reported a value for. Recomputed (and everything else discarded)
+    // on every applySnapshot() call; empty before the first one.
+    QSet<QString> keysContradictedByLastSnapshot() const { return m_lastSnapshotContradictions; }
+
     // ---- Inbound from the daemon (Task 18 calls these per decoded wire
     // message) ----
 
@@ -286,6 +356,12 @@ private:
     /// set is diagnostic-only and must not change what any const call
     /// returns.
     mutable QSet<QString> m_provenUnset;
+
+    /// Fix round 1 (review, Important 2). See droppedWhileOffline()'s
+    /// and keysContradictedByLastSnapshot()'s doc comments above and the
+    /// class comment's "Offline behaviour" section.
+    QSet<QString> m_droppedWhileOffline;
+    QSet<QString> m_lastSnapshotContradictions;
 
     bool m_ready = false;
     bool m_snapshotEverApplied = false;
