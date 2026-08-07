@@ -93,6 +93,12 @@
 //                                    AppSettings delegation interface.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-08-06  J.J. Boyd / KG4VCF  Fix round 2 (review): documented the
+//                                    handledKeys()/handlesKey() subset
+//                                    contract Important 1's restored
+//                                    allKeys() invariant now depends on.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -143,6 +149,27 @@ public:
     /// see SettingsProxy.h) is deliberately NOT included here: it has no
     /// value to enumerate, exactly as an AppSettings key that was never
     /// written is absent from m_settings.keys() today.
+    ///
+    /// CONTRACT (fix round 2, review, smaller item): every key returned
+    /// here MUST also satisfy `handlesKey(key) == true` on this same
+    /// instance. AppSettings::allKeys() (fix round 1, Important 1) relies
+    /// on this: it builds its local half by excluding any m_settings key
+    /// the backend CLAIMS (handlesKey()), then appends this list
+    /// unmodified as the remote half. A backend that returned a key here
+    /// without also claiming it via handlesKey() would silently
+    /// reintroduce the exact allKeys()/contains() divergence Important 1
+    /// fixed -- the key would appear in allKeys() (from this list) while
+    /// contains()/value() (which gate on handlesKey() first) fall through
+    /// to the LOCAL store instead of asking this backend, an inconsistent
+    /// answer from two different sources. SettingsProxy satisfies this
+    /// (handledKeys() returns m_cache.keys(), and every key ever inserted
+    /// into m_cache arrived through a handlesKey()-gated path -- setValue()/
+    /// remove() from AppSettings, or applySnapshot()/applyRemoteValue()/
+    /// applyRejection(), all of which Task 18 is expected to only call
+    /// with Station-scoped keys in the first place). Not mechanically
+    /// enforced here (a pure virtual interface cannot assert a caller's
+    /// invariant); a future backend implementation must maintain it by
+    /// construction.
     virtual QStringList handledKeys() const = 0;
 };
 

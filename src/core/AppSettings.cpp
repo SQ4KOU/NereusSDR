@@ -753,15 +753,34 @@ void AppSettings::remove(const QString& key)
     // claimed that key's family -- allKeys()'s own fix (above) makes such
     // an entry correctly invisible to allKeys()/contains()/value(), but
     // invisible is not the same as gone, and "forget radio"
-    // (clearHardwareValues()/forgetRadio(), both funnel through here)
-    // needs it actually gone, not just hidden while a backend happens to
-    // be installed. remove() is the one of the five delegated operations
-    // where touching BOTH targets is safe: unlike setValue() (which must
-    // NEVER touch m_settings for a backend-claimed key, or a remote-mode
-    // GUI's own local file would end up storing another station's data --
-    // see AppSettings.h's snapshot() doc comment), removing a key that
-    // is not locally present is a harmless no-op, so there is no
+    // (AppSettings::clearHardwareValues() / AppSettings::forgetRadio(),
+    // BOTH of which fully funnel through this method) needs it actually
+    // gone, not just hidden while a backend happens to be installed.
+    // remove() is the one of the five delegated operations where
+    // touching BOTH targets is safe: unlike setValue() (which must NEVER
+    // touch m_settings for a backend-claimed key, or a remote-mode GUI's
+    // own local file would end up storing another station's data -- see
+    // AppSettings.h's snapshot() doc comment), removing a key that is
+    // not locally present is a harmless no-op, so there is no
     // symmetrical contamination risk here.
+    //
+    // Fix round 2 (review, smaller item): NOT covered by this method at
+    // all, despite the name collision -- SettingsHygiene::forgetRadio()
+    // (SettingsHygiene.cpp:136-154, a DIFFERENT class's method sharing
+    // this method's colloquial name) discovers what to remove via its
+    // OWN s.allKeys() scan, not via this class's remove(). Once
+    // allKeys() correctly excludes a backend-claimed local key (this
+    // file's own fix, above), that scan cannot find such a key either,
+    // so this method's local-cleanup half never runs for it -- the exact
+    // shape of gap clearHardwareValues() had before its own fix.
+    // Currently inert: both live call sites
+    // (DiagnosticsPhaseHPages.cpp:184, RadioStatusPage.cpp:657) pass an
+    // empty mac, so the scan's own prefix ("hardware//") never matches a
+    // real key regardless. A future caller passing a real mac to
+    // SettingsHygiene::forgetRadio() would resurrect this exact bug for
+    // that call site; fixing it is that class's responsibility, not
+    // this one's, since AppSettings has no way to know SettingsHygiene
+    // exists.
     if (m_remoteBackend && m_remoteBackend->handlesKey(key)) {
         m_remoteBackend->remove(key);
         // Best-effort local cleanup, not a locally-observed value

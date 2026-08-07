@@ -22,36 +22,143 @@
 //                                    caller's raw QVariant). AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-08-06  J.J. Boyd / KG4VCF  Fix round 2 (review): Important 3a
+//                                    (union range corrected to include
+//                                    stepAttMaxDb()'s Alex-widened 61 dB
+//                                    ceiling, not just the static
+//                                    unwidened .attenuator table), 3b
+//                                    (key matcher extended to the
+//                                    rx1Band/<band> and txBand/<band>
+//                                    siblings that actually win over
+//                                    rx1Value on the load path). AI-
+//                                    assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/settings/SettingsProxyServer.h"
 
 #include "core/AppSettings.h"
+#include "core/BoardCapabilities.h"
 #include "core/settings/SettingsScope.h"
 
 #include <QScopeGuard>
+
+#include <algorithm>
 
 namespace NereusSDR {
 
 namespace {
 
-// Fix round 1 (review, Important 3b). See SettingsProxyServer.h's class
-// comment ("Inbound-write validation") for the full reasoning: this is a
-// conservative, HARDCODED union of every board's attenuator range
-// currently defined in BoardCapabilities.cpp (grep '.attenuator ='):
-// {0,31} for most boards, {-28,31} for HL2, {0,0} where no attenuator is
-// present -- so [-28, 31] covers every board this tree knows about
-// today. Deliberately NOT a live per-board lookup (this class has no
-// MAC-to-board-type resolution); it exists only to close the one gap the
-// review named, where NO gate at all sits between the socket and
-// StepAttenuatorController::m_attDb.
-constexpr int kStepAttUnionMinDb = -28;
-constexpr int kStepAttUnionMaxDb = 31;
+// Fix round 2 (review, Important 3a). Fix round 1's union was derived by
+// grepping the literal text ".attenuator =" in BoardCapabilities.cpp,
+// which finds every board's STATIC {minDb, maxDb, ...} row but completely
+// misses BoardCapsTable::stepAttMaxDb(hw, alexPresent)
+// (BoardCapabilities.cpp:1394-1428) -- the function whose entire purpose
+// is to WIDEN that static maxDb: Atlas, Hermes, HermesII, Angelia and
+// Orion reach 61 dB when an Alex filter board is present (Thetis parity,
+// GeneralOptionsPage.cpp:538-541 against setup.cs:15773-15786). The
+// fix-round-1 union of [-28, 31] therefore REJECTED a legitimate 32-61 dB
+// setting on five real board types -- the wrong direction to err in: a
+// bounds check exists to stop hostile/garbage values, not real operator
+// settings RxApplet.cpp:1573-1578 itself puts on those same boards' own
+// spinboxes.
+//
+// This computes the union PROPERLY: for every named board, ask
+// stepAttMaxDb(hw, /*alexPresent=*/true) -- the widest case this class
+// can offer, since (as fix round 1 already established) it has no
+// MAC-to-board-type resolution to ask for less -- for the maximum, and
+// read BoardCapabilities::attenuator.minDb directly for the minimum
+// (stepAttMaxDb() only ever answers the maximum; the minimum is never
+// Alex-widened, only HL2's signed range differs from the 0 dB floor
+// every other board uses). This is the SAME pair of calls
+// RxApplet.cpp:1573-1578 already makes for the live spinbox range, so
+// this mirrors an established call shape rather than inventing a new
+// one. Calling the real function (rather than re-reading its output by
+// hand into a second, static copy, which is exactly the mistake fix
+// round 1 made) means this union tracks BoardCapabilities.cpp
+// automatically if it ever changes again.
+//
+// kAllBoards is hand-maintained because BoardCapabilities.h/.cpp exposes
+// no "every board" enumeration to iterate instead -- HPSDRHW::Unknown is
+// excluded (not a real board; BoardCapsTable::forBoard() falls back to
+// it for an unrecognised value, and its own {0,0,...,present=false} row
+// contributes nothing to either bound regardless). A board added to
+// HPSDRHW without a matching entry here silently drops out of the
+// union -- the same class of hand-maintenance risk SettingsScope.cpp's
+// own hand-seeded prefixes already carry, not a new pattern.
+struct StepAttUnionRange {
+    int minDb;
+    int maxDb;
+};
 
-bool isStepAttenuatorRxValueKey(const QString& key)
+const StepAttUnionRange& stepAttenuatorUnionRange()
 {
-    return key.startsWith(QStringLiteral("hardware/")) &&
-           key.endsWith(QStringLiteral("/options/stepAtt/rx1Value"));
+    static constexpr HPSDRHW kAllBoards[] = {
+        HPSDRHW::Atlas,     HPSDRHW::Hermes,   HPSDRHW::HermesII,
+        HPSDRHW::Angelia,   HPSDRHW::Orion,    HPSDRHW::OrionMKII,
+        HPSDRHW::HermesC10, HPSDRHW::HermesLite, HPSDRHW::HermesLiteRxOnly,
+        HPSDRHW::Saturn,    HPSDRHW::SaturnMKII, HPSDRHW::Andromeda,
+    };
+
+    static const StepAttUnionRange range = [] {
+        int minDb = 0;
+        int maxDb = 0;
+        bool first = true;
+        for (const HPSDRHW hw : kAllBoards) {
+            const BoardCapabilities& caps = BoardCapsTable::forBoard(hw);
+            if (!caps.attenuator.present) {
+                continue;
+            }
+            const int hwMaxDb = BoardCapsTable::stepAttMaxDb(hw, /*alexPresent=*/true);
+            const int hwMinDb = caps.attenuator.minDb;
+            if (first) {
+                minDb = hwMinDb;
+                maxDb = hwMaxDb;
+                first = false;
+            } else {
+                minDb = std::min(minDb, hwMinDb);
+                maxDb = std::max(maxDb, hwMaxDb);
+            }
+        }
+        return StepAttUnionRange{minDb, maxDb};
+    }();
+    return range;
+}
+
+// Which step-attenuator key family (if any) `key` belongs to. Fix round 2
+// (review, Important 3b): fix round 1's check matched ONLY
+// options/stepAtt/rx1Value, the line StepAttenuatorController::
+// loadSettings() (StepAttenuatorController.cpp:1052-1148) reads FIRST
+// (:1067) -- but :1093-1106 then reads options/stepAtt/rx1Band/<band>
+// UNCLAMPED into m_bandState[b].attDb, and :1109-1114 does
+// `m_attDb = it->second.attDb` whenever the CURRENT band has a stored
+// entry, silently overwriting the one value the fix-round-1 check
+// actually gated. options/stepAtt/txBand/<band> (:1126-1135, feeding
+// m_txAttByBand[]) is the identical shape on the TX side, bypassing
+// setTxAttenuationForBand()'s own clamp (StepAttenuatorController.cpp:
+// 313-314). Both are covered here.
+enum class StepAttKeyFamily {
+    None,
+    RxValue, // options/stepAtt/rx1Value -- exact, no band suffix
+    RxBand,  // options/stepAtt/rx1Band/<band>
+    TxBand,  // options/stepAtt/txBand/<band>
+};
+
+StepAttKeyFamily stepAttenuatorKeyFamily(const QString& key)
+{
+    if (!key.startsWith(QStringLiteral("hardware/"))) {
+        return StepAttKeyFamily::None;
+    }
+    if (key.endsWith(QStringLiteral("/options/stepAtt/rx1Value"))) {
+        return StepAttKeyFamily::RxValue;
+    }
+    if (key.contains(QStringLiteral("/options/stepAtt/rx1Band/"))) {
+        return StepAttKeyFamily::RxBand;
+    }
+    if (key.contains(QStringLiteral("/options/stepAtt/txBand/"))) {
+        return StepAttKeyFamily::TxBand;
+    }
+    return StepAttKeyFamily::None;
 }
 
 } // namespace
@@ -133,19 +240,29 @@ SettingsApplyResult SettingsProxyServer::applyInboundWrite(const QString& key, c
         return result;
     }
 
-    // Fix round 1 (review, Important 3b). See the class comment's
-    // "Inbound-write validation" section and isStepAttenuatorRxValueKey()'s
-    // own comment above for why this ONE key gets a targeted check
-    // rather than a general framework.
-    if (isStepAttenuatorRxValueKey(key)) {
+    // Fix round 1 (review, Important 3b), corrected in fix round 2
+    // (review, Important 3a+3b). See the class comment's "Inbound-write
+    // validation" section and stepAttenuatorUnionRange()'s /
+    // stepAttenuatorKeyFamily()'s own comments above for the full
+    // reasoning: three key shapes gated, a union range that must never
+    // reject a value legitimate on ANY board (erring permissive is
+    // correct here -- a live per-board lookup is not available to this
+    // class), and the TX family's floor is 0 dB regardless of board
+    // (matching setTxAttenuationForBand()'s own hardcoded floor,
+    // StepAttenuatorController.cpp:313-314) rather than the RX union's
+    // minimum, which can be negative (HL2).
+    const StepAttKeyFamily stepAttFamily = stepAttenuatorKeyFamily(key);
+    if (stepAttFamily != StepAttKeyFamily::None) {
+        const StepAttUnionRange& range = stepAttenuatorUnionRange();
+        const int floorDb = (stepAttFamily == StepAttKeyFamily::TxBand) ? 0 : range.minDb;
         bool ok = false;
         const int dB = value.toInt(&ok);
-        if (!ok || dB < kStepAttUnionMinDb || dB > kStepAttUnionMaxDb) {
+        if (!ok || dB < floorDb || dB > range.maxDb) {
             SettingsApplyResult result;
             result.accepted = false;
             result.reason = QStringLiteral("step attenuator value out of range [%1, %2]")
-                                .arg(kStepAttUnionMinDb)
-                                .arg(kStepAttUnionMaxDb);
+                                .arg(floorDb)
+                                .arg(range.maxDb);
             result.restoredValue = m_appSettings.value(key);
             return result;
         }

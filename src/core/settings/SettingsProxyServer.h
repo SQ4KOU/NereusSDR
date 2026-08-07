@@ -110,26 +110,53 @@
 // out-of-range Station value written over the wire today reaches
 // AppSettings with nothing between the socket and the applied state.
 //
-// ONE case gets a targeted, hardcoded bounds check anyway (.cpp,
-// isStepAttenuatorRxValueKey() / kStepAttUnionMinDb / kStepAttUnionMaxDb):
-// options/stepAtt/rx1Value, because StepAttenuatorController::setAttenuation()
-// (StepAttenuatorController.cpp:208-219) demonstrably clamps this exact
-// field on every LIVE write path, while
-// StepAttenuatorController::loadSettings() (:1052-1148), the path that
-// reads it back off disk, applies no clamp at all -- so a value written
-// straight to the settings store, which is exactly what an inbound
-// remote write does, reaches RF-relevant state (m_attDb) completely
-// unclamped until incidental correction. The clamp bound used here is a
-// conservative UNION across every board StepAttenuatorController.cpp's
-// BoardCapabilities table currently advertises ([0,31] for most boards,
-// [-28,31] for HL2, [0,0] where no attenuator is present), not a live
-// per-board lookup -- this class has no MAC-to-board-type resolution and
-// building one would be exactly the general framework this section
-// declines to build. Every other un-gated numeric Station value
-// (per-band ATT/preamp, sample rate catalogue entries not already
-// checked by resolveSampleRate, etc.) is explicitly OUT of this fix's
-// scope; the general gap is tracked as a hostile-value row in Task 20's
-// acceptance run, not solved piecemeal here.
+// THREE key shapes get a targeted, unioned bounds check anyway (.cpp,
+// stepAttenuatorKeyFamily() / stepAttenuatorUnionRange()):
+// options/stepAtt/rx1Value, options/stepAtt/rx1Band/<band> and
+// options/stepAtt/txBand/<band>. StepAttenuatorController::setAttenuation()
+// (StepAttenuatorController.cpp:208-219) and setTxAttenuationForBand()
+// (:313-314) demonstrably clamp these fields on every LIVE write path,
+// while StepAttenuatorController::loadSettings() (:1052-1148), the path
+// that reads them back off disk, applies no clamp to any of the three --
+// so a value written straight to the settings store, which is exactly
+// what an inbound remote write does, reaches RF-relevant state
+// (m_attDb / m_bandState[].attDb / m_txAttByBand[]) completely unclamped
+// until incidental correction. rx1Band/<band> and txBand/<band> are not
+// a cosmetic addition: loadSettings() reads rx1Value FIRST, then
+// OVERWRITES m_attDb with the current band's rx1Band/<band> entry if one
+// exists (:1093-1114) -- fix round 1's rx1Value-only check gated a value
+// a same-load-path sibling key silently superseded, leaving the real
+// bypass open under the exact key the finding named.
+//
+// The bound is a UNION, not a per-board range, because this class has no
+// MAC-to-board-type resolution to narrow it with -- and a union in this
+// direction must never reject a value legitimate on ANY board (erring
+// permissive is correct: a check whose job is to stop hostile/garbage
+// values must not also reject a real operator setting). Fix round 1's
+// union was wrong in exactly that unsafe direction: it was derived by
+// grepping the literal ".attenuator =" table in BoardCapabilities.cpp,
+// which captures every board's STATIC range but completely misses
+// BoardCapsTable::stepAttMaxDb(hw, alexPresent)
+// (BoardCapabilities.cpp:1394-1428) -- the function that WIDENS it: Atlas,
+// Hermes, HermesII, Angelia and Orion reach 61 dB with an Alex filter
+// board present (Thetis parity, GeneralOptionsPage.cpp:538-541 against
+// setup.cs:15773-15786; wired live at RxApplet.cpp:1573-1578, the exact
+// call shape stepAttenuatorUnionRange() mirrors). The fix-round-1 range
+// of [-28, 31] rejected every legitimate 32-61 dB setting on those five
+// board types. The corrected union ([-28, 61] as of this writing, but
+// see the .cpp for why it is COMPUTED, not hardcoded, so it cannot drift
+// out of sync with BoardCapabilities.cpp the way the grep-derived one
+// did) still rejects genuinely out-of-range values (the existing test
+// suite's own scoped-to-one-key proof uses a 9-digit sample rate on an
+// unrelated key, which this check was never meant to catch in the first
+// place; a value like 999 or -999 on a step-attenuator key IS still
+// rejected).
+//
+// Every other un-gated numeric Station value (per-band preamp, sample
+// rate catalogue entries not already checked by resolveSampleRate, etc.)
+// is explicitly OUT of this fix's scope; the general gap is tracked as a
+// hostile-value row in Task 20's acceptance run, not solved piecemeal
+// here.
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -146,6 +173,19 @@
 //                                    broadcast paths now emit
 //                                    m_appSettings.value(key) so the
 //                                    QVariant type is consistent). AI-
+//                                    assisted transformation via
+//                                    Anthropic Claude Code.
+//   2026-08-06  J.J. Boyd / KG4VCF  Fix round 2 (review): Important 3
+//                                    corrected in both directions --
+//                                    the union range now includes
+//                                    stepAttMaxDb()'s Alex-widened
+//                                    ceiling (was silently rejecting
+//                                    legitimate 32-61 dB settings on
+//                                    five board types), and the gate now
+//                                    also covers rx1Band/<band> and
+//                                    txBand/<band>, the sibling keys
+//                                    that were bypassing the original
+//                                    rx1Value-only check entirely. AI-
 //                                    assisted transformation via
 //                                    Anthropic Claude Code.
 // =================================================================
@@ -227,8 +267,9 @@ public:
     /// class comment's "Inbound-write validation" section for why
     /// SettingsHygiene is NOT that fallback despite the name suggesting
     /// it (a fix-round review found it wired into no write path at all),
-    /// and for the one specific, targeted exception this method DOES
-    /// enforce (the step-attenuator rx1Value bounds check, .cpp).
+    /// and for the three specific, targeted exceptions this method DOES
+    /// enforce (the step-attenuator rx1Value / rx1Band / txBand bounds
+    /// check, .cpp).
     SettingsApplyResult applyInboundWrite(const QString& key, const QVariant& value,
                                           const QString& originTag);
 

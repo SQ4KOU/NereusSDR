@@ -163,6 +163,25 @@
 // key had a pending offline edit AND the snapshot has an opinion about
 // it", and Task 19 owns turning that into operator-facing language.
 //
+// Fix round 2 (review, smaller item) -- what Task 19 is told, precisely:
+// keysContradictedByLastSnapshot() names only the CONTRADICTED subset,
+// not every key that was dropped while offline. An offline edit whose
+// key the fresh snapshot does NOT cover at all leaves no record in
+// EITHER set once applySnapshot() returns -- m_droppedWhileOffline was
+// cleared in full (the paragraph above explains why), and that key was
+// never inserted into keysContradictedByLastSnapshot() either, since the
+// contradiction check only fires for keys present in `data`. The edit's
+// VALUE is not lost (it is still sitting in m_cache, exactly where
+// setValue() put it, and value() keeps returning it), but nothing
+// records that it is a value the daemon never actually received. This
+// is not a regression from any behaviour this class ever had -- Step 8
+// was always "the daemon's store can move underneath a queued write" --
+// and reviewed as an acceptable outcome, not a bug: it is the honest
+// shape of "we can only tell you what the snapshot had an opinion
+// about", not a promise to reconcile everything. Recorded here so Task
+// 19 does not assume droppedWhileOffline()'s absence of a key, post-
+// snapshot, means that key's edit is known-applied.
+//
 // ---- The Setup-dialog gate (Step 7) ----
 //
 // setupDialogAllowed() is the single predicate a caller (Task 20) checks
@@ -224,6 +243,26 @@
 //                                    settings proxy. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-08-06  J.J. Boyd / KG4VCF  Fix round 1 (review): Important 2
+//                                    (droppedWhileOffline() /
+//                                    keysContradictedByLastSnapshot()),
+//                                    Minor 8 (proven-unset gated on
+//                                    m_snapshotEverApplied in remove()
+//                                    too), Minor 10 (seed-marker
+//                                    handlesKey()/applyInboundWrite()
+//                                    dead-path note), the ready()==false
+//                                    record-not-fix section. This entry
+//                                    was missed on the .h file in that
+//                                    round (only .cpp's history was
+//                                    updated); added retroactively here.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
+//   2026-08-06  J.J. Boyd / KG4VCF  Fix round 2 (review): documented
+//                                    that keysContradictedByLastSnapshot()
+//                                    names only the contradicted subset,
+//                                    not every key dropped while
+//                                    offline. AI-assisted transformation
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QMap>

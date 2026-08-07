@@ -19,6 +19,12 @@
 //                                    proven-unset before any snapshot has
 //                                    landed). AI-assisted transformation
 //                                    via Anthropic Claude Code.
+//   2026-08-06  J.J. Boyd / KG4VCF  Fix round 2 (review): no code change
+//                                    in this file; see the .h for the
+//                                    documentation-only fix (Task 19 is
+//                                    told only the contradicted subset).
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/settings/SettingsProxy.h"

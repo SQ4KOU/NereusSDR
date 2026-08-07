@@ -1101,7 +1101,7 @@ private slots:
         QCOMPARE(fromInboundPath.toString(), fromLocalPath.toString());
     }
 
-    // ── Fix round 1 (review, Important 3b): step-attenuator bounds check ──
+    // ── Fix round 1+2 (review, Important 3): step-attenuator bounds check ──
 
     void serverRejectsOutOfRangeStepAttenuatorValue()
     {
@@ -1126,7 +1126,28 @@ private slots:
         QCOMPARE(spy.count(), 0); // nothing broadcast for a rejected write
     }
 
-    void serverAcceptsInRangeStepAttenuatorValueIncludingBoundaries()
+    void serverRejectsJustPastTheCorrectedUnionBoundary()
+    {
+        // Fix round 2 (review, Important 3a). Distinguishes "still rejects
+        // real out-of-range values" (the test above, which used values far
+        // outside EITHER the old or new range and would pass either way)
+        // from "the boundary itself is now -28..61, not -28..31": 62 and
+        // -29 are just past the CORRECTED union and must still be
+        // rejected, proving the fix did not simply remove the gate.
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings daemon(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        SettingsProxyServer server(daemon);
+        const QString key = QStringLiteral("hardware/aa:bb/options/stepAtt/rx1Value");
+
+        const SettingsApplyResult tooHigh = server.applyInboundWrite(key, 62, QStringLiteral("client-1"));
+        QVERIFY2(!tooHigh.accepted, "62 is one past the corrected union maximum (61) and must still reject");
+
+        const SettingsApplyResult tooLow = server.applyInboundWrite(key, -29, QStringLiteral("client-1"));
+        QVERIFY2(!tooLow.accepted, "-29 is one past the union minimum (-28) and must still reject");
+    }
+
+    void serverAcceptsInRangeStepAttenuatorValueIncludingCorrectedBoundaries()
     {
         QTemporaryDir tmp;
         QVERIFY(tmp.isValid());
@@ -1141,17 +1162,91 @@ private slots:
         QVERIFY(low.accepted);
         QCOMPARE(daemon.value(key).toInt(), -28);
 
-        const SettingsApplyResult high = server.applyInboundWrite(key, 31, QStringLiteral("client-1"));
+        // Fix round 2 (review, Important 3a): 61, not 31, is the real
+        // ceiling -- BoardCapsTable::stepAttMaxDb() widens Atlas/Hermes/
+        // HermesII/Angelia/Orion to 61 dB when an Alex filter board is
+        // present (BoardCapabilities.cpp:1394-1428).
+        const SettingsApplyResult high = server.applyInboundWrite(key, 61, QStringLiteral("client-1"));
         QVERIFY(high.accepted);
-        QCOMPARE(daemon.value(key).toInt(), 31);
+        QCOMPARE(daemon.value(key).toInt(), 61);
     }
 
-    void serverStepAttenuatorBoundsCheckIsScopedToThatOneKey()
+    void serverAcceptsFormerlyRejectedThirtyTwoToSixtyOneRange()
+    {
+        // Fix round 2 (review, Important 3a) -- required by the review
+        // verbatim: a 40 dB rx1Value write, which fix round 1's [-28, 31]
+        // union incorrectly rejected on Atlas/Hermes/HermesII/Angelia/
+        // Orion with an Alex filter board present, must now be accepted.
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings daemon(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        SettingsProxyServer server(daemon);
+        const QString key = QStringLiteral("hardware/aa:bb/options/stepAtt/rx1Value");
+
+        const SettingsApplyResult result = server.applyInboundWrite(key, 40, QStringLiteral("client-1"));
+        QVERIFY2(result.accepted,
+                 "40 dB is a legitimate Alex-widened value on five real board types and must "
+                 "not be rejected");
+        QCOMPARE(daemon.value(key).toInt(), 40);
+    }
+
+    void serverGatesRxBandKeyNotOnlyRxValue()
+    {
+        // Fix round 2 (review, Important 3b) -- required by the review
+        // verbatim: a band-key write must be gated. Before this fix, only
+        // options/stepAtt/rx1Value was checked, even though
+        // StepAttenuatorController::loadSettings() reads rx1Value FIRST
+        // (StepAttenuatorController.cpp:1067) and then OVERWRITES m_attDb
+        // with options/stepAtt/rx1Band/<band> whenever the current band
+        // has a stored entry (:1093-1114) -- the actual bypass the
+        // original finding was about.
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings daemon(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        SettingsProxyServer server(daemon);
+        const QString bandKey = QStringLiteral("hardware/aa:bb/options/stepAtt/rx1Band/20m");
+
+        const SettingsApplyResult tooHigh = server.applyInboundWrite(bandKey, 999, QStringLiteral("client-1"));
+        QVERIFY2(!tooHigh.accepted, "rx1Band/<band> must be gated, not just rx1Value");
+        QVERIFY(!daemon.contains(bandKey));
+
+        const SettingsApplyResult inRange = server.applyInboundWrite(bandKey, 40, QStringLiteral("client-1"));
+        QVERIFY(inRange.accepted);
+        QCOMPARE(daemon.value(bandKey).toInt(), 40);
+    }
+
+    void serverGatesTxBandKeyWithZeroFloorNotTheRxMinimum()
+    {
+        // Fix round 2 (review, Important 3b). txBand/<band> feeds
+        // m_txAttByBand[] (StepAttenuatorController.cpp:1126-1135),
+        // bypassing setTxAttenuationForBand()'s own clamp (:313-314),
+        // which floors at 0 dB regardless of board -- NOT the RX union's
+        // minimum (-28), which is legitimate for RX on HL2 but never for
+        // TX on any board.
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings daemon(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        SettingsProxyServer server(daemon);
+        const QString txBandKey = QStringLiteral("hardware/aa:bb/options/stepAtt/txBand/20m");
+
+        // -10 is a legitimate RX value on HL2 but must still be rejected
+        // for TX, which floors at 0 on every board.
+        const SettingsApplyResult negative = server.applyInboundWrite(txBandKey, -10, QStringLiteral("client-1"));
+        QVERIFY2(!negative.accepted, "TX floors at 0 dB regardless of board, unlike RX");
+
+        const SettingsApplyResult zero = server.applyInboundWrite(txBandKey, 0, QStringLiteral("client-1"));
+        QVERIFY2(zero.accepted, "0 is TX's own floor and must be accepted");
+
+        const SettingsApplyResult high = server.applyInboundWrite(txBandKey, 61, QStringLiteral("client-1"));
+        QVERIFY(high.accepted);
+    }
+
+    void serverStepAttenuatorBoundsCheckIsScopedToThoseThreeKeyFamilies()
     {
         // A different, arbitrary Station-scoped numeric key must NOT be
         // caught by the step-attenuator gate -- the fix is a targeted,
-        // single-key check, not a general range-validation framework
-        // (explicitly out of scope -- see the class comment).
+        // three-key-family check, not a general range-validation
+        // framework (explicitly out of scope -- see the class comment).
         QTemporaryDir tmp;
         QVERIFY(tmp.isValid());
         AppSettings daemon(tmp.filePath(QStringLiteral("NereusSDR.settings")));
@@ -1160,6 +1255,12 @@ private slots:
         const SettingsApplyResult result = server.applyInboundWrite(
             QStringLiteral("hardware/aa:bb/radioInfo/sampleRate"), 999999999, QStringLiteral("client-1"));
         QVERIFY(result.accepted);
+
+        // Also confirm a key that merely CONTAINS "stepAtt" but is not one
+        // of the three real families is not accidentally swept in.
+        const SettingsApplyResult unrelated = server.applyInboundWrite(
+            QStringLiteral("hardware/aa:bb/options/stepAtt/rx1Enabled"), 999999999, QStringLiteral("client-1"));
+        QVERIFY(unrelated.accepted);
     }
 
     void serverRejectsInboundWriteForNonStationKey()
