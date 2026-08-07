@@ -1101,7 +1101,7 @@ private slots:
         QCOMPARE(fromInboundPath.toString(), fromLocalPath.toString());
     }
 
-    // ── Fix round 1+2 (review, Important 3): step-attenuator bounds check ──
+    // ── Fix rounds 1-3 (review, Important 3): step-attenuator bounds check ─
 
     void serverRejectsOutOfRangeStepAttenuatorValue()
     {
@@ -1215,27 +1215,45 @@ private slots:
         QCOMPARE(daemon.value(bandKey).toInt(), 40);
     }
 
-    void serverGatesTxBandKeyWithZeroFloorNotTheRxMinimum()
+    void serverGatesTxBandKeyWithTheSameUnionFloorAsRx()
     {
-        // Fix round 2 (review, Important 3b). txBand/<band> feeds
-        // m_txAttByBand[] (StepAttenuatorController.cpp:1126-1135),
-        // bypassing setTxAttenuationForBand()'s own clamp (:313-314),
-        // which floors at 0 dB regardless of board -- NOT the RX union's
-        // minimum (-28), which is legitimate for RX on HL2 but never for
-        // TX on any board.
+        // Fix round 3 (review, Important 3 TX half) -- this test used to
+        // be named serverGatesTxBandKeyWithZeroFloorNotTheRxMinimum and
+        // asserted -10 must be REJECTED, encoding a real bug as intended
+        // behaviour: fix round 2 hardcoded a 0 dB TX floor, derived from
+        // setTxAttenuationForBand() alone (StepAttenuatorController.cpp:
+        // 305-316, floors at 0). That function is not the only writer of
+        // m_txAttByBand[] -- setAttOnTxValue() (:349-374) writes the SAME
+        // field, clamped to [m_minAttDb, 31], and its own comment states
+        // the bypass of setTxAttenuationForBand()'s 0 floor is
+        // deliberate: "the public setter hard-clamps negatives to 0,
+        // which would strip the HL2 signed range." PureSignal's AutoAtt
+        // RestoreOperation state (PureSignal.cpp:1600-1616) is the live
+        // caller: it computes `max(oldAtten + deltaDb, minAttenuation())`
+        // -- which is negative on HL2, whose minAttenuation() is -28 --
+        // and calls setAttOnTxValue() with the result. A 0 dB TX floor
+        // therefore rejected a value PureSignal legitimately produces on
+        // HL2 today, not a hypothetical one. All three key families now
+        // share one union floor (SettingsProxyServer.cpp), so -10 must be
+        // ACCEPTED for txBand/<band> exactly as it already was for
+        // rx1Value/rx1Band/<band>.
         QTemporaryDir tmp;
         QVERIFY(tmp.isValid());
         AppSettings daemon(tmp.filePath(QStringLiteral("NereusSDR.settings")));
         SettingsProxyServer server(daemon);
         const QString txBandKey = QStringLiteral("hardware/aa:bb/options/stepAtt/txBand/20m");
 
-        // -10 is a legitimate RX value on HL2 but must still be rejected
-        // for TX, which floors at 0 on every board.
         const SettingsApplyResult negative = server.applyInboundWrite(txBandKey, -10, QStringLiteral("client-1"));
-        QVERIFY2(!negative.accepted, "TX floors at 0 dB regardless of board, unlike RX");
+        QVERIFY2(negative.accepted,
+                 "-10 is a legitimate HL2 TX value (setAttOnTxValue's PureSignal AutoAtt path) "
+                 "and must be accepted, not floored at 0");
+        QCOMPARE(daemon.value(txBandKey).toInt(), -10);
 
-        const SettingsApplyResult zero = server.applyInboundWrite(txBandKey, 0, QStringLiteral("client-1"));
-        QVERIFY2(zero.accepted, "0 is TX's own floor and must be accepted");
+        const SettingsApplyResult atUnionFloor = server.applyInboundWrite(txBandKey, -28, QStringLiteral("client-1"));
+        QVERIFY2(atUnionFloor.accepted, "the union minimum itself must be accepted for TX too");
+
+        const SettingsApplyResult belowUnionFloor = server.applyInboundWrite(txBandKey, -29, QStringLiteral("client-1"));
+        QVERIFY2(!belowUnionFloor.accepted, "one past the union minimum must still reject for TX");
 
         const SettingsApplyResult high = server.applyInboundWrite(txBandKey, 61, QStringLiteral("client-1"));
         QVERIFY(high.accepted);

@@ -113,9 +113,15 @@
 // THREE key shapes get a targeted, unioned bounds check anyway (.cpp,
 // stepAttenuatorKeyFamily() / stepAttenuatorUnionRange()):
 // options/stepAtt/rx1Value, options/stepAtt/rx1Band/<band> and
-// options/stepAtt/txBand/<band>. StepAttenuatorController::setAttenuation()
-// (StepAttenuatorController.cpp:208-219) and setTxAttenuationForBand()
-// (:313-314) demonstrably clamp these fields on every LIVE write path,
+// options/stepAtt/txBand/<band>. Every live writer of the three fields
+// saveSettings() persists under these keys was traced (task report,
+// "Exhaustive writer audit", fix round 3) -- not just the most obvious
+// one, which is the mistake that reopened this finding twice:
+// StepAttenuatorController::setAttenuation() (StepAttenuatorController.cpp:
+// 208-219, m_attDb), setTxAttenuationForBand() (:305-316, m_txAttByBand[])
+// AND setAttOnTxValue() (:349-374, m_txAttByBand[] -- a SECOND,
+// independent writer of the same field, called from PureSignal's AutoAtt
+// path, PureSignal.cpp:1600-1616) all clamp on every LIVE write path,
 // while StepAttenuatorController::loadSettings() (:1052-1148), the path
 // that reads them back off disk, applies no clamp to any of the three --
 // so a value written straight to the settings store, which is exactly
@@ -133,24 +139,33 @@
 // direction must never reject a value legitimate on ANY board (erring
 // permissive is correct: a check whose job is to stop hostile/garbage
 // values must not also reject a real operator setting). Fix round 1's
-// union was wrong in exactly that unsafe direction: it was derived by
-// grepping the literal ".attenuator =" table in BoardCapabilities.cpp,
-// which captures every board's STATIC range but completely misses
-// BoardCapsTable::stepAttMaxDb(hw, alexPresent)
+// union was wrong in exactly that unsafe direction on the CEILING: it was
+// derived by grepping the literal ".attenuator =" table in
+// BoardCapabilities.cpp, which captures every board's STATIC range but
+// completely misses BoardCapsTable::stepAttMaxDb(hw, alexPresent)
 // (BoardCapabilities.cpp:1394-1428) -- the function that WIDENS it: Atlas,
 // Hermes, HermesII, Angelia and Orion reach 61 dB with an Alex filter
 // board present (Thetis parity, GeneralOptionsPage.cpp:538-541 against
 // setup.cs:15773-15786; wired live at RxApplet.cpp:1573-1578, the exact
-// call shape stepAttenuatorUnionRange() mirrors). The fix-round-1 range
-// of [-28, 31] rejected every legitimate 32-61 dB setting on those five
-// board types. The corrected union ([-28, 61] as of this writing, but
-// see the .cpp for why it is COMPUTED, not hardcoded, so it cannot drift
-// out of sync with BoardCapabilities.cpp the way the grep-derived one
-// did) still rejects genuinely out-of-range values (the existing test
-// suite's own scoped-to-one-key proof uses a 9-digit sample rate on an
-// unrelated key, which this check was never meant to catch in the first
-// place; a value like 999 or -999 on a step-attenuator key IS still
-// rejected).
+// call shape stepAttenuatorUnionRange() mirrors). Fix round 2 corrected
+// the ceiling but introduced the SAME class of error on the TX FLOOR: it
+// hardcoded 0 for the TX family, derived from setTxAttenuationForBand()
+// alone, missing that setAttOnTxValue() -- the PureSignal AutoAtt write
+// path -- deliberately bypasses that 0 floor to let HL2's negative range
+// through. Fix round 3 removed the per-family floor split entirely: all
+// three families now use the SAME union minimum, which is what the full
+// writer trace shows is actually correct for TX too (every board's
+// m_minAttDb <= 0 and m_maxAttDb >= 31, so the two TX writers' ranges,
+// [0, m_maxAttDb] and [m_minAttDb, 31], are never disjoint and their
+// union is exactly [m_minAttDb, m_maxAttDb] -- identical to RX, for
+// every board, not a coincidence). The corrected union ([-28, 61] as of
+// this writing, but see the .cpp for why it is COMPUTED, not hardcoded,
+// so it cannot drift out of sync with BoardCapabilities.cpp the way the
+// grep-derived one did) still rejects genuinely out-of-range values (the
+// existing test suite's own scoped-to-one-key proof uses a 9-digit
+// sample rate on an unrelated key, which this check was never meant to
+// catch in the first place; a value like 999 or -999 on a step-attenuator
+// key IS still rejected).
 //
 // Every other un-gated numeric Station value (per-band preamp, sample
 // rate catalogue entries not already checked by resolveSampleRate, etc.)
@@ -186,6 +201,16 @@
 //                                    txBand/<band>, the sibling keys
 //                                    that were bypassing the original
 //                                    rx1Value-only check entirely. AI-
+//                                    assisted transformation via
+//                                    Anthropic Claude Code.
+//   2026-08-06  J.J. Boyd / KG4VCF  Fix round 3 (review): Important 3 TX
+//                                    half -- fix round 2's hardcoded 0 dB
+//                                    TX floor rejected legitimate
+//                                    negative HL2 TX values that
+//                                    setAttOnTxValue() (the PureSignal
+//                                    AutoAtt write path) deliberately
+//                                    lets through. All three key families
+//                                    now share one union floor. AI-
 //                                    assisted transformation via
 //                                    Anthropic Claude Code.
 // =================================================================

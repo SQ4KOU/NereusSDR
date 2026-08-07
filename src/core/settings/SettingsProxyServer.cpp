@@ -33,6 +33,17 @@
 //                                    rx1Value on the load path). AI-
 //                                    assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-08-06  J.J. Boyd / KG4VCF  Fix round 3 (review): Important 3 TX
+//                                    half (the hardcoded 0 dB TX floor
+//                                    rejected legitimate negative HL2
+//                                    values from setAttOnTxValue()'s
+//                                    PureSignal AutoAtt write path; all
+//                                    three key families now share one
+//                                    union floor) and a Minor
+//                                    (BoardCapsTable::all() replaces the
+//                                    hand-maintained kAllBoards list).
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/settings/SettingsProxyServer.h"
@@ -78,14 +89,21 @@ namespace {
 // round 1 made) means this union tracks BoardCapabilities.cpp
 // automatically if it ever changes again.
 //
-// kAllBoards is hand-maintained because BoardCapabilities.h/.cpp exposes
-// no "every board" enumeration to iterate instead -- HPSDRHW::Unknown is
-// excluded (not a real board; BoardCapsTable::forBoard() falls back to
-// it for an unrecognised value, and its own {0,0,...,present=false} row
-// contributes nothing to either bound regardless). A board added to
-// HPSDRHW without a matching entry here silently drops out of the
-// union -- the same class of hand-maintenance risk SettingsScope.cpp's
-// own hand-seeded prefixes already carry, not a new pattern.
+// Fix round 3 (review, Minor): fix round 2's claim that "BoardCapabilities
+// .h/.cpp exposes no 'every board' enumeration to iterate instead" was
+// false -- BoardCapsTable::all() (BoardCapabilities.h:586) returns a
+// std::span over the whole table (13 entries, including
+// HPSDRHW::Unknown), and six existing test files already use
+// `for (const auto& caps : BoardCapsTable::all())` as the house idiom
+// (e.g. tests/tst_board_capabilities.cpp:52). Iterating it here instead
+// of a hand-maintained board array removes the exact drift vector fix
+// round 2 introduced while claiming to remove drift: a board added to
+// HPSDRHW without a matching hand-added entry would have silently
+// dropped out of the union. all() needs no Unknown special-case: its row
+// has attenuator.present == false, so the existing !present guard below
+// already skips it -- the same guard that already skips Atlas for the
+// same reason (see "Things I noticed but did not fix", fix round 2's
+// report section).
 struct StepAttUnionRange {
     int minDb;
     int maxDb;
@@ -93,23 +111,15 @@ struct StepAttUnionRange {
 
 const StepAttUnionRange& stepAttenuatorUnionRange()
 {
-    static constexpr HPSDRHW kAllBoards[] = {
-        HPSDRHW::Atlas,     HPSDRHW::Hermes,   HPSDRHW::HermesII,
-        HPSDRHW::Angelia,   HPSDRHW::Orion,    HPSDRHW::OrionMKII,
-        HPSDRHW::HermesC10, HPSDRHW::HermesLite, HPSDRHW::HermesLiteRxOnly,
-        HPSDRHW::Saturn,    HPSDRHW::SaturnMKII, HPSDRHW::Andromeda,
-    };
-
     static const StepAttUnionRange range = [] {
         int minDb = 0;
         int maxDb = 0;
         bool first = true;
-        for (const HPSDRHW hw : kAllBoards) {
-            const BoardCapabilities& caps = BoardCapsTable::forBoard(hw);
+        for (const BoardCapabilities& caps : BoardCapsTable::all()) {
             if (!caps.attenuator.present) {
                 continue;
             }
-            const int hwMaxDb = BoardCapsTable::stepAttMaxDb(hw, /*alexPresent=*/true);
+            const int hwMaxDb = BoardCapsTable::stepAttMaxDb(caps.board, /*alexPresent=*/true);
             const int hwMinDb = caps.attenuator.minDb;
             if (first) {
                 minDb = hwMinDb;
@@ -137,6 +147,36 @@ const StepAttUnionRange& stepAttenuatorUnionRange()
 // m_txAttByBand[]) is the identical shape on the TX side, bypassing
 // setTxAttenuationForBand()'s own clamp (StepAttenuatorController.cpp:
 // 313-314). Both are covered here.
+//
+// Fix round 3 (review, Important 3 TX half): ALL THREE families share
+// ONE floor, range.minDb -- see applyInboundWrite() below. There is no
+// per-family split any more. This is not a simplification made for its
+// own sake; it is the exhaustively-traced conclusion. Every writer of
+// every field saveSettings() persists under these three keys was
+// enumerated (task report, "Exhaustive writer audit"):
+//   m_attDb / m_bandState[].attDb (rx1Value, rx1Band/<band>) trace, via
+//   setBand()/onMoxHardwareFlipped()/applyAttToHardware()'s callers, to
+//   ONE of setAttenuation() ([m_minAttDb, m_maxAttDb]) or whatever is
+//   already in m_txAttByBand[] (below) -- never a wider value than
+//   those two produce.
+//   m_txAttByBand[] (txBand/<band>) has TWO independent primary writers:
+//   setTxAttenuationForBand() ([0, m_maxAttDb], StepAttenuatorController
+//   .cpp:305-316) and setAttOnTxValue() ([m_minAttDb, 31], :349-374 --
+//   called from PureSignal's AutoAtt RestoreOperation state,
+//   PureSignal.cpp:1600-1616, computing `max(oldAtten + deltaDb,
+//   minAttenuation())` with NO upper bound of its own and relying
+//   entirely on setAttOnTxValue()'s internal clamp; its own comment
+//   states the bypass of setTxAttenuationForBand()'s hardcoded-0 floor
+//   is deliberate, "which would strip the HL2 signed range").
+// For every board, m_minAttDb <= 0 and m_maxAttDb >= 31 (confirmed
+// against every row in BoardCapabilities.cpp, not assumed), so
+// [0, m_maxAttDb] union [m_minAttDb, 31] is CONTIGUOUS and collapses to
+// exactly [m_minAttDb, m_maxAttDb] -- identical to the RX bound, for
+// every board, not a coincidence of the union operation. A fix-round-2
+// TX-specific 0 floor therefore rejected legitimate negative HL2 TX
+// values (PureSignal AutoAtt is the live path that produces them, not a
+// theoretical one) for no reason: the correct TX floor was always the
+// same as RX's.
 enum class StepAttKeyFamily {
     None,
     RxValue, // options/stepAtt/rx1Value -- exact, no band suffix
@@ -241,27 +281,28 @@ SettingsApplyResult SettingsProxyServer::applyInboundWrite(const QString& key, c
     }
 
     // Fix round 1 (review, Important 3b), corrected in fix round 2
-    // (review, Important 3a+3b). See the class comment's "Inbound-write
-    // validation" section and stepAttenuatorUnionRange()'s /
-    // stepAttenuatorKeyFamily()'s own comments above for the full
-    // reasoning: three key shapes gated, a union range that must never
-    // reject a value legitimate on ANY board (erring permissive is
-    // correct here -- a live per-board lookup is not available to this
-    // class), and the TX family's floor is 0 dB regardless of board
-    // (matching setTxAttenuationForBand()'s own hardcoded floor,
-    // StepAttenuatorController.cpp:313-314) rather than the RX union's
-    // minimum, which can be negative (HL2).
+    // (review, Important 3a+3b) and fix round 3 (review, Important 3 TX
+    // half). See the class comment's "Inbound-write validation" section
+    // and stepAttenuatorUnionRange()'s / stepAttenuatorKeyFamily()'s own
+    // comments above for the full reasoning: three key shapes gated, ONE
+    // union range applied UNIFORMLY to all three (fix round 3 removed
+    // the fix-round-2 TX-specific 0 dB floor -- setAttOnTxValue(), the
+    // PureSignal AutoAtt write path, deliberately bypasses
+    // setTxAttenuationForBand()'s hardcoded-0 floor specifically to let
+    // HL2's negative range through, so a 0 dB TX floor rejected values
+    // that path legitimately produces). Erring permissive is correct
+    // here: a live per-board lookup is not available to this class, so
+    // the union must never reject a value legitimate on ANY board.
     const StepAttKeyFamily stepAttFamily = stepAttenuatorKeyFamily(key);
     if (stepAttFamily != StepAttKeyFamily::None) {
         const StepAttUnionRange& range = stepAttenuatorUnionRange();
-        const int floorDb = (stepAttFamily == StepAttKeyFamily::TxBand) ? 0 : range.minDb;
         bool ok = false;
         const int dB = value.toInt(&ok);
-        if (!ok || dB < floorDb || dB > range.maxDb) {
+        if (!ok || dB < range.minDb || dB > range.maxDb) {
             SettingsApplyResult result;
             result.accepted = false;
             result.reason = QStringLiteral("step attenuator value out of range [%1, %2]")
-                                .arg(floorDb)
+                                .arg(range.minDb)
                                 .arg(range.maxDb);
             result.restoredValue = m_appSettings.value(key);
             return result;
