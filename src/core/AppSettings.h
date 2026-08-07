@@ -75,6 +75,8 @@
 
 namespace NereusSDR {
 
+class ISettingsBackend;
+
 // Saved-radio bundle (Phase 3I Task 15).
 // Combines RadioInfo with the client-side flags that only live in settings.
 struct SavedRadio {
@@ -212,6 +214,90 @@ public:
     // Pass an empty std::function (or nullptr) to stop observing.
     // ------------------------------------------------------------------
     void setChangeHook(std::function<void(const QString& key)> hook);
+
+    // ------------------------------------------------------------------
+    // Remote Daemon R2, Task 15 -- the delegation seam.
+    //
+    // Non-owning, nullptr default. When installed, value(), setValue(),
+    // contains() and remove() each start with the SAME one-branch guard:
+    // "if a backend is installed AND it claims this key
+    // (ISettingsBackend::handlesKey()), delegate the whole call and
+    // return -- otherwise fall through to the body these methods have
+    // always run." allKeys() is additive instead (unions its own
+    // m_settings.keys() with the backend's handledKeys()) since there is
+    // no single key for a guard clause to test. setRemoteBackend(nullptr)
+    // -- the default, and the state of every AppSettings instance nothing
+    // has opted into remote mode -- means every one of those guards is
+    // false on every call, so the local path below them is BYTE-IDENTICAL
+    // to what it was before this task: nothing between here and that
+    // fallback code changed, only a skipped conditional was added above
+    // it. tst_settings_proxy.cpp's nullBackendLeavesLocalPathByteIdentical
+    // pins this directly.
+    //
+    // ---- Reads never touch the network (a header invariant, asserted
+    // ---- by the caller of this seam, ISettingsBackend.h) ----
+    //
+    // AppSettings::value() runs inside widget and model constructors --
+    // SetupDialog alone default-constructs on the order of 187 controls
+    // that each read a setting in their own constructor body, on the GUI
+    // thread, before any event loop exists to service anything else. A
+    // delegated value()/contains() call that spins a nested event loop or
+    // blocks on a socket read deadlocks the GUI the first time Setup
+    // opens against a real link -- this is NOT a hypothetical: it is
+    // exactly the kind of defect that passes a unit test against a fast
+    // loopback fake and only shows up on a bench with real network
+    // latency. The synchronous, cache-only contract is stated in full,
+    // and its runtime proxy (tst_settings_proxy.cpp's
+    // valueNeverBlocksOrSpinsEventLoop) lives, on ISettingsBackend.h --
+    // this comment exists so a reader arriving from THIS seam, rather
+    // than from the interface itself, does not miss it.
+    //
+    // The only shipped implementation is SettingsProxy
+    // (src/core/settings/SettingsProxy.h), installed on a remote-mode
+    // GUI's AppSettings singleton. The daemon's own AppSettings never has
+    // a backend installed -- SettingsProxyServer (same directory) wraps
+    // it from the OUTSIDE, through this class's existing public API plus
+    // setChangeHook() above, rather than being installed as one.
+    // ------------------------------------------------------------------
+    void setRemoteBackend(ISettingsBackend* backend) { m_remoteBackend = backend; }
+    ISettingsBackend* remoteBackend() const { return m_remoteBackend; }
+
+    // ------------------------------------------------------------------
+    // Remote Daemon R2, Task 15 -- bulk, prefix-scoped extraction.
+    //
+    // Returns every key in THIS instance's own m_settings map whose text
+    // starts with at least one of `prefixes`, as FULLY QUALIFIED keys
+    // (deliberately unlike hardwareValues(), which strips its
+    // "hardware/<mac>/" prefix down to bare keys -- see that method's own
+    // doc comment, which points back here) mapped to their raw stored
+    // QString values (not QVariant: setValue() already collapses to
+    // QString before storing, and value() only wraps it in a QVariant on
+    // the way OUT -- there is no richer type to preserve on the way in).
+    // An empty `prefixes` list matches nothing (not "everything" --
+    // callers that want everything should pass an explicit prefix
+    // matching every key they care about, or use allKeys() directly).
+    //
+    // Pure read: does not consult m_remoteBackend and is not one of the
+    // five delegated accessors above. Intended for a DAEMON's own
+    // AppSettings instance -- one that never has a remote backend
+    // installed -- to pull out the subset a connecting client needs; see
+    // SettingsProxyServer::buildSnapshot() (src/core/settings/
+    // SettingsProxyServer.h), which is the production caller and which
+    // also explains why it does NOT simply pass every Station-classified
+    // prefix here (hardware/ is per-MAC and needs its own scoping; every
+    // other Station family is instead found by scanning allKeys() with
+    // classifySettingsKey() directly, to stay in sync with Task 14's
+    // rule table without re-deriving it as a second, driftable copy).
+    //
+    // There is no matching applySnapshot() on THIS class. See
+    // SettingsProxy::applySnapshot() for where the client-side merge
+    // happens instead, and its class comment for why it is deliberately
+    // NOT here: merging a station's ~2,900 keys into a remote-mode GUI's
+    // own m_settings would let that GUI's own save() write them into its
+    // local NereusSDR.settings file, contaminating one operator's local
+    // store with another station's data. snapshot() only ever reads.
+    // ------------------------------------------------------------------
+    QMap<QString, QString> snapshot(const QStringList& prefixes) const;
 
     // Per-station settings (nested under <StationName> element).
     QVariant stationValue(const QString& key, const QVariant& defaultValue = {}) const;
@@ -593,6 +679,11 @@ private:
     // above. Instance-scoped; empty (default-constructed) means "no
     // observer", checked before every fire.
     std::function<void(const QString& key)> m_changeHook;
+
+    // Remote Daemon R2, Task 15 -- see setRemoteBackend()'s doc comment
+    // above. Non-owning; nullptr means "not in remote mode", checked
+    // before every delegated call.
+    ISettingsBackend* m_remoteBackend = nullptr;
 
     // Issue #241 — corruption-recovery diagnostics (cleared at the top of
     // every load()).

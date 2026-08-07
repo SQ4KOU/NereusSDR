@@ -47,6 +47,22 @@ void FaultLog::clear()
     emit changed();
 }
 
+void FaultLog::reload()
+{
+    // See FaultLog.h's doc comment for the full ordering contract this
+    // exists to satisfy (Remote Daemon R2, Task 15). load() re-reads
+    // m_deviceKey through the SAME AppSettings::instance().value() call
+    // the constructor uses -- on a remote-mode GUI with a SettingsProxy
+    // installed via AppSettings::setRemoteBackend(), that now answers
+    // out of the connect-time snapshot instead of an empty local store.
+    // Unlike the constructor's own load() call, this emits changed():
+    // reload() is only useful to call on an object that may already have
+    // observers (a bound UI, in particular), where the constructor path
+    // never has any.
+    load();
+    emit changed();
+}
+
 // static
 QString FaultLog::likelyCauseFor(float fwd, float swr, float temp)
 {

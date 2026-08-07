@@ -62,6 +62,8 @@
 
 #include "AppSettings.h"
 
+#include "core/settings/ISettingsBackend.h"
+
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -710,6 +712,13 @@ void AppSettings::save()
 
 QVariant AppSettings::value(const QString& key, const QVariant& defaultValue) const
 {
+    // Remote Daemon R2, Task 15 -- one-branch delegation. See
+    // setRemoteBackend()'s doc comment (AppSettings.h) for the full
+    // contract; nullptr (or a backend that declines this key) falls
+    // straight through to the ORIGINAL body below, unchanged.
+    if (m_remoteBackend && m_remoteBackend->handlesKey(key)) {
+        return m_remoteBackend->value(key, defaultValue);
+    }
     auto it = m_settings.constFind(key);
     if (it != m_settings.constEnd()) {
         return QVariant(it.value());
@@ -719,6 +728,15 @@ QVariant AppSettings::value(const QString& key, const QVariant& defaultValue) co
 
 void AppSettings::setValue(const QString& key, const QVariant& val)
 {
+    // Remote Daemon R2, Task 15 -- one-branch delegation (see value()).
+    // The delegated path does not touch m_settings and does not fire
+    // m_changeHook: that hook is this LOCAL instance's own "something in
+    // my own map changed" signal (Task 13), and a delegated write never
+    // touches this instance's own map at all.
+    if (m_remoteBackend && m_remoteBackend->handlesKey(key)) {
+        m_remoteBackend->setValue(key, val);
+        return;
+    }
     m_settings.insert(key, val.toString());
     if (m_changeHook) {
         m_changeHook(key);
@@ -727,6 +745,11 @@ void AppSettings::setValue(const QString& key, const QVariant& val)
 
 void AppSettings::remove(const QString& key)
 {
+    // Remote Daemon R2, Task 15 -- one-branch delegation (see value()).
+    if (m_remoteBackend && m_remoteBackend->handlesKey(key)) {
+        m_remoteBackend->remove(key);
+        return;
+    }
     m_settings.remove(key);
     if (m_changeHook) {
         m_changeHook(key);
@@ -735,12 +758,33 @@ void AppSettings::remove(const QString& key)
 
 bool AppSettings::contains(const QString& key) const
 {
+    // Remote Daemon R2, Task 15 -- one-branch delegation (see value()).
+    if (m_remoteBackend && m_remoteBackend->handlesKey(key)) {
+        return m_remoteBackend->contains(key);
+    }
     return m_settings.contains(key);
 }
 
 QStringList AppSettings::allKeys() const
 {
-    return m_settings.keys();
+    // Remote Daemon R2, Task 15 -- additive, not a guard clause: there is
+    // no single key to ask handlesKey() about, so this unions the local
+    // keys with whatever the backend currently holds real values for
+    // (ISettingsBackend::handledKeys()) instead of choosing one source
+    // over the other. m_remoteBackend == nullptr (today's only path
+    // outside a test, and every path before this task) takes the loop
+    // zero times, leaving the return value byte-identical to
+    // `m_settings.keys()`.
+    QStringList out = m_settings.keys();
+    if (m_remoteBackend) {
+        const QStringList remoteKeys = m_remoteBackend->handledKeys();
+        for (const QString& k : remoteKeys) {
+            if (!out.contains(k)) {
+                out.append(k);
+            }
+        }
+    }
+    return out;
 }
 
 void AppSettings::clear()
@@ -755,6 +799,26 @@ void AppSettings::clear()
 void AppSettings::setChangeHook(std::function<void(const QString& key)> hook)
 {
     m_changeHook = std::move(hook);
+}
+
+QMap<QString, QString> AppSettings::snapshot(const QStringList& prefixes) const
+{
+    // Remote Daemon R2, Task 15 -- see the doc comment on this
+    // declaration (AppSettings.h) for the full contract: fully-qualified
+    // keys, raw QString values, a pure read over THIS instance's own
+    // m_settings with no m_remoteBackend involvement at all. O(keys x
+    // prefixes); a real snapshot call happens once per connect, against
+    // a handful of prefixes, so this is not a hot path.
+    QMap<QString, QString> out;
+    for (auto it = m_settings.constBegin(); it != m_settings.constEnd(); ++it) {
+        for (const QString& prefix : prefixes) {
+            if (it.key().startsWith(prefix)) {
+                out.insert(it.key(), it.value());
+                break;
+            }
+        }
+    }
+    return out;
 }
 
 QVariant AppSettings::stationValue(const QString& key, const QVariant& defaultValue) const

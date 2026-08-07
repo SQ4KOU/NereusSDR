@@ -1,0 +1,904 @@
+// Remote Daemon R2, Task 15 -- SettingsProxy / SettingsProxyServer.
+//
+// Task 13 gave AppSettings a single funnel (value/setValue/contains/
+// remove/allKeys) and a change hook that fires from inside it. Task 14
+// gave the tree a pure function, classifySettingsKey(), that decides
+// whether an AppSettings key belongs to the operator's own machine
+// (OperatorLocal) or to the station (Station, must round-trip over the
+// wire). This task is where those two land: AppSettings gains a
+// non-owning ISettingsBackend* delegation seam (setRemoteBackend(),
+// nullptr default, one-branch guard in each of the five funnel methods),
+// SettingsProxy is the client-side implementation of that interface (an
+// in-memory cache, installed on a remote-mode GUI's AppSettings
+// singleton), and SettingsProxyServer is the daemon-side counterpart
+// that WRAPS AppSettings from the outside (through its existing public
+// API plus the Task 13 hook) to build connect-time snapshots and apply
+// inbound writes.
+//
+// The hazard this whole task exists to avoid, named by Task 13's own
+// review before this task was written: an inbound remote write lands via
+// AppSettings::setValue(), which fires the Task 13 change hook, which
+// ships the SAME change straight back out to every connected client --
+// including, redundantly, the one that sent it. AppSettings.h:187-198's
+// contract is explicit that the fix is a suppression flag in the
+// CONSUMER of the hook (SettingsProxyServer), never inside AppSettings
+// itself. serverSuppressesEchoOnInboundApply below is the test that
+// proves the fix; the task report records a sabotage-and-revert pass
+// against the SAME test (temporarily removing SettingsProxyServer's
+// m_applyingInboundWrite guard) to prove it is not vacuous.
+//
+// This file also pins two invariants the controller notes call out by
+// name as things later tasks depend on:
+//   - reads are synchronous and never touch the network
+//     (valueNeverBlocksOrSpinsEventLoop);
+//   - setRemoteBackend(nullptr) leaves today's local path byte-identical
+//     (nullBackendLeavesLocalPathByteIdentical).
+
+#include <QtTest/QtTest>
+#include <QElapsedTimer>
+#include <QLoggingCategory>
+#include <QSignalSpy>
+#include <QTemporaryDir>
+
+#include "core/AppSettings.h"
+#include "core/settings/ISettingsBackend.h"
+#include "core/settings/SettingsProxy.h"
+#include "core/settings/SettingsProxyServer.h"
+#include "core/settings/SettingsScope.h"
+
+using namespace NereusSDR;
+
+namespace {
+
+// A deliberately NARROW fake, matching the R2 Task 15 brief's own Step 1
+// wording ("a fake backend handling only hardware/") rather than a full
+// classifySettingsKey()-driven implementation: this file's job is to
+// prove AppSettings's delegation SEAM works (asks handlesKey(), honours
+// the answer, falls through when it says no), not to re-verify Task 14's
+// classification rules, which tst_settings_scope.cpp already covers at
+// length.
+class FakeHardwareOnlyBackend : public ISettingsBackend {
+public:
+    bool handlesKey(const QString& key) const override
+    {
+        handlesKeyCalls.append(key);
+        return key.startsWith(QStringLiteral("hardware/"));
+    }
+
+    QVariant value(const QString& key, const QVariant& defaultValue) const override
+    {
+        valueCalls.append(key);
+        auto it = store.constFind(key);
+        if (it != store.constEnd()) {
+            return QVariant(it.value());
+        }
+        return defaultValue;
+    }
+
+    void setValue(const QString& key, const QVariant& val) override
+    {
+        setValueCalls.append(key);
+        store.insert(key, val.toString());
+    }
+
+    bool contains(const QString& key) const override
+    {
+        containsCalls.append(key);
+        return store.contains(key);
+    }
+
+    void remove(const QString& key) override
+    {
+        removeCalls.append(key);
+        store.remove(key);
+    }
+
+    QStringList handledKeys() const override
+    {
+        return store.keys();
+    }
+
+    QMap<QString, QString> store;
+    mutable QStringList handlesKeyCalls;
+    mutable QStringList valueCalls;
+    QStringList setValueCalls;
+    mutable QStringList containsCalls;
+    QStringList removeCalls;
+};
+
+QStringList g_capturedLogLines;
+
+void captureMessageHandler(QtMsgType type, const QMessageLogContext& context, const QString& msg)
+{
+    Q_UNUSED(type);
+    Q_UNUSED(context);
+    g_capturedLogLines.append(msg);
+}
+
+} // namespace
+
+class TstSettingsProxy : public QObject {
+    Q_OBJECT
+
+private slots:
+
+    // ── Step 1: the routing test (AppSettings <-> ISettingsBackend seam) ──
+
+    void routingReachesBackendForStationKeyOnly()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings s(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        FakeHardwareOnlyBackend fake;
+        s.setRemoteBackend(&fake);
+
+        // A hardware/ key: setValue/value/contains all reach the fake.
+        s.setValue(QStringLiteral("hardware/aa:bb/x/y"), QStringLiteral("42"));
+        QCOMPARE(fake.setValueCalls, QStringList{QStringLiteral("hardware/aa:bb/x/y")});
+        QCOMPARE(fake.store.value(QStringLiteral("hardware/aa:bb/x/y")), QStringLiteral("42"));
+        QVERIFY(s.contains(QStringLiteral("hardware/aa:bb/x/y")));
+        QCOMPARE(s.value(QStringLiteral("hardware/aa:bb/x/y")).toString(), QStringLiteral("42"));
+        QVERIFY(fake.valueCalls.contains(QStringLiteral("hardware/aa:bb/x/y")));
+
+        // hardwareValue()/setHardwareValue() reach it too -- Task 13
+        // already routes both through value()/setValue(), so this is
+        // "for free" once the delegation branch exists in those two.
+        s.setHardwareValue(QStringLiteral("aa:bb"), QStringLiteral("z"), QStringLiteral("99"));
+        QCOMPARE(fake.store.value(QStringLiteral("hardware/aa:bb/z")), QStringLiteral("99"));
+        QCOMPARE(s.hardwareValue(QStringLiteral("aa:bb"), QStringLiteral("z")).toString(),
+                 QStringLiteral("99"));
+
+        // An OperatorLocal-shaped key (no "hardware/" prefix) never
+        // reaches the fake's storage or read/write methods at all -- it
+        // stays entirely on AppSettings's own local m_settings map.
+        fake.setValueCalls.clear();
+        fake.valueCalls.clear();
+        fake.containsCalls.clear();
+        s.setValue(QStringLiteral("DisplayNoiseFloorColor"), QStringLiteral("#112233"));
+        QVERIFY(fake.setValueCalls.isEmpty());
+        QVERIFY(!fake.store.contains(QStringLiteral("DisplayNoiseFloorColor")));
+        QCOMPARE(s.value(QStringLiteral("DisplayNoiseFloorColor")).toString(),
+                 QStringLiteral("#112233"));
+        QVERIFY(fake.valueCalls.isEmpty());
+        QVERIFY(s.contains(QStringLiteral("DisplayNoiseFloorColor")));
+        QVERIFY(fake.containsCalls.isEmpty());
+    }
+
+    void removeRoutesThroughBackendForClaimedKeyOnly()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings s(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        FakeHardwareOnlyBackend fake;
+        s.setRemoteBackend(&fake);
+
+        s.setValue(QStringLiteral("hardware/aa:bb/x"), QStringLiteral("1"));
+        s.remove(QStringLiteral("hardware/aa:bb/x"));
+        QCOMPARE(fake.removeCalls, QStringList{QStringLiteral("hardware/aa:bb/x")});
+        QVERIFY(!fake.store.contains(QStringLiteral("hardware/aa:bb/x")));
+
+        s.setValue(QStringLiteral("DisplayNoiseFloorColor"), QStringLiteral("#000"));
+        s.remove(QStringLiteral("DisplayNoiseFloorColor"));
+        QVERIFY(fake.removeCalls.size() == 1); // unchanged -- the local remove never reached the fake
+        QVERIFY(!s.contains(QStringLiteral("DisplayNoiseFloorColor")));
+    }
+
+    void allKeysMergesLocalAndBackendKeys()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings s(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        s.setValue(QStringLiteral("DisplayNoiseFloorColor"), QStringLiteral("x"));
+
+        FakeHardwareOnlyBackend fake;
+        fake.store.insert(QStringLiteral("hardware/aa:bb/y"), QStringLiteral("z"));
+        s.setRemoteBackend(&fake);
+
+        const QStringList keys = s.allKeys();
+        QCOMPARE(keys.size(), 2);
+        QVERIFY(keys.contains(QStringLiteral("DisplayNoiseFloorColor")));
+        QVERIFY(keys.contains(QStringLiteral("hardware/aa:bb/y")));
+    }
+
+    // ── setRemoteBackend(nullptr) leaves today's path byte-identical ──────
+
+    void nullBackendLeavesLocalPathByteIdentical()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings s(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        QVERIFY(s.remoteBackend() == nullptr); // default, before this task's seam is ever touched
+
+        s.setValue(QStringLiteral("hardware/aa:bb/x"), QStringLiteral("1"));
+        s.setValue(QStringLiteral("DisplayNoiseFloorColor"), QStringLiteral("#000000"));
+        QCOMPARE(s.value(QStringLiteral("hardware/aa:bb/x")).toString(), QStringLiteral("1"));
+        QCOMPARE(s.allKeys().size(), 2);
+        QVERIFY(s.contains(QStringLiteral("hardware/aa:bb/x")));
+        s.remove(QStringLiteral("hardware/aa:bb/x"));
+        QVERIFY(!s.contains(QStringLiteral("hardware/aa:bb/x")));
+        QCOMPARE(s.allKeys().size(), 1);
+
+        // Installing, then immediately uninstalling, a backend must leave
+        // AppSettings in EXACTLY the state it would be in had
+        // setRemoteBackend() never been called at all.
+        FakeHardwareOnlyBackend fake;
+        s.setRemoteBackend(&fake);
+        s.setRemoteBackend(nullptr);
+        QVERIFY(s.remoteBackend() == nullptr);
+
+        s.setValue(QStringLiteral("hardware/aa:bb/x"), QStringLiteral("2"));
+        QCOMPARE(s.value(QStringLiteral("hardware/aa:bb/x")).toString(), QStringLiteral("2"));
+        QVERIFY2(fake.store.isEmpty(), "the fake must never have been consulted once uninstalled");
+        QCOMPARE(s.allKeys().size(), 2);
+    }
+
+    // ── ISettingsBackend.h's synchronous-read invariant ────────────────────
+
+    void valueNeverBlocksOrSpinsEventLoop()
+    {
+        SettingsProxy proxy;
+        QMap<QString, QString> data;
+        for (int i = 0; i < 2000; ++i) {
+            data.insert(QStringLiteral("hardware/aa:bb/k%1").arg(i), QStringLiteral("v%1").arg(i));
+        }
+        proxy.applySnapshot(data);
+
+        // logProxiedRead() (Step 9) is unconditional and this loop makes
+        // 4000 calls -- silenced for the DURATION of this timing loop
+        // only (restored immediately after) so it does not trip QTest's
+        // default max-message count (2000) and swallow output from every
+        // later test slot in this same process, and so the measured
+        // time reflects the cache lookup itself rather than 4000 log
+        // lines' worth of string formatting.
+        QLoggingCategory::setFilterRules(QStringLiteral("nereus.settingsproxy.debug=false"));
+
+        QElapsedTimer timer;
+        timer.start();
+        for (int i = 0; i < 2000; ++i) {
+            const QVariant v = proxy.value(QStringLiteral("hardware/aa:bb/k%1").arg(i), QVariant());
+            QCOMPARE(v.toString(), QStringLiteral("v%1").arg(i));
+        }
+        for (int i = 0; i < 2000; ++i) {
+            const QVariant v = proxy.value(QStringLiteral("hardware/aa:bb/missing%1").arg(i),
+                                           QStringLiteral("default"));
+            QCOMPARE(v.toString(), QStringLiteral("default"));
+        }
+        const qint64 elapsedMs = timer.elapsed();
+        QLoggingCategory::setFilterRules(QString());
+        // This cannot PROVE the absence of a blocking call (see
+        // ISettingsBackend.h's invariant paragraph for why that is
+        // fundamentally a code-review, not a unit-test, property) -- but
+        // 4000 synchronous in-memory QMap lookups complete in low single-
+        // digit milliseconds; a single hidden socket wait or sleep would
+        // blow this budget by two to three orders of magnitude. 200ms
+        // leaves a wide, non-flaky margin while still catching that.
+        QVERIFY2(elapsedMs < 200,
+                 qPrintable(QStringLiteral("4000 SettingsProxy::value() calls took %1 ms -- "
+                                           "reads must be synchronous/cache-only")
+                                .arg(elapsedMs)));
+    }
+
+    // ── Step 3: AppSettings::snapshot() -- fully-qualified extraction ─────
+
+    void snapshotReturnsFullyQualifiedKeysUnlikeHardwareValues()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings s(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        s.setHardwareValue(QStringLiteral("aa:bb"), QStringLiteral("radioInfo/sampleRate"), 192000);
+
+        const QMap<QString, QString> snap = s.snapshot({QStringLiteral("hardware/aa:bb/")});
+        QCOMPARE(snap.size(), 1);
+        QVERIFY2(snap.contains(QStringLiteral("hardware/aa:bb/radioInfo/sampleRate")),
+                 "snapshot() must return the FULLY QUALIFIED key, unlike hardwareValues()");
+        QCOMPARE(snap.value(QStringLiteral("hardware/aa:bb/radioInfo/sampleRate")),
+                 QStringLiteral("192000"));
+
+        // hardwareValues() strips the prefix -- the two methods are
+        // deliberately different shapes; confirm both on the same data.
+        const QMap<QString, QVariant> stripped = s.hardwareValues(QStringLiteral("aa:bb"));
+        QVERIFY(stripped.contains(QStringLiteral("radioInfo/sampleRate")));
+        QVERIFY(!stripped.contains(QStringLiteral("hardware/aa:bb/radioInfo/sampleRate")));
+    }
+
+    void snapshotScopesToGivenPrefixesOnly()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings s(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        s.setHardwareValue(QStringLiteral("aa:bb"), QStringLiteral("k"), QStringLiteral("1"));
+        s.setHardwareValue(QStringLiteral("cc:dd"), QStringLiteral("k"), QStringLiteral("2"));
+        s.setValue(QStringLiteral("Slice0/Locked"), QStringLiteral("True"));
+        s.setValue(QStringLiteral("DisplayNoiseFloorColor"), QStringLiteral("x"));
+
+        const QMap<QString, QString> snap =
+            s.snapshot({QStringLiteral("hardware/aa:bb/"), QStringLiteral("Slice")});
+        QCOMPARE(snap.size(), 2);
+        QVERIFY(snap.contains(QStringLiteral("hardware/aa:bb/k")));
+        QVERIFY(snap.contains(QStringLiteral("Slice0/Locked")));
+        QVERIFY(!snap.contains(QStringLiteral("hardware/cc:dd/k")));
+        QVERIFY(!snap.contains(QStringLiteral("DisplayNoiseFloorColor")));
+    }
+
+    void snapshotWithNoMatchingPrefixesReturnsEmpty()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings s(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        s.setValue(QStringLiteral("Slice0/Locked"), QStringLiteral("True"));
+
+        const QMap<QString, QString> snap = s.snapshot({QStringLiteral("Tci")});
+        QVERIFY(snap.isEmpty());
+    }
+
+    // ── Step 3: SettingsProxy::applySnapshot() merges, never replaces ─────
+
+    void proxyApplySnapshotMergesNotReplaces()
+    {
+        SettingsProxy proxy;
+        QMap<QString, QString> first;
+        first.insert(QStringLiteral("hardware/aa:bb/k1"), QStringLiteral("v1"));
+        proxy.applySnapshot(first);
+        QCOMPARE(proxy.cacheSize(), 1);
+
+        QMap<QString, QString> second;
+        second.insert(QStringLiteral("hardware/aa:bb/k2"), QStringLiteral("v2"));
+        proxy.applySnapshot(second);
+
+        QCOMPARE(proxy.cacheSize(), 2);
+        QCOMPARE(proxy.value(QStringLiteral("hardware/aa:bb/k1"), QVariant()).toString(),
+                 QStringLiteral("v1"));
+        QCOMPARE(proxy.value(QStringLiteral("hardware/aa:bb/k2"), QVariant()).toString(),
+                 QStringLiteral("v2"));
+    }
+
+    void proxyApplySnapshotOverwritesUpdatedKeysWithinScope()
+    {
+        SettingsProxy proxy;
+        proxy.applySnapshot(QMap<QString, QString>{
+            {QStringLiteral("hardware/aa:bb/k1"), QStringLiteral("old")}});
+        proxy.applySnapshot(QMap<QString, QString>{
+            {QStringLiteral("hardware/aa:bb/k1"), QStringLiteral("new")}});
+
+        QCOMPARE(proxy.value(QStringLiteral("hardware/aa:bb/k1"), QVariant()).toString(),
+                 QStringLiteral("new"));
+        QCOMPARE(proxy.cacheSize(), 1);
+    }
+
+    // ── Step 4: absent keys stay absent, before and after a snapshot ──────
+
+    void unwrittenStationKeyReturnsCallerDefaultBeforeAnySnapshot()
+    {
+        SettingsProxy proxy;
+        QVERIFY(!proxy.hasReceivedSnapshot());
+        QCOMPARE(proxy.value(QStringLiteral("hardware/aa:bb/never"), QStringLiteral("fallback")).toString(),
+                 QStringLiteral("fallback"));
+        QVERIFY2(proxy.provenUnsetKeys().isEmpty(),
+                 "nothing is PROVEN unset before any snapshot has ever been applied");
+    }
+
+    void unwrittenStationKeyReturnsCallerDefaultAfterSnapshot()
+    {
+        SettingsProxy proxy;
+        proxy.applySnapshot(QMap<QString, QString>{
+            {QStringLiteral("hardware/aa:bb/k1"), QStringLiteral("v1")}});
+
+        // The controller notes' own worked example: a Setup page reading
+        // Region and expecting "United States" back when the key was
+        // never set. Reproduced here against the STATION path instead of
+        // AppSettings's local path (Task 13 already pins the local one).
+        QCOMPARE(proxy.value(QStringLiteral("hardware/aa:bb/never"), QStringLiteral("fallback")).toString(),
+                 QStringLiteral("fallback"));
+        QVERIFY(proxy.provenUnsetKeys().contains(QStringLiteral("hardware/aa:bb/never")));
+        // Still doesn't show up as a real cached key.
+        QVERIFY(!proxy.handledKeys().contains(QStringLiteral("hardware/aa:bb/never")));
+        QVERIFY(!proxy.contains(QStringLiteral("hardware/aa:bb/never")));
+    }
+
+    void handledKeysReturnsOnlyRealCachedValuesNotProvenUnsetOnes()
+    {
+        SettingsProxy proxy;
+        proxy.applySnapshot(QMap<QString, QString>{
+            {QStringLiteral("hardware/aa:bb/k1"), QStringLiteral("v1")}});
+        proxy.value(QStringLiteral("hardware/aa:bb/never"), QVariant());
+
+        const QStringList keys = proxy.handledKeys();
+        QCOMPARE(keys.size(), 1);
+        QVERIFY(keys.contains(QStringLiteral("hardware/aa:bb/k1")));
+        QVERIFY(!keys.contains(QStringLiteral("hardware/aa:bb/never")));
+    }
+
+    // ── Step 9: the proxied-read log ───────────────────────────────────────
+
+    void proxiedReadLogHasScannableShape()
+    {
+        SettingsProxy proxy;
+        proxy.applySnapshot(QMap<QString, QString>{
+            {QStringLiteral("hardware/aa:bb/k1"), QStringLiteral("v1")}});
+
+        g_capturedLogLines.clear();
+        QLoggingCategory::setFilterRules(QStringLiteral("nereus.settingsproxy.debug=true"));
+        QtMessageHandler previous = qInstallMessageHandler(captureMessageHandler);
+
+        const QVariant hit = proxy.value(QStringLiteral("hardware/aa:bb/k1"), QVariant());
+        Q_UNUSED(hit);
+        const QVariant beforeSnapshot = SettingsProxy().value(QStringLiteral("hardware/aa:bb/x"),
+                                                               QStringLiteral("def"));
+        Q_UNUSED(beforeSnapshot);
+        const QVariant provenUnset = proxy.value(QStringLiteral("hardware/aa:bb/missing"),
+                                                  QStringLiteral("def"));
+        Q_UNUSED(provenUnset);
+
+        qInstallMessageHandler(previous);
+        QLoggingCategory::setFilterRules(QString());
+
+        bool sawHit = false;
+        bool sawProvenUnset = false;
+        bool sawNoSnapshotYet = false;
+        for (const QString& line : std::as_const(g_capturedLogLines)) {
+            if (!line.contains(QStringLiteral("proxied-read"))) {
+                continue;
+            }
+            if (line.contains(QStringLiteral("hardware/aa:bb/k1")) && line.contains(QStringLiteral("CacheHit"))) {
+                sawHit = true;
+            }
+            if (line.contains(QStringLiteral("hardware/aa:bb/missing")) &&
+                line.contains(QStringLiteral("ProvenUnset"))) {
+                sawProvenUnset = true;
+            }
+            if (line.contains(QStringLiteral("hardware/aa:bb/x")) &&
+                line.contains(QStringLiteral("NoSnapshotYet"))) {
+                sawNoSnapshotYet = true;
+            }
+        }
+        QVERIFY2(sawHit, "expected a 'proxied-read ... CacheHit' log line for a real cached value");
+        QVERIFY2(sawProvenUnset, "expected a 'proxied-read ... ProvenUnset' log line");
+        QVERIFY2(sawNoSnapshotYet, "expected a 'proxied-read ... NoSnapshotYet' log line");
+    }
+
+    // ── Step 6: optimistic writes, origin tags, rejection ──────────────────
+
+    void optimisticWriteUpdatesCacheAndEmitsOutboundWhileReady()
+    {
+        SettingsProxy proxy;
+        proxy.setReady(true);
+        QSignalSpy spy(&proxy, &SettingsProxy::outboundWriteRequested);
+
+        proxy.setValue(QStringLiteral("hardware/aa:bb/AgcThreshold"), 10);
+
+        QCOMPARE(proxy.value(QStringLiteral("hardware/aa:bb/AgcThreshold"), QVariant()).toInt(), 10);
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.at(0).at(0).toString(), QStringLiteral("hardware/aa:bb/AgcThreshold"));
+        QCOMPARE(spy.at(0).at(1).toInt(), 10);
+    }
+
+    void writeDroppedNotQueuedWhileNotReady()
+    {
+        SettingsProxy proxy;
+        QVERIFY(!proxy.ready());
+        QSignalSpy spy(&proxy, &SettingsProxy::outboundWriteRequested);
+
+        proxy.setValue(QStringLiteral("hardware/aa:bb/AgcThreshold"), 10);
+
+        QCOMPARE(spy.count(), 0); // dropped, not queued -- no signal at all
+        // The cache still reflects the optimistic write (UI stays
+        // interactive/consistent during an outage -- see class comment).
+        QCOMPARE(proxy.value(QStringLiteral("hardware/aa:bb/AgcThreshold"), QVariant()).toInt(), 10);
+
+        // Becoming ready afterward does not retroactively flush anything
+        // -- there is no queue.
+        proxy.setReady(true);
+        QCOMPARE(spy.count(), 0);
+    }
+
+    void removeDroppedNotQueuedWhileNotReady()
+    {
+        SettingsProxy proxy;
+        proxy.applySnapshot(QMap<QString, QString>{
+            {QStringLiteral("hardware/aa:bb/k"), QStringLiteral("v")}});
+        QSignalSpy spy(&proxy, &SettingsProxy::outboundRemoveRequested);
+
+        proxy.remove(QStringLiteral("hardware/aa:bb/k"));
+
+        QCOMPARE(spy.count(), 0);
+        QVERIFY(!proxy.contains(QStringLiteral("hardware/aa:bb/k")));
+    }
+
+    void removeRoutesToBackendAndEmitsOutboundWhileReady()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings s(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        SettingsProxy proxy;
+        s.setRemoteBackend(&proxy);
+        proxy.setReady(true);
+        proxy.applySnapshot(QMap<QString, QString>{
+            {QStringLiteral("hardware/aa:bb/k"), QStringLiteral("v")}});
+        QVERIFY(s.contains(QStringLiteral("hardware/aa:bb/k")));
+
+        QSignalSpy spy(&proxy, &SettingsProxy::outboundRemoveRequested);
+        s.remove(QStringLiteral("hardware/aa:bb/k"));
+
+        QVERIFY(!s.contains(QStringLiteral("hardware/aa:bb/k")));
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.at(0).at(0).toString(), QStringLiteral("hardware/aa:bb/k"));
+    }
+
+    void applyRemoteValueUpdatesCacheRegardlessOfOriginTag()
+    {
+        SettingsProxy proxy;
+        proxy.setLocalOriginTag(QStringLiteral("my-session"));
+
+        // A genuine third-party/daemon-local change: empty origin tag.
+        proxy.applyRemoteValue(QStringLiteral("hardware/aa:bb/k"), QStringLiteral("fromDaemon"), QString());
+        QCOMPARE(proxy.value(QStringLiteral("hardware/aa:bb/k"), QVariant()).toString(),
+                 QStringLiteral("fromDaemon"));
+
+        // The echo of this client's OWN write: tag matches localOriginTag().
+        proxy.applyRemoteValue(QStringLiteral("hardware/aa:bb/k"), QStringLiteral("myOwnEcho"),
+                               QStringLiteral("my-session"));
+        QCOMPARE(proxy.value(QStringLiteral("hardware/aa:bb/k"), QVariant()).toString(),
+                 QStringLiteral("myOwnEcho"));
+    }
+
+    void rejectionRevertsCacheToRestoredValueAndEmitsSignal()
+    {
+        SettingsProxy proxy;
+        proxy.setReady(true);
+        proxy.setValue(QStringLiteral("hardware/aa:bb/k"), QStringLiteral("optimistic"));
+        QSignalSpy spy(&proxy, &SettingsProxy::valueRejected);
+
+        proxy.applyRejection(QStringLiteral("hardware/aa:bb/k"), QStringLiteral("daemon-truth"));
+
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.at(0).at(0).toString(), QStringLiteral("hardware/aa:bb/k"));
+        QCOMPARE(spy.at(0).at(1).toString(), QStringLiteral("daemon-truth"));
+        QCOMPARE(proxy.value(QStringLiteral("hardware/aa:bb/k"), QVariant()).toString(),
+                 QStringLiteral("daemon-truth"));
+    }
+
+    void rejectionToProvenUnsetWhenDaemonHasNothingEither()
+    {
+        SettingsProxy proxy;
+        proxy.setReady(true);
+        proxy.setValue(QStringLiteral("hardware/aa:bb/k"), QStringLiteral("optimistic"));
+        QVERIFY(proxy.contains(QStringLiteral("hardware/aa:bb/k")));
+
+        proxy.applyRejection(QStringLiteral("hardware/aa:bb/k"), QVariant()); // invalid = daemon has nothing
+
+        QVERIFY(!proxy.contains(QStringLiteral("hardware/aa:bb/k")));
+        QVERIFY(proxy.provenUnsetKeys().contains(QStringLiteral("hardware/aa:bb/k")));
+    }
+
+    void snapshotAppliedSignalCarriesThisCallsKeyCount()
+    {
+        SettingsProxy proxy;
+        QSignalSpy spy(&proxy, &SettingsProxy::snapshotApplied);
+
+        QMap<QString, QString> data;
+        data.insert(QStringLiteral("hardware/aa:bb/k1"), QStringLiteral("v1"));
+        data.insert(QStringLiteral("hardware/aa:bb/k2"), QStringLiteral("v2"));
+        proxy.applySnapshot(data);
+
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.at(0).at(0).toInt(), 2);
+    }
+
+    // ── Step 7: the Setup-dialog gate ───────────────────────────────────────
+
+    void setupGateDeniesWithoutReadyEvenWithNonEmptySnapshot()
+    {
+        SettingsProxy proxy;
+        proxy.applySnapshot(QMap<QString, QString>{{QStringLiteral("Slice0/Locked"), QStringLiteral("True")}});
+        QVERIFY(!proxy.ready());
+        QVERIFY(!proxy.setupDialogAllowed());
+    }
+
+    void setupGateAllowsOnReadyWithNonEmptySnapshot()
+    {
+        SettingsProxy proxy;
+        proxy.setReady(true);
+        proxy.applySnapshot(QMap<QString, QString>{{QStringLiteral("Slice0/Locked"), QStringLiteral("True")}});
+        QVERIFY(proxy.setupDialogAllowed());
+    }
+
+    void setupGateDeniesOnReadyWithNoSnapshotAtAll()
+    {
+        SettingsProxy proxy;
+        proxy.setReady(true);
+        QVERIFY(!proxy.hasReceivedSnapshot());
+        QVERIFY(!proxy.setupDialogAllowed());
+    }
+
+    void setupGateDeniesOnReadyWithEmptySnapshotAndNoSeedMarker()
+    {
+        SettingsProxy proxy;
+        proxy.setReady(true);
+        proxy.applySnapshot(QMap<QString, QString>{});
+        QVERIFY(proxy.hasReceivedSnapshot());
+        QVERIFY(!proxy.hasNonEmptySnapshot());
+        QVERIFY2(!proxy.setupDialogAllowed(),
+                 "ready() alone must not be sufficient -- an empty snapshot with no seed marker "
+                 "must not open Setup (187 widget constructors would bake ship defaults in)");
+    }
+
+    void setupGateAllowsOnReadyWithSeedMarkerAloneEvenIfSnapshotOtherwiseEmpty()
+    {
+        SettingsProxy proxy;
+        proxy.setReady(true);
+        QMap<QString, QString> data;
+        data.insert(QLatin1String(AppSettings::kDaemonProfileSeededKey), QStringLiteral("True"));
+        proxy.applySnapshot(data);
+
+        QVERIFY(proxy.hasReceivedSnapshot());
+        QVERIFY2(!proxy.hasNonEmptySnapshot(),
+                 "the seed marker alone must not count as real station content");
+        QVERIFY2(proxy.setupDialogAllowed(),
+                 "the seed marker alone must still open the gate -- a legitimately fresh "
+                 "daemon profile must not be indistinguishable from something broken");
+    }
+
+    // ── The seed-marker special case in handlesKey() ────────────────────────
+
+    void seedMarkerRoutesThroughBackendAndSurvivesSnapshotDespiteNotClassifyingStation()
+    {
+        // This test would be meaningless if the marker DID classify
+        // Station -- confirm it genuinely does not, so the special case
+        // in SettingsProxy::handlesKey() is doing real work.
+        QCOMPARE(classifySettingsKey(QString::fromLatin1(AppSettings::kDaemonProfileSeededKey)),
+                 SettingsScope::OperatorLocal);
+
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings s(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        SettingsProxy proxy;
+        s.setRemoteBackend(&proxy);
+
+        QVERIFY(!s.contains(QLatin1String(AppSettings::kDaemonProfileSeededKey)));
+
+        QMap<QString, QString> data;
+        data.insert(QLatin1String(AppSettings::kDaemonProfileSeededKey), QStringLiteral("True"));
+        proxy.applySnapshot(data);
+
+        QVERIFY2(s.contains(QLatin1String(AppSettings::kDaemonProfileSeededKey)),
+                 "the seed marker must reach AppSettings::contains() through the proxy even "
+                 "though classifySettingsKey() has no rule for it");
+        QCOMPARE(s.value(QLatin1String(AppSettings::kDaemonProfileSeededKey)).toString(),
+                 QStringLiteral("True"));
+    }
+
+    // ── SettingsProxyServer: buildSnapshot() scope (Step 5) ─────────────────
+
+    void serverBuildSnapshotScopesToConnectedMacPlusGlobalStationKeys()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings daemon(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        daemon.setHardwareValue(QStringLiteral("aa:bb"), QStringLiteral("radioInfo/sampleRate"), 192000);
+        daemon.setHardwareValue(QStringLiteral("cc:dd"), QStringLiteral("radioInfo/sampleRate"), 96000);
+        daemon.setValue(QStringLiteral("Slice0/Locked"), QStringLiteral("True"));
+        daemon.setValue(QStringLiteral("DisplayNoiseFloorColor"), QStringLiteral("#000"));
+
+        SettingsProxyServer server(daemon);
+        const QMap<QString, QString> snap = server.buildSnapshot(QStringLiteral("aa:bb"));
+
+        QVERIFY(snap.contains(QStringLiteral("hardware/aa:bb/radioInfo/sampleRate")));
+        QVERIFY2(!snap.contains(QStringLiteral("hardware/cc:dd/radioInfo/sampleRate")),
+                 "hardware/ is per-MAC -- a different saved radio's subtree must not leak in");
+        QVERIFY(snap.contains(QStringLiteral("Slice0/Locked")));
+        QVERIFY(!snap.contains(QStringLiteral("DisplayNoiseFloorColor")));
+    }
+
+    void serverBuildSnapshotIncludesHardwareOcLiteralSegmentRegardlessOfConnectedMac()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings daemon(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        daemon.setHardwareValue(QStringLiteral("oc"), QStringLiteral("pennyExtCtrl"), QStringLiteral("True"));
+
+        SettingsProxyServer server(daemon);
+        const QMap<QString, QString> snap = server.buildSnapshot(QStringLiteral("aa:bb"));
+
+        QVERIFY2(snap.contains(QStringLiteral("hardware/oc/pennyExtCtrl")),
+                 "'oc' is a literal segment, not a MAC (Task 14's own canonical proof), and must "
+                 "be included regardless of which MAC is connected");
+    }
+
+    void serverBuildSnapshotIncludesSeedMarkerWhenPresent()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings daemon(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        daemon.seedDaemonProfileMarker();
+
+        SettingsProxyServer server(daemon);
+        const QMap<QString, QString> snap = server.buildSnapshot(QString());
+
+        QVERIFY(snap.contains(QLatin1String(AppSettings::kDaemonProfileSeededKey)));
+        QCOMPARE(snap.value(QLatin1String(AppSettings::kDaemonProfileSeededKey)), QStringLiteral("True"));
+    }
+
+    void serverBuildSnapshotOmitsSeedMarkerWhenAbsent()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings daemon(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+
+        SettingsProxyServer server(daemon);
+        const QMap<QString, QString> snap = server.buildSnapshot(QString());
+
+        QVERIFY(!snap.contains(QLatin1String(AppSettings::kDaemonProfileSeededKey)));
+    }
+
+    void serverBuildSnapshotMeasuredSizeOnSyntheticRealisticFixture()
+    {
+        // The R2 design addendum section 8 measured a REAL settings file
+        // at 15,201 keys / 3,186,789 bytes across five MACs (13,970 under
+        // hardware/, 11,564 of those under hardware/<mac>/tx/profile/*).
+        // That file is not available in this environment, so this test
+        // builds a SCALED-DOWN synthetic fixture with the same shape --
+        // five MACs, tx/profile/* dominating each one's hardware/ subtree,
+        // a small global Station set, a larger OperatorLocal set -- and
+        // measures buildSnapshot() for ONE connected MAC against it. The
+        // task report quotes these numbers verbatim; they approximate,
+        // they do not reproduce, the real file.
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings daemon(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+
+        const QStringList macs = {
+            QStringLiteral("aa:aa:aa:aa:aa:aa"), QStringLiteral("bb:bb:bb:bb:bb:bb"),
+            QStringLiteral("cc:cc:cc:cc:cc:cc"), QStringLiteral("dd:dd:dd:dd:dd:dd"),
+            QStringLiteral("ee:ee:ee:ee:ee:ee"),
+        };
+        constexpr int kProfileEntriesPerMac = 550; // approximates 11,564 / 5, scaled down 4x
+        constexpr int kOtherHardwareKeysPerMac = 30;
+        for (const QString& mac : macs) {
+            for (int p = 0; p < kProfileEntriesPerMac; ++p) {
+                daemon.setHardwareValue(mac, QStringLiteral("tx/profile/P%1/field").arg(p),
+                                        QStringLiteral("v"));
+            }
+            for (int k = 0; k < kOtherHardwareKeysPerMac; ++k) {
+                daemon.setHardwareValue(mac, QStringLiteral("radioInfo/k%1").arg(k), QStringLiteral("v"));
+            }
+        }
+        constexpr int kGlobalStationKeys = 40;
+        for (int i = 0; i < kGlobalStationKeys; ++i) {
+            daemon.setValue(QStringLiteral("Slice%1/Locked").arg(i % 4), QStringLiteral("True"));
+        }
+        constexpr int kOperatorLocalKeys = 200;
+        for (int i = 0; i < kOperatorLocalKeys; ++i) {
+            daemon.setValue(QStringLiteral("DisplaySomeCosmeticKey%1").arg(i), QStringLiteral("x"));
+        }
+
+        SettingsProxyServer server(daemon);
+        const QMap<QString, QString> snap = server.buildSnapshot(macs.at(0));
+
+        qint64 approxBytes = 0;
+        for (auto it = snap.constBegin(); it != snap.constEnd(); ++it) {
+            approxBytes += it.key().size() + it.value().size();
+        }
+
+        qInfo() << "SettingsProxyServer synthetic snapshot measurement:"
+                << "totalKeysInStore=" << daemon.allKeys().size()
+                << "snapshotKeyCount=" << snap.size()
+                << "approxSnapshotBytes=" << approxBytes;
+
+        const int expectedOneMacShare = kProfileEntriesPerMac + kOtherHardwareKeysPerMac; // 580
+        QVERIFY2(snap.size() >= expectedOneMacShare,
+                 "must carry at least the connected MAC's own hardware/ subtree");
+        QVERIFY2(snap.size() <= expectedOneMacShare + kGlobalStationKeys,
+                 "must not carry more than one MAC's hardware/ subtree plus the global Station set");
+        QVERIFY2(snap.size() < daemon.allKeys().size(),
+                 "the snapshot must be smaller than the whole store, never a full copy");
+    }
+
+    // ── The hazard: inbound-apply echo suppression (Steps 6+10 root cause) ─
+
+    void serverSuppressesEchoOnInboundApply()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings daemon(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        SettingsProxyServer server(daemon);
+        QSignalSpy spy(&server, &SettingsProxyServer::outboundValueChanged);
+
+        const SettingsApplyResult result = server.applyInboundWrite(
+            QStringLiteral("hardware/aa:bb/radioInfo/sampleRate"), 192000, QStringLiteral("client-42"));
+
+        QVERIFY(result.accepted);
+        QVERIFY(result.reason.isEmpty());
+        QCOMPARE(daemon.value(QStringLiteral("hardware/aa:bb/radioInfo/sampleRate")).toInt(), 192000);
+
+        // Exactly ONE broadcast -- the explicit, tagged emission
+        // applyInboundWrite() makes itself. If the generic change-hook
+        // path (onLocalAppSettingsChange) were not suppressed for the
+        // duration of that call, this would be 2: the explicit one plus
+        // a redundant, untagged second one reacting to the identical
+        // underlying AppSettings::setValue(). This is the exact hazard
+        // Task 13's review named by shape before this task was written.
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.at(0).at(0).toString(), QStringLiteral("hardware/aa:bb/radioInfo/sampleRate"));
+        QCOMPARE(spy.at(0).at(1).toInt(), 192000);
+        QCOMPARE(spy.at(0).at(2).toString(), QStringLiteral("client-42"));
+    }
+
+    void serverRejectsInboundWriteForNonStationKey()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings daemon(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        SettingsProxyServer server(daemon);
+        QSignalSpy spy(&server, &SettingsProxyServer::outboundValueChanged);
+
+        const SettingsApplyResult result = server.applyInboundWrite(
+            QStringLiteral("DisplayNoiseFloorColor"), QStringLiteral("#ff0000"), QStringLiteral("client-42"));
+
+        QVERIFY(!result.accepted);
+        QVERIFY(!result.reason.isEmpty());
+        QVERIFY2(!daemon.contains(QStringLiteral("DisplayNoiseFloorColor")),
+                 "a rejected write must change nothing");
+        QCOMPARE(spy.count(), 0);
+    }
+
+    void serverForwardsGenuineLocalChangeWithEmptyOriginTag()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings daemon(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        SettingsProxyServer server(daemon);
+        QSignalSpy spy(&server, &SettingsProxyServer::outboundValueChanged);
+
+        // A DIRECT AppSettings::setValue() call -- exactly what a
+        // migration, or a Setup page open on the daemon's own console (if
+        // this build ever grows one), makes. NOT through
+        // applyInboundWrite().
+        daemon.setValue(QStringLiteral("Slice0/Locked"), QStringLiteral("True"));
+
+        QCOMPARE(spy.count(), 1);
+        QCOMPARE(spy.at(0).at(0).toString(), QStringLiteral("Slice0/Locked"));
+        QCOMPARE(spy.at(0).at(1).toString(), QStringLiteral("True"));
+        QVERIFY2(spy.at(0).at(2).toString().isEmpty(),
+                 "a genuine local change carries an EMPTY origin tag -- it is nobody's echo");
+    }
+
+    void serverIgnoresLocalOperatorLocalKeyChange()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings daemon(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        SettingsProxyServer server(daemon);
+        QSignalSpy spy(&server, &SettingsProxyServer::outboundValueChanged);
+
+        daemon.setValue(QStringLiteral("DisplayNoiseFloorColor"), QStringLiteral("#000000"));
+
+        QCOMPARE(spy.count(), 0);
+    }
+
+    void serverDestructorClearsChangeHookAndSubsequentWritesDoNotCrash()
+    {
+        // AppSettings::instance()-shaped lifetime mismatch guard: a
+        // SettingsProxyServer that outlives its own usefulness must not
+        // leave a dangling `this` captured in AppSettings's change hook.
+        // This cannot deterministically PROVE the hook was cleared
+        // without a getter AppSettings deliberately does not expose (see
+        // the task report) -- it is a smoke test relying on a sanitizer
+        // build to flag a real dangling-pointer bug, not a self-contained
+        // proof. What it does directly confirm: after the server is
+        // destroyed, further AppSettings mutations complete normally and
+        // round-trip correctly, which a live dangling std::function call
+        // would put at serious risk of not doing.
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings daemon(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        {
+            SettingsProxyServer server(daemon);
+            Q_UNUSED(server);
+        }
+        daemon.setValue(QStringLiteral("Slice0/Locked"), QStringLiteral("True"));
+        QCOMPARE(daemon.value(QStringLiteral("Slice0/Locked")).toString(), QStringLiteral("True"));
+    }
+};
+
+QTEST_APPLESS_MAIN(TstSettingsProxy)
+#include "tst_settings_proxy.moc"

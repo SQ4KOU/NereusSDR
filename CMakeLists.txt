@@ -723,6 +723,17 @@ set(CORE_SOURCES
     # extracts every key literal this tree passes to an AppSettings
     # accessor and cross-checks this table against it.
     src/core/settings/SettingsScope.cpp
+    # R2 Task 15: the AppSettings delegation seam's two live components.
+    # SettingsProxy.cpp is the client-side cache installed via
+    # AppSettings::setRemoteBackend() on a remote-mode GUI. SettingsProxyServer.cpp
+    # is the daemon-side wrapper: builds the connect-time snapshot and
+    # applies inbound client writes onto the daemon's own AppSettings with
+    # the anti-echo suppression AppSettings.h:187-198's contract requires
+    # (see that class's own header comment for why the guard lives here,
+    # not inside AppSettings). ISettingsBackend.h (the interface the first
+    # of these implements) is header-only, nothing to add here.
+    src/core/settings/SettingsProxy.cpp
+    src/core/settings/SettingsProxyServer.cpp
 )
 
 # CoreAudioHalBus — macOS-only IAudioBus implementation bridging to the

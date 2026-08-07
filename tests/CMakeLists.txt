@@ -6457,6 +6457,27 @@ nereus_add_test(tst_settings_scope)
 target_compile_definitions(tst_settings_scope PRIVATE
     NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
+# Remote Daemon R2, Task 15: SettingsProxy / SettingsProxyServer. AppSettings
+# gains a non-owning ISettingsBackend* delegation seam (setRemoteBackend(),
+# nullptr default, one-branch guard in value/setValue/contains/remove, additive
+# union in allKeys()) plus snapshot(prefixes), a fully-qualified prefix-scoped
+# extraction. SettingsProxy (client) implements the interface as an in-memory
+# cache with a proven-unset set, optimistic writes, origin-tag echo handling,
+# and the Step 7 Setup-dialog gate. SettingsProxyServer (daemon) wraps
+# AppSettings from the outside -- buildSnapshot() for the connect-time bulk
+# transfer, applyInboundWrite() with the anti-echo suppression that answers
+# Task 13's review hazard ("an inbound remote write lands via setValue(), fires
+# the hook, and ships straight back out") by suppressing the CONSUMER's own
+# forwarding around one call, never inside AppSettings itself. Pins: the
+# routing seam reaches a Station-classified key and never an OperatorLocal one;
+# setRemoteBackend(nullptr) is byte-identical to today; reads are synchronous
+# (no event-loop/socket wait -- timed, not merely asserted); snapshot/
+# applySnapshot merge scoping incl. the hardware/oc/ literal-segment call-out;
+# the Step 7 gate's two conditions independently; and
+# serverSuppressesEchoOnInboundApply, the test directly proving the hazard is
+# closed (exactly one broadcast per inbound write, not two).
+nereus_add_test(tst_settings_proxy)
+
 # R1 Task 10: DaemonApp connects the daemon to a radio (or runs discovery)
 # and creates min(cfg.sliceCount, connected-board-maxSlices) slices via
 # RadioModel's own addSlice() -- the same entry point connectToRadio()
