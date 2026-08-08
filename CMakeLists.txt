@@ -187,6 +187,43 @@ else()
 endif()
 
 # --------------------------------------------------------------------------
+# OpenSSL libcrypto (Remote Daemon R2, Task 17 -- TLS certificate provisioning)
+# --------------------------------------------------------------------------
+# nereusd mints its own self-signed X.509 certificate on first run (a
+# headless Pi has no domain name to get a CA-signed one for); Qt6 has no API
+# that GENERATES a certificate (QSslCertificate/QSslKey only parse), so
+# src/core/security/CertificateStore links libcrypto directly. This is the
+# first OpenSSL dependency anywhere in this tree -- verified 2026-08-08 that
+# neither "OpenSSL" nor "libcrypto" appeared anywhere in CMakeLists.txt or
+# src/ before this block.
+#
+# Deliberately NOT REQUIRED. Unlike Qt6::WebSockets above (made REQUIRED
+# after a QUIET find_package let v0.5.0 ship a macOS x86_64 build with a
+# real, already-wired feature silently disabled -- see that block's own
+# comment), nothing in this tree yet depends on HAVE_OPENSSL_CRYPTO being
+# defined: CertificateStore has no production caller until Task 18 wires up
+# the wss session. Keeping the dependency optional-at-configure-time means a
+# machine without OpenSSL dev headers still configures and builds NereusSDR,
+# nereusd, and every existing test -- it just does not get
+# tst_certificate_store or the TLS identity feature. Mirrors the
+# FFTW3_FOUND / WDSP_FOUND / PIPEWIRE_FOUND pattern below, not the
+# WebSockets one. Revisit once a task actually wires CertificateStore into
+# nereusd's startup path -- at that point the WebSockets lesson applies here
+# too.
+#
+# Version floor 3.0: CertificateStore.cpp uses the OpenSSL 3.0 one-call key
+# generator EVP_RSA_gen(). Found here with no extra search hints via CMake's
+# own FindOpenSSL module (verified empirically 2026-08-08 against the
+# maintainer's Homebrew keg-only openssl@3 formula) -- do not hardcode a
+# Homebrew Cellar/opt path; let find_package() resolve it on every platform.
+find_package(OpenSSL 3.0 COMPONENTS Crypto)
+if(OPENSSL_FOUND)
+    message(STATUS "OpenSSL ${OPENSSL_VERSION} found at ${OPENSSL_INCLUDE_DIR} -- nereusd TLS certificate provisioning enabled")
+else()
+    message(STATUS "OpenSSL >= 3.0 not found -- nereusd TLS certificate provisioning (CertificateStore, remote pairing) disabled")
+endif()
+
+# --------------------------------------------------------------------------
 # PortAudio v19 (Phase 3O VAX — PortAudioBus fallback for IAudioBus)
 # --------------------------------------------------------------------------
 include(FetchContent)
@@ -735,6 +772,15 @@ set(CORE_SOURCES
     src/core/settings/SettingsProxy.cpp
     src/core/settings/SettingsProxyServer.cpp
 )
+
+# R2 Task 17: TLS certificate provisioning for nereusd's future wss::
+# listener (Task 18). Gated on OPENSSL_FOUND (see the find_package(OpenSSL)
+# block above) rather than unconditional: nothing calls CertificateStore in
+# production yet, so a tree without OpenSSL dev headers still builds
+# everything else.
+if(OPENSSL_FOUND)
+    list(APPEND CORE_SOURCES src/core/security/CertificateStore.cpp)
+endif()
 
 # CoreAudioHalBus — macOS-only IAudioBus implementation bridging to the
 # NereusSDRVAX HAL plugin via POSIX shared memory. The header is
@@ -1326,6 +1372,17 @@ function(nereus_apply_core_deps target)
         target_include_directories(${target} PUBLIC ${FFTW3_INCLUDE_DIRS})
         target_link_libraries(${target} PUBLIC ${FFTW3_LIBRARIES})
         target_compile_definitions(${target} PUBLIC HAVE_FFTW3)
+    endif()
+
+    # R2 Task 17: OpenSSL libcrypto for CertificateStore. PUBLIC so it
+    # reaches nereusd (links NereusCore PRIVATE, but PRIVATE only controls
+    # whether nereusd's own PUBLIC deps propagate further downstream -- the
+    # link itself still lands in the nereusd binary) and every test target
+    # via NereusSDRObjs. See the find_package(OpenSSL) block near the top of
+    # this file for why this is gated on OPENSSL_FOUND instead of REQUIRED.
+    if(OPENSSL_FOUND)
+        target_link_libraries(${target} PUBLIC OpenSSL::Crypto)
+        target_compile_definitions(${target} PUBLIC HAVE_OPENSSL_CRYPTO)
     endif()
 
     # libpipewire-0.3, gated by the pkg_check_modules block above. Only links on

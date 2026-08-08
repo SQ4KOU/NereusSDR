@@ -6532,6 +6532,31 @@ nereus_add_test(tst_tnf_ui_wiring)
 #         section 8.3 + section 11.
 nereus_add_test(tst_notch_visual_does_not_perturb_noise_floor_or_maxbin)
 
+# ── Remote Daemon R2, Task 17: TLS certificate provisioning ───────────────
+# CertificateStore mints (first run) or loads (every run after) a
+# self-signed RSA-2048 certificate + key for nereusd's future wss::
+# listener, stored beside the daemon profile's own settings directory.
+# Pins: generation produces something that parses back through both
+# QSslCertificate and QSslKey (independently re-read from disk, not just
+# the store's own cached copy); a second construction against the same
+# directory reuses rather than regenerates (fingerprint AND raw PEM bytes
+# identical across two independent constructions -- see the slot's own
+# comment for why that is real evidence and not a vacuous pass); a corrupt
+# on-disk pair is treated as a fresh first run instead of wedging
+# permanently; the private key file is owner-only on UNIX (QSKIP on
+# Windows, where QFile::permissions() mirrors owner bits into group/other);
+# tlsBackendDiagnostic() is empty exactly when QSslSocket::supportsSsl() is
+# true; and defaultDirectory() resolves through
+# AppSettings::resolveConfigDir(AppSettings::kDaemonProfileName) rather than
+# a hand-built equivalent.
+#
+# Gated on OPENSSL_FOUND (see the top-level CMakeLists.txt find_package(
+# OpenSSL) block): CertificateStore.cpp is only added to CORE_SOURCES, and
+# only in that case does this test have anything to link against.
+if(OPENSSL_FOUND)
+    nereus_add_test(tst_certificate_store)
+endif()
+
 # --------------------------------------------------------------------------
 # Aggregate "all_tests" target  (2026-05-26 KG4VCF dev-loop fix, from PR #291)
 # --------------------------------------------------------------------------
