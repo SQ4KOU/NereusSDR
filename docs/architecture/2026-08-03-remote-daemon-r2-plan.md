@@ -55,13 +55,20 @@ is written down rather than left in conversation.
 
 Before any bench row connects to anything:
 
-1. Run discovery and **list every responder with its MAC and board type**.
-2. The G2E identifies as `HPSDRHW::HermesC10`, discovery byte `0x14`. The G2 does
-   not. Pin the target by **MAC address**, not by "the first one found".
-3. **Confirm the MAC with the maintainer before the first connect**, then reuse
-   that pinned MAC for every later row.
-4. If discovery returns exactly one responder and it is not a G2E, **stop**. Do
-   not fall back to whatever answered.
+1. Run discovery and **list every responder with its MAC and board type**. Send
+   **both** probes: the P1 packet alone misses P2 boards, and the G2E is P2. See
+   `RadioDiscovery::scanAllNics`, which sends a 63-byte P1 and a 60-byte P2
+   probe on every NIC.
+2. **The board byte is the identification, not the MAC.** The G2E answers `0x14`
+   (`HPSDRHW::HermesC10`); the G2 answers `0x0A`. Those cannot be confused, so
+   the board byte alone is sufficient to tell the authorised radio from the
+   excluded one. Pin by MAC because a connection needs an address, but **derive
+   the decision from the board byte**.
+3. **Do not ask the maintainer to confirm a MAC address.** That was tried on
+   2026-08-08 and it is a bad question: it asks a human to recall from memory
+   something the hardware states more reliably in its own discovery reply.
+4. If no responder answers `0x14`, **stop**. Do not fall back to whatever
+   answered. Report which radios did respond and let the maintainer decide.
 
 This applies to task 16 step 3 and every row of task 20 step 5.
 
