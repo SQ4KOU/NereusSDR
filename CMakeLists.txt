@@ -226,10 +226,20 @@ endif()
 #              .github/docker/Dockerfile, all updated alongside this block
 #              (fix round 1 review, Important 1 point 2).
 #   Windows -- vcpkg, triplet x64-windows-static-md, pinned by a manifest
-#              baseline (vcpkg.json at the repo root; ITS builtin-baseline
-#              PLACEHOLDER MUST BE REPLACED with a real vcpkg commit SHA --
-#              run `vcpkg x-update-baseline` against the vcpkg checkout the
-#              target CI runner uses -- before this route is live).
+#              baseline (vcpkg.json at the repo root). Fix round 2:
+#              builtin-baseline is 9e593bb18ea69cc5095e012465dcd675a822ed0d,
+#              the commit vcpkg's annotated release tag 2026.07.29
+#              (published 2026-07-31, tag object
+#              c76c06644034521fb761a39f8f52d8e87d1103d5) dereferences to --
+#              deliberately a release tag rather than master HEAD, because
+#              reproducibility is the whole point of pinning a baseline at
+#              all, and a future OpenSSL security update should be a
+#              visible one-line bump to a newer tag, not silent drift.
+#              Confirmed ports/openssl/vcpkg.json exists at that tree
+#              before pinning it, so the dependency actually resolves.
+#              Bump by replacing this SHA (and the identical one in
+#              vcpkg.json) with a newer release tag's commit when taking
+#              an update; do not point this at master HEAD instead.
 #              Coordinator decision, fix round 1:
 #                - Static (not dynamic) because this project ships a
 #                  portable ZIP and an NSIS installer, and a missing runtime
