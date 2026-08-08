@@ -6534,7 +6534,7 @@ nereus_add_test(tst_notch_visual_does_not_perturb_noise_floor_or_maxbin)
 
 # ── Remote Daemon R2, Task 17: TLS certificate provisioning ───────────────
 # CertificateStore mints (first run) or loads (every run after) a
-# self-signed RSA-2048 certificate + key for nereusd's future wss::
+# self-signed RSA-3072 certificate + key for nereusd's future wss::
 # listener, stored beside the daemon profile's own settings directory.
 # Pins: generation produces something that parses back through both
 # QSslCertificate and QSslKey (independently re-read from disk, not just

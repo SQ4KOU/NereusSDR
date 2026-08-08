@@ -41,6 +41,22 @@ namespace {
 const QRegularExpression kFingerprintPattern(
     QStringLiteral("^([0-9A-F]{2}:){31}[0-9A-F]{2}$"));
 
+#ifdef Q_OS_UNIX
+// Fix round 3 minor: restores a path's permissions on scope exit
+// (destructor, so this runs on an early return too), rather than a bare
+// QFile::setPermissions() call placed after the assertions it is meant
+// to clean up after. Two slots below deliberately leave a path in a
+// permission state QTemporaryDir's own destructor cannot remove
+// (unreadable file, unwritable directory); a prior revision restored
+// permissions only on the success path, so a QVERIFY failing between the
+// chmod and the restore left an unremovable QTemporaryDir behind.
+struct PermissionRestorer {
+    QString path;
+    QFileDevice::Permissions restoreTo;
+    ~PermissionRestorer() { QFile::setPermissions(path, restoreTo); }
+};
+#endif
+
 } // namespace
 
 class TstCertificateStore : public QObject {
@@ -243,13 +259,21 @@ private slots:
     // so this QSKIPs under root rather than asserting something it
     // cannot actually test.
     //
-    // Fails before the exists()-vs-open() fix (the unfixed code's
-    // `!certFile.exists() || !keyFile.exists()` early return is false
-    // here since both files DO exist, so it falls into open() failing,
-    // which the unfixed code also returns false for -- but the
-    // CONSTRUCTOR then calls generateAndStore(), silently overwriting
-    // the unreadable key); passes after (fixed loadExisting() reports
-    // the I/O failure as a hard error instead of falling through).
+    // Fails before the exists()-vs-open() fix, but not for the reason an
+    // earlier revision of this comment claimed. Fix round 3 correction
+    // (reviewer-verified): the unfixed code does not fail to overwrite
+    // the mode-0000 key, it succeeds. QSaveFile::commit() never opens the
+    // EXISTING file at all -- it writes a new temp file elsewhere and
+    // atomically rename()s it over the old name, and rename() is a
+    // DIRECTORY-entry operation gated on the directory's write
+    // permission, not the target file's own permission bits. The
+    // unfixed `generateAndStore()` fallback therefore overwrites BOTH
+    // files successfully (the directory is still fully writable in this
+    // test; only the key FILE's own mode is 0000), silently replacing
+    // the pinned identity with a fresh, unrelated one. Fixed
+    // loadExisting() reports the I/O failure as a hard error instead of
+    // falling through to that fallback at all, so no write of either
+    // file is ever attempted.
     void unreadableExistingKeyFailsRatherThanRegenerates()
     {
         if (geteuid() == 0) {
@@ -265,24 +289,20 @@ private slots:
         const QString keyPath = first.privateKeyPath();
 
         QVERIFY(QFile::setPermissions(keyPath, QFileDevice::Permissions()));
+        // RAII (fix round 3 minor): restores permissions on scope exit,
+        // including an early return from a QVERIFY below, so a failing
+        // assertion here never leaves QTemporaryDir unable to clean up
+        // the still-mode-0000 key file.
+        const PermissionRestorer restorer{
+            keyPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner};
 
         CertificateStore second(tmp.path());
         QVERIFY(!second.isValid());
         QVERIFY(!second.lastError().isEmpty());
 
-        // Restore permissions before QTemporaryDir's destructor tries to
-        // remove the file, and confirm the ORIGINAL identity survived
-        // untouched (the whole point of failing loudly instead of
-        // regenerating). This last check also catches a cascade the
-        // unfixed code has: without the Important 3 fix, `second`'s
-        // constructor falls through to generateAndStore() on the
-        // unreadable key, which overwrites the CERTIFICATE (succeeds)
-        // before failing to overwrite the still-locked KEY, leaving a
-        // mismatched pair for `third` to load -- which the unfixed
-        // Important 2 code then also silently accepts. Fixing Important
-        // 3 alone (never attempting generateAndStore() over an
-        // unreadable key) is what prevents that cascade; this assertion
-        // is why both fixes must land together for this slot to pass.
+        // Confirm the ORIGINAL identity survived untouched (the whole
+        // point of failing loudly instead of regenerating), now that
+        // permissions are restored.
         QVERIFY(QFile::setPermissions(
             keyPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner));
         CertificateStore third(tmp.path());
@@ -308,15 +328,18 @@ private slots:
         QVERIFY(tmp.isValid());
         QVERIFY(QFile::setPermissions(
             tmp.path(), QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+        // RAII (fix round 3 minor): restores the write bit on scope exit,
+        // including an early return from a QVERIFY below, so a failing
+        // assertion here never leaves QTemporaryDir unable to remove its
+        // own still-unwritable directory. A prior revision restored this
+        // only after both assertions below, on the success path alone.
+        const PermissionRestorer restorer{
+            tmp.path(),
+            QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner};
 
         CertificateStore store(tmp.path());
         QVERIFY(!store.isValid());
         QVERIFY(!store.lastError().isEmpty());
-
-        // Restore write permission so QTemporaryDir can clean itself up.
-        QVERIFY(QFile::setPermissions(
-            tmp.path(),
-            QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
     }
 #endif
 

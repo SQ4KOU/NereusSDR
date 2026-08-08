@@ -215,100 +215,164 @@ endif()
 # Version floor 3.0: CertificateStore.cpp uses the OpenSSL 3.0 one-call key
 # generator EVP_RSA_gen().
 #
-# Per-platform acquisition:
-#   macOS   -- Homebrew's keg-only openssl@3 formula, found here with NO
-#              extra search hints via CMake's own FindOpenSSL module
-#              (verified empirically 2026-08-08). Do not hardcode a
-#              Homebrew Cellar/opt path.
-#   Linux   -- distro package: `openssl` (Arch) / `libssl-dev` (Debian,
-#              Ubuntu). See CLAUDE.md's Dependencies lines,
-#              .github/workflows/ci.yml, .github/workflows/release.yml and
-#              .github/docker/Dockerfile, all updated alongside this block
-#              (fix round 1 review, Important 1 point 2).
-#   Windows -- vcpkg, triplet x64-windows-static-md, pinned by a manifest
-#              baseline (vcpkg.json at the repo root). Fix round 2:
-#              builtin-baseline is 9e593bb18ea69cc5095e012465dcd675a822ed0d,
-#              the commit vcpkg's annotated release tag 2026.07.29
-#              (published 2026-07-31, tag object
-#              c76c06644034521fb761a39f8f52d8e87d1103d5) dereferences to --
-#              deliberately a release tag rather than master HEAD, because
-#              reproducibility is the whole point of pinning a baseline at
-#              all, and a future OpenSSL security update should be a
-#              visible one-line bump to a newer tag, not silent drift.
-#              Confirmed ports/openssl/vcpkg.json exists at that tree
-#              before pinning it, so the dependency actually resolves.
-#              Bump by replacing this SHA (and the identical one in
-#              vcpkg.json) with a newer release tag's commit when taking
-#              an update; do not point this at master HEAD instead.
-#              Coordinator decision, fix round 1:
-#                - Static (not dynamic) because this project ships a
-#                  portable ZIP and an NSIS installer, and a missing runtime
-#                  DLL has already cost a release (v0.5.0 shipped without
-#                  rade.dll). -static-md specifically, not plain -static:
-#                  static OpenSSL libs against the DYNAMIC CRT, matching
-#                  what Qt itself links against on Windows. Mixing CRTs
-#                  (static OpenSSL against a static CRT, dynamic Qt against
-#                  a dynamic CRT) is its own class of bug.
-#                - vcpkg because `windows-latest` already ships it
-#                  (VCPKG_INSTALLATION_ROOT is set on the image), so this
-#                  adds no new tool alongside release.yml's existing
-#                  `choco install ninja nsis`.
-#                - A pinned baseline (not vcpkg's rolling default) because
-#                  this is a TLS library: vendoring a prebuilt binary blob
-#                  the way third_party/fftw3/ does for FFTW would mean
-#                  owning patch distribution by hand when OpenSSL issues an
-#                  advisory. A baseline makes taking that update a one-line
-#                  bump with a visible diff instead.
-#              release.yml passes -DCMAKE_TOOLCHAIN_FILE, -DVCPKG_TARGET_
-#              TRIPLET and -DOPENSSL_ROOT_DIR explicitly on the initial
-#              `cmake -B build` line (a toolchain file must be supplied
-#              before project() runs, so it cannot be set from inside this
-#              file). The assertion immediately below exists because
-#              GitHub's windows-latest image preinstalls Strawberry Perl,
-#              which bundles its own MinGW-built OpenSSL; if FindOpenSSL
-#              resolves to THAT copy instead of the vcpkg one (wrong search
-#              order, a stale CMake cache entry, a PATH change), linking it
-#              against this MSVC-built project fails confusingly, or worse,
-#              configures and silently misbehaves. Do not rely on the
-#              vcpkg toolchain winning by search order alone -- the root is
-#              named explicitly and checked.
+# Per-platform acquisition. Five routes, one per (OS, arch, workflow)
+# combination that actually needs OpenSSL:
+#
+# macOS, arm64 (both ci.yml and release.yml, native):
+#   Homebrew's openssl@3 formula. Fix round 3 correction: a prior revision
+#   of this comment (and CLAUDE.md's) called it "keg-only" -- it is not
+#   (`brew info --json=v2 openssl@3` reports `"keg_only": false`, and
+#   `/opt/homebrew/lib/libcrypto*.dylib` / `/opt/homebrew/include/openssl`
+#   are live symlinks into the Cellar, verified 2026-08-08). The real
+#   reason find_package(OpenSSL) needs no extra hint here is more mundane:
+#   those symlinks land openssl@3 in the same ${HOMEBREW_PREFIX}/lib and
+#   .../include this file's own `if(APPLE)` block (above, near the top)
+#   already adds to the search path for every Homebrew-installed library,
+#   openssl@3 included. Do not hardcode a Homebrew Cellar/opt path
+#   regardless.
+#
+# macOS, x86_64 (release.yml's Intel cross-compile row only):
+#   Fix round 3, Important B. That arm64 openssl@3 keg has no x86_64
+#   slice, so the route above does not apply on this row at all -- source-
+#   built instead, the same pattern release.yml already uses for FFTW
+#   immediately above this row's Configure step (see that step's own
+#   comment): this is an Apple Silicon runner producing an Intel artifact,
+#   so no Homebrew keg for either library is ever usable here regardless
+#   of keg-only status. OpenSSL 3.0.21, Configure target
+#   darwin64-x86_64-cc (bakes in -arch x86_64 itself), -mmacosx-version-min
+#   matching the row's deployment target, shared (matching FFTW's
+#   --enable-shared choice on the same row, so packaging treats both the
+#   same way), installed via `make install_sw` (skips docs) into a
+#   build-local prefix, wired in via an explicit -DOPENSSL_ROOT_DIR on
+#   that row only. This is the exact artifact-class bug the whole
+#   REQUIRED finding is modelled on -- v0.5.0's Windows build shipped
+#   without rade.dll; unfixed, this would have been the Intel DMG failing
+#   to configure, or worse, linking an arm64 libcrypto into an x86_64
+#   binary -- caught here, before a release, not after.
+#
+# Linux (all three workflows plus the CI Dockerfile):
+#   Distro package: `openssl` (Arch) / `libssl-dev` (Debian, Ubuntu). See
+#   CLAUDE.md's Dependencies lines, .github/workflows/ci.yml,
+#   .github/workflows/release.yml, .github/workflows/codeql.yml (fix
+#   round 3 minor C) and .github/docker/Dockerfile, all updated alongside
+#   this block.
+#
+# Windows, MSVC (release.yml's release-artifact leg only):
+#   vcpkg, triplet x64-windows-static-md, pinned by a manifest baseline
+#   (vcpkg.json at the repo root). Fix round 2: builtin-baseline is
+#   9e593bb18ea69cc5095e012465dcd675a822ed0d, the commit vcpkg's annotated
+#   release tag 2026.07.29 (published 2026-07-31, tag object
+#   c76c06644034521fb761a39f8f52d8e87d1103d5) dereferences to --
+#   deliberately a release tag rather than master HEAD, because
+#   reproducibility is the whole point of pinning a baseline at all, and a
+#   future OpenSSL security update should be a visible one-line bump to a
+#   newer tag, not silent drift. Confirmed ports/openssl/vcpkg.json exists
+#   at that tree before pinning it, so the dependency actually resolves.
+#   Bump by replacing this SHA (and the identical one in vcpkg.json) with
+#   a newer release tag's commit when taking an update; do not point this
+#   at master HEAD instead.
+#
+#   Coordinator decision, fix round 1, for why THIS route on THIS leg:
+#     - Static (not dynamic) because this project ships a portable ZIP and
+#       an NSIS installer, and a missing runtime DLL has already cost a
+#       release (v0.5.0 shipped without rade.dll). -static-md
+#       specifically, not plain -static: static OpenSSL libs against the
+#       DYNAMIC CRT, matching what Qt itself links against on this leg.
+#       Mixing CRTs (static OpenSSL against a static CRT, dynamic Qt
+#       against a dynamic CRT) is its own class of bug.
+#     - vcpkg because `windows-latest` already ships it
+#       (VCPKG_INSTALLATION_ROOT is set on the image), so this adds no new
+#       tool alongside release.yml's existing `choco install ninja nsis`.
+#     - A pinned baseline (not vcpkg's rolling default) because this is a
+#       TLS library: vendoring a prebuilt binary blob the way
+#       third_party/fftw3/ does for FFTW would mean owning patch
+#       distribution by hand when OpenSSL issues an advisory. A baseline
+#       makes taking that update a one-line bump with a visible diff
+#       instead.
+#
+#   release.yml passes -DCMAKE_TOOLCHAIN_FILE, -DVCPKG_TARGET_TRIPLET and
+#   -DOPENSSL_ROOT_DIR explicitly on the initial `cmake -B build` line (a
+#   toolchain file must be supplied before project() runs, so it cannot be
+#   set from inside this file). Fix round 3 correction to the assertion
+#   below's own original reasoning: CMake's FindOpenSSL sets NO_DEFAULT_PATH
+#   once OPENSSL_ROOT_DIR is defined, so the Strawberry Perl collision this
+#   assertion was written to catch cannot actually happen on this leg --
+#   confirmed by the round 3 reviewer, who ran it. The assertion is kept
+#   anyway: it is redundant against a fresh configure but still catches a
+#   STALE CMake cache (e.g. a persisted build/ directory reconfigured with
+#   a different OPENSSL_ROOT_DIR than the one that populated its cache),
+#   which NO_DEFAULT_PATH alone does not guard against.
+#
+# Windows, MinGW (ci.yml's compile-only smoke-check leg only):
+#   Fix round 3, Important A: this leg's Qt is `arch: win64_mingw`, GCC
+#   13.1.0 (tools_mingw1310), confirmed the classic MSVCRT-based MinGW
+#   build, not UCRT (verified 2026-08-08: Qt's separate win64_mingw_ucrt
+#   architecture exists specifically because plain win64_mingw is the
+#   older MSVCRT one; MSYS2's own docs are explicit that mixing MSVCRT and
+#   UCRT binaries is unsafe because their internal structures differ). A
+#   prior revision of this route tried a Qt-distributed OpenSSL tool by
+#   the wrong name entirely and, worse, even correctly named it would have
+#   been an MSVC-built prebuild -- the wrong ABI for a MinGW target no
+#   matter what it was called. Replaced with MSYS2's MINGW64 environment
+#   (not UCRT64), package mingw-w64-x86_64-openssl, matching
+#   win64_mingw's own MSVCRT runtime -- installed via the msys2/setup-msys2
+#   action in ci.yml, landing at `<msys2-location>/mingw64/`. The header
+#   and link-library assertions ci.yml already runs against the resolved
+#   path (added fix round 2, kept as-is fix round 3 -- they were judged
+#   correct) still apply: this route can still hand a runtime-only
+#   package the same way the removed one did if MSYS2's package layout
+#   ever changes, so they keep failing the job loudly rather than
+#   trusting presence alone.
 #
 # Design note on why static linking is safe despite Qt's own Windows TLS
-# story: Qt on Windows commonly uses Schannel, and where it uses OpenSSL
-# instead it may carry its own copy -- ordinarily, two OpenSSL runtimes
-# alive in one process is a real hazard (symbol collisions, mismatched
-# struct layouts across versions). It is safe here specifically BECAUSE
-# this class hands Qt PEM *text*, never an OpenSSL object: CertificateStore
-# generates with libcrypto, serialises to PEM, writes it to disk, and Qt's
-# QSslCertificate/QSslKey parse that PEM independently through whichever
-# backend Qt itself is using. No EVP_PKEY*, X509*, or other OpenSSL pointer
-# ever crosses the boundary into Qt, so there is no shared state for two
-# OpenSSL runtimes to corrupt. Keep it that way -- an optimisation that
-# skips the PEM round-trip and hands Qt an OpenSSL object directly would
-# silently reintroduce this hazard.
+# story (MSVC leg): Qt on Windows commonly uses Schannel, and where it
+# uses OpenSSL instead it may carry its own copy -- ordinarily, two
+# OpenSSL runtimes alive in one process is a real hazard (symbol
+# collisions, mismatched struct layouts across versions). It is safe here
+# specifically BECAUSE this class hands Qt PEM *text*, never an OpenSSL
+# object: CertificateStore generates with libcrypto, serialises to PEM,
+# writes it to disk, and Qt's QSslCertificate/QSslKey parse that PEM
+# independently through whichever backend Qt itself is using. No
+# EVP_PKEY*, X509*, or other OpenSSL pointer ever crosses the boundary
+# into Qt, so there is no shared state for two OpenSSL runtimes to
+# corrupt. Keep it that way -- an optimisation that skips the PEM
+# round-trip and hands Qt an OpenSSL object directly would silently
+# reintroduce this hazard.
 find_package(OpenSSL 3.0 REQUIRED COMPONENTS Crypto)
 message(STATUS "OpenSSL ${OPENSSL_VERSION} found at ${OPENSSL_INCLUDE_DIR}")
 
-if(WIN32 AND DEFINED OPENSSL_ROOT_DIR)
+# Fix round 3: broadened from WIN32-only to any platform, since the same
+# "assert what was explicitly requested is what was actually found"
+# principle now also applies to release.yml's macOS x86_64 cross-compile
+# row (Important B) -- a stale build/ directory reconfigured after a
+# switch between the arm64 native row and the x86_64 cross-compile row
+# could otherwise silently keep the wrong architecture's cached OpenSSL.
+if(DEFINED OPENSSL_ROOT_DIR)
     # Only checked when the build was actually told which root to expect
-    # (release.yml's vcpkg step sets this; a bare local Windows configure
-    # with no OPENSSL_ROOT_DIR is not asserted against anything here, and
-    # relies on whatever FindOpenSSL resolves on its own). Turns a silent
-    # wrong-pick (see the design note above) into a hard configure error --
-    # the same "refuse to configure quietly wrong" principle the
-    # Qt6::WebSockets block above applies to a missing mandatory feature,
-    # extended here to a mandatory dependency resolving to the WRONG copy.
+    # (release.yml's vcpkg step on the Windows/MSVC leg, or its x86_64
+    # OpenSSL source-build step on the macOS Intel leg, sets this; a bare
+    # local configure with no OPENSSL_ROOT_DIR is not asserted against
+    # anything here, and relies on whatever FindOpenSSL resolves on its
+    # own). Turns a silent wrong-pick (see the design notes above) into a
+    # hard configure error -- the same "refuse to configure quietly
+    # wrong" principle the Qt6::WebSockets block above applies to a
+    # missing mandatory feature, extended here to a mandatory dependency
+    # resolving to the WRONG copy.
     cmake_path(IS_PREFIX OPENSSL_ROOT_DIR "${OPENSSL_INCLUDE_DIR}" NORMALIZE _openssl_under_intended_root)
     if(NOT _openssl_under_intended_root)
         message(FATAL_ERROR
             "find_package(OpenSSL) resolved to ${OPENSSL_INCLUDE_DIR}, which is "
             "NOT under the OPENSSL_ROOT_DIR (${OPENSSL_ROOT_DIR}) this build was "
-            "explicitly told to use. The likely cause is Strawberry Perl's "
-            "bundled MinGW-built OpenSSL, which GitHub's windows-latest runner "
-            "preinstalls and which is NOT link-compatible with this MSVC build. "
-            "Fix: confirm OPENSSL_ROOT_DIR points at the vcpkg "
-            "x64-windows-static-md install and that no earlier search path "
-            "entry lets FindOpenSSL prefer a different copy.")
+            "explicitly told to use. On Windows/MSVC the likely cause is "
+            "Strawberry Perl's bundled MinGW-built OpenSSL, which "
+            "windows-latest preinstalls and which is not link-compatible with "
+            "an MSVC build; confirm OPENSSL_ROOT_DIR points at the vcpkg "
+            "x64-windows-static-md install. On macOS the likely cause is a "
+            "stale build/ directory that cached a different architecture's "
+            "OpenSSL before switching between the native and cross-compile "
+            "rows; delete build/CMakeCache.txt and reconfigure. Either way: "
+            "confirm no earlier search path entry lets FindOpenSSL prefer a "
+            "different copy.")
     endif()
     unset(_openssl_under_intended_root)
 endif()
@@ -1467,9 +1531,14 @@ function(nereus_apply_core_deps target)
     # link itself still lands in the nereusd binary) and every test target
     # via NereusSDRObjs. Unconditional (fix round 1 review, Important 1):
     # find_package(OpenSSL) near the top of this file is REQUIRED, so
-    # OpenSSL::Crypto always exists by the time this runs.
+    # OpenSSL::Crypto always exists by the time this runs. No
+    # HAVE_OPENSSL_CRYPTO compile definition (fix round 3 minor): a prior
+    # revision defined one, unconditionally, with nothing anywhere
+    # consuming it -- exactly the #ifdef-guarded-call affordance Important
+    # 1 warned Task 18 away from reaching for. If a real conditional-
+    # compilation need appears later, add the define back at that point,
+    # next to its first consumer.
     target_link_libraries(${target} PUBLIC OpenSSL::Crypto)
-    target_compile_definitions(${target} PUBLIC HAVE_OPENSSL_CRYPTO)
 
     # libpipewire-0.3, gated by the pkg_check_modules block above. Only links on
     # Linux when the dev package is present; NEREUS_HAVE_PIPEWIRE lets follow-up

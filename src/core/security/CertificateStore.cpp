@@ -318,6 +318,17 @@ CertificateStore::LoadResult CertificateStore::loadExisting()
     // Task 18 a certificate that does not match the key beside it, which
     // would fail every client's TLS handshake with no clue why.
     if (X509_check_private_key(cert.get(), pkey.get()) != 1) {
+        // Fix round 3 minor: this branch was silent, leaving the operator
+        // with only generateAndStore()'s later "generated new TLS
+        // identity" line and no statement of why the pinned identity is
+        // about to be rotated -- unlike the two IoFailure branches above,
+        // which both explain themselves. A mismatched pair rotating the
+        // identity every already-paired client depends on deserves the
+        // same visibility.
+        qCWarning(lcApp) << "CertificateStore: certificate/key pair at"
+                          << m_certPath << "and" << m_keyPath
+                          << "do not match (X509_check_private_key failed); "
+                             "regenerating a fresh identity.";
         ERR_clear_error();
         return LoadResult::NotPresent;
     }
