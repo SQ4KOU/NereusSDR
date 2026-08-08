@@ -329,12 +329,21 @@ endif()
 #
 # Windows, MinGW (ci.yml's compile-only smoke-check leg only):
 #   Fix round 3, Important A: this leg's Qt is `arch: win64_mingw`, GCC
-#   13.1.0 (tools_mingw1310), confirmed the classic MSVCRT-based MinGW
-#   build, not UCRT (verified 2026-08-08: Qt's separate win64_mingw_ucrt
-#   architecture exists specifically because plain win64_mingw is the
-#   older MSVCRT one; MSYS2's own docs are explicit that mixing MSVCRT and
-#   UCRT binaries is unsafe because their internal structures differ). A
-#   prior revision of this route tried a Qt-distributed OpenSSL tool by
+#   13.1.0 (tools_mingw1310), the classic MSVCRT-based MinGW build, not
+#   UCRT. Fix round 5 correction: this sentence originally (fix round 3)
+#   supported that claim by asserting "Qt's separate win64_mingw_ucrt
+#   architecture exists" -- that name does not exist and was never
+#   checked before being written down here, an exact copy of the same
+#   fabrication `ci.yml`'s equivalent comment already retracted fix round
+#   4 (the two blocks were written together fix round 3, and only one
+#   was corrected). Verified (aqtinstall's own docs, fix round 4): Qt's
+#   Windows desktop architectures are win64_mingw, win64_llvm_mingw,
+#   win64_msvc2022_64 and win64_msvc2022_arm64_cross_compiled -- no
+#   `_ucrt` suffix anywhere. mingw-builds (this leg's toolchain) is
+#   MSVCRT-based; win64_llvm_mingw (a different, LLVM-based toolchain) is
+#   Qt's actual UCRT option. MSYS2's own docs are still the real,
+#   separately-verified basis for treating MSVCRT/UCRT as unsafe to mix.
+#   A prior revision of this route tried a Qt-distributed OpenSSL tool by
 #   the wrong name entirely and, worse, even correctly named it would have
 #   been an MSVC-built prebuild -- the wrong ABI for a MinGW target no
 #   matter what it was called. Replaced with MSYS2's MINGW64 environment
