@@ -223,13 +223,37 @@ endif()
 #   of this comment (and CLAUDE.md's) called it "keg-only" -- it is not
 #   (`brew info --json=v2 openssl@3` reports `"keg_only": false`, and
 #   `/opt/homebrew/lib/libcrypto*.dylib` / `/opt/homebrew/include/openssl`
-#   are live symlinks into the Cellar, verified 2026-08-08). The real
-#   reason find_package(OpenSSL) needs no extra hint here is more mundane:
-#   those symlinks land openssl@3 in the same ${HOMEBREW_PREFIX}/lib and
-#   .../include this file's own `if(APPLE)` block (above, near the top)
-#   already adds to the search path for every Homebrew-installed library,
-#   openssl@3 included. Do not hardcode a Homebrew Cellar/opt path
-#   regardless.
+#   are live symlinks into the Cellar, verified 2026-08-08).
+#
+#   Fix round 4 correction: that same revision then credited the WRONG
+#   mechanism for why find_package(OpenSSL) needs no extra hint --
+#   pointing at this file's own `if(APPLE)` block (above, near the top),
+#   which calls link_directories()/include_directories(). Those two
+#   commands affect compile and link command lines; per CMake's own
+#   find_path()/find_library() documentation (what a Find module like
+#   FindOpenSSL.cmake calls internally), neither one is consulted by
+#   find_package's search procedure at all. The keg-only correction
+#   itself still holds; only the "why" was wrong. Verified instead,
+#   for the two cases that actually matter here:
+#     - ci.yml and release.yml both pass -DCMAKE_PREFIX_PATH="$(brew
+#       --prefix)" explicitly on this row's Configure step, and
+#       CMAKE_PREFIX_PATH genuinely is one of find_path/find_library's
+#       documented search inputs (confirmed against CMake's own
+#       find_path() docs, 2026-08-08).
+#     - A bare local configure with no explicit CMAKE_PREFIX_PATH (every
+#       manual `cmake -B build` run during this task) resolves it a
+#       DIFFERENT way, verified empirically rather than assumed:
+#       FindOpenSSL.cmake also tries pkg-config internally (visible in
+#       CMakeCache.txt as the pkgcfg_lib__OPENSSL_*/__pkg_config_*
+#       variables), and Homebrew's own `pkg-config` binary has
+#       /opt/homebrew/lib/pkgconfig compiled into its default search
+#       path -- `pkg-config --variable pc_path pkg-config` lists it, and
+#       `pkg-config --exists openssl` succeeds even with PKG_CONFIG_PATH
+#       explicitly unset. Neither CMAKE_PREFIX_PATH nor the PATH
+#       environment variable is involved in this second case: both were
+#       checked and are empty/uninvolved on this machine.
+#   Do not hardcode a Homebrew Cellar/opt path regardless of which of
+#   the two mechanisms above actually resolves it in a given context.
 #
 # macOS, x86_64 (release.yml's Intel cross-compile row only):
 #   Fix round 3, Important B. That arm64 openssl@3 keg has no x86_64
@@ -358,7 +382,56 @@ if(DEFINED OPENSSL_ROOT_DIR)
     # wrong" principle the Qt6::WebSockets block above applies to a
     # missing mandatory feature, extended here to a mandatory dependency
     # resolving to the WRONG copy.
-    cmake_path(IS_PREFIX OPENSSL_ROOT_DIR "${OPENSSL_INCLUDE_DIR}" NORMALIZE _openssl_under_intended_root)
+    #
+    # Fix round 4: this assertion previously compared OPENSSL_ROOT_DIR
+    # against OPENSSL_INCLUDE_DIR directly through cmake_path(IS_PREFIX),
+    # which broke BOTH Windows legs. cmake_path's own documentation is
+    # explicit that "/" is the only recognised directory separator; it
+    # never treats "\" as one. ci.yml's msys2-location output and
+    # release.yml's OPENSSL_ROOT_DIR (mangled to backslashes by Git
+    # Bash's MSYS path translation under `shell: bash`) are both NATIVE
+    # Windows paths, so OPENSSL_ROOT_DIR arrived as e.g.
+    # "D:\a\_temp\msys64/mingw64" while FindOpenSSL had already
+    # normalised OPENSSL_INCLUDE_DIR to forward slashes -- IS_PREFIX
+    # parsed the backslash root as a single opaque path component with
+    # no root-directory, which can never prefix-match a path that has
+    # one, and FATAL_ERROR fired on every correctly-resolved Windows
+    # configure. Reproduced and fixed locally (this machine is not
+    # Windows, but cmake_path's parsing is pure string logic, independent
+    # of host OS, so this is meaningfully testable here):
+    #
+    #   backslash root "D:\a\_temp\msys64/mingw64" vs forward-slash
+    #   input "D:/a/_temp/msys64/mingw64/include" -> IS_PREFIX: OFF (bug
+    #   reproduced)
+    #
+    # cmake_path(CONVERT ... TO_CMAKE_PATH_LIST ...), the mechanism first
+    # proposed for this fix, was tried and rejected: TO_CMAKE_PATH_LIST
+    # treats its input as a native PATH-LIST (semicolon/colon-separated,
+    # like $PATH), not a single path's separators, and mangled
+    # "D:\a\_temp\msys64/mingw64" into "D;\a\_temp\msys64/mingw64" --
+    # actively wrong, not merely ineffective. string(REPLACE "\\" "/" ...)
+    # is what actually works, applied to both sides so this holds even if
+    # a future FindOpenSSL stops pre-normalising OPENSSL_INCLUDE_DIR:
+    #
+    #   sanitized backslash root vs forward-slash input -> IS_PREFIX: ON
+    #   sanitized already-forward-slash root vs same input -> IS_PREFIX: ON (no regression)
+    #   sanitized WRONG root (Strawberry Perl-shaped, with backslashes) -> IS_PREFIX: OFF (negative control still rejects)
+    #   POSIX root/input (no backslashes at all, e.g. this machine) -> IS_PREFIX: ON (unaffected)
+    #
+    # The round-2 reviewer's other point stands and is worth restating:
+    # this assertion is redundant against a FRESH configure specifically
+    # on the MSVC leg (FindOpenSSL sets NO_DEFAULT_PATH once
+    # OPENSSL_ROOT_DIR is defined, so the Strawberry Perl collision it
+    # guards against cannot occur there). It is kept, not deleted,
+    # because it still catches a STALE CMake cache on any platform (a
+    # persisted build/ directory reconfigured with a different
+    # OPENSSL_ROOT_DIR than the one that populated its cache) -- see the
+    # macOS x86_64-vs-arm64 row-switch case documented above -- and NOW
+    # also genuinely fires correctly on Windows instead of unconditionally
+    # rejecting it.
+    string(REPLACE "\\" "/" _openssl_root_sanitized "${OPENSSL_ROOT_DIR}")
+    string(REPLACE "\\" "/" _openssl_include_sanitized "${OPENSSL_INCLUDE_DIR}")
+    cmake_path(IS_PREFIX _openssl_root_sanitized "${_openssl_include_sanitized}" NORMALIZE _openssl_under_intended_root)
     if(NOT _openssl_under_intended_root)
         message(FATAL_ERROR
             "find_package(OpenSSL) resolved to ${OPENSSL_INCLUDE_DIR}, which is "
@@ -374,6 +447,8 @@ if(DEFINED OPENSSL_ROOT_DIR)
             "confirm no earlier search path entry lets FindOpenSSL prefer a "
             "different copy.")
     endif()
+    unset(_openssl_root_sanitized)
+    unset(_openssl_include_sanitized)
     unset(_openssl_under_intended_root)
 endif()
 
