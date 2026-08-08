@@ -1,0 +1,11 @@
+{
+  "name": "nereussdr",
+  "version-string": "0.5.2",
+  "builtin-baseline": "REPLACE-WITH-VCPKG-COMMIT-SHA-BEFORE-FIRST-USE",
+  "dependencies": [
+    {
+      "name": "openssl",
+      "platform": "windows"
+    }
+  ]
+}

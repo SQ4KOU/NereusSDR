@@ -197,30 +197,110 @@ endif()
 # neither "OpenSSL" nor "libcrypto" appeared anywhere in CMakeLists.txt or
 # src/ before this block.
 #
-# Deliberately NOT REQUIRED. Unlike Qt6::WebSockets above (made REQUIRED
-# after a QUIET find_package let v0.5.0 ship a macOS x86_64 build with a
-# real, already-wired feature silently disabled -- see that block's own
-# comment), nothing in this tree yet depends on HAVE_OPENSSL_CRYPTO being
-# defined: CertificateStore has no production caller until Task 18 wires up
-# the wss session. Keeping the dependency optional-at-configure-time means a
-# machine without OpenSSL dev headers still configures and builds NereusSDR,
-# nereusd, and every existing test -- it just does not get
-# tst_certificate_store or the TLS identity feature. Mirrors the
-# FFTW3_FOUND / WDSP_FOUND / PIPEWIRE_FOUND pattern below, not the
-# WebSockets one. Revisit once a task actually wires CertificateStore into
-# nereusd's startup path -- at that point the WebSockets lesson applies here
-# too.
+# REQUIRED (fix round 1 review, reversing an initial "optional-at-
+# configure-time" decision). The reviewer's objection: the optional gate's
+# benefit expires the moment a real caller exists. Task 18 either calls
+# CertificateStore unguarded, so an OpenSSL-less machine would configure
+# cleanly and then fail at LINK with an undefined constructor symbol -- a
+# worse diagnostic, arriving later -- or Task 18 guards every call behind
+# `#ifdef HAVE_OPENSSL_CRYPTO`, producing a nereusd that configures, builds,
+# installs and starts, then silently cannot serve wss://. That second shape
+# is the exact v0.5.0 Qt6::WebSockets bug reproduced verbatim (see that
+# block's own comment: "if a feature is mandatory, the build system has to
+# refuse to configure without it"), on the one feature this phase is named
+# after. Both successor states are worse than a loud configure error today,
+# so this is REQUIRED even though CertificateStore itself has no production
+# caller in this commit.
 #
 # Version floor 3.0: CertificateStore.cpp uses the OpenSSL 3.0 one-call key
-# generator EVP_RSA_gen(). Found here with no extra search hints via CMake's
-# own FindOpenSSL module (verified empirically 2026-08-08 against the
-# maintainer's Homebrew keg-only openssl@3 formula) -- do not hardcode a
-# Homebrew Cellar/opt path; let find_package() resolve it on every platform.
-find_package(OpenSSL 3.0 COMPONENTS Crypto)
-if(OPENSSL_FOUND)
-    message(STATUS "OpenSSL ${OPENSSL_VERSION} found at ${OPENSSL_INCLUDE_DIR} -- nereusd TLS certificate provisioning enabled")
-else()
-    message(STATUS "OpenSSL >= 3.0 not found -- nereusd TLS certificate provisioning (CertificateStore, remote pairing) disabled")
+# generator EVP_RSA_gen().
+#
+# Per-platform acquisition:
+#   macOS   -- Homebrew's keg-only openssl@3 formula, found here with NO
+#              extra search hints via CMake's own FindOpenSSL module
+#              (verified empirically 2026-08-08). Do not hardcode a
+#              Homebrew Cellar/opt path.
+#   Linux   -- distro package: `openssl` (Arch) / `libssl-dev` (Debian,
+#              Ubuntu). See CLAUDE.md's Dependencies lines,
+#              .github/workflows/ci.yml, .github/workflows/release.yml and
+#              .github/docker/Dockerfile, all updated alongside this block
+#              (fix round 1 review, Important 1 point 2).
+#   Windows -- vcpkg, triplet x64-windows-static-md, pinned by a manifest
+#              baseline (vcpkg.json at the repo root; ITS builtin-baseline
+#              PLACEHOLDER MUST BE REPLACED with a real vcpkg commit SHA --
+#              run `vcpkg x-update-baseline` against the vcpkg checkout the
+#              target CI runner uses -- before this route is live).
+#              Coordinator decision, fix round 1:
+#                - Static (not dynamic) because this project ships a
+#                  portable ZIP and an NSIS installer, and a missing runtime
+#                  DLL has already cost a release (v0.5.0 shipped without
+#                  rade.dll). -static-md specifically, not plain -static:
+#                  static OpenSSL libs against the DYNAMIC CRT, matching
+#                  what Qt itself links against on Windows. Mixing CRTs
+#                  (static OpenSSL against a static CRT, dynamic Qt against
+#                  a dynamic CRT) is its own class of bug.
+#                - vcpkg because `windows-latest` already ships it
+#                  (VCPKG_INSTALLATION_ROOT is set on the image), so this
+#                  adds no new tool alongside release.yml's existing
+#                  `choco install ninja nsis`.
+#                - A pinned baseline (not vcpkg's rolling default) because
+#                  this is a TLS library: vendoring a prebuilt binary blob
+#                  the way third_party/fftw3/ does for FFTW would mean
+#                  owning patch distribution by hand when OpenSSL issues an
+#                  advisory. A baseline makes taking that update a one-line
+#                  bump with a visible diff instead.
+#              release.yml passes -DCMAKE_TOOLCHAIN_FILE, -DVCPKG_TARGET_
+#              TRIPLET and -DOPENSSL_ROOT_DIR explicitly on the initial
+#              `cmake -B build` line (a toolchain file must be supplied
+#              before project() runs, so it cannot be set from inside this
+#              file). The assertion immediately below exists because
+#              GitHub's windows-latest image preinstalls Strawberry Perl,
+#              which bundles its own MinGW-built OpenSSL; if FindOpenSSL
+#              resolves to THAT copy instead of the vcpkg one (wrong search
+#              order, a stale CMake cache entry, a PATH change), linking it
+#              against this MSVC-built project fails confusingly, or worse,
+#              configures and silently misbehaves. Do not rely on the
+#              vcpkg toolchain winning by search order alone -- the root is
+#              named explicitly and checked.
+#
+# Design note on why static linking is safe despite Qt's own Windows TLS
+# story: Qt on Windows commonly uses Schannel, and where it uses OpenSSL
+# instead it may carry its own copy -- ordinarily, two OpenSSL runtimes
+# alive in one process is a real hazard (symbol collisions, mismatched
+# struct layouts across versions). It is safe here specifically BECAUSE
+# this class hands Qt PEM *text*, never an OpenSSL object: CertificateStore
+# generates with libcrypto, serialises to PEM, writes it to disk, and Qt's
+# QSslCertificate/QSslKey parse that PEM independently through whichever
+# backend Qt itself is using. No EVP_PKEY*, X509*, or other OpenSSL pointer
+# ever crosses the boundary into Qt, so there is no shared state for two
+# OpenSSL runtimes to corrupt. Keep it that way -- an optimisation that
+# skips the PEM round-trip and hands Qt an OpenSSL object directly would
+# silently reintroduce this hazard.
+find_package(OpenSSL 3.0 REQUIRED COMPONENTS Crypto)
+message(STATUS "OpenSSL ${OPENSSL_VERSION} found at ${OPENSSL_INCLUDE_DIR}")
+
+if(WIN32 AND DEFINED OPENSSL_ROOT_DIR)
+    # Only checked when the build was actually told which root to expect
+    # (release.yml's vcpkg step sets this; a bare local Windows configure
+    # with no OPENSSL_ROOT_DIR is not asserted against anything here, and
+    # relies on whatever FindOpenSSL resolves on its own). Turns a silent
+    # wrong-pick (see the design note above) into a hard configure error --
+    # the same "refuse to configure quietly wrong" principle the
+    # Qt6::WebSockets block above applies to a missing mandatory feature,
+    # extended here to a mandatory dependency resolving to the WRONG copy.
+    cmake_path(IS_PREFIX OPENSSL_ROOT_DIR "${OPENSSL_INCLUDE_DIR}" NORMALIZE _openssl_under_intended_root)
+    if(NOT _openssl_under_intended_root)
+        message(FATAL_ERROR
+            "find_package(OpenSSL) resolved to ${OPENSSL_INCLUDE_DIR}, which is "
+            "NOT under the OPENSSL_ROOT_DIR (${OPENSSL_ROOT_DIR}) this build was "
+            "explicitly told to use. The likely cause is Strawberry Perl's "
+            "bundled MinGW-built OpenSSL, which GitHub's windows-latest runner "
+            "preinstalls and which is NOT link-compatible with this MSVC build. "
+            "Fix: confirm OPENSSL_ROOT_DIR points at the vcpkg "
+            "x64-windows-static-md install and that no earlier search path "
+            "entry lets FindOpenSSL prefer a different copy.")
+    endif()
+    unset(_openssl_under_intended_root)
 endif()
 
 # --------------------------------------------------------------------------
@@ -774,13 +854,10 @@ set(CORE_SOURCES
 )
 
 # R2 Task 17: TLS certificate provisioning for nereusd's future wss::
-# listener (Task 18). Gated on OPENSSL_FOUND (see the find_package(OpenSSL)
-# block above) rather than unconditional: nothing calls CertificateStore in
-# production yet, so a tree without OpenSSL dev headers still builds
-# everything else.
-if(OPENSSL_FOUND)
-    list(APPEND CORE_SOURCES src/core/security/CertificateStore.cpp)
-endif()
+# listener (Task 18). Unconditional (fix round 1 review, Important 1):
+# find_package(OpenSSL) above is REQUIRED, so this file is always
+# available to compile.
+list(APPEND CORE_SOURCES src/core/security/CertificateStore.cpp)
 
 # CoreAudioHalBus — macOS-only IAudioBus implementation bridging to the
 # NereusSDRVAX HAL plugin via POSIX shared memory. The header is
@@ -1378,12 +1455,11 @@ function(nereus_apply_core_deps target)
     # reaches nereusd (links NereusCore PRIVATE, but PRIVATE only controls
     # whether nereusd's own PUBLIC deps propagate further downstream -- the
     # link itself still lands in the nereusd binary) and every test target
-    # via NereusSDRObjs. See the find_package(OpenSSL) block near the top of
-    # this file for why this is gated on OPENSSL_FOUND instead of REQUIRED.
-    if(OPENSSL_FOUND)
-        target_link_libraries(${target} PUBLIC OpenSSL::Crypto)
-        target_compile_definitions(${target} PUBLIC HAVE_OPENSSL_CRYPTO)
-    endif()
+    # via NereusSDRObjs. Unconditional (fix round 1 review, Important 1):
+    # find_package(OpenSSL) near the top of this file is REQUIRED, so
+    # OpenSSL::Crypto always exists by the time this runs.
+    target_link_libraries(${target} PUBLIC OpenSSL::Crypto)
+    target_compile_definitions(${target} PUBLIC HAVE_OPENSSL_CRYPTO)
 
     # libpipewire-0.3, gated by the pkg_check_modules block above. Only links on
     # Linux when the dev package is present; NEREUS_HAVE_PIPEWIRE lets follow-up

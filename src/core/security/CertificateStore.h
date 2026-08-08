@@ -24,10 +24,18 @@
 // is known and still open. This task's choices, recorded once here
 // rather than scattered across the .cpp:
 //
-//   - RSA 2048 / SHA-256, not ECDSA. Slightly larger and slower to
-//     generate, but the safer default against an unknown-until-runtime
-//     Qt TLS backend (see tlsBackendDiagnostic()) -- RSA has no curve-
-//     selection dimension to get wrong.
+//   - RSA 3072 / SHA-256, not ECDSA. Larger and slower to generate than
+//     RSA 2048 or an EC curve, but this runs once per daemon lifetime
+//     (a fresh key pair costs a few seconds, not a hot-path cost), and
+//     RSA has no curve-selection dimension to get wrong against an
+//     unknown-until-runtime Qt TLS backend (see tlsBackendDiagnostic()).
+//     Fix round 1 review: 3072 replaces an initial choice of 2048 after
+//     the reviewer flagged that 2048-bit RSA paired with this class's
+//     10-year validity put the key's ~112-bit security strength (NIST-
+//     rated through roughly 2030) on a certificate meant to still be in
+//     service through roughly 2036, with no rotation mechanism to
+//     revisit either number before then. 3072-bit RSA's strength margin
+//     comfortably covers the 10-year horizon instead.
 //   - 10-year validity (see generateAndStore() in the .cpp). No renewal
 //     mechanism exists yet, and because the client PINS this
 //     certificate's fingerprint (parent design §10.5), regenerating it
@@ -39,6 +47,14 @@
 //   - Fingerprint display: colon-separated uppercase SHA-256 hex pairs
 //     (see fingerprintSha256() below), the conventional X.509 form. This
 //     task's own choice in the documented absence of a specified one.
+//   - X.509v3 declared, zero v3 extensions. Deliberate, not an
+//     oversight: under fingerprint pinning (the whole point of the
+//     parent design's certificate model) extensions buy nothing today,
+//     and adding them retroactively would change the DER encoding under
+//     every already-paired client's pinned fingerprint, forcing a
+//     re-pair. If a later task needs Qt's addCaCertificate() trust-chain
+//     route instead of pinning, that is a deliberate, separate decision
+//     to make then -- not something to grow into by accident here.
 //
 // SCOPE BOUNDARY: this class provisions a certificate and a private key,
 // and nothing else. No socket, no handshake, no token -- those belong to
@@ -72,7 +88,7 @@
 namespace NereusSDR {
 
 // Generates (first run) or loads (every run after) a self-signed TLS
-// identity for nereusd's wss:// listener: one RSA-2048 key pair and one
+// identity for nereusd's wss:// listener: one RSA-3072 key pair and one
 // X.509 certificate, PEM-encoded, stored beside the daemon profile's own
 // settings file.
 //
@@ -120,9 +136,11 @@ public:
     QSslCertificate certificate() const { return m_certificate; }
     QSslKey privateKey() const { return m_privateKey; }
 
-    // Absolute paths to the PEM files this instance loaded or wrote.
-    // Empty when isValid() is false and generation never reached the
-    // point of choosing paths (directory could not be created).
+    // Absolute paths to the PEM files this instance will load from or
+    // write to. Fix round 1 review minor 6: always populated, derived
+    // from the constructor's directory argument unconditionally in the
+    // member-initializer list (see the .cpp) before any provisioning is
+    // attempted -- never empty, regardless of isValid().
     QString certificatePath() const { return m_certPath; }
     QString privateKeyPath() const { return m_keyPath; }
 
@@ -154,12 +172,27 @@ public:
     static QString tlsBackendDiagnostic();
 
 private:
-    // True if directory already held a cert + key that both parsed
-    // successfully; false (and generateAndStore() must run instead) on a
-    // missing, partial, or corrupt pair.
-    bool loadExisting();
+    // Fix round 1, Important 3: loadExisting() used to collapse three
+    // distinct outcomes into a bool, which is exactly what let "exists
+    // but this process cannot read it" get treated the same as "does not
+    // exist yet" and silently regenerated over. Loaded and NotPresent
+    // both existed before (as true/false); IoFailure is new and is the
+    // one outcome the constructor must NOT respond to by calling
+    // generateAndStore() -- doing so would overwrite a station identity
+    // the operator cannot currently prove is wrong, which is worse than
+    // refusing to start.
+    enum class LoadResult {
+        Loaded,      // a matching cert + key pair was parsed successfully
+        NotPresent,  // missing, corrupt, or a mismatched pair -- safe to
+                     // regenerate, exactly like a genuine first run
+        IoFailure,   // exists but this process could not open it -- must
+                     // NOT be regenerated over; see m_lastError
+    };
 
-    // Creates a fresh RSA-2048 key pair and self-signed certificate,
+    // See LoadResult above for the three outcomes.
+    LoadResult loadExisting();
+
+    // Creates a fresh RSA-3072 key pair and self-signed certificate,
     // writes both to m_certPath / m_keyPath (restrictive permissions on
     // the key), and populates m_certificate / m_privateKey /
     // m_fingerprint from the freshly generated bytes. Returns false (and

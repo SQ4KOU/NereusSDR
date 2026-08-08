@@ -6550,12 +6550,13 @@ nereus_add_test(tst_notch_visual_does_not_perturb_noise_floor_or_maxbin)
 # AppSettings::resolveConfigDir(AppSettings::kDaemonProfileName) rather than
 # a hand-built equivalent.
 #
-# Gated on OPENSSL_FOUND (see the top-level CMakeLists.txt find_package(
-# OpenSSL) block): CertificateStore.cpp is only added to CORE_SOURCES, and
-# only in that case does this test have anything to link against.
-if(OPENSSL_FOUND)
-    nereus_add_test(tst_certificate_store)
-endif()
+# Unconditional (fix round 1 review, Important 1): the top-level
+# CMakeLists.txt find_package(OpenSSL) is REQUIRED, so CertificateStore.cpp
+# is always in CORE_SOURCES and this test always has something to link
+# against. A prior revision gated this on OPENSSL_FOUND, which the review
+# flagged as losing both the class AND its only test with no signal on a
+# runner that happened to lack OpenSSL.
+nereus_add_test(tst_certificate_store)
 
 # --------------------------------------------------------------------------
 # Aggregate "all_tests" target  (2026-05-26 KG4VCF dev-loop fix, from PR #291)

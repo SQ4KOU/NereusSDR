@@ -327,12 +327,13 @@ systemd unit. Note that `release.yml` is the only workflow that runs
 path has no PR-CI coverage**. Always pass `--profile <name>` when running
 `nereusd` by hand, or it writes the same settings the GUI reads.
 
-Dependencies (Arch): `qt6-base qt6-multimedia qt6-svg qt6-websockets cmake ninja pkgconf fftw alsa-lib jack2 pipewire`
-Dependencies (Ubuntu/Debian): `qt6-base-dev qt6-base-private-dev qt6-multimedia-dev qt6-shadertools-dev qt6-svg-dev qt6-websockets-dev cmake ninja-build pkg-config libfftw3-dev libgl1-mesa-dev libasound2-dev libjack-jackd2-dev libpipewire-0.3-dev`
+Dependencies (Arch): `qt6-base qt6-multimedia qt6-svg qt6-websockets cmake ninja pkgconf fftw alsa-lib jack2 pipewire openssl`
+Dependencies (Ubuntu/Debian): `qt6-base-dev qt6-base-private-dev qt6-multimedia-dev qt6-shadertools-dev qt6-svg-dev qt6-websockets-dev cmake ninja-build pkg-config libfftw3-dev libgl1-mesa-dev libasound2-dev libjack-jackd2-dev libpipewire-0.3-dev libssl-dev`
 Notes:
 * `qt6-svg` / `qt6-svg-dev` is hard-required (`find_package(Qt6 REQUIRED COMPONENTS Svg)`).
 * `alsa-lib` / `libasound2-dev` and `jack2` / `libjack-jackd2-dev` are hard-required on Linux because PortAudio is built with `PA_USE_ALSA=ON` and `PA_USE_JACK=ON FORCE`; without them the static libportaudio links with zero host APIs.
 * `libpipewire-0.3-dev` ≥ 0.3.50 enables the native PipeWire audio bridge (Phase 3O). Build still succeeds without it; the Linux audio path falls back to the existing pactl / LinuxPipeBus FIFO route.
+* `openssl` / `libssl-dev` (≥ 3.0) is hard-required (`find_package(OpenSSL 3.0 REQUIRED COMPONENTS Crypto)`) since Remote Daemon R2 Task 17: `src/core/security/CertificateStore` links libcrypto directly to mint nereusd's self-signed TLS certificate, because Qt6 has no certificate-*generation* API. macOS resolves this through Homebrew's keg-only `openssl@3` formula with no extra hints. Windows resolves it through vcpkg (`x64-windows-static-md` triplet, pinned baseline) rather than a system package; see the `find_package(OpenSSL)` block in `CMakeLists.txt` and `vcpkg.json` for the full acquisition story and the Strawberry-Perl-collision guard.
 
 WDSP source is in `third_party/wdsp/` (TAPR v1.29 + linux_port.h for cross-platform).
 FFTW3: system package on Linux/macOS, pre-built DLL on Windows (`third_party/fftw3/`).

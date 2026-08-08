@@ -17,6 +17,7 @@
 
 #include <QtTest>
 #include <QFile>
+#include <QFileDevice>
 #include <QFileInfo>
 #include <QRegularExpression>
 #include <QSslCertificate>
@@ -26,6 +27,10 @@
 
 #include "core/AppSettings.h"
 #include "core/security/CertificateStore.h"
+
+#ifdef Q_OS_UNIX
+#include <unistd.h>
+#endif
 
 using namespace NereusSDR;
 
@@ -143,6 +148,11 @@ private slots:
         QVERIFY2(first.isValid(), qPrintable(first.lastError()));
         const QString certPath = first.certificatePath();
         const QString keyPath  = first.privateKeyPath();
+        // Fix round 1, review minor 11: capture the original fingerprint
+        // so "regenerates" is asserted positively below (a genuinely new
+        // identity), not just inferred from the recovered fingerprint's
+        // format being well-formed.
+        const QString originalFingerprint = first.fingerprintSha256();
 
         {
             QFile certFile(certPath);
@@ -160,6 +170,184 @@ private slots:
         QVERIFY(!recovered.certificate().isNull());
         QVERIFY(!recovered.privateKey().isNull());
         QVERIFY(kFingerprintPattern.match(recovered.fingerprintSha256()).hasMatch());
+        QVERIFY(recovered.fingerprintSha256() != originalFingerprint);
+    }
+
+    // Fix round 1, Important 2: a certificate and key that are each
+    // individually well-formed PEM, but do not belong to the same key
+    // pair, must be rejected rather than silently accepted as valid.
+    // This is exactly what a write that fails between the certificate
+    // write and the key write in generateAndStore() (ENOSPC on an SD
+    // card being the realistic case) leaves on disk: a NEW certificate
+    // beside the OLD key, or vice versa.
+    //
+    // The class has no way to report "rejected, and here is why" other
+    // than by falling through to regeneration -- the same self-healing
+    // path regeneratesWhenStoredFilesAreCorrupt() above already pins for
+    // unparseable files. So the observable proof from outside the class
+    // is: reconstructing over a mismatched pair produces a store that is
+    // valid again (regeneration succeeded) with a certificate that is
+    // NOT the foreign one that was sitting on disk -- proving the
+    // mismatched pair was not the thing served.
+    //
+    // Fails before the X509_check_private_key() fix (the foreign
+    // certificate parses individually, so unfixed loadExisting() accepts
+    // it and fingerprintSha256() equals foreignFingerprint); passes after.
+    void rejectsMismatchedCertificateAndKeyPair()
+    {
+        QTemporaryDir tmpA;
+        QVERIFY(tmpA.isValid());
+        CertificateStore storeA(tmpA.path());
+        QVERIFY2(storeA.isValid(), qPrintable(storeA.lastError()));
+
+        QTemporaryDir tmpB;
+        QVERIFY(tmpB.isValid());
+        CertificateStore storeB(tmpB.path());
+        QVERIFY2(storeB.isValid(), qPrintable(storeB.lastError()));
+        const QString foreignFingerprint = storeB.fingerprintSha256();
+        QVERIFY(!foreignFingerprint.isEmpty());
+        QVERIFY(foreignFingerprint != storeA.fingerprintSha256());
+
+        QFile foreignCertFile(storeB.certificatePath());
+        QVERIFY(foreignCertFile.open(QIODevice::ReadOnly));
+        const QByteArray foreignCertPem = foreignCertFile.readAll();
+
+        // storeA's key is left untouched; only its certificate is
+        // replaced with storeB's, unrelated, certificate -- a mismatched
+        // pair, each half individually valid PEM.
+        {
+            QFile certA(storeA.certificatePath());
+            QVERIFY(certA.open(QIODevice::WriteOnly | QIODevice::Truncate));
+            QCOMPARE(certA.write(foreignCertPem),
+                     static_cast<qint64>(foreignCertPem.size()));
+        }
+
+        CertificateStore reloaded(tmpA.path());
+        QVERIFY2(reloaded.isValid(), qPrintable(reloaded.lastError()));
+        QVERIFY(reloaded.fingerprintSha256() != foreignFingerprint);
+    }
+
+#ifdef Q_OS_UNIX
+    // Fix round 1, Important 3: an EXISTING private key this process
+    // cannot read (mode 0000, simulating a permission mismatch between
+    // the user who first provisioned the daemon and the user it is
+    // later run as -- systemd's User=, for example) must fail loudly,
+    // not be silently treated the same as "no identity yet" and
+    // regenerated over. Regenerating here would destroy a pinned station
+    // identity every already-paired client depends on, with no error and
+    // no log line -- see task-17-report.md's fix-round section for the
+    // full scenario.
+    //
+    // Root bypasses UNIX permission checks entirely, which would make
+    // this pass vacuously (the "unreadable" file would still open fine),
+    // so this QSKIPs under root rather than asserting something it
+    // cannot actually test.
+    //
+    // Fails before the exists()-vs-open() fix (the unfixed code's
+    // `!certFile.exists() || !keyFile.exists()` early return is false
+    // here since both files DO exist, so it falls into open() failing,
+    // which the unfixed code also returns false for -- but the
+    // CONSTRUCTOR then calls generateAndStore(), silently overwriting
+    // the unreadable key); passes after (fixed loadExisting() reports
+    // the I/O failure as a hard error instead of falling through).
+    void unreadableExistingKeyFailsRatherThanRegenerates()
+    {
+        if (geteuid() == 0) {
+            QSKIP("Running as root, which bypasses UNIX permission checks; "
+                  "this test cannot exercise an unreadable-but-existing file.");
+        }
+
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        CertificateStore first(tmp.path());
+        QVERIFY2(first.isValid(), qPrintable(first.lastError()));
+        const QString fingerprint1 = first.fingerprintSha256();
+        const QString keyPath = first.privateKeyPath();
+
+        QVERIFY(QFile::setPermissions(keyPath, QFileDevice::Permissions()));
+
+        CertificateStore second(tmp.path());
+        QVERIFY(!second.isValid());
+        QVERIFY(!second.lastError().isEmpty());
+
+        // Restore permissions before QTemporaryDir's destructor tries to
+        // remove the file, and confirm the ORIGINAL identity survived
+        // untouched (the whole point of failing loudly instead of
+        // regenerating). This last check also catches a cascade the
+        // unfixed code has: without the Important 3 fix, `second`'s
+        // constructor falls through to generateAndStore() on the
+        // unreadable key, which overwrites the CERTIFICATE (succeeds)
+        // before failing to overwrite the still-locked KEY, leaving a
+        // mismatched pair for `third` to load -- which the unfixed
+        // Important 2 code then also silently accepts. Fixing Important
+        // 3 alone (never attempting generateAndStore() over an
+        // unreadable key) is what prevents that cascade; this assertion
+        // is why both fixes must land together for this slot to pass.
+        QVERIFY(QFile::setPermissions(
+            keyPath, QFileDevice::ReadOwner | QFileDevice::WriteOwner));
+        CertificateStore third(tmp.path());
+        QVERIFY2(third.isValid(), qPrintable(third.lastError()));
+        QCOMPARE(third.fingerprintSha256(), fingerprint1);
+    }
+
+    // Fix round 1, Important 4: a directory that exists but cannot be
+    // written into (first run, no cert/key yet, so generateAndStore()
+    // must create the files) must fail cleanly with isValid() == false
+    // and a non-empty lastError(), not crash or silently succeed.
+    //
+    // Root bypasses this too (ignores the missing write bit), hence the
+    // same QSKIP guard as the test above.
+    void constructingAgainstAnUnwritableDirectoryFails()
+    {
+        if (geteuid() == 0) {
+            QSKIP("Running as root, which bypasses UNIX permission checks; "
+                  "this test cannot exercise an unwritable directory.");
+        }
+
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        QVERIFY(QFile::setPermissions(
+            tmp.path(), QFileDevice::ReadOwner | QFileDevice::ExeOwner));
+
+        CertificateStore store(tmp.path());
+        QVERIFY(!store.isValid());
+        QVERIFY(!store.lastError().isEmpty());
+
+        // Restore write permission so QTemporaryDir can clean itself up.
+        QVERIFY(QFile::setPermissions(
+            tmp.path(),
+            QFileDevice::ReadOwner | QFileDevice::WriteOwner | QFileDevice::ExeOwner));
+    }
+#endif
+
+    // Fix round 1, Important 4: a genuinely MISSING file (as opposed to
+    // Important 3's unreadable-but-present file) must still regenerate
+    // cleanly. This is the negative control proving the Important 3 fix
+    // is scoped to "exists but cannot be opened" and does not also
+    // start rejecting the legitimately-missing case an operator hits on
+    // every real first run.
+    void deletingOneFileAfterFirstRunStillRegenerates()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        CertificateStore first(tmp.path());
+        QVERIFY2(first.isValid(), qPrintable(first.lastError()));
+        const QString originalFingerprint = first.fingerprintSha256();
+        const QString keyPath = first.privateKeyPath();
+
+        // Delete only the key; the certificate is left in place. This is
+        // the "missing" half of the exists()-vs-open() distinction
+        // Important 3 draws: loadExisting()'s own
+        // `!certFile.exists() || !keyFile.exists()` check must still
+        // catch this (it is unchanged by the fix) and fall through to
+        // regeneration, which replaces BOTH files -- so the recovered
+        // fingerprint legitimately differs from the original.
+        QVERIFY(QFile::remove(keyPath));
+
+        CertificateStore recovered(tmp.path());
+        QVERIFY2(recovered.isValid(), qPrintable(recovered.lastError()));
+        QVERIFY(kFingerprintPattern.match(recovered.fingerprintSha256()).hasMatch());
+        QVERIFY(recovered.fingerprintSha256() != originalFingerprint);
     }
 
     // task-17-brief.md Step 1: guard the file-permission assertion with
@@ -198,13 +386,16 @@ private slots:
     // diagnostic exactly when Qt reports a working backend, non-empty
     // exactly when it does not -- true on any CI runner regardless of
     // which side of that it lands on.
+    //
+    // Fix round 1, review minor 11: the trailing QVERIFY(!diagnostic.
+    // isEmpty()) a prior revision had here was redundant -- the QCOMPARE
+    // above already establishes diagnostic.isEmpty() == supportsSsl(),
+    // so "supportsSsl() is false" already implies "diagnostic is
+    // non-empty" with nothing left to separately check.
     void tlsBackendDiagnosticMatchesSupportsSsl()
     {
         const QString diagnostic = CertificateStore::tlsBackendDiagnostic();
         QCOMPARE(diagnostic.isEmpty(), QSslSocket::supportsSsl());
-        if (!QSslSocket::supportsSsl()) {
-            QVERIFY(!diagnostic.isEmpty());
-        }
     }
 
     // task-17-controller-notes.md: "resolve it through
