@@ -40,7 +40,7 @@
 | Test seam | **Build it** (task 2), and it precedes every task that consumes it | Addendum 10.4 |
 | Record streams | Deferred to R3 | Addendum 3, 10 |
 | Pairing and connect UI | Its own planning unit. R2 ships `--station` and `--token` plus one Setup field group | Identity design 10.3 |
-| Control-channel heartbeat | **Deferred to R4 with TX.** R2 detects link loss by TCP close | Parent 12.1 |
+| Control-channel heartbeat | **In R2.** `QWebSocket` ping/pong, configured at task 18, tested at task 19 | Maintainer, 2026-08-08 |
 | Wire encoding | Negotiated dense ordinal, JSON text on the reliable channel | Addendum 6 |
 | Spot-client ownership | Task 5 gates the client's collectors off as a **safety** measure. Which side owns each collector stays **open** | Task 5 step 5a |
 | Risk 9 issues | **Drafted into the tree, not filed.** The maintainer files them | Task 5 step 6 |
@@ -358,6 +358,13 @@ Three tasks changed local behaviour on purpose (3, 12, 13). This task owns provi
 
 - [ ] **Step 1: Write the failing test.** Client and daemon in one process complete the full section 7.0 sequence over `wss` on loopback. Assert a **major** version mismatch refuses with both versions named; a **minor** mismatch negotiates down; a bad token is refused and rate-limited; a second authenticated connection **preempts** the first and the displaced session is told why. **`QSKIP` the `wss` slots when `!QSslSocket::supportsSsl()`, naming the Qt TLS backend, and keep the message-order assertions on a non-TLS in-process link so the protocol half is covered unconditionally.**
 - [ ] **Step 2:** Implement the transport with **no ICE and no codecs**. TLS from task 17.
+- [ ] **Step 2a: Configure the control-channel heartbeat. Added 2026-08-08 by maintainer directive, reversing the Decisions-table deferral to R4.** A TCP connection that dies silently (laptop lid, cell handoff, NAT timeout) never produces a close, so the daemon would sit believing a dead client is alive. Parent section 12.1 calls the TX watchdog a hard requirement and the mechanism it depends on had been deferred into the same release that first enables TX, giving it zero soak time before becoming load-bearing. Landing it now buys months of soak.
+
+  **This is not an interim wire format.** RFC 6455 ping/pong is transport-level, so the global constraint against formats R3 deletes does not apply. Nothing here is temporary.
+
+  **Follow the in-tree precedent, do not invent one.** `TciServer.cpp:129-141` already runs a 20 s `QTimer` calling `QWebSocket::ping()`, itself ported from Thetis `TCIServer.cs:2650-2654 [v2.10.3.13]`. Copy that shape.
+
+  For sanity-checking your interval only, a shipping configuration on real internet links is piHPSDR's 15 s heartbeat with a 30 s receive timeout and a 5 s send timeout (`server_thread.c:925-934 [@4aa95c5]`, verified 2026-08-08). Our 20 s `TciServer` precedent is the closer match; do not copy their numbers blindly.
 - [ ] **Step 3:** Implement `TokenStore`: generated, never user-chosen, rate-limited verify.
 - [ ] **Step 4: On first run the daemon prints the generated token and the task 17 certificate fingerprint to `qCInfo`** and stores them under the reserved daemon profile. Parent 7.1 requires the distribution mechanism be specified before R2, and without it the acceptance run cannot authenticate.
 - [ ] **Step 5:** Implement the capability descriptor. Advertise **effective** limits, not board limits (parent 4.5).
@@ -381,6 +388,9 @@ Ctrl-C on `nereusd` is the first thing anyone does on a bench, and nothing curre
 - [ ] **Step 1: Write the failing test.** Kill the daemon mid-session. Assert the client tears down the mirror registry, **drives connection state back to Disconnected** (the inverse of task 18 step 6), enters a defined stale state rather than showing stale values as live, keeps serving the `SettingsProxy` cache for reads, drops writes, and reconnects with a fresh snapshot and a bumped epoch.
 - [ ] **Step 2:** Implement mirror teardown and the epoch bump.
 - [ ] **Step 3:** Use an **owned single-shot `QTimer` with a cancellable slot**, not static `QTimer::singleShot`. Parent section 13 records that `PgxlConnection` and `TgxlConnection` get this wrong and that cancellability matters more here because this subsystem gates a transmitter.
+- [ ] **Step 3a: Test that a silently-dead peer is detected, not just a clean close. Added 2026-08-08 by maintainer directive.** Step 1 kills the daemon, which produces a TCP close and is the easy case. This step covers the case that motivated pulling the heartbeat into R2: a peer that stops responding **without** closing, which is what a laptop lid, a cell handoff or a NAT timeout actually produces.
+
+  Simulate a peer that accepts the connection and then goes silent, and assert detection happens within the configured timeout rather than never. **A test that only kills the process proves nothing about this path**, because the close does the work. Task 18 step 2a configures the interval; assert against that configuration rather than hardcoding a duplicate number.
 - [ ] **Step 4:** Assert a reconnect after a daemon restart with different state converges without a client relaunch.
 - [ ] **Step 5:** `cmake --build build --target tst_session_link_loss && ctest -R session_link_loss --no-tests=error`. Commit.
 

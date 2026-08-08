@@ -754,3 +754,66 @@ Each needs the maintainer. None is inferable from the code.
 9. **Deferring record streams leaves two daemon defects live**: `nereusd` builds
    seven spot collectors and starts none, and `FreeDVStationModel` grows without
    bound headless. File both as issues now.
+
+---
+
+## 12. R3 notes from the piHPSDR comparison (2026-08-08)
+
+**Status: reference notes, not R2 scope.** The maintainer evaluated
+`dl1ycf/pihpsdr` (`@4aa95c5`, 2026-08-06, GPLv3-or-later) as a possible
+alternative base and **concluded we keep our architecture**. Their core is not
+GUI-free: `struct RECEIVER` holds `GtkWidget *panel`, `*panadapter` and
+`*waterfall` directly (`src/receiver.h:190-192`), 150 of 219 source files
+include `gtk/gtk.h`, and there is no automated test suite. Ours is already split
+into `NereusCore` / `NereusGui` with `nereusd` as a real target. All three of
+those facts were verified against the clone on 2026-08-08.
+
+**Do not implement any of the following in R2.** They are evidence for whoever
+plans R3's display codec and media path.
+
+### 12.1 Piggyback fast telemetry onto the spectrum frame
+
+`SPECTRUM_DATA` (`src/client_server.h:695-726`) carries the S-meter (`rxlvl`),
+AGC, ALC, SWR, mic peak, PureSignal status and all four VFO frequencies **inside
+the same packet as the spectrum samples**, sent every 150 ms
+(`src/server_thread.c:1131`). One packet where our design sends several, and the
+meters always match the trace they arrived with.
+
+That is worth measuring against our `SliceMeterPump` plus `StateMirror` path
+before R3 locks the codec. Note the R2 finding it interacts with:
+`signalStrengthDbm` now has a NOTIFY on the mirrored surface, so a connected
+daemon already produces up to one delta per slice per pump tick, 10 Hz at the
+default interval, with the coalescer as the only thing between that and the link.
+
+### 12.2 Uncompressed fallback
+
+`src/server_thread.c:217-245`: when `compress()` does not return `Z_OK` they set
+`compressed = 0` and send the raw byte array rather than dropping the frame.
+Cheap robustness our codec should copy.
+
+### 12.3 Opus tiering as a UX option
+
+`src/client_thread.c:246-283` offers three user-selectable tiers: 32 kbit
+`OPUS_APPLICATION_VOIP` with signal VOICE, 64 kbit `OPUS_APPLICATION_AUDIO` with
+signal MUSIC, and 96 kbit AUDIO with MUSIC, all at complexity 5. Our section 9.3
+specifies a single 24 kbit/s at complexity 10.
+
+The CPU tradeoff is the interesting part: complexity 5 against 10 matters on
+Pi-class hardware, which is the deployment R1 benched on.
+
+### 12.4 Where we are ahead, so R3 does not regress toward their design
+
+Their quantizer is fixed at exactly 1 dB per step, `(int)sample + 200` clamped to
+0-255 against a hard-wired -200 to +55 dBm window (`src/server_thread.c:241-245`),
+and will stair-step visibly on a weak-signal waterfall. Ours is 8 bits over a
+**configurable** window, roughly 0.41 dB per step at typical settings.
+
+They also send **one** plane. We send two, because our trace and waterfall have
+independent detectors and averaging. **Do not adopt their single-plane format.**
+
+### 12.5 Explicitly not adopted
+
+No architecture change and no piHPSDR code. In particular, do not port their
+command set: our generic `StateMirror` over 144 `Q_PROPERTY` declarations is
+deliberately better than their 114 hand-enumerated `CMD_*` types, because a new
+property mirrors for free rather than costing two handlers.

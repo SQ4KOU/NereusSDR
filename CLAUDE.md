@@ -737,6 +737,32 @@ preferences. OpenHPSDR radios don't store per-slice state.
      (shipped as 2, 4, 7 and 8 at different times on the same board). No static
      per-board DDC count can be correct across firmware versions — see the
      Radio-Authoritative Settings Policy.
+8. **piHPSDR (dl1ycf)** - `https://github.com/dl1ycf/pihpsdr`
+   * **Clone to `../pihpsdr/` relative to NereusSDR root.** Pinned at SHA
+     `4aa95c5` (2026-08-06). GPLv3-or-later, the same licence NereusSDR ships
+     under, so there is no compatibility blocker.
+   * A mature C/GTK OpenHPSDR console with its own client/server remote mode.
+     Added 2026-08-08 after the maintainer evaluated it as a possible
+     alternative base and **decided against it**. That evaluation is the entry's
+     value: it is a second independent implementation of problems we are
+     solving, useful as design evidence and as a source of field-proven numbers.
+   * **The architecture decision is settled: we keep ours.** Their core is not
+     GUI-free (`src/receiver.h:190-192` holds `GtkWidget *panel`, `*panadapter`
+     and `*waterfall` inside `struct RECEIVER`; 150 of 219 source files include
+     `gtk/gtk.h`; no automated test suite). NereusSDR is already split into
+     `NereusCore` / `NereusGui` with `nereusd` as a real target. Do not propose
+     adopting their structure.
+   * Do **not** port their command set. Our generic `StateMirror` over 144
+     `Q_PROPERTY` declarations is deliberately better than their 114
+     hand-enumerated `CMD_*` types, because a new property mirrors for free
+     instead of costing two handlers.
+   * Useful facts cited so far: the remote-mode socket timeouts at
+     `src/server_thread.c:925-934` (15 s heartbeat, 30 s receive, 5 s send, a
+     shipping configuration on real internet links), and four R3 display-codec
+     observations recorded in
+     `docs/architecture/2026-08-03-remote-daemon-r2-r3-design-addendum.md` §12.
+   * **`dl1bz/deskhpsdr`**, a piHPSDR desktop fork, is also cloned at
+     `../deskhpsdr/` (SHA `f3d857c`) and falls under the same rules.
 
 ### Gateware citations — cite facts, don't port logic
 
@@ -759,3 +785,13 @@ scope and correctness, not legal risk:
 * The gateware carries its own author tags (`Yurij-eu2av` in `Orion.v`). If a
   gateware comment is ever quoted verbatim, the inline-comment-preservation rule
   applies to it exactly as it does to Thetis tags.
+
+**The same rule governs piHPSDR and deskhpsdr.** Both are GPLv3-or-later, so
+again the constraint is scope and correctness rather than law. Cite a fact (a
+timeout, a packet layout, a bitrate, a quantiser step) with a
+`// From piHPSDR src/server_thread.c:930 [@4aa95c5]` style cite and a PROVENANCE
+row of kind `reference`. **Stop and ask before translating any of their logic**,
+because the maintainer has already ruled that we keep our architecture, so
+needing their code almost certainly means a design took a wrong turn. Quoting one
+of their comments verbatim triggers the inline-comment-preservation rule exactly
+as a Thetis tag would.
