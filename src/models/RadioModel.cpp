@@ -3065,8 +3065,109 @@ int RadioModel::maxSlices() const
     if (!isConnected()) {
         return 1;
     }
+    // Remote-daemon R2 Task 18: a Role::Remote model gates on the
+    // EFFECTIVE limit the station advertised, never on the board's own
+    // BoardCapabilities::maxSlices -- parent design section 4.5, "Capacity
+    // is a runtime property, not a SKU property ... The client gates its
+    // UI on the effective values, never the board values." The two differ
+    // whenever the daemon's own hardware cannot sustain what the radio
+    // supports, which is the entire reason the effective number exists.
+    //
+    // Role::Local never reaches this branch, so local direct mode reads
+    // exactly what it always did.
+    if (m_role == Role::Remote) {
+        return m_stationMaxSlices > 0 ? m_stationMaxSlices : 1;
+    }
     const int n = boardCapabilities().maxSlices;
     return n > 0 ? n : 1;
+}
+
+// ── Remote-daemon R2 Task 18: production handshake entry points ─────────────
+//
+// See RadioModel.h's doc comments for why these exist at all (before this
+// task the only non-connection writer of m_connectionState was a test seam)
+// and why both refuse on a Role::Local model.
+
+void RadioModel::applyStationCapabilities(const NereusSDR::StationCapabilities& caps)
+{
+    if (m_role != Role::Remote) {
+        qCWarning(lcConnection)
+            << "applyStationCapabilities ignored on a Role::Local model: a local"
+            << "model's identity and connection state come from its own radio";
+        return;
+    }
+
+    // Identity first. name/model/version are mirrored Q_PROPERTYs with no
+    // WRITE, and RadioModel::applyMirroredValue refuses all three on
+    // purpose (its own comment names this task as the path that fills
+    // them), so this is their only remote writer.
+    const bool infoMoved = m_name != caps.stationName || m_model != caps.radioModelName
+        || m_version != caps.firmwareVersion;
+    m_name = caps.stationName;
+    m_model = caps.radioModelName;
+    m_version = caps.firmwareVersion;
+
+    // The MAC is what scopes every hardware/<mac>/ settings read, so it has
+    // to be the STATION's radio rather than anything this client saw.
+    m_lastRadioInfo.macAddress = caps.macAddress;
+    m_lastRadioInfo.boardType = caps.board;
+    m_lastRadioInfo.name = caps.stationName;
+
+    // Board type drives boardCapabilities(), which 14 GUI sites read for
+    // slider ranges, antenna counts and preamp tables. Routed through the
+    // same profileForModel(defaultModelForBoard(...)) pair connectToRadio()
+    // uses, so a remote client resolves the identical HardwareProfile a
+    // local one would for the same board.
+    m_hardwareProfile = ::NereusSDR::profileForModel(
+        ::NereusSDR::defaultModelForBoard(caps.board));
+
+    m_stationMaxSlices = caps.effectiveMaxSlices > 0 ? caps.effectiveMaxSlices : 1;
+    m_stationUserDdcCount = caps.userDdcCount;
+
+    if (infoMoved) {
+        emit infoChanged();
+    }
+
+    // LAST, deliberately: connectionStateChanged() is what wakes every GUI
+    // site that then re-reads maxSlices() and boardCapabilities(), so
+    // emitting it before the values above are settled would hand those
+    // sites the stale ones.
+    setConnectionState(caps.radioConnected ? ConnectionState::Connected
+                                           : ConnectionState::Disconnected);
+}
+
+void RadioModel::setStationConnectionState(ConnectionState s)
+{
+    if (m_role != Role::Remote) {
+        qCWarning(lcConnection)
+            << "setStationConnectionState ignored on a Role::Local model: its"
+            << "connection state has exactly one writer, its own RadioConnection";
+        return;
+    }
+    setConnectionState(s);
+}
+
+int RadioModel::addSliceWithStationId(int sliceId, const QString& initialPanId)
+{
+    if (m_role != Role::Remote) {
+        qCWarning(lcConnection)
+            << "addSliceWithStationId ignored on a Role::Local model: local slice"
+            << "ids are minted here, not handed in";
+        return -1;
+    }
+    if (sliceId < 0) {
+        return -1;
+    }
+    if (sliceById(sliceId) != nullptr) {
+        // The station believes this id is new and this client believes it
+        // is live. Refusing is the same call ObjectRegistry::onSliceAdded
+        // makes for a duplicate create on the daemon side: clobbering the
+        // existing slice would orphan whatever already references it.
+        qCWarning(lcConnection) << "Station create for slice id" << sliceId
+                                << "which this client already holds; refused";
+        return -1;
+    }
+    return addSliceImpl(sliceId, initialPanId);
 }
 
 // ── RX meter calibration offset (Thetis-faithful port) ──────────────────────
@@ -4639,6 +4740,16 @@ bool RadioModel::requestTxHandoffToSlice(int sliceId)
 
 int RadioModel::addSlice(const QString& initialPanId)
 {
+    // Remote-daemon R2 Task 18: -1 means "mint the lowest free id", which
+    // is the only thing this entry point has ever done and the only thing
+    // it does now. The body moved to addSliceImpl so a remote client can
+    // reproduce the STATION's ids verbatim (addSliceWithStationId); no
+    // behaviour changed on this path.
+    return addSliceImpl(-1, initialPanId);
+}
+
+int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId)
+{
     auto* slice = new SliceModel(this);
 
     // Phase 3F Sub-Epic I closeout, defect C3: lowest id not currently in
@@ -4660,9 +4771,17 @@ int RadioModel::addSlice(const QString& initialPanId)
     // (RxApplet::updateSliceButtons, VaxApplet::updateTagsLabels).
     //
     // The scan is O(n^2) over at most maxSlices (5), on a user action.
-    int index = 0;
-    while (sliceById(index) != nullptr) {
-        ++index;
+    //
+    // Remote-daemon R2 Task 18: skipped entirely when the caller already
+    // has an id -- a Role::Remote client reproducing the station's slice
+    // list, where minting locally would drift the two apart after any
+    // mid-list removal. addSliceWithStationId() has already refused a
+    // colliding id before reaching here.
+    int index = requestedId >= 0 ? requestedId : 0;
+    if (requestedId < 0) {
+        while (sliceById(index) != nullptr) {
+            ++index;
+        }
     }
     slice->setSliceIndex(index);
     // Phase 3F: stamp the owning pan id BEFORE the sliceAdded() emit below,

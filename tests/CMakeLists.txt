@@ -6558,6 +6558,30 @@ nereus_add_test(tst_notch_visual_does_not_perturb_noise_floor_or_maxbin)
 # runner that happened to lack OpenSSL.
 nereus_add_test(tst_certificate_store)
 
+# Remote Daemon R2, Task 18: the wss session. Everything tasks 7 through 17
+# built converges here -- StateMirror, ObjectRegistry,
+# SessionCommandDispatcher and SettingsProxyServer on a socket, behind Task
+# 17's TLS certificate and this task's TokenStore.
+#
+# Split deliberately: every PROTOCOL assertion (the section 7.0 connect
+# sequence and its exact message order, the version policy from both sides,
+# token rejection and rate limiting, session preemption, mirror round trip
+# and echo suppression, settings-proxy readiness, schema skew by name
+# comparison, and the heartbeat) runs over an in-process, NON-TLS
+# SessionTransport (fakes/LoopbackTransport) and therefore runs on every
+# build. Only the two genuinely TLS-specific slots QSKIP when
+# QSslSocket::supportsSsl() is false, naming the active Qt TLS backend.
+#
+# The slot that matters most is heartbeatDetectsAPeerThatWentSilentWithout-
+# Closing: the fake transport keeps the link nominally OPEN and simply stops
+# answering pings, which is what a laptop lid, a cell handoff or a NAT
+# timeout actually produces and what a loopback QWebSocket cannot simulate
+# (its Qt stack answers every ping automatically). TciServer's in-tree ping
+# timer, which this task was pointed at as precedent, explicitly does not
+# track pongs and would not pass this slot.
+nereus_add_test(tst_station_session
+    fakes/LoopbackTransport.cpp)
+
 # --------------------------------------------------------------------------
 # Aggregate "all_tests" target  (2026-05-26 KG4VCF dev-loop fix, from PR #291)
 # --------------------------------------------------------------------------

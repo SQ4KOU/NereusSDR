@@ -14,6 +14,10 @@
 //                                    / CommandResult codec. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-08-08  J.J. Boyd / KG4VCF  Remote daemon R2 Task 18: handshake,
+//                                    property-write and settings codec.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionMessages.h"
@@ -22,6 +26,9 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+
+#include <cmath>
+#include <limits>
 
 namespace NereusSDR {
 
@@ -101,6 +108,125 @@ SessionMessage SessionMessages::commandResult(const QByteArray& verb, quint32 co
     return m;
 }
 
+// ── Task 18 builders ─────────────────────────────────────────────────────
+
+namespace {
+/// One settings key/value pair in the generic {name, kind, value} shape
+/// the settings kinds reuse. `ordinal` is meaningless for settings (there
+/// is no schema and no ordinal dictionary for a flat key space) and is
+/// always 0, exactly as it is for CommandInvoke arguments.
+MirrorUpdate settingsEntry(const QString& key, const QString& value)
+{
+    return MirrorUpdate{ 0, key.toUtf8(), MirrorWireKind::Utf8, QVariant(value) };
+}
+} // namespace
+
+SessionMessage SessionMessages::hello(quint16 major, quint16 minor,
+                                      qint32 settingsSchemaVersion,
+                                      const QString& peerName)
+{
+    SessionMessage m;
+    m.kind = SessionMessageKind::Hello;
+    m.protocolMajor = major;
+    m.protocolMinor = minor;
+    m.settingsSchemaVersion = settingsSchemaVersion;
+    m.peerName = peerName;
+    return m;
+}
+
+SessionMessage SessionMessages::authRequest(const QString& token)
+{
+    SessionMessage m;
+    m.kind = SessionMessageKind::AuthRequest;
+    m.token = token;
+    return m;
+}
+
+SessionMessage SessionMessages::authResult(bool accepted, const QString& reason)
+{
+    SessionMessage m;
+    m.kind = SessionMessageKind::AuthResult;
+    m.accepted = accepted;
+    m.reason = reason;
+    return m;
+}
+
+SessionMessage SessionMessages::capabilities(const QList<MirrorUpdate>& descriptor)
+{
+    SessionMessage m;
+    m.kind = SessionMessageKind::Capabilities;
+    m.updates = descriptor;
+    return m;
+}
+
+SessionMessage SessionMessages::sessionEnd(const QString& reason)
+{
+    SessionMessage m;
+    m.kind = SessionMessageKind::SessionEnd;
+    m.reason = reason;
+    return m;
+}
+
+SessionMessage SessionMessages::propertyWrite(const QByteArray& objectKey,
+                                              const QList<MirrorUpdate>& updates)
+{
+    SessionMessage m;
+    m.kind = SessionMessageKind::PropertyWrite;
+    m.objectKey = objectKey;
+    m.updates = updates;
+    return m;
+}
+
+SessionMessage SessionMessages::settingsSnapshot(const QList<MirrorUpdate>& entries)
+{
+    SessionMessage m;
+    m.kind = SessionMessageKind::SettingsSnapshot;
+    m.updates = entries;
+    return m;
+}
+
+SessionMessage SessionMessages::settingsWrite(const QString& key, const QString& value,
+                                              const QString& originTag)
+{
+    SessionMessage m;
+    m.kind = SessionMessageKind::SettingsWrite;
+    m.objectKey = key.toUtf8();
+    m.updates = { settingsEntry(key, value) };
+    m.originTag = originTag;
+    return m;
+}
+
+SessionMessage SessionMessages::settingsRemove(const QString& key)
+{
+    SessionMessage m;
+    m.kind = SessionMessageKind::SettingsRemove;
+    m.objectKey = key.toUtf8();
+    return m;
+}
+
+SessionMessage SessionMessages::settingsValue(const QString& key, const QString& value,
+                                              const QString& originTag)
+{
+    SessionMessage m;
+    m.kind = SessionMessageKind::SettingsValue;
+    m.objectKey = key.toUtf8();
+    m.updates = { settingsEntry(key, value) };
+    m.originTag = originTag;
+    return m;
+}
+
+SessionMessage SessionMessages::settingsReject(const QString& key, bool hasRestoredValue,
+                                               const QString& restoredValue)
+{
+    SessionMessage m;
+    m.kind = SessionMessageKind::SettingsReject;
+    m.objectKey = key.toUtf8();
+    if (hasRestoredValue) {
+        m.updates = { settingsEntry(key, restoredValue) };
+    }
+    return m;
+}
+
 // ── Kind name tables ─────────────────────────────────────────────────────
 
 namespace {
@@ -120,6 +246,17 @@ constexpr KindName kKindNames[] = {
     { SessionMessageKind::SnapshotComplete, "snapshot.complete" },
     { SessionMessageKind::CommandInvoke, "command.invoke" },
     { SessionMessageKind::CommandResult, "command.result" },
+    { SessionMessageKind::Hello, "hello" },
+    { SessionMessageKind::AuthRequest, "auth.request" },
+    { SessionMessageKind::AuthResult, "auth.result" },
+    { SessionMessageKind::Capabilities, "capabilities" },
+    { SessionMessageKind::SessionEnd, "session.end" },
+    { SessionMessageKind::PropertyWrite, "property.write" },
+    { SessionMessageKind::SettingsSnapshot, "settings.snapshot" },
+    { SessionMessageKind::SettingsWrite, "settings.write" },
+    { SessionMessageKind::SettingsRemove, "settings.remove" },
+    { SessionMessageKind::SettingsValue, "settings.value" },
+    { SessionMessageKind::SettingsReject, "settings.reject" },
 };
 
 struct WireKindName {
@@ -193,6 +330,28 @@ namespace {
 // MirrorWireKind::Int64: case MirrorWireKind::Enum:` fallthrough), double,
 // QString. This mirrors that same choice on the JSON side rather than
 // inventing a second one.
+// JSON has no NaN and no Infinity. QJsonDocument::toJson() silently
+// serialises a non-finite double as `null`, and a `null` fails
+// fromJsonValue()'s isDouble() gate, so the WHOLE message is rejected --
+// not just the one property.
+//
+// This is not hypothetical and it is not rare. SliceModel::snrDb defaults
+// to std::numeric_limits<double>::quiet_NaN() (SliceModel.h, the RADE
+// SNR row, which is genuinely unknown until RADE syncs), so EVERY slice
+// object.create carried a NaN and every one of them was discarded on
+// arrival -- the client saw no slices at all. Found by Task 18's own wss
+// slot, which is the first thing in this plan to put a real slice snapshot
+// through the codec end to end.
+//
+// So non-finite doubles travel as one of three explicit string tokens.
+// Lossless (all three round-trip exactly, and +Inf stays distinct from
+// -Inf), self-describing in a capture, and impossible to confuse with a
+// real value because a Float64 property's ordinary encoding is a JSON
+// number and never a string.
+constexpr const char* kFloatNan = "nan";
+constexpr const char* kFloatPosInf = "inf";
+constexpr const char* kFloatNegInf = "-inf";
+
 QJsonValue toJsonValue(MirrorWireKind kind, const QVariant& value)
 {
     switch (kind) {
@@ -201,8 +360,16 @@ QJsonValue toJsonValue(MirrorWireKind kind, const QVariant& value)
     case MirrorWireKind::Int64:
     case MirrorWireKind::Enum:
         return QJsonValue(static_cast<double>(value.toLongLong()));
-    case MirrorWireKind::Float64:
-        return QJsonValue(value.toDouble());
+    case MirrorWireKind::Float64: {
+        const double d = value.toDouble();
+        if (std::isnan(d)) {
+            return QJsonValue(QString::fromLatin1(kFloatNan));
+        }
+        if (std::isinf(d)) {
+            return QJsonValue(QString::fromLatin1(d > 0.0 ? kFloatPosInf : kFloatNegInf));
+        }
+        return QJsonValue(d);
+    }
     case MirrorWireKind::Utf8:
         return QJsonValue(value.toString());
     case MirrorWireKind::Unsupported:
@@ -231,11 +398,29 @@ bool fromJsonValue(MirrorWireKind kind, const QJsonValue& json, QVariant* out)
         *out = QVariant(static_cast<qlonglong>(json.toDouble()));
         return true;
     case MirrorWireKind::Float64:
-        if (!json.isDouble()) {
-            return false;
+        if (json.isDouble()) {
+            *out = QVariant(json.toDouble());
+            return true;
         }
-        *out = QVariant(json.toDouble());
-        return true;
+        // The three non-finite tokens toJsonValue() emits. Anything else
+        // that is not a number is still rejected outright: this is the far
+        // side of a socket, and "some other string" is not a double.
+        if (json.isString()) {
+            const QString token = json.toString();
+            if (token == QLatin1String(kFloatNan)) {
+                *out = QVariant(std::numeric_limits<double>::quiet_NaN());
+                return true;
+            }
+            if (token == QLatin1String(kFloatPosInf)) {
+                *out = QVariant(std::numeric_limits<double>::infinity());
+                return true;
+            }
+            if (token == QLatin1String(kFloatNegInf)) {
+                *out = QVariant(-std::numeric_limits<double>::infinity());
+                return true;
+            }
+        }
+        return false;
     case MirrorWireKind::Utf8:
         if (!json.isString()) {
             return false;
@@ -395,6 +580,57 @@ QByteArray SessionMessages::encode(const SessionMessage& message)
         o.insert(QStringLiteral("affected"), affected);
         break;
     }
+    case SessionMessageKind::Hello:
+        o.insert(QStringLiteral("major"), static_cast<int>(message.protocolMajor));
+        o.insert(QStringLiteral("minor"), static_cast<int>(message.protocolMinor));
+        o.insert(QStringLiteral("settingsSchema"),
+                 static_cast<double>(message.settingsSchemaVersion));
+        o.insert(QStringLiteral("peer"), message.peerName);
+        break;
+    case SessionMessageKind::AuthRequest:
+        o.insert(QStringLiteral("token"), message.token);
+        break;
+    case SessionMessageKind::AuthResult:
+        o.insert(QStringLiteral("accepted"), message.accepted);
+        o.insert(QStringLiteral("reason"), message.reason);
+        break;
+    case SessionMessageKind::Capabilities:
+    case SessionMessageKind::SettingsSnapshot: {
+        QJsonArray entries;
+        for (const MirrorUpdate& u : message.updates) {
+            entries.append(updateToJson(u));
+        }
+        o.insert(QStringLiteral("properties"), entries);
+        break;
+    }
+    case SessionMessageKind::SessionEnd:
+        o.insert(QStringLiteral("reason"), message.reason);
+        break;
+    case SessionMessageKind::PropertyWrite: {
+        o.insert(QStringLiteral("key"), QString::fromUtf8(message.objectKey));
+        QJsonArray props;
+        for (const MirrorUpdate& u : message.updates) {
+            props.append(updateToJson(u));
+        }
+        o.insert(QStringLiteral("properties"), props);
+        break;
+    }
+    case SessionMessageKind::SettingsWrite:
+    case SessionMessageKind::SettingsValue:
+    case SessionMessageKind::SettingsRemove:
+    case SessionMessageKind::SettingsReject: {
+        o.insert(QStringLiteral("key"), QString::fromUtf8(message.objectKey));
+        QJsonArray entries;
+        for (const MirrorUpdate& u : message.updates) {
+            entries.append(updateToJson(u));
+        }
+        o.insert(QStringLiteral("properties"), entries);
+        if (message.kind == SessionMessageKind::SettingsWrite
+            || message.kind == SessionMessageKind::SettingsValue) {
+            o.insert(QStringLiteral("origin"), message.originTag);
+        }
+        break;
+    }
     }
 
     return QJsonDocument(o).toJson(QJsonDocument::Compact);
@@ -427,7 +663,12 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
     // silently coerce "absent" into "empty" rather than reject it. This is
     // the far side of a socket a remote peer controls.
     const bool needsKey = kind == SessionMessageKind::ObjectCreate
-        || kind == SessionMessageKind::ObjectDestroy || kind == SessionMessageKind::Delta;
+        || kind == SessionMessageKind::ObjectDestroy || kind == SessionMessageKind::Delta
+        || kind == SessionMessageKind::PropertyWrite
+        || kind == SessionMessageKind::SettingsWrite
+        || kind == SessionMessageKind::SettingsRemove
+        || kind == SessionMessageKind::SettingsValue
+        || kind == SessionMessageKind::SettingsReject;
     if (needsKey && !o.value(QStringLiteral("key")).isString()) {
         return false;
     }
@@ -440,8 +681,57 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
         return false;
     }
     const bool needsProperties =
-        kind == SessionMessageKind::ObjectCreate || kind == SessionMessageKind::Delta;
+        kind == SessionMessageKind::ObjectCreate || kind == SessionMessageKind::Delta
+        || kind == SessionMessageKind::PropertyWrite
+        || kind == SessionMessageKind::Capabilities
+        || kind == SessionMessageKind::SettingsSnapshot
+        || kind == SessionMessageKind::SettingsWrite
+        || kind == SessionMessageKind::SettingsRemove
+        || kind == SessionMessageKind::SettingsValue
+        || kind == SessionMessageKind::SettingsReject;
     if (needsProperties && !o.value(QStringLiteral("properties")).isArray()) {
+        return false;
+    }
+    // Task 18: the section 7.0 handshake kinds. Same presence-and-type
+    // discipline as every field above, for the same reason: this is the
+    // far side of a socket, and these three kinds run BEFORE the peer has
+    // authenticated, so they are the most exposed surface in the protocol.
+    if (kind == SessionMessageKind::Hello) {
+        if (!o.value(QStringLiteral("major")).isDouble()
+            || !o.value(QStringLiteral("minor")).isDouble()
+            || !o.value(QStringLiteral("settingsSchema")).isDouble()
+            || !o.value(QStringLiteral("peer")).isString()) {
+            return false;
+        }
+        // Range-checked before the narrowing casts below, the same
+        // discipline the CommandInvoke id check above applies.
+        const double majorRaw = o.value(QStringLiteral("major")).toDouble();
+        const double minorRaw = o.value(QStringLiteral("minor")).toDouble();
+        const double schemaRaw = o.value(QStringLiteral("settingsSchema")).toDouble();
+        if (majorRaw < 0.0 || majorRaw > 65535.0 || minorRaw < 0.0 || minorRaw > 65535.0) {
+            return false;
+        }
+        if (schemaRaw < -2147483648.0 || schemaRaw > 2147483647.0) {
+            return false;
+        }
+    }
+    if (kind == SessionMessageKind::AuthRequest
+        && !o.value(QStringLiteral("token")).isString()) {
+        return false;
+    }
+    if (kind == SessionMessageKind::AuthResult) {
+        if (!o.value(QStringLiteral("accepted")).isBool()
+            || !o.value(QStringLiteral("reason")).isString()) {
+            return false;
+        }
+    }
+    if (kind == SessionMessageKind::SessionEnd
+        && !o.value(QStringLiteral("reason")).isString()) {
+        return false;
+    }
+    if ((kind == SessionMessageKind::SettingsWrite
+         || kind == SessionMessageKind::SettingsValue)
+        && !o.value(QStringLiteral("origin")).isString()) {
         return false;
     }
     // Task 11: CommandInvoke and CommandResult share "verb" and "id";
@@ -557,6 +847,51 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
                 return false;
             }
             message.affectedKeys.append(v.toString().toUtf8());
+        }
+        break;
+    }
+    case SessionMessageKind::Hello:
+        message.protocolMajor =
+            static_cast<quint16>(o.value(QStringLiteral("major")).toDouble());
+        message.protocolMinor =
+            static_cast<quint16>(o.value(QStringLiteral("minor")).toDouble());
+        message.settingsSchemaVersion =
+            static_cast<qint32>(o.value(QStringLiteral("settingsSchema")).toDouble());
+        message.peerName = o.value(QStringLiteral("peer")).toString();
+        break;
+    case SessionMessageKind::AuthRequest:
+        message.token = o.value(QStringLiteral("token")).toString();
+        break;
+    case SessionMessageKind::AuthResult:
+        message.accepted = o.value(QStringLiteral("accepted")).toBool();
+        message.reason = o.value(QStringLiteral("reason")).toString();
+        break;
+    case SessionMessageKind::SessionEnd:
+        message.reason = o.value(QStringLiteral("reason")).toString();
+        break;
+    case SessionMessageKind::Capabilities:
+    case SessionMessageKind::SettingsSnapshot:
+    case SessionMessageKind::PropertyWrite:
+    case SessionMessageKind::SettingsWrite:
+    case SessionMessageKind::SettingsRemove:
+    case SessionMessageKind::SettingsValue:
+    case SessionMessageKind::SettingsReject: {
+        if (kind != SessionMessageKind::Capabilities
+            && kind != SessionMessageKind::SettingsSnapshot) {
+            message.objectKey = o.value(QStringLiteral("key")).toString().toUtf8();
+        }
+        if (kind == SessionMessageKind::SettingsWrite
+            || kind == SessionMessageKind::SettingsValue) {
+            message.originTag = o.value(QStringLiteral("origin")).toString();
+        }
+        const QJsonArray entries = o.value(QStringLiteral("properties")).toArray();
+        message.updates.reserve(entries.size());
+        for (const QJsonValue& v : entries) {
+            MirrorUpdate u;
+            if (!updateFromJson(v, &u)) {
+                return false;
+            }
+            message.updates.append(u);
         }
         break;
     }

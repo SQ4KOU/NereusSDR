@@ -1,0 +1,384 @@
+#pragma once
+// =================================================================
+// src/core/session/StationServer.h  (NereusSDR)
+// =================================================================
+//
+// no-port-check: NereusSDR-original. Remote-daemon R2 Task 18.
+//
+// The daemon half of the wss session. Everything tasks 7 through 17 built
+// converges here: this is the class that puts StateMirror, ObjectRegistry,
+// SessionCommandDispatcher and SettingsProxyServer on a socket, behind
+// task 17's TLS certificate and task 18's own TokenStore.
+//
+// ── THE CONNECT SEQUENCE (parent design section 7.0) ─────────────────────
+//
+//   TLS establish
+//     -> protocol hello carrying a semantic version from both ends
+//     -> authentication
+//     -> capability exchange
+//     -> state snapshot
+//     -> snapshot-complete marker
+//
+// Concretely, per accepted connection, the daemon:
+//
+//   1. sends Hello (its own major.minor plus its AppSettings schema
+//      version) the moment the socket is up, so a client can refuse
+//      without ever revealing that it holds a token;
+//   2. waits for the client's Hello, and REFUSES on a major mismatch with
+//      a reason naming BOTH versions (section 7.0: "the connection is
+//      refused with a message naming both versions rather than failing
+//      obscurely"). Equal major with a differing minor NEGOTIATES DOWN to
+//      the lower of the two and records it as agreedMinor();
+//   3. waits for AuthRequest and runs it past TokenStore, which is
+//      rate-limited (section 7.1);
+//   4. sends AuthResult, then Capabilities;
+//   5. sends the settings snapshot (SettingsProxyServer::buildSnapshot);
+//   6. attaches the state mirror, which sends a schema per class, an
+//      object.create per live object, and the snapshot-complete marker
+//      LAST (StateMirror::attachSession).
+//
+// ── ONE SESSION, ONE SHARED MIRROR (topology decision, task 18) ──────────
+//
+// Nothing before this task stated whether a daemon hosts one StateMirror
+// per client or one shared across clients, and it matters:
+// StateMirror::hasAttachedSession() is a single bool and attachSession()
+// unconditionally clears the outbound coalescer, so a second client
+// attaching to a SHARED mirror would silently discard deltas the first
+// still had pending.
+//
+// **Decision: one shared mirror, because there is never more than one
+// authenticated session.** Parent design section 7.1 is explicit --
+// "Single operator, one session at a time" and "A second authenticated
+// connection preempts the existing session" -- so the incumbent is closed
+// BEFORE the newcomer's attachSession() runs, and the deltas the clear
+// discards belong to a session that no longer exists. This is not a
+// simplification to revisit when multi-client arrives: multi-client is not
+// a planned feature, it is a thing section 7.1 rules out on purpose,
+// because two operators sharing one transmitter is a control-operator
+// problem before it is an engineering one. Anything that ever wants a
+// second concurrent VIEWER has to answer section 7.1 first, and would then
+// want a mirror per viewer.
+//
+// A connection that has NOT yet authenticated does not touch the mirror at
+// all -- it holds nothing but its own handshake state -- so an unlimited
+// number of unauthenticated peers can be mid-handshake without disturbing
+// the live session. That is what keeps a failed or hostile connection
+// attempt from being a denial of service against the operator's own
+// session.
+//
+// ── THREADING ────────────────────────────────────────────────────────────
+//
+// This object, its QWebSocketServer, every transport it accepts, the
+// StateMirror, the ObjectRegistry, the SessionCommandDispatcher, the
+// SettingsProxyServer, the daemon's AppSettings and the RadioModel with
+// every SliceModel under it ALL live on ONE thread: RadioModel's.
+//
+// That is not a convenience. StateMirror.h's attachSession() precondition
+// spells out what breaks otherwise, and it breaks SILENTLY: every
+// connection StateMirror::watch() makes is Qt::AutoConnection, which
+// resolves to a direct call only while sender and receiver share a thread.
+// Give the session its own thread and construct the mirror there, and
+// onWatchedPropertyChanged() starts running AFTER applyInbound() has
+// returned and cleared its m_applying guard, so every echo of a remote
+// peer's own write leaks straight back to it -- with no test failing,
+// because every test in this suite constructs on one thread.
+// SessionCommandDispatcher.h states the same requirement for dispatch(),
+// and SettingsProxyServer.h states it for AppSettings, which has no
+// internal locking at all.
+//
+// So: the session read loop runs on the RadioModel thread. There is no I/O
+// thread. Qt's WebSocket stack is event-loop driven, so this costs nothing
+// a headless daemon notices; what it buys is that three separate
+// documented invariants stay true by construction rather than by review.
+//
+// ── THE HEARTBEAT (task 18 step 2a) ──────────────────────────────────────
+//
+// **A TCP connection that dies silently never produces a close.** A laptop
+// lid, a cell handoff, a NAT timeout: in all three the peer simply stops
+// existing as far as the wire is concerned, and nothing about the socket
+// says so. Without a heartbeat the daemon sits believing a dead client is
+// alive, which is the state parent section 12.1's TX watchdog exists to
+// make impossible.
+//
+// TciServer.cpp's 20 s QTimer + QWebSocket::ping is the in-tree precedent
+// and this class copies its SHAPE. It deliberately does NOT copy its
+// DETECTION MODEL. That precedent's own comment says it plainly:
+//
+//     "we don't expect a Pong back within any timeout -- we use the ping
+//     itself to surface a dead socket via Qt's automatic write-error path"
+//
+// A write error is not a timely signal. A silently dead TCP connection can
+// take minutes of retransmit backoff to produce one, and on a path where
+// the far side vanished mid-NAT-mapping it may never produce one at all.
+// So this class TRACKS PONGS: SessionTransport::pongReceived() resets a
+// per-peer miss counter, and a peer that lets kDefaultMaxMissedPongs
+// consecutive pings go unanswered is declared dead and closed.
+//
+// **Only a pong counts, deliberately.** An arbitrary inbound frame proves
+// the peer's send path works; a pong proves the ROUND TRIP works, because
+// the peer's WebSocket layer only emits one in response to a ping it
+// actually received. The asymmetric case -- a client happily sending
+// commands whose replies never reach it -- is exactly the case where the
+// operator most needs the session torn down, and counting any inbound
+// traffic as liveness would keep it alive indefinitely.
+//
+// **The numbers.** 20 s interval, 2 missed pongs, so a peer is declared
+// dead between 40 s and 60 s after it actually went silent. The interval
+// is TciServer's, which is this tree's own precedent and is itself ported
+// from Thetis. The miss count comes from the only shipping configuration
+// on real internet links anyone has measured for us: piHPSDR runs a 15 s
+// heartbeat against a 30 s receive timeout (server_thread.c:925-934
+// [@4aa95c5], verified 2026-08-08 by the maintainer), a ratio of two.
+// One miss (20 s) would kill a session on a single dropped ping over a
+// lossy mobile link, which is a false positive on precisely the links this
+// feature exists for; three (60-80 s) is longer than a session-liveness
+// signal needs to be.
+//
+// **What this is NOT: section 12.1's keyed-state deadline.** That section
+// requires "a deadline in the low hundreds of milliseconds while MOX is
+// asserted", which is two orders of magnitude tighter than the idle
+// deadline above. R2 has no remote TX at all (design addendum section 2:
+// "no MOX; TX is R4 in its entirety"), so there is no keyed state here to
+// hang that deadline on and building one would be untestable speculation.
+// The mechanism is the reusable part: setHeartbeatIntervalMs() and
+// setMaxMissedPongs() are live-settable, so whichever task brings remote
+// TX tightens an existing, soaked mechanism rather than introducing a
+// second one at the moment it first becomes safety-critical. Pulling the
+// heartbeat forward into R2 was a maintainer directive with exactly that
+// soak time as its stated purpose.
+//
+// ── SCOPE ────────────────────────────────────────────────────────────────
+//
+// No ICE, no codecs, no spectrum, no audio. R2's demo is a blank
+// panadapter, a blank waterfall and silent speakers, on purpose.
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-08-08  J.J. Boyd / KG4VCF  Remote daemon R2 Task 18: the daemon
+//                                    half of the wss session. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
+// =================================================================
+
+#include <QHash>
+#include <QHostAddress>
+#include <QObject>
+#include <QPointer>
+#include <QString>
+
+#include <memory>
+
+#include "core/session/SessionMessages.h"
+#include "core/session/StationCapabilities.h"
+
+QT_BEGIN_NAMESPACE
+class QTimer;
+class QWebSocketServer;
+QT_END_NAMESPACE
+
+namespace NereusSDR {
+
+class AppSettings;
+class CertificateStore;
+class ObjectRegistry;
+class RadioModel;
+class SessionCommandDispatcher;
+class SessionTransport;
+class SettingsProxyServer;
+class StateMirror;
+class TokenStore;
+
+class StationServer : public QObject {
+    Q_OBJECT
+
+public:
+    /// See the class comment's heartbeat section for both numbers and the
+    /// reasoning behind each.
+    static constexpr int kDefaultHeartbeatIntervalMs = 20000;
+    static constexpr int kDefaultMaxMissedPongs = 2;
+
+    /// How often the outbound delta coalescer is drained. StateMirror's
+    /// coalescer is latest-wins and re-resolves against the live model at
+    /// flush time, so this is a rate limit rather than a delay budget: one
+    /// band-button press runs 75 setters on each of up to five slices
+    /// (design addendum section 7), and without a flush cadence that is
+    /// roughly 250 messages for one keypress.
+    static constexpr int kDefaultDeltaFlushMs = 50;
+
+    /// `radioModel` and `settings` are NOT owned and must outlive this
+    /// object; both must live on this object's thread (see the class
+    /// comment's threading section, which is where the consequences of
+    /// getting that wrong are spelled out).
+    ///
+    /// `securityDirectory` is where the TLS certificate and the auth token
+    /// live. Empty means the daemon profile's own config directory, which
+    /// is the production answer; tests pass a scratch directory so a run
+    /// never reads back or overwrites a real station's identity.
+    explicit StationServer(RadioModel* radioModel, AppSettings& settings,
+                           const QString& securityDirectory = QString(),
+                           QObject* parent = nullptr);
+    ~StationServer() override;
+
+    StationServer(const StationServer&) = delete;
+    StationServer& operator=(const StationServer&) = delete;
+
+    /// Binds a wss listener. False (with lastError() set) when TLS is
+    /// unavailable, the certificate could not be provisioned, or the bind
+    /// failed. Port 0 asks the OS for a free one; read it back with
+    /// serverPort().
+    bool listen(const QHostAddress& address, quint16 port);
+
+    void close();
+    bool isListening() const;
+    quint16 serverPort() const;
+    QString lastError() const { return m_lastError; }
+
+    /// The generated pre-shared token and the TLS fingerprint a client has
+    /// to be given out of band. Empty when provisioning failed.
+    QString token() const;
+    QString certificateFingerprint() const;
+
+    /// Adopt an already-connected transport as a new peer. This is what
+    /// the QWebSocketServer's newConnection handler calls, and it is also
+    /// how a test drives the real handshake over an in-process pipe: ONE
+    /// code path, no test-only branch (SessionTransport.h explains why the
+    /// seam exists at all). Takes ownership by reparenting.
+    void acceptTransport(SessionTransport* transport);
+
+    /// Parent design section 4.5's EFFECTIVE slice limit: what this daemon
+    /// can sustain, which on the Pi 4 floor may be fewer than the radio
+    /// supports. Defaults to the board's own maxSlices, i.e. no narrowing,
+    /// because R2 builds no PerfMonitor to compute anything better. Values
+    /// below 1 are ignored.
+    void setSustainableSliceLimit(int slices);
+    int sustainableSliceLimit() const { return m_sustainableSliceLimit; }
+
+    /// See the class comment's heartbeat section. Applied to the running
+    /// timer immediately. An interval of 0 or less STOPS the heartbeat
+    /// entirely, which exists for a bench session an operator is
+    /// deliberately holding open through a laptop suspend; it is not a
+    /// supported production configuration and is logged as a warning.
+    void setHeartbeatIntervalMs(int ms);
+    int heartbeatIntervalMs() const { return m_heartbeatIntervalMs; }
+
+    void setMaxMissedPongs(int misses);
+    int maxMissedPongs() const { return m_maxMissedPongs; }
+
+    /// Consecutive failed authentications tolerated before the station
+    /// stops answering, and for how long. Forwards to TokenStore; see its
+    /// header for the semantics and for why RateLimited is a distinct
+    /// outcome from Rejected. Defaults are TokenStore's own.
+    void setAuthRateLimit(int maxFailures, int lockoutMs);
+
+    /// Every peer currently attached, authenticated or not.
+    int peerCount() const { return static_cast<int>(m_peers.size()); }
+
+    /// At most one, by construction. See the topology decision above.
+    bool hasAuthenticatedSession() const;
+
+    /// The capability descriptor this daemon would advertise right now.
+    /// Public so a caller (and this task's tests) can inspect what a
+    /// client is about to be told without standing up a client.
+    StationCapabilities buildCapabilities() const;
+
+    // ---- Subsystem accessors, non-owning, for tests and diagnostics ----
+    StateMirror* stateMirror() const { return m_mirror; }
+    ObjectRegistry* objectRegistry() const { return m_registry; }
+    SettingsProxyServer* settingsServer() const { return m_settingsServer; }
+
+signals:
+    /// A peer completed the full section 7.0 sequence and is now THE
+    /// session.
+    void clientAuthenticated(const QString& peer);
+
+    /// A peer went away, for any reason, with the reason. Fires for
+    /// unauthenticated peers too.
+    void peerDisconnected(const QString& peer, const QString& reason);
+
+    /// A second authenticated connection displaced an existing session.
+    /// The displaced peer has already been sent a SessionEnd naming why
+    /// (parent section 7.1: "The displaced session is told why") by the
+    /// time this fires.
+    void sessionPreempted(const QString& displacedPeer);
+
+    /// The heartbeat declared a peer dead: it stopped answering pings
+    /// without closing. Distinct from peerDisconnected's ordinary path
+    /// because this is the case that has no TCP close behind it at all.
+    void peerHeartbeatTimeout(const QString& peer);
+
+private:
+    /// Per-connection state. Deliberately small: everything that is not
+    /// per-CONNECTION (the mirror, the registry, the dispatcher, the
+    /// settings server) is shared, because there is only ever one
+    /// authenticated session to own it.
+    struct Peer {
+        SessionTransport* transport = nullptr;
+        QString description;
+        bool helloReceived = false;
+        bool authenticated = false;
+        quint16 agreedMinor = 0;
+
+        /// Pings sent since the last pong. Reset to 0 by every pong; the
+        /// heartbeat tick declares death when it reaches maxMissedPongs().
+        int pingsAwaitingPong = 0;
+    };
+
+    void onNewWebSocketConnection();
+    void onTransportText(SessionTransport* transport, const QByteArray& wire);
+    void onTransportClosed(SessionTransport* transport);
+    void onHeartbeatTick();
+
+    // Every handler takes the TRANSPORT and looks its Peer up itself,
+    // never a Peer& held across a call. dropPeer() erases from m_peers,
+    // and Qt6's QHash does not promise a reference into it survives an
+    // unrelated erase -- promoteToSession() drops the INCUMBENT session
+    // while holding the newcomer's entry, which is exactly the shape that
+    // would go wrong.
+    void handleHello(SessionTransport* transport, const SessionMessage& message);
+    void handleAuthRequest(SessionTransport* transport, const SessionMessage& message);
+    void handlePropertyWrite(SessionTransport* transport, const SessionMessage& message);
+    void handleSettingsWrite(SessionTransport* transport, const SessionMessage& message);
+    void handleSettingsRemove(const SessionMessage& message);
+
+    /// Completes the session: capability exchange, settings snapshot,
+    /// mirror attach, snapshot-complete marker. Preempts any incumbent
+    /// first.
+    void promoteToSession(SessionTransport* transport);
+
+    void dropPeer(SessionTransport* transport, const QString& reason,
+                  bool sendSessionEnd);
+    void send(SessionTransport* transport, const SessionMessage& message);
+    void sendToSession(const SessionMessage& message);
+
+    /// Watches the five singleton mirrored models plus every slice
+    /// RadioModel already holds. Idempotent.
+    void buildMirror();
+
+    QPointer<RadioModel> m_radioModel;
+    AppSettings& m_settings;
+    QString m_securityDirectory;
+    QString m_lastError;
+
+    std::unique_ptr<CertificateStore> m_certificates;
+    std::unique_ptr<TokenStore> m_tokens;
+
+    QWebSocketServer* m_wsServer = nullptr;
+
+    StateMirror* m_mirror = nullptr;
+    ObjectRegistry* m_registry = nullptr;
+    SessionCommandDispatcher* m_dispatcher = nullptr;
+    SettingsProxyServer* m_settingsServer = nullptr;
+    bool m_mirrorBuilt = false;
+
+    QHash<SessionTransport*, Peer> m_peers;
+    SessionTransport* m_session = nullptr;
+
+    QTimer* m_heartbeatTimer = nullptr;
+    QTimer* m_deltaFlushTimer = nullptr;
+
+    int m_heartbeatIntervalMs = kDefaultHeartbeatIntervalMs;
+    int m_maxMissedPongs = kDefaultMaxMissedPongs;
+    int m_sustainableSliceLimit = 0;
+};
+
+} // namespace NereusSDR

@@ -1,0 +1,777 @@
+// =================================================================
+// src/core/session/StationServer.cpp  (NereusSDR)
+// =================================================================
+//
+// no-port-check: NereusSDR-original. Remote-daemon R2 Task 18.
+// See StationServer.h for the connect sequence, the one-session topology
+// decision, the threading invariant, and the heartbeat's detection model.
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-08-08  J.J. Boyd / KG4VCF  Remote daemon R2 Task 18: the daemon
+//                                    half of the wss session. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
+// =================================================================
+
+#include "core/session/StationServer.h"
+
+#include "core/AppSettings.h"
+#include "core/BoardCapabilities.h"
+#include "core/security/CertificateStore.h"
+#include "core/security/TokenStore.h"
+#include "core/session/ObjectRegistry.h"
+#include "core/session/SessionCommandDispatcher.h"
+#include "core/session/SessionTransport.h"
+#include "core/session/StateMirror.h"
+#include "core/settings/SettingsProxyServer.h"
+#include "core/settings/SettingsScope.h"
+#include "models/PanadapterModel.h"
+#include "models/RadioModel.h"
+#include "models/SliceModel.h"
+#include "models/TransmitModel.h"
+#include "models/TunerModel.h"
+
+#include <QLoggingCategory>
+#include <QSslConfiguration>
+#include <QSslSocket>
+#include <QTimer>
+#include <QWebSocket>
+#include <QWebSocketServer>
+
+#include <algorithm>
+
+namespace NereusSDR {
+
+namespace {
+Q_LOGGING_CATEGORY(lcStation, "nereus.station")
+
+// The wire identities the five singleton mirrored models are watched
+// under. Slices use ObjectRegistry::keyForSlice() instead, which is
+// already shared with the daemon's own lifecycle tracking.
+constexpr const char* kRadioKey = "radio";
+constexpr const char* kTransmitKey = "transmit";
+constexpr const char* kTunerKey = "tuner";
+
+QByteArray panKey(int index)
+{
+    return QByteArrayLiteral("pan:") + QByteArray::number(index);
+}
+
+QString peerNameForThisProcess()
+{
+    return QStringLiteral("nereusd");
+}
+
+// Each side's own AppSettings schema version, read by the key name
+// AppSettings::ensureSettingsAtVersion() writes it under. Read rather than
+// hardcoded: the literal lives at exactly one place today (CoreInit.cpp's
+// ensureSettingsAtVersion(6) call), and duplicating it here would create a
+// second copy free to drift from the migrations that actually ran.
+qint32 settingsSchemaVersionOf(const AppSettings& settings)
+{
+    return static_cast<qint32>(
+        settings.value(QStringLiteral("SettingsSchemaVersion"), QStringLiteral("0"))
+            .toString()
+            .toInt());
+}
+} // namespace
+
+StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
+                             const QString& securityDirectory, QObject* parent)
+    : QObject(parent)
+    , m_radioModel(radioModel)
+    , m_settings(settings)
+    , m_securityDirectory(securityDirectory.isEmpty() ? CertificateStore::defaultDirectory()
+                                                      : securityDirectory)
+{
+    m_certificates = std::make_unique<CertificateStore>(m_securityDirectory);
+    m_tokens = std::make_unique<TokenStore>(m_securityDirectory);
+
+    // Step 4: the token distribution mechanism parent section 7.1 requires
+    // be specified before R2. Printed ONCE, on the run that generates it,
+    // beside the certificate fingerprint the client pins (section 10.5) --
+    // the two things an operator has to carry to the client by hand, in
+    // one place, at the one moment they are new. Deliberately not repeated
+    // on later starts: a secret echoed into every log file forever is a
+    // different problem from a secret nobody can find.
+    if (m_tokens->wasGeneratedThisRun()) {
+        qCInfo(lcStation).noquote()
+            << "\n"
+               "  ============================================================\n"
+               "  NereusSDR station: first run, pairing details\n"
+               "  ------------------------------------------------------------\n"
+               "  Token:       "
+            << m_tokens->token() << "\n"
+               "  TLS SHA-256: "
+            << m_certificates->fingerprintSha256() << "\n"
+               "  Stored in:   "
+            << m_securityDirectory << "\n"
+               "  ------------------------------------------------------------\n"
+               "  Give both to the client. They are printed once, here.\n"
+               "  ============================================================";
+    }
+    if (!m_tokens->isValid()) {
+        qCWarning(lcStation) << "Auth token unavailable:" << m_tokens->lastError();
+    }
+
+    m_mirror = new StateMirror(this);
+    m_registry = new ObjectRegistry(radioModel, m_mirror, this);
+    m_dispatcher = new SessionCommandDispatcher(radioModel, this);
+    m_settingsServer = new SettingsProxyServer(settings, this);
+
+    // Outbound: everything the daemon has to say goes to whichever
+    // transport currently holds the session, and to nothing at all when
+    // there is none.
+    connect(m_mirror, &StateMirror::sessionMessageReady, this,
+            [this](const SessionMessage& message) { sendToSession(message); });
+    connect(m_dispatcher, &SessionCommandDispatcher::commandResultReady, this,
+            [this](const SessionMessage& result) { sendToSession(result); });
+    connect(m_settingsServer, &SettingsProxyServer::outboundValueChanged, this,
+            [this](const QString& key, const QVariant& value, const QString& originTag) {
+                sendToSession(
+                    SessionMessages::settingsValue(key, value.toString(), originTag));
+            });
+
+    // ObjectRegistry's create/destroy events are the lifecycle half of the
+    // mirror; StateMirror only carries property deltas for objects it
+    // already knows about.
+    connect(m_registry, &ObjectRegistry::objectCreated, this,
+            [this](const QByteArray& objectKey, const QByteArray& className, int,
+                   const QList<MirrorUpdate>& snapshot) {
+                sendToSession(
+                    SessionMessages::objectCreate(objectKey, className, snapshot));
+            });
+    connect(m_registry, &ObjectRegistry::objectDestroyed, this,
+            [this](const QByteArray& objectKey, const QByteArray& className, int) {
+                sendToSession(SessionMessages::objectDestroy(objectKey, className));
+            });
+
+    m_heartbeatTimer = new QTimer(this);
+    m_heartbeatTimer->setInterval(m_heartbeatIntervalMs);
+    connect(m_heartbeatTimer, &QTimer::timeout, this, &StationServer::onHeartbeatTick);
+
+    m_deltaFlushTimer = new QTimer(this);
+    m_deltaFlushTimer->setInterval(kDefaultDeltaFlushMs);
+    connect(m_deltaFlushTimer, &QTimer::timeout, this, [this]() {
+        if (m_session != nullptr && m_mirror != nullptr) {
+            m_mirror->flushCoalescedDeltas();
+        }
+    });
+}
+
+StationServer::~StationServer()
+{
+    close();
+}
+
+// ── Listener lifecycle ───────────────────────────────────────────────────
+
+bool StationServer::listen(const QHostAddress& address, quint16 port)
+{
+    m_lastError.clear();
+
+    if (!QSslSocket::supportsSsl()) {
+        m_lastError = CertificateStore::tlsBackendDiagnostic();
+        if (m_lastError.isEmpty()) {
+            m_lastError = QStringLiteral("Qt reports no working TLS backend");
+        }
+        qCWarning(lcStation) << "Refusing to listen:" << m_lastError;
+        return false;
+    }
+    if (!m_certificates->isValid()) {
+        m_lastError = m_certificates->lastError();
+        qCWarning(lcStation) << "Refusing to listen:" << m_lastError;
+        return false;
+    }
+    if (!m_tokens->isValid()) {
+        // Listening with no token would accept nobody, forever, while
+        // looking healthy. Refuse loudly instead.
+        m_lastError = m_tokens->lastError().isEmpty()
+                          ? QStringLiteral("No authentication token available")
+                          : m_tokens->lastError();
+        qCWarning(lcStation) << "Refusing to listen:" << m_lastError;
+        return false;
+    }
+
+    if (m_wsServer == nullptr) {
+        m_wsServer = new QWebSocketServer(QStringLiteral("NereusSDR station"),
+                                          QWebSocketServer::SecureMode, this);
+        connect(m_wsServer, &QWebSocketServer::newConnection, this,
+                &StationServer::onNewWebSocketConnection);
+    }
+
+    QSslConfiguration tls = QSslConfiguration::defaultConfiguration();
+    tls.setLocalCertificate(m_certificates->certificate());
+    tls.setPrivateKey(m_certificates->privateKey());
+    // The client pins this certificate's fingerprint (parent design
+    // section 10.5), so it is the client's job to decide whether to trust
+    // it. Asking for a client certificate here would be a second,
+    // unimplemented identity mechanism.
+    tls.setPeerVerifyMode(QSslSocket::VerifyNone);
+    m_wsServer->setSslConfiguration(tls);
+
+    if (!m_wsServer->listen(address, port)) {
+        m_lastError = m_wsServer->errorString();
+        qCWarning(lcStation) << "Listen failed:" << m_lastError;
+        return false;
+    }
+
+    qCInfo(lcStation) << "Station listening on wss://" << address.toString() << ":"
+                      << m_wsServer->serverPort();
+    return true;
+}
+
+void StationServer::close()
+{
+    const QList<SessionTransport*> transports = m_peers.keys();
+    for (SessionTransport* transport : transports) {
+        dropPeer(transport, QStringLiteral("station shutting down"), true);
+    }
+    if (m_wsServer != nullptr) {
+        m_wsServer->close();
+    }
+    if (m_heartbeatTimer != nullptr) {
+        m_heartbeatTimer->stop();
+    }
+    if (m_deltaFlushTimer != nullptr) {
+        m_deltaFlushTimer->stop();
+    }
+}
+
+bool StationServer::isListening() const
+{
+    return m_wsServer != nullptr && m_wsServer->isListening();
+}
+
+quint16 StationServer::serverPort() const
+{
+    return m_wsServer != nullptr ? m_wsServer->serverPort() : 0;
+}
+
+QString StationServer::token() const
+{
+    return m_tokens != nullptr ? m_tokens->token() : QString();
+}
+
+QString StationServer::certificateFingerprint() const
+{
+    return m_certificates != nullptr ? m_certificates->fingerprintSha256() : QString();
+}
+
+bool StationServer::hasAuthenticatedSession() const
+{
+    return m_session != nullptr;
+}
+
+// ── Peer lifecycle ───────────────────────────────────────────────────────
+
+void StationServer::onNewWebSocketConnection()
+{
+    while (m_wsServer != nullptr && m_wsServer->hasPendingConnections()) {
+        QWebSocket* socket = m_wsServer->nextPendingConnection();
+        if (socket == nullptr) {
+            break;
+        }
+        acceptTransport(new WebSocketTransport(socket));
+    }
+}
+
+void StationServer::acceptTransport(SessionTransport* transport)
+{
+    if (transport == nullptr) {
+        return;
+    }
+    transport->setParent(this);
+
+    Peer peer;
+    peer.transport = transport;
+    peer.description = transport->peerDescription();
+    m_peers.insert(transport, peer);
+
+    connect(transport, &SessionTransport::textReceived, this,
+            [this, transport](const QByteArray& wire) { onTransportText(transport, wire); });
+    connect(transport, &SessionTransport::pongReceived, this, [this, transport]() {
+        auto it = m_peers.find(transport);
+        if (it != m_peers.end()) {
+            it->pingsAwaitingPong = 0;
+        }
+    });
+    connect(transport, &SessionTransport::closed, this,
+            [this, transport]() { onTransportClosed(transport); });
+
+    if (!m_heartbeatTimer->isActive() && m_heartbeatIntervalMs > 0) {
+        m_heartbeatTimer->start();
+    }
+
+    // The daemon greets first, so a client can refuse on a major version
+    // mismatch without ever having sent its token. Section 7.0's sequence
+    // does not fix which end speaks first; sending it in the direction
+    // that avoids exposing a secret to an incompatible peer is this
+    // task's own choice, recorded here.
+    send(transport,
+         SessionMessages::hello(kSessionProtocolMajor, kSessionProtocolMinor,
+                                settingsSchemaVersionOf(m_settings),
+                                peerNameForThisProcess()));
+
+    qCDebug(lcStation) << "Peer attached:" << peer.description;
+}
+
+void StationServer::onTransportClosed(SessionTransport* transport)
+{
+    dropPeer(transport, QStringLiteral("peer closed the link"), false);
+}
+
+void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
+                             bool sendSessionEnd)
+{
+    auto it = m_peers.find(transport);
+    if (it == m_peers.end()) {
+        return;
+    }
+    const QString description = it->description;
+
+    if (sendSessionEnd) {
+        send(transport, SessionMessages::sessionEnd(reason));
+    }
+    m_peers.erase(it);
+
+    if (m_session == transport) {
+        m_session = nullptr;
+        // Stop draining deltas into nothing. StateMirror keeps watching --
+        // the daemon's own state is not the session's to tear down -- and
+        // the next attachSession() clears whatever the coalescer holds
+        // anyway, because a fresh burst already carries every watched
+        // object's current value.
+        m_deltaFlushTimer->stop();
+    }
+
+    transport->closeLink(reason);
+    transport->deleteLater();
+
+    if (m_peers.isEmpty() && m_heartbeatTimer != nullptr) {
+        m_heartbeatTimer->stop();
+    }
+
+    qCInfo(lcStation) << "Peer detached:" << description << "reason:" << reason;
+    emit peerDisconnected(description, reason);
+}
+
+// ── Heartbeat ────────────────────────────────────────────────────────────
+
+void StationServer::setHeartbeatIntervalMs(int ms)
+{
+    m_heartbeatIntervalMs = ms;
+    if (ms <= 0) {
+        qCWarning(lcStation)
+            << "Heartbeat disabled. A peer that dies without closing the TCP "
+               "connection will not be detected.";
+        m_heartbeatTimer->stop();
+        return;
+    }
+    m_heartbeatTimer->setInterval(ms);
+    if (!m_peers.isEmpty()) {
+        m_heartbeatTimer->start();
+    }
+}
+
+void StationServer::setMaxMissedPongs(int misses)
+{
+    m_maxMissedPongs = misses < 1 ? 1 : misses;
+}
+
+void StationServer::setAuthRateLimit(int maxFailures, int lockoutMs)
+{
+    if (m_tokens != nullptr) {
+        m_tokens->setRateLimit(maxFailures, lockoutMs);
+    }
+}
+
+void StationServer::onHeartbeatTick()
+{
+    // Copied deliberately: dropPeer() mutates m_peers, and a peer declared
+    // dead here is dropped inside this loop.
+    const QList<SessionTransport*> transports = m_peers.keys();
+    for (SessionTransport* transport : transports) {
+        auto it = m_peers.find(transport);
+        if (it == m_peers.end()) {
+            continue;
+        }
+        if (it->pingsAwaitingPong >= m_maxMissedPongs) {
+            const QString description = it->description;
+            qCWarning(lcStation)
+                << "Peer" << description << "missed" << it->pingsAwaitingPong
+                << "consecutive pongs; declaring the link dead";
+            emit peerHeartbeatTimeout(description);
+            dropPeer(transport, QStringLiteral("heartbeat timeout"), true);
+            continue;
+        }
+        ++it->pingsAwaitingPong;
+        transport->ping();
+    }
+}
+
+// ── Inbound dispatch ─────────────────────────────────────────────────────
+
+void StationServer::onTransportText(SessionTransport* transport, const QByteArray& wire)
+{
+    auto it = m_peers.find(transport);
+    if (it == m_peers.end()) {
+        return;
+    }
+
+    SessionMessage message;
+    if (!SessionMessages::decode(wire, &message)) {
+        dropPeer(transport, QStringLiteral("undecodable message"), true);
+        return;
+    }
+
+    switch (message.kind) {
+    case SessionMessageKind::Hello:
+        handleHello(transport, message);
+        return;
+    case SessionMessageKind::AuthRequest:
+        handleAuthRequest(transport, message);
+        return;
+    default:
+        break;
+    }
+
+    if (!it->authenticated) {
+        // Everything below this line moves radio or settings state. A peer
+        // that has not proved it holds the token gets exactly one answer.
+        dropPeer(transport, QStringLiteral("message sent before authentication"), true);
+        return;
+    }
+
+    switch (message.kind) {
+    case SessionMessageKind::CommandInvoke:
+        m_dispatcher->dispatch(message);
+        break;
+    case SessionMessageKind::PropertyWrite:
+        handlePropertyWrite(transport, message);
+        break;
+    case SessionMessageKind::SettingsWrite:
+        handleSettingsWrite(transport, message);
+        break;
+    case SessionMessageKind::SettingsRemove:
+        handleSettingsRemove(message);
+        break;
+    default:
+        // Every remaining kind is daemon-to-client. A client sending one
+        // is confused rather than hostile, so it is logged and ignored
+        // rather than being grounds to close a working session.
+        qCWarning(lcStation) << "Ignoring client message of daemon-only kind:"
+                             << SessionMessages::kindName(message.kind);
+        break;
+    }
+}
+
+void StationServer::handleHello(SessionTransport* transport, const SessionMessage& message)
+{
+    auto it = m_peers.find(transport);
+    if (it == m_peers.end()) {
+        return;
+    }
+    if (it->helloReceived) {
+        dropPeer(transport, QStringLiteral("duplicate hello"), true);
+        return;
+    }
+    it->helloReceived = true;
+
+    // Parent design section 7.0's version policy, both halves.
+    if (message.protocolMajor != kSessionProtocolMajor) {
+        const QString reason =
+            QStringLiteral("Protocol major version mismatch: station speaks %1.%2, "
+                           "client speaks %3.%4. A differing major means an "
+                           "incompatible wire contract.")
+                .arg(kSessionProtocolMajor)
+                .arg(kSessionProtocolMinor)
+                .arg(message.protocolMajor)
+                .arg(message.protocolMinor);
+        qCWarning(lcStation) << reason;
+        dropPeer(transport, reason, true);
+        return;
+    }
+
+    // Equal major, differing minor: negotiate DOWN to the lower of the
+    // two. A desktop GUI several releases ahead of a Pi still running this
+    // one is the EXPECTED case, and it degrades rather than refusing.
+    it->agreedMinor = std::min(kSessionProtocolMinor, message.protocolMinor);
+
+    if (message.settingsSchemaVersion != settingsSchemaVersionOf(m_settings)) {
+        // Not a refusal. The settings schema governs how each side's own
+        // local store is shaped, not the wire contract, and the client is
+        // the side that has to decide what to do about it (see
+        // StationClient's own skew check). Logged here so a bench session
+        // shows the skew from both ends.
+        qCWarning(lcStation) << "Settings schema skew: station is at"
+                             << settingsSchemaVersionOf(m_settings) << "client is at"
+                             << message.settingsSchemaVersion;
+    }
+
+    qCDebug(lcStation) << "Hello from" << message.peerName << "version"
+                       << message.protocolMajor << "." << message.protocolMinor
+                       << "agreed minor" << it->agreedMinor;
+}
+
+void StationServer::handleAuthRequest(SessionTransport* transport,
+                                      const SessionMessage& message)
+{
+    auto it = m_peers.find(transport);
+    if (it == m_peers.end()) {
+        return;
+    }
+    if (!it->helloReceived) {
+        dropPeer(transport, QStringLiteral("auth before hello"), true);
+        return;
+    }
+    if (it->authenticated) {
+        dropPeer(transport, QStringLiteral("duplicate auth"), true);
+        return;
+    }
+
+    const QString description = it->description;
+
+    // The candidate token is never logged, at any level, on any path.
+    const TokenStore::VerifyResult result = m_tokens->verify(message.token);
+    if (result != TokenStore::VerifyResult::Accepted) {
+        const QString reason =
+            result == TokenStore::VerifyResult::RateLimited
+                ? QStringLiteral("Too many failed authentication attempts; try again later")
+                : QStringLiteral("Authentication failed");
+        send(transport, SessionMessages::authResult(false, reason));
+        qCWarning(lcStation) << "Authentication refused for" << description << ":" << reason;
+        dropPeer(transport, reason, false);
+        return;
+    }
+
+    it->authenticated = true;
+    send(transport, SessionMessages::authResult(true, QString()));
+    promoteToSession(transport);
+}
+
+void StationServer::promoteToSession(SessionTransport* transport)
+{
+    const QString description = m_peers.value(transport).description;
+
+    // Parent design section 7.1: "A second authenticated connection
+    // preempts the existing session ... The displaced session is told
+    // why." The token is the authority, and the realistic sequence is the
+    // same operator reconnecting after a link drop from a different
+    // device. Leaving the stale session in place, or refusing the second
+    // connection, locks the operator out of their own transmitter for an
+    // undefined interval.
+    if (m_session != nullptr && m_session != transport) {
+        const QString displaced = m_peers.contains(m_session)
+                                      ? m_peers.value(m_session).description
+                                      : QStringLiteral("<unknown>");
+        const QString reason =
+            QStringLiteral("Displaced by a newer authenticated connection from %1")
+                .arg(description);
+        qCInfo(lcStation) << "Preempting session" << displaced << "for" << description;
+        dropPeer(m_session, reason, true);
+        emit sessionPreempted(displaced);
+    }
+
+    // BEFORE m_session is assigned, deliberately. buildMirror() ends in
+    // ObjectRegistry::backfillExistingSlices(), which emits objectCreated
+    // for every slice the daemon already holds -- and those are wired
+    // straight to sendToSession(). With m_session still null they are
+    // dropped, which is exactly right: attachSession() below sends an
+    // object.create for every watched object anyway, AFTER the schema
+    // messages that a client needs in order to make sense of one. Assign
+    // first and the backfill's creates go out ahead of any schema, and
+    // then get sent a second time by the burst.
+    buildMirror();
+
+    m_session = transport;
+
+    // Capability exchange (section 7.0 step 4). Sent before any state, so
+    // the client has sized its own limits before the first object arrives.
+    send(transport, SessionMessages::capabilities(buildCapabilities().toUpdates()));
+
+    // State snapshot, settings half. Scoped to the connected radio's MAC
+    // plus everything else Station-classified; see SettingsProxyServer.
+    const QMap<QString, QString> snapshot = m_settingsServer->buildSnapshot(
+        m_radioModel.isNull() ? QString() : m_radioModel->currentRadioMac());
+    QList<MirrorUpdate> entries;
+    entries.reserve(snapshot.size());
+    for (auto it = snapshot.cbegin(); it != snapshot.cend(); ++it) {
+        entries.append(
+            MirrorUpdate{ 0, it.key().toUtf8(), MirrorWireKind::Utf8, QVariant(it.value()) });
+    }
+    send(transport, SessionMessages::settingsSnapshot(entries));
+
+    // State snapshot, model half, ending in the snapshot-complete marker.
+    // attachSession() emits the whole burst synchronously through
+    // sessionMessageReady before it returns, which reaches sendToSession()
+    // above -- and m_session is already set by now, which is what makes
+    // the burst go anywhere at all.
+    m_mirror->attachSession();
+
+    if (!m_deltaFlushTimer->isActive()) {
+        m_deltaFlushTimer->start();
+    }
+
+    qCInfo(lcStation) << "Session established with" << description;
+    emit clientAuthenticated(description);
+}
+
+// ── Mirror wiring ────────────────────────────────────────────────────────
+
+void StationServer::buildMirror()
+{
+    if (m_mirrorBuilt || m_radioModel.isNull()) {
+        return;
+    }
+    m_mirrorBuilt = true;
+
+    m_mirror->watch(QByteArray(kRadioKey), m_radioModel.data());
+    m_mirror->watch(QByteArray(kTransmitKey), &m_radioModel->transmitModel());
+    if (m_radioModel->tunerModel() != nullptr) {
+        m_mirror->watch(QByteArray(kTunerKey), m_radioModel->tunerModel());
+    }
+    const QList<PanadapterModel*> pans = m_radioModel->panadapters();
+    for (int i = 0; i < pans.size(); ++i) {
+        m_mirror->watch(panKey(i), pans.at(i));
+    }
+
+    // The third step of ObjectRegistry's three-step, and the one that is
+    // easy to forget: the constructor only wires sliceAdded/sliceRemoved,
+    // so every slice DaemonApp::start() already created is invisible until
+    // this runs. StateMirror::snapshotAll() is not a substitute -- it walks
+    // its own watch list and cannot discover an object nobody watched.
+    // Called after the objectCreated/objectDestroyed wiring in the
+    // constructor, which is the ordering its own doc comment requires.
+    m_registry->backfillExistingSlices();
+}
+
+// ── Inbound state and settings ───────────────────────────────────────────
+
+void StationServer::handlePropertyWrite(SessionTransport* transport,
+                                        const SessionMessage& message)
+{
+    for (const MirrorUpdate& update : message.updates) {
+        const MirrorApplyResult result =
+            m_mirror->applyInbound(message.objectKey, update.name, update.value);
+        if (result.accepted) {
+            continue;
+        }
+        qCWarning(lcStation) << "Refused remote write" << message.objectKey << "."
+                             << update.name << ":" << result.reason;
+        // Self-correcting: hand the peer back what the daemon actually
+        // holds for that property, as an ordinary Delta, so a GUI control
+        // that optimistically moved snaps back rather than displaying a
+        // value the station never accepted.
+        const QList<MirrorUpdate> settled = m_mirror->snapshot(message.objectKey);
+        for (const MirrorUpdate& live : settled) {
+            if (live.name == update.name) {
+                send(transport, SessionMessages::delta(message.objectKey, { live }));
+                break;
+            }
+        }
+    }
+}
+
+void StationServer::handleSettingsWrite(SessionTransport* transport,
+                                        const SessionMessage& message)
+{
+    if (message.updates.isEmpty()) {
+        return;
+    }
+    const QString key = QString::fromUtf8(message.objectKey);
+    const SettingsApplyResult result =
+        m_settingsServer->applyInboundWrite(key, message.updates.first().value,
+                                            message.originTag);
+    if (!result.accepted) {
+        qCWarning(lcStation) << "Refused remote settings write" << key << ":"
+                             << result.reason;
+        send(transport,
+             SessionMessages::settingsReject(key, result.restoredValue.isValid(),
+                                             result.restoredValue.toString()));
+    }
+}
+
+void StationServer::handleSettingsRemove(const SessionMessage& message)
+{
+    const QString key = QString::fromUtf8(message.objectKey);
+    // SettingsProxyServer has no remove path of its own: AppSettings::
+    // remove() fires the same Task 13 change hook a setValue() does, so
+    // the broadcast that reaches every client is produced by the same
+    // generic path, with an empty origin tag. Routed through the daemon's
+    // own store directly, and gated on the same Station classification
+    // applyInboundWrite() enforces so a client cannot reach an
+    // OperatorLocal key by removing it instead of writing it.
+    if (classifySettingsKey(key) != SettingsScope::Station) {
+        qCWarning(lcStation) << "Refused remote settings remove of non-station key" << key;
+        return;
+    }
+    m_settings.remove(key);
+}
+
+// ── Send helpers ─────────────────────────────────────────────────────────
+
+void StationServer::send(SessionTransport* transport, const SessionMessage& message)
+{
+    if (transport == nullptr) {
+        return;
+    }
+    transport->sendText(SessionMessages::encode(message));
+}
+
+void StationServer::sendToSession(const SessionMessage& message)
+{
+    if (m_session == nullptr) {
+        return;
+    }
+    m_session->sendText(SessionMessages::encode(message));
+}
+
+// ── Capability descriptor ────────────────────────────────────────────────
+
+void StationServer::setSustainableSliceLimit(int slices)
+{
+    if (slices < 1) {
+        return;
+    }
+    m_sustainableSliceLimit = slices;
+}
+
+StationCapabilities StationServer::buildCapabilities() const
+{
+    StationCapabilities caps;
+    caps.settingsSchemaVersion = settingsSchemaVersionOf(m_settings);
+    if (m_radioModel.isNull()) {
+        return caps;
+    }
+
+    const BoardCapabilities& board = m_radioModel->boardCapabilities();
+
+    caps.stationName = m_radioModel->name();
+    caps.radioModelName = m_radioModel->model();
+    caps.firmwareVersion = m_radioModel->version();
+    caps.macAddress = m_radioModel->currentRadioMac();
+    caps.board = board.board;
+    caps.radioConnected = m_radioModel->isConnected();
+
+    caps.boardMaxSlices = board.maxSlices > 0 ? board.maxSlices : 1;
+    caps.userDdcCount = board.userDdcCount;
+    caps.pureSignalPresent = board.hasPureSignal;
+
+    // EFFECTIVE, not board (parent section 4.5). R2 has no PerfMonitor to
+    // compute a sustainable number, so the effective value is whatever an
+    // operator configured, clamped to what the radio can actually do --
+    // advertising more slices than the board has would be a worse failure
+    // than advertising fewer.
+    caps.effectiveMaxSlices = m_sustainableSliceLimit > 0
+                                  ? std::min(m_sustainableSliceLimit, caps.boardMaxSlices)
+                                  : caps.boardMaxSlices;
+
+    // Always false in R2: TX is R4 in its entirety.
+    caps.txPermitted = false;
+
+    return caps;
+}
+
+} // namespace NereusSDR

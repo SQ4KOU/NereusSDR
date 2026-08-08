@@ -1009,7 +1009,28 @@ set(CORE_SOURCES
     # of these implements) is header-only, nothing to add here.
     src/core/settings/SettingsProxy.cpp
     src/core/settings/SettingsProxyServer.cpp
+    # R2 Task 18: the wss session itself, both halves. StationServer is the
+    # daemon side (QWebSocketServer + TLS from Task 17 + TokenStore, driving
+    # StateMirror / ObjectRegistry / SessionCommandDispatcher /
+    # SettingsProxyServer); StationClient is the GUI side (applies the
+    # capability descriptor onto a Role::Remote RadioModel, builds the
+    # client-side mirror, feeds SettingsProxy). SessionTransport is the seam
+    # between the protocol and whatever carries it, which is what lets the
+    # handshake and ordering assertions run without TLS and lets a silently
+    # dead peer be simulated at all. StationCapabilities is the descriptor
+    # struct plus its codec, included by RadioModel.h for the production
+    # handshake entry point.
+    src/core/session/SessionTransport.cpp
+    src/core/session/StationCapabilities.cpp
+    src/core/session/StationServer.cpp
+    src/core/session/StationClient.cpp
 )
+
+# R2 Task 18: the generated pre-shared token nereusd authenticates clients
+# against. Sits beside CertificateStore in src/core/security/ and stores its
+# secret the same way (a permission-restricted file beside the daemon
+# profile, never an AppSettings key -- see TokenStore.h).
+list(APPEND CORE_SOURCES src/core/security/TokenStore.cpp)
 
 # R2 Task 17: TLS certificate provisioning for nereusd's future wss::
 # listener (Task 18). Unconditional (fix round 1 review, Important 1):

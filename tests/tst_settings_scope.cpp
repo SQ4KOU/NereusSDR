@@ -356,6 +356,17 @@ ScanResult scanTree(const QString& absoluteDir)
 //   one is frequently noise on the other, so this is correctly
 //   per-process rather than per-station.
 //
+//   SettingsSchemaVersion -- read from src/core by StationServer.cpp and
+//   StationClient.cpp (remote-daemon R2 Task 18) so each end can advertise
+//   its own AppSettings schema version in the section 7.0 handshake and
+//   the client can detect skew. It is correctly OperatorLocal, and it is
+//   load-bearing that it stays that way: the whole comparison depends on
+//   each side reading the value from ITS OWN store. Were it Station, the
+//   snapshot would overwrite the client's copy with the daemon's and the
+//   two would agree by construction, permanently -- a skew check that can
+//   never fire. AppSettings::ensureSettingsAtVersion() (CoreInit.cpp) is
+//   what writes it, per machine, after that machine's own migrations run.
+//
 //   Not on this list: "radios/*". It is core-touched (AppSettings.cpp's
 //   own lastConnected()/setLastConnected()/discoveryProfile()/
 //   setDiscoveryProfile()), correctly classifies OperatorLocal, but is
@@ -379,6 +390,7 @@ const QSet<QString> kCoreExemptExact = {
     QStringLiteral("tx/OwnerSlot"),
     QStringLiteral("DisplayGridStep"),
     QStringLiteral("DisplayProfileApplied"),
+    QStringLiteral("SettingsSchemaVersion"),
 };
 
 bool isCoreExempt(const QString& key)

@@ -1,0 +1,129 @@
+#pragma once
+// =================================================================
+// src/core/session/SessionTransport.h  (NereusSDR)
+// =================================================================
+//
+// no-port-check: NereusSDR-original. Remote-daemon R2 Task 18.
+//
+// One session's byte pipe, abstracted away from what is carrying it.
+// StationServer and StationClient hold this, never a QWebSocket, for two
+// reasons that both turned out to be load-bearing rather than tidiness:
+//
+//   1. **The protocol half of this task has to be testable without TLS.**
+//      QSslSocket::supportsSsl() is false on a Qt build with no working
+//      TLS backend, and a suite that put every handshake, preemption and
+//      ordering assertion behind a wss socket would silently QSKIP its
+//      way to green on such a build. With this seam the message-order and
+//      handshake assertions run over an in-process pipe unconditionally,
+//      and only the genuinely TLS-specific slots skip.
+//
+//   2. **A silently dead peer cannot be simulated over a real socket.**
+//      Task 19 step 3a exists to prove the heartbeat detects a peer that
+//      stops answering WITHOUT closing -- a laptop lid, a cell handoff, a
+//      NAT timeout. Over a loopback QWebSocket the peer's Qt stack answers
+//      every ping automatically, so the case is unreachable; over this
+//      seam a test transport simply stops emitting pongReceived(). Same
+//      production code path either way -- there is no second, test-only
+//      branch through StationServer.
+//
+// The abstraction is deliberately RFC 6455 shaped (text frames, ping,
+// pong, close) rather than a generic byte stream, because that is what
+// the transport under it actually is and pretending otherwise would mean
+// re-inventing framing above it. R3's compact native envelope rides in
+// the same text/binary frames; nothing here needs to change for it.
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-08-08  J.J. Boyd / KG4VCF  Remote daemon R2 Task 18: session
+//                                    transport seam and its QWebSocket
+//                                    implementation. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
+// =================================================================
+
+#include <QByteArray>
+#include <QObject>
+#include <QPointer>
+#include <QString>
+
+QT_BEGIN_NAMESPACE
+class QWebSocket;
+QT_END_NAMESPACE
+
+namespace NereusSDR {
+
+class SessionTransport : public QObject {
+    Q_OBJECT
+
+public:
+    explicit SessionTransport(QObject* parent = nullptr) : QObject(parent) {}
+    ~SessionTransport() override = default;
+
+    /// One complete session message, already encoded (SessionMessages::
+    /// encode). Dropped silently when the link is not open: a caller
+    /// racing a close is normal, not an error worth propagating up into
+    /// the protocol layer.
+    virtual void sendText(const QByteArray& wire) = 0;
+
+    /// RFC 6455 ping. The peer's WebSocket implementation answers it
+    /// without involving its application code at all, which is precisely
+    /// what makes a pong evidence about the LINK rather than about the
+    /// peer's event loop having got around to us.
+    virtual void ping() = 0;
+
+    /// Close the link, telling the peer why where the transport can carry
+    /// a reason. Idempotent.
+    virtual void closeLink(const QString& reason) = 0;
+
+    virtual bool isOpen() const = 0;
+
+    /// Human-readable peer identification for logs ("127.0.0.1:54321").
+    /// Never used as an identity for authorisation.
+    virtual QString peerDescription() const = 0;
+
+signals:
+    void textReceived(const QByteArray& wire);
+
+    /// A pong came back for one of our pings. This is the ONLY liveness
+    /// evidence StationServer/StationClient accept -- see their heartbeat
+    /// comments for why an arbitrary inbound frame is deliberately not
+    /// treated as equivalent.
+    void pongReceived();
+
+    void closed();
+};
+
+/// The production transport: a QWebSocket, which the caller hands over and
+/// this object then owns (Qt parent-ownership). Used by StationServer for
+/// each accepted connection and by StationClient for its one outbound
+/// connection.
+class WebSocketTransport : public SessionTransport {
+    Q_OBJECT
+
+public:
+    /// Takes ownership of `socket` by reparenting it onto this object, so
+    /// a caller cannot accidentally outlive-or-be-outlived by the socket
+    /// it just wrapped.
+    explicit WebSocketTransport(QWebSocket* socket, QObject* parent = nullptr);
+    ~WebSocketTransport() override;
+
+    void sendText(const QByteArray& wire) override;
+    void ping() override;
+    void closeLink(const QString& reason) override;
+    bool isOpen() const override;
+    QString peerDescription() const override;
+
+    QWebSocket* socket() const { return m_socket; }
+
+private:
+    // Raw, not QPointer, and safe for one specific reason: the
+    // constructor reparents the socket onto this object, so it cannot
+    // outlive us and cannot be destroyed independently of us. A
+    // QPointer here would additionally force this header to include
+    // <QWebSocket> rather than forward-declaring it, because QPointer's
+    // own accessors need the complete type.
+    QWebSocket* m_socket = nullptr;
+    bool m_closing = false;
+};
+
+} // namespace NereusSDR

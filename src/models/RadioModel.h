@@ -73,6 +73,10 @@
 #include "core/TgxlConnection.h"
 #include "core/FaultLog.h"
 #include "core/session/IStationLink.h"
+// Remote-daemon R2 Task 18: the handshake descriptor applyStationCapabilities()
+// takes by const reference. A by-value struct member of a public method
+// signature, so a forward declaration would not do.
+#include "core/session/StationCapabilities.h"
 #include "core/spectrum/ISpectrumSink.h"
 #include "core/TxInterlockPolicy.h"
 #include "core/TuneMemoryStore.h"
@@ -272,6 +276,77 @@ public:
     // allocates or deletes it.
     void attachStation(NereusSDR::IStationLink* link) { m_station = link; }
     void detachStation() { m_station = nullptr; }
+
+    // ── Remote-daemon R2 Task 18: the production handshake entry points ──
+    //
+    // Before this task the ONLY way anything outside RadioModel could move
+    // m_connectionState was setConnectionStateForTest(), a test seam
+    // (above). Every production transition ran off a RadioConnection
+    // signal, which a Role::Remote model does not have and never will --
+    // connectToRadio() early-returns for Remote (Task 4). Without a
+    // production entry point, Task 3's storage-backed isConnected() is
+    // never true on a remote client, maxSlices() keeps returning its
+    // disconnected default of 1, and roughly fourteen GUI sites keep
+    // reading disconnected while a real radio is being driven.
+    //
+    // Both methods are Role::Remote ONLY, and refuse (no-op plus a warning)
+    // on a Role::Local model. A Local model's connection state is derived
+    // from its own socket and must keep exactly one writer; letting a
+    // second one in "just in case" is how the two silently disagree.
+
+    /// Apply what the daemon advertised at handshake (StationServer's
+    /// Capabilities message) and, if it reports a live radio, drive this
+    /// model to Connected.
+    ///
+    /// Writes station identity (name / model / version / MAC / board type
+    /// and therefore boardCapabilities()), the EFFECTIVE slice limit and
+    /// userDdcCount, and finally the connection state. In that order,
+    /// deliberately: connectionStateChanged() is what wakes every GUI site
+    /// that then reads maxSlices() and boardCapabilities(), so the state
+    /// change has to be last or those sites re-read stale values.
+    ///
+    /// Deliberately does NOT call configureStreamPool(). Task 5 made that
+    /// call a no-op for Role::Remote precisely so a capability apply
+    /// cannot re-arm a local stream allocator the daemon is the only one
+    /// placing slices against; this method must not route around that by
+    /// reaching configureStreamPoolImpl() instead.
+    ///
+    /// `caps.radioConnected == false` (an authenticated daemon whose radio
+    /// is powered off or unreachable) applies identity and limits but
+    /// leaves the state Disconnected: every slice control a Connected
+    /// client offers would otherwise reach a RadioModel that cannot act.
+    void applyStationCapabilities(const NereusSDR::StationCapabilities& caps);
+
+    /// Drive the connection lifecycle from the session directly. Task 18
+    /// uses it for the close side (a preempted or refused session goes back
+    /// to Disconnected); Task 19 owns the link-loss and reconnect
+    /// transitions built on it.
+    void setStationConnectionState(ConnectionState s);
+
+    /// The EFFECTIVE user DDC count the station advertised, 0 before any
+    /// handshake. Deliberately NOT the same read as
+    /// boardCapabilities().userDdcCount: that is the board's own number,
+    /// and parent design section 4.5 is explicit that a client gates on
+    /// what the DAEMON can sustain, which on the Pi 4 floor can be fewer.
+    /// The two agree today only because R2 builds no PerfMonitor to
+    /// narrow anything. Meaningful for Role::Remote only.
+    int stationUserDdcCount() const { return m_stationUserDdcCount; }
+
+    /// Create a slice under the id the STATION chose rather than minting
+    /// one locally. Role::Remote only.
+    ///
+    /// RadioModel::addSlice() mints the lowest id not currently in use, and
+    /// removeSlice() never renumbers survivors, so a daemon holding slices
+    /// {0, 2} cannot be reproduced on a client that only has addSlice():
+    /// replaying create(0) then create(2) would produce {0, 1}. Every wire
+    /// message naming a slice carries SliceModel::sliceIndex() (parent
+    /// design section 7.1's general rule), so a client whose ids drifted
+    /// from the station's would silently address the wrong slice on every
+    /// command verb it sent afterwards.
+    ///
+    /// Returns the id on success, or -1 if the id is negative, already in
+    /// use here, or this is a Role::Local model.
+    int addSliceWithStationId(int sliceId, const QString& initialPanId = QString());
 
     // Sub-components
     RadioConnection*  connection()       { return m_connection; }
@@ -3218,6 +3293,14 @@ private:
 
     void commitStreamSampleRateChange(const StreamRateChangePlan& plan);
 
+    /// Remote-daemon R2 Task 18: shared body of addSlice() and
+    /// addSliceWithStationId(). `requestedId` below 0 means "mint the
+    /// lowest id not currently in use", which is exactly what addSlice()
+    /// has always done and remains its only behaviour; any other value is
+    /// used verbatim, and checking it for collision first is the caller's
+    /// job (addSliceWithStationId does).
+    int addSliceImpl(int requestedId, const QString& initialPanId);
+
     /// Remote-daemon R2 Task 5: the actual sizing body, shared by
     /// configureStreamPool (gated on Role::Local) and
     /// configureStreamPoolForTest (unconditional). See both definitions.
@@ -3471,6 +3554,15 @@ private:
     // Remote-daemon R2 Task 4: non-owning; see attachStation()/
     // detachStation() above.
     NereusSDR::IStationLink* m_station{nullptr};
+
+    // Remote-daemon R2 Task 18: the EFFECTIVE slice limit the station
+    // advertised (parent design section 4.5 -- what the DAEMON can
+    // sustain, never the board's own BoardCapabilities::maxSlices), and
+    // its user DDC count. 0 means no handshake has been applied yet.
+    // Read by maxSlices() for Role::Remote only; a Role::Local model
+    // never sets or reads either, so local direct mode is untouched.
+    int m_stationMaxSlices{0};
+    int m_stationUserDdcCount{0};
 
     // Phase 3Q sub-PR-3: uptime tracking for NetworkDiagnosticsDialog.
     // Set to current time on Connected transition, cleared (default-constructed)

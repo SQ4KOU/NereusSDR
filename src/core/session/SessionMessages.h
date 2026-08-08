@@ -47,6 +47,30 @@
 //                         (requestSliceSampleRate) where it really is a
 //                         full before/after diff.
 //
+// Task 18 appends eleven more, in three groups, to the SAME table rather
+// than starting a second one:
+//
+//   Hello / AuthRequest / AuthResult / Capabilities / SessionEnd
+//                      -- the parent design's section 7.0 connect
+//                         sequence, in order: "TLS establish -> protocol
+//                         hello carrying a semantic version from both
+//                         ends -> authentication -> capability exchange
+//                         -> state snapshot -> snapshot-complete marker".
+//   PropertyWrite       -- the INBOUND half of the property mirror: a
+//                         client asking the daemon to write mirrored
+//                         properties (StateMirror::applyInbound). Tasks 7
+//                         and 8 built both halves of that apply; until now
+//                         nothing named it on the wire.
+//   SettingsSnapshot / SettingsWrite / SettingsRemove / SettingsValue /
+//   SettingsReject     -- SettingsProxy (client) and SettingsProxyServer
+//                         (daemon) talking to each other. Deliberately
+//                         separate kinds from the property mirror above:
+//                         settings are a flat QString-valued key space
+//                         with no object identity and no schema, so
+//                         routing them through Delta would mean
+//                         overloading `objectKey` with something that is
+//                         not an object.
+//
 // Encodes as JSON text, per the R2 design addendum section 6: "R2 encodes
 // as JSON text on the reliable control channel ... because the ordinal
 // dictionary [MirrorSchema's dense per-class ordinals] exists from day
@@ -74,6 +98,14 @@
 //                                    / CommandResult message shapes and
 //                                    codec. AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-08-08  J.J. Boyd / KG4VCF  Remote daemon R2 Task 18: the section
+//                                    7.0 handshake kinds (Hello /
+//                                    AuthRequest / AuthResult /
+//                                    Capabilities / SessionEnd), the
+//                                    inbound PropertyWrite, and the five
+//                                    settings kinds. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include <QByteArray>
@@ -95,7 +127,43 @@ enum class SessionMessageKind {
     SnapshotComplete,
     CommandInvoke,
     CommandResult,
+
+    // ── Task 18: the section 7.0 connect sequence ───────────────────────
+    Hello,
+    AuthRequest,
+    AuthResult,
+    Capabilities,
+    SessionEnd,
+
+    // ── Task 18: the inbound half of the property mirror ────────────────
+    PropertyWrite,
+
+    // ── Task 18: SettingsProxy / SettingsProxyServer over the wire ──────
+    SettingsSnapshot,
+    SettingsWrite,
+    SettingsRemove,
+    SettingsValue,
+    SettingsReject,
 };
+
+/// The session protocol's own semantic version, advertised by BOTH ends in
+/// the Hello message and governed by the parent design's section 7.0
+/// version policy: "refuse on major mismatch, negotiate down on minor".
+///
+/// Major is incremented ONLY for a breaking change to framing, identity, or
+/// the snapshot contract (section 7.0's own wording). Everything else is a
+/// minor bump plus a capability entry, because a desktop GUI several
+/// releases ahead of a Pi still running this one is the EXPECTED case, not
+/// an error case, and it has to degrade rather than refuse.
+///
+/// R2 ships 1.0. It is deliberately not 0.x: the JSON control encoding is a
+/// documented staged simplification (see this file's header), but the
+/// message SHAPES -- object identity, the snapshot contract, the schema
+/// table -- are the thing this number governs, and those are not
+/// provisional. R3 swapping the codec under the same object model is a
+/// minor bump at most.
+inline constexpr quint16 kSessionProtocolMajor = 1;
+inline constexpr quint16 kSessionProtocolMinor = 0;
 
 /// One property's WIRE DECLARATION: name, ordinal and kind, carrying no
 /// live value. This is what a Schema message announces once per class per
@@ -184,6 +252,42 @@ struct SessionMessage {
     ///   - setActiveSliceById: the newly-active slice, plus the previously-
     ///     active one when it differs.
     QList<QByteArray> affectedKeys;
+
+    // ── Task 18: Hello only ─────────────────────────────────────────────
+
+    /// The sender's own kSessionProtocolMajor / kSessionProtocolMinor.
+    /// Both ends send these; see kSessionProtocolMajor's doc comment for
+    /// the policy the receiver applies to them.
+    quint16 protocolMajor = 0;
+    quint16 protocolMinor = 0;
+
+    /// The sender's AppSettings schema version (AppSettings::
+    /// currentSchemaVersion()). Parent design section 7.0 lists it among
+    /// the capability descriptor's contents but assigns the comparison to
+    /// nothing; StationClient does it at handshake time. Carried on Hello
+    /// rather than only in the Capabilities descriptor so BOTH ends learn
+    /// it, and so it is available before authentication decides whether a
+    /// descriptor is ever sent at all.
+    qint32 settingsSchemaVersion = 0;
+
+    /// Free-form identification of the sending process ("nereusd",
+    /// "NereusSDR 0.5.2"). Diagnostics only: nothing gates on it.
+    QString peerName;
+
+    // ── Task 18: AuthRequest only ───────────────────────────────────────
+
+    /// The pre-shared token (TokenStore). NEVER logged: StationServer logs
+    /// the OUTCOME of a verify, never the candidate.
+    QString token;
+
+    // ── Task 18: SettingsWrite / SettingsValue only ─────────────────────
+
+    /// SettingsProxy::localOriginTag() -- a per-SESSION identifier, not a
+    /// per-write sequence number. The daemon echoes it back verbatim on the
+    /// resulting SettingsValue broadcast so a client can tell its own echo
+    /// from a third party's change. See SettingsProxy.h's origin-tag
+    /// paragraph.
+    QString originTag;
 };
 
 /// Builders plus the JSON codec. A static-method utility class with no
@@ -215,6 +319,70 @@ public:
     static SessionMessage commandResult(const QByteArray& verb, quint32 commandId,
                                         bool accepted, const QString& reason,
                                         const QList<QByteArray>& affectedKeys);
+
+    // ── Task 18 builders ────────────────────────────────────────────────
+
+    /// First message either end sends after the TLS handshake completes.
+    static SessionMessage hello(quint16 major, quint16 minor,
+                                qint32 settingsSchemaVersion,
+                                const QString& peerName);
+
+    /// Client to daemon, once the daemon's Hello has been accepted.
+    static SessionMessage authRequest(const QString& token);
+
+    /// Daemon to client. A false `accepted` is always followed by the
+    /// daemon closing the socket; `reason` is what the operator sees.
+    static SessionMessage authResult(bool accepted, const QString& reason);
+
+    /// Daemon to client, after a successful AuthResult. `descriptor` is
+    /// StationCapabilities::toUpdates() -- MirrorUpdate reused as a generic
+    /// {name, kind, value} triple, the same way CommandInvoke reuses it for
+    /// arguments, rather than inventing a parallel encode path. `ordinal`
+    /// carries no meaning here and is always 0.
+    static SessionMessage capabilities(const QList<MirrorUpdate>& descriptor);
+
+    /// Daemon to client: this session is over, and why. Sent for a version
+    /// refusal, and for the incumbent session when a second authenticated
+    /// connection preempts it (parent design section 7.1: "The displaced
+    /// session is told why").
+    static SessionMessage sessionEnd(const QString& reason);
+
+    /// Client to daemon: apply these property values to this object. The
+    /// mirror-image of a Delta, deliberately a DISTINCT kind rather than a
+    /// reused Delta so direction is explicit on the wire and a daemon can
+    /// refuse a Delta outright -- a peer must never be able to tell a
+    /// daemon what its own state IS, only what it should be CHANGED to,
+    /// and those two readings of one message shape are exactly the
+    /// ambiguity worth spending a kind name to avoid.
+    static SessionMessage propertyWrite(const QByteArray& objectKey,
+                                        const QList<MirrorUpdate>& updates);
+
+    /// Daemon to client: the connect-time settings snapshot
+    /// (SettingsProxyServer::buildSnapshot()). Each entry's `name` is the
+    /// AppSettings key and its `kind` is always Utf8, matching
+    /// AppSettings's own flat QString-valued store.
+    static SessionMessage settingsSnapshot(const QList<MirrorUpdate>& entries);
+
+    /// Client to daemon: one Station-classified key changed here, please
+    /// apply it there.
+    static SessionMessage settingsWrite(const QString& key, const QString& value,
+                                        const QString& originTag);
+
+    /// Client to daemon: remove one Station-classified key.
+    static SessionMessage settingsRemove(const QString& key);
+
+    /// Daemon to client: this key's current value, broadcast to every
+    /// connected client (SettingsProxyServer::outboundValueChanged).
+    static SessionMessage settingsValue(const QString& key, const QString& value,
+                                        const QString& originTag);
+
+    /// Daemon to client: a SettingsWrite was refused. `hasRestoredValue`
+    /// false means the daemon has nothing for this key either (proven
+    /// unset, which SettingsProxy::applyRejection() distinguishes from a
+    /// restored empty string) and is encoded as an EMPTY entry list rather
+    /// than an entry carrying an empty value.
+    static SessionMessage settingsReject(const QString& key, bool hasRestoredValue,
+                                         const QString& restoredValue);
 
     /// UTF-8 JSON text. See the file header for the Int64/Enum precision
     /// note.
