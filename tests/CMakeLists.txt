@@ -6582,6 +6582,25 @@ nereus_add_test(tst_certificate_store)
 nereus_add_test(tst_station_session
     fakes/LoopbackTransport.cpp)
 
+# Remote Daemon R2, Task 19: link loss, daemon restart, and reconnect.
+# Nothing before this task defined what the client does with a mirror of
+# objects that no longer exist. Split the same way tst_station_session.cpp
+# is: the link-loss CONTRACT (mirror teardown, the defined stale state,
+# settings-proxy offline behaviour, the session epoch, reconnect
+# convergence) runs over the same in-process LoopbackTransport and
+# therefore on every build; the automatic-reconnect TIMER mechanism itself
+# can only be exercised through connectToStation(), which always creates a
+# real QWebSocket, so those three slots QSKIP when QSslSocket::supportsSsl()
+# is false.
+#
+# The slot that matters most is silentlyDeadPeerIsDetectedNotJustAClean-
+# Close: killing the daemon produces a clean TCP close, which does all the
+# work by itself. This slot covers the case that motivated pulling the
+# heartbeat into R2 at all -- a peer that stops responding WITHOUT closing,
+# reusing Task 18's LoopbackTransport::setAnswersPings(false) mechanism.
+nereus_add_test(tst_session_link_loss
+    fakes/LoopbackTransport.cpp)
+
 # --------------------------------------------------------------------------
 # Aggregate "all_tests" target  (2026-05-26 KG4VCF dev-loop fix, from PR #291)
 # --------------------------------------------------------------------------

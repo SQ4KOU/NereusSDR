@@ -126,12 +126,88 @@
 //     handshake completes, which is necessarily after the RadioModel it
 //     was handed already existed.
 //
+// ── LINK LOSS AND RECONNECT (Task 19) ────────────────────────────────────
+//
+// Nothing before this task defined what happens to a mirror of objects
+// that no longer exist. Parent design section 13 ("Error handling and
+// reconnect"): "The client retains last-known state, indicates staleness
+// rather than showing stale values as live, and reconnects with
+// exponential backoff."
+//
+//   - endSession() (the one place a session ends, unchanged in that
+//     respect) now ALSO tears down the client-side mirror registry
+//     (m_objects), the outbound watcher (m_outboundMirror->unwatchAll())
+//     and its coalescer (m_outboundCoalescer.clear()) -- see endSession()
+//     for why the coalescer clear is load-bearing and not just hygiene.
+//     RadioModel's own state (SliceModel property values) is left exactly
+//     where the last inbound delta set it: retained, not reset, per
+//     section 13. isStale() is what a caller checks before trusting it.
+//   - A reconnect ADOPTS the retained SliceModel objects under the
+//     station's ids (StationClient::resolveOrCreate(), unchanged by this
+//     task) rather than recreating them, so a GUI holding a raw pointer to
+//     one survives a reconnect with no rebinding.
+//   - sessionEpoch() bumps on every attachTransport(), including the
+//     first, so a caller that captured it before an asynchronous
+//     operation can tell whether the session it was about is still
+//     current.
+//   - Automatic reconnect is owned by an OWNED, CANCELLABLE, single-shot
+//     QTimer (m_reconnectTimer) with a latched URL/token/fingerprint --
+//     never static QTimer::singleShot. Section 13 names PgxlConnection and
+//     TgxlConnection as the in-tree pattern to NOT copy: both arm retry
+//     with static QTimer::singleShot (PgxlConnection.cpp:421), so a
+//     pending reconnect cannot be cancelled, and both declare an
+//     m_reconnectTimer member that is referenced nowhere in either .cpp
+//     (verified against this tree: PgxlConnection.h:149 and
+//     TgxlConnection.h:150 are the only two occurrences of that name
+//     anywhere in either pair of files). Only the EXPONENTIAL
+//     BACKOFF SCHEDULE is reused from that class (PgxlConnection.cpp:30,
+//     1/2/5/10/30/60 s, saturating), scaled by reconnectBackoffUnitMs()
+//     for tests -- the schedule was never the part section 13 objects to,
+//     only the timer's ownership.
+//   - Only a closure that WANTS a retry re-arms the timer: a plain
+//     transport close or socket-level error does (the "kill the daemon"
+//     and heartbeat-timeout cases section 13 exists for), but a closure
+//     that carries an explicit reason FROM THE DAEMON (a version refusal,
+//     an auth refusal, a preemption, a peer-limit refusal) does not --
+//     retrying with the same latched credentials against a daemon that
+//     just explicitly refused for a stated reason cannot converge, and
+//     for a preemption specifically would fight the very session that
+//     just took over. This is also how a reconnecting client cannot turn
+//     into a preemption storm against StationServer::kMaxConcurrentPeers
+//     (Task 18 review, carried forward): a preempted client's SessionEnd
+//     is exactly the "daemon spoke with a reason" case, so it is never
+//     retried. disconnectFromStation() -- the operator's own call, and the
+//     only one that must win even while no session is active at all, mid
+//     backoff-wait -- is the other thing that must cancel a pending retry
+//     (section 13: "ICE restart and operator-initiated disconnect both
+//     need [cancellability]").
+//   - The one defect the Task 18 review found and graded Minor, because
+//     nothing called connectToStation() twice on one client before this
+//     task existed to do exactly that: the sslErrors/errorOccurred lambdas
+//     below are connected with the QWebSocket as sender, not the
+//     SessionTransport wrapping it, so attachTransport()'s
+//     disconnect(stale, ...) release does not cover them. A stale socket's
+//     asynchronous error, delivered after attachTransport() has already
+//     moved m_transport on to a freshly attached session, used to reach
+//     endSession() unconditionally and tear that fresh session down. Fixed
+//     by capturing the transport in the lambda and returning early when it
+//     is no longer m_transport -- the same guard onTransportClosed()
+//     already used for the identical reason.
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-08-08  J.J. Boyd / KG4VCF  Remote daemon R2 Task 18: the GUI half
 //                                    of the wss session. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-08-08  J.J. Boyd / KG4VCF  Remote daemon R2 Task 19: link loss,
+//                                    daemon restart and reconnect (mirror
+//                                    teardown, the stale-state accessor,
+//                                    the session epoch, the owned
+//                                    cancellable auto-reconnect timer, and
+//                                    the stale-transport-error fix above).
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -173,6 +249,13 @@ public:
     /// reasoning in the other direction.
     static constexpr int kDefaultWriteFlushMs = 50;
 
+    /// The exponential-backoff schedule's unit (see scheduleReconnect() in
+    /// the .cpp). Production default is 1000, so the schedule below reads
+    /// in real seconds; a test shrinks this so the mechanism can be
+    /// exercised without a multi-minute wait -- see
+    /// setReconnectBackoffUnitMs().
+    static constexpr int kDefaultReconnectBackoffUnitMs = 1000;
+
     /// `radioModel` must be Role::Remote and is NOT owned. `settingsProxy`
     /// is the backend a remote-mode GUI installs via
     /// AppSettings::setRemoteBackend(); also not owned. Both must live on
@@ -199,10 +282,47 @@ public:
     /// why that matters). Takes ownership by reparenting.
     void startSession(SessionTransport* transport, const QString& token);
 
-    void disconnectFromStation(const QString& reason);
+    /// `attemptReconnect` (Task 19) decides whether this closure re-arms
+    /// the automatic reconnect timer once the session has ended. Defaults
+    /// to false, which is correct for every caller that has not thought
+    /// about it: an operator's own "Disconnect" click (Task 20) must not
+    /// be followed by a surprise redial, and neither must any of this
+    /// class's own internal calls that already carry an explicit reason
+    /// FROM THE DAEMON (version refusal, auth refusal, preemption,
+    /// peer-limit refusal) -- see the class comment's link-loss section
+    /// for why retrying those cannot converge. onHeartbeatTick() is the
+    /// one internal caller that passes true. Cancels a PENDING retry too,
+    /// even when no session is active at all (mid backoff-wait) -- see
+    /// the class comment.
+    void disconnectFromStation(const QString& reason, bool attemptReconnect = false);
 
     bool isHandshakeComplete() const { return m_handshakeComplete; }
     QString lastError() const { return m_lastError; }
+
+    /// Task 19. True once a session has been fully established
+    /// (handshakeComplete()) at least once, and is not right now.
+    /// Distinguishes "no data exists yet" (never connected: false) from
+    /// "there IS retained state, but it can no longer be trusted as live"
+    /// (true) -- design doc section 13. RadioModel's own property values
+    /// (SliceModel::frequency() and the rest) are untouched by a link
+    /// loss; this is what a caller checks before trusting them. Cleared
+    /// the moment handshakeComplete() fires again.
+    bool isStale() const { return m_everConnected && !m_handshakeComplete; }
+
+    /// Task 19. Bumped by one on every attachTransport() call, including
+    /// the very first (so the first session is epoch 1; 0 means "never
+    /// attached"). See the class comment.
+    quint32 sessionEpoch() const { return m_sessionEpoch; }
+
+    /// Task 19. True while the owned reconnect timer is counting down
+    /// between attempts.
+    bool isReconnectPending() const;
+
+    /// Test seam: production default is kDefaultReconnectBackoffUnitMs
+    /// (real seconds). See scheduleReconnect() in the .cpp for the
+    /// schedule this scales.
+    void setReconnectBackoffUnitMs(int ms);
+    int reconnectBackoffUnitMs() const { return m_reconnectBackoffUnitMs; }
 
     /// The station's descriptor as applied. Default-constructed before the
     /// capability exchange.
@@ -262,8 +382,30 @@ signals:
     /// without closing.
     void stationHeartbeatTimeout();
 
+    /// Task 19. A reconnect attempt was scheduled after a retry-eligible
+    /// closure. attemptNumber starts at 1; delayMs is the actual delay
+    /// this attempt will wait (reconnectBackoffUnitMs()-scaled). Mirrors
+    /// PgxlConnection::reconnectAttempt's shape for a future GUI
+    /// ("Reconnecting... attempt 3, retrying in 10s"); see the class
+    /// comment for why the underlying timer mechanism is NOT copied from
+    /// that class.
+    void reconnectScheduled(int attemptNumber, int delayMs);
+
 private:
     void attachTransport(SessionTransport* transport, const QString& token);
+
+    /// The actual dial: latches url/token/expectedFingerprint/allowUnpinned
+    /// (so onReconnectTimeout() can redial identically), creates the
+    /// QWebSocket, wires its error paths (guarded against a stale prior
+    /// socket -- see the class comment), and attaches it. connectToStation()
+    /// is the deliberate-fresh-attempt entry (it resets m_reconnectAttempts
+    /// and applies the empty-fingerprint refusal before ever reaching
+    /// here); onReconnectTimeout() is the automatic-retry entry (it must
+    /// NOT reset the attempt counter, or the backoff would never advance
+    /// past its first step).
+    void dialStation(const QUrl& url, const QString& token,
+                     const QString& expectedFingerprint, bool allowUnpinned);
+
     void onTransportText(const QByteArray& wire);
     void onTransportClosed();
 
@@ -272,9 +414,19 @@ private:
     /// close, socket error, heartbeat timeout, the station's own
     /// SessionEnd, a version refusal, an auth refusal). Idempotent: a
     /// second call for the same attach returns without emitting.
-    void endSession(const QString& reason);
+    /// `attemptReconnect` (Task 19) is disconnectFromStation()'s own
+    /// parameter, threaded through: true arms the reconnect timer once
+    /// the mirror teardown and connection-state transition below have
+    /// run; false leaves it untouched (already stopped, or never started).
+    void endSession(const QString& reason, bool attemptReconnect);
     void onHeartbeatTick();
     void onWriteFlushTick();
+
+    /// Task 19. Arms m_reconnectTimer at the current backoff step and
+    /// advances the step for next time. Only ever called from endSession()
+    /// and only when there is a latched URL to redial.
+    void scheduleReconnect();
+    void onReconnectTimeout();
 
     void handleHello(const SessionMessage& message);
     void handleAuthResult(const SessionMessage& message);
@@ -378,6 +530,42 @@ private:
     int m_pingsAwaitingPong = 0;
 
     quint32 m_nextCommandId = 1;
+
+    // ---- Task 19: stale state and session epoch ----
+
+    /// See isStale(). Once true, never cleared: it records that a session
+    /// has EVER fully established, not that one is established now.
+    bool m_everConnected = false;
+
+    /// See sessionEpoch(). Bumped in attachTransport().
+    quint32 m_sessionEpoch = 0;
+
+    // ---- Task 19: automatic reconnect ----
+
+    /// Latched by dialStation() so onReconnectTimeout() can redial
+    /// identically. Invalid (QUrl().isValid() == false) for a session
+    /// that was never dialed via connectToStation() -- the startSession()
+    /// transport-seam path used by every non-TLS test in this suite and by
+    /// this task's own tst_session_link_loss.cpp for the mirror-teardown
+    /// and stale-state assertions. scheduleReconnect() checks this before
+    /// arming anything, which is what keeps that path from ever being
+    /// auto-retried: there is nothing to redial.
+    QUrl m_lastUrl;
+    QString m_lastFingerprint;
+    bool m_lastAllowUnpinned = false;
+
+    /// Owned, single-shot, cancellable. NEVER static QTimer::singleShot --
+    /// see the class comment's link-loss section for why that matters more
+    /// here than in the in-tree reference (PgxlConnection/TgxlConnection)
+    /// that gets it wrong.
+    QTimer* m_reconnectTimer = nullptr;
+
+    /// How many consecutive retry-eligible failures have happened since
+    /// the last PROVEN success (handshakeComplete) or the last DELIBERATE
+    /// fresh connectToStation() call -- both reset this to 0. Indexes
+    /// scheduleReconnect()'s backoff schedule.
+    int m_reconnectAttempts = 0;
+    int m_reconnectBackoffUnitMs = kDefaultReconnectBackoffUnitMs;
 };
 
 } // namespace NereusSDR
