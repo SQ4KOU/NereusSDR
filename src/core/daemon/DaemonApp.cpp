@@ -11,9 +11,11 @@
 #include "core/CoreInit.h"
 #include "core/FFTRouter.h"
 #include "core/LogCategories.h"
+#include "core/session/StationServer.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
+#include <QHostAddress>
 #include <QThread>
 
 #include <algorithm>
@@ -128,6 +130,13 @@ bool DaemonApp::start(const DaemonConfig& cfg)
     createConfiguredSlices(cfg.sliceCount);
     mintFftEndpoints();
 
+    // Remote Daemon R2 Task 18: the wss control plane. AFTER the slices
+    // exist, so a client connecting immediately gets them in its
+    // connect-time burst without waiting for a delta -- StationServer's
+    // own ObjectRegistry::backfillExistingSlices() covers the case either
+    // way, but there is no reason to make it the only cover.
+    startStationServer(cfg);
+
     // Fix round 1, Finding 1: mintFftEndpoints() only fills m_topology's
     // own private bookkeeping. Without this call the subscriptions never
     // reached RadioModel's live FFTRouter (RadioModel::fftRouter()) and
@@ -139,6 +148,15 @@ bool DaemonApp::start(const DaemonConfig& cfg)
 
 void DaemonApp::stop()
 {
+    // BEFORE the m_radioModel guard below, and before anything else: a
+    // StationServer can exist without a RadioModel only transiently, but
+    // tearing it down first is what lets connected clients be told the
+    // station is going away while there is still a station to speak for
+    // them. It also has to go before m_radioModel.reset() regardless --
+    // its StateMirror and ObjectRegistry hold QPointers into that model
+    // and every SliceModel under it.
+    m_stationServer.reset();
+
     if (!m_radioModel) {
         return;
     }
@@ -179,6 +197,47 @@ void DaemonApp::stop()
     m_radioModel.reset();
 
     emit radioConnected(false);
+}
+
+// Remote Daemon R2 Task 18. Opt-in: cfg.remotePort == 0 means "do not
+// listen" and is the default (DaemonConfig.h explains why). A listener
+// that fails to come up is logged with StationServer::lastError() and is
+// NOT a startup failure, matching this class's existing treatment of a
+// radio that cannot be found: a daemon that still demodulates locally is
+// more useful than one that refuses to boot, and the operator has a named
+// reason in the log either way.
+void DaemonApp::startStationServer(const DaemonConfig& cfg)
+{
+    if (cfg.remotePort == 0) {
+        qCInfo(lcApp) << "DaemonApp: remote control disabled (remote_port = 0)";
+        return;
+    }
+
+    const QHostAddress bind(cfg.remoteBind);
+    if (bind.isNull()) {
+        qCWarning(lcApp) << "DaemonApp: remote_bind is not a valid address:"
+                          << cfg.remoteBind << "- remote control not started";
+        return;
+    }
+
+    // Constructing it is what provisions the TLS certificate and the
+    // pairing token, and what prints both to the log on the run that
+    // generates them (StationServer's constructor). AppSettings::instance()
+    // is the daemon's OWN store here -- server_main.cpp resolved the
+    // profile before this point.
+    m_stationServer = std::make_unique<StationServer>(m_radioModel.get(),
+                                                      AppSettings::instance());
+    if (!m_stationServer->listen(bind, static_cast<quint16>(cfg.remotePort))) {
+        qCWarning(lcApp) << "DaemonApp: remote control listener failed on"
+                          << cfg.remoteBind << cfg.remotePort << ":"
+                          << m_stationServer->lastError();
+        // Kept rather than reset: the certificate and token it provisioned
+        // are still on disk and still what a later attempt will use, and
+        // holding the object means stop() tears down through one path.
+        return;
+    }
+    qCInfo(lcApp) << "DaemonApp: remote control listening on wss://"
+                   << cfg.remoteBind << ":" << m_stationServer->serverPort();
 }
 
 int DaemonApp::sliceCount() const

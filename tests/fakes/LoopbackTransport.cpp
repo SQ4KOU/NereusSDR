@@ -35,9 +35,16 @@ void LoopbackTransport::sendText(const QByteArray& wire)
     // call, and a direct hop here would let a handshake reply run inside
     // the middle of the send that provoked it -- reentrancy the production
     // code is not written for and a real transport never produces.
-    LoopbackTransport* peer = m_peer.data();
+    // QPointer through the queue, not a raw capture. StationClient releases
+    // and deleteLater()s a stale transport on reconnect, so a queued
+    // delivery can outlive its target -- a real QWebSocket simply delivers
+    // nothing in that case, and this fake has to behave the same or it
+    // turns a correct production behaviour into a test crash.
+    QPointer<LoopbackTransport> peer(m_peer);
     QMetaObject::invokeMethod(
-        peer, [peer, wire]() { peer->deliver(wire); }, Qt::QueuedConnection);
+        peer, [peer, wire]() {
+            if (!peer.isNull()) { peer->deliver(wire); }
+        }, Qt::QueuedConnection);
 }
 
 void LoopbackTransport::deliver(const QByteArray& wire)
@@ -54,9 +61,11 @@ void LoopbackTransport::ping()
     if (!m_open || m_peer.isNull()) {
         return;
     }
-    LoopbackTransport* peer = m_peer.data();
+    QPointer<LoopbackTransport> peer(m_peer);
     QMetaObject::invokeMethod(
-        peer, [peer]() { peer->receivePing(); }, Qt::QueuedConnection);
+        peer, [peer]() {
+            if (!peer.isNull()) { peer->receivePing(); }
+        }, Qt::QueuedConnection);
 }
 
 void LoopbackTransport::receivePing()
@@ -69,9 +78,11 @@ void LoopbackTransport::receivePing()
         // QWebSocket cannot produce it.
         return;
     }
-    LoopbackTransport* peer = m_peer.data();
+    QPointer<LoopbackTransport> peer(m_peer);
     QMetaObject::invokeMethod(
-        peer, [peer]() { emit peer->pongReceived(); }, Qt::QueuedConnection);
+        peer, [peer]() {
+            if (!peer.isNull()) { emit peer->pongReceived(); }
+        }, Qt::QueuedConnection);
 }
 
 void LoopbackTransport::closeLink(const QString& reason)
@@ -83,9 +94,11 @@ void LoopbackTransport::closeLink(const QString& reason)
     m_closeReason = reason;
     emit closed();
     if (!m_peer.isNull()) {
-        LoopbackTransport* peer = m_peer.data();
+        QPointer<LoopbackTransport> peer(m_peer);
         QMetaObject::invokeMethod(
-            peer, [peer, reason]() { peer->closeLink(reason); }, Qt::QueuedConnection);
+            peer, [peer, reason]() {
+                if (!peer.isNull()) { peer->closeLink(reason); }
+            }, Qt::QueuedConnection);
     }
 }
 

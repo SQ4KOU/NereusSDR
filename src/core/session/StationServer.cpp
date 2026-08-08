@@ -171,6 +171,17 @@ bool StationServer::listen(const QHostAddress& address, quint16 port)
 {
     m_lastError.clear();
 
+    // Idempotent. A second call used to re-apply the SSL configuration and
+    // then fail the bind into lastError(), so a caller that could not
+    // cheaply tell whether it had already started ended up with a working
+    // listener AND an error string describing it as broken. Rebinding
+    // somewhere else is close() then listen() again, deliberately explicit.
+    if (isListening()) {
+        qCDebug(lcStation) << "listen() ignored: already listening on port"
+                            << m_wsServer->serverPort();
+        return true;
+    }
+
     if (!QSslSocket::supportsSsl()) {
         m_lastError = CertificateStore::tlsBackendDiagnostic();
         if (m_lastError.isEmpty()) {
@@ -284,9 +295,47 @@ void StationServer::acceptTransport(SessionTransport* transport)
     }
     transport->setParent(this);
 
+    // Peer cap. Refused BEFORE any state is allocated for it, and with a
+    // reason on the wire so a legitimate client that hits this knows why
+    // rather than seeing an unexplained close. Only ever one session is
+    // authenticated (see the topology decision in the header), so this
+    // bounds peers that are mid-handshake.
+    if (m_peers.size() >= kMaxConcurrentPeers) {
+        qCWarning(lcStation) << "Refusing connection from" << transport->peerDescription()
+                             << ": already at" << kMaxConcurrentPeers << "peers";
+        transport->sendText(SessionMessages::encode(SessionMessages::sessionEnd(
+            QStringLiteral("Station is at its concurrent-connection limit"))));
+        transport->closeLink(QStringLiteral("peer limit reached"));
+        transport->deleteLater();
+        return;
+    }
+
     Peer peer;
     peer.transport = transport;
     peer.description = transport->peerDescription();
+
+    // Authenticate-or-drop. Parented to the transport so it cannot outlive
+    // the peer it is about, and stopped the moment authentication
+    // succeeds. An OWNED single-shot timer, not static
+    // QTimer::singleShot: cancellability is the whole point.
+    if (m_authDeadlineMs > 0) {
+        auto* deadline = new QTimer(transport);
+        deadline->setSingleShot(true);
+        deadline->setInterval(m_authDeadlineMs);
+        connect(deadline, &QTimer::timeout, this, [this, transport]() {
+            auto it = m_peers.find(transport);
+            if (it == m_peers.end() || it->authenticated) {
+                return;
+            }
+            qCWarning(lcStation) << "Dropping" << it->description
+                                 << ": did not authenticate within" << m_authDeadlineMs
+                                 << "ms";
+            dropPeer(transport, QStringLiteral("handshake deadline expired"), true);
+        });
+        deadline->start();
+        peer.authDeadline = deadline;
+    }
+
     m_peers.insert(transport, peer);
 
     connect(transport, &SessionTransport::textReceived, this,
@@ -378,6 +427,16 @@ void StationServer::setHeartbeatIntervalMs(int ms)
 void StationServer::setMaxMissedPongs(int misses)
 {
     m_maxMissedPongs = misses < 1 ? 1 : misses;
+}
+
+void StationServer::setAuthDeadlineMs(int ms)
+{
+    m_authDeadlineMs = ms;
+    if (ms < 1) {
+        qCWarning(lcStation)
+            << "Handshake deadline disabled. A peer that connects and answers pings "
+               "but never authenticates will hold its slot indefinitely.";
+    }
 }
 
 void StationServer::setAuthRateLimit(int maxFailures, int lockoutMs)
@@ -547,6 +606,9 @@ void StationServer::handleAuthRequest(SessionTransport* transport,
     }
 
     it->authenticated = true;
+    if (it->authDeadline != nullptr) {
+        it->authDeadline->stop();
+    }
     send(transport, SessionMessages::authResult(true, QString()));
     promoteToSession(transport);
 }

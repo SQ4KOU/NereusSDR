@@ -50,6 +50,7 @@
 #include <QJsonObject>
 #include <QSignalSpy>
 #include <QSslSocket>
+#include <QTcpServer>
 #include <QTemporaryDir>
 #include <QUrl>
 
@@ -166,9 +167,18 @@ private slots:
     void settingsProxyIsNotReadyBeforeTheSnapshot();
     void schemaSkewIsCaughtByNameComparison();
 
+    // ---- Fix round 1 ----
+    void reconnectSurvivesTheOldTransportClosing();
+    void heartbeatTimeoutReportsTheSessionAsEnded();
+    void tunerPropertiesAreCountedAsUnapplied();
+    void handshakeDeadlineDropsASilentPeer();
+    void peerLimitRefusesFurtherConnections();
+    void listenIsIdempotent();
+
     // ---- TLS-specific (QSKIP when the backend is unusable) ----
     void wssListenerComesUpAndCompletesAHandshake();
     void wssRefusesAMismatchedCertificateFingerprint();
+    void failedInitialConnectReportsPromptly();
 
 private:
     /// One temp dir for the whole class so the RSA-3072 key pair is
@@ -849,17 +859,30 @@ void TstStationSession::settingsProxyIsNotReadyBeforeTheSnapshot()
     QCOMPARE(proxy.value(QStringLiteral("TciServerPort"), QStringLiteral("50001")).toString(),
              QStringLiteral("50123"));
 
-    // A client write reaches the station's own store.
+    // ── Fix round 1, Important 2 ─────────────────────────────────────────
+    //
+    // A client write must reach the station's own store THROUGH THE REAL
+    // CLIENT. An earlier version of this slot hand-relayed the frame and
+    // attributed the wiring to Task 20, which contradicted both records
+    // that assign it here (SettingsProxy.h's own "for a live session (Task
+    // 18) to relay over", and the plan's self-review). Nothing in src/
+    // consumed outboundWriteRequested or outboundRemoveRequested, so the
+    // operator-visible shape was: a remote GUI's Setup change updates the
+    // optimistic cache, appears to take, never reaches the station, and is
+    // silently reverted by the next snapshot.
+    //
+    // Hand-relaying here would pass against exactly that broken build,
+    // which is why this now goes through proxy.setValue() and nothing else.
     QSignalSpy outbound(&proxy, &SettingsProxy::outboundWriteRequested);
     proxy.setValue(QStringLiteral("TciServerPort"), QStringLiteral("50999"));
     QCOMPARE(outbound.count(), 1);
-    // Relay it the way a remote-mode GUI's wiring will (task 20 owns that
-    // wiring; this asserts the daemon half accepts it).
-    clientEnd->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
-        QStringLiteral("TciServerPort"), QStringLiteral("50999"),
-        proxy.localOriginTag())));
     QTRY_COMPARE(stationSettings.value(QStringLiteral("TciServerPort")).toString(),
                  QStringLiteral("50999"));
+
+    // The removal half of the same seam.
+    QVERIFY(stationSettings.contains(QStringLiteral("TciServerPort")));
+    proxy.remove(QStringLiteral("TciServerPort"));
+    QTRY_VERIFY(!stationSettings.contains(QStringLiteral("TciServerPort")));
 }
 
 void TstStationSession::schemaSkewIsCaughtByNameComparison()
@@ -926,6 +949,286 @@ void TstStationSession::schemaSkewIsCaughtByNameComparison()
     QVERIFY(client.stationSettingsSchemaVersion() == 6);
     QCOMPARE(client.hasSettingsSchemaSkew(),
              client.localSettingsSchemaVersion() != 6);
+}
+
+// ── Fix round 1 ──────────────────────────────────────────────────────────
+
+void TstStationSession::reconnectSurvivesTheOldTransportClosing()
+{
+    // Important 3. attachTransport() used to overwrite m_transport with no
+    // disconnect and no deleteLater, and onTransportClosed() took no
+    // sender argument, so it could not tell WHICH link had closed.
+    // WebSocketTransport::closeLink is asynchronous, so the real sequence
+    // -- heartbeat timeout, reconnect from the slot, the old socket's
+    // disconnected arrives a moment later -- drove the BRAND NEW session
+    // to Disconnected, stopped both timers and called setReady(false).
+    // Task 19 is reconnect and walks straight into it.
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(
+        settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+
+    auto stationModel = makeStationRadioModel(0);
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+
+    // First session, established normally. Held through QPointers because
+    // the whole point of the fix is that the client DESTROYS the stale
+    // transport, so raw pointers here would dangle.
+    auto* firstStation = new LoopbackTransport(QStringLiteral("station-1"), this);
+    auto* firstClient = new LoopbackTransport(QStringLiteral("client-1"), this);
+    QPointer<LoopbackTransport> staleStation(firstStation);
+    QPointer<LoopbackTransport> staleClient(firstClient);
+    firstStation->linkTo(firstClient);
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    client.startSession(firstClient, server.token());
+    server.acceptTransport(firstStation);
+    QTRY_COMPARE(completed.count(), 1);
+    QVERIFY(clientModel.isConnected());
+
+    // Reconnect on a fresh pair WITHOUT closing the old one first, which
+    // is exactly what a reconnect-from-the-timeout-slot looks like.
+    auto* secondStation = new LoopbackTransport(QStringLiteral("station-2"), this);
+    auto* secondClient = new LoopbackTransport(QStringLiteral("client-2"), this);
+    secondStation->linkTo(secondClient);
+    client.startSession(secondClient, server.token());
+    server.acceptTransport(secondStation);
+    QTRY_COMPARE(completed.count(), 2);
+    QVERIFY(clientModel.isConnected());
+    QVERIFY(proxy.ready());
+
+    // The stale transport must have been RELEASED, not merely orphaned.
+    // attachTransport() disconnects it from this client, closes it and
+    // deleteLater()s it; the old code overwrote m_transport and did none
+    // of the three, which leaked a transport (and, over a real socket, a
+    // QWebSocket still connected to onTransportText) on every reconnect.
+    QTRY_VERIFY2(staleClient.isNull(),
+                 "the stale transport was orphaned rather than released");
+
+    // And if anything of the old link is still around to make noise, it
+    // must not reach the live session. Under the fix there is nothing left
+    // to poke, which is itself the assertion above; this covers the case
+    // where a late close still arrives from the far end.
+    if (!staleStation.isNull()) {
+        staleStation->closeLink(QStringLiteral("stale link finally closing"));
+    }
+    QTest::qWait(StationClient::kDefaultWriteFlushMs * 4);
+
+    QVERIFY2(client.isHandshakeComplete(),
+             "a stale transport's close tore down the fresh session");
+    QVERIFY2(clientModel.isConnected(),
+             "a stale transport's close drove the fresh session to Disconnected");
+    QVERIFY2(proxy.ready(),
+             "a stale transport's close called setReady(false) on the fresh session");
+}
+
+void TstStationSession::heartbeatTimeoutReportsTheSessionAsEnded()
+{
+    // Important 4, the half that needs no socket. onTransportClosed() used
+    // to emit sessionEnded only `if (m_handshakeComplete)`, and
+    // disconnectFromStation() cleared that flag before the close handler
+    // read it, so the client's own heartbeat timeout reported
+    // stationHeartbeatTimeout and then went silent.
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(
+        settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+
+    auto stationModel = makeStationRadioModel(0);
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    // Keep the station's own heartbeat out of the way; this slot is about
+    // the CLIENT's.
+    server.setHeartbeatIntervalMs(0);
+
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+    client.setHeartbeatIntervalMs(20);
+    client.setMaxMissedPongs(2);
+
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
+    stationEnd->linkTo(clientEnd);
+
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    QSignalSpy timedOut(&client, &StationClient::stationHeartbeatTimeout);
+    QSignalSpy ended(&client, &StationClient::sessionEnded);
+
+    client.startSession(clientEnd, server.token());
+    server.acceptTransport(stationEnd);
+    QTRY_COMPARE(completed.count(), 1);
+
+    // The station goes silent without closing.
+    stationEnd->setAnswersPings(false);
+
+    QTRY_COMPARE_WITH_TIMEOUT(timedOut.count(), 1, 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(ended.count(), 1, 2000);
+    QCOMPARE(ended.first().first().toString(), QStringLiteral("heartbeat timeout"));
+    QVERIFY(!clientModel.isConnected());
+    QVERIFY(!proxy.ready());
+
+    // Exactly once, no matter how many close paths unwind afterwards.
+    QTest::qWait(200);
+    QCOMPARE(ended.count(), 1);
+}
+
+void TstStationSession::tunerPropertiesAreCountedAsUnapplied()
+{
+    // Important 5. TunerModel::applyMirroredValue answers isOperate /
+    // isBypass / antennaA by calling COMMAND SENDERS that forward to a
+    // bound TgxlConnection and no-op when there is none, while still
+    // returning success. On a client that meant those properties reported
+    // as APPLIED, changed nothing, read stale, and never entered
+    // unappliedProperties() -- defeating the accessor Task 20's bench is
+    // meant to trust.
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(
+        settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+
+    auto stationModel = makeStationRadioModel(0);
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
+    stationEnd->linkTo(clientEnd);
+
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    client.startSession(clientEnd, server.token());
+    server.acceptTransport(stationEnd);
+    QTRY_COMPARE(completed.count(), 1);
+
+    // The tuner is watched by the station, so its full property bag
+    // arrived in the connect burst and every one of these was attempted.
+    const QSet<QByteArray> unapplied = client.unappliedProperties();
+    QVERIFY2(unapplied.contains(QByteArrayLiteral("TunerModel.isOperate")),
+             "isOperate reported as applied while changing nothing");
+    QVERIFY2(unapplied.contains(QByteArrayLiteral("TunerModel.isBypass")),
+             "isBypass reported as applied while changing nothing");
+    QVERIFY(unapplied.contains(QByteArrayLiteral("TunerModel.antennaA")));
+
+    // And the property that genuinely DOES land is not swept into the set
+    // along with them: SliceModel::signalStrengthDbm reaches its own plain
+    // setter through the hook, which is the one pair the client allowlists.
+    SliceModel* stationSlice = stationModel->slices().first();
+    SliceModel* clientSlice = clientModel.sliceById(stationSlice->sliceIndex());
+    QVERIFY(clientSlice != nullptr);
+    stationSlice->setSignalStrengthDbm(-91.0);
+    QTRY_COMPARE(clientSlice->signalStrengthDbm(), -91.0);
+    QVERIFY(!client.unappliedProperties().contains(
+        QByteArrayLiteral("SliceModel.signalStrengthDbm")));
+}
+
+void TstStationSession::handshakeDeadlineDropsASilentPeer()
+{
+    // Minor: a peer that opens a socket and answers pings but never
+    // authenticates used to live forever, holding a slot.
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(
+        settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+
+    auto stationModel = makeStationRadioModel(0);
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    server.setAuthDeadlineMs(60);
+    QCOMPARE(server.authDeadlineMs(), 60);
+
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("lurker"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("lurker-client"), this);
+    stationEnd->linkTo(clientEnd);
+
+    QSignalSpy dropped(&server, &StationServer::peerDisconnected);
+    server.acceptTransport(stationEnd);
+    QTRY_COMPARE(server.peerCount(), 1);
+
+    // It answers pings (the default) but never says hello or authenticates.
+    QTRY_COMPARE_WITH_TIMEOUT(server.peerCount(), 0, 3000);
+    QCOMPARE(dropped.count(), 1);
+    QVERIFY(!server.hasAuthenticatedSession());
+
+    // A peer that DOES authenticate is not dropped by the same deadline.
+    auto* goodStation = new LoopbackTransport(QStringLiteral("good"), this);
+    auto* goodClient = new LoopbackTransport(QStringLiteral("good-client"), this);
+    goodStation->linkTo(goodClient);
+    server.acceptTransport(goodStation);
+    QTRY_VERIFY(!goodClient->received().isEmpty());
+    goodClient->sendText(SessionMessages::encode(
+        SessionMessages::hello(kSessionProtocolMajor, kSessionProtocolMinor, 6,
+                               QStringLiteral("good"))));
+    goodClient->sendText(
+        SessionMessages::encode(SessionMessages::authRequest(server.token())));
+    QTRY_VERIFY(server.hasAuthenticatedSession());
+    QTest::qWait(200);  // well past the 60 ms deadline
+    QVERIFY2(server.hasAuthenticatedSession(),
+             "the handshake deadline fired on a peer that had authenticated");
+}
+
+void TstStationSession::peerLimitRefusesFurtherConnections()
+{
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(
+        settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+
+    auto stationModel = makeStationRadioModel(0);
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    // Out of the way: this slot is about the cap, not the deadline.
+    server.setAuthDeadlineMs(0);
+
+    QList<LoopbackTransport*> clientEnds;
+    for (int i = 0; i < StationServer::kMaxConcurrentPeers; ++i) {
+        auto* stationEnd =
+            new LoopbackTransport(QStringLiteral("peer-%1").arg(i), this);
+        auto* clientEnd =
+            new LoopbackTransport(QStringLiteral("peer-%1-client").arg(i), this);
+        stationEnd->linkTo(clientEnd);
+        server.acceptTransport(stationEnd);
+        clientEnds.append(clientEnd);
+    }
+    QCOMPARE(server.peerCount(), StationServer::kMaxConcurrentPeers);
+
+    auto* overflowStation = new LoopbackTransport(QStringLiteral("overflow"), this);
+    auto* overflowClient = new LoopbackTransport(QStringLiteral("overflow-client"), this);
+    overflowStation->linkTo(overflowClient);
+    server.acceptTransport(overflowStation);
+
+    QCOMPARE(server.peerCount(), StationServer::kMaxConcurrentPeers);
+    // Refused with a reason on the wire, not an unexplained close.
+    QTRY_VERIFY(overflowClient->receivedKinds().contains(QByteArrayLiteral("session.end")));
+}
+
+void TstStationSession::listenIsIdempotent()
+{
+    if (!QSslSocket::supportsSsl()) {
+        QSKIP(qPrintable(tlsSkipMessage()));
+    }
+
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(
+        settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+
+    auto stationModel = makeStationRadioModel(0);
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+
+    QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.lastError()));
+    const quint16 port = server.serverPort();
+
+    // A second call used to re-apply the SSL config and fail the bind into
+    // lastError(), leaving a working listener described as broken.
+    QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.lastError()));
+    QVERIFY(server.lastError().isEmpty());
+    QCOMPARE(server.serverPort(), port);
+    QVERIFY(server.isListening());
+
+    server.close();
 }
 
 // ── TLS ──────────────────────────────────────────────────────────────────
@@ -1013,6 +1316,52 @@ void TstStationSession::wssRefusesAMismatchedCertificateFingerprint()
     QVERIFY(!unpinnedModel.isConnected());
 
     server.close();
+}
+
+void TstStationSession::failedInitialConnectReportsPromptly()
+{
+    if (!QSslSocket::supportsSsl()) {
+        QSKIP(qPrintable(tlsSkipMessage()));
+    }
+
+    // Important 4's headline case. errorOccurred set m_lastError and
+    // logged but emitted NOTHING, and onTransportClosed emitted
+    // sessionEnded only `if (m_handshakeComplete)`, so a station that was
+    // down, a wrong port or a refused TLS handshake produced no signal at
+    // all for a full 40 to 60 second heartbeat window. Only the
+    // fingerprint-mismatch path emitted, which is why the existing TLS
+    // slot passed while the ORDINARY failure was uncovered.
+    //
+    // v0.5.1 shipped "connection state stuck Connected on failed initial
+    // connect". Same bug class, so it gets a test rather than a comment.
+    QTcpServer probe;
+    QVERIFY(probe.listen(QHostAddress::LocalHost, 0));
+    const quint16 deadPort = probe.serverPort();
+    probe.close();  // nothing is listening there now
+
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+    QSignalSpy ended(&client, &StationClient::sessionEnded);
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+
+    const QString anyFingerprint =
+        QStringLiteral("00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:"
+                       "00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF");
+    client.connectToStation(QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(deadPort)),
+                            QStringLiteral("token"), anyFingerprint);
+
+    // WELL inside one heartbeat interval, which is the entire point: the
+    // old behaviour would have taken 40 to 60 seconds, and only then via
+    // a mechanism that had nothing to do with the connect failing.
+    QTRY_COMPARE_WITH_TIMEOUT(ended.count(), 1, 5000);
+    QCOMPARE(completed.count(), 0);
+    QVERIFY(!clientModel.isConnected());
+    QVERIFY(!ended.first().first().toString().isEmpty());
+
+    // And exactly once, however many socket errors and closes unwind.
+    QTest::qWait(300);
+    QCOMPARE(ended.count(), 1);
 }
 
 QTEST_MAIN(TstStationSession)

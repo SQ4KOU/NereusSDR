@@ -39,9 +39,14 @@
 
 #include <QtTest/QtTest>
 
+#include <QHostAddress>
+#include <QSslSocket>
+#include <QTcpServer>
+
 #include "core/HpsdrModel.h"
 #include "core/daemon/DaemonApp.h"
 #include "core/daemon/DaemonConfig.h"
+#include "core/session/StationServer.h"
 
 using namespace NereusSDR;
 
@@ -163,6 +168,87 @@ private slots:
         QVERIFY(app.start(cfg));
         QCOMPARE(app.sliceCount(), 2);   // not 4
 
+        app.stop();
+    }
+
+    // ── Remote Daemon R2 Task 18 ─────────────────────────────────────────
+    //
+    // Until this landed, NOTHING in the tree constructed a StationServer:
+    // grep for it across src/core/daemon, src/main.cpp and
+    // src/core/CoreInit.cpp returned nothing, so nereusd never listened
+    // and never printed the pairing banner. Task 18 step 4 is phrased as
+    // daemon behaviour and its stated purpose is that without it the
+    // acceptance run cannot authenticate, so it belongs here rather than
+    // to the GUI-gating task.
+
+    void remoteListenerIsNotStartedByDefault()
+    {
+        // remote_port defaults to 0, which means "do not listen". A
+        // default nereusd must therefore open no port at all.
+        DaemonConfig cfg = DaemonConfig::defaults();
+        QCOMPARE(cfg.remotePort, 0);
+
+        DaemonApp app;
+        app.primeBoardForTest(HPSDRHW::HermesLite);
+        QVERIFY(app.start(cfg));
+        QVERIFY2(app.stationServer() == nullptr,
+                 "a default config must not bring up a network listener");
+        app.stop();
+    }
+
+    void configuredRemotePortBringsUpAListener()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend, so a wss listener cannot bind. "
+                  "The listener is wss-only by design (parent design section 10.5).");
+        }
+
+        DaemonConfig cfg = DaemonConfig::defaults();
+        cfg.remotePort = 0;
+        // Port 0 means "disabled" in the config, so an ephemeral port has
+        // to be requested explicitly. Bind loopback and let the OS pick by
+        // asking for a high port; a fixed port would collide with a
+        // parallel ctest shard.
+        QTcpServer probe;
+        QVERIFY(probe.listen(QHostAddress::LocalHost, 0));
+        const quint16 freePort = probe.serverPort();
+        probe.close();
+        cfg.remotePort = static_cast<int>(freePort);
+        cfg.remoteBind = QStringLiteral("127.0.0.1");
+
+        DaemonApp app;
+        app.primeBoardForTest(HPSDRHW::HermesLite);
+        QVERIFY(app.start(cfg));
+
+        StationServer* server = app.stationServer();
+        QVERIFY2(server != nullptr, "remote_port was set but no StationServer exists");
+        QVERIFY2(server->isListening(), qPrintable(server->lastError()));
+        QCOMPARE(server->serverPort(), freePort);
+
+        // Step 4's other half: the pairing material an operator has to
+        // carry to the client by hand exists and is non-empty.
+        QVERIFY(!server->token().isEmpty());
+        QVERIFY(!server->certificateFingerprint().isEmpty());
+
+        // And it is torn down with the daemon rather than outliving the
+        // RadioModel its mirror holds QPointers into.
+        app.stop();
+        QVERIFY(app.stationServer() == nullptr);
+    }
+
+    void invalidRemoteBindIsLoggedRatherThanFatal()
+    {
+        DaemonConfig cfg = DaemonConfig::defaults();
+        cfg.remotePort = 4711;
+        cfg.remoteBind = QStringLiteral("not-an-address");
+
+        DaemonApp app;
+        app.primeBoardForTest(HPSDRHW::HermesLite);
+        // A daemon that still demodulates locally is more useful than one
+        // that refuses to boot over a mistyped config line.
+        QVERIFY(app.start(cfg));
+        QVERIFY(app.stationServer() == nullptr);
+        QCOMPARE(app.sliceCount(), cfg.sliceCount);
         app.stop();
     }
 };

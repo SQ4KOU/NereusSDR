@@ -48,9 +48,25 @@
 //   1. MirrorSchema::write() when the property has a WRITE accessor. This
 //      is the overwhelming majority -- 24 of 148 mirrored properties lack
 //      one (design addendum section 3).
-//   2. The model's own Q_INVOKABLE applyMirroredValue hook, which is how
-//      SliceModel::signalStrengthDbm lands (task 12 built that path for
-//      exactly this reason, and its own comment says so).
+//   2. The model's own Q_INVOKABLE applyMirroredValue hook, but ONLY for
+//      an explicit allowlist of (class, property) pairs whose hook is a
+//      genuine STATE APPLY. Exactly one today: SliceModel::
+//      signalStrengthDbm, whose hook calls a plain setter task 12 added
+//      for precisely this path.
+//
+//      The allowlist exists because that hook is the DAEMON's inbound
+//      path ("a peer is asking this model to do something"), and some
+//      implementations of it are COMMAND SENDERS. TunerModel answers
+//      isOperate / isBypass / antennaA by forwarding to a bound
+//      TgxlConnection. Consulting it here fed a station STATE REPORT into
+//      a command sender, which inverts the link; it was inert only
+//      because a remote client has no TgxlConnection, and binding one
+//      would have turned every inbound tuner delta into an outbound
+//      tuner command. Those setters also no-op with no connection while
+//      the hook still reports success, so the properties reported as
+//      applied, changed nothing, and never reached unappliedProperties().
+//      The hook itself is deliberately left alone -- see the .cpp for why
+//      that behaviour is Task 8's tested, documented choice.
 //   3. A small client-side adapter for the handful of properties whose
 //      only legitimate CLIENT-side writer is this class, but whose only
 //      legitimate DAEMON-side writer is an arbiter that must not be
@@ -250,6 +266,13 @@ private:
     void attachTransport(SessionTransport* transport, const QString& token);
     void onTransportText(const QByteArray& wire);
     void onTransportClosed();
+
+    /// The single place a session ends. Emits sessionEnded() EXACTLY ONCE
+    /// per attachTransport(), whichever of the six paths reached it (peer
+    /// close, socket error, heartbeat timeout, the station's own
+    /// SessionEnd, a version refusal, an auth refusal). Idempotent: a
+    /// second call for the same attach returns without emitting.
+    void endSession(const QString& reason);
     void onHeartbeatTick();
     void onWriteFlushTick();
 
@@ -258,6 +281,13 @@ private:
     void handleCapabilities(const SessionMessage& message);
     void handleSettingsSnapshot(const SessionMessage& message);
     void handleSchema(const SessionMessage& message);
+
+    /// The NAME comparison itself, shared by handleSchema() (when an
+    /// instance of the class already exists) and handleObjectCreate()
+    /// (when the schema arrived first, which is always the case for
+    /// slices).
+    void compareSchema(const QByteArray& className, const QSet<QByteArray>& stationNames,
+                       const QMetaObject* mo);
     void handleObjectCreate(const SessionMessage& message);
     void handleObjectDestroy(const SessionMessage& message);
     void handleDelta(const SessionMessage& message);
@@ -299,6 +329,10 @@ private:
     qint32 m_stationSettingsSchema = 0;
     bool m_settingsSchemaSkew = false;
 
+    /// Station schemas that arrived before any instance of their class
+    /// existed here, waiting for one. See handleSchema().
+    QHash<QByteArray, QSet<QByteArray>> m_pendingStationSchemas;
+
     QSet<QByteArray> m_schemaOnlyOnStation;
     QSet<QByteArray> m_schemaOnlyLocal;
     QSet<QByteArray> m_unapplied;
@@ -323,6 +357,19 @@ private:
     /// burst landing, and forwarding any of it would tell the station its
     /// own state back.
     bool m_forwardLocalChanges = false;
+
+    /// True from attachTransport() until endSession() reports. What makes
+    /// "exactly one sessionEnded per attach" true, and what makes a FAILED
+    /// INITIAL CONNECT reportable at all: the previous shape gated the
+    /// emit on m_handshakeComplete, so a station that was simply down
+    /// produced no signal whatsoever.
+    bool m_sessionActive = false;
+
+    /// True once a frame has actually arrived from the station. Gates the
+    /// heartbeat: a wss dial can take seconds, and counting missed pongs
+    /// across a socket that has not finished connecting reports a slow
+    /// dial as a dead station.
+    bool m_linkUp = false;
 
     QTimer* m_heartbeatTimer = nullptr;
     QTimer* m_writeFlushTimer = nullptr;

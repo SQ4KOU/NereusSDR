@@ -60,11 +60,14 @@
 // want a mirror per viewer.
 //
 // A connection that has NOT yet authenticated does not touch the mirror at
-// all -- it holds nothing but its own handshake state -- so an unlimited
-// number of unauthenticated peers can be mid-handshake without disturbing
-// the live session. That is what keeps a failed or hostile connection
-// attempt from being a denial of service against the operator's own
-// session.
+// all -- it holds nothing but its own handshake state -- so a peer
+// mid-handshake cannot disturb the live session. That is what keeps a
+// failed or hostile connection attempt from being a denial of service
+// against the operator's own session. Two bounds keep the mid-handshake
+// population from becoming its own problem: kMaxConcurrentPeers caps how
+// many can exist at once, and kDefaultAuthDeadlineMs drops any that has
+// not authenticated in time (a peer that opens a socket and answers pings
+// but never authenticates would otherwise live forever).
 //
 // ── THREADING ────────────────────────────────────────────────────────────
 //
@@ -205,6 +208,24 @@ public:
     /// roughly 250 messages for one keypress.
     static constexpr int kDefaultDeltaFlushMs = 50;
 
+    /// How long a connection has to complete the section 7.0 handshake
+    /// before it is dropped. Without it, a peer that opens a socket and
+    /// answers pings but never authenticates lives forever, holding a slot
+    /// and a file descriptor, which is a cheap way to sit on a station.
+    /// Generous on purpose: the only work between accept and authenticate
+    /// is two small messages, so 30 s is far more than a real client needs
+    /// even on a bad link, and short enough that a stuck peer clears
+    /// without operator action.
+    static constexpr int kDefaultAuthDeadlineMs = 30000;
+
+    /// Concurrent connections, authenticated or not. There is only ever
+    /// ONE authenticated session (parent section 7.1), so this bounds
+    /// peers that are mid-handshake. Small on purpose: a legitimate
+    /// deployment needs one, and a couple of stale sockets from a
+    /// reconnecting client. Beyond this a new connection is refused
+    /// immediately rather than being allowed to displace a live session.
+    static constexpr int kMaxConcurrentPeers = 8;
+
     /// `radioModel` and `settings` are NOT owned and must outlive this
     /// object; both must live on this object's thread (see the class
     /// comment's threading section, which is where the consequences of
@@ -270,6 +291,11 @@ public:
     /// outcome from Rejected. Defaults are TokenStore's own.
     void setAuthRateLimit(int maxFailures, int lockoutMs);
 
+    /// See kDefaultAuthDeadlineMs. Values below 1 disable the deadline,
+    /// which is logged as a warning rather than silently accepted.
+    void setAuthDeadlineMs(int ms);
+    int authDeadlineMs() const { return m_authDeadlineMs; }
+
     /// Every peer currently attached, authenticated or not.
     int peerCount() const { return static_cast<int>(m_peers.size()); }
 
@@ -321,6 +347,15 @@ private:
         /// Pings sent since the last pong. Reset to 0 by every pong; the
         /// heartbeat tick declares death when it reaches maxMissedPongs().
         int pingsAwaitingPong = 0;
+
+        /// Owned single-shot authenticate-or-drop timer, parented to the
+        /// transport so it dies with it. Stopped the moment the peer
+        /// authenticates. An OWNED timer rather than static
+        /// QTimer::singleShot deliberately: the plan's own section 13 note
+        /// records that PgxlConnection and TgxlConnection get that wrong,
+        /// and cancellability matters more here because this subsystem
+        /// gates a transmitter.
+        QTimer* authDeadline = nullptr;
     };
 
     void onNewWebSocketConnection();
@@ -376,6 +411,7 @@ private:
     QTimer* m_heartbeatTimer = nullptr;
     QTimer* m_deltaFlushTimer = nullptr;
 
+    int m_authDeadlineMs = kDefaultAuthDeadlineMs;
     int m_heartbeatIntervalMs = kDefaultHeartbeatIntervalMs;
     int m_maxMissedPongs = kDefaultMaxMissedPongs;
     int m_sustainableSliceLimit = 0;

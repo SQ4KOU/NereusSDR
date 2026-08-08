@@ -132,6 +132,12 @@ private slots:
             QStringLiteral("sample_rate_hz"),
             QStringLiteral("slice_count"),
             QStringLiteral("audio_device"),
+            // Remote Daemon R2 Task 18: both reach DaemonApp::
+            // startStationServer(), which is what this pinning test is
+            // for -- a key that reaches DaemonConfig must reach behaviour
+            // AND the sample file.
+            QStringLiteral("remote_port"),
+            QStringLiteral("remote_bind"),
         };
 
         // Each documented key parses without an "unknown key" complaint.
@@ -143,7 +149,9 @@ private slots:
         f.write("radio_mac = aa:bb:cc:dd:ee:ff\n"
                 "sample_rate_hz = 96000\n"
                 "slice_count = 2\n"
-                "audio_device = default\n");
+                "audio_device = default\n"
+                "remote_port = 4711\n"
+                "remote_bind = 0.0.0.0\n");
         f.flush();
         QString err;
         const DaemonConfig c = DaemonConfig::fromFile(f.fileName(), &err);
@@ -152,6 +160,8 @@ private slots:
         QCOMPARE(c.sampleRateHz, 96000);
         QCOMPARE(c.sliceCount, 2);
         QCOMPARE(c.audioDevice, QStringLiteral("default"));
+        QCOMPARE(c.remotePort, 4711);
+        QCOMPARE(c.remoteBind, QStringLiteral("0.0.0.0"));
 
         // And the shipped sample file documents exactly those keys, no
         // more. Parsed straight out of the packaging file so the two
@@ -174,6 +184,37 @@ private slots:
         QStringList expected = documented;
         expected.sort();
         QCOMPARE(found, expected);
+    }
+
+    // Remote Daemon R2 Task 18: the listener is OPT IN. A default-
+    // constructed config must not bind anything, and must bind loopback
+    // when it does. Pinned because flipping either default silently turns
+    // every existing nereusd install into a network service.
+    void remoteListenerIsOptInAndLoopbackByDefault()
+    {
+        const DaemonConfig d = DaemonConfig::defaults();
+        QCOMPARE(d.remotePort, 0);
+        QCOMPARE(d.remoteBind, QStringLiteral("127.0.0.1"));
+        QString err;
+        QVERIFY(d.validate(&err));
+    }
+
+    void rejectsRemotePortOutOfRange()
+    {
+        DaemonConfig c = DaemonConfig::defaults();
+        QString err;
+
+        // 0 is the documented "disabled" value, not an error.
+        c.remotePort = 0;
+        QVERIFY(c.validate(&err));
+
+        c.remotePort = 65536;
+        QVERIFY(!c.validate(&err));
+        QVERIFY(!err.isEmpty());
+
+        c.remotePort = -1;
+        QVERIFY(!c.validate(&err));
+        QVERIFY(!err.isEmpty());
     }
 
     void rejectsSliceCountBelowOne()

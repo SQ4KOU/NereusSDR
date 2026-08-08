@@ -188,6 +188,33 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     m_writeFlushTimer = new QTimer(this);
     m_writeFlushTimer->setInterval(kDefaultWriteFlushMs);
     connect(m_writeFlushTimer, &QTimer::timeout, this, &StationClient::onWriteFlushTick);
+
+    // ── The settings proxy's OUTBOUND half ───────────────────────────────
+    //
+    // SettingsProxy.h's own contract says it emits these "for a live
+    // session (Task 18) to relay over the wire", and until this connect
+    // existed neither signal had a consumer anywhere in src/. The
+    // operator-visible shape of that gap: a remote GUI's Setup change
+    // updates the optimistic cache, appears to take, never reaches the
+    // station, and is silently reverted by the next snapshot.
+    //
+    // Origin tag read at emit time rather than captured, because
+    // handleSettingsSnapshot() assigns it after the handshake and these
+    // connects are made in the constructor.
+    if (m_settingsProxy != nullptr) {
+        connect(m_settingsProxy, &SettingsProxy::outboundWriteRequested, this,
+                [this](const QString& key, const QVariant& value) {
+                    if (m_settingsProxy.isNull()) {
+                        return;
+                    }
+                    send(SessionMessages::settingsWrite(key, value.toString(),
+                                                        m_settingsProxy->localOriginTag()));
+                });
+        connect(m_settingsProxy, &SettingsProxy::outboundRemoveRequested, this,
+                [this](const QString& key) {
+                    send(SessionMessages::settingsRemove(key));
+                });
+    }
 }
 
 StationClient::~StationClient() = default;
@@ -233,7 +260,7 @@ void StationClient::connectToStation(const QUrl& url, const QString& token,
                             .arg(pinned, actual);
                     qCWarning(lcStationClient) << m_lastError;
                     socket->abort();
-                    emit sessionEnded(m_lastError);
+                    endSession(m_lastError);
                     return;
                 }
                 // The pinned fingerprint IS the identity check (parent
@@ -261,6 +288,13 @@ void StationClient::connectToStation(const QUrl& url, const QString& token,
                 }
                 qCWarning(lcStationClient)
                     << "Station connection error:" << socket->errorString();
+                // A refused or unreachable station emits this and may never
+                // emit disconnected at all, so waiting for a close would
+                // leave the caller with no signal whatsoever. endSession()
+                // is idempotent per attach, so a socket error DURING a live
+                // session that is followed by a real close still reports
+                // once.
+                endSession(m_lastError);
             });
 
     attachTransport(new WebSocketTransport(socket), token);
@@ -277,10 +311,43 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
     if (transport == nullptr) {
         return;
     }
+
+    // RELEASE THE OLD LINK FIRST. Overwriting m_transport without this was
+    // a reconnect defect waiting for Task 19: WebSocketTransport::closeLink
+    // closes ASYNCHRONOUSLY, so "heartbeat timeout, reconnect from the
+    // slot, the old socket's disconnected arrives a moment later" drove the
+    // BRAND NEW session to Disconnected, stopped both timers and called
+    // setReady(false). Every reconnect also leaked a WebSocketTransport and
+    // its QWebSocket, still connected to onTransportText.
+    //
+    // Disconnecting every signal from the old transport to this object
+    // FIRST is what makes the subsequent closeLink() safe: the close it
+    // provokes can no longer reach onTransportClosed(). onTransportClosed()
+    // additionally ignores anything that is not the current transport (see
+    // there), so the two protections are independent -- the same
+    // erase-then-look-up discipline StationServer::dropPeer already uses.
+    if (m_transport != nullptr && m_transport != transport) {
+        SessionTransport* stale = m_transport;
+        m_transport = nullptr;
+        disconnect(stale, nullptr, this, nullptr);
+        stale->closeLink(QStringLiteral("replaced by a newer session"));
+        stale->deleteLater();
+    }
+
     transport->setParent(this);
     m_transport = transport;
     m_token = token;
     m_pingsAwaitingPong = 0;
+    m_linkUp = false;
+    m_sessionActive = true;
+
+    // These three describe THIS session. Carrying them across a reconnect
+    // would let a difference the station has since fixed keep showing up
+    // in a diagnostic Task 20's bench is meant to trust.
+    m_schemaOnlyOnStation.clear();
+    m_schemaOnlyLocal.clear();
+    m_unapplied.clear();
+    m_pendingStationSchemas.clear();
 
     connect(transport, &SessionTransport::textReceived, this,
             &StationClient::onTransportText);
@@ -288,24 +355,24 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
             [this]() { m_pingsAwaitingPong = 0; });
     connect(transport, &SessionTransport::closed, this, &StationClient::onTransportClosed);
 
-    if (m_heartbeatIntervalMs > 0) {
-        m_heartbeatTimer->start();
-    }
+    // The heartbeat deliberately does NOT start here. A wss dial can take
+    // seconds, and a heartbeat counting missed pongs across a socket that
+    // has not finished connecting reports a slow dial as a dead station.
+    // It starts on the first inbound frame instead (onTransportText), which
+    // is the station's own Hello and therefore proof the link carries
+    // traffic in both directions.
 }
 
 void StationClient::disconnectFromStation(const QString& reason)
 {
-    m_heartbeatTimer->stop();
-    m_writeFlushTimer->stop();
-    m_handshakeComplete = false;
-    m_authenticated = false;
-    m_forwardLocalChanges = false;
-    if (m_settingsProxy != nullptr) {
-        m_settingsProxy->setReady(false);
-    }
-    if (!m_radioModel.isNull()) {
-        m_radioModel->setStationConnectionState(ConnectionState::Disconnected);
-    }
+    // endSession FIRST, closeLink second. A transport can deliver its
+    // closed() signal synchronously (the in-process one does, and nothing
+    // forbids it), and endSession() is once-per-attach, so closing first
+    // let the close handler's generic "link closed" win the race and the
+    // caller was told that instead of "heartbeat timeout" -- the specific
+    // reason, thrown away by ordering alone. endSession() touches no
+    // transport, so running it first is safe.
+    endSession(reason);
     if (m_transport != nullptr) {
         m_transport->closeLink(reason);
     }
@@ -313,24 +380,51 @@ void StationClient::disconnectFromStation(const QString& reason)
 
 void StationClient::onTransportClosed()
 {
-    // Task 19 owns reconnect and the stale-state presentation; this task
-    // owns only the honest immediate consequence, which is that a client
-    // with no session is not connected to anything.
-    const bool wasUp = m_handshakeComplete;
+    // Ignore a close from a transport this client has already moved on
+    // from. sender() is null when this is called directly rather than
+    // through the signal, which is a legitimate internal path.
+    if (sender() != nullptr && sender() != m_transport) {
+        return;
+    }
+    endSession(m_lastError.isEmpty() ? QStringLiteral("link closed") : m_lastError);
+}
+
+// The single place a session ends, so sessionEnded() fires EXACTLY ONCE
+// per attach no matter which of the six paths got here (peer close, socket
+// error, heartbeat timeout, station SessionEnd, version refusal, auth
+// refusal).
+//
+// The previous shape emitted only `if (m_handshakeComplete)`, which swallowed
+// the two failures that matter most:
+//
+//   - A failed INITIAL connect (station down, wrong port, TLS refused)
+//     produced no signal at all, for a full 40 to 60 second heartbeat
+//     window. v0.5.1 shipped "connection state stuck Connected on failed
+//     initial connect"; this is the same bug class, so it gets a named
+//     mechanism rather than a gate that happens to be true on the paths
+//     someone tested.
+//   - The client's own heartbeat timeout, because disconnectFromStation()
+//     cleared m_handshakeComplete before the close handler read it.
+void StationClient::endSession(const QString& reason)
+{
+    if (!m_sessionActive) {
+        return;  // already reported for this attach
+    }
+    m_sessionActive = false;
+
     m_handshakeComplete = false;
     m_authenticated = false;
     m_forwardLocalChanges = false;
+    m_linkUp = false;
     m_heartbeatTimer->stop();
     m_writeFlushTimer->stop();
-    if (m_settingsProxy != nullptr) {
+    if (!m_settingsProxy.isNull()) {
         m_settingsProxy->setReady(false);
     }
     if (!m_radioModel.isNull()) {
         m_radioModel->setStationConnectionState(ConnectionState::Disconnected);
     }
-    if (wasUp) {
-        emit sessionEnded(QStringLiteral("link closed"));
-    }
+    emit sessionEnded(reason);
 }
 
 // ── Heartbeat ────────────────────────────────────────────────────────────
@@ -346,7 +440,9 @@ void StationClient::setHeartbeatIntervalMs(int ms)
         return;
     }
     m_heartbeatTimer->setInterval(ms);
-    if (m_transport != nullptr) {
+    // m_linkUp, not m_transport: see attachTransport() for why the
+    // heartbeat waits for the first inbound frame.
+    if (m_linkUp) {
         m_heartbeatTimer->start();
     }
 }
@@ -368,7 +464,6 @@ void StationClient::onHeartbeatTick()
             << "consecutive pongs; declaring the link dead";
         emit stationHeartbeatTimeout();
         disconnectFromStation(QStringLiteral("heartbeat timeout"));
-        onTransportClosed();
         return;
     }
     ++m_pingsAwaitingPong;
@@ -379,6 +474,16 @@ void StationClient::onHeartbeatTick()
 
 void StationClient::onTransportText(const QByteArray& wire)
 {
+    // First frame from the station is proof the link carries traffic in
+    // both directions, which is the point at which a missed-pong count
+    // starts meaning something. See attachTransport().
+    if (!m_linkUp) {
+        m_linkUp = true;
+        if (m_heartbeatIntervalMs > 0 && m_sessionActive) {
+            m_heartbeatTimer->start();
+        }
+    }
+
     SessionMessage message;
     if (!SessionMessages::decode(wire, &message)) {
         qCWarning(lcStationClient) << "Undecodable message from station; ignoring";
@@ -433,7 +538,6 @@ void StationClient::onTransportText(const QByteArray& wire)
         qCWarning(lcStationClient) << "Station ended the session:" << message.reason;
         m_lastError = message.reason;
         disconnectFromStation(message.reason);
-        emit sessionEnded(message.reason);
         break;
     default:
         qCWarning(lcStationClient) << "Ignoring station message of client-only kind:"
@@ -458,7 +562,6 @@ void StationClient::handleHello(const SessionMessage& message)
                           .arg(message.protocolMinor);
         qCWarning(lcStationClient) << m_lastError;
         disconnectFromStation(m_lastError);
-        emit sessionEnded(m_lastError);
         return;
     }
 
@@ -489,7 +592,6 @@ void StationClient::handleAuthResult(const SessionMessage& message)
         m_lastError = message.reason;
         qCWarning(lcStationClient) << "Station refused authentication:" << message.reason;
         disconnectFromStation(message.reason);
-        emit sessionEnded(message.reason);
         return;
     }
     m_authenticated = true;
@@ -639,35 +741,50 @@ void StationClient::handleSchema(const SessionMessage& message)
         }
     }
     if (mo == nullptr) {
-        // Nothing of this class exists here yet (slices arrive after their
-        // schema does). Record the station's names; the comparison runs
-        // again from handleObjectCreate once an instance exists.
-        for (const QByteArray& name : stationNames) {
-            m_schemaOnlyOnStation.insert(skewKey(message.className, name));
-        }
+        // Nothing of this class exists here YET. A slice's schema always
+        // arrives before its first object.create, so recording every
+        // station name as skew here would report the entire SliceModel
+        // property table as missing on a client that in fact declares all
+        // of it. Defer instead, and run the real comparison the moment an
+        // instance exists (handleObjectCreate).
+        m_pendingStationSchemas.insert(message.className, stationNames);
         return;
     }
 
+    compareSchema(message.className, stationNames, mo);
+}
+
+void StationClient::compareSchema(const QByteArray& className,
+                                  const QSet<QByteArray>& stationNames,
+                                  const QMetaObject* mo)
+{
     const MirrorSchema& local = MirrorSchema::forMetaObject(mo);
     QSet<QByteArray> localNames;
     for (const MirrorProperty& prop : local.properties()) {
         localNames.insert(prop.name);
     }
 
+    int onlyStation = 0;
+    int onlyLocal = 0;
     for (const QByteArray& name : stationNames) {
         if (!localNames.contains(name)) {
-            m_schemaOnlyOnStation.insert(skewKey(message.className, name));
+            m_schemaOnlyOnStation.insert(skewKey(className, name));
+            ++onlyStation;
         }
     }
     for (const QByteArray& name : localNames) {
         if (!stationNames.contains(name)) {
-            m_schemaOnlyLocal.insert(skewKey(message.className, name));
+            m_schemaOnlyLocal.insert(skewKey(className, name));
+            ++onlyLocal;
         }
     }
-    if (!m_schemaOnlyOnStation.isEmpty() || !m_schemaOnlyLocal.isEmpty()) {
+    // THIS class's counts, not the accumulated set sizes. Logging the set
+    // totals made every class after the first look like it had inherited
+    // the previous one's differences.
+    if (onlyStation > 0 || onlyLocal > 0) {
         qCWarning(lcStationClient)
-            << "Mirror schema skew for" << message.className << "-- station-only:"
-            << m_schemaOnlyOnStation.size() << "local-only:" << m_schemaOnlyLocal.size();
+            << "Mirror schema skew for" << className << "-- station-only:" << onlyStation
+            << "local-only:" << onlyLocal;
     }
 }
 
@@ -720,6 +837,16 @@ void StationClient::handleObjectCreate(const SessionMessage& message)
     if (target == nullptr) {
         return;
     }
+
+    // The deferred half of the schema comparison: this is the first
+    // instance of a class whose schema arrived before anything of that
+    // class existed here. See handleSchema().
+    const auto pending = m_pendingStationSchemas.find(message.className);
+    if (pending != m_pendingStationSchemas.end()) {
+        compareSchema(message.className, pending.value(), target->metaObject());
+        m_pendingStationSchemas.erase(pending);
+    }
+
     applyUpdates(target, message.objectKey, message.updates);
 }
 
@@ -808,15 +935,57 @@ bool StationClient::applyOne(QObject* target, const MirrorProperty& prop,
         return false;
     }
 
-    // Strategy 2: the model's own inbound hook. SliceModel::
-    // signalStrengthDbm lands here (task 12).
-    QString hookReason;
-    const bool invoked = QMetaObject::invokeMethod(
-        target, "applyMirroredValue", Qt::DirectConnection,
-        Q_RETURN_ARG(QString, hookReason), Q_ARG(QByteArray, prop.name),
-        Q_ARG(QVariant, native));
-    if (invoked && hookReason.isEmpty()) {
-        return true;
+    // Strategy 2: the model's own inbound hook -- but ONLY where that hook
+    // is a genuine STATE APPLY, never where it is a COMMAND SENDER.
+    //
+    // This distinction is not fussiness, it is a direction error the
+    // allowlist exists to make structurally impossible. applyMirroredValue
+    // is the DAEMON's inbound path: "a remote peer is asking this model to
+    // do something." Inbound on a CLIENT the same message means the
+    // opposite: "the station reports this is now true." Feeding a state
+    // report into a command sender inverts the link.
+    //
+    // TunerModel is the live case. Its hook answers isOperate / isBypass /
+    // antennaA by calling setOperate() / setBypass() / setAntennaA(), each
+    // of which forwards a command to a bound TgxlConnection. Two things
+    // went wrong before this allowlist:
+    //
+    //   - Those three setters no-op when no tuner is bound and the hook
+    //     still returns success, so on a client isOperate and isBypass
+    //     reported as APPLIED, changed nothing, read stale, and never
+    //     entered m_unapplied -- defeating the accessor Task 20's bench is
+    //     meant to trust.
+    //   - It was inert only because a remote client has no TgxlConnection.
+    //     Bind one and every inbound tuner delta from the station becomes
+    //     an outbound tuner COMMAND from the client.
+    //
+    // Fixed HERE rather than in TunerModel::applyMirroredValue, which was
+    // the other option the review offered. That hook's accept-with-no-tuner
+    // behaviour is deliberate and tested: tst_mirror_inbound's
+    // tunerOperateAndBypassRouteThroughTheHookToTheRealCommandSlots pins it
+    // with the rationale that the mirror is a REMOTE CLICK and must not
+    // diverge from what a local TunerApplet click does, which is also a
+    // silent no-op with no tuner attached. Changing it would overturn a
+    // documented Task 8 decision to fix a problem that only exists on the
+    // client, so the client is where it is fixed.
+    //
+    // So the client consults the hook only for pairs proven to be a plain
+    // state apply. Exactly one today: SliceModel::signalStrengthDbm, whose
+    // hook calls setSignalStrengthDbm(), a plain setter task 12 added for
+    // precisely this path. Adding a pair here means having read the hook
+    // body and confirmed it writes state rather than sending a command.
+    static const QSet<QByteArray> kClientStateApplyHooks = {
+        QByteArrayLiteral("SliceModel.signalStrengthDbm"),
+    };
+    if (kClientStateApplyHooks.contains(skewKey(className, prop.name))) {
+        QString hookReason;
+        const bool invoked = QMetaObject::invokeMethod(
+            target, "applyMirroredValue", Qt::DirectConnection,
+            Q_RETURN_ARG(QString, hookReason), Q_ARG(QByteArray, prop.name),
+            Q_ARG(QVariant, native));
+        if (invoked && hookReason.isEmpty()) {
+            return true;
+        }
     }
 
     // Strategy 3: the client-side adapter, for properties whose hook

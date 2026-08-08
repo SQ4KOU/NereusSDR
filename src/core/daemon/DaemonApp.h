@@ -130,6 +130,7 @@ class QThread;
 namespace NereusSDR {
 
 class RadioModel;
+class StationServer;
 
 // Connects a headless nereusd process to a radio and keeps its slice list
 // in sync with the resolved DaemonConfig. See the file header above for
@@ -213,6 +214,13 @@ public:
     // continues to report it. Only ~DaemonApp() (via the owning
     // unique_ptr) or a later start() destroys/replaces it.
     QThread* widebandThread() const { return m_widebandThread.get(); }
+
+    // Remote Daemon R2 Task 18. nullptr when cfg.remotePort was 0 (the
+    // default: the listener is opt-in, see DaemonConfig.h) or before the
+    // first start(). Test-only for the same reason widebandThread() is:
+    // production code never asks, because start()/stop() own the lifetime
+    // and start() already logs whether the listener came up.
+    StationServer* stationServer() const { return m_stationServer.get(); }
 
     // Test-only seam, only compiled when NEREUS_BUILD_TESTS is defined.
     // Forces the NEXT start() (and every start() after a stop(), since
@@ -298,6 +306,11 @@ private:
     // an empty radio_mac the MAC is not known until discovery answers.
     void applyConfigToSettings(const DaemonConfig& cfg, const QString& mac) const;
 
+    // Remote Daemon R2 Task 18: constructs and starts the wss control
+    // plane when cfg.remotePort is non-zero. Opt-in; a listener that
+    // cannot bind is logged, not fatal. See the definition.
+    void startStationServer(const DaemonConfig& cfg);
+
     // Tops up m_radioModel's slice list to min(cfg.sliceCount,
     // connected-board-maxSlices), starting from however many slices
     // connectToRadio() (or the disconnected-default / primed-board path)
@@ -351,6 +364,15 @@ private:
     void clearFftTopology();
 
     std::unique_ptr<RadioModel> m_radioModel;
+
+    // Remote Daemon R2 Task 18: the wss control plane, constructed only
+    // when cfg.remotePort is non-zero (0 means "do not listen", the
+    // default -- see DaemonConfig.h). Destroyed FIRST in stop(), before
+    // the RadioModel: it owns a StateMirror and an ObjectRegistry holding
+    // QPointers to that model and every SliceModel under it, and it holds
+    // live peer sockets that must be told the station is going away while
+    // there is still a station to speak for.
+    std::unique_ptr<StationServer> m_stationServer;
     FftTopology m_topology;
 
     // R1 Task 11. See widebandThread()'s doc comment above for the

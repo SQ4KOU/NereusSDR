@@ -89,6 +89,18 @@ DaemonConfig DaemonConfig::fromFile(const QString& path, QString* errorOut)
                                   << "slice_count is not a number, keeping"
                                   << cfg.sliceCount << ":" << value;
             }
+        } else if (key == QLatin1String("remote_port")) {
+            bool ok = false;
+            const int v = value.toInt(&ok);
+            if (ok) {
+                cfg.remotePort = v;
+            } else {
+                qCWarning(lcApp) << "nereusd.conf" << path << "line" << lineNo
+                                  << "remote_port is not a number, keeping"
+                                  << cfg.remotePort << ":" << value;
+            }
+        } else if (key == QLatin1String("remote_bind")) {
+            cfg.remoteBind = value;
         } else {
             qCWarning(lcApp) << "nereusd.conf" << path << "line" << lineNo
                               << "unknown key, ignored:" << key;
@@ -114,6 +126,18 @@ bool DaemonConfig::validate(QString* errorOut) const
         if (errorOut) {
             *errorOut = QStringLiteral("sample_rate_hz must be positive, got %1")
                             .arg(sampleRateHz);
+        }
+        return false;
+    }
+    // 0 is the documented "do not listen" value, so only a genuinely
+    // impossible port is rejected. Refusing at parse time rather than
+    // letting bind() fail later means the operator is told which line of
+    // their config is wrong.
+    if (remotePort < 0 || remotePort > 65535) {
+        if (errorOut) {
+            *errorOut = QStringLiteral(
+                            "remote_port must be 0 (disabled) or 1-65535, got %1")
+                            .arg(remotePort);
         }
         return false;
     }

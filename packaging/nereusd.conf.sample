@@ -42,6 +42,28 @@ slice_count = 1
 # Default: (unset -- platform default)
 audio_device =
 
+# TCP port for the remote-control (wss) listener a NereusSDR GUI connects
+# to with --station wss://<host>:<port>. 0 disables the listener entirely,
+# which is the default: nothing needs it until you ask for it, and a daemon
+# that binds a port on first install with a pairing token buried in a log
+# is a worse default than one line of config here.
+#
+# The FIRST time the listener starts, nereusd generates a pairing token and
+# a self-signed TLS certificate and prints both, once, to its log. Copy them
+# to the client: the token authenticates you, and the certificate SHA-256
+# fingerprint is what the client pins. They are stored under the daemon's
+# own profile directory alongside the settings file.
+# Default: 0 (disabled)
+remote_port = 0
+
+# Address the remote-control listener binds. Defaults to loopback, so out
+# of the box the listener is reachable only from this machine even once
+# remote_port is set. Use 0.0.0.0 (or a specific interface address) to
+# accept connections from other machines, and note that doing so is the
+# moment to think about who can reach this port.
+# Default: 127.0.0.1
+remote_bind = 127.0.0.1
+
 # Logging verbosity is NOT set here. Use Qt's own QT_LOGGING_RULES
 # environment variable, which takes precedence over the filter rules
 # NereusSDR installs at startup, and which systemd can set for you:

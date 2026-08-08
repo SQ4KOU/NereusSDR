@@ -75,6 +75,27 @@ struct DaemonConfig {
                                                 // applied later, by R1 Task 10
     QString audioDevice;                       // empty = platform default
 
+    // ── Remote Daemon R2 Task 18: the wss control plane ──────────────────
+    //
+    // remotePort 0 means DO NOT LISTEN, and that is the default on
+    // purpose. A daemon that binds a listener on first install, with a
+    // pairing token printed to a log the operator may not have read, is a
+    // worse default than one line of config: R2's own demo is two
+    // processes on one host (design addendum section 2), so nothing needs
+    // a listener until somebody asks for one. Turning it on is
+    // `remote_port = <port>`.
+    //
+    // remoteBind defaults to loopback for the same reason. An operator who
+    // wants the daemon reachable from another machine sets it explicitly,
+    // which is also the moment they are thinking about who can reach it.
+    //
+    // Both feed StationServer::listen() from DaemonApp::start(); see
+    // packaging/nereusd.conf.sample, and note that a key reaching this
+    // struct must reach behaviour AND the sample, which
+    // tst_daemon_config's sampleFileKeysAndParserKeysAgree pins.
+    int     remotePort {0};
+    QString remoteBind {QStringLiteral("127.0.0.1")};
+
     // Reads and parses `path`. If the file cannot be opened, returns
     // defaults() with *errorOut set to a human-readable message describing
     // why; the caller decides whether that is fatal (src/server_main.cpp
