@@ -45,6 +45,12 @@
 //                 (Important 2) and the local-sweep sabotage detector
 //                 (Minor 1). J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-08-09 -- Fix round 4: the isConnected()-no-longer-implies-a-
+//                 connection precondition (Critical), the TUNE refusal
+//                 and its mirrored-state leak (Important), and the MOX
+//                 button's missing follow of a refusal. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -52,6 +58,7 @@
 #include <QApplication>
 #include <QMap>
 #include <QMetaObject>
+#include <QPushButton>
 #include <QSignalSpy>
 #include <QStringList>
 #include <QWidget>
@@ -65,8 +72,10 @@
 #include "core/settings/SettingsScope.h"
 #include "gui/MainWindow.h"
 #include "gui/SetupDialog.h"
+#include "gui/applets/TxApplet.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "models/TransmitModel.h"
 
 using namespace NereusSDR;
 
@@ -644,6 +653,240 @@ private slots:
         QCOMPARE(outbound.count(), 0);
 
         AppSettings::instance().setRemoteBackend(nullptr);
+    }
+
+    // ====================================================================
+    // Fix round 4, Critical: isConnected() stopped implying a connection.
+    //
+    // Before this branch, RadioModel::isConnected() was
+    // `m_connection && m_connection->isConnected()`, so any caller that
+    // tested it had ALSO tested connection() for null without meaning to.
+    // Task 3 made it storage-backed (m_connectionState == Connected) so a
+    // client that deliberately owns no RadioConnection can report
+    // Connected. Every caller that leaned on the old implication became a
+    // null dereference the moment a station handshake completed.
+    //
+    // The two tests below pin the two halves of what is now true, so the
+    // next reader is not left inferring the implication from the name.
+    // ====================================================================
+
+    // Half one: on a Role::Remote model the implication is FALSE, and that
+    // is the supported steady state, not a transient. This is the exact
+    // precondition MainWindow::onConnectionStateChanged() crashed on.
+    //
+    // setStationConnectionState() is used rather than
+    // applyStationCapabilities() on purpose: it is the narrowest public
+    // writer of the same m_connectionState, so the assertion does not go
+    // stale if the capabilities struct gains or loses a field.
+    void remoteModelReportsConnectedWhileConnectionStaysNull()
+    {
+        RadioModel model(RadioModel::Role::Remote);
+        QVERIFY(!model.isConnected());
+        QVERIFY(model.connection() == nullptr);
+
+        model.setStationConnectionState(ConnectionState::Connected);
+
+        QCOMPARE(model.connectionState(), ConnectionState::Connected);
+        QVERIFY2(model.isConnected(),
+                 "a remote client whose station holds the radio must report "
+                 "Connected; that is the premise of R2");
+        QVERIFY2(model.connection() == nullptr,
+                 "and it must still hold no RadioConnection. Any GUI branch "
+                 "that reads isConnected() and then dereferences connection() "
+                 "runs here, on a null pointer");
+    }
+
+    // Half two, and the non-vacuity for half one: a Role::Local model
+    // cannot be talked into that state. Its connection state has exactly
+    // one writer, its own RadioConnection, so the old implication still
+    // holds for every existing local user. A change that let the storage
+    // be forced on a local model would put local direct mode into the
+    // same shape as the crash above.
+    void localModelConnectionStateCannotBeForcedFromStorage()
+    {
+        RadioModel model;
+        QVERIFY(model.connection() == nullptr);
+        QVERIFY(!model.isConnected());
+
+        model.setStationConnectionState(ConnectionState::Connected);
+
+        QVERIFY2(!model.isConnected(),
+                 "setStationConnectionState must be refused on a local model; "
+                 "if it is not, isConnected() can go true with no connection "
+                 "in local direct mode too");
+        QVERIFY(model.connection() == nullptr);
+    }
+
+    // MainWindow cannot be constructed here (see the file banner), so the
+    // slot that carries the crash is pinned by name only.
+    //
+    // Stated plainly, because it matters: this proves the slot still
+    // exists and is still invokable, so the connect at MainWindow.cpp's
+    // connectionStateChanged wiring cannot be silently unmade by a rename.
+    // It proves NOTHING about the body -- it does not execute one line of
+    // it, and it would pass just as happily with the null dereference
+    // still in place. The guard itself is unreachable from a unit test in
+    // this tree; the two model-side cases above are what state the
+    // precondition, and the audit note in RadioModel.h is what tells the
+    // next author the precondition is real.
+    void mainWindowExposesTheConnectionStateSlot()
+    {
+        const QMetaObject& mo = MainWindow::staticMetaObject;
+        QVERIFY2(mo.indexOfSlot("onConnectionStateChanged()") >= 0,
+                 "MainWindow::onConnectionStateChanged() is not an invokable "
+                 "slot; the connectionStateChanged wiring would be unmade");
+    }
+
+    // ====================================================================
+    // Fix round 4, Important: TUNE is a second door into the transmitter
+    // and it was not gated.
+    //
+    // RadioModel::setTune(true)'s power-on guard is `!isConnected() ||
+    // !m_audioEngine`. Both halves pass on a connected remote model:
+    // isConnected() is storage-backed (above), and m_audioEngine is
+    // constructed unconditionally. MoxController::setTune(true) then sets
+    // PttMode::Manual and m_manualMox and EMITS manualMoxChanged(true)
+    // before it calls setMox(), and only setMox consults the R2 refusal --
+    // so the refusal arrived after the state had already advanced.
+    // ====================================================================
+
+    void remoteModelRefusesTuneBeforeAnyStateAdvances()
+    {
+        RadioModel model(RadioModel::Role::Remote);
+        MoxController* mox = model.moxController();
+        QVERIFY(mox != nullptr);
+        mox->setTimerIntervals(0, 0, 0, 0, 0, 0);
+
+        // The precondition that made the old guard pass.
+        model.setStationConnectionState(ConnectionState::Connected);
+        QVERIFY(model.isConnected());
+
+        QSignalSpy refused(&model, &RadioModel::tuneRefused);
+        QSignalSpy manual(mox, &MoxController::manualMoxChanged);
+        QVERIFY(refused.isValid());
+        QVERIFY(manual.isValid());
+
+        model.setTune(true);
+
+        QCOMPARE(refused.count(), 1);
+        const QString reason = refused.at(0).at(0).toString();
+        QVERIFY2(reason.contains(QStringLiteral("R4")),
+                 qPrintable(QStringLiteral("the refusal must name the phase "
+                                           "that brings TX, the way the MOX "
+                                           "refusal does; got: %1")
+                                .arg(reason)));
+
+        // Nothing may have advanced. manualMoxChanged is the one that
+        // reaches the UI: TxApplet paints the TUNE button "TUNING..." off
+        // it, so an emission here leaves an operator looking at a button
+        // that says the radio is transmitting.
+        QCOMPARE(manual.count(), 0);
+        QVERIFY(!mox->isManualMox());
+        QVERIFY(!mox->isMox());
+        QVERIFY2(!model.isTune(),
+                 "m_isTuning must not latch: nothing clears it on a remote "
+                 "model, because teardownConnection()'s clear sits behind "
+                 "`if (!m_connection) return;`");
+    }
+
+    // The leak this closes does not stop at the client. TransmitModel is
+    // watched for outbound mirroring and MirrorPolicy marks `tune`
+    // Bidirectional, so a client-side TUNE press wrote tune=true on the
+    // DAEMON -- which is what TransmitModel::setPowerUsingTargetDbm reads
+    // to select txMode = 1, silently switching the station's drive-power
+    // source out from under the operator sitting at it.
+    void remoteTuneRefusalWritesNoMirroredTransmitState()
+    {
+        RadioModel model(RadioModel::Role::Remote);
+        model.moxController()->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        model.setStationConnectionState(ConnectionState::Connected);
+
+        const int powerBefore = model.transmitModel().power();
+
+        QSignalSpy tuneChanged(&model.transmitModel(),
+                               &TransmitModel::tuneChanged);
+        QSignalSpy powerChanged(&model.transmitModel(),
+                                &TransmitModel::powerChanged);
+        QVERIFY(tuneChanged.isValid());
+        QVERIFY(powerChanged.isValid());
+
+        model.setTune(true);
+
+        QCOMPARE(tuneChanged.count(), 0);
+        QVERIFY2(!model.transmitModel().isTune(),
+                 "TransmitModel::tune is Bidirectional in MirrorPolicy; "
+                 "setting it here writes it on the station");
+        QCOMPARE(powerChanged.count(), 0);
+        QCOMPARE(model.transmitModel().power(), powerBefore);
+    }
+
+    // Non-vacuity: a Role::Local model must keep refusing TUNE for the
+    // ORIGINAL reason (power off), not the new one. A gate that refused
+    // unconditionally, or that reported the R4 reason locally, would pass
+    // the two cases above and mislead every local user.
+    void localModelStillRefusesTuneForPowerNotForRole()
+    {
+        RadioModel model;
+        model.moxController()->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        QVERIFY(!model.isConnected());
+
+        QSignalSpy refused(&model, &RadioModel::tuneRefused);
+        model.setTune(true);
+
+        QCOMPARE(refused.count(), 1);
+        const QString reason = refused.at(0).at(0).toString();
+        QVERIFY2(reason.contains(QStringLiteral("Power")),
+                 qPrintable(QStringLiteral("local direct mode must still get "
+                                           "the power-on reason; got: %1")
+                                .arg(reason)));
+        QVERIFY2(!reason.contains(QStringLiteral("R4")),
+                 "the remote reason must not leak into local direct mode");
+        QVERIFY(!model.isTune());
+    }
+
+    // ====================================================================
+    // Fix round 4, Important (sibling): the MOX button stayed checked
+    // after a refusal.
+    //
+    // MoxController::setMox(true) returns on rejection without advancing
+    // state, so moxStateChanged never fires -- and moxStateChanged was the
+    // ONLY thing that unchecked the button. Locally that is occasional
+    // (band-plan / interlock rejections). Remotely EVERY press is
+    // rejected, so the button was permanently wrong.
+    // ====================================================================
+
+    void moxButtonUnchecksItselfWhenTheRequestIsRefused()
+    {
+        RadioModel model(RadioModel::Role::Remote);
+        model.moxController()->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        model.setStationConnectionState(ConnectionState::Connected);
+
+        // TxApplet::wireControls() reads m_model->moxController() itself,
+        // from the constructor, so there is nothing to inject.
+        TxApplet applet(&model);
+
+        QPushButton* moxBtn = nullptr;
+        for (QPushButton* b : applet.findChildren<QPushButton*>()) {
+            if (b->accessibleName() == QStringLiteral("MOX transmit")) {
+                moxBtn = b;
+                break;
+            }
+        }
+        QVERIFY2(moxBtn != nullptr,
+                 "MOX button not found by accessible name; the applet's "
+                 "accessible names are the only stable handle a test has");
+
+        QSignalSpy rejected(model.moxController(), &MoxController::moxRejected);
+        QVERIFY(rejected.isValid());
+
+        moxBtn->setChecked(true);
+
+        QCOMPARE(rejected.count(), 1);
+        QVERIFY(!model.moxController()->isMox());
+        QVERIFY2(!moxBtn->isChecked(),
+                 "the button must follow the refusal; leaving it checked "
+                 "tells the operator the radio is transmitting when it is "
+                 "not");
     }
 };
 

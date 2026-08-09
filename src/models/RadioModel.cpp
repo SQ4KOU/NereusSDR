@@ -11970,8 +11970,14 @@ void RadioModel::teardownConnection()
     // every Role::Remote model, because nothing ever assigns m_connection
     // there (connectToRadio() early-returns before the assignment, Task 4).
     // Verified by sabotage: removing the role test below and re-running
-    // tst_remote_gui_gating leaves all 21 cases green, which is what an
-    // unreachable line looks like.
+    // tst_remote_gui_gating leaves EVERY case green, which is what an
+    // unreachable line looks like. Re-verified 2026-08-09.
+    //
+    // The count that used to sit in that sentence ("all 21 cases") is gone
+    // deliberately. It was already wrong by the time it was read -- the
+    // suite had grown to 26 -- and a literal that goes stale on every added
+    // test is the same species of claim as the one this fix round exists to
+    // correct. Say what the sabotage shows, not how many rows scrolled past.
     //
     // Kept anyway, and this is a judgement call rather than a proven need.
     // disconnectFromRadio() is reachable from a remote client's UI (the
@@ -12573,6 +12579,43 @@ void RadioModel::setTune(bool on)
     //     as named comments so the H.3 author knows exactly where to plug in.
 
     if (on) {
+        // ── Remote-daemon R2: refuse TUNE on a Role::Remote model ─────────────
+        //
+        // FIRST, ahead of every state write below, because TUNE is the
+        // second door into the transmitter and the refusal on the first
+        // door arrives too late to cover it. MoxController::setTune(true)
+        // sets PttMode::Manual, sets m_manualMox and EMITS
+        // manualMoxChanged(true) before it calls setMox() -- and setMox()
+        // is the only thing that consults the R2 refusal
+        // (installBandPlanMoxCheck, this file). By the time the refusal
+        // lands the UI has already been told the radio is transmitting.
+        //
+        // The power-on guard below cannot stand in for this. Both of its
+        // halves pass on a connected remote model: isConnected() is
+        // storage-backed as of Task 3 and true whenever the station holds
+        // the radio, and m_audioEngine is constructed unconditionally.
+        //
+        // It does not stop at this process either. TransmitModel is
+        // watched for outbound mirroring and MirrorPolicy.cpp marks `tune`
+        // Bidirectional, so m_transmitModel.setTune(true) below writes
+        // tune=true on the DAEMON, where TransmitModel::setPowerUsingTargetDbm
+        // reads it to select txMode = 1 -- silently switching the station's
+        // drive-power source out from under whoever is sitting at it.
+        //
+        // Routed through tuneRefused so TxApplet's existing handler
+        // unchecks the button, matching the way the MOX refusal reaches
+        // the operator through moxRejected rather than failing silently.
+        // TX in remote mode is R4 in its entirety (docs/architecture/
+        // 2026-08-03-remote-daemon-r2-r3-design-addendum.md section 2).
+        //
+        // Role::Local is untouched: this branch cannot be entered there.
+        if (m_role == Role::Remote) {
+            emit tuneRefused(
+                QStringLiteral("TX is not available on a remote station "
+                               "connection (R4)"));
+            return;
+        }
+
         // ── Power-on guard ─────────────────────────────────────────────────────
         // Cite: console.cs:29983-29991 [v2.10.3.13].
         // Thetis: "if (!PowerOn) { MessageBox.Show(...); chkTUN.Checked = false; return; }"

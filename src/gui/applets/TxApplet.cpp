@@ -1041,6 +1041,32 @@ void TxApplet::wireControls()
             m_updatingFromModel = false;
         });
 
+        // Reverse, the rejection half: MoxController::moxRejected → button
+        // follows the state that actually holds.
+        //
+        // setMox(true) returns on rejection without advancing anything, so
+        // moxStateChanged never fires -- and the connect immediately above
+        // was the ONLY thing that unchecked this button. The user's own
+        // press left it checked and red, reading "transmitting", with the
+        // radio in RX.
+        //
+        // Pre-existing locally, where rejections are occasional (band-plan
+        // and TX-interlock refusals). Remote-daemon R2 is what made it
+        // worth fixing: on a Role::Remote model EVERY press is refused, so
+        // the button was not occasionally wrong, it was permanently wrong.
+        //
+        // isMox() rather than a literal false: setMox() only ever rejects
+        // a TX-on request, but reading the controller keeps the button
+        // following the authority instead of an assumption about which
+        // requests can be refused.
+        connect(mox, &MoxController::moxRejected,
+                this, [this, mox](const QString& /*reason*/) {
+            QSignalBlocker b(m_moxBtn);
+            m_updatingFromModel = true;
+            m_moxBtn->setChecked(mox->isMox());
+            m_updatingFromModel = false;
+        });
+
         // TUNE button checked state driven by manualMoxChanged.
         // manualMoxChanged fires when setTune() sets/clears m_manualMox.
         connect(mox, &MoxController::manualMoxChanged,
