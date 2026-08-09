@@ -289,7 +289,8 @@ void StationServer::close()
 {
     const QList<SessionTransport*> transports = m_peers.keys();
     for (SessionTransport* transport : transports) {
-        dropPeer(transport, QStringLiteral("station shutting down"), true);
+        dropPeer(transport, QStringLiteral("station shutting down"), true,
+                 /*retryable=*/true);
     }
     if (m_wsServer != nullptr) {
         m_wsServer->close();
@@ -381,8 +382,15 @@ void StationServer::acceptTransport(SessionTransport* transport)
     if (m_peers.size() >= kMaxConcurrentPeers) {
         qCWarning(lcStation) << "Refusing connection from" << transport->peerDescription()
                              << ": already at" << kMaxConcurrentPeers << "peers";
+        // RETRYABLE, and this is the one that mattered most. The header
+        // sizes kMaxConcurrentPeers for "one client, and a couple of stale
+        // sockets from a reconnecting client", so this cap is expected to
+        // be hit BY a reconnecting client, transiently, while its own dead
+        // sockets are still draining. Sent as permanent, it told exactly
+        // that client to stop trying forever.
         transport->sendText(SessionMessages::encode(SessionMessages::sessionEnd(
-            QStringLiteral("Station is at its concurrent-connection limit"))));
+            QStringLiteral("Station is at its concurrent-connection limit"),
+            /*retryable=*/true)));
         transport->closeLink(QStringLiteral("peer limit reached"));
         transport->deleteLater();
         return;
@@ -408,7 +416,8 @@ void StationServer::acceptTransport(SessionTransport* transport)
             qCWarning(lcStation) << "Dropping" << it->description
                                  << ": did not authenticate within" << m_authDeadlineMs
                                  << "ms";
-            dropPeer(transport, QStringLiteral("handshake deadline expired"), true);
+            dropPeer(transport, QStringLiteral("handshake deadline expired"), true,
+                     /*retryable=*/true);
         });
         deadline->start();
         peer.authDeadline = deadline;
@@ -446,11 +455,12 @@ void StationServer::acceptTransport(SessionTransport* transport)
 
 void StationServer::onTransportClosed(SessionTransport* transport)
 {
-    dropPeer(transport, QStringLiteral("peer closed the link"), false);
+    dropPeer(transport, QStringLiteral("peer closed the link"), false,
+             /*retryable=*/true);
 }
 
 void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
-                             bool sendSessionEnd)
+                             bool sendSessionEnd, bool retryable)
 {
     auto it = m_peers.find(transport);
     if (it == m_peers.end()) {
@@ -459,7 +469,7 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
     const QString description = it->description;
 
     if (sendSessionEnd) {
-        send(transport, SessionMessages::sessionEnd(reason));
+        send(transport, SessionMessages::sessionEnd(reason, retryable));
     }
     m_peers.erase(it);
 
@@ -540,7 +550,8 @@ void StationServer::onHeartbeatTick()
                 << "Peer" << description << "missed" << it->pingsAwaitingPong
                 << "consecutive pongs; declaring the link dead";
             emit peerHeartbeatTimeout(description);
-            dropPeer(transport, QStringLiteral("heartbeat timeout"), true);
+            dropPeer(transport, QStringLiteral("heartbeat timeout"), true,
+                     /*retryable=*/true);
             continue;
         }
         ++it->pingsAwaitingPong;
@@ -559,7 +570,8 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
 
     SessionMessage message;
     if (!SessionMessages::decode(wire, &message)) {
-        dropPeer(transport, QStringLiteral("undecodable message"), true);
+        dropPeer(transport, QStringLiteral("undecodable message"), true,
+                 /*retryable=*/false);
         return;
     }
 
@@ -577,7 +589,8 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
     if (!it->authenticated) {
         // Everything below this line moves radio or settings state. A peer
         // that has not proved it holds the token gets exactly one answer.
-        dropPeer(transport, QStringLiteral("message sent before authentication"), true);
+        dropPeer(transport, QStringLiteral("message sent before authentication"), true,
+                 /*retryable=*/false);
         return;
     }
 
@@ -611,7 +624,7 @@ void StationServer::handleHello(SessionTransport* transport, const SessionMessag
         return;
     }
     if (it->helloReceived) {
-        dropPeer(transport, QStringLiteral("duplicate hello"), true);
+        dropPeer(transport, QStringLiteral("duplicate hello"), true, /*retryable=*/false);
         return;
     }
     it->helloReceived = true;
@@ -627,7 +640,10 @@ void StationServer::handleHello(SessionTransport* transport, const SessionMessag
                 .arg(message.protocolMajor)
                 .arg(message.protocolMinor);
         qCWarning(lcStation) << reason;
-        dropPeer(transport, reason, true);
+        // NOT retryable: an incompatible wire contract does not become
+        // compatible by being dialed again. The operator has to upgrade
+        // one end.
+        dropPeer(transport, reason, true, /*retryable=*/false);
         return;
     }
 
@@ -660,11 +676,11 @@ void StationServer::handleAuthRequest(SessionTransport* transport,
         return;
     }
     if (!it->helloReceived) {
-        dropPeer(transport, QStringLiteral("auth before hello"), true);
+        dropPeer(transport, QStringLiteral("auth before hello"), true, /*retryable=*/false);
         return;
     }
     if (it->authenticated) {
-        dropPeer(transport, QStringLiteral("duplicate auth"), true);
+        dropPeer(transport, QStringLiteral("duplicate auth"), true, /*retryable=*/false);
         return;
     }
 
@@ -673,13 +689,31 @@ void StationServer::handleAuthRequest(SessionTransport* transport,
     // The candidate token is never logged, at any level, on any path.
     const TokenStore::VerifyResult result = m_tokens->verify(message.token);
     if (result != TokenStore::VerifyResult::Accepted) {
+        // THE distinction TokenStore.h says the two results exist to
+        // preserve, carried through to the client's retry policy.
+        //
+        // RateLimited is retryable: it is transient BY CONSTRUCTION -- the
+        // lockout expires on TokenStore's own timer, and the refusal text
+        // literally says "try again later". Crucially, the rate limiter is
+        // global rather than per-peer (TokenStore.h:44-48 says so outright:
+        // a lockout refuses a connection "including one carrying the
+        // correct token"), so five bad guesses from anyone who can reach
+        // the port refuse the OPERATOR too. Marked permanent, that turned
+        // somebody else's failed guesses into the operator being locked
+        // out of their own station with no automatic recovery.
+        //
+        // Rejected is NOT retryable: the token is simply wrong, redialing
+        // cannot make it right, and a client that retried forever would
+        // feed the very rate limiter above and keep the station locked out
+        // on the operator's own behalf.
+        const bool rateLimited = result == TokenStore::VerifyResult::RateLimited;
         const QString reason =
-            result == TokenStore::VerifyResult::RateLimited
+            rateLimited
                 ? QStringLiteral("Too many failed authentication attempts; try again later")
                 : QStringLiteral("Authentication failed");
-        send(transport, SessionMessages::authResult(false, reason));
+        send(transport, SessionMessages::authResult(false, reason, rateLimited));
         qCWarning(lcStation) << "Authentication refused for" << description << ":" << reason;
-        dropPeer(transport, reason, false);
+        dropPeer(transport, reason, false, rateLimited);
         return;
     }
 
@@ -687,7 +721,7 @@ void StationServer::handleAuthRequest(SessionTransport* transport,
     if (it->authDeadline != nullptr) {
         it->authDeadline->stop();
     }
-    send(transport, SessionMessages::authResult(true, QString()));
+    send(transport, SessionMessages::authResult(true, QString(), /*retryable=*/false));
     promoteToSession(transport);
 }
 
@@ -710,7 +744,14 @@ void StationServer::promoteToSession(SessionTransport* transport)
             QStringLiteral("Displaced by a newer authenticated connection from %1")
                 .arg(description);
         qCInfo(lcStation) << "Preempting session" << displaced << "for" << description;
-        dropPeer(m_session, reason, true);
+        // NOT retryable, and deliberately so even though the CONDITION is
+        // transient. Another authenticated peer has deliberately taken the
+        // session; a displaced client that redialed on a backoff would
+        // preempt the newcomer straight back, and the two would trade the
+        // radio between them indefinitely. Section 7.1 makes the token the
+        // authority, so the most recent authenticated connection wins and
+        // the displaced operator reconnects by hand.
+        dropPeer(m_session, reason, true, /*retryable=*/false);
         emit sessionPreempted(displaced);
     }
 

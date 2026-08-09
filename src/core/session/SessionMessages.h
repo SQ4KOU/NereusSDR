@@ -232,6 +232,26 @@ struct SessionMessage {
     /// CommandResult only. Empty iff accepted.
     QString reason;
 
+    /// AuthResult and SessionEnd only: is the condition that produced this
+    /// refusal TRANSIENT, so a client may sensibly back off and try again?
+    ///
+    /// A free-text `reason` is for the operator; this is for the client's
+    /// retry policy, which must not be built on matching English prose.
+    /// The distinction is load-bearing in both directions. "Station is at
+    /// its concurrent-connection limit" and "too many failed
+    /// authentication attempts" both clear on their own, and treating them
+    /// as permanent is what let a bad actor lock an operator out with no
+    /// automatic recovery. A wrong token and a protocol-major mismatch
+    /// never clear, and retrying either forever is how the rate limiter
+    /// gets fed.
+    ///
+    /// Defaults to FALSE, and decode() reads it leniently rather than
+    /// requiring it: a peer built before this field existed sends no
+    /// "retryable" key, and absent must mean "assume permanent", which is
+    /// both the safe direction and exactly the behaviour that peer's own
+    /// client half had.
+    bool retryable = false;
+
     /// CommandResult only: which object(s) this result is about. The exact
     /// meaning is PER-VERB, not a blanket mutation-diff guarantee:
     ///
@@ -331,8 +351,13 @@ public:
     static SessionMessage authRequest(const QString& token);
 
     /// Daemon to client. A false `accepted` is always followed by the
-    /// daemon closing the socket; `reason` is what the operator sees.
-    static SessionMessage authResult(bool accepted, const QString& reason);
+    /// daemon closing the socket; `reason` is what the operator sees and
+    /// `retryable` is what the client's reconnect policy reads. Both are
+    /// required rather than defaulted, so a refusal cannot be added
+    /// without someone deciding which kind it is. See
+    /// SessionMessage::retryable.
+    static SessionMessage authResult(bool accepted, const QString& reason,
+                                     bool retryable);
 
     /// Daemon to client, after a successful AuthResult. `descriptor` is
     /// StationCapabilities::toUpdates() -- MirrorUpdate reused as a generic
@@ -344,8 +369,9 @@ public:
     /// Daemon to client: this session is over, and why. Sent for a version
     /// refusal, and for the incumbent session when a second authenticated
     /// connection preempts it (parent design section 7.1: "The displaced
-    /// session is told why").
-    static SessionMessage sessionEnd(const QString& reason);
+    /// session is told why"). `retryable` is required for the same reason
+    /// it is on authResult(); see SessionMessage::retryable.
+    static SessionMessage sessionEnd(const QString& reason, bool retryable);
 
     /// Client to daemon: apply these property values to this object. The
     /// mirror-image of a Delta, deliberately a DISTINCT kind rather than a

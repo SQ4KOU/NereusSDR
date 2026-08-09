@@ -972,9 +972,18 @@ void StationClient::onTransportText(const QByteArray& wire)
         handleSettingsReject(message);
         break;
     case SessionMessageKind::SessionEnd:
-        qCWarning(lcStationClient) << "Station ended the session:" << message.reason;
+        qCWarning(lcStationClient) << "Station ended the session:" << message.reason
+                                   << (message.retryable ? "(retryable)" : "(permanent)");
         m_lastError = message.reason;
-        disconnectFromStation(message.reason);
+        // The station's own classification, not this end's guess at one
+        // and not a match against its English prose. Every station-sent
+        // refusal used to take disconnectFromStation()'s default of false,
+        // so "Station is at its concurrent-connection limit" -- a cap the
+        // header explicitly sizes to be hit BY a reconnecting client --
+        // permanently disarmed automatic reconnect. See
+        // SessionMessage::retryable and the classification argued at each
+        // StationServer call site.
+        disconnectFromStation(message.reason, message.retryable);
         break;
     default:
         qCWarning(lcStationClient) << "Ignoring station message of client-only kind:"
@@ -1039,7 +1048,16 @@ void StationClient::handleAuthResult(const SessionMessage& message)
     if (!message.accepted) {
         m_lastError = message.reason;
         qCWarning(lcStationClient) << "Station refused authentication:" << message.reason;
-        disconnectFromStation(message.reason);
+        // A WRONG TOKEN stays permanent; a RATE-LIMITED refusal does not.
+        // The station's rate limiter is global rather than per-peer, so
+        // somebody else's five bad guesses inside 60 s refuse the operator
+        // too (TokenStore.h:44-48). Treated as permanent, that was a
+        // stranger being able to lock the operator out of their own
+        // station until they noticed and reconnected by hand. Retrying is
+        // safe here precisely BECAUSE the wrong-token case is not retried:
+        // this client only comes back when the station said the condition
+        // was temporary.
+        disconnectFromStation(message.reason, message.retryable);
         return;
     }
     m_authenticated = true;

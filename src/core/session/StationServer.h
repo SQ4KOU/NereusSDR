@@ -430,8 +430,14 @@ private:
     /// first.
     void promoteToSession(SessionTransport* transport);
 
+    /// `retryable` rides out on the SessionEnd and tells the client's
+    /// reconnect policy whether the condition that produced this drop
+    /// clears on its own. Required, not defaulted, so a new refusal cannot
+    /// be added without someone deciding which kind it is. See
+    /// SessionMessage::retryable; the classification for each call site is
+    /// argued at the site.
     void dropPeer(SessionTransport* transport, const QString& reason,
-                  bool sendSessionEnd);
+                  bool sendSessionEnd, bool retryable);
     void send(SessionTransport* transport, const SessionMessage& message);
     void sendToSession(const SessionMessage& message);
 

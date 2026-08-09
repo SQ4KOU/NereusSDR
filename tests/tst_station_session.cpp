@@ -223,6 +223,8 @@ private slots:
     void clientCapsWhatAStationCanMakeItAllocate();
     void wsSchemeIsRefusedWhenAFingerprintIsPinned();
     void tokenIsNeverSentOnALinkWhosePinWasNeverChecked();
+    void transientRefusalsStayRetryableAndABadTokenDoesNot();
+    void lockedOutOperatorRetriesButABadTokenDoesNot();
 
     // ---- TLS-specific (QSKIP when the backend is unusable) ----
     void wssListenerComesUpAndCompletesAHandshake();
@@ -953,7 +955,8 @@ void TstStationSession::schemaSkewIsCaughtByNameComparison()
     fakeStationEnd->sendText(SessionMessages::encode(SessionMessages::hello(
         kSessionProtocolMajor, kSessionProtocolMinor, 6, QStringLiteral("station"))));
     fakeStationEnd->sendText(
-        SessionMessages::encode(SessionMessages::authResult(true, QString())));
+        SessionMessages::encode(
+            SessionMessages::authResult(true, QString(), /*retryable=*/false)));
 
     StationCapabilities caps;
     caps.stationName = QStringLiteral("Skewed");
@@ -1572,6 +1575,195 @@ void TstStationSession::tokenIsNeverSentOnALinkWhosePinWasNeverChecked()
     // other slot in this file: the default argument means those keep
     // authenticating exactly as before.
     QVERIFY(StationClient(&clientModel, &proxy).isPinSatisfied());
+}
+
+void TstStationSession::transientRefusalsStayRetryableAndABadTokenDoesNot()
+{
+    // Important 4. Two station-side refusals an operator actually hits are
+    // transient by nature, and both used to take
+    // disconnectFromStation()'s default of attemptReconnect = false, which
+    // PERMANENTLY disarms automatic reconnect:
+    //
+    //   - "Station is at its concurrent-connection limit", a cap
+    //     StationServer.h sizes for "one client, and a couple of stale
+    //     sockets from a reconnecting client" -- so it is expected to be
+    //     hit BY a reconnecting client, which then gave up forever.
+    //   - "Too many failed authentication attempts", where the rate
+    //     limiter is GLOBAL rather than per-peer (TokenStore.h:44-48), so
+    //     a stranger's five bad guesses inside 60 s refuse the operator's
+    //     correct token too.
+    //
+    // A wrong token must stay permanent, because retrying a wrong secret
+    // forever is how the rate limiter above gets fed.
+    //
+    // Asserted on the WIRE FLAG rather than on client timer state, because
+    // that flag is the whole mechanism: the client must not be classifying
+    // refusals by matching the station's English prose.
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(
+        settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+
+    auto stationModel = makeStationRadioModel(0);
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    server.setAuthDeadlineMs(0);  // out of the way; this slot is about refusals
+
+    // ---- Peer-limit refusal ----
+    QList<LoopbackTransport*> held;
+    for (int i = 0; i < StationServer::kMaxConcurrentPeers; ++i) {
+        auto* stationEnd = new LoopbackTransport(QStringLiteral("hold-%1").arg(i), this);
+        auto* clientEnd = new LoopbackTransport(QStringLiteral("hold-%1-c").arg(i), this);
+        stationEnd->linkTo(clientEnd);
+        server.acceptTransport(stationEnd);
+        held.append(clientEnd);
+    }
+    auto* overflowStation = new LoopbackTransport(QStringLiteral("overflow"), this);
+    auto* overflowClient = new LoopbackTransport(QStringLiteral("overflow-c"), this);
+    overflowStation->linkTo(overflowClient);
+    server.acceptTransport(overflowStation);
+
+    QTRY_VERIFY(overflowClient->receivedKinds().contains(QByteArrayLiteral("session.end")));
+    SessionMessage limitEnd;
+    for (const QByteArray& wire : overflowClient->received()) {
+        const SessionMessage m = decodeOrFail(wire);
+        if (m.kind == SessionMessageKind::SessionEnd) {
+            limitEnd = m;
+            break;
+        }
+    }
+    QCOMPARE(limitEnd.kind, SessionMessageKind::SessionEnd);
+    QVERIFY(limitEnd.reason.contains(QStringLiteral("concurrent-connection limit")));
+    QVERIFY2(limitEnd.retryable,
+             "the concurrent-connection cap was sent as permanent, so a "
+             "reconnecting client that hits it gives up forever");
+
+    // ---- Bad token, then the rate limit it produces ----
+    StationServer authServer(stationModel.get(), stationSettings, m_securityDir.path());
+    authServer.setAuthDeadlineMs(0);
+    authServer.setAuthRateLimit(2, 60000);
+
+    // Returns the CLIENT end so the caller can QTRY on it: LoopbackTransport
+    // delivers through the event loop, so reading received() straight after
+    // sendText() sees nothing.
+    auto refuse = [&](const QString& candidate) {
+        auto* stationEnd = new LoopbackTransport(QStringLiteral("guess"), this);
+        auto* clientEnd = new LoopbackTransport(QStringLiteral("guess-c"), this);
+        stationEnd->linkTo(clientEnd);
+        authServer.acceptTransport(stationEnd);
+        clientEnd->sendText(SessionMessages::encode(
+            SessionMessages::hello(kSessionProtocolMajor, kSessionProtocolMinor, 6,
+                                   QStringLiteral("guess"))));
+        clientEnd->sendText(
+            SessionMessages::encode(SessionMessages::authRequest(candidate)));
+        return clientEnd;
+    };
+
+    auto refusalOn = [](LoopbackTransport* end) {
+        SessionMessage result;
+        for (const QByteArray& wire : end->received()) {
+            const SessionMessage m = decodeOrFail(wire);
+            if (m.kind == SessionMessageKind::AuthResult && !m.accepted) {
+                result = m;
+            }
+        }
+        return result;
+    };
+
+    LoopbackTransport* firstEnd = refuse(QStringLiteral("not-the-token"));
+    QTRY_VERIFY(firstEnd->receivedKinds().contains(QByteArrayLiteral("auth.result")));
+    const SessionMessage firstBad = refusalOn(firstEnd);
+    QCOMPARE(firstBad.kind, SessionMessageKind::AuthResult);
+    QCOMPARE(firstBad.reason, QStringLiteral("Authentication failed"));
+    QVERIFY2(!firstBad.retryable,
+             "a wrong token was marked retryable, so a client would redial it "
+             "forever and feed the station's own rate limiter");
+
+    LoopbackTransport* secondEnd = refuse(QStringLiteral("still-not-the-token"));
+    QTRY_VERIFY(secondEnd->receivedKinds().contains(QByteArrayLiteral("auth.result")));
+    const SessionMessage secondBad = refusalOn(secondEnd);
+    QCOMPARE(secondBad.reason, QStringLiteral("Authentication failed"));
+    QVERIFY(!secondBad.retryable);
+
+    // Two failures at a limit of two: the next attempt is rate limited,
+    // and it would be even with the CORRECT token, which is exactly the
+    // lockout this flag has to let the operator recover from.
+    LoopbackTransport* lockedEnd = refuse(authServer.token());
+    QTRY_VERIFY(lockedEnd->receivedKinds().contains(QByteArrayLiteral("auth.result")));
+    const SessionMessage locked = refusalOn(lockedEnd);
+    QCOMPARE(locked.kind, SessionMessageKind::AuthResult);
+    QVERIFY(locked.reason.contains(QStringLiteral("Too many failed")));
+    QVERIFY2(locked.retryable,
+             "a rate-limit lockout was sent as permanent, so a stranger's bad "
+             "guesses lock the operator out with no automatic recovery");
+}
+
+void TstStationSession::lockedOutOperatorRetriesButABadTokenDoesNot()
+{
+    if (!QSslSocket::supportsSsl()) {
+        QSKIP(qPrintable(tlsSkipMessage()));
+    }
+
+    // The client half of Important 4, end to end and over a real dial,
+    // because only a dial latches a redial target for scheduleReconnect().
+    //
+    // The narrative, exactly as an operator meets it: a stranger who can
+    // reach the port guesses wrong, the GLOBAL rate limiter trips
+    // (TokenStore.h:44-48: a lockout refuses a connection "including one
+    // carrying the correct token"), and the operator's own GUI is then
+    // refused. Before this fix that refusal permanently disarmed automatic
+    // reconnect, so the operator stayed locked out until they noticed and
+    // reconnected by hand. Now the GUI backs off and comes back on its own
+    // once the lockout expires.
+    //
+    // Both halves are discriminating. The stranger's wrong token must NOT
+    // re-arm; the operator's rate-limited refusal MUST.
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(
+        settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+
+    auto stationModel = makeStationRadioModel(0);
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    // One failure trips the lockout, so the sequence below is two dials
+    // rather than six.
+    server.setAuthRateLimit(1, 60000);
+    QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.lastError()));
+
+    const QUrl url(QStringLiteral("wss://127.0.0.1:%1").arg(server.serverPort()));
+
+    // ---- The stranger ----
+    RadioModel strangerModel(RadioModel::Role::Remote);
+    SettingsProxy strangerProxy;
+    StationClient stranger(&strangerModel, &strangerProxy);
+    QSignalSpy strangerEnded(&stranger, &StationClient::sessionEnded);
+    stranger.connectToStation(url, QStringLiteral("not-the-token"),
+                              server.certificateFingerprint());
+    QTRY_COMPARE_WITH_TIMEOUT(strangerEnded.count(), 1, 15000);
+    QVERIFY(stranger.lastError().contains(QStringLiteral("Authentication failed")));
+    QVERIFY2(!stranger.isReconnectPending(),
+             "a wrong token re-armed automatic reconnect, which would hammer the "
+             "station's rate limiter and keep the operator locked out");
+
+    // ---- The operator, refused by the stranger's lockout ----
+    RadioModel operatorModel(RadioModel::Role::Remote);
+    SettingsProxy operatorProxy;
+    StationClient op(&operatorModel, &operatorProxy);
+    QSignalSpy opEnded(&op, &StationClient::sessionEnded);
+    op.connectToStation(url, server.token(), server.certificateFingerprint());
+    QTRY_COMPARE_WITH_TIMEOUT(opEnded.count(), 1, 15000);
+    QVERIFY2(op.lastError().contains(QStringLiteral("Too many failed")),
+             qPrintable(op.lastError()));
+    QVERIFY2(op.isReconnectPending(),
+             "the operator's own client gave up permanently on a lockout that "
+             "expires on its own, so a stranger's failed guesses locked them out "
+             "of their own station until they reconnected by hand");
+
+    // Cancel the pending retry before teardown so it cannot fire into a
+    // station this slot is about to close.
+    op.disconnectFromStation(QStringLiteral("test complete"));
+    QVERIFY(!op.isReconnectPending());
+
+    server.close();
 }
 
 // ── TLS ──────────────────────────────────────────────────────────────────

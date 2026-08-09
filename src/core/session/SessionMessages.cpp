@@ -142,12 +142,14 @@ SessionMessage SessionMessages::authRequest(const QString& token)
     return m;
 }
 
-SessionMessage SessionMessages::authResult(bool accepted, const QString& reason)
+SessionMessage SessionMessages::authResult(bool accepted, const QString& reason,
+                                           bool retryable)
 {
     SessionMessage m;
     m.kind = SessionMessageKind::AuthResult;
     m.accepted = accepted;
     m.reason = reason;
+    m.retryable = retryable;
     return m;
 }
 
@@ -159,11 +161,12 @@ SessionMessage SessionMessages::capabilities(const QList<MirrorUpdate>& descript
     return m;
 }
 
-SessionMessage SessionMessages::sessionEnd(const QString& reason)
+SessionMessage SessionMessages::sessionEnd(const QString& reason, bool retryable)
 {
     SessionMessage m;
     m.kind = SessionMessageKind::SessionEnd;
     m.reason = reason;
+    m.retryable = retryable;
     return m;
 }
 
@@ -593,6 +596,7 @@ QByteArray SessionMessages::encode(const SessionMessage& message)
     case SessionMessageKind::AuthResult:
         o.insert(QStringLiteral("accepted"), message.accepted);
         o.insert(QStringLiteral("reason"), message.reason);
+        o.insert(QStringLiteral("retryable"), message.retryable);
         break;
     case SessionMessageKind::Capabilities:
     case SessionMessageKind::SettingsSnapshot: {
@@ -605,6 +609,7 @@ QByteArray SessionMessages::encode(const SessionMessage& message)
     }
     case SessionMessageKind::SessionEnd:
         o.insert(QStringLiteral("reason"), message.reason);
+        o.insert(QStringLiteral("retryable"), message.retryable);
         break;
     case SessionMessageKind::PropertyWrite: {
         o.insert(QStringLiteral("key"), QString::fromUtf8(message.objectKey));
@@ -865,9 +870,16 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
     case SessionMessageKind::AuthResult:
         message.accepted = o.value(QStringLiteral("accepted")).toBool();
         message.reason = o.value(QStringLiteral("reason")).toString();
+        // Read LENIENTLY, unlike "accepted" and "reason" above, which the
+        // validator requires. See SessionMessage::retryable: a peer built
+        // before this field existed sends no such key, and absent has to
+        // mean "assume permanent" -- the safe direction, and exactly what
+        // that peer's own client half did.
+        message.retryable = o.value(QStringLiteral("retryable")).toBool();
         break;
     case SessionMessageKind::SessionEnd:
         message.reason = o.value(QStringLiteral("reason")).toString();
+        message.retryable = o.value(QStringLiteral("retryable")).toBool();
         break;
     case SessionMessageKind::Capabilities:
     case SessionMessageKind::SettingsSnapshot:
