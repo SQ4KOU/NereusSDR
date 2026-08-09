@@ -18,6 +18,11 @@
 //                                    property-write and settings codec.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-08-09  J.J. Boyd / KG4VCF  Whole-branch review, Important 2:
+//                                    range-check the Int64/Enum value
+//                                    before narrowing it to qlonglong.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionMessages.h"
@@ -394,12 +399,43 @@ bool fromJsonValue(MirrorWireKind kind, const QJsonValue& json, QVariant* out)
         *out = QVariant(json.toBool());
         return true;
     case MirrorWireKind::Int64:
-    case MirrorWireKind::Enum:
+    case MirrorWireKind::Enum: {
         if (!json.isDouble()) {
             return false;
         }
-        *out = QVariant(static_cast<qlonglong>(json.toDouble()));
+        // Whole-branch review, Important 2: range-checked BEFORE the
+        // narrowing static_cast<qlonglong>, the same discipline this file
+        // already applies to the ordinal (updateFromJson / fieldFromJson,
+        // below), to the CommandInvoke/CommandResult id, and to Hello's
+        // major/minor/settingsSchema. This was the one place the header
+        // comment's promise about untrusted input was not kept.
+        //
+        // {"value":1e300} parses cleanly and passes the isDouble() gate,
+        // and casting it to qlonglong is a floating-to-integer conversion
+        // of an unrepresentable value: undefined behaviour, and one that
+        // diverges by platform (a saturating result on arm64, the
+        // indefinite value on x86-64), so a developer's Mac and the Pi 4
+        // target would not even agree on the wrong answer. Any UBSan
+        // build trips on it.
+        //
+        // qlonglong's MINIMUM converts to double exactly (it is -2^63);
+        // its MAXIMUM does not (2^63 - 1 rounds UP to 2^63), so the upper
+        // bound has to be the exclusive 2^63 rather than an inexact
+        // max(). Written as the negated minimum so both bounds come from
+        // the type rather than from a transcribed digit string. The
+        // comparison is spelt as a rejection of everything OUTSIDE the
+        // range, which also refuses a NaN (every comparison against one
+        // is false).
+        constexpr double kMinAsDouble =
+            static_cast<double>(std::numeric_limits<qlonglong>::min());
+        constexpr double kOnePastMaxAsDouble = -kMinAsDouble;
+        const double raw = json.toDouble();
+        if (!(raw >= kMinAsDouble && raw < kOnePastMaxAsDouble)) {
+            return false;
+        }
+        *out = QVariant(static_cast<qlonglong>(raw));
         return true;
+    }
     case MirrorWireKind::Float64:
         if (json.isDouble()) {
             *out = QVariant(json.toDouble());

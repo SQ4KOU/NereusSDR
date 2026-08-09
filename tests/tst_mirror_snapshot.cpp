@@ -33,6 +33,7 @@
 #include <QSignalSpy>
 #include <QVariant>
 
+#include "core/WdspTypes.h"
 #include "core/session/MirrorSchema.h"
 #include "core/session/ObjectRegistry.h"
 #include "core/session/SessionMessages.h"
@@ -40,6 +41,8 @@
 #include "models/Band.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+
+#include <limits>
 
 using namespace NereusSDR;
 
@@ -602,6 +605,117 @@ private slots:
         // key) must be rejected the same way as an absent one.
         QVERIFY2(!SessionMessages::decode(QByteArray(R"({"type":"delta","key":5,"properties":[]})"), &out),
                  "a non-string key must be rejected");
+    }
+
+    // ── Int64 / Enum value range (whole-branch review, Important 2) ──────
+
+    // The Int64/Enum value path used to do a bare
+    // static_cast<qlonglong>(json.toDouble()) behind nothing but an
+    // isDouble() gate. {"value":1e300} parses cleanly and isDouble() is
+    // true, so that cast is a floating-to-integer conversion of an
+    // unrepresentable value: undefined behaviour, and platform-divergent
+    // (a saturating result on arm64, the indefinite value on x86-64), so
+    // a developer's Mac and the Pi 4 target would not even agree on the
+    // wrong answer. Any UBSan build trips on it.
+    //
+    // Driven from raw wire bytes on purpose -- the whole defect is what
+    // an attacker-controlled JSON number does on the way in, so a
+    // hand-built MirrorUpdate cannot express it at all.
+    void decodeRejectsIntegerValuesOutsideInt64sRange()
+    {
+        SessionMessage out;
+
+        QVERIFY2(!SessionMessages::decode(
+                     QByteArray(
+                         R"({"type":"delta","key":"slice:0","properties":[{"ordinal":0,"name":"x","kind":"i64","value":1e300}]})"),
+                     &out),
+                 "an i64 value past qlonglong's range must be rejected");
+        QVERIFY2(!SessionMessages::decode(
+                     QByteArray(
+                         R"({"type":"delta","key":"slice:0","properties":[{"ordinal":0,"name":"x","kind":"i64","value":-1e300}]})"),
+                     &out),
+                 "an i64 value below qlonglong's range must be rejected");
+        QVERIFY2(!SessionMessages::decode(
+                     QByteArray(
+                         R"({"type":"delta","key":"slice:0","properties":[{"ordinal":0,"name":"x","kind":"enum","value":1e300}]})"),
+                     &out),
+                 "an enum value past qlonglong's range must be rejected");
+
+        // The exact boundary. 2^63 is representable as a double but not
+        // as a qlonglong, so it is the first value that must be refused;
+        // -2^63 IS qlonglong's minimum and must still be accepted, as
+        // must the largest double strictly below 2^63.
+        QVERIFY2(!SessionMessages::decode(
+                     QByteArray(
+                         R"({"type":"delta","key":"slice:0","properties":[{"ordinal":0,"name":"x","kind":"i64","value":9223372036854775808}]})"),
+                     &out),
+                 "2^63 is one past qlonglong's maximum and must be rejected");
+        QVERIFY2(SessionMessages::decode(
+                     QByteArray(
+                         R"({"type":"delta","key":"slice:0","properties":[{"ordinal":0,"name":"x","kind":"i64","value":-9223372036854775808}]})"),
+                     &out),
+                 "-2^63 is qlonglong's minimum and must still be accepted");
+        QCOMPARE(out.updates.first().value.toLongLong(),
+                 std::numeric_limits<qlonglong>::min());
+        QVERIFY2(SessionMessages::decode(
+                     QByteArray(
+                         R"({"type":"delta","key":"slice:0","properties":[{"ordinal":0,"name":"x","kind":"i64","value":9223372036854774784}]})"),
+                     &out),
+                 "the largest double below 2^63 must still be accepted");
+        QCOMPARE(out.updates.first().value.toLongLong(), Q_INT64_C(9223372036854774784));
+
+        // Ordinary values are untouched by the check.
+        QVERIFY(SessionMessages::decode(
+            QByteArray(
+                R"({"type":"delta","key":"slice:0","properties":[{"ordinal":0,"name":"x","kind":"i64","value":0}]})"),
+            &out));
+        QCOMPARE(out.updates.first().value.toLongLong(), Q_INT64_C(0));
+        QVERIFY(SessionMessages::decode(
+            QByteArray(
+                R"({"type":"delta","key":"slice:0","properties":[{"ordinal":0,"name":"x","kind":"enum","value":6}]})"),
+            &out));
+        QCOMPARE(out.updates.first().value.toLongLong(), Q_INT64_C(6));
+    }
+
+    // The companion to the case above, and the one the reviewer asked for
+    // by shape: bytes produced from a LIVE model rather than from a
+    // hand-written MirrorUpdate literal. Every Int64- and Enum-kind
+    // property of a real SliceModel is read through MirrorSchema, encoded,
+    // decoded, and compared -- so a range check that were too tight would
+    // fail here rather than only showing up on a bench.
+    void everyIntegerPropertyOfALiveSliceSurvivesTheJsonRoundTrip()
+    {
+        RadioModel model;
+        model.configureStreamPool(5, 5, 192000);
+        const int id = model.addSlice(QStringLiteral("pan-a"));
+        SliceModel* slice = model.sliceById(id);
+        QVERIFY(slice != nullptr);
+        slice->setFrequency(14200000.0);
+        slice->setDspMode(DSPMode::AM);
+        slice->setStepHz(1000);
+
+        const MirrorSchema& schema = MirrorSchema::forObject(slice);
+        QList<MirrorUpdate> bag;
+        for (const MirrorProperty& prop : schema.properties()) {
+            if (prop.kind != MirrorWireKind::Int64 && prop.kind != MirrorWireKind::Enum) {
+                continue;
+            }
+            const QVariant live = schema.read(prop, slice);
+            QVERIFY2(live.isValid(), prop.name.constData());
+            bag.append(MirrorUpdate{ prop.ordinal, prop.name, prop.kind, live });
+        }
+        QVERIFY2(bag.size() >= 12, "a real SliceModel must carry integer and enum properties");
+
+        const QByteArray wire =
+            SessionMessages::encode(SessionMessages::delta(ObjectRegistry::keyForSlice(id), bag));
+        SessionMessage back;
+        QVERIFY2(SessionMessages::decode(wire, &back), wire.constData());
+        QCOMPARE(back.updates.size(), bag.size());
+        for (int i = 0; i < bag.size(); ++i) {
+            QCOMPARE(back.updates.at(i).name, bag.at(i).name);
+            QCOMPARE(back.updates.at(i).kind, bag.at(i).kind);
+            QCOMPARE(back.updates.at(i).value.toLongLong(), bag.at(i).value.toLongLong());
+        }
     }
 
     // The companion to the "missing" cases above: a genuinely PRESENT but
