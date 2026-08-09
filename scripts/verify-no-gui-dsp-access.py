@@ -121,8 +121,13 @@ def check_rx_channel_for_slice_inventory() -> int:
                 stripped = line.strip()
                 if _is_comment_line(stripped):
                     continue
-                if FOR_SLICE_PATTERN.search(line):
-                    found[rel] = found.get(rel, 0) + 1
+                # findall, not search: two calls on one physical line must
+                # count as two, or a second call appended to an already
+                # matching line would leave the total unchanged and slip
+                # past the very check that exists to catch it.
+                hits = len(FOR_SLICE_PATTERN.findall(line))
+                if hits:
+                    found[rel] = found.get(rel, 0) + hits
                     sites.setdefault(rel, []).append(f"{rel}:{num}: {stripped}")
 
     failures = []
