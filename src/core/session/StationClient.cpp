@@ -238,11 +238,20 @@ void StationClient::connectToStation(const QUrl& url, const QString& token,
                                      const QString& expectedFingerprint,
                                      bool allowUnpinned)
 {
-    // A DELIBERATE, fresh attempt -- the very first connect, or an
-    // operator manually reconnecting after giving up -- always starts the
-    // backoff over. dialStation(), the redial entry onReconnectTimeout()
-    // also uses, deliberately does NOT do this (Task 19).
-    m_reconnectAttempts = 0;
+    // Fix round 1, Important 2. Every OTHER entry into connectToStation()
+    // cancels a pending retry as a side effect of reaching attachTransport()
+    // (which does this too, unconditionally, for the case where a caller
+    // reconnects by hand while a backoff wait is still counting down). The
+    // empty-fingerprint refusal below returns BEFORE ever reaching
+    // dialStation() and therefore attachTransport(), so without this
+    // explicit stop here, a retry armed by an earlier failed dial survived
+    // an unrelated refused attempt at a DIFFERENT station untouched, and
+    // would go on to silently redial the FIRST station once its backoff
+    // elapsed -- an operator who tried station B and was told the
+    // connection was refused would, moments later, find the GUI connected
+    // to station A instead, unprompted. Stopped here, unconditionally,
+    // before any other logic runs, so it also covers the refusal path.
+    m_reconnectTimer->stop();
 
     // FIRST error wins for the rest of this connection attempt. A pinning
     // refusal is followed immediately by the socket errors it causes
@@ -259,6 +268,17 @@ void StationClient::connectToStation(const QUrl& url, const QString& token,
         emit sessionEnded(m_lastError);
         return;
     }
+
+    // A DELIBERATE, fresh attempt that is actually going to DIAL -- the
+    // very first connect, or an operator manually reconnecting after
+    // giving up -- always starts the backoff over. Moved below the
+    // refusal check (fix round 1, Important 2): resetting it for a call
+    // that never reaches dialStation() would silently reset the schedule
+    // of a DIFFERENT, still-relevant retry sequence that happens to be
+    // between attempts (timer briefly inactive, mid-redial) at the exact
+    // moment an unrelated refusal runs. dialStation()'s own redial entry,
+    // onReconnectTimeout(), deliberately does not reset this at all.
+    m_reconnectAttempts = 0;
 
     dialStation(url, token, expectedFingerprint, allowUnpinned);
 }
@@ -367,6 +387,21 @@ void StationClient::dialStation(const QUrl& url, const QString& token,
 
 void StationClient::startSession(SessionTransport* transport, const QString& token)
 {
+    // Fix round 1, Minor 3. Without this, a client that once dialed via
+    // connectToStation() (latching m_lastUrl to something real) and LATER
+    // runs a startSession()-based seam session -- this suite's own pattern
+    // for the manual-reconnect half of the link-loss narrative, and a
+    // legitimate production sequence too if a caller ever mixes the two
+    // entry points -- would keep the STALE latch from the earlier real
+    // dial. A retry-eligible close of the SEAM session would then
+    // scheduleReconnect() find m_lastUrl still valid and silently redial
+    // the earlier, unrelated target. Invalidating it here is what makes
+    // the class comment's claim -- "nothing to redial" for a
+    // startSession()-based session -- actually true rather than true only
+    // for a client that has never dialed at all.
+    m_lastUrl.clear();
+    m_lastFingerprint.clear();
+    m_lastAllowUnpinned = false;
     attachTransport(transport, token);
 }
 
@@ -486,10 +521,13 @@ void StationClient::onTransportClosed()
               /*attemptReconnect=*/true);
 }
 
-// The single place a session ends, so sessionEnded() fires EXACTLY ONCE
+// The single place a session ends, so sessionEnded() fires AT MOST ONCE
 // per attach no matter which of the six paths got here (peer close, socket
 // error, heartbeat timeout, station SessionEnd, version refusal, auth
-// refusal).
+// refusal). Not "exactly once" (fix round 1, Minor 7): an attach that is
+// SUPERSEDED by a fresh attachTransport() before its own endSession() ever
+// runs is released silently, with no sessionEnded for it at all -- see
+// the header's own note on this method for the covering test.
 //
 // The previous shape emitted only `if (m_handshakeComplete)`, which swallowed
 // the two failures that matter most:
@@ -522,6 +560,29 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect)
     m_linkUp = false;
     m_heartbeatTimer->stop();
     m_writeFlushTimer->stop();
+
+    // Fix round 1, Important 1: disconnect the dead transport's signals to
+    // this object. Without this, m_transport stays fully wired
+    // (onTransportText, onTransportClosed, the pongReceived lambda) for
+    // the entire stale window even though the session it belonged to has
+    // just ended -- onTransportText() has no m_sessionActive gate of its
+    // own (only the heartbeat-start check does), so a frame arriving late
+    // on this SAME transport is dispatched in full, and a buffered
+    // SnapshotComplete would silently re-set m_handshakeComplete /
+    // m_everConnected / m_forwardLocalChanges with no sessionEnded ever
+    // firing for the attach that just ended. Exactly the case this
+    // subsystem exists to prevent: a link that resumes after a heartbeat
+    // timeout, delivering a frame that was already in flight when the
+    // timeout was declared. Mirrors attachTransport()'s identical
+    // disconnect for a superseded transport. Deliberately does NOT null
+    // m_transport: disconnectFromStation()'s subsequent closeLink() call
+    // is a direct call on the object itself, not a signal delivery, and is
+    // unaffected by severing its signals TO this object; the pointer stays
+    // valid until the next attachTransport() releases it the same way a
+    // superseded transport is released.
+    if (m_transport != nullptr) {
+        disconnect(m_transport, nullptr, this, nullptr);
+    }
 
     // Task 19 step 2: mirror teardown. All three describe THIS session and
     // none may survive it:
@@ -665,8 +726,14 @@ void StationClient::scheduleReconnect()
 
     qCInfo(lcStationClient) << "Scheduling reconnect attempt" << m_reconnectAttempts
                             << "in" << delayMs << "ms";
-    emit reconnectScheduled(m_reconnectAttempts, delayMs);
+    // Fix round 1, Minor 8: start BEFORE emitting. A directly-connected
+    // slot that reacts to reconnectScheduled() by cancelling (e.g. an
+    // operator's own "stop retrying" control) must see an ALREADY-ARMED
+    // timer to cancel; emitting first would let such a slot's
+    // isReconnectPending() read false and its own stop() call be
+    // overridden a moment later by the start() below.
     m_reconnectTimer->start(delayMs);
+    emit reconnectScheduled(m_reconnectAttempts, delayMs);
 }
 
 void StationClient::onReconnectTimeout()

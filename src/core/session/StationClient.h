@@ -409,11 +409,19 @@ private:
     void onTransportText(const QByteArray& wire);
     void onTransportClosed();
 
-    /// The single place a session ends. Emits sessionEnded() EXACTLY ONCE
+    /// The single place a session ends. Emits sessionEnded() AT MOST ONCE
     /// per attachTransport(), whichever of the six paths reached it (peer
     /// close, socket error, heartbeat timeout, the station's own
     /// SessionEnd, a version refusal, an auth refusal). Idempotent: a
-    /// second call for the same attach returns without emitting.
+    /// second call for the same attach returns without emitting. Fix
+    /// round 1, Minor 7: worded "at most once", not "exactly once" -- an
+    /// attach that is SUPERSEDED by a fresh attachTransport() before its
+    /// own endSession() ever runs (a reconnect landing on top of a stale
+    /// transport that never got the chance to report) is released
+    /// silently, with no sessionEnded for it at all.
+    /// staleTransportErrorDoesNotTearDownAFreshlyAttachedSession in
+    /// tst_session_link_loss.cpp pins exactly this: nine superseded
+    /// attaches, zero sessionEnded emissions for any of them.
     /// `attemptReconnect` (Task 19) is disconnectFromStation()'s own
     /// parameter, threaded through: true arms the reconnect timer once
     /// the mirror teardown and connection-state transition below have
@@ -544,12 +552,17 @@ private:
 
     /// Latched by dialStation() so onReconnectTimeout() can redial
     /// identically. Invalid (QUrl().isValid() == false) for a session
-    /// that was never dialed via connectToStation() -- the startSession()
-    /// transport-seam path used by every non-TLS test in this suite and by
-    /// this task's own tst_session_link_loss.cpp for the mirror-teardown
-    /// and stale-state assertions. scheduleReconnect() checks this before
-    /// arming anything, which is what keeps that path from ever being
-    /// auto-retried: there is nothing to redial.
+    /// established via startSession() -- the transport-seam path used by
+    /// every non-TLS test in this suite and by this task's own
+    /// tst_session_link_loss.cpp for the mirror-teardown and stale-state
+    /// assertions -- because startSession() explicitly clears it (fix
+    /// round 1, Minor 3): a client that once dialed via connectToStation()
+    /// and later runs a startSession()-based seam session would otherwise
+    /// keep the STALE latch from the earlier real dial, and a
+    /// retry-eligible close of the seam session would silently redial that
+    /// unrelated earlier target. scheduleReconnect() checks this before
+    /// arming anything, which is what keeps a session with nothing latched
+    /// from ever being auto-retried: there is nothing to redial.
     QUrl m_lastUrl;
     QString m_lastFingerprint;
     bool m_lastAllowUnpinned = false;

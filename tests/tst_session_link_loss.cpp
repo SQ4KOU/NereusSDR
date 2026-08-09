@@ -56,11 +56,13 @@
 #include <QTemporaryDir>
 #include <QUrl>
 
+#include <algorithm>
 #include <memory>
 
 #include "core/AppSettings.h"
 #include "core/ConnectionState.h"
 #include "core/security/CertificateStore.h"
+#include "core/session/SessionMessages.h"
 #include "core/session/SessionTransport.h"
 #include "core/session/StationCapabilities.h"
 #include "core/session/StationClient.h"
@@ -142,6 +144,12 @@ private slots:
     void autoReconnectUsesOwnedCancellableTimerWithExponentialBackoff();
     void staleTransportErrorDoesNotTearDownAFreshlyAttachedSession();
     void daemonRefusalDoesNotArmAutomaticReconnect();
+
+    // ---- Fix round 1 ----
+    void lateFrameOnADeadTransportCannotExitTheStaleState();
+    void unpinnedRefusalDoesNotLeaveAPendingRetryArmed();
+    void startSessionClearsAnyPreviouslyLatchedRedialTarget();
+    void automaticRetryReconnectsToASuccessfulHandshake();
 
 private:
     /// One temp dir for the whole class so the RSA-3072 key pair is
@@ -346,10 +354,18 @@ void TstSessionLinkLoss::silentlyDeadPeerIsDetectedNotJustACleanClose()
     stationEnd->setAnswersPings(false);
 
     // Detection happens WITHIN the configured interval/miss count, not
-    // never. 5000/2000 ms are generous ceilings for QTRY's own polling,
-    // not the expected time -- the real interval was driven down above.
-    QTRY_COMPARE_WITH_TIMEOUT(timedOut.count(), 1, 5000);
-    QTRY_COMPARE_WITH_TIMEOUT(ended.count(), 1, 2000);
+    // never. Fix round 1, Minor 5: the ceiling is DERIVED from the live
+    // configuration (heartbeatIntervalMs() * maxMissedPongs(), theoretical
+    // minimum 40 ms here) rather than a hardcoded 5000/2000 ms -- 125x and
+    // 50x the theoretical minimum respectively, loose enough that a
+    // regression making detection take three seconds would still have
+    // passed. x10 plus a 500 ms floor for QTest's own polling granularity
+    // stays comfortably clear of CI jitter while still catching a
+    // regression an order of magnitude slower than expected.
+    const int detectionDeadlineMs =
+        std::max(500, client.heartbeatIntervalMs() * client.maxMissedPongs() * 10);
+    QTRY_COMPARE_WITH_TIMEOUT(timedOut.count(), 1, detectionDeadlineMs);
+    QTRY_COMPARE_WITH_TIMEOUT(ended.count(), 1, detectionDeadlineMs);
     QCOMPARE(ended.first().first().toString(), QStringLiteral("heartbeat timeout"));
 
     // The pings really went out, against the LIVE configured value:
@@ -416,10 +432,16 @@ void TstSessionLinkLoss::autoReconnectUsesOwnedCancellableTimerWithExponentialBa
     const QUrl deadUrl(QStringLiteral("wss://127.0.0.1:%1").arg(deadPort));
     client.connectToStation(deadUrl, QStringLiteral("token"), placeholderFingerprint());
 
+    // Fix round 1, Minor 6: no isReconnectPending() check at THIS step.
+    // QTRY_COMPARE_WITH_TIMEOUT polls roughly every 50 ms against a 200 ms
+    // window here, so under load the timer can already have fired by the
+    // time control returns from a successful poll -- a flake, not a
+    // finding. The load-bearing pending-ness assertions below are safe:
+    // they land inside the much wider 1000 ms window reached after the
+    // third scheduled attempt.
     QTRY_COMPARE_WITH_TIMEOUT(scheduled.count(), 1, 5000);
     QCOMPARE(scheduled.at(0).at(0).toInt(), 1);
     QCOMPARE(scheduled.at(0).at(1).toInt(), 200);   // backoff step 1 * unit 200
-    QVERIFY2(client.isReconnectPending(), "the retry timer was not armed");
 
     QTRY_COMPARE_WITH_TIMEOUT(scheduled.count(), 2, 5000);
     QCOMPARE(scheduled.at(1).at(0).toInt(), 2);
@@ -623,6 +645,274 @@ void TstSessionLinkLoss::daemonRefusalDoesNotArmAutomaticReconnect()
     QCOMPARE(ended.count(), 1);
     QCOMPARE(scheduled.count(), 0);
     QVERIFY(!client.isReconnectPending());
+
+    server.close();
+}
+
+// ── Fix round 1 ──────────────────────────────────────────────────────────
+
+void TstSessionLinkLoss::lateFrameOnADeadTransportCannotExitTheStaleState()
+{
+    // Review Important 1. endSession() cleared the mirror and drove
+    // Disconnected but never disconnected m_transport's signals to this
+    // object, and onTransportText() has no m_sessionActive gate of its
+    // own -- only the heartbeat-start check does. So a frame arriving on
+    // the SAME, now-dead transport after the session has ended used to be
+    // dispatched in full, and a buffered SnapshotComplete would silently
+    // re-set m_handshakeComplete / m_everConnected / m_forwardLocalChanges
+    // with no sessionEnded ever firing for the attach that just ended.
+    // Exactly the case this subsystem exists to prevent: a link that
+    // resumes after a heartbeat timeout, delivering a frame that was
+    // already in flight when the timeout was declared.
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+    auto stationModel = makeStationRadioModel(0);
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    // Isolate: this slot is about the CLIENT's own detection and its
+    // aftermath, not the station's heartbeat.
+    server.setHeartbeatIntervalMs(0);
+
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+    client.setHeartbeatIntervalMs(20);
+    client.setMaxMissedPongs(2);
+
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("silent-station"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
+    stationEnd->linkTo(clientEnd);
+
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    QSignalSpy ended(&client, &StationClient::sessionEnded);
+    client.startSession(clientEnd, server.token());
+    server.acceptTransport(stationEnd);
+    QTRY_COMPARE(completed.count(), 1);
+
+    stationEnd->setAnswersPings(false);
+    QTRY_COMPARE_WITH_TIMEOUT(ended.count(), 1, 5000);
+    QVERIFY2(client.isStale(), "the session did not enter the stale state to test exiting from");
+    QVERIFY(!client.isHandshakeComplete());
+
+    // Simulate a frame that was ALREADY in flight when the timeout was
+    // declared, landing now. This bypasses LoopbackTransport::deliver()'s
+    // own m_open bookkeeping (already flipped false by disconnectFromStation()'s
+    // closeLink() call) by invoking the textReceived SIGNAL directly --
+    // exactly the shape an already-buffered byte stream delivers on a real
+    // socket regardless of an application-level close() having run
+    // meanwhile. Signals are invokable by name via QMetaObject::invokeMethod
+    // (Qt's own documented behaviour: invoking a signal this way emits it,
+    // reaching every connected slot exactly as a real emission would).
+    QSignalSpy completedAfterStale(&client, &StationClient::handshakeComplete);
+    const QByteArray lateFrame = SessionMessages::encode(SessionMessages::snapshotComplete());
+    QVERIFY2(QMetaObject::invokeMethod(clientEnd, "textReceived", Qt::DirectConnection,
+                                       Q_ARG(QByteArray, lateFrame)),
+             "could not invoke textReceived by name -- check the signal name/signature");
+
+    QVERIFY2(client.isStale(),
+             "a frame on the dead transport silently exited the defined stale state");
+    QVERIFY2(!client.isHandshakeComplete(),
+             "a frame on the dead transport silently re-completed the handshake");
+    QCOMPARE(completedAfterStale.count(), 0);
+    QVERIFY(!clientModel.isConnected());
+    QVERIFY2(client.mirroredObjectKeys().isEmpty(),
+             "a frame on the dead transport repopulated the mirror registry");
+}
+
+void TstSessionLinkLoss::unpinnedRefusalDoesNotLeaveAPendingRetryArmed()
+{
+    if (!QSslSocket::supportsSsl()) {
+        QSKIP(qPrintable(tlsSkipMessage()));
+    }
+
+    // Review Important 2, the carried item this task had judged
+    // unreachable. connectToStation() resets m_reconnectAttempts, then
+    // returns on the empty-fingerprint refusal without ever reaching
+    // dialStation() -- and therefore without ever reaching
+    // attachTransport()'s m_reconnectTimer->stop(). Every OTHER entry into
+    // connectToStation() cancels a pending retry as a side effect of
+    // attaching; this one did not, so a retry armed by an earlier failed
+    // dial (station "A") survived an unrelated refused attempt at station
+    // "B" and would go on to silently redial A.
+    QTcpServer probe;
+    QVERIFY(probe.listen(QHostAddress::LocalHost, 0));
+    const quint16 deadPort = probe.serverPort();
+    probe.close();
+
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+    auto stationModel = makeStationRadioModel(0);
+    // Real StationServer purely as a source of a well-formed token and
+    // fingerprint to latch -- never listened on, so this dial is doomed.
+    StationServer stationA(stationModel.get(), stationSettings, m_securityDir.path());
+
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+    client.setReconnectBackoffUnitMs(50);
+
+    QSignalSpy scheduled(&client, &StationClient::reconnectScheduled);
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+
+    // Dial "A" against a dead port: fails, arms a retry latched to A's own
+    // token and fingerprint.
+    const QUrl urlA(QStringLiteral("wss://127.0.0.1:%1").arg(deadPort));
+    client.connectToStation(urlA, stationA.token(), stationA.certificateFingerprint());
+    QTRY_COMPARE_WITH_TIMEOUT(scheduled.count(), 1, 5000);
+    QVERIFY2(client.isReconnectPending(), "no retry was armed to test cancellation against");
+
+    // The operator tries "B" -- any URL, since the refusal fires on the
+    // empty fingerprint before any socket is ever touched -- and is
+    // refused for an unrelated reason (no pin, no allowUnpinned).
+    QSignalSpy ended(&client, &StationClient::sessionEnded);
+    client.connectToStation(QUrl(QStringLiteral("wss://127.0.0.1:1")),
+                            QStringLiteral("irrelevant-token"), QString());
+    QCOMPARE(ended.count(), 1);
+
+    QVERIFY2(!client.isReconnectPending(),
+             "an unpinned refusal to a DIFFERENT station left a pending retry armed to the "
+             "previous one");
+
+    // No redial to A occurs: wait comfortably longer than the original
+    // scheduled delay (50 ms) and confirm nothing further was scheduled
+    // and no handshake ever completed out of nowhere.
+    QTest::qWait(500);
+    QCOMPARE(scheduled.count(), 1);
+    QCOMPARE(completed.count(), 0);
+    QVERIFY(!client.isReconnectPending());
+}
+
+void TstSessionLinkLoss::startSessionClearsAnyPreviouslyLatchedRedialTarget()
+{
+    // Minor 3. StationClient.h's own comment on m_lastUrl claimed a
+    // startSession()-based (transport-seam) session can never auto-retry
+    // because it never latches a URL -- true only for a client that has
+    // never dialed via connectToStation() at all. A client that once
+    // dialed and later runs a startSession() seam session (this suite's
+    // own pattern for the manual-reconnect half of the link-loss
+    // narrative) keeps the STALE m_lastUrl/m_token/m_lastFingerprint from
+    // the earlier real dial, so a retry-eligible close of the
+    // startSession()-based session would auto-dial that stale target.
+    if (!QSslSocket::supportsSsl()) {
+        QSKIP(qPrintable(tlsSkipMessage()));
+    }
+
+    QTcpServer probe;
+    QVERIFY(probe.listen(QHostAddress::LocalHost, 0));
+    const quint16 deadPort = probe.serverPort();
+    probe.close();
+
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+    auto stationModel = makeStationRadioModel(0);
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.lastError()));
+
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    QSignalSpy scheduled(&client, &StationClient::reconnectScheduled);
+
+    // A real, successful dial via connectToStation() -- this is what
+    // latches m_lastUrl to something real and dialable.
+    const QUrl realUrl(QStringLiteral("wss://127.0.0.1:%1").arg(server.serverPort()));
+    client.connectToStation(realUrl, server.token(), server.certificateFingerprint());
+    QTRY_COMPARE_WITH_TIMEOUT(completed.count(), 1, 15000);
+    server.close();
+
+    // Now a startSession()-based (transport-seam) session, exactly this
+    // suite's own manual-reconnect pattern, and a retry-eligible closure
+    // of IT.
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("seam-station"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("seam-client"), this);
+    stationEnd->linkTo(clientEnd);
+    QTemporaryDir settingsDir2;
+    QVERIFY(settingsDir2.isValid());
+    AppSettings stationSettings2(settingsDir2.filePath(QStringLiteral("NereusSDR.settings")));
+    auto stationModel2 = makeStationRadioModel(0);
+    StationServer seamServer(stationModel2.get(), stationSettings2, m_securityDir.path());
+    client.startSession(clientEnd, seamServer.token());
+    seamServer.acceptTransport(stationEnd);
+    QTRY_COMPARE(completed.count(), 2);
+
+    stationEnd->closeLink(QStringLiteral("simulated: seam session also dies"));
+    QTest::qWait(300);
+
+    QVERIFY2(!client.isReconnectPending(),
+             "a startSession()-based session auto-retried against a stale latched URL from an "
+             "earlier connectToStation() dial");
+    QCOMPARE(scheduled.count(), 0);
+}
+
+void TstSessionLinkLoss::automaticRetryReconnectsToASuccessfulHandshake()
+{
+    if (!QSslSocket::supportsSsl()) {
+        QSKIP(qPrintable(tlsSkipMessage()));
+    }
+
+    // Minor 4, graded the most valuable of the six: no existing slot drove
+    // an automatic reconnect all the way to a successful handshake.
+    // autoReconnectUsesOwnedCancellableTimerWithExponentialBackoff only
+    // ever dials a dead port and stops at cancellation; both convergence
+    // slots (killedDaemon..., silentlyDeadPeer...) reconnect MANUALLY, via
+    // a second startSession()/connectToStation() call the TEST itself
+    // makes, never letting onReconnectTimeout()'s own timer fire the
+    // successful redial. So onReconnectTimeout()'s relatch of token and
+    // fingerprint into a WORKING session was untested, and so was outbound
+    // forwarding after a reconnect via resolveOrCreate()'s re-watch when
+    // reached by the automatic path. This is the headline bench row:
+    // "kill nereusd, restart it, the GUI returns unaided" -- nothing in
+    // this slot calls startSession() or connectToStation() a second time.
+    QTcpServer probe;
+    QVERIFY(probe.listen(QHostAddress::LocalHost, 0));
+    const quint16 port = probe.serverPort();
+    probe.close();
+
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+    auto stationModel = makeStationRadioModel(0);
+    // Constructed now, purely as a source of the token/fingerprint the
+    // client latches on its first (doomed) dial, but not LISTENING yet --
+    // this is "the daemon has not started back up" half of the scenario.
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+    client.setReconnectBackoffUnitMs(50);
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    QSignalSpy scheduled(&client, &StationClient::reconnectScheduled);
+
+    const QUrl url(QStringLiteral("wss://127.0.0.1:%1").arg(port));
+    client.connectToStation(url, server.token(), server.certificateFingerprint());
+    QTRY_COMPARE_WITH_TIMEOUT(scheduled.count(), 1, 5000);
+    QVERIFY(client.isReconnectPending());
+    QVERIFY(!client.isHandshakeComplete());
+
+    // The daemon comes up, on the exact port the already-armed retry is
+    // targeting -- unaided by anything else this test does.
+    QVERIFY2(server.listen(QHostAddress::LocalHost, port), qPrintable(server.lastError()));
+
+    // The retry timer fires ON ITS OWN and completes the handshake.
+    // Nothing here calls startSession() or connectToStation() again.
+    QTRY_COMPARE_WITH_TIMEOUT(completed.count(), 1, 5000);
+    QVERIFY(client.isHandshakeComplete());
+    QVERIFY(clientModel.isConnected());
+    QVERIFY(!client.isStale());
+    QVERIFY(!client.mirroredObjectKeys().isEmpty());
+
+    // Outbound forwarding over the auto-reconnected session, exercising
+    // resolveOrCreate()'s re-watch via the AUTOMATIC path rather than a
+    // manually re-driven one.
+    SliceModel* stationSlice = stationModel->slices().first();
+    SliceModel* clientSlice = clientModel.sliceById(stationSlice->sliceIndex());
+    QVERIFY(clientSlice != nullptr);
+    clientSlice->setFrequency(21050000.0);
+    QTRY_COMPARE(stationSlice->frequency(), 21050000.0);
 
     server.close();
 }
