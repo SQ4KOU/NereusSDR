@@ -67,11 +67,25 @@ using NereusSDR::Test::ConnectableRadioModel;
 namespace {
 
 // Trivial concrete IStationLink so attachStation()/detachStation() have
-// something non-null to hold. IStationLink itself declares no methods
-// yet (see the header comment), so there is nothing to override.
+// something non-null to hold. Every verb refuses: this file's assertions
+// are about a Role::Remote model being INERT, so a link that pretended to
+// send would be the wrong stand-in. The command routing itself is covered
+// by tst_remote_slice_commands.cpp against a real StationClient.
 class NullStationLink : public NereusSDR::IStationLink {
 public:
     ~NullStationLink() override = default;
+
+    CommandOutcome requestAddSlice(const QString&) override { return refused(); }
+    CommandOutcome requestAddSliceOnPan(const QString&) override { return refused(); }
+    CommandOutcome requestRemoveSlice(int) override { return refused(); }
+    CommandOutcome requestActiveSlice(int) override { return refused(); }
+    CommandOutcome requestSliceSampleRate(int, int) override { return refused(); }
+
+private:
+    static CommandOutcome refused()
+    {
+        return CommandOutcome{ false, QStringLiteral("NullStationLink sends nothing") };
+    }
 };
 
 } // namespace
@@ -216,7 +230,15 @@ private slots:
     {
         RadioModel model{RadioModel::Role::Remote};
 
-        const int sliceId = model.addSlice();
+        // addSliceWithStationId, not addSlice. On a Role::Remote model
+        // addSlice() is now a WIRE VERB (RadioModel.h): it asks the
+        // station for a slice and returns -1, because the id is the
+        // station's to mint. addSliceWithStationId is the inbound
+        // creator, and it reaches the same addSliceImpl body -- the same
+        // unconditional frequencyChanged handler, the same
+        // syncToSliceList -- so every assertion below is unchanged. The
+        // same substitution is made in the two slots after this one.
+        const int sliceId = model.addSliceWithStationId(0);
         QVERIFY(sliceId >= 0);
         SliceModel* slice = model.sliceById(sliceId);
         QVERIFY(slice != nullptr);
@@ -273,7 +295,7 @@ private slots:
     {
         RadioModel model{RadioModel::Role::Remote};
 
-        const int sliceId = model.addSlice();
+        const int sliceId = model.addSliceWithStationId(0);  // see (a) above
         QVERIFY(sliceId >= 0);
         SliceModel* slice = model.sliceById(sliceId);
         QVERIFY(slice != nullptr);
@@ -298,7 +320,7 @@ private slots:
     {
         RadioModel model{RadioModel::Role::Remote};
 
-        const int sliceId = model.addSlice();
+        const int sliceId = model.addSliceWithStationId(0);  // see (a) above
         QVERIFY(sliceId >= 0);
         SliceModel* slice = model.sliceById(sliceId);
         QVERIFY(slice != nullptr);

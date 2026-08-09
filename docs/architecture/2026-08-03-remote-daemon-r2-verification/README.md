@@ -533,20 +533,57 @@ do. Expect them greyed out on the bench and do not file it.
 
 ---
 
-### Step 5: the acceptance run (STATUS: OPEN, and row 5.13 is BLOCKED)
+### Step 5: the acceptance run (STATUS: OPEN; row 5.13 was BLOCKED, now UNBLOCKED)
 
-> **Row 5.13 cannot pass as the branch stands, and the cause is a gap in the
-> plan rather than in any one task.** The whole-branch review found that
-> `StationClient::invokeCommand()` has **zero callers**: the GUI's slice
-> controls call `RadioModel` directly, so on a remote client an active-slice
-> click flips `active` locally, the mirror correctly refuses to send a
-> daemon-authoritative property outbound, and the daemon never learns. Add-slice
-> mints a client-local slice the station has never heard of. Task 4 created
-> `IStationLink` as the attach point with a header note that a later task would
-> grow it once it had a real call to make; no later task was assigned that work,
-> and the interface is still empty. Escalated to the maintainer rather than
-> improvised around. Until it is resolved, treat 5.13 as blocked and read
-> 5.10 through 5.12 as covering property mirroring only, not command verbs.
+> **Row 5.13 was blocked, and is not any more. Read the row description
+> below before running it: what it checks has changed shape.**
+>
+> The whole-branch review found that `StationClient::invokeCommand()` had
+> **zero callers**. The GUI's slice controls called `RadioModel` directly, so
+> on a remote client an active-slice click flipped `active` locally, the
+> mirror correctly refused to send a daemon-authoritative property outbound,
+> the daemon never learned, and with nothing changed on the daemon there was
+> no corrective delta coming back: a silent, permanent divergence. Add-slice
+> minted a client-local slice the station had never heard of. Task 4 created
+> `IStationLink` as the attach point with a header note that a later task
+> would grow it once it had a real call to make; no later task was assigned
+> that work.
+>
+> **What now ships.** `IStationLink` carries the five verbs
+> `SessionCommandDispatcher` already accepts (`addSlice`, `addSliceOnPan`,
+> `removeSlice`, `setActiveSliceById`, `requestSliceSampleRate`).
+> `StationClient` implements it and attaches itself to the `RadioModel` in its
+> constructor. `RadioModel`'s five slice-mutating entry points route to the
+> link when `role() == Role::Remote` **instead of** mutating locally.
+> `tests/tst_remote_slice_commands.cpp` pins the whole path end to end,
+> against a real `StationServer` over the in-process transport, asserting on
+> the DAEMON's own `RadioModel`.
+>
+> **Three things the bench must watch for, because they are what a test on
+> one host cannot show:**
+>
+> 1. **Latency is now visible in the UI.** A remote click is asynchronous by
+>    construction: nothing moves locally until the daemon has acted and the
+>    delta has come back. On a LAN that is one `StationServer::
+>    kDefaultDeltaFlushMs` tick (50 ms) plus the round trip. Over a real
+>    internet path in R5 it will be longer, and there is **no pending-state
+>    UI** for the gap. A flag that takes a beat to highlight is expected
+>    behaviour, not a defect. File it if it feels bad; do not file it as
+>    "the click did nothing" without watching for the deferred update.
+> 2. **Refusals arrive as toasts.** The station's own reason is relayed
+>    verbatim onto `sliceAddRejected` (4 s toast) or, for rate changes,
+>    `sliceRetuneRejected` (6 s toast). If a refusal toast shows this
+>    client's wording rather than the daemon's, that is a defect.
+> 3. **`addSliceOnPan` carries a `panId` the daemon interprets on its own
+>    terms.** It is honest, not faked: the daemon stamps it as `panKey` and
+>    derives its stream placement from whether that pan already holds slices,
+>    and `panKey` mirrors back. But the client's pan LAYOUT is client-owned
+>    and `RadioModel::addPanadapter()` still has no production caller, so a
+>    slice added onto a second pan is placed by the daemon against the daemon's
+>    view of that pan id. Check where a second pan's slice actually lands.
+>
+> Rows 5.10 through 5.12 still cover property mirroring only. 5.13 is the one
+> row that covers command verbs.
 
 **Bench hardware: the ANAN-G2E, never the ANAN-G2.** The G2 is a different
 radio reachable on the same LAN and is explicitly excluded. Confirm the
@@ -570,7 +607,7 @@ Two processes, one host. `nereusd` holds the radio; the GUI holds nothing.
 | 5.10 | VFO, band, mode, filter round-trip and the radio follows | **yes** | OPEN |
 | 5.11 | AGC, NR, NB, SNB, APF, squelch round-trip | **yes** | OPEN |
 | 5.12 | RIT, XIT, antenna round-trip | **yes** | OPEN |
-| 5.13 | Add slice, remove slice, TX slice display | **yes** | **BLOCKED** (see below) |
+| 5.13 | Add slice, remove slice, set active slice, per-slice sample rate: the command verbs reach the daemon, the daemon acts, and the answer comes back through the mirror. A refusal shows the STATION's wording. Nothing moves on the client before the daemon has spoken. See the note above. | **yes** | OPEN (was BLOCKED) |
 | 5.14 | Per-slice S-meter needles are live | **yes** | OPEN |
 | 5.15 | Setup pages round-trip station settings both ways | **yes** | OPEN |
 | 5.16 | `unappliedProperties()` reports exactly the 13 TunerModel entries | no | OPEN |
@@ -893,7 +930,7 @@ than only in the ledger, because the pattern is the reusable part.
 
 | # | What | Why no per-task review could see it | Status |
 | --- | --- | --- | --- |
-| 1 | The GUI never issues the command verbs. `StationClient::invokeCommand()` has zero callers, so an active-slice click or an add-slice never leaves the client. | Task 11 built the verbs, task 18 built the session, task 20 gated the GUI. **No task was assigned to connect them.** Task 4's `IStationLink` seam is still an empty interface. | **OPEN**, escalated to the maintainer |
+| 1 | The GUI never issues the command verbs. `StationClient::invokeCommand()` has zero callers, so an active-slice click or an add-slice never leaves the client. | Task 11 built the verbs, task 18 built the session, task 20 gated the GUI. **No task was assigned to connect them.** Task 4's `IStationLink` seam was still an empty interface. | Fixed. `IStationLink` grew the five verbs, `StationClient` implements it and attaches itself, and `RadioModel`'s five slice-mutating entry points route to the link in `Role::Remote` instead of mutating locally. Pinned end to end by `tests/tst_remote_slice_commands.cpp`. Row 5.13 unblocked. |
 | 2 | The remote GUI crashed on handshake: `connection()->radioInfo()` guarded only by `isConnected()`. | Task 3 changed `isConnected()` from a pointer test to a stored state, so the guard stopped implying a non-null pointer. The caller is in a different file and was written months earlier. | Fixed, `29744d76` |
 | 3 | The first-run pairing banner printed a fingerprint with 25 of 32 bytes destroyed. | The redactor's MAC pattern and the banner were written by different tasks. A colon-separated hex fingerprint is exactly the shape of a MAC. | Fixed, `fa95d6de` |
 | 4 | No incoming message cap on the station listener: about 2 GiB per message per socket, entirely pre-authentication. | The precedent lives in `TciServer.cpp`, a file the session work had no reason to open. | Fixed, `edac6eaa` |

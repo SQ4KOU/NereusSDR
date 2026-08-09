@@ -2278,6 +2278,18 @@ QMap<QString, QString> kvsFromSpot(const NereusSDR::DxSpot& spot,
     return kvs;
 }
 
+// Remote-daemon R2: what a Role::Remote model tells the operator when the
+// click had nowhere to go. One wording, in one place, for all five slice
+// command verbs, because all five fail this way for the same reason: the
+// GUI is in remote mode and there is no established session behind it,
+// which is where a remote client sits before its first handshake and
+// again after a link loss. `action` names the thing that did not happen,
+// so the toast reads as a sentence.
+QString noStationReason(const QString& action)
+{
+    return QStringLiteral("Not connected to a station, so %1 was not sent.").arg(action);
+}
+
 }  // namespace
 
 void RadioModel::onClusterSpotReceived(const DxSpot& spot)
@@ -3188,6 +3200,70 @@ int RadioModel::addSliceWithStationId(int sliceId, const QString& initialPanId)
         return -1;
     }
     return addSliceImpl(sliceId, initialPanId);
+}
+
+// ── Remote-daemon R2: the station's answers coming back ────────────────────
+//
+// See RadioModel.h for why these exist. All three are the inbound twins of
+// the outbound command routing in addSlice / addSliceOnPan / removeSlice /
+// setActiveSliceById / requestSliceSampleRate below, and all three refuse
+// on a Role::Local model for the same reason applyStationCapabilities and
+// setStationConnectionState do: a local model's slice list has exactly one
+// authority, its own operator, and letting a second one in is how the two
+// silently disagree.
+
+void RadioModel::removeSliceWithStationId(int sliceId)
+{
+    if (m_role != Role::Remote) {
+        qCWarning(lcConnection)
+            << "removeSliceWithStationId ignored on a Role::Local model: local"
+            << "slices are removed by their own operator, not by a station";
+        return;
+    }
+    removeSliceImpl(sliceId);
+}
+
+void RadioModel::applyStationActiveSlice(int sliceId)
+{
+    if (m_role != Role::Remote) {
+        qCWarning(lcConnection)
+            << "applyStationActiveSlice ignored on a Role::Local model: its active"
+            << "slice is chosen here, not reported to it";
+        return;
+    }
+    SliceModel* target = sliceById(sliceId);
+    if (target == nullptr) {
+        // Ordinary, not an error: an `active` delta can land in the same
+        // batch as the create it belongs to, or name a slice this client
+        // has already reaped. The create's own snapshot carries `active`
+        // too, so nothing is lost by ignoring it here.
+        return;
+    }
+    const int position = m_slices.indexOf(target);
+    if (position < 0) {
+        return;
+    }
+    // The LOCAL body, deliberately. Everything the daemon did when it made
+    // this slice active (clear the previous flag, move m_activeSlice, emit
+    // both the positional and the id-based signal) has to happen here too,
+    // and setActiveSlice is where all of it already lives.
+    setActiveSlice(position);
+}
+
+void RadioModel::reportStationSliceCommandRejected(const QString& reason)
+{
+    if (m_role != Role::Remote) {
+        return;
+    }
+    emit sliceAddRejected(reason);
+}
+
+void RadioModel::reportStationRetuneRejected(int sliceId, const QString& reason)
+{
+    if (m_role != Role::Remote) {
+        return;
+    }
+    emit sliceRetuneRejected(sliceId, reason);
 }
 
 // ── RX meter calibration offset (Thetis-faithful port) ──────────────────────
@@ -4159,6 +4235,29 @@ void RadioModel::applyRestoredSampleRate(SliceModel* slice)
 
 void RadioModel::requestSliceSampleRate(int sliceId, int rateHz)
 {
+    // Remote-daemon R2: the daemon owns the DDC windows, so a remote
+    // operator's rate change is a request sent to it, never a local
+    // retune. Deliberately no local sliceById() pre-check ahead of the
+    // send, unlike setActiveSliceById below: this entry point returns
+    // void, so it owes the caller no synchronous verdict, and the
+    // station's own reason ("no such slice", or a refusal from its
+    // allocator) is the one worth putting in front of an operator. It
+    // comes back through reportStationRetuneRejected().
+    if (m_role == Role::Remote) {
+        const QString action =
+            QStringLiteral("the sample-rate change to %1 kHz").arg(rateHz / 1000);
+        if (m_station == nullptr) {
+            emit sliceRetuneRejected(sliceId, noStationReason(action));
+            return;
+        }
+        const IStationLink::CommandOutcome outcome =
+            m_station->requestSliceSampleRate(sliceId, rateHz);
+        if (!outcome.sent) {
+            emit sliceRetuneRejected(sliceId, outcome.reason);
+        }
+        return;
+    }
+
     // Phase 3F Sub-Epic I closeout, defect G2. Resolve by ID, not by list
     // position: VfoWidget carries SliceModel::sliceIndex(), and addSlice /
     // removeSlice never renumber survivors, so the two diverge after any
@@ -4775,6 +4874,29 @@ bool RadioModel::requestTxHandoffToSlice(int sliceId)
 
 int RadioModel::addSlice(const QString& initialPanId)
 {
+    // Remote-daemon R2: a remote client must not mint a slice id. Ids are
+    // the STATION's (addSliceWithStationId's comment has the full reason),
+    // so a local mint here would produce a slice the daemon has never
+    // heard of, sitting on an id that will collide with a real one the
+    // moment the station creates its next slice.
+    //
+    // Returns -1 unconditionally on this path. That is not a rejection: it
+    // is this entry point saying it did not mint an id, which is exactly
+    // true. The slice arrives later through addSliceWithStationId().
+    if (m_role == Role::Remote) {
+        const QString action = QStringLiteral("the request for a new slice");
+        if (m_station == nullptr) {
+            emit sliceAddRejected(noStationReason(action));
+            return -1;
+        }
+        const IStationLink::CommandOutcome outcome =
+            m_station->requestAddSlice(initialPanId);
+        if (!outcome.sent) {
+            emit sliceAddRejected(outcome.reason);
+        }
+        return -1;
+    }
+
     // Remote-daemon R2 Task 18: -1 means "mint the lowest free id", which
     // is the only thing this entry point has ever done and the only thing
     // it does now. The body moved to addSliceImpl so a remote client can
@@ -5215,6 +5337,34 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId)
 // by sliceIndex()).
 void RadioModel::removeSlice(int sliceId)
 {
+    // Remote-daemon R2: the operator's "close this slice" click. Sent, not
+    // applied. Removing it here would take the flag off screen while the
+    // daemon kept demodulating the slice, and the mirror would have no
+    // corrective delta to send back because nothing on the daemon changed.
+    //
+    // Deliberately no local pre-checks (no "does it exist", no "is it the
+    // last one"): the station enforces both, with reasons this client
+    // relays rather than duplicates, and duplicating them here is what
+    // would make a bench see the CLIENT's wording for a refusal the
+    // STATION made. removeSliceWithStationId() is the door the session's
+    // own inbound object.destroy comes through.
+    if (m_role == Role::Remote) {
+        const QString action = QStringLiteral("the request to close this slice");
+        if (m_station == nullptr) {
+            emit sliceAddRejected(noStationReason(action));
+            return;
+        }
+        const IStationLink::CommandOutcome outcome = m_station->requestRemoveSlice(sliceId);
+        if (!outcome.sent) {
+            emit sliceAddRejected(outcome.reason);
+        }
+        return;
+    }
+    removeSliceImpl(sliceId);
+}
+
+void RadioModel::removeSliceImpl(int sliceId)
+{
     const int position = m_slices.indexOf(sliceById(sliceId));
     if (position < 0) {
         return;
@@ -5306,6 +5456,34 @@ void RadioModel::removeSlice(int sliceId)
 // (+RX button handler).
 void RadioModel::addSliceOnPan(const QString& panId)
 {
+    // Remote-daemon R2: sent as its own verb rather than falling through
+    // to addSlice's Role::Remote branch, because the two are not the same
+    // request on the daemon. addSliceOnPan derives its stream placement
+    // from whether `panId` already holds slices (see the openingANewPan
+    // comment in addSliceImpl), so collapsing this into addSlice would
+    // silently ask for the cheapest placement and put a second pan's
+    // slice on the first pan's DDC, tuning the two in lockstep. Design
+    // addendum section 6.1: "routes pan-affecting creation through
+    // addSliceOnPan".
+    //
+    // Ahead of the maxSlices() cap check below, on purpose. On a remote
+    // client that cap is the STATION's to enforce, and reading it here
+    // before the handshake has landed a capability descriptor gives the
+    // disconnected default of 1, so a local check would refuse every
+    // legitimate add with a cap reason that is not the real one.
+    if (m_role == Role::Remote) {
+        const QString action = QStringLiteral("the request for a new slice");
+        if (m_station == nullptr) {
+            emit sliceAddRejected(noStationReason(action));
+            return;
+        }
+        const IStationLink::CommandOutcome outcome = m_station->requestAddSliceOnPan(panId);
+        if (!outcome.sent) {
+            emit sliceAddRejected(outcome.reason);
+        }
+        return;
+    }
+
     if (m_slices.size() >= maxSlices()) {
         // Surface a human-readable cap reason for the status-bar / toast
         // wiring landing in Sub-Epic C Tasks 8-9.  RadioInfo.name carries
@@ -5973,6 +6151,39 @@ void RadioModel::emitActiveSliceChanged(int index)
 
 bool RadioModel::setActiveSliceById(int sliceId)
 {
+    // Remote-daemon R2: THE defect this round exists to close. Before it,
+    // this ran the local body on a Role::Remote model, flipped
+    // SliceModel::active on the client, and stopped there. `active` is
+    // Outbound in MirrorPolicy, so the mirror correctly refused to send
+    // it, nothing changed on the daemon, and with nothing changed there
+    // was no corrective delta to put it back: the client and the station
+    // disagreed about which slice was active, permanently and silently.
+    //
+    // Nothing is flipped here now. The one thing checked locally is
+    // whether this client's own mirrored slice list holds the id at all,
+    // because this entry point owes its caller a synchronous bool and
+    // that list is a faithful copy of the station's. That is a read of
+    // mirrored state, not an optimistic write.
+    if (m_role == Role::Remote) {
+        const QString action =
+            QStringLiteral("the request to make slice %1 active").arg(sliceId);
+        if (sliceById(sliceId) == nullptr) {
+            emit sliceAddRejected(
+                QStringLiteral("Slice %1 is not on this station.").arg(sliceId));
+            return false;
+        }
+        if (m_station == nullptr) {
+            emit sliceAddRejected(noStationReason(action));
+            return false;
+        }
+        const IStationLink::CommandOutcome outcome = m_station->requestActiveSlice(sliceId);
+        if (!outcome.sent) {
+            emit sliceAddRejected(outcome.reason);
+            return false;
+        }
+        return true;
+    }
+
     SliceModel* target = sliceById(sliceId);
     if (target == nullptr) { return false; }
 

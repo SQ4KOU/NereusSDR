@@ -217,6 +217,12 @@
 //                                    the stale-transport-error fix above).
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-08-09  J.J. Boyd / KG4VCF  Remote daemon R2: implement
+//                                    IStationLink, so the GUI's slice
+//                                    controls actually reach the daemon.
+//                                    invokeCommand() had zero callers.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -227,6 +233,7 @@
 #include <QString>
 #include <QUrl>
 
+#include "core/session/IStationLink.h"
 #include "core/session/MirrorSchema.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StateMirror.h"
@@ -242,7 +249,11 @@ class RadioModel;
 class SessionTransport;
 class SettingsProxy;
 
-class StationClient : public QObject {
+/// QObject first, deliberately: moc requires the QObject base to come
+/// first, and IStationLink is a plain abstract interface with no metatype
+/// involvement, so the pair compose without any virtual-inheritance
+/// gymnastics.
+class StationClient : public QObject, public IStationLink {
     Q_OBJECT
 
 public:
@@ -413,7 +424,35 @@ public:
     /// Send a command verb (SessionCommandDispatcher's five) to the
     /// station. Returns the commandId the result will echo, or 0 when
     /// there is no session.
+    ///
+    /// The generic form. Prefer the IStationLink overrides below for the
+    /// five verbs that have one: they also REMEMBER the verb and the
+    /// slice it named, which is what lets a refusal come back to the
+    /// operator on the right signal instead of being counted and
+    /// forgotten.
     quint32 invokeCommand(const QByteArray& verb, const QList<MirrorUpdate>& arguments);
+
+    // ── IStationLink: the operator's clicks leaving this process ─────────
+    //
+    // Attached to the RadioModel in this class's CONSTRUCTOR and detached
+    // in its destructor, not at handshake and link loss. The model has a
+    // link for the whole life of a remote-mode GUI, and whether a command
+    // can actually be sent right now is invokeCommand()'s existing
+    // question (no transport, or not yet authenticated) rather than a
+    // second piece of attach/detach state to keep in step with it. A
+    // click before the first handshake, or during a reconnect backoff,
+    // therefore reaches the operator as "the session is not established"
+    // rather than doing something locally.
+    //
+    // Each records {verb, sliceId} against the commandId it returns, so
+    // handleCommandResult() can route a refusal to sliceRetuneRejected
+    // (rate changes, which carry a slice id) or sliceAddRejected
+    // (everything else). See the .cpp for the map's bound.
+    CommandOutcome requestAddSlice(const QString& initialPanId) override;
+    CommandOutcome requestAddSliceOnPan(const QString& panId) override;
+    CommandOutcome requestRemoveSlice(int sliceId) override;
+    CommandOutcome requestActiveSlice(int sliceId) override;
+    CommandOutcome requestSliceSampleRate(int sliceId, int rateHz) override;
 
     void setHeartbeatIntervalMs(int ms);
     int heartbeatIntervalMs() const { return m_heartbeatIntervalMs; }
@@ -527,6 +566,19 @@ private:
     void handleObjectCreate(const SessionMessage& message);
     void handleObjectDestroy(const SessionMessage& message);
     void handleDelta(const SessionMessage& message);
+
+    /// The station's verdict on a command this client sent. Clears the
+    /// pending entry either way, and puts a refusal in front of the
+    /// operator through the RadioModel signal that already reaches
+    /// MainWindow's toast for that kind of refusal.
+    void handleCommandResult(const SessionMessage& message);
+
+    /// Shared tail of the five IStationLink overrides: send, remember,
+    /// and turn "there is no session" into a sentence an operator can
+    /// read. `sliceId` is -1 for the verbs that name no slice.
+    CommandOutcome sendCommand(const QByteArray& verb, int sliceId,
+                               const QList<MirrorUpdate>& arguments,
+                               const QString& action);
     void handleSettingsValue(const SessionMessage& message);
     void handleSettingsReject(const SessionMessage& message);
 
@@ -614,6 +666,16 @@ private:
     int m_pingsAwaitingPong = 0;
 
     quint32 m_nextCommandId = 1;
+
+    /// What each in-flight command was about, keyed by the commandId the
+    /// station echoes back. A CommandResult carries the verb but no slice
+    /// id, and a REFUSAL carries no affectedKeys either, so the id the
+    /// operator's refusal message needs exists only here.
+    struct PendingCommand {
+        QByteArray verb;
+        int sliceId = -1;
+    };
+    QHash<quint32, PendingCommand> m_pendingCommands;
 
     // ---- Task 19: stale state and session epoch ----
 

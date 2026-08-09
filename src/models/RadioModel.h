@@ -348,6 +348,55 @@ public:
     /// use here, or this is a Role::Local model.
     int addSliceWithStationId(int sliceId, const QString& initialPanId = QString());
 
+    // ── Remote-daemon R2: the station's answers coming back ─────────────
+    //
+    // The three entry points below are the INBOUND half of the command
+    // routing added alongside them (see the Role::Remote branches in
+    // addSlice / addSliceOnPan / removeSlice / setActiveSliceById /
+    // requestSliceSampleRate). They exist because the outbound half turns
+    // those five entry points into wire verbs on a Role::Remote model, so
+    // the session can no longer reach the local bodies through them: a
+    // StationClient calling removeSlice() to apply the daemon's OWN
+    // object.destroy would bounce that destroy straight back at the
+    // daemon as a fresh removeSlice command.
+    //
+    // Same shape and same reasoning as addSliceWithStationId above, which
+    // was already the inbound half of creation for exactly this reason.
+
+    /// Remove the slice the STATION has destroyed. Role::Remote only.
+    ///
+    /// The inbound twin of addSliceWithStationId: this is the daemon's
+    /// object.destroy landing, not an operator asking for a removal, so
+    /// it runs the local removal body rather than sending a verb.
+    void removeSliceWithStationId(int sliceId);
+
+    /// Adopt the station's choice of active slice. Role::Remote only.
+    ///
+    /// SliceModel::active alone is not enough. StationClient applies the
+    /// mirrored `active` flag onto each SliceModel, but RadioModel's own
+    /// m_activeSlice pointer is moved only by setActiveSlice(), so
+    /// without this every activeSlice()-reading surface on a remote GUI
+    /// (the container S-meter, the RX applet, the DSP menu, the band
+    /// buttons) stays stranded on whichever slice was created first.
+    /// Silently ignores an id this client does not hold.
+    void applyStationActiveSlice(int sliceId);
+
+    /// The station refused a slice command this client sent, with its own
+    /// reason. Role::Remote only.
+    ///
+    /// Routed to sliceAddRejected, the channel MainWindow already toasts
+    /// (MainWindow.cpp, the sliceAddRejected connect). A remote refusal
+    /// that reached no operator-facing signal would be indistinguishable
+    /// from the silent divergence this whole round exists to close: the
+    /// click does nothing and nothing says why.
+    void reportStationSliceCommandRejected(const QString& reason);
+
+    /// The station refused a sample-rate change, with its own reason.
+    /// Role::Remote only. Routed to sliceRetuneRejected, which carries the
+    /// slice id and is separately toasted by MainWindow, because that is
+    /// the signal a rate or retune refusal already uses locally.
+    void reportStationRetuneRejected(int sliceId, const QString& reason);
+
     // ── Remote-daemon R2 Task 20: the local-DSP capability gate ─────────
     //
     // The single authority a GUI surface asks before reaching for anything
@@ -932,6 +981,13 @@ public:
     /// This is the body of MainWindow's sampleRateRequested handler, factored
     /// out so both flag-wiring sites share it and so it is reachable from a
     /// test without a MainWindow.
+    ///
+    /// Remote-daemon R2: on a Role::Remote model this SENDS the
+    /// requestSliceSampleRate verb and returns, applying nothing locally.
+    /// Deliberately no local pre-check on the id: the daemon owns the
+    /// slice list and its refusal reason is the one the operator needs,
+    /// relayed onto sliceRetuneRejected by
+    /// reportStationRetuneRejected().
     void requestSliceSampleRate(int sliceId, int rateHz);
 
     /// Push a slice's just-restored per-band sample rate onto its DDC.
@@ -981,6 +1037,12 @@ public:
     /// -1 if the allocator refused to place it, in which case nothing is
     /// added: see the rollback in the definition.
     ///
+    /// Remote-daemon R2: on a Role::Remote model this SENDS the addSlice
+    /// verb and always returns -1, because the id is the STATION's to
+    /// mint and is not knowable here yet. The slice appears later, under
+    /// the station's id, through addSliceWithStationId(). A caller that
+    /// needs the id must wait for sliceAdded rather than read the return.
+    ///
     /// Whether the slice gets its own receiver window or shares an existing
     /// one is DERIVED from `initialPanId`, not passed in: a pan with no
     /// other slices is new and needs its own, a pan that already has slices
@@ -991,6 +1053,12 @@ public:
 
     /// Takes a slice ID (see sliceById), not a list position. sliceRemoved
     /// carries the same id.
+    ///
+    /// Remote-daemon R2: on a Role::Remote model this SENDS the
+    /// removeSlice verb and removes nothing locally; the slice goes away
+    /// when the station's object.destroy arrives at
+    /// removeSliceWithStationId(). The session's own inbound path must
+    /// call that one, never this.
     void removeSlice(int sliceId);
 
     /// NOTE: still a LIST POSITION, unlike sliceById / removeSlice above.
@@ -1016,6 +1084,15 @@ public:
     /// Leaving the previous active slice in place matters: every
     /// active-slice surface (container S-meter, RX applet, DSP menu) would
     /// otherwise be stranded on nullptr by one stale click.
+    ///
+    /// Remote-daemon R2: on a Role::Remote model this SENDS the
+    /// setActiveSliceById verb and flips nothing locally. The return then
+    /// means "the request left this client", not "the slice is now
+    /// active": the daemon applies it and its answer arrives back as an
+    /// ordinary mirrored `active` delta. False still means nothing
+    /// changed, for the two reasons a remote client can know on its own:
+    /// the id is not in its mirrored slice list, or there is no station
+    /// to ask.
     bool setActiveSliceById(int sliceId);
 
     /// Phase 3F Sub-Epic C Task 7: AetherSDR-faithful slice creation entry
@@ -1025,6 +1102,12 @@ public:
     /// readable reason on overflow.
     /// Pattern from AetherSDR MainWindow.cpp:6849-6859 [@0cd4559a]
     /// (+RX button handler).
+    ///
+    /// Remote-daemon R2: on a Role::Remote model this SENDS the
+    /// addSliceOnPan verb and creates nothing locally. The maxSlices()
+    /// cap check below is deliberately skipped on that path: the station
+    /// owns the slice list and enforces its own cap, with its own reason,
+    /// which comes back through reportStationSliceCommandRejected().
     Q_INVOKABLE void addSliceOnPan(const QString& panId);
 
     /// Re-point any slice whose pan is not in `livePanIds` at the first one
@@ -3426,6 +3509,13 @@ private:
     /// used verbatim, and checking it for collision first is the caller's
     /// job (addSliceWithStationId does).
     int addSliceImpl(int requestedId, const QString& initialPanId);
+
+    /// Remote-daemon R2: shared body of removeSlice() and
+    /// removeSliceWithStationId(), for the same reason addSliceImpl above
+    /// is shared. removeSlice() now sends a verb on a Role::Remote model,
+    /// so the session's own inbound destroy needs a way past that branch
+    /// to the removal itself.
+    void removeSliceImpl(int sliceId);
 
     /// Remote-daemon R2 Task 5: the actual sizing body, shared by
     /// configureStreamPool (gated on Role::Local) and

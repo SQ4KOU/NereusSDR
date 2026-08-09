@@ -6626,6 +6626,20 @@ nereus_add_test(tst_station_session
 nereus_add_test(tst_session_link_loss
     fakes/LoopbackTransport.cpp)
 
+# Remote Daemon R2: the GUI's slice controls reach the daemon.
+#
+# Task 11 built the command verbs, task 18 built the session that could
+# carry them, task 20 gated the GUI, and nothing connected the three:
+# StationClient::invokeCommand() had zero callers. Every slot here stands
+# up a REAL StationServer and StationClient over the same in-process
+# LoopbackTransport the two files above use, and asserts on the DAEMON's
+# own RadioModel -- "the client called a function" is exactly the
+# assertion that would have passed while the defect shipped.
+#
+# No TLS anywhere in this file, so no slot QSKIPs.
+nereus_add_test(tst_remote_slice_commands
+    fakes/LoopbackTransport.cpp)
+
 # --------------------------------------------------------------------------
 # Aggregate "all_tests" target  (2026-05-26 KG4VCF dev-loop fix, from PR #291)
 # --------------------------------------------------------------------------

@@ -22,6 +22,15 @@
 //                                    removal, not an empty string.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-08-09  J.J. Boyd / KG4VCF  Remote daemon R2: the five
+//                                    IStationLink verbs, the pending-
+//                                    command map that routes a station
+//                                    refusal to an operator-facing
+//                                    signal, attach/detach against the
+//                                    RadioModel, and the two inbound
+//                                    paths re-pointed off removeSlice().
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -164,6 +173,16 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
             << "so this session will connect and then drive nothing.";
     }
 
+    // The seam RadioModel routes its five slice-mutating entry points
+    // through in Role::Remote (RadioModel.h, attachStation). Attached for
+    // this object's whole life rather than per session -- see the
+    // IStationLink block in this class's header for why that is the state
+    // with fewer ways to be wrong. Harmless on a Role::Local model, which
+    // never consults the link at all.
+    if (radioModel != nullptr) {
+        radioModel->attachStation(this);
+    }
+
     m_outboundMirror = new StateMirror(this);
     connect(m_outboundMirror, &StateMirror::propertiesChanged, this,
             [this](const QByteArray& objectKey, const QList<MirrorUpdate>& updates) {
@@ -236,7 +255,16 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     }
 }
 
-StationClient::~StationClient() = default;
+StationClient::~StationClient()
+{
+    // The model holds this pointer non-owningly and outlives this object
+    // in the ordinary GUI teardown, so leaving it attached would leave
+    // RadioModel routing operator clicks into freed memory. QPointer, so
+    // the reverse order (model destroyed first) needs no special case.
+    if (!m_radioModel.isNull()) {
+        m_radioModel->detachStation();
+    }
+}
 
 // ── Connecting ───────────────────────────────────────────────────────────
 
@@ -976,7 +1004,7 @@ void StationClient::onTransportText(const QByteArray& wire)
         emit handshakeComplete();
         break;
     case SessionMessageKind::CommandResult:
-        emit commandResult(message.commandId, message.accepted, message.reason);
+        handleCommandResult(message);
         break;
     case SessionMessageKind::SettingsValue:
         handleSettingsValue(message);
@@ -1349,10 +1377,14 @@ QObject* StationClient::resolveOrCreate(const QByteArray& objectKey,
 // finished naming everything it has, which is exactly the question this
 // asks.
 //
-// Removal goes through the same RadioModel::removeSlice() that
-// handleObjectDestroy() uses, under the same inbound guard, so a reap is
-// indistinguishable downstream from an explicit destroy. Two of that
-// method's own invariants carry through unchanged and are relied on here:
+// Removal goes through the same RadioModel::removeSliceWithStationId()
+// that handleObjectDestroy() uses, under the same inbound guard, so a
+// reap is indistinguishable downstream from an explicit destroy. NOT
+// removeSlice(), which on a Role::Remote model sends a removeSlice verb
+// to the station (RadioModel.h) -- reaping locally must not ask the
+// station to remove slices it has already told this client it does not
+// have. Two of the removal body's own invariants carry through unchanged
+// and are relied on here:
 // it refuses to remove the last remaining slice (so a station reporting
 // zero slices leaves the client with one rather than an empty model), and
 // it hands TX off before removing a TX-bound victim.
@@ -1382,7 +1414,7 @@ void StationClient::reconcileSlicesAgainstStation()
         m_outboundMirror->unwatch(key);
         {
             InboundGuard guard(m_applyingInbound);
-            m_radioModel->removeSlice(sliceId);
+            m_radioModel->removeSliceWithStationId(sliceId);
         }
         // Confirmed, not assumed. removeSlice() returns void and refuses
         // silently when the victim is the LAST remaining slice, so a
@@ -1438,7 +1470,11 @@ void StationClient::handleObjectDestroy(const SessionMessage& message)
     m_outboundMirror->unwatch(message.objectKey);
     if (sliceId >= 0 && !m_radioModel.isNull()) {
         InboundGuard guard(m_applyingInbound);
-        m_radioModel->removeSlice(sliceId);
+        // removeSliceWithStationId, NOT removeSlice. On a Role::Remote
+        // model removeSlice() now SENDS a removeSlice verb (RadioModel.h),
+        // so calling it here would bounce the station's own destroy
+        // straight back at the station as a fresh command.
+        m_radioModel->removeSliceWithStationId(sliceId);
     }
 }
 
@@ -1597,6 +1633,21 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
     // R2 demo names explicitly (design addendum section 2).
     if (propertyName == "active") {
         slice->setActive(native.toBool());
+        // ...and move RadioModel's own m_activeSlice with it. The flag
+        // alone was not enough: activeSlice() is repointed only by
+        // RadioModel::setActiveSlice(), so before this, every
+        // activeSlice()-reading surface on a remote GUI (the container
+        // S-meter, the RX applet, the DSP menu, the band buttons) stayed
+        // stranded on whichever slice was created first, no matter which
+        // one the station reported active.
+        //
+        // Only on the TRUE edge. The false edge is the slice being stood
+        // down, and its partner true edge -- which arrives in the same
+        // batch, in either order -- is what does the repointing;
+        // setActiveSlice() clears the outgoing slice's flag itself.
+        if (native.toBool() && !m_radioModel.isNull()) {
+            m_radioModel->applyStationActiveSlice(slice->sliceIndex());
+        }
         return true;
     }
     if (propertyName == "txSlice") {
@@ -1670,6 +1721,124 @@ quint32 StationClient::invokeCommand(const QByteArray& verb,
     const quint32 id = m_nextCommandId++;
     send(SessionMessages::commandInvoke(verb, id, arguments));
     return id;
+}
+
+// ── IStationLink: the operator's clicks leaving this process ─────────────
+//
+// Every one of the five is the same three steps: build the arguments
+// SessionCommandDispatcher's handler for that verb reads by name, hand
+// them to invokeCommand(), and remember what the command was about so its
+// result can be reported to a human. Nothing here touches RadioModel:
+// applying the change on the way out is precisely the defect this seam
+// closes, and the daemon's answer arrives on the ordinary mirror path.
+
+namespace {
+
+// The argument shapes are SessionCommandDispatcher's, read by NAME out of
+// the CommandInvoke's `arguments` list (which reuses MirrorUpdate as a
+// generic {name, kind, value} triple -- SessionMessage::arguments' own doc
+// comment). `ordinal` is not consulted by any handler, so 0 throughout.
+MirrorUpdate intArgument(const QByteArray& name, int value)
+{
+    return MirrorUpdate{ 0, name, MirrorWireKind::Int64,
+                         QVariant(static_cast<qlonglong>(value)) };
+}
+
+MirrorUpdate stringArgument(const QByteArray& name, const QString& value)
+{
+    return MirrorUpdate{ 0, name, MirrorWireKind::Utf8, QVariant(value) };
+}
+
+} // namespace
+
+StationClient::CommandOutcome StationClient::sendCommand(const QByteArray& verb, int sliceId,
+                                                         const QList<MirrorUpdate>& arguments,
+                                                         const QString& action)
+{
+    const quint32 id = invokeCommand(verb, arguments);
+    if (id == 0) {
+        // invokeCommand()'s own two refusals: no transport, or a transport
+        // that has not finished authenticating. Both are the same thing to
+        // an operator -- the station is not reachable right now -- and
+        // both are ordinary rather than exceptional, because this is the
+        // state a remote GUI sits in before its first handshake and again
+        // for the whole of a reconnect backoff.
+        return CommandOutcome{
+            false,
+            QStringLiteral("The station session is not established, so %1 was not sent.")
+                .arg(action)
+        };
+    }
+    m_pendingCommands.insert(id, PendingCommand{ verb, sliceId });
+    return CommandOutcome{ true, QString() };
+}
+
+StationClient::CommandOutcome StationClient::requestAddSlice(const QString& initialPanId)
+{
+    return sendCommand("addSlice", -1, { stringArgument("initialPanId", initialPanId) },
+                       QStringLiteral("the request for a new slice"));
+}
+
+StationClient::CommandOutcome StationClient::requestAddSliceOnPan(const QString& panId)
+{
+    return sendCommand("addSliceOnPan", -1, { stringArgument("panId", panId) },
+                       QStringLiteral("the request for a new slice"));
+}
+
+StationClient::CommandOutcome StationClient::requestRemoveSlice(int sliceId)
+{
+    return sendCommand("removeSlice", sliceId, { intArgument("sliceId", sliceId) },
+                       QStringLiteral("the request to close this slice"));
+}
+
+StationClient::CommandOutcome StationClient::requestActiveSlice(int sliceId)
+{
+    return sendCommand("setActiveSliceById", sliceId, { intArgument("sliceId", sliceId) },
+                       QStringLiteral("the request to make slice %1 active").arg(sliceId));
+}
+
+StationClient::CommandOutcome StationClient::requestSliceSampleRate(int sliceId, int rateHz)
+{
+    return sendCommand(
+        "requestSliceSampleRate", sliceId,
+        { intArgument("sliceId", sliceId), intArgument("rateHz", rateHz) },
+        QStringLiteral("the sample-rate change to %1 kHz").arg(rateHz / 1000));
+}
+
+void StationClient::handleCommandResult(const SessionMessage& message)
+{
+    // Taken, not read: an id is answered exactly once, and leaving the
+    // entry behind would grow this map for the life of the session.
+    // A result for an id this client does not hold is not an error worth
+    // refusing -- it is what a second CommandResult, or a result for a
+    // command sent through the generic invokeCommand() rather than the
+    // five typed verbs, looks like -- so the signal below still fires and
+    // only the operator-facing routing is skipped.
+    const PendingCommand pending = m_pendingCommands.take(message.commandId);
+
+    if (!message.accepted && !m_radioModel.isNull()) {
+        // The station's OWN reason, relayed verbatim. Wording a refusal
+        // here instead would put this client's guess in front of an
+        // operator for a decision the daemon made -- and on a bench that
+        // is indistinguishable from the click having silently done
+        // nothing, which is the shape of the defect this round closes.
+        const QString reason = message.reason.isEmpty()
+            ? QStringLiteral("The station refused the request without giving a reason.")
+            : message.reason;
+        // requestSliceSampleRate is the one verb whose refusal already has
+        // a slice-scoped signal locally (sliceRetuneRejected, which
+        // MainWindow toasts for 6 s because it names a frequency), so it
+        // keeps using it. `pending.verb` rather than message.commandVerb
+        // so an unrecognised or absent echo cannot misroute; the two agree
+        // on every path SessionCommandDispatcher produces.
+        if (pending.verb == "requestSliceSampleRate") {
+            m_radioModel->reportStationRetuneRejected(pending.sliceId, reason);
+        } else {
+            m_radioModel->reportStationSliceCommandRejected(reason);
+        }
+    }
+
+    emit commandResult(message.commandId, message.accepted, message.reason);
 }
 
 void StationClient::send(const SessionMessage& message)
