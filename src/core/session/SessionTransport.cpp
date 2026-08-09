@@ -20,7 +20,8 @@
 
 namespace NereusSDR {
 
-WebSocketTransport::WebSocketTransport(QWebSocket* socket, QObject* parent)
+WebSocketTransport::WebSocketTransport(QWebSocket* socket, quint64 maxIncomingBytes,
+                                       QObject* parent)
     : SessionTransport(parent)
     , m_socket(socket)
 {
@@ -28,6 +29,26 @@ WebSocketTransport::WebSocketTransport(QWebSocket* socket, QObject* parent)
         return;
     }
     m_socket->setParent(this);
+
+    // Applied HERE, in the wrapper's constructor, so it is impossible to
+    // hold a session transport whose socket was never capped. On the
+    // daemon side this runs inside the newConnection slot, before control
+    // returns to the event loop, so no inbound frame can have been
+    // processed on this socket yet.
+    //
+    // Message AND frame, and in that order: the frame cap must not exceed
+    // the message cap, and Qt's default message cap is the larger of the
+    // two, so lowering the message cap first keeps the pair consistent at
+    // every instant. Capping only the message would still let a single
+    // oversized FRAME be buffered on the way to a message that is then
+    // rejected.
+    //
+    // QWebSocketServer has no equivalent setter in Qt 6.11 (checked
+    // against qwebsocketserver.h), which is why this is per-socket rather
+    // than configured once on the listener. TciServer.cpp:1470 does the
+    // same thing for the same reason.
+    m_socket->setMaxAllowedIncomingMessageSize(maxIncomingBytes);
+    m_socket->setMaxAllowedIncomingFrameSize(maxIncomingBytes);
 
     connect(m_socket, &QWebSocket::textMessageReceived, this,
             [this](const QString& message) { emit textReceived(message.toUtf8()); });

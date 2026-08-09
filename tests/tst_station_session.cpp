@@ -53,6 +53,8 @@
 #include <QTcpServer>
 #include <QTemporaryDir>
 #include <QUrl>
+#include <QWebSocket>
+#include <QWebSocketProtocol>
 
 #include <memory>
 
@@ -217,6 +219,8 @@ private slots:
 
     // ---- Security fix round ----
     void firstRunPairingBannerNeverReachesTheLoggingHandler();
+    void oversizedMessageIsRefusedBeforeAnyAuthentication();
+    void clientCapsWhatAStationCanMakeItAllocate();
 
     // ---- TLS-specific (QSKIP when the backend is unusable) ----
     void wssListenerComesUpAndCompletesAHandshake();
@@ -1352,6 +1356,106 @@ void TstStationSession::firstRunPairingBannerNeverReachesTheLoggingHandler()
     // the two meet: even a fingerprint logged from somewhere else now
     // survives redaction untouched.
     QCOMPARE(CoreInit::redactPiiForTest(fingerprint), fingerprint);
+}
+
+void TstStationSession::oversizedMessageIsRefusedBeforeAnyAuthentication()
+{
+    if (!QSslSocket::supportsSsl()) {
+        QSKIP(qPrintable(tlsSkipMessage()));
+    }
+
+    // Critical 2. StationServer never capped the sockets it accepted, and
+    // Qt's defaults are roughly INT_MAX, about 2 GiB per message, buffered
+    // in full before textMessageReceived fires. The 30 s auth deadline
+    // bounds TIME, not BYTES, so this was entirely pre-authentication.
+    //
+    // The assertion is on the CLOSE CODE, deliberately, not on the peer
+    // going away. An uncapped station also drops this peer -- it buffers
+    // the whole message, fails to decode it, and closes with
+    // CloseCodeNormal and the reason "undecodable message". Only a capped
+    // socket refuses the BYTES, which Qt reports as CloseCodeTooMuchData
+    // (1009). Asserting on peerCount alone would pass either way.
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(
+        settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+
+    auto stationModel = makeStationRadioModel(0);
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.lastError()));
+
+    // A RAW QWebSocket, not a StationClient: this peer is deliberately
+    // hostile and must not be constrained by the client's own protocol.
+    QWebSocket raw;
+    connect(&raw, &QWebSocket::sslErrors, &raw,
+            [&raw](const QList<QSslError>& errors) { raw.ignoreSslErrors(errors); });
+    QSignalSpy rawConnected(&raw, &QWebSocket::connected);
+    raw.open(QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(server.serverPort())));
+    QTRY_COMPARE_WITH_TIMEOUT(rawConnected.count(), 1, 15000);
+    QTRY_COMPARE(server.peerCount(), 1);
+
+    // Comfortably past the cap and nowhere near Qt's default, so an
+    // uncapped station accepts every byte of it.
+    const qsizetype oversize =
+        static_cast<qsizetype>(StationServer::kMaxIncomingMessageBytes) + 4096;
+    raw.sendTextMessage(QString(oversize, QLatin1Char('x')));
+
+    QTRY_COMPARE_WITH_TIMEOUT(server.peerCount(), 0, 15000);
+    QVERIFY2(!server.hasAuthenticatedSession(),
+             "an oversized message reached a peer that had authenticated");
+    QTRY_COMPARE_WITH_TIMEOUT(raw.closeCode(),
+                              QWebSocketProtocol::CloseCodeTooMuchData, 5000);
+
+    server.close();
+}
+
+void TstStationSession::clientCapsWhatAStationCanMakeItAllocate()
+{
+    if (!QSslSocket::supportsSsl()) {
+        QSKIP(qPrintable(tlsSkipMessage()));
+    }
+
+    // The other direction. A pinned certificate proves WHO the station is;
+    // it promises nothing about how much the station will ask this GUI to
+    // allocate. Asserted on the socket the production dial path actually
+    // creates, through StationClient::transport(), rather than on a
+    // hand-built WebSocketTransport -- the defect was that dialStation()
+    // passed no cap, so constructing a transport by hand in the test would
+    // have proved nothing about the call site.
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(
+        settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+
+    auto stationModel = makeStationRadioModel(0);
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.lastError()));
+
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+
+    client.connectToStation(
+        QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(server.serverPort())),
+        server.token(), server.certificateFingerprint());
+    QTRY_COMPARE_WITH_TIMEOUT(completed.count(), 1, 15000);
+
+    auto* transport = qobject_cast<WebSocketTransport*>(client.transport());
+    QVERIFY2(transport != nullptr, "the dial did not produce a WebSocketTransport");
+    QVERIFY(transport->socket() != nullptr);
+    QCOMPARE(transport->socket()->maxAllowedIncomingMessageSize(),
+             StationClient::kMaxIncomingMessageBytes);
+    QCOMPARE(transport->socket()->maxAllowedIncomingFrameSize(),
+             StationClient::kMaxIncomingMessageBytes);
+
+    // And the daemon's own accepted socket carries the smaller cap, so the
+    // two constants are not accidentally the same number.
+    QVERIFY(StationServer::kMaxIncomingMessageBytes
+            < StationClient::kMaxIncomingMessageBytes);
+
+    client.disconnectFromStation(QStringLiteral("test complete"));
+    server.close();
 }
 
 // ── TLS ──────────────────────────────────────────────────────────────────

@@ -226,6 +226,44 @@ public:
     /// immediately rather than being allowed to displace a live session.
     static constexpr int kMaxConcurrentPeers = 8;
 
+    /// Largest inbound WebSocket message, and frame, on an ACCEPTED
+    /// socket. Applied by WebSocketTransport's constructor.
+    ///
+    /// This bound is PRE-AUTHENTICATION and that is the whole reason it
+    /// exists. Qt's default, measured on Qt 6.11 by reading it back off an
+    /// accepted socket, is 2147483646 bytes: just under 2 GiB, per message,
+    /// per socket. Qt buffers a complete message before it emits
+    /// textMessageReceived, so kDefaultAuthDeadlineMs bounds how LONG an
+    /// unauthenticated peer may sit here but bounds no BYTES at all.
+    /// Uncapped, kMaxConcurrentPeers of them come to roughly 16 GiB on a
+    /// daemon whose stated hardware floor is a Pi 4.
+    ///
+    /// Sized against the largest message a legitimate client can send,
+    /// which is not a guess:
+    ///
+    ///   - Hello, AuthRequest, SettingsRemove: hundreds of bytes. The
+    ///     token is 43 base64url characters (TokenStore.h).
+    ///   - CommandInvoke: at most two named scalar arguments across the
+    ///     four known verbs (SessionMessage::commandVerb).
+    ///   - PropertyWrite: one object's coalesced dirty set, bounded by
+    ///     that class's whole property table. SliceModel is the largest
+    ///     mirrored class at over a hundred Q_PROPERTY declarations, and
+    ///     its only QString-valued mirrored properties are antenna names,
+    ///     panKey and lastRadeRxCallsign. At a generous 128 bytes per JSON
+    ///     entry that is under 16 KiB.
+    ///   - SettingsWrite: one key plus one value. The longest values this
+    ///     tree stores under a Station-classified key are persisted JSON
+    ///     blobs, and the largest of those is bounded by construction:
+    ///     FaultLog is a 10-entry ring of six short fields
+    ///     (FaultLog.cpp:19, kMaxEvents = 10).
+    ///
+    /// So roughly 16 KiB is the real ceiling, and 1 MiB is about 64 times
+    /// that. It leaves 8 MiB of total pre-auth exposure across every peer
+    /// slot, which is a number a Pi 4 does not notice. TciServer.cpp:1470
+    /// makes the same call at the same magnitude for a socket that is
+    /// loopback-only.
+    static constexpr quint64 kMaxIncomingMessageBytes = 1024ULL * 1024ULL;
+
     /// `radioModel` and `settings` are NOT owned and must outlive this
     /// object; both must live on this object's thread (see the class
     /// comment's threading section, which is where the consequences of

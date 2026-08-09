@@ -299,7 +299,11 @@ void StationClient::dialStation(const QUrl& url, const QString& token,
     m_lastAllowUnpinned = allowUnpinned;
 
     auto* socket = new QWebSocket();
-    auto* transport = new WebSocketTransport(socket);
+    // Capped before the socket is ever opened. A pinned certificate proves
+    // WHO the station is, not that it will behave; see
+    // kMaxIncomingMessageBytes for how the number was derived from the
+    // connect-time settings snapshot.
+    auto* transport = new WebSocketTransport(socket, kMaxIncomingMessageBytes);
     // Task 19 fix: captured so the two lambdas below can tell a STALE
     // socket's asynchronous signal apart from the current one's. See the
     // class comment's link-loss section for the defect this closes --

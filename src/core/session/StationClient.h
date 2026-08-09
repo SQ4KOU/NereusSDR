@@ -256,6 +256,32 @@ public:
     /// setReconnectBackoffUnitMs().
     static constexpr int kDefaultReconnectBackoffUnitMs = 1000;
 
+    /// Largest inbound WebSocket message, and frame, on this client's own
+    /// socket. Applied by WebSocketTransport's constructor.
+    ///
+    /// Two orders of magnitude above StationServer::kMaxIncomingMessageBytes
+    /// because the two directions carry different traffic, not because one
+    /// side is trusted more. The client's largest legitimate inbound
+    /// message is the connect-time settings snapshot, which
+    /// StationServer::promoteToSession sends as ONE SettingsSnapshot
+    /// carrying every Station-classified key.
+    ///
+    /// Sized against the measurement in R2 design addendum section 8: a
+    /// real settings file of 15,201 keys and 3,186,789 bytes across five
+    /// MACs, of which the subset a snapshot actually carries (the
+    /// connected MAC's hardware/ subtree, hardware/oc/, and the
+    /// non-hardware Station keys -- SettingsProxyServer::buildSnapshot) is
+    /// roughly 2,900 keys and 190 KiB. The JSON envelope adds about 30
+    /// bytes per entry, so that encodes to roughly 275 KiB. 8 MiB is about
+    /// 30 times the measured snapshot and still covers the pathological
+    /// case of an entire 3.19 MB store classifying Station, while staying
+    /// 256 times below Qt's own default.
+    ///
+    /// Qt's default would let a station this client has pinned, but which
+    /// has since been compromised, allocate about 2 GiB in the operator's
+    /// GUI. A pin is an identity check, not a promise of good behaviour.
+    static constexpr quint64 kMaxIncomingMessageBytes = 8ULL * 1024ULL * 1024ULL;
+
     /// `radioModel` must be Role::Remote and is NOT owned. `settingsProxy`
     /// is the backend a remote-mode GUI installs via
     /// AppSettings::setRemoteBackend(); also not owned. Both must live on
@@ -353,6 +379,12 @@ public:
     /// tears this down on link loss.
     QList<QByteArray> mirroredObjectKeys() const;
     QObject* mirroredObject(const QByteArray& objectKey) const;
+
+    /// The transport currently carrying this session, or null. Non-owning,
+    /// for tests and diagnostics, matching StationServer's own subsystem
+    /// accessors. A caller must not hold this across an event-loop turn:
+    /// attachTransport() releases and deletes a superseded one.
+    SessionTransport* transport() const { return m_transport; }
 
     /// Send a command verb (SessionCommandDispatcher's five) to the
     /// station. Returns the commandId the result will echo, or 0 when

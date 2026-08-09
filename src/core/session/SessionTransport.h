@@ -104,7 +104,22 @@ public:
     /// Takes ownership of `socket` by reparenting it onto this object, so
     /// a caller cannot accidentally outlive-or-be-outlived by the socket
     /// it just wrapped.
-    explicit WebSocketTransport(QWebSocket* socket, QObject* parent = nullptr);
+    ///
+    /// `maxIncomingBytes` caps one inbound WebSocket message, and one
+    /// inbound frame, on this socket. It is REQUIRED rather than defaulted
+    /// on purpose. Qt's own defaults are roughly INT_MAX, about 2 GiB per
+    /// message, and Qt buffers a whole message before it emits
+    /// textMessageReceived, so an uncapped accepted socket lets a peer
+    /// that has not authenticated anything allocate gigabytes on a daemon
+    /// whose stated hardware floor is a Pi 4. Making the parameter
+    /// mandatory means a future call site has to state a number rather
+    /// than inherit a fatal default by omission. The two production
+    /// numbers are StationServer::kMaxIncomingMessageBytes and
+    /// StationClient::kMaxIncomingMessageBytes, which differ by two orders
+    /// of magnitude because the two directions carry different traffic;
+    /// see each constant for the arithmetic behind it.
+    explicit WebSocketTransport(QWebSocket* socket, quint64 maxIncomingBytes,
+                                QObject* parent = nullptr);
     ~WebSocketTransport() override;
 
     void sendText(const QByteArray& wire) override;

@@ -355,7 +355,14 @@ void StationServer::onNewWebSocketConnection()
         if (socket == nullptr) {
             break;
         }
-        acceptTransport(new WebSocketTransport(socket));
+        // The cap goes on inside WebSocketTransport's constructor, which
+        // runs here, inside the newConnection slot, before control returns
+        // to the event loop -- so no frame on this socket has been
+        // processed yet. See kMaxIncomingMessageBytes for the arithmetic
+        // and for why an uncapped accepted socket is a pre-authentication
+        // memory-exhaustion path rather than a theoretical one.
+        acceptTransport(
+            new WebSocketTransport(socket, kMaxIncomingMessageBytes));
     }
 }
 
