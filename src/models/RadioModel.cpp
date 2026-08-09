@@ -3841,6 +3841,21 @@ QVector<int> RadioModel::slicesOnStream(int streamIndex) const
 // MeterPoller channel wiring, Setup-page channel-readiness gates) that
 // legitimately need the pointer but were reaching straight into the engine
 // to get it.
+//
+// ── Remote-daemon R2 Task 20: this is the remote gate's known blind spot ──
+//
+// On a Role::Remote model m_wdspEngine is non-null (constructed
+// unconditionally) but holds no channels, so this returns nullptr, every
+// caller's `if (RxChannel* ch = ...)` guard swallows it, and the control
+// silently does nothing. It is NOT counted by RadioModel's local-DSP
+// hand-out audit, so a Setup page reaching DSP through here stays ENABLED
+// on a remote client while doing nothing. src/gui/setup/DspOptionsPage.cpp
+// is already in that state.
+//
+// Before adding a call site in src/gui/setup/, decide what the control
+// should do on a remote client. Full reasoning, including why routing this
+// through noteLocalDspHandOut() was tried and rejected, is on
+// localDspHandOutCount() in RadioModel.h.
 RxChannel* RadioModel::rxChannelForSlice(int sliceIndex) const
 {
     return m_wdspEngine ? m_wdspEngine->rxChannel(sliceIndex) : nullptr;

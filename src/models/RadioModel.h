@@ -367,18 +367,49 @@ public:
 
     // ── Remote-daemon R2 Task 20: the reach-through audit ────────────────
     //
-    // These three accessors are the only local-DSP reach-through a test
-    // cannot see by running the code. connection() is nullptr on a
-    // Role::Remote model, so an unguarded caller crashes and any sweep
-    // that merely executes the path finds it. The other three are
-    // constructed unconditionally (see this class's constructor
-    // initializer list), so on a remote model they hand back a real but
-    // inert object: the caller's writes land nowhere, the connects it
-    // makes never fire, and nothing is observably wrong until an operator
-    // notices a control that does not work. A null-dereference assertion
-    // cannot catch that shape at all. Counting the hand-outs can, which is
-    // why the counter exists rather than a comment asking people to be
-    // careful.
+    // These three accessors are silent on a Role::Remote model in a way a
+    // test cannot see by running the code. connection() is nullptr there,
+    // so an unguarded caller crashes and any sweep that merely executes
+    // the path finds it. The other three are constructed unconditionally
+    // (see this class's constructor initializer list), so on a remote
+    // model they hand back a real but inert object: the caller's writes
+    // land nowhere, the connects it makes never fire, and nothing is
+    // observably wrong until an operator notices a control that does not
+    // work. A null-dereference assertion cannot catch that shape at all.
+    // Counting the hand-outs can, which is why the counter exists rather
+    // than a comment asking people to be careful.
+    //
+    // ---- KNOWN BLIND SPOT: rxChannelForSlice() is NOT counted ----
+    //
+    // An earlier version of this comment claimed these three were the ONLY
+    // reach-through a running test cannot see. That was wrong, and the
+    // exception matters because the tree is actively migrating toward it.
+    //
+    // rxChannelForSlice() (below, and defined in RadioModel.cpp) forwards
+    // to WdspEngine::rxChannel(). On a remote model m_wdspEngine is
+    // non-null but has no channels, so the forward returns nullptr, every
+    // call site's `if (RxChannel* ch = ...)` guard swallows it, and the
+    // control silently does nothing. It is the same silent shape as the
+    // three above, arrived at through a null rather than an inert object,
+    // and it is not counted here.
+    //
+    // It is not counted DELIBERATELY, not by oversight. Routing it through
+    // noteLocalDspHandOut() was tried and rejected: two of its seven
+    // src/gui call sites run at page-construction time
+    // (setup/DspOptionsPage.cpp's buildUI, and MnfSetupPage's constructor
+    // via refreshMinNotchWidth), so the SetupDialog gate would disable DSP
+    // > Options and MNF outright. Both pages exist mainly to edit
+    // Station-scoped settings that must round-trip to the daemon; each
+    // reaches for a channel for one incidental local binding. Disabling
+    // them would cost a remote operator two working settings pages to
+    // silence one dead widget on each. Recorded rather than fixed.
+    //
+    // The consequence to know before adding a call site: reaching DSP
+    // through rxChannelForSlice() in a Setup page produces a page that
+    // stays ENABLED on a remote client and silently does nothing.
+    // setup/DspOptionsPage.cpp is already in that state. If a future
+    // change makes those two pages tolerable to disable, route the wrapper
+    // and delete this paragraph.
     //
     // Armed for Role::Remote only, so this is not a general accessor tally
     // -- it means specifically "a remote model gave away something local".
@@ -401,7 +432,14 @@ public:
     QSet<QByteArray> localDspHandOutNames() const { return m_localDspHandOutNames; }
 
     /// Clear the audit so a caller can attribute hand-outs to one narrow
-    /// window. SetupDialog::realizePage() does exactly that, per page.
+    /// window.
+    ///
+    /// No production caller. SetupDialog::realizePage() deliberately uses a
+    /// before/after difference instead, so that a page factory which
+    /// re-enters realizePage() cannot zero the outer page's tally on its
+    /// way through; its own comment says as much. This stays for tests that
+    /// want a clean window and for a future caller that has no re-entrancy
+    /// to worry about.
     void resetLocalDspHandOutAudit()
     {
         m_localDspHandOuts = 0;

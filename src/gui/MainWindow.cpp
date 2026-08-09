@@ -8943,6 +8943,11 @@ void MainWindow::applyRemoteRoleGating()
     // is not merely useless here, it is a crash.
     if (m_actProtocolInfo != nullptr) {
         m_actProtocolInfo->setEnabled(false);
+        // Fix round 1: was the one gated action with no explanation while
+        // the other three carried one.
+        m_actProtocolInfo->setToolTip(
+            tr("Unavailable: the radio's protocol details live on the "
+               "station, not in this window."));
     }
 }
 
@@ -8956,9 +8961,20 @@ void MainWindow::showSegmentContextMenu(const QPoint& globalPos)
 {
     QMenu menu(this);
 
-    menu.addAction(tr("Disconnect"), this, [this]() {
+    // R2 Task 20: Disconnect is gated the same way the Radio menu's is.
+    // Harmless today (teardownConnection() returns early on the null
+    // connection a remote model always has), but an enabled control that
+    // does nothing is exactly what this gate exists to remove, and its
+    // sibling below is already gated through showConnectionPanel().
+    QAction* disconnectAction = menu.addAction(tr("Disconnect"), this, [this]() {
         m_radioModel->disconnectFromRadio();
     });
+    if (m_radioModel != nullptr && !m_radioModel->ownsLocalDsp()) {
+        disconnectAction->setEnabled(false);
+        disconnectAction->setToolTip(
+            tr("Unavailable: this window is driving a remote station. "
+               "The station owns the radio connection."));
+    }
     menu.addAction(tr("Connect to other radio…"), this, [this]() {
         showConnectionPanel();
     });

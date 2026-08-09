@@ -460,6 +460,25 @@ do. Expect them greyed out on the bench and do not file it.
    then persisted back into the bounds-checked keys. It is the one live
    path by which an in-range gated field can be driven outside its union by
    an ungated sibling. Step 6a is where that gets probed.
+9. **The gate has one known blind spot: `RadioModel::rxChannelForSlice()`.**
+   It is not counted by the hand-out audit, so a Setup page reaching DSP
+   through it stays **enabled** on a remote client while doing nothing.
+   **Setup > DSP > Options is already in that state**, and so is
+   Setup > DSP > MNF's minimum-notch-width readout. Both were left enabled
+   deliberately: each page exists mainly to edit Station-scoped settings
+   that must round-trip, and each reaches for a channel for one incidental
+   local binding, so disabling them would cost two working settings pages
+   to silence one dead widget on each. Expect those two pages to be usable
+   but to have one control that does not respond. Full reasoning is on
+   `RadioModel::localDspHandOutCount()`.
+10. **Once a station is saved in Setup, every launch is remote** until the
+    field is cleared. There is no `--local` escape hatch. A launch against
+    a dead station therefore shows a greyed Connect menu with no obvious
+    cause. **Recovery: Setup > CAT & Network > Remote Station, clear the
+    Station address field, relaunch.** The Remote Station page is never
+    disabled by the gate, which is asserted by
+    `theRemoteStationPageStaysUsableOnARemoteModel`, so this recovery is
+    always reachable.
 
 ---
 
@@ -557,6 +576,24 @@ Then, on the Audio category: Devices, TX Input, VAX, TCI and Advanced must
 all be greyed out. On CAT & Network: **Remote Station** must be usable, and
 must show the station address that was passed on the command line only if
 it was also saved; the command line does not write it back.
+
+Two pages are expected to be **enabled but partially dead**, which is
+limitation 9 above and not a defect to file: Setup > DSP > Options (its
+high-resolution filter-characteristics toggle binds a local WDSP channel
+that does not exist here) and Setup > DSP > MNF (its minimum-notch-width
+readout reads the same channel). Everything else on both pages is
+Station-scoped and should round-trip normally.
+
+Audio > TCI is greyed for a different reason from its four neighbours and
+this is worth knowing before judging it: the page itself touches no local
+DSP at all. It is wrapped by `SetupDialog::wrapWithAudioBackendStrip`,
+which constructs an `AudioBackendStrip` against the local `AudioEngine`,
+so every wrapped leaf classifies as reaching regardless of its own
+content. Left as-is pending a maintainer decision, because the only
+non-invasive fix (skip the strip in remote mode) would also un-grey
+Audio > TX Input, whose sole reach is a VU-meter timer tick. That is a
+change to which pages the gate outputs, and it belongs with the "a
+disabled page says nothing" question rather than with this task.
 
 #### 5.7 The local-hardware surfaces
 

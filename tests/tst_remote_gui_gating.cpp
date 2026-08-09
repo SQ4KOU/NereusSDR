@@ -71,8 +71,11 @@ namespace {
 // on purpose: this test is the thing that pins them as OperatorLocal, and
 // a rename that silently moved them would otherwise rename the assertion
 // with them and prove nothing.
-const QString kStationUrlKey   = QStringLiteral("RemoteStationUrl");
-const QString kStationTokenKey = QStringLiteral("RemoteStationToken");
+const QString kStationUrlKey         = QStringLiteral("RemoteStationUrl");
+const QString kStationTokenKey       = QStringLiteral("RemoteStationToken");
+const QString kStationFingerprintKey = QStringLiteral("RemoteStationFingerprint");
+const QString kStationAllowUnpinnedKey =
+    QStringLiteral("RemoteStationAllowUnpinned");
 
 } // namespace
 
@@ -159,6 +162,32 @@ private slots:
         QVERIFY(model.localDspHandOutNames().isEmpty());
     }
 
+    // The audit's KNOWN BLIND SPOT, asserted rather than only described.
+    //
+    // rxChannelForSlice() forwards to WdspEngine::rxChannel(), which on a
+    // channel-less remote engine returns nullptr. Every call site guards
+    // with `if (RxChannel* ch = ...)`, so the null is swallowed and the
+    // control silently does nothing -- the same shape as the three counted
+    // accessors, reached through a null instead of an inert object.
+    //
+    // It is deliberately NOT counted: two of its seven src/gui call sites
+    // run at page-construction time (DspOptionsPage::buildUI and
+    // MnfSetupPage's constructor), so counting it would disable DSP >
+    // Options and MNF, two pages that exist mainly to edit Station-scoped
+    // settings. Pinning the decision here means a future change that routes
+    // the wrapper has to come through this test and say so on purpose.
+    // Fix round 1, Important 1.
+    void rxChannelForSliceIsSilentOnRemoteAndDeliberatelyUncounted()
+    {
+        RadioModel model(RadioModel::Role::Remote);
+
+        QVERIFY2(model.rxChannelForSlice(0) == nullptr,
+                 "a remote model's WdspEngine has no channels, so this must "
+                 "resolve to nullptr rather than a usable channel");
+        QCOMPARE(model.localDspHandOutCount(), 0);
+        QVERIFY(model.localDspHandOutNames().isEmpty());
+    }
+
     void auditResetClearsCountAndNames()
     {
         RadioModel model(RadioModel::Role::Remote);
@@ -198,14 +227,22 @@ private slots:
         RadioModel model(RadioModel::Role::Remote);
         SetupDialog dialog(&model);
 
+        // Iterate by INDEX, not by label. Two leaves are registered as
+        // "Options" (General and DSP), and pageEntryIndex() returns the
+        // first match, so a label-driven loop realizes the General one
+        // twice and never builds the DSP one -- while still reporting a
+        // clean sweep, which is the worst possible failure for a test
+        // whose whole job is coverage. Fix round 1, Minor 2.
         QStringList offenders;
         int reachedCount = 0;
         const QStringList labels = dialog.pageLabelsForTest();
-        QVERIFY(!labels.isEmpty());
+        const int pageCount = dialog.registeredPageCountForTest();
+        QVERIFY(pageCount > 0);
+        QCOMPARE(labels.size(), pageCount);
 
-        for (const QString& label : labels) {
+        for (int i = 0; i < pageCount; ++i) {
             const int before = model.localDspHandOutCount();
-            QWidget* page = dialog.realizePageForTest(label);
+            QWidget* page = dialog.realizePageAtForTest(i);
             if (page == nullptr) {
                 continue;  // a factory that yields nothing has nothing to gate
             }
@@ -215,9 +252,15 @@ private slots:
             }
             ++reachedCount;
             if (page->isEnabled()) {
-                offenders << label;
+                offenders << labels.at(i);
             }
         }
+
+        // Minor 2's fix, pinned: the sweep must have BUILT every leaf. With
+        // the previous label-driven loop this read pageCount - 1, because
+        // the second "Options" resolved back to the first and its factory
+        // never ran -- and the test still reported a clean sweep.
+        QCOMPARE(dialog.realizedPageCountForTest(), pageCount);
 
         QVERIFY2(offenders.isEmpty(),
                  qPrintable(QStringLiteral(
@@ -242,12 +285,16 @@ private slots:
         RadioModel model;
         SetupDialog dialog(&model);
 
+        // By index, for the same reason as the remote twin above: the
+        // duplicate "Options" label would otherwise leave DSP > Options
+        // unvisited in the local-mode regression guard too.
         QStringList disabled;
         const QStringList labels = dialog.pageLabelsForTest();
-        for (const QString& label : labels) {
-            QWidget* page = dialog.realizePageForTest(label);
+        const int pageCount = dialog.registeredPageCountForTest();
+        for (int i = 0; i < pageCount; ++i) {
+            QWidget* page = dialog.realizePageAtForTest(i);
             if (page != nullptr && !page->isEnabled()) {
-                disabled << label;
+                disabled << labels.at(i);
             }
         }
         QVERIFY2(disabled.isEmpty(),
@@ -414,6 +461,18 @@ private slots:
     {
         QCOMPARE(classifySettingsKey(kStationUrlKey), SettingsScope::OperatorLocal);
         QCOMPARE(classifySettingsKey(kStationTokenKey), SettingsScope::OperatorLocal);
+
+        // All four keys the field group writes, not just the two the brief
+        // named. The fingerprint is per-client TRUST state: a rule that
+        // classified it Station would share one client's certificate pin
+        // with every other client of the same daemon, which is a downgrade
+        // no operator asked for and none would see. The allow-unpinned flag
+        // is worse, because it would let one bench client turn pinning off
+        // for everyone. Fix round 1, Minor 6.
+        QCOMPARE(classifySettingsKey(kStationFingerprintKey),
+                 SettingsScope::OperatorLocal);
+        QCOMPARE(classifySettingsKey(kStationAllowUnpinnedKey),
+                 SettingsScope::OperatorLocal);
     }
 
     // The one page a remote operator must be able to reach, since it is

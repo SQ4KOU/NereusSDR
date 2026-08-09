@@ -241,6 +241,11 @@ public:
     // Remote-daemon R2 Task 20. Every registered leaf label, in
     // registration order, so a test can sweep the tree without hardcoding
     // a list that goes stale the next time a page is added.
+    //
+    // Labels are NOT unique: "Options" is registered twice (General and
+    // DSP). A sweep must iterate by INDEX, via realizePageAtForTest below,
+    // or pageEntryIndex() resolves the second one back to the first and the
+    // second leaf is silently never visited.
     QStringList pageLabelsForTest() const
     {
         QStringList labels;
@@ -249,6 +254,17 @@ public:
             labels << entry.label;
         }
         return labels;
+    }
+
+    // Remote-daemon R2 Task 20. Force-realize one leaf by REGISTRY INDEX.
+    //
+    // The label-keyed realizePageForTest() cannot express "every leaf":
+    // two leaves share the label "Options", so a label-driven loop realizes
+    // the General one twice and never builds the DSP one. A gate sweep that
+    // skips a page is worse than no sweep, because it reports a clean run.
+    QWidget* realizePageAtForTest(int entryIndex)
+    {
+        return realizePage(entryIndex);
     }
 
     // Remote-daemon R2 Task 20. The realized widget for a leaf, or nullptr
