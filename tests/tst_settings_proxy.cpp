@@ -41,6 +41,7 @@
 #include <QTemporaryDir>
 
 #include "core/AppSettings.h"
+#include "core/session/SessionMessages.h"
 #include "core/settings/ISettingsBackend.h"
 #include "core/settings/SettingsProxy.h"
 #include "core/settings/SettingsProxyServer.h"
@@ -1331,6 +1332,96 @@ private slots:
         daemon.setValue(QStringLiteral("DisplayNoiseFloorColor"), QStringLiteral("#000000"));
 
         QCOMPARE(spy.count(), 0);
+    }
+
+    // ── Whole-branch review, Important 4 ─────────────────────────────────
+    //
+    // The two units behind the end-to-end case in tst_station_session
+    // (aRemovedStationSettingReachesTheClientAsAbsenceNotAnEmptyString).
+    // The daemon's change hook fires identically for a set and a remove,
+    // and value() on an absent key returns an INVALID QVariant that the
+    // relay used to flatten into "", so a removal reached every client as
+    // "set to empty string".
+    void serverReportsARemovalAsRemovalNotAsAnEmptyValue()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings daemon(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        daemon.setValue(QStringLiteral("Slice0/Locked"), QStringLiteral("True"));
+
+        SettingsProxyServer server(daemon);
+        QSignalSpy changed(&server, &SettingsProxyServer::outboundValueChanged);
+        QSignalSpy removed(&server, &SettingsProxyServer::outboundValueRemoved);
+
+        daemon.remove(QStringLiteral("Slice0/Locked"));
+
+        QCOMPARE(removed.count(), 1);
+        QCOMPARE(removed.at(0).at(0).toString(), QStringLiteral("Slice0/Locked"));
+        QVERIFY2(changed.count() == 0,
+                 "a removal must not also be announced as a value change");
+
+        // An ordinary write to the SAME key still takes the value path,
+        // so this is a branch and not a blanket reclassification.
+        daemon.setValue(QStringLiteral("Slice0/Locked"), QStringLiteral("False"));
+        QCOMPARE(changed.count(), 1);
+        QCOMPARE(changed.at(0).at(1).toString(), QStringLiteral("False"));
+        QCOMPARE(removed.count(), 1);
+
+        // A genuine empty string is a VALUE, not an absence.
+        daemon.setValue(QStringLiteral("Slice0/Locked"), QString());
+        QCOMPARE(changed.count(), 2);
+        QVERIFY(changed.at(1).at(1).toString().isEmpty());
+        QCOMPARE(removed.count(), 1);
+    }
+
+    void applyRemoteRemovalLeavesTheKeyAbsentAndProvenUnset()
+    {
+        SettingsProxy proxy;
+        proxy.setReady(true);
+        proxy.applySnapshot({ { QStringLiteral("Slice0/Locked"), QStringLiteral("True") } });
+        QVERIFY(proxy.contains(QStringLiteral("Slice0/Locked")));
+
+        QSignalSpy outboundRemove(&proxy, &SettingsProxy::outboundRemoveRequested);
+        proxy.applyRemoteRemoval(QStringLiteral("Slice0/Locked"));
+
+        QVERIFY2(!proxy.contains(QStringLiteral("Slice0/Locked")),
+                 "the daemon said the key is gone, so contains() must say so too");
+        QCOMPARE(proxy.value(QStringLiteral("Slice0/Locked"), QStringLiteral("fallback"))
+                     .toString(),
+                 QStringLiteral("fallback"));
+        QVERIFY2(!proxy.handledKeys().contains(QStringLiteral("Slice0/Locked")),
+                 "a removed key must not still be listed");
+        QVERIFY(proxy.provenUnsetKeys().contains(QStringLiteral("Slice0/Locked")));
+        QVERIFY2(outboundRemove.count() == 0,
+                 "applying the daemon's own report must not send it back a removal");
+    }
+
+    // The wire shape, so the absence encoding survives a real encode and
+    // decode rather than only existing as a pair of C++ calls. Same
+    // convention settingsReject already uses: no entry at all, never an
+    // entry carrying an empty string.
+    void anAbsentSettingsValueEncodesWithNoEntryAndSurvivesTheRoundTrip()
+    {
+        const QByteArray wire = SessionMessages::encode(
+            SessionMessages::settingsValueAbsent(QStringLiteral("Slice0/Locked"), QString()));
+        QVERIFY2(!wire.contains("\"value\""), wire.constData());
+
+        SessionMessage back;
+        QVERIFY2(SessionMessages::decode(wire, &back), wire.constData());
+        QCOMPARE(back.kind, SessionMessageKind::SettingsValue);
+        QCOMPARE(back.objectKey, QByteArray("Slice0/Locked"));
+        QVERIFY2(back.updates.isEmpty(),
+                 "an entry-less settings.value is what marks the key absent");
+
+        // The distinguishing case: a genuine empty-string VALUE still
+        // carries an entry, so the two cannot be confused on the wire.
+        SessionMessage empty;
+        QVERIFY(SessionMessages::decode(
+            SessionMessages::encode(SessionMessages::settingsValue(
+                QStringLiteral("Slice0/Locked"), QString(), QStringLiteral("client-1"))),
+            &empty));
+        QCOMPARE(empty.updates.size(), 1);
+        QVERIFY(empty.updates.first().value.toString().isEmpty());
     }
 
     void serverDestructorClearsChangeHookAndSubsequentWritesDoNotCrash()

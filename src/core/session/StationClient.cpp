@@ -17,6 +17,11 @@
 //                                    daemon restart and reconnect. AI-
 //                                    assisted transformation via Anthropic
 //                                    Claude Code.
+//   2026-08-09  J.J. Boyd / KG4VCF  Whole-branch review, Important 4:
+//                                    an entry-less settings.value is a
+//                                    removal, not an empty string.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -1152,7 +1157,17 @@ void StationClient::handleSettingsSnapshot(const SessionMessage& message)
 
 void StationClient::handleSettingsValue(const SessionMessage& message)
 {
-    if (m_settingsProxy.isNull() || message.updates.isEmpty()) {
+    if (m_settingsProxy.isNull()) {
+        return;
+    }
+    // An EMPTY entry list means the key is GONE from the station's store,
+    // the same absence convention handleSettingsReject below already
+    // reads (whole-branch review, Important 4). Before this, the daemon
+    // sent a real entry holding "" for a removal and this method cached
+    // it, so the client reported contains() true and value(key, default)
+    // "" for a key the station did not have.
+    if (message.updates.isEmpty()) {
+        m_settingsProxy->applyRemoteRemoval(QString::fromUtf8(message.objectKey));
         return;
     }
     m_settingsProxy->applyRemoteValue(QString::fromUtf8(message.objectKey),

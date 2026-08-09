@@ -31,6 +31,10 @@
 //                                    so the Setup gate has a production
 //                                    caller. AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-08-09  J.J. Boyd / KG4VCF  Whole-branch review, Important 4:
+//                                    applyRemoteRemoval(). AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include "core/settings/SettingsProxy.h"
@@ -211,6 +215,20 @@ void SettingsProxy::applyRemoteValue(const QString& key, const QVariant& value, 
     Q_UNUSED(originTag); // see the class comment's origin-tag paragraph: applied unconditionally here
     m_cache.insert(key, value.toString());
     m_provenUnset.remove(key);
+}
+
+void SettingsProxy::applyRemoteRemoval(const QString& key)
+{
+    // Deliberately NOT this class's own remove(): that is the OUTBOUND
+    // path and would emit outboundRemoveRequested() (or record a dropped
+    // offline edit), sending the station a removal it just told us about.
+    // Proven-unset unconditionally, without value()'s and remove()'s
+    // m_snapshotEverApplied gate: the daemon has directly asserted this
+    // key's absence, which is a stronger fact than the inference that
+    // gate protects, and is the same reasoning applyRejection() below
+    // uses for an invalid restored value.
+    m_cache.remove(key);
+    m_provenUnset.insert(key);
 }
 
 void SettingsProxy::applyRejection(const QString& key, const QVariant& restoredValue)

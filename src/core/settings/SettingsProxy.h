@@ -277,6 +277,12 @@
 //                                    which described a caller that did not
 //                                    exist. AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-08-09  J.J. Boyd / KG4VCF  Whole-branch review, Important 4:
+//                                    applyRemoteRemoval(), so a station
+//                                    removal is cached as absence rather
+//                                    than as an empty string. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include <QMap>
@@ -368,6 +374,21 @@ public:
     // client's own write (see the class comment's origin-tag paragraph).
     // Applied to m_cache unconditionally.
     void applyRemoteValue(const QString& key, const QVariant& value, const QString& originTag);
+
+    // The daemon reports `key` as GONE from the station's store, whether
+    // a daemon-local removal or the echo of this client's own remove().
+    //
+    // Whole-branch review, Important 4. Until this existed there was no
+    // way to represent "removed" as distinct from "empty" on this side:
+    // the daemon's removal broadcast carried an invalid QVariant that the
+    // relay flattened to "", applyRemoteValue() cached that, and the key
+    // came back from the dead as an empty string -- contains() true here
+    // and false on the daemon, value(key, someDefault) returning "" where
+    // the caller's default was the whole contract (SettingsProxy's own
+    // "Absent keys must stay absent"). Leaves the key PROVEN UNSET, which
+    // is exactly what the daemon just asserted, the same way
+    // applyRejection() below treats an invalid restored value.
+    void applyRemoteRemoval(const QString& key);
 
     // The daemon rejected a write this client sent for `key`.
     // `restoredValue`, if valid, becomes the new cached value; an

@@ -44,6 +44,12 @@
 //                                    hand-maintained kAllBoards list).
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-08-09  J.J. Boyd / KG4VCF  Whole-branch review, Important 4:
+//                                    onLocalAppSettingsChange() emits
+//                                    outboundValueRemoved() for a key that
+//                                    is now absent. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include "core/settings/SettingsProxyServer.h"
@@ -364,6 +370,18 @@ void SettingsProxyServer::onLocalAppSettingsChange(const QString& key)
         // An OperatorLocal key changed on the daemon (e.g. nereusd.conf-
         // derived local audio device selection) -- not a remote GUI's
         // concern, nothing to broadcast.
+        return;
+    }
+    // Whole-branch review, Important 4: a REMOVAL is not a value change,
+    // and this hook fires for both. AppSettings::remove() calls this
+    // exactly as setValue() does, and value() on the now-absent key
+    // returns an invalid QVariant that the relay used to flatten into ""
+    // -- so a removal arrived at every client as "set to empty string",
+    // leaving contains() true there and false here. contains() is the
+    // question that separates the two cases, and it is asked here rather
+    // than left for a downstream reader to infer from QVariant validity.
+    if (!m_appSettings.contains(key)) {
+        emit outboundValueRemoved(key);
         return;
     }
     // A genuine local/daemon-side change: empty origin tag, since it is

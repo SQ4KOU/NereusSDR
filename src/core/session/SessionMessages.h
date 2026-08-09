@@ -106,6 +106,10 @@
 //                                    settings kinds. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-08-09  J.J. Boyd / KG4VCF  Whole-branch review, Important 4:
+//                                    settingsValueAbsent(). AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include <QByteArray>
@@ -401,6 +405,22 @@ public:
     /// connected client (SettingsProxyServer::outboundValueChanged).
     static SessionMessage settingsValue(const QString& key, const QString& value,
                                         const QString& originTag);
+
+    /// Daemon to client: this key is GONE from the station's store
+    /// (SettingsProxyServer::outboundValueRemoved), as distinct from
+    /// holding an empty string.
+    ///
+    /// Whole-branch review, Important 4. The same SettingsValue kind with
+    /// an EMPTY entry list, which is exactly how settingsReject() below
+    /// already encodes "the daemon has nothing for this key either" --
+    /// one absence convention on this wire, not two. A peer built before
+    /// this existed decodes the frame fine (the codec requires the
+    /// properties array to be present, and empty is present) and its
+    /// handler ignores an entry-less settings.value, so it keeps its last
+    /// known value rather than acquiring the empty-string ghost this
+    /// replaces. Strictly better than the old behaviour, and not a
+    /// version break.
+    static SessionMessage settingsValueAbsent(const QString& key, const QString& originTag);
 
     /// Daemon to client: a SettingsWrite was refused. `hasRestoredValue`
     /// false means the daemon has nothing for this key either (proven

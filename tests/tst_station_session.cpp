@@ -207,6 +207,7 @@ private slots:
     // ---- Mirror and settings wiring (task 18 steps 7 and 8) ----
     void mirrorRoundTripsSliceStateAndDoesNotEcho();
     void settingsProxyIsNotReadyBeforeTheSnapshot();
+    void aRemovedStationSettingReachesTheClientAsAbsenceNotAnEmptyString();
     void schemaSkewIsCaughtByNameComparison();
 
     // ---- Fix round 1 ----
@@ -934,6 +935,87 @@ void TstStationSession::settingsProxyIsNotReadyBeforeTheSnapshot()
     QVERIFY(stationSettings.contains(QStringLiteral("TciServerPort")));
     proxy.remove(QStringLiteral("TciServerPort"));
     QTRY_VERIFY(!stationSettings.contains(QStringLiteral("TciServerPort")));
+}
+
+// Whole-branch review, Important 4. A settings remove on the station used
+// to arrive at the client as "set to empty string", because the daemon's
+// change hook reports every mutation the same way: it emits
+// outboundValueChanged(key, m_appSettings.value(key), ...) and value() on
+// an absent key returns an INVALID QVariant, which StationServer then
+// flattened with value.toString() into "". The client cached that, so
+// contains() stayed true and value(key, someDefault) returned "" rather
+// than the caller's default, while the station said absent.
+//
+// This is the same invariant an earlier fix round removed inside one
+// process (AppSettings::remove's own "actually gone, not just hidden"),
+// reintroduced at the wire seam. Reachable operator actions on a remote
+// GUI: deleting a mic profile (roughly 91 keys), shrinking the notch list
+// (whose own prune exists so a later grow cannot read stale values back,
+// which the ghost defeats exactly), and Diagnostics cleanup on a
+// non-BPF1 board.
+//
+// Driven end to end through the real StationServer, the real wire codec
+// and the real StationClient, because the flattening happened in the
+// relay and no unit-level test of either half could see it.
+void TstStationSession::aRemovedStationSettingReachesTheClientAsAbsenceNotAnEmptyString()
+{
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(
+        settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+    stationSettings.setValue(QStringLiteral("TciServerPort"), QStringLiteral("50123"));
+
+    auto stationModel = makeStationRadioModel(0);
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
+    stationEnd->linkTo(clientEnd);
+
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    client.startSession(clientEnd, server.token());
+    server.acceptTransport(stationEnd);
+    QTRY_COMPARE(completed.count(), 1);
+
+    QCOMPARE(proxy.value(QStringLiteral("TciServerPort"), QStringLiteral("fallback")).toString(),
+             QStringLiteral("50123"));
+    QVERIFY(proxy.contains(QStringLiteral("TciServerPort")));
+
+    // ── Station to client ────────────────────────────────────────────────
+    // A removal on the daemon, for any reason of its own.
+    stationSettings.remove(QStringLiteral("TciServerPort"));
+
+    QTRY_VERIFY2(!proxy.contains(QStringLiteral("TciServerPort")),
+                 "the client still holds a key the station removed");
+    QCOMPARE(proxy.value(QStringLiteral("TciServerPort"), QStringLiteral("fallback")).toString(),
+             QStringLiteral("fallback"));
+    QVERIFY2(!proxy.handledKeys().contains(QStringLiteral("TciServerPort")),
+             "a removed key must not still be listed");
+
+    // ── Client to station, and the echo back ─────────────────────────────
+    // The direction an operator actually triggers. The client removes it
+    // locally and immediately, the station catches up, and then the
+    // station's own broadcast for that removal comes BACK to this client.
+    // That echo is what used to resurrect the key as an empty string,
+    // undoing a removal the client had already performed correctly.
+    stationSettings.setValue(QStringLiteral("Slice0/Locked"), QStringLiteral("True"));
+    QTRY_COMPARE(proxy.value(QStringLiteral("Slice0/Locked"), QString()).toString(),
+                 QStringLiteral("True"));
+
+    proxy.remove(QStringLiteral("Slice0/Locked"));
+    QVERIFY(!proxy.contains(QStringLiteral("Slice0/Locked")));
+    QTRY_VERIFY(!stationSettings.contains(QStringLiteral("Slice0/Locked")));
+
+    // Several flush intervals for the echo to land and misbehave in.
+    QTest::qWait(StationClient::kDefaultWriteFlushMs * 6);
+    QVERIFY2(!proxy.contains(QStringLiteral("Slice0/Locked")),
+             "the station's echo resurrected the key the client just removed");
+    QCOMPARE(proxy.value(QStringLiteral("Slice0/Locked"), QStringLiteral("fallback")).toString(),
+             QStringLiteral("fallback"));
 }
 
 void TstStationSession::schemaSkewIsCaughtByNameComparison()

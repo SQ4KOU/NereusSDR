@@ -12,6 +12,11 @@
 //                                    half of the wss session. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-08-09  J.J. Boyd / KG4VCF  Whole-branch review, Important 4:
+//                                    relay a settings removal as an
+//                                    absence frame, not as a value of "".
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -183,6 +188,16 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             [this](const QString& key, const QVariant& value, const QString& originTag) {
                 sendToSession(
                     SessionMessages::settingsValue(key, value.toString(), originTag));
+            });
+    // Whole-branch review, Important 4. A removal has its own signal and
+    // its own frame. It used to arrive here as an outboundValueChanged
+    // carrying an INVALID QVariant, and the value.toString() above turned
+    // that into "" -- so every client cached an empty string for a key
+    // the station no longer had, and a client that had just correctly
+    // removed the key itself had it resurrected by the echo.
+    connect(m_settingsServer, &SettingsProxyServer::outboundValueRemoved, this,
+            [this](const QString& key) {
+                sendToSession(SessionMessages::settingsValueAbsent(key, QString()));
             });
 
     // ObjectRegistry's create/destroy events are the lifecycle half of the

@@ -213,6 +213,11 @@
 //                                    now share one union floor. AI-
 //                                    assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-08-09  J.J. Boyd / KG4VCF  Whole-branch review, Important 4:
+//                                    outboundValueRemoved(), so a removal
+//                                    is not reported as a value change.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QMap>
@@ -306,6 +311,30 @@ signals:
     /// given). Never fired twice for the same underlying setValue() call
     /// -- see the class comment.
     void outboundValueChanged(const QString& key, const QVariant& value, const QString& originTag);
+
+    /// One Station key that is now GONE from the station's store, rather
+    /// than holding a new value. A separate signal, not an
+    /// outboundValueChanged carrying an invalid QVariant.
+    ///
+    /// Whole-branch review, Important 4. The generic hook path cannot
+    /// tell a caller which kind of mutation happened, and it reported
+    /// both as a value change: AppSettings::value() on an absent key
+    /// returns an INVALID QVariant, StationServer flattened that with
+    /// .toString() into "", and the client cached an empty string for a
+    /// key the station no longer had -- contains() true on one side and
+    /// false on the other, with value(key, someDefault) returning ""
+    /// instead of the caller's default. AppSettings::contains() is the
+    /// question that actually distinguishes the two, so it is asked here
+    /// and the answer is carried in the signal's identity rather than in
+    /// the validity of a QVariant that has to survive a relay.
+    ///
+    /// Origin tag deliberately absent: every removal reaching this class
+    /// arrives through the generic local-change hook (there is no
+    /// applyInboundRemove counterpart to applyInboundWrite -- StationServer
+    /// routes a client's remove straight at the store), so there is never
+    /// a tag to carry, exactly as onLocalAppSettingsChange's value path
+    /// already emits an empty one.
+    void outboundValueRemoved(const QString& key);
 
 private:
     /// Installed as m_appSettings's Task 13 change hook. See the class

@@ -23,6 +23,11 @@
 //                                    before narrowing it to qlonglong.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-08-09  J.J. Boyd / KG4VCF  Whole-branch review, Important 4:
+//                                    settingsValueAbsent(), the distinct
+//                                    absence encoding for a removed key.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionMessages.h"
@@ -219,6 +224,18 @@ SessionMessage SessionMessages::settingsValue(const QString& key, const QString&
     m.kind = SessionMessageKind::SettingsValue;
     m.objectKey = key.toUtf8();
     m.updates = { settingsEntry(key, value) };
+    m.originTag = originTag;
+    return m;
+}
+
+SessionMessage SessionMessages::settingsValueAbsent(const QString& key,
+                                                    const QString& originTag)
+{
+    // No entry at all, deliberately: see the header. An entry carrying an
+    // empty string is the exact thing this exists to stop being sent.
+    SessionMessage m;
+    m.kind = SessionMessageKind::SettingsValue;
+    m.objectKey = key.toUtf8();
     m.originTag = originTag;
     return m;
 }
