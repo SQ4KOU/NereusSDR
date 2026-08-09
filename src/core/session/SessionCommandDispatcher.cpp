@@ -19,6 +19,13 @@
 //                                    lambda captures (Minor 7). AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-08-09  J.J. Boyd / KG4VCF  Whole-branch review, Important 1:
+//                                    findIntArgument() replaces four bare
+//                                    QVariant::toInt() narrows that
+//                                    silently truncated an out-of-range
+//                                    id to 32 bits. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -29,7 +36,10 @@
 
 #include <QHash>
 #include <QMetaObject>
+#include <QMetaType>
 #include <QVariant>
+
+#include <limits>
 
 namespace NereusSDR {
 
@@ -38,9 +48,10 @@ namespace {
 // Looks up one named argument out of a CommandInvoke's arguments list.
 // `arguments` reuses MirrorUpdate as a generic {name, kind, value} triple
 // (SessionMessage::arguments' own doc comment) -- `kind` and `ordinal` are
-// not consulted here, only `name` and `value`; the QVariant coercions in
-// each handler below (toInt() / toString()) are what actually narrow the
-// value to what RadioModel's entry point expects.
+// not consulted here, only `name` and `value`. Every INTEGER argument goes
+// through findIntArgument() below rather than narrowing the QVariant at
+// the call site; only the string arguments (initialPanId, panId) still
+// read this directly, and QVariant::toString() has no range to fall off.
 bool findArgument(const QList<MirrorUpdate>& arguments, const QByteArray& name, QVariant* out)
 {
     for (const MirrorUpdate& arg : arguments) {
@@ -50,6 +61,75 @@ bool findArgument(const QList<MirrorUpdate>& arguments, const QByteArray& name, 
         }
     }
     return false;
+}
+
+// What findIntArgument() found. Three states rather than a bool, because
+// "you did not send sliceId" and "the sliceId you sent is not a number
+// this station can act on" are different things to tell a peer, and the
+// pre-existing "missing ..." reasons are worth keeping distinct.
+enum class ArgumentStatus {
+    Ok,
+    Missing,
+    NotRepresentable,
+};
+
+// Every id and rate argument in this file is an `int` on RadioModel's
+// side, and every one of them arrives from the far side of a socket.
+//
+// Fix round 5 review finding (Important 1): each of these used to be a
+// bare QVariant::toInt() with the `ok` flag discarded. Measured on this
+// tree's Qt, QVariant(qlonglong 4294967296).toInt() returns 0 with
+// ok == true and 4294967297 returns 1, so a peer asking to remove slice
+// 4294967296 removed slice 0 and got back accepted with affected
+// ["slice:0"] -- a request naming an object that does not exist
+// destroying a DIFFERENT object that does. One helper rather than four
+// checked narrows at four call sites: the four sites want identical
+// semantics, the next verb added to this file gets the safe behaviour by
+// construction, and the wording a peer sees stays in one place.
+//
+// The runtime type is checked, not the declared MirrorWireKind. The two
+// carry the same information -- SessionMessages' decoder collapses each
+// wire kind onto exactly one QVariant runtime type (fromJsonValue:
+// bool / qlonglong for Int64 and Enum / double / QString) -- but the
+// runtime type is the stronger statement, since it also holds for an
+// in-process caller that built the MirrorUpdate directly. Refusing a
+// double outright also keeps this code out of QVariant's own
+// floating-to-integral conversion, which is not a narrowing this layer
+// should be performing on untrusted input.
+ArgumentStatus findIntArgument(const QList<MirrorUpdate>& arguments,
+                               const QByteArray& name, int* out)
+{
+    QVariant raw;
+    if (!findArgument(arguments, name, &raw)) {
+        return ArgumentStatus::Missing;
+    }
+    switch (raw.typeId()) {
+    case QMetaType::Short:
+    case QMetaType::UShort:
+    case QMetaType::Int:
+    case QMetaType::UInt:
+    case QMetaType::Long:
+    case QMetaType::ULong:
+    case QMetaType::LongLong:
+    case QMetaType::ULongLong:
+        break;
+    default:
+        return ArgumentStatus::NotRepresentable;
+    }
+    bool ok = false;
+    const qlonglong wide = raw.toLongLong(&ok);
+    if (!ok || wide < static_cast<qlonglong>(std::numeric_limits<int>::min())
+        || wide > static_cast<qlonglong>(std::numeric_limits<int>::max())) {
+        return ArgumentStatus::NotRepresentable;
+    }
+    *out = static_cast<int>(wide);
+    return ArgumentStatus::Ok;
+}
+
+QString notRepresentableReason(const QByteArray& name)
+{
+    return QStringLiteral("%1 argument is not a whole number this station can represent")
+        .arg(QString::fromUtf8(name));
 }
 
 } // namespace
@@ -143,13 +223,19 @@ void SessionCommandDispatcher::handleAddSlice(const SessionMessage& invoke)
 
 void SessionCommandDispatcher::handleRemoveSlice(const SessionMessage& invoke)
 {
-    QVariant sliceIdArg;
-    if (!findArgument(invoke.arguments, "sliceId", &sliceIdArg)) {
+    int sliceId = 0;
+    switch (findIntArgument(invoke.arguments, "sliceId", &sliceId)) {
+    case ArgumentStatus::Missing:
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("missing sliceId argument"), {});
         return;
+    case ArgumentStatus::NotRepresentable:
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   notRepresentableReason("sliceId"), {});
+        return;
+    case ArgumentStatus::Ok:
+        break;
     }
-    const int sliceId = sliceIdArg.toInt();
 
     if (m_radioModel->sliceById(sliceId) == nullptr) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
@@ -222,16 +308,30 @@ void SessionCommandDispatcher::handleAddSliceOnPan(const SessionMessage& invoke)
 
 void SessionCommandDispatcher::handleRequestSliceSampleRate(const SessionMessage& invoke)
 {
-    QVariant sliceIdArg;
-    QVariant rateHzArg;
-    if (!findArgument(invoke.arguments, "sliceId", &sliceIdArg)
-        || !findArgument(invoke.arguments, "rateHz", &rateHzArg)) {
+    int sliceId = 0;
+    int rateHz = 0;
+    const ArgumentStatus sliceIdStatus =
+        findIntArgument(invoke.arguments, "sliceId", &sliceId);
+    const ArgumentStatus rateHzStatus = findIntArgument(invoke.arguments, "rateHz", &rateHz);
+    // One combined message for the missing case, as before -- naming both
+    // is what tells a peer this verb needs the pair. The out-of-range
+    // case names the offending argument specifically, because there the
+    // peer sent something and needs to know WHICH one was refused.
+    if (sliceIdStatus == ArgumentStatus::Missing || rateHzStatus == ArgumentStatus::Missing) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("missing sliceId or rateHz argument"), {});
         return;
     }
-    const int sliceId = sliceIdArg.toInt();
-    const int rateHz = rateHzArg.toInt();
+    if (sliceIdStatus == ArgumentStatus::NotRepresentable) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   notRepresentableReason("sliceId"), {});
+        return;
+    }
+    if (rateHzStatus == ArgumentStatus::NotRepresentable) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   notRepresentableReason("rateHz"), {});
+        return;
+    }
 
     if (m_radioModel->sliceById(sliceId) == nullptr) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
@@ -335,13 +435,19 @@ void SessionCommandDispatcher::handleRequestSliceSampleRate(const SessionMessage
 // duplicate.
 void SessionCommandDispatcher::handleSetActiveSliceById(const SessionMessage& invoke)
 {
-    QVariant sliceIdArg;
-    if (!findArgument(invoke.arguments, "sliceId", &sliceIdArg)) {
+    int sliceId = 0;
+    switch (findIntArgument(invoke.arguments, "sliceId", &sliceId)) {
+    case ArgumentStatus::Missing:
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("missing sliceId argument"), {});
         return;
+    case ArgumentStatus::NotRepresentable:
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   notRepresentableReason("sliceId"), {});
+        return;
+    case ArgumentStatus::Ok:
+        break;
     }
-    const int sliceId = sliceIdArg.toInt();
 
     // Captured BEFORE the call: this is the slice that is ABOUT to stop
     // being active, and setActiveSliceById() (RadioModel.cpp) reassigns

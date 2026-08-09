@@ -97,6 +97,12 @@
 //                                    active-slice click had no path to the
 //                                    daemon). AI-assisted transformation
 //                                    via Anthropic Claude Code.
+//   2026-08-09  J.J. Boyd / KG4VCF  Whole-branch review, Important 1: an
+//                                    integer argument outside int's range
+//                                    is now refused rather than truncated
+//                                    (see dispatch()). AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include <QByteArray>
@@ -122,9 +128,13 @@ public:
     /// Decode `invoke`'s verb and act on it.
     ///
     /// A malformed request (`invoke.kind` is not CommandInvoke, no
-    /// RadioModel attached, or an unrecognised commandVerb) produces an
-    /// immediate, synchronous rejection via commandResultReady() before
-    /// this call returns. A well-formed command's result may also arrive
+    /// RadioModel attached, an unrecognised commandVerb, a missing
+    /// argument, or an integer argument outside the range RadioModel's
+    /// own entry point can hold) produces an immediate, synchronous
+    /// rejection via commandResultReady() before this call returns. The
+    /// range check applies to requestSliceSampleRate too, so an
+    /// out-of-range argument there is answered synchronously and its
+    /// deferral (see the class comment) is never entered. A well-formed command's result may also arrive
     /// synchronously (addSlice, removeSlice, addSliceOnPan) or on a LATER
     /// turn of RadioModel's event loop (requestSliceSampleRate -- see the
     /// class comment). Callers must not assume commandResultReady() has

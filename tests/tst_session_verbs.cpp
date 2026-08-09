@@ -532,6 +532,92 @@ private slots:
         }
     }
 
+    // ── Out-of-range integer arguments (fix round 5, review Important 1) ──
+
+    // Every id argument used to reach RadioModel through a bare
+    // QVariant::toInt() with the `ok` flag discarded. Measured on this
+    // tree's Qt: QVariant(qlonglong 4294967296).toInt() returns 0 with
+    // ok == true, and 4294967297 returns 1. So an authenticated peer
+    // asking to remove slice 4294967296 removed slice 0 instead, and the
+    // command.result claimed accepted with affected ["slice:0"] -- the
+    // request named an object that does not exist and a DIFFERENT,
+    // existing object was destroyed.
+    //
+    // Driven from RAW WIRE BYTES rather than a hand-built MirrorUpdate.
+    // The whole defect lives in what a decoded, attacker-controlled frame
+    // narrows to, so building the argument in C++ (where the literal is
+    // already an int) would test the wrong thing.
+    void outOfRangeIntegerArgumentsAreRefusedRatherThanTruncated()
+    {
+        RadioModel model;
+        model.configureStreamPool(5, 5, 192000);
+        DispatchHarness harness(&model);
+
+        const int a = model.addSlice();
+        const int b = model.addSlice();
+        QCOMPARE(a, 0);
+        QCOMPARE(b, 1);
+        QCOMPARE(model.activeSlice(), model.sliceById(a));
+
+        // 2^32: exactly representable as a double, so it survives JSON
+        // intact and arrives as a qlonglong whose low 32 bits are zero.
+        harness.link.sendFromClient(
+            QByteArray(R"({"type":"command.invoke","verb":"removeSlice","id":1,)"
+                       R"("args":[{"ordinal":0,"name":"sliceId","kind":"i64",)"
+                       R"("value":4294967296}]})"));
+        QCOMPARE(harness.results.size(), 1);
+        QVERIFY2(!harness.results.at(0).accepted,
+                 "sliceId 4294967296 names no slice and must be refused, not "
+                 "truncated to 0");
+        QVERIFY(harness.results.at(0).affectedKeys.isEmpty());
+        QVERIFY2(model.sliceById(a) != nullptr, "slice 0 must not have been removed");
+        QVERIFY(model.sliceById(b) != nullptr);
+
+        // 2^32 + 1: low 32 bits are 1, so the same truncation activates
+        // slice 1 instead of refusing.
+        harness.link.sendFromClient(
+            QByteArray(R"({"type":"command.invoke","verb":"setActiveSliceById","id":2,)"
+                       R"("args":[{"ordinal":0,"name":"sliceId","kind":"i64",)"
+                       R"("value":4294967297}]})"));
+        QCOMPARE(harness.results.size(), 2);
+        QVERIFY2(!harness.results.at(1).accepted,
+                 "sliceId 4294967297 names no slice and must be refused, not "
+                 "truncated to 1");
+        QCOMPARE(model.activeSlice(), model.sliceById(a)); // unmoved
+
+        // rateHz is narrowed by the same bare toInt(). 2^32 + 192000
+        // truncates to a perfectly plausible 192 kHz.
+        harness.link.sendFromClient(
+            QByteArray(R"({"type":"command.invoke","verb":"requestSliceSampleRate","id":3,)"
+                       R"("args":[{"ordinal":0,"name":"sliceId","kind":"i64","value":0},)"
+                       R"({"ordinal":0,"name":"rateHz","kind":"i64","value":4295159296}]})"));
+        // Refused at argument-parse time, so the answer is synchronous --
+        // this verb's own deferral (see the class comment) is never
+        // reached at all.
+        QCOMPARE(harness.results.size(), 3);
+        QVERIFY2(!harness.results.at(2).accepted,
+                 "rateHz 4295159296 must be refused, not truncated to 192000");
+        QVERIFY(harness.results.at(2).affectedKeys.isEmpty());
+
+        // Every rejection carries a reason, and none of them is the
+        // pre-existing "missing argument" one: the argument was present,
+        // it was the VALUE that could not be represented.
+        for (const SessionMessage& r : harness.results) {
+            QVERIFY(!r.reason.isEmpty());
+            QVERIFY2(!r.reason.contains(QStringLiteral("missing")),
+                     qPrintable(r.reason));
+        }
+
+        // A well-formed id still works, over the same raw-bytes path, so
+        // the check above is a range test and not a blanket refusal.
+        harness.link.sendFromClient(
+            QByteArray(R"({"type":"command.invoke","verb":"setActiveSliceById","id":4,)"
+                       R"("args":[{"ordinal":0,"name":"sliceId","kind":"i64","value":1}]})"));
+        QCOMPARE(harness.results.size(), 4);
+        QVERIFY2(harness.results.at(3).accepted, qPrintable(harness.results.at(3).reason));
+        QCOMPARE(model.activeSlice(), model.sliceById(b));
+    }
+
     // ── setActiveSliceById (fix round 1, review Important 1) ────────────
 
     // Before this verb existed, a remote operator's active-slice click had
