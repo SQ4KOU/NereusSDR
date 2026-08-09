@@ -131,6 +131,12 @@
 //                                    once SessionCommandDispatcher exists.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-08-09  J.J. Boyd / KG4VCF  Whole-branch review, Important 4: the
+//                                    ordinal-keyed applyInbound overload
+//                                    no longer claims to be what a wire
+//                                    frame is keyed by. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include <QByteArray>
@@ -354,12 +360,24 @@ public:
     /// dispatch (Bidirectional WRITE / refused-with-reason / the
     /// applyMirroredValue hook) and for what m_applying suppresses while
     /// this runs.
+    ///
+    /// THIS is the overload the wire uses: StationServer::
+    /// handlePropertyWrite calls it with update.name for every inbound
+    /// property.write. See MirrorProperty::ordinal for the full list of
+    /// cross-process consumers that route by name, and for why dropping
+    /// the name from the wire encoding would break all of them silently.
     MirrorApplyResult applyInbound(const QByteArray& objectKey,
                                    const QByteArray& propertyName,
                                    const QVariant& wireValue);
 
-    /// Same, keyed by the property's wire ordinal -- what an actual wire
-    /// frame (Task 18) carries -- rather than its name.
+    /// Same, keyed by the property's wire ordinal rather than its name.
+    ///
+    /// Whole-branch review, Important 4: this used to say the ordinal is
+    /// "what an actual wire frame (Task 18) carries", which was false. A
+    /// frame carries both, and every cross-process consumer reads the
+    /// name; this overload has no production caller and exists as the
+    /// in-process-shaped counterpart to the coalescer's ordinal key.
+    /// tst_mirror_inbound covers both overloads.
     MirrorApplyResult applyInbound(const QByteArray& objectKey,
                                    quint16 ordinal,
                                    const QVariant& wireValue);

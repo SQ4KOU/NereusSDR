@@ -53,6 +53,13 @@
 //                                    validation that nothing performs.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-08-09  J.J. Boyd / KG4VCF  Whole-branch review, Important 4:
+//                                    MirrorProperty::ordinal no longer
+//                                    claims to be the wire identity. It
+//                                    is the in-process coalescing key;
+//                                    the wire routes on the name. AI-
+//                                    assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -89,8 +96,32 @@ enum class MirrorWireKind {
 /// One mirrored Q_PROPERTY.
 struct MirrorProperty {
     /// Dense, declaration-ordered, stable for the life of the process.
-    /// This is the wire identity; the name is carried for logging and
-    /// tests only.
+    ///
+    /// The IN-PROCESS coalescing key, and nothing more. Whole-branch
+    /// review, Important 4: this used to claim to be "the wire identity"
+    /// with "the name carried for logging and tests only", and that was
+    /// false as shipped. Every cross-process consumer routes by NAME --
+    /// StationServer::handlePropertyWrite applies by name,
+    /// StationClient::applyUpdates and onWriteFlushTick both resolve
+    /// schema.byName(update.name), StationCapabilities::fromUpdates
+    /// dispatches on name with a hardcoded ordinal of 0, and
+    /// StationClient::handleSchema builds a name set and discards every
+    /// ordinal the station sent it. StateMirror's ordinal-keyed
+    /// applyInbound overload has no production caller.
+    ///
+    /// Where the ordinal IS load-bearing: MirrorCoalescer keys its
+    /// per-object pending map on it, and flushCoalescedDeltas() re-reads
+    /// through byOrdinal(). Both ends of that are inside one process, so
+    /// ordinal skew between two builds cannot desynchronise anything --
+    /// no consumer assumes the two sides agree.
+    ///
+    /// The consequence for anyone tempted to shrink a 146-property
+    /// snapshot by dropping `name` from updateToJson/updateFromJson:
+    /// don't. It would make every property.write refuse with "no such
+    /// mirrored property" and every inbound delta land in the
+    /// schema-only-on-station bucket, both log-only and both silent to
+    /// the operator. tst_mirror_inbound's
+    /// thePropertyNameIsWhatTheWireRoutesOnNotTheOrdinal pins it.
     quint16 ordinal = 0;
 
     QByteArray name;

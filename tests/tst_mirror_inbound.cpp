@@ -51,6 +51,7 @@
 
 #include "core/session/MirrorPolicy.h"
 #include "core/session/MirrorSchema.h"
+#include "core/session/SessionMessages.h"
 #include "core/session/StateMirror.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -217,6 +218,100 @@ private slots:
         QVERIFY2(result.accepted, qPrintable(result.reason));
         QCOMPARE(result.property, QByteArray("frequency"));
         QCOMPARE(slice.frequency(), 7100000.0);
+    }
+
+    // ── Whole-branch review, Important 4: the NAME is load-bearing ─────────
+    //
+    // MirrorSchema.h used to call the ordinal "the wire identity" and the
+    // name something "carried for logging and tests only", and
+    // StateMirror.h used to describe the ordinal overload above as keyed
+    // by "what an actual wire frame carries". Both were false as shipped:
+    // everything cross-process routes by NAME. StationServer::
+    // handlePropertyWrite applies by name, StationClient::applyUpdates and
+    // onWriteFlushTick both resolve schema.byName(update.name),
+    // StationCapabilities::fromUpdates dispatches on name with a
+    // hardcoded ordinal of 0, and StationClient::handleSchema builds a
+    // name set and discards every ordinal it is sent. The ordinal overload
+    // above has no production caller at all; the ordinal's real job is
+    // in-process, as MirrorCoalescer's key.
+    //
+    // The comments are now corrected, and this is the thing that keeps
+    // them true. The optimisation they used to invite is dropping `name`
+    // from updateToJson/updateFromJson to shrink a 146-property snapshot,
+    // and it would make every property.write refuse with "no such
+    // mirrored property" and every inbound delta land in the
+    // schema-only-on-station bucket -- both log-only, both silent to the
+    // operator. Built from a LIVE model through the REAL codec rather
+    // than from a hand-written MirrorUpdate literal, which is exactly how
+    // the task-18 NaN defect survived four reviews.
+    void thePropertyNameIsWhatTheWireRoutesOnNotTheOrdinal()
+    {
+        SliceModel slice(0);
+        StateMirror mirror;
+        QVERIFY(mirror.watch("slice:0", &slice));
+        slice.setFrequency(7100000.0);
+
+        // A real snapshot of a real object, encoded and decoded by the
+        // real message codec.
+        const QList<MirrorUpdate> live = mirror.snapshot("slice:0");
+        MirrorUpdate frequency;
+        bool found = false;
+        for (const MirrorUpdate& u : live) {
+            if (u.name == "frequency") {
+                frequency = u;
+                found = true;
+                break;
+            }
+        }
+        QVERIFY2(found, "the live snapshot carried no frequency property");
+
+        const QByteArray wire =
+            SessionMessages::encode(SessionMessages::delta("slice:0", { frequency }));
+        SessionMessage decoded;
+        QVERIFY(SessionMessages::decode(wire, &decoded));
+        QCOMPARE(decoded.updates.size(), 1);
+        const MirrorUpdate roundTripped = decoded.updates.first();
+
+        // 1. The encoded frame carries the name, and the decoder keeps it.
+        //    This assertion is what a "drop the name to save bytes" change
+        //    breaks first, before any behaviour test would notice.
+        QVERIFY2(wire.contains("\"name\":\"frequency\""),
+                 "the encoded frame does not carry the property NAME; every "
+                 "cross-process apply path resolves by name, so this is not a "
+                 "byte to save");
+        QCOMPARE(roundTripped.name, QByteArray("frequency"));
+
+        // 2. The daemon's apply path is BY NAME. This is literally
+        //    StationServer::handlePropertyWrite's call.
+        const MirrorApplyResult byName =
+            mirror.applyInbound("slice:0", roundTripped.name, QVariant(14200000.0));
+        QVERIFY2(byName.accepted, qPrintable(byName.reason));
+        QCOMPARE(slice.frequency(), 14200000.0);
+
+        // 3. ...and the CLIENT's is too: StationClient::applyUpdates does
+        //    exactly this lookup before it can apply anything.
+        QVERIFY(MirrorSchema::forObject(&slice).byName(roundTripped.name) != nullptr);
+
+        // 4. The same update with its name stripped and its ordinal still
+        //    perfectly correct is REFUSED, which is the state every frame
+        //    would be in if the name were dropped from the wire.
+        MirrorUpdate nameless = roundTripped;
+        nameless.name.clear();
+        const MirrorApplyResult refused =
+            mirror.applyInbound("slice:0", nameless.name, QVariant(21050000.0));
+        QVERIFY2(!refused.accepted,
+                 "a nameless update was applied, so this test cannot detect the "
+                 "name being dropped from the wire");
+        QCOMPARE(slice.frequency(), 14200000.0);
+
+        // 5. The ordinal it still carries really is correct -- so the
+        //    refusal above is about the NAME being gone, not about a
+        //    damaged update. This is also the whole reason ordinal skew is
+        //    harmless today: no cross-process consumer reads it.
+        QCOMPARE(nameless.ordinal,
+                 MirrorSchema::forObject(&slice).byName("frequency")->ordinal);
+        QVERIFY(mirror.applyInbound("slice:0", nameless.ordinal, QVariant(21050000.0)).accepted);
+        QCOMPARE(slice.frequency(), 21050000.0);
     }
 
     // ── The per-model applyMirroredValue hook ───────────────────────────────
