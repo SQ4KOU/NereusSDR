@@ -184,8 +184,15 @@
 //
 // ---- The Setup-dialog gate (Step 7) ----
 //
-// setupDialogAllowed() is the single predicate a caller (Task 20) checks
-// before constructing SetupDialog. ready() alone is NOT sufficient: Task
+// setupDialogAllowed() is the single predicate behind every SetupDialog
+// construction. Task 20 wired it: MainWindow::createSetupDialog() is the
+// only place in src/gui that runs `new SetupDialog`, all twelve former
+// call sites go through it, and it asks
+// setupDialogAllowedForCurrentBackend() (declared at the bottom of this
+// header) which resolves the installed backend and delegates here. Until
+// fix round 2 this sentence described an intention rather than a fact:
+// the predicate had no production caller at all, so the gate was written
+// and not hung. ready() alone is NOT sufficient: Task
 // 1's daemon profile starts genuinely empty, so a freshly-reserved
 // `nereusd --profile daemon` reports ready() (the handshake completed)
 // with zero station settings for a Setup page to show. Without the
@@ -263,6 +270,13 @@
 //                                    not every key dropped while
 //                                    offline. AI-assisted transformation
 //                                    via Anthropic Claude Code.
+//   2026-08-08  J.J. Boyd / KG4VCF  Task 20 fix round 2 (review,
+//                                    Important 2): added
+//                                    setupDialogAllowedForCurrentBackend()
+//                                    and corrected the Setup-gate section,
+//                                    which described a caller that did not
+//                                    exist. AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QMap>
@@ -406,5 +420,23 @@ private:
     bool m_snapshotEverApplied = false;
     QString m_localOriginTag;
 };
+
+// ---------------------------------------------------------------------------
+// The Setup gate, as production actually asks the question.
+//
+// Task 20 fix round 2, Important 2. setupDialogAllowed() above is a method
+// on this class, so a caller has to already HAVE a SettingsProxy to ask it,
+// and in local direct mode there is no proxy at all -- AppSettings holds a
+// null remote backend. Every caller would therefore repeat the same
+// "cross-cast the installed backend, allow unconditionally if it is not a
+// SettingsProxy" preamble, and the first one to get it wrong would refuse
+// Setup on a local radio. One function, one place to be right.
+//
+// Local direct mode: AppSettings::remoteBackend() is nullptr, the cast
+// yields nullptr, this returns true, and nothing changes. The same is true
+// of any OTHER ISettingsBackend implementation that might be installed:
+// this gate is specifically about a station whose settings have not landed
+// yet, and it has no opinion about backends it does not recognise.
+bool setupDialogAllowedForCurrentBackend();
 
 } // namespace NereusSDR

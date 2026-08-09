@@ -705,8 +705,9 @@ void GeneralOptionsPage::connectController()
 // at page construction time.
 //
 // Issue #259 — the SetupDialog (and every page in it) is constructed lazily
-// on every Tools → Setup open via `new SetupDialog(m_radioModel, this)` at
-// the seven call sites in MainWindow.cpp. So:
+// on every Tools → Setup open, through MainWindow::createSetupDialog(), which
+// remote-daemon R2 Task 20 made the single construction site for the twelve
+// entry points that used to run `new SetupDialog` inline. So:
 //
 //   1. App launches, no SetupDialog yet.
 //   2. RadioModel connects, StepAttenuatorController::loadSettings runs,

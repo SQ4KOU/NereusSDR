@@ -25,6 +25,12 @@
 //                                    told only the contradicted subset).
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-08-08  J.J. Boyd / KG4VCF  Task 20 fix round 2 (review,
+//                                    Important 2):
+//                                    setupDialogAllowedForCurrentBackend(),
+//                                    so the Setup gate has a production
+//                                    caller. AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/settings/SettingsProxy.h"
@@ -241,6 +247,22 @@ void SettingsProxy::logProxiedRead(const QString& key, const QString& outcome,
     qCDebug(lcSettingsProxy).noquote()
         << QStringLiteral("proxied-read %1 outcome=%2 %3=\"%4\"")
                .arg(key, outcome, label, valueOrDefault.toString());
+}
+
+bool setupDialogAllowedForCurrentBackend()
+{
+    // dynamic_cast, not qobject_cast: AppSettings holds the backend as an
+    // ISettingsBackend*, and that interface deliberately is NOT a QObject
+    // (see ISettingsBackend.h), so there is no meta-object for qobject_cast
+    // to walk. The interface has a virtual destructor, which is what makes
+    // this cross-cast well-formed. Same shape MainWindow::connectToStation()
+    // uses to find the proxy at dial time.
+    const auto* proxy = dynamic_cast<const SettingsProxy*>(
+        AppSettings::instance().remoteBackend());
+    if (proxy == nullptr) {
+        return true;  // local direct mode, or a backend this gate has no opinion about
+    }
+    return proxy->setupDialogAllowed();
 }
 
 } // namespace NereusSDR

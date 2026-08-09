@@ -470,7 +470,12 @@ do. Expect them greyed out on the bench and do not file it.
    local binding, so disabling them would cost two working settings pages
    to silence one dead widget on each. Expect those two pages to be usable
    but to have one control that does not respond. Full reasoning is on
-   `RadioModel::localDspHandOutCount()`.
+   `RadioModel::localDspHandOutCount()`. The blind spot does **not** widen
+   unnoticed: check 2 of `scripts/verify-no-gui-dsp-access.py` inventories
+   every `rxChannelForSlice()` call under `src/gui/` per file and fails on
+   a call in an uninventoried file or a count that moved, in CI and in the
+   pre-commit hook both. A third page joining these two has to pass that
+   check first.
 10. **Once a station is saved in Setup, every launch is remote** until the
     field is cleared. There is no `--local` escape hatch. A launch against
     a dead station therefore shows a greyed Connect menu with no obvious
@@ -497,6 +502,7 @@ Two processes, one host. `nereusd` holds the radio; the GUI holds nothing.
 | 5.2 | GUI launches with `--station`, `wss` handshake completes | no | OPEN |
 | 5.3 | Token round-trip succeeds | no | OPEN |
 | 5.4 | A WRONG token is refused, and refused again while rate-limited | no | OPEN |
+| 5.4a | Setup is REFUSED with a toast while the station is unreachable | no | OPEN |
 | 5.5 | Settings snapshot arrives; `setupDialogAllowed()` opens the gate | no | OPEN |
 | 5.6 | Setup opens; Remote Station page is usable; the 5 Audio pages are greyed | no | OPEN |
 | 5.7 | Connect / Disconnect / Manage Radios / Protocol Info are all greyed; Network diagnostics refuses | no | OPEN |
@@ -510,9 +516,9 @@ Two processes, one host. `nereusd` holds the radio; the GUI holds nothing.
 | 5.15 | Setup pages round-trip station settings both ways | **yes** | OPEN |
 | 5.16 | `unappliedProperties()` reports exactly the 13 TunerModel entries | no | OPEN |
 
-Rows 5.1 through 5.7 and 5.16 do **not** need a radio and can be run first
-on any machine. Record which rows ran and which are still OPEN; do not
-merge the two into one verdict.
+Rows 5.1 through 5.7 (including 5.4a) and 5.16 do **not** need a radio and
+can be run first on any machine. Record which rows ran and which are still
+OPEN; do not merge the two into one verdict.
 
 #### 5.1 Start the daemon
 
@@ -564,13 +570,38 @@ lockout is in force (`TokenStore` returns `RateLimited`, which is distinct
 from `Rejected` on purpose). Wait out `kDefaultLockoutMs` and retry to
 confirm recovery.
 
+#### 5.4a The gate seen SHUT
+
+Run this before 5.5, because 5.5 only proves the gate opens and an
+always-open gate would pass it. Stop `nereusd` (or leave it stopped after
+5.4) and launch the GUI with the same `--station`. The handshake cannot
+complete, so `SettingsProxy::ready()` stays false.
+
+Now try to open Setup, by any route: **File > Settings** (Ctrl+,), a
+right-click "Setup" item on an applet, or the VFO flag's AGC / NB / NR
+right-click hops. All twelve routes go through
+`MainWindow::createSetupDialog()`.
+
+Pass: **no dialog appears**, and a status-bar toast says Setup is not ready
+yet and that this window is still waiting for the station's settings. Fail:
+the dialog opens. That is the failure that matters most on this whole
+matrix, because a Setup dialog opened here shows this machine's ship
+defaults, and the first control the operator touches writes one of them
+into the STATION store as if it had been chosen deliberately.
+
+Then start `nereusd` and wait for the reconnect toast. Pass: the same Setup
+route now opens the dialog, with no relaunch needed. What changed is the
+snapshot arriving, nothing the operator did.
+
 #### 5.5 through 5.6 The Setup gate and the page gate
 
 Open Setup. Pass: it opens at all (`SettingsProxy::setupDialogAllowed()` is
 `ready()` **and** (non-empty snapshot **or** the seed marker
-`AppSettings::kDaemonProfileSeededKey`)). Do not open Setup before the
-handshake completes: 187 widget constructors would bake ship defaults into
-the station.
+`AppSettings::kDaemonProfileSeededKey`)). It is asked through
+`setupDialogAllowedForCurrentBackend()`, from
+`MainWindow::createSetupDialog()`, which is the only place in `src/gui`
+that constructs the dialog. Setup cannot be opened before the handshake
+completes; 5.4a is that half of the row.
 
 Then, on the Audio category: Devices, TX Input, VAX, TCI and Advanced must
 all be greyed out. On CAT & Network: **Remote Station** must be usable, and

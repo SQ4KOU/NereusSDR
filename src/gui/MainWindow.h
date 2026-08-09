@@ -121,6 +121,13 @@ class MeterPoller;
 class TitleBar;
 class VaxFirstRunDialog;
 class PsForm;
+// Remote-daemon R2 Task 20 fix round 2: createSetupDialog() returns this,
+// and it is a slot, so the type appears in a moc-parsed signature.
+// Declared here rather than written inline as the elaborated
+// `class SetupDialog*` that the older, non-slot wireSetupDialog() uses.
+// Whether moc would accept the elaborated form in a return position was
+// not tested; the forward declaration is the form that is known to work.
+class SetupDialog;
 // Phase 3J-2 H1: Tools menu modeless singletons.
 class SpotHubDialog;
 class FreeDVReporterDialog;
@@ -484,6 +491,32 @@ private slots:
     /// Build the StationClient and dial `m_station`. Called once at the end
     /// of construction and only when m_station.isRemote().
     void connectToStation();
+
+    /// The one place in src/gui that runs `new SetupDialog`.
+    ///
+    /// Remote-daemon R2 Task 20, fix round 2. Twelve call sites all did the
+    /// identical construct / WA_DeleteOnClose / wireSetupDialog() shape, so
+    /// the remote gate had nowhere to live and, until this landed,
+    /// SettingsProxy::setupDialogAllowed() had no production caller at all.
+    ///
+    /// Returns nullptr when the gate refuses, having already told the
+    /// operator why through the status-bar toast. Callers that navigate to
+    /// a page afterwards must null-check.
+    ///
+    /// A no-op in local direct mode: AppSettings has no remote backend
+    /// there, setupDialogAllowedForCurrentBackend() returns true
+    /// unconditionally, and this is the same three lines it replaced.
+    ///
+    /// The gate matters because a freshly reserved daemon profile reports
+    /// ready() with zero station settings. Open Setup then and 187 widget
+    /// constructors each read their AppSettings default, and the first
+    /// interaction writes a ship default into the STATION store as if the
+    /// operator had chosen it.
+    ///
+    /// A slot rather than a plain method so it stays resolvable off
+    /// MainWindow::staticMetaObject: MainWindow cannot be constructed in a
+    /// unit test, and that name lookup is the only seam the suite has on it.
+    SetupDialog* createSetupDialog();
     void showSupportDialog();
     void showAudioDiagnoseDialog();
     void showFeatureRequestDialog();

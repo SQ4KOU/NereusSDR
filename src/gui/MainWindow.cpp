@@ -1491,24 +1491,27 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
         }
     });
     connect(newFlag, &VfoWidget::openSetupRequested, this, [this]() {
-        auto* dialog = new SetupDialog(m_radioModel, this);
-        dialog->setAttribute(Qt::WA_DeleteOnClose);
-        wireSetupDialog(dialog);
+        auto* dialog = createSetupDialog();
+        if (dialog == nullptr) {
+            return;  // the gate refused and has already said why
+        }
         dialog->selectPage(QStringLiteral("AGC/ALC"));
         dialog->show();
     });
     connect(newFlag, &VfoWidget::openNbSetupRequested, this, [this]() {
-        auto* dialog = new SetupDialog(m_radioModel, this);
-        dialog->setAttribute(Qt::WA_DeleteOnClose);
-        wireSetupDialog(dialog);
+        auto* dialog = createSetupDialog();
+        if (dialog == nullptr) {
+            return;  // the gate refused and has already said why
+        }
         dialog->selectPage(QStringLiteral("NB/SNB"));
         dialog->show();
     });
     connect(newFlag, &VfoWidget::openNrSetupRequested, this,
             [this](NereusSDR::NrSlot slot) {
-        auto* dialog = new SetupDialog(m_radioModel, this);
-        dialog->setAttribute(Qt::WA_DeleteOnClose);
-        wireSetupDialog(dialog);
+        auto* dialog = createSetupDialog();
+        if (dialog == nullptr) {
+            return;  // the gate refused and has already said why
+        }
         dialog->selectPage(QStringLiteral("NR/ANF"));
         // Deep-link to the sub-tab matching the NR slot the user clicked
         // (Task 18 polish 2026-04-23 — previously always opened NR1).
@@ -4249,9 +4252,10 @@ void MainWindow::buildUI()
         // B8 Task 24: wire "More Display Options →" link to Setup → Display.
         connect(m_overlayPanel, &SpectrumOverlayPanel::openSetupRequested,
                 this, [this](const QString& page) {
-            auto* dialog = new SetupDialog(m_radioModel, this);
-            dialog->setAttribute(Qt::WA_DeleteOnClose);
-            wireSetupDialog(dialog);
+            auto* dialog = createSetupDialog();
+            if (dialog == nullptr) {
+                return;  // the gate refused and has already said why
+            }
             dialog->selectPage(page);
             dialog->show();
         });
@@ -4976,9 +4980,10 @@ void MainWindow::populateDefaultMeter()
         txApplet->setTwoToneController(m_radioModel->twoToneController());
     }
     connect(txApplet, &TxApplet::txProfileMenuRequested, this, [this]() {
-        auto* dialog = new SetupDialog(m_radioModel, this);
-        dialog->setAttribute(Qt::WA_DeleteOnClose);
-        wireSetupDialog(dialog);
+        auto* dialog = createSetupDialog();
+        if (dialog == nullptr) {
+            return;  // the gate refused and has already said why
+        }
         dialog->selectPage(QStringLiteral("TX Profile"));
         dialog->show();
     });
@@ -5511,9 +5516,10 @@ void MainWindow::buildMenuBar()
     {
         QAction* settingsAction = fileMenu->addAction(QStringLiteral("&Settings..."),
             this, [this]() {
-                auto* dialog = new SetupDialog(m_radioModel, this);
-                dialog->setAttribute(Qt::WA_DeleteOnClose);
-                wireSetupDialog(dialog);
+                auto* dialog = createSetupDialog();
+                if (dialog == nullptr) {
+                    return;  // the gate refused and has already said why
+                }
                 dialog->show();
             });
         settingsAction->setShortcut(QKeySequence(Qt::CTRL | Qt::Key_Comma));
@@ -7631,9 +7637,10 @@ void MainWindow::updateTciIndicator()
 // (e.g. vfoWidget::openSetupRequested, m_overlayPanel::openSetupRequested).
 void MainWindow::openTciSetupPage()
 {
-    auto* dialog = new SetupDialog(m_radioModel, this);
-    dialog->setAttribute(Qt::WA_DeleteOnClose);
-    wireSetupDialog(dialog);
+    auto* dialog = createSetupDialog();
+    if (dialog == nullptr) {
+        return;  // the gate refused and has already said why
+    }
     dialog->selectPage(QStringLiteral("TCI Server"));
     dialog->show();
 }
@@ -7665,9 +7672,10 @@ void MainWindow::openSetup(const QString& pageKey)
         {QStringLiteral("rfKit"),         QStringLiteral("RF-Kit")},
     };
 
-    auto* dialog = new SetupDialog(m_radioModel, this);
-    dialog->setAttribute(Qt::WA_DeleteOnClose);
-    wireSetupDialog(dialog);
+    auto* dialog = createSetupDialog();
+    if (dialog == nullptr) {
+        return;  // the gate refused and has already said why
+    }
 
     const QString label = kKeyToLabel.value(pageKey);
     if (label.isEmpty()) {
@@ -8271,9 +8279,10 @@ void MainWindow::wireSliceToSpectrum()
 
         // Right-click AGC-T slider → open Setup dialog to AGC/ALC page
         connect(m_rxApplet, &RxApplet::openSetupRequested, this, [this]() {
-            auto* dialog = new SetupDialog(m_radioModel, this);
-            dialog->setAttribute(Qt::WA_DeleteOnClose);
-            wireSetupDialog(dialog);
+            auto* dialog = createSetupDialog();
+            if (dialog == nullptr) {
+                return;  // the gate refused and has already said why
+            }
             dialog->selectPage(QStringLiteral("AGC/ALC"));
             dialog->show();
         });
@@ -8292,9 +8301,10 @@ void MainWindow::wireSliceToSpectrum()
     if (m_phoneCwApplet) {
         connect(m_phoneCwApplet, &PhoneCwApplet::openSetupRequested, this,
                 [this](const QString& /*category*/, const QString& page) {
-            auto* dialog = new SetupDialog(m_radioModel, this);
-            dialog->setAttribute(Qt::WA_DeleteOnClose);
-            wireSetupDialog(dialog);
+            auto* dialog = createSetupDialog();
+            if (dialog == nullptr) {
+                return;  // the gate refused and has already said why
+            }
             dialog->selectPage(page);
             dialog->show();
             dialog->raise();
@@ -8308,9 +8318,10 @@ void MainWindow::wireSliceToSpectrum()
     if (m_txApplet) {
         connect(m_txApplet, &TxApplet::openSetupRequested, this,
                 [this](const QString& /*category*/, const QString& page) {
-            auto* dialog = new SetupDialog(m_radioModel, this);
-            dialog->setAttribute(Qt::WA_DeleteOnClose);
-            wireSetupDialog(dialog);
+            auto* dialog = createSetupDialog();
+            if (dialog == nullptr) {
+                return;  // the gate refused and has already said why
+            }
             dialog->selectPage(page);
             dialog->show();
             dialog->raise();
@@ -8903,6 +8914,41 @@ void MainWindow::openNetworkDiagnostics()
         m_radioModel, m_radioModel->audioEngine(), this);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     dlg->show();
+}
+
+SetupDialog* MainWindow::createSetupDialog()
+{
+    // The gate. In local direct mode AppSettings holds no remote backend,
+    // so setupDialogAllowedForCurrentBackend() returns true without looking
+    // at anything and the three lines below are exactly what every call
+    // site used to run inline.
+    //
+    // On a remote client it is the difference between a Setup dialog that
+    // shows the station's settings and one that shows this machine's ship
+    // defaults and then writes them into the station on first touch. See
+    // SettingsProxy.h's Setup-gate section: ready() alone is not enough,
+    // because a freshly reserved daemon profile is ready and empty.
+    if (!setupDialogAllowedForCurrentBackend()) {
+        // Deliberately not a modal error. The condition clears on its own
+        // the moment the snapshot lands, usually within a second of the
+        // handshake, so the operator's next click succeeds and a dialog
+        // they had to dismiss would have been the more annoying half of
+        // the interaction.
+        showToast(tr("Setup is not ready yet: this window is still waiting "
+                     "for the station's settings. Try again once the link "
+                     "reports connected."),
+                  ToastSeverity::Warning, 5000);
+        qCInfo(lcConnection)
+            << "Setup dialog refused: the station's settings snapshot has not "
+               "arrived, and opening Setup now would seed this client's ship "
+               "defaults into the station store.";
+        return nullptr;
+    }
+
+    auto* dialog = new SetupDialog(m_radioModel, this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    wireSetupDialog(dialog);
+    return dialog;
 }
 
 void MainWindow::applyRemoteRoleGating()
@@ -10257,9 +10303,10 @@ void MainWindow::checkVaxFirstRun()
     // Opens (or raises) the Setup dialog and navigates to Audio → VAX.
     connect(dlg, &VaxFirstRunDialog::openSetupAudioPage, this,
             [this](const QString& pageLabel) {
-        auto* dialog = new SetupDialog(m_radioModel, this);
-        dialog->setAttribute(Qt::WA_DeleteOnClose);
-        wireSetupDialog(dialog);
+        auto* dialog = createSetupDialog();
+        if (dialog == nullptr) {
+            return;  // the gate refused and has already said why
+        }
         dialog->selectPage(pageLabel);
         dialog->show();
     });

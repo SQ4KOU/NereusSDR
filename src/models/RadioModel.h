@@ -411,6 +411,14 @@ public:
     // change makes those two pages tolerable to disable, route the wrapper
     // and delete this paragraph.
     //
+    // That consequence is ENFORCED, not merely written down here. Check 2
+    // of scripts/verify-no-gui-dsp-access.py holds a per-file inventory of
+    // every rxChannelForSlice() call under src/gui/ and fails on a call in
+    // a file that is not listed, or on a count that moved in one that is.
+    // It runs in CI and in the pre-commit hook, so a new call site has to
+    // come through that inventory and read this block on the way past. Fix
+    // round 2, Important 1.
+    //
     // Armed for Role::Remote only, so this is not a general accessor tally
     // -- it means specifically "a remote model gave away something local".
     // That is also what makes it thread-safe without an atomic: a

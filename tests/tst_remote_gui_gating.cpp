@@ -41,11 +41,16 @@
 //   2026-08-08 -- New test file for remote-daemon R2 Task 20. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-08-08 -- Fix round 2: the Setup gate's production entry point
+//                 (Important 2) and the local-sweep sabotage detector
+//                 (Minor 1). J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
 
 #include <QApplication>
+#include <QMap>
 #include <QMetaObject>
 #include <QSignalSpy>
 #include <QStringList>
@@ -55,6 +60,7 @@
 #include "core/MoxController.h"
 #include "core/WdspTypes.h"
 #include "core/session/RemoteStationOptions.h"
+#include "core/settings/ISettingsBackend.h"
 #include "core/settings/SettingsProxy.h"
 #include "core/settings/SettingsScope.h"
 #include "gui/MainWindow.h"
@@ -76,6 +82,19 @@ const QString kStationTokenKey       = QStringLiteral("RemoteStationToken");
 const QString kStationFingerprintKey = QStringLiteral("RemoteStationFingerprint");
 const QString kStationAllowUnpinnedKey =
     QStringLiteral("RemoteStationAllowUnpinned");
+
+// An ISettingsBackend that is NOT a SettingsProxy. Exists to prove the
+// Setup gate's cross-cast has no opinion about backends it does not
+// recognise, rather than refusing whenever any backend is installed.
+class StubBackend : public ISettingsBackend {
+public:
+    bool handlesKey(const QString&) const override { return false; }
+    QVariant value(const QString&, const QVariant& def) const override { return def; }
+    void setValue(const QString&, const QVariant&) override {}
+    bool contains(const QString&) const override { return false; }
+    void remove(const QString&) override {}
+    QStringList handledKeys() const override { return {}; }
+};
 
 } // namespace
 
@@ -297,6 +316,14 @@ private slots:
                 disabled << labels.at(i);
             }
         }
+
+        // The same sabotage detector its remote-mode twin carries at the
+        // top of this file. Without it, a revert to label-driven iteration
+        // here leaves DSP > Options unvisited and this regression guard
+        // reports local mode clean while never having built the one page
+        // most likely to break it. Fix round 2, Minor 1.
+        QCOMPARE(dialog.realizedPageCountForTest(), pageCount);
+
         QVERIFY2(disabled.isEmpty(),
                  qPrintable(QStringLiteral(
                      "local direct mode regressed: %1 Setup page(s) came up "
@@ -330,6 +357,93 @@ private slots:
                                                "gate would be unreachable")
                                     .arg(QLatin1String(sig))));
         }
+    }
+
+    // ====================================================================
+    // Fix round 2, Important 2: the Setup gate, and the fact that it is
+    // now hung on something.
+    // ====================================================================
+
+    // MainWindow::createSetupDialog() is the only place in src/gui that
+    // runs `new SetupDialog`; all twelve former call sites go through it.
+    // MainWindow cannot be constructed here, so the name is pinned off the
+    // meta-object, the same seam the gating slots above use. A rename or a
+    // demotion to a plain method would strand the test that proves the gate
+    // exists at all, and a thirteenth site constructing the dialog inline
+    // would slip past a gate nobody was asserting on.
+    void mainWindowRoutesSetupDialogThroughOneGatedFactory()
+    {
+        const QMetaObject& mo = MainWindow::staticMetaObject;
+        QVERIFY2(mo.indexOfSlot("createSetupDialog()") >= 0,
+                 "MainWindow::createSetupDialog() is not an invokable slot; "
+                 "the Setup gate would be unreachable and unpinnable");
+    }
+
+    // Local direct mode, which is every existing user. AppSettings holds no
+    // remote backend there, so the gate must not have an opinion.
+    void setupGateIsOpenWhenNoRemoteBackendIsInstalled()
+    {
+        QVERIFY(AppSettings::instance().remoteBackend() == nullptr);
+        QVERIFY2(setupDialogAllowedForCurrentBackend(),
+                 "local direct mode has no SettingsProxy, so the gate must "
+                 "open unconditionally; refusing here would take Setup away "
+                 "from every non-remote user");
+    }
+
+    // A backend that is not a SettingsProxy is not this gate's business
+    // either. The cross-cast yields nullptr and the gate opens.
+    void setupGateIsOpenBehindAnUnrecognisedBackend()
+    {
+        StubBackend stub;
+        AppSettings::instance().setRemoteBackend(&stub);
+        QVERIFY(setupDialogAllowedForCurrentBackend());
+        AppSettings::instance().setRemoteBackend(nullptr);
+    }
+
+    // The states that matter, asked through the production entry point
+    // rather than through the method directly: this is what
+    // MainWindow::createSetupDialog() actually calls, so a regression in
+    // the cross-cast or the delegation shows up here and not only in
+    // tst_settings_proxy's method-level coverage.
+    void setupGateFollowsTheInstalledProxyThroughItsStates()
+    {
+        SettingsProxy proxy;
+        AppSettings::instance().setRemoteBackend(&proxy);
+
+        // Pre-handshake. This is the window in which 187 widget
+        // constructors would otherwise read their ship defaults and start
+        // writing them into the STATION store on first touch.
+        QVERIFY2(!setupDialogAllowedForCurrentBackend(),
+                 "the gate must be shut before the handshake completes");
+
+        // Ready, but nothing has arrived: a freshly reserved daemon
+        // profile looks exactly like this, which is why ready() alone was
+        // never sufficient.
+        proxy.setReady(true);
+        QVERIFY2(!setupDialogAllowedForCurrentBackend(),
+                 "ready() alone must not open the gate");
+
+        // Ready and empty is still shut.
+        proxy.applySnapshot(QMap<QString, QString>{});
+        QVERIFY(!setupDialogAllowedForCurrentBackend());
+
+        // The seed marker alone opens it: that is what tells "empty
+        // because the daemon profile is fresh" apart from "empty because
+        // something is broken".
+        QMap<QString, QString> seeded;
+        seeded.insert(QLatin1String(AppSettings::kDaemonProfileSeededKey),
+                      QStringLiteral("True"));
+        proxy.applySnapshot(seeded);
+        QVERIFY2(setupDialogAllowedForCurrentBackend(),
+                 "a legitimately fresh daemon profile must not be locked out "
+                 "of Setup, or a remote operator can never configure one");
+
+        // And so does real station content.
+        proxy.applySnapshot(QMap<QString, QString>{
+            {QStringLiteral("Slice0/Locked"), QStringLiteral("True")}});
+        QVERIFY(setupDialogAllowedForCurrentBackend());
+
+        AppSettings::instance().setRemoteBackend(nullptr);
     }
 
     // ====================================================================
