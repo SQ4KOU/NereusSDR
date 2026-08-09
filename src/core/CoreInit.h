@@ -69,6 +69,13 @@ void shutdown();
 // rather than a harmless replay of migrations that each happen to be
 // idempotent on their own. Not part of the public API.
 int initializeRunCount();
+
+// Test-only view of the PII redaction the installed message handler runs
+// over EVERY Qt log message before it reaches stderr or the on-disk log.
+// Exposed rather than reimplemented in the test, because the whole value
+// of the pinned cases is that this is the function production actually
+// runs. Not part of the public API.
+QString redactPiiForTest(const QString& message);
 #endif
 
 } // namespace CoreInit

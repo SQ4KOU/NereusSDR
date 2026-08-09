@@ -92,6 +92,73 @@ private slots:
         // on replay".
         QCOMPARE(NereusSDR::CoreInit::initializeRunCount(), 1);
     }
+
+    // ---- redactPii (Remote Daemon R2, security fix round) ---------------
+    //
+    // The message handler initialize() installs passes every Qt log message
+    // through redactPii() first. Its MAC rule used to be a bare six-pair
+    // hex body with no boundary guard, which is a strict PREFIX of a
+    // colon-separated SHA-256 certificate fingerprint
+    // (CertificateStore::fingerprintSha256(), 32 pairs) -- so the rule
+    // matched five times over inside one fingerprint and replaced 25 of its
+    // 32 bytes with asterisks, on stderr and in the on-disk log alike.
+    // These two slots pin both halves of the narrowing: a fingerprint
+    // survives, and genuine MAC redaction is unchanged.
+
+    void redactionLeavesATlsFingerprintIntact()
+    {
+        // Byte-for-byte the shape CertificateStore::fingerprintSha256()
+        // emits: 32 colon-separated uppercase hex pairs.
+        const QString fingerprint = QStringLiteral(
+            "9F:2A:07:BE:41:5C:D3:88:10:6E:AB:33:74:CF:29:5D:"
+            "E8:01:96:B2:47:0F:AD:5E:C1:38:72:9A:0B:E4:56:7D");
+        QCOMPARE(NereusSDR::CoreInit::redactPiiForTest(fingerprint), fingerprint);
+
+        // And on a line that carries BOTH: the fingerprint survives, the
+        // MAC does not. This is the real production shape -- the daemon's
+        // own diagnostics name a radio's MAC and a station fingerprint in
+        // the same breath.
+        const QString mac = QStringLiteral("00:1C:2D:05:37:2A");
+        const QString line =
+            QStringLiteral("station %1 radio %2 up").arg(fingerprint, mac);
+        const QString out = NereusSDR::CoreInit::redactPiiForTest(line);
+        QVERIFY2(out.contains(fingerprint),
+                 qPrintable(QStringLiteral("fingerprint was mangled: %1").arg(out)));
+        QVERIFY2(!out.contains(mac),
+                 qPrintable(QStringLiteral("MAC survived redaction: %1").arg(out)));
+        QVERIFY(out.contains(QStringLiteral("**:**:**:**:**:2A")));
+    }
+
+    void redactionStillHidesAMacInEveryShapeWeLogOne()
+    {
+        // Bare, colon-separated.
+        QCOMPARE(NereusSDR::CoreInit::redactPiiForTest(
+                     QStringLiteral("00:1C:2D:05:37:2A")),
+                 QStringLiteral("**:**:**:**:**:2A"));
+
+        // Dash-separated, the other form the rule has always accepted.
+        QCOMPARE(NereusSDR::CoreInit::redactPiiForTest(
+                     QStringLiteral("00-1C-2D-05-37-2A")),
+                 QStringLiteral("**:**:**:**:**:2A"));
+
+        // Inside an AppSettings key, which is how nearly every MAC in this
+        // tree reaches a log line ("hardware/<mac>/..." is 92 percent of a
+        // real settings file, R2 design addendum section 8).
+        QCOMPARE(NereusSDR::CoreInit::redactPiiForTest(
+                     QStringLiteral("hardware/AA:BB:CC:DD:EE:FF/radioInfo/sampleRate")),
+                 QStringLiteral("hardware/**:**:**:**:**:FF/radioInfo/sampleRate"));
+
+        // After a word and a hyphen. The narrowing must not treat the
+        // hyphen as evidence of a longer hex run.
+        QCOMPARE(NereusSDR::CoreInit::redactPiiForTest(
+                     QStringLiteral("adapter-00:1C:2D:05:37:2A")),
+                 QStringLiteral("adapter-**:**:**:**:**:2A"));
+
+        // IPv4 redaction is untouched by any of this.
+        QCOMPARE(NereusSDR::CoreInit::redactPiiForTest(
+                     QStringLiteral("bound 192.168.50.121")),
+                 QStringLiteral("bound *.*.*. 121"));
+    }
 };
 
 QTEST_MAIN(TstCoreInit)

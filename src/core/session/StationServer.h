@@ -259,6 +259,18 @@ public:
     QString token() const;
     QString certificateFingerprint() const;
 
+    /// The first-run pairing block, exactly as the operator is shown it.
+    ///
+    /// Pure and public for two reasons. It keeps the one place the token
+    /// is FORMATTED separate from the one place it is WRITTEN, so the
+    /// write side can be a single stdout call with no formatting logic in
+    /// it; and it lets a test assert on the exact text without capturing a
+    /// stream. See writePairingBanner() in the .cpp for why the banner
+    /// does not go through qCInfo() like every other line in this class.
+    static QString formatPairingBanner(const QString& token,
+                                       const QString& fingerprint,
+                                       const QString& storedIn);
+
     /// Adopt an already-connected transport as a new peer. This is what
     /// the QWebSocketServer's newConnection handler calls, and it is also
     /// how a test drives the real handshake over an in-process pipe: ONE

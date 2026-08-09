@@ -40,6 +40,7 @@
 #include <QWebSocketServer>
 
 #include <algorithm>
+#include <cstdio>
 
 namespace NereusSDR {
 
@@ -75,6 +76,59 @@ qint32 settingsSchemaVersionOf(const AppSettings& settings)
             .toString()
             .toInt());
 }
+
+// Written straight to stdout with C stdio, deliberately NOT through
+// qCInfo() like every other line in this class. That is a correctness fix,
+// not a style preference, and it closes two separate defects.
+//
+// FIRST, the banner was arriving MANGLED. CoreInit::initialize() installs
+// a process-wide qInstallMessageHandler whose handler passes every message
+// through redactPii() before it reaches stderr or the log file, and
+// redactPii's MAC rule used to be a bare six-pair hex body -- which is a
+// strict prefix of the 32-pair colon-separated SHA-256 fingerprint printed
+// two lines below. It matched five times over inside one fingerprint and
+// replaced 25 of its 32 bytes with asterisks, while the banner still said
+// the values were printed once, here. StationClient::connectToStation
+// refuses to dial without a fingerprint and nereusd has no option to
+// reprint one, so that left an operator with no way forward. redactPii is
+// now narrowed too (CoreInit.cpp), because a fingerprint logged from
+// anywhere else would otherwise still be destroyed; this function is the
+// other half, not a substitute for it.
+//
+// SECOND, and the reason the fix is a different STREAM rather than a
+// different regex: that same handler writes every message verbatim into
+// ~/.config/NereusSDR/profiles/<profile>/nereussdr-<stamp>.log, kept
+// indefinitely and symlinked as nereussdr.log. That is the file
+// CONTRIBUTING.md tells operators to attach to a bug report. Routing the
+// token through it contradicts TokenStore.h's own stated reason for
+// keeping the secret out of AppSettings -- "a secret sitting in the same
+// XML the operator backs up, mails to a maintainer with a bug report" --
+// against a worse medium than the one that header rejects. Bypassing the
+// handler entirely is what keeps the token out of the log file; no
+// redaction rule could, because the token is 43 characters of base64url
+// with no shape to match on.
+//
+// STDOUT rather than stderr. Under packaging/nereusd.service.in this
+// process sets neither StandardOutput= nor StandardError=, so systemd's
+// defaults put both streams in the journal and the banner reaches
+// `journalctl -u nereusd` either way; the systemd case does not decide it.
+// What decides it is what each stream means. This banner is the run's
+// primary output, two values the operator is being asked to copy, not a
+// diagnostic. stderr in this process is already owned by the Qt handler,
+// so putting the banner there would interleave a copy-paste block with
+// redacted diagnostic lines, and an operator debugging by hand with
+// `nereusd 2> daemon-errors.log` would lose it off the terminal.
+//
+// The explicit fflush is load-bearing rather than hygiene: stdout is
+// block-buffered whenever it is not a terminal, which is exactly the
+// systemd case, so without it the banner would sit in libc's buffer until
+// it filled or the daemon exited.
+void writePairingBanner(const QString& banner)
+{
+    const QByteArray bytes = banner.toUtf8();
+    std::fwrite(bytes.constData(), 1, static_cast<size_t>(bytes.size()), stdout);
+    std::fflush(stdout);
+}
 } // namespace
 
 StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
@@ -96,20 +150,18 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     // on later starts: a secret echoed into every log file forever is a
     // different problem from a secret nobody can find.
     if (m_tokens->wasGeneratedThisRun()) {
-        qCInfo(lcStation).noquote()
-            << "\n"
-               "  ============================================================\n"
-               "  NereusSDR station: first run, pairing details\n"
-               "  ------------------------------------------------------------\n"
-               "  Token:       "
-            << m_tokens->token() << "\n"
-               "  TLS SHA-256: "
-            << m_certificates->fingerprintSha256() << "\n"
-               "  Stored in:   "
-            << m_securityDirectory << "\n"
-               "  ------------------------------------------------------------\n"
-               "  Give both to the client. They are printed once, here.\n"
-               "  ============================================================";
+        writePairingBanner(formatPairingBanner(m_tokens->token(),
+                                               m_certificates->fingerprintSha256(),
+                                               m_securityDirectory));
+        // The LOG gets a pointer, never either secret. Without this line a
+        // first run leaves no trace at all in the file an operator goes
+        // looking in, which is its own support problem; with it, the log
+        // says what happened and where the values went without carrying
+        // them. See writePairingBanner() for why they went to stdout.
+        qCInfo(lcStation)
+            << "First run for this profile: a pairing token and a TLS certificate "
+               "fingerprint were generated and printed to stdout. Both are "
+               "deliberately kept out of this log file.";
     }
     if (!m_tokens->isValid()) {
         qCWarning(lcStation) << "Auth token unavailable:" << m_tokens->lastError();
@@ -268,6 +320,25 @@ QString StationServer::token() const
 QString StationServer::certificateFingerprint() const
 {
     return m_certificates != nullptr ? m_certificates->fingerprintSha256() : QString();
+}
+
+QString StationServer::formatPairingBanner(const QString& token,
+                                           const QString& fingerprint,
+                                           const QString& storedIn)
+{
+    return QStringLiteral(
+               "\n"
+               "  ============================================================\n"
+               "  NereusSDR station: first run, pairing details\n"
+               "  ------------------------------------------------------------\n"
+               "  Token:       %1\n"
+               "  TLS SHA-256: %2\n"
+               "  Stored in:   %3\n"
+               "  ------------------------------------------------------------\n"
+               "  Give both to the client. They are printed once, here, on\n"
+               "  stdout, and are deliberately kept out of the log file.\n"
+               "  ============================================================\n")
+        .arg(token, fingerprint, storedIn);
 }
 
 bool StationServer::hasAuthenticatedSession() const

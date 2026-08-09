@@ -58,6 +58,7 @@
 
 #include "core/AppSettings.h"
 #include "core/ConnectionState.h"
+#include "core/CoreInit.h"
 #include "core/security/CertificateStore.h"
 #include "core/security/TokenStore.h"
 #include "core/session/SessionMessages.h"
@@ -131,6 +132,45 @@ int indexOfKind(const QList<QByteArray>& kinds, const char* name)
     return static_cast<int>(kinds.indexOf(QByteArray(name)));
 }
 
+// ── Capturing whatever reaches the Qt logging handler ────────────────────
+//
+// Production installs CoreInit's handler, which redacts and then writes to
+// BOTH stderr and a log file kept indefinitely. A test cannot assert on
+// that file without running CoreInit::initialize(), so it asserts one step
+// earlier instead, on what is handed to the handler at all: anything that
+// arrives here in production reaches the log file.
+
+QStringList* g_capturedLines = nullptr;
+
+void capturingMessageHandler(QtMsgType, const QMessageLogContext&, const QString& msg)
+{
+    if (g_capturedLines != nullptr) {
+        g_capturedLines->append(msg);
+    }
+}
+
+/// RAII, because every assertion in a QtTest slot is a bare `return`: a
+/// hand-rolled install/restore pair would leave this handler installed for
+/// the rest of the binary on the first failure.
+class LogCapture {
+public:
+    explicit LogCapture(QStringList* sink)
+    {
+        g_capturedLines = sink;
+        m_previous = qInstallMessageHandler(&capturingMessageHandler);
+    }
+    ~LogCapture()
+    {
+        qInstallMessageHandler(m_previous);
+        g_capturedLines = nullptr;
+    }
+    LogCapture(const LogCapture&) = delete;
+    LogCapture& operator=(const LogCapture&) = delete;
+
+private:
+    QtMessageHandler m_previous = nullptr;
+};
+
 } // namespace
 
 class TstStationSession : public QObject {
@@ -174,6 +214,9 @@ private slots:
     void handshakeDeadlineDropsASilentPeer();
     void peerLimitRefusesFurtherConnections();
     void listenIsIdempotent();
+
+    // ---- Security fix round ----
+    void firstRunPairingBannerNeverReachesTheLoggingHandler();
 
     // ---- TLS-specific (QSKIP when the backend is unusable) ----
     void wssListenerComesUpAndCompletesAHandshake();
@@ -1229,6 +1272,86 @@ void TstStationSession::listenIsIdempotent()
     QVERIFY(server.isListening());
 
     server.close();
+}
+
+// ── Security fix round ───────────────────────────────────────────────────
+
+void TstStationSession::firstRunPairingBannerNeverReachesTheLoggingHandler()
+{
+    // The banner used to go out through qCInfo(lcStation), which put it
+    // into the hands of CoreInit's process-wide message handler. That
+    // handler does two things to it: redactPii()'s MAC rule shredded the
+    // 32-pair TLS fingerprint down to 7 surviving bytes, and the message
+    // was written verbatim into the daemon's persistent log file -- the
+    // file CONTRIBUTING.md tells operators to attach to a bug report, and
+    // a worse medium for a shared secret than the AppSettings XML
+    // TokenStore.h refuses to use for exactly that reason.
+    //
+    // A FRESH security directory, not the class-wide m_securityDir: this
+    // slot needs TokenStore::wasGeneratedThisRun() to be true, and
+    // m_securityDir already holds a token from an earlier slot. The price
+    // is one extra RSA-3072 key generation for the run.
+    QTemporaryDir freshSecurity;
+    QVERIFY(freshSecurity.isValid());
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(
+        settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+
+    auto stationModel = makeStationRadioModel(0);
+
+    QStringList captured;
+    std::unique_ptr<StationServer> server;
+    {
+        LogCapture capture(&captured);
+        server = std::make_unique<StationServer>(stationModel.get(), stationSettings,
+                                                 freshSecurity.path());
+    }
+
+    const QString token = server->token();
+    const QString fingerprint = server->certificateFingerprint();
+    QVERIFY2(!token.isEmpty(), "no token was provisioned, so this slot proves nothing");
+    QVERIFY2(!fingerprint.isEmpty(),
+             "no certificate was provisioned, so this slot proves nothing");
+
+    for (const QString& line : captured) {
+        QVERIFY2(!line.contains(token),
+                 qPrintable(QStringLiteral(
+                                "the pairing token reached the Qt logging handler, "
+                                "which writes it verbatim into the daemon's "
+                                "persistent log file. Line: %1").arg(line)));
+        QVERIFY2(!line.contains(fingerprint),
+                 qPrintable(QStringLiteral(
+                                "the TLS fingerprint reached the Qt logging handler, "
+                                "whose redactPii() destroys 25 of its 32 bytes. "
+                                "Line: %1").arg(line)));
+    }
+
+    // A first run must still leave a trace an operator can find, or the
+    // fix trades one support problem for another.
+    bool mentionsFirstRun = false;
+    for (const QString& line : captured) {
+        if (line.contains(QStringLiteral("First run"))) {
+            mentionsFirstRun = true;
+            break;
+        }
+    }
+    QVERIFY2(mentionsFirstRun,
+             "nothing in the log says a first run provisioned anything");
+
+    // And what the operator IS shown carries both values intact. Asserted
+    // against the formatter rather than by capturing stdout, so the check
+    // is the same on every platform; writePairingBanner() is a single
+    // fwrite of exactly this string.
+    const QString banner = StationServer::formatPairingBanner(token, fingerprint,
+                                                              freshSecurity.path());
+    QVERIFY(banner.contains(token));
+    QVERIFY(banner.contains(fingerprint));
+
+    // The other half of the same defect, pinned here because this is where
+    // the two meet: even a fingerprint logged from somewhere else now
+    // survives redaction untouched.
+    QCOMPARE(CoreInit::redactPiiForTest(fingerprint), fingerprint);
 }
 
 // ── TLS ──────────────────────────────────────────────────────────────────

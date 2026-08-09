@@ -48,8 +48,29 @@ static QString redactPii(const QString& msg)
 {
     static const QRegularExpression* ipRe = new QRegularExpression(
         R"((\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3}))");
+    // MAC addresses, and ONLY MAC addresses. The four lookarounds are the
+    // whole point of this pattern rather than defensive noise: without
+    // them the six-pair body matches happily INSIDE any longer
+    // colon-separated hex run, and the longest one this project prints is
+    // a TLS SHA-256 certificate fingerprint
+    // (CertificateStore::fingerprintSha256(), 32 colon-separated pairs).
+    // Applied to one of those, the unguarded rule matched five times over
+    // and replaced 25 of the 32 bytes with asterisks, on stderr and in
+    // this file's own on-disk log alike, leaving the operator with an
+    // unusable copy of the value StationClient refuses to connect without.
+    //
+    // The guard is "not part of a longer run", NOT "surrounded by
+    // whitespace". A candidate is refused when it is preceded by a hex
+    // digit (that would be mid-byte) or by <hex><hex><separator> (a pair
+    // already sits in front of it), and likewise when it is followed by a
+    // hex digit or by <separator><hex><hex>. Genuine MAC redaction is
+    // untouched in every shape this tree logs one: bare, inside an
+    // AppSettings key ("hardware/00:1C:2D:05:37:2A/..."), or after a word
+    // and a hyphen. A run of seven pairs or more is left alone, which is
+    // correct: it is not a MAC.
     static const QRegularExpression* macRe = new QRegularExpression(
-        R"(([0-9A-Fa-f]{2}[:-]){5}([0-9A-Fa-f]{2}))");
+        R"((?<![0-9A-Fa-f])(?<![0-9A-Fa-f]{2}[:-])([0-9A-Fa-f]{2}[:-]){5})"
+        R"(([0-9A-Fa-f]{2})(?![0-9A-Fa-f])(?![:-][0-9A-Fa-f]{2}))");
 
     QString out = msg;
     // IPv4 addresses: 192.168.50.121 -> *.*.*. 121 (keep last octet)
@@ -178,6 +199,11 @@ void shutdown()
 int initializeRunCount()
 {
     return s_initializeRunCount;
+}
+
+QString redactPiiForTest(const QString& message)
+{
+    return redactPii(message);
 }
 #endif
 
