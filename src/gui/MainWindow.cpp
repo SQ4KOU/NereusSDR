@@ -346,6 +346,10 @@ warren@wpratt.com
 #endif
 #include "SpectrumOverlayPanel.h"
 #include "SetupDialog.h"
+// Remote-daemon R2 Task 20: the wss client and the settings backend it
+// writes through. Both are used only on the m_station.isRemote() path.
+#include "core/session/StationClient.h"
+#include "core/settings/SettingsProxy.h"
 #include "setup/DspSetupPages.h"   // NrAnfSetupPage::selectSubtab
 #include "TitleBar.h"
 #include "VaxFirstRunDialog.h"
@@ -450,8 +454,20 @@ QVector<DetectedCable> detectedForFirstRun()
 } // namespace
 
 MainWindow::MainWindow(QWidget* parent)
+    : MainWindow(RemoteStationOptions{}, parent)
+{
+    // Remote-daemon R2 Task 20: delegates with an empty station, which
+    // resolves to Role::Local. Every existing construction site keeps its
+    // current behaviour with no change on its end -- the same shape Task 4
+    // used for RadioModel's own two constructors.
+}
+
+MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent)
     : QMainWindow(parent)
-    , m_radioModel(new RadioModel(this))
+    , m_station(station)
+    , m_radioModel(new RadioModel(m_station.isRemote() ? RadioModel::Role::Remote
+                                                       : RadioModel::Role::Local,
+                                  this))
 {
     // ── Phase 23 (bench fix 2026-05-10): TCI Server BEFORE buildUI ───────────
     // TciApplet + ClientChainApplet are constructed by populateDefaultMeter()
@@ -607,18 +623,15 @@ MainWindow::MainWindow(QWidget* parent)
                 showConnectionPanel();
                 return;
             }
-            auto* dlg = new NetworkDiagnosticsDialog(
-                m_radioModel, m_radioModel->audioEngine(), this);
-            dlg->setAttribute(Qt::WA_DeleteOnClose);
-            dlg->show();
+            // R2 Task 20: was an inline NetworkDiagnosticsDialog construction
+            // here and at two other sites. Routed through the named slot so
+            // the remote gate has one home instead of three.
+            openNetworkDiagnostics();
         });
         connect(seg, &ConnectionSegment::audioPipClicked, this, [this]() {
             // Audio pip click also opens diagnostics — audio section
             // is the most relevant panel for pip trouble-shooting.
-            auto* dlg = new NetworkDiagnosticsDialog(
-                m_radioModel, m_radioModel->audioEngine(), this);
-            dlg->setAttribute(Qt::WA_DeleteOnClose);
-            dlg->show();
+            openNetworkDiagnostics();
         });
         connect(seg, &ConnectionSegment::contextMenuRequested,
                 this, &MainWindow::showSegmentContextMenu);
@@ -738,12 +751,19 @@ MainWindow::MainWindow(QWidget* parent)
         }
     });
 
-    // Start discovery in background so radios are found before the user opens the panel
-    m_radioModel->discovery()->startDiscovery();
+    // Remote-daemon R2 Task 20: neither of the next two runs on a remote
+    // client. Discovery would flood the LAN looking for a radio this
+    // process must not dial, and tryAutoReconnect() ends in
+    // connectToRadio() -- which early-returns on a Role::Remote model but
+    // only after opening the connection panel on its failure paths.
+    if (m_radioModel->ownsLocalDsp()) {
+        // Start discovery in background so radios are found before the user opens the panel
+        m_radioModel->discovery()->startDiscovery();
 
-    // Auto-reconnect to last radio — deferred so the event loop is running
-    // before any signal/slot activity (e.g. discovery radioDiscovered).
-    QTimer::singleShot(0, this, &MainWindow::tryAutoReconnect);
+        // Auto-reconnect to last radio — deferred so the event loop is running
+        // before any signal/slot activity (e.g. discovery radioDiscovered).
+        QTimer::singleShot(0, this, &MainWindow::tryAutoReconnect);
+    }
 
     // Phase 3J-2 + 3R M3: restore each spot client's auto-connect /
     // auto-start state. Sibling to tryAutoReconnect above; deferred via
@@ -787,7 +807,14 @@ MainWindow::MainWindow(QWidget* parent)
     // The dialog's Dismiss button (Task 18) sets Audio/LinuxFirstRunSeen=True,
     // so this trigger fires at most once per user installation.
 #if defined(Q_OS_LINUX)
-    if (m_radioModel->audioEngine()->linuxBackend() == LinuxAudioBackend::None
+    // Remote-daemon R2 Task 20: skipped on a remote client. Its AudioEngine
+    // is constructed but never started (Task 4), so linuxBackend() reports
+    // None regardless of what the host actually has, and the operator would
+    // be shown a first-run dialog about a local sound card that R2 never
+    // uses -- with the "seen" flag then set, hiding the real prompt if that
+    // same machine is later run in local direct mode.
+    if (m_radioModel->ownsLocalDsp()
+        && m_radioModel->audioEngine()->linuxBackend() == LinuxAudioBackend::None
         && AppSettings::instance().value(QStringLiteral("Audio/LinuxFirstRunSeen"),
                                           QStringLiteral("False")).toString()
                != QStringLiteral("True")) {
@@ -862,9 +889,92 @@ MainWindow::MainWindow(QWidget* parent)
         saveMainWindowGeometry();
         AppSettings::instance().save();
     });
+
+    // ── Remote-daemon R2 Task 20: the remote gate, then the dial ─────────
+    //
+    // Last in the constructor on purpose. applyRemoteRoleGating() reaches
+    // for m_actConnect / m_actDisconnect / m_actManageRadios /
+    // m_actProtocolInfo, which buildMenuBar() creates near the top of this
+    // body, and it must run after the initial-enablement block there has
+    // already had its say. It is a no-op in local direct mode.
+    applyRemoteRoleGating();
+
+    if (m_station.isRemote()) {
+        connectToStation();
+    }
 }
 
 MainWindow::~MainWindow() = default;
+
+// ---------------------------------------------------------------------------
+// Remote-daemon R2 Task 20: bring up the wss session.
+//
+// Everything the session needs already exists by the time this runs:
+// SettingsProxy is installed as AppSettings' remote backend by src/main.cpp
+// BEFORE this window is constructed (see the constructor overload's
+// precondition, and SettingsProxy.h's "ready()==false is load-bearing"
+// section for why that ordering is not a style choice), and m_radioModel is
+// Role::Remote, which StationClient refuses to run without.
+// ---------------------------------------------------------------------------
+void MainWindow::connectToStation()
+{
+    if (!m_station.isRemote() || m_radioModel == nullptr) {
+        return;
+    }
+
+    // dynamic_cast, not qobject_cast: AppSettings holds the backend as an
+    // ISettingsBackend*, and that interface deliberately is NOT a QObject
+    // (see ISettingsBackend.h), so there is no meta-object for qobject_cast
+    // to walk. The interface has a virtual destructor, which is what makes
+    // this cross-cast well-formed.
+    auto* proxy = dynamic_cast<SettingsProxy*>(
+        AppSettings::instance().remoteBackend());
+    if (proxy == nullptr) {
+        // Refusing here rather than dialling with a null proxy: without it
+        // every Station-scoped read resolves against this machine's own
+        // settings file and the operator drives the daemon with someone
+        // else's DSP configuration on screen.
+        qCWarning(lcConnection)
+            << "Remote station requested but no SettingsProxy is installed as "
+               "the AppSettings backend; refusing to connect. This is a "
+               "programming error in the startup sequence, not a "
+               "configuration problem.";
+        return;
+    }
+
+    m_stationClient = new StationClient(m_radioModel, proxy, this);
+
+    connect(m_stationClient, &StationClient::handshakeComplete, this, [this]() {
+        qCInfo(lcConnection) << "Station handshake complete:" << m_station.url;
+        showToast(tr("Connected to station %1").arg(m_station.url),
+                  ToastSeverity::Info, 3000);
+    });
+    connect(m_stationClient, &StationClient::sessionEnded, this,
+            [this](const QString& reason) {
+        qCWarning(lcConnection) << "Station session ended:" << reason;
+        showToast(tr("Station link lost: %1").arg(reason),
+                  ToastSeverity::Warning, 5000);
+    });
+    connect(m_stationClient, &StationClient::reconnectScheduled, this,
+            [this](int attempt, int delayMs) {
+        showToast(tr("Reconnecting to station (attempt %1) in %2 s")
+                      .arg(attempt).arg((delayMs + 999) / 1000),
+                  ToastSeverity::Info, 3000);
+    });
+
+    // Task 19: the Disconnect side must pass attemptReconnect = false so a
+    // deliberate quit does not schedule a surprise redial during teardown.
+    connect(qApp, &QCoreApplication::aboutToQuit, this, [this]() {
+        if (m_stationClient != nullptr) {
+            m_stationClient->disconnectFromStation(
+                QStringLiteral("client shutting down"));
+        }
+    });
+
+    m_stationClient->connectToStation(QUrl(m_station.url), m_station.token,
+                                      m_station.fingerprint,
+                                      m_station.allowUnpinned);
+}
 
 // Phase 3F Sub-Epic D Task 12: resolve the active pan's SpectrumWidget.
 // Used as a backward-compat shim for call sites that still address "the"
@@ -8741,6 +8851,21 @@ void MainWindow::applyDarkTheme()
 
 void MainWindow::showConnectionPanel()
 {
+    // ── Remote-daemon R2 Task 20 ─────────────────────────────────────────
+    // Ten call sites reach this method (Manage Radios, the status-bar RTT
+    // and station blocks, two context menus, two per-pan click-to-connect
+    // affordances, autoConnectFailed, and two tryAutoReconnect fallbacks).
+    // Gating here rather than at any of them is the whole point: a remote
+    // client has no RadioConnection to dial, and every button the panel
+    // offers would call connectToRadio() on a model whose connectToRadio()
+    // early-returns. The station is chosen with --station, not from here.
+    if (m_radioModel != nullptr && !m_radioModel->ownsLocalDsp()) {
+        qCInfo(lcConnection)
+            << "Connection panel suppressed: this window is driving a remote "
+               "station, which owns the radio. Use --station to change it.";
+        return;
+    }
+
     if (!m_connectionPanel) {
         m_connectionPanel = new ConnectionPanel(m_radioModel, this);
         m_connectionPanel->setAttribute(Qt::WA_DeleteOnClose);
@@ -8751,6 +8876,74 @@ void MainWindow::showConnectionPanel()
     m_connectionPanel->show();
     m_connectionPanel->raise();
     m_connectionPanel->activateWindow();
+}
+
+// ---------------------------------------------------------------------------
+// Remote-daemon R2 Task 20: the two remaining halves of the remote gate.
+// ---------------------------------------------------------------------------
+
+void MainWindow::openNetworkDiagnostics()
+{
+    // Every figure this dialog paints is sourced from THIS process's
+    // RadioConnection (nullptr in Role::Remote -- NetworkDiagnosticsDialog
+    // null-guards it, so the window opens and reads zero) or from its
+    // AudioEngine (constructed but never started, so the audio section
+    // reads a device that is not running). Neither says anything about the
+    // link that actually matters to a remote operator, which is the wss
+    // session. Refusing is more honest than a window of zeroes; the real
+    // remote-link diagnostics are R5's, not R2's.
+    if (m_radioModel != nullptr && !m_radioModel->ownsLocalDsp()) {
+        qCInfo(lcConnection)
+            << "Network diagnostics suppressed: the radio link belongs to the "
+               "station, and this window holds no RadioConnection to measure.";
+        return;
+    }
+
+    auto* dlg = new NetworkDiagnosticsDialog(
+        m_radioModel, m_radioModel->audioEngine(), this);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    dlg->show();
+}
+
+void MainWindow::applyRemoteRoleGating()
+{
+    if (m_radioModel == nullptr || m_radioModel->ownsLocalDsp()) {
+        return;  // local direct mode: nothing here runs, by construction
+    }
+
+    // The Radio menu is the only place an operator can reach
+    // connectToRadio() / disconnectFromRadio() by keyboard shortcut, and
+    // both are meaningless here: connectToRadio() early-returns on a remote
+    // model (Task 4), and disconnectFromRadio() would run teardownConnection()
+    // against state the STATION owns.
+    //
+    // Re-applied from onConnectionStateChanged() rather than done once,
+    // because that slot's tail sets these three from connection state alone
+    // -- and a remote model reports Connected, so Disconnect would come back
+    // live on the first state change if this only ran at construction.
+    if (m_actConnect != nullptr) {
+        m_actConnect->setEnabled(false);
+        m_actConnect->setToolTip(
+            tr("Unavailable: this window is driving a remote station. "
+               "The station owns the radio connection."));
+    }
+    if (m_actDisconnect != nullptr) {
+        m_actDisconnect->setEnabled(false);
+        m_actDisconnect->setToolTip(
+            tr("Unavailable: this window is driving a remote station. "
+               "The station owns the radio connection."));
+    }
+    if (m_actManageRadios != nullptr) {
+        m_actManageRadios->setEnabled(false);
+        m_actManageRadios->setToolTip(
+            tr("Unavailable: the station is selected with --station, not from "
+               "the radio list."));
+    }
+    // Protocol Info dereferences connection()->radioInfo() unguarded, so it
+    // is not merely useless here, it is a crash.
+    if (m_actProtocolInfo != nullptr) {
+        m_actProtocolInfo->setEnabled(false);
+    }
 }
 
 // Phase 3Q Sub-PR-4 D.2 — right-click context menu on the TitleBar
@@ -8770,12 +8963,10 @@ void MainWindow::showSegmentContextMenu(const QPoint& globalPos)
         showConnectionPanel();
     });
     menu.addSeparator();
-    menu.addAction(tr("Network diagnostics…"), this, [this]() {
-        auto* dlg = new NetworkDiagnosticsDialog(
-            m_radioModel, m_radioModel->audioEngine(), this);
-        dlg->setAttribute(Qt::WA_DeleteOnClose);
-        dlg->show();
-    });
+    // R2 Task 20: third of the three former inline constructions, now the
+    // named slot so the remote gate covers this one too.
+    menu.addAction(tr("Network diagnostics…"), this,
+                   &MainWindow::openNetworkDiagnostics);
     menu.addSeparator();
     menu.addAction(tr("Copy IP address"), this, [this]() {
         QGuiApplication::clipboard()->setText(m_radioModel->connectionIpText());
@@ -9760,6 +9951,15 @@ void MainWindow::onConnectionStateChanged()
         m_actDisconnect->setEnabled(connected);
         m_actProtocolInfo->setEnabled(connected);
     }
+
+    // Remote-daemon R2 Task 20: re-apply the remote gate LAST, so it wins
+    // over the block above. A remote model reaches ConnectionState::Connected
+    // (Task 3's storage-backed state, driven by Task 18's
+    // applyStationCapabilities), so `connected` is true here and Disconnect
+    // and Protocol Info would both come back live -- the first tearing down
+    // state the station owns, the second dereferencing a null connection().
+    // No-op in local direct mode.
+    applyRemoteRoleGating();
 }
 
 // Phase 3I Task 17 / Phase 3Q Task 10 — auto-reconnect on launch.

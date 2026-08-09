@@ -85,6 +85,9 @@
 // otherwise forward-declares), so the complete type is needed here rather
 // than just in MainWindow.cpp.
 #include "core/spectrum/FftTopology.h"
+// Remote-daemon R2 Task 20: by value in the constructor overload and in
+// m_station below, so it cannot be forward-declared.
+#include "core/session/RemoteStationOptions.h"
 
 class QProgressDialog;
 class QSplitter;
@@ -146,6 +149,32 @@ class MainWindow : public QMainWindow {
 
 public:
     explicit MainWindow(QWidget* parent = nullptr);
+
+    /// Remote-daemon R2 Task 20: the remote-station overload.
+    ///
+    /// An empty `station.url` is byte-identical to the constructor above
+    /// (which delegates here with a default-constructed options struct), so
+    /// local direct mode is untouched. A non-empty one makes this window's
+    /// RadioModel Role::Remote: it never calls connectToRadio(), owns no
+    /// RadioConnection, and drives a daemon over `wss` instead.
+    ///
+    /// The options are taken by value at construction because
+    /// m_radioModel's role has to be decided in the initializer list --
+    /// there is no later point at which a RadioModel can change role.
+    ///
+    /// PRECONDITION for remote use, and it is not optional: the caller must
+    /// have already installed a SettingsProxy as AppSettings' remote
+    /// backend, and that proxy must still report ready() == false. Several
+    /// model constructors seed Station-classified keys if absent, and what
+    /// keeps those ship defaults out of the STATION store is entirely that
+    /// the proxy is not ready yet and drops the write. See
+    /// SettingsProxy.h's "ready()==false is load-bearing beyond this class"
+    /// section, which names this task as the one that had to confirm the
+    /// ordering. src/main.cpp installs the proxy before constructing this
+    /// window, and tst_remote_gui_gating pins that nothing in RadioModel
+    /// construction flips ready().
+    explicit MainWindow(const RemoteStationOptions& station,
+                        QWidget* parent = nullptr);
     ~MainWindow() override;
 
     // ── Phase 3M-0 Task 14 test accessors ────────────────────────────────
@@ -418,7 +447,43 @@ private slots:
     void onPanTxBadgeClicked(const QString& panId);
 
     void onConnectionStateChanged();
+
+    /// Open the radio list / scan panel.
+    ///
+    /// Remote-daemon R2 Task 20: this is the single choke point for TEN
+    /// entry points (the Radio menu's Manage Radios, the status-bar RTT and
+    /// station blocks, two context menus, two per-pan "click to connect"
+    /// affordances, the auto-connect-failed handler and two auto-reconnect
+    /// fallbacks), which is why the remote gate lives inside it rather than
+    /// at any of them. Everything the panel does drives a LOCAL
+    /// RadioConnection this process does not own in Role::Remote.
     void showConnectionPanel();
+
+    /// Open the network + audio diagnostics window.
+    ///
+    /// Remote-daemon R2 Task 20: extracted from three identical inline
+    /// lambdas (status-bar RTT click, audio-pip click, segment context
+    /// menu) precisely so the remote gate has one place to live. Every
+    /// number the dialog shows comes from this process's RadioConnection
+    /// (null in Role::Remote) or its AudioEngine (present but never
+    /// started), so on a remote client it is a window of zeroes at best.
+    void openNetworkDiagnostics();
+
+    /// Apply the Role::Remote gate to every local-hardware surface this
+    /// window owns.
+    ///
+    /// Idempotent, and a no-op in local direct mode. Called once at the end
+    /// of construction and again from onConnectionStateChanged(), because
+    /// that slot's tail re-enables the Radio menu from connection state
+    /// alone -- and a remote model reports Connected (Task 3 + Task 18), so
+    /// without the second call Disconnect would come back live and
+    /// disconnectFromRadio() on a remote model would tear down state the
+    /// station owns.
+    void applyRemoteRoleGating();
+
+    /// Build the StationClient and dial `m_station`. Called once at the end
+    /// of construction and only when m_station.isRemote().
+    void connectToStation();
     void showSupportDialog();
     void showAudioDiagnoseDialog();
     void showFeatureRequestDialog();
@@ -704,9 +769,21 @@ private:
     // VaxFirstRunDialog in the appropriate scenario.
     void checkVaxFirstRun();
 
+    // Remote-daemon R2 Task 20. MUST be declared before m_radioModel: the
+    // initializer list reads it to pick the model's Role, and a member
+    // initialised out of a later-declared member is undefined behaviour,
+    // not merely a warning.
+    RemoteStationOptions m_station;
+
     RadioModel* m_radioModel{nullptr};
     ConnectionPanel* m_connectionPanel{nullptr};
     SupportDialog* m_supportDialog{nullptr};
+
+    // Remote-daemon R2 Task 20: the wss client, Qt-parented to this window.
+    // Null in local direct mode and never constructed there. Declared as a
+    // forward-declared pointer so this header stays free of the session
+    // stack (StationClient.h drags in the whole message codec).
+    class StationClient* m_stationClient{nullptr};
 
     // Phase 3M-4 Task 8: PsForm modeless dialog (Tools > PureSignal...).
     // Lazy-constructed on first openPureSignalDialog() call; lives for the

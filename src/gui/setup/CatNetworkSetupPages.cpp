@@ -8,6 +8,10 @@
 #include "gui/StyleConstants.h"
 #include "gui/LanScanDialog.h"
 #include "core/AppSettings.h"
+// Remote-daemon R2 Task 20: RemoteStationPage validates its URL field with
+// the same rule src/main.cpp applies to --station, so a value the field
+// accepts is a value the next launch will actually dial.
+#include "core/session/RemoteStationOptions.h"
 #include "models/RadioModel.h"
 
 #include <QNetworkInterface>
@@ -923,6 +927,147 @@ void CatMidiControlPage::buildUI()
 
     contentLayout()->addWidget(group);
     contentLayout()->addStretch();
+}
+
+// ---------------------------------------------------------------------------
+// RemoteStationPage
+// Remote-daemon R2 Task 20: Setup > CAT & Network > Remote Station.
+//
+// One group box, four fields, no discovery and no pairing flow. See the
+// class comment in CatNetworkSetupPages.h for why the four keys must stay
+// OperatorLocal and why the settings only take effect at next launch.
+// ---------------------------------------------------------------------------
+
+RemoteStationPage::RemoteStationPage(QWidget* parent)
+    : SetupPage(QStringLiteral("Remote Station"), parent)
+{
+    buildUI();
+}
+
+void RemoteStationPage::buildUI()
+{
+    NereusSDR::Style::applyDarkPageStyle(this);
+    buildStationGroup();
+    contentLayout()->addStretch();
+}
+
+void RemoteStationPage::buildStationGroup()
+{
+    auto* group = new QGroupBox(tr("Remote Station"), this);
+    group->setStyleSheet(QString::fromLatin1(Style::kGroupBoxStyle));
+    auto* form = new QFormLayout(group);
+    form->setSpacing(6);
+
+    auto& s = AppSettings::instance();
+
+    // ── Station address ──────────────────────────────────────────────────
+    m_urlEdit = new QLineEdit(
+        s.value(QStringLiteral("RemoteStationUrl"), QString()).toString(), group);
+    m_urlEdit->setStyleSheet(QString::fromLatin1(Style::kLineEditStyle));
+    m_urlEdit->setPlaceholderText(QStringLiteral("wss://host:4433"));
+    m_urlEdit->setToolTip(
+        tr("Address of the nereusd station that owns the radio. Leave empty to "
+           "run in local direct mode, driving a radio attached to this "
+           "machine. Takes effect at next launch."));
+    connect(m_urlEdit, &QLineEdit::textEdited, this, [this](const QString& v) {
+        AppSettings::instance().setValue(QStringLiteral("RemoteStationUrl"),
+                                          v.trimmed());
+        refreshValidation();
+    });
+    form->addRow(tr("Station address:"), m_urlEdit);
+
+    // ── Token ────────────────────────────────────────────────────────────
+    m_tokenEdit = new QLineEdit(
+        s.value(QStringLiteral("RemoteStationToken"), QString()).toString(), group);
+    m_tokenEdit->setStyleSheet(QString::fromLatin1(Style::kLineEditStyle));
+    // Password echo so the token is not readable over a shoulder or in a
+    // screenshot. It is NOT encrypted at rest -- see the tooltip, and the
+    // limitation recorded in the R2 verification README.
+    m_tokenEdit->setEchoMode(QLineEdit::Password);
+    m_tokenEdit->setToolTip(
+        tr("Shared token the station prints on its first run. Stored in this "
+           "machine's settings file in plain text, so treat that file as a "
+           "credential store. Takes effect at next launch."));
+    connect(m_tokenEdit, &QLineEdit::textEdited, this, [](const QString& v) {
+        AppSettings::instance().setValue(QStringLiteral("RemoteStationToken"),
+                                          v.trimmed());
+    });
+    form->addRow(tr("Token:"), m_tokenEdit);
+
+    // ── Certificate fingerprint ──────────────────────────────────────────
+    //
+    // Not optional in practice: StationClient refuses to dial when the
+    // fingerprint is empty and unpinned certificates are not allowed,
+    // because an unpinned self-signed certificate authenticates nothing.
+    // Without this field, an operator who never uses the command line
+    // could fill in the two fields above and still never connect.
+    m_fingerprintEdit = new QLineEdit(
+        s.value(QStringLiteral("RemoteStationFingerprint"), QString()).toString(),
+        group);
+    m_fingerprintEdit->setStyleSheet(QString::fromLatin1(Style::kLineEditStyle));
+    m_fingerprintEdit->setPlaceholderText(QStringLiteral("SHA-256 fingerprint"));
+    m_fingerprintEdit->setToolTip(
+        tr("SHA-256 fingerprint of the station's certificate, as nereusd "
+           "prints it. Required unless the box below is ticked: an unpinned "
+           "self-signed certificate proves nothing about who answered."));
+    connect(m_fingerprintEdit, &QLineEdit::textEdited, this,
+            [](const QString& v) {
+        AppSettings::instance().setValue(
+            QStringLiteral("RemoteStationFingerprint"), v.trimmed());
+    });
+    form->addRow(tr("Certificate fingerprint:"), m_fingerprintEdit);
+
+    // ── Allow unpinned ───────────────────────────────────────────────────
+    m_allowUnpinnedCheck =
+        new QCheckBox(tr("Accept an unpinned certificate (bench only)"), group);
+    m_allowUnpinnedCheck->setStyleSheet(QString::fromLatin1(Style::kCheckBoxStyle));
+    m_allowUnpinnedCheck->setChecked(
+        s.value(QStringLiteral("RemoteStationAllowUnpinned"),
+                QStringLiteral("False")).toString() == QStringLiteral("True"));
+    m_allowUnpinnedCheck->setToolTip(
+        tr("Connect without checking the station's certificate against a "
+           "fingerprint. Only safe on a link you already trust end to end, "
+           "such as loopback on one machine."));
+    connect(m_allowUnpinnedCheck, &QCheckBox::toggled, this, [](bool on) {
+        AppSettings::instance().setValue(
+            QStringLiteral("RemoteStationAllowUnpinned"),
+            on ? QStringLiteral("True") : QStringLiteral("False"));
+    });
+    form->addRow(QString(), m_allowUnpinnedCheck);
+
+    // ── Validation / restart notice ──────────────────────────────────────
+    m_validationLabel = new QLabel(group);
+    m_validationLabel->setWordWrap(true);
+    m_validationLabel->setStyleSheet(
+        QString::fromLatin1(Style::kSecondaryLabelStyle));
+    form->addRow(QString(), m_validationLabel);
+    refreshValidation();
+
+    contentLayout()->addWidget(group);
+}
+
+void RemoteStationPage::refreshValidation()
+{
+    if (m_validationLabel == nullptr || m_urlEdit == nullptr) {
+        return;
+    }
+
+    const QString url = m_urlEdit->text().trimmed();
+    if (url.isEmpty()) {
+        m_validationLabel->setText(
+            tr("Local direct mode: this machine drives the radio itself."));
+        return;
+    }
+
+    QString whyNot;
+    if (!RemoteStationOptions::isValidStationUrl(url, &whyNot)) {
+        m_validationLabel->setText(whyNot);
+        return;
+    }
+
+    m_validationLabel->setText(
+        tr("Applied at next launch. A window's local-or-remote role is fixed "
+           "when it starts and cannot change while running."));
 }
 
 // ---------------------------------------------------------------------------

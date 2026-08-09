@@ -1024,6 +1024,10 @@ set(CORE_SOURCES
     src/core/session/StationCapabilities.cpp
     src/core/session/StationServer.cpp
     src/core/session/StationClient.cpp
+    # R2 Task 20: where a GUI process gets its station address and token
+    # from. A plain value struct plus one URL rule; deliberately carries no
+    # AppSettings key literals (see RemoteStationOptions.h for why).
+    src/core/session/RemoteStationOptions.cpp
 )
 
 # R2 Task 18: the generated pre-shared token nereusd authenticates clients

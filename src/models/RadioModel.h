@@ -348,13 +348,65 @@ public:
     /// use here, or this is a Role::Local model.
     int addSliceWithStationId(int sliceId, const QString& initialPanId = QString());
 
+    // ── Remote-daemon R2 Task 20: the local-DSP capability gate ─────────
+    //
+    // The single authority a GUI surface asks before reaching for anything
+    // whose implementation only exists when the DSP runs in THIS process.
+    // src/gui does not re-derive this from role(): one predicate means one
+    // place to widen when a later phase (R4's TX path) makes part of it
+    // true for a remote client too.
+    bool ownsLocalDsp() const { return m_role == Role::Local; }
+
     // Sub-components
     RadioConnection*  connection()       { return m_connection; }
     const RadioConnection* connection() const { return m_connection; }
     RadioDiscovery*   discovery()        { return m_discovery; }
-    ReceiverManager*  receiverManager()  { return m_receiverManager; }
-    AudioEngine*      audioEngine()      { return m_audioEngine; }
-    WdspEngine*       wdspEngine()       { return m_wdspEngine; }
+    ReceiverManager*  receiverManager()  { noteLocalDspHandOut("receiverManager"); return m_receiverManager; }
+    AudioEngine*      audioEngine()      { noteLocalDspHandOut("audioEngine");     return m_audioEngine;     }
+    WdspEngine*       wdspEngine()       { noteLocalDspHandOut("wdspEngine");      return m_wdspEngine;      }
+
+    // ── Remote-daemon R2 Task 20: the reach-through audit ────────────────
+    //
+    // These three accessors are the only local-DSP reach-through a test
+    // cannot see by running the code. connection() is nullptr on a
+    // Role::Remote model, so an unguarded caller crashes and any sweep
+    // that merely executes the path finds it. The other three are
+    // constructed unconditionally (see this class's constructor
+    // initializer list), so on a remote model they hand back a real but
+    // inert object: the caller's writes land nowhere, the connects it
+    // makes never fire, and nothing is observably wrong until an operator
+    // notices a control that does not work. A null-dereference assertion
+    // cannot catch that shape at all. Counting the hand-outs can, which is
+    // why the counter exists rather than a comment asking people to be
+    // careful.
+    //
+    // Armed for Role::Remote only, so this is not a general accessor tally
+    // -- it means specifically "a remote model gave away something local".
+    // That is also what makes it thread-safe without an atomic: a
+    // Role::Remote model starts no RxDspWorker, no TxWorkerThread, no
+    // AudioEngine device thread and no RadioConnection thread (Task 4's
+    // connectToRadio() early return), and Task 18 keeps the whole session
+    // stack on this object's own thread, so every armed call is on the
+    // same thread. On Role::Local, where those threads DO exist, the
+    // counter is never written at all.
+
+    /// How many times this model handed out a live local-DSP object while
+    /// in Role::Remote. Always 0 on a Role::Local model.
+    int localDspHandOutCount() const { return m_localDspHandOuts; }
+
+    /// Which accessors did it, spelled exactly as the accessor is named
+    /// ("audioEngine", "receiverManager", "wdspEngine"), so a failing
+    /// assertion says what to go and gate rather than only that something
+    /// leaked.
+    QSet<QByteArray> localDspHandOutNames() const { return m_localDspHandOutNames; }
+
+    /// Clear the audit so a caller can attribute hand-outs to one narrow
+    /// window. SetupDialog::realizePage() does exactly that, per page.
+    void resetLocalDspHandOutAudit()
+    {
+        m_localDspHandOuts = 0;
+        m_localDspHandOutNames.clear();
+    }
 
     // Remote Daemon R2 Task 12: non-null only when role() == Role::Local.
     // Constructed and start()ed in the constructor; never rebuilt. Unlike
@@ -3550,6 +3602,25 @@ private:
     // Remote-daemon R2 Task 4: set once at construction (see the Role
     // constructor overload above), never mutated afterward.
     Role m_role{Role::Local};
+
+    // Remote-daemon R2 Task 20: the reach-through audit described on
+    // localDspHandOutCount() above. Written only while m_role ==
+    // Role::Remote, which is what makes plain ints safe here (see that
+    // comment for the thread argument).
+    int              m_localDspHandOuts{0};
+    QSet<QByteArray> m_localDspHandOutNames;
+
+    // Bumps the audit above. Returns immediately on Role::Local so the
+    // three hot accessors cost one predictable branch there and nothing
+    // else. Deliberately NOT const: the accessors it serves are non-const.
+    void noteLocalDspHandOut(const char* accessor)
+    {
+        if (m_role == Role::Local) {
+            return;
+        }
+        ++m_localDspHandOuts;
+        m_localDspHandOutNames.insert(QByteArray(accessor));
+    }
 
     // Remote-daemon R2 Task 4: non-owning; see attachStation()/
     // detachStation() above.

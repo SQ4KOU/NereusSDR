@@ -12,6 +12,7 @@
 
 #include <QDialog>
 #include <QString>
+#include <QStringList>
 #include <QTreeWidget>
 #include <QStackedWidget>
 #include <QSplitter>
@@ -235,6 +236,32 @@ public:
         for (int i = 0; i < static_cast<int>(m_pages.size()); ++i) {
             realizePage(i);
         }
+    }
+
+    // Remote-daemon R2 Task 20. Every registered leaf label, in
+    // registration order, so a test can sweep the tree without hardcoding
+    // a list that goes stale the next time a page is added.
+    QStringList pageLabelsForTest() const
+    {
+        QStringList labels;
+        labels.reserve(static_cast<int>(m_pages.size()));
+        for (const PageEntry& entry : m_pages) {
+            labels << entry.label;
+        }
+        return labels;
+    }
+
+    // Remote-daemon R2 Task 20. The realized widget for a leaf, or nullptr
+    // if that leaf has not been realized. Distinct from realizePageForTest,
+    // which builds on demand: a gating test needs to ask about the widget
+    // WITHOUT the question itself constructing one.
+    QWidget* realizedPageForTest(const QString& label) const
+    {
+        const int index = pageEntryIndex(label);
+        if (index < 0) {
+            return nullptr;
+        }
+        return m_pages[static_cast<std::size_t>(index)].widget;
     }
 #endif
 };

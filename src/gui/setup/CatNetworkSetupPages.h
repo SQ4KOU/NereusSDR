@@ -199,6 +199,53 @@ private:
 };
 
 // ---------------------------------------------------------------------------
+// CAT & Network > Remote Station
+//
+// Remote-daemon R2 Task 20. One group box carrying the same four values
+// --station / --token / --station-fingerprint / --station-allow-unpinned
+// carry on the command line, so an operator who does not launch from a
+// terminal can still point this GUI at a nereusd station.
+//
+// The command line wins over these when both are present (src/main.cpp),
+// and nothing here takes effect until the next launch: a RadioModel's Role
+// is fixed at construction and there is no in-place local-to-remote
+// transition, by design.
+//
+// The four AppSettings keys below classify OperatorLocal, and that is
+// load-bearing rather than incidental. They are this client's own address
+// book and its credential. If they ever classified Station, every GUI
+// connected to one daemon would write its station address and token into
+// the shared store and read each other's back out.
+// tests/tst_remote_gui_gating.cpp pins the classification for the two the
+// brief names; SettingsScope.h's default (OperatorLocal for anything with
+// no explicit rule) is what makes it true.
+//
+// Deliberately NOT a connect screen, a discovery browser or a pairing
+// flow. Those are R5's, and R2's scope note (design addendum section 2)
+// excludes them by name.
+// ---------------------------------------------------------------------------
+class RemoteStationPage : public SetupPage {
+    Q_OBJECT
+
+public:
+    explicit RemoteStationPage(QWidget* parent = nullptr);
+
+private:
+    QLineEdit* m_urlEdit{nullptr};
+    QLineEdit* m_tokenEdit{nullptr};
+    QLineEdit* m_fingerprintEdit{nullptr};
+    QCheckBox* m_allowUnpinnedCheck{nullptr};
+    QLabel*    m_validationLabel{nullptr};
+
+    void buildUI();
+    void buildStationGroup();
+
+    // Repaint m_validationLabel from the current URL field. Called on every
+    // edit so a typo is visible immediately rather than at next launch.
+    void refreshValidation();
+};
+
+// ---------------------------------------------------------------------------
 // Network > Peripherals
 // Two-row grid: TGXL (port 9010) and PGXL (port 9008).
 // Six columns per row: Name, Host IP, Port, Scan LAN, Connect, Status.

@@ -6478,6 +6478,31 @@ target_compile_definitions(tst_settings_scope PRIVATE
 # closed (exactly one broadcast per inbound write, not two).
 nereus_add_test(tst_settings_proxy)
 
+# Remote Daemon R2, Task 20: the remote-mode GUI gate. Pins RadioModel's
+# ownsLocalDsp() capability authority and the Role::Remote-only hand-out audit
+# that is the ONLY thing able to catch a reach-through to audioEngine(),
+# receiverManager() or wdspEngine() -- all three are constructed
+# unconditionally, so on a remote model they return a real but inert object
+# and a null-dereference assertion sees nothing. Also pins: every registered
+# Setup leaf realizes against a Role::Remote model without dereferencing the
+# null connection(); the per-page invariant "reached local DSP => disabled",
+# stated over the whole tree rather than as a page list so a leaf added later
+# is covered; the same sweep disabling NOTHING on a Role::Local model (the
+# local-direct-mode regression guard); MainWindow's three gating slots
+# resolved by name off staticMetaObject, because MainWindow cannot be
+# constructed in a unit test; the MOX refusal running through the EXISTING
+# MoxCheckFn so moxRejected still reaches the status-bar toast, including
+# after disconnectFromRadio() (whose teardown would otherwise clear the
+# callback, and an empty MoxCheckFn is MoxController's BYPASS); the
+# --station URL rule; and the SettingsProxy construction ordering that
+# SettingsProxy.h explicitly asks this task to confirm rather than inherit.
+#
+# NEREUS_BUILD_TESTS is required for SetupDialog's lazy-page seams
+# (pageLabelsForTest / realizePageForTest / realizedPageForTest), the same
+# way tst_setup_dialog_lazy_pages needs it.
+nereus_add_test(tst_remote_gui_gating)
+target_compile_definitions(tst_remote_gui_gating PRIVATE NEREUS_BUILD_TESTS)
+
 # R1 Task 10: DaemonApp connects the daemon to a radio (or runs discovery)
 # and creates min(cfg.sliceCount, connected-board-maxSlices) slices via
 # RadioModel's own addSlice() -- the same entry point connectToRadio()

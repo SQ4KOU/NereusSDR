@@ -788,6 +788,26 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // Display.TXAttenuatorOffset = 0; //[2.10.3.6]MW0LGE att_fixes  [console.cs:29659]
     m_moxController = new MoxController(this);
 
+    // ── Remote-daemon R2 Task 20: arm the MOX refusal for Role::Remote ──
+    //
+    // On a Role::Local model the pre-check is installed from inside
+    // connectToRadio()'s txSetup lambda, because its closure needs a live
+    // TX channel's worth of state to be meaningful. A Role::Remote model
+    // never enters connectToRadio() at all (Task 4's early return), so
+    // without this call its MoxCheckFn stays empty -- and an empty
+    // MoxCheckFn is MoxController's documented BYPASS, not its deny
+    // (MoxController.h: "If no callback is installed (nullptr),
+    // setMox(true) proceeds as before"). The remote client would then be
+    // the ONE configuration in the tree where MOX is ungated.
+    //
+    // Installing here is safe for the remote case specifically: the
+    // closure's Role::Remote branch returns before touching AppSettings,
+    // txBoundSlice() or m_bandPlan, so none of the state the Local install
+    // site waits for is read.
+    if (m_role == Role::Remote) {
+        installBandPlanMoxCheck();
+    }
+
     // ── Phase 3F Sub-Epic C Task 6: TxSliceArbiter construction + wiring ──
     // Owned QObject child of RadioModel (Qt parent semantics handle the
     // destruction).  Sliced list pointer is non-owning; the arbiter reads
@@ -9413,6 +9433,32 @@ void RadioModel::installBandPlanMoxCheck()
     }
 
     m_moxController->setMoxCheck([this]() -> safety::BandPlanGuard::MoxCheckResult {
+        // ── Remote-daemon R2 Task 20: refuse MOX on a Role::Remote model ──
+        //
+        // MOX is the one operator control that would otherwise key a
+        // transmitter from a phase that has no TX path at all. A remote
+        // client holds no RadioConnection, no initialised WdspEngine and
+        // no TxChannel (Task 4's connectToRadio() early return), so
+        // setMox(true) would advance MoxController's state machine, flip
+        // every UI surface to "transmitting", and put nothing on the air
+        // -- while the STATION, which does hold the radio, stays in RX.
+        // The R2 design addendum scopes TX entirely to R4
+        // (docs/architecture/2026-08-03-remote-daemon-r2-r3-design-
+        // addendum.md section 2, "no MOX (TX is R4 in its entirety)").
+        //
+        // Routed through this existing pre-check rather than through a
+        // second gate in RadioModel::setMox, because this callback is what
+        // emits moxRejected(QString), and moxRejected is what MainWindow's
+        // toast is already connected to (MainWindow.cpp, the
+        // MoxController::moxRejected connect). A parallel gate would make
+        // remote refusals silent in exactly the path an operator watches.
+        // Same reasoning recorded in the design addendum section 4.
+        if (m_role == Role::Remote) {
+            return {false,
+                    QStringLiteral("TX is not available on a remote station "
+                                   "connection (R4)")};
+        }
+
         const int regionInt = AppSettings::instance()
             .value(QStringLiteral("BandPlanRegion"),
                    QString::number(static_cast<int>(safety::Region::UnitedStates)))
@@ -11899,7 +11945,33 @@ void RadioModel::teardownConnection()
     // 3M-1b L.1: K.2 carry-forward — uninstall the MoxCheck callback before
     // the closure's captured state (m_slices, m_bandPlan) is potentially invalid.
     // Passing an empty std::function clears the stored callback in MoxController.
-    if (m_moxController) {
+    //
+    // Remote-daemon R2 Task 20: NOT for Role::Remote. An empty MoxCheckFn is
+    // MoxController's BYPASS, not its deny, so clearing it here would leave a
+    // remote client with MOX ungated for the rest of the process's life.
+    //
+    // Stated honestly: this guard is UNREACHABLE today. The `if
+    // (!m_connection) return;` at the top of this method fires first on
+    // every Role::Remote model, because nothing ever assigns m_connection
+    // there (connectToRadio() early-returns before the assignment, Task 4).
+    // Verified by sabotage: removing the role test below and re-running
+    // tst_remote_gui_gating leaves all 21 cases green, which is what an
+    // unreachable line looks like.
+    //
+    // Kept anyway, and this is a judgement call rather than a proven need.
+    // disconnectFromRadio() is reachable from a remote client's UI (the
+    // Radio menu action is gated by MainWindow::applyRemoteRoleGating, but
+    // aboutToQuit calls it unconditionally), so this method genuinely runs
+    // on remote models -- it just returns early. The moment anything gives
+    // a remote model a RadioConnection, which is exactly what R4's TX path
+    // will have to consider, that early return stops firing and the clear
+    // below becomes live. The cost of being wrong here is a transmitter
+    // that keys with no gate at all.
+    //
+    // The remote branch of the check reads none of the state this teardown
+    // invalidates (see installBandPlanMoxCheck), so leaving it installed is
+    // safe.
+    if (m_moxController && m_role == Role::Local) {
         m_moxController->setMoxCheck({});
     }
 

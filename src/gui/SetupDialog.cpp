@@ -335,6 +335,28 @@ QWidget* SetupDialog::realizePage(int entryIndex)
     const std::function<QWidget*()> factory = std::move(entry.factory);
     entry.factory = nullptr;
 
+    // ── Remote-daemon R2 Task 20: the local-DSP page gate ────────────────
+    //
+    // ONE gate for all 55-odd leaves, and it classifies itself. A page that
+    // binds itself to this process's WdspEngine, AudioEngine or
+    // ReceiverManager while the DSP actually lives on a station is a page
+    // whose controls move nothing: on a Role::Remote model those three
+    // accessors hand back real but INERT objects (RadioModel.h,
+    // localDspHandOutCount()'s comment), so the page looks live, accepts
+    // input, and silently does nothing. Disabling it is the honest state.
+    //
+    // Deliberately not a hand-written list of page labels. A list has to be
+    // edited every time a leaf is added, and the failure mode of forgetting
+    // is a page that looks like it works -- the exact thing this gate
+    // exists to prevent. Reading the model's own hand-out audit across the
+    // factory call means a new page classifies itself on the day it is
+    // written, with nothing to remember.
+    //
+    // Local direct mode never reaches the branch: ownsLocalDsp() is true,
+    // and RadioModel's audit is not even armed for Role::Local.
+    const bool gateRemotePages = (m_model != nullptr) && !m_model->ownsLocalDsp();
+    const int handOutsBefore = (m_model != nullptr) ? m_model->localDspHandOutCount() : 0;
+
     QElapsedTimer realizeTimer;
     realizeTimer.start();
     QWidget* page = factory();
@@ -342,6 +364,20 @@ QWidget* SetupDialog::realizePage(int entryIndex)
         qCWarning(lcSetupTiming) << "page factory yielded nothing for"
                                  << entry.label;
         return nullptr;
+    }
+
+    // A before/after difference rather than a reset-then-read, so a page
+    // whose factory re-enters realizePage() (see the comment above the
+    // factory move) cannot zero the outer page's tally on its way through.
+    // The names below are therefore the running set for the whole dialog,
+    // not this page's alone; the verdict is per-page, the names are a hint.
+    if (gateRemotePages && m_model->localDspHandOutCount() > handOutsBefore) {
+        page->setEnabled(false);
+        qCWarning(lcSetupTiming)
+            << "Setup page" << entry.label
+            << "reached local DSP on a remote-station model and has been "
+               "disabled; accessors reached so far in this dialog:"
+            << m_model->localDspHandOutNames().values();
     }
 
     entry.widget     = page;
@@ -773,6 +809,10 @@ void SetupDialog::buildTree()
         }
         return fourO3A;
     });
+    // Remote-daemon R2 Task 20: the --station / --token field group. One
+    // leaf, no discovery browser and no pairing flow; see
+    // RemoteStationPage's class comment for what is deliberately absent.
+    registerPage(cat, "Remote Station", [] { return new RemoteStationPage; });
     registerPage(cat, "RF-Kit",       [this] { return new RfKitPage(m_model); });
     registerPage(cat, "TCP/IP CAT",   [] { return new CatTcpIpPage;       });
     registerPage(cat, "MIDI Control", [] { return new CatMidiControlPage;  });

@@ -406,3 +406,309 @@ that the fifteen R2 tasks did not regress local direct mode. Every targeted test
 and every models-label test passed in both runs, and the single failure is a
 pre-existing timing-sensitive test in an unrelated subsystem. The 623/623 figure
 should be read as "623/623 on an unloaded machine", not as an unqualified pass.
+
+---
+
+## Task 20: remote-mode GUI gating, `--station`, and the acceptance run
+
+Task 20 splits into a code half and a bench half. The code half (steps 1a,
+1b, 2, 3 and 4) landed with the task and is verified by
+`tests/tst_remote_gui_gating.cpp`. **Steps 5 and 7 are bench procedures and
+are OPEN.** They are written out below as numbered runnable procedures so
+whoever runs them does not have to reconstruct them.
+
+### What shipped, and what the gate actually is
+
+| Piece | Where |
+| --- | --- |
+| Capability authority | `RadioModel::ownsLocalDsp()` |
+| Reach-through audit | `RadioModel::localDspHandOutCount()` / `localDspHandOutNames()` |
+| Setup page gate | `SetupDialog::realizePage()`, one self-classifying branch |
+| Local-hardware UI gate | `MainWindow::applyRemoteRoleGating()` + `showConnectionPanel()` + `openNetworkDiagnostics()` |
+| MOX refusal | the existing `MoxController` `MoxCheckFn`, installed at construction for `Role::Remote` |
+| Station selection | `--station` / `--token` / `--station-fingerprint` / `--station-allow-unpinned`, plus Setup > CAT & Network > Remote Station |
+
+Five Setup pages are disabled on a remote model, all of them under Audio:
+**Devices, TX Input, VAX, TCI, Advanced**. That is not a hand-written list,
+it is what the gate classified, and it will change on its own if the pages
+do. Expect them greyed out on the bench and do not file it.
+
+### Known limitations to read BEFORE the bench, so they are not filed as bugs
+
+1. **The daemon's listener is off by default.** `remote_port` defaults to 0
+   and `remote_bind` to loopback, deliberately. The acceptance run needs a
+   config file; step 5.1 below writes one.
+2. **All 13 `TunerModel` properties arrive and cannot be applied**, so
+   `StationClient::unappliedProperties()` reports 13 entries and the log
+   carries 13 one-time warnings per handshake. That is honest reporting of
+   a read-only-property limitation, not a regression; 10 of the 13 were
+   already unapplied before R2.
+3. **No spectrum, no waterfall, no audio, no MOX.** Expected, and step 5.9
+   records it as a pass condition rather than a defect.
+4. **The client token is stored in plain text** in this machine's settings
+   file when entered through Setup. `--token` avoids writing it. Closing
+   this belongs with R5's identity and pairing work.
+5. **`FaultLog::reload()` is wired but unasserted.** Confirming it needs
+   PGXL or TGXL hardware, which no row here has.
+6. **Qt's generic TLS key backend is unverified.** The development machine
+   uses the OpenSSL backend, so nothing has exercised `QSslKey` against
+   OpenSSL 3's PKCS#8 output on a Schannel or SecureTransport build.
+7. **Three Windows and Intel-macOS CI routes have never run on real
+   hardware.** First proof is the PR, not this matrix.
+8. **`options/autoAtt/rx1AdaptiveFloor` is Station-scoped and ungated.** It
+   reaches the step attenuator through the adaptive decay floor, which is
+   then persisted back into the bounds-checked keys. It is the one live
+   path by which an in-range gated field can be driven outside its union by
+   an ungated sibling. Step 6a is where that gets probed.
+
+---
+
+### Step 5: the acceptance run (STATUS: OPEN)
+
+**Bench hardware: the ANAN-G2E, never the ANAN-G2.** The G2 is a different
+radio reachable on the same LAN and is explicitly excluded. Confirm the
+board by its discovery board-type byte before starting, not by asking for a
+MAC, and reuse the identification pinned at task 16 step 3.
+
+Two processes, one host. `nereusd` holds the radio; the GUI holds nothing.
+
+| Row | What | Needs a radio? | Result |
+| --- | --- | --- | --- |
+| 5.1 | Daemon config written, `nereusd` starts, listener bound | no | OPEN |
+| 5.2 | GUI launches with `--station`, `wss` handshake completes | no | OPEN |
+| 5.3 | Token round-trip succeeds | no | OPEN |
+| 5.4 | A WRONG token is refused, and refused again while rate-limited | no | OPEN |
+| 5.5 | Settings snapshot arrives; `setupDialogAllowed()` opens the gate | no | OPEN |
+| 5.6 | Setup opens; Remote Station page is usable; the 5 Audio pages are greyed | no | OPEN |
+| 5.7 | Connect / Disconnect / Manage Radios / Protocol Info are all greyed; Network diagnostics refuses | no | OPEN |
+| 5.8 | MOX is refused with a toast naming R4; the radio stays in RX | **yes** | OPEN |
+| 5.9 | Panadapter blank, waterfall blank, speakers silent, spot collectors inert | **yes** | OPEN |
+| 5.10 | VFO, band, mode, filter round-trip and the radio follows | **yes** | OPEN |
+| 5.11 | AGC, NR, NB, SNB, APF, squelch round-trip | **yes** | OPEN |
+| 5.12 | RIT, XIT, antenna round-trip | **yes** | OPEN |
+| 5.13 | Add slice, remove slice, TX slice display | **yes** | OPEN |
+| 5.14 | Per-slice S-meter needles are live | **yes** | OPEN |
+| 5.15 | Setup pages round-trip station settings both ways | **yes** | OPEN |
+| 5.16 | `unappliedProperties()` reports exactly the 13 TunerModel entries | no | OPEN |
+
+Rows 5.1 through 5.7 and 5.16 do **not** need a radio and can be run first
+on any machine. Record which rows ran and which are still OPEN; do not
+merge the two into one verdict.
+
+#### 5.1 Start the daemon
+
+```
+mkdir -p ~/.config/nereusd
+cat > /tmp/nereusd-bench.conf <<'CONF'
+remote_port = 50100
+remote_bind = 127.0.0.1
+CONF
+cmake --build build --target nereusd
+./build/nereusd --profile daemon --config /tmp/nereusd-bench.conf
+```
+
+The first run prints the generated token and the certificate fingerprint.
+Copy both. The token file lives beside the daemon profile with
+owner-only permissions and is deliberately NOT in AppSettings.
+
+Confirm the listener is actually bound before going further:
+
+```
+lsof -nP -iTCP:50100 -sTCP:LISTEN
+```
+
+An empty result means `remote_port` did not reach the daemon, which is
+limitation 1 above, not a defect.
+
+#### 5.2 through 5.3 Launch the GUI against it
+
+```
+./build/NereusSDR --profile client \
+  --station wss://127.0.0.1:50100 \
+  --token <TOKEN-FROM-5.1> \
+  --station-fingerprint <SHA256-FROM-5.1>
+```
+
+Pass: the toast reads `Connected to station wss://127.0.0.1:50100`, and the
+daemon log shows one authenticated peer.
+
+`--profile client` matters. Without it both binaries resolve to the same
+settings file on one host and the whole SettingsProxy layer is bypassed
+without anything appearing wrong. See design addendum section 2.1.
+
+#### 5.4 The wrong token
+
+Relaunch with `--token deliberately-wrong`. Pass: the session ends with an
+auth failure and the GUI does not reach Connected. Repeat five times, then
+try the CORRECT token immediately. Pass: it is still refused while the
+lockout is in force (`TokenStore` returns `RateLimited`, which is distinct
+from `Rejected` on purpose). Wait out `kDefaultLockoutMs` and retry to
+confirm recovery.
+
+#### 5.5 through 5.6 The Setup gate and the page gate
+
+Open Setup. Pass: it opens at all (`SettingsProxy::setupDialogAllowed()` is
+`ready()` **and** (non-empty snapshot **or** the seed marker
+`AppSettings::kDaemonProfileSeededKey`)). Do not open Setup before the
+handshake completes: 187 widget constructors would bake ship defaults into
+the station.
+
+Then, on the Audio category: Devices, TX Input, VAX, TCI and Advanced must
+all be greyed out. On CAT & Network: **Remote Station** must be usable, and
+must show the station address that was passed on the command line only if
+it was also saved; the command line does not write it back.
+
+#### 5.7 The local-hardware surfaces
+
+Radio menu: Connect, Disconnect, Manage Radios and Protocol Info all
+greyed, each with a tooltip saying why. Click the status-bar RTT block and
+the audio pip: neither may open Network Diagnostics. Right-click the
+connection segment: the Network diagnostics entry must do nothing. Nothing
+anywhere may open the Connection Panel.
+
+#### 5.8 MOX (needs the G2E, and a dummy load or antenna)
+
+Press MOX. Pass: a warning toast naming R4 appears, the MOX state does not
+advance, and **the radio stays in receive**. Confirm the last part at the
+radio, not only on screen: the screen is the thing under test.
+
+#### 5.9 The blank surfaces, recorded as EXPECTED
+
+Panadapter blank, waterfall blank, speakers silent, spot collectors inert.
+All four are R2 scope decisions, not defects. Record them as passes.
+
+#### 5.10 through 5.15 The control round-trips
+
+For each control: change it in the GUI, confirm the radio followed, then
+change it at the daemon end (or via a second client) and confirm the GUI
+followed. A control that moves the radio but does not come back is a
+one-directional mirror bug and is worth more than a note.
+
+#### 5.16 Unapplied properties
+
+Read `StationClient::unappliedProperties()` from the log at handshake.
+Pass: exactly 13 entries, all `TunerModel.*`. More than 13, or any entry
+outside `TunerModel`, is a real finding.
+
+---
+
+### Step 6: proxied-read scan (STATUS: OPEN)
+
+Scan the `proxied-read ... resolved-locally` log lines produced during step
+5 for keys that should have classified Station and did not. The log line
+comes from task 15 step 9 and is on the `nereus.settingsproxy` category:
+
+```
+QT_LOGGING_RULES="nereus.settingsproxy.debug=true" ./build/NereusSDR --profile client --station ...
+```
+
+### Step 6a: one hostile value (STATUS: OPEN, EXPECTED TO DOCUMENT A GAP)
+
+Inbound Station writes reach the daemon's store **unvalidated**.
+`SettingsHygiene` runs once on connect, only reports rather than clamps,
+and reports to two GUI diagnostics pages `nereusd` does not link. Task 15
+added a bounds check for the step attenuator specifically, because
+`StepAttenuatorController::loadForMac` demonstrably bypasses the clamp that
+`setAttenuation()` applies. The general gap is deliberately left open for a
+later phase.
+
+Procedure: from the client, write one out-of-range Station value (the step
+attenuator keys are the ones with a bound to violate) and record what the
+daemon does with it. **This row is expected to document a gap, not to
+pass.** Also probe `options/autoAtt/rx1AdaptiveFloor`, which is
+Station-scoped and ungated and reaches the attenuator through the adaptive
+decay floor.
+
+---
+
+### Step 7: re-run the task 16 gate (STATUS: OPEN for its bench half)
+
+Tasks 17 and 20 both landed after the task 16 gate ran, and both have large
+local blast radius, so the gate is re-run here rather than trusted.
+
+**7.1 Targeted regression set.** Re-run task 16 step 1 exactly as recorded
+in the Task 16 section above, including the eleven-component regex. Confirm
+with `ctest -N` that every component contributed at least one test: a regex
+component matching nothing is invisible to `--no-tests=error`.
+
+**7.2 Full suite.**
+
+```
+cmake --build build --target all_tests
+ctest --test-dir build --no-tests=error
+```
+
+Read the result against the known-flaky sets recorded in the Task 16 section
+and in "A second load-dependent flake" below: `cty_dat_parser`,
+`adif_parser` and `dxcc_color_provider` can fail under ccache, and
+`tst_tx_mic_source` and `tst_p1_loopback_connection` are load-dependent.
+Anything else is a real finding. Do not report an unqualified pass from a
+single run on a loaded machine.
+
+**7.3 Bench, local direct mode on the ANAN-G2E.** Re-run task 16 step 3 on
+the same pinned G2E, with **no** `--station` argument, and confirm local
+direct mode is unchanged: discovery finds the radio, connect succeeds, the
+panadapter and waterfall paint, audio comes out of the speakers, MOX keys
+into a dummy load, and every Setup page is enabled. This is the row that
+proves task 20 did not gate anything it should not have.
+
+**7.4 Release artifacts.** Confirmed on the PR, not locally. `release.yml`
+is the only workflow that runs `cmake --install`, and it triggers only on
+`v*` tags, so the `nereusd` install path still has no PR-CI coverage.
+
+---
+
+### Task 20 automated coverage (GREEN)
+
+```
+$ cmake --build build --target tst_remote_gui_gating
+$ ctest --test-dir build -R remote_gui_gating --no-tests=error --output-on-failure
+100% tests passed, 0 tests failed out of 1
+```
+
+21 cases. Non-vacuity was established by sabotage-and-revert on four
+separate mechanisms; the results are recorded in
+`.superpowers/sdd/2026-08-03-remote-daemon-r2-plan/task-20-report.md`,
+including one sabotage that did **not** fail and the claim that was
+corrected as a result.
+
+### A second load-dependent flake, found by Task 20's full-suite run
+
+Task 20's full suite reported **623/627 with four failures**: the three
+known ccache-sensitive parsers (`tst_cty_dat_parser`, `tst_adif_parser`,
+`tst_dxcc_color_provider`) and one that was not on any known list,
+`tst_p1_loopback_connection`.
+
+Diagnosed rather than waved through. Reproduced by running the binary 40
+ways concurrently: 39 of 40 exit 0, one fails.
+
+```
+QWARN  : P1: Connect watchdog fired -- no ep6 frame within 2000 ms;
+         tearing down and emitting connectFailed(Timeout)
+FAIL!  : TestP1LoopbackConnection::firstConnectLogFiresExactlyOncePerBatch()
+         Compared values are not the same
+   Actual   (conn.state())              : 0
+   Expected (ConnectionState::Connected): 3
+   Loc: [../tests/tst_p1_loopback_connection.cpp(189)]
+```
+
+The failing run took 10615 ms against a normal 1021 ms. The test burst-sends
+100 ep6 frames and then waits for `Connected`; under enough CPU contention
+the event loop does not run for two seconds, so `P1RadioConnection`'s own
+2000 ms connect watchdog fires first, tears the connection down, and the
+state reads Disconnected. That is the product behaving correctly against a
+starved event loop, not a product defect.
+
+**Not a regression from this branch.**
+`git log 3349ccb8..HEAD -- tests/tst_p1_loopback_connection.cpp
+src/core/P1RadioConnection.{h,cpp} tests/fakes/P1FakeRadio.cpp` returns
+nothing, so neither the test nor the class it exercises was touched here.
+Serially and at 16-way concurrency it passes every time; it took 40-way
+concurrency to reproduce.
+
+One procedural note worth recording, because it cost time: **running
+`ctest -R <name>` to investigate a failure overwrites
+`build/Testing/Temporary/LastTest.log`**, so the failing run's output is
+gone by the time you go looking for it. Read the log first, re-run second.
+`LastTestsFailed.log` survives and is the reliable list of which tests
+failed.
