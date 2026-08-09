@@ -457,13 +457,18 @@ private slots:
 
     /// Open the radio list / scan panel.
     ///
-    /// Remote-daemon R2 Task 20: this is the single choke point for TEN
+    /// Remote-daemon R2 Task 20: this is the single choke point for ELEVEN
     /// entry points (the Radio menu's Manage Radios, the status-bar RTT and
     /// station blocks, two context menus, two per-pan "click to connect"
-    /// affordances, the auto-connect-failed handler and two auto-reconnect
-    /// fallbacks), which is why the remote gate lives inside it rather than
-    /// at any of them. Everything the panel does drives a LOCAL
-    /// RadioConnection this process does not own in Role::Remote.
+    /// affordances, the auto-connect-failed handler, the disconnect
+    /// auto-reopen inside onConnectionStateChanged itself, and two
+    /// auto-reconnect fallbacks), which is why the remote gate lives inside
+    /// it rather than at any of them. Everything the panel does drives a
+    /// LOCAL RadioConnection this process does not own in Role::Remote.
+    ///
+    /// Fix round 4: this said TEN and enumerated ten. The eleventh, the
+    /// disconnect auto-reopen, is the one that fires without a user action,
+    /// which is exactly the one an enumeration written from the UI misses.
     void showConnectionPanel();
 
     /// Open the network + audio diagnostics window.

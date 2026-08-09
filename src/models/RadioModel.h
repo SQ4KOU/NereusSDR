@@ -368,16 +368,44 @@ public:
     // ── Remote-daemon R2 Task 20: the reach-through audit ────────────────
     //
     // These three accessors are silent on a Role::Remote model in a way a
-    // test cannot see by running the code. connection() is nullptr there,
-    // so an unguarded caller crashes and any sweep that merely executes
-    // the path finds it. The other three are constructed unconditionally
-    // (see this class's constructor initializer list), so on a remote
-    // model they hand back a real but inert object: the caller's writes
-    // land nowhere, the connects it makes never fire, and nothing is
-    // observably wrong until an operator notices a control that does not
-    // work. A null-dereference assertion cannot catch that shape at all.
-    // Counting the hand-outs can, which is why the counter exists rather
-    // than a comment asking people to be careful.
+    // test cannot see by running the code. They are constructed
+    // unconditionally (see this class's constructor initializer list), so
+    // on a remote model they hand back a real but inert object: the
+    // caller's writes land nowhere, the connects it makes never fire, and
+    // nothing is observably wrong until an operator notices a control that
+    // does not work. A null-dereference assertion cannot catch that shape
+    // at all. Counting the hand-outs can, which is why the counter exists
+    // rather than a comment asking people to be careful.
+    //
+    // ---- connection() is NOT the easy case this used to claim ----
+    //
+    // An earlier version of this block set connection() up as the
+    // reassuring contrast: nullptr on a remote model, "so an unguarded
+    // caller crashes and any sweep that merely executes the path finds
+    // it". That is false, and it was false when it was written.
+    //
+    // Nothing in this tree executes the path. The one caller that mattered,
+    // MainWindow::onConnectionStateChanged(), is in a class the test suite
+    // cannot construct -- it boots WDSP, the audio engine and the discovery
+    // thread, and three separate test banners say so
+    // (tst_notch_hit_test.cpp, tst_mainwindow_status_bar_safety.cpp,
+    // tst_pan_active_slice_sync.cpp). It sat there dereferencing a null
+    // connection() on the first state change any remote client produced,
+    // and the whole R2 acceptance run went past it.
+    //
+    // The reasoning that produced the false claim is worth naming, because
+    // it is easy to repeat: the audit was designed around accessors that
+    // fail SILENTLY, on the premise that a loud one would be caught by
+    // running code. The premise needs code that runs. The single place it
+    // had to hold is the single place nothing does.
+    //
+    // So connection() is not covered by the counter AND not covered by
+    // execution. What covers it is that every caller tests it for null,
+    // which used to come free -- isConnected() was `m_connection &&
+    // m_connection->isConnected()` before Task 3 made it storage-backed,
+    // so testing isConnected() tested the pointer too. It does not any
+    // more. If you are writing a branch gated on isConnected(), the
+    // pointer test is now yours to write.
     //
     // ---- KNOWN BLIND SPOT: rxChannelForSlice() is NOT counted ----
     //

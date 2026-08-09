@@ -5651,7 +5651,14 @@ void MainWindow::buildMenuBar()
     // the connected radio's protocol, firmware, and address info.
     m_actProtocolInfo = radioMenu->addAction(QStringLiteral("&Protocol Info"),
         this, [this]() {
-            if (!m_radioModel->isConnected()) {
+            // Remote-daemon R2: isConnected() is storage-backed and true on
+            // a remote client, whose connection() is permanently null, so
+            // the second half of this test is load-bearing and not merely
+            // defensive. applyRemoteRoleGating() disables this QAction on a
+            // remote model, which masks the crash today -- but the mask is
+            // an enablement, and QAction::trigger() ignores enablement.
+            // The gate is not the guard.
+            if (!m_radioModel->isConnected() || !m_radioModel->connection()) {
                 return;
             }
             RadioInfo info = m_radioModel->connection()->radioInfo();
@@ -8863,9 +8870,11 @@ void MainWindow::applyDarkTheme()
 void MainWindow::showConnectionPanel()
 {
     // ── Remote-daemon R2 Task 20 ─────────────────────────────────────────
-    // Ten call sites reach this method (Manage Radios, the status-bar RTT
-    // and station blocks, two context menus, two per-pan click-to-connect
-    // affordances, autoConnectFailed, and two tryAutoReconnect fallbacks).
+    // Eleven call sites reach this method (Manage Radios, the status-bar
+    // RTT and station blocks, two context menus, two per-pan
+    // click-to-connect affordances, autoConnectFailed, the disconnect
+    // auto-reopen in onConnectionStateChanged, and two tryAutoReconnect
+    // fallbacks).
     // Gating here rather than at any of them is the whole point: a remote
     // client has no RadioConnection to dial, and every button the panel
     // offers would call connectToRadio() on a model whose connectToRadio()
@@ -9050,14 +9059,34 @@ void MainWindow::showStationContextMenu(const QPoint& globalPos)
 
     QMenu menu(this);
 
-    menu.addAction(tr("Disconnect"), this, [this]() {
+    // Fix round 4: all three entries below are gated the way
+    // showSegmentContextMenu()'s Disconnect already is. That sibling gained
+    // its gate in Task 20 and this one did not, so a remote client got a
+    // fully live station menu offering three actions that between them
+    // return early, open a panel that is itself suppressed, and delete a
+    // saved radio this window is not connected to.
+    //
+    // Each is harmless in the sense of not crashing -- disconnectFromRadio()
+    // returns early on the null connection a remote model always has,
+    // showConnectionPanel() is gated inside itself, and the MAC these read
+    // off connection() is empty so forgetRadio() is skipped. The standard
+    // the sibling's own comment sets is not "does it crash", it is: "an
+    // enabled control that does nothing is exactly what this gate exists to
+    // remove".
+    const bool localDsp =
+        (m_radioModel != nullptr) && m_radioModel->ownsLocalDsp();
+    const QString remoteWhy =
+        tr("Unavailable: this window is driving a remote station. "
+           "The station owns the radio connection.");
+
+    QAction* disconnectAction = menu.addAction(tr("Disconnect"), this, [this]() {
         m_radioModel->disconnectFromRadio();
     });
 
     // "Edit radio…" — open ConnectionPanel so the user can edit the currently
     // connected radio's settings (model override, etc.). The panel pre-selects
     // by highlighted MAC when available; if not connected, user clicks the row.
-    menu.addAction(tr("Edit radio…"), this, [this]() {
+    QAction* editAction = menu.addAction(tr("Edit radio…"), this, [this]() {
         showConnectionPanel();
         if (m_connectionPanel) {
             const QString mac =
@@ -9070,7 +9099,7 @@ void MainWindow::showStationContextMenu(const QPoint& globalPos)
         }
     });
 
-    menu.addAction(tr("Forget radio"), this, [this]() {
+    QAction* forgetAction = menu.addAction(tr("Forget radio"), this, [this]() {
         const QString mac =
             m_radioModel->connection()
                 ? m_radioModel->connection()->radioInfo().macAddress
@@ -9080,6 +9109,19 @@ void MainWindow::showStationContextMenu(const QPoint& globalPos)
             AppSettings::instance().forgetRadio(mac);
         }
     });
+
+    if (!localDsp) {
+        disconnectAction->setEnabled(false);
+        disconnectAction->setToolTip(remoteWhy);
+        editAction->setEnabled(false);
+        editAction->setToolTip(
+            tr("Unavailable: the station is selected with --station, not from "
+               "the radio list."));
+        forgetAction->setEnabled(false);
+        forgetAction->setToolTip(
+            tr("Unavailable: the station is selected with --station, not from "
+               "the radio list."));
+    }
 
     menu.exec(globalPos);
 }
@@ -9638,12 +9680,36 @@ void MainWindow::onConnectionStateChanged()
     pushConnectionStateToPans();
 
     if (m_radioModel->isConnected()) {
+        // ── Remote-daemon R2: isConnected() no longer implies a connection ──
+        //
+        // Before this branch, RadioModel::isConnected() was `m_connection &&
+        // m_connection->isConnected()`, so the `if` above had ALSO tested
+        // connection() for null and everything below could dereference it.
+        // Task 3 made it storage-backed (`m_connectionState == Connected`,
+        // RadioModel.cpp) so a client that owns no RadioConnection can report
+        // Connected, and Task 18's applyStationCapabilities() sets exactly
+        // that state whenever the station holds the radio -- which is the
+        // premise of R2, not an edge case. Every dereference below was
+        // therefore a null dereference on the FIRST state change a remote
+        // client sees, taking the whole slot with it.
+        //
+        // Guarded on connection() rather than on role(): a null pointer is
+        // the actual precondition, and testing it restores the invariant the
+        // `if` above used to carry. The `else` branch of this same function
+        // has always tested it this way.
+        RadioConnection* const conn = m_radioModel->connection();
+
         // Board widget top line: show model code ("Saturn") not marketing name
         // ("ANAN-G2 (Saturn)") — the marketing name truncates at status-bar widths.
         // boardCodeName() returns the HPSDRHW enum label which is short and unambiguous.
         {
-            const HPSDRHW board = m_radioModel->connection()->radioInfo().boardType;
-            const QString code  = QString::fromLatin1(boardCodeName(board));
+            // With no connection of our own, the station's radioModelName is
+            // the identity we have. Same source the line below already uses
+            // for firmware: model state populated by applyStationCapabilities,
+            // not the connection.
+            const QString code = conn != nullptr
+                ? QString::fromLatin1(boardCodeName(conn->radioInfo().boardType))
+                : m_radioModel->model();
             m_radioModelLabel->setText(code);
         }
         m_radioModelLabel->setStyleSheet(QStringLiteral(
@@ -9663,18 +9729,52 @@ void MainWindow::onConnectionStateChanged()
         // stays the same object across connect/disconnect cycles.
         // (Connection details moved to segment tooltip / NetworkDiagnosticsDialog.)
 
-        // Wire step attenuator controller to the live radio connection
-        // and set max attenuation from board capabilities.
-        // From Thetis console.cs ucInfoBar Warning() + SetupForm attenuator init.
-        m_stepAttController->setRadioConnection(m_radioModel->connection());
-        const auto& caps = BoardCapsTable::forBoard(
-            m_radioModel->connection()->radioInfo().boardType);
-        m_stepAttController->setMaxAttenuation(caps.attenuator.maxDb);
-        // Wire HPSDR-board flag — Atlas/Metis kit uses preamp save/restore on
-        // MOX rather than per-band TX ATT (Thetis console.cs:29548 [v2.10.3.13]:
-        //   if (HardwareSpecific.Model == HPSDRModel.HPSDR) { ... }).
-        m_stepAttController->setIsHpsdrBoard(
-            m_radioModel->connection()->radioInfo().boardType == HPSDRHW::Atlas);
+        // Everything from here to the closing brace reads the LOCAL radio
+        // connection: the step attenuator drives it directly, and `caps`
+        // comes from the board byte the connection reported (which is NOT
+        // the same as m_radioModel->boardCapabilities() -- a saved model
+        // override moves the latter and not the former, so this stays on
+        // the connection for local direct mode).
+        //
+        // A remote client has no local step attenuator to wire and no
+        // local PureSignal coordinator to arm; both live on the station.
+        // Skipping the block is the correct behaviour there, not merely
+        // the safe one.
+        if (conn != nullptr) {
+            // Wire step attenuator controller to the live radio connection
+            // and set max attenuation from board capabilities.
+            // From Thetis console.cs ucInfoBar Warning() + SetupForm attenuator init.
+            m_stepAttController->setRadioConnection(conn);
+            const auto& caps = BoardCapsTable::forBoard(
+                conn->radioInfo().boardType);
+            m_stepAttController->setMaxAttenuation(caps.attenuator.maxDb);
+            // Wire HPSDR-board flag — Atlas/Metis kit uses preamp save/restore on
+            // MOX rather than per-band TX ATT (Thetis console.cs:29548 [v2.10.3.13]:
+            //   if (HardwareSpecific.Model == HPSDRModel.HPSDR) { ... }).
+            m_stepAttController->setIsHpsdrBoard(
+                conn->radioInfo().boardType == HPSDRHW::Atlas);
+
+            // Phase 3M-4 Task 13: gate PureSignalApplet + TxApplet [PS-A] on
+            // the same board capability.  PureSignalApplet hides itself; the
+            // TxApplet [PS-A] button hides via its setBoardCapabilities slot.
+            if (m_pureSignalApplet) {
+                m_pureSignalApplet->setVisible(caps.hasPureSignal);
+            }
+            if (m_txApplet) {
+                m_txApplet->setBoardCapabilities(caps);
+            }
+            // P1 full-parity §4.1: gate AutoAttMode::Adaptive on per-step
+            // calibration support.  Must be set BEFORE loadSettings() so a
+            // persisted "Adaptive" string is clamped to Classic when the
+            // connected board lacks the feature.
+            m_stepAttController->setHasStepAttenuatorCal(caps.hasStepAttenuatorCal);
+            m_stepAttController->loadSettings(conn->radioInfo().macAddress);
+        } else if (m_pureSignalApplet) {
+            // No local connection means no local PureSignal coordinator,
+            // so the applet has nothing behind it. Same call the
+            // disconnected branch below makes, for the same reason.
+            m_pureSignalApplet->setVisible(false);
+        }
 
         // Phase 3M-4 Task 10 + bench-fix: PSA bottom-banner indicator is
         // gated on caps.hasPureSignal AND pureSignal->isAutoCalEnabled().
@@ -9682,22 +9782,19 @@ void MainWindow::onConnectionStateChanged()
         // entirely; PS-capable boards (Hermes II / Angelia / Orion /
         // Saturn / G2) show it only when the user has armed PS-A.
         // updatePsaIndicatorVisibility centralises the condition.
+        //
+        // Hoisted out of the connection-guarded block above: it reads
+        // m_radioModel->boardCapabilities() and pureSignal(), never the
+        // connection, and a remote client must still get the hide (its
+        // pureSignal() is null, so the condition is false).
+        //
+        // The hoist moved it from before that block to after it. That is
+        // observably a no-op in local direct mode: nothing the block does
+        // -- step-attenuator wiring, PureSignalApplet visibility,
+        // TxApplet board capabilities -- is read by
+        // updatePsaIndicatorVisibility, and nothing it does is read by the
+        // block. Checked both directions rather than assumed.
         updatePsaIndicatorVisibility();
-        // Phase 3M-4 Task 13: gate PureSignalApplet + TxApplet [PS-A] on
-        // the same board capability.  PureSignalApplet hides itself; the
-        // TxApplet [PS-A] button hides via its setBoardCapabilities slot.
-        if (m_pureSignalApplet) {
-            m_pureSignalApplet->setVisible(caps.hasPureSignal);
-        }
-        if (m_txApplet) {
-            m_txApplet->setBoardCapabilities(caps);
-        }
-        // P1 full-parity §4.1: gate AutoAttMode::Adaptive on per-step
-        // calibration support.  Must be set BEFORE loadSettings() so a
-        // persisted "Adaptive" string is clamped to Classic when the
-        // connected board lacks the feature.
-        m_stepAttController->setHasStepAttenuatorCal(caps.hasStepAttenuatorCal);
-        m_stepAttController->loadSettings(m_radioModel->connection()->radioInfo().macAddress);
 
         // Phase 3Q Task 5 — auto-close: 1 s after connect, accept() the panel if open.
         // Fires on transitions TO Connected only (not on repeated Connected emits).
