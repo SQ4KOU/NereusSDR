@@ -42,6 +42,7 @@
 #include <QLoggingCategory>
 #include <QSslCertificate>
 #include <QSslError>
+#include <QStringList>
 #include <QTimer>
 #include <QWebSocket>
 
@@ -946,6 +947,13 @@ void StationClient::onTransportText(const QByteArray& wire)
         handleDelta(message);
         break;
     case SessionMessageKind::SnapshotComplete:
+        // BEFORE anything below, and in particular before
+        // m_forwardLocalChanges goes true: this marker is the FIRST moment
+        // the station's full object set is known, and it is the only
+        // moment at which "the station did not name this slice" means
+        // "the station does not have this slice". See
+        // reconcileSlicesAgainstStation().
+        reconcileSlicesAgainstStation();
         m_handshakeComplete = true;
         // Task 19: this is a PROVEN success, the moment isStale() (once it
         // has ever been true) goes false again, and the only place that
@@ -1310,6 +1318,83 @@ QObject* StationClient::resolveOrCreate(const QByteArray& objectKey,
     m_objects.insert(objectKey, slice);
     watchForOutbound(objectKey, slice);
     return slice;
+}
+
+// Whole-branch review, Important 1.
+//
+// endSession() deliberately RETAINS RadioModel's slices across a link
+// loss (design doc section 13: "the client retains last-known state"), and
+// resolveOrCreate() adopts, on reattach, only the ids the station actually
+// NAMES. Nothing anywhere closed the other half of that: a slice the
+// station no longer has was never adopted, never watched, never mirrored,
+// and never removed either -- it simply stayed on screen, and every edit
+// the operator made to it went nowhere. m_forwardLocalChanges gates the
+// forwarder on session state, not on membership, so the ghost did not even
+// produce a refusal to log.
+//
+// Reachable by an ordinary restart, not a contrived one: slice_count is a
+// real key in packaging/nereusd.conf.sample, DaemonConfig parses it, and
+// DaemonApp::createConfiguredSlices clamps it to min(requested, the
+// board's cap) and additionally stops early when the allocator refuses. A
+// daemon that served two slices and comes back with one is a config edit
+// or a smaller board away.
+//
+// WHEN this runs is the whole of the design. It cannot run per
+// object.create (a burst that has delivered slice 0 but not yet slice 1
+// would reap slice 1 for not having arrived), it cannot run on
+// Capabilities (which precedes the burst entirely), and it must not run
+// on link loss (the station may well come back with the same set, and
+// section 13's retention is what lets a GUI keep its pointers). The
+// snapshot-complete marker is the one point at which the station has
+// finished naming everything it has, which is exactly the question this
+// asks.
+//
+// Removal goes through the same RadioModel::removeSlice() that
+// handleObjectDestroy() uses, under the same inbound guard, so a reap is
+// indistinguishable downstream from an explicit destroy. Two of that
+// method's own invariants carry through unchanged and are relied on here:
+// it refuses to remove the last remaining slice (so a station reporting
+// zero slices leaves the client with one rather than an empty model), and
+// it hands TX off before removing a TX-bound victim.
+void StationClient::reconcileSlicesAgainstStation()
+{
+    if (m_radioModel.isNull()) {
+        return;
+    }
+    // A COPY: removeSlice() mutates the list this iterates.
+    const QList<SliceModel*> held = m_radioModel->slices();
+    QList<int> reaped;
+    for (SliceModel* slice : held) {
+        if (slice == nullptr) {
+            continue;
+        }
+        const int sliceId = slice->sliceIndex();
+        const QByteArray key = QByteArray(kSliceKeyPrefix) + QByteArray::number(sliceId);
+        if (m_objects.contains(key)) {
+            continue;
+        }
+        reaped.append(sliceId);
+        // Symmetric with handleObjectDestroy(): drop the wire registry
+        // entry and the outbound watch first, then remove the object.
+        // Both are no-ops for a slice that was never adopted, and both
+        // are correct for one adopted by an EARLIER session whose
+        // registry entry endSession() already cleared.
+        m_objects.remove(key);
+        m_outboundMirror->unwatch(key);
+        InboundGuard guard(m_applyingInbound);
+        m_radioModel->removeSlice(sliceId);
+    }
+    if (!reaped.isEmpty()) {
+        QStringList ids;
+        ids.reserve(reaped.size());
+        for (int id : reaped) {
+            ids.append(QString::number(id));
+        }
+        qCInfo(lcStationClient)
+            << "Station no longer has slice(s)" << ids.join(QLatin1String(", "))
+            << "-- removed locally so no control is left pointing at a slice"
+            << "the station cannot act on";
+    }
 }
 
 void StationClient::handleObjectCreate(const SessionMessage& message)

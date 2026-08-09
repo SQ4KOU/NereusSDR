@@ -146,6 +146,15 @@
 //     station's ids (StationClient::resolveOrCreate(), unchanged by this
 //     task) rather than recreating them, so a GUI holding a raw pointer to
 //     one survives a reconnect with no rebinding.
+//   - ...and, whole-branch review Important 1, REAPS the ones the station
+//     did not name. Adoption alone covered only the ids the station
+//     still has, so a daemon that came back with fewer slices left the
+//     surplus on screen forever: unwatched, unmirrored, and silently
+//     swallowing every edit made to it. reconcileSlicesAgainstStation()
+//     closes that, and runs at the SnapshotComplete marker specifically
+//     -- see its own comment in the .cpp for why no earlier point can
+//     tell "the station does not have this" apart from "it has not
+//     arrived yet".
 //   - sessionEpoch() bumps on every attachTransport(), including the
 //     first, so a caller that captured it before an asynchronous
 //     operation can tell whether the session it was about is still
@@ -509,6 +518,12 @@ private:
     /// slices).
     void compareSchema(const QByteArray& className, const QSet<QByteArray>& stationNames,
                        const QMetaObject* mo);
+    /// Remove every client-side slice the station's just-finished
+    /// snapshot did not name. Called from the SnapshotComplete arm, and
+    /// only from there -- see the .cpp for why no earlier point can
+    /// answer the question this asks.
+    void reconcileSlicesAgainstStation();
+
     void handleObjectCreate(const SessionMessage& message);
     void handleObjectDestroy(const SessionMessage& message);
     void handleDelta(const SessionMessage& message);

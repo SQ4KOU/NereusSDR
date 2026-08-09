@@ -174,8 +174,20 @@ void TstSessionLinkLoss::killedDaemonEntersDefinedStaleStateThenReconnectsToARes
     AppSettings stationSettings1(settingsDir1.filePath(QStringLiteral("NereusSDR.settings")));
     stationSettings1.setValue(QStringLiteral("TciServerPort"), QStringLiteral("50123"));
 
-    auto stationModel1 = makeStationRadioModel(0);
+    // TWO slices, and the restarted daemon below has ONE. Whole-branch
+    // review, Important 1: this slot used to build both daemons with
+    // makeStationRadioModel(0), so it exercised a changed VALUE and never
+    // a changed SET, and a client-side slice the restarted station no
+    // longer has survived forever -- unwatched, unmirrored, and silently
+    // swallowing every edit the operator made to it. A daemon that comes
+    // back with fewer slices is an ordinary restart, not a contrived one:
+    // slice_count is a real nereusd.conf key and
+    // DaemonApp::createConfiguredSlices clamps it to the board's cap and
+    // stops early when the allocator refuses.
+    auto stationModel1 = makeStationRadioModel(1);
+    QCOMPARE(stationModel1->slices().size(), 2);
     stationModel1->slices().first()->setFrequency(7100000.0);
+    stationModel1->slices().at(1)->setFrequency(21300000.0);
     StationServer server1(stationModel1.get(), stationSettings1, m_securityDir.path());
 
     RadioModel clientModel(RadioModel::Role::Remote);
@@ -197,9 +209,17 @@ void TstSessionLinkLoss::killedDaemonEntersDefinedStaleStateThenReconnectsToARes
     QCOMPARE(client.sessionEpoch(), quint32(1));
 
     const int sliceId = stationModel1->slices().first()->sliceIndex();
+    const int secondSliceId = stationModel1->slices().at(1)->sliceIndex();
+    QVERIFY(secondSliceId != sliceId);
     SliceModel* clientSliceBeforeKill = clientModel.sliceById(sliceId);
     QVERIFY(clientSliceBeforeKill != nullptr);
     QCOMPARE(clientSliceBeforeKill->frequency(), 7100000.0);
+    // Both of the station's slices arrived, so the reconnect below really
+    // is a shrink and not merely a client that never saw the second one.
+    QCOMPARE(clientModel.slices().size(), 2);
+    SliceModel* clientSecondSlice = clientModel.sliceById(secondSliceId);
+    QVERIFY(clientSecondSlice != nullptr);
+    QCOMPARE(clientSecondSlice->frequency(), 21300000.0);
     QVERIFY(!client.mirroredObjectKeys().isEmpty());
 
     QVERIFY(proxy.ready());
@@ -229,9 +249,13 @@ void TstSessionLinkLoss::killedDaemonEntersDefinedStaleStateThenReconnectsToARes
 
     // RadioModel's own state is RETAINED, not reset (design doc section
     // 13): the client is showing last-known values, not zeros, and it is
-    // the SAME SliceModel object -- nothing was destroyed.
+    // the SAME SliceModel object -- nothing was destroyed. That retention
+    // covers the whole SET too: link loss is not the moment to decide a
+    // slice is gone, because the station may well come back with it.
     QCOMPARE(clientModel.sliceById(sliceId), clientSliceBeforeKill);
     QCOMPARE(clientSliceBeforeKill->frequency(), 7100000.0);
+    QCOMPARE(clientModel.slices().size(), 2);
+    QCOMPARE(clientModel.sliceById(secondSliceId), clientSecondSlice);
 
     // SettingsProxy: keeps serving the cache for reads, drops writes.
     QVERIFY(!proxy.ready());
@@ -283,6 +307,20 @@ void TstSessionLinkLoss::killedDaemonEntersDefinedStaleStateThenReconnectsToARes
     QCOMPARE(clientSliceAfterReconnect, clientSliceBeforeKill);
     // ...but its value now reflects the fresh, DIFFERENT daemon's state.
     QCOMPARE(clientSliceAfterReconnect->frequency(), 14200000.0);
+
+    // Whole-branch review, Important 1: a CHANGED SET, not just a changed
+    // value. The restarted daemon has one slice; the client had two. The
+    // second is REAPED at the snapshot-complete marker, which is the
+    // first moment the station's full set is known -- a partial burst
+    // must never be read as "the station no longer has this".
+    QVERIFY2(clientModel.sliceById(secondSliceId) == nullptr,
+             "a slice the restarted station no longer has survived the "
+             "reconnect as an unwatched, unmirrored ghost");
+    QCOMPARE(clientModel.slices().size(), 1);
+    // ...and the ghost is gone from the wire registry too, so nothing can
+    // route to it and no local edit on it is forwarded.
+    QVERIFY(!client.mirroredObjectKeys().contains(
+        QByteArray("slice:") + QByteArray::number(secondSliceId)));
 
     QVERIFY(proxy.ready());
     QCOMPARE(proxy.value(QStringLiteral("TciServerPort"), QStringLiteral("0")).toString(),
