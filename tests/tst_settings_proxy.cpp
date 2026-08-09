@@ -728,6 +728,65 @@ private slots:
                  QStringLiteral("daemon-truth"));
     }
 
+    // ── Whole-branch review, Important 2: the bookkeeping gets a consumer ──
+    //
+    // keysContradictedByLastSnapshot() was written, tested, and read by
+    // nothing in production: the operator was told the LINK dropped
+    // (MainWindow's "Station link lost" toast) and never that a specific
+    // EDIT of theirs did not stick. value() keeps returning the offline
+    // value, so the control reads back as applied, which is the worst
+    // shape this can take. The signal below is what a GUI hangs a notice
+    // on; these two slots pin that it fires when and only when there is
+    // something to say.
+    void contradictedOfflineEditsAreAnnouncedOnceWithTheirKeys()
+    {
+        SettingsProxy proxy;
+        QSignalSpy announced(&proxy, &SettingsProxy::offlineEditsSuperseded);
+
+        QVERIFY(!proxy.ready());
+        proxy.setValue(QStringLiteral("hardware/aa:bb/k2"), QStringLiteral("mine-too"));
+        proxy.setValue(QStringLiteral("hardware/aa:bb/k1"), QStringLiteral("mine"));
+        proxy.setValue(QStringLiteral("hardware/aa:bb/k3"), QStringLiteral("uncovered"));
+        QCOMPARE(announced.count(), 0);
+
+        QMap<QString, QString> snap;
+        snap.insert(QStringLiteral("hardware/aa:bb/k1"), QStringLiteral("daemon-truth"));
+        snap.insert(QStringLiteral("hardware/aa:bb/k2"), QStringLiteral("daemon-truth-2"));
+        proxy.setReady(true);
+        proxy.applySnapshot(snap);
+
+        QCOMPARE(announced.count(), 1);
+        // SORTED, and carrying only the contradicted subset: k3 is an
+        // offline edit the snapshot had no opinion about, which
+        // SettingsProxy.h documents as deliberately unreported.
+        const QStringList keys = announced.first().first().toStringList();
+        QCOMPARE(keys, (QStringList{QStringLiteral("hardware/aa:bb/k1"),
+                                    QStringLiteral("hardware/aa:bb/k2")}));
+    }
+
+    void aSnapshotThatContradictsNothingAnnouncesNothing()
+    {
+        SettingsProxy proxy;
+        QSignalSpy announced(&proxy, &SettingsProxy::offlineEditsSuperseded);
+
+        // An ONLINE write is not a dropped one, so a later snapshot
+        // covering it is an ordinary update, not a superseded edit.
+        proxy.setReady(true);
+        proxy.setValue(QStringLiteral("hardware/aa:bb/k1"), QStringLiteral("mine"));
+        proxy.applySnapshot(QMap<QString, QString>{
+            {QStringLiteral("hardware/aa:bb/k1"), QStringLiteral("daemon-truth")}});
+        QCOMPARE(announced.count(), 0);
+
+        // ...and neither is an offline edit whose key the snapshot never
+        // mentions. Nothing was overwritten, so there is nothing to say.
+        proxy.setReady(false);
+        proxy.setValue(QStringLiteral("hardware/aa:bb/k9"), QStringLiteral("mine"));
+        proxy.setReady(true);
+        proxy.applySnapshot(QMap<QString, QString>{
+            {QStringLiteral("hardware/aa:bb/k1"), QStringLiteral("daemon-truth-2")}});
+        QCOMPARE(announced.count(), 0);
+    }
+
     void keysContradictedByLastSnapshotIsRecomputedNotAccumulated()
     {
         SettingsProxy proxy;

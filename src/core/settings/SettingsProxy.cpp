@@ -35,6 +35,11 @@
 //                                    applyRemoteRemoval(). AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-08-09  J.J. Boyd / KG4VCF  Whole-branch review, Important 2:
+//                                    applySnapshot() logs and announces
+//                                    superseded offline edits. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include "core/settings/SettingsProxy.h"
@@ -180,6 +185,29 @@ void SettingsProxy::applySnapshot(const QMap<QString, QString>& data)
     m_droppedWhileOffline.clear();
     m_snapshotEverApplied = true;
     emit snapshotApplied(data.size());
+
+    // Whole-branch review, Important 2. Until this existed the
+    // contradiction set had no consumer anywhere in production, so the
+    // operator was told the LINK dropped and never that a specific EDIT of
+    // theirs had been overwritten -- and value() had been serving the
+    // offline value back the whole time, so the control read as applied.
+    // Sorted so the log line and any UI hung on the signal are stable and
+    // diffable rather than QSet-hash-ordered.
+    if (!m_lastSnapshotContradictions.isEmpty()) {
+        QStringList keys(m_lastSnapshotContradictions.cbegin(),
+                         m_lastSnapshotContradictions.cend());
+        keys.sort();
+        // The DETAIL lives here, at warning level, so a consumer can stay
+        // proportionate (a count, and "see the log") instead of pasting a
+        // wall of key names into a toast.
+        qCWarning(lcSettingsProxy).noquote()
+            << QStringLiteral("%1 setting(s) changed while the station link was "
+                              "down did not reach the station and have been "
+                              "replaced by its own values: %2")
+                   .arg(keys.size())
+                   .arg(keys.join(QStringLiteral(", ")));
+        emit offlineEditsSuperseded(keys);
+    }
 }
 
 bool SettingsProxy::hasNonEmptySnapshot() const

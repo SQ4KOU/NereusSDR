@@ -161,7 +161,19 @@
 // diff (this class does not retain the pre-snapshot cached value
 // separately from what applySnapshot() merges over it) -- it is "this
 // key had a pending offline edit AND the snapshot has an opinion about
-// it", and Task 19 owns turning that into operator-facing language.
+// it".
+//
+// Whole-branch review, Important 2 -- who turns that into operator-facing
+// language, since for two rounds the answer was "nobody". Task 19 was
+// named here as the owner and never did it: both accessors were read only
+// from tests, so a remote operator who changed a Setup control during an
+// outage was told the LINK dropped (MainWindow's "Station link lost"
+// toast) and never that their EDIT had been thrown away -- while value()
+// went on returning the offline value, so the control itself read back as
+// applied. applySnapshot() now logs the contradicted key names at warning
+// level and emits offlineEditsSuperseded(), which MainWindow::
+// connectToStation() turns into a counted toast. The accessors stay: they
+// are the introspectable form, and the tests read them.
 //
 // Fix round 2 (review, smaller item) -- what Task 19 is told, precisely:
 // keysContradictedByLastSnapshot() names only the CONTRADICTED subset,
@@ -281,6 +293,12 @@
 //                                    applyRemoteRemoval(), so a station
 //                                    removal is cached as absence rather
 //                                    than as an empty string. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
+//   2026-08-09  J.J. Boyd / KG4VCF  Whole-branch review, Important 2:
+//                                    offlineEditsSuperseded(), so the
+//                                    offline-edit bookkeeping finally has
+//                                    a production consumer. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
 // =================================================================
@@ -416,6 +434,27 @@ signals:
     /// A snapshot (connect-time or reconnect) was applied. `keyCount` is
     /// data.size() from THIS call, not the cache total.
     void snapshotApplied(int keyCount);
+
+    /// Whole-branch review, Important 2. The just-applied snapshot
+    /// overwrote at least one key this client had edited while offline:
+    /// `keys` is keysContradictedByLastSnapshot() as a sorted list, and
+    /// the values those edits carried are gone. Fired at most once per
+    /// applySnapshot(), and only when there is something to report.
+    ///
+    /// This exists because value() keeps returning the offline value
+    /// until the snapshot lands, so the control the operator moved reads
+    /// back as APPLIED the whole time -- the failure is invisible from
+    /// the widget, and "Station link lost" tells them about the link, not
+    /// about their edit. MainWindow::connectToStation() hangs a toast on
+    /// this; applySnapshot() also logs the key names at warning level, so
+    /// the toast can stay a count and the log carries the detail.
+    ///
+    /// It reports only the CONTRADICTED subset, for the reason the class
+    /// comment's "Offline behaviour" section gives: an offline edit whose
+    /// key the snapshot did not cover leaves no record in either set, and
+    /// this class cannot honestly claim to know whether it reached the
+    /// station.
+    void offlineEditsSuperseded(const QStringList& keys);
 
 private:
     void logProxiedRead(const QString& key, const QString& outcome,

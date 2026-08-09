@@ -962,6 +962,25 @@ void MainWindow::connectToStation()
                   ToastSeverity::Info, 3000);
     });
 
+    // Whole-branch review, Important 2. The three toasts above tell the
+    // operator about the LINK. This one tells them about their own EDIT,
+    // which nothing did before: while the link is down SettingsProxy still
+    // caches a write and value() still returns it, so the Setup control
+    // they moved reads back as applied, and the reconnect snapshot then
+    // replaces it with the station's own value in silence.
+    //
+    // Proportionate on purpose: a COUNT here, the key names at warning
+    // level in SettingsProxy::applySnapshot(). A remote client that has
+    // been offline through a band change can have a dozen of these, and a
+    // toast listing "hardware/aa:bb:.../alex/hpf/..." twelve times is
+    // noise the operator will learn to dismiss unread.
+    connect(proxy, &SettingsProxy::offlineEditsSuperseded, this,
+            [this](const QStringList& keys) {
+        showToast(tr("%n station setting(s) you changed while the link was down "
+                     "did not stick. See the log for which.", "", keys.size()),
+                  ToastSeverity::Warning, 8000);
+    });
+
     // Task 19: the Disconnect side must pass attemptReconnect = false so a
     // deliberate quit does not schedule a surprise redial during teardown.
     connect(qApp, &QCoreApplication::aboutToQuit, this, [this]() {
