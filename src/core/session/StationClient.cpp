@@ -291,6 +291,41 @@ void StationClient::dialStation(const QUrl& url, const QString& token,
     // its own clean slate too.
     m_lastError.clear();
 
+    // A PIN THAT IS CONFIGURED IS A PIN THAT MUST BE CHECKED, and a scheme
+    // with no TLS under it cannot check one. RemoteStationOptions::
+    // isValidStationUrl accepts ws:// for a loopback bench run and its
+    // rejection message advertises it, while connectToStation() above
+    // refuses only an EMPTY fingerprint. So an operator who had pinned a
+    // fingerprint correctly and typed ws:// got no TLS, therefore no
+    // sslErrors, therefore no pin comparison anywhere, and then
+    // handleHello() put the shared pre-shared token on the wire in
+    // cleartext. Checked BEFORE the latch below so a refused URL is not
+    // left behind for onReconnectTimeout() to redial.
+    if (url.scheme().compare(QLatin1String("wss"), Qt::CaseInsensitive) != 0
+        && !expectedFingerprint.isEmpty()) {
+        m_lastError =
+            QStringLiteral("Refusing to connect to %1: a station certificate "
+                           "fingerprint is pinned, but \"%2\" carries no TLS, so "
+                           "there is nothing to compare the fingerprint against "
+                           "and the pairing token would travel in cleartext. Use "
+                           "wss://.")
+                .arg(url.toString(QUrl::RemovePassword), url.scheme());
+        qCWarning(lcStationClient) << m_lastError;
+        // Emitted directly rather than through endSession(), matching
+        // connectToStation()'s own empty-fingerprint refusal: no session
+        // has been attached yet, so endSession()'s m_sessionActive guard
+        // would swallow this and the caller would hear nothing at all.
+        emit sessionEnded(m_lastError);
+        return;
+    }
+
+    // Whether this attempt owes a certificate comparison before it may
+    // send the token. The conjunction is the SAME one the sslErrors bypass
+    // below has always used: opting out requires both an explicit
+    // allowUnpinned and no configured pin. attachTransport() turns this
+    // into the per-attach m_pinSatisfied.
+    m_pinRequired = !(expectedFingerprint.isEmpty() && allowUnpinned);
+
     // Latched (Task 19) so a later automatic retry can redial identically.
     // Parent design section 13: "onReconnectTimeout slot with latched host
     // and port."
@@ -329,21 +364,15 @@ void StationClient::dialStation(const QUrl& url, const QString& token,
                     socket->ignoreSslErrors(errors);
                     return;
                 }
-                const QSslCertificate peer = socket->sslConfiguration().peerCertificate();
-                const QString actual =
-                    formatFingerprint(peer.digest(QCryptographicHash::Sha256));
-                if (actual != pinned) {
-                    m_lastError =
-                        QStringLiteral("Station certificate fingerprint does not match. "
-                                       "Expected %1, got %2.")
-                            .arg(pinned, actual);
-                    qCWarning(lcStationClient) << m_lastError;
-                    socket->abort();
-                    // A fingerprint mismatch is a security refusal, not a
-                    // transient link failure: retrying with the same
-                    // latched (wrong-presenting) station cannot converge.
-                    // No auto-reconnect (Task 19).
-                    endSession(m_lastError, /*attemptReconnect=*/false);
+                // The comparison itself now lives in ensurePinSatisfied(),
+                // which this path shares with the connected() handler
+                // below and with handleHello()'s gate. Keeping it here as
+                // well as there is what makes a MISMATCH surface at the
+                // earliest possible moment -- mid-handshake, before the
+                // socket is even usable -- while the other two callers are
+                // what make the comparison happen AT ALL on a handshake
+                // that produced no errors to report.
+                if (!ensurePinSatisfied()) {
                     return;
                 }
                 // The pinned fingerprint IS the identity check (parent
@@ -362,6 +391,27 @@ void StationClient::dialStation(const QUrl& url, const QString& token,
                 }
                 socket->ignoreSslErrors(ignorable);
             });
+
+    // THE fix for the second reachable instance of the pinning gap.
+    // QWebSocket::sslErrors fires ONLY when the handshake produced errors,
+    // so a handshake the client's own trust store already accepts -- a
+    // corporate or antivirus MITM root, or a genuine DV certificate issued
+    // for a dynamic-DNS station name -- never reached the comparison at
+    // all. That is precisely the case pinning exists for. connected()
+    // fires on every successful handshake, error-free ones included, and
+    // by then sslConfiguration().peerCertificate() is populated.
+    //
+    // This is belt to handleHello()'s braces rather than a replacement for
+    // it: Qt emits connected() before it delivers any frame on the same
+    // socket, so this normally runs first, but the token is gated on
+    // m_pinSatisfied at the one place it is actually sent, so the ordering
+    // does not have to be relied upon.
+    connect(socket, &QWebSocket::connected, this, [this, transportGuard]() {
+        if (transportGuard.isNull() || transportGuard.data() != m_transport) {
+            return;
+        }
+        ensurePinSatisfied();
+    });
 
     connect(socket, &QWebSocket::errorOccurred, this,
             [this, socket, transportGuard](QAbstractSocket::SocketError) {
@@ -389,8 +439,88 @@ void StationClient::dialStation(const QUrl& url, const QString& token,
     socket->open(url);
 }
 
-void StationClient::startSession(SessionTransport* transport, const QString& token)
+// The one place the pinned fingerprint is compared, called from three:
+// the sslErrors handler (earliest possible refusal on a handshake that
+// reported problems), the connected() handler (every OTHER handshake,
+// which is the case the old code never checked at all), and handleHello()
+// immediately before the token would go out (the gate that makes the
+// property hold regardless of which of the other two ran, or whether
+// either did).
+//
+// Idempotent and cheap after the first success: m_pinSatisfied latches.
+//
+// A refusal here is a SECURITY refusal, not a transient link failure, so
+// it is never retry-eligible. Redialing the same latched station that is
+// presenting the same wrong certificate cannot converge, and retrying
+// forever against an active MITM is worse than stopping.
+bool StationClient::ensurePinSatisfied()
 {
+    if (m_pinSatisfied) {
+        return true;
+    }
+
+    auto* wsTransport = qobject_cast<WebSocketTransport*>(m_transport);
+    QWebSocket* socket = wsTransport != nullptr ? wsTransport->socket() : nullptr;
+    const QSslCertificate peer = socket != nullptr
+                                     ? socket->sslConfiguration().peerCertificate()
+                                     : QSslCertificate();
+
+    if (peer.isNull()) {
+        // A pin is configured and the link cannot produce a certificate to
+        // check it against. dialStation() refuses a non-TLS scheme up
+        // front, so reaching this means something stranger: a transport
+        // that is not a WebSocketTransport at all, or a wss socket whose
+        // peer certificate is somehow absent. Refuse rather than fall
+        // through, because falling through is what sends the token.
+        m_lastError = QStringLiteral(
+            "Refusing to authenticate: a station certificate fingerprint is "
+            "pinned, but this link presented no certificate to compare it "
+            "against.");
+        qCWarning(lcStationClient) << m_lastError;
+        // endSession FIRST, abort second, for the same reason
+        // disconnectFromStation() documents for closeLink(): abort()
+        // emits errorOccurred SYNCHRONOUSLY, that handler calls
+        // endSession(attemptReconnect = true), and endSession is
+        // once-per-attach -- so aborting first let the socket error win
+        // the race and schedule a reconnect for a refusal this function
+        // has just declared non-retryable. Observed in the log as
+        // "Scheduling reconnect attempt 1" immediately after a fingerprint
+        // mismatch.
+        endSession(m_lastError, /*attemptReconnect=*/false);
+        if (socket != nullptr) {
+            socket->abort();
+        }
+        return false;
+    }
+
+    const QString pinned = m_lastFingerprint.toUpper();
+    const QString actual = formatFingerprint(peer.digest(QCryptographicHash::Sha256));
+    if (actual != pinned) {
+        m_lastError = QStringLiteral("Station certificate fingerprint does not match. "
+                                     "Expected %1, got %2.")
+                          .arg(pinned, actual);
+        qCWarning(lcStationClient) << m_lastError;
+        // See the ordering note above: endSession, then abort.
+        endSession(m_lastError, /*attemptReconnect=*/false);
+        socket->abort();
+        return false;
+    }
+
+    m_pinSatisfied = true;
+    return true;
+}
+
+void StationClient::startSession(SessionTransport* transport, const QString& token,
+                                 const QString& expectedFingerprint)
+{
+    // A pin this caller states is a pin this session owes, exactly as on
+    // the dial path. With no fingerprint (the default, and every adopted
+    // transport in the tree today) there is nothing to compare and nothing
+    // to require. Set BEFORE attachTransport(), which is what turns it
+    // into this attach's m_pinSatisfied, and latched into
+    // m_lastFingerprint because ensurePinSatisfied() reads it from there.
+    m_pinRequired = !expectedFingerprint.isEmpty();
+
     // Fix round 1, Minor 3. Without this, a client that once dialed via
     // connectToStation() (latching m_lastUrl to something real) and LATER
     // runs a startSession()-based seam session -- this suite's own pattern
@@ -403,8 +533,14 @@ void StationClient::startSession(SessionTransport* transport, const QString& tok
     // the class comment's claim -- "nothing to redial" for a
     // startSession()-based session -- actually true rather than true only
     // for a client that has never dialed at all.
+    //
+    // m_lastFingerprint is the exception among the three: it is not a
+    // redial target, it is what ensurePinSatisfied() compares against, so
+    // it takes this call's own value rather than being blanked. With the
+    // default empty argument that is byte-identical to the clear this
+    // replaced.
     m_lastUrl.clear();
-    m_lastFingerprint.clear();
+    m_lastFingerprint = expectedFingerprint;
     m_lastAllowUnpinned = false;
     attachTransport(transport, token);
 }
@@ -452,6 +588,13 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
     m_pingsAwaitingPong = 0;
     m_linkUp = false;
     m_sessionActive = true;
+
+    // Per-attach, never carried across one. A reconnect re-dials and gets
+    // a fresh TLS handshake, possibly against a different certificate, so
+    // a pin satisfied by the PREVIOUS session says nothing about this one.
+    // The caller (dialStation or startSession) has already set
+    // m_pinRequired for this attempt.
+    m_pinSatisfied = !m_pinRequired;
 
     // Task 19: a new epoch for every attach, including the first (so the
     // first session is epoch 1; 0 means "never attached"). See
@@ -873,6 +1016,17 @@ void StationClient::handleHello(const SessionMessage& message)
             << "Settings schema skew: this client is at" << m_localSettingsSchema
             << "the station is at" << m_stationSettingsSchema
             << "-- station settings may not round-trip as expected";
+    }
+
+    // THE GATE. This is the one line on which the pre-shared token leaves
+    // this process, so this is where the pin has to have been checked --
+    // not in whichever handler happened to fire, and not only on a
+    // handshake that reported errors. ensurePinSatisfied() has normally
+    // already latched by now (connected() precedes any inbound frame), so
+    // in the ordinary case this costs one bool test; when it has not, it
+    // does the comparison here rather than letting the secret out.
+    if (!ensurePinSatisfied()) {
+        return;
     }
 
     send(SessionMessages::hello(kSessionProtocolMajor, kSessionProtocolMinor,

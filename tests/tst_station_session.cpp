@@ -221,6 +221,8 @@ private slots:
     void firstRunPairingBannerNeverReachesTheLoggingHandler();
     void oversizedMessageIsRefusedBeforeAnyAuthentication();
     void clientCapsWhatAStationCanMakeItAllocate();
+    void wsSchemeIsRefusedWhenAFingerprintIsPinned();
+    void tokenIsNeverSentOnALinkWhosePinWasNeverChecked();
 
     // ---- TLS-specific (QSKIP when the backend is unusable) ----
     void wssListenerComesUpAndCompletesAHandshake();
@@ -1456,6 +1458,120 @@ void TstStationSession::clientCapsWhatAStationCanMakeItAllocate()
 
     client.disconnectFromStation(QStringLiteral("test complete"));
     server.close();
+}
+
+void TstStationSession::wsSchemeIsRefusedWhenAFingerprintIsPinned()
+{
+    // Critical 3, instance 1. No TLS needed to prove it, which is the
+    // point: RemoteStationOptions::isValidStationUrl accepts ws:// and its
+    // rejection message advertises it, connectToStation() refused only an
+    // EMPTY fingerprint, and QWebSocket::sslErrors cannot fire on a link
+    // with no TLS under it. An operator who had pinned a fingerprint
+    // correctly and typed ws:// therefore got no pin comparison anywhere,
+    // and handleHello() then put the pre-shared token on the wire in
+    // cleartext.
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+    QSignalSpy ended(&client, &StationClient::sessionEnded);
+
+    const QString fingerprint =
+        QStringLiteral("00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:"
+                       "00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF");
+    client.connectToStation(QUrl(QStringLiteral("ws://127.0.0.1:50100")),
+                            QStringLiteral("the-shared-secret"), fingerprint);
+
+    // Refused SYNCHRONOUSLY, before anything was dialed at all. The old
+    // code reached dialStation(), built a QWebSocket and opened it, so
+    // this count was 0 on return.
+    QCOMPARE(ended.count(), 1);
+    QVERIFY2(client.transport() == nullptr,
+             "a transport was created for a scheme that cannot carry a pin");
+    QVERIFY2(client.lastError().contains(QStringLiteral("wss://")),
+             qPrintable(client.lastError()));
+    // Deliberately NOT asserting isPinSatisfied() here: the refusal
+    // returns before any transport is attached, so that flag describes no
+    // attach at all and reads as its neutral default. What is being pinned
+    // is that nothing was dialed, which the two checks above cover.
+
+    // And nothing was latched for the automatic reconnect to redial: a
+    // scheme refusal cannot converge by being retried.
+    QVERIFY(!client.isReconnectPending());
+}
+
+void TstStationSession::tokenIsNeverSentOnALinkWhosePinWasNeverChecked()
+{
+    // Critical 3, instance 2. QWebSocket::sslErrors fires ONLY when the
+    // handshake produced errors, and the pin comparison lived exclusively
+    // inside that handler. A handshake the client's own trust store
+    // already accepts -- a corporate or antivirus MITM root, a real DV
+    // certificate for a dynamic-DNS station name -- therefore reached
+    // handleHello() with no comparison having happened anywhere, and
+    // handleHello() sent the pre-shared token.
+    //
+    // WHAT THIS SLOT DOES NOT DO, stated plainly. It does not stand up a
+    // genuinely error-free TLS handshake. That is not reachable in-process
+    // against this station: CertificateStore issues CN "nereusd" with no
+    // subjectAltName, so any connection to 127.0.0.1 raises
+    // HostNameMismatch, and QWebSocket exposes no per-socket
+    // setPeerVerifyName() to redirect the check (that is a QSslSocket
+    // member, not a QSslConfiguration one, on Qt 6.11). Turning peer
+    // verification off in the default configuration was tried and does not
+    // help: Qt still emits sslErrors and merely continues afterwards, so
+    // the old code's handler still ran and the case stayed invisible.
+    //
+    // So the property is pinned where it is actually specified instead:
+    // the token must not leave this process while the pin is unchecked,
+    // whatever produced that state. A LoopbackTransport carries no TLS at
+    // all, which is the strongest possible form of "no certificate was
+    // ever compared" -- strictly worse than the trusted-MITM case, and
+    // driven through the same handleHello() gate that case now goes
+    // through. Before the gate existed, the client answered the station's
+    // Hello with an auth.request carrying the token.
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(
+        settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+
+    auto stationModel = makeStationRadioModel(0);
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("station"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("client"), this);
+    stationEnd->linkTo(clientEnd);
+
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+    QSignalSpy ended(&client, &StationClient::sessionEnded);
+    QSignalSpy authenticated(&server, &StationServer::clientAuthenticated);
+
+    server.acceptTransport(stationEnd);
+
+    // The CORRECT token, so nothing but the pin can refuse this, and a
+    // fingerprint the link has no way to satisfy.
+    const QString pin =
+        QStringLiteral("00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF:"
+                       "00:11:22:33:44:55:66:77:88:99:AA:BB:CC:DD:EE:FF");
+    client.startSession(clientEnd, server.token(), pin);
+
+    QTRY_COMPARE_WITH_TIMEOUT(ended.count(), 1, 5000);
+    QVERIFY(!client.isPinSatisfied());
+    QVERIFY2(client.lastError().contains(QStringLiteral("no certificate")),
+             qPrintable(client.lastError()));
+
+    // The leak, asserted from both ends. On the wire: no auth.request ever
+    // left the client. On the station: nobody proved they held the secret.
+    QTest::qWait(200);
+    QVERIFY2(!stationEnd->receivedKinds().contains(QByteArrayLiteral("auth.request")),
+             "the client sent its pre-shared token over a link whose certificate "
+             "fingerprint had never been compared");
+    QCOMPARE(authenticated.count(), 0);
+
+    // And a seam session with NO pin stated is unaffected, which is every
+    // other slot in this file: the default argument means those keep
+    // authenticating exactly as before.
+    QVERIFY(StationClient(&clientModel, &proxy).isPinSatisfied());
 }
 
 // ── TLS ──────────────────────────────────────────────────────────────────

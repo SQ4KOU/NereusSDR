@@ -306,7 +306,16 @@ public:
     /// one. Same code path from the first message onward; this is how the
     /// protocol half is exercised without TLS (SessionTransport.h explains
     /// why that matters). Takes ownership by reparenting.
-    void startSession(SessionTransport* transport, const QString& token);
+    ///
+    /// `expectedFingerprint` is the pin this session owes, and defaults to
+    /// none because the transports adopted here today carry no TLS. It is
+    /// not decoration: a caller adopting an already-open link that DID
+    /// negotiate TLS has to be able to state the pin, or the token would
+    /// leave this process without the comparison connectToStation()
+    /// guarantees. A non-empty value with a transport that cannot produce
+    /// a peer certificate is refused rather than waved through.
+    void startSession(SessionTransport* transport, const QString& token,
+                      const QString& expectedFingerprint = QString());
 
     /// `attemptReconnect` (Task 19) decides whether this closure re-arms
     /// the automatic reconnect timer once the session has ended. Defaults
@@ -386,6 +395,12 @@ public:
     /// attachTransport() releases and deletes a superseded one.
     SessionTransport* transport() const { return m_transport; }
 
+    /// True when this attach either owes no certificate comparison (the
+    /// non-TLS transport seam, or an explicit unpinned bench run) or has
+    /// already passed one. The pre-shared token is never sent while this
+    /// is false; see ensurePinSatisfied() in the .cpp.
+    bool isPinSatisfied() const { return m_pinSatisfied; }
+
     /// Send a command verb (SessionCommandDispatcher's five) to the
     /// station. Returns the commandId the result will echo, or 0 when
     /// there is no session.
@@ -437,6 +452,20 @@ private:
     /// past its first step).
     void dialStation(const QUrl& url, const QString& token,
                      const QString& expectedFingerprint, bool allowUnpinned);
+
+    /// Compares the station's presented certificate against the pinned
+    /// fingerprint, exactly once per attach, and ends the session
+    /// (non-retryably) when it does not match or when there is no
+    /// certificate to compare. Returns true when this attach may proceed
+    /// to send the token.
+    ///
+    /// Called from THREE places on purpose. The sslErrors handler surfaces
+    /// a mismatch at the earliest possible moment. The connected() handler
+    /// covers every handshake that reported no errors at all, which is the
+    /// case the original code never checked and the case pinning exists
+    /// for. handleHello() gates the one line that actually sends the
+    /// token, so the property holds regardless of which handler ran.
+    bool ensurePinSatisfied();
 
     void onTransportText(const QByteArray& wire);
     void onTransportClosed();
@@ -598,6 +627,16 @@ private:
     QUrl m_lastUrl;
     QString m_lastFingerprint;
     bool m_lastAllowUnpinned = false;
+
+    /// Whether THIS attempt owes a certificate comparison before it may
+    /// send the token, and whether it has passed one. Set by
+    /// dialStation()/startSession() and turned into m_pinSatisfied by
+    /// attachTransport(), per attach, never carried across a reconnect:
+    /// a redial gets a fresh handshake and possibly a different
+    /// certificate. Default true on m_pinSatisfied so a client that has
+    /// never dialed is not in a refusing state.
+    bool m_pinRequired = false;
+    bool m_pinSatisfied = true;
 
     /// Owned, single-shot, cancellable. NEVER static QTimer::singleShot --
     /// see the class comment's link-loss section for why that matters more
