@@ -6,12 +6,13 @@
 //
 // The ordered rule table, first match wins:
 //   1. Explicit exceptions -- a key that would otherwise be caught by a
-//      prefix rule below but needs the opposite answer. Only the two
-//      TciLogWindow* entries qualify under that strict definition (both
-//      would match the "Tci" prefix rule in step 2 without this step
-//      running first). A key that matches no prefix at all belongs in
-//      step 3 below, even if it reads like an "exception" to some
-//      family's usual answer in prose.
+//      prefix rule below but needs the opposite answer. Twelve entries
+//      qualify under that strict definition: the two TciLogWindow* keys
+//      (which would match the "Tci" prefix rule in step 2) and the ten
+//      FreeDvReporter/* window-presentation keys (which would match
+//      "FreeDv"). A key that matches no prefix at all belongs in step 3
+//      below, even if it reads like an "exception" to some family's usual
+//      answer in prose.
 //   2. Prefixes -- a whole family that shares one scope regardless of
 //      what follows the prefix (checked with startsWith(), so ordering
 //      between prefixes only matters if one is a leading substring of
@@ -104,6 +105,15 @@
 //                                    a false claim in stripPanSuffix's
 //                                    comment. AI-assisted transformation
 //                                    via Anthropic Claude Code.
+//   2026-08-09  J.J. Boyd / KG4VCF  Whole-branch review, Important 3: ten
+//                                    FreeDvReporter/* window-presentation
+//                                    keys move from Station to explicit
+//                                    OperatorLocal exceptions, and the
+//                                    "FreeDv" prefix rule's justification
+//                                    is corrected to what is actually
+//                                    true of it. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include "core/settings/SettingsScope.h"
@@ -163,6 +173,52 @@ const Rule kExceptions[] = {
     // below on purpose.
     { "TciLogWindowGeometry", SettingsScope::OperatorLocal },
     { "TciLogWindowAutoScroll", SettingsScope::OperatorLocal },
+
+    // ---- The FreeDV Reporter window's own presentation state ----------
+    //
+    // Whole-branch review, Important 3. The "FreeDv" prefix rule below is
+    // justified on RadioModel owning the client instance, with the dialogs
+    // only presenting what it already collected. That holds for
+    // FreeDvReporter/{Callsign,GridSquare,Message,ServerUrl}, which
+    // src/models/RadioModel.cpp really does read. It does not hold for the
+    // ten below: table geometry, sort state, column visibility, per-column
+    // filters, the hide-self toggle and three display-unit toggles, whose
+    // only reader or writer anywhere in the tree is
+    // src/gui/FreeDVReporterDialog.cpp or src/gui/SpotHubDialog.cpp.
+    //
+    // Left Station, each of these was over-classified, the direction
+    // SettingsScope.h's own default-local rationale names as the worse
+    // one: on a remote client, dragging a column divider wrote into the
+    // proxy cache and out onto the wire, the value never reached the
+    // operator's own settings file, reads were shadowed by the proxy so
+    // widths saved during earlier LOCAL use were ignored while remote, and
+    // the daemon's store accumulated one GUI's table geometry for every
+    // client that ever connected.
+    //
+    // These are true "explicit exceptions" in this file's strict sense:
+    // every one is caught by the "FreeDv" prefix rule in step 2 without
+    // this step running first.
+    //
+    // Three further FreeDvReporter/* keys are also written only from
+    // src/gui and are deliberately NOT moved here, because each is a
+    // judgement rather than a presentation fact and none was in the
+    // review's scope: SavedMessages (the operator's canned status-message
+    // presets, whose SENT counterpart Message is Station), ReportToPsk (a
+    // reporting BEHAVIOUR flag that has no runtime consumer at all today,
+    // the same shape as the five reviewed-and-pinned entries at the bottom
+    // of kWholeKeys), and IdleTimeoutMinutes (the dialog's own idle-sweep
+    // threshold, and the only expiry FreeDVStationModel has anywhere).
+    // Recorded so the next reader sees they were checked, not missed.
+    { "FreeDvReporter/ColumnWidths", SettingsScope::OperatorLocal },
+    { "FreeDvReporter/SortColumn", SettingsScope::OperatorLocal },
+    { "FreeDvReporter/SortAscending", SettingsScope::OperatorLocal },
+    { "FreeDvReporter/VisibleColumns", SettingsScope::OperatorLocal },
+    { "FreeDvReporter/ColumnFilters", SettingsScope::OperatorLocal },
+    { "FreeDvReporter/BandFilter", SettingsScope::OperatorLocal },
+    { "FreeDvReporter/Hidden", SettingsScope::OperatorLocal },
+    { "FreeDvReporter/DistanceMiles", SettingsScope::OperatorLocal },
+    { "FreeDvReporter/DirectionAsCardinal", SettingsScope::OperatorLocal },
+    { "FreeDvReporter/FrequencyAsKhz", SettingsScope::OperatorLocal },
 };
 
 // ---- 2. Prefixes ---------------------------------------------------------
@@ -254,14 +310,27 @@ const Rule kPrefixes[] = {
     // Spot-source client connection + display config (DX cluster/RBN
     // telnet, WSJT-X UDP, SpotCollector/DXLab UDP, POTA HTTPS, FreeDV
     // Reporter Socket.IO, PSK Reporter IPFIX). RadioModel.h/.cpp owns
-    // every one of these six client instances directly (not a GUI dialog
-    // -- SpotHubDialog/FreeDVReporterDialog only present what RadioModel
-    // already collected), so in the R2 split they run in the daemon.
-    // Covers both the connection half (host/port/poll-interval) and the
-    // per-source display half (spot marker colour/lifetime): both are
-    // read by src/models/RadioModel.cpp today, and nothing in this tree
-    // currently splits "which server" from "what colour its dots are"
-    // into two different scopes for the same source.
+    // every one of these six client instances directly, so in the R2
+    // split they run in the daemon. Covers both the connection half
+    // (host/port/poll-interval) and the per-source display half (spot
+    // marker colour/lifetime): both are read by src/models/RadioModel.cpp
+    // today, and nothing in this tree currently splits "which server"
+    // from "what colour its dots are" into two different scopes for the
+    // same source.
+    //
+    // Whole-branch review, Important 3 corrected the reasoning above. It
+    // used to say the dialogs "only present what RadioModel already
+    // collected" and that RadioModel owns EVERY key in these families.
+    // The first half is true of the collected SPOTS; the second is false
+    // of the FreeDV Reporter window's own table geometry, sort state,
+    // column visibility, view filters and display-unit toggles, which
+    // RadioModel never reads and which are now ten explicit exceptions in
+    // step 1 above. What survives, and is what actually justifies these
+    // prefix rules, is narrower: the CONNECTION half and the SPOT-DISPLAY
+    // half of each source are read by src/models/RadioModel.cpp. A key
+    // under one of these prefixes that no core or model consumer reads is
+    // not automatically Station, and the exceptions list is where it
+    // belongs.
     { "DxCluster", SettingsScope::Station },
     { "Rbn", SettingsScope::Station },
     { "Pota", SettingsScope::Station },

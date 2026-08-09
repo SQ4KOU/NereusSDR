@@ -476,7 +476,31 @@ do. Expect them greyed out on the bench and do not file it.
    a call in an uninventoried file or a count that moved, in CI and in the
    pre-commit hook both. A third page joining these two has to pass that
    check first.
-10. **Once a station is saved in Setup, every launch is remote** until the
+10. **`tst_settings_scope.cpp`'s completeness sweep has no
+    over-classification arm, and cannot usefully be given one.** Both its
+    assertions test for under-classification (a core/models key that is
+    not Station; an overlap key that is not Station), which is why the ten
+    over-classified `FreeDvReporter/*` window-presentation keys survived to
+    a whole-branch review. The obvious inverse arm ("a key touched only
+    from `src/gui` outside `src/gui/setup` must be OperatorLocal") flags 35
+    keys against the current tree and 25 of those are correctly Station:
+    the whole `DxCluster*` / `Rbn*` / `Wsjtx*` / `Pota*` / `PskReporter*` /
+    `SpotCollector*` family is written only from `SpotHubDialog.cpp` while
+    being read by `src/models/RadioModel.cpp` through a key this scan's
+    regex cannot see. An exemption list of 25 that grows with every new
+    GUI-written station key is the list doing the work, not the assertion,
+    so the arm was declined and the ten keys are pinned by explicit
+    `knownExamples_data()` rows instead.
+11. **Three further `FreeDvReporter/*` keys are written only from
+    `src/gui` and were deliberately left Station**: `SavedMessages`,
+    `ReportToPsk` and `IdleTimeoutMinutes`. Each is a judgement rather
+    than a presentation fact (the first two have Station-side
+    counterparts; the third is the only expiry `FreeDVStationModel` has
+    anywhere), none was in the review's scope, and all three are recorded
+    in `SettingsScope.cpp`'s exception block so a later reader sees they
+    were checked. If a bench finds a remote client's daemon store growing
+    saved status-message lists, this is the entry to reopen.
+12. **Once a station is saved in Setup, every launch is remote** until the
     field is cleared. There is no `--local` escape hatch. A launch against
     a dead station therefore shows a greyed Connect menu with no obvious
     cause. **Recovery: Setup > CAT & Network > Remote Station, clear the

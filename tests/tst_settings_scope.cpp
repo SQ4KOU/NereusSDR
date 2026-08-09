@@ -474,6 +474,53 @@ private slots:
         // nereusd.conf), and this row is what actually pins it.
         QTest::newRow("radios/lastConnected is OperatorLocal (daemon never touches this namespace)")
             << QStringLiteral("radios/lastConnected") << int(SettingsScope::OperatorLocal);
+
+        // ---- Whole-branch review, Important 3 ----------------------------
+        //
+        // The "FreeDv" prefix rule's justification is that RadioModel owns
+        // the client instance and the dialogs "only present what RadioModel
+        // already collected". True of the four identity/connection keys
+        // pinned first below, and false of the ten after them: those are
+        // the FreeDV Reporter window's own table geometry, sort state,
+        // column visibility, per-column filters and display-unit toggles,
+        // and their ONLY reader or writer anywhere in the tree is
+        // src/gui/FreeDVReporterDialog.cpp or src/gui/SpotHubDialog.cpp.
+        //
+        // Not covered by either completeness assertion below, in either
+        // direction: those scan src/core, src/models and src/gui/setup, and
+        // these ten live in src/gui/ directly. Both assertions test for
+        // UNDER-classification only, which is why this over-classification
+        // survived to a whole-branch review. These rows are the pin.
+        QTest::newRow("FreeDvReporter/Callsign is Station (RadioModel seeds the client)")
+            << QStringLiteral("FreeDvReporter/Callsign") << int(SettingsScope::Station);
+        QTest::newRow("FreeDvReporter/GridSquare is Station (the STATION's grid)")
+            << QStringLiteral("FreeDvReporter/GridSquare") << int(SettingsScope::Station);
+        QTest::newRow("FreeDvReporter/Message is Station (RadioModel.cpp reads it)")
+            << QStringLiteral("FreeDvReporter/Message") << int(SettingsScope::Station);
+        QTest::newRow("FreeDvReporter/ServerUrl is Station (which server the client dials)")
+            << QStringLiteral("FreeDvReporter/ServerUrl") << int(SettingsScope::Station);
+
+        QTest::newRow("FreeDvReporter/ColumnWidths is OperatorLocal (this window's table)")
+            << QStringLiteral("FreeDvReporter/ColumnWidths") << int(SettingsScope::OperatorLocal);
+        QTest::newRow("FreeDvReporter/SortColumn is OperatorLocal (this window's table)")
+            << QStringLiteral("FreeDvReporter/SortColumn") << int(SettingsScope::OperatorLocal);
+        QTest::newRow("FreeDvReporter/SortAscending is OperatorLocal (this window's table)")
+            << QStringLiteral("FreeDvReporter/SortAscending") << int(SettingsScope::OperatorLocal);
+        QTest::newRow("FreeDvReporter/VisibleColumns is OperatorLocal (this window's table)")
+            << QStringLiteral("FreeDvReporter/VisibleColumns") << int(SettingsScope::OperatorLocal);
+        QTest::newRow("FreeDvReporter/ColumnFilters is OperatorLocal (this window's table)")
+            << QStringLiteral("FreeDvReporter/ColumnFilters") << int(SettingsScope::OperatorLocal);
+        QTest::newRow("FreeDvReporter/BandFilter is OperatorLocal (this window's view filter)")
+            << QStringLiteral("FreeDvReporter/BandFilter") << int(SettingsScope::OperatorLocal);
+        QTest::newRow("FreeDvReporter/Hidden is OperatorLocal (this window's hide-self toggle)")
+            << QStringLiteral("FreeDvReporter/Hidden") << int(SettingsScope::OperatorLocal);
+        QTest::newRow("FreeDvReporter/DistanceMiles is OperatorLocal (a display unit)")
+            << QStringLiteral("FreeDvReporter/DistanceMiles") << int(SettingsScope::OperatorLocal);
+        QTest::newRow("FreeDvReporter/DirectionAsCardinal is OperatorLocal (a display unit)")
+            << QStringLiteral("FreeDvReporter/DirectionAsCardinal")
+            << int(SettingsScope::OperatorLocal);
+        QTest::newRow("FreeDvReporter/FrequencyAsKhz is OperatorLocal (a display unit)")
+            << QStringLiteral("FreeDvReporter/FrequencyAsKhz") << int(SettingsScope::OperatorLocal);
     }
 
     void knownExamples()
