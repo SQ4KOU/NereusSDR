@@ -482,14 +482,15 @@ do. Expect them greyed out on the bench and do not file it.
     not Station; an overlap key that is not Station), which is why the ten
     over-classified `FreeDvReporter/*` window-presentation keys survived to
     a whole-branch review. The obvious inverse arm ("a key touched only
-    from `src/gui` outside `src/gui/setup` must be OperatorLocal") flags 35
-    keys against the current tree and 25 of those are correctly Station:
-    the whole `DxCluster*` / `Rbn*` / `Wsjtx*` / `Pota*` / `PskReporter*` /
-    `SpotCollector*` family is written only from `SpotHubDialog.cpp` while
-    being read by `src/models/RadioModel.cpp` through a key this scan's
-    regex cannot see. An exemption list of 25 that grows with every new
-    GUI-written station key is the list doing the work, not the assertion,
-    so the arm was declined and the ten keys are pinned by explicit
+    from `src/gui` outside `src/gui/setup` must be OperatorLocal") flags
+    25 keys against the tree as it stands after those ten were fixed, and
+    every one of the 25 is correctly Station: the whole `DxCluster*` /
+    `Rbn*` / `Wsjtx*` / `Pota*` / `PskReporter*` / `SpotCollector*` family
+    is written only from `SpotHubDialog.cpp` while being read by
+    `src/models/RadioModel.cpp` through a key this scan's regex cannot
+    see. An exemption list of 25 that grows with every new GUI-written
+    station key is the list doing the work, not the assertion, so the arm
+    was declined and the ten keys are pinned by explicit
     `knownExamples_data()` rows instead.
 11. **Three further `FreeDvReporter/*` keys are written only from
     `src/gui` and were deliberately left Station**: `SavedMessages`,
