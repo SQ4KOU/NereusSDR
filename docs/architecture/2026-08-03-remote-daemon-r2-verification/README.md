@@ -533,7 +533,20 @@ do. Expect them greyed out on the bench and do not file it.
 
 ---
 
-### Step 5: the acceptance run (STATUS: OPEN)
+### Step 5: the acceptance run (STATUS: OPEN, and row 5.13 is BLOCKED)
+
+> **Row 5.13 cannot pass as the branch stands, and the cause is a gap in the
+> plan rather than in any one task.** The whole-branch review found that
+> `StationClient::invokeCommand()` has **zero callers**: the GUI's slice
+> controls call `RadioModel` directly, so on a remote client an active-slice
+> click flips `active` locally, the mirror correctly refuses to send a
+> daemon-authoritative property outbound, and the daemon never learns. Add-slice
+> mints a client-local slice the station has never heard of. Task 4 created
+> `IStationLink` as the attach point with a header note that a later task would
+> grow it once it had a real call to make; no later task was assigned that work,
+> and the interface is still empty. Escalated to the maintainer rather than
+> improvised around. Until it is resolved, treat 5.13 as blocked and read
+> 5.10 through 5.12 as covering property mirroring only, not command verbs.
 
 **Bench hardware: the ANAN-G2E, never the ANAN-G2.** The G2 is a different
 radio reachable on the same LAN and is explicitly excluded. Confirm the
@@ -557,7 +570,7 @@ Two processes, one host. `nereusd` holds the radio; the GUI holds nothing.
 | 5.10 | VFO, band, mode, filter round-trip and the radio follows | **yes** | OPEN |
 | 5.11 | AGC, NR, NB, SNB, APF, squelch round-trip | **yes** | OPEN |
 | 5.12 | RIT, XIT, antenna round-trip | **yes** | OPEN |
-| 5.13 | Add slice, remove slice, TX slice display | **yes** | OPEN |
+| 5.13 | Add slice, remove slice, TX slice display | **yes** | **BLOCKED** (see below) |
 | 5.14 | Per-slice S-meter needles are live | **yes** | OPEN |
 | 5.15 | Setup pages round-trip station settings both ways | **yes** | OPEN |
 | 5.16 | `unappliedProperties()` reports exactly the 13 TunerModel entries | no | OPEN |
@@ -565,6 +578,45 @@ Two processes, one host. `nereusd` holds the radio; the GUI holds nothing.
 Rows 5.1 through 5.7 (including 5.4a) and 5.16 do **not** need a radio and
 can be run first on any machine. Record which rows ran and which are still
 OPEN; do not merge the two into one verdict.
+
+#### Radio-free subset: RUN 2026-08-09, results below
+
+Run on macOS after the whole-branch review fixes landed, with the daemon
+under `--profile r2accept` and the client under `--profile r2client` so
+neither touched the developer's real settings directory.
+
+**The ANAN-G2E was not on the network.** A two-packet discovery probe (P1
+and P2) across both subnets got exactly one answer: the ANAN-G2 at
+`192.168.109.45`, which is the radio the maintainer excluded. So
+`radio_mac` was pinned to the G2E's MAC deliberately rather than left
+unset, because unset means "first radio discovered" and that would have
+grabbed the excluded board. The daemon saw the G2, logged it, and
+continued disconnected. **Rows 5.8 through 5.15 stay PENDING on G2E
+availability.**
+
+| Row | Result | Evidence |
+| --- | --- | --- |
+| 5.1 | **PASS** | `Station listening on wss:// 127.0.0.1 : 50055`. The pairing banner printed on stdout with the full 32-byte fingerprint intact, and the log confirms neither secret reached it. |
+| 5.2 | **PASS** | `Station handshake complete: wss://127.0.0.1:50055` |
+| 5.3 | **PASS** | Daemon: `Session established`. The pin was satisfied, or the run would not have reached auth. |
+| 5.4 | **PASS** | Client: `Station refused authentication`. Daemon: `Authentication refused ... Peer detached`. |
+| 5.4a | OPEN | Needs UI interaction. |
+| 5.5 | **PARTIAL** | The snapshot arrived but carried `0 station settings`, because the daemon profile was fresh. That exercises the seed-marker fallback rather than the non-empty-snapshot branch. Re-run against a daemon with real station settings. |
+| 5.6 | OPEN | Needs UI interaction. |
+| 5.7 | OPEN | Needs UI interaction. |
+| 5.16 | **PASS** | Exactly 13 `TunerModel` entries warned, matching limitation 1 verbatim: `relayC1`, `relayL`, `relayC2`, `isOperate`, `isBypass`, `isTuning`, `antennaA`, `hasAntennaSwitch`, `isPresent`, `hasDirectConnection`, `tgxlIp`, `fwdPower`, `swr`. |
+
+Two things this run did **not** prove, stated plainly so nobody reads more
+into it than it earned:
+
+1. **It did not exercise the remote-handshake crash fix.** That crash
+   needs `caps.radioConnected == true`, which needs the daemon to hold a
+   radio. With no radio the branch is never entered. The fix is real and
+   the null check is there, but **this run is not its proof**; the G2E
+   bench is.
+2. Clean shutdown was observed (`Peer detached ... peer closed the link`),
+   which is the easy half of link loss. The silent-death half is what the
+   heartbeat exists for and is covered by test, not by this run.
 
 #### 5.1 Start the daemon
 
@@ -826,3 +878,56 @@ One procedural note worth recording, because it cost time: **running
 gone by the time you go looking for it. Read the log first, re-run second.
 `LastTestsFailed.log` survives and is the reliable list of which tests
 failed.
+
+---
+
+## Whole-branch review, 2026-08-09
+
+Run after all 20 tasks landed, as four scoped reviewers (session and mirror,
+settings plane, security and daemon and build, GUI and role and local-mode
+non-regression). Every task had already had its own review and fix rounds.
+
+**It found five Criticals. Every one of them is a gap BETWEEN tasks, which is
+exactly why twenty per-task reviews saw none of them.** Recorded here rather
+than only in the ledger, because the pattern is the reusable part.
+
+| # | What | Why no per-task review could see it | Status |
+| --- | --- | --- | --- |
+| 1 | The GUI never issues the command verbs. `StationClient::invokeCommand()` has zero callers, so an active-slice click or an add-slice never leaves the client. | Task 11 built the verbs, task 18 built the session, task 20 gated the GUI. **No task was assigned to connect them.** Task 4's `IStationLink` seam is still an empty interface. | **OPEN**, escalated to the maintainer |
+| 2 | The remote GUI crashed on handshake: `connection()->radioInfo()` guarded only by `isConnected()`. | Task 3 changed `isConnected()` from a pointer test to a stored state, so the guard stopped implying a non-null pointer. The caller is in a different file and was written months earlier. | Fixed, `29744d76` |
+| 3 | The first-run pairing banner printed a fingerprint with 25 of 32 bytes destroyed. | The redactor's MAC pattern and the banner were written by different tasks. A colon-separated hex fingerprint is exactly the shape of a MAC. | Fixed, `fa95d6de` |
+| 4 | No incoming message cap on the station listener: about 2 GiB per message per socket, entirely pre-authentication. | The precedent lives in `TciServer.cpp`, a file the session work had no reason to open. | Fixed, `edac6eaa` |
+| 5 | The certificate pin was consulted only from inside the `sslErrors` handler, so a clean handshake skipped it and `ws://` sent the token in cleartext. | The pin check landed in the handler that looked like its natural home. Nothing in one task's scope asks "what if this handler never fires?" | Fixed, `0360ec0f` |
+
+Two of the five are the same species: **a guard that used to imply something and
+quietly stopped**. That is the question worth asking on any future branch that
+changes a widely-read predicate: not "who calls this?" but "what did callers
+believe this proved, and does it still?"
+
+Beyond the Criticals: TUNE was completely ungated remotely and, because
+`TransmitModel::tune` is Bidirectional, a remote TUNE press **wrote onto the
+daemon** and switched the station's drive-power source. Fixed in `fc4a8000`.
+Twelve further Importants were fixed across five rounds, `5aff2905` through
+`9b91fd4e`.
+
+### Two things recorded and deliberately not fixed
+
+- `TwoToneController::activate` writes the mirrored `TransmitModel::power`
+  before its own `setMox(true)`. It is a dead door today **only** because
+  `m_txChannel` is assigned inside `connectToRadio`, which a remote model never
+  enters. **It opens the moment R4 gives a remote model a TxChannel.**
+- The rate limiter is global rather than per-peer, so anyone who can reach the
+  port can hold the station rate-limited by guessing every 60 s. Making it
+  per-peer would key unbounded state on attacker-controlled input and buys
+  nothing against address rotation. The mitigations that actually apply are
+  that `remote_port` defaults to 0 and `remote_bind` to loopback. A durable
+  answer belongs with R5.
+
+### One methodology note
+
+The single highest-value fact this review produced was not a fix, it was an
+explanation: **acceptance rows 5.2 through 5.16 could never have passed**,
+because the client died at the handshake. The bench run that would have found
+it was scheduled after every task was already marked complete. On the next
+phase, run the first end-to-end bench earlier, even against a stub, rather
+than treating it as the final gate.
