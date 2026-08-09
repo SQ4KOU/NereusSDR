@@ -41,8 +41,10 @@
 #include <QMetaType>
 #include <QVariant>
 
+#include "core/session/MirrorEnumDomain.h"
 #include "core/session/MirrorPolicy.h"
 #include "core/session/MirrorSchema.h"
+#include "models/Band.h"
 #include "models/MeterModel.h"
 #include "models/PanadapterModel.h"
 #include "models/RadioModel.h"
@@ -165,6 +167,131 @@ private slots:
                                                "classifying by it would "
                                                "mis-encode").arg(name)));
         }
+    }
+
+    // Whole-branch review, Important 3. Two headers promised that
+    // per-property domain validation happened at the inbound-apply
+    // layer; nothing at any layer performed it, and for Enum the codec
+    // did not even do the width round trip it does for Int64 -- an
+    // arbitrary integer was rebuilt at the enum's underlying width and
+    // handed straight to QMetaProperty::write.
+    //
+    // Before deciding what CAN be checked, this pins what Qt offers for
+    // these particular enums. All four routes are measured here rather
+    // than assumed, because the answer is what forces the design:
+    // MirrorEnumDomain is a hand-declared table precisely because none
+    // of these routes yields an enumerator list.
+    void noReflectionRouteReachesTheseEnumsEnumerators()
+    {
+        SliceModel slice(0);
+        for (const char* name : { "dspMode", "agcMode", "band", "nbMode" }) {
+            const QMetaProperty p = prop(&slice, name);
+            const QString label = QString::fromLatin1(name);
+            QVERIFY2(p.metaType().flags().testFlag(QMetaType::IsEnumeration),
+                     qPrintable(label));
+            // The three routes a Q_ENUM / Q_ENUM_NS registration would
+            // open. None of these enums has one (plain namespaces, no
+            // Q_NAMESPACE -- src/core/WdspTypes.h, src/models/Band.h), so
+            // all three are closed. QMetaEnum::fromType<T>() is the
+            // fourth and does not even compile for such a type, which is
+            // why it cannot appear here.
+            QVERIFY2(!p.isEnumType(), qPrintable(label));
+            QVERIFY2(p.metaType().metaObject() == nullptr, qPrintable(label));
+            QVERIFY2(!p.enumerator().isValid(), qPrintable(label));
+            QCOMPARE(p.enumerator().keyCount(), 0);
+        }
+    }
+
+    // The consequence: an inbound enum value that names no declared
+    // enumerator has to be refused by a declared table, since nothing
+    // can derive one. Before this, {"kind":"enum","name":"dspMode",
+    // "value":9999} set SliceModel::m_dspMode = 9999, which reaches
+    // SetRXAMode(channel, 9999) via RxChannel.cpp. That switch has a
+    // default: and indexes nothing by mode (third_party/wdsp/src/RXA.c,
+    // SetRXAMode at :848, plus RXAbpsnbaCheck at :934 and RXAbpsnbaSet
+    // which likewise only compare), so it is not a memory-safety
+    // problem -- the effect is that the daemon's demodulator holds an
+    // undefined mode while SliceModel::modeName() still reports "USB" on
+    // both ends.
+    void inboundEnumValuesThatNameNoEnumeratorAreRefused()
+    {
+        SliceModel slice(0);
+        const MirrorSchema& schema = MirrorSchema::forObject(&slice);
+        const MirrorProperty* dsp = schema.byName("dspMode");
+        QVERIFY(dsp != nullptr);
+        QCOMPARE(dsp->kind, MirrorWireKind::Enum);
+
+        slice.setDspMode(DSPMode::USB);
+        const DSPMode before = slice.dspMode();
+
+        QVERIFY2(!MirrorSchema::decode(*dsp, QVariant(qlonglong(9999))).isValid(),
+                 "9999 is not a declared DSPMode and must be refused");
+        QVERIFY2(!schema.write(*dsp, &slice, QVariant(qlonglong(9999))),
+                 "the refusal must reach the live-object path");
+        QCOMPARE(slice.dspMode(), before);
+
+        // Negative, and one past the last declared enumerator, are the
+        // two ways to walk off either end.
+        QVERIFY(!MirrorSchema::decode(*dsp, QVariant(qlonglong(-1))).isValid());
+        QVERIFY(!MirrorSchema::decode(*dsp, QVariant(qlonglong(14))).isValid());
+
+        // Every declared enumerator still round-trips, including the two
+        // NereusSDR-native RADE modes at the top of the range.
+        for (const DSPMode mode : { DSPMode::LSB, DSPMode::AM, DSPMode::DRM,
+                                    DSPMode::RADE_U, DSPMode::RADE_L }) {
+            const QVariant wire(static_cast<qlonglong>(mode));
+            QVERIFY2(MirrorSchema::decode(*dsp, wire).isValid(),
+                     qPrintable(QString::number(static_cast<int>(mode))));
+            QVERIFY(schema.write(*dsp, &slice, wire));
+            QCOMPARE(slice.dspMode(), mode);
+        }
+
+        // Band carries a Count sentinel that is NOT a band. It must not
+        // be accepted as one even though it is a declared enumerator of
+        // the C++ type.
+        const MirrorProperty* band = schema.byName("band");
+        QVERIFY(band != nullptr);
+        QVERIFY2(!MirrorSchema::decode(*band, QVariant(qlonglong(Band::Count))).isValid(),
+                 "Band::Count is an iteration sentinel, not a band");
+        QVERIFY(MirrorSchema::decode(*band, QVariant(qlonglong(Band::Band20m))).isValid());
+        QVERIFY(MirrorSchema::decode(*band, QVariant(qlonglong(Band::Band11m))).isValid());
+    }
+
+    // Coverage guard, the same shape as everyMirroredPropertyHasAnExplicit
+    // PolicyEntry below: an enum property whose type has no declared
+    // domain would silently be refused outright (default deny), so the
+    // guard names it rather than letting a future property go quietly
+    // unwritable.
+    void everyEnumPropertyOnTheMirroredSurfaceHasADeclaredDomain()
+    {
+        QStringList offenders;
+        for (const QMetaObject* mo : mirroredMetaObjects()) {
+            const MirrorSchema& schema = MirrorSchema::forMetaObject(mo);
+            for (const MirrorProperty& p : schema.properties()) {
+                if (p.kind != MirrorWireKind::Enum) {
+                    continue;
+                }
+                if (!MirrorEnumDomain::hasDomain(p.metaType)) {
+                    offenders << QStringLiteral("%1::%2 (%3) has no MirrorEnumDomain "
+                                                "entry, so no remote peer can write it")
+                                     .arg(QString::fromLatin1(mo->className()),
+                                          QString::fromUtf8(p.name),
+                                          QString::fromLatin1(p.metaType.name()));
+                }
+            }
+        }
+        QVERIFY2(offenders.isEmpty(), qPrintable(offenders.join(QLatin1String("\n"))));
+
+        // Not vacuous: the twelve known enum properties must be present.
+        SliceModel slice(0);
+        const MirrorSchema& schema = MirrorSchema::forObject(&slice);
+        int enumProperties = 0;
+        for (const MirrorProperty& p : schema.properties()) {
+            if (p.kind == MirrorWireKind::Enum) {
+                ++enumProperties;
+            }
+        }
+        QVERIFY2(enumProperties >= 12, "the enum surface must not have vanished");
     }
 
     // The write half of the enum codec: an integer off the wire has to get

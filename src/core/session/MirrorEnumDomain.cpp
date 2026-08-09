@@ -1,0 +1,135 @@
+// =================================================================
+// src/core/session/MirrorEnumDomain.cpp  (NereusSDR)
+// =================================================================
+//
+// no-port-check: NereusSDR-original. Remote-daemon R2, whole-branch
+// review finding (Important 3).
+//
+// See MirrorEnumDomain.h for why this table is hand-declared rather than
+// reflected, and for what default deny costs.
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-08-09  J.J. Boyd / KG4VCF  Whole-branch review, Important 3:
+//                                    declared enum domains. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
+// =================================================================
+
+#include "core/session/MirrorEnumDomain.h"
+
+#include "core/WdspTypes.h"
+#include "models/Band.h"
+
+#include <QHash>
+
+#include <initializer_list>
+
+namespace NereusSDR {
+
+namespace {
+
+using DomainTable = QHash<int, QList<qlonglong>>;
+
+// Keyed on QMetaType::id() rather than on QMetaType itself: the ids for
+// these custom types are assigned at registration and stable for the life
+// of the process, which is the only scope this table has, and QHash needs
+// a key type with qHash.
+template <typename E>
+void declare(DomainTable* table, std::initializer_list<E> values)
+{
+    QList<qlonglong> declared;
+    declared.reserve(static_cast<int>(values.size()));
+    for (const E value : values) {
+        declared.append(static_cast<qlonglong>(value));
+    }
+    table->insert(QMetaType::fromType<E>().id(), declared);
+}
+
+// Every enum type reachable through a Q_PROPERTY on a mirrored class.
+// Twelve properties across ten types, all of them on SliceModel today
+// (MirrorSchema.h's own count); TransmitModel, TunerModel, RadioModel and
+// PanadapterModel declare no enum property at all.
+//
+// Written out enumerator by enumerator rather than as a first/last range,
+// so every name here is compile-checked against the real enum. See the
+// header for the one drift this still cannot catch.
+const DomainTable& table()
+{
+    // Function-local static: built once, on first use, thread-safe
+    // initialisation. QMetaType::fromType<E>().id() is a runtime call, so
+    // this cannot be a constexpr table.
+    static const DomainTable kTable = [] {
+        DomainTable t;
+
+        // From src/core/WdspTypes.h. RADE_U / RADE_L are the two
+        // NereusSDR-native modes; they are declared values of this enum
+        // and a remote peer may select them, even though WDSP has no
+        // knowledge of them (RxChannel::wdspModeFor maps them before the
+        // WDSP call).
+        declare<DSPMode>(&t, { DSPMode::LSB, DSPMode::USB, DSPMode::DSB, DSPMode::CWL,
+                               DSPMode::CWU, DSPMode::FM, DSPMode::AM, DSPMode::DIGU,
+                               DSPMode::SPEC, DSPMode::DIGL, DSPMode::SAM, DSPMode::DRM,
+                               DSPMode::RADE_U, DSPMode::RADE_L });
+
+        declare<AGCMode>(&t, { AGCMode::Off, AGCMode::Long, AGCMode::Slow, AGCMode::Med,
+                               AGCMode::Fast, AGCMode::Custom });
+
+        declare<NbMode>(&t, { NbMode::Off, NbMode::NB, NbMode::NB2 });
+
+        declare<NrSlot>(&t, { NrSlot::Off, NrSlot::NR1, NrSlot::NR2, NrSlot::NR3,
+                              NrSlot::NR4, NrSlot::DFNR, NrSlot::BNR, NrSlot::MNR });
+
+        declare<NrPosition>(&t, { NrPosition::PreAgc, NrPosition::PostAgc });
+
+        declare<EmnrGainMethod>(&t, { EmnrGainMethod::Linear, EmnrGainMethod::Log,
+                                      EmnrGainMethod::Gamma, EmnrGainMethod::Trained });
+
+        declare<EmnrNpeMethod>(&t, { EmnrNpeMethod::Osms, EmnrNpeMethod::Mmse,
+                                     EmnrNpeMethod::Nstat });
+
+        declare<SbnrAlgo>(&t, { SbnrAlgo::Algo1, SbnrAlgo::Algo2, SbnrAlgo::Algo3 });
+
+        declare<FmTxMode>(&t, { FmTxMode::High, FmTxMode::Simplex, FmTxMode::Low });
+
+        // From src/models/Band.h. Count is deliberately ABSENT: it is an
+        // iteration bound and AlexController's "no slice in this slot"
+        // sentinel, not a band, and accepting it here would let a remote
+        // peer put a sentinel into a band field. SwlFirst and SwlLast are
+        // aliases of Band120m and Band11m, so they need no entry of their
+        // own.
+        declare<Band>(&t, { Band::Band160m, Band::Band80m, Band::Band60m, Band::Band40m,
+                            Band::Band30m, Band::Band20m, Band::Band17m, Band::Band15m,
+                            Band::Band12m, Band::Band10m, Band::Band6m, Band::GEN,
+                            Band::WWV, Band::XVTR, Band::Band120m, Band::Band90m,
+                            Band::Band61m, Band::Band49m, Band::Band41m, Band::Band31m,
+                            Band::Band25m, Band::Band22m, Band::Band19m, Band::Band16m,
+                            Band::Band14m, Band::Band13m, Band::Band11m });
+
+        return t;
+    }();
+    return kTable;
+}
+
+} // namespace
+
+bool MirrorEnumDomain::contains(QMetaType metaType, qlonglong value)
+{
+    const auto it = table().constFind(metaType.id());
+    if (it == table().constEnd()) {
+        return false;
+    }
+    return it.value().contains(value);
+}
+
+bool MirrorEnumDomain::hasDomain(QMetaType metaType)
+{
+    return table().contains(metaType.id());
+}
+
+QList<qlonglong> MirrorEnumDomain::valuesFor(QMetaType metaType)
+{
+    return table().value(metaType.id());
+}
+
+} // namespace NereusSDR

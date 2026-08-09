@@ -10,9 +10,19 @@
 //                                    property schema. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-08-09  J.J. Boyd / KG4VCF  Whole-branch review, Important 3:
+//                                    decode() refuses an enum value that
+//                                    names no declared enumerator, and
+//                                    the codec's comments no longer
+//                                    attribute domain validation to a
+//                                    layer that does not perform it.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorSchema.h"
+
+#include "core/session/MirrorEnumDomain.h"
 
 #include <QLoggingCategory>
 #include <QMetaMethod>
@@ -329,9 +339,17 @@ QVariant MirrorSchema::decode(const MirrorProperty& prop, const QVariant& wireVa
         // nr1Taps and snbOutputBandwidthHz all land here.
         //
         // This is a WIDTH check only. It says nothing about a value being
-        // semantically sensible for the property (a 40 kHz filterLow fits
-        // in an int perfectly well); per-property domain validation is
-        // Task 8's inbound apply, not the codec's.
+        // semantically sensible for the property: a 40 kHz filterLow fits
+        // in an int perfectly well and nothing anywhere refuses it.
+        // Earlier revisions of this comment named Task 8's inbound apply
+        // as where per-property domain validation happens; it does not
+        // happen there or anywhere else (StateMirror::
+        // applyInboundToProperty checks isConstant, then
+        // MirrorPolicy::inboundAllowed, then writes), and the R2
+        // whole-branch review recorded that as an open gap rather than
+        // leave the claim standing. The Enum case below is the one
+        // membership check that DOES exist, and it is representability
+        // rather than domain: 9999 is not a DSPMode at all.
         const qlonglong wire = wireValue.toLongLong();
         QVariant typed{ QVariant(wire) };
         if (!typed.convert(prop.metaType)) {
@@ -342,8 +360,36 @@ QVariant MirrorSchema::decode(const MirrorProperty& prop, const QVariant& wireVa
         }
         return typed;
     }
-    case MirrorWireKind::Enum:
-        return enumVariantFromInteger(prop.metaType, wireValue.toLongLong());
+    case MirrorWireKind::Enum: {
+        // Whole-branch review, Important 3. Before this, an arbitrary
+        // integer was rebuilt at the enum's underlying width and handed
+        // to QMetaProperty::write with nothing examining it -- not even
+        // the round-trip check the Int64 case above performs. A remote
+        // peer sending {"kind":"enum","name":"dspMode","value":9999} set
+        // SliceModel::m_dspMode = 9999, which reaches SetRXAMode(channel,
+        // 9999) via RxChannel.cpp. That is not a memory-safety problem:
+        // WDSP's own switch has a default: and indexes nothing by mode
+        // (third_party/wdsp/src/RXA.c, SetRXAMode at :848, and likewise
+        // RXAbpsnbaCheck at :934 / RXAbpsnbaSet, which only compare).
+        // The effect was that the daemon's demodulator held an undefined
+        // mode while SliceModel::modeName() reported "USB" on both ends.
+        //
+        // Membership in a DECLARED table, because no reflection route
+        // reaches these enums' enumerators -- see MirrorEnumDomain.h for
+        // the four routes, all measured closed, and for why registering
+        // them with Q_ENUM_NS is an architecture change rather than a
+        // fix. Refusing here rather than in a caller keeps it beside the
+        // Int64 width check, which is the same kind of question:
+        // representability, not whether the value is sensible.
+        const qlonglong wire = wireValue.toLongLong();
+        if (!MirrorEnumDomain::contains(prop.metaType, wire)) {
+            qCWarning(lcMirrorSchema)
+                << "refusing" << prop.name << "value" << wire
+                << "-- not a declared value of" << prop.metaType.name();
+            return QVariant();
+        }
+        return enumVariantFromInteger(prop.metaType, wire);
+    }
     case MirrorWireKind::Unsupported:
         break;
     }

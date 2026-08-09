@@ -45,6 +45,14 @@
 //                                    property schema. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-08-09  J.J. Boyd / KG4VCF  Whole-branch review, Important 3:
+//                                    write()/decode() now refuse an enum
+//                                    value that names no declared
+//                                    enumerator, and this header no
+//                                    longer promises per-property domain
+//                                    validation that nothing performs.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -173,12 +181,22 @@ public:
     /// without touching the object if it is not of this class, the
     /// property carries no WRITE, or the value cannot be decoded.
     ///
-    /// "Cannot be decoded" covers WIDTH only: an integer that does not
-    /// survive a round trip into the property's declared type is rejected
-    /// rather than truncated. It does NOT cover the value being sensible
-    /// for the property. Nothing here stops a remote peer setting a 40 kHz
-    /// filterLow or a negative ritHz; per-property domain validation is the
-    /// inbound apply's job, not the codec's.
+    /// "Cannot be decoded" covers REPRESENTABILITY, in two forms. For an
+    /// integer, WIDTH: a value that does not survive a round trip into
+    /// the property's declared type is rejected rather than truncated.
+    /// For an enum, MEMBERSHIP: a value that names no declared
+    /// enumerator (MirrorEnumDomain) is rejected rather than written, so
+    /// a property whose C++ type is DSPMode cannot come to hold 9999.
+    ///
+    /// It does NOT cover the value being SENSIBLE for the property, and
+    /// as of the R2 whole-branch review nothing at any layer does.
+    /// Nothing stops a remote peer setting a 40 kHz filterLow or a
+    /// negative ritHz: StateMirror::applyInboundToProperty checks
+    /// isConstant, then MirrorPolicy::inboundAllowed, then calls write().
+    /// Earlier revisions of this comment attributed per-property domain
+    /// validation to the inbound apply; that was a promise nobody kept,
+    /// and it is recorded here as an open gap rather than assigned to a
+    /// layer that does not perform it.
     ///
     /// This is the codec only. Whether a remote peer is ALLOWED to write a
     /// given property is MirrorPolicy's question, and gating on it is the

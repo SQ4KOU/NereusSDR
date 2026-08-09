@@ -952,6 +952,7 @@ set(CORE_SOURCES
     # through QMetaObject, so nothing here includes a GUI header. No
     # production caller yet -- Task 18 binds them onto a wss session.
     src/core/session/MirrorSchema.cpp
+    src/core/session/MirrorEnumDomain.cpp
     src/core/session/MirrorPolicy.cpp
     src/core/session/StateMirror.cpp
     # R2 Task 9: the slice-lifecycle half of the mirror. StateMirror forwards
