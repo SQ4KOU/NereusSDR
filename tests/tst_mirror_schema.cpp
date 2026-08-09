@@ -671,11 +671,14 @@ private slots:
             for (const MirrorProperty& p :
                  MirrorSchema::forMetaObject(mo).properties()) {
                 if (!MirrorPolicy::hasExplicitEntry(cls, p.name)) {
-                    // Name the SAFE default explicitly. 115 of the 145
-                    // entries are Bidirectional, so copying the nearest
-                    // neighbour is both the path of least resistance and
-                    // the wrong answer for anything that is not an
-                    // operator control.
+                    // Name the SAFE default explicitly. The large
+                    // majority of entries are Bidirectional, so copying
+                    // the nearest neighbour is both the path of least
+                    // resistance and the wrong answer for anything that
+                    // is not an operator control. (Whole-branch review,
+                    // Minor 1: the exact fraction used to be quoted here
+                    // and had rotted. A count that goes stale on every
+                    // added property does not belong in a comment.)
                     missing << QStringLiteral("%1::%2 has no MirrorPolicy "
                                               "entry; add one to "
                                               "MirrorPolicy.cpp. Default to "

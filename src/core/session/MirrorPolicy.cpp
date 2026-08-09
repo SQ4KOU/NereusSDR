@@ -37,15 +37,24 @@ namespace {
 // Three groups are worth reading twice, because nothing in the
 // meta-object system would produce them on its own:
 //
-//   1. Seven SliceModel properties are Outbound DESPITE carrying WRITE:
-//      chainIndex, ddcIndex, streamIndex, shiftOffsetHz, sampleRateHz,
-//      widebandExtensionRequested and psPaused. Every one is codec- or
-//      coordinator-owned state that the daemon computes and the GUI only
-//      displays. sampleRateHz is the clearest case: it is a property of
-//      the DDC stream, not of the slice, and the way to change it is
+//   1. Some SliceModel properties are Outbound DESPITE carrying WRITE.
+//      The R2 plan names seven -- chainIndex, ddcIndex, streamIndex,
+//      shiftOffsetHz, sampleRateHz, widebandExtensionRequested and
+//      psPaused -- and every one is codec- or coordinator-owned state
+//      that the daemon computes and the GUI only displays. sampleRateHz
+//      is the clearest case: it is a property of the DDC stream, not of
+//      the slice, and the way to change it is
 //      RadioModel::requestSliceSampleRate. Writing the property directly
 //      moves the display and nothing else, and the next bind overwrites
 //      it.
+//
+//      Whole-branch review, Minor 1: that seven is the PLAN's list, not
+//      the current total. snrDb and lastRadeRxCallsign joined the same
+//      category later and are argued at their own entries below, which
+//      already say the plan's seven is "a floor, not a cap". Reworded
+//      here because reading this paragraph alone gave the wrong answer,
+//      and because a StateMirror.cpp comment quoting the same stale seven
+//      had drifted out of agreement with this file.
 //
 //   2. panKey is Bidirectional. The R2 plan's step 5 deliberately
 //      corrects the design addendum's section 6.1 here, which counts

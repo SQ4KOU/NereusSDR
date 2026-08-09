@@ -1373,7 +1373,6 @@ void StationClient::reconcileSlicesAgainstStation()
         if (m_objects.contains(key)) {
             continue;
         }
-        reaped.append(sliceId);
         // Symmetric with handleObjectDestroy(): drop the wire registry
         // entry and the outbound watch first, then remove the object.
         // Both are no-ops for a slice that was never adopted, and both
@@ -1381,8 +1380,24 @@ void StationClient::reconcileSlicesAgainstStation()
         // registry entry endSession() already cleared.
         m_objects.remove(key);
         m_outboundMirror->unwatch(key);
-        InboundGuard guard(m_applyingInbound);
-        m_radioModel->removeSlice(sliceId);
+        {
+            InboundGuard guard(m_applyingInbound);
+            m_radioModel->removeSlice(sliceId);
+        }
+        // Confirmed, not assumed. removeSlice() returns void and refuses
+        // silently when the victim is the LAST remaining slice, so a
+        // station that somehow reported none would otherwise be logged as
+        // a reap that did not happen. Not reachable through configuration
+        // (DaemonConfig refuses slice_count below 1), which is why this
+        // is a check rather than a branch with behaviour behind it.
+        if (m_radioModel->sliceById(sliceId) == nullptr) {
+            reaped.append(sliceId);
+        } else {
+            qCWarning(lcStationClient)
+                << "Station does not have slice" << sliceId
+                << "but it could not be removed locally; RadioModel always keeps at"
+                << "least one slice. It stays on screen, unmirrored.";
+        }
     }
     if (!reaped.isEmpty()) {
         QStringList ids;

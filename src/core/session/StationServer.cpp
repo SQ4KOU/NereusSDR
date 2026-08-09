@@ -17,6 +17,12 @@
 //                                    absence frame, not as a value of "".
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-08-09  J.J. Boyd / KG4VCF  Whole-branch review, Minor 4:
+//                                    handlePropertyWrite() answers one
+//                                    inbound frame with one snapshot and
+//                                    one outbound frame, not N of each.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -38,6 +44,7 @@
 #include "models/TunerModel.h"
 
 #include <QLoggingCategory>
+#include <QSet>
 #include <QSslConfiguration>
 #include <QSslSocket>
 #include <QTimer>
@@ -848,6 +855,7 @@ void StationServer::buildMirror()
 void StationServer::handlePropertyWrite(SessionTransport* transport,
                                         const SessionMessage& message)
 {
+    QSet<QByteArray> refused;
     for (const MirrorUpdate& update : message.updates) {
         const MirrorApplyResult result =
             m_mirror->applyInbound(message.objectKey, update.name, update.value);
@@ -856,17 +864,40 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
         }
         qCWarning(lcStation) << "Refused remote write" << message.objectKey << "."
                              << update.name << ":" << result.reason;
-        // Self-correcting: hand the peer back what the daemon actually
-        // holds for that property, as an ordinary Delta, so a GUI control
-        // that optimistically moved snaps back rather than displaying a
-        // value the station never accepted.
-        const QList<MirrorUpdate> settled = m_mirror->snapshot(message.objectKey);
-        for (const MirrorUpdate& live : settled) {
-            if (live.name == update.name) {
-                send(transport, SessionMessages::delta(message.objectKey, { live }));
-                break;
-            }
+        refused.insert(update.name);
+    }
+    if (refused.isEmpty()) {
+        return;
+    }
+
+    // Self-correcting: hand the peer back what the daemon actually holds
+    // for every refused property, as an ordinary Delta, so a GUI control
+    // that optimistically moved snaps back rather than displaying a value
+    // the station never accepted.
+    //
+    // ONE snapshot and ONE send for the whole message. Whole-branch
+    // review, Minor 4: this used to sit inside the loop above, so a single
+    // inbound frame carrying N refusable properties cost N full-object
+    // snapshots and N separately encoded outbound frames. Post-auth, so
+    // not an unauthenticated amplifier, but a peer whose whole message is
+    // refusable had no reason to be the cheapest thing in the session
+    // either.
+    //
+    // Taking the snapshot after the loop rather than per refusal is also
+    // the more correct answer, not merely the cheaper one: what the client
+    // needs is the settled state once the entire message has been applied,
+    // which is the mirror's own latest-wins principle. Reading it mid-loop
+    // could hand back a value a later update in the same frame then
+    // changed.
+    QList<MirrorUpdate> corrections;
+    const QList<MirrorUpdate> settled = m_mirror->snapshot(message.objectKey);
+    for (const MirrorUpdate& live : settled) {
+        if (refused.contains(live.name)) {
+            corrections.append(live);
         }
+    }
+    if (!corrections.isEmpty()) {
+        send(transport, SessionMessages::delta(message.objectKey, corrections));
     }
 }
 

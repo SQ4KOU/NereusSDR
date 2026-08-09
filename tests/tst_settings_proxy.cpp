@@ -787,6 +787,76 @@ private slots:
         QCOMPARE(announced.count(), 0);
     }
 
+    // ── Whole-branch review, Minor 5 ──────────────────────────────────────
+    //
+    // hasNonEmptySnapshot()'s doc says "once at least one snapshot has
+    // been applied AND it carried at least one key besides the seed
+    // marker". The body only ever inspected m_cache, so this client's own
+    // optimistic offline writes satisfied it too, and the "a snapshot has
+    // landed" half of the sentence was decoration. Inert today (the
+    // setupDialogAllowed() gate also requires ready(), which only the
+    // handshake sets, and the handshake applies a snapshot first), which
+    // is exactly why it needs a test rather than a reader noticing.
+    void hasNonEmptySnapshotStaysFalseUntilASnapshotHasActuallyLanded()
+    {
+        SettingsProxy proxy;
+        QVERIFY(!proxy.hasNonEmptySnapshot());
+
+        // The client's OWN write, before it has ever heard from a station.
+        proxy.setValue(QStringLiteral("hardware/aa:bb/k1"), QStringLiteral("mine"));
+        QVERIFY(proxy.contains(QStringLiteral("hardware/aa:bb/k1")));
+        QVERIFY2(!proxy.hasNonEmptySnapshot(),
+                 "an optimistic local write is not a snapshot from the station");
+
+        proxy.applySnapshot(QMap<QString, QString>{
+            {QStringLiteral("hardware/aa:bb/k2"), QStringLiteral("daemon-truth")}});
+        QVERIFY(proxy.hasNonEmptySnapshot());
+    }
+
+    // ── Whole-branch review, Minor 6 ──────────────────────────────────────
+    //
+    // ISettingsBackend's contract is handledKeys() subset-of handlesKey():
+    // every key this backend reports holding is one it claims. Every
+    // writer into m_cache honoured that by construction except
+    // applySnapshot(), which merged whatever the daemon sent. At one
+    // version the two classifiers agree and nothing can go wrong; across a
+    // version skew the daemon can send a key this build classifies
+    // OperatorLocal, and the invariant became conventional rather than
+    // structural. Filtering costs nothing and changes no read: a key this
+    // client does not claim was never routed here by AppSettings anyway.
+    void applySnapshotOnlyCachesKeysThisClientClaims()
+    {
+        SettingsProxy proxy;
+        QMap<QString, QString> snap;
+        snap.insert(QStringLiteral("hardware/aa:bb/k1"), QStringLiteral("station"));
+        // Classifies OperatorLocal: a hypothetical newer daemon deciding
+        // trace colour belongs to the station.
+        snap.insert(QStringLiteral("DisplayNoiseFloorColor"), QStringLiteral("#112233"));
+        proxy.applySnapshot(snap);
+
+        QVERIFY(proxy.contains(QStringLiteral("hardware/aa:bb/k1")));
+        QVERIFY2(!proxy.contains(QStringLiteral("DisplayNoiseFloorColor")),
+                 "a snapshot key this client does not claim was cached anyway, "
+                 "breaking handledKeys() subset-of handlesKey()");
+
+        // The invariant itself, asserted over the whole cache rather than
+        // over the one key this slot happened to plant.
+        for (const QString& key : proxy.handledKeys()) {
+            QVERIFY2(proxy.handlesKey(key), qPrintable(key));
+        }
+
+        // The seed marker survives, because handlesKey() claims it
+        // explicitly even though it classifies OperatorLocal. Without that
+        // carve-out this filter would silently disarm the Setup gate on a
+        // freshly reserved daemon profile.
+        SettingsProxy seeded;
+        seeded.applySnapshot(QMap<QString, QString>{
+            {QString::fromLatin1(AppSettings::kDaemonProfileSeededKey), QStringLiteral("1")}});
+        QVERIFY(seeded.contains(QString::fromLatin1(AppSettings::kDaemonProfileSeededKey)));
+        seeded.setReady(true);
+        QVERIFY(seeded.setupDialogAllowed());
+    }
+
     void keysContradictedByLastSnapshotIsRecomputedNotAccumulated()
     {
         SettingsProxy proxy;
@@ -1184,6 +1254,52 @@ private slots:
 
         QCOMPARE(daemon.value(key).toInt(), 10); // still untouched
         QCOMPARE(spy.count(), 0); // nothing broadcast for a rejected write
+    }
+
+    // ── Whole-branch review, Minor 7 ──────────────────────────────────────
+    //
+    // SwrProtectionLimit is Station-scoped and reaches a PA-protection
+    // gate. RadioModel's construction reads it and hands it straight to
+    // SwrProtectionController::setLimit(), which stores without clamping,
+    // while the only UI that writes it is a QDoubleSpinBox clamped to
+    // 1.0..5.0 (TransmitSetupPages.cpp). Over the wire there was nothing
+    // between the socket and the applied limit. Hardening rather than a
+    // live defect: it needs an authenticated client and a daemon restart,
+    // and it is the same "ungated inbound" class the R2 plan documents.
+    // The bound here is the spinbox's, exactly, so the wire cannot express
+    // a limit the operator's own control cannot.
+    void serverRejectsSwrProtectionLimitOutsideTheSpinboxRange()
+    {
+        QTemporaryDir tmp;
+        QVERIFY(tmp.isValid());
+        AppSettings daemon(tmp.filePath(QStringLiteral("NereusSDR.settings")));
+        daemon.setValue(QStringLiteral("SwrProtectionLimit"), QStringLiteral("2.0"));
+        SettingsProxyServer server(daemon);
+        QSignalSpy spy(&server, &SettingsProxyServer::outboundValueChanged);
+        const QString key = QStringLiteral("SwrProtectionLimit");
+
+        // Disabling protection by asking for an unreachable SWR is the
+        // shape that matters, not merely a malformed number.
+        const SettingsApplyResult tooHigh =
+            server.applyInboundWrite(key, 99.0, QStringLiteral("client-1"));
+        QVERIFY(!tooHigh.accepted);
+        QVERIFY(!tooHigh.reason.isEmpty());
+        QCOMPARE(tooHigh.restoredValue.toString(), QStringLiteral("2.0"));
+
+        // ...and below 1.0 is not physical: SWR cannot be under 1:1, and a
+        // limit there trips the PA gate permanently.
+        QVERIFY(!server.applyInboundWrite(key, 0.5, QStringLiteral("client-1")).accepted);
+        QVERIFY(!server.applyInboundWrite(key, QStringLiteral("not a number"),
+                                          QStringLiteral("client-1")).accepted);
+
+        QCOMPARE(daemon.value(key).toString(), QStringLiteral("2.0"));
+        QCOMPARE(spy.count(), 0);
+
+        // Both boundaries themselves are legal, not just the interior.
+        QVERIFY(server.applyInboundWrite(key, 1.0, QStringLiteral("client-1")).accepted);
+        QVERIFY(server.applyInboundWrite(key, 5.0, QStringLiteral("client-1")).accepted);
+        QVERIFY(server.applyInboundWrite(key, 2.5, QStringLiteral("client-1")).accepted);
+        QCOMPARE(daemon.value(key).toDouble(), 2.5);
     }
 
     void serverRejectsJustPastTheCorrectedUnionBoundary()

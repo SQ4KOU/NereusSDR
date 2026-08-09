@@ -94,8 +94,8 @@
 //      is this protocol's own connect-time bookkeeping, so step 2 would
 //      never pick it up on its own.
 //
-// ---- Inbound-write validation is scope-only, with one named exception
-// ---- (fix round 1 review, Important 3) ----
+// ---- Inbound-write validation is scope-only, with named exceptions ----
+// ---- (fix round 1 review, Important 3; whole-branch review, Minor 7) ----
 //
 // applyInboundWrite() checks classifySettingsKey() == Station and
 // nothing else about a write's VALUE, by design -- see its own doc
@@ -110,7 +110,18 @@
 // out-of-range Station value written over the wire today reaches
 // AppSettings with nothing between the socket and the applied state.
 //
-// THREE key shapes get a targeted, unioned bounds check anyway (.cpp,
+// FOUR key shapes get a targeted bounds check anyway. The fourth is
+// SwrProtectionLimit (whole-branch review, Minor 7): Station-scoped,
+// reaching SwrProtectionController::setLimit(), which stores without
+// clamping, while the only UI that writes it is a QDoubleSpinBox pinned
+// to 1.0..5.0. Bounded to that same 1.0..5.0 in .cpp, so the wire cannot
+// express a limit the operator's own control cannot -- an authenticated
+// client could otherwise park it at 99 (protection effectively off after
+// the next daemon start) or below 1.0 (unreachable, so the gate trips
+// permanently). That one is a flat range compare and needs none of the
+// union machinery the other three do.
+//
+// The other three get a targeted, UNIONED bounds check (.cpp,
 // stepAttenuatorKeyFamily() / stepAttenuatorUnionRange()):
 // options/stepAtt/rx1Value, options/stepAtt/rx1Band/<band> and
 // options/stepAtt/txBand/<band>. Every live writer of the three fields
@@ -218,6 +229,12 @@
 //                                    is not reported as a value change.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-08-09  J.J. Boyd / KG4VCF  Whole-branch review, Minor 7:
+//                                    SwrProtectionLimit is range-checked
+//                                    on the wire path against its own
+//                                    spinbox's 1.0..5.0. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include <QMap>
@@ -297,9 +314,9 @@ public:
     /// class comment's "Inbound-write validation" section for why
     /// SettingsHygiene is NOT that fallback despite the name suggesting
     /// it (a fix-round review found it wired into no write path at all),
-    /// and for the three specific, targeted exceptions this method DOES
-    /// enforce (the step-attenuator rx1Value / rx1Band / txBand bounds
-    /// check, .cpp).
+    /// and for the four specific, targeted exceptions this method DOES
+    /// enforce (the step-attenuator rx1Value / rx1Band / txBand union
+    /// bounds check, and SwrProtectionLimit's flat 1.0..5.0 range, .cpp).
     SettingsApplyResult applyInboundWrite(const QString& key, const QVariant& value,
                                           const QString& originTag);
 

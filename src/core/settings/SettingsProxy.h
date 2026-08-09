@@ -354,6 +354,13 @@ public:
     // empty snapshot is real information: see setupDialogAllowed()).
     // Clears any m_provenUnset entry a newly-arrived real value
     // contradicts.
+    //
+    // Whole-branch review, Minor 6: entries are filtered through
+    // handlesKey() on the way in, so ISettingsBackend's
+    // handledKeys() subset-of handlesKey() contract is structural rather
+    // than a convention that happens to hold while both binaries share a
+    // classifier build. A dropped entry is counted and logged once per
+    // snapshot, not per key.
     void applySnapshot(const QMap<QString, QString>& data);
 
     bool hasReceivedSnapshot() const { return m_snapshotEverApplied; }

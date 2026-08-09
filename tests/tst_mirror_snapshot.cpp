@@ -718,6 +718,93 @@ private slots:
         }
     }
 
+    // ── Whole-branch review, Minor 2: the three non-finite float tokens ──
+    //
+    // toJsonValue() encodes a non-finite Float64 as one of three explicit
+    // string tokens, because JSON has no representation for them and
+    // QJsonValue(qQNaN()) silently becomes null. Nothing pinned any of the
+    // three directly: NaN was covered only incidentally, by whatever live
+    // snapshot happened to include SliceModel::snrDb at its NaN default,
+    // and +inf / -inf had no coverage at all in either direction. A NaN
+    // defect on this exact path survived four task reviews before task 18
+    // caught it, which is why this asserts on the ENCODED BYTES from a
+    // LIVE model rather than round-tripping a hand-written MirrorUpdate:
+    // a hand-built bag proves the two halves of the codec agree with each
+    // other, not that either matches the wire.
+    void theThreeNonFiniteFloatTokensSurviveTheWireFromALiveModel()
+    {
+        RadioModel model;
+        model.configureStreamPool(5, 5, 192000);
+        const int id = model.addSlice(QStringLiteral("pan-a"));
+        SliceModel* slice = model.sliceById(id);
+        QVERIFY(slice != nullptr);
+
+        const MirrorSchema& schema = MirrorSchema::forObject(slice);
+        const MirrorProperty* snr = schema.byName("snrDb");
+        QVERIFY(snr != nullptr);
+        QCOMPARE(snr->kind, MirrorWireKind::Float64);
+
+        struct Case {
+            double value;
+            const char* token;
+        };
+        // NaN LAST on purpose: setSnrDb() is change-guarded and treats
+        // NaN -> NaN as a no-op, so starting from the NaN default and
+        // asserting NaN first would pass without the setter ever running.
+        const Case cases[] = {
+            { std::numeric_limits<double>::infinity(), "inf" },
+            { -std::numeric_limits<double>::infinity(), "-inf" },
+            { std::numeric_limits<double>::quiet_NaN(), "nan" },
+        };
+
+        for (const Case& c : cases) {
+            // A finite value between cases, and it is load-bearing rather
+            // than tidiness. SliceModel::setSnrDb()'s change guard is
+            // qFuzzyCompare(db, m_snrDb), and qFuzzyCompare(+inf, -inf) is
+            // TRUE: the difference is -inf, its magnitude is inf, and the
+            // tolerance term 1e-12 * qMin(inf, inf) is also inf, so
+            // `inf <= inf` holds. Going straight from +inf to -inf left
+            // the model at +inf and this test caught it, encoding "inf"
+            // where it wanted "-inf". That is a pre-existing property of
+            // the setter, unrelated to R2 and out of this round's scope
+            // (snrDb is a WDSP SNR reading and never legitimately
+            // infinite), recorded here so a later reader does not
+            // rediscover it as a codec bug.
+            slice->setSnrDb(0.0);
+            slice->setSnrDb(c.value);
+            const QVariant live = schema.read(*snr, slice);
+            QVERIFY2(live.isValid(), c.token);
+
+            const QByteArray wire = SessionMessages::encode(SessionMessages::delta(
+                ObjectRegistry::keyForSlice(id),
+                { MirrorUpdate{ snr->ordinal, snr->name, snr->kind, live } }));
+
+            // The token, verbatim, in the bytes that leave the process --
+            // and specifically as a JSON STRING, which is what keeps it
+            // impossible to confuse with a real Float64 value.
+            const QByteArray expected =
+                QByteArray("\"value\":\"") + QByteArray(c.token) + QByteArray("\"");
+            QVERIFY2(wire.contains(expected),
+                     qPrintable(QStringLiteral("expected %1 in %2")
+                                    .arg(QString::fromUtf8(expected),
+                                         QString::fromUtf8(wire))));
+
+            SessionMessage back;
+            QVERIFY2(SessionMessages::decode(wire, &back), wire.constData());
+            QCOMPARE(back.updates.size(), 1);
+            const double decoded = back.updates.first().value.toDouble();
+            if (std::isnan(c.value)) {
+                QVERIFY2(std::isnan(decoded), "NaN did not survive the round trip");
+            } else {
+                QVERIFY2(std::isinf(decoded), "an infinity did not survive the round trip");
+                // The SIGN matters and is the half a single "isinf" check
+                // would miss: +inf and -inf are distinct tokens for a
+                // reason.
+                QCOMPARE(decoded > 0.0, c.value > 0.0);
+            }
+        }
+    }
+
     // The companion to the "missing" cases above: a genuinely PRESENT but
     // EMPTY key/array is a different, legal shape -- an empty properties
     // array is exactly what a class with zero changed properties or zero

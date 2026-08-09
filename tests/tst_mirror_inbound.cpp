@@ -10,9 +10,11 @@
 //
 //   1. A property with a real Q_PROPERTY WRITE goes through
 //      MirrorPolicy::inboundAllowed() then MirrorSchema::write(). The
-//      seven SliceModel properties that carry WRITE but are Outbound
-//      (chainIndex, ddcIndex, streamIndex, shiftOffsetHz, sampleRateHz,
-//      widebandExtensionRequested, psPaused -- MirrorPolicy.cpp) are
+//      SliceModel properties that carry WRITE but are Outbound
+//      (MirrorPolicy.cpp: the R2 plan's chainIndex, ddcIndex,
+//      streamIndex, shiftOffsetHz, sampleRateHz,
+//      widebandExtensionRequested and psPaused, plus snrDb and
+//      lastRadeRxCallsign, which joined the same category later) are
 //      refused with a reason; sampleRateHz is the one the R2 plan names a
 //      client verb for (requestSliceSampleRate), so its rejection must
 //      name that verb literally.

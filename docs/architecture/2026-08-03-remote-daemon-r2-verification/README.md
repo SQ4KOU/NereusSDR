@@ -500,7 +500,28 @@ do. Expect them greyed out on the bench and do not file it.
     in `SettingsScope.cpp`'s exception block so a later reader sees they
     were checked. If a bench finds a remote client's daemon store growing
     saved status-message lists, this is the entry to reopen.
-12. **Once a station is saved in Setup, every launch is remote** until the
+12. **The `PanadapterModel` arm of the mirror is unreachable in R2.**
+    `RadioModel::addPanadapter()` has no production caller (pan ids are
+    minted GUI-side by `PanadapterStack`), so the `pan:N` loops in both
+    `StationServer::buildMirror` and `StationClient::handleCapabilities`
+    never execute and four `MirrorPolicy` rows read as live surface while
+    being dormant. Left alone deliberately: the two ends are **symmetric**,
+    so this is dead code rather than a divergence, and the rows are the
+    default-deny table's whole point (a property with no entry mirrors
+    read-only, so deleting them to "clean up" would silently change the
+    answer the day 3F wires panadapters up). Expect
+    `mirroredObjectKeys()` to carry no `pan:` entry on the bench and do
+    not file it.
+13. **A remote client's panadapters come up looking live and paint
+    nothing.** `MainWindow::pushConnectionStateToPans()` computes
+    `live = isConnected()`, which is true on a remote client after task 3,
+    so the pans do not show the disconnect overlay. There is no trace to
+    draw because R2 ships no spectrum at all (limitation 3). Arguably the
+    correct answer already, since the radio really is connected, and R3's
+    spectrum path settles it either way, so nothing was changed here
+    rather than adding an R2-only overlay state that R3 deletes. This is
+    step 5.9's expected appearance, not a defect.
+14. **Once a station is saved in Setup, every launch is remote** until the
     field is cleared. There is no `--local` escape hatch. A launch against
     a dead station therefore shows a greyed Connect menu with no obvious
     cause. **Recovery: Setup > CAT & Network > Remote Station, clear the

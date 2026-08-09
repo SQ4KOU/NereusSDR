@@ -40,6 +40,15 @@
 //                                    superseded offline edits. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-08-09  J.J. Boyd / KG4VCF  Whole-branch review, Minors 5 and 6:
+//                                    hasNonEmptySnapshot() consults
+//                                    m_snapshotEverApplied as its own doc
+//                                    always claimed, and applySnapshot()
+//                                    filters through handlesKey() so
+//                                    handledKeys() subset-of handlesKey()
+//                                    is structural. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include "core/settings/SettingsProxy.h"
@@ -175,12 +184,40 @@ void SettingsProxy::applySnapshot(const QMap<QString, QString>& data)
     // of which members were contradicted, not just the contradicted
     // subset.
     m_lastSnapshotContradictions.clear();
+    int notClaimed = 0;
     for (auto it = data.constBegin(); it != data.constEnd(); ++it) {
+        // Whole-branch review, Minor 6. ISettingsBackend's contract is
+        // handledKeys() subset-of handlesKey(), and every other writer
+        // into m_cache honours it by construction: setValue()/remove()
+        // are only reached through AppSettings, which asks handlesKey()
+        // first. This method was the one un-gated writer, merging
+        // whatever the station sent, so the invariant held only while
+        // both binaries shared a classifier build. Not reachable at one
+        // version, and this filter is what makes it structural instead of
+        // conventional.
+        //
+        // No read changes: a key this client does not claim was never
+        // routed here in the first place, so caching it only ever made
+        // handledKeys() report a key handlesKey() denies. Dropping it is
+        // also the safer half of the skew: the value stays readable from
+        // this machine's own settings file, which is where a key this
+        // build calls OperatorLocal belongs.
+        if (!handlesKey(it.key())) {
+            ++notClaimed;
+            continue;
+        }
         if (m_droppedWhileOffline.contains(it.key())) {
             m_lastSnapshotContradictions.insert(it.key());
         }
         m_cache.insert(it.key(), it.value());
         m_provenUnset.remove(it.key());
+    }
+    if (notClaimed > 0) {
+        qCWarning(lcSettingsProxy)
+            << "Station snapshot carried" << notClaimed
+            << "key(s) this build does not classify as station-scoped; they were "
+               "not cached. This is settings-classifier skew between the two "
+               "binaries, not a transport fault.";
     }
     m_droppedWhileOffline.clear();
     m_snapshotEverApplied = true;
@@ -212,6 +249,18 @@ void SettingsProxy::applySnapshot(const QMap<QString, QString>& data)
 
 bool SettingsProxy::hasNonEmptySnapshot() const
 {
+    // Whole-branch review, Minor 5. This method's own doc comment has
+    // always said "once at least one snapshot has been applied AND it
+    // carried at least one key besides the seed marker", and the body
+    // inspected only m_cache -- so this client's own optimistic writes
+    // (which land in m_cache whether or not a station has ever been heard
+    // from) satisfied it too. Inert today, because the only consumer,
+    // setupDialogAllowed() below, also requires m_ready, which nothing but
+    // a completed handshake sets and which necessarily follows a snapshot.
+    // Made structural rather than left resting on that ordering.
+    if (!m_snapshotEverApplied) {
+        return false;
+    }
     if (m_cache.isEmpty()) {
         return false;
     }

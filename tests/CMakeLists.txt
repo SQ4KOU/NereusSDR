@@ -6300,7 +6300,7 @@ nereus_add_test(tst_mirror_forwarder)
 # one write a remote peer sent for a watched object's property.
 #
 # A property with a real WRITE goes through MirrorPolicy::inboundAllowed()
-# then MirrorSchema::write(); the seven writable-but-Outbound SliceModel
+# then MirrorSchema::write(); the writable-but-Outbound SliceModel
 # properties are refused instead, sampleRateHz naming the client verb
 # (requestSliceSampleRate) the R2 plan assigns it. A property with NO WRITE
 # at all (TunerModel's whole ATU surface, SliceModel's active/txSlice/band,

@@ -50,6 +50,11 @@
 //                                    is now absent. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-08-09  J.J. Boyd / KG4VCF  Whole-branch review, Minor 7:
+//                                    SwrProtectionLimit range-checked on
+//                                    the inbound write path. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include "core/settings/SettingsProxyServer.h"
@@ -183,6 +188,17 @@ const StepAttUnionRange& stepAttenuatorUnionRange()
 // values (PureSignal AutoAtt is the live path that produces them, not a
 // theoretical one) for no reason: the correct TX floor was always the
 // same as RX's.
+
+// Whole-branch review, Minor 7. Both taken from the operator's own
+// control rather than invented here: TransmitSetupPages.cpp's
+// udSwrProtectionLimit is a QDoubleSpinBox with setRange(1.0, 5.0), and
+// carries its own upstream cite at that call site. Keeping the wire bound
+// identical to the UI bound is the whole point: a remote client must not
+// be able to express a limit the operator sitting at the station cannot.
+// If that spinbox's range ever moves, this pair moves with it.
+constexpr double kSwrProtectionLimitMin = 1.0;
+constexpr double kSwrProtectionLimitMax = 5.0;
+
 enum class StepAttKeyFamily {
     None,
     RxValue, // options/stepAtt/rx1Value -- exact, no band suffix
@@ -310,6 +326,36 @@ SettingsApplyResult SettingsProxyServer::applyInboundWrite(const QString& key, c
             result.reason = QStringLiteral("step attenuator value out of range [%1, %2]")
                                 .arg(range.minDb)
                                 .arg(range.maxDb);
+            result.restoredValue = m_appSettings.value(key);
+            return result;
+        }
+    }
+
+    // Whole-branch review, Minor 7. SwrProtectionLimit is Station-scoped
+    // and reaches a PA-protection gate: RadioModel's construction reads it
+    // and hands it to SwrProtectionController::setLimit(), which stores
+    // without clamping, while the only UI that writes it is a
+    // QDoubleSpinBox pinned to 1.0..5.0 (TransmitSetupPages.cpp's
+    // udSwrProtectionLimit). Over the wire there was nothing between the
+    // socket and the applied limit, so an authenticated client could park
+    // a limit at 99 (protection effectively disabled at the next daemon
+    // start) or below 1.0 (unreachable, so the gate trips permanently).
+    //
+    // Hardening, not a live defect: it needs an authenticated client AND a
+    // daemon restart, which is the same "ungated inbound" class the class
+    // comment above describes. Bounded to the operator's own control's
+    // range exactly, so the wire cannot express a limit the UI cannot --
+    // deliberately NOT a new general validation framework, which that
+    // section explains does not belong here.
+    if (key == QLatin1String("SwrProtectionLimit")) {
+        bool ok = false;
+        const double limit = value.toDouble(&ok);
+        if (!ok || limit < kSwrProtectionLimitMin || limit > kSwrProtectionLimitMax) {
+            SettingsApplyResult result;
+            result.accepted = false;
+            result.reason = QStringLiteral("SWR protection limit out of range [%1, %2]")
+                                .arg(kSwrProtectionLimitMin)
+                                .arg(kSwrProtectionLimitMax);
             result.restoredValue = m_appSettings.value(key);
             return result;
         }

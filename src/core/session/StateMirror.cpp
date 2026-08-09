@@ -737,11 +737,21 @@ MirrorApplyResult StateMirror::applyInboundToProperty(const Watch& watch,
 
     if (prop.isWritable) {
         // The standard path: a real Q_PROPERTY WRITE, gated by MirrorPolicy.
-        // Most of the mirrored surface (115 of 145 properties) is
-        // Bidirectional and passes; the seven SliceModel properties that
-        // carry WRITE but are daemon-authoritative (MirrorPolicy.cpp) are
-        // refused here, naming the client command to use instead where the
-        // R2 plan has assigned one.
+        // Most of the mirrored surface is Bidirectional and passes; the
+        // SliceModel properties that carry WRITE but are daemon-
+        // authoritative (MirrorPolicy.cpp) are refused here, naming the
+        // client command to use instead where the R2 plan has assigned one.
+        //
+        // Whole-branch review, Minor 1: this used to quote "115 of 145
+        // properties" and "the seven SliceModel properties". Both had
+        // rotted (146 and nine as counted mechanically), and both
+        // contradicted MirrorPolicy.cpp, which already calls the plan's
+        // seven "a floor, not a cap" and names the two later additions.
+        // Removed rather than corrected, matching the earlier round on
+        // this branch that deleted a literal count for the same reason: a
+        // number that goes stale on every added property is the same
+        // species of false claim, just deferred. MirrorPolicy.cpp's table
+        // is the one place that can be counted, and it is one file away.
         if (!MirrorPolicy::inboundAllowed(className, prop.name)) {
             result.reason = writableButOutboundReason(
                 MirrorSchema::shortClassName(className), prop.name);
