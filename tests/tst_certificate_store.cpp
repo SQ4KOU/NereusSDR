@@ -20,6 +20,7 @@
 #include <QFileDevice>
 #include <QFileInfo>
 #include <QRegularExpression>
+#include <QScopeGuard>
 #include <QSslCertificate>
 #include <QSslKey>
 #include <QSslSocket>
@@ -27,6 +28,7 @@
 
 #include "core/AppSettings.h"
 #include "core/security/CertificateStore.h"
+#include "core/security/TokenStore.h"
 
 #ifdef Q_OS_UNIX
 #include <unistd.h>
@@ -432,6 +434,65 @@ private slots:
         QCOMPARE(CertificateStore::defaultDirectory(),
                  AppSettings::resolveConfigDir(
                      QString::fromLatin1(AppSettings::kDaemonProfileName)));
+    }
+
+    // Security material has to follow --profile, or --profile does not
+    // isolate what it claims to isolate.
+    //
+    // Both stores used to hardcode kDaemonProfileName, and
+    // DaemonApp::startStationServer passes no securityDirectory, so
+    // `nereusd --profile alpha` and `nereusd --profile beta` isolated
+    // their settings and their logs and then SHARED one certificate and
+    // one token. Two simultaneous first runs each minted a token and raced
+    // the rename, and the loser went on to accept a token that was not the
+    // one on disk. --profile exists to isolate instances on one
+    // workstation, so that isolation was incomplete in exactly the place
+    // it matters most.
+    //
+    // Asserted on BOTH stores in one slot: it is one invariant, and
+    // splitting it across two files is how half of it later drifts.
+    void securityDirectoryFollowsTheProfileOverride()
+    {
+        // setProfileOverride is process-global, so it is restored on every
+        // exit path -- each QCOMPARE below is a bare return.
+        const QString saved = AppSettings::profileOverride();
+        const auto restore =
+            qScopeGuard([&saved]() { AppSettings::setProfileOverride(saved); });
+
+        AppSettings::setProfileOverride(QStringLiteral("alpha"));
+        const QString alphaCert = CertificateStore::defaultDirectory();
+        const QString alphaToken = TokenStore::defaultDirectory();
+        QCOMPARE(alphaCert, AppSettings::resolveConfigDir(QStringLiteral("alpha")));
+        QCOMPARE(alphaToken, alphaCert);
+
+        AppSettings::setProfileOverride(QStringLiteral("beta"));
+        const QString betaCert = CertificateStore::defaultDirectory();
+        const QString betaToken = TokenStore::defaultDirectory();
+        QCOMPARE(betaCert, AppSettings::resolveConfigDir(QStringLiteral("beta")));
+        QCOMPARE(betaToken, betaCert);
+
+        QVERIFY2(alphaCert != betaCert,
+                 "two --profile instances resolved to the same TLS identity "
+                 "directory, so they share one certificate and one token");
+        QVERIFY2(alphaToken != betaToken,
+                 "two --profile instances resolved to the same token directory");
+
+        // And they both track the SETTINGS directory, which is the whole
+        // claim: security material sits beside the store its instance uses.
+        QCOMPARE(alphaCert,
+                 QFileInfo(AppSettings::resolveSettingsPath(QStringLiteral("alpha")))
+                     .absolutePath());
+
+        // No override at all (a GUI, or this test binary before the lines
+        // above ran) still resolves to the RESERVED daemon profile, never
+        // to the user's shared config directory. See
+        // CertificateStore::defaultDirectory() for why the fallback is
+        // deliberate rather than defensive.
+        AppSettings::setProfileOverride(QString());
+        QCOMPARE(CertificateStore::defaultDirectory(),
+                 AppSettings::resolveConfigDir(
+                     QString::fromLatin1(AppSettings::kDaemonProfileName)));
+        QCOMPARE(TokenStore::defaultDirectory(), CertificateStore::defaultDirectory());
     }
 };
 

@@ -102,8 +102,14 @@ public:
     // station's token.
     explicit TokenStore(const QString& directory = defaultDirectory());
 
-    // AppSettings::resolveConfigDir(AppSettings::kDaemonProfileName),
-    // resolved through that function rather than rebuilt by hand.
+    // Where the production token lives: the config directory of the
+    // profile this process is actually running under, resolved through
+    // AppSettings::resolveConfigDir() rather than rebuilt by hand. Follows
+    // AppSettings::profileOverride() for the same reason
+    // CertificateStore::defaultDirectory() does, and that header carries
+    // the full rationale: hardcoding the daemon profile made two --profile
+    // instances share one token, and a simultaneous first run let the
+    // loser of a rename race accept a token that was not the one on disk.
     static QString defaultDirectory();
 
     // True once a token is loaded or generated. False means lastError()

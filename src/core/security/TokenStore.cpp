@@ -89,8 +89,23 @@ TokenStore::TokenStore(const QString& directory)
 
 QString TokenStore::defaultDirectory()
 {
+    // profileOverride() when there is one, kDaemonProfileName otherwise.
+    // See the header for why this follows --profile at all.
+    //
+    // isEmpty(), not isNull(), and the fallback is deliberate rather than
+    // defensive. server_main.cpp calls setProfileOverride() only for a
+    // NON-empty resolved profile, so `nereusd --profile ""` -- the
+    // documented escape hatch back to the shared settings directory --
+    // leaves the override unset. Falling back to the reserved daemon
+    // profile keeps the token and the private key out of the user's shared
+    // config directory even then, which is the conservative choice for a
+    // secret and is not what that escape hatch was asking for. It also
+    // means any process that never sets an override still gets the
+    // reserved directory rather than the shared one.
+    const QString profile = AppSettings::profileOverride();
     return AppSettings::resolveConfigDir(
-        QString::fromLatin1(AppSettings::kDaemonProfileName));
+        profile.isEmpty() ? QString::fromLatin1(AppSettings::kDaemonProfileName)
+                          : profile);
 }
 
 bool TokenStore::loadExisting()

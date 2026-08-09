@@ -114,11 +114,30 @@ public:
     // identity.
     explicit CertificateStore(const QString& directory = defaultDirectory());
 
-    // AppSettings::resolveConfigDir(AppSettings::kDaemonProfileName), the
-    // production default -- resolved through that function, never
-    // rebuilt by hand (task-17-controller-notes.md). A free function so
-    // a caller can read where the real one lives without constructing a
-    // CertificateStore.
+    // Where the production TLS identity lives: the config directory of the
+    // profile this process is actually running under, resolved through
+    // AppSettings::resolveConfigDir() rather than rebuilt by hand
+    // (task-17-controller-notes.md).
+    //
+    // Follows AppSettings::profileOverride(), NOT a hardcoded
+    // kDaemonProfileName. Hardcoding it meant `nereusd --profile alpha` and
+    // `nereusd --profile beta` isolated their settings and their logs but
+    // SHARED one certificate and one token, which defeats the point of
+    // --profile: it exists to isolate instances on one workstation. Two
+    // simultaneous first runs each minted a token and raced the rename, and
+    // the loser then accepted a token that was not the one on disk.
+    //
+    // The default daemon run is unaffected: server_main.cpp resolves an
+    // absent --profile to kDaemonProfileName (DaemonConfig.cpp's
+    // resolveDaemonProfileArgument) and calls setProfileOverride() with it
+    // before anything reaches here, so profileOverride() is already
+    // "daemon" and this resolves to exactly the directory it always did. No
+    // migration needed. An explicit `--profile ""`, the documented escape
+    // hatch back to the shared directory, now shares the security material
+    // too, which is the consistent reading of what the operator asked for.
+    //
+    // A free function so a caller can read where the real one lives without
+    // constructing a store.
     static QString defaultDirectory();
 
     // True once a certificate and private key are loaded and usable.
