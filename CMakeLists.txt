@@ -822,6 +822,7 @@ set(CORE_SOURCES
     src/core/TxSliceArbiter.h
     src/core/FFTEngine.cpp
     src/core/TxAnalyzer.cpp
+    src/core/AmModulationAnalyzer.cpp
     src/core/NoiseFloorEstimator.cpp
     src/core/NoiseFloorTracker.cpp
     src/core/ClarityController.cpp
@@ -1339,6 +1340,9 @@ set(GUI_SOURCES
     src/gui/applets/FmApplet.cpp
     src/gui/applets/DigitalApplet.cpp
     src/gui/applets/PureSignalApplet.cpp
+    src/gui/applets/ModMonitorApplet.cpp
+    src/gui/applets/AppletFloatingWindow.cpp
+    src/gui/VintageModMeterWidget.cpp
     src/gui/applets/DiversityApplet.cpp
     src/gui/applets/CwxApplet.cpp
     src/gui/applets/DvkApplet.cpp
