@@ -87,9 +87,27 @@ that the computer upgrade broke an implemented media path.
   Existing WDSP reducers and Aether-derived renderer logic retain their
   source-first, license and inline-comment obligations.
 - Full remote TX remains R4. Hosted rendezvous, the two-CGNAT acceptance case,
-  and relay operations remain R5. Wideband ADC display transport remains a
-  separate deferred feature; wider coverage inside a selected DDC for 3D is
-  not that feature.
+  and relay operations remain R5. On September 21 the operator requested
+  the existing full zoom range: wideband ADC display transport is now an
+  explicit R3 parity requirement, R-R3-20/task 4b. Wider coverage inside a
+  selected DDC for 3D does not satisfy it.
+
+## September 21 control and accessory audit
+
+The [bounded two-scout audit](2026-09-21-remote-gui-control-gap-audit.md)
+found gaps beyond media delivery: dead connection entry points, missing
+persistent session/audio feedback, snapshot-time slice creation, unsupported
+controls without capability gating, and station accessory operations still
+owned by GUI code. These are explicit R3 deliverables in tasks 4c/4d/5a,
+not work silently deferred to R6. R3 must also prevent receive-only frequency
+changes or inbound tuner telemetry from initiating accessory tuning; R4
+retains actual TX and tuner-operation workflows.
+
+Current runtime evidence separates three TGXL problems: the saved endpoint
+addresses the amplifier, the actual tuner's TCP control port times out from
+both hosts, and the client cannot apply all 13 tuner telemetry properties.
+The audit records the evidence and remaining uncertainty. No live settings
+or product behavior were changed during the investigation.
 
 The recommended execution order is working R3 LAN receive, then receive-only
 R5 internet access without waiting for the entire R4 TX implementation.

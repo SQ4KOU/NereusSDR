@@ -20,7 +20,8 @@ in task 1; the fixed-ratio Resampler is not its implementation.
 **Specifications:** [umbrella](2026-07-28-remote-daemon-architecture-design.md),
 [R2/R3 addendum](2026-08-03-remote-daemon-r2-r3-design-addendum.md),
 [identity and network design](2026-08-02-remote-station-identity-and-pairing-design.md),
-[current review and decisions](2026-09-20-remote-daemon-r3-review.md).
+[current review and decisions](2026-09-20-remote-daemon-r3-review.md),
+[September 21 controls/accessory audit](2026-09-21-remote-gui-control-gap-audit.md).
 This plan supersedes procedural boilerplate in older plans, not their
 substantive safety or acceptance requirements.
 
@@ -44,7 +45,7 @@ Their presence in the build does not make remote transmit an R3 feature.
 | --- | --- | --- |
 | First display | A live Saturn spectrum and advancing 2D/3D waterfall in the remote GUI | Real board-to-Mac session; tuning and zoom remain aligned |
 | First sound | The same session plays mixed stereo Opus with working slice controls | Actual listening plus two-slice mix and loss/clock tests |
-| R3 accepted | Multiple pans and slices remain usable through reconnect and sustained reception | Four-pan measurements, two-hour audio run, install/boot/reconnect checks |
+| R3 accepted | Multiple pans and slices remain usable through reconnect and sustained reception; connection, audio and receive-safe accessory controls show accepted station state | Four-pan measurements, two-hour audio run, install/boot/reconnect checks, visible-control and accessory acceptance |
 | R4 | Remote microphone/PTT and transmit operation | TX chain and watchdog/starvation/handoff safety acceptance together |
 | R5 | Remote access across difficult internet connections without a required VPN | Direct/relay racing, dual-stack and CGNAT-to-CGNAT evidence |
 | R6 | Routine installation and use without development-session help | Full station selection/pairing UX, reachability diagnostics, packaging and documentation; basic connection controls and visible state are R3 requirements |
@@ -54,6 +55,14 @@ remote receiver. Codec tests, dependency probes and successful builds are
 supporting evidence; no R3 checkpoint is complete until its operator-visible
 result is demonstrated. There is no separate executable named NereusUI yet;
 this plan uses the existing NereusSDR executable in remote station mode.
+
+**Current remaining order, September 21:** finish basic connection controls,
+snapshot hydration and capability gating (4a/4c); block receive-only accessory
+tuning side effects, then repair station accessory connection/status (4d);
+finish wideband parity and sustained audio with operator feedback (4b/5/5a);
+run capacity, boot/reconnect and two-hour acceptance (6). Receive-only R5
+traversal follows, then safeguarded R4 TX and R6 selection/pairing/packaging.
+The audit is complete; these newly identified implementation tasks are open.
 
 ## Network decisions carried forward
 
@@ -115,6 +124,11 @@ by the earlier brainstorming, and this review does not present them as such.
 | R-R3-18 | Remote C-Tune preserves the Core receive-window centre during in-window VFO tuning. Explicit pan motion moves Core's window and shifts every cohost without moving their VFOs. Pin state belongs to the stream, is negotiated, clears with the station session, and is restored from GUI preference after reconnect; direct local behavior remains unchanged. |
 | R-R3-19 | Remote frequency-scale and wheel zoom stop at the currently supplied DDC bandwidth during the gesture. An unsupported ADC-wide view must not be offered then collapsed by Core's crop ACK. Preserve the local extended-view preference; wider remote coverage requires a separately advertised wideband source. |
 | R-R3-20 | Restore the existing extended-pan behavior across Core/UI: supported wideband ADC data fills the view outside the listenable DDC island, with the existing zoom gestures, RF alignment, wing tuning and filter-state feedback. Core owns capture, calibration and shared ADC/BPF demand. The R-R3-19 DDC-only limit is an interim compatibility fallback, not completion of receive parity. |
+| R-R3-21 | Visible remote receive controls act on their declared local or station owner and show accepted state. Controls unavailable in the negotiated role/capabilities are visibly disabled with a reason. TX affordances respect `txPermitted=false` in R3; Core refusal remains mandatory. A visible-control inventory and interaction tests distinguish implemented behavior from unavailable features. |
+| R-R3-22 | Core owns station accessory sockets, discovery, live configuration application and basic connect/disconnect/cancel. It validates device identity before declaring a TGXL connected, cancels obsolete retries, and publishes current status. Tuner telemetry applies without commands; headless frequency/mode reporting follows the stable station TX-bound slice. Direct local behavior is preserved. |
+| R-R3-23 | Remote audio exposes persistent playback/media/output status, the actual accepted codec profile and useful measured health. Local device/trim/mute stay separate from station slice mix controls. Any quality selector requires measured profiles and acknowledged Core configuration; unimplemented codec settings are not presented as functioning controls. |
+| R-R3-24 | Attaching/reconnecting and restoring saved GUI layout hydrates the authoritative snapshot without outbound slice creation. One saved pan attaching to one existing station slice retains that slice. Explicit post-hydration operator add/layout actions still work within station capacity. |
+| R-R3-25 | Receive-only remote frequency changes, snapshot replay and inbound accessory telemetry cannot initiate tune-carrier orchestration or TX-coupled accessory commands. Apply the guard before enabling repaired TGXL connection/telemetry. Local-direct operation retains its established behavior; authorized remote TX/tuner workflows remain R4. |
 
 The authorized radio is the ANAN-G2/Saturn, MAC `2C:CF:67:AB:FC:F4`, board
 `0x0A`; the September 20 instruction supersedes the old G2E-only bench rows.
@@ -157,6 +171,9 @@ Task 1 establishes dependency/API contracts. Tasks 2 and 3 may then run in
 parallel with separate file ownership. Task 4 integrates them. Task 5 completes
 audio. Task 6 expands capacity and runs the final acceptance. Do not parallelize
 CMake, session-message schemas, MainWindow edits or hardware operations.
+The original numbering is retained; the current remaining order above takes
+precedence. Tasks 4c and 4d consume the same session/model boundary and must
+agree their capabilities and reply semantics before editing shared files.
 
 ## 1. Close dependency and clock-correction contracts
 
@@ -403,11 +420,142 @@ tests remain green. Compare the same gestures and frequency coverage in local
 and remote receive modes. Record live 2D/3D behavior, network cost and Rock 5C
 load separately; R3 parity remains open until those observations pass.
 
+## 4c. Complete visible controls and snapshot-safe startup
+
+**Requirements:** R-R3-02/09/10/16/17/21/24.
+**Dependencies:** existing StationClient lifecycle and task 4a connection
+entry points. This closes the interaction gaps identified by audit C01-C04
+and C10; it does not replace the R6 station-selection design.
+
+**Owned files:** `src/gui/{MainWindow,SetupDialog}.*`, affected setup/applets,
+`src/core/session/StationClient.*`, `src/models/RadioModel.*`,
+`tests/tst_remote_gui_gating.cpp`, session/snapshot tests, and a compact
+control acceptance matrix in the existing R3 verification directory.
+
+**Interfaces:** consume station lifecycle, snapshot readiness, generation,
+negotiated capabilities and Core radio state. Produce consistent actions and
+presentation from those values. Session connection is not snapshot readiness;
+restoring presentation must not imply a station create command. Reuse the
+existing capability schema; negotiate any genuinely missing capability before
+advertising it. Preserve explicit operator add/layout operations after hydrate.
+
+- [ ] Inventory currently visible menus, applets and setup controls by owner:
+  GUI-local, station-backed, or unavailable in remote receive. Record the
+  concrete handler/property and acceptance case. Trace generic mirrored DSP
+  setters before labelling them broken; the observed FIR-graph gap is a local
+  visualization dependency, not evidence that all DSP settings fail.
+- [ ] Complete task 4a's title/status/pan connection actions and persistent
+  status. Keep automatic panel callbacks separate from explicit connect.
+  Disable unavailable local-resource controls with a reason, and gate all
+  TX entry points using the negotiated permission while retaining Core guards.
+- [ ] Reproduce the extra-slice startup through the actual connection,
+  snapshot and `populateEmptyPans` path. Separate hydration/layout restoration
+  from explicit operator creation; do not delete an existing station slice
+  to conceal an unintended create. Test reconnect and delayed snapshots.
+- [ ] Add a narrow injected session/presentation harness that exercises the
+  real action routing. Slot-existence checks alone do not close this task.
+
+**Acceptance:** each connect entry point starts one configured-Core attempt;
+cancel during backoff leaves it stopped through delayed callbacks; Core-up /
+radio-down presents distinct state. With one saved pan and one Core slice,
+connect/reconnect emits zero add-slice commands and preserves station identity.
+An explicit add after hydrate emits one valid request and handles refusal.
+TX and FIR graph controls show unavailable state when their capabilities or
+resources are absent. Local direct connection and layout behavior remain valid.
+
+**Verification:** session/hydration and cancellation are consequential state
+transitions: establish reproducing integration cases before changing them.
+Build `tst_remote_gui_gating`, `tst_session_verbs` and `tst_remote_role_inert`
+before running the corresponding `ctest --test-dir build-integration -R
+'^tst_(remote_gui_gating|session_verbs|remote_role_inert)$' --no-tests=error`.
+Register/build any additional harness target explicitly. Then perform the
+listed connect/cancel/reconnect cases in the actual GUI with receive only;
+record both automated and visible results in the matrix.
+
+**Execution:** bounded Terra implementation is suitable after the lifecycle
+contract is settled; the lead owns shared MainWindow/session integration.
+Do not dispatch an overlapping MainWindow editor for task 4d.
+
+## 4d. Make basic station accessory use work remotely
+
+**Requirements:** R-R3-02/10/21/22/25. **Dependencies:** source audit C06-C09,
+C11-C12, authenticated station commands and state/settings ownership.
+Receive-only guards precede repaired live connection and telemetry acceptance.
+
+**Owned files:** `src/core/{TgxlConnection,PgxlConnection,SmartSdrApiListener}.*`,
+`src/models/{RadioModel,TunerModel}.*`, session capabilities/messages/client/server,
+`src/gui/setup/{CatNetworkSetupPages,FourO3APage,TgxlAdvancedPage}.*`,
+`src/gui/{MainWindow,applets/TunerApplet}.*`, accessory/session tests and the
+control acceptance matrix. Core remains GUI-free.
+
+**Interfaces:** station-scoped accessory settings already persist through
+SettingsProxy. Define the missing live-application and basic connect/disconnect
+contract with explicit accepted/refused replies and current-session ownership.
+Choose atomic configure/connect or acknowledged settings followed by an ordered
+command; do not let a click race persistence and use an old endpoint. Inbound
+TunerModel state uses a client-only assign/notify adapter, never its hardware
+command hook. Discovery is station-side, or its remote button is explicitly
+unavailable until implemented. Full administration/pairing remains R6.
+
+- [ ] Establish regressions for remote band-change auto-recall and applet
+  reactions to `isTuning`. Guard RX-only operation and telemetry replay from
+  autotune/carrier/operate/bypass/relay/antenna commands; preserve the existing
+  local-direct workflow. This guard is part of the telemetry change, not a
+  later R4 cleanup. Do not enable remote TX as a connection repair.
+- [ ] Validate TGXL identity before declaring connected/present or enabling
+  commands. Derive supported model aliases and serial correlation from actual
+  discovery/info evidence; a V banner alone is insufficient. Reject a PGXL
+  response and show expected versus observed device. Bound handshake timeout.
+- [ ] Implement unconditional cancellation across connecting, handshaking,
+  connected and backoff states for disable, disconnect, radio teardown and
+  endpoint replacement. A cancellable timer or generation check must prevent
+  an old captured endpoint from redialling after replacement.
+- [ ] Route basic remote configuration/apply/connect/disconnect to Core;
+  show selected endpoint, identity, pending state and error. Apply all 13 tuner
+  snapshot/update fields safely, including false/zero values and disconnect.
+  Gate applet orchestration while retaining read-only visual updates.
+- [ ] Move existing SmartSDR frequency/mode seeding and PGXL band propagation
+  from MainWindow to the authoritative Core slice wiring. Follow the stable
+  TX-bound slice, including binding change/removal, and remove duplicate GUI
+  sends. Retain source attribution and current wire behavior.
+- [ ] Resolve the separate real-device control-port issue with read-only
+  evidence. The current `.235:9008` setting addresses the amplifier; `.234`
+  advertises the tuner but TCP 9010 times out from both hosts. Another-client
+  occupancy is a question, not a proven cause. After the guards pass, correct
+  the endpoint and verify basic connection/status without tuning or RF.
+
+**Acceptance:** a PGXL banner/status never yields a connected tuner; supported
+tuner identity does, and unknown/timeout responses leave an actionable error.
+Disable/disconnect in every lifecycle state causes no delayed redial, including
+after endpoint changes. A remote configuration action applies on Core without
+restarting it and opens no GUI-side accessory socket. All 13 fields hydrate,
+update and recover without any hardware command, including an `isTuning=true`
+snapshot. With auto-recall enabled and a stored memory fixture, remote RX band
+changes send no autotune. Headless initial, within-band, mode and rebind updates
+report the correct station slice; unrelated slices cannot drive the accessory.
+
+**Verification:** establish meaningful authorization/lifecycle regressions
+before changes. Reuse observed wire fixtures, never invented TGXL identity
+strings. Build/run affected targets including `tst_tgxl_connection_parse`,
+`tst_tgxl_connection_ping`, `tst_pgxl_connection_reconnect`,
+`tst_tuner_model_apply_status`, `tst_tuner_applet_context_menu`,
+`tst_settings_proxy`, `tst_session_verbs` and `tst_remote_role_inert`; register
+new lifecycle/telemetry/headless-boundary tests where coverage is absent.
+Use the corresponding exact-name `ctest -R` selection with `--no-tests=error`.
+Then inspect station-reported frequency/mode and tuner status on the real
+bench without RF. Hardware acceptance stays pending while TCP 9010 is
+unavailable. Actual tuner operation and pairing/interlock changes remain R4.
+
+**Execution:** Sol is appropriate for this ownership/lifecycle boundary after
+the lead settles command and capability contracts. Keep hardware and shared
+session/MainWindow edits serial; use one integrated risk-focused review.
+
 ## 5. Deliver mixed stereo Opus with continuous playback
 
-Execution order remains task 4a's remaining receive telemetry bindings,
-then this audio task. First sound and the final two-hour stability run are
-separate checkpoints. R5 traversal is not a prerequisite for LAN listening.
+First sound is implemented and heard on the bench. Remaining playback
+interruptions, the profile comparison and final two-hour stability run are
+separate open gates. Follow the current remaining order above; R5 traversal
+is not a prerequisite for LAN listening.
 
 **Requirements:** R-R3-02, 03, 06, 07, 09. **Dependencies:** 1 and 4's session
 lifecycle; audio codec unit work can precede GUI spectrum completion.
@@ -475,6 +623,46 @@ playback, then real long-session audio. Lossless/high-rate digital-mode audio
 remains a tracked parent requirement; do not advertise Opus as transparent
 input for weak-signal decoding or claim that path accepted without its gate.
 
+## 5a. Expose useful remote audio controls and health
+
+**Requirements:** R-R3-06/07/17/21/23. **Dependencies:** current playback path,
+task 4c status ownership, and task 5's measured profile comparison.
+
+**Owned files:** `src/gui/{RemoteMediaController,MainWindow}.*`, existing audio
+setup surface, `src/core/session/media/{DaemonMediaController,OpusAudioCodec}.*`,
+negotiated media contracts if needed, and remote audio/GUI tests.
+
+**Interfaces:** consume actual accepted encoder settings, local output state,
+receiver counters and session generation. Produce persistent status and a
+small operator-facing profile choice only if the measurements justify it.
+The currently fixed 24 kbit/s profile is not a negotiated quality selector.
+
+- [ ] Show current codec/rate, local output/mute and persistent output/media
+  error with a recovery action. Distinguish no signal from no media, local mute
+  and output-device failure; show measured loss/jitter/buffer health with clear
+  meanings. Arrival spacing alone must not be labelled packet loss.
+- [ ] Complete the 24/48 kbit/s mixed-stereo listening/CPU/wire-rate comparison
+  in task 5. Decide the offered quality profiles from those results. Preserve
+  the selected mixed stereo ownership; do not silently substitute mono.
+- [ ] If profiles are offered, add acknowledged Core configuration with bounded
+  reconfiguration and reconnect replay. Display accepted settings on refusal;
+  never present raw frame-size/FEC/complexity controls without a working wire
+  contract. The addendum's three-tier example is not a mandatory profile list.
+
+**Acceptance:** mute and device failures remain understandable after a toast
+expires; client trim/mute does not change Core slice gain/pan. Displayed codec
+matches actual packets. A refused or stale profile reply cannot claim a new
+profile or revive an old session. Reconfiguration flushes incompatible queued
+audio and recovers without unbounded latency. Listening comparison and device
+failure recovery must be recorded separately from codec unit tests.
+
+**Verification:** build `tst_opus_audio_codec`, `tst_remote_audio_receiver`,
+`tst_remote_audio_session` and affected GUI targets before the matching exact
+`ctest -R` selection with `--no-tests=error`; add meaningful profile/lifecycle
+regressions if negotiation is introduced. Lead/operator compare the same
+stereo reception at both rates and record preference plus measured costs.
+No selector is required merely to make already-working Opus decoding operate.
+
 ## 6. Capacity, installation and release evidence
 
 **Requirements:** all. **Dependencies:** integrated receive path.
@@ -532,3 +720,6 @@ whole-plan review loops.
 | Applet S-meter | Implemented, 673/673 suite passed; Core and GUI running | Live needle movement and applet/active-flag agreement observed on Saturn; all-mode/longer acceptance pending |
 | BPF and Auto AGC-T indicators | Source implementation and focused tests pass | R-R3-14/15: station filter snapshot/reconnect, headless per-stream AGC source, active-applet/flag bindings implemented; live 20m filter and AGC floor observed, complete band/reconnect acceptance pending |
 | Manual Core reconnect | Menu/shortcut path implemented; complete interface acceptance reopened | R-R3-16/17: initial live menu round trip passed at `73fcccfe`; later `ef3e69d7` unreachable-Core check confirms menu cancellation/fresh attempt but exposes dead click-to-connect chrome and missing persistent Core/retry status. Remaining entry points and feedback are now explicit R3 gates. |
+| Visible controls and snapshot hydration | R-R3-21/24 open; task 4c | Two-scout audit found unavailable FIR visualization, unused TX capability gating and a startup path consistent with the observed extra slice. Add the reproducing interaction/snapshot tests; do not mistake metadata tests for live action coverage. |
+| Station accessories / TGXL | R-R3-22/25 open; task 4d | Settings persist on Core, but connection/live-apply still invokes local GUI objects; all 13 tuner fields fail client application. Wrong-device identity and retry cancellation need fixes. Move headless frequency/mode reporting into Core and guard receive-only tuning side effects before live acceptance. Actual TGXL TCP 9010 remains unreachable from both hosts. |
+| Audio controls and diagnostics | R-R3-23 open; task 5a | Fixed 24 kbit/s stereo is active; persistent profile/health/output feedback and measured 24/48 comparison remain. A selectable quality profile needs an acknowledged Core contract; no adaptive-rate claim. |
