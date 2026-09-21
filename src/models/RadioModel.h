@@ -1251,6 +1251,11 @@ public:
     void setSpectrumSink(NereusSDR::ISpectrumSink* sink) { m_spectrumSink = sink; }
     class FFTEngine* fftEngine() const { return m_fftEngine; }
     void setFftEngine(class FFTEngine* e) { m_fftEngine = e; }
+    // Phase 3M-5d: Setup → Display → TX page reaches the TX analyzer the
+    // same way it reaches the FFT engine.  Non-owning pointer wired by
+    // MainWindow at construction.
+    class TxAnalyzer* txAnalyzer() const { return m_txAnalyzer; }
+    void setTxAnalyzer(class TxAnalyzer* a) { m_txAnalyzer = a; }
     class ClarityController* clarityController() const { return m_clarityController; }
     void setClarityController(class ClarityController* c) { m_clarityController = c; }
     class StepAttenuatorController* stepAttController() const { return m_stepAttController; }
@@ -1327,6 +1332,18 @@ public:
     // Returns nullptr when no arbiter binding resolves. TX-global callers
     // must fail safely rather than substituting listening/UI state.
     SliceModel* txBoundSlice() const;
+
+    /// The RF carrier a slice actually transmits on: its dial frequency
+    /// plus XIT when XIT is enabled. Returns 0 for a null slice and clamps
+    /// at 0 rather than wrapping.
+    ///
+    /// Public because the TX display has to centre on the same number the
+    /// transmitter uses. Centring on slice->frequency() instead drew the
+    /// trace, waterfall and TX filter overlay around the RX VFO while the
+    /// radio transmitted at the shifted carrier (Codex, PR #317). Anything
+    /// that needs "where is this slice transmitting" should come here
+    /// rather than re-derive the offset.
+    quint64 txFrequencyForSlice(const SliceModel* slice) const;
 
     // Phase 3F Sub-Epic D Task 13: NereusSDR-original FFT fan-out router.
     // Wires receiverId -> N pans so a single DDC FFT pipeline can feed
@@ -3186,7 +3203,6 @@ private:
     // XIT-shifted frequency too.
     //
     // Returns 0 for a null slice, and clamps at 0 rather than wrapping.
-    quint64 txFrequencyForSlice(const SliceModel* slice) const;
     void teardownConnection();
 
     // Derives the 16-digit dashed FlexRadio-style serial number from the
@@ -3673,6 +3689,8 @@ private:
     QList<PanadapterModel*> m_panadapters;
     SliceModel* m_activeSlice{nullptr};
 
+    // View hooks (non-owning, set by MainWindow). Phase 3G-8 + 3G-9c +
+    // 3M-5d (m_txAnalyzer).
     // Phase 3F Sub-Epic I: which DDC stream hosts which slice. Pure policy;
     // sized by configureStreamPool at connect, empty (and therefore
     // bind-refusing) while disconnected.
@@ -3767,6 +3785,7 @@ private:
     // spectrumSink() comment. Same object, different static type.
     NereusSDR::ISpectrumSink* m_spectrumSink{nullptr};
     class FFTEngine*          m_fftEngine{nullptr};
+    class TxAnalyzer*         m_txAnalyzer{nullptr};
     class ClarityController*  m_clarityController{nullptr};
     class StepAttenuatorController* m_stepAttController{nullptr};
 
