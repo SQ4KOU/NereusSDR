@@ -5,13 +5,15 @@ and real remote receive acceptance. A component pass does not close R3.
 
 ## Current receive status, September 21
 
-Core and the running GUI are both at `74145a4b`. The GUI was reopened after
-Mac unlock, authenticated to the Rock's wired address and showed live
-applet meter movement and matching active-slice readings. The previous
+Core remains at `74145a4b`; the running GUI is now `73fcccfe`, with live
+Radio/Disconnect and Radio/Connect verified against the Rock's wired address
+without relaunching. Spectrum, waterfall and matching applet/slice meter
+readings recovered. The earlier GUI reopening after Mac unlock established
+initial live applet meter movement. The previous
 checkpoint has authenticated Core control, live spectrum/2D waterfall,
 station display calibration and Clarity floor-input evidence below. The
-meter correction passed 673/673 tests and native installation; full mode
-and reconnect visual acceptance remains open. Clarity's saved black-level/palette
+meter correction passed 673/673 tests and native installation; full meter-mode
+and longer-session acceptance remains open. Clarity's saved black-level/palette
 adjustment and subjective comparison also remain pending. Remote audio playback, BPF/WIDE
 indicator bindings, Auto AGC-T visuals, capacity/long-run acceptance and R5
 internet traversal are still unfinished. Earlier sections record evidence
@@ -487,5 +489,28 @@ server behavior change. Remote audio is still incomplete. The source audit
 identified WDSP rmatch/varsamp as a continuous-rate candidate, but the bus
 currently lacks public device-consumption/queue-depth feedback. Add that
 feedback before validating the clock loop; a timer alone cannot measure the
-Mac sound device's clock. Task 5 now records the sender, receiver/playback
-and output-control sequence as the next implementation priority.
+Mac sound device's clock. Task 5 records the sender, receiver/playback
+and output-control implementation sequence. The existing order, remaining
+task 4a receive bindings followed by task 5 audio, is retained.
+
+
+## Live manual reconnect, 73fcccfe
+
+The signed GUI was built and strictly code-signature-verified, then opened
+with the existing `radxa_5c_r3` profile (PID 19939). Core remained running at
+`74145a4b`, active with `ExecMainStatus=0` and `NRestarts=0`.
+
+In the actual Radio menu, Connect was disabled and Disconnect enabled while
+the session was active. Selecting Disconnect removed the TCP connection
+without closing the GUI, enabled Connect, and disabled Disconnect. Selecting
+Connect on the same process authenticated again at 09:10:47 local time and
+received fresh Core noise-floor data. The established TCP endpoint was
+`192.168.109.104:62313 -> 192.168.109.106:50055`.
+
+The visible GUI then showed live spectrum and populated waterfall, with the
+applet and both slice flags at -57 dBm on the operator's 3.952200 MHz tuning.
+No frequency, gain, filter, mute or transmit control was changed for this
+check. This closes the initial live R-R3-16 menu round trip; multi-hour link
+recovery and audio reconnect acceptance remain separate work. The GUI is
+left running and connected. Audio playback remains task 5, following the
+remaining task 4a receive bindings.

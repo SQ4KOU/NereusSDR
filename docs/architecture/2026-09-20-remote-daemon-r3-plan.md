@@ -328,12 +328,9 @@ and live observations; the meter fix does not establish those gates.
 
 ## 5. Deliver mixed stereo Opus with continuous playback
 
-**Current priority, September 21:** after the bounded manual reconnect fix,
-first audible Saturn reception is the next implementation deliverable.
-BPF/WIDE and Auto AGC-T indicator corrections remain required receive work,
-but do not block this audio path. R5 traversal is not a prerequisite for
-LAN listening. Preserve the loss/clock and actual-listening gates below;
-the two-hour run belongs to final R3 acceptance.
+Execution order remains task 4a's remaining receive telemetry bindings,
+then this audio task. First sound and the final two-hour stability run are
+separate checkpoints. R5 traversal is not a prerequisite for LAN listening.
 
 **Requirements:** R-R3-02, 03, 06, 07, 09. **Dependencies:** 1 and 4's session
 lifecycle; audio codec unit work can precede GUI spectrum completion.
@@ -442,7 +439,7 @@ whole-plan review loops.
 | --- | --- | --- |
 | R2 baseline | Preserved rollback checkpoint `14124e7c` | Authenticated control/tuning/meter baseline retained; installed runtime advanced to `ea55d24a` |
 | Combined open-PR recovery | Complete source checkpoint `14124e7c` | GUI/Core build and unfiltered 662/662 desktop tests pass; fixture-path workaround recorded separately |
-| Native combined Core | Installed at signed `74145a4b`, with `3c4b15e6` rollback | Native build/stage/install passed; previous checkpoint has authenticated display and live Clarity evidence; new applet visual acceptance pending; [verification ledger](2026-09-20-remote-daemon-r3-verification/README.md) |
+| Native combined Core | Installed at signed `74145a4b`, with `3c4b15e6` rollback | Native build/stage/install passed; previous checkpoint has authenticated display and live Clarity evidence; initial live applet meter movement verified; [verification ledger](2026-09-20-remote-daemon-r3-verification/README.md) |
 | Plan review and mixed-stereo choice | Lead, recorded | Current review; user confirmed mixed stereo and Opus |
 | Direct media transport | Production adapter and MediaPeer integrated | Real encrypted peers, bounded callbacks, stop/restart/delete regressions pass; live display capture passes: Ethernet, 969-byte maximum IP packet; separate SRTP-size proof pending |
 | Headless FFT and display codec | Implemented and component-tested | Independent Wide/Fine sources, retune input reset, independent planes, crop clamp, bounded codec and recovery tests pass; authenticated daemon-to-GUI regression and live Saturn display pass |
@@ -450,4 +447,4 @@ whole-plan review loops.
 | GUI media wiring | Desktop builds; initial focused checks pass | Dedicated reduced-frame renderer and authenticated subscription controller tested; two-pane, shared-window and reconnect regressions pass; live GPU spectrum/2D observed; operator 3D confirmation and gesture refinement pending |
 | Applet S-meter | Implemented, 673/673 suite passed; Core and GUI running | Live needle movement and applet/active-flag agreement observed on Saturn; all-mode/longer acceptance pending |
 | BPF and Auto AGC-T indicators | Confirmed remaining bindings | R-R3-14 and R-R3-15; source audit complete, implementation pending |
-| Manual Core reconnect | Implemented; live GUI verification pending | R-R3-16; Radio menu/shortcuts and connection context menus target one reusable Core client; Disconnect cancels pending retries |
+| Manual Core reconnect | Implemented at signed `73fcccfe`; live menu round trip passed | R-R3-16; Disconnect removed the Core TCP link, Connect reauthenticated in the same GUI process, and spectrum/waterfall/meters recovered; Core remains `74145a4b` |
