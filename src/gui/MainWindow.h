@@ -109,6 +109,7 @@ class TxAnalyzer;
 class SpectrumWidget;
 class SliceModel;
 class VfoWidget;
+class PanadapterModel;
 // Phase 3F Sub-Epic D: forward declarations for the multi-pan layout
 // manager. Member m_panStack is introduced (nullptr) in Task 10/11 so the
 // +PAN affordance (a dropdown at the time; a drawn icon opening
@@ -238,6 +239,20 @@ public:
                                              const QString& panId);
     static void fanWidebandBinsForTest(PanadapterStack* stack, int adcIndex,
                                        const QVector<float>& bins);
+    /// 3D Stacked-Trace Spectrum Plan Task 14 fix-forward (recall) + Task 15
+    /// fix-forward (save): wires 3D Floor's per-band recall AND save into a
+    /// live SpectrumWidget. Recall: pushes the value stored for `pan`'s
+    /// current band immediately, then keeps it synced on every
+    /// PanadapterModel::bandChanged() crossing. Save: `spectrum`'s
+    /// dssFloorDepthChanged (an operator edit through either the overlay
+    /// menu or the Setup page) writes back to `pan`'s CURRENT band, guarded
+    /// against the recall push above re-triggering itself. Extracted as a
+    /// static seam (rather than inlined at the MainWindow constructor call
+    /// site) for the same reason as the helpers above: MainWindow needs a
+    /// full RadioModel to construct, which no unit-test executable can
+    /// afford.
+    static void wireDss3DFloorRecallForTest(PanadapterModel* pan,
+                                            SpectrumWidget* spectrum);
 
     // ── TNF operator controls (design sections 7, 7.5 and 10.2) ───────────
     // Public statics rather than file-local helpers: MainWindow needs a full

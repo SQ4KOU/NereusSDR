@@ -1092,6 +1092,7 @@ set(MODEL_SOURCES
     src/models/BandFilterProxy.cpp
     src/models/FreeDVStationModel.cpp
     src/models/RxDecodeModel.cpp
+    src/models/DisplaySettingsModel.cpp
 )
 
 set(GUI_SOURCES
@@ -1184,6 +1185,7 @@ set(GUI_SOURCES
     src/gui/NetworkDiagnosticsDialog.h
     src/gui/DiversityDialog.cpp
     src/gui/DiversityDialog.h
+    src/gui/DssRenderer.cpp
     src/gui/SpotHubDialog.cpp
     src/gui/SpotHubDialog.h
     src/gui/FreeDVReporterDialog.cpp
@@ -1973,6 +1975,8 @@ if(NEREUS_GPU_SPECTRUM AND Qt6ShaderTools_FOUND)
             resources/shaders/spectrum.frag
             resources/shaders/overlay.vert
             resources/shaders/overlay.frag
+            resources/shaders/dss_mesh.vert
+            resources/shaders/dss_mesh.frag
     )
 
     qt_add_shaders(NereusCore "nereus_meter_shaders"
