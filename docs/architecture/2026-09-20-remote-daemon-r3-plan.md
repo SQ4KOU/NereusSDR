@@ -364,7 +364,11 @@ for continuous rate matching; its exported `create_rmatchV`, `xrmatchIN`
 and `xrmatchOUT` API preserves variable-resampler state. It uses critical
 sections, so it must not run in a lock-free device callback. Source review
 alone does not close task 1's runtime gate: the wrapper, attribution,
-consumer-clock feedback and deterministic drift tests remain to be done.
+consumer-clock feedback and deterministic drift tests are now implemented.
+The bounded adapter feeds the source's 64-frame blocks and preserves its
+continuous interpolation. Both signs of 500 ppm pass a simulated hour with
+zero underflows/overflows. This closes the offline runtime gate; hardware
+listening and long-session acceptance remain separate.
 
 - [x] Tee exactly one successful master drain before speaker volume/mute.
   Preallocate bounded storage with nonblocking producer admission; use an
@@ -376,10 +380,10 @@ consumer-clock feedback and deterministic drift tests remain to be done.
   higher-rate stereo settings during listening; report actual channels,
   packet bandwidth, bytes and CPU. Do not reinterpret the old mono benchmark
   as a measured stereo result.
-- [ ] Add bounded ordering/jitter, Opus loss concealment and continuous clock
+- [x] Add bounded ordering/jitter, Opus loss concealment and continuous clock
   correction with preserved interpolation state. Start near the design's
   180 ms receive-buffer target; make timing injectable for tests.
-- [ ] Drive a client playback bus independently of local RadioModel DSP.
+- [x] Drive a client playback bus independently of local RadioModel DSP.
   Local output trim/mute must work, mute flushes queued samples, and encoding
   suspension is a session operation. Resume starts a fresh audio generation.
 - [ ] Sample-rate, mode, band and slice transitions preserve a 48 kHz mixed
@@ -443,11 +447,11 @@ whole-plan review loops.
 | --- | --- | --- |
 | R2 baseline | Preserved rollback checkpoint `14124e7c` | Authenticated control/tuning/meter baseline retained; installed runtime advanced to `ea55d24a` |
 | Combined open-PR recovery | Complete source checkpoint `14124e7c` | GUI/Core build and unfiltered 662/662 desktop tests pass; fixture-path workaround recorded separately |
-| Native combined Core | Installed at signed `74145a4b`, with `3c4b15e6` rollback | Native build/stage/install passed; previous checkpoint has authenticated display and live Clarity evidence; initial live applet meter movement verified; [verification ledger](2026-09-20-remote-daemon-r3-verification/README.md) |
+| Native combined Core | Installed at signed `04da2aab`, with `74145a4b` rollback | Native build/stage/install passed; previous checkpoint has authenticated display and live Clarity evidence; initial live applet meter movement verified; [verification ledger](2026-09-20-remote-daemon-r3-verification/README.md) |
 | Plan review and mixed-stereo choice | Lead, recorded | Current review; user confirmed mixed stereo and Opus |
 | Direct media transport | Production adapter and MediaPeer integrated | Real encrypted peers, bounded callbacks, stop/restart/delete regressions pass; live display capture passes: Ethernet, 969-byte maximum IP packet; separate SRTP-size proof pending |
 | Headless FFT and display codec | Implemented and component-tested | Independent Wide/Fine sources, retune input reset, independent planes, crop clamp, bounded codec and recovery tests pass; authenticated daemon-to-GUI regression and live Saturn display pass |
-| Audio | Opus/RTP and mixed-audio capture tests pass | Stereo wideband 24/48 kbit/s packet checks, mixer gain/mute/pan, bounded capture timestamps and retirement pass; sender, jitter, adaptive clock correction and playback remain pending |
+| Audio | Sender, encrypted session, jitter, adaptive clock correction and playback implemented; focused checks pass | Both 500 ppm directions pass one simulated hour, large device callbacks and bursts pass, encrypted mute/resume/reconnect passes; 681/681 full suite passed; native installation and stereo listening next |
 | GUI media wiring | Desktop builds; initial focused checks pass | Dedicated reduced-frame renderer and authenticated subscription controller tested; two-pane, shared-window and reconnect regressions pass; live GPU spectrum/2D observed; operator 3D confirmation and gesture refinement pending |
 | Applet S-meter | Implemented, 673/673 suite passed; Core and GUI running | Live needle movement and applet/active-flag agreement observed on Saturn; all-mode/longer acceptance pending |
 | BPF and Auto AGC-T indicators | Source implementation and focused tests pass | R-R3-14/15: station filter snapshot/reconnect, headless per-stream AGC source, active-applet/flag bindings; live deployment acceptance pending |

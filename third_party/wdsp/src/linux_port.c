@@ -25,8 +25,16 @@ john.d.melton@googlemail.com
 
 */
 
+// NereusSDR modification history:
+//   2026-09-21 — Make macOS semaphore names process-unique and unlink them
+//                immediately after creation so concurrent NereusSDR/Qt test
+//                processes cannot collide in the POSIX semaphore namespace.
+//                J.J. Boyd (KG4VCF), with AI assistance from OpenAI Codex.
+
 #include "linux_port.h"
 #include "comm.h"
+
+#include <errno.h>
 
 /********************************************************************************************************
 *													*
@@ -93,14 +101,43 @@ int LinuxWaitForSingleObject(sem_t *sem,int ms) {
 sem_t *LinuxCreateSemaphore(int attributes,int initial_count,int maximum_count,char *name) {
         sem_t *sem;
 #ifdef __APPLE__
-        //DL1YCF
+	//DL1YCF
 	//This routine is invoked with name=NULL several times, so we have to make
 	//a unique name of tpye WDSPxxxxx for each invocation.
-	static int semcount=0;
-	char sname[12];
-        sprintf(sname,"WDSP%05d",semcount++);
-	sem_unlink(sname);
-        sem=sem_open(sname, O_CREAT | O_EXCL, 0700, initial_count);
+	// NereusSDR: macOS only provides named process-shared semaphores.  The
+	// upstream process-local WDSPxxxxx counter collides when independent
+	// NereusSDR processes create WDSP channels concurrently: both can unlink
+	// the name before either sem_open(O_EXCL), leaving one with SEM_FAILED.
+	// Include the PID, serialize this process's counter, and unlink a
+	// successful semaphore immediately.  POSIX keeps the object alive until
+	// CloseHandle's sem_close while removing its cross-process namespace.
+	static pthread_mutex_t semname_mutex = PTHREAD_MUTEX_INITIALIZER;
+	static unsigned int semcount = 0;
+	char sname[32];
+	int attempts;
+
+	sem = SEM_FAILED;
+	pthread_mutex_lock(&semname_mutex);
+	for (attempts = 0; attempts < 16; ++attempts)
+	{
+		const unsigned int sequence = semcount++;
+		const int length = snprintf(sname, sizeof(sname), "/wdsp-%ld-%u",
+			(long)getpid(), sequence);
+		if (length < 0 || (size_t)length >= sizeof(sname))
+		{
+			errno = ENAMETOOLONG;
+			break;
+		}
+		sem = sem_open(sname, O_CREAT | O_EXCL, 0700, initial_count);
+		if (sem != SEM_FAILED)
+		{
+			sem_unlink(sname);
+			break;
+		}
+		if (errno != EEXIST)
+			break;
+	}
+	pthread_mutex_unlock(&semname_mutex);
 	if (sem == SEM_FAILED) {
 	  perror("WDSP:CreateSemaphore");
 	}

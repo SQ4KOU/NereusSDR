@@ -2,6 +2,8 @@
 #include "core/audio/PortAudioBus.h"
 #include <portaudio.h>
 
+#include <cmath>
+
 using namespace NereusSDR;
 
 class TstPortAudioBus : public QObject {
@@ -173,6 +175,102 @@ private slots:
         // have had capacity for it or Pa_OpenStream would have failed.
         QCOMPARE(bus.negotiatedFormat().channels, 2);
         bus.close();
+    }
+
+    void outputPacingTracksActualCallbackDrainAndUnderrun() {
+        PortAudioBus bus;
+        bus.m_cfg.direction = AudioDirection::Output;
+        bus.m_negFormat = AudioFormat{48000, 2, AudioFormat::Sample::Float32};
+        bus.m_ring[0] = 0.1f;
+        bus.m_ring[1] = 0.2f;
+        bus.m_ring[2] = 0.3f;
+        bus.m_ring[3] = 0.4f;
+        bus.m_ring[4] = 0.5f;
+        bus.m_ring[5] = 0.6f;
+        bus.m_ring[6] = 0.7f;
+        bus.m_ring[7] = 0.8f;
+        bus.m_ringRead.store(0, std::memory_order_relaxed);
+        bus.m_ringWrite.store(8, std::memory_order_relaxed);
+
+        auto pacing = bus.outputPacing();
+        QVERIFY(pacing.has_value());
+        QCOMPARE(pacing->consumedFrames, quint64(0));
+        QCOMPARE(pacing->queuedFrames, 4);
+        QCOMPARE(pacing->capacityFrames, static_cast<int>(bus.m_ring.size() / 2));
+
+        float first[4] = {};
+        QCOMPARE(PortAudioBus::paCallback(nullptr, first, 2, nullptr, 0, &bus), paContinue);
+        QCOMPARE(first[0], 0.1f);
+        QCOMPARE(first[3], 0.4f);
+        pacing = bus.outputPacing();
+        QCOMPARE(pacing->consumedFrames, quint64(2));
+        QCOMPARE(pacing->queuedFrames, 2);
+
+        float second[4] = {};
+        QCOMPARE(PortAudioBus::paCallback(nullptr, second, 2, nullptr, 0, &bus), paContinue);
+        QCOMPARE(second[0], 0.5f);
+        QCOMPARE(second[3], 0.8f);
+
+        float underrun[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+        QCOMPARE(PortAudioBus::paCallback(nullptr, underrun, 2, nullptr, 0, &bus), paContinue);
+        for (float sample : underrun) {
+            QCOMPARE(sample, 0.0f);
+        }
+        pacing = bus.outputPacing();
+        QCOMPARE(pacing->consumedFrames, quint64(6));
+        QCOMPARE(pacing->queuedFrames, 0);
+        QCOMPARE(pacing->capacityFrames, static_cast<int>(bus.m_ring.size() / 2));
+    }
+
+    void outputFlushFloorSurvivesStaleCallbackPublication() {
+        PortAudioBus bus;
+        bus.m_cfg.direction = AudioDirection::Output;
+        bus.m_negFormat = AudioFormat{48000, 2, AudioFormat::Sample::Float32};
+        bus.m_ring[0] = 0.25f;
+        bus.m_ring[1] = -0.25f;
+        bus.m_ring[2] = 0.25f;
+        bus.m_ring[3] = -0.25f;
+        bus.m_ring[4] = 0.25f;
+        bus.m_ring[5] = -0.25f;
+        bus.m_ring[6] = 0.25f;
+        bus.m_ring[7] = -0.25f;
+        bus.m_ringRead.store(0, std::memory_order_relaxed);
+        bus.m_ringWrite.store(8, std::memory_order_relaxed);
+
+        bus.flush();
+        auto pacing = bus.outputPacing();
+        QVERIFY(pacing.has_value());
+        QCOMPARE(pacing->queuedFrames, 0);
+
+        // Models a callback that loaded read=0 before flush and publishes
+        // that stale position later. The discard floor remains authoritative.
+        bus.m_ringRead.store(0, std::memory_order_release);
+        pacing = bus.outputPacing();
+        QCOMPARE(pacing->queuedFrames, 0);
+
+        float discarded[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+        QCOMPARE(PortAudioBus::paCallback(nullptr, discarded, 2, nullptr, 0, &bus), paContinue);
+        for (float sample : discarded) {
+            QCOMPARE(sample, 0.0f);
+        }
+        QCOMPARE(bus.m_ringRead.load(std::memory_order_acquire), qint64(8));
+
+        // New audio after the flush may ramp from silence, but none of the
+        // discarded 0.25/-0.25 samples may reappear.
+        bus.m_ring[8] = 0.75f;
+        bus.m_ring[9] = -0.75f;
+        bus.m_ring[10] = 0.75f;
+        bus.m_ring[11] = -0.75f;
+        bus.m_ringWrite.store(12, std::memory_order_release);
+        float fresh[4] = {};
+        QCOMPARE(PortAudioBus::paCallback(nullptr, fresh, 2, nullptr, 0, &bus), paContinue);
+        for (float sample : fresh) {
+            QVERIFY(std::abs(sample) < 0.02f);
+            QVERIFY(std::abs(std::abs(sample) - 0.25f) > 0.10f);
+        }
+        pacing = bus.outputPacing();
+        QCOMPARE(pacing->consumedFrames, quint64(4));
+        QCOMPARE(pacing->queuedFrames, 0);
     }
 };
 

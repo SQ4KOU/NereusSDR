@@ -270,6 +270,18 @@ bool PortAudioBus::open(const AudioFormat& format) {
         close();
     }
 
+    // No callback can run until Pa_StartStream below. A fresh open starts
+    // with no queued audio or stale device-clock/discard state.
+    m_ringRead.store(0, std::memory_order_relaxed);
+    m_ringWrite.store(0, std::memory_order_relaxed);
+    m_outputDiscardBefore.store(0, std::memory_order_relaxed);
+    m_outputConsumedFrames.store(0, std::memory_order_relaxed);
+    m_outputCallbackFrames.store(0, std::memory_order_relaxed);
+    m_lastOutL = 0.0f;
+    m_lastOutR = 0.0f;
+    m_crossfadeFramesRem = 0;
+    m_resumeAfterDiscard = false;
+
     const bool wantOutput = (m_cfg.direction == AudioDirection::Output);
 
     PaStreamParameters params;
@@ -448,18 +460,28 @@ bool PortAudioBus::open(const AudioFormat& format) {
 }
 
 void PortAudioBus::close() {
-    if (!m_stream) {
-        return;
+    if (m_stream) {
+        Pa_StopStream(m_stream);
+        Pa_CloseStream(m_stream);
+        m_stream = nullptr;
     }
-    Pa_StopStream(m_stream);
-    Pa_CloseStream(m_stream);
-    m_stream = nullptr;
     // Release the input resampler + its scratch buffer.  Safe here
     // because Pa_StopStream above has joined the audio thread, so no
     // more paCallback invocations can be in flight.
     m_inputResampler.reset();
     m_resampleScratch.clear();
     m_nativeSampleRate = 0;
+    // Pa_StopStream joins the callback before this reset. Reopening must not
+    // inherit queued output, a prior discard floor, or device consumption.
+    m_ringRead.store(0, std::memory_order_relaxed);
+    m_ringWrite.store(0, std::memory_order_relaxed);
+    m_outputDiscardBefore.store(0, std::memory_order_relaxed);
+    m_outputConsumedFrames.store(0, std::memory_order_relaxed);
+    m_outputCallbackFrames.store(0, std::memory_order_relaxed);
+    m_lastOutL = 0.0f;
+    m_lastOutR = 0.0f;
+    m_crossfadeFramesRem = 0;
+    m_resumeAfterDiscard = false;
     // Cumulative drop / underrun / PA-flag counters remain queryable
     // via ringOverrunEvents() / ringOverrunSamples() /
     // ringUnderrunEvents() and the m_paOutputUnderflowEvents /
@@ -483,7 +505,9 @@ qint64 PortAudioBus::push(const char* data, qint64 bytes) {
     // paCallback detects the same condition on its next entry and skips
     // forward to the oldest still-valid sample.  Counting the event here
     // gives diagnostics a single producer-side perspective.
-    const qint64 readPos = m_ringRead.load(std::memory_order_acquire);
+    const qint64 publishedRead = m_ringRead.load(std::memory_order_acquire);
+    const qint64 discardBefore = m_outputDiscardBefore.load(std::memory_order_acquire);
+    const qint64 readPos = std::max(publishedRead, discardBefore);
     const qint64 afterWrite = w + floatCount;
     if (afterWrite - readPos > ringSize) {
         m_dropEvents.fetch_add(1, std::memory_order_relaxed);
@@ -515,27 +539,52 @@ void PortAudioBus::flush() {
     // path) want unread captured samples dropped.  In both modes the
     // operation is the same: equalize read/write cursors atomically.
     //
-    // Race with the audio thread:
-    //  - Output mode: paCallback advances m_ringRead; push() advances
-    //    m_ringWrite.  If we set ringRead := ringWrite atomically, the
-    //    callback may have JUST advanced ringRead one tick before our
-    //    store; the store still leaves r ≤ w, so the next callback
-    //    iteration reads `r < w` as false and outputs silence.  No
-    //    torn-read window.
-    //  - Input mode: paCallback advances m_ringWrite; pull() advances
-    //    m_ringRead.  Symmetric reasoning applies.
-    //
-    // No mutex needed — the cursors are std::atomic<qint64> and the
-    // single store is sequenced after the load by acquire/release
-    // ordering.  The PortAudio device's own internal output buffer
-    // (~5–20 ms latency on Core Audio / WASAPI) still plays its
-    // already-handed-off samples; that's below the threshold of
-    // perception and outside this layer's reach.
-    if (!m_stream) {
+    // Output mode cannot write m_ringRead here: an in-flight callback owns
+    // that cursor and could later publish an older value. Instead publish a
+    // monotonic absolute floor. Every callback and pacing observation clamps
+    // its read position to this floor, including after a stale publication.
+    // Input retains the established equalize-cursors behavior.
+    if (m_ring.empty()) {
         return;
     }
     const qint64 w = m_ringWrite.load(std::memory_order_acquire);
+    if (m_cfg.direction == AudioDirection::Output) {
+        qint64 floor = m_outputDiscardBefore.load(std::memory_order_acquire);
+        while (floor < w
+               && !m_outputDiscardBefore.compare_exchange_weak(
+                   floor, w, std::memory_order_release, std::memory_order_acquire)) {
+        }
+        return;
+    }
+    if (!m_stream) {
+        return;
+    }
     m_ringRead.store(w, std::memory_order_release);
+}
+
+std::optional<IAudioBus::OutputPacing> PortAudioBus::outputPacing() const
+{
+    if (m_cfg.direction != AudioDirection::Output || m_ring.empty()
+        || m_negFormat.channels <= 0) {
+        return std::nullopt;
+    }
+
+    const qint64 ringSamples = static_cast<qint64>(m_ring.size());
+    const int channels = m_negFormat.channels;
+    const qint64 publishedRead = m_ringRead.load(std::memory_order_acquire);
+    const qint64 discardBefore = m_outputDiscardBefore.load(std::memory_order_acquire);
+    const qint64 effectiveRead = std::max(publishedRead, discardBefore);
+    const qint64 write = m_ringWrite.load(std::memory_order_acquire);
+    const qint64 unreadSamples = std::clamp(write - effectiveRead,
+                                             qint64{0}, ringSamples);
+
+    OutputPacing pacing;
+    pacing.consumedFrames = m_outputConsumedFrames.load(std::memory_order_acquire);
+    pacing.queuedFrames = static_cast<int>(unreadSamples / channels);
+    pacing.capacityFrames = static_cast<int>(ringSamples / channels);
+    pacing.callbackFrames = std::max(m_cfg.bufferSamples,
+        m_outputCallbackFrames.load(std::memory_order_acquire));
+    return pacing;
 }
 
 qint64 PortAudioBus::pull(char* data, qint64 maxBytes) {
@@ -592,6 +641,19 @@ int PortAudioBus::paCallback(const void* in, void* out,
 
         qint64 r = self->m_ringRead.load(std::memory_order_relaxed);
         const qint64 w = self->m_ringWrite.load(std::memory_order_acquire);
+        const qint64 discardBefore = self->m_outputDiscardBefore.load(
+            std::memory_order_acquire);
+        bool discarded = false;
+        if (r < discardBefore) {
+            r = discardBefore;
+            discarded = true;
+        }
+        const int previousQuantum = self->m_outputCallbackFrames.load(std::memory_order_relaxed);
+        if (frames > static_cast<unsigned long>(previousQuantum)) {
+            self->m_outputCallbackFrames.store(static_cast<int>(frames), std::memory_order_release);
+        }
+        self->m_outputConsumedFrames.fetch_add(
+            static_cast<quint64>(frames), std::memory_order_relaxed);
 
         // 2026-05-26 KG4VCF perf instrumentation: report the ring fill
         // level (ms of unread audio still in the producer->consumer
@@ -602,7 +664,7 @@ int PortAudioBus::paCallback(const void* in, void* out,
         // toward 0 we are about to underrun even when paOutputUnderflow
         // is still 0.
         {
-            const qint64 fillSamples = w - r;  // total samples (interleaved)
+            const qint64 fillSamples = std::clamp(w - r, qint64{0}, ringSize);
             const int    rateHz      = self->m_negFormat.sampleRate;
             const int    fillChans   = self->m_negFormat.channels;
             if (rateHz > 0 && fillChans > 0) {
@@ -639,6 +701,15 @@ int PortAudioBus::paCallback(const void* in, void* out,
         float lastL = self->m_lastOutL;
         float lastR = self->m_lastOutR;
         int crossfadeRem = self->m_crossfadeFramesRem;
+        bool resumeAfterDiscard = self->m_resumeAfterDiscard;
+        if (discarded) {
+            // Never crossfade flushed samples back out. A later first fresh
+            // sample receives the normal zero-to-signal ramp below.
+            lastL = 0.0f;
+            lastR = 0.0f;
+            crossfadeRem = 0;
+            resumeAfterDiscard = true;
+        }
         if (startCrossfade && crossfadeRem == 0) {
             crossfadeRem = kCrossfadeFrames;
         }
@@ -661,9 +732,10 @@ int PortAudioBus::paCallback(const void* in, void* out,
                 // Underrun-to-resume edge: start a fresh crossfade to
                 // bring the listener gently from silence (or stale
                 // last-sample) up to the live signal.
-                if (wasUnderrun && crossfadeRem == 0) {
+                if ((wasUnderrun || resumeAfterDiscard) && crossfadeRem == 0) {
                     crossfadeRem = kCrossfadeFrames;
                 }
+                resumeAfterDiscard = false;
                 wasUnderrun = false;
             } else {
                 target = 0.0f;  // underrun -> silence (with crossfade below)
@@ -691,10 +763,23 @@ int PortAudioBus::paCallback(const void* in, void* out,
             }
             last = o[i];
         }
+        // A flush may have raced this callback after its initial floor
+        // observation. Clamp again before publication so this callback never
+        // makes the logical read position precede the discard boundary.
+        const qint64 finalDiscardBefore = self->m_outputDiscardBefore.load(
+            std::memory_order_acquire);
+        if (r < finalDiscardBefore) {
+            r = finalDiscardBefore;
+            lastL = 0.0f;
+            lastR = 0.0f;
+            crossfadeRem = 0;
+            resumeAfterDiscard = true;
+        }
         self->m_ringRead.store(r, std::memory_order_release);
         self->m_lastOutL = lastL;
         self->m_lastOutR = lastR;
         self->m_crossfadeFramesRem = crossfadeRem;
+        self->m_resumeAfterDiscard = resumeAfterDiscard;
     } else {
         // Input mode: read captured samples from `in`, write to ring,
         // update m_txLevel (the audio here is destined for transmit).

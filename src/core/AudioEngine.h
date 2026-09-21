@@ -302,6 +302,15 @@ public:
     // see addendum §2.1 "intra-control only" wording.
     // Handlers may synchronously call setSpeakersConfig (mutex is released before emit).
     void setSpeakersConfig(const AudioDeviceConfig& cfg);
+
+    // Remote RX playback owns only the existing speakers bus. The caller must
+    // stop/join its playback worker before this AudioEngine is destroyed.
+    // Begin/end run on the owner thread; pacing/write are worker-safe.
+    bool beginRemotePlayback(QString* error = nullptr);
+    void endRemotePlayback();
+    std::optional<IAudioBus::OutputPacing> remotePlaybackPacing();
+    bool writeRemotePlayback(const QVector<float>& stereo);
+
     void setHeadphonesConfig(const AudioDeviceConfig& cfg);
     void setTxInputConfig(const AudioDeviceConfig& cfg);
 
@@ -762,6 +771,7 @@ private:
     std::mutex m_speakersBusMutex;
 
     std::unique_ptr<IAudioBus> m_speakersBus;
+    bool m_remotePlayback{false}; // protected by m_speakersBusMutex
     std::unique_ptr<IAudioBus> m_headphonesBus;
     std::unique_ptr<IAudioBus> m_txInputBus;
 

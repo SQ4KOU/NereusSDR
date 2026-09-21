@@ -861,6 +861,7 @@ private:
     // forward-declared pointer so this header stays free of the session
     // stack (StationClient.h drags in the whole message codec).
     class StationClient* m_stationClient{nullptr};
+    class RemoteMediaController* m_remoteMedia{nullptr};
     bool m_stationDisconnectRequested{false};
 
     // Phase 3M-4 Task 8: PsForm modeless dialog (Tools > PureSignal...).

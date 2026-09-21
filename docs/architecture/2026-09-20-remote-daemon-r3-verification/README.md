@@ -5,19 +5,22 @@ and real remote receive acceptance. A component pass does not close R3.
 
 ## Current receive status, September 21
 
-Core remains at `74145a4b`; the running GUI is now `73fcccfe`, with live
-Radio/Disconnect and Radio/Connect verified against the Rock's wired address
-without relaunching. Spectrum, waterfall and matching applet/slice meter
-readings recovered. The earlier GUI reopening after Mac unlock established
-initial live applet meter movement. The previous
-checkpoint has authenticated Core control, live spectrum/2D waterfall,
-station display calibration and Clarity floor-input evidence below. The
-meter correction passed 673/673 tests and native installation; full meter-mode
-and longer-session acceptance remains open. Clarity's saved black-level/palette
-adjustment and subjective comparison also remain pending. Remote audio playback, BPF/WIDE
-indicator bindings, Auto AGC-T visuals, capacity/long-run acceptance and R5
-internet traversal are still unfinished. Earlier sections record evidence
-at their named checkpoints; their then-pending items are not current status.
+Core is installed at signed receive checkpoint `04da2aab`; the running GUI
+remains `73fcccfe` while the combined audio candidate is verified. Core now
+publishes BPF/WIDE state and independent Auto AGC-T measurements. Their GUI
+bindings pass source/session checks; live visual acceptance awaits the new
+GUI. Existing live spectrum, waterfall, Clarity inputs, applet/slice meters
+and menu-driven Core reconnect have been demonstrated at earlier checkpoints.
+
+The mixed stereo Opus sender, encrypted session control, bounded jitter,
+continuous WDSP rate matching and client playback are implemented. Focused
+checks pass, including a simulated hour in each direction at 500 ppm, large
+speaker callbacks, packet bursts, mute/resume and encrypted reconnect. Full
+suite, native audio installation and actual listening are the next gates.
+The Mac is now remote/on VPN; that existing connection is not R5 traversal.
+Capacity, two-hour hardware audio soak, Clarity's subjective comparison and
+R5 internet traversal remain open. Earlier sections retain checkpoint-specific
+evidence and should not be read as the current installation state.
 
 ## Combined baseline, 14124e7c
 
@@ -559,3 +562,79 @@ No new binary is installed at this source checkpoint. Core remains
 the Saturn/Rock/Mac path remains pending. These changes do not close R3's
 audio, capacity or long-run acceptance gates. Task 5 audio integration is
 continuing after the receive-binding implementation.
+
+
+## Receive deployment and audio integration progress, September 21
+
+Signed receive checkpoint `04da2aab` was built natively and installed on
+ROCK 5C at 10:20 EDT. Both `nereusd` and NereusCore were staged with licences.
+The rollback copy is `rollback-74145a4b-before-04da2aab`. Service checks
+reported active/running, zero restarts and exit status zero; the existing
+GUI re-established its session automatically. The previous GUI binary does
+not yet display the new filter and Auto AGC properties, so visual acceptance
+awaits the combined GUI update.
+
+The first combined audio build completed. Six of eight focused tests passed:
+Opus codec, actual mixer-to-sender, audio session controls, jitter ordering,
+PortAudio device pacing/flush, and existing GUI display lifecycle. Two failures
+were investigated before deployment:
+
+- The 1-hour drift gate found 20,202 underflows for the first tested clock
+  direction. WDSP's feedback windows count calls; direct 1,920-frame input and
+  480-frame output exposed only 125 calls/second. A separate probe using the
+  source's native 64-frame blocks and unchanged WDSP defaults had zero
+  under/overflows in both drift directions for 300 simulated seconds. The
+  bounded 64-frame adapter subsequently passed the full-hour gate in both
+  directions with zero rate-matcher underflows or overflows (104.83 seconds
+  wall time for both simulations).
+- A less-than-0.1 channel-correlation assertion was incompatible with the
+  approved lossy 24 kbit/s Opus profile. A direct pinned-codec probe measured
+  correlation 0.1042 and 23.5/27.5 dB tone isolation for 997/1703 Hz L/R inputs,
+  reproducing the playback result. The receiver test now requires at least
+  18 dB intended-channel isolation and nonzero channel energy. That check
+  passed. The same direct probe at 48 kbit/s measured about 64-71 dB isolation;
+  actual listening comparison is still pending, and the default is unchanged.
+
+Consolidated audio review identified two integration defects: a fixed 960-frame
+speaker target could not cover supported 1,024/2,048-frame callbacks, and a
+three-packet arrival burst could overflow the rate matcher. Corrections now
+report the actual/configured callback quantum and cover it when replenishing;
+jitter release waits for room in the rate matcher. Explicit diagnostics reject
+silent under/overflow repair. Large-callback and 3/8-packet burst tests pass (5.31 seconds). Larger
+speaker queues retain the same initial rate-matcher reserve; the 480, 1,024
+and 2,048-frame callback cases pass without rate-matcher under/overflow.
+The real DTLS/SRTP two-controller test also passes (2.48 seconds), including
+stereo tones from the actual master mixer, local mute without changing slice
+mix settings, fresh resume context and session disconnect/reconnect. Its
+isolation checks compare the same tone across the two channels, preserving
+the distinct per-slice gains. These are automated fixtures, not physical
+speaker listening. Audio has not yet been installed or accepted on hardware.
+
+
+The first rebuilt 681-test full run found three failures. The clock simulation
+exceeded the general 120-second timeout under parallel load; its dedicated
+limit is now 180 seconds without reducing either hour of simulated samples.
+Two existing real-channel tests crashed after `WDSP:CreateSemaphore: File
+exists`. Both crash reports traced to the macOS compatibility layer's
+process-local semaphore names colliding between concurrently running test
+processes. The narrow correction uses process-unique names and immediately
+unlinks successful named semaphores; it changes no DSP calculation. Focused
+concurrent regression and the final complete rerun are recorded below when
+finished. No audio installation is accepted on the basis of this failed run.
+
+
+## Combined audio software gate, September 21
+
+The semaphore collision reproduced before the correction; the same concurrent
+pair passed afterward. A rebuilt unfiltered full suite then passed **681/681,
+zero failed and zero skipped**, in **136.57 seconds**. The continuous clock
+test completed in 136.55 seconds under the parallel workload, retaining both
+simulated hours and zero-underflow/overflow assertions. The GUI target built
+successfully. Detailed build/test logs are in the maintainer's private work
+directory as `r3-audio-final-{build,test}.log`.
+
+The earlier repeated real-device stress run passed 18 test invocations before
+a later PortAudio reopen hung; the exact concurrent regression and the final
+whole suite passed. This does not establish unlimited physical-device
+reopen/close stress acceptance. Hardware audio listening, native CPU/bandwidth
+measurement and the two-hour live soak remain pending at this source gate.

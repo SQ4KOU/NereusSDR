@@ -33,6 +33,7 @@ namespace NereusSDR { class Resampler; }
 typedef void PaStream;
 struct PaDeviceInfo;
 struct PaStreamCallbackTimeInfo;
+class TstPortAudioBus;
 
 namespace NereusSDR {
 
@@ -89,6 +90,7 @@ public:
     qint64 push(const char* data, qint64 bytes) override;
     qint64 pull(char* data, qint64 maxBytes) override;
     void   flush() override;
+    std::optional<OutputPacing> outputPacing() const override;
 
     float rxLevel() const override { return m_rxLevel.load(std::memory_order_acquire); }
     float txLevel() const override { return m_txLevel.load(std::memory_order_acquire); }
@@ -152,6 +154,8 @@ public:
                              int channels, float* out, int outCapacity);
 
 private:
+    friend class ::TstPortAudioBus;
+
     PaStream*       m_stream{nullptr};
     PortAudioConfig m_cfg;
     AudioFormat     m_negFormat;
@@ -205,6 +209,13 @@ private:
     std::atomic<qint64> m_ringRead{0};
     std::atomic<qint64> m_ringWrite{0};
 
+    // Output flushes publish an absolute sample position below which audio
+    // is permanently discarded. Only the callback writes m_ringRead, so an
+    // in-flight callback cannot resurrect flushed audio with a stale store.
+    std::atomic<qint64> m_outputDiscardBefore{0};
+    std::atomic<quint64> m_outputConsumedFrames{0};
+    std::atomic<int> m_outputCallbackFrames{0};
+
     std::atomic<float> m_rxLevel{0.0f};
     std::atomic<float> m_txLevel{0.0f};
 
@@ -240,6 +251,7 @@ private:
     float m_lastOutL{0.0f};
     float m_lastOutR{0.0f};
     int   m_crossfadeFramesRem{0};
+    bool  m_resumeAfterDiscard{false};
 
     static int paCallback(const void* in, void* out,
                           unsigned long frames,

@@ -6804,6 +6804,15 @@ nereus_add_test(tst_opus_audio_codec)
 # Remote Daemon R3 audio source: bounded master-mix delivery and synchronous
 # tap retirement across an admitted DSP callback.
 nereus_add_test(tst_daemon_audio_source)
+nereus_add_test(tst_daemon_audio_sender)
+nereus_add_test(tst_audio_jitter_buffer)
+nereus_add_test(tst_remote_audio_clock)
+# Two simulated hours of continuous interpolation take ~105 s in isolation;
+# allow parallel-suite scheduling headroom without shortening the drift gate.
+set_tests_properties(tst_remote_audio_clock PROPERTIES TIMEOUT 180)
+nereus_add_test(tst_daemon_audio_session fakes/LoopbackTransport.cpp)
+nereus_add_test(tst_remote_audio_receiver)
+nereus_add_test(tst_remote_audio_session fakes/LoopbackTransport.cpp)
 
 # Remote Daemon R3, Task 3: bounded native trace, waterfall, and DSS codec.
 nereus_add_test(tst_display_codec)

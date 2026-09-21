@@ -59,6 +59,17 @@ struct OpusRtpDecodeResult {
     OpusPacketInfo packetInfo;
 };
 
+struct OpusRtpInspection {
+    OpusAudioCodecStatus status {OpusAudioCodecStatus::InvalidInput};
+    quint16 sequence {0};
+    quint32 timestamp {0};
+    OpusPacketInfo packetInfo;
+};
+
+// Validates the same RTP/profile boundary as decodeRtp without advancing
+// decoder history, so packets can be ordered before decoding.
+OpusRtpInspection inspectOpusRtp(const QByteArray& packet, quint32 expectedSsrc);
+
 /// RAII encoder for the approved 48 kHz, stereo, 40 ms AUDIO/MUSIC profile.
 /// Caller owns the RTP sequence, timestamp, and SSRC/session generation.
 class OpusAudioEncoder {

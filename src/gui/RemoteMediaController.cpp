@@ -2,6 +2,8 @@
 
 #include "gui/RemoteMediaController.h"
 #include "core/AppSettings.h"
+#include "core/AudioEngine.h"
+#include "core/session/media/RemoteAudioReceiver.h"
 #include "core/ClarityController.h"
 #include "core/FFTEngine.h"
 #include "core/session/StationClient.h"
@@ -146,6 +148,13 @@ struct RemoteMediaController::Private {
     quint32 epoch = 0;
     quint32 nextEndpoint = 1;
     quint64 frames = 0;
+    std::unique_ptr<RemoteAudioReceiver> audio;
+    quint32 audioRevision = 0;
+    quint32 audioGeneration = 0;
+    bool preparingAudio = false;
+    bool audioEnabled = false;
+    bool audioRetryPending = false;
+    qint64 lastAudioRequestMs = -1000;
 };
 
 RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* model,
@@ -157,6 +166,38 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
     d->stack = stack;
     d->factory = std::move(factory);
     d->clock.start();
+    d->audio = std::make_unique<RemoteAudioReceiver>(model->audioEngine());
+    connect(d->audio.get(), &RemoteAudioReceiver::errorOccurred, this, [this](const QString& reason) {
+        d->audioEnabled = false;
+        d->audio->stop();
+        if (d->peer && d->peer->isReady()) {
+            ++d->audioRevision;
+            if (!d->audioRevision) { ++d->audioRevision; }
+            send({{QStringLiteral("op"), QStringLiteral("audio")},
+                  {QStringLiteral("revision"), double(d->audioRevision)},
+                  {QStringLiteral("enabled"), false}});
+        }
+        emit errorOccurred(reason);
+    });
+    connect(d->audio.get(), &RemoteAudioReceiver::restartRequested, this, [this](const QString& reason) {
+        qCWarning(lcRemoteMedia) << reason;
+        d->audio->stop();
+        if (d->audioRetryPending) { return; }
+        d->audioRetryPending = true;
+        const QString connection = d->connectionId;
+        const quint32 revision = d->audioRevision;
+        const int delay = int(std::max<qint64>(0, 1000 - (d->clock.elapsed() - d->lastAudioRequestMs)));
+        QTimer::singleShot(delay, this, [this, connection, revision] {
+            if (connection != d->connectionId || revision != d->audioRevision) { return; }
+            d->audioRetryPending = false;
+            requestAudio();
+        });
+    });
+    connect(model->audioEngine(), &AudioEngine::masterMutedChanged,
+            this, &RemoteMediaController::requestAudio);
+    connect(model->audioEngine(), &AudioEngine::speakersConfigChanged, this, [this] {
+        if (!d->preparingAudio) { requestAudio(); }
+    });
     d->timer = new QTimer(this);
     d->timer->setInterval(100);
     connect(d->timer, &QTimer::timeout, this, &RemoteMediaController::refreshSubscriptions);
@@ -180,8 +221,10 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
                 if (binding.widget) { binding.widget->clearRemoteSpectrum(); }
             }
             d->bindings.clear();
+            requestAudio();
         } else {
             refreshSubscriptions();
+            requestAudio();
         }
     });
     if (client && client->mediaAvailable()) {
@@ -196,6 +239,11 @@ int RemoteMediaController::activeEndpointCount() const { return int(d->bindings.
 void RemoteMediaController::stop()
 {
     d->timer->stop();
+    d->audio->stop();
+    d->audioEnabled = false;
+    d->audioRetryPending = false;
+    d->audioRevision = 0;
+    d->audioGeneration = 0;
     d->connectionId.clear();
     if (d->peer) {
         MediaPeer* old = d->peer;
@@ -233,10 +281,14 @@ void RemoteMediaController::start()
     connect(peer, &MediaPeer::displayReceived, this, [this, current](const QByteArray& packet) {
         if (current()) { receiveDisplay(packet); }
     });
+    connect(peer, &MediaPeer::rtpReceived, this, [this, current](const QByteArray& packet) {
+        if (current() && d->audioEnabled) { d->audio->submit(packet); }
+    });
     connect(peer, &MediaPeer::ready, this, [this, current] {
         if (current()) {
             d->timer->start();
             refreshSubscriptions();
+            requestAudio();
         }
     });
     connect(peer, &MediaPeer::closed, this, [this, current] {
@@ -341,11 +393,50 @@ void RemoteMediaController::refreshSubscriptions()
     }
 }
 
+void RemoteMediaController::requestAudio()
+{
+    d->audio->stop();
+    d->audioEnabled = false;
+    d->audioRetryPending = false;
+    if (!d->peer || !d->peer->isReady() || !d->model || !d->client
+        || !d->client->mediaAvailable()) { return; }
+    ++d->audioRevision;
+    if (!d->audioRevision) { ++d->audioRevision; }
+    d->lastAudioRequestMs = d->clock.elapsed();
+    const bool enabled = d->model->isConnected() && !d->model->audioEngine()->masterMuted();
+    send({{QStringLiteral("op"), QStringLiteral("audio")},
+          {QStringLiteral("revision"), double(d->audioRevision)},
+          {QStringLiteral("enabled"), enabled}});
+}
+
 void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 epoch)
 {
     if (!d->client || !d->client->mediaAvailable() || epoch != d->epoch
         || !d->peer || payload.value(QStringLiteral("connectionId")) != d->connectionId) { return; }
     const QString op = payload.value(QStringLiteral("op")).toString();
+    if (op == QLatin1String("audio-context")) {
+        quint32 revision = 0, generation = 0, ssrc = 0;
+        double sequence = 0, timestamp = 0;
+        if (payload.size() != 8 || !uint32(payload, "revision", revision)
+            || revision != d->audioRevision || !uint32(payload, "generation", generation)
+            || !newer(generation, d->audioGeneration) || !uint32(payload, "ssrc", ssrc)
+            || ssrc != d->peer->audioSsrc() || !payload.value(QStringLiteral("enabled")).isBool()
+            || !number(payload, "firstSequence", 0, 65535, sequence, true)
+            || !number(payload, "firstTimestamp", 0, 4294967295.0, timestamp, true)) { return; }
+        d->audioGeneration = generation;
+        d->audio->stop();
+        d->audioEnabled = false;
+        if (payload.value(QStringLiteral("enabled")).toBool() && d->model
+            && d->model->isConnected() && !d->model->audioEngine()->masterMuted()) {
+            d->preparingAudio = true;
+            d->audioEnabled = d->audio->start(ssrc, static_cast<quint32>(timestamp));
+            d->preparingAudio = false;
+            if (d->audioEnabled) {
+                qCInfo(lcRemoteMedia) << "Remote audio receiving: 48 kHz stereo Opus, context" << generation;
+            }
+        }
+        return;
+    }
     if (op == QLatin1String("description") || op == QLatin1String("candidate")) {
         d->peer->acceptControl(payload);
         return;

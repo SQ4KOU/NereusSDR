@@ -13,6 +13,8 @@
 
 #include <QString>
 
+#include <optional>
+
 namespace NereusSDR {
 
 struct AudioFormat {
@@ -28,6 +30,13 @@ struct AudioFormat {
 
 class IAudioBus {
 public:
+    struct OutputPacing {
+        quint64 consumedFrames = 0;
+        int queuedFrames = 0;
+        int capacityFrames = 0;
+        int callbackFrames = 0; // largest/configured output callback quantum
+    };
+
     virtual ~IAudioBus() = default;
 
     // Lifecycle. open() returns false on failure; errorString() has details.
@@ -47,9 +56,16 @@ public:
     // AudioEngine::setMasterMuted to stop already-buffered pre-mute audio
     // from draining out the speakers device after the mute click — see
     // issue #201.  Default no-op for buses without an internal ring (HAL
-    // shm, PipeWire, FIFO).  PortAudioBus overrides to atomically equalize
-    // its ring read/write cursors.  Safe to call from any thread.
+    // shm, PipeWire, FIFO). PortAudioBus uses a monotonic output discard
+    // floor so an in-flight device callback cannot republish stale reads.
+    // Safe to call from any thread.
     virtual void flush() {}
+
+    // Output-device pacing observation. A receiver worker uses this only to
+    // replenish a physical-output queue after real callback consumption; it
+    // must not estimate device time from its own timer cadence. Unsupported
+    // buses return nullopt.
+    virtual std::optional<OutputPacing> outputPacing() const { return std::nullopt; }
 
     // Metering (RMS of last block). 0.0–1.0. Published atomically for UI.
     virtual float rxLevel() const = 0;

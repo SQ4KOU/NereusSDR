@@ -394,6 +394,9 @@ Discovery-reply hex fixtures are covered by `tests/fixtures/discovery/README.md`
 | third_party/wdsp/src/iqc.c | Project Files/Source/wdsp/iqc.c | full | port | thetis-no-samphire | Vendored verbatim from Thetis v2.10.3.13 @ 501e3f5 for Phase 3M-4 Task 2 (PureSignal iqc adaptive-predistortion driver) — TAPR v1.29 has no calcc/iqc. NR0V (Warren Pratt) only — no Samphire contributions or dual-license block. |
 | third_party/wdsp/src/iqc.h | Project Files/Source/wdsp/iqc.h | full | port | thetis-no-samphire | Vendored alongside iqc.c (Phase 3M-4 Task 2). Header mirrors iqc.c. NR0V only. |
 
+| src/core/session/media/RemoteAudioRateMatcher.h | Project Files/Source/ChannelMaster/ivac.c; Project Files/Source/wdsp/rmatch.h | 34-45; 145-168; 254; 117-139 | wrapper | thetis-no-samphire | Remote daemon R3 Task 5 worker-only 48 kHz stereo rmatchOUT public boundary. Declares the fixed 48 kHz stereo worker API and direct rmatch diagnostics projection. Caller must pace take() from actual output-device consumed/queued frames, never a timer. Ported from Thetis v2.10.3.15 @ 3759d09. |
+| src/core/session/media/RemoteAudioRateMatcher.cpp | Project Files/Source/ChannelMaster/ivac.c; Project Files/Source/ChannelMaster/cmsetup.c; Project Files/Source/wdsp/rmatch.h; Project Files/Source/wdsp/rmatch.c | 34-45; 104-111; 145-168; 254; 117-139; 132-144; 469-526 | wrapper | thetis-no-samphire | Preserves IVAC rmatchOUT call ordering, Thetis's 64-frame 48 kHz buffer quantum, rmatch API declarations, and rmatch.c's sizing bounds. Bounded input/output carries bridge public packet/device dimensions to unchanged WDSP 64-frame calls; reported fill includes an unreturned native output suffix. All adaptive ratio/interpolation/filter/phase state remains in the existing vendored rmatch/varsamp dependency. Ported from Thetis v2.10.3.15 @ 3759d09. |
+
 ## Files derived from TAPR WDSP
 
 Vendored in `third_party/wdsp/` with upstream TAPR/OpenHPSDR-wdsp license

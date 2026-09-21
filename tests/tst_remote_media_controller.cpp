@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include "core/AppSettings.h"
+#include "core/AudioEngine.h"
 #include "core/ClarityController.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
@@ -105,6 +106,7 @@ private slots:
                 return sourceMedia;
             });
         RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true); // Display fixture opens no speaker.
         ClarityController clarity;
         remote.setClarityController(&clarity);
         const auto detachClarity = qScopeGuard([&] { remote.setClarityController(nullptr); });
@@ -239,6 +241,7 @@ private slots:
         StationServer server(&station, settings, dir.path());
         server.setMediaEnabled(true);
         RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true); // Display fixture opens no speaker.
         ClarityController clarity;
         remote.setClarityController(&clarity);
         const auto detachClarity = qScopeGuard([&] { remote.setClarityController(nullptr); });

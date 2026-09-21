@@ -36,6 +36,7 @@ private:
     void receiveControl(const QJsonObject& payload, quint32 epoch);
     void receiveDisplay(const QByteArray& packet);
     void requestKeyframe(quint32 endpointId);
+    void requestAudio();
     bool send(QJsonObject payload);
 };
 } // namespace NereusSDR

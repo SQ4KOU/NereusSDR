@@ -912,7 +912,13 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent)
     }
 }
 
-MainWindow::~MainWindow() = default;
+MainWindow::~MainWindow()
+{
+    // Join remote playback before QObject destroys the earlier-created
+    // RadioModel child and its speaker AudioEngine.
+    delete m_remoteMedia;
+    m_remoteMedia = nullptr;
+}
 
 // ---------------------------------------------------------------------------
 // Remote-daemon R2 Task 20: bring up the wss session.
@@ -959,9 +965,9 @@ void MainWindow::connectToStation()
         m_stationClient = new StationClient(m_radioModel, proxy, this);
         connect(m_stationClient, &StationClient::connectionActivityChanged,
                 this, &MainWindow::applyRemoteRoleGating);
-        auto* media = new RemoteMediaController(m_stationClient, m_radioModel,
+        m_remoteMedia = new RemoteMediaController(m_stationClient, m_radioModel,
                                                m_panStack, m_stationClient);
-        connect(media, &RemoteMediaController::errorOccurred, this, [this](const QString& reason) {
+        connect(m_remoteMedia, &RemoteMediaController::errorOccurred, this, [this](const QString& reason) {
             qCWarning(lcConnection) << "Station media:" << reason;
             showToast(tr("Station media: %1").arg(reason), ToastSeverity::Warning, 5000);
         });

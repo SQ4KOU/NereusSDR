@@ -138,6 +138,26 @@ bool validPacketInfo(const OpusPacketInfo& info)
 
 } // namespace
 
+OpusRtpInspection inspectOpusRtp(const QByteArray& packet, quint32 expectedSsrc)
+{
+    OpusRtpInspection result;
+    ParsedRtp parsed;
+    result.status = parseRtp(packet, parsed);
+    if (result.status != OpusAudioCodecStatus::Accepted) { return result; }
+    if (parsed.ssrc != expectedSsrc) {
+        result.status = OpusAudioCodecStatus::UnexpectedSsrc;
+        return result;
+    }
+    result.packetInfo = packetInfo(parsed.payload);
+    if (!validPacketInfo(result.packetInfo)) {
+        result.status = OpusAudioCodecStatus::MalformedRtp;
+        return result;
+    }
+    result.sequence = parsed.sequence;
+    result.timestamp = parsed.timestamp;
+    return result;
+}
+
 struct OpusAudioEncoder::State {
     OpusEncoder* encoder {nullptr};
     OpusAudioCodecConfig config;

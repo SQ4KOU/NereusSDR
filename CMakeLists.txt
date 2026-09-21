@@ -949,6 +949,10 @@ set(CORE_SOURCES
     src/core/session/media/DaemonMediaController.cpp
     # R3 bounded bridge from the AudioEngine master mix to daemon media.
     src/core/session/media/DaemonAudioSource.cpp
+    src/core/session/media/DaemonAudioSender.cpp
+    src/core/session/media/AudioJitterBuffer.cpp
+    src/core/session/media/RemoteAudioRateMatcher.cpp
+    src/core/session/media/RemoteAudioReceiver.cpp
     # R1 Task 7: consumer-to-stream subscription set extracted from the
     # router-mutation half of MainWindow::rebuildFftRouting. Rebuilds an
     # FFTRouter from its own subscription set on demand, so the daemon can

@@ -455,7 +455,11 @@ void AudioEngine::stop()
     // runs there. The same contract covers the destructor path (~unique_ptr
     // → ~LinuxPipeBus → close()). The CoreAudioHalBus / PortAudioBus dtors
     // have no main-thread requirement.
-    m_speakersBus.reset();
+    {
+        std::lock_guard<std::mutex> lock(m_speakersBusMutex);
+        m_remotePlayback = false;
+        m_speakersBus.reset();
+    }
     m_headphonesBus.reset();
     m_txInputBus.reset();
     // Reset VAX TX before iterating m_vaxBus so the close ordering is
@@ -849,6 +853,66 @@ void AudioEngine::ensureTxInputOpen()
     } else {
         qCWarning(lcAudio) << "TX input bus open failed — mic level meter inert";
     }
+}
+
+bool AudioEngine::beginRemotePlayback(QString* error)
+{
+    if (m_running) {
+        if (error) { *error = QStringLiteral("Local DSP already owns speaker playback"); }
+        return false;
+    }
+    // No remote worker exists yet. This may emit speakersConfigChanged, so
+    // do not hold the bus mutex across opening or that notification.
+    ensureSpeakersOpen();
+    std::lock_guard<std::mutex> lock(m_speakersBusMutex);
+    if (!m_speakersBus || !m_speakersBus->isOpen()) {
+        if (error) { *error = QStringLiteral("Could not open the selected speaker device"); }
+        return false;
+    }
+    const AudioFormat format = m_speakersBus->negotiatedFormat();
+    if (format.sampleRate != kMasterMixSampleRateHz || format.channels != 2
+        || format.sample != AudioFormat::Sample::Float32 || !m_speakersBus->outputPacing()) {
+        if (error) { *error = QStringLiteral("Remote audio requires a 48 kHz stereo speaker device with playback timing"); }
+        return false;
+    }
+    m_speakersBus->flush();
+    m_remotePlayback = true;
+    return true;
+}
+
+void AudioEngine::endRemotePlayback()
+{
+    std::lock_guard<std::mutex> lock(m_speakersBusMutex);
+    m_remotePlayback = false;
+    if (m_speakersBus) { m_speakersBus->flush(); }
+}
+
+std::optional<IAudioBus::OutputPacing> AudioEngine::remotePlaybackPacing()
+{
+    std::lock_guard<std::mutex> lock(m_speakersBusMutex);
+    if (!m_remotePlayback || !m_speakersBus || !m_speakersBus->isOpen()
+        || m_speakersBus->negotiatedFormat() != AudioFormat{}) { return std::nullopt; }
+    return m_speakersBus->outputPacing();
+}
+
+bool AudioEngine::writeRemotePlayback(const QVector<float>& stereo)
+{
+    // Bounded worker-side scratch; never called by the device callback.
+    if (stereo.size() != 480 * 2) { return false; }
+    std::array<float, 480 * 2> scaled;
+    const float gain = m_masterVolume.load(std::memory_order_acquire);
+    for (qsizetype i = 0; i < stereo.size(); ++i) {
+        if (!std::isfinite(stereo[i])) { return false; }
+        scaled[static_cast<size_t>(i)] = stereo[i] * gain;
+    }
+    std::lock_guard<std::mutex> lock(m_speakersBusMutex);
+    if (!m_remotePlayback || !m_speakersBus || !m_speakersBus->isOpen()
+        || m_speakersBus->negotiatedFormat() != AudioFormat{}) { return false; }
+    if (m_masterMuted.load(std::memory_order_acquire)) { return true; }
+    const auto pacing = m_speakersBus->outputPacing();
+    if (!pacing || pacing->capacityFrames - pacing->queuedFrames < 480) { return false; }
+    const auto bytes = static_cast<qint64>(sizeof(scaled));
+    return m_speakersBus->push(reinterpret_cast<const char*>(scaled.data()), bytes) == bytes;
 }
 
 void AudioEngine::setSpeakersConfig(const AudioDeviceConfig& cfg)

@@ -8,6 +8,7 @@
 
 #include "core/FFTEngine.h"
 #include "core/session/StationServer.h"
+#include "core/session/media/DaemonAudioSender.h"
 #include "core/session/media/MediaPeer.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -289,8 +290,16 @@ void DaemonMediaController::onSessionEnded(quint64 epoch)
 void DaemonMediaController::onRadioConnectionStateChanged(ConnectionState state)
 {
     if (state != ConnectionState::Connected) {
+        // Keep the accepted intent, but retire the capture bridge before any
+        // display or peer lifecycle can tear down the station's audio graph.
+        stopAudioCapture();
+        if (m_audioRevision != 0) {
+            sendAudioContext(false);
+        }
         clearProduction();
+        return;
     }
+    reconcileAudio();
 }
 
 void DaemonMediaController::onControl(const QJsonObject& control, quint64 epoch)
@@ -304,6 +313,7 @@ void DaemonMediaController::onControl(const QJsonObject& control, quint64 epoch)
     if (op == QLatin1String("subscribe")) { handleSubscribe(control); return; }
     if (op == QLatin1String("unsubscribe")) { handleUnsubscribe(control); return; }
     if (op == QLatin1String("keyframe")) { handleKeyframe(control); return; }
+    if (op == QLatin1String("audio")) { handleAudio(control); return; }
     acceptPeerControl(control);
 }
 
@@ -332,6 +342,11 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
     connect(peer, &MediaPeer::closed, this, [this, peer, peerEpoch]() {
         if (m_peer.get() == peer && m_epoch == peerEpoch) {
             clearSession();
+        }
+    });
+    connect(peer, &MediaPeer::ready, this, [this, peer, peerEpoch]() {
+        if (m_peer.get() == peer && m_epoch == peerEpoch) {
+            reconcileAudio();
         }
     });
     if (!peer->start(IMediaTransport::Role::Offerer, connectionId)) {
@@ -522,6 +537,27 @@ bool DaemonMediaController::handleKeyframe(const QJsonObject& control)
     }
     ++it->second.keyframesInWindow;
     it->second.forceKeyframe = true;
+    return true;
+}
+
+bool DaemonMediaController::handleAudio(const QJsonObject& control)
+{
+    quint32 revision = 0;
+    if (!exactKeys(control, {"op", "connectionId", "revision", "enabled"})
+        || !m_peer
+        || !canonicalConnectionId(control.value(QStringLiteral("connectionId")))
+        || control.value(QStringLiteral("connectionId")).toString() != m_peer->connectionId()
+        || !exactUnsigned(control.value(QStringLiteral("revision")), revision, true)
+        || !control.value(QStringLiteral("enabled")).isBool()
+        || (m_audioRevision != 0 && staleOrEqualRevision(revision, m_audioRevision))) {
+        return false;
+    }
+
+    m_audioRevision = revision;
+    m_audioDesiredEnabled = control.value(QStringLiteral("enabled")).toBool();
+    // An accepted control is a fresh audio context even if it leaves actual
+    // capture unavailable pending peer readiness or station reconnect.
+    reconcileAudio();
     return true;
 }
 
@@ -892,12 +928,90 @@ void DaemonMediaController::onSliceRemoved(int sliceId)
     }
 }
 
+void DaemonMediaController::reconcileAudio()
+{
+    // Every accepted control and every readiness transition begins by
+    // flushing bounded captured PCM.  The saved next values preserve RTP
+    // ordering across false/true contexts for this same MediaPeer.
+    stopAudioCapture();
+    const bool shouldRun = m_audioDesiredEnabled && m_peer && m_peer->isReady()
+        && m_radioModel && m_radioModel->isConnected();
+    bool actualEnabled = false;
+    if (shouldRun) {
+        if (!m_audioSender) {
+            m_audioSender = std::make_unique<DaemonAudioSender>(m_radioModel->audioEngine());
+            DaemonAudioSender* const sender = m_audioSender.get();
+            connect(sender, &DaemonAudioSender::packetReady, this,
+                    [this, sender](const QByteArray& packet) {
+                // packetReady is emitted by the sender's owner thread.  The
+                // identity checks make a stopped/retired session unable to
+                // forward a late signal to a replacement peer.
+                if (m_audioSender.get() == sender && sender->isRunning()
+                    && m_epoch != 0 && m_peer && m_peer->isReady()) {
+                    m_peer->sendRtp(packet);
+                }
+            });
+        }
+        actualEnabled = m_audioSender->start(m_peer->audioSsrc(), m_audioNextSequence,
+                                              m_audioNextTimestamp);
+        if (actualEnabled) {
+            m_audioNextSequence = m_audioSender->nextSequence();
+            m_audioNextTimestamp = m_audioSender->nextTimestamp();
+        }
+    }
+    sendAudioContext(actualEnabled);
+}
+
+void DaemonMediaController::stopAudioCapture()
+{
+    if (!m_audioSender) {
+        return;
+    }
+    // Sender advances timestamp over every consumed block, including an
+    // encode failure; retaining both fields before stop preserves the next
+    // audio-context boundary across a pause or reconnect.
+    m_audioNextSequence = m_audioSender->nextSequence();
+    m_audioNextTimestamp = m_audioSender->nextTimestamp();
+    m_audioSender->stop();
+}
+
+void DaemonMediaController::sendAudioContext(bool enabled)
+{
+    if (!m_peer || m_audioRevision == 0) {
+        return;
+    }
+    sendControl({
+        {QStringLiteral("op"), QStringLiteral("audio-context")},
+        {QStringLiteral("connectionId"), m_peer->connectionId()},
+        {QStringLiteral("revision"), static_cast<qint64>(m_audioRevision)},
+        {QStringLiteral("generation"), static_cast<qint64>(nextContextGeneration())},
+        {QStringLiteral("enabled"), enabled},
+        {QStringLiteral("ssrc"), static_cast<qint64>(m_peer->audioSsrc())},
+        {QStringLiteral("firstSequence"), static_cast<qint64>(m_audioNextSequence)},
+        {QStringLiteral("firstTimestamp"), static_cast<qint64>(m_audioNextTimestamp)},
+    });
+}
+
+void DaemonMediaController::resetAudioSession()
+{
+    stopAudioCapture();
+    m_audioDesiredEnabled = false;
+    m_audioRevision = 0;
+    // A different MediaPeer has a different SSRC identity, so it may start
+    // a new RTP timeline. Existing peers always retain the saved values.
+    m_audioNextSequence = 1;
+    m_audioNextTimestamp = 0;
+}
+
 void DaemonMediaController::clearSession()
 {
     // Detach and move ownership before stop(): MediaPeer::stop() can emit
     // closed synchronously. Its callbacks are identity/epoch guarded, but
     // disconnecting them too prevents recursive clearSession() and deletion
     // of the peer while it is emitting one of its own signals.
+    // Sender remains owned by this controller; stop its timer/capture while
+    // the current peer is still identifiable, then retire the peer.
+    resetAudioSession();
     std::unique_ptr<MediaPeer> peer = std::move(m_peer);
     if (peer) {
         peer->disconnect(this);

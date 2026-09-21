@@ -25,6 +25,7 @@ namespace NereusSDR {
 
 class RadioModel;
 class StationServer;
+class DaemonAudioSender;
 enum class ConnectionState;
 
 /// Owns one authenticated daemon media session: strict control validation,
@@ -61,6 +62,7 @@ private:
     bool handleSubscribe(const QJsonObject& control);
     bool handleUnsubscribe(const QJsonObject& control);
     bool handleKeyframe(const QJsonObject& control);
+    bool handleAudio(const QJsonObject& control);
     bool acceptPeerControl(const QJsonObject& control);
 
     void clearSession();
@@ -75,6 +77,10 @@ private:
                                                double stationOffsetDb);
     void sendRejected(const QString& connectionId, quint32 endpointId,
                       quint32 revision, const QString& reason);
+    void reconcileAudio();
+    void stopAudioCapture();
+    void sendAudioContext(bool enabled);
+    void resetAudioSession();
     bool sendControl(const QJsonObject& payload) const;
     quint32 nextContextGeneration();
 
@@ -84,11 +90,16 @@ private:
     NoiseFloorEstimator m_noiseFloorEstimator;
     MediaPeer::TransportFactory m_peerFactory;
     std::unique_ptr<MediaPeer> m_peer;
+    std::unique_ptr<DaemonAudioSender> m_audioSender;
     std::map<quint32, EndpointEntry> m_endpoints;
     QMap<MediaSourceKey, SourceRuntime> m_sources;
     QTimer m_sendTimer;
     quint64 m_epoch{0};
     quint32 m_nextContextGeneration{0};
+    quint32 m_audioRevision{0};
+    quint16 m_audioNextSequence{1};
+    quint32 m_audioNextTimestamp{0};
+    bool m_audioDesiredEnabled{false};
     int m_roundRobinCursor{0};
 };
 
