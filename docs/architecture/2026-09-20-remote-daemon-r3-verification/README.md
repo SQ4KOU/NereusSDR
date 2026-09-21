@@ -719,3 +719,28 @@ The rebuilt source, sender, daemon session, receiver and real encrypted session
 tests all passed (5/5, 4.86 seconds). Full-suite and native installation results
 will be recorded after the signed correction is built. The live diagnostic's
 temporary-disabled-context handling is included in this correction.
+
+
+## Installed packet-grid correction, 5c24eda0
+
+The rebuilt unfiltered suite passed **681/681, zero failed/skipped**, in
+101.49 seconds; both simulated one-hour drift cases remain intact. Native
+ARM build and staged daemon/licence installation passed. Core `5c24eda0`
+replaced `0123d8e1` at approximately 12:01:50 EDT, preserving a rollback at
+`/var/lib/nereus-build/rollback-0123d8e1-before-5c24eda0`. Service result and
+exit status are successful with zero restarts. The existing `8a23f8f7` GUI
+automatically reconnected.
+
+A three-minute wired capture contains 4,242 SRTP packets over 179.213 seconds:
+4,220 timestamp steps of 1,920 frames and 21 of 3,840, with **no off-grid
+steps**, continuous sequence numbers and zero kernel capture drops. Median
+spacing is 40.076 ms; the maximum 215.140 ms includes the reconnect phase.
+The capture confirms the source correction. Playback is still **not accepted**:
+initial watchdog resets continued until about 12:02:15, followed by a
+62-second context before a rate-matcher underflow and later arrival-queue
+bursts. Client restart diagnostics are being added to distinguish input
+arrival stalls from consumer scheduling and clock behavior.
+
+A 10-second one-pan live sample measured Core at 61.9% of one CPU core,
+138,916 KiB resident memory and 47.153 degrees C. This is an observation
+under the current receiver configuration, not four-pan capacity evidence.

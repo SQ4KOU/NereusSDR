@@ -32,6 +32,7 @@ struct RemoteAudioReceiver::Private {
     std::atomic<quint64> concealed{0};
     std::atomic<int> underflows{0};
     std::atomic<int> overflows{0};
+    std::atomic<quint64> rejectedHeaders{0};
     bool overflow = false; // under mutex
     quint32 ssrc = 0;
     quint64 generation = 0; // owner thread only
@@ -75,6 +76,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
     d->concealed.store(0);
     d->underflows.store(0);
     d->overflows.store(0);
+    d->rejectedHeaders.store(0);
     d->running.store(true);
     const quint64 generation = d->generation;
     d->worker = std::jthread([this, ssrc, firstTimestamp, generation](std::stop_token stop) {
@@ -82,12 +84,36 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
         jitter.reset(firstTimestamp);
         OpusAudioDecoder decoder;
         RemoteAudioRateMatcher matcher;
-        const auto notify = [this, generation](const QString& reason, bool fatal = false) {
+        const qint64 startedAt = monotonicNs();
+        qint64 lastPacket = startedAt;
+        qint64 previousArrival = 0;
+        qint64 maxArrivalGap = 0;
+        qint64 previousWake = startedAt;
+        qint64 maxWakeGap = 0;
+        quint64 accepted = 0, late = 0, invalid = 0, duplicate = 0;
+        const auto notify = [&](const QString& reason, bool fatal = false) {
             d->running.store(false);
-            QMetaObject::invokeMethod(this, [this, generation, reason, fatal] {
+            const auto stats = matcher.stats();
+            const auto pacing = d->engine->remotePlaybackPacing();
+            const qint64 now = monotonicNs();
+            // Bounded, restart-only diagnostics distinguish capture/network
+            // loss from a stalled consumer without logging media or secrets.
+            const QString detail = reason + QStringLiteral(
+                " [ageMs=%1 accepted=%2 decoded=%3 plc=%4 late=%5 invalid=%6 duplicate=%7"
+                " rejectedHeaders=%8 lastPacketMs=%9 maxArrivalGapMs=%10 maxWakeGapMs=%11"
+                " jitterPackets=%12 ratio=%13 fill=%14 callback=%15 deviceQueued=%16]")
+                .arg((now - startedAt) / 1'000'000).arg(accepted)
+                .arg(d->decoded.load()).arg(d->concealed.load()).arg(late).arg(invalid)
+                .arg(duplicate).arg(d->rejectedHeaders.load())
+                .arg((now - lastPacket) / 1'000'000).arg(maxArrivalGap / 1'000'000)
+                .arg(maxWakeGap / 1'000'000).arg(jitter.queuedPackets())
+                .arg(stats.currentRatio, 0, 'f', 7).arg(stats.ringFillFrames)
+                .arg(pacing ? pacing->callbackFrames : 0)
+                .arg(pacing ? pacing->queuedFrames : 0);
+            QMetaObject::invokeMethod(this, [this, generation, detail, fatal] {
                 if (d->generation != generation) { return; }
-                if (fatal) { emit errorOccurred(reason); }
-                else { emit restartRequested(reason); }
+                if (fatal) { emit errorOccurred(detail); }
+                else { emit restartRequested(detail); }
             }, Qt::QueuedConnection);
         };
         const auto initialPacing = d->engine->remotePlaybackPacing();
@@ -110,7 +136,6 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
             notify(QStringLiteral("Could not initialize the remote audio decoder or rate matcher"), true);
             return;
         }
-        qint64 lastPacket = monotonicNs();
         bool playing = false;
         quint64 lastDeviceFrames = 0;
         qint64 lastDeviceProgress = lastPacket;
@@ -127,17 +152,33 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
                 d->overflow = false;
             }
             if (stop.stop_requested()) { break; }
+            const qint64 wakeAt = monotonicNs();
+            maxWakeGap = std::max(maxWakeGap, wakeAt - previousWake);
+            previousWake = wakeAt;
             if (overflow) {
                 notify(QStringLiteral("Remote audio arrival queue exceeded its latency bound"));
                 return;
             }
             for (const auto& packet : incoming) {
+                if (previousArrival != 0) {
+                    maxArrivalGap = std::max(maxArrivalGap, packet.arrival - previousArrival);
+                }
+                previousArrival = packet.arrival;
                 const auto admitted = jitter.insert(packet.bytes, packet.timestamp, packet.arrival);
                 if (admitted == AudioJitterBuffer::Admission::OutsideWindow) {
                     notify(QStringLiteral("Remote audio needs a fresh context after a stream gap"));
                     return;
                 }
-                if (admitted == AudioJitterBuffer::Admission::Accepted) { lastPacket = packet.arrival; }
+                switch (admitted) {
+                case AudioJitterBuffer::Admission::Accepted:
+                    ++accepted;
+                    lastPacket = packet.arrival;
+                    break;
+                case AudioJitterBuffer::Admission::Late: ++late; break;
+                case AudioJitterBuffer::Admission::Invalid: ++invalid; break;
+                case AudioJitterBuffer::Admission::Duplicate: ++duplicate; break;
+                case AudioJitterBuffer::Admission::OutsideWindow: break;
+                }
             }
             const qint64 now = monotonicNs();
             if (now - lastPacket > 500'000'000) {
@@ -217,7 +258,10 @@ void RemoteAudioReceiver::submit(const QByteArray& packet)
 {
     if (!isRunning()) { return; }
     const auto header = inspectOpusRtp(packet, d->ssrc);
-    if (header.status != OpusAudioCodecStatus::Accepted) { return; }
+    if (header.status != OpusAudioCodecStatus::Accepted) {
+        ++d->rejectedHeaders;
+        return;
+    }
     {
         std::lock_guard<std::mutex> lock(d->mutex);
         if (d->incoming.size() >= AudioJitterBuffer::kMaxPackets) { d->overflow = true; }

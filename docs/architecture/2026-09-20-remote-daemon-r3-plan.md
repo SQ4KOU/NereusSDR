@@ -170,7 +170,7 @@ verification record under `docs/architecture/2026-09-20-remote-daemon-r3-verific
   encrypted loopback peers without an external STUN service. Stop/recreate
   peers, and capture packet sizes with the configured MTU. A small application
   payload alone does not prove the UDP-size requirement.
-- [ ] Validate a continuously adjustable resampling implementation from an
+- [x] Validate a continuously adjustable resampling implementation from an
   existing source, preserving phase/history across ratio changes. Inspect the
   existing WDSP variable-rate path before proposing a new dependency. Record
   exact source and API; do not use periodic ring flushes as drift correction.
@@ -447,12 +447,12 @@ whole-plan review loops.
 | --- | --- | --- |
 | R2 baseline | Preserved rollback checkpoint `14124e7c` | Authenticated control/tuning/meter baseline retained; installed runtime advanced to `ea55d24a` |
 | Combined open-PR recovery | Complete source checkpoint `14124e7c` | GUI/Core build and unfiltered 662/662 desktop tests pass; fixture-path workaround recorded separately |
-| Native combined Core | Installed at signed `04da2aab`, with `74145a4b` rollback | Native build/stage/install passed; previous checkpoint has authenticated display and live Clarity evidence; initial live applet meter movement verified; [verification ledger](2026-09-20-remote-daemon-r3-verification/README.md) |
+| Native combined Core | Installed at signed `5c24eda0`, with `0123d8e1` rollback | Native build/stage/install passed; live audio timestamp-grid correction verified; continued playback interruption investigation; [verification ledger](2026-09-20-remote-daemon-r3-verification/README.md) |
 | Plan review and mixed-stereo choice | Lead, recorded | Current review; user confirmed mixed stereo and Opus |
 | Direct media transport | Production adapter and MediaPeer integrated | Real encrypted peers, bounded callbacks, stop/restart/delete regressions pass; live display capture passes: Ethernet, 969-byte maximum IP packet; separate SRTP-size proof pending |
 | Headless FFT and display codec | Implemented and component-tested | Independent Wide/Fine sources, retune input reset, independent planes, crop clamp, bounded codec and recovery tests pass; authenticated daemon-to-GUI regression and live Saturn display pass |
-| Audio | Sender, encrypted session, jitter, adaptive clock correction and playback implemented; focused checks pass | Both 500 ppm directions pass one simulated hour, large device callbacks and bursts pass, encrypted mute/resume/reconnect passes; 681/681 full suite passed; native installation and stereo listening next |
+| Audio | First sound confirmed; sustained playback not yet accepted | Both 500 ppm directions pass one simulated hour; encrypted mute/resume/reconnect and 681/681 suite pass. Core `5c24eda0` fixes captured off-grid timestamps. Operator reports intermittent chop; remaining underflow/arrival bursts are under investigation. |
 | GUI media wiring | Desktop builds; initial focused checks pass | Dedicated reduced-frame renderer and authenticated subscription controller tested; two-pane, shared-window and reconnect regressions pass; live GPU spectrum/2D observed; operator 3D confirmation and gesture refinement pending |
 | Applet S-meter | Implemented, 673/673 suite passed; Core and GUI running | Live needle movement and applet/active-flag agreement observed on Saturn; all-mode/longer acceptance pending |
-| BPF and Auto AGC-T indicators | Source implementation and focused tests pass | R-R3-14/15: station filter snapshot/reconnect, headless per-stream AGC source, active-applet/flag bindings; live deployment acceptance pending |
+| BPF and Auto AGC-T indicators | Source implementation and focused tests pass | R-R3-14/15: station filter snapshot/reconnect, headless per-stream AGC source, active-applet/flag bindings implemented; live 20m filter and AGC floor observed, complete band/reconnect acceptance pending |
 | Manual Core reconnect | Implemented at signed `73fcccfe`; live menu round trip passed | R-R3-16; Disconnect removed the Core TCP link, Connect reauthenticated in the same GUI process, and spectrum/waterfall/meters recovered; Core remains `74145a4b` |
