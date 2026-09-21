@@ -1446,7 +1446,7 @@ void SpectrumWidget::updateSpectrumFromTxPixels(int receiverId,
     update();
 }
 
-void SpectrumWidget::clearRemoteSpectrum()
+void SpectrumWidget::invalidateRemoteSpectrumFrame()
 {
     m_remoteSpectrum = true;
     m_remoteCodec = {};
@@ -1462,17 +1462,32 @@ void SpectrumWidget::clearRemoteSpectrum()
     m_pendingWfPixelsDbmDirty = false;
     m_pendingRemoteWide.clear();
     m_lastFullBinsDbm.clear();
+    m_hasNewSpectrum = true;
+}
+
+void SpectrumWidget::clearRemoteSpectrum()
+{
+    invalidateRemoteSpectrumFrame();
     m_dss.clear();
     m_dssRowsPushed = 0;
     m_dssScrollProgressRows = 0.0f;
     clearWaterfallHistory();
-    m_hasNewSpectrum = true;
 }
 
 void SpectrumWidget::setRemoteSpectrumContext(const SpectrumEndpointContext& context,
                                                double sourceCentreHz, double sampleRateHz)
 {
-    clearRemoteSpectrum();
+    invalidateRemoteSpectrumFrame();
+    // NereusSDR-original remote wiring: a new codec generation retires live
+    // planes, not already-painted history. Core's accepted crop can differ
+    // from the requested view by FFT-bin alignment; use the existing local
+    // reprojection to keep the 2D rows at their original RF frequencies.
+    // 3D rows already retain their own centre/span in DssRenderer.
+    if (!qFuzzyCompare(m_centerHz, context.exactCentreHz)
+        || !qFuzzyCompare(m_bandwidthHz, context.exactSpanHz)) {
+        reprojectWaterfall(m_centerHz, m_bandwidthHz,
+                           context.exactCentreHz, context.exactSpanHz);
+    }
     m_remoteCodec = context.codec;
     m_remoteExactCentreHz = context.exactCentreHz;
     m_remoteExactSpanHz = context.exactSpanHz;

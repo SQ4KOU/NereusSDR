@@ -366,6 +366,10 @@ public:
     void setRemoteSpectrumContext(const SpectrumEndpointContext& context,
                                   double sourceCentreHz, double sampleRateHz);
     bool updateRemoteSpectrum(const DisplayCodecFrame& frame);
+    /// Retire incoming/pending planes while preserving painted RF history.
+    /// Used while renewing the same remote display binding; full retirement
+    /// (disconnect, replacement or rejection) uses clearRemoteSpectrum().
+    void invalidateRemoteSpectrumFrame();
     void clearRemoteSpectrum();
     void setCenterFrequency(double centerHz);
     double centerFrequency() const { return m_centerHz; }

@@ -264,6 +264,8 @@ private slots:
         const float savedLow = widget->wfLowThreshold();
         const float savedHigh = widget->wfHighThreshold();
         widget->setDisplayWindowPreservingHistory(14225000, 24000);
+        widget->setSpectrumRenderMode(int(SpectrumRenderMode::Mode3D));
+        widget->setWfUpdatePeriodMs(20);
         stack.resize(600, 400);
         stack.show();
         QVERIFY(QTest::qWaitForWindowExposed(&stack));
@@ -366,22 +368,54 @@ private slots:
         QCOMPARE(widget->renderedPixels().size(), 128);
         QVERIFY(std::abs(widget->renderedPixels().first() + 75) < 0.4);
         QVERIFY(std::abs(widget->wfRenderedPixels().first() + 125) < 0.4);
+        QTRY_COMPARE(widget->dssRowsPushedForTest(), 1);
         QTest::qWait(250);
         // Bin-aligned accepted geometry must not create a resubscribe loop.
         QCOMPARE(countControl(controls, QStringLiteral("subscribe")), 1);
+
+        // A regular tune must keep painted history even during the request/ACK
+        // gap. Old media is retired immediately; only the new generation paints.
+        widget->setCenterFrequency(widget->centerFrequency() + 500);
+        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 2);
+        QCOMPARE(widget->dssRowsPushedForTest(), 1);
+        QVERIFY(widget->renderedPixels().isEmpty());
+        media->deliver(packet);
+        QCOMPARE(frames.count(), 1);
+        const auto tuned = lastControl(controls, QStringLiteral("subscribe"));
+        context.insert(QStringLiteral("revision"), tuned.value(QStringLiteral("revision")));
+        context.insert(QStringLiteral("contextGeneration"), 2);
+        context.insert(QStringLiteral("centreHz"), widget->centerFrequency());
+        context.insert(QStringLiteral("spanHz"), widget->bandwidth());
+        const int contextsBefore = countControl(receivedControls, QStringLiteral("context"));
+        QVERIFY(server.sendMediaControl(context, server.mediaSessionEpoch()));
+        QTRY_COMPARE(countControl(receivedControls, QStringLiteral("context")), contextsBefore + 1);
+        QCOMPARE(widget->dssRowsPushedForTest(), 1);
+        media->deliver(packet);
+        QCOMPARE(frames.count(), 1);
+        frame.context.contextGeneration = 2;
+        media->deliver(encoder.encode(frame));
+        QCOMPARE(frames.count(), 2);
+        QTRY_COMPARE(widget->dssRowsPushedForTest(), 2);
+        noiseFloor.insert(QStringLiteral("revision"), tuned.value(QStringLiteral("revision")));
+        noiseFloor.insert(QStringLiteral("contextGeneration"), 2);
+        noiseFloor.insert(QStringLiteral("floorDbm"), -131);
+        deliverFloor(noiseFloor);
+        QCOMPARE(floors.size(), 2);
+
         widget->setDisplayWindowPreservingHistory(14425000, 24000);
         deliverFloor(noiseFloor); // A gesture retires old RF meaning before its ACK.
-        QCOMPARE(floors.size(), 1);
+        QCOMPARE(floors.size(), 2);
         applet->hide();
         QTRY_COMPARE(countControl(controls, QStringLiteral("unsubscribe")), 1);
         QCOMPARE(controller.activeEndpointCount(), 0);
         deliverFloor(noiseFloor);
-        QCOMPARE(floors.size(), 1);
+        QCOMPARE(floors.size(), 2);
         media->deliver(packet);
-        QCOMPARE(frames.count(), 1);
+        QCOMPARE(frames.count(), 2);
         client.disconnectFromStation(QStringLiteral("test complete"));
         QVERIFY(!media || !media->active);
         QVERIFY(widget->renderedPixels().isEmpty());
+        QCOMPARE(widget->dssRowsPushedForTest(), 0);
     }
 };
 QTEST_MAIN(TestRemoteMediaController)

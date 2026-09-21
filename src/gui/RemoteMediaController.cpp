@@ -385,7 +385,10 @@ void RemoteMediaController::refreshSubscriptions()
         binding.accepted = false;
         binding.rejected = false;
         binding.decoder.reset();
-        widget->clearRemoteSpectrum();
+        // A tune/zoom renews this binding's codec, not its painted history.
+        // New/replaced bindings were fully cleared above; rejection and
+        // session retirement still clear them through their lifecycle paths.
+        widget->invalidateRemoteSpectrumFrame();
         request.insert(QStringLiteral("op"), QStringLiteral("subscribe"));
         request.insert(QStringLiteral("endpointId"), double(id));
         request.insert(QStringLiteral("revision"), double(binding.revision));

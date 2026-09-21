@@ -791,3 +791,46 @@ for the Rock's link to return. A second read-only switch check still showed
 ether2 not running, with switch-recorded last link-down `2026-09-21 12:06:40`
 (the switch clock was not compared against the Mac). Remaining playback,
 long-soak and capacity gates stay open.
+
+## Tuning waterfall history regression
+
+The operator reported that both ordinary tuning and C-Tune wiped the
+waterfall. The remote client cleared all 2D/3D history when issuing a changed
+subscription and again when accepting Core's context. Local tuning already
+has its own history policy; renewing a remote codec must not add a full wipe.
+
+The correction separates invalidation of live/pending planes from full
+binding retirement. Subscription/context renewal preserves painted history,
+while disconnect, replacement and rejection retain their full-clear paths.
+Core's bin-aligned accepted geometry uses the existing local waterfall
+reprojection; 3D rows retain their recorded RF centre/span. Codec, revision,
+generation and view guards still reject obsolete incoming media. No Core
+source invalidation, DDC policy or DSP formula is changed.
+
+Before the correction, regressions failed for a fixed-view source retune,
+a small tuning move, the request/ACK interval and RF-aligned history. After
+the correction, the rebuilt renderer, authenticated media controller, 3D
+row tee and 3D ring tests passed **4/4 in 5.24 seconds**. The renderer checks
+actual 2D images/timestamps, 3D row RF identity, continued painting and old
+generation rejection. Full-suite and installed-GUI evidence follow below.
+Live tuning verification remains pending: both known Rock addresses still
+failed SSH reachability at this checkpoint.
+
+The rebuilt unfiltered suite passed **674/681**, with the same seven
+audio-device tests listed in the diagnostic checkpoint timing out, in
+157.89 seconds. This is not a full pass. After tightening the controller
+fixture to retain its post-tune Clarity gesture guard, that rebuilt test
+also passed. The production code was unchanged by that test-only follow-up.
+Private logs: `r3-tune-{red,green,full}-{build,test}.log` and
+`r3-tune-final-focused-{build,test}.log`.
+
+The source audit also identified a separate remote C-Tune control gap.
+MainWindow's C-Tune pan drag currently calls the client-local
+ReceiverManager; a Remote-role client has no wired radio connection, and
+its resulting `shiftOffsetHz` change is daemon-authoritative and is not
+forwarded. C-Tune pinning is also GUI-local. Ordinary `frequency` writes
+do reach Core. This is not evidence of a mislabelled Core FFT source, and
+the visual correction does not close C-Tune hardware-control parity.
+Follow-up needs an authenticated Core-owned pin/centre operation with
+shared-stream, bounds, reconnect and remote-inertness coverage, reusing
+the existing local allocator/receiver behavior.

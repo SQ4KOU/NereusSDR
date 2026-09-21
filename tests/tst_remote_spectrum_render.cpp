@@ -98,8 +98,43 @@ private slots:
                  < remote.dbmToY(stationCalibratedDbm, plot));
     }
 
-    void contextReplacementRejectsOldDataAndClearsHistory()
+    void acceptedGeometryReprojectsPaintedHistory()
     {
+        SpectrumWidget widget;
+        SpectrumEndpointContext context;
+        context.codec = {7, 1, -180, 0, 128, 128, 0};
+        context.exactCentreHz = 14225000;
+        context.exactSpanHz = 24000;
+        widget.setRemoteSpectrumContext(context, context.exactCentreHz, 192000);
+        // A previously painted RF marker at 14.225 MHz, in both 2D rings.
+        // At 50 Hz/pixel a 1 kHz view correction moves it 20 pixels left.
+        QImage painted(480, 2, QImage::Format_RGB32);
+        painted.fill(Qt::black);
+        painted.setPixel(240, 0, qRgb(255, 0, 0));
+        widget.m_waterfall = painted;
+        widget.m_waterfallHistory = painted;
+        widget.m_wfHistoryRowCount = 1;
+        widget.m_wfHistoryTimestamps = {1234, 0};
+        ++context.codec.contextGeneration;
+        context.exactCentreHz += 1000;
+        widget.setRemoteSpectrumContext(context, context.exactCentreHz, 192000);
+        QCOMPARE(widget.m_waterfall.pixel(220, 0), qRgb(255, 0, 0));
+        QCOMPARE(widget.m_waterfall.pixel(240, 0), qRgb(0, 0, 0));
+        QCOMPARE(widget.m_waterfallHistory, widget.m_waterfall);
+        QCOMPARE(widget.m_wfHistoryRowCount, 1);
+        QCOMPARE(widget.m_wfHistoryTimestamps, QVector<qint64>({1234, 0}));
+    }
+
+    void contextRenewalPreservesHistoryWhileRejectingOldData_data()
+    {
+        QTest::addColumn<bool>("moveView");
+        QTest::newRow("fixed-view-source-retune") << false;
+        QTest::newRow("small-view-tune") << true;
+    }
+
+    void contextRenewalPreservesHistoryWhileRejectingOldData()
+    {
+        QFETCH(bool, moveView);
         SpectrumWidget widget;
         widget.resize(500, 300);
         widget.show();
@@ -118,15 +153,31 @@ private slots:
         frame.waterfallAdvance = true;
         QVERIFY(widget.updateRemoteSpectrum(frame));
         QTRY_COMPARE(widget.dssRowsPushedForTest(), 1);
+        QCOMPARE(widget.m_wfHistoryRowCount, 1);
+        if (moveView) {
+            context.exactCentreHz += 500;
+            widget.setCenterFrequency(context.exactCentreHz);
+        }
+        const QImage paintedHistory = widget.m_waterfallHistory;
+        const QImage paintedViewport = widget.m_waterfall;
+        const auto timestamps = widget.m_wfHistoryTimestamps;
         ++context.codec.contextGeneration;
-        context.exactCentreHz += 100000;
-        widget.setRemoteSpectrumContext(context, context.exactCentreHz, 192000);
-        QCOMPARE(widget.dssRowsPushedForTest(), 0);
+        widget.setRemoteSpectrumContext(context, 14225500, 192000);
+        QCOMPARE(widget.dssRowsPushedForTest(), 1);
+        QCOMPARE(widget.m_dss.rowCenterMhzAtAge(0), 14.225);
+        QCOMPARE(widget.m_wfHistoryRowCount, 1);
+        QCOMPARE(widget.m_waterfallHistory, paintedHistory);
+        QCOMPARE(widget.m_waterfall, paintedViewport);
+        QCOMPARE(widget.m_wfHistoryTimestamps, timestamps);
         QVERIFY(widget.renderedPixels().isEmpty());
         QVERIFY(!widget.updateRemoteSpectrum(frame));
+        QTest::qWait(80);
+        QCOMPARE(widget.dssRowsPushedForTest(), 1); // No replay of the old pending row.
         frame.context = context.codec;
         QVERIFY(widget.updateRemoteSpectrum(frame));
-        QTRY_COMPARE(widget.dssRowsPushedForTest(), 1);
+        QTRY_COMPARE(widget.dssRowsPushedForTest(), 2);
+        QCOMPARE(widget.m_dss.rowCenterMhzAtAge(1), 14.225);
+        QCOMPARE(widget.m_wfHistoryRowCount, 2);
         widget.setCenterFrequency(context.exactCentreHz + 200000);
         QVERIFY(widget.renderedPixels().isEmpty());
         QVERIFY(!widget.updateRemoteSpectrum(frame));
@@ -134,6 +185,7 @@ private slots:
         QVERIFY(!widget.updateRemoteSpectrum(frame));
         QTest::qWait(80);
         QCOMPARE(widget.dssRowsPushedForTest(), 0);
+        QCOMPARE(widget.m_wfHistoryRowCount, 0);
     }
 };
 QTEST_MAIN(TestRemoteSpectrumRender)
