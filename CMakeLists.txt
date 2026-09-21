@@ -1364,29 +1364,27 @@ elseif(WIN32)
 endif()
 
 # --------------------------------------------------------------------------
-# Object library — shared between the app executable and test targets so
-# the same translation units are compiled once and consumed by both
-# (Phase 3I test infrastructure). Properties on NereusSDRObjs propagate
-# to consumers (PUBLIC) via the CMake INTERFACE; the thin executable just
-# links src/main.cpp on top.
+# Shared application libraries, built once and linked dynamically by the
+# executable and every test target. NereusCore contains the headless half
+# used by nereusd. NereusSDRLib contains the GUI half and links NereusCore.
 #
-# APP_ICON_SOURCES is intentionally NOT in the OBJECT library: CMake's
+# APP_ICON_SOURCES is intentionally NOT in either shared library: CMake's
 # MACOSX_PACKAGE_LOCATION property only takes effect when the file is a
-# direct source of a MACOSX_BUNDLE TRUE target. OBJECT libraries propagate
-# compiled object files, not bundle-resource sources. Attach the icon to
+# direct source of a MACOSX_BUNDLE TRUE target. Libraries propagate linkable
+# code, not bundle-resource sources. Attach the icon to
 # the executable target below so .icns lands in Contents/Resources/ and
 # Windows .rc lands on the linker line.
 # --------------------------------------------------------------------------
 # Split for the headless daemon (docs/architecture/2026-07-28-remote-daemon-architecture-design.md
 # section 4.1).  NereusCore must reference no widget symbol so nereusd can link
-# it alone.  NereusSDRObjs survives as an INTERFACE aggregate because 589
-# nereus_add_test() call sites link it by name and reuse its PCH.
-add_library(NereusCore OBJECT
+# it alone. NereusSDRLib keeps PR #314's application-library contract while
+# preserving the Core/GUI boundary required by the daemon.
+add_library(NereusCore SHARED
     ${CORE_SOURCES}
     ${MODEL_SOURCES}
 )
 
-add_library(NereusGui OBJECT
+add_library(NereusSDRLib SHARED
     ${GUI_SOURCES}
     ${RESOURCES}
 )
@@ -1396,32 +1394,14 @@ add_library(NereusGui OBJECT
 # already gates the menu wiring on Q_OS_LINUX, so the .cpp shouldn't enter
 # the build on macOS or Windows.
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-    target_sources(NereusGui PRIVATE src/gui/VaxLinuxFirstRunDialog.cpp)
+    target_sources(NereusSDRLib PRIVATE src/gui/VaxLinuxFirstRunDialog.cpp)
 endif()
 
-add_library(NereusSDRObjs INTERFACE)
-target_link_libraries(NereusSDRObjs INTERFACE NereusCore NereusGui)
-# target_link_libraries() alone propagates NereusCore/NereusGui's USAGE
-# REQUIREMENTS (link libraries, include dirs, compile definitions) to
-# whatever links NereusSDRObjs, but does NOT propagate their compiled
-# object files: CMake's "linking an OBJECT library adds its objects to my
-# sources" behavior only triggers when a target names the OBJECT library
-# directly in its own target_link_libraries call, not through another
-# level of indirection. Verified by an actual link failure (every symbol
-# from both object libraries came back undefined) before this line was
-# added. Declaring the objects as INTERFACE sources here is what actually
-# makes every existing target_link_libraries(x PRIVATE NereusSDRObjs) call
-# site link real code.
-target_sources(NereusSDRObjs INTERFACE
-    $<TARGET_OBJECTS:NereusCore>
-    $<TARGET_OBJECTS:NereusGui>
-)
-
 # 2026-05-26 KG4VCF: parallel LTO-enabled object library pair, ONLY built
-# when NEREUSSDR_ENABLE_LTO=ON.  Same sources as NereusCore/NereusGui above,
+# when NEREUSSDR_ENABLE_LTO=ON. Same sources as NereusCore/NereusSDRLib above,
 # but compiled with LTO bitcode so the main NereusSDR app's link can
 # do cross-translation-unit optimization.  Tests continue to link the
-# plain NereusSDRObjs aggregate (no bitcode), so test link times stay fast.
+# plain shared libraries (no bitcode), so test link times stay fast.
 #
 # This is more work to build a release artifact (sources compile
 # twice) but it keeps the dev loop fast while preserving the LTO perf
@@ -1454,6 +1434,33 @@ if(NEREUSSDR_LTO_AVAILABLE)
     endforeach()
 endif()
 
+# Shared-library plumbing. The source tree has no export annotations, so
+# Windows builds export all symbols from both application-private DLLs.
+foreach(_nereus_shared_target NereusCore NereusSDRLib)
+    set_target_properties(${_nereus_shared_target} PROPERTIES
+        WINDOWS_EXPORT_ALL_SYMBOLS ON)
+    if(MINGW)
+        target_link_options(${_nereus_shared_target} PRIVATE
+            "-Wl,--export-all-symbols")
+    endif()
+endforeach()
+
+# No VERSION/SOVERSION: these libraries are private implementation details.
+# Keep transitive shared-library dependencies discoverable beside each other.
+if(APPLE)
+    foreach(_nereus_shared_target NereusCore NereusSDRLib)
+        set_target_properties(${_nereus_shared_target} PROPERTIES
+            MACOSX_RPATH ON
+            INSTALL_NAME_DIR "@rpath"
+            INSTALL_RPATH "@loader_path")
+    endforeach()
+elseif(UNIX)
+    foreach(_nereus_shared_target NereusCore NereusSDRLib)
+        set_target_properties(${_nereus_shared_target} PROPERTIES
+            INSTALL_RPATH "$ORIGIN")
+    endforeach()
+endif()
+
 add_executable(NereusSDR src/main.cpp ${APP_ICON_SOURCES})
 if(NEREUSSDR_LTO_AVAILABLE)
     # Main app + its OBJECT-lib twins link both get LTO when enabled.  The
@@ -1467,7 +1474,16 @@ if(NEREUSSDR_LTO_AVAILABLE)
         INTERPROCEDURAL_OPTIMIZATION_RELEASE TRUE
         INTERPROCEDURAL_OPTIMIZATION_RELWITHDEBINFO TRUE)
 else()
-    target_link_libraries(NereusSDR PRIVATE NereusSDRObjs)
+    target_link_libraries(NereusSDR PRIVATE NereusSDRLib)
+endif()
+
+if(APPLE)
+    set_target_properties(NereusSDR PROPERTIES
+        BUILD_RPATH   "@executable_path/../Frameworks"
+        INSTALL_RPATH "@executable_path/../Frameworks")
+elseif(UNIX)
+    set_target_properties(NereusSDR PROPERTIES
+        INSTALL_RPATH "$ORIGIN/../lib")
 endif()
 
 set_target_properties(NereusSDR PROPERTIES
@@ -1493,9 +1509,12 @@ set_target_properties(NereusSDR PROPERTIES
 if(APPLE)
     set(_nereus_mic_desc "NereusSDR uses the microphone for SSB voice transmission and live mic level monitoring.")
     add_custom_command(TARGET NereusSDR POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Frameworks"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:NereusCore>" "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Frameworks/"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:NereusSDRLib>" "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Frameworks/"
         COMMAND /bin/sh -c "/usr/libexec/PlistBuddy -c \"Set :NSMicrophoneUsageDescription '${_nereus_mic_desc}'\" \"$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Info.plist\" 2>/dev/null || /usr/libexec/PlistBuddy -c \"Add :NSMicrophoneUsageDescription string '${_nereus_mic_desc}'\" \"$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Info.plist\""
-        COMMAND codesign --force --sign - "$<TARGET_BUNDLE_DIR:NereusSDR>"
-        COMMENT "Inject NSMicrophoneUsageDescription + re-sign bundle (mic-permission gate)"
+        COMMAND codesign --force --deep --sign - "$<TARGET_BUNDLE_DIR:NereusSDR>"
+        COMMENT "Stage private libraries, inject NSMicrophoneUsageDescription, and re-sign bundle"
         VERBATIM
     )
 endif()
@@ -1526,11 +1545,11 @@ target_link_libraries(nereusd PRIVATE NereusCore)
 # NereusCore / NereusGui dependency application (R1 Task 1; see
 # docs/architecture/2026-07-28-remote-daemon-architecture-design.md section 4.1)
 #
-# NereusCore, NereusGui, and their LTO twins are four distinct OBJECT
-# library targets. Rather than hand-duplicating each target_link_libraries /
+# NereusCore, NereusSDRLib, and their LTO twins are four distinct targets.
+# Rather than hand-duplicating each target_link_libraries /
 # target_include_directories / target_compile_definitions call for all four,
 # the dependency set each half needs is hoisted into the two functions below
-# and applied by calling them once per target. NereusGui/NereusGui_LTO see
+# and applied by calling them once per target. NereusSDRLib/NereusGui_LTO see
 # the NereusCore dependencies transitively because they link their
 # NereusCore twin PUBLIC (below).
 #
@@ -1922,8 +1941,8 @@ elseif(ENABLE_MNR)
 endif()
 
 nereus_apply_core_deps(NereusCore)
-nereus_apply_gui_deps(NereusGui)
-target_link_libraries(NereusGui PUBLIC NereusCore)
+nereus_apply_gui_deps(NereusSDRLib)
+target_link_libraries(NereusSDRLib PUBLIC NereusCore)
 
 if(NEREUSSDR_LTO_AVAILABLE)
     nereus_apply_core_deps(NereusCore_LTO)
@@ -2130,7 +2149,7 @@ if(NEREUS_USE_PCH)
         <cstdint>
         <utility>
     )
-    target_precompile_headers(NereusGui REUSE_FROM NereusCore)
+    target_precompile_headers(NereusSDRLib REUSE_FROM NereusCore)
 endif()
 
 # --------------------------------------------------------------------------
@@ -2213,6 +2232,16 @@ install(TARGETS NereusSDR
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     BUNDLE  DESTINATION .
 )
+
+# Both application-private libraries travel with the desktop executable.
+# The daemon component also installs NereusCore below through its own target
+# dependency packaging path.
+if(NOT APPLE)
+    install(TARGETS NereusCore NereusSDRLib
+        LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
+endif()
 
 # nereusd -- headless daemon (R1 Task 12; see
 # docs/architecture/2026-08-02-remote-daemon-r1-plan.md Task 12).

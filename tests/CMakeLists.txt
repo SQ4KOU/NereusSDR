@@ -1,8 +1,8 @@
 # NereusSDR test suite. Opt-in via -DNEREUS_BUILD_TESTS=ON.
 #
-# Test targets compile against NereusSDRObjs (the OBJECT library that backs
-# the main executable) so behavior under test is byte-identical to shipped
-# code. Each test gets its own thin executable + add_test() registration.
+# Test targets link the same shared NereusSDRLib image as the main executable,
+# so behavior under test is byte-identical to shipped code. Each test gets its
+# own thin executable plus add_test() registration.
 #
 # CI parallel sharding (added 2026-05-13, Linux speed-alignment epic):
 # When -DNEREUS_TEST_SHARDS=N -DNEREUS_TEST_SHARD=I is passed (0 ≤ I < N)
@@ -175,7 +175,7 @@ function(nereus_add_test name)
     # this file from a global property each nereus_add_test() call
     # appends to.
     add_executable(${name} EXCLUDE_FROM_ALL ${name}.cpp $<TARGET_OBJECTS:nereus_test_sandbox> ${_extra_sources})
-    target_link_libraries(${name} PRIVATE NereusSDRObjs Qt6::Test)
+    target_link_libraries(${name} PRIVATE NereusSDRLib Qt6::Test)
     set_property(GLOBAL APPEND PROPERTY NEREUS_ALL_TESTS ${name})
 
     # Reuse the NereusCore precompiled header (CMakeLists.txt §PCH).
@@ -206,6 +206,14 @@ function(nereus_add_test name)
     set_tests_properties(${name} PROPERTIES
         LABELS "${_test_labels}"
         TIMEOUT 120)
+
+    # Test executables sit in build/tests while the application DLLs sit in
+    # build. Add that directory to PATH so Windows can load both shared
+    # libraries. CMake before 3.22 has no ENVIRONMENT_MODIFICATION support.
+    if(WIN32 AND CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
+        set_tests_properties(${name} PROPERTIES ENVIRONMENT_MODIFICATION
+            "PATH=path_list_prepend:$<TARGET_FILE_DIR:NereusSDRLib>")
+    endif()
 
     # Per-label build aggregates, so `ctest -L core` has a matching
     # `tests_core` target that actually builds what it is about to run.
