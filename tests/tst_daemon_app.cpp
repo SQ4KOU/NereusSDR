@@ -48,6 +48,7 @@
 #include <QScopeGuard>
 #include <QSslSocket>
 #include <QTcpServer>
+#include <QTimer>
 
 #include <utility>
 
@@ -410,6 +411,173 @@ private slots:
         // RadioModel its mirror holds QPointers into.
         app.stop();
         QVERIFY(app.stationServer() == nullptr);
+    }
+
+    void occupiedRemotePortRecoversWithoutRecreatingStationState()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend, so the wss retry cannot bind.");
+        }
+
+        QTcpServer blocker;
+        QVERIFY(blocker.listen(QHostAddress::LocalHost, 0));
+        const quint16 port = blocker.serverPort();
+
+        DaemonConfig cfg = DaemonConfig::defaults();
+        cfg.remoteBind = QStringLiteral("127.0.0.1");
+        cfg.remotePort = static_cast<int>(port);
+        cfg.sliceCount = 2;
+
+        DaemonApp app;
+        app.setStationListenRetryIntervalsForTest(10, 30);
+        app.primeBoardForTest(HPSDRHW::HermesLite);
+        QVERIFY(app.start(cfg));
+
+        StationServer* const server = app.stationServer();
+        RadioModel* const model = app.m_radioModel.get();
+        DaemonMediaController* const media = app.m_mediaController.get();
+        QVERIFY(server != nullptr);
+        QVERIFY(model != nullptr);
+        QVERIFY(media != nullptr);
+        QVERIFY(!server->isListening());
+        QVERIFY(app.stationListenerRetryPending());
+        QCOMPARE(app.stationListenAttemptCountForTest(), 1);
+
+        const auto token = server->token();
+        const QList<SliceModel*> slices = model->slices();
+
+        // Keep the port occupied through several retries. The compressed
+        // schedule must progress 10 -> 20 -> 30 ms and remain capped there;
+        // no production-duration sleep is needed to observe the backoff.
+        QTRY_VERIFY_WITH_TIMEOUT(app.stationListenAttemptCountForTest() >= 3, 500);
+        QCOMPARE(app.m_stationListenRetryTimer->interval(), 30);
+        QCOMPARE(app.m_stationListenNextDelayMs, 30);
+        blocker.close();
+
+        QTRY_VERIFY_WITH_TIMEOUT(app.stationListenerReady(), 1000);
+        QCOMPARE(app.stationServer(), server);
+        QCOMPARE(app.m_radioModel.get(), model);
+        QCOMPARE(app.m_mediaController.get(), media);
+        QCOMPARE(server->token(), token);
+        QVERIFY(model->slices() == slices);
+        QCOMPARE(server->serverPort(), port);
+        QVERIFY(!app.stationListenerRetryPending());
+        QVERIFY(app.stationListenAttemptCountForTest() >= 4);
+
+        app.stop();
+    }
+
+    void stopDuringListenerBackoffCannotBindLater()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend, so the wss retry cannot bind.");
+        }
+
+        QTcpServer blocker;
+        QVERIFY(blocker.listen(QHostAddress::LocalHost, 0));
+        const quint16 port = blocker.serverPort();
+
+        DaemonConfig cfg = DaemonConfig::defaults();
+        cfg.remoteBind = QStringLiteral("127.0.0.1");
+        cfg.remotePort = static_cast<int>(port);
+
+        DaemonApp app;
+        app.setStationListenRetryIntervalsForTest(10, 20);
+        app.primeBoardForTest(HPSDRHW::HermesLite);
+        QVERIFY(app.start(cfg));
+        QVERIFY(app.stationListenerRetryPending());
+
+        app.stop();
+        QVERIFY(!app.stationListenerRetryPending());
+        QVERIFY(app.stationServer() == nullptr);
+        blocker.close();
+
+        // Let several compressed backoff periods pass. This waits for the
+        // absence of a late callback; listener recovery itself is always
+        // awaited with QTRY in the positive tests.
+        QTest::qWait(80);
+        QVERIFY(app.stationServer() == nullptr);
+        QTcpServer claimant;
+        QVERIFY(claimant.listen(QHostAddress::LocalHost, port));
+    }
+
+    void restartDiscardsOldListenerRetryTarget()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend, so the wss retry cannot bind.");
+        }
+
+        QTcpServer oldBlocker;
+        QTcpServer newBlocker;
+        QVERIFY(oldBlocker.listen(QHostAddress::LocalHost, 0));
+        QVERIFY(newBlocker.listen(QHostAddress::LocalHost, 0));
+        const quint16 oldPort = oldBlocker.serverPort();
+        const quint16 newPort = newBlocker.serverPort();
+        QVERIFY(oldPort != newPort);
+
+        DaemonConfig cfg = DaemonConfig::defaults();
+        cfg.remoteBind = QStringLiteral("127.0.0.1");
+        cfg.remotePort = static_cast<int>(oldPort);
+
+        DaemonApp app;
+        app.setStationListenRetryIntervalsForTest(10, 30);
+        app.primeBoardForTest(HPSDRHW::HermesLite);
+        QVERIFY(app.start(cfg));
+        QVERIFY(app.stationListenerRetryPending());
+        app.stop();
+
+        cfg.remotePort = static_cast<int>(newPort);
+        QVERIFY(app.start(cfg));
+        QVERIFY(app.stationListenerRetryPending());
+        QCOMPARE(app.stationListenAttemptCountForTest(), 1);
+        newBlocker.close();
+
+        QTRY_VERIFY_WITH_TIMEOUT(app.stationListenerReady(), 1000);
+        QCOMPARE(app.stationServer()->serverPort(), newPort);
+        QVERIFY(oldBlocker.isListening());
+        QCOMPARE(oldBlocker.serverPort(), oldPort);
+
+        app.stop();
+    }
+
+    void disabledAndInvalidRemoteConfigNeverScheduleListenerRetry()
+    {
+        DaemonApp app;
+        app.setStationListenRetryIntervalsForTest(10, 30);
+        app.primeBoardForTest(HPSDRHW::HermesLite);
+
+        DaemonConfig cfg = DaemonConfig::defaults();
+        cfg.remotePort = 0;
+        QVERIFY(app.start(cfg));
+        QVERIFY(app.stationServer() == nullptr);
+        QVERIFY(!app.stationListenerReady());
+        QVERIFY(!app.stationListenerRetryPending());
+        QCOMPARE(app.stationListenAttemptCountForTest(), 0);
+        app.stop();
+
+        cfg.remoteBind = QStringLiteral("127.0.0.1");
+        cfg.remotePort = -1;
+        QVERIFY(app.start(cfg));
+        QVERIFY(app.stationServer() == nullptr);
+        QVERIFY(!app.stationListenerRetryPending());
+        QCOMPARE(app.stationListenAttemptCountForTest(), 0);
+        app.stop();
+
+        cfg.remotePort = 65536;
+        QVERIFY(app.start(cfg));
+        QVERIFY(app.stationServer() == nullptr);
+        QVERIFY(!app.stationListenerRetryPending());
+        QCOMPARE(app.stationListenAttemptCountForTest(), 0);
+        app.stop();
+
+        cfg.remotePort = 4711;
+        cfg.remoteBind = QStringLiteral("not-an-address");
+        QVERIFY(app.start(cfg));
+        QVERIFY(app.stationServer() == nullptr);
+        QVERIFY(!app.stationListenerReady());
+        QVERIFY(!app.stationListenerRetryPending());
+        QCOMPARE(app.stationListenAttemptCountForTest(), 0);
+        app.stop();
     }
 
     void invalidRemoteBindIsLoggedRatherThanFatal()

@@ -5,28 +5,87 @@ and real remote receive acceptance. A component pass does not close R3.
 
 ## Current receive status, September 21
 
-The installed Core and GUI code is signed checkpoint `501b2701`. The user
-confirmed that C-Tune wheel tuning and frequency-scale drag zoom within the
-current bandwidth now behave smoothly. That does not establish full ADC-wide
-zoom parity, which remains task 4b.
+Signed checkpoint `95b19467` is installed on the Rock 5C and its matching
+macOS GUI has been launched. It adds Core connection controls, snapshot-safe
+startup, TX capability gating and receive-only tuner telemetry. The broader
+accessory connection/identity/configuration work remains task 4d. See the
+[control acceptance matrix](remote-controls.md) for the bounded scope.
 
-The next candidate implements Core connection presentation/actions,
-snapshot-safe startup, TX capability gating and receive-only tuner telemetry.
-Its software and live evidence is tracked in
-[the control acceptance matrix](remote-controls.md). It is not installed yet.
-The broader accessory connection/identity/configuration work remains task 4d.
+The corrected native Release build and staged installation passed. All 32
+source-overlay hashes matched the signed checkpoint. An initial package used
+zero file timestamps and caused Ninja to reuse old Core objects; that candidate
+was caught by library-hash comparison and rolled back before GUI testing.
+The packager now preserves current timestamps and touches verified source before
+building. The subsequent build compiled the changed Core sources, exported the
+new policy/telemetry symbols, and produced matching staged/installed hashes:
 
-After the September 21 power cycle, Core restarted successfully. Ethernet
-has a 1 Gbit/s physical link but no IPv4 lease; the board's route to Saturn
-currently uses Wi-Fi. The previous boot journal does not establish why the
-board locked up. Wired recovery, reboot robustness and sustained audio
-acceptance remain open; no network configuration was changed in this check.
+| File | SHA-256 |
+| --- | --- |
+| `/usr/local/bin/nereusd` | `8e0b6483c27ac79c757b41e02bdcf78eee31e8b16a07f01f066c2fc6c0faa599` |
+| `/usr/local/lib/libNereusCore.so` | `422bd1989c4af83c013ed151a32cda9613efe7d72119cc2603abd0e950630d82` |
+| `/usr/local/lib/librade.so.0.1` | `18e56fe8ee4b8a8450cc786cbcfed9bab147ec11df64e33486ce50e0ff91c32f` |
 
-Mixed stereo Opus playback works, with occasional stutters reported by the
-user. The existing path is through the user's VPN, not R5 NAT traversal.
-Capacity, full wideband parity, audio diagnostics/profile comparison, the
+The valid rollback is
+`/var/lib/nereus-build/rollback-501b2701-before-95b19467/`. Private station
+identity, pairing and profile were preserved. The service was last observed
+active with zero restarts; current reachability is not established. The macOS
+bundle build and deep/strict code-signature verification passed.
+
+**Live receive acceptance failed and remains open.** The GUI authenticated,
+received encrypted waterfall frames and displayed one slice. Audio repeatedly
+stalled before the control connection timed out; spectrum/meter health was not
+accepted. The user described a lethargic waterfall that stopped after moving
+the VFO away and back. That sequence does not yet establish a tuning cause.
+Manual Disconnect cancelled the retry and left the GUI stopped. The other
+connection surfaces and successful reconnect still need live verification.
+
+After the earlier power cycle, Ethernet initially had carrier but no IPv4
+lease, and the route to Saturn used Wi-Fi. Ethernet later regained its lease
+and the Saturn route returned to `end1`. The user confirmed disabling and
+reenabling the MikroTik port, explaining the recorded 16:03/16:04 carrier drops,
+not the original lockup. During the failed smoke, both the Rock and switch
+management endpoint became unreachable from the Mac; the router and Saturn
+still responded through the existing VPN. No OS or network configuration was
+changed. Hardware/network diagnosis remains open.
+
+A separate startup defect is reproducible: binding the configured wired
+address before that address exists leaves the service running without a Core
+listener, even after the address returns. R-R3-26 adds cancellable, capped
+backoff with the same station objects and identity; implementation and hardware
+verification are tracked separately from this installed checkpoint.
+
+At the preceding `501b2701` checkpoint the user accepted smooth C-Tune wheel
+and in-band scale-drag zoom, and reported working mixed stereo Opus with
+occasional stutters. Those results do not override the failed latest smoke.
+Full ADC-wide zoom, audio diagnostics/profile comparison, capacity, the
 two-hour hardware soak and R5 traversal remain open. The sections below retain
 historical checkpoint evidence and do not override this current status.
+
+## Late-network listener recovery, R-R3-26
+
+The regression was reproduced with a real occupied loopback port: the running
+daemon had no listener and no retry. The three recovery/cancellation/restart
+cases failed before implementation; disabled/invalid configuration remained
+inert.
+
+DaemonApp now retains the existing StationServer, media controller, model,
+certificate/token and slices while retrying the exact configured address and
+port. Delay starts at one second and doubles to a 30-second cap. Stop cancels
+the timer and clears its target before teardown; each new start resets the
+target and delay. Invalid addresses/ports and disabled remote control do not
+retry. Failure, retry delay and success are logged, with readiness and pending
+state available from the daemon.
+
+A fresh `tst_daemon_app` build/run passed in 1.15 seconds. Real-loopback cases
+cover multiple capped retries followed by successful binding with unchanged
+station objects/token/slices, no delayed bind after stop, replacement-target
+recovery, and disabled/invalid configuration. Logs are private
+`r3-listener-{red,green}-{build,test}.log`. A fresh `all_tests` build and
+unfiltered `ctest --test-dir build-integration -j8 --no-tests=error
+--output-on-failure` then passed **682/682** in **94.99 seconds**; no tests were
+skipped. Full logs are private `r3-listener-full-{build,test}.log`.
+This change is not yet installed; late-address boot and reconnect on the Rock
+remain pending. It does not claim to repair the network outage or media stalls.
 
 ## Combined baseline, 14124e7c
 

@@ -9,11 +9,11 @@ Setup page or an assertion that all station accessories work.
 
 | Surface | Owner and production path | Automated evidence | Live acceptance |
 | --- | --- | --- | --- |
-| Radio menu Connect / Disconnect | GUI -> configured StationClient through RemoteConnectionController | Real WebSocket connect, intentional disconnect and reconnect; duplicate connect does not create another session | Pending candidate installation |
-| Title connection segment, station block, disconnected pan | MainWindow::connectionRequestedByOperator -> same controller; automatic local panel callbacks remain inert remotely | Actual title mouse activation; controller tests. MainWindow routing inspected, full window interactions still need smoke | Pending all three click paths |
-| Core connection details | Persistent endpoint, session state, radio state, failure and retry/cancel; no credentials displayed | Authenticated Core with offline radio; failed dial/cancel beyond retry deadline; credential stripping | Pending failure/recovery presentation |
-| Saved layout / snapshot | Core owns slices; GUI restoration only hydrates. Explicit post-snapshot layout/add remains a command | Authenticated attach/reconnect preserves one station slice; production population helper emits no implicit add; explicit action waits for readiness | Pending fresh GUI attach and reconnect |
-| TX applet / PureSignal / TX filter match | Negotiated txPermitted + handshake; Core retains admission checks | Widget activation, no mutation when gating, preservation of independent disabled state; remote refusal | Pending disabled appearance; no RF test |
+| Radio menu Connect / Disconnect | GUI -> configured StationClient through RemoteConnectionController | Real WebSocket connect, intentional disconnect and reconnect; duplicate connect does not create another session | Installed; intentional disconnect/cancel observed; successful reconnect pending |
+| Title connection segment, station block, disconnected pan | MainWindow::connectionRequestedByOperator -> same controller; automatic local panel callbacks remain inert remotely | Actual title mouse activation; controller tests. MainWindow routing inspected, full window interactions still need smoke | Title segment opens details; all three paths and reconnect still pending |
+| Core connection details | Persistent endpoint, session state, radio state, failure and retry/cancel; no credentials displayed | Authenticated Core with offline radio; failed dial/cancel beyond retry deadline; credential stripping | Endpoint, separated state and stopped presentation observed; recovery pending |
+| Saved layout / snapshot | Core owns slices; GUI restoration only hydrates. Explicit post-snapshot layout/add remains a command | Authenticated attach/reconnect preserves one station slice; production population helper emits no implicit add; explicit action waits for readiness | Fresh attach displayed one slice; reconnect pending |
+| TX applet / PureSignal / TX filter match | Negotiated txPermitted + handshake; Core retains admission checks | Widget activation, no mutation when gating, preservation of independent disabled state; remote refusal | Tune/MOX/VOX disabled appearance observed; remaining controls pending; no RF test |
 | High-resolution FIR graph | Requires absent local RxChannel; visibly unavailable remotely | Remote/local checkbox interaction tests | Pending appearance; ordinary mirrored RX DSP is not classified as broken |
 | Tuner telemetry | Core TunerModel -> outbound mirror -> client-only assign/notify adapter | All 13 fields, false/zero updates and absence of accessory commands | Actual tuner TCP endpoint still unresolved |
 | Tuner TUNE / operate / antenna / relay / recall | Receive-only remote capability blocks commands; Core policy additionally guards autotune callbacks | Authenticated band change and telemetry replay issue no tune; MOX/TUNE admission blocked before radio connection and after session teardown | No RF or tuner actuation permitted in this checkpoint |
@@ -63,8 +63,18 @@ teardown regression. Final combined source, including the radio-teardown correct
 `all_tests` build and unfiltered `ctest --test-dir build-integration -j8
 --no-tests=error --output-on-failure`: **682 passed, zero failed, zero skipped**
 in **93.58 seconds**. Logs are retained privately as
-`r3-controls-teardown-full-{build,test}.log`. Native build and hardware smoke
-remain pending; this software pass does not establish live tuner connectivity.
+`r3-controls-teardown-full-{build,test}.log`. Corrected native build and
+installation of signed `95b19467` passed; the matching GUI bundle also passed
+code-signature verification. The [deployment ledger](README.md) records source
+verification, installed hashes and the corrected packaging timestamp failure.
+
+The receive smoke is **failed/incomplete**: authentication and waterfall frames
+arrived, but audio stalled, the session timed out and steady spectrum/meter
+operation was not established. The user reported slow waterfall painting that
+stopped after a VFO movement. Manual Disconnect cancelled retry and remained
+stopped. Network reachability to both the board and switch management endpoint
+was lost while the router and Saturn remained reachable. No tuning cause or
+hardware root cause is claimed; no live tuner connectivity is established.
 
 Hardware smoke is receive-only: attach to the existing station, inspect endpoint
 and radio state, disconnect and leave stopped, reconnect once, exercise the

@@ -27,6 +27,7 @@
 
 #include <QHostAddress>
 #include <QThread>
+#include <QTimer>
 
 #include <algorithm>
 
@@ -35,6 +36,10 @@ namespace NereusSDR {
 DaemonApp::DaemonApp(QObject* parent)
     : QObject(parent)
 {
+    m_stationListenRetryTimer = new QTimer(this);
+    m_stationListenRetryTimer->setSingleShot(true);
+    connect(m_stationListenRetryTimer, &QTimer::timeout,
+            this, &DaemonApp::attemptStationServerListen);
 }
 
 DaemonApp::~DaemonApp()
@@ -187,6 +192,11 @@ bool DaemonApp::start(const DaemonConfig& cfg)
 
 void DaemonApp::stop()
 {
+    // Cancel before destroying any object the timeout callback reads. Clear
+    // the latched endpoint as well so even an already-delivered/stale callback
+    // cannot bind a previous run's address after teardown.
+    cancelStationServerListenRetry();
+
     // BEFORE the m_radioModel guard below, and before anything else: a
     // StationServer can exist without a RadioModel only transiently, but
     // tearing it down first is what lets connected clients be told the
@@ -333,14 +343,22 @@ void DaemonApp::syncStepAttenuatorBandAndMode()
 // Remote Daemon R2 Task 18. Opt-in: cfg.remotePort == 0 means "do not
 // listen" and is the default (DaemonConfig.h explains why). A listener
 // that fails to come up is logged with StationServer::lastError() and is
-// NOT a startup failure, matching this class's existing treatment of a
-// radio that cannot be found: a daemon that still demodulates locally is
-// more useful than one that refuses to boot, and the operator has a named
-// reason in the log either way.
+// retried at a bounded rate without rebuilding station state. The initial
+// failure is NOT a startup failure, matching this class's existing treatment
+// of a radio that cannot be found: a daemon that still demodulates locally is
+// more useful than one that refuses to boot.
 void DaemonApp::startStationServer(const DaemonConfig& cfg)
 {
+    cancelStationServerListenRetry();
+    m_stationListenAttemptCount = 0;
+    m_stationListenNextDelayMs = m_stationListenRetryInitialMs;
     if (cfg.remotePort == 0) {
         qCInfo(lcApp) << "DaemonApp: remote control disabled (remote_port = 0)";
+        return;
+    }
+    if (cfg.remotePort < 0 || cfg.remotePort > 65535) {
+        qCWarning(lcApp) << "DaemonApp: remote_port is out of range:"
+                          << cfg.remotePort << "- remote control not started";
         return;
     }
 
@@ -352,10 +370,11 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
     }
 
     // Constructing it is what provisions the TLS certificate and the
-    // pairing token, and what prints both to the log on the run that
-    // generates them (StationServer's constructor). AppSettings::instance()
-    // is the daemon's OWN store here -- server_main.cpp resolved the
-    // profile before this point.
+    // pairing token, and what prints the first-run pairing banner to stdout
+    // on the run that generates them (StationServer's constructor). Secrets
+    // are deliberately kept out of the normal log. AppSettings::instance()
+    // is the daemon's OWN store here -- server_main.cpp resolved the profile
+    // before this point.
     m_stationServer = std::make_unique<StationServer>(m_radioModel.get(),
                                                       AppSettings::instance());
     // Set before listen() so the first authenticated client sees the media
@@ -363,22 +382,89 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
     m_stationServer->setMediaEnabled(true);
     m_mediaController = std::make_unique<DaemonMediaController>(
         m_stationServer.get(), m_radioModel.get(), this);
-    if (!m_stationServer->listen(bind, static_cast<quint16>(cfg.remotePort))) {
-        qCWarning(lcApp) << "DaemonApp: remote control listener failed on"
-                          << cfg.remoteBind << cfg.remotePort << ":"
-                          << m_stationServer->lastError();
-        // Kept rather than reset: the certificate and token it provisioned
-        // are still on disk and still what a later attempt will use, and
-        // holding the object means stop() tears down through one path.
+    m_stationListenBind = cfg.remoteBind;
+    m_stationListenPort = static_cast<quint16>(cfg.remotePort);
+    attemptStationServerListen();
+}
+
+void DaemonApp::attemptStationServerListen()
+{
+    if (!m_stationServer || m_stationListenPort == 0 || m_stationListenBind.isEmpty()) {
         return;
     }
-    qCInfo(lcApp) << "DaemonApp: remote control listening on wss://"
-                   << cfg.remoteBind << ":" << m_stationServer->serverPort();
+    if (m_stationServer->isListening()) {
+        m_stationListenRetryTimer->stop();
+        return;
+    }
+
+    const QHostAddress bind(m_stationListenBind);
+    if (bind.isNull()) {
+        // startStationServer validates before latching, so this is only a
+        // defensive guard against future mutation. Invalid config never
+        // becomes an indefinitely retried bind target.
+        qCWarning(lcApp) << "DaemonApp: refusing listener retry for invalid bind"
+                          << m_stationListenBind;
+        cancelStationServerListenRetry();
+        return;
+    }
+
+    ++m_stationListenAttemptCount;
+    if (m_stationServer->listen(bind, m_stationListenPort)) {
+        m_stationListenRetryTimer->stop();
+        qCInfo(lcApp) << "DaemonApp: remote control listening on wss://"
+                       << m_stationListenBind << ":" << m_stationServer->serverPort()
+                       << "after" << m_stationListenAttemptCount << "attempt(s)";
+        return;
+    }
+
+    qCWarning(lcApp) << "DaemonApp: remote control listener attempt"
+                      << m_stationListenAttemptCount << "failed on"
+                      << m_stationListenBind << m_stationListenPort << ":"
+                      << m_stationServer->lastError();
+    scheduleStationServerListenRetry();
+}
+
+void DaemonApp::scheduleStationServerListenRetry()
+{
+    if (!m_stationServer || m_stationListenPort == 0 || m_stationListenBind.isEmpty()) {
+        return;
+    }
+
+    const int delayMs = m_stationListenNextDelayMs;
+    qCInfo(lcApp) << "DaemonApp: retrying remote control listener in"
+                   << delayMs << "ms on" << m_stationListenBind << m_stationListenPort;
+    m_stationListenRetryTimer->start(delayMs);
+
+    if (m_stationListenNextDelayMs < m_stationListenRetryMaximumMs) {
+        const qint64 doubled = static_cast<qint64>(m_stationListenNextDelayMs) * 2;
+        m_stationListenNextDelayMs = static_cast<int>(
+            std::min<qint64>(doubled, m_stationListenRetryMaximumMs));
+    }
+}
+
+void DaemonApp::cancelStationServerListenRetry()
+{
+    if (m_stationListenRetryTimer) {
+        m_stationListenRetryTimer->stop();
+    }
+    m_stationListenBind.clear();
+    m_stationListenPort = 0;
+    m_stationListenNextDelayMs = m_stationListenRetryInitialMs;
 }
 
 int DaemonApp::sliceCount() const
 {
     return m_radioModel ? m_radioModel->slices().size() : 0;
+}
+
+bool DaemonApp::stationListenerReady() const
+{
+    return m_stationServer && m_stationServer->isListening();
+}
+
+bool DaemonApp::stationListenerRetryPending() const
+{
+    return m_stationListenRetryTimer && m_stationListenRetryTimer->isActive();
 }
 
 void DaemonApp::applyConfigToSettings(const DaemonConfig& cfg,

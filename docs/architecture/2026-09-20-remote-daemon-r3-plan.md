@@ -129,6 +129,7 @@ by the earlier brainstorming, and this review does not present them as such.
 | R-R3-23 | Remote audio exposes persistent playback/media/output status, the actual accepted codec profile and useful measured health. Local device/trim/mute stay separate from station slice mix controls. Any quality selector requires measured profiles and acknowledged Core configuration; unimplemented codec settings are not presented as functioning controls. |
 | R-R3-24 | Attaching/reconnecting and restoring saved GUI layout hydrates the authoritative snapshot without outbound slice creation. One saved pan attaching to one existing station slice retains that slice. Explicit post-hydration operator add/layout actions still work within station capacity. |
 | R-R3-25 | Receive-only remote frequency changes, snapshot replay and inbound accessory telemetry cannot initiate tune-carrier orchestration or TX-coupled accessory commands. Apply the guard before enabling repaired TGXL connection/telemetry. Local-direct operation retains its established behavior; authorized remote TX/tuner workflows remain R4. |
+| R-R3-26 | A configured Core listener recovers when its bind address becomes available after startup. A running radio service must not silently remain without remote control after a transient bind failure. Retry is bounded/backed off, preserves station identity, and is cancelled by stop/reconfiguration; readiness and errors are observable. |
 
 The authorized radio is the ANAN-G2/Saturn, MAC `2C:CF:67:AB:FC:F4`, board
 `0x0A`; the September 20 instruction supersedes the old G2E-only bench rows.
@@ -686,6 +687,16 @@ rules, configuration sample and the R3 verification ledger.
 - [ ] Verify the combined full desktop suite once after integration, plus
   ARM-sensitive focused tests and Linux daemon-component staged install.
   Do not hide known failures through exclusions or call a partial run green.
+- [ ] R-R3-26: reproduce configured-listener bind failure followed by address/
+  port availability; recover without restarting the radio service or changing
+  the configured bind/security scope. Stop/reconfiguration cancels stale retry
+  callbacks. The September 21 boot left nereusd active but no control listener
+  because Ethernet's address arrived late. Add lifecycle regression coverage
+  and test late-network boot on the board; distinguish link flaps from Core
+  readiness. Do not claim service-active alone proves remote availability.
+  Software recovery/cancellation and capped-backoff regressions now pass,
+  including the full 682-test suite; installation and late-network board
+  acceptance remain pending (see the verification ledger).
 - [ ] Install a signed checkpoint with a recoverable previous binary/library
   set, preserve private station configuration, and verify boot, clean stop,
   client reconnect and live media. Provide a launcher using private pairing

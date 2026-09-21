@@ -126,6 +126,7 @@
 #endif
 
 class QThread;
+class QTimer;
 
 namespace NereusSDR {
 
@@ -196,6 +197,11 @@ public:
     // was ever connected. Otherwise the RadioModel's live slice count.
     int sliceCount() const;
 
+    // Remote listener observability. A configured listener may exist while a
+    // transient bind failure is waiting for its next bounded retry.
+    bool stationListenerReady() const;
+    bool stationListenerRetryPending() const;
+
 #ifdef NEREUS_BUILD_TESTS
     // Test-only observer, only compiled when NEREUS_BUILD_TESTS is
     // defined, like every other test hook on this class. Production code
@@ -225,6 +231,17 @@ public:
     // production code never asks, because start()/stop() own the lifetime
     // and start() already logs whether the listener came up.
     StationServer* stationServer() const { return m_stationServer.get(); }
+
+    void setStationListenRetryIntervalsForTest(int initialMs, int maximumMs)
+    {
+        m_stationListenRetryInitialMs = initialMs > 0 ? initialMs : 1;
+        m_stationListenRetryMaximumMs = maximumMs >= m_stationListenRetryInitialMs
+            ? maximumMs : m_stationListenRetryInitialMs;
+    }
+    int stationListenAttemptCountForTest() const
+    {
+        return m_stationListenAttemptCount;
+    }
 
     // Test-only seam, only compiled when NEREUS_BUILD_TESTS is defined.
     // Forces the NEXT start() (and every start() after a stop(), since
@@ -317,6 +334,9 @@ private:
     // plane when cfg.remotePort is non-zero. Opt-in; a listener that
     // cannot bind is logged, not fatal. See the definition.
     void startStationServer(const DaemonConfig& cfg);
+    void attemptStationServerListen();
+    void scheduleStationServerListenRetry();
+    void cancelStationServerListenRetry();
 
     // Gives the headless daemon the same core-owned RX attenuation,
     // preamp, overload and ATT-on-TX state that MainWindow wires in a
@@ -397,6 +417,13 @@ private:
     // live peer sockets that must be told the station is going away while
     // there is still a station to speak for.
     std::unique_ptr<StationServer> m_stationServer;
+    QTimer* m_stationListenRetryTimer {nullptr};
+    int m_stationListenRetryInitialMs {1000};
+    int m_stationListenRetryMaximumMs {30000};
+    int m_stationListenNextDelayMs {1000};
+    int m_stationListenAttemptCount {0};
+    QString m_stationListenBind;
+    quint16 m_stationListenPort {0};
     /// Must be destroyed before StationServer/RadioModel: it owns queued
     /// source, peer and endpoint work referring to both.
     std::unique_ptr<DaemonMediaController> m_mediaController;
