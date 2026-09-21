@@ -48,6 +48,7 @@ bool DaemonAudioSender::start(quint32 ssrc, quint16 firstSequence,
         m_ssrc = 0;
         return false;
     }
+    m_telemetry = {};
     ++m_lifecycleGeneration;
     m_running = true;
     m_drainTimer.start();
@@ -70,6 +71,15 @@ bool DaemonAudioSender::isRunning() const noexcept
     return m_running && m_source && m_source->isRunning();
 }
 
+DaemonAudioSenderTelemetry DaemonAudioSender::telemetry() const noexcept
+{
+    DaemonAudioSenderTelemetry snapshot = m_telemetry;
+    if (m_source) {
+        snapshot.source = m_source->telemetry();
+    }
+    return snapshot;
+}
+
 void DaemonAudioSender::drain()
 {
     if (!isRunning()) {
@@ -82,6 +92,7 @@ void DaemonAudioSender::drain()
         if (!block.has_value()) {
             return;
         }
+        ++m_telemetry.consumedBlocks;
 
         // The capture position, rather than timer cadence, is the RTP clock.
         // Thus source queue loss remains visible as a timestamp gap.  The
@@ -92,8 +103,13 @@ void DaemonAudioSender::drain()
             block->pcmInterleaved, m_nextSequence, timestamp, m_ssrc);
         m_nextTimestamp = timestamp + DaemonAudioSource::kBlockFrames;
         if (encoded.status != OpusAudioCodecStatus::Accepted) {
+            ++m_telemetry.encodeFailures;
             continue;
         }
+        ++m_telemetry.encodedPackets;
+        m_telemetry.hasLastEmittedPacket = true;
+        m_telemetry.lastEmittedSequence = m_nextSequence;
+        m_telemetry.lastEmittedTimestamp = timestamp;
         ++m_nextSequence;
         emit packetReady(encoded.packet);
         // A direct packetReady recipient may stop the sender or start a new

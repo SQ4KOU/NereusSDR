@@ -7,6 +7,8 @@
 
 #pragma once
 
+#include "core/session/media/DaemonAudioSource.h"
+
 #include <QObject>
 #include <QTimer>
 
@@ -16,8 +18,20 @@
 namespace NereusSDR {
 
 class AudioEngine;
-class DaemonAudioSource;
 class OpusAudioEncoder;
+
+/// Owner-thread packetisation diagnostics for one successful sender start.
+/// `encodedPackets` means Opus/RTP construction succeeded; it says nothing
+/// about later transport acceptance or network delivery.
+struct DaemonAudioSenderTelemetry {
+    DaemonAudioSourceTelemetry source;
+    std::uint64_t consumedBlocks = 0;
+    std::uint64_t encodedPackets = 0;
+    std::uint64_t encodeFailures = 0;
+    bool hasLastEmittedPacket = false;
+    quint16 lastEmittedSequence = 0;
+    quint32 lastEmittedTimestamp = 0;
+};
 
 /// Turns bounded post-master-mix blocks into RTP/Opus packets.
 ///
@@ -41,6 +55,10 @@ public:
     quint16 nextSequence() const noexcept { return m_nextSequence; }
     quint32 nextTimestamp() const noexcept { return m_nextTimestamp; }
 
+    /// Read-only diagnostics. The snapshot remains available after stop() and
+    /// resets only after a later successful start().
+    DaemonAudioSenderTelemetry telemetry() const noexcept;
+
     /// Bounded owner-thread consumer tick.  Public only so tests and an
     /// explicit host loop can drain without waiting for the QTimer.
     void drain();
@@ -57,6 +75,7 @@ private:
     quint16 m_nextSequence{0};
     quint32 m_nextTimestamp{0};
     quint64 m_lifecycleGeneration{0};
+    DaemonAudioSenderTelemetry m_telemetry;
     bool m_running{false};
 };
 

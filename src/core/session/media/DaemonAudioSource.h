@@ -31,6 +31,14 @@ struct DaemonAudioBlock {
     quint64 samplePosition = 0;
 };
 
+/// Snapshot of capture-bridge activity for one source lifetime.  Frames count
+/// valid-rate master-mix ingress; drop events combine rejected ingress and
+/// bounded completed-block drops, so they are deliberately not packet loss.
+struct DaemonAudioSourceTelemetry {
+    std::uint64_t capturedValidRateFrames = 0;
+    std::uint64_t sourceDropEvents = 0;
+};
+
 class DaemonAudioSource final : public QObject {
     Q_OBJECT
 
@@ -48,7 +56,7 @@ public:
     // preventing a completed block from a previous station from surviving a
     // reconnect.
     void setAudioEngine(AudioEngine* audioEngine);
-    AudioEngine* audioEngine() const noexcept { return m_audioEngine.data(); }
+    AudioEngine* audioEngine() const noexcept;
 
     // Control-thread lifecycle. start() discards all prior partial and queued
     // audio before installing the synchronous tap. stop() detaches the tap
@@ -66,6 +74,10 @@ public:
     // the fixed ring was full. It is diagnostic only; audio loss is expected
     // under overload and never causes the DSP callback to wait.
     std::uint64_t dropCount() const noexcept;
+
+    /// Read-only capture diagnostics. Values survive stop() and reset only on
+    /// the next successful start(). Safe for the control thread to sample.
+    DaemonAudioSourceTelemetry telemetry() const noexcept;
 
     // Test seam: models a valid master-mix callback rejected by the
     // nonblocking bridge after its source frames have been reserved. It does

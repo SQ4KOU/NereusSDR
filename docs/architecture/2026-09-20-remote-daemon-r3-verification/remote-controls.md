@@ -61,7 +61,7 @@ it now performs those same assertions without requiring OS popup exposure.
 The next full run passed 682/682 in 90.53 seconds before the additional radio
 teardown regression. Final combined source, including the radio-teardown correction, passed a fresh
 `all_tests` build and unfiltered `ctest --test-dir build-integration -j8
---no-tests=error --output-on-failure`: **682 passed, zero failed, zero skipped**
+--no-tests=error --output-on-failure`: **682 test executables passed, zero failed, zero executables skipped**
 in **93.58 seconds**. Logs are retained privately as
 `r3-controls-teardown-full-{build,test}.log`. Corrected native build and
 installation of signed `95b19467` passed; the matching GUI bundle also passed

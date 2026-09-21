@@ -72,6 +72,11 @@ public:
         return m_dropCount.load(std::memory_order_relaxed);
     }
 
+    std::uint64_t capturedValidRateFrames() const noexcept
+    {
+        return m_nextFramePosition.load(std::memory_order_relaxed);
+    }
+
     void dropIngressForTest(int frames) noexcept
     {
         if (frames <= 0) {
@@ -238,6 +243,11 @@ void DaemonAudioSource::setAudioEngine(AudioEngine* audioEngine)
     m_audioEngine = audioEngine;
 }
 
+AudioEngine* DaemonAudioSource::audioEngine() const noexcept
+{
+    return m_audioEngine.data();
+}
+
 void DaemonAudioSource::start()
 {
     if (m_audioEngine.isNull()) {
@@ -276,6 +286,11 @@ std::optional<DaemonAudioBlock> DaemonAudioSource::takeBlock()
 std::uint64_t DaemonAudioSource::dropCount() const noexcept
 {
     return m_bridge->dropCount();
+}
+
+DaemonAudioSourceTelemetry DaemonAudioSource::telemetry() const noexcept
+{
+    return {m_bridge->capturedValidRateFrames(), m_bridge->dropCount()};
 }
 
 void DaemonAudioSource::dropIngressForTest(int frames) noexcept

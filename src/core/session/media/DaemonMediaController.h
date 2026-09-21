@@ -7,6 +7,7 @@
 // =================================================================
 
 #include "core/NoiseFloorEstimator.h"
+#include "core/session/media/DaemonAudioSender.h"
 #include "core/session/media/DaemonSpectrumSource.h"
 #include "core/session/media/DisplayCodec.h"
 #include "core/session/media/MediaPeer.h"
@@ -17,6 +18,7 @@
 #include <QPointer>
 #include <QTimer>
 
+#include <cstdint>
 #include <memory>
 #include <map>
 #include <optional>
@@ -25,8 +27,25 @@ namespace NereusSDR {
 
 class RadioModel;
 class StationServer;
-class DaemonAudioSender;
 enum class ConnectionState;
+
+/// Read-only diagnostics for the most recent active daemon audio context.
+/// A successful send means the media transport accepted the RTP packet; it is
+/// not evidence of network delivery. For every context,
+/// attempts = accepted + rejected + inFlight + unresolvedAtRetirement.
+/// Unresolved sends were interrupted by retirement and are not packet loss.
+struct DaemonAudioDiagnostics {
+    quint32 contextGeneration = 0;
+    quint32 revision = 0;
+    bool activeContext = false;
+    qint64 elapsedMs = 0;
+    DaemonAudioSenderTelemetry sender;
+    std::uint64_t sendAttempts = 0;
+    std::uint64_t sendAccepted = 0;
+    std::uint64_t sendRejected = 0;
+    std::uint64_t sendInFlight = 0;
+    std::uint64_t sendUnresolvedAtRetirement = 0;
+};
 
 /// Owns one authenticated daemon media session: strict control validation,
 /// actual RadioModel I/Q to bounded source, per-endpoint reduction/codec and
@@ -43,6 +62,7 @@ public:
     /// integration tests. Endpoint internals remain session-private.
     int activeEndpointCount() const;
     int activeSourceCount() const;
+    DaemonAudioDiagnostics audioDiagnostics() const;
 
 private:
     struct EndpointEntry;
@@ -80,6 +100,10 @@ private:
     void reconcileAudio();
     void stopAudioCapture();
     void sendAudioContext(bool enabled);
+    void beginAudioDiagnostics(quint32 contextGeneration);
+    void finalizeAudioDiagnostics();
+    void maybeLogAudioDiagnostics(bool final);
+    DaemonAudioDiagnostics snapshotAudioDiagnostics() const;
     void resetAudioSession();
     bool sendControl(const QJsonObject& payload) const;
     quint32 nextContextGeneration();
@@ -94,12 +118,16 @@ private:
     std::map<quint32, EndpointEntry> m_endpoints;
     QMap<MediaSourceKey, SourceRuntime> m_sources;
     QTimer m_sendTimer;
+    QTimer m_audioDiagnosticsTimer;
     quint64 m_epoch{0};
     quint32 m_nextContextGeneration{0};
     quint32 m_audioRevision{0};
     quint16 m_audioNextSequence{1};
     quint32 m_audioNextTimestamp{0};
     bool m_audioDesiredEnabled{false};
+    DaemonAudioDiagnostics m_audioDiagnostics;
+    QElapsedTimer m_audioDiagnosticsClock;
+    qint64 m_audioDiagnosticsLastLogMs{0};
     int m_roundRobinCursor{0};
 };
 

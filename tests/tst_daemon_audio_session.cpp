@@ -42,7 +42,14 @@ public:
     bool sendDisplay(const QByteArray&) override { return readyState; }
     bool sendRtp(const QByteArray& packet) override
     {
-        if (!readyState) { return false; }
+        ++rtpAttempts;
+        if (closeOnNextRtp) {
+            // This signal can synchronously destroy the owning MediaPeer.
+            // Do not touch fixture state after emitting it.
+            emit closed();
+            return false;
+        }
+        if (!readyState || !acceptRtp) { return false; }
         rtpPackets.append(packet);
         return true;
     }
@@ -53,6 +60,9 @@ public:
     bool readyState{false};
     StartOptions startOptions{Role::Answerer, 0};
     QList<QByteArray> rtpPackets;
+    int rtpAttempts{0};
+    bool acceptRtp{true};
+    bool closeOnNextRtp{false};
 };
 
 QVector<float> stereoBlock(float left, float right)
@@ -243,6 +253,104 @@ private slots:
         const QJsonObject reconnected = latestAudioContext(controls);
         QVERIFY(reconnected.value(QStringLiteral("generation")).toInteger()
                 > disconnected.value(QStringLiteral("generation")).toInteger());
+    }
+
+    void audioDiagnosticsCountTransportAcceptanceAndKeepFinalSnapshot()
+    {
+        Harness h;
+        h.establishAndReady();
+        QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+        QVERIFY(h.client.sendMediaControl(audioControl(1, true), h.client.sessionEpoch()));
+        QTRY_VERIFY(!latestAudioContext(controls).isEmpty());
+        const QJsonObject context = latestAudioContext(controls);
+
+        h.feedMixed(DaemonAudioSource::kBlockFrames);
+        QTRY_VERIFY(h.controller.audioDiagnostics().sendAccepted == std::uint64_t{1});
+        const auto accepted = h.controller.audioDiagnostics();
+        QVERIFY(accepted.activeContext);
+        QCOMPARE(accepted.contextGeneration,
+                 static_cast<quint32>(context.value(QStringLiteral("generation")).toInteger()));
+        QCOMPARE(accepted.revision, quint32{1});
+        QCOMPARE(accepted.sender.source.capturedValidRateFrames,
+                 std::uint64_t{DaemonAudioSource::kBlockFrames});
+        QCOMPARE(accepted.sender.source.sourceDropEvents, std::uint64_t{0});
+        QCOMPARE(accepted.sender.consumedBlocks, std::uint64_t{1});
+        QCOMPARE(accepted.sender.encodedPackets, std::uint64_t{1});
+        QCOMPARE(accepted.sender.encodeFailures, std::uint64_t{0});
+        QVERIFY(accepted.sender.hasLastEmittedPacket);
+        QCOMPARE(accepted.sendAttempts, std::uint64_t{1});
+        QCOMPARE(accepted.sendAccepted, std::uint64_t{1});
+        QCOMPARE(accepted.sendRejected, std::uint64_t{0});
+        QCOMPARE(accepted.sendInFlight, std::uint64_t{0});
+        QCOMPARE(accepted.sendUnresolvedAtRetirement, std::uint64_t{0});
+        QCOMPARE(accepted.sendAttempts, accepted.sendAccepted + accepted.sendRejected
+                 + accepted.sendInFlight + accepted.sendUnresolvedAtRetirement);
+
+        h.mediaTransport->acceptRtp = false;
+        h.feedMixed(DaemonAudioSource::kBlockFrames);
+        QTRY_VERIFY(h.controller.audioDiagnostics().sendRejected == std::uint64_t{1});
+        const auto rejected = h.controller.audioDiagnostics();
+        QCOMPARE(rejected.sendAttempts, std::uint64_t{2});
+        QCOMPARE(rejected.sendAccepted, std::uint64_t{1});
+        QCOMPARE(rejected.sendRejected, std::uint64_t{1});
+        QCOMPARE(rejected.sendInFlight, std::uint64_t{0});
+        QCOMPARE(rejected.sendUnresolvedAtRetirement, std::uint64_t{0});
+        QCOMPARE(rejected.sendAttempts, rejected.sendAccepted + rejected.sendRejected
+                 + rejected.sendInFlight + rejected.sendUnresolvedAtRetirement);
+        QCOMPARE(h.mediaTransport->rtpAttempts, 2);
+        QCOMPARE(h.mediaTransport->rtpPackets.size(), 1);
+
+        QVERIFY(h.client.sendMediaControl(audioControl(2, false), h.client.sessionEpoch()));
+        QTRY_VERIFY(!latestAudioContext(controls).value(QStringLiteral("enabled")).toBool());
+        const auto stopped = h.controller.audioDiagnostics();
+        QVERIFY(!stopped.activeContext);
+        QCOMPARE(stopped.sendAttempts, rejected.sendAttempts);
+        QCOMPARE(stopped.sendAccepted, rejected.sendAccepted);
+        QCOMPARE(stopped.sendRejected, rejected.sendRejected);
+        QCOMPARE(stopped.sendInFlight, std::uint64_t{0});
+        QCOMPARE(stopped.sendUnresolvedAtRetirement,
+                 rejected.sendUnresolvedAtRetirement);
+        QCOMPARE(stopped.sendAttempts, stopped.sendAccepted + stopped.sendRejected
+                 + stopped.sendInFlight + stopped.sendUnresolvedAtRetirement);
+        QCOMPARE(stopped.sender.source.capturedValidRateFrames,
+                 rejected.sender.source.capturedValidRateFrames);
+        QCOMPARE(stopped.sender.source.sourceDropEvents,
+                 rejected.sender.source.sourceDropEvents);
+        QCOMPARE(stopped.sender.consumedBlocks, rejected.sender.consumedBlocks);
+        QCOMPARE(stopped.sender.encodedPackets, rejected.sender.encodedPackets);
+        QCOMPARE(stopped.sender.lastEmittedSequence,
+                 rejected.sender.lastEmittedSequence);
+        QCOMPARE(stopped.sender.lastEmittedTimestamp,
+                 rejected.sender.lastEmittedTimestamp);
+    }
+
+    void audioDiagnosticsRetainAnAttemptWhenTransportRetiresPeerSynchronously()
+    {
+        Harness h;
+        h.establishAndReady();
+        QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+        QVERIFY(h.client.sendMediaControl(audioControl(1, true), h.client.sessionEpoch()));
+        QTRY_VERIFY(!latestAudioContext(controls).isEmpty());
+        QTRY_VERIFY(h.controller.audioDiagnostics().activeContext);
+
+        // sendRtp() closes its MediaPeer synchronously. Keep no raw fixture
+        // pointer after feeding audio: closing can delete the transport later
+        // in this same event turn.
+        h.mediaTransport->closeOnNextRtp = true;
+        h.feedMixed(DaemonAudioSource::kBlockFrames);
+
+        QTRY_VERIFY(!h.controller.audioDiagnostics().activeContext);
+        const auto retired = h.controller.audioDiagnostics();
+        // The return value was interrupted by peer retirement, so it cannot
+        // be accepted or refused. It remains visible as an unresolved
+        // retirement result, which is not packet loss.
+        QCOMPARE(retired.sendAttempts, std::uint64_t{1});
+        QCOMPARE(retired.sendAccepted, std::uint64_t{0});
+        QCOMPARE(retired.sendRejected, std::uint64_t{0});
+        QCOMPARE(retired.sendInFlight, std::uint64_t{0});
+        QCOMPARE(retired.sendUnresolvedAtRetirement, std::uint64_t{1});
+        QCOMPARE(retired.sendAttempts, retired.sendAccepted + retired.sendRejected
+                 + retired.sendInFlight + retired.sendUnresolvedAtRetirement);
     }
 };
 

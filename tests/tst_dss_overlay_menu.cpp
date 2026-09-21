@@ -191,9 +191,8 @@ private slots:
     // one wording silently winning both states.
     void spanUnsupported_tooltipDiffersFromSupported() {
         SpectrumOverlayMenu m;
-        m.resize(320, 640);
-        m.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&m));
+        // Tooltip text changes synchronously; native popup exposure is not
+        // part of this assertion. Shown-widget wiring is exercised below.
 
         auto* span = m.findChild<QSlider*>(QStringLiteral("dssRowSpanSlider"));
         QVERIFY(span);

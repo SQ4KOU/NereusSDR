@@ -182,7 +182,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
             }
             const qint64 now = monotonicNs();
             if (now - lastPacket > 500'000'000) {
-                notify(QStringLiteral("Remote audio packets stopped arriving"));
+                notify(QStringLiteral("Remote audio had no admitted/playable packets for 500 ms"));
                 return;
             }
             // At most the bounded jitter window per wake. A long scheduling

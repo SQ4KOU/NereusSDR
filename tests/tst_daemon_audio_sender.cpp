@@ -162,6 +162,47 @@ private slots:
             firstTimestamp + 2 * DaemonAudioSource::kBlockFrames));
     }
 
+    void telemetryTracksSourceEncodingAndRestart()
+    {
+        Harness h;
+        h.engine->setSliceStreaming(h.sliceB, false);
+        DaemonAudioSender sender(h.engine);
+        QSignalSpy packets(&sender, &DaemonAudioSender::packetReady);
+        QVERIFY(sender.start(kSsrc, 11, 2'000));
+        h.feedMixed(DaemonAudioSource::kBlockFrames * 2,
+                    0.25f, -0.25f, 0.0f, 0.0f);
+        sender.drain();
+        QCOMPARE(packets.count(), 2);
+
+        const auto active = sender.telemetry();
+        QCOMPARE(active.source.capturedValidRateFrames,
+                 std::uint64_t{2 * DaemonAudioSource::kBlockFrames});
+        QCOMPARE(active.source.sourceDropEvents, std::uint64_t{0});
+        QCOMPARE(active.consumedBlocks, std::uint64_t{2});
+        QCOMPARE(active.encodedPackets, std::uint64_t{2});
+        QCOMPARE(active.encodeFailures, std::uint64_t{0});
+        QVERIFY(active.hasLastEmittedPacket);
+        QCOMPARE(active.lastEmittedSequence, quint16{12});
+        QCOMPARE(active.lastEmittedTimestamp,
+                 quint32{2'000 + DaemonAudioSource::kBlockFrames});
+
+        sender.stop();
+        const auto stopped = sender.telemetry();
+        QCOMPARE(stopped.consumedBlocks, active.consumedBlocks);
+        QCOMPARE(stopped.encodedPackets, active.encodedPackets);
+        QCOMPARE(stopped.lastEmittedSequence, active.lastEmittedSequence);
+        QCOMPARE(stopped.lastEmittedTimestamp, active.lastEmittedTimestamp);
+
+        QVERIFY(sender.start(kSsrc, 99, 99'000));
+        const auto restarted = sender.telemetry();
+        QCOMPARE(restarted.source.capturedValidRateFrames, std::uint64_t{0});
+        QCOMPARE(restarted.source.sourceDropEvents, std::uint64_t{0});
+        QCOMPARE(restarted.consumedBlocks, std::uint64_t{0});
+        QCOMPARE(restarted.encodedPackets, std::uint64_t{0});
+        QCOMPARE(restarted.encodeFailures, std::uint64_t{0});
+        QVERIFY(!restarted.hasLastEmittedPacket);
+    }
+
     void stopRestartFlushesCaptureAndUsesTheNewCallerBases()
     {
         Harness h;

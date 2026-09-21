@@ -28,7 +28,10 @@ new policy/telemetry symbols, and produced matching staged/installed hashes:
 The valid rollback is
 `/var/lib/nereus-build/rollback-501b2701-before-95b19467/`. Private station
 identity, pairing and profile were preserved. The service was last observed
-active with zero restarts; current reachability is not established. The macOS
+active with zero restarts. Reachability has since returned over Wi-Fi at
+`.105`; Core was temporarily rebound to that address, retaining its certificate
+and pairing. Ethernet has carrier but no IPv4 lease (lease lost at 16:34:10).
+This later loss does not establish the cause of the earlier media failure. The macOS
 bundle build and deep/strict code-signature verification passed.
 
 **Live receive acceptance failed and remains open.** The GUI authenticated,
@@ -61,6 +64,9 @@ Full ADC-wide zoom, audio diagnostics/profile comparison, capacity, the
 two-hour hardware soak and R5 traversal remain open. The sections below retain
 historical checkpoint evidence and do not override this current status.
 
+Candidate startup-rate regression and audio-counter evidence is recorded in
+[startup receive cadence and diagnostics](startup-audio.md).
+
 ## Late-network listener recovery, R-R3-26
 
 The regression was reproduced with a real occupied loopback port: the running
@@ -82,9 +88,12 @@ station objects/token/slices, no delayed bind after stop, replacement-target
 recovery, and disabled/invalid configuration. Logs are private
 `r3-listener-{red,green}-{build,test}.log`. A fresh `all_tests` build and
 unfiltered `ctest --test-dir build-integration -j8 --no-tests=error
---output-on-failure` then passed **682/682** in **94.99 seconds**; no tests were
-skipped. Full logs are private `r3-listener-full-{build,test}.log`.
-This change is not yet installed; late-address boot and reconnect on the Rock
+--output-on-failure` then passed **682/682 test executables** in **94.99 seconds**. No executable
+was skipped. Eleven existing Qt cases inside those executables skipped for
+host-API availability or explicitly deferred harness/UI coverage; the new
+listener cases all executed. Full logs are private
+`r3-listener-full-{build,test,cases}.log`.
+Signed code checkpoint `e518b63d` is not yet installed; late-address boot and reconnect on the Rock
 remain pending. It does not claim to repair the network outage or media stalls.
 
 ## Combined baseline, 14124e7c

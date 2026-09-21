@@ -12795,6 +12795,16 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
     switch (state) {
     case ConnectionState::Connected:
         qCDebug(lcConnection) << "Connected to" << m_name;
+        // The per-board codec normally arrives while the connection is still
+        // Connecting, before the first I/Q packet promotes this model. That
+        // arrival requests the complete DDC assignment immediately, but this
+        // transition is the convergence edge if initialization was coalesced
+        // or otherwise ran before the connection was ready to accept it.
+        // Idempotent in the normal case: applyDdcAssignment compares every
+        // field before it emits another CmdRx.
+        if (qobject_cast<P2RadioConnection*>(m_connection)) {
+            requestDdcAssignment();
+        }
         // Phase 3Q Task 10: auto-connect succeeded — disarm the in-progress
         // flag so a later user-initiated Connect does not trip the failure path.
         if (m_autoConnectInProgress) {
@@ -12898,6 +12908,14 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
         break;
     case ConnectionState::Connecting:
         qCDebug(lcConnection) << "Connecting to" << m_name << "...";
+        // P2 selects and announces its codec immediately before it emits the
+        // Connecting transition. The codec-arrival request can therefore be
+        // observed first while the model still has its prior cached state.
+        // Retry now, after the state has advanced, so the Connecting admission
+        // in invokeCodecDdcAssignment is effective in that real ordering.
+        if (qobject_cast<P2RadioConnection*>(m_connection)) {
+            requestDdcAssignment();
+        }
         break;
     case ConnectionState::Probing:
         qCDebug(lcConnection) << "Probing for" << m_name << "...";
@@ -16511,13 +16529,42 @@ void RadioModel::invokeCodecDdcAssignment()
     // capture of a trivially copyable aggregate; the metatype system is only
     // involved for the Q_ARG / string-name overload or for a queued
     // signal-slot connection carrying DdcAssignment as a parameter.
-    if (isConnected()) {
+    // The codec is selected inside P2RadioConnection::connectToRadio, before
+    // the first I/Q packet can promote the model from Connecting to Connected.
+    // Its arrival is therefore both valid and expected during Connecting: the
+    // complete codec assignment must replace the P2 bootstrap geometry then,
+    // or the first/only DDC can retain its 48 kHz constructor rate while WDSP
+    // waits for the configured connection rate. A later slice operation used
+    // to issue another request and hide that startup gap.
+    //
+    // Do not broaden this to every state. Disconnected, Probing and LinkLost
+    // have no live startup/steady-state wire owner and must remain publication-
+    // only paths. The Connected transition above re-requests idempotently so a
+    // request coalesced before readiness still converges.
+    const bool p2WireStateAccepting =
+        m_connectionState == ConnectionState::Connecting
+        || m_connectionState == ConnectionState::Connected;
+    if (p2WireStateAccepting) {
         if (auto* p2conn = qobject_cast<P2RadioConnection*>(m_connection)) {
-            if (p2conn->p2Codec()) {
-                QMetaObject::invokeMethod(p2conn, [p2conn, assignment]() {
-                    p2conn->applyDdcAssignment(assignment);
-                });
-            }
+            QMetaObject::invokeMethod(p2conn, [p2conn, assignment]() {
+                // The model-side state admitted this request, but the
+                // connection thread may have processed a link-loss or
+                // disconnect ahead of this queued delivery. Re-check the
+                // actual atomic lifecycle state on its owning thread so a
+                // stale main-thread snapshot cannot write after shutdown.
+                const ConnectionState state = p2conn->state();
+                if (state != ConnectionState::Connecting
+                    && state != ConnectionState::Connected) {
+                    return;
+                }
+                // selectCodec owns this unique_ptr on the connection thread.
+                // Read it here as part of final delivery admission rather than
+                // racing that owner from RadioModel's thread.
+                if (!p2conn->p2Codec()) {
+                    return;
+                }
+                p2conn->applyDdcAssignment(assignment);
+            });
         }
     }
 

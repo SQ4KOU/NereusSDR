@@ -267,6 +267,23 @@ private slots:
                  quint64{DaemonAudioSource::kQueueBlocks + 1}
                      * DaemonAudioSource::kBlockFrames);
         verifyStereoConstant(*afterLoss, 6.0f, -6.0f);
+
+        // This is capture ingress, rather than a packet-loss percentage:
+        // the discarded completed block still advanced the source frame
+        // position. The snapshot remains useful after capture stops and is
+        // cleared only by the next source epoch.
+        const auto active = source.telemetry();
+        QCOMPARE(active.capturedValidRateFrames,
+                 std::uint64_t{DaemonAudioSource::kQueueBlocks + 2}
+                     * DaemonAudioSource::kBlockFrames);
+        QCOMPARE(active.sourceDropEvents, std::uint64_t{1});
+        source.stop();
+        QCOMPARE(source.telemetry().capturedValidRateFrames,
+                 active.capturedValidRateFrames);
+        QCOMPARE(source.telemetry().sourceDropEvents, active.sourceDropEvents);
+        source.start();
+        QCOMPARE(source.telemetry().capturedValidRateFrames, std::uint64_t{0});
+        QCOMPARE(source.telemetry().sourceDropEvents, std::uint64_t{0});
     }
 
     void stopAndRestartDiscardOldAndStoppedAudio()

@@ -15,6 +15,7 @@
 
 #include <QJsonArray>
 #include <QJsonValue>
+#include <QLoggingCategory>
 #include <QUuid>
 
 #include <algorithm>
@@ -23,6 +24,7 @@
 #include <utility>
 
 namespace NereusSDR {
+Q_LOGGING_CATEGORY(lcDaemonMedia, "nereus.daemon.media")
 namespace {
 
 constexpr int kMaxEndpoints = 8;
@@ -33,6 +35,7 @@ constexpr float kNoiseFloorMinimumDbm = -400.0f;
 constexpr float kNoiseFloorMaximumDbm = 100.0f;
 constexpr float kFftDbmFloor = -200.0f;
 constexpr float kFftPowerFloor = 1.0e-20f;
+constexpr qint64 kAudioDiagnosticsLogIntervalMs = 2'000;
 
 bool exactKeys(const QJsonObject& object, std::initializer_list<const char*> keys)
 {
@@ -226,10 +229,15 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
     , m_source(this)
     , m_peerFactory(std::move(peerFactory))
     , m_sendTimer(this)
+    , m_audioDiagnosticsTimer(this)
 {
     m_source.setRadioModel(radioModel);
     m_sendTimer.setInterval(kSenderIntervalMs);
     connect(&m_sendTimer, &QTimer::timeout, this, &DaemonMediaController::onSendTick);
+    m_audioDiagnosticsTimer.setInterval(kAudioDiagnosticsLogIntervalMs);
+    connect(&m_audioDiagnosticsTimer, &QTimer::timeout, this, [this] {
+        maybeLogAudioDiagnostics(false);
+    });
     if (!m_server || !m_radioModel) {
         return;
     }
@@ -271,6 +279,11 @@ int DaemonMediaController::activeSourceCount() const
         }
     }
     return active;
+}
+
+DaemonAudioDiagnostics DaemonMediaController::audioDiagnostics() const
+{
+    return snapshotAudioDiagnostics();
 }
 
 void DaemonMediaController::onSessionStarted(quint64 epoch)
@@ -948,7 +961,32 @@ void DaemonMediaController::reconcileAudio()
                 // forward a late signal to a replacement peer.
                 if (m_audioSender.get() == sender && sender->isRunning()
                     && m_epoch != 0 && m_peer && m_peer->isReady()) {
-                    m_peer->sendRtp(packet);
+                    MediaPeer* const peer = m_peer.get();
+                    const quint64 epoch = m_epoch;
+                    const quint32 contextGeneration = m_audioDiagnostics.contextGeneration;
+                    const bool activeContext = m_audioDiagnostics.activeContext;
+                    if (activeContext) {
+                        ++m_audioDiagnostics.sendAttempts;
+                        ++m_audioDiagnostics.sendInFlight;
+                    }
+                    const bool accepted = peer->sendRtp(packet);
+                    // The transport can synchronously retire or replace this
+                    // session. Resolve only into the context that initiated
+                    // this send, never a replacement that appeared mid-call.
+                    // Retirement finalizes any remaining in-flight attempt as
+                    // unresolved, without treating it as a packet-loss event.
+                    if (activeContext && m_audioSender.get() == sender
+                        && m_epoch == epoch && m_peer.get() == peer
+                        && m_audioDiagnostics.activeContext
+                        && m_audioDiagnostics.contextGeneration == contextGeneration) {
+                        --m_audioDiagnostics.sendInFlight;
+                        if (accepted) {
+                            ++m_audioDiagnostics.sendAccepted;
+                        } else {
+                            ++m_audioDiagnostics.sendRejected;
+                        }
+                        maybeLogAudioDiagnostics(false);
+                    }
                 }
             });
         }
@@ -969,10 +1007,13 @@ void DaemonMediaController::stopAudioCapture()
     }
     // Sender advances timestamp over every consumed block, including an
     // encode failure; retaining both fields before stop preserves the next
-    // audio-context boundary across a pause or reconnect.
+    // audio-context boundary across a pause or reconnect. Stop quiesces the
+    // source bridge before the final diagnostics sample, so ingress/drop
+    // counters include any admitted DSP callback.
     m_audioNextSequence = m_audioSender->nextSequence();
     m_audioNextTimestamp = m_audioSender->nextTimestamp();
     m_audioSender->stop();
+    finalizeAudioDiagnostics();
 }
 
 void DaemonMediaController::sendAudioContext(bool enabled)
@@ -980,16 +1021,89 @@ void DaemonMediaController::sendAudioContext(bool enabled)
     if (!m_peer || m_audioRevision == 0) {
         return;
     }
+    const quint32 contextGeneration = nextContextGeneration();
+    if (enabled) {
+        beginAudioDiagnostics(contextGeneration);
+    }
     sendControl({
         {QStringLiteral("op"), QStringLiteral("audio-context")},
         {QStringLiteral("connectionId"), m_peer->connectionId()},
         {QStringLiteral("revision"), static_cast<qint64>(m_audioRevision)},
-        {QStringLiteral("generation"), static_cast<qint64>(nextContextGeneration())},
+        {QStringLiteral("generation"), static_cast<qint64>(contextGeneration)},
         {QStringLiteral("enabled"), enabled},
         {QStringLiteral("ssrc"), static_cast<qint64>(m_peer->audioSsrc())},
         {QStringLiteral("firstSequence"), static_cast<qint64>(m_audioNextSequence)},
         {QStringLiteral("firstTimestamp"), static_cast<qint64>(m_audioNextTimestamp)},
     });
+}
+
+DaemonAudioDiagnostics DaemonMediaController::snapshotAudioDiagnostics() const
+{
+    DaemonAudioDiagnostics snapshot = m_audioDiagnostics;
+    if (snapshot.activeContext) {
+        if (m_audioDiagnosticsClock.isValid()) {
+            snapshot.elapsedMs = m_audioDiagnosticsClock.elapsed();
+        }
+        if (m_audioSender) {
+            snapshot.sender = m_audioSender->telemetry();
+        }
+    }
+    return snapshot;
+}
+
+void DaemonMediaController::beginAudioDiagnostics(quint32 contextGeneration)
+{
+    m_audioDiagnostics = {};
+    m_audioDiagnostics.contextGeneration = contextGeneration;
+    m_audioDiagnostics.revision = m_audioRevision;
+    m_audioDiagnostics.activeContext = true;
+    m_audioDiagnosticsClock.start();
+    m_audioDiagnosticsLastLogMs = 0;
+    m_audioDiagnosticsTimer.start();
+}
+
+void DaemonMediaController::finalizeAudioDiagnostics()
+{
+    if (!m_audioDiagnostics.activeContext) {
+        return;
+    }
+    m_audioDiagnostics = snapshotAudioDiagnostics();
+    m_audioDiagnostics.sendUnresolvedAtRetirement += m_audioDiagnostics.sendInFlight;
+    m_audioDiagnostics.sendInFlight = 0;
+    maybeLogAudioDiagnostics(true);
+    m_audioDiagnostics.activeContext = false;
+    m_audioDiagnosticsTimer.stop();
+}
+
+void DaemonMediaController::maybeLogAudioDiagnostics(bool final)
+{
+    if (!m_audioDiagnostics.activeContext || !m_audioDiagnosticsClock.isValid()) {
+        return;
+    }
+    const qint64 elapsedMs = m_audioDiagnosticsClock.elapsed();
+    if (!final && elapsedMs - m_audioDiagnosticsLastLogMs < kAudioDiagnosticsLogIntervalMs) {
+        return;
+    }
+    const DaemonAudioDiagnostics snapshot = snapshotAudioDiagnostics();
+    qCInfo(lcDaemonMedia).nospace()
+        << "daemon audio diagnostics " << (final ? "final" : "periodic")
+        << " context=" << snapshot.contextGeneration
+        << " revision=" << snapshot.revision
+        << " elapsedMs=" << snapshot.elapsedMs
+        << " sourceFrames=" << snapshot.sender.source.capturedValidRateFrames
+        << " sourceDropEvents=" << snapshot.sender.source.sourceDropEvents
+        << " consumed=" << snapshot.sender.consumedBlocks
+        << " encoded=" << snapshot.sender.encodedPackets
+        << " encodeFailures=" << snapshot.sender.encodeFailures
+        << " sendAttempts=" << snapshot.sendAttempts
+        << " sendAccepted=" << snapshot.sendAccepted
+        << " sendRejected=" << snapshot.sendRejected
+        << " sendInFlight=" << snapshot.sendInFlight
+        << " sendUnresolvedAtRetirement=" << snapshot.sendUnresolvedAtRetirement
+        << " hasLastPacket=" << snapshot.sender.hasLastEmittedPacket
+        << " lastSequence=" << snapshot.sender.lastEmittedSequence
+        << " lastTimestamp=" << snapshot.sender.lastEmittedTimestamp;
+    m_audioDiagnosticsLastLogMs = elapsedMs;
 }
 
 void DaemonMediaController::resetAudioSession()
