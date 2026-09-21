@@ -33,13 +33,17 @@
 //
 //   "Display" -- most Display* keys are pure client-side rendering
 //   (colours, line widths, hold timers for the peak/blob overlay) and are
-//   correctly OperatorLocal by the bare default below. Exactly four are
-//   not: DisplayFftSize, DisplayFftWindow, DisplayHzPerBinTarget and
-//   DisplaySpectrumFps, which MainWindow::refreshFftPoolConfig
+//   correctly OperatorLocal by the bare default below. The RX FftPoolConfig
+//   quartet is not: DisplayFftSize, DisplayFftWindow,
+//   DisplayHzPerBinTarget and DisplaySpectrumFps, which
+//   MainWindow::refreshFftPoolConfig
 //   (MainWindow.cpp:1477-1500, this exact quartet named at :1512-1539's
 //   "the four display AppSettings-sourced knobs" comment) reads to
 //   configure the daemon's actual FFT production rate/size/window/target
-//   bin width. Those four are whole-key rules below, Station -- NOT
+//   bin width. The nine DisplayTx* analyzer settings are also Station:
+//   TxAnalyzer::loadSettings() reads them to configure the TX-side WDSP
+//   analyzer, and saveSettings() writes the same exact set. These thirteen
+//   keys are whole-key rules below, Station, not
 //   "explicit exceptions" in this file's strict sense, since no prefix
 //   rule claims "Display*" for step 1 to need to override. DisplaySpectrumFps
 //   carries its own paragraph (see below) because it is not simply
@@ -379,6 +383,21 @@ const Rule kWholeKeys[] = {
     { "DisplayFftWindow", SettingsScope::Station },
     { "DisplayHzPerBinTarget", SettingsScope::Station },
     { "DisplaySpectrumFps", SettingsScope::Station },
+
+    // TX-side WDSP analyzer configuration. TxAnalyzer owns the detector,
+    // averaging, normalization, FFT geometry and window applied before TX
+    // pixels leave the station, so these must follow the daemon rather than
+    // an operator's local display preferences. Keep these exact instead of
+    // claiming the broader DisplayTx family.
+    { "DisplayTxFftSize", SettingsScope::Station },
+    { "DisplayTxWindowType", SettingsScope::Station },
+    { "DisplayTxPanDetector", SettingsScope::Station },
+    { "DisplayTxPanAveraging", SettingsScope::Station },
+    { "DisplayTxPanAvTimeMs", SettingsScope::Station },
+    { "DisplayTxPanNormalize", SettingsScope::Station },
+    { "DisplayTxWfDetector", SettingsScope::Station },
+    { "DisplayTxWfAveraging", SettingsScope::Station },
+    { "DisplayTxWfAvTimeMs", SettingsScope::Station },
 
     // The "audio/" split -- see this file's header comment. Both are read
     // by AudioAdvancedPage.cpp:145-170 (Setup -> Audio -> Advanced) and

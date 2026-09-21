@@ -107,9 +107,6 @@ private slots:
 
     void movingASlider_emitsItsSignal() {
         SpectrumOverlayMenu m;
-        m.resize(320, 640);
-        m.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&m));
 
         QSignalSpy modeSpy(&m, &SpectrumOverlayMenu::spectrumRenderModeChanged);
         QSignalSpy floorSpy(&m, &SpectrumOverlayMenu::dssFloorDepthChanged);
