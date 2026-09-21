@@ -987,3 +987,39 @@ The final combined gate is rerun after this correction.
 Final gate after the gesture-time routing and shared-stream rollback fixes:
 **681/681 passed in 93.87 s**, all targets rebuilt first, no exclusions.
 Matching signed Core/GUI deployment and operator gesture acceptance follow.
+
+
+## September 21: signed tuning checkpoint installed
+
+Signed source checkpoint **501b2701** passed the final **681/681** desktop
+suite and unchanged repository hooks. The matching Mac app built and passed
+`codesign --verify --deep --strict`. All 34 changed-file hashes since the
+previous Core checkpoint matched on the Rock 5C; native Core source was
+unchanged from the passing reviewed native build. Final native configure,
+build, daemon/license staged install and dependency/help checks passed.
+
+Core was installed at about 14:55 EDT, retaining
+`rollback-5c24eda0-before-501b2701`. Clean stop and start passed, with
+`ActiveState=active`, `Result=success`, `ExecMainStatus=0`, `NRestarts=0`.
+The installed `libNereusCore.so` SHA-256 is
+`d50411c42ea89860aa048843abdac799c2a8d780fe682a3231170e79476d75a2`.
+
+The matching GUI reopened with the dedicated profile and visible build tag
+`501b2701`. Station handshake completed at 14:55:42; the first encrypted
+spectrum frame arrived at 14:55:45. A live screenshot at 14:56 showed the 3D
+spectrum, advancing 2D waterfall and applet/slice signal readings on 40m LSB.
+MOX, TUNE and VOX remained off. The operator's wheel/scale-drag acceptance
+question is pending; a working display is not proof of those gestures.
+
+One audio startup restart coincided with a 2676 ms GUI-owner queue delay;
+reception restarted as context 3. Subsequent short observation still showed
+80–88 ms packet-arrival gaps. Sustained audio and the two-hour run remain
+open; this tuning checkpoint does not claim to fix them. The old GUI's
+pre-update media outage and misleading connected/disconnected chrome also
+reinforce the existing R-R3-16/17 acceptance gates.
+
+The operator subsequently confirmed **“Both now behave smoothly”** for
+C-Tune wheel tuning and frequency-scale drag zoom within the current
+bandwidth on the installed 501b2701 build. Those reported gesture regressions
+are now live-accepted. This does not close R-R3-20 wideband transport, sustained
+audio, connection feedback or multi-pan capacity acceptance.
