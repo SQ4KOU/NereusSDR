@@ -7,8 +7,9 @@ and real remote receive acceptance. A component pass does not close R3.
 
 The earlier smooth checkpoint did not establish continuous acceptance. GUI
 PID 54322 crashed at 19:09:12 while applying a mirrored AGC threshold to a
-VFO slider, after a pan layout change rehomed a slice. The crash is being
-investigated separately from the TGXL patch. Core PID 3656 stayed active, but
+VFO slider, after a pan layout change rehomed a slice. The dangling flag
+connection is reproduced by a failing production-binding regression; see
+[VFO lifetime verification](vfo-lifetime.md). Core PID 3656 stayed active, but
 later reported zero audio source frames and repeated media-context renewal.
 A passive capture still contained Saturn DDC2 I/Q on UDP 1037 and status on
 1026, so this occurrence must not be labelled total radio ingress loss.
@@ -19,7 +20,26 @@ and reopening the saved radxa_5c_r3 profile restored the intended build, not
 reception. An authorized Core restart at 19:19 restored approximately 48,000
 audio source frames and 25 accepted Opus packets per second; Core PID 5242
 has zero service restarts. The GUI retained a blank previous pan, so complete
-visual recovery remains under investigation. No new TGXL binaries are installed.
+visual recovery required reopening the GUI again. At 19:22 the live 40m
+spectrum/waterfall and both meters (-94 dBm) were verified in GUI PID 66655,
+still 706b9a5f with profile radxa_5c_r3 and Core at .106. The station restart
+restored slice A and removed the earlier slice B; this is recovery evidence,
+not proof that the failing multi-slice state is repaired. No new TGXL binaries
+are installed. Its source is signed as 3a589945, with 683 test executables
+passing; see [TGXL lifecycle verification](tgxl-recovery.md).
+
+The VFO correction now passes its regression, all four affected GUI targets,
+independent review and a fresh full 684-executable suite. Installation and live
+layout acceptance are the next checkpoint; this evidence does not yet change
+the installed 706b9a5f state described above.
+
+A separate source/log audit identified a RADE channel belonging to B being
+routed through A's worker path. This suppresses A's normal audio contribution
+and correlates with all three zero-frame intervals. That repair is pending;
+the details and limits of the evidence are in the VFO incident record above.
+At 19:30 the reopened GUI also logged a 1.036-second owner-thread packet delay,
+an underflow and two subsequent stream-gap recoveries. Later packet reception
+resumed. The restored single-slice state is still not a soak pass.
 
 ## Current receive status, September 21, checkpoint 706b9a5f
 

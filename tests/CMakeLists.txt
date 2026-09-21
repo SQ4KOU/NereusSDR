@@ -6642,6 +6642,14 @@ nereus_add_test(tst_remote_gui_gating)
 target_compile_definitions(tst_remote_gui_gating PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_remote_connection_controls fakes/LoopbackTransport.cpp)
 
+# Remote Daemon R3 R-R3-30: a secondary slice flag may be destroyed and
+# replaced while its SliceModel and MainWindow remain alive during a pan-layout
+# rehome. Every direct model-to-flag presentation edge must therefore share the
+# flag's lifetime. The test checks actual Qt connection retirement handles
+# after SpectrumWidget::removeVfoWidget(), then exercises later property writes.
+# NereusSDR-native lifecycle boundary; no upstream port applies.
+nereus_add_test(tst_slice_flag_presentation_lifetime)
+
 # R1 Task 10: DaemonApp connects the daemon to a radio (or runs discovery)
 # and creates min(cfg.sliceCount, connected-board-maxSlices) slices via
 # RadioModel's own addSlice() -- the same entry point connectToRadio()

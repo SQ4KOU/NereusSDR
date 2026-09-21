@@ -459,6 +459,17 @@ advertising it. Preserve explicit operator add/layout operations after hydrate.
   to conceal an unintended create. Test reconnect and delayed snapshots.
 - [ ] Add a narrow injected session/presentation harness that exercises the
   real action routing. Slot-existence checks alone do not close this task.
+- [ ] R-R3-30: retire SliceModel-to-VFO callbacks with their actual flag
+  widget when a pan shrinks or a slice is rehomed. The observed AGC crash
+  used a MainWindow-owned lambda capturing a deleted flag. Correct the
+  identical pure presentation bindings together; do not suppress valid
+  station updates. Exercise the production bindings with a surviving slice,
+  a flag removed through SpectrumWidget, and a replacement flag. Prove
+  automatic disconnection before applying AGC and sibling properties, then
+  prove the replacement receives updates.
+  The production lifetime correction and replacement-view regression now pass
+  focused/full-suite verification and independent review; live layout acceptance is tracked
+  in [VFO lifetime verification](2026-09-20-remote-daemon-r3-verification/vfo-lifetime.md).
 
 **Acceptance:** each connect entry point starts one configured-Core attempt;
 cancel during backoff leaves it stopped through delayed callbacks; Core-up /
@@ -467,6 +478,8 @@ connect/reconnect emits zero add-slice commands and preserves station identity.
 An explicit add after hydrate emits one valid request and handles refusal.
 TX and FIR graph controls show unavailable state when their capabilities or
 resources are absent. Local direct connection and layout behavior remain valid.
+Shrinking two pans to one while Core continues AGC updates cannot call a
+destroyed flag; the migrated slice and its replacement flag stay responsive.
 
 **Verification:** session/hydration and cancellation are consequential state
 transitions: establish reproducing integration cases before changing them.

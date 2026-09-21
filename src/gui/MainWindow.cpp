@@ -246,6 +246,7 @@ warren@wpratt.com
 #include "SupportDialog.h"
 #include "AboutDialog.h"
 #include "SpectrumWidget.h"
+#include "SliceFlagPresentationBinding.h"
 // Phase 3F Sub-Epic D Task 10: +PAN bottom-bar dropdown reads slice
 // state + drives PanadapterStack layout/float actions.
 #include "PanadapterStack.h"
@@ -1603,29 +1604,9 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
             &m_radioModel->alexControllerMutable(), &AlexController::setRxOutOnTx);
     connect(slice, &SliceModel::lastRadeRxCallsignChanged,
             newFlag, &VfoWidget::setRadeCallsign);
-    connect(slice, &SliceModel::ritEnabledChanged, this, [newFlag](bool on) {
-        newFlag->setRitEnabled(on);
-    });
-    connect(slice, &SliceModel::ritHzChanged, this, [newFlag](int hz) {
-        newFlag->setRitHz(hz);
-    });
-    connect(slice, &SliceModel::xitEnabledChanged, this, [newFlag](bool on) {
-        newFlag->setXitEnabled(on);
-    });
-    connect(slice, &SliceModel::xitHzChanged, this, [newFlag](int hz) {
-        newFlag->setXitHz(hz);
-    });
+    wireSliceFlagPresentation(slice, newFlag);
     connect(slice, &SliceModel::nbModeChanged, newFlag, &VfoWidget::setNbMode);
     newFlag->setNbMode(slice->nbMode());   // initial sync
-    connect(slice, &SliceModel::snbEnabledChanged, this, [newFlag](bool v) {
-        newFlag->setSnbEnabled(v);
-    });
-    connect(slice, &SliceModel::apfEnabledChanged, this, [newFlag](bool v) {
-        newFlag->setApfEnabled(v);
-    });
-    connect(slice, &SliceModel::apfTuneHzChanged, this, [newFlag](int hz) {
-        newFlag->setApfTuneHz(hz);
-    });
     connect(newFlag, &VfoWidget::txFilterMatchRequested, this,
             [this](int audioLow, int audioHigh) {
         if (!transmitControlsPermitted()) {
@@ -1654,24 +1635,6 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     });
     connect(newFlag, &VfoWidget::apfTuneHzChanged, this, [slice](int hz) {
         slice->setApfTuneHz(hz);
-    });
-    connect(slice, &SliceModel::mutedChanged, this, [newFlag](bool v) {
-        newFlag->setMuted(v);
-    });
-    connect(slice, &SliceModel::audioPanChanged, this, [newFlag](double p) {
-        newFlag->setAudioPan(p);
-    });
-    connect(slice, &SliceModel::ssqlEnabledChanged, this, [newFlag](bool v) {
-        newFlag->setSsqlEnabled(v);
-    });
-    connect(slice, &SliceModel::ssqlThreshChanged, this, [newFlag](double d) {
-        newFlag->setSsqlThresh(d);
-    });
-    connect(slice, &SliceModel::agcThresholdChanged, this, [newFlag](int v) {
-        newFlag->setAgcThreshold(v);
-    });
-    connect(slice, &SliceModel::binauralEnabledChanged, this, [newFlag](bool v) {
-        newFlag->setBinauralEnabled(v);
     });
     connect(newFlag, &VfoWidget::muteChanged, this, [slice](bool v) {
         slice->setMuted(v);
@@ -1755,9 +1718,6 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     });
     connect(newFlag, &VfoWidget::lockChanged, this, [slice](bool locked) {
         slice->setLocked(locked);
-    });
-    connect(slice, &SliceModel::lockedChanged, this, [newFlag](bool v) {
-        newFlag->setLocked(v);
     });
     return newFlag;
 }
