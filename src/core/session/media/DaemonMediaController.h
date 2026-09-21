@@ -6,6 +6,7 @@
 // coordination; it contains neither GUI nor radio control policy.
 // =================================================================
 
+#include "core/NoiseFloorEstimator.h"
 #include "core/session/media/DaemonSpectrumSource.h"
 #include "core/session/media/DisplayCodec.h"
 #include "core/session/media/MediaPeer.h"
@@ -70,6 +71,8 @@ private:
     void configureEndpointFromFrame(EndpointEntry& endpoint,
                                     const DaemonSpectrumFrame& frame);
     void sendContext(EndpointEntry& endpoint);
+    std::optional<float> fullSourceNoiseFloor(const DaemonSpectrumFrame& sourceFrame,
+                                               double stationOffsetDb);
     void sendRejected(const QString& connectionId, quint32 endpointId,
                       quint32 revision, const QString& reason);
     bool sendControl(const QJsonObject& payload) const;
@@ -78,6 +81,7 @@ private:
     QPointer<StationServer> m_server;
     QPointer<RadioModel> m_radioModel;
     DaemonSpectrumSource m_source;
+    NoiseFloorEstimator m_noiseFloorEstimator;
     MediaPeer::TransportFactory m_peerFactory;
     std::unique_ptr<MediaPeer> m_peer;
     std::map<quint32, EndpointEntry> m_endpoints;

@@ -103,6 +103,24 @@ is discarded; the GUI requests a keyframe after accepting context.
 | `unsubscribe` | `endpointId` |
 | `keyframe` | `endpointId`, `contextGeneration` |
 | `rejected` (Core to GUI) | `endpointId`, `revision`, `reason` |
+| `noise-floor` (Core to GUI) | `endpointId`, `revision`, `contextGeneration`, `floorDbm` |
+
+R-R3-12 adds `noise-floor` as optional display metadata; older clients ignore
+the unknown operation. It has exactly six payload fields including `op` and
+`connectionId`. Core sends it after the accepted context, once initially and
+then at most twice per second per endpoint, using a fresh source frame.
+`floorDbm` is finite and bounded to [-400,100]. It is the existing
+NoiseFloorEstimator's 30th percentile of the full-source FFT dBm bins, with
+station calibration applied once, before viewport crop, detector, averaging
+or codec quantization. No full FFT array travels over WSS.
+
+The GUI requires the current authenticated session, connection ID, endpoint
+revision and context generation. Only the visible active pan with unchanged
+subscription inputs may feed its existing Clarity controller. Local cadence,
+EWMA, deadband, manual override, re-tune, TX pause and palette behavior remain
+in effect. The binary display codec and R3 media version are unchanged. This
+restores the existing global active-pan Clarity behavior; independent
+per-pan Clarity controllers and Auto AGC-T telemetry remain separate work.
 
 Keyframe requests are limited to five per endpoint per second and must
 match its current context. A whole-peer rejection uses endpoint/revision

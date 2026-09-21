@@ -27,6 +27,11 @@ namespace {
 constexpr int kMaxEndpoints = 8;
 constexpr int kSenderIntervalMs = 5;
 constexpr int kMaxKeyframesPerSecond = 5;
+constexpr qint64 kNoiseFloorMinimumIntervalNs = 500'000'000;
+constexpr float kNoiseFloorMinimumDbm = -400.0f;
+constexpr float kNoiseFloorMaximumDbm = 100.0f;
+constexpr float kFftDbmFloor = -200.0f;
+constexpr float kFftPowerFloor = 1.0e-20f;
 
 bool exactKeys(const QJsonObject& object, std::initializer_list<const char*> keys)
 {
@@ -202,6 +207,7 @@ struct DaemonMediaController::EndpointEntry {
     bool forceKeyframe{true};
     int keyframesInWindow{0};
     QElapsedTimer keyframeWindow;
+    qint64 lastNoiseFloorTimestampNs{-1};
 };
 
 struct DaemonMediaController::SourceRuntime {
@@ -531,12 +537,12 @@ void DaemonMediaController::onSourceFrame(MediaSourceKey key)
     // authoritative meter calibration here before either reducer quantizes it.
     // Reading it per frame keeps remote planes current across station preamp
     // and step-attenuator changes without reading RadioModel from the worker.
-    DaemonSpectrumFrame frame = *sourceFrame;
     const double stationOffsetDb = m_radioModel->rxMeterOffsetDb();
     if (!std::isfinite(stationOffsetDb)
-        || !std::isfinite(frame.dbmOffset + stationOffsetDb)) {
+        || !std::isfinite(sourceFrame->dbmOffset + stationOffsetDb)) {
         return;
     }
+    DaemonSpectrumFrame frame = *sourceFrame;
     frame.dbmOffset += stationOffsetDb;
 
     for (auto it = m_endpoints.begin(); it != m_endpoints.end(); ++it) {
@@ -549,7 +555,51 @@ void DaemonMediaController::onSourceFrame(MediaSourceKey key)
             || entry.endpoint.context().codec.contextGeneration == 0) {
             configureEndpointFromFrame(entry, frame);
         }
-        if (entry.endpoint.configured() && entry.contextSent) {
+    }
+
+    bool needsNoiseFloor = false;
+    for (const auto& [unused, entry] : m_endpoints) {
+        Q_UNUSED(unused);
+        if (entry.request.source == key && entry.contextSent && entry.endpoint.configured()
+            && entry.endpoint.context().sourceGeneration == frame.generation
+            && (entry.lastNoiseFloorTimestampNs < 0
+                || frame.producedAtNs - entry.lastNoiseFloorTimestampNs
+                    >= kNoiseFloorMinimumIntervalNs)) {
+            needsNoiseFloor = true;
+            break;
+        }
+    }
+    if (needsNoiseFloor) {
+        const std::optional<float> floorDbm = fullSourceNoiseFloor(*sourceFrame, stationOffsetDb);
+        if (floorDbm.has_value() && m_peer) {
+            for (auto& [endpointId, entry] : m_endpoints) {
+                if (entry.request.source != key || !entry.contextSent || !entry.endpoint.configured()
+                    || entry.endpoint.context().sourceGeneration != frame.generation
+                    || (entry.lastNoiseFloorTimestampNs >= 0
+                        && frame.producedAtNs - entry.lastNoiseFloorTimestampNs
+                            < kNoiseFloorMinimumIntervalNs)) {
+                    continue;
+                }
+                const QJsonObject message{
+                    {QStringLiteral("op"), QStringLiteral("noise-floor")},
+                    {QStringLiteral("connectionId"), m_peer->connectionId()},
+                    {QStringLiteral("endpointId"), static_cast<qint64>(endpointId)},
+                    {QStringLiteral("revision"), static_cast<qint64>(entry.revision)},
+                    {QStringLiteral("contextGeneration"), static_cast<qint64>(
+                        entry.endpoint.context().codec.contextGeneration)},
+                    {QStringLiteral("floorDbm"), *floorDbm},
+                };
+                if (sendControl(message)) {
+                    entry.lastNoiseFloorTimestampNs = frame.producedAtNs;
+                }
+            }
+        }
+    }
+
+    for (auto& [unused, entry] : m_endpoints) {
+        Q_UNUSED(unused);
+        if (entry.request.source == key && entry.endpoint.configured() && entry.contextSent
+            && entry.endpoint.context().sourceGeneration == frame.generation) {
             entry.latestInput = frame;
         }
     }
@@ -574,7 +624,43 @@ void DaemonMediaController::configureEndpointFromFrame(EndpointEntry& entry,
     entry.latestInput.reset();
     entry.forceKeyframe = true;
     entry.contextSent = false;
+    entry.lastNoiseFloorTimestampNs = -1;
     sendContext(entry);
+}
+
+std::optional<float> DaemonMediaController::fullSourceNoiseFloor(
+    const DaemonSpectrumFrame& sourceFrame, double stationOffsetDb)
+{
+    if (!std::isfinite(sourceFrame.dbmOffset) || !std::isfinite(stationOffsetDb)
+        || sourceFrame.binsLinear.isEmpty()) {
+        return std::nullopt;
+    }
+
+    // Match FFTEngine::fftReady exactly: it floors tiny raw FFT powers to
+    // -200 dBFS before station calibration, rather than adding the window
+    // coherent-gain offset to an underflow bin. Clarity estimates the complete
+    // source row before any endpoint crop, detector, averaging or quantization.
+    QVector<float> binsDbm;
+    binsDbm.reserve(sourceFrame.binsLinear.size());
+    for (float power : sourceFrame.binsLinear) {
+        if (!std::isfinite(power) || power < 0.0f) {
+            return std::nullopt;
+        }
+        const double rawDbm = power < kFftPowerFloor
+            ? static_cast<double>(kFftDbmFloor)
+            : 10.0 * std::log10(static_cast<double>(power)) + sourceFrame.dbmOffset;
+        const double calibratedDbm = rawDbm + stationOffsetDb;
+        if (!std::isfinite(calibratedDbm)) {
+            return std::nullopt;
+        }
+        binsDbm.append(static_cast<float>(calibratedDbm));
+    }
+    const float floorDbm = m_noiseFloorEstimator.estimate(binsDbm);
+    if (!std::isfinite(floorDbm) || floorDbm < kNoiseFloorMinimumDbm
+        || floorDbm > kNoiseFloorMaximumDbm) {
+        return std::nullopt;
+    }
+    return floorDbm;
 }
 
 void DaemonMediaController::sendContext(EndpointEntry& entry)
@@ -716,6 +802,7 @@ bool DaemonMediaController::reconcileSource(const MediaSourceKey& key)
                 entry.latestInput.reset();
                 entry.contextSent = false;
                 entry.forceKeyframe = true;
+                entry.lastNoiseFloorTimestampNs = -1;
             }
         }
     }
@@ -764,6 +851,7 @@ void DaemonMediaController::onStreamGeometryChanged(int streamIndex, double, int
                     entry.encoder.reset();
                     entry.latestInput.reset();
                     entry.contextSent = false;
+                    entry.lastNoiseFloorTimestampNs = -1;
                 }
             }
         }

@@ -269,3 +269,38 @@ not connected. Silence in this remote profile is therefore expected at this
 checkpoint. The agreed next receive milestone is one mixed stereo Opus feed
 preserving slice volume, mute and stereo placement. R5 traversal decisions
 remain intact; neither this installation nor its display probe completes R3.
+
+## Clarity parity investigation, September 21
+
+The operator reported a grainier waterfall when using both automatic Clarity
+and the Clarity Blue palette. Tracing confirmed that remote subscriptions
+already preserve the local per-plane detector, averaging mode and alpha.
+The missing boundary was Clarity's input: MainWindow connected it only to
+the GUI's local `FFTEngine::fftReady`, which does not produce radio frames
+in the remote role. Clarity could therefore remain enabled without updating
+its thresholds, while its active flag suppressed the legacy waterfall AGC.
+
+R-R3-12 restores the full-source percentile as bounded `noise-floor` control
+metadata from Core. It is measured before display crop/reduction/quantization
+and receives the station calibration once. The client routes only current,
+accepted, visible active-pan measurements to the same Clarity cadence, EWMA,
+deadband and operator gates used locally. The palette, detector settings and
+binary display codec are unchanged. The codec's existing 180/255 dB quantum
+is approximately 0.706 dB; this investigation does not attribute the reported
+texture to that quantization.
+
+The native aarch64 candidate build passed, with all four changed Core source
+files verified against the immutable overlay manifest. The five relevant
+test executables pass. The nonzero source regression compares Core with an
+independent local FFTEngine and NoiseFloorEstimator using broadband input
+plus an out-of-crop carrier, at 1,024/2,048 FFT sizes and two calibration
+settings; the floor agrees within 0.01 dB. Other checks cover the zero-power
+floor, context ordering, cadence, retirement, client rejection of stale or
+malformed metadata, local/remote Clarity smoothing and operator gates, and
+preservation of saved thresholds.
+
+The rebuilt unfiltered desktop suite passed **672/672**, zero failed/skipped,
+in 63.07 seconds. Logs are retained in
+`~/.config/nereus/work/r3-clarity/`. Signed installation and live visual
+evidence follow separately; this software gate does not establish remote
+audio playback or exact subjective waterfall parity.

@@ -2,6 +2,7 @@
 
 #include "gui/RemoteMediaController.h"
 #include "core/AppSettings.h"
+#include "core/ClarityController.h"
 #include "core/FFTEngine.h"
 #include "core/session/StationClient.h"
 #include "core/session/media/DisplayCodec.h"
@@ -131,6 +132,7 @@ struct RemoteMediaController::Private {
         qint64 lastKeyframeMs = -1000;
         bool accepted = false;
         bool rejected = false;
+        bool receivedNoiseFloor = false;
     };
     QPointer<StationClient> client;
     QPointer<RadioModel> model;
@@ -364,6 +366,32 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
     auto it = d->bindings.find(endpointId);
     if (it == d->bindings.end() || it->second.revision != revision || !it->second.widget) { return; }
     auto& binding = it->second;
+    if (op == QLatin1String("noise-floor")) {
+        quint32 generation = 0;
+        double floor = 0;
+        if (payload.size() != 6 || !binding.accepted || binding.rejected
+            || !uint32(payload, "contextGeneration", generation)
+            || generation != binding.context.codec.contextGeneration
+            || !number(payload, "floorDbm", -400, 100, floor)
+            || !d->model || !d->model->isConnected() || !d->stack
+            || !binding.slice || !binding.widget->isVisible()
+            || d->stack->spectrum(d->stack->activePanId()) != binding.widget
+            || binding.observedStream != binding.slice->streamIndex()
+            || requestFor(binding.widget, binding.slice) != binding.observed) {
+            return;
+        }
+        // Clarity remains the GUI's existing active-pan controller. Core
+        // supplies the full-source percentile, before any display detector
+        // or codec can bias it; palette and operator overrides stay local.
+        if (ClarityController* clarity = d->model->clarityController()) {
+            if (!binding.receivedNoiseFloor) {
+                binding.receivedNoiseFloor = true;
+                qCInfo(lcRemoteMedia) << "Core noise floor received for Clarity:" << floor << "dBm";
+            }
+            clarity->feedNoiseFloor(static_cast<float>(floor));
+        }
+        return;
+    }
     if (op == QLatin1String("rejected")) {
         if (payload.size() == 6 && payload.value(QStringLiteral("reason")).isString()) {
             binding.accepted = false;
@@ -416,6 +444,7 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
     binding.decoder.reset();
     binding.accepted = true;
     binding.rejected = false;
+    binding.receivedNoiseFloor = false;
     binding.widget->setRemoteSpectrumContext(context, sourceCentre, rate);
     // The source crop may be bin-aligned. Remember the displayed accepted
     // window so the polling observer does not feed an ACK back as a new zoom.

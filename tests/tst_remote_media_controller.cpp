@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include "core/AppSettings.h"
+#include "core/ClarityController.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "core/settings/SettingsProxy.h"
@@ -104,11 +105,17 @@ private slots:
                 return sourceMedia;
             });
         RadioModel remote(RadioModel::Role::Remote);
+        ClarityController clarity;
+        remote.setClarityController(&clarity);
+        const auto detachClarity = qScopeGuard([&] { remote.setClarityController(nullptr); });
+        clarity.setEnabled(true);
+        QSignalSpy liveFloors(&clarity, &ClarityController::noiseFloorChanged);
         SettingsProxy proxy;
         StationClient client(&remote, &proxy);
         PanadapterStack stack;
         auto* first = stack.addPanadapter(QStringLiteral("first"));
         auto* second = stack.addPanadapter(QStringLiteral("second"));
+        stack.setActivePan(QStringLiteral("first"));
         for (auto* applet : {first, second}) {
             applet->setActiveSliceIndex(sliceId);
             applet->spectrumWidget()->setDisplayWindowPreservingHistory(centre, 48000);
@@ -150,6 +157,7 @@ private slots:
                 && !second->spectrumWidget()->renderedPixels().isEmpty();
         };
         QTRY_VERIFY_WITH_TIMEOUT(bothHaveFrames(), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(!liveFloors.isEmpty(), 5000);
         QCOMPARE(countControl(inbound, QStringLiteral("rejected")), 0);
 
         // DaemonMediaController applies the station offset before reducing
@@ -231,12 +239,27 @@ private slots:
         StationServer server(&station, settings, dir.path());
         server.setMediaEnabled(true);
         RadioModel remote(RadioModel::Role::Remote);
+        ClarityController clarity;
+        remote.setClarityController(&clarity);
+        const auto detachClarity = qScopeGuard([&] { remote.setClarityController(nullptr); });
+        clarity.setEnabled(true);
+        clarity.setPollIntervalMs(0);
+        clarity.setSmoothingTauSec(0);
+        clarity.setDeadbandDb(0);
+        QSignalSpy floors(&clarity, &ClarityController::noiseFloorChanged);
         SettingsProxy proxy;
         StationClient client(&remote, &proxy);
         PanadapterStack stack;
         auto* applet = stack.addPanadapter(QStringLiteral("pan-0"));
         applet->setActiveSliceIndex(stationSlice->sliceIndex());
         auto* widget = applet->spectrumWidget();
+        connect(&clarity, &ClarityController::waterfallThresholdsChanged,
+                widget, [widget](float low, float high) {
+            widget->setClarityActive(true);
+            widget->setClarityWaterfallThresholds(low, high);
+        });
+        const float savedLow = widget->wfLowThreshold();
+        const float savedHigh = widget->wfHighThreshold();
         widget->setDisplayWindowPreservingHistory(14225000, 24000);
         stack.resize(600, 400);
         stack.show();
@@ -248,6 +271,7 @@ private slots:
                 return media;
             });
         QSignalSpy controls(&server, &StationServer::mediaControlReceived);
+        QSignalSpy receivedControls(&client, &StationClient::mediaControlReceived);
         QSignalSpy frames(&controller, &RemoteMediaController::displayFrameReceived);
         QVERIFY(!media); // No pre-authentication peer or subscription.
         auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
@@ -263,6 +287,20 @@ private slots:
         QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 1);
         const QJsonObject subscription = lastControl(controls, QStringLiteral("subscribe"));
         const quint32 id = quint32(subscription.value(QStringLiteral("endpointId")).toDouble());
+        QJsonObject noiseFloor{
+            {QStringLiteral("op"), QStringLiteral("noise-floor")},
+            {QStringLiteral("connectionId"), subscription.value(QStringLiteral("connectionId"))},
+            {QStringLiteral("endpointId"), double(id)},
+            {QStringLiteral("revision"), subscription.value(QStringLiteral("revision"))},
+            {QStringLiteral("contextGeneration"), 1},
+            {QStringLiteral("floorDbm"), -132.375}};
+        const auto deliverFloor = [&](const QJsonObject& message) {
+            const int before = countControl(receivedControls, QStringLiteral("noise-floor"));
+            QVERIFY(server.sendMediaControl(message, server.mediaSessionEpoch()));
+            QTRY_COMPARE(countControl(receivedControls, QStringLiteral("noise-floor")), before + 1);
+        };
+        deliverFloor(noiseFloor); // No accepted display context yet.
+        QCOMPARE(floors.size(), 0);
         DisplayCodecFrame frame;
         frame.context = {id, 1, -180, 0, 128, 128, 0};
         frame.traceDbm = QVector<float>(128, -75);
@@ -294,6 +332,32 @@ private slots:
         QCOMPARE(frames.count(), 0);
         QVERIFY(server.sendMediaControl(context, server.mediaSessionEpoch()));
         QTRY_COMPARE(countControl(controls, QStringLiteral("keyframe")), 1);
+        deliverFloor(noiseFloor);
+        QCOMPARE(floors.size(), 1);
+        QCOMPARE(clarity.smoothedFloor(), -132.375f);
+        QCOMPARE(widget->wfActiveLowThreshold(), -137.375f);
+        QCOMPARE(widget->wfActiveHighThreshold(), -77.375f);
+        QCOMPARE(widget->wfLowThreshold(), savedLow);
+        QCOMPARE(widget->wfHighThreshold(), savedHigh);
+        const QList<QPair<QString, QJsonValue>> invalidFields{
+            {QStringLiteral("connectionId"), QStringLiteral("00000000-0000-4000-8000-000000000001")},
+            {QStringLiteral("endpointId"), double(id + 1000)},
+            {QStringLiteral("revision"), subscription.value(QStringLiteral("revision")).toDouble() + 1},
+            {QStringLiteral("contextGeneration"), 2},
+            {QStringLiteral("contextGeneration"), 1.5},
+            {QStringLiteral("floorDbm"), QStringLiteral("-120")},
+            {QStringLiteral("floorDbm"), -401},
+            {QStringLiteral("floorDbm"), 101},
+            {QStringLiteral("floorDbm"), QJsonValue(QJsonValue::Null)},
+            {QStringLiteral("extra"), 1}};
+        for (const auto& [key, value] : invalidFields) {
+            QJsonObject badFloor = noiseFloor;
+            badFloor.insert(key, value);
+            deliverFloor(badFloor);
+            QCOMPARE(floors.size(), 1);
+        }
+        client.mediaControlReceived(noiseFloor, client.sessionEpoch() - 1);
+        QCOMPARE(floors.size(), 1);
         media->deliver(packet);
         QCOMPARE(frames.count(), 1);
         QCOMPARE(widget->renderedPixels().size(), 128);
@@ -302,9 +366,14 @@ private slots:
         QTest::qWait(250);
         // Bin-aligned accepted geometry must not create a resubscribe loop.
         QCOMPARE(countControl(controls, QStringLiteral("subscribe")), 1);
+        widget->setDisplayWindowPreservingHistory(14425000, 24000);
+        deliverFloor(noiseFloor); // A gesture retires old RF meaning before its ACK.
+        QCOMPARE(floors.size(), 1);
         applet->hide();
         QTRY_COMPARE(countControl(controls, QStringLiteral("unsubscribe")), 1);
         QCOMPARE(controller.activeEndpointCount(), 0);
+        deliverFloor(noiseFloor);
+        QCOMPARE(floors.size(), 1);
         media->deliver(packet);
         QCOMPARE(frames.count(), 1);
         client.disconnectFromStation(QStringLiteral("test complete"));
