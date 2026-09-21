@@ -5,12 +5,13 @@ and real remote receive acceptance. A component pass does not close R3.
 
 ## Current receive status, September 21
 
-Core is installed at `74145a4b`; the matching GUI build is ready, but the
-running GUI is still `3c4b15e6` because the Mac is locked. The previous
+Core and the running GUI are both at `74145a4b`. The GUI was reopened after
+Mac unlock, authenticated to the Rock's wired address and showed live
+applet meter movement and matching active-slice readings. The previous
 checkpoint has authenticated Core control, live spectrum/2D waterfall,
 station display calibration and Clarity floor-input evidence below. The
-meter correction passed 673/673 tests and native installation; visible
-needle verification waits for GUI restart. Clarity's saved black-level/palette
+meter correction passed 673/673 tests and native installation; full mode
+and reconnect visual acceptance remains open. Clarity's saved black-level/palette
 adjustment and subjective comparison also remain pending. Remote audio playback, BPF/WIDE
 indicator bindings, Auto AGC-T visuals, capacity/long-run acceptance and R5
 internet traversal are still unfinished. Earlier sections record evidence
@@ -425,3 +426,28 @@ Installed SHA-256 values:
 | `nereusd` | `8e0b6483c27ac79c757b41e02bdcf78eee31e8b16a07f01f066c2fc6c0faa599` |
 | `libNereusCore.so` | `f78ae36d2ae7cc3ce7cf19c6f179ee326bae814186d24bd23dedf172a4b3e8c8` |
 | `librade.so.0.1` | `18e56fe8ee4b8a8450cc786cbcfed9bab147ec11df64e33486ce50e0ff91c32f` |
+
+## Live meter observation and overnight reconnect
+
+After the Mac was unlocked, the old `3c4b15e6` GUI was still running but
+disconnected. Its log showed an overnight closed connection and six failed
+redial attempts; this does not establish the underlying network cause.
+Core remained active with zero service restarts. Closing the GUI and
+relaunching profile `radxa_5c_r3` opened the matching `74145a4b` build and
+completed a fresh authenticated handshake. The actual TCP connection was
+verified to `192.168.109.106:50055`, and the client logged fresh Core
+noise-floor and encrypted spectrum input.
+
+The applet initially showed about -67 dBm with a responsive needle. A later
+observation, after the operator selected the stronger signal at 3.915100 MHz,
+showed -39 dBm on both the applet and active slice flag, with advancing
+spectrum and waterfall. The agent did not retune or transmit. This closes
+the initial real-signal needle check; all-mode and longer reconnect testing
+remain distinct acceptance work.
+
+The current manual recovery is to quit and relaunch the saved Core profile.
+The normal Radio/Connect action still targets the local radio-discovery
+path, so it is not yet a remote-station reconnect control. A private desktop
+launcher named `Nereus Core - Rock 5C.command` now launches the correct
+build/profile and rejects a duplicate instance. R-R3-16 records the missing
+direct reconnect control rather than presenting relaunch as the finished UX.

@@ -110,6 +110,7 @@ by the earlier brainstorming, and this review does not present them as such.
 | R-R3-13 | Remote applet and slice S-meters select Core's independent calibrated peak/average readings, or the decoded display's passband Max Bin. They follow active slice identity and never poll local DSP or add client calibration. Disconnect clears the live reading, and reconnect waits for the current snapshot; RX telemetry remains read-only. |
 | R-R3-14 | Remote CH/BPF/WIDE indicators show Core's effective per-chain filter state and reason, including initial snapshot and reconnect. Client-local Alex bookkeeping cannot stand in for station state. |
 | R-R3-15 | Remote Auto AGC-T visuals reflect the station's per-slice AGC noise-floor state. GUI Clarity smoothing is not an AGC measurement source. |
+| R-R3-16 | Remote GUI Connect/Disconnect actions operate the configured Core station session. After automatic retries stop, the operator can explicitly reconnect without relaunching or invoking direct-radio discovery. |
 
 The authorized radio is the ANAN-G2/Saturn, MAC `2C:CF:67:AB:FC:F4`, board
 `0x0A`; the September 20 instruction supersedes the old G2E-only bench rows.
@@ -300,7 +301,7 @@ LAN run. This milestone is a display checkpoint, not completed R3.
 
 ## 4a. Complete receive telemetry bindings
 
-**Requirements:** R-R3-13 through R-R3-15. **Dependencies:** authenticated
+**Requirements:** R-R3-13 through R-R3-16. **Dependencies:** authenticated
 state mirror and decoded remote display.
 
 - [x] Publish separate read-only `SliceModel.signalPeakDbm` and
@@ -314,6 +315,9 @@ state mirror and decoded remote display.
   existing CH indicator bindings and replay state after reconnect.
 - [ ] Mirror station Auto AGC-T measurements and bind the applet/flag
   visuals without feeding back client-derived noise estimates.
+- [ ] Route remote-role Connect/Disconnect actions to the saved Core
+  session, including an explicit retry after the automatic retry budget
+  ends. Retain direct-radio behavior for local mode.
 
 **Verification:** real Core meter reads, read-only mirror round trips,
 source selection, stable slice IDs, disconnect/TX/lifetime tests, unchanged
@@ -414,5 +418,6 @@ whole-plan review loops.
 | Headless FFT and display codec | Implemented and component-tested | Independent Wide/Fine sources, retune input reset, independent planes, crop clamp, bounded codec and recovery tests pass; authenticated daemon-to-GUI regression and live Saturn display pass |
 | Audio | Opus/RTP and mixed-audio capture tests pass | Stereo wideband 24/48 kbit/s packet checks, mixer gain/mute/pan, bounded capture timestamps and retirement pass; sender, jitter, adaptive clock correction and playback remain pending |
 | GUI media wiring | Desktop builds; initial focused checks pass | Dedicated reduced-frame renderer and authenticated subscription controller tested; two-pane, shared-window and reconnect regressions pass; live GPU spectrum/2D observed; operator 3D confirmation and gesture refinement pending |
-| Applet S-meter | Implemented, 673/673 suite passed; Core installed | Peak/average telemetry and decoded-passband Max Bin tested; matching GUI built and signed, but reopening and visual acceptance wait for Mac unlock |
+| Applet S-meter | Implemented, 673/673 suite passed; Core and GUI running | Live needle movement and applet/active-flag agreement observed on Saturn; all-mode/longer acceptance pending |
 | BPF and Auto AGC-T indicators | Confirmed remaining bindings | R-R3-14 and R-R3-15; source audit complete, implementation pending |
+| Manual Core reconnect | Relaunch recovery verified; direct UI action pending | R-R3-16; desktop launcher preserves the saved Core profile, normal Connect still follows local discovery |
