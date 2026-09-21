@@ -175,9 +175,9 @@ private slots:
 
     void spanUnsupported_disablesTheSliderNotTheRest() {
         SpectrumOverlayMenu m;
-        m.resize(320, 640);
-        m.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&m));
+        // Enabled state is synchronous and independent of popup exposure.
+        // Keep this test independent of native popup focus/visibility;
+        // the real shown-widget interaction is exercised below.
 
         m.setDssRowSpanSupported(false);
         QVERIFY(!m.findChild<QSlider*>(QStringLiteral("dssRowSpanSlider"))->isEnabled());

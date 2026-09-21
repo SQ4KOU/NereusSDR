@@ -110,7 +110,7 @@ by the earlier brainstorming, and this review does not present them as such.
 | R-R3-13 | Remote applet and slice S-meters select Core's independent calibrated peak/average readings, or the decoded display's passband Max Bin. They follow active slice identity and never poll local DSP or add client calibration. Disconnect clears the live reading, and reconnect waits for the current snapshot; RX telemetry remains read-only. |
 | R-R3-14 | Remote CH/BPF/WIDE indicators show Core's effective per-chain filter state and reason, including initial snapshot and reconnect. Client-local Alex bookkeeping cannot stand in for station state. |
 | R-R3-15 | Remote Auto AGC-T visuals reflect the station's per-slice AGC noise-floor state. GUI Clarity smoothing is not an AGC measurement source. |
-| R-R3-16 | Remote GUI Connect/Disconnect actions operate the configured Core station session. After automatic retries stop, the operator can explicitly reconnect without relaunching or invoking direct-radio discovery. |
+| R-R3-16 | Remote GUI Connect/Disconnect actions operate the configured Core station session. Disconnect cancels pending retries; explicit Connect starts a fresh session without relaunching or invoking direct-radio discovery. |
 
 The authorized radio is the ANAN-G2/Saturn, MAC `2C:CF:67:AB:FC:F4`, board
 `0x0A`; the September 20 instruction supersedes the old G2E-only bench rows.
@@ -315,9 +315,10 @@ state mirror and decoded remote display.
   existing CH indicator bindings and replay state after reconnect.
 - [ ] Mirror station Auto AGC-T measurements and bind the applet/flag
   visuals without feeding back client-derived noise estimates.
-- [ ] Route remote-role Connect/Disconnect actions to the saved Core
-  session, including an explicit retry after the automatic retry budget
-  ends. Retain direct-radio behavior for local mode.
+- [x] Route remote-role Connect/Disconnect actions to the saved Core
+  session, including cancellation during retry backoff and a fresh explicit
+  connection on the same client. Retain direct-radio behavior for local mode.
+  Live GUI acceptance is recorded separately in the verification ledger.
 
 **Verification:** real Core meter reads, read-only mirror round trips,
 source selection, stable slice IDs, disconnect/TX/lifetime tests, unchanged
@@ -327,6 +328,13 @@ and live observations; the meter fix does not establish those gates.
 
 ## 5. Deliver mixed stereo Opus with continuous playback
 
+**Current priority, September 21:** after the bounded manual reconnect fix,
+first audible Saturn reception is the next implementation deliverable.
+BPF/WIDE and Auto AGC-T indicator corrections remain required receive work,
+but do not block this audio path. R5 traversal is not a prerequisite for
+LAN listening. Preserve the loss/clock and actual-listening gates below;
+the two-hour run belongs to final R3 acceptance.
+
 **Requirements:** R-R3-02, 03, 06, 07, 09. **Dependencies:** 1 and 4's session
 lifecycle; audio codec unit work can precede GUI spectrum completion.
 
@@ -334,6 +342,28 @@ lifecycle; audio codec unit work can precede GUI spectrum completion.
 `OpusAudioCodec`, `AudioJitterBuffer`, variable resampling adapter and playback
 adapter; tests `tst_remote_audio_mix`, `tst_opus_audio_codec`,
 `tst_remote_audio_clock`, `tst_remote_audio_session`.
+
+The September 21 source audit narrows the remaining integration:
+
+1. Own an audio sender from `DaemonMediaController`: consume the existing
+   `DaemonAudioSource` off the DSP callback, encode with `OpusAudioEncoder`,
+   and send via the current session's `MediaPeer::sendRtp`. Source sample
+   positions drive timestamps; peer/session retirement stops capture and
+   retires the encoder and SSRC.
+2. Connect `RemoteMediaController` to `MediaPeer::rtpReceived`, with bounded
+   reordering, jitter, loss concealment, continuous rate matching and a
+   playback bus independent of local radio DSP. Validate clocks against
+   actual device consumption, not the worker timer's cadence.
+3. Bind client output device, trim and mute; flush queued audio and retire
+   generations on mute/disconnect. Verify actual stereo listening, per-slice
+   gain/mute/pan and reconnect on the Saturn/Rock/Mac path.
+
+The vendored WDSP `rmatch`/`varsamp` implementation is a source candidate
+for continuous rate matching; its exported `create_rmatchV`, `xrmatchIN`
+and `xrmatchOUT` API preserves variable-resampler state. It uses critical
+sections, so it must not run in a lock-free device callback. Source review
+alone does not close task 1's runtime gate: the wrapper, attribution,
+consumer-clock feedback and deterministic drift tests remain to be done.
 
 - [x] Tee exactly one successful master drain before speaker volume/mute.
   Preallocate bounded storage with nonblocking producer admission; use an
@@ -420,4 +450,4 @@ whole-plan review loops.
 | GUI media wiring | Desktop builds; initial focused checks pass | Dedicated reduced-frame renderer and authenticated subscription controller tested; two-pane, shared-window and reconnect regressions pass; live GPU spectrum/2D observed; operator 3D confirmation and gesture refinement pending |
 | Applet S-meter | Implemented, 673/673 suite passed; Core and GUI running | Live needle movement and applet/active-flag agreement observed on Saturn; all-mode/longer acceptance pending |
 | BPF and Auto AGC-T indicators | Confirmed remaining bindings | R-R3-14 and R-R3-15; source audit complete, implementation pending |
-| Manual Core reconnect | Relaunch recovery verified; direct UI action pending | R-R3-16; desktop launcher preserves the saved Core profile, normal Connect still follows local discovery |
+| Manual Core reconnect | Implemented; live GUI verification pending | R-R3-16; Radio menu/shortcuts and connection context menus target one reusable Core client; Disconnect cancels pending retries |

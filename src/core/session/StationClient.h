@@ -373,6 +373,11 @@ public:
     /// between attempts.
     bool isReconnectPending() const;
 
+    /// A dial, live session or automatic retry is in progress. Unlike the
+    /// mirrored radio state, this remains true when Core is reachable but
+    /// its radio is offline. Used by the operator's Connect/Disconnect actions.
+    bool isConnectionActive() const { return m_sessionActive || isReconnectPending(); }
+
     /// Test seam: production default is kDefaultReconnectBackoffUnitMs
     /// (real seconds). See scheduleReconnect() in the .cpp for the
     /// schedule this scales.
@@ -463,6 +468,8 @@ public:
     int maxMissedPongs() const { return m_maxMissedPongs; }
 
 signals:
+    /// Refresh connection controls after a dial, closure or retry cancellation.
+    void connectionActivityChanged();
     void mediaControlReceived(const QJsonObject& payload, quint32 epoch);
     /// Retires media even when a deliberate redial silently supersedes a link.
     void mediaSessionEnded(quint32 epoch);

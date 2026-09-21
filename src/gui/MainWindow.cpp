@@ -930,83 +930,106 @@ void MainWindow::connectToStation()
         return;
     }
 
-    // dynamic_cast, not qobject_cast: AppSettings holds the backend as an
-    // ISettingsBackend*, and that interface deliberately is NOT a QObject
-    // (see ISettingsBackend.h), so there is no meta-object for qobject_cast
-    // to walk. The interface has a virtual destructor, which is what makes
-    // this cross-cast well-formed.
-    auto* proxy = dynamic_cast<SettingsProxy*>(
-        AppSettings::instance().remoteBackend());
-    if (proxy == nullptr) {
-        // Refusing here rather than dialling with a null proxy: without it
-        // every Station-scoped read resolves against this machine's own
-        // settings file and the operator drives the daemon with someone
-        // else's DSP configuration on screen.
-        qCWarning(lcConnection)
-            << "Remote station requested but no SettingsProxy is installed as "
-               "the AppSettings backend; refusing to connect. This is a "
-               "programming error in the startup sequence, not a "
-               "configuration problem.";
+    if (m_stationClient != nullptr && m_stationClient->isConnectionActive()) {
         return;
     }
-
-    m_stationClient = new StationClient(m_radioModel, proxy, this);
-    auto* media = new RemoteMediaController(m_stationClient, m_radioModel,
-                                             m_panStack, m_stationClient);
-    connect(media, &RemoteMediaController::errorOccurred, this, [this](const QString& reason) {
-        qCWarning(lcConnection) << "Station media:" << reason;
-        showToast(tr("Station media: %1").arg(reason), ToastSeverity::Warning, 5000);
-    });
-
-    connect(m_stationClient, &StationClient::handshakeComplete, this, [this]() {
-        qCInfo(lcConnection) << "Station handshake complete:" << m_station.url;
-        showToast(tr("Connected to station %1").arg(m_station.url),
-                  ToastSeverity::Info, 3000);
-    });
-    connect(m_stationClient, &StationClient::sessionEnded, this,
-            [this](const QString& reason) {
-        qCWarning(lcConnection) << "Station session ended:" << reason;
-        showToast(tr("Station link lost: %1").arg(reason),
-                  ToastSeverity::Warning, 5000);
-    });
-    connect(m_stationClient, &StationClient::reconnectScheduled, this,
-            [this](int attempt, int delayMs) {
-        showToast(tr("Reconnecting to station (attempt %1) in %2 s")
-                      .arg(attempt).arg((delayMs + 999) / 1000),
-                  ToastSeverity::Info, 3000);
-    });
-
-    // Whole-branch review, Important 2. The three toasts above tell the
-    // operator about the LINK. This one tells them about their own EDIT,
-    // which nothing did before: while the link is down SettingsProxy still
-    // caches a write and value() still returns it, so the Setup control
-    // they moved reads back as applied, and the reconnect snapshot then
-    // replaces it with the station's own value in silence.
-    //
-    // Proportionate on purpose: a COUNT here, the key names at warning
-    // level in SettingsProxy::applySnapshot(). A remote client that has
-    // been offline through a band change can have a dozen of these, and a
-    // toast listing "hardware/aa:bb:.../alex/hpf/..." twelve times is
-    // noise the operator will learn to dismiss unread.
-    connect(proxy, &SettingsProxy::offlineEditsSuperseded, this,
-            [this](const QStringList& keys) {
-        showToast(tr("%n station setting(s) you changed while the link was down "
-                     "did not stick. See the log for which.", "", keys.size()),
-                  ToastSeverity::Warning, 8000);
-    });
-
-    // Task 19: the Disconnect side must pass attemptReconnect = false so a
-    // deliberate quit does not schedule a surprise redial during teardown.
-    connect(qApp, &QCoreApplication::aboutToQuit, this, [this]() {
-        if (m_stationClient != nullptr) {
-            m_stationClient->disconnectFromStation(
-                QStringLiteral("client shutting down"));
+    // A manual reconnect must reuse the same client, model attachment and
+    // media controller. Their per-session state is retired by StationClient.
+    if (m_stationClient == nullptr) {
+        // dynamic_cast, not qobject_cast: AppSettings holds the backend as an
+        // ISettingsBackend*, and that interface deliberately is NOT a QObject
+        // (see ISettingsBackend.h), so there is no meta-object for qobject_cast
+        // to walk. The interface has a virtual destructor, which is what makes
+        // this cross-cast well-formed.
+        auto* proxy = dynamic_cast<SettingsProxy*>(
+            AppSettings::instance().remoteBackend());
+        if (proxy == nullptr) {
+            // Refusing here rather than dialling with a null proxy: without it
+            // every Station-scoped read resolves against this machine's own
+            // settings file and the operator drives the daemon with someone
+            // else's DSP configuration on screen.
+            qCWarning(lcConnection)
+                << "Remote station requested but no SettingsProxy is installed as "
+                   "the AppSettings backend; refusing to connect. This is a "
+                   "programming error in the startup sequence, not a "
+                   "configuration problem.";
+            return;
         }
-    });
+
+        m_stationClient = new StationClient(m_radioModel, proxy, this);
+        connect(m_stationClient, &StationClient::connectionActivityChanged,
+                this, &MainWindow::applyRemoteRoleGating);
+        auto* media = new RemoteMediaController(m_stationClient, m_radioModel,
+                                               m_panStack, m_stationClient);
+        connect(media, &RemoteMediaController::errorOccurred, this, [this](const QString& reason) {
+            qCWarning(lcConnection) << "Station media:" << reason;
+            showToast(tr("Station media: %1").arg(reason), ToastSeverity::Warning, 5000);
+        });
+
+        connect(m_stationClient, &StationClient::handshakeComplete, this, [this]() {
+            qCInfo(lcConnection) << "Station handshake complete:" << m_station.url;
+            showToast(tr("Connected to station %1").arg(m_station.url),
+                      ToastSeverity::Info, 3000);
+        });
+        connect(m_stationClient, &StationClient::sessionEnded, this,
+                [this](const QString& reason) {
+            if (m_stationDisconnectRequested) {
+                return;
+            }
+            qCWarning(lcConnection) << "Station session ended:" << reason;
+            showToast(tr("Station link lost: %1").arg(reason),
+                      ToastSeverity::Warning, 5000);
+        });
+        connect(m_stationClient, &StationClient::reconnectScheduled, this,
+                [this](int attempt, int delayMs) {
+            showToast(tr("Reconnecting to station (attempt %1) in %2 s")
+                          .arg(attempt).arg((delayMs + 999) / 1000),
+                      ToastSeverity::Info, 3000);
+        });
+
+        // Whole-branch review, Important 2. The three toasts above tell the
+        // operator about the LINK. This one tells them about their own EDIT,
+        // which nothing did before: while the link is down SettingsProxy still
+        // caches a write and value() still returns it, so the Setup control
+        // they moved reads back as applied, and the reconnect snapshot then
+        // replaces it with the station's own value in silence.
+        //
+        // Proportionate on purpose: a COUNT here, the key names at warning
+        // level in SettingsProxy::applySnapshot(). A remote client that has
+        // been offline through a band change can have a dozen of these, and a
+        // toast listing "hardware/aa:bb:.../alex/hpf/..." twelve times is
+        // noise the operator will learn to dismiss unread.
+        connect(proxy, &SettingsProxy::offlineEditsSuperseded, this,
+                [this](const QStringList& keys) {
+            showToast(tr("%n station setting(s) you changed while the link was down "
+                         "did not stick. See the log for which.", "", keys.size()),
+                      ToastSeverity::Warning, 8000);
+        });
+
+        // Task 19: the Disconnect side must pass attemptReconnect = false so a
+        // deliberate quit does not schedule a surprise redial during teardown.
+        connect(qApp, &QCoreApplication::aboutToQuit, this, [this]() {
+            if (m_stationClient != nullptr) {
+                m_stationClient->disconnectFromStation(
+                    QStringLiteral("client shutting down"));
+            }
+        });
+    }
 
     m_stationClient->connectToStation(QUrl(m_station.url), m_station.token,
                                       m_station.fingerprint,
                                       m_station.allowUnpinned);
+}
+
+void MainWindow::disconnectFromStation()
+{
+    if (m_stationClient == nullptr) {
+        return;
+    }
+    m_stationDisconnectRequested = true;
+    m_stationClient->disconnectFromStation(QStringLiteral("operator disconnect"));
+    m_stationDisconnectRequested = false;
+    showToast(tr("Disconnected from Core station"), ToastSeverity::Info, 3000);
 }
 
 // Phase 3F Sub-Epic D Task 12: resolve the active pan's SpectrumWidget.
@@ -6328,6 +6351,10 @@ void MainWindow::buildMenuBar()
     m_actConnect = radioMenu->addAction(QStringLiteral("&Connect"),
         QKeySequence(Qt::CTRL | Qt::Key_K),
         this, [this]() {
+            if (!m_radioModel->ownsLocalDsp()) {
+                connectToStation();
+                return;
+            }
             if (m_radioModel->isConnected()) {
                 return;
             }
@@ -6385,7 +6412,13 @@ void MainWindow::buildMenuBar()
     // Disconnect (⌘⇧K) — disabled while disconnected.
     m_actDisconnect = radioMenu->addAction(QStringLiteral("&Disconnect"),
         QKeySequence(Qt::CTRL | Qt::SHIFT | Qt::Key_K),
-        this, [this]() { m_radioModel->disconnectFromRadio(); });
+        this, [this]() {
+            if (!m_radioModel->ownsLocalDsp()) {
+                disconnectFromStation();
+                return;
+            }
+            m_radioModel->disconnectFromRadio();
+        });
     m_actDisconnect->setToolTip(QStringLiteral("Disconnect from the current radio"));
 
     radioMenu->addSeparator();
@@ -9899,27 +9932,18 @@ void MainWindow::applyRemoteRoleGating()
         return;  // local direct mode: nothing here runs, by construction
     }
 
-    // The Radio menu is the only place an operator can reach
-    // connectToRadio() / disconnectFromRadio() by keyboard shortcut, and
-    // both are meaningless here: connectToRadio() early-returns on a remote
-    // model (Task 4), and disconnectFromRadio() would run teardownConnection()
-    // against state the STATION owns.
-    //
-    // Re-applied from onConnectionStateChanged() rather than done once,
-    // because that slot's tail sets these three from connection state alone
-    // -- and a remote model reports Connected, so Disconnect would come back
-    // live on the first state change if this only ran at construction.
+    // Core session activity is independent of the mirrored radio state:
+    // an authenticated Core with an offline radio must still be disconnectable.
+    const bool active = m_stationClient != nullptr
+        && m_stationClient->isConnectionActive();
     if (m_actConnect != nullptr) {
-        m_actConnect->setEnabled(false);
-        m_actConnect->setToolTip(
-            tr("Unavailable: this window is driving a remote station. "
-               "The station owns the radio connection."));
+        m_actConnect->setEnabled(m_station.isRemote() && !active);
+        m_actConnect->setToolTip(tr("Connect to the configured Core station"));
     }
     if (m_actDisconnect != nullptr) {
-        m_actDisconnect->setEnabled(false);
+        m_actDisconnect->setEnabled(active);
         m_actDisconnect->setToolTip(
-            tr("Unavailable: this window is driving a remote station. "
-               "The station owns the radio connection."));
+            tr("Disconnect from Core and stop automatic connection attempts"));
     }
     if (m_actManageRadios != nullptr) {
         m_actManageRadios->setEnabled(false);
@@ -9948,6 +9972,12 @@ void MainWindow::applyRemoteRoleGating()
 void MainWindow::showSegmentContextMenu(const QPoint& globalPos)
 {
     QMenu menu(this);
+    if (!m_radioModel->ownsLocalDsp()) {
+        menu.addAction(m_actConnect);
+        menu.addAction(m_actDisconnect);
+        menu.exec(globalPos);
+        return;
+    }
 
     // R2 Task 20: Disconnect is gated the same way the Radio menu's is.
     // Harmless today (teardownConnection() returns early on the null
@@ -9991,6 +10021,12 @@ void MainWindow::showStationContextMenu(const QPoint& globalPos)
     }
 
     QMenu menu(this);
+    if (!m_radioModel->ownsLocalDsp()) {
+        menu.addAction(m_actConnect);
+        menu.addAction(m_actDisconnect);
+        menu.exec(globalPos);
+        return;
+    }
 
     // Fix round 4: all three entries below are gated the way
     // showSegmentContextMenu()'s Disconnect already is. That sibling gained
@@ -11034,13 +11070,8 @@ void MainWindow::onConnectionStateChanged()
         m_actProtocolInfo->setEnabled(connected);
     }
 
-    // Remote-daemon R2 Task 20: re-apply the remote gate LAST, so it wins
-    // over the block above. A remote model reaches ConnectionState::Connected
-    // (Task 3's storage-backed state, driven by Task 18's
-    // applyStationCapabilities), so `connected` is true here and Disconnect
-    // and Protocol Info would both come back live -- the first tearing down
-    // state the station owns, the second dereferencing a null connection().
-    // No-op in local direct mode.
+    // Remote actions follow Core session activity; protocol/discovery remain
+    // local-only even when the mirrored radio reports Connected.
     applyRemoteRoleGating();
 }
 

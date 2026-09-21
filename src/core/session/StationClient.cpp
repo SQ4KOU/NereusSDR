@@ -300,6 +300,7 @@ void StationClient::connectToStation(const QUrl& url, const QString& token,
             "unpinned self-signed certificate authenticates nothing.");
         qCWarning(lcStationClient) << m_lastError;
         emit sessionEnded(m_lastError);
+        emit connectionActivityChanged();
         return;
     }
 
@@ -350,6 +351,7 @@ void StationClient::dialStation(const QUrl& url, const QString& token,
         // has been attached yet, so endSession()'s m_sessionActive guard
         // would swallow this and the caller would hear nothing at all.
         emit sessionEnded(m_lastError);
+        emit connectionActivityChanged();
         return;
     }
 
@@ -664,6 +666,7 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
     // It starts on the first inbound frame instead (onTransportText), which
     // is the station's own Hello and therefore proof the link carries
     // traffic in both directions.
+    emit connectionActivityChanged();
 }
 
 void StationClient::disconnectFromStation(const QString& reason, bool attemptReconnect)
@@ -691,6 +694,8 @@ void StationClient::disconnectFromStation(const QString& reason, bool attemptRec
     if (m_transport != nullptr) {
         m_transport->closeLink(reason);
     }
+    // A cancelled backoff has no active session for endSession() to retire.
+    emit connectionActivityChanged();
 }
 
 void StationClient::onTransportClosed()
@@ -837,6 +842,7 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     if (attemptReconnect && m_lastUrl.isValid()) {
         scheduleReconnect();
     }
+    emit connectionActivityChanged();
 }
 
 // ── Heartbeat ────────────────────────────────────────────────────────────
@@ -937,6 +943,7 @@ void StationClient::onReconnectTimeout()
         // stop this timer unconditionally, so a fired-with-nothing-to-
         // redial timeout should be unreachable. Not treated as a bug if
         // it somehow happens -- just nothing to do.
+        emit connectionActivityChanged();
         return;
     }
     dialStation(m_lastUrl, m_token, m_lastFingerprint, m_lastAllowUnpinned);

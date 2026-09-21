@@ -520,21 +520,14 @@ private slots:
     /// started), so on a remote client it is a window of zeroes at best.
     void openNetworkDiagnostics();
 
-    /// Apply the Role::Remote gate to every local-hardware surface this
-    /// window owns.
-    ///
-    /// Idempotent, and a no-op in local direct mode. Called once at the end
-    /// of construction and again from onConnectionStateChanged(), because
-    /// that slot's tail re-enables the Radio menu from connection state
-    /// alone -- and a remote model reports Connected (Task 3 + Task 18), so
-    /// without the second call Disconnect would come back live and
-    /// disconnectFromRadio() on a remote model would tear down state the
-    /// station owns.
+    /// Refresh Core session actions and suppress local-only hardware controls.
+    /// Called after both mirrored radio state and Core connection activity
+    /// change; a reachable Core need not have its radio connected.
     void applyRemoteRoleGating();
 
-    /// Build the StationClient and dial `m_station`. Called once at the end
-    /// of construction and only when m_station.isRemote().
+    /// Reuse one StationClient/media controller to dial the configured Core.
     void connectToStation();
+    void disconnectFromStation();
 
     /// The one place in src/gui that runs `new SetupDialog`.
     ///
@@ -861,6 +854,7 @@ private:
     // forward-declared pointer so this header stays free of the session
     // stack (StationClient.h drags in the whole message codec).
     class StationClient* m_stationClient{nullptr};
+    bool m_stationDisconnectRequested{false};
 
     // Phase 3M-4 Task 8: PsForm modeless dialog (Tools > PureSignal...).
     // Lazy-constructed on first openPureSignalDialog() call; lives for the

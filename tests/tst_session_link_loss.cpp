@@ -150,6 +150,7 @@ private slots:
     void unpinnedRefusalDoesNotLeaveAPendingRetryArmed();
     void startSessionClearsAnyPreviouslyLatchedRedialTarget();
     void automaticRetryReconnectsToASuccessfulHandshake();
+    void operatorConnectionActivityIsIndependentOfRadioState();
 
 private:
     /// One temp dir for the whole class so the RSA-3072 key pair is
@@ -162,6 +163,49 @@ private:
 void TstSessionLinkLoss::initTestCase()
 {
     QVERIFY(m_securityDir.isValid());
+}
+
+void TstSessionLinkLoss::operatorConnectionActivityIsIndependentOfRadioState()
+{
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+    auto stationModel = makeStationRadioModel(0);
+    stationModel->setConnectionStateForTest(ConnectionState::Disconnected);
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    server.setHeartbeatIntervalMs(0);
+
+    RadioModel model(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&model, &proxy);
+    client.setHeartbeatIntervalMs(0);
+    QSignalSpy activity(&client, &StationClient::connectionActivityChanged);
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    QVERIFY(!client.isConnectionActive());
+
+    for (int session = 1; session <= 2; ++session) {
+        auto* stationEnd = new LoopbackTransport(QStringLiteral("station"), this);
+        auto* clientEnd = new LoopbackTransport(QStringLiteral("client"), this);
+        stationEnd->linkTo(clientEnd);
+        const int changesBeforeDial = activity.count();
+        client.startSession(clientEnd, server.token());
+        QVERIFY(client.isConnectionActive()); // Includes the incomplete handshake.
+        QVERIFY(activity.count() > changesBeforeDial);
+        server.acceptTransport(stationEnd);
+        QTRY_COMPARE(completed.count(), session);
+        QCOMPARE(client.sessionEpoch(), quint32(session));
+        QVERIFY(client.isConnectionActive());
+        QVERIFY(!model.isConnected()); // Core is live while its radio is offline.
+
+        const int changesBeforeClose = activity.count();
+        client.disconnectFromStation(QStringLiteral("operator disconnect"));
+        QVERIFY(!client.isConnectionActive());
+        QVERIFY(!client.isReconnectPending());
+        QVERIFY(!client.isHandshakeComplete());
+        QVERIFY(!proxy.ready());
+        QVERIFY(activity.count() > changesBeforeClose);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    }
 }
 
 // ── Step 1 + step 4 ──────────────────────────────────────────────────────
@@ -467,8 +511,11 @@ void TstSessionLinkLoss::autoReconnectUsesOwnedCancellableTimerWithExponentialBa
     QCOMPARE(client.reconnectBackoffUnitMs(), 200);
 
     QSignalSpy scheduled(&client, &StationClient::reconnectScheduled);
+    QSignalSpy activity(&client, &StationClient::connectionActivityChanged);
     const QUrl deadUrl(QStringLiteral("wss://127.0.0.1:%1").arg(deadPort));
     client.connectToStation(deadUrl, QStringLiteral("token"), placeholderFingerprint());
+    QVERIFY(client.isConnectionActive());
+    QVERIFY(!activity.isEmpty());
 
     // Fix round 1, Minor 6: no isReconnectPending() check at THIS step.
     // QTRY_COMPARE_WITH_TIMEOUT polls roughly every 50 ms against a 200 ms
@@ -494,7 +541,11 @@ void TstSessionLinkLoss::autoReconnectUsesOwnedCancellableTimerWithExponentialBa
     // section 13: "ICE restart and operator-initiated disconnect both
     // need [cancellability]").
     QVERIFY(client.isReconnectPending());
+    QVERIFY(client.isConnectionActive());
+    const int changesBeforeCancel = activity.count();
     client.disconnectFromStation(QStringLiteral("operator disconnect"));
+    QVERIFY(!client.isConnectionActive());
+    QVERIFY(activity.count() > changesBeforeCancel);
     QVERIFY2(!client.isReconnectPending(),
              "disconnectFromStation() did not cancel the pending retry");
 
@@ -505,6 +556,16 @@ void TstSessionLinkLoss::autoReconnectUsesOwnedCancellableTimerWithExponentialBa
     QTest::qWait(800);
     QCOMPARE(scheduled.count(), scheduledAfterCancel);
     QVERIFY(!client.isReconnectPending());
+
+    // An explicit Connect after cancellation starts a fresh retry sequence
+    // on this same client, with no relaunch or direct-radio discovery.
+    client.connectToStation(deadUrl, QStringLiteral("token"), placeholderFingerprint());
+    QVERIFY(client.isConnectionActive());
+    QTRY_COMPARE_WITH_TIMEOUT(scheduled.count(), scheduledAfterCancel + 1, 5000);
+    QCOMPARE(scheduled.last().at(0).toInt(), 1);
+    QCOMPARE(scheduled.last().at(1).toInt(), 200);
+    client.disconnectFromStation(QStringLiteral("operator disconnect"));
+    QVERIFY(!client.isConnectionActive());
 }
 
 void TstSessionLinkLoss::staleTransportErrorDoesNotTearDownAFreshlyAttachedSession()

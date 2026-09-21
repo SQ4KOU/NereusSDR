@@ -451,3 +451,41 @@ path, so it is not yet a remote-station reconnect control. A private desktop
 launcher named `Nereus Core - Rock 5C.command` now launches the correct
 build/profile and rejects a duplicate instance. R-R3-16 records the missing
 direct reconnect control rather than presenting relaunch as the finished UX.
+
+
+## Manual Core session controls, September 21
+
+R-R3-16 now routes Radio/Connect and Radio/Disconnect, their existing
+keyboard shortcuts, and the connection context menus to the configured
+Core session. The window creates one StationClient and media controller
+and reuses them across manual connections. Enablement follows session
+activity, including an incomplete handshake or pending retry, independently
+of whether Core's radio is connected. Disconnect cancels pending retries;
+Connect starts a fresh sequence without local radio discovery.
+
+The retry schedule saturates at 60 seconds and continues retrying. The six
+failed redials observed above were a log excerpt, not a six-attempt limit.
+No retry-policy change is included here.
+
+Focused session/link-loss, remote GUI gating and media-controller tests
+passed (3/3, 13.46 seconds). New session regressions cover incomplete
+handshake activity, authenticated Core with an offline radio, repeated
+manual sessions on the same client, cancellation during backoff and a fresh
+retry sequence afterward. The matching `all_tests` and GUI targets were
+built, followed by an unfiltered **673/673 pass, zero failed or skipped,
+60.94 seconds**. Strict app code-signature verification passed.
+
+The first full run and isolated retry hit the same native popup-exposure
+wait in the existing 3D span-control test, before its state assertions ran.
+That state-only test no longer opens a native popup; all enablement assertions
+remain, and the separate real SpectrumWidget interaction test remains intact.
+The final full run above includes this test correction.
+
+Live GUI acceptance is pending at this source checkpoint. Core remains at
+`74145a4b`; this client session-control change requires no wire-schema or
+server behavior change. Remote audio is still incomplete. The source audit
+identified WDSP rmatch/varsamp as a continuous-rate candidate, but the bus
+currently lacks public device-consumption/queue-depth feedback. Add that
+feedback before validating the clock loop; a timer alone cannot measure the
+Mac sound device's clock. Task 5 now records the sender, receiver/playback
+and output-control sequence as the next implementation priority.
