@@ -126,3 +126,44 @@ Native aarch64 Core builds with the same reviewed source also passed on the
 Rock 5C. The maintainer verified SHA-256 agreement for all 79 files in the
 source overlay. Signed installation and live media evidence follow separately;
 this software gate does not establish remote audio playback or R5 traversal.
+
+## Installed display checkpoint, ea55d24a
+
+Signed commit `ea55d24a088b6b611e1acc5d4cbc5341cdd0f459` is installed on the
+Rock 5C. Native Release build, daemon/license staged installation, clean stop
+and fresh authenticated receive-control verification passed. The service is
+active with zero restarts. Previous `14124e7c` binaries, libraries, unit and
+private configuration are recoverable from
+`/var/lib/nereus-build/rollback-14124e7c-before-ea55d24a/`.
+
+A real 20-second Saturn media run received **298 distinct decoded frames**,
+298 waterfall advances and 298 wide rows, with zero decoder rejections or
+keyframe-gap requests. The requested 15-fps view had a 48,046.875-Hz accepted
+span, 1,024 trace samples, 1,024 waterfall samples and 768 wide samples.
+[Machine-readable results](live-display-ea55d24a.json) contain no pairing data.
+
+The packet capture shows the media using `end1` (Ethernet), with maximum
+IPv4 packet size **969 bytes**. The measured DTLS flow was approximately
+324.86 kbit/s Core to client and 23.31 kbit/s in return, including handshake
+and SCTP acknowledgments. This is one 15-fps display profile, excluding WSS
+control, radio I/Q and audio; it does not establish the total session budget
+or SRTP packet-size acceptance. During the probe the service used about
+102 MiB and the CPU sensor read 48.1 C.
+
+The signed desktop GUI is running with private profile `radxa_5c_r3`.
+Changing spectrum and 2D waterfall signal history were observed, including
+operator band changes from 14.225 MHz USB to 3.650 and 3.830 MHz LSB. The
+3D payload is arriving, and renderer tests pass; operator confirmation of
+the live 3D view is pending. No RF transmission was requested by this work.
+
+Installed SHA-256 values:
+
+| File | SHA-256 |
+| --- | --- |
+| `nereusd` | `c9f6fea40007f2e7c4538a8eaa00903224c04330697e77220bdbb2b0b52ff312` |
+| `libNereusCore.so` | `fc03f826e82e102f9224d7a2b053e36e4d111bc37da9fcac4e46689660836aa7` |
+| `librade.so.0.1` | `18e56fe8ee4b8a8450cc786cbcfed9bab147ec11df64e33486ce50e0ff91c32f` |
+
+Remaining R3 work includes the remote Opus sender/playback and clock-control
+path, gesture-margin refinement, session budgeting, multi-pan capacity and
+long hardware audio verification. R5 traversal requirements remain intact.

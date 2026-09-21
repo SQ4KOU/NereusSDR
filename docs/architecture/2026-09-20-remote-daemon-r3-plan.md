@@ -378,11 +378,11 @@ whole-plan review loops.
 
 | Work | Owner/status | Evidence/next action |
 | --- | --- | --- |
-| R2 baseline | Installed, running on combined `14124e7c` | Fresh Rock 5C authenticated control, tuning/restoration and changing meters passed; no remote media |
+| R2 baseline | Preserved rollback checkpoint `14124e7c` | Authenticated control/tuning/meter baseline retained; installed runtime advanced to `ea55d24a` |
 | Combined open-PR recovery | Complete source checkpoint `14124e7c` | GUI/Core build and unfiltered 662/662 desktop tests pass; fixture-path workaround recorded separately |
-| Native combined Core | Installed at `14124e7c` with rollback backup | ARM Release build/stage/install and receive-control probe passed; [verification ledger](2026-09-20-remote-daemon-r3-verification/README.md) |
+| Native combined Core | Installed at signed `ea55d24a`, with `14124e7c` rollback | ARM build/stage/install and live Saturn display pass; 298 changing frames in 20 seconds; [verification ledger](2026-09-20-remote-daemon-r3-verification/README.md) |
 | Plan review and mixed-stereo choice | Lead, recorded | Current review; user confirmed mixed stereo and Opus |
-| Direct media transport | Production adapter and MediaPeer integrated | Real encrypted peers, bounded callbacks, stop/restart/delete regressions pass; actual UDP-size capture still pending |
-| Headless FFT and display codec | Implemented and component-tested | Independent Wide/Fine sources, retune input reset, independent planes, crop clamp, bounded codec and recovery tests pass; authenticated daemon-to-GUI regression passes; live Saturn run next |
+| Direct media transport | Production adapter and MediaPeer integrated | Real encrypted peers, bounded callbacks, stop/restart/delete regressions pass; live display capture passes: Ethernet, 969-byte maximum IP packet; separate SRTP-size proof pending |
+| Headless FFT and display codec | Implemented and component-tested | Independent Wide/Fine sources, retune input reset, independent planes, crop clamp, bounded codec and recovery tests pass; authenticated daemon-to-GUI regression and live Saturn display pass |
 | Audio | Opus/RTP and mixed-audio capture tests pass | Stereo wideband 24/48 kbit/s packet checks, mixer gain/mute/pan, bounded capture timestamps and retirement pass; sender, jitter, adaptive clock correction and playback remain pending |
-| GUI media wiring | Desktop builds; initial focused checks pass | Dedicated reduced-frame renderer and authenticated subscription controller tested; two-pane daemon/GUI wire, shared-window and reconnect regressions pass; gesture refinement and real GPU/hardware smoke next |
+| GUI media wiring | Desktop builds; initial focused checks pass | Dedicated reduced-frame renderer and authenticated subscription controller tested; two-pane, shared-window and reconnect regressions pass; live GPU spectrum/2D observed; operator 3D confirmation and gesture refinement pending |
