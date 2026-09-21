@@ -304,3 +304,43 @@ in 63.07 seconds. Logs are retained in
 `~/.config/nereus/work/r3-clarity/`. Signed installation and live visual
 evidence follow separately; this software gate does not establish remote
 audio playback or exact subjective waterfall parity.
+
+## Installed Clarity checkpoint, 3c4b15e6
+
+Signed commit `3c4b15e67cbef1b1991bcf3d36a2b273d818272c` is installed on
+the Rock 5C and in the reopened desktop bundle. The source overlay was
+verified against signed Git blobs and SHA-256 hashes before the native
+aarch64 Release build. Both daemon and license components were staged.
+The service is active with `Result=success`, `ExecMainStatus=0` and zero
+restarts. The prior installation is retained in
+`/var/lib/nereus-build/rollback-f8531cd9-before-3c4b15e6/`. This verifies
+a service restart, not a board reboot with this checkpoint.
+
+The Mac bundle passed strict code-signature verification. Its title shows
+`3c4b15e6` with profile `radxa_5c_r3`, and its actual TCP connection goes to
+the Rock's wired address `192.168.109.106:50055`. The fresh session logged
+an authenticated handshake, a Core noise-floor measurement of
+**-88.9303 dBm**, and its first encrypted remote spectrum frame. Live RF
+traces and slice meters were observed at the operator's 3.897600-MHz LSB
+selection. No RF transmission was performed.
+
+Installed SHA-256 values:
+
+| File | SHA-256 |
+| --- | --- |
+| `nereusd` | `8e0b6483c27ac79c757b41e02bdcf78eee31e8b16a07f01f066c2fc6c0faa599` |
+| `libNereusCore.so` | `8ab49b1a0786423f8471bf2aea27e15e6771133ab9eb4cb5939fcd3b7deddd0c` |
+| `librade.so.0.1` | `18e56fe8ee4b8a8450cc786cbcfed9bab147ec11df64e33486ce50e0ff91c32f` |
+
+The first live waterfall was almost black, so visual acceptance remains
+open. The saved profile has Clarity enabled, palette `Default` (index 0),
+black level 32 and color gain 16. With the existing renderer formula,
+black level 32 adds `(125 - 32) * 0.4 = 37.2 dB` to Clarity's low threshold.
+For the first observed floor, this places the effective black cutoff at
+about -56.7 dBm and hides weaker signals. The next check is to remove that
+profile offset and select the operator's requested Clarity Blue palette,
+then compare the live result. No profile setting has been changed during
+this check: the Mac locked before the controls could be inspected. This
+is not evidence that subjective grain or local/remote visual parity has
+been resolved. The remote audio and R5 traversal milestones above remain
+unfinished.
