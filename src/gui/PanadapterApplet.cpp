@@ -173,6 +173,7 @@ QByteArrayList PanadapterApplet::statusOverlaySliceProperties()
         QByteArrayLiteral("diversityEnabled"),
         QByteArrayLiteral("psPaused"),
         QByteArrayLiteral("streamIndex"),
+        QByteArrayLiteral("chainIndex"),
     };
 }
 

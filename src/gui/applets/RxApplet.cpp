@@ -1708,7 +1708,8 @@ void RxApplet::disconnectSlice(SliceModel* s)
 }
 
 // --- Auto AGC-T visual update (Task 7 — exact match of VfoWidget) ---
-void RxApplet::updateAgcAutoVisuals(bool autoOn, float noiseFloorDbm, double offset)
+void RxApplet::updateAgcAutoVisuals(bool autoOn, float noiseFloorDbm, double offset,
+                                   bool noiseFloorValid)
 {
     m_autoAgcActive = autoOn;
     m_noiseFloorDbm = noiseFloorDbm;
@@ -1731,9 +1732,11 @@ void RxApplet::updateAgcAutoVisuals(bool autoOn, float noiseFloorDbm, double off
         // Show info sub-line
         if (m_agcInfoLabel) {
             m_agcInfoLabel->setText(
-                QStringLiteral("NF %1 dB \u00b7 offset +%2")
-                    .arg(static_cast<int>(noiseFloorDbm))
-                    .arg(static_cast<int>(offset)));
+                noiseFloorValid
+                    ? QStringLiteral("NF %1 dB \u00b7 offset +%2")
+                          .arg(static_cast<int>(noiseFloorDbm))
+                          .arg(static_cast<int>(offset))
+                    : QStringLiteral("NF awaiting measurement"));
             m_agcInfoLabel->show();
         }
     } else {

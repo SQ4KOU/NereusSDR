@@ -226,6 +226,15 @@ class SliceModel : public QObject {
     Q_PROPERTY(double signalAverageDbm READ signalAverageDbm
                NOTIFY signalAverageDbmChanged)
 
+    // R-R3-15: the station-owned tracker used by Auto AGC-T. This is
+    // independent of the display/Clarity floor and is outbound telemetry.
+    Q_PROPERTY(double stationAutoAgcNoiseFloorDbm READ stationAutoAgcNoiseFloorDbm
+               NOTIFY stationAutoAgcNoiseFloorChanged)
+    Q_PROPERTY(bool stationAutoAgcNoiseFloorValid READ stationAutoAgcNoiseFloorValid
+               NOTIFY stationAutoAgcNoiseFloorChanged)
+    Q_PROPERTY(quint64 stationAutoAgcNoiseFloorGeneration READ stationAutoAgcNoiseFloorGeneration
+               NOTIFY stationAutoAgcNoiseFloorChanged)
+
     // ── Phase 3F Sub-Epic A: multi-panadapter / multi-slice identity ────────────
     // Phase 3F: per-slice letter identifier A-E. Drives badge color via VfoWidget::sliceColor().
     // Read-only: derived from sliceIndex, so there is nothing to write and
@@ -555,6 +564,10 @@ public:
     void setSignalStrengthDbm(double dbm);
     void setSignalPeakDbm(double dbm);
     void setSignalAverageDbm(double dbm);
+    double stationAutoAgcNoiseFloorDbm() const { return m_stationAutoAgcNoiseFloorDbm; }
+    bool stationAutoAgcNoiseFloorValid() const { return m_stationAutoAgcNoiseFloorValid; }
+    quint64 stationAutoAgcNoiseFloorGeneration() const { return m_stationAutoAgcNoiseFloorGeneration; }
+    void setStationAutoAgcNoiseFloor(double dbm, bool valid, quint64 generation);
 
     // Remote Daemon R2 Task 8: StateMirror::applyInbound()'s hook for
     // SliceModel's no-WRITE properties -- active, txSlice, band, and (Task
@@ -1020,6 +1033,7 @@ signals:
     void signalStrengthDbmChanged(double dbm);
     void signalPeakDbmChanged(double dbm);
     void signalAverageDbmChanged(double dbm);
+    void stationAutoAgcNoiseFloorChanged();
     void dspModeChanged(NereusSDR::DSPMode mode);
     void filterChanged(int low, int high);
     void agcModeChanged(NereusSDR::AGCMode mode);
@@ -1158,6 +1172,9 @@ private:
     double  m_signalStrengthDbm{-140.0};
     double  m_signalPeakDbm{-140.0};
     double  m_signalAverageDbm{-140.0};
+    double  m_stationAutoAgcNoiseFloorDbm{-200.0};
+    bool    m_stationAutoAgcNoiseFloorValid{false};
+    quint64 m_stationAutoAgcNoiseFloorGeneration{0};
     DSPMode m_dspMode{DSPMode::USB};
     int     m_filterLow{100};            // USB default from Thetis F5
     int     m_filterHigh{3000};

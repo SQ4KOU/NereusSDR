@@ -986,15 +986,24 @@ void TstSessionLinkLoss::automaticRetryReconnectsToASuccessfulHandshake()
     QSignalSpy completed(&client, &StationClient::handshakeComplete);
     QSignalSpy scheduled(&client, &StationClient::reconnectScheduled);
 
+    // Start listening in the first scheduling signal. Polling for count == 1
+    // races the deliberately compressed 50 ms retry under full-suite load.
+    // This observes the armed timer before allowing it to perform the redial.
+    bool firstRetryWasPending = false;
+    bool listening = false;
+    connect(&client, &StationClient::reconnectScheduled, &server,
+            [&](int attempt, int) {
+        if (attempt == 1) {
+            firstRetryWasPending = client.isReconnectPending()
+                && !client.isHandshakeComplete();
+            listening = server.listen(QHostAddress::LocalHost, port);
+        }
+    });
     const QUrl url(QStringLiteral("wss://127.0.0.1:%1").arg(port));
     client.connectToStation(url, server.token(), server.certificateFingerprint());
-    QTRY_COMPARE_WITH_TIMEOUT(scheduled.count(), 1, 5000);
-    QVERIFY(client.isReconnectPending());
-    QVERIFY(!client.isHandshakeComplete());
-
-    // The daemon comes up, on the exact port the already-armed retry is
-    // targeting -- unaided by anything else this test does.
-    QVERIFY2(server.listen(QHostAddress::LocalHost, port), qPrintable(server.lastError()));
+    QTRY_VERIFY_WITH_TIMEOUT(!scheduled.isEmpty(), 5000);
+    QVERIFY(firstRetryWasPending);
+    QVERIFY2(listening, qPrintable(server.lastError()));
 
     // The retry timer fires ON ITS OWN and completes the handshake.
     // Nothing here calls startSession() or connectToStation() again.

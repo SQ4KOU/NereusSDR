@@ -19,6 +19,7 @@
 
 #include "core/accessories/AlexController.h"
 #include "gui/StyleConstants.h"
+#include "models/RadioModel.h"
 
 #include <QButtonGroup>
 #include <QCheckBox>
@@ -32,7 +33,17 @@
 
 namespace NereusSDR {
 
-FilterPolicyDialog::FilterPolicyDialog(int chainIndex, AlexController* alex, QWidget* parent)
+FilterPolicyDialog::FilterPolicyDialog(int chainIndex, RadioModel* model, QWidget* parent)
+    : FilterPolicyDialog(chainIndex, &model->alexControllerMutable(), parent,
+                         model->role() == RadioModel::Role::Remote
+                             ? &model->filterChainState(chainIndex) : nullptr,
+                         model->filterChainStateAvailable(chainIndex))
+{
+}
+
+FilterPolicyDialog::FilterPolicyDialog(int chainIndex, AlexController* alex, QWidget* parent,
+                                       const AlexController::AlexAdcState* stationState,
+                                       bool stationStateAvailable)
     : QDialog(parent)
 {
     setWindowTitle(QStringLiteral("Chain %1 - Filter Policy").arg(chainIndex));
@@ -48,7 +59,7 @@ FilterPolicyDialog::FilterPolicyDialog(int chainIndex, AlexController* alex, QWi
     auto* stateGroup = new QGroupBox(QStringLiteral("Current state"), this);
     stateGroup->setStyleSheet(QLatin1String(Style::kGroupBoxStyle));
     auto* stateLayout = new QVBoxLayout(stateGroup);
-    const auto& state = alex->adcState(chainIndex);
+    const auto& state = stationState ? *stationState : alex->adcState(chainIndex);
     const QString effectiveText =
         (state.effective == AlexController::BpfEffective::Filtered)
             ? QStringLiteral("Filtered")
@@ -56,7 +67,9 @@ FilterPolicyDialog::FilterPolicyDialog(int chainIndex, AlexController* alex, QWi
                   ? QStringLiteral("BYPASS (wideband)")
                   : QStringLiteral("BYPASS");
     auto* stateLbl = new QLabel(
-        QStringLiteral("Effective: %1\nReason: %2").arg(effectiveText, state.reasonText),
+        stationState && !stationStateAvailable
+            ? tr("Core filter state is not available yet.")
+            : QStringLiteral("Effective: %1\nReason: %2").arg(effectiveText, state.reasonText),
         stateGroup);
     stateLbl->setStyleSheet(QStringLiteral("font-family: monospace; font-size: 11px;"));
     stateLbl->setWordWrap(true);
@@ -83,7 +96,7 @@ FilterPolicyDialog::FilterPolicyDialog(int chainIndex, AlexController* alex, QWi
     forceBandBtn->setStyleSheet(QLatin1String(Style::kRadioButtonStyle));
     forceByBtn->setStyleSheet(QLatin1String(Style::kRadioButtonStyle));
 
-    switch (alex->bpfMode(chainIndex)) {
+    switch (state.mode) {
         case AlexController::BpfMode::Auto:        autoBtn->setChecked(true); break;
         case AlexController::BpfMode::ForceBand:   forceBandBtn->setChecked(true); break;
         case AlexController::BpfMode::ForceBypass: forceByBtn->setChecked(true); break;
@@ -92,12 +105,20 @@ FilterPolicyDialog::FilterPolicyDialog(int chainIndex, AlexController* alex, QWi
     modeLayout->addWidget(autoBtn);
     modeLayout->addWidget(forceBandBtn);
     modeLayout->addWidget(forceByBtn);
+    modeGroup->setEnabled(stationState == nullptr);
+    modeGroup->setVisible(!stationState || stationStateAvailable);
     main->addWidget(modeGroup);
+    if (stationState && stationStateAvailable) {
+        auto* note = new QLabel(tr("Core reports this filter state. Remote policy editing is not available yet."), this);
+        note->setWordWrap(true);
+        main->addWidget(note);
+    }
 
     // HPF checkbox - scaffolded for Sub-Epic G diversity polish.
     auto* hpfBox = new QCheckBox(QStringLiteral("HPF (broadcast band reject) enabled"), this);
     hpfBox->setChecked(true);  // Default; bind to AlexController HPF state in Sub-Epic G.
     hpfBox->setStyleSheet(QLatin1String(Style::kCheckBoxStyle));
+    hpfBox->setVisible(stationState == nullptr);
     main->addWidget(hpfBox);
 
     // Footer buttons
@@ -107,10 +128,11 @@ FilterPolicyDialog::FilterPolicyDialog(int chainIndex, AlexController* alex, QWi
     cancelBtn->setStyleSheet(Style::buttonBaseStyle());
     connect(cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
     footer->addWidget(cancelBtn);
-    auto* applyBtn = new QPushButton(QStringLiteral("Apply"), this);
+    auto* applyBtn = new QPushButton(stationState ? tr("Close") : tr("Apply"), this);
     applyBtn->setStyleSheet(Style::buttonBaseStyle() + Style::blueCheckedStyle());
     connect(applyBtn, &QPushButton::clicked, this,
-            [this, alex, chainIndex, btnGroup]() {
+            [this, alex, chainIndex, btnGroup, readOnly = stationState != nullptr]() {
+        if (readOnly) { accept(); return; }
         alex->setBpfMode(chainIndex,
                          static_cast<AlexController::BpfMode>(btnGroup->checkedId()));
         accept();

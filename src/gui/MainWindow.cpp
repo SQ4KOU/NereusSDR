@@ -1293,13 +1293,7 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     // computed from the slice's own.
     connect(newFlag, &VfoWidget::autoAgcToggled,
             slice, &SliceModel::setAutoAgcEnabled);
-    connect(slice, &SliceModel::autoAgcEnabledChanged, this,
-            [this, flagRef = QPointer<VfoWidget>(newFlag), slice](bool on) {
-        if (!flagRef) { return; }
-        NoiseFloorTracker* nft = m_radioModel->noiseFloorTrackerForSlice(slice);
-        const float nf = nft ? nft->noiseFloor() : -200.0f;
-        flagRef->updateAgcAutoVisuals(on, nf, slice->autoAgcOffset());
-    });
+    wireAutoAgcVisuals(m_radioModel, slice, newFlag, m_rxApplet);
 
     // Remote Daemon R2 Task 12: per-slice S-meter. SliceMeterPump
     // (src/core/meters/, owned by RadioModel) writes this slice's own
@@ -1361,8 +1355,7 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     connect(newFlag, &VfoWidget::filterPolicyRequested, this,
             [this](int chainIdx) {
         if (!m_radioModel) { return; }
-        auto* alex = &m_radioModel->alexControllerMutable();
-        FilterPolicyDialog dlg(chainIdx, alex, this);
+        FilterPolicyDialog dlg(chainIdx, m_radioModel, this);
         dlg.exec();
     });
     connect(newFlag, &VfoWidget::removeSliceRequested, this,
@@ -1723,6 +1716,48 @@ FFTEngine* MainWindow::primaryFftEngine() const
 // the 4096 baseline with a visible replan pause, with zero user action on
 // that pan). setConfigForNewStreams() only affects the stream about to be
 // built, leaving every other engine's live state alone.
+void MainWindow::wireAutoAgcVisuals(RadioModel* model, SliceModel* slice,
+                                   VfoWidget* flag, RxApplet* applet)
+{
+    if (!model || !slice || !flag) { return; }
+    const auto refresh = [modelRef = QPointer<RadioModel>(model),
+                          sliceRef = QPointer<SliceModel>(slice),
+                          flagRef = QPointer<VfoWidget>(flag),
+                          appletRef = QPointer<RxApplet>(applet)] {
+        if (!modelRef || !sliceRef || !flagRef) { return; }
+        refreshAutoAgcVisuals(modelRef, sliceRef, flagRef, appletRef);
+    };
+    connect(slice, &SliceModel::autoAgcEnabledChanged, flag, refresh);
+    connect(slice, &SliceModel::autoAgcOffsetChanged, flag, refresh);
+    connect(slice, &SliceModel::stationAutoAgcNoiseFloorChanged, flag, refresh);
+    connect(model, &RadioModel::connectionStateChanged, flag, refresh);
+    connect(model, &RadioModel::activeSliceChanged, flag, refresh);
+    refresh();
+}
+
+void MainWindow::refreshAutoAgcVisuals(RadioModel* model, SliceModel* slice,
+                                      VfoWidget* flag, RxApplet* applet)
+{
+    if (!slice || !model) { return; }
+    float floor = -200.0f;
+    bool valid = false;
+    if (model->role() == RadioModel::Role::Remote) {
+        floor = static_cast<float>(slice->stationAutoAgcNoiseFloorDbm());
+        valid = model->isConnected() && slice->stationAutoAgcNoiseFloorValid();
+    } else if (const auto* tracker = model->noiseFloorTrackerForSlice(slice)) {
+        floor = tracker->noiseFloor();
+        valid = tracker->isGood();
+    }
+    if (flag) {
+        flag->updateAgcAutoVisuals(slice->autoAgcEnabled(), floor,
+                                   slice->autoAgcOffset(), valid);
+    }
+    if (applet && model->activeSlice() == slice) {
+        applet->updateAgcAutoVisuals(slice->autoAgcEnabled(), floor,
+                                       slice->autoAgcOffset(), valid);
+    }
+}
+
 void MainWindow::refreshFftPoolConfig()
 {
     if (!m_fftEnginePool) { return; }
@@ -2605,8 +2640,7 @@ void MainWindow::onPanChainTagClicked(const QString& panId, int chainIdx)
     if (chain < 0) { chain = chainIdx; }
     if (chain < 0) { return; }
 
-    auto* alex = &m_radioModel->alexControllerMutable();
-    FilterPolicyDialog dlg(chain, alex, this);
+    FilterPolicyDialog dlg(chain, m_radioModel, this);
     dlg.exec();
 }
 
@@ -2646,6 +2680,11 @@ void MainWindow::onPanFloatRequested(const QString& panId)
 void MainWindow::wireSliceStatusOverlayTriggers(SliceModel* slice)
 {
     if (!slice) { return; }
+
+    connect(slice, &SliceModel::chainIndexChanged,
+            this, &MainWindow::refreshPanWideBadges, Qt::UniqueConnection);
+    connect(slice, &SliceModel::streamIndexChanged,
+            this, &MainWindow::refreshPanWideBadges, Qt::UniqueConnection);
 
     // Connect the NOTIFY signal of every property the overlay reads, resolved
     // through the metaobject from the list PanadapterApplet publishes. Naming
@@ -3349,63 +3388,48 @@ void MainWindow::buildUI()
     connect(m_radioModel, &RadioModel::currentRadioChanged, this,
             updateChain1Visibility);
 
-    // Phase 3F Sub-Epic D Task 11: drive the CH 0 / CH 1 bottom-bar
-    // indicator text + colour from AlexController's per-ADC BPF state.
-    // Filtered = green; WidebandLocked / Bypass = amber. reasonText
-    // (set by AlexController::recomputeBpf) drives the body label.
-    connect(&m_radioModel->alexController(),
-            &AlexController::bpfStateChanged, this,
-            [this](int adc, const AlexController::AlexAdcState& state) {
-                auto* lbl = findChild<QLabel*>(
-                    QStringLiteral("chainIndicator%1").arg(adc));
-                if (!lbl) { return; }
-                lbl->setText(state.reasonText);
-                const QString color =
-                    (state.effective == AlexController::BpfEffective::Filtered)
-                        ? Style::kGreenText
-                        : Style::kAmberWarn;
-                lbl->setStyleSheet(
-                    QStringLiteral("color: %1; font-size: 9px; font-weight: bold;")
-                        .arg(color));
+    // One view of local hardware state or Core telemetry drives both CH labels
+    // and WIDE badges. A remote client never consults its inert Alex controller.
+    auto refreshFilterIndicators = [this]() {
+        for (int adc = 0; adc < 2; ++adc) {
+            const auto& state = m_radioModel->filterChainState(adc);
+            auto* lbl = findChild<QLabel*>(
+                QStringLiteral("chainIndicator%1").arg(adc));
+            if (!lbl) { continue; }
+            const bool available = m_radioModel->filterChainStateAvailable(adc);
+            lbl->setText(available ? state.reasonText
+                : (m_radioModel->isConnected() ? tr("awaiting Core") : tr("offline")));
+            const QString color =
+                (available && state.effective == AlexController::BpfEffective::Filtered)
+                    ? Style::kGreenText
+                    : Style::kAmberWarn;
+            lbl->setStyleSheet(
+                QStringLiteral("color: %1; font-size: 9px; font-weight: bold;")
+                    .arg(color));
 
-                // reasonText ranges from "idle" to
-                // "BYPASS (multi-band: 160m + 80m + 40m + 20m + 10m)", so the
-                // owning chain widget's sizeHint (registered with m_chromeBar
-                // at rung 4) just went stale. Report it so folding stays a
-                // pure function of width rather than overflowing on the next
-                // band change (final-fix-wave finding 1).
-                if (m_chromeBar && m_chromeBarWidget) {
-                    QWidget* chainWidget = (adc == 0) ? m_chain0IndicatorWidget
-                                                       : m_chain1IndicatorWidget;
-                    if (chainWidget) {
-                        m_chromeBar->setNaturalWidth(
-                            chainWidget, chainWidget->sizeHint().width());
-                        m_chromeBar->relayout(m_chromeBarWidget->width());
-                    }
+            // reasonText ranges from "idle" to
+            // "BYPASS (multi-band: 160m + 80m + 40m + 20m + 10m)", so the
+            // owning chain widget's sizeHint (registered with m_chromeBar
+            // at rung 4) just went stale. Report it so folding stays a
+            // pure function of width rather than overflowing on the next
+            // band change (final-fix-wave finding 1).
+            if (m_chromeBar && m_chromeBarWidget) {
+                QWidget* chainWidget = (adc == 0) ? m_chain0IndicatorWidget
+                                                   : m_chain1IndicatorWidget;
+                if (chainWidget) {
+                    m_chromeBar->setNaturalWidth(
+                        chainWidget, chainWidget->sizeHint().width());
+                    m_chromeBar->relayout(m_chromeBarWidget->width());
                 }
-            });
-
-    // Phase 3F: and drive the per-pan WIDE pill from the same signal.
-    //
-    // A separate connect rather than a line inside the lambda above: the two
-    // surfaces answer different questions. The bottom-bar label reports one
-    // chain by number, and this reports every pan that chain happens to feed,
-    // which on a multi-pan layout is what tells the operator WHICH of their
-    // receivers is exposed.
-    //
-    // The signal's own adc argument is deliberately unused. A recompute on
-    // chain 1 can leave a pan straddling both chains bypassed for a reason
-    // that now belongs to chain 0, so the refresh re-asks per pan rather than
-    // trying to patch only the pans on the chain that moved.
-    //
-    // This covers the state-change half of the trigger set (band crossings,
-    // wideband toggles, Filter Policy edits); rebuildFftRouting covers the
-    // topology half (slice add / remove / pan migration / stream rebind).
-    connect(&m_radioModel->alexController(),
-            &AlexController::bpfStateChanged, this,
-            [this](int, const AlexController::AlexAdcState&) {
-                refreshPanWideBadges();
-            });
+            }
+        }
+        refreshPanWideBadges();
+    };
+    connect(m_radioModel, &RadioModel::filterStateChanged,
+            this, refreshFilterIndicators);
+    connect(m_radioModel, &RadioModel::connectionStateChanged,
+            this, refreshFilterIndicators);
+    refreshFilterIndicators();
 
     // Issue #118 — helper: wire a container's bandClicked signal through
     // the RadioModel handler. Invoked from the containerAdded callback,
@@ -4622,17 +4646,9 @@ void MainWindow::buildUI()
     // Periodic visual update: auto-AGC timer → refresh NF visuals on both widgets
     if (m_radioModel->autoAgcTimer()) {
         connect(m_radioModel->autoAgcTimer(), &QTimer::timeout, this, [this]() {
-            SliceModel* s = m_radioModel->activeSlice();
-            auto* nft = m_radioModel->noiseFloorTracker();
-            if (s && s->autoAgcEnabled() && nft) {
-                float nf = nft->noiseFloor();
-                double offset = s->autoAgcOffset();
-                if (m_vfoWidget) {
-                    m_vfoWidget->updateAgcAutoVisuals(true, nf, offset);
-                }
-                if (m_rxApplet) {
-                    m_rxApplet->updateAgcAutoVisuals(true, nf, offset);
-                }
+            for (SliceModel* slice : m_radioModel->slices()) {
+                refreshAutoAgcVisuals(m_radioModel, slice,
+                    m_vfoWidgetsBySlice.value(slice->sliceIndex()), m_rxApplet);
             }
         });
     }
@@ -9352,10 +9368,15 @@ void MainWindow::wireSliceToSpectrum()
     // --- Wire RxApplet to active slice ---
     if (m_rxApplet) {
         m_rxApplet->setSlice(slice);
+        refreshAutoAgcVisuals(m_radioModel, slice,
+                    m_vfoWidgetsBySlice.value(slice->sliceIndex()), m_rxApplet);
 
         // AUTO button toggle → SliceModel
-        connect(m_rxApplet, &RxApplet::autoAgcToggled,
-                slice, &SliceModel::setAutoAgcEnabled);
+        connect(m_rxApplet, &RxApplet::autoAgcToggled, this, [this](bool enabled) {
+            if (SliceModel* active = m_radioModel->activeSlice()) {
+                active->setAutoAgcEnabled(enabled);
+            }
+        });
 
         // Right-click AGC-T slider → open Setup dialog to AGC/ALC page
         connect(m_rxApplet, &RxApplet::openSetupRequested, this, [this]() {

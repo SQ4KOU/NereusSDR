@@ -201,7 +201,8 @@ public:
                             int activeSliceIndex);
 
     // --- Auto AGC-T visual update (Task 7 — matches VfoWidget) ---
-    void updateAgcAutoVisuals(bool autoOn, float noiseFloorDbm, double offset);
+    void updateAgcAutoVisuals(bool autoOn, float noiseFloorDbm, double offset,
+                              bool noiseFloorValid = true);
 
     // Set the antenna list shown in the RX/TX antenna menus.
     void setAntennaList(const QStringList& ants);

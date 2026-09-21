@@ -664,6 +664,10 @@ RadioModel::RadioModel(Role role, QObject* parent)
             [this](int, const AlexController::AlexAdcState&) {
         republishAlexAdcSlices();
     });
+    connect(&m_alexController, &AlexController::bpfStateChanged, this,
+            [this](int, const AlexController::AlexAdcState&) {
+        if (ownsLocalDsp()) { emit filterStateChanged(); }
+    });
 
     // Phase 3P-I-b (T6): flag changes must re-fire composition for current band.
     // The isTx arg stays false in 3P-I-b — MOX trigger wiring lands in 3M-1.
@@ -10334,96 +10338,11 @@ void RadioModel::wireSliceSignals(SliceModel* slice)
     // One timer for the model, NOT one per slice. This function now runs for
     // every slice, so an unguarded `new QTimer` here would build and connect a
     // fresh timer per slice and fire the auto-AGC tick N times a period. The
-    // tick itself is deliberately active-slice-only (it reads m_activeSlice
-    // below), which is why it stays a singleton rather than being
-    // parameterised like the per-slice handlers above.
+    // tick covers every enabled slice using its registered stream tracker.
     if (!m_autoAgcTimer) {
     m_autoAgcTimer = new QTimer(this);
     m_autoAgcTimer->setInterval(500);
-    connect(m_autoAgcTimer, &QTimer::timeout, this, [this]() {
-        // From Thetis v2.10.3.13 console.cs:46059 — guard: skip if not connected or MOX
-        if (!m_connection || !m_connection->isConnected()) {
-            return;
-        }
-        // From Thetis v2.10.3.13 console.cs:46059 — if (!chkPower.Checked || _mox) return;
-        if (m_transmitModel.isMox()) {
-            return;
-        }
-
-        // EVERY slice with auto-AGC on, not just the active one. The tick used
-        // to open `SliceModel* slice = m_activeSlice;`, so arming AUTO on a
-        // flag other than the active slice's did nothing at all -- bench-caught
-        // 2026-07-26 as auto AGC not working on flags B-D.
-        for (SliceModel* slice : std::as_const(m_slices)) {
-        if (!slice || !slice->autoAgcEnabled()) {
-            continue;
-        }
-
-        // This slice's OWN stream noise floor. A shared tracker (stream 0's)
-        // would set a 20m slice's threshold from 40m's noise floor.
-        NoiseFloorTracker* nfTracker = noiseFloorTrackerForSlice(slice);
-        if (!nfTracker || !nfTracker->isGood()) {
-            continue;
-        }
-
-        // From Thetis v2.10.3.13 console.cs:46107-46115
-        const double noiseFloor = static_cast<double>(nfTracker->noiseFloor());
-
-        // From Thetis v2.10.3.13 console.cs:33292-33319 — agcCalOffset(rx)
-        // Full Thetis formula:
-        //   FIXD:    0.0
-        //   default: 2.0 + (DisplayCalOffset + PreampOffset - AlexPreampOffset
-        //                    - FFTSizeOffset)
-        //
-        // FFTSizeOffset (Display.cs:1389-1397 [v2.10.3.13]) is set to
-        // slider.Value * 2 dB on every FFT slider scroll (setup.cs:16154).
-        // Without subtracting it, the AGC threshold drifts up to 12 dB
-        // across the slider's 0..6 range (each step adds 2 dB to the
-        // visible noise floor as bin width halves).
-        //
-        // PreampOffset / AlexPreampOffset still TBD (separate scope: lands
-        // with the spectrum knee-line overlay work).  They sum to ~0 on
-        // most current radios so the AGC drift was negligible until the
-        // FFT slider made FFTSizeOffset user-tunable.
-        float calOffset = 0.0f;
-        if (slice->agcMode() != AGCMode::Off) {
-            const double fftOffsetDb = m_fftEngine
-                ? m_fftEngine->fftSizeOffsetDb() : 0.0;
-            calOffset = 2.0f - static_cast<float>(fftOffsetDb);
-        }
-
-        // From Thetis v2.10.3.13 console.cs:45965-45968 — apply cal offset
-        const double threshold = (noiseFloor + slice->autoAgcOffset())
-                                 - static_cast<double>(calOffset);
-
-        // From Thetis v2.10.3.13 console.cs:45969-45970 — clamp [-160, +2]
-        const double clamped = std::clamp(threshold, -160.0, 2.0);
-        const int threshInt = static_cast<int>(std::round(clamped));
-
-        // Update both WDSP and model. m_syncingAgc prevents the
-        // agcThresholdChanged handler from disabling auto mode AND from
-        // re-entering the WDSP call, so we must call RxChannel directly.
-        if (slice->agcThreshold() != threshInt) {
-            m_syncingAgc = true;
-
-            // Direct WDSP update — the signal handler is blocked by m_syncingAgc
-            RxChannel* rxCh = m_wdspEngine ? m_wdspEngine->rxChannel(slice->sliceIndex()) : nullptr;
-            if (rxCh) {
-                rxCh->setAgcThreshold(threshInt);
-                // From Thetis v2.10.3.13 console.cs:45978 — readback AGC top
-                double top = rxCh->readBackAgcTop();
-                int rfGain = static_cast<int>(std::round(top));
-                if (slice->rfGain() != rfGain) {
-                    slice->setRfGain(rfGain);
-                }
-            }
-
-            // Update model (UI sync) — handler won't re-enter WDSP
-            slice->setAgcThreshold(threshInt);
-            m_syncingAgc = false;
-        }
-        }  // for each slice with auto-AGC
-    });
+    connect(m_autoAgcTimer, &QTimer::timeout, this, &RadioModel::updateAutoAgc);
     m_autoAgcTimer->start();
     }
 
@@ -11708,6 +11627,74 @@ QString joinRangeNames(const QStringList& names)
 
 } // namespace
 
+const AlexController::AlexAdcState& RadioModel::filterChainState(int chain) const
+{
+    chain = std::clamp(chain, 0, 1);
+    return ownsLocalDsp() ? m_alexController.adcState(chain)
+                         : m_stationFilterStates[static_cast<size_t>(chain)];
+}
+
+bool RadioModel::filterChainStateAvailable(int chain) const
+{
+    if (chain < 0 || chain >= 2) { return false; }
+    return ownsLocalDsp() || (isConnected() && m_stationFilterSnapshotReady
+        && m_stationFilterFields[static_cast<size_t>(chain)] == 15U);
+}
+
+void RadioModel::clearStationFilterState()
+{
+    if (ownsLocalDsp()) { return; }
+    m_stationFilterFields.fill(0);
+    m_stationFilterSnapshotReady = false;
+    emit filterStateChanged();
+}
+
+void RadioModel::setStationFilterSnapshotReady()
+{
+    if (ownsLocalDsp() || m_stationFilterSnapshotReady) { return; }
+    m_stationFilterSnapshotReady = true;
+    emit filterStateChanged();
+}
+
+bool RadioModel::applyStationFilterValue(const QByteArray& name, const QVariant& value)
+{
+    if (ownsLocalDsp()) { return false; }
+    for (int chain = 0; chain < 2; ++chain) {
+        const QByteArray prefix = QByteArrayLiteral("rxFilter") + QByteArray::number(chain);
+        if (!name.startsWith(prefix)) { continue; }
+        const QByteArray field = name.mid(prefix.size());
+        auto& state = m_stationFilterStates[static_cast<size_t>(chain)];
+        unsigned received = 0;
+        if (field == "Reason") {
+            const QString reason = value.toString();
+            if (reason.size() > 512) { return false; }
+            state.reasonText = reason;
+            received = 8;
+        } else {
+            bool ok = false;
+            const int number = value.toInt(&ok);
+            if (!ok || number < 0) { return false; }
+            if (field == "Mode" && number <= int(AlexController::BpfMode::ForceBypass)) {
+                state.mode = static_cast<AlexController::BpfMode>(number);
+                received = 1;
+            } else if (field == "Effective"
+                       && number <= int(AlexController::BpfEffective::WidebandLocked)) {
+                state.effective = static_cast<AlexController::BpfEffective>(number);
+                received = 2;
+            } else if (field == "Band" && number < int(Band::Count)) {
+                state.currentBpfBand = static_cast<Band>(number);
+                received = 4;
+            } else {
+                return false;
+            }
+        }
+        m_stationFilterFields[static_cast<size_t>(chain)] |= received;
+        emit filterStateChanged();
+        return true;
+    }
+    return false;
+}
+
 RadioModel::PanBypassState
 RadioModel::panBypassState(const QSet<int>& sliceIndices) const
 {
@@ -11739,7 +11726,8 @@ RadioModel::panBypassState(const QSet<int>& sliceIndices) const
     for (int adc = 0; adc < kAdcCount; ++adc) {
         if (!feeds[adc]) { continue; }
 
-        const AlexController::AlexAdcState& st = m_alexController.adcState(adc);
+        if (!filterChainStateAvailable(adc)) { continue; }
+        const AlexController::AlexAdcState& st = filterChainState(adc);
         if (st.effective == AlexController::BpfEffective::Filtered) { continue; }
 
         result.bypassed = true;
@@ -11774,6 +11762,9 @@ int RadioModel::sliceChainIndex(int sliceId) const
 {
     SliceModel* s = sliceById(sliceId);
     if (s == nullptr) { return -1; }
+    if (!ownsLocalDsp()) {
+        return s->streamIndex() >= 0 ? s->chainIndex() : -1;
+    }
 
     // No DDC stream means no chain. Distinct from chain 0: callers have to be
     // able to tell "fed by nothing" from "fed by the first ADC".
@@ -11879,7 +11870,16 @@ QString RadioModel::bypassReasonForAdc(
                   "filtering.");
     }
 
-    if (m_alexController.bpfMode(adc) == AlexController::BpfMode::ForceBypass) {
+    if (!ownsLocalDsp()) {
+        if (st.mode == AlexController::BpfMode::ForceBypass) {
+            return tr("Preselector bypassed by Core's Filter Policy setting for this chain. "
+                      "Click to inspect the reported state.");
+        }
+        return tr("Core reports preselector bypass for this receiver chain: %1. "
+                  "Click to inspect the reported state.").arg(st.reasonText);
+    }
+
+    if (st.mode == AlexController::BpfMode::ForceBypass) {
         // Design doc §16.4.4, "operator override" row, verbatim.
         return tr("Preselector bypassed by your Filter Policy setting for this "
                   "chain. Click to change it.");
@@ -11896,7 +11896,7 @@ QString RadioModel::bypassReasonForAdc(
     QSet<Band> seen;
     for (SliceModel* s : m_slices) {
         if (s == nullptr) { continue; }
-        const int sliceChain = chainForStream(s->streamIndex());
+        const int sliceChain = sliceChainIndex(s->sliceIndex());
         if (sliceChain != adc) { continue; }
         const Band b = bandFromFrequency(s->frequency());
         if (seen.contains(b)) { continue; }
@@ -11921,6 +11921,94 @@ QString RadioModel::bypassReasonForAdc(
               "to restore filtering, or click to change the filter policy for "
               "this chain.")
         .arg(joinRangeNames(rangeNames));
+}
+
+// The same station-owned tick runs in the desktop local mode and daemon.
+// Source selection is registered separately; there is no GUI dependency.
+void RadioModel::updateAutoAgc()
+{
+    // From Thetis v2.10.3.13 console.cs:46059 — guard: skip if not connected or MOX
+    if (!ownsLocalDsp() || !isConnected()) {
+        return;
+    }
+    // From Thetis v2.10.3.13 console.cs:46059 — if (!chkPower.Checked || _mox) return;
+    if (m_transmitModel.isMox()) {
+        return;
+    }
+
+    // EVERY slice with auto-AGC on, not just the active one. The tick used
+    // to open `SliceModel* slice = m_activeSlice;`, so arming AUTO on a
+    // flag other than the active slice's did nothing at all -- bench-caught
+    // 2026-07-26 as auto AGC not working on flags B-D.
+    for (SliceModel* slice : std::as_const(m_slices)) {
+        if (!slice || !slice->autoAgcEnabled()) {
+            continue;
+        }
+
+        // This slice's OWN stream noise floor. A shared tracker (stream 0's)
+        // would set a 20m slice's threshold from 40m's noise floor.
+        NoiseFloorTracker* nfTracker = noiseFloorTrackerForSlice(slice);
+        if (!nfTracker || !nfTracker->isGood()) {
+            continue;
+        }
+
+        // From Thetis v2.10.3.13 console.cs:46107-46115
+        const double noiseFloor = static_cast<double>(nfTracker->noiseFloor());
+
+        // From Thetis v2.10.3.13 console.cs:33292-33319 — agcCalOffset(rx)
+        // Full Thetis formula:
+        //   FIXD:    0.0
+        //   default: 2.0 + (DisplayCalOffset + PreampOffset - AlexPreampOffset
+        //                    - FFTSizeOffset)
+        //
+        // FFTSizeOffset (Display.cs:1389-1397 [v2.10.3.13]) is set to
+        // slider.Value * 2 dB on every FFT slider scroll (setup.cs:16154).
+        // Without subtracting it, the AGC threshold drifts up to 12 dB
+        // across the slider's 0..6 range (each step adds 2 dB to the
+        // visible noise floor as bin width halves).
+        //
+        // PreampOffset / AlexPreampOffset still TBD (separate scope: lands
+        // with the spectrum knee-line overlay work).  They sum to ~0 on
+        // most current radios so the AGC drift was negligible until the
+        // FFT slider made FFTSizeOffset user-tunable.
+        float calOffset = 0.0f;
+        if (slice->agcMode() != AGCMode::Off) {
+            const double fftOffsetDb = m_fftEngine
+                ? m_fftEngine->fftSizeOffsetDb() : 0.0;
+            calOffset = 2.0f - static_cast<float>(fftOffsetDb);
+        }
+
+        // From Thetis v2.10.3.13 console.cs:45965-45968 — apply cal offset
+        const double threshold = (noiseFloor + slice->autoAgcOffset())
+                                 - static_cast<double>(calOffset);
+
+        // From Thetis v2.10.3.13 console.cs:45969-45970 — clamp [-160, +2]
+        const double clamped = std::clamp(threshold, -160.0, 2.0);
+        const int threshInt = static_cast<int>(std::round(clamped));
+
+        // Update both WDSP and model. m_syncingAgc prevents the
+        // agcThresholdChanged handler from disabling auto mode AND from
+        // re-entering the WDSP call, so we must call RxChannel directly.
+        if (slice->agcThreshold() != threshInt) {
+            m_syncingAgc = true;
+
+            // Direct WDSP update — the signal handler is blocked by m_syncingAgc
+            RxChannel* rxCh = m_wdspEngine ? m_wdspEngine->rxChannel(slice->sliceIndex()) : nullptr;
+            if (rxCh) {
+                rxCh->setAgcThreshold(threshInt);
+                // From Thetis v2.10.3.13 console.cs:45978 — readback AGC top
+                double top = rxCh->readBackAgcTop();
+                int rfGain = static_cast<int>(std::round(top));
+                if (slice->rfGain() != rfGain) {
+                    slice->setRfGain(rfGain);
+                }
+            }
+
+            // Update model (UI sync) — handler won't re-enter WDSP
+            slice->setAgcThreshold(threshInt);
+            m_syncingAgc = false;
+        }
+    }  // for each slice with auto-AGC
 }
 
 // Coalesce settings saves to avoid writing on every scroll tick.

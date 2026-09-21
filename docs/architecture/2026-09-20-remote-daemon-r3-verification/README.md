@@ -514,3 +514,48 @@ check. This closes the initial live R-R3-16 menu round trip; multi-hour link
 recovery and audio reconnect acceptance remain separate work. The GUI is
 left running and connected. Audio playback remains task 5, following the
 remaining task 4a receive bindings.
+
+
+## Core filter and Auto AGC-T bindings, September 21
+
+R-R3-14 publishes each Core filter chain's mode, effective state, band and
+reason as outbound-only RadioModel telemetry. Remote CH and WIDE indicators
+use those values and the already-mirrored slice chain assignment. Presentation
+waits for the complete station snapshot, including slice reconciliation, and
+is unavailable after session retirement. The Filter Policy dialog shows the
+reported Core state read-only; remote policy editing remains unavailable.
+An offline/awaiting dialog explicitly withholds the retained prior reading.
+
+R-R3-15 now has a daemon-lifetime, bounded FFT source and the existing
+NoiseFloorTracker for each active stream. Previously, only MainWindow created
+these trackers and Core's existing Auto AGC-T timer skipped all enabled slices.
+Core now feeds the same FFT-to-tracker path used locally, independently of
+client display subscriptions. It does not substitute the Clarity percentile
+floor or introduce new AGC threshold math. Retune, mode, routing, attenuation,
+MOX, stream suspension and disconnection invalidate the measurement until
+fresh tracker convergence. Unbound slices become invalid immediately, and
+source teardown unregisters every borrowed tracker before destroying it.
+
+Three read-only per-slice properties carry the floor, validity and generation.
+The GUI flags remain per-slice; the RX applet follows the active slice and
+shows an awaiting state when no valid station reading exists. Its AUTO toggle
+resolves the active slice when clicked. Local direct mode keeps its own
+per-stream source.
+
+Focused tests passed 7/7 (22.14 seconds), followed by a rebuilt full suite
+675/675 (63.45 seconds). Consolidated review found the unavailable-dialog case
+and two coverage gaps. The correction adds snapshot-completion gating, an
+unavailable dialog state, and a test of the production two-slice GUI binding
+with active switching, telemetry deltas, local-floor contamination and
+connection loss. All six affected tests then passed (21.83 seconds).
+The post-review full run exposed a pre-existing test timing race: polling for
+exactly one scheduled retry could miss the compressed 50 ms retry under load.
+The test now starts the listener synchronously on the first scheduling signal
+and still verifies automatic, unaided reconnect. After rebuilding that test,
+the complete suite passed 675/675 with no skips in 61.27 seconds.
+
+No new binary is installed at this source checkpoint. Core remains
+74145a4b and the GUI remains 73fcccfe. Live filter/Auto AGC-T observation on
+the Saturn/Rock/Mac path remains pending. These changes do not close R3's
+audio, capacity or long-run acceptance gates. Task 5 audio integration is
+continuing after the receive-binding implementation.

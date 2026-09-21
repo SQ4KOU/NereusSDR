@@ -134,6 +134,7 @@
 #include <QStandardPaths>
 
 #include <algorithm>
+#include <cmath>
 
 namespace NereusSDR {
 
@@ -648,6 +649,20 @@ void SliceModel::setSignalAverageDbm(double dbm)
     emit signalAverageDbmChanged(dbm);
 }
 
+void SliceModel::setStationAutoAgcNoiseFloor(double dbm, bool valid, quint64 generation)
+{
+    if (!std::isfinite(dbm)) { return; }
+    if (m_stationAutoAgcNoiseFloorDbm == dbm
+        && m_stationAutoAgcNoiseFloorValid == valid
+        && m_stationAutoAgcNoiseFloorGeneration == generation) {
+        return;
+    }
+    m_stationAutoAgcNoiseFloorDbm = dbm;
+    m_stationAutoAgcNoiseFloorValid = valid;
+    m_stationAutoAgcNoiseFloorGeneration = generation;
+    emit stationAutoAgcNoiseFloorChanged();
+}
+
 // ── Remote Daemon R2 Task 8: inbound mirror hook ─────────────────────────────
 //
 // NereusSDR-original; no Thetis/AetherSDR equivalent. Each of the no-WRITE
@@ -675,6 +690,23 @@ QString SliceModel::applyMirroredValue(const QByteArray& propertyName, const QVa
     if (propertyName == "signalAverageDbm") {
         setSignalAverageDbm(value.toDouble());
         return QString();
+    }
+    if (propertyName == "stationAutoAgcNoiseFloorDbm") {
+        const double dbm = value.toDouble();
+        if (!std::isfinite(dbm)) { return QStringLiteral("noise floor must be finite"); }
+        setStationAutoAgcNoiseFloor(dbm, m_stationAutoAgcNoiseFloorValid,
+                                   m_stationAutoAgcNoiseFloorGeneration);
+        return {};
+    }
+    if (propertyName == "stationAutoAgcNoiseFloorValid") {
+        setStationAutoAgcNoiseFloor(m_stationAutoAgcNoiseFloorDbm, value.toBool(),
+                                   m_stationAutoAgcNoiseFloorGeneration);
+        return {};
+    }
+    if (propertyName == "stationAutoAgcNoiseFloorGeneration") {
+        setStationAutoAgcNoiseFloor(m_stationAutoAgcNoiseFloorDbm,
+                                   m_stationAutoAgcNoiseFloorValid, value.toULongLong());
+        return {};
     }
     if (propertyName == "active") {
         // Fix round 1 review finding (Important 1): this used to name

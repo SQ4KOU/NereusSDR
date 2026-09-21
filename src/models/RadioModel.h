@@ -243,6 +243,16 @@ class RadioModel : public QObject {
     Q_PROPERTY(bool    connected   READ isConnected NOTIFY connectionStateChanged)
     Q_PROPERTY(bool rfKitEnabled READ rfKitEnabled WRITE setRfKitEnabled
                NOTIFY rfKitEnabledChanged)
+    // Station-owned preselector telemetry, never remotely writable.
+    Q_PROPERTY(int rxFilter0Mode READ rxFilter0Mode NOTIFY filterStateChanged)
+    Q_PROPERTY(int rxFilter0Effective READ rxFilter0Effective NOTIFY filterStateChanged)
+    Q_PROPERTY(int rxFilter0Band READ rxFilter0Band NOTIFY filterStateChanged)
+    Q_PROPERTY(QString rxFilter0Reason READ rxFilter0Reason NOTIFY filterStateChanged)
+    Q_PROPERTY(int rxFilter1Mode READ rxFilter1Mode NOTIFY filterStateChanged)
+    Q_PROPERTY(int rxFilter1Effective READ rxFilter1Effective NOTIFY filterStateChanged)
+    Q_PROPERTY(int rxFilter1Band READ rxFilter1Band NOTIFY filterStateChanged)
+    Q_PROPERTY(QString rxFilter1Reason READ rxFilter1Reason NOTIFY filterStateChanged)
+
 
 public:
     // Remote-daemon R2 Task 4: which side of the wire this model's DSP
@@ -627,6 +637,21 @@ public:
     // (AntennaAlexAntennaControlTab — Phase 3P-F Task 3).
     const AlexController& alexController()        const { return m_alexController; }
     AlexController&       alexControllerMutable()       { return m_alexController; }
+
+    // Reads local hardware policy in direct mode, Core telemetry in remote mode.
+    const AlexController::AlexAdcState& filterChainState(int chain) const;
+    bool filterChainStateAvailable(int chain) const;
+    bool applyStationFilterValue(const QByteArray& name, const QVariant& value);
+    void clearStationFilterState();
+    void setStationFilterSnapshotReady();
+    int rxFilter0Mode() const { return static_cast<int>(filterChainState(0).mode); }
+    int rxFilter0Effective() const { return static_cast<int>(filterChainState(0).effective); }
+    int rxFilter0Band() const { return static_cast<int>(filterChainState(0).currentBpfBand); }
+    QString rxFilter0Reason() const { return filterChainState(0).reasonText; }
+    int rxFilter1Mode() const { return static_cast<int>(filterChainState(1).mode); }
+    int rxFilter1Effective() const { return static_cast<int>(filterChainState(1).effective); }
+    int rxFilter1Band() const { return static_cast<int>(filterChainState(1).currentBpfBand); }
+    QString rxFilter1Reason() const { return filterChainState(1).reasonText; }
 
     // ── Phase 3F: per-panadapter RX preselector bypass state (WIDE badge) ────
     // NereusSDR-original; no upstream port. Design doc
@@ -1278,6 +1303,11 @@ public:
     void setStreamNoiseFloorTracker(int streamIndex, NoiseFloorTracker* t) {
         if (t) { m_streamNoiseFloors.insert(streamIndex, t); }
     }
+    void clearStreamNoiseFloorTracker(int streamIndex, NoiseFloorTracker* expected) {
+        if (m_streamNoiseFloors.value(streamIndex, nullptr) == expected) {
+            m_streamNoiseFloors.remove(streamIndex);
+        }
+    }
 
     /// The tracker for this slice's stream, falling back to the global one
     /// when the slice is unbound or its stream has no tracker yet.
@@ -1696,6 +1726,7 @@ public:
     double rxMeterOffsetDb() const;
 
 signals:
+    void filterStateChanged();
     // Emitted when rxMeterOffsetDb() changes (model swap, preamp change,
     // step-att enable/disable, attenuator dB change, or AppSettings
     // RX1_MeterCalOffsetDb override).  MeterPoller connects this to
@@ -1850,6 +1881,7 @@ public:
 public:
     // Test-only: inject board caps without a live radio connection.
     // Mirrors P1RadioConnection::setBoardForTest pattern.
+    void runAutoAgcTickForTest() { updateAutoAgc(); }
     void setBoardForTest(HPSDRHW board) {
         m_hardwareProfile = ::NereusSDR::profileForModel(
             defaultModelForBoard(board));
@@ -3064,6 +3096,8 @@ private slots:
     void onSliceBandChanged(SliceModel* source, NereusSDR::Band band);
 
 private:
+    void updateAutoAgc();
+
     // Phase 3Q-1: drives the RadioModel-level connection state machine.
     // Guards against redundant transitions (no emit if state unchanged).
     void setConnectionState(ConnectionState s);
@@ -3674,6 +3708,9 @@ private:
     // MAC and load() are called on connect, matching OcMatrix ownership pattern.
     // Phase 3P-F Task 3.
     AlexController m_alexController;
+    std::array<AlexController::AlexAdcState, 2> m_stationFilterStates{};
+    std::array<unsigned, 2> m_stationFilterFields{};
+    bool m_stationFilterSnapshotReady{false};
 
     // Phase 3F Sub-Epic F Task 5: per-ADC WidebandFftEngine instances.
     // Indexed by adcIndex (0 or 1). Constructed in the RadioModel ctor with

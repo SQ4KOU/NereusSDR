@@ -132,6 +132,7 @@ namespace NereusSDR {
 class RadioModel;
 class StationServer;
 class DaemonMediaController;
+class DaemonAgcSource;
 class SliceModel;
 class StepAttenuatorController;
 
@@ -399,6 +400,7 @@ private:
     /// Must be destroyed before StationServer/RadioModel: it owns queued
     /// source, peer and endpoint work referring to both.
     std::unique_ptr<DaemonMediaController> m_mediaController;
+    std::unique_ptr<DaemonAgcSource> m_agcSource;
     FftTopology m_topology;
 
     // R1 Task 11. See widebandThread()'s doc comment above for the

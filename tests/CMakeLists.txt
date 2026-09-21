@@ -811,6 +811,8 @@ nereus_add_test(tst_slice_agc_advanced)
 # Audited 2026-07-25: had no nereus_add_test() call site; compiles and
 # passes against current SliceModel APIs, registered here.
 nereus_add_test(tst_slice_auto_agc)
+nereus_add_test(tst_daemon_agc_source)
+nereus_add_test(tst_remote_receive_indicators)
 
 # ── Phase 3G-10 Stage 2: WDSP wiring — EMNR (NR2) ────────────────────────
 nereus_add_test(tst_rxchannel_emnr)

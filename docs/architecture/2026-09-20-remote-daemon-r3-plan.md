@@ -311,10 +311,14 @@ state mirror and decoded remote display.
   selecting the existing peak/average modes locally. Obtain Max Bin from
   each slice's decoded passband. Start the GUI meter timer without waiting
   for a local WDSP channel, and clear readings on disconnect.
-- [ ] Mirror effective per-chain BPF/WIDE state and reasons; adapt the
+- [x] Mirror effective per-chain BPF/WIDE state and reasons; adapt the
   existing CH indicator bindings and replay state after reconnect.
-- [ ] Mirror station Auto AGC-T measurements and bind the applet/flag
-  visuals without feeding back client-derived noise estimates.
+- [x] Mirror station Auto AGC-T measurements and bind the applet/flag
+  visuals without feeding back client-derived noise estimates. Core now owns
+  a bounded per-stream FFT/tracker independently of display subscriptions;
+  both the existing threshold tick and mirrored visuals use that tracker.
+  Source and session regressions pass; live deployment acceptance is recorded
+  separately and remains pending at this source checkpoint.
 - [x] Route remote-role Connect/Disconnect actions to the saved Core
   session, including cancellation during retry backoff and a fresh explicit
   connection on the same client. Retain direct-radio behavior for local mode.
@@ -446,5 +450,5 @@ whole-plan review loops.
 | Audio | Opus/RTP and mixed-audio capture tests pass | Stereo wideband 24/48 kbit/s packet checks, mixer gain/mute/pan, bounded capture timestamps and retirement pass; sender, jitter, adaptive clock correction and playback remain pending |
 | GUI media wiring | Desktop builds; initial focused checks pass | Dedicated reduced-frame renderer and authenticated subscription controller tested; two-pane, shared-window and reconnect regressions pass; live GPU spectrum/2D observed; operator 3D confirmation and gesture refinement pending |
 | Applet S-meter | Implemented, 673/673 suite passed; Core and GUI running | Live needle movement and applet/active-flag agreement observed on Saturn; all-mode/longer acceptance pending |
-| BPF and Auto AGC-T indicators | Confirmed remaining bindings | R-R3-14 and R-R3-15; source audit complete, implementation pending |
+| BPF and Auto AGC-T indicators | Source implementation and focused tests pass | R-R3-14/15: station filter snapshot/reconnect, headless per-stream AGC source, active-applet/flag bindings; live deployment acceptance pending |
 | Manual Core reconnect | Implemented at signed `73fcccfe`; live menu round trip passed | R-R3-16; Disconnect removed the Core TCP link, Connect reauthenticated in the same GUI process, and spectrum/waterfall/meters recovered; Core remains `74145a4b` |

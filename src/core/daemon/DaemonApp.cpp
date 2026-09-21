@@ -11,6 +11,7 @@
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
+#include "core/daemon/DaemonAgcSource.h"
 
 #include "core/AppSettings.h"
 #include "core/CoreInit.h"
@@ -70,6 +71,8 @@ bool DaemonApp::start(const DaemonConfig& cfg)
                 &StepAttenuatorController::onMoxHardwareFlipped,
                 Qt::QueuedConnection);
     }
+
+    m_agcSource = std::make_unique<DaemonAgcSource>(m_radioModel.get());
 
     // R1 Task 11: dedicated thread for the wideband FFT dispatch hop --
     // RadioModel currently hops that work onto ITS OWN thread to stay off
@@ -188,6 +191,7 @@ void DaemonApp::stop()
     // and every SliceModel under it.
     m_mediaController.reset();
     m_stationServer.reset();
+    m_agcSource.reset();
 
     if (!m_radioModel) {
         m_stepAttController.reset();

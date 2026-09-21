@@ -229,6 +229,12 @@ public:
     static SliceModel* sliceForAddedIdForTest(RadioModel* model, int sliceId);
     static void applyAntennaChangeForTest(RadioModel* model, int sliceId,
                                           const QString& antennaName);
+    // Production composition seam: flags remain per-slice while the RX
+    // applet follows the active slice. Exercised without booting a window.
+    static void wireAutoAgcVisuals(RadioModel* model, SliceModel* slice,
+                                   VfoWidget* flag, class RxApplet* applet);
+    static void refreshAutoAgcVisuals(RadioModel* model, SliceModel* slice,
+                                      VfoWidget* flag, class RxApplet* applet);
     static void wireRadeFlagForTest(RadioModel* model, VfoWidget* flag,
                                     int sliceId);
     static void configureSpectrumForPanForTest(SpectrumWidget* spectrum,
@@ -710,6 +716,7 @@ private:
     /// FftEnginePool.h's doc comments on both methods for the full
     /// reasoning.
     void refreshFftPoolConfig();
+
 
     /// R1 Task 6: wires a pool-provided engine into MainWindow's other
     /// subsystems the first time streamIndex is seen -- the raw I/Q feed

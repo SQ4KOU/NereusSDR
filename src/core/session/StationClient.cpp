@@ -824,6 +824,11 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     }
     if (!m_radioModel.isNull()) {
         m_radioModel->setStationConnectionState(ConnectionState::Disconnected);
+        m_radioModel->clearStationFilterState();
+        for (SliceModel* slice : m_radioModel->slices()) {
+            slice->setStationAutoAgcNoiseFloor(slice->stationAutoAgcNoiseFloorDbm(), false,
+                                              slice->stationAutoAgcNoiseFloorGeneration());
+        }
     }
     emit mediaSessionEnded(m_sessionEpoch);
     if (reportSessionEnd) {
@@ -1008,6 +1013,7 @@ void StationClient::onTransportText(const QByteArray& wire)
         // reconcileSlicesAgainstStation().
         reconcileSlicesAgainstStation();
         m_handshakeComplete = true;
+        if (m_radioModel) { m_radioModel->setStationFilterSnapshotReady(); }
         // Task 19: this is a PROVEN success, the moment isStale() (once it
         // has ever been true) goes false again, and the only place that
         // resets the reconnect backoff on the strength of an actually
@@ -1633,6 +1639,9 @@ bool StationClient::applyOne(QObject* target, const MirrorProperty& prop,
         QByteArrayLiteral("SliceModel.signalStrengthDbm"),
         QByteArrayLiteral("SliceModel.signalPeakDbm"),
         QByteArrayLiteral("SliceModel.signalAverageDbm"),
+        QByteArrayLiteral("SliceModel.stationAutoAgcNoiseFloorDbm"),
+        QByteArrayLiteral("SliceModel.stationAutoAgcNoiseFloorValid"),
+        QByteArrayLiteral("SliceModel.stationAutoAgcNoiseFloorGeneration"),
     };
     if (kClientStateApplyHooks.contains(skewKey(className, prop.name))) {
         QString hookReason;
@@ -1654,6 +1663,9 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
                                             const QByteArray& propertyName,
                                             const QVariant& native)
 {
+    if (target == m_radioModel.data() && className == "RadioModel") {
+        return m_radioModel->applyStationFilterValue(propertyName, native);
+    }
     if (className != "SliceModel") {
         return false;
     }

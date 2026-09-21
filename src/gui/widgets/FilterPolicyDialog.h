@@ -19,10 +19,12 @@
 #pragma once
 
 #include <QDialog>
+#include "core/accessories/AlexController.h"
 
 namespace NereusSDR {
 
 class AlexController;
+class RadioModel;
 
 /// Modal dialog opened from the WIDE badge or CH tag in the
 /// SpectrumStatusOverlay (per-pan), and from VfoWidget's right-click
@@ -32,7 +34,10 @@ class AlexController;
 class FilterPolicyDialog : public QDialog {
     Q_OBJECT
 public:
-    explicit FilterPolicyDialog(int chainIndex, AlexController* alex, QWidget* parent = nullptr);
+    explicit FilterPolicyDialog(int chainIndex, RadioModel* model, QWidget* parent = nullptr);
+    explicit FilterPolicyDialog(int chainIndex, AlexController* alex, QWidget* parent = nullptr,
+                                const AlexController::AlexAdcState* stationState = nullptr,
+                                bool stationStateAvailable = true);
     ~FilterPolicyDialog() override;
 };
 

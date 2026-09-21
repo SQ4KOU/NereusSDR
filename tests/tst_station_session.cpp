@@ -209,6 +209,8 @@ private slots:
 
     // ---- Mirror and settings wiring (task 18 steps 7 and 8) ----
     void mirrorRoundTripsSliceStateAndDoesNotEcho();
+    void filterTelemetryFollowsCoreAcrossReconnect();
+    void autoAgcTelemetryFollowsCoreAcrossReconnect();
     void settingsProxyIsNotReadyBeforeTheSnapshot();
     void aRemovedStationSettingReachesTheClientAsAbsenceNotAnEmptyString();
     void schemaSkewIsCaughtByNameComparison();
@@ -1005,6 +1007,154 @@ void TstStationSession::mirrorRoundTripsSliceStateAndDoesNotEcho()
     }
     QCOMPARE(stationSlice->signalPeakDbm(), -61.0);
     QCOMPARE(stationSlice->signalAverageDbm(), -79.0);
+}
+
+void TstStationSession::autoAgcTelemetryFollowsCoreAcrossReconnect()
+{
+    QTemporaryDir directory;
+    QVERIFY(directory.isValid());
+    AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+    auto station = makeStationRadioModel(1);
+    auto* first = station->slices().at(0);
+    auto* second = station->slices().at(1);
+    StationServer server(station.get(), settings, m_securityDir.path());
+    RadioModel remote(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&remote, &proxy);
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    for (int session = 1; session <= 2; ++session) {
+        first->setStationAutoAgcNoiseFloor(-113.0, true, session * 10);
+        second->setStationAutoAgcNoiseFloor(-91.0, false, session * 10 + 1);
+        auto* stationEnd = new LoopbackTransport(QStringLiteral("agc-station"), this);
+        auto* clientEnd = new LoopbackTransport(QStringLiteral("agc-client"), this);
+        stationEnd->linkTo(clientEnd);
+        client.startSession(clientEnd, server.token());
+        server.acceptTransport(stationEnd);
+        QTRY_COMPARE(completed.count(), session);
+        auto* remoteFirst = remote.sliceById(first->sliceIndex());
+        auto* remoteSecond = remote.sliceById(second->sliceIndex());
+        QVERIFY(remoteFirst && remoteSecond);
+        QCOMPARE(remoteFirst->stationAutoAgcNoiseFloorDbm(), -113.0);
+        QVERIFY(remoteFirst->stationAutoAgcNoiseFloorValid());
+        QCOMPARE(remoteFirst->stationAutoAgcNoiseFloorGeneration(), quint64(session * 10));
+        QCOMPARE(remoteSecond->stationAutoAgcNoiseFloorDbm(), -91.0);
+        QVERIFY(!remoteSecond->stationAutoAgcNoiseFloorValid());
+
+        first->setStationAutoAgcNoiseFloor(-108.5, false, session * 10 + 2);
+        QTRY_COMPARE(remoteFirst->stationAutoAgcNoiseFloorGeneration(), quint64(session * 10 + 2));
+        QCOMPARE(remoteFirst->stationAutoAgcNoiseFloorDbm(), -108.5);
+        QVERIFY(!remoteFirst->stationAutoAgcNoiseFloorValid());
+        first->setStationAutoAgcNoiseFloor(-107.0, true, session * 10 + 2);
+        QTRY_VERIFY(remoteFirst->stationAutoAgcNoiseFloorValid());
+        QCOMPARE(remoteFirst->stationAutoAgcNoiseFloorDbm(), -107.0);
+        QCOMPARE(remoteSecond->stationAutoAgcNoiseFloorDbm(), -91.0);
+
+        stationEnd->clearReceived();
+        remoteFirst->setStationAutoAgcNoiseFloor(-55.0, true, 999);
+        // An actual operator write is the barrier for the client's write
+        // flush. None of the telemetry notifies may join that outbound batch.
+        remoteFirst->setFrequency(14080000.0 + session * 100.0);
+        QTRY_COMPARE(first->frequency(), remoteFirst->frequency());
+        for (const QByteArray& wire : stationEnd->received()) {
+            const auto message = decodeOrFail(wire);
+            if (message.kind != SessionMessageKind::PropertyWrite) { continue; }
+            for (const auto& update : message.updates) {
+                QVERIFY(!update.name.startsWith("stationAutoAgc"));
+            }
+        }
+        QCOMPARE(first->stationAutoAgcNoiseFloorDbm(), -107.0);
+        client.disconnectFromStation(QStringLiteral("operator disconnect"));
+        QVERIFY(!remoteFirst->stationAutoAgcNoiseFloorValid());
+        QVERIFY(!remoteSecond->stationAutoAgcNoiseFloorValid());
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    }
+}
+
+void TstStationSession::filterTelemetryFollowsCoreAcrossReconnect()
+{
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings settings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+    auto station = makeStationRadioModel(1);
+    auto* slice0 = station->slices().at(0);
+    auto* slice1 = station->slices().at(1);
+    // The allocator/codec normally publishes these coordinates. This test
+    // isolates their already-existing mirror from the physical routing tests.
+    slice0->setStreamIndex(0);
+    slice0->setChainIndex(0);
+    slice1->setStreamIndex(1);
+    slice1->setChainIndex(1);
+    station->alexControllerMutable().setBpfMode(1, AlexController::BpfMode::ForceBypass);
+    StationServer server(station.get(), settings, m_securityDir.path());
+    RadioModel remote(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&remote, &proxy);
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    QVERIFY(!remote.filterChainStateAvailable(1));
+    QVERIFY(!station->applyStationFilterValue("rxFilter1Effective", 0));
+
+    for (int session = 1; session <= 2; ++session) {
+        auto* stationEnd = new LoopbackTransport(QStringLiteral("filter-station"), this);
+        auto* clientEnd = new LoopbackTransport(QStringLiteral("filter-client"), this);
+        stationEnd->linkTo(clientEnd);
+        auto snapshotSeen = std::make_shared<bool>(false);
+        auto presentedEarly = std::make_shared<bool>(false);
+        connect(clientEnd, &SessionTransport::textReceived, clientEnd,
+                [snapshotSeen](const QByteArray& wire) {
+            if (decodeOrFail(wire).kind == SessionMessageKind::SnapshotComplete) {
+                *snapshotSeen = true;
+            }
+        });
+        connect(&remote, &RadioModel::filterStateChanged, clientEnd,
+                [&remote, snapshotSeen, presentedEarly] {
+            if (!*snapshotSeen && remote.filterChainStateAvailable(1)) {
+                *presentedEarly = true;
+            }
+        });
+        client.startSession(clientEnd, server.token());
+        QVERIFY(!remote.filterChainStateAvailable(1));
+        server.acceptTransport(stationEnd);
+        QTRY_COMPARE(completed.count(), session);
+        QVERIFY(*snapshotSeen);
+        QVERIFY(!*presentedEarly);
+        QVERIFY(remote.filterChainStateAvailable(0));
+        QVERIFY(remote.filterChainStateAvailable(1));
+        QCOMPARE(remote.rxFilter1Reason(), station->rxFilter1Reason());
+        QCOMPARE(remote.rxFilter1Effective(), int(AlexController::BpfEffective::Bypass));
+        QCOMPARE(remote.sliceChainIndex(slice1->sliceIndex()), 1);
+        QVERIFY(!remote.panBypassState({slice0->sliceIndex()}).bypassed);
+        QVERIFY(remote.panBypassState({slice1->sliceIndex()}).bypassed);
+        QVERIFY(remote.panBypassState({slice1->sliceIndex()}).reason.contains("Filter Policy"));
+
+        // A client-local Alex change must not replace the station's answer.
+        remote.alexControllerMutable().setWidebandActive(0, true);
+        QVERIFY(!remote.panBypassState({slice0->sliceIndex()}).bypassed);
+        station->alexControllerMutable().setWidebandActive(1, true);
+        QTRY_COMPARE(remote.rxFilter1Effective(), int(AlexController::BpfEffective::WidebandLocked));
+        QVERIFY(remote.panBypassState({slice1->sliceIndex()}).reason.contains("more spectrum"));
+        station->alexControllerMutable().setWidebandActive(1, false);
+        QTRY_COMPARE(remote.rxFilter1Effective(), int(AlexController::BpfEffective::Bypass));
+
+        stationEnd->clearReceived();
+        QVERIFY(remote.applyStationFilterValue("rxFilter1Reason", QStringLiteral("client-only")));
+        QVERIFY(!remote.applyStationFilterValue("rxFilter1Effective", 99));
+        auto* clientSlice = remote.sliceById(slice0->sliceIndex());
+        QVERIFY(clientSlice);
+        clientSlice->setFrequency(14075000.0 + session * 100.0);
+        QTRY_COMPARE(slice0->frequency(), clientSlice->frequency());
+        for (const QByteArray& wire : stationEnd->received()) {
+            const auto message = decodeOrFail(wire);
+            if (message.kind != SessionMessageKind::PropertyWrite) { continue; }
+            for (const auto& update : message.updates) {
+                QVERIFY(!update.name.startsWith("rxFilter"));
+            }
+        }
+        QVERIFY(station->rxFilter1Reason() != QStringLiteral("client-only"));
+        client.disconnectFromStation(QStringLiteral("operator disconnect"));
+        QVERIFY(!remote.filterChainStateAvailable(1));
+        QVERIFY(!remote.panBypassState({slice1->sliceIndex()}).bypassed);
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+    }
 }
 
 void TstStationSession::settingsProxyIsNotReadyBeforeTheSnapshot()

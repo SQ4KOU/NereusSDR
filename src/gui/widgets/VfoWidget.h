@@ -418,7 +418,8 @@ public:
     void setBinauralEnabled(bool v);
 
     // --- Auto AGC-T visual update (Task 6) ---
-    void updateAgcAutoVisuals(bool autoOn, float noiseFloorDbm, double offset);
+    void updateAgcAutoVisuals(bool autoOn, float noiseFloorDbm, double offset,
+                              bool noiseFloorValid = true);
 
     // --- Small filter display mode (Task 3.4 — Appearance > Meter Styles) ---
     void setSmallFilterMode(bool small);

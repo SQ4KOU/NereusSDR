@@ -942,6 +942,7 @@ set(CORE_SOURCES
     src/core/spectrum/FftEnginePool.cpp
     # R3 Task 2: daemon-owned source that feeds the existing FFT pool from
     # live stream I/Q without any GUI or endpoint policy.
+    src/core/daemon/DaemonAgcSource.cpp
     src/core/session/media/DaemonSpectrumSource.cpp
     # R3 daemon session owner for media peer, spectrum endpoints, and the
     # existing mixed-audio Opus path.
