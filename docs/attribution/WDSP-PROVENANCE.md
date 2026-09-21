@@ -10,6 +10,12 @@ WDSP (Warren Pratt NR0V's DSP library) is vendored in `third_party/wdsp/`.
   v2.10.3.13 sync** for `cfcomp.c` + `cfcomp.h` (see "Partial sync record"
   below).
 
+## Local portability corrections
+
+| File | Status | Source and preserved attribution | Date |
+| --- | --- | --- | --- |
+| `third_party/wdsp/src/linux_port.c` | Existing vendored POSIX shim; local macOS semaphore namespace fix | TAPR/OpenHPSDR-wdsp v1.29 baseline. Warren Pratt NR0V and John Melton G0ORX/N6LYT, Copyright 2013; DL1YCF inline comments and GPLv2-or-later header retained. J.J. Boyd (KG4VCF), assisted by OpenAI Codex, added process-unique names, synchronized naming, collision retries and immediate unlink after successful creation. DSP behavior is unchanged. | 2026-09-21 |
+
 ## Partial sync record
 
 | File | Status | Source | Date |

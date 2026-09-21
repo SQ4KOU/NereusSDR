@@ -25,6 +25,9 @@ john.d.melton@googlemail.com
 
 */
 
+// no-port-check: Existing vendored TAPR WDSP POSIX shim, registered in
+// docs/attribution/WDSP-PROVENANCE.md and checked by the WDSP header verifier.
+// The local semaphore namespace repair below introduces no new Thetis port.
 // NereusSDR modification history:
 //   2026-09-21 — Make macOS semaphore names process-unique and unlink them
 //                immediately after creation so concurrent NereusSDR/Qt test

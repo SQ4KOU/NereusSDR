@@ -15,8 +15,9 @@ and menu-driven Core reconnect have been demonstrated at earlier checkpoints.
 The mixed stereo Opus sender, encrypted session control, bounded jitter,
 continuous WDSP rate matching and client playback are implemented. Focused
 checks pass, including a simulated hour in each direction at 500 ppm, large
-speaker callbacks, packet bursts, mute/resume and encrypted reconnect. Full
-suite, native audio installation and actual listening are the next gates.
+speaker callbacks, packet bursts, mute/resume and encrypted reconnect. The full
+681-test suite passes at signed audio checkpoint `0123d8e1`. Native audio
+installation and actual listening are the next gates.
 The Mac is now remote/on VPN; that existing connection is not R5 traversal.
 Capacity, two-hour hardware audio soak, Clarity's subjective comparison and
 R5 internet traversal remain open. Earlier sections retain checkpoint-specific
@@ -638,3 +639,23 @@ a later PortAudio reopen hung; the exact concurrent regression and the final
 whole suite passed. This does not establish unlimited physical-device
 reopen/close stress acceptance. Hardware audio listening, native CPU/bandwidth
 measurement and the two-hour live soak remain pending at this source gate.
+
+
+## Audio checkpoint awaiting installation
+
+Signed audio checkpoint `0123d8e1` passed the repository attribution hooks.
+The immutable source overlay and SHA-256 manifest were prepared from Git.
+The first transfer ended with a closed connection before the native build
+started; subsequent SSH attempts to both board addresses and a ping to the
+home router timed out. The existing GUI also lost its control/media session.
+The operator had confirmed that the Mac was now remote/on VPN. No network
+settings were changed, and no audio binary was installed: Core remains
+`04da2aab`, with the old `73fcccfe` GUI still running. Installation resumes
+when the LAN route is available, followed by decoded live audio diagnostics
+and physical speaker listening. This interruption is not R5 traversal work.
+
+The route subsequently recovered, and the verified `0123d8e1` overlay reached
+the board. Native compilation is underway. The optional `nereus-media-probe --audio` diagnostic now builds and advertises its flag. It validates the current
+audio context before decoding and reports finite PCM energy, actual stereo
+bandwidth/channels, byte counts and discontinuities. A successful diagnostic
+is transport/decoder evidence and does not replace physical listening.

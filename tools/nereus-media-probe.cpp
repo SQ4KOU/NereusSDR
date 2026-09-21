@@ -19,6 +19,7 @@
 #include "core/session/StationClient.h"
 #include "core/session/media/DisplayCodec.h"
 #include "core/session/media/MediaPeer.h"
+#include "core/session/media/OpusAudioCodec.h"
 #include "core/session/media/SpectrumEndpoint.h"
 #include "core/settings/SettingsProxy.h"
 #include "models/RadioModel.h"
@@ -45,6 +46,7 @@
 #include <cstdio>
 #include <limits>
 #include <memory>
+#include <initializer_list>
 
 using namespace NereusSDR;
 
@@ -85,6 +87,44 @@ bool jsonUint32(const QJsonObject& object, const char* key, quint32& value)
     }
     value = static_cast<quint32>(parsed);
     return true;
+}
+
+bool jsonUint16(const QJsonObject& object, const char* key, quint16& value)
+{
+    double parsed = 0.0;
+    if (!jsonNumber(object, key, 0, std::numeric_limits<quint16>::max(), parsed, true)) {
+        return false;
+    }
+    value = static_cast<quint16>(parsed);
+    return true;
+}
+
+bool exactKeys(const QJsonObject& object, std::initializer_list<const char*> keys)
+{
+    if (object.size() != static_cast<qsizetype>(keys.size())) {
+        return false;
+    }
+    for (const char* key : keys) {
+        if (!object.contains(QLatin1String(key))) {
+            return false;
+        }
+    }
+    return true;
+}
+
+QString opusStatusName(OpusAudioCodecStatus status)
+{
+    switch (status) {
+    case OpusAudioCodecStatus::Accepted: return QStringLiteral("accepted");
+    case OpusAudioCodecStatus::Concealed: return QStringLiteral("concealed");
+    case OpusAudioCodecStatus::InvalidInput: return QStringLiteral("invalidInput");
+    case OpusAudioCodecStatus::EncodeFailed: return QStringLiteral("encodeFailed");
+    case OpusAudioCodecStatus::DecodeFailed: return QStringLiteral("decodeFailed");
+    case OpusAudioCodecStatus::MalformedRtp: return QStringLiteral("malformedRtp");
+    case OpusAudioCodecStatus::UnexpectedSsrc: return QStringLiteral("unexpectedSsrc");
+    case OpusAudioCodecStatus::Oversized: return QStringLiteral("oversized");
+    }
+    return QStringLiteral("unknown");
 }
 
 QString reasonName(DisplayCodecReason reason)
@@ -181,12 +221,14 @@ QByteArray frameContentHash(const DisplayCodecFrame& frame)
 class MediaProbe final : public QObject {
 public:
     MediaProbe(QCoreApplication* application, StationClient* client,
-               RadioModel* model, int durationSeconds, QObject* parent = nullptr)
+               RadioModel* model, int durationSeconds, bool audioRequested,
+               QObject* parent = nullptr)
         : QObject(parent)
         , m_application(application)
         , m_client(client)
         , m_model(model)
         , m_durationSeconds(durationSeconds)
+        , m_audioRequested(audioRequested)
     {
         m_clock.start();
         m_timeout.setSingleShot(true);
@@ -246,12 +288,19 @@ private:
                         receiveDisplay(packet);
                     }
                 });
+        connect(peer, &MediaPeer::rtpReceived, this,
+                [this, peer](const QByteArray& packet) {
+                    if (isCurrent(peer)) {
+                        receiveAudio(packet);
+                    }
+                });
         connect(peer, &MediaPeer::ready, this, [this, peer] {
             if (!isCurrent(peer)) {
                 return;
             }
             m_mediaReady = true;
             subscribeFirstLiveSlice();
+            requestAudio();
             if (!m_subscribed) {
                 m_slicePoll.start();
             }
@@ -341,6 +390,126 @@ private:
         m_slicePoll.stop();
     }
 
+    void requestAudio()
+    {
+        if (!m_audioRequested || m_audioControlSent || m_finished || !m_mediaReady) {
+            return;
+        }
+        if (!m_audioDecoder.isReady()) {
+            fail(QStringLiteral("audioDecoderUnavailable"));
+            return;
+        }
+        if (!send({{QStringLiteral("op"), QStringLiteral("audio")},
+                   {QStringLiteral("revision"), double(kRevision)},
+                   {QStringLiteral("enabled"), true}})) {
+            fail(QStringLiteral("audioRequestSendFailed"));
+            return;
+        }
+        m_audioControlSent = true;
+    }
+
+    bool acceptAudioContext(const QJsonObject& payload)
+    {
+        quint32 revision = 0;
+        quint32 generation = 0;
+        quint32 ssrc = 0;
+        quint16 firstSequence = 0;
+        double firstTimestamp = 0.0;
+        if (!m_audioRequested
+            || !exactKeys(payload, {"op", "connectionId", "revision", "generation",
+                                    "enabled", "ssrc", "firstSequence", "firstTimestamp"})
+            || payload.value(QStringLiteral("op")) != QLatin1String("audio-context")
+            || payload.value(QStringLiteral("connectionId")).toString() != m_connectionId
+            || !jsonUint32(payload, "revision", revision) || revision != kRevision
+            || !jsonUint32(payload, "generation", generation)
+            || !payload.value(QStringLiteral("enabled")).isBool()
+            || !jsonUint32(payload, "ssrc", ssrc) || !m_peer || ssrc != m_peer->audioSsrc()
+            || !jsonUint16(payload, "firstSequence", firstSequence)
+            || !jsonNumber(payload, "firstTimestamp", 0,
+                           std::numeric_limits<quint32>::max(), firstTimestamp, true)) {
+            return false;
+        }
+        if (!payload.value(QStringLiteral("enabled")).toBool()) {
+            fail(QStringLiteral("audioUnavailable"));
+            return false;
+        }
+        if (m_audioContextAccepted
+            && (generation == m_audioGeneration
+                || quint32(generation - m_audioGeneration) >= 0x80000000U)) {
+            return false;
+        }
+        m_audioGeneration = generation;
+        m_audioSsrc = ssrc;
+        m_audioFirstSequence = firstSequence;
+        m_audioFirstTimestamp = static_cast<quint32>(firstTimestamp);
+        m_audioContextAccepted = true;
+        m_audioHavePrevious = false;
+        m_audioDecoder.reset();
+        return true;
+    }
+
+    void receiveAudio(const QByteArray& packet)
+    {
+        ++m_audioPackets;
+        m_audioBytes += static_cast<quint64>(packet.size());
+        if (!m_audioContextAccepted) {
+            ++m_audioPreContextPackets;
+            return;
+        }
+        const auto header = inspectOpusRtp(packet, m_audioSsrc);
+        if (header.status != OpusAudioCodecStatus::Accepted) {
+            ++m_audioRejected;
+            ++m_audioStatusCounts[opusStatusName(header.status)];
+            return;
+        }
+        // Reject retired context data before it can change decoder history.
+        if (static_cast<qint32>(header.timestamp - m_audioFirstTimestamp) < 0) {
+            ++m_audioRejected;
+            ++m_audioStatusCounts[QStringLiteral("oldTimestamp")];
+            return;
+        }
+        const OpusRtpDecodeResult decoded = m_audioDecoder.decodeRtp(packet, m_audioSsrc);
+        ++m_audioStatusCounts[opusStatusName(decoded.status)];
+        if (decoded.status != OpusAudioCodecStatus::Accepted) {
+            ++m_audioRejected;
+            return;
+        }
+        ++m_audioDecoded;
+        m_audioChannels = decoded.packetInfo.channels;
+        m_audioBandwidth = decoded.packetInfo.bandwidth;
+        if (m_audioHavePrevious) {
+            if (decoded.sequence != static_cast<quint16>(m_audioPreviousSequence + 1)) {
+                ++m_audioSequenceDiscontinuities;
+            }
+            if (decoded.timestamp != m_audioPreviousTimestamp + OpusAudioCodecConfig::kFrameSamples) {
+                ++m_audioTimestampDiscontinuities;
+            }
+        } else if (decoded.sequence != m_audioFirstSequence
+                   || decoded.timestamp != m_audioFirstTimestamp) {
+            ++m_audioContextDiscontinuities;
+        }
+        m_audioPreviousSequence = decoded.sequence;
+        m_audioPreviousTimestamp = decoded.timestamp;
+        m_audioHavePrevious = true;
+
+        double leftSquared = 0.0;
+        double rightSquared = 0.0;
+        for (int index = 0; index < decoded.pcmInterleaved.size(); index += 2) {
+            const float left = decoded.pcmInterleaved.at(index);
+            const float right = decoded.pcmInterleaved.at(index + 1);
+            if (!std::isfinite(left) || !std::isfinite(right)) {
+                m_audioPcmFinite = false;
+                ++m_audioRejected;
+                return;
+            }
+            leftSquared += static_cast<double>(left) * left;
+            rightSquared += static_cast<double>(right) * right;
+        }
+        m_audioPcmFrames += static_cast<quint64>(decoded.pcmInterleaved.size() / 2);
+        m_audioLeftSquared += leftSquared;
+        m_audioRightSquared += rightSquared;
+    }
+
     void receiveControl(const QJsonObject& payload, quint32 epoch)
     {
         if (m_finished || epoch != m_epoch || !m_peer
@@ -357,6 +526,15 @@ private:
         }
         if (op == QLatin1String("rejected")) {
             fail(QStringLiteral("subscriptionRejected"));
+            return;
+        }
+        if (op == QLatin1String("audio-context")) {
+            if (!m_audioRequested) {
+                return;
+            }
+            if (!acceptAudioContext(payload)) {
+                fail(QStringLiteral("audioContextInvalid"));
+            }
             return;
         }
         if (op != QLatin1String("context") || payload.size() != 19
@@ -499,9 +677,12 @@ private:
             && m_accepted >= kMinimumAcceptedFrames
             && m_distinctFrames.size() >= kMinimumDistinctFrames
             && m_waterfallAdvances >= kMinimumWaterfallAdvances
-            && m_wideFrames > 0;
+            && m_wideFrames > 0
+            && (!m_audioRequested || (m_audioContextAccepted && m_audioPackets > 0
+                && m_audioDecoded > 0 && m_audioPcmFinite && m_audioPcmFrames > 0));
         if (!passed && m_failure.isEmpty()) {
-            m_failure = QStringLiteral("insufficientChangingFrames");
+            m_failure = m_audioRequested ? QStringLiteral("insufficientAudioOrDisplayMedia")
+                                         : QStringLiteral("insufficientChangingFrames");
         }
 
         if (m_subscribed) {
@@ -540,6 +721,34 @@ private:
             {QStringLiteral("contextGeneration"),
              double(m_codecContext.contextGeneration)},
         };
+        QJsonObject audio;
+        if (m_audioRequested) {
+            QJsonObject statuses;
+            for (auto it = m_audioStatusCounts.cbegin(); it != m_audioStatusCounts.cend(); ++it) {
+                statuses.insert(it.key(), double(it.value()));
+            }
+            const double leftRms = m_audioPcmFrames
+                ? std::sqrt(m_audioLeftSquared / double(m_audioPcmFrames)) : 0.0;
+            const double rightRms = m_audioPcmFrames
+                ? std::sqrt(m_audioRightSquared / double(m_audioPcmFrames)) : 0.0;
+            audio = {{QStringLiteral("contextAccepted"), m_audioContextAccepted},
+                     {QStringLiteral("contextGeneration"), double(m_audioGeneration)},
+                     {QStringLiteral("packetCount"), double(m_audioPackets)},
+                     {QStringLiteral("actualReceivedBytes"), double(m_audioBytes)},
+                     {QStringLiteral("decodedPackets"), double(m_audioDecoded)},
+                     {QStringLiteral("rejectedPackets"), double(m_audioRejected)},
+                     {QStringLiteral("preContextPackets"), double(m_audioPreContextPackets)},
+                     {QStringLiteral("sequenceDiscontinuities"), double(m_audioSequenceDiscontinuities)},
+                     {QStringLiteral("timestampDiscontinuities"), double(m_audioTimestampDiscontinuities)},
+                     {QStringLiteral("contextDiscontinuities"), double(m_audioContextDiscontinuities)},
+                     {QStringLiteral("channels"), m_audioChannels},
+                     {QStringLiteral("bandwidth"), m_audioBandwidth},
+                     {QStringLiteral("pcmFinite"), m_audioPcmFinite},
+                     {QStringLiteral("pcmFrames"), double(m_audioPcmFrames)},
+                     {QStringLiteral("leftRms"), leftRms},
+                     {QStringLiteral("rightRms"), rightRms},
+                     {QStringLiteral("decodeStatuses"), statuses}};
+        }
         QJsonObject report{
             {QStringLiteral("status"), passed ? QStringLiteral("ok")
                                                : QStringLiteral("failed")},
@@ -555,6 +764,7 @@ private:
             {QStringLiteral("actualReceivedEncodedBytes"),
              double(m_receivedEncodedBytes)},
         };
+        if (m_audioRequested) { report.insert(QStringLiteral("audio"), audio); }
         const QByteArray output = QJsonDocument(report).toJson(QJsonDocument::Compact)
             + '\n';
         std::fwrite(output.constData(), 1, size_t(output.size()), stdout);
@@ -570,12 +780,20 @@ private:
     QTimer m_slicePoll;
     QElapsedTimer m_clock;
     DisplayCodecDecoder m_decoder;
+    OpusAudioDecoder m_audioDecoder;
     DisplayCodecContext m_codecContext;
     QSet<QByteArray> m_distinctFrames;
     QMap<QString, quint64> m_reasonCounts;
+    QMap<QString, quint64> m_audioStatusCounts;
     QString m_connectionId;
     QString m_failure;
     quint32 m_epoch = 0;
+    quint32 m_audioGeneration = 0;
+    quint32 m_audioSsrc = 0;
+    quint32 m_audioFirstTimestamp = 0;
+    quint32 m_audioPreviousTimestamp = 0;
+    quint16 m_audioFirstSequence = 0;
+    quint16 m_audioPreviousSequence = 0;
     qint64 m_lastKeyframeMs = -1000;
     quint64 m_receivedEncodedBytes = 0;
     quint64 m_receivedFrames = 0;
@@ -584,14 +802,32 @@ private:
     quint64 m_rejected = 0;
     quint64 m_waterfallAdvances = 0;
     quint64 m_wideFrames = 0;
+    quint64 m_audioBytes = 0;
+    quint64 m_audioPackets = 0;
+    quint64 m_audioDecoded = 0;
+    quint64 m_audioRejected = 0;
+    quint64 m_audioPreContextPackets = 0;
+    quint64 m_audioSequenceDiscontinuities = 0;
+    quint64 m_audioTimestampDiscontinuities = 0;
+    quint64 m_audioContextDiscontinuities = 0;
+    quint64 m_audioPcmFrames = 0;
+    double m_audioLeftSquared = 0.0;
+    double m_audioRightSquared = 0.0;
     double m_contextCentreHz = 0.0;
     double m_contextSpanHz = 0.0;
     double m_sourceCentreHz = 0.0;
     double m_sampleRateHz = 0.0;
+    int m_audioChannels = 0;
+    int m_audioBandwidth = 0;
     int m_durationSeconds = kDefaultSeconds;
     bool m_mediaReady = false;
     bool m_subscribed = false;
     bool m_contextAccepted = false;
+    bool m_audioRequested = false;
+    bool m_audioControlSent = false;
+    bool m_audioContextAccepted = false;
+    bool m_audioHavePrevious = false;
+    bool m_audioPcmFinite = true;
     bool m_finished = false;
 };
 
@@ -627,8 +863,12 @@ int main(int argc, char* argv[])
         QStringLiteral("seconds"),
         QStringLiteral("Bounded capture duration, 1 through 300 seconds."),
         QStringLiteral("seconds"), QString::number(kDefaultSeconds));
+    QCommandLineOption audioOption(
+        QStringLiteral("audio"),
+        QStringLiteral("Also request and validate decrypted 48 kHz stereo Opus RTP."));
     parser.addOption(stationFileOption);
     parser.addOption(secondsOption);
+    parser.addOption(audioOption);
     parser.process(application);
 
     bool durationValid = false;
@@ -661,7 +901,8 @@ int main(int argc, char* argv[])
         AppSettings::instance().setRemoteBackend(&settingsProxy);
         RadioModel remoteModel(RadioModel::Role::Remote);
         StationClient client(&remoteModel, &settingsProxy);
-        MediaProbe probe(&application, &client, &remoteModel, durationSeconds);
+        MediaProbe probe(&application, &client, &remoteModel, durationSeconds,
+                         parser.isSet(audioOption));
         probe.begin(credentials);
         credentials.token.fill(QChar::Null);
         result = application.exec();
