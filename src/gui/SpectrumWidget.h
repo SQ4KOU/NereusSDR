@@ -293,6 +293,7 @@ class VfoWidget;
 class ImdOverlay;  // Phase 3M-4 Task 12 — two-tone IMD overlay analytical core
 class WaterfallTicker;  // src/gui/spectrum/WaterfallTicker.h
 struct SpectrumEndpointContext;
+class DisplaySettingsModel;  // src/models/DisplaySettingsModel.h (3D Stacked-Trace Spectrum Plan Task 18)
 
 // Waterfall color scheme presets: extracted to core in R1 Task 4
 // (src/core/spectrum/ISpectrumSink.h) alongside AverageMode below, because
@@ -522,6 +523,13 @@ public:
 
     // ---- Display range ----
     void setDbmRange(float minDbm, float maxDbm);
+    // 3D Stacked-Trace Spectrum Plan Task 18: named setters for the two
+    // fields setDbmRange() has always written directly, so
+    // DisplaySettingsModel has something to bind each of the fourteen
+    // values to individually (setDbmRange sets both at once; the popup's
+    // Ref Level and Dyn Range sliders each set one).
+    void setRefLevel(float dBm);
+    void setDynamicRange(float dB);
     float refLevel() const { return m_refLevel; }
     float dynamicRange() const { return m_dynamicRange; }
     /// Parity Task 28: the transmit grid's pair whether or not it is live
@@ -532,6 +540,13 @@ public:
     {
         return m_moxOverlay ? m_dynamicRange : m_txDynamicRange;
     }
+
+    // Waterfall/spectrum vertical split fraction (Task 18's third new
+    // setter): DisplaySettingsModel's binding target for the divider
+    // drag in mouseMoveEvent. No popup or Setup control reaches this
+    // directly (yet); persisted via DisplaySpectrumFrac regardless.
+    void  setSpectrumFrac(float frac);
+    float spectrumFrac() const { return m_spectrumFrac; }
 
     // ---- Waterfall settings ----
     void setWfColorScheme(WfColorScheme scheme) override;
@@ -1429,8 +1444,17 @@ public:
 #endif
 
     // ---- Per-pan settings persistence ----
-    void setPanIndex(int idx) { m_panIndex = idx; }
+    // setPanIndex() also forwards to this widget's owned
+    // DisplaySettingsModel (Task 18) so the child's per-pan keys always
+    // track this widget's own. Out-of-line (not inline) because
+    // DisplaySettingsModel is only forward-declared in this header.
+    void setPanIndex(int idx);
     int  panIndex() const { return m_panIndex; }
+    // The DisplaySettingsModel this widget owns and binds to (Task 18):
+    // one per SpectrumWidget, i.e. one per panadapter. Surfaces that
+    // follow the active pan reach it through
+    // RadioModel::spectrumWidget()->displaySettings().
+    DisplaySettingsModel* displaySettings() const { return m_displaySettings; }
     void loadSettings();
     void loadSpectrumPeaksSettings();
     // The grid's noise-floor tracking rule both feeds share, and its timer.
@@ -2040,6 +2064,11 @@ public:
         updateDssScaleOverlayFreshness();
 #endif
     }
+    // Task 18: counts real (non-guarded) applies across all fourteen
+    // DisplaySettingsModel-bound appliers. Used to prove loadSettings()
+    // never drives an apply (it pushes straight into the model, bypassing
+    // these appliers entirely) and that a no-op re-apply does not move it.
+    int displaySettingsApplyCountForTest() const { return m_displaySettingsApplyCount; }
 
 signals:
     /// Task 78: a click on another device's slice label, with what it says.
@@ -2997,6 +3026,14 @@ private:
 
     int    m_panIndex{0};            // for per-pan settings keys
 
+    // 3D Stacked-Trace Spectrum Plan Task 18: this widget's owned
+    // DisplaySettingsModel (one per SpectrumWidget / panadapter),
+    // constructed in the SpectrumWidget constructor and bound in
+    // bindDisplaySettings(). m_displaySettingsApplyCount is a test seam;
+    // see displaySettingsApplyCountForTest().
+    DisplaySettingsModel* m_displaySettings{nullptr};
+    int                   m_displaySettingsApplyCount{0};
+
     // ---- VFO flag widgets ----
     QMap<int, VfoWidget*> m_vfoWidgets;
     // Slices shown here only as their flag and their own edge marker
@@ -3267,6 +3304,15 @@ private:
     // ---- Coalesced settings save ----
     void scheduleSettingsSave();
     bool m_settingsSaveScheduled{false};
+
+    // 3D Stacked-Trace Spectrum Plan Task 18: wires m_displaySettings
+    // bidirectionally (called once from the constructor). Called from
+    // every write site of the eight fields with no per-field widget
+    // signal (named setters, setDbmRange(), loadSettings(), the dBm-strip
+    // and divider mouse drags, wheelEvent) -- see SpectrumWidget.cpp for
+    // the full list.
+    void bindDisplaySettings();
+    void syncDisplaySettingsFromWidget();
 
     // Recompute m_spectrumAverageAlpha + m_waterfallAverageAlpha from the
     // current per-side time constants and live FPS using the Thetis formula:
