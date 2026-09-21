@@ -9,11 +9,14 @@
 
 #include "core/session/media/LibDataChannelMediaTransport.h"
 
+#include <QDebug>
 #include <QPointer>
 #include <QTimer>
 
 #include <rtc/rtc.hpp>
 
+#include <algorithm>
+#include <chrono>
 #include <deque>
 #include <limits>
 #include <mutex>
@@ -32,6 +35,8 @@ constexpr std::size_t kMaxPendingEvents = 128;
 constexpr std::size_t kMaxPendingDisplayMessages = 8;
 constexpr std::size_t kMaxPendingDisplayBytes = 256 * 1024;
 constexpr std::size_t kMaxPendingRtpPackets = 64;
+constexpr auto kRtpTimingWarningThreshold = std::chrono::milliseconds(80);
+constexpr auto kRtpTimingWarningInterval = std::chrono::seconds(1);
 
 struct CallbackEvent {
     enum class Kind {
@@ -47,6 +52,11 @@ struct CallbackEvent {
     std::string second;
 };
 
+struct PendingRtpPacket {
+    rtc::binary data;
+    std::chrono::steady_clock::time_point receivedAt;
+};
+
 struct CallbackBridge {
     std::mutex mutex;
     bool cancelled = false;
@@ -54,7 +64,10 @@ struct CallbackBridge {
     std::deque<CallbackEvent> events;
     std::deque<rtc::binary> displayMessages;
     std::size_t displayBytes = 0;
-    std::deque<rtc::binary> rtpPackets;
+    std::deque<PendingRtpPacket> rtpPackets;
+    std::chrono::steady_clock::time_point lastRtpReceipt;
+    std::chrono::steady_clock::duration maxRtpCallbackGap {};
+    std::size_t droppedRtpPackets = 0;
     std::shared_ptr<rtc::DataChannel> dataChannel;
     std::shared_ptr<rtc::Track> track;
     bool dataChannelAssigned = false;
@@ -118,6 +131,7 @@ void queueRtp(const std::weak_ptr<CallbackBridge>& weak, rtc::binary data)
     if (!bridge) {
         return;
     }
+    const auto receivedAt = std::chrono::steady_clock::now();
     std::lock_guard lock(bridge->mutex);
     if (bridge->cancelled) {
         return;
@@ -130,10 +144,16 @@ void queueRtp(const std::weak_ptr<CallbackBridge>& weak, rtc::binary data)
         }
         return;
     }
+    if (bridge->lastRtpReceipt != std::chrono::steady_clock::time_point {}) {
+        bridge->maxRtpCallbackGap = std::max(
+            bridge->maxRtpCallbackGap, receivedAt - bridge->lastRtpReceipt);
+    }
+    bridge->lastRtpReceipt = receivedAt;
     if (bridge->rtpPackets.size() >= kMaxPendingRtpPackets) {
         bridge->rtpPackets.pop_front();
+        ++bridge->droppedRtpPackets;
     }
-    bridge->rtpPackets.push_back(std::move(data));
+    bridge->rtpPackets.push_back({std::move(data), receivedAt});
 }
 
 void bindDataChannel(const std::shared_ptr<rtc::DataChannel>& channel,
@@ -203,6 +223,7 @@ struct LibDataChannelMediaTransport::Private {
     bool ready = false;
     bool remoteDescriptionAccepted = false;
     int acceptedCandidates = 0;
+    std::chrono::steady_clock::time_point lastRtpTimingWarning;
 };
 
 LibDataChannelMediaTransport::LibDataChannelMediaTransport(
@@ -561,7 +582,9 @@ void LibDataChannelMediaTransport::drainCallbacks()
 
     std::deque<CallbackEvent> events;
     std::deque<rtc::binary> displayMessages;
-    std::deque<rtc::binary> rtpPackets;
+    std::deque<PendingRtpPacket> rtpPackets;
+    std::chrono::steady_clock::duration maxRtpCallbackGap {};
+    std::size_t droppedRtpPackets = 0;
     std::shared_ptr<rtc::DataChannel> incomingDisplay;
     std::shared_ptr<rtc::Track> incomingAudio;
     {
@@ -573,6 +596,10 @@ void LibDataChannelMediaTransport::drainCallbacks()
         displayMessages.swap(bridge->displayMessages);
         bridge->displayBytes = 0;
         rtpPackets.swap(bridge->rtpPackets);
+        maxRtpCallbackGap = bridge->maxRtpCallbackGap;
+        bridge->maxRtpCallbackGap = {};
+        droppedRtpPackets = bridge->droppedRtpPackets;
+        bridge->droppedRtpPackets = 0;
         incomingDisplay = std::move(bridge->dataChannel);
         incomingAudio = std::move(bridge->track);
     }
@@ -580,6 +607,7 @@ void LibDataChannelMediaTransport::drainCallbacks()
     if (!isCurrentGeneration()) {
         return;
     }
+
     if (!d->display && incomingDisplay) {
         d->display = std::move(incomingDisplay);
     }
@@ -625,8 +653,25 @@ void LibDataChannelMediaTransport::drainCallbacks()
             return;
         }
     }
-    for (const rtc::binary& packet : rtpPackets) {
-        emit rtpReceived(toByteArray(packet));
+    if (!rtpPackets.empty()) {
+        const auto drainedAt = std::chrono::steady_clock::now();
+        const auto oldestRtpQueueAge = drainedAt - rtpPackets.front().receivedAt;
+        if ((maxRtpCallbackGap > kRtpTimingWarningThreshold
+             || oldestRtpQueueAge > kRtpTimingWarningThreshold)
+            && (d->lastRtpTimingWarning == std::chrono::steady_clock::time_point {}
+                || drainedAt - d->lastRtpTimingWarning >= kRtpTimingWarningInterval)) {
+            d->lastRtpTimingWarning = drainedAt;
+            qWarning().nospace()
+                << "media RTP timing: callbackGapMs="
+                << std::chrono::duration_cast<std::chrono::milliseconds>(maxRtpCallbackGap).count()
+                << " ownerDrainAgeMs="
+                << std::chrono::duration_cast<std::chrono::milliseconds>(oldestRtpQueueAge).count()
+                << " batchPackets=" << rtpPackets.size()
+                << " droppedPending=" << droppedRtpPackets;
+        }
+    }
+    for (const PendingRtpPacket& packet : rtpPackets) {
+        emit rtpReceived(toByteArray(packet.data));
         if (!isCurrentGeneration()) {
             return;
         }

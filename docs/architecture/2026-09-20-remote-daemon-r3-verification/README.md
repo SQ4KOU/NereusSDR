@@ -744,3 +744,25 @@ arrival stalls from consumer scheduling and clock behavior.
 A 10-second one-pan live sample measured Core at 61.9% of one CPU core,
 138,916 KiB resident memory and 47.153 degrees C. This is an observation
 under the current receiver configuration, not four-pan capacity evidence.
+
+The operator reported smoother audio after this correction, with occasional
+stutters accompanied by a waterfall slowdown. Receiver restart diagnostics
+were built into signed GUI `a7a6da39`; receiver and encrypted-session tests
+passed 2/2. The first cold-start observation shows a three-second speaker
+open followed by an arrival backlog, so startup backlog remains an explicit
+follow-up rather than evidence of radio silence.
+
+At approximately 12:07:57 the media connection failed, followed by a WSS
+timeout. Both Rock addresses became unreachable while the router, Saturn
+and MikroTik still answered pings. A read-only MikroTik query at 12:11
+reported **no physical link on ether2**, the port identified by the operator.
+No switch or VPN settings were changed. Further live acceptance waits for
+board/link recovery; this outage must not be counted as an audio pass or
+attributed to the receiver without additional evidence.
+
+Transport diagnostics now record library RTP callback spacing and queue age
+at actual owner-thread delivery, after display processing. Warnings above
+80 ms are bounded to one per second and contain timing/counts only. The
+existing 64-packet queue, retirement checks and transport API are unchanged.
+The rebuilt transport, media peer, receiver and encrypted audio session tests
+passed 4/4 in 5.04 seconds. Full-suite verification follows this source gate.
