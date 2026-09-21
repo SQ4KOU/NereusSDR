@@ -54,6 +54,7 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         boolEntry("pureSignalPresent", pureSignalPresent),
         boolEntry("txPermitted", txPermitted),
         intEntry("remoteMediaVersion", remoteMediaVersion),
+        intEntry("remoteCtunVersion", remoteCtunVersion),
         intEntry("settingsSchemaVersion", settingsSchemaVersion),
     };
 }
@@ -103,6 +104,10 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
         } else if (u.name == "remoteMediaVersion") {
             const qlonglong version = u.value.toLongLong();
             caps.remoteMediaVersion = version >= 0 && version <= 65535
+                ? static_cast<int>(version) : 0;
+        } else if (u.name == "remoteCtunVersion") {
+            const qlonglong version = u.value.toLongLong();
+            caps.remoteCtunVersion = version >= 0 && version <= 65535
                 ? static_cast<int>(version) : 0;
         } else if (u.name == "settingsSchemaVersion") {
             caps.settingsSchemaVersion = static_cast<qint32>(u.value.toLongLong());

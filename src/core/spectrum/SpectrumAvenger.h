@@ -151,6 +151,9 @@ private:
     // whose semantic depends on av_mode (peak max, linear sum,
     // log running EMA, etc).
     QVector<double> m_avSum;
+    // resize/clear run before the caller supplies the next averaging mode.
+    // Defer WDSP's mode-dependent accumulator seed until that first apply.
+    bool m_needsInitialization{true};
 
     // av_buff at analyzer.h:83 [v2.10.3.13] — ring of past frames
     // used by window-averaging mode (av_mode == 2).  Sized

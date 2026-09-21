@@ -871,3 +871,119 @@ The plan now explicitly retains the verified menu work while reopening full
 R-R3-16 interface acceptance and adding R-R3-17 for minimum persistent
 identity/status/error feedback. The broader station-selection/pairing screen
 remains grounded in the existing identity design and the R5/R6 roadmap.
+
+
+## September 21: power recovery and C-Tune spectrum restart
+
+The operator identified the outage as USB power shutting off. After power
+returned, the running `ef3e69d7` GUI automatically reconnected at 13:54:37
+local time. The operator confirmed that small tune gestures now preserve
+painted waterfall history. This is live acceptance of the history fix, not
+of the outstanding 3D, audio-soak or complete connection-interface gates.
+
+The next report was a spectrum trace dropping from the top on each C-Tune
+wheel step. Source inspection found two independent defects:
+
+- `SpectrumAvenger` reset its recursive log accumulator to zero (0 dB).
+  The wrapper's comment promised a mode-dependent first-apply seed, but
+  that seed was absent. The existing port now follows Thetis
+  `wdsp/analyzer.c` `SetDisplayAverageMode` at v2.10.3.15 / `3759d096`:
+  log mode starts at -160 dB and linear mode at `1e-12`.
+- The GUI's C-Tune pin and explicit pan-centre calls only reached its
+  inert local receiver. Core saw an ordinary frequency write and retuned
+  a sole stream, recreating the display reducer on every wheel step.
+
+The averaging regressions failed before the correction and pass after it:
+recursive linear/log startup, clear, resize and endpoint source-retune
+reset, including rejection of frames from the old source. Reducer,
+endpoint, widget-parity and remote-render targets: **4/4 passed, 2.02 s**.
+
+R-R3-18's implementation uses two typed authenticated commands:
+`requestStreamCtunPinned(sliceId, pinned)` and
+`requestStreamCentre(sliceId, centreHz)`. Core resolves the current stream,
+maintains its pin independently of other streams, projects the effective
+pin to every slice sharing it, and owns all DDC/shift/notch-origin updates.
+The centre command refuses a move that would displace a cohost outside
+its receive window. Ordinary VFO tuning still uses the existing mirror.
+Session minor 2 and `remoteCtunVersion=1` gate this new command path.
+The GUI restores a saved preference once per acquired stream, displays
+Core's effective pin, and retains its preference when support is absent
+or the connection closes. The original local C-Tune path is preserved.
+
+Verification gates for the combined change: authenticated wheel tuning
+leaves source centre/context unchanged; explicit pan motion updates centre
+and all cohost shifts; unpin restores normal tuning; pins on independent
+streams do not interact; disconnect clears Core pins and reconnect restores
+the GUI preference. Matching Core and GUI installation and live operator
+acceptance are still pending at this checkpoint.
+
+
+The consolidated review identified two lifecycle gaps before installation:
+a refused pan command needed GUI rollback, and logical stream indices could
+be reused before a GUI poll saw the empty state. The correction adds a
+Core-owned, outbound `streamEpoch` for each stream lifetime, epoch-scoped
+command outcomes, and restoration completion only after Core accepts the
+pin. Refused centre moves restore affected views to their last accepted
+Core source centre without echoing another hardware command. Context/frame
+admission also checks the current stream lifetime.
+
+The initial combined full suite passed **681/681 in 120.44 s**; the previous
+macOS microphone-open timeouts were absent in this run. After the review
+correction, typed-command tests passed in **2.14 s** and the GUI/controller
+regressions passed in **5.76 s**, including a cohost-blocked pan move and
+retirement/reuse of the same stream index within one event-loop turn.
+The final combined full run and matching native installation are in progress.
+
+A subsequent operator report concerns the frequency-scale bandwidth drag
+snapping back on release. Investigation is separate from acceptance of the
+C-Tune correction; a sample-rate clamp has not yet been established as its
+cause. The currently running GUI is still `ef3e69d7`.
+
+
+The zoom investigation confirmed a capability mismatch (R-R3-19). The local
+Extended-view preference allowed a scale drag up to the ADC-wide ceiling,
+while remote media supplies only the current DDC source. Core correctly
+clamped that oversized crop and its ACK replaced the GUI view. Zoom is not
+the local sample-rate selection path, so a drag now stops at the remote
+DDC limit rather than changing a shared stream's sample rate. The saved
+local Extended-view preference remains intact, and local wings still work.
+Remote ADC-wide transport remains unimplemented and is not implied by this fix.
+
+A real press/move/release regression reproduced **450 kHz requested from a
+192 kHz source** before the fix. It now stops at 192 kHz during the drag and
+remains there after the source ACK. Remote render, authenticated controller,
+and local extended-wing tests passed **3/3 in 6.99 s**. The preceding final
+C-Tune full suite passed **681/681 in 99.23 s**. A combined full run including
+the small zoom correction passed **681/681 in 94.38 s**, with all test targets
+rebuilt first and no exclusions. Both candidate native Core builds passed;
+the signed checkpoint still needs its final build tag, staged install and
+matching GUI before live acceptance.
+
+The operator then clarified that zoom must retain the existing wideband
+extended-pan capability. The May 26 Wideband Extended Pan plan and current
+local ADC capture/FFT/wings implementation confirm that this is existing
+feature parity. R-R3-20 and task 4b now explicitly track its missing remote
+transport, Core-owned shared capture/filter state and local/remote comparison.
+The DDC-only clamp is recorded as an interim fallback, not a finished zoom
+implementation.
+
+The repository's per-pan wiring check blocked the first commit attempt. Its
+sender convention exposed a real timing gap: immediately after selecting a
+new slice, a gesture could use the previous subscription's slice until the
+100 ms refresh. Both remote gesture handlers now resolve the owning pan's
+current slice at invocation. The new regression failed with slice 0 instead
+of slice 1 before the change; the authenticated controller test passes after
+it (**5.97 s**), and the unmodified repository wiring check passes. A fresh
+combined run follows this last correction.
+
+The following combined run passed 680/681 and exposed a related rollback
+race in the new slice-selection scenario. A replacement subscription lost
+the last accepted source centre while awaiting its first frame. Rebinding
+the same widget to a cohost in the same stream lifetime now preserves that
+centre; a different stream or lifetime cannot inherit it. The focused
+controller regression then passed three consecutive runs (**15.87 s total**).
+The final combined gate is rerun after this correction.
+
+Final gate after the gesture-time routing and shared-stream rollback fixes:
+**681/681 passed in 93.87 s**, all targets rebuilt first, no exclusions.
+Matching signed Core/GUI deployment and operator gesture acceptance follow.

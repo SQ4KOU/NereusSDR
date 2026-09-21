@@ -170,8 +170,9 @@ enum class SessionMessageKind {
 /// provisional. R3 swapping the codec under the same object model is a
 /// minor bump at most.
 inline constexpr quint16 kSessionProtocolMajor = 1;
-inline constexpr quint16 kSessionProtocolMinor = 1;
+inline constexpr quint16 kSessionProtocolMinor = 2;
 inline constexpr quint16 kMediaSessionProtocolMinor = 1;
+inline constexpr quint16 kRemoteCtunSessionProtocolMinor = 2;
 inline constexpr qsizetype kMaxMediaControlBytes = 128 * 1024;
 
 /// One property's WIRE DECLARATION: name, ordinal and kind, carrying no
@@ -231,6 +232,8 @@ struct SessionMessage {
     ///   removeSlice            -- {"sliceId": Int64}
     ///   requestSliceSampleRate -- {"sliceId": Int64, "rateHz": Int64}
     ///   addSliceOnPan          -- {"panId": Utf8}
+    ///   requestStreamCtunPinned -- {"sliceId": Int64, "pinned": Bool}
+    ///   requestStreamCentre     -- {"sliceId": Int64, "centreHz": Double}
     QList<MirrorUpdate> arguments;
 
     /// CommandResult only. True iff the command ran; false leaves every

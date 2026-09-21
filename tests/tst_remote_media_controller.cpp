@@ -67,6 +67,193 @@ int countControl(const QSignalSpy& spy, const QString& op)
 class TestRemoteMediaController : public QObject {
     Q_OBJECT
 private slots:
+    void remoteCtunProjectionPreservesPreferenceWithoutEcho()
+    {
+        SpectrumWidget widget;
+        widget.setCtunEnabled(true);
+        QSignalSpy gestures(&widget, &SpectrumWidget::ctunEnabledChanged);
+        QSignalSpy centres(&widget, &SpectrumWidget::centerChanged);
+        widget.applyRemoteCtunState(false, false);
+        QVERIFY(!widget.ctunAvailable());
+        QVERIFY(!widget.ctunEnabled());
+        QVERIFY(widget.ctunPreference());
+        widget.setCtunEnabled(true); // An unsupported Core cannot pretend to pin.
+        QVERIFY(!widget.ctunEnabled());
+        widget.applyRemoteCtunState(true, true);
+        QVERIFY(widget.ctunEnabled());
+        QCOMPARE(gestures.size(), 0);
+        QCOMPARE(centres.size(), 0);
+    }
+
+    void ctunWheelKeepsSourceAndDragMovesCoreCentre()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        const int sliceId = station.addSlice();
+        auto* sourceSlice = station.sliceById(sliceId);
+        QVERIFY(sourceSlice);
+        const int stream = sourceSlice->streamIndex();
+        QVERIFY(stream >= 0);
+        const double centre = station.streamCentreHz(stream);
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        QPointer<DisplayTransport> sourceMedia;
+        DaemonMediaController daemon(&server, &station, nullptr,
+            [&sourceMedia](QObject* owner) -> IMediaTransport* {
+                sourceMedia = new DisplayTransport(owner);
+                return sourceMedia;
+            });
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        PanadapterStack stack;
+        auto* first = stack.addPanadapter(QStringLiteral("first"));
+        auto* cohost = stack.addPanadapter(QStringLiteral("cohost"));
+        stack.setActivePan(QStringLiteral("first"));
+        for (auto* applet : {first, cohost}) {
+            applet->setActiveSliceIndex(sliceId);
+            applet->spectrumWidget()->setDisplayWindowPreservingHistory(centre, 48000);
+            applet->spectrumWidget()->setVfoFrequency(centre);
+        }
+        auto* widget = first->spectrumWidget();
+        widget->setCtunEnabled(true);
+        cohost->spectrumWidget()->setCtunEnabled(false);
+        // This is the existing MainWindow click/wheel -> mirrored VFO path.
+        connect(widget, &SpectrumWidget::frequencyClicked, &remote,
+            [&remote, sliceId](double hz) { remote.sliceById(sliceId)->setFrequency(hz); });
+        stack.resize(600, 700);
+        stack.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&stack));
+        QPointer<DisplayTransport> sinkMedia;
+        RemoteMediaController gui(&client, &remote, &stack, nullptr,
+            [&sinkMedia](QObject* owner) -> IMediaTransport* {
+                sinkMedia = new DisplayTransport(owner);
+                return sinkMedia;
+            });
+        QSignalSpy inbound(&client, &StationClient::mediaControlReceived);
+        const auto connectSession = [&] {
+            auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+            auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+            stationLink->linkTo(clientLink);
+            client.startSession(clientLink, server.token());
+            server.acceptTransport(stationLink);
+        };
+        connectSession();
+        QTRY_VERIFY(sourceMedia && sinkMedia);
+        sourceMedia->other = sinkMedia;
+        sourceMedia->activate();
+        sinkMedia->activate();
+        QVector<float> iq(2048, 0.001f);
+        const auto feed = [&] {
+            QMetaObject::invokeMethod(&station, "rawIqDataForStream", Qt::DirectConnection,
+                Q_ARG(int, stream), Q_ARG(QVector<float>, iq));
+            return !widget->renderedPixels().isEmpty();
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(feed(), 5000);
+        QTRY_VERIFY(sourceSlice->streamCtunPinned());
+        QTRY_VERIFY(widget->ctunEnabled());
+        QTRY_VERIFY(cohost->spectrumWidget()->ctunEnabled());
+        const int contexts = countControl(inbound, QStringLiteral("context"));
+        QSignalSpy centreChanges(&station, &RadioModel::streamCentreChanged);
+        widget->frequencyClicked(centre + 100);
+        QTRY_COMPARE(sourceSlice->frequency(), centre + 100);
+        QCOMPARE(station.streamCentreHz(stream), centre);
+        QCOMPARE(sourceSlice->shiftOffsetHz(), 100.0);
+        QCOMPARE(centreChanges.size(), 0);
+        QTest::qWait(150);
+        QCOMPARE(countControl(inbound, QStringLiteral("context")), contexts);
+        QVERIFY(feed());
+
+        // Pan dragging applies the view then emits centerChanged. The plain
+        // setter deliberately does not emit a user gesture.
+        widget->setCenterFrequency(centre + 1000.25);
+        widget->centerChanged(centre + 1000.25); // Fractional pixel -> whole-Hz DDC.
+        QTRY_COMPARE(station.streamCentreHz(stream), centre + 1000);
+        QCOMPARE(sourceSlice->frequency(), centre + 100);
+        QCOMPARE(sourceSlice->shiftOffsetHz(), -900.0);
+        QTRY_VERIFY_WITH_TIMEOUT(feed() && widget->ddcCenterFrequency() == centre + 1000, 5000);
+        QVERIFY(countControl(inbound, QStringLiteral("context")) > contexts);
+        QVERIFY(widget->ctunEnabled());
+
+        // A cohost near the far edge makes this otherwise valid pan move
+        // unsafe. Core refuses it; every affected view returns to Core truth.
+        const int cohostId = station.addSlice();
+        auto* cohostSlice = station.sliceById(cohostId);
+        QVERIFY(cohostSlice);
+        cohostSlice->setFrequency(centre + 80000);
+        QCOMPARE(cohostSlice->streamIndex(), stream);
+        QTRY_VERIFY(remote.sliceById(cohostId));
+        // A selection followed immediately by a gesture precedes the next
+        // subscription poll. Resolve the pan's current slice for both verbs.
+        QSignalSpy pinResults(&client, &StationClient::streamCtunPinFinished);
+        QSignalSpy centreResults(&client, &StationClient::streamCentreFinished);
+        first->setActiveSliceIndex(cohostId);
+        widget->ctunEnabledChanged(true);
+        widget->centerChanged(centre + 1000);
+        QTRY_VERIFY(!pinResults.isEmpty());
+        QTRY_VERIFY(!centreResults.isEmpty());
+        QCOMPARE(pinResults.first().at(0).toInt(), cohostId);
+        QCOMPARE(centreResults.first().at(0).toInt(), cohostId);
+        first->setActiveSliceIndex(sliceId);
+        const double rejectedCentre = centre - 50000;
+        widget->setCenterFrequency(rejectedCentre);
+        widget->centerChanged(rejectedCentre);
+        QTRY_VERIFY_WITH_TIMEOUT(feed()
+            && std::abs(widget->centerFrequency() - (centre + 1000)) < 50, 5000);
+        QCOMPARE(widget->ddcCenterFrequency(), centre + 1000);
+        QCOMPARE(station.streamCentreHz(stream), centre + 1000);
+        QCOMPARE(sourceSlice->frequency(), centre + 100);
+        QCOMPARE(cohostSlice->frequency(), centre + 80000);
+        station.removeSlice(cohostId);
+        QTRY_VERIFY(!remote.sliceById(cohostId));
+
+        widget->setCtunEnabled(false);
+        QTRY_VERIFY(!sourceSlice->streamCtunPinned());
+        QTRY_VERIFY(!cohost->spectrumWidget()->ctunEnabled());
+        widget->frequencyClicked(centre + 2000);
+        QTRY_COMPARE(station.streamCentreHz(stream), centre + 2000);
+        QCOMPARE(sourceSlice->shiftOffsetHz(), 0.0);
+        widget->setCtunEnabled(true);
+        QTRY_VERIFY(sourceSlice->streamCtunPinned());
+        client.disconnectFromStation(QStringLiteral("C-Tune reconnect test"));
+        QTRY_VERIFY(!sourceSlice->streamCtunPinned());
+        QVERIFY(!widget->ctunAvailable());
+        QVERIFY(widget->ctunPreference());
+        connectSession();
+        QTRY_VERIFY(sourceMedia && sinkMedia);
+        sourceMedia->other = sinkMedia;
+        sourceMedia->activate();
+        sinkMedia->activate();
+        QTRY_VERIFY_WITH_TIMEOUT(feed(), 5000);
+        QTRY_VERIFY(sourceSlice->streamCtunPinned());
+        QTRY_VERIFY(widget->ctunEnabled());
+
+        // Retire and reuse stream 0 without an intervening empty GUI poll.
+        // A stream index is reusable; its Core lifetime identity is not.
+        const quint64 previousEpoch = sourceSlice->streamEpoch();
+        const int spareId = station.addSlice();
+        station.sliceById(spareId)->setFrequency(7100000);
+        station.removeSlice(sliceId);
+        const int replacementId = station.addSlice();
+        auto* replacement = station.sliceById(replacementId);
+        replacement->setFrequency(centre + 2000);
+        QCOMPARE(replacement->streamIndex(), stream);
+        QVERIFY(replacement->streamEpoch() != previousEpoch);
+        QVERIFY(!replacement->streamCtunPinned());
+        first->setActiveSliceIndex(replacementId);
+        cohost->setActiveSliceIndex(replacementId);
+        // Keep producing I/Q across retirement: an old painted frame may
+        // still be visible before the new source/context is established.
+        QTRY_VERIFY_WITH_TIMEOUT(feed() && replacement->streamCtunPinned(), 5000);
+        QTRY_VERIFY(widget->ctunEnabled());
+        client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
     void sharedWindowChangeAndRadioReconnectResumeBothPanes()
     {
         QTemporaryDir dir;

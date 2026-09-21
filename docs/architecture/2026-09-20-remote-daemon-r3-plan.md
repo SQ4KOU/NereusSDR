@@ -112,6 +112,9 @@ by the earlier brainstorming, and this review does not present them as such.
 | R-R3-15 | Remote Auto AGC-T visuals reflect the station's per-slice AGC noise-floor state. GUI Clarity smoothing is not an AGC measurement source. |
 | R-R3-16 | Remote GUI Connect/Disconnect actions operate the configured Core station session. Disconnect cancels pending retries; explicit Connect starts a fresh session without relaunching or invoking direct-radio discovery. |
 | R-R3-17 | The GUI persistently identifies its configured Core and shows disconnected, connecting, retrying, or connected state independently of Core's radio state. Failed attempts leave a useful reason and available recovery/cancel action. A Core session with an offline radio must not appear to be a disconnected GUI session. |
+| R-R3-18 | Remote C-Tune preserves the Core receive-window centre during in-window VFO tuning. Explicit pan motion moves Core's window and shifts every cohost without moving their VFOs. Pin state belongs to the stream, is negotiated, clears with the station session, and is restored from GUI preference after reconnect; direct local behavior remains unchanged. |
+| R-R3-19 | Remote frequency-scale and wheel zoom stop at the currently supplied DDC bandwidth during the gesture. An unsupported ADC-wide view must not be offered then collapsed by Core's crop ACK. Preserve the local extended-view preference; wider remote coverage requires a separately advertised wideband source. |
+| R-R3-20 | Restore the existing extended-pan behavior across Core/UI: supported wideband ADC data fills the view outside the listenable DDC island, with the existing zoom gestures, RF alignment, wing tuning and filter-state feedback. Core owns capture, calibration and shared ADC/BPF demand. The R-R3-19 DDC-only limit is an interim compatibility fallback, not completion of receive parity. |
 
 The authorized radio is the ANAN-G2/Saturn, MAC `2C:CF:67:AB:FC:F4`, board
 `0x0A`; the September 20 instruction supersedes the old G2E-only bench rows.
@@ -351,6 +354,55 @@ R6 completes the selection/pairing experience and packaging. The September 21
 operator report brings basic feedback and consistent actions forward into
 R3; the earlier menu-only round trip did not prove the whole interface.
 
+## 4b. Restore wideband extended-pan parity
+
+**Requirements:** R-R3-04/08/09/10/11/14/18/19/20. **Dependencies:** accepted
+remote spectrum contexts and authenticated receive controls. This explicit
+follow-through was added after the September 21 operator report; the older
+R3 `Wide` FFT tier and optional 3D wide rows are DDC-bounded and do not supply
+ADC-wide wings.
+
+**Existing specification:** [Wideband Extended Pan plan](2026-05-26-phase3f-sub-epic-f-wideband-plan.md)
+and the parent multi-pan design, section 7. Reuse the implemented behavior in
+`WidebandFrameAccumulator`, `WidebandFftEngine`, RadioModel's per-ADC production
+and demand reconciliation, and SpectrumWidget's local extended rendering.
+
+**Owned files:** `src/core/session/{StationCapabilities,SessionMessages}.*`,
+`src/core/session/media/` display contracts and endpoint production,
+`src/models/{RadioModel,SliceModel}.*`,
+`src/gui/{RemoteMediaController,SpectrumWidget,MainWindow}.*`, and their
+remote-spectrum, extended-wing and filter-state regression tests.
+
+**Interfaces:** consume `RadioModel::widebandSpectrumReady(adcIndex, bins)`
+and Core's effective ADC/filter identity. Produce a negotiated, bounded
+wideband display source alongside the DDC source, with explicit RF geometry,
+calibration and current-session/context identity. Exact wire representation
+is a discovery deliverable below; do not silently reinterpret `FftTier::Wide`
+or transmit unrestricted full FFT arrays.
+
+- [ ] Trace the current local extended-pan contract end to end, including
+  wing click/drag behavior, physical ADC versus filter-chain mapping, BPF
+  bypass ownership and restoration, and 2D/3D history. Record the proposed
+  capability, source identity and reduced-frame schema before implementation.
+- [ ] Carry Core-produced, calibrated wideband display data through the
+  authenticated session under the existing datagram and session budgets.
+  Aggregate demand across pans; hiding/removing one pan must not disable
+  another pan's capture or leave bypass enabled after the last consumer.
+- [ ] Composite the DDC island and wideband wings using their actual RF
+  coverage. Preserve the existing local zoom range on capable hardware;
+  keep the DDC fallback only when the remote source is unavailable. Wing
+  tuning must use Core commands and preserve shared-slice constraints.
+- [ ] Verify zoom across the DDC edge, release without snap-back, inward
+  zoom, ADC changes, shared pans, rejected moves and reconnect. Reject stale
+  wideband frames and apply calibration once. Verify real Saturn wideband
+  capture and BPF transitions without transmitting.
+
+**Verification:** meaningful integration tests for source identity, bounds,
+RF alignment, multi-pan demand and filter restoration; existing local-wing
+tests remain green. Compare the same gestures and frequency coverage in local
+and remote receive modes. Record live 2D/3D behavior, network cost and Rock 5C
+load separately; R3 parity remains open until those observations pass.
+
 ## 5. Deliver mixed stereo Opus with continuous playback
 
 Execution order remains task 4a's remaining receive telemetry bindings,
@@ -475,7 +527,8 @@ whole-plan review loops.
 | Audio | First sound confirmed; sustained playback not yet accepted | Both 500 ppm directions pass one simulated hour; encrypted mute/resume/reconnect and 681/681 suite pass. Core `5c24eda0` fixes captured off-grid timestamps. Operator reports intermittent chop; remaining underflow/arrival bursts are under investigation. |
 | GUI media wiring | Desktop builds; initial focused checks pass | Dedicated reduced-frame renderer and authenticated subscription controller tested; two-pane, shared-window and reconnect regressions pass; live GPU spectrum/2D observed; operator 3D confirmation and gesture refinement pending |
 | Tuning waterfall continuity | Visual regression corrected; focused tests pass | R-R3-04/09/10: subscription/context renewal preserves painted 2D/3D history while rejecting stale incoming planes; accepted RF geometry reprojects existing rows. Full-suite and live tuning gates remain recorded in the verification ledger. |
-| Remote C-Tune control parity | Separate source-audited gap, still open | C-Tune pin/centre changes currently affect client-local receiver state; add an authenticated Core-owned operation and verify shared-stream offsets and reconnect. The history correction alone does not close this gate. |
+| Remote C-Tune control parity | R-R3-18 implementation/verification in progress | Authenticated slice-addressed pin and explicit-centre commands, Core per-stream state, outbound cohost projection and GUI capability gating. Small wheel tunes must preserve the source context; pan motion must move it. Live acceptance remains open until the matching Core/GUI builds are installed. |
+| Wideband zoom parity | R-R3-20 open; task 4b added explicitly | Existing local ADC capture/FFT and extended wings are preserved. Remote display currently carries DDC data only. R-R3-19 prevents snap-back at that interim limit; it does not complete wideband transport or restore the full zoom range. |
 | Applet S-meter | Implemented, 673/673 suite passed; Core and GUI running | Live needle movement and applet/active-flag agreement observed on Saturn; all-mode/longer acceptance pending |
 | BPF and Auto AGC-T indicators | Source implementation and focused tests pass | R-R3-14/15: station filter snapshot/reconnect, headless per-stream AGC source, active-applet/flag bindings implemented; live 20m filter and AGC floor observed, complete band/reconnect acceptance pending |
 | Manual Core reconnect | Menu/shortcut path implemented; complete interface acceptance reopened | R-R3-16/17: initial live menu round trip passed at `73fcccfe`; later `ef3e69d7` unreachable-Core check confirms menu cancellation/fresh attempt but exposes dead click-to-connect chrome and missing persistent Core/retry status. Remaining entry points and feedback are now explicit R3 gates. |

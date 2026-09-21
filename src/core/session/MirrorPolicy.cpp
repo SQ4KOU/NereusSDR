@@ -107,6 +107,8 @@ const MirrorPolicy::Entry kEntries[] = {
     { "SliceModel", "chainIndex", MirrorDirection::Outbound },
     { "SliceModel", "ddcIndex", MirrorDirection::Outbound },
     { "SliceModel", "streamIndex", MirrorDirection::Outbound },
+    { "SliceModel", "streamCtunPinned", MirrorDirection::Outbound },
+    { "SliceModel", "streamEpoch", MirrorDirection::Outbound },
     { "SliceModel", "shiftOffsetHz", MirrorDirection::Outbound },
     { "SliceModel", "panKey", MirrorDirection::Bidirectional },
     { "SliceModel", "sampleRateHz", MirrorDirection::Outbound },

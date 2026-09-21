@@ -1031,6 +1031,21 @@ public:
     /// reportStationRetuneRejected().
     void requestSliceSampleRate(int sliceId, int rateHz);
 
+    /// Set the station-owned C-Tune pin for the bound stream named by a
+    /// slice. Remote roles send the typed station command and never mutate
+    /// their mirror optimistically. Returns whether the local operation, or
+    /// remote send, was accepted.
+    bool requestStreamCtunPinned(int sliceId, bool pinned);
+
+    /// Move the bound stream's DDC centre explicitly. All cohosts must remain
+    /// inside the target window or the request is refused without changes.
+    bool requestStreamCentre(int sliceId, double centreHz);
+
+    /// End the session-scoped C-Tune state and project the cleared value to
+    /// every cohost. StationServer calls this when the authenticated session
+    /// goes away; it does not persist across a reconnect.
+    void clearStreamCtunPins();
+
     /// Push a slice's just-restored per-band sample rate onto its DDC.
     ///
     /// Codex review round 7, PR #293. SliceModel::restoreFromSettings reads
@@ -3471,6 +3486,12 @@ public:
     /// Push the current slice set for `streamIndex` to RxDspWorker and emit
     /// streamBindingsChanged. Called after every bind / unbind.
     void republishStreamBindings(int streamIndex);
+    bool streamCtunPinned(int streamIndex) const;
+    void setStreamCtunPinned(int streamIndex, bool pinned);
+    quint64 streamEpoch(int streamIndex) const;
+    void setStreamEpoch(int streamIndex, quint64 epoch);
+    void claimStreamEpoch(int streamIndex);
+    void retireStream(int streamIndex);
 
     /// Emit ddcAssignmentRequested and drive the per-board codec recompute.
     void requestDdcAssignment();
@@ -3758,6 +3779,9 @@ private:
     // sized by configureStreamPool at connect, empty (and therefore
     // bind-refusing) while disconnected.
     NereusSDR::SliceStreamAllocator m_streamAllocator;
+    QVector<bool> m_streamCtunPinned;
+    QVector<quint64> m_streamEpoch;
+    quint64 m_nextStreamEpoch{0};
 
     // Rate handed to configureStreamPool, used when a stream is claimed
     // before m_connectionSampleRateHz has been set (Slice A binds during

@@ -342,6 +342,7 @@ warren@wpratt.com
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -3402,6 +3403,8 @@ void RadioModel::configureStreamPoolImpl(int userDdcCount, int maxSlices,
 {
     m_streamAllocator.configure(userDdcCount, maxSlices);
     m_streamAllocator.setDefaultSampleRateHz(defaultRateHz);
+    m_streamCtunPinned.fill(false, m_streamAllocator.streamCount());
+    m_streamEpoch.fill(0, m_streamAllocator.streamCount());
     m_streamDefaultRateHz = defaultRateHz > 0 ? defaultRateHz : 192000;
 
     // Phase 3F Sub-Epic I closeout, defect H1: every stream starts at the
@@ -3890,6 +3893,8 @@ void RadioModel::releaseStreamBindings()
         // hosts this slice. Leaving it would let the VFO flag keep reporting
         // a DDC the radio has stopped streaming.
         s->setDdcIndex(-1);
+        s->setStreamCtunPinned(false);
+        s->setStreamEpoch(0);
         // An unbound slice has no stream to be fed from, so it must not go
         // on holding the mixer's readiness barrier. Whichever slices the
         // next connect re-binds are re-admitted by activateSliceChannel;
@@ -3904,6 +3909,8 @@ void RadioModel::releaseStreamBindings()
         m_streamAllocator.deactivateStream(st);
     }
     m_streamDdc.fill(-1);
+    m_streamCtunPinned.fill(false, m_streamAllocator.streamCount());
+    m_streamEpoch.fill(0, m_streamAllocator.streamCount());
     // Defect D1: a torn-down stream is on no chain, so its last ADC must not
     // outlive it. Left behind, a slice rebound to that stream on the next
     // connection would be credited to chain 1 on a radio that never put it
@@ -4026,6 +4033,70 @@ int RadioModel::ddcForStream(int streamIndex) const
         return -1;
     }
     return m_streamDdc[static_cast<size_t>(streamIndex)];
+}
+
+bool RadioModel::streamCtunPinned(int streamIndex) const
+{
+    return streamIndex >= 0 && streamIndex < m_streamCtunPinned.size()
+        && m_streamCtunPinned.at(streamIndex);
+}
+
+void RadioModel::setStreamCtunPinned(int streamIndex, bool pinned)
+{
+    if (streamIndex < 0 || streamIndex >= m_streamCtunPinned.size()) {
+        return;
+    }
+    if (m_streamCtunPinned.at(streamIndex) == pinned) {
+        return;
+    }
+    m_streamCtunPinned[streamIndex] = pinned;
+    for (const int sliceId : slicesOnStream(streamIndex)) {
+        if (SliceModel* slice = sliceById(sliceId)) {
+            slice->setStreamCtunPinned(pinned);
+        }
+    }
+}
+
+quint64 RadioModel::streamEpoch(int streamIndex) const
+{
+    return streamIndex >= 0 && streamIndex < m_streamEpoch.size()
+        ? m_streamEpoch.at(streamIndex) : 0;
+}
+
+void RadioModel::setStreamEpoch(int streamIndex, quint64 epoch)
+{
+    if (streamIndex < 0 || streamIndex >= m_streamEpoch.size()
+        || m_streamEpoch.at(streamIndex) == epoch) {
+        return;
+    }
+    m_streamEpoch[streamIndex] = epoch;
+    for (const int sliceId : slicesOnStream(streamIndex)) {
+        if (SliceModel* slice = sliceById(sliceId)) {
+            slice->setStreamEpoch(epoch);
+        }
+    }
+}
+
+void RadioModel::claimStreamEpoch(int streamIndex)
+{
+    if (streamIndex < 0 || streamIndex >= m_streamEpoch.size()) {
+        return;
+    }
+    ++m_nextStreamEpoch;
+    if (m_nextStreamEpoch == 0) {
+        ++m_nextStreamEpoch;
+    }
+    setStreamEpoch(streamIndex, m_nextStreamEpoch);
+}
+
+void RadioModel::retireStream(int streamIndex)
+{
+    if (streamIndex < 0 || streamIndex >= m_streamAllocator.streamCount()) {
+        return;
+    }
+    m_streamAllocator.deactivateStream(streamIndex);
+    setStreamCtunPinned(streamIndex, false);
+    setStreamEpoch(streamIndex, 0);
 }
 
 void RadioModel::republishStreamBindings(int streamIndex)
@@ -4269,6 +4340,95 @@ void RadioModel::applyRestoredSampleRate(SliceModel* slice)
     requestSliceSampleRate(slice->sliceIndex(), restored);
 }
 
+bool RadioModel::requestStreamCtunPinned(int sliceId, bool pinned)
+{
+    if (m_role == Role::Remote) {
+        if (m_station == nullptr) {
+            emit sliceAddRejected(noStationReason(QStringLiteral("the C-Tune pin change")));
+            return false;
+        }
+        const auto outcome = m_station->requestStreamCtunPinned(sliceId, pinned);
+        if (!outcome.sent) {
+            emit sliceAddRejected(outcome.reason);
+        }
+        return outcome.sent;
+    }
+    SliceModel* slice = sliceById(sliceId);
+    if (slice == nullptr || slice->streamIndex() < 0
+        || !m_streamAllocator.isStreamActive(slice->streamIndex())) {
+        return false;
+    }
+    setStreamCtunPinned(slice->streamIndex(), pinned);
+    return true;
+}
+
+bool RadioModel::requestStreamCentre(int sliceId, double centreHz)
+{
+    if (m_role == Role::Remote) {
+        if (m_station == nullptr) {
+            emit sliceRetuneRejected(sliceId,
+                noStationReason(QStringLiteral("the C-Tune centre change")));
+            return false;
+        }
+        const auto outcome = m_station->requestStreamCentre(sliceId, centreHz);
+        if (!outcome.sent) {
+            emit sliceRetuneRejected(sliceId, outcome.reason);
+        }
+        return outcome.sent;
+    }
+    // Hardware C&C carries whole Hertz in quint64. Keep the conversion in a
+    // range every supported platform can represent exactly enough to avoid a
+    // narrowing overflow; station receive ranges are much lower in practice.
+    if (!std::isfinite(centreHz) || centreHz <= 0.0
+        || std::floor(centreHz) != centreHz
+        || centreHz > static_cast<double>(std::numeric_limits<quint64>::max() / 2)) {
+        return false;
+    }
+    SliceModel* slice = sliceById(sliceId);
+    if (slice == nullptr) {
+        return false;
+    }
+    const int stream = slice->streamIndex();
+    if (stream < 0 || !m_streamAllocator.isStreamActive(stream)) {
+        return false;
+    }
+    const int rateHz = m_streamAllocator.streamSampleRateHz(stream);
+    if (rateHz <= 0) {
+        return false;
+    }
+    const double halfWindow = static_cast<double>(rateHz) / 2.0;
+    const QVector<int> members = slicesOnStream(stream);
+    if (members.isEmpty()) {
+        return false;
+    }
+    for (const int memberId : members) {
+        const SliceModel* member = sliceById(memberId);
+        if (member == nullptr || !std::isfinite(member->frequency())
+            || member->frequency() <= centreHz - halfWindow
+            || member->frequency() >= centreHz + halfWindow) {
+            return false;
+        }
+    }
+
+    if (m_streamAllocator.streamCentreHz(stream) == centreHz) {
+        return true;
+    }
+    m_streamAllocator.activateStream(stream, centreHz, rateHz);
+    if (m_receiverManager) {
+        m_receiverManager->forceHardwareFrequency(stream, static_cast<quint64>(centreHz));
+    }
+    reshiftSlicesOnStream(stream, centreHz);
+    emit streamCentreChanged(stream, centreHz, rateHz);
+    return true;
+}
+
+void RadioModel::clearStreamCtunPins()
+{
+    for (int stream = 0; stream < m_streamCtunPinned.size(); ++stream) {
+        setStreamCtunPinned(stream, false);
+    }
+}
+
 void RadioModel::requestSliceSampleRate(int sliceId, int rateHz)
 {
     // Remote-daemon R2: the daemon owns the DDC windows, so a remote
@@ -4358,8 +4518,6 @@ RadioModel::planStreamSampleRateChange(int streamIndex, int rateHz) const
     }
     plan.slices.reserve(simulated.size());
 
-    const bool ddcPinned =
-        m_receiverManager && m_receiverManager->ddcFrequencyLocked();
     using Outcome = SliceStreamAllocator::Outcome;
 
     for (int i = 0; i < simulated.size(); ++i) {
@@ -4372,6 +4530,8 @@ RadioModel::planStreamSampleRateChange(int streamIndex, int rateHz) const
         }
 
         const int previousStream = candidate.stream;
+        const bool ddcPinned = streamCtunPinned(previousStream)
+            || (m_receiverManager && m_receiverManager->ddcFrequencyLocked());
         const SliceStreamAllocator::Placement placement =
             plan.allocator.retuneSlice(
                 previousStream, occupantCount == 1, ddcPinned,
@@ -4435,6 +4595,14 @@ void RadioModel::commitStreamSampleRateChange(
     QSet<int> bindingsToPublish;
 
     m_streamAllocator = plan.allocator;
+    for (int st = 0; st < m_streamCtunPinned.size(); ++st) {
+        if (!m_streamAllocator.isStreamActive(st)) {
+            setStreamCtunPinned(st, false);
+            setStreamEpoch(st, 0);
+        } else if (!previousAllocator.isStreamActive(st)) {
+            claimStreamEpoch(st);
+        }
+    }
 
     for (int st = 0; st < m_streamAllocator.streamCount(); ++st) {
         if (!m_streamAllocator.isStreamActive(st)) {
@@ -4459,6 +4627,8 @@ void RadioModel::commitStreamSampleRateChange(
         bindingsToPublish.insert(planned.placement.streamIndex);
 
         slice->setStreamIndex(planned.placement.streamIndex);
+        slice->setStreamCtunPinned(streamCtunPinned(planned.placement.streamIndex));
+        slice->setStreamEpoch(streamEpoch(planned.placement.streamIndex));
         slice->setShiftOffsetHz(planned.placement.shiftOffsetHz);
         slice->setSampleRateHz(planned.resolvedRateHz);
 
@@ -4648,8 +4818,8 @@ bool RadioModel::bindSliceToStream(SliceModel* slice, double frequencyHz,
     // (MainWindow sets it from SpectrumWidget::ctunEnabled). The allocator
     // applies it only while the slice stays inside the window, which is the
     // case CTUN exists for; see SliceStreamAllocator::retuneSlice.
-    const bool ddcPinned =
-        m_receiverManager && m_receiverManager->ddcFrequencyLocked();
+    const bool ddcPinned = streamCtunPinned(previousStream)
+            || (m_receiverManager && m_receiverManager->ddcFrequencyLocked());
     const bool soleOccupant =
         previousStream >= 0 && slicesOnStream(previousStream).size() == 1;
 
@@ -4730,6 +4900,9 @@ bool RadioModel::bindSliceToStream(SliceModel* slice, double frequencyHz,
                 : (m_connectionSampleRateHz > 0 ? m_connectionSampleRateHz
                                                 : m_streamDefaultRateHz);
 
+        if (!streamAlreadyLive) {
+            claimStreamEpoch(placement.streamIndex);
+        }
         m_streamAllocator.activateStream(
             placement.streamIndex, placement.newStreamCentreHz, rateForStream);
 
@@ -4772,6 +4945,8 @@ bool RadioModel::bindSliceToStream(SliceModel* slice, double frequencyHz,
     }
 
     slice->setStreamIndex(placement.streamIndex);
+    slice->setStreamCtunPinned(streamCtunPinned(placement.streamIndex));
+    slice->setStreamEpoch(streamEpoch(placement.streamIndex));
     slice->setShiftOffsetHz(placement.shiftOffsetHz);
 
     // Phase 3F Sub-Epic J Task 6: joining an occupied window adopts its
@@ -4840,7 +5015,7 @@ bool RadioModel::bindSliceToStream(SliceModel* slice, double frequencyHz,
     // A stream the slice just left may now be empty.
     if (previousStream >= 0 && previousStream != placement.streamIndex) {
         if (slicesOnStream(previousStream).isEmpty()) {
-            m_streamAllocator.deactivateStream(previousStream);
+            retireStream(previousStream);
             // Symmetric with the claim above. A receiver left active for a
             // stream with no slices keeps a DDC in the routing table and in
             // the announced count that nothing is listening to.
@@ -5452,6 +5627,8 @@ void RadioModel::removeSliceImpl(int sliceId)
     // streaming it. The WDSP channel stays open for reuse.
     const int freedStream = slice->streamIndex();
     slice->setStreamIndex(-1);
+    slice->setStreamCtunPinned(false);
+    slice->setStreamEpoch(0);
     // ...and stop it running. Unbind is the counterpart of the bind-time
     // activation: Thetis pairs its enable (SetChannelState(..., 1, 0)) with
     // SetChannelState(..., 0, 0) on disable (console.cs:37398-37400
@@ -5459,7 +5636,7 @@ void RadioModel::removeSliceImpl(int sliceId)
     // this id next; it just stops dispatching in the meantime.
     deactivateSliceChannel(sliceId);
     if (freedStream >= 0 && slicesOnStream(freedStream).isEmpty()) {
-        m_streamAllocator.deactivateStream(freedStream);
+        retireStream(freedStream);
         // Same pairing as bindSliceToStream's two edges: a receiver left
         // active for a stream with no slices keeps a DDC in the routing
         // table, and in the announced receiver count, that nothing reads.

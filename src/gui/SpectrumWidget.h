@@ -1224,6 +1224,11 @@ public:
     // ---- CTUN mode (SmartSDR-style independent pan) ----
     void setCtunEnabled(bool enabled);
     bool ctunEnabled() const { return m_ctunEnabled; }
+    bool ctunPreference() const { return m_ctunPreference; }
+    bool ctunAvailable() const { return m_ctunAvailable; }
+    // Core's effective stream state must not emit a gesture or overwrite the
+    // per-pan preference restored when a new station stream is acquired.
+    void applyRemoteCtunState(bool available, bool pinned);
     void recenterOnVfo();
 
     // ---- Tuning step ----
@@ -2633,6 +2638,8 @@ private:
 
     // ---- CTUN mode ----
     bool   m_ctunEnabled{true};  // true = SmartSDR-style (pan independent of VFO)
+    bool   m_ctunPreference{true};
+    bool   m_ctunAvailable{true};
     enum class VfoOffScreen { None, Left, Right };
     VfoOffScreen m_vfoOffScreen{VfoOffScreen::None};
     void drawOffScreenIndicator(QPainter& p, const QRect& specRect, const QRect& wfRect);

@@ -393,6 +393,7 @@ public:
     quint16 agreedMinor() const { return m_agreedMinor; }
 
     bool mediaAvailable() const;
+    bool remoteCtunAvailable() const;
     bool sendMediaControl(const QJsonObject& payload, quint32 expectedEpoch);
 
     /// Non-zero when the station's AppSettings schema version differs from
@@ -461,6 +462,8 @@ public:
     CommandOutcome requestRemoveSlice(int sliceId) override;
     CommandOutcome requestActiveSlice(int sliceId) override;
     CommandOutcome requestSliceSampleRate(int sliceId, int rateHz) override;
+    CommandOutcome requestStreamCtunPinned(int sliceId, bool pinned) override;
+    CommandOutcome requestStreamCentre(int sliceId, double centreHz) override;
 
     void setHeartbeatIntervalMs(int ms);
     int heartbeatIntervalMs() const { return m_heartbeatIntervalMs; }
@@ -485,6 +488,8 @@ signals:
     /// A CommandResult came back. `commandId` matches invokeCommand()'s
     /// return value.
     void commandResult(quint32 commandId, bool accepted, const QString& reason);
+    void streamCtunPinFinished(int sliceId, quint64 streamEpoch, bool pinned, bool accepted);
+    void streamCentreFinished(int sliceId, quint64 streamEpoch, bool accepted);
 
     /// The heartbeat declared the station dead: it stopped answering pings
     /// without closing.
@@ -688,6 +693,8 @@ private:
     struct PendingCommand {
         QByteArray verb;
         int sliceId = -1;
+        quint64 streamEpoch = 0;
+        bool requestedPin = false;
     };
     QHash<quint32, PendingCommand> m_pendingCommands;
 

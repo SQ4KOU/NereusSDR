@@ -1,5 +1,7 @@
 // no-port-check: NereusSDR-original. Remote display rendering contract.
 #include <QTest>
+#include <QMouseEvent>
+#include <QSignalSpy>
 #define private public
 #include "gui/SpectrumWidget.h"
 #undef private
@@ -10,6 +12,49 @@ using namespace NereusSDR;
 class TestRemoteSpectrumRender : public QObject {
     Q_OBJECT
 private slots:
+    void remoteFrequencyScaleDragStopsAtAvailableSourceBandwidth()
+    {
+        SpectrumWidget widget;
+        widget.resize(1000, 700);
+        widget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&widget));
+        widget.setConnectionState(ConnectionState::Connected);
+        widget.setExtendedViewAllowed(true); // Keep the operator's saved preference.
+        widget.setVfoFrequency(14225000);
+        SpectrumEndpointContext context;
+        context.codec = {31, 1, -180, 0, 128, 128, 0};
+        context.exactCentreHz = 14225000;
+        context.exactSpanHz = 180000;
+        widget.setRemoteSpectrumContext(context, context.exactCentreHz, 192000);
+        QSignalSpy spans(&widget, &SpectrumWidget::bandwidthChangeRequested);
+        const int y = widget.notchSpecRect().height() + widget.kDividerH
+            + widget.kFreqScaleH / 2;
+        const auto mouse = [&](QEvent::Type type, int x, Qt::MouseButton button,
+                               Qt::MouseButtons buttons) {
+            const QPointF pos(x, y);
+            QMouseEvent event(type, pos, widget.mapToGlobal(pos), button, buttons,
+                              Qt::NoModifier);
+            QCoreApplication::sendEvent(&widget, &event);
+        };
+        mouse(QEvent::MouseButtonPress, 800, Qt::LeftButton, Qt::LeftButton);
+        mouse(QEvent::MouseMove, 300, Qt::NoButton, Qt::LeftButton);
+        QCOMPARE(widget.bandwidth(), 192000.0); // Clamp during drag, before any ACK.
+        mouse(QEvent::MouseButtonRelease, 300, Qt::LeftButton, Qt::NoButton);
+        QCOMPARE(spans.size(), 1);
+        QCOMPARE(spans.first().first().toDouble(), 192000.0);
+        context.codec.contextGeneration++;
+        context.exactSpanHz = 192000;
+        widget.setRemoteSpectrumContext(context, context.exactCentreHz, 192000);
+        QCOMPARE(widget.bandwidth(), 192000.0); // Accepted source cannot snap it narrower.
+        QVERIFY(widget.extendedViewAllowed());
+        QVERIFY(!widget.extendedMode());
+
+        SpectrumWidget local;
+        local.setSampleRate(192000);
+        local.setExtendedViewAllowed(true);
+        QVERIFY(local.maxZoomOutBandwidthHz() > 192000.0);
+    }
+
     void remoteMaxBinUsesEachRequestedPassbandAndClearsWithContext()
     {
         SpectrumWidget widget;

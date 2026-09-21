@@ -77,6 +77,18 @@ QJsonObject plane(int detector, int averageMode, double alpha)
             {QStringLiteral("averageAlpha"), alpha}};
 }
 
+SliceModel* currentSliceForPan(RadioModel* model, PanadapterStack* stack,
+                              SpectrumWidget* widget)
+{
+    if (!model || !stack || !widget) { return nullptr; }
+    for (PanadapterApplet* applet : stack->allApplets()) {
+        if (applet->spectrumWidget() == widget) {
+            return model->sliceById(applet->activeSliceIndex());
+        }
+    }
+    return nullptr;
+}
+
 QJsonObject requestFor(SpectrumWidget* widget, SliceModel* slice)
 {
     auto& settings = AppSettings::instance();
@@ -128,13 +140,21 @@ struct RemoteMediaController::Private {
         QPointer<SliceModel> slice;
         QJsonObject observed;
         int observedStream = -1;
+        quint64 observedStreamEpoch = 0;
         quint32 revision = 0;
         SpectrumEndpointContext context;
+        double sourceCentreHz = 0;
         DisplayCodecDecoder decoder;
         qint64 lastKeyframeMs = -1000;
         bool accepted = false;
         bool rejected = false;
         bool receivedNoiseFloor = false;
+        QMetaObject::Connection ctunGesture;
+        QMetaObject::Connection centreGesture;
+        ~Binding() {
+            QObject::disconnect(ctunGesture);
+            QObject::disconnect(centreGesture);
+        }
     };
     QPointer<StationClient> client;
     QPointer<RadioModel> model;
@@ -144,6 +164,15 @@ struct RemoteMediaController::Private {
     QTimer* timer = nullptr;
     QElapsedTimer clock;
     std::map<quint32, Binding> bindings;
+    struct CtunState {
+        quint64 epoch = 0;
+        int requestSliceId = -1;
+        bool requestedPin = false;
+        bool pending = false;
+        bool initialized = false;
+        quint32 rejectedContext = 0;
+    };
+    QHash<int, CtunState> ctunStreams;
     QString connectionId;
     quint32 epoch = 0;
     quint32 nextEndpoint = 1;
@@ -209,6 +238,49 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
     });
     connect(client, &StationClient::mediaControlReceived,
             this, &RemoteMediaController::receiveControl);
+    connect(client, &StationClient::streamCtunPinFinished, this,
+        [this](int sliceId, quint64 epoch, bool pinned, bool accepted) {
+            if (!d->model) { return; }
+            SliceModel* slice = d->model->sliceById(sliceId);
+            if (!slice || slice->streamEpoch() != epoch) { return; }
+            auto state = d->ctunStreams.find(slice->streamIndex());
+            if (state == d->ctunStreams.end() || state->epoch != epoch
+                || state->requestSliceId != sliceId || state->requestedPin != pinned) { return; }
+            state->pending = false;
+            state->initialized = accepted;
+            if (!accepted) {
+                // A migration can refuse a request after it leaves the GUI.
+                // Wait for fresh source context before retrying this lifetime.
+                for (const auto& [id, binding] : d->bindings) {
+                    if (binding.slice && binding.slice->streamIndex() == slice->streamIndex()
+                        && newer(binding.context.codec.contextGeneration, state->rejectedContext)) {
+                        state->rejectedContext = binding.context.codec.contextGeneration;
+                    }
+                }
+            }
+            refreshCtunState();
+        });
+    connect(client, &StationClient::streamCentreFinished, this,
+        [this](int sliceId, quint64 epoch, bool accepted) {
+            if (accepted || !d->model) { return; }
+            SliceModel* slice = d->model->sliceById(sliceId);
+            if (!slice || slice->streamEpoch() != epoch) { return; }
+            for (auto& [id, binding] : d->bindings) {
+                if (!binding.widget || !binding.slice
+                    || binding.slice->streamIndex() != slice->streamIndex()
+                    || binding.slice->streamEpoch() != epoch
+                    || binding.sourceCentreHz <= 0) { continue; }
+                // A drag is optimistic view movement. A refused hardware move
+                // must return to the last accepted Core source, without
+                // emitting another gesture or retaining its in-flight crop.
+                binding.widget->setDisplayWindowPreservingHistory(
+                    binding.sourceCentreHz, binding.widget->bandwidth());
+                binding.widget->setDdcCenterFrequency(binding.sourceCentreHz);
+                binding.widget->invalidateRemoteSpectrumFrame();
+                binding.observed = {};
+            }
+            refreshSubscriptions();
+        });
     connect(client, &QObject::destroyed, this, &RemoteMediaController::stop);
     connect(model, &RadioModel::connectionStateChanged, this, [this](ConnectionState state) {
         if (state != ConnectionState::Connected) {
@@ -218,9 +290,13 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
             for (auto& [id, binding] : d->bindings) {
                 send({{QStringLiteral("op"), QStringLiteral("unsubscribe")},
                       {QStringLiteral("endpointId"), double(id)}});
-                if (binding.widget) { binding.widget->clearRemoteSpectrum(); }
+                if (binding.widget) {
+                    binding.widget->clearRemoteSpectrum();
+                    binding.widget->applyRemoteCtunState(false, false);
+                }
             }
             d->bindings.clear();
+            d->ctunStreams.clear();
             requestAudio();
         } else {
             refreshSubscriptions();
@@ -255,9 +331,11 @@ void RemoteMediaController::stop()
     for (auto& [id, binding] : d->bindings) {
         if (binding.widget) {
             binding.widget->clearRemoteSpectrum();
+            binding.widget->applyRemoteCtunState(false, false);
         }
     }
     d->bindings.clear();
+    d->ctunStreams.clear();
 }
 
 void RemoteMediaController::start()
@@ -341,6 +419,7 @@ void RemoteMediaController::refreshSubscriptions()
     // a global FFT-window change must release every old shared-source window
     // first; updating them individually would reject each against its peers.
     // The reliable control stream preserves all unsubscriptions before adds.
+    QHash<SpectrumWidget*, double> retainedSourceCentres;
     for (auto it = d->bindings.begin(); it != d->bindings.end();) {
         const auto next = std::find_if(desired.cbegin(), desired.cend(),
             [&it](const Desired& item) {
@@ -350,6 +429,16 @@ void RemoteMediaController::refreshSubscriptions()
             && next->request.value(QStringLiteral("windowType"))
                 != it->second.observed.value(QStringLiteral("windowType"));
         if (next != desired.cend() && !windowChanged) { ++it; continue; }
+        // A cohost selection changes the endpoint's slice identity, not its
+        // physical receive window. Retain that accepted geometry for an
+        // immediate rejected gesture while the replacement awaits its FFT.
+        for (const Desired& item : desired) {
+            if (item.widget == it->second.widget && it->second.sourceCentreHz > 0
+                && item.slice->streamIndex() == it->second.observedStream
+                && item.slice->streamEpoch() == it->second.observedStreamEpoch) {
+                retainedSourceCentres.insert(item.widget, it->second.sourceCentreHz);
+            }
+        }
         send({{QStringLiteral("op"), QStringLiteral("unsubscribe")},
               {QStringLiteral("endpointId"), double(it->first)}});
         if (it->second.widget) { it->second.widget->clearRemoteSpectrum(); }
@@ -368,7 +457,47 @@ void RemoteMediaController::refreshSubscriptions()
             found = d->bindings.try_emplace(id).first;
             found->second.widget = widget;
             found->second.slice = slice;
+            found->second.sourceCentreHz = retainedSourceCentres.value(widget, 0);
+            auto& binding = found->second;
+            // Per-pan sender and gesture-time slice lookup: selection may
+            // have changed since the last subscription poll. Never capture
+            // its former slice as the command target.
+            SpectrumWidget* const sw = item.widget;
+            binding.ctunGesture = connect(sw, &SpectrumWidget::ctunEnabledChanged,
+                this, [this, id](bool pinned) {
+                    auto current = d->bindings.find(id);
+                    if (current == d->bindings.end() || !current->second.slice
+                        || !d->model
+                        || !d->client || !d->client->remoteCtunAvailable()) { return; }
+                    SliceModel* slice = currentSliceForPan(
+                        d->model, d->stack, current->second.widget);
+                    if (!slice || slice->streamIndex() < 0) { return; }
+                    auto& state = d->ctunStreams[slice->streamIndex()];
+                    state.epoch = slice->streamEpoch();
+                    state.requestSliceId = slice->sliceIndex();
+                    state.requestedPin = pinned;
+                    state.pending = true;
+                    state.initialized = false;
+                    state.rejectedContext = 0;
+                    if (!d->model->requestStreamCtunPinned(slice->sliceIndex(), pinned)) {
+                        state.pending = false;
+                        state.rejectedContext = current->second.context.codec.contextGeneration;
+                    }
+                });
+            binding.centreGesture = connect(sw, &SpectrumWidget::centerChanged,
+                this, [this, id](double centreHz) {
+                    auto current = d->bindings.find(id);
+                    if (current == d->bindings.end() || !current->second.slice
+                        || !current->second.widget
+                        || !current->second.widget->ctunEnabled() || !d->model
+                        || !d->client || !d->client->remoteCtunAvailable()) { return; }
+                    SliceModel* slice = currentSliceForPan(
+                        d->model, d->stack, current->second.widget);
+                    if (!slice || slice->streamIndex() < 0) { return; }
+                    d->model->requestStreamCentre(slice->sliceIndex(), std::round(centreHz));
+                });
             widget->clearRemoteSpectrum();
+            widget->applyRemoteCtunState(false, false);
         }
         const quint32 id = found->first;
         auto& binding = found->second;
@@ -377,9 +506,11 @@ void RemoteMediaController::refreshSubscriptions()
         // A rejected request remains blank until its inputs change; reconnect
         // retires the binding, and source-window changes are batched above.
         if (request == binding.observed
-            && binding.observedStream == slice->streamIndex()) { continue; }
+            && binding.observedStream == slice->streamIndex()
+            && binding.observedStreamEpoch == slice->streamEpoch()) { continue; }
         binding.observed = request;
         binding.observedStream = slice->streamIndex();
+        binding.observedStreamEpoch = slice->streamEpoch();
         ++binding.revision;
         if (binding.revision == 0) { ++binding.revision; }
         binding.accepted = false;
@@ -393,6 +524,60 @@ void RemoteMediaController::refreshSubscriptions()
         request.insert(QStringLiteral("endpointId"), double(id));
         request.insert(QStringLiteral("revision"), double(binding.revision));
         if (!send(request)) { binding.observed = {}; }
+    }
+    refreshCtunState();
+}
+
+void RemoteMediaController::refreshCtunState()
+{
+    if (!d->model || !d->client) { return; }
+    QSet<int> occupied;
+    for (SliceModel* slice : d->model->slices()) {
+        if (slice->streamIndex() >= 0) { occupied.insert(slice->streamIndex()); }
+    }
+    for (auto it = d->ctunStreams.begin(); it != d->ctunStreams.end();) {
+        if (!occupied.contains(it.key())) { it = d->ctunStreams.erase(it); }
+        else { ++it; }
+    }
+    for (auto& [id, binding] : d->bindings) {
+        if (!binding.widget || !binding.slice) { continue; }
+        const int stream = binding.slice->streamIndex();
+        const quint64 epoch = binding.slice->streamEpoch();
+        auto& state = d->ctunStreams[stream];
+        if (state.epoch != epoch) { state = {}; state.epoch = epoch; }
+        const bool currentContext = binding.accepted
+            && binding.context.source.streamIndex == stream
+            && binding.observedStreamEpoch == epoch;
+        const bool available = d->client->remoteCtunAvailable()
+            && d->model->isConnected() && stream >= 0 && epoch != 0
+            && (state.initialized || state.pending || currentContext);
+        if (available && currentContext && !state.initialized && !state.pending
+            && (state.rejectedContext == 0
+                || newer(binding.context.codec.contextGeneration, state.rejectedContext))) {
+            // One hardware stream has one effective pin, even when several
+            // pans show it. Restore once; mirrored truth then updates cohosts.
+            // Never reassert competing saved preferences on every frame/ACK.
+            bool preference = binding.widget->ctunPreference();
+            // The active pan owns the initial preference when several pans
+            // share a stream; ACK arrival order must not choose the winner.
+            for (PanadapterApplet* applet : d->stack->allApplets()) {
+                SliceModel* member = d->model->sliceById(applet->activeSliceIndex());
+                if (member && member->streamIndex() == stream
+                    && applet->panId() == d->stack->activePanId()) {
+                    preference = applet->spectrumWidget()->ctunPreference();
+                    break;
+                }
+            }
+            state.requestSliceId = binding.slice->sliceIndex();
+            state.requestedPin = preference;
+            state.pending = true;
+            if (!d->model->requestStreamCtunPinned(state.requestSliceId, preference)) {
+                state.pending = false;
+                state.rejectedContext = binding.context.codec.contextGeneration;
+            }
+        }
+        binding.widget->applyRemoteCtunState(available,
+                                             binding.slice->streamCtunPinned());
     }
 }
 
@@ -471,6 +656,7 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
             || !binding.slice || !binding.widget->isVisible()
             || d->stack->spectrum(d->stack->activePanId()) != binding.widget
             || binding.observedStream != binding.slice->streamIndex()
+            || binding.observedStreamEpoch != binding.slice->streamEpoch()
             || requestFor(binding.widget, binding.slice) != binding.observed) {
             return;
         }
@@ -500,7 +686,8 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
     // A gesture/rebind may arrive between the outgoing request and its ACK.
     // Issue the newer request before accepting an old view over that gesture.
     if (binding.slice && (requestFor(binding.widget, binding.slice) != binding.observed
-                         || binding.observedStream != binding.slice->streamIndex())) {
+                         || binding.observedStream != binding.slice->streamIndex()
+                         || binding.observedStreamEpoch != binding.slice->streamEpoch())) {
         refreshSubscriptions();
         return;
     }
@@ -535,6 +722,7 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
     context.targetFps = int(fps);
     context.framesPerLine = int(lines);
     binding.context = context;
+    binding.sourceCentreHz = sourceCentre;
     binding.decoder.reset();
     binding.accepted = true;
     binding.rejected = false;
@@ -543,6 +731,7 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
     // The source crop may be bin-aligned. Remember the displayed accepted
     // window so the polling observer does not feed an ACK back as a new zoom.
     if (binding.slice) { binding.observed = requestFor(binding.widget, binding.slice); }
+    refreshCtunState();
     requestKeyframe(endpointId);
 }
 
@@ -569,6 +758,9 @@ void RemoteMediaController::receiveDisplay(const QByteArray& packet)
     const quint32 generation = qFromBigEndian<quint32>(packet.constData() + 12);
     auto it = d->bindings.find(id);
     if (it == d->bindings.end() || !it->second.accepted || !it->second.widget
+        || !it->second.slice
+        || it->second.observedStream != it->second.slice->streamIndex()
+        || it->second.observedStreamEpoch != it->second.slice->streamEpoch()
         || generation != it->second.context.codec.contextGeneration) { return; }
     auto& binding = it->second;
     const DisplayCodecDecodeResult decoded = binding.decoder.decode(packet);

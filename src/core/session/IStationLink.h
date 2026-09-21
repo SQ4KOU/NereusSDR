@@ -96,6 +96,13 @@ public:
 
     /// Verb "requestSliceSampleRate", arguments sliceId and rateHz.
     virtual CommandOutcome requestSliceSampleRate(int sliceId, int rateHz) = 0;
+
+    // R3 remote C-Tune. Default refusals retain source compatibility for
+    // older test links and transports that do not negotiate this capability.
+    virtual CommandOutcome requestStreamCtunPinned(int, bool)
+    { return { false, QStringLiteral("Remote C-Tune is not supported by this station link.") }; }
+    virtual CommandOutcome requestStreamCentre(int, double)
+    { return { false, QStringLiteral("Remote C-Tune is not supported by this station link.") }; }
 };
 
 } // namespace NereusSDR

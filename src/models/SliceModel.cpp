@@ -708,6 +708,14 @@ QString SliceModel::applyMirroredValue(const QByteArray& propertyName, const QVa
                                    m_stationAutoAgcNoiseFloorValid, value.toULongLong());
         return {};
     }
+    if (propertyName == "streamCtunPinned") {
+        setStreamCtunPinned(value.toBool());
+        return {};
+    }
+    if (propertyName == "streamEpoch") {
+        setStreamEpoch(value.toULongLong());
+        return {};
+    }
     if (propertyName == "active") {
         // Fix round 1 review finding (Important 1): this used to name
         // RadioModel::setActiveSlice(), which a remote peer cannot reach
@@ -758,6 +766,24 @@ void SliceModel::setStreamIndex(int idx)
         m_streamIndex = idx;
         emit streamIndexChanged(idx);
     }
+}
+
+void SliceModel::setStreamCtunPinned(bool pinned)
+{
+    if (m_streamCtunPinned == pinned) {
+        return;
+    }
+    m_streamCtunPinned = pinned;
+    emit streamCtunPinnedChanged(pinned);
+}
+
+void SliceModel::setStreamEpoch(quint64 epoch)
+{
+    if (m_streamEpoch == epoch) {
+        return;
+    }
+    m_streamEpoch = epoch;
+    emit streamEpochChanged(epoch);
 }
 
 void SliceModel::setShiftOffsetHz(double hz)

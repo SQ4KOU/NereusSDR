@@ -25,6 +25,9 @@
 //                                    daemon build split (R1).  No logic
 //                                    change.  AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-21  J.J. Boyd / KG4VCF  Restore WDSP's mode-dependent
+//                                    accumulator initialization after reset.
+//                                    AI-assisted transformation via OpenAI Codex.
 // =================================================================
 
 //=================================================================
@@ -88,6 +91,7 @@ inline double cd(const QVector<double>& correction, int i)
 
 void SpectrumAvenger::resize(int numPixels)
 {
+    m_needsInitialization = true;
     if (numPixels <= 0) {
         m_avSum.clear();
         m_avBuff.clear();
@@ -128,6 +132,7 @@ void SpectrumAvenger::clear()
     // the appropriate initial values per-mode (recursive linear starts at
     // 1.0e-12, recursive log at -160.0 dB, window mode resets indices).
     std::fill(m_avSum.begin(), m_avSum.end(), 0.0);
+    m_needsInitialization = true;
     m_availFrames = 0;
     m_avInIdx = 0;
     m_avOutIdx = 0;
@@ -152,6 +157,25 @@ void SpectrumAvenger::apply(const QVector<float>& tPixels,
     }
     if (pixelsOut.size() != num_pixels) {
         pixelsOut.resize(num_pixels);
+    }
+
+    if (m_needsInitialization) {
+        // From Thetis wdsp/analyzer.c:1854-1872 [@3759d096] (v2.10.3.15).
+        // SetDisplayAverageMode seeds each accumulator in its own domain.
+        // The wrapper receives the mode only at apply(), after resize/clear.
+        // Zero in log mode is 0 dB, which made each remote context restart
+        // descend from the top of the spectrum instead of the noise floor.
+        switch (avMode) {
+        case 1:
+            std::fill(m_avSum.begin(), m_avSum.end(), 1.0e-12);
+            break;
+        case 3:
+            std::fill(m_avSum.begin(), m_avSum.end(), -160.0);
+            break;
+        default:
+            break; // Other accumulators/indices were zeroed by resize/clear.
+        }
+        m_needsInitialization = false;
     }
 
     int i;

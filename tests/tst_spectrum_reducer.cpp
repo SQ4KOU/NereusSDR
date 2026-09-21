@@ -409,6 +409,43 @@ private slots:
 
     // ---- averaging state ---------------------------------------------
 
+    void recursiveAveragingStartsFromWdspFloor_data()
+    {
+        QTest::addColumn<int>("mode");
+        QTest::addColumn<float>("firstQuiet");
+        QTest::addColumn<float>("secondQuiet");
+        QTest::addColumn<float>("loudAfterClear");
+        QTest::newRow("recursive-linear") << 1 << -120.0f << -120.0f << -63.0103f;
+        QTest::newRow("recursive-log") << 3 << -140.0f << -130.0f << -110.0f;
+    }
+
+    void recursiveAveragingStartsFromWdspFloor()
+    {
+        QFETCH(int, mode);
+        QFETCH(float, firstQuiet);
+        QFETCH(float, secondQuiet);
+        QFETCH(float, loudAfterClear);
+        SpectrumReducer reducer;
+        auto config = baseConfig();
+        config.pixels = 32;
+        config.averageMode = mode;
+        config.averageAlpha = 0.5;
+        reducer.setConfig(config);
+        const auto quiet = flatBins(4096, 1.0e-12f);
+        QVector<float> output;
+        reducer.reduce(quiet, 1.0, 0.0, output);
+        QVERIFY(std::abs(output[16] - firstQuiet) < 0.001f);
+        reducer.reduce(quiet, 1.0, 0.0, output);
+        QVERIFY(std::abs(output[16] - secondQuiet) < 0.001f);
+        reducer.clearAveraging();
+        reducer.reduce(flatBins(4096, 1.0e-6f), 1.0, 0.0, output);
+        QVERIFY(std::abs(output[16] - loudAfterClear) < 0.001f);
+        config.pixels = 64;
+        reducer.setConfig(config);
+        reducer.reduce(quiet, 1.0, 0.0, output);
+        QVERIFY(std::abs(output[16] - firstQuiet) < 0.001f);
+    }
+
     // The reducer owns the avenger, so it owns per-frame state.  Log-
     // recursive averaging must converge across frames (proving state is
     // carried), and clearAveraging() must reset it (proving the widget's
@@ -439,8 +476,8 @@ private slots:
         r.clearAveraging();
         r.reduce(loud, 1.0, 0.0, out);
         const float afterClear = out[16];
-        QVERIFY2(afterClear > firstLoud,
-                 "clearAveraging must drop the accumulated history");
+        QVERIFY2(std::abs(afterClear - (-150.0f)) < 0.001f,
+                 "clearAveraging must restart log state at the WDSP -160 dB floor");
     }
 
     // Changing the pixel count must re-size the avenger, which resets its

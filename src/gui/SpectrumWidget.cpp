@@ -762,6 +762,7 @@ void SpectrumWidget::loadSettings()
     m_panFill        = readBool(QStringLiteral("DisplayPanFill"), true);
 
     m_ctunEnabled    = readBool(QStringLiteral("DisplayCtunEnabled"), true);
+    m_ctunPreference = m_ctunEnabled;
 
     int scheme = readInt(QStringLiteral("DisplayWfColorScheme"), 0);
     m_wfColorScheme = static_cast<WfColorScheme>(qBound(0, scheme,
@@ -1217,7 +1218,7 @@ void SpectrumWidget::saveSettings()
               m_panFill ? QStringLiteral("True") : QStringLiteral("False"));
     writeInt(QStringLiteral("DisplayWfColorScheme"), static_cast<int>(m_wfColorScheme));
     s.setValue(settingsKey(QStringLiteral("DisplayCtunEnabled"), m_panIndex),
-              m_ctunEnabled ? QStringLiteral("True") : QStringLiteral("False"));
+              m_ctunPreference ? QStringLiteral("True") : QStringLiteral("False"));
 
     // Phase 3G-8 commit 3: spectrum renderer state.
     // DisplayAverageMode + DisplayAverageAlpha are retired keys (v0.3.0
@@ -1449,6 +1450,7 @@ void SpectrumWidget::updateSpectrumFromTxPixels(int receiverId,
 void SpectrumWidget::invalidateRemoteSpectrumFrame()
 {
     m_remoteSpectrum = true;
+    recomputeExtendedMode();
     m_remoteCodec = {};
     m_pxPeakHold.clear();
     m_activePeakHold.resize(0);
@@ -5691,7 +5693,10 @@ void SpectrumWidget::setWidebandAdcRateHz(double rateHz)
 // the operator override still pins a pan to its DDC.
 double SpectrumWidget::maxZoomOutBandwidthHz() const
 {
-    if (!m_extendedViewAllowed || m_sampleRateHz <= 0.0) {
+    // Remote display currently carries this DDC's FFT, not the ADC-wide
+    // source used by local extended wings. Clamp the gesture itself so a
+    // later Core crop ACK cannot collapse an unavailable wide view.
+    if (m_remoteSpectrum || !m_extendedViewAllowed || m_sampleRateHz <= 0.0) {
         return m_sampleRateHz;
     }
     return std::max(m_sampleRateHz, m_widebandAdcRateHz / 2.0);
@@ -5905,6 +5910,7 @@ void SpectrumWidget::recomputeExtendedMode()
 {
     const bool actual =
         m_extendedViewAllowed
+        && !m_remoteSpectrum
         && m_sampleRateHz > 0.0
         && m_bandwidthHz > m_sampleRateHz;
     if (m_extendedMode == actual) { return; }
@@ -8577,6 +8583,7 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* event)
                                   static_cast<int>(m_wfColorScheme),
                                   m_fillAlpha, m_panFill, false,
                                   m_refLevel, m_dynamicRange, m_ctunEnabled);
+        m_overlayMenu->setCtunAvailable(m_ctunAvailable);
         // Re-seed every popup (not just at construction): the 3D VIEW
         // section reflects whatever the operator last set, and row-span
         // support can change across the widget's lifetime if the GPU mesh
@@ -11509,8 +11516,21 @@ void SpectrumWidget::recenterOnVfo()
 #endif
 }
 
+void SpectrumWidget::applyRemoteCtunState(bool available, bool pinned)
+{
+    m_ctunAvailable = available;
+    m_ctunEnabled = available && pinned;
+    if (m_overlayMenu) {
+        m_overlayMenu->setCtunAvailable(available);
+        m_overlayMenu->setCtunState(m_ctunEnabled);
+    }
+    update();
+}
+
 void SpectrumWidget::setCtunEnabled(bool enabled)
 {
+    if (!m_ctunAvailable) { return; }
+    m_ctunPreference = enabled;
     if (m_ctunEnabled == enabled) {
         return;
     }

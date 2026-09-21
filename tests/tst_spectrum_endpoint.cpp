@@ -73,6 +73,36 @@ class TstSpectrumEndpoint : public QObject
     Q_OBJECT
 
 private slots:
+    void logAveragingDoesNotRestartAtZeroDbAfterRetune()
+    {
+        SpectrumEndpoint endpoint;
+        auto req = request();
+        req.trace.averageMode = 3;
+        req.trace.averageAlpha = 0.5;
+        auto source = sourceContext();
+        QVERIFY(endpoint.configure(req, source));
+        auto input = frame(source, 1'000'000'000);
+        input.binsLinear.fill(1.0e-12f);
+        auto output = endpoint.consume(input);
+        QVERIFY(output);
+        QVERIFY(std::abs(output->traceDbm[32] - (-140.0f)) < 0.001f);
+        input.producedAtNs += 40'000'000;
+        output = endpoint.consume(input);
+        QVERIFY(output);
+        QVERIFY(std::abs(output->traceDbm[32] - (-130.0f)) < 0.001f);
+
+        ++source.sourceGeneration;
+        ++source.contextGeneration;
+        source.centreHz += 100;
+        QVERIFY(endpoint.configure(req, source));
+        QVERIFY(!endpoint.consume(input)); // Old source frames remain inadmissible.
+        input = frame(source, 1'100'000'000);
+        input.binsLinear.fill(1.0e-12f);
+        output = endpoint.consume(input);
+        QVERIFY(output);
+        QVERIFY(std::abs(output->traceDbm[32] - (-140.0f)) < 0.001f);
+    }
+
     void independentPlanesClampAndWideCoverage()
     {
         SpectrumEndpoint endpoint;

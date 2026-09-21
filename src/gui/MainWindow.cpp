@@ -1443,6 +1443,15 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
         const double center = host->centerFrequency();
         const double halfBw = host->bandwidth() / 2.0;
         const bool offScreen = (hz < center - halfBw) || (hz > center + halfBw);
+        if (!m_radioModel->ownsLocalDsp()) {
+            // Core alone moves the DDC and applies the demodulator shift.
+            // Following a mirrored VFO must not echo an explicit pan gesture.
+            if (!host->ctunEnabled() || offScreen) {
+                host->setDisplayWindowPreservingHistory(hz, host->bandwidth());
+            }
+            host->setVfoFrequency(hz);
+            return;
+        }
         if (!host->ctunEnabled() || offScreen) {
             m_handlingBandJump = true;
             const bool wasCtun = host->ctunEnabled();
@@ -2401,6 +2410,9 @@ void MainWindow::wireSpectrumSliceControls(SpectrumWidget* sw,
             s->setFrequency(centerHz);
             return;
         }
+        // RemoteMediaController sends an authenticated centre command and
+        // waits for Core's geometry. No client-local hardware/DSP mutation.
+        if (!m_radioModel->ownsLocalDsp()) { return; }
         const int stream = s->streamIndex();
         if (stream >= 0 && m_radioModel->receiverManager()) {
             m_radioModel->receiverManager()->forceHardwareFrequency(
@@ -2429,6 +2441,7 @@ void MainWindow::wireSpectrumSliceControls(SpectrumWidget* sw,
     // through the now-unpinned allocator.
     connect(sw, &SpectrumWidget::ctunEnabledChanged, this,
             [this, panId, sw](bool enabled) {
+        if (!m_radioModel->ownsLocalDsp()) { return; }
         if (m_radioModel->receiverManager()) {
             m_radioModel->receiverManager()->setDdcFrequencyLocked(enabled);
         }

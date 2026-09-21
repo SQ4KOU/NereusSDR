@@ -37,9 +37,12 @@
 #include <QHash>
 #include <QMetaObject>
 #include <QMetaType>
+#include <QSet>
 #include <QVariant>
 
 #include <limits>
+#include <initializer_list>
+#include <cmath>
 
 namespace NereusSDR {
 
@@ -126,6 +129,38 @@ ArgumentStatus findIntArgument(const QList<MirrorUpdate>& arguments,
     return ArgumentStatus::Ok;
 }
 
+bool hasExactlyArguments(const QList<MirrorUpdate>& arguments,
+                         std::initializer_list<QByteArray> expected)
+{
+    if (arguments.size() != static_cast<qsizetype>(expected.size())) {
+        return false;
+    }
+    QSet<QByteArray> expectedNames(expected.begin(), expected.end());
+    QSet<QByteArray> seen;
+    for (const MirrorUpdate& argument : arguments) {
+        if (!expectedNames.contains(argument.name) || seen.contains(argument.name)) {
+            return false;
+        }
+        seen.insert(argument.name);
+    }
+    return true;
+}
+
+bool findFiniteDoubleArgument(const QList<MirrorUpdate>& arguments,
+                              const QByteArray& name, double* out)
+{
+    QVariant raw;
+    if (!findArgument(arguments, name, &raw) || raw.typeId() != QMetaType::Double) {
+        return false;
+    }
+    const double value = raw.toDouble();
+    if (!std::isfinite(value)) {
+        return false;
+    }
+    *out = value;
+    return true;
+}
+
 QString notRepresentableReason(const QByteArray& name)
 {
     return QStringLiteral("%1 argument is not a whole number this station can represent")
@@ -163,6 +198,10 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleAddSliceOnPan(invoke);
     } else if (invoke.commandVerb == "setActiveSliceById") {
         handleSetActiveSliceById(invoke);
+    } else if (invoke.commandVerb == "requestStreamCtunPinned") {
+        handleRequestStreamCtunPinned(invoke);
+    } else if (invoke.commandVerb == "requestStreamCentre") {
+        handleRequestStreamCentre(invoke);
     } else {
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("unrecognised command verb"), {});
@@ -471,6 +510,57 @@ void SessionCommandDispatcher::handleSetActiveSliceById(const SessionMessage& in
     QList<QByteArray> affected{ ObjectRegistry::keyForSlice(sliceId) };
     if (previouslyActiveId >= 0 && previouslyActiveId != sliceId) {
         affected.append(ObjectRegistry::keyForSlice(previouslyActiveId));
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), affected);
+}
+
+void SessionCommandDispatcher::handleRequestStreamCtunPinned(const SessionMessage& invoke)
+{
+    int sliceId = 0;
+    QVariant pinned;
+    if (!hasExactlyArguments(invoke.arguments, { "sliceId", "pinned" })
+        || findIntArgument(invoke.arguments, "sliceId", &sliceId) != ArgumentStatus::Ok
+        || !findArgument(invoke.arguments, "pinned", &pinned)
+        || pinned.typeId() != QMetaType::Bool) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("invalid sliceId or pinned argument"), {});
+        return;
+    }
+    if (!m_radioModel->requestStreamCtunPinned(sliceId, pinned.toBool())) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("slice is not bound to an active stream"), {});
+        return;
+    }
+    QList<QByteArray> affected;
+    if (SliceModel* slice = m_radioModel->sliceById(sliceId)) {
+        for (int id : m_radioModel->slicesOnStream(slice->streamIndex())) {
+            affected.append(ObjectRegistry::keyForSlice(id));
+        }
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), affected);
+}
+
+void SessionCommandDispatcher::handleRequestStreamCentre(const SessionMessage& invoke)
+{
+    int sliceId = 0;
+    double centreHz = 0.0;
+    if (!hasExactlyArguments(invoke.arguments, { "sliceId", "centreHz" })
+        || findIntArgument(invoke.arguments, "sliceId", &sliceId) != ArgumentStatus::Ok
+        || !findFiniteDoubleArgument(invoke.arguments, "centreHz", &centreHz)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("invalid sliceId or centreHz argument"), {});
+        return;
+    }
+    SliceModel* const slice = m_radioModel->sliceById(sliceId);
+    const int stream = slice ? slice->streamIndex() : -1;
+    if (!m_radioModel->requestStreamCentre(sliceId, centreHz)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("C-Tune centre is invalid for this stream's cohosts"), {});
+        return;
+    }
+    QList<QByteArray> affected;
+    for (int id : m_radioModel->slicesOnStream(stream)) {
+        affected.append(ObjectRegistry::keyForSlice(id));
     }
     emitResult(invoke.commandVerb, invoke.commandId, true, QString(), affected);
 }

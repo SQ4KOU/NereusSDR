@@ -52,6 +52,9 @@ public:
                    bool heatMap, float refLevel, float dynRange,
                    bool ctunEnabled = true);
 
+    void setCtunAvailable(bool available);
+    void setCtunState(bool pinned);
+
     // Absolute RF Hz under the cursor at popup time.  The caller sets it
     // just before show(); the Notch section's button carries it back out
     // through notchAddRequested.  Kept separate from setValues because it

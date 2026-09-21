@@ -154,6 +154,8 @@ private:
     void handleRequestSliceSampleRate(const NereusSDR::SessionMessage& invoke);
     void handleAddSliceOnPan(const NereusSDR::SessionMessage& invoke);
     void handleSetActiveSliceById(const NereusSDR::SessionMessage& invoke);
+    void handleRequestStreamCtunPinned(const NereusSDR::SessionMessage& invoke);
+    void handleRequestStreamCentre(const NereusSDR::SessionMessage& invoke);
 
     void emitResult(const QByteArray& verb, quint32 commandId, bool accepted,
                     const QString& reason, const QList<QByteArray>& affectedKeys);

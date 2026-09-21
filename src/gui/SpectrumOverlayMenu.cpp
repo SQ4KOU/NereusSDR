@@ -450,6 +450,21 @@ void SpectrumOverlayMenu::setValues(int wfColorGain, int wfBlackLevel, bool auto
     m_ctunCheck->blockSignals(false);
 }
 
+void SpectrumOverlayMenu::setCtunAvailable(bool available)
+{
+    m_ctunCheck->setEnabled(available);
+    m_ctunCheck->setToolTip(available
+        ? QStringLiteral("Keep the receive window fixed while tuning within it")
+        : QStringLiteral("C-Tune requires a connected Core with remote C-Tune support"));
+}
+
+void SpectrumOverlayMenu::setCtunState(bool pinned)
+{
+    const bool blocked = m_ctunCheck->blockSignals(true);
+    m_ctunCheck->setChecked(pinned);
+    m_ctunCheck->blockSignals(blocked);
+}
+
 // Seeds the 3D VIEW section's six widgets without emitting: the same
 // blockSignals(true)/blockSignals(false) idiom setValues() above uses, so
 // opening the menu cannot echo the seeded values back out through the

@@ -497,6 +497,9 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
 
     if (m_session == transport) {
         m_session = nullptr;
+        if (!m_radioModel.isNull()) {
+            m_radioModel->clearStreamCtunPins();
+        }
         emit mediaSessionEnded(m_mediaSessionEpoch);
         // Stop draining deltas into nothing. StateMirror keeps watching --
         // the daemon's own state is not the session's to tear down -- and
@@ -619,6 +622,14 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
 
     switch (message.kind) {
     case SessionMessageKind::CommandInvoke:
+        if ((message.commandVerb == "requestStreamCtunPinned"
+             || message.commandVerb == "requestStreamCentre")
+            && it->agreedMinor < kRemoteCtunSessionProtocolMinor) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                QStringLiteral("Remote C-Tune requires a newer station protocol."), {}));
+            break;
+        }
         m_dispatcher->dispatch(message);
         break;
     case SessionMessageKind::MediaControl:
@@ -1044,6 +1055,7 @@ StationCapabilities StationServer::buildCapabilities() const
     // Always false in R2: TX is R4 in its entirety.
     caps.txPermitted = false;
     caps.remoteMediaVersion = m_mediaEnabled ? 1 : 0;
+    caps.remoteCtunVersion = 1;
 
     return caps;
 }

@@ -255,6 +255,9 @@ class SliceModel : public QObject {
     // ReceiverManager, FFTEngine, and the FFTRouter topology.
     Q_PROPERTY(int streamIndex READ streamIndex WRITE setStreamIndex
                NOTIFY streamIndexChanged)
+    Q_PROPERTY(bool streamCtunPinned READ streamCtunPinned
+               NOTIFY streamCtunPinnedChanged)
+    Q_PROPERTY(quint64 streamEpoch READ streamEpoch NOTIFY streamEpochChanged)
 
     // Phase 3F Sub-Epic I: this slice's offset from its stream's centre,
     // pushed into WDSP via RxChannel::setShiftFrequency (the Thetis RXOsc
@@ -638,6 +641,10 @@ public:
 
     int  streamIndex() const { return m_streamIndex; }
     void setStreamIndex(int idx);
+    bool streamCtunPinned() const { return m_streamCtunPinned; }
+    void setStreamCtunPinned(bool pinned);
+    quint64 streamEpoch() const { return m_streamEpoch; }
+    void setStreamEpoch(quint64 epoch);
     double shiftOffsetHz() const { return m_shiftOffsetHz; }
     void setShiftOffsetHz(double hz);
 
@@ -1049,6 +1056,8 @@ signals:
     void chainIndexChanged(int idx);
     void ddcIndexChanged(int ddc);
     void streamIndexChanged(int idx);      // Phase 3F Sub-Epic I
+    void streamCtunPinnedChanged(bool pinned);
+    void streamEpochChanged(quint64 epoch);
     void shiftOffsetHzChanged(double hz);  // Phase 3F Sub-Epic I
     void panKeyChanged(const QString& key);  // Phase 3F multi-pan routing
     void sampleRateHzChanged(int hz);
@@ -1175,6 +1184,8 @@ private:
     double  m_stationAutoAgcNoiseFloorDbm{-200.0};
     bool    m_stationAutoAgcNoiseFloorValid{false};
     quint64 m_stationAutoAgcNoiseFloorGeneration{0};
+    bool    m_streamCtunPinned{false};
+    quint64 m_streamEpoch{0};
     DSPMode m_dspMode{DSPMode::USB};
     int     m_filterLow{100};            // USB default from Thetis F5
     int     m_filterHigh{3000};

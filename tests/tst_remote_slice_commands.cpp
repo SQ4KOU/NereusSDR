@@ -68,6 +68,7 @@
 #include "core/ConnectionState.h"
 #include "core/session/IStationLink.h"
 #include "core/session/SessionMessages.h"
+#include "core/session/SessionCommandDispatcher.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "core/settings/SettingsProxy.h"
@@ -201,6 +202,10 @@ private slots:
     void remoteAddSliceCreatesTheSliceOnTheDaemonAndTheClientAdoptsTheStationsId();
     void remoteRemoveSliceRemovesItOnTheDaemon();
     void remoteSampleRateRequestReachesTheDaemon();
+    void remoteCtunPinAndExplicitCentreAreCoreOwnedAndMirroredToCohosts();
+    void remoteCtunDispatcherRejectsDuplicateOrFractionalArguments();
+    void localCtunPinIsolatesIndependentStreams();
+    void migratedAndRetiredStreamsDoNotKeepCtunPins();
 
     // ---- A refusal is visible, and nothing was optimistically flipped ----
     void stationRefusalReachesAnOperatorFacingSignalAndChangesNothingLocally();
@@ -357,6 +362,204 @@ void TstRemoteSliceCommands::remoteSampleRateRequestReachesTheDaemon()
     QCOMPARE(results.count(), 1);
     QCOMPARE(results.first().at(1).toBool(), true);
     QCOMPARE(retuneRejected.count(), 0);
+}
+
+void TstRemoteSliceCommands::
+    remoteCtunPinAndExplicitCentreAreCoreOwnedAndMirroredToCohosts()
+{
+    auto fixture = establishSession(1);
+    QVERIFY(fixture != nullptr);
+    RadioModel& station = *fixture->stationModel;
+    RadioModel& client = *fixture->clientModel;
+    station.configureStreamPoolForTest(2, 2, 192000);
+
+    SliceModel* stationA = station.slices().at(0);
+    SliceModel* stationB = station.slices().at(1);
+    const int firstId = stationA->sliceIndex();
+    const int secondId = stationB->sliceIndex();
+
+    // Give both station slices one real shared DDC window. The second tune
+    // lies within the first stream's 192 kHz window, so it joins rather than
+    // claims a second stream.
+    stationA->setFrequency(14230000.0);
+    stationB->setFrequency(14240000.0);
+    QTRY_VERIFY(stationA->streamIndex() >= 0);
+    QTRY_COMPARE(stationB->streamIndex(), stationA->streamIndex());
+    const int stream = stationA->streamIndex();
+    QTRY_VERIFY(client.sliceById(firstId)->streamEpoch() != 0);
+    QTRY_COMPARE(client.sliceById(secondId)->streamEpoch(),
+                 client.sliceById(firstId)->streamEpoch());
+
+    QVERIFY(fixture->client->remoteCtunAvailable());
+    QSignalSpy pinFinished(fixture->client.get(), &StationClient::streamCtunPinFinished);
+    QVERIFY(client.requestStreamCtunPinned(firstId, true));
+    QTRY_VERIFY(stationA->streamCtunPinned());
+    QTRY_VERIFY(stationB->streamCtunPinned());
+    QTRY_VERIFY(client.sliceById(firstId)->streamCtunPinned());
+    QTRY_VERIFY(client.sliceById(secondId)->streamCtunPinned());
+    QTRY_COMPARE(pinFinished.count(), 1);
+    QCOMPARE(pinFinished.first().at(0).toInt(), firstId);
+    QCOMPARE(pinFinished.first().at(1).toULongLong(), client.sliceById(firstId)->streamEpoch());
+    QCOMPARE(pinFinished.first().at(2).toBool(), true);
+    QCOMPARE(pinFinished.first().at(3).toBool(), true);
+
+    // This is a DDC-centre move, not a slice-frequency write: both cohosts
+    // retain their VFOs and receive new offsets around the requested centre.
+    const double newCentreHz = 14235000.0;
+    QSignalSpy results(fixture->client.get(), &StationClient::commandResult);
+    QSignalSpy centreFinished(fixture->client.get(), &StationClient::streamCentreFinished);
+    QVERIFY(client.requestStreamCentre(firstId, newCentreHz));
+    QTRY_COMPARE(station.streamCentreHzForTest(stream), newCentreHz);
+    QTRY_COMPARE(results.count(), 1);
+    QCOMPARE(results.first().at(1).toBool(), true);
+    QTRY_COMPARE(centreFinished.count(), 1);
+    QCOMPARE(centreFinished.first().at(1).toULongLong(), client.sliceById(firstId)->streamEpoch());
+    QCOMPARE(centreFinished.first().at(2).toBool(), true);
+    QCOMPARE(stationA->frequency(), 14230000.0);
+    QCOMPARE(stationB->frequency(), 14240000.0);
+    QCOMPARE(stationA->shiftOffsetHz(), -5000.0);
+    QCOMPARE(stationB->shiftOffsetHz(), 5000.0);
+
+    // A proposed centre that would leave both cohosts outside the current
+    // window is rejected atomically: neither the actual DDC nor projection
+    // is moved by a request aimed only at one slice.
+    QVERIFY(client.requestStreamCentre(firstId, 14000000.0));
+    QTRY_COMPARE(results.count(), 2);
+    QCOMPARE(results.at(1).at(1).toBool(), false);
+    QTRY_COMPARE(centreFinished.count(), 2);
+    QCOMPARE(centreFinished.at(1).at(2).toBool(), false);
+    QCOMPARE(station.streamCentreHzForTest(stream), newCentreHz);
+
+    QVERIFY(client.requestStreamCtunPinned(secondId, false));
+    QTRY_VERIFY(!stationA->streamCtunPinned());
+    QTRY_VERIFY(!stationB->streamCtunPinned());
+
+    QVERIFY(client.requestStreamCtunPinned(firstId, true));
+    QTRY_VERIFY(stationA->streamCtunPinned());
+    fixture->client->disconnectFromStation(QStringLiteral("test session end"));
+    QTRY_VERIFY(!stationA->streamCtunPinned());
+    QTRY_VERIFY(!stationB->streamCtunPinned());
+}
+
+void TstRemoteSliceCommands::remoteCtunDispatcherRejectsDuplicateOrFractionalArguments()
+{
+    auto model = makeStationRadioModel(0);
+    model->configureStreamPoolForTest(1, 1, 192000);
+    SliceModel* slice = model->slices().first();
+    slice->setFrequency(14230000.0);
+    QVERIFY(slice->streamIndex() >= 0);
+
+    SessionCommandDispatcher dispatcher(model.get());
+    QList<SessionMessage> results;
+    connect(&dispatcher, &SessionCommandDispatcher::commandResultReady, &dispatcher,
+            [&results](const SessionMessage& result) { results.append(result); });
+    const auto intArg = [](const QByteArray& name, int value) {
+        return MirrorUpdate{ 0, name, MirrorWireKind::Int64,
+                             QVariant(static_cast<qlonglong>(value)) };
+    };
+    const auto boolArg = [](const QByteArray& name, bool value) {
+        return MirrorUpdate{ 0, name, MirrorWireKind::Bool, QVariant(value) };
+    };
+    const auto doubleArg = [](const QByteArray& name, double value) {
+        return MirrorUpdate{ 0, name, MirrorWireKind::Float64, QVariant(value) };
+    };
+
+    // Exact command schemas reject a duplicate instead of accepting an
+    // ambiguous first matching argument.
+    dispatcher.dispatch(SessionMessages::commandInvoke(
+        "requestStreamCtunPinned", 1,
+        { intArg("sliceId", slice->sliceIndex()), boolArg("pinned", true),
+          boolArg("pinned", false) }));
+    QCOMPARE(results.count(), 1);
+    QVERIFY(!results.first().accepted);
+    QVERIFY(!slice->streamCtunPinned());
+
+    dispatcher.dispatch(SessionMessages::commandInvoke(
+        "requestStreamCentre", 2,
+        { intArg("sliceId", slice->sliceIndex()), doubleArg("centreHz", 14230000.5) }));
+    QCOMPARE(results.count(), 2);
+    QVERIFY(!results.at(1).accepted);
+    QCOMPARE(model->streamCentreHzForTest(slice->streamIndex()), 14230000.0);
+}
+
+void TstRemoteSliceCommands::localCtunPinIsolatesIndependentStreams()
+{
+    auto model = makeStationRadioModel(1);
+    model->configureStreamPoolForTest(2, 2, 192000);
+    SliceModel* pinned = model->slices().at(0);
+    SliceModel* free = model->slices().at(1);
+    pinned->setFrequency(14230000.0);
+    free->setFrequency(14330000.0);
+    QVERIFY(pinned->streamIndex() >= 0);
+    QVERIFY(free->streamIndex() >= 0);
+    QVERIFY(pinned->streamIndex() != free->streamIndex());
+    const int pinnedStream = pinned->streamIndex();
+    const int freeStream = free->streamIndex();
+    const double pinnedCentre = model->streamCentreHzForTest(pinnedStream);
+
+    QVERIFY(model->requestStreamCtunPinned(pinned->sliceIndex(), true));
+    QVERIFY(pinned->streamCtunPinned());
+    QVERIFY(!free->streamCtunPinned());
+
+    // Both moves stay inside their current 192 kHz windows. The pin holds
+    // only its own stream's DDC centre; an unrelated sole stream continues
+    // to follow its VFO exactly as local direct mode always did.
+    pinned->setFrequency(14235000.0);
+    QCOMPARE(model->streamCentreHzForTest(pinnedStream), pinnedCentre);
+    QCOMPARE(pinned->shiftOffsetHz(), 5000.0);
+
+    free->setFrequency(14335000.0);
+    QCOMPARE(model->streamCentreHzForTest(freeStream), 14335000.0);
+    QCOMPARE(free->shiftOffsetHz(), 0.0);
+}
+
+void TstRemoteSliceCommands::migratedAndRetiredStreamsDoNotKeepCtunPins()
+{
+    auto model = makeStationRadioModel(2);
+    model->configureStreamPoolForTest(2, 3, 192000);
+    SliceModel* moving = model->slices().at(0);
+    SliceModel* remaining = model->slices().at(1);
+    SliceModel* destination = model->slices().at(2);
+    moving->setFrequency(14230000.0);
+    remaining->setFrequency(14240000.0); // shares moving's first stream
+    destination->setFrequency(14330000.0); // claims the second stream
+    const int oldStream = moving->streamIndex();
+    const quint64 oldEpoch = moving->streamEpoch();
+    const int destinationStream = destination->streamIndex();
+    QVERIFY(oldStream >= 0);
+    QVERIFY(oldEpoch != 0);
+    QVERIFY(destinationStream >= 0);
+    QVERIFY(oldStream != destinationStream);
+
+    QVERIFY(model->requestStreamCtunPinned(moving->sliceIndex(), true));
+    QVERIFY(moving->streamCtunPinned());
+    QVERIFY(remaining->streamCtunPinned());
+
+    // A shared source cannot re-centre underneath its cohost. Tuning the
+    // moving slice into the live second window therefore migrates only that
+    // slice; the projection follows the destination stream rather than
+    // carrying the old stream's pin along with the slice.
+    moving->setFrequency(14335000.0);
+    QCOMPARE(moving->streamIndex(), destinationStream);
+    QCOMPARE(moving->streamEpoch(), destination->streamEpoch());
+    QVERIFY(moving->streamEpoch() != oldEpoch);
+    QVERIFY(!moving->streamCtunPinned());
+    QVERIFY(remaining->streamCtunPinned());
+
+    // Retiring the last old-stream member clears its session pin. A later
+    // binding that reuses the logical index must start unpinned.
+    const int remainingId = remaining->sliceIndex();
+    model->removeSlice(remainingId);
+    QVERIFY(!model->streamActiveForTest(oldStream));
+    const int replacementId = model->addSlice(QStringLiteral("pan-0"));
+    QVERIFY(replacementId >= 0);
+    SliceModel* replacement = model->sliceById(replacementId);
+    QVERIFY(replacement != nullptr);
+    replacement->setFrequency(14230000.0);
+    QCOMPARE(replacement->streamIndex(), oldStream);
+    QVERIFY(replacement->streamEpoch() != 0);
+    QVERIFY(replacement->streamEpoch() != oldEpoch);
+    QVERIFY(!replacement->streamCtunPinned());
 }
 
 // ─────────────────────────────────────────────────────────────────────────

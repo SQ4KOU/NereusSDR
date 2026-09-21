@@ -1642,6 +1642,8 @@ bool StationClient::applyOne(QObject* target, const MirrorProperty& prop,
         QByteArrayLiteral("SliceModel.stationAutoAgcNoiseFloorDbm"),
         QByteArrayLiteral("SliceModel.stationAutoAgcNoiseFloorValid"),
         QByteArrayLiteral("SliceModel.stationAutoAgcNoiseFloorGeneration"),
+        QByteArrayLiteral("SliceModel.streamCtunPinned"),
+        QByteArrayLiteral("SliceModel.streamEpoch"),
     };
     if (kClientStateApplyHooks.contains(skewKey(className, prop.name))) {
         QString hookReason;
@@ -1801,6 +1803,16 @@ MirrorUpdate stringArgument(const QByteArray& name, const QString& value)
     return MirrorUpdate{ 0, name, MirrorWireKind::Utf8, QVariant(value) };
 }
 
+MirrorUpdate boolArgument(const QByteArray& name, bool value)
+{
+    return MirrorUpdate{ 0, name, MirrorWireKind::Bool, QVariant(value) };
+}
+
+MirrorUpdate doubleArgument(const QByteArray& name, double value)
+{
+    return MirrorUpdate{ 0, name, MirrorWireKind::Float64, QVariant(value) };
+}
+
 } // namespace
 
 StationClient::CommandOutcome StationClient::sendCommand(const QByteArray& verb, int sliceId,
@@ -1821,7 +1833,22 @@ StationClient::CommandOutcome StationClient::sendCommand(const QByteArray& verb,
                 .arg(action)
         };
     }
-    m_pendingCommands.insert(id, PendingCommand{ verb, sliceId });
+    PendingCommand pending{ verb, sliceId };
+    if ((verb == "requestStreamCtunPinned" || verb == "requestStreamCentre")
+        && !m_radioModel.isNull()) {
+        if (SliceModel* slice = m_radioModel->sliceById(sliceId)) {
+            pending.streamEpoch = slice->streamEpoch();
+        }
+        if (verb == "requestStreamCtunPinned") {
+            for (const MirrorUpdate& argument : arguments) {
+                if (argument.name == "pinned" && argument.value.typeId() == QMetaType::Bool) {
+                    pending.requestedPin = argument.value.toBool();
+                    break;
+                }
+            }
+        }
+    }
+    m_pendingCommands.insert(id, pending);
     return CommandOutcome{ true, QString() };
 }
 
@@ -1857,6 +1884,26 @@ StationClient::CommandOutcome StationClient::requestSliceSampleRate(int sliceId,
         QStringLiteral("the sample-rate change to %1 kHz").arg(rateHz / 1000));
 }
 
+StationClient::CommandOutcome StationClient::requestStreamCtunPinned(int sliceId, bool pinned)
+{
+    if (!remoteCtunAvailable()) {
+        return { false, QStringLiteral("The station does not support remote C-Tune.") };
+    }
+    return sendCommand("requestStreamCtunPinned", sliceId,
+                       { intArgument("sliceId", sliceId), boolArgument("pinned", pinned) },
+                       QStringLiteral("the C-Tune pin change"));
+}
+
+StationClient::CommandOutcome StationClient::requestStreamCentre(int sliceId, double centreHz)
+{
+    if (!remoteCtunAvailable()) {
+        return { false, QStringLiteral("The station does not support remote C-Tune.") };
+    }
+    return sendCommand("requestStreamCentre", sliceId,
+                       { intArgument("sliceId", sliceId), doubleArgument("centreHz", centreHz) },
+                       QStringLiteral("the C-Tune centre change"));
+}
+
 void StationClient::handleCommandResult(const SessionMessage& message)
 {
     // Taken, not read: an id is answered exactly once, and leaving the
@@ -1890,6 +1937,29 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         }
     }
 
+    const bool isCtunCommand = pending.verb == "requestStreamCtunPinned"
+        || pending.verb == "requestStreamCentre";
+    bool newerCtunCommand = false;
+    if (isCtunCommand) {
+        for (auto it = m_pendingCommands.cbegin(); it != m_pendingCommands.cend(); ++it) {
+            const PendingCommand& candidate = it.value();
+            if (candidate.verb == pending.verb && candidate.sliceId == pending.sliceId
+                && candidate.streamEpoch == pending.streamEpoch) {
+                newerCtunCommand = true;
+                break;
+            }
+        }
+        if (!newerCtunCommand) {
+            if (pending.verb == "requestStreamCtunPinned") {
+                emit streamCtunPinFinished(pending.sliceId, pending.streamEpoch,
+                                           pending.requestedPin, message.accepted);
+            } else {
+                emit streamCentreFinished(pending.sliceId, pending.streamEpoch,
+                                          message.accepted);
+            }
+        }
+    }
+
     emit commandResult(message.commandId, message.accepted, message.reason);
 }
 
@@ -1899,6 +1969,14 @@ void StationClient::send(const SessionMessage& message)
         return;
     }
     m_transport->sendText(SessionMessages::encode(message));
+}
+
+bool StationClient::remoteCtunAvailable() const
+{
+    return m_sessionActive && m_authenticated && m_handshakeComplete
+        && m_transport && m_transport->isOpen()
+        && m_agreedMinor >= kRemoteCtunSessionProtocolMinor
+        && m_capabilities.remoteCtunVersion >= 1;
 }
 
 bool StationClient::mediaAvailable() const
