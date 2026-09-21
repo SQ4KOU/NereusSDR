@@ -303,10 +303,10 @@ LAN run. This milestone is a display checkpoint, not completed R3.
 **Requirements:** R-R3-13 through R-R3-15. **Dependencies:** authenticated
 state mirror and decoded remote display.
 
-- [ ] Publish separate read-only `SliceModel.signalPeakDbm` and
+- [x] Publish separate read-only `SliceModel.signalPeakDbm` and
   `signalAverageDbm` from the existing Core meter pump. Preserve the legacy
   selected `signalStrengthDbm` property and local direct behavior.
-- [ ] Feed the remote applet and slice meters from these properties,
+- [x] Feed the remote applet and slice meters from these properties,
   selecting the existing peak/average modes locally. Obtain Max Bin from
   each slice's decoded passband. Start the GUI meter timer without waiting
   for a local WDSP channel, and clear readings on disconnect.
@@ -408,11 +408,11 @@ whole-plan review loops.
 | --- | --- | --- |
 | R2 baseline | Preserved rollback checkpoint `14124e7c` | Authenticated control/tuning/meter baseline retained; installed runtime advanced to `ea55d24a` |
 | Combined open-PR recovery | Complete source checkpoint `14124e7c` | GUI/Core build and unfiltered 662/662 desktop tests pass; fixture-path workaround recorded separately |
-| Native combined Core | Installed at signed `3c4b15e6`, with `f8531cd9` rollback | ARM build/stage/install, authenticated display and live Clarity floor input pass; [verification ledger](2026-09-20-remote-daemon-r3-verification/README.md) |
+| Native combined Core | Installed at signed `74145a4b`, with `3c4b15e6` rollback | Native build/stage/install passed; previous checkpoint has authenticated display and live Clarity evidence; new applet visual acceptance pending; [verification ledger](2026-09-20-remote-daemon-r3-verification/README.md) |
 | Plan review and mixed-stereo choice | Lead, recorded | Current review; user confirmed mixed stereo and Opus |
 | Direct media transport | Production adapter and MediaPeer integrated | Real encrypted peers, bounded callbacks, stop/restart/delete regressions pass; live display capture passes: Ethernet, 969-byte maximum IP packet; separate SRTP-size proof pending |
 | Headless FFT and display codec | Implemented and component-tested | Independent Wide/Fine sources, retune input reset, independent planes, crop clamp, bounded codec and recovery tests pass; authenticated daemon-to-GUI regression and live Saturn display pass |
 | Audio | Opus/RTP and mixed-audio capture tests pass | Stereo wideband 24/48 kbit/s packet checks, mixer gain/mute/pan, bounded capture timestamps and retirement pass; sender, jitter, adaptive clock correction and playback remain pending |
 | GUI media wiring | Desktop builds; initial focused checks pass | Dedicated reduced-frame renderer and authenticated subscription controller tested; two-pane, shared-window and reconnect regressions pass; live GPU spectrum/2D observed; operator 3D confirmation and gesture refinement pending |
-| Applet S-meter | Implementation and verification in progress | Local DSP polling was still active in the remote meter; peak/average telemetry and decoded-passband Max Bin now under test |
+| Applet S-meter | Implemented, 673/673 suite passed; Core installed | Peak/average telemetry and decoded-passband Max Bin tested; matching GUI built and signed, but reopening and visual acceptance wait for Mac unlock |
 | BPF and Auto AGC-T indicators | Confirmed remaining bindings | R-R3-14 and R-R3-15; source audit complete, implementation pending |

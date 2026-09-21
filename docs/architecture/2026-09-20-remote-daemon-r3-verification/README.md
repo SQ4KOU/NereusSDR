@@ -5,11 +5,13 @@ and real remote receive acceptance. A component pass does not close R3.
 
 ## Current receive status, September 21
 
-The installed checkpoint is `3c4b15e6`: authenticated Core control, live
-spectrum/2D waterfall, station display calibration and Clarity floor input
-have hardware evidence below. Clarity's saved black-level/palette adjustment
-and subjective comparison remain pending. The applet meter correction is
-under verification in the working tree. Remote audio playback, BPF/WIDE
+Core is installed at `74145a4b`; the matching GUI build is ready, but the
+running GUI is still `3c4b15e6` because the Mac is locked. The previous
+checkpoint has authenticated Core control, live spectrum/2D waterfall,
+station display calibration and Clarity floor-input evidence below. The
+meter correction passed 673/673 tests and native installation; visible
+needle verification waits for GUI restart. Clarity's saved black-level/palette
+adjustment and subjective comparison also remain pending. Remote audio playback, BPF/WIDE
 indicator bindings, Auto AGC-T visuals, capacity/long-run acceptance and R5
 internet traversal are still unfinished. Earlier sections record evidence
 at their named checkpoints; their then-pending items are not current status.
@@ -396,3 +398,30 @@ state in the remote GUI. The existing RadioModel connection-state mirror
 already has a client apply path; no blanket claim that all connection status
 is broken is made here. The meter correction does not close these other
 requirements or the mixed-stereo Opus milestone.
+
+## Installed meter checkpoint, 74145a4b
+
+Signed commit `74145a4bcfc2504547e563d230aa54b5ad7f452e` is installed on
+the Rock 5C. All 18 files exported from the prior deployed checkpoint were
+verified against signed Git blobs and SHA-256 hashes, then verified again
+on the board. The native Release build passed, daemon and license components
+were staged, and installation succeeded with the prior configuration and
+binaries retained in
+`/var/lib/nereus-build/rollback-3c4b15e6-before-74145a4b/`.
+The service is active, with `Result=success`, `ExecMainStatus=0` and zero
+restarts. Only a service restart was tested, not a board reboot.
+
+The Mac GUI build identifies itself as `codex/integrate-r2-main@74145a4b`
+and passes strict code-signature verification. It has **not** been reopened:
+the Mac remained locked at the final UI check. The running old GUI is not
+evidence of the new meter behavior. Visible applet/flag movement and mode
+switching on the real Saturn feed remain pending, along with the earlier
+Clarity profile adjustment. No RF transmission was performed.
+
+Installed SHA-256 values:
+
+| File | SHA-256 |
+| --- | --- |
+| `nereusd` | `8e0b6483c27ac79c757b41e02bdcf78eee31e8b16a07f01f066c2fc6c0faa599` |
+| `libNereusCore.so` | `f78ae36d2ae7cc3ce7cf19c6f179ee326bae814186d24bd23dedf172a4b3e8c8` |
+| `librade.so.0.1` | `18e56fe8ee4b8a8450cc786cbcfed9bab147ec11df64e33486ce50e0ff91c32f` |
