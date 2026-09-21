@@ -131,6 +131,8 @@ by the earlier brainstorming, and this review does not present them as such.
 | R-R3-25 | Receive-only remote frequency changes, snapshot replay and inbound accessory telemetry cannot initiate tune-carrier orchestration or TX-coupled accessory commands. Apply the guard before enabling repaired TGXL connection/telemetry. Local-direct operation retains its established behavior; authorized remote TX/tuner workflows remain R4. |
 | R-R3-26 | A configured Core listener recovers when its bind address becomes available after startup. A running radio service must not silently remain without remote control after a transient bind failure. Retry is bounded/backed off, preserves station identity, and is cancelled by stop/reconfiguration; readiness and errors are observable. |
 | R-R3-27 | A daemon that starts before its configured radio is discoverable can later recover that same radio without a daemon restart. Discovery retries must preserve the pinned radio choice, station identity and slice ownership, remain cancellable, and keep the Core control plane responsive. Listener recovery alone does not establish radio recovery. |
+| R-R3-28 | Unexpected media transport failure/closure must recover through a fresh authenticated session even when Core control remains connected. Recovery reuses the configured endpoint, certificate pin, pairing, bounded backoff and authoritative snapshot; manual Disconnect/teardown cancels it. Stale peer callbacks cannot reconnect a newer or intentionally stopped session. Ordinary audio jitter/device errors and permanent protocol refusals do not trigger whole-session retry. |
+| R-R3-29 | An established radio stream that stops delivering data must not remain indefinitely presented as healthy. Detect and report receive silence using the protocol's authoritative behavior, safely retire stale DSP/media state, and provide cancellable recovery of the selected radio. Verify separately from initial discovery, first-packet connection timeout and GUI/Core media loss; preserve receive-only/TX safety policy. |
 
 The authorized radio is the ANAN-G2/Saturn, MAC `2C:CF:67:AB:FC:F4`, board
 `0x0A`; the September 20 instruction supersedes the old G2E-only bench rows.
@@ -527,11 +529,13 @@ unavailable until implemented. Full administration/pairing remains R6.
   from MainWindow to the authoritative Core slice wiring. Follow the stable
   TX-bound slice, including binding change/removal, and remove duplicate GUI
   sends. Retain source attribution and current wire behavior.
-- [ ] Resolve the separate real-device control-port issue with read-only
-  evidence. The current `.235:9008` setting addresses the amplifier; `.234`
-  advertises the tuner but TCP 9010 times out from both hosts. Another-client
-  occupancy is a question, not a proven cause. After the guards pass, correct
-  the endpoint and verify basic connection/status without tuning or RF.
+- [ ] Complete Core-owned real-device connection/status acceptance without
+  tuning or RF. The former `.235:9008` endpoint addressed the amplifier.
+  On September 21 the actual tuner `.234:9010` became reachable; the user
+  corrected the local GUI port and status responses arrived. That resolves
+  the current local TCP question, not remote Core ownership. The connect-time
+  retry path also emitted invalid-descriptor/source-bind errors after timeouts;
+  reproduce and correct its cancellation/lifecycle behavior.
 
 **Acceptance:** a PGXL banner/status never yields a connected tuner; supported
 tuner identity does, and unknown/timeout responses leave an actionable error.
@@ -702,6 +706,27 @@ rules, configuration sample and the R3 verification ledger.
   Software recovery/cancellation and capped-backoff regressions now pass,
   including the full 682-test suite; installation and late-network board
   acceptance remain pending (see the verification ledger).
+- [ ] R-R3-28: reproduce established media loss with a healthy control session,
+  then route typed terminal transport failures through cancellable authenticated
+  reconnect. The current controller only stops media and shows a toast, leaving
+  the connection panel misleadingly healthy. Reuse existing StationClient retry
+  rather than inventing another peer-replacement protocol. Verify manual cancel,
+  stale epochs, one preserved slice and real resumed display/audio; distinguish
+  packet validation/device errors from retryable transport lifecycle failure.
+  Track initial backend start refusal, negotiation without a terminal event,
+  and repeated media failures across successful control handshakes separately:
+  the current control backoff resets at handshake, so it cannot by itself prove
+  growing backoff across those media failures. See [recovery evidence](2026-09-20-remote-daemon-r3-verification/media-recovery.md).
+- [ ] R-R3-29: audit and reproduce established P2 receive silence. The current
+  first-packet watchdog is disarmed after initial I/Q and does not cover a later
+  zero-ingress connection. Follow source-first protocol behavior before adding
+  loss detection/recovery. The source audit found Thetis ChannelMaster
+  `network.c:655-666` uses a three-second all-inbound-UDP deadline followed by
+  SendStop/zero notification; it does not itself implement automatic reconnect.
+  Keep that source behavior distinct from a separately justified Nereus retry
+  policy. A loopback P2 fake must send a real DDC packet, then cease ingress
+  while command egress continues. Verify no healthy status during indefinite silence,
+  no wrong-radio selection, and cancellation/receive-only safety.
 - [ ] R-R3-27: cover startup with the configured radio absent, then present.
   `DaemonApp::resolveRadioInfo()` currently performs one startup discovery;
   the no-radio branch explicitly leaves later recovery to a service restart.
@@ -737,11 +762,11 @@ whole-plan review loops.
 | --- | --- | --- |
 | R2 baseline | Preserved rollback checkpoint `14124e7c` | Authenticated control/tuning/meter baseline retained; installed runtime advanced to `ea55d24a` |
 | Combined open-PR recovery | Complete source checkpoint `14124e7c` | GUI/Core build and unfiltered 662/662 desktop tests pass; fixture-path workaround recorded separately |
-| Native combined Core | Installed signed `95b19467`, rollback `501b2701` | Corrected native rebuild/stage/install and matching GUI signature passed. Latest receive smoke failed with audio stalls and eventual connection loss; see [verification ledger](2026-09-20-remote-daemon-r3-verification/README.md). |
+| Native combined Core | Installed signed `8c011066`, rollback `95b19467` | Native rebuild/stage/install and GUI signature passed. Startup wire/host mismatch fixed live; media closure/recovery and playback acceptance remain open; see [verification ledger](2026-09-20-remote-daemon-r3-verification/README.md). |
 | Plan review and mixed-stereo choice | Lead, recorded | Current review; user confirmed mixed stereo and Opus |
 | Direct media transport | Production adapter and MediaPeer integrated | Real encrypted peers, bounded callbacks, stop/restart/delete regressions pass; live display capture passes: Ethernet, 969-byte maximum IP packet; separate SRTP-size proof pending |
 | Headless FFT and display codec | Implemented and component-tested | Independent Wide/Fine sources, retune input reset, independent planes, crop clamp, bounded codec and recovery tests pass; authenticated daemon-to-GUI regression and live Saturn display pass |
-| Audio | First sound previously confirmed; latest smoke failed | Offline drift and encrypted session regressions pass. At `95b19467`, audio contexts repeatedly received one playable packet and late arrivals before timeout. Startup wire/host mismatch now reproduced on hardware (48/192 kHz); startup correction and source/encoding/transport-admission diagnostics passed 682 test executables, pending install. No network or VFO cause is established. |
+| Audio | First sound previously confirmed; latest smoke failed | Offline drift and encrypted session regressions pass. At `95b19467`, audio contexts repeatedly received one playable packet and late arrivals before timeout. Startup wire/host mismatch fixed live at `8c011066` (192/192 kHz), source now 48 kHz with about 25 Opus packets/s. User reports smooth when working; Starlink/ZeroTier arrival gaps and unrecovered media closure remain. No VFO cause is established. |
 | GUI media wiring | Desktop builds; initial focused checks pass | Dedicated reduced-frame renderer and authenticated subscription controller tested; two-pane, shared-window and reconnect regressions pass; live GPU spectrum/2D observed; operator 3D confirmation and gesture refinement pending |
 | Tuning waterfall continuity | Visual regression corrected; focused tests pass | R-R3-04/09/10: subscription/context renewal preserves painted 2D/3D history while rejecting stale incoming planes; accepted RF geometry reprojects existing rows. Full-suite and live tuning gates remain recorded in the verification ledger. |
 | Remote C-Tune control parity | R-R3-18 installed at `501b2701`; reported gestures accepted | Authenticated stream pin/centre commands, stream-lifetime guards, gesture-time pan selection, refusal rollback and reducer initialization pass the 681/681 combined suite. Matching Core/GUI are running; operator confirmed both wheel tuning and in-band scale zoom behave smoothly. Broader multi-slice hardware checks remain in task 6. |
@@ -750,6 +775,6 @@ whole-plan review loops.
 | BPF and Auto AGC-T indicators | Source implementation and focused tests pass | R-R3-14/15: station filter snapshot/reconnect, headless per-stream AGC source, active-applet/flag bindings implemented; live 20m filter and AGC floor observed, complete band/reconnect acceptance pending |
 | Manual Core reconnect | Configured-endpoint controls installed at `95b19467`; full live acceptance open | Persistent controller/panel and title/station/pan routing have focused tests. Title opens details and manual Disconnect cancelled retry in the latest smoke; successful recovery and all entry points remain pending. |
 | Visible controls and snapshot hydration | Bounded task 4c implementation installed at `95b19467` | Startup implicit slice creation is fixed and covered; fresh live attach displayed one slice. TX applet/PureSignal/filter-match, FIR and tuner gates are implemented. Phone/CW, XIT, TX settings and other remaining surfaces are listed in the control matrix. |
-| Station accessories / TGXL | Receive-only guards and 13-field telemetry adapter installed; task 4d remains open | Snapshot replay is non-actuating; raw transmit writes and automatic tuner carrier requests are refused. Positive device identity, retry cancellation, Core-owned configuration/actions and headless frequency/mode propagation remain. Actual tuner TCP connectivity is unverified. |
+| Station accessories / TGXL | Receive-only guards and 13-field telemetry adapter installed; task 4d remains open | Snapshot replay is non-actuating; raw transmit writes and automatic tuner carrier requests are refused. Positive device identity, retry cancellation, Core-owned configuration/actions and headless frequency/mode propagation remain. The user corrected the local GUI endpoint to the reachable tuner at .234:9010; status responses now arrive. Core-owned connectivity/identity and commands remain unverified; ANT1–3 are intentionally gated in this receive-only checkpoint. |
 | Audio controls and diagnostics | R-R3-23 open; task 5a | Fixed 24 kbit/s stereo is active; persistent profile/health/output feedback and measured 24/48 comparison remain. A selectable quality profile needs an acknowledged Core contract; no adaptive-rate claim. |
-| Boot recovery | R-R3-26 software passed at `e518b63d`; hardware pending | Listener retries reuse station identity and cancel on stop; 682 test executables pass. Separate R-R3-27 covers one-shot initial radio discovery. |
+| Boot recovery | R-R3-26 included in installed `8c011066`; late-address boot pending | Listener retries reuse station identity and cancel on stop; 682 test executables pass. Separate R-R3-27 covers one-shot initial radio discovery. |

@@ -27,6 +27,7 @@ public:
 public slots:
     void connectToStation();
     void disconnectFromStation();
+    void recoverMediaSession(quint32 expectedEpoch, const QString& reason);
 signals:
     void changed();
 private:
@@ -34,6 +35,7 @@ private:
     QPointer<RadioModel> m_model;
     RemoteStationOptions m_options;
     bool m_operatorDisconnected = false;
+    quint32 m_pendingMediaRecoveryEpoch = 0;
     int m_retryAttempt = 0;
     int m_retryDelayMs = 0;
 };

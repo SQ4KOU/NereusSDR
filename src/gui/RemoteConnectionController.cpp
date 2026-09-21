@@ -18,10 +18,12 @@ RemoteConnectionController::RemoteConnectionController(
             this, &RemoteConnectionController::changed);
     connect(client, &StationClient::handshakeComplete, this, [this] {
         m_operatorDisconnected = false;
+        m_pendingMediaRecoveryEpoch = 0;
         m_retryAttempt = 0;
         emit changed();
     });
     connect(client, &StationClient::sessionEnded, this, [this](const QString&) {
+        m_pendingMediaRecoveryEpoch = 0;
         emit changed();
     });
     connect(client, &StationClient::reconnectScheduled, this,
@@ -117,8 +119,33 @@ void RemoteConnectionController::disconnectFromStation()
     if (!m_client) { return; }
     // Latch before synchronous teardown emits state and retained-radio signals.
     m_operatorDisconnected = true;
+    m_pendingMediaRecoveryEpoch = 0;
     m_client->disconnectFromStation(QStringLiteral("operator disconnect"));
     emit changed();
+}
+
+void RemoteConnectionController::recoverMediaSession(quint32 expectedEpoch,
+                                                      const QString& reason)
+{
+    if (!m_client || m_operatorDisconnected || expectedEpoch == 0
+        || !m_client->isHandshakeComplete()
+        || m_client->sessionEpoch() != expectedEpoch
+        || m_pendingMediaRecoveryEpoch == expectedEpoch) {
+        return;
+    }
+    m_pendingMediaRecoveryEpoch = expectedEpoch;
+    QMetaObject::invokeMethod(this, [this, expectedEpoch, reason] {
+        if (m_pendingMediaRecoveryEpoch != expectedEpoch) { return; }
+        m_pendingMediaRecoveryEpoch = 0;
+        if (!m_client || m_operatorDisconnected
+            || !m_client->isHandshakeComplete()
+            || m_client->sessionEpoch() != expectedEpoch) {
+            return;
+        }
+        m_client->disconnectFromStation(
+            reason.isEmpty() ? QStringLiteral("station media connection failed") : reason,
+            true);
+    }, Qt::QueuedConnection);
 }
 
 RemoteConnectionPanel::RemoteConnectionPanel(RemoteConnectionController* controller,

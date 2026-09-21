@@ -630,7 +630,11 @@ void LibDataChannelMediaTransport::drainCallbacks()
             emit errorOccurred(QString::fromStdString(event.first));
             break;
         case CallbackEvent::Kind::PeerFailed:
-            emit errorOccurred(QString::fromStdString(event.first));
+            // Terminal peer connectivity is a recovery decision for the
+            // authenticated session owner.  Keep it typed: generic media
+            // errors also describe malformed packets and local decoder/device
+            // failures, none of which may redial the station.
+            emit connectionFailed(QString::fromStdString(event.first));
             mustStop = true;
             break;
         case CallbackEvent::Kind::PeerClosed:

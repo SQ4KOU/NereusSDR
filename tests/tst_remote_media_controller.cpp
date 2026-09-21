@@ -41,6 +41,9 @@ public:
     bool isReady() const override { return active; }
     void activate() { active = true; emit ready(); }
     void deliver(const QByteArray& packet) { emit displayReceived(packet); }
+    void failConnection(const QString& reason) { emit connectionFailed(reason); }
+    void closeUnexpectedly() { active = false; emit closed(); }
+    void reportGenericError(const QString& reason) { emit errorOccurred(reason); }
     bool active = false;
     QPointer<DisplayTransport> other;
 };
@@ -67,6 +70,166 @@ int countControl(const QSignalSpy& spy, const QString& op)
 class TestRemoteMediaController : public QObject {
     Q_OBJECT
 private slots:
+    void preReadyTypedFailureRequestsRecovery()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        QPointer<DisplayTransport> media;
+        RemoteMediaController controller(&client, &remote, nullptr, nullptr,
+            [&media](QObject* owner) -> IMediaTransport* {
+                media = new DisplayTransport(owner);
+                return media;
+            });
+        QSignalSpy recoveries(&controller, &RemoteMediaController::recoveryRequested);
+        auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(client.isHandshakeComplete());
+        QTRY_VERIFY(media);
+        const quint32 epoch = client.sessionEpoch();
+
+        // PeerFailed is transient connectivity even before ICE reaches ready.
+        media->failConnection(QStringLiteral("media peer connection failed"));
+        QTRY_COMPARE(recoveries.size(), 1);
+        QCOMPARE(recoveries.constFirst().at(0).toUInt(), epoch);
+    }
+
+    void diagnosticConsumerMayDeleteControllerDuringRecovery()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        QPointer<DisplayTransport> media;
+        QPointer<RemoteMediaController> controller = new RemoteMediaController(
+            &client, &remote, nullptr, nullptr,
+            [&media](QObject* owner) -> IMediaTransport* {
+                media = new DisplayTransport(owner);
+                return media;
+            });
+        int recoveries = 0;
+        connect(controller, &RemoteMediaController::recoveryRequested,
+                this, [&recoveries](quint32, const QString&) { ++recoveries; });
+        connect(controller, &RemoteMediaController::errorOccurred,
+                this, [controller](const QString&) { delete controller.data(); });
+        auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(client.isHandshakeComplete());
+        QTRY_VERIFY(media);
+        media->activate();
+
+        media->closeUnexpectedly();
+        QVERIFY(controller.isNull());
+        QCOMPARE(recoveries, 0);
+    }
+
+    void establishedMediaCloseRequestsOneEpochScopedRecovery()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        QPointer<DisplayTransport> media;
+        RemoteMediaController controller(&client, &remote, nullptr, nullptr,
+            [&media](QObject* owner) -> IMediaTransport* {
+                media = new DisplayTransport(owner);
+                return media;
+            });
+        QSignalSpy recoveries(&controller, &RemoteMediaController::recoveryRequested);
+
+        auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(client.isHandshakeComplete());
+        QTRY_VERIFY(media);
+        media->activate();
+        const quint32 epoch = client.sessionEpoch();
+
+        media->closeUnexpectedly();
+        QTRY_COMPARE(recoveries.size(), 1);
+        QCOMPARE(recoveries.constFirst().at(0).toUInt(), epoch);
+        QVERIFY(recoveries.constFirst().at(1).toString().contains(
+            QStringLiteral("media"), Qt::CaseInsensitive));
+
+        // A terminal failure may be followed by the backend's closed event.
+        // The controller must request one full-session recovery, not two.
+        if (media) {
+            media->failConnection(QStringLiteral("media peer connection failed"));
+            media->closeUnexpectedly();
+        }
+        QCoreApplication::processEvents();
+        QCOMPARE(recoveries.size(), 1);
+    }
+
+    void deliberateSessionEndAndGenericMediaErrorDoNotRequestRecovery()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        QPointer<DisplayTransport> media;
+        RemoteMediaController controller(&client, &remote, nullptr, nullptr,
+            [&media](QObject* owner) -> IMediaTransport* {
+                media = new DisplayTransport(owner);
+                return media;
+            });
+        QSignalSpy recoveries(&controller, &RemoteMediaController::recoveryRequested);
+        auto connectSession = [&] {
+            auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+            auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+            stationLink->linkTo(clientLink);
+            client.startSession(clientLink, server.token());
+            server.acceptTransport(stationLink);
+            QTRY_VERIFY(client.isHandshakeComplete());
+            QTRY_VERIFY(media);
+            media->activate();
+        };
+
+        connectSession();
+        media->reportGenericError(QStringLiteral("invalid media packet"));
+        QCoreApplication::processEvents();
+        QCOMPARE(recoveries.size(), 0);
+
+        client.disconnectFromStation(QStringLiteral("reset after generic error"));
+        connectSession();
+        QVERIFY(media && media->active);
+        // This disconnect retires a live current media peer. Its local stop
+        // must not be reclassified as an unexpected transport close.
+        client.disconnectFromStation(QStringLiteral("operator disconnect"));
+        QCoreApplication::processEvents();
+        QCOMPARE(recoveries.size(), 0);
+    }
+
     void remoteCtunProjectionPreservesPreferenceWithoutEcho()
     {
         SpectrumWidget widget;

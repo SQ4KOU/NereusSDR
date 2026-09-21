@@ -68,6 +68,10 @@ signals:
     void rtpReceived(const QByteArray& packet);
     void ready();
     void closed();
+    /// The underlying peer connection entered a terminal transport-failure
+    /// state.  Kept separate from validation/decoder errors so session
+    /// recovery never depends on matching an error string.
+    void connectionFailed(const QString& message);
     void errorOccurred(const QString& message);
 };
 

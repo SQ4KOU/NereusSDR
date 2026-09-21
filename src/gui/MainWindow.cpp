@@ -982,6 +982,9 @@ void MainWindow::connectToStation()
             qCWarning(lcConnection) << "Station media:" << reason;
             showToast(tr("Station media: %1").arg(reason), ToastSeverity::Warning, 5000);
         });
+        connect(m_remoteMedia, &RemoteMediaController::recoveryRequested,
+                m_remoteConnection, &RemoteConnectionController::recoverMediaSession,
+                Qt::QueuedConnection);
 
         connect(m_stationClient, &StationClient::handshakeComplete, this, [this]() {
             qCInfo(lcConnection) << "Station handshake complete:" << m_station.url;

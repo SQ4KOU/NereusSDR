@@ -269,6 +269,12 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId)
                     self->stop();
                 }
             });
+    connect(transport, &IMediaTransport::connectionFailed, this,
+            [self, isCurrentGeneration](const QString& message) {
+                if (isCurrentGeneration()) {
+                    emit self->connectionFailed(message);
+                }
+            });
     connect(transport, &IMediaTransport::errorOccurred, this,
             [self, isCurrentGeneration](const QString& message) {
                 if (isCurrentGeneration()) {

@@ -6,19 +6,38 @@
 #include <QTemporaryDir>
 #include <QTcpServer>
 #include <QWebSocketServer>
+#include <QSslSocket>
 #include "core/AppSettings.h"
+#include "core/AudioEngine.h"
 #include "core/session/IStationLink.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "core/settings/SettingsProxy.h"
 #include "gui/MainWindow.h"
 #include "gui/RemoteConnectionController.h"
+#include "gui/RemoteMediaController.h"
 #include "gui/TitleBar.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "fakes/LoopbackTransport.h"
 
 using namespace NereusSDR;
+
+class RecoveryMediaTransport final : public IMediaTransport {
+public:
+    explicit RecoveryMediaTransport(QObject* parent) : IMediaTransport(parent) {}
+    bool start(const StartOptions&) override { return true; }
+    void stop() override { m_ready = false; }
+    bool acceptDescription(const QString&, const QString&) override { return true; }
+    bool acceptCandidate(const QString&, const QString&) override { return true; }
+    bool sendDisplay(const QByteArray&) override { return m_ready; }
+    bool sendRtp(const QByteArray&) override { return m_ready; }
+    bool isReady() const override { return m_ready; }
+    void activate() { m_ready = true; emit ready(); }
+    void closeUnexpectedly() { m_ready = false; emit closed(); }
+private:
+    bool m_ready = false;
+};
 
 class RecordingStationLink final : public IStationLink {
 public:
@@ -125,6 +144,99 @@ private slots:
         QVERIFY(!client.isConnectionActive());
         QVERIFY(controls.canConnect());
         QVERIFY(!controls.detailText().contains(QStringLiteral("Last failure:")));
+    }
+
+    void mediaRecoveryUsesPinnedCoreReconnectAndRetainsSlice()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt SSL support is unavailable");
+        }
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        const int sliceId = station.addSlice(QStringLiteral("pan-0"));
+        QVERIFY(sliceId >= 0);
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.lastError()));
+
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        client.setReconnectBackoffUnitMs(50);
+        RemoteConnectionController controls(&client, &remote,
+            {QStringLiteral("wss://127.0.0.1:%1").arg(server.serverPort()),
+             server.token(), server.certificateFingerprint(), false});
+        QPointer<RecoveryMediaTransport> transport;
+        RemoteMediaController media(&client, &remote, nullptr, nullptr,
+            [&transport](QObject* owner) -> IMediaTransport* {
+                transport = new RecoveryMediaTransport(owner);
+                return transport;
+            });
+        connect(&media, &RemoteMediaController::recoveryRequested,
+                &controls, &RemoteConnectionController::recoverMediaSession,
+                Qt::QueuedConnection);
+        QSignalSpy handshakes(&client, &StationClient::handshakeComplete);
+        QSignalSpy retries(&client, &StationClient::reconnectScheduled);
+
+        controls.connectToStation();
+        QTRY_COMPARE_WITH_TIMEOUT(handshakes.size(), 1, 15000);
+        QTRY_VERIFY(transport);
+        transport->activate();
+        SliceModel* const retained = remote.sliceById(sliceId);
+        QVERIFY(retained);
+        retained->setFrequency(retained->frequency() + 731.0);
+        QTRY_COMPARE(station.sliceById(sliceId)->frequency(), retained->frequency());
+        const double retainedFrequency = retained->frequency();
+        const quint32 failedEpoch = client.sessionEpoch();
+
+        // Drive the production chain: transport close -> MediaPeer close ->
+        // RemoteMediaController recovery -> queued connection controller.
+        transport->closeUnexpectedly();
+        QTRY_VERIFY_WITH_TIMEOUT(!retries.isEmpty(), 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(handshakes.size(), 2, 15000);
+        QVERIFY(client.sessionEpoch() > failedEpoch);
+        QCOMPARE(remote.sliceById(sliceId), retained);
+        QCOMPARE(retained->frequency(), retainedFrequency);
+        QCOMPARE(station.slices().size(), 1);
+        QCOMPARE(remote.slices().size(), 1);
+
+        // A stale close from the retired media epoch must not disturb the
+        // newly authenticated session.
+        const quint32 secondEpoch = client.sessionEpoch();
+        const int retriesAfterRecovery = retries.size();
+        emit media.recoveryRequested(failedEpoch,
+                                     QStringLiteral("stale media connection closed"));
+        QTest::qWait(100);
+        QCOMPARE(client.sessionEpoch(), secondEpoch);
+        QCOMPARE(retries.size(), retriesAfterRecovery);
+        QVERIFY(client.isHandshakeComplete());
+
+        // Peer failure and its trailing close can enqueue the same recovery
+        // twice. Only one station teardown/reconnect is admitted per epoch.
+        emit media.recoveryRequested(secondEpoch, QStringLiteral("media peer failed"));
+        emit media.recoveryRequested(secondEpoch, QStringLiteral("media peer closed"));
+        QTRY_COMPARE_WITH_TIMEOUT(retries.size(), retriesAfterRecovery + 1, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(handshakes.size(), 3, 15000);
+        QCOMPARE(remote.sliceById(sliceId), retained);
+        QCOMPARE(retained->frequency(), retainedFrequency);
+        QCOMPARE(station.slices().size(), 1);
+        QCOMPARE(remote.slices().size(), 1);
+
+        // The operator can cancel after recovery is queued but before its
+        // deferred teardown runs. The operator's intent wins.
+        const quint32 thirdEpoch = client.sessionEpoch();
+        emit media.recoveryRequested(thirdEpoch,
+                                     QStringLiteral("media peer connection failed"));
+        controls.disconnectFromStation();
+        const int retryCount = retries.size();
+        QTest::qWait(100);
+        QCOMPARE(retries.size(), retryCount);
+        QVERIFY(!client.isConnectionActive());
     }
 
     void displayedEndpointExcludesCredentials()

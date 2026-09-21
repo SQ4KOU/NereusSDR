@@ -24,6 +24,7 @@ public:
     int activeEndpointCount() const;
 
 signals:
+    void recoveryRequested(quint32 expectedEpoch, const QString& reason);
     void errorOccurred(const QString& reason);
     void displayFrameReceived(quint32 endpointId);
 
@@ -32,6 +33,7 @@ private:
     std::unique_ptr<Private> d;
     void start();
     void stop();
+    void requestRecovery(quint32 expectedEpoch, const QString& reason);
     void refreshSubscriptions();
     void refreshCtunState();
     void receiveControl(const QJsonObject& payload, quint32 epoch);

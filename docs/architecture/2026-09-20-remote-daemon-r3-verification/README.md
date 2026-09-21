@@ -3,7 +3,53 @@
 This ledger separates the recovered integration baseline, component evidence
 and real remote receive acceptance. A component pass does not close R3.
 
-## Current receive status, September 21
+## Current receive status, September 21, checkpoint 8c011066
+
+Signed `8c011066` is installed on the Rock and in the matching macOS GUI.
+It includes the listener retry, initial DDC-rate correction and audio diagnostics.
+All 45 packaged source hashes matched; native build, staging, dependency checks,
+installation with rollback, and GUI strict/deep signature verification passed.
+The previous installation is retained at
+`/var/lib/nereus-build/rollback-95b19467-before-8c011066/`.
+
+Installed SHA-256:
+
+| File | SHA-256 |
+| --- | --- |
+| nereusd | `4a685f62e6c9ed6a7e83fbe5daadda8eacf5aeb4079e7e30d481310e001b7202` |
+| libNereusCore.so | `325f7a99f81d02726b65bade69a0e8372604c635c484ca3e16e593cf4d2cdf05` |
+| librade.so.0.1 | `18e56fe8ee4b8a8450cc786cbcfed9bab147ec11df64e33486ce50e0ff91c32f` |
+
+The live startup defect is verified before/after: the old code commanded
+DDC2 at 48 kHz against a 192 kHz host; the new code converges to 192 kHz within
+2 ms of its initial bootstrap command. The GUI then displayed live 3D/2D,
+noise-floor telemetry and matching applet/flag meters (one observation -83 dBm).
+Core produced approximately 48,000 mixed frames and 25 Opus packets per second.
+See [startup/audio evidence](startup-audio.md).
+
+**Sustained receive acceptance remains open.** The user reported smooth output
+when working, then a disconnection without recovery while on Starlink through
+ZeroTier. The log separates two failures: audio underflows amid receive callback
+gaps up to 481 ms (later 1.855/6.032 s), and media closure at 17:39:01 while the
+control session remained authenticated. That state left the GUI saying Core
+connected with no live media. R-R3-28 now tracks automatic recovery of that
+specific state; see [media recovery evidence](media-recovery.md). Manual panel
+Disconnect/Connect restored a handshake and audio;
+later complete control-link losses entered the existing automatic retry path.
+
+Core was temporarily rebound to Wi-Fi `.105` using its unchanged certificate
+and pairing; Ethernet retained carrier but lost its IPv4 lease. The GUI's private
+launcher overrides the endpoint to `.105`. Subsequent Mac routing changed to
+local `en0`; the board again stopped answering SSH at `.105` and `.106`.
+At 18:04 the user reported `.106` back; the board had a fresh boot, both
+addresses, and a wired route to Saturn. Core and the private GUI launcher were
+restored to `.106` with unchanged pairing. The service (PID 1569 after that
+restart) listened successfully, and audio/display resumed. This is a successful
+ordinary restart, not a controlled late-address boot test. No OS, VPN, switch
+or network configuration was changed by this work. Network stability,
+sustained playback and a two-hour soak remain unaccepted.
+
+## Previous receive checkpoint, 95b19467
 
 Signed checkpoint `95b19467` is installed on the Rock 5C and its matching
 macOS GUI has been launched. It adds Core connection controls, snapshot-safe
@@ -93,8 +139,8 @@ was skipped. Eleven existing Qt cases inside those executables skipped for
 host-API availability or explicitly deferred harness/UI coverage; the new
 listener cases all executed. Full logs are private
 `r3-listener-full-{build,test,cases}.log`.
-Signed code checkpoint `e518b63d` is not yet installed; late-address boot and reconnect on the Rock
-remain pending. It does not claim to repair the network outage or media stalls.
+Signed code checkpoint `e518b63d` is included in the installed `8c011066`;
+a real late-address boot test remains pending. It does not claim to repair the network outage or media stalls.
 
 ## Combined baseline, 14124e7c
 

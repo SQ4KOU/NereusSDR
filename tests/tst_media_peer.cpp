@@ -119,6 +119,8 @@ public:
 
     void fireDisplay(const QByteArray& message) { emit displayReceived(message); }
     void fireRtp(const QByteArray& packet) { emit rtpReceived(packet); }
+    void fireConnectionFailed(const QString& reason) { emit connectionFailed(reason); }
+    void fireGenericError(const QString& reason) { emit errorOccurred(reason); }
 
     void fireReady()
     {
@@ -148,9 +150,41 @@ private slots:
     void strictControlBuffersCandidatesAndEnforcesCap();
     void outboundControlIsScopedAndBounded();
     void oldQueuedCallbacksCannotEnterNewGeneration();
+    void terminalConnectionFailureIsTypedAndGenerationScoped();
     void signalHandlersMayRestartOrDeletePeer();
     void realPeersExchangeQueuedControlAndDirectMedia();
 };
+
+void TestMediaPeer::terminalConnectionFailureIsTypedAndGenerationScoped()
+{
+    QList<QPointer<FakeTransport>> transports;
+    MediaPeer peer(nullptr, [&transports](QObject* parent) -> IMediaTransport* {
+        auto* transport = new FakeTransport(parent);
+        transports.push_back(transport);
+        return transport;
+    });
+    QSignalSpy failures(&peer, &MediaPeer::connectionFailed);
+    QSignalSpy errors(&peer, &MediaPeer::errorOccurred);
+
+    QVERIFY(peer.start(IMediaTransport::Role::Answerer, QLatin1String(kConnectionA)));
+    QVERIFY(transports.constLast());
+    transports.constLast()->fireGenericError(QStringLiteral("invalid media packet"));
+    QCOMPARE(errors.size(), 1);
+    QCOMPARE(failures.size(), 0);
+
+    transports.constLast()->fireConnectionFailed(QStringLiteral("media peer connection failed"));
+    QCOMPARE(failures.size(), 1);
+    QCOMPARE(failures.constFirst().constFirst().toString(),
+             QStringLiteral("media peer connection failed"));
+    QCOMPARE(errors.size(), 1);
+
+    QPointer<FakeTransport> stale = transports.constLast();
+    peer.stop();
+    QVERIFY(peer.start(IMediaTransport::Role::Answerer, QLatin1String(kConnectionB)));
+    QVERIFY(stale);
+    stale->fireConnectionFailed(QStringLiteral("stale peer failed"));
+    QCOMPARE(failures.size(), 1);
+}
 
 void TestMediaPeer::strictControlBuffersCandidatesAndEnforcesCap()
 {

@@ -83,10 +83,10 @@ VFO movement, spectrum, waterfall, meter, audio and disconnect/reconnect.
 
 The latest GUI log's 159–200 ms RTP arrival gaps and prompt Qt drain are
 consistent with a fourfold source slowdown, but do not prove the live wire
-rate. The board is reachable again at its Wi-Fi address `.105`; its wired port has
-carrier but lost its IPv4 lease. The existing installed checkpoint was
-temporarily rebound to `.105` with unchanged pairing and certificate. No live
-startup-rate correction is claimed before deploying and checking this code.
+rate. The deployment uses the board’s Wi-Fi address `.105`; its wired port has
+carrier but lost its IPv4 lease. Core was temporarily rebound to `.105` with
+unchanged pairing and certificate. The results below distinguish startup-rate
+verification from sustained media acceptance.
 
 ## Pre-install hardware evidence, September 21
 
@@ -97,3 +97,34 @@ computed codec assignment of 192 kHz. This establishes the live wire/host
 mismatch before the correction. Private capture: `r3-startup-rate-before.pcap`.
 The radio was reached through `wlan0`; Core listened on `.105`. Post-install
 wire convergence and continuous media remain separate acceptance checks.
+
+## Post-install hardware evidence, 8c011066
+
+The startup capture at 17:36:11 contains DDC2 mask `0x04` at 48 kHz followed
+1.96 ms later by mask `0x04` at **192 kHz**. The host log remains configured at
+192 kHz with one active receiver. Private capture: `r3-startup-rate-after.pcap`.
+This closes the observed initial wire/host mismatch, not all media acceptance.
+
+A 20.244-second interval in audio context 8 measured 48,003 source frames/s
+and 24.95 encoded packets/s, two source drop events, no encode failures and no
+transport refusals. Context 15 separately sustained 48 kHz/25 packets per second
+for ten seconds with no source drops. The GUI restored live 3D/2D spectrum and
+applet/flag meter movement. The operator reported smooth output when working.
+
+The current Starlink/ZeroTier receive path still had hundreds-of-milliseconds
+RTP callback gaps and playback restarts, later multi-second callback gaps.
+Owner-thread drain usually remained short. At 17:39:01 the media connection
+closed without ending the authenticated control session; no automatic media
+recovery occurred. That software gap is R-R3-28. Manual Core Disconnect/Connect
+restored audio, but sustained playback and recovery acceptance remain open.
+
+A later zero-ingress interval is distinct from the media-close failure: Core
+retained Connected state while source frame counters stayed zero, the radio
+answered ping, and a five-second capture saw no sustained inbound radio stream
+(zero captured packets, one received by the kernel filter).
+The existing P2 watchdog covers only first-packet startup, leaving established
+receive silence unhandled. After a fresh board boot was observed at 18:04,
+Core and GUI were returned to wired `.106`; 48 kHz source cadence and display
+resumed. The initial attempt to restart at `.105` had failed before SSH login,
+so it did not change the service. Established-radio silence recovery remains
+a separate gap from R-R3-27 initial discovery and R-R3-28 media recovery.

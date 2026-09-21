@@ -49,6 +49,7 @@ signals:
     void rtpReceived(const QByteArray& packet);
     void ready();
     void closed();
+    void connectionFailed(const QString& message);
     void errorOccurred(const QString& message);
 
 private:

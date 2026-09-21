@@ -15,7 +15,7 @@ Setup page or an assertion that all station accessories work.
 | Saved layout / snapshot | Core owns slices; GUI restoration only hydrates. Explicit post-snapshot layout/add remains a command | Authenticated attach/reconnect preserves one station slice; production population helper emits no implicit add; explicit action waits for readiness | Fresh attach displayed one slice; reconnect pending |
 | TX applet / PureSignal / TX filter match | Negotiated txPermitted + handshake; Core retains admission checks | Widget activation, no mutation when gating, preservation of independent disabled state; remote refusal | Tune/MOX/VOX disabled appearance observed; remaining controls pending; no RF test |
 | High-resolution FIR graph | Requires absent local RxChannel; visibly unavailable remotely | Remote/local checkbox interaction tests | Pending appearance; ordinary mirrored RX DSP is not classified as broken |
-| Tuner telemetry | Core TunerModel -> outbound mirror -> client-only assign/notify adapter | All 13 fields, false/zero updates and absence of accessory commands | Actual tuner TCP endpoint still unresolved |
+| Tuner telemetry | Core TunerModel -> outbound mirror -> client-only assign/notify adapter | All 13 fields, false/zero updates and absence of accessory commands | Actual tuner at .234:9010 is reachable; Core ownership/identity acceptance remains pending |
 | Tuner TUNE / operate / antenna / relay / recall | Receive-only remote capability blocks commands; Core policy additionally guards autotune callbacks | Authenticated band change and telemetry replay issue no tune; MOX/TUNE admission blocked before radio connection and after session teardown | No RF or tuner actuation permitted in this checkpoint |
 | Tuner cached values after Core loss | Retained values explicitly marked stale; unsupported remote accessory reconnect disabled | Applet session presentation/command tests | Pending disconnect smoke |
 
@@ -99,3 +99,31 @@ this checkpoint does not claim all visible controls are complete. Keep shared
 receive functions available: in particular, the antenna labelled TX participates
 in TRX receive routing, so its name alone is not grounds for disabling it.
 Review the actual station/receive effect before restricting Slice properties.
+
+## Follow-up at 8c011066
+
+Title-segment activation opened Core details while media had failed but the
+control session remained connected. Disconnect changed the panel to stopped
+with Connect enabled; Connect began a fresh handshake and restored audio at
+17:47:35. That verifies this manual recovery path. Automatic media-only
+recovery is still missing (R-R3-28); later full control-link losses exercised
+the existing retry path. The live receive status is tracked in the current
+[deployment ledger](README.md), not the older 95b19467 result above.
+
+## TGXL socket report and corrected endpoint, September 21
+
+At 18:23 the GUI was repeatedly attempting the actual tuner IP with port 9008.
+A read-only TCP connection check reached `.234:9010` in 0.01 seconds; port 9008
+timed out. The user corrected the port, and the GUI log then showed recurring
+status responses. This establishes local-GUI connectivity, not completion of
+Core-owned accessory configuration or positive identity validation.
+
+The retry log also exposed a separate lifecycle defect: after a connect timeout,
+source binding reported a socket that was not in UnconnectedState, followed by
+an invalid descriptor. That fault remains under investigation in task 4d.
+
+The user next reported that ANT1–3 appeared but did not work. These controls
+are explicitly disabled by the current receive-only remote policy; they are
+not repaired by correcting the TCP port. Enabling tuner RF-path actions remains
+part of the authorized remote tuner workflow, with Core ownership and capability
+checks. No tuner antenna, operate or tune commands were exercised here.

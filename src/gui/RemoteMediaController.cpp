@@ -183,6 +183,7 @@ struct RemoteMediaController::Private {
     bool preparingAudio = false;
     bool audioEnabled = false;
     bool audioRetryPending = false;
+    bool recoveryRequested = false;
     qint64 lastAudioRequestMs = -1000;
 };
 
@@ -338,12 +339,27 @@ void RemoteMediaController::stop()
     d->ctunStreams.clear();
 }
 
+void RemoteMediaController::requestRecovery(quint32 expectedEpoch, const QString& reason)
+{
+    if (d->recoveryRequested) { return; }
+    d->recoveryRequested = true;
+    QPointer<RemoteMediaController> self(this);
+    stop();
+    if (!self) { return; }
+    emit self->errorOccurred(reason);
+    // A diagnostic consumer may synchronously destroy this controller (or
+    // its StationClient parent). Never continue through a deleted sender.
+    if (!self) { return; }
+    emit self->recoveryRequested(expectedEpoch, reason);
+}
+
 void RemoteMediaController::start()
 {
     stop();
     if (!d->client || !d->client->mediaAvailable()) {
         return;
     }
+    d->recoveryRequested = false;
     d->epoch = d->client->sessionEpoch();
     d->connectionId = QUuid::createUuid().toString(QUuid::WithoutBraces);
     auto* peer = new MediaPeer(this, d->factory);
@@ -369,10 +385,15 @@ void RemoteMediaController::start()
             requestAudio();
         }
     });
-    connect(peer, &MediaPeer::closed, this, [this, current] {
+    connect(peer, &MediaPeer::connectionFailed, this,
+            [this, current, epoch](const QString& reason) {
         if (current()) {
-            stop();
-            emit errorOccurred(QStringLiteral("Station media connection closed"));
+            requestRecovery(epoch, reason);
+        }
+    });
+    connect(peer, &MediaPeer::closed, this, [this, current, epoch] {
+        if (current()) {
+            requestRecovery(epoch, QStringLiteral("Station media connection closed"));
         }
     });
     connect(peer, &MediaPeer::errorOccurred, this, [this, current](const QString& reason) {
