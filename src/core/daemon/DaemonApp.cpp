@@ -16,6 +16,9 @@
 #include "core/CoreInit.h"
 #include "core/FFTRouter.h"
 #include "core/LogCategories.h"
+#include "core/MoxController.h"
+#include "core/StepAttenuatorController.h"
+#include "core/TxSliceArbiter.h"
 #include "core/session/StationServer.h"
 #include "core/session/media/DaemonMediaController.h"
 #include "models/RadioModel.h"
@@ -58,6 +61,15 @@ bool DaemonApp::start(const DaemonConfig& cfg)
     NereusSDR::CoreInit::initialize();
 
     m_radioModel = std::make_unique<RadioModel>();
+    m_stepAttController = std::make_unique<StepAttenuatorController>();
+    m_radioModel->setStepAttController(m_stepAttController.get());
+    m_stepAttController->setReceiverManager(m_radioModel->receiverManager());
+    if (MoxController* const mox = m_radioModel->moxController()) {
+        connect(mox, &MoxController::hardwareFlipped,
+                m_stepAttController.get(),
+                &StepAttenuatorController::onMoxHardwareFlipped,
+                Qt::QueuedConnection);
+    }
 
     // R1 Task 11: dedicated thread for the wideband FFT dispatch hop --
     // RadioModel currently hops that work onto ITS OWN thread to stay off
@@ -90,9 +102,19 @@ bool DaemonApp::start(const DaemonConfig& cfg)
     // machine), never synthetically from start() itself.
     connect(m_radioModel.get(), &RadioModel::connectionStateChanged, this,
             [this](NereusSDR::ConnectionState state) {
+        if (m_stepAttControllerConfigured && m_stepAttController) {
+            if (state == ConnectionState::Connected && m_radioModel
+                && m_radioModel->connection()) {
+                applyStepAttenuatorConnection(
+                    m_radioModel->connection()->radioInfo().macAddress);
+            } else {
+                m_stepAttController->setRadioConnection(nullptr);
+            }
+        }
         emit radioConnected(state == ConnectionState::Connected);
     });
 
+    QString radioMac;
 #ifdef NEREUS_BUILD_TESTS
     if (m_testBoard.has_value()) {
         // Test-only path -- see primeBoardForTest()'s doc comment in
@@ -109,6 +131,7 @@ bool DaemonApp::start(const DaemonConfig& cfg)
         const int poolSlices = primedCaps.maxSlices > 0 ? primedCaps.maxSlices : 1;
         m_radioModel->configureStreamPool(primedCaps.userDdcCount, poolSlices,
                                            cfg.sampleRateHz);
+        radioMac = m_testRadioMac;
     } else
 #endif
     {
@@ -120,6 +143,7 @@ bool DaemonApp::start(const DaemonConfig& cfg)
             // store instead of new parameters on the connect call.
             applyConfigToSettings(cfg, info.macAddress);
             m_radioModel->connectToRadio(info);
+            radioMac = info.macAddress;
         } else {
             // Not a startup failure -- see start()'s own doc comment. The
             // radio may appear later; today's daemon does not retry, so an
@@ -134,6 +158,7 @@ bool DaemonApp::start(const DaemonConfig& cfg)
     }
 
     createConfiguredSlices(cfg.sliceCount);
+    configureStepAttenuatorController(radioMac);
     mintFftEndpoints();
 
     // Remote Daemon R2 Task 18: the wss control plane. AFTER the slices
@@ -165,6 +190,8 @@ void DaemonApp::stop()
     m_stationServer.reset();
 
     if (!m_radioModel) {
+        m_stepAttController.reset();
+        m_stepAttControllerConfigured = false;
         return;
     }
 
@@ -196,14 +223,102 @@ void DaemonApp::stop()
         m_widebandThread->wait();
     }
 
+    // Stop controller callbacks from the connection before RadioModel begins
+    // destroying that connection. Keep the controller itself alive through
+    // RadioModel teardown: teardownConnection() saves the controller's
+    // per-MAC state while the model still holds its non-owning pointer.
+    if (m_stepAttController) {
+        m_stepAttController->setRadioConnection(nullptr);
+    }
+
     // ~RadioModel() calls teardownConnection() and deletes every slice
     // (RadioModel.cpp), so resetting the pointer alone satisfies
     // "stop() leaves sliceCount() == 0." Reset before emitting so any
     // radioConnected(false) listener already sees a consistent
     // (sliceCount() == 0) state if it queries back into this object.
     m_radioModel.reset();
+    m_stepAttController.reset();
+    m_stepAttControllerConfigured = false;
 
     emit radioConnected(false);
+}
+
+void DaemonApp::configureStepAttenuatorController(const QString& mac)
+{
+    if (!m_radioModel || !m_stepAttController) {
+        return;
+    }
+
+    for (SliceModel* const slice : m_radioModel->slices()) {
+        wireStepAttenuatorSlice(slice);
+    }
+    connect(m_radioModel.get(), &RadioModel::sliceAdded, this,
+            [this](int index) {
+        if (!m_radioModel) {
+            return;
+        }
+        if (SliceModel* const slice = m_radioModel->sliceById(index)) {
+            wireStepAttenuatorSlice(slice);
+        }
+    });
+    if (TxSliceArbiter* const arbiter = m_radioModel->txSliceArbiter()) {
+        connect(arbiter, &TxSliceArbiter::txBoundSliceChanged, this,
+                [this](int, int) { syncStepAttenuatorBandAndMode(); });
+    }
+
+    m_stepAttControllerConfigured = true;
+    applyStepAttenuatorConnection(mac);
+}
+
+void DaemonApp::applyStepAttenuatorConnection(const QString& mac)
+{
+    if (!m_radioModel || !m_stepAttController) {
+        return;
+    }
+
+    const auto& caps = m_radioModel->boardCapabilities();
+    m_stepAttController->setMinAttenuation(caps.attenuator.minDb);
+    m_stepAttController->setMaxAttenuation(caps.attenuator.maxDb);
+    m_stepAttController->setHasStepAttenuatorCal(caps.hasStepAttenuatorCal);
+    m_stepAttController->setIsHpsdrBoard(caps.board == HPSDRHW::Atlas);
+    m_stepAttController->setRadioConnection(m_radioModel->connection());
+
+    // Select the current band before loading, because loadSettings restores
+    // the per-band RX attenuation and preamp slot for m_currentBand.
+    syncStepAttenuatorBandAndMode();
+    if (!mac.isEmpty()) {
+        m_stepAttController->loadSettings(mac);
+    }
+}
+
+void DaemonApp::wireStepAttenuatorSlice(SliceModel* slice)
+{
+    if (!slice) {
+        return;
+    }
+    connect(slice, &SliceModel::bandChanged, this,
+            [this, slice](Band) {
+        if (m_radioModel && slice == m_radioModel->txBoundSlice()) {
+            syncStepAttenuatorBandAndMode();
+        }
+    });
+    connect(slice, &SliceModel::dspModeChanged, this,
+            [this, slice](DSPMode) {
+        if (m_radioModel && slice == m_radioModel->txBoundSlice()) {
+            syncStepAttenuatorBandAndMode();
+        }
+    });
+}
+
+void DaemonApp::syncStepAttenuatorBandAndMode()
+{
+    if (!m_radioModel || !m_stepAttController) {
+        return;
+    }
+    if (SliceModel* const slice = m_radioModel->txBoundSlice()) {
+        m_stepAttController->setBand(slice->band());
+        m_stepAttController->setCurrentDspMode(slice->dspMode());
+    }
 }
 
 // Remote Daemon R2 Task 18. Opt-in: cfg.remotePort == 0 means "do not

@@ -1,6 +1,8 @@
 // no-port-check: NereusSDR-original. Remote display rendering contract.
 #include <QTest>
+#define private public
 #include "gui/SpectrumWidget.h"
+#undef private
 #include "core/session/media/SpectrumEndpoint.h"
 
 using namespace NereusSDR;
@@ -15,6 +17,7 @@ private slots:
         widget.show();
         QVERIFY(QTest::qWaitForWindowExposed(&widget));
         widget.setSpectrumRenderMode(int(SpectrumRenderMode::Mode3D));
+        widget.setDbmCalOffset(18.0f); // A remote client-local value is ignored.
         widget.setWfUpdatePeriodMs(20);
         widget.setActivePeakHoldEnabled(true);
         SpectrumEndpointContext context;
@@ -46,6 +49,31 @@ private slots:
         QTest::qWait(70);
         QCOMPARE(widget.dssRowsPushedForTest(), 1);
         QCOMPARE(widget.renderedPixels(), frame.traceDbm);
+    }
+
+    void remoteFramesIgnoreClientCalibrationWhileLocalRenderingKeepsIt()
+    {
+        SpectrumWidget local;
+        SpectrumWidget remote;
+        SpectrumWidget uncalibrated;
+        uncalibrated.setDbmCalOffset(0.0f);
+        local.setDbmCalOffset(18.0f);
+        remote.setDbmCalOffset(18.0f); // Deliberately wrong for the station.
+
+        SpectrumEndpointContext context;
+        context.codec = {19, 1, -180, 0, 64, 64, 0};
+        context.exactCentreHz = 14225000;
+        context.exactSpanHz = 24000;
+        remote.setRemoteSpectrumContext(context, context.exactCentreHz, 192000);
+
+        const QRect plot(0, 0, 640, 240);
+        constexpr float stationCalibratedDbm = -120.0f;
+        QCOMPARE(remote.dbmToY(stationCalibratedDbm, plot),
+                 uncalibrated.dbmToY(stationCalibratedDbm, plot));
+        QCOMPARE(remote.dbmToYf(stationCalibratedDbm, plot),
+                 uncalibrated.dbmToYf(stationCalibratedDbm, plot));
+        QVERIFY(local.dbmToY(stationCalibratedDbm, plot)
+                 < remote.dbmToY(stationCalibratedDbm, plot));
     }
 
     void contextReplacementRejectsOldDataAndClearsHistory()

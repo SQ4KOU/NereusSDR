@@ -5,6 +5,12 @@ channel. It has no socket, GUI, radio, or Qt Multimedia dependency. The codec
 is NereusSDR-original; its input is the output of the independent trace and
 waterfall reducers.
 
+R-R3-11: production rows are antenna-referenced dBm. Core applies the
+station calibration before reduction/quantization, including the optional
+wide row. A remote renderer must not add its own local radio calibration.
+This corrects the missing level calibration at the first display checkpoint;
+it does not change the v1 packet layout.
+
 ## Bounds and context
 
 One frame has an endpoint ID, a context generation, a 32-bit encoder sequence,

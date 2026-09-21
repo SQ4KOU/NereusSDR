@@ -132,6 +132,8 @@ namespace NereusSDR {
 class RadioModel;
 class StationServer;
 class DaemonMediaController;
+class SliceModel;
+class StepAttenuatorController;
 
 // Connects a headless nereusd process to a radio and keeps its slice list
 // in sync with the resolved DaemonConfig. See the file header above for
@@ -234,7 +236,10 @@ public:
     // generation that took over 5 minutes when measured directly for
     // this task, which is incompatible with an automated test's budget.
     // Not part of the public API.
-    void primeBoardForTest(HPSDRHW board) { m_testBoard = board; }
+    void primeBoardForTest(HPSDRHW board, const QString& mac = {}) {
+        m_testBoard = board;
+        m_testRadioMac = mac;
+    }
 
     // Test-only: the receiver/stream indices FFTRouter currently has
     // mapped for `consumerId` (RadioModel::fftRouter()->
@@ -312,6 +317,18 @@ private:
     // cannot bind is logged, not fatal. See the definition.
     void startStationServer(const DaemonConfig& cfg);
 
+    // Gives the headless daemon the same core-owned RX attenuation,
+    // preamp, overload and ATT-on-TX state that MainWindow wires in a
+    // desktop-local session. The controller is injected before the radio
+    // connect so RadioModel's connect-time capability and PureSignal paths
+    // can see it; this finishing step runs after slices exist so the
+    // controller can select the authoritative TX-bound band before loading
+    // that band's persisted values.
+    void configureStepAttenuatorController(const QString& mac);
+    void applyStepAttenuatorConnection(const QString& mac);
+    void wireStepAttenuatorSlice(SliceModel* slice);
+    void syncStepAttenuatorBandAndMode();
+
     // Tops up m_radioModel's slice list to min(cfg.sliceCount,
     // connected-board-maxSlices), starting from however many slices
     // connectToRadio() (or the disconnected-default / primed-board path)
@@ -365,6 +382,11 @@ private:
     void clearFftTopology();
 
     std::unique_ptr<RadioModel> m_radioModel;
+    // Non-GUI owner of the controller RadioModel and TransmitModel hold by
+    // raw pointer. It must outlive m_radioModel teardown because that path
+    // saves its per-MAC state before releasing the RadioConnection.
+    std::unique_ptr<StepAttenuatorController> m_stepAttController;
+    bool m_stepAttControllerConfigured {false};
 
     // Remote Daemon R2 Task 18: the wss control plane, constructed only
     // when cfg.remotePort is non-zero (0 means "do not listen", the
@@ -393,6 +415,7 @@ private:
 
 #ifdef NEREUS_BUILD_TESTS
     std::optional<HPSDRHW> m_testBoard;
+    QString m_testRadioMac;
 #endif
 };
 

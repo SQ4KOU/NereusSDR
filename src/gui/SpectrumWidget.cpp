@@ -5271,9 +5271,11 @@ float SpectrumWidget::normalizeShiftDb() const
 
 int SpectrumWidget::dbmToY(float dbm, const QRect& r) const
 {
-    // Phase 3G-8: apply display calibration offset before mapping to Y.
+    // Remote frames already carry the station's antenna calibration. The
+    // client preference remains a local-display adjustment only.
     // From Thetis display.cs:1372 Display.RX1DisplayCalOffset.
-    const float calibrated = dbm + m_dbmCalOffset + normalizeShiftDb();
+    const float displayOffset = m_remoteSpectrum ? 0.0f : m_dbmCalOffset;
+    const float calibrated = dbm + displayOffset + normalizeShiftDb();
     float bottom = m_refLevel - m_dynamicRange;
     float frac = (calibrated - bottom) / m_dynamicRange;
     frac = qBound(0.0f, frac, 1.0f);
@@ -5288,7 +5290,8 @@ int SpectrumWidget::dbmToY(float dbm, const QRect& r) const
 
 float SpectrumWidget::dbmToYf(float dbm, const QRect& r) const
 {
-    const float calibrated = dbm + m_dbmCalOffset + normalizeShiftDb();
+    const float displayOffset = m_remoteSpectrum ? 0.0f : m_dbmCalOffset;
+    const float calibrated = dbm + displayOffset + normalizeShiftDb();
     float bottom = m_refLevel - m_dynamicRange;
     float frac = (calibrated - bottom) / m_dynamicRange;
     frac = qBound(0.0f, frac, 1.0f);
@@ -11005,7 +11008,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
     // Thetis Display.cs:5249-5378 [v2.10.3.13] per-pixel render loop
     // (DrawLine over current_display_data[i], i = 0..nDecimatedWidth-1).
     // Honours:
-    //   - m_dbmCalOffset (shifts every pixel's dBm before y mapping)
+    //   - local m_dbmCalOffset (shifts local pixels before y mapping)
     //   - m_gradientEnabled (off = flat m_fillColor, on = heatmap)
     //   - m_panFill (skips fill VBO update when disabled)
     //   - m_fillColor / m_fillAlpha (used for the flat-fill path)
@@ -11019,7 +11022,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         const float yTop = 1.0f;
 
         const float fa = m_fillAlpha;
-        const float cal = m_dbmCalOffset;
+        const float cal = m_remoteSpectrum ? 0.0f : m_dbmCalOffset;
 
         // Flat-mode colour picked from m_fillColor.
         const float flatR = m_fillColor.redF();

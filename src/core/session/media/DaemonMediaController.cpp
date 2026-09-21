@@ -521,19 +521,33 @@ bool DaemonMediaController::handleKeyframe(const QJsonObject& control)
 
 void DaemonMediaController::onSourceFrame(MediaSourceKey key)
 {
-    const std::optional<DaemonSpectrumFrame> frame = m_source.takeLatest(key);
-    if (!frame.has_value()) {
+    const std::optional<DaemonSpectrumFrame> sourceFrame = m_source.takeLatest(key);
+    if (!sourceFrame.has_value() || !m_radioModel) {
         return;
     }
+
+    // The source-worker frame is in raw FFT dBFS plus window compensation.
+    // This controller and RadioModel share the station thread, so sample the
+    // authoritative meter calibration here before either reducer quantizes it.
+    // Reading it per frame keeps remote planes current across station preamp
+    // and step-attenuator changes without reading RadioModel from the worker.
+    DaemonSpectrumFrame frame = *sourceFrame;
+    const double stationOffsetDb = m_radioModel->rxMeterOffsetDb();
+    if (!std::isfinite(stationOffsetDb)
+        || !std::isfinite(frame.dbmOffset + stationOffsetDb)) {
+        return;
+    }
+    frame.dbmOffset += stationOffsetDb;
+
     for (auto it = m_endpoints.begin(); it != m_endpoints.end(); ++it) {
         EndpointEntry& entry = it->second;
         if (!(entry.request.source == key)) {
             continue;
         }
         if (!entry.endpoint.configured()
-            || entry.endpoint.context().sourceGeneration != frame->generation
+            || entry.endpoint.context().sourceGeneration != frame.generation
             || entry.endpoint.context().codec.contextGeneration == 0) {
-            configureEndpointFromFrame(entry, *frame);
+            configureEndpointFromFrame(entry, frame);
         }
         if (entry.endpoint.configured() && entry.contextSent) {
             entry.latestInput = frame;

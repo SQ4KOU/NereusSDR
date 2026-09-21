@@ -52,12 +52,15 @@
 #include <utility>
 
 #include "core/HpsdrModel.h"
+#include "core/MoxController.h"
+#include "core/StepAttenuatorController.h"
 #define private public
 #include "core/daemon/DaemonApp.h"
 #undef private
 #include "core/daemon/DaemonConfig.h"
 #include "core/session/StationServer.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
 
 using namespace NereusSDR;
 
@@ -204,6 +207,115 @@ private slots:
 
         QVERIFY(app.start(cfg));
         QCOMPARE(app.sliceCount(), 2);   // not 4
+
+        app.stop();
+    }
+
+    void headlessControllerUsesSaturnDefaultsAndCalibration()
+    {
+        DaemonConfig cfg = DaemonConfig::defaults();
+        cfg.sliceCount = 1;
+
+        DaemonApp app;
+        app.primeBoardForTest(HPSDRHW::Saturn,
+                              QStringLiteral("02:00:00:00:00:91"));
+        QVERIFY(app.start(cfg));
+
+        StepAttenuatorController* const controller =
+            app.m_stepAttController.get();
+        QVERIFY(controller != nullptr);
+        QCOMPARE(app.m_radioModel->stepAttController(), controller);
+        QVERIFY(controller->settingsLoaded());
+
+        const auto& caps = app.m_radioModel->boardCapabilities();
+        QCOMPARE(controller->minAttenuation(), caps.attenuator.minDb);
+        QCOMPARE(controller->maxAttenuation(), caps.attenuator.maxDb);
+        QCOMPARE(controller->hasStepAttenuatorCal(),
+                 caps.hasStepAttenuatorCal);
+        QVERIFY(!controller->isHpsdrBoard());
+
+        // This synthetic MAC has no persisted step-att/preamp keys. Preserve
+        // the controller's existing defaults: step ATT enabled at 0 dB.
+        // ANAN-G2/Saturn's Thetis factory calibration is -4.476 dB, so the
+        // live RadioModel offset must now be that value rather than the
+        // preamp-Off branch's +15.524 dB.
+        QVERIFY(controller->stepAttEnabled());
+        QCOMPARE(controller->attenuatorDb(), 0);
+        QCOMPARE(app.m_radioModel->rxMeterOffsetDb(),
+                 static_cast<double>(-4.476f));
+
+        app.stop();
+        QVERIFY(app.m_stepAttController == nullptr);
+    }
+
+    void headlessControllerTracksTxBandModeAndMox()
+    {
+        DaemonConfig cfg = DaemonConfig::defaults();
+        cfg.sliceCount = 1;
+
+        DaemonApp app;
+        app.primeBoardForTest(HPSDRHW::Saturn);
+        QVERIFY(app.start(cfg));
+
+        StepAttenuatorController* const controller =
+            app.m_stepAttController.get();
+        SliceModel* const txSlice = app.m_radioModel->txBoundSlice();
+        QVERIFY(controller != nullptr);
+        QVERIFY(txSlice != nullptr);
+
+        controller->setTxAttenuationForBand(Band::Band80m, 7);
+        controller->setTxAttenuationForBand(Band::Band20m, 11);
+        txSlice->setFrequency(3'830'000.0);
+        txSlice->setDspMode(DSPMode::LSB);
+        QCOMPARE(controller->attOnTxValue(), 7);
+        QCOMPARE(controller->currentDspMode(), DSPMode::LSB);
+
+        // Prove the daemon owns the desktop-equivalent MOX connection. With
+        // PS marked active, the ordinary per-band 7 dB TX value is selected
+        // rather than the force-31 safety branch, then RX restores to 0 dB.
+        controller->setPsActive(true);
+        app.m_radioModel->moxController()->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        app.m_radioModel->moxController()->setMox(true);
+        QTRY_COMPARE(controller->attenuatorDb(), 7);
+        app.m_radioModel->moxController()->setMox(false);
+        QTRY_COMPARE(controller->attenuatorDb(), 0);
+
+        app.stop();
+    }
+
+    void replacementSliceUsesStableIdForControllerWiring()
+    {
+        DaemonConfig cfg = DaemonConfig::defaults();
+        cfg.sliceCount = 2;
+
+        DaemonApp app;
+        app.primeBoardForTest(HPSDRHW::Saturn);
+        QVERIFY(app.start(cfg));
+
+        RadioModel* const model = app.m_radioModel.get();
+        StepAttenuatorController* const controller =
+            app.m_stepAttController.get();
+        QVERIFY(model != nullptr);
+        QVERIFY(controller != nullptr);
+        QVERIFY(model->sliceById(0) != nullptr);
+        QVERIFY(model->sliceById(1) != nullptr);
+
+        // Remove A, leaving B at list position 0, then recreate A. sliceAdded
+        // carries stable id 0 while the replacement is list position 1. A
+        // positional slices.at(0) lookup would silently wire B a second time.
+        model->removeSlice(0);
+        QVERIFY(model->sliceById(0) == nullptr);
+        QCOMPARE(model->addSlice(), 0);
+        SliceModel* const replacement = model->sliceById(0);
+        QVERIFY(replacement != nullptr);
+        QCOMPARE(model->slices().indexOf(replacement), 1);
+
+        QVERIFY(model->requestTxHandoffToSlice(0));
+        controller->setTxAttenuationForBand(Band::Band80m, 8);
+        replacement->setFrequency(3'830'000.0);
+        replacement->setDspMode(DSPMode::LSB);
+        QCOMPARE(controller->attOnTxValue(), 8);
+        QCOMPARE(controller->currentDspMode(), DSPMode::LSB);
 
         app.stop();
     }

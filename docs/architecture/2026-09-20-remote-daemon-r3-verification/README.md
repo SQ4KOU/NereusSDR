@@ -167,3 +167,59 @@ Installed SHA-256 values:
 Remaining R3 work includes the remote Opus sender/playback and clock-control
 path, gesture-margin refinement, session budgeting, multi-pan capacity and
 long hardware audio verification. R5 traversal requirements remain intact.
+
+## Receive-path investigation, September 21
+
+At installed checkpoint `ea55d24a`, the operator reported little/no signal.
+A passive capture during operator-driven 80m/20m band changes confirmed the
+Saturn filter commands follow the band. The active DDC3 frequency followed
+the VFO, both receive-preselector words selected the expected band, both
+step-attenuator bytes were zero, and every captured command had PTT off.
+Stable ANT1 selections were Alex0 `0x01400020` on 80m and `0x01100002` on
+20m. The last captured antenna change selected EXT2 (`0x01100c02` at 20m).
+The physical antenna/socket path remains unconfirmed; a correct command
+does not prove the physical relay or antenna feed.
+
+A separate three-second active-DDC capture contained 2,324 packets and
+553,112 complex samples, with no sequence gaps or all-zero stream. The
+captured signal was predominantly noise: complex RMS -88.11 dBFS; a
+4096-point Hann analysis gave a median -122.06 dBFS/bin and peak -120.17
+dBFS/bin. These are raw diagnostic units, not calibrated antenna dBm.
+
+Source tracing identified two Core/UI omissions: DaemonApp did not create
+and restore the RF-gain controller, and the remote display boundary did not
+apply the station's `rxMeterOffsetDb()` calibration. Corrections and their
+verification are tracked under R-R3-11. This finding does not establish
+that the external RF path is working, nor does it close remote audio.
+
+The operator then reported a power issue and rebooted the Rock. Core started
+automatically and reconnected to the Saturn with no service restart failures.
+A subsequent raw-DDC2 capture contained 498 packets with no sequence gaps;
+complex RMS was -48.77 dBFS, median -84.64 dBFS/bin and strongest peak -66.73
+dBFS/bin. Clear RF peaks and populated waterfall history were then observed
+in the remote GUI around 3.869 MHz, still running `ea55d24a`, before either
+software correction was installed. The captures differ in operating state;
+this establishes recovery, not an isolated causal test of the power supply.
+
+The operator relaunched the default local profile, which was disconnected.
+At their request, the development GUI was reopened with `radxa_5c_r3`; its
+profile title, established TCP connection to Core's port 50055 and fresh
+authenticated station handshake were verified. The large analog meter still
+showed -127 dBm while the mirrored slice flag showed about -65 dBm. That is
+a separate remote meter-binding gap; it is not evidence of missing RF.
+
+Calibration qualification: the daemon's absent-key defaults enable step ATT
+at 0 dB, giving Saturn's existing factory offset of -4.476 dB. The +15.524 dB
+offset applies only with step ATT disabled and preamp mode Off. Neither
+number should be presented as the proven cause of the original flat RF.
+
+R-R3-11 software gate: the daemon now owns/restores its RF-gain controller,
+tracks stable slice identities and bound band/mode, reconnects its hardware
+binding, and preserves controller lifetime through teardown. Core calibrates
+trace/waterfall/wide rows before reduction and quantization; remote rendering
+does not add the client's local calibration. Local direct rendering is
+unchanged. Eight focused test executables passed (4.50 seconds), followed
+by all 672 registered tests passing with zero failures/skips (65.52 seconds).
+The final renderer-fixture edit was confirmed present in that build. Logs
+are in `~/.config/nereus/work/r3-rx-calibration/`. Native installation and
+live corrected-checkpoint evidence follow separately.

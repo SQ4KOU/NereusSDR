@@ -3,6 +3,7 @@
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QScopeGuard>
+#include <algorithm>
 #include <cmath>
 #include "core/AppSettings.h"
 #include "core/session/StationClient.h"
@@ -11,6 +12,7 @@
 #include "core/session/media/DisplayCodec.h"
 #include "core/session/media/DaemonMediaController.h"
 #include "core/FFTEngine.h"
+#include "core/StepAttenuatorController.h"
 #include "gui/RemoteMediaController.h"
 #include "gui/PanadapterStack.h"
 #include "gui/PanadapterApplet.h"
@@ -78,6 +80,13 @@ private slots:
         });
         RadioModel station;
         station.setBoardForTest(HPSDRHW::Saturn);
+        StepAttenuatorController stationAttenuator(&station);
+        stationAttenuator.setStepAttEnabled(true);
+        stationAttenuator.setAttenuation(0);
+        station.setStepAttController(&stationAttenuator);
+        const auto detachStationAttenuator = qScopeGuard([&] {
+            station.setStepAttController(nullptr);
+        });
         station.configureStreamPool(5, 5, 192000);
         station.setConnectionStateForTest(ConnectionState::Connected);
         const int sliceId = station.addSlice();
@@ -129,8 +138,10 @@ private slots:
         // calls also wait for the asynchronous source configuration to finish.
         QVector<float> iq(2048);
         for (int i = 0; i < iq.size(); i += 2) {
-            iq[i] = std::cos(double(i) * 0.17);
-            iq[i + 1] = std::sin(double(i) * 0.17);
+            // Keep the station-calibration matrix well below the codec's
+            // 0 dBm ceiling; otherwise a positive offset can hide a shift.
+            iq[i] = 0.01f * std::cos(double(i) * 0.17);
+            iq[i + 1] = 0.01f * std::sin(double(i) * 0.17);
         }
         const auto bothHaveFrames = [&] {
             QMetaObject::invokeMethod(&station, "rawIqDataForStream", Qt::DirectConnection,
@@ -140,6 +151,42 @@ private slots:
         };
         QTRY_VERIFY_WITH_TIMEOUT(bothHaveFrames(), 5000);
         QCOMPARE(countControl(inbound, QStringLiteral("rejected")), 0);
+
+        // DaemonMediaController applies the station offset before reducing
+        // and encoding. Exercise all authoritative receiver paths using the
+        // same tagged I/Q, rather than relying on the remote client's local
+        // DisplayCalOffset preference.
+        const auto traceLevels = [&] {
+            QVector<float> bins = first->spectrumWidget()->renderedPixels();
+            std::sort(bins.begin(), bins.end());
+            return qMakePair(bins.last(), bins.at(bins.size() / 2));
+        };
+        const auto feedAndAwaitOffset = [&](double expectedOffsetDb,
+                                            const QPair<float, float>& referenceDbm) {
+            return QTest::qWaitFor([&] {
+                QMetaObject::invokeMethod(&station, "rawIqDataForStream", Qt::DirectConnection,
+                    Q_ARG(int, stream), Q_ARG(QVector<float>, iq));
+                const float offset = static_cast<float>(expectedOffsetDb);
+                const auto levels = traceLevels();
+                return std::abs(levels.first - (referenceDbm.first + offset)) < 1.0f
+                    && std::abs(levels.second - (referenceDbm.second + offset)) < 1.0f;
+            }, 5000);
+        };
+        const auto baseTraceDbm = traceLevels();
+        const double baseOffsetDb = station.rxMeterOffsetDb();
+        stationAttenuator.setAttenuation(10);
+        QVERIFY(feedAndAwaitOffset(station.rxMeterOffsetDb() - baseOffsetDb, baseTraceDbm));
+        const auto stepAttTraceDbm = traceLevels();
+        stationAttenuator.setStepAttEnabled(false);
+        stationAttenuator.setPreampMode(PreampMode::Off);
+        QVERIFY(feedAndAwaitOffset(station.rxMeterOffsetDb() - baseOffsetDb, baseTraceDbm));
+        const auto preampOffTraceDbm = traceLevels();
+        stationAttenuator.setPreampMode(PreampMode::On);
+        QVERIFY(feedAndAwaitOffset(station.rxMeterOffsetDb() - baseOffsetDb, baseTraceDbm));
+        const auto preampOnTraceDbm = traceLevels();
+        QVERIFY(std::abs(stepAttTraceDbm.first - baseTraceDbm.first) > 1.0f);
+        QVERIFY(std::abs(preampOffTraceDbm.first - stepAttTraceDbm.first) > 1.0f);
+        QVERIFY(std::abs(preampOnTraceDbm.first - preampOffTraceDbm.first) > 1.0f);
         outbound.clear();
         inbound.clear();
         appSettings.setValue(QStringLiteral("DisplayFftWindow"), QString::number(int(WindowFunction::BlackmanHarris4)));
