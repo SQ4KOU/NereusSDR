@@ -41,6 +41,25 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)  # for clangd / IDE integration
 
+# NereusSDRLib is a SHARED library, and on ELF targets every object linked
+# into a shared object must be position-independent.  CMake sets -fPIC
+# automatically for the SHARED target's own sources, but NOT for the
+# vendored static libraries linked into it, which are separate targets.
+# Without this, x86-64 Linux fails at link with:
+#
+#   mold: error: libwdsp_static.a(iqc.c.o): R_X86_64_PC32 relocation
+#         against symbol `ch' can not be used; recompile with -fPIC
+#
+# r8brain, rnnoise and libspecbleach already set the property themselves;
+# wdsp_static, portaudio_static and the rade/opus/lpcnet targets did not.
+# Setting it globally covers all of them and any vendored lib added later,
+# rather than leaving a per-target trap for the next one.  Must precede
+# every target definition, hence its position here.
+#
+# No effect on macOS (arm64 Mach-O is always PIC) or Windows (PE has no
+# equivalent notion); the cost on x86-64 Linux is one reserved register.
+set(CMAKE_POSITION_INDEPENDENT_CODE ON)
+
 # Windows: prevent windows.h from defining min/max preprocessor macros
 # (collides with std::min / std::max). Standard pattern for Qt apps;
 # applied globally so any TU that transitively pulls in <windows.h>
