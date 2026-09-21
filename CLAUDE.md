@@ -584,6 +584,9 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | [2026-07-28-remote-daemon-architecture-design.md](docs/architecture/2026-07-28-remote-daemon-architecture-design.md) | Remote daemon: split point, transport ladder (direct first, relay as fallback), NAT traversal incl. CGNAT-to-CGNAT, measured Pi 4 floor capacity, R1-R6 phasing | **Approved** |
 | [2026-08-02-remote-daemon-r1-plan.md](docs/architecture/2026-08-02-remote-daemon-r1-plan.md) | R1: build split + spectrum extraction + headless `nereusd` (13 tasks, 91 steps) | **Complete** |
 | [2026-08-02-remote-daemon-r1-verification/README.md](docs/architecture/2026-08-02-remote-daemon-r1-verification/README.md) | R1: 12-row Pi 4 bench matrix (Rows 5/10/11 found real defects; Row 10 fixed, 5 and 11 chipped) | Matrix verified (Pi 4 + ANAN-G2E) |
+| [2026-08-02-bottom-banner-and-pan-menu-design.md](docs/architecture/2026-08-02-bottom-banner-and-pan-menu-design.md) | Bottom Banner Cleanup + AetherSDR-Shaped Pan Menu design spec: single `ChromeBarController` layout authority replacing 3 competing responsive systems, 9-layout pan menu thumbnail grid | **Complete (pending PR merge)** |
+| [2026-08-02-bottom-banner-and-pan-menu-plan.md](docs/architecture/2026-08-02-bottom-banner-and-pan-menu-plan.md) | Bottom Banner Cleanup + Pan Menu: 14-task implementation plan (Phase A ChromeBarController + fold ladder, Phase B pan-menu thumbnail grid) plus a final fix wave closing the merge-blocking audit findings | **Complete (14/14 tasks + fix wave; pending PR merge)** |
+| [2026-08-02-bottom-banner-and-pan-menu-verification/README.md](docs/architecture/2026-08-02-bottom-banner-and-pan-menu-verification/README.md) | Bottom Banner + Pan Menu: 7-row bench verification matrix | Matrix drafted (pending live G2 + HL2 hardware) |
 
 ### Protocol Reference (`docs/protocols/`)
 
