@@ -429,11 +429,7 @@ private:
                            std::numeric_limits<quint32>::max(), firstTimestamp, true)) {
             return false;
         }
-        if (!payload.value(QStringLiteral("enabled")).toBool()) {
-            fail(QStringLiteral("audioUnavailable"));
-            return false;
-        }
-        if (m_audioContextAccepted
+        if (m_audioGeneration != 0
             && (generation == m_audioGeneration
                 || quint32(generation - m_audioGeneration) >= 0x80000000U)) {
             return false;
@@ -442,7 +438,10 @@ private:
         m_audioSsrc = ssrc;
         m_audioFirstSequence = firstSequence;
         m_audioFirstTimestamp = static_cast<quint32>(firstTimestamp);
-        m_audioContextAccepted = true;
+        // The answerer's ready callback can precede the offerer's. Core
+        // then reports disabled until its own peer is ready, followed by a
+        // newer enabled context. Keep waiting within the bounded probe.
+        m_audioContextAccepted = payload.value(QStringLiteral("enabled")).toBool();
         m_audioHavePrevious = false;
         m_audioDecoder.reset();
         return true;

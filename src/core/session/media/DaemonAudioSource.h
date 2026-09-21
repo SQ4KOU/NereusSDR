@@ -22,8 +22,10 @@ class AudioEngine;
 
 // One owned Opus-profile capture block. samplePosition is the first 48 kHz
 // stereo frame's position since this source was started. It advances across
-// every valid-rate ingress callback, including ones the bounded bridge drops,
-// and is therefore suitable for RTP timestamp progression without hiding loss.
+// every valid-rate ingress callback, including ones the bounded bridge drops.
+// Completed blocks resume only on the original 1,920-frame grid after a
+// partial ingress loss, making that loss visible as an integer packet gap in
+// RTP without exposing an unaligned packet timestamp.
 struct DaemonAudioBlock {
     QVector<float> pcmInterleaved;
     quint64 samplePosition = 0;
@@ -64,6 +66,11 @@ public:
     // the fixed ring was full. It is diagnostic only; audio loss is expected
     // under overload and never causes the DSP callback to wait.
     std::uint64_t dropCount() const noexcept;
+
+    // Test seam: models a valid master-mix callback rejected by the
+    // nonblocking bridge after its source frames have been reserved. It does
+    // not inject samples and is used to verify packet-grid recovery.
+    void dropIngressForTest(int frames) noexcept;
 
 private:
     class Bridge;

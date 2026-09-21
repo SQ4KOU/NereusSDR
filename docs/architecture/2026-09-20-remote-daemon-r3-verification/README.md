@@ -659,3 +659,63 @@ the board. Native compilation is underway. The optional `nereus-media-probe --au
 audio context before decoding and reports finite PCM energy, actual stereo
 bandwidth/channels, byte counts and discontinuities. A successful diagnostic
 is transport/decoder evidence and does not replace physical listening.
+
+
+## Installed first-audio checkpoint, 0123d8e1
+
+Native aarch64 Release build and daemon/licence staging passed. The 36-file
+overlay matched the signed Git SHA-256 manifest. Core `0123d8e1` was installed
+at 11:34 EDT with rollback to `04da2aab`; service checks reported active,
+`Result=success`, `ExecMainStatus=0`, and `NRestarts=0`. The Mac GUI was rebuilt
+at diagnostics checkpoint `8a23f8f7`, passed strict code-signature verification,
+and opened with the existing private `radxa_5c_r3` profile. Its production audio
+code matches Core `0123d8e1`.
+
+The bounded live diagnostic received 218 distinct display frames and 117
+stereo wideband Opus packets (224,640 decoded PCM frames), with finite channel
+RMS approximately 0.09138 and no audio sequence/timestamp gaps or rejections.
+The first diagnostic attempt ended early on a temporary disabled context;
+the probe was corrected to wait for Core's own media-ready transition. The
+production GUI already handles this transition. The capture is evidence of
+nonzero live decoding, not sustained delivery at the nominal packet rate.
+
+The operator confirmed first sound: audio works for a while, then becomes
+bursty/choppy. This does **not** pass continuous playback acceptance. A separate
+25-second Core-side capture establishes normal source cadence: 602 SRTP audio
+packets over 24.249 seconds, median 39.986 ms between packets and maximum
+89.980 ms. Ethernet carries both media paths. Display traffic measured about
+460.56 kbit/s in this selected GUI view (maximum IP packet 969 bytes); audio
+plus its small UDP control overhead measured about 35.1 kbit/s (maximum IP
+packet 175 bytes). This excludes WSS control and radio I/Q and is not the
+complete session-budget gate.
+
+The capture exposed the chop mechanism: three RTP timestamp steps of 1,984
+frames and one of 2,944 frames, instead of the normal 1,920. A short capture
+lock miss abandoned a partial packet and resumed off the negotiated packet
+grid. The jitter buffer then rejected following packets until the 500 ms
+watchdog reset the context. Three captured timestamp shifts correlate with
+GUI restarts approximately 500 ms later. The correction keeps the honest
+source clock but resumes packet assembly at the next whole packet boundary,
+so the existing loss-concealment path can recover. Verification follows at
+the correction's checkpoint; the first-audio build remains installed for now.
+
+Initial live receive binding observations in the new GUI show the active
+slice and large applet agreeing at -52 dBm, the Core-provided Auto AGC floor
+around -105 dB with AUTO active, and CH 0 selecting 20m. Spectrum and the
+Clarity Blue 2D waterfall advance. These observations do not close all band,
+meter-mode, reconnect or subjective Clarity acceptance cases.
+
+
+## Partial-ingress loss correction
+
+The deterministic regression reserves and rejects a 64-frame ingress callback
+inside a partial packet, then verifies that the recovered blocks begin at
+source frames 1,920 and 3,840 with unchanged stereo samples. Consumer allocation
+now occurs outside the capture mutex, reducing the opportunity for ingress
+lock misses. The source position still includes dropped frames; the correction
+does not conceal loss by renumbering time.
+
+The rebuilt source, sender, daemon session, receiver and real encrypted session
+tests all passed (5/5, 4.86 seconds). Full-suite and native installation results
+will be recorded after the signed correction is built. The live diagnostic's
+temporary-disabled-context handling is included in this correction.

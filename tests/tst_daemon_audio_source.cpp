@@ -199,6 +199,37 @@ private slots:
         verifyStereoConstant(*block, -0.40f, 0.70f);
     }
 
+    void partialIngressLossResumesOnOriginalPacketGrid()
+    {
+        Harness harness;
+        DaemonAudioSource source;
+        source.setAudioEngine(harness.engine);
+        source.start();
+        harness.engine->setSliceStreaming(harness.sliceB, false);
+
+        // Establish a partial packet, then model a 64-frame master-mix
+        // callback that lost the bridge's try-lock. The next complete packet
+        // must begin at source frame 1,920, not at the first post-loss frame
+        // (128). That makes the receiver see one integral PLC-sized gap.
+        feedFrames(harness.engine, harness.sliceA, kDspFrames, 0.25f, -0.50f);
+        source.dropIngressForTest(kDspFrames);
+        feedFrames(harness.engine, harness.sliceA,
+                   DaemonAudioSource::kBlockFrames * 3, 0.25f, -0.50f);
+
+        const auto block = source.takeBlock();
+        QVERIFY(block.has_value());
+        QCOMPARE(block->samplePosition,
+                 quint64{DaemonAudioSource::kBlockFrames});
+        verifyStereoConstant(*block, 0.25f, -0.50f);
+
+        const auto followingBlock = source.takeBlock();
+        QVERIFY(followingBlock.has_value());
+        QCOMPARE(followingBlock->samplePosition,
+                 quint64{DaemonAudioSource::kBlockFrames * 2});
+        verifyStereoConstant(*followingBlock, 0.25f, -0.50f);
+        QCOMPARE(source.dropCount(), std::uint64_t{1});
+    }
+
     void boundedQueueDropsNewestCompletedBlock()
     {
         Harness harness;

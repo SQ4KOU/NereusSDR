@@ -41,24 +41,49 @@ public:
 
     std::optional<DaemonAudioBlock> takeBlock()
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        if (!m_running || m_readyCount == 0) {
-            return std::nullopt;
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (!m_running || m_readyCount == 0) {
+                return std::nullopt;
+            }
         }
 
         DaemonAudioBlock block;
         block.pcmInterleaved.resize(DaemonAudioSource::kBlockSamples);
-        block.samplePosition = m_readyPositions[m_readIndex];
-        std::memcpy(block.pcmInterleaved.data(), m_ready[m_readIndex].data(),
-                    sizeof(float) * DaemonAudioSource::kBlockSamples);
-        m_readIndex = (m_readIndex + 1) % DaemonAudioSource::kQueueBlocks;
-        --m_readyCount;
+        {
+            // QVector allocation is deliberately outside the shared bridge
+            // mutex. The DSP callback only contends with this fixed-size copy
+            // and ring bookkeeping.
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (!m_running || m_readyCount == 0) {
+                return std::nullopt;
+            }
+            block.samplePosition = m_readyPositions[m_readIndex];
+            std::memcpy(block.pcmInterleaved.data(), m_ready[m_readIndex].data(),
+                        sizeof(float) * DaemonAudioSource::kBlockSamples);
+            m_readIndex = (m_readIndex + 1) % DaemonAudioSource::kQueueBlocks;
+            --m_readyCount;
+        }
         return block;
     }
 
     std::uint64_t dropCount() const noexcept
     {
         return m_dropCount.load(std::memory_order_relaxed);
+    }
+
+    void dropIngressForTest(int frames) noexcept
+    {
+        if (frames <= 0) {
+            return;
+        }
+
+        // This is the same externally observable state left by a valid
+        // callback that reserved its source position but lost the try-lock.
+        m_nextFramePosition.fetch_add(static_cast<quint64>(frames),
+                                      std::memory_order_relaxed);
+        m_dropCount.fetch_add(1, std::memory_order_relaxed);
+        m_discontinuity.store(true, std::memory_order_release);
     }
 
     void consume(const float* samples, int frames, int sampleRateHz) noexcept override
@@ -83,31 +108,41 @@ public:
         if (!m_running) {
             return;
         }
-        if (m_discontinuity.exchange(false, std::memory_order_acq_rel)) {
-            m_fillSamples = 0;
-        }
+        const bool hadDiscontinuity =
+            m_discontinuity.exchange(false, std::memory_order_acq_rel);
         // Multiple producers are not assumed to arrive in reservation order.
         // An older callback that wins the mutex after a newer one would make
         // packet contents run backward in time, so reject it and let the next
         // accepted ingress establish a clean block boundary.
         if (callbackFirstFrame < m_lastAcceptedEndFrame) {
-            m_fillSamples = 0;
+            discardPartialAndRealignLocked(m_lastAcceptedEndFrame);
             m_dropCount.fetch_add(1, std::memory_order_relaxed);
             return;
         }
-        if (callbackFirstFrame > m_lastAcceptedEndFrame) {
+        if (hadDiscontinuity || callbackFirstFrame > m_lastAcceptedEndFrame) {
             // A valid-rate callback reserved earlier may have lost the
             // try-lock before it could publish the discontinuity flag. Do
             // not append this later reservation to the old partial block.
-            m_fillSamples = 0;
+            // Discard through the next original 40 ms boundary so the next
+            // emitted RTP packet can represent the loss as an integral packet
+            // gap rather than an unaligned timestamp step.
+            discardPartialAndRealignLocked(callbackFirstFrame);
         }
         m_lastAcceptedEndFrame = callbackFirstFrame + static_cast<quint64>(frames);
 
         int consumedFrames = 0;
         while (consumedFrames < frames) {
+            const quint64 currentFrame = callbackFirstFrame
+                + static_cast<quint64>(consumedFrames);
+            if (currentFrame < m_discardBeforeFrame) {
+                const quint64 skippedFrames = std::min(
+                    static_cast<quint64>(frames - consumedFrames),
+                    m_discardBeforeFrame - currentFrame);
+                consumedFrames += static_cast<int>(skippedFrames);
+                continue;
+            }
             if (m_fillSamples == 0) {
-                m_assemblingFirstFrame = callbackFirstFrame
-                    + static_cast<quint64>(consumedFrames);
+                m_assemblingFirstFrame = currentFrame;
             }
             const int freeFrames = DaemonAudioSource::kBlockFrames
                 - (m_fillSamples / DaemonAudioSource::kChannels);
@@ -139,6 +174,20 @@ public:
     }
 
 private:
+    static quint64 nextBlockBoundary(quint64 frame) noexcept
+    {
+        const quint64 remainder = frame % DaemonAudioSource::kBlockFrames;
+        return remainder == 0
+            ? frame
+            : frame + (DaemonAudioSource::kBlockFrames - remainder);
+    }
+
+    void discardPartialAndRealignLocked(quint64 firstAvailableFrame) noexcept
+    {
+        m_fillSamples = 0;
+        m_discardBeforeFrame = nextBlockBoundary(firstAvailableFrame);
+    }
+
     void resetLocked()
     {
         m_fillSamples = 0;
@@ -147,6 +196,7 @@ private:
         m_readyCount = 0;
         m_assemblingFirstFrame = 0;
         m_lastAcceptedEndFrame = 0;
+        m_discardBeforeFrame = 0;
         m_discontinuity.store(false, std::memory_order_release);
     }
 
@@ -161,6 +211,7 @@ private:
     int m_readyCount = 0;
     quint64 m_assemblingFirstFrame = 0;
     quint64 m_lastAcceptedEndFrame = 0;
+    quint64 m_discardBeforeFrame = 0;
     bool m_running = false;
     std::atomic<bool> m_discontinuity{false};
     std::atomic<std::uint64_t> m_dropCount{0};
@@ -225,6 +276,11 @@ std::optional<DaemonAudioBlock> DaemonAudioSource::takeBlock()
 std::uint64_t DaemonAudioSource::dropCount() const noexcept
 {
     return m_bridge->dropCount();
+}
+
+void DaemonAudioSource::dropIngressForTest(int frames) noexcept
+{
+    m_bridge->dropIngressForTest(frames);
 }
 
 } // namespace NereusSDR
