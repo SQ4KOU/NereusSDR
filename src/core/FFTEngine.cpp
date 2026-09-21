@@ -284,6 +284,19 @@ void FFTEngine::feedIQ(const QVector<float>& interleavedIQ)
 #endif
 }
 
+void FFTEngine::resetInputHistory()
+{
+    // This method runs on the engine's worker thread.  m_iqWritePos gates
+    // every read of m_iqRaw, so resetting it makes prior partial input and
+    // the overlap tail unreachable without an unnecessary memset of the
+    // FFTW buffer.  Restarting the rate limiter also lets the first wholly
+    // new-context frame through immediately.
+    m_iqWritePos = 0;
+    m_decimationCounter = 0;
+    m_frameTimerStarted = false;
+    m_frameTimer.invalidate();
+}
+
 void FFTEngine::replanFft()
 {
 #ifdef HAVE_FFTW3

@@ -14,6 +14,12 @@ directory alongside NereusSDR's own `LICENSE`.
 | Qt 6 | GUI / network / audio framework | LGPL-3.0 (dynamic linking) | `qt6.txt` | `LGPLv3.txt` (+ `GPLv3.txt` by LGPL §4 reference) |
 | FFTW3 | FFT library | GPL-2.0-or-later | `fftw3.txt` | `GPLv2.txt` |
 | WDSP | DSP engine | GPL-2.0-or-later | `wdsp.txt` | `GPLv2.txt` |
+| libdatachannel 0.24.5 | direct DTLS/SCTP and SRTP media transport | MPL-2.0 | `libdatachannel.txt` | `MPLv2.txt` |
+| libjuice | direct ICE backend for libdatachannel | MPL-2.0 | `libjuice.txt` | `MPLv2.txt` |
+| plog | libdatachannel logging dependency | MIT | `plog.txt` | `plog.txt` |
+| usrsctp | SCTP implementation for libdatachannel | BSD-3-Clause | `usrsctp.txt` | `usrsctp.txt` |
+| libsrtp | SRTP implementation for libdatachannel | BSD-3-Clause | `libsrtp.txt` | `libsrtp.txt` |
+| OpenSSL 3 | certificate, DTLS, and application cryptography | Apache-2.0 | `openssl.txt` | `Apache-2.0.txt` |
 
 ## Upstream projects whose code is ported into the binary
 
@@ -47,6 +53,11 @@ the §6(b) fallback.
   (`LGPLv3.txt`), and (c) a mechanism for the user to relink with a
   modified Qt (dynamic linking + the upstream Qt source pointer in
   `SOURCE-OFFER.txt` §3).
+- libdatachannel and libjuice: MPL-2.0 covered files, without an applied
+  Exhibit B incompatible-secondary-license notice in the pinned sources.
+- plog, usrsctp and libsrtp: permissive MIT or BSD dependencies whose full
+  notices are reproduced here.
+- OpenSSL 3: Apache-2.0, compatible with this GPLv3 combined work.
 
 ## File inventory
 
@@ -54,9 +65,17 @@ the §6(b) fallback.
 - `GPLv2.txt`           — full GNU General Public License, version 2
 - `GPLv3.txt`           — full GNU General Public License, version 3
 - `LGPLv3.txt`          — full GNU Lesser General Public License, version 3
+- `MPLv2.txt`           — full Mozilla Public License, version 2.0
+- `Apache-2.0.txt`      — full Apache License, version 2.0
 - `qt6.txt`             — Qt 6 dependency notice
 - `fftw3.txt`           — FFTW 3 dependency notice
 - `wdsp.txt`            — WDSP dependency notice
+- `libdatachannel.txt`  — libdatachannel dependency notice
+- `libjuice.txt`        — libjuice dependency notice
+- `plog.txt`            — plog full MIT notice
+- `usrsctp.txt`         — usrsctp full BSD-3-Clause notice
+- `libsrtp.txt`         — libsrtp full BSD-3-Clause notice
+- `openssl.txt`         — OpenSSL dependency notice
 - `thetis.txt`          — Thetis upstream-port notice
 - `mi0bot-thetis.txt`   — mi0bot/Thetis-HL2 upstream-port notice
 - `aethersdr.txt`       — AetherSDR upstream-port notice

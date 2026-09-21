@@ -59,16 +59,37 @@ or spectrum. Reboot/reconnect passed earlier at `daf05135`; a new reboot at
 
 - [Pinned transport build and two-peer probe](transport-probe.md): encrypted
   display and RTP exchange and stop/recreate passed in the standalone harness.
-  Production Qt/session integration and real on-wire MTU verification remain
+  Production Qt transport and MediaPeer tests now pass, including callback
+  retirement during stop/restart/deletion. Real on-wire MTU verification remains
   pending. The selected libjuice backend lacks TURN/TCP and TURN/TLS; see the
   [plan's network continuity section](../2026-09-20-remote-daemon-r3-plan.md#network-decisions-carried-forward).
 - [Opus source/packet probe](opus-profile-probe.txt) and
   [fixture source](opus-profile-probe.c): actual wideband, stereo channel count
   and payload rate checked. This is not listening or Rock 5C CPU evidence.
-- Display codec: initial standalone harness passed; lead review requested
-  finite-extreme arithmetic and lost-delta recovery regressions. Still under
-  correction and not yet integrated into the production build.
-- Headless FFT source and production transport adapter: in progress.
+- Display codec: integrated target passes, including finite-extreme arithmetic,
+  reconstructed-history error bounds, lost-delta recovery, malformed input and
+  stale/wrapped sequence regressions.
+- Headless FFT source and pool: focused integrated tests pass. Retune discards
+  pending input and overlap, and the daemon uses bounded ingress/latest output.
+- Session media gates: `tst_station_session` and `tst_session_link_loss` pass
+  after fixing replacement-session retirement while preserving silent redial.
+- Desktop and daemon display integration: production targets build, and the
+  focused transport, peer, source, endpoint, session, local/remote rendering
+  and GUI-controller checks pass. The two-pane regression uses actual
+  authenticated control, the daemon controller and tagged I/Q production
+  with a deterministic test carrier. Both panes receive decoded frames after
+  a shared window change and a radio disconnect/reconnect. The daemon tests
+  also cover subscription revision, epoch, no-overlap and slice retirement.
+- Real Saturn media, GPU display and on-wire packet-size evidence remain
+  pending installation of this checkpoint.
+- Mixed-audio tap: `tst_daemon_audio_source` passes 8 cases using the real
+  master-mixer path, independent left/right values, per-slice mute, local
+  master-mute isolation, bounded overflow with honest sample positions,
+  restart and synchronous callback retirement. Network sender, jitter/playback
+  and adaptive clock correction remain pending.
+  The existing WDSP RMATCH probe preserved stereo and bounded occupancy for
+  120 simulated seconds at fixed compensation ratios for +/-500 ppm; this is
+  not an adaptive-controller or long-session acceptance result.
 
 ## Operator acceptance still pending
 
@@ -76,3 +97,32 @@ Live remote spectrum and 2D/3D waterfall, real stereo listening, four-pan and
 two-tier capacity, independent-clock stability, measured total bandwidth,
 two-hour hardware audio soak, and fresh installation/reconnect with media.
 Internet carrier and CGNAT-to-CGNAT evidence remain separate network gates.
+
+## Consolidated display-checkpoint review
+
+One independent review identified five corrections: shared FFT-window changes
+needed batch retirement; endpoint pacing needed an advancing schedule;
+no-overlap subscriptions needed explicit rejection; dropped I/Q needed input
+history reset; and SDP-embedded candidates bypassed the host-only admission
+path. These are corrected in the current source and covered by focused
+regressions. Integrated and hardware results will be recorded against the
+signed checkpoint after the combined checks finish.
+
+The two-pane integration also exposed an R2 state-application gap: the
+read-only mirrored `RadioModel.connected` delta had no client writer. The
+client now applies it through the existing remote-only connection-state
+setter, allowing media subscriptions to retire and resume when the radio
+changes state while the station control connection stays up.
+
+## Combined R3 display-checkpoint software gate
+
+The final combined macOS build succeeded, followed by unfiltered
+`ctest --test-dir build-integration -j10 --no-tests=error --output-on-failure`:
+**672 passed, zero failed, zero skipped**, 58.96 seconds. The focused source
+and daemon-controller gate passed before the full run. Logs are retained in
+`~/.config/nereus/work/r3-transport-integration/final-suite-302df0e7/`.
+
+Native aarch64 Core builds with the same reviewed source also passed on the
+Rock 5C. The maintainer verified SHA-256 agreement for all 79 files in the
+source overlay. Signed installation and live media evidence follow separately;
+this software gate does not establish remote audio playback or R5 traversal.

@@ -387,6 +387,9 @@ public:
     /// to the lower). Meaningful once the station's Hello has arrived.
     quint16 agreedMinor() const { return m_agreedMinor; }
 
+    bool mediaAvailable() const;
+    bool sendMediaControl(const QJsonObject& payload, quint32 expectedEpoch);
+
     /// Non-zero when the station's AppSettings schema version differs from
     /// this build's. Reported, never a refusal -- see the class comment.
     bool hasSettingsSchemaSkew() const { return m_settingsSchemaSkew; }
@@ -460,6 +463,9 @@ public:
     int maxMissedPongs() const { return m_maxMissedPongs; }
 
 signals:
+    void mediaControlReceived(const QJsonObject& payload, quint32 epoch);
+    /// Retires media even when a deliberate redial silently supersedes a link.
+    void mediaSessionEnded(quint32 epoch);
     /// The full section 7.0 sequence completed, snapshot-complete marker
     /// included. Parent section 12.2 gates TX on exactly this point.
     void handshakeComplete();
@@ -535,7 +541,8 @@ private:
     /// parameter, threaded through: true arms the reconnect timer once
     /// the mirror teardown and connection-state transition below have
     /// run; false leaves it untouched (already stopped, or never started).
-    void endSession(const QString& reason, bool attemptReconnect);
+    void endSession(const QString& reason, bool attemptReconnect,
+                    bool reportSessionEnd = true);
     void onHeartbeatTick();
     void onWriteFlushTick();
 

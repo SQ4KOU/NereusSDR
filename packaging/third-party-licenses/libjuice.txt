@@ -1,0 +1,11 @@
+libjuice commit 3c40a3545b6b1b62c7adee7f8f2bd58aa290afd6
+Copyright (c) Paul-Louis Ageneau and contributors
+
+NereusSDR uses libjuice through libdatachannel as the R3 direct ICE backend.
+The pinned source is fetched from:
+
+  https://github.com/paullouisageneau/libjuice/tree/3c40a3545b6b1b62c7adee7f8f2bd58aa290afd6
+
+libjuice is licensed under the Mozilla Public License 2.0. The complete
+license is supplied in MPLv2.txt. This backend does not supply the R5 TURN
+TCP/TLS fallback; that deployment acceptance remains separate.

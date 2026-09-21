@@ -497,6 +497,7 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
 
     if (m_session == transport) {
         m_session = nullptr;
+        emit mediaSessionEnded(m_mediaSessionEpoch);
         // Stop draining deltas into nothing. StateMirror keeps watching --
         // the daemon's own state is not the session's to tear down -- and
         // the next attachSession() clears whatever the coalescer holds
@@ -619,6 +620,11 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
     switch (message.kind) {
     case SessionMessageKind::CommandInvoke:
         m_dispatcher->dispatch(message);
+        break;
+    case SessionMessageKind::MediaControl:
+        if (transport == m_session && mediaAvailable()) {
+            emit mediaControlReceived(message.mediaPayload, m_mediaSessionEpoch);
+        }
         break;
     case SessionMessageKind::PropertyWrite:
         handlePropertyWrite(transport, message);
@@ -789,6 +795,7 @@ void StationServer::promoteToSession(SessionTransport* transport)
     buildMirror();
 
     m_session = transport;
+    ++m_mediaSessionEpoch;
 
     // Capability exchange (section 7.0 step 4). Sent before any state, so
     // the client has sized its own limits before the first object arrives.
@@ -812,6 +819,10 @@ void StationServer::promoteToSession(SessionTransport* transport)
     // above -- and m_session is already set by now, which is what makes
     // the burst go anywhere at all.
     m_mirror->attachSession();
+    if (m_session != transport || !m_peers.contains(transport)) {
+        return;
+    }
+    m_peers[transport].snapshotComplete = true;
 
     if (!m_deltaFlushTimer->isActive()) {
         m_deltaFlushTimer->start();
@@ -819,6 +830,9 @@ void StationServer::promoteToSession(SessionTransport* transport)
 
     qCInfo(lcStation) << "Session established with" << description;
     emit clientAuthenticated(description);
+    if (m_session == transport && mediaAvailable()) {
+        emit mediaSessionStarted(m_mediaSessionEpoch);
+    }
 }
 
 // ── Mirror wiring ────────────────────────────────────────────────────────
@@ -955,6 +969,38 @@ void StationServer::sendToSession(const SessionMessage& message)
     m_session->sendText(SessionMessages::encode(message));
 }
 
+void StationServer::setMediaEnabled(bool enabled)
+{
+    // A live session negotiated its capability already. Do not advertise a
+    // different contract midway through it.
+    if (!m_session) {
+        m_mediaEnabled = enabled;
+    }
+}
+
+bool StationServer::mediaAvailable() const
+{
+    const auto it = m_peers.constFind(m_session);
+    return m_mediaEnabled && it != m_peers.cend() && it->authenticated
+        && it->snapshotComplete && it->agreedMinor >= kMediaSessionProtocolMinor;
+}
+
+bool StationServer::sendMediaControl(const QJsonObject& payload, quint64 expectedEpoch)
+{
+    if (!mediaAvailable() || expectedEpoch != m_mediaSessionEpoch) {
+        return false;
+    }
+    SessionMessage message;
+    message.kind = SessionMessageKind::MediaControl;
+    message.mediaPayload = payload;
+    const QByteArray wire = SessionMessages::encode(message);
+    if (wire.isEmpty()) {
+        return false;
+    }
+    m_session->sendText(wire);
+    return true;
+}
+
 // ── Capability descriptor ────────────────────────────────────────────────
 
 void StationServer::setSustainableSliceLimit(int slices)
@@ -997,6 +1043,7 @@ StationCapabilities StationServer::buildCapabilities() const
 
     // Always false in R2: TX is R4 in its entirety.
     caps.txPermitted = false;
+    caps.remoteMediaVersion = m_mediaEnabled ? 1 : 0;
 
     return caps;
 }

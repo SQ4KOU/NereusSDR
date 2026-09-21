@@ -1035,6 +1035,43 @@ void AudioEngine::setVaxTxBusForTest(std::unique_ptr<IAudioBus> bus)
 
 #endif
 
+void AudioEngine::setMasterMixAudioTap(MasterMixAudioTap* tap)
+{
+    std::lock_guard<std::mutex> controlLock(m_masterMixTapControlMutex);
+
+    // Close first, then wait for an already-admitted DSP callback.  The
+    // callback checks the gate again after incrementing, so one that raced
+    // this store cannot invoke a pointer being replaced.
+    m_masterMixTapAdmissionClosed.store(true, std::memory_order_seq_cst);
+    unsigned calls = m_masterMixTapCallsInFlight.load(std::memory_order_seq_cst);
+    while (calls != 0) {
+        m_masterMixTapCallsInFlight.wait(calls, std::memory_order_relaxed);
+        calls = m_masterMixTapCallsInFlight.load(std::memory_order_seq_cst);
+    }
+    m_masterMixAudioTap.store(tap, std::memory_order_seq_cst);
+    m_masterMixTapAdmissionClosed.store(false, std::memory_order_seq_cst);
+}
+
+void AudioEngine::clearMasterMixAudioTap(MasterMixAudioTap* tap)
+{
+    if (tap == nullptr) {
+        return;
+    }
+
+    std::lock_guard<std::mutex> controlLock(m_masterMixTapControlMutex);
+    m_masterMixTapAdmissionClosed.store(true, std::memory_order_seq_cst);
+    unsigned calls = m_masterMixTapCallsInFlight.load(std::memory_order_seq_cst);
+    while (calls != 0) {
+        m_masterMixTapCallsInFlight.wait(calls, std::memory_order_relaxed);
+        calls = m_masterMixTapCallsInFlight.load(std::memory_order_seq_cst);
+    }
+    MasterMixAudioTap* expected = tap;
+    m_masterMixAudioTap.compare_exchange_strong(expected, nullptr,
+                                                std::memory_order_seq_cst,
+                                                std::memory_order_seq_cst);
+    m_masterMixTapAdmissionClosed.store(false, std::memory_order_seq_cst);
+}
+
 void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
 {
     if (m_mixAdmissionClosed.load(std::memory_order_acquire)) {
@@ -1284,6 +1321,25 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
         return;
     }
     const int stereoFloats = mixed * 2;
+
+    // R3 receive-only master tap.  This is the output of MasterMixer, after
+    // per-slice gain/mute/pan and the readiness barrier, and deliberately
+    // before local speaker volume/mute/device handling.  A local-monitor
+    // setting therefore cannot alter the station's remote mixed program.
+    // The raw pointer is valid only during this synchronous call.
+    if (!m_masterMixTapAdmissionClosed.load(std::memory_order_seq_cst)) {
+        m_masterMixTapCallsInFlight.fetch_add(1, std::memory_order_seq_cst);
+        if (!m_masterMixTapAdmissionClosed.load(std::memory_order_seq_cst)) {
+            MasterMixAudioTap* tap =
+                m_masterMixAudioTap.load(std::memory_order_seq_cst);
+            if (tap != nullptr) {
+                tap->consume(mix.data(), mixed, kMasterMixSampleRateHz);
+            }
+        }
+        if (m_masterMixTapCallsInFlight.fetch_sub(1, std::memory_order_seq_cst) == 1) {
+            m_masterMixTapCallsInFlight.notify_all();
+        }
+    }
 
     const float vol = m_masterVolume.load(std::memory_order_acquire);
     if (vol != 1.0f) {

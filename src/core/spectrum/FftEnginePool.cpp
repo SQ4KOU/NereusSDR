@@ -35,12 +35,14 @@
 #include <QThread>
 #include <QtGlobal>
 
+#include <algorithm>
 #include <utility>
 
 namespace NereusSDR {
 
-FftEnginePool::FftEnginePool(QObject* parent)
+FftEnginePool::FftEnginePool(QObject* parent, bool forwardFrameReady)
     : QObject(parent)
+    , m_forwardFrameReady(forwardFrameReady)
 {
 }
 
@@ -76,13 +78,13 @@ FftEnginePool::~FftEnginePool()
     m_threadsByBucket.clear();
 }
 
-void FftEnginePool::applyConfigTo(FFTEngine* engine) const
+void FftEnginePool::applyConfigTo(FFTEngine* engine, const FftPoolConfig& cfg)
 {
-    engine->setOutputFps(m_config.fps);
-    engine->setFftSizeBaseline(m_config.fftSize);
-    engine->setFftSize(m_config.fftSize);
-    engine->setWindowFunction(static_cast<WindowFunction>(m_config.windowType));
-    engine->setHzPerBinTarget(m_config.hzPerBinTarget);
+    engine->setOutputFps(cfg.fps);
+    engine->setFftSizeBaseline(cfg.fftSize);
+    engine->setFftSize(cfg.fftSize);
+    engine->setWindowFunction(static_cast<WindowFunction>(cfg.windowType));
+    engine->setHzPerBinTarget(cfg.hzPerBinTarget);
 }
 
 void FftEnginePool::setConfig(const FftPoolConfig& cfg)
@@ -90,7 +92,7 @@ void FftEnginePool::setConfig(const FftPoolConfig& cfg)
     m_config = cfg;
     for (FFTEngine* engine : std::as_const(m_engines)) {
         if (engine) {
-            applyConfigTo(engine);
+            applyConfigTo(engine, m_config);
         }
     }
 }
@@ -107,29 +109,37 @@ void FftEnginePool::setConfigForNewStreams(const FftPoolConfig& cfg)
 FFTEngine* FftEnginePool::engineForStream(int streamIndex)
 {
     if (streamIndex < 0) { return nullptr; }
-    if (FFTEngine* existing = m_engines.value(streamIndex, nullptr)) {
-        return existing;
-    }
-    return createEngine(streamIndex);
+    return engineForSource({streamIndex, FftTier::Wide}, m_config);
 }
 
-FFTEngine* FftEnginePool::createEngine(int streamIndex)
+FFTEngine* FftEnginePool::engineForSource(const FftSourceKey& key,
+                                          const FftPoolConfig& cfg)
+{
+    if (key.streamIndex < 0) { return nullptr; }
+    if (FFTEngine* existing = m_engines.value(key, nullptr)) {
+        return existing;
+    }
+    return createEngine(key, cfg);
+}
+
+FFTEngine* FftEnginePool::createEngine(const FftSourceKey& key,
+                                       const FftPoolConfig& cfg)
 {
     // No QObject parent: this pool owns the engine's lifetime directly
     // (removeStream()'s deleteLater(), or the destructor's quit-wait-then-
     // delete above), matching the ownership model
     // createFftEngineForStream used before this extraction.
-    auto* engine = new FFTEngine(streamIndex);
+    auto* engine = new FFTEngine(key.streamIndex);
 
     // Configured from the pool's current config, on the calling thread --
     // this runs before moveToThread() below, so it is a same-thread call
     // exactly like the old createFftEngineForStream's construction-time
     // setters were (all of them ran before that function's own
     // moveToThread call).
-    applyConfigTo(engine);
+    applyConfigTo(engine, cfg);
 
     const int threadCount = qMax(1, m_config.threadCount);
-    const int bucket = streamIndex % threadCount;
+    const int bucket = key.streamIndex % threadCount;
     QThread* thread = m_threadsByBucket.value(bucket, nullptr);
     const bool threadIsNew = (thread == nullptr);
     if (threadIsNew) {
@@ -162,20 +172,32 @@ FFTEngine* FftEnginePool::createEngine(int streamIndex)
         thread->start();
     }
 
-    // Re-emit with the stream index attached, matching the shape
-    // MainWindow::dispatchFftFrameToPans expects. fftReadyLinear and
-    // fftFrameReady share the same parameter list (both carry the
-    // engine's receiverId first), so this is a plain signal-to-signal
-    // forward, no lambda needed.
-    connect(engine, &FFTEngine::fftReadyLinear, this, &FftEnginePool::fftFrameReady);
+    if (m_forwardFrameReady) {
+        // Re-emit with the stream index attached, matching the shape
+        // MainWindow::dispatchFftFrameToPans expects. fftReadyLinear and
+        // fftFrameReady share the same parameter list (both carry the
+        // engine's receiverId first), so this is a plain signal-to-signal
+        // forward, no lambda needed.
+        connect(engine, &FFTEngine::fftReadyLinear, this, &FftEnginePool::fftFrameReady);
+    }
 
-    m_engines.insert(streamIndex, engine);
+    m_engines.insert(key, engine);
     return engine;
 }
 
 void FftEnginePool::removeStream(int streamIndex)
 {
-    FFTEngine* engine = m_engines.take(streamIndex);
+    const QList<FftSourceKey> keys = m_engines.keys();
+    for (const FftSourceKey& key : keys) {
+        if (key.streamIndex == streamIndex) {
+            removeSource(key);
+        }
+    }
+}
+
+void FftEnginePool::removeSource(const FftSourceKey& key)
+{
+    FFTEngine* engine = m_engines.take(key);
     if (!engine) { return; }
     // Disconnect first so a frame already in flight toward fftFrameReady
     // does not fire for a stream that is being removed right now (mirrors
@@ -190,6 +212,17 @@ void FftEnginePool::removeStream(int streamIndex)
 }
 
 QList<int> FftEnginePool::streams() const
+{
+    QSet<int> streamSet;
+    for (const FftSourceKey& key : m_engines.keys()) {
+        streamSet.insert(key.streamIndex);
+    }
+    QList<int> result = streamSet.values();
+    std::sort(result.begin(), result.end());
+    return result;
+}
+
+QList<FftSourceKey> FftEnginePool::sources() const
 {
     return m_engines.keys();
 }

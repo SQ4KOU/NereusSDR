@@ -1,0 +1,308 @@
+// =================================================================
+// tests/tst_media_transport.cpp  (NereusSDR)
+// =================================================================
+//
+// no-port-check: NereusSDR-original. Remote-daemon R3 Task 1.
+//
+// =================================================================
+
+#include "core/session/media/LibDataChannelMediaTransport.h"
+
+#include <QPointer>
+#include <QSignalSpy>
+#include <QtTest>
+
+using namespace NereusSDR;
+
+namespace {
+
+constexpr quint32 kTestAudioSsrc = 0x4e523301U;
+
+} // namespace
+
+class TestMediaTransport : public QObject {
+    Q_OBJECT
+
+private slots:
+    void encryptedPeersCarryDisplayAndRtp();
+    void boundedInputsRefuseBeforeTransport();
+    void stopCancelsOldCallbacksAndRecreates();
+    void signalRestartDropsRemainingOldGenerationMedia();
+    void deletionFromReceivedSignalIsSafe();
+
+private:
+    static void wire(LibDataChannelMediaTransport& offerer,
+                     LibDataChannelMediaTransport& answerer);
+    static void startPair(LibDataChannelMediaTransport& offerer,
+                          LibDataChannelMediaTransport& answerer);
+    static QByteArray rtpPacket(quint16 sequence,
+                                qsizetype size = 15,
+                                quint32 ssrc = kTestAudioSsrc);
+};
+
+void TestMediaTransport::wire(LibDataChannelMediaTransport& offerer,
+                              LibDataChannelMediaTransport& answerer)
+{
+    connect(&offerer, &IMediaTransport::localDescription, &answerer,
+            [&answerer](const QString& sdp, const QString& type) {
+                QVERIFY2(answerer.acceptDescription(sdp, type),
+                         "answerer rejected offer");
+            });
+    connect(&answerer, &IMediaTransport::localDescription, &offerer,
+            [&offerer](const QString& sdp, const QString& type) {
+                QVERIFY2(offerer.acceptDescription(sdp, type),
+                         "offerer rejected answer");
+            });
+    connect(&offerer, &IMediaTransport::localCandidate, &answerer,
+            [&answerer](const QString& candidate, const QString& mid) {
+                QVERIFY2(answerer.acceptCandidate(candidate, mid),
+                         "answerer rejected host candidate");
+            });
+    connect(&answerer, &IMediaTransport::localCandidate, &offerer,
+            [&offerer](const QString& candidate, const QString& mid) {
+                QVERIFY2(offerer.acceptCandidate(candidate, mid),
+                         "offerer rejected host candidate");
+            });
+}
+
+void TestMediaTransport::startPair(LibDataChannelMediaTransport& offerer,
+                                   LibDataChannelMediaTransport& answerer)
+{
+    wire(offerer, answerer);
+    QSignalSpy offerReady(&offerer, &IMediaTransport::ready);
+    QSignalSpy answerReady(&answerer, &IMediaTransport::ready);
+    QVERIFY(answerer.start({IMediaTransport::Role::Answerer,
+                            kTestAudioSsrc}));
+    QVERIFY(offerer.start({IMediaTransport::Role::Offerer,
+                           kTestAudioSsrc}));
+    QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
+    QVERIFY(offerer.isReady());
+    QVERIFY(answerer.isReady());
+}
+
+QByteArray TestMediaTransport::rtpPacket(quint16 sequence, qsizetype size,
+                                         quint32 ssrc)
+{
+    QByteArray packet(size, char(0xa5));
+    packet[0] = char(0x80);
+    packet[1] = char(111);
+    packet[2] = char(sequence >> 8);
+    packet[3] = char(sequence & 0xff);
+    packet[8] = char(ssrc >> 24);
+    packet[9] = char(ssrc >> 16);
+    packet[10] = char(ssrc >> 8);
+    packet[11] = char(ssrc);
+    return packet;
+}
+
+void TestMediaTransport::encryptedPeersCarryDisplayAndRtp()
+{
+    LibDataChannelMediaTransport offerer;
+    LibDataChannelMediaTransport answerer;
+    QSignalSpy offerDescriptions(&offerer, &IMediaTransport::localDescription);
+    QSignalSpy answerDescriptions(&answerer, &IMediaTransport::localDescription);
+    QSignalSpy displayReceived(&answerer, &IMediaTransport::displayReceived);
+    QSignalSpy rtpReceived(&answerer, &IMediaTransport::rtpReceived);
+    startPair(offerer, answerer);
+
+    QCOMPARE(offerDescriptions.count(), 1);
+    QCOMPARE(answerDescriptions.count(), 1);
+    QVERIFY(offerDescriptions.at(0).at(0).toString().contains("a=fingerprint:"));
+    QVERIFY(answerDescriptions.at(0).at(0).toString().contains("a=fingerprint:"));
+    QVERIFY(offerDescriptions.at(0).at(0).toString().contains("m=application"));
+    QVERIFY(offerDescriptions.at(0).at(0).toString().contains("m=audio"));
+    QVERIFY(offerDescriptions.at(0).at(0).toString().contains("stereo=1"));
+    QVERIFY(offerDescriptions.at(0).at(0).toString().contains(
+        QStringLiteral("a=ssrc:%1").arg(kTestAudioSsrc)));
+    QVERIFY(!offerDescriptions.at(0).at(0).toString().contains(
+        QStringLiteral("a=candidate:"), Qt::CaseInsensitive));
+    QVERIFY(!answerDescriptions.at(0).at(0).toString().contains(
+        QStringLiteral("a=candidate:"), Qt::CaseInsensitive));
+
+    const QList<QByteArray> displayMessages{
+        QByteArrayLiteral("pan-0-display"),
+        QByteArrayLiteral("pan-1-display"),
+        QByteArrayLiteral("pan-2-display"),
+        QByteArrayLiteral("pan-3-display"),
+    };
+    const QByteArray rtp = rtpPacket(7);
+    for (const QByteArray& message : displayMessages) {
+        QVERIFY(offerer.sendDisplay(message));
+    }
+    QVERIFY(offerer.sendRtp(rtp));
+    QTRY_COMPARE_WITH_TIMEOUT(displayReceived.count(), displayMessages.size(), 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(rtpReceived.count(), 1, 5000);
+    for (qsizetype i = 0; i < displayMessages.size(); ++i) {
+        QCOMPARE(displayReceived.at(i).at(0).toByteArray(), displayMessages.at(i));
+    }
+    QCOMPARE(rtpReceived.at(0).at(0).toByteArray(), rtp);
+
+    const QByteArray boundaryDisplay(
+        IMediaTransport::kMaxDisplayMessageBytes, char(0x5a));
+    const QByteArray boundaryRtp = rtpPacket(
+        8, IMediaTransport::kMaxRawRtpBytes);
+    QVERIFY(offerer.sendDisplay(boundaryDisplay));
+    QVERIFY(offerer.sendRtp(boundaryRtp));
+    QTRY_COMPARE_WITH_TIMEOUT(displayReceived.count(),
+                              displayMessages.size() + 1, 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(rtpReceived.count(), 2, 5000);
+    QCOMPARE(displayReceived.last().at(0).toByteArray(), boundaryDisplay);
+    QCOMPARE(rtpReceived.last().at(0).toByteArray(), boundaryRtp);
+    QVERIFY(!offerer.sendRtp(rtpPacket(9, 15, kTestAudioSsrc + 1)));
+
+    offerer.stop();
+    answerer.stop();
+}
+
+void TestMediaTransport::boundedInputsRefuseBeforeTransport()
+{
+    LibDataChannelMediaTransport transport;
+    QVERIFY(transport.start({IMediaTransport::Role::Answerer,
+                             kTestAudioSsrc}));
+
+    LibDataChannelMediaTransport offerer;
+    QSignalSpy offerDescriptions(&offerer, &IMediaTransport::localDescription);
+    QVERIFY(offerer.start({IMediaTransport::Role::Offerer,
+                           kTestAudioSsrc}));
+    QTRY_COMPARE_WITH_TIMEOUT(offerDescriptions.count(), 1, 5000);
+    const QString candidateFreeOffer =
+        offerDescriptions.at(0).at(0).toString();
+    QVERIFY(!candidateFreeOffer.contains(QStringLiteral("a=candidate:"),
+                                         Qt::CaseInsensitive));
+
+    QVERIFY(!transport.acceptDescription(
+        QString(IMediaTransport::kMaxDescriptionBytes + 1, QLatin1Char('x')),
+        QStringLiteral("offer")));
+    QVERIFY(!transport.acceptDescription(QStringLiteral("v=0"),
+                                         QStringLiteral("answer")));
+
+    QString embeddedRelay = candidateFreeOffer;
+    if (!embeddedRelay.endsWith(QLatin1Char('\n'))) {
+        embeddedRelay.append(QStringLiteral("\r\n"));
+    }
+    embeddedRelay.append(QStringLiteral(
+        "a=candidate:1 1 UDP 1 192.0.2.1 5000 typ relay\r\n"));
+    QVERIFY(!transport.acceptDescription(embeddedRelay,
+                                         QStringLiteral("offer")));
+
+    QString overBudget = candidateFreeOffer;
+    if (!overBudget.endsWith(QLatin1Char('\n'))) {
+        overBudget.append(QStringLiteral("\r\n"));
+    }
+    for (int i = 0; i <= IMediaTransport::kMaxRemoteCandidates; ++i) {
+        overBudget.append(QStringLiteral(
+            "a=candidate:%1 1 UDP 2122260223 192.0.2.%2 %3 typ host\r\n")
+                              .arg(i + 1)
+                              .arg(i + 1)
+                              .arg(5000 + i));
+    }
+    QVERIFY(!transport.acceptDescription(overBudget,
+                                         QStringLiteral("offer")));
+    QVERIFY(!transport.acceptCandidate(
+        QString(IMediaTransport::kMaxCandidateBytes + 1, QLatin1Char('x')),
+        QStringLiteral("0")));
+    QVERIFY(!transport.acceptCandidate(
+        QStringLiteral("1 1 UDP 1 192.0.2.1 5000 typ relay"),
+        QStringLiteral("0")));
+    QVERIFY(!transport.sendDisplay(QByteArray(
+        IMediaTransport::kMaxDisplayMessageBytes + 1, 'x')));
+    QVERIFY(!transport.sendRtp(QByteArray(
+        IMediaTransport::kMaxRawRtpBytes + 1, 'x')));
+    QVERIFY(!transport.sendRtp(QByteArray(
+        IMediaTransport::kMinRawRtpBytes - 1, 'x')));
+
+    transport.stop();
+    transport.stop();
+    offerer.stop();
+    QVERIFY(!transport.isReady());
+}
+
+void TestMediaTransport::stopCancelsOldCallbacksAndRecreates()
+{
+    LibDataChannelMediaTransport offerer;
+    LibDataChannelMediaTransport answerer;
+    startPair(offerer, answerer);
+
+    QSignalSpy offerClosed(&offerer, &IMediaTransport::closed);
+    QSignalSpy answerClosed(&answerer, &IMediaTransport::closed);
+    QSignalSpy lateDisplay(&answerer, &IMediaTransport::displayReceived);
+    QSignalSpy lateRtp(&answerer, &IMediaTransport::rtpReceived);
+    QVERIFY(offerer.sendDisplay(QByteArrayLiteral("queued-before-stop")));
+    QVERIFY(offerer.sendRtp(rtpPacket(9)));
+    offerer.stop();
+    answerer.stop();
+    QCOMPARE(offerClosed.count(), 1);
+    QCOMPARE(answerClosed.count(), 1);
+    QTest::qWait(100);
+    QCOMPARE(lateDisplay.count(), 0);
+    QCOMPARE(lateRtp.count(), 0);
+
+    disconnect(&offerer, nullptr, &answerer, nullptr);
+    disconnect(&answerer, nullptr, &offerer, nullptr);
+    startPair(offerer, answerer);
+
+    QSignalSpy displayReceived(&answerer, &IMediaTransport::displayReceived);
+    QSignalSpy rtpReceived(&answerer, &IMediaTransport::rtpReceived);
+    const QByteArray display("R3-recreated-display");
+    const QByteArray rtp = rtpPacket(8);
+    QVERIFY(offerer.sendDisplay(display));
+    QVERIFY(offerer.sendRtp(rtp));
+    QTRY_COMPARE_WITH_TIMEOUT(displayReceived.count(), 1, 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(rtpReceived.count(), 1, 5000);
+    QCOMPARE(displayReceived.at(0).at(0).toByteArray(), display);
+    QCOMPARE(rtpReceived.at(0).at(0).toByteArray(), rtp);
+}
+
+void TestMediaTransport::signalRestartDropsRemainingOldGenerationMedia()
+{
+    LibDataChannelMediaTransport offerer;
+    LibDataChannelMediaTransport answerer;
+    startPair(offerer, answerer);
+
+    int displaysReceived = 0;
+    int rtpReceived = 0;
+    connect(&answerer, &IMediaTransport::displayReceived, &answerer,
+            [&answerer, &displaysReceived](const QByteArray&) {
+                ++displaysReceived;
+                if (displaysReceived == 1) {
+                    answerer.stop();
+                    QVERIFY(answerer.start({IMediaTransport::Role::Answerer,
+                                            kTestAudioSsrc}));
+                }
+            });
+    connect(&answerer, &IMediaTransport::rtpReceived, &answerer,
+            [&rtpReceived](const QByteArray&) { ++rtpReceived; });
+
+    QVERIFY(offerer.sendDisplay(QByteArrayLiteral("old-display-0")));
+    QVERIFY(offerer.sendDisplay(QByteArrayLiteral("old-display-1")));
+    QVERIFY(offerer.sendDisplay(QByteArrayLiteral("old-display-2")));
+    QVERIFY(offerer.sendRtp(rtpPacket(10)));
+    QTRY_COMPARE_WITH_TIMEOUT(displaysReceived, 1, 5000);
+    QTest::qWait(100);
+    QCOMPARE(displaysReceived, 1);
+    QCOMPARE(rtpReceived, 0);
+
+    offerer.stop();
+    answerer.stop();
+}
+
+void TestMediaTransport::deletionFromReceivedSignalIsSafe()
+{
+    LibDataChannelMediaTransport offerer;
+    QPointer<LibDataChannelMediaTransport> answerer =
+        new LibDataChannelMediaTransport;
+    startPair(offerer, *answerer);
+
+    connect(answerer, &IMediaTransport::displayReceived, answerer,
+            [&answerer](const QByteArray&) { delete answerer.data(); });
+    QVERIFY(offerer.sendDisplay(QByteArrayLiteral("delete-receiver")));
+    QVERIFY(offerer.sendDisplay(QByteArrayLiteral("must-not-follow-delete")));
+    QVERIFY(offerer.sendRtp(rtpPacket(11)));
+    QTRY_VERIFY_WITH_TIMEOUT(answerer.isNull(), 5000);
+
+    offerer.stop();
+}
+
+QTEST_GUILESS_MAIN(TestMediaTransport)
+#include "tst_media_transport.moc"

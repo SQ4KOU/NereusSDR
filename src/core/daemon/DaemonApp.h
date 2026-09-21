@@ -131,6 +131,7 @@ namespace NereusSDR {
 
 class RadioModel;
 class StationServer;
+class DaemonMediaController;
 
 // Connects a headless nereusd process to a radio and keeps its slice list
 // in sync with the resolved DaemonConfig. See the file header above for
@@ -373,6 +374,9 @@ private:
     // live peer sockets that must be told the station is going away while
     // there is still a station to speak for.
     std::unique_ptr<StationServer> m_stationServer;
+    /// Must be destroyed before StationServer/RadioModel: it owns queued
+    /// source, peer and endpoint work referring to both.
+    std::unique_ptr<DaemonMediaController> m_mediaController;
     FftTopology m_topology;
 
     // R1 Task 11. See widebandThread()'s doc comment above for the

@@ -6786,6 +6786,47 @@ nereus_add_test(tst_station_session
 nereus_add_test(tst_session_link_loss
     fakes/LoopbackTransport.cpp)
 
+# Remote Daemon R3, Task 1: two live direct peers prove DTLS/SCTP display,
+# SRTP RTP, bounded signalling/media inputs, stop cancellation, and restart.
+nereus_add_test(tst_media_transport)
+
+# Remote Daemon R3, Task 1: strict connection-scoped signalling bridge and
+# live queued-control exchange over the encrypted media transport.
+nereus_add_test(tst_media_peer)
+
+# Remote Daemon R3, Task 5: the existing RADE-pinned Opus encodes and decodes
+# the bounded mixed-stereo RTP profile without a second codec build.
+nereus_add_test(tst_opus_audio_codec)
+
+# Remote Daemon R3 audio source: bounded master-mix delivery and synchronous
+# tap retirement across an admitted DSP callback.
+nereus_add_test(tst_daemon_audio_source)
+
+# Remote Daemon R3, Task 3: bounded native trace, waterfall, and DSS codec.
+nereus_add_test(tst_display_codec)
+
+# Remote Daemon R3, Task 2: synthetic live stream I/Q reaches a daemon-owned
+# FFT source with tier isolation and bounded source lifecycle.
+nereus_add_test(tst_remote_fft_production)
+
+# Remote Daemon R3, Task 4: endpoint state, tier switching, frame reduction,
+# cadence, compression, and bounded DSS wide-row composition.
+nereus_add_test(tst_spectrum_endpoint)
+
+# Remote Daemon R3 GUI receive seam: decoded remote spectrum reaches the
+# existing renderer entry point without local FFT ownership.
+nereus_add_test(tst_remote_spectrum_render)
+
+# Remote Daemon R3 GUI controller: authenticated media signalling, endpoint
+# subscription lifecycle, stale context rejection, and teardown.
+nereus_add_test(tst_remote_media_controller
+    fakes/LoopbackTransport.cpp)
+
+# Remote Daemon R3 daemon controller: authenticated session/media lifecycle,
+# real FFT/display production, stale control rejection, and slice cleanup.
+nereus_add_test(tst_daemon_media_controller
+    fakes/LoopbackTransport.cpp)
+
 # Remote Daemon R2: the GUI's slice controls reach the daemon.
 #
 # Task 11 built the command verbs, task 18 built the session that could

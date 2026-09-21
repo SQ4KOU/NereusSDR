@@ -60,6 +60,18 @@ class TstSpectrumReducer : public QObject
 
 private slots:
 
+    void extremeRemoteCropClampsBeforeIntegerConversion()
+    {
+        ReducerConfig config = baseConfig();
+        config.centreHz = 1.0e200;
+        QCOMPARE(SpectrumReducer::visibleBinRange(4096, config), std::make_pair(4095, 4095));
+        config.centreHz = -1.0e200;
+        QCOMPARE(SpectrumReducer::visibleBinRange(4096, config), std::make_pair(0, 0));
+        config = baseConfig();
+        config.spanHz = 1.0e200;
+        QCOMPARE(SpectrumReducer::visibleBinRange(4096, config), std::make_pair(0, 4095));
+    }
+
     // ---- [plan] the five tests the R1 plan specified ------------------
 
     // Design section 9.4: the pixel count is a bandwidth control, and must

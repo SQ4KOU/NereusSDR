@@ -41,7 +41,9 @@ namespace NereusSDR {
 std::pair<int, int> SpectrumReducer::visibleBinRange(int binCount,
                                                      const ReducerConfig& cfg)
 {
-    if (binCount <= 0 || cfg.sampleRateHz <= 0.0) {
+    if (binCount <= 0 || !std::isfinite(cfg.sampleRateHz) || cfg.sampleRateHz <= 0.0
+        || !std::isfinite(cfg.streamCentreHz) || !std::isfinite(cfg.centreHz)
+        || !std::isfinite(cfg.spanHz)) {
         return {0, -1};  // empty range, callers compute count = 0
     }
 
@@ -51,11 +53,18 @@ std::pair<int, int> SpectrumReducer::visibleBinRange(int binCount,
     double displayLowHz  = cfg.centreHz - cfg.spanHz / 2.0;
     double displayHighHz = cfg.centreHz + cfg.spanHz / 2.0;
 
-    int firstBin = static_cast<int>(std::floor((displayLowHz - fftLowHz) / binWidth));
-    int lastBin  = static_cast<int>(std::ceil((displayHighHz - fftLowHz) / binWidth));
-
-    firstBin = std::clamp(firstBin, 0, binCount - 1);
-    lastBin  = std::clamp(lastBin, 0, binCount - 1);
+    if (!std::isfinite(fftLowHz) || !std::isfinite(displayLowHz)
+        || !std::isfinite(displayHighHz) || binWidth <= 0.0) {
+        return {0, -1};
+    }
+    // Remote requests can be finite but far outside the source. Clamp in
+    // floating point before narrowing: an out-of-range double-to-int cast
+    // is undefined even when an integer clamp follows it.
+    const double lastIndex = binCount - 1;
+    int firstBin = static_cast<int>(std::clamp(
+        std::floor((displayLowHz - fftLowHz) / binWidth), 0.0, lastIndex));
+    int lastBin = static_cast<int>(std::clamp(
+        std::ceil((displayHighHz - fftLowHz) / binWidth), 0.0, lastIndex));
 
     if (firstBin > lastBin) {
         firstBin = lastBin;

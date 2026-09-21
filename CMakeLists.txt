@@ -393,6 +393,12 @@ endif()
 find_package(OpenSSL 3.0 REQUIRED COMPONENTS Crypto)
 message(STATUS "OpenSSL ${OPENSSL_VERSION} found at ${OPENSSL_INCLUDE_DIR}")
 
+# R3 Task 1: direct encrypted media transport. The helper fetches only
+# SHA-256-pinned codeload archives, keeps media enabled, disables the unused
+# WebSocket implementation, and keeps dependency targets out of installation.
+include(cmake/NereusRemoteMedia.cmake)
+nereus_add_remote_media_dependency()
+
 # Fix round 3: broadened from WIN32-only to any platform, since the same
 # "assert what was explicitly requested is what was actually found"
 # principle now also applies to release.yml's macOS x86_64 cross-compile
@@ -934,6 +940,14 @@ set(CORE_SOURCES
     # knobs (as FftPoolConfig), and the shared worker thread(s), so the
     # daemon can produce spectrum with no widget toolkit in the process.
     src/core/spectrum/FftEnginePool.cpp
+    # R3 Task 2: daemon-owned source that feeds the existing FFT pool from
+    # live stream I/Q without any GUI or endpoint policy.
+    src/core/session/media/DaemonSpectrumSource.cpp
+    # R3 daemon session owner for media peer, spectrum endpoints, and the
+    # existing mixed-audio Opus path.
+    src/core/session/media/DaemonMediaController.cpp
+    # R3 bounded bridge from the AudioEngine master mix to daemon media.
+    src/core/session/media/DaemonAudioSource.cpp
     # R1 Task 7: consumer-to-stream subscription set extracted from the
     # router-mutation half of MainWindow::rebuildFftRouting. Rebuilds an
     # FFTRouter from its own subscription set on demand, so the daemon can
@@ -1046,6 +1060,16 @@ set(CORE_SOURCES
     src/core/session/StationCapabilities.cpp
     src/core/session/StationServer.cpp
     src/core/session/StationClient.cpp
+    # R3 media transport, signalling, display, spectrum, and Opus building
+    # blocks. IMediaTransport carries Q_OBJECT and is listed so AUTOMOC emits
+    # its signal metadata.
+    src/core/session/media/IMediaTransport.h
+    src/core/session/media/LibDataChannelMediaTransport.cpp
+    src/core/session/media/MediaPeer.cpp
+    src/core/session/media/OpusAudioCodec.cpp
+    src/core/session/media/DisplayCodec.cpp
+    src/core/session/media/DssWideRow.cpp
+    src/core/session/media/SpectrumEndpoint.cpp
     # R2 Task 20: where a GUI process gets its station address and token
     # from. A plain value struct plus one URL rule; deliberately carries no
     # AppSettings key literals (see RemoteStationOptions.h for why).
@@ -1117,6 +1141,7 @@ set(MODEL_SOURCES
 
 set(GUI_SOURCES
     src/gui/MainWindow.cpp
+    src/gui/RemoteMediaController.cpp
     src/gui/AmpViewChart.cpp
     src/gui/AmpViewWindow.cpp
     src/gui/PsaIndicatorWidget.cpp
@@ -1702,6 +1727,11 @@ function(nereus_apply_core_deps target)
     # next to its first consumer.
     target_link_libraries(${target} PUBLIC OpenSSL::Crypto)
 
+    # libdatachannel supplies DTLS/SCTP and SRTP transport only. It does not
+    # build Opus, so RADE's existing Opus remains the sole codec copy.
+    target_link_libraries(${target} PRIVATE
+        LibDataChannel::LibDataChannelStatic)
+
     # libpipewire-0.3, gated by the pkg_check_modules block above. Only links on
     # Linux when the dev package is present; NEREUS_HAVE_PIPEWIRE lets follow-up
     # PipeWire sources compile conditionally.
@@ -1973,6 +2003,13 @@ endif()
 nereus_apply_core_deps(NereusCore)
 nereus_apply_gui_deps(NereusSDRLib)
 target_link_libraries(NereusSDRLib PUBLIC NereusCore)
+
+# Remote Daemon R3 developer probe. Kept out of routine builds and installs;
+# it reads credentials from a private file and links the headless core only.
+add_executable(nereus-media-probe EXCLUDE_FROM_ALL
+    tools/nereus-media-probe.cpp)
+target_link_libraries(nereus-media-probe PRIVATE NereusCore)
+nereus_apply_warnings(nereus-media-probe)
 
 if(NEREUSSDR_LTO_AVAILABLE)
     nereus_apply_core_deps(NereusCore_LTO)

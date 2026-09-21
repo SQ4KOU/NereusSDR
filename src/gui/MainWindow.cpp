@@ -351,6 +351,7 @@ warren@wpratt.com
 // Remote-daemon R2 Task 20: the wss client and the settings backend it
 // writes through. Both are used only on the m_station.isRemote() path.
 #include "core/session/StationClient.h"
+#include "gui/RemoteMediaController.h"
 #include "core/settings/SettingsProxy.h"
 #include "setup/DspSetupPages.h"   // NrAnfSetupPage::selectSubtab
 #include "TitleBar.h"
@@ -950,6 +951,12 @@ void MainWindow::connectToStation()
     }
 
     m_stationClient = new StationClient(m_radioModel, proxy, this);
+    auto* media = new RemoteMediaController(m_stationClient, m_radioModel,
+                                             m_panStack, m_stationClient);
+    connect(media, &RemoteMediaController::errorOccurred, this, [this](const QString& reason) {
+        qCWarning(lcConnection) << "Station media:" << reason;
+        showToast(tr("Station media: %1").arg(reason), ToastSeverity::Warning, 5000);
+    });
 
     connect(m_stationClient, &StationClient::handshakeComplete, this, [this]() {
         qCInfo(lcConnection) << "Station handshake complete:" << m_station.url;

@@ -3499,6 +3499,20 @@ public:
     /// them. Empty in steady state.
     QVector<int> suspendedStreams() const { return m_suspendedStreams; }
 
+    /// Current allocator geometry for a live stream. These are read-only
+    /// production accessors for daemon media consumers; they deliberately
+    /// forward the same allocator values exposed by the older test seams
+    /// below, rather than deriving geometry from a slice frequency.
+    double streamCentreHz(int streamIndex) const {
+        return m_streamAllocator.streamCentreHz(streamIndex);
+    }
+    int streamSampleRateHz(int streamIndex) const {
+        return m_streamAllocator.streamSampleRateHz(streamIndex);
+    }
+    bool streamActive(int streamIndex) const {
+        return m_streamAllocator.isStreamActive(streamIndex);
+    }
+
     /// Phase 3F Sub-Epic I closeout, defect F4 test seam: a stream's window
     /// centre, so a test can reconstruct the frequency WDSP is actually
     /// demodulating (centre + the slice's shift offset) and require it to

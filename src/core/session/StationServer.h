@@ -352,6 +352,14 @@ public:
     /// At most one, by construction. See the topology decision above.
     bool hasAuthenticatedSession() const;
 
+    /// Configure before accepting sessions. Old peers remain control-only.
+    void setMediaEnabled(bool enabled);
+    bool mediaAvailable() const;
+    quint64 mediaSessionEpoch() const { return m_mediaSessionEpoch; }
+    /// expectedEpoch is captured by the producer when its session starts;
+    /// late work must never target a replacement session.
+    bool sendMediaControl(const QJsonObject& payload, quint64 expectedEpoch);
+
     /// The capability descriptor this daemon would advertise right now.
     /// Public so a caller (and this task's tests) can inspect what a
     /// client is about to be told without standing up a client.
@@ -363,6 +371,9 @@ public:
     SettingsProxyServer* settingsServer() const { return m_settingsServer; }
 
 signals:
+    void mediaSessionStarted(quint64 epoch);
+    void mediaSessionEnded(quint64 epoch);
+    void mediaControlReceived(const QJsonObject& payload, quint64 epoch);
     /// A peer completed the full section 7.0 sequence and is now THE
     /// session.
     void clientAuthenticated(const QString& peer);
@@ -393,6 +404,7 @@ private:
         bool helloReceived = false;
         bool authenticated = false;
         quint16 agreedMinor = 0;
+        bool snapshotComplete = false;
 
         /// Pings sent since the last pong. Reset to 0 by every pong; the
         /// heartbeat tick declares death when it reaches maxMissedPongs().
@@ -463,6 +475,8 @@ private:
 
     QHash<SessionTransport*, Peer> m_peers;
     SessionTransport* m_session = nullptr;
+    bool m_mediaEnabled = false;
+    quint64 m_mediaSessionEpoch = 0;
 
     QTimer* m_heartbeatTimer = nullptr;
     QTimer* m_deltaFlushTimer = nullptr;

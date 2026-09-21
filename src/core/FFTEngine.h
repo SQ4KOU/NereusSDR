@@ -105,6 +105,10 @@ public:
     explicit FFTEngine(int receiverId, QObject* parent = nullptr);
     ~FFTEngine() override;
 
+    /// The engine owns the supported FFT bound; callers validate requests
+    /// through this accessor instead of duplicating a DSP constant.
+    static constexpr int maximumFftSize() { return kMaxFftSize; }
+
     // --- Configuration (thread-safe, main thread sets these) ---
 
     void setFftSize(int size);
@@ -187,6 +191,12 @@ public slots:
     // Format: [I0, Q0, I1, Q1, ...] as float pairs.
     // Accumulates until fftSize samples are collected, then runs FFT.
     void feedIQ(const QVector<float>& interleavedIQ);
+
+    /// Drops every accumulated and overlap sample on this engine's worker
+    /// thread. Call at an RF-source context boundary before accepting input
+    /// for the new context; configuration setters alone do not clear the
+    /// overlap ring when their values happen to be unchanged.
+    void resetInputHistory();
 
 signals:
     // Emitted when a new FFT frame is ready.

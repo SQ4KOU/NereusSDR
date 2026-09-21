@@ -104,6 +104,10 @@ struct StationCapabilities {
     /// until the snapshot-complete marker has arrived regardless.
     bool txPermitted = false;
 
+    /// Zero means control-only. Nonzero is advertised only when a daemon
+    /// media controller is installed; negotiated session minor still gates it.
+    int remoteMediaVersion = 0;
+
     /// The daemon's own AppSettings SettingsSchemaVersion, read by that
     /// key name from its own store. See StationClient's schema-skew check.
     qint32 settingsSchemaVersion = 0;

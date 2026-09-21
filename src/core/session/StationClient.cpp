@@ -585,6 +585,15 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
         return;
     }
 
+    // A directly adopted replacement link needs the same retirement as a
+    // redial. Otherwise the previous authentication/snapshot flags remain
+    // true until the new Hello arrives, admitting work into an unverified
+    // session. Retire its media and mirror state, preserving the existing
+    // contract that a deliberate redial emits no sessionEnded notification.
+    if (m_sessionActive) {
+        endSession(QStringLiteral("replaced by a newer session"), false, false);
+    }
+
     // RELEASE THE OLD LINK FIRST. Overwriting m_transport without this was
     // a reconnect defect waiting for Task 19: WebSocketTransport::closeLink
     // closes ASYNCHRONOUSLY, so "heartbeat timeout, reconnect from the
@@ -728,7 +737,8 @@ void StationClient::onTransportClosed()
 // loss, RadioModel's own state does (retained, not reset -- design doc
 // section 13), and only a closure that WANTS a retry re-arms the
 // automatic reconnect timer.
-void StationClient::endSession(const QString& reason, bool attemptReconnect)
+void StationClient::endSession(const QString& reason, bool attemptReconnect,
+                               bool reportSessionEnd)
 {
     if (!m_sessionActive) {
         return;  // already reported for this attach
@@ -810,7 +820,10 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect)
     if (!m_radioModel.isNull()) {
         m_radioModel->setStationConnectionState(ConnectionState::Disconnected);
     }
-    emit sessionEnded(reason);
+    emit mediaSessionEnded(m_sessionEpoch);
+    if (reportSessionEnd) {
+        emit sessionEnded(reason);
+    }
 
     // Task 19 step 3: automatic reconnect. Only for a closure that WANTS
     // one, and only when there is something to redial -- a
@@ -950,6 +963,11 @@ void StationClient::onTransportText(const QByteArray& wire)
     }
 
     switch (message.kind) {
+    case SessionMessageKind::MediaControl:
+        if (mediaAvailable()) {
+            emit mediaControlReceived(message.mediaPayload, m_sessionEpoch);
+        }
+        break;
     case SessionMessageKind::Hello:
         handleHello(message);
         break;
@@ -1552,6 +1570,19 @@ bool StationClient::applyOne(QObject* target, const MirrorProperty& prop,
         return false;
     }
 
+    // Radio connectivity can change while the authenticated station link
+    // stays up. The handshake seeds this state from capabilities, but its
+    // read-only property deltas need the same explicit remote-state writer.
+    // RadioModel's generic inbound hook is deliberately a command boundary.
+    if (target == m_radioModel.data() && className == QByteArrayLiteral("RadioModel")
+        && prop.name == QByteArrayLiteral("connected")
+        && m_radioModel->role() == RadioModel::Role::Remote) {
+        m_capabilities.radioConnected = native.toBool();
+        m_radioModel->setStationConnectionState(m_capabilities.radioConnected
+            ? ConnectionState::Connected : ConnectionState::Disconnected);
+        return true;
+    }
+
     // Strategy 2: the model's own inbound hook -- but ONLY where that hook
     // is a genuine STATE APPLY, never where it is a COMMAND SENDER.
     //
@@ -1847,6 +1878,30 @@ void StationClient::send(const SessionMessage& message)
         return;
     }
     m_transport->sendText(SessionMessages::encode(message));
+}
+
+bool StationClient::mediaAvailable() const
+{
+    return m_sessionActive && m_authenticated && m_handshakeComplete
+        && m_transport && m_transport->isOpen()
+        && m_agreedMinor >= kMediaSessionProtocolMinor
+        && m_capabilities.remoteMediaVersion >= 1;
+}
+
+bool StationClient::sendMediaControl(const QJsonObject& payload, quint32 expectedEpoch)
+{
+    if (!mediaAvailable() || expectedEpoch != m_sessionEpoch) {
+        return false;
+    }
+    SessionMessage message;
+    message.kind = SessionMessageKind::MediaControl;
+    message.mediaPayload = payload;
+    const QByteArray wire = SessionMessages::encode(message);
+    if (wire.isEmpty()) {
+        return false;
+    }
+    m_transport->sendText(wire);
+    return true;
 }
 
 QList<QByteArray> StationClient::mirroredObjectKeys() const

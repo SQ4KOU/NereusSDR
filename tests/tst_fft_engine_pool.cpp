@@ -44,6 +44,64 @@ private slots:
         QCOMPARE(pool.streams(), QList<int>{1});
     }
 
+    void twoTiersOnOneStreamKeepIndependentFftSizes()
+    {
+        FftEnginePool pool;
+        FftPoolConfig wideConfig;
+        wideConfig.fftSize = 4096;
+        FftPoolConfig fineConfig = wideConfig;
+        fineConfig.fftSize = 16384;
+
+        const FftSourceKey wide{0, FftTier::Wide};
+        const FftSourceKey fine{0, FftTier::Fine};
+        FFTEngine* wideEngine = pool.engineForSource(wide, wideConfig);
+        FFTEngine* fineEngine = pool.engineForSource(fine, fineConfig);
+
+        QVERIFY(wideEngine != nullptr);
+        QVERIFY(fineEngine != nullptr);
+        QVERIFY(wideEngine != fineEngine);
+        QCOMPARE(wideEngine->fftSize(), 4096);
+        QCOMPARE(fineEngine->fftSize(), 16384);
+        const QList<FftSourceKey> expectedSources{wide, fine};
+        QCOMPARE(pool.sources(), expectedSources);
+        QCOMPARE(pool.streams(), QList<int>{0});
+
+        pool.removeSource(fine);
+        QCOMPARE(pool.engineCount(), 1);
+        QCOMPARE(pool.engineForStream(0), wideEngine);
+        QCOMPARE(wideEngine->fftSize(), 4096);
+
+        pool.removeStream(0);
+        QCOMPARE(pool.engineCount(), 0);
+    }
+
+    void disabledForwardingStillLetsSourceEngineProduce()
+    {
+#ifndef HAVE_FFTW3
+        QSKIP("FFTEngine has no FFTW3 backend in this build");
+#else
+        FftEnginePool pool(nullptr, false);
+        QVERIFY(!pool.frameForwardingEnabled());
+
+        FftPoolConfig config;
+        config.fftSize = 1024;
+        config.fps = 60;
+        config.windowType = static_cast<int>(WindowFunction::Hann);
+        FFTEngine* engine = pool.engineForSource({0, FftTier::Wide}, config);
+        QVERIFY(engine != nullptr);
+
+        QSignalSpy directFrames(engine, &FFTEngine::fftReadyLinear);
+        QSignalSpy forwardedFrames(&pool, &FftEnginePool::fftFrameReady);
+        const QVector<float> iq(2052, 0.0f); // 1026 complex samples
+        QMetaObject::invokeMethod(engine, [engine, iq]() {
+            engine->feedIQ(iq);
+        }, Qt::QueuedConnection);
+
+        QTRY_VERIFY(directFrames.count() >= 1);
+        QCOMPARE(forwardedFrames.count(), 0);
+#endif
+    }
+
     // Config must reach engines created BEFORE and AFTER the call, otherwise
     // stream 0 and stream 4 silently run different FFT sizes.
     void configAppliesToExistingAndFutureEngines()

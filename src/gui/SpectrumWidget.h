@@ -193,6 +193,7 @@ mw0lge@grange-lane.co.uk
 #include "core/WdspTypes.h"  // DSPMode — for TX filter IQ-space mapping (Plan 4 D9)
 #include "core/spectrum/SpectrumDetectorMode.h"
 #include "core/spectrum/ISpectrumSink.h"  // R1 Task 4: also supplies WfColorScheme + AverageMode
+#include "core/session/media/DisplayCodec.h"
 
 QT_BEGIN_NAMESPACE
 class QLabel;
@@ -218,6 +219,7 @@ class SpectrumOverlayMenu;
 class VfoWidget;
 class ImdOverlay;  // Phase 3M-4 Task 12 — two-tone IMD overlay analytical core
 class WaterfallTicker;  // src/gui/spectrum/WaterfallTicker.h
+struct SpectrumEndpointContext;
 
 // Waterfall color scheme presets: extracted to core in R1 Task 4
 // (src/core/spectrum/ISpectrumSink.h) alongside AverageMode below, because
@@ -359,6 +361,12 @@ public:
     /// already stands the receive path down for the waterfall plane.
     void updateSpectrumFromTxPixels(int receiverId,
                                     const QVector<float>& binsDbm);
+    /// R3: render Core's independent, already reduced dBm planes without
+    /// running the local detector/averager over them again.
+    void setRemoteSpectrumContext(const SpectrumEndpointContext& context,
+                                  double sourceCentreHz, double sampleRateHz);
+    bool updateRemoteSpectrum(const DisplayCodecFrame& frame);
+    void clearRemoteSpectrum();
     void setCenterFrequency(double centerHz);
     double centerFrequency() const { return m_centerHz; }
     double bandwidth() const { return m_bandwidthHz; }
@@ -1984,6 +1992,7 @@ private:
     // Also runs the fast-attack convergence-gated auto-clear from
     // display.cs:5904-5908.
     void processNoiseFloor();
+    void updateReducedSpectrumOverlays();
     void drawWaterfall(QPainter& p, const QRect& wfRect);
     // HIGH SWR / PA safety overlay — ported from display.cs:4183-4201 [v2.10.3.13]
     void paintHighSwrOverlay(QPainter& p);
@@ -2410,6 +2419,13 @@ private:
     // via pushTxWaterfallRow (TxAnalyzer's pixout=1 stream).  Only set
     // true during MOX, by MainWindow.
     bool                  m_txExternalWaterfall{false};
+    bool m_remoteSpectrum{false};
+    DisplayCodecContext m_remoteCodec;
+    double m_remoteExactCentreHz{0.0};
+    double m_remoteExactSpanHz{0.0};
+    QVector<float> m_pendingRemoteWide;
+    double m_remoteWideCentreHz{0.0};
+    double m_remoteWideSpanHz{0.0};
 
     // ---- Phase 3G-8 commit 4: waterfall renderer state ----
 

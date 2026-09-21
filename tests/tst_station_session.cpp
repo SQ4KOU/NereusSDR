@@ -189,6 +189,9 @@ private slots:
     void handshakeCompletesInSectionSevenZeroOrder();
     void capabilitiesAdvertiseEffectiveNotBoardLimits();
     void clientAppliesCapabilitiesAndDrivesConnected();
+    void mediaEnvelopeIsBoundedAndTyped();
+    void mediaRejectsPreAuthenticationAndOldProtocol();
+    void mediaRequiresReadySessionAndRejectsPriorEpoch();
 
     // ---- Version policy (task 18 step 1) ----
     void majorVersionMismatchRefusesNamingBothVersions();
@@ -242,6 +245,114 @@ private:
 void TstStationSession::initTestCase()
 {
     QVERIFY(m_securityDir.isValid());
+}
+
+void TstStationSession::mediaEnvelopeIsBoundedAndTyped()
+{
+    SessionMessage message;
+    message.kind = SessionMessageKind::MediaControl;
+    message.mediaPayload = {{QStringLiteral("op"), QStringLiteral("start")}};
+    SessionMessage decoded;
+    QVERIFY(SessionMessages::decode(SessionMessages::encode(message), &decoded));
+    QCOMPARE(decoded.kind, SessionMessageKind::MediaControl);
+    QCOMPARE(decoded.mediaPayload, message.mediaPayload);
+    QVERIFY(!SessionMessages::decode(
+        QByteArrayLiteral("{\"type\":\"media.control\",\"payload\":[]}"), &decoded));
+    QCOMPARE(decoded.mediaPayload, message.mediaPayload);
+    message.mediaPayload.insert(QStringLiteral("sdp"),
+                                QString(kMaxMediaControlBytes, QLatin1Char('x')));
+    QVERIFY(SessionMessages::encode(message).isEmpty());
+    const QByteArray oversized = QJsonDocument(QJsonObject{
+        {QStringLiteral("type"), QStringLiteral("media.control")},
+        {QStringLiteral("payload"), message.mediaPayload}}).toJson(QJsonDocument::Compact);
+    QVERIFY(!SessionMessages::decode(oversized, &decoded));
+}
+
+void TstStationSession::mediaRejectsPreAuthenticationAndOldProtocol()
+{
+    QTemporaryDir settingsDir;
+    AppSettings settings(settingsDir.filePath(QStringLiteral("media.settings")));
+    auto model = makeStationRadioModel(0);
+    StationServer server(model.get(), settings, m_securityDir.path());
+    server.setMediaEnabled(true);
+    QSignalSpy inbound(&server, &StationServer::mediaControlReceived);
+    SessionMessage media;
+    media.kind = SessionMessageKind::MediaControl;
+    media.mediaPayload = {{QStringLiteral("op"), QStringLiteral("start")}};
+
+    auto* unauthStation = new LoopbackTransport(QStringLiteral("unauth-station"), this);
+    auto* unauthPeer = new LoopbackTransport(QStringLiteral("unauth-peer"), this);
+    unauthStation->linkTo(unauthPeer);
+    server.acceptTransport(unauthStation);
+    unauthPeer->sendText(SessionMessages::encode(media));
+    QTRY_VERIFY(!unauthPeer->isOpen());
+    QCOMPARE(inbound.count(), 0);
+
+    auto* oldStation = new LoopbackTransport(QStringLiteral("old-station"), this);
+    auto* oldPeer = new LoopbackTransport(QStringLiteral("old-peer"), this);
+    oldStation->linkTo(oldPeer);
+    server.acceptTransport(oldStation);
+    oldPeer->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor, 0, 6, QStringLiteral("old-client"))));
+    oldPeer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
+    QTRY_VERIFY(server.hasAuthenticatedSession());
+    QVERIFY(!server.mediaAvailable());
+    QVERIFY(!server.sendMediaControl(media.mediaPayload, server.mediaSessionEpoch()));
+    oldPeer->sendText(SessionMessages::encode(media));
+    QCoreApplication::processEvents();
+    QCOMPARE(inbound.count(), 0);
+    QVERIFY(oldPeer->isOpen());
+}
+
+void TstStationSession::mediaRequiresReadySessionAndRejectsPriorEpoch()
+{
+    QTemporaryDir settingsDir;
+    AppSettings settings(settingsDir.filePath(QStringLiteral("media.settings")));
+    auto model = makeStationRadioModel(0);
+    StationServer server(model.get(), settings, m_securityDir.path());
+    server.setMediaEnabled(true);
+    RadioModel remote(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&remote, &proxy);
+    const QJsonObject payload{{QStringLiteral("op"), QStringLiteral("start")}};
+    QSignalSpy serverInbound(&server, &StationServer::mediaControlReceived);
+    QSignalSpy clientInbound(&client, &StationClient::mediaControlReceived);
+    QSignalSpy ended(&server, &StationServer::mediaSessionEnded);
+    QVERIFY(!client.sendMediaControl(payload, client.sessionEpoch()));
+    QVERIFY(!server.sendMediaControl(payload, server.mediaSessionEpoch()));
+
+    auto connectPair = [&] {
+        auto* station = new LoopbackTransport(QStringLiteral("media-station"), this);
+        auto* peer = new LoopbackTransport(QStringLiteral("media-client"), this);
+        station->linkTo(peer);
+        client.startSession(peer, server.token());
+        server.acceptTransport(station);
+    };
+    connectPair();
+    QTRY_VERIFY(client.mediaAvailable());
+    QVERIFY(server.mediaAvailable());
+    const quint32 firstClientEpoch = client.sessionEpoch();
+    const quint64 firstServerEpoch = server.mediaSessionEpoch();
+    QVERIFY(client.sendMediaControl(payload, firstClientEpoch));
+    QVERIFY(server.sendMediaControl(payload, firstServerEpoch));
+    QTRY_COMPARE(serverInbound.count(), 1);
+    QTRY_COMPARE(clientInbound.count(), 1);
+    QCOMPARE(serverInbound.first().at(1).toULongLong(), firstServerEpoch);
+    QCOMPARE(clientInbound.first().at(1).toUInt(), firstClientEpoch);
+
+    connectPair();
+    QTRY_VERIFY(client.mediaAvailable());
+    QVERIFY(client.sessionEpoch() != firstClientEpoch);
+    QVERIFY(server.mediaSessionEpoch() != firstServerEpoch);
+    QVERIFY(!ended.isEmpty());
+    QVERIFY(!client.sendMediaControl(payload, firstClientEpoch));
+    QVERIFY(!server.sendMediaControl(payload, firstServerEpoch));
+    QVERIFY(client.sendMediaControl(payload, client.sessionEpoch()));
+    QTRY_COMPARE(serverInbound.count(), 2);
+    QCOMPARE(clientInbound.count(), 1);
+    client.disconnectFromStation(QStringLiteral("media test complete"));
+    QTRY_VERIFY(!server.mediaAvailable());
+    QVERIFY(!client.sendMediaControl(payload, client.sessionEpoch()));
 }
 
 // ── TokenStore ───────────────────────────────────────────────────────────

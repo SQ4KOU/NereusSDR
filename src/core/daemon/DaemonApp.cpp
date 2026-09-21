@@ -17,6 +17,7 @@
 #include "core/FFTRouter.h"
 #include "core/LogCategories.h"
 #include "core/session/StationServer.h"
+#include "core/session/media/DaemonMediaController.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -160,6 +161,7 @@ void DaemonApp::stop()
     // them. It also has to go before m_radioModel.reset() regardless --
     // its StateMirror and ObjectRegistry hold QPointers into that model
     // and every SliceModel under it.
+    m_mediaController.reset();
     m_stationServer.reset();
 
     if (!m_radioModel) {
@@ -232,6 +234,11 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
     // profile before this point.
     m_stationServer = std::make_unique<StationServer>(m_radioModel.get(),
                                                       AppSettings::instance());
+    // Set before listen() so the first authenticated client sees the media
+    // capability, never a control-only session that cannot be upgraded.
+    m_stationServer->setMediaEnabled(true);
+    m_mediaController = std::make_unique<DaemonMediaController>(
+        m_stationServer.get(), m_radioModel.get(), this);
     if (!m_stationServer->listen(bind, static_cast<quint16>(cfg.remotePort))) {
         qCWarning(lcApp) << "DaemonApp: remote control listener failed on"
                           << cfg.remoteBind << cfg.remotePort << ":"

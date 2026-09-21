@@ -30,11 +30,40 @@
 
 #include <QMap>
 #include <QObject>
+#include <QSet>
 #include <QVector>
 
 class QThread;
 
 namespace NereusSDR {
+
+/// A stream can have the normal full-span engine and an independently sized
+/// deep-resolution engine at the same time.  This is a production identity,
+/// not a pan identity: several panes may consume the same source.
+enum class FftTier : quint8 {
+    Wide,
+    Fine,
+};
+
+struct FftSourceKey {
+    int streamIndex{-1};
+    FftTier tier{FftTier::Wide};
+
+    friend bool operator==(const FftSourceKey& lhs, const FftSourceKey& rhs)
+    {
+        return lhs.streamIndex == rhs.streamIndex && lhs.tier == rhs.tier;
+    }
+
+    friend bool operator<(const FftSourceKey& lhs, const FftSourceKey& rhs)
+    {
+        if (lhs.streamIndex != rhs.streamIndex) {
+            return lhs.streamIndex < rhs.streamIndex;
+        }
+        return static_cast<quint8>(lhs.tier) < static_cast<quint8>(rhs.tier);
+    }
+};
+
+using MediaSourceKey = FftSourceKey;
 
 /// The four global display knobs MainWindow::createFftEngineForStream used
 /// to read from AppSettings, plus the thread-count policy the old code
@@ -90,7 +119,12 @@ struct FftPoolConfig {
 class FftEnginePool : public QObject {
     Q_OBJECT
 public:
-    explicit FftEnginePool(QObject* parent = nullptr);
+    /// Local GUI callers retain the historical full-frame relay by default.
+    /// A daemon producer that owns its own bounded latest-frame handoff can
+    /// disable it before creating engines, avoiding an unused queued copy of
+    /// each full FFT frame onto the pool's owner thread.
+    explicit FftEnginePool(QObject* parent = nullptr,
+                           bool forwardFrameReady = true);
     ~FftEnginePool() override;
 
     /// Applies to every engine that exists right now AND every engine
@@ -146,18 +180,37 @@ public:
     /// createFftEngineForStream guard).
     FFTEngine* engineForStream(int streamIndex);
 
+    /// Returns a source-specific engine, creating it with `cfg` on first
+    /// use. Wide and Fine keys for one stream deliberately have separate
+    /// engines, accumulators, plans and resolution settings.  `cfg` applies
+    /// only to this source; it cannot resize its sibling tier.
+    ///
+    /// The worker-thread count remains the pool's established policy from
+    /// setConfig()/setConfigForNewStreams(); source-specific requests only
+    /// select FFT behaviour, not a new thread topology.
+    FFTEngine* engineForSource(const FftSourceKey& key, const FftPoolConfig& cfg);
+
     /// Drops and deletes the engine for streamIndex, if one exists. Safe
     /// to call for a stream with no engine (no-op). The engine's own
     /// worker thread keeps running for whatever other streams still use
     /// it; only this one engine is torn down.
     void removeStream(int streamIndex);
 
+    /// Drops one source tier without affecting the other tier on the same
+    /// stream.  Safe for an unknown key.
+    void removeSource(const FftSourceKey& key);
+
     /// Stream indices with a live engine, ascending (QMap keeps its keys
     /// sorted).
     QList<int> streams() const;
 
+    /// Every live production source, ordered by stream then tier.
+    QList<FftSourceKey> sources() const;
+
     /// Number of live engines.
     int engineCount() const;
+
+    bool frameForwardingEnabled() const { return m_forwardFrameReady; }
 
 signals:
     /// Re-emission of every pooled engine's fftReadyLinear, with the
@@ -169,11 +222,12 @@ signals:
                        double windowEnb, double dbmOffset);
 
 private:
-    FFTEngine* createEngine(int streamIndex);
-    void applyConfigTo(FFTEngine* engine) const;
+    FFTEngine* createEngine(const FftSourceKey& key, const FftPoolConfig& cfg);
+    static void applyConfigTo(FFTEngine* engine, const FftPoolConfig& cfg);
 
     FftPoolConfig          m_config;
-    QMap<int, FFTEngine*>  m_engines;       // keyed by stream index
+    bool                   m_forwardFrameReady{true};
+    QMap<FftSourceKey, FFTEngine*> m_engines;
     QMap<int, QThread*>    m_threadsByBucket;  // keyed by streamIndex % threadCount
 };
 

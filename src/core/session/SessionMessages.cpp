@@ -282,6 +282,7 @@ constexpr KindName kKindNames[] = {
     { SessionMessageKind::SettingsRemove, "settings.remove" },
     { SessionMessageKind::SettingsValue, "settings.value" },
     { SessionMessageKind::SettingsReject, "settings.reject" },
+    { SessionMessageKind::MediaControl, "media.control" },
 };
 
 struct WireKindName {
@@ -580,6 +581,9 @@ QByteArray SessionMessages::encode(const SessionMessage& message)
     o.insert(QStringLiteral("type"), QString::fromUtf8(kindName(message.kind)));
 
     switch (message.kind) {
+    case SessionMessageKind::MediaControl:
+        o.insert(QStringLiteral("payload"), message.mediaPayload);
+        break;
     case SessionMessageKind::Schema: {
         o.insert(QStringLiteral("class"), QString::fromUtf8(message.className));
         QJsonArray fields;
@@ -691,7 +695,12 @@ QByteArray SessionMessages::encode(const SessionMessage& message)
     }
     }
 
-    return QJsonDocument(o).toJson(QJsonDocument::Compact);
+    const QByteArray wire = QJsonDocument(o).toJson(QJsonDocument::Compact);
+    if (message.kind == SessionMessageKind::MediaControl
+        && wire.size() > kMaxMediaControlBytes) {
+        return {};
+    }
+    return wire;
 }
 
 bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
@@ -709,6 +718,11 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
 
     SessionMessageKind kind = SessionMessageKind::Delta;
     if (!kindFromName(o.value(QStringLiteral("type")).toString().toUtf8(), &kind)) {
+        return false;
+    }
+    if (kind == SessionMessageKind::MediaControl
+        && (wire.size() > kMaxMediaControlBytes
+            || !o.value(QStringLiteral("payload")).isObject())) {
         return false;
     }
 
@@ -841,6 +855,9 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
     message.kind = kind;
 
     switch (kind) {
+    case SessionMessageKind::MediaControl:
+        message.mediaPayload = o.value(QStringLiteral("payload")).toObject();
+        break;
     case SessionMessageKind::Schema: {
         message.className = o.value(QStringLiteral("class")).toString().toUtf8();
         const QJsonArray fields = o.value(QStringLiteral("fields")).toArray();

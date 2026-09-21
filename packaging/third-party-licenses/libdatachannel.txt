@@ -1,0 +1,12 @@
+libdatachannel v0.24.5
+Copyright (c) Paul-Louis Ageneau and contributors
+
+NereusSDR uses libdatachannel for direct ICE, DTLS, SCTP, and SRTP media
+transport. The pinned source is fetched from:
+
+  https://github.com/paullouisageneau/libdatachannel/tree/v0.24.5
+
+libdatachannel v0.24.5 is licensed under the Mozilla Public License 2.0.
+The complete license is supplied in MPLv2.txt. Corresponding source for the
+unmodified pinned version and its exact transitive revisions is available
+through the source URL and NereusSDR's written source offer.

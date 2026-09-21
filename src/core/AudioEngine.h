@@ -135,6 +135,16 @@ namespace NereusSDR {
 class RadioModel;
 class SliceModel;
 
+// Synchronous observer for the final receiver master mix.  `samples` is
+// borrowed interleaved stereo float32 and is valid only for the duration of
+// consume().  Implementations run on the DSP thread and must not block,
+// allocate, encode, or queue this pointer for later use.
+class MasterMixAudioTap {
+public:
+    virtual ~MasterMixAudioTap() = default;
+    virtual void consume(const float* samples, int frames, int sampleRateHz) noexcept = 0;
+};
+
 // Audio engine for NereusSDR (Phase 3O VAX).
 //
 // Owns one IAudioBus per routable endpoint:
@@ -167,6 +177,11 @@ class AudioEngine : public QObject {
 public:
     explicit AudioEngine(QObject* parent = nullptr);
     ~AudioEngine() override;
+
+    // WDSP RX channels deliver 48 kHz audio to this engine regardless of
+    // radio wire rate.  The master mixer preserves that rate and stereo
+    // geometry; device negotiation is downstream of this point.
+    static constexpr int kMasterMixSampleRateHz = 48000;
 
     // Audio pipeline health state — driven by the flow-state FSM.
     // Healthy  = recent successful feed (DSP audio is flowing).
@@ -240,6 +255,15 @@ public:
     /// Safe to call while audio is streaming: it only flips atomics on an
     /// entry preregisterSlices() already created.
     void setSliceStreaming(int sliceId, bool streaming);
+
+    // Install or remove the one non-owning synchronous post-master-mix tap.
+    // These control-thread calls close callback admission and wait for an
+    // already-admitted callback before changing the raw pointer.  The DSP
+    // thread performs only atomic admission and a synchronous invoke.
+    // `clearMasterMixAudioTap` removes the tap only when `tap` still owns the
+    // slot, so stopping an old source cannot detach a newer source.
+    void setMasterMixAudioTap(MasterMixAudioTap* tap);
+    void clearMasterMixAudioTap(MasterMixAudioTap* tap);
 
     // Task 1.6 — Sample-rate live-apply coordination hooks.
     //
@@ -781,6 +805,15 @@ private:
     // admitted regions to finish before withdrawal returns.
     std::atomic<bool> m_mixAdmissionClosed{false};
     std::atomic<unsigned> m_mixRegionsInFlight{0};
+
+    // One receive-only remote-media observer.  Its lifetime is owned by the
+    // caller; set/clear establish the quiescent boundary before the raw
+    // pointer changes.  Keep this separate from the mixer admission gate:
+    // changing media lifecycle must never suppress the local speaker mix.
+    std::atomic<MasterMixAudioTap*> m_masterMixAudioTap{nullptr};
+    std::atomic<bool> m_masterMixTapAdmissionClosed{false};
+    std::atomic<unsigned> m_masterMixTapCallsInFlight{0};
+    std::mutex m_masterMixTapControlMutex;
 
 #ifdef NEREUS_BUILD_TESTS
     std::function<void()> m_withdrawalPublishedHookForTest;

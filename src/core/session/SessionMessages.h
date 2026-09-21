@@ -115,6 +115,7 @@
 #include <QByteArray>
 #include <QList>
 #include <QMetaType>
+#include <QJsonObject>
 
 #include "core/session/MirrorSchema.h"
 
@@ -148,6 +149,8 @@ enum class SessionMessageKind {
     SettingsRemove,
     SettingsValue,
     SettingsReject,
+    // R3: bounded control/signalling for the separate encrypted media peer.
+    MediaControl,
 };
 
 /// The session protocol's own semantic version, advertised by BOTH ends in
@@ -167,7 +170,9 @@ enum class SessionMessageKind {
 /// provisional. R3 swapping the codec under the same object model is a
 /// minor bump at most.
 inline constexpr quint16 kSessionProtocolMajor = 1;
-inline constexpr quint16 kSessionProtocolMinor = 0;
+inline constexpr quint16 kSessionProtocolMinor = 1;
+inline constexpr quint16 kMediaSessionProtocolMinor = 1;
+inline constexpr qsizetype kMaxMediaControlBytes = 128 * 1024;
 
 /// One property's WIRE DECLARATION: name, ordinal and kind, carrying no
 /// live value. This is what a Schema message announces once per class per
@@ -312,6 +317,11 @@ struct SessionMessage {
     /// from a third party's change. See SettingsProxy.h's origin-tag
     /// paragraph.
     QString originTag;
+
+    /// R3 MediaControl only. Individual media operations validate their own
+    /// fields after the authenticated, snapshot-ready session gate. This
+    /// envelope carries signalling/subscriptions, never audio or FFT arrays.
+    QJsonObject mediaPayload;
 };
 
 /// Builders plus the JSON codec. A static-method utility class with no

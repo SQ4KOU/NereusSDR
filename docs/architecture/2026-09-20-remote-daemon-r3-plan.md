@@ -168,9 +168,10 @@ verification record under `docs/architecture/2026-09-20-remote-daemon-r3-verific
   existing source, preserving phase/history across ratio changes. Inspect the
   existing WDSP variable-rate path before proposing a new dependency. Record
   exact source and API; do not use periodic ring flushes as drift correction.
-- [ ] Add the pinned production dependency only after those source gates;
+- [x] Add the pinned production dependency after its transport source gates;
   expose it through NereusCore without adding GUI linkage or an uncontrolled
-  second Opus copy. Include daemon-component install dependencies.
+  second Opus copy. Include daemon-component install dependencies. The
+  independent resampling gate remains a prerequisite for audio playback.
 
 **Verification:** dependency build and two-peer integration, actual packet
 inspection, deterministic variable-rate sample accounting. Native ARM and
@@ -192,7 +193,7 @@ integration exposes a difficult platform/linking failure.
 `fftReadyLinear` into one reducer per endpoint plane; produces a latest
 `ReducedSpectrumFrame` and accepted `SpectrumContext`.
 
-- [ ] Give DaemonApp ownership of a live pool, connect the same per-stream
+- [x] Give DaemonApp ownership of a live pool, connect the same per-stream
   I/Q producer used by local mode, and tear it down before RadioModel streams.
 - [ ] Add `(stream,tier)` lifecycle without changing existing local callers'
   default Wide behavior. Derive FFT sizes from resolution targets, clamp to
@@ -201,9 +202,9 @@ integration exposes a difficult platform/linking failure.
 - [ ] Validate subscription values and ownership; clamp output pixels to the
   available source bins and report the clamp. Keep a latest frame slot, not
   an unbounded Qt frame queue.
-- [ ] Use separate SpectrumReducers for trace and waterfall. Apply cadence
+- [x] Use separate SpectrumReducers for trace and waterfall. Apply cadence
   before transport encoding and preserve independent averaging histories.
-- [ ] Extract the existing 3D wide-crop/peak-preserving behavior into a
+- [x] Extract the existing 3D wide-crop/peak-preserving behavior into a
   GUI-free helper with its original attribution. Produce bounded coverage
   and at most the renderer's 768 wide samples. Do not substitute another
   detector/averaging formula for the current local wide-row behavior.
@@ -230,15 +231,15 @@ bounded native bytes; decoder returns either a complete decoded frame,
 `NeedKeyframe`, or a typed rejection. Context application and reset are
 explicit. Parser failure never changes the last accepted frame/history.
 
-- [ ] Define and check in version 1's exact byte layout before connecting
+- [x] Define and check in version 1's exact byte layout before connecting
   sockets: network byte order, endpoint/context/sequence fields, bounded
   plane lengths, flags, and no native struct serialization.
-- [ ] Quantize dBm over the negotiated finite min/max window. Encode temporal
+- [x] Quantize dBm over the negotiated finite min/max window. Encode temporal
   residuals against the decoder's reconstructed previous frame, using
   adaptive block widths and an absolute/keyframe fallback when deltas expand.
-- [ ] Specify the accuracy/dead-zone setting and prove its error bound over
+- [x] Specify the accuracy/dead-zone setting and prove its error bound over
   long ramps; errors must not accumulate invisibly through the delta chain.
-- [ ] Keyframe on first frame/context change, periodically, and on reliable
+- [x] Keyframe on first frame/context change, periodically, and on reliable
   request. Reject deltas after a gap until a valid keyframe. Rate-limit keyframe
   requests, accept sequence wrap correctly and reject stale generations.
 - [ ] Carry trace and waterfall independently, plus optional bounded 3D row.
@@ -265,17 +266,17 @@ RF quality or network-throughput claim.
 `SessionMessages`, `StationCapabilities`, `RemoteMediaController`, MainWindow,
 SpectrumWidget; tests `tst_remote_media_session`, `tst_remote_spectrum_render`.
 
-- [ ] Add a minor-version-negotiated media capability and bounded signalling
+- [x] Add a minor-version-negotiated media capability and bounded signalling
   messages. Authenticate first; bind peer SDP/certificate fingerprints and
   candidates to the accepted control session. Old peers retain control-only
   behavior and receive no unsupported media messages.
-- [ ] Establish direct DTLS/SCTP and SRTP using libdatachannel. Retain current
+- [x] Establish direct DTLS/SCTP and SRTP using libdatachannel. Retain current
   WSS command/state handling. Configure display unordered with no retries;
   keep RTP separate. Reject oversized signalling before library parsing.
 - [ ] Add subscribe/context/enable/unsubscribe/keyframe control messages with
   explicit endpoint ownership. Late library callbacks cannot revive an old
   session. A failed peer stops its producers and leaves control responsive.
-- [ ] Decode into a dedicated external reduced-frame widget entry point.
+- [x] Decode into a dedicated external reduced-frame widget entry point.
   Do not feed reduced dBm into the local linear-FFT path and reduce it again.
   Advance 2D and 3D from the decoded waterfall cadence; use explicit supplied
   wide coverage rather than a fictitious full-DDC cache.
@@ -302,8 +303,9 @@ lifecycle; audio codec unit work can precede GUI spectrum completion.
 adapter; tests `tst_remote_audio_mix`, `tst_opus_audio_codec`,
 `tst_remote_audio_clock`, `tst_remote_audio_session`.
 
-- [ ] Tee exactly one successful master drain before speaker volume/mute.
-  Preallocate SPSC storage; use an explicit overflow/reset policy, counters
+- [x] Tee exactly one successful master drain before speaker volume/mute.
+  Preallocate bounded storage with nonblocking producer admission; use an
+  explicit overflow/reset policy, counters
   and bounded latency. Do not retain a callback pointer or encode on DSP.
 - [ ] Use the existing pinned Opus build, 48 kHz stereo and standard RFC 7587
   packet/timestamp semantics. Begin with the saved 24 kbit/s, constrained VBR,
@@ -380,6 +382,7 @@ whole-plan review loops.
 | Combined open-PR recovery | Complete source checkpoint `14124e7c` | GUI/Core build and unfiltered 662/662 desktop tests pass; fixture-path workaround recorded separately |
 | Native combined Core | Installed at `14124e7c` with rollback backup | ARM Release build/stage/install and receive-control probe passed; [verification ledger](2026-09-20-remote-daemon-r3-verification/README.md) |
 | Plan review and mixed-stereo choice | Lead, recorded | Current review; user confirmed mixed stereo and Opus |
-| Direct media dependency probe | Complete standalone exchange; production adapter in progress | Two fresh encrypted peer pairs passed display and RTP exchange; actual UDP-size capture still pending |
-| FFT/audio source audit | Initial contracts established | No daemon FFT producer; fixed-rate Resampler unsuitable for drift; existing WDSP RMATCH under source/probe validation |
-| R3 production implementation | Codec submitted for review; producer and adapter active | Codec standalone tests pass; production registration/review and end-to-end session/GUI wiring remain pending |
+| Direct media transport | Production adapter and MediaPeer integrated | Real encrypted peers, bounded callbacks, stop/restart/delete regressions pass; actual UDP-size capture still pending |
+| Headless FFT and display codec | Implemented and component-tested | Independent Wide/Fine sources, retune input reset, independent planes, crop clamp, bounded codec and recovery tests pass; authenticated daemon-to-GUI regression passes; live Saturn run next |
+| Audio | Opus/RTP and mixed-audio capture tests pass | Stereo wideband 24/48 kbit/s packet checks, mixer gain/mute/pan, bounded capture timestamps and retirement pass; sender, jitter, adaptive clock correction and playback remain pending |
+| GUI media wiring | Desktop builds; initial focused checks pass | Dedicated reduced-frame renderer and authenticated subscription controller tested; two-pane daemon/GUI wire, shared-window and reconnect regressions pass; gesture refinement and real GPU/hardware smoke next |

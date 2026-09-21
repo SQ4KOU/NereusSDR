@@ -113,8 +113,10 @@
 // Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
 
 #include "SpectrumWidget.h"
+#include "core/session/media/SpectrumEndpoint.h"
 #include "SpectrumOverlayMenu.h"
 #include "core/WidebandFftEngine.h"
+#include "core/session/media/DssWideRow.h"
 #include "core/spectrum/SpectrumDetector.h"
 #include "ImdOverlay.h"
 #include "gui/DssMeshGeometry.h"
@@ -541,6 +543,11 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
         // contents here are frozen RX data during transmit -- there is
         // nothing worth drawing even if the cadence did line up.
         if (m_txExternalWaterfall) {
+            return;
+        }
+        // Core controls remote waterfall cadence. Replaying a cached row
+        // would invent new waterfall time during loss or a paused session.
+        if (m_remoteSpectrum && !m_pendingWfPixelsDbmDirty) {
             return;
         }
         m_pendingWfPixelsDbmDirty = false;
@@ -1437,6 +1444,88 @@ void SpectrumWidget::updateSpectrumFromTxPixels(int receiverId,
     m_hasNewSpectrum = true;
     emit spectrumFrameRendered();
     update();
+}
+
+void SpectrumWidget::clearRemoteSpectrum()
+{
+    m_remoteSpectrum = true;
+    m_remoteCodec = {};
+    m_pxPeakHold.clear();
+    m_activePeakHold.resize(0);
+    const bool blobsEnabled = m_peakBlobs.enabled();
+    m_peakBlobs.setEnabled(false);
+    m_peakBlobs.setEnabled(blobsEnabled);
+    m_renderedPixels.clear();
+    m_undentedPixels.clear();
+    m_wfRenderedPixels.clear();
+    m_pendingWfPixelsDbm.clear();
+    m_pendingWfPixelsDbmDirty = false;
+    m_pendingRemoteWide.clear();
+    m_lastFullBinsDbm.clear();
+    m_dss.clear();
+    m_dssRowsPushed = 0;
+    m_dssScrollProgressRows = 0.0f;
+    clearWaterfallHistory();
+    m_hasNewSpectrum = true;
+}
+
+void SpectrumWidget::setRemoteSpectrumContext(const SpectrumEndpointContext& context,
+                                               double sourceCentreHz, double sampleRateHz)
+{
+    clearRemoteSpectrum();
+    m_remoteCodec = context.codec;
+    m_remoteExactCentreHz = context.exactCentreHz;
+    m_remoteExactSpanHz = context.exactSpanHz;
+    m_remoteWideCentreHz = context.wideCentreHz;
+    m_remoteWideSpanHz = context.wideSpanHz;
+    setDdcCenterFrequency(sourceCentreHz);
+    setSampleRate(sampleRateHz);
+    setDisplayWindowPreservingHistory(context.exactCentreHz, context.exactSpanHz);
+}
+
+bool SpectrumWidget::updateRemoteSpectrum(const DisplayCodecFrame& frame)
+{
+    const auto& context = frame.context;
+    if (!m_remoteSpectrum || m_remoteCodec.traceSamples == 0
+        || !qFuzzyCompare(m_centerHz, m_remoteExactCentreHz)
+        || !qFuzzyCompare(m_bandwidthHz, m_remoteExactSpanHz)
+        || context.endpointId != m_remoteCodec.endpointId
+        || context.contextGeneration != m_remoteCodec.contextGeneration
+        || context.traceSamples != m_remoteCodec.traceSamples
+        || context.waterfallSamples != m_remoteCodec.waterfallSamples
+        || context.wideSamples != m_remoteCodec.wideSamples
+        || context.minDbm != m_remoteCodec.minDbm || context.maxDbm != m_remoteCodec.maxDbm) {
+        return false;
+    }
+    const auto valid = [](const QVector<float>& plane, int count) {
+        return plane.size() == count
+            && std::all_of(plane.cbegin(), plane.cend(), [](float value) {
+                return std::isfinite(value);
+            });
+    };
+    if (!valid(frame.traceDbm, context.traceSamples)
+        || !valid(frame.waterfallDbm, context.waterfallSamples)
+        || !valid(frame.wideDbm, context.wideSamples)) {
+        return false;
+    }
+    m_renderedPixels = frame.traceDbm;
+    m_wfRenderedPixels = frame.waterfallDbm;
+    if (visualNotchWillDent()) {
+        m_undentedPixels = m_renderedPixels;
+        applyVisualNotchDent(m_renderedPixels);
+        applyVisualNotchDent(m_wfRenderedPixels);
+    } else {
+        m_undentedPixels.clear();
+    }
+    updateReducedSpectrumOverlays();
+    if (frame.waterfallAdvance) {
+        m_pendingWfPixelsDbm = m_wfRenderedPixels;
+        m_pendingRemoteWide = frame.wideDbm;
+        m_pendingWfPixelsDbmDirty = true;
+    }
+    m_hasNewSpectrum = true;
+    emit spectrumFrameRendered();
+    return true;
 }
 
 void SpectrumWidget::setDisplayWindowPreservingHistory(double centerHz,
@@ -3223,6 +3312,124 @@ void SpectrumWidget::setBandEdgeColor(const QColor& c)
     markOverlayDirty();
 }
 
+// Shared overlay consumers of the final local or remote reduced trace.
+void SpectrumWidget::updateReducedSpectrumOverlays()
+{
+    // Legacy per-pixel peak hold -- track running max in display-pixel
+    // space.  Replaces the old per-bin m_peakHoldBins.
+    if (m_peakHoldEnabled) {
+        if (m_pxPeakHold.size() != m_renderedPixels.size()) {
+            m_pxPeakHold = m_renderedPixels;
+        } else {
+            for (int i = 0; i < m_renderedPixels.size(); ++i) {
+                if (m_renderedPixels[i] > m_pxPeakHold[i]) {
+                    m_pxPeakHold[i] = m_renderedPixels[i];
+                }
+            }
+        }
+    }
+
+    // Active Peak Hold trace -- per-display-pixel decay.  From Thetis
+    // Display.cs:5341 [v2.10.3.13] spectralPeaks[i] is indexed by pixel
+    // (i runs 0..nDecimatedWidth-1) and the y-mapping uses the per-pixel
+    // peak.max_dBm value.  Display.cs:5356 decays peak.max_dBm by
+    // dBmSpectralPeakFall per second -> /fps per frame (analyzer-adjacent).
+    const int intervalMs = m_displayTimer.interval();
+    const int fps = (intervalMs > 0) ? qMax(1, 1000 / intervalMs) : 30;
+
+    if (m_activePeakHold.enabled()) {
+        if (m_activePeakHold.size() != m_renderedPixels.size()) {
+            m_activePeakHold.resize(m_renderedPixels.size());
+        }
+        m_activePeakHold.update(m_renderedPixels);
+        m_activePeakHold.tickFrame(fps);
+    }
+
+    // Peak Blob detector -- pixel-space local maxima with hold/decay.
+    // Filter-passband math becomes pixel-space: visible window is
+    // m_centerHz +/- m_bandwidthHz/2 mapped across displayWidth pixels.
+    // From Thetis Display.cs:5453-5508 [v2.10.3.13].
+    if (m_peakBlobs.enabled() && !m_renderedPixels.isEmpty()) {
+        const int n = m_renderedPixels.size();
+        int filterLowPx  = 0;
+        int filterHighPx = n - 1;
+        if (m_peakBlobs.insideOnly() && m_bandwidthHz > 0.0) {
+            const double leftHz  = m_centerHz - m_bandwidthHz / 2.0;
+            const double pxWidth = m_bandwidthHz / static_cast<double>(n);
+            const double loHz = m_vfoHz + m_filterLowHz;
+            const double hiHz = m_vfoHz + m_filterHighHz;
+            filterLowPx  = qBound(0,
+                static_cast<int>(std::floor((loHz - leftHz) / pxWidth)),
+                n - 1);
+            filterHighPx = qBound(0,
+                static_cast<int>(std::ceil((hiHz - leftHz) / pxWidth)),
+                n - 1);
+        }
+        m_peakBlobs.update(m_renderedPixels, filterLowPx, filterHighPx);
+        m_peakBlobs.tickFrame(fps, intervalMs > 0 ? intervalMs : 33);
+    }
+
+    // Force GPU overlay texture re-render when any per-frame overlay is
+    // active -- paintEvent's CPU path calls paintActivePeakHoldTrace +
+    // paintPeakBlobs from drawSpectrum() every frame, but the GPU path
+    // bakes overlays into m_overlayStatic.  Without this nudge, peak
+    // indicators only update on Setup-driven state changes (bug from
+    // 2026-05-02).
+    //
+    // TODO: separate m_overlayDynamic layer so static chrome (grid,
+    // scales, band plan) doesn't repaint every frame.
+    // Per-frame NF estimate update — Thetis display.cs:5385 [v2.10.3.13]
+    // calls processNoiseFloor at the same point in its render loop (after
+    // the per-pixel accumulator finishes).  Always runs (not gated on
+    // m_showNoiseFloor) so the lerp/fft state stays current even when the
+    // overlay is toggled off — saves a cold-start visual jump on toggle on.
+    processNoiseFloor();
+#ifdef NEREUS_GPU_SPECTRUM
+    // I2 fix: dirty the cached 3D dBm-scale strip only when the floor just
+    // updated above actually moved its rounded label set. See
+    // updateDssScaleOverlayFreshness() for the full rationale.
+    updateDssScaleOverlayFreshness();
+#endif
+
+    // 2026-05-25 perf fix: this block USED to force the ENTIRE GPU
+    // overlay texture (freq scale, dBm strip, bandplan, time scale,
+    // VFO marker, spots, waterfall chrome, peak hold trace, peak blobs,
+    // NF text/line — ~16 paint ops + a full window-size QImage fill
+    // and GPU texture upload) to rebuild on EVERY spectrum frame
+    // whenever any of three features were enabled.  Rate-limited to
+    // 10 Hz to keep CPU sane, which made blob decay / peak-hold drop
+    // look chunky.
+    //
+    // 2026-05-26 KG4VCF first attempt: bumped 10 Hz -> 30 Hz to fix
+    // chunky blob decay.  Bench: under heavy build load (parallel
+    // ninja) the system became unusable -- the 30 Hz full-overlay
+    // rebuild saturated the raster pool exactly as the earlier
+    // measurement warned.  Reverted to 10 Hz here; the next commit
+    // does the proper fix (static/dynamic layer split: chrome cached
+    // on state change, dynamic overlays in a smaller spectrum-area
+    // texture rebuilt every frame).
+#ifdef NEREUS_GPU_SPECTRUM
+    if (m_activePeakHold.enabled() || m_peakBlobs.enabled()
+        || m_showNoiseFloor) {
+        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+        // 2026-05-26 KG4VCF dual-layer overlay split: peak-hold trace
+        // + peak blobs + noise-floor line/text live in their own GPU
+        // texture (m_overlayDynamic).  We only mark *that* layer
+        // dirty here -- chrome stays cached in m_overlayStatic and is
+        // invalidated separately by setters that actually change
+        // chrome state (band change, zoom, theme, etc.).  Rate-limit
+        // raised to 30 Hz because the dynamic layer is dramatically
+        // cheaper than the previous full-overlay rebuild (no chrome
+        // paint ops, smaller GPU upload bandwidth).
+        if (nowMs - m_overlayDynamicDirtyMs >= 33) {  // 30 Hz cap
+            m_overlayDynamicDirty = true;
+            m_overlayDynamicDirtyMs = nowMs;
+        }
+    }
+#endif
+
+}
+
 // Feed new FFT frame -- single Thetis-faithful pipeline.
 //
 // Mirrors Thetis Display.cs:4970-5378 [v2.10.3.13] DrawPanadapterDX2D's
@@ -3249,7 +3456,7 @@ void SpectrumWidget::updateSpectrumLinear(int receiverId,
                                           double dbmOffset)
 {
     Q_UNUSED(receiverId);
-    if (binsLinear.isEmpty()) { return; }
+    if (m_remoteSpectrum || binsLinear.isEmpty()) { return; }
 
     // FFT size change detection.  When the FFTEngine replans (e.g. via
     // auto-zoom on bandwidth change), the per-pixel resolution shifts:
@@ -3528,118 +3735,7 @@ void SpectrumWidget::updateSpectrumLinear(int receiverId,
         applyVisualNotchDent(m_wfRenderedPixels);
     }
 
-    // Legacy per-pixel peak hold -- track running max in display-pixel
-    // space.  Replaces the old per-bin m_peakHoldBins.
-    if (m_peakHoldEnabled) {
-        if (m_pxPeakHold.size() != m_renderedPixels.size()) {
-            m_pxPeakHold = m_renderedPixels;
-        } else {
-            for (int i = 0; i < m_renderedPixels.size(); ++i) {
-                if (m_renderedPixels[i] > m_pxPeakHold[i]) {
-                    m_pxPeakHold[i] = m_renderedPixels[i];
-                }
-            }
-        }
-    }
-
-    // Active Peak Hold trace -- per-display-pixel decay.  From Thetis
-    // Display.cs:5341 [v2.10.3.13] spectralPeaks[i] is indexed by pixel
-    // (i runs 0..nDecimatedWidth-1) and the y-mapping uses the per-pixel
-    // peak.max_dBm value.  Display.cs:5356 decays peak.max_dBm by
-    // dBmSpectralPeakFall per second -> /fps per frame (analyzer-adjacent).
-    const int intervalMs = m_displayTimer.interval();
-    const int fps = (intervalMs > 0) ? qMax(1, 1000 / intervalMs) : 30;
-
-    if (m_activePeakHold.enabled()) {
-        if (m_activePeakHold.size() != m_renderedPixels.size()) {
-            m_activePeakHold.resize(m_renderedPixels.size());
-        }
-        m_activePeakHold.update(m_renderedPixels);
-        m_activePeakHold.tickFrame(fps);
-    }
-
-    // Peak Blob detector -- pixel-space local maxima with hold/decay.
-    // Filter-passband math becomes pixel-space: visible window is
-    // m_centerHz +/- m_bandwidthHz/2 mapped across displayWidth pixels.
-    // From Thetis Display.cs:5453-5508 [v2.10.3.13].
-    if (m_peakBlobs.enabled() && !m_renderedPixels.isEmpty()) {
-        const int n = m_renderedPixels.size();
-        int filterLowPx  = 0;
-        int filterHighPx = n - 1;
-        if (m_peakBlobs.insideOnly() && m_bandwidthHz > 0.0) {
-            const double leftHz  = m_centerHz - m_bandwidthHz / 2.0;
-            const double pxWidth = m_bandwidthHz / static_cast<double>(n);
-            const double loHz = m_vfoHz + m_filterLowHz;
-            const double hiHz = m_vfoHz + m_filterHighHz;
-            filterLowPx  = qBound(0,
-                static_cast<int>(std::floor((loHz - leftHz) / pxWidth)),
-                n - 1);
-            filterHighPx = qBound(0,
-                static_cast<int>(std::ceil((hiHz - leftHz) / pxWidth)),
-                n - 1);
-        }
-        m_peakBlobs.update(m_renderedPixels, filterLowPx, filterHighPx);
-        m_peakBlobs.tickFrame(fps, intervalMs > 0 ? intervalMs : 33);
-    }
-
-    // Force GPU overlay texture re-render when any per-frame overlay is
-    // active -- paintEvent's CPU path calls paintActivePeakHoldTrace +
-    // paintPeakBlobs from drawSpectrum() every frame, but the GPU path
-    // bakes overlays into m_overlayStatic.  Without this nudge, peak
-    // indicators only update on Setup-driven state changes (bug from
-    // 2026-05-02).
-    //
-    // TODO: separate m_overlayDynamic layer so static chrome (grid,
-    // scales, band plan) doesn't repaint every frame.
-    // Per-frame NF estimate update — Thetis display.cs:5385 [v2.10.3.13]
-    // calls processNoiseFloor at the same point in its render loop (after
-    // the per-pixel accumulator finishes).  Always runs (not gated on
-    // m_showNoiseFloor) so the lerp/fft state stays current even when the
-    // overlay is toggled off — saves a cold-start visual jump on toggle on.
-    processNoiseFloor();
-#ifdef NEREUS_GPU_SPECTRUM
-    // I2 fix: dirty the cached 3D dBm-scale strip only when the floor just
-    // updated above actually moved its rounded label set. See
-    // updateDssScaleOverlayFreshness() for the full rationale.
-    updateDssScaleOverlayFreshness();
-#endif
-
-    // 2026-05-25 perf fix: this block USED to force the ENTIRE GPU
-    // overlay texture (freq scale, dBm strip, bandplan, time scale,
-    // VFO marker, spots, waterfall chrome, peak hold trace, peak blobs,
-    // NF text/line — ~16 paint ops + a full window-size QImage fill
-    // and GPU texture upload) to rebuild on EVERY spectrum frame
-    // whenever any of three features were enabled.  Rate-limited to
-    // 10 Hz to keep CPU sane, which made blob decay / peak-hold drop
-    // look chunky.
-    //
-    // 2026-05-26 KG4VCF first attempt: bumped 10 Hz -> 30 Hz to fix
-    // chunky blob decay.  Bench: under heavy build load (parallel
-    // ninja) the system became unusable -- the 30 Hz full-overlay
-    // rebuild saturated the raster pool exactly as the earlier
-    // measurement warned.  Reverted to 10 Hz here; the next commit
-    // does the proper fix (static/dynamic layer split: chrome cached
-    // on state change, dynamic overlays in a smaller spectrum-area
-    // texture rebuilt every frame).
-#ifdef NEREUS_GPU_SPECTRUM
-    if (m_activePeakHold.enabled() || m_peakBlobs.enabled()
-        || m_showNoiseFloor) {
-        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
-        // 2026-05-26 KG4VCF dual-layer overlay split: peak-hold trace
-        // + peak blobs + noise-floor line/text live in their own GPU
-        // texture (m_overlayDynamic).  We only mark *that* layer
-        // dirty here -- chrome stays cached in m_overlayStatic and is
-        // invalidated separately by setters that actually change
-        // chrome state (band change, zoom, theme, etc.).  Rate-limit
-        // raised to 30 Hz because the dynamic layer is dramatically
-        // cheaper than the previous full-overlay rebuild (no chrome
-        // paint ops, smaller GPU upload bandwidth).
-        if (nowMs - m_overlayDynamicDirtyMs >= 33) {  // 30 Hz cap
-            m_overlayDynamicDirty = true;
-            m_overlayDynamicDirtyMs = nowMs;
-        }
-    }
-#endif
+    updateReducedSpectrumOverlays();
 
     // Push display-pixel waterfall row -- waterfall AGC + NF-AGC +
     // threshold compute now operate on display pixels per Thetis
@@ -6099,39 +6195,19 @@ QVector<float> SpectrumWidget::buildDssWideRow(
     double& wideCenterMhzOut,
     double& wideBandwidthMhzOut) const
 {
-    wideCenterMhzOut = 0.0;
-    wideBandwidthMhzOut = 0.0;
-    if (fullBins.isEmpty() || m_sampleRateHz <= 0.0) {
-        return {};
-    }
-    const double viewBwHz = m_bandwidthHz;
-    if (viewBwHz <= 0.0 || viewBwHz >= m_sampleRateHz) {
-        return {};   // view already covers the DDC; nothing outside it
-    }
-
-    const float widestSpan = dssMaxRowSpanFactor(dssShapeForAngle(0));
-    const double wantHz = std::min(
-        static_cast<double>(widestSpan) * viewBwHz, m_sampleRateHz);
-    const double ddcLowHz  = m_ddcCenterHz - m_sampleRateHz * 0.5;
-    const double binHz     = m_sampleRateHz / fullBins.size();
-    const double wideLowHz = std::clamp(
-        m_centerHz - wantHz * 0.5,
-        ddcLowHz, ddcLowHz + m_sampleRateHz - wantHz);
-
-    // fullBins.size() is qsizetype (long long on 64-bit); std::clamp needs
-    // all three arguments the same type, so the bound is narrowed to int
-    // explicitly rather than left to fail template deduction.
-    const int binCount = static_cast<int>(fullBins.size());
-    const int first = std::clamp(
-        static_cast<int>((wideLowHz - ddcLowHz) / binHz), 0, binCount - 1);
-    const int last = std::clamp(
-        static_cast<int>((wideLowHz + wantHz - ddcLowHz) / binHz),
-        first + 1, binCount);
-
-    wideCenterMhzOut    = (wideLowHz + wantHz * 0.5) / 1.0e6;
-    wideBandwidthMhzOut = wantHz / 1.0e6;
-    return QVector<float>(fullBins.constBegin() + first,
-                          fullBins.constBegin() + last);
+    // The core helper is the shared local/remote crop contract. This widget
+    // retains ownership of the GUI's maximum-shape choice; core receives that
+    // explicit factor and remains QRhi-free.
+    const DssWideRow wide = cropDssWideRow(fullBins, {
+        m_centerHz,
+        m_bandwidthHz,
+        m_ddcCenterHz,
+        m_sampleRateHz,
+        dssMaxRowSpanFactor(dssShapeForAngle(0)),
+    });
+    wideCenterMhzOut = wide.centreHz / 1.0e6;
+    wideBandwidthMhzOut = wide.spanHz / 1.0e6;
+    return wide.binsDbm;
 }
 
 // From AetherSDR SpectrumWidget.cpp:12743-12784 [@1872028c], minus the
@@ -6240,7 +6316,11 @@ void SpectrumWidget::pushDssRow(const QVector<float>& wfPixelsDbm)
     double wideCenterMhz = 0.0;
     double wideBandwidthMhz = 0.0;
     QVector<float> wide;
-    if (!m_moxOverlay) {
+    if (m_remoteSpectrum && !m_moxOverlay) {
+        wide = m_pendingRemoteWide;
+        wideCenterMhz = m_remoteWideCentreHz / 1.0e6;
+        wideBandwidthMhz = m_remoteWideSpanHz / 1.0e6;
+    } else if (!m_moxOverlay) {
         wide = buildDssWideRow(
             m_lastFullBinsDbm, wideCenterMhz, wideBandwidthMhz);
     }
@@ -9298,6 +9378,16 @@ void SpectrumWidget::applyViewWindow(double centreHz, double bandwidthHz)
     // setMoxOverlay's swap. Everything else routes through here.
     m_centerHz    = centreHz;
     m_bandwidthHz = bandwidthHz;
+    if (m_remoteSpectrum) {
+        // A gesture can precede the subscription observer by one tick.
+        // Retire the old plane immediately so it cannot acquire new RF labels.
+        m_renderedPixels.clear();
+        m_undentedPixels.clear();
+        m_wfRenderedPixels.clear();
+        m_pendingWfPixelsDbm.clear();
+        m_pendingWfPixelsDbmDirty = false;
+        m_hasNewSpectrum = true;
+    }
 
     // The scale and grid are cached chrome; the trace is not. Without this
     // the numbers stay frozen while the trace moves.
