@@ -47,7 +47,7 @@ Their presence in the build does not make remote transmit an R3 feature.
 | R3 accepted | Multiple pans and slices remain usable through reconnect and sustained reception | Four-pan measurements, two-hour audio run, install/boot/reconnect checks |
 | R4 | Remote microphone/PTT and transmit operation | TX chain and watchdog/starvation/handoff safety acceptance together |
 | R5 | Remote access across difficult internet connections without a required VPN | Direct/relay racing, dual-stack and CGNAT-to-CGNAT evidence |
-| R6 | Routine installation and use without development-session help | Connection UX, reachability diagnostics, packaging and documentation |
+| R6 | Routine installation and use without development-session help | Full station selection/pairing UX, reachability diagnostics, packaging and documentation; basic connection controls and visible state are R3 requirements |
 
 R1/R2 establish the split and control foundation. They are not a completed
 remote receiver. Codec tests, dependency probes and successful builds are
@@ -111,6 +111,7 @@ by the earlier brainstorming, and this review does not present them as such.
 | R-R3-14 | Remote CH/BPF/WIDE indicators show Core's effective per-chain filter state and reason, including initial snapshot and reconnect. Client-local Alex bookkeeping cannot stand in for station state. |
 | R-R3-15 | Remote Auto AGC-T visuals reflect the station's per-slice AGC noise-floor state. GUI Clarity smoothing is not an AGC measurement source. |
 | R-R3-16 | Remote GUI Connect/Disconnect actions operate the configured Core station session. Disconnect cancels pending retries; explicit Connect starts a fresh session without relaunching or invoking direct-radio discovery. |
+| R-R3-17 | The GUI persistently identifies its configured Core and shows disconnected, connecting, retrying, or connected state independently of Core's radio state. Failed attempts leave a useful reason and available recovery/cancel action. A Core session with an offline radio must not appear to be a disconnected GUI session. |
 
 The authorized radio is the ANAN-G2/Saturn, MAC `2C:CF:67:AB:FC:F4`, board
 `0x0A`; the September 20 instruction supersedes the old G2E-only bench rows.
@@ -301,7 +302,7 @@ LAN run. This milestone is a display checkpoint, not completed R3.
 
 ## 4a. Complete receive telemetry bindings
 
-**Requirements:** R-R3-13 through R-R3-16. **Dependencies:** authenticated
+**Requirements:** R-R3-13 through R-R3-17. **Dependencies:** authenticated
 state mirror and decoded remote display.
 
 - [x] Publish separate read-only `SliceModel.signalPeakDbm` and
@@ -319,16 +320,36 @@ state mirror and decoded remote display.
   both the existing threshold tick and mirrored visuals use that tracker.
   Source and session regressions pass; live deployment acceptance is recorded
   separately and remains pending at this source checkpoint.
-- [x] Route remote-role Connect/Disconnect actions to the saved Core
+- [x] Route remote-role menu/shortcut Connect/Disconnect actions to the saved Core
   session, including cancellation during retry backoff and a fresh explicit
   connection on the same client. Retain direct-radio behavior for local mode.
   Live GUI acceptance is recorded separately in the verification ledger.
+- [ ] Complete the disconnected title/status/pan click-to-connect paths;
+  each currently reaches the suppressed local ConnectionPanel. Keep explicit
+  operator actions separate from automatic panel-open callbacks so a manual
+  Disconnect cannot cause an immediate redial during session teardown.
+- [ ] Add persistent configured-Core identity and connection/retry/error
+  feedback to the existing GUI chrome. Show Core connectivity and radio
+  connectivity separately. Offer a clear retry action and cancellation;
+  expiring toasts and log-only socket errors are insufficient.
+- [ ] Verify all visible entry points during first connection, unreachable
+  Core, retry backoff, manual cancellation, recovered Core, and connected
+  Core with its radio offline. Repeat a manual disconnect after a successful
+  session to catch retained-name auto-open callbacks. Treat this as a basic
+  R3 usability gate before the two-hour receive acceptance run.
 
 **Verification:** real Core meter reads, read-only mirror round trips,
 source selection, stable slice IDs, disconnect/TX/lifetime tests, unchanged
 local tests, then visible needle and numeric movement on the Saturn feed.
 BPF and Auto AGC-T require their own state/snapshot/reconnect regressions
 and live observations; the meter fix does not establish those gates.
+
+The full connection-screen discussion remains a separate follow-up. Preserve
+the identity design's three groups: radios on this network, stations on
+this network, and paired stations. R5 supplies the remote reachability paths;
+R6 completes the selection/pairing experience and packaging. The September 21
+operator report brings basic feedback and consistent actions forward into
+R3; the earlier menu-only round trip did not prove the whole interface.
 
 ## 5. Deliver mixed stereo Opus with continuous playback
 
@@ -457,4 +478,4 @@ whole-plan review loops.
 | Remote C-Tune control parity | Separate source-audited gap, still open | C-Tune pin/centre changes currently affect client-local receiver state; add an authenticated Core-owned operation and verify shared-stream offsets and reconnect. The history correction alone does not close this gate. |
 | Applet S-meter | Implemented, 673/673 suite passed; Core and GUI running | Live needle movement and applet/active-flag agreement observed on Saturn; all-mode/longer acceptance pending |
 | BPF and Auto AGC-T indicators | Source implementation and focused tests pass | R-R3-14/15: station filter snapshot/reconnect, headless per-stream AGC source, active-applet/flag bindings implemented; live 20m filter and AGC floor observed, complete band/reconnect acceptance pending |
-| Manual Core reconnect | Implemented at signed `73fcccfe`; live menu round trip passed | R-R3-16; Disconnect removed the Core TCP link, Connect reauthenticated in the same GUI process, and spectrum/waterfall/meters recovered; Core remains `74145a4b` |
+| Manual Core reconnect | Menu/shortcut path implemented; complete interface acceptance reopened | R-R3-16/17: initial live menu round trip passed at `73fcccfe`; later `ef3e69d7` unreachable-Core check confirms menu cancellation/fresh attempt but exposes dead click-to-connect chrome and missing persistent Core/retry status. Remaining entry points and feedback are now explicit R3 gates. |

@@ -834,3 +834,40 @@ the visual correction does not close C-Tune hardware-control parity.
 Follow-up needs an authenticated Core-owned pin/centre operation with
 shared-stream, bounds, reconnect and remote-inertness coverage, reusing
 the existing local allocator/receiver behavior.
+
+## Connection controls and feedback audit, September 21
+
+The operator reported that reconnect and Connect/Disconnect appeared not to
+work, and asked whether their GUI was incomplete or covered by the plan.
+On the running `ef3e69d7` GUI, the Radio menu initially disabled Connect and
+enabled Disconnect during an active connection attempt. Selecting Disconnect
+enabled Connect and disabled Disconnect. Selecting Connect started a fresh
+sequence; the following socket timeout scheduled retry attempt 1. The bottom
+station block continued to say `Click to connect` throughout. These are
+observations of cancellation and redial, not successful reconnection.
+
+At this checkpoint Rock `.106` TCP ports 22 and 50055 timed out, `.105` SSH
+was unavailable, and MikroTik `.85` SSH was reachable. The earlier physical
+ether2 link-down remains prior evidence; no new switch-link read or network
+configuration change was performed in this audit. The operator was asked
+to check the board's power and Ethernet link.
+
+Source tracing confirms a second, independent problem: title/status/pan
+click-to-connect affordances call `MainWindow::showConnectionPanel`, whose
+remote branch only logs a suppression message and returns. The user hit
+that path at 13:45. Remote context menus share the working menu actions,
+but StationBlock itself suppresses its context menu when painted disconnected.
+Existing transient toasts do not provide persistent Core/retry status, and
+the chrome still follows mirrored radio state rather than the Core session.
+
+Do not turn the central suppressed-panel path into an unconditional dial:
+`onConnectionStateChanged` also invokes it automatically after disconnect
+when a radio name is retained. Such a change could redial during teardown
+and defeat explicit cancellation. The correction must distinguish operator
+affordances from automatic local-mode panel opening and cover both paths.
+
+No product code or deployed binary was changed in this discussion/audit.
+The plan now explicitly retains the verified menu work while reopening full
+R-R3-16 interface acceptance and adding R-R3-17 for minimum persistent
+identity/status/error feedback. The broader station-selection/pairing screen
+remains grounded in the existing identity design and the R5/R6 roadmap.
