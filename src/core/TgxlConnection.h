@@ -14,6 +14,11 @@
 //                 Layout from AetherSDR src/core/TgxlConnection.{h,cpp} [@0cd4559].
 //   2026-05-19  Tier 2 additions (keepalive/ping/setup r/w/ifconf r/w/save +
 //                 auto-reconnect). NereusSDR-native; design §4.2.1 + §6.4.
+//   2026-09-21  J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 OpenAI Codex: adopted AetherSDR's owned reconnect-timer
+//                 lifecycle [@1e0718ad]. Endpoint/attempt generations,
+//                 exponential backoff, and explicit source-bind fallback
+//                 are NereusSDR-native.
 // =================================================================
 #pragma once
 
@@ -42,6 +47,7 @@ class TgxlConnection : public QObject {
     Q_OBJECT
 public:
     explicit TgxlConnection(QObject* parent = nullptr);
+    ~TgxlConnection() override;
 
     bool    isConnected() const { return m_connected; }
     QString version()     const { return m_version; }
@@ -60,7 +66,7 @@ public:
 
     // Test-only: feed a single line into processLine (no newline needed).
     // Used by tst_tgxl_connection_parse. Production code never calls this.
-    void injectLineForTesting(const QString& line) { processLine(line); }
+    void injectLineForTesting(const QString& line) { processLine(line, 0); }
 
     // Test-only: simulate a disconnect without a real socket drop.
     // Used by future TgxlConnection reconnect tests. Production code never
@@ -72,6 +78,21 @@ public:
 
     // Test-only: flush all pending pings as timed-out without waiting 5 s.
     void testFlushPingTimeouts();
+
+    // Test-only reconnect lifecycle seams. They compress the existing
+    // 1/2/5/10/30/60-second policy and expose owned-timer state without
+    // changing production defaults.
+    void testSetReconnectBackoffUnitMs(int ms) {
+        m_reconnectBackoffUnitMs = ms > 0 ? ms : 1;
+    }
+    bool testReconnectPending() const { return m_reconnectTimer.isActive(); }
+    void testForceSourceBindFailureOnce() { m_testForceSourceBindFailure = true; }
+    quint64 testActiveSocketAttemptGeneration() const {
+        return m_socketAttemptGeneration;
+    }
+    void testInjectLineForSocketAttempt(const QString& line,
+                                        quint64 attemptGeneration);
+    void testInjectFailureForSocketAttempt(quint64 attemptGeneration);
 
 public slots:
     void connectToTgxl(const QString& host, quint16 port = 9010);
@@ -110,17 +131,27 @@ signals:
     void testFrameWrittenForTesting(const QString& frame);
 
 private slots:
-    void onConnected();
-    void onDisconnected();
-    void onReadyRead();
-    void onError();
     void pollStatus();
     void onKeepaliveTimeout();
     void onPingTimeoutCheck();
     void scheduleReconnect();
+    void onReconnectTimeout();
+    void onConnectTimeout();
 
 private:
-    void processLine(const QString& line);
+    enum class SourceBindResult { NotRequested, Bound, Failed };
+
+    void onConnected(quint64 attemptGeneration);
+    void onDisconnected(quint64 attemptGeneration);
+    void onReadyRead(quint64 attemptGeneration);
+    void onError(quint64 attemptGeneration);
+    void processLine(const QString& line, quint64 attemptGeneration);
+    void queueDial(const QString& host, quint16 port, quint64 generation);
+    bool requestIsCurrent(const QString& host, quint16 port,
+                          quint64 generation) const;
+    bool socketAttemptIsCurrent(quint64 attemptGeneration) const;
+    void beginSocketAttempt(quint64 endpointGeneration);
+    void retireSocketAttempt();
 
     // 2026-05-26 KG4VCF: probe the kernel for the local source IP
     // it would use to reach `host` and explicitly bind m_socket to
@@ -129,7 +160,7 @@ private:
     // between drops and the next attempt is picked up.  No-op if
     // host is invalid or the probe fails -- falls through to the
     // OS default route in that case.
-    void bindSourceForHost(const QString& host);
+    SourceBindResult bindSourceForHost(const QString& host);
 
     QTcpSocket m_socket;
     QTimer     m_pollTimer;       // 1/sec status poll
@@ -148,16 +179,24 @@ private:
     QTimer  m_pingTimer;          // periodic auto-ping (TGXL_PingSec); wired in Task 67.
     QTimer  m_pingTimeoutTimer;
     QTimer  m_reconnectTimer;
+    QTimer  m_connectTimer;
+    int     m_reconnectBackoffUnitMs{1000};
     int     m_reconnectAttempts{0};
-    // Dedup window for scheduleReconnect: when Qt fires BOTH errorOccurred
-    // and disconnected for the same socket failure (happens on most
-    // connect-time errors), we'd otherwise schedule two retries back-to-
-    // back which race and waste an attempt. This timestamp is set every
-    // time scheduleReconnect is invoked; if called again within
-    // kReconnectDedupMs ms, the second call is treated as a duplicate
-    // and ignored. Bench-confirmed 2026-05-20 18:19:25 (two scheduleR-
-    // econnect calls in the same millisecond from onError + onDisc).
-    qint64  m_lastReconnectScheduleMs{0};
+    quint64 m_endpointGeneration{0};
+    quint64 m_socketAttemptGeneration{0};
+    quint64 m_nextSocketAttemptGeneration{0};
+    quint64 m_socketAttemptEndpointGeneration{0};
+    quint64 m_retryGeneration{0};
+    quint64 m_connectGeneration{0};
+    QString m_retryHost;
+    quint16 m_retryPort{0};
+    QString m_connectHost;
+    quint16 m_connectPort{0};
+    bool    m_suppressSocketReconnect{false};
+    QMetaObject::Connection m_socketConnectedConnection;
+    QMetaObject::Connection m_socketDisconnectedConnection;
+    QMetaObject::Connection m_socketReadyReadConnection;
+    QMetaObject::Connection m_socketErrorConnection;
     int     m_keepaliveMissed{0};
     quint32 m_pendingSetupSeq{0};
     quint32 m_pendingIfconfSeq{0};
@@ -168,6 +207,7 @@ private:
     quint64 m_framesIn{0}, m_framesOut{0}, m_bytesIn{0}, m_bytesOut{0};
     QString m_lastHost;
     quint16 m_lastPort{9010};
+    bool    m_testForceSourceBindFailure{false};
 };
 
 }  // namespace NereusSDR

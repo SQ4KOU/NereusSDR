@@ -15,7 +15,7 @@ Setup page or an assertion that all station accessories work.
 | Saved layout / snapshot | Core owns slices; GUI restoration only hydrates. Explicit post-snapshot layout/add remains a command | Authenticated attach/reconnect preserves one station slice; production population helper emits no implicit add; explicit action waits for readiness | Fresh attach displayed one slice; reconnect pending |
 | TX applet / PureSignal / TX filter match | Negotiated txPermitted + handshake; Core retains admission checks | Widget activation, no mutation when gating, preservation of independent disabled state; remote refusal | Tune/MOX/VOX disabled appearance observed; remaining controls pending; no RF test |
 | High-resolution FIR graph | Requires absent local RxChannel; visibly unavailable remotely | Remote/local checkbox interaction tests | Pending appearance; ordinary mirrored RX DSP is not classified as broken |
-| Tuner telemetry | Core TunerModel -> outbound mirror -> client-only assign/notify adapter | All 13 fields, false/zero updates and absence of accessory commands | Actual tuner at .234:9010 is reachable; Core ownership/identity acceptance remains pending |
+| Tuner telemetry | Core TunerModel -> outbound mirror -> client-only assign/notify adapter | All 13 fields, false/zero updates and absence of accessory commands | Core connected after restart to .234:9010 and received actual tuner info; live configuration/identity admission remains pending |
 | Tuner TUNE / operate / antenna / relay / recall | Receive-only remote capability blocks commands; Core policy additionally guards autotune callbacks | Authenticated band change and telemetry replay issue no tune; MOX/TUNE admission blocked before radio connection and after session teardown | No RF or tuner actuation permitted in this checkpoint |
 | Tuner cached values after Core loss | Retained values explicitly marked stale; unsupported remote accessory reconnect disabled | Applet session presentation/command tests | Pending disconnect smoke |
 
@@ -127,3 +127,20 @@ are explicitly disabled by the current receive-only remote policy; they are
 not repaired by correcting the TCP port. Enabling tuner RF-path actions remains
 part of the authorized remote tuner workflow, with Core ownership and capability
 checks. No tuner antenna, operate or tune commands were exercised here.
+
+After installation of 706b9a5f, Core itself auto-connected at 18:31:15 from
+`.106` to `.234:9010`; `ss` confirmed the socket belonged to nereusd. It received
+the captured real tuner info (`serial=241288-1`, `version=1.2.17`,
+`nickname=Tuner_Genius_XL`, `3way=1`). Thus the corrected setting persisted to
+Core and applied at restart. This does not establish the missing ordered live
+apply/connect contract or identity rejection; no tuner RF action was sent.
+
+A later socket check confirmed the separate ownership defect directly: GUI PID
+54322 had `.30:52225 -> .234:9010` established while Core PID 3656 already owned
+`.106:37183 -> .234:9010`. The GUI connection began at 18:32:22. This demonstrates
+that remote Peripherals can still operate a Mac-local socket; it does not prove
+that two clients caused any earlier device/network failure. Task 4d must route
+remote configuration/connect/cancel to Core and keep the local socket inert.
+
+The bounded TGXL retry/cancellation regression is tracked in
+[TGXL connection lifecycle](tgxl-recovery.md).

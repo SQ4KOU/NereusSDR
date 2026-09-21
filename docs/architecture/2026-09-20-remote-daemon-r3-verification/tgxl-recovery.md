@@ -1,0 +1,111 @@
+# TGXL connection lifecycle, R-R3-22
+
+This is the bounded retry/cancellation portion of task 4d. It does not complete
+remote accessory commands, identity admission, live configuration, or authorize
+RF actions. Execution follows `yonder-cost-aware-execution`.
+
+## Observed defect
+
+The GUI retried `.234:9008` after connect timeouts and reported source binding
+outside UnconnectedState followed by an invalid socket descriptor. The user
+corrected the port to 9010 and status responses arrived. Core applied the
+persisted setting at restart and connected to the actual tuner. The original
+static reconnect callbacks still retained old endpoints and could not be
+cancelled when the operator disconnected or replaced the endpoint.
+
+The intended correction retains the existing 1/2/5/10/30/60-second schedule,
+using one owned timer and a current-request generation. Socket preparation,
+failed source-bind fallback, explicit stop, replacement and destruction must
+not permit an old callback to dial or retire a newer connection. A successful
+TCP/version session cancels pending retry. The existing wire commands and
+receive-only tuner policy remain unchanged.
+
+Qt documents that a socket can still be unwinding its error when errorOccurred
+is delivered; a replacement dial must wait for the event loop when necessary.
+See [QAbstractSocket error delivery](https://doc.qt.io/qt-6/qabstractsocket.html#errorOccurred).
+AetherSDR's owned timer provides the existing structural precedent; Nereus's
+exponential backoff and source-route fallback remain native orchestration.
+
+## Regression evidence before the correction
+
+A fresh build of `tst_tgxl_connection_reconnect` succeeded, then real-loopback
+cases reproduced the faults:
+
+- Replacing the endpoint still produced one connection to the old endpoint
+  (expected zero).
+- Explicit Disconnect still produced one later connection (expected zero).
+- A real bind failure on a nonlocal test address armed an extra retry while
+  the OS-default fallback established a connection (expected no extra retry).
+- A synchronous endpoint replacement from the retry notification connected to
+  the new endpoint twice (expected once).
+
+The test seam compresses the unchanged schedule for socket observation; it
+also causes an actual QTcpSocket bind failure. It does not invent device replies
+beyond the existing version-handshake fixture. Private logs:
+`r3-tgxl-retry-red-{build,test}.log`.
+
+The initial executable ended with SIGTRAP after these failures (3.25 seconds).
+The crash report establishes destructor reentry: QAbstractSocket destruction
+emitted disconnected, which entered the partially destroyed TgxlConnection,
+then a retry consumer invoked another connection. Explicit quiescent destruction
+is part of the lifecycle correction. The remaining cases were not all reached
+in that failed run.
+
+PGXL has a similar old retry pattern; its lifecycle remains a separate open
+part of task 4d. This bounded patch does not claim to repair PGXL.
+
+The first candidate passed seven focused suites (6.13 seconds, no Qt case
+skips). The consolidated review then found a remaining active-socket race:
+replacing endpoint A with B invalidated the request but left A's socket alive
+until the deferred dial. A late A connected/version callback could cancel B's
+timer, and A's error/disconnect callback could be mistaken for B's. Graceful
+operator cancellation had the same late-handshake admission gap. Regression
+coverage and correction must associate callbacks with the socket attempt,
+including cancellation while waiting for the version banner.
+
+A second fresh regression build reproduced all three gaps (9 passed, 3 failed,
+zero skipped; 9.91 seconds for the executable). With real loopback TCP peers
+holding the version banner, a controlled callback seam delivered the old
+attempt's callback at the precise ordering boundary: replacement B received
+zero connections instead of one; the cancelled session emitted one connected
+signal instead of zero; a late old failure emitted one disconnect for B
+instead of zero. Logs: `r3-tgxl-active-red-{build,test}.log`. The correction
+must route that seam through the same attempt admission used by actual socket
+callbacks, rather than fix only the tests.
+
+Hardware acceptance is pending. The running 706b9a5f station is not using
+this new source; the user initially confirmed its audio and waterfall smooth.
+
+## Review correction and model notification
+
+Each actual dial now receives a unique attempt token associated with its
+endpoint request. All four real socket signal callbacks capture that token;
+replacement, cancellation and a queued next attempt retire the old callbacks
+immediately. The three ordering regressions enter the same handlers as those
+callbacks. Parser-only tests retain their explicit offline injection path.
+The corrected seven focused suites passed in 6.12 seconds. These tests control
+the late-callback ordering; they do not claim the OS naturally reproduced it.
+
+Lead integration inspection also found that retiring an established socket's
+callbacks suppressed the model's disconnected notification during replacement.
+A real-loopback test with a bound TunerModel failed: observers received only
+`true` rather than `true, false` while B's version banner was held (12 passed,
+1 failed, zero skipped). Replacement now publishes the retired connection's
+disconnected state after queuing the new request, with no member access after
+that public signal. The test requires the complete `true, false, true`
+sequence once B is admitted. Logs: `r3-tgxl-state-red-{build,test}.log`.
+
+## Final software verification
+
+After the consolidated review correction and model-notification fix, all seven
+focused suites passed in 6.06 seconds, with no Qt case skips. A fresh
+`all_tests`/`nereusd` build followed by unfiltered ctest passed **683/683 test
+executables in 134.32 seconds**. Eleven existing inner Qt cases skipped for
+unavailable host APIs or deferred harness coverage; the new lifecycle cases
+all ran. Private logs: `r3-tgxl-final-focused-{build,test,cases}.log` and
+`r3-tgxl-final-full-{build,test,cases}.log`.
+
+Before installation, the existing 706b9a5f GUI crashed during a mirrored AGC
+update, and the still-running Core was subsequently observed producing zero
+audio frames. These are separate live acceptance failures, under investigation;
+the passing TGXL suite does not establish their resolution.

@@ -3,9 +3,66 @@
 This ledger separates the recovered integration baseline, component evidence
 and real remote receive acceptance. A component pass does not close R3.
 
-## Current receive status, September 21, checkpoint 8c011066
+## Latest live interruption, September 21, 19:09–19:20
 
-Signed `8c011066` is installed on the Rock and in the matching macOS GUI.
+The earlier smooth checkpoint did not establish continuous acceptance. GUI
+PID 54322 crashed at 19:09:12 while applying a mirrored AGC threshold to a
+VFO slider, after a pan layout change rehomed a slice. The crash is being
+investigated separately from the TGXL patch. Core PID 3656 stayed active, but
+later reported zero audio source frames and repeated media-context renewal.
+A passive capture still contained Saturn DDC2 I/Q on UDP 1037 and status on
+1026, so this occurrence must not be labelled total radio ingress loss.
+
+The original 706b9a5f executable and private library UUIDs were verified;
+CMake had regenerated Info.plist, invalidating its bundle signature. Re-signing
+and reopening the saved radxa_5c_r3 profile restored the intended build, not
+reception. An authorized Core restart at 19:19 restored approximately 48,000
+audio source frames and 25 accepted Opus packets per second; Core PID 5242
+has zero service restarts. The GUI retained a blank previous pan, so complete
+visual recovery remains under investigation. No new TGXL binaries are installed.
+
+## Current receive status, September 21, checkpoint 706b9a5f
+
+Signed `706b9a5f` is installed on the Rock and in the matching macOS GUI.
+It adds typed media-loss recovery through the existing authenticated reconnect
+path. All 55 packaged source hashes matched; the native build/stage, updated
+Core-library hash and exported typed-failure symbols, install with rollback,
+and GUI deep/strict signature verification passed. The prior install is kept
+at `/var/lib/nereus-build/rollback-8c011066-before-706b9a5f/`.
+
+Installed SHA-256:
+
+| File | SHA-256 |
+| --- | --- |
+| nereusd | `4a685f62e6c9ed6a7e83fbe5daadda8eacf5aeb4079e7e30d481310e001b7202` |
+| libNereusCore.so | `23303eceb27fe1744533aea39a442e897ee2afa633e86ec9206d779d0e105dbc` |
+| librade.so.0.1 | `18e56fe8ee4b8a8450cc786cbcfed9bab147ec11df64e33486ce50e0ff91c32f` |
+
+The GUI (PID 54322) was left open across the authorized Core installation.
+It observed station shutdown at 18:31:07, retried automatically, authenticated
+again at 18:31:25, and resumed Opus reception. Core PID 3656 had zero restarts
+and listened at `.106:50055`. Its first two-second audio diagnostic reported
+96,064 source frames, 50 encoded/accepted packets, zero encoder errors and zero
+source drops. At 18:32 the GUI visibly showed live 3D/2D and matching applet/flag
+meters (-65 dBm at that observation).
+
+The user confirmed both audio and waterfall were smooth after this restart.
+This is a successful short receive checkpoint; it does not close the soak.
+
+This establishes normal full-Core restart recovery, not yet the new media-only
+failure path on hardware. That path has real pinned-TLS integration coverage;
+see [media recovery](media-recovery.md). Sustained listening, media-only live
+recovery, initial negotiation deadline/backoff and the two-hour soak remain
+open. After the restart Core itself opened `.106 -> .234:9010` and received
+`info serial=241288-1 version=1.2.17 nickname=Tuner_Genius_XL 3way=1`.
+The user's endpoint change persisted through settings; applying it live without
+a restart, validating identity before admission, and remote tuner actions are
+still incomplete. No RF actions or OS/VPN/switch/network configuration were
+performed.
+
+## Previous receive status, September 21, checkpoint 8c011066
+
+Signed `8c011066` was installed on the Rock and in the matching macOS GUI.
 It includes the listener retry, initial DDC-rate correction and audio diagnostics.
 All 45 packaged source hashes matched; native build, staging, dependency checks,
 installation with rollback, and GUI strict/deep signature verification passed.
@@ -51,8 +108,8 @@ sustained playback and a two-hour soak remain unaccepted.
 
 ## Previous receive checkpoint, 95b19467
 
-Signed checkpoint `95b19467` is installed on the Rock 5C and its matching
-macOS GUI has been launched. It adds Core connection controls, snapshot-safe
+Signed checkpoint `95b19467` was installed on the Rock 5C and its matching
+macOS GUI was launched. It adds Core connection controls, snapshot-safe
 startup, TX capability gating and receive-only tuner telemetry. The broader
 accessory connection/identity/configuration work remains task 4d. See the
 [control acceptance matrix](remote-controls.md) for the bounded scope.

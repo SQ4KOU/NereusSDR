@@ -49,8 +49,8 @@ Logs: `r3-media-recovery-green-{build,test,cases}.log`.
 
 One consolidated independent review found no actionable correctness,
 lifecycle, authentication or regression-coverage issues. Full-suite software
-verification passed as recorded below. Live installation/acceptance remains
-pending; software evidence alone does not establish live recovery.
+verification passed as recorded below. Installation is now complete as recorded below; software evidence alone does
+not establish live media-only recovery.
 
 ## Explicit remaining boundary
 
@@ -75,3 +75,19 @@ skips. Eleven pre-existing inner Qt cases skipped for unavailable host APIs
 or deferred harness coverage; all new recovery cases executed. Private logs:
 `r3-media-recovery-final-{build,test,cases}.log`. The earlier failed run is
 retained separately. No production amplifier behavior changed.
+
+## Installed checkpoint 706b9a5f
+
+Native and macOS builds, source-hash validation, library/symbol checks,
+rollback-protected install and GUI code-signature verification passed. During
+installation the already-running new GUI observed Core shutdown, retried,
+and resumed an authenticated session, audio and display at 18:31:25. This is
+live full-Core restart recovery; a media-only failure with surviving control
+has not yet been reproduced on the installed build. Preserve that distinction.
+The [deployment ledger](README.md) contains hashes and remaining acceptance.
+
+The operator reported both audio and waterfall smooth at this checkpoint.
+A later log check over 18:31:25–19:00:59 found six audio-buffer underflow
+warnings and 171 RTP timing warnings; Core remained PID 3656 with zero service
+restarts. This is useful short receive evidence, not acceptance of the
+two-hour audio soak or proof that occasional stutters are resolved.
