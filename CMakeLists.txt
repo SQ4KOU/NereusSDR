@@ -2229,10 +2229,13 @@ install(TARGETS rade
 # AppImage job sees exactly what it saw before. See the rade install rule
 # above for why leaving the default install path untouched matters here.
 #
-# Not applied on Apple: the macOS artifact is an .app bundle deployed by
-# macdeployqt, which rewrites install names into Contents/Frameworks
-# itself. nereusd is not shipped on macOS.
-if(NOT APPLE AND UNIX)
+# Apple gets the equivalent executable-relative path so a staged component
+# can be inspected and run locally even though nereusd is not shipped there.
+if(APPLE)
+    set_target_properties(nereusd PROPERTIES
+        INSTALL_RPATH "@executable_path/../${CMAKE_INSTALL_LIBDIR}"
+    )
+elseif(UNIX)
     file(RELATIVE_PATH NEREUS_BIN_TO_LIB
          "${CMAKE_INSTALL_FULL_BINDIR}"
          "${CMAKE_INSTALL_FULL_LIBDIR}")
@@ -2255,6 +2258,16 @@ if(NOT APPLE)
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     )
 endif()
+
+# The component install is a standalone daemon runtime. NereusCore is a
+# shared library, so it must travel with nereusd just like RADE does above.
+# This rule is intentionally separate from the default desktop install.
+install(TARGETS NereusCore
+    LIBRARY DESTINATION ${CMAKE_INSTALL_LIBDIR}
+            COMPONENT nereusd EXCLUDE_FROM_ALL
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+            COMPONENT nereusd EXCLUDE_FROM_ALL
+)
 
 # nereusd -- headless daemon (R1 Task 12; see
 # docs/architecture/2026-08-02-remote-daemon-r1-plan.md Task 12).
