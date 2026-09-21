@@ -223,3 +223,49 @@ by all 672 registered tests passing with zero failures/skips (65.52 seconds).
 The final renderer-fixture edit was confirmed present in that build. Logs
 are in `~/.config/nereus/work/r3-rx-calibration/`. Native installation and
 live corrected-checkpoint evidence follow separately.
+
+## Installed RF-gain and calibration checkpoint, f8531cd9
+
+Signed commit `f8531cd92676209f0acaf96b475e0d6c7a51e1b3` is installed on
+the Rock 5C. The ten-file source overlay was hash-verified, and the native
+aarch64 Release build passed. The first installation attempt detected a
+missing staged license component and rolled back successfully. After staging
+both the daemon and licenses and adding the corresponding preflight check,
+the second attempt succeeded. Prior `ea55d24a` binaries, libraries, service
+unit and private configuration are retained in
+`/var/lib/nereus-build/rollback-ea55d24a-before-f8531cd9-attempt2/`.
+The service is active with `Result=success`, `ExecMainStatus=0` and zero
+restarts. This verifies a service restart; the operator's earlier board
+power cycle ran the previous checkpoint.
+
+A fresh authenticated 20-second media probe received **230 distinct decoded
+frames**, 230 waterfall advances and 230 wide rows, with zero decoder
+rejections or keyframe-gap requests. Trace and waterfall each contained
+1,024 samples; wide rows contained 768 samples. The accepted span was
+48,046.875 Hz. This bounded run includes startup and is not sustained
+frame-rate or long-duration acceptance.
+[Machine-readable results](live-display-f8531cd9.json) contain no pairing data.
+
+The rebuilt desktop bundle passed strict code-signature verification. It
+was reopened with profile `radxa_5c_r3`; the title showed `f8531cd9`, a fresh
+authenticated handshake completed, and its established TCP connection was
+verified to the Rock's wired address `192.168.109.106:50055`. Live spectrum
+and populated, advancing 2D waterfall were observed at the operator's
+3.650-MHz LSB selection. The large analog meter and connection/status
+indicators still need remote bindings; the mirrored slice meter is the
+currently useful RF indication. No RF transmission was performed.
+
+Installed SHA-256 values:
+
+| File | SHA-256 |
+| --- | --- |
+| `nereusd` | `8e0b6483c27ac79c757b41e02bdcf78eee31e8b16a07f01f066c2fc6c0faa599` |
+| `libNereusCore.so` | `c0ca4f294174afb83efa14af11fe1501e9e5dd67719382c8fbf3d7a39f592e4b` |
+| `librade.so.0.1` | `18e56fe8ee4b8a8450cc786cbcfed9bab147ec11df64e33486ce50e0ff91c32f` |
+
+Remote receive audio remains unfinished: capture and Opus codec components
+exist, but network audio sending, jitter/clock control and GUI playback are
+not connected. Silence in this remote profile is therefore expected at this
+checkpoint. The agreed next receive milestone is one mixed stereo Opus feed
+preserving slice volume, mute and stereo placement. R5 traversal decisions
+remain intact; neither this installation nor its display probe completes R3.
