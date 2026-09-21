@@ -766,3 +766,28 @@ at actual owner-thread delivery, after display processing. Warnings above
 existing 64-packet queue, retirement checks and transport API are unchanged.
 The rebuilt transport, media peer, receiver and encrypted audio session tests
 passed 4/4 in 5.04 seconds. Full-suite verification follows this source gate.
+
+
+## Diagnostic GUI checkpoint, 4d923aeb
+
+The complete desktop/test build and strict application code-signature check
+passed. An unfiltered 681-test run passed **674 and timed out seven** in
+160.95 seconds. The failures are `tst_port_audio_bus`,
+`tst_audio_engine_speakers_live_reconfig`, `tst_connectable_radio_model`,
+`tst_connected_state_equivalence`, `tst_remote_role_inert`,
+`tst_session_verbs`, and `tst_slice_meter_pump`. A live sample of the last
+test shows `Pa_OpenStream` blocked in the macOS Core Audio hardware-property
+RPC while opening the microphone through `ensureTxInputOpen`. A subsequent
+serial failed-test retry remained in the first PortAudio test for 45 seconds
+and was stopped as a bounded diagnostic. No tests were excluded, no device
+settings or audio services were changed, and this run is **not** reported as
+a full pass. The production source correction's earlier 681/681 pass and
+the diagnostic changes' focused 4/4 pass remain separate evidence.
+
+Logs are retained privately as `r3-diagnostics-final-{build,test}.log`,
+`r3-diagnostics-serial-audio-test.log` and `r3-diag-test-hang-sample.txt`.
+The `4d923aeb` GUI was reopened with the existing station profile. It waits
+for the Rock's link to return. A second read-only switch check still showed
+ether2 not running, with switch-recorded last link-down `2026-09-21 12:06:40`
+(the switch clock was not compared against the Mac). Remaining playback,
+long-soak and capacity gates stay open.
