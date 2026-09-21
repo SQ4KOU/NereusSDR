@@ -9,8 +9,8 @@ Recovered on 2026-09-20 by J.J. Boyd (KG4VCF), with OpenAI Codex assistance.
 | Shipping baseline | `main` at `efd88e69` | Does not contain the daemon split |
 | R1 foundation | [PR #315](https://github.com/boydsoftprez/NereusSDR/pull/315), branch `claude/nereus-thin-client-arch-8f24ec`, tip `a7324cdd` | Open; conflicts with main. Its last Linux, Windows, macOS, compliance and CodeQL checks passed. Parts of its PR description still predate those results. |
 | R2 control session | `claude/remote-daemon-r2`, worktree `/Users/j.j.boyd/NereusSDR/.worktrees/remote-daemon-r2` | Recovered clean at `efddd7ea`, 75 commits after R1. No remote branch or R2 PR was found. |
-| R2 integrated with main | `codex/integrate-r2-main`, worktree `/Users/j.j.boyd/.codex/worktrees/nereus-r2-integration/NereusSDR` | Signed merge `fac45926` contains both `efd88e69` and the shutdown-fix checkpoint `daf05135`. Both executables build and nine focused tests pass. |
-| R3 media | Existing architecture and R2/R3 addendum | No R3 implementation plan or media implementation found in the recovered branch |
+| R2 integrated with main and selected open PRs | `codex/integrate-r2-main`, worktree `/Users/j.j.boyd/.codex/worktrees/nereus-r2-integration/NereusSDR` | Signed checkpoint `14124e7c` includes the published 3D waterfall and other selected PR work. Both executables build; unfiltered desktop suite passes 662/662 with a documented local fixture-path workaround. |
+| R3 media | [September 20 implementation plan](../architecture/2026-09-20-remote-daemon-r3-plan.md), extending Claude's architecture and addendum | Codec, headless FFT source and encrypted media adapter in progress; end-to-end remote media not yet implemented |
 
 The build targets are `NereusCore`, `NereusGui`, `nereusd`, and `NereusSDR`.
 "NereusUI" refers to the existing GUI running in remote mode; there is no
@@ -140,13 +140,14 @@ A later discovery from the Rock 5C's wired interface found the G2E again
 at `192.168.109.198`, with the same MAC and board byte, idle. This restores
 the opportunity for an SBC bench; it does not explain the earlier outage.
 
-Temporary logs and the supervised launch helper are under
-`/tmp/nereus-resume-20260920`. Raw first-run output can contain pairing
-credentials; keep these files local and do not attach them to a PR.
+The original temporary logs and supervised launch helper were under
+`/tmp/nereus-resume-20260920` and were lost during the Mac upgrade/reboot.
+Committed sanitized evidence remains available. New private build/probe work
+is stored under `~/.config/nereus/work/`; pairing data remains outside the repo.
 
 ## Rock 5C installation and live R2 verification
 
-The native Release build of signed checkpoint `daf05135` completed on the
+The first native Release build of signed checkpoint `daf05135` completed on the
 Rock 5C with Qt 6.8.2, GCC 14, OpenSSL 3.5.7, WDSP and FFTW. GPU rendering,
 tests and DFNR were disabled for this headless build. The installed executable
 is `/usr/local/bin/nereusd`, with its required RADE shared library installed.
@@ -188,6 +189,16 @@ own, and the already-open Mac GUI reconnected automatically about 33 seconds
 after shutdown. The OEM kernel-managed fan was present after boot.
 Multi-slice throughput and a longer soak remain unverified.
 
+The installed Core was subsequently upgraded to signed combined checkpoint
+`14124e7c`. Native ARM build, staged shared-library installation and a fresh
+authenticated receive-control probe all passed. The service remains enabled
+and active with zero restarts; the probe verified Saturn identity, 2,502
+settings, tuning/restoration, and 161 changing receive-meter samples.
+The previous binary/library/unit set is retained in a root-only rollback
+directory. See the [current verification ledger](../architecture/2026-09-20-remote-daemon-r3-verification/README.md).
+The new baseline still has control-only R2 behavior. No new reboot or live
+remote media result is implied by this installation.
+
 ### Network observation, not a proven fix
 
 An early streaming session caused severe LAN latency and packet loss. With
@@ -216,23 +227,27 @@ a persistent link limit.
 
 ## Next milestones
 
-1. Finish R2's Saturn multi-slice throughput, accessory/meter-widget,
-   and longer network-soak acceptance rows. Single-slice control, boot,
-   automatic client reconnect and clean shutdown now have Rock 5C evidence.
-2. Resolve PR #315's conflicts and carry the shutdown fixes into the branch
-   that will be merged. Publish/review R2 as the next development stage.
-3. Finish the R3 decisions in addendum section 10.1: master versus per-slice
-   audio, shared versus separate FFTs, source-verified Opus settings, and
-   codec attribution. Then write its implementation plan.
-4. Bring up one remote audio stream and one spectrum/waterfall subscription
-   end to end early, then expand to the planned multi-pan budgets and soak
-   tests. The previous design explicitly rejected a throwaway raw-media
-   protocol; reuse that decision.
-5. Carry the combined GUI and media work onto the installed SBC baseline,
-   then verify boot, client reconnect, and end-to-end remote receive media.
+1. Follow the [R3 implementation plan](../architecture/2026-09-20-remote-daemon-r3-plan.md).
+   One mixed stereo Opus feed is confirmed; original network decisions are
+   preserved. Claude's original documents and execution history are mapped in
+   the [objective review](../architecture/2026-09-20-remote-daemon-r3-review.md).
+2. Deliver one live Saturn pan and advancing 2D/3D waterfall through encrypted
+   media, then actual mixed stereo playback with the slice controls working.
+3. Complete multi-pan/tier capacity, remaining meter/accessory acceptance,
+   bandwidth, audio-clock and two-hour hardware-soak gates. Install and verify
+   reconnect with media on both ends. R2 plus R3 remains one receive release.
+4. Prepare the carrier-network bench alongside R3. The review recommends
+   receive-only R5 NAT traversal after working LAN reception, without waiting
+   for the full R4 TX implementation. Preserve both relay paths, including
+   TLS/443, which the current libjuice backend does not provide.
+5. Keep the integrated signed branch ready for review. No public push or PR
+   update has been performed; the maintainer's posting preference still applies.
 
 ## Sources to resume from
 
+- [Current R3 plan and network continuity](../architecture/2026-09-20-remote-daemon-r3-plan.md)
+- [Recovered Claude planning chain and review](../architecture/2026-09-20-remote-daemon-r3-review.md)
+- [Current integration and installation evidence](../architecture/2026-09-20-remote-daemon-r3-verification/README.md)
 - [Rock 5C live control and reboot evidence](../architecture/2026-08-03-remote-daemon-r2-verification/rock-5c-2026-09-20/README.md)
 
 - [R2 implementation plan](../architecture/2026-08-03-remote-daemon-r2-plan.md)
