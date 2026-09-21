@@ -137,6 +137,28 @@ private slots:
         w.pushWaterfallRowForTest(row(768, -130.0f));
         QCOMPARE(w.dssRowsPushedForTest(), 0);
     }
+
+    // The wide cache is populated only by receive FFT frames. A keyed row
+    // must therefore stay exact-only: attaching that cache would combine the
+    // current transmit centre with shoulders from the last receive frame.
+    void moxRow_doesNotReuseReceiveWideCache() {
+        SpectrumWidget w;
+        w.resize(400, 200);
+        w.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&w));
+        w.setSampleRate(768000.0);
+        w.setDdcCenterFrequency(14200000.0);
+        w.setFrequencyRange(14200000.0, 96000.0);
+        w.setSpectrumRenderMode(static_cast<int>(SpectrumRenderMode::Mode3D));
+        w.setFullBinsForTest(row(4096, -130.0f));
+
+        w.pushWaterfallRowForTest(row(768, -130.0f));
+        QVERIFY(w.dssNewestRowWideBandwidthForTest() > 0.096);
+
+        w.setMoxOverlay(true);
+        w.pushWaterfallRowForTest(row(768, -50.0f));
+        QCOMPARE(w.dssNewestRowWideBandwidthForTest(), 0.0);
+    }
 };
 
 QTEST_MAIN(TestDssRowTee)

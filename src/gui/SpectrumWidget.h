@@ -760,6 +760,9 @@ public:
     void setFullBinsForTest(const QVector<float>& binsDbm) {
         m_lastFullBinsDbm = binsDbm;
     }
+    double dssNewestRowWideBandwidthForTest() const {
+        return m_dss.rowWideBandwidthMhzAtAge(0);
+    }
     // Public one-line forward (drawDbmScale3D is private) so the 3D dBm
     // scale can be painted onto an off-widget QImage/QPainter without a
     // live paintEvent(), following the drawSpotMarkersForTest /

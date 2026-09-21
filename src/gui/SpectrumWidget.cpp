@@ -6227,17 +6227,23 @@ QVector<SpectrumWidget::DssShadowBand> SpectrumWidget::buildDssShadowBands() con
 // Resamples the same post-pipeline row pushWaterfallRow() just wrote to the
 // flat waterfall into the stacked-trace ring, and fills the wide (off-
 // screen) channel from the cached full-DDC dBm snapshot (m_lastFullBinsDbm,
-// set in updateSpectrumLinear()) via pushRowWithWide. Falls back to the
-// exact-only pushRow() whenever buildDssWideRow() has nothing to offer
-// (not zoomed in, or no FFT frame cached yet).
+// set in updateSpectrumLinear()) via pushRowWithWide. Transmit rows are
+// exact-only because updateSpectrumFromTxPixels() has no full-DDC TX frame;
+// using the cache while keyed would mix fresh TX pixels with stale RX
+// shoulders. Receive rows also fall back to exact-only whenever
+// buildDssWideRow() has nothing to offer (not zoomed in, or no FFT frame
+// cached yet).
 void SpectrumWidget::pushDssRow(const QVector<float>& wfPixelsDbm)
 {
     const double centerMhz    = m_centerHz    / 1.0e6;
     const double bandwidthMhz = m_bandwidthHz / 1.0e6;
     double wideCenterMhz = 0.0;
     double wideBandwidthMhz = 0.0;
-    const QVector<float> wide =
-        buildDssWideRow(m_lastFullBinsDbm, wideCenterMhz, wideBandwidthMhz);
+    QVector<float> wide;
+    if (!m_moxOverlay) {
+        wide = buildDssWideRow(
+            m_lastFullBinsDbm, wideCenterMhz, wideBandwidthMhz);
+    }
     if (wide.isEmpty()) {
         m_dss.pushRow(wfPixelsDbm, centerMhz, bandwidthMhz);
     } else {
