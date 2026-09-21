@@ -114,6 +114,11 @@ public:
                                    QComboBox* c, QComboBox* d);
     static bool comboValuesDiffer3(QComboBox* a, QComboBox* b, QComboBox* c);
 
+    QCheckBox* highResolutionFilterCharacteristicsCheckBox() const noexcept
+    {
+        return m_highResFilterChars;
+    }
+
 private:
     void buildUI();
 

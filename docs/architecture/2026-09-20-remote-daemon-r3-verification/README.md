@@ -5,23 +5,28 @@ and real remote receive acceptance. A component pass does not close R3.
 
 ## Current receive status, September 21
 
-Core is installed at signed receive checkpoint `04da2aab`; the running GUI
-remains `73fcccfe` while the combined audio candidate is verified. Core now
-publishes BPF/WIDE state and independent Auto AGC-T measurements. Their GUI
-bindings pass source/session checks; live visual acceptance awaits the new
-GUI. Existing live spectrum, waterfall, Clarity inputs, applet/slice meters
-and menu-driven Core reconnect have been demonstrated at earlier checkpoints.
+The installed Core and GUI code is signed checkpoint `501b2701`. The user
+confirmed that C-Tune wheel tuning and frequency-scale drag zoom within the
+current bandwidth now behave smoothly. That does not establish full ADC-wide
+zoom parity, which remains task 4b.
 
-The mixed stereo Opus sender, encrypted session control, bounded jitter,
-continuous WDSP rate matching and client playback are implemented. Focused
-checks pass, including a simulated hour in each direction at 500 ppm, large
-speaker callbacks, packet bursts, mute/resume and encrypted reconnect. The full
-681-test suite passes at signed audio checkpoint `0123d8e1`. Native audio
-installation and actual listening are the next gates.
-The Mac is now remote/on VPN; that existing connection is not R5 traversal.
-Capacity, two-hour hardware audio soak, Clarity's subjective comparison and
-R5 internet traversal remain open. Earlier sections retain checkpoint-specific
-evidence and should not be read as the current installation state.
+The next candidate implements Core connection presentation/actions,
+snapshot-safe startup, TX capability gating and receive-only tuner telemetry.
+Its software and live evidence is tracked in
+[the control acceptance matrix](remote-controls.md). It is not installed yet.
+The broader accessory connection/identity/configuration work remains task 4d.
+
+After the September 21 power cycle, Core restarted successfully. Ethernet
+has a 1 Gbit/s physical link but no IPv4 lease; the board's route to Saturn
+currently uses Wi-Fi. The previous boot journal does not establish why the
+board locked up. Wired recovery, reboot robustness and sustained audio
+acceptance remain open; no network configuration was changed in this check.
+
+Mixed stereo Opus playback works, with occasional stutters reported by the
+user. The existing path is through the user's VPN, not R5 NAT traversal.
+Capacity, full wideband parity, audio diagnostics/profile comparison, the
+two-hour hardware soak and R5 traversal remain open. The sections below retain
+historical checkpoint evidence and do not override this current status.
 
 ## Combined baseline, 14124e7c
 

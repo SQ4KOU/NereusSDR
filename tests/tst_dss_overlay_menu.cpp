@@ -145,9 +145,8 @@ private slots:
     // Slice Shadow to unchecked regardless of the operator's real setting.
     void setDssValues_doesNotEcho() {
         SpectrumOverlayMenu m;
-        m.resize(320, 640);
-        m.show();
-        QVERIFY(QTest::qWaitForWindowExposed(&m));
+        // Seeding happens before the popup is shown. No window exposure or
+        // focus is needed to verify the values and absence of signal echoes.
 
         QSignalSpy modeSpy(&m, &SpectrumOverlayMenu::spectrumRenderModeChanged);
         QSignalSpy floorSpy(&m, &SpectrumOverlayMenu::dssFloorDepthChanged);

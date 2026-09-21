@@ -278,6 +278,8 @@ public:
 
     // Remote-daemon R2 Task 4.
     Role role() const { return m_role; }
+    void setReceiveOnlyStationPolicy(bool receiveOnly);
+    bool receiveOnlyStationPolicy() const { return m_receiveOnlyStationPolicy; }
 
     // Remote-daemon R2 Task 4: non-owning attach point for the
     // control-plane station-link seam (core/session/IStationLink.h). A
@@ -3360,6 +3362,7 @@ public:
     // MOX-engage so prior TUN-state desync cannot starve SSB MOX).
     void pushTxModeAndBandpass();
     void installBandPlanMoxCheck();
+    bool receiveOnlyTxOperationsBlocked() const;
 
     // ── Phase 3F Sub-Epic B Task 16: multi-slice codec glue ─────────────────
     // Build the 5-element codec input array. Phase 3F Sub-Epic I Task 7b:
@@ -3897,6 +3900,7 @@ private:
     // Remote-daemon R2 Task 4: set once at construction (see the Role
     // constructor overload above), never mutated afterward.
     Role m_role{Role::Local};
+    bool m_receiveOnlyStationPolicy{false};
 
     // Remote-daemon R2 Task 20: the reach-through audit described on
     // localDspHandOutCount() above. Written only while m_role ==

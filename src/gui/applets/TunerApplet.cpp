@@ -52,6 +52,11 @@ TunerApplet::TunerApplet(RadioModel* model, TunerModel* tunerModel, QWidget* par
     : AppletWidget(model, parent)
     , m_tuneStore(tuneStore)
 {
+    m_transmitPermitted = !model
+        || (model->role() == RadioModel::Role::Local
+            && !model->receiveOnlyStationPolicy());
+    m_stationConnected = !model || model->role() == RadioModel::Role::Local;
+
     // NOTE: m_tunerModel is deliberately NOT initialised from `tunerModel` in
     // the initializer list. The setTunerModel() call below uses an `if (==)`
     // early-return to detect a no-op rebind; passing the same pointer twice
@@ -78,6 +83,8 @@ TunerApplet::TunerApplet(RadioModel* model, TunerModel* tunerModel, QWidget* par
     if (tunerModel) {
         setTunerModel(tunerModel);
     }
+    updateActuatingControls();
+    updateStationAvailability();
 }
 
 void TunerApplet::buildUI()
@@ -93,6 +100,14 @@ void TunerApplet::buildUI()
     auto* vbox = new QVBoxLayout(body);
     vbox->setContentsMargins(4, 2, 4, 4);
     vbox->setSpacing(2);
+
+    m_staleLabel = new QLabel(
+        QStringLiteral("Core disconnected — tuner values are stale"), this);
+    m_staleLabel->setTextFormat(Qt::PlainText);
+    m_staleLabel->setWordWrap(true);
+    m_staleLabel->setStyleSheet(QStringLiteral("color: #d9a441; font-size: 10px;"));
+    m_staleLabel->setVisible(false);
+    vbox->addWidget(m_staleLabel);
 
     // --- Control 1: Forward power gauge (0-200W, red@125; auto-rescaled via setPowerScale) ---
     // From AetherSDR src/gui/TunerApplet.cpp:buildUI() [@0cd4559]
@@ -134,11 +149,23 @@ void TunerApplet::buildUI()
     // Manual relay adjustment via mousewheel scroll.
     // From AetherSDR src/gui/TunerApplet.cpp:buildUI() relayAdjusted connections [@0cd4559]
     connect(m_c1Bar, &RelayBar::relayAdjusted, this,
-            [this](int dir) { if (m_tunerModel) m_tunerModel->adjustRelay(0, dir); });
+            [this](int dir) {
+                if (m_transmitPermitted && m_tunerModel) {
+                    m_tunerModel->adjustRelay(0, dir);
+                }
+            });
     connect(m_lBar, &RelayBar::relayAdjusted, this,
-            [this](int dir) { if (m_tunerModel) m_tunerModel->adjustRelay(1, dir); });
+            [this](int dir) {
+                if (m_transmitPermitted && m_tunerModel) {
+                    m_tunerModel->adjustRelay(1, dir);
+                }
+            });
     connect(m_c2Bar, &RelayBar::relayAdjusted, this,
-            [this](int dir) { if (m_tunerModel) m_tunerModel->adjustRelay(2, dir); });
+            [this](int dir) {
+                if (m_transmitPermitted && m_tunerModel) {
+                    m_tunerModel->adjustRelay(2, dir);
+                }
+            });
 
     // Right column: TUNE + OPERATE cycle buttons
     auto* btnCol = new QVBoxLayout;
@@ -173,7 +200,7 @@ void TunerApplet::buildUI()
     // NereusSDR-native; no AetherSDR equivalent (AetherSDR routes through
     // a real FlexRadio that handles the carrier internally).
     connect(m_tuneBtn, &QPushButton::clicked, this, [this]() {
-        if (!m_tunerModel) { return; }
+        if (!m_transmitPermitted || !m_tunerModel) { return; }
         // Engage local CW tune carrier via the G.4 orchestrator
         // RadioModel::setTune(true). That call configures the gen1 PostGen
         // tone (TxChannel::setTuneTone), swaps CW->LSB/USB if needed,
@@ -288,11 +315,23 @@ void TunerApplet::buildUI()
         // ANT buttons: 1-indexed to match AetherSDR upstream convention.
         // From AetherSDR src/gui/TunerApplet.cpp:buildUI() ant clicked [@0cd4559]
         connect(m_ant1Btn, &QPushButton::clicked, this,
-                [this]() { if (m_tunerModel) m_tunerModel->setAntennaA(1); });
+                [this]() {
+                    if (m_transmitPermitted && m_tunerModel) {
+                        m_tunerModel->setAntennaA(1);
+                    }
+                });
         connect(m_ant2Btn, &QPushButton::clicked, this,
-                [this]() { if (m_tunerModel) m_tunerModel->setAntennaA(2); });
+                [this]() {
+                    if (m_transmitPermitted && m_tunerModel) {
+                        m_tunerModel->setAntennaA(2);
+                    }
+                });
         connect(m_ant3Btn, &QPushButton::clicked, this,
-                [this]() { if (m_tunerModel) m_tunerModel->setAntennaA(3); });
+                [this]() {
+                    if (m_transmitPermitted && m_tunerModel) {
+                        m_tunerModel->setAntennaA(3);
+                    }
+                });
 
         vbox->addWidget(m_antContainer);
     }
@@ -344,6 +383,77 @@ void TunerApplet::onAntennaLabelChanged(int index, const QString& label)
 void TunerApplet::setBand(Band band)
 {
     m_currentBand = band;
+}
+
+QString TunerApplet::tuneButtonTextForTesting() const
+{
+    return m_tuneBtn ? m_tuneBtn->text() : QString{};
+}
+
+bool TunerApplet::actuatingControlsEnabledForTesting() const
+{
+    return m_tuneBtn && m_tuneBtn->isEnabled()
+        && m_operateBtn && m_operateBtn->isEnabled()
+        && m_ant1Btn && m_ant1Btn->isEnabled()
+        && m_ant2Btn && m_ant2Btn->isEnabled()
+        && m_ant3Btn && m_ant3Btn->isEnabled();
+}
+
+bool TunerApplet::staleIndicatorVisibleForTesting() const
+{
+    return m_staleLabel && !m_staleLabel->isHidden();
+}
+
+void TunerApplet::setTransmitPermitted(bool permitted, const QString& reason)
+{
+    if (m_transmitPermitted == permitted && m_transmitPermissionReason == reason) {
+        return;
+    }
+
+    if (!permitted && m_carrierEngagedForTgxlTune) {
+        if (m_model) {
+            m_model->setTune(false);
+        }
+        m_carrierEngagedForTgxlTune = false;
+    }
+
+    m_transmitPermitted = permitted;
+    m_transmitPermissionReason = reason;
+    updateActuatingControls();
+}
+
+void TunerApplet::setStationConnected(bool connected)
+{
+    m_stationConnected = connected;
+    updateStationAvailability();
+}
+
+void TunerApplet::updateStationAvailability()
+{
+    if (!m_staleLabel) { return; }
+    const bool remote = m_model && m_model->role() == RadioModel::Role::Remote;
+    m_staleLabel->setVisible(remote && !m_stationConnected);
+}
+
+void TunerApplet::updateActuatingControls()
+{
+    const QString tooltip = m_transmitPermitted ? QString() : m_transmitPermissionReason;
+    const auto updateButton = [this, &tooltip](QPushButton* button) {
+        if (!button) { return; }
+        button->setEnabled(m_transmitPermitted);
+        button->setToolTip(tooltip);
+    };
+    updateButton(m_tuneBtn);
+    updateButton(m_operateBtn);
+    updateButton(m_ant1Btn);
+    updateButton(m_ant2Btn);
+    updateButton(m_ant3Btn);
+
+    const bool relayCommandsEnabled = m_transmitPermitted && m_tunerModel
+        && m_tunerModel->hasDirectConnection();
+    if (m_c1Bar) { m_c1Bar->setScrollEnabled(relayCommandsEnabled); }
+    if (m_lBar) { m_lBar->setScrollEnabled(relayCommandsEnabled); }
+    if (m_c2Bar) { m_c2Bar->setScrollEnabled(relayCommandsEnabled); }
 }
 
 void TunerApplet::setTunerModel(TunerModel* model)
@@ -425,7 +535,10 @@ void TunerApplet::setTunerModel(TunerModel* model)
             // where TunerApplet TUNE click already started the cycle
             // (m_tgxlAutotuneInProgress is true) and TGXL then echoes by
             // pushing tuning=1; that re-entry is detected and ignored.
-            if (m_model && !m_carrierEngagedForTgxlTune) {
+            const bool localOrchestrationAllowed = m_transmitPermitted && m_model
+                && m_model->role() == RadioModel::Role::Local
+                && !m_model->receiveOnlyStationPolicy();
+            if (localOrchestrationAllowed && !m_carrierEngagedForTgxlTune) {
                 m_carrierEngagedForTgxlTune = true;
                 m_model->startTgxlAutotune(/*fromHardware=*/true);
             }
@@ -471,11 +584,7 @@ void TunerApplet::setTunerModel(TunerModel* model)
     // Direct connection active -> enable relay bar scrolling.
     // From AetherSDR src/gui/TunerApplet.cpp:setTunerModel() directConnectionChanged [@0cd4559]
     auto updateScrollEnabled = [this]() {
-        if (!m_tunerModel) return;
-        const bool on = m_tunerModel->hasDirectConnection();
-        m_c1Bar->setScrollEnabled(on);
-        m_lBar->setScrollEnabled(on);
-        m_c2Bar->setScrollEnabled(on);
+        updateActuatingControls();
     };
     connect(m_tunerModel, &TunerModel::directConnectionChanged, this, updateScrollEnabled);
     updateScrollEnabled();
@@ -577,7 +686,7 @@ void TunerApplet::cycleOperateState()
     // From AetherSDR src/gui/TunerApplet.cpp:cycleOperateState [@0cd4559]
     // Cycle: OPERATE -> BYPASS -> STANDBY -> OPERATE
     // (AetherSDR comment at line 184: "OPERATE -> BYPASS -> STANDBY -> OPERATE")
-    if (!m_tunerModel) return;
+    if (!m_transmitPermitted || !m_tunerModel) return;
 
     if (m_tunerModel->isOperate() && !m_tunerModel->isBypass()) {
         // Currently OPERATE -> go to BYPASS
@@ -681,9 +790,14 @@ QMenu* TunerApplet::buildContextMenu(QObject* menuParent)
     // the TGXL's default. Absolute apply deferred to the TGXL "set relay"
     // command when that API lands.
     auto* recallAction = menu->addAction(QStringLiteral("Recall tune memory"));
-    if (!m_tuneStore) { recallAction->setEnabled(false); }
+    if (!m_tuneStore || !m_transmitPermitted) {
+        recallAction->setEnabled(false);
+        if (!m_transmitPermitted) {
+            recallAction->setToolTip(m_transmitPermissionReason);
+        }
+    }
     connect(recallAction, &QAction::triggered, this, [this]() {
-        if (!m_tuneStore) { return; }
+        if (!m_transmitPermitted || !m_tuneStore) { return; }
         auto rec = m_tuneStore->recall(m_currentAntenna, m_currentBand);
         if (!rec.has_value()) { return; }
         // Update local relay display so the operator can see the stored values.
@@ -711,7 +825,14 @@ QMenu* TunerApplet::buildContextMenu(QObject* menuParent)
         ? QStringLiteral("Disconnect")
         : QStringLiteral("Reconnect");
     auto* toggleAction = menu->addAction(toggleLabel);
+    const bool remote = m_model && m_model->role() == RadioModel::Role::Remote;
+    if (remote) {
+        toggleAction->setEnabled(false);
+        toggleAction->setToolTip(
+            QStringLiteral("Remote tuner connection control is not available yet"));
+    }
     connect(toggleAction, &QAction::triggered, this, [this]() {
+        if (m_model && m_model->role() == RadioModel::Role::Remote) { return; }
         emit connectionToggleRequested();
     });
 

@@ -67,6 +67,21 @@ using namespace NereusSDR;
 class TstDaemonApp : public QObject {
     Q_OBJECT
 private slots:
+    void installsReceiveOnlyPolicyBeforeStationStartup()
+    {
+        DaemonConfig cfg = DaemonConfig::defaults();
+        cfg.sliceCount = 1;
+
+        DaemonApp app;
+        app.primeBoardForTest(HPSDRHW::HermesLite);
+        QVERIFY(app.start(cfg));
+        QVERIFY(app.m_radioModel != nullptr);
+        QVERIFY2(app.m_radioModel->receiveOnlyStationPolicy(),
+                 "nereusd constructed a hardware-owning RadioModel without "
+                 "the persistent R3 receive-only policy");
+        app.stop();
+    }
+
     // The whole point of the task: a headless start must create the
     // configured number of slices, not just Slice A. HermesLite's
     // BoardCapabilities row (BoardCapabilities.cpp kHermesLite) sets
@@ -270,15 +285,27 @@ private slots:
         QCOMPARE(controller->attOnTxValue(), 7);
         QCOMPARE(controller->currentDspMode(), DSPMode::LSB);
 
-        // Prove the daemon owns the desktop-equivalent MOX connection. With
-        // PS marked active, the ordinary per-band 7 dB TX value is selected
-        // rather than the force-31 safety branch, then RX restores to 0 dB.
+        // Prove the daemon owns the desktop-equivalent MOX connection without
+        // bypassing its receive-only policy. hardwareFlipped is the
+        // authoritative controller notification DaemonApp wires to the step
+        // attenuator; emitting it directly here isolates that signal/slot
+        // projection from MOX admission. With PS active, the ordinary 7 dB TX
+        // value is selected, then the synthetic RX notification restores 0 dB.
         controller->setPsActive(true);
-        app.m_radioModel->moxController()->setTimerIntervals(0, 0, 0, 0, 0, 0);
-        app.m_radioModel->moxController()->setMox(true);
+        MoxController* const mox = app.m_radioModel->moxController();
+        QVERIFY(mox != nullptr);
+        emit mox->hardwareFlipped(true);
         QTRY_COMPARE(controller->attenuatorDb(), 7);
-        app.m_radioModel->moxController()->setMox(false);
+        emit mox->hardwareFlipped(false);
         QTRY_COMPARE(controller->attenuatorDb(), 0);
+
+        // The real admission path remains receive-only: it rejects before
+        // state advance and must not disturb the restored RX attenuation.
+        QSignalSpy rejected(mox, &MoxController::moxRejected);
+        mox->setMox(true);
+        QCOMPARE(rejected.count(), 1);
+        QVERIFY(!mox->isMox());
+        QCOMPARE(controller->attenuatorDb(), 0);
 
         app.stop();
     }

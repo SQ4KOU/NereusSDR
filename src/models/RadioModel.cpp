@@ -9906,7 +9906,7 @@ void RadioModel::installBandPlanMoxCheck()
         // MoxController::moxRejected connect). A parallel gate would make
         // remote refusals silent in exactly the path an operator watches.
         // Same reasoning recorded in the design addendum section 4.
-        if (m_role == Role::Remote) {
+        if (receiveOnlyTxOperationsBlocked()) {
             return {false,
                     QStringLiteral("TX is not available on a remote station "
                                    "connection (R4)")};
@@ -9932,6 +9932,27 @@ void RadioModel::installBandPlanMoxCheck()
                                           /*preventDifferentBand=*/false,
                                           /*extended=*/false);
     });
+}
+
+void RadioModel::setReceiveOnlyStationPolicy(bool receiveOnly)
+{
+    m_receiveOnlyStationPolicy = receiveOnly;
+    if (receiveOnly) {
+        // A local-role hardware owner does not otherwise install the MOX
+        // precheck until radio TX setup. The daemon policy must be effective
+        // during boot and while disconnected too.
+        installBandPlanMoxCheck();
+    }
+}
+
+bool RadioModel::receiveOnlyTxOperationsBlocked() const
+{
+    // A GUI-side remote model is always receive-only in R3. The daemon owns
+    // real hardware while serving that GUI, so its otherwise-local model also
+    // carries a persistent station policy installed before peripheral/radio
+    // startup. Keeping both cases in one predicate prevents a station-side
+    // callback from bypassing the same rule the client UI observes.
+    return m_role == Role::Remote || m_receiveOnlyStationPolicy;
 }
 
 // ---------------------------------------------------------------------------
@@ -12557,7 +12578,10 @@ void RadioModel::teardownConnection()
     // The remote branch of the check reads none of the state this teardown
     // invalidates (see installBandPlanMoxCheck), so leaving it installed is
     // safe.
-    if (m_moxController && m_role == Role::Local) {
+    // R3's hardware-owning daemon is Role::Local too. Its persistent
+    // receive-only check must survive this reachable teardown path; the
+    // predicate's deny branch does not read any released radio resources.
+    if (m_moxController && !receiveOnlyTxOperationsBlocked()) {
         m_moxController->setMoxCheck({});
     }
 
@@ -13173,8 +13197,10 @@ void RadioModel::setTune(bool on)
         // TX in remote mode is R4 in its entirety (docs/architecture/
         // 2026-08-03-remote-daemon-r2-r3-design-addendum.md section 2).
         //
-        // Role::Local is untouched: this branch cannot be entered there.
-        if (m_role == Role::Remote) {
+        // A normal desktop-local model keeps the default false policy. A
+        // daemon model is also Role::Local, but enters this branch because
+        // it owns hardware for a receive-only R3 station session.
+        if (receiveOnlyTxOperationsBlocked()) {
             emit tuneRefused(
                 QStringLiteral("TX is not available on a remote station "
                                "connection (R4)"));
@@ -15237,6 +15263,13 @@ void RadioModel::onPgxlConnected()
 // restore PGXL to OPERATE (if it was operating before the tune cycle).
 void RadioModel::startTgxlAutotune(bool fromHardware)
 {
+    if (receiveOnlyTxOperationsBlocked()) {
+        emit tuneRefused(
+            QStringLiteral("Tuner operation is not available on a receive-only "
+                           "remote station connection (R4)"));
+        return;
+    }
+
     if (!m_tgxlConnection || !m_tgxlConnection->isConnected()) {
         qCWarning(lcConnection)
             << "TGXL autotune requested but TGXL not connected; ignoring";
@@ -15347,6 +15380,12 @@ void RadioModel::startTgxlAutotune(bool fromHardware)
 // disconnected mid-cycle before they could ACK).
 void RadioModel::continueTgxlAutotuneAfterStandby()
 {
+    if (receiveOnlyTxOperationsBlocked()) {
+        m_tgxlAutotuneInProgress = false;
+        m_awaitingInterlockForAutotune = false;
+        setTune(false);
+        return;
+    }
     if (!m_tgxlAutotuneInProgress) {
         // Cycle was cancelled (e.g. operator hit TUN-off) before we got
         // here. Bail out -- don't engage TUN and don't send autotune.
@@ -15391,6 +15430,12 @@ void RadioModel::continueTgxlAutotuneAfterStandby()
 // (degraded path, no interlock confirmation arrived).
 void RadioModel::sendTgxlAutotuneCmd()
 {
+    if (receiveOnlyTxOperationsBlocked()) {
+        m_tgxlAutotuneInProgress = false;
+        m_awaitingInterlockForAutotune = false;
+        setTune(false);
+        return;
+    }
     if (m_tgxlConnection && m_tgxlConnection->isConnected()
         && m_tgxlAutotuneInProgress) {
         m_tgxlConnection->sendCommand(QStringLiteral("autotune"));
@@ -15414,6 +15459,7 @@ void RadioModel::sendTgxlAutotuneCmd()
 // stable TX binding may propagate a band transition to the global TGXL.
 void RadioModel::onSliceBandChanged(SliceModel* source, NereusSDR::Band band)
 {
+    if (receiveOnlyTxOperationsBlocked()) { return; }
     if (source != txBoundSlice()) { return; }
     if (!m_tuneMemoryStore || !m_tgxlConnection) { return; }
 

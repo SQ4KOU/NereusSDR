@@ -201,6 +201,9 @@ TxApplet::TxApplet(RadioModel* model, QWidget* parent)
 {
     buildUI();
     wireControls();
+    if (model && model->role() == RadioModel::Role::Remote) {
+        setTransmitPermitted(false);
+    }
 }
 
 void TxApplet::buildUI()
@@ -1993,7 +1996,7 @@ void TxApplet::setTwoToneController(TwoToneController* controller)
 // ---------------------------------------------------------------------------
 void TxApplet::requestOpenCfcDialog()
 {
-    if (!m_model) { return; }
+    if (!m_model || !m_transmitPermitted) { return; }
 
     if (!m_cfcDialog) {
         QWidget* host = window();
@@ -2009,6 +2012,70 @@ void TxApplet::requestOpenCfcDialog()
     m_cfcDialog->show();
     m_cfcDialog->raise();
     m_cfcDialog->activateWindow();
+}
+
+// ---------------------------------------------------------------------------
+// Remote-station transmit-permission presentation
+//
+// The Core remains the authority for transmit refusal and unwind. This gate
+// exists so a remote operator never receives a live-looking TX control before
+// the completed handshake explicitly grants that capability. Do not clear or
+// write any model state here: model-to-view updates must remain authoritative.
+// ---------------------------------------------------------------------------
+void TxApplet::setTransmitPermitted(bool permitted, const QString& unavailableReason)
+{
+    m_transmitPermitted = permitted;
+    const QString reason = unavailableReason.isEmpty()
+        ? tr("Transmit controls are unavailable until the station handshake "
+             "confirms transmit permission.")
+        : unavailableReason;
+
+    const auto apply = [permitted, &reason](QWidget* control) {
+        if (!control) { return; }
+
+        static constexpr auto kSavedTooltip = "TxAppletSavedTransmitTooltip";
+        static constexpr auto kSavedDescription = "TxAppletSavedTransmitDescription";
+        static constexpr auto kSavedEnabled = "TxAppletSavedTransmitEnabled";
+        if (!permitted) {
+            if (!control->property(kSavedTooltip).isValid()) {
+                control->setProperty(kSavedTooltip, control->toolTip());
+                control->setProperty(kSavedDescription, control->accessibleDescription());
+                control->setProperty(kSavedEnabled, control->isEnabled());
+            }
+            control->setEnabled(false);
+            control->setToolTip(reason);
+            control->setAccessibleDescription(reason);
+            return;
+        }
+
+        if (control->property(kSavedTooltip).isValid()) {
+            control->setEnabled(control->property(kSavedEnabled).toBool());
+            control->setToolTip(control->property(kSavedTooltip).toString());
+            control->setAccessibleDescription(
+                control->property(kSavedDescription).toString());
+            control->setProperty(kSavedTooltip, QVariant());
+            control->setProperty(kSavedDescription, QVariant());
+            control->setProperty(kSavedEnabled, QVariant());
+        }
+    };
+
+    apply(m_rfPowerSlider);
+    apply(m_tunePwrSlider);
+    apply(m_tuneBtn);
+    apply(m_moxBtn);
+    apply(m_voxBtn);
+    apply(m_voxSlider);
+    apply(m_voxDlySlider);
+    apply(m_monBtn);
+    apply(m_monitorVolumeSlider);
+    apply(m_levBtn);
+    apply(m_eqBtn);
+    apply(m_cfcBtn);
+    apply(m_profileCombo);
+    apply(m_txFilterLowSpin);
+    apply(m_txFilterHighSpin);
+    apply(m_twoToneBtn);
+    apply(m_psaBtn);
 }
 
 // ---------------------------------------------------------------------------

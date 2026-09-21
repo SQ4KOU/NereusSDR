@@ -1668,6 +1668,10 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
     if (target == m_radioModel.data() && className == "RadioModel") {
         return m_radioModel->applyStationFilterValue(propertyName, native);
     }
+    if (className == "TunerModel") {
+        auto* tuner = qobject_cast<TunerModel*>(target);
+        return tuner != nullptr && tuner->applyStationValue(propertyName, native);
+    }
     if (className != "SliceModel") {
         return false;
     }

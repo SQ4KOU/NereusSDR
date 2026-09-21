@@ -127,6 +127,9 @@ public:
     // Exposed publicly so callers can verify click regions (e.g. in tests).
     QRect rttRect() const;
     QRect audioPipRect() const;
+    // Remote mode reports Core session state; local-radio rates are unavailable.
+    void setRemoteStatusText(const QString& text);
+    QString remoteStatusText() const { return m_remoteStatusText; }
 
 public slots:
     // Throttled activity tick — nudges a repaint so the pulse looks "live".
@@ -149,6 +152,7 @@ private:
     QColor audioPipColor(AudioEngine::FlowState s) const;
 
     ConnectionState         m_state{ConnectionState::Disconnected};
+    QString                 m_remoteStatusText;
     double                  m_rxMbps{0.0};
     double                  m_txMbps{0.0};
     int                     m_rttMs{-1};

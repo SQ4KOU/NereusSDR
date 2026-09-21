@@ -502,6 +502,17 @@ void DspOptionsPage::buildUI()
            "magnitude response. When disabled, a simplified box-shape passband "
            "is shown instead."));
 
+    // A remote client has no local RxChannel from which FilterDisplayItem can
+    // obtain the computed FIR curve. This is a rendering enhancement, not a
+    // station DSP setting, so leave the rest of the station-scoped Options
+    // page available and make this one unavailable surface explicit.
+    if (RadioModel* rm = model(); rm && !rm->ownsLocalDsp()) {
+        m_highResFilterChars->setEnabled(false);
+        m_highResFilterChars->setToolTip(
+            tr("Actual FIR filter-curve rendering is available only in local "
+               "direct mode. Remote stations show the simplified passband."));
+    }
+
     loadCheck(m_highResFilterChars, "DspOptionsHighResFilterCharacteristics", false);
 
     // Task 4.4: helper that fans out high-res mode + RxChannel binding to all

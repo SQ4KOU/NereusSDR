@@ -6639,6 +6639,7 @@ nereus_add_test(tst_settings_proxy)
 # way tst_setup_dialog_lazy_pages needs it.
 nereus_add_test(tst_remote_gui_gating)
 target_compile_definitions(tst_remote_gui_gating PRIVATE NEREUS_BUILD_TESTS)
+nereus_add_test(tst_remote_connection_controls fakes/LoopbackTransport.cpp)
 
 # R1 Task 10: DaemonApp connects the daemon to a radio (or runs discovery)
 # and creates min(cfg.sliceCount, connected-board-maxSlices) slices via

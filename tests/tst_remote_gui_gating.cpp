@@ -56,6 +56,7 @@
 #include <QtTest/QtTest>
 
 #include <QApplication>
+#include <QCheckBox>
 #include <QMap>
 #include <QMetaObject>
 #include <QPushButton>
@@ -73,6 +74,7 @@
 #include "gui/MainWindow.h"
 #include "gui/SetupDialog.h"
 #include "gui/applets/TxApplet.h"
+#include "gui/setup/DspOptionsPage.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -864,6 +866,7 @@ private slots:
         // TxApplet::wireControls() reads m_model->moxController() itself,
         // from the constructor, so there is nothing to inject.
         TxApplet applet(&model);
+        applet.setTransmitPermitted(true);
 
         QPushButton* moxBtn = nullptr;
         for (QPushButton* b : applet.findChildren<QPushButton*>()) {
@@ -887,6 +890,133 @@ private slots:
                  "the button must follow the refusal; leaving it checked "
                  "tells the operator the radio is transmitting when it is "
                  "not");
+    }
+
+    void remoteTransmitPermissionDisablesActivationWithoutWritingModelState()
+    {
+        RadioModel model(RadioModel::Role::Remote);
+        model.setStationConnectionState(ConnectionState::Connected);
+        TxApplet applet(&model);
+        applet.setTransmitPermitted(false,
+                                    QStringLiteral("Remote transmit is unavailable"));
+
+        const auto findButton = [&applet](const QString& accessibleName) {
+            for (QPushButton* button : applet.findChildren<QPushButton*>()) {
+                if (button->accessibleName() == accessibleName) {
+                    return button;
+                }
+            }
+            return static_cast<QPushButton*>(nullptr);
+        };
+        QPushButton* const tune = findButton(QStringLiteral("Tune carrier"));
+        QPushButton* const mox = findButton(QStringLiteral("MOX transmit"));
+        QPushButton* const vox = findButton(
+            QStringLiteral("VOX voice-operated transmit"));
+        QVERIFY(tune != nullptr);
+        QVERIFY(mox != nullptr);
+        QVERIFY(vox != nullptr);
+        QVERIFY(!tune->isEnabled());
+        QVERIFY(!mox->isEnabled());
+        QVERIFY(!vox->isEnabled());
+        QCOMPARE(mox->toolTip(), QStringLiteral("Remote transmit is unavailable"));
+
+        QSignalSpy moxRejected(model.moxController(), &MoxController::moxRejected);
+        QSignalSpy tuneRefused(&model, &RadioModel::tuneRefused);
+        QSignalSpy voxChanged(&model.transmitModel(), &TransmitModel::voxEnabledChanged);
+
+        // QAbstractButton::click() is the widget activation path and is a
+        // no-op while disabled. It verifies the presentation gate prevents
+        // reaching the existing MOX/TUNE/VOX model handlers.
+        tune->click();
+        mox->click();
+        vox->click();
+
+        QCOMPARE(moxRejected.count(), 0);
+        QCOMPARE(tuneRefused.count(), 0);
+        QCOMPARE(voxChanged.count(), 0);
+        QVERIFY(!model.mox());
+        QVERIFY(!model.isTune());
+        QVERIFY(!model.transmitModel().voxEnabled());
+    }
+
+    void remoteTransmitControlsStartDeniedBeforeHandshakePermission()
+    {
+        RadioModel model(RadioModel::Role::Remote);
+        TxApplet applet(&model);
+
+        const auto findButton = [&applet](const QString& accessibleName) {
+            for (QPushButton* button : applet.findChildren<QPushButton*>()) {
+                if (button->accessibleName() == accessibleName) {
+                    return button;
+                }
+            }
+            return static_cast<QPushButton*>(nullptr);
+        };
+        QPushButton* const tune = findButton(QStringLiteral("Tune carrier"));
+        QPushButton* const mox = findButton(QStringLiteral("MOX transmit"));
+        QVERIFY(tune != nullptr);
+        QVERIFY(mox != nullptr);
+
+        QVERIFY(!tune->isEnabled());
+        QVERIFY(!mox->isEnabled());
+        QVERIFY(mox->toolTip().contains(QStringLiteral("station handshake")));
+
+        QSignalSpy moxRejected(model.moxController(), &MoxController::moxRejected);
+        QSignalSpy tuneRefused(&model, &RadioModel::tuneRefused);
+        tune->click();
+        mox->click();
+        QCOMPARE(moxRejected.count(), 0);
+        QCOMPARE(tuneRefused.count(), 0);
+    }
+
+    void localTransmitControlsRemainEnabledByDefault()
+    {
+        RadioModel model;
+        TxApplet applet(&model);
+
+        QVERIFY(applet.rfPowerSlider()->isEnabled());
+        QVERIFY(applet.tunePowerSlider()->isEnabled());
+        QVERIFY(applet.findChild<QPushButton*>(QStringLiteral("TxVoxButton"))->isEnabled());
+    }
+
+    void transmitPermissionRestorePreservesAnExistingFeatureGate()
+    {
+        RadioModel model;
+        TxApplet applet(&model);
+        QPushButton* const twoTone = applet.twoToneButton();
+        QVERIFY(twoTone != nullptr);
+
+        // Simulate an independent feature/dependency gate that was already
+        // in effect before remote permission was denied.
+        twoTone->setEnabled(false);
+        applet.setTransmitPermitted(false, QStringLiteral("Remote transmit is unavailable"));
+        applet.setTransmitPermitted(true);
+
+        QVERIFY(!twoTone->isEnabled());
+    }
+
+    void remoteHighResolutionFilterGraphControlIsExplicitlyUnavailable()
+    {
+        RadioModel model(RadioModel::Role::Remote);
+        DspOptionsPage page(&model);
+        QCheckBox* const highRes = page.highResolutionFilterCharacteristicsCheckBox();
+        QVERIFY(highRes != nullptr);
+        QVERIFY(!highRes->isEnabled());
+        QVERIFY(highRes->toolTip().contains(QStringLiteral("local direct mode")));
+
+        QSignalSpy toggled(highRes, &QCheckBox::toggled);
+        highRes->click();
+        QCOMPARE(toggled.count(), 0);
+        QVERIFY(!highRes->isChecked());
+    }
+
+    void localHighResolutionFilterGraphControlRemainsAvailable()
+    {
+        RadioModel model;
+        DspOptionsPage page(&model);
+        QCheckBox* const highRes = page.highResolutionFilterCharacteristicsCheckBox();
+        QVERIFY(highRes != nullptr);
+        QVERIFY(highRes->isEnabled());
     }
 };
 

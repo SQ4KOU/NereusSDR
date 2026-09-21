@@ -238,6 +238,9 @@ void TunerModel::bindConnection(TgxlConnection* conn)
 bool TunerModel::hasDirectConnection() const
 {
     // From AetherSDR src/models/TunerModel.cpp:hasDirectConnection [@0cd4559]
+    if (m_stationDirectConnectionValid) {
+        return m_stationDirectConnection;
+    }
     return m_conn && m_conn->isConnected();
 }
 
@@ -278,6 +281,124 @@ QString TunerModel::applyMirroredValue(const QByteArray& propertyName, const QVa
         "TunerModel::%1 is hardware telemetry TunerModel only learns from "
         "the tuner itself; there is no remote-write path")
         .arg(QString::fromUtf8(propertyName));
+}
+
+bool TunerModel::applyStationValue(const QByteArray& propertyName, const QVariant& value)
+{
+    // This is intentionally a direct state adapter. Calling the public
+    // command slots here would invert a Core telemetry update into a second
+    // hardware command from the GUI process.
+    if (propertyName == QByteArrayLiteral("relayC1")) {
+        const int next = value.toInt();
+        if (m_relayC1 != next) {
+            m_relayC1 = next;
+            emit relayChanged();
+            emit stateChanged();
+        }
+        return true;
+    }
+    if (propertyName == QByteArrayLiteral("relayL")) {
+        const int next = value.toInt();
+        if (m_relayL != next) {
+            m_relayL = next;
+            emit relayChanged();
+            emit stateChanged();
+        }
+        return true;
+    }
+    if (propertyName == QByteArrayLiteral("relayC2")) {
+        const int next = value.toInt();
+        if (m_relayC2 != next) {
+            m_relayC2 = next;
+            emit relayChanged();
+            emit stateChanged();
+        }
+        return true;
+    }
+    if (propertyName == QByteArrayLiteral("isOperate")) {
+        const bool next = value.toBool();
+        if (m_operate != next) {
+            m_operate = next;
+            emit stateChanged();
+        }
+        return true;
+    }
+    if (propertyName == QByteArrayLiteral("isBypass")) {
+        const bool next = value.toBool();
+        if (m_bypass != next) {
+            m_bypass = next;
+            emit stateChanged();
+        }
+        return true;
+    }
+    if (propertyName == QByteArrayLiteral("isTuning")) {
+        const bool next = value.toBool();
+        if (m_tuning != next) {
+            m_tuning = next;
+            emit tuningChanged(next);
+            emit stateChanged();
+        }
+        return true;
+    }
+    if (propertyName == QByteArrayLiteral("antennaA")) {
+        const int next = value.toInt();
+        if (m_antA != next) {
+            m_antA = next;
+            emit antennaAChanged(next);
+            emit stateChanged();
+        }
+        return true;
+    }
+    if (propertyName == QByteArrayLiteral("hasAntennaSwitch")) {
+        const bool next = value.toBool();
+        if (m_oneByThree != next) {
+            m_oneByThree = next;
+            emit stateChanged();
+        }
+        return true;
+    }
+    if (propertyName == QByteArrayLiteral("isPresent")) {
+        const bool next = value.toBool();
+        if (m_present != next) {
+            m_present = next;
+            emit presenceChanged(next);
+        }
+        return true;
+    }
+    if (propertyName == QByteArrayLiteral("hasDirectConnection")) {
+        const bool previous = hasDirectConnection();
+        m_stationDirectConnectionValid = true;
+        m_stationDirectConnection = value.toBool();
+        if (previous != m_stationDirectConnection) {
+            emit directConnectionChanged();
+        }
+        return true;
+    }
+    if (propertyName == QByteArrayLiteral("tgxlIp")) {
+        const QString next = value.toString();
+        if (m_ip != next) {
+            m_ip = next;
+            emit stateChanged();
+        }
+        return true;
+    }
+    if (propertyName == QByteArrayLiteral("fwdPower")) {
+        const float next = value.toFloat();
+        if (m_fwd != next) {
+            m_fwd = next;
+            emit metersChanged(m_fwd, m_swr);
+        }
+        return true;
+    }
+    if (propertyName == QByteArrayLiteral("swr")) {
+        const float next = value.toFloat();
+        if (m_swr != next) {
+            m_swr = next;
+            emit metersChanged(m_fwd, m_swr);
+        }
+        return true;
+    }
+    return false;
 }
 
 // ── Commands ─────────────────────────────────────────────────────────────────

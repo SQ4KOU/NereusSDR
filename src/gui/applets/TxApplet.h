@@ -146,6 +146,7 @@
 
 #include "AppletWidget.h"
 #include <QPointer>
+#include <QString>
 #include "models/Band.h"
 #include "core/BoardCapabilities.h"  // setBoardCapabilities slot
 #include "core/HpsdrModel.h"   // HPSDRModel for rescaleFwdGaugeForModel
@@ -271,6 +272,13 @@ public slots:
     // when the coordinator becomes available.  Tests call this slot
     // directly with their own coordinator instance.
     void setPureSignal(NereusSDR::PureSignal* coordinator);
+
+    // Remote-station presentation gate. MainWindow supplies true only after
+    // the station handshake completes and its negotiated capabilities permit
+    // transmit. This changes widget availability only: it deliberately does
+    // not alter TransmitModel, station settings, or the displayed state of an
+    // already-authoritative control.
+    void setTransmitPermitted(bool permitted, const QString& unavailableReason = QString());
 public:
 
     // ── Test accessors ──────────────────────────────────────────────────────
@@ -493,6 +501,10 @@ private:
 
     // Flag preventing echo loops between the model and the UI.
     bool m_updatingFromModel{false};
+
+    // Defaults to local-direct behaviour. Remote MainWindow wiring replaces it
+    // after handshake/capability evaluation.
+    bool m_transmitPermitted{true};
 };
 
 } // namespace NereusSDR

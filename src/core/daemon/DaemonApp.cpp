@@ -62,6 +62,11 @@ bool DaemonApp::start(const DaemonConfig& cfg)
     NereusSDR::CoreInit::initialize();
 
     m_radioModel = std::make_unique<RadioModel>();
+    // R3 remote operation is receive-only. Install the station-side policy
+    // before controllers, peripherals, slices, or the radio can produce a
+    // callback: the daemon owns real hardware even though its model has the
+    // normal local role.
+    m_radioModel->setReceiveOnlyStationPolicy(true);
     m_stepAttController = std::make_unique<StepAttenuatorController>();
     m_radioModel->setStepAttController(m_stepAttController.get());
     m_stepAttController->setReceiverManager(m_radioModel->receiverManager());

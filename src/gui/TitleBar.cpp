@@ -145,6 +145,14 @@ void ConnectionSegment::setRates(double rxMbps, double txMbps)
     update();
 }
 
+void ConnectionSegment::setRemoteStatusText(const QString& text)
+{
+    if (m_remoteStatusText == text) { return; }
+    m_remoteStatusText = text;
+    setAccessibleName(text);
+    update();
+}
+
 void ConnectionSegment::setRttMs(int ms)
 {
     // Track the latest raw value so callers can read it back for
@@ -285,6 +293,16 @@ void ConnectionSegment::paintEvent(QPaintEvent*)
     int x = dotRect.right() + 8;
     const int textY = height() / 2 + 4;
 
+    if (!m_remoteStatusText.isEmpty()) {
+        p.setPen(QColor("#c8d8e8"));
+        p.drawText(x, textY, p.fontMetrics().elidedText(
+            m_remoteStatusText, Qt::ElideRight, width() - x - 6));
+        m_lastRttX1 = x;
+        m_lastRttX2 = width();
+        m_lastPipX1 = m_lastPipX2 = 0;
+        return;
+    }
+
     if (m_state == ConnectionState::Disconnected) {
         p.setPen(QColor("#607080"));
         p.drawText(x, textY, tr("Disconnected — click to connect"));
@@ -360,6 +378,10 @@ void ConnectionSegment::mousePressEvent(QMouseEvent* event)
         return;
     }
     if (event->button() == Qt::LeftButton) {
+        if (!m_remoteStatusText.isEmpty()) {
+            emit rttClicked();
+            return;
+        }
         if (rttRect().contains(event->pos())) {
             emit rttClicked();
             return;

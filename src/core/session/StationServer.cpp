@@ -151,6 +151,15 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     , m_securityDirectory(securityDirectory.isEmpty() ? CertificateStore::defaultDirectory()
                                                       : securityDirectory)
 {
+    // Every capability set this R3 server advertises is receive-only. Make
+    // that a persistent property of the hardware-owning model as well, so a
+    // standalone StationServer host cannot admit a TX/accessory side effect
+    // through a local callback. DaemonApp installs the same policy earlier,
+    // before startup; neither owner clears it when a session ends.
+    if (m_radioModel) {
+        m_radioModel->setReceiveOnlyStationPolicy(true);
+    }
+
     m_certificates = std::make_unique<CertificateStore>(m_securityDirectory);
     m_tokens = std::make_unique<TokenStore>(m_securityDirectory);
 
@@ -881,7 +890,19 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
                                         const SessionMessage& message)
 {
     QSet<QByteArray> refused;
+    const bool receiveOnlyTransmitWrite = message.objectKey == QByteArray(kTransmitKey)
+        && !m_radioModel.isNull() && m_radioModel->receiveOnlyStationPolicy();
     for (const MirrorUpdate& update : message.updates) {
+        // R3 advertises txPermitted=false and installs the matching persistent
+        // model policy. TransmitModel remains bidirectional in the generic
+        // mirror table for later phases and other contexts, so enforce the
+        // station's current authority here before any setter can run.
+        if (receiveOnlyTransmitWrite) {
+            qCWarning(lcStation) << "Refused remote transmit write on receive-only station"
+                                 << message.objectKey << "." << update.name;
+            refused.insert(update.name);
+            continue;
+        }
         const MirrorApplyResult result =
             m_mirror->applyInbound(message.objectKey, update.name, update.value);
         if (result.accepted) {

@@ -1,0 +1,91 @@
+# R3 remote control acceptance matrix
+
+Requirements: R-R3-16/17/21/22/24/25. Execution uses
+`yonder-cost-aware-execution`. This matrix records the bounded connection,
+capability and telemetry checkpoint; it is not a completed audit of every
+Setup page or an assertion that all station accessories work.
+
+## Changed controls and ownership
+
+| Surface | Owner and production path | Automated evidence | Live acceptance |
+| --- | --- | --- | --- |
+| Radio menu Connect / Disconnect | GUI -> configured StationClient through RemoteConnectionController | Real WebSocket connect, intentional disconnect and reconnect; duplicate connect does not create another session | Pending candidate installation |
+| Title connection segment, station block, disconnected pan | MainWindow::connectionRequestedByOperator -> same controller; automatic local panel callbacks remain inert remotely | Actual title mouse activation; controller tests. MainWindow routing inspected, full window interactions still need smoke | Pending all three click paths |
+| Core connection details | Persistent endpoint, session state, radio state, failure and retry/cancel; no credentials displayed | Authenticated Core with offline radio; failed dial/cancel beyond retry deadline; credential stripping | Pending failure/recovery presentation |
+| Saved layout / snapshot | Core owns slices; GUI restoration only hydrates. Explicit post-snapshot layout/add remains a command | Authenticated attach/reconnect preserves one station slice; production population helper emits no implicit add; explicit action waits for readiness | Pending fresh GUI attach and reconnect |
+| TX applet / PureSignal / TX filter match | Negotiated txPermitted + handshake; Core retains admission checks | Widget activation, no mutation when gating, preservation of independent disabled state; remote refusal | Pending disabled appearance; no RF test |
+| High-resolution FIR graph | Requires absent local RxChannel; visibly unavailable remotely | Remote/local checkbox interaction tests | Pending appearance; ordinary mirrored RX DSP is not classified as broken |
+| Tuner telemetry | Core TunerModel -> outbound mirror -> client-only assign/notify adapter | All 13 fields, false/zero updates and absence of accessory commands | Actual tuner TCP endpoint still unresolved |
+| Tuner TUNE / operate / antenna / relay / recall | Receive-only remote capability blocks commands; Core policy additionally guards autotune callbacks | Authenticated band change and telemetry replay issue no tune; MOX/TUNE admission blocked before radio connection and after session teardown | No RF or tuner actuation permitted in this checkpoint |
+| Tuner cached values after Core loss | Retained values explicitly marked stale; unsupported remote accessory reconnect disabled | Applet session presentation/command tests | Pending disconnect smoke |
+
+## Known unfinished controls
+
+| Surface | Remaining work |
+| --- | --- |
+| Peripheral configuration, scan and connect/disconnect | Task 4d: Core-owned ordered configuration and acknowledged actions, positive device identity, cancellation in every lifecycle state and live status. Settings persistence alone is insufficient. |
+| 4O3A master enable / SmartSDR reporting / PGXL band tracking | Task 4d: apply at Core and move frequency/mode propagation to stable station slice ownership. |
+| Audio profile and health | Task 5a: persistent accepted Opus profile, output/media error and measured health. Measure 24/48 kbit/s before presenting a quality selector. |
+| Full-band zoom | Task 4b: transport the existing ADC-wide wings; the current smooth in-band zoom is only an interim fix. |
+| Full station selection and pairing | R6; the current panel controls the configured Core endpoint. |
+
+## Evidence and remaining checks
+
+The snapshot regression first failed because automatic and pre-snapshot explicit
+population each emitted an add. The accessory regressions first failed on the
+missing daemon policy, band-triggered autotune and unapplied tuner fields.
+These were behavior reproductions, not merely checks that slots exist.
+
+Connection, visible TX/FIR gating, tuner and daemon suites pass after separating
+the daemon test's synthetic controller notification from actual MOX admission.
+The real admission request is required to be refused with RX state unchanged.
+
+One consolidated independent review found that raw authenticated TransmitModel
+writes still bypassed RadioModel's guard. A loopback regression reproduced the
+station adopting the requested MOX model state. StationServer now rejects all
+inbound transmit-object writes under its receive-only policy and uses the
+existing correction delta to return authoritative values. This regression is
+about model admission, not evidence that RF was emitted. The review's second
+finding, the remote applet's local accessory reconnect action, is corrected
+and covered by disabled-action/no-emission tests.
+
+The lead also found that radio teardown cleared the local-role MOX check,
+including the daemon's persistent receive-only policy. A regression using the
+real non-null connection teardown path reproduced the missing refusal. Teardown
+now preserves the receive-only check, while ordinary local-direct teardown
+retains its existing behavior. This complements the session-disconnect test.
+
+An initial unfiltered 682-test run exposed an unrelated popup-exposure wait in
+`tst_dss_overlay_menu`. That test verifies pre-show value seeding/no signal echo;
+it now performs those same assertions without requiring OS popup exposure.
+The next full run passed 682/682 in 90.53 seconds before the additional radio
+teardown regression. Final combined source, including the radio-teardown correction, passed a fresh
+`all_tests` build and unfiltered `ctest --test-dir build-integration -j8
+--no-tests=error --output-on-failure`: **682 passed, zero failed, zero skipped**
+in **93.58 seconds**. Logs are retained privately as
+`r3-controls-teardown-full-{build,test}.log`. Native build and hardware smoke
+remain pending; this software pass does not establish live tuner connectivity.
+
+Hardware smoke is receive-only: attach to the existing station, inspect endpoint
+and radio state, disconnect and leave stopped, reconnect once, exercise the
+three click surfaces and confirm slice count does not grow. Check disabled
+controls and stale tuner presentation. Do not classify cached amplifier data
+from the currently misconfigured TGXL endpoint as a working tuner.
+
+The passive discovery capture was re-read after board recovery: the actual
+announcement includes `TunerGenius`, version `1.2.17`, serial `241288-1` and
+nickname `Tuner_Genius_XL`. An abbreviated investigation note omitted the last
+two fields; there is no evidence that this live announcement lacks them.
+Native captured `info` uses `serial`, while the existing model accepts only
+`serial_num`; that normalization belongs with task 4d's identity validation.
+
+## Scoped follow-up inventory
+
+The second bounded control pass identified Phone/CW TX writers (mic/PROC/VAX/
+DEXP), XIT controls, the inert remote TX-slice handoff, VFO RX-bypass-on-TX,
+Tools TX Equalizer and editable TX-specific Setup pages. These still need
+consistent unavailable presentation and interaction coverage in task 4c;
+this checkpoint does not claim all visible controls are complete. Keep shared
+receive functions available: in particular, the antenna labelled TX participates
+in TRX receive routing, so its name alone is not grounds for disabling it.
+Review the actual station/receive effect before restricting Slice properties.

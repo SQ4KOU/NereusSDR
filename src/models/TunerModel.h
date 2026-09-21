@@ -108,6 +108,10 @@ public:
     Q_INVOKABLE QString applyMirroredValue(const QByteArray& propertyName,
                                            const QVariant& value);
 
+    // Client-side station telemetry adapter. Unlike applyMirroredValue(),
+    // this never translates values into commands for TgxlConnection.
+    bool applyStationValue(const QByteArray& propertyName, const QVariant& value);
+
 public slots:
     void autoTune();
     void adjustRelay(int relay, int dir);
@@ -131,6 +135,11 @@ private:
     int  m_antA{0};
     bool m_oneByThree{false};
     bool m_present{false};
+    // A remote GUI has no TGXL socket of its own. Once Core projects this
+    // property, it becomes the authoritative answer for the client model;
+    // local-direct models continue to derive it from m_conn.
+    bool m_stationDirectConnectionValid{false};
+    bool m_stationDirectConnection{false};
     QString m_ip;
     QString m_serial;
     QString m_model;

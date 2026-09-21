@@ -351,6 +351,7 @@ warren@wpratt.com
 // Remote-daemon R2 Task 20: the wss client and the settings backend it
 // writes through. Both are used only on the m_station.isRemote() path.
 #include "core/session/StationClient.h"
+#include "RemoteConnectionController.h"
 #include "gui/RemoteMediaController.h"
 #include "core/settings/SettingsProxy.h"
 #include "setup/DspSetupPages.h"   // NrAnfSetupPage::selectSubtab
@@ -563,8 +564,10 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent)
         auto* seg = m_titleBar->connectionSegment();
 
         // 1. State dot + pulse: driven by connectionStateChanged.
-        connect(m_radioModel, &RadioModel::connectionStateChanged,
-                seg, &ConnectionSegment::setState);
+        if (m_radioModel->ownsLocalDsp()) {
+            connect(m_radioModel, &RadioModel::connectionStateChanged,
+                    seg, &ConnectionSegment::setState);
+        }
 
         // 2. frameTick: forwarded from RadioModel so we never need to
         //    re-wire when m_connection is recreated.
@@ -625,6 +628,10 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent)
         // instead of opening the connection panel (Codex P2 review
         // against PR #158, MainWindow.cpp:482).
         connect(seg, &ConnectionSegment::rttClicked, this, [this]() {
+            if (!m_radioModel->ownsLocalDsp()) {
+                connectionRequestedByOperator();
+                return;
+            }
             const auto state = m_radioModel->connectionState();
             if (state == ConnectionState::Disconnected
                 || state == ConnectionState::LinkLost) {
@@ -963,6 +970,10 @@ void MainWindow::connectToStation()
         }
 
         m_stationClient = new StationClient(m_radioModel, proxy, this);
+        m_remoteConnection = new RemoteConnectionController(
+            m_stationClient, m_radioModel, m_station, this);
+        connect(m_remoteConnection, &RemoteConnectionController::changed,
+                this, &MainWindow::refreshRemoteConnectionUi);
         connect(m_stationClient, &StationClient::connectionActivityChanged,
                 this, &MainWindow::applyRemoteRoleGating);
         m_remoteMedia = new RemoteMediaController(m_stationClient, m_radioModel,
@@ -979,7 +990,8 @@ void MainWindow::connectToStation()
         });
         connect(m_stationClient, &StationClient::sessionEnded, this,
                 [this](const QString& reason) {
-            if (m_stationDisconnectRequested) {
+            if (m_stationDisconnectRequested
+                || reason == QStringLiteral("operator disconnect")) {
                 return;
             }
             qCWarning(lcConnection) << "Station session ended:" << reason;
@@ -1022,9 +1034,7 @@ void MainWindow::connectToStation()
         });
     }
 
-    m_stationClient->connectToStation(QUrl(m_station.url), m_station.token,
-                                      m_station.fingerprint,
-                                      m_station.allowUnpinned);
+    m_remoteConnection->connectToStation();
 }
 
 void MainWindow::disconnectFromStation()
@@ -1033,9 +1043,55 @@ void MainWindow::disconnectFromStation()
         return;
     }
     m_stationDisconnectRequested = true;
-    m_stationClient->disconnectFromStation(QStringLiteral("operator disconnect"));
+    m_remoteConnection->disconnectFromStation();
     m_stationDisconnectRequested = false;
     showToast(tr("Disconnected from Core station"), ToastSeverity::Info, 3000);
+}
+
+void MainWindow::connectionRequestedByOperator()
+{
+    if (!m_station.isRemote()) {
+        showConnectionPanel();
+        return;
+    }
+    // Explicit clicks can dial. Automatic panel-open callbacks never do.
+    if (!m_stationClient || !m_stationClient->isConnectionActive()) {
+        connectToStation();
+    }
+    showRemoteConnectionPanel();
+}
+
+void MainWindow::showRemoteConnectionPanel()
+{
+    if (!m_remoteConnection) { return; }
+    if (!m_remoteConnectionPanel) {
+        m_remoteConnectionPanel = new RemoteConnectionPanel(m_remoteConnection, this);
+    }
+    m_remoteConnectionPanel->show();
+    m_remoteConnectionPanel->raise();
+    m_remoteConnectionPanel->activateWindow();
+}
+
+void MainWindow::refreshRemoteConnectionUi()
+{
+    if (!m_remoteConnection) { return; }
+    applyRemoteRoleGating();
+    if (m_titleBar) {
+        auto* segment = m_titleBar->connectionSegment();
+        segment->setState(m_remoteConnection->state());
+        segment->setRemoteStatusText(m_remoteConnection->statusText());
+    }
+    if (m_stationBlock) {
+        m_stationBlock->setRadioName(tr("Core %1").arg(m_remoteConnection->endpointText()));
+        m_stationBlock->setHardwareLine(
+            m_remoteConnection->state() == ConnectionState::Connected
+                ? m_remoteConnection->radioText() : m_remoteConnection->statusText(), {});
+        m_stationBlock->setToolTip(m_remoteConnection->detailText());
+        if (m_chromeBar && m_chromeBarWidget) {
+            m_chromeBar->setNaturalWidth(m_stationBlock, m_stationBlock->sizeHint().width());
+            m_chromeBar->relayout(m_chromeBarWidget->width());
+        }
+    }
 }
 
 // Phase 3F Sub-Epic D Task 12: resolve the active pan's SpectrumWidget.
@@ -1569,6 +1625,11 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     });
     connect(newFlag, &VfoWidget::txFilterMatchRequested, this,
             [this](int audioLow, int audioHigh) {
+        if (!transmitControlsPermitted()) {
+            showToast(tr("Remote transmit controls are unavailable in this receive-only build."),
+                      ToastSeverity::Info, 3000);
+            return;
+        }
         m_radioModel->transmitModel().setFilterLow(audioLow);
         m_radioModel->transmitModel().setFilterHigh(audioHigh);
     });
@@ -2326,7 +2387,7 @@ void MainWindow::wireSpectrumForPan(SpectrumWidget* sw, const QString& panId)
 
     // Clicking a disconnected pan opens the connection panel, from any pan.
     connect(sw, &SpectrumWidget::disconnectedClickRequest,
-            this, &MainWindow::showConnectionPanel);
+            this, &MainWindow::connectionRequestedByOperator, Qt::UniqueConnection);
 
     // CTUN max-bin offset follows THIS pan's slice rather than the globally
     // active one, so a max-bin readout on a background pan is not measured
@@ -3978,7 +4039,7 @@ void MainWindow::buildUI()
 
     // Phase 3Q-8: clicking the spectrum while disconnected opens ConnectionPanel.
     connect(activeSpectrumWidget(), &SpectrumWidget::disconnectedClickRequest,
-            this, &MainWindow::showConnectionPanel);
+            this, &MainWindow::connectionRequestedByOperator, Qt::UniqueConnection);
 
     // Wire BandPlanManager → SpectrumWidget so the bandplan strip renders on launch.
     activeSpectrumWidget()->setBandPlanManager(&m_radioModel->bandPlanManagerMutable());
@@ -6983,10 +7044,10 @@ void MainWindow::buildMenuBar()
         // Both this entry and Tools > PureSignal... below open the same
         // singleton dialog (DSP for discoverability under the existing
         // DSP-feature menu, Tools per the per-task plan §8.4).
-        QAction* psAction = dspMenu->addAction(QStringLiteral("&PureSignal..."));
-        psAction->setToolTip(
+        m_actDspPureSignal = dspMenu->addAction(QStringLiteral("&PureSignal..."));
+        m_actDspPureSignal->setToolTip(
             QStringLiteral("Open the PureSignal pre-distortion control dialog."));
-        connect(psAction, &QAction::triggered,
+        connect(m_actDspPureSignal, &QAction::triggered,
                 this, &MainWindow::openPureSignalDialog);
     }
     {
@@ -7888,12 +7949,16 @@ void MainWindow::buildStatusBar()
     // future operator-callsign surface; it is no longer shown in status chrome.
     m_stationBlock = new StationBlock(barWidget);
     connect(m_stationBlock, &StationBlock::clicked,
-            this, &MainWindow::showConnectionPanel);
+            this, &MainWindow::connectionRequestedByOperator);
     connect(m_stationBlock, &StationBlock::contextMenuRequested,
             this, &MainWindow::showStationContextMenu);
     // Update the block's name on connection state changes.
     connect(m_radioModel, &RadioModel::currentRadioChanged, this,
             [this](const NereusSDR::RadioInfo& info) {
+        if (!m_radioModel->ownsLocalDsp()) {
+            refreshRemoteConnectionUi();
+            return;
+        }
         const bool connected =
             (m_radioModel->connectionState() == ConnectionState::Connected);
         m_stationBlock->setRadioName(connected ? info.name : QString());
@@ -7910,6 +7975,10 @@ void MainWindow::buildStatusBar()
     });
     connect(m_radioModel, &RadioModel::connectionStateChanged, this,
             [this](ConnectionState s) {
+        if (!m_radioModel->ownsLocalDsp()) {
+            refreshRemoteConnectionUi();
+            return;
+        }
         if (s != ConnectionState::Connected) {
             m_stationBlock->setRadioName(QString());
             if (m_chromeBar && m_chromeBarWidget) {
@@ -9768,7 +9837,8 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event)
      && event->type() == QEvent::ToolTip) {
         auto* helpEvent = static_cast<QHelpEvent*>(event);
         QToolTip::showText(helpEvent->globalPos(),
-                           m_radioModel->buildConnectionTooltip(),
+                           m_remoteConnection ? m_remoteConnection->detailText()
+                                              : m_radioModel->buildConnectionTooltip(),
                            m_titleBar->connectionSegment());
         return true;
     }
@@ -9876,15 +9946,10 @@ void MainWindow::applyDarkTheme()
 void MainWindow::showConnectionPanel()
 {
     // ── Remote-daemon R2 Task 20 ─────────────────────────────────────────
-    // Eleven call sites reach this method (Manage Radios, the status-bar
-    // RTT and station blocks, two context menus, two per-pan
-    // click-to-connect affordances, autoConnectFailed, the disconnect
-    // auto-reopen in onConnectionStateChanged, and two tryAutoReconnect
-    // fallbacks).
-    // Gating here rather than at any of them is the whole point: a remote
-    // client has no RadioConnection to dial, and every button the panel
-    // offers would call connectToRadio() on a model whose connectToRadio()
-    // early-returns. The station is chosen with --station, not from here.
+    // This is the local radio panel, including its automatic reopen paths.
+    // Explicit operator connection gestures use connectionRequestedByOperator.
+    // Never turn this remote guard into a dial: retained radio-name updates
+    // during manual session teardown can invoke it and undo Disconnect.
     if (m_radioModel != nullptr && !m_radioModel->ownsLocalDsp()) {
         qCInfo(lcConnection)
             << "Connection panel suppressed: this window is driving a remote "
@@ -9915,13 +9980,11 @@ void MainWindow::openNetworkDiagnostics()
     // null-guards it, so the window opens and reads zero) or from its
     // AudioEngine (constructed but never started, so the audio section
     // reads a device that is not running). Neither says anything about the
-    // link that actually matters to a remote operator, which is the wss
-    // session. Refusing is more honest than a window of zeroes; the real
-    // remote-link diagnostics are R5's, not R2's.
+    // link that matters to a remote operator, which is the Core session.
+    // R3's connection panel reports its current state and failure reason.
+    // Radio-path counters and R5 reachability diagnostics are separate work.
     if (m_radioModel != nullptr && !m_radioModel->ownsLocalDsp()) {
-        qCInfo(lcConnection)
-            << "Network diagnostics suppressed: the radio link belongs to the "
-               "station, and this window holds no RadioConnection to measure.";
+        showRemoteConnectionPanel();
         return;
     }
 
@@ -9966,6 +10029,13 @@ SetupDialog* MainWindow::createSetupDialog()
     return dialog;
 }
 
+bool MainWindow::transmitControlsPermitted() const
+{
+    return m_radioModel && (m_radioModel->ownsLocalDsp()
+        || (m_stationClient && m_stationClient->isHandshakeComplete()
+            && m_stationClient->capabilities().txPermitted));
+}
+
 void MainWindow::applyRemoteRoleGating()
 {
     if (m_radioModel == nullptr || m_radioModel->ownsLocalDsp()) {
@@ -9976,6 +10046,25 @@ void MainWindow::applyRemoteRoleGating()
     // an authenticated Core with an offline radio must still be disconnectable.
     const bool active = m_stationClient != nullptr
         && m_stationClient->isConnectionActive();
+    const bool transmitPermitted = transmitControlsPermitted();
+    const QString transmitReason = tr("Remote transmit is unavailable in this receive-only build (R4).");
+    if (m_txApplet) {
+        m_txApplet->setTransmitPermitted(transmitPermitted, transmitReason);
+    }
+    if (m_tunerApplet) {
+        m_tunerApplet->setTransmitPermitted(transmitPermitted, transmitReason);
+        m_tunerApplet->setStationConnected(
+            m_stationClient && m_stationClient->isHandshakeComplete());
+    }
+    for (QAction* action : {m_actPureSignal, m_actDspPureSignal}) {
+        if (!action) { continue; }
+        action->setEnabled(transmitPermitted);
+        action->setToolTip(transmitPermitted ? QString() : transmitReason);
+    }
+    if (m_pureSignalApplet) {
+        m_pureSignalApplet->setEnabled(transmitPermitted);
+        m_pureSignalApplet->setToolTip(transmitPermitted ? QString() : transmitReason);
+    }
     if (m_actConnect != nullptr) {
         m_actConnect->setEnabled(m_station.isRemote() && !active);
         m_actConnect->setToolTip(tr("Connect to the configured Core station"));
@@ -10015,6 +10104,8 @@ void MainWindow::showSegmentContextMenu(const QPoint& globalPos)
     if (!m_radioModel->ownsLocalDsp()) {
         menu.addAction(m_actConnect);
         menu.addAction(m_actDisconnect);
+        menu.addAction(tr("Core connection details..."),
+                       this, &MainWindow::showRemoteConnectionPanel);
         menu.exec(globalPos);
         return;
     }
@@ -10056,7 +10147,8 @@ void MainWindow::showStationContextMenu(const QPoint& globalPos)
 {
     // Only show when connected — StationBlock only emits contextMenuRequested
     // in connected appearance, but guard here defensively.
-    if (m_radioModel->connectionState() != ConnectionState::Connected) {
+    if (m_radioModel->ownsLocalDsp()
+        && m_radioModel->connectionState() != ConnectionState::Connected) {
         return;
     }
 
@@ -10064,6 +10156,8 @@ void MainWindow::showStationContextMenu(const QPoint& globalPos)
     if (!m_radioModel->ownsLocalDsp()) {
         menu.addAction(m_actConnect);
         menu.addAction(m_actDisconnect);
+        menu.addAction(tr("Core connection details..."),
+                       this, &MainWindow::showRemoteConnectionPanel);
         menu.exec(globalPos);
         return;
     }
@@ -10162,6 +10256,11 @@ void MainWindow::showSupportDialog()
 // NereusSDR mirrors via raise()+activateWindow() instead of Focus().
 void MainWindow::openPureSignalDialog()
 {
+    if (!transmitControlsPermitted()) {
+        showToast(tr("PureSignal transmit controls are unavailable in this receive-only build."),
+                  ToastSeverity::Info, 3000);
+        return;
+    }
     if (!m_psForm) {
         // PureSignal coordinator is owned by RadioModel; pass it directly so
         // the dialog can wire signal/slot bindings even before connect.
@@ -10502,6 +10601,12 @@ QStringList MainWindow::panIdsForLayout(const QString& layoutId)
 void MainWindow::applyPanLayout(const QString& layoutId)
 {
     if (!m_panStack) { return; }
+    if (m_station.isRemote()
+        && (!m_stationClient || !m_stationClient->isHandshakeComplete())) {
+        showToast(tr("Wait for the Core snapshot before changing the pan layout."),
+                  ToastSeverity::Info, 3000);
+        return;
+    }
 
     const QStringList ids = panIdsForLayout(layoutId);
 
@@ -10547,7 +10652,7 @@ void MainWindow::applyPanLayout(const QString& layoutId)
 
     // Whatever is still empty after the surplus has been used up genuinely
     // needs a new slice.
-    populateEmptyPans();
+    populateEmptyPans(true);
 }
 
 // ---------------------------------------------------------------------------
@@ -10572,7 +10677,7 @@ void MainWindow::applyPanLayout(const QString& layoutId)
 // addSliceOnPan enforces the maxSlices cap itself and emits sliceAddRejected
 // with an operator-facing reason, so there is no cap arithmetic here.
 // ---------------------------------------------------------------------------
-void MainWindow::populateEmptyPans()
+void MainWindow::populateEmptyPans(bool operatorRequested)
 {
     if (!m_radioModel || !m_panStack) { return; }
 
@@ -10584,8 +10689,19 @@ void MainWindow::populateEmptyPans()
         if (applet) { ids << applet->panId(); }
     }
 
-    for (const QString& emptyPan : m_radioModel->pansWithoutSlices(ids)) {
-        m_radioModel->addSliceOnPan(emptyPan);
+    populatePanSlices(m_radioModel, ids, operatorRequested,
+                      m_stationClient && m_stationClient->isHandshakeComplete());
+}
+
+void MainWindow::populatePanSlices(RadioModel* model, const QStringList& panIds,
+                                  bool operatorRequested, bool snapshotReady)
+{
+    if (!model) { return; }
+    // Restoring a client layout is never permission to create station slices.
+    // Capabilities report radio connectivity before slice snapshot hydration.
+    if (!model->ownsLocalDsp() && (!operatorRequested || !snapshotReady)) { return; }
+    for (const QString& emptyPan : model->pansWithoutSlices(panIds)) {
+        model->addSliceOnPan(emptyPan);
     }
 }
 
@@ -11113,6 +11229,7 @@ void MainWindow::onConnectionStateChanged()
     // Remote actions follow Core session activity; protocol/discovery remain
     // local-only even when the mirrored radio reports Connected.
     applyRemoteRoleGating();
+    refreshRemoteConnectionUi();
 }
 
 // Phase 3I Task 17 / Phase 3Q Task 10 — auto-reconnect on launch.

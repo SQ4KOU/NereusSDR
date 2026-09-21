@@ -476,6 +476,13 @@ record both automated and visible results in the matrix.
 contract is settled; the lead owns shared MainWindow/session integration.
 Do not dispatch an overlapping MainWindow editor for task 4d.
 
+Current bounded implementation evidence is recorded in the
+[control acceptance matrix](2026-09-20-remote-daemon-r3-verification/remote-controls.md).
+Connection presentation, snapshot guards, selected TX/FIR controls and tuner
+telemetry now have interaction/session regressions. Full visible-control
+inventory and actual GUI acceptance are still required; the checkboxes above
+remain open until their complete acceptance is demonstrated.
+
 ## 4d. Make basic station accessory use work remotely
 
 **Requirements:** R-R3-02/10/21/22/25. **Dependencies:** source audit C06-C09,

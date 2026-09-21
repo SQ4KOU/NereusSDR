@@ -222,6 +222,9 @@ public:
     /// indirectly through applyPanLayout, which needs a constructed
     /// MainWindow the test harness cannot build.
     static QStringList panIdsForLayout(const QString& layoutId);
+    // Shared startup/operator boundary, exercised without booting MainWindow.
+    static void populatePanSlices(RadioModel* model, const QStringList& panIds,
+                                  bool operatorRequested, bool snapshotReady);
 
     // Narrow composition seams used by deletion-gap regressions. Runtime
     // call sites use these same helpers so stable-ID lookup cannot diverge
@@ -534,6 +537,10 @@ private slots:
     /// Reuse one StationClient/media controller to dial the configured Core.
     void connectToStation();
     void disconnectFromStation();
+    void connectionRequestedByOperator();
+    void showRemoteConnectionPanel();
+    void refreshRemoteConnectionUi();
+    bool transmitControlsPermitted() const;
 
     /// The one place in src/gui that runs `new SetupDialog`.
     ///
@@ -608,7 +615,7 @@ private slots:
     /// connect, because the startup layout restore cannot do it: no radio,
     /// no stream pool. See the definition for the bench defect where a
     /// persisted multi-pan layout came back with a permanently dead pane.
-    void populateEmptyPans();
+    void populateEmptyPans(bool operatorRequested = false);
 
     // Phase 3M-4 bench-fix: gate m_psaIndicator visibility on
     // caps.hasPureSignal && PureSignal::isAutoCalEnabled.  Called from
@@ -862,6 +869,8 @@ private:
     // stack (StationClient.h drags in the whole message codec).
     class StationClient* m_stationClient{nullptr};
     class RemoteMediaController* m_remoteMedia{nullptr};
+    class RemoteConnectionController* m_remoteConnection{nullptr};
+    class RemoteConnectionPanel* m_remoteConnectionPanel{nullptr};
     bool m_stationDisconnectRequested{false};
 
     // Phase 3M-4 Task 8: PsForm modeless dialog (Tools > PureSignal...).
@@ -869,6 +878,7 @@ private:
     // lifetime of MainWindow.  Hidden on close, never destroyed.
     PsForm* m_psForm{nullptr};
     QAction* m_actPureSignal{nullptr};
+    QAction* m_actDspPureSignal{nullptr};
 
     // Phase 3J-2 H1: Tools > Spot Hub... and Tools > FreeDV Reporter...
     // modeless singleton dialogs. Lazy-constructed on first

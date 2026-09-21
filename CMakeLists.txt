@@ -1147,6 +1147,7 @@ set(MODEL_SOURCES
 set(GUI_SOURCES
     src/gui/MainWindow.cpp
     src/gui/RemoteMediaController.cpp
+    src/gui/RemoteConnectionController.cpp
     src/gui/AmpViewChart.cpp
     src/gui/AmpViewWindow.cpp
     src/gui/PsaIndicatorWidget.cpp

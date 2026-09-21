@@ -34,6 +34,7 @@
 #include "core/TuneMemoryStore.h"
 
 class QContextMenuEvent;
+class QLabel;
 class QPushButton;
 class QMenu;
 class QWidget;
@@ -110,6 +111,23 @@ public:
         m_lastL  = l;
         m_lastC2 = c2;
     }
+    QString tuneButtonTextForTesting() const;
+    bool carrierEngagedForTgxlTuneForTesting() const
+    {
+        return m_carrierEngagedForTgxlTune;
+    }
+    bool actuatingControlsEnabledForTesting() const;
+    bool staleIndicatorVisibleForTesting() const;
+
+    // R3 remote sessions are receive-only. MainWindow applies the negotiated
+    // station capability here; telemetry remains visible while every TGXL
+    // command surface stays disabled and its handler refuses programmatic
+    // activation too.
+    void setTransmitPermitted(bool permitted, const QString& reason = QString());
+
+    // The remote model retains last-known telemetry across link loss. This
+    // controls an explicit stale-state presentation without erasing it.
+    void setStationConnected(bool connected);
 
     // Phase 3P-II Phase 4 Task 89: update TGXL connected flag for context menu.
     void setTgxlConnected(bool connected);
@@ -170,6 +188,8 @@ private:
 
     // Build a TuneMemory from the applet's current state.
     TuneMemory currentMem() const;
+    void updateActuatingControls();
+    void updateStationAvailability();
 
     TunerModel* m_tunerModel = nullptr;
 
@@ -177,6 +197,7 @@ private:
     HGauge* m_fwdPowerGauge = nullptr;
     // Control 2 -- SWR gauge (1.0-3.0, red@2.5)
     HGauge* m_swrGauge       = nullptr;
+    QLabel* m_staleLabel     = nullptr;
 
     // Control 3 -- Relay position bars (C1 / L / C2)
     // From AetherSDR src/gui/TunerApplet.h:m_c1Bar [@0cd4559]
@@ -243,6 +264,9 @@ private:
     int  m_lastC2{0};
     // TGXL connected state for Disconnect/Reconnect label.
     bool m_tgxlConnected{false};
+    bool m_transmitPermitted{true};
+    QString m_transmitPermissionReason;
+    bool m_stationConnected{true};
 };
 
 } // namespace NereusSDR

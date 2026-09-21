@@ -61,6 +61,8 @@
 #include "core/AppSettings.h"
 #include "core/ConnectionState.h"
 #include "core/CoreInit.h"
+#include "core/MoxController.h"
+#include "core/P1RadioConnection.h"
 #include "core/security/CertificateStore.h"
 #include "core/security/TokenStore.h"
 #include "core/session/SessionMessages.h"
@@ -72,6 +74,9 @@
 #include "core/settings/SettingsProxy.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "models/TransmitModel.h"
+#include "models/TunerModel.h"
+#include "core/TgxlConnection.h"
 
 #include "fakes/LoopbackTransport.h"
 
@@ -214,11 +219,14 @@ private slots:
     void settingsProxyIsNotReadyBeforeTheSnapshot();
     void aRemovedStationSettingReachesTheClientAsAbsenceNotAnEmptyString();
     void schemaSkewIsCaughtByNameComparison();
+    void receiveOnlyStationBlocksRemoteBandRecall();
+    void receiveOnlyStationRefusesTransmitPropertyWrites();
+    void receiveOnlyPolicySurvivesRadioTeardown();
 
     // ---- Fix round 1 ----
     void reconnectSurvivesTheOldTransportClosing();
     void heartbeatTimeoutReportsTheSessionAsEnded();
-    void tunerPropertiesAreCountedAsUnapplied();
+    void tunerPropertiesHydrateWithoutClientCommands();
     void handshakeDeadlineDropsASilentPeer();
     void peerLimitRefusesFurtherConnections();
     void listenIsIdempotent();
@@ -1493,22 +1501,171 @@ void TstStationSession::heartbeatTimeoutReportsTheSessionAsEnded()
     QCOMPARE(ended.count(), 1);
 }
 
-void TstStationSession::tunerPropertiesAreCountedAsUnapplied()
+void TstStationSession::tunerPropertiesHydrateWithoutClientCommands()
 {
-    // Important 5. TunerModel::applyMirroredValue answers isOperate /
-    // isBypass / antennaA by calling COMMAND SENDERS that forward to a
-    // bound TgxlConnection and no-op when there is none, while still
-    // returning success. On a client that meant those properties reported
-    // as APPLIED, changed nothing, read stale, and never entered
-    // unappliedProperties() -- defeating the accessor Task 20's bench is
-    // meant to trust.
+    // R-R3-22/25: the station's whole tuner property bag is telemetry on the
+    // client. In particular, isOperate/isBypass/antennaA must not be routed
+    // through TunerModel::applyMirroredValue(), because that is the daemon's
+    // command hook and calls the native TGXL command slots. isTuning=true is
+    // also an ordinary snapshot value here, not permission to start a local
+    // tune-carrier cycle.
     QTemporaryDir settingsDir;
     QVERIFY(settingsDir.isValid());
     AppSettings stationSettings(
         settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
 
     auto stationModel = makeStationRadioModel(0);
+    TunerModel* const stationTuner = stationModel->tunerModel();
+    QVERIFY(stationTuner != nullptr);
+    stationModel->tgxlConnection()->injectLineForTesting(QStringLiteral("V1.2.17"));
+    stationTuner->applyStatus({
+        {QStringLiteral("relayC1"), QStringLiteral("42")},
+        {QStringLiteral("relayL"), QStringLiteral("199")},
+        {QStringLiteral("relayC2"), QStringLiteral("88")},
+        {QStringLiteral("operate"), QStringLiteral("1")},
+        {QStringLiteral("bypass"), QStringLiteral("1")},
+        {QStringLiteral("tuning"), QStringLiteral("1")},
+        {QStringLiteral("antA"), QStringLiteral("2")},
+        {QStringLiteral("3way"), QStringLiteral("1")},
+        {QStringLiteral("model"), QStringLiteral("TunerGenius")},
+        {QStringLiteral("ip"), QStringLiteral("192.0.2.34")},
+        {QStringLiteral("fwd"), QStringLiteral("12.5")},
+        {QStringLiteral("swr"), QStringLiteral("1.4")},
+    });
     StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+    QSignalSpy clientTgxlFrames(clientModel.tgxlConnection(),
+                                &TgxlConnection::testFrameWrittenForTesting);
+
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
+    stationEnd->linkTo(clientEnd);
+
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    client.startSession(clientEnd, server.token());
+    server.acceptTransport(stationEnd);
+    QTRY_COMPARE(completed.count(), 1);
+
+    TunerModel* const clientTuner = clientModel.tunerModel();
+    QVERIFY(clientTuner != nullptr);
+    QCOMPARE(clientTuner->relayC1(), 42);
+    QCOMPARE(clientTuner->relayL(), 199);
+    QCOMPARE(clientTuner->relayC2(), 88);
+    QVERIFY(clientTuner->isOperate());
+    QVERIFY(clientTuner->isBypass());
+    QVERIFY(clientTuner->isTuning());
+    QCOMPARE(clientTuner->antennaA(), 2);
+    QVERIFY(clientTuner->hasAntennaSwitch());
+    QVERIFY(clientTuner->isPresent());
+    QVERIFY(clientTuner->hasDirectConnection());
+    QCOMPARE(clientTuner->tgxlIp(), QStringLiteral("192.0.2.34"));
+    QCOMPARE(clientTuner->fwdPower(), 12.5f);
+    QCOMPARE(clientTuner->swr(), 1.4f);
+    QCOMPARE(clientTgxlFrames.count(), 0);
+
+    const QSet<QByteArray> unapplied = client.unappliedProperties();
+    for (const QByteArray& property : {
+             QByteArrayLiteral("relayC1"), QByteArrayLiteral("relayL"),
+             QByteArrayLiteral("relayC2"), QByteArrayLiteral("isOperate"),
+             QByteArrayLiteral("isBypass"), QByteArrayLiteral("isTuning"),
+             QByteArrayLiteral("antennaA"), QByteArrayLiteral("hasAntennaSwitch"),
+             QByteArrayLiteral("isPresent"), QByteArrayLiteral("hasDirectConnection"),
+             QByteArrayLiteral("tgxlIp"), QByteArrayLiteral("fwdPower"),
+             QByteArrayLiteral("swr")}) {
+        QVERIFY2(!unapplied.contains(QByteArrayLiteral("TunerModel.") + property),
+                 property.constData());
+    }
+
+    // False and zero are state, not "missing" values. Exercise a live delta
+    // after the non-default snapshot so the client must actively clear them.
+    stationTuner->applyStatus({
+        {QStringLiteral("relayC1"), QStringLiteral("0")},
+        {QStringLiteral("relayL"), QStringLiteral("0")},
+        {QStringLiteral("relayC2"), QStringLiteral("0")},
+        {QStringLiteral("operate"), QStringLiteral("0")},
+        {QStringLiteral("bypass"), QStringLiteral("0")},
+        {QStringLiteral("tuning"), QStringLiteral("0")},
+        {QStringLiteral("antA"), QStringLiteral("0")},
+        {QStringLiteral("3way"), QStringLiteral("0")},
+        {QStringLiteral("fwd"), QStringLiteral("0")},
+        {QStringLiteral("swr"), QStringLiteral("0")},
+    });
+    QTRY_COMPARE(clientTuner->relayC1(), 0);
+    QTRY_COMPARE(clientTuner->relayL(), 0);
+    QTRY_COMPARE(clientTuner->relayC2(), 0);
+    QTRY_VERIFY(!clientTuner->isOperate());
+    QTRY_VERIFY(!clientTuner->isBypass());
+    QTRY_VERIFY(!clientTuner->isTuning());
+    QTRY_COMPARE(clientTuner->antennaA(), 0);
+    QTRY_VERIFY(!clientTuner->hasAntennaSwitch());
+    QTRY_COMPARE(clientTuner->fwdPower(), 0.0f);
+    QTRY_COMPARE(clientTuner->swr(), 0.0f);
+    QCOMPARE(clientTgxlFrames.count(), 0);
+
+    // And the property that genuinely DOES land is not swept into the set
+    // along with them: SliceModel::signalStrengthDbm reaches its own plain
+    // setter through the hook, which is the one pair the client allowlists.
+    SliceModel* stationSlice = stationModel->slices().first();
+    SliceModel* clientSlice = clientModel.sliceById(stationSlice->sliceIndex());
+    QVERIFY(clientSlice != nullptr);
+    stationSlice->setSignalStrengthDbm(-91.0);
+    QTRY_COMPARE(clientSlice->signalStrengthDbm(), -91.0);
+    QVERIFY(!client.unappliedProperties().contains(
+        QByteArrayLiteral("SliceModel.signalStrengthDbm")));
+}
+
+void TstStationSession::receiveOnlyStationBlocksRemoteBandRecall()
+{
+    // R-R3-25 must hold through the real authenticated property-write path,
+    // not just for a direct unit-test call on the station slice. The daemon's
+    // RadioModel is Role::Local because it owns the hardware, so the durable
+    // receive-only station policy is what distinguishes it from desktop-local
+    // direct mode.
+    AppSettings& settings = AppSettings::instance();
+    settings.setValue(QStringLiteral("TGXL_AutoTuneMemoryRecall"),
+                      QStringLiteral("True"));
+
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(
+        settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+
+    auto stationModel = makeStationRadioModel(0);
+    SliceModel* const stationSlice = stationModel->slices().first();
+    stationSlice->setFrequency(14200000.0);
+    stationModel->tuneMemoryStore()->store(
+        TuneMemory{1, Band::Band40m, 4, 5, 6, 1});
+    stationModel->tgxlConnection()->injectLineForTesting(QStringLiteral("V1.2.17"));
+    QSignalSpy tgxlFrames(stationModel->tgxlConnection(),
+                         &TgxlConnection::testFrameWrittenForTesting);
+
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    QVERIFY2(stationModel->receiveOnlyStationPolicy(),
+             "a receive-only StationServer must protect a standalone local-role model");
+
+    MoxController* const stationMox = stationModel->moxController();
+    QVERIFY(stationMox != nullptr);
+    QSignalSpy moxRefused(stationMox, &MoxController::moxRejected);
+    QSignalSpy tuneRefused(stationModel.get(), &RadioModel::tuneRefused);
+
+    stationMox->setMox(true);
+    QCOMPARE(moxRefused.count(), 1);
+    QVERIFY(!stationMox->isMox());
+    QVERIFY(stationMox->state() == MoxState::Rx);
+
+    stationModel->setTune(true);
+    QCOMPARE(tuneRefused.count(), 1);
+    QVERIFY(!stationModel->isTune());
+    QVERIFY(!stationMox->isManualMox());
+
+    stationModel->startTgxlAutotune(/*fromHardware=*/false);
+    QCOMPARE(tuneRefused.count(), 2);
+    QVERIFY(!stationModel->isTune());
+    QVERIFY(!stationMox->isMox());
+    QCOMPARE(tgxlFrames.count(), 0);
 
     RadioModel clientModel(RadioModel::Role::Remote);
     SettingsProxy proxy;
@@ -1523,25 +1680,101 @@ void TstStationSession::tunerPropertiesAreCountedAsUnapplied()
     server.acceptTransport(stationEnd);
     QTRY_COMPARE(completed.count(), 1);
 
-    // The tuner is watched by the station, so its full property bag
-    // arrived in the connect burst and every one of these was attempted.
-    const QSet<QByteArray> unapplied = client.unappliedProperties();
-    QVERIFY2(unapplied.contains(QByteArrayLiteral("TunerModel.isOperate")),
-             "isOperate reported as applied while changing nothing");
-    QVERIFY2(unapplied.contains(QByteArrayLiteral("TunerModel.isBypass")),
-             "isBypass reported as applied while changing nothing");
-    QVERIFY(unapplied.contains(QByteArrayLiteral("TunerModel.antennaA")));
-
-    // And the property that genuinely DOES land is not swept into the set
-    // along with them: SliceModel::signalStrengthDbm reaches its own plain
-    // setter through the hook, which is the one pair the client allowlists.
-    SliceModel* stationSlice = stationModel->slices().first();
-    SliceModel* clientSlice = clientModel.sliceById(stationSlice->sliceIndex());
+    SliceModel* const clientSlice = clientModel.sliceById(stationSlice->sliceIndex());
     QVERIFY(clientSlice != nullptr);
-    stationSlice->setSignalStrengthDbm(-91.0);
-    QTRY_COMPARE(clientSlice->signalStrengthDbm(), -91.0);
-    QVERIFY(!client.unappliedProperties().contains(
-        QByteArrayLiteral("SliceModel.signalStrengthDbm")));
+    clientSlice->setFrequency(7100000.0);
+
+    QTRY_COMPARE(stationSlice->frequency(), 7100000.0);
+    QCOMPARE(tgxlFrames.count(), 0);
+
+    // Session teardown must never lift the daemon's persistent policy.
+    clientEnd->closeLink(QStringLiteral("test session complete"));
+    QTRY_VERIFY(!clientModel.isConnected());
+    QVERIFY(stationModel->receiveOnlyStationPolicy());
+    stationMox->setMox(true);
+    QCOMPARE(moxRefused.count(), 2);
+    QVERIFY(!stationMox->isMox());
+
+    // Restore the singleton keys this accessory fixture owns. Each test
+    // process has an isolated profile, but leaving state behind inside the
+    // same binary would make later slots order-dependent.
+    stationModel->tuneMemoryStore()->clear(1, Band::Band40m);
+    settings.remove(QStringLiteral("TGXL_AutoTuneMemoryRecall"));
+}
+
+void TstStationSession::receiveOnlyStationRefusesTransmitPropertyWrites()
+{
+    // R-R3-25 applies at the authenticated StationServer boundary too.
+    // TransmitModel is mirrored bidirectionally for later phases, but an R3
+    // receive-only server must reject those writes and return authoritative
+    // correction deltas rather than adopting the client's optimistic state.
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(
+        settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+
+    auto stationModel = makeStationRadioModel(0);
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    QVERIFY(stationModel->receiveOnlyStationPolicy());
+
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
+    stationEnd->linkTo(clientEnd);
+
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    client.startSession(clientEnd, server.token());
+    server.acceptTransport(stationEnd);
+    QTRY_COMPARE(completed.count(), 1);
+
+    TransmitModel& stationTx = stationModel->transmitModel();
+    TransmitModel& clientTx = clientModel.transmitModel();
+    const int settledPower = stationTx.power();
+    const int requestedPower = settledPower == 17 ? 18 : 17;
+    QVERIFY(!stationTx.isMox());
+    QVERIFY(!stationTx.isTune());
+    QCOMPARE(clientTx.power(), settledPower);
+
+    stationEnd->clearReceived();
+    clientEnd->clearReceived();
+    clientTx.setMox(true);
+    clientTx.setTune(true);
+    clientTx.setPower(requestedPower);
+
+    QTRY_VERIFY(stationEnd->receivedKinds().contains(
+        QByteArrayLiteral("property.write")));
+
+    // These are model-state assertions. This fixture does not claim that a
+    // radio socket emitted RF in the uncorrected implementation.
+    QVERIFY(!stationTx.isMox());
+    QVERIFY(!stationTx.isTune());
+    QCOMPARE(stationTx.power(), settledPower);
+
+    QTRY_VERIFY(clientEnd->receivedKinds().contains(QByteArrayLiteral("delta")));
+    QTRY_VERIFY(!clientTx.isMox());
+    QTRY_VERIFY(!clientTx.isTune());
+    QTRY_COMPARE(clientTx.power(), settledPower);
+}
+
+void TstStationSession::receiveOnlyPolicySurvivesRadioTeardown()
+{
+    // Use the real non-null connection teardown path, without opening a
+    // socket or starting DSP. A null connection returns before clearing the
+    // ordinary local MOX check and would miss this lifecycle regression.
+    P1RadioConnection connection;
+    RadioModel station;
+    station.injectConnectionForTest(&connection);
+    station.setReceiveOnlyStationPolicy(true);
+    station.disconnectFromRadio();
+    QVERIFY(station.connection() == nullptr);
+    QVERIFY(station.receiveOnlyStationPolicy());
+    QSignalSpy rejected(station.moxController(), &MoxController::moxRejected);
+    station.moxController()->setMox(true);
+    QCOMPARE(rejected.count(), 1);
+    QVERIFY(!station.moxController()->isMox());
 }
 
 void TstStationSession::handshakeDeadlineDropsASilentPeer()
