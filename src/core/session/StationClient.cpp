@@ -1618,12 +1618,14 @@ bool StationClient::applyOne(QObject* target, const MirrorProperty& prop,
     // client, so the client is where it is fixed.
     //
     // So the client consults the hook only for pairs proven to be a plain
-    // state apply. Exactly one today: SliceModel::signalStrengthDbm, whose
-    // hook calls setSignalStrengthDbm(), a plain setter task 12 added for
-    // precisely this path. Adding a pair here means having read the hook
+    // state apply: SliceModel's signal readings call plain telemetry
+    // setters, including the separate R3 peak and average readings.
+    // Adding a pair here means having read the hook
     // body and confirmed it writes state rather than sending a command.
     static const QSet<QByteArray> kClientStateApplyHooks = {
         QByteArrayLiteral("SliceModel.signalStrengthDbm"),
+        QByteArrayLiteral("SliceModel.signalPeakDbm"),
+        QByteArrayLiteral("SliceModel.signalAverageDbm"),
     };
     if (kClientStateApplyHooks.contains(skewKey(className, prop.name))) {
         QString hookReason;

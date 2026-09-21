@@ -107,6 +107,9 @@ by the earlier brainstorming, and this review does not present them as such.
 | R-R3-10 | Installable GUI/Core builds preserve local direct mode, source attribution and settings ownership. Remote receive requires real hardware and long-session evidence. |
 | R-R3-11 | Core restores station RF gain controls and produces antenna-calibrated display levels. The remote GUI applies no second local calibration; local direct rendering retains its existing calibration. |
 | R-R3-12 | Remote Clarity receives Core's unsmoothed full-source noise-floor estimate before display reduction/quantization, with station calibration applied once. The GUI retains its existing smoothing, deadband, TX/manual-override gates and palette; stale or inactive endpoint measurements cannot drive the active pan. |
+| R-R3-13 | Remote applet and slice S-meters select Core's independent calibrated peak/average readings, or the decoded display's passband Max Bin. They follow active slice identity and never poll local DSP or add client calibration. Disconnect clears the live reading, and reconnect waits for the current snapshot; RX telemetry remains read-only. |
+| R-R3-14 | Remote CH/BPF/WIDE indicators show Core's effective per-chain filter state and reason, including initial snapshot and reconnect. Client-local Alex bookkeeping cannot stand in for station state. |
+| R-R3-15 | Remote Auto AGC-T visuals reflect the station's per-slice AGC noise-floor state. GUI Clarity smoothing is not an AGC measurement source. |
 
 The authorized radio is the ANAN-G2/Saturn, MAC `2C:CF:67:AB:FC:F4`, board
 `0x0A`; the September 20 instruction supersedes the old G2E-only bench rows.
@@ -295,6 +298,29 @@ An unauthenticated or old-session peer cannot subscribe or deliver media.
 offscreen renderer contracts plus a real GPU visual smoke. Then the Rock 5C
 LAN run. This milestone is a display checkpoint, not completed R3.
 
+## 4a. Complete receive telemetry bindings
+
+**Requirements:** R-R3-13 through R-R3-15. **Dependencies:** authenticated
+state mirror and decoded remote display.
+
+- [ ] Publish separate read-only `SliceModel.signalPeakDbm` and
+  `signalAverageDbm` from the existing Core meter pump. Preserve the legacy
+  selected `signalStrengthDbm` property and local direct behavior.
+- [ ] Feed the remote applet and slice meters from these properties,
+  selecting the existing peak/average modes locally. Obtain Max Bin from
+  each slice's decoded passband. Start the GUI meter timer without waiting
+  for a local WDSP channel, and clear readings on disconnect.
+- [ ] Mirror effective per-chain BPF/WIDE state and reasons; adapt the
+  existing CH indicator bindings and replay state after reconnect.
+- [ ] Mirror station Auto AGC-T measurements and bind the applet/flag
+  visuals without feeding back client-derived noise estimates.
+
+**Verification:** real Core meter reads, read-only mirror round trips,
+source selection, stable slice IDs, disconnect/TX/lifetime tests, unchanged
+local tests, then visible needle and numeric movement on the Saturn feed.
+BPF and Auto AGC-T require their own state/snapshot/reconnect regressions
+and live observations; the meter fix does not establish those gates.
+
 ## 5. Deliver mixed stereo Opus with continuous playback
 
 **Requirements:** R-R3-02, 03, 06, 07, 09. **Dependencies:** 1 and 4's session
@@ -382,9 +408,11 @@ whole-plan review loops.
 | --- | --- | --- |
 | R2 baseline | Preserved rollback checkpoint `14124e7c` | Authenticated control/tuning/meter baseline retained; installed runtime advanced to `ea55d24a` |
 | Combined open-PR recovery | Complete source checkpoint `14124e7c` | GUI/Core build and unfiltered 662/662 desktop tests pass; fixture-path workaround recorded separately |
-| Native combined Core | Installed at signed `ea55d24a`, with `14124e7c` rollback | ARM build/stage/install and live Saturn display pass; 298 changing frames in 20 seconds; [verification ledger](2026-09-20-remote-daemon-r3-verification/README.md) |
+| Native combined Core | Installed at signed `3c4b15e6`, with `f8531cd9` rollback | ARM build/stage/install, authenticated display and live Clarity floor input pass; [verification ledger](2026-09-20-remote-daemon-r3-verification/README.md) |
 | Plan review and mixed-stereo choice | Lead, recorded | Current review; user confirmed mixed stereo and Opus |
 | Direct media transport | Production adapter and MediaPeer integrated | Real encrypted peers, bounded callbacks, stop/restart/delete regressions pass; live display capture passes: Ethernet, 969-byte maximum IP packet; separate SRTP-size proof pending |
 | Headless FFT and display codec | Implemented and component-tested | Independent Wide/Fine sources, retune input reset, independent planes, crop clamp, bounded codec and recovery tests pass; authenticated daemon-to-GUI regression and live Saturn display pass |
 | Audio | Opus/RTP and mixed-audio capture tests pass | Stereo wideband 24/48 kbit/s packet checks, mixer gain/mute/pan, bounded capture timestamps and retirement pass; sender, jitter, adaptive clock correction and playback remain pending |
 | GUI media wiring | Desktop builds; initial focused checks pass | Dedicated reduced-frame renderer and authenticated subscription controller tested; two-pane, shared-window and reconnect regressions pass; live GPU spectrum/2D observed; operator 3D confirmation and gesture refinement pending |
+| Applet S-meter | Implementation and verification in progress | Local DSP polling was still active in the remote meter; peak/average telemetry and decoded-passband Max Bin now under test |
+| BPF and Auto AGC-T indicators | Confirmed remaining bindings | R-R3-14 and R-R3-15; source audit complete, implementation pending |

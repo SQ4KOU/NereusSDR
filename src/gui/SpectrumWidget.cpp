@@ -3791,6 +3791,12 @@ void SpectrumWidget::updateSpectrumLinear(int receiverId,
 // return -400 sentinel.
 double SpectrumWidget::peakDbmInSlicePassband() const
 {
+    return peakDbmInPassband(m_vfoHz + static_cast<double>(m_filterLowHz),
+                             m_vfoHz + static_cast<double>(m_filterHighHz));
+}
+
+double SpectrumWidget::peakDbmInPassband(double loHz, double hiHz) const
+{
     // Deliberate NereusSDR-specific divergence from the dent-in-place rule
     // (design section 8.3, decision recorded 2026-07-28): this feeds
     // WdspEngine's MaxBin detector and therefore the analog S-Meter. Thetis
@@ -3802,9 +3808,7 @@ double SpectrumWidget::peakDbmInSlicePassband() const
     const int n = src.size();
     if (n < 2 || m_bandwidthHz <= 0.0) { return -400.0; }
 
-    const double loHz = m_vfoHz + static_cast<double>(m_filterLowHz);
-    const double hiHz = m_vfoHz + static_cast<double>(m_filterHighHz);
-    if (hiHz <= loHz) { return -400.0; }
+    if (!std::isfinite(loHz) || !std::isfinite(hiHz) || hiHz <= loHz) { return -400.0; }
 
     const double leftHz  = m_centerHz - m_bandwidthHz / 2.0;
     const double rightHz = m_centerHz + m_bandwidthHz / 2.0;

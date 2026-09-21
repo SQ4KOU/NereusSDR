@@ -99,6 +99,8 @@ const MirrorPolicy::Entry kEntries[] = {
     // this same direction from the client's point of view; this table is
     // the daemon's point of view, and Outbound is the correct entry here.
     { "SliceModel", "signalStrengthDbm", MirrorDirection::Outbound },
+    { "SliceModel", "signalPeakDbm", MirrorDirection::Outbound },
+    { "SliceModel", "signalAverageDbm", MirrorDirection::Outbound },
     { "SliceModel", "chainIndex", MirrorDirection::Outbound },
     { "SliceModel", "ddcIndex", MirrorDirection::Outbound },
     { "SliceModel", "streamIndex", MirrorDirection::Outbound },

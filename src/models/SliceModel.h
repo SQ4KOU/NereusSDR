@@ -201,7 +201,7 @@ class SliceModel : public QObject {
     // only ever changes as a side effect of tuning frequency.
     Q_PROPERTY(NereusSDR::Band band READ band NOTIFY bandChanged)
 
-    // ── Remote Daemon R2 Task 12: per-slice S-meter reading ─────────────────
+    // ── Remote Daemon R2 Task 12: per-slice S-meter readings ────────────────
     // Written by SliceMeterPump (src/core/meters/), a core-side QTimer that
     // replaces the GUI-only MeterPoller::pollSliceSMeters() so a headless
     // nereusd can produce this reading too. No WRITE clause on purpose: the
@@ -217,6 +217,14 @@ class SliceModel : public QObject {
     // cases that actually accepts a value rather than refusing it.
     Q_PROPERTY(double signalStrengthDbm READ signalStrengthDbm
                NOTIFY signalStrengthDbmChanged)
+    // The selected reading above retains the local analog S-meter's chosen
+    // source.  These two station-calibrated source readings are independent
+    // of that GUI selection so a remote client can render its own selected
+    // S-meter mode without asking its local model to read WDSP.
+    Q_PROPERTY(double signalPeakDbm READ signalPeakDbm
+               NOTIFY signalPeakDbmChanged)
+    Q_PROPERTY(double signalAverageDbm READ signalAverageDbm
+               NOTIFY signalAverageDbmChanged)
 
     // ── Phase 3F Sub-Epic A: multi-panadapter / multi-slice identity ────────────
     // Phase 3F: per-slice letter identifier A-E. Drives badge color via VfoWidget::sliceColor().
@@ -534,6 +542,8 @@ public:
     // MeterPoller.cpp's smeterDbm fallback and TciServer.cpp's rx1Dbm
     // fallback (both "no WDSP data yet").
     double signalStrengthDbm() const { return m_signalStrengthDbm; }
+    double signalPeakDbm() const { return m_signalPeakDbm; }
+    double signalAverageDbm() const { return m_signalAverageDbm; }
 
     // Plain public setter, deliberately NOT a Q_PROPERTY WRITE accessor --
     // same shape as setActive()/setTxSlice() above. SliceMeterPump calls
@@ -543,19 +553,22 @@ public:
     // StateMirror.h's class comment). Emits signalStrengthDbmChanged only
     // on actual change.
     void setSignalStrengthDbm(double dbm);
+    void setSignalPeakDbm(double dbm);
+    void setSignalAverageDbm(double dbm);
 
     // Remote Daemon R2 Task 8: StateMirror::applyInbound()'s hook for
     // SliceModel's no-WRITE properties -- active, txSlice, band, and (Task
-    // 12) signalStrengthDbm (a fifth, sliceIndex, is CONSTANT /
+    // 12) signalStrengthDbm, signalPeakDbm and signalAverageDbm (a fifth,
+    // sliceIndex, is CONSTANT /
     // ConstantSnapshot and is refused before ever reaching here;
     // sliceLetter is excluded from the mirror entirely). active and
     // txSlice are exclusive across MULTIPLE slices and arbitrated by
     // RadioModel::setActiveSlice() and TxSliceArbiter respectively, not
     // owned by any one SliceModel; band is purely derived from frequency
     // by Band::bandFromFrequency() (see the comment above); all three are
-    // refused, naming the owner to use instead. signalStrengthDbm is the
-    // ONE case that accepts and applies the value rather than refusing it:
-    // it has no other owner to name, because on a Role::Remote model the
+    // refused, naming the owner to use instead. The three S-meter readings
+    // accept and apply their values rather than refusing them: they have no
+    // other owner to name, because on a Role::Remote model the
     // mirror's inbound apply IS the value's sole legitimate writer (the
     // local writer, SliceMeterPump, is never constructed on that role --
     // see RadioModel's constructor).
@@ -1003,8 +1016,10 @@ signals:
     // Uses Band::bandFromFrequency(freq) to detect crossings; emits once per
     // distinct Band change. Consumed by MainWindow to notify PgxlConnection.
     void bandChanged(NereusSDR::Band newBand);
-    // Remote Daemon R2 Task 12: per-slice S-meter reading changed.
+    // Remote Daemon R2 Task 12: per-slice S-meter readings changed.
     void signalStrengthDbmChanged(double dbm);
+    void signalPeakDbmChanged(double dbm);
+    void signalAverageDbmChanged(double dbm);
     void dspModeChanged(NereusSDR::DSPMode mode);
     void filterChanged(int low, int high);
     void agcModeChanged(NereusSDR::AGCMode mode);
@@ -1141,6 +1156,8 @@ private:
     // matches MeterPoller.cpp's smeterDbm / TciServer.cpp's rx1Dbm "no WDSP
     // data yet" fallback.
     double  m_signalStrengthDbm{-140.0};
+    double  m_signalPeakDbm{-140.0};
+    double  m_signalAverageDbm{-140.0};
     DSPMode m_dspMode{DSPMode::USB};
     int     m_filterLow{100};            // USB default from Thetis F5
     int     m_filterHigh{3000};

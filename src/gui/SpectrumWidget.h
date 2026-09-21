@@ -476,6 +476,7 @@ public:
     // from the display pipeline makes the meter read what the operator
     // visually sees on the trace.
     double peakDbmInSlicePassband() const;
+    double peakDbmInPassband(double lowHz, double highHz) const;
 
     // Static helper for detector math. Exposed for unit tests.
     // Note: legacy bin-reduction helper, kept for tst_detector_modes;

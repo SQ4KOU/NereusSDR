@@ -11,8 +11,9 @@
 // pollSMeter() (Remote-daemon R2 Task 12). MeterPoller lives in src/gui/,
 // so a headless nereusd -- which links NereusCore only, no GUI object code
 // (see tst_core_has_no_gui_includes) -- never ran it, and the per-slice
-// S-meter reading SliceModel::signalStrengthDbm exists to carry never had
-// a value on that build. This class is the same polling logic, moved to
+// S-meter readings SliceModel::signalStrengthDbm, signalPeakDbm and
+// signalAverageDbm had no producer on that build. This class is the same
+// polling logic, moved to
 // src/core/ so both the GUI and the headless daemon produce it, exactly
 // the way TciServer.cpp's own rx_sensors timer (src/core/TciServer.cpp)
 // already proves core-side WDSP meter polling needs no GUI at all.
@@ -30,9 +31,9 @@
 //     unguarded pump would run this 10 Hz timer against a channel-less
 //     engine on a Role::Remote model and clobber every mirrored needle
 //     with the -140.0 fallback the instant a future task wires a real
-//     inbound delta into signalStrengthDbm. On Role::Remote,
-//     signalStrengthDbm is written exclusively through SliceModel::
-//     applyMirroredValue() -- the mirror's own inbound-apply path.
+//     inbound delta into any S-meter reading. On Role::Remote, all three
+//     readings are written exclusively through SliceModel::applyMirroredValue()
+//     -- the mirror's own inbound-apply path.
 //   - The ONE thing RadioModel cannot supply is which WDSP meter type to
 //     read: that is a property of the analog SMeterWidget's rxMode()
 //     selector (SMeter/SMeterPeak -> SignalPeak, SignalAverage ->

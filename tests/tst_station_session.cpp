@@ -982,6 +982,29 @@ void TstStationSession::mirrorRoundTripsSliceStateAndDoesNotEcho()
     // through the applyMirroredValue hook task 12 built for exactly this.
     stationSlice->setSignalStrengthDbm(-73.0);
     QTRY_COMPARE(clientSlice->signalStrengthDbm(), -73.0);
+    stationSlice->setSignalPeakDbm(-61.0);
+    stationSlice->setSignalAverageDbm(-79.0);
+    QTRY_COMPARE(clientSlice->signalPeakDbm(), -61.0);
+    QTRY_COMPARE(clientSlice->signalAverageDbm(), -79.0);
+
+    // Read-only telemetry must never turn into a client command, even if
+    // code changes the client's local copy. Only Core is authoritative.
+    stationEnd->clearReceived();
+    clientSlice->setSignalPeakDbm(-20.0);
+    clientSlice->setSignalAverageDbm(-30.0);
+    // A real writable property is a flush barrier, avoiding a timed sleep.
+    clientSlice->setFrequency(14075100.0);
+    QTRY_COMPARE(stationSlice->frequency(), 14075100.0);
+    for (const QByteArray& wire : stationEnd->received()) {
+        const SessionMessage message = decodeOrFail(wire);
+        if (message.kind != SessionMessageKind::PropertyWrite) { continue; }
+        for (const MirrorUpdate& update : message.updates) {
+            QVERIFY(update.name != "signalPeakDbm");
+            QVERIFY(update.name != "signalAverageDbm");
+        }
+    }
+    QCOMPARE(stationSlice->signalPeakDbm(), -61.0);
+    QCOMPARE(stationSlice->signalAverageDbm(), -79.0);
 }
 
 void TstStationSession::settingsProxyIsNotReadyBeforeTheSnapshot()

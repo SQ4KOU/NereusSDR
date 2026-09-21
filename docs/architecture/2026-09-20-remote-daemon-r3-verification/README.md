@@ -3,6 +3,17 @@
 This ledger separates the recovered integration baseline, component evidence
 and real remote receive acceptance. A component pass does not close R3.
 
+## Current receive status, September 21
+
+The installed checkpoint is `3c4b15e6`: authenticated Core control, live
+spectrum/2D waterfall, station display calibration and Clarity floor input
+have hardware evidence below. Clarity's saved black-level/palette adjustment
+and subjective comparison remain pending. The applet meter correction is
+under verification in the working tree. Remote audio playback, BPF/WIDE
+indicator bindings, Auto AGC-T visuals, capacity/long-run acceptance and R5
+internet traversal are still unfinished. Earlier sections record evidence
+at their named checkpoints; their then-pending items are not current status.
+
 ## Combined baseline, 14124e7c
 
 The signed integration checkpoint includes the published open-PR work selected
@@ -344,3 +355,44 @@ this check: the Mac locked before the controls could be inspected. This
 is not evidence that subjective grain or local/remote visual parity has
 been resolved. The remote audio and R5 traversal milestones above remain
 unfinished.
+
+## Applet S-meter correction, September 21
+
+The operator confirmed that the large applet meter remained unresponsive.
+Its `MeterPoller` still waited for and polled the GUI's local RxChannel,
+which is inactive in the remote role. The existing mirrored per-slice value
+was insufficient for all applet modes: the headless pump defaults to signal
+average, while S-Meter and S-Meter Peak select signal peak.
+
+R-R3-13 adds independent, read-only `signalPeakDbm` and `signalAverageDbm`
+properties to SliceModel. Core's existing meter pump produces both with the
+station calibration once; the legacy selected reading is preserved. The
+remote poller uses those source values for the applet, custom signal meter
+items and each slice flag. Max Bin scans the decoded, calibrated display
+within each slice's passband, preserving the existing measurement-pixel
+path before visual notch rendering. The remote timer starts independently
+of local WDSP. It clears the visible RX reading on disconnect and waits for
+the current session's completed snapshot before showing retained models.
+Local direct polling and widget ballistics are unchanged.
+
+Six focused executables passed in 8.99 seconds. They cover actual Core meter
+reads, source selection independent of the legacy selector, calibrated
+read-only mirror round trips without outbound telemetry writes, active
+slice IDs, applet/flag agreement, disconnect/TX/model destruction, and
+decoded-passband Max Bin with context invalidation. Consolidated review
+identified the pre-snapshot reconnect gap; a readiness callback and a
+regression covering that interval were added before the final full suite.
+The rebuilt unfiltered full suite passed **673/673**, zero failed/skipped,
+in 53.34 seconds, including the readiness regression. The native aarch64
+candidate built successfully after its six changed Core/model source files
+were hash-verified. Logs are retained in
+`~/.config/nereus/work/r3-applet-meter/`. Signed installation and live applet
+observations follow separately; the locked Mac currently blocks the latter.
+
+The adjacent binding audit identified two separate open requirements now in
+the plan: R-R3-14 for Core's effective CH/BPF/WIDE state, and R-R3-15 for
+station Auto AGC-T measurements. These still read local controller/tracker
+state in the remote GUI. The existing RadioModel connection-state mirror
+already has a client apply path; no blanket claim that all connection status
+is broken is made here. The meter correction does not close these other
+requirements or the mixed-stereo Opus milestone.

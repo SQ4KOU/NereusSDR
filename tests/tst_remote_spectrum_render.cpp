@@ -10,6 +10,28 @@ using namespace NereusSDR;
 class TestRemoteSpectrumRender : public QObject {
     Q_OBJECT
 private slots:
+    void remoteMaxBinUsesEachRequestedPassbandAndClearsWithContext()
+    {
+        SpectrumWidget widget;
+        SpectrumEndpointContext context;
+        context.codec = {29, 1, -180, 0, 11, 11, 0};
+        context.exactCentreHz = 10000000;
+        context.exactSpanHz = 10000;
+        widget.setRemoteSpectrumContext(context, context.exactCentreHz, 192000);
+        DisplayCodecFrame frame;
+        frame.context = context.codec;
+        frame.traceDbm = QVector<float>(11, -120);
+        frame.traceDbm[2] = -62;
+        frame.traceDbm[8] = -43;
+        frame.waterfallDbm = QVector<float>(11, -110);
+        QVERIFY(widget.updateRemoteSpectrum(frame));
+        QCOMPARE(widget.peakDbmInPassband(9996000, 9998000), -62.0);
+        QCOMPARE(widget.peakDbmInPassband(10002000, 10004000), -43.0);
+        QCOMPARE(widget.peakDbmInPassband(11000000, 11002000), -400.0);
+        widget.clearRemoteSpectrum();
+        QCOMPARE(widget.peakDbmInPassband(9996000, 9998000), -400.0);
+    }
+
     void independentPlanesAndSuppliedWideCoverage()
     {
         SpectrumWidget widget;

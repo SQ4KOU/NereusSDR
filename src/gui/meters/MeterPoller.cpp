@@ -81,6 +81,10 @@ mw0lge@grange-lane.co.uk
 // Task 41 (Phase 3P-II): SMeterWidget + WdspEngine for the pollSMeter() path.
 #include "gui/SMeterWidget.h"
 #include "core/WdspEngine.h"
+#include "models/RadioModel.h"
+#include "models/SliceModel.h"
+
+#include <cmath>
 
 // WDSP GetTXAMeter — lock-free TX meter read.
 // From Thetis dsp.cs:390-391 [v2.10.3.13]:
@@ -131,6 +135,16 @@ void MeterPoller::setWdspEngine(WdspEngine* engine)
 {
     m_wdspEngine = engine;
     qCDebug(lcMeter) << "MeterPoller: WdspEngine set:" << (engine ? "yes" : "nullptr");
+}
+
+void MeterPoller::setRemoteRadioModel(RadioModel* model,
+                                     std::function<bool()> snapshotReady,
+                                     std::function<double(const SliceModel*)> maxBinSource)
+{
+    m_remoteRole = model && model->role() == RadioModel::Role::Remote;
+    m_remoteModel = m_remoteRole ? model : nullptr;
+    m_remoteSnapshotReady = std::move(snapshotReady);
+    m_remoteMaxBinSource = std::move(maxBinSource);
 }
 
 // RX meter cal offset source (Thetis-faithful port).
@@ -292,6 +306,13 @@ void MeterPoller::poll()
         target->update();
     }
 
+    // R3: a remote window must never fall through to the inactive local
+    // DSP, including after its model has been destroyed or disconnected.
+    if (m_remoteRole) {
+        pollRemoteRxMeters();
+        return;
+    }
+
     // H.2 (Phase 3M-1a): when MOX is active, switch to TX meter polling.
     // From Thetis dsp.cs:995-1050 [v2.10.3.13] CalculateTXMeter — the switch
     // on MeterType dispatches TX vs RX reads from the same timer tick.
@@ -348,6 +369,70 @@ void MeterPoller::poll()
     // never disagree on source.
     Q_UNUSED(smeterDbm);
     pollSMeter();
+}
+
+void MeterPoller::pollRemoteRxMeters()
+{
+    // The station owns calibration and RX meter production. The GUI only
+    // chooses a reading and applies the existing widget ballistics.
+    const bool ready = m_remoteModel && m_remoteModel->isConnected()
+        && m_remoteSnapshotReady && m_remoteSnapshotReady();
+    SliceModel* slice = ready ? m_remoteModel->activeSlice() : nullptr;
+    if (slice && (m_inTx || m_remoteModel->radioStatus().isTransmitting()
+                        || m_remoteModel->transmitModel().isMox())) {
+        return;
+    }
+    auto finiteOr = [](double value, double fallback) {
+        return std::isfinite(value) ? value : fallback;
+    };
+    const double peak = slice ? finiteOr(slice->signalPeakDbm(), -140.0) : -140.0;
+    const double average = slice ? finiteOr(slice->signalAverageDbm(), -140.0) : -140.0;
+    const double maxBin = slice && m_remoteMaxBinSource
+        ? finiteOr(m_remoteMaxBinSource(slice), -400.0) : -400.0;
+    for (const auto& guarded : m_targets) {
+        MeterWidget* target = guarded.data();
+        if (!target) { continue; }
+        target->updateMeterValue(MeterBinding::SignalPeak, peak);
+        target->updateMeterValue(MeterBinding::SignalAvg, average);
+        target->updateMeterValue(MeterBinding::SignalMaxBin, maxBin);
+    }
+    if (!m_sMeter) { return; }
+    double level = peak;
+    switch (m_sMeter->rxMode()) {
+    case SMeterWidget::RxMode::SMeter:
+    case SMeterWidget::RxMode::SMeterPeak:
+        break;
+    case SMeterWidget::RxMode::SignalAverage:
+        level = average;
+        break;
+    case SMeterWidget::RxMode::MaxBin:
+        level = maxBin;
+        break;
+    }
+    m_sMeter->setLevel(static_cast<float>(level));
+
+    // Keep each flag on the same selected meter source as the applet,
+    // resolving stable slice IDs on every tick rather than caching channels.
+    if (!m_remoteModel) { return; }
+    for (const SliceModel* flagSlice : m_remoteModel->slices()) {
+        if (!flagSlice) { continue; }
+        double flagLevel = -140.0;
+        if (ready) {
+            switch (m_sMeter->rxMode()) {
+            case SMeterWidget::RxMode::SMeter:
+            case SMeterWidget::RxMode::SMeterPeak:
+                flagLevel = flagSlice->signalPeakDbm();
+                break;
+            case SMeterWidget::RxMode::SignalAverage:
+                flagLevel = flagSlice->signalAverageDbm();
+                break;
+            case SMeterWidget::RxMode::MaxBin:
+                flagLevel = m_remoteMaxBinSource ? m_remoteMaxBinSource(flagSlice) : -400.0;
+                break;
+            }
+        }
+        emit remoteSliceLevelUpdated(flagSlice->sliceIndex(), finiteOr(flagLevel, -140.0));
+    }
 }
 
 void MeterPoller::pollSMeter()

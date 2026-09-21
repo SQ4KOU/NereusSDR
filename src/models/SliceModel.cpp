@@ -630,6 +630,24 @@ void SliceModel::setSignalStrengthDbm(double dbm)
     emit signalStrengthDbmChanged(dbm);
 }
 
+void SliceModel::setSignalPeakDbm(double dbm)
+{
+    if (qFuzzyIsNull(m_signalPeakDbm - dbm)) {
+        return;
+    }
+    m_signalPeakDbm = dbm;
+    emit signalPeakDbmChanged(dbm);
+}
+
+void SliceModel::setSignalAverageDbm(double dbm)
+{
+    if (qFuzzyIsNull(m_signalAverageDbm - dbm)) {
+        return;
+    }
+    m_signalAverageDbm = dbm;
+    emit signalAverageDbmChanged(dbm);
+}
+
 // ── Remote Daemon R2 Task 8: inbound mirror hook ─────────────────────────────
 //
 // NereusSDR-original; no Thetis/AetherSDR equivalent. Each of the no-WRITE
@@ -648,6 +666,14 @@ QString SliceModel::applyMirroredValue(const QByteArray& propertyName, const QVa
         // -- the hook receives a properly narrowed, natively typed value,
         // the same as a normal WRITE would). Empty return means accepted.
         setSignalStrengthDbm(value.toDouble());
+        return QString();
+    }
+    if (propertyName == "signalPeakDbm") {
+        setSignalPeakDbm(value.toDouble());
+        return QString();
+    }
+    if (propertyName == "signalAverageDbm") {
+        setSignalAverageDbm(value.toDouble());
         return QString();
     }
     if (propertyName == "active") {

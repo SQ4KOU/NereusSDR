@@ -47,6 +47,7 @@
 
 #include <QtTest/QtTest>
 #include <QSignalSpy>
+#include <QPair>
 
 #include <memory>
 
@@ -67,29 +68,35 @@ class TestSliceMeterPump : public QObject {
 
 private slots:
 
-    // ── Group 1: SliceModel::signalStrengthDbm's shape ─────────────────────
+    // ── Group 1: SliceModel's S-meter telemetry shape ──────────────────────
 
     // Step 1: "not writable, has a notify, starts at -140.0". Pure
     // meta-object introspection plus a freshly-constructed default -- no
     // RadioModel, no WdspEngine, nothing that could touch a real radio.
-    void signalStrengthDbmIsReadOnlyWithNotifyAndDefaultsToMinus140()
+    void signalReadingsAreReadOnlyWithNotifyAndDefaultToMinus140()
     {
         SliceModel slice(0);
 
         const QMetaObject* mo = slice.metaObject();
-        const int idx = mo->indexOfProperty("signalStrengthDbm");
-        QVERIFY2(idx >= 0, "signalStrengthDbm must be a declared Q_PROPERTY");
-        const QMetaProperty prop = mo->property(idx);
-        QVERIFY2(!prop.isWritable(),
-                 "signalStrengthDbm must carry no WRITE -- SliceMeterPump is "
-                 "the only local writer, via setSignalStrengthDbm(), which is "
-                 "not a QMetaProperty accessor");
-        QVERIFY2(prop.hasNotifySignal(),
-                 "signalStrengthDbm must have a NOTIFY or it can never reach "
-                 "the mirror as a delta");
-        QCOMPARE(prop.notifySignal().name(), QByteArray("signalStrengthDbmChanged"));
+        const QList<QPair<QByteArray, QByteArray>> readings = {
+            {"signalStrengthDbm", "signalStrengthDbmChanged"},
+            {"signalPeakDbm", "signalPeakDbmChanged"},
+            {"signalAverageDbm", "signalAverageDbmChanged"},
+        };
+        for (const auto& [name, notify] : readings) {
+            const int idx = mo->indexOfProperty(name.constData());
+            QVERIFY2(idx >= 0, qPrintable(name + " must be a declared Q_PROPERTY"));
+            const QMetaProperty prop = mo->property(idx);
+            QVERIFY2(!prop.isWritable(),
+                     qPrintable(name + " must carry no WRITE accessor"));
+            QVERIFY2(prop.hasNotifySignal(),
+                     qPrintable(name + " must have a NOTIFY for mirror deltas"));
+            QCOMPARE(prop.notifySignal().name(), notify);
+        }
 
         QCOMPARE(slice.signalStrengthDbm(), -140.0);
+        QCOMPARE(slice.signalPeakDbm(), -140.0);
+        QCOMPARE(slice.signalAverageDbm(), -140.0);
     }
 
     // "Emits once per distinct value." A property of setSignalStrengthDbm's
@@ -117,6 +124,27 @@ private slots:
         QCOMPARE(spy.constLast().at(0).toDouble(), -91.5);
     }
 
+    void sourceReadingsEmitOncePerDistinctValueAndAcceptMirrorState()
+    {
+        SliceModel slice(0);
+        QSignalSpy peakSpy(&slice, &SliceModel::signalPeakDbmChanged);
+        QSignalSpy averageSpy(&slice, &SliceModel::signalAverageDbmChanged);
+
+        slice.setSignalPeakDbm(-73.0);
+        slice.setSignalPeakDbm(-73.0);
+        QCOMPARE(peakSpy.count(), 1);
+        QCOMPARE(slice.applyMirroredValue("signalPeakDbm", QVariant(-71.5)), QString());
+        QCOMPARE(peakSpy.count(), 2);
+        QCOMPARE(slice.signalPeakDbm(), -71.5);
+
+        slice.setSignalAverageDbm(-91.0);
+        slice.setSignalAverageDbm(-91.0);
+        QCOMPARE(averageSpy.count(), 1);
+        QCOMPARE(slice.applyMirroredValue("signalAverageDbm", QVariant(-89.5)), QString());
+        QCOMPARE(averageSpy.count(), 2);
+        QCOMPARE(slice.signalAverageDbm(), -89.5);
+    }
+
     // ── Group 2: poll() against an unconnected RadioModel ───────────────────
 
     // Step 1: "a slice with no WDSP channel reads -140.0." A bare, never-
@@ -139,6 +167,8 @@ private slots:
         pump->poll();
 
         QCOMPARE(slice->signalStrengthDbm(), -140.0);
+        QCOMPARE(slice->signalPeakDbm(), -140.0);
+        QCOMPARE(slice->signalAverageDbm(), -140.0);
     }
 
     // Step 4: "the pump stops while transmitting." RadioStatus::
@@ -190,11 +220,15 @@ private slots:
         // setTxSlice), not a QMetaProperty WRITE -- direct calls are the
         // normal way to seed it in a test.
         slice->setSignalStrengthDbm(seeded);
+        slice->setSignalPeakDbm(seeded);
+        slice->setSignalAverageDbm(seeded);
 
         model.radioStatus().setTransmitting(true);
         pump->poll();
 
         QCOMPARE(slice->signalStrengthDbm(), seeded);
+        QCOMPARE(slice->signalPeakDbm(), seeded);
+        QCOMPARE(slice->signalAverageDbm(), seeded);
 
         harness.reset();
     }
@@ -235,6 +269,9 @@ private slots:
         const double expected =
             ch->getMeter(RxMeterType::SignalAvg) + model.rxMeterOffsetDb();
         QCOMPARE(slice->signalStrengthDbm(), expected);
+        QCOMPARE(slice->signalPeakDbm(),
+                 ch->getMeter(RxMeterType::SignalPeak) + model.rxMeterOffsetDb());
+        QCOMPARE(slice->signalAverageDbm(), expected);
 
         harness.reset();
     }
@@ -268,6 +305,9 @@ private slots:
         const double expected =
             ch->getMeter(RxMeterType::SignalPeak) + model.rxMeterOffsetDb();
         QCOMPARE(slice->signalStrengthDbm(), expected);
+        QCOMPARE(slice->signalPeakDbm(), expected);
+        QCOMPARE(slice->signalAverageDbm(),
+                 ch->getMeter(RxMeterType::SignalAvg) + model.rxMeterOffsetDb());
 
         harness.reset();
     }
@@ -296,6 +336,12 @@ private slots:
         pump->poll();
 
         QCOMPARE(slice->signalStrengthDbm(), -400.0);
+        QCOMPARE(slice->signalPeakDbm(),
+                 model.wdspEngine()->rxChannel(slice->sliceIndex())
+                     ->getMeter(RxMeterType::SignalPeak) + model.rxMeterOffsetDb());
+        QCOMPARE(slice->signalAverageDbm(),
+                 model.wdspEngine()->rxChannel(slice->sliceIndex())
+                     ->getMeter(RxMeterType::SignalAvg) + model.rxMeterOffsetDb());
 
         harness.reset();
     }

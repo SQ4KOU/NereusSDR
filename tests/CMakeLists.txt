@@ -2352,6 +2352,7 @@ nereus_add_test(tst_spectrum_widget_mox_overlay)
 # pollTxMeters() and poll().  No live WDSP reads — headless state tests only.
 # Derives from Thetis dsp.cs:995-1050 [v2.10.3.13] CalculateTXMeter dispatch.
 nereus_add_test(tst_meter_poller_tx_bindings)
+nereus_add_test(tst_remote_meter_poller)
 
 # ── RX meter cal offset port (Thetis-faithful) ───────────────────────────────
 # Verifies the per-radio factory default lookup (rxMeterCalOffsetDefaultFor)

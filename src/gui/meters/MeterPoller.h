@@ -81,6 +81,8 @@ class MeterWidget;
 class RadioStatus;
 class SMeterWidget;
 class WdspEngine;
+class RadioModel;
+class SliceModel;
 
 // Binding IDs map to WDSP meter types (RxMeterType enum values)
 namespace MeterBinding {
@@ -144,6 +146,13 @@ public:
     // Both are non-owning; call with nullptr to detach.
     void setSMeter(SMeterWidget* widget);
     void setWdspEngine(WdspEngine* engine);
+
+    // Remote GUI readings are already calibrated by Core. The display
+    // callback supplies Max Bin from the current decoded passband; no
+    // local WDSP channel or calibration participates in this path.
+    void setRemoteRadioModel(RadioModel* model,
+                             std::function<bool()> snapshotReady,
+                             std::function<double(const SliceModel*)> maxBinSource = {});
 
     // ── TX meter bindings (H.2, Phase 3M-1a) ─────────────────────────────
     //
@@ -216,6 +225,9 @@ public:
     // Pass nullptr to detach (e.g. on RadioModel teardown).
     void setRxOffsetSource(std::function<double()> source);
 
+signals:
+    void remoteSliceLevelUpdated(int sliceId, double dbm);
+
 public slots:
     // Switch between RX and TX meter polling.
     // Connected to MoxController::moxStateChanged(bool) by MainWindow (H.2).
@@ -244,6 +256,7 @@ private:
     //   SignalAverage        -> GetRXAMeter(ch, RXA_S_AV)  (enum 1)
     //   MaxBin               -> GetDetectMaxBin(disp=0)
     void pollSMeter();
+    void pollRemoteRxMeters();
 
     // m_avgWindow: averaging window size set by MultimeterPage (Task 3.1).
     // Task 3.2 will use this value in dispatch; stored here for round-trip.
@@ -288,6 +301,10 @@ private:
     // fix round 1 -- see MeterPoller.cpp's modification history).
     // See setRxOffsetSource() doc for Thetis console.cs:46821 cite.
     std::function<double()> m_rxOffsetSource;
+    bool m_remoteRole{false};
+    QPointer<RadioModel> m_remoteModel;
+    std::function<bool()> m_remoteSnapshotReady;
+    std::function<double(const SliceModel*)> m_remoteMaxBinSource;
 };
 
 } // namespace NereusSDR

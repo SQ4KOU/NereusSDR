@@ -1286,7 +1286,16 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     // this replaces). Seed the current value immediately so a newly
     // created flag does not show a stale reading until the next poll tick,
     // matching the seeding already done above for frequency/mode/filter/etc.
-    connect(slice, &SliceModel::signalStrengthDbmChanged, newFlag, &VfoWidget::setSmeter);
+    if (m_radioModel->role() == RadioModel::Role::Remote) {
+        // Core sends independent peak and average readings. MeterPoller
+        // selects the applet's current source for every mirrored flag too.
+        connect(m_meterPoller, &MeterPoller::remoteSliceLevelUpdated,
+                newFlag, [newFlag, id = slice->sliceIndex()](int sliceId, double dbm) {
+            if (sliceId == id) { newFlag->setSmeter(dbm); }
+        });
+    } else {
+        connect(slice, &SliceModel::signalStrengthDbmChanged, newFlag, &VfoWidget::setSmeter);
+    }
     newFlag->setSmeter(slice->signalStrengthDbm());
     newFlag->setFilter(slice->filterLow(), slice->filterHigh());
     newFlag->setAgcMode(slice->agcMode());
@@ -5375,6 +5384,23 @@ void MainWindow::populateDefaultMeter()
             m_meterPoller->setSMeter(sm);
         }
         m_meterPoller->setWdspEngine(m_radioModel->wdspEngine());
+
+        if (m_radioModel->role() == RadioModel::Role::Remote) {
+            m_meterPoller->setRemoteRadioModel(m_radioModel,
+                [this]() {
+                    return m_stationClient && m_stationClient->isHandshakeComplete();
+                },
+                [this](const SliceModel* slice) -> double {
+                    SpectrumWidget* sw = m_panStack && slice
+                        ? m_panStack->spectrum(slice->panKey()) : nullptr;
+                    if (!sw) { return -400.0; }
+                    return sw->peakDbmInPassband(slice->frequency() + slice->filterLow(),
+                                                slice->frequency() + slice->filterHigh());
+                });
+            // Remote models never initialize a local RxChannel, so the
+            // WDSP-ready callback cannot start this timer for them.
+            m_meterPoller->start();
+        }
 
         // RX meter cal offset source (Thetis-faithful port).
         // RadioModel::rxMeterOffsetDb() returns RXPreampOffset(1) +

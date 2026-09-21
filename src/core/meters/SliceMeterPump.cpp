@@ -131,8 +131,8 @@ void SliceMeterPump::poll()
     // comment) -- the narrower of the two. Matches the headless precedent
     // at TciServer.cpp's TX-sensor broadcast timer, which gates the same
     // way for the same reason. While transmitting this touches NO slice at
-    // all, leaving every signalStrengthDbm exactly where the last RX-mode
-    // poll left it.
+    // all, leaving every S-meter reading exactly where the last RX-mode poll
+    // left it.
     if (m_radioModel->radioStatus().isTransmitting()) {
         return;
     }
@@ -178,12 +178,32 @@ void SliceMeterPump::poll()
         RxChannel* ch = engine->rxChannel(slice->sliceIndex());
         if (!ch) {
             // No channel yet (not connected, or this slice has not been
-            // bound to hardware) -- leave signalStrengthDbm at whatever it
-            // already holds (its constructed -140.0 default, for a slice
+            // bound to hardware) -- leave all readings at whatever they
+            // already hold (their constructed -140.0 defaults for a slice
             // that has never had a channel at all) rather than writing a
             // sentinel of this pump's own invention.
             continue;
         }
+
+        // Read and publish both source readings on every RX tick.  The
+        // selected signalStrengthDbm below remains the legacy analog-meter
+        // view; publishing the sources independently lets a remote GUI make
+        // that selection from station telemetry without a local WDSP read.
+        // From Thetis Console/dsp.cs:954 [@501e3f5] (CalculateRXMeter):
+        //   case MeterType.SIGNAL_STRENGTH: val = GetRXAMeter(channel, RXA_S_PK);
+        // The adjacent ADC_REAL case at dsp.cs:959 carries //MW0LGE [2.9.0.7]
+        // attribution that we preserve verbatim per GPL inline-tag rule.
+        // Display-side offset per console.cs:46824 [v2.10.3.13].
+        const double signalPeakDbm =
+            ch->getMeter(RxMeterType::SignalPeak) + rxOffsetDb;
+
+        // From Thetis Console/dsp.cs:957 [@501e3f5] (CalculateRXMeter):
+        //   case MeterType.AVG_SIGNAL_STRENGTH: val = GetRXAMeter(channel, RXA_S_AV);
+        // The adjacent ADC_REAL case at dsp.cs:959 carries //MW0LGE [2.9.0.7]
+        // attribution that we preserve verbatim per GPL inline-tag rule.
+        // Display-side offset per console.cs:46828 [v2.10.3.13].
+        const double signalAverageDbm =
+            ch->getMeter(RxMeterType::SignalAvg) + rxOffsetDb;
 
         double dbm = -140.0;
         switch (source) {
@@ -195,7 +215,7 @@ void SliceMeterPump::poll()
             // (same preservation MeterPoller.cpp's own pollSMeter() carries
             // for this identical citation).
             // Display-side offset per console.cs:46824 [v2.10.3.13].
-            dbm = ch->getMeter(RxMeterType::SignalPeak) + rxOffsetDb;
+            dbm = signalPeakDbm;
             break;
         case MeterSource::SignalAverage:
             // From Thetis Console/dsp.cs:957 [@501e3f5] (CalculateRXMeter):
@@ -205,13 +225,15 @@ void SliceMeterPump::poll()
             // (same preservation MeterPoller.cpp's own pollSMeter() carries
             // for this identical citation).
             // Display-side offset per console.cs:46828 [v2.10.3.13].
-            dbm = ch->getMeter(RxMeterType::SignalAvg) + rxOffsetDb;
+            dbm = signalAverageDbm;
             break;
         case MeterSource::MaxBin:
             dbm = maxBinDbm;
             break;
         }
         slice->setSignalStrengthDbm(dbm);
+        slice->setSignalPeakDbm(signalPeakDbm);
+        slice->setSignalAverageDbm(signalAverageDbm);
     }
 }
 
