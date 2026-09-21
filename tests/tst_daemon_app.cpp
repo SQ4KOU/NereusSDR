@@ -36,17 +36,28 @@
 // Uses QTEST_MAIN (not APPLESS_MAIN): RadioModel's construction touches
 // Qt machinery (timers, WdspEngine, AudioEngine) that wants a
 // QCoreApplication, matching every other RadioModel-constructing test.
+//
+// Modification history (NereusSDR):
+//   2026-09-20: cover DaemonApp's RadioModel teardown state relay,
+//               by J.J. Boyd (KG4VCF), with AI-assisted implementation
+//               via OpenAI Codex.
 
 #include <QtTest/QtTest>
 
 #include <QHostAddress>
+#include <QScopeGuard>
 #include <QSslSocket>
 #include <QTcpServer>
 
+#include <utility>
+
 #include "core/HpsdrModel.h"
+#define private public
 #include "core/daemon/DaemonApp.h"
+#undef private
 #include "core/daemon/DaemonConfig.h"
 #include "core/session/StationServer.h"
+#include "models/RadioModel.h"
 
 using namespace NereusSDR;
 
@@ -147,6 +158,32 @@ private slots:
         DaemonApp app;
         app.stop();          // must not crash
         QCOMPARE(app.sliceCount(), 0);
+    }
+
+    // DaemonApp owns RadioModel with a unique_ptr. unique_ptr::reset() clears
+    // that pointer before it deletes the old object, so a connection-state
+    // relay emitted while the model tears down cannot query m_radioModel.
+    // This takes the identical ownership shape explicitly, then emits the
+    // source signal while the old model is still alive. The relay must use
+    // the state argument, which is already the authoritative value.
+    void connectionStateRelayDoesNotDereferenceReleasedModel()
+    {
+        DaemonConfig cfg = DaemonConfig::defaults();
+
+        DaemonApp app;
+        app.primeBoardForTest(HPSDRHW::HermesLite);
+        QVERIFY(app.start(cfg));
+
+        std::unique_ptr<RadioModel> releasedModel = std::move(app.m_radioModel);
+        QVERIFY(releasedModel != nullptr);
+        const auto restoreModel = qScopeGuard([&app, &releasedModel]() {
+            app.m_radioModel = std::move(releasedModel);
+        });
+
+        QSignalSpy connectedSpy(&app, &DaemonApp::radioConnected);
+        emit releasedModel->connectionStateChanged(ConnectionState::Disconnected);
+        QCOMPARE(connectedSpy.count(), 1);
+        QCOMPARE(connectedSpy.takeFirst().at(0).toBool(), false);
     }
 
     void restartIsClean()

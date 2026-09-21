@@ -38,15 +38,10 @@
 //      the moment Task 10 lands. This is the SECOND call site (after
 //      main.cpp's); CoreInit's own Task 8 report reserved centralising the
 //      registration for when a THIRD appears.
-//   2. SIGTERM/SIGINT: reconciled rather than reimplemented a third way.
-//      main.cpp posts QCoreApplication::quit() via QMetaObject::invokeMethod
-//      with Qt::QueuedConnection instead of calling quit() directly from
-//      the handler, specifically so the call lands on the event-loop
-//      thread regardless of which thread the signal was delivered to. That
-//      property matters here too -- R1 Task 11 gives nereusd a second
-//      (wideband FFT) thread -- so onTerm() below uses the same indirection
-//      main.cpp does, adapted to this file's simpler global-pointer
-//      structure (no pre-QApplication argv scan to share it with).
+//   2. SIGTERM/SIGINT: the handler only sets a sig_atomic_t flag. A timer
+//      on the application thread calls quit() after observing it. Posting
+//      a queued Qt call from a signal handler allocates and takes locks,
+//      which can deadlock if the signal interrupted either operation.
 //
 // R1 Task 10, fix round 1, Finding 3: daemon.start(cfg) is scheduled via
 // a queued QMetaObject::invokeMethod rather than called inline before
@@ -57,15 +52,14 @@
 // synchronous nested QEventLoop that can block for many minutes -- see
 // DaemonApp.h). Calling start() inline meant that wait was the ONLY
 // event loop alive during a cold-cache first connect: app.exec() was
-// never reached, so onTerm()'s QMetaObject::invokeMethod(s_app, "quit",
-// Qt::QueuedConnection) had no outer loop to land on, and a SIGTERM
+// never reached, so the original queued quit had no outer loop to land
+// on, and a SIGTERM
 // arriving in that window could not be serviced -- confirmed live
 // (task-10-report.md): SIGTERM sent mid-wisdom-generation did not
 // unwind within 10 seconds and required SIGKILL. Deferring start() to
 // run AFTER app.exec() begins means the SAME nested QEventLoop
-// (RadioModel.cpp) is now nested INSIDE a live outer loop, so a queued
-// quit() posted during the wait is serviced exactly like it would be
-// for any other nested-loop wait in this codebase.
+// (RadioModel.cpp) is now nested INSIDE a live outer loop, so the signal
+// polling timer can request quit during that wait as well.
 //
 // One further reconciliation beyond the brief's own server_main.cpp
 // sketch (task-9-brief.md Step 4): that sketch predates CoreInit::shutdown()
@@ -107,6 +101,8 @@
 //   2026-08-02: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-20: make termination signal handling allocation-free.
+//               J.J. Boyd (KG4VCF), with AI assistance via OpenAI Codex.
 // =================================================================
 
 #include "core/AppSettings.h"
@@ -121,24 +117,19 @@
 #include <QCommandLineParser>
 #include <QCoreApplication>
 #include <QMetaObject>
+#include <QTimer>
 #include <csignal>
 
 namespace {
 
 QCoreApplication* s_app = nullptr;
+volatile std::sig_atomic_t s_terminationRequested = 0;
 
-// Async-signal-safe: only QCoreApplication::quit() is approximately safe
-// to call from signal context (it just sets an atomic flag the event loop
-// polls), and even that is routed through QMetaObject::invokeMethod with
-// Qt::QueuedConnection so the actual call happens on the event-loop thread
-// rather than whatever thread the signal was delivered to. Same pattern as
-// src/main.cpp's SIGTERM/SIGINT handlers; see the file header above for why
-// this file does not just call s_app->quit() directly.
+// No Qt, allocation, or locks are permitted in signal context. Keep the
+// flag set once requested so another signal cannot race a reset.
 void onTerm(int)
 {
-    if (s_app) {
-        QMetaObject::invokeMethod(s_app, "quit", Qt::QueuedConnection);
-    }
+    s_terminationRequested = 1;
 }
 
 } // namespace
@@ -151,6 +142,14 @@ int main(int argc, char* argv[])
 
     std::signal(SIGTERM, onTerm);
     std::signal(SIGINT,  onTerm);
+
+    QTimer terminationPoll;
+    QObject::connect(&terminationPoll, &QTimer::timeout, &app, [&app]() {
+        if (s_terminationRequested) {
+            app.quit();
+        }
+    });
+    terminationPoll.start(50);
 
     // Register custom metatypes for cross-thread signal/slot connections.
     // See the file header above (Task 8 deferral 1) for why these are

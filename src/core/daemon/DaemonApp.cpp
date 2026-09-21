@@ -3,6 +3,11 @@
 // =================================================================
 // no-port-check: NereusSDR-original. See DaemonApp.h for the design
 // rationale (R1 Task 10).
+//
+// Modification history (NereusSDR):
+//   2026-09-20: relay RadioModel connection state without dereferencing a
+//               RadioModel being destroyed, by J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via OpenAI Codex.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -83,8 +88,8 @@ bool DaemonApp::start(const DaemonConfig& cfg)
     // connectionStateChanged from its connection-thread-marshalled state
     // machine), never synthetically from start() itself.
     connect(m_radioModel.get(), &RadioModel::connectionStateChanged, this,
-            [this](NereusSDR::ConnectionState) {
-        emit radioConnected(m_radioModel->isConnected());
+            [this](NereusSDR::ConnectionState state) {
+        emit radioConnected(state == ConnectionState::Connected);
     });
 
 #ifdef NEREUS_BUILD_TESTS

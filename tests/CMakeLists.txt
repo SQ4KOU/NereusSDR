@@ -6517,6 +6517,10 @@ target_compile_definitions(tst_remote_gui_gating PRIVATE NEREUS_BUILD_TESTS)
 # that a restart does not accumulate slices from the previous run.
 nereus_add_test(tst_daemon_app)
 
+# Exercise the real daemon signal handler and detect allocation from signal
+# context, where a queued Qt invocation can deadlock the interrupted thread.
+nereus_add_test(tst_daemon_signals)
+
 # R1 Task 11: nereusd needs its own thread for the wideband FFT dispatch
 # hop (P2RadioConnection::widebandFrameReady -> WidebandFftEngine::
 # computeFft, wired in RadioModel::wireConnectionSignals) because that hop
