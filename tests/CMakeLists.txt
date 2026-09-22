@@ -6897,6 +6897,8 @@ nereus_add_test(tst_opus_audio_codec)
 nereus_add_test(tst_daemon_audio_source)
 nereus_add_test(tst_daemon_audio_sender)
 nereus_add_test(tst_audio_jitter_buffer)
+# R-R3-23 Task 2: RFC 3550 jitter and sequence accounting for one context.
+nereus_add_test(tst_rtp_reception_stats)
 nereus_add_test(tst_remote_audio_clock)
 # Two simulated hours of continuous interpolation take ~105 s in isolation;
 # allow parallel-suite scheduling headroom without shortening the drift gate.

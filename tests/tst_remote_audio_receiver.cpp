@@ -232,6 +232,42 @@ private slots:
         releaseGate.bus->releaseOutputPacingGateForTesting();
         receiver.stop();
     }
+    void speakerTimingUnavailableFiresThroughTheRealWorkerPath()
+    {
+        AudioEngine engine;
+        engine.setVolume(1.0f);
+        auto sink = std::make_unique<PacedAudioBus>();
+        auto* bus = sink.get();
+        // beginRemotePlayback() makes one synchronous pacing read (call 1).
+        // Block the worker's own first pacing read (call 2), so the test
+        // knows -- from the real worker thread, not a wall-clock guess --
+        // exactly when that read has happened and it is safe to end remote
+        // playback without racing the worker's own startup checks.
+        bus->blockOutputPacingAfterCallsForTesting(1);
+        engine.setSpeakersBusForTest(std::move(sink));
+        RemoteAudioReceiver receiver(&engine);
+        QSignalSpy errors(&receiver, &RemoteAudioReceiver::errorOccurred);
+        QVERIFY(receiver.start(741, 0));
+        QVERIFY(bus->waitForOutputPacingGateForTesting(std::chrono::milliseconds(250)));
+        bus->releaseOutputPacingGateForTesting();
+        // The worker's own initial pacing read (just unblocked above) still
+        // observes remote playback as active, so decoder/rate-matcher setup
+        // succeeds normally. Ending remote playback now takes effect on the
+        // worker's next pacing read -- the "during play" one it reaches once
+        // the packet below is decoded -- never by emitting the signal here.
+        engine.endRemotePlayback();
+
+        OpusAudioEncoder encoder;
+        const auto encoded = encoder.encode(QVector<float>(3840, 0.1f), 0, 0, 741);
+        QCOMPARE(encoded.status, OpusAudioCodecStatus::Accepted);
+        receiver.submit(encoded.packet);
+
+        QTRY_VERIFY_WITH_TIMEOUT(!errors.isEmpty(), 2000);
+        QCOMPARE(errors.count(), 1);
+        QCOMPARE(errors.first().at(1).value<RemoteAudioReceiver::Fault>(),
+                 RemoteAudioReceiver::Fault::SpeakerTimingUnavailable);
+        receiver.stop();
+    }
     void telemetryLifetimeInterruptionsSurviveContextRestart()
     {
         AudioEngine engine;
@@ -350,6 +386,12 @@ private slots:
         QVERIFY2(errors.isEmpty(), errors.isEmpty() ? "" : qPrintable(errors.first().first().toString()));
         QVERIFY2(restarts.isEmpty(), restarts.isEmpty() ? "" : qPrintable(restarts.first().first().toString()));
         QVERIFY(receiver.concealedPackets() >= 1);
+        // Packet 8 was never submitted: exactly one real gap. Packet 5's
+        // duplicate is not a gap, so it must not inflate missingPackets.
+        const auto lossTelemetry = receiver.telemetry();
+        QCOMPARE(lossTelemetry.missingPackets, quint64(1));
+        QVERIFY(lossTelemetry.expectedPackets >= quint64(24));
+        QVERIFY(lossTelemetry.arrivalJitterMs.has_value());
         QCOMPARE(errors.count(), 0);
         QCOMPARE(restarts.count(), 0);
         source.stop();
@@ -383,6 +425,10 @@ private slots:
         QVERIFY(toneAmplitude(0, 997) > 8 * toneAmplitude(1, 997));
         QVERIFY(toneAmplitude(1, 1703) > 8 * toneAmplitude(0, 1703));
         QVERIFY(receiver.start(123, quint32(packet) * 1920u));
+        const auto restartedTelemetry = receiver.telemetry();
+        QCOMPARE(restartedTelemetry.missingPackets, quint64(0));
+        QCOMPARE(restartedTelemetry.expectedPackets, quint64(0));
+        QVERIFY(!restartedTelemetry.arrivalJitterMs.has_value());
         receiver.submit(retired); // Previous generation cannot be decoded.
         QTest::qWait(100);
         QCOMPARE(receiver.decodedPackets(), quint64(0));
@@ -558,6 +604,13 @@ private slots:
         QCOMPARE(telemetry.acceptedPackets, quint64(kPackets - 1));
         QCOMPARE(telemetry.decodedPackets, quint64(kPackets - 1));
         QCOMPARE(telemetry.concealedPackets, quint64(1));
+        // The one deliberately withheld packet (index kDroppedPacket) is a
+        // real gap; the live 100 ms/0 ms coalesced arrival pattern is
+        // spacing, never counted as loss.
+        QCOMPARE(telemetry.missingPackets, quint64(1));
+        QVERIFY(telemetry.arrivalJitterMs.has_value());
+        QVERIFY2(*telemetry.arrivalJitterMs > 5.0,
+                 qPrintable(QStringLiteral("arrivalJitterMs=%1").arg(*telemetry.arrivalJitterMs)));
         QCOMPARE(receiver.rateMatcherUnderflows(), 0);
         QCOMPARE(receiver.rateMatcherOverflows(), 0);
         QCOMPARE(restarts.count(), 0);

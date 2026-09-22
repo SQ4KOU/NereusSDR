@@ -38,6 +38,19 @@ struct RemoteAudioReceiverTelemetry {
     // Worker-observed speaker queue duration. It is unavailable before a
     // pacing sample, and for stopped or failed contexts.
     std::optional<double> speakerQueuedMs;
+    // RFC 3550 interarrival jitter and extended-sequence expected/missing
+    // accounting for this computer's admitted RTP in this context, from
+    // RtpReceptionStats. Like the packet counters above, the last measured
+    // value stays available after stop(); a later successful start() resets
+    // it. arrivalJitterMs is absent until a second packet has been observed.
+    std::optional<double> arrivalJitterMs;
+    quint64 expectedPackets = 0;
+    quint64 missingPackets = 0;
+    // Packets currently held in the jitter buffer for reordering, in ms
+    // (queued count x the buffer's 40 ms packet duration). Unlike the
+    // fields above, this is a live gauge: unavailable before a measurement
+    // and for stopped or failed contexts, like speakerQueuedMs.
+    std::optional<double> reorderQueuedMs;
 };
 
 // One generation of bounded RTP receive, Opus decoding and WDSP rate matching.
@@ -45,6 +58,16 @@ struct RemoteAudioReceiverTelemetry {
 class RemoteAudioReceiver final : public QObject {
     Q_OBJECT
 public:
+    // The fault a worker notify() site observed. Q_ENUM registers it as a
+    // real meta-type so QSignalSpy and the cross-thread Qt::QueuedConnection
+    // delivery in notify() carry it, not an opaque int.
+    enum class Fault {
+        SpeakerOpenFailed, SpeakerTimingUnavailable, SpeakerCallbackTooLarge,
+        SpeakerStalled, SpeakerWriteFailed, DecoderUnavailable,
+        ArrivalBurst, StreamGap, NoPackets, DecodeFailed, ClockBuffer,
+    };
+    Q_ENUM(Fault)
+
     explicit RemoteAudioReceiver(AudioEngine* engine, QObject* parent = nullptr);
     ~RemoteAudioReceiver() override;
     bool start(quint32 ssrc, quint32 firstTimestamp);
@@ -59,8 +82,8 @@ public:
     // jitter/resampler state nor synchronizes with the audio callback.
     RemoteAudioReceiverTelemetry telemetry() const;
 signals:
-    void restartRequested(const QString& reason);
-    void errorOccurred(const QString& reason);
+    void restartRequested(const QString& reason, NereusSDR::RemoteAudioReceiver::Fault fault);
+    void errorOccurred(const QString& reason, NereusSDR::RemoteAudioReceiver::Fault fault);
 private:
     struct Private;
     std::unique_ptr<Private> d;

@@ -971,6 +971,8 @@ set(CORE_SOURCES
     src/core/session/media/RemoteAudioContext.cpp
     src/core/session/media/AudioJitterBuffer.cpp
     src/core/session/media/RemoteAudioRateMatcher.cpp
+    # R-R3-23 Task 2: RFC 3550 jitter/sequence measurement for one receiver context.
+    src/core/session/media/RtpReceptionStats.cpp
     src/core/session/media/RemoteAudioReceiver.cpp
     # R1 Task 7: consumer-to-stream subscription set extracted from the
     # router-mutation half of MainWindow::rebuildFftRouting. Rebuilds an
