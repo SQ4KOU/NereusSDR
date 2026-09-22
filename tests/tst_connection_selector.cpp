@@ -9,6 +9,7 @@
 #include "gui/CoreTargetEditor.h"
 #include "gui/styles/AppTheme.h"
 
+#include <QAccessible>
 #include <QCheckBox>
 #include <QApplication>
 #include <QDir>
@@ -17,6 +18,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QPersistentModelIndex>
 #include <QSignalSpy>
 #include <QTest>
 #include <QTreeWidget>
@@ -54,6 +56,7 @@ class ConnectionSelectorTest final : public QObject {
 
 private slots:
     void selectionRefreshIsStableAndDoesNotConnect();
+    void refreshPreservesSelectedRowModelIdentity();
     void explicitActionsUseTheSelectedKey();
     void disconnectRemainsIndependentOfSelectedTarget();
     void editorValidatesAndPreservesSecrets();
@@ -83,6 +86,76 @@ void ConnectionSelectorTest::selectionRefreshIsStableAndDoesNotConnect()
     selector.setTargets(targets);
     QCOMPARE(selector.selectedKey(), QStringLiteral("saved-core"));
     QCOMPARE(connectSpy.count(), 0);
+}
+
+void ConnectionSelectorTest::refreshPreservesSelectedRowModelIdentity()
+{
+    ConnectionSelector selector;
+    ConnectionTargetRow first = savedRow(QStringLiteral("saved-first"));
+    first.name = QStringLiteral("First");
+    ConnectionTargetRow selected = savedRow(QStringLiteral("saved-selected"));
+    selected.name = QStringLiteral("Selected");
+    selector.setTargets({first, selected});
+
+    auto* tree = selector.findChild<QTreeWidget*>(QStringLiteral("connectionSelectorTargets"));
+    QVERIFY(tree != nullptr);
+    selector.setSelectedKey(selected.key);
+    QTreeWidgetItem* selectedItem = tree->currentItem();
+    QVERIFY(selectedItem != nullptr);
+    selector.show();
+    QCoreApplication::processEvents();
+    const QPersistentModelIndex selectedIndex = tree->indexFromItem(selectedItem, 0);
+    QVERIFY(selectedIndex.isValid());
+    QAccessibleInterface* treeInterface = QAccessible::queryAccessibleInterface(tree);
+    QVERIFY(treeInterface != nullptr);
+    QAccessibleSelectionInterface* accessibleSelection = treeInterface->selectionInterface();
+    QVERIFY(accessibleSelection != nullptr);
+    const auto currentSelectedAccessibleId = [accessibleSelection] {
+        const QList<QAccessibleInterface*> selected = accessibleSelection->selectedItems();
+        return selected.isEmpty() || selected.first() == nullptr
+            ? QAccessible::Id{} : QAccessible::uniqueId(selected.first());
+    };
+    const QList<QAccessibleInterface*> selectedInterfaces = accessibleSelection->selectedItems();
+    QVERIFY(!selectedInterfaces.isEmpty());
+    QVERIFY(selectedInterfaces.first() != nullptr);
+    const QAccessible::Id selectedAccessibleId = QAccessible::uniqueId(selectedInterfaces.first());
+    QSignalSpy resetSpy(tree->model(), &QAbstractItemModel::modelReset);
+
+    selected.state = QStringLiteral("Connected");
+    selector.setTargets({first, selected});
+
+    QCOMPARE(resetSpy.count(), 0);
+    QVERIFY(selectedIndex.isValid());
+    QCOMPARE(tree->itemFromIndex(selectedIndex), selectedItem);
+    QCOMPARE(tree->currentItem(), selectedItem);
+    QCOMPARE(selectedItem->text(3), QStringLiteral("Connected"));
+    QCOMPARE(currentSelectedAccessibleId(), selectedAccessibleId);
+
+    selector.setTargets({selected});
+
+    QCOMPARE(resetSpy.count(), 0);
+    QVERIFY(selectedIndex.isValid());
+    QCOMPARE(tree->itemFromIndex(selectedIndex), selectedItem);
+    QCOMPARE(tree->currentItem(), selectedItem);
+    QCOMPARE(selectedItem->text(3), QStringLiteral("Connected"));
+    QCOMPARE(selector.selectedKey(), selected.key);
+    const QList<QAccessibleInterface*> shiftedInterfaces = accessibleSelection->selectedItems();
+    QVERIFY(!shiftedInterfaces.isEmpty());
+    for (QAccessibleInterface* interface : shiftedInterfaces) {
+        QVERIFY(interface != nullptr);
+        QVERIFY(interface->isValid());
+    }
+
+    selector.setTargets({first});
+
+    QCOMPARE(resetSpy.count(), 0);
+    QVERIFY(!selectedIndex.isValid());
+    QVERIFY(accessibleSelection->selectedItems().isEmpty());
+    QVERIFY(tree->currentItem() == nullptr);
+    QVERIFY(selector.selectedKey().isEmpty());
+    auto* details = selector.findChild<QPushButton*>(QStringLiteral("connectionSelectorDetails"));
+    QVERIFY(details != nullptr);
+    QVERIFY(!details->isEnabled());
 }
 
 void ConnectionSelectorTest::explicitActionsUseTheSelectedKey()

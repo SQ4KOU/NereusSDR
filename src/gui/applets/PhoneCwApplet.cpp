@@ -103,6 +103,7 @@
 #include <QSlider>
 #include <QStackedWidget>
 #include <QTimer>
+#include <QVariant>
 #include <QVBoxLayout>
 #include <algorithm>
 #include <cmath>
@@ -165,6 +166,9 @@ PhoneCwApplet::PhoneCwApplet(RadioModel* model, QWidget* parent)
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
     buildUI();
     wireControls();
+    if (model && model->role() == RadioModel::Role::Remote) {
+        setTransmitPermitted(false);
+    }
 }
 
 PhoneCwApplet::~PhoneCwApplet()
@@ -856,7 +860,7 @@ void PhoneCwApplet::wireControls()
 
     // UI → Model
     connect(m_micLevelSlider, &QSlider::valueChanged, this, [this, &tx](int val) {
-        if (m_updatingFromModel) { return; }
+        if (m_updatingFromModel || !m_transmitPermitted) { return; }
         m_micLevelLabel->setText(QStringLiteral("%1 dB").arg(val));
         tx.setMicGainDb(val);
     });
@@ -875,7 +879,11 @@ void PhoneCwApplet::wireControls()
     // Mic mute state → slider enabled / greyed.
     // NOTE: micMute == true means mic IS in use; false means muted/disabled.
     connect(&tx, &TransmitModel::micMuteChanged, this, [this](bool micInUse) {
-        m_micLevelSlider->setEnabled(micInUse);
+        if (m_transmitPermitted) {
+            m_micLevelSlider->setEnabled(micInUse);
+        } else {
+            m_micLevelSlider->setProperty("PhoneCwSavedTransmitEnabled", micInUse);
+        }
     });
 
     // ── #7 PROC button + slider (CPDR speech compressor) ────────────────────
@@ -897,7 +905,7 @@ void PhoneCwApplet::wireControls()
         }
         // UI → Model
         connect(m_procBtn, &QPushButton::toggled, this, [this, &tx](bool on) {
-            if (m_updatingFromModel) { return; }
+            if (m_updatingFromModel || !m_transmitPermitted) { return; }
             tx.setCpdrOn(on);
         });
         // Model → UI
@@ -924,7 +932,7 @@ void PhoneCwApplet::wireControls()
             if (m_procValueLabel) {
                 m_procValueLabel->setText(QStringLiteral("%1 dB").arg(v));
             }
-            if (m_updatingFromModel) { return; }
+            if (m_updatingFromModel || !m_transmitPermitted) { return; }
             tx.setCpdrLevelDb(v);
         });
         // Model → UI
@@ -956,7 +964,7 @@ void PhoneCwApplet::wireControls()
         }
         // UI -> Model
         connect(m_vaxBtn, &QPushButton::toggled, this, [this, &tx](bool on) {
-            if (m_updatingFromModel) { return; }
+            if (m_updatingFromModel || !m_transmitPermitted) { return; }
             tx.toggleVaxSource(on);
         });
         // Model -> UI (mirrors button to model so external changes - profile
@@ -973,6 +981,7 @@ void PhoneCwApplet::wireControls()
         m_vaxBtn->setContextMenuPolicy(Qt::CustomContextMenu);
         connect(m_vaxBtn, &QPushButton::customContextMenuRequested, this,
                 [this](const QPoint&) {
+            if (!m_transmitPermitted) { return; }
             emit openSetupRequested(QStringLiteral("Audio"),
                                     QStringLiteral("TX Input"));
         });
@@ -998,7 +1007,7 @@ void PhoneCwApplet::wireControls()
         }
         // UI → Model
         connect(m_dexpBtn, &QPushButton::toggled, this, [this, &tx](bool on) {
-            if (m_updatingFromModel) { return; }
+            if (m_updatingFromModel || !m_transmitPermitted) { return; }
             tx.setDexpEnabled(on);
         });
         // Model → UI
@@ -1070,6 +1079,7 @@ void PhoneCwApplet::wireControls()
         m_dexpBtn->setContextMenuPolicy(Qt::CustomContextMenu);
         connect(m_dexpBtn, &QPushButton::customContextMenuRequested, this,
                 [this](const QPoint&) {
+            if (!m_transmitPermitted) { return; }
             emit openSetupRequested(QStringLiteral("Transmit"),
                                     QStringLiteral("DEXP/VOX"));
         });
@@ -1138,7 +1148,11 @@ void PhoneCwApplet::syncFromModel()
         m_micLevelSlider->setRange(caps.micGainMinDb, caps.micGainMaxDb);
         m_micLevelSlider->setValue(tx.micGainDb());
         m_micLevelLabel->setText(QStringLiteral("%1 dB").arg(tx.micGainDb()));
-        m_micLevelSlider->setEnabled(tx.micMute());
+        if (m_transmitPermitted) {
+            m_micLevelSlider->setEnabled(tx.micMute());
+        } else {
+            m_micLevelSlider->setProperty("PhoneCwSavedTransmitEnabled", tx.micMute());
+        }
         m_updatingFromModel = false;
     }
 
@@ -1188,6 +1202,50 @@ void PhoneCwApplet::syncFromModel()
     }
 
     // Other controls wired in Phase 3I-1 (Phone/FM) / Phase 3I-2 (CW)
+}
+
+void PhoneCwApplet::setTransmitPermitted(bool permitted, const QString& reason)
+{
+    m_transmitPermitted = permitted;
+    m_transmitPermissionReason = reason.isEmpty()
+        ? tr("Transmit controls are unavailable until the station handshake confirms transmit permission.")
+        : reason;
+    updateTransmitControlAvailability();
+}
+
+void PhoneCwApplet::updateTransmitControlAvailability()
+{
+    const auto apply = [this](QWidget* control) {
+        if (!control) { return; }
+        static constexpr auto kSavedTooltip = "PhoneCwSavedTransmitTooltip";
+        static constexpr auto kSavedDescription = "PhoneCwSavedTransmitDescription";
+        static constexpr auto kSavedEnabled = "PhoneCwSavedTransmitEnabled";
+        if (!m_transmitPermitted) {
+            if (!control->property(kSavedTooltip).isValid()) {
+                control->setProperty(kSavedTooltip, control->toolTip());
+                control->setProperty(kSavedDescription, control->accessibleDescription());
+                control->setProperty(kSavedEnabled, control->isEnabled());
+            }
+            control->setEnabled(false);
+            control->setToolTip(m_transmitPermissionReason);
+            control->setAccessibleDescription(m_transmitPermissionReason);
+            return;
+        }
+        if (control->property(kSavedTooltip).isValid()) {
+            control->setEnabled(control->property(kSavedEnabled).toBool());
+            control->setToolTip(control->property(kSavedTooltip).toString());
+            control->setAccessibleDescription(control->property(kSavedDescription).toString());
+            control->setProperty(kSavedTooltip, QVariant());
+            control->setProperty(kSavedDescription, QVariant());
+            control->setProperty(kSavedEnabled, QVariant());
+        }
+    };
+
+    apply(m_micLevelSlider);
+    apply(m_procBtn);
+    apply(m_procSlider);
+    apply(m_vaxBtn);
+    apply(m_dexpBtn);
 }
 
 // ── pollDexpMeters — Phase 3M-3a-iii Task 15 ─────────────────────────────────

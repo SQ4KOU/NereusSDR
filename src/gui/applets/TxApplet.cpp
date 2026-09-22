@@ -1300,7 +1300,7 @@ void TxApplet::wireControls()
         // hidden-but-alive instance is brought forward.
         connect(m_eqBtn, &QPushButton::customContextMenuRequested,
                 this, [this](const QPoint& /*pos*/) {
-            if (!m_model) { return; }
+            if (!m_model || !m_transmitPermitted) { return; }
             TxEqDialog* dlg = TxEqDialog::instance(m_model, this);
             dlg->show();
             dlg->raise();

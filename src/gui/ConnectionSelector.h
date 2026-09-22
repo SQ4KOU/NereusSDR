@@ -68,6 +68,9 @@ signals:
 private:
     void addGroup(const QString& title, ConnectionTargetKind kind,
                   const QString& emptyText, const QList<ConnectionTargetRow>& targets);
+    QTreeWidgetItem* groupForKind(ConnectionTargetKind kind) const;
+    bool groupStructureMatches(ConnectionTargetKind kind,
+                               const QList<ConnectionTargetRow>& targets) const;
     const ConnectionTargetRow* selectedTarget() const;
     void updateActions();
     QPushButton* makeButton(const QString& text, const QString& objectName);

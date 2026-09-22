@@ -811,7 +811,7 @@ private:
     //
     // Ownership: WdspEngine.  Lifetime: must outlive the WDSP DEXP DSP
     // module (pdexp[id]) — the WDSP module retains the raw pointer set
-    // by create_dexp until destroy_dexp clears it.  destroyTxChannel
+    // by create_dexp until destroy_dexp frees the module. destroyTxChannel
     // destroys the WDSP DEXP via destroy_dexp BEFORE erasing this map,
     // so the ordering is correct.
     std::map<int, std::vector<double>> m_dexpBuffers;

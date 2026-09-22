@@ -73,6 +73,23 @@ ctest --test-dir build-integration -j6 --output-on-failure
 
 ## Pending acceptance
 
+### September 22 operating-message correction
+
+The installed `c28e1565` Core configuration omits both aggregate limit keys,
+as expected while hardware measurements remain open. The GUI nevertheless
+painted "Core does not advertise aggregate display capacity" on every pan.
+The operator reported that this internal terminology was unhelpful. The
+compatibility branch now leaves the normal display clear and logs the missing
+descriptor when media becomes ready. Actual allocation failure/limiting states
+remain visible. No new limits or network policy were selected for this change.
+
+The authenticated remote-display lifecycle fixture checks an absent descriptor,
+an empty overlay and continued rendered frames. The rebuilt controller and TX
+widget targets passed together, 2/2 in 13.20 s. Installation of this correction
+is pending the combined checkpoint checks.
+
+### Remaining hardware work
+
 - Measure one/four/floating/shared-source pan workloads with both FFT tiers,
   WDSP, mixed stereo Opus and 3D on the Rock 5C; select production limits only
   from those measurements. The independent Pi 4 floor remains unmeasured.

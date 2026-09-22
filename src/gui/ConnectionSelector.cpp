@@ -21,6 +21,7 @@ namespace NereusSDR {
 namespace {
 
 constexpr int kKeyRole = Qt::UserRole;
+constexpr int kKindRole = Qt::UserRole + 1;
 
 void configurePlainTextLabel(QLabel* label)
 {
@@ -154,7 +155,17 @@ void ConnectionSelector::setTargets(const QList<ConnectionTargetRow>& targets)
         }
     }
 
-    m_targetTree->clear();
+    const bool structureChanges =
+        !groupStructureMatches(ConnectionTargetKind::LocalRadio, localRadios)
+        || !groupStructureMatches(ConnectionTargetKind::LanCore, lanCores)
+        || !groupStructureMatches(ConnectionTargetKind::SavedCore, savedCores);
+    if (structureChanges && !previousKey.isEmpty()) {
+        // Clear the selection before removing rows. Qt's macOS accessibility
+        // bridge keeps separate table and selection caches; deleting the
+        // selected interface during a model reset can leave it with a stale
+        // pointer while AppKit is enumerating accessibilitySelectedChildren.
+        m_targetTree->setCurrentItem(nullptr);
+    }
     addGroup(tr("Radios on this network"), ConnectionTargetKind::LocalRadio,
              tr("No radios found on this network."), localRadios);
     addGroup(tr("Stations on this network"), ConnectionTargetKind::LanCore,
@@ -216,26 +227,124 @@ void ConnectionSelector::addGroup(const QString& title, ConnectionTargetKind kin
                                   const QString& emptyText,
                                   const QList<ConnectionTargetRow>& targets)
 {
-    auto* group = new QTreeWidgetItem(m_targetTree, {title});
-    group->setFirstColumnSpanned(true);
-    group->setFlags(Qt::ItemIsEnabled);
-    group->setExpanded(true);
+    QTreeWidgetItem* group = groupForKind(kind);
+    if (group == nullptr) {
+        group = new QTreeWidgetItem(m_targetTree, {title});
+        group->setData(0, kKindRole, static_cast<int>(kind));
+        group->setFirstColumnSpanned(true);
+        group->setFlags(Qt::ItemIsEnabled);
+    } else if (group->text(0) != title) {
+        group->setText(0, title);
+    }
 
     if (targets.isEmpty()) {
-        auto* empty = new QTreeWidgetItem(group, {emptyText});
-        empty->setFirstColumnSpanned(true);
-        empty->setFlags(Qt::ItemIsEnabled);
+        QTreeWidgetItem* empty = nullptr;
+        if (group->childCount() == 1 && group->child(0)->data(0, kKeyRole).toString().isEmpty()) {
+            empty = group->child(0);
+            if (empty->text(0) != emptyText) {
+                empty->setText(0, emptyText);
+            }
+        } else {
+            while (group->childCount() > 0) {
+                delete group->takeChild(group->childCount() - 1);
+            }
+            empty = new QTreeWidgetItem(group, {emptyText});
+            empty->setFirstColumnSpanned(true);
+            empty->setFlags(Qt::ItemIsEnabled);
+        }
+        group->setExpanded(true);
         return;
     }
 
+    QList<QString> unmatchedKeys;
+    unmatchedKeys.reserve(targets.size());
     for (const ConnectionTargetRow& target : targets) {
-        auto* row = new QTreeWidgetItem(group,
-                                        {target.name, target.radioText,
-                                         target.address, target.state});
-        row->setData(0, kKeyRole, target.key);
-        row->setData(0, kKeyRole + 1, static_cast<int>(kind));
-        row->setFlags(Qt::ItemIsEnabled | Qt::ItemIsSelectable);
+        unmatchedKeys.append(target.key);
     }
+    for (int childIndex = group->childCount() - 1; childIndex >= 0; --childIndex) {
+        const QString key = group->child(childIndex)->data(0, kKeyRole).toString();
+        const int match = unmatchedKeys.lastIndexOf(key);
+        if (key.isEmpty() || match < 0) {
+            delete group->takeChild(childIndex);
+        } else {
+            unmatchedKeys.removeAt(match);
+        }
+    }
+
+    for (int targetIndex = 0; targetIndex < targets.size(); ++targetIndex) {
+        const ConnectionTargetRow& target = targets.at(targetIndex);
+        QTreeWidgetItem* row = nullptr;
+        if (targetIndex < group->childCount()
+            && group->child(targetIndex)->data(0, kKeyRole).toString() == target.key) {
+            row = group->child(targetIndex);
+        } else {
+            for (int childIndex = targetIndex + 1; childIndex < group->childCount(); ++childIndex) {
+                if (group->child(childIndex)->data(0, kKeyRole).toString() == target.key) {
+                    row = group->takeChild(childIndex);
+                    group->insertChild(targetIndex, row);
+                    break;
+                }
+            }
+            if (row == nullptr) {
+                row = new QTreeWidgetItem();
+                group->insertChild(targetIndex, row);
+            }
+        }
+
+        const QStringList text{target.name, target.radioText, target.address, target.state};
+        for (int column = 0; column < text.size(); ++column) {
+            if (row->text(column) != text.at(column)) {
+                row->setText(column, text.at(column));
+            }
+        }
+        if (row->data(0, kKeyRole).toString() != target.key) {
+            row->setData(0, kKeyRole, target.key);
+        }
+        if (row->data(0, kKindRole).toInt() != static_cast<int>(kind)) {
+            row->setData(0, kKindRole, static_cast<int>(kind));
+        }
+        const Qt::ItemFlags rowFlags = Qt::ItemIsEnabled | Qt::ItemIsSelectable;
+        if (row->flags() != rowFlags) {
+            row->setFlags(rowFlags);
+        }
+    }
+    while (group->childCount() > targets.size()) {
+        delete group->takeChild(group->childCount() - 1);
+    }
+    group->setExpanded(true);
+}
+
+QTreeWidgetItem* ConnectionSelector::groupForKind(ConnectionTargetKind kind) const
+{
+    for (int index = 0; index < m_targetTree->topLevelItemCount(); ++index) {
+        QTreeWidgetItem* group = m_targetTree->topLevelItem(index);
+        if (group->data(0, kKindRole).toInt() == static_cast<int>(kind)) {
+            return group;
+        }
+    }
+    return nullptr;
+}
+
+bool ConnectionSelector::groupStructureMatches(
+    ConnectionTargetKind kind, const QList<ConnectionTargetRow>& targets) const
+{
+    const QTreeWidgetItem* group = groupForKind(kind);
+    if (group == nullptr) {
+        return false;
+    }
+    if (targets.isEmpty()) {
+        return group->childCount() == 1
+            && group->child(0)->data(0, kKeyRole).toString().isEmpty();
+    }
+    if (group->childCount() != targets.size()) {
+        return false;
+    }
+    for (int index = 0; index < targets.size(); ++index) {
+        if (group->child(index)->data(0, kKeyRole).toString() != targets.at(index).key) {
+            return false;
+        }
+    }
+    return true;
 }
 
 const ConnectionTargetRow* ConnectionSelector::selectedTarget() const

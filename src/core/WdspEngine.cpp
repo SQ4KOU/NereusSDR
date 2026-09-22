@@ -24,6 +24,8 @@
 //                 create_dexp callsite below for the full root-cause /
 //                 buffer-architecture narrative.
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-22 — Correct TX wrapper/DEXP teardown lifetime and upstream close
+//                 ordering. J.J. Boyd (KG4VCF), assisted by OpenAI Codex.
 // =================================================================
 
 /*  cmaster.c
@@ -69,6 +71,15 @@ warren@wpratt.com
 #include <QStandardPaths>
 #include <QTimer>
 #include <QThread>
+
+#ifdef HAVE_WDSP
+// Opaque WDSP lookup slot, as in TxChannel.cpp. dexp.h requires internal
+// C DSP types; the owner only needs to clear this pointer after destruction.
+extern "C" {
+struct _dexp;
+extern _dexp* pdexp[];
+}
+#endif
 
 namespace NereusSDR {
 
@@ -1311,22 +1322,21 @@ void WdspEngine::destroyTxChannel(int channelId)
     // Deactivate with drain before closing.
     // dmode=1: drain-mode close (mirrors destroyRxChannel pattern).
     SetChannelState(channelId, 0, 1);
+#endif
 
-    // Phase 3M-3a-iii Task 20: tear down the DEXP DSP module before closing
-    // the channel.  Mirrors Thetis cmaster.c:267 [v2.10.3.13] which calls
-    // destroy_dexp(i) BEFORE CloseChannel at cmaster.c:265 inside
-    // destroy_xmtr.  After destroy_dexp returns, pdexp[channelId] is nullptr
-    // again, which restores the pre-create_dexp state — any callback already
-    // in flight on the WDSP audio worker thread becomes a no-op when it
-    // executes (TxChannel::unregisterVoxCallback ran ahead of this in the
-    // ~TxChannel destructor, which itself ran when m_txChannels.erase()
-    // below destroys the unique_ptr — but we'll see that erase happens AFTER
-    // this destroy_dexp call, so the order is: WDSP DEXP module dies first,
-    // then the C++ wrapper).
-    destroy_dexp(channelId);
+    // The C++ wrapper unregisters its VOX callback through the live DEXP
+    // object. Retire it before either WDSP object is destroyed. The owner
+    // has already stopped the TX pump before channel teardown.
+    m_txChannels.erase(it);
 
-    // Close the WDSP TX channel.
+#ifdef HAVE_WDSP
+    // From Thetis cmaster.c:265-267 [v2.10.3.15]: destroy_xmtr closes
+    // the channel BEFORE destroying its DEXP module.
     CloseChannel(channelId);
+    destroy_dexp(channelId);
+    // destroy_dexp frees the object but does not clear WDSP's lookup slot.
+    // Native wrapper guards use a null slot to recognize absent DEXP.
+    pdexp[channelId] = nullptr;
 #endif
 
     // Drop the DEXP buffer slot regardless of HAVE_WDSP — the non-HAVE_WDSP
@@ -1334,7 +1344,6 @@ void WdspEngine::destroyTxChannel(int channelId)
     // hold for both build configs.  Erase is idempotent on a missing key.
     m_dexpBuffers.erase(channelId);
 
-    m_txChannels.erase(it);
     qCInfo(lcDsp) << "Destroyed TX channel" << channelId;
 }
 

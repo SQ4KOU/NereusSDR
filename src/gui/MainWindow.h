@@ -899,6 +899,7 @@ private:
     // lifetime of MainWindow.  Hidden on close, never destroyed.
     PsForm* m_psForm{nullptr};
     QAction* m_actPureSignal{nullptr};
+    QAction* m_actTxEqualizer{nullptr};
     QAction* m_actDspPureSignal{nullptr};
 
     // Phase 3J-2 H1: Tools > Spot Hub... and Tools > FreeDV Reporter...

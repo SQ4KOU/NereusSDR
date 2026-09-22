@@ -1053,6 +1053,8 @@ void MainWindow::ensureRemoteSession()
                 this, &MainWindow::refreshRemoteConnectionUi);
         connect(m_stationClient, &StationClient::connectionActivityChanged,
                 this, &MainWindow::applyRemoteRoleGating);
+        connect(m_radioModel, &RadioModel::stationLinkStateChanged,
+                this, &MainWindow::applyRemoteRoleGating);
         m_remoteMedia = new RemoteMediaController(m_stationClient, m_radioModel,
                                                m_panStack, m_stationClient);
         m_remoteTelemetry = new RemoteTelemetryController(
@@ -1504,6 +1506,8 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     // so its right-click antenna submenu builds AntennaPickerMenu with live
     // caps + alex + slice (instead of the stub ANT1/ANT2 list).
     newFlag->setRadioModel(m_radioModel);
+    newFlag->setTransmitPermitted(transmitControlsPermitted(),
+        tr("Remote transmit controls are not available from this Core yet."));
     wireRadeFlagForTest(m_radioModel, newFlag, sliceIndex);
     if (TxSliceArbiter* arb = m_radioModel->txSliceArbiter()) {
         newFlag->setTxSlice(arb->txBoundSliceId() == sliceIndex);
@@ -7439,10 +7443,12 @@ void MainWindow::buildMenuBar()
     // TX Equalizer: modeless singleton dialog (Phase 3M-3a-i Batch 3 A.1).
     {
         QAction* txEqAction = toolsMenu->addAction(QStringLiteral("TX &Equalizer..."));
+        m_actTxEqualizer = txEqAction;
+        txEqAction->setObjectName(QStringLiteral("toolsTxEqualizer"));
         txEqAction->setToolTip(QStringLiteral(
             "Open the 10-band TX EQ dialog (preamp + 10 band gains + center frequencies)."));
         connect(txEqAction, &QAction::triggered, this, [this]() {
-            if (!m_radioModel) { return; }
+            if (!transmitControlsPermitted()) { return; }
             TxEqDialog* dlg = TxEqDialog::instance(m_radioModel, this);
             dlg->show();
             dlg->raise();
@@ -9308,6 +9314,8 @@ void MainWindow::wireSliceToSpectrum()
     // Phase 3F closeout — give Slice A's VfoWidget the RadioModel pointer so
     // contextMenuEvent builds AntennaPickerMenu instead of the stub fallback.
     vfo->setRadioModel(m_radioModel);
+    vfo->setTransmitPermitted(transmitControlsPermitted(),
+        tr("Remote transmit controls are not available from this Core yet."));
     connect(m_radioModel, &RadioModel::currentRadioChanged, vfo,
             [this, vfo]() {
         vfo->setBoardCapabilities(m_radioModel->boardCapabilities());
@@ -10071,6 +10079,8 @@ SetupDialog* MainWindow::createSetupDialog()
     }
 
     auto* dialog = new SetupDialog(m_radioModel, this);
+    dialog->setTransmitPermitted(transmitControlsPermitted(),
+        tr("Remote transmit controls are not available from this Core yet."));
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     wireSetupDialog(dialog);
     return dialog;
@@ -10094,9 +10104,23 @@ void MainWindow::applyRemoteRoleGating()
     const bool active = m_stationClient != nullptr
         && m_stationClient->isConnectionActive();
     const bool transmitPermitted = transmitControlsPermitted();
-    const QString transmitReason = tr("Remote transmit is unavailable in this receive-only build (R4).");
+    const QString transmitReason = tr("Remote transmit controls are not available from this Core yet.");
     if (m_txApplet) {
         m_txApplet->setTransmitPermitted(transmitPermitted, transmitReason);
+    }
+    if (m_phoneCwApplet) {
+        m_phoneCwApplet->setTransmitPermitted(transmitPermitted, transmitReason);
+    }
+    for (VfoWidget* flag : m_vfoWidgetsBySlice) {
+        if (flag) { flag->setTransmitPermitted(transmitPermitted, transmitReason); }
+    }
+    for (SetupDialog* dialog : findChildren<SetupDialog*>()) {
+        dialog->setTransmitPermitted(transmitPermitted, transmitReason);
+    }
+    if (m_actTxEqualizer) {
+        m_actTxEqualizer->setEnabled(transmitPermitted);
+        m_actTxEqualizer->setToolTip(transmitPermitted
+            ? tr("Open the TX equalizer.") : transmitReason);
     }
     if (m_tunerApplet) {
         m_tunerApplet->setTransmitPermitted(transmitPermitted, transmitReason);

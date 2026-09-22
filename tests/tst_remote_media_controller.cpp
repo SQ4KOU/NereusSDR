@@ -964,6 +964,8 @@ private slots:
         QTRY_COMPARE(daemon.activeEndpointCount(), 1);
         QTRY_COMPARE(daemon.activeSourceCount(), 1);
         QTRY_COMPARE(controller.activeEndpointCount(), 1);
+        QVERIFY(!client.remoteDisplayBudgetLimits());
+        QVERIFY(first->remoteDisplayStatus().isEmpty());
         const QJsonObject firstSubscription = lastControl(controls, QStringLiteral("subscribe"));
         const quint32 firstEndpoint = quint32(firstSubscription.value(QStringLiteral("endpointId")).toDouble());
         QVERIFY(firstEndpoint != 0);
@@ -980,6 +982,7 @@ private slots:
                 && firstWidget->dssRowsPushedForTest() > 0;
         };
         QTRY_VERIFY_WITH_TIMEOUT(feedFirst(), 5000);
+        QVERIFY(first->remoteDisplayStatus().isEmpty());
         const int rowsBeforeReparent = firstWidget->dssRowsPushedForTest();
         const QByteArray stalePacket = sourceMedia->displayPackets.constLast();
         QVERIFY(!stalePacket.isEmpty());

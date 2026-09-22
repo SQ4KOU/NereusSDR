@@ -6693,6 +6693,9 @@ nereus_add_test(tst_settings_proxy)
 nereus_add_test(tst_remote_gui_gating)
 target_compile_definitions(tst_remote_gui_gating PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_remote_connection_controls fakes/LoopbackTransport.cpp)
+nereus_add_test(tst_remote_tx_widgets)
+nereus_add_test(tst_remote_tx_presentation fakes/LoopbackTransport.cpp)
+target_compile_definitions(tst_remote_tx_presentation PRIVATE NEREUS_BUILD_TESTS)
 
 # R-R3-38: client-only saved Core credentials and coherent CLI selection.
 nereus_add_test(tst_core_target_store)

@@ -669,6 +669,15 @@ unfinished.
 
 ## Applet S-meter correction, September 21
 
+September 22 follow-up: the operator again reported a nonworking meter on
+`c28e1565`. Native inspection at 18:00:56 UTC showed selected slice A and the
+applet both at -107 dBm; at 18:04:13, after operator changes, selected slice B
+and the applet both showed -88 dBm while A showed -93 and C -111. Source tracing
+confirmed the remote reading and active-slice selection paths. This establishes
+that it was updating at those observations, not that an intermittent fault was
+fixed. No meter code was changed; clarification of the reported failure is
+pending. The rebuilt 740-target suite, including meter regressions, passed.
+
 The operator confirmed that the large applet meter remained unresponsive.
 Its `MeterPoller` still waited for and polled the GUI's local RxChannel,
 which is inactive in the remote role. The existing mirrored per-slice value

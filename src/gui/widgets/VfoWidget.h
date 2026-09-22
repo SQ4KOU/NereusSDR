@@ -509,6 +509,10 @@ public slots:
     // Phase 3P-I-b T9 — reflect AlexController::rxOutOnTx state into the BYPS button.
     void setRxBypassActive(bool on);
 
+    // Remote-station presentation gate.  TX-only XIT, TX-slice handoff, and
+    // RX-bypass-on-TX remain displayed but cannot issue client or station work.
+    void setTransmitPermitted(bool permitted, const QString& reason = QString());
+
     // Phase 3F closeout — non-owning RadioModel pointer used by contextMenuEvent
     // to construct an AntennaPickerMenu with the live slice, AlexController, and
     // BoardCapabilities. Without this set, the antenna submenu falls back to a
@@ -678,6 +682,9 @@ private:
     bool m_hasRxBypassRelay{false};    // Phase 3P-I-b T9 — BYPS button gate (caps)
     bool m_hasRxOutOnTxUi{false};      // Phase 3P-I-b T9 — BYPS button gate (SKU)
     bool m_smallFilterMode{false};     // Task 3.4 — small filter display
+    bool m_transmitPermitted{true};
+    QString m_transmitPermissionReason;
+    void updateTransmitControlAvailability();
 
     // B3: stored caps + SKU profile for AntennaPopupBuilder in popup lambdas.
     std::optional<BoardCapabilities> m_popupCaps;

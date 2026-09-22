@@ -90,9 +90,13 @@ new priority, not a substitution for the full plan.
    reachability guidance and documentation. Basic usable selection is step 2,
    rather than being held for this final phase.
 
-The last matching installed Core/GUI checkpoint was `55e7d49f`. After a reboot,
-empty installation files required restoring the verified `3402d171` Core; the
-matching selector installation is pending (see its evidence). Source completion,
+The matching selector Core/GUI checkpoint `c28e1565` is installed. Its full
+desktop suite passed 738/738, the fresh native build passed, and the GUI
+authenticated and received audio/spectrum. Actual IPv4 LAN announcements
+reached the Mac. Native selector interaction is pending because the Mac was
+locked; smooth-audio/soak acceptance also remains open. After an earlier reboot,
+empty installation files required restoring the verified `3402d171` Core;
+that verified version is the durable rollback for `c28e1565`. Source completion,
 deployment and operator acceptance are separate evidence. R4 remains part of the objective;
 R3's current TX-disabled runtime is an intermediate boundary, not the product's
 final feature scope.
@@ -550,6 +554,13 @@ advertising it. Preserve explicit operator add/layout operations after hydrate.
   status. Keep automatic panel callbacks separate from explicit connect.
   Disable unavailable local-resource controls with a reason, and gate all
   TX entry points using the negotiated permission while retaining Core guards.
+  The remaining named TX-presentation pass covers Phone/CW MIC/PROC/VAX/DEXP,
+  XIT, TX-slice handoff, RX-bypass-on-TX, Tools TX Equalizer, and the six TX
+  Setup leaves. It consumes the existing `txPermitted` capability; it does not
+  implement or remove R4's station TX commands. Preserve local operation,
+  receive controls and the separate local-DSP resource gate. VAX Setup is
+  receive export and is not classified as a TX page. See the
+  [control matrix](2026-09-20-remote-daemon-r3-verification/remote-controls.md).
 - [ ] Reproduce the extra-slice startup through the actual connection,
   snapshot and `populateEmptyPans` path. Separate hydration/layout restoration
   from explicit operator creation; do not delete an existing station slice

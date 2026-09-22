@@ -152,6 +152,8 @@ Q_LOGGING_CATEGORY(lcSetupTiming, "nereus.setup.timing")
 SetupDialog::SetupDialog(RadioModel* model, QWidget* parent)
     : QDialog(parent), m_model(model)
 {
+    m_transmitPermitted = model && model->ownsLocalDsp();
+    m_transmitReason = tr("Remote transmit controls are not available from this Core yet.");
     setWindowTitle("NereusSDR Settings");
     setMinimumSize(820, 600);
     resize(900, 650);
@@ -181,8 +183,19 @@ SetupDialog::SetupDialog(RadioModel* model, QWidget* parent)
     m_stack = new QStackedWidget;
     m_stack->setStyleSheet("QStackedWidget { background: #0f0f1a; }");
 
+    auto* pageContainer = new QWidget;
+    auto* pageLayout = new QVBoxLayout(pageContainer);
+    pageLayout->setContentsMargins(0, 0, 0, 0);
+    m_transmitNotice = new QLabel(pageContainer);
+    m_transmitNotice->setObjectName(QStringLiteral("setupTransmitUnavailable"));
+    m_transmitNotice->setWordWrap(true);
+    m_transmitNotice->setMargin(12);
+    m_transmitNotice->setStyleSheet(QStringLiteral("QLabel { color: #c8d8e8; background: #1a2a3a; }"));
+    m_transmitNotice->hide();
+    pageLayout->addWidget(m_transmitNotice);
+    pageLayout->addWidget(m_stack, 1);
     splitter->addWidget(m_tree);
-    splitter->addWidget(m_stack);
+    splitter->addWidget(pageContainer);
     splitter->setStretchFactor(0, 0);
     splitter->setStretchFactor(1, 1);
 
@@ -306,11 +319,16 @@ void SetupDialog::setTciServer(NereusSDR::TciServer* server)
 
 QTreeWidgetItem* SetupDialog::registerPage(QTreeWidgetItem* parent,
                                           const QString& label,
-                                          std::function<QWidget*()> factory)
+                                          std::function<QWidget*()> factory,
+                                          bool requiresTransmit)
 {
     auto* item = new QTreeWidgetItem(parent, QStringList{label});
     item->setData(0, Qt::UserRole, static_cast<int>(m_pages.size()));
-    m_pages.push_back(PageEntry{label, std::move(factory), nullptr, -1});
+    m_pages.push_back(PageEntry{label, std::move(factory), nullptr, -1,
+                               requiresTransmit, false});
+    if (requiresTransmit && !m_transmitPermitted) {
+        item->setToolTip(0, m_transmitReason);
+    }
     return item;
 }
 
@@ -372,6 +390,7 @@ QWidget* SetupDialog::realizePage(int entryIndex)
     // The names below are therefore the running set for the whole dialog,
     // not this page's alone; the verdict is per-page, the names are a hint.
     if (gateRemotePages && m_model->localDspHandOutCount() > handOutsBefore) {
+        entry.localDspUnavailable = true;
         page->setEnabled(false);
         qCWarning(lcSetupTiming)
             << "Setup page" << entry.label
@@ -382,6 +401,7 @@ QWidget* SetupDialog::realizePage(int entryIndex)
 
     entry.widget     = page;
     entry.stackIndex = m_stack->addWidget(page);
+    refreshTransmitPresentation();
     qCDebug(lcSetupTiming) << "realized page" << entry.label
                            << "elapsed (ms):" << realizeTimer.elapsed();
     return page;
@@ -394,6 +414,41 @@ void SetupDialog::showPageAt(int entryIndex)
     }
     m_stack->setCurrentIndex(
         m_pages[static_cast<std::size_t>(entryIndex)].stackIndex);
+    refreshTransmitPresentation();
+}
+
+void SetupDialog::setTransmitPermitted(bool permitted, const QString& reason)
+{
+    m_transmitPermitted = permitted;
+    m_transmitReason = reason.isEmpty()
+        ? tr("Remote transmit controls are not available from this Core yet.") : reason;
+    refreshTransmitPresentation();
+}
+
+void SetupDialog::refreshTransmitPresentation()
+{
+    bool showNotice = false;
+    for (const PageEntry& entry : m_pages) {
+        if (!entry.requiresTransmit || !entry.widget) { continue; }
+        // A negotiated TX permission cannot make this client's absent DSP
+        // available. Preserve the independent resource gate and child rules.
+        entry.widget->setEnabled(m_transmitPermitted && !entry.localDspUnavailable);
+        entry.widget->setToolTip(m_transmitPermitted ? QString() : m_transmitReason);
+        if (m_stack->currentWidget() == entry.widget && !m_transmitPermitted) {
+            showNotice = true;
+        }
+    }
+    QTreeWidgetItemIterator it(m_tree);
+    while (*it) {
+        const int index = (*it)->data(0, Qt::UserRole).toInt();
+        if (index >= 0 && index < static_cast<int>(m_pages.size())
+            && m_pages[static_cast<std::size_t>(index)].requiresTransmit) {
+            (*it)->setToolTip(0, m_transmitPermitted ? QString() : m_transmitReason);
+        }
+        ++it;
+    }
+    m_transmitNotice->setText(m_transmitReason);
+    m_transmitNotice->setVisible(showNotice);
 }
 
 int SetupDialog::pageEntryIndex(const QString& label) const
@@ -595,7 +650,7 @@ void SetupDialog::buildTree()
     registerPage(audio, "Devices",
                  [this] { return wrapWithAudioBackendStrip(new AudioDevicesPage(m_model)); });
     registerPage(audio, "TX Input",  // I.1
-                 [this] { return wrapWithAudioBackendStrip(new AudioTxInputPage(m_model)); });
+                 [this] { return wrapWithAudioBackendStrip(new AudioTxInputPage(m_model)); }, true);
     registerPage(audio, "VAX",
                  [this] { return wrapWithAudioBackendStrip(new AudioVaxPage(m_model)); });
     registerPage(audio, "TCI",
@@ -616,7 +671,7 @@ void SetupDialog::buildTree()
             m_model,
             m_model ? m_model->micProfileManager() : nullptr,
             m_model ? &m_model->transmitModel() : nullptr);
-    });
+    }, true);
 
     tick("Audio");
 
@@ -715,8 +770,8 @@ void SetupDialog::buildTree()
 
     // ── Transmit ──────────────────────────────────────────────────────────────
     QTreeWidgetItem* transmit = addCategory("Transmit");
-    registerPage(transmit, "Power",       [this] { return new PowerPage(m_model);      });
-    registerPage(transmit, "TX Profiles", [this] { return new TxProfilesPage(m_model); });
+    registerPage(transmit, "Power",       [this] { return new PowerPage(m_model);      }, true);
+    registerPage(transmit, "TX Profiles", [this] { return new TxProfilesPage(m_model); }, true);
 
     // SpeechProcessorPage is the TX dashboard (3M-3a-i Batch 5).  Its
     // openSetupRequested(category, page) signal feeds straight back into
@@ -729,7 +784,7 @@ void SetupDialog::buildTree()
             selectPage(page);
         });
         return speechPage;
-    });
+    }, true);
 
     // Note: Setup → Transmit → PureSignal page retired in Phase 3M-4 Task 14
     // (no Thetis equivalent; PsForm at Tools > PureSignal is the entire PS
@@ -742,7 +797,7 @@ void SetupDialog::buildTree()
     // from the legacy DSP > VOX/DEXP placeholder above (line 245), which
     // remains a lightweight 4-control disabled stub for back-compat with
     // the Thetis tpDSPVOX tab IA.
-    registerPage(transmit, "DEXP/VOX", [this] { return new DexpVoxPage(m_model); });
+    registerPage(transmit, "DEXP/VOX", [this] { return new DexpVoxPage(m_model); }, true);
 
     // 2026-05-22 menu cleanup: the standalone "PGXL Interlock" entry that
     // previously lived here is removed. The same controls live under

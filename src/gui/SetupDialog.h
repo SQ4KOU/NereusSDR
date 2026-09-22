@@ -16,6 +16,7 @@
 #include <QTreeWidget>
 #include <QStackedWidget>
 #include <QSplitter>
+#include <QLabel>
 
 #include <functional>
 #include <vector>
@@ -48,6 +49,7 @@ public:
 
     // Navigate to a page by its label text (e.g. "AGC/ALC").
     void selectPage(const QString& label);
+    void setTransmitPermitted(bool permitted, const QString& reason = QString());
 
     // Phase 3J-1 bench fix (2026-05-11): wire the live TciServer state into
     // the CatTciServerPage's Server group box title and Status label.  Pass
@@ -124,12 +126,16 @@ private:
         std::function<QWidget*()> factory;
         QWidget*                  widget     = nullptr;
         int                       stackIndex = -1;
+        bool                      requiresTransmit = false;
+        bool                      localDspUnavailable = false;
     };
 
     // Registration phase: create the tree leaf and record its factory. The
     // leaf's Qt::UserRole holds the m_pages index (categories hold -1).
     QTreeWidgetItem* registerPage(QTreeWidgetItem* parent, const QString& label,
-                                  std::function<QWidget*()> factory);
+                                  std::function<QWidget*()> factory,
+                                  bool requiresTransmit = false);
+    void refreshTransmitPresentation();
 
     // Realization phase: build the page if it has not been built yet, add it
     // to the stack, and return it. Returns nullptr for an out-of-range index
@@ -150,6 +156,9 @@ private:
     RadioModel*      m_model   = nullptr;
     QTreeWidget*     m_tree    = nullptr;
     QStackedWidget*  m_stack   = nullptr;
+    QLabel*         m_transmitNotice = nullptr;
+    bool            m_transmitPermitted = false;
+    QString         m_transmitReason;
 
     std::vector<PageEntry> m_pages;
 

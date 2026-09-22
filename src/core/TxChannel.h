@@ -2831,9 +2831,8 @@ private:
     // that was passed to create_dexp at TX-channel-create time (see
     // WdspEngine.cpp createTxChannel).  Set once by WdspEngine::
     // createTxChannel via setDexpBuffer right after construction; stays
-    // valid for the life of the wrapper because WdspEngine destroys the
-    // C++ wrapper (m_txChannels.erase) AFTER it tears down the DEXP
-    // module (destroy_dexp).
+    // valid for the life of the wrapper: WdspEngine retires the C++
+    // wrapper/callback before destroying DEXP, then releases the buffer.
     //
     // Initialised nullptr so pumpDexp degrades to a no-op in test builds
     // that construct TxChannel directly without going through

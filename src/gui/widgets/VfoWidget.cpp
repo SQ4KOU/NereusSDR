@@ -292,6 +292,7 @@ warren@wpratt.com
 #include <QHBoxLayout>
 #include <QGridLayout>
 #include <QMenu>
+#include <QVariant>
 #include <QFontDatabase>
 #include <QSignalBlocker>
 
@@ -580,7 +581,7 @@ void VfoWidget::buildHeaderRow()
         "Maps to Thetis chkRxOutOnTx (Alex.cs:61)."));
     m_rxBypassBtn->setVisible(false);  // hidden until setBoardCapabilities + setHpsdrSku confirm gates
     connect(m_rxBypassBtn, &QPushButton::toggled, this, [this](bool on) {
-        if (m_updatingFromModel) { return; }
+        if (m_updatingFromModel || !m_transmitPermitted) { return; }
         emit rxBypassToggled(on);
     });
     hdr->addWidget(m_rxBypassBtn);
@@ -631,6 +632,7 @@ void VfoWidget::buildHeaderRow()
 
     // TX badge
     m_txBadge = new QPushButton(QStringLiteral("TX"), this);
+    m_txBadge->setObjectName(QStringLiteral("VfoTxBadge"));
     m_txBadge->setFixedSize(28, 18);
     m_txBadge->setCheckable(true);
     m_txBadge->setStyleSheet(
@@ -1699,6 +1701,7 @@ void VfoWidget::buildXRitTab()
         row->setSpacing(4);
 
         m_ritBtn = new QPushButton(QStringLiteral("RIT"), ritWidget);
+        m_ritBtn->setObjectName(QStringLiteral("VfoRitButton"));
         m_ritBtn->setCheckable(true);
         m_ritBtn->setStyleSheet(vfoDspToggleStyle());
         m_ritBtn->setFixedHeight(22);
@@ -1716,6 +1719,7 @@ void VfoWidget::buildXRitTab()
         row->addWidget(m_ritLabel, 1);
 
         m_ritZeroBtn = new QPushButton(QStringLiteral("0"), ritWidget);
+        m_ritZeroBtn->setObjectName(QStringLiteral("VfoRitZeroButton"));
         m_ritZeroBtn->setFixedWidth(20);
         m_ritZeroBtn->setFlat(true);
         m_ritZeroBtn->setStyleSheet(kZeroBtn);
@@ -1732,6 +1736,7 @@ void VfoWidget::buildXRitTab()
         row->setSpacing(4);
 
         m_xitBtn = new QPushButton(QStringLiteral("XIT"), ritWidget);
+        m_xitBtn->setObjectName(QStringLiteral("VfoXitButton"));
         m_xitBtn->setCheckable(true);
         m_xitBtn->setStyleSheet(vfoDspToggleStyle());
         m_xitBtn->setFixedHeight(22);
@@ -1742,6 +1747,7 @@ void VfoWidget::buildXRitTab()
         row->addWidget(m_xitBtn);
 
         m_xitLabel = new ScrollableLabel(ritWidget);
+        m_xitLabel->setObjectName(QStringLiteral("VfoXitOffset"));
         m_xitLabel->setRange(-10000, 10000);
         m_xitLabel->setStep(m_stepHz);
         m_xitLabel->setValue(0);
@@ -1751,6 +1757,7 @@ void VfoWidget::buildXRitTab()
         row->addWidget(m_xitLabel, 1);
 
         m_xitZeroBtn = new QPushButton(QStringLiteral("0"), ritWidget);
+        m_xitZeroBtn->setObjectName(QStringLiteral("VfoXitZeroButton"));
         m_xitZeroBtn->setFixedWidth(20);
         m_xitZeroBtn->setFlat(true);
         m_xitZeroBtn->setStyleSheet(kZeroBtn);
@@ -1810,18 +1817,19 @@ void VfoWidget::buildXRitTab()
     });
 
     connect(m_xitBtn, &QPushButton::toggled, this, [this](bool on) {
-        if (!m_updatingFromModel) {
+        if (!m_updatingFromModel && m_transmitPermitted) {
             emit xitEnabledChanged(on);
         }
     });
 
     connect(m_xitLabel, &ScrollableLabel::valueChanged, this, [this](int hz) {
-        if (!m_updatingFromModel) {
+        if (!m_updatingFromModel && m_transmitPermitted) {
             emit xitHzChanged(hz);
         }
     });
 
     connect(m_xitZeroBtn, &QPushButton::clicked, this, [this]() {
+        if (!m_transmitPermitted) { return; }
         m_xitLabel->setValue(0);
         if (!m_updatingFromModel) {
             emit xitHzChanged(0);
@@ -2204,6 +2212,7 @@ void VfoWidget::setStepHz(int hz)
 // Phase 3F Sub-Epic C Task 9: emit handoff request to MainWindow for forwarding.
 void VfoWidget::onTxBadgeClicked()
 {
+    if (!m_transmitPermitted) { return; }
     emit txHandoffRequested(m_sliceIndex);
 }
 
@@ -2900,7 +2909,12 @@ void VfoWidget::contextMenuEvent(QContextMenuEvent* event)
 
     // Make this the TX slice
     QAction* makeTxAct = menu.addAction(QStringLiteral("Make this the TX slice"));
+    if (!m_transmitPermitted) {
+        makeTxAct->setEnabled(false);
+        makeTxAct->setToolTip(m_transmitPermissionReason);
+    }
     connect(makeTxAct, &QAction::triggered, this, [this]() {
+        if (!m_transmitPermitted) { return; }
         emit txHandoffRequested(m_sliceIndex);
     });
 
@@ -3192,6 +3206,53 @@ void VfoWidget::setRxBypassActive(bool on)
 void VfoWidget::setRadioModel(RadioModel* model)
 {
     m_radioModel = model;
+    if (model && model->role() == RadioModel::Role::Remote) {
+        setTransmitPermitted(false);
+    }
+}
+
+void VfoWidget::setTransmitPermitted(bool permitted, const QString& reason)
+{
+    m_transmitPermitted = permitted;
+    m_transmitPermissionReason = reason.isEmpty()
+        ? tr("Transmit controls are unavailable until the station handshake confirms transmit permission.")
+        : reason;
+    updateTransmitControlAvailability();
+}
+
+void VfoWidget::updateTransmitControlAvailability()
+{
+    const auto apply = [this](QWidget* control) {
+        if (!control) { return; }
+        static constexpr auto kSavedTooltip = "VfoSavedTransmitTooltip";
+        static constexpr auto kSavedDescription = "VfoSavedTransmitDescription";
+        static constexpr auto kSavedEnabled = "VfoSavedTransmitEnabled";
+        if (!m_transmitPermitted) {
+            if (!control->property(kSavedTooltip).isValid()) {
+                control->setProperty(kSavedTooltip, control->toolTip());
+                control->setProperty(kSavedDescription, control->accessibleDescription());
+                control->setProperty(kSavedEnabled, control->isEnabled());
+            }
+            control->setEnabled(false);
+            control->setToolTip(m_transmitPermissionReason);
+            control->setAccessibleDescription(m_transmitPermissionReason);
+            return;
+        }
+        if (control->property(kSavedTooltip).isValid()) {
+            control->setEnabled(control->property(kSavedEnabled).toBool());
+            control->setToolTip(control->property(kSavedTooltip).toString());
+            control->setAccessibleDescription(control->property(kSavedDescription).toString());
+            control->setProperty(kSavedTooltip, QVariant());
+            control->setProperty(kSavedDescription, QVariant());
+            control->setProperty(kSavedEnabled, QVariant());
+        }
+    };
+
+    apply(m_xitBtn);
+    apply(m_xitLabel);
+    apply(m_xitZeroBtn);
+    apply(m_txBadge);
+    apply(m_rxBypassBtn);
 }
 
 SliceModel* VfoWidget::contextMenuSliceForTest() const

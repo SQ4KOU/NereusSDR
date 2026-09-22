@@ -662,6 +662,10 @@ void RemoteMediaController::start()
     });
     connect(peer, &MediaPeer::ready, this, [this, current] {
         if (current()) {
+            if (!d->client->remoteDisplayBudgetLimits()) {
+                qCDebug(lcRemoteMedia)
+                    << "Core supplied no aggregate display limits; using per-display subscriptions";
+            }
             d->timer->start();
             refreshSubscriptions();
             requestAudio();
@@ -777,8 +781,10 @@ void RemoteMediaController::refreshSubscriptions()
     }
     for (PanadapterApplet* applet : d->stack->allApplets()) {
         if (applet) {
-            applet->setRemoteDisplayStatus(
-                QStringLiteral("Core does not advertise aggregate display capacity"));
+            // This supported subscription mode does not indicate a display
+            // failure or require operator action. Keep capability details in
+            // diagnostics, and clear any status from a previous allocation.
+            applet->setRemoteDisplayStatus(QString());
         }
     }
     const QPointer<RemoteMediaController> self(this);

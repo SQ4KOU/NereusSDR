@@ -190,7 +190,9 @@ multicast/interface/reachability evidence. No announcement is trust proof.
   discovery trust; resolve concrete findings with focused regressions.
 - [x] Matching NereusSDR/nereusd/all_tests build and unfiltered full suite with
   host load recorded; preserve test skips as coverage gaps, not passed behavior.
-- [ ] Signed local checkpoint, matching build identity and clean working tree.
+- [x] Signed local checkpoint c28e1565, matching build identity and clean working
+  tree at that checkpoint. Matching Core/GUI installation and IPv4 announcement
+  receipt passed; native UI/switching and operator smoke remain below.
 - [ ] Authorized installation and operator smoke: choose local radio, Rock/Saturn
   pair and a second Core where available; switch/cancel/reconnect, observe identity,
   audio/display continuity after connection and preserved local capability.

@@ -1271,9 +1271,9 @@ void SendAntiVOXData(int id, int nsamples, double* data);
 //
 // xdexp() runs once per audio block from TxWorkerThread::dispatchOneBlock,
 // mirroring Thetis cmaster.c:388 [v2.10.3.13] (xdexp BEFORE fexchange0).
-// destroy_dexp() runs from WdspEngine::destroyTxChannel before
-// CloseChannel — mirrors cmaster.c:267 [v2.10.3.13] (destroy_dexp before
-// CloseChannel in destroy_xmtr).  SetDEXPIOBuffers re-points the in/out
+// destroy_dexp() runs from WdspEngine::destroyTxChannel after
+// CloseChannel, matching destroy_xmtr at cmaster.c:265-267 [v2.10.3.15].
+// SetDEXPIOBuffers re-points the in/out
 // buffer pair while the DEXP is live; NereusSDR's parallel-only buffer
 // architecture (see WdspEngine.cpp comment at the create_dexp callsite)
 // does not call SetDEXPIOBuffers per block, but the declaration is here
@@ -1288,13 +1288,13 @@ void SendAntiVOXData(int id, int nsamples, double* data);
 //
 // From Thetis wdsp/dexp.c [v2.10.3.13]:
 //   create_dexp:       dexp.c:187-227 — allocates DEXP struct, stores in pdexp[id]
-//   destroy_dexp:      dexp.c:230-239 — deallocates struct, clears pdexp[id]
+//   destroy_dexp:      dexp.c:230-239 — deallocates struct; owner must clear pdexp[id]
 //   xdexp:             dexp.c:266-396 — per-block driver (envelope + state machine)
 //   SetDEXPIOBuffers:  dexp.c:436-448 — re-point in/out buffers (heavy: rebuilds filter)
 // Cited from Thetis cmaster.c [v2.10.3.13]:
 //   create_dexp call:  cmaster.c:130-157 (default args verbatim from this site)
 //   xdexp call:        cmaster.c:388     (BEFORE fexchange0 at cmaster.c:389)
-//   destroy_dexp call: cmaster.c:267     (BEFORE CloseChannel at cmaster.c:265)
+//   destroy_dexp call: cmaster.c:267     (AFTER CloseChannel at cmaster.c:265)
 void create_dexp(int id, int run_dexp, int size, double* in, double* out, int rate,
                  double dettau, double tattack, double tdecay, double thold,
                  double exp_ratio, double hyst_ratio, double attack_thresh,

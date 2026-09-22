@@ -265,6 +265,13 @@ An absent pair preserves legacy behavior and explicitly advertises no budget
 support until a measured configuration is selected. This is an intermediate
 compatibility state, not completion of Task 6 or a default capacity claim.
 
+Normal reception in this compatibility state has no pan-overlay notice. The
+absence of a descriptor is diagnostic information, not an operator failure.
+Log it when the media connection becomes ready. Retain visible status for
+actual reduced, paused, stalled or refused displays. This presentation correction
+follows the September 22 operator report that the capability terminology was
+unhelpful and obscured the operating display.
+
 A future/current effective-limit publisher changes the descriptor generation
 atomically for advertisement and enforcement. A decrease takes effect at the
 sender immediately. Allow genuinely reducing replacements even while retained

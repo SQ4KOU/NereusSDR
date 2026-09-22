@@ -39,7 +39,7 @@ are rejected or retired. Manual addresses remain available without multicast.
 | Integrated AddressSanitizer | Coordinator, controller and TLS selection: 3/3 targets passed, 50.48 s before final review corrections |
 | Consolidated source review | Five findings corrected; no remaining blocking source finding. Includes interface recovery, credential-free errors, applicable connection actions and config identity validation |
 | Matching GUI/Core/all-tests build and unfiltered suite | Passed: 738/738 CTest executables, 245.15 s |
-| Signed checkpoint and matching installed build | Pending |
+| Signed checkpoint and matching installed build | c28e1565, verified GPG signature; matching GUI tag/private-library UUIDs and strict/deep bundle signature passed. Fresh native source manifest/build/install passed |
 
 The session test exposed and corrected a toast-destruction use-after-free:
 QWidget child destruction called back into a MainWindow member list after that
@@ -61,10 +61,41 @@ one optional screenshot, one modal-menu timing case, two obsolete RADE TX-route
 cases and six WDSP TX harness cases. These are coverage gaps, not passed TX
 behavior. No executable timed out or was excluded.
 
+## Installed checkpoint and native evidence
+
+Matching Core and GUI `c28e1565` were installed September 22. Core was active
+with zero automatic restarts at readback, and actual Saturn I/Q arrived. The
+GUI authenticated at 13:18:30, opened 48 kHz stereo speakers and received Opus
+at 13:18:32, followed by encrypted spectrum at 13:18:33. This confirms the
+backend paths, not sustained smooth playback. Later audio-context recoveries
+and source queue drops leave the audio/soak gate open.
+
+The Rock emitted 146-byte IPv4 discovery datagrams from `.106` through `end1`
+to `239.255.42.99:47910`, TTL 1, at the expected five-second interval. A passive
+Mac receiver received `rock-5c`, `ANAN-G2 (Saturn)`, connected=true and control
+port 50055. This proves actual IPv4 multicast emission and client reachability.
+The Mac was subsequently unlocked. Native inspection confirmed the running
+`c28e1565` GUI, the Rock `.106:50055`/Saturn identity, received spectrum and
+waterfall, and live receiver/meter values. Selector interaction and switching
+acceptance remain pending; this operating-screen observation does not prove them.
+
+Native inspection then exposed a crash while opening Radio → Connections and
+reading its accessibility tree. The macOS report identifies
+`QMacAccessibilityElement::accessibilitySelectedChildren`; Core remained active
+with zero automatic restarts. The chooser was clearing and rebuilding every
+row on each discovery refresh, including unchanged rows. It now reconciles
+rows by key, deselects before structural changes and preserves surviving rows
+when obsolete siblings are removed. A regression first reproduced the model
+reset, then passed with a visible widget using Qt's actual accessibility
+selection API. It covers status-only updates, removal of a preceding row and
+deletion of the selected row. The rebuilt selector target passed in 0.47 s.
+Actual AppKit accessibility inspection and the final combined suite remain
+pending for this correction; the source test alone does not close the crash.
+
 ## Native acceptance still open
 
-- Actual IPv4 and IPv6 multicast reception, interface/address changes and
-  discovery expiry on a real LAN. Loopback UDP is not proof of multicast reachability.
+- Actual GUI population from native IPv4 announcements, IPv6 multicast
+  reception, interface/address changes and discovery expiry on a real LAN.
 - Native renderer/audio retirement while switching between a local radio and
   the Rock/Saturn station; second real Core if available. Offscreen/ASAN tests
   do not prove native GPU or physical-radio ownership behavior.
@@ -82,5 +113,8 @@ established. Installation preparation now checks a nonempty unit with
 installed binary, libraries and service file before startup. The retained `3402d171` executable/Core/RADE hashes matched the earlier
 successful installation log. Those files and its verified unit were restored
 with the current configuration/credentials preserved and backed up. systemd
-reports active and enabled again. Fresh boot and matching selector installation
-acceptance remain pending; recovery is not an application reconnect pass.
+reports active and enabled again. A subsequent reboot was observed without a
+root-issued reboot command; the recovered service autostarted. Its cause is
+awaiting operator confirmation. The fresh c28e1565 native installation then
+completed with a nonempty, flushed rollback of verified 3402d171. Post-install
+boot/switch/soak acceptance remains open; recovery alone is not a reconnect pass.

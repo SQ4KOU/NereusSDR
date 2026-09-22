@@ -123,6 +123,10 @@ public:
     QString appletTitle() const override { return QStringLiteral("Phone / CW"); }
     void syncFromModel() override;
 
+    // Remote-station presentation gate.  This affects only controls that
+    // configure a TX input or TX DSP; model-to-widget updates remain live.
+    void setTransmitPermitted(bool permitted, const QString& reason = QString());
+
     // Switch the stacked widget page: 0=Phone, 1=CW, 2=FM
     void showPage(int index);
 
@@ -149,6 +153,7 @@ private:
     void buildFmPage(QWidget* page);
     // Phase 3M-1b: wire mic gain slider + mic level gauge timer.
     void wireControls();
+    void updateTransmitControlAvailability();
     // ── Shared ───────────────────────────────────────────────────────────────
     QStackedWidget* m_stack{nullptr};
     QButtonGroup*   m_tabGroup{nullptr};
@@ -160,6 +165,8 @@ private:
     // linear 0..1 amplitude to dBFS for m_levelGauge. Silent (-40 floor) when
     // the TX input bus is not open (mic not configured / RX-only mode).
     QTimer*  m_micLevelTimer{nullptr};
+    bool m_transmitPermitted{true};
+    QString m_transmitPermissionReason;
 
     // ── Phone page (13 controls) ──────────────────────────────────────────────
     // #1  Mic level gauge (HGauge -40..+10 dBFS, yellow -10, red 0)
