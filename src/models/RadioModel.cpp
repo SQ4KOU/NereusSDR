@@ -10635,8 +10635,8 @@ void RadioModel::installBandPlanMoxCheck()
         // Same reasoning recorded in the design addendum section 4.
         if (receiveOnlyTxOperationsBlocked()) {
             return {false,
-                    QStringLiteral("TX is not available on a remote station "
-                                   "connection (R4)")};
+                    QStringLiteral("Remote transmit controls are not available "
+                                   "from this Core yet.")};
         }
 
         const int regionInt = AppSettings::instance()
@@ -14448,8 +14448,8 @@ void RadioModel::setTune(bool on)
         // it owns hardware for a receive-only R3 station session.
         if (receiveOnlyTxOperationsBlocked()) {
             emit tuneRefused(
-                QStringLiteral("TX is not available on a remote station "
-                               "connection (R4)"));
+                QStringLiteral("Remote transmit controls are not available "
+                               "from this Core yet."));
             return;
         }
 
@@ -16513,8 +16513,7 @@ void RadioModel::startTgxlAutotune(bool fromHardware)
 {
     if (receiveOnlyTxOperationsBlocked()) {
         emit tuneRefused(
-            QStringLiteral("Tuner operation is not available on a receive-only "
-                           "remote station connection (R4)"));
+            QStringLiteral("Automatic tuning is not available from this Core yet."));
         return;
     }
 

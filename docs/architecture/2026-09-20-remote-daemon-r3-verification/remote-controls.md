@@ -162,6 +162,29 @@ capture, modal-menu, obsolete RADE TX and unopened WDSP TX harness reasons
 recorded at the selector checkpoint. No executable was excluded or timed out;
 those skipped TX behaviors still require R4 evidence.
 
+The subsequent signed `46b01ebf` checkpoint includes the selector accessibility
+correction and passed the final combined 740-target suite in 258.45 seconds.
+Matching Core/GUI were installed; GUI authentication, Opus and display delivery
+resumed after Core restart. External AppKit selector interaction and installed
+appearance remain pending the Mac unlock. These backend observations do not
+claim operator listening or visual acceptance.
+
+The next presentation cleanup removes roadmap phase labels from remote
+MOX/Tune/TGXL refusal messages and the PureSignal tooltip. They now identify the
+unsupported operation in plain language. Existing admission guards and the
+tests proving no state advance remain intact. The missing optional aggregate
+display-capacity notice was already moved to diagnostics in `46b01ebf`; a
+healthy fallback has no operating overlay. Actual limiting/failure states
+remain visible. The associated S-meter report remains unreproduced: two live
+observations showed the analog meter updating and matching the selected slice;
+no meter source change is claimed.
+
+This wording cleanup passed the combined GUI/Core build and the unfiltered
+740-target suite in 277.34 seconds, with the same twelve existing inner Qt
+skips. The [PC-source prerequisite evidence](pc-mic-source-intent.md) records
+the shared run's load and log details. Installed appearance remains a separate
+operator check.
+
 ## Follow-up at 8c011066
 
 Title-segment activation opened Core details while media had failed but the

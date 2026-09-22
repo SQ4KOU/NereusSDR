@@ -17,6 +17,8 @@
 //   4. RadioModel's txModemReady receiver routes the encoded
 //      baseband through 24 -> txSampleRate upsample into
 //      RadioConnection::sendTxIq with at least one non-zero call.
+//   5. Selected PC mic with unavailable capture emits only silent RADE
+//      encoder input even when the radio mic block is loud.
 //
 // =================================================================
 //
@@ -26,6 +28,10 @@
 //                 contracts the K2-K4 scaffolding deferred until
 //                 the RADE TX pump was fully wired. AI tooling:
 //                 Anthropic Claude Code.
+//   2026-09-22  J.J. Boyd / KG4VCF  R-R3-36 prerequisite: add a
+//                 selected-PC/unavailable-capture regression proving the
+//                 RADE encoder never receives radio-mic fallback. AI tooling:
+//                 OpenAI Codex.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -257,6 +263,56 @@ private slots:
 
         QCOMPARE(conn.callCount.load(), 1);
         QCOMPARE(micSpy.count(), 0);
+
+        src.stop();
+    }
+
+    void pcMicSelected_withoutCaptureFeedsSilenceToRade()
+    {
+        AudioEngine engine;
+        engine.onMicSourceChanged(/*selectedSourceIsPc=*/true);
+
+        TxChannel ch(kChannelId, kBlockFrames, kBlockFrames);
+        MockConnection conn;
+        ch.setConnection(&conn);
+        ch.setRunning(true);
+
+        TxMicSource src;
+        src.start();
+
+        TxWorkerThread w;
+        w.setTxChannel(&ch);
+        w.setAudioEngine(&engine);
+        w.setMicSource(&src);
+        w.setCurrentTxPath(TxWorkerThread::TxPath::Rade);
+
+        QSignalSpy micSpy(&w, &TxWorkerThread::radeMicBlockReady);
+
+        constexpr int kBlockCount = 500;
+        std::vector<float> loudRadio(kBlockFrames);
+        for (int blk = 0; blk < kBlockCount; ++blk) {
+            for (int i = 0; i < kBlockFrames; ++i) {
+                const float t = static_cast<float>(blk * kBlockFrames + i)
+                                / 48000.0f;
+                loudRadio[static_cast<size_t>(i)] =
+                    0.9f * std::sin(2.0f * 3.14159265f * 1000.0f * t);
+            }
+            src.inbound(loudRadio.data(), kBlockFrames);
+            w.tickForTest();
+        }
+
+        QVERIFY2(micSpy.count() > 0,
+                 "RADE resampler never produced a post-warmup payload");
+        for (const auto& args : micSpy) {
+            const QByteArray payload = args.value(0).toByteArray();
+            const int16_t* samples = reinterpret_cast<const int16_t*>(
+                payload.constData());
+            const int sampleCount = payload.size()
+                                    / static_cast<int>(sizeof(int16_t));
+            for (int i = 0; i < sampleCount; ++i) {
+                QCOMPARE(samples[i], static_cast<int16_t>(0));
+            }
+        }
 
         src.stop();
     }

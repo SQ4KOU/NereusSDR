@@ -21,6 +21,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-22 — R-R3-36 prerequisite by J.J. Boyd (KG4VCF), AI-assisted
+//                 via OpenAI Codex. Separates selected PC-mic source intent
+//                 from capture-bus readiness for fail-silent TX routing.
 //   2026-04-16 — Ported/adapted in C++20/Qt6 for NereusSDR by
 //                 J.J. Boyd (KG4VCF), with AI-assisted transformation
 //                 via Anthropic Claude Code.
@@ -481,17 +484,22 @@ public:
     // bytes so we do not allocate per call.
     int pullVaxTxMic(float* dst, int n);
 
+    /// Returns the operator's PC-mic source selection independently of
+    /// whether the capture bus currently exists or is open. Worker routing
+    /// uses this fail-silent intent query so capture loss cannot expose the
+    /// already-drained radio mic block to WDSP, RADE, or VOX.
+    bool isPcMicSelected() const noexcept;
+
     /// Phase 3M-1c TX pump v3 — PC mic override gate.
     ///
-    /// Returns true when the worker should overlay PC mic samples on
-    /// top of the radio mic samples in m_in.  Gated by:
+    /// Returns true when PC mic is selected and capture is ready. Gated by:
     ///   1. m_micSourceWantsPc (true iff TransmitModel::micSource ==
     ///      MicSource::Pc; updated by onMicSourceChanged()).
     ///   2. m_txInputBus exists and is open.
     ///
-    /// Both conditions are read atomically; both must be true.  Mirrors
-    /// the conditional invocation of `asioIN(pcm->in[stream])` at
-    /// Thetis cmaster.c:379 [v2.10.3.13].
+    /// Both conditions must be true. Existing callers that need the combined
+    /// readiness predicate retain this API; worker source routing uses
+    /// isPcMicSelected() so unavailable input cannot change the chosen source.
     bool isPcMicOverrideActive() const noexcept;
 
     /// Phase VAX-TX (eager-borg-d64bed, 2026-05-06) — VAX mic override gate.
@@ -873,7 +881,7 @@ private:
     // Phase 3M-1c TX pump v3 — PC mic override gate.
     // Written by onMicSourceChanged() on the main thread (slot wired
     // by RadioModel to TransmitModel::micSourceChanged).  Read by the
-    // worker thread via isPcMicOverrideActive().  Default false matches
+    // worker thread via isPcMicSelected().  Default false matches
     // a fresh radio session before TransmitModel::micSourceChanged
     // fires.  When the radio is HL2 (no mic jack), RadioModel forces
     // micSource=PC via setMicSourceLocked, and the resulting

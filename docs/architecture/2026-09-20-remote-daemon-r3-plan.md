@@ -536,6 +536,14 @@ restoring presentation must not imply a station create command. Reuse the
 existing capability schema; negotiate any genuinely missing capability before
 advertising it. Preserve explicit operator add/layout operations after hydrate.
 
+Operator-facing status must describe the effect and available action in ordinary
+language. Keep roadmap phase names, protocol capability names and healthy
+fallback diagnostics out of operating overlays, tooltips and refusal messages.
+Missing optional aggregate display limits are a supported fallback, not a
+warning to the operator. Keep actual display pauses, connection failures and
+unsupported actions visible with a useful explanation; retain technical details
+in diagnostics.
+
 - [ ] Inventory currently visible menus, applets and setup controls by owner:
   GUI-local, station-backed, or unavailable in remote receive. Record the
   concrete handler/property and acceptance case. Trace generic mirrored DSP
@@ -950,16 +958,27 @@ keep direct native input opening as a separate acceptance check. This audit
 does not yet choose an asynchronous native-open lifecycle or alter production
 microphone behavior.
 
-The follow-up source audit also found a source-selection gap to fix before
-capture becomes demand-driven: `AudioEngine::isPcMicOverrideActive()` requires
-an open bus, so a selected but absent/closed PC mic skips the worker's override
-and can leave radio-mic samples in the normal and RADE input paths. The normal
-path can also feed those samples into VOX detection. Separate source intent
-from capture readiness, verify silence/refusal when the selected input is
-unavailable, and preserve non-PC/generated-audio paths. The existing
+The two existing input-settings surfaces also need one authoritative device
+configuration: Devices edits persisted `audio/TxInput` and calls the engine,
+while the PC Mic page edits TransmitModel session properties with no engine
+configuration connection. Test Mic currently only polls the existing bus.
+Integrate configuration, capture demand and actual device readiness together;
+do not report a selected named input as ready after silently opening a different
+default device. Preserve the independent speaker-device policy.
+
+The source-selection prerequisite is implemented: the worker now uses
+`AudioEngine::isPcMicSelected()` independently of capture readiness. Previously,
+`isPcMicOverrideActive()` required an open bus, so selected but absent/closed PC
+capture could leave radio-mic samples in ordinary, RADE and normal VOX input.
+The new regressions reproduced that leakage and now verify zero-filled input,
+valid/short PC pulls and deliberate return to radio selection. The existing
+combined readiness predicate and non-PC/generated-audio paths are preserved.
+See [source-intent evidence](2026-09-20-remote-daemon-r3-verification/pc-mic-source-intent.md)
+for checks and remaining limits. The existing
 `MoxController::setMox()` precheck precedes RF side effects and is the shared
-admission boundary; release must remain unconditional. This is recorded source
-evidence, not a completed fix or an approved asynchronous capture lifecycle.
+admission boundary for the later readiness gate; release must remain
+unconditional. Worker silence does not implement that gate or an asynchronous
+capture lifecycle, and R-R3-36 remains open.
 
 **Requirements:** R-R3-02, 03, 06, 07, 09. **Dependencies:** 1 and 4's session
 lifecycle; audio codec unit work can precede GUI spectrum completion.

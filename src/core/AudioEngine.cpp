@@ -19,6 +19,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-22 — R-R3-36 prerequisite by J.J. Boyd (KG4VCF), AI-assisted
+//                 via OpenAI Codex. Adds a source-intent-only PC-mic query
+//                 while preserving the existing combined readiness query.
 //   2026-04-16 — Ported/adapted in C++20/Qt6 for NereusSDR by
 //                 J.J. Boyd (KG4VCF), with AI-assisted transformation
 //                 via Anthropic Claude Code.
@@ -1460,13 +1463,18 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     }
 }
 
+bool AudioEngine::isPcMicSelected() const noexcept
+{
+    return m_micSourceWantsPc.load(std::memory_order_acquire);
+}
+
 bool AudioEngine::isPcMicOverrideActive() const noexcept
 {
-    // Phase 3M-1c TX pump v3 — both conditions must hold for the worker
-    // to overlay PC mic samples on radio mic samples:
+    // Combined selection/readiness query for callers that need both:
     //   - the user explicitly selected MicSource::Pc (m_micSourceWantsPc)
     //   - we have an open TX-input bus to pull from
-    if (!m_micSourceWantsPc.load(std::memory_order_acquire)) {
+    // Worker source routing uses isPcMicSelected() independently of readiness.
+    if (!isPcMicSelected()) {
         return false;
     }
     return (m_txInputBus != nullptr) && m_txInputBus->isOpen();

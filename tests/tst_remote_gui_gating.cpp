@@ -462,7 +462,7 @@ private slots:
     // pre-check, so the refusal reaches the status-bar toast.
     // ====================================================================
 
-    void remoteModelRefusesMoxWithAnR4Reason()
+    void remoteModelRefusesMoxWithAnOperatorReason()
     {
         RadioModel model(RadioModel::Role::Remote);
         MoxController* mox = model.moxController();
@@ -476,9 +476,11 @@ private slots:
 
         QCOMPARE(rejected.count(), 1);
         const QString reason = rejected.at(0).at(0).toString();
-        QVERIFY2(reason.contains(QStringLiteral("R4")),
-                 qPrintable(QStringLiteral("refusal reason must name the phase "
-                                           "that brings TX, got: %1")
+        QVERIFY2(reason.contains(QStringLiteral("transmit"))
+                     && reason.contains(QStringLiteral("Core"))
+                     && !reason.contains(QStringLiteral("R4")),
+                 qPrintable(QStringLiteral("refusal must explain the unavailable "
+                                           "Core operation without roadmap jargon: %1")
                                 .arg(reason)));
         QVERIFY(!mox->isMox());
         QVERIFY(!model.mox());
@@ -777,10 +779,11 @@ private slots:
 
         QCOMPARE(refused.count(), 1);
         const QString reason = refused.at(0).at(0).toString();
-        QVERIFY2(reason.contains(QStringLiteral("R4")),
-                 qPrintable(QStringLiteral("the refusal must name the phase "
-                                           "that brings TX, the way the MOX "
-                                           "refusal does; got: %1")
+        QVERIFY2(reason.contains(QStringLiteral("transmit"))
+                     && reason.contains(QStringLiteral("Core"))
+                     && !reason.contains(QStringLiteral("R4")),
+                 qPrintable(QStringLiteral("refusal must explain the unavailable "
+                                           "Core operation without roadmap jargon: %1")
                                 .arg(reason)));
 
         // Nothing may have advanced. manualMoxChanged is the one that
@@ -829,7 +832,7 @@ private slots:
 
     // Non-vacuity: a Role::Local model must keep refusing TUNE for the
     // ORIGINAL reason (power off), not the new one. A gate that refused
-    // unconditionally, or that reported the R4 reason locally, would pass
+    // unconditionally, or that reported the Core refusal locally, would pass
     // the two cases above and mislead every local user.
     void localModelStillRefusesTuneForPowerNotForRole()
     {
@@ -846,7 +849,7 @@ private slots:
                  qPrintable(QStringLiteral("local direct mode must still get "
                                            "the power-on reason; got: %1")
                                 .arg(reason)));
-        QVERIFY2(!reason.contains(QStringLiteral("R4")),
+        QVERIFY2(!reason.contains(QStringLiteral("Core")),
                  "the remote reason must not leak into local direct mode");
         QVERIFY(!model.isTune());
     }

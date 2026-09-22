@@ -12,6 +12,10 @@
 //
 // Pre-code review cite: §0.3 (PcMicSource arch — pullTxMic is the
 // foundational accessor PcMicSource will tap in Phase F.1).
+//
+// 2026-09-22: R-R3-36 prerequisite adds the source-intent/readiness
+// distinction used by TxWorkerThread. J.J. Boyd (KG4VCF), AI-assisted via
+// OpenAI Codex.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -105,6 +109,34 @@ private:
     }
 
 private slots:
+
+    void pcMicSelectionIntent_isIndependentOfCaptureReadiness()
+    {
+        AudioEngine engine;
+        QVERIFY(!engine.isPcMicSelected());
+        QVERIFY(!engine.isPcMicOverrideActive());
+
+        engine.onMicSourceChanged(/*selectedSourceIsPc=*/true);
+        QVERIFY(engine.isPcMicSelected());
+        QVERIFY(!engine.isPcMicOverrideActive());
+
+        AudioFormat fmt = float32StereoFmt();
+        auto fakeBus = std::make_unique<FakeAudioBus>(
+            QStringLiteral("ClosedFakeTxInput"));
+        FakeAudioBus* bus = fakeBus.get();
+        fakeBus->setNegotiatedFormat(fmt);
+        engine.setTxInputBusForTest(std::move(fakeBus));
+        QVERIFY(engine.isPcMicSelected());
+        QVERIFY(!engine.isPcMicOverrideActive());
+
+        QVERIFY(bus->open(fmt));
+        QVERIFY(engine.isPcMicSelected());
+        QVERIFY(engine.isPcMicOverrideActive());
+
+        engine.onMicSourceChanged(/*selectedSourceIsPc=*/false);
+        QVERIFY(!engine.isPcMicSelected());
+        QVERIFY(!engine.isPcMicOverrideActive());
+    }
 
     // ── 1. Null bus: returns 0 ─────────────────────────────────────────────
     // m_txInputBus is default-null — engine with no TX input configured.

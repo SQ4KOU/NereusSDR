@@ -10,6 +10,10 @@
 // =================================================================
 //
 // Modification history (NereusSDR):
+//   2026-09-22 — R-R3-36 prerequisite by J.J. Boyd (KG4VCF), AI-assisted
+//                 via OpenAI Codex. Normal and RADE source routing now uses
+//                 PC-mic selection intent and fails silent if capture is not
+//                 ready, preventing radio fallback into WDSP/RADE/VOX.
 //   2026-04-29 — Phase 3M-1c TX pump redesign v3 — semaphore-wake
 //                 loop replaces v2's QTimer-driven polling.  J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via
@@ -584,7 +588,7 @@ void TxWorkerThread::dispatchOneBlock()
                 m_radeMicFloat[static_cast<size_t>(i)] = 0.0f;
             }
         } else if (m_audioEngine != nullptr
-                   && m_audioEngine->isPcMicOverrideActive()) {
+                   && m_audioEngine->isPcMicSelected()) {
             const int got = m_audioEngine->pullTxMic(
                 m_pcMicBuf.data(), kBlockFrames);
             const int n = std::clamp(got, 0, kBlockFrames);
@@ -692,7 +696,7 @@ void TxWorkerThread::dispatchOneBlock()
                 (m_audioEngine && m_audioEngine->isVaxMicOverrideActive())
                     ? "VAX"
                     : (m_audioEngine
-                       && m_audioEngine->isPcMicOverrideActive())
+                       && m_audioEngine->isPcMicSelected())
                           ? "PC"
                           : "Radio";
             qCInfo(lcTxWorker)
@@ -784,9 +788,11 @@ void TxWorkerThread::dispatchOneBlock()
     //   asioIN(pcm->in[stream]);
     // ASIO is the OS-mic source; in NereusSDR this is the PortAudio /
     // QAudio bus owned by AudioEngine.  When the user has selected
-    // MicSource::Pc AND the bus is open, AudioEngine::isPcMicOverrideActive
-    // returns true and we splice PC mic samples into m_in's I channel,
-    // overwriting whatever the radio sent.
+    // MicSource::Pc, AudioEngine::isPcMicSelected returns true and we splice
+    // PC mic samples into m_in's I channel, overwriting whatever the radio
+    // sent. Capture readiness is deliberately not part of source selection:
+    // pullTxMic returns zero when the bus is absent/closed, and the existing
+    // zero-fill policy then makes the entire selected-PC block silent.
     //
     // Partial-pull policy: PC mic is the user's chosen TX input; partial
     // pulls (got < kBlockFrames) are zero-filled across the remaining
@@ -824,7 +830,7 @@ void TxWorkerThread::dispatchOneBlock()
             m_in[static_cast<size_t>(2 * i + 1)] = 0.0;
         }
     } else if (path != TxPath::Rade
-               && m_audioEngine != nullptr && m_audioEngine->isPcMicOverrideActive()) {
+               && m_audioEngine != nullptr && m_audioEngine->isPcMicSelected()) {
         const int got = m_audioEngine->pullTxMic(m_pcMicBuf.data(), kBlockFrames);
         const int n   = std::clamp(got, 0, kBlockFrames);
         for (int i = 0; i < n; ++i) {

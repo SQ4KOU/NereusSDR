@@ -10,6 +10,9 @@
 // =================================================================
 //
 // Modification history (NereusSDR):
+//   2026-09-22 — R-R3-36 prerequisite by J.J. Boyd (KG4VCF), AI-assisted
+//                 via OpenAI Codex. Worker source routing now follows PC-mic
+//                 selection intent and fails silent when capture is unavailable.
 //   2026-04-29 — Original implementation for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.  Phase 3M-1c TX pump
@@ -68,12 +71,10 @@ class TxMicSource;
 //   pcm->in[stream]          <==>  m_in (interleaved I/Q double, 128 elems)
 //
 // PC mic override (Thetis cmaster.c:379 — `asioIN(pcm->in[stream])`):
-//   When AudioEngine::isPcMicOverrideActive() returns true (the user
-//   selected MicSource::Pc AND m_txInputBus is open), the worker
-//   overwrites the radio mic samples in m_in with PC mic samples
-//   pulled via AudioEngine::pullTxMic.  Partial pulls (< kBlockFrames)
-//   leave the remaining slots filled with the radio mic data — a
-//   "smooth degradation" rather than a hard zero-fill.
+//   When AudioEngine::isPcMicSelected() returns true, the worker overwrites
+//   the radio mic samples in m_in with samples pulled via pullTxMic. An
+//   absent/closed bus and partial pulls both zero-fill the unavailable part
+//   of the block, so selected PC intent can never fall through to radio mic.
 //
 // VOX/DEXP gating (Thetis cmaster.c:388 — `xdexp(tx)`) is deferred until
 // create_dexp is ported (separate follow-up).  VOX setters in TxChannel

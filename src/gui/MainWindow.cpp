@@ -1723,7 +1723,7 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     connect(newFlag, &VfoWidget::txFilterMatchRequested, this,
             [this](int audioLow, int audioHigh) {
         if (!transmitControlsPermitted()) {
-            showToast(tr("Remote transmit controls are unavailable in this receive-only build."),
+            showToast(tr("Remote transmit controls are not available from this Core yet."),
                       ToastSeverity::Info, 3000);
             return;
         }
@@ -10133,7 +10133,7 @@ void MainWindow::applyRemoteRoleGating()
             && m_stationClient->capabilities().psAlgorithmVersion == 3;
         action->setEnabled(ps3Supported);
         action->setToolTip(ps3Supported
-            ? tr("PureSignal 3 settings, saved corrections and diagnostics. Transmit actions require R4.")
+            ? tr("PureSignal 3 settings, saved corrections and diagnostics. Remote transmit controls are not available from this Core yet.")
             : tr("The connected station has not advertised PureSignal 3."));
     }
     if (m_pureSignalApplet) {
