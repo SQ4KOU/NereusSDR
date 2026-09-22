@@ -2,7 +2,10 @@
 #include <QtTest>
 #include <QFile>
 
+#include <memory>
+
 #include "core/AppSettings.h"
+#include "core/RadioConnection.h"
 #include "core/ReceiveLayoutStore.h"
 #include "core/WdspEngine.h"
 #include "models/RadioModel.h"
@@ -20,6 +23,77 @@ ReceiveLayoutStore::LoadResult savedLayout()
                      {0, QStringLiteral("pan-0"), 14293200.0, DSPMode::USB}};
     layout.radeRxOwnerId = 2;
     return layout;
+}
+
+// Just enough radio for wireSliceSignals to install the slice handlers.
+class StubConnection : public RadioConnection {
+    Q_OBJECT
+public:
+    StubConnection() { setState(ConnectionState::Connected); }
+    void init() override {}
+    void connectToRadio(const NereusSDR::RadioInfo&) override {}
+    void disconnect() override {}
+    void setReceiverFrequency(int, quint64) override {}
+    void setTxFrequency(quint64) override {}
+    void setActiveReceiverCount(int) override {}
+    void setSampleRate(int) override {}
+    void setAttenuator(int) override {}
+    void setPreamp(bool) override {}
+    void setTxDrive(int) override {}
+    void setMox(bool) override {}
+    void setAntennaRouting(AntennaRouting) override {}
+    void setWatchdogEnabled(bool) override {}
+    void sendTxIq(const float*, int) override {}
+    void setTrxRelay(bool) override {}
+    void setMicBoost(bool) override {}
+    void setLineIn(bool) override {}
+    void setMicTipRing(bool) override {}
+    void setMicBias(bool) override {}
+    void setLineInGain(int) override {}
+    void setUserDigOut(quint8) override {}
+    void setPuresignalRun(bool) override {}
+    void setMicPTTDisabled(bool) override {}
+    void setMicXlr(bool) override {}
+};
+
+// R-R3-24: a Core that boots with its only slice already in a RADE mode.
+// Replays connectToRadio's order: the layout is hydrated offline, the
+// transmit model then loads this radio's saved filter, and only after that
+// are the slice handlers wired. Returns the transmit filter the wiring left.
+QPair<int, int> transmitFilterAfterRestore(DSPMode mode, int savedLow, int savedHigh)
+{
+    auto& settings = AppSettings::instance();
+    const QString pfx = QStringLiteral("hardware/%1/tx/").arg(kMac);
+    settings.setValue(pfx + QStringLiteral("FilterLow"), QString::number(savedLow));
+    settings.setValue(pfx + QStringLiteral("FilterHigh"), QString::number(savedHigh));
+
+    ReceiveLayoutStore::LoadResult layout;
+    layout.state = ReceiveLayoutStore::LoadState::Loaded;
+    layout.slices = {{0, QStringLiteral("pan-0"), 14236000.0, mode}};
+
+    RadioModel radio;
+    QString error;
+    if (!radio.hydrateReceiveLayout(kMac, layout, &error)) {
+        qWarning() << "hydrate failed:" << error;
+        return {-1, -1};
+    }
+    SliceModel* slice = radio.sliceById(0);
+    if (!slice || slice->dspMode() != mode || radio.txBoundSlice() != slice) {
+        return {-2, -2};
+    }
+    radio.transmitModel().setMacAddress(kMac);
+    radio.transmitModel().loadFromSettings(kMac);
+    if (radio.transmitModel().filterLow() != savedLow
+        || radio.transmitModel().filterHigh() != savedHigh) {
+        return {-3, -3};
+    }
+    const auto connection = std::make_unique<StubConnection>();
+    radio.injectConnectionForTest(connection.get());
+    radio.wireSliceSignalsForTest();
+    const QPair<int, int> result{radio.transmitModel().filterLow(),
+                                 radio.transmitModel().filterHigh()};
+    radio.injectConnectionForTest(nullptr);
+    return result;
 }
 
 QByteArray diskSettings()
@@ -181,6 +255,36 @@ private slots:
         QCOMPARE(radio.activeSlice()->sliceIndex(), 2);
         QVERIFY(!radio.wdspEngine()->radeChannel(2));
         QVERIFY(!radio.wdspEngine()->radeChannel(4));
+    }
+
+    void radeRestoredSliceAppliesRadeTransmitFilter_data()
+    {
+        QTest::addColumn<DSPMode>("mode");
+        QTest::newRow("RADE_U") << DSPMode::RADE_U;
+        QTest::newRow("RADE_L") << DSPMode::RADE_L;
+    }
+
+    void radeRestoredSliceAppliesRadeTransmitFilter()
+    {
+        QFETCH(DSPMode, mode);
+        QCOMPARE(transmitFilterAfterRestore(mode, 100, 3900), (QPair<int, int>{650, 2350}));
+    }
+
+    void voiceRestoredSliceKeepsLoadedTransmitFilter_data()
+    {
+        QTest::addColumn<int>("low");
+        QTest::addColumn<int>("high");
+        QTest::newRow("custom") << 200 << 2800;
+        // Even the RADE passband stays: only a live mode change leaves RADE.
+        QTest::newRow("rade-passband") << 650 << 2350;
+    }
+
+    void voiceRestoredSliceKeepsLoadedTransmitFilter()
+    {
+        QFETCH(int, low);
+        QFETCH(int, high);
+        QCOMPARE(transmitFilterAfterRestore(DSPMode::USB, low, high),
+                 (QPair<int, int>{low, high}));
     }
 
     void refusesAlreadyBoundBootstrapWithoutChangingItsPlacement()

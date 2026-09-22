@@ -11106,6 +11106,21 @@ void RadioModel::pushTxFrequencyFromTxSlice()
 
 // Wire active slice signals to WDSP channel and radio hardware.
 // Called from wireConnectionSignals after connection is established.
+void RadioModel::snapTransmitFilterForMode(DSPMode mode)
+{
+    // 2026-05-12 bench fix (PR #238): snap TX BW to the RADE modem
+    // audio passband only when the transmitter's mode changes.
+    if (mode == DSPMode::RADE_U || mode == DSPMode::RADE_L) {
+        m_transmitModel.setFilterLow(650);
+        m_transmitModel.setFilterHigh(2350);
+    } else if (m_transmitModel.filterLow() == 650
+               && m_transmitModel.filterHigh() == 2350) {
+        // Leaving RADE: preserve custom voice bandwidths.
+        m_transmitModel.setFilterLow(100);
+        m_transmitModel.setFilterHigh(3900);
+    }
+}
+
 void RadioModel::wireSliceSignals(SliceModel* slice)
 {
     // Every slice, not just the active one.
@@ -11244,21 +11259,21 @@ void RadioModel::wireSliceSignals(SliceModel* slice)
             // state above, but it has no authority over this global chain.
             pushTxModeAndBandpass();
 
-            // 2026-05-12 bench fix (PR #238): snap TX BW to the RADE modem
-            // audio passband only when the transmitter's mode changes.
-            if (mode == DSPMode::RADE_U || mode == DSPMode::RADE_L) {
-                m_transmitModel.setFilterLow(650);
-                m_transmitModel.setFilterHigh(2350);
-            } else if (m_transmitModel.filterLow() == 650
-                       && m_transmitModel.filterHigh() == 2350) {
-                // Leaving RADE: preserve custom voice bandwidths.
-                m_transmitModel.setFilterLow(100);
-                m_transmitModel.setFilterHigh(3900);
-            }
+            snapTransmitFilterForMode(mode);
         }
 
         scheduleSettingsSave();
     });
+
+    // R-R3-24: a slice restored already in a RADE mode never produces the
+    // mode-change edge above, so the per-radio transmit filter loaded at
+    // connect (often 100/3900) would stay. Apply the entering-RADE snap once
+    // now, under the handler's own transmitter condition. A slice in any
+    // other mode leaves the loaded transmit filter untouched.
+    if (slice == txBoundSlice()
+        && (slice->dspMode() == DSPMode::RADE_U || slice->dspMode() == DSPMode::RADE_L)) {
+        snapTransmitFilterForMode(slice->dspMode());
+    }
 
     // Filter → WDSP
     connect(slice, &SliceModel::filterChanged, this, [this, slice](int low, int high) {

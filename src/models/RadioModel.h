@@ -3227,6 +3227,12 @@ private:
     /// addSlice time.
     void wireSliceSignals(SliceModel* slice);
 
+    /// The transmitter's RADE passband snap: entering RADE_U/RADE_L sets the
+    /// transmit filter to 650..2350 Hz; leaving RADE restores 100..3900 Hz
+    /// only when the filter is still exactly the RADE passband. Callers own
+    /// the "is this the TX-bound slice" check.
+    void snapTransmitFilterForMode(DSPMode mode);
+
     /// Connect NotchModel's mutation signals to the per-channel WDSP
     /// fan-out. Called once from the ctor; NotchModel outlives every
     /// connection.
