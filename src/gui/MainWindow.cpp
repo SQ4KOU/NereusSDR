@@ -11,6 +11,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-22 — J.J. Boyd (KG4VCF). Invoke the Aether-derived pan-stack
+//                 shutdown before QWidget destroys its graphics backend.
+//                 AI-assisted integration via OpenAI Codex.
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -938,6 +941,7 @@ MainWindow::~MainWindow()
     // RadioModel child and its speaker AudioEngine.
     delete m_remoteMedia;
     m_remoteMedia = nullptr;
+    if (m_panStack) { m_panStack->prepareShutdown(); }
 }
 
 // ---------------------------------------------------------------------------

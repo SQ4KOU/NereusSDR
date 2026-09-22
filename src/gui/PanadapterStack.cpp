@@ -201,7 +201,7 @@ PanadapterStack::PanadapterStack(QWidget* parent) : QWidget(parent)
 
 PanadapterStack::~PanadapterStack()
 {
-    dockAllFloatingPans();
+    prepareShutdown();
 }
 
 PanadapterApplet* PanadapterStack::addPanadapter(const QString& panId)
@@ -223,6 +223,21 @@ void PanadapterStack::removePanadapter(const QString& panId)
 {
     auto* applet = m_pans.take(panId);
     if (!applet) { return; }
+    // From AetherSDR src/gui/PanadapterStack.cpp:241-249 [@0dea0dd7].
+    // Close floating window if this pan is floating
+    if (auto* fw = m_floating.take(panId)) {
+        fw->saveWindowGeometry();
+        // Don't takeApplet — the applet will be deleted below
+        // just disconnect and hide the window
+        QObject::disconnect(fw, &PanFloatingWindow::dockRequested,
+                            this, &PanadapterStack::dockPanadapter);
+        QObject::disconnect(applet, &PanadapterApplet::dockRequested, this, nullptr);
+        retireFloatingWindow(fw, applet);
+    }
+    m_retiringPans.append(applet);
+    connect(applet, &QObject::destroyed, this, [this] {
+        m_retiringPans.removeIf([](const auto& pan) { return pan.isNull(); });
+    });
     applet->deleteLater();
 
     // R1 Task 7 fix round 1 (coordinator spec review, finding 2): announce
@@ -263,7 +278,7 @@ void PanadapterStack::applyLayout(const QString& layoutId, const QStringList& pa
     // window, so their render contexts have to be rebuilt rather than merely
     // re-shown. Every other applet keeps its top-level across this rebuild
     // and must be left alone.
-    const QStringList returnedFromFloat = dockAllFloatingPans();
+    const auto returnedFromFloat = dockAllFloatingPans();
     clearSplitters();
 
     // Retire orphan pans not referenced by the new layout. Without this,
@@ -502,8 +517,13 @@ void PanadapterStack::floatPanadapter(const QString& panId)
     // Only the floated widget. The pans left behind keep the same top-level
     // and the same splitter -- QSplitter just drops a child and resizes the
     // rest -- so touching them is what used to kill them.
-    QTimer::singleShot(0, this, [sw]() {
-        refreshAfterTopLevelChange(sw, /*wantVisible=*/true);
+    const QPointer<PanadapterApplet> pendingApplet(applet);
+    const QPointer<PanFloatingWindow> pendingWindow(floater);
+    QTimer::singleShot(0, this, [this, panId, pendingApplet, pendingWindow]() {
+        if (!pendingApplet || !pendingWindow
+            || m_pans.value(panId) != pendingApplet
+            || m_floating.value(panId) != pendingWindow) { return; }
+        refreshAfterTopLevelChange(pendingApplet->spectrumWidget(), /*wantVisible=*/true);
     });
 }
 
@@ -536,17 +556,17 @@ void PanadapterStack::dockPanadapter(const QString& panId)
     // Reparent straight onto the stack, never through nullptr, then let
     // applyLayout put it back in the splitter tree.
     floater->takeApplet(this);
-    floater->hide();
-    floater->deleteLater();
+    retireFloatingWindow(floater, applet);
 
     // This pan is already out of m_floating (taken at the top), so
     // applyLayout's own dockAllFloatingPans finds nothing and schedules
     // nothing for it -- the refresh has to be named here. Exactly one pass,
     // over exactly the one widget whose top-level changed.
+    const QPointer<PanadapterApplet> pendingApplet(applet);
     applyLayout(m_currentLayoutId, m_pans.keys());
 
-    QTimer::singleShot(0, this, [this, panId]() {
-        refreshReturnedFromFloat({panId});
+    QTimer::singleShot(0, this, [this, pendingApplet]() {
+        refreshReturnedFromFloat({pendingApplet});
     });
 }
 
@@ -555,11 +575,11 @@ void PanadapterStack::dockPanadapter(const QString& panId)
 // Everything else in the tree kept its top-level, so it needs nothing: a
 // plain layout swap moved applets between splitters long before any of this
 // and never needed a GPU touch.
-void PanadapterStack::refreshReturnedFromFloat(const QStringList& panIds)
+void PanadapterStack::refreshReturnedFromFloat(const QList<QPointer<PanadapterApplet>>& applets)
 {
-    for (const QString& panId : panIds) {
-        PanadapterApplet* applet = m_pans.value(panId, nullptr);
-        if (!applet) { continue; }
+    for (const QPointer<PanadapterApplet>& applet : applets) {
+        if (!applet || m_pans.value(applet->panId()) != applet
+            || m_floating.contains(applet->panId())) { continue; }
         refreshAfterTopLevelChange(applet->spectrumWidget(),
                                    /*wantVisible=*/true);
     }
@@ -576,13 +596,80 @@ void PanadapterStack::saveFloatingGeometry()
     }
 }
 
-QStringList PanadapterStack::dockAllFloatingPans()
+void PanadapterStack::retireFloatingWindow(PanFloatingWindow* window,
+                                          PanadapterApplet* applet)
 {
-    QStringList returned;
+    window->hide();
+    m_retiringWindows.append(window);
+    connect(window, &QObject::destroyed, this, [this] {
+        m_retiringWindows.removeIf([](const auto& owner) { return owner.isNull(); });
+    });
+#ifdef NEREUS_GPU_SPECTRUM
+    if (SpectrumWidget* sw = applet ? applet->spectrumWidget() : nullptr) {
+        // QRhiWidget retains its outgoing QRhi pointer until the first render
+        // in the new window. Keep that owner alive even if the pan is hidden
+        // or removed before rendering, so its destructor can deregister safely.
+        if (sw->window() != window) {
+            connect(sw, &QRhiWidget::frameSubmitted, window, &QObject::deleteLater,
+                    Qt::SingleShotConnection);
+        }
+        connect(sw, &QObject::destroyed, window, &QObject::deleteLater);
+        return;
+    }
+#else
+    Q_UNUSED(applet);
+#endif
+    window->deleteLater();
+}
+
+// Adapted from AetherSDR src/gui/PanadapterStack.cpp:1167-1221 [@0dea0dd7].
+// Nereus has no canvas/restore marker. Retain its own geometry persistence and
+// include outgoing windows held across an unfinished render-context transfer.
+void PanadapterStack::prepareShutdown()
+{
+    if (m_shutdownPrepared) { return; }
+    m_shutdownPrepared = true;
+    saveFloatingGeometry();
+    auto panes = m_retiringPans;
+    m_retiringPans.clear();
+    for (PanadapterApplet* applet : m_pans) { panes.append(applet); }
+    m_pans.clear();
+    m_activePanId.clear();
+    // Explicitly delete docked applets so ~QRhiWidget() runs (and calls
+    // removeCleanupCallback) while MainWindow's QRhi is still alive.
+    // If we leave applets alive, Qt's destructor chain for QWidget destroys
+    // the QRhi *before* ~QObject()::deleteChildren() deletes the child
+    // SpectrumWidgets — QRhi::runCleanup() then fires against QRhiWidgetPrivate
+    // objects that are still live but have internal Qt fields in a stale state
+    // → crash at $0_cleanup +24 on exit (#2495 macOS).
+    for (const QPointer<PanadapterApplet>& applet : panes) {
+        if (!applet) { continue; }
+        if (SpectrumWidget* sw = applet->spectrumWidget()) {
+            sw->prepareForShutdown();
+        }
+        delete applet.data();
+    }
+    // All applets, including retired ones, are now gone. It is safe to destroy
+    // both current floating owners and those retained across a pending move.
+    auto windows = m_retiringWindows;
+    m_retiringWindows.clear();
+    for (PanFloatingWindow* window : m_floating) { windows.append(window); }
+    m_floating.clear();
+    for (const QPointer<PanFloatingWindow>& window : windows) {
+        if (window) {
+            QObject::disconnect(window, &PanFloatingWindow::dockRequested,
+                                this, &PanadapterStack::dockPanadapter);
+            delete window.data();
+        }
+    }
+}
+
+QList<QPointer<PanadapterApplet>> PanadapterStack::dockAllFloatingPans()
+{
+    QList<QPointer<PanadapterApplet>> returned;
     while (!m_floating.isEmpty()) {
         auto it = m_floating.begin();
         PanFloatingWindow* floater = it.value();
-        const QString panId = it.key();
         m_floating.erase(it);
         if (!floater) { continue; }
 
@@ -593,7 +680,8 @@ QStringList PanadapterStack::dockAllFloatingPans()
         // one did not, so the last move or resize of the day was the one
         // guaranteed to be lost. Found by Codex on PR #318.
         floater->saveWindowGeometry();
-        if (PanadapterApplet* applet = floater->applet()) {
+        PanadapterApplet* applet = floater->applet();
+        if (applet) {
             QObject::disconnect(applet, &PanadapterApplet::dockRequested,
                                 this, nullptr);
             // Same teardown-before-reparent order as dockPanadapter. This
@@ -608,9 +696,9 @@ QStringList PanadapterStack::dockAllFloatingPans()
             applet->setFloatingState(false);
             floater->takeApplet(this);
             applet->hide();
-            returned << panId;
+            returned << applet;
         }
-        delete floater;
+        retireFloatingWindow(floater, applet);
     }
     return returned;
 }

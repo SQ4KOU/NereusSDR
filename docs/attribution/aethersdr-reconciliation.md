@@ -1418,3 +1418,16 @@ See [telemetry provenance](AETHER-TELEMETRY-PROVENANCE.md) for the port boundary
 | `src/gui/TimeSeriesGraphWidget.h` | A: copied and adapted Qt graph | `src/gui/TimeSeriesGraphWidget.h` |
 | `src/gui/TelemetryHistory.h` | A: adapted bounded history contract | `src/gui/NetworkDiagnosticsDialog.{h,cpp}` |
 | `src/gui/TelemetryHistory.cpp` | A: adapted sampling and bucket query behavior, Nereus validity/segment/weight rules | `src/gui/NetworkDiagnosticsDialog.{h,cpp}` |
+
+## September 22, 2026 pane retirement and graphics shutdown
+
+Source read at `0dea0dd7d73e25a40c8c01d46873af5834e23921`. Existing
+Aether credits and Thetis licence blocks remain intact. Aether's files have
+no per-file copyright header; the project GPLv3 attribution above applies.
+Adaptation by J.J. Boyd / KG4VCF, with OpenAI Codex assistance.
+
+| NereusSDR file | Upstream source | Adaptation |
+| --- | --- | --- |
+| `src/gui/PanadapterStack.{h,cpp}` | `src/gui/PanadapterStack.cpp:239-274,1167-1221` | Remove the floating-window registration with its pan; preserve geometry and disconnect docking. Adapt idempotent early shutdown to destroy registered and pending-retired applets before their graphics owners. Nereus retains deferred pan deletion, has no canvas/restore marker, and guards queued float/dock work by original object identity. Outgoing windows remain alive until destination rendering or widget destruction, covering Qt's retained outgoing QRhi pointer. |
+| `src/gui/SpectrumWidget.{h,cpp}` | `src/gui/SpectrumWidget.cpp:2370-2373,2397-2420` | Destructor calls idempotent shutdown; stop updates, hide and release resources. Use Nereus's GPU flag. Native destruction is restricted to child windows: destroying a standalone SpectrumWidget's own window early invalidates the QRhi still needed by its base destructor, reproduced by the remote-display test. |
+| `src/gui/MainWindow.cpp` | Integration of the stack shutdown contract above | Call `prepareShutdown()` before QMainWindow/QWidget base destruction releases the main graphics owner. |

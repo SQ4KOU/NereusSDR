@@ -8,6 +8,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-22 J.J. Boyd / KG4VCF — adapt AetherSDR prepareForShutdown()
+//                 [@0dea0dd7]; native child teardown only, preserving the
+//                 standalone QRhi owner's lifetime (OpenAI Codex).
 //   2026-09-22 J.J. Boyd / KG4VCF — share wing reference with Core (OpenAI Codex).
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
@@ -647,6 +650,7 @@ SpectrumWidget::SpectrumWidget(QWidget* parent)
 
 SpectrumWidget::~SpectrumWidget()
 {
+    prepareForShutdown();
     // 2026-05-25 KG4VCF bench fix #4: shut down the waterfall ticker
     // thread cleanly so its QTimer + event loop are torn down before
     // m_waterfallTicker is deleted (which happens via the finished ->
@@ -11370,6 +11374,31 @@ void SpectrumWidget::prepareForTopLevelChange()
     // so identically on Metal, D3D and Vulkan.
     QEvent event(QEvent::WindowAboutToChangeInternal);
     QCoreApplication::sendEvent(this, &event);
+#endif
+}
+
+// From AetherSDR src/gui/SpectrumWidget.cpp:2397-2420 [@0dea0dd7].
+// Adapter: use Nereus's GPU build flag; shutdown is also invoked by the stack
+// before the top-level backing store is destroyed. Only destroy native CHILD
+// windows here: a standalone SpectrumWidget owns the QRhi its base destructor
+// still needs, so destroying its top-level window here would free that QRhi.
+void SpectrumWidget::prepareForShutdown()
+{
+    if (m_shutdownPrepared) { return; }
+    m_shutdownPrepared = true;
+
+    prepareForTopLevelChange();
+    setUpdatesEnabled(false);
+    hide();
+
+#ifdef NEREUS_GPU_SPECTRUM
+    releaseResources();
+#ifdef Q_OS_MAC
+    // Drop the native child window while its parent backing store is still
+    // alive, so any remaining platform resources are gone before QWidgetWindow
+    // destruction runs on app exit.
+    if (!isWindow()) { destroy(true, true); }
+#endif
 #endif
 }
 

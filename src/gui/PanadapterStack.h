@@ -62,6 +62,15 @@
 //                                    button share one path. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-22  J.J. Boyd / KG4VCF  Retire floating windows with their pans,
+//                                    following AetherSDR PanadapterStack.cpp
+//                                    removePanadapter() [@0dea0dd7]. Bind
+//                                    deferred render work to the original
+//                                    applet/window lifetime; adapt upstream
+//                                    prepareShutdown() so panes die before
+//                                    their graphics owners, including pending
+//                                    removals. AI-assisted adaptation via
+//                                    OpenAI Codex.
 // =================================================================
 #pragma once
 
@@ -69,6 +78,7 @@
 #include <QString>
 #include <QList>
 #include <QMap>
+#include <QPointer>
 
 class QSplitter;
 
@@ -207,6 +217,10 @@ public:
     /// everything the same way); this is the one that survives a quit. Codex,
     /// PR #318.
     void saveFloatingGeometry();
+
+    /// Destroy panes while their owning windows' graphics backends still live.
+    /// MainWindow calls this before its QWidget base destructor; idempotent.
+    void prepareShutdown();
     void restoreSplitterState();
 
     /// Phase 3F Sub-Epic D Task 6 test seam: read the root splitter's current
@@ -233,9 +247,9 @@ signals:
 
 private:
     void rebuildSplitters(const QString& layoutId, const QStringList& panIds);
-    /// Returns the ids of the pans that came back from a floating window,
-    /// so the caller can re-realize exactly those render contexts.
-    QStringList dockAllFloatingPans();
+    /// Retains guarded identities of the panes whose top-level changed.
+    /// A deferred refresh must never resolve a retired pane's reused ID.
+    QList<QPointer<PanadapterApplet>> dockAllFloatingPans();
     void clearSplitters();
 
     /// Single construction point for every splitter in the pan tree.
@@ -251,11 +265,15 @@ private:
     /// Re-realize the render contexts of the named pans, which have just
     /// returned from a floating window. Deliberately not "every docked pan":
     /// a widget whose top-level never changed must not be touched.
-    void refreshReturnedFromFloat(const QStringList& panIds);
+    void refreshReturnedFromFloat(const QList<QPointer<PanadapterApplet>>& applets);
+    void retireFloatingWindow(PanFloatingWindow* window, PanadapterApplet* applet);
 
     QSplitter*                                 m_rootSplitter {nullptr};
     QMap<QString, PanadapterApplet*>           m_pans;
     QMap<QString, PanFloatingWindow*>          m_floating;
+    QList<QPointer<PanadapterApplet>>          m_retiringPans;
+    QList<QPointer<PanFloatingWindow>>         m_retiringWindows;
+    bool                                       m_shutdownPrepared {false};
     QString                                    m_currentLayoutId {"1"};
     QString                                    m_activePanId;
 };

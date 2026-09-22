@@ -11,6 +11,7 @@
 #include "gui/PanadapterStack.h"
 #include "gui/PanFloatingWindow.h"
 #include "gui/PanadapterApplet.h"
+#include "gui/SpectrumWidget.h"
 #include "gui/MainWindow.h"
 #include "core/AppSettings.h"
 
@@ -192,9 +193,64 @@ private slots:
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 
         QVERIFY(omitted.isNull());
-        QVERIFY(floater.isNull());
+        // The old graphics owner is retired only after its widget dies.
+        QTRY_VERIFY(floater.isNull());
         QCOMPARE(stack.count(), 1);
         QVERIFY(stack.panadapter(QStringLiteral("pan-0")) != nullptr);
+    }
+
+    void removing_floating_pan_releases_window_and_allows_reused_id()
+    {
+        PanadapterStack stack;
+        const QString id = QStringLiteral("pan-0");
+        QPointer<PanadapterApplet> retired(stack.panadapter(id));
+        stack.floatPanadapter(id);
+        QPointer<PanFloatingWindow> oldWindow(stack.floatingWindowForTest(id));
+        QVERIFY(oldWindow);
+        QSignalSpy retirements(&stack, &PanadapterStack::panRetired);
+
+        stack.removePanadapter(id);
+        QCOMPARE(stack.count(), 0);
+        QCOMPARE(retirements.size(), 1);
+        QVERIFY(!stack.floatingWindowForTest(id));
+        QVERIFY(!oldWindow->isVisible());
+
+        auto* replacement = stack.addPanadapter(id);
+        stack.floatPanadapter(id);
+        QPointer<PanFloatingWindow> replacementWindow(stack.floatingWindowForTest(id));
+        QVERIFY(replacementWindow);
+        QVERIFY(replacementWindow != oldWindow);
+        oldWindow->requestDock(); // A retiring window must not dock the replacement.
+        QCOMPARE(stack.floatingWindowForTest(id), replacementWindow.data());
+
+        // Force child destruction before the queued first-float render callback.
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QVERIFY(retired.isNull());
+        QTRY_VERIFY(oldWindow.isNull());
+        QCoreApplication::processEvents();
+        QCOMPARE(stack.panadapter(id), replacement);
+        QCOMPARE(stack.floatingWindowForTest(id), replacementWindow.data());
+        QTRY_VERIFY(replacement->spectrumWidget()->isVisible());
+    }
+
+    void deferred_dock_refresh_does_not_show_replacement_pan()
+    {
+        PanadapterStack stack;
+        const QString id = QStringLiteral("pan-0");
+        stack.floatPanadapter(id);
+        QTRY_VERIFY(stack.spectrum(id)->isVisible());
+        QPointer<PanadapterApplet> retired(stack.panadapter(id));
+        stack.dockPanadapter(id); // Queues a render refresh for this instance.
+        stack.removePanadapter(id);
+        auto* replacement = stack.addPanadapter(id);
+        replacement->spectrumWidget()->hide();
+
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+        QVERIFY(retired.isNull());
+        QCoreApplication::processEvents();
+        // A pending refresh for the retired pan must not act on a reused ID.
+        QVERIFY(replacement->spectrumWidget()->isHidden());
+        QCOMPARE(stack.panadapter(id), replacement);
     }
 
     void layout_retaining_a_floating_pan_docks_before_reparenting()
@@ -214,10 +270,98 @@ private slots:
         QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
 
         QVERIFY(retained);
-        QVERIFY(floater.isNull());
+        // A hidden destination cannot render yet. The outgoing graphics owner
+        // must survive until the retained widget renders in the new window.
+#ifdef NEREUS_GPU_SPECTRUM
+        QVERIFY(floater);
+        QVERIFY(!floater->isVisible());
+#endif
+        stack.show();
+        QTRY_VERIFY(floater.isNull());
         QCOMPARE(stack.panadapter(QStringLiteral("pan-1")), retained.data());
         QVERIFY(!retained->isWindow());
         QCOMPARE(stack.count(), 2);
+    }
+
+    void shutdown_with_pending_retired_pans_data()
+    {
+        QTest::addColumn<int>("state");
+        QTest::newRow("docked") << 0;
+        QTest::newRow("floating") << 1;
+        QTest::newRow("returning-from-float") << 2;
+    }
+
+    void shutdown_with_pending_retired_pans()
+    {
+        QFETCH(int, state);
+        PanadapterStack stack;
+        stack.show();
+        const QString id = QStringLiteral("pan-0");
+        QPointer<PanadapterApplet> applet(stack.panadapter(id));
+        QPointer<PanFloatingWindow> floater;
+        if (state > 0) {
+            stack.floatPanadapter(id);
+            floater = stack.floatingWindowForTest(id);
+            QTRY_VERIFY(applet->spectrumWidget()->isVisible());
+        }
+        if (state == 2) { stack.dockPanadapter(id); }
+        stack.removePanadapter(id);
+        // Quit before deferred deletion or the destination's next frame.
+        stack.prepareShutdown();
+        QVERIFY(applet.isNull());
+        QVERIFY(floater.isNull());
+        QCOMPARE(stack.count(), 0);
+        stack.prepareShutdown(); // Idempotent when the owner subsequently dies.
+        QCoreApplication::processEvents();
+    }
+
+    void rapid_float_dock_preserves_all_outgoing_owners_data()
+    {
+        QTest::addColumn<int>("completion");
+        QTest::newRow("destination-frame") << 0;
+        QTest::newRow("remove") << 1;
+        QTest::newRow("shutdown") << 2;
+    }
+
+    void rapid_float_dock_preserves_all_outgoing_owners()
+    {
+        QFETCH(int, completion);
+        PanadapterStack stack;
+        const QString id = QStringLiteral("pan-0");
+        QPointer<PanadapterApplet> applet(stack.panadapter(id));
+        stack.floatPanadapter(id);
+        QTRY_VERIFY(applet->spectrumWidget()->isVisible());
+        QPointer<PanFloatingWindow> first(stack.floatingWindowForTest(id));
+        stack.dockPanadapter(id);
+        stack.floatPanadapter(id);
+        QPointer<PanFloatingWindow> second(stack.floatingWindowForTest(id));
+        QVERIFY(first != second);
+        stack.dockPanadapter(id);
+
+        // No destination has rendered between these moves. Deferred deletion
+        // must not destroy either candidate owner of the widget's last QRhi.
+        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+#ifdef NEREUS_GPU_SPECTRUM
+        QVERIFY(first);
+        QVERIFY(second);
+        QVERIFY(!first->isVisible());
+        QVERIFY(!second->isVisible());
+#endif
+        if (completion == 0) {
+            stack.show();
+            QTRY_VERIFY(first.isNull() && second.isNull());
+            QVERIFY(applet);
+            QVERIFY(applet->spectrumWidget()->isVisible());
+        } else {
+            if (completion == 1) {
+                stack.removePanadapter(id);
+                QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            } else {
+                stack.prepareShutdown();
+            }
+            QVERIFY(applet.isNull());
+            QTRY_VERIFY(first.isNull() && second.isNull());
+        }
     }
 
     void layout2h1BuildsThreePans() {

@@ -512,6 +512,11 @@ advertising it. Preserve explicit operator add/layout operations after hydrate.
   concrete handler/property and acceptance case. Trace generic mirrored DSP
   setters before labelling them broken; the observed FIR-graph gap is a local
   visualization dependency, not evidence that all DSP settings fail.
+- [ ] Wire Tools → Network Diagnostics to the existing
+  `MainWindow::openNetworkDiagnostics()` role-aware handler. The status segment
+  already opens the implemented local/remote dialog, but the Tools entry is
+  still disabled with an obsolete "NYI — Phase X" tooltip. Verify the real
+  menu action reaches the appropriate dialog without changing connection state.
 - [ ] Complete task 4a's title/status/pan connection actions and persistent
   status. Keep automatic panel callbacks separate from explicit connect.
   Disable unavailable local-resource controls with a reason, and gate all
@@ -1049,7 +1054,30 @@ rules, configuration sample and the R3 verification ledger.
   Matching GUI/Core/all-tests builds pass. The unfiltered desktop suite passes
   725/727 in 338.49 seconds, with the same two native microphone-open timeouts
   (`tst_port_audio_bus`, `tst_audio_engine_speakers_live_reconfig`). R-R3-36 and
-  the full-suite gate remain open. Hardware float/dock acceptance is pending.
+  the full-suite gate remained open at that checkpoint. The follow-up below
+  records the latest suite result. Hardware float/dock acceptance is pending.
+- [x] Close the floating pane's window when its logical pan is retired, and
+  bind queued float/dock rendering to the original applet/window identity.
+  Removing and recreating a pan ID cannot dock or show the replacement through
+  stale work. Preserve an outgoing graphics owner until the moved widget has
+  rendered in its new window or has been destroyed. Orderly shutdown destroys
+  registered and pending-retired panes before their graphics owners, including
+  an immediate quit during a dock operation. This completes the additional
+  software lifetime gap under R-R3-09; it does not close hardware acceptance.
+  Regression tests first exposed a stale floating-window registration and a
+  Qt graphics-owner use-after-free. The three focused pane/layout/media targets
+  now pass, including hidden destinations, reused IDs and immediate shutdown.
+  Independent review found no blocking defect; its rapid multi-window coverage
+  recommendation was added and passed for destination render, removal and
+  shutdown. Matching GUI/Core/all-tests builds pass. The first unfiltered run
+  passed 726/727 in 281.72 seconds and exposed the station-session fixture's
+  shared settings file: parallel GUI tests could overwrite a TGXL persistence
+  check. A process-specific test profile fixes that isolation gap without
+  changing product TGXL behavior. The final unfiltered parallel run passes
+  **727/727 in 272.92 seconds**, including both native microphone tests that
+  timed out at earlier checkpoints. This satisfies the current software suite
+  gate; R-R3-36's optional-capture startup behavior and hardware acceptance
+  remain open and are not claimed fixed by one successful device-open run.
 - [ ] Exercise one pan, four docked pans, floating pans and multiple slices
   sharing a stream. Allocate the session budget across focused/background
   endpoints; reduce display rate/pixels before impairing audio or control.

@@ -45,6 +45,7 @@
 
 #include <QByteArray>
 #include <QCryptographicHash>
+#include <QFile>
 #include <QHostAddress>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -255,6 +256,7 @@ class TstStationSession : public QObject {
 
 private slots:
     void initTestCase();
+    void cleanupTestCase();
 
     // ---- TokenStore (task 18 step 3) ----
     void tokenIsGeneratedNotChosenAndPersists();
@@ -339,6 +341,22 @@ private:
 void TstStationSession::initTestCase()
 {
     QVERIFY(m_securityDir.isValid());
+    // TGXL admission persists through the process settings singleton. The
+    // generic Qt test sandbox is shared by parallel test executables, so a
+    // different GUI test can replace that file between our save and reload.
+    // Follow the receive-layout session fixture's process-specific profile.
+    const QString profile = QStringLiteral("station-session-%1")
+                                .arg(QCoreApplication::applicationPid());
+    AppSettings::setProfileOverride(profile);
+    QCOMPARE(AppSettings::instance().filePath(), AppSettings::resolveSettingsPath(profile));
+    AppSettings::instance().clear();
+}
+
+void TstStationSession::cleanupTestCase()
+{
+    const QString path = AppSettings::instance().filePath();
+    QFile::remove(path);
+    QFile::remove(path + QStringLiteral(".bak"));
 }
 
 void TstStationSession::mediaEnvelopeIsBoundedAndTyped()

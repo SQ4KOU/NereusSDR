@@ -31,6 +31,10 @@
 //                 AetherSDR src/gui/SpectrumWidget.cpp:1843-1857,
 //                 2227-2247, 7092-7110 [@1e0718ad]. AI-assisted
 //                 transformation via Anthropic Claude Code.
+//   2026-09-22 — J.J. Boyd (KG4VCF). Adapt prepareForShutdown() from
+//                 AetherSDR src/gui/SpectrumWidget.cpp:2397-2420 [@0dea0dd7].
+//                 Keep a standalone widget's owning graphics window alive
+//                 until QRhiWidget teardown. AI-assisted via OpenAI Codex.
 // =================================================================
 
 /*  enums.cs
@@ -1467,6 +1471,9 @@ public slots:
     /// not re-send it.
     void prepareForTopLevelChange();
 
+    /// Idempotent final teardown while the owning top-level QRhi still lives.
+    void prepareForShutdown();
+
     /// Drop the pipelines/buffers/textures so initialize() rebuilds them
     /// against the new window's surface. Linux/OpenGL survives the move, so
     /// there it is just a repaint request.
@@ -1481,6 +1488,9 @@ public slots:
     /// reassert one without the other. Idempotent; a no-op off macOS and on
     /// non-GPU builds.
     void applyNativeWindowIsolationPolicy();
+
+private:
+    bool m_shutdownPrepared {false};
 
 public:
     /// Fraction of the DDC's spectrum discarded at EACH edge when drawing
