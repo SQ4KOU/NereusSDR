@@ -813,7 +813,7 @@ bool TxChannel::stageRunning(Stage s) const
     // From TXA.c:130  run=1 — eqmeter (gated on eqp.run via second param)
     case Stage::EqMeter:   return txa[ch].eqmeter.p->run   != 0;
     // From TXA.c:145  run=0 — preemph (pre-emphasis filter)
-    case Stage::PreEmph:   return txa[ch].preemph.p->run   != 0;
+    case Stage::PreEmph:   return getRun_emphp(txa[ch].preemph.p) != 0;
     // From TXA.c:158  run=0 — leveler (wcpagc, OFF by default)
     case Stage::Leveler:   return txa[ch].leveler.p->run   != 0;
     // From TXA.c:183  run=1 — lvlrmeter (gated on leveler.run)
@@ -850,13 +850,21 @@ bool TxChannel::stageRunning(Stage s) const
     case Stage::AlcMeter:  return txa[ch].alcmeter.p->run  != 0;
     // From TXA.c:394  run=1 — sip1 (siphon for TX spectrum)
     case Stage::Sip1:      return txa[ch].sip1.p->run      != 0;
-    // From TXA.c:405  run=1 (runcal) — calcc (PureSignal calibration, ON but unused until 3M-4)
-    // calcc struct uses 'runcal' not 'run' — from wdsp/calcc.h:34 [v2.10.3.13]
-    case Stage::Calcc:     return txa[ch].calcc.p->runcal  != 0;
-    // From TXA.c:424  run=0 — iqc (IQ correction)
-    case Stage::Iqc:       return txa[ch].iqc.p0->run      != 0;
+    // TAPR WDSP 2.10 makes CALCC opaque.  Read the run state through the
+    // narrow compatibility getter rather than dereferencing its structure.
+    case Stage::Calcc: {
+        int run = 0;
+        return ::GetPSRunCal(ch, &run) != 0 && run != 0;
+    }
+    // From TXA.c:424  run=0 — iqc (IQ correction). WDSP 2.10 keeps IQC
+    // opaque, so use the narrow native readback under ch[channel].csDSP.
+    case Stage::Iqc: {
+        int run = 0;
+        int busy = 0;
+        return ::GetPSCorrectionState(ch, &run, &busy) != 0 && run != 0;
+    }
     // From TXA.c:434  run=0 — cfir (custom CIC FIR, turned on if needed)
-    case Stage::Cfir:      return txa[ch].cfir.p->run      != 0;
+    case Stage::Cfir:      return getRun_cfir(txa[ch].cfir.p) != 0;
     // From TXA.c:451  run=0 — rsmpout (output resampler, turned on if needed)
     case Stage::RsmpOut:   return txa[ch].rsmpout.p->run   != 0;
     // From TXA.c:462  run=1 — outmeter
@@ -4521,33 +4529,52 @@ void TxChannel::setTxFixedGain(double level)
 // PureSignal API wrappers (Phase 3M-4 Task 3)
 //
 // Each instance method delegates to the matching WDSP entry point with
-// m_channelId as the channel arg.  All wrappers guard the WDSP call with
-// `txa[m_channelId].rsmpin.p == nullptr` (matching the existing CFC / DEXP
-// wrapper convention — a null rsmpin means create_txa() was never called for
-// this channel id, in which case calcc.p is also null).
+// m_channelId as the channel arg.  CALCC is opaque in TAPR WDSP 2.10, so the
+// compatibility GetPSRunCal readback supplies the common validity guard.
 //
 // The 2 static routing helpers wire the CMaster RX/TX feedback streams.
 // They take an explicit txid (always 0 for the primary transmitter at the
 // callsite — cmaster.cs:533-534 [v2.10.3.13]).
 //
-// From Thetis wdsp/calcc.c:891-1132 [v2.10.3.13]
+// From TAPR WDSP 2.10 calcc.c [@b02d5bac]
 // + Thetis cmaster.cs:143-147 [v2.10.3.13] (channel routing).
 // ===========================================================================
+
+bool TxChannel::psAvailable() const noexcept
+{
+#ifdef HAVE_WDSP
+    int run = 0;
+    return ::GetPSRunCal(m_channelId, &run) != 0;
+#else
+    return false;
+#endif
+}
 
 void TxChannel::setPSRunCal(int run)
 {
 #ifdef HAVE_WDSP
-    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    if (!psAvailable()) return;
     ::SetPSRunCal(m_channelId, run);
 #else
     Q_UNUSED(run);
 #endif
 }
 
+std::optional<bool> TxChannel::psRunCal() const
+{
+#ifdef HAVE_WDSP
+    int run = 0;
+    if (::GetPSRunCal(m_channelId, &run) == 0) return std::nullopt;
+    return run != 0;
+#else
+    return std::nullopt;
+#endif
+}
+
 void TxChannel::setPSMox(bool mox)
 {
 #ifdef HAVE_WDSP
-    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    if (!psAvailable()) return;
     ::SetPSMox(m_channelId, mox ? 1 : 0);
 #else
     Q_UNUSED(mox);
@@ -4556,8 +4583,9 @@ void TxChannel::setPSMox(bool mox)
 
 void TxChannel::getPSInfo(int* info16)
 {
+    if (info16 == nullptr) return;
 #ifdef HAVE_WDSP
-    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    if (!psAvailable()) return;
     ::GetPSInfo(m_channelId, info16);
 #else
     Q_UNUSED(info16);
@@ -4567,7 +4595,7 @@ void TxChannel::getPSInfo(int* info16)
 void TxChannel::setPSReset(bool reset)
 {
 #ifdef HAVE_WDSP
-    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    if (!psAvailable()) return;
     ::SetPSReset(m_channelId, reset ? 1 : 0);
 #else
     Q_UNUSED(reset);
@@ -4577,7 +4605,7 @@ void TxChannel::setPSReset(bool reset)
 void TxChannel::setPSMancal(bool mancal)
 {
 #ifdef HAVE_WDSP
-    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    if (!psAvailable()) return;
     ::SetPSMancal(m_channelId, mancal ? 1 : 0);
 #else
     Q_UNUSED(mancal);
@@ -4587,7 +4615,7 @@ void TxChannel::setPSMancal(bool mancal)
 void TxChannel::setPSAutomode(bool automode)
 {
 #ifdef HAVE_WDSP
-    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    if (!psAvailable()) return;
     ::SetPSAutomode(m_channelId, automode ? 1 : 0);
 #else
     Q_UNUSED(automode);
@@ -4597,7 +4625,7 @@ void TxChannel::setPSAutomode(bool automode)
 void TxChannel::setPSTurnon(bool turnon)
 {
 #ifdef HAVE_WDSP
-    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    if (!psAvailable()) return;
     ::SetPSTurnon(m_channelId, turnon ? 1 : 0);
 #else
     Q_UNUSED(turnon);
@@ -4607,7 +4635,7 @@ void TxChannel::setPSTurnon(bool turnon)
 void TxChannel::setPSControl(int reset, int mancal, int automode, int turnon)
 {
 #ifdef HAVE_WDSP
-    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    if (!psAvailable()) return;
     ::SetPSControl(m_channelId, reset, mancal, automode, turnon);
 #else
     Q_UNUSED(reset);
@@ -4620,7 +4648,7 @@ void TxChannel::setPSControl(int reset, int mancal, int automode, int turnon)
 void TxChannel::setPSLoopDelay(double seconds)
 {
 #ifdef HAVE_WDSP
-    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    if (!psAvailable()) return;
     ::SetPSLoopDelay(m_channelId, seconds);
 #else
     Q_UNUSED(seconds);
@@ -4630,7 +4658,7 @@ void TxChannel::setPSLoopDelay(double seconds)
 void TxChannel::setPSMoxDelay(double seconds)
 {
 #ifdef HAVE_WDSP
-    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    if (!psAvailable()) return;
     ::SetPSMoxDelay(m_channelId, seconds);
 #else
     Q_UNUSED(seconds);
@@ -4640,7 +4668,7 @@ void TxChannel::setPSMoxDelay(double seconds)
 double TxChannel::setPSTXDelay(double seconds)
 {
 #ifdef HAVE_WDSP
-    if (txa[m_channelId].rsmpin.p == nullptr) return 0.0;
+    if (!psAvailable()) return 0.0;
     return ::SetPSTXDelay(m_channelId, seconds);
 #else
     Q_UNUSED(seconds);
@@ -4651,7 +4679,7 @@ double TxChannel::setPSTXDelay(double seconds)
 void TxChannel::setPSHWPeak(double peak)
 {
 #ifdef HAVE_WDSP
-    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    if (!psAvailable()) return;
     ::SetPSHWPeak(m_channelId, peak);
 #else
     Q_UNUSED(peak);
@@ -4661,7 +4689,7 @@ void TxChannel::setPSHWPeak(double peak)
 double TxChannel::getPSHWPeak()
 {
 #ifdef HAVE_WDSP
-    if (txa[m_channelId].rsmpin.p == nullptr) return 0.0;
+    if (!psAvailable()) return 0.0;
     double peak = 0.0;
     ::GetPSHWPeak(m_channelId, &peak);
     return peak;
@@ -4673,7 +4701,7 @@ double TxChannel::getPSHWPeak()
 double TxChannel::getPSMaxTX()
 {
 #ifdef HAVE_WDSP
-    if (txa[m_channelId].rsmpin.p == nullptr) return 0.0;
+    if (!psAvailable()) return 0.0;
     double maxtx = 0.0;
     ::GetPSMaxTX(m_channelId, &maxtx);
     return maxtx;
@@ -4682,30 +4710,117 @@ double TxChannel::getPSMaxTX()
 #endif
 }
 
-void TxChannel::setPSPtol(double ptol)
+std::optional<Ps3Snapshot> TxChannel::getPs3DisplaySnapshot(
+    std::uint64_t sessionGeneration,
+    std::uint64_t sequence,
+    std::int64_t capturedAtUnixMilliseconds)
 {
 #ifdef HAVE_WDSP
-    if (txa[m_channelId].rsmpin.p == nullptr) return;
-    ::SetPSPtol(m_channelId, ptol);
+    if (!psAvailable()) {
+        return std::nullopt;
+    }
+    return m_ps3DisplayAdapter.capture(m_channelId, sessionGeneration, sequence,
+                                       capturedAtUnixMilliseconds);
 #else
-    Q_UNUSED(ptol);
+    Q_UNUSED(sessionGeneration);
+    Q_UNUSED(sequence);
+    Q_UNUSED(capturedAtUnixMilliseconds);
+    return std::nullopt;
 #endif
 }
 
-void TxChannel::getPSDisp(double* x, double* ym, double* yc, double* ys,
-                          double* cm, double* cc, double* cs)
+std::optional<Ps3CorrectionState> TxChannel::psCorrectionState() const
 {
 #ifdef HAVE_WDSP
-    if (txa[m_channelId].rsmpin.p == nullptr) return;
-    ::GetPSDisp(m_channelId, x, ym, yc, ys, cm, cc, cs);
+    if (!psAvailable()) {
+        return std::nullopt;
+    }
+    int run = 0;
+    int busy = 0;
+    if (::GetPSCorrectionState(m_channelId, &run, &busy) == 0) {
+        return std::nullopt;
+    }
+    return Ps3CorrectionState{run != 0, busy != 0};
 #else
-    Q_UNUSED(x);
-    Q_UNUSED(ym);
-    Q_UNUSED(yc);
-    Q_UNUSED(ys);
-    Q_UNUSED(cm);
-    Q_UNUSED(cc);
-    Q_UNUSED(cs);
+    return std::nullopt;
+#endif
+}
+
+std::optional<bool> TxChannel::psCorrectionAvailable() const
+{
+#ifdef HAVE_WDSP
+    if (!psAvailable()) {
+        return std::nullopt;
+    }
+    int available = 0;
+    if (::GetPSCorrectionAvailable(m_channelId, &available) == 0) {
+        return std::nullopt;
+    }
+    return available != 0;
+#else
+    return std::nullopt;
+#endif
+}
+
+bool TxChannel::stopPsCorrectionQuiescent()
+{
+#ifdef HAVE_WDSP
+    return psAvailable() && ::StopPSCorrectionQuiescent(m_channelId) != 0;
+#else
+    return false;
+#endif
+}
+
+bool TxChannel::requestPsCorrectionStop()
+{
+#ifdef HAVE_WDSP
+    return psAvailable() && ::RequestPSCorrectionStop(m_channelId) != 0;
+#else
+    return false;
+#endif
+}
+
+bool TxChannel::applyPsCorrection()
+{
+#ifdef HAVE_WDSP
+    return psAvailable() && ::ApplyPSCorrection(m_channelId) != 0;
+#else
+    return false;
+#endif
+}
+
+std::optional<Ps3FileOperationStatus> TxChannel::psFileOperationStatus(
+    Ps3FileOperationKind kind) const
+{
+#ifdef HAVE_WDSP
+    if (!psAvailable()) return std::nullopt;
+    ::PSFileOperationStatus native{};
+    if (::GetPSFileOperationStatus(m_channelId, static_cast<int>(kind),
+                                   &native) == 0) {
+        return std::nullopt;
+    }
+    if (native.result < static_cast<int>(Ps3FileOperationResult::Success)
+        || native.result > static_cast<int>(Ps3FileOperationResult::Cancelled)) {
+        return std::nullopt;
+    }
+    return Ps3FileOperationStatus{
+        native.generation,
+        native.pending != 0,
+        static_cast<Ps3FileOperationResult>(native.result)};
+#else
+    Q_UNUSED(kind);
+    return std::nullopt;
+#endif
+}
+
+bool TxChannel::cancelPsFileOperation(Ps3FileOperationKind kind)
+{
+#ifdef HAVE_WDSP
+    return psAvailable()
+        && ::CancelPSFileOperation(m_channelId, static_cast<int>(kind)) != 0;
+#else
+    Q_UNUSED(kind);
+    return false;
 #endif
 }
 
@@ -4716,58 +4831,10 @@ void TxChannel::setPSFeedbackRate(int rate)
     // observe what PureSignal::applyBoardCapabilities pushed through.
     m_lastPSFeedbackRate = rate;
 #ifdef HAVE_WDSP
-    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    if (!psAvailable()) return;
     ::SetPSFeedbackRate(m_channelId, rate);
 #else
     Q_UNUSED(rate);
-#endif
-}
-
-void TxChannel::setPSPinMode(bool pin)
-{
-#ifdef HAVE_WDSP
-    if (txa[m_channelId].rsmpin.p == nullptr) return;
-    ::SetPSPinMode(m_channelId, pin ? 1 : 0);
-#else
-    Q_UNUSED(pin);
-#endif
-}
-
-void TxChannel::setPSMapMode(bool map)
-{
-#ifdef HAVE_WDSP
-    if (txa[m_channelId].rsmpin.p == nullptr) return;
-    ::SetPSMapMode(m_channelId, map ? 1 : 0);
-#else
-    Q_UNUSED(map);
-#endif
-}
-
-void TxChannel::setPSStabilize(bool stbl)
-{
-#ifdef HAVE_WDSP
-    if (txa[m_channelId].rsmpin.p == nullptr) return;
-    ::SetPSStabilize(m_channelId, stbl ? 1 : 0);
-#else
-    Q_UNUSED(stbl);
-#endif
-}
-
-void TxChannel::setPSIntsAndSpi(int ints, int spi)
-{
-    // Codex Fix F: cache the (ints, spi) pair last forwarded so the
-    // tst_puresignal_coordinator test seams (lastPSIntsForTest /
-    // lastPSSpiForTest) can verify PureSignal::setTintIndex(idx) routes
-    // through to WDSP.  Caching is unconditional regardless of WDSP
-    // build mode (matches m_lastPSFeedbackRate pattern at line 3833).
-    m_lastPSInts = ints;
-    m_lastPSSpi  = spi;
-#ifdef HAVE_WDSP
-    if (txa[m_channelId].rsmpin.p == nullptr) return;
-    ::SetPSIntsAndSpi(m_channelId, ints, spi);
-#else
-    Q_UNUSED(ints);
-    Q_UNUSED(spi);
 #endif
 }
 
@@ -4780,27 +4847,55 @@ void TxChannel::setPSIntsAndSpi(int ints, int spi)
 // PSRestoreCorrection thread bodies fopen() the path verbatim and treat
 // failure as a silent no-op.
 
-void TxChannel::psSaveCorr(const QString& filename)
+std::optional<std::uint64_t> TxChannel::psSaveCorr(const QString& filename)
 {
 #ifdef HAVE_WDSP
-    if (txa[m_channelId].rsmpin.p == nullptr) return;
-    if (filename.isEmpty()) return;
+    if (!psAvailable() || filename.isEmpty() || filename.contains(QChar::Null)) {
+        return std::nullopt;
+    }
     QByteArray utf8 = filename.toUtf8();
+    if (utf8.isEmpty() || utf8.size() >= 256) return std::nullopt;
+    const auto before = psFileOperationStatus(Ps3FileOperationKind::Save);
+    const auto other = psFileOperationStatus(Ps3FileOperationKind::Restore);
+    if (!before || !other || before->pending || other->pending) return std::nullopt;
     ::PSSaveCorr(m_channelId, utf8.data());
+    const auto after = psFileOperationStatus(Ps3FileOperationKind::Save);
+    if (!after) return std::nullopt;
+    const std::uint64_t completion = before->generation + 1;
+    if (after->pending && after->generation != before->generation) {
+        return std::nullopt;
+    }
+    if (!after->pending && after->generation != completion) return std::nullopt;
+    return completion;
 #else
     Q_UNUSED(filename);
+    return std::nullopt;
 #endif
 }
 
-void TxChannel::psRestoreCorr(const QString& filename)
+std::optional<std::uint64_t> TxChannel::psRestoreCorr(const QString& filename)
 {
 #ifdef HAVE_WDSP
-    if (txa[m_channelId].rsmpin.p == nullptr) return;
-    if (filename.isEmpty()) return;
+    if (!psAvailable() || filename.isEmpty() || filename.contains(QChar::Null)) {
+        return std::nullopt;
+    }
     QByteArray utf8 = filename.toUtf8();
+    if (utf8.isEmpty() || utf8.size() >= 256) return std::nullopt;
+    const auto before = psFileOperationStatus(Ps3FileOperationKind::Restore);
+    const auto other = psFileOperationStatus(Ps3FileOperationKind::Save);
+    if (!before || !other || before->pending || other->pending) return std::nullopt;
     ::PSRestoreCorr(m_channelId, utf8.data());
+    const auto after = psFileOperationStatus(Ps3FileOperationKind::Restore);
+    if (!after) return std::nullopt;
+    const std::uint64_t completion = before->generation + 1;
+    if (after->pending && after->generation != before->generation) {
+        return std::nullopt;
+    }
+    if (!after->pending && after->generation != completion) return std::nullopt;
+    return completion;
 #else
     Q_UNUSED(filename);
+    return std::nullopt;
 #endif
 }
 

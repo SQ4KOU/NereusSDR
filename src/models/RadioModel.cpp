@@ -260,7 +260,11 @@ warren@wpratt.com
 #include "core/PaProfile.h"
 #include "core/PaProfileManager.h"
 #include "core/PaTelemetryScaling.h"
+#include "models/PureSignalSettings.h"
+#include "core/dsp/DspAssetService.h"
+#include "core/session/PureSignalSessionFacade.h"
 #include "core/PureSignal.h"
+#include "core/PsFeedbackChannel.h"
 #include "core/StepAttenuatorController.h"
 #include "core/TwoToneController.h"
 // Phase 3F Sub-Epic C Task 6: TxSliceArbiter integration.
@@ -545,6 +549,25 @@ RadioModel::RadioModel(Role role, QObject* parent)
     , m_wdspEngine(new WdspEngine(this))
 {
     m_role = role;
+    connect(this, &RadioModel::connectionStateChanged, this, [this](ConnectionState state) {
+        if (state == ConnectionState::Connected && m_pureSignal) {
+            m_pureSignal->applyAcceptedSettingsToEngine();
+            m_pureSignal->resumeAutomaticCalibrationPreference();
+        }
+    });
+    m_dspAssets = new DspAssetService(AppSettings::instance(), role == Role::Local, this);
+    connect(m_dspAssets, &DspAssetService::configurationChanged, this, [this]() {
+        scheduleSettingsSave();
+    });
+    m_pureSignalSettings = new PureSignalSettings(this);
+    m_pureSignalFacade = new PureSignalSessionFacade(this, nullptr, this);
+    if (role == Role::Local) {
+        m_pureSignalSettings->load(AppSettings::instance().lastConnected());
+        connect(m_pureSignalSettings, &PureSignalSettings::configurationChanged, this, [this]() {
+            m_pureSignalSettings->save();
+            scheduleSettingsSave();
+        });
+    }
 
     // Remote Daemon R2 Task 12: construct and start the per-slice S-meter
     // pump ONLY for Role::Local. m_wdspEngine above is constructed
@@ -3821,7 +3844,140 @@ void RadioModel::activateSliceChannel(SliceModel* slice)
     // fired.
     syncNotchesToChannel(ch, slice->sliceIndex());
 
+    applyNnrStateToChannel(slice, ch);
     ch->setActive(true);
+}
+
+// NereusSDR-original acceptance boundary for the WDSP 2.10 controls.
+// Resolve the current channel for every call: a rate/mode change can replace
+// the RxChannel while the SliceModel and its stable identity remain alive.
+void RadioModel::wireNnrSettings(SliceModel* slice)
+{
+    slice->setNnrSettingsApplier([this, slice](const NnrSettings& requested,
+                                               QString* reason) -> std::optional<NnrSettings> {
+        RxChannel* channel = m_wdspEngine ? m_wdspEngine->rxChannel(slice->sliceIndex()) : nullptr;
+        if (!channel) {
+            return requested; // Offline preference, visibly distinct from runtime readiness.
+        }
+        const bool accepted = channel->setNnrTuning(requested, reason);
+        slice->updateNnrDiagnostics(channel->nnrDiagnostics());
+        if (!accepted) {
+            return std::nullopt;
+        }
+        return channel->nnrTuning();
+    });
+    slice->setNrSelectionApplier([this, slice](NrSlot requested, QString* reason) {
+        RxChannel* channel = m_wdspEngine ? m_wdspEngine->rxChannel(slice->sliceIndex()) : nullptr;
+        if (!channel) {
+            return true;
+        }
+        const bool accepted = channel->setActiveNr(requested);
+        slice->updateNnrDiagnostics(channel->nnrDiagnostics());
+        if (!accepted && reason) {
+            *reason = slice->nnrStatus().isEmpty()
+                ? tr("The requested noise reduction is unavailable.") : slice->nnrStatus();
+        }
+        return accepted;
+    });
+    connect(slice, &SliceModel::nnrConfigurationChanged, this,
+            [this, slice]() { scheduleSettingsSave(slice); });
+    connect(slice, &SliceModel::nnrDiagnosticsRequested, this,
+            [this, slice](int testMode, int outputMode) {
+        QString reason;
+        setNnrDiagnosticMode(slice->sliceIndex(), testMode, outputMode, &reason);
+        slice->reportNnrEditResult(reason);
+    });
+    connect(slice, &SliceModel::activeNrChanged, this,
+            [this, slice](NrSlot) { scheduleSettingsSave(slice); });
+}
+
+bool RadioModel::setNnrDiagnosticMode(int sliceId, int testMode, int outputMode, QString* reason)
+{
+    if (reason) { reason->clear(); }
+    SliceModel* slice = sliceById(sliceId);
+    if (!slice || testMode < 0 || testMode > 2 || outputMode < 0 || outputMode > 1) {
+        if (reason) { *reason = tr("Unknown receiver or unsupported NNR diagnostic mode."); }
+        return false;
+    }
+    if (role() == Role::Remote) {
+        const auto result = m_station ? m_station->requestNnrDiagnostics(sliceId, testMode, outputMode)
+            : IStationLink::CommandOutcome{false, tr("The station is not connected.")};
+        if (reason) { *reason = result.reason; }
+        return result.sent;
+    }
+    RxChannel* channel = m_wdspEngine ? m_wdspEngine->rxChannel(sliceId) : nullptr;
+    if (!channel) {
+        if (reason) { *reason = tr("The NNR receiver is not ready."); }
+        return false;
+    }
+    const bool accepted = channel->setNnrDiagnostics(testMode, outputMode, reason);
+    slice->updateNnrDiagnostics(channel->nnrDiagnostics());
+    return accepted;
+}
+
+bool RadioModel::applyNnrModelSelection(quint32 revision, QString* reason)
+{
+    if (reason) {
+        reason->clear();
+    }
+    if (role() == Role::Remote) {
+        if (!m_station) {
+            if (reason) {
+                *reason = QStringLiteral("There is no station session.");
+            }
+            return false;
+        }
+        const auto outcome = m_station->requestApplyNnrModels(revision);
+        if (reason) {
+            *reason = outcome.reason;
+        }
+        return outcome.sent;
+    }
+    if (!m_dspAssets || revision != m_dspAssets->selectionRevision()) {
+        if (reason) {
+            *reason = QStringLiteral("The model selection changed; refresh it before applying.");
+        }
+        return false;
+    }
+    if (m_transmitModel.isMox()) {
+        if (reason) {
+            *reason = QStringLiteral("Stop transmitting before reconnecting to apply NNR models.");
+        }
+        return false;
+    }
+    flushPendingSettingsSave();
+    if (!m_connection) {
+        const auto paths = m_dspAssets->resolveNnrModelPaths(reason);
+        if (!m_wdspEngine->setNnrModelPaths(paths, reason)) {
+            return false;
+        }
+        m_dspAssets->markNnrModelsApplied();
+        return true;
+    }
+    const RadioInfo radio = m_lastRadioInfo;
+    connectToRadioPreservingSlices(radio);
+    return true;
+}
+
+void RadioModel::applyNnrStateToChannel(SliceModel* slice, RxChannel* channel)
+{
+    if (!slice || !channel) {
+        return;
+    }
+    QString reason;
+    const bool tuningAccepted = channel->setNnrTuning(slice->nnrSettings(), &reason);
+    // A missing saved model must not enable a different model silently.
+    // Retain the saved preference so the operator can repair the asset.
+    if (tuningAccepted || slice->activeNr() != NrSlot::NNR) {
+        channel->setActiveNr(slice->activeNr());
+    } else {
+        channel->setActiveNr(NrSlot::Off);
+    }
+    NnrDiagnostics status = channel->nnrDiagnostics();
+    if (!tuningAccepted) {
+        status.explanation = reason;
+    }
+    slice->updateNnrDiagnostics(status);
 }
 
 // ── TNF fan-out (design section 6.3) ────────────────────────────────────────
@@ -5374,6 +5530,13 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId)
         }
     }
     slice->setSliceIndex(index);
+    if (role() == Role::Local) {
+        slice->setSettingsRadioIdentity(m_lastRadioInfo.macAddress);
+        // Restore before binding can activate a pooled receiver. Each stable
+        // slice ID owns its NR selection even when another slice has focus.
+        slice->restoreNnrSettings();
+        wireNnrSettings(slice);
+    }
     // Phase 3F: stamp the owning pan id BEFORE the sliceAdded() emit below,
     // so the MainWindow handler routes the new VfoWidget to the correct
     // pan's SpectrumWidget. Without this the handler would fall back to the
@@ -5823,6 +5986,12 @@ void RadioModel::removeSliceImpl(int sliceId)
     // victim itself, in which case fall back to slice 1.
     //
     SliceModel* victim = m_slices.at(position);
+    if (role() == Role::Local) {
+        saveSliceState(victim);
+        m_dirtySettingsSliceIds.remove(victim->sliceIndex());
+        m_settingsSaveScheduled = true;
+        flushPendingSettingsSave();
+    }
     if (m_radeRxTarget.slice == victim) {
         // Retire the exact QObject identity while it is still present in the
         // slice list. The worker acknowledgment arrives after its old route
@@ -6922,6 +7091,21 @@ void RadioModel::connectToRadioPreservingSlices(const RadioInfo& info)
     connectToRadioImpl(info, true);
 }
 
+Ps3RoutingSnapshot RadioModel::pureSignalRoutingSnapshot() const
+{
+    Ps3RoutingSnapshot route;
+    if (m_psccPump && m_psccPump->txChannelId() >= 0) {
+        route.txMonitorDdc = m_psccPump->txMonDdc();
+        route.feedbackDdc = m_psccPump->psFbDdc();
+        route.pumpActive = m_psccPump->isActive();
+        route.pairedBlocks = static_cast<std::uint64_t>(m_psccPump->totalBlocksPumped());
+    }
+    if (m_wdspEngine && m_wdspEngine->psFeedbackChannel()) {
+        route.feedbackChannelId = m_wdspEngine->psFeedbackChannel()->channelId();
+    }
+    return route;
+}
+
 void RadioModel::connectToRadio(const RadioInfo& info)
 {
     connectToRadioImpl(info, false);
@@ -6956,6 +7140,8 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
     }
 
     m_lastRadioInfo = info;
+    m_pureSignalSettings->load(info.macAddress);
+    m_dspAssets->setRadioIdentity(info.macAddress);
     m_intentionalDisconnect = false;
 
     // Compute HardwareProfile from model override (Phase 3I-RP).
@@ -7182,6 +7368,10 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
         if (!m_slices.isEmpty()) {
             m_slices.first()->setPanKey(QStringLiteral("pan-0"));
         }
+    }
+    for (SliceModel* slice : std::as_const(m_slices)) {
+        slice->setSettingsRadioIdentity(info.macAddress);
+        slice->restoreNnrSettings();
     }
     if (!preserveSlices) {
         setActiveSlice(0);
@@ -7433,7 +7623,7 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
                     // Push the active NR slot last — parameters must be set before
                     // run-flag so WDSP gets valid defaults on first enable.
                     // From Thetis console.cs:43297 SelectNR pattern [v2.10.3.13]
-                    rxCh->setActiveNr(primarySlice->activeNr());
+                    applyNnrStateToChannel(primarySlice, rxCh);
                 }
 
                 rxCh->setSnbEnabled(primarySlice->snbEnabled());
@@ -7492,6 +7682,13 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
         m_audioEngine->start();
         qCInfo(lcDsp) << "WDSP ready — RX channel 0 active, audio started";
     }, Qt::SingleShotConnection);
+    QString nnrPathError;
+    const auto nnrModelPaths = m_dspAssets->resolveNnrModelPaths(&nnrPathError);
+    if (m_wdspEngine->setNnrModelPaths(nnrModelPaths, &nnrPathError)) {
+        m_dspAssets->markNnrModelsApplied();
+    } else {
+        qCWarning(lcDsp) << "NNR model paths were refused:" << nnrPathError;
+    }
     m_wdspEngine->initialize(configDir);
 
     // WDSP wisdom now ALWAYS runs on a worker thread (WdspEngine::initialize
@@ -7795,6 +7992,15 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
                     m_wdspEngine ? m_wdspEngine->psFeedbackChannel() : nullptr);
             }
 
+            m_pureSignal->setSettings(m_pureSignalSettings);
+            m_pureSignal->setOperationalPermissionPredicate([this]() {
+                return !receiveOnlyStationPolicy();
+            });
+            m_pureSignal->setOperationalReadinessPredicate([this]() {
+                return isConnected() && m_txChannel && boardCapabilities().hasPureSignal;
+            });
+            m_pureSignal->initializeAutoCalPreference(m_pureSignalSettings->autoCalEnabled());
+
             // From Thetis cmaster.cs:566 [v2.10.3.13-beta2] (mi0bot):
             //   puresignal.SetPSHWPeak(txch, HardwareSpecific.PSDefaultPeak);
             //   // MI0BOT: Correct for correct PS value
@@ -7976,64 +8182,11 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
             // that the coordinator is live.
             emit pureSignalCoordinatorReady(m_pureSignal.get());
 
-            // ANAN-G2E bench-fix 2026-05-23 (JJ Boyd): per-MAC persistence
-            // for PS-A enabled (autoCalEnabled).  Without this the toggle
-            // lives only in memory and resets on every app launch.  Key
-            // shares the same hardware/<mac>/... per-MAC scope as the
-            // AlexController TX-bypass flags landed alongside this fix.
-            //
-            // Three subtle gotchas the bench surfaced (2026-05-23):
-            //
-            //   1. MAC source: m_connection->radioInfo().macAddress is
-            //      populated asynchronously by the radio handshake and is
-            //      still EMPTY at the moment this WDSP-init lambda runs.
-            //      Use m_lastRadioInfo.macAddress (cached at the top of
-            //      connectToRadio when the user picked the radio from
-            //      discovery) instead.
-            //
-            //   2. Save flush: AppSettings::instance().setValue() updates
-            //      only the in-memory map.  scheduleSettingsSave() writes
-            //      per-slice + AlexController + TransmitModel state but
-            //      does NOT call AppSettings::instance().save(), so this
-            //      arbitrary key never reaches the XML.  Direct save() is
-            //      the right pattern for rare user-initiated writes (same
-            //      as SpotHubDialog / SpectrumWidget).
-            //
-            //   3. UniqueConnection vs lambda: Qt::UniqueConnection
-            //      requires a pointer-to-member-function slot and Qt
-            //      SILENTLY DROPS the connect when handed a lambda
-            //      (with only a runtime warning).  Idempotency across
-            //      reconnect re-wires is already safe here because
-            //      m_pureSignal is reset() on disconnect (line 6760),
-            //      so its outgoing connections die with it before the
-            //      next connect rebuilds them — no UniqueConnection
-            //      needed.
-            {
-                const QString mac = m_lastRadioInfo.macAddress;
-                if (!mac.isEmpty()) {
-                    auto& s = AppSettings::instance();
-                    const QString key = QStringLiteral(
-                        "hardware/%1/pureSignal/autoCalEnabled").arg(mac);
-                    const bool persisted =
-                        (s.value(key, QStringLiteral("False")).toString()
-                         == QStringLiteral("True"));
-                    if (persisted) {
-                        m_pureSignal->setAutoCalEnabled(true);
-                    }
-                    connect(m_pureSignal.get(),
-                            &PureSignal::autoCalEnabledChanged,
-                            this,
-                            [mac](bool on) {
-                                AppSettings::instance().setValue(
-                                    QStringLiteral(
-                                        "hardware/%1/pureSignal/autoCalEnabled")
-                                        .arg(mac),
-                                    on ? QStringLiteral("True")
-                                       : QStringLiteral("False"));
-                                AppSettings::instance().save();
-                            });
-                }
-            }
+            // Restore desired automatic calibration only after local coordinator
+            // dependencies and board routing are ready. Remote snapshot hydration
+            // never invokes this operational readiness path.
+            m_pureSignal->applyAcceptedSettingsToEngine();
+            m_pureSignal->resumeAutomaticCalibrationPreference();
 
             // ── 3M-1c L.2 fixup: 5 TransmitModel two-tone signal connects + ──
             //                   initial-state pushes to TxChannel TXPostGen
@@ -8211,6 +8364,9 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
             // Thread.Sleep(space_mox_delay); // default 0 // from PSDR MW0LGE  [console.cs:29603]
             connect(m_moxController, &MoxController::txaFlushed,
                     m_txChannel, [this]() {
+                if (m_pureSignal) {
+                    m_pureSignal->onMoxChanged(false);
+                }
                 m_txChannel->setRunning(false);
             });
 
@@ -11175,10 +11331,10 @@ void RadioModel::wireSliceSignals(SliceModel* slice)
     // From Thetis console.cs:43297 SelectNR [v2.10.3.13]
     connect(slice, &SliceModel::activeNrChanged, this, [this, slice](NereusSDR::NrSlot slot) {
         RxChannel* rxCh = m_wdspEngine->rxChannel(slice->sliceIndex());
-        if (rxCh) {
+        if (rxCh && !slice->hasNrSelectionApplier()) {
             rxCh->setActiveNr(slot);
         }
-        scheduleSettingsSave();
+        scheduleSettingsSave(slice);
     });
 
     // ANF is per-slice: it lives in RXA, one instance per WDSP channel.
@@ -12642,15 +12798,23 @@ void RadioModel::updateAutoAgc()
 }
 
 // Coalesce settings saves to avoid writing on every scroll tick.
-void RadioModel::scheduleSettingsSave()
+void RadioModel::scheduleSettingsSave(SliceModel* slice)
 {
+    if (role() != Role::Local) {
+        return;
+    }
+    if (!slice) {
+        slice = m_activeSlice;
+    }
+    if (slice) {
+        m_dirtySettingsSliceIds.insert(slice->sliceIndex());
+    }
     if (m_settingsSaveScheduled) {
         return;
     }
     m_settingsSaveScheduled = true;
     QTimer::singleShot(500, this, [this]() {
-        m_settingsSaveScheduled = false;
-        saveSliceState(m_activeSlice);
+        flushPendingSettingsSave();
     });
 }
 
@@ -12667,7 +12831,40 @@ void RadioModel::flushPendingSettingsSave()
         return;
     }
     m_settingsSaveScheduled = false;
-    saveSliceState(m_activeSlice);
+    const QSet<int> dirty = std::exchange(m_dirtySettingsSliceIds, {});
+    for (int id : dirty) {
+        saveSliceState(sliceById(id));
+    }
+    if (dirty.isEmpty()) {
+        saveSliceState(nullptr);
+    }
+    QString error;
+    if (!AppSettings::instance().save(&error)) {
+        // Retain both live identities and already captured removed-slice values.
+        // A later edit, orderly shutdown, or bounded retry can commit them.
+        m_dirtySettingsSliceIds.unite(dirty);
+        m_settingsSaveScheduled = true;
+        if (!m_settingsRetryScheduled) {
+            m_settingsRetryScheduled = true;
+            QTimer::singleShot(5000, this, [this]() {
+                m_settingsRetryScheduled = false;
+                flushPendingSettingsSave();
+            });
+        }
+    }
+    if (m_settingsSaveError != error) {
+        m_settingsSaveError = error;
+        emit settingsSaveErrorChanged(error);
+    }
+}
+
+void RadioModel::applyStationSettingsSaveError(const QString& reason)
+{
+    if (role() != Role::Remote || m_settingsSaveError == reason) {
+        return;
+    }
+    m_settingsSaveError = reason;
+    emit settingsSaveErrorChanged(reason);
 }
 
 // Persist current slice state to AppSettings (per-band + session state).
@@ -12676,7 +12873,7 @@ void RadioModel::flushPendingSettingsSave()
 void RadioModel::saveSliceState(SliceModel* slice)
 {
     if (slice) {
-        slice->saveToSettings(m_lastBand);
+        slice->saveToSettings(slice->band());
     }
 
     // Flush AlexController if any per-band antenna or block-TX toggle
@@ -12934,6 +13131,9 @@ void RadioModel::teardownConnection()
     // TransmitModel seam first so any late-firing setPowerUsingTargetDbm
     // doesn't dereference a half-destructed PureSignal.
     m_transmitModel.setPureSignal(nullptr);
+    if (m_psccPump) {
+        m_psccPump->retireSession();
+    }
     m_pureSignal.reset();
     // Phase 3M-4 Task 17 chunk C: drain the pscc() driver before TxChannel
     // teardown so any in-flight pump drains cleanly.  PsccPump::~ default
@@ -14410,6 +14610,7 @@ void RadioModel::setRxNr(int rx, bool on, int nrIndex)
         case 4: slot = NrSlot::DFNR; break;
         case 5: slot = NrSlot::BNR;  break;
         case 6: slot = NrSlot::MNR;  break;
+        case 7: slot = NrSlot::NNR;  break;
         default: slot = NrSlot::NR1; break;
     }
     s->setActiveNr(slot);
@@ -14431,6 +14632,7 @@ int RadioModel::rxNrIndex(int rx) const
             case NrSlot::DFNR: return 4;
             case NrSlot::BNR:  return 5;
             case NrSlot::MNR:  return 6;
+            case NrSlot::NNR:  return 7;
         }
     }
     return 0;
@@ -16069,9 +16271,11 @@ PureSignal* RadioModel::installPureSignalForTest(TxChannel* tx)
     m_pureSignal = std::make_unique<PureSignal>(
         /*engine=*/nullptr, tx, /*fb=*/nullptr, /*mox=*/nullptr,
         /*stepAtt=*/nullptr, /*twoTone=*/nullptr, /*parent=*/nullptr);
+    m_pureSignal->setSettings(m_pureSignalSettings);
     connect(m_pureSignal.get(), &PureSignal::psEnabledChanged,
             this, &RadioModel::refreshDdcAssignmentForRadioState,
             Qt::UniqueConnection);
+    emit pureSignalCoordinatorReady(m_pureSignal.get());
     return m_pureSignal.get();
 }
 #endif

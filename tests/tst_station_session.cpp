@@ -2574,7 +2574,7 @@ void TstStationSession::receiveOnlyStationRefusesTransmitPropertyWrites()
     // R-R3-25 applies at the authenticated StationServer boundary too.
     // TransmitModel is mirrored bidirectionally for later phases, but an R3
     // receive-only server must reject those writes and return authoritative
-    // correction deltas rather than adopting the client's optimistic state.
+    // accepted-state results rather than adopting the client's optimistic state.
     QTemporaryDir settingsDir;
     QVERIFY(settingsDir.isValid());
     AppSettings stationSettings(
@@ -2620,7 +2620,7 @@ void TstStationSession::receiveOnlyStationRefusesTransmitPropertyWrites()
     QVERIFY(!stationTx.isTune());
     QCOMPARE(stationTx.power(), settledPower);
 
-    QTRY_VERIFY(clientEnd->receivedKinds().contains(QByteArrayLiteral("delta")));
+    QTRY_VERIFY(clientEnd->receivedKinds().contains(QByteArrayLiteral("property.result")));
     QTRY_VERIFY(!clientTx.isMox());
     QTRY_VERIFY(!clientTx.isTune());
     QTRY_COMPARE(clientTx.power(), settledPower);

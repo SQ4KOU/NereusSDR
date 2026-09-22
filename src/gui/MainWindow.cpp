@@ -326,6 +326,7 @@ warren@wpratt.com
 #include "core/PotaClient.h"
 #include "core/PskReporterClient.h"
 #include "PsForm.h"
+#include "AmpViewWindow.h"
 #include "PsaIndicatorWidget.h"
 #include "core/PureSignal.h"
 #include "core/TwoToneController.h"
@@ -358,6 +359,9 @@ warren@wpratt.com
 #include "gui/RemoteMediaController.h"
 #include "core/settings/SettingsProxy.h"
 #include "setup/DspSetupPages.h"   // NrAnfSetupPage::selectSubtab
+#include "gui/DspAssetDialog.h"
+#include "models/PureSignalSettings.h"
+#include "core/session/PureSignalSessionFacade.h"
 #include "TitleBar.h"
 #include "VaxFirstRunDialog.h"
 #if defined(Q_OS_LINUX)
@@ -1693,8 +1697,11 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
         dialog->selectPage(QStringLiteral("NB/SNB"));
         dialog->show();
     });
-    connect(newFlag, &VfoWidget::openNrSetupRequested, this,
-            [this](NereusSDR::NrSlot slot) {
+    connect(newFlag, &VfoWidget::openNrSetupForSliceRequested, this,
+            [this](NereusSDR::NrSlot slot, int sliceId) {
+        if (!m_radioModel->sliceById(sliceId)) {
+            return;
+        }
         auto* dialog = createSetupDialog();
         if (dialog == nullptr) {
             return;  // the gate refused and has already said why
@@ -1703,8 +1710,16 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
         // Deep-link to the sub-tab matching the NR slot the user clicked
         // (Task 18 polish 2026-04-23 — previously always opened NR1).
         if (auto* nrPage = dialog->findChild<NrAnfSetupPage*>()) {
-            nrPage->selectSubtab(slot);
+            nrPage->selectSubtab(slot, sliceId);
         }
+        dialog->show();
+    });
+    connect(newFlag, &VfoWidget::openNnrModelsRequested, this, [this](int sliceId) {
+        if (!m_radioModel->sliceById(sliceId)) {
+            return;
+        }
+        auto* dialog = new DspAssetDialog(m_radioModel, DspAssetKind::NnrModel, this);
+        dialog->setAttribute(Qt::WA_DeleteOnClose);
         dialog->show();
     });
     connect(newFlag, &VfoWidget::ritEnabledChanged, this, [slice](bool on) {
@@ -4553,6 +4568,9 @@ void MainWindow::buildUI()
         //                              display.cs:304-311 [v2.10.3.13])
         // displayduplex stays at SpectrumWidget's default (true) — see header.
         if (activeSpectrumWidget()) {
+            activeSpectrumWidget()->setShowIMDMeasurements(
+                AppSettings::instance().value(
+                    QStringLiteral("puresignal/showTwoToneMeasurements"), false).toBool());
             if (auto* tt = m_radioModel->twoToneController()) {
                 connect(tt, &TwoToneController::twoToneActiveChanged,
                         activeSpectrumWidget(), &SpectrumWidget::setTestingIMD);
@@ -4903,6 +4921,12 @@ void MainWindow::buildUI()
     // SKU cap blocks a +RX click (e.g. "Hermes Lite 2 supports a maximum
     // of 1 slices"). Surface that for 4 seconds so the operator sees why
     // the click did nothing.
+    connect(m_radioModel, &RadioModel::settingsSaveErrorChanged, this,
+            [this](const QString& reason) {
+        if (!reason.isEmpty()) {
+            showToast(reason, ToastSeverity::Error, 10000);
+        }
+    });
     connect(m_radioModel, &RadioModel::sliceAddRejected, this,
             [this](const QString& reason) {
         showToast(reason, ToastSeverity::Warning, 4000);
@@ -6776,6 +6800,7 @@ void MainWindow::buildMenuBar()
             { "NR&3",   Slot::NR3,  false },
             { "NR&4",   Slot::NR4,  false },
             { "&DFNR",  Slot::DFNR, false },
+            { "&NNR",   Slot::NNR, false },
             { "&MNR",   Slot::MNR,
 #ifdef HAVE_MNR
                 false
@@ -6798,10 +6823,20 @@ void MainWindow::buildMenuBar()
                     SliceModel* slice = m_radioModel->activeSlice();
                     if (slice) { slice->setActiveNr(slot); }
                 });
+            a->setData(static_cast<int>(slot));
             a->setCheckable(true);
             if (nr.hidden) { a->setVisible(false); }
             m_nrGroup->addAction(a);
         }
+        connect(nrMenu, &QMenu::aboutToShow, this, [this]() {
+            const SliceModel* slice = m_radioModel->activeSlice();
+            for (QAction* action : m_nrGroup->actions()) {
+                const NrSlot slot = static_cast<NrSlot>(action->data().toInt());
+                QSignalBlocker blocker(action);
+                action->setChecked(slice && slice->activeNr() == slot);
+                action->setEnabled(slice && (slot != NrSlot::NNR || slice->nnrAvailable()));
+            }
+        });
     }
 
     // ── NB submenu — Off/NB/NB2 mutual exclusion ───────────────────────────
@@ -6960,19 +6995,11 @@ void MainWindow::buildMenuBar()
         SliceModel* slice = m_radioModel->activeSlice();
         if (!slice) { return; }
 
-        // NR submenu sync — actions appended to m_nrGroup in this fixed order.
-        const NereusSDR::NrSlot nrOrder[] = {
-            NereusSDR::NrSlot::Off,  NereusSDR::NrSlot::NR1,
-            NereusSDR::NrSlot::NR2,  NereusSDR::NrSlot::NR3,
-            NereusSDR::NrSlot::NR4,  NereusSDR::NrSlot::DFNR,
-            NereusSDR::NrSlot::MNR,  NereusSDR::NrSlot::BNR,
-        };
-        auto syncNr = [this, nrOrder](NereusSDR::NrSlot slot) {
-            QList<QAction*> acts = m_nrGroup->actions();
-            const int n = static_cast<int>(std::size(nrOrder));
-            for (int i = 0; i < acts.size() && i < n; ++i) {
-                QSignalBlocker b(acts[i]);
-                acts[i]->setChecked(nrOrder[i] == slot);
+        // Each action carries its stable enum; menu ordering is presentation only.
+        auto syncNr = [this](NereusSDR::NrSlot slot) {
+            for (QAction* action : m_nrGroup->actions()) {
+                QSignalBlocker blocker(action);
+                action->setChecked(action->data().toInt() == static_cast<int>(slot));
             }
         };
         syncNr(slice->activeNr());
@@ -7893,27 +7920,28 @@ void MainWindow::buildStatusBar()
     // pureSignalCoordinatorReady (late-bind seam, Task 13).
     m_psaIndicator = new PsaIndicatorWidget(m_radioModel, barWidget);
     m_psaIndicator->setVisible(false);
-    auto wirePsaCoordinator = [this](PureSignal* ps) {
-        if (!ps) return;
-        connect(m_psaIndicator,
-                &PsaIndicatorWidget::invertRedBlueRequested,
-                this, [ps]() {
-                    ps->setInvertRedBlue(!ps->invertRedBlue());
-                });
-        connect(m_psaIndicator,
-                &PsaIndicatorWidget::hideFeedbackToggleRequested,
-                this, [ps]() {
-                    ps->setHideFeedback(!ps->hideFeedback());
-                });
-        connect(ps, &PureSignal::autoCalEnabledChanged,
-                this, &MainWindow::updatePsaIndicatorVisibility);
-    };
-    wirePsaCoordinator(m_radioModel->pureSignal());
-    connect(m_radioModel, &RadioModel::pureSignalCoordinatorReady,
-            this, [this, wirePsaCoordinator](PureSignal* ps) {
-                wirePsaCoordinator(ps);
-                updatePsaIndicatorVisibility();
-            });
+    connect(m_psaIndicator, &PsaIndicatorWidget::invertRedBlueRequested, this, [this]() {
+        auto& settings = AppSettings::instance();
+        const bool inverted = settings.value("InvertRedBluePsa", "False").toString() != "True";
+        settings.setValue("InvertRedBluePsa", inverted ? "True" : "False");
+        m_psaIndicator->setInvertRedBlue(inverted);
+        if (PureSignal* ps = m_radioModel->pureSignal()) {
+            ps->setInvertRedBlue(inverted);
+        }
+    });
+    connect(m_psaIndicator, &PsaIndicatorWidget::hideFeedbackToggleRequested, this, [this]() {
+        auto& settings = AppSettings::instance();
+        const bool hidden = settings.value("HideFeedbackLevel", "False").toString() != "True";
+        settings.setValue("HideFeedbackLevel", hidden ? "True" : "False");
+        m_psaIndicator->setHideFeedback(hidden);
+        if (PureSignal* ps = m_radioModel->pureSignal()) {
+            ps->setHideFeedback(hidden);
+        }
+    });
+    connect(m_radioModel->pureSignalSettings(), &PureSignalSettings::autoCalEnabledChanged,
+            this, &MainWindow::updatePsaIndicatorVisibility);
+    connect(m_radioModel->pureSignalFacade(), &PureSignalSessionFacade::statusChanged,
+            this, &MainWindow::updatePsaIndicatorVisibility);
     hbox->addWidget(m_psaIndicator);
 
     // ── Stretch ───────────────────────────────────────────────────────────────
@@ -9970,12 +9998,18 @@ void MainWindow::applyRemoteRoleGating()
     }
     for (QAction* action : {m_actPureSignal, m_actDspPureSignal}) {
         if (!action) { continue; }
-        action->setEnabled(transmitPermitted);
-        action->setToolTip(transmitPermitted ? QString() : transmitReason);
+        const bool ps3Supported = m_stationClient && m_stationClient->isHandshakeComplete()
+            && m_stationClient->capabilities().psAlgorithmVersion == 3;
+        action->setEnabled(ps3Supported);
+        action->setToolTip(ps3Supported
+            ? tr("PureSignal 3 settings, saved corrections and diagnostics. Transmit actions require R4.")
+            : tr("The connected station has not advertised PureSignal 3."));
     }
     if (m_pureSignalApplet) {
-        m_pureSignalApplet->setEnabled(transmitPermitted);
-        m_pureSignalApplet->setToolTip(transmitPermitted ? QString() : transmitReason);
+        const bool ps3Supported = m_stationClient && m_stationClient->isHandshakeComplete()
+            && m_stationClient->capabilities().psAlgorithmVersion == 3;
+        m_pureSignalApplet->setEnabled(ps3Supported);
+        m_pureSignalApplet->setVisible(ps3Supported);
     }
     if (m_actConnect != nullptr) {
         m_actConnect->setEnabled(m_station.isRemote() && !active);
@@ -10168,11 +10202,6 @@ void MainWindow::showSupportDialog()
 // NereusSDR mirrors via raise()+activateWindow() instead of Focus().
 void MainWindow::openPureSignalDialog()
 {
-    if (!transmitControlsPermitted()) {
-        showToast(tr("PureSignal transmit controls are unavailable in this receive-only build."),
-                  ToastSeverity::Info, 3000);
-        return;
-    }
     if (!m_psForm) {
         // PureSignal coordinator is owned by RadioModel; pass it directly so
         // the dialog can wire signal/slot bindings even before connect.
@@ -10182,6 +10211,12 @@ void MainWindow::openPureSignalDialog()
         PureSignal* coordinator =
             (m_radioModel ? m_radioModel->pureSignal() : nullptr);
         m_psForm = new PsForm(m_radioModel, coordinator, this);
+        connect(m_psForm, &PsForm::showTwoToneMeasurementsChanged,
+                this, [this](bool shown) {
+            if (auto* spectrum = activeSpectrumWidget()) {
+                spectrum->setShowIMDMeasurements(shown);
+            }
+        });
     }
     m_psForm->show();
     m_psForm->raise();
@@ -10661,12 +10696,9 @@ void MainWindow::showPanLayoutDialog()
 void MainWindow::updatePsaIndicatorVisibility()
 {
     if (!m_psaIndicator) { return; }
-    const bool caps =
-        m_radioModel
-        && m_radioModel->isConnected()
-        && m_radioModel->boardCapabilities().hasPureSignal;
-    auto* ps = m_radioModel ? m_radioModel->pureSignal() : nullptr;
-    const bool armed = ps && ps->isAutoCalEnabled();
+    const bool caps = m_radioModel && m_radioModel->isConnected()
+        && m_radioModel->pureSignalFacade()->available();
+    const bool armed = m_radioModel && m_radioModel->pureSignalSettings()->autoCalEnabled();
     if (m_chromeBar && m_chromeBarWidget) {
         m_chromeBar->setItemAvailable(m_psaIndicator, caps && armed);
         m_chromeBar->relayout(m_chromeBarWidget->width());
@@ -10799,10 +10831,9 @@ void MainWindow::onConnectionStateChanged()
             m_stepAttController->setHasStepAttenuatorCal(caps.hasStepAttenuatorCal);
             m_stepAttController->loadSettings(conn->radioInfo().macAddress);
         } else if (m_pureSignalApplet) {
-            // No local connection means no local PureSignal coordinator,
-            // so the applet has nothing behind it. Same call the
-            // disconnected branch below makes, for the same reason.
-            m_pureSignalApplet->setVisible(false);
+            m_pureSignalApplet->setVisible(m_stationClient
+                && m_stationClient->isHandshakeComplete()
+                && m_stationClient->capabilities().psAlgorithmVersion == 3);
         }
 
         // Phase 3M-4 Task 10 + bench-fix: PSA bottom-banner indicator is
@@ -11457,6 +11488,19 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // ConnectionPanel on Disconnect" slot below doesn't re-trigger
     // discovery via ConnectionPanel's ctor while teardown runs.
     m_shuttingDown = true;
+
+    // Capture GUI-local DSP dialog preferences while these windows still
+    // exist and before the final AppSettings flush. QObject destruction is
+    // later than that flush, so destructor-only geometry saves miss shutdown.
+    for (auto* dialog : findChildren<AmpViewWindow*>()) {
+        dialog->close();
+    }
+    for (auto* dialog : findChildren<DspAssetDialog*>()) {
+        dialog->close();
+    }
+    if (m_psForm) {
+        m_psForm->close();
+    }
 
     // Force-run any pending coalesced slice save BEFORE we tear anything
     // down. The 500 ms debounce in RadioModel::scheduleSettingsSave can't

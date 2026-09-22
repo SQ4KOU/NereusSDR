@@ -4,8 +4,12 @@
 > are binding; test order and review effort follow the Yonder risk-based policy.
 > Native Qt evidence applies here; Yonder web-page tooling does not.
 
-**Status:** Plan for review. The design, including persistent settings, is
-approved. No production implementation or RF operation has been performed.
+**Status:** Implementation is complete at the macOS software boundary: desktop,
+Core/daemon and 716 test targets build, and the final integrated suite passed
+716/716. Native sanitizer evidence and signed local integration are recorded in
+[the execution ledger](wdsp210-verification/README.md). Remaining platform,
+full-application/operator and RF acceptance stays explicitly unchecked below.
+No RF operation has been performed by this task.
 
 **Goal:** Upgrade the shared desktop/Core DSP to WDSP 2.10, deliver complete NNR
 and PS3 controls with durable settings, and prepare remote PS3 for R4 activation.
@@ -155,11 +159,11 @@ inventory, CFC characterization fixtures, and control-coverage ledger used by
 Tasks 2-8. The ledger includes symbol/source, units/default/range, owner,
 property/action, UI, settings key/scope/load-save path, and verification.
 
-- [ ] Reconcile the isolated implementation checkout with the current accepted
+- [x] Reconcile the isolated implementation checkout with the current accepted
   integration branch. Record HEAD, dirty-state ownership, configure options,
   compiler/OS, and existing relevant test results. Keep hardware disconnected
   for software-only checks.
-- [ ] Obtain the pinned upstream source tree and hashes. Classify every current
+- [x] Obtain the pinned upstream source tree and hashes. Classify every current
   vendor deviation as retained Thetis extension, Nereus platform/lifecycle
   patch, superseded upstream change, or obsolete PS2 API. Record reasons rather
   than treating a successful link as compatibility evidence.
@@ -168,16 +172,16 @@ property/action, UI, settings key/scope/load-save path, and verification.
   `nurbs_spline`, `extrapolate`, and new RXA/TXA dependencies. Preserve or
   deliberately retire current-only `FDnoiseIQ`, platform and stub files based
   on real references; the current source glob can silently compile additions.
-- [ ] Audit the pinned correction writer/reader and `ns_build` branch overlap/
+- [x] Audit the pinned correction writer/reader and `ns_build` branch overlap/
   extension geometry. Record the maximum valid aggregate spline points before
   choosing a parser point cap; 1616 is only an initial estimate and must not
   reject a valid writer output. Census binary NNR models in both supported
   dtypes and saved PS3 fixtures against Task 5's product file-size ceilings.
-- [ ] Capture the existing CFC response/output for default and non-default
+- [x] Capture the existing CFC response/output for default and non-default
   Qg/Qe profiles and existing profile loading. Include the 1.29/2.10 same-symbol
   signature change in the manifest. Pin reference input/expected comparisons
   and their numerical tolerance to repeatable pre-upgrade observations.
-- [ ] Populate the coverage ledger from spec sections 6-7 and pinned sources,
+- [x] Populate the coverage ledger from spec sections 6-7 and pinned sources,
   including aliases, read-only hardware fields, and reasoned implementation-
   owned exclusions. Record the real existing source of every retained default.
 
@@ -217,11 +221,11 @@ must agree. Retain upstream split `SetTXACFCOMPGprofile` and
 a bounded value snapshot with four sample arrays, four correction arrays,
 counts and phase reference; Task 4 defines its lifecycle metadata.
 
-- [ ] Import all required pinned source/dependencies and embedded model data.
+- [x] Import all required pinned source/dependencies and embedded model data.
   Reapply classified NR3/NR4, VOX/DEXP, channel/meter/analyzer/diversity/cache,
   static-build and platform patches explicitly. Audit new RXA/TXA lifecycle
   and declarations instead of restoring whole old headers over new structs.
-- [ ] Add Qg/Qe compatibility to 2.10 `cfcomp.{c,h}`. Preserve the old Thetis
+- [x] Add Qg/Qe compatibility to 2.10 `cfcomp.{c,h}`. Preserve the old Thetis
   Gaussian-tail evaluation exactly, with its constants, Q floor, and sorted
   frequency/value/Q tuples. Store independent Qg and Qe arrays/modes. A supplied
   Qg/Qe selects that band's retained calculation; null uses stock linear/NURBS
@@ -229,28 +233,29 @@ counts and phase reference; Task 4 defines its lifecycle metadata.
   clear only their corresponding legacy Q array/mode before recalculation.
   Do not approximate Q with NURBS degree or weights. Update all prototypes so
   there is no silent five-versus-seven-argument collision.
-- [ ] Reconcile POSIX primitives used by the new PS3 source, including
+- [x] Reconcile POSIX primitives used by the new PS3 source, including
   `CreateSemaphoreW`, `WAIT_OBJECT_0`, and wait-any
   `WaitForMultipleObjects(FALSE, INFINITE)`. Preserve macOS unique named
   semaphore behavior and correct initial counts. Implement the supported wait
   contract off the audio thread with explicit unsupported-mode/error handling;
   interruption cannot masquerade as a signaled semaphore.
-- [ ] Repair worker lifetime: request stop, await confirmed completion, close
+- [x] Repair worker lifetime: request stop, await confirmed completion, close
   all owned semaphore/thread handles, then free calibration state. A 500 ms
   wait that times out cannot justify freeing a live worker's memory. Exercise
-  pending calculation/save/restore and repeated create/destroy on each platform.
-- [ ] Reconcile exact PS3 signatures, remove obsolete PS2 wrapper/state calls,
+  pending calculation/save/restore and repeated create/destroy. macOS native
+  evidence passed; the remaining platform runs are tracked in Task 9.
+- [x] Reconcile exact PS3 signatures, remove obsolete PS2 wrapper/state calls,
   and update TX construction defaults from pinned TXA/board sources. Preserve
   valid saved timing values. Keep `SetPSTXDelay`'s returned applied value.
   Include all dependent call-site compile fixes in this deliverable: never
   fake removed controls with no-op wrappers or interpret new display memory
   as the old cubic format. Tasks 4 and 8 complete coordinator/UI behavior.
-- [ ] Preallocate `GetPSDisp` storage before calling it: four sample arrays of
+- [x] Preallocate `GetPSDisp` storage before calling it: four sample arrays of
   4096 doubles and four correction arrays of 512 doubles. These maxima come
   from pinned `calcc.c` collection geometry and `DISP_PTS`, not from returned
   counts. Validate counts and finite values after the call before publishing.
   Add source/compile guards so changing the vendor geometry forces review.
-- [ ] Update provenance, source/header inventory and diagnostics version.
+- [x] Update provenance, source/header inventory and diagnostics version.
   Verify fresh/existing wisdom and impulse-cache cases without using a moving
   upstream source or silently disabling existing optional NR implementations.
 
@@ -292,29 +297,29 @@ linked NNR API, initially with bundled models and controlled test paths.
 Task 5 subsequently connects asset-backed process model paths. Produces
 accepted SliceModel properties and diagnostics consumed by Tasks 6-7.
 
-- [ ] Add the stable enum, properties, validation, exact AppSettings leaves,
+- [x] Add the stable enum, properties, validation, exact AppSettings leaves,
   change notifications, and scheduled save wiring. Validate stored values as
   well as live edits; reject non-finite values. Keep source-backed defaults for
   absent keys without replacing valid legacy NR selection.
-- [ ] Add the radio identity/settings prefix and one-time migration described
+- [x] Add the radio identity/settings prefix and one-time migration described
   above. Test same-MAC migration, missing/mismatched MAC, idempotent reload,
   retained legacy values, and two radios with the same stable slice ID.
-- [ ] Remove reliance on saving only `m_activeSlice` for NNR edits. Capture
+- [x] Remove reliance on saving only `m_activeSlice` for NNR edits. Capture
   dirty stable slice identities when changes are accepted; flush each affected
   slice before deletion or orderly shutdown. A popup bound to an inactive slice
   must save that slice, even if the active slice changes during the debounce.
-- [ ] Add the NNR branch to mutual-exclusion dispatch and old carry/run flags.
+- [x] Add the NNR branch to mutual-exclusion dispatch and old carry/run flags.
   Apply model selection, readiness checks, then tuning, and only then enable.
   Protect setters that upstream calls through a potentially absent model.
   Report an unavailable requested model without claiming it is active.
-- [ ] Apply loaded settings to every allocated slice, including slices created
+- [x] Apply loaded settings to every allocated slice, including slices created
   after connection. Extend capture/apply with the actual NR slot and NNR tuning;
   the current legacy `nrMode` carry alone is insufficient. Do not replace the
   established pointer-preserving sample-rate path with ad hoc wrapper rebuilds.
-- [ ] Reset tuning through the same setters/storage scope while preserving
+- [x] Reset tuning through the same setters/storage scope while preserving
   selection and global assets. Reset diagnostic modes on a fresh station
   session; leave normal tuning and disabled-feature values intact.
-- [ ] Add storage and linked-WDSP tests covering both models, unavailable model,
+- [x] Add storage and linked-WDSP tests covering both models, unavailable model,
   finite processing, rate/enable/disable/recreate lifecycle, and two-slice
   isolation. Verify actual DSP readback after reload, not only model equality.
 
@@ -360,13 +365,13 @@ coordinator. `Ps3Snapshot` contains channel/session generation, sequence/time,
 bounded snapshot. The settings model cannot key TX or restore a correction by
 being hydrated. Semantic actions are defined in Task 6.
 
-- [ ] Move normal retained configuration to PureSignalSettings: loop/MOX/
+- [x] Move normal retained configuration to PureSignalSettings: loop/MOX/
   requested TX delay, peak override/default selection, auto-/quick attenuation,
   desired automatic-calibration and run-calibration preferences. Retain existing
   per-MAC key identities, especially `pureSignal/autoCalEnabled`; add explicit
   new leaves through the same scope. Keep live correction, counters, MOX,
   measured peak, pending operations and one-shot requests out of save/load.
-- [ ] Implement non-actuating hydration, validation and accepted-value updates.
+- [x] Implement non-actuating hydration, validation and accepted-value updates.
   Load board defaults then supported persisted overrides before operational
   initialization. Preserve local readiness-controlled automatic intent; remote
   session restoration never invokes startAutomaticCalibration. GUI geometry,
@@ -374,11 +379,11 @@ being hydrated. Semantic actions are defined in Task 6.
   Split the current behavior into `initializeAutoCalPreference(bool)` (hydrate
   only) and `resumeAutomaticCalibrationPreference()` (local, readiness-gated).
   The first must never set `_autoON`, call WDSP control, or key TX.
-- [ ] Decode `info[5]` as successes and `info[7]` as attempts; drive automatic
+- [x] Decode `info[5]` as successes and `info[7]` as attempts; drive automatic
   attenuation on new attempts, including failures. Decode compound bitfields
   (including overdrive bit in `info[6]`) and `info[12]` file status. Display raw
   reserved entries honestly instead of inventing meanings.
-- [ ] Implement coherent Off, Single, Automatic and ApplyCurrentCorrection
+- [x] Implement coherent Off, Single, Automatic and ApplyCurrentCorrection
   transitions. `runCal=false` suspends processing but need not remove an
   existing correction. Off/reset must complete the real stop transition even
   from that state, and its result reflects correction-off acknowledgement.
@@ -386,10 +391,10 @@ being hydrated. Semantic actions are defined in Task 6.
   suspended engine must honor operational permission/readiness and must not
   release an old queued action from another session. Receive-only settings
   changes can record intent but cannot resume calibration implicitly.
-- [ ] Preserve board routing/aligned sample feed; deliver MOX-off before TXA
+- [x] Preserve board routing/aligned sample feed; deliver MOX-off before TXA
   shutdown. Retire pending operations/display subscriptions on disconnect or
   channel replacement and use Task 2's confirmed worker teardown.
-- [ ] Produce source-backed display snapshots and verify the transform below
+- [x] Produce source-backed display snapshots and verify the transform below
   independently of widgets. Include count/finite checks, freshness and latest-
   value backpressure. Use at most the existing 100 ms PS polling cadence;
   acquire display snapshots only while a subscriber exists.
@@ -450,24 +455,24 @@ version, compatibility metadata, user-visible label and validation state.
 NNR slot choices distinguish requested asset, applied asset and pending apply.
 PS saved selection is separate from the explicit restore action.
 
-- [ ] Store assets beneath the station profile's writable directory with
+- [x] Store assets beneath the station profile's writable directory with
   generated short filenames and atomic publication. Separate model slot
   settings (process-wide) from per-radio correction metadata. Persist IDs and
   hashes, not a workstation-specific absolute path.
-- [ ] Preflight NNR `WDSPNN` version-1 files before invoking `nnio`: 32-byte
+- [x] Preflight NNR `WDSPNN` version-1 files before invoking `nnio`: 32-byte
   header, 72-byte tensor descriptors, 40-byte names, rank 1..4, supported
   float32/float64 dtype, descriptor/data extents, checked multiplication and
   addition, finite weights and tensor shapes/names compatible with the pinned
   model architecture. Upstream's unchecked `int` products/total are not the
   import validator. Reject duplicate/conflicting tensors and truncated data.
-- [ ] Bound transfer and parser resources explicitly. Initial application
+- [x] Bound transfer and parser resources explicitly. Initial application
   policy: 64 MiB maximum model file, 1 MiB maximum correction file, and 64 KiB
   decoded transfer chunks. These are product resource limits, not algorithm
   maxima. Before enabling import, verify bundled models and a freshly saved
   PS3 fixture fit, plus float64 model representation; if a valid supported
   format exceeds a ceiling, adjust the named limit with fixture evidence.
   Do not allocate according to untrusted declared counts before validating.
-- [ ] Validate PS3 correction version/structure with a non-actuating parser
+- [x] Validate PS3 correction version/structure with a non-actuating parser
   derived from `nurbs_spline.c`. Version 2 text contains MAG/COS/SIN in order,
   six EMA metadata rows per curve, `curve_ema_pts 256` and 256 values, then
   branches with index/point-count/midpoint and x/y pairs. Verify exact keys,
@@ -478,13 +483,13 @@ PS saved selection is separate from the explicit restore action.
   Reject legacy PS2/version 1, incompatible radio/algorithm metadata, malformed
   counts and incomplete files without calling PSRestoreCorr. Preserve originals
   and report useful format/compatibility errors; no invented PS2 conversion.
-- [ ] Apply selected NNR paths before any receiver creation. An override chosen
+- [x] Apply selected NNR paths before any receiver creation. An override chosen
   while receivers exist is persisted as pending and requires the explicit
   established reconnect/lifecycle operation. Default/bundled mode must not
   accidentally discover models through the process working directory.
   Require encoded NNR path plus terminator to fit the upstream 512-byte buffer;
   reject truncation rather than silently loading another path.
-- [ ] Serialize correction save/restore and identify each pending operation.
+- [x] Serialize correction save/restore and identify each pending operation.
   Saving publishes a validated temporary file only after actual completion;
   restore is an actuating command with permission/interlock checks. Surface
   upstream asynchronous file errors and ignore stale completions after session
@@ -503,7 +508,7 @@ PS saved selection is separate from the explicit restore action.
   `int pending`, and `int result` (0 success, 1 failure, 2 cancelled); result is
   meaningful only for a completed generation. Copy under the update lock;
   never retain the caller's pointer or query after channel teardown.
-- [ ] Persist selected assets and visible fallback/pending state. A missing
+- [x] Persist selected assets and visible fallback/pending state. A missing
   custom asset must not overwrite the saved preference with the bundled ID.
   Export yields the validated bytes; interrupted import publishes no asset.
 
@@ -586,31 +591,34 @@ unknown fields/types/values and unknown capabilities. Asset transfer IDs and
 operation IDs are station/session-owned; disconnect retires incomplete work.
 Do not introduce a parallel text control protocol.
 
-- [ ] Advertise WDSP version/compatibility revision, NNR/model availability,
+- [x] Advertise WDSP version/compatibility revision, NNR/model availability,
   PS algorithm/schema version, property-result support, display and asset
   features. Negotiate independently from `pureSignalPresent` hardware support.
   Older Core/GUI peers degrade explicitly without renumbering enums or writing
   unsupported cached values back on connect.
-- [ ] Register accepted property/status objects and real write validation.
+- [x] Register accepted property/status objects and real write validation.
   Normal settings pass through the same live model validators locally and
   remotely. Refused writes return accepted state and produce no saved change;
   echoed snapshots and SettingsProxy hydration do not call action setters.
-- [ ] Implement typed actions and bounded asset transfer over the authenticated
+- [x] Implement typed actions and bounded asset transfer over the authenticated
   channel. Gate at Core even if a client bypasses disabled widgets. Preserve
   controlling-session ownership; inspection rights never imply mutation rights.
-- [ ] Encode display snapshots with schema, channel/session identity, sequence,
+- [x] Encode display snapshots with schema, channel/session identity, sequence,
   actual counts and freshness. Max payload is bounded by 4x4096+4x512 doubles
   (147456 data bytes) plus fixed metadata, capped at 160 KiB per frame. Use a
   dedicated bounded binary display message compatible
   with the existing transport framing, not an oversized generic JSON command.
+  Integration clarification: preserve the transport’s 64 KiB per-message cap
+  through negotiated bounded chunks, capped at 160 KiB per assembled snapshot
+  with latest-only assembly; count every transmitted chunk in R35 telemetry.
   Publish at most once per 100 ms while subscribed, one latest pending frame;
   stale sequence/session data is dropped without changing the graph's owner.
-- [ ] Load Core's validated stored configuration before publishing the initial
+- [x] Load Core's validated stored configuration before publishing the initial
   state snapshot; that snapshot wins on reconnect. Resolve pending model paths
   before channels exist. Flush every dirty slice and PS/model preference into
   AppSettings, then `AppSettings::save()` on orderly daemon shutdown after
   pending changes are captured. Handle file-save failure visibly in diagnostics.
-- [ ] Close raw SettingsProxy write/remove bypasses for the new authoritative
+- [x] Close raw SettingsProxy write/remove bypasses for the new authoritative
   DSP keys; either route through the same validator or reject with a typed
   reason. Keep GUI-only presentation settings local and preserve existing
   unrelated settings-proxy behavior.
@@ -652,21 +660,21 @@ Its host chooses compact or full layout. Add an NNR Setup deep link that carries
 the opening slice identity, rather than resolving whichever slice is active
 when a delayed callback runs.
 
-- [ ] Add NNR in the available fourth grid cell beside NR4/DFNR/MNR, the
+- [x] Add NNR in the available fourth grid cell beside NR4/DFNR/MNR, the
   RxDashboard selector, and MainWindow's DSP/NR menu. Use enum data, not display
   order, for selection. Honor mode/backend capabilities.
-- [ ] Extend DspParamPopup only with reusable fractional numeric and expandable
+- [x] Extend DspParamPopup only with reusable fractional numeric and expandable
   group support. Share bindings through NnrControls so Setup and popup expose
   identical accepted values and validation. Retain existing popup behavior.
-- [ ] Implement model/suppression quick controls; advanced position, alpha,
+- [x] Implement model/suppression quick controls; advanced position, alpha,
   knee, tau, gain, attack and release; Diagnostics/Models/More Settings links;
   and scoped Reset NNR tuning. Include source-backed help, units, defaults,
   keyboard context action, pending/refused states and diagnostic badge.
-- [ ] Show actual model availability and pending model-asset application.
+- [x] Show actual model availability and pending model-asset application.
   Require the explicit lifecycle action for an override; never load arbitrary
   GUI paths into live remote receivers. Retire callbacks on slice deletion or
   session replacement and keep normal settings editable while NNR is off.
-- [ ] Exercise each coverage row from a real control and inspect native Qt
+- [x] Exercise each coverage row from a real control and inspect native Qt
   screenshots at minimum size, high DPI, expanded groups, and screen edges.
   Opening/right-clicking/deep-linking must not enable NNR or redirect to another
   slice when the active slice changes.
@@ -702,27 +710,27 @@ extend `tests/tst_psform.cpp`, `tst_ampview_window.cpp`,
 from Task 6 and bounded display data from Task 4. Widgets never call GetPSDisp
 or retain TxChannel pointers. Presentation persists through GUI AppSettings.
 
-- [ ] Retitle and regroup the modeless dialog into quick actions, status,
+- [x] Retitle and regroup the modeless dialog into quick actions, status,
   Calibration, Timing & Feedback, and Diagnostics. Remove obsolete live PS2
   PIN/MAP/STBL/PTOL/TINT controls/calls while preserving inactive migration data.
   Add run-calibration control, requested/applied delay, full status decoding,
   file outcomes and hardware-owned readbacks with explanations.
-- [ ] Route applet/indicator context menus to the same semantic actions and
+- [x] Route applet/indicator context menus to the same semantic actions and
   settings/AmpView/diagnostic pages. Separate saved automatic-calibration intent
   from operational arming. Gate controls by actual capability/permission; menu
   opening and model refresh generate no calibration or TX command.
-- [ ] Replace PS2 cubic reconstruction with Task 4's source-backed PS3 data
+- [x] Replace PS2 cubic reconstruction with Task 4's source-backed PS3 data
   transform. Preserve the reference line, measured/correction magnitude and
   phase series, Show Gain, Phase Zoom, Low Res, and On Top. Add per-series
   visibility and a readable legend; retain gain behavior around zero safely.
-- [ ] Bind display subscriptions to visibility and session identity. Bound
+- [x] Bind display subscriptions to visibility and session identity. Bound
   update cadence/backpressure, unsubscribe on hide/close/disconnect, and mark
   stale/absent data explicitly. Graph updates cannot trigger correction state.
-- [ ] Persist geometry, On Top, expanded sections, all existing display choices
+- [x] Persist geometry, On Top, expanded sections, all existing display choices
   and added series visibility. Restore under signal blockers before wiring
   actions. Keep legacy view keys so existing preferences survive the upgrade.
   Recover a window onto an available screen if the saved monitor disappeared.
-- [ ] Replace tests that assert removed PS2 widgets/defaults with PS3 contract
+- [x] Replace tests that assert removed PS2 widgets/defaults with PS3 contract
   assertions backed by the pinned source. Retain still-valid behavior checks;
   do not rewrite a test merely to bless an accidental UI change.
 
@@ -754,24 +762,32 @@ coverage ledger, affected regression fixtures, and migration/operator notes.
 Tests belong beside the behavior they check; this task combines their evidence
 and closes integration gaps rather than creating a second copy of each test.
 
-- [ ] Run a sandboxed restart matrix through actual AppSettings files and
-  startup paths: local desktop, headless Core with remote GUI, each with two
-  slices and two radio identities. Include feature-off tuning, fractional
-  values, reset, model override pending/applied state, and existing PS/AmpView
-  migration. Verify both UI readback and applied engine values.
-- [ ] Change accepted state on Core, reconnect a GUI holding stale settings,
-  and restart Core. The last accepted Core value wins. A refused remote edit
+- [x] Verify sandboxed settings/model restart boundaries through actual
+  AppSettings files: two slices and two radio identities, feature-off tuning,
+  fractional values, reset, model override pending/applied state and existing
+  PS/AmpView migration. Session fixtures verify accepted remote readback; native
+  channel/reconnect fixtures verify applied engine values.
+- [ ] Complete the full desktop and headless-Core/remote-GUI process-relaunch
+  matrix with an operator. The software fixtures above do not substitute for
+  that application-level workflow.
+- [x] Change accepted state on Core, reconnect a GUI holding stale settings,
+  and recreate Core models from the saved file. The last accepted Core value wins. A refused remote edit
   must not appear in the saved file. Exercise orderly shutdown with a pending
-  scheduled save; the last accepted edit survives process relaunch.
-- [ ] Exercise an older-Core handshake, missing model, unsupported property,
+  scheduled save through the same synchronous shutdown flush. Fresh settings
+  and Core models retain the edit without action replay. Full application
+  process-relaunch observation remains in the preceding unchecked row.
+- [x] Exercise an older-Core handshake, missing model, unsupported property,
   interrupted asset transfer, channel/slice deletion, and session replacement
   with NNR popup, PS dialog, and AmpView open. Verify no stale target writes,
   accidental operation, hung shutdown, or unbounded snapshot queues.
-- [ ] Build desktop, `nereusd`, and all tests on the combined revision and run
-  the required suite once after focused checks pass. Run existing source,
-  attribution, GUI/DSP-boundary and CI gates; retain the full platform matrix
-  and Linux ARM64 build coverage. Do not bypass failing hooks or replace full
-  verification with only subsystem labels.
+- [x] Build desktop, `nereusd`, and all tests on the shared Core/GUI base plus
+  this implementation, then run the full suite after focused corrections:
+  716/716 passed on macOS arm64. Run source/attribution and GUI/DSP gates.
+- [ ] Complete serial integration with the Core/GUI owner and record its final
+  combined revision/checks. Preserve independent wideband and CMake changes.
+- [ ] Run the remaining Windows/Linux and Linux ARM64 platform matrix, including
+  native worker lifecycle checks. Public CI remains on the existing publication
+  hold; macOS results do not imply those platforms passed.
 - [ ] Arrange an operator session for NNR listening and the three UI workflows:
   tune/reset/restart NNR; inspect and adjust PS3; view AmpView at minimum size
   and reconnect. Record operator, platform, revision, expected observations,
@@ -831,7 +847,8 @@ checks/results, outstanding concerns and next action. Shared schemas, Git,
 CMake, RadioModel, MainWindow and hardware remain serialized. Commit coherent
 deliverables with provenance updates using repository signing and hooks.
 
-Execution begins after this plan's review. The integration task remains the
-combined Core/GUI objective; this planning branch must be incorporated at a
-deliberate Git boundary. No implementation, platform build, operator listening,
-Rock capacity result, or RF acceptance is claimed by the planning artifacts.
+Execution followed the approved design and Yonder risk-based policy. The
+Core/GUI owner incorporates this feature at a signed, serial local Git boundary;
+the existing public-push/PR-mutation hold remains in force. Software evidence
+and remaining acceptance are recorded above and in the execution ledger. No
+operator listening, Rock capacity result or RF acceptance is claimed.

@@ -57,15 +57,11 @@ typedef struct _resample
 	int phnum;			// phase number
 } resample, *RESAMPLE;
 
-
 RESAMPLE create_resample (int run, int size, double* in, double* out, int in_rate, int out_rate, double fc, int ncoef, double gain);
-
 
 void destroy_resample (RESAMPLE a);
 
-
 void flush_resample (RESAMPLE a);
-
 
 int xresample (RESAMPLE a);
 

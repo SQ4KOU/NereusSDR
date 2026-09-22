@@ -472,6 +472,9 @@ public:
     CommandOutcome requestConfigureTgxl(const QString& host, quint16 port) override;
     CommandOutcome requestDisconnectTgxl() override;
     CommandOutcome requestFourO3AEnabled(bool enabled) override;
+    CommandOutcome requestApplyNnrModels(quint32 revision) override;
+    bool nnrControlAvailable() const override;
+    CommandOutcome requestNnrDiagnostics(int sliceId, int testMode, int outputMode) override;
 
     void setHeartbeatIntervalMs(int ms);
     int heartbeatIntervalMs() const { return m_heartbeatIntervalMs; }
@@ -479,6 +482,8 @@ public:
     int maxMissedPongs() const { return m_maxMissedPongs; }
 
 signals:
+    void propertyWriteCompleted(const QByteArray& objectKey, const QByteArray& property,
+                                quint32 writeId, bool accepted, const QString& reason);
     /// Refresh connection controls after a dial, closure or retry cancellation.
     void connectionActivityChanged();
     void mediaControlReceived(const QJsonObject& payload, quint32 epoch);
@@ -497,6 +502,7 @@ signals:
 
     /// A CommandResult came back. `commandId` matches invokeCommand()'s
     /// return value.
+    void commandResponse(const NereusSDR::SessionMessage& message);
     void commandResult(quint32 commandId, bool accepted, const QString& reason);
     void streamCtunPinFinished(int sliceId, quint64 streamEpoch, bool pinned, bool accepted);
     void streamCentreFinished(int sliceId, quint64 streamEpoch, bool accepted);
@@ -595,6 +601,8 @@ private:
     void handleObjectCreate(const SessionMessage& message);
     void handleObjectDestroy(const SessionMessage& message);
     void handleDelta(const SessionMessage& message);
+    void handlePropertyResult(const SessionMessage& message);
+    bool propertyResultsAvailable() const;
 
     /// The station's verdict on a command this client sent. Clears the
     /// pending entry either way, and puts a refusal in front of the
@@ -695,6 +703,10 @@ private:
     int m_pingsAwaitingPong = 0;
 
     quint32 m_nextCommandId = 1;
+    quint32 m_nextPropertyWriteId = 1;
+    // Zero marks an edit waiting for the coalescer; nonzero marks its most
+    // recent sent batch. Both protect the value from an older answer.
+    QHash<QByteArray, QHash<QByteArray, quint32>> m_propertyWriteIds;
 
     /// What each in-flight command was about, keyed by the commandId the
     /// station echoes back. A CommandResult carries the verb but no slice

@@ -52,6 +52,9 @@ namespace {
 // ship four construction defaults forever and nothing else.
 const char* const kMirroredClasses[] = {
     "NereusSDR::SliceModel",
+    "NereusSDR::PureSignalSettings",
+    "NereusSDR::DspAssetService",
+    "NereusSDR::PureSignalSessionFacade",
     "NereusSDR::TransmitModel",
     "NereusSDR::TunerModel",
     "NereusSDR::RadioModel",

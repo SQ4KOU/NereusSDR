@@ -129,6 +129,7 @@ private:
     QElapsedTimer m_audioDiagnosticsClock;
     qint64 m_audioDiagnosticsLastLogMs{0};
     int m_roundRobinCursor{0};
+    QList<QByteArray> m_ps3Chunks;
 };
 
 } // namespace NereusSDR

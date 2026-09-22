@@ -13,6 +13,8 @@
 #include "core/settings/SettingsProxy.h"
 #include "core/session/media/DisplayCodec.h"
 #include "core/session/media/DaemonMediaController.h"
+#include "core/session/PureSignalSessionFacade.h"
+#include "core/session/Ps3DisplayCodec.h"
 #include "core/FFTEngine.h"
 #include "core/StepAttenuatorController.h"
 #include "gui/RemoteMediaController.h"
@@ -34,6 +36,7 @@ public:
     bool acceptCandidate(const QString&, const QString&) override { return true; }
     bool sendDisplay(const QByteArray& packet) override {
         if (!active) { return false; }
+        displayPackets.append(packet);
         if (other) { other->deliver(packet); }
         return true;
     }
@@ -46,6 +49,7 @@ public:
     void reportGenericError(const QString& reason) { emit errorOccurred(reason); }
     bool active = false;
     QPointer<DisplayTransport> other;
+    QList<QByteArray> displayPackets;
 };
 
 namespace {
@@ -70,6 +74,87 @@ int countControl(const QSignalSpy& spy, const QString& op)
 class TestRemoteMediaController : public QObject {
     Q_OBJECT
 private slots:
+    void pureSignalChunksShareMediaWithoutChangingMessageLimit()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath("station.settings"));
+        RadioModel station;
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        QPointer<DisplayTransport> coreMedia;
+        DaemonMediaController core(&server, &station, nullptr,
+            [&coreMedia](QObject* owner) -> IMediaTransport* {
+                coreMedia = new DisplayTransport(owner);
+                return coreMedia;
+            });
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        QPointer<DisplayTransport> guiMedia;
+        RemoteMediaController gui(&client, &remote, nullptr, nullptr,
+            [&guiMedia](QObject* owner) -> IMediaTransport* {
+                guiMedia = new DisplayTransport(owner);
+                return guiMedia;
+            });
+        auto* stationLink = new Test::LoopbackTransport("station");
+        auto* clientLink = new Test::LoopbackTransport("client");
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(client.isHandshakeComplete());
+        QTRY_VERIFY(coreMedia && guiMedia);
+        coreMedia->other = guiMedia;
+        guiMedia->other = coreMedia;
+        coreMedia->activate();
+        guiMedia->activate();
+        QCOMPARE(client.capabilities().psDisplayVersion, 1);
+        PureSignalSessionFacade* coreFacade = station.pureSignalFacade();
+        PureSignalSessionFacade* guiFacade = remote.pureSignalFacade();
+        QTRY_COMPARE(guiFacade->displayGeneration(), coreFacade->displayGeneration());
+        Ps3Snapshot frame;
+        frame.channelId = 3;
+        frame.sessionGeneration = coreFacade->displayGeneration();
+        frame.sequence = 1;
+        frame.sampleCount = Ps3Snapshot::kMaxSampleCount;
+        frame.correctionCount = Ps3Snapshot::kMaxCorrectionCount;
+        frame.x.assign(frame.sampleCount, 0.5);
+        frame.ym.assign(frame.sampleCount, 0.45);
+        frame.yc.assign(frame.sampleCount, 1.0);
+        frame.ys.assign(frame.sampleCount, 0.0);
+        frame.xmCorrection.assign(frame.correctionCount, 0.6);
+        frame.ymCorrection.assign(frame.correctionCount, 0.65);
+        frame.xaCorrection.assign(frame.correctionCount, 0.7);
+        frame.yaCorrection.assign(frame.correctionCount, 2.0);
+        // Only the DSP sample source is synthetic. Authenticated control,
+        // subscription, chunk scheduling, peer bounds and GUI assembly are real.
+        emit coreFacade->displaySnapshotReady(frame);
+        QCoreApplication::processEvents();
+        QVERIFY(coreMedia->displayPackets.isEmpty());
+        guiFacade->setAmpViewSubscribed(true);
+        QTRY_VERIFY(coreFacade->remoteAmpViewSubscribed());
+        emit coreFacade->displaySnapshotReady(frame);
+        QTRY_VERIFY(guiFacade->displaySnapshot().has_value());
+        const Ps3Snapshot received = *guiFacade->displaySnapshot();
+        QCOMPARE(received.sequence, 1u);
+        QCOMPARE(received.sampleCount, 4096);
+        QCOMPARE(received.xaCorrection.at(0), 0.7);
+        QCOMPARE(received.xmCorrection.at(0), 0.6);
+        const QList<QByteArray> expected = Ps3DisplayCodec::encode(frame);
+        QCOMPARE(coreMedia->displayPackets, expected);
+        for (const QByteArray& packet : coreMedia->displayPackets) {
+            QVERIFY(packet.size() <= 64 * 1024);
+        }
+        guiFacade->setAmpViewSubscribed(false);
+        QTRY_VERIFY(!coreFacade->remoteAmpViewSubscribed());
+        ++frame.sequence;
+        emit coreFacade->displaySnapshotReady(frame);
+        QCoreApplication::processEvents();
+        QCOMPARE(coreMedia->displayPackets.size(), expected.size());
+        client.disconnectFromStation(QStringLiteral("test completed"));
+        QVERIFY(!guiFacade->displaySnapshot());
+    }
+
     void preReadyTypedFailureRequestsRecovery()
     {
         QTemporaryDir dir;

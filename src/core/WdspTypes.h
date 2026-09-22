@@ -261,7 +261,8 @@ enum class NrSlot : int {
     NR4  = 4,   // WDSP sbnr.c    (Samphire MW0LGE, libspecbleach backend)
     DFNR = 5,   // AetherSDR DeepFilterFilter (DeepFilterNet3, post-WDSP)
     BNR  = 6,   // AetherSDR NvidiaBnrFilter (NVIDIA Broadcast, Windows+NVIDIA, post-WDSP)
-    MNR  = 7    // AetherSDR MacNRFilter (Apple Accelerate, macOS, post-WDSP)
+    MNR  = 7,   // AetherSDR MacNRFilter (Apple Accelerate, macOS, post-WDSP)
+    NNR  = 8    // TAPR WDSP 2.10 neural NR; append to preserve saved values.
 };
 
 // From Thetis wdsp/anr.h:102 [v2.10.3.13] — SetRXAANRPosition(int channel, int position)

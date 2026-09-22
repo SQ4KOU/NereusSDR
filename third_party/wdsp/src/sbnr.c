@@ -171,11 +171,9 @@ void SetRXASBNRRun (int channel, int run)
 	SBNR a = rxa[channel].sbnr.p;
 	if (a->run != run)
 	{
-		RXAbp1Check (channel, rxa[channel].amd.p->run, rxa[channel].snba.p->run, 
-                             rxa[channel].emnr.p->run, rxa[channel].anf.p->run, rxa[channel].anr.p->run,
-                             rxa[channel].rnnr.p->run, run);
 		EnterCriticalSection (&ch[channel].csDSP);
 		a->run = run;
+		RXAbp1Check (channel);
 		RXAbp1Set (channel);
 		LeaveCriticalSection (&ch[channel].csDSP);
 	}

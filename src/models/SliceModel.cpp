@@ -1078,9 +1078,322 @@ void SliceModel::setNbMode(NereusSDR::NbMode v)
 
 void SliceModel::setActiveNr(NereusSDR::NrSlot slot)
 {
+    setNnrLastError({});
+    if (static_cast<int>(slot) < 0 || static_cast<int>(slot) > static_cast<int>(NrSlot::NNR)) {
+        setNnrLastError(QStringLiteral("Unsupported noise-reduction selection."));
+        emit nnrEditRejected(m_nnrLastError);
+        return;
+    }
     if (m_activeNr == slot) { return; }
+    QString reason;
+    if (m_nrSelectionApplier && !m_nrSelectionApplier(slot, &reason)) {
+        setNnrLastError(reason.isEmpty() ? QStringLiteral("The requested noise reducer is unavailable.") : reason);
+        emit nnrEditRejected(m_nnrLastError);
+        return;
+    }
     m_activeNr = slot;
     emit activeNrChanged(slot);
+}
+
+
+// NereusSDR-original accepted NNR configuration. The coordinator supplies
+// the optional appliers; offline objects retain valid preferences without
+// pretending a WDSP receiver is running.
+void SliceModel::setNnrLastError(const QString& error)
+{
+    if (m_nnrLastError == error) return;
+    m_nnrLastError = error;
+    emit nnrLastErrorChanged();
+}
+
+bool SliceModel::applyNnrSettings(const NnrSettings& requested)
+{
+    setNnrLastError({});
+    if (!requested.isValid()) {
+        setNnrLastError(QStringLiteral("NNR values must be finite and within their supported ranges."));
+        emit nnrEditRejected(m_nnrLastError);
+        return false;
+    }
+    if (requested == m_nnrSettings) return true;
+    auto accepted = std::optional<NnrSettings>{requested};
+    QString reason;
+    if (m_nnrSettingsApplier)
+        accepted = m_nnrSettingsApplier(requested, &reason);
+    if (!accepted || !accepted->isValid()) {
+        setNnrLastError(reason.isEmpty() ? QStringLiteral("The NNR receiver refused this configuration.") : reason);
+        emit nnrEditRejected(m_nnrLastError);
+        return false;
+    }
+    const auto before = m_nnrSettings;
+    m_nnrSettings = *accepted;
+    if (before.modelSlot != m_nnrSettings.modelSlot) emit nnrModelSlotChanged(m_nnrSettings.modelSlot);
+    if (before.maskFloorDb != m_nnrSettings.maskFloorDb) emit nnrMaskFloorDbChanged(m_nnrSettings.maskFloorDb);
+    if (before.position != m_nnrSettings.position) emit nnrPositionChanged(m_nnrSettings.position);
+    if (before.alpha != m_nnrSettings.alpha) emit nnrAlphaChanged(m_nnrSettings.alpha);
+    if (before.alphaKneeDb != m_nnrSettings.alphaKneeDb) emit nnrAlphaKneeDbChanged(m_nnrSettings.alphaKneeDb);
+    if (before.tauSeconds != m_nnrSettings.tauSeconds) emit nnrTauSecondsChanged(m_nnrSettings.tauSeconds);
+    if (before.maxGainDb != m_nnrSettings.maxGainDb) emit nnrMaxGainDbChanged(m_nnrSettings.maxGainDb);
+    if (before.attackMs != m_nnrSettings.attackMs) emit nnrAttackMsChanged(m_nnrSettings.attackMs);
+    if (before.releaseMs != m_nnrSettings.releaseMs) emit nnrReleaseMsChanged(m_nnrSettings.releaseMs);
+    if (before != m_nnrSettings) emit nnrConfigurationChanged();
+    return true;
+}
+
+void SliceModel::setNnrModelSlot(int value)
+{
+    auto requested = m_nnrSettings;
+    requested.modelSlot = value;
+    applyNnrSettings(requested);
+}
+
+void SliceModel::setNnrMaskFloorDb(double value)
+{
+    auto requested = m_nnrSettings;
+    requested.maskFloorDb = value;
+    applyNnrSettings(requested);
+}
+
+void SliceModel::setNnrPosition(NereusSDR::NrPosition value)
+{
+    auto requested = m_nnrSettings;
+    requested.position = value;
+    applyNnrSettings(requested);
+}
+
+void SliceModel::setNnrAlpha(double value)
+{
+    auto requested = m_nnrSettings;
+    requested.alpha = value;
+    applyNnrSettings(requested);
+}
+
+void SliceModel::setNnrAlphaKneeDb(double value)
+{
+    auto requested = m_nnrSettings;
+    requested.alphaKneeDb = value;
+    applyNnrSettings(requested);
+}
+
+void SliceModel::setNnrTauSeconds(double value)
+{
+    auto requested = m_nnrSettings;
+    requested.tauSeconds = value;
+    applyNnrSettings(requested);
+}
+
+void SliceModel::setNnrMaxGainDb(double value)
+{
+    auto requested = m_nnrSettings;
+    requested.maxGainDb = value;
+    applyNnrSettings(requested);
+}
+
+void SliceModel::setNnrAttackMs(double value)
+{
+    auto requested = m_nnrSettings;
+    requested.attackMs = value;
+    applyNnrSettings(requested);
+}
+
+void SliceModel::setNnrReleaseMs(double value)
+{
+    auto requested = m_nnrSettings;
+    requested.releaseMs = value;
+    applyNnrSettings(requested);
+}
+
+void SliceModel::resetNnrTuning()
+{
+    NnrSettings defaults;
+    defaults.modelSlot = m_nnrSettings.modelSlot;
+    applyNnrSettings(defaults);
+}
+
+void SliceModel::updateNnrDiagnostics(const NnrDiagnostics& diagnostics)
+{
+    if (m_nnrDiagnostics == diagnostics) return;
+    m_nnrDiagnostics = diagnostics;
+    emit nnrDiagnosticsChanged();
+}
+
+QString SliceModel::nnrModelSource() const
+{
+    const int slot = m_nnrDiagnostics.actualModelSlot;
+    if (slot < 0 || slot >= 2) return QStringLiteral("Unavailable");
+    switch (m_nnrDiagnostics.modelSources[slot]) {
+    case NnrModelSource::Bundled: return QStringLiteral("Bundled");
+    case NnrModelSource::File: return QStringLiteral("Station asset");
+    case NnrModelSource::Unavailable: return QStringLiteral("Unavailable");
+    }
+    return QStringLiteral("Unavailable");
+}
+
+void SliceModel::setSettingsRadioIdentity(const QString& mac)
+{
+    m_settingsRadioMac = AppSettings::normalizedRadioMac(mac);
+}
+
+void SliceModel::requestNnrDiagnostics(int testMode, int outputMode)
+{
+    if (testMode < 0 || testMode > 2 || outputMode < 0 || outputMode > 1) {
+        setNnrLastError(QStringLiteral("Unsupported NNR diagnostic mode."));
+        return;
+    }
+    emit nnrDiagnosticsRequested(testMode, outputMode);
+}
+
+bool SliceModel::applyStationNnrDiagnostic(const QByteArray& name, const QVariant& value)
+{
+    auto status = m_nnrDiagnostics;
+    if (name == "nnrAvailable") status.available = value.toBool();
+    else if (name == "nnrReady") status.ready = value.toBool();
+    else if (name == "nnrRunning") status.running = value.toBool();
+    else if (name == "nnrRateSupported") status.rateSupported = value.toBool();
+    else if (name == "nnrStandardAvailable") status.modelAvailable[0] = value.toBool();
+    else if (name == "nnrPremiumAvailable") status.modelAvailable[1] = value.toBool();
+    else if (name == "nnrActualModelSlot") status.actualModelSlot = value.toInt();
+    else if (name == "nnrDspRateHz") status.dspRateHz = value.toInt();
+    else if (name == "nnrNetworkRateHz") status.networkRateHz = value.toInt();
+    else if (name == "nnrDelaySamples") status.delaySamples = value.toInt();
+    else if (name == "nnrProfilingAvailable") status.profilingAvailable = value.toBool();
+    else if (name == "nnrLatencyMs") status.latencyMs = value.toDouble();
+    else if (name == "nnrTestMode") status.testMode = value.toInt();
+    else if (name == "nnrOutputMode") status.outputMode = value.toInt();
+    else if (name == "nnrStatus") status.explanation = value.toString();
+    else if (name == "nnrLastError") { setNnrLastError(value.toString()); return true; }
+    else if (name == "nnrModelSource") {
+        if (status.actualModelSlot >= 0 && status.actualModelSlot < 2) {
+            status.modelSources[status.actualModelSlot] = value.toString() == QStringLiteral("Bundled")
+                ? NnrModelSource::Bundled : value.toString() == QStringLiteral("Station asset")
+                ? NnrModelSource::File : NnrModelSource::Unavailable;
+        }
+    } else return false;
+    if (status.actualModelSlot < -1 || status.actualModelSlot > 1
+        || status.dspRateHz < 0 || status.networkRateHz < 0 || status.delaySamples < 0
+        || !std::isfinite(status.latencyMs) || status.latencyMs < 0
+        || status.testMode < 0 || status.testMode > 2 || status.outputMode < 0 || status.outputMode > 1) {
+        return false;
+    }
+    updateNnrDiagnostics(status);
+    return true;
+}
+
+QString SliceModel::nnrSettingsPrefix() const
+{
+    if (m_settingsRadioMac.isEmpty() || m_sliceIndex < 0) return {};
+    return QStringLiteral("hardware/%1/slices/%2/nnr/").arg(m_settingsRadioMac).arg(m_sliceIndex);
+}
+
+void SliceModel::saveNnrSettings() const
+{
+    const QString prefix = nnrSettingsPrefix();
+    if (prefix.isEmpty() || !m_nnrSettings.isValid()) return;
+    auto& settings = AppSettings::instance();
+    settings.setValue(prefix + QStringLiteral("NrActive"), static_cast<int>(m_activeNr));
+    settings.setValue(prefix + QStringLiteral("NnrModelSlot"), m_nnrSettings.modelSlot);
+    settings.setValue(prefix + QStringLiteral("NnrMaskFloorDb"), m_nnrSettings.maskFloorDb);
+    settings.setValue(prefix + QStringLiteral("NnrPosition"), static_cast<int>(m_nnrSettings.position));
+    settings.setValue(prefix + QStringLiteral("NnrAlpha"), m_nnrSettings.alpha);
+    settings.setValue(prefix + QStringLiteral("NnrAlphaKneeDb"), m_nnrSettings.alphaKneeDb);
+    settings.setValue(prefix + QStringLiteral("NnrTauSeconds"), m_nnrSettings.tauSeconds);
+    settings.setValue(prefix + QStringLiteral("NnrMaxGainDb"), m_nnrSettings.maxGainDb);
+    settings.setValue(prefix + QStringLiteral("NnrAttackMs"), m_nnrSettings.attackMs);
+    settings.setValue(prefix + QStringLiteral("NnrReleaseMs"), m_nnrSettings.releaseMs);
+}
+
+void SliceModel::restoreNnrSettings()
+{
+    const QString prefix = nnrSettingsPrefix();
+    if (prefix.isEmpty()) return;
+    auto& settings = AppSettings::instance();
+    NnrSettings restored;
+    QStringList rejected;
+    // Validate each stored field against a full valid configuration. One
+    // damaged field falls back to its documented default without losing the
+    // independent valid fields, and the fallback remains visible.
+    if (settings.contains(prefix + QStringLiteral("NnrModelSlot"))) {
+        bool ok = false;
+        const auto value = settings.value(prefix + QStringLiteral("NnrModelSlot")).toInt(&ok);
+        auto candidate = restored;
+        candidate.modelSlot = value;
+        if (ok && candidate.isValid()) restored = candidate;
+        else rejected.append(QStringLiteral("NnrModelSlot"));
+    }
+    if (settings.contains(prefix + QStringLiteral("NnrMaskFloorDb"))) {
+        bool ok = false;
+        const auto value = settings.value(prefix + QStringLiteral("NnrMaskFloorDb")).toDouble(&ok);
+        auto candidate = restored;
+        candidate.maskFloorDb = value;
+        if (ok && candidate.isValid()) restored = candidate;
+        else rejected.append(QStringLiteral("NnrMaskFloorDb"));
+    }
+    if (settings.contains(prefix + QStringLiteral("NnrPosition"))) {
+        bool ok = false;
+        const auto value = settings.value(prefix + QStringLiteral("NnrPosition")).toInt(&ok);
+        auto candidate = restored;
+        candidate.position = static_cast<NrPosition>(value);
+        if (ok && candidate.isValid()) restored = candidate;
+        else rejected.append(QStringLiteral("NnrPosition"));
+    }
+    if (settings.contains(prefix + QStringLiteral("NnrAlpha"))) {
+        bool ok = false;
+        const auto value = settings.value(prefix + QStringLiteral("NnrAlpha")).toDouble(&ok);
+        auto candidate = restored;
+        candidate.alpha = value;
+        if (ok && candidate.isValid()) restored = candidate;
+        else rejected.append(QStringLiteral("NnrAlpha"));
+    }
+    if (settings.contains(prefix + QStringLiteral("NnrAlphaKneeDb"))) {
+        bool ok = false;
+        const auto value = settings.value(prefix + QStringLiteral("NnrAlphaKneeDb")).toDouble(&ok);
+        auto candidate = restored;
+        candidate.alphaKneeDb = value;
+        if (ok && candidate.isValid()) restored = candidate;
+        else rejected.append(QStringLiteral("NnrAlphaKneeDb"));
+    }
+    if (settings.contains(prefix + QStringLiteral("NnrTauSeconds"))) {
+        bool ok = false;
+        const auto value = settings.value(prefix + QStringLiteral("NnrTauSeconds")).toDouble(&ok);
+        auto candidate = restored;
+        candidate.tauSeconds = value;
+        if (ok && candidate.isValid()) restored = candidate;
+        else rejected.append(QStringLiteral("NnrTauSeconds"));
+    }
+    if (settings.contains(prefix + QStringLiteral("NnrMaxGainDb"))) {
+        bool ok = false;
+        const auto value = settings.value(prefix + QStringLiteral("NnrMaxGainDb")).toDouble(&ok);
+        auto candidate = restored;
+        candidate.maxGainDb = value;
+        if (ok && candidate.isValid()) restored = candidate;
+        else rejected.append(QStringLiteral("NnrMaxGainDb"));
+    }
+    if (settings.contains(prefix + QStringLiteral("NnrAttackMs"))) {
+        bool ok = false;
+        const auto value = settings.value(prefix + QStringLiteral("NnrAttackMs")).toDouble(&ok);
+        auto candidate = restored;
+        candidate.attackMs = value;
+        if (ok && candidate.isValid()) restored = candidate;
+        else rejected.append(QStringLiteral("NnrAttackMs"));
+    }
+    if (settings.contains(prefix + QStringLiteral("NnrReleaseMs"))) {
+        bool ok = false;
+        const auto value = settings.value(prefix + QStringLiteral("NnrReleaseMs")).toDouble(&ok);
+        auto candidate = restored;
+        candidate.releaseMs = value;
+        if (ok && candidate.isValid()) restored = candidate;
+        else rejected.append(QStringLiteral("NnrReleaseMs"));
+    }
+    if (!applyNnrSettings(restored)) return;
+    NrSlot active = NrSlot::Off;
+    if (settings.contains(prefix + QStringLiteral("NrActive"))) {
+        bool ok = false;
+        const int stored = settings.value(prefix + QStringLiteral("NrActive")).toInt(&ok);
+        if (ok && stored >= 0 && stored <= static_cast<int>(NrSlot::NNR)) active = static_cast<NrSlot>(stored);
+        else rejected.append(QStringLiteral("NrActive"));
+    }
+    setActiveNr(active);
+    if (!rejected.isEmpty())
+        setNnrLastError(QStringLiteral("Invalid saved NNR settings used defaults: %1").arg(rejected.join(QStringLiteral(", "))));
 }
 
 // NR1
@@ -1872,6 +2185,7 @@ bool SliceModel::hasSettingsFor(Band band) const
 
 void SliceModel::saveToSettings(Band band)
 {
+    saveNnrSettings();
     auto& s = AppSettings::instance();
     const QString bp = bandPrefix(m_sliceIndex, band);
     const QString sp = slicePrefix(m_sliceIndex);
@@ -2116,7 +2430,7 @@ void SliceModel::restoreFromSettings(Band band)
 
     // ── Session state (band-agnostic) ─────────────────────────────────────────
     // NR active slot + tuning (no per-band suffix, per user directive Q10).
-    if (s.contains(sp + QStringLiteral("NrActive"))) {
+    if (m_settingsRadioMac.isEmpty() && s.contains(sp + QStringLiteral("NrActive"))) {
         setActiveNr(static_cast<NereusSDR::NrSlot>(s.value(sp + QStringLiteral("NrActive")).toInt()));
     }
     // NR1
@@ -2313,6 +2627,7 @@ void SliceModel::restoreFromSettings(Band band)
     if (s.contains(sp + QStringLiteral("TxAntenna"))) {
         setTxAntenna(s.value(sp + QStringLiteral("TxAntenna")).toString());
     }
+    restoreNnrSettings();
 }
 
 // One-shot migration of the legacy flat key format (VfoFrequency, VfoDspMode,
@@ -2491,6 +2806,7 @@ void SliceModel::setLastRadeRxCallsign(const QString& callsign)
 
 void SliceModel::loadFromSettings()
 {
+    restoreNnrSettings();
     auto& s = AppSettings::instance();
 
     // ── VAX channel (Phase 3O) ────────────────────────────────────────────────

@@ -42,6 +42,10 @@
 #include "core/session/SessionTransport.h"
 #include "core/settings/SettingsProxy.h"
 #include "models/PanadapterModel.h"
+#include "models/PureSignalSettings.h"
+#include "core/dsp/DspAssetService.h"
+#include "DspCommandValues.h"
+#include "PureSignalSessionFacade.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -207,6 +211,9 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
                         continue;
                     }
                     m_outboundCoalescer.update(objectKey, update);
+                    if (propertyResultsAvailable()) {
+                        m_propertyWriteIds[objectKey].insert(update.name, 0);
+                    }
                 }
             });
 
@@ -763,6 +770,11 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     m_handshakeComplete = false;
     m_authenticated = false;
     m_forwardLocalChanges = false;
+    m_propertyWriteIds.clear();
+    if (m_radioModel) {
+        m_radioModel->dspAssets()->resetSession();
+        m_radioModel->pureSignalFacade()->resetSession();
+    }
     m_linkUp = false;
     m_heartbeatTimer->stop();
     m_writeFlushTimer->stop();
@@ -1054,6 +1066,11 @@ void StationClient::onTransportText(const QByteArray& wire)
     case SessionMessageKind::Delta:
         handleDelta(message);
         break;
+    case SessionMessageKind::PropertyResult:
+        if (propertyResultsAvailable()) {
+            handlePropertyResult(message);
+        }
+        break;
     case SessionMessageKind::SnapshotComplete:
         // BEFORE anything below, and in particular before
         // m_forwardLocalChanges goes true: this marker is the FIRST moment
@@ -1063,6 +1080,11 @@ void StationClient::onTransportText(const QByteArray& wire)
         // reconcileSlicesAgainstStation().
         reconcileSlicesAgainstStation();
         m_handshakeComplete = true;
+        if (m_radioModel) {
+            m_radioModel->pureSignalFacade()->setRemoteCapabilities(
+                m_agreedMinor >= kDspControlSessionProtocolMinor && m_capabilities.psAlgorithmVersion == 3,
+                m_capabilities.txPermitted);
+        }
         if (m_radioModel) {
             m_radioModel->setStationFilterSnapshotReady();
             m_radioModel->reportStationLinkStateChanged();
@@ -1211,6 +1233,9 @@ void StationClient::handleCapabilities(const SessionMessage& message)
     // whether the typed remote TGXL controls are available without a radio
     // connection-state transition.
     if (m_handshakeComplete) {
+        m_radioModel->pureSignalFacade()->setRemoteCapabilities(
+            m_agreedMinor >= kDspControlSessionProtocolMinor && m_capabilities.psAlgorithmVersion == 3,
+            m_capabilities.txPermitted);
         m_radioModel->reportStationLinkStateChanged();
     }
 
@@ -1221,6 +1246,38 @@ void StationClient::handleCapabilities(const SessionMessage& message)
     const QByteArray radioKey(kRadioKey);
     m_objects.insert(radioKey, m_radioModel.data());
     watchForOutbound(radioKey, m_radioModel.data());
+
+    m_objects.insert("pureSignal", m_radioModel->pureSignalFacade());
+    m_objects.insert("dspAssets", m_radioModel->dspAssets());
+    QPointer<StationClient> self(this);
+    m_radioModel->pureSignalFacade()->setRemoteRequestHandler(
+        [self](Ps3Action action, const QVariantMap& arguments) -> quint32 {
+        if (!self || !self->propertyResultsAvailable() || self->m_capabilities.psAlgorithmVersion != 3) {
+            return 0;
+        }
+        const auto values = dspCommandValues(arguments);
+        return values ? self->invokeCommand(PureSignalSessionFacade::actionVerb(action), *values) : 0;
+    });
+    disconnect(m_radioModel->pureSignalFacade(), &PureSignalSessionFacade::displaySubscriptionRequested,
+               this, nullptr);
+    connect(m_radioModel->pureSignalFacade(), &PureSignalSessionFacade::displaySubscriptionRequested,
+            this, [this](bool enabled) {
+        if (m_handshakeComplete && m_capabilities.psDisplayVersion > 0 && mediaAvailable()) {
+            invokeCommand("ps3.subscribeDisplay", {{0, "enabled", MirrorWireKind::Bool, enabled}});
+        }
+    });
+    m_radioModel->dspAssets()->setRemoteRequestHandler(
+        [self](const QByteArray& verb, const QVariantMap& arguments) -> quint32 {
+        if (!self || !self->m_handshakeComplete
+            || self->m_agreedMinor < kDspControlSessionProtocolMinor
+            || self->m_capabilities.dspAssetVersion < 1 || !verb.startsWith("dspAssets.")) {
+            return 0;
+        }
+        const auto values = dspCommandValues(arguments);
+        return values ? self->invokeCommand(verb, *values) : 0;
+    });
+    m_objects.insert("pureSignalSettings", m_radioModel->pureSignalSettings());
+    watchForOutbound("pureSignalSettings", m_radioModel->pureSignalSettings());
 
     const QByteArray transmitKey(kTransmitKey);
     m_objects.insert(transmitKey, &m_radioModel->transmitModel());
@@ -1312,6 +1369,9 @@ void StationClient::handleSettingsReject(const SessionMessage& message)
     const QVariant restored =
         message.updates.isEmpty() ? QVariant() : message.updates.first().value;
     m_settingsProxy->applyRejection(QString::fromUtf8(message.objectKey), restored);
+    if (!message.reason.isEmpty() && m_radioModel) {
+        m_radioModel->reportStationSliceCommandRejected(message.reason);
+    }
 }
 
 // ── The mirror, inbound ──────────────────────────────────────────────────
@@ -1558,6 +1618,7 @@ void StationClient::handleObjectDestroy(const SessionMessage& message)
 {
     const int sliceId = idFromKey(message.objectKey, kSliceKeyPrefix);
     m_objects.remove(message.objectKey);
+    m_propertyWriteIds.remove(message.objectKey);
     m_outboundMirror->unwatch(message.objectKey);
     if (sliceId >= 0 && !m_radioModel.isNull()) {
         InboundGuard guard(m_applyingInbound);
@@ -1577,7 +1638,52 @@ void StationClient::handleDelta(const SessionMessage& message)
                                    << message.objectKey;
         return;
     }
-    applyUpdates(target, message.objectKey, message.updates);
+    QList<MirrorUpdate> current;
+    const auto pending = m_propertyWriteIds.value(message.objectKey);
+    for (const auto& value : message.updates) {
+        if (!pending.contains(value.name)) {
+            current.append(value);
+        }
+    }
+    applyUpdates(target, message.objectKey, current);
+}
+
+void StationClient::handlePropertyResult(const SessionMessage& message)
+{
+    QObject* target = m_objects.value(message.objectKey).data();
+    if (!target || message.writeId == 0) {
+        return;
+    }
+    auto pending = m_propertyWriteIds.find(message.objectKey);
+    if (pending == m_propertyWriteIds.end()) {
+        return;
+    }
+    QList<MirrorUpdate> acceptedValues;
+    QList<SessionPropertyResult> currentResults;
+    for (const auto& result : message.propertyResults) {
+        if (!pending->contains(result.property)
+            || pending->value(result.property) != message.writeId) {
+            continue;
+        }
+        pending->remove(result.property);
+        if (result.hasValue) {
+            acceptedValues.append(result.value);
+        }
+        currentResults.append(result);
+    }
+    if (pending->isEmpty()) {
+        m_propertyWriteIds.erase(pending);
+    }
+    applyUpdates(target, message.objectKey, acceptedValues);
+    for (const auto& result : currentResults) {
+        if (auto* slice = qobject_cast<SliceModel*>(target);
+            slice && (result.property.startsWith("nnr") || result.property == "activeNr")) {
+            InboundGuard guard(m_applyingInbound);
+            slice->reportNnrEditResult(result.reason);
+        }
+        emit propertyWriteCompleted(message.objectKey, result.property, message.writeId,
+                                    result.accepted, result.reason);
+    }
 }
 
 void StationClient::applyUpdates(QObject* target, const QByteArray& objectKey,
@@ -1731,7 +1837,23 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
                                             const QVariant& native)
 {
     if (target == m_radioModel.data() && className == "RadioModel") {
+        if (propertyName == "settingsSaveError") {
+            m_radioModel->applyStationSettingsSaveError(native.toString());
+            return true;
+        }
         return m_radioModel->applyStationFilterValue(propertyName, native);
+    }
+    if (className == "PureSignalSessionFacade") {
+        auto* facade = qobject_cast<PureSignalSessionFacade*>(target);
+        return facade && facade->applyRemoteProperty(propertyName, native);
+    }
+    if (className == "DspAssetService") {
+        auto* assets = qobject_cast<DspAssetService*>(target);
+        return assets && assets->applyRemoteProperty(propertyName, native);
+    }
+    if (className == "PureSignalSettings") {
+        auto* settings = qobject_cast<PureSignalSettings*>(target);
+        return settings && settings->applyStationDiagnostic(propertyName, native);
     }
     if (className == "TunerModel") {
         auto* tuner = qobject_cast<TunerModel*>(target);
@@ -1743,6 +1865,9 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
     auto* slice = qobject_cast<SliceModel*>(target);
     if (slice == nullptr) {
         return false;
+    }
+    if (propertyName.startsWith("nnr")) {
+        return slice->applyStationNnrDiagnostic(propertyName, native);
     }
 
     // SliceModel::active and ::txSlice have no WRITE, and their
@@ -1794,7 +1919,42 @@ void StationClient::watchForOutbound(const QByteArray& objectKey, QObject* objec
     if (object == nullptr) {
         return;
     }
+    if (auto* settings = qobject_cast<PureSignalSettings*>(object)) {
+        QPointer<StationClient> self(this);
+        settings->setEditGate([self](QString* reason) {
+            const bool allowed = self && (self->m_applyingInbound
+                || (self->propertyResultsAvailable() && self->m_capabilities.psAlgorithmVersion == 3));
+            if (!allowed && reason) {
+                *reason = QStringLiteral("The station does not support PS3 settings.");
+            }
+            return allowed;
+        });
+    }
     m_outboundMirror->watch(objectKey, object);
+    if (auto* slice = qobject_cast<SliceModel*>(object)) {
+        const QPointer<StationClient> owner(this);
+        slice->setNnrSettingsApplier([owner](const NnrSettings& requested, QString* reason)
+                                       -> std::optional<NnrSettings> {
+            if (owner && (owner->m_applyingInbound || owner->nnrControlAvailable())) {
+                return requested;
+            }
+            if (reason) { *reason = QStringLiteral("This station session does not support NNR controls."); }
+            return std::nullopt;
+        });
+        slice->setNrSelectionApplier([owner](NrSlot requested, QString* reason) {
+            if (requested != NrSlot::NNR || (owner && (owner->m_applyingInbound || owner->nnrControlAvailable()))) {
+                return true;
+            }
+            if (reason) { *reason = QStringLiteral("This station session does not support NNR."); }
+            return false;
+        });
+        disconnect(slice, &SliceModel::nnrDiagnosticsRequested, this, nullptr);
+        connect(slice, &SliceModel::nnrDiagnosticsRequested, this,
+                [this, slice](int testMode, int outputMode) {
+            const auto outcome = requestNnrDiagnostics(slice->sliceIndex(), testMode, outputMode);
+            if (!outcome.sent) { slice->reportNnrEditResult(outcome.reason); }
+        });
+    }
 }
 
 void StationClient::onWriteFlushTick()
@@ -1828,7 +1988,17 @@ void StationClient::onWriteFlushTick()
             resolved.append(MirrorUpdate{ prop->ordinal, prop->name, prop->kind, live });
         }
         if (!resolved.isEmpty()) {
-            send(SessionMessages::propertyWrite(batch.first, resolved));
+            quint32 writeId = 0;
+            if (propertyResultsAvailable()) {
+                writeId = m_nextPropertyWriteId++;
+                if (m_nextPropertyWriteId == 0) {
+                    ++m_nextPropertyWriteId;
+                }
+                for (const auto& update : resolved) {
+                    m_propertyWriteIds[batch.first].insert(update.name, writeId);
+                }
+            }
+            send(SessionMessages::propertyWrite(batch.first, resolved, writeId));
         }
     }
 }
@@ -1842,6 +2012,9 @@ quint32 StationClient::invokeCommand(const QByteArray& verb,
         return 0;
     }
     const quint32 id = m_nextCommandId++;
+    if (m_nextCommandId == 0) {
+        ++m_nextCommandId;
+    }
     send(SessionMessages::commandInvoke(verb, id, arguments));
     return id;
 }
@@ -1983,6 +2156,36 @@ StationClient::CommandOutcome StationClient::requestConfigureTgxl(const QString&
                        QStringLiteral("the TGXL configuration"));
 }
 
+bool StationClient::propertyResultsAvailable() const
+{
+    return m_handshakeComplete && m_agreedMinor >= kDspControlSessionProtocolMinor
+        && m_capabilities.propertyResultVersion > 0;
+}
+
+StationClient::CommandOutcome StationClient::requestApplyNnrModels(quint32 revision)
+{
+    if (!nnrControlAvailable() || m_capabilities.dspAssetVersion < 1) {
+        return {false, QStringLiteral("The station does not support NNR model application.")};
+    }
+    return sendCommand("nnr.applyModelSelection", -1, {intArgument("revision", revision)},
+        QStringLiteral("the NNR model reconnect"));
+}
+
+bool StationClient::nnrControlAvailable() const
+{
+    return propertyResultsAvailable() && m_capabilities.nnrVersion > 0;
+}
+
+StationClient::CommandOutcome StationClient::requestNnrDiagnostics(int sliceId, int testMode, int outputMode)
+{
+    if (!nnrControlAvailable()) {
+        return {false, QStringLiteral("The station does not support NNR diagnostics.")};
+    }
+    return sendCommand("nnr.setDiagnostics", sliceId,
+        {intArgument("sliceId", sliceId), intArgument("testMode", testMode), intArgument("outputMode", outputMode)},
+        QStringLiteral("the NNR diagnostic change"));
+}
+
 StationClient::CommandOutcome StationClient::requestDisconnectTgxl()
 {
     if (!remoteTgxlConfigAvailable()) {
@@ -2025,7 +2228,8 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         }
     }
 
-    if (!message.accepted && !m_radioModel.isNull()) {
+    if (!message.accepted && !m_radioModel.isNull()
+        && !message.commandVerb.startsWith("ps3.") && !message.commandVerb.startsWith("dspAssets.")) {
         // The station's OWN reason, relayed verbatim. Wording a refusal
         // here instead would put this client's guess in front of an
         // operator for a decision the daemon made -- and on a bench that
@@ -2040,7 +2244,11 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         // keeps using it. `pending.verb` rather than message.commandVerb
         // so an unrecognised or absent echo cannot misroute; the two agree
         // on every path SessionCommandDispatcher produces.
-        if (pending.verb == "requestSliceSampleRate") {
+        if (pending.verb.startsWith("nnr.")) {
+            if (auto* slice = m_radioModel->sliceById(pending.sliceId)) {
+                slice->reportNnrEditResult(reason);
+            }
+        } else if (pending.verb == "requestSliceSampleRate") {
             m_radioModel->reportStationRetuneRejected(pending.sliceId, reason);
         } else {
             m_radioModel->reportStationSliceCommandRejected(reason);
@@ -2070,6 +2278,28 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         }
     }
 
+    if (message.commandVerb.startsWith("dspAssets.") && m_radioModel) {
+        if (const auto values = dspCommandValues(message.updates)) {
+            m_radioModel->dspAssets()->receiveRemoteResult(message.commandId, message.commandVerb,
+                message.accepted, message.reason, *values);
+        }
+    }
+    if (message.commandVerb.startsWith("ps3.") && m_radioModel) {
+        if (const auto values = dspCommandValues(message.updates)) {
+            const QString state = values->value("phase").toString();
+            Ps3ActionPhase phase = Ps3ActionPhase::Failed;
+            if (message.accepted && state == "pending") {
+                phase = Ps3ActionPhase::Pending;
+            } else if (message.accepted && state == "completed") {
+                phase = Ps3ActionPhase::Completed;
+            } else if (message.accepted && state == "accepted") {
+                phase = Ps3ActionPhase::Accepted;
+            }
+            m_radioModel->pureSignalFacade()->receiveRemoteActionResult(message.commandId,
+                message.commandVerb, phase, message.reason, *values);
+        }
+    }
+    emit commandResponse(message);
     emit commandResult(message.commandId, message.accepted, message.reason);
 }
 

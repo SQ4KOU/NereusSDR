@@ -265,6 +265,7 @@ warren@wpratt.com
 
 #include "VfoWidget.h"
 #include "DspParamPopup.h"
+#include "NnrControls.h"
 #include "VaxChannelSelector.h"
 #include "gui/AntennaPopupBuilder.h"
 #include "gui/applets/NyiOverlay.h"
@@ -1357,7 +1358,7 @@ void VfoWidget::buildDspTab()
     // own slider row below the grid (consistent with its CW-only visibility gate).
     //
     //   Row 0: NB  | NR1  | NR2 | NR3
-    //   Row 1: NR4 | DFNR | MNR | (empty)
+    //   Row 1: NR4 | DFNR | MNR | NNR
     //   Row 2: ANF | SNB  |     |
     //
     // Overrides earlier horizontal-bank design per user directive 2026-04-23.
@@ -1411,7 +1412,7 @@ void VfoWidget::buildDspTab()
     m_nr3Btn->setToolTip(QStringLiteral("NR3: RNNR (Recurrent Neural Net noise reduction) — left-click activates, right-click adjusts knobs"));
     // 4×2 layout (option B) — four cols consistently filled.
     //   Row 0: NB  | NR1  | NR2 | NR3
-    //   Row 1: NR4 | DFNR | MNR | ANF
+    //   Row 1: NR4 | DFNR | MNR | NNR
     //   Row 2: SNB (alone)
     dspGrid->addWidget(m_nr1Btn, 0, 1);
     dspGrid->addWidget(m_nr2Btn, 0, 2);
@@ -1422,18 +1423,21 @@ void VfoWidget::buildDspTab()
     m_dfnrBtn = makeToggle(QStringLiteral("DFNR"));  // Full label — was "DFN" (truncated at 28px); now fits at uniform width
     m_bnrBtn  = makeToggle(QStringLiteral("BNR"));   // Hidden permanently (NVIDIA deferred)
     m_mnrBtn  = makeToggle(QStringLiteral("MNR"));
+    m_nnrBtn  = makeToggle(QStringLiteral("NNR"));
     m_nr4Btn->setContextMenuPolicy(Qt::CustomContextMenu);
     m_dfnrBtn->setContextMenuPolicy(Qt::CustomContextMenu);
     m_bnrBtn->setContextMenuPolicy(Qt::CustomContextMenu);
     m_mnrBtn->setContextMenuPolicy(Qt::CustomContextMenu);
+    m_nnrBtn->setContextMenuPolicy(Qt::CustomContextMenu);
     m_nr4Btn->setToolTip(QStringLiteral("NR4: SBNR (Spectral Baseline NR) — left-click activates, right-click adjusts knobs"));
     m_dfnrBtn->setToolTip(QStringLiteral("DFNR: DeepFilter noise reduction — left-click activates, right-click adjusts knobs"));
     m_bnrBtn->setToolTip(QStringLiteral("BNR: NVIDIA noise reduction — left-click activates, right-click adjusts knobs"));
     m_mnrBtn->setToolTip(QStringLiteral("MNR: macOS noise reduction — left-click activates, right-click adjusts knobs"));
+    m_nnrBtn->setToolTip(QStringLiteral("NNR: WDSP neural noise reduction — left-click activates, right-click adjusts settings"));
     dspGrid->addWidget(m_nr4Btn,  1, 0);
     dspGrid->addWidget(m_dfnrBtn, 1, 1);
     dspGrid->addWidget(m_mnrBtn,  1, 2);
-    // col (1,3) intentionally empty
+    dspGrid->addWidget(m_nnrBtn,  1, 3);
 
 #ifndef HAVE_BNR
     m_bnrBtn->hide();  // Hidden permanently: NVIDIA BNR integration deferred.
@@ -1459,8 +1463,8 @@ void VfoWidget::buildDspTab()
     m_snbToggle->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_snbToggle, &QWidget::customContextMenuRequested,
             this, [this](const QPoint&) { emit openNbSetupRequested(); });
-    dspGrid->addWidget(m_anfToggle, 1, 3);  // fills row 1 col 4
-    dspGrid->addWidget(m_snbToggle, 2, 0);  // alone on row 2
+    dspGrid->addWidget(m_anfToggle, 2, 0);
+    dspGrid->addWidget(m_snbToggle, 2, 1);
 
     // Uniform size for all 9 grid buttons: 64×26 px.
     // User directive: natural button size (not cramped), zero gaps between
@@ -1469,7 +1473,7 @@ void VfoWidget::buildDspTab()
     // size so the sub-grid hugs its content instead of stretching to the
     // flag width.
     for (auto* btn : {m_nbButton, m_nr1Btn, m_nr2Btn, m_nr3Btn,
-                      m_nr4Btn, m_dfnrBtn, m_mnrBtn,
+                      m_nr4Btn, m_dfnrBtn, m_mnrBtn, m_nnrBtn,
                       m_anfToggle, m_snbToggle}) {
         if (btn) {
             btn->setFixedHeight(26);
@@ -1556,6 +1560,7 @@ void VfoWidget::buildDspTab()
     wireNrBtnToggle(m_dfnrBtn, NereusSDR::NrSlot::DFNR);
     wireNrBtnToggle(m_bnrBtn,  NereusSDR::NrSlot::BNR);
     wireNrBtnToggle(m_mnrBtn,  NereusSDR::NrSlot::MNR);
+    wireNrBtnToggle(m_nnrBtn,  NereusSDR::NrSlot::NNR);
 
     // Sub-epic C-1: NR bank right-click = DspParamPopup quick controls.
     connect(m_nr1Btn,  &QPushButton::customContextMenuRequested, this,
@@ -1572,6 +1577,8 @@ void VfoWidget::buildDspTab()
             [this](const QPoint& pos) { showBnrPopup(m_bnrBtn->mapToGlobal(pos)); });
     connect(m_mnrBtn,  &QPushButton::customContextMenuRequested, this,
             [this](const QPoint& pos) { showMnrPopup(m_mnrBtn->mapToGlobal(pos)); });
+    connect(m_nnrBtn,  &QPushButton::customContextMenuRequested, this,
+            [this](const QPoint& pos) { showNnrPopup(m_nnrBtn->mapToGlobal(pos)); });
     connect(m_anfToggle, &QPushButton::toggled, this, [this](bool on) {
         if (!m_updatingFromModel) { emit anfChanged(on); }
     });
@@ -2306,7 +2313,7 @@ void VfoWidget::onActiveNrChanged(NereusSDR::NrSlot slot)
 {
     if (!m_nr1Btn) { return; }  // not yet built
     QSignalBlocker b1(m_nr1Btn),  b2(m_nr2Btn),  b3(m_nr3Btn), b4(m_nr4Btn);
-    QSignalBlocker b5(m_dfnrBtn), b6(m_bnrBtn),  b7(m_mnrBtn);
+    QSignalBlocker b5(m_dfnrBtn), b6(m_bnrBtn), b7(m_mnrBtn), b8(m_nnrBtn);
     m_nr1Btn->setChecked(slot  == NereusSDR::NrSlot::NR1);
     m_nr2Btn->setChecked(slot  == NereusSDR::NrSlot::NR2);
     m_nr3Btn->setChecked(slot  == NereusSDR::NrSlot::NR3);
@@ -2314,6 +2321,7 @@ void VfoWidget::onActiveNrChanged(NereusSDR::NrSlot slot)
     m_dfnrBtn->setChecked(slot == NereusSDR::NrSlot::DFNR);
     m_bnrBtn->setChecked(slot  == NereusSDR::NrSlot::BNR);
     m_mnrBtn->setChecked(slot  == NereusSDR::NrSlot::MNR);
+    m_nnrBtn->setChecked(slot  == NereusSDR::NrSlot::NNR);
 }
 
 void VfoWidget::setSnbEnabled(bool v)
@@ -3236,7 +3244,7 @@ void VfoWidget::showNr1Popup(const QPoint& globalPos)
                      [this](int v) {
                          if (m_slice) m_slice->setNr1Position(static_cast<NereusSDR::NrPosition>(v));
                      });
-    p->finalize([this]() { emit openNrSetupRequested(NereusSDR::NrSlot::NR1); }, nullptr);
+    p->finalize([this]() { requestNrSetup(NereusSDR::NrSlot::NR1); }, nullptr);
     p->showAt(globalPos);
 }
 
@@ -3277,7 +3285,7 @@ void VfoWidget::showNr2Popup(const QPoint& globalPos)
     p->addSlider(QStringLiteral("Rate"), 0, 30, post2Rate,
                  [](int v) { return QString::number(v); },
                  [this](int v) { if (m_slice) m_slice->setNr2Post2Rate(static_cast<double>(v)); });
-    p->finalize([this]() { emit openNrSetupRequested(NereusSDR::NrSlot::NR2); }, nullptr);
+    p->finalize([this]() { requestNrSetup(NereusSDR::NrSlot::NR2); }, nullptr);
     p->showAt(globalPos);
 }
 
@@ -3300,7 +3308,7 @@ void VfoWidget::showNr3Popup(const QPoint& globalPos)
     p->addCheckbox(QStringLiteral("Use fixed gain for input samples"), m_slice->nr3UseDefaultGain(),
                    [this](bool v) { if (m_slice) m_slice->setNr3UseDefaultGain(v); });
     // "Load Model…" opens Setup NR3 page where file dialog lives (Task 17).
-    p->finalize([this]() { emit openNrSetupRequested(NereusSDR::NrSlot::NR3); }, nullptr);
+    p->finalize([this]() { requestNrSetup(NereusSDR::NrSlot::NR3); }, nullptr);
     p->showAt(globalPos);
 }
 
@@ -3339,7 +3347,7 @@ void VfoWidget::showNr4Popup(const QPoint& globalPos)
                      [this](int v) {
                          if (m_slice) m_slice->setNr4Algo(static_cast<NereusSDR::SbnrAlgo>(v));
                      });
-    p->finalize([this]() { emit openNrSetupRequested(NereusSDR::NrSlot::NR4); }, nullptr);
+    p->finalize([this]() { requestNrSetup(NereusSDR::NrSlot::NR4); }, nullptr);
     p->showAt(globalPos);
 }
 
@@ -3369,7 +3377,7 @@ void VfoWidget::showDfnrPopup(const QPoint& globalPos)
                     "consonants. Typical tuning: start at 0.05-0.10 and nudge up."),
                  /*factory=*/0);
 
-    p->finalize([this]() { emit openNrSetupRequested(NereusSDR::NrSlot::DFNR); },
+    p->finalize([this]() { requestNrSetup(NereusSDR::NrSlot::DFNR); },
                 /*onReset=*/[]() { /* per-slider resetters push via valueChanged */ });
     p->showAt(globalPos);
 }
@@ -3386,7 +3394,7 @@ void VfoWidget::showBnrPopup(const QPoint& globalPos)
     p->addSlider(QStringLiteral("Strength"), 0, 100, strength,
                  [](int v) { return QString::number(v) + QStringLiteral("%"); },
                  [this](int v) { if (m_slice) m_slice->setBnrStrength(v / 100.0); });
-    p->finalize([this]() { emit openNrSetupRequested(NereusSDR::NrSlot::BNR); }, nullptr);
+    p->finalize([this]() { requestNrSetup(NereusSDR::NrSlot::BNR); }, nullptr);
     p->showAt(globalPos);
 }
 
@@ -3471,7 +3479,7 @@ void VfoWidget::showMnrPopup(const QPoint& globalPos)
     // Wire Reset button (finalize's second callback) to restore the
     // factory defaults on every slider. DspParamPopup::finalize runs the
     // per-slider resetters registered by addSlider's /*factory=*/ arg.
-    p->finalize([this]() { emit openNrSetupRequested(NereusSDR::NrSlot::MNR); },
+    p->finalize([this]() { requestNrSetup(NereusSDR::NrSlot::MNR); },
                 /*onReset=*/[]() {
                     // Per-slider resetters registered via addSlider's
                     // factoryDefault arg already push slider → onChange →
@@ -3480,6 +3488,34 @@ void VfoWidget::showMnrPopup(const QPoint& globalPos)
                     // hides it when onReset is null).
                 });
     p->showAt(globalPos);
+}
+
+void VfoWidget::showNnrPopup(const QPoint& globalPos)
+{
+    if (!m_slice) { return; }
+
+    auto* popup = new DspParamPopup(this);
+    auto* controls = new NnrControls(m_radioModel, m_slice.data(),
+                                     NnrControls::Presentation::Compact, popup);
+    popup->addWidget(controls);
+    connect(controls, &NnrControls::bindingInvalidated, popup, &QWidget::close);
+    connect(controls, &NnrControls::openMoreSettingsRequested, popup,
+            [this, popup](int) {
+                requestNrSetup(NrSlot::NNR);
+                popup->close();
+            });
+    connect(controls, &NnrControls::openModelsRequested, popup,
+            [this, popup](int sliceId) {
+                emit openNnrModelsRequested(sliceId);
+                popup->close();
+            });
+    popup->showAt(globalPos);
+}
+
+void VfoWidget::requestNrSetup(NrSlot slot)
+{
+    emit openNrSetupRequested(slot);
+    emit openNrSetupForSliceRequested(slot, m_slice ? m_slice->sliceIndex() : m_sliceIndex);
 }
 
 } // namespace NereusSDR

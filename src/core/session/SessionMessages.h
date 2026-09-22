@@ -154,6 +154,7 @@ enum class SessionMessageKind {
     MediaControl,
     // R3: bounded, capability-gated station observations. Never a command.
     StationTelemetry,
+    PropertyResult,
 };
 
 /// The session protocol's own semantic version, advertised by BOTH ends in
@@ -173,7 +174,7 @@ enum class SessionMessageKind {
 /// provisional. R3 swapping the codec under the same object model is a
 /// minor bump at most.
 inline constexpr quint16 kSessionProtocolMajor = 1;
-inline constexpr quint16 kSessionProtocolMinor = 4;
+inline constexpr quint16 kSessionProtocolMinor = 5;
 inline constexpr quint16 kMediaSessionProtocolMinor = 1;
 inline constexpr quint16 kRemoteCtunSessionProtocolMinor = 2;
 inline constexpr quint16 kStationTelemetrySessionProtocolMinor = 3;
@@ -182,6 +183,7 @@ inline constexpr quint16 kRemoteTgxlConfigSessionProtocolMinor = 4;
 // intermediate development builds expose TGXL configuration before the
 // master/listener controls are available.
 inline constexpr quint16 kRemoteFourO3AControlSessionProtocolMinor = 4;
+inline constexpr quint16 kDspControlSessionProtocolMinor = 5;
 inline constexpr qsizetype kMaxMediaControlBytes = 128 * 1024;
 inline constexpr qsizetype kMaxStationTelemetryBytes = 16 * 1024;
 
@@ -211,6 +213,14 @@ struct SessionSchemaField {
 ///   CommandInvoke       -- commandVerb, commandId, arguments
 ///   CommandResult       -- commandVerb, commandId, accepted, reason,
 ///                          affectedKeys
+struct SessionPropertyResult {
+    QByteArray property;
+    bool accepted = false;
+    QString reason;
+    bool hasValue = false;
+    MirrorUpdate value;
+};
+
 struct SessionMessage {
     SessionMessageKind kind = SessionMessageKind::Delta;
 
@@ -220,6 +230,8 @@ struct SessionMessage {
     QList<SessionSchemaField> fields;
     QByteArray objectKey;
     QList<MirrorUpdate> updates;
+    quint32 writeId = 0;
+    QList<SessionPropertyResult> propertyResults;
 
     // ── Task 11: CommandInvoke / CommandResult only ─────────────────────
 
@@ -369,7 +381,8 @@ public:
     /// SessionMessage::affectedKeys.
     static SessionMessage commandResult(const QByteArray& verb, quint32 commandId,
                                         bool accepted, const QString& reason,
-                                        const QList<QByteArray>& affectedKeys);
+                                        const QList<QByteArray>& affectedKeys,
+                                        const QList<MirrorUpdate>& values = {});
 
     // ── Task 18 builders ────────────────────────────────────────────────
 
@@ -412,7 +425,11 @@ public:
     /// and those two readings of one message shape are exactly the
     /// ambiguity worth spending a kind name to avoid.
     static SessionMessage propertyWrite(const QByteArray& objectKey,
-                                        const QList<MirrorUpdate>& updates);
+                                        const QList<MirrorUpdate>& updates,
+                                        quint32 writeId = 0);
+    static SessionMessage propertyResult(const QByteArray& objectKey,
+                                         quint32 writeId,
+                                         const QList<SessionPropertyResult>& results);
 
     /// Daemon to client: the connect-time settings snapshot
     /// (SettingsProxyServer::buildSnapshot()). Each entry's `name` is the
@@ -455,7 +472,8 @@ public:
     /// restored empty string) and is encoded as an EMPTY entry list rather
     /// than an entry carrying an empty value.
     static SessionMessage settingsReject(const QString& key, bool hasRestoredValue,
-                                         const QString& restoredValue);
+                                         const QString& restoredValue,
+                                         const QString& reason = {});
 
     /// UTF-8 JSON text. See the file header for the Int64/Enum precision
     /// note.

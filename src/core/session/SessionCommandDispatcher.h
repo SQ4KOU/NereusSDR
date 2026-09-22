@@ -109,6 +109,7 @@
 #include <QList>
 #include <QObject>
 #include <QPointer>
+#include <QHash>
 
 #include "core/session/SessionMessages.h"
 
@@ -140,6 +141,7 @@ public:
     /// class comment). Callers must not assume commandResultReady() has
     /// fired by the time dispatch() itself returns.
     void dispatch(const NereusSDR::SessionMessage& invoke);
+    void setSessionOwner(const QString& owner);
 
 signals:
     /// Every CommandResult this dispatcher produces, in answer to some
@@ -159,11 +161,19 @@ private:
     void handleConfigureTgxl(const NereusSDR::SessionMessage& invoke);
     void handleDisconnectTgxl(const NereusSDR::SessionMessage& invoke);
     void handleSetFourO3AEnabled(const NereusSDR::SessionMessage& invoke);
+    void handleNnrAction(const NereusSDR::SessionMessage& invoke);
+    void handlePureSignalAction(const NereusSDR::SessionMessage& invoke);
 
     void emitResult(const QByteArray& verb, quint32 commandId, bool accepted,
                     const QString& reason, const QList<QByteArray>& affectedKeys);
 
     QPointer<RadioModel> m_radioModel;
+    QString m_sessionOwner{QStringLiteral("local")};
+    struct PendingPureSignalCommand {
+        quint32 commandId;
+        QByteArray verb;
+    };
+    QHash<quint32, PendingPureSignalCommand> m_pureSignalCommands;
 };
 
 } // namespace NereusSDR

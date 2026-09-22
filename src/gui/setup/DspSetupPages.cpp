@@ -72,6 +72,8 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
+#include "gui/widgets/NnrControls.h"
+#include "gui/DspAssetDialog.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -1349,6 +1351,25 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
     }
 
     // ── ANF tab ───────────────────────────────────────────────────────────────
+    // NNR uses the same editor in the quick popup and in Setup. This tab's
+    // existing scroll area supplies scrolling for the full control set.
+    {
+        auto [tabPage, tabLay] = makeTab(tabs, "NNR");
+        m_nnrControls = new NnrControls(model, slice, NnrControls::Presentation::Full,
+                                        tabPage);
+        connect(m_nnrControls, &NnrControls::openModelsRequested, this,
+                [this, model](int sliceId) {
+            if (!model->sliceById(sliceId)) {
+                return;
+            }
+            auto* dialog = new DspAssetDialog(model, DspAssetKind::NnrModel, this);
+            dialog->setAttribute(Qt::WA_DeleteOnClose);
+            dialog->show();
+        });
+        tabLay->addWidget(m_nnrControls);
+        tabLay->addStretch(1);
+    }
+
     // From Thetis setup.designer.cs — chkDSPANFEnable [v2.10.3.13].
     // Advanced ANF tuning (Taps/Delay/Gain/Leakage) is not yet in SliceModel;
     // deferred to a future phase. This tab wires the Enable toggle only.
@@ -2599,7 +2620,7 @@ void MnfSetupPage::showEvent(QShowEvent* event)
 // Settings…" popup button into the correct sub-tab. Tab order mirrors the
 // constructor's addTab calls.
 //
-void NrAnfSetupPage::selectSubtab(NrSlot slot)
+void NrAnfSetupPage::selectSubtab(NrSlot slot, int openerSliceId)
 {
     if (!m_tabs) { return; }
     // Map NrSlot → QTabWidget tab label. Must match the labels passed to
@@ -2612,6 +2633,14 @@ void NrAnfSetupPage::selectSubtab(NrSlot slot)
         case NrSlot::NR4:  target = QStringLiteral("NR4");  break;
         case NrSlot::DFNR: target = QStringLiteral("DFNR"); break;
         case NrSlot::MNR:  target = QStringLiteral("MNR");  break;
+        case NrSlot::NNR:
+            target = QStringLiteral("NNR");
+            if (m_nnrControls && model()) {
+                SliceModel* opener = openerSliceId >= 0 ? model()->sliceById(openerSliceId)
+                                                        : model()->activeSlice();
+                m_nnrControls->bindSlice(opener);
+            }
+            break;
         case NrSlot::BNR:
         case NrSlot::Off:  return;  // no dedicated sub-tab
     }

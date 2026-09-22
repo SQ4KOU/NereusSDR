@@ -322,11 +322,13 @@ warren@wpratt.com
 #include <atomic>   // std::atomic<bool> — m_running cross-thread mirror (3M-1c TxWorkerThread)
 #include <cstddef>  // std::size_t — DEXP buffer size (3M-3a-iii Task 20)
 #include <limits>   // std::numeric_limits — quiet_NaN() initialiser (D.3)
+#include <optional>
 #include <vector>
 
 #include "WdspTypes.h"
 #include "audio/AudioRingSpsc.h"  // m_tciInputRing — TCI TX audio buffer (3J-1 bench fix)
 #include "dsp/ChannelConfig.h"
+#include "dsp/Ps3DisplayAdapter.h"
 #include "dsp/TxChannelState.h"
 #include "wdsp_api.h"  // NEREUS_STDCALL macro for s_pushVoxCallback (Task 17)
 
@@ -2077,13 +2079,9 @@ public:
     //
     // Adaptive-predistortion calibration engine wrappers.  Each instance
     // method delegates to the matching WDSP entry point with m_channelId as
-    // the channel arg.  All 19 instance setters/readers operate on the
-    // CALCC struct created by create_calcc inside create_txa() at
-    // wdsp/TXA.c:405 [v2.10.3.13]; calls are csDSP-protected at the WDSP
-    // boundary.  Each wrapper guards against an unopened TX channel via
-    // `txa[m_channelId].rsmpin.p == nullptr` (matches the existing CFC /
-    // DEXP wrapper convention; the calcc pointer is created together with
-    // rsmpin inside create_txa, so the rsmpin sentinel covers both).
+    // the channel arg.  CALCC is opaque in WDSP 2.10.  Each retained wrapper
+    // first uses GetPSRunCal as a narrow validity/readback guard so an unopened
+    // channel never reaches an entry point that dereferences calibration state.
     //
     // The 2 static routing helpers (setPSRxIdx / setPSTxIdx) wire the
     // CMaster RX/TX feedback streams; per Thetis cmaster.cs:533-534
@@ -2092,10 +2090,9 @@ public:
     //
     // setPSTXDelay returns the actual delay applied (calcc.c:1001-1021
     // [v2.10.3.13] — the engine snaps to a fractional 20 ns step derived
-    // from the feedback sample rate).  getPSDisp's seven output buffers
-    // feed AmpView's Ref / MagAmp / PhsAmp / MagCorr / PhsCorr /
-    // MagCorrSmooth / PhsCorrSmooth display series; sizing is `nsamps`
-    // doubles for x/ym/yc/ys and `ints * 4` doubles for cm/cc/cs.
+    // from the feedback sample rate).  getPs3DisplaySnapshot owns and bounds
+    // the new four-sample/four-correction-array display ABI before any data
+    // reaches AmpView.
     // getPSInfo writes 16 ints (calcc.c:927 [v2.10.3.13] — `memcpy(info,
     // a->info, 16 * sizeof(int))`).
     //
@@ -2105,6 +2102,7 @@ public:
     /// Set the calcc run flag.  Wraps SetPSRunCal(channelId, run).
     /// From Thetis wdsp/calcc.c:899 [v2.10.3.13].
     void setPSRunCal(int run);
+    std::optional<bool> psRunCal() const;
 
     /// Set the calcc MOX flag (engages PS calibration when MOX is up).
     /// Wraps SetPSMox(channelId, mox ? 1 : 0).
@@ -2171,17 +2169,43 @@ public:
     /// From Thetis wdsp/calcc.c:1042 [v2.10.3.13].
     double getPSMaxTX();
 
-    /// Set the calibration-tolerance threshold.  Wraps SetPSPtol.
-    /// From Thetis wdsp/calcc.c:1050 [v2.10.3.13].
-    void setPSPtol(double ptol);
+    /// Capture the PS3 display as an owning, bounded value.  The adapter
+    /// allocates every vendor output buffer at the pinned maximum before the
+    /// unbounded GetPSDisp call and publishes only validated finite counts.
+    /// From TAPR WDSP 2.10 calcc.c:GetPSDisp [@b02d5bac].
+    std::optional<Ps3Snapshot> getPs3DisplaySnapshot(
+        std::uint64_t sessionGeneration,
+        std::uint64_t sequence,
+        std::int64_t capturedAtUnixMilliseconds);
 
-    /// Read seven AmpView display arrays (Ref / MagAmp / PhsAmp / MagCorr /
-    /// PhsCorr / MagCorrSmooth / PhsCorrSmooth).  Each pointer must address
-    /// at least `nsamps` (x/ym/yc/ys) or `ints * 4` (cm/cc/cs) doubles.
-    /// Wraps GetPSDisp; csDSP-protected at the WDSP boundary.
-    /// From Thetis wdsp/calcc.c:1058 [v2.10.3.13] — 7 output buffers.
-    void getPSDisp(double* x, double* ym, double* yc, double* ys,
-                   double* cm, double* cc, double* cs);
+    /// Read the IQC run and transition-busy latches under WDSP's DSP lock.
+    /// A missing value means the TX/IQC instance is not available.
+    std::optional<Ps3CorrectionState> psCorrectionState() const;
+
+    /// Read whether the native IQC instance retains a complete current
+    /// correction set that can be applied without recalibration.
+    std::optional<bool> psCorrectionAvailable() const;
+
+    /// Durably stop CALCC and IQC without requiring another TX/audio or
+    /// paired-feedback block. Retained correction curves remain available.
+    bool stopPsCorrectionQuiescent();
+
+    /// Request an active-stream IQC END. Completion is acknowledged only
+    /// when psCorrectionState() reports run=false and busy=false.
+    bool requestPsCorrectionStop();
+
+    /// Apply the retained current correction. Returns false for a fresh or
+    /// incomplete IQC instance and leaves native state unchanged.
+    bool applyPsCorrection();
+
+    /// Read the asynchronous correction-file state for one operation kind.
+    std::optional<Ps3FileOperationStatus> psFileOperationStatus(
+        Ps3FileOperationKind kind) const;
+
+    /// Request nonblocking cancellation of one pending native file worker.
+    /// The operation remains pending until the worker acknowledges the
+    /// cancelled epoch and publishes its terminal generation.
+    bool cancelPsFileOperation(Ps3FileOperationKind kind);
 
     /// Set the feedback sample rate (Hz).  Recomputes loopdelay/moxdelay
     /// sample counts and rebuilds the TX/RX delay lines.  Cmaster.cs:535
@@ -2190,22 +2214,6 @@ public:
     /// From Thetis wdsp/calcc.c:1073 [v2.10.3.13].
     void setPSFeedbackRate(int rate);
 
-    /// Set the PIN-aware mode flag.  Wraps SetPSPinMode.
-    /// From Thetis wdsp/calcc.c:1102 [v2.10.3.13].
-    void setPSPinMode(bool pin);
-
-    /// Set the calcc map mode.  Wraps SetPSMapMode.
-    /// From Thetis wdsp/calcc.c:1110 [v2.10.3.13].
-    void setPSMapMode(bool map);
-
-    /// Set the calcc stabilization flag.  Wraps SetPSStabilize.
-    /// From Thetis wdsp/calcc.c:1118 [v2.10.3.13].
-    void setPSStabilize(bool stbl);
-
-    /// Set per-FFT-mask interval count and SPI flag together.  Wraps
-    /// SetPSIntsAndSpi.  From Thetis wdsp/calcc.c:1140 [v2.10.3.13].
-    void setPSIntsAndSpi(int ints, int spi);
-
     /// Save the active correction tables to a user-chosen file.  Wraps
     /// PSSaveCorr(channelId, filename).  Used by PsForm Save button and the
     /// PureSignalApplet Save button — see PSForm.cs btnPSSave_Click
@@ -2213,7 +2221,7 @@ public:
     /// (calcc.c:567 PSSaveCorrection [v2.10.3.13]); this wrapper returns
     /// after the thread is started, NOT after the file is fully written.
     /// From Thetis wdsp/calcc.c:888 [v2.10.3.13].
-    void psSaveCorr(const QString& filename);
+    std::optional<std::uint64_t> psSaveCorr(const QString& filename);
 
     /// Restore correction tables from a user-chosen file.  Wraps
     /// PSRestoreCorr(channelId, filename).  Used by PsForm Restore button
@@ -2225,7 +2233,7 @@ public:
     /// host coordinator's command-state machine routes the next pump cycle
     /// through eCMDState::IntiateRestoredCorrection.
     /// From Thetis wdsp/calcc.c:900 [v2.10.3.13].
-    void psRestoreCorr(const QString& filename);
+    std::optional<std::uint64_t> psRestoreCorr(const QString& filename);
 
     // Channel routing (STATIC — global, not per-channel).  Called once at
     // PS init.  Per Thetis cmaster.cs:533-534 [v2.10.3.13] "txid = 0, all
@@ -2380,13 +2388,6 @@ public:
     // Tests asserting non-zero rates use a 0/-1 guard if they care.
     int lastPSFeedbackRateForTest()           const noexcept { return m_lastPSFeedbackRate; }
 
-    // Codex Fix F seam: observe the (ints, spi) pair the wrapper last
-    // forwarded to WDSP via setPSIntsAndSpi.  Used by
-    // tst_puresignal_coordinator to verify PureSignal::setTintIndex(idx)
-    // routes through to the calcc engine.  Sentinels -1 distinguish
-    // "never called" from explicit zero.
-    int lastPSIntsForTest()                   const noexcept { return m_lastPSInts; }
-    int lastPSSpiForTest()                    const noexcept { return m_lastPSSpi; }
 #endif // NEREUS_BUILD_TESTS
 
 public slots:
@@ -2973,11 +2974,15 @@ private:
     // doesn't have unit tests for PS feedback rate).
     int m_lastPSFeedbackRate = -1;
 
-    // Codex Fix F: per-call cache of the (ints, spi) pair last forwarded
-    // through setPSIntsAndSpi.  Read by lastPSInts/SpiForTest seams above.
-    // Sentinels -1 distinguish "never called" from explicit zero.
-    int m_lastPSInts = -1;
-    int m_lastPSSpi  = -1;
+    // Owning fixed-capacity buffers for the PS3 GetPSDisp boundary.  No
+    // caller or widget receives these mutable arrays or a WDSP pointer.
+#ifdef HAVE_WDSP
+    Ps3DisplayAdapter m_ps3DisplayAdapter{&::GetPSDisp};
+#else
+    Ps3DisplayAdapter m_ps3DisplayAdapter{nullptr};
+#endif
+
+    bool psAvailable() const noexcept;
 
     // ── TXA PostGen split-property cache (3M-1c E.3 / E.4) ──────────────────
     //

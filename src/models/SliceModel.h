@@ -120,6 +120,7 @@
 #include "core/NbFamily.h"
 #include "core/SampleRateCatalog.h"
 #include "core/WdspTypes.h"
+#include "core/dsp/NnrSettings.h"
 
 #include <QByteArray>
 #include <QList>
@@ -130,6 +131,7 @@
 #include <QVariant>
 
 #include <atomic>
+#include <functional>
 #include <limits>
 #include <optional>
 #include <utility>
@@ -340,6 +342,34 @@ class SliceModel : public QObject {
     // Single source of truth for active NR slot. Mutual exclusion enforced
     // in setActiveNr. See Thetis console.cs:43297-43450 SelectNR() [v2.10.3.13].
     Q_PROPERTY(NereusSDR::NrSlot activeNr READ activeNr WRITE setActiveNr NOTIFY activeNrChanged)
+    // WDSP 2.10 NNR: accepted configuration, separate from runtime diagnostics.
+    Q_PROPERTY(int nnrModelSlot READ nnrModelSlot WRITE setNnrModelSlot NOTIFY nnrModelSlotChanged)
+    Q_PROPERTY(double nnrMaskFloorDb READ nnrMaskFloorDb WRITE setNnrMaskFloorDb NOTIFY nnrMaskFloorDbChanged)
+    Q_PROPERTY(NereusSDR::NrPosition nnrPosition READ nnrPosition WRITE setNnrPosition NOTIFY nnrPositionChanged)
+    Q_PROPERTY(double nnrAlpha READ nnrAlpha WRITE setNnrAlpha NOTIFY nnrAlphaChanged)
+    Q_PROPERTY(double nnrAlphaKneeDb READ nnrAlphaKneeDb WRITE setNnrAlphaKneeDb NOTIFY nnrAlphaKneeDbChanged)
+    Q_PROPERTY(double nnrTauSeconds READ nnrTauSeconds WRITE setNnrTauSeconds NOTIFY nnrTauSecondsChanged)
+    Q_PROPERTY(double nnrMaxGainDb READ nnrMaxGainDb WRITE setNnrMaxGainDb NOTIFY nnrMaxGainDbChanged)
+    Q_PROPERTY(double nnrAttackMs READ nnrAttackMs WRITE setNnrAttackMs NOTIFY nnrAttackMsChanged)
+    Q_PROPERTY(double nnrReleaseMs READ nnrReleaseMs WRITE setNnrReleaseMs NOTIFY nnrReleaseMsChanged)
+    Q_PROPERTY(bool nnrAvailable READ nnrAvailable NOTIFY nnrDiagnosticsChanged)
+    Q_PROPERTY(bool nnrReady READ nnrReady NOTIFY nnrDiagnosticsChanged)
+    Q_PROPERTY(bool nnrRunning READ nnrRunning NOTIFY nnrDiagnosticsChanged)
+    Q_PROPERTY(bool nnrStandardAvailable READ nnrStandardAvailable NOTIFY nnrDiagnosticsChanged)
+    Q_PROPERTY(bool nnrPremiumAvailable READ nnrPremiumAvailable NOTIFY nnrDiagnosticsChanged)
+    Q_PROPERTY(bool nnrRateSupported READ nnrRateSupported NOTIFY nnrDiagnosticsChanged)
+    Q_PROPERTY(int nnrActualModelSlot READ nnrActualModelSlot NOTIFY nnrDiagnosticsChanged)
+    Q_PROPERTY(int nnrDspRateHz READ nnrDspRateHz NOTIFY nnrDiagnosticsChanged)
+    Q_PROPERTY(int nnrNetworkRateHz READ nnrNetworkRateHz NOTIFY nnrDiagnosticsChanged)
+    Q_PROPERTY(int nnrDelaySamples READ nnrDelaySamples NOTIFY nnrDiagnosticsChanged)
+    Q_PROPERTY(bool nnrProfilingAvailable READ nnrProfilingAvailable NOTIFY nnrDiagnosticsChanged)
+    Q_PROPERTY(double nnrLatencyMs READ nnrLatencyMs NOTIFY nnrDiagnosticsChanged)
+    Q_PROPERTY(int nnrTestMode READ nnrTestMode NOTIFY nnrDiagnosticsChanged)
+    Q_PROPERTY(int nnrOutputMode READ nnrOutputMode NOTIFY nnrDiagnosticsChanged)
+    Q_PROPERTY(QString nnrModelSource READ nnrModelSource NOTIFY nnrDiagnosticsChanged)
+    Q_PROPERTY(QString nnrStatus READ nnrStatus NOTIFY nnrDiagnosticsChanged)
+    Q_PROPERTY(QString nnrLastError READ nnrLastError NOTIFY nnrLastErrorChanged)
+
 
     // NR1 (ANR) tuning — 5 knobs.
     // Gain/Leakage stored in WDSP-domain values (not UI-units — UI applies
@@ -759,6 +789,65 @@ public:
     NereusSDR::NrSlot activeNr() const { return m_activeNr; }
     void              setActiveNr(NereusSDR::NrSlot slot);
 
+    using NnrSettingsApplier = std::function<std::optional<NnrSettings>(const NnrSettings&, QString*)>;
+    using NrSelectionApplier = std::function<bool(NrSlot, QString*)>;
+    void setNnrSettingsApplier(NnrSettingsApplier apply) { m_nnrSettingsApplier = std::move(apply); }
+    void setNrSelectionApplier(NrSelectionApplier apply) { m_nrSelectionApplier = std::move(apply); }
+    bool hasNrSelectionApplier() const { return static_cast<bool>(m_nrSelectionApplier); }
+    NnrSettings nnrSettings() const { return m_nnrSettings; }
+    bool applyNnrSettings(const NnrSettings& requested);
+    void resetNnrTuning();
+    // Explicit session-only action. The radio/session owner validates and
+    // applies it; changing diagnostics never changes persisted preferences.
+    void requestNnrDiagnostics(int testMode, int outputMode);
+    int nnrModelSlot() const { return m_nnrSettings.modelSlot; }
+    void setNnrModelSlot(int value);
+    double nnrMaskFloorDb() const { return m_nnrSettings.maskFloorDb; }
+    void setNnrMaskFloorDb(double value);
+    NereusSDR::NrPosition nnrPosition() const { return m_nnrSettings.position; }
+    void setNnrPosition(NereusSDR::NrPosition value);
+    double nnrAlpha() const { return m_nnrSettings.alpha; }
+    void setNnrAlpha(double value);
+    double nnrAlphaKneeDb() const { return m_nnrSettings.alphaKneeDb; }
+    void setNnrAlphaKneeDb(double value);
+    double nnrTauSeconds() const { return m_nnrSettings.tauSeconds; }
+    void setNnrTauSeconds(double value);
+    double nnrMaxGainDb() const { return m_nnrSettings.maxGainDb; }
+    void setNnrMaxGainDb(double value);
+    double nnrAttackMs() const { return m_nnrSettings.attackMs; }
+    void setNnrAttackMs(double value);
+    double nnrReleaseMs() const { return m_nnrSettings.releaseMs; }
+    void setNnrReleaseMs(double value);
+    void updateNnrDiagnostics(const NnrDiagnostics& diagnostics);
+    NnrDiagnostics nnrDiagnostics() const { return m_nnrDiagnostics; }
+    bool nnrAvailable() const { return m_nnrDiagnostics.available; }
+    bool nnrReady() const { return m_nnrDiagnostics.ready; }
+    bool nnrRunning() const { return m_nnrDiagnostics.running; }
+    bool nnrStandardAvailable() const { return m_nnrDiagnostics.modelAvailable[0]; }
+    bool nnrPremiumAvailable() const { return m_nnrDiagnostics.modelAvailable[1]; }
+    bool nnrRateSupported() const { return m_nnrDiagnostics.rateSupported; }
+    int nnrActualModelSlot() const { return m_nnrDiagnostics.actualModelSlot; }
+    int nnrDspRateHz() const { return m_nnrDiagnostics.dspRateHz; }
+    int nnrNetworkRateHz() const { return m_nnrDiagnostics.networkRateHz; }
+    int nnrDelaySamples() const { return m_nnrDiagnostics.delaySamples; }
+    bool nnrProfilingAvailable() const { return m_nnrDiagnostics.profilingAvailable; }
+    double nnrLatencyMs() const { return m_nnrDiagnostics.latencyMs; }
+    int nnrTestMode() const { return m_nnrDiagnostics.testMode; }
+    int nnrOutputMode() const { return m_nnrDiagnostics.outputMode; }
+    QString nnrModelSource() const;
+    QString nnrStatus() const { return m_nnrDiagnostics.explanation; }
+    QString nnrLastError() const { return m_nnrLastError; }
+    bool applyStationNnrDiagnostic(const QByteArray& name, const QVariant& value);
+    void reportNnrEditResult(const QString& reason) { setNnrLastError(reason); }
+
+    // Set identity before restore; the stable slice id is never a tab index.
+    void setSettingsRadioIdentity(const QString& mac);
+    QString settingsRadioIdentity() const { return m_settingsRadioMac; }
+    QString nnrSettingsPrefix() const;
+    void saveNnrSettings() const;
+    void restoreNnrSettings();
+
+
     // NR1
     int    nr1Taps()    const { return m_nr1Taps; }
     void   setNr1Taps(int v);
@@ -1031,6 +1120,7 @@ public slots:
                                  const NereusSDR::SkuUiProfile* sku = nullptr);
 
 signals:
+    void nnrDiagnosticsRequested(int testMode, int outputMode);
     void frequencyChanged(double freq);
     // Phase 3P-II Task 64: emitted when frequency crosses a ham-band boundary.
     // Uses Band::bandFromFrequency(freq) to detect crossings; emits once per
@@ -1095,6 +1185,20 @@ signals:
     void nbModeChanged(NereusSDR::NbMode v);
     // NR signals (Sub-epic C-1)
     void activeNrChanged(NereusSDR::NrSlot slot);
+    void nnrModelSlotChanged(int value);
+    void nnrMaskFloorDbChanged(double value);
+    void nnrPositionChanged(NereusSDR::NrPosition value);
+    void nnrAlphaChanged(double value);
+    void nnrAlphaKneeDbChanged(double value);
+    void nnrTauSecondsChanged(double value);
+    void nnrMaxGainDbChanged(double value);
+    void nnrAttackMsChanged(double value);
+    void nnrReleaseMsChanged(double value);
+    void nnrConfigurationChanged();
+    void nnrDiagnosticsChanged();
+    void nnrLastErrorChanged();
+    void nnrEditRejected(const QString& reason);
+
     void nr1TapsChanged(int v);
     void nr1DelayChanged(int v);
     void nr1GainChanged(double v);
@@ -1246,6 +1350,14 @@ private:
     // --- NR state (Sub-epic C-1) ---
     // See Thetis console.cs:43297-43450 SelectNR() [v2.10.3.13].
     NereusSDR::NrSlot m_activeNr{NereusSDR::NrSlot::Off};
+    NnrSettings m_nnrSettings;
+    NnrDiagnostics m_nnrDiagnostics;
+    NnrSettingsApplier m_nnrSettingsApplier;
+    NrSelectionApplier m_nrSelectionApplier;
+    QString m_settingsRadioMac;
+    QString m_nnrLastError;
+    void setNnrLastError(const QString& error);
+
 
     // NR1 — from RxChannel::Nr1Tuning defaults (Task 8 commit 8747ae4),
     // which in turn match Thetis radio.cs:673-699 [v2.10.3.13].

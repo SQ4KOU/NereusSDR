@@ -1,0 +1,133 @@
+// no-port-check: NereusSDR-original acceptance tests for validated PS3
+// configuration persistence and non-actuating hydration.
+
+#include <QtTest>
+
+#include "core/AppSettings.h"
+#include "models/PureSignalSettings.h"
+
+#include <limits>
+
+using namespace NereusSDR;
+
+namespace {
+const QString radioA = QStringLiteral("00:1C:2D:03:04:05");
+const QString radioB = QStringLiteral("00:1C:2D:03:04:06");
+}
+
+class TestPs3SettingsPersistence : public QObject {
+    Q_OBJECT
+private slots:
+    void init() { AppSettings::instance().clear(); }
+    void defaultsMatchPs3Contract();
+    void allAcceptedValuesRoundTripPerRadio();
+    void invalidEditRejectsWholeCandidate();
+    void corruptFieldsFallBackIndependentlyAndRemainVisible();
+    void loadingDesiredAutomaticIntentEmitsNoConfigurationWrite();
+};
+
+void TestPs3SettingsPersistence::defaultsMatchPs3Contract()
+{
+    PureSignalSettings settings;
+    QCOMPARE(settings.autoCalEnabled(), false);
+    QCOMPARE(settings.runCalibrationProcessing(), true);
+    QCOMPARE(settings.autoAttenuate(), true);
+    QCOMPARE(settings.quickAttenuate(), false);
+    QCOMPARE(settings.moxDelaySeconds(), 0.1);
+    QCOMPARE(settings.loopDelaySeconds(), 0.0);
+    QCOMPARE(settings.requestedTxDelayNs(), 150.0);
+    QCOMPARE(settings.hardwarePeakOverrideEnabled(), false);
+    QCOMPARE(settings.hardwarePeakOverride(), 0.0);
+}
+
+void TestPs3SettingsPersistence::allAcceptedValuesRoundTripPerRadio()
+{
+    PureSignalSettings settings;
+    settings.setRadioIdentity(radioA.toLower());
+    PureSignalSettingsValues requested;
+    requested.autoCalEnabled = true;
+    requested.runCalibrationProcessing = false;
+    requested.autoAttenuate = false;
+    requested.quickAttenuate = true;
+    requested.moxDelaySeconds = 3.4;
+    requested.loopDelaySeconds = 17.25;
+    requested.requestedTxDelayNs = 123456.5;
+    requested.hardwarePeakOverrideEnabled = true;
+    requested.hardwarePeakOverride = 0.4125;
+    QVERIFY(settings.apply(requested));
+    QVERIFY(settings.save());
+    auto& app = AppSettings::instance();
+    QVERIFY(app.save());
+    app.clear();
+    app.load();
+
+    PureSignalSettings other;
+    QVERIFY(other.load(radioB));
+    QVERIFY(other.values() == PureSignalSettingsValues{});
+
+    PureSignalSettings restored;
+    QVERIFY(restored.load(radioA));
+    QVERIFY(restored.values() == requested);
+    QCOMPARE(restored.settingsPrefix(),
+             QStringLiteral("hardware/00:1C:2D:03:04:05/pureSignal/"));
+}
+
+void TestPs3SettingsPersistence::invalidEditRejectsWholeCandidate()
+{
+    PureSignalSettings settings;
+    PureSignalSettingsValues accepted;
+    accepted.loopDelaySeconds = 9.0;
+    QVERIFY(settings.apply(accepted));
+
+    QSignalSpy changed(&settings, &PureSignalSettings::configurationChanged);
+    QSignalSpy rejected(&settings, &PureSignalSettings::editRejected);
+    auto invalid = accepted;
+    invalid.autoAttenuate = false;
+    invalid.moxDelaySeconds = 0.09;
+    QVERIFY(!settings.apply(invalid));
+    QVERIFY(settings.values() == accepted);
+    QCOMPARE(changed.count(), 0);
+    QCOMPARE(rejected.count(), 1);
+
+    settings.setRequestedTxDelayNs(std::numeric_limits<double>::infinity());
+    settings.setLoopDelaySeconds(100.01);
+    settings.setHardwarePeakOverride(-1.0);
+    QVERIFY(settings.values() == accepted);
+}
+
+void TestPs3SettingsPersistence::corruptFieldsFallBackIndependentlyAndRemainVisible()
+{
+    PureSignalSettings settings;
+    settings.setRadioIdentity(radioA);
+    auto& app = AppSettings::instance();
+    const QString prefix = settings.settingsPrefix();
+    app.setValue(prefix + QStringLiteral("MoxDelaySeconds"), 0.01);
+    app.setValue(prefix + QStringLiteral("LoopDelaySeconds"), 12.5);
+    app.setValue(prefix + QStringLiteral("RequestedTxDelayNs"), QStringLiteral("bogus"));
+    app.setValue(prefix + QStringLiteral("HardwarePeakOverride"), 0.37);
+    app.setValue(prefix + QStringLiteral("HardwarePeakOverrideEnabled"), true);
+    QVERIFY(settings.load());
+
+    QCOMPARE(settings.moxDelaySeconds(), 0.1);
+    QCOMPARE(settings.loopDelaySeconds(), 12.5);
+    QCOMPARE(settings.requestedTxDelayNs(), 150.0);
+    QCOMPARE(settings.hardwarePeakOverrideEnabled(), true);
+    QCOMPARE(settings.hardwarePeakOverride(), 0.37);
+    QVERIFY(settings.lastLoadError().contains(QStringLiteral("MoxDelaySeconds")));
+    QVERIFY(settings.lastLoadError().contains(QStringLiteral("RequestedTxDelayNs")));
+}
+
+void TestPs3SettingsPersistence::loadingDesiredAutomaticIntentEmitsNoConfigurationWrite()
+{
+    PureSignalSettings settings;
+    settings.setRadioIdentity(radioA);
+    AppSettings::instance().setValue(
+        settings.settingsPrefix() + QStringLiteral("autoCalEnabled"), true);
+    QSignalSpy writes(&settings, &PureSignalSettings::configurationChanged);
+    QVERIFY(settings.load());
+    QCOMPARE(settings.autoCalEnabled(), true);
+    QCOMPARE(writes.count(), 0);
+}
+
+QTEST_APPLESS_MAIN(TestPs3SettingsPersistence)
+#include "tst_ps3_settings_persistence.moc"

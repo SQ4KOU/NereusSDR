@@ -175,6 +175,10 @@ class TwoToneController;
 // 3M-4 Task 7: PureSignal coordinator (cal lifecycle, MOX integration,
 // auto-attention, polling, save/restore, two-tone wiring).
 class PureSignal;
+class PureSignalSettings;
+struct Ps3RoutingSnapshot;
+class DspAssetService;
+class PureSignalSessionFacade;
 class PsccPump;
 // Phase 4 Agent 4A of issue #167: PaProfileManager forward declaration.
 // RadioModel owns the per-MAC PA gain profile bank (parallel to
@@ -242,6 +246,7 @@ class StationTgxlController;
 class RadioModel : public QObject {
     Q_OBJECT
 
+    Q_PROPERTY(QString settingsSaveError READ settingsSaveError NOTIFY settingsSaveErrorChanged)
     Q_PROPERTY(QString name        READ name        NOTIFY infoChanged)
     Q_PROPERTY(QString model       READ model       NOTIFY infoChanged)
     Q_PROPERTY(QString version     READ version     NOTIFY infoChanged)
@@ -1441,6 +1446,11 @@ public:
     // lambda once m_txChannel + m_psFeedbackChannel are live.  Returns nullptr
     // before that point (and after teardown).
     PureSignal* pureSignal() const { return m_pureSignal.get(); }
+    PureSignalSettings* pureSignalSettings() const { return m_pureSignalSettings; }
+    DspAssetService* dspAssets() const { return m_dspAssets; }
+    PureSignalSessionFacade* pureSignalFacade() const { return m_pureSignalFacade; }
+    Ps3RoutingSnapshot pureSignalRoutingSnapshot() const;
+    bool applyNnrModelSelection(quint32 revision, QString* reason = nullptr);
 
     // Stage C2: expose FilterPresetStore so RxApplet, VfoWidget, and
     // FilterPresetsSetupPage can read/write user-customised presets.
@@ -2822,6 +2832,7 @@ signals:
     // emit pureSignalCoordinatorReady(...) directly to inject a test-owned
     // coordinator into the applet wiring.
     void pureSignalCoordinatorReady(NereusSDR::PureSignal* coordinator);
+    void settingsSaveErrorChanged(const QString& reason);
     void sliceAdded(int index);
     void sliceRemoved(int index);
 
@@ -3358,7 +3369,9 @@ private:
                            quint16 userAdc0Raw, quint16 userAdc1Raw,
                            quint16 supplyRaw);
     void saveSliceState(SliceModel* slice);
-    void scheduleSettingsSave();
+    void scheduleSettingsSave(SliceModel* slice = nullptr);
+    void wireNnrSettings(SliceModel* slice);
+    void applyNnrStateToChannel(SliceModel* slice, RxChannel* channel);
 
 public:
     // Force-run any pending coalesced slice save synchronously. Call this
@@ -3368,6 +3381,10 @@ public:
     // tweak when they immediately close the app. No-op when nothing's
     // pending. Idempotent — calling repeatedly is safe.
     void flushPendingSettingsSave();
+    QString settingsSaveError() const { return m_settingsSaveError; }
+    void applyStationSettingsSaveError(const QString& reason);
+    bool setNnrDiagnosticMode(int sliceId, int testMode, int outputMode,
+                              QString* reason = nullptr);
 
     // Restore a slice's persisted state from AppSettings.  Public so unit
     // tests can drive it without spinning up the full connectToRadio()
@@ -4046,6 +4063,9 @@ private:
 
     // Settings save coalescing
     bool m_settingsSaveScheduled{false};
+    bool m_settingsRetryScheduled{false};
+    QString m_settingsSaveError;
+    QSet<int> m_dirtySettingsSliceIds;
     // Phase 3P-I-a — dirty flag for AlexController persistence.
     // AlexController::antennaChanged can fire 14× during load(); the
     // flag + scheduleSettingsSave() timer coalesces them into a single
@@ -4352,6 +4372,9 @@ private:
     // QObject child-deletion path doesn't guarantee that ordering.  See
     // PureSignal.h for the design.  Constructed inside the WDSP-init
     // lambda alongside TwoToneController; reset() in teardown.
+    PureSignalSettings* m_pureSignalSettings{nullptr};
+    DspAssetService* m_dspAssets{nullptr};
+    PureSignalSessionFacade* m_pureSignalFacade{nullptr};
     std::unique_ptr<PureSignal> m_pureSignal;
 
     // 3M-4 Task 17 chunk C: pscc() driver — pairs per-DDC IQ streams

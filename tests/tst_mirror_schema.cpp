@@ -42,6 +42,9 @@
 #include <QVariant>
 
 #include "core/session/MirrorEnumDomain.h"
+#include "core/dsp/DspAssetService.h"
+#include "core/session/PureSignalSessionFacade.h"
+#include "models/PureSignalSettings.h"
 #include "core/session/MirrorPolicy.h"
 #include "core/session/MirrorSchema.h"
 #include "models/Band.h"
@@ -846,7 +849,10 @@ private:
                  &TransmitModel::staticMetaObject,
                  &TunerModel::staticMetaObject,
                  &RadioModel::staticMetaObject,
-                 &PanadapterModel::staticMetaObject };
+                 &PanadapterModel::staticMetaObject,
+                 &PureSignalSettings::staticMetaObject,
+                 &PureSignalSessionFacade::staticMetaObject,
+                 &DspAssetService::staticMetaObject };
     }
 };
 

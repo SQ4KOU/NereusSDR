@@ -263,6 +263,8 @@ warren@wpratt.com
 
 #pragma once
 
+#include "../../third_party/wdsp/src/ps3_abi.h"
+
 // NEREUS_STDCALL — calling-convention shim for WDSP function-pointer
 // callbacks.  Defined OUTSIDE the HAVE_WDSP guard so consumers (TxChannel's
 // pushvox bridge) can declare a portable callback signature in test builds
@@ -601,6 +603,24 @@ void SetRXASBNRnoiseRescale(int channel, float factor);
 void SetRXASBNRpostFilterThreshold(int channel, float threshold);
 
 void SetRXASBNRnoiseScalingType(int channel, int noise_scaling_type);
+
+// NNR, pinned TAPR WDSP 2.10 nnr.c/nnet.c [b02d5bac]. Model paths are
+// process-wide and are set before channel creation. Application code uses
+// NnrAdapter's accepted configuration/status boundary for live tuning.
+void SetNNRModelPathSlot(int slot, const char* path);
+void SetNNRModelPath(const char* path);
+void SetRXANNRRun(int channel, int run);
+void SetRXANNRPosition(int channel, int position);
+void SetRXANNRMaskFloor(int channel, double floorDb);
+int SetRXANNRModel(int channel, int slot);
+int GetRXANNRModel(int channel);
+void SetRXANNRTestMode(int channel, int mode);
+void SetRXANNRcmode(int channel, int mode);
+void SetRXANNRAlpha(int channel, double alpha);
+void SetRXANNRAlphaKnee(int channel, double kneeDb);
+void SetRXANNRTau(int channel, double seconds);
+void SetRXANNRMaxGain(int channel, double gainDb);
+void SetRXANNRSmooth(int channel, double attackMs, double releaseMs);
 
 // ---------------------------------------------------------------------------
 // Spectral noise blanker (snb.h) — From Thetis dsp.cs P/Invoke declarations
@@ -1338,30 +1358,22 @@ void GetDEXPPeakSignal(int id, double* peak);
 // ---------------------------------------------------------------------------
 // PureSignal API (calcc.c + cmaster.cs routing)
 //
-// Adaptive-predistortion calibration engine.  19 calcc entries control the
-// CALCC state machine (run, mox, reset, mancal, automode, turnon, loopdelay,
-// moxdelay, txdelay, hwpeak, ptol, feedbackrate, pinmode, mapmode, stabilize,
-// intsandspi) plus 4 readers (info[16], hwpeak, maxtx, disp×7).  2 routing
-// entries (SetPSRxIdx / SetPSTxIdx) wire the CMaster RX/TX feedback streams.
+// Adaptive-predistortion calibration engine from pinned TAPR WDSP 2.10.
+// CALCC is opaque.  GetPSRunCal is the narrow compatibility readback used
+// for availability/run-state checks; callers never dereference CALCC.
 //
-// All 19 calcc functions take a TXA channel id and operate on
-// txa[channel].calcc.p (pointer is created by create_calcc inside
-// create_txa() at TXA.c:405 [v2.10.3.13]).  Calls are csDSP-protected at
-// the WDSP boundary.  The routing functions take a "txid" (0 for primary
+// The routing functions take a "txid" (0 for primary
 // transmitter) and a stream index; per cmaster.cs:533-534 [v2.10.3.13]
 // "all current models use Stream0 for RX feedback / Stream1 for TX
 // feedback" — the values do not change across boards.
 //
 // SetPSTXDelay returns the actual delay applied (calcc.c:1001-1021
 // [v2.10.3.13] — the engine snaps to a fractional 20 ns delay step
-// derived from the feedback sample rate).  GetPSDisp takes seven output
-// buffers feeding the AmpView Ref / MagAmp / PhsAmp / MagCorr / PhsCorr /
-// MagCorrSmooth / PhsCorrSmooth series; sizing is `nsamps` doubles for
-// x/ym/yc/ys and `ints * 4` doubles for cm/cc/cs (calcc.c:1058-1070).
-// GetPSInfo writes 16 ints (calcc.c:927 — `memcpy(info, a->info,
-// 16 * sizeof(int))`).
+// derived from the feedback sample rate).  GetPSDisp takes four sample
+// arrays and four correction-curve arrays, then returns both counts and the
+// phase reference.  App code must allocate the pinned maxima before calling.
 //
-// From Thetis wdsp/calcc.c:891-1132 [v2.10.3.13]
+// From TAPR WDSP 2.10 calcc.c [@b02d5bac]
 // + Thetis cmaster.cs:143-147 [v2.10.3.13] (channel routing).
 // ---------------------------------------------------------------------------
 
@@ -1379,15 +1391,17 @@ double SetPSTXDelay(int channel, double delay);
 void SetPSHWPeak(int channel, double peak);
 void GetPSHWPeak(int channel, double* peak);
 void GetPSMaxTX(int channel, double* maxtx);
-void SetPSPtol(int channel, double ptol);
 void GetPSDisp(int channel, double* x, double* ym, double* yc, double* ys,
-               double* cm, double* cc, double* cs);
+               double* xmCorrection, double* ymCorrection,
+               double* xaCorrection, double* yaCorrection,
+               int* sampleCount, int* correctionCount,
+               double* phaseReferenceDegrees);
 void SetPSFeedbackRate(int channel, int rate);
-void SetPSPinMode(int channel, int pin);
-void SetPSMapMode(int channel, int map);
-void SetPSStabilize(int channel, int stbl);
-void SetPSIntsAndSpi(int channel, int ints, int spi);
 
+// WDSP 2.10 supersedes the historical PS2 implementation described below:
+// these entry points queue work on CALCC's owned worker and use the version-2
+// text correction format. Completion is read through ps3_abi.h generations.
+// Historical wiring/attribution context retained:
 // Save / restore the calcc correction tables to / from disk.  Both spawn a
 // detached thread inside calcc.c (PSSaveCorrection / PSRestoreCorrection at
 // calcc.c:567/600 [v2.10.3.13]) that writes / reads the binary `correctionsX`

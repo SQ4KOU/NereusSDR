@@ -508,6 +508,7 @@ void AppSettings::load()
         // reference, not a series of individually-meaningful mutations
         // through setValue().
         if (parseSettingsXml(sanitized, m_settings, m_stationSettings, m_stationName)) {
+            migrateLegacyNnrSettings();
             logLoadedSummary(m_settings, m_stationSettings.size());
             return;
         }
@@ -585,6 +586,7 @@ void AppSettings::load()
             // Same "bulk populate, no hook fire" reasoning as the
             // main-file parse above.
             if (parseSettingsXml(sanitized, m_settings, m_stationSettings, m_stationName)) {
+                migrateLegacyNnrSettings();
                 m_recoveredFromBackup = true;
                 qWarning() << "Recovered settings from backup file" << bakPath;
                 logLoadedSummary(m_settings, m_stationSettings.size());
@@ -617,8 +619,11 @@ void AppSettings::load()
     m_stationSettings.clear();
 }
 
-void AppSettings::save()
+bool AppSettings::save(QString* error)
 {
+    if (error) {
+        error->clear();
+    }
     // Ensure directory exists
     QDir().mkpath(QFileInfo(m_filePath).absolutePath());
 
@@ -672,7 +677,10 @@ void AppSettings::save()
     if (!file.open(QIODevice::WriteOnly | QIODevice::Text)) {
         qWarning() << "Could not save settings to" << m_filePath
                    << ":" << file.errorString();
-        return;
+        if (error) {
+            *error = QStringLiteral("Settings could not be saved: %1").arg(file.errorString());
+        }
+        return false;
     }
 
     {
@@ -698,16 +706,30 @@ void AppSettings::save()
 
         xml.writeEndElement(); // NereusSDR
         xml.writeEndDocument();
+        if (xml.hasError()) {
+            const QString reason = QStringLiteral("Settings XML could not be written: %1")
+                .arg(file.errorString());
+            file.cancelWriting();
+            qWarning() << reason;
+            if (error) {
+                *error = reason;
+            }
+            return false;
+        }
     }
 
     if (!file.commit()) {
         qWarning() << "Could not commit settings to" << m_filePath
                    << ":" << file.errorString();
-        return;
+        if (error) {
+            *error = QStringLiteral("Settings could not be saved: %1").arg(file.errorString());
+        }
+        return false;
     }
 
     QFile::setPermissions(m_filePath,
                           QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+    return true;
 }
 
 QVariant AppSettings::value(const QString& key, const QVariant& defaultValue) const
@@ -1070,6 +1092,71 @@ std::optional<SavedRadio> AppSettings::savedRadio(const QString& macKey) const
 QString AppSettings::lastConnected() const
 {
     return value(QStringLiteral("radios/lastConnected")).toString();
+}
+
+QString AppSettings::normalizedRadioMac(const QString& mac)
+{
+    QString compact = mac.trimmed().toUpper();
+    compact.remove(QLatin1Char(':'));
+    compact.remove(QLatin1Char('-'));
+    if (compact.size() != 12)
+        return {};
+    for (QChar c : compact) {
+        if (!((c >= QLatin1Char('0') && c <= QLatin1Char('9'))
+              || (c >= QLatin1Char('A') && c <= QLatin1Char('F'))))
+            return {};
+    }
+    QString result;
+    for (int i = 0; i < compact.size(); i += 2) {
+        if (!result.isEmpty())
+            result += QLatin1Char(':');
+        result += compact.mid(i, 2);
+    }
+    return result;
+}
+
+void AppSettings::migrateLegacyNnrSettings()
+{
+    // Only the last owner recorded in the loaded file can claim station-wide
+    // Slice<N> NR selection. Run before connection mutates radios/lastConnected.
+    if (m_remoteBackend)
+        return;
+    const QString mac = normalizedRadioMac(lastConnected());
+    if (mac.isEmpty())
+        return;
+    const QString radioPrefix = QStringLiteral("hardware/%1/").arg(mac);
+    const QString marker = radioPrefix + QStringLiteral("NnrMigrationComplete");
+    if (contains(marker))
+        return;
+
+    const auto keys = allKeys();
+    bool sawLegacyNr = false;
+    for (const QString& key : keys) {
+        if (!key.startsWith(QLatin1String("Slice")) || !key.endsWith(QLatin1String("/NrActive")))
+            continue;
+        const QString idText = key.mid(5, key.size() - 5 - 9);
+        bool validId = false;
+        const int id = idText.toInt(&validId);
+        if (!validId || id < 0 || QString::number(id) != idText)
+            continue;
+        bool validValue = false;
+        const int selected = value(key).toInt(&validValue);
+        if (!validValue || selected < 0 || selected > 8)
+            continue;
+        sawLegacyNr = true;
+        const QString target = radioPrefix + QStringLiteral("slices/%1/nnr/").arg(id);
+        bool exists = false;
+        for (const QString& existing : keys) {
+            if (existing.startsWith(target)) {
+                exists = true;
+                break;
+            }
+        }
+        if (!exists)
+            setValue(target + QStringLiteral("NrActive"), selected);
+    }
+    if (sawLegacyNr)
+        setValue(marker, QStringLiteral("True"));
 }
 
 void AppSettings::setLastConnected(const QString& macKey)

@@ -11,8 +11,10 @@
 #include <memory>
 #include <vector>
 
+#include "core/RxChannel.h"
 #include "core/TxChannel.h"
 #include "core/WdspEngine.h"
+#include "core/wdsp_api.h"
 
 extern "C" int nereus_copy_cfc_profile(int channel, double* compression,
                                       double* postEq, int capacity);
@@ -28,8 +30,14 @@ private slots:
         m_engine = std::make_unique<WdspEngine>();
         m_engine->setSynchronousInitForTest(true);
         QVERIFY(m_engine->initialize(m_directory.path() + QLatin1Char('/')));
+        m_rx = m_engine->createRxChannel(0, 256, 1024, 48000, 48000, 48000);
         m_tx = m_engine->createTxChannel(1);
+        QVERIFY(m_rx);
         QVERIFY(m_tx);
+        // Mode 1 forwards SIP1 samples to the host analyzer callback.  This
+        // linked-WDSP fixture has no TxAnalyzer, so keep the real siphon in
+        // its native buffer-only mode while exercising fexchange0 below.
+        TXASetSipMode(1, 0);
     }
 
     void defaultProfileResponse()
@@ -64,8 +72,48 @@ private slots:
         verifyResponse(qMode);
     }
 
+    void filterCurveResizeRetainsReplacement()
+    {
+        // Pinned b02d5bac freed each FCIMP and discarded build_fcimp's
+        // replacement in both setters.  Exercise the public collectives that
+        // exposed the defect, process at the configured block geometry, then
+        // resize again so cleanup owns the last replacement exactly once.
+        RXASetNC(0, 4096);
+        TXASetNC(1, 4096);
+
+        std::array<float, 256> rxInI{};
+        std::array<float, 256> rxInQ{};
+        std::array<float, 256> rxOutI{};
+        std::array<float, 256> rxOutQ{};
+        m_rx->setActive(true);
+        m_rx->processIq(rxInI.data(), rxInQ.data(), rxOutI.data(), rxOutQ.data(),
+                        static_cast<int>(rxInI.size()), static_cast<int>(rxOutI.size()));
+        for (const float sample : rxOutI) {
+            QVERIFY(std::isfinite(sample));
+        }
+        for (const float sample : rxOutQ) {
+            QVERIFY(std::isfinite(sample));
+        }
+        m_rx->setActive(false);
+
+        std::array<double, 512> txIn{};
+        std::array<double, 512> txOut{};
+        m_tx->setRunning(true);
+        int error = -1;
+        fexchange0(1, txIn.data(), txOut.data(), &error);
+        QCOMPARE(error, 0);
+        for (const double sample : txOut) {
+            QVERIFY(std::isfinite(sample));
+        }
+        m_tx->setRunning(false);
+
+        RXASetNC(0, 2048);
+        TXASetNC(1, 2048);
+    }
+
     void cleanupTestCase()
     {
+        m_rx = nullptr;
         m_tx = nullptr;
         m_engine.reset();
     }
@@ -100,6 +148,7 @@ private:
 
     QTemporaryDir m_directory;
     std::unique_ptr<WdspEngine> m_engine;
+    RxChannel* m_rx{nullptr};
     TxChannel* m_tx{nullptr};
 };
 

@@ -79,5 +79,8 @@ enum class SettingsScope {
 // itself. Links against exactly one .cpp. Task 15's SettingsProxy asks
 // this, per key, before deciding whether a write crosses the wire.
 SettingsScope classifySettingsKey(QStringView key);
+// Core models validate these values; the raw settings proxy may observe them
+// but cannot write/remove them around that acceptance boundary.
+bool isModelOwnedDspSettingsKey(QStringView key);
 
 } // namespace NereusSDR

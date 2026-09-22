@@ -4,7 +4,8 @@ Pinned source: TAPR `b02d5bac675dd2f33ec2bab2b339f79a597c47dd`,
 `wdsp 2.10/Source`. This is the implementation inventory for
 [the approved design](2026-09-21-wdsp210-nnr-ps3-design.md) and
 [plan](2026-09-21-wdsp210-nnr-ps3-plan.md). Entries are acceptance contracts;
-implementation/verification is pending until recorded below.
+implementation and verification evidence is recorded below and in the
+[execution ledger](wdsp210-verification/README.md).
 
 ## NNR
 
@@ -77,17 +78,26 @@ choices and series visibility remain GUI-local AppSettings preferences.
   added to this inventory and surfaced; it cannot be dismissed as an internal.
 - Hardware feedback rate and actual MOX are visible readbacks controlled by
   stream/TX ownership, not independent operator overrides.
+- The legacy "Display PS-RX and PS-TX spectra" checkbox had no display-route
+  consumer in the existing application. It remains explicitly unavailable,
+  with its stored preference retained; AmpView exposes the supported PS3
+  samples and correction curves. The two-tone measurement display retains its
+  working spectrum-overlay binding and GUI-local preference.
 
 ## Verification ledger
 
-| Boundary | Required evidence | State |
+| Boundary | Evidence | State |
 | --- | --- | --- |
-| Upstream symbols and ABI | Public header plus implementation census; all aliases accounted for | Pending vendor inventory |
-| NNR engine/settings | Both models, every tuning field, real applied readback, missing model, per-radio/slice restart/reset | Pending implementation |
-| NNR UI | Every row accessible via popup/Setup, fractional values, no right-click enable, stale slice/session rejection | Pending implementation |
-| PS3 coordinator | Attempts/successes, compound bits, processing pause/off ordering, worker teardown | Pending implementation |
-| PS3 files/display | Real completion generation, validated correction round-trip, bounded counts, correct phase/curve transform | Pending implementation |
-| Session ownership | Accepted-state result, old peers, receive-only refusal, no action replay, transport bounds | Pending implementation |
-| Persistence | Local and daemon restart, inactive slice edit, rejected edit, migration, two radios, GUI preferences | Pending implementation |
-| Native UI/operator | Minimum-size/scaled layouts, actual control workflows and listening comparison | Pending implementation/operator evidence |
-| Hardware | Rock NNR workload and authorized local PS3 feedback/RF measurements | Pending arranged bench |
+| Upstream symbols and ABI | 167-file census; 83 native C units; linked CFC/PS/NNR checks; all eight PS3 compatibility helpers exported | Passed on macOS arm64 |
+| NNR engine/settings | Both models, every tuning field, applied readback, missing model, two-radio/stable-slice file reload/reset and slice-preserving reconnect | Passed |
+| NNR UI | Popup/Setup fields, fractional values, context-menu non-actuation and stale slice/session rejection | Passed; actual 1x/1.5x Qt captures inspected |
+| PS3 coordinator | Real native restore, active/quiescent Off with calibration intent false, retained correction Apply, pending restore cancellation and worker teardown | Passed; final native lifecycle target 32.58 s |
+| PS3 files/display | Native save/validated restore round-trip, exact generations, bounded arrays/chunks, phase/curve transform and latest-only subscriptions | Passed |
+| Session ownership | Accepted-value results, older peers, receive-only refusal, no action replay, remote manager import/export while restore is R4-gated | Passed |
+| Persistence | Atomic settings-file reload, inactive/deleted slice flush, refusal, two radios, GUI geometry/OnTop/series preferences and save-failure retry | Passed in software fixtures; full application/operator restart matrix remains pending |
+| Full integrated software | Desktop, daemon and all test targets built; final CTest run | 716/716 passed, 267.01 s |
+| Native UI/operator | Minimum-size/scaled layouts and non-actuating workflows | Qt checks/captures passed; listening and subjective operator acceptance pending |
+| Platform/hardware | Other desktop platforms, Linux ARM64, Rock NNR workload and authorized local PS3 feedback/RF measurements | Pending; no RF operation by this task |
+
+The [execution ledger](wdsp210-verification/README.md) records sanitizer scope,
+final source handoff and the distinction between software and hardware evidence.

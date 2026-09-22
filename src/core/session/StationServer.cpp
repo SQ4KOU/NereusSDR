@@ -38,6 +38,11 @@
 #include "core/settings/SettingsProxyServer.h"
 #include "core/settings/SettingsScope.h"
 #include "models/PanadapterModel.h"
+#include "models/PureSignalSettings.h"
+#include "core/dsp/DspAssetService.h"
+#include "PureSignalSessionFacade.h"
+#include "core/PureSignal.h"
+#include <QScopeGuard>
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -530,6 +535,10 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
 
     if (m_session == transport) {
         m_session = nullptr;
+        m_dispatcher->setSessionOwner({});
+        if (m_radioModel) {
+            m_radioModel->pureSignalFacade()->resetSession();
+        }
         if (!m_radioModel.isNull()) {
             m_radioModel->clearStreamCtunPins();
         }
@@ -661,6 +670,14 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
             send(transport, SessionMessages::commandResult(
                 message.commandVerb, message.commandId, false,
                 QStringLiteral("Remote 4O3A control requires a newer station protocol."), {}));
+            break;
+        }
+        if ((message.commandVerb.startsWith("nnr.") || message.commandVerb.startsWith("ps3.")
+             || message.commandVerb.startsWith("dspAssets."))
+            && it->agreedMinor < kDspControlSessionProtocolMinor) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                QStringLiteral("This DSP action requires a newer station protocol."), {}));
             break;
         }
         if ((message.commandVerb == "configureTgxl" || message.commandVerb == "disconnectTgxl")
@@ -855,6 +872,8 @@ void StationServer::promoteToSession(SessionTransport* transport)
 
     m_session = transport;
     ++m_mediaSessionEpoch;
+    m_radioModel->pureSignalFacade()->resetSession();
+    m_dispatcher->setSessionOwner(QStringLiteral("station:%1").arg(m_mediaSessionEpoch));
 
     if (!sendCapabilitiesAndSettingsSnapshot(transport, m_mediaSessionEpoch)) {
         return;
@@ -895,6 +914,9 @@ void StationServer::buildMirror()
     m_mirrorBuilt = true;
 
     m_mirror->watch(QByteArray(kRadioKey), m_radioModel.data());
+    m_mirror->watch("pureSignalSettings", m_radioModel->pureSignalSettings());
+    m_mirror->watch("dspAssets", m_radioModel->dspAssets());
+    m_mirror->watch("pureSignal", m_radioModel->pureSignalFacade());
     m_mirror->watch(QByteArray(kTransmitKey), &m_radioModel->transmitModel());
     if (m_radioModel->tunerModel() != nullptr) {
         m_mirror->watch(QByteArray(kTunerKey), m_radioModel->tunerModel());
@@ -962,57 +984,98 @@ bool StationServer::sendCapabilitiesAndSettingsSnapshot(SessionTransport* transp
 void StationServer::handlePropertyWrite(SessionTransport* transport,
                                         const SessionMessage& message)
 {
-    QSet<QByteArray> refused;
+    // Persist accepted PS preferences without replaying transmit operations.
+    // This session advertises txPermitted=false until the R4 transmit path.
+    const QPointer<PureSignal> hydrating = message.objectKey == "pureSignalSettings"
+        && m_radioModel ? m_radioModel->pureSignal() : nullptr;
+    if (hydrating) {
+        hydrating->beginSettingsHydration();
+    }
+    const auto hydrationGuard = qScopeGuard([hydrating]() {
+        if (hydrating) {
+            hydrating->endSettingsHydration();
+        }
+    });
+    const QList<MirrorUpdate> before = m_mirror->snapshot(message.objectKey);
+    QHash<QByteArray, MirrorUpdate> previous;
+    for (const auto& value : before) {
+        previous.insert(value.name, value);
+    }
+    QHash<QByteArray, QString> refusals;
+    const bool negotiated = m_peers.value(transport).agreedMinor >= kDspControlSessionProtocolMinor;
     const bool receiveOnlyTransmitWrite = message.objectKey == QByteArray(kTransmitKey)
         && !m_radioModel.isNull() && m_radioModel->receiveOnlyStationPolicy();
+    QSet<QByteArray> requested;
     for (const MirrorUpdate& update : message.updates) {
-        // R3 advertises txPermitted=false and installs the matching persistent
-        // model policy. TransmitModel remains bidirectional in the generic
-        // mirror table for later phases and other contexts, so enforce the
-        // station's current authority here before any setter can run.
+        if (requested.contains(update.name)) {
+            refusals.insert(update.name, QStringLiteral("Duplicate property in one write."));
+            continue;
+        }
+        requested.insert(update.name);
+        const auto known = previous.constFind(update.name);
+        if (known == previous.cend() || known->kind != update.kind) {
+            refusals.insert(update.name, QStringLiteral("Unknown property or incompatible value type."));
+            continue;
+        }
         if (receiveOnlyTransmitWrite) {
-            qCWarning(lcStation) << "Refused remote transmit write on receive-only station"
-                                 << message.objectKey << "." << update.name;
-            refused.insert(update.name);
+            refusals.insert(update.name, QStringLiteral("Transmit configuration is unavailable on this receive-only station."));
             continue;
         }
-        const MirrorApplyResult result =
-            m_mirror->applyInbound(message.objectKey, update.name, update.value);
-        if (result.accepted) {
+        if (!negotiated && (message.objectKey == "pureSignalSettings"
+            || update.name.startsWith("nnr")
+            || (update.name == "activeNr" && update.value.toInt() == static_cast<int>(NrSlot::NNR)))) {
+            refusals.insert(update.name, QStringLiteral("This client has not negotiated DSP settings control."));
             continue;
         }
-        qCWarning(lcStation) << "Refused remote write" << message.objectKey << "."
-                             << update.name << ":" << result.reason;
-        refused.insert(update.name);
-    }
-    if (refused.isEmpty()) {
-        return;
+        const MirrorApplyResult result = m_mirror->applyInbound(message.objectKey, update.name, update.value);
+        if (!result.accepted) {
+            refusals.insert(update.name, result.reason);
+        }
     }
 
-    // Self-correcting: hand the peer back what the daemon actually holds
-    // for every refused property, as an ordinary Delta, so a GUI control
-    // that optimistically moved snaps back rather than displaying a value
-    // the station never accepted.
-    //
-    // ONE snapshot and ONE send for the whole message. Whole-branch
-    // review, Minor 4: this used to sit inside the loop above, so a single
-    // inbound frame carrying N refusable properties cost N full-object
-    // snapshots and N separately encoded outbound frames. Post-auth, so
-    // not an unauthenticated amplifier, but a peer whose whole message is
-    // refusable had no reason to be the cheapest thing in the session
-    // either.
-    //
-    // Taking the snapshot after the loop rather than per refusal is also
-    // the more correct answer, not merely the cheaper one: what the client
-    // needs is the settled state once the entire message has been applied,
-    // which is the mirror's own latest-wins principle. Reading it mid-loop
-    // could hand back a value a later update in the same frame then
-    // changed.
-    QList<MirrorUpdate> corrections;
+    // Read once after the WHOLE batch: a later setter may change an earlier
+    // property's final value. Qt's successful WRITE invocation alone cannot
+    // prove that a validating model accepted the requested configuration.
     const QList<MirrorUpdate> settled = m_mirror->snapshot(message.objectKey);
-    for (const MirrorUpdate& live : settled) {
-        if (refused.contains(live.name)) {
-            corrections.append(live);
+    QHash<QByteArray, MirrorUpdate> actual;
+    for (const auto& value : settled) {
+        actual.insert(value.name, value);
+    }
+    QList<SessionPropertyResult> results;
+    QSet<QByteArray> reported;
+    for (const auto& update : message.updates) {
+        if (reported.contains(update.name)) {
+            continue;
+        }
+        reported.insert(update.name);
+        SessionPropertyResult result;
+        result.property = update.name;
+        result.hasValue = actual.contains(update.name);
+        if (result.hasValue) {
+            result.value = actual.value(update.name);
+        }
+        result.reason = refusals.value(update.name);
+        if (result.reason.isEmpty() && (!result.hasValue || result.value.value != update.value)) {
+            result.reason = QStringLiteral("The station retained the returned value after validating this edit.");
+        }
+        result.accepted = result.reason.isEmpty();
+        results.append(result);
+    }
+    if (negotiated && message.writeId != 0) {
+        send(transport, SessionMessages::propertyResult(message.objectKey, message.writeId, results));
+    }
+
+    // Inbound setters suppress their notifications to avoid echo loops.
+    // Publish their settled side effects, and give legacy peers accepted or
+    // clamped readback too. New peers get requested fields in the sequenced
+    // result above so an older answer cannot overwrite a newer local edit.
+    QList<MirrorUpdate> corrections;
+    for (const auto& value : settled) {
+        const bool changed = !previous.contains(value.name)
+            || previous.value(value.name).value != value.value;
+        if ((requested.contains(value.name) && (!negotiated || message.writeId == 0))
+            || (changed && !requested.contains(value.name))) {
+            corrections.append(value);
         }
     }
     if (!corrections.isEmpty()) {
@@ -1035,13 +1098,19 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
                              << result.reason;
         send(transport,
              SessionMessages::settingsReject(key, result.restoredValue.isValid(),
-                                             result.restoredValue.toString()));
+                                             result.restoredValue.toString(), result.reason));
     }
 }
 
 void StationServer::handleSettingsRemove(const SessionMessage& message)
 {
     const QString key = QString::fromUtf8(message.objectKey);
+    if (isModelOwnedDspSettingsKey(key)) {
+        const QVariant value = m_settings.value(key);
+        sendToSession(SessionMessages::settingsReject(key, value.isValid(), value.toString(),
+            QStringLiteral("Use the validated DSP controls to change these settings.")));
+        return;
+    }
     // SettingsProxyServer has no remove path of its own: AppSettings::
     // remove() fires the same Task 13 change hook a setValue() does, so
     // the broadcast that reaches every client is produced by the same
@@ -1178,6 +1247,15 @@ StationCapabilities StationServer::buildCapabilities() const
     caps.stationTelemetryVersion = m_telemetryEnabled ? 1 : 0;
     caps.remoteTgxlConfigVersion = m_radioModel->stationAccessoryIdentityEnabled() ? 1 : 0;
     caps.remoteFourO3AControlVersion = m_radioModel->stationAccessoryIdentityEnabled() ? 1 : 0;
+    caps.propertyResultVersion = 1;
+#ifdef HAVE_WDSP
+    caps.wdspVersion = 210;
+    caps.wdspCompatibilityVersion = 1;
+    caps.nnrVersion = 1;
+    caps.psAlgorithmVersion = 3;
+    caps.dspAssetVersion = 1;
+    caps.psDisplayVersion = m_mediaEnabled ? 1 : 0;
+#endif
 
     return caps;
 }

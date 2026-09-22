@@ -464,6 +464,12 @@ public:
     void setEmnrTuning (const Nr2Tuning& t);
     void setRnnrTuning (const Nr3Tuning& t);
     void setSbnrTuning (const Nr4Tuning& t);
+    // Returns the actual accepted WDSP values; an unavailable model changes
+    // neither the saved tuning nor the currently active reduction mode.
+    bool setNnrTuning(const NnrSettings& settings, QString* reason = nullptr);
+    NnrSettings nnrTuning() const;
+    NnrDiagnostics nnrDiagnostics() const;
+    bool setNnrDiagnostics(int testMode, int outputMode, QString* reason = nullptr);
 
     // Per-knob convenience setters (single WDSP call each).
     // Gain/leakage are in raw WDSP domain (caller is responsible for 1e-6/1e-3 scaling).
@@ -500,7 +506,7 @@ public:
 
     // Central mode dispatch — flip SetRXA*Run flags so exactly 0 or 1 is on.
     // Byte-for-byte from Thetis console.cs:43297-43450 SelectNR() [v2.10.3.13].
-    void   setActiveNr(NrSlot slot);
+    bool   setActiveNr(NrSlot slot);
     NrSlot activeNr() const { return m_activeNr.load(std::memory_order_acquire); }
 
     // Accessors for post-WDSP filter atomics (filter classes land in Tasks 9-11).
@@ -996,6 +1002,7 @@ private:
     Nr2Tuning m_nr2Tuning;
     Nr3Tuning m_nr3Tuning;
     Nr4Tuning m_nr4Tuning;
+    NnrSettings m_nnrTuning;
 
     // Post-WDSP filter "on" flags.  Filter instances (DeepFilterFilter,
     // NvidiaBnrFilter, MacNRFilter) land in Tasks 9-11; these atomics exist now

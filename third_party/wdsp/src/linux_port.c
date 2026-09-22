@@ -38,6 +38,7 @@ john.d.melton@googlemail.com
 #include "comm.h"
 
 #include <errno.h>
+#include <time.h>
 
 /********************************************************************************************************
 *													*
@@ -79,26 +80,72 @@ void DeleteCriticalSection(pthread_mutex_t *mutex) {
 	pthread_mutex_destroy(mutex);
 }
 
+static uint64_t monotonic_milliseconds(void)
+{
+	struct timespec now;
+	clock_gettime(CLOCK_MONOTONIC, &now);
+	return (uint64_t)now.tv_sec * 1000u + (uint64_t)now.tv_nsec / 1000000u;
+}
+
 int LinuxWaitForSingleObject(sem_t *sem,int ms) {
-	int result=0;
-	if(ms==INFINITE) {
-		// wait for the lock
-		result=sem_wait(sem);
-	} else {
-		// try to get the lock
-		result=sem_trywait(sem);
-		if(result!=0) {
-			// didn't get the lock
-			if(ms!=0) {
-				// sleep if ms not zero
-				Sleep(ms);
-				// try to get the lock again
-				result=sem_trywait(sem);
-			}
+	uint64_t deadline;
+	if (sem == 0) return (int)WAIT_FAILED;
+	if (ms == INFINITE) {
+		while (sem_wait(sem) != 0) {
+			if (errno != EINTR) return (int)WAIT_FAILED;
+		}
+		return (int)WAIT_OBJECT_0;
+	}
+	if (ms < 0) return (int)WAIT_FAILED;
+	deadline = monotonic_milliseconds() + (uint64_t)ms;
+	for (;;) {
+		if (sem_trywait(sem) == 0) return (int)WAIT_OBJECT_0;
+		if (errno != EAGAIN && errno != EINTR) return (int)WAIT_FAILED;
+		if (monotonic_milliseconds() >= deadline) return (int)WAIT_TIMEOUT;
+		{
+			const struct timespec pause = { 0, 1000000 };
+			nanosleep(&pause, 0);
 		}
 	}
-	
-	return result;
+}
+
+unsigned int LinuxWaitForMultipleObjects(unsigned int count, HANDLE* handles,
+	int wait_all, int milliseconds)
+{
+	static unsigned int next_start;
+	uint64_t deadline;
+	unsigned int start;
+	if (wait_all) {
+		errno = ENOTSUP;
+		return WAIT_FAILED;
+	}
+	if (count == 0 || handles == 0 || milliseconds < INFINITE) {
+		errno = EINVAL;
+		return WAIT_FAILED;
+	}
+	start = __sync_fetch_and_add(&next_start, 1u) % count;
+	deadline = milliseconds == INFINITE ? 0u
+		: monotonic_milliseconds() + (uint64_t)milliseconds;
+	for (;;) {
+		unsigned int offset;
+		for (offset = 0; offset < count; ++offset) {
+			const unsigned int index = (start + offset) % count;
+			sem_t* sem = (sem_t*)handles[index];
+			if (sem == 0) {
+				errno = EINVAL;
+				return WAIT_FAILED;
+			}
+			if (sem_trywait(sem) == 0) return WAIT_OBJECT_0 + index;
+			if (errno != EAGAIN && errno != EINTR) return WAIT_FAILED;
+		}
+		if (milliseconds != INFINITE && monotonic_milliseconds() >= deadline)
+			return WAIT_TIMEOUT;
+		{
+			const struct timespec pause = { 0, 1000000 };
+			nanosleep(&pause, 0);
+		}
+		start = (start + 1u) % count;
+	}
 }
 
 sem_t *LinuxCreateSemaphore(int attributes,int initial_count,int maximum_count,char *name) {
@@ -176,7 +223,7 @@ void LinuxReleaseSemaphore(sem_t* sem,int release_count, int* previous_count) {
 sem_t *CreateEvent(void* security_attributes,int bManualReset,int bInitialState,char* name) {
 	int result;
         sem_t *sem;
-	sem=LinuxCreateSemaphore(0,0,0,0);
+	sem=LinuxCreateSemaphore(0,bInitialState ? 1 : 0,1,0);
 	// need to handle bManualReset and bInitialState
 	return sem;
 }
