@@ -9654,7 +9654,7 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
         }
 
         // ── Phase 3F Sub-Epic F Task 5: wideband frame -> per-ADC FFT ──
-        // P2RadioConnection::widebandFrameReady fires on the connection
+        // P2RadioConnection::widebandFrameReadyForGeneration fires on the connection
         // thread once a 32-packet frame (16384 normalized real samples)
         // is assembled by WidebandFrameAccumulator (Sub-Epic F Task 3).
         // We hop off the connection thread via auto-connection so the
@@ -9672,10 +9672,16 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
         // protection concern of its own and wants this off its single
         // event-loop thread entirely.
         const quint64 widebandEpoch = m_widebandConnectionEpoch.load(std::memory_order_acquire);
-        connect(p2, &P2RadioConnection::widebandFrameReady, &m_widebandDispatchContext,
-                [this, widebandEpoch](int adcIdx, const QVector<float>& samples) {
+        const std::array captureEpochs {p2->widebandCaptureEpoch(0),
+                                       p2->widebandCaptureEpoch(1)};
+        connect(p2, &P2RadioConnection::widebandFrameReadyForGeneration,
+                &m_widebandDispatchContext,
+                [this, widebandEpoch, captureEpochs](int adcIdx,
+                    quint64 captureGeneration, const QVector<float>& samples) {
             if (widebandEpoch != m_widebandConnectionEpoch.load(std::memory_order_acquire)
-                || adcIdx < 0 || adcIdx >= 2 || !m_widebandFftEngines[adcIdx]) {
+                || adcIdx < 0 || adcIdx >= 2 || !m_widebandFftEngines[adcIdx]
+                || captureGeneration == 0 || !captureEpochs[adcIdx]
+                || captureGeneration != captureEpochs[adcIdx]->load(std::memory_order_acquire)) {
                 return;
             }
             QVector<float> bins;
@@ -9683,8 +9689,14 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
             // Publication is serialized with teardown on the model thread.
             // A worker-side check alone leaves a check-to-emit race and can
             // deliver an old frame into a freshly subscribed remote endpoint.
-            QMetaObject::invokeMethod(this, [this, widebandEpoch, adcIdx, bins = std::move(bins)]() {
-                if (widebandEpoch == m_widebandConnectionEpoch.load(std::memory_order_acquire)) {
+            // The shared ADC epoch also retires disable/re-enable on the same
+            // connection. It remains safe to read after P2 QObject destruction;
+            // the FFT worker never dereferences the connection itself.
+            QMetaObject::invokeMethod(this, [this, widebandEpoch, adcIdx,
+                captureGeneration, captureEpoch = captureEpochs[adcIdx],
+                bins = std::move(bins)]() {
+                if (widebandEpoch == m_widebandConnectionEpoch.load(std::memory_order_acquire)
+                    && captureGeneration == captureEpoch->load(std::memory_order_acquire)) {
                     emit widebandSpectrumReady(adcIdx, bins);
                 }
             }, Qt::AutoConnection);

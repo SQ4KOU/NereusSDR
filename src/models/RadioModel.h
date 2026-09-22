@@ -575,7 +575,7 @@ public:
 
     /// R1 Task 11: injectable target for the wideband FFT dispatch hop
     /// wired inside wireConnectionSignals (P2RadioConnection::
-    /// widebandFrameReady -> WidebandFftEngine::computeFft). That hop has
+    /// widebandFrameReadyForGeneration -> WidebandFftEngine::computeFft). That hop has
     /// always landed on RadioModel's own thread via an auto-connection --
     /// fine for the GUI, where RadioModel lives on the main thread and the
     /// entire point is getting the FFT off the P2 connection thread onto

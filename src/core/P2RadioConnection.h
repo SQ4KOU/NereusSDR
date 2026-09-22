@@ -55,7 +55,7 @@
 //   2026-04-28 — setMicPTT (G.5): byte 50 bit 2 (0x04, INVERTED). deskhpsdr new_protocol.c:1488-1490 [@120188f]. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-05-04 — setMicPTT renamed to setMicPTTDisabled (issue #182): direct polarity matches Thetis console.cs:19757-19766 [v2.10.3.13+501e3f51]; default MicState::micControl flipped 0x24→0x20 so PTT is enabled at firmware out of the box. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-04-28 — setMicXlr (G.6): byte 50 bit 5 (0x20), P2-only, polarity 1=XLR. deskhpsdr new_protocol.c:1500-1502 [@120188f]. MicState::micControl default updated 0x04 -> 0x24. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
-//   2026-09-22 — Established UDP silence: Thetis ChannelMaster/network.c:655-666 [v2.10.3.15]; stop/report, daemon-owned recovery.
+//   2026-09-22 — Established UDP silence: Thetis ChannelMaster/network.c:655-666 [v2.10.3.15]; stop/report, daemon-owned recovery; Nereus per-ADC capture epochs.
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // =================================================================
 
@@ -337,6 +337,12 @@ public slots:
     // of range (0..7) or when the resulting mask is unchanged.
     void setWidebandEnabled(int adcIndex, bool on);
 
+    // Stable lifetime token for asynchronous wideband consumers. The shared
+    // atomic remains readable after this connection is destroyed; each capture
+    // boundary publishes a new nonzero epoch with release ordering.
+    // Invalid ADC indices return an empty pointer.
+    std::shared_ptr<const std::atomic<quint64>> widebandCaptureEpoch(int adcIndex) const;
+
     // Phase 3F Sub-Epic F Task 1: read current wideband per-ADC enable
     // mask. Used by buildCodecContext to thread the value into CodecContext
     // for the codec-driven composeCmdGeneral path.
@@ -356,6 +362,13 @@ signals:
     // by WidebandFftEngine (Task 4) / SpectrumWidget extended-pan view
     // (Task 5+).
     void widebandFrameReady(int adcIndex, QVector<float> samples);
+
+    // Nereus-original capture identity attached before any direct observer can
+    // change the ADC lifetime. Consumers compare this value with the retained
+    // widebandCaptureEpoch() token before and after asynchronous processing.
+    void widebandFrameReadyForGeneration(int adcIndex,
+                                         quint64 captureGeneration,
+                                         QVector<float> samples);
 
 private slots:
     void onReadyRead();
@@ -397,6 +410,8 @@ private:
     bool isSelectedSourceAddress(const QHostAddress& sender) const;
     void noteAcceptedInboundDatagram(quint64 datagramGeneration);
     void stopForEstablishedSilence();
+    void advanceWidebandCaptureEpoch(int adcIndex);
+    void advanceAllWidebandCaptureEpochs();
     void discardWidebandFrames();
 
     static void writeBE32(char* buf, int offset, quint32 value);
@@ -769,6 +784,11 @@ private:
     // by P2CodecOrionMkII::composeCmdGeneral. See Thetis network.c:879
     // [v2.10.3.15].
     quint8 m_wbEnableMask{0};
+
+    // Nereus-original per-ADC capture identity. The pointees deliberately
+    // outlive this QObject when a worker retains a shared pointer. Connection
+    // and capture transitions advance them; zero is reserved as invalid.
+    std::array<std::shared_ptr<std::atomic<quint64>>, 8> m_wbCaptureEpochs{};
 
     // Phase 3F Sub-Epic F Task 3: per-ADC wideband frame accumulators
     // (up to 8 ADCs). Constructed in the P2RadioConnection ctor and

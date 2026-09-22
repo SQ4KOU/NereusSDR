@@ -415,13 +415,14 @@ and demand reconciliation, and SpectrumWidget's local extended rendering.
 `src/gui/{RemoteMediaController,SpectrumWidget,MainWindow}.*`, and their
 remote-spectrum, extended-wing and filter-state regression tests.
 
-**Interfaces:** consume `RadioModel::widebandSpectrumReady(adcIndex, bins)`
-and Core's effective ADC/filter identity. This publication is raw FFT power
-in dB, not calibrated antenna data. Produce a negotiated, bounded
-wideband display source alongside the DDC source, with explicit RF geometry,
-calibration and current-session/context identity. Exact wire representation
-is a discovery deliverable below; do not silently reinterpret `FftTier::Wide`
-or transmit unrestricted full FFT arrays.
+**Interfaces:** extend the existing `RadioModel::widebandSpectrumReady`
+publication with physical ADC identity, capture generation and configured
+geometry; raw FFT power in dB must not be described as calibrated antenna
+data. The September 22 contract selects Core composition of ADC wings and
+the DDC island before averaging, carried in the existing bounded codec v1
+trace/waterfall rows. A negotiated source descriptor supplies explicit RF
+geometry, level reference and current-session/context identity. Do not
+reinterpret `FftTier::Wide` or transmit unrestricted full FFT arrays.
 
 - [x] Trace the current local extended-pan contract end to end, including
   wing click/drag behavior, physical ADC versus filter-chain mapping, BPF
@@ -430,7 +431,10 @@ or transmit unrestricted full FFT arrays.
   September 22: [source-grounded contract and ordered implementation](2026-09-22-remote-wideband-design.md)
   select Core composition before per-plane averaging, preserving codec v1
   trace/waterfall rows and the separate DDC-only 3D row. The shared Core/local
-  normalization helper is implemented; four focused targets pass. The
+  normalization helper and Core compositor are implemented. Five focused
+  targets pass, including pixel-by-pixel parity against all five local
+  detectors with and without a visible DDC island. The compositor is not yet
+  connected to remote endpoints. The
   122.88 MHz geometry remains the explicit existing Thetis reference, not a
   negotiated P2 rate or a new per-ADC calibration. Capture/demand, remote
   transport, GUI admission and hardware acceptance remain open. Task 6's

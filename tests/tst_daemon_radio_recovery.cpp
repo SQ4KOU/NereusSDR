@@ -10,6 +10,7 @@
 #include <optional>
 #include "core/RadioConnection.h"
 #include "core/P2RadioConnection.h"
+#include "core/WidebandFrameAccumulator.h"
 #include "core/WdspEngine.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -41,6 +42,19 @@ void prepare(DaemonApp& app)
     app.m_radioRetryInitialMs = 10;
     app.m_radioRetryMaximumMs = 40;
     RadioDiscovery::clearHoldOffForTest();
+}
+
+// Exercise the real P2 assembler-to-FFT boundary. UDP parsing has its own
+// focused coverage; this fixture controls delivery around the two queues.
+void feedWidebandBurst(P2RadioConnection* connection)
+{
+    connection->setWidebandEnabled(0, true);
+    const auto accumulators = connection->findChildren<WidebandFrameAccumulator*>();
+    Q_ASSERT(accumulators.size() == 8);
+    const QByteArray payload(1024, char(0x20));
+    for (int sequence = 0; sequence < 32; ++sequence) {
+        accumulators.first()->pushPacket(sequence, payload);
+    }
 }
 }
 
@@ -113,9 +127,8 @@ private slots:
         QVERIFY(entered.tryAcquire(1, 1000));
         auto* const oldP2 = qobject_cast<P2RadioConnection*>(model->connection());
         QVERIFY(oldP2);
-        const QVector<float> widebandSamples(16384, 0.25f);
-        QVERIFY(QMetaObject::invokeMethod(oldP2, [oldP2, widebandSamples]() {
-            emit oldP2->widebandFrameReady(0, widebandSamples);
+        QVERIFY(QMetaObject::invokeMethod(oldP2, [oldP2]() {
+            feedWidebandBurst(oldP2);
         }, Qt::BlockingQueuedConnection));
         available = false;
         fake.stopIngress();
@@ -155,8 +168,49 @@ private slots:
         QCOMPARE(fake.moxAssertedCount(), 0);
         auto* const freshP2 = qobject_cast<P2RadioConnection*>(model->connection());
         QVERIFY(freshP2);
-        QVERIFY(QMetaObject::invokeMethod(freshP2, [freshP2, widebandSamples]() {
-            emit freshP2->widebandFrameReady(0, widebandSamples);
+        QVERIFY(QMetaObject::invokeMethod(freshP2, [freshP2]() {
+            feedWidebandBurst(freshP2);
+        }, Qt::BlockingQueuedConnection));
+        QTRY_COMPARE(widebandFrames.count(), 1);
+
+        // A still-connected radio can also retire an ADC capture. A row
+        // queued before disable/re-enable must not enter the next capture.
+        widebandFrames.clear();
+        QMetaObject::invokeMethod(blocker, [&]() {
+            entered.release();
+            release.acquire();
+        }, Qt::QueuedConnection);
+        QVERIFY(entered.tryAcquire(1, 1000));
+        QVERIFY(QMetaObject::invokeMethod(freshP2, [freshP2]() {
+            feedWidebandBurst(freshP2);
+            freshP2->setWidebandEnabled(0, false);
+            freshP2->setWidebandEnabled(0, true);
+        }, Qt::BlockingQueuedConnection));
+        release.release();
+        QMetaObject::invokeMethod(blocker, [&]() {
+            frameProcessed.release();
+        }, Qt::QueuedConnection);
+        QVERIFY(frameProcessed.tryAcquire(1, 1000));
+        QCoreApplication::processEvents();
+        QCOMPARE(widebandFrames.count(), 0);
+
+        // Retirement after FFT but before owner-thread publication must also
+        // drop that row. The valid row afterward proves capture still works.
+        QVERIFY(QMetaObject::invokeMethod(freshP2, [freshP2]() {
+            feedWidebandBurst(freshP2);
+        }, Qt::BlockingQueuedConnection));
+        QMetaObject::invokeMethod(blocker, [&]() {
+            frameProcessed.release();
+        }, Qt::QueuedConnection);
+        QVERIFY(frameProcessed.tryAcquire(1, 1000));
+        QVERIFY(QMetaObject::invokeMethod(freshP2, [freshP2]() {
+            freshP2->setWidebandEnabled(0, false);
+            freshP2->setWidebandEnabled(0, true);
+        }, Qt::BlockingQueuedConnection));
+        QCoreApplication::processEvents();
+        QCOMPARE(widebandFrames.count(), 0);
+        QVERIFY(QMetaObject::invokeMethod(freshP2, [freshP2]() {
+            feedWidebandBurst(freshP2);
         }, Qt::BlockingQueuedConnection));
         QTRY_COMPARE(widebandFrames.count(), 1);
 
@@ -164,8 +218,8 @@ private slots:
         // waiting. Its publication is now queued here but not delivered.
         // Retiring the connection must also reject this later race window.
         widebandFrames.clear();
-        QVERIFY(QMetaObject::invokeMethod(freshP2, [freshP2, widebandSamples]() {
-            emit freshP2->widebandFrameReady(0, widebandSamples);
+        QVERIFY(QMetaObject::invokeMethod(freshP2, [freshP2]() {
+            feedWidebandBurst(freshP2);
         }, Qt::BlockingQueuedConnection));
         QVERIFY(QMetaObject::invokeMethod(blocker, [&]() {
             frameProcessed.release();

@@ -191,6 +191,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include <algorithm>
 #include <bit>
 #include <chrono>
+#include <limits>
 
 namespace NereusSDR {
 
@@ -280,9 +281,16 @@ P2RadioConnection::P2RadioConnection(QObject* parent)
     // actually receive packets. The lambda captures `i` by value so the
     // forwarded widebandFrameReady carries the correct ADC index.
     for (int i = 0; i < 8; ++i) {
+        m_wbCaptureEpochs[i] = std::make_shared<std::atomic<quint64>>(1);
         m_wbAccumulators[i] = new WidebandFrameAccumulator(this);
         connect(m_wbAccumulators[i], &WidebandFrameAccumulator::frameReady,
                 this, [this, i](const QVector<float>& samples) {
+            // Capture before emitting either signal. A direct tagged observer
+            // may disable/re-enable capture; this completed row must retain the
+            // generation under which its assembler emitted it.
+            const quint64 captureGeneration =
+                m_wbCaptureEpochs[i]->load(std::memory_order_acquire);
+            emit widebandFrameReadyForGeneration(i, captureGeneration, samples);
             emit widebandFrameReady(i, samples);
         });
     }
@@ -293,6 +301,10 @@ P2RadioConnection::~P2RadioConnection()
     if (m_running) {
         disconnect();
     }
+    // Workers may retain the shared atomic after QObject destruction. Always
+    // invalidate their last observation, including never-started/already-
+    // stopped connections for which disconnect() did not run here.
+    advanceAllWidebandCaptureEpochs();
 }
 
 // --- Thread Lifecycle ---
@@ -1360,7 +1372,9 @@ void P2RadioConnection::setWidebandEnabled(int adcIndex, bool on)
         return;
     }
     // Nereus capture lifetime: trailing packets after an enable transition
-    // cannot finish the previous burst. Other ADCs retain their own state.
+    // cannot finish the previous burst. Publish the new identity before
+    // retiring partial data; other ADCs retain their own state and identity.
+    advanceWidebandCaptureEpoch(adcIndex);
     m_wbAccumulators[adcIndex]->discardPartialFrame();
     m_wbEnableMask = newMask;
     if (m_state == ConnectionState::Connected) {
@@ -1368,8 +1382,43 @@ void P2RadioConnection::setWidebandEnabled(int adcIndex, bool on)
     }
 }
 
+std::shared_ptr<const std::atomic<quint64>>
+P2RadioConnection::widebandCaptureEpoch(int adcIndex) const
+{
+    if (adcIndex < 0 || adcIndex >= int(m_wbCaptureEpochs.size())) {
+        return {};
+    }
+    return m_wbCaptureEpochs[adcIndex];
+}
+
+void P2RadioConnection::advanceWidebandCaptureEpoch(int adcIndex)
+{
+    std::atomic<quint64>& epoch = *m_wbCaptureEpochs[adcIndex];
+    quint64 current = epoch.load(std::memory_order_relaxed);
+    for (;;) {
+        const quint64 next = current == std::numeric_limits<quint64>::max()
+            ? quint64(1)
+            : current + quint64(1);
+        if (epoch.compare_exchange_weak(current, next,
+                                        std::memory_order_release,
+                                        std::memory_order_relaxed)) {
+            return;
+        }
+    }
+}
+
+void P2RadioConnection::advanceAllWidebandCaptureEpochs()
+{
+    for (int adcIndex = 0; adcIndex < int(m_wbCaptureEpochs.size()); ++adcIndex) {
+        advanceWidebandCaptureEpoch(adcIndex);
+    }
+}
+
 void P2RadioConnection::discardWidebandFrames()
 {
+    // Retire each ADC identity before touching any partial assembler state.
+    // The model's separate connection epoch guards the whole radio lifetime.
+    advanceAllWidebandCaptureEpochs();
     for (WidebandFrameAccumulator* accumulator : m_wbAccumulators) {
         accumulator->discardPartialFrame();
     }

@@ -297,6 +297,18 @@ transmit permission or menu redesign is part of this contract.
   no-GUI Core guard. Run-start load: 5.05 / 6.50 / 7.44. This reducer is not yet
   connected to remote endpoints; these checks do not establish wire or
   hardware parity.
+- [x] Tag P2 assembler publication with a retained per-ADC atomic capture
+  identity. Actual enable transitions retire that ADC; connection boundaries
+  and destruction retire every ADC. Duplicate enable and unrelated ADC changes
+  preserve identity. RadioModel checks the tag before FFT and again after its
+  owner-thread hop without dereferencing a deleted connection. The real daemon
+  fixture first published an obsolete row after disable/re-enable; it now
+  rejects rows queued before FFT and queued after FFT, then accepts a fresh
+  capture. Direct observer reentrancy and retained tokens after destruction
+  are covered. Five freshly built focused targets pass (18.14 seconds): P2
+  enable/tagging, established silence, marshalling, actual daemon recovery and
+  wideband worker lifetime. This is capture-to-model retirement; the bounded
+  latest-frame descriptor and remote endpoint generation are still pending.
 - [ ] Tagged source/demand, negotiated endpoint, GUI parity, combined full
   suite and native/hardware acceptance remain pending. This checkpoint is
   not deployed. The installed software remains `55e7d49f`.
