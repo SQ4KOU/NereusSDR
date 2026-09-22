@@ -2,8 +2,8 @@
 
 Date: 2026-09-21
 
-Status: Written specification for user review. The architecture and feature
-scope have conversational approval; implementation has not started.
+Status: Approved by the user, including the explicit persistence requirement.
+Implementation has not started.
 
 Integration target: `codex/integrate-r2-main`, inspected at
 `aed2278fb7033c4b5f6e36207bc6764f6bd1bad9`. That branch remains active;
@@ -28,6 +28,11 @@ every available NNR and PS3 control. The UI must carry forward the useful
 Nereus/Thetis interaction patterns, especially DSP parameter popups, the
 PureSignal dialog, and AmpView. An enable switch and a renamed PS2 window do not
 satisfy this scope.
+
+Settings persistence is an explicit acceptance requirement, including advanced
+tuning and display preferences. Normal settings must survive application/Core
+restart, reconnect, and receiver recreation; persistence cannot depend on a
+particular popup or dialog remaining open.
 
 Success means the operator can discover, adjust, and inspect every supported
 runtime control without editing a configuration file. Common controls remain
@@ -136,6 +141,10 @@ version and compatibility revision in diagnostics.
 | R-UI-PS-01 | Popup, Setup, dialog, applet, and indicator use the same accepted model state; no duplicate parameter authority. |
 | R-UI-PS-02 | All controls have names, units, useful tooltips, defaults/reset behavior, keyboard access, and a usable minimum-size layout. |
 | R-UI-PS-03 | A source-to-UI coverage inventory proves that no supported control/readback was accidentally omitted. |
+| R-PERSIST-01 | Normal NNR selection/tuning, PS3 configuration, model-asset selections, and GUI display preferences survive clean restart, reconnect, and receiver recreation at their declared scopes. |
+| R-PERSIST-02 | The radio-owning process persists accepted DSP settings, with station/radio and slice isolation; remote GUI caches cannot overwrite Core settings during connection or snapshot replay. |
+| R-PERSIST-03 | Persisted preferences are distinct from commands and live status: loading settings does not replay one-shot calibration, correction restore, two-tone, PTT, or diagnostic bypass; existing supported settings migrate without loss. |
+| R-PERSIST-04 | Round-trip, reset, migration, rejected-edit, missing-asset, and local/remote restart tests establish persistence through the real storage and startup paths. |
 | R-VERIFY-PS-01 | Software, session/UI integration, and real hardware evidence are reported separately; pending RF evidence prevents claiming PS3 RF acceptance. |
 
 ## 5. NNR interaction design
@@ -397,6 +406,54 @@ stop operation for the controlling session. R4 adds its transmit authorization,
 watchdog, starvation, and handoff acceptance before granting operational PS3
 commands. This upgrade does not widen the existing receive-only checkpoint.
 
+### 9.1 Explicit persistence contract
+
+Use the repository's `AppSettings` infrastructure and existing stable radio and
+slice identity conventions; do not add a parallel `QSettings` store. In local
+operation the desktop owns DSP settings. In remote operation the Core owns DSP
+settings and assets, and the GUI persists only its presentation preferences.
+Core settings must be loaded and saved in headless startup/shutdown paths too;
+a desktop close handler cannot be the daemon's persistence mechanism.
+
+| Setting class | What survives restart | Owner/scope |
+| --- | --- | --- |
+| NNR receive configuration | NR selection, Standard/Premium selection, mask floor, position, alpha, knee, normalization tau, maximum gain, attack and release | Radio-owning process; existing radio/slice settings identity |
+| NNR model overrides | Bundled/custom choice and validated asset identity for each slot; pending versus applied identity remains truthful | Station/process, because upstream model paths are process-global |
+| PS3 configuration | Supported timing/delay, hardware-peak override, automatic/quick attenuation preferences, desired automatic-calibration preference, and normal processing preference | Radio-owning process; existing per-radio PS settings identity |
+| PS3 correction assets | Saved files and metadata/selection, without implicitly applying the selected file | Station-owned asset store, with radio/version compatibility metadata |
+| GUI presentation | PS dialog/AmpView geometry, On Top, expanded sections, existing Show Gain/Phase Zoom/Low Res, and new series visibility choices | GUI-local AppSettings; no DSP commands during restoration |
+| Commands, measurements, and diagnostic overrides | No automatic replay of single calibration, correction apply/restore, off/reset, two-tone/PTT, counters, measured peaks, live MOX/correction state, NNR TestMode or output-layout override | Transient state; diagnostics return to their documented normal defaults |
+
+Persist automatic-calibration intent separately from operational arming. Local
+startup retains the established coordinator-controlled behavior and its normal
+readiness checks. Remote reconnect or loading a saved preference cannot bypass
+R4 permission, synthesize a new calibration action, or key the transmitter.
+The UI shows saved intent and actual activity distinctly. A saved correction
+selection is likewise not authority to restore/apply it.
+
+Save only validated, accepted DSP configuration. A rejected remote edit must
+not become the value restored on next start. On reconnect, the Core snapshot
+wins over stale GUI values. Preserve fractional values through storage and
+reapplication; disabled features retain their tuning. Apply model-path choices
+before receiver creation, and reapply saved tuning after channel recreation
+before enabling NNR. Do not create defaults by overwriting an existing record
+before it has been loaded.
+
+Use the existing settings-save scheduling and durable flush mechanisms; ensure
+accepted changes are saved without opening or closing a settings window and
+flush pending saves on orderly shutdown. A missing/corrupt model asset must
+produce a visible availability/fallback state without silently erasing the
+saved custom selection. Old-Core negotiation similarly leaves unsupported
+preferences intact. Reset writes the documented defaults back to the same
+scope and survives a subsequent restart; it does not reset other slices or
+station-wide assets when only tuning was requested.
+
+Migration preserves existing NR enum identities, supported PS2 timing/feedback
+settings, and existing AmpView choices. Retain removed PS2-only keys as inactive
+rollback data. Invalid stored values use the same validation/default rules as
+live edits and expose any material fallback. Every coverage-inventory row
+declares its settings key, scope, load/save path, and whether it is transient.
+
 ## 10. UI behavior and coverage discipline
 
 Maintain one control inventory with upstream symbol, semantic parameter,
@@ -464,8 +521,18 @@ this repository.
   reconnect, session replacement, slice deletion, and stale AmpView snapshots.
 - Test receive-only refusal at Core independently of disabled widgets, including
   correction restore, automatic calibration, and two-tone entry points.
-- Verify snapshot/persistence replay cannot activate PS3 or diagnostic NNR
-  modes, and that version migration preserves existing selections/settings.
+- Verify remote snapshot/persistence replay cannot arm PS3 or activate diagnostic
+  NNR modes. Local automatic-calibration intent follows the existing readiness-
+  gated coordinator path. Migration preserves existing selections/settings.
+- Exercise actual save/reload and process startup for local desktop and headless
+  Core: set non-default fractional NNR/PS3 values with the feature off, restart,
+  reconnect/recreate channels, and check both widgets and applied DSP values.
+  Repeat with two slices and two radio/station identities to detect leakage.
+- Change a remote setting, receive acceptance, restart Core and reconnect a
+  stale GUI; the accepted Core value must win. Refuse an invalid/unauthorized
+  edit and verify it was not saved. Reset a group, restart, and verify only that
+  group's defaults changed. Cover settings migration, absent/corrupt assets,
+  and a clean first run without touching real user configuration in tests.
 
 ### Hardware and operator evidence
 
