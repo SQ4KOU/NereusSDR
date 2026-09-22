@@ -55,6 +55,8 @@
 //   2026-04-28 — setMicPTT (G.5): byte 50 bit 2 (0x04, INVERTED). deskhpsdr new_protocol.c:1488-1490 [@120188f]. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-05-04 — setMicPTT renamed to setMicPTTDisabled (issue #182): direct polarity matches Thetis console.cs:19757-19766 [v2.10.3.13+501e3f51]; default MicState::micControl flipped 0x24→0x20 so PTT is enabled at firmware out of the box. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-04-28 — setMicXlr (G.6): byte 50 bit 5 (0x20), P2-only, polarity 1=XLR. deskhpsdr new_protocol.c:1500-1502 [@120188f]. MicState::micControl default updated 0x04 -> 0x24. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-22 — Established UDP silence: Thetis ChannelMaster/network.c:655-666 [v2.10.3.15]; stop/report, daemon-owned recovery.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // =================================================================
 
 /*
@@ -181,6 +183,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include <QTimer>
 #include <QVector>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <memory>
@@ -361,6 +364,7 @@ private slots:
     // Fires kConnectTimeoutMs after connectToRadio() if no first DDC I/Q frame
     // arrives. Emits connectFailed(Timeout, ...) — Phase 3Q Task 3.
     void onConnectTimeout();
+    void onEstablishedSilenceTimeout();
 
 private:
     // --- Phase 3P-B: per-board codec chosen at connectToRadio() time ---
@@ -390,6 +394,9 @@ private:
 
     void processIqPacket(const QByteArray& data, int ddcIndex);
     void processHighPriorityStatus(const QByteArray& data);
+    bool isSelectedSourceAddress(const QHostAddress& sender) const;
+    void noteAcceptedInboundDatagram(quint64 datagramGeneration);
+    void stopForEstablishedSilence();
 
     static void writeBE32(char* buf, int offset, quint32 value);
 
@@ -462,8 +469,22 @@ private:
     // valid frame. Created in init(), Qt-parent-owned. Phase 3Q Task 3.
     QTimer* m_connectWatchdog{nullptr};
 
+    // Thetis ChannelMaster/network.c:655-666 [v2.10.3.15] waits three
+    // seconds for any inbound P2 UDP before sending stop. Nereus arms this
+    // only after the first valid DDC packet establishes the stream, keeps a
+    // monotonic deadline behind the Qt wakeup, then quiesces and reports loss
+    // rather than retrying inside the transport.
+    QTimer* m_establishedSilenceTimer{nullptr};
+    QDeadlineTimer m_establishedSilenceDeadline;
+    quint64 m_establishedSilenceGeneration{0};
+    quint64 m_connectionGeneration{0};
+    bool m_linkLossLatched{false};
+
     // Connect watchdog budget — 2 s matches P1.
     static constexpr int kConnectTimeoutMs = 2000;
+    static constexpr int kEstablishedSilenceTimeoutMs = 3000;
+    int m_connectTimeoutMs{kConnectTimeoutMs};
+    int m_establishedSilenceTimeoutMs{kEstablishedSilenceTimeoutMs};
 
     // Periodic protocol heartbeat: fires every 100 ms while connected and
     // dispatches HighPri / RX-spec / TX-spec / General on the cycling cadence
@@ -957,6 +978,25 @@ public:
 
     // Return number of floats currently buffered in the TX I/Q ring.
     int txIqRingCountForTest() const { return m_txIqRingCount.load(std::memory_order_acquire); }
+
+    // Keep loopback fixtures off the protocol's fixed 1024-1041 ports while
+    // preserving the real role arithmetic in compose/dispatch paths.
+    void setPortBasesForTest(quint16 outboundBase, quint16 inputRoleBase) {
+        Q_ASSERT(!m_running);
+        m_baseOutboundPort = static_cast<int>(outboundBase);
+        m_p2CustomPortBase = static_cast<int>(inputRoleBase);
+    }
+
+    // Compress only timer budgets; packet parsing and socket paths remain the
+    // production implementations. Values are clamped away from zero so a
+    // queued start cannot become an accidental immediate callback.
+    void setSilenceTimeoutsForTest(int connectTimeoutMs,
+                                   int establishedTimeoutMs) {
+        Q_ASSERT(!m_running);
+        m_connectTimeoutMs = std::max(1, connectTimeoutMs);
+        m_establishedSilenceTimeoutMs = std::max(1, establishedTimeoutMs);
+    }
+
 #endif
 };
 

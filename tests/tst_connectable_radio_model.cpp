@@ -38,6 +38,7 @@
 
 #include "core/RxChannel.h"
 #include "core/WdspEngine.h"
+#include "models/SliceModel.h"
 #include "fakes/ConnectableRadioModel.h"
 
 using namespace NereusSDR;
@@ -47,6 +48,50 @@ class TestConnectableRadioModel : public QObject {
     Q_OBJECT
 
 private slots:
+    void reconnectPreservesLiveReceivers()
+    {
+        auto harness = ConnectableRadioModel::create();
+        QVERIFY(harness);
+        RadioModel& model = harness->model();
+        model.setReceiveOnlyStationPolicy(true);
+        SliceModel* const a = model.slices().first();
+        SliceModel* const b = model.sliceById(model.addSlice());
+        QVERIFY(b);
+        a->setFrequency(3865100);
+        a->setDspMode(DSPMode::LSB);
+        b->setFrequency(14225000);
+        b->setDspMode(DSPMode::USB);
+        b->setPanKey(QStringLiteral("pan-1"));
+        model.setActiveSlice(b->sliceIndex());
+        QSignalSpy activeChanges(&model, &RadioModel::activeSliceChanged);
+        QSignalSpy removed(&model, &RadioModel::sliceRemoved);
+
+        model.disconnectFromRadio();
+        RadioDiscovery::clearHoldOffForTest();
+        model.connectToRadioPreservingSlices(harness->radioInfo());
+        QTRY_COMPARE_WITH_TIMEOUT(model.connectionState(), ConnectionState::Connected, 10000);
+        QCOMPARE(model.slices().size(), 2);
+        QCOMPARE(model.slices().at(0), a);
+        QCOMPARE(model.slices().at(1), b);
+        QCOMPARE(model.activeSlice(), b);
+        QCOMPARE(a->frequency(), 3865100.0);
+        QCOMPARE(b->frequency(), 14225000.0);
+        QCOMPARE(a->dspMode(), DSPMode::LSB);
+        QCOMPARE(b->dspMode(), DSPMode::USB);
+        QCOMPARE(b->panKey(), QStringLiteral("pan-1"));
+        QCOMPARE(removed.count(), 0);
+        QCOMPARE(activeChanges.count(), 0);
+        QVERIFY(a->streamIndex() >= 0);
+        QVERIFY(b->streamIndex() >= 0);
+        QVERIFY(!model.mox());
+
+        RadioInfo other = harness->radioInfo();
+        other.macAddress = QStringLiteral("bb:bb:cc:11:22:33");
+        model.connectToRadioPreservingSlices(other);
+        QCOMPARE(model.currentRadioMac(), harness->radioInfo().macAddress);
+        QCOMPARE(model.connectionState(), ConnectionState::Connected);
+    }
+
     // Spike: WdspEngine::setSynchronousInitForTest(true) + initialize()
     // must run finishInitialization(false) for real (impulse cache init,
     // PS feedback channel open) and then let the caller open one more RX

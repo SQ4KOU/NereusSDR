@@ -53,6 +53,8 @@
 //   2026-04-28 — setMicPTT (G.5): byte 50 bit 2 (0x04, INVERTED). deskhpsdr new_protocol.c:1488-1490 [@120188f]. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-05-04 — setMicPTT renamed to setMicPTTDisabled (issue #182): direct polarity matches Thetis console.cs:19757-19766 [v2.10.3.13+501e3f51]; default MicState::micControl flipped 0x24→0x20 so PTT is enabled at firmware out of the box. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-04-28 — setMicXlr (G.6): byte 50 bit 5 (0x20), P2-only, polarity 1=XLR. deskhpsdr new_protocol.c:1500-1502 [@120188f]. MicState::micControl default updated 0x04 -> 0x24. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-22 — Established UDP silence: Thetis ChannelMaster/network.c:655-666 [v2.10.3.15]; stop/report, daemon-owned recovery.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 // =================================================================
 
 /*
@@ -188,6 +190,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 
 #include <algorithm>
 #include <bit>
+#include <chrono>
 
 namespace NereusSDR {
 
@@ -550,6 +553,17 @@ void P2RadioConnection::init()
     m_connectWatchdog->setSingleShot(true);
     connect(m_connectWatchdog, &QTimer::timeout, this, &P2RadioConnection::onConnectTimeout);
 
+    // Thetis ReadThreadMainLoop waits up to three seconds for any inbound
+    // P2 UDP after the stream is established (network.c:655-666
+    // [v2.10.3.15]). The QTimer is only the wakeup; QDeadlineTimer below is
+    // the monotonic authority and the connection generation rejects stale
+    // queued callbacks.
+    m_establishedSilenceTimer = new QTimer(this);
+    m_establishedSilenceTimer->setSingleShot(true);
+    m_establishedSilenceTimer->setTimerType(Qt::PreciseTimer);
+    connect(m_establishedSilenceTimer, &QTimer::timeout,
+            this, &P2RadioConnection::onEstablishedSilenceTimeout);
+
     qCDebug(lcConnection) << "P2: init() socket port:" << m_socket->localPort();
 }
 
@@ -562,6 +576,24 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     if (m_running) {
         disconnect();
     }
+
+    ++m_connectionGeneration;
+    m_linkLossLatched = false;
+    m_establishedSilenceGeneration = 0;
+    m_establishedSilenceDeadline = QDeadlineTimer();
+    if (m_establishedSilenceTimer) {
+        m_establishedSilenceTimer->stop();
+    }
+
+    // A new transport generation always starts unkeyed. In particular, a
+    // stale setter delivered after the previous LinkLost must not carry MOX,
+    // PureSignal, or relay intent into this SendStart sequence.
+    m_mox.store(false);
+    m_puresignalRun = false;
+    m_trxRelay = false;
+    m_tx[0].pttOut = 0;
+    m_txIqPrimePending.store(false, std::memory_order_release);
+    m_moxOffGrace = QDeadlineTimer();
 
     m_radioInfo = info;
     m_intentionalDisconnect = false;
@@ -723,7 +755,7 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     // kConnectTimeoutMs, emit connectFailed(Timeout, ...).
     // processIqPacket() cancels this on the first valid frame. Phase 3Q Task 3.
     if (m_connectWatchdog) {
-        m_connectWatchdog->start(kConnectTimeoutMs);
+        m_connectWatchdog->start(m_connectTimeoutMs);
     }
 }
 
@@ -733,6 +765,10 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
 void P2RadioConnection::disconnect()
 {
     m_intentionalDisconnect = true;
+    m_linkLossLatched = true;
+    ++m_connectionGeneration;
+    m_establishedSilenceGeneration = 0;
+    m_establishedSilenceDeadline = QDeadlineTimer();
 
     if (m_keepAliveTimer) {
         m_keepAliveTimer->stop();
@@ -750,6 +786,9 @@ void P2RadioConnection::disconnect()
     // trigger connectFailed() after the user has already moved on.
     if (m_connectWatchdog) {
         m_connectWatchdog->stop();
+    }
+    if (m_establishedSilenceTimer) {
+        m_establishedSilenceTimer->stop();
     }
 
     if (m_running && m_socket && !m_radioInfo.address.isNull()) {
@@ -1046,6 +1085,13 @@ void P2RadioConnection::setTxDrive(int level)
 
 void P2RadioConnection::setMox(bool enabled)
 {
+    // Once a generation is terminal, late queued control work may still call
+    // this slot. It must neither emit another packet nor latch keyed state
+    // that a later connection generation could inherit.
+    if (enabled && m_linkLossLatched) {
+        return;
+    }
+
     // Guard idempotent transitions: the 100 ms high-priority periodic cadence
     // already re-emits the current m_mox state on every tick, so there is no
     // need to force an extra packet when the value is unchanged.  This matches
@@ -1963,6 +2009,20 @@ void P2RadioConnection::onReadyRead()
         QByteArray data = datagram.data();
         quint16 sourcePort = datagram.senderPort();
 
+        // A closed generation may still have readyRead work queued. Drain it
+        // without decoding, refreshing liveness, or reviving state.
+        if (!m_running || m_linkLossLatched) {
+            continue;
+        }
+        const quint64 datagramGeneration = m_connectionGeneration;
+
+        // P2 payloads contain no MAC identity. The selected radio address is
+        // therefore the strongest identity available at this layer; daemon
+        // rediscovery owns the MAC-pinned recovery decision above us.
+        if (!isSelectedSourceAddress(datagram.senderAddress())) {
+            continue;
+        }
+
         // From Thetis ReadUDPFrame:514-515
         // inport = ntohs(fromaddr.sin_port);
         // int portIdx = inport - prn->p2_custom_port_base;
@@ -1988,6 +2048,7 @@ void P2RadioConnection::onReadyRead()
             // From Thetis ReadUDPFrame:519-532
             if (data.size() == 60) {
                 processHighPriorityStatus(data);
+                noteAcceptedInboundDatagram(datagramGeneration);
             }
             break;
 
@@ -2008,12 +2069,13 @@ void P2RadioConnection::onReadyRead()
             // `(int16)(b0<<8 | b1) / 32768` because the upper 16 bits hold
             // a sign-extended int16 — both yield the same float in [-1, 1].
             // We use the int16/32768 form to make the byte order explicit.
-            if (m_txMicSource != nullptr) {
+            if (data.size() == 132) {
                 std::array<float, 64> samples{};
-                if (decodeMicFrame132(data, samples)) {
+                if (decodeMicFrame132(data, samples) && m_txMicSource != nullptr) {
                     m_txMicSource->inbound(samples.data(), 64);
                     m_lastMicAt = QDateTime::currentDateTimeUtc();
                 }
+                noteAcceptedInboundDatagram(datagramGeneration);
             }
             break;
 
@@ -2043,12 +2105,19 @@ void P2RadioConnection::onReadyRead()
             if (adcId < 0 || adcId >= 8) {
                 break;
             }
+            // A syntactically valid packet on a disabled wideband role is not
+            // accepted negotiated ingress. Without this gate, stale or stray
+            // wideband UDP could keep a dead primary stream Connected forever.
+            if ((m_wbEnableMask & static_cast<quint8>(1u << adcId)) == 0) {
+                break;
+            }
             const quint32 seq = (quint32(quint8(data[0])) << 24) |
                                 (quint32(quint8(data[1])) << 16) |
                                 (quint32(quint8(data[2])) << 8)  |
                                  quint32(quint8(data[3]));
             const QByteArray payload = data.mid(4);
             m_wbAccumulators[adcId]->pushPacket(int(seq), payload);
+            noteAcceptedInboundDatagram(datagramGeneration);
             break;
         }
 
@@ -2068,6 +2137,7 @@ void P2RadioConnection::onReadyRead()
             recordBytesReceived(static_cast<qint64>(data.size()));
             int ddc = portIdx - 10;
             processIqPacket(data, ddc);
+            noteAcceptedInboundDatagram(datagramGeneration);
             break;
         }
 
@@ -2079,6 +2149,117 @@ void P2RadioConnection::onReadyRead()
                                   << "from" << datagram.senderAddress().toString();
             break;
         }
+    }
+}
+
+bool P2RadioConnection::isSelectedSourceAddress(const QHostAddress& sender) const
+{
+    // An Any-bound dual-stack QUdpSocket reports IPv4 peers as IPv4-mapped
+    // IPv6 on some platforms (observed on macOS as ::ffff:127.0.0.1). Treat
+    // only that representation as equal; genuine IPv6 peers such as ::1
+    // remain distinct from an IPv4-selected radio.
+    return sender.isEqual(m_radioInfo.address,
+                          QHostAddress::ConvertV4MappedToIPv4);
+}
+
+// Refresh the established-stream deadline only after onReadyRead has
+// accepted the selected address, negotiated role, and that role's existing
+// packet validity rule. Before first DDC, the separate connect watchdog is
+// authoritative and status/mic/wideband traffic cannot establish the link.
+void P2RadioConnection::noteAcceptedInboundDatagram(quint64 datagramGeneration)
+{
+    if (!m_running || m_linkLossLatched
+        || datagramGeneration != m_connectionGeneration
+        || state() != ConnectionState::Connected
+        || !m_establishedSilenceTimer) {
+        return;
+    }
+
+    m_establishedSilenceGeneration = m_connectionGeneration;
+    m_establishedSilenceDeadline = QDeadlineTimer(
+        std::chrono::milliseconds(m_establishedSilenceTimeoutMs),
+        Qt::PreciseTimer);
+    // Keep the high-rate I/Q path free of repeated timer registration. The
+    // active wakeup may fire against an older deadline; its callback consults
+    // the monotonic authority above and re-arms only the current remainder.
+    if (!m_establishedSilenceTimer->isActive()) {
+        m_establishedSilenceTimer->start(m_establishedSilenceTimeoutMs);
+    }
+}
+
+void P2RadioConnection::onEstablishedSilenceTimeout()
+{
+    if (!m_running || m_linkLossLatched
+        || state() != ConnectionState::Connected
+        || m_establishedSilenceGeneration != m_connectionGeneration) {
+        return;
+    }
+
+    // The Qt timer is a wakeup mechanism, not the clock authority. If it was
+    // delivered before the monotonic deadline (for example after a refresh
+    // raced an already queued timeout event), re-arm only the remainder.
+    if (!m_establishedSilenceDeadline.hasExpired()) {
+        const qint64 remainingMs = m_establishedSilenceDeadline.remainingTime();
+        m_establishedSilenceTimer->start(
+            static_cast<int>(std::max<qint64>(1, remainingMs)));
+        return;
+    }
+
+    stopForEstablishedSilence();
+}
+
+void P2RadioConnection::stopForEstablishedSilence()
+{
+    if (!m_running || m_linkLossLatched
+        || state() != ConnectionState::Connected) {
+        return;
+    }
+
+    // Thetis ChannelMaster/network.c:655-666 [v2.10.3.15] sends one stop
+    // after three seconds with no inbound UDP and does not reconnect. Nereus
+    // first retires every socket producer, then emits the stop unkeyed, closes
+    // ingress, and reports one typed terminal loss to the model/daemon layer.
+    m_linkLossLatched = true;
+    m_intentionalDisconnect = true;
+    ++m_connectionGeneration;
+    m_establishedSilenceGeneration = 0;
+    m_establishedSilenceDeadline = QDeadlineTimer();
+
+    if (m_keepAliveTimer) { m_keepAliveTimer->stop(); }
+    if (m_txIqTimer) { m_txIqTimer->stop(); }
+    if (m_p2HeartbeatTimer) { m_p2HeartbeatTimer->stop(); }
+    if (m_connectWatchdog) { m_connectWatchdog->stop(); }
+    if (m_establishedSilenceTimer) { m_establishedSilenceTimer->stop(); }
+    if (m_reconnectTimer) { m_reconnectTimer->stop(); }
+
+    // Safety state must be applied before composing the terminal high-priority
+    // packet: byte 4 must be exactly run=0/MOX=0. Clear the related local
+    // transmit intents as well so a reused object cannot re-key itself.
+    m_mox.store(false);
+    m_puresignalRun = false;
+    m_trxRelay = false;
+    m_tx[0].pttOut = 0;
+    m_txIqPrimePending.store(false, std::memory_order_release);
+    m_moxOffGrace = QDeadlineTimer();
+    m_running = false;
+
+    if (m_socket && !m_radioInfo.address.isNull()) {
+        sendCmdHighPriority();
+        m_socket->flush();
+        QThread::msleep(kStopDrainMs);
+        m_socket->close();
+    }
+
+    const quint64 terminalGeneration = m_connectionGeneration;
+    const QString detail =
+        QStringLiteral("No accepted UDP from selected radio for %1 ms")
+            .arg(m_establishedSilenceTimeoutMs);
+    emit errorOccurred(RadioConnectionError::NoDataTimeout, detail);
+    // errorOccurred is a public Qt signal and direct observers may tear down
+    // or replace this connection synchronously. Never stamp LinkLost onto the
+    // newer generation after control returns from such an observer.
+    if (m_connectionGeneration == terminalGeneration && m_linkLossLatched) {
+        setState(ConnectionState::LinkLost);
     }
 }
 
@@ -3068,7 +3249,7 @@ void P2RadioConnection::onConnectTimeout()
     if (m_totalIqPackets > 0) { return; }
 
     qCWarning(lcConnection) << "P2: Connect watchdog fired — no DDC I/Q frame within"
-                            << kConnectTimeoutMs << "ms; tearing down and emitting connectFailed(Timeout)";
+                            << m_connectTimeoutMs << "ms; tearing down and emitting connectFailed(Timeout)";
 
     // Issue #239: tear down to Disconnected so the UI does not claim
     // "Connected" while the radio is unreachable. Stop the keep-alive,
@@ -3077,17 +3258,22 @@ void P2RadioConnection::onConnectTimeout()
     // drained later are dropped without re-arming the state machine.
     m_running = false;
     m_intentionalDisconnect = true;
+    m_linkLossLatched = true;
+    ++m_connectionGeneration;
+    m_establishedSilenceGeneration = 0;
+    m_establishedSilenceDeadline = QDeadlineTimer();
     if (m_keepAliveTimer) { m_keepAliveTimer->stop(); }
     if (m_txIqTimer) { m_txIqTimer->stop(); }
     if (m_p2HeartbeatTimer) { m_p2HeartbeatTimer->stop(); }
     if (m_reconnectTimer) { m_reconnectTimer->stop(); }
+    if (m_establishedSilenceTimer) { m_establishedSilenceTimer->stop(); }
     if (m_socket) { m_socket->close(); }
     setState(ConnectionState::Disconnected);
 
     emit connectFailed(ConnectFailure::Timeout,
                        QStringLiteral("No response from radio within %1 ms — "
                                       "check IP address, radio power, and network")
-                           .arg(kConnectTimeoutMs));
+                           .arg(m_connectTimeoutMs));
 }
 
 // Porting from Thetis ReadUDPFrame:519-532 — High Priority C&C status

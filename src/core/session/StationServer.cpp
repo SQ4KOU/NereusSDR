@@ -216,6 +216,30 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                 sendToSession(SessionMessages::settingsValueAbsent(key, QString()));
             });
 
+    // A daemon can authenticate a GUI before its configured radio is
+    // discoverable.  currentRadioChanged is emitted only after RadioModel's
+    // Connected handlers have populated the live identity and profile, but
+    // defer the wire update one event turn so every other observer of that
+    // signal has finished too.  Capture the current session now: a later
+    // authenticated replacement already received its own initial snapshot,
+    // and an old callback must never refresh it.
+    if (m_radioModel) {
+        connect(m_radioModel, &RadioModel::currentRadioChanged, this,
+                [this](const NereusSDR::RadioInfo&) {
+                    const QPointer<SessionTransport> session(m_session);
+                    const quint64 sessionEpoch = m_mediaSessionEpoch;
+                    if (session.isNull()) {
+                        return;
+                    }
+                    QTimer::singleShot(0, this, [this, session, sessionEpoch]() {
+                        if (session.isNull()) {
+                            return;
+                        }
+                        sendCapabilitiesAndSettingsSnapshot(session.data(), sessionEpoch);
+                    });
+                });
+    }
+
     // ObjectRegistry's create/destroy events are the lifecycle half of the
     // mirror; StateMirror only carries property deltas for objects it
     // already knows about.
@@ -832,21 +856,9 @@ void StationServer::promoteToSession(SessionTransport* transport)
     m_session = transport;
     ++m_mediaSessionEpoch;
 
-    // Capability exchange (section 7.0 step 4). Sent before any state, so
-    // the client has sized its own limits before the first object arrives.
-    send(transport, SessionMessages::capabilities(buildCapabilities().toUpdates()));
-
-    // State snapshot, settings half. Scoped to the connected radio's MAC
-    // plus everything else Station-classified; see SettingsProxyServer.
-    const QMap<QString, QString> snapshot = m_settingsServer->buildSnapshot(
-        m_radioModel.isNull() ? QString() : m_radioModel->currentRadioMac());
-    QList<MirrorUpdate> entries;
-    entries.reserve(snapshot.size());
-    for (auto it = snapshot.cbegin(); it != snapshot.cend(); ++it) {
-        entries.append(
-            MirrorUpdate{ 0, it.key().toUtf8(), MirrorWireKind::Utf8, QVariant(it.value()) });
+    if (!sendCapabilitiesAndSettingsSnapshot(transport, m_mediaSessionEpoch)) {
+        return;
     }
-    send(transport, SessionMessages::settingsSnapshot(entries));
 
     // State snapshot, model half, ending in the snapshot-complete marker.
     // attachSession() emits the whole burst synchronously through
@@ -900,6 +912,49 @@ void StationServer::buildMirror()
     // Called after the objectCreated/objectDestroyed wiring in the
     // constructor, which is the ordering its own doc comment requires.
     m_registry->backfillExistingSlices();
+}
+
+bool StationServer::sendCapabilitiesAndSettingsSnapshot(SessionTransport* transport,
+                                                         quint64 expectedEpoch)
+{
+    // Do not let a queued radio callback target a disconnected, preempted,
+    // or merely handshaking peer.  promoteToSession() intentionally calls
+    // this while snapshotComplete is still false, so authentication is the
+    // boundary here rather than readiness of the full mirror snapshot.
+    const auto stillOwnsSession = [this, transport, expectedEpoch]() {
+        if (transport == nullptr || transport != m_session
+            || expectedEpoch != m_mediaSessionEpoch) {
+            return false;
+        }
+        const auto peer = m_peers.constFind(transport);
+        return peer != m_peers.cend() && peer->authenticated;
+    };
+    if (!stillOwnsSession()) {
+        return false;
+    }
+
+    // Capability exchange (section 7.0 step 4).  On the initial path this
+    // remains before every model message; on the late-radio path it updates
+    // only identity, board, effective limits, and connection state.
+    send(transport, SessionMessages::capabilities(buildCapabilities().toUpdates()));
+    if (!stillOwnsSession()) {
+        return false;
+    }
+
+    // Station settings are scoped to the radio that is live *now*.  A late
+    // radio therefore needs a fresh snapshot even though the mirror objects
+    // already exist on the GUI; SettingsProxy merges this authoritative scope
+    // into its in-memory cache without touching local GUI storage.
+    const QMap<QString, QString> snapshot = m_settingsServer->buildSnapshot(
+        m_radioModel.isNull() ? QString() : m_radioModel->currentRadioMac());
+    QList<MirrorUpdate> entries;
+    entries.reserve(snapshot.size());
+    for (auto it = snapshot.cbegin(); it != snapshot.cend(); ++it) {
+        entries.append(
+            MirrorUpdate{0, it.key().toUtf8(), MirrorWireKind::Utf8, QVariant(it.value())});
+    }
+    send(transport, SessionMessages::settingsSnapshot(entries));
+    return stillOwnsSession();
 }
 
 // ── Inbound state and settings ───────────────────────────────────────────

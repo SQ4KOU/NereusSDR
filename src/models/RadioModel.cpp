@@ -6910,7 +6910,24 @@ void RadioModel::removePanadapter(int index)
 
 // --- Connection ---
 
+void RadioModel::connectToRadioPreservingSlices(const RadioInfo& info)
+{
+    // This is a rebuild of the selected radio, not a way to transfer live
+    // receiver state to a different radio with potentially different limits.
+    if (m_lastRadioInfo.macAddress.isEmpty()
+        || info.macAddress.compare(m_lastRadioInfo.macAddress, Qt::CaseInsensitive) != 0) {
+        qCWarning(lcConnection) << "Preserving reconnect rejected: radio identity changed";
+        return;
+    }
+    connectToRadioImpl(info, true);
+}
+
 void RadioModel::connectToRadio(const RadioInfo& info)
+{
+    connectToRadioImpl(info, false);
+}
+
+void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
 {
     // Remote-daemon R2 Task 4: a Role::Remote model has no RadioConnection,
     // WdspEngine channel or AudioEngine to drive locally -- it exists so a
@@ -7166,8 +7183,10 @@ void RadioModel::connectToRadio(const RadioInfo& info)
             m_slices.first()->setPanKey(QStringLiteral("pan-0"));
         }
     }
-    setActiveSlice(0);
-    loadSliceState(m_activeSlice);
+    if (!preserveSlices) {
+        setActiveSlice(0);
+        loadSliceState(m_activeSlice);
+    }
 
     // ── 3M-1c L.2: TwoToneController active-slice mode source ────────────────
     //
@@ -7244,9 +7263,9 @@ void RadioModel::connectToRadio(const RadioInfo& info)
     // Without that disconnect, every connectToRadio() would add another copy
     // of this lambda; on the second connect, both copies would call
     // createRxChannel + createTxChannel(kTxChannelId) (idempotent today, but doubled work).
-    connect(m_wdspEngine, &WdspEngine::initializedChanged, this,
+    const auto initializedConnection = connect(m_wdspEngine, &WdspEngine::initializedChanged, this,
             [this, wdspInputRate, wdspInSize](bool ok) {
-        if (!ok) {
+        if (!ok || m_intentionalDisconnect) {
             return;
         }
         // Create primary RX channel once WDSP is ready. in_size follows
@@ -7289,22 +7308,24 @@ void RadioModel::connectToRadio(const RadioInfo& info)
             // can call rebuild() when the active mode's DSP-Options settings change.
             rxCh->setWdspEngine(m_wdspEngine);
 
-            // Apply slice state to WDSP channel (no longer hardcoded)
-            if (m_activeSlice) {
-                rxCh->setMode(m_activeSlice->dspMode());
-                rxCh->setFilterFreqs(m_activeSlice->filterLow(),
-                                     m_activeSlice->filterHigh());
-                rxCh->setAgcMode(m_activeSlice->agcMode());
-                rxCh->setAgcTop(m_activeSlice->rfGain());
+            // Channel zero belongs to the primary slice even when recovery
+            // preserves another receiver as the operator's active selection.
+            SliceModel* const primarySlice = m_slices.isEmpty() ? nullptr : m_slices.first();
+            if (primarySlice) {
+                rxCh->setMode(primarySlice->dspMode());
+                rxCh->setFilterFreqs(primarySlice->filterLow(),
+                                     primarySlice->filterHigh());
+                rxCh->setAgcMode(primarySlice->agcMode());
+                rxCh->setAgcTop(primarySlice->rfGain());
                 // AGC advanced — push slice state to WDSP (Stage 2)
-                rxCh->setAgcThreshold(m_activeSlice->agcThreshold());
-                rxCh->setAgcHang(m_activeSlice->agcHang());
-                rxCh->setAgcSlope(m_activeSlice->agcSlope());
-                rxCh->setAgcAttack(m_activeSlice->agcAttack());
-                rxCh->setAgcDecay(m_activeSlice->agcDecay());
-                rxCh->setAgcHangThreshold(m_activeSlice->agcHangThreshold());
-                rxCh->setAgcFixedGain(m_activeSlice->agcFixedGain());
-                rxCh->setAgcMaxGain(m_activeSlice->agcMaxGain());
+                rxCh->setAgcThreshold(primarySlice->agcThreshold());
+                rxCh->setAgcHang(primarySlice->agcHang());
+                rxCh->setAgcSlope(primarySlice->agcSlope());
+                rxCh->setAgcAttack(primarySlice->agcAttack());
+                rxCh->setAgcDecay(primarySlice->agcDecay());
+                rxCh->setAgcHangThreshold(primarySlice->agcHangThreshold());
+                rxCh->setAgcFixedGain(primarySlice->agcFixedGain());
+                rxCh->setAgcMaxGain(primarySlice->agcMaxGain());
                 // NB mode is per-band, and so is the detailed tuning beside
                 // it. The tuning pass-through was removed 2026-04-22 in favour
                 // of NbFamily seeding from radio-global AppSettings, but the
@@ -7317,16 +7338,16 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 // live push (the connect resolves no channel and no-ops), so
                 // without this the channel would run on NbFamily's ctor
                 // defaults while the model reported the operator's values.
-                rxCh->setNbMode(m_activeSlice->nbMode());
+                rxCh->setNbMode(primarySlice->nbMode());
                 // From Thetis setup.cs:8606 [v2.10.3.15] for the 0.165 scale.
-                rxCh->setNbThreshold(0.165 * static_cast<double>(m_activeSlice->nb1Threshold()));
-                rxCh->setNbTransitionMs(m_activeSlice->nb1TransitionMs());
-                rxCh->setNbLeadMs(m_activeSlice->nb1LeadMs());
-                rxCh->setNbLagMs(m_activeSlice->nb1LagMs());
-                rxCh->setNb2Mode(m_activeSlice->nb2Mode());
-                rxCh->setSnbK1(m_activeSlice->snbK1());
-                rxCh->setSnbK2(m_activeSlice->snbK2());
-                rxCh->setSnbOutputBandwidthHz(m_activeSlice->snbOutputBandwidthHz());
+                rxCh->setNbThreshold(0.165 * static_cast<double>(primarySlice->nb1Threshold()));
+                rxCh->setNbTransitionMs(primarySlice->nb1TransitionMs());
+                rxCh->setNbLeadMs(primarySlice->nb1LeadMs());
+                rxCh->setNbLagMs(primarySlice->nb1LagMs());
+                rxCh->setNb2Mode(primarySlice->nb2Mode());
+                rxCh->setSnbK1(primarySlice->snbK1());
+                rxCh->setSnbK2(primarySlice->snbK2());
+                rxCh->setSnbOutputBandwidthHz(primarySlice->snbOutputBandwidthHz());
 
                 // Sub-epic C-1 Task 19: push full NR config to the active slice's
                 // RxChannel on radio connect.
@@ -7335,60 +7356,60 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 // valid parameters before the run-flag is set.
                 {
                     RxChannel::Nr1Tuning n1;
-                    n1.taps     = m_activeSlice->nr1Taps();
-                    n1.delay    = m_activeSlice->nr1Delay();
-                    n1.gain     = m_activeSlice->nr1Gain();
-                    n1.leakage  = m_activeSlice->nr1Leakage();
-                    n1.position = m_activeSlice->nr1Position();
+                    n1.taps     = primarySlice->nr1Taps();
+                    n1.delay    = primarySlice->nr1Delay();
+                    n1.gain     = primarySlice->nr1Gain();
+                    n1.leakage  = primarySlice->nr1Leakage();
+                    n1.position = primarySlice->nr1Position();
                     rxCh->setAnrTuning(n1);
 
                     RxChannel::Nr2Tuning n2;
-                    n2.gainMethod  = m_activeSlice->nr2GainMethod();
-                    n2.npeMethod   = m_activeSlice->nr2NpeMethod();
+                    n2.gainMethod  = primarySlice->nr2GainMethod();
+                    n2.npeMethod   = primarySlice->nr2NpeMethod();
                     // trainT1/trainT2 are not in Nr2Tuning struct — applied via
                     // per-knob setters below (they call SetRXAEMNRtrainZetaThresh/
                     // SetRXAEMNRtrainT2 which have no struct-level path).
-                    n2.aeFilter    = m_activeSlice->nr2AeFilter();
-                    n2.position    = m_activeSlice->nr2Position();
-                    n2.post2Run    = m_activeSlice->nr2Post2Run();
-                    n2.post2Level  = m_activeSlice->nr2Post2Level();
-                    n2.post2Factor = m_activeSlice->nr2Post2Factor();
-                    n2.post2Rate   = m_activeSlice->nr2Post2Rate();
-                    n2.post2Taper  = m_activeSlice->nr2Post2Taper();
+                    n2.aeFilter    = primarySlice->nr2AeFilter();
+                    n2.position    = primarySlice->nr2Position();
+                    n2.post2Run    = primarySlice->nr2Post2Run();
+                    n2.post2Level  = primarySlice->nr2Post2Level();
+                    n2.post2Factor = primarySlice->nr2Post2Factor();
+                    n2.post2Rate   = primarySlice->nr2Post2Rate();
+                    n2.post2Taper  = primarySlice->nr2Post2Taper();
                     rxCh->setEmnrTuning(n2);
                     // Push trainT1/trainT2 separately (not in Nr2Tuning struct)
-                    rxCh->setEmnrTrainT1(m_activeSlice->nr2TrainT1());
-                    rxCh->setEmnrTrainT2(m_activeSlice->nr2TrainT2());
+                    rxCh->setEmnrTrainT1(primarySlice->nr2TrainT1());
+                    rxCh->setEmnrTrainT2(primarySlice->nr2TrainT2());
 
                     RxChannel::Nr3Tuning n3;
-                    n3.position       = m_activeSlice->nr3Position();
-                    n3.useDefaultGain = m_activeSlice->nr3UseDefaultGain();
+                    n3.position       = primarySlice->nr3Position();
+                    n3.useDefaultGain = primarySlice->nr3UseDefaultGain();
                     rxCh->setRnnrTuning(n3);
 
                     RxChannel::Nr4Tuning n4;
-                    n4.reductionAmount     = m_activeSlice->nr4Reduction();
-                    n4.smoothingFactor     = m_activeSlice->nr4Smoothing();
-                    n4.whiteningFactor     = m_activeSlice->nr4Whitening();
-                    n4.noiseRescale        = m_activeSlice->nr4Rescale();
-                    n4.postFilterThreshold = m_activeSlice->nr4PostThresh();
-                    n4.algo                = m_activeSlice->nr4Algo();
+                    n4.reductionAmount     = primarySlice->nr4Reduction();
+                    n4.smoothingFactor     = primarySlice->nr4Smoothing();
+                    n4.whiteningFactor     = primarySlice->nr4Whitening();
+                    n4.noiseRescale        = primarySlice->nr4Rescale();
+                    n4.postFilterThreshold = primarySlice->nr4PostThresh();
+                    n4.algo                = primarySlice->nr4Algo();
                     rxCh->setSbnrTuning(n4);
 
 #ifdef HAVE_DFNR
-                    rxCh->setDfnrAttenLimit(static_cast<float>(m_activeSlice->dfnrAttenLimit()));
-                    rxCh->setDfnrPostFilterBeta(static_cast<float>(m_activeSlice->dfnrPostFilterBeta()));
+                    rxCh->setDfnrAttenLimit(static_cast<float>(primarySlice->dfnrAttenLimit()));
+                    rxCh->setDfnrPostFilterBeta(static_cast<float>(primarySlice->dfnrPostFilterBeta()));
 #endif
 #ifdef HAVE_MNR
                     // SliceModel already stores mnrStrength as 0.0–1.0
                     // (matches MacNRFilter::setStrength expected range).
                     // The Setup/popup slider does the ×100 / ÷100 UI↔model
                     // conversion; the model→filter path is 1:1.
-                    rxCh->setMnrStrength(static_cast<float>(m_activeSlice->mnrStrength()));
-                    rxCh->setMnrOversub(static_cast<float>(m_activeSlice->mnrOversub()));
-                    rxCh->setMnrFloor(static_cast<float>(m_activeSlice->mnrFloor()));
-                    rxCh->setMnrAlpha(static_cast<float>(m_activeSlice->mnrAlpha()));
-                    rxCh->setMnrBias(static_cast<float>(m_activeSlice->mnrBias()));
-                    rxCh->setMnrGsmooth(static_cast<float>(m_activeSlice->mnrGsmooth()));
+                    rxCh->setMnrStrength(static_cast<float>(primarySlice->mnrStrength()));
+                    rxCh->setMnrOversub(static_cast<float>(primarySlice->mnrOversub()));
+                    rxCh->setMnrFloor(static_cast<float>(primarySlice->mnrFloor()));
+                    rxCh->setMnrAlpha(static_cast<float>(primarySlice->mnrAlpha()));
+                    rxCh->setMnrBias(static_cast<float>(primarySlice->mnrBias()));
+                    rxCh->setMnrGsmooth(static_cast<float>(primarySlice->mnrGsmooth()));
 #endif
 
                     // NR3 model — global (RNNRloadModel), not per-channel.
@@ -7412,10 +7433,10 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                     // Push the active NR slot last — parameters must be set before
                     // run-flag so WDSP gets valid defaults on first enable.
                     // From Thetis console.cs:43297 SelectNR pattern [v2.10.3.13]
-                    rxCh->setActiveNr(m_activeSlice->activeNr());
+                    rxCh->setActiveNr(primarySlice->activeNr());
                 }
 
-                rxCh->setSnbEnabled(m_activeSlice->snbEnabled());
+                rxCh->setSnbEnabled(primarySlice->snbEnabled());
                 // APF sub-parameter defaults — From Thetis radio.cs:1986,1948,1967,1929
                 // These are set-and-forget on channel creation; run flag follows slice.
                 // selection=3 (bi-quad), bw=600Hz, gain=1.0, freq=600.0Hz
@@ -7423,29 +7444,29 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                 rxCh->setApfBandwidth(600.0);   // radio.cs:1948 rx_apf_bw = 600.0 Hz
                 rxCh->setApfGain(1.0);          // radio.cs:1967 rx_apf_gain = 1.0
                 rxCh->setApfFreq(600.0);        // radio.cs:1929 rx_apf_freq = 600.0 Hz
-                rxCh->setApfEnabled(m_activeSlice->apfEnabled());
+                rxCh->setApfEnabled(primarySlice->apfEnabled());
                 // Squelch initial push — From Thetis radio.cs:1185,1164,1274,1293,1312
-                rxCh->setSsqlEnabled(m_activeSlice->ssqlEnabled());
+                rxCh->setSsqlEnabled(primarySlice->ssqlEnabled());
                 // Model stores 0–100 (slider units); WDSP expects 0.0–1.0 linear.
-                rxCh->setSsqlThresh(std::clamp(m_activeSlice->ssqlThresh() / 100.0, 0.0, 1.0));
-                rxCh->setAmsqEnabled(m_activeSlice->amsqEnabled());
-                rxCh->setAmsqThresh(m_activeSlice->amsqThresh());
-                rxCh->setFmsqEnabled(m_activeSlice->fmsqEnabled());
-                rxCh->setFmsqThresh(m_activeSlice->fmsqThresh());
+                rxCh->setSsqlThresh(std::clamp(primarySlice->ssqlThresh() / 100.0, 0.0, 1.0));
+                rxCh->setAmsqEnabled(primarySlice->amsqEnabled());
+                rxCh->setAmsqThresh(primarySlice->amsqThresh());
+                rxCh->setFmsqEnabled(primarySlice->fmsqEnabled());
+                rxCh->setFmsqThresh(primarySlice->fmsqThresh());
                 // Audio panel initial push
                 // Mute: From Thetis dsp.cs:393-394 — panel runs by default (unmuted)
                 // Pan: From Thetis radio.cs:1386 — pan = 0.5f (center); NereusSDR 0.0 center
                 // Binaural: From Thetis radio.cs:1145 — bin_on = false (dual-mono)
-                rxCh->setMuted(m_activeSlice->muted());
-                rxCh->setAudioPan(m_activeSlice->audioPan());
-                rxCh->setBinauralEnabled(m_activeSlice->binauralEnabled());
+                rxCh->setMuted(primarySlice->muted());
+                rxCh->setAudioPan(primarySlice->audioPan());
+                rxCh->setBinauralEnabled(primarySlice->binauralEnabled());
                 // AF Gain: route the slice slider through the WDSP RX panel
                 // (SetRXAPanelGain1) — Thetis radio.cs:1077-1107 [v2.10.3.14]
                 // RXOutputGain pattern — instead of multiplying it onto the
                 // post-DSP master mix.  setActive(true) below will re-push
                 // m_afGain regardless, but seeding it first means the channel
                 // never runs even one block at WDSP's default gain1=4.0.
-                rxCh->setAfGain(m_activeSlice->afGain() / 100.0);
+                rxCh->setAfGain(primarySlice->afGain() / 100.0);
             }
             rxCh->setActive(true);
         }
@@ -7498,10 +7519,17 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         &wisdomLoop, [&wisdomLoop](bool ok) {
             if (ok) wisdomLoop.quit();
         });
-    if (!m_wdspEngine->isInitialized()) {
+    if (!m_wdspEngine->isInitialized() && !m_intentionalDisconnect) {
         wisdomLoop.exec();
     }
     QObject::disconnect(waitConn);
+    if (m_intentionalDisconnect || !m_wdspEngine->isInitialized()) {
+        // Wisdom itself is a non-interruptible global WDSP operation. A
+        // cancelled owner keeps this model alive until it finishes (or the
+        // application exits), then retires it without dialing the radio.
+        QObject::disconnect(initializedConnection);
+        return;
+    }
 
     // Factory-create the connection (no parent — will be moved to thread)
     auto conn = RadioConnection::create(info);
@@ -7510,6 +7538,14 @@ void RadioModel::connectToRadio(const RadioInfo& info)
         return;
     }
     m_connection = conn.release();
+#ifdef NEREUS_BUILD_TESTS
+    if (m_testP2OutboundBase != 0) {
+        if (auto* const p2 = qobject_cast<P2RadioConnection*>(m_connection)) {
+            p2->setPortBasesForTest(m_testP2OutboundBase, m_testP2InputBase);
+            p2->setSilenceTimeoutsForTest(m_testP2FirstIqMs, m_testP2EstablishedMs);
+        }
+    }
+#endif
     m_connection->setHardwareProfile(m_hardwareProfile);
 
     // Phase B6' — per-board WDSP ChannelMaster-layer calls.
@@ -9392,10 +9428,10 @@ void RadioModel::connectToRadio(const RadioInfo& info)
             conn->setActiveReceiverCount(activeRxCount);
         });
     }
-    if (m_activeSlice) {
+    if (!m_slices.isEmpty()) {
         int hwRx = m_receiverManager->receiverConfig(0).hardwareRx;
         if (hwRx < 0) { hwRx = 0; }
-        quint64 freqHz = m_activeSlice->frequency();
+        quint64 freqHz = m_slices.first()->frequency();
         QMetaObject::invokeMethod(m_connection, [conn = m_connection, hwRx, freqHz]() {
             conn->setReceiverFrequency(hwRx, freqHz);
         });
@@ -9513,6 +9549,7 @@ void RadioModel::connectToRadio(const RadioInfo& info)
 void RadioModel::disconnectFromRadio()
 {
     m_intentionalDisconnect = true;
+    emit radioDisconnectRequested();
     teardownConnection();
 }
 
@@ -9523,8 +9560,15 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
     }
 
     // Connection state → RadioModel (auto-queued: connection thread → main thread)
-    connect(m_connection, &RadioConnection::connectionStateChanged,
-            this, &RadioModel::onConnectionStateChanged);
+    const QPointer<RadioConnection> stateSource(m_connection);
+    connect(m_connection, &RadioConnection::connectionStateChanged, this,
+            [this, stateSource](ConnectionState state) {
+        // Queued events can outlive disconnect(). A retired connection must
+        // never promote or tear down its replacement through a stale state.
+        if (stateSource && stateSource == m_connection) {
+            onConnectionStateChanged(state);
+        }
+    });
 
     // --- Slice → WDSP + RadioConnection ---
     // Every slice, each to its own WDSP channel. Slices created later are
@@ -9595,8 +9639,11 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
         // applyPureSignalDdcConfig is never invoked, so ddcConfigChanged
         // observation consumers never receive the PS pair. Fires once when
         // selectCodec runs at connectToRadio time.
-        connect(p2, &P2RadioConnection::p2CodecChanged, this, [this, p2]() {
-            m_receiverManager->setP2Codec(p2->p2Codec());
+        const QPointer<P2RadioConnection> codecSource(p2);
+        connect(p2, &P2RadioConnection::p2CodecChanged, this, [this, codecSource]() {
+            if (codecSource && codecSource == m_connection) {
+                m_receiverManager->setP2Codec(codecSource->p2Codec());
+            }
         });
         // Race: if selectCodec already fired before this connect (the
         // codec is selected on the connection thread, signal posted via
@@ -9624,13 +9671,23 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
         // dedicated QThread instead, because it has no main-thread
         // protection concern of its own and wants this off its single
         // event-loop thread entirely.
+        const quint64 widebandEpoch = m_widebandConnectionEpoch.load(std::memory_order_acquire);
         connect(p2, &P2RadioConnection::widebandFrameReady, &m_widebandDispatchContext,
-                [this](int adcIdx, const QVector<float>& samples) {
-            if (adcIdx < 0 || adcIdx >= 2) { return; }
-            if (!m_widebandFftEngines[adcIdx]) { return; }
+                [this, widebandEpoch](int adcIdx, const QVector<float>& samples) {
+            if (widebandEpoch != m_widebandConnectionEpoch.load(std::memory_order_acquire)
+                || adcIdx < 0 || adcIdx >= 2 || !m_widebandFftEngines[adcIdx]) {
+                return;
+            }
             QVector<float> bins;
             m_widebandFftEngines[adcIdx]->computeFft(samples, bins);
-            emit widebandSpectrumReady(adcIdx, bins);
+            // Publication is serialized with teardown on the model thread.
+            // A worker-side check alone leaves a check-to-emit race and can
+            // deliver an old frame into a freshly subscribed remote endpoint.
+            QMetaObject::invokeMethod(this, [this, widebandEpoch, adcIdx, bins = std::move(bins)]() {
+                if (widebandEpoch == m_widebandConnectionEpoch.load(std::memory_order_acquire)) {
+                    emit widebandSpectrumReady(adcIdx, bins);
+                }
+            }, Qt::AutoConnection);
         });
     }
 
@@ -9652,8 +9709,11 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
                 p1, &P1RadioConnection::applyPsDdcConfig,
                 Qt::QueuedConnection);
 
-        connect(p1, &P1RadioConnection::p1CodecChanged, this, [this, p1]() {
-            m_receiverManager->setP1Codec(p1->p1Codec());
+        const QPointer<P1RadioConnection> codecSource(p1);
+        connect(p1, &P1RadioConnection::p1CodecChanged, this, [this, codecSource]() {
+            if (codecSource && codecSource == m_connection) {
+                m_receiverManager->setP1Codec(codecSource->p1Codec());
+            }
         });
         if (auto* codec = p1->p1Codec()) {
             m_receiverManager->setP1Codec(codec);
@@ -12640,6 +12700,8 @@ void RadioModel::teardownConnection()
     if (!m_connection) {
         return;
     }
+    m_widebandConnectionEpoch.fetch_add(1, std::memory_order_acq_rel);
+
 
     // The external pdiv slot is independent of RXA channel ownership. Quiesce
     // its worker feed, stop Run, and destroy it before the DSP thread or any

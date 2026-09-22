@@ -451,6 +451,14 @@ private:
     /// first.
     void promoteToSession(SessionTransport* transport);
 
+    /// Sends the identity-dependent portion of the session state. Returns
+    /// false if either send changed the owning session. The
+    /// initial handshake uses this before the mirror attach; a later radio
+    /// identity event uses it on the same authenticated transport without
+    /// replaying the mirror snapshot or restarting media.
+    bool sendCapabilitiesAndSettingsSnapshot(SessionTransport* transport,
+                                             quint64 expectedEpoch);
+
     /// `retryable` rides out on the SessionEnd and tells the client's
     /// reconnect policy whether the condition that produced this drop
     /// clears on its own. Required, not defaulted, so a new refusal cannot

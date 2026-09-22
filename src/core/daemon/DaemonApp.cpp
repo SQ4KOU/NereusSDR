@@ -21,11 +21,13 @@
 #include "core/MoxController.h"
 #include "core/StepAttenuatorController.h"
 #include "core/TxSliceArbiter.h"
+#include "core/WdspEngine.h"
 #include "core/session/StationServer.h"
 #include "core/session/media/DaemonMediaController.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
+#include <QEventLoop>
 #include <QHostAddress>
 #include <QThread>
 #include <QTimer>
@@ -37,6 +39,10 @@ namespace NereusSDR {
 DaemonApp::DaemonApp(QObject* parent)
     : QObject(parent)
 {
+    m_radioRetryTimer = new QTimer(this);
+    m_radioRetryTimer->setSingleShot(true);
+    connect(m_radioRetryTimer, &QTimer::timeout,
+            this, &DaemonApp::attemptRadioDiscovery);
     m_stationListenRetryTimer = new QTimer(this);
     m_stationListenRetryTimer->setSingleShot(true);
     connect(m_stationListenRetryTimer, &QTimer::timeout,
@@ -59,6 +65,16 @@ bool DaemonApp::start(const DaemonConfig& cfg)
         stop();
     }
 
+    if (m_radioConnectInProgress) {
+        return false; // stop is deferred until the nested connection setup unwinds.
+    }
+    m_stopDeferred = false;
+    m_radioConfig = cfg;
+    m_selectedRadioMac = cfg.radioMac;
+    m_radioAttempted = false;
+    m_radioConnectedBefore = false;
+    m_radioRetryNextMs = m_radioRetryInitialMs;
+
     // Idempotent process-wide (CoreInit.cpp's s_initialized guard), so
     // this is a genuine no-op when server_main.cpp already called it
     // before constructing this DaemonApp. Calling it here too means a
@@ -68,6 +84,23 @@ bool DaemonApp::start(const DaemonConfig& cfg)
     NereusSDR::CoreInit::initialize();
 
     m_radioModel = std::make_unique<RadioModel>();
+#ifdef NEREUS_BUILD_TESTS
+    m_radioModel->wdspEngine()->setSynchronousInitForTest(m_synchronousWdspForTest);
+#endif
+    const quint64 runGeneration = m_radioRecoveryGeneration;
+    connect(m_radioModel.get(), &RadioModel::connectionStateChanged, this,
+            [this, runGeneration](ConnectionState state) {
+        if (runGeneration == m_radioRunGeneration) {
+            onRadioStateForRecovery(state);
+        }
+    }, Qt::QueuedConnection);
+    m_radioRunGeneration = runGeneration;
+    connect(m_radioModel.get(), &RadioModel::radioDisconnectRequested, this, [this]() {
+        if (!m_retiringRadio) {
+            m_radioRecoveryEnabled = false;
+            cancelRadioDiscovery();
+        }
+    });
     // R3 remote operation is receive-only. Install the station-side policy
     // before controllers, peripherals, slices, or the radio can produce a
     // callback: the daemon owns real hardware even though its model has the
@@ -150,26 +183,10 @@ bool DaemonApp::start(const DaemonConfig& cfg)
     } else
 #endif
     {
-        RadioInfo info;
-        if (resolveRadioInfo(cfg, info)) {
-            // Before connectToRadio(), which is where resolveSampleRate()
-            // reads the per-MAC key. See applyConfigToSettings()'s doc
-            // comment for why the config file goes through the settings
-            // store instead of new parameters on the connect call.
-            applyConfigToSettings(cfg, info.macAddress);
-            m_radioModel->connectToRadio(info);
-            radioMac = info.macAddress;
-        } else {
-            // Not a startup failure -- see start()'s own doc comment. The
-            // radio may appear later; today's daemon does not retry, so an
-            // operator restarts nereusd (or a future task adds a retry loop)
-            // once one is reachable.
-            qCWarning(lcApp) << "DaemonApp: no radio found at startup"
-                              << (cfg.radioMac.isEmpty()
-                                      ? QStringLiteral("(discovery found nothing)")
-                                      : QStringLiteral("matching MAC ") + cfg.radioMac)
-                              << "- continuing with the disconnected-default slice";
-        }
+        // Bring up the station before asynchronous discovery. An authenticated
+        // client can observe the disconnected state while a radio powers up.
+        m_radioRecoveryEnabled = true;
+        radioMac = cfg.radioMac;
     }
 
     createConfiguredSlices(cfg.sliceCount);
@@ -188,12 +205,31 @@ bool DaemonApp::start(const DaemonConfig& cfg)
     // reached RadioModel's live FFTRouter (RadioModel::fftRouter()) and
     // were completely inert. See the file header above.
     publishFftTopology();
+    if (m_radioRecoveryEnabled) {
+        m_radioRetryTimer->start(0);
+    }
 
     return true;
 }
 
 void DaemonApp::stop()
 {
+    m_radioRecoveryEnabled = false;
+    cancelRadioDiscovery();
+    cancelStationServerListenRetry();
+    if (m_radioConnectInProgress) {
+        // A cold WDSP initialization pumps a nested event loop. Never delete
+        // the RadioModel from inside its still-running connect stack. Its
+        // non-interruptible wisdom job may finish, but the cancelled connect
+        // path cannot create a radio socket afterward.
+        m_stopDeferred = true;
+        if (m_stationServer) {
+            m_stationServer->close();
+        }
+        m_radioModel->disconnectFromRadio();
+        return;
+    }
+    m_stopDeferred = false;
     // Cancel before destroying any object the timeout callback reads. Clear
     // the latched endpoint as well so even an already-delivered/stale callback
     // cannot bind a previous run's address after teardown.
@@ -511,41 +547,171 @@ void DaemonApp::applyConfigToSettings(const DaemonConfig& cfg,
     }
 }
 
-bool DaemonApp::resolveRadioInfo(const DaemonConfig& cfg, RadioInfo& out) const
+void DaemonApp::cancelRadioDiscovery()
 {
-    // Preconditions: called only from start(), after m_radioModel has
-    // just been constructed, and only on the production path (start()
-    // does not call this at all when primeBoardForTest() is armed).
-    //
-    // A real NIC-walk broadcast. RadioDiscovery::
-    // startDiscovery() -> scanAllNics() blocks internally (waitForReadyRead
-    // per NIC, up to ~1.8 s per NIC at the SafeDefault profile --
-    // RadioDiscovery.h's DiscoveryTiming table), so this call IS the
-    // daemon's "wait for the radio" step; no separate event loop needed
-    // here, and discoveredRadios() below already reflects whatever the
-    // walk found by the time startDiscovery() returns.
-    RadioDiscovery* discovery = m_radioModel->discovery();
-    discovery->startDiscovery();
-
-    const QList<RadioInfo> found = discovery->discoveredRadios();
-    if (found.isEmpty()) {
-        return false;
+    ++m_radioRecoveryGeneration;
+    m_radioRetryTimer->stop();
+    if (m_radioDiscoveryThread) {
+        m_radioDiscoveryThread->requestInterruption();
+        m_radioDiscoveryThread->wait();
+        m_radioDiscoveryThread.reset();
     }
+}
 
-    if (cfg.radioMac.isEmpty()) {
-        // "empty = first discovered" -- DaemonConfig.h's own contract
-        // for this field.
-        out = found.first();
-        return true;
+void DaemonApp::scheduleRadioDiscovery()
+{
+    if (!m_radioRecoveryEnabled || !m_radioModel || m_radioDiscoveryThread
+        || m_radioRetryTimer->isActive()) {
+        return;
     }
+    // Nereus daemon policy, not a radio-protocol timeout.
+    m_radioRetryTimer->start(m_radioRetryNextMs);
+    m_radioRetryNextMs = std::min(m_radioRetryMaximumMs, m_radioRetryNextMs * 2);
+}
 
-    for (const RadioInfo& candidate : found) {
-        if (candidate.macAddress.compare(cfg.radioMac, Qt::CaseInsensitive) == 0) {
-            out = candidate;
-            return true;
+void DaemonApp::attemptRadioDiscovery()
+{
+    if (!m_radioRecoveryEnabled || !m_radioModel || m_radioDiscoveryThread
+        || m_radioConnectInProgress || m_radioModel->isConnected()) {
+        return;
+    }
+    // Preserve the full process-wide post-stop quiet interval, including in
+    // tests which inject discoveries without sending any network probes.
+    const qint64 quietMs = m_radioModel->discovery()->holdOffRemainingMs();
+    if (quietMs > 0) {
+        m_radioRetryTimer->start(int(quietMs));
+        return;
+    }
+    const quint64 generation = m_radioRecoveryGeneration;
+    auto result = std::make_shared<QList<RadioInfo>>();
+#ifdef NEREUS_BUILD_TESTS
+    const auto provider = m_discoveryProviderForTest;
+    auto* worker = QThread::create([result, provider]() {
+        if (provider) {
+            *result = provider();
+            return;
         }
+#else
+    auto* worker = QThread::create([result]() {
+#endif
+        RadioDiscovery discovery;
+        QEventLoop loop;
+        QTimer cancellation;
+        cancellation.setInterval(25);
+        QObject::connect(&cancellation, &QTimer::timeout, &loop, [&loop]() {
+            if (QThread::currentThread()->isInterruptionRequested()) {
+                loop.quit();
+            }
+        });
+        QObject::connect(&discovery, &RadioDiscovery::discoveryFinished,
+                         &loop, &QEventLoop::quit);
+        QTimer::singleShot(0, &discovery, [&discovery]() {
+            discovery.startDiscovery();
+        });
+        cancellation.start();
+        loop.exec();
+        if (!QThread::currentThread()->isInterruptionRequested()) {
+            *result = discovery.discoveredRadios();
+        }
+    });
+    worker->setObjectName(QStringLiteral("DaemonRadioDiscovery"));
+    m_radioDiscoveryThread.reset(worker);
+    connect(worker, &QThread::finished, this, [this, worker, generation, result]() {
+        if (generation != m_radioRecoveryGeneration || !m_radioRecoveryEnabled
+            || m_radioDiscoveryThread.get() != worker) {
+            return;
+        }
+        worker->wait();
+        m_radioDiscoveryThread.reset();
+        finishRadioDiscovery(*result);
+    });
+    worker->start();
+}
+
+void DaemonApp::finishRadioDiscovery(const QList<RadioInfo>& found)
+{
+    if (!m_radioRecoveryEnabled || !m_radioModel) {
+        return;
     }
-    return false;
+    const auto selected = std::find_if(found.cbegin(), found.cend(), [this](const RadioInfo& info) {
+        return !info.inUse && !info.macAddress.isEmpty()
+            && (m_selectedRadioMac.isEmpty()
+                || info.macAddress.compare(m_selectedRadioMac, Qt::CaseInsensitive) == 0);
+    });
+    if (selected == found.cend()) {
+        scheduleRadioDiscovery();
+        return;
+    }
+    if (m_selectedRadioMac.isEmpty()) {
+        m_selectedRadioMac = selected->macAddress;
+    }
+    const bool preserve = m_radioAttempted;
+    m_radioAttempted = true;
+    if (!preserve) {
+        applyConfigToSettings(m_radioConfig, m_selectedRadioMac);
+    }
+    m_radioConnectInProgress = true;
+    if (preserve) {
+        m_radioModel->connectToRadioPreservingSlices(*selected);
+    } else {
+        m_radioModel->connectToRadio(*selected);
+    }
+    m_radioConnectInProgress = false;
+    if (m_stopDeferred) {
+        stop();
+        return;
+    }
+    if (!m_radioRecoveryEnabled) {
+        return;
+    }
+    if (RadioConnection* const connection = m_radioModel->connection()) {
+        const quint64 generation = m_radioRecoveryGeneration;
+        connect(connection, &RadioConnection::connectFailed, this,
+                [this, generation](ConnectFailure, const QString&) {
+            if (generation == m_radioRecoveryGeneration && m_radioRecoveryEnabled) {
+                retireRadioAndRetry();
+            }
+        }, Qt::QueuedConnection);
+    } else {
+        scheduleRadioDiscovery();
+    }
+}
+
+void DaemonApp::onRadioStateForRecovery(ConnectionState state)
+{
+    if (!m_radioRecoveryEnabled || !m_radioModel || m_retiringRadio
+        || state != m_radioModel->connectionState()) {
+        return;
+    }
+    if (state == ConnectionState::Connected) {
+        m_radioRetryNextMs = m_radioRetryInitialMs;
+        if (!m_radioConnectedBefore) {
+            createConfiguredSlices(m_radioConfig.sliceCount);
+            m_radioConnectedBefore = true;
+        }
+        clearFftTopology();
+        mintFftEndpoints();
+        publishFftTopology();
+    } else if ((state == ConnectionState::LinkLost
+                || state == ConnectionState::Disconnected) && m_radioAttempted
+               && m_radioModel->connection()) {
+        retireRadioAndRetry();
+    }
+}
+
+void DaemonApp::retireRadioAndRetry()
+{
+    if (!m_radioRecoveryEnabled || !m_radioModel || m_retiringRadio) {
+        return;
+    }
+    // Invalidate both discovery completions and terminal reports from the
+    // retired connection. RadioModel keeps the slices while retiring all DSP.
+    cancelRadioDiscovery();
+    clearFftTopology();
+    m_retiringRadio = true;
+    m_radioModel->disconnectFromRadio();
+    m_retiringRadio = false;
+    scheduleRadioDiscovery();
 }
 
 void DaemonApp::createConfiguredSlices(int sliceCountRequested)

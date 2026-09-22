@@ -240,13 +240,15 @@ private slots:
         QCOMPARE(controls.count(), acceptedContexts);
         QVERIFY(!h.client.sendMediaControl(audioControl(7, false), h.client.sessionEpoch() + 1));
 
-        h.radio.setConnectionStateForTest(ConnectionState::Disconnected);
+        h.radio.setConnectionStateForTest(ConnectionState::LinkLost);
         QTRY_VERIFY(!latestAudioContext(controls).value(QStringLiteral("enabled")).toBool());
         const QJsonObject disconnected = latestAudioContext(controls);
         QCOMPARE(disconnected.value(QStringLiteral("revision")).toInteger(), qint64{5});
         h.feedMixed(DaemonAudioSource::kBlockFrames);
         QTest::qWait(20);
         QVERIFY(h.mediaTransport->rtpPackets.isEmpty());
+        h.radio.setConnectionStateForTest(ConnectionState::Disconnected);
+        QTRY_VERIFY(!latestAudioContext(controls).value(QStringLiteral("enabled")).toBool());
 
         h.radio.setConnectionStateForTest(ConnectionState::Connected);
         QTRY_VERIFY(latestAudioContext(controls).value(QStringLiteral("enabled")).toBool());

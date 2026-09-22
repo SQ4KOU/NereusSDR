@@ -2252,7 +2252,20 @@ public:
 
     // Connection
     void connectToRadio(const RadioInfo& info);
+    // Same selected radio, retaining live receiver state and active selection.
+    void connectToRadioPreservingSlices(const RadioInfo& info);
     void disconnectFromRadio();
+#ifdef NEREUS_BUILD_TESTS
+    // Instance-local loopback transport setup, applied before the connection
+    // moves to its worker. No global port overrides or production callers.
+    void configureP2TransportForTest(quint16 outboundBase, quint16 inputRoleBase,
+                                     int firstIqMs, int establishedMs) {
+        m_testP2OutboundBase = outboundBase;
+        m_testP2InputBase = inputRoleBase;
+        m_testP2FirstIqMs = firstIqMs;
+        m_testP2EstablishedMs = establishedMs;
+    }
+#endif
 
     // Phase 3Q Task 10: arm / disarm the auto-connect-in-progress flag.
     // Called by MainWindow::tryAutoReconnect() before and after the probe.
@@ -2770,6 +2783,8 @@ signals:
     // Existing no-arg slot connections (ConnectionPanel, MainWindow, SpectrumWidget)
     // remain valid: Qt discards excess signal args when slot arity is lower.
     void connectionStateChanged(NereusSDR::ConnectionState newState);
+    // Explicit owner/operator intent, including a stop while already offline.
+    void radioDisconnectRequested();
     // Emitted when the on-air sample rate for the current connection is
     // known. MainWindow reacts by updating FFTEngine + SpectrumWidget so
     // bin math matches the wire rate (P1=192k, P2=768k).
@@ -3189,6 +3204,7 @@ private:
     // TX handoff, and immediately before MOX routing).
     void applyTxAntennaFromBoundSlice();
 
+    void connectToRadioImpl(const RadioInfo& info, bool preserveSlices);
     void wireConnectionSignals(int wdspInSize);
     /// Wire one slice's property changes to its OWN WDSP channel and to the
     /// radio. Call for every slice, not just the active one: this used to
@@ -3815,6 +3831,7 @@ private:
     // RadioModel -- identical to the pre-Task-11 `this` context it
     // replaces in wireConnectionSignals.
     QObject m_widebandDispatchContext;
+    std::atomic<quint64> m_widebandConnectionEpoch {0};
 
     // Band-plan overlay manager — app-global, loaded once from Qt resources.
     // Phase 3G RX Epic sub-epic D.
@@ -4047,6 +4064,10 @@ private:
     bool m_republishingAlexBpf{false};
 
 #ifdef NEREUS_BUILD_TESTS
+    quint16 m_testP2OutboundBase {0};
+    quint16 m_testP2InputBase {0};
+    int m_testP2FirstIqMs {2000};
+    int m_testP2EstablishedMs {3000};
     bool     m_testCapsOverride{false};
     bool     m_testCapsHasAlex{false};
     bool     m_testCapsIsRxOnly{false};              // 3M-1a G.2: injected via setCapsRxOnlyForTest

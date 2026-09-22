@@ -73,24 +73,8 @@
 // unsubscribe(), matching MainWindow::rebuildFftRouting()'s pattern
 // exactly instead of only citing it).
 //
-// IMPORTANT, found while verifying this task (see task-10-report.md):
-// RadioModel::connectToRadio() is not safely exercisable end-to-end from
-// an automated test. It contains a synchronous nested QEventLoop
-// (RadioModel.cpp, "Block here while the wisdom worker finishes, pumping
-// the Qt event loop") that blocks the CALLING thread until WdspEngine
-// finishes generating FFTW wisdom -- by design, so the GUI can show a
-// progress dialog during a cold-cache first connect (CLAUDE.md: "First
-// run generates FFTW wisdom (~15 min)"). Measured directly during this
-// task: >5 minutes on a cold cache, at which point QtTest's own 300 s
-// per-function watchdog aborted the process (SIGABRT) rather than the
-// call ever returning within a plausible test budget. No test in this
-// 513-test suite calls RadioModel::connectToRadio() for exactly this
-// reason -- every RadioModel-level test instead primes board state via
-// RadioModel::setBoardForTest() + configureStreamPool() (see
-// tst_p1_hl2_rx2_wiring.cpp). primeBoardForTest() below exists so this
-// class's tests can follow the same established, wisdom-free pattern.
-// The production discovery/connectToRadio() path is unchanged and is
-// exercised only by manual verification (task-10-report.md), not ctest.
+// Real connection tests use WdspEngine::setSynchronousInitForTest(true)
+// with a loopback radio; primeBoardForTest remains for topology-only tests.
 //
 // FIX ROUND 1, FINDING 3: this same nested wait is reachable in
 // production, and before this task server_main.cpp never constructed a
@@ -119,10 +103,12 @@
 #include "core/spectrum/FftTopology.h"
 
 #include <QObject>
+#include "core/ConnectionState.h"
 
 #include <memory>
 #ifdef NEREUS_BUILD_TESTS
 #include <optional>
+#include <functional>
 #endif
 
 class QThread;
@@ -166,23 +152,11 @@ public:
     explicit DaemonApp(QObject* parent = nullptr);
     ~DaemonApp() override;
 
-    // Connects to a radio (or runs discovery when cfg.radioMac is empty --
-    // see resolveRadioInfo()) and creates min(cfg.sliceCount,
-    // connected-board-maxSlices) slices. Always returns true: a radio
-    // that cannot be found or reached is not a startup failure for a
-    // headless daemon (it may be powered on later, or discoverable once
-    // the network settles), so the daemon still comes up with its
-    // disconnected-default slice (see RadioModel::maxSlices()'s own
-    // "returns 1 when disconnected" contract, mirrored here via
-    // BoardCapabilities::maxSlices rather than that accessor -- see
-    // resolveRadioInfo()'s call site in the .cpp for why the accessor
-    // itself is the wrong read).
-    //
-    // NOTE: on a genuine first connect (cold FFTW wisdom cache) this call
-    // blocks for as long as RadioModel::connectToRadio() takes to finish
-    // wisdom generation -- see the file header above. That is inherited,
-    // pre-existing behaviour, not something this method adds or can
-    // avoid while still calling the real connectToRadio().
+    // Starts the station/control plane immediately and schedules cancellable
+    // selected-radio discovery. Radio absence is not a startup failure; the
+    // default slice remains available until the configured radio appears.
+    // Returns false only if a previous cancelled connection setup is still
+    // draining its non-interruptible WDSP wisdom job. See the recovery design.
     bool start(const DaemonConfig& cfg);
 
     // Tears down in reverse: drops every FFT-topology subscription this
@@ -194,8 +168,8 @@ public:
     // has no RadioModel to tear down) and safe to call twice in a row.
     void stop();
 
-    // 0 before the first start(), after stop(), and whenever no radio
-    // was ever connected. Otherwise the RadioModel's live slice count.
+    // 0 before start and after completed stop; otherwise the live slice count,
+    // including the disconnected-default slice while discovery is pending.
     int sliceCount() const;
 
     // Remote listener observability. A configured listener may exist while a
@@ -249,7 +223,7 @@ public:
     // this persists across a restart on the same instance --
     // restartIsClean needs the second start() to prime the same board
     // again) to prime the RadioModel via setBoardForTest() +
-    // configureStreamPool() instead of running resolveRadioInfo() /
+    // configureStreamPool() instead of running asynchronous discovery /
     // calling the real connectToRadio(). See the file header above for
     // why: connectToRadio() blocks on a cold-cache WDSP wisdom
     // generation that took over 5 minutes when measured directly for
@@ -298,15 +272,13 @@ signals:
     void radioConnected(bool connected);
 
 private:
-    // Resolves the radio to connect to via production discovery
-    // (RadioDiscovery::startDiscovery(), a synchronous NIC walk -- see
-    // RadioDiscovery.h -- filtered to cfg.radioMac when non-empty, or the
-    // first responder when empty, per DaemonConfig.h's "empty = first
-    // discovered" contract). Returns false, leaving `out` untouched, when
-    // nothing is found; the caller (start()) treats that as "no radio
-    // yet", not a hard failure. Not called at all when primeBoardForTest()
-    // is armed -- see start()'s implementation.
-    bool resolveRadioInfo(const DaemonConfig& cfg, RadioInfo& out) const;
+    // R-R3-27/29: control remains available while discovery runs elsewhere.
+    void attemptRadioDiscovery();
+    void finishRadioDiscovery(const QList<RadioInfo>& found);
+    void scheduleRadioDiscovery();
+    void cancelRadioDiscovery();
+    void onRadioStateForRecovery(ConnectionState state);
+    void retireRadioAndRetry();
 
     // Seeds the AppSettings keys the shared connect path reads, so that
     // config-file values actually take effect, from `cfg`:
@@ -327,7 +299,7 @@ private:
     // decides what the persisted value is on this start.
     //
     // Requires a resolved `mac`, which is why it is called after
-    // resolveRadioInfo() and before RadioModel::connectToRadio(): with
+    // identity selection and before RadioModel::connectToRadio(): with
     // an empty radio_mac the MAC is not known until discovery answers.
     void applyConfigToSettings(const DaemonConfig& cfg, const QString& mac) const;
 
@@ -404,6 +376,21 @@ private:
     void clearFftTopology();
 
     std::unique_ptr<RadioModel> m_radioModel;
+    DaemonConfig m_radioConfig;
+    QString m_selectedRadioMac;
+    std::unique_ptr<QThread> m_radioDiscoveryThread;
+    QTimer* m_radioRetryTimer {nullptr};
+    quint64 m_radioRecoveryGeneration {0};
+    quint64 m_radioRunGeneration {0};
+    bool m_radioRecoveryEnabled {false};
+    bool m_radioAttempted {false};
+    bool m_radioConnectedBefore {false};
+    bool m_retiringRadio {false};
+    bool m_radioConnectInProgress {false};
+    bool m_stopDeferred {false};
+    int m_radioRetryInitialMs {1000};
+    int m_radioRetryMaximumMs {15000};
+    int m_radioRetryNextMs {1000};
     // Non-GUI owner of the controller RadioModel and TransmitModel hold by
     // raw pointer. It must outlive m_radioModel teardown because that path
     // saves its per-MAC state before releasing the RadioConnection.
@@ -447,6 +434,8 @@ private:
     int m_nextEndpointId {0};
 
 #ifdef NEREUS_BUILD_TESTS
+    std::function<QList<RadioInfo>()> m_discoveryProviderForTest;
+    bool m_synchronousWdspForTest {false};
     std::optional<HPSDRHW> m_testBoard;
     QString m_testRadioMac;
 #endif

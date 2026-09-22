@@ -60,6 +60,8 @@ mw0lge@grange-lane.co.uk
 //============================================================================================//
 
 #include "RadioDiscovery.h"
+#include <QThread>
+#include <QMutexLocker>
 #include "BoardCapabilities.h"
 #include "LogCategories.h"
 
@@ -150,6 +152,21 @@ RadioDiscovery::~RadioDiscovery()
 // Process-wide quiet deadline — see the declaration for why this is not
 // per-instance, and why it is monotonic rather than wall-clock.
 QDeadlineTimer RadioDiscovery::s_scanHoldOff;
+QMutex RadioDiscovery::s_scanHoldOffMutex;
+
+bool RadioDiscovery::scanCancelled() const
+{
+    return m_stopRequested.load(std::memory_order_acquire)
+        || QThread::currentThread()->isInterruptionRequested();
+}
+
+#ifdef NEREUS_BUILD_TESTS
+void RadioDiscovery::clearHoldOffForTest()
+{
+    const QMutexLocker lock(&s_scanHoldOffMutex);
+    s_scanHoldOff = QDeadlineTimer();
+}
+#endif
 
 void RadioDiscovery::holdOffScans(std::chrono::milliseconds quiet)
 {
@@ -157,6 +174,7 @@ void RadioDiscovery::holdOffScans(std::chrono::milliseconds quiet)
     // longer one already in flight.  Qt::PreciseTimer because this bounds a
     // radio-safety interval, not a UI refresh.
     const QDeadlineTimer candidate(quiet, Qt::PreciseTimer);
+    const QMutexLocker lock(&s_scanHoldOffMutex);
     if (candidate > s_scanHoldOff) {
         s_scanHoldOff = candidate;
     }
@@ -168,12 +186,17 @@ qint64 RadioDiscovery::holdOffRemainingMs() const
 {
     // remainingTime() is monotonic and already clamps to 0 once expired; the
     // guard covers the -1 "forever" encoding, which we never construct.
+    const QMutexLocker lock(&s_scanHoldOffMutex);
     const qint64 remaining = s_scanHoldOff.remainingTime();
     return remaining > 0 ? remaining : 0;
 }
 
 void RadioDiscovery::startDiscovery()
 {
+    if (QThread::currentThread()->isInterruptionRequested()) {
+        emit discoveryFinished();
+        return;
+    }
     // Post-disconnect quiet period: defer, never drop.  One pending deferred
     // scan is enough — the scan that eventually runs walks every NIC anyway.
     if (const qint64 waitMs = holdOffRemainingMs(); waitMs > 0) {
@@ -476,7 +499,7 @@ void RadioDiscovery::scanAllNics()
     for (const QNetworkInterface& iface : interfaces) {
         // Cooperative cancel — see stopDiscovery(). Bail before touching
         // a new NIC if a shutdown was requested. (Inner loop also checks.)
-        if (m_stopRequested.load(std::memory_order_acquire)) {
+        if (scanCancelled()) {
             return;
         }
 
@@ -531,6 +554,9 @@ void RadioDiscovery::scanAllNics()
 
         // From Thetis discoverOnNic(): attempts × (send + quiet-poll loop)
         for (int attempt = 0; attempt < attempts; attempt++) {
+            if (scanCancelled()) {
+                return;
+            }
             // Send P1 and P2 probes to directed subnet broadcast and 255.255.255.255
             if (!nicBroadcast.isNull()) {
                 sock.writeDatagram(p1Packet, nicBroadcast, kDiscoveryPort);
@@ -544,7 +570,7 @@ void RadioDiscovery::scanAllNics()
                 // Cooperative cancel — see stopDiscovery(). Checked after
                 // each waitForReadyRead window so shutdown latency is at
                 // most one pollTimeoutMs (~150 ms on SafeDefault).
-                if (m_stopRequested.load(std::memory_order_acquire)) {
+                if (scanCancelled()) {
                     sock.close();
                     return;
                 }
@@ -558,6 +584,9 @@ void RadioDiscovery::scanAllNics()
                 quietPolls = 0;
 
                 while (sock.hasPendingDatagrams()) {
+                    if (scanCancelled()) {
+                        return;
+                    }
                     QHostAddress senderAddr;
                     quint16 senderPort = 0;
                     QByteArray data;

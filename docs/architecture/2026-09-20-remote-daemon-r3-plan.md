@@ -58,12 +58,14 @@ this plan uses the existing NereusSDR executable in remote station mode.
 
 **Current remaining order, September 22:** RADE routing, Core telemetry,
 bandwidth graphs and the Core-owned accessory controls have software
-implementations installed through `3402d171`. Finish real TGXL admission and
-visible-control acceptance (4a/4c/4d); restore receiver membership across Core
+implementations installed through `3402d171`. Selected-radio late startup and
+established-silence recovery now pass focused checks and all 698 test
+executables; complete matching installation and hardware acceptance next (6). Finish
+real TGXL admission and visible-control acceptance (4a/4c/4d); restore receiver membership across Core
 restart (R-R3-34), integrating the parallel WDSP per-slice persistence work
 serially first; finish wideband parity and sustained mixed audio with operator
-feedback (4b/5/5a). Then complete capacity, late-radio/silence recovery,
-boot/reconnect and two-hour acceptance (6). Receive-only R5 traversal follows,
+feedback (4b/5/5a). Then complete capacity, boot/reconnect and two-hour
+acceptance (6). Receive-only R5 traversal follows,
 then safeguarded R4 TX and R6 selection/pairing/packaging. Installed software
 does not close the outstanding hardware and sustained-listening checks.
 
@@ -963,22 +965,24 @@ rules, configuration sample and the R3 verification ledger.
   and repeated media failures across successful control handshakes separately:
   the current control backoff resets at handshake, so it cannot by itself prove
   growing backoff across those media failures. See [recovery evidence](2026-09-20-remote-daemon-r3-verification/media-recovery.md).
-- [ ] R-R3-29: audit and reproduce established P2 receive silence. The current
-  first-packet watchdog is disarmed after initial I/Q and does not cover a later
-  zero-ingress connection. Follow source-first protocol behavior before adding
-  loss detection/recovery. The source audit found Thetis ChannelMaster
+- [ ] R-R3-29: established P2 receive-silence recovery is implemented and
+  passes real-loopback checks and the full 698-test suite; installation and
+  physical radio-loss/resume acceptance remain pending. The source audit found Thetis ChannelMaster
   `network.c:655-666` uses a three-second all-inbound-UDP deadline followed by
   SendStop/zero notification; it does not itself implement automatic reconnect.
   Keep that source behavior distinct from a separately justified Nereus retry
   policy. A loopback P2 fake must send a real DDC packet, then cease ingress
-  while command egress continues. Verify no healthy status during indefinite silence,
-  no wrong-radio selection, and cancellation/receive-only safety.
-- [ ] R-R3-27: cover startup with the configured radio absent, then present.
-  `DaemonApp::resolveRadioInfo()` currently performs one startup discovery;
-  the no-radio branch explicitly leaves later recovery to a service restart.
-  Add cancellable discovery recovery for the selected identity without
-  blocking Core control or duplicating the preserved station slices. Retain
-  separate checks for established-radio link loss and initial discovery.
+  while command egress continues. These checks now prove terminal loss,
+  same-radio recovery, cancellation and receive-only safety. Valid status-only
+  traffic still keeps the sourced all-inbound watchdog alive. See
+  [recovery evidence](2026-09-20-remote-daemon-r3-verification/radio-recovery.md).
+- [ ] R-R3-27: cancellable discovery recovery is implemented for startup
+  with the configured radio absent, then present. A worker replaces one-shot
+  startup discovery; Core control stays responsive and existing GUI sessions
+  receive late capabilities/settings while retaining their slice objects.
+  Focused wrong-radio, cancellation, stop-during-setup and preservation checks
+  pass, including the full 698-test suite. Installation and actual late-radio
+  startup acceptance remain pending; established-radio loss is tested separately under R-R3-29.
 - [ ] Install a signed checkpoint with a recoverable previous binary/library
   set, preserve private station configuration, and verify boot, clean stop,
   client reconnect and live media. Provide a launcher using private pairing

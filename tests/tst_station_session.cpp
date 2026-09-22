@@ -140,6 +140,75 @@ int indexOfKind(const QList<QByteArray>& kinds, const char* name)
     return static_cast<int>(kinds.indexOf(QByteArray(name)));
 }
 
+/// Delivers synchronously only where this regression needs to preempt a
+/// session before StationServer's already-queued radio callback runs. The
+/// ordinary handshake tests keep using LoopbackTransport's realistic queued
+/// delivery; this narrow fixture exercises the server's reentrancy guard.
+class ImmediateTransport final : public SessionTransport {
+public:
+    explicit ImmediateTransport(const QString& description, QObject* parent = nullptr)
+        : SessionTransport(parent)
+        , m_description(description)
+    {
+    }
+
+    void linkTo(ImmediateTransport* peer)
+    {
+        m_peer = peer;
+        if (peer != nullptr) {
+            peer->m_peer = this;
+        }
+    }
+
+    void sendText(const QByteArray& wire) override
+    {
+        if (!m_open || m_peer == nullptr || !m_peer->m_open) {
+            return;
+        }
+        m_peer->m_received.append(wire);
+        emit m_peer->textReceived(wire);
+    }
+
+    void ping() override
+    {
+        if (m_open && m_peer != nullptr && m_peer->m_open) {
+            emit pongReceived();
+        }
+    }
+
+    void closeLink(const QString& reason) override
+    {
+        if (!m_open) {
+            return;
+        }
+        m_open = false;
+        emit closed();
+        if (m_peer != nullptr) {
+            m_peer->closeLink(reason);
+        }
+    }
+
+    bool isOpen() const override { return m_open; }
+    QString peerDescription() const override { return m_description; }
+
+    QList<QByteArray> receivedKinds() const
+    {
+        QList<QByteArray> kinds;
+        kinds.reserve(m_received.size());
+        for (const QByteArray& wire : m_received) {
+            const QJsonDocument document = QJsonDocument::fromJson(wire);
+            kinds.append(document.object().value(QStringLiteral("type")).toString().toUtf8());
+        }
+        return kinds;
+    }
+
+private:
+    QString m_description;
+    ImmediateTransport* m_peer = nullptr;
+    bool m_open = true;
+    QList<QByteArray> m_received;
+};
+
 // ── Capturing whatever reaches the Qt logging handler ────────────────────
 //
 // Production installs CoreInit's handler, which redacts and then writes to
@@ -195,6 +264,8 @@ private slots:
     void handshakeCompletesInSectionSevenZeroOrder();
     void capabilitiesAdvertiseEffectiveNotBoardLimits();
     void clientAppliesCapabilitiesAndDrivesConnected();
+    void lateRadioRefreshUpdatesAuthenticatedClientWithoutReplayingMirror();
+    void queuedLateRadioRefreshDoesNotReachReplacementSession();
     void mediaEnvelopeIsBoundedAndTyped();
     void mediaRejectsPreAuthenticationAndOldProtocol();
     void mediaRequiresReadySessionAndRejectsPriorEpoch();
@@ -1170,8 +1241,143 @@ void TstStationSession::clientAppliesCapabilitiesAndDrivesConnected()
     }
 }
 
+void TstStationSession::lateRadioRefreshUpdatesAuthenticatedClientWithoutReplayingMirror()
+{
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(
+        settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+
+    // Start as the R-R3-27 daemon does when discovery has not yet found its
+    // configured radio.  Keep a real slice in the mirror so the assertion
+    // below proves the late identity update does not replace GUI objects.
+    auto stationModel = makeStationRadioModel(0);
+    stationModel->setConnectionStateForTest(ConnectionState::Disconnected);
+    QCOMPARE(stationModel->addPanadapter(), 0);
+    const QString mac = QStringLiteral("AA:BB:CC:DD:EE:01");
+    stationSettings.setHardwareValue(
+        mac, QStringLiteral("radioInfo/sampleRate"), QStringLiteral("192000"));
+
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    server.setSustainableSliceLimit(2);
+    server.setMediaEnabled(true);
+
+    RadioModel clientModel(RadioModel::Role::Remote);
+    QCOMPARE(clientModel.addPanadapter(), 0);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
+    stationEnd->linkTo(clientEnd);
+
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    QSignalSpy authenticated(&server, &StationServer::clientAuthenticated);
+    QSignalSpy mediaStarted(&server, &StationServer::mediaSessionStarted);
+    client.startSession(clientEnd, server.token());
+    server.acceptTransport(stationEnd);
+    QTRY_COMPARE(completed.count(), 1);
+
+    QVERIFY(!clientModel.isConnected());
+    QVERIFY(clientModel.currentRadioMac().isEmpty());
+    const int sliceId = stationModel->slices().first()->sliceIndex();
+    SliceModel* const existingSlice = clientModel.sliceById(sliceId);
+    const QList<PanadapterModel*> initialPans = clientModel.panadapters();
+    QVERIFY(!initialPans.isEmpty());
+    PanadapterModel* const existingPan = initialPans.first();
+    QVERIFY(existingSlice != nullptr);
+    QVERIFY(existingPan != nullptr);
+    QCOMPARE(authenticated.count(), 1);
+    QCOMPARE(mediaStarted.count(), 1);
+    QVERIFY(!proxy.contains(QStringLiteral("hardware/%1/radioInfo/sampleRate").arg(mac)));
+
+    clientEnd->clearReceived();
+    stationModel->setConnectionStateForTest(ConnectionState::Connected);
+    stationModel->emitCurrentRadioChangedForTest();
+
+    QTRY_VERIFY(clientModel.isConnected());
+    QCOMPARE(clientModel.currentRadioMac(), mac);
+    QCOMPARE(clientModel.boardCapabilities().board, HPSDRHW::HermesLite);
+    QCOMPARE(clientModel.maxSlices(), 2);
+    QTRY_COMPARE(proxy.value(QStringLiteral("hardware/%1/radioInfo/sampleRate").arg(mac), QVariant{})
+                     .toString(),
+                 QStringLiteral("192000"));
+
+    const QList<QByteArray> lateKinds = clientEnd->receivedKinds();
+    QVERIFY(lateKinds.contains(QByteArrayLiteral("capabilities")));
+    QVERIFY(lateKinds.contains(QByteArrayLiteral("settings.snapshot")));
+    QVERIFY(!lateKinds.contains(QByteArrayLiteral("schema")));
+    QVERIFY(!lateKinds.contains(QByteArrayLiteral("object.create")));
+    QVERIFY(!lateKinds.contains(QByteArrayLiteral("snapshot.complete")));
+    QCOMPARE(clientModel.sliceById(sliceId), existingSlice);
+    const QList<PanadapterModel*> refreshedPans = clientModel.panadapters();
+    QVERIFY(!refreshedPans.isEmpty());
+    QCOMPARE(refreshedPans.first(), existingPan);
+    QCOMPARE(completed.count(), 1);
+    QCOMPARE(authenticated.count(), 1);
+    QCOMPARE(mediaStarted.count(), 1);
+}
+
 // ── Version policy ───────────────────────────────────────────────────────
 
+// The replacement race uses the same real session boundary as the ordinary
+// loopback coverage above.
+void TstStationSession::queuedLateRadioRefreshDoesNotReachReplacementSession()
+{
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(
+        settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+
+    auto stationModel = makeStationRadioModel(0);
+    stationModel->setConnectionStateForTest(ConnectionState::Disconnected);
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+
+    RadioModel oldClientModel(RadioModel::Role::Remote);
+    SettingsProxy oldProxy;
+    StationClient oldClient(&oldClientModel, &oldProxy);
+    auto* oldStationEnd = new LoopbackTransport(QStringLiteral("old-station-end"), this);
+    auto* oldClientEnd = new LoopbackTransport(QStringLiteral("old-client-end"), this);
+    oldStationEnd->linkTo(oldClientEnd);
+    QSignalSpy oldCompleted(&oldClient, &StationClient::handshakeComplete);
+    oldClient.startSession(oldClientEnd, server.token());
+    server.acceptTransport(oldStationEnd);
+    QTRY_COMPARE(oldCompleted.count(), 1);
+    oldClientEnd->clearReceived();
+
+    // The deferred callback captures the old session here. Before its timer
+    // may run, synchronously authenticate a replacement transport. This is
+    // the reentrant boundary that a normal queued socket cannot reach in one
+    // test turn, and it pins the epoch check against a replacement session.
+    stationModel->setConnectionStateForTest(ConnectionState::Connected);
+    stationModel->emitCurrentRadioChangedForTest();
+
+    auto* replacementStation =
+        new ImmediateTransport(QStringLiteral("replacement-station"), this);
+    auto* replacementClient =
+        new ImmediateTransport(QStringLiteral("replacement-client"), this);
+    replacementStation->linkTo(replacementClient);
+    server.acceptTransport(replacementStation);
+    replacementClient->sendText(SessionMessages::encode(
+        SessionMessages::hello(kSessionProtocolMajor, kSessionProtocolMinor, 6,
+                               QStringLiteral("replacement-client"))));
+    replacementClient->sendText(
+        SessionMessages::encode(SessionMessages::authRequest(server.token())));
+
+    QTRY_VERIFY(replacementClient->receivedKinds().contains(
+        QByteArrayLiteral("snapshot.complete")));
+    QTRY_VERIFY(oldClientEnd->receivedKinds().contains(QByteArrayLiteral("session.end")));
+
+    const QList<QByteArray> replacementKinds = replacementClient->receivedKinds();
+    QCOMPARE(replacementKinds.count(QByteArrayLiteral("capabilities")), 1);
+    QCOMPARE(replacementKinds.count(QByteArrayLiteral("settings.snapshot")), 1);
+    const QList<QByteArray> oldKinds = oldClientEnd->receivedKinds();
+    QVERIFY(!oldKinds.contains(QByteArrayLiteral("capabilities")));
+    QVERIFY(!oldKinds.contains(QByteArrayLiteral("settings.snapshot")));
+    QCOMPARE(oldCompleted.count(), 1);
+}
+
+// Version policy (task 18 step 1)
 void TstStationSession::majorVersionMismatchRefusesNamingBothVersions()
 {
     QTemporaryDir settingsDir;

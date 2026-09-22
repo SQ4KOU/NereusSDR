@@ -64,6 +64,7 @@ mw0lge@grange-lane.co.uk
 #include <QUdpSocket>
 #include <QTimer>
 #include <QMap>
+#include <QMutex>
 #include <QMetaType>
 #include <QSet>
 #include <QStringList>
@@ -229,7 +230,7 @@ public:
     // The holdOffScans deadline is process-wide (see s_scanHoldOff), so it
     // survives across test functions and would defer probes in unrelated
     // cases. Call from a QTest init() for a clean slate.
-    static void clearHoldOffForTest() { s_scanHoldOff = QDeadlineTimer(); }
+    static void clearHoldOffForTest();
 #endif
 
     // Public static parsers — exposed for unit-testing in Task 5.
@@ -301,6 +302,8 @@ private:
     // source, so clock synchronisation cannot shorten a radio-safety interval
     // or wedge discovery.
     static QDeadlineTimer s_scanHoldOff;
+    static QMutex s_scanHoldOffMutex;
+    bool scanCancelled() const;
 
     // Per-instance: stops a burst of startDiscovery() calls on THIS object
     // from queueing multiple delayed scans.

@@ -566,10 +566,13 @@ private slots:
         QTRY_COMPARE(countControl(inbound, QStringLiteral("context")), 2);
         QCOMPARE(countControl(inbound, QStringLiteral("rejected")), 0);
 
-        station.setConnectionStateForTest(ConnectionState::Disconnected);
+        station.setConnectionStateForTest(ConnectionState::LinkLost);
         QTRY_COMPARE(gui.activeEndpointCount(), 0);
+        QTRY_COMPARE(daemon.activeEndpointCount(), 0);
         QVERIFY(first->spectrumWidget()->renderedPixels().isEmpty());
         QVERIFY(second->spectrumWidget()->renderedPixels().isEmpty());
+        station.setConnectionStateForTest(ConnectionState::Disconnected);
+        QCOMPARE(daemon.activeEndpointCount(), 0);
         station.setConnectionStateForTest(ConnectionState::Connected);
         QTRY_COMPARE(daemon.activeEndpointCount(), 2);
         QTRY_VERIFY_WITH_TIMEOUT(bothHaveFrames(), 5000);
