@@ -6151,6 +6151,7 @@ nereus_add_test(tst_wideband_fft_engine)
 # preserves detector-specific bandwidth normalization without GUI dependencies.
 nereus_add_test(tst_wideband_display_reference)
 nereus_add_test(tst_extended_spectrum_reducer)
+nereus_add_test(tst_wideband_spectrum_cache)
 
 # Phase 3F Sub-Epic F Tasks 8 + 9 (finished 2026-08-08): extended-pan
 # listenable-island geometry + wideband wing fill. Closes the bench report

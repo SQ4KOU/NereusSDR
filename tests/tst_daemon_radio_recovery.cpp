@@ -7,6 +7,7 @@
 #include <QScopeGuard>
 #include <QTimer>
 #include <atomic>
+#include <chrono>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -15,6 +16,7 @@
 #include "core/RadioConnection.h"
 #include "core/P2RadioConnection.h"
 #include "core/WidebandFrameAccumulator.h"
+#include "core/WidebandFftEngine.h"
 #include "core/WdspEngine.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -230,6 +232,17 @@ private slots:
         }, Qt::BlockingQueuedConnection));
         QTRY_COMPARE(widebandFrames.count(), 1);
 
+        const auto firstWideband = model->latestWidebandSpectrum(0);
+        QVERIFY(firstWideband);
+        QCOMPARE(firstWideband->source.physicalAdcIndex, 0);
+        QCOMPARE(firstWideband->source.adcRateHz, 122880000.0);
+        QVERIFY(firstWideband->source.sourceGeneration != 0);
+        QVERIFY(firstWideband->producedAtNs > 0);
+        QCOMPARE(firstWideband->rawDbBins.size(), WidebandFftEngine::kOutputBins);
+        QVERIFY(!model->latestWidebandSpectrum(1));
+        QVERIFY(!model->widebandAdcRateHz(-1));
+        QVERIFY(!model->widebandAdcRateHz(2));
+
         // A still-connected radio can also retire an ADC capture. A row
         // queued before disable/re-enable must not enter the next capture.
         widebandFrames.clear();
@@ -243,6 +256,9 @@ private slots:
             freshP2->setWidebandEnabled(0, false);
             freshP2->setWidebandEnabled(0, true);
         }, Qt::BlockingQueuedConnection));
+        // The owner-thread retirement notification is still queued. A read
+        // must already refuse the old cached frame using the retained token.
+        QVERIFY(!model->latestWidebandSpectrum(0));
         release.release();
         QMetaObject::invokeMethod(blocker, [&]() {
             frameProcessed.release();
@@ -271,6 +287,49 @@ private slots:
         }, Qt::BlockingQueuedConnection));
         QTRY_COMPARE(widebandFrames.count(), 1);
 
+        const auto renewed = model->latestWidebandSpectrum(0);
+        QVERIFY(renewed);
+        QVERIFY(renewed->source.sourceGeneration > firstWideband->source.sourceGeneration);
+
+        // Geometry changes retire both cached rows and frames waiting before
+        // FFT, even if the configured rate is changed back before dispatch.
+        widebandFrames.clear();
+        QMetaObject::invokeMethod(blocker, [&]() {
+            entered.release();
+            release.acquire();
+        }, Qt::QueuedConnection);
+        QVERIFY(entered.tryAcquire(1, 1000));
+        QVERIFY(QMetaObject::invokeMethod(freshP2, [freshP2]() {
+            feedWidebandBurst(freshP2);
+        }, Qt::BlockingQueuedConnection));
+        model->widebandFftEngine(0)->setAdcSampleRateHz(61440000.0);
+        model->widebandFftEngine(0)->setAdcSampleRateHz(122880000.0);
+        QVERIFY(!model->latestWidebandSpectrum(0));
+        release.release();
+        QMetaObject::invokeMethod(blocker, [&]() { frameProcessed.release(); }, Qt::QueuedConnection);
+        QVERIFY(frameProcessed.tryAcquire(1, 1000));
+        QCoreApplication::processEvents();
+        QCOMPARE(widebandFrames.count(), 0);
+
+        // Host production time predates FFT queueing; it cannot be refreshed
+        // merely because a blocked worker eventually finishes the transform.
+        QMetaObject::invokeMethod(blocker, [&]() {
+            entered.release();
+            release.acquire();
+        }, Qt::QueuedConnection);
+        QVERIFY(entered.tryAcquire(1, 1000));
+        QVERIFY(QMetaObject::invokeMethod(freshP2, [freshP2]() {
+            feedWidebandBurst(freshP2);
+        }, Qt::BlockingQueuedConnection));
+        const qint64 beforeRelease = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        release.release();
+        QTRY_COMPARE(widebandFrames.count(), 1);
+        const auto delayed = model->latestWidebandSpectrum(0);
+        QVERIFY(delayed);
+        QVERIFY(delayed->producedAtNs <= beforeRelease);
+        QVERIFY(delayed->source.sourceGeneration > renewed->source.sourceGeneration);
+
         // Complete another FFT while the owner thread is synchronously
         // waiting. Its publication is now queued here but not delivered.
         // Retiring the connection must also reject this later race window.
@@ -282,7 +341,18 @@ private slots:
             frameProcessed.release();
         }, Qt::QueuedConnection));
         QVERIFY(frameProcessed.tryAcquire(1, 1000));
+        int retirementNotifications = 0;
+        bool retiredSourceOffered = false;
+        connect(model, &RadioModel::widebandSourceChanged, model, [&](int) {
+            ++retirementNotifications;
+            retiredSourceOffered |= model->widebandAdcRateHz(0).has_value()
+                || model->widebandAdcRateHz(1).has_value();
+        }, Qt::DirectConnection);
         model->disconnectFromRadio();
+        QVERIFY(retirementNotifications > 0);
+        QVERIFY(!retiredSourceOffered);
+        QVERIFY(!model->latestWidebandSpectrum(0));
+        QVERIFY(!model->widebandAdcRateHz(0));
         QCoreApplication::processEvents();
         QCOMPARE(widebandFrames.count(), 0);
         app.stop();

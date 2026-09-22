@@ -440,8 +440,17 @@ reinterpret `FftTier::Wide` or transmit unrestricted full FFT arrays.
   detectors with and without a visible DDC island. The compositor is not yet
   connected to remote endpoints. The
   122.88 MHz geometry remains the explicit existing Thetis reference, not a
-  negotiated P2 rate or a new per-ADC calibration. Capture/demand, remote
-  transport, GUI admission and hardware acceptance remain open. Task 6's
+  negotiated P2 rate or a new per-ADC calibration. Tagged publication now
+  retains one latest frame per physical ADC with connection/capture/geometry
+  identity and a capture timestamp recorded before FFT dispatch. Seven focused
+  targets pass; consolidated review added a regression for retiring availability
+  before teardown notifications. That regression and worker lifetime pass
+  after correction. The combined GUI/Core/test build succeeds; the unfiltered
+  suite passes 723/725 executables, with the same two native microphone-open
+  timeouts recorded at the preceding checkpoint (R-R3-36 remains open).
+  Separate ADC capture versus filter-chain
+  bypass demand, remote transport, GUI admission and hardware acceptance
+  remain open. Task 6's
   missing session allocator is now an explicit acceptance dependency.
 - [ ] Carry Core-produced, calibrated wideband display data through the
   authenticated session under the existing datagram and session budgets.

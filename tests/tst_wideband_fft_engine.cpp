@@ -16,6 +16,26 @@ using namespace NereusSDR;
 class TestWidebandFftEngine : public QObject {
     Q_OBJECT
 private slots:
+    void geometry_snapshot_keeps_rate_and_identity_together()
+    {
+        WidebandFftEngine engine;
+        QSignalSpy changes(&engine, &WidebandFftEngine::geometryChanged);
+        const auto original = engine.geometry();
+        engine.setAdcSampleRateHz(original->adcRateHz);
+        QCOMPARE(changes.count(), 0);
+        QCOMPARE(engine.geometry(), original);
+        engine.setAdcSampleRateHz(original->adcRateHz / 2.0);
+        const auto changed = engine.geometry();
+        QCOMPARE(changes.count(), 1);
+        QVERIFY(changed->generation != original->generation);
+        QCOMPARE(changed->adcRateHz, original->adcRateHz / 2.0);
+        QCOMPARE(engine.binSpacingHz(), changed->adcRateHz / WidebandFftEngine::kFftSize);
+        engine.setAdcSampleRateHz(original->adcRateHz);
+        QCOMPARE(changes.count(), 2);
+        QVERIFY(engine.geometry()->generation != original->generation);
+        QCOMPARE(original->adcRateHz, 122880000.0); // retained snapshot is immutable
+    }
+
     // The engine consumes one capture (16384 samples, all the FPGA's FIFO
     // holds) and zero-pads it to a longer transform, so the bin COUNT is set
     // by the padded length, not the capture length.

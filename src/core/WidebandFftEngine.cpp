@@ -8,6 +8,9 @@
 // =================================================================
 #include "core/WidebandFftEngine.h"
 
+#include <limits>
+#include <chrono>
+
 #include <algorithm>
 #include <cmath>
 
@@ -44,13 +47,34 @@ WidebandFftEngine::~WidebandFftEngine()
     }
 }
 
+void WidebandFftEngine::setAdcSampleRateHz(double rateHz)
+{
+    auto current = geometry();
+    for (;;) {
+        if (current->adcRateHz == rateHz) {
+            return;
+        }
+        const quint64 next = current->generation == std::numeric_limits<quint64>::max()
+            ? quint64(1) : current->generation + quint64(1);
+        const qint64 configuredAtNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        auto updated = std::make_shared<const Geometry>(Geometry{rateHz, next, configuredAtNs});
+        if (std::atomic_compare_exchange_weak_explicit(&m_geometry, &current, updated,
+                                                       std::memory_order_acq_rel,
+                                                       std::memory_order_acquire)) {
+            emit geometryChanged();
+            return;
+        }
+    }
+}
+
 // Spacing of the bins we hand out, which after zero-padding is FINER than
 // the resolution they represent. Callers mapping bin index to frequency want
 // this; callers reasoning about resolvability want adcRateHz /
 // kCaptureSamples, which is 4x larger.
 double WidebandFftEngine::binWidthHz() const
 {
-    return m_adcRateHz / double(kFftSize);
+    return adcSampleRateHz() / double(kFftSize);
 }
 
 // Hann window.

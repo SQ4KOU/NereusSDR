@@ -290,7 +290,9 @@ P2RadioConnection::P2RadioConnection(QObject* parent)
             // generation under which its assembler emitted it.
             const quint64 captureGeneration =
                 m_wbCaptureEpochs[i]->load(std::memory_order_acquire);
-            emit widebandFrameReadyForGeneration(i, captureGeneration, samples);
+            const qint64 producedAtNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count();
+            emit widebandFrameReadyForGeneration(i, captureGeneration, samples, producedAtNs);
             emit widebandFrameReady(i, samples);
         });
     }
@@ -1377,6 +1379,8 @@ void P2RadioConnection::setWidebandEnabled(int adcIndex, bool on)
     advanceWidebandCaptureEpoch(adcIndex);
     m_wbAccumulators[adcIndex]->discardPartialFrame();
     m_wbEnableMask = newMask;
+    emit widebandCaptureRetired(adcIndex,
+        m_wbCaptureEpochs[adcIndex]->load(std::memory_order_acquire));
     if (m_state == ConnectionState::Connected) {
         sendCmdGeneral();
     }
@@ -1421,6 +1425,10 @@ void P2RadioConnection::discardWidebandFrames()
     advanceAllWidebandCaptureEpochs();
     for (WidebandFrameAccumulator* accumulator : m_wbAccumulators) {
         accumulator->discardPartialFrame();
+    }
+    for (int adc = 0; adc < int(m_wbCaptureEpochs.size()); ++adc) {
+        emit widebandCaptureRetired(adc,
+            m_wbCaptureEpochs[adc]->load(std::memory_order_acquire));
     }
 }
 

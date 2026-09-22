@@ -20,6 +20,7 @@
 
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <memory>
 
 using namespace NereusSDR;
@@ -79,13 +80,19 @@ private slots:
         QSignalSpy legacy(&conn, &P2RadioConnection::widebandFrameReady);
 
         const QByteArray payload(1024, char(0x20));
+        const auto before = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
         for (int seq = 0; seq < 32; ++seq) {
             accumulators.at(0)->pushPacket(seq, payload);
         }
+        const auto after = std::chrono::duration_cast<std::chrono::nanoseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
 
         QCOMPARE(tagged.count(), 1);
         QCOMPARE(tagged.first().at(0).toInt(), 0);
         QCOMPARE(tagged.first().at(1).toULongLong(), expected);
+        QVERIFY(tagged.first().at(3).toLongLong() >= before);
+        QVERIFY(tagged.first().at(3).toLongLong() <= after);
         const QVector<float> samples =
             tagged.first().at(2).value<QVector<float>>();
         QCOMPARE(samples.size(), 16384);
@@ -118,6 +125,21 @@ private slots:
         QVERIFY(adc0Disabled != adc0Enabled);
         conn.setWidebandEnabled(0, true);
         QVERIFY(adc0->load(std::memory_order_acquire) != adc0Disabled);
+    }
+
+    void retirement_observer_sees_committed_mask_and_can_enable_another_adc()
+    {
+        P2RadioConnection conn;
+        connect(&conn, &P2RadioConnection::widebandCaptureRetired, &conn,
+                [&](int adc, quint64 generation) {
+            QCOMPARE(generation, conn.widebandCaptureEpoch(adc)->load(std::memory_order_acquire));
+            if (adc == 0) {
+                QCOMPARE(conn.wbEnableMask(), quint8(1));
+                conn.setWidebandEnabled(1, true);
+            }
+        });
+        conn.setWidebandEnabled(0, true);
+        QCOMPARE(conn.wbEnableMask(), quint8(3));
     }
 
     void restarting_capture_discards_the_old_partial_frame()

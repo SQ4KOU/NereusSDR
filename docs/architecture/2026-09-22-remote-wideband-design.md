@@ -307,13 +307,44 @@ transmit permission or menu redesign is part of this contract.
   capture. Direct observer reentrancy and retained tokens after destruction
   are covered. Five freshly built focused targets pass (18.14 seconds): P2
   enable/tagging, established silence, marshalling, actual daemon recovery and
-  wideband worker lifetime. This is capture-to-model retirement; the bounded
-  latest-frame descriptor and remote endpoint generation are still pending.
-- [ ] Tagged source/demand, negotiated endpoint, GUI parity, combined full
-  suite and native/hardware acceptance remain pending. This checkpoint is
-  not deployed. The installed software remains `55e7d49f`.
+  wideband worker lifetime. This establishes capture-to-model retirement.
+- [x] Add an owner-thread, bounded latest-frame cache for each physical ADC.
+  The descriptor carries connection, capture and geometry identity, a nonzero
+  source generation and the configured ADC rate. P2 timestamps a completed
+  capture before dispatch; worker delay cannot make an old capture appear new.
+  Immutable geometry snapshots reject captures queued across a rate change,
+  including a change back to the original rate. Invalid shape, nonfinite bins,
+  obsolete identity and backwards timestamps cannot replace a valid latest row.
+  Availability and cache reads check retained capture tokens even before an
+  asynchronous retirement notification reaches the model. Legacy local rows
+  retain their existing shape and relative level reference.
+  Seven freshly built focused targets pass (51.14 seconds; build-start load
+  1.03 / 1.39 / 2.63). They cover the cache, FFT geometry, P2 tagging, daemon
+  recovery, worker lifetime, marshalling and the no-GUI Core guard. Consolidated
+  source/lifetime review found one reentrant teardown gap: notification could
+  briefly expose the retiring source's availability. A regression reproduced
+  the failure; both source tokens now retire before either notification.
+  The two rebuilt correction targets pass (50.38 seconds): actual daemon
+  recovery and wideband worker lifetime. Private evidence:
+  `r3-wideband-source-tests.log` and
+  `r3-wideband-source-retirement-{red,green}-{build,test}.log`.
+- [x] Rebuild the matching `NereusSDR`, `nereusd` and `all_tests` targets,
+  then run the unfiltered suite: **723/725 executables passed in 312.86
+  seconds** (build-start load 1.38 / 1.34 / 1.90). The two failures are the
+  unchanged native microphone-open timeouts in `tst_port_audio_bus` and
+  `tst_audio_engine_speakers_live_reconfig`, both at 120 seconds, also present
+  at the preceding receiver-layout checkpoint. Source/cache and actual daemon
+  recovery checks pass. This records a completed verification run, not a
+  passing full-suite gate. No timeout or test was weakened or excluded; the
+  separate R-R3-36 native capture-startup gap remains open. Private evidence:
+  `r3-wideband-source-final-{build,tests,load}.log`.
+- [ ] Separately aggregated physical-ADC capture and filter-chain bypass
+  demand, negotiated endpoints, GUI parity and native/hardware acceptance
+  remain pending. Real Saturn cadence still determines the freshness policy;
+  no TTL has been guessed. The source cache is not connected to remote display
+  endpoints. This checkpoint is not deployed; the installed software remains
+  `55e7d49f`.
 
-The full suite is deliberately serialized with the parallel WDSP integration;
-focused success is not recorded as full R3 acceptance. The helper is a direct
-small extraction reviewed by the lead; the integrated source/lifetime/media
-boundary receives the single substantive review specified above.
+The WDSP integration is included in the combined build. Focused success does
+not establish full R3 acceptance. The source/lifetime boundary received one
+consolidated independent review; endpoint and hardware acceptance remain open.

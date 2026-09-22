@@ -38,6 +38,8 @@
 #include <QVector>
 
 #include <vector>
+#include <atomic>
+#include <memory>
 
 #include <fftw3.h>
 
@@ -56,7 +58,19 @@ public:
 
     /// Configure the ADC geometry rate for bin spacing and noise bandwidth;
     /// the FFT plan itself is rate-agnostic. This is not P2 negotiation.
-    void setAdcSampleRateHz(double rateHz) { m_adcRateHz = rateHz; }
+    void setAdcSampleRateHz(double rateHz);
+
+    struct Geometry {
+        double adcRateHz{122880000.0};
+        quint64 generation{1};
+        qint64 configuredAtNs{0};
+    };
+    /// One immutable pair, safe to capture before the FFT thread hop.
+    std::shared_ptr<const Geometry> geometry() const
+    {
+        return std::atomic_load_explicit(&m_geometry, std::memory_order_acquire);
+    }
+    double adcSampleRateHz() const { return geometry()->adcRateHz; }
 
     /// Analysis-window figures, shared by every instance because the window
     /// is a pure function of kCaptureSamples. Static so the display side can
@@ -78,10 +92,10 @@ public:
     /// the window ENB). Zero-padding drives these apart on purpose: the
     /// first governs where a bin sits, the second governs how much noise is
     /// in it.
-    double binSpacingHz() const { return m_adcRateHz / double(kFftSize); }
+    double binSpacingHz() const { return adcSampleRateHz() / double(kFftSize); }
     double noiseBandwidthHz() const
     {
-        return (m_adcRateHz / double(kCaptureSamples)) * windowEnbBins();
+        return (adcSampleRateHz() / double(kCaptureSamples)) * windowEnbBins();
     }
 
     /// Per-bin frequency width (Hz). Equals adcRateHz / kFftSize.
@@ -120,11 +134,16 @@ public:
     static constexpr int kFftSize    = 65536;
     static constexpr int kOutputBins = kFftSize / 2;
 
+signals:
+    void geometryChanged();
+
 private:
     /// The Hann window, built once and shared.
     static const std::vector<float>& window();
 
-    double         m_adcRateHz {122880000.0};
+    // Use shared_ptr's atomic free functions for the supported libc++ builds
+    // that do not yet provide atomic<shared_ptr<T>>.
+    std::shared_ptr<const Geometry> m_geometry{std::make_shared<const Geometry>()};
     fftwf_plan     m_plan      {nullptr};
     float*         m_input     {nullptr};
     fftwf_complex* m_output    {nullptr};

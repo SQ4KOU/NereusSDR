@@ -368,7 +368,10 @@ signals:
     // widebandCaptureEpoch() token before and after asynchronous processing.
     void widebandFrameReadyForGeneration(int adcIndex,
                                          quint64 captureGeneration,
-                                         QVector<float> samples);
+                                         QVector<float> samples,
+                                         qint64 producedAtNs);
+    /// Invalidates already-published survey data as well as queued FFT work.
+    void widebandCaptureRetired(int adcIndex, quint64 captureGeneration);
 
 private slots:
     void onReadyRead();

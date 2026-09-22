@@ -72,6 +72,7 @@
 
 #include "core/ConnectionState.h"
 #include "core/ReceiveLayoutStore.h"
+#include "core/spectrum/WidebandSpectrumCache.h"
 #include "core/PgxlConnection.h"
 #include "core/Rf2ksConnection.h"
 #include "core/TgxlConnection.h"
@@ -580,6 +581,15 @@ public:
     NereusSDR::WidebandFftEngine* widebandFftEngine(int adc) const {
         return (adc >= 0 && adc < 2) ? m_widebandFftEngines[adc] : nullptr;
     }
+
+    /// Configured Thetis/local RF geometry, not a measured P2 sample rate.
+    /// An unsupported/offline source or invalid rate has no offer.
+    std::optional<double> widebandAdcRateHz(int adc) const;
+    /// Owner-thread snapshots. Retired capture/configuration tokens are
+    /// checked on reads as well as publication, including before queued
+    /// retirement notifications have reached this model.
+    std::optional<WidebandSourceDescriptor> widebandSourceDescriptor(int adc) const;
+    std::optional<WidebandSpectrumFrame> latestWidebandSpectrum(int adc) const;
 
     /// R1 Task 11: injectable target for the wideband FFT dispatch hop
     /// wired inside wireConnectionSignals (P2RadioConnection::
@@ -2844,10 +2854,12 @@ signals:
     void receiveLayoutRestoreStatusChanged();
 
     /// Phase 3F Sub-Epic F Task 5: emitted after the per-ADC wideband FFT
-    /// completes.  adcIndex is 0 or 1; dbmBins is 8192 entries (kOutputBins
+    /// completes.  adcIndex is 0 or 1; dbmBins is 32768 raw dB entries (kOutputBins
     /// from WidebandFftEngine).  SpectrumWidget consumes this in extended
     /// pan rendering; visual paint wires in Sub-Epic F polish (T7-T10).
     void widebandSpectrumReady(int adcIndex, QVector<float> dbmBins);
+    void widebandSourceChanged(int adcIndex);
+    void widebandSpectrumAvailable(int adcIndex, quint32 sourceGeneration);
     // Phase 3F Sub-Epic C Task 7: emitted when addSliceOnPan rejects a
     // request because the maxSlices() cap has been reached.  Status-bar /
     // toast subscribers wire to this signal in Sub-Epic C Tasks 8-9.
@@ -3866,6 +3878,9 @@ private:
     // Indexed by adcIndex (0 or 1). Constructed in the RadioModel ctor with
     // a default 122.88 MHz ADC sample rate. Owned via QObject parent.
     std::array<NereusSDR::WidebandFftEngine*, 2> m_widebandFftEngines{};
+    WidebandSpectrumCache m_widebandSpectrumCache;
+    std::array<std::shared_ptr<const std::atomic<quint64>>, 2> m_widebandCaptureEpochs{};
+    void invalidateWidebandSpectrum(int adc);
 
     // R1 Task 11: connection-context anchor for the wideband FFT dispatch
     // hop inside wireConnectionSignals -- a bare QObject used only for its
@@ -3879,7 +3894,7 @@ private:
     // RadioModel -- identical to the pre-Task-11 `this` context it
     // replaces in wireConnectionSignals.
     QObject m_widebandDispatchContext;
-    std::atomic<quint64> m_widebandConnectionEpoch {0};
+    std::atomic<quint64> m_widebandConnectionEpoch {1};
 
     // Band-plan overlay manager — app-global, loaded once from Qt resources.
     // Phase 3G RX Epic sub-epic D.
