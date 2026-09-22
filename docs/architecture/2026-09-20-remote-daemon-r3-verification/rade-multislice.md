@@ -60,6 +60,12 @@ unchanged clock test in 148.38 seconds. No tests were excluded or weakened.
 Matching native Core and GUI installation follows this signed source checkpoint.
 Hardware acceptance remains pending.
 
+The first native build of `aed2278f` found a compile-only configuration defect:
+the moved `attachDspWorkerForTest` definition lacked the test-build guard already
+present on its declaration. The following corrective checkpoint restores that
+guard without changing runtime behavior. The failed native build was never
+installed; the native build and matching GUI are regenerated after correction.
+
 Focused build/run targets are `tst_rade_rx_multislice_routing`,
 `tst_rade_channel`, `tst_audio_engine_rade`, `tst_rade_channel_model_wiring` and
 `tst_stream_pool_binding`, plus affected mixer/lifecycle coverage. Final checks

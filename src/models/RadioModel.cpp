@@ -5874,10 +5874,12 @@ void RadioModel::attachRadeRxWorker(RxDspWorker* worker)
                        m_radeRxTarget.workerGeneration);
 }
 
+#ifdef NEREUS_BUILD_TESTS
 void RadioModel::attachDspWorkerForTest(RxDspWorker* worker)
 {
     attachRadeRxWorker(worker);
 }
+#endif
 
 quint64 RadioModel::publishRadeRxTarget(int sliceId, RadeChannel* channel,
                                         SliceModel* slice)
