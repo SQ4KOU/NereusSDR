@@ -512,11 +512,15 @@ advertising it. Preserve explicit operator add/layout operations after hydrate.
   concrete handler/property and acceptance case. Trace generic mirrored DSP
   setters before labelling them broken; the observed FIR-graph gap is a local
   visualization dependency, not evidence that all DSP settings fail.
-- [ ] Wire Tools → Network Diagnostics to the existing
-  `MainWindow::openNetworkDiagnostics()` role-aware handler. The status segment
-  already opens the implemented local/remote dialog, but the Tools entry is
-  still disabled with an obsolete "NYI — Phase X" tooltip. Verify the real
-  menu action reaches the appropriate dialog without changing connection state.
+- [x] Wire Tools → Network Diagnostics to the existing
+  `MainWindow::openNetworkDiagnostics()` role-aware handler. The Tools entry
+  now opens the same local/remote dialog as the status segment. Production
+  QAction tests verify both routes without local discovery or connection
+  changes, and a disconnected remote session remains disconnected. The test
+  uses an isolated settings profile and the existing discovery holdoff;
+  production startup behavior is unchanged. Matching GUI/Core/all-tests builds
+  pass, followed by an unfiltered **727/727** desktop suite in **276.12 seconds**.
+  Operator acceptance remains below.
 - [ ] Complete task 4a's title/status/pan connection actions and persistent
   status. Keep automatic panel callbacks separate from explicit connect.
   Disable unavailable local-resource controls with a reason, and gate all
@@ -767,6 +771,17 @@ measurements. Never equate transport send acceptance with packet delivery.
   banner/all-three-tab readability and real restart/reconnect history gaps.
   R-R3-35 adds total/directional Core–GUI traffic, separate Opus/track kbps,
   and speaker-buffer ms. Audio soak and true end-to-end delay remain separate.
+- [ ] Define and implement measured Core-to-client audio latency. Record the
+  exact start/end timing points, cross-host clock relationship and measurement
+  uncertainty before labelling any graph as one-way latency. Distinguish
+  delivery to the client from actual speaker playback, retain unknown/stale
+  gaps, and validate against an independent timing measurement. Existing
+  control RTT and sampled PCM buffering do not satisfy this follow-on.
+- [ ] Operator checkpoint for the empty-state labels and diagnostics menu:
+  verify total/directional kbps or Mbps on Connection, separate Opus kbps on
+  Audio, and RTT versus speaker-buffer ms on Round trip / buffering, both
+  connected and disconnected. This remains pending installation of the current
+  source; previous live graph acceptance does not cover these later fixes.
 
 **Verification:** follow the design's codec/lifecycle, real collector,
 history, widget and live acceptance cases. Register and build focused tests
@@ -1086,6 +1101,13 @@ rules, configuration sample and the R3 verification ledger.
   above replaces the `isVisible()` heuristic. No total budget or
   focus-share values have yet been measured/selected; do not derive them from
   the single-pan 969-byte observation or the eight-endpoint admission cap.
+- [ ] Verify the budget against actual sender time, including rapid endpoint
+  replacement and context renewal. `SpectrumEndpoint::configure()` resets
+  per-endpoint cadence, so an admission sum alone cannot enforce the session's
+  sustained send rate. Define the burst allowance and preserve enforcement
+  state through reconfiguration within the same session. Distinguish spectrum
+  application bytes from full display-channel traffic, wire overhead and CPU
+  work; keep Opus independent. Numeric limits and allocation policy remain open.
 - [ ] Measure full-span/noise and deep-zoom cases with both FFT tiers, WDSP,
   stereo Opus and 3D enabled on the Rock 5C. Report actual effective limits;
   preserve the separate Pi 4 hardware-floor obligation until measured there.

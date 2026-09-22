@@ -7452,8 +7452,8 @@ void MainWindow::buildMenuBar()
 
     {
         QAction* netDiagAction = toolsMenu->addAction(QStringLiteral("&Network Diagnostics..."));
-        netDiagAction->setEnabled(false);
-        netDiagAction->setToolTip(QStringLiteral("NYI — Phase X"));
+        connect(netDiagAction, &QAction::triggered,
+                this, &MainWindow::openNetworkDiagnostics);
     }
     toolsMenu->addAction(QStringLiteral("&Support Bundle..."), this,
                          &MainWindow::showSupportDialog);

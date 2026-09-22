@@ -76,6 +76,25 @@ and Opus. Empty graphs now retain their existing series names, units and
 legend selection without synthesizing zero-valued samples. This is a GUI
 presentation correction; it adds no counters or audio-latency estimate.
 
+### Where the operator finds the measurements
+
+Open **Tools → Network Diagnostics** or click the **Core RTT** status segment.
+The menu and status segment use the same role-aware handler: a remote session
+opens Remote Network Diagnostics, and a direct-radio session opens its existing
+local diagnostics. Opening diagnostics must not connect, disconnect or retry a
+station session, including when the remote session is currently disconnected.
+
+| Tab | Graph | Units and accounting |
+| --- | --- | --- |
+| Connection | Total Core ↔ GUI application traffic | Core→GUI, GUI→Core and their sum, sharing adaptive kbps/Mbps units; includes Opus once |
+| Audio | Opus audio traffic received at GUI | Separate received audio-packet and validated Opus-payload series in kbps; both are subsets of total traffic |
+| Round trip / buffering | Round-trip time | Core control RTT and Core-to-radio RTT in ms, where measured |
+| Round trip / buffering | Client speaker buffering | Sampled client PCM queue in ms; not capture-to-playback latency |
+
+These application totals exclude encryption, transport framing and network/VPN
+overhead. Exact link usage is not measured by these counters. Keep the separate
+end-to-end audio timing work open; neither RTT nor half-RTT closes that gap.
+
 Fetched `ten9876/AetherSDR` upstream/main on September 21 and inspected
 `0dea0dd7d73e25a40c8c01d46873af5834e23921` in a detached source worktree.
 The user's Aether feature checkout was preserved.

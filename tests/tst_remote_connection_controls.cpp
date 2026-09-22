@@ -1,21 +1,30 @@
 // no-port-check: NereusSDR-original. Remote GUI connection and hydration boundaries.
 #include <QTest>
+#include <QCoreApplication>
+#include <QFile>
 #include <QLabel>
+#include <QMenu>
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTcpServer>
 #include <QWebSocketServer>
 #include <QSslSocket>
+
+#include <chrono>
+
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#include "core/RadioDiscovery.h"
 #include "core/session/IStationLink.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "core/settings/SettingsProxy.h"
 #include "gui/MainWindow.h"
 #include "gui/RemoteConnectionController.h"
+#include "gui/RemoteDiagnosticsDialog.h"
 #include "gui/RemoteMediaController.h"
+#include "gui/NetworkDiagnosticsDialog.h"
 #include "gui/TitleBar.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -51,9 +60,131 @@ public:
     CommandOutcome requestSliceSampleRate(int, int) override { return {}; }
 };
 
+class ScopedDiscoveryHoldOff final {
+public:
+    ScopedDiscoveryHoldOff()
+    {
+        RadioDiscovery::clearHoldOffForTest();
+        m_discovery.holdOffScans(std::chrono::minutes{5});
+    }
+
+    ~ScopedDiscoveryHoldOff()
+    {
+        RadioDiscovery::clearHoldOffForTest();
+    }
+
+private:
+    RadioDiscovery m_discovery;
+};
+
+class ScopedRemoteBackend final {
+public:
+    explicit ScopedRemoteBackend(ISettingsBackend* backend)
+    {
+        AppSettings::instance().setRemoteBackend(backend);
+    }
+
+    ~ScopedRemoteBackend()
+    {
+        AppSettings::instance().setRemoteBackend(nullptr);
+    }
+};
+
+QAction* networkDiagnosticsToolsAction(MainWindow& window)
+{
+    for (QMenu* menu : window.findChildren<QMenu*>()) {
+        if (menu->title() != QStringLiteral("&Tools")) { continue; }
+        for (QAction* action : menu->actions()) {
+            if (action->text() == QStringLiteral("&Network Diagnostics...")) {
+                return action;
+            }
+        }
+    }
+    return nullptr;
+}
+
 class TestRemoteConnectionControls : public QObject {
     Q_OBJECT
 private slots:
+    void initTestCase()
+    {
+        const QString profile = QStringLiteral("remote-connection-controls-%1")
+                                    .arg(QCoreApplication::applicationPid());
+        AppSettings::setProfileOverride(profile);
+        QCOMPARE(AppSettings::instance().filePath(), AppSettings::resolveSettingsPath(profile));
+        AppSettings::instance().clear();
+        QVERIFY(AppSettings::instance().save());
+        RadioDiscovery::clearHoldOffForTest();
+    }
+
+    void init()
+    {
+        AppSettings::instance().clear();
+        QVERIFY(AppSettings::instance().save());
+        RadioDiscovery::clearHoldOffForTest();
+    }
+
+    void cleanupTestCase()
+    {
+        const QString path = AppSettings::instance().filePath();
+        QFile::remove(path);
+        QFile::remove(path + QStringLiteral(".bak"));
+        RadioDiscovery::clearHoldOffForTest();
+    }
+
+    void toolsNetworkDiagnosticsActionRoutesWithoutChangingLocalConnection()
+    {
+        ScopedDiscoveryHoldOff holdOff;
+        MainWindow window;
+        RadioModel* const model = window.findChild<RadioModel*>();
+        RadioDiscovery* const discovery = window.findChild<RadioDiscovery*>();
+        QVERIFY(model);
+        QVERIFY(discovery);
+        QAction* const action = networkDiagnosticsToolsAction(window);
+        QVERIFY(action);
+        QVERIFY(action->isEnabled());
+
+        QSignalSpy connectionChanges(model, &RadioModel::connectionStateChanged);
+        QSignalSpy discoveryStarts(discovery, &RadioDiscovery::discoveryStarted);
+        QVERIFY(model->connection() == nullptr);
+        action->trigger();
+
+        QVERIFY(window.findChild<NetworkDiagnosticsDialog*>() != nullptr);
+        QCOMPARE(connectionChanges.count(), 0);
+        QCOMPARE(discoveryStarts.count(), 0);
+        QVERIFY(model->connection() == nullptr);
+    }
+
+    void toolsNetworkDiagnosticsActionRoutesDisconnectedRemoteWithoutRedial()
+    {
+        SettingsProxy proxy;
+        ScopedRemoteBackend remoteBackend(&proxy);
+        QTcpServer port;
+        QVERIFY(port.listen(QHostAddress::LocalHost, 0));
+        const quint16 unusedPort = port.serverPort();
+        port.close();
+
+        MainWindow window({QStringLiteral("ws://127.0.0.1:%1").arg(unusedPort), {}, {}, true});
+        RadioModel* const model = window.findChild<RadioModel*>();
+        StationClient* const client = window.findChild<StationClient*>();
+        QVERIFY(model && client);
+        QVERIFY(!model->ownsLocalDsp());
+        client->disconnectFromStation(QStringLiteral("test setup"));
+        QVERIFY(!client->isConnectionActive());
+        QVERIFY(!client->isReconnectPending());
+        const quint32 epoch = client->sessionEpoch();
+        QAction* const action = networkDiagnosticsToolsAction(window);
+        QVERIFY(action);
+        QVERIFY(action->isEnabled());
+        action->trigger();
+
+        QTRY_VERIFY(window.findChild<RemoteDiagnosticsDialog*>() != nullptr);
+        QCOMPARE(client->sessionEpoch(), epoch);
+        QVERIFY(!client->isConnectionActive());
+        QVERIFY(!client->isReconnectPending());
+        QVERIFY(model->connection() == nullptr);
+    }
+
     void remoteTitleIsClickableInEverySessionState()
     {
         ConnectionSegment segment;
