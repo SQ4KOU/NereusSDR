@@ -1929,12 +1929,6 @@ private:
                            double dbmOffset,
                            SpectrumDetector detector) const;
 
-    /// Divisor for a REAL transform's peak: a real sinusoid splits its
-    /// energy between +f and -f, and an r2c transform returns only the
-    /// positive half, so the peak sits at (sum w)/2 rather than (sum w).
-    /// This is the 6.02 dB between this path and the complex I/Q path's
-    /// convention at FFTEngine.cpp:484-486.
-    static constexpr float kWidebandRealFftPeakDivisor = 2.0f;
 
 
 

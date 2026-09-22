@@ -8,6 +8,7 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-22 J.J. Boyd / KG4VCF — share wing reference with Core (OpenAI Codex).
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -116,6 +117,7 @@
 #include "core/session/media/SpectrumEndpoint.h"
 #include "SpectrumOverlayMenu.h"
 #include "core/WidebandFftEngine.h"
+#include "core/spectrum/WidebandDisplayReference.h"
 #include "core/session/media/DssWideRow.h"
 #include "core/spectrum/SpectrumDetector.h"
 #include "ImdOverlay.h"
@@ -5564,100 +5566,26 @@ void SpectrumWidget::setWidebandBins(int adcIndex, const QVector<float>& dbmBins
     }
 }
 
-// -20*log10((sum w)/2): the peak bin of a real transform of a full-scale
-// sinusoid, once the analysis window is accounted for. Same convention the
-// I/Q path uses (FFTEngine.cpp:484-486, -20*log10(sum w)), adjusted by the
-// real-vs-complex split.
-//
-// Reads the window sum from the engine rather than assuming an unwindowed
-// block: WidebandFftEngine gained a Hann window on 2026-08-08, which halves
-// the coherent gain (about 6 dB). Hardcoding N here would have left the wings
-// that far out the moment the window landed, and would have to be revisited
-// again on any future window change. Blackman-Harris 7-term was tried the
-// same day and rejected on the bench for its 2.63-bin ENB; had it stayed, the
-// figure would have been about 24 dB rather than 6, which is the point of
-// reading it rather than writing it down.
+// Existing public display helpers delegate to the Core reference shared
+// with remote endpoint production. Arithmetic and source explanations live
+// in WidebandDisplayReference.cpp; local rendering and station offset
+// ownership are unchanged.
 float SpectrumWidget::widebandFftNormalisationDb()
 {
-    const double coherentPeak =
-        WidebandFftEngine::windowSum() / kWidebandRealFftPeakDivisor;
-    if (coherentPeak <= 0.0) { return 0.0f; }
-    return -20.0f * std::log10(static_cast<float>(coherentPeak));
+    return NereusSDR::widebandFftNormalisationDb();
 }
 
-// Refer a wideband bin to the DDC's bin width.
-//
-// Bench 2026-08-08: the wings saturated the panel even with the FFT
-// normalisation right. Both halves of the trace are showing noise, and noise
-// power in a bin scales with that bin's width -- so putting a 7500 Hz
-// wideband bin (122.88 MHz / 16384) next to a 47 Hz DDC bin (192 kHz / 4096)
-// without referring them to a common bandwidth overstates the wideband side
-// by 10*log10(7500/47) = 22 dB. That is the whole discrepancy: -78.27 dB
-// alone saturated, -124.39 dB fell through the floor, and the two brackets
-// straddle this value.
-//
-// Computed per frame rather than baked into a constant because BOTH widths
-// move: the DDC bin width follows the pan's FFT size and the radio's sample
-// rate, and the wideband bin width follows the ADC clock. A fixed number
-// would be correct for exactly one combination and silently wrong for the
-// rest.
-//
-// Same idea as the existing 1-Hz normalisation the DDC path already offers
-// (normalizeShiftDb, -10*log10(binWidthHz), Thetis SetDisplayNormOneHz at
-// specHPSDR.cs:325) — but applied only to the wings, and referred to the
-// island's bin rather than to 1 Hz, since the goal is for the two halves to
-// agree with each other.
-//
-// Note this is a power-DENSITY match, so it is the NOISE FLOORS either side
-// of the boundary that line up. A narrow carrier in a wing reads low by the
-// same factor; the wideband bin is 160x too coarse to resolve one anyway.
 float SpectrumWidget::widebandBandwidthNormalisationDb(
     SpectrumDetector detector) const
 {
-    // NOISE bandwidth on both sides, not bin spacing. The wideband transform
-    // is zero-padded, so its bins sit 4x closer together than the bandwidth
-    // each one integrates -- using the spacing here would under-correct by
-    // exactly that padding factor and put the wings 6 dB hot.
-    //
-    // The wing side is always a peak: fillWidebandWings takes a max over the
-    // bins under a pixel and the engine applies no detector of its own, so
-    // the window ENB stays in.
-    const double wbNoiseBwHz =
-        (m_widebandAdcRateHz
-         / static_cast<double>(WidebandFftEngine::kCaptureSamples))
-        * WidebandFftEngine::windowEnbBins();
-
-    // The island side depends on which detector produced it, which is what
-    // this argument is for.
-    //
-    // applySpectrumDetector is handed invEnb = 1 / m_fftWindowEnb, and only
-    // Average, Sample and RMS actually apply it (SpectrumDetector.cpp cases
-    // 2, 3 and 4 multiply by invEnb; the Peak and Rosenfell cases at 0 and 1
-    // take a max and never touch it). So under those three the island pixels
-    // have already had the window ENB divided out and their effective noise
-    // reference is the bare bin width; under Peak and Rosenfell the ENB is
-    // still in and the reference is binWidth * ENB.
-    //
-    // Using one reference for both left the wings high by exactly the DDC
-    // window ENB whenever a normalising detector was selected: about 1.8 dB
-    // on Hann, and near 5.8 dB on Flat-Top. Found by Codex on PR #318.
-    const bool detectorDividesOutEnb = (detector == SpectrumDetector::Average
-                                     || detector == SpectrumDetector::Sample
-                                     || detector == SpectrumDetector::RMS);
-    const double ddcNoiseBwHz = detectorDividesOutEnb
-        ? binWidthHz()
-        : binWidthHz() * qMax(m_fftWindowEnb, 1e-9);
-
-    if (wbNoiseBwHz <= 0.0 || ddcNoiseBwHz <= 0.0) {
-        return 0.0f;
-    }
-    return -10.0f * std::log10(static_cast<float>(wbNoiseBwHz / ddcNoiseBwHz));
+    return NereusSDR::widebandBandwidthNormalisationDb(
+        m_widebandAdcRateHz, binWidthHz(), m_fftWindowEnb, detector);
 }
 
 float SpectrumWidget::widebandTotalCalibrationDb(SpectrumDetector detector) const
 {
-    return widebandFftNormalisationDb()
-         + widebandBandwidthNormalisationDb(detector);
+    return NereusSDR::widebandRelativeReferenceDb(
+        m_widebandAdcRateHz, binWidthHz(), m_fftWindowEnb, detector);
 }
 
 void SpectrumWidget::setWidebandAdcIndex(int adcIndex)

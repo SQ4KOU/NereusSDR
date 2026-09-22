@@ -2,19 +2,21 @@
 // src/core/WidebandFftEngine.h  (NereusSDR)
 // =================================================================
 //
-// no-port-check: NereusSDR-original. FFTW3 real-to-complex 16384-pt
-// FFT engine for the P2 wideband ADC stream (Phase 3F Sub-Epic F).
+// no-port-check: NereusSDR-original. FFTW3 real-to-complex FFT engine
+// for the P2 wideband ADC stream (Phase 3F Sub-Epic F).
 //
 // One instance per ADC. Consumes 16384-sample float frames emitted
-// by WidebandFrameAccumulator and produces 8192 dBm-style bins
-// covering 0..(adcRateHz / 2). Bin width = adcRateHz / 16384
-// (7500 Hz at 122.88 MHz, 9375 Hz at 153.6 MHz).
+// by WidebandFrameAccumulator, zero-pads to 65536, and produces 32768 raw
+// dB bins covering the positive frequencies through adcRateHz / 2 (DC
+// dropped). Bin spacing = adcRateHz / 65536 (1875 Hz at 122.88 MHz).
+// Noise bandwidth still comes from the 16384 captured samples and Hann ENB.
 //
 // Why a separate engine rather than reusing FFTEngine: FFTEngine
 // is complex-input (I/Q) and rebuilds its plan around per-DDC
 // bandwidth (typically 48..384 kHz). Wideband is real-input at the
-// full ADC rate (122.88 / 153.6 / 245.76 MHz) with a fixed 16384-pt
-// plan. Separate class keeps both code paths small and avoids
+// full configured ADC rate with a fixed 65536-point plan. The current
+// production wiring uses the existing 122.88 MHz display reference, not
+// a rate negotiated over P2. Separate class keeps both code paths small and avoids
 // branching the existing complex FFT pipeline.
 //
 // See:
@@ -41,19 +43,19 @@
 
 namespace NereusSDR {
 
-/// Real-to-complex 16384-pt FFT engine for the P2 wideband ADC stream.
+/// Zero-padded real-to-complex FFT engine for the P2 wideband ADC stream.
 ///
 /// Input: 16384 normalized real samples (typically from
 /// WidebandFrameAccumulator::frameReady).
-/// Output: 8192 dBm-style bins (10 * log10(|c|^2)), DC bin dropped.
+/// Output: 32768 raw dB bins (10 * log10(|c|^2)), DC bin dropped.
 class WidebandFftEngine : public QObject {
     Q_OBJECT
 public:
     explicit WidebandFftEngine(QObject* parent = nullptr);
     ~WidebandFftEngine() override;
 
-    /// Configure the ADC sample rate. Used only by `binWidthHz()`;
-    /// the FFT plan itself is rate-agnostic.
+    /// Configure the ADC geometry rate for bin spacing and noise bandwidth;
+    /// the FFT plan itself is rate-agnostic. This is not P2 negotiation.
     void setAdcSampleRateHz(double rateHz) { m_adcRateHz = rateHz; }
 
     /// Analysis-window figures, shared by every instance because the window
@@ -83,11 +85,11 @@ public:
     }
 
     /// Per-bin frequency width (Hz). Equals adcRateHz / kFftSize.
-    /// Examples: 7500 Hz at 122.88 MHz, 9375 Hz at 153.6 MHz.
+    /// Example: 1875 Hz at the configured 122.88 MHz reference.
     double binWidthHz() const;
 
-    /// Compute FFT: real samples in, dBm-style bins out (size 8192
-    /// for the canonical 16384-sample input). Output is resized.
+    /// Compute FFT: real samples in, raw dB bins out (size kOutputBins
+    /// for the canonical kCaptureSamples input). Output is resized.
     /// If `realSamples.size() != kCaptureSamples`, the call is a no-op
     /// (callers must always pass a full frame).
     /// Note: dBm calibration constant (gain offset) deferred to the

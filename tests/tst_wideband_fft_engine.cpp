@@ -4,9 +4,8 @@
 // no-port-check: NereusSDR-original test infrastructure.
 //
 // Phase 3F Sub-Epic F Task 4: WidebandFftEngine wraps an FFTW3
-// 16384-point real-to-complex plan. Output: 8192 dBm-style bins
-// (real-to-complex produces N/2+1 = 8193 bins; we drop DC to leave
-// 8192 covering 0..(adcRateHz / 2) less the DC bin width).
+// 65536-point real-to-complex plan, zero-padded from 16384 samples.
+// Output: 32768 raw dB bins (FFTW r2c produces N/2+1 bins; DC is dropped).
 // Bin width = adcRateHz / kFftSize.
 // =================================================================
 #include <QtTest/QtTest>

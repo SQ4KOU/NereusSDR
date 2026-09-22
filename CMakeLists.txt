@@ -799,6 +799,7 @@ set(CORE_SOURCES
     src/core/SliceStreamAllocator.cpp
     src/core/WidebandFrameAccumulator.cpp
     src/core/WidebandFftEngine.cpp
+    src/core/spectrum/WidebandDisplayReference.cpp
     src/core/AudioDeviceConfig.cpp
     src/core/SampleRateCatalog.cpp
     src/core/SkuUiProfile.cpp

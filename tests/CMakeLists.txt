@@ -6112,11 +6112,15 @@ nereus_add_test(tst_p2_wideband_enable_byte)
 # Design: docs/architecture/2026-05-26-phase3f-sub-epic-f-wideband-plan.md Task 2.
 nereus_add_test(tst_wideband_frame_accumulator)
 
-# Phase 3F Sub-Epic F Task 4: WidebandFftEngine wraps an FFTW3 16384-pt
-# real-to-complex plan. Output is 8192 dBm-style bins (N/2+1 less DC).
+# Phase 3F Sub-Epic F Task 4: WidebandFftEngine zero-pads 16384 real samples
+# into a 65536-point transform. Output is 32768 raw dB bins (DC dropped).
 # Source: NereusSDR-original test for a NereusSDR-original class.
 # Design: docs/architecture/2026-05-26-phase3f-sub-epic-f-wideband-plan.md Task 4.
 nereus_add_test(tst_wideband_fft_engine)
+
+# R3 Task 4b: the shared Core/local reference consumes real FFT output and
+# preserves detector-specific bandwidth normalization without GUI dependencies.
+nereus_add_test(tst_wideband_display_reference)
 
 # Phase 3F Sub-Epic F Tasks 8 + 9 (finished 2026-08-08): extended-pan
 # listenable-island geometry + wideband wing fill. Closes the bench report
