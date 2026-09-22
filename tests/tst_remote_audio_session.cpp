@@ -11,6 +11,7 @@
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/HpsdrModel.h"
+#include "core/session/SessionMessages.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "core/session/media/DaemonMediaController.h"
@@ -34,6 +35,47 @@ namespace {
 
 constexpr int kFrames = 480;
 constexpr double kPi = 3.14159265358979323846;
+
+// Rewrites the protocol minor inside the Hello this end sends. Installed on
+// both ends, it makes a current Core and a current GUI each believe the other
+// speaks that minor, so a minor-7 peer can be exercised without any
+// production test hook.
+class HelloMinorTransport final : public Test::LoopbackTransport {
+public:
+    HelloMinorTransport(const QString& description, quint16 minor)
+        : LoopbackTransport(description), m_minor(minor) {}
+
+    void sendText(const QByteArray& wire) override
+    {
+        SessionMessage message;
+        if (wire.contains("\"hello\"") && SessionMessages::decode(wire, &message)
+            && message.kind == SessionMessageKind::Hello) {
+            ++rewrittenHellos;
+            LoopbackTransport::sendText(SessionMessages::encode(SessionMessages::hello(
+                message.protocolMajor, m_minor, message.settingsSchemaVersion,
+                message.peerName)));
+            return;
+        }
+        LoopbackTransport::sendText(wire);
+    }
+
+    int rewrittenHellos = 0;
+
+private:
+    quint16 m_minor;
+};
+
+QList<QJsonObject> audioContexts(const QSignalSpy& controls)
+{
+    QList<QJsonObject> contexts;
+    for (const auto& call : controls) {
+        const QJsonObject message = call.at(0).toJsonObject();
+        if (message.value(QStringLiteral("op")) == QLatin1String("audio-context")) {
+            contexts.append(message);
+        }
+    }
+    return contexts;
+}
 
 QJsonObject latestAudioContext(const QSignalSpy& controls)
 {
@@ -139,6 +181,20 @@ struct Harness {
         client.startSession(clientLink, server.token());
         server.acceptTransport(stationLink);
         QTRY_VERIFY(server.mediaAvailable());
+    }
+
+    // Both ends announce `minor`, so both negotiate down to it.
+    void connectSessionAtMinor(quint16 minor)
+    {
+        auto* stationLink = new HelloMinorTransport(QStringLiteral("station"), minor);
+        auto* clientLink = new HelloMinorTransport(QStringLiteral("client"), minor);
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(server.mediaAvailable());
+        QCOMPARE(stationLink->rewrittenHellos, 1);
+        QCOMPARE(clientLink->rewrittenHellos, 1);
+        QCOMPARE(client.agreedMinor(), minor);
     }
 
     void feedMixedTone()
@@ -266,6 +322,53 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(channelEnergy(h.remoteBus->heard, 0, heardBeforeReconnect) > 0.5
                                  && channelEnergy(h.remoteBus->heard, 1, heardBeforeReconnect) > 0.5,
                                  15000);
+        QCOMPARE(remoteErrors.count(), 0);
+
+        source.stop();
+        speaker.stop();
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    void minorSevenPeersKeepLegacyAudioContext()
+    {
+        Harness h;
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
+        DaemonMediaController daemonMedia(&h.server, &h.station);
+        QSignalSpy remoteErrors(&remoteMedia, &RemoteMediaController::errorOccurred);
+        QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+
+        QTimer source;
+        source.setInterval(10);
+        source.setTimerType(Qt::PreciseTimer);
+        connect(&source, &QTimer::timeout, &source, [&h] { h.feedMixedTone(); });
+        QTimer speaker;
+        speaker.setInterval(10);
+        speaker.setTimerType(Qt::PreciseTimer);
+        connect(&speaker, &QTimer::timeout, &speaker, [&h] { h.remoteBus->render(kFrames); });
+        source.start();
+        speaker.start();
+
+        // Both ends agree minor 7: a Core and a GUI from before the audio
+        // status detail. Audio must still start, on the eight-key context.
+        h.connectSessionAtMinor(7);
+        if (QTest::currentTestFailed()) { return; }
+        QTRY_VERIFY_WITH_TIMEOUT(latestAudioContext(controls)
+                                     .value(QStringLiteral("enabled")).toBool(), 15000);
+        QCOMPARE(latestAudioContext(controls).size(), 8);
+
+        const int heardBefore = h.remoteBus->heard.size() / 2;
+        QTRY_VERIFY_WITH_TIMEOUT(channelEnergy(h.remoteBus->heard, 0, heardBefore) > 0.5
+                                 && channelEnergy(h.remoteBus->heard, 1, heardBefore) > 0.5,
+                                 15000);
+
+        h.remote.audioEngine()->setMasterMuted(true);
+        QTRY_VERIFY_WITH_TIMEOUT(!latestAudioContext(controls)
+                                     .value(QStringLiteral("enabled")).toBool(), 5000);
+        for (const QJsonObject& context : audioContexts(controls)) {
+            QCOMPARE(context.size(), 8);
+            QVERIFY(!context.contains(QStringLiteral("encoder")));
+            QVERIFY(!context.contains(QStringLiteral("reason")));
+        }
         QCOMPARE(remoteErrors.count(), 0);
 
         source.stop();

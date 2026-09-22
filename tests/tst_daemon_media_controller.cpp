@@ -31,6 +31,7 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
+#include <QJsonDocument>
 #include <QPointer>
 #include <QScopeGuard>
 #include <QSignalSpy>
@@ -242,6 +243,49 @@ QJsonObject audioControl(quint32 revision, bool enabled)
             {QStringLiteral("enabled"), enabled}};
 }
 
+// Every audio context a raw control peer has received, in arrival order.
+QList<QJsonObject> receivedAudioContexts(const Test::LoopbackTransport& peer)
+{
+    QList<QJsonObject> contexts;
+    for (const QByteArray& wire : peer.received()) {
+        SessionMessage message;
+        if (SessionMessages::decode(wire, &message)
+            && message.kind == SessionMessageKind::MediaControl
+            && message.mediaPayload.value(QStringLiteral("op"))
+                == QLatin1String("audio-context")) {
+            contexts.append(message.mediaPayload);
+        }
+    }
+    return contexts;
+}
+
+QStringList sortedKeys(const QJsonObject& object)
+{
+    QStringList keys = object.keys();
+    keys.sort();
+    return keys;
+}
+
+// The minor-7 audio context, key for key and JSON type for type: what every
+// GUI built before the audio status detail parses.
+bool hasLegacyAudioContextShape(const QJsonObject& context)
+{
+    const QStringList legacyKeys{
+        QStringLiteral("connectionId"), QStringLiteral("enabled"),
+        QStringLiteral("firstSequence"), QStringLiteral("firstTimestamp"),
+        QStringLiteral("generation"), QStringLiteral("op"),
+        QStringLiteral("revision"), QStringLiteral("ssrc")};
+    return sortedKeys(context) == legacyKeys
+        && context.value(QStringLiteral("op")) == QLatin1String("audio-context")
+        && context.value(QStringLiteral("connectionId")).isString()
+        && context.value(QStringLiteral("enabled")).isBool()
+        && context.value(QStringLiteral("revision")).isDouble()
+        && context.value(QStringLiteral("generation")).isDouble()
+        && context.value(QStringLiteral("ssrc")).isDouble()
+        && context.value(QStringLiteral("firstSequence")).isDouble()
+        && context.value(QStringLiteral("firstTimestamp")).isDouble();
+}
+
 struct Harness {
     QTemporaryDir directory;
     AppSettings settings;
@@ -403,6 +447,7 @@ private slots:
     void extendedPermissionFirstCaptureAndSharedEndpointLifetimes();
     void widebandSourceReplacementAndSessionRetirement();
     void olderPeerKeepsLegacyContextAndCannotAcquireWideband();
+    void minorSevenPeerReceivesLegacyAudioContexts();
     void localCaptureDuringConnectingGetsIdentityBeforeFirstAdcRow();
     void synchronousDisplayClosureRetiresDemandAndAllowsNewPeer_data();
     void synchronousDisplayClosureRetiresDemandAndAllowsNewPeer();
@@ -1750,6 +1795,81 @@ void TstDaemonMediaController::olderPeerKeepsLegacyContextAndCannotAcquireWideba
         }
         return false;
     })());
+    peer->closeLink(QStringLiteral("test complete"));
+}
+
+void TstDaemonMediaController::minorSevenPeerReceivesLegacyAudioContexts()
+{
+    OpusAudioEncoder encoder;
+    if (!encoder.isReady()) {
+        QSKIP("Opus encoder is unavailable in this build");
+    }
+    Harness h;
+    // A GUI that says hello with minor 7 predates the audio status detail.
+    // Whatever state Core is in, it must keep receiving the exact context
+    // that GUI already parses, or its audio stops.
+    auto* station = new Test::LoopbackTransport(QStringLiteral("minor7-station"), this);
+    auto* peer = new Test::LoopbackTransport(QStringLiteral("minor7-peer"), this);
+    station->linkTo(peer);
+    h.server.acceptTransport(station);
+    peer->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor, quint16{7}, 0, QStringLiteral("minor-7 client"))));
+    peer->sendText(SessionMessages::encode(SessionMessages::authRequest(h.server.token())));
+    QTRY_VERIFY(h.server.mediaAvailable());
+    const auto send = [&](const QJsonObject& payload) {
+        SessionMessage message;
+        message.kind = SessionMessageKind::MediaControl;
+        message.mediaPayload = payload;
+        peer->sendText(SessionMessages::encode(message));
+    };
+    send({{QStringLiteral("op"), QStringLiteral("start")},
+          {QStringLiteral("connectionId"), QLatin1String(kConnectionId)}});
+    QTRY_VERIFY(h.mediaTransport);
+    const qint64 ssrc = h.mediaTransport->startOptions.localAudioSsrc;
+    QVERIFY(ssrc != 0);
+
+    const auto latestContext = [&] { return receivedAudioContexts(*peer).constLast(); };
+    const auto expectLegacy = [&](int count, quint32 revision, bool enabled) {
+        QTRY_COMPARE(receivedAudioContexts(*peer).size(), count);
+        const QJsonObject context = latestContext();
+        QVERIFY2(hasLegacyAudioContextShape(context),
+                 QJsonDocument(context).toJson(QJsonDocument::Compact).constData());
+        QCOMPARE(context.value(QStringLiteral("connectionId")).toString(),
+                 QLatin1String(kConnectionId));
+        QCOMPARE(context.value(QStringLiteral("revision")).toInteger(), qint64{revision});
+        QCOMPARE(context.value(QStringLiteral("enabled")).toBool(), enabled);
+        QCOMPARE(context.value(QStringLiteral("ssrc")).toInteger(), ssrc);
+    };
+
+    // Asked for before the media peer is ready, then granted once it is.
+    send(audioControl(1, true));
+    expectLegacy(1, 1, false);
+    if (QTest::currentTestFailed()) { return; }
+    h.mediaTransport->becomeReady();
+    expectLegacy(2, 1, true);
+    if (QTest::currentTestFailed()) { return; }
+    QCOMPARE(latestContext().value(QStringLiteral("firstSequence")).toInteger(), qint64{1});
+    QCOMPARE(latestContext().value(QStringLiteral("firstTimestamp")).toInteger(), qint64{0});
+
+    // The client turns audio off, and the station radio drops while it is off.
+    send(audioControl(2, false));
+    expectLegacy(3, 2, false);
+    if (QTest::currentTestFailed()) { return; }
+    h.radio.setConnectionStateForTest(ConnectionState::Disconnected);
+    expectLegacy(4, 2, false);
+    if (QTest::currentTestFailed()) { return; }
+
+    // Asked for while the radio is offline, granted when it returns, and
+    // withdrawn again when it drops with audio still wanted.
+    send(audioControl(3, true));
+    expectLegacy(5, 3, false);
+    if (QTest::currentTestFailed()) { return; }
+    h.radio.setConnectionStateForTest(ConnectionState::Connected);
+    expectLegacy(6, 3, true);
+    if (QTest::currentTestFailed()) { return; }
+    h.radio.setConnectionStateForTest(ConnectionState::Disconnected);
+    expectLegacy(7, 3, false);
+    if (QTest::currentTestFailed()) { return; }
     peer->closeLink(QStringLiteral("test complete"));
 }
 
