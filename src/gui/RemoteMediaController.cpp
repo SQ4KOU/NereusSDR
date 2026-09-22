@@ -9,6 +9,7 @@
 #include "core/session/StationClient.h"
 #include "core/session/media/DisplayCodec.h"
 #include "core/session/media/SpectrumEndpoint.h"
+#include "core/session/media/WidebandDisplayContext.h"
 #include "gui/DssGeometry.h"
 #include "gui/PanadapterApplet.h"
 #include "gui/PanadapterStack.h"
@@ -63,6 +64,23 @@ bool newer(quint32 next, quint32 previous)
     return next != previous && quint32(next - previous) < 0x80000000u;
 }
 
+bool geometryNeedsWideband(double centreHz, double spanHz,
+                           double sourceCentreHz, double sourceRateHz)
+{
+    const double sourceLow = sourceCentreHz - sourceRateHz * 0.5;
+    const double sourceHigh = sourceCentreHz + sourceRateHz * 0.5;
+    const double viewLow = centreHz - spanHz * 0.5;
+    const double viewHigh = centreHz + spanHz * 0.5;
+    // Inactive endpoint geometry is derived from clamped FFT bin edges and
+    // can legitimately land exactly on either DDC edge. Expand by one ULP
+    // solely for arithmetic roundoff; this is not a bin-width allowance.
+    const double lowLimit = std::nextafter(sourceLow,
+                                           -std::numeric_limits<double>::infinity());
+    const double highLimit = std::nextafter(sourceHigh,
+                                            std::numeric_limits<double>::infinity());
+    return viewLow < lowLimit || viewHigh > highLimit;
+}
+
 int fftSizeFor(double target)
 {
     int size = 1024;
@@ -91,7 +109,8 @@ SliceModel* currentSliceForPan(RadioModel* model, PanadapterStack* stack,
     return nullptr;
 }
 
-QJsonObject requestFor(SpectrumWidget* widget, SliceModel* slice)
+QJsonObject requestFor(SpectrumWidget* widget, SliceModel* slice,
+                       bool remoteWidebandAvailable)
 {
     auto& settings = AppSettings::instance();
     const int fps = qBound(1, settings.value(QStringLiteral("DisplaySpectrumFps"),
@@ -121,7 +140,7 @@ QJsonObject requestFor(SpectrumWidget* widget, SliceModel* slice)
         double(widget->wfUpdatePeriodMs()) * fps / 1000.0)), 10000);
     const double wideFactor = widget->spectrumRenderMode() == int(SpectrumRenderMode::Mode3D)
         ? dssMaxRowSpanFactor(dssShapeForAngle(0)) : 0.0;
-    return {{QStringLiteral("sliceId"), slice->sliceIndex()},
+    QJsonObject request{{QStringLiteral("sliceId"), slice->sliceIndex()},
             {QStringLiteral("tier"), size > baseSize ? QStringLiteral("fine") : QStringLiteral("wide")},
             {QStringLiteral("fftSize"), size}, {QStringLiteral("windowType"), window},
             {QStringLiteral("centreHz"), widget->centerFrequency()},
@@ -133,6 +152,12 @@ QJsonObject requestFor(SpectrumWidget* widget, SliceModel* slice)
                 int(widget->waterfallAveraging()), widget->waterfallAverageAlpha())},
             {QStringLiteral("minDbm"), -180.0}, {QStringLiteral("maxDbm"), 0.0},
             {QStringLiteral("wideSpanFactor"), wideFactor}};
+    if (remoteWidebandAvailable) {
+        // This is permission, not current demand. Core derives demand from
+        // the accepted span and reports the resulting active state.
+        request.insert(QStringLiteral("extendedView"), widget->extendedViewAllowed());
+    }
+    return request;
 }
 } // namespace
 
@@ -447,7 +472,8 @@ void RemoteMediaController::refreshSubscriptions()
         SpectrumWidget* widget = applet->spectrumWidget();
         SliceModel* slice = d->model->sliceById(applet->activeSliceIndex());
         if (!widget || !widget->isVisible() || !slice || slice->streamIndex() < 0) { continue; }
-        QJsonObject request = requestFor(widget, slice);
+        QJsonObject request = requestFor(widget, slice,
+                                         d->client->remoteWidebandAvailable());
         if (!request.isEmpty()) { desired.append({widget, slice, std::move(request)}); }
     }
     // Retire obsolete bindings before creating any replacement. In particular,
@@ -692,7 +718,8 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
             || d->stack->spectrum(d->stack->activePanId()) != binding.widget
             || binding.observedStream != binding.slice->streamIndex()
             || binding.observedStreamEpoch != binding.slice->streamEpoch()
-            || requestFor(binding.widget, binding.slice) != binding.observed) {
+            || requestFor(binding.widget, binding.slice,
+                          d->client->remoteWidebandAvailable()) != binding.observed) {
             return;
         }
         // Clarity remains the GUI's existing active-pan controller. Core
@@ -717,10 +744,16 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
         }
         return;
     }
-    if (op != QLatin1String("context") || payload.size() != 19 || binding.rejected) { return; }
+    const bool widebandRequested = d->client->remoteWidebandAvailable()
+        && binding.observed.value(QStringLiteral("extendedView")).isBool();
+    if (op != QLatin1String("context")
+        || payload.size() != (widebandRequested ? 20 : 19)
+        || binding.rejected) { return; }
     // A gesture/rebind may arrive between the outgoing request and its ACK.
     // Issue the newer request before accepting an old view over that gesture.
-    if (binding.slice && (requestFor(binding.widget, binding.slice) != binding.observed
+    if (binding.slice
+        && (requestFor(binding.widget, binding.slice,
+                       d->client->remoteWidebandAvailable()) != binding.observed
                          || binding.observedStream != binding.slice->streamIndex()
                          || binding.observedStreamEpoch != binding.slice->streamEpoch())) {
         refreshSubscriptions();
@@ -733,9 +766,18 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
     if (!uint32(payload, "contextGeneration", context.codec.contextGeneration)
         || !number(payload, "sourceStream", 0, 255, stream, true)
         || !number(payload, "sourceCentreHz", 0, 1.0e12, sourceCentre)
-        || !number(payload, "sampleRateHz", 1, 1.0e8, rate)
-        || !number(payload, "centreHz", 0, 1.0e12, context.exactCentreHz)
-        || !number(payload, "spanHz", 0.000001, rate, context.exactSpanHz)
+        || !number(payload, "sampleRateHz", 1, 1.0e8, rate)) { return; }
+    if (widebandRequested) {
+        const QJsonValue widebandJson = payload.value(QStringLiteral("wideband"));
+        if (!widebandJson.isObject()) { return; }
+        const auto wideband = WidebandDisplayContext::fromJson(widebandJson.toObject());
+        if (!wideband) { return; }
+        context.wideband = *wideband;
+    }
+    const double maxSpan = context.wideband.available
+        ? std::max(rate, context.wideband.adcRateHz / 2.0) : rate;
+    if (!number(payload, "centreHz", 0, 1.0e12, context.exactCentreHz)
+        || !number(payload, "spanHz", 0.000001, maxSpan, context.exactSpanHz)
         || !number(payload, "wideCentreHz", 0, 1.0e12, context.wideCentreHz)
         || !number(payload, "wideSpanHz", 0, rate, context.wideSpanHz)
         || !number(payload, "traceSamples", 1, SpectrumEndpoint::kMaxPixels, trace, true)
@@ -745,6 +787,14 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
         || !number(payload, "maxDbm", -400, 100, max) || min >= max
         || !number(payload, "fps", 1, 60, fps, true)
         || !number(payload, "framesPerLine", 1, 10000, lines, true)) { return; }
+    if (widebandRequested) {
+        const bool permission = binding.observed.value(
+            QStringLiteral("extendedView")).toBool();
+        const bool needsWideband = geometryNeedsWideband(
+            context.exactCentreHz, context.exactSpanHz, sourceCentre, rate);
+        if (context.wideband.active != needsWideband
+            || (context.wideband.active && !permission)) { return; }
+    }
     if (binding.accepted && !newer(context.codec.contextGeneration,
                                   binding.context.codec.contextGeneration)) { return; }
     if ((wide == 0) != (context.wideSpanHz == 0)) { return; }
@@ -765,7 +815,10 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
     binding.widget->setRemoteSpectrumContext(context, sourceCentre, rate);
     // The source crop may be bin-aligned. Remember the displayed accepted
     // window so the polling observer does not feed an ACK back as a new zoom.
-    if (binding.slice) { binding.observed = requestFor(binding.widget, binding.slice); }
+    if (binding.slice) {
+        binding.observed = requestFor(binding.widget, binding.slice,
+                                      d->client->remoteWidebandAvailable());
+    }
     refreshCtunState();
     requestKeyframe(endpointId);
 }

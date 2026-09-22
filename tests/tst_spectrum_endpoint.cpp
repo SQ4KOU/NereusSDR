@@ -9,10 +9,14 @@
 #include <QtTest>
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <optional>
 
+#include "core/WidebandFftEngine.h"
 #include "core/session/media/SpectrumEndpoint.h"
+#include "core/spectrum/ExtendedSpectrumReducer.h"
+#include "core/spectrum/WidebandDisplayReference.h"
 
 using namespace NereusSDR;
 
@@ -64,6 +68,63 @@ DaemonSpectrumFrame frame(const SpectrumEndpointSourceContext& source,
     frame.binsLinear[300] = 1.0e-5f;
     frame.binsLinear[800] = 1.0e-4f;
     return frame;
+}
+
+SpectrumEndpointSourceContext extendedSourceContext(int adc = 0,
+                                                    quint32 widebandGeneration = 31,
+                                                    quint64 generation = 11,
+                                                    quint32 contextGeneration = 4)
+{
+    SpectrumEndpointSourceContext source = sourceContext(generation, contextGeneration);
+    source.centreHz = 500'000.0;
+    source.sampleRateHz = 1'000'000.0;
+    source.wideband.available = true;
+    source.wideband.active = true;
+    source.wideband.physicalAdcIndex = adc;
+    source.wideband.filterChainIndex = 0;
+    source.wideband.sourceGeneration = widebandGeneration;
+    source.wideband.adcRateHz = 4'000'000.0;
+    return source;
+}
+
+SpectrumEndpointRequest extendedRequest()
+{
+    SpectrumEndpointRequest endpoint = request();
+    endpoint.centreHz = 500'000.0;
+    endpoint.spanHz = 2'000'000.0;
+    endpoint.pixels = 100;
+    endpoint.extendedView = true;
+    return endpoint;
+}
+
+WidebandSpectrumFrame widebandFrame(const SpectrumEndpointSourceContext& source,
+                                    float value = -140.0f)
+{
+    WidebandSpectrumFrame frame;
+    frame.source.physicalAdcIndex = source.wideband.physicalAdcIndex;
+    frame.source.sourceGeneration = source.wideband.sourceGeneration;
+    frame.source.adcRateHz = source.wideband.adcRateHz;
+    frame.producedAtNs = 1;
+    frame.rawDbBins.fill(value, WidebandFftEngine::kOutputBins);
+    return frame;
+}
+
+WidebandSpectrumFrame widebandAtDisplayLevel(const SpectrumEndpointSourceContext& source,
+                                             float levelDbm)
+{
+    // The cache holds unnormalised FFT dB, not display dBm. These integration
+    // fixtures choose a known display level through the existing reference;
+    // separate reference/reducer tests characterize the normalization itself.
+    const float reference = widebandRelativeReferenceDb(source.wideband.adcRateHz,
+        source.sampleRateHz / source.fftBins, 1.0, SpectrumDetectorMode::Peak);
+    return widebandFrame(source, levelDbm - reference);
+}
+
+bool allNear(const QVector<float>& values, float expected, float tolerance = 0.01f)
+{
+    return std::all_of(values.cbegin(), values.cend(), [expected, tolerance](float value) {
+        return std::abs(value - expected) <= tolerance;
+    });
 }
 
 } // namespace
@@ -298,6 +359,236 @@ private slots:
         DaemonSpectrumFrame nonfinite = frame(source, 1'000'000'000);
         nonfinite.binsLinear[0] = std::numeric_limits<float>::infinity();
         QVERIFY(!configured.consume(nonfinite).has_value());
+    }
+
+    void extendedCompositeMatchesCoreReducerForEveryDetector()
+    {
+        const SpectrumEndpointSourceContext source = extendedSourceContext();
+        DaemonSpectrumFrame ddc = frame(source, 1'000'000'000);
+        ddc.binsLinear.fill(1.0e-12f);
+        ddc.binsLinear[512] = 1.0e-4f;
+        WidebandSpectrumFrame adc = widebandFrame(source);
+        adc.rawDbBins[24'576] = -80.0f;
+
+        for (SpectrumDetectorMode detector : {SpectrumDetectorMode::Peak,
+                                               SpectrumDetectorMode::Rosenfell,
+                                               SpectrumDetectorMode::Average,
+                                               SpectrumDetectorMode::Sample,
+                                               SpectrumDetectorMode::RMS}) {
+            SpectrumEndpointRequest req = extendedRequest();
+            req.trace.detector = detector;
+            req.waterfall.detector = detector;
+            SpectrumEndpoint endpoint;
+            QVERIFY(endpoint.configure(req, source));
+
+            ExtendedSpectrumReducer expectedTrace;
+            ExtendedSpectrumReducer expectedWaterfall;
+            ReducerConfig traceConfig;
+            traceConfig.pixels = req.pixels;
+            traceConfig.centreHz = req.centreHz;
+            traceConfig.spanHz = req.spanHz;
+            traceConfig.streamCentreHz = source.centreHz;
+            traceConfig.sampleRateHz = source.sampleRateHz;
+            traceConfig.detector = detector;
+            traceConfig.averageMode = req.trace.averageMode;
+            traceConfig.averageAlpha = req.trace.averageAlpha;
+            ReducerConfig waterfallConfig = traceConfig;
+            waterfallConfig.averageMode = req.waterfall.averageMode;
+            waterfallConfig.averageAlpha = req.waterfall.averageAlpha;
+            expectedTrace.setConfig(traceConfig);
+            expectedWaterfall.setConfig(waterfallConfig);
+            QVector<float> expectedTraceRow;
+            QVector<float> expectedWaterfallRow;
+            QVERIFY(expectedTrace.reduce(ddc.binsLinear, ddc.windowEnb, ddc.dbmOffset,
+                                         adc.rawDbBins, source.wideband.adcRateHz, 3.5,
+                                         req.minDbm, expectedTraceRow));
+            QVERIFY(expectedWaterfall.reduce(ddc.binsLinear, ddc.windowEnb, ddc.dbmOffset,
+                                             adc.rawDbBins, source.wideband.adcRateHz, 3.5,
+                                             req.minDbm, expectedWaterfallRow));
+
+            const auto actual = endpoint.consume(ddc, 3.5, adc);
+            QVERIFY(actual.has_value());
+            QCOMPARE(actual->traceDbm, expectedTraceRow);
+            QCOMPARE(actual->waterfallDbm, expectedWaterfallRow);
+        }
+    }
+
+    void extendedPermissionAndActivationRemainSeparate()
+    {
+        SpectrumEndpointRequest unavailablePermission = request();
+        unavailablePermission.extendedView = true;
+        SpectrumEndpoint endpoint;
+        // Permission alone does not activate or require an ADC source.
+        const SpectrumEndpointSourceContext ddcOnly = sourceContext();
+        QVERIFY(endpoint.configure(unavailablePermission, ddcOnly));
+        QVERIFY(!endpoint.context().wideband.available);
+        QVERIFY(!endpoint.context().wideband.active);
+        QVERIFY(endpoint.consume(frame(ddcOnly, 1'000'000'000)).has_value());
+
+        SpectrumEndpointRequest req = extendedRequest();
+        SpectrumEndpointSourceContext inactive = extendedSourceContext();
+        inactive.wideband.active = false;
+        inactive.wideband.sourceGeneration = 0;
+        QVERIFY(endpoint.configure(req, inactive));
+        QVERIFY(!endpoint.context().wideband.active);
+        QCOMPARE(endpoint.context().wideband.sourceGeneration, quint32(0));
+        QVERIFY(endpoint.context().wideband.available);
+        QVERIFY(endpoint.context().exactSpanHz < req.spanHz);
+        QVERIFY(endpoint.consume(frame(inactive, 1'000'000'000)).has_value());
+
+        // An active ADC cannot compose a row without the negotiated permission.
+        const SpectrumEndpointContext ddcContext = endpoint.context();
+        req.extendedView = false;
+        const SpectrumEndpointSourceContext active = extendedSourceContext();
+        QVERIFY(!endpoint.configure(req, active));
+        QCOMPARE(endpoint.context().codec.contextGeneration,
+                 ddcContext.codec.contextGeneration);
+        QCOMPARE(endpoint.context().wideband, ddcContext.wideband);
+
+        SpectrumEndpointSourceContext malformed = inactive;
+        malformed.wideband.sourceGeneration = 99;
+        QVERIFY(!endpoint.configure(extendedRequest(), malformed));
+    }
+
+    void extendedStationScalarAndAdcIdentityAreAppliedExactlyOnce()
+    {
+        for (int adcIndex : {0, 1}) {
+            const SpectrumEndpointSourceContext source = extendedSourceContext(adcIndex);
+            SpectrumEndpointRequest req = extendedRequest();
+            req.centreHz = 1'500'000.0; // DDC is absent; ADC owns every pixel.
+            req.spanHz = 500'000.0;
+            SpectrumEndpoint endpoint;
+            QVERIFY(endpoint.configure(req, source));
+            const auto base = endpoint.consume(frame(source, 1'000'000'000), 0.0,
+                                               widebandFrame(source, -120.0f));
+            QVERIFY(base.has_value());
+
+            SpectrumEndpoint shifted;
+            QVERIFY(shifted.configure(req, source));
+            const auto plusSeven = shifted.consume(frame(source, 1'000'000'000), 7.0,
+                                                   widebandFrame(source, -120.0f));
+            QVERIFY(plusSeven.has_value());
+            QVERIFY(std::abs((plusSeven->traceDbm[50] - base->traceDbm[50]) - 7.0f) < 0.01f);
+            QVERIFY(std::abs((plusSeven->waterfallDbm[50] - base->waterfallDbm[50]) - 7.0f) < 0.01f);
+        }
+    }
+
+    void extendedMissingAndMismatchedAdcRowsPaintFloor()
+    {
+        const SpectrumEndpointSourceContext source = extendedSourceContext();
+        SpectrumEndpointRequest req = extendedRequest();
+        req.centreHz = 1'500'000.0; // no DDC island
+        req.spanHz = 500'000.0;
+        SpectrumEndpoint endpoint;
+        QVERIFY(endpoint.configure(req, source));
+        const auto missing = endpoint.consume(frame(source, 1'000'000'000));
+        QVERIFY(missing.has_value());
+        QVERIFY(allNear(missing->traceDbm, req.minDbm));
+        QVERIFY(allNear(missing->waterfallDbm, req.minDbm));
+
+        for (const auto mismatch : {0, 1, 2}) {
+            SpectrumEndpoint wrongSource;
+            QVERIFY(wrongSource.configure(req, source));
+            WidebandSpectrumFrame stale = widebandFrame(source, -20.0f);
+            if (mismatch == 0) {
+                ++stale.source.physicalAdcIndex;
+            } else if (mismatch == 1) {
+                stale.source.adcRateHz *= 0.5;
+            } else {
+                ++stale.source.sourceGeneration;
+            }
+            const auto masked = wrongSource.consume(frame(source, 1'000'000'000), 0.0, stale);
+            QVERIFY(masked.has_value());
+            QVERIFY(allNear(masked->traceDbm, req.minDbm));
+            QVERIFY(allNear(masked->waterfallDbm, req.minDbm));
+        }
+    }
+
+    void extendedAllowsNoDdcIslandAndFloorsOutsideAdcGeometry()
+    {
+        const SpectrumEndpointSourceContext source = extendedSourceContext();
+        WidebandSpectrumFrame adc = widebandAtDisplayLevel(source, -90.0f);
+
+        SpectrumEndpoint noIsland;
+        SpectrumEndpointRequest wingOnly = extendedRequest();
+        wingOnly.centreHz = 1'500'000.0;
+        wingOnly.spanHz = 500'000.0;
+        QVERIFY(noIsland.configure(wingOnly, source));
+        const auto wingRow = noIsland.consume(frame(source, 1'000'000'000), 0.0, adc);
+        QVERIFY(wingRow.has_value());
+        QVERIFY(wingRow->traceDbm[50] > wingOnly.minDbm + 10.0f);
+
+        SpectrumEndpoint belowDc;
+        SpectrumEndpointRequest negative = extendedRequest();
+        negative.centreHz = -250'000.0;
+        negative.spanHz = 500'000.0;
+        QVERIFY(belowDc.configure(negative, source));
+        const auto below = belowDc.consume(frame(source, 1'000'000'000), 0.0, adc);
+        QVERIFY(below.has_value());
+        QVERIFY(allNear(below->traceDbm, negative.minDbm));
+
+        SpectrumEndpoint beyondNyquist;
+        SpectrumEndpointRequest high = extendedRequest();
+        high.centreHz = 2'250'000.0;
+        high.spanHz = 1'000'000.0;
+        QVERIFY(beyondNyquist.configure(high, source));
+        const auto above = beyondNyquist.consume(frame(source, 1'000'000'000), 0.0, adc);
+        QVERIFY(above.has_value());
+        QVERIFY(above->traceDbm.first() > high.minDbm + 10.0f);
+        QVERIFY(std::abs(above->traceDbm.last() - high.minDbm) < 0.01f);
+    }
+
+    void extendedHistoriesResetOnSourceChangeAndKeepDdcWidePlane()
+    {
+        SpectrumEndpointSourceContext source = extendedSourceContext();
+        SpectrumEndpointRequest req = extendedRequest();
+        req.centreHz = 1'500'000.0;
+        req.spanHz = 500'000.0;
+        req.trace.averageMode = 1;
+        req.trace.averageAlpha = 0.5;
+        req.waterfall.averageMode = 0;
+        SpectrumEndpoint endpoint;
+        QVERIFY(endpoint.configure(req, source));
+        QVERIFY(endpoint.consume(frame(source, 1'000'000'000), 0.0,
+                                  widebandAtDisplayLevel(source, -100.0f)).has_value());
+        const auto loud = endpoint.consume(frame(source, 1'040'000'000), 0.0,
+                                           widebandAtDisplayLevel(source, -40.0f));
+        QVERIFY(loud.has_value());
+        QVERIFY(loud->traceDbm[50] < loud->waterfallDbm[50] - 1.0f);
+
+        ++source.sourceGeneration;
+        ++source.contextGeneration;
+        ++source.wideband.sourceGeneration;
+        QVERIFY(endpoint.configure(req, source));
+        const DaemonSpectrumFrame fresh = frame(source, 1'040'000'000);
+        const WidebandSpectrumFrame quiet = widebandAtDisplayLevel(source, -100.0f);
+        const auto reset = endpoint.consume(fresh, 0.0, quiet);
+        QVERIFY(reset.has_value());
+
+        SpectrumEndpoint freshEndpoint;
+        QVERIFY(freshEndpoint.configure(req, source));
+        const auto expected = freshEndpoint.consume(fresh, 0.0, quiet);
+        QVERIFY(expected.has_value());
+        QCOMPARE(reset->traceDbm, expected->traceDbm);
+        QCOMPARE(reset->waterfallDbm, expected->waterfallDbm);
+
+        SpectrumEndpointRequest ddcWide = extendedRequest();
+        // A half-DDC view crossing its upper edge needs ADC wings while
+        // still leaving off-screen DDC coverage for the optional 3D row.
+        // A full-DDC view correctly has no additional DDC history to send.
+        ddcWide.centreHz = source.centreHz + source.sampleRateHz * 0.4;
+        ddcWide.spanHz = source.sampleRateHz * 0.5;
+        ddcWide.requestedWideSpanFactor = 2.0;
+        SpectrumEndpoint wideEndpoint;
+        QVERIFY(wideEndpoint.configure(ddcWide, source));
+        DaemonSpectrumFrame ddcNoise = frame(source, 2'000'000'000);
+        ddcNoise.binsLinear.fill(1.0e-12f);
+        const auto output = wideEndpoint.consume(ddcNoise, 5.0, widebandFrame(source, -10.0f));
+        QVERIFY(output.has_value());
+        QVERIFY(!output->wideDbm.isEmpty());
+        // The ADC's -10 dB row is intentionally absent from the legacy
+        // DDC-only 3D history, whose DDC noise floor is -120 dB plus scalar.
+        QVERIFY(*std::max_element(output->wideDbm.cbegin(), output->wideDbm.cend()) < -100.0f);
     }
 };
 

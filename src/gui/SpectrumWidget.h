@@ -371,6 +371,8 @@ public:
     /// (disconnect, replacement or rejection) uses clearRemoteSpectrum().
     void invalidateRemoteSpectrumFrame();
     void clearRemoteSpectrum();
+    bool remoteWidebandAvailable() const { return m_remoteWidebandAvailable; }
+    bool remoteWidebandActive() const { return m_remoteWidebandActive; }
     void setCenterFrequency(double centerHz);
     double centerFrequency() const { return m_centerHz; }
     double bandwidth() const { return m_bandwidthHz; }
@@ -1363,6 +1365,8 @@ public slots:
     /// could reach. With extended view allowed the ceiling becomes the
     /// wideband ADC's Nyquist (the span wing data actually covers); with it
     /// switched off the ceiling stays at the DDC rate, exactly as before.
+    /// A remote pan uses the same rule only after its accepted context says
+    /// that a concrete ADC source is available; active streaming is separate.
     double maxZoomOutBandwidthHz() const;
 
     /// Set the display window with the span held to what this pan may show.
@@ -2427,6 +2431,9 @@ private:
     DisplayCodecContext m_remoteCodec;
     double m_remoteExactCentreHz{0.0};
     double m_remoteExactSpanHz{0.0};
+    bool m_remoteWidebandAvailable{false};
+    bool m_remoteWidebandActive{false};
+    double m_remoteWidebandAdcRateHz{0.0};
     QVector<float> m_pendingRemoteWide;
     double m_remoteWideCentreHz{0.0};
     double m_remoteWideSpanHz{0.0};

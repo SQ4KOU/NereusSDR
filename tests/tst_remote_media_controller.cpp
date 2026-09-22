@@ -13,6 +13,7 @@
 #include "core/settings/SettingsProxy.h"
 #include "core/session/media/DisplayCodec.h"
 #include "core/session/media/DaemonMediaController.h"
+#include "core/session/media/WidebandDisplayContext.h"
 #include "core/session/PureSignalSessionFacade.h"
 #include "core/session/Ps3DisplayCodec.h"
 #include "core/FFTEngine.h"
@@ -331,6 +332,91 @@ private slots:
         QVERIFY(widget.ctunEnabled());
         QCOMPARE(gestures.size(), 0);
         QCOMPARE(centres.size(), 0);
+    }
+
+    void acceptedWidebandContextControlsRemoteZoomWithoutLocalDemand()
+    {
+        SpectrumWidget widget;
+        widget.resize(500, 300);
+        widget.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&widget));
+        widget.setConnectionState(ConnectionState::Connected);
+        widget.setExtendedViewAllowed(true);
+        widget.setSpectrumRenderMode(int(SpectrumRenderMode::Mode3D));
+        widget.setWfUpdatePeriodMs(20);
+        QSignalSpy localDemand(&widget, &SpectrumWidget::widebandExtensionStateChanged);
+
+        SpectrumEndpointContext context;
+        context.codec = {41, 1, -180, 0, 128, 128, 96};
+        context.exactCentreHz = 14225000;
+        context.exactSpanHz = 192000;
+        context.wideCentreHz = context.exactCentreHz;
+        context.wideSpanHz = 96000;
+        context.wideband.available = true;
+        context.wideband.active = false;
+        context.wideband.physicalAdcIndex = 1;
+        context.wideband.filterChainIndex = 0;
+        context.wideband.adcRateHz = 4000000;
+        widget.setRemoteSpectrumContext(context, context.exactCentreHz, 192000);
+
+        QVERIFY(widget.remoteWidebandAvailable());
+        QVERIFY(!widget.remoteWidebandActive());
+        QCOMPARE(widget.maxZoomOutBandwidthHz(), 2000000.0);
+        QVERIFY(!widget.extendedMode());
+        QCOMPARE(localDemand.size(), 0);
+
+        DisplayCodecFrame frame;
+        frame.context = context.codec;
+        frame.traceDbm = QVector<float>(128, -80);
+        frame.waterfallDbm = QVector<float>(128, -120);
+        frame.wideDbm = QVector<float>(96, -105);
+        frame.waterfallAdvance = true;
+        QVERIFY(widget.updateRemoteSpectrum(frame));
+        QTRY_COMPARE(widget.dssRowsPushedForTest(), 1);
+        QCOMPARE(widget.dssNewestRowWideBandwidthForTest(), 0.096);
+
+        // Subscription renewal retires live planes but keeps the accepted
+        // availability and painted RF history while the gesture is in flight.
+        widget.setDisplayWindowPreservingHistory(context.exactCentreHz, 1000000);
+        widget.invalidateRemoteSpectrumFrame();
+        QCOMPARE(widget.maxZoomOutBandwidthHz(), 2000000.0);
+        QCOMPARE(widget.dssRowsPushedForTest(), 1);
+
+        ++context.codec.contextGeneration;
+        context.exactSpanHz = 1000000;
+        context.wideband.active = true;
+        context.wideband.sourceGeneration = 7;
+        widget.setRemoteSpectrumContext(context, 14225000, 192000);
+        QVERIFY(widget.remoteWidebandActive());
+        QVERIFY(widget.extendedMode());
+        QCOMPARE(widget.dssRowsPushedForTest(), 1);
+        QCOMPARE(localDemand.size(), 0);
+
+        frame.context = context.codec;
+        QVERIFY(widget.updateRemoteSpectrum(frame));
+        QTRY_COMPARE(widget.dssRowsPushedForTest(), 2);
+        // The exact row may be composite; the optional wide row remains the
+        // separately described DDC-only 3D history plane.
+        QCOMPARE(widget.dssNewestRowWideBandwidthForTest(), 0.096);
+
+        widget.setDisplayWindowPreservingHistory(context.exactCentreHz, 192000);
+        widget.invalidateRemoteSpectrumFrame();
+        ++context.codec.contextGeneration;
+        context.exactSpanHz = 192000;
+        context.wideband.active = false;
+        context.wideband.sourceGeneration = 0;
+        widget.setRemoteSpectrumContext(context, 14225000, 192000);
+        QVERIFY(!widget.extendedMode());
+        QCOMPARE(widget.dssRowsPushedForTest(), 2);
+        QCOMPARE(localDemand.size(), 0);
+
+        widget.clearRemoteSpectrum();
+        QVERIFY(!widget.remoteWidebandAvailable());
+        QVERIFY(!widget.remoteWidebandActive());
+        QCOMPARE(widget.maxZoomOutBandwidthHz(), 192000.0);
+        QVERIFY(widget.extendedViewAllowed());
+        QCOMPARE(widget.dssRowsPushedForTest(), 0);
+        QCOMPARE(localDemand.size(), 0);
     }
 
     void ctunWheelKeepsSourceAndDragMovesCoreCentre()
@@ -729,6 +815,10 @@ private slots:
         media->activate();
         QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 1);
         const QJsonObject subscription = lastControl(controls, QStringLiteral("subscribe"));
+        QVERIFY(client.remoteWidebandAvailable());
+        QVERIFY(!widget->extendedMode());
+        QVERIFY(subscription.value(QStringLiteral("extendedView")).isBool());
+        QVERIFY(subscription.value(QStringLiteral("extendedView")).toBool());
         const quint32 id = quint32(subscription.value(QStringLiteral("endpointId")).toDouble());
         QJsonObject noiseFloor{
             {QStringLiteral("op"), QStringLiteral("noise-floor")},
@@ -766,13 +856,90 @@ private slots:
             {QStringLiteral("traceSamples"), 128}, {QStringLiteral("waterfallSamples"), 128},
             {QStringLiteral("wideSamples"), 0}, {QStringLiteral("minDbm"), -180},
             {QStringLiteral("maxDbm"), 0}, {QStringLiteral("fps"), 30},
-            {QStringLiteral("framesPerLine"), 1}};
+            {QStringLiteral("framesPerLine"), 1},
+            {QStringLiteral("wideband"), WidebandDisplayContext{}.toJson()}};
         QJsonObject invalid = context;
         invalid.insert(QStringLiteral("traceSamples"), 128.5);
         QVERIFY(server.sendMediaControl(invalid, server.mediaSessionEpoch()));
         QTest::qWait(30);
         media->deliver(packet);
         QCOMPARE(frames.count(), 0);
+        invalid = context;
+        invalid.remove(QStringLiteral("wideband"));
+        QVERIFY(server.sendMediaControl(invalid, server.mediaSessionEpoch()));
+        QTest::qWait(30);
+        media->deliver(packet);
+        QCOMPARE(frames.count(), 0);
+        invalid = context;
+        QJsonObject malformedWideband = WidebandDisplayContext{}.toJson();
+        malformedWideband.insert(QStringLiteral("active"), true);
+        invalid.insert(QStringLiteral("wideband"), malformedWideband);
+        QVERIFY(server.sendMediaControl(invalid, server.mediaSessionEpoch()));
+        QTest::qWait(30);
+        media->deliver(packet);
+        QCOMPARE(frames.count(), 0);
+
+        const auto availableWideband = [](bool active) {
+            WidebandDisplayContext wideband;
+            wideband.available = true;
+            wideband.active = active;
+            wideband.physicalAdcIndex = 0;
+            wideband.filterChainIndex = 0;
+            wideband.sourceGeneration = active ? 7 : 0;
+            wideband.adcRateHz = 4000000;
+            return wideband.toJson();
+        };
+
+        // An active context needs both the saved request permission and RF
+        // geometry that actually leaves the DDC source window.
+        widget->setDisplayWindowPreservingHistory(14500000, 24000);
+        widget->setExtendedViewAllowed(false);
+        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 2);
+        const QJsonObject permissionOff = lastControl(controls, QStringLiteral("subscribe"));
+        QVERIFY(!permissionOff.value(QStringLiteral("extendedView")).toBool());
+        invalid = context;
+        invalid.insert(QStringLiteral("revision"),
+                       permissionOff.value(QStringLiteral("revision")));
+        invalid.insert(QStringLiteral("centreHz"), 14500000);
+        invalid.insert(QStringLiteral("spanHz"), 24000);
+        invalid.insert(QStringLiteral("wideband"), availableWideband(true));
+        QVERIFY(server.sendMediaControl(invalid, server.mediaSessionEpoch()));
+        QTest::qWait(30);
+        QCOMPARE(countControl(controls, QStringLiteral("keyframe")), 0);
+
+        widget->setDisplayWindowPreservingHistory(14225000, 24000);
+        widget->setExtendedViewAllowed(true);
+        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 3);
+        const QJsonObject permissionOn = lastControl(controls, QStringLiteral("subscribe"));
+        QVERIFY(permissionOn.value(QStringLiteral("extendedView")).toBool());
+        context.insert(QStringLiteral("revision"),
+                       permissionOn.value(QStringLiteral("revision")));
+        noiseFloor.insert(QStringLiteral("revision"),
+                          permissionOn.value(QStringLiteral("revision")));
+
+        // A narrow inactive view is still extended geometry when it sits
+        // wholly outside sourceCentre +/- sampleRate/2.
+        invalid = context;
+        invalid.insert(QStringLiteral("centreHz"), 14500000);
+        invalid.insert(QStringLiteral("spanHz"), 24000);
+        invalid.insert(QStringLiteral("wideband"), availableWideband(false));
+        QVERIFY(server.sendMediaControl(invalid, server.mediaSessionEpoch()));
+        QTest::qWait(30);
+        QCOMPARE(countControl(controls, QStringLiteral("keyframe")), 0);
+
+        // Permission alone cannot make an in-DDC accepted crop active.
+        invalid = context;
+        invalid.insert(QStringLiteral("centreHz"), 14225000);
+        invalid.insert(QStringLiteral("spanHz"), 24000);
+        invalid.insert(QStringLiteral("wideband"), availableWideband(true));
+        QVERIFY(server.sendMediaControl(invalid, server.mediaSessionEpoch()));
+        QTest::qWait(30);
+        QCOMPARE(countControl(controls, QStringLiteral("keyframe")), 0);
+
+        // SpectrumEndpoint's real inactive crop rounds outward to bin edges:
+        // 14,225,023.4375 +/- 12,023.4375 Hz. It remains inside the DDC
+        // bounds and must be admitted without any guessed bin-width margin.
+        context.insert(QStringLiteral("wideband"), availableWideband(false));
         QVERIFY(server.sendMediaControl(context, server.mediaSessionEpoch()));
         QTRY_COMPARE(countControl(controls, QStringLiteral("keyframe")), 1);
         deliverFloor(noiseFloor);
@@ -785,7 +952,7 @@ private slots:
         const QList<QPair<QString, QJsonValue>> invalidFields{
             {QStringLiteral("connectionId"), QStringLiteral("00000000-0000-4000-8000-000000000001")},
             {QStringLiteral("endpointId"), double(id + 1000)},
-            {QStringLiteral("revision"), subscription.value(QStringLiteral("revision")).toDouble() + 1},
+            {QStringLiteral("revision"), permissionOn.value(QStringLiteral("revision")).toDouble() + 1},
             {QStringLiteral("contextGeneration"), 2},
             {QStringLiteral("contextGeneration"), 1.5},
             {QStringLiteral("floorDbm"), QStringLiteral("-120")},
@@ -809,12 +976,15 @@ private slots:
         QTRY_COMPARE(widget->dssRowsPushedForTest(), 1);
         QTest::qWait(250);
         // Bin-aligned accepted geometry must not create a resubscribe loop.
-        QCOMPARE(countControl(controls, QStringLiteral("subscribe")), 1);
+        const int acceptedSubscriptionCount = 3;
+        QCOMPARE(countControl(controls, QStringLiteral("subscribe")),
+                 acceptedSubscriptionCount);
 
         // A regular tune must keep painted history even during the request/ACK
         // gap. Old media is retired immediately; only the new generation paints.
         widget->setCenterFrequency(widget->centerFrequency() + 500);
-        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 2);
+        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")),
+                     acceptedSubscriptionCount + 1);
         QCOMPARE(widget->dssRowsPushedForTest(), 1);
         QVERIFY(widget->renderedPixels().isEmpty());
         media->deliver(packet);
@@ -843,13 +1013,29 @@ private slots:
         widget->setDisplayWindowPreservingHistory(14425000, 24000);
         deliverFloor(noiseFloor); // A gesture retires old RF meaning before its ACK.
         QCOMPARE(floors.size(), 2);
+        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")),
+                     acceptedSubscriptionCount + 2);
+        const auto extended = lastControl(controls, QStringLiteral("subscribe"));
+        context.insert(QStringLiteral("revision"), extended.value(QStringLiteral("revision")));
+        context.insert(QStringLiteral("contextGeneration"), 3);
+        context.insert(QStringLiteral("centreHz"), widget->centerFrequency());
+        context.insert(QStringLiteral("spanHz"), widget->bandwidth());
+        context.insert(QStringLiteral("wideband"), availableWideband(true));
+        QVERIFY(server.sendMediaControl(context, server.mediaSessionEpoch()));
+        QTRY_VERIFY(widget->remoteWidebandActive());
+        QVERIFY(widget->extendedMode());
+        QCOMPARE(widget->dssRowsPushedForTest(), 2);
+        frame.context.contextGeneration = 3;
+        media->deliver(encoder.encode(frame));
+        QCOMPARE(frames.count(), 3);
+        QTRY_COMPARE(widget->dssRowsPushedForTest(), 3);
         applet->hide();
         QTRY_COMPARE(countControl(controls, QStringLiteral("unsubscribe")), 1);
         QCOMPARE(controller.activeEndpointCount(), 0);
         deliverFloor(noiseFloor);
         QCOMPARE(floors.size(), 2);
         media->deliver(packet);
-        QCOMPARE(frames.count(), 2);
+        QCOMPARE(frames.count(), 3);
         client.disconnectFromStation(QStringLiteral("test complete"));
         QVERIFY(!media || !media->active);
         QVERIFY(widget->renderedPixels().isEmpty());

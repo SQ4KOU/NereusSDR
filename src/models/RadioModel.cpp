@@ -9975,98 +9975,7 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
             m_receiverManager->setP2Codec(codec);
         }
 
-        // ── Phase 3F Sub-Epic F Task 5: wideband frame -> per-ADC FFT ──
-        // P2RadioConnection::widebandFrameReadyForGeneration fires on the connection
-        // thread once a 32-packet frame (16384 normalized real samples)
-        // is assembled by WidebandFrameAccumulator (Sub-Epic F Task 3).
-        // We hop off the connection thread via auto-connection so the
-        // FFT runs out of the network hot path.  The 16k-pt real-to-
-        // complex FFT typically completes well under one frame period
-        // even at 153.6 MHz.
-        //
-        // R1 Task 11: the hop target is m_widebandDispatchContext, not
-        // `this` -- see setWidebandDispatchThread()'s doc comment in
-        // RadioModel.h. Left unset (the GUI never calls it),
-        // m_widebandDispatchContext stays on RadioModel's own thread, so
-        // this reproduces the exact pre-Task-11 "hop to the main thread"
-        // behaviour byte for byte. nereusd's DaemonApp redirects it to a
-        // dedicated QThread instead, because it has no main-thread
-        // protection concern of its own and wants this off its single
-        // event-loop thread entirely.
-        const quint64 widebandEpoch = m_widebandConnectionEpoch.load(std::memory_order_acquire);
-        const std::array captureEpochs {p2->widebandCaptureEpoch(0),
-                                       p2->widebandCaptureEpoch(1)};
-        m_widebandCaptureEpochs = captureEpochs;
-        connect(p2, &P2RadioConnection::widebandCaptureRetired, this,
-                [this, widebandEpoch](int adcIdx) {
-            if (widebandEpoch == m_widebandConnectionEpoch.load(std::memory_order_acquire)
-                && !widebandSourceDescriptor(adcIdx)) {
-                invalidateWidebandSpectrum(adcIdx);
-            }
-        });
-        connect(p2, &P2RadioConnection::widebandFrameReadyForGeneration,
-                &m_widebandDispatchContext,
-                [this, widebandEpoch, captureEpochs](int adcIdx,
-                    quint64 captureGeneration, const QVector<float>& samples,
-                    qint64 producedAtNs) {
-            if (widebandEpoch != m_widebandConnectionEpoch.load(std::memory_order_acquire)
-                || adcIdx < 0 || adcIdx >= 2 || !m_widebandFftEngines[adcIdx]
-                || captureGeneration == 0 || !captureEpochs[adcIdx]
-                || captureGeneration != captureEpochs[adcIdx]->load(std::memory_order_acquire)) {
-                return;
-            }
-            // Capture the immutable geometry at production, before waiting
-            // for the FFT worker. A later rate change (including change/back)
-            // cannot relabel old samples as a new RF source.
-            const auto geometry = m_widebandFftEngines[adcIdx]->geometry();
-            if (!std::isfinite(geometry->adcRateHz) || geometry->adcRateHz <= 0.0
-                || geometry->adcRateHz / 2.0 <= 0.0
-                || producedAtNs < geometry->configuredAtNs) {
-                return;
-            }
-            QMetaObject::invokeMethod(&m_widebandDispatchContext,
-                [this, widebandEpoch, adcIdx, captureGeneration,
-                 captureEpoch = captureEpochs[adcIdx], geometry, samples, producedAtNs]() {
-                if (widebandEpoch != m_widebandConnectionEpoch.load(std::memory_order_acquire)
-                    || captureGeneration != captureEpoch->load(std::memory_order_acquire)
-                    || geometry != m_widebandFftEngines[adcIdx]->geometry()) {
-                    return;
-                }
-                QVector<float> bins;
-                m_widebandFftEngines[adcIdx]->computeFft(samples, bins);
-                // Serialize publication with model teardown and configuration.
-                // Retained tokens are safe after the P2 QObject is destroyed.
-                QMetaObject::invokeMethod(this,
-                    [this, widebandEpoch, adcIdx, captureGeneration, captureEpoch,
-                     geometry, producedAtNs, bins = std::move(bins)]() {
-                    if (widebandEpoch != m_widebandConnectionEpoch.load(std::memory_order_acquire)
-                        || captureGeneration != captureEpoch->load(std::memory_order_acquire)
-                        || geometry != m_widebandFftEngines[adcIdx]->geometry()
-                        || !widebandAdcRateHz(adcIdx)) {
-                        return;
-                    }
-                    const auto previous = m_widebandSpectrumCache.source(adcIdx);
-                    const auto source = m_widebandSpectrumCache.configureSource(adcIdx,
-                        {widebandEpoch, captureGeneration, geometry->generation},
-                        geometry->adcRateHz);
-                    if (!source) {
-                        return;
-                    }
-                    if (source != previous) {
-                        emit widebandSourceChanged(adcIdx);
-                    }
-                    const WidebandSpectrumFrame frame{*source, producedAtNs, std::move(bins)};
-                    if (widebandSourceDescriptor(adcIdx) != source
-                        || !m_widebandSpectrumCache.publish(frame)) {
-                        return;
-                    }
-                    emit widebandSpectrumAvailable(adcIdx, source->sourceGeneration);
-                    if (widebandSourceDescriptor(adcIdx) == source) {
-                        emit widebandSpectrumReady(adcIdx, frame.rawDbBins);
-                    }
-                }, Qt::AutoConnection);
-            }, Qt::AutoConnection);
-        }, Qt::DirectConnection);
+        wireWidebandConnection();
 
     }
 
@@ -12824,6 +12733,123 @@ int RadioModel::sliceChainIndex(int sliceId) const
 // ADC0's survey either side of a correct DDC island, on exactly the
 // ANAN-100D / 200D boards the fold exists for. Found by Codex on PR #318.
 // ---------------------------------------------------------------------------
+void RadioModel::wireWidebandConnection()
+{
+    auto* p2 = qobject_cast<P2RadioConnection*>(m_connection);
+    if (!p2) { return; }
+    // ── Phase 3F Sub-Epic F Task 5: wideband frame -> per-ADC FFT ──
+    // P2RadioConnection::widebandFrameReadyForGeneration fires on the connection
+    // thread once a 32-packet frame (16384 normalized real samples)
+    // is assembled by WidebandFrameAccumulator (Sub-Epic F Task 3).
+    // We hop off the connection thread via auto-connection so the
+    // FFT runs out of the network hot path.  The 16k-pt real-to-
+    // complex FFT typically completes well under one frame period
+    // even at 153.6 MHz.
+    //
+    // R1 Task 11: the hop target is m_widebandDispatchContext, not
+    // `this` -- see setWidebandDispatchThread()'s doc comment in
+    // RadioModel.h. Left unset (the GUI never calls it),
+    // m_widebandDispatchContext stays on RadioModel's own thread, so
+    // this reproduces the exact pre-Task-11 "hop to the main thread"
+    // behaviour byte for byte. nereusd's DaemonApp redirects it to a
+    // dedicated QThread instead, because it has no main-thread
+    // protection concern of its own and wants this off its single
+    // event-loop thread entirely.
+    const quint64 widebandEpoch = m_widebandConnectionEpoch.load(std::memory_order_acquire);
+    const std::array captureEpochs {p2->widebandCaptureEpoch(0),
+                                   p2->widebandCaptureEpoch(1)};
+    m_widebandCaptureEpochs = captureEpochs;
+    connect(p2, &P2RadioConnection::widebandCaptureRetired, this,
+            [this, widebandEpoch](int adcIdx) {
+        if (widebandEpoch == m_widebandConnectionEpoch.load(std::memory_order_acquire)
+            && !widebandSourceDescriptor(adcIdx)) {
+            invalidateWidebandSpectrum(adcIdx);
+        }
+    });
+    connect(p2, &P2RadioConnection::widebandCaptureStateApplied, this,
+            [this, widebandEpoch, captureEpochs](int adc, quint64 generation, bool enabled) {
+        if (widebandEpoch != m_widebandConnectionEpoch.load(std::memory_order_acquire)
+            || adc < 0 || adc >= int(captureEpochs.size()) || !captureEpochs[adc]
+            || generation != captureEpochs[adc]->load(std::memory_order_acquire)) {
+            return;
+        }
+        if (!enabled) {
+            invalidateWidebandSpectrum(adc);
+            return;
+        }
+        const auto rate = widebandAdcRateHz(adc);
+        if (!rate) { return; }
+        const auto geometry = m_widebandFftEngines[adc]->geometry();
+        const auto previous = m_widebandSpectrumCache.source(adc);
+        const auto source = m_widebandSpectrumCache.configureSource(adc,
+            {widebandEpoch, generation, geometry->generation}, *rate);
+        if (source != previous) { emit widebandSourceChanged(adc); }
+    });
+    connect(p2, &P2RadioConnection::widebandFrameReadyForGeneration,
+            &m_widebandDispatchContext,
+            [this, widebandEpoch, captureEpochs](int adcIdx,
+                quint64 captureGeneration, const QVector<float>& samples,
+                qint64 producedAtNs) {
+        if (widebandEpoch != m_widebandConnectionEpoch.load(std::memory_order_acquire)
+            || adcIdx < 0 || adcIdx >= 2 || !m_widebandFftEngines[adcIdx]
+            || captureGeneration == 0 || !captureEpochs[adcIdx]
+            || captureGeneration != captureEpochs[adcIdx]->load(std::memory_order_acquire)) {
+            return;
+        }
+        // Capture the immutable geometry at production, before waiting
+        // for the FFT worker. A later rate change (including change/back)
+        // cannot relabel old samples as a new RF source.
+        const auto geometry = m_widebandFftEngines[adcIdx]->geometry();
+        if (!std::isfinite(geometry->adcRateHz) || geometry->adcRateHz <= 0.0
+            || geometry->adcRateHz / 2.0 <= 0.0
+            || producedAtNs < geometry->configuredAtNs) {
+            return;
+        }
+        QMetaObject::invokeMethod(&m_widebandDispatchContext,
+            [this, widebandEpoch, adcIdx, captureGeneration,
+             captureEpoch = captureEpochs[adcIdx], geometry, samples, producedAtNs]() {
+            if (widebandEpoch != m_widebandConnectionEpoch.load(std::memory_order_acquire)
+                || captureGeneration != captureEpoch->load(std::memory_order_acquire)
+                || geometry != m_widebandFftEngines[adcIdx]->geometry()) {
+                return;
+            }
+            QVector<float> bins;
+            m_widebandFftEngines[adcIdx]->computeFft(samples, bins);
+            // Serialize publication with model teardown and configuration.
+            // Retained tokens are safe after the P2 QObject is destroyed.
+            QMetaObject::invokeMethod(this,
+                [this, widebandEpoch, adcIdx, captureGeneration, captureEpoch,
+                 geometry, producedAtNs, bins = std::move(bins)]() {
+                if (widebandEpoch != m_widebandConnectionEpoch.load(std::memory_order_acquire)
+                    || captureGeneration != captureEpoch->load(std::memory_order_acquire)
+                    || geometry != m_widebandFftEngines[adcIdx]->geometry()
+                    || !widebandAdcRateHz(adcIdx)) {
+                    return;
+                }
+                const auto previous = m_widebandSpectrumCache.source(adcIdx);
+                const auto source = m_widebandSpectrumCache.configureSource(adcIdx,
+                    {widebandEpoch, captureGeneration, geometry->generation},
+                    geometry->adcRateHz);
+                if (!source) {
+                    return;
+                }
+                if (source != previous) {
+                    emit widebandSourceChanged(adcIdx);
+                }
+                const WidebandSpectrumFrame frame{*source, producedAtNs, std::move(bins)};
+                if (widebandSourceDescriptor(adcIdx) != source
+                    || !m_widebandSpectrumCache.publish(frame)) {
+                    return;
+                }
+                emit widebandSpectrumAvailable(adcIdx, source->sourceGeneration);
+                if (widebandSourceDescriptor(adcIdx) == source) {
+                    emit widebandSpectrumReady(adcIdx, frame.rawDbBins);
+                }
+            }, Qt::AutoConnection);
+        }, Qt::AutoConnection);
+    }, Qt::DirectConnection);
+}
+
 std::optional<double> RadioModel::widebandAdcRateHz(int adc) const
 {
     if (role() != Role::Local || !isConnected()

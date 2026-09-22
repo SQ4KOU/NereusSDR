@@ -6902,6 +6902,7 @@ nereus_add_test(tst_remote_fft_production)
 # Remote Daemon R3, Task 4: endpoint state, tier switching, frame reduction,
 # cadence, compression, and bounded DSS wide-row composition.
 nereus_add_test(tst_spectrum_endpoint)
+nereus_add_test(tst_wideband_display_context)
 
 # Remote Daemon R3 GUI receive seam: decoded remote spectrum reaches the
 # existing renderer entry point without local FFT ownership.

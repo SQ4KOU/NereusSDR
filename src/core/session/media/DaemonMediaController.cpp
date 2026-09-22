@@ -196,6 +196,20 @@ bool requestOverlapsSource(const SpectrumEndpointRequest& request,
         && requestHigh > sourceLow && requestLow < sourceHigh;
 }
 
+bool needsWideband(const SpectrumEndpointRequest& request, double centreHz, double rateHz)
+{
+    return request.spanHz > rateHz
+        || request.centreHz - request.spanHz * 0.5 < centreHz - rateHz * 0.5
+        || request.centreHz + request.spanHz * 0.5 > centreHz + rateHz * 0.5;
+}
+
+// A replacement endpoint can temporarily coexist with the old one for
+// rollback. Unique ownership releases exactly once when either entry retires.
+struct WidebandDemandLease {
+    QPointer<RadioModel> model;
+    RadioModel::WidebandDemandToken token{0};
+    ~WidebandDemandLease() { if (model) { model->releaseWidebandDemand(token); } }
+};
 } // namespace
 
 struct DaemonMediaController::EndpointEntry {
@@ -206,9 +220,13 @@ struct DaemonMediaController::EndpointEntry {
     double sourceCentreHz{0.0};
     double sourceSampleRateHz{0.0};
     SpectrumEndpointRequest request;
+    bool widebandNegotiated{false};
+    bool widebandWanted{false};
+    std::unique_ptr<WidebandDemandLease> widebandDemand;
     SpectrumEndpoint endpoint;
     DisplayCodecEncoder encoder;
     std::optional<DaemonSpectrumFrame> latestInput;
+    double stationOffsetDb{0.0};
     bool contextSent{false};
     bool forceKeyframe{true};
     int keyframesInWindow{0};
@@ -259,6 +277,13 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
             this, &DaemonMediaController::onSliceRemoved);
     connect(m_radioModel, &RadioModel::connectionStateChanged,
             this, &DaemonMediaController::onRadioConnectionStateChanged);
+    // Capture changes can be emitted inside endpoint lease release. Process
+    // them after map replacement/removal completes, then revalidate again at
+    // send time so no old source row slips through the queued notification.
+    connect(m_radioModel, &RadioModel::widebandSourceChanged, this,
+            &DaemonMediaController::onWidebandSourceChanged, Qt::QueuedConnection);
+    connect(m_radioModel, &RadioModel::streamAdcRoutingChanged, this,
+            [this]() { onWidebandSourceChanged(-1); }, Qt::QueuedConnection);
     connect(m_radioModel->pureSignalFacade(), &PureSignalSessionFacade::displayInvalidated,
             this, [this]() { m_ps3Chunks.clear(); });
     connect(m_radioModel->pureSignalFacade(), &PureSignalSessionFacade::displaySnapshotReady,
@@ -400,7 +425,12 @@ bool DaemonMediaController::acceptPeerControl(const QJsonObject& control)
 
 bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
 {
-    if (!exactKeys(control, {"op", "connectionId", "endpointId", "revision", "sliceId",
+    const bool widebandNegotiated = control.contains(QStringLiteral("extendedView"));
+    QJsonObject legacyShape = control;
+    if (widebandNegotiated) { legacyShape.remove(QStringLiteral("extendedView")); }
+    if ((widebandNegotiated && (!m_server || !m_server->remoteWidebandAvailable()
+                               || !control.value(QStringLiteral("extendedView")).isBool()))
+        || !exactKeys(legacyShape, {"op", "connectionId", "endpointId", "revision", "sliceId",
                              "tier", "fftSize", "windowType", "centreHz", "spanHz", "pixels",
                              "fps", "framesPerLine", "trace", "waterfall", "minDbm", "maxDbm",
                              "wideSpanFactor"})
@@ -488,6 +518,8 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
         }
     }
 
+    request.extendedView = widebandNegotiated
+        && control.value(QStringLiteral("extendedView")).toBool();
     request.endpointId = endpointId;
     request.source = source;
     request.pixels = pixels;
@@ -495,12 +527,16 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     request.framesPerLine = framesPerLine;
     request.minDbm = static_cast<float>(minDbm);
     request.maxDbm = static_cast<float>(maxDbm);
-    if (!requestOverlapsSource(request, sourceCentreHz, sourceSampleRateHz)) {
+    const auto adcRate = m_radioModel->widebandAdcRateHz(m_radioModel->sliceAdcIndex(sliceId));
+    const bool extendedAllowed = request.extendedView && adcRate.has_value();
+    if ((!requestOverlapsSource(request, sourceCentreHz, sourceSampleRateHz) && !extendedAllowed)
+        || (extendedAllowed && request.spanHz > std::max(sourceSampleRateHz, *adcRate / 2.0))) {
         sendRejected(m_peer->connectionId(), endpointId, revision,
                      QStringLiteral("requested crop is outside source coverage"));
         return false;
     }
     EndpointEntry entry;
+    entry.widebandNegotiated = widebandNegotiated;
     entry.revision = revision;
     entry.sliceId = sliceId;
     entry.sourceFftSize = fftSize;
@@ -522,6 +558,16 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
         }
         sendRejected(m_peer->connectionId(), endpointId, revision,
                      QStringLiteral("source configuration rejected"));
+        return false;
+    }
+    if (!reconcileWidebandDemand(m_endpoints.at(endpointId))) {
+        removeEndpoint(endpointId);
+        if (replaced) {
+            m_endpoints.emplace(endpointId, std::move(*replaced));
+            reconcileSource(replacedSource);
+        }
+        sendRejected(m_peer->connectionId(), endpointId, revision,
+                     QStringLiteral("wideband source is unavailable"));
         return false;
     }
     if (replaced.has_value() && !(replacedSource == source)) {
@@ -609,18 +655,31 @@ void DaemonMediaController::onSourceFrame(MediaSourceKey key)
         || !std::isfinite(sourceFrame->dbmOffset + stationOffsetDb)) {
         return;
     }
-    DaemonSpectrumFrame frame = *sourceFrame;
-    frame.dbmOffset += stationOffsetDb;
+    const DaemonSpectrumFrame& frame = *sourceFrame;
+    MediaPeer* const peer = m_peer.get();
+    const quint64 epoch = m_epoch;
+    const QList<quint32> ids = endpointIds();
 
-    for (auto it = m_endpoints.begin(); it != m_endpoints.end(); ++it) {
+    for (quint32 endpointId : ids) {
+        auto it = m_endpoints.find(endpointId);
+        if (it == m_endpoints.end()) { continue; }
         EndpointEntry& entry = it->second;
         if (!(entry.request.source == key)) {
             continue;
         }
+        entry.stationOffsetDb = stationOffsetDb;
+        entry.latestInput = frame;
+        const auto wideband = widebandContext(entry);
+        if (!wideband) {
+            entry.contextSent = false;
+            continue; // Await capture enable acknowledgement, never ADC data.
+        }
         if (!entry.endpoint.configured()
             || entry.endpoint.context().sourceGeneration != frame.generation
-            || entry.endpoint.context().codec.contextGeneration == 0) {
+            || entry.endpoint.context().codec.contextGeneration == 0
+            || entry.endpoint.context().wideband != *wideband) {
             configureEndpointFromFrame(entry, frame);
+            if (m_peer.get() != peer || m_epoch != epoch) { return; }
         }
     }
 
@@ -639,7 +698,10 @@ void DaemonMediaController::onSourceFrame(MediaSourceKey key)
     if (needsNoiseFloor) {
         const std::optional<float> floorDbm = fullSourceNoiseFloor(*sourceFrame, stationOffsetDb);
         if (floorDbm.has_value() && m_peer) {
-            for (auto& [endpointId, entry] : m_endpoints) {
+            for (quint32 endpointId : ids) {
+                auto it = m_endpoints.find(endpointId);
+                if (it == m_endpoints.end()) { continue; }
+                EndpointEntry& entry = it->second;
                 if (entry.request.source != key || !entry.contextSent || !entry.endpoint.configured()
                     || entry.endpoint.context().sourceGeneration != frame.generation
                     || (entry.lastNoiseFloorTimestampNs >= 0
@@ -656,8 +718,15 @@ void DaemonMediaController::onSourceFrame(MediaSourceKey key)
                         entry.endpoint.context().codec.contextGeneration)},
                     {QStringLiteral("floorDbm"), *floorDbm},
                 };
-                if (sendControl(message)) {
-                    entry.lastNoiseFloorTimestampNs = frame.producedAtNs;
+                const quint32 revision = entry.revision;
+                const quint32 generation = entry.endpoint.context().codec.contextGeneration;
+                const bool sent = sendControl(message);
+                if (m_peer.get() != peer || m_epoch != epoch) { return; }
+                it = m_endpoints.find(endpointId);
+                if (sent && it != m_endpoints.end() && it->second.revision == revision
+                    && it->second.endpoint.configured()
+                    && it->second.endpoint.context().codec.contextGeneration == generation) {
+                    it->second.lastNoiseFloorTimestampNs = frame.producedAtNs;
                 }
             }
         }
@@ -681,6 +750,9 @@ void DaemonMediaController::configureEndpointFromFrame(EndpointEntry& entry,
     sourceContext.fftBins = frame.binsLinear.size();
     sourceContext.centreHz = frame.centreHz;
     sourceContext.sampleRateHz = frame.sampleRateHz;
+    const auto wideband = widebandContext(entry);
+    if (!wideband) { entry.contextSent = false; return; }
+    sourceContext.wideband = *wideband;
     sourceContext.contextGeneration = nextContextGeneration();
     if (!entry.endpoint.configure(entry.request, sourceContext)) {
         return;
@@ -688,7 +760,7 @@ void DaemonMediaController::configureEndpointFromFrame(EndpointEntry& entry,
     entry.encoder.reset();
     entry.sourceCentreHz = frame.centreHz;
     entry.sourceSampleRateHz = frame.sampleRateHz;
-    entry.latestInput.reset();
+    entry.latestInput = frame;
     entry.forceKeyframe = true;
     entry.contextSent = false;
     entry.lastNoiseFloorTimestampNs = -1;
@@ -757,7 +829,24 @@ void DaemonMediaController::sendContext(EndpointEntry& entry)
         {QStringLiteral("fps"), context.targetFps},
         {QStringLiteral("framesPerLine"), context.framesPerLine},
     };
-    entry.contextSent = sendControl(message);
+    if (entry.widebandNegotiated) {
+        message.insert(QStringLiteral("wideband"), context.wideband.toJson());
+    }
+    // A failed send can synchronously close the session. Copy identity before
+    // crossing the transport and never retain an endpoint reference across it.
+    MediaPeer* const peer = m_peer.get();
+    const quint64 epoch = m_epoch;
+    const quint32 endpointId = context.codec.endpointId;
+    const quint32 revision = entry.revision;
+    const quint32 generation = context.codec.contextGeneration;
+    const bool sent = sendControl(message);
+    if (m_peer.get() != peer || m_epoch != epoch) { return; }
+    auto it = m_endpoints.find(endpointId);
+    if (it != m_endpoints.end() && it->second.revision == revision
+        && it->second.endpoint.configured()
+        && it->second.endpoint.context().codec.contextGeneration == generation) {
+        it->second.contextSent = sent;
+    }
 }
 
 void DaemonMediaController::onSendTick()
@@ -765,12 +854,16 @@ void DaemonMediaController::onSendTick()
     if (!m_peer || !m_peer->isReady()) {
         return;
     }
+    MediaPeer* const peer = m_peer.get();
+    const quint64 epoch = m_epoch;
     if (!m_radioModel || !m_radioModel->pureSignalFacade()->remoteAmpViewSubscribed()) {
         m_ps3Chunks.clear();
     }
     if (!m_ps3Chunks.isEmpty()) {
         const QByteArray chunk = m_ps3Chunks.takeFirst();
-        if (!m_peer->sendDisplay(chunk)) {
+        const bool sent = peer->sendDisplay(chunk);
+        if (m_peer.get() != peer || m_epoch != epoch) { return; }
+        if (!sent) {
             // A rejected send may already have buffered bytes. Never retry
             // this sequence; the next snapshot replaces the partial frame.
             m_ps3Chunks.clear();
@@ -780,33 +873,128 @@ void DaemonMediaController::onSendTick()
     if (m_endpoints.empty()) {
         return;
     }
-    QList<quint32> ids;
-    ids.reserve(static_cast<qsizetype>(m_endpoints.size()));
-    for (const auto& [endpointId, unused] : m_endpoints) {
-        Q_UNUSED(unused);
-        ids.append(endpointId);
-    }
+    const QList<quint32> ids = endpointIds();
     for (int offset = 0; offset < ids.size(); ++offset) {
         const int index = (m_roundRobinCursor + offset) % ids.size();
-        EndpointEntry& entry = m_endpoints.at(ids.at(index));
+        const quint32 endpointId = ids.at(index);
+        auto it = m_endpoints.find(endpointId);
+        if (it == m_endpoints.end()) { continue; }
+        EndpointEntry& entry = it->second;
         if (!entry.latestInput.has_value() || !entry.contextSent) {
             continue;
         }
         const DaemonSpectrumFrame frame = std::move(*entry.latestInput);
         entry.latestInput.reset();
-        const std::optional<DisplayCodecFrame> reduced = entry.endpoint.consume(frame);
+        const quint32 revision = entry.revision;
+        const auto currentWideband = widebandContext(entry);
+        if (!currentWideband) { entry.contextSent = false; continue; }
+        if (*currentWideband != entry.endpoint.context().wideband) {
+            configureEndpointFromFrame(entry, frame);
+            if (m_peer.get() != peer || m_epoch != epoch) { return; }
+        }
+        // The reliable context send may also retire/rebind this endpoint.
+        it = m_endpoints.find(endpointId);
+        if (it == m_endpoints.end() || it->second.revision != revision
+            || !it->second.contextSent) { continue; }
+        EndpointEntry& current = it->second;
+        current.latestInput.reset();
+        const auto adcFrame = currentWideband->active && m_radioModel
+            ? m_radioModel->latestWidebandSpectrum(currentWideband->physicalAdcIndex)
+            : std::nullopt;
+        const std::optional<DisplayCodecFrame> reduced =
+            current.endpoint.consume(frame, current.stationOffsetDb, adcFrame);
         m_roundRobinCursor = (index + 1) % ids.size();
         if (!reduced.has_value()) {
             return;
         }
-        const QByteArray bytes = entry.encoder.encode(*reduced, entry.forceKeyframe);
-        entry.forceKeyframe = false;
-        if (bytes.isEmpty() || !m_peer->sendDisplay(bytes)) {
+        const QByteArray bytes = current.encoder.encode(*reduced, current.forceKeyframe);
+        const quint32 generation = current.endpoint.context().codec.contextGeneration;
+        current.forceKeyframe = false;
+        const bool sent = !bytes.isEmpty() && peer->sendDisplay(bytes);
+        if (m_peer.get() != peer || m_epoch != epoch) { return; }
+        it = m_endpoints.find(endpointId);
+        if (!sent && it != m_endpoints.end() && it->second.revision == revision
+            && it->second.endpoint.configured()
+            && it->second.endpoint.context().codec.contextGeneration == generation) {
             // A false return can mean the backend accepted/buffered bytes.
             // Do not resend this sequence; force a fresh keyframe later.
-            entry.forceKeyframe = true;
+            it->second.forceKeyframe = true;
         }
         return;
+    }
+}
+
+bool DaemonMediaController::reconcileWidebandDemand(EndpointEntry& entry)
+{
+    if (!m_radioModel) { return false; }
+    const int adc = m_radioModel->sliceAdcIndex(entry.sliceId);
+    const auto rate = m_radioModel->widebandAdcRateHz(adc);
+    const double centre = m_radioModel->streamCentreHz(entry.request.source.streamIndex);
+    const double ddcRate = m_radioModel->streamSampleRateHz(entry.request.source.streamIndex);
+    entry.widebandWanted = entry.widebandNegotiated && entry.request.extendedView
+        && rate.has_value() && needsWideband(entry.request, centre, ddcRate);
+    if (!entry.widebandWanted) {
+        entry.widebandDemand.reset();
+        return true;
+    }
+    if (!entry.widebandDemand) {
+        const auto token = m_radioModel->acquireWidebandDemand(entry.sliceId);
+        if (!token) { return false; }
+        entry.widebandDemand = std::make_unique<WidebandDemandLease>();
+        entry.widebandDemand->model = m_radioModel;
+        entry.widebandDemand->token = token;
+    }
+    return m_radioModel->setWidebandDemandActive(entry.widebandDemand->token, true);
+}
+
+std::optional<WidebandDisplayContext>
+DaemonMediaController::widebandContext(const EndpointEntry& entry) const
+{
+    WidebandDisplayContext context;
+    if (!entry.widebandNegotiated || !m_radioModel) { return context; }
+    const int adc = m_radioModel->sliceAdcIndex(entry.sliceId);
+    const int chain = m_radioModel->sliceChainIndex(entry.sliceId);
+    const auto rate = m_radioModel->widebandAdcRateHz(adc);
+    if (!rate || chain < 0 || chain >= m_radioModel->boardCapabilities().rxFilterChainCount) {
+        return context;
+    }
+    context.available = true;
+    context.physicalAdcIndex = adc;
+    context.filterChainIndex = chain;
+    context.adcRateHz = *rate;
+    if (entry.widebandWanted) {
+        const auto source = m_radioModel->widebandSourceDescriptor(adc);
+        if (!source) { return std::nullopt; }
+        context.active = true;
+        context.sourceGeneration = source->sourceGeneration;
+    }
+    return context.valid() ? std::optional(context) : std::nullopt;
+}
+
+void DaemonMediaController::onWidebandSourceChanged(int)
+{
+    MediaPeer* const peer = m_peer.get();
+    const quint64 epoch = m_epoch;
+    for (quint32 endpointId : endpointIds()) {
+        auto it = m_endpoints.find(endpointId);
+        if (it == m_endpoints.end()) { continue; }
+        EndpointEntry& entry = it->second;
+        if (!entry.widebandNegotiated) { continue; }
+        if (!reconcileWidebandDemand(entry)) {
+            entry.contextSent = false;
+            entry.latestInput.reset();
+            continue;
+        }
+        const auto context = widebandContext(entry);
+        if (!context || (entry.endpoint.configured()
+                         && entry.endpoint.context().wideband != *context)) {
+            entry.contextSent = false;
+        }
+        if (context && entry.latestInput && !entry.contextSent) {
+            const auto frame = *entry.latestInput;
+            configureEndpointFromFrame(entry, frame);
+            if (m_peer.get() != peer || m_epoch != epoch) { return; }
+        }
     }
 }
 
@@ -896,6 +1084,8 @@ bool DaemonMediaController::reconcileSource(const MediaSourceKey& key)
 
 void DaemonMediaController::onStreamGeometryChanged(int streamIndex, double, int)
 {
+    MediaPeer* const peer = m_peer.get();
+    const quint64 epoch = m_epoch;
     const QList<MediaSourceKey> keys = m_sources.keys();
     for (const MediaSourceKey& key : keys) {
         if (key.streamIndex != streamIndex) {
@@ -904,21 +1094,32 @@ void DaemonMediaController::onStreamGeometryChanged(int streamIndex, double, int
         const double centreHz = m_radioModel ? m_radioModel->streamCentreHz(streamIndex) : 0.0;
         const double sampleRateHz = m_radioModel
             ? m_radioModel->streamSampleRateHz(streamIndex) : 0.0;
-        QList<quint32> outsideCoverage;
-        for (const auto& [endpointId, entry] : m_endpoints) {
+        for (quint32 endpointId : endpointIds()) {
+            auto it = m_endpoints.find(endpointId);
+            if (it == m_endpoints.end()) { continue; }
+            const EndpointEntry& entry = it->second;
+            const auto adcRate = m_radioModel
+                ? m_radioModel->widebandAdcRateHz(m_radioModel->sliceAdcIndex(entry.sliceId))
+                : std::nullopt;
             if (entry.request.source == key
-                && !requestOverlapsSource(entry.request, centreHz, sampleRateHz)) {
-                sendRejected(m_peer ? m_peer->connectionId() : QString(), endpointId,
-                             entry.revision,
+                && !requestOverlapsSource(entry.request, centreHz, sampleRateHz)
+                && !(entry.request.extendedView && adcRate)) {
+                const quint32 revision = entry.revision;
+                removeEndpoint(endpointId);
+                sendRejected(m_peer ? m_peer->connectionId() : QString(), endpointId, revision,
                              QStringLiteral("source retune no longer covers requested crop"));
-                outsideCoverage.append(endpointId);
+                if (m_peer.get() != peer || m_epoch != epoch) { return; }
             }
-        }
-        for (quint32 endpointId : outsideCoverage) {
-            removeEndpoint(endpointId);
         }
         if (!m_sources.contains(key)) {
             continue;
+        }
+        for (auto& [unused, entry] : m_endpoints) {
+            Q_UNUSED(unused);
+            if (entry.request.source == key && !reconcileWidebandDemand(entry)) {
+                entry.contextSent = false;
+                entry.latestInput.reset();
+            }
         }
         if (!reconcileSource(key)) {
             // A retuned/disconnected stream must never keep emitting frames
@@ -942,35 +1143,39 @@ void DaemonMediaController::onStreamGeometryChanged(int streamIndex, double, int
 
 void DaemonMediaController::onStreamBindingsChanged(int streamIndex, const QVector<int>&)
 {
-    QList<quint32> removed;
-    for (auto it = m_endpoints.cbegin(); it != m_endpoints.cend(); ++it) {
+    MediaPeer* const peer = m_peer.get();
+    const quint64 epoch = m_epoch;
+    for (quint32 endpointId : endpointIds()) {
+        auto it = m_endpoints.find(endpointId);
+        if (it == m_endpoints.end()) { continue; }
         const EndpointEntry& entry = it->second;
         SliceModel* slice = m_radioModel ? m_radioModel->sliceById(entry.sliceId) : nullptr;
         if (entry.request.source.streamIndex == streamIndex
             && (!slice || slice->streamIndex() != streamIndex)) {
-            sendRejected(m_peer ? m_peer->connectionId() : QString(), it->first, entry.revision,
+            const quint32 revision = entry.revision;
+            removeEndpoint(endpointId);
+            sendRejected(m_peer ? m_peer->connectionId() : QString(), endpointId, revision,
                          QStringLiteral("slice stream binding changed"));
-            removed.append(it->first);
+            if (m_peer.get() != peer || m_epoch != epoch) { return; }
         }
-    }
-    for (quint32 endpointId : removed) {
-        removeEndpoint(endpointId);
     }
 }
 
 void DaemonMediaController::onSliceRemoved(int sliceId)
 {
-    QList<quint32> removed;
-    for (auto it = m_endpoints.cbegin(); it != m_endpoints.cend(); ++it) {
+    MediaPeer* const peer = m_peer.get();
+    const quint64 epoch = m_epoch;
+    for (quint32 endpointId : endpointIds()) {
+        auto it = m_endpoints.find(endpointId);
+        if (it == m_endpoints.end()) { continue; }
         const EndpointEntry& entry = it->second;
         if (entry.sliceId == sliceId) {
-            sendRejected(m_peer ? m_peer->connectionId() : QString(), it->first, entry.revision,
+            const quint32 revision = entry.revision;
+            removeEndpoint(endpointId);
+            sendRejected(m_peer ? m_peer->connectionId() : QString(), endpointId, revision,
                          QStringLiteral("slice removed"));
-            removed.append(it->first);
+            if (m_peer.get() != peer || m_epoch != epoch) { return; }
         }
-    }
-    for (quint32 endpointId : removed) {
-        removeEndpoint(endpointId);
     }
 }
 
@@ -1154,17 +1359,30 @@ void DaemonMediaController::clearSession()
 {
     // Detach and move ownership before stop(): MediaPeer::stop() can emit
     // closed synchronously. Its callbacks are identity/epoch guarded, but
-    // disconnecting them too prevents recursive clearSession() and deletion
-    // of the peer while it is emitting one of its own signals.
+    // disconnecting them too prevents recursive clearSession(). Defer deletion
+    // until its send/signal stack has unwound. QObject parent ownership still
+    // reclaims a retired peer if the controller dies before deferred deletion.
     // Sender remains owned by this controller; stop its timer/capture while
     // the current peer is still identifiable, then retire the peer.
     resetAudioSession();
-    std::unique_ptr<MediaPeer> peer = std::move(m_peer);
+    MediaPeer* const peer = m_peer.release();
     if (peer) {
         peer->disconnect(this);
         peer->stop();
+        peer->deleteLater();
     }
     clearProduction();
+}
+
+QList<quint32> DaemonMediaController::endpointIds() const
+{
+    QList<quint32> ids;
+    ids.reserve(static_cast<qsizetype>(m_endpoints.size()));
+    for (const auto& [endpointId, unused] : m_endpoints) {
+        Q_UNUSED(unused);
+        ids.append(endpointId);
+    }
+    return ids;
 }
 
 void DaemonMediaController::clearProduction()

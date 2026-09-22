@@ -1371,6 +1371,12 @@ void P2RadioConnection::setWidebandEnabled(int adcIndex, bool on)
         ? static_cast<quint8>(m_wbEnableMask | bit)
         : static_cast<quint8>(m_wbEnableMask & static_cast<quint8>(~bit));
     if (newMask == m_wbEnableMask) {
+        // A local request can enable capture while the model is Connecting.
+        // Its Connected reconciliation still needs the actual identity even
+        // if no ADC data has arrived. Acknowledge without advancing epochs or
+        // sending another CmdGeneral packet.
+        emit widebandCaptureStateApplied(adcIndex,
+            m_wbCaptureEpochs[adcIndex]->load(std::memory_order_acquire), on);
         return;
     }
     // Nereus capture lifetime: trailing packets after an enable transition
@@ -1379,8 +1385,14 @@ void P2RadioConnection::setWidebandEnabled(int adcIndex, bool on)
     advanceWidebandCaptureEpoch(adcIndex);
     m_wbAccumulators[adcIndex]->discardPartialFrame();
     m_wbEnableMask = newMask;
-    emit widebandCaptureRetired(adcIndex,
-        m_wbCaptureEpochs[adcIndex]->load(std::memory_order_acquire));
+    const quint64 generation = m_wbCaptureEpochs[adcIndex]->load(std::memory_order_acquire);
+    emit widebandCaptureRetired(adcIndex, generation);
+    // Direct observers may start a different capture while retiring this one.
+    // Never announce the outer transition after such a replacement.
+    if (generation == m_wbCaptureEpochs[adcIndex]->load(std::memory_order_acquire)
+        && bool(m_wbEnableMask & bit) == on) {
+        emit widebandCaptureStateApplied(adcIndex, generation, on);
+    }
     if (m_state == ConnectionState::Connected) {
         sendCmdGeneral();
     }

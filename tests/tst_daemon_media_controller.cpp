@@ -10,6 +10,9 @@
 
 #include "core/AppSettings.h"
 #include "core/FFTEngine.h"
+#include "core/P2RadioConnection.h"
+#include "core/DdcAssignment.h"
+#include "core/WidebandFrameAccumulator.h"
 #include "core/HpsdrModel.h"
 #include "core/NoiseFloorEstimator.h"
 #include "core/session/StationClient.h"
@@ -28,6 +31,7 @@
 #include <QTemporaryDir>
 
 #include <cmath>
+#include <functional>
 #include <numbers>
 
 using namespace NereusSDR;
@@ -53,6 +57,8 @@ public:
     {
         if (!readyState) { return false; }
         displays.append(bytes);
+        const auto callback = onDisplaySend;
+        if (callback) { return callback(); }
         return true;
     }
     bool sendRtp(const QByteArray&) override { return readyState; }
@@ -63,6 +69,23 @@ public:
     bool readyState{false};
     StartOptions startOptions{Role::Answerer, 0};
     QList<QByteArray> displays;
+    std::function<bool()> onDisplaySend;
+};
+
+class ClosingControlTransport final : public Test::LoopbackTransport {
+public:
+    ClosingControlTransport() : LoopbackTransport(QStringLiteral("station")) {}
+    void sendText(const QByteArray& wire) override
+    {
+        if (!closeOnOp.isEmpty()
+            && wire.contains(QByteArray("\"op\":\"") + closeOnOp + '"')) {
+            closeOnOp.clear();
+            closeLink(QStringLiteral("test synchronous send closure"));
+            return;
+        }
+        LoopbackTransport::sendText(wire);
+    }
+    QByteArray closeOnOp;
 };
 
 QVector<float> syntheticIq(int complexSamples, double cyclesPerSample)
@@ -151,12 +174,14 @@ QJsonObject messageFor(const QSignalSpy& messages, const QString& op,
 struct Harness {
     QTemporaryDir directory;
     AppSettings settings;
+    P2RadioConnection p2;
     RadioModel radio;
     StationServer server;
     RadioModel remote{RadioModel::Role::Remote};
     SettingsProxy settingsProxy;
     StationClient client{&remote, &settingsProxy};
     QPointer<FakeTransport> mediaTransport;
+    QPointer<ClosingControlTransport> stationTransport;
     DaemonMediaController controller;
     int sliceId{-1};
     int spareSliceId{-1};
@@ -191,9 +216,20 @@ struct Harness {
         server.setMediaEnabled(true);
     }
 
+    void enableWidebandSource()
+    {
+        p2.setBoardForTest(HPSDRHW::Saturn);
+        radio.injectConnectionForTest(&p2);
+        RadioInfo info;
+        info.protocol = ProtocolVersion::Protocol2;
+        radio.setLastRadioInfoForTest(info);
+        radio.wireWidebandConnectionForTest();
+    }
+
     void establishSession()
     {
-        auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+        auto* stationLink = new ClosingControlTransport;
+        stationTransport = stationLink;
         auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
         stationLink->linkTo(clientLink);
         client.startSession(clientLink, server.token());
@@ -256,6 +292,14 @@ private slots:
     }
 
     void authenticatedControlProducesContextThenDecodedDisplayAndUnsubscribes();
+    void extendedPermissionFirstCaptureAndSharedEndpointLifetimes();
+    void widebandSourceReplacementAndSessionRetirement();
+    void olderPeerKeepsLegacyContextAndCannotAcquireWideband();
+    void localCaptureDuringConnectingGetsIdentityBeforeFirstAdcRow();
+    void synchronousDisplayClosureRetiresDemandAndAllowsNewPeer_data();
+    void synchronousDisplayClosureRetiresDemandAndAllowsNewPeer();
+    void synchronousControlClosureRetiresDemand_data();
+    void synchronousControlClosureRetiresDemand();
     void staleRevisionAndWrongEpochPreserveTheActiveSource();
     void streamRemovalRetiresEndpointAndSource();
     void nonoverlappingCropIsRejectedBeforeSourceActivation();
@@ -528,6 +572,304 @@ void TstDaemonMediaController::streamRemovalRetiresEndpointAndSource()
     QTRY_COMPARE(harness.controller.activeEndpointCount(), 0);
     QTRY_COMPARE(harness.controller.activeSourceCount(), 0);
     harness.finish();
+}
+
+void TstDaemonMediaController::extendedPermissionFirstCaptureAndSharedEndpointLifetimes()
+{
+    Harness h;
+    h.enableWidebandSource();
+    h.establishSession();
+    QVERIFY(h.client.remoteWidebandAvailable());
+    h.startReadyPeer();
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    const double centre = h.radio.streamCentreHz(h.streamIndex);
+    auto request = subscription(21, 1, h.sliceId, centre);
+    request.insert(QStringLiteral("extendedView"), true);
+    QVERIFY(h.client.sendMediaControl(request, h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 1);
+    QCOMPARE(h.p2.wbEnableMask(), quint8(0));
+    QTRY_VERIFY(([&] {
+        h.feedRadio();
+        return !messageFor(controls, QStringLiteral("context"), 21).isEmpty();
+    })());
+    auto context = messageFor(controls, QStringLiteral("context"), 21);
+    QCOMPARE(context.size(), 20);
+    auto wideband = WidebandDisplayContext::fromJson(context.value(QStringLiteral("wideband")).toObject());
+    QVERIFY(wideband && wideband->available && !wideband->active);
+    QCOMPARE(wideband->sourceGeneration, quint32(0));
+    QCOMPARE(h.p2.wbEnableMask(), quint8(0));
+
+    request.insert(QStringLiteral("revision"), 2);
+    request.insert(QStringLiteral("spanHz"), 1'000'000.0);
+    const auto packetsBefore = h.mediaTransport->displays.size();
+    QVERIFY(h.client.sendMediaControl(request, h.client.sessionEpoch()));
+    QTRY_COMPARE(h.p2.wbEnableMask(), quint8(1));
+    // No synthetic ADC burst has been sent: capture enable alone must give
+    // the first view an identity, a context and explicit empty wings.
+    QVERIFY(!h.radio.latestWidebandSpectrum(0));
+    QTRY_VERIFY(([&] {
+        h.feedRadio();
+        return messageFor(controls, QStringLiteral("context"), 21)
+            .value(QStringLiteral("revision")).toInt() == 2;
+    })());
+    context = messageFor(controls, QStringLiteral("context"), 21);
+    QCOMPARE(context.value(QStringLiteral("spanHz")).toDouble(), 1'000'000.0);
+    wideband = WidebandDisplayContext::fromJson(context.value(QStringLiteral("wideband")).toObject());
+    QVERIFY(wideband && wideband->active && wideband->sourceGeneration != 0);
+    QCOMPARE(wideband->physicalAdcIndex, 0);
+    QTRY_VERIFY(h.mediaTransport->displays.size() > packetsBefore);
+    DisplayCodecDecoder decoder;
+    const auto first = decoder.decode(h.mediaTransport->displays.constLast());
+    QCOMPARE(first.disposition, DisplayCodecDisposition::Accepted);
+    QCOMPARE(first.frame.context.contextGeneration,
+             quint32(context.value(QStringLiteral("contextGeneration")).toInteger()));
+    QVERIFY(std::abs(first.frame.traceDbm.first() - (-180.0f)) < 0.02f);
+    QVERIFY(std::abs(first.frame.traceDbm.last() - (-180.0f)) < 0.02f);
+
+    // Replacement rollback/invalid requests cannot disturb the active owner.
+    auto malformed = request;
+    malformed.insert(QStringLiteral("revision"), 3);
+    malformed.insert(QStringLiteral("physicalAdcIndex"), 1);
+    QVERIFY(h.client.sendMediaControl(malformed, h.client.sessionEpoch()));
+    QCoreApplication::processEvents();
+    QCOMPARE(h.controller.activeEndpointCount(), 1);
+    QCOMPARE(h.p2.wbEnableMask(), quint8(1));
+
+    request.insert(QStringLiteral("endpointId"), 22);
+    request.insert(QStringLiteral("revision"), 1);
+    QVERIFY(h.client.sendMediaControl(request, h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 2);
+    QCOMPARE(h.radio.widebandSourceDescriptor(0)->sourceGeneration, wideband->sourceGeneration);
+    const auto unsubscribe = [&](int id) {
+        return h.client.sendMediaControl({{QStringLiteral("op"), QStringLiteral("unsubscribe")},
+            {QStringLiteral("connectionId"), QLatin1String(kConnectionId)},
+            {QStringLiteral("endpointId"), id}}, h.client.sessionEpoch());
+    };
+    QVERIFY(unsubscribe(21));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 1);
+    QCOMPARE(h.p2.wbEnableMask(), quint8(1));
+    QVERIFY(unsubscribe(22));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 0);
+    QCOMPARE(h.p2.wbEnableMask(), quint8(0));
+    QVERIFY(!h.radio.widebandSourceDescriptor(0));
+    h.finish();
+}
+
+void TstDaemonMediaController::widebandSourceReplacementAndSessionRetirement()
+{
+    Harness h;
+    h.enableWidebandSource();
+    h.establishSession();
+    h.startReadyPeer();
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    auto request = subscription(31, 1, h.sliceId, h.radio.streamCentreHz(h.streamIndex));
+    request.insert(QStringLiteral("extendedView"), true);
+    request.insert(QStringLiteral("spanHz"), 1'000'000.0);
+    QVERIFY(h.client.sendMediaControl(request, h.client.sessionEpoch()));
+    QTRY_VERIFY(([&] { h.feedRadio(); return !messageFor(controls, QStringLiteral("context"), 31).isEmpty(); })());
+    const auto before = messageFor(controls, QStringLiteral("context"), 31);
+    const auto sourceBefore = h.radio.widebandSourceDescriptor(0);
+    QVERIFY(sourceBefore);
+
+    const auto accumulators = h.p2.findChildren<WidebandFrameAccumulator*>();
+    QCOMPARE(accumulators.size(), 8);
+    const QByteArray samples(1024, char(0x20));
+    for (int sequence = 0; sequence < 32; ++sequence) {
+        accumulators[0]->pushPacket(sequence, samples);
+    }
+    QTRY_VERIFY(h.radio.latestWidebandSpectrum(0));
+    h.p2.setWidebandEnabled(0, false);
+    h.p2.setWidebandEnabled(0, true);
+    QVERIFY(!h.radio.latestWidebandSpectrum(0));
+    QTRY_VERIFY(([&] {
+        h.feedRadio();
+        return messageFor(controls, QStringLiteral("context"), 31)
+            .value(QStringLiteral("contextGeneration")).toInteger()
+            > before.value(QStringLiteral("contextGeneration")).toInteger();
+    })());
+    const auto after = messageFor(controls, QStringLiteral("context"), 31);
+    const auto wideband = WidebandDisplayContext::fromJson(after.value(QStringLiteral("wideband")).toObject());
+    QVERIFY(wideband && wideband->active);
+    QVERIFY(wideband->sourceGeneration > sourceBefore->sourceGeneration);
+    QVERIFY(!h.radio.latestWidebandSpectrum(0));
+
+    // Change only the physical ADC routing. The DDC geometry stays fixed;
+    // source identity and mask must still follow the new physical input.
+    DdcAssignment assignment{};
+    assignment.streamDdc[h.streamIndex] = 0;
+    assignment.rate[0] = 192000;
+    assignment.ddcEnable = 1;
+    assignment.adcCtrl1 = 1;
+    h.radio.publishDdcAssignmentForTest(assignment);
+    QTRY_COMPARE(h.p2.wbEnableMask(), quint8(2));
+    QTRY_VERIFY(([&] {
+        h.feedRadio();
+        const auto metadata = messageFor(controls, QStringLiteral("context"), 31)
+            .value(QStringLiteral("wideband")).toObject();
+        return metadata.value(QStringLiteral("physicalAdcIndex")).toInt(-1) == 1;
+    })());
+    const auto remapped = messageFor(controls, QStringLiteral("context"), 31);
+    QVERIFY(remapped.value(QStringLiteral("contextGeneration")).toInteger()
+            > after.value(QStringLiteral("contextGeneration")).toInteger());
+    QVERIFY(!h.radio.latestWidebandSpectrum(1));
+    h.finish();
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 0);
+    QTRY_COMPARE(h.p2.wbEnableMask(), quint8(0));
+}
+
+void TstDaemonMediaController::localCaptureDuringConnectingGetsIdentityBeforeFirstAdcRow()
+{
+    Harness h;
+    h.enableWidebandSource();
+    h.radio.setConnectionStateForTest(ConnectionState::Connecting);
+    h.radio.sliceById(h.sliceId)->setWidebandExtensionRequested(true);
+    // The fixture has retired an earlier Connected state, so normal demand
+    // is gated. Simulate P2 capture applied during the next connection setup,
+    // before the model publishes Connected and re-applies retained demand.
+    h.p2.setWidebandEnabled(0, true);
+    QCOMPARE(h.p2.wbEnableMask(), quint8(1));
+    QVERIFY(!h.radio.widebandSourceDescriptor(0));
+    h.radio.setConnectionStateForTest(ConnectionState::Connected);
+    // Production Connected re-publishes its DDC assignment and reconciles
+    // demand. This narrow fixture runs the same reconciliation explicitly.
+    h.radio.reconcileWidebandDemand();
+    QVERIFY(h.radio.widebandSourceDescriptor(0));
+    QVERIFY(!h.radio.latestWidebandSpectrum(0));
+    h.establishSession();
+    h.startReadyPeer();
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    auto request = subscription(51, 1, h.sliceId, h.radio.streamCentreHz(h.streamIndex));
+    request.insert(QStringLiteral("extendedView"), true);
+    request.insert(QStringLiteral("spanHz"), 1'000'000.0);
+    QVERIFY(h.client.sendMediaControl(request, h.client.sessionEpoch()));
+    QTRY_VERIFY(([&] {
+        h.feedRadio();
+        return messageFor(controls, QStringLiteral("context"), 51)
+            .value(QStringLiteral("wideband")).toObject().value(QStringLiteral("active")).toBool();
+    })());
+    QVERIFY(!h.radio.latestWidebandSpectrum(0));
+    h.finish();
+}
+
+void TstDaemonMediaController::synchronousDisplayClosureRetiresDemandAndAllowsNewPeer_data()
+{
+    QTest::addColumn<bool>("sendAccepted");
+    QTest::newRow("refused") << false;
+    QTest::newRow("accepted-before-close") << true;
+}
+
+void TstDaemonMediaController::synchronousDisplayClosureRetiresDemandAndAllowsNewPeer()
+{
+    QFETCH(bool, sendAccepted);
+    Harness h;
+    h.enableWidebandSource();
+    h.establishSession();
+    h.startReadyPeer();
+    QPointer<QObject> retiredPeer = h.mediaTransport->parent();
+    bool returnedFromClose = false;
+    bool peerAliveDuringSend = false;
+    h.mediaTransport->onDisplaySend = [&, transport = h.mediaTransport] {
+        emit transport->closed();
+        peerAliveDuringSend = !retiredPeer.isNull();
+        returnedFromClose = true;
+        return sendAccepted;
+    };
+    auto request = subscription(61, 1, h.sliceId, h.radio.streamCentreHz(h.streamIndex));
+    request.insert(QStringLiteral("extendedView"), true);
+    request.insert(QStringLiteral("spanHz"), 1'000'000.0);
+    QVERIFY(h.client.sendMediaControl(request, h.client.sessionEpoch()));
+    QTRY_COMPARE(h.p2.wbEnableMask(), quint8(1));
+    QTRY_VERIFY(([&] { h.feedRadio(); return returnedFromClose; })());
+    QVERIFY(peerAliveDuringSend);
+    QCOMPARE(h.controller.activeEndpointCount(), 0);
+    QCOMPARE(h.controller.activeSourceCount(), 0);
+    QCOMPARE(h.p2.wbEnableMask(), quint8(0));
+    QTRY_VERIFY(retiredPeer.isNull());
+    QTRY_VERIFY(h.mediaTransport.isNull());
+
+    // The control session survives a media close. A fresh peer can reuse the
+    // endpoint number without an old send modifying its new context.
+    h.startReadyPeer();
+    QVERIFY(h.client.sendMediaControl(request, h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 1);
+    QTRY_VERIFY(([&] { h.feedRadio(); return !h.mediaTransport->displays.isEmpty(); })());
+    QCOMPARE(h.p2.wbEnableMask(), quint8(1));
+    h.finish();
+}
+
+void TstDaemonMediaController::synchronousControlClosureRetiresDemand_data()
+{
+    QTest::addColumn<QByteArray>("op");
+    QTest::newRow("context") << QByteArray("context");
+    QTest::newRow("noise-floor") << QByteArray("noise-floor");
+}
+
+void TstDaemonMediaController::synchronousControlClosureRetiresDemand()
+{
+    QFETCH(QByteArray, op);
+    Harness h;
+    h.enableWidebandSource();
+    h.establishSession();
+    h.startReadyPeer();
+    auto request = subscription(62, 1, h.sliceId, h.radio.streamCentreHz(h.streamIndex));
+    request.insert(QStringLiteral("extendedView"), true);
+    request.insert(QStringLiteral("spanHz"), 1'000'000.0);
+    QVERIFY(h.client.sendMediaControl(request, h.client.sessionEpoch()));
+    QTRY_COMPARE(h.p2.wbEnableMask(), quint8(1));
+    h.stationTransport->closeOnOp = op;
+    QTRY_VERIFY(([&] { h.feedRadio(); return !h.server.mediaAvailable(); })());
+    QCOMPARE(h.controller.activeEndpointCount(), 0);
+    QCOMPARE(h.controller.activeSourceCount(), 0);
+    QCOMPARE(h.p2.wbEnableMask(), quint8(0));
+    QTRY_VERIFY(h.mediaTransport.isNull());
+}
+
+void TstDaemonMediaController::olderPeerKeepsLegacyContextAndCannotAcquireWideband()
+{
+    Harness h;
+    h.enableWidebandSource();
+    auto* station = new Test::LoopbackTransport(QStringLiteral("old-station"), this);
+    auto* peer = new Test::LoopbackTransport(QStringLiteral("old-peer"), this);
+    station->linkTo(peer);
+    h.server.acceptTransport(station);
+    peer->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor, kRemoteWidebandSessionProtocolMinor - 1, 6, QStringLiteral("old-client"))));
+    peer->sendText(SessionMessages::encode(SessionMessages::authRequest(h.server.token())));
+    QTRY_VERIFY(h.server.mediaAvailable());
+    QVERIFY(!h.server.remoteWidebandAvailable());
+    const auto send = [&](const QJsonObject& payload) {
+        SessionMessage message;
+        message.kind = SessionMessageKind::MediaControl;
+        message.mediaPayload = payload;
+        peer->sendText(SessionMessages::encode(message));
+    };
+    send({{QStringLiteral("op"), QStringLiteral("start")},
+          {QStringLiteral("connectionId"), QLatin1String(kConnectionId)}});
+    QTRY_VERIFY(h.mediaTransport);
+    h.mediaTransport->becomeReady();
+    auto request = subscription(41, 1, h.sliceId, h.radio.streamCentreHz(h.streamIndex));
+    request.insert(QStringLiteral("extendedView"), true);
+    send(request);
+    QCoreApplication::processEvents();
+    QCOMPARE(h.controller.activeEndpointCount(), 0);
+    QCOMPARE(h.p2.wbEnableMask(), quint8(0));
+    request.remove(QStringLiteral("extendedView"));
+    send(request);
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 1);
+    QTRY_VERIFY(([&] {
+        h.feedRadio();
+        for (const auto& wire : peer->received()) {
+            SessionMessage message;
+            if (SessionMessages::decode(wire, &message)
+                && message.kind == SessionMessageKind::MediaControl
+                && message.mediaPayload.value(QStringLiteral("op")) == QStringLiteral("context")) {
+                return message.mediaPayload.size() == 19
+                    && !message.mediaPayload.contains(QStringLiteral("wideband"));
+            }
+        }
+        return false;
+    })());
+    peer->closeLink(QStringLiteral("test complete"));
 }
 
 QTEST_MAIN(TstDaemonMediaController)

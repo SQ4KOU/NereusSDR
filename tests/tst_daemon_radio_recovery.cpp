@@ -227,6 +227,16 @@ private slots:
         QCOMPARE(fake.moxAssertedCount(), 0);
         auto* const freshP2 = qobject_cast<P2RadioConnection*>(model->connection());
         QVERIFY(freshP2);
+        // A remote view can acknowledge the real capture identity and paint
+        // empty wings before any ADC samples arrive. DDC and ADC cadence are
+        // independent; waiting for the first survey would stall first zoom.
+        QVERIFY(QMetaObject::invokeMethod(freshP2, [freshP2]() {
+            freshP2->setWidebandEnabled(0, true);
+        }, Qt::BlockingQueuedConnection));
+        QTRY_VERIFY(model->widebandSourceDescriptor(0));
+        const auto preparedSource = model->widebandSourceDescriptor(0);
+        QVERIFY(preparedSource->sourceGeneration != 0);
+        QVERIFY(!model->latestWidebandSpectrum(0));
         QVERIFY(QMetaObject::invokeMethod(freshP2, [freshP2]() {
             feedWidebandBurst(freshP2);
         }, Qt::BlockingQueuedConnection));
@@ -234,6 +244,7 @@ private slots:
 
         const auto firstWideband = model->latestWidebandSpectrum(0);
         QVERIFY(firstWideband);
+        QCOMPARE(firstWideband->source, *preparedSource);
         QCOMPARE(firstWideband->source.physicalAdcIndex, 0);
         QCOMPARE(firstWideband->source.adcRateHz, 122880000.0);
         QVERIFY(firstWideband->source.sourceGeneration != 0);

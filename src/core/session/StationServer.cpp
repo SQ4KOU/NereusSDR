@@ -1191,6 +1191,13 @@ bool StationServer::mediaAvailable() const
         && it->snapshotComplete && it->agreedMinor >= kMediaSessionProtocolMinor;
 }
 
+bool StationServer::remoteWidebandAvailable() const
+{
+    const auto it = m_peers.constFind(m_session);
+    return mediaAvailable() && it != m_peers.cend()
+        && it->agreedMinor >= kRemoteWidebandSessionProtocolMinor;
+}
+
 bool StationServer::sendMediaControl(const QJsonObject& payload, quint64 expectedEpoch)
 {
     if (!mediaAvailable() || expectedEpoch != m_mediaSessionEpoch) {
@@ -1250,6 +1257,7 @@ StationCapabilities StationServer::buildCapabilities() const
     // Always false in R2: TX is R4 in its entirety.
     caps.txPermitted = false;
     caps.remoteMediaVersion = m_mediaEnabled ? 1 : 0;
+    caps.remoteWidebandDisplayVersion = m_mediaEnabled ? 1 : 0;
     caps.remoteCtunVersion = 1;
     caps.stationTelemetryVersion = m_telemetryEnabled ? 1 : 0;
     caps.remoteTgxlConfigVersion = m_radioModel->stationAccessoryIdentityEnabled() ? 1 : 0;

@@ -1188,6 +1188,12 @@ void TstStationSession::capabilitiesAdvertiseEffectiveNotBoardLimits()
     QCOMPARE(decoded.boardMaxSlices, narrowed.boardMaxSlices);
     QCOMPARE(decoded.board, narrowed.board);
     QCOMPARE(decoded.macAddress, narrowed.macAddress);
+    QCOMPARE(server.buildCapabilities().remoteWidebandDisplayVersion, 0);
+    server.setMediaEnabled(true);
+    const auto mediaCaps = server.buildCapabilities();
+    QCOMPARE(mediaCaps.remoteWidebandDisplayVersion, 1);
+    QCOMPARE(StationCapabilities::fromUpdates(mediaCaps.toUpdates()).remoteWidebandDisplayVersion, 1);
+    QCOMPARE(StationCapabilities::fromUpdates({}).remoteWidebandDisplayVersion, 0);
 }
 
 void TstStationSession::clientAppliesCapabilitiesAndDrivesConnected()

@@ -437,8 +437,8 @@ reinterpret `FftTier::Wide` or transmit unrestricted full FFT arrays.
   trace/waterfall rows and the separate DDC-only 3D row. The shared Core/local
   normalization helper and Core compositor are implemented. Five focused
   targets pass, including pixel-by-pixel parity against all five local
-  detectors with and without a visible DDC island. The compositor is not yet
-  connected to remote endpoints. The
+  detectors with and without a visible DDC island. The endpoint integration
+  below now connects that compositor to remote displays. The
   122.88 MHz geometry remains the explicit existing Thetis reference, not a
   negotiated P2 rate or a new per-ADC calibration. Tagged publication now
   retains one latest frame per physical ADC with connection/capture/geometry
@@ -454,17 +454,29 @@ reinterpret `FftTier::Wide` or transmit unrestricted full FFT arrays.
   daemon teardown. The matching combined GUI/Core/test build succeeds and
   the unfiltered demand suite passes 724/726 executables, with the same two
   native microphone-open timeouts; the full-suite gate remains unmet.
-  Wiring those leases to remote endpoint lifetimes,
-  remote transport, GUI admission and hardware acceptance remain open. Task 6's
-  missing session allocator is now an explicit acceptance dependency.
+  The September 22 endpoint integration now binds those leases to negotiated
+  display lifetimes, carries Core-composed ADC wings in codec v1 rows, and
+  restores GUI zoom availability with strict context admission and retained
+  history. Applied capture state establishes identity before the first ADC
+  row. Consolidated review corrected synchronous send/retirement lifetime
+  hazards and permission/coverage inconsistencies. See the wideband contract
+  for current verification: all 12 focused targets pass, the matching
+  GUI/Core/all-tests build succeeds, and the unfiltered suite passes 725/727
+  executables (313.08 seconds), with the same two native microphone-open
+  timeouts and 12 inner Qt skips. The full-suite gate remains unmet; R-R3-36,
+  hardware acceptance and Task 6's total session allocator remain open.
 - [ ] Carry Core-produced, calibrated wideband display data through the
   authenticated session under the existing datagram and session budgets.
   Aggregate demand across pans; hiding/removing one pan must not disable
   another pan's capture or leave bypass enabled after the last consumer.
+  Endpoint transport, shared demand and retirement are implemented and tested;
+  the checkbox remains open for total-session allocation and live acceptance.
 - [ ] Composite the DDC island and wideband wings using their actual RF
   coverage. Preserve the existing local zoom range on capable hardware;
   keep the DDC fallback only when the remote source is unavailable. Wing
   tuning must use Core commands and preserve shared-slice constraints.
+  Core composition and GUI availability/history wiring are implemented; real
+  hardware zoom/wing gestures and shared-slice acceptance remain pending.
 - [ ] Verify zoom across the DDC edge, release without snap-back, inward
   zoom, ADC changes, shared pans, rejected moves and reconnect. Reject stale
   wideband frames and apply calibration once. Verify real Saturn wideband
@@ -1020,6 +1032,12 @@ rules, configuration sample and the R3 verification ledger.
 - [ ] Exercise one pan, four docked pans, floating pans and multiple slices
   sharing a stream. Allocate the session budget across focused/background
   endpoints; reduce display rate/pixels before impairing audio or control.
+  Per parent architecture §9.5, the GUI divides Core's advertised total across
+  endpoints and Core validates/enforces that ceiling. Replace the current
+  `isVisible()` subscription heuristic with stable pane-intent handling:
+  transient dock/float hides must not flap capture demand. No total budget or
+  focus-share values have yet been measured/selected; do not derive them from
+  the single-pan 969-byte observation or the eight-endpoint admission cap.
 - [ ] Measure full-span/noise and deep-zoom cases with both FFT tiers, WDSP,
   stereo Opus and 3D enabled on the Rock 5C. Report actual effective limits;
   preserve the separate Pi 4 hardware-floor obligation until measured there.
@@ -1104,7 +1122,7 @@ whole-plan review loops.
 | GUI media wiring | Desktop builds; initial focused checks pass | Dedicated reduced-frame renderer and authenticated subscription controller tested; two-pane, shared-window and reconnect regressions pass; live GPU spectrum/2D observed; operator 3D confirmation and gesture refinement pending |
 | Tuning waterfall continuity | Visual regression corrected; focused tests pass | R-R3-04/09/10: subscription/context renewal preserves painted 2D/3D history while rejecting stale incoming planes; accepted RF geometry reprojects existing rows. Full-suite and live tuning gates remain recorded in the verification ledger. |
 | Remote C-Tune control parity | R-R3-18 installed at `501b2701`; reported gestures accepted | Authenticated stream pin/centre commands, stream-lifetime guards, gesture-time pan selection, refusal rollback and reducer initialization pass the 681/681 combined suite. Matching Core/GUI are running; operator confirmed both wheel tuning and in-band scale zoom behave smoothly. Broader multi-slice hardware checks remain in task 6. |
-| Wideband zoom parity | R-R3-20 open; task 4b added explicitly | Existing local ADC capture/FFT and extended wings are preserved. Remote display currently carries DDC data only. R-R3-19 prevents snap-back at that interim limit; it does not complete wideband transport or restore the full zoom range. |
+| Wideband zoom parity | R-R3-20 source integration implemented; full acceptance open | Core now composes tagged ADC wings with the DDC island in negotiated display rows; GUI admits the descriptor, restores the source zoom ceiling and preserves history. Twelve focused checks pass. Total-session allocation, native ARM installation and real Saturn RF/filter/gesture/network/audio evidence remain pending; the installed build still has the DDC-only limit. See [contract](2026-09-22-remote-wideband-design.md). |
 | Applet S-meter | Live applet/flag agreement at `706b9a5f` | Matching -65 dBm observed after automatic Core restart recovery; prior no-signal reports remain documented with their source/connection failures. Sustained acceptance remains open. |
 | BPF and Auto AGC-T indicators | Source implementation and focused tests pass | R-R3-14/15: station filter snapshot/reconnect, headless per-stream AGC source, active-applet/flag bindings implemented; live 20m filter and AGC floor observed, complete band/reconnect acceptance pending |
 | Manual Core reconnect | Configured-endpoint controls installed; title-panel path verified | Title opens details; manual Disconnect/Connect restored receive at `8c011066`. New `706b9a5f` also automatically resumed after Core installation. New media-only recovery has pinned-TLS integration coverage; a real media-only drop and remaining UI entry points need acceptance. |

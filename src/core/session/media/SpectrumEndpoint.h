@@ -13,7 +13,10 @@
 
 #include "core/session/media/DaemonSpectrumSource.h"
 #include "core/session/media/DisplayCodec.h"
+#include "core/session/media/WidebandDisplayContext.h"
+#include "core/spectrum/ExtendedSpectrumReducer.h"
 #include "core/spectrum/SpectrumReducer.h"
+#include "core/spectrum/WidebandSpectrumCache.h"
 
 #include <memory>
 #include <optional>
@@ -40,6 +43,8 @@ struct SpectrumEndpointRequest {
     float maxDbm {0.0f};
     /// GUI supplies its maximum 3D shape factor. Zero disables wide output.
     double requestedWideSpanFactor {0.0};
+    /// Negotiated permission to compose the slice's authorized ADC wings.
+    bool extendedView {false};
 };
 
 struct SpectrumEndpointSourceContext {
@@ -49,6 +54,8 @@ struct SpectrumEndpointSourceContext {
     double centreHz {0.0};
     double sampleRateHz {0.0};
     quint32 contextGeneration {0};
+    /// ADC metadata is a separate identity from the DDC FFT source above.
+    WidebandDisplayContext wideband;
 };
 
 struct SpectrumEndpointContext {
@@ -61,6 +68,8 @@ struct SpectrumEndpointContext {
     double wideSpanHz {0.0};
     int targetFps {0};
     int framesPerLine {0};
+    /// Accepted physical-ADC descriptor for an extended composite row.
+    WidebandDisplayContext wideband;
 };
 
 class SpectrumEndpoint {
@@ -78,10 +87,14 @@ public:
     const SpectrumEndpointContext& context() const { return m_context; }
 
     /// Reduces one matching current-generation FFT frame. Returns no frame
-    /// when source/context do not match, crop is wholly outside source coverage,
-    /// input is invalid, timestamps are non-monotonic, or cadence has not
-    /// reached the requested interval.
-    std::optional<DisplayCodecFrame> consume(const DaemonSpectrumFrame& frame);
+    /// when source/context do not match, input is invalid, timestamps are
+    /// non-monotonic, or cadence has not reached the requested interval. The
+    /// optional ADC row is used only by an accepted extended context; a missing
+    /// or mismatched row paints its wings at the requested display floor.
+    std::optional<DisplayCodecFrame> consume(
+        const DaemonSpectrumFrame& frame,
+        double stationOffsetDb = 0.0,
+        const std::optional<WidebandSpectrumFrame>& widebandFrame = std::nullopt);
 
     void reset();
 
@@ -91,11 +104,14 @@ private:
 
     bool m_configured {false};
     bool m_hasOverlap {false};
+    bool m_extendedView {false};
     SpectrumEndpointRequest m_request;
     SpectrumEndpointSourceContext m_sourceContext;
     SpectrumEndpointContext m_context;
     std::unique_ptr<SpectrumReducer> m_traceReducer;
     std::unique_ptr<SpectrumReducer> m_waterfallReducer;
+    std::unique_ptr<ExtendedSpectrumReducer> m_extendedTraceReducer;
+    std::unique_ptr<ExtendedSpectrumReducer> m_extendedWaterfallReducer;
     bool m_hasProducerTimestamp {false};
     qint64 m_lastProducerTimestampNs {0};
     qint64 m_nextOutputDueNs {0};

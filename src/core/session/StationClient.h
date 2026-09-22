@@ -394,6 +394,7 @@ public:
     quint16 agreedMinor() const { return m_agreedMinor; }
 
     bool mediaAvailable() const;
+    bool remoteWidebandAvailable() const;
     bool remoteCtunAvailable() const;
     bool remoteTgxlConfigAvailable() const override;
     bool remoteFourO3AControlAvailable() const override;

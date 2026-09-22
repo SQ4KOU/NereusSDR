@@ -384,13 +384,53 @@ transmit permission or menu redesign is part of this contract.
   Build-start load was 1.27 / 1.43 / 2.00. This is not a passing full-suite
   gate; R-R3-36 remains open. No tests were excluded or weakened. Private
   evidence: `r3-wideband-demand-final-{build,tests,load}.log`.
-- [ ] Wire demand-owner lifetimes into negotiated endpoints, then complete
-  GUI parity and native/hardware acceptance. Real Saturn cadence still
-  determines the freshness policy;
-  no TTL has been guessed. The source cache is not connected to remote display
-  endpoints. This checkpoint is not deployed; the installed software remains
-  `55e7d49f`.
+- [x] Wire demand-owner lifetimes into negotiated Core endpoints. Session
+  minor 6 and `remoteWidebandDisplayVersion=1` gate the new subscription and
+  strict nested descriptor; legacy peers retain their 19-field context.
+  Core composes its current ADC row with the DDC island before independent
+  trace/waterfall averaging, applies the station scalar once, and retains
+  DDC-only optional 3D wide rows. Permission alone does not enable capture;
+  endpoint replacement, last removal, remap and session retirement release
+  their own leases. Applied software capture state supplies a real descriptor
+  before the first ADC burst, including a capture enabled while Connecting.
+  Idempotent application neither advances the capture epoch nor sends an
+  extra CmdGeneral; it is not a hardware acknowledgement.
+- [x] Admit negotiated contexts in the GUI, preserving the existing zoom
+  controls and 2D/3D RF history. Available source geometry raises the zoom
+  ceiling; active state must agree with granted permission and accepted RF
+  coverage. Full retirement clears the offer without changing the saved
+  preference. Remote accepted state does not emit local hardware intent.
+- [x] Complete one integrated requirements/lifetime review and its corrections.
+  The review found inconsistent GUI context admission and endpoint references
+  retained across synchronous transport closure. Reproducing display-send
+  tests failed because the peer was destroyed on its own send stack. Peer
+  deletion is now deferred; control/display return paths revalidate identities
+  and re-find endpoints. Context and noise-floor closure also retire capture,
+  while a fresh media peer can reuse the endpoint number. GUI regressions
+  cover invalid permission/coverage and valid inactive/active painting.
+  No DSP, FFT normalization or hardware policy was changed to resolve tests.
+- [ ] Complete native/hardware acceptance and Task 6's total-session allocator.
+  Real Saturn burst cadence still determines freshness policy; no TTL has
+  been guessed. Observe RF placement, receive-only BPF transitions, shared
+  pans, wing tuning, 2D/3D gestures, packet sizes/rates, Rock load and mixed
+  audio. Current source is not deployed; installed software remains `55e7d49f`.
 
-The WDSP integration is included in the combined build. Focused success does
-not establish full R3 acceptance. The source/lifetime boundary received one
-consolidated independent review; endpoint and hardware acceptance remain open.
+Twelve freshly built focused targets pass in 50.03 seconds (run-start load
+1.23 / 1.53 / 1.82): endpoint composition, daemon media and audio sessions,
+P2 capture application, actual daemon recovery, GUI control/rendering, station
+negotiation, strict descriptor codec, physical demand/chain lifetimes, local
+wings and the no-GUI Core guard. Evidence:
+`r3-wideband-endpoint-review-{build,tests,load}.log`,
+`r3-wideband-close-{red-test,build,tests}.log`, and
+`r3-wideband-gui-admission-build.log`.
+
+The matching `NereusSDR`, `nereusd` and `all_tests` build succeeds, including
+WDSP integration. The unfiltered suite passes **725/727 executables in 313.08
+seconds**, with 12 inner Qt skips. Build-start load: 1.72 / 1.63 / 1.84;
+run-start load: 8.35 / 4.66 / 3.04. The same two native microphone-open
+120-second timeouts remain: `tst_port_audio_bus::openInputSucceedsOnDefaultDevice`
+and `tst_audio_engine_speakers_live_reconfig::setTxInputConfigEmitsSignal`.
+No test was excluded, weakened or given a longer timeout. This is a completed
+verification run, not a passing full-suite gate; R-R3-36 remains open.
+Evidence: `r3-wideband-endpoint-final-{build,tests,load}.log`.
+Automated endpoint coverage does not establish full R3 or hardware acceptance.

@@ -72,6 +72,9 @@ private:
     void onSessionEnded(quint64 epoch);
     void onControl(const QJsonObject& control, quint64 epoch);
     void onSourceFrame(MediaSourceKey key);
+    void onWidebandSourceChanged(int adc);
+    bool reconcileWidebandDemand(EndpointEntry& entry);
+    std::optional<WidebandDisplayContext> widebandContext(const EndpointEntry& entry) const;
     void onSendTick();
     void onStreamGeometryChanged(int streamIndex, double centreHz, int sampleRateHz);
     void onStreamBindingsChanged(int streamIndex, const QVector<int>& sliceIds);
@@ -87,6 +90,7 @@ private:
 
     void clearSession();
     void clearProduction();
+    QList<quint32> endpointIds() const;
     void removeEndpoint(quint32 endpointId);
     bool reconcileSource(const MediaSourceKey& key);
     void releaseSourceIfUnused(const MediaSourceKey& key);

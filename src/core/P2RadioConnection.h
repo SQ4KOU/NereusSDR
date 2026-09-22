@@ -372,6 +372,9 @@ signals:
                                          qint64 producedAtNs);
     /// Invalidates already-published survey data as well as queued FFT work.
     void widebandCaptureRetired(int adcIndex, quint64 captureGeneration);
+    /// Applied local capture state (including idempotent requests), independent
+    /// of first ADC data. This does not claim acknowledgement from the radio.
+    void widebandCaptureStateApplied(int adcIndex, quint64 captureGeneration, bool enabled);
 
 private slots:
     void onReadyRead();

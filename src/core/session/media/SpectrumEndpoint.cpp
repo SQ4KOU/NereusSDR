@@ -10,6 +10,8 @@
 #include "core/FFTEngine.h"
 
 #include "core/session/media/DssWideRow.h"
+#include "core/WidebandFftEngine.h"
+#include "core/spectrum/ExtendedSpectrumReducer.h"
 #include "core/spectrum/SpectrumReducer.h"
 
 #include <algorithm>
@@ -74,9 +76,9 @@ bool finiteRow(const QVector<float>& row)
     });
 }
 
-QVector<float> calibratedDbm(const DaemonSpectrumFrame& frame)
+QVector<float> calibratedDbm(const DaemonSpectrumFrame& frame, double offsetDb)
 {
-    const double scale = std::pow(10.0, frame.dbmOffset / 10.0);
+    const double scale = std::pow(10.0, offsetDb / 10.0);
     if (!finite(scale) || scale <= 0.0) {
         return {};
     }
@@ -93,6 +95,19 @@ QVector<float> calibratedDbm(const DaemonSpectrumFrame& frame)
         }
     }
     return output;
+}
+
+bool matchesWidebandSource(const WidebandSpectrumFrame& frame,
+                           const WidebandDisplayContext& context)
+{
+    if (frame.source.physicalAdcIndex != context.physicalAdcIndex
+        || frame.source.sourceGeneration != context.sourceGeneration
+        || frame.source.adcRateHz != context.adcRateHz
+        || frame.producedAtNs < 0
+        || frame.rawDbBins.size() != WidebandFftEngine::kOutputBins) {
+        return false;
+    }
+    return finiteRow(frame.rawDbBins);
 }
 
 qint64 saturatingAdd(qint64 value, qint64 increment)
@@ -139,15 +154,27 @@ bool SpectrumEndpoint::configure(const SpectrumEndpointRequest& request,
         return false;
     }
 
-    // visibleBinRange is geometry-only; resolve it before accepting pixels so
-    // a deep crop cannot claim more independent output samples than bins.
+    // Permission is distinct from activation. An available inactive ADC is
+    // advertised with the normal DDC row until Core activates its demand;
+    // only an active ADC changes the row's geometry and reducer ownership.
+    if (!sourceContext.wideband.valid()
+        || (sourceContext.wideband.active && !request.extendedView)) {
+        return false;
+    }
+    const bool extendedView = sourceContext.wideband.active;
+
+    // A DDC-only crop cannot claim more independent samples than source bins.
+    // The extended path instead uses the full requested RF geometry, where an
+    // empty DDC island is valid because the physical ADC owns every pixel.
     const ReducerConfig geometry = reducerConfig(request, sourceContext, request.trace, 1);
     const std::pair<int, int> bins = SpectrumReducer::visibleBinRange(sourceContext.fftBins, geometry);
     const int count = bins.second - bins.first + 1;
-    if (count <= 0) {
+    if (!extendedView && count <= 0) {
         return false;
     }
-    const int pixels = std::min({request.pixels, count, kMaxPixels});
+    const int pixels = extendedView
+        ? std::min(request.pixels, kMaxPixels)
+        : std::min({request.pixels, count, kMaxPixels});
     if (pixels <= 0) {
         return false;
     }
@@ -163,10 +190,19 @@ bool SpectrumEndpoint::configure(const SpectrumEndpointRequest& request,
     accepted.source = request.source;
     accepted.sourceGeneration = sourceContext.sourceGeneration;
     const bool hasOverlap = overlapsSource(request, sourceContext);
-    if (hasOverlap) {
+    if (extendedView) {
+        accepted.exactCentreHz = request.centreHz;
+        accepted.exactSpanHz = request.spanHz;
+        accepted.wideband = sourceContext.wideband;
+    } else if (hasOverlap) {
         accepted.exactCentreHz = sourceContext.centreHz - sourceContext.sampleRateHz * 0.5
             + (bins.first + bins.second + 1) * binHz * 0.5;
         accepted.exactSpanHz = count * binHz;
+    }
+    if (!extendedView) {
+        accepted.wideband = sourceContext.wideband;
+        accepted.wideband.active = false;
+        accepted.wideband.sourceGeneration = 0;
     }
     accepted.targetFps = request.targetFps;
     accepted.framesPerLine = request.framesPerLine;
@@ -184,29 +220,49 @@ bool SpectrumEndpoint::configure(const SpectrumEndpointRequest& request,
         }
     }
 
-    auto trace = std::make_unique<SpectrumReducer>();
-    auto waterfall = std::make_unique<SpectrumReducer>();
-    trace->setConfig(traceConfig);
-    waterfall->setConfig(reducerConfig(request, sourceContext, request.waterfall, pixels));
-    trace->clearAveraging();
-    waterfall->clearAveraging();
+    std::unique_ptr<SpectrumReducer> trace;
+    std::unique_ptr<SpectrumReducer> waterfall;
+    std::unique_ptr<ExtendedSpectrumReducer> extendedTrace;
+    std::unique_ptr<ExtendedSpectrumReducer> extendedWaterfall;
+    if (extendedView) {
+        extendedTrace = std::make_unique<ExtendedSpectrumReducer>();
+        extendedWaterfall = std::make_unique<ExtendedSpectrumReducer>();
+        extendedTrace->setConfig(traceConfig);
+        extendedWaterfall->setConfig(
+            reducerConfig(request, sourceContext, request.waterfall, pixels));
+        extendedTrace->clearAveraging();
+        extendedWaterfall->clearAveraging();
+    } else {
+        trace = std::make_unique<SpectrumReducer>();
+        waterfall = std::make_unique<SpectrumReducer>();
+        trace->setConfig(traceConfig);
+        waterfall->setConfig(reducerConfig(request, sourceContext, request.waterfall, pixels));
+        trace->clearAveraging();
+        waterfall->clearAveraging();
+    }
 
     m_request = request;
     m_sourceContext = sourceContext;
     m_context = accepted;
     m_traceReducer = std::move(trace);
     m_waterfallReducer = std::move(waterfall);
+    m_extendedTraceReducer = std::move(extendedTrace);
+    m_extendedWaterfallReducer = std::move(extendedWaterfall);
     m_hasProducerTimestamp = false;
     m_lastProducerTimestampNs = 0;
     m_nextOutputDueNs = 0;
     m_emittedFrames = 0;
     m_nextEncoderSequence = 0;
     m_hasOverlap = hasOverlap;
+    m_extendedView = extendedView;
     m_configured = true;
     return true;
 }
 
-std::optional<DisplayCodecFrame> SpectrumEndpoint::consume(const DaemonSpectrumFrame& frame)
+std::optional<DisplayCodecFrame> SpectrumEndpoint::consume(
+    const DaemonSpectrumFrame& frame,
+    double stationOffsetDb,
+    const std::optional<WidebandSpectrumFrame>& widebandFrame)
 {
     if (!m_configured || !(frame.source == m_sourceContext.source)
         || frame.generation != m_sourceContext.sourceGeneration
@@ -214,7 +270,9 @@ std::optional<DisplayCodecFrame> SpectrumEndpoint::consume(const DaemonSpectrumF
         || frame.centreHz != m_sourceContext.centreHz
         || frame.sampleRateHz != m_sourceContext.sampleRateHz
         || !finite(frame.windowEnb) || frame.windowEnb <= 0.0 || !finite(frame.dbmOffset)
-        || frame.producedAtNs < 0 || !m_hasOverlap || !finiteNonnegativeBins(frame.binsLinear)) {
+        || !finite(stationOffsetDb) || !finite(frame.dbmOffset + stationOffsetDb)
+        || frame.producedAtNs < 0 || (!m_extendedView && !m_hasOverlap)
+        || !finiteNonnegativeBins(frame.binsLinear)) {
         return std::nullopt;
     }
     if (m_hasProducerTimestamp
@@ -237,8 +295,28 @@ std::optional<DisplayCodecFrame> SpectrumEndpoint::consume(const DaemonSpectrumF
 
     QVector<float> trace;
     QVector<float> waterfall;
-    m_traceReducer->reduce(frame.binsLinear, frame.windowEnb, frame.dbmOffset, trace);
-    m_waterfallReducer->reduce(frame.binsLinear, frame.windowEnb, frame.dbmOffset, waterfall);
+    if (m_extendedView) {
+        const QVector<float> emptyAdcRawDb;
+        const QVector<float>& adcRawDb =
+            widebandFrame && matchesWidebandSource(*widebandFrame, m_context.wideband)
+            ? widebandFrame->rawDbBins
+            : emptyAdcRawDb;
+        if (!m_extendedTraceReducer->reduce(frame.binsLinear, frame.windowEnb, frame.dbmOffset,
+                                            adcRawDb, m_context.wideband.adcRateHz,
+                                            stationOffsetDb, m_request.minDbm, trace)
+            || !m_extendedWaterfallReducer->reduce(frame.binsLinear, frame.windowEnb,
+                                                    frame.dbmOffset, adcRawDb,
+                                                    m_context.wideband.adcRateHz,
+                                                    stationOffsetDb, m_request.minDbm,
+                                                    waterfall)) {
+            return std::nullopt;
+        }
+    } else {
+        m_traceReducer->reduce(frame.binsLinear, frame.windowEnb,
+                               frame.dbmOffset + stationOffsetDb, trace);
+        m_waterfallReducer->reduce(frame.binsLinear, frame.windowEnb,
+                                   frame.dbmOffset + stationOffsetDb, waterfall);
+    }
     if (trace.size() != m_context.codec.traceSamples
         || waterfall.size() != m_context.codec.waterfallSamples
         || !finiteRow(trace) || !finiteRow(waterfall)) {
@@ -253,7 +331,8 @@ std::optional<DisplayCodecFrame> SpectrumEndpoint::consume(const DaemonSpectrumF
     output.traceDbm = std::move(trace);
     output.waterfallDbm = std::move(waterfall);
     if (m_context.codec.wideSamples != 0) {
-        const QVector<float> fullDbm = calibratedDbm(frame);
+        const QVector<float> fullDbm = calibratedDbm(frame,
+                                                      frame.dbmOffset + stationOffsetDb);
         const DssWideRow wide = cropDssWideRow(fullDbm, {
             m_request.centreHz, m_request.spanHz, m_sourceContext.centreHz,
             m_sourceContext.sampleRateHz, m_request.requestedWideSpanFactor});
@@ -279,8 +358,11 @@ void SpectrumEndpoint::reset()
 {
     m_configured = false;
     m_hasOverlap = false;
+    m_extendedView = false;
     m_traceReducer.reset();
     m_waterfallReducer.reset();
+    m_extendedTraceReducer.reset();
+    m_extendedWaterfallReducer.reset();
     m_hasProducerTimestamp = false;
     m_lastProducerTimestampNs = 0;
     m_nextOutputDueNs = 0;

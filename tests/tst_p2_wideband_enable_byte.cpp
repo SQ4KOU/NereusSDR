@@ -28,6 +28,36 @@ using namespace NereusSDR;
 class TestP2WidebandEnableByte : public QObject {
     Q_OBJECT
 private slots:
+    void enable_announces_identity_without_data_and_suppresses_replaced_transition()
+    {
+        P2RadioConnection connection;
+        QSignalSpy states(&connection, &P2RadioConnection::widebandCaptureStateApplied);
+        QSignalSpy rows(&connection, &P2RadioConnection::widebandFrameReadyForGeneration);
+        connection.setWidebandEnabled(0, true);
+        QCOMPARE(states.size(), 1);
+        QCOMPARE(states.last().at(2).toBool(), true);
+        QCOMPARE(states.last().at(1).toULongLong(),
+                 connection.widebandCaptureEpoch(0)->load(std::memory_order_acquire));
+        QCOMPARE(rows.size(), 0);
+        const auto generation = states.last().at(1).toULongLong();
+        connection.setWidebandEnabled(0, true);
+        QCOMPARE(states.size(), 2);
+        QCOMPARE(states.last().at(1).toULongLong(), generation);
+        bool replaced = false;
+        connect(&connection, &P2RadioConnection::widebandCaptureRetired, &connection,
+                [&](int adc, quint64) {
+            if (adc == 0 && !replaced) {
+                replaced = true;
+                connection.setWidebandEnabled(0, true);
+            }
+        });
+        states.clear();
+        connection.setWidebandEnabled(0, false);
+        QCOMPARE(states.size(), 1); // Only the nested current enable is announced.
+        QCOMPARE(states.last().at(2).toBool(), true);
+        QCOMPARE(connection.wbEnableMask(), quint8(1));
+    }
+
     void capture_epoch_rejects_invalid_adc()
     {
         P2RadioConnection conn;

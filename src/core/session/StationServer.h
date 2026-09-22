@@ -355,6 +355,7 @@ public:
     /// Configure before accepting sessions. Old peers remain control-only.
     void setMediaEnabled(bool enabled);
     bool mediaAvailable() const;
+    bool remoteWidebandAvailable() const;
     quint64 mediaSessionEpoch() const { return m_mediaSessionEpoch; }
     /// expectedEpoch is captured by the producer when its session starts;
     /// late work must never target a replacement session.

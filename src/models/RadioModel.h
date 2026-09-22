@@ -1934,6 +1934,7 @@ public:
     // isConnected() gate on the P2 DDC wire push (RadioModel.cpp:15412)
     // through it, so keeping the two in lockstep here is what keeps those
     // 24 sites working rather than just the pointer-consuming ones.
+    void wireWidebandConnectionForTest() { wireWidebandConnection(); }
     void injectConnectionForTest(RadioConnection* conn) {
         m_connection = conn;
         setConnectionState(conn != nullptr ? ConnectionState::Connected
@@ -3212,6 +3213,7 @@ private:
 
     void connectToRadioImpl(const RadioInfo& info, bool preserveSlices);
     void wireConnectionSignals(int wdspInSize);
+    void wireWidebandConnection();
     /// Wire one slice's property changes to its OWN WDSP channel and to the
     /// radio. Call for every slice, not just the active one: this used to
     /// read m_activeSlice and run once, leaving 65 per-slice DSP handlers

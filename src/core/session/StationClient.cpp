@@ -2394,6 +2394,12 @@ bool StationClient::mediaAvailable() const
         && m_capabilities.remoteMediaVersion >= 1;
 }
 
+bool StationClient::remoteWidebandAvailable() const
+{
+    return mediaAvailable() && m_agreedMinor >= kRemoteWidebandSessionProtocolMinor
+        && m_capabilities.remoteWidebandDisplayVersion >= 1;
+}
+
 bool StationClient::sendMediaControl(const QJsonObject& payload, quint32 expectedEpoch)
 {
     if (!mediaAvailable() || expectedEpoch != m_sessionEpoch) {

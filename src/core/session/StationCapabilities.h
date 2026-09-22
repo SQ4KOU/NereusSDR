@@ -107,6 +107,7 @@ struct StationCapabilities {
     /// Zero means control-only. Nonzero is advertised only when a daemon
     /// media controller is installed; negotiated session minor still gates it.
     int remoteMediaVersion = 0;
+    int remoteWidebandDisplayVersion = 0;
     int remoteCtunVersion = 0;
     int stationTelemetryVersion = 0;
     int remoteTgxlConfigVersion = 0;

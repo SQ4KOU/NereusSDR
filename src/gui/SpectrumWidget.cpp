@@ -1472,6 +1472,10 @@ void SpectrumWidget::invalidateRemoteSpectrumFrame()
 void SpectrumWidget::clearRemoteSpectrum()
 {
     invalidateRemoteSpectrumFrame();
+    m_remoteWidebandAvailable = false;
+    m_remoteWidebandActive = false;
+    m_remoteWidebandAdcRateHz = 0.0;
+    recomputeExtendedMode();
     m_dss.clear();
     m_dssRowsPushed = 0;
     m_dssScrollProgressRows = 0.0f;
@@ -1495,11 +1499,16 @@ void SpectrumWidget::setRemoteSpectrumContext(const SpectrumEndpointContext& con
     m_remoteCodec = context.codec;
     m_remoteExactCentreHz = context.exactCentreHz;
     m_remoteExactSpanHz = context.exactSpanHz;
+    m_remoteWidebandAvailable = context.wideband.available;
+    m_remoteWidebandActive = context.wideband.active;
+    m_remoteWidebandAdcRateHz = context.wideband.available
+        ? context.wideband.adcRateHz : 0.0;
     m_remoteWideCentreHz = context.wideCentreHz;
     m_remoteWideSpanHz = context.wideSpanHz;
     setDdcCenterFrequency(sourceCentreHz);
     setSampleRate(sampleRateHz);
     setDisplayWindowPreservingHistory(context.exactCentreHz, context.exactSpanHz);
+    recomputeExtendedMode();
 }
 
 bool SpectrumWidget::updateRemoteSpectrum(const DisplayCodecFrame& frame)
@@ -5621,11 +5630,13 @@ void SpectrumWidget::setWidebandAdcRateHz(double rateHz)
 // the operator override still pins a pan to its DDC.
 double SpectrumWidget::maxZoomOutBandwidthHz() const
 {
-    // Remote display currently carries this DDC's FFT, not the ADC-wide
-    // source used by local extended wings. Clamp the gesture itself so a
-    // later Core crop ACK cannot collapse an unavailable wide view.
-    if (m_remoteSpectrum || !m_extendedViewAllowed || m_sampleRateHz <= 0.0) {
+    if (!m_extendedViewAllowed || m_sampleRateHz <= 0.0) {
         return m_sampleRateHz;
+    }
+    if (m_remoteSpectrum) {
+        return m_remoteWidebandAvailable && m_remoteWidebandAdcRateHz > 0.0
+            ? std::max(m_sampleRateHz, m_remoteWidebandAdcRateHz / 2.0)
+            : m_sampleRateHz;
     }
     return std::max(m_sampleRateHz, m_widebandAdcRateHz / 2.0);
 }
@@ -5639,7 +5650,11 @@ void SpectrumWidget::setDisplayWindowClamped(double centreHz,
         span = ceiling;
     }
     if (span > 0.0) {
-        setFrequencyRange(centreHz, span);
+        if (m_remoteSpectrum) {
+            setDisplayWindowPreservingHistory(centreHz, span);
+        } else {
+            setFrequencyRange(centreHz, span);
+        }
     }
 }
 
@@ -5830,23 +5845,32 @@ void SpectrumWidget::setExtendedViewAllowed(bool allowed)
 // carries the repaint + history handling every other span change gets.
 void SpectrumWidget::applyViewWindowForExtendedClamp(double bandwidthHz)
 {
-    setFrequencyRange(m_centerHz, bandwidthHz);
+    if (m_remoteSpectrum) {
+        setDisplayWindowPreservingHistory(m_centerHz, bandwidthHz);
+    } else {
+        setFrequencyRange(m_centerHz, bandwidthHz);
+    }
     emit bandwidthChangeRequested(bandwidthHz);
 }
 
 void SpectrumWidget::recomputeExtendedMode()
 {
-    const bool actual =
-        m_extendedViewAllowed
-        && !m_remoteSpectrum
-        && m_sampleRateHz > 0.0
-        && m_bandwidthHz > m_sampleRateHz;
+    const bool actual = m_remoteSpectrum
+        ? m_extendedViewAllowed && m_remoteWidebandAvailable
+            && m_remoteWidebandActive
+        : m_extendedViewAllowed && m_sampleRateHz > 0.0
+            && m_bandwidthHz > m_sampleRateHz;
     if (m_extendedMode == actual) { return; }
     m_extendedMode = actual;
-    emit widebandExtensionStateChanged(actual);
-    // Schedule a repaint so the future paint impl picks up the state
-    // change. Today this is a no-op in the visual pipeline beyond the
-    // stored bool — cheap.
+    // Remote demand belongs to the authenticated subscription. Emitting this
+    // signal would route the accepted Core state into the remote RadioModel's
+    // local wideband intent through MainWindow.
+    if (!m_remoteSpectrum) {
+        emit widebandExtensionStateChanged(actual);
+    }
+    // Island bounds live in the cached overlay, so a context-only active
+    // transition must invalidate it even when accepted geometry did not move.
+    markOverlayDirty();
     update();
 }
 
