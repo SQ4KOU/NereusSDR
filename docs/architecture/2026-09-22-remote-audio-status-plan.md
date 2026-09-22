@@ -257,10 +257,15 @@ minor-7 peers in both directions is part of the requirement.
   6000..510000, `audioBandwidthHz` in {4000, 6000, 8000, 12000, 20000};
   anything else (extra key, missing key, string number, 44100, 1 channel,
   fractional value, 510001) returns nullopt.
-- `OpusAudioEncoder::profile()` reads bitrate and bandwidth back from the
-  live encoder (`OPUS_GET_BITRATE`, `OPUS_GET_BANDWIDTH`, mapping
+- `OpusAudioEncoder::profile()` reads the bitrate back from the live
+  encoder (`OPUS_GET_BITRATE`) and reports the audio bandwidth from the one
+  forced constant the constructor passes to `OPUS_SET_BANDWIDTH` (mapping
   NARROWBAND 4000, MEDIUMBAND 6000, WIDEBAND 8000, SUPERWIDEBAND 12000,
-  FULLBAND 20000). Default encoder: `{48000, 2, 1920, 24000, 8000}`; a
+  FULLBAND 20000). `OPUS_GET_BANDWIDTH` is not used: it reports the last
+  encoded frame and says FULLBAND on a new or reset encoder, and Core sends
+  the context before the first encode (Task 1 ruling). The profile is
+  checked immediately after construction and after reset. Default encoder:
+  `{48000, 2, 1920, 24000, 8000}`; a
   48000 bit/s config reports 48000. Every packet the default encoder
   produces from a 997/1703 Hz stereo test signal inspects as
   `channels == profile.channels`, `samplesPerChannel == profile.frameSamples`,
