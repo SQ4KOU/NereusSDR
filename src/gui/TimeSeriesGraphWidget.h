@@ -15,6 +15,8 @@
 //   2026-09-21 -- Ported for R-R3-32/33 Core telemetry graphs by J.J. Boyd
 //                 (KG4VCF), with AI-assisted adaptation via OpenAI Codex. No
 //                 Aether collectors, Flex transport, or radio-model logic is used.
+//                 Measured the axis gutter from actual unit/value labels to
+//                 keep remote audio frame and packet rates readable.
 // =================================================================
 
 #pragma once
@@ -219,7 +221,7 @@ protected:
         // chart needs every line named; the single row used to stop at
         // width - 110 and leave the rest unnamed and unclickable).
         const int legendRows = legendRowCount(QFontMetrics(font()));
-        const QRectF plot =
+        QRectF plot =
             rect().adjusted(84, 30, -14, -42 - (legendRows - 1) * kLegendRowHeight);
         painter.setPen(QPen(QColor("#233246"), 1));
         painter.setBrush(Qt::NoBrush);
@@ -276,6 +278,45 @@ protected:
             maxY = niceCeiling(maxY);
         }
 
+        // Nereus remote graphs use longer units such as frames/s and
+        // packets/s. Measure the actual tick and live-value labels instead
+        // of clipping them inside Aether's fixed 74-pixel text gutter.
+        // Y-axis grid + tick labels.  Linear: 4 evenly-spaced.
+        // Log: one tick per decade between minY and maxY so labels
+        // sit at clean 1k / 10k / 100k / 1M / 10M boundaries.
+        const int yTicks = m_logScale
+            ? std::max(1, static_cast<int>(std::round(std::log10(maxY / minY))))
+            : 4;
+        const QFontMetrics metrics(normalFont);
+        int labelWidth = 74;
+        QVector<QString> tickLabels;
+        tickLabels.reserve(yTicks + 1);
+        for (int i = 0; i <= yTicks; ++i) {
+            const double value = m_logScale
+                ? minY * std::pow(10.0, static_cast<double>(i) * std::log10(maxY / minY) / yTicks)
+                : minY + (maxY - minY) * i / yTicks;
+            // For the log path, relabel the bottom-most tick as "0" so
+            // the axis reads with a familiar zero baseline — values at
+            // or below the floor (~1 unit) are functionally silent and
+            // already clamp to minY in the y-mapping below.
+            const QString label = m_logScale && i == 0
+                ? QString("0%1").arg(axisSuffix)
+                : formatAxisValue(value, axisSuffix);
+            tickLabels.push_back(label);
+            labelWidth = std::max(labelWidth, metrics.horizontalAdvance(label) + 2);
+        }
+        for (const Series& series : visibleSeries) {
+            if (series.points.isEmpty()) { continue; }
+            const QString suffix = series.unitSuffix.isEmpty() ? m_suffix : series.unitSuffix;
+            labelWidth = std::max(labelWidth, metrics.horizontalAdvance(
+                formatAxisValue(series.points.last().y(), suffix)) + 2);
+        }
+        const int plotLeft = labelWidth + 10;
+        const int measuredLegendRows = legendRowCount(metrics, plotLeft);
+        plot = rect().adjusted(plotLeft, 30, -14,
+            -42 - (measuredLegendRows - 1) * kLegendRowHeight);
+        if (plot.width() < 20 || plot.height() < 20) { return; }
+
         // Per-series "last sample" hints in the left gutter.  Each
         // visible series gets a colored label at the y-pixel matching
         // its most recent value; labels are spread vertically to avoid
@@ -327,33 +368,17 @@ protected:
             if (hints[i].y < plot.top())          hints[i].y = plot.top();
             next = hints[i].y;
         }
-        // Y-axis grid + tick labels.  Linear: 4 evenly-spaced.
-        // Log: one tick per decade between minY and maxY so labels
-        // sit at clean 1k / 10k / 100k / 1M / 10M boundaries.
-        const int yTicks = m_logScale
-            ? std::max(1, static_cast<int>(std::round(std::log10(maxY / minY))))
-            : 4;
+        // Axis labels and live hints share the measured gutter. A hint
+        // wins when they overlap, preserving the upstream presentation.
         painter.setPen(QPen(QColor("#233246"), 1));
         for (int i = 0; i <= yTicks; ++i) {
             const double y = plot.bottom() - (plot.height() * i / yTicks);
             painter.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y));
-            const double tickValue = m_logScale
-                ? minY * std::pow(10.0, static_cast<double>(i) * std::log10(maxY / minY) / yTicks)
-                : minY + (maxY - minY) * i / yTicks;
-            // For the log path, relabel the bottom-most tick as "0" so
-            // the axis reads with a familiar zero baseline — values at
-            // or below the floor (~1 unit) are functionally silent and
-            // already clamp to minY in the y-mapping below.
-            QString label;
-            if (m_logScale && i == 0) {
-                label = QString("0%1").arg(axisSuffix);
-            } else {
-                label = formatAxisValue(tickValue, axisSuffix);
-            }
-            const QRectF tickRect(4, y - 8, 74, 16);
+            const QString& label = tickLabels[i];
+            const QRectF tickRect(4, y - 8, labelWidth, 16);
             const bool underHint = std::any_of(
-                hints.cbegin(), hints.cend(), [&tickRect](const ValueHint& h) {
-                    return QRectF(4, h.y - 10, 74, 20).intersects(tickRect);
+                hints.cbegin(), hints.cend(), [&tickRect, labelWidth](const ValueHint& h) {
+                    return QRectF(4, h.y - 10, labelWidth, 20).intersects(tickRect);
                 });
             if (!underHint) {
                 painter.setPen(QColor("#8d99ad"));
@@ -436,7 +461,7 @@ protected:
         }
 
         for (const ValueHint& h : hints) {
-            const QRectF rect(4, h.y - 10, 74, 20);
+            const QRectF rect(4, h.y - 10, labelWidth, 20);
             // Vertical alpha gradient (0 → chart bg → 0) so the soft
             // top/bottom edges blend into adjacent hints rather than
             // butting them with a hard rectangle seam.  (A tick label
@@ -625,10 +650,9 @@ private:
         const Series* series{nullptr};
     };
 
-    QVector<LegendSlot> legendLayout(const QFontMetrics& fm) const
+    QVector<LegendSlot> legendLayout(const QFontMetrics& fm, int left = 84) const
     {
         QVector<LegendSlot> entries;
-        const int left = 84;            // = the plot's left edge (rect().adjusted(84, …))
         const int right = width() - 14; // = the plot's right edge
         int x = left;
         int row = 0;
@@ -647,9 +671,9 @@ private:
         return entries;
     }
 
-    int legendRowCount(const QFontMetrics& fm) const
+    int legendRowCount(const QFontMetrics& fm, int left = 84) const
     {
-        const QVector<LegendSlot> entries = legendLayout(fm);
+        const QVector<LegendSlot> entries = legendLayout(fm, left);
         return entries.isEmpty() ? 1 : entries.last().row + 1;
     }
 
@@ -657,7 +681,7 @@ private:
     {
         m_legendHits.clear();
         const int top = static_cast<int>(plot.bottom()) + 12;
-        for (const LegendSlot& slot : legendLayout(QFontMetrics(painter->font()))) {
+        for (const LegendSlot& slot : legendLayout(QFontMetrics(painter->font()), static_cast<int>(plot.left()))) {
             const Series& series = *slot.series;
             const int x = slot.x;
             const int y = top + slot.row * kLegendRowHeight;

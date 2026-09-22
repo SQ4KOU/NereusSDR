@@ -337,6 +337,136 @@ private slots:
         QCOMPARE(bus->outputPacing()->queuedFrames, 0);
     }
 
+    // Live R3 playback showed a production-rate Core (25 packets/s, no send
+    // rejection) while the GUI restarted after admitted packets arrived with
+    // 100-151 ms maximum gaps and occasional two-packet callback batches.
+    // Exercise that reachable arrival shape through the actual Opus decoder,
+    // jitter buffer, WDSP rate matcher, AudioEngine, and a 128-frame device
+    // clock. The interval cycle still averages exactly 40 ms, so this does
+    // not replace the producer-clock contract with a faster test source.
+    void delayedCoalescedArrivalsKeepPlaybackContinuous()
+    {
+        constexpr quint32 kSsrc = 731;
+        constexpr int kPackets = 100;
+        constexpr int kDroppedPacket = 57;
+        constexpr int kCallbackFrames = 128;
+
+        OpusAudioEncoder encoder;
+        QVector<QByteArray> packets;
+        packets.reserve(kPackets);
+        const QVector<float> pcm(3840, 0.1f);
+        for (int packet = 0; packet < kPackets; ++packet) {
+            const auto encoded = encoder.encode(
+                pcm, quint16(packet), quint32(packet) * 1920u, kSsrc);
+            QCOMPARE(encoded.status, OpusAudioCodecStatus::Accepted);
+            packets.append(encoded.packet);
+        }
+
+        AudioEngine engine;
+        engine.setVolume(1.0f);
+        auto sink = std::make_unique<PacedAudioBus>();
+        auto* bus = sink.get();
+        bus->callbackFrames = kCallbackFrames;
+        engine.setSpeakersBusForTest(std::move(sink));
+
+        RemoteAudioReceiver receiver(&engine);
+        QSignalSpy errors(&receiver, &RemoteAudioReceiver::errorOccurred);
+        QSignalSpy restarts(&receiver, &RemoteAudioReceiver::restartRequested);
+        QVERIFY(receiver.start(kSsrc, 0));
+
+        // The callback is independent of the Qt event loop, as a real audio
+        // device is. Integer nanosecond deadlines preserve 48 kHz over the
+        // whole run instead of accumulating a rounded 2.667 ms sleep error.
+        std::jthread device([bus, callbackFrames = kCallbackFrames](
+                                std::stop_token stop) {
+            using Clock = std::chrono::steady_clock;
+            const auto started = Clock::now();
+            quint64 callback = 1;
+            while (!stop.stop_requested()) {
+                const auto deadline = started + std::chrono::nanoseconds(
+                    callback * quint64(callbackFrames) * 1'000'000'000ull
+                    / 48'000ull);
+                std::this_thread::sleep_until(deadline);
+                if (stop.stop_requested()) {
+                    break;
+                }
+                bus->render(callbackFrames);
+                ++callback;
+            }
+        });
+
+        // Every 20 inter-packet intervals are:
+        //   17 * 40 ms, 100 ms, 0 ms, 20 ms = 800 ms.
+        // This is still exactly 25 packets/s over each cycle, but it includes
+        // the live 100 ms gap and coalesced pair. One omitted RTP timestamp
+        // additionally proves the existing bounded PLC path remains viable.
+        using Clock = std::chrono::steady_clock;
+        const auto started = Clock::now();
+        qint64 arrivalMs = 0;
+        for (int packet = 0; packet < kPackets; ++packet) {
+            if (packet > 0) {
+                const int phase = packet % 20;
+                arrivalMs += phase == 18 ? 100
+                    : phase == 19 ? 0
+                    : phase == 0 ? 20
+                    : 40;
+            }
+            std::this_thread::sleep_until(
+                started + std::chrono::milliseconds(arrivalMs));
+            if (packet != kDroppedPacket) {
+                receiver.submit(packets.at(packet));
+            }
+        }
+
+        // Sample as soon as every valid packet and the one deliberate loss
+        // have traversed the real decoder. This proves that demand release did
+        // not skip a valid frame, without leaving an empty stream running long
+        // enough to manufacture additional end-of-test PLC.
+        RemoteAudioReceiverTelemetry telemetry;
+        bool completed = false;
+        const auto completionDeadline = Clock::now() + std::chrono::seconds(1);
+        while (Clock::now() < completionDeadline) {
+            telemetry = receiver.telemetry();
+            if (!receiver.isRunning()) {
+                break;
+            }
+            if (telemetry.acceptedPackets == quint64(kPackets - 1)
+                && telemetry.decodedPackets >= quint64(kPackets - 1)
+                && telemetry.concealedPackets >= 1) {
+                completed = true;
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        device.request_stop();
+        device.join();
+        QCoreApplication::processEvents();
+        const bool runningAtSnapshot = receiver.isRunning();
+        receiver.stop();
+
+        const QString restartReason = restarts.isEmpty()
+            ? QStringLiteral("none")
+            : restarts.first().first().toString();
+        const QString evidence = QStringLiteral(
+            "running=%1 accepted=%2 decoded=%3 plc=%4 underflows=%5 "
+            "overflows=%6 restarts=%7 errors=%8 queued=%9 reason=%10")
+            .arg(runningAtSnapshot).arg(telemetry.acceptedPackets)
+            .arg(telemetry.decodedPackets).arg(telemetry.concealedPackets)
+            .arg(receiver.rateMatcherUnderflows())
+            .arg(receiver.rateMatcherOverflows()).arg(restarts.count())
+            .arg(errors.count())
+            .arg(bus->outputPacing() ? bus->outputPacing()->queuedFrames : -1)
+            .arg(restartReason);
+        QVERIFY2(completed && runningAtSnapshot, qPrintable(evidence));
+        QCOMPARE(telemetry.acceptedPackets, quint64(kPackets - 1));
+        QCOMPARE(telemetry.decodedPackets, quint64(kPackets - 1));
+        QCOMPARE(telemetry.concealedPackets, quint64(1));
+        QCOMPARE(receiver.rateMatcherUnderflows(), 0);
+        QCOMPARE(receiver.rateMatcherOverflows(), 0);
+        QCOMPARE(restarts.count(), 0);
+        QCOMPARE(errors.count(), 0);
+    }
+
 };
 QTEST_GUILESS_MAIN(TstRemoteAudioReceiver)
 #include "tst_remote_audio_receiver.moc"

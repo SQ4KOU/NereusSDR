@@ -25,6 +25,11 @@ per-metric optional values, observation weights, bounded raw/minute retention,
 and explicit segment/missing breaks. Those changes prevent a reconnect or an
 unavailable field from becoming either a zero sample or a continuous line.
 
+Live Nereus Audio graphs use longer `frames/s` and `packets/s` labels. Their
+left gutter is measured from the actual tick and last-value text, and the
+legend wraps from the resulting plot edge. The upstream formatting, scale
+semantics and inline explanatory comments are retained.
+
 The Nereus telemetry collector, authenticated Core session message, receiver
 observations, and all remote-control transport behavior are original Nereus
 work and remain outside this port.

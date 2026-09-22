@@ -65,4 +65,26 @@ std::optional<AudioJitterBuffer::Playout> AudioJitterBuffer::takeReady(qint64 no
     m_nextMissingDue = std::max(*due, nowNs) + kPacketDurationNs;
     return result;
 }
+
+std::optional<AudioJitterBuffer::Playout> AudioJitterBuffer::takeExpectedPresentEarly()
+{
+    auto first = m_packets.begin();
+    if (first == m_packets.end() || first->first != m_nextIndex) {
+        return std::nullopt;
+    }
+
+    Playout result;
+    result.packet = std::move(first->second.packet);
+    result.timestamp = m_nextTimestamp;
+    const qint64 originalDue = first->second.dueNs;
+    m_packets.erase(first);
+    ++m_nextIndex;
+    m_nextTimestamp += kPacketFrames;
+    // Demand release changes only when usable PCM becomes available. Keep the
+    // producer-derived due time as the empty-queue missing deadline; a queued
+    // future packet retains the same anchor precedence as takeReady(). Using
+    // the early wall-clock release here would silently create a local clock.
+    m_nextMissingDue = originalDue + kPacketDurationNs;
+    return result;
+}
 } // namespace NereusSDR

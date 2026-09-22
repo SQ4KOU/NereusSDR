@@ -293,6 +293,33 @@ QVector<float> RemoteAudioRateMatcher::take()
 #endif
 }
 
+bool RemoteAudioRateMatcher::canTakeWithoutUnderflow() const
+{
+#ifdef HAVE_WDSP
+    if (!m_matcher) {
+        return false;
+    }
+    int underflows = 0;
+    int overflows = 0;
+    double ratio = 1.0;
+    int capacity = 0;
+    int ringFill = 0;
+    getRMatchDiags(m_matcher, &underflows, &overflows, &ratio, &capacity, &ringFill);
+    Q_UNUSED(underflows);
+    Q_UNUSED(overflows);
+    Q_UNUSED(ratio);
+    Q_UNUSED(capacity);
+    const int carry = m_outputCarryFrames - m_outputCarryOffsetFrames;
+    const int remaining = std::max(0, m_outputFrames - carry);
+    const int nativeFrames = ((remaining + kThetisNativeBlockFrames - 1)
+                              / kThetisNativeBlockFrames)
+        * kThetisNativeBlockFrames;
+    return ringFill >= nativeFrames;
+#else
+    return false;
+#endif
+}
+
 void RemoteAudioRateMatcher::reset()
 {
     if (m_inputFrames == 0 || m_outputFrames == 0 || m_ringFrames == 0) {

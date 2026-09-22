@@ -343,6 +343,24 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
             // output clock; at most one bounded ring can be replenished here.
             for (int i = 0; i < pacing->capacityFrames / 480
                  && pacing->queuedFrames < targetFrames; ++i) {
+                // A packet may already be admitted yet remain behind its
+                // per-arrival reorder hold while the independently clocked
+                // speaker consumes the final usable matcher block. There is
+                // no ordering benefit in retaining the exact expected packet
+                // at that point. Never use this demand path for a missing head
+                // or a future packet: those retain the normal PLC deadline.
+                if (!matcher.canTakeWithoutUnderflow()) {
+                    const auto present = jitter.takeExpectedPresentEarly();
+                    if (present) {
+                        const auto audio = decoder.decodeRtp(present->packet, ssrc);
+                        if (audio.status != OpusAudioCodecStatus::Accepted
+                            || !matcher.push(audio.pcmInterleaved)) {
+                            notify(QStringLiteral("Remote audio decode failed"));
+                            return;
+                        }
+                        ++d->decoded;
+                    }
+                }
                 const QVector<float> pcm = matcher.take();
                 if (pcm.size() != 960 || !d->engine->writeRemotePlayback(pcm)) {
                     notify(QStringLiteral("Could not write remote audio to the speaker device"), true);

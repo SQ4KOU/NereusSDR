@@ -3,22 +3,42 @@
 This ledger separates the recovered integration baseline, component evidence
 and real remote receive acceptance. A component pass does not close R3.
 
-## Prepared telemetry and RADE cadence correction
+## Prepared packet-burst playback correction
 
-Telemetry is signed at `d6ce05a5`; all 692 desktop tests and the native Rock
-production build pass. Installation is combined with the following RADE cadence
-correction, because the installed route/lifetime repair alone failed listening.
+The actual receiver now uses an already-admitted expected packet when its next
+speaker refill would otherwise underflow. It preserves ordering, normal hold,
+loss policy, queue bounds and WDSP feedback. The measured-burst regression went
+from a spontaneous restart to decoding all 99 valid packets with exactly the
+one deliberate concealment. Seven affected targets, the native-block readiness
+check, the complete build and all 692 test executables pass; eleven existing
+inner Qt skips remain. One independent review is resolved, with strengthened
+tests rerun successfully. The same checkpoint corrects clipped graph labels.
+Matching Core/GUI installation and live acceptance are next.
 
-The mixer retained only 256/2048 delayed frames in the new reproducer. Its
-4096-frame minimum now matches the upstream RX and anti-VOX mixers, preserving
-all frame pairs through clumped or uneven queued delivery without a prefill.
-All six affected mixer/audio/RADE targets pass. The full build and all 692
-test executables pass in 154.93 seconds, with eleven existing inner Qt skips.
-Matching installation follows. See [RADE multislice](rade-multislice.md) for the measured
-failure and exact source contract, and [telemetry verification](core-telemetry.md)
-for the independent telemetry gate and remaining live graph checks.
+## Installed checkpoint 0b408427, September 21, 21:42
 
-## Current checkpoint dd2a9ebf, September 21, 21:11
+Matching signed Core and GUI `0b408427` are installed and receiving through the
+Rock 5C at `.106`. This includes telemetry `d6ce05a5` and the RADE mixer capacity
+correction. All 109 packaged source hashes, the native production build/stage,
+installed hashes, GUI executable tag/private library UUIDs and strict/deep
+signature checks passed. The full desktop gate passed 692/692 executables in
+154.93 seconds, with eleven pre-existing inner Qt skips.
+
+The live Core banner and Connection/Audio history graphs are verified. They
+showed about 18.7 Mbps radio ingress, measured Core RTT and about 48,000 source
+frames/25 accepted Opus packets per second. Audio graph labels were clipped;
+a font-measured gutter correction passes the two affected graph/dialog tests,
+but is not installed yet. Reconnect gaps and final readability remain pending.
+
+With A in USB and B in RADE-L, Core's earlier 39–44k frame/s deficit is resolved
+in the observed intervals. The GUI still reports intermittent buffer underflows
+and restarts amid 80–150 ms packet-arrival gaps. Smooth listening and sustained
+RADE operation therefore remain open. The receiver investigation preserves the
+existing producer-clock contract; no speculative jitter deadline change is
+installed. See [RADE multislice](rade-multislice.md) and
+[telemetry verification](core-telemetry.md) for evidence and limits.
+
+## Previous checkpoint dd2a9ebf, September 21, 21:11
 
 Signed `dd2a9ebf` is installed in matching Core and GUI builds. It includes
 R-R3-31's owning-slice RADE routing, decoder/worker lifetime guards, unsynchronised

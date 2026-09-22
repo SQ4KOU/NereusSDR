@@ -112,6 +112,10 @@ public:
     bool configure(int inputFrames, int outputFrames, int ringFrames);
     bool push(const QVector<float>& pcmInterleaved);
     QVector<float> take();
+    /// True when one public output block can be returned without asking WDSP
+    /// for more input than its ring currently contains. Accounts for the
+    /// partially consumed native 64-frame output block.
+    bool canTakeWithoutUnderflow() const;
     void reset();
 
     /// getRMatchDiags() projection: underflows, overflows, var, and ringsize.

@@ -25,6 +25,11 @@ public:
     void reset(quint32 firstTimestamp);
     Admission insert(const QByteArray& packet, quint32 timestamp, qint64 arrivalNs);
     std::optional<Playout> takeReady(qint64 nowNs);
+    /// Releases only the exact expected packet when downstream PCM is about
+    /// to underrun. Future packets never conceal a missing head through this
+    /// path. Its original due time remains the empty-queue missing deadline;
+    /// the existing future-packet anchor rule is unchanged.
+    std::optional<Playout> takeExpectedPresentEarly();
     int queuedPackets() const { return static_cast<int>(m_packets.size()); }
     quint32 nextTimestamp() const { return m_nextTimestamp; }
 

@@ -225,6 +225,30 @@ private slots:
         QCOMPARE(after.underflows, 0);
     }
 
+    void readinessAccountsForNativeOutputBlockRounding()
+    {
+        RemoteAudioRateMatcher matcher;
+        QVERIFY(matcher.configure(kInputFrames, kOutputFrames, kRingFrames));
+
+        // Eight public 480-frame takes leave 480 frames and no 64-frame
+        // output carry. The next request needs eight complete native blocks
+        // (512 frames), so reported fill alone must not claim it is safe.
+        for (int call = 0; call < 8; ++call) {
+            QVERIFY(matcher.canTakeWithoutUnderflow());
+            QCOMPARE(matcher.take().size(), kOutputFrames
+                * RemoteAudioRateMatcher::kChannels);
+        }
+        QCOMPARE(matcher.stats().ringFillFrames, 480);
+        QVERIFY(!matcher.canTakeWithoutUnderflow());
+        QCOMPARE(matcher.stats().underflows, 0);
+
+        QVERIFY(matcher.push(stereoBlock(0)));
+        QVERIFY(matcher.canTakeWithoutUnderflow());
+        QCOMPARE(matcher.take().size(), kOutputFrames
+            * RemoteAudioRateMatcher::kChannels);
+        QCOMPARE(matcher.stats().underflows, 0);
+    }
+
     void adaptiveClockStaysBoundedAtPlusAndMinus500Ppm()
     {
 #ifndef HAVE_WDSP

@@ -58,3 +58,22 @@ NereusCore, its dependencies and licences successfully; dependency resolution
 and staged `--help` passed. The installed service remains `dd2a9ebf` while the
 separate RADE cadence correction is prepared. No telemetry live acceptance is
 claimed from this build-only checkpoint.
+
+## Matching live installation, 0b408427
+
+The combined telemetry/cadence checkpoint was installed and authenticated at
+21:42 on September 21. Core and GUI identities, native production dependencies
+and GUI signatures were verified. The banner visibly displayed Core connected,
+about 18.7 Mbps radio ingress, measured Core RTT and Audio playing. Clicking it
+opened the production Remote Network Diagnostics dialog. Connection and Audio
+history plots updated, including about 48,000 source frames/s, 25 encoded and
+accepted packets/s, and actual audio interruption/context gaps. Core RTT varied
+with its measurement age; unavailable radio RTT was not fabricated.
+
+The Audio tab exposed clipped unit labels at the fixed-width left gutter. A
+font-measured gutter correction passes `tst_time_series_graph` and
+`tst_remote_diagnostics` (2/2, 2.48 seconds), and awaits installation/visual
+verification. The operator closed the dialog during live listening; it was
+left closed. Roundtrip-tab readability, receive-only reconnect gaps and final
+layout acceptance remain pending. Ongoing RADE-related playback underflows
+are tracked separately and prevent any smooth-audio acceptance claim.

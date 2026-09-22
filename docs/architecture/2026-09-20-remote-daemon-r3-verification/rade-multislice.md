@@ -148,3 +148,74 @@ reviewed the frame-count/content regressions. Both verbatim upstream licence
 headers are preserved; their original trailing spaces are the only diff
 whitespace findings. Matching native/GUI installation and the repeated live
 RADE test remain the next gate.
+
+## Installed cadence correction and remaining playback interruptions
+
+Signed `0b408427` was installed in matching Core and GUI builds at 21:42 on
+September 21. The native production build and 109 source-overlay hashes pass.
+Installed NereusCore SHA-256 is
+`f91a7c05b4fe86a5f55d83fa0dab0b921e60c846428cfc09d8a2765e0d8f0925`;
+rollback is `/var/lib/nereus-build/rollback-dd2a9ebf-before-0b408427/`.
+Core PID 14142 was active with zero service restarts. The saved GUI profile,
+endpoint and pairing were retained; executable/private library identities and
+strict/deep signing matched the checkpoint before launch.
+
+Live observation showed A at 14.2932 MHz USB and B at 7.177 MHz RADE-L, with
+RADE indicating sync at one observation. Core context 39 produced 4,832,960
+source frames in 100.686 seconds (about 48,000/s), 2487 encoded/accepted packets,
+30 source-drop events and no encoder errors or send rejections. Source-frame
+telemetry counts valid ingress before bridge contention drops; it is not proof
+that every frame reached the encoder. Codec sync is not listening acceptance
+for decoded speech.
+
+The original mixer sample deficit is no longer observed, but playback still
+underflows. At 21:52:46 a context restarted after 175.206 seconds, with 4338
+accepted packets, 40 PLC blocks, one late packet, a 133 ms maximum arrival gap
+and a 10 ms maximum worker wake gap. Further interruptions followed. Packet
+receipt gaps are generally much larger than the GUI owner-thread drain delay.
+The operator's clarification that leaving RADE on both receivers resolves the
+problem remains the comparison condition. Sender timing and an actual receiver
+burst-arrival regression are under investigation. The arrival-plus-80-ms jitter
+clock and existing long-duration clock-drift invariants remain unchanged.
+
+### Sender capture and receiver regression
+
+A passive 24.277-second capture on the Rock's wired `end1` interface contained
+607 outgoing audio RTP packets (PT 111). Their median spacing was 40.109 ms,
+maximum spacing 109.967 ms, and fifteen gaps were at least 80 ms. Every sequence
+increment was one; timestamp steps were 1920 except one 3840 step. Thus this
+capture proves uneven timing before the network hop, without claiming that
+all later client gaps originate on Core or that a particular codec call causes
+them. The exact sender scheduling cause remains open.
+
+The new actual-Opus receiver regression uses a 128-frame independent device
+clock and repeated arrival intervals `17 × 40, 100, 0, 20 ms`, preserving an
+average 25 packets/s. It fails before its intentional missing packet: at
+865 ms it had accepted 22 packets, decoded 18, concealed none and underflowed,
+with four packets still queued, a 98 ms maximum arrival gap, 4 ms maximum worker
+wake gap and unchanged 1.0 resampler ratio. This reproduces restart from bounded
+burst timing without source loss or a stalled GUI worker.
+
+The correction under development permits only the exact expected, already
+received packet to leave its hold when decoded PCM cannot satisfy the next
+speaker refill. It retains the normal arrival-plus-80-ms release path, original
+missing-packet deadlines, queue bounds and continuous resampler state. It does
+not force early PLC, grow latency or change resampler feedback. Verification
+and hardware acceptance are pending.
+
+The demand-release correction passes the unchanged real-receiver burst/loss
+regression and all seven affected executable checks in 9.77 seconds. Its precise
+native-block readiness test also passes: eight 480-frame pulls leave 480 frames,
+which cannot satisfy the next 512-frame native pull; adding a real input block
+restores readiness without an underflow. The complete `all_tests`/`nereusd` build and unfiltered **692/692** desktop
+executables pass in 128.73 seconds, including both one-hour simulated clock
+directions. Eleven pre-existing inner Qt skips remain; the new regressions have
+none. Independent review prompted stronger exact packet/PLC assertions and an
+explicit comparison of existing future-packet loss deadlines. Both affected
+executables pass after those test/comment refinements (9.43 seconds): all 99
+valid packets are admitted and decoded, with exactly one deliberate PLC and no
+restart or matcher error. The comparison confirms that the future-packet loss
+anchor behaves identically before/after early release; the API comment now
+precisely identifies the preserved empty-queue deadline. No production behavior
+changed after the full gate. Matching installation and repeated RADE listening
+remain pending.
