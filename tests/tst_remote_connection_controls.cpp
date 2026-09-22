@@ -1,7 +1,6 @@
 // no-port-check: NereusSDR-original. Remote GUI connection and hydration boundaries.
 #include <QTest>
 #include <QCoreApplication>
-#include <QDir>
 #include <QFile>
 #include <QLabel>
 #include <QMenu>
@@ -333,19 +332,19 @@ private slots:
         QVERIFY(audioDetails->text().contains(QStringLiteral("Problem:")));
         QVERIFY(audioDetails->text().contains(QStringLiteral("Arrival jitter")));
 
-        // The controller can inspect the rendering: one save under this
-        // test's own temporary directory, one alongside the plan for review.
+        // The rendering is saved under this test's own temporary directory.
+        // Set NEREUS_REMOTE_PANEL_DUMP_DIR to also keep a copy for review;
+        // that copy is best effort and never asserted.
         QCoreApplication::processEvents();
         QTemporaryDir captureDir;
         QVERIFY(captureDir.isValid());
         const QPixmap rendered = panel.grab();
         QVERIFY(!rendered.isNull());
         QVERIFY(rendered.save(captureDir.filePath(QStringLiteral("panel-capture.png")), "PNG"));
-        const QString sharedCaptureDir = QStringLiteral(
-            "/Users/j.j.boyd/.codex/worktrees/nereus-r2-integration/NereusSDR/"
-            ".crew/2026-09-22-remote-audio-status-plan");
-        QVERIFY(QDir().mkpath(sharedCaptureDir));
-        QVERIFY(rendered.save(sharedCaptureDir + QStringLiteral("/panel-capture.png"), "PNG"));
+        const QString dumpDir = qEnvironmentVariable("NEREUS_REMOTE_PANEL_DUMP_DIR");
+        if (!dumpDir.isEmpty()) {
+            rendered.save(dumpDir + QStringLiteral("/panel-capture.png"), "PNG");
+        }
 
         // The speaker is back; Retry asks Core again with a newer revision.
         h.remoteBus->setOutputPacingAvailableForTesting(true);
