@@ -8,6 +8,11 @@
 // stall-demotion heuristic these tests exist to prevent. The ported
 // logic itself lives in src/core/audio/MasterMixer.{h,cpp}, which carry
 // the verbatim Warren Pratt NR0V header and the PROVENANCE rows.
+//
+// Modification history (NereusSDR):
+//   2026-09-21 -- Added queued-producer frame-conservation coverage for the
+//                 RADE RX DSP -> main -> DSP return path. J.J. Boyd / KG4VCF,
+//                 with AI assistance from OpenAI Codex.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -149,6 +154,100 @@ private slots:
             mix.accumulate(2, b.data(), 1);
             QCOMPARE(mix.tryDrain(out.data(), 1), 1);
             QCOMPARE(out[0], 0.7f);
+        }
+    }
+
+    void queuedProducerSkewPreservesEveryFrame_data() {
+        QTest::addColumn<QList<int>>("bursts");
+
+        // 32 * 64 = 2,048 frames: the live RADE return can arrive as one
+        // clump after the ordinary receiver has already filled several
+        // same-cadence blocks.
+        QTest::newRow("32-block-clump") << QList<int>{32};
+
+        // Same 2,048 frames with bounded, uneven scheduling skew. This is
+        // closer to two queued producers alternating in event-loop bursts
+        // while retaining exact source-frame conservation.
+        QTest::newRow("jittered-32-blocks")
+            << QList<int>{5, 1, 9, 3, 7, 2, 5};
+    }
+
+    // R-R3-31 live acceptance exposed a gap in the earlier burst test: it
+    // proved three one-frame blocks survived, but production uses 64-frame
+    // blocks and the RADE owner returns through DSP -> main -> DSP queued
+    // delivery. The ordinary receiver can therefore lead by more than four
+    // blocks even though both producers have the same long-term 48 kHz rate.
+    //
+    // Thetis gives both the RX master and anti-VOX aamix instances a 4,096-
+    // sample ring (cmaster.c:159-168, 297-306 [v2.10.3.15]). These rows stay
+    // at or below that source-grounded bound and require every delayed frame,
+    // with its original sequence value, to survive until its mate arrives.
+    void queuedProducerSkewPreservesEveryFrame() {
+        QFETCH(QList<int>, bursts);
+
+        MasterMixer mix;
+        mix.setRampFrames(1);
+        mix.setSlewUpFrames(0);
+        mix.setSliceGain(1, 1.0f, 0.0f);
+        mix.setSliceGain(2, 1.0f, 0.0f);
+
+        constexpr int kFrames = 64;
+        std::vector<float> a(static_cast<size_t>(kFrames) * 2);
+        std::vector<float> b(static_cast<size_t>(kFrames) * 2);
+        std::vector<float> out(static_cast<size_t>(kFrames) * 2);
+
+        // Enrol and empty both members before measuring the queued skew.
+        std::fill(a.begin(), a.end(), 0.1f);
+        std::fill(b.begin(), b.end(), 0.2f);
+        mix.accumulate(1, a.data(), kFrames);
+        mix.accumulate(2, b.data(), kFrames);
+        QCOMPARE(mix.tryDrain(out.data(), kFrames), kFrames);
+        QCOMPARE(mix.producingSliceCount(), 2);
+
+        int nextBlock = 0;
+        int drainedFrames = 0;
+        QList<float> drainedBlockValues;
+        auto collectDrain = [&] {
+            const int drained = mix.tryDrain(out.data(), kFrames);
+            drainedFrames += drained;
+            if (drained <= 0) {
+                return;
+            }
+            QCOMPARE(drained, kFrames);
+            const float value = out.front();
+            for (int frame = 0; frame < drained; ++frame) {
+                QCOMPARE(out[static_cast<size_t>(frame) * 2], value);
+                QCOMPARE(out[static_cast<size_t>(frame) * 2 + 1], value);
+            }
+            drainedBlockValues.append(value);
+        };
+
+        for (const int burstBlocks : bursts) {
+            const int burstFirst = nextBlock;
+            for (int block = 0; block < burstBlocks; ++block) {
+                const float marker = static_cast<float>(nextBlock + 1);
+                std::fill(a.begin(), a.end(), marker);
+                mix.accumulate(1, a.data(), kFrames);
+                collectDrain();
+                ++nextBlock;
+            }
+            for (int block = 0; block < burstBlocks; ++block) {
+                // B's matching block has a distinct value, making an
+                // overflow/re-pair visible even if the final frame count
+                // happens to balance after a later burst.
+                const float marker =
+                    static_cast<float>(1000 + burstFirst + block);
+                std::fill(b.begin(), b.end(), marker);
+                mix.accumulate(2, b.data(), kFrames);
+                collectDrain();
+            }
+        }
+
+        QCOMPARE(drainedFrames, nextBlock * kFrames);
+        QCOMPARE(drainedBlockValues.size(), nextBlock);
+        for (int block = 0; block < nextBlock; ++block) {
+            const float expected = static_cast<float>(1001 + 2 * block);
+            QCOMPARE(drainedBlockValues.at(block), expected);
         }
     }
 

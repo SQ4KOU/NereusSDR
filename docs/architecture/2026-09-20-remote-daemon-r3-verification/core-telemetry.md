@@ -49,3 +49,12 @@ The telemetry checkpoint is ready for the native production build, but its
 installation is held while the installed RADE checkpoint's live sample-cadence
 failure is investigated. The passing telemetry suite does not close that separate
 hardware failure; see [RADE multislice](rade-multislice.md).
+
+## Native production build, signed d6ce05a5
+
+All 105 source-overlay hashes matched the signed checkpoint. The Rock 5C's
+production configuration (`NEREUS_BUILD_TESTS=OFF`) built and staged `nereusd`,
+NereusCore, its dependencies and licences successfully; dependency resolution
+and staged `--help` passed. The installed service remains `dd2a9ebf` while the
+separate RADE cadence correction is prepared. No telemetry live acceptance is
+claimed from this build-only checkpoint.

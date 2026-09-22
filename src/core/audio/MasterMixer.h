@@ -2,6 +2,107 @@
 // src/core/audio/MasterMixer.h  (NereusSDR)
 // =================================================================
 //
+// Ported from Thetis sources (structural derivation, not a line-by-line
+// translation -- the architecture is upstream's, the semantics are ours):
+//   Project Files/Source/ChannelMaster/aamix.c [v2.10.3.15]
+//     (per-producer ring + readiness barrier + one summed output)
+//   Project Files/Source/ChannelMaster/cmaster.c [v2.10.3.15]
+//     (RX and anti-VOX minimum ring capacity)
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-07-27 -- Per-slice mute / volume / pan mixer reworked from a
+//                 single shared accumulator into per-slice rings behind
+//                 a readiness barrier, so N slices produce ONE mixed
+//                 block per audio period instead of N pushes. The ring
+//                 + barrier + single-summed-output STRUCTURE is Warren
+//                 Pratt's from aamix.c; the per-slice gain / pan / mute
+//                 semantics and the anti-click gain ramp are
+//                 NereusSDR-original. Three divergences from the
+//                 upstream structure are argued in MasterMixer.h.
+//                 Authored by J.J. Boyd (KG4VCF), with AI-assisted
+//                 transformation via Anthropic Claude Code.
+//   2026-07-27 -- Replaced the stall-demotion heuristic with the explicit
+//                 leave that upstream uses. A member is now withdrawn
+//                 only by setSliceStreaming(false) or removeSlice(), so
+//                 a slice that is merely late can no longer be mistaken
+//                 for one that has stopped. Fixes the ANAN-G2E bench
+//                 defect where two pans produced scratchy, robotic audio.
+//                 Authored by J.J. Boyd (KG4VCF), with AI-assisted
+//                 transformation via Anthropic Claude Code.
+//   2026-07-27 -- Ported the master up-slew across a membership change.
+//                 The raised-cosine window is Warren Pratt's from
+//                 create_aaslew (aamix.c:86-92), armed where open_mixer
+//                 raises slew.uflag (aamix.c:494-496), and its 10 ms
+//                 length is the RX mixer's own tslewup from
+//                 cmaster.c:297-313. Fixes the ANAN-G2E bench report of a
+//                 "kerplunk at the end of the unkey": a slice re-admitted
+//                 after MOX resumed at full amplitude in one sample.
+//                 Down-slew is NOT ported; see divergence 4 below.
+//                 Authored by J.J. Boyd (KG4VCF), with AI-assisted
+//                 transformation via Anthropic Claude Code.
+//   2026-09-21 -- Preserve queued RADE/ordinary receiver sample pairs with
+//                 the upstream 4096-frame minimum ring, independent of the
+//                 small DSP block size. No prefill or barrier-policy change.
+//                 Authored by J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via OpenAI Codex.
+// =================================================================
+
+// --- From aamix.c ---
+/*  aamix.c
+
+This file is part of a program that implements a Software-Defined Radio.
+
+Copyright (C) 2014 Warren Pratt, NR0V
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+The author can be reached by email at  
+
+warren@wpratt.com
+
+*/
+
+
+// --- From cmaster.c ---
+/*  cmaster.c
+
+This file is part of a program that implements a Software-Defined Radio.
+
+Copyright (C) 2014-2019 Warren Pratt, NR0V
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+The author can be reached by email at  
+
+warren@wpratt.com
+
+*/
+
 // Phase 3O per-slice mute / volume / pan mixer. Per-slice gain, pan,
 // mute and the anti-click ramp are NereusSDR-original; the ring +
 // barrier structure is derived from Thetis, see below.
@@ -37,7 +138,8 @@
 //     each stream's DSP block with bufferSizeForRate(), which scales the
 //     input size linearly with the sample rate, so every stream emits one
 //     64-frame 48 kHz block per period whatever its DDC rate. Cadences
-//     match by construction and the rings only ever absorb jitter.
+//     match by construction. Decoded RADE speech returns asynchronously
+//     at the same long-term rate; the rings absorb that scheduling skew.
 //
 //  3. Barrier membership is asymmetric: a slice JOINS implicitly on its
 //     first block, but LEAVES only when the slice lifecycle withdraws it
@@ -84,73 +186,6 @@
 // going. Ramping the per-slice gain targets our actual artifact and
 // keeps the audio-thread path branch-light.
 //
-// Ported from Thetis sources (structural derivation, not a line-by-line
-// translation -- the architecture is upstream's, the semantics are ours):
-//   Project Files/Source/ChannelMaster/aamix.c [v2.10.3.15]
-//     (per-producer ring + readiness barrier + one summed output)
-//
-// =================================================================
-// Modification history (NereusSDR):
-//   2026-07-27 -- Per-slice mute / volume / pan mixer reworked from a
-//                 single shared accumulator into per-slice rings behind
-//                 a readiness barrier, so N slices produce ONE mixed
-//                 block per audio period instead of N pushes. The ring
-//                 + barrier + single-summed-output STRUCTURE is Warren
-//                 Pratt's from aamix.c; the per-slice gain / pan / mute
-//                 semantics and the anti-click gain ramp are
-//                 NereusSDR-original. Three divergences from the
-//                 upstream structure are argued in MasterMixer.h.
-//                 Authored by J.J. Boyd (KG4VCF), with AI-assisted
-//                 transformation via Anthropic Claude Code.
-//   2026-07-27 -- Replaced the stall-demotion heuristic with the explicit
-//                 leave that upstream uses. A member is now withdrawn
-//                 only by setSliceStreaming(false) or removeSlice(), so
-//                 a slice that is merely late can no longer be mistaken
-//                 for one that has stopped. Fixes the ANAN-G2E bench
-//                 defect where two pans produced scratchy, robotic audio.
-//                 Authored by J.J. Boyd (KG4VCF), with AI-assisted
-//                 transformation via Anthropic Claude Code.
-//   2026-07-27 -- Ported the master up-slew across a membership change.
-//                 The raised-cosine window is Warren Pratt's from
-//                 create_aaslew (aamix.c:86-92), armed where open_mixer
-//                 raises slew.uflag (aamix.c:494-496), and its 10 ms
-//                 length is the RX mixer's own tslewup from
-//                 cmaster.c:297-313. Fixes the ANAN-G2E bench report of a
-//                 "kerplunk at the end of the unkey": a slice re-admitted
-//                 after MOX resumed at full amplitude in one sample.
-//                 Down-slew is NOT ported; see divergence 4 below.
-//                 Authored by J.J. Boyd (KG4VCF), with AI-assisted
-//                 transformation via Anthropic Claude Code.
-// =================================================================
-
-// --- From aamix.c ---
-/*  aamix.c
-
-This file is part of a program that implements a Software-Defined Radio.
-
-Copyright (C) 2014 Warren Pratt, NR0V
-
-This program is free software; you can redistribute it and/or
-modify it under the terms of the GNU General Public License
-as published by the Free Software Foundation; either version 2
-of the License, or (at your option) any later version.
-
-This program is distributed in the hope that it will be useful,
-but WITHOUT ANY WARRANTY; without even the implied warranty of
-MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
-GNU General Public License for more details.
-
-You should have received a copy of the GNU General Public License
-along with this program; if not, write to the Free Software
-Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
-
-The author can be reached by email at  
-
-warren@wpratt.com
-
-*/
-
-
 #pragma once
 
 #include <atomic>
@@ -262,8 +297,12 @@ private:
     // short enough that it never smears a real signal.
     static constexpr int kDefaultRampFrames = 240;
 
-    // Ring depth in blocks. Cadences match by construction (see the
-    // header note), so this only has to cover jitter, not drift.
+    // From Thetis cmaster.c:159-168,297-306 [v2.10.3.15]: both RX and
+    // anti-VOX mixers retain 4096 frames independently of the DSP block size.
+    // At 48 kHz this holds 85.3 ms of queued-producer skew without dropping
+    // the ordinary receiver while RADE completes its DSP/main/DSP handoff.
+    // Capacity is not a prefill target: a ready pair still drains immediately.
+    static constexpr int kMinimumRingFrames = 4096;
     static constexpr int kRingBlocks = 4;
 
     // Master up-slew across a membership change, applied to the MIXED
@@ -348,7 +387,8 @@ private:
         bool drainStaged{false};
     };
 
-    // Grow (or first-allocate) a slice's ring to hold kRingBlocks blocks.
+    // Grow (or first-allocate) a slice's ring to hold at least the upstream
+    // minimum or kRingBlocks larger blocks, whichever is greater.
     static void ensureRing(SliceState& st, int frames);
 
 

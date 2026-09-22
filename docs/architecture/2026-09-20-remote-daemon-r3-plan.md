@@ -655,10 +655,10 @@ measurements. Never equate transport send acceptance with packet delivery.
 - [x] Fetch current Aether upstream into an isolated source snapshot and audit
   graph/history licensing, data sources, gaps and lifecycle semantics.
 - [x] Settle the first scope with the operator and record the concrete design.
-- [ ] Implement and test the bounded typed collector/session contract.
-- [ ] Add observational GUI transport and receiver diagnostics.
-- [ ] Port/adapt Aether graph/history behavior with attribution and gap tests.
-- [ ] Wire live banner and remote Network Diagnostics, including older-Core,
+- [x] Implement and test the bounded typed collector/session contract.
+- [x] Add observational GUI transport and receiver diagnostics.
+- [x] Port/adapt Aether graph/history behavior with attribution and gap tests.
+- [x] Wire live banner and remote Network Diagnostics, including older-Core,
   stale and reconnect states; preserve direct-mode behavior.
 - [ ] Verify the integrated checkpoint and live receive-only Rock 5C session.
 
@@ -739,6 +739,17 @@ occupancy and no periodic drop/duplicate repair. Loss/bursts conceal and
 recover; old SSRC/generation packets cannot play after reconnect. Stereo
 listening on the real client is required in addition to packet receipt.
 
+**Additional continuity check from September 21:** after RADE was disabled,
+context 166 ran for 76.7 seconds before a separate underflow following a 154 ms
+arrival gap. The operator later confirmed ordinary receive becomes smooth when
+both receivers leave RADE. Retain a bounded delayed/coalesced-RTP regression in
+the remaining audio hardening: test real playout of a delayed three-packet burst
+and distinguish packets retained for reordering from usable PCM reserve. A
+source audit suggests a late present packet may wait an additional 80 ms; that
+is a hypothesis requiring a reproducer, not an implemented or proven repair.
+Any subsequent scheduling change must preserve bounded latency and existing
+restart semantics, with the delayed-batch regression establishing its contract.
+
 **Verification:** unit/integration tests, measured Rock 5C encoding and client
 playback, then real long-session audio. Lossless/high-rate digital-mode audio
 remains a tracked parent requirement; do not advertise Opus as transparent
@@ -792,8 +803,9 @@ This repairs the reported second-pan RADE-U failure; it introduces no new
 active-VFO selection policy or transmit behavior.
 
 **Owned files:** `src/models/{RadioModel,RxDspWorker}.*`,
-`src/core/RadeChannel.cpp`, `tests/tst_rade_rx_multislice_routing.cpp`,
-affected RADE lifecycle tests and Aether attribution.
+`src/core/RadeChannel.cpp`, `src/core/audio/MasterMixer.*`,
+`tests/tst_rade_rx_multislice_routing.cpp`, `tests/tst_master_mixer.cpp`,
+affected RADE lifecycle tests and Aether/Thetis attribution.
 
 **Interfaces:** publish the true owning slice identity and a generation to the
 DSP worker at all existing RADE publication sites. Keep QObject lifetime on its
@@ -807,18 +819,25 @@ clear a replacement owner, including when a slice ID is reused.
   With both ordinary slices already producing, selecting B yielded
   `Aordinary=0 Bordinary=96 radeAfterA=44 radeAfterB=44`; master pushes stayed
   at one. The regression uses actual WDSP channels and the real audio mixer.
-- [ ] Route only the selected slice to RADE and retain other slice audio.
+- [x] Route only the selected slice to RADE and retain other slice audio.
   Withdraw the selected slice from the mix until current valid output is
   available; mode exit, slice removal, worker replacement and MOX lifecycle
   must not prematurely re-admit an obsolete producer.
-- [ ] Restore Aether's existing same-sized quiet output for active decoder
+- [x] Restore Aether's existing same-sized quiet output for active decoder
   input without enough decoded speech (`RADEEngine.cpp:496–504` at
   `0dea0dd7`). The removed padding's old timer-driven assumption no longer
   matches Nereus's per-slice mixer barrier. Preserve decoder/DSP parameters;
   do not add a mixer timeout to disguise missing production.
-- [ ] Cover stale queued I/Q/speech, old-owner destruction, removed/reused
+- [x] Cover stale queued I/Q/speech, old-owner destruction, removed/reused
   slice IDs and worker teardown/restart. Prove a failed/warming/unsynced B
   decoder cannot stall A's mixed output.
+- [ ] Preserve every mixed source frame under bounded queued RADE delivery.
+  The live check exposed a 39–44k/s mixed-source deficit at nominal 48k/s;
+  the prior 256-frame ring discarded ordinary receiver audio while RADE was
+  delayed. Adopt Thetis's 4096-frame RX/anti-VOX capacity independently of
+  block size, keep immediate readiness drainage, and verify exact frame count
+  and sequence contents through repeated/clumped producer delivery. Recheck
+  the actual Core rate and listening before accepting the repair.
 - [ ] Run affected RADE/mixer/audio regressions, consolidated review and full
   suite; install a signed matching checkpoint and perform the receive-only
   two-pan RADE smoke with the user.
@@ -933,7 +952,7 @@ whole-plan review loops.
 | Manual Core reconnect | Configured-endpoint controls installed; title-panel path verified | Title opens details; manual Disconnect/Connect restored receive at `8c011066`. New `706b9a5f` also automatically resumed after Core installation. New media-only recovery has pinned-TLS integration coverage; a real media-only drop and remaining UI entry points need acceptance. |
 | Visible controls and snapshot hydration | Bounded task 4c implementation installed at `95b19467` | Startup implicit slice creation is fixed and covered; fresh live attach displayed one slice. TX applet/PureSignal/filter-match, FIR and tuner gates are implemented. Phone/CW, XIT, TX settings and other remaining surfaces are listed in the control matrix. |
 | Station accessories / TGXL | Receive-only guards, status adapter and lifecycle repair installed; task 4d remains open | Snapshot replay is non-actuating; raw transmit writes and automatic tuner carrier requests are refused. Owned retry cancellation and stale-socket guards are installed via `3a589945`/`d9c7bce1`. Core connected at .234:9010 and received actual tuner info. Ordered live configuration, positive identity admission and headless frequency/mode propagation remain unfinished; ANT1–3 are intentionally gated in this receive-only checkpoint. |
-| Second-pan RADE | R-R3-31 installed at signed `dd2a9ebf`; live cadence correction required | Owning-slice routing, worker/decoder lifetime guards, unsynchronised quiet cadence and warming-target mix admission are repaired. Two independent review findings are corrected. All 685 desktop tests, native build and matching receive-only installation pass; the operator reports A stutters with B in RADE, and Core produces only about 39–44k mixed frames/s. USB restores 48k; sample-cadence investigation remains open; see [RADE verification](2026-09-20-remote-daemon-r3-verification/rade-multislice.md). |
+| Second-pan RADE | R-R3-31 installed at signed `dd2a9ebf`; live cadence correction required | Owning-slice routing, worker/decoder lifetime guards, unsynchronised quiet cadence and warming-target mix admission are repaired. Two independent review findings are corrected. All 685 desktop tests, native build and matching receive-only installation pass; the operator reports A stutters with B in RADE, and Core produces only about 39–44k mixed frames/s. Leaving RADE on both receivers restores smooth audio. The upstream 4096-frame ring correction passes exact frame-conservation regressions and the complete 692-test gate; matching installation and repeat live acceptance follow; see [RADE verification](2026-09-20-remote-daemon-r3-verification/rade-multislice.md). |
 | Core banner and telemetry graphs | R-R3-32/33 integrated; 692/692 test executables pass | User chose banner plus connection/audio graphs first. Latest fetched Aether source is `0dea0dd7`; graph/history port and authenticated collectors passed focused checks and consolidated review, including corrections for interruptions across audio restarts. The complete desktop gate passes; native installation and live acceptance remain, following the RADE cadence correction. Core CPU/memory history is follow-on work; see [design](2026-09-21-core-telemetry-design.md). |
 | Audio controls and diagnostics | R-R3-23 open; task 5a | Fixed 24 kbit/s stereo is active; persistent profile/health/output feedback and measured 24/48 comparison remain. A selectable quality profile needs an acknowledged Core contract; no adaptive-rate claim. |
 | Boot recovery | R-R3-26 included in installed `8c011066`; late-address boot pending | Listener retries reuse station identity and cancel on stop; 682 test executables pass. Separate R-R3-27 covers one-shot initial radio discovery. |

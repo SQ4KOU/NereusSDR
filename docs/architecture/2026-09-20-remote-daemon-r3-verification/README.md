@@ -3,6 +3,21 @@
 This ledger separates the recovered integration baseline, component evidence
 and real remote receive acceptance. A component pass does not close R3.
 
+## Prepared telemetry and RADE cadence correction
+
+Telemetry is signed at `d6ce05a5`; all 692 desktop tests and the native Rock
+production build pass. Installation is combined with the following RADE cadence
+correction, because the installed route/lifetime repair alone failed listening.
+
+The mixer retained only 256/2048 delayed frames in the new reproducer. Its
+4096-frame minimum now matches the upstream RX and anti-VOX mixers, preserving
+all frame pairs through clumped or uneven queued delivery without a prefill.
+All six affected mixer/audio/RADE targets pass. The full build and all 692
+test executables pass in 154.93 seconds, with eleven existing inner Qt skips.
+Matching installation follows. See [RADE multislice](rade-multislice.md) for the measured
+failure and exact source contract, and [telemetry verification](core-telemetry.md)
+for the independent telemetry gate and remaining live graph checks.
+
 ## Current checkpoint dd2a9ebf, September 21, 21:11
 
 Signed `dd2a9ebf` is installed in matching Core and GUI builds. It includes

@@ -119,3 +119,32 @@ seconds. This correlates the deficit with the RADE path; the exact sample-loss
 cause and the operator's USB comparison remain under investigation. The earlier
 regression proves routing and eventual output, not sustained sample conservation.
 Telemetry installation is held while this cadence defect is investigated.
+
+The operator subsequently clarified that leaving RADE mode on **both** receivers
+resolves the audible issue. The source audit finds a 256-frame (5.33 ms at
+48 kHz) mixer ring for the actual 64-frame DSP blocks. Ordinary audio arrives
+synchronously, while RADE returns through a queued DSP/control/DSP round trip;
+a delayed decoder burst can overflow the ordinary producer's ring. Thetis
+`cmaster.c:159–168,297–306` at `v2.10.3.15` instead configures 4096 frames for
+both RX and anti-VOX mixers independently of block size. A deterministic
+sample-conservation regression and a bounded-capacity correction are next.
+The longer-capacity ring is not a prefill delay; readiness still drains as soon
+as all enrolled producers have samples.
+
+The deterministic mixer regression fails on the installed implementation:
+32 delayed 64-frame blocks drain only **256/2048 frames**; the uneven burst
+sequence drains **1728/2048**. Both enroll the actual two-member mixer first
+and mark input blocks so the green check verifies their exact paired content,
+not just an eventual push. The correction gives each ring at least 4096 frames
+while retaining the larger-block rule, immediate drainage, explicit lifecycle
+withdrawal and drop-oldest behavior beyond its bound. Focused/full verification
+and a fresh hardware test follow; no sustained repair is claimed yet.
+
+The cadence correction passes all six affected test executables (7.10 seconds),
+then the complete `all_tests`/`nereusd` build and **692/692 executables in
+154.93 seconds**, with eleven pre-existing inner Qt skips and no new skips.
+The lead verified the small capacity change against the upstream source and
+reviewed the frame-count/content regressions. Both verbatim upstream licence
+headers are preserved; their original trailing spaces are the only diff
+whitespace findings. Matching native/GUI installation and the repeated live
+RADE test remain the next gate.

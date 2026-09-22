@@ -8,6 +8,8 @@
 // translation -- the architecture is upstream's, the semantics are ours):
 //   Project Files/Source/ChannelMaster/aamix.c [v2.10.3.15]
 //     (per-producer ring + readiness barrier + one summed output)
+//   Project Files/Source/ChannelMaster/cmaster.c [v2.10.3.15]
+//     (RX and anti-VOX minimum ring capacity)
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -22,6 +24,11 @@
 //                 upstream structure are argued in MasterMixer.h.
 //                 Authored by J.J. Boyd (KG4VCF), with AI-assisted
 //                 transformation via Anthropic Claude Code.
+//   2026-09-21 -- Preserve queued RADE/ordinary receiver sample pairs with
+//                 the upstream 4096-frame minimum ring, independent of the
+//                 small DSP block size. No prefill or barrier-policy change.
+//                 Authored by J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via OpenAI Codex.
 // =================================================================
 
 // --- From aamix.c ---
@@ -51,6 +58,33 @@ warren@wpratt.com
 
 */
 
+
+// --- From cmaster.c ---
+/*  cmaster.c
+
+This file is part of a program that implements a Software-Defined Radio.
+
+Copyright (C) 2014-2019 Warren Pratt, NR0V
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+The author can be reached by email at  
+
+warren@wpratt.com
+
+*/
 
 #include "MasterMixer.h"
 
@@ -163,7 +197,7 @@ int MasterMixer::producingSliceCount() const {
 }
 
 void MasterMixer::ensureRing(SliceState& st, int frames) {
-    const int want = frames * kRingBlocks;
+    const int want = std::max(kMinimumRingFrames, frames * kRingBlocks);
     if (st.capFrames >= want) { return; }
     // Growing discards whatever was queued. This only happens on the
     // first block, or on a block-size change, and both are already
