@@ -395,6 +395,9 @@ public:
 
     bool mediaAvailable() const;
     bool remoteWidebandAvailable() const;
+    /// Agreed minor 8 or later and advertised by Core: audio contexts carry
+    /// the encoder profile or the off reason.
+    bool remoteAudioStatusAvailable() const;
     std::optional<DisplayBudgetLimits> remoteDisplayBudgetLimits() const;
     bool remotePs3DisplaySubscribed() const;
     quint32 requestPs3DisplaySubscription(bool enabled);

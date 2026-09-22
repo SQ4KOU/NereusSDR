@@ -636,7 +636,10 @@ void DaemonMediaController::onRadioConnectionStateChanged(ConnectionState state)
         // display or peer lifecycle can tear down the station's audio graph.
         stopAudioCapture();
         if (m_audioRevision != 0) {
-            sendAudioContext(false);
+            // The client's own choice outranks the radio, as in reconcileAudio().
+            sendAudioContext(false, m_audioDesiredEnabled
+                                        ? RemoteAudioOffReason::RadioOffline
+                                        : RemoteAudioOffReason::ClientDisabled);
         }
         clearProduction();
         return;
@@ -1686,8 +1689,17 @@ void DaemonMediaController::reconcileAudio()
     // flushing bounded captured PCM.  The saved next values preserve RTP
     // ordering across false/true contexts for this same MediaPeer.
     stopAudioCapture();
-    const bool shouldRun = m_audioDesiredEnabled && m_peer && m_peer->isReady()
-        && m_radioModel && m_radioModel->isConnected();
+    // Why audio is off, first cause wins: the client's own choice, then the
+    // station radio, then media readiness.
+    std::optional<RemoteAudioOffReason> blockedBy;
+    if (!m_audioDesiredEnabled) {
+        blockedBy = RemoteAudioOffReason::ClientDisabled;
+    } else if (!m_radioModel || !m_radioModel->isConnected()) {
+        blockedBy = RemoteAudioOffReason::RadioOffline;
+    } else if (!m_peer || !m_peer->isReady()) {
+        blockedBy = RemoteAudioOffReason::MediaNotReady;
+    }
+    const bool shouldRun = !blockedBy.has_value();
     bool actualEnabled = false;
     if (shouldRun) {
         if (!m_audioSender) {
@@ -1737,7 +1749,10 @@ void DaemonMediaController::reconcileAudio()
             m_audioNextTimestamp = m_audioSender->nextTimestamp();
         }
     }
-    sendAudioContext(actualEnabled);
+    // Nothing blocked audio, so a context that is still off means the sender
+    // could not start.
+    sendAudioContext(actualEnabled,
+                     blockedBy.value_or(RemoteAudioOffReason::EncoderUnavailable));
 }
 
 void DaemonMediaController::stopAudioCapture()
@@ -1756,7 +1771,7 @@ void DaemonMediaController::stopAudioCapture()
     finalizeAudioDiagnostics();
 }
 
-void DaemonMediaController::sendAudioContext(bool enabled)
+void DaemonMediaController::sendAudioContext(bool enabled, RemoteAudioOffReason reason)
 {
     if (!m_peer || m_audioRevision == 0) {
         return;
@@ -1765,16 +1780,24 @@ void DaemonMediaController::sendAudioContext(bool enabled)
     if (enabled) {
         beginAudioDiagnostics(contextGeneration);
     }
-    sendControl({
-        {QStringLiteral("op"), QStringLiteral("audio-context")},
-        {QStringLiteral("connectionId"), m_peer->connectionId()},
-        {QStringLiteral("revision"), static_cast<qint64>(m_audioRevision)},
-        {QStringLiteral("generation"), static_cast<qint64>(contextGeneration)},
-        {QStringLiteral("enabled"), enabled},
-        {QStringLiteral("ssrc"), static_cast<qint64>(m_peer->audioSsrc())},
-        {QStringLiteral("firstSequence"), static_cast<qint64>(m_audioNextSequence)},
-        {QStringLiteral("firstTimestamp"), static_cast<qint64>(m_audioNextTimestamp)},
-    });
+    RemoteAudioContextMessage message;
+    message.connectionId = m_peer->connectionId();
+    message.revision = m_audioRevision;
+    message.generation = contextGeneration;
+    message.enabled = enabled;
+    message.ssrc = m_peer->audioSsrc();
+    message.firstSequence = m_audioNextSequence;
+    message.firstTimestamp = m_audioNextTimestamp;
+    if (enabled) {
+        // A started sender always has a ready encoder, so this is the
+        // profile the context's packets are coded with.
+        message.encoder = m_audioSender ? m_audioSender->encoderProfile() : std::nullopt;
+    } else {
+        message.offReason = reason;
+    }
+    // A minor-7 peer gets exactly the eight keys it has always parsed.
+    sendControl(encodeRemoteAudioContext(
+        message, m_server && m_server->remoteAudioStatusAvailable()));
 }
 
 DaemonAudioDiagnostics DaemonMediaController::snapshotAudioDiagnostics() const

@@ -26,6 +26,7 @@
 #include "core/session/media/DisplayBudget.h"
 #include "core/session/media/IMediaTransport.h"
 #include "core/session/media/OpusAudioCodec.h"
+#include "core/session/media/RemoteAudioContext.h"
 #include "core/settings/SettingsProxy.h"
 #include "fakes/LoopbackTransport.h"
 #include "models/RadioModel.h"
@@ -448,6 +449,7 @@ private slots:
     void widebandSourceReplacementAndSessionRetirement();
     void olderPeerKeepsLegacyContextAndCannotAcquireWideband();
     void minorSevenPeerReceivesLegacyAudioContexts();
+    void minorEightAudioContextsCarryEncoderOrReason();
     void localCaptureDuringConnectingGetsIdentityBeforeFirstAdcRow();
     void synchronousDisplayClosureRetiresDemandAndAllowsNewPeer_data();
     void synchronousDisplayClosureRetiresDemandAndAllowsNewPeer();
@@ -1813,9 +1815,11 @@ void TstDaemonMediaController::minorSevenPeerReceivesLegacyAudioContexts()
     station->linkTo(peer);
     h.server.acceptTransport(station);
     peer->sendText(SessionMessages::encode(SessionMessages::hello(
-        kSessionProtocolMajor, quint16{7}, 0, QStringLiteral("minor-7 client"))));
+        kSessionProtocolMajor, kRemoteAudioStatusSessionProtocolMinor - 1, 0,
+        QStringLiteral("minor-7 client"))));
     peer->sendText(SessionMessages::encode(SessionMessages::authRequest(h.server.token())));
     QTRY_VERIFY(h.server.mediaAvailable());
+    QVERIFY(!h.server.remoteAudioStatusAvailable());
     const auto send = [&](const QJsonObject& payload) {
         SessionMessage message;
         message.kind = SessionMessageKind::MediaControl;
@@ -1839,6 +1843,9 @@ void TstDaemonMediaController::minorSevenPeerReceivesLegacyAudioContexts()
         QCOMPARE(context.value(QStringLiteral("revision")).toInteger(), qint64{revision});
         QCOMPARE(context.value(QStringLiteral("enabled")).toBool(), enabled);
         QCOMPARE(context.value(QStringLiteral("ssrc")).toInteger(), ssrc);
+        // What a minor-7 GUI accepts, and not what a minor-8 GUI accepts.
+        QVERIFY(decodeRemoteAudioContext(context, false).has_value());
+        QVERIFY(!decodeRemoteAudioContext(context, true).has_value());
     };
 
     // Asked for before the media peer is ready, then granted once it is.
@@ -1871,6 +1878,114 @@ void TstDaemonMediaController::minorSevenPeerReceivesLegacyAudioContexts()
     expectLegacy(7, 3, false);
     if (QTest::currentTestFailed()) { return; }
     peer->closeLink(QStringLiteral("test complete"));
+}
+
+void TstDaemonMediaController::minorEightAudioContextsCarryEncoderOrReason()
+{
+    OpusAudioEncoder encoder;
+    if (!encoder.isReady()) {
+        QSKIP("Opus encoder is unavailable in this build");
+    }
+    // The controller's sender is private; an identically built sender
+    // reports the profile its encoder runs.
+    const DaemonAudioSender reference(nullptr);
+    const std::optional<OpusEncoderProfile> senderProfile = reference.encoderProfile();
+    QVERIFY(senderProfile.has_value());
+    const QJsonObject expectedEncoder = remoteAudioEncoderToJson(*senderProfile);
+    QCOMPARE(expectedEncoder,
+             (QJsonObject{{QStringLiteral("codec"), QStringLiteral("opus")},
+                          {QStringLiteral("sampleRate"), 48000},
+                          {QStringLiteral("channels"), 2},
+                          {QStringLiteral("frameSamples"), 1920},
+                          {QStringLiteral("targetBitrate"), 24000},
+                          {QStringLiteral("audioBandwidthHz"), 8000}}));
+
+    Harness h;
+    h.establishSession();
+    QCOMPARE(h.client.agreedMinor(), kRemoteAudioStatusSessionProtocolMinor);
+    QVERIFY(h.server.remoteAudioStatusAvailable());
+    QVERIFY(h.client.remoteAudioStatusAvailable());
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    QVERIFY(h.client.sendMediaControl({
+        {QStringLiteral("op"), QStringLiteral("start")},
+        {QStringLiteral("connectionId"), QLatin1String(kConnectionId)}},
+        h.client.sessionEpoch()));
+    QTRY_VERIFY(h.mediaTransport);
+
+    const auto contexts = [&controls] {
+        QList<QJsonObject> found;
+        for (const auto& call : controls) {
+            const QJsonObject message = call.at(0).toJsonObject();
+            if (message.value(QStringLiteral("op")) == QLatin1String("audio-context")) {
+                found.append(message);
+            }
+        }
+        return found;
+    };
+    const auto expectOn = [&](int count, quint32 revision) {
+        QTRY_COMPARE(contexts().size(), count);
+        const QJsonObject context = contexts().constLast();
+        QCOMPARE(context.size(), 9);
+        QVERIFY(context.value(QStringLiteral("enabled")).toBool());
+        QCOMPARE(context.value(QStringLiteral("revision")).toInteger(), qint64{revision});
+        QCOMPARE(context.value(QStringLiteral("encoder")).toObject(), expectedEncoder);
+        QVERIFY(!context.contains(QStringLiteral("reason")));
+        const std::optional<RemoteAudioContextMessage> decoded =
+            decodeRemoteAudioContext(context, true);
+        QVERIFY(decoded.has_value());
+        QVERIFY(decoded->encoder.has_value());
+        QCOMPARE(*decoded->encoder, *senderProfile);
+        QVERIFY(!decodeRemoteAudioContext(context, false).has_value());
+    };
+    const auto expectOff = [&](int count, quint32 revision, const char* reason) {
+        QTRY_COMPARE(contexts().size(), count);
+        const QJsonObject context = contexts().constLast();
+        QCOMPARE(context.size(), 9);
+        QVERIFY(!context.value(QStringLiteral("enabled")).toBool());
+        QCOMPARE(context.value(QStringLiteral("revision")).toInteger(), qint64{revision});
+        QCOMPARE(context.value(QStringLiteral("reason")).toString(), QLatin1String(reason));
+        QVERIFY(!context.contains(QStringLiteral("encoder")));
+        QVERIFY(decodeRemoteAudioContext(context, true).has_value());
+        QVERIFY(!decodeRemoteAudioContext(context, false).has_value());
+    };
+    const auto sendAudio = [&h](quint32 revision, bool enabled) {
+        QVERIFY(h.client.sendMediaControl(audioControl(revision, enabled),
+                                          h.client.sessionEpoch()));
+    };
+
+    // encoder-unavailable needs DaemonAudioSender::start() to fail with a
+    // ready peer and a connected radio. That is unreachable here without a
+    // production seam: the SSRC is never 0, RadioModel always owns an
+    // AudioEngine and the default encoder always initialises.
+
+    // Asked for before the media peer is ready, then granted once it is.
+    sendAudio(1, true);
+    expectOff(1, 1, "media-not-ready");
+    if (QTest::currentTestFailed()) { return; }
+    h.mediaTransport->becomeReady();
+    expectOn(2, 1);
+    if (QTest::currentTestFailed()) { return; }
+
+    // The client's own choice outranks the radio: off, then the radio drops.
+    sendAudio(2, false);
+    expectOff(3, 2, "client-disabled");
+    if (QTest::currentTestFailed()) { return; }
+    h.radio.setConnectionStateForTest(ConnectionState::Disconnected);
+    expectOff(4, 2, "client-disabled");
+    if (QTest::currentTestFailed()) { return; }
+
+    // Asked for while the radio is offline, granted when it returns, and
+    // withdrawn again when it drops with audio still wanted.
+    sendAudio(3, true);
+    expectOff(5, 3, "radio-offline");
+    if (QTest::currentTestFailed()) { return; }
+    h.radio.setConnectionStateForTest(ConnectionState::Connected);
+    expectOn(6, 3);
+    if (QTest::currentTestFailed()) { return; }
+    h.radio.setConnectionStateForTest(ConnectionState::Disconnected);
+    expectOff(7, 3, "radio-offline");
+    if (QTest::currentTestFailed()) { return; }
+    h.finish();
 }
 
 QTEST_MAIN(TstDaemonMediaController)

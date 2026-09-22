@@ -17,9 +17,39 @@
 
 using namespace NereusSDR;
 
+namespace NereusSDR {
+
+// Readable QCOMPARE failures for the profile value type (found by ADL).
+char* toString(const OpusEncoderProfile& profile)
+{
+    return QTest::toString(QStringLiteral("{%1 Hz, %2 ch, %3 samples, %4 bit/s, %5 Hz}")
+                               .arg(profile.sampleRate)
+                               .arg(profile.channels)
+                               .arg(profile.frameSamples)
+                               .arg(profile.targetBitrate)
+                               .arg(profile.audioBandwidthHz));
+}
+
+} // namespace NereusSDR
+
 namespace {
 
 constexpr quint32 kSsrc = 0x6e657265U;
+
+// One 40 ms frame of a phase-continuous stereo signal, frame `frameIndex` of
+// a longer stream, so consecutive frames form one uninterrupted program.
+QVector<float> continuousStereoTones(int frameIndex, double leftHz, double rightHz)
+{
+    QVector<float> pcm(OpusAudioCodecConfig::kFrameSamples * OpusAudioCodecConfig::kChannels);
+    for (int sample = 0; sample < OpusAudioCodecConfig::kFrameSamples; ++sample) {
+        const double time = static_cast<double>(
+            frameIndex * OpusAudioCodecConfig::kFrameSamples + sample)
+            / OpusAudioCodecConfig::kSampleRate;
+        pcm[sample * 2] = static_cast<float>(0.3 * std::sin(2.0 * M_PI * leftHz * time));
+        pcm[sample * 2 + 1] = static_cast<float>(0.3 * std::sin(2.0 * M_PI * rightHz * time));
+    }
+    return pcm;
+}
 
 QVector<float> stereoTones(float leftHz = 700.0f, float rightHz = 1700.0f)
 {
@@ -77,6 +107,74 @@ private slots:
                 > frequencyEnergy(decoded.pcmInterleaved, 0, 1700.0f));
         QVERIFY(frequencyEnergy(decoded.pcmInterleaved, 1, 1700.0f)
                 > frequencyEnergy(decoded.pcmInterleaved, 1, 700.0f));
+    }
+
+    void profileIsCorrectBeforeAnyEncodeAndAfterReset()
+    {
+        const OpusEncoderProfile expected{48'000, 2, 1'920, 24'000, 8'000};
+        OpusAudioEncoder encoder;
+        QVERIFY(encoder.isReady());
+        // Core announces an audio context straight after construction and
+        // straight after reset(), before the first frame is encoded.
+        std::optional<OpusEncoderProfile> profile = encoder.profile();
+        QVERIFY(profile.has_value());
+        QCOMPARE(*profile, expected);
+
+        QCOMPARE(encode(encoder).status, OpusAudioCodecStatus::Accepted);
+        profile = encoder.profile();
+        QVERIFY(profile.has_value());
+        QCOMPARE(*profile, expected);
+
+        encoder.reset();
+        profile = encoder.profile();
+        QVERIFY(profile.has_value());
+        QCOMPARE(*profile, expected);
+    }
+
+    void alternateBitrateProfileAndUnreadyEncoder()
+    {
+        OpusAudioCodecConfig config;
+        config.bitrate = 48'000;
+        OpusAudioEncoder alternate(config);
+        const OpusEncoderProfile expected{48'000, 2, 1'920, 48'000, 8'000};
+        QVERIFY(alternate.profile().has_value());
+        QCOMPARE(*alternate.profile(), expected);
+        alternate.reset();
+        QVERIFY(alternate.profile().has_value());
+        QCOMPARE(*alternate.profile(), expected);
+
+        OpusAudioCodecConfig unsupported;
+        unsupported.bitrate = 32'000;
+        const OpusAudioEncoder unready(unsupported);
+        QVERIFY(!unready.isReady());
+        QVERIFY(!unready.profile().has_value());
+    }
+
+    void everyPacketMatchesTheReportedProfile()
+    {
+        OpusAudioEncoder encoder;
+        const std::optional<OpusEncoderProfile> profile = encoder.profile();
+        QVERIFY(profile.has_value());
+        QCOMPARE(profile->audioBandwidthHz, 8'000); // what OPUS_BANDWIDTH_WIDEBAND codes
+        // Two seconds of a 997/1703 Hz stereo program per context, with the
+        // reset Core performs between contexts.
+        constexpr int kFramesPerContext = 50;
+        for (int context = 0; context < 2; ++context) {
+            for (int frame = 0; frame < kFramesPerContext; ++frame) {
+                const OpusRtpEncodeResult encoded = encoder.encode(
+                    continuousStereoTones(frame, 997.0, 1703.0), static_cast<quint16>(frame),
+                    static_cast<quint32>(frame * OpusAudioCodecConfig::kFrameSamples), kSsrc);
+                QCOMPARE(encoded.status, OpusAudioCodecStatus::Accepted);
+                const OpusRtpInspection inspected = inspectOpusRtp(encoded.packet, kSsrc);
+                QCOMPARE(inspected.status, OpusAudioCodecStatus::Accepted);
+                QCOMPARE(inspected.packetInfo.channels, profile->channels);
+                QCOMPARE(inspected.packetInfo.samplesPerChannel, profile->frameSamples);
+                QCOMPARE(inspected.packetInfo.bandwidth, OPUS_BANDWIDTH_WIDEBAND);
+            }
+            encoder.reset();
+            QVERIFY(encoder.profile().has_value());
+            QCOMPARE(*encoder.profile(), *profile);
+        }
     }
 
     void measuredAlternateBitrateAndPlc()

@@ -2,6 +2,7 @@
 // no-port-check: NereusSDR-original. Remote daemon R3 receive display wiring.
 
 #include "core/session/media/MediaPeer.h"
+#include "core/session/media/RemoteAudioContext.h"
 #include "core/session/media/RemoteAudioReceiver.h"
 #include <QObject>
 #include <functional>
@@ -32,11 +33,19 @@ public:
     int activeEndpointCount() const;
     std::optional<MediaPeerTelemetry> trafficTelemetry() const;
     RemoteAudioReceiverTelemetry audioTelemetry() const;
+    /// The audio context most recently accepted from Core. Its encoder and
+    /// off reason are present only when audioDetailNegotiated().
+    std::optional<RemoteAudioContextMessage> acceptedAudioContext() const; // nullopt before the first accepted context and after stop()
+    /// Core and this GUI agreed the minor-8 audio-context detail.
+    bool audioDetailNegotiated() const; // d->client && d->client->remoteAudioStatusAvailable()
 
 signals:
     void recoveryRequested(quint32 expectedEpoch, const QString& reason);
     void errorOccurred(const QString& reason);
     void displayFrameReceived(quint32 endpointId);
+    /// Once per accepted audio context, after playback was started or
+    /// stopped for it. A malformed or stale context emits nothing.
+    void audioContextAccepted();
 
 private:
     struct Private;

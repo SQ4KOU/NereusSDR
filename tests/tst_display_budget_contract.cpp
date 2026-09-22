@@ -158,8 +158,9 @@ private slots:
 
     void protocolMinorAndCapabilityVersionAreAllocated()
     {
-        QCOMPARE(kSessionProtocolMinor, quint16(7));
+        QCOMPARE(kSessionProtocolMinor, quint16(8));
         QCOMPARE(kRemoteDisplayBudgetSessionProtocolMinor, quint16(7));
+        QCOMPARE(kRemoteAudioStatusSessionProtocolMinor, quint16(8));
 
         const StationCapabilities capabilities = budgetCapabilities();
         QCOMPARE(capabilities.remoteDisplayBudgetVersion, 1);

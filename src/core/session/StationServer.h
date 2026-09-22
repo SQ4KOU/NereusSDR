@@ -358,6 +358,9 @@ public:
     void setMediaEnabled(bool enabled);
     bool mediaAvailable() const;
     bool remoteWidebandAvailable() const;
+    /// The session agreed minor 8 or later: audio contexts carry the encoder
+    /// profile or the off reason. Minor-7 peers keep the eight-key context.
+    bool remoteAudioStatusAvailable() const;
     bool setDisplayBudgetLimits(const DisplayBudgetLimits& limits);
     std::optional<DisplayBudgetLimits> displayBudgetLimits() const { return m_displayBudget; }
     void setDisplayBudgetEnforcementEnabled(bool enabled);

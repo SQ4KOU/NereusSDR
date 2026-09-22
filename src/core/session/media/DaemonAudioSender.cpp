@@ -71,6 +71,11 @@ bool DaemonAudioSender::isRunning() const noexcept
     return m_running && m_source && m_source->isRunning();
 }
 
+std::optional<OpusEncoderProfile> DaemonAudioSender::encoderProfile() const
+{
+    return m_encoder ? m_encoder->profile() : std::nullopt;
+}
+
 DaemonAudioSenderTelemetry DaemonAudioSender::telemetry() const noexcept
 {
     DaemonAudioSenderTelemetry snapshot = m_telemetry;

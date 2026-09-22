@@ -109,6 +109,9 @@ struct StationCapabilities {
     /// media controller is installed; negotiated session minor still gates it.
     int remoteMediaVersion = 0;
     int remoteWidebandDisplayVersion = 0;
+    /// Audio contexts carry the accepted encoder profile or the reason audio
+    /// is off. Nonzero only with media; negotiated minor still gates it.
+    int remoteAudioStatusVersion = 0;
     int remoteDisplayBudgetVersion = 0;
     std::optional<DisplayBudgetLimits> displayBudget;
     bool remotePs3DisplaySubscribed = false;

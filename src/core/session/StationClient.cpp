@@ -2443,6 +2443,12 @@ bool StationClient::remoteWidebandAvailable() const
         && m_capabilities.remoteWidebandDisplayVersion >= 1;
 }
 
+bool StationClient::remoteAudioStatusAvailable() const
+{
+    return mediaAvailable() && m_agreedMinor >= kRemoteAudioStatusSessionProtocolMinor
+        && m_capabilities.remoteAudioStatusVersion >= 1;
+}
+
 std::optional<DisplayBudgetLimits> StationClient::remoteDisplayBudgetLimits() const
 {
     if (!mediaAvailable() || m_agreedMinor < kRemoteDisplayBudgetSessionProtocolMinor

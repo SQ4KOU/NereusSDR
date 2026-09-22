@@ -183,7 +183,10 @@ private slots:
         QVERIFY(h.client.sendMediaControl(audioControl(1, true), h.client.sessionEpoch()));
         QTRY_VERIFY(!latestAudioContext(controls).isEmpty());
         const QJsonObject enabled = latestAudioContext(controls);
-        QCOMPARE(enabled.size(), 8);
+        // A minor-8 session: the eight keys plus the encoder profile.
+        QCOMPARE(enabled.size(), 9);
+        QVERIFY(enabled.value(QStringLiteral("encoder")).isObject());
+        QVERIFY(!enabled.contains(QStringLiteral("reason")));
         QCOMPARE(enabled.value(QStringLiteral("revision")).toInteger(), qint64{1});
         QVERIFY(enabled.value(QStringLiteral("enabled")).toBool());
         QCOMPARE(static_cast<quint32>(enabled.value(QStringLiteral("ssrc")).toInteger()),
@@ -200,6 +203,8 @@ private slots:
         QTRY_VERIFY(latestAudioContext(controls).value(QStringLiteral("revision")).toInteger() == 2);
         const QJsonObject paused = latestAudioContext(controls);
         QVERIFY(!paused.value(QStringLiteral("enabled")).toBool());
+        QCOMPARE(paused.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("client-disabled"));
         QCOMPARE(paused.value(QStringLiteral("firstSequence")).toInteger(),
                  qint64{static_cast<quint16>(first.sequence + 1)});
         QCOMPARE(paused.value(QStringLiteral("firstTimestamp")).toInteger(),
@@ -244,6 +249,8 @@ private slots:
         QTRY_VERIFY(!latestAudioContext(controls).value(QStringLiteral("enabled")).toBool());
         const QJsonObject disconnected = latestAudioContext(controls);
         QCOMPARE(disconnected.value(QStringLiteral("revision")).toInteger(), qint64{5});
+        QCOMPARE(disconnected.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("radio-offline"));
         h.feedMixed(DaemonAudioSource::kBlockFrames);
         QTest::qWait(20);
         QVERIFY(h.mediaTransport->rtpPackets.isEmpty());

@@ -20,6 +20,31 @@
 namespace NereusSDR {
 namespace {
 
+// The one coded bandwidth this profile forces, passed to OPUS_SET_BANDWIDTH
+// and reported by OpusAudioEncoder::profile(). libopus has no getter for a
+// forced bandwidth (OPUS_GET_BANDWIDTH reports the last encoded frame), so
+// profile() reports this value and the codec tests check it against the
+// TOC bandwidth of every packet the encoder produces.
+constexpr opus_int32 kEncoderBandwidth = OPUS_BANDWIDTH_WIDEBAND;
+
+int audioBandwidthHz(opus_int32 bandwidth)
+{
+    switch (bandwidth) {
+    case OPUS_BANDWIDTH_NARROWBAND:
+        return 4'000;
+    case OPUS_BANDWIDTH_MEDIUMBAND:
+        return 6'000;
+    case OPUS_BANDWIDTH_WIDEBAND:
+        return 8'000;
+    case OPUS_BANDWIDTH_SUPERWIDEBAND:
+        return 12'000;
+    case OPUS_BANDWIDTH_FULLBAND:
+        return 20'000;
+    default:
+        return 0;
+    }
+}
+
 bool validConfig(const OpusAudioCodecConfig& config)
 {
     return config.bitrate == 24'000 || config.bitrate == 48'000;
@@ -186,7 +211,7 @@ OpusAudioEncoder::OpusAudioEncoder(const OpusAudioCodecConfig& config)
                                          OPUS_APPLICATION_AUDIO, &error);
     if (state->encoder == nullptr || error != OPUS_OK
         || opus_encoder_ctl(state->encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_MUSIC)) != OPUS_OK
-        || opus_encoder_ctl(state->encoder, OPUS_SET_BANDWIDTH(OPUS_BANDWIDTH_WIDEBAND)) != OPUS_OK
+        || opus_encoder_ctl(state->encoder, OPUS_SET_BANDWIDTH(kEncoderBandwidth)) != OPUS_OK
         || opus_encoder_ctl(state->encoder, OPUS_SET_BITRATE(config.bitrate)) != OPUS_OK
         || opus_encoder_ctl(state->encoder, OPUS_SET_VBR(1)) != OPUS_OK
         || opus_encoder_ctl(state->encoder, OPUS_SET_VBR_CONSTRAINT(1)) != OPUS_OK
@@ -203,6 +228,26 @@ OpusAudioEncoder::~OpusAudioEncoder() = default;
 bool OpusAudioEncoder::isReady() const
 {
     return m_state && m_state->encoder;
+}
+
+std::optional<OpusEncoderProfile> OpusAudioEncoder::profile() const
+{
+    if (!isReady()) {
+        return std::nullopt;
+    }
+    opus_int32 sampleRate = 0;
+    opus_int32 bitrate = 0;
+    if (opus_encoder_ctl(m_state->encoder, OPUS_GET_SAMPLE_RATE(&sampleRate)) != OPUS_OK
+        || opus_encoder_ctl(m_state->encoder, OPUS_GET_BITRATE(&bitrate)) != OPUS_OK) {
+        return std::nullopt;
+    }
+    OpusEncoderProfile profile;
+    profile.sampleRate = sampleRate;
+    profile.channels = OpusAudioCodecConfig::kChannels;
+    profile.frameSamples = OpusAudioCodecConfig::kFrameSamples;
+    profile.targetBitrate = bitrate;
+    profile.audioBandwidthHz = audioBandwidthHz(kEncoderBandwidth);
+    return profile;
 }
 
 OpusRtpEncodeResult OpusAudioEncoder::encode(const QVector<float>& pcmInterleaved,

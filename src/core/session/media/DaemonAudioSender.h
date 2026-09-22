@@ -8,12 +8,14 @@
 #pragma once
 
 #include "core/session/media/DaemonAudioSource.h"
+#include "core/session/media/OpusAudioCodec.h"
 
 #include <QObject>
 #include <QTimer>
 
 #include <cstdint>
 #include <memory>
+#include <optional>
 
 namespace NereusSDR {
 
@@ -54,6 +56,11 @@ public:
 
     quint16 nextSequence() const noexcept { return m_nextSequence; }
     quint32 nextTimestamp() const noexcept { return m_nextTimestamp; }
+
+    /// The profile this sender's encoder runs. Empty only when the encoder
+    /// failed to initialise, in which case start() fails too, so a
+    /// successful start() always has a profile to announce.
+    std::optional<OpusEncoderProfile> encoderProfile() const;
 
     /// Read-only diagnostics. The snapshot remains available after stop() and
     /// resets only after a later successful start().

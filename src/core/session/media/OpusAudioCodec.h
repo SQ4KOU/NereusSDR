@@ -13,6 +13,7 @@
 #include <QVector>
 
 #include <memory>
+#include <optional>
 
 namespace NereusSDR {
 
@@ -73,6 +74,16 @@ struct OpusRtpInspection {
 // decoder history, so packets can be ordered before decoding.
 OpusRtpInspection inspectOpusRtp(const QByteArray& packet, quint32 expectedSsrc);
 
+/// The profile an encoder is actually running, as Core reports it to a GUI.
+struct OpusEncoderProfile {
+    int sampleRate {0};       // RTP clock and decoder rate, Hz
+    int channels {0};
+    int frameSamples {0};     // per channel per packet
+    int targetBitrate {0};    // constrained-VBR encoder target, bit/s; not measured traffic
+    int audioBandwidthHz {0}; // coded audio bandwidth limit
+    friend bool operator==(const OpusEncoderProfile&, const OpusEncoderProfile&) = default;
+};
+
 /// RAII encoder for the approved 48 kHz, stereo, 40 ms AUDIO/MUSIC profile.
 /// Caller owns the RTP sequence, timestamp, and SSRC/session generation.
 class OpusAudioEncoder {
@@ -83,6 +94,13 @@ public:
     OpusAudioEncoder& operator=(const OpusAudioEncoder&) = delete;
 
     bool isReady() const;
+    /// Sample rate and target bitrate are read back from libopus. The coded
+    /// bandwidth is the forced bandwidth the constructor configured:
+    /// OPUS_GET_BANDWIDTH describes the last encoded frame instead, and reads
+    /// FULLBAND after construction and after reset(), which is exactly when
+    /// Core announces a new audio context. Valid immediately after
+    /// construction or reset(), before any encode.
+    std::optional<OpusEncoderProfile> profile() const; // nullopt when !isReady()
     OpusRtpEncodeResult encode(const QVector<float>& pcmInterleaved,
                                quint16 sequence, quint32 timestamp,
                                quint32 ssrc);

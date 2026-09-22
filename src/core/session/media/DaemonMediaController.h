@@ -12,6 +12,7 @@
 #include "core/session/media/DisplayBudget.h"
 #include "core/session/media/DisplayCodec.h"
 #include "core/session/media/MediaPeer.h"
+#include "core/session/media/RemoteAudioContext.h"
 #include "core/session/media/SpectrumEndpoint.h"
 
 #include <QElapsedTimer>
@@ -138,7 +139,9 @@ private:
     bool trySendSpectrum(MediaPeer* peer, quint64 epoch, qint64 nowNs);
     void reconcileAudio();
     void stopAudioCapture();
-    void sendAudioContext(bool enabled);
+    /// `reason` travels only in a disabled context, and only to a peer that
+    /// agreed the minor-8 detail; an enabled one carries the encoder profile.
+    void sendAudioContext(bool enabled, RemoteAudioOffReason reason);
     void beginAudioDiagnostics(quint32 contextGeneration);
     void finalizeAudioDiagnostics();
     void maybeLogAudioDiagnostics(bool final);

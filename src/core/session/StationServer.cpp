@@ -1239,6 +1239,13 @@ bool StationServer::remoteWidebandAvailable() const
         && it->agreedMinor >= kRemoteWidebandSessionProtocolMinor;
 }
 
+bool StationServer::remoteAudioStatusAvailable() const
+{
+    const auto it = m_peers.constFind(m_session);
+    return mediaAvailable() && it != m_peers.cend()
+        && it->agreedMinor >= kRemoteAudioStatusSessionProtocolMinor;
+}
+
 bool StationServer::displayBudgetAvailable() const
 {
     const auto it = m_peers.constFind(m_session);
@@ -1306,6 +1313,7 @@ StationCapabilities StationServer::buildCapabilities() const
     caps.txPermitted = false;
     caps.remoteMediaVersion = m_mediaEnabled ? 1 : 0;
     caps.remoteWidebandDisplayVersion = m_mediaEnabled ? 1 : 0;
+    caps.remoteAudioStatusVersion = m_mediaEnabled ? 1 : 0;
     if (m_mediaEnabled && m_displayBudgetEnforcementEnabled && m_displayBudget) {
         caps.remoteDisplayBudgetVersion = 1;
         caps.displayBudget = m_displayBudget;

@@ -6905,6 +6905,8 @@ nereus_add_test(tst_daemon_audio_session fakes/LoopbackTransport.cpp)
 nereus_add_test(tst_daemon_telemetry fakes/LoopbackTransport.cpp)
 nereus_add_test(tst_remote_audio_receiver)
 nereus_add_test(tst_remote_audio_session fakes/LoopbackTransport.cpp)
+# R-R3-23: the audio-context wire codec in both negotiated shapes.
+nereus_add_test(tst_remote_audio_context)
 
 # Remote Daemon R3, Task 3: bounded native trace, waterfall, and DSS codec.
 nereus_add_test(tst_display_codec)

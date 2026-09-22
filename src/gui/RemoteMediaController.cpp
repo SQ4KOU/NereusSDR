@@ -82,6 +82,22 @@ bool newer(quint32 next, quint32 previous)
     return next != previous && quint32(next - previous) < 0x80000000u;
 }
 
+// Log wording only: the profile Core reported for this context, never a
+// profile this GUI assumes.
+QString reportedAudioProfile(const std::optional<OpusEncoderProfile>& encoder)
+{
+    if (!encoder) {
+        return QStringLiteral("codec profile not reported by Core");
+    }
+    return QStringLiteral("Opus %1 Hz, %2 channels, %3-sample frames, "
+                          "target %4 bit/s, audio bandwidth %5 Hz")
+        .arg(encoder->sampleRate)
+        .arg(encoder->channels)
+        .arg(encoder->frameSamples)
+        .arg(encoder->targetBitrate)
+        .arg(encoder->audioBandwidthHz);
+}
+
 bool geometryNeedsWideband(double centreHz, double spanHz,
                            double sourceCentreHz, double sourceRateHz)
 {
@@ -317,6 +333,7 @@ struct RemoteMediaController::Private {
     Ps3DisplayAssembler ps3Assembler;
     quint64 ps3Generation = 0;
     std::unique_ptr<RemoteAudioReceiver> audio;
+    std::optional<RemoteAudioContextMessage> acceptedAudioContext;
     quint32 audioRevision = 0;
     quint32 audioGeneration = 0;
     bool preparingAudio = false;
@@ -569,6 +586,14 @@ RemoteAudioReceiverTelemetry RemoteMediaController::audioTelemetry() const
 {
     return d->audio->telemetry();
 }
+std::optional<RemoteAudioContextMessage> RemoteMediaController::acceptedAudioContext() const
+{
+    return d->acceptedAudioContext;
+}
+bool RemoteMediaController::audioDetailNegotiated() const
+{
+    return d->client && d->client->remoteAudioStatusAvailable();
+}
 
 void RemoteMediaController::stop()
 {
@@ -580,6 +605,7 @@ void RemoteMediaController::stop()
     d->audioRetryPending = false;
     d->audioRevision = 0;
     d->audioGeneration = 0;
+    d->acceptedAudioContext.reset();
     d->connectionId.clear();
     d->pendingPs3.reset();
     d->ps3Refused = false;
@@ -1660,26 +1686,35 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
         return;
     }
     if (op == QLatin1String("audio-context")) {
-        quint32 revision = 0, generation = 0, ssrc = 0;
-        double sequence = 0, timestamp = 0;
-        if (payload.size() != 8 || !uint32(payload, "revision", revision)
-            || revision != d->audioRevision || !uint32(payload, "generation", generation)
-            || !newer(generation, d->audioGeneration) || !uint32(payload, "ssrc", ssrc)
-            || ssrc != d->peer->audioSsrc() || !payload.value(QStringLiteral("enabled")).isBool()
-            || !number(payload, "firstSequence", 0, 65535, sequence, true)
-            || !number(payload, "firstTimestamp", 0, 4294967295.0, timestamp, true)) { return; }
-        d->audioGeneration = generation;
+        // The shape the agreed minor selects, then this session's identity.
+        // Anything refused leaves generation, playback and signals untouched.
+        const std::optional<RemoteAudioContextMessage> context =
+            decodeRemoteAudioContext(payload, audioDetailNegotiated());
+        if (!context || context->revision != d->audioRevision
+            || !newer(context->generation, d->audioGeneration)
+            || context->ssrc != d->peer->audioSsrc()) { return; }
+        d->audioGeneration = context->generation;
+        d->acceptedAudioContext = context;
         d->audio->stop();
         d->audioEnabled = false;
-        if (payload.value(QStringLiteral("enabled")).toBool() && d->model
+        if (context->enabled && d->model
             && d->model->isConnected() && !d->model->audioEngine()->masterMuted()) {
+            // start() can report a speaker failure synchronously, and a
+            // listener to that report may retire this controller.
+            const QPointer<RemoteMediaController> self(this);
             d->preparingAudio = true;
-            d->audioEnabled = d->audio->start(ssrc, static_cast<quint32>(timestamp));
+            const bool started = d->audio->start(context->ssrc, context->firstTimestamp);
+            if (!self) { return; }
+            d->audioEnabled = started;
             d->preparingAudio = false;
             if (d->audioEnabled) {
-                qCInfo(lcRemoteMedia) << "Remote audio receiving: 48 kHz stereo Opus, context" << generation;
+                qCInfo(lcRemoteMedia).noquote()
+                    << QStringLiteral("Remote audio receiving: %1, context %2")
+                           .arg(reportedAudioProfile(context->encoder))
+                           .arg(context->generation);
             }
         }
+        emit audioContextAccepted();
         return;
     }
     if (op == QLatin1String("description") || op == QLatin1String("candidate")) {
