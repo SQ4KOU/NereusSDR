@@ -11151,8 +11151,7 @@ void RadioModel::pushTxFrequencyFromTxSlice()
     });
 }
 
-// Wire active slice signals to WDSP channel and radio hardware.
-// Called from wireConnectionSignals after connection is established.
+// Snap the transmit filter for a transmitter entering or leaving RADE mode.
 void RadioModel::snapTransmitFilterForMode(DSPMode mode)
 {
     // 2026-05-12 bench fix (PR #238): snap TX BW to the RADE modem
@@ -11168,6 +11167,8 @@ void RadioModel::snapTransmitFilterForMode(DSPMode mode)
     }
 }
 
+// Wire active slice signals to WDSP channel and radio hardware.
+// Called from wireConnectionSignals after connection is established.
 void RadioModel::wireSliceSignals(SliceModel* slice)
 {
     // Every slice, not just the active one.
