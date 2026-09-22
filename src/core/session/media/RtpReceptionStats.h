@@ -17,7 +17,7 @@ namespace NereusSDR {
 
 /// One context's RTP reception measurements: interarrival jitter (RFC 3550
 /// appendix A.8) and extended sequence-number expected/received/missing
-/// accounting (appendix A.1, without the source-probation state machine —
+/// accounting (appendix A.1, without the source-probation state machine:
 /// every admitted packet is trusted the moment it is observed). Not
 /// thread-safe; the caller owns exclusive access and publishes snapshots
 /// through its own synchronization.
