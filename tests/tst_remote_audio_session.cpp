@@ -127,6 +127,18 @@ struct AcceptedContexts {
     {
         return std::any_of(contexts.cbegin(), contexts.cend(), match);
     }
+
+    // One signal per accepted context: no context is reported twice.
+    bool eachReportedOnce() const
+    {
+        for (qsizetype index = 1; index < contexts.size(); ++index) {
+            if (contexts.at(index).connectionId == contexts.at(index - 1).connectionId
+                && contexts.at(index).generation == contexts.at(index - 1).generation) {
+                return false;
+            }
+        }
+        return true;
+    }
 };
 
 QList<QJsonObject> audioContexts(const QSignalSpy& controls)
@@ -425,6 +437,7 @@ private slots:
         QCOMPARE(remoteErrors.count(), 0);
         // Every accepted context carried exactly the detail its state calls for.
         QCOMPARE(accepted.signalsWithoutContext, 0);
+        QVERIFY(accepted.eachReportedOnce());
         QVERIFY(!accepted.contexts.isEmpty());
         for (const RemoteAudioContextMessage& context : accepted.contexts) {
             QCOMPARE(context.encoder.has_value(), context.enabled);
@@ -510,6 +523,7 @@ private slots:
         QCOMPARE(qint64{accepted.contexts.constFirst().firstSequence},
                  received.at(1).value(QStringLiteral("firstSequence")).toInteger());
         QCOMPARE(accepted.signalsWithoutContext, 0);
+        QVERIFY(accepted.eachReportedOnce());
         for (const RemoteAudioContextMessage& context : accepted.contexts) {
             QVERIFY(!context.encoder.has_value());
             QVERIFY(!context.offReason.has_value());
@@ -599,6 +613,7 @@ private slots:
                                  15000);
 
         QCOMPARE(accepted.signalsWithoutContext, 0);
+        QVERIFY(accepted.eachReportedOnce());
         for (const RemoteAudioContextMessage& context : accepted.contexts) {
             QCOMPARE(context.encoder.has_value(), context.enabled);
             QCOMPARE(context.offReason.has_value(), !context.enabled);
