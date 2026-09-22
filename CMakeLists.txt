@@ -800,6 +800,7 @@ set(CORE_SOURCES
     src/core/WidebandFrameAccumulator.cpp
     src/core/WidebandFftEngine.cpp
     src/core/spectrum/WidebandDisplayReference.cpp
+    src/core/spectrum/ExtendedSpectrumReducer.cpp
     src/core/AudioDeviceConfig.cpp
     src/core/SampleRateCatalog.cpp
     src/core/SkuUiProfile.cpp

@@ -219,6 +219,12 @@ The configured libdatachannel MTU is 1,000 bytes; codec message size is not
 wire datagram size. Record actual encrypted UDP sizes, including overhead,
 for keyframes and deltas. A failing capture is an implementation defect to
 resolve before hardware acceptance, not a reason to relax the datagram cap.
+Reuse the existing [installed display evidence](2026-09-20-remote-daemon-r3-verification/README.md#installed-display-checkpoint-ea55d24a):
+its 20-second Saturn run carried 1,024 trace + 1,024 waterfall + 768 DDC-wide
+samples at 15 fps with a maximum IPv4 packet of 969 bytes. That establishes
+this measured profile, not total-session, four-pan or SRTP acceptance. Broaden
+the capture for materially different combined workloads; do not discard the
+valid baseline or substitute codec byte counts for the new observation.
 
 ## Ordered implementation and verification
 
@@ -277,6 +283,20 @@ transmit permission or menu redesign is part of this contract.
   frame accumulator, established silence, thread marshalling and wideband
   worker ownership. This fixes partial packet assembly; tagged FFT/media
   source-generation retirement remains the next distinct boundary.
+- [x] Extract `ExtendedSpectrumReducer` for composed Core rows, retaining
+  the existing local detector, clipped DDC island, ADC peak wings and separate
+  plane averaging. A pixel-by-pixel characterization matches the existing
+  widget across all five detectors with the DDC island visible and absent.
+  Additional checks cover station calibration once on both regions, absent
+  ADC data, independent trace/waterfall histories, recursive ADC averaging
+  and malformed geometry/power. An extreme finite calibration initially
+  corrupted retained averaging even when its row was rejected; the regression
+  now confirms rejection leaves both output and subsequent history intact.
+  Five freshly built focused targets pass (1.45 seconds): the extended and
+  ordinary reducers, local wing characterization, shared reference and the
+  no-GUI Core guard. Run-start load: 5.05 / 6.50 / 7.44. This reducer is not yet
+  connected to remote endpoints; these checks do not establish wire or
+  hardware parity.
 - [ ] Tagged source/demand, negotiated endpoint, GUI parity, combined full
   suite and native/hardware acceptance remain pending. This checkpoint is
   not deployed. The installed software remains `55e7d49f`.

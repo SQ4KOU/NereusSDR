@@ -26,6 +26,8 @@ Template variant (see `HEADER-TEMPLATES.md`):
 
 | NereusSDR file | Thetis source | Line ranges | Type | Variant | Notes |
 | --- | --- | --- | --- | --- | --- |
+| src/core/spectrum/ExtendedSpectrumReducer.h | Project Files/Source/Console/HPSDR/specHPSDR.cs | 529-535 [v2.10.3.15 @3759d09] | port | thetis-no-samphire | Shared extended-display DDC clip fraction and floor convention; original upstream header preserved. Remaining configuration interface is Nereus-original. |
+| src/core/spectrum/ExtendedSpectrumReducer.cpp | Project Files/Source/Console/wbDisplay.cs | 2106; 4680-4711 [v2.10.3.15 @3759d09] | port | thetis-samphire | Extracts existing local ADC-wing geometry and peak reduction into Core, retaining upstream header and inline citations. Existing SpectrumDetector/Avenger own WDSP behavior; relative wing reference remains Nereus-original. |
 | src/core/TciBinaryFrame.cpp | Project Files/Source/Console/TCIServer.cs | 5234-5305 | port | thetis-samphire | TCI binary stream frame encode: writeUInt32 helper + buildStreamPayload (64-byte LE header) + encodeSamples (FLOAT32/INT16/INT24/INT32 paths). Samphire MW0LGE sole author of TCIServer.cs. |
 | src/core/TciBinaryFrame.h | Project Files/Source/Console/TCIServer.cs | 343-362; 5234-5262 | port | thetis-samphire | header mirrors .cpp; also ports TCISampleType + TCIStreamType enum values |
 | src/core/TciSensorManager.h | Project Files/Source/Console/TCIServer.cs | 462-560; 2314-2332; 501-506; 7571-7603 | port | thetis-samphire | header-only static helpers: formatRxSensors, formatRxChannelSensors, formatRxChannelSensorsEx, formatTxSensors (all F1 invariant culture), minimumRequiredInterval (clamp 30..1000ms, default 200ms). Samphire MW0LGE sole author of TCIServer.cs. |

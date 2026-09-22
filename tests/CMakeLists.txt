@@ -6121,6 +6121,7 @@ nereus_add_test(tst_wideband_fft_engine)
 # R3 Task 4b: the shared Core/local reference consumes real FFT output and
 # preserves detector-specific bandwidth normalization without GUI dependencies.
 nereus_add_test(tst_wideband_display_reference)
+nereus_add_test(tst_extended_spectrum_reducer)
 
 # Phase 3F Sub-Epic F Tasks 8 + 9 (finished 2026-08-08): extended-pan
 # listenable-island geometry + wideband wing fill. Closes the bench report

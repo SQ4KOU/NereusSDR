@@ -26,6 +26,7 @@
 
 #include "gui/SpectrumWidget.h"
 #include "core/WidebandFftEngine.h"
+#include "core/spectrum/ExtendedSpectrumReducer.h"
 
 using namespace NereusSDR;
 
@@ -44,6 +45,65 @@ private:
     }
 
 private slots:
+    void core_composition_matches_existing_local_view_data()
+    {
+        QTest::addColumn<int>("detectorValue");
+        QTest::addColumn<bool>("islandVisible");
+        for (int detector = 0; detector < int(SpectrumDetector::Count); ++detector) {
+            for (bool island : {true, false}) {
+                QTest::newRow(qPrintable(QStringLiteral("detector-%1-island-%2")
+                                             .arg(detector).arg(island)))
+                    << detector << island;
+            }
+        }
+    }
+
+    void core_composition_matches_existing_local_view()
+    {
+        QFETCH(int, detectorValue);
+        QFETCH(bool, islandVisible);
+        SpectrumWidget widget;
+        configureExtendedPan(widget);
+        widget.resize(1024, 400);
+        widget.setSpectrumDetector(static_cast<SpectrumDetector>(detectorValue));
+        widget.setSpectrumAveraging(SpectrumAveraging::None);
+        if (!islandVisible) {
+            widget.setFrequencyRange(18000000.0, 1920000.0);
+        }
+        QVector<float> ddc(4096);
+        for (int i = 0; i < ddc.size(); ++i) {
+            ddc[i] = float(i % 31 + 1) * 0.001f;
+        }
+        QVector<float> adc(WidebandFftEngine::kOutputBins);
+        for (int i = 0; i < adc.size(); ++i) {
+            adc[i] = float(i % 23) - 10.0f;
+        }
+        widget.setWidebandBins(0, adc);
+        widget.updateSpectrumLinear(0, ddc, 1.5, -60.0);
+        const QVector<float> local = widget.undentedPixelsForTest();
+        QVERIFY(!local.isEmpty());
+
+        ReducerConfig config;
+        config.pixels = int(local.size());
+        config.centreHz = widget.centerFrequency();
+        config.spanHz = widget.bandwidth();
+        config.streamCentreHz = widget.ddcCenterFrequency();
+        config.sampleRateHz = 192000.0;
+        config.detector = static_cast<SpectrumDetector>(detectorValue);
+        config.averageMode = 0;
+        ExtendedSpectrumReducer core;
+        core.setConfig(config);
+        QVector<float> remote;
+        QVERIFY(core.reduce(ddc, 1.5, -60.0, adc, widget.widebandAdcRateHz(),
+                            0.0, -180.0, remote));
+        QCOMPARE(remote.size(), local.size());
+        for (int i = 0; i < local.size(); ++i) {
+            QVERIFY2(std::abs(remote[i] - local[i]) < 0.001f,
+                     qPrintable(QStringLiteral("pixel %1: Core %2, local %3")
+                                    .arg(i).arg(remote[i]).arg(local[i])));
+        }
+    }
+
     // Extended mode is permission plus need: the toggle alone must not put a
     // pan into it at ordinary zoom, or every pan would ask the radio for a
     // wideband stream it has no use for.
