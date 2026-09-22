@@ -741,7 +741,7 @@ with its configured single receiver. A resumed at 14.2932 MHz USB, while the
 GUI retained an empty second pan and B had to be recreated. A GUI reconnect
 alone and a Core restart are distinct lifecycle boundaries.
 
-- [ ] Audit existing Thetis/local receiver persistence and daemon slice-count
+- [x] Audit existing Thetis/local receiver persistence and daemon slice-count
   configuration before selecting the station-owned restore representation.
   September 22 source audit after WDSP integration confirms that NNR leaves
   are per-radio/per-slice, but membership and pan keys are not persisted;
@@ -751,7 +751,13 @@ alone and a Core restart are distinct lifecycle boundaries.
   stable ID, pan key and current frequency/mode without claiming a migration
   of all legacy `Slice<N>` band settings. Pending hydration must avoid starting
   RADE through a mode setter before connection/resource validation. Exact
-  restore/status interfaces and their lifecycle tests remain to implement.
+  persistence interfaces are defined in the
+  [receive-layout design](2026-09-22-core-receive-layout-design.md); runtime
+  restoration/status integration and lifecycle tests remain to implement.
+  The data-only store now persists a validated per-radio layout and explicit
+  RADE receive-audio owner; its disk round trips and rejection behavior pass
+  within the fresh 719-test suite. See the
+  [foundation evidence](2026-09-20-remote-daemon-r3-verification/receive-layout-store.md).
 - [ ] Restore saved slice identities, frequencies/modes and view bindings, with
   capability/resource validation and safe fallback for a changed radio.
 - [ ] Reconcile the attached GUI from the restored snapshot; removed or refused

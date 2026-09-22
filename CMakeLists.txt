@@ -997,6 +997,9 @@ set(CORE_SOURCES
     # on the same NereusCore target either way (see the add_library
     # call further down).
     src/core/daemon/DaemonApp.cpp
+    # R-R3-34: bounded per-radio receive-layout persistence. Runtime
+    # restoration is wired separately at the RadioModel/daemon boundary.
+    src/core/ReceiveLayoutStore.cpp
     # R2 Task 7: the state-mirroring core. MirrorSchema walks Qt's
     # meta-object system over the five mirrored model classes and gives
     # each Q_PROPERTY a dense session-scoped ordinal plus a wire kind;

@@ -16,6 +16,8 @@
 //                 Claude Code.
 //                 Structural pattern follows AetherSDR (ten9876/AetherSDR,
 //                 GPLv3).
+//   2026-09-22 — Name the general receive bounds for Core layout validation,
+//                 by J.J. Boyd (KG4VCF), with OpenAI Codex assistance.
 // =================================================================
 
 //=================================================================
@@ -480,6 +482,14 @@ class SliceModel : public QObject {
                WRITE setLastRadeRxCallsign NOTIFY lastRadeRxCallsignChanged)
 
 public:
+    // Receive-layout admission bounds: general receive defaults, not a
+    // per-radio/transverter capability.
+    // Manual VFO entry retains its existing narrower 100 kHz floor.
+    // From Thetis console.cs:15540 [v2.10.3.15] — min_freq = 0.0 MHz.
+    static constexpr double kMinReceiveFrequencyHz = 0.0;
+    // From Thetis console.cs:15552 [v2.10.3.15] — max_freq = 61.44 MHz.
+    static constexpr double kMaxReceiveFrequencyHz = 61440000.0;
+
     /// Type alias so RxChannelState/TxChannelState can reference SliceModel::Mode
     /// (matches the design contract; underlying type is the canonical DSPMode enum).
     using Mode = DSPMode;
