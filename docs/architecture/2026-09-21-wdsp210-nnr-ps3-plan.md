@@ -783,8 +783,12 @@ and closes integration gaps rather than creating a second copy of each test.
 - [x] Build desktop, `nereusd`, and all tests on the shared Core/GUI base plus
   this implementation, then run the full suite after focused corrections:
   716/716 passed on macOS arm64. Run source/attribution and GUI/DSP gates.
-- [ ] Complete serial integration with the Core/GUI owner and record its final
-  combined revision/checks. Preserve independent wideband and CMake changes.
+- [x] Complete serial integration with the Core/GUI owner: signed merge
+  `fe9e0dc1` preserves the independent wideband/CMake changes and slice-preserving
+  reconnect path. Fresh desktop, `nereusd` and all-tests build passed;
+  **718/718** combined CTest executables passed. See the
+  [combined source verification](2026-09-20-remote-daemon-r3-verification/combined-wdsp210.md)
+  for scope, machine load, gates and outstanding hardware acceptance.
 - [ ] Run the remaining Windows/Linux and Linux ARM64 platform matrix, including
   native worker lifecycle checks. Public CI remains on the existing publication
   hold; macOS results do not imply those platforms passed.

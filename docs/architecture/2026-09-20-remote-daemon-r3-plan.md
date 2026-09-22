@@ -64,8 +64,11 @@ and are installed as `55e7d49f`. Initial automatic GUI reconnect passed, but
 the Rock subsequently became unreachable by SSH/ping; resolve that host
 reachability failure and finish hardware acceptance next (6). Finish
 real TGXL admission and visible-control acceptance (4a/4c/4d); restore receiver membership across Core
-restart (R-R3-34), integrating the parallel WDSP per-slice persistence work
-serially first; finish wideband parity and sustained mixed audio with operator
+restart (R-R3-34); the parallel WDSP per-slice persistence work is now serially
+integrated at signed source `fe9e0dc1` (fresh GUI/daemon build and 718/718
+combined tests passed; [evidence](2026-09-20-remote-daemon-r3-verification/combined-wdsp210.md)).
+Receiver membership and pan bindings remain distinct open work. Finish
+wideband parity and sustained mixed audio with operator
 feedback (4b/5/5a). Then complete capacity, boot/reconnect and two-hour
 acceptance (6). Receive-only R5 traversal follows,
 then safeguarded R4 TX and R6 selection/pairing/packaging. Installed software
@@ -740,6 +743,15 @@ alone and a Core restart are distinct lifecycle boundaries.
 
 - [ ] Audit existing Thetis/local receiver persistence and daemon slice-count
   configuration before selecting the station-owned restore representation.
+  September 22 source audit after WDSP integration confirms that NNR leaves
+  are per-radio/per-slice, but membership and pan keys are not persisted;
+  startup recreates `slice_count` and loads conventional state only for active
+  A. A pinned MAC is available before discovery, so restoration can retain the
+  responsive offline listener. The proposed bounded per-radio descriptor adds
+  stable ID, pan key and current frequency/mode without claiming a migration
+  of all legacy `Slice<N>` band settings. Pending hydration must avoid starting
+  RADE through a mode setter before connection/resource validation. Exact
+  restore/status interfaces and their lifecycle tests remain to implement.
 - [ ] Restore saved slice identities, frequencies/modes and view bindings, with
   capability/resource validation and safe fallback for a changed radio.
 - [ ] Reconcile the attached GUI from the restored snapshot; removed or refused

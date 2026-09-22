@@ -162,3 +162,181 @@ remain separate verification work; this document does not infer those results.
 The source headers are the controlling per-file notices. This record explains
 the pinned baseline, retained lineages, and downstream changes; it does not
 replace or narrow those notices.
+
+## Explicit native file registry
+
+These fixed repository paths register the 167 reviewed native files for the
+port checker. They do not automatically register future additions. Source
+hashes were checked against the pinned column of the frozen manifest: 126
+identical, 30 documented downstream variants and 11 local files. Grouped
+source descriptions above retain the detailed lineage and license context.
+
+| File | Source / lineage | Current disposition |
+| --- | --- | --- |
+| `third_party/wdsp/src/amd.c` | TAPR WDSP 2.10 @b02d5bac, Source/amd.c | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/amd.h` | TAPR WDSP 2.10 @b02d5bac, Source/amd.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/ammod.c` | TAPR WDSP 2.10 @b02d5bac, Source/ammod.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/ammod.h` | TAPR WDSP 2.10 @b02d5bac, Source/ammod.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/amsq.c` | TAPR WDSP 2.10 @b02d5bac, Source/amsq.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/amsq.h` | TAPR WDSP 2.10 @b02d5bac, Source/amsq.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/analyzer.c` | TAPR WDSP 2.10 @b02d5bac, Source/analyzer.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/analyzer.h` | TAPR WDSP 2.10 @b02d5bac, Source/analyzer.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/anf.c` | TAPR WDSP 2.10 @b02d5bac, Source/anf.c | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/anf.h` | TAPR WDSP 2.10 @b02d5bac, Source/anf.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/anr.c` | TAPR WDSP 2.10 @b02d5bac, Source/anr.c | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/anr.h` | TAPR WDSP 2.10 @b02d5bac, Source/anr.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/apfshadow.c` | TAPR WDSP 2.10 @b02d5bac, Source/apfshadow.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/apfshadow.h` | TAPR WDSP 2.10 @b02d5bac, Source/apfshadow.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/bandpass.c` | TAPR WDSP 2.10 @b02d5bac, Source/bandpass.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/bandpass.h` | TAPR WDSP 2.10 @b02d5bac, Source/bandpass.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/calcc.c` | TAPR WDSP 2.10 @b02d5bac, Source/calcc.c | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/calcc.h` | TAPR WDSP 2.10 @b02d5bac, Source/calcc.h | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/calculus.c` | TAPR WDSP 2.10 @b02d5bac, Source/calculus.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/calculus.h` | TAPR WDSP 2.10 @b02d5bac, Source/calculus.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/cblock.c` | TAPR WDSP 2.10 @b02d5bac, Source/cblock.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/cblock.h` | TAPR WDSP 2.10 @b02d5bac, Source/cblock.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/cfcomp.c` | TAPR WDSP 2.10 @b02d5bac, Source/cfcomp.c | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/cfcomp.h` | TAPR WDSP 2.10 @b02d5bac, Source/cfcomp.h | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/cfir.c` | TAPR WDSP 2.10 @b02d5bac, Source/cfir.c | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/cfir.h` | TAPR WDSP 2.10 @b02d5bac, Source/cfir.h | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/channel.c` | TAPR WDSP 2.10 @b02d5bac, Source/channel.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/channel.h` | TAPR WDSP 2.10 @b02d5bac, Source/channel.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/cmath.c` | TAPR WDSP 2.10 @b02d5bac, Source/cmath.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/cmath.h` | TAPR WDSP 2.10 @b02d5bac, Source/cmath.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/comm.h` | TAPR WDSP 2.10 @b02d5bac, Source/comm.h | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/compress.c` | TAPR WDSP 2.10 @b02d5bac, Source/compress.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/compress.h` | TAPR WDSP 2.10 @b02d5bac, Source/compress.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/delay.c` | TAPR WDSP 2.10 @b02d5bac, Source/delay.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/delay.h` | TAPR WDSP 2.10 @b02d5bac, Source/delay.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/dexp.c` | TAPR WDSP 2.10 @b02d5bac, Source/dexp.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/dexp.h` | TAPR WDSP 2.10 @b02d5bac, Source/dexp.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/div.c` | TAPR WDSP 2.10 @b02d5bac, Source/div.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/div.h` | TAPR WDSP 2.10 @b02d5bac, Source/div.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/doublepole.c` | TAPR WDSP 2.10 @b02d5bac, Source/doublepole.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/doublepole.h` | TAPR WDSP 2.10 @b02d5bac, Source/doublepole.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/eer.c` | TAPR WDSP 2.10 @b02d5bac, Source/eer.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/eer.h` | TAPR WDSP 2.10 @b02d5bac, Source/eer.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/emnr.c` | TAPR WDSP 2.10 @b02d5bac, Source/emnr.c | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/emnr.h` | TAPR WDSP 2.10 @b02d5bac, Source/emnr.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/emph.c` | TAPR WDSP 2.10 @b02d5bac, Source/emph.c | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/emph.h` | TAPR WDSP 2.10 @b02d5bac, Source/emph.h | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/eq.c` | TAPR WDSP 2.10 @b02d5bac, Source/eq.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/eq.h` | TAPR WDSP 2.10 @b02d5bac, Source/eq.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/extrapolate.c` | TAPR WDSP 2.10 @b02d5bac, Source/extrapolate.c | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/extrapolate.h` | TAPR WDSP 2.10 @b02d5bac, Source/extrapolate.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/fcurve.c` | TAPR WDSP 2.10 @b02d5bac, Source/fcurve.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/fcurve.h` | TAPR WDSP 2.10 @b02d5bac, Source/fcurve.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/fftw3.h` | TAPR WDSP 2.10 @b02d5bac, Source/fftw3.h | Pinned file, byte-identical. Upstream FFTW header; see FFTW3-PROVENANCE.md. |
+| `third_party/wdsp/src/fir.c` | TAPR WDSP 2.10 @b02d5bac, Source/fir.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/fir.h` | TAPR WDSP 2.10 @b02d5bac, Source/fir.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/firmin.c` | TAPR WDSP 2.10 @b02d5bac, Source/firmin.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/firmin.h` | TAPR WDSP 2.10 @b02d5bac, Source/firmin.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/fmd.c` | TAPR WDSP 2.10 @b02d5bac, Source/fmd.c | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/fmd.h` | TAPR WDSP 2.10 @b02d5bac, Source/fmd.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/fmmod.c` | TAPR WDSP 2.10 @b02d5bac, Source/fmmod.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/fmmod.h` | TAPR WDSP 2.10 @b02d5bac, Source/fmmod.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/fmsq.c` | TAPR WDSP 2.10 @b02d5bac, Source/fmsq.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/fmsq.h` | TAPR WDSP 2.10 @b02d5bac, Source/fmsq.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/gain.c` | TAPR WDSP 2.10 @b02d5bac, Source/gain.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/gain.h` | TAPR WDSP 2.10 @b02d5bac, Source/gain.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/gaussian.c` | TAPR WDSP 2.10 @b02d5bac, Source/gaussian.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/gaussian.h` | TAPR WDSP 2.10 @b02d5bac, Source/gaussian.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/gen.c` | TAPR WDSP 2.10 @b02d5bac, Source/gen.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/gen.h` | TAPR WDSP 2.10 @b02d5bac, Source/gen.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/icfir.c` | TAPR WDSP 2.10 @b02d5bac, Source/icfir.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/icfir.h` | TAPR WDSP 2.10 @b02d5bac, Source/icfir.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/iir.c` | TAPR WDSP 2.10 @b02d5bac, Source/iir.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/iir.h` | TAPR WDSP 2.10 @b02d5bac, Source/iir.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/impulse_cache.c` | TAPR WDSP 2.10 @b02d5bac, Source/impulse_cache.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/impulse_cache.h` | TAPR WDSP 2.10 @b02d5bac, Source/impulse_cache.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/iobuffs.c` | TAPR WDSP 2.10 @b02d5bac, Source/iobuffs.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/iobuffs.h` | TAPR WDSP 2.10 @b02d5bac, Source/iobuffs.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/iqc.c` | TAPR WDSP 2.10 @b02d5bac, Source/iqc.c | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/iqc.h` | TAPR WDSP 2.10 @b02d5bac, Source/iqc.h | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/linux_port.c` | Retained POSIX port; Pratt/Melton provenance and downstream semaphore changes documented above. | Retained or new local integration; original notices preserved. |
+| `third_party/wdsp/src/linux_port.h` | Retained POSIX port; Pratt/Melton provenance documented above. | Retained or new local integration; original notices preserved. |
+| `third_party/wdsp/src/lmath.c` | TAPR WDSP 2.10 @b02d5bac, Source/lmath.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/lmath.h` | TAPR WDSP 2.10 @b02d5bac, Source/lmath.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/main.c` | TAPR WDSP 2.10 @b02d5bac, Source/main.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/main.h` | TAPR WDSP 2.10 @b02d5bac, Source/main.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/matchedCW.c` | TAPR WDSP 2.10 @b02d5bac, Source/matchedCW.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/matchedCW.h` | TAPR WDSP 2.10 @b02d5bac, Source/matchedCW.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/meter.c` | TAPR WDSP 2.10 @b02d5bac, Source/meter.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/meter.h` | TAPR WDSP 2.10 @b02d5bac, Source/meter.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/meterlog10.c` | TAPR WDSP 2.10 @b02d5bac, Source/meterlog10.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/meterlog10.h` | TAPR WDSP 2.10 @b02d5bac, Source/meterlog10.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/nbp.c` | TAPR WDSP 2.10 @b02d5bac, Source/nbp.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/nbp.h` | TAPR WDSP 2.10 @b02d5bac, Source/nbp.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/netinterface_stub.c` | Nereus-original ChannelMaster-facing glue; see the glue inventory above. | Retained or new local integration; original notices preserved. |
+| `third_party/wdsp/src/nnet.c` | TAPR WDSP 2.10 @b02d5bac, Source/nnet.c | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/nnet.h` | TAPR WDSP 2.10 @b02d5bac, Source/nnet.h | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/nnet_profile.h` | TAPR WDSP 2.10 @b02d5bac, Source/nnet_profile.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/nnio.c` | TAPR WDSP 2.10 @b02d5bac, Source/nnio.c | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/nnio.h` | TAPR WDSP 2.10 @b02d5bac, Source/nnio.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/nnr.c` | TAPR WDSP 2.10 @b02d5bac, Source/nnr.c | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/nnr.h` | TAPR WDSP 2.10 @b02d5bac, Source/nnr.h | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/nnr_compat.h` | Nereus-original bounded NNR ABI declarations. | Retained or new local integration; original notices preserved. |
+| `third_party/wdsp/src/nnr_model_0.c` | TAPR WDSP 2.10 @b02d5bac, Source/nnr_model_0.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/nnr_model_1.c` | TAPR WDSP 2.10 @b02d5bac, Source/nnr_model_1.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/nob.c` | TAPR WDSP 2.10 @b02d5bac, Source/nob.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/nob.h` | TAPR WDSP 2.10 @b02d5bac, Source/nob.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/nobII.c` | TAPR WDSP 2.10 @b02d5bac, Source/nobII.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/nobII.h` | TAPR WDSP 2.10 @b02d5bac, Source/nobII.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/nurbs.c` | TAPR WDSP 2.10 @b02d5bac, Source/nurbs.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/nurbs.h` | TAPR WDSP 2.10 @b02d5bac, Source/nurbs.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/nurbs_fit.c` | TAPR WDSP 2.10 @b02d5bac, Source/nurbs_fit.c | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/nurbs_fit.h` | TAPR WDSP 2.10 @b02d5bac, Source/nurbs_fit.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/nurbs_spline.c` | TAPR WDSP 2.10 @b02d5bac, Source/nurbs_spline.c | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/nurbs_spline.h` | TAPR WDSP 2.10 @b02d5bac, Source/nurbs_spline.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/osctrl.c` | TAPR WDSP 2.10 @b02d5bac, Source/osctrl.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/osctrl.h` | TAPR WDSP 2.10 @b02d5bac, Source/osctrl.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/patchpanel.c` | TAPR WDSP 2.10 @b02d5bac, Source/patchpanel.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/patchpanel.h` | TAPR WDSP 2.10 @b02d5bac, Source/patchpanel.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/phrot.c` | TAPR WDSP 2.10 @b02d5bac, Source/phrot.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/phrot.h` | TAPR WDSP 2.10 @b02d5bac, Source/phrot.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/ps3_abi.h` | Nereus-original bounded PS3 ABI declarations. | Retained or new local integration; original notices preserved. |
+| `third_party/wdsp/src/ps_sync_stub.c` | Nereus-original retained PS routing glue; see the glue inventory above. | Retained or new local integration; original notices preserved. |
+| `third_party/wdsp/src/resample.c` | TAPR WDSP 2.10 @b02d5bac, Source/resample.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/resample.h` | TAPR WDSP 2.10 @b02d5bac, Source/resample.h | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/reshb.c` | TAPR WDSP 2.10 @b02d5bac, Source/reshb.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/reshb.h` | TAPR WDSP 2.10 @b02d5bac, Source/reshb.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/resource.h` | TAPR WDSP 2.10 @b02d5bac, Source/resource.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/resource1.h` | TAPR WDSP 2.10 @b02d5bac, Source/resource1.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/rmatch.c` | TAPR WDSP 2.10 @b02d5bac, Source/rmatch.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/rmatch.h` | TAPR WDSP 2.10 @b02d5bac, Source/rmatch.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/rnnr.c` | Retained Thetis NR3 extension, v2.10.3.13 @501e3f51. | Retained or new local integration; original notices preserved. |
+| `third_party/wdsp/src/rnnr.h` | Retained Thetis NR3 extension, v2.10.3.13 @501e3f51. | Retained or new local integration; original notices preserved. |
+| `third_party/wdsp/src/RXA.c` | TAPR WDSP 2.10 @b02d5bac, Source/RXA.c | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/RXA.h` | TAPR WDSP 2.10 @b02d5bac, Source/RXA.h | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/sbnr.c` | Retained Thetis NR4 extension, v2.10.3.13 @501e3f51. | Retained or new local integration; original notices preserved. |
+| `third_party/wdsp/src/sbnr.h` | Retained Thetis NR4 extension, v2.10.3.13 @501e3f51. | Retained or new local integration; original notices preserved. |
+| `third_party/wdsp/src/sender.c` | TAPR WDSP 2.10 @b02d5bac, Source/sender.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/sender.h` | TAPR WDSP 2.10 @b02d5bac, Source/sender.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/shift.c` | TAPR WDSP 2.10 @b02d5bac, Source/shift.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/shift.h` | TAPR WDSP 2.10 @b02d5bac, Source/shift.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/siphon.c` | TAPR WDSP 2.10 @b02d5bac, Source/siphon.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/siphon.h` | TAPR WDSP 2.10 @b02d5bac, Source/siphon.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/slew.c` | TAPR WDSP 2.10 @b02d5bac, Source/slew.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/slew.h` | TAPR WDSP 2.10 @b02d5bac, Source/slew.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/snb.c` | TAPR WDSP 2.10 @b02d5bac, Source/snb.c | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/snb.h` | TAPR WDSP 2.10 @b02d5bac, Source/snb.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/ssql.c` | TAPR WDSP 2.10 @b02d5bac, Source/ssql.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/ssql.h` | TAPR WDSP 2.10 @b02d5bac, Source/ssql.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/syncbuffs.c` | TAPR WDSP 2.10 @b02d5bac, Source/syncbuffs.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/syncbuffs.h` | TAPR WDSP 2.10 @b02d5bac, Source/syncbuffs.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/TXA.c` | TAPR WDSP 2.10 @b02d5bac, Source/TXA.c | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/TXA.h` | TAPR WDSP 2.10 @b02d5bac, Source/TXA.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/txgain_stub.c` | Nereus-original fixed-I/Q-gain glue; see the glue inventory above. | Retained or new local integration; original notices preserved. |
+| `third_party/wdsp/src/utilities.c` | TAPR WDSP 2.10 @b02d5bac, Source/utilities.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/utilities.h` | TAPR WDSP 2.10 @b02d5bac, Source/utilities.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/varsamp.c` | TAPR WDSP 2.10 @b02d5bac, Source/varsamp.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/varsamp.h` | TAPR WDSP 2.10 @b02d5bac, Source/varsamp.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/version.c` | TAPR WDSP 2.10 @b02d5bac, Source/version.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/version.h` | TAPR WDSP 2.10 @b02d5bac, Source/version.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/wbfm.c` | TAPR WDSP 2.10 @b02d5bac, Source/wbfm.c | Pinned file with reviewed downstream changes; see the integration inventory above. |
+| `third_party/wdsp/src/wbfm.h` | TAPR WDSP 2.10 @b02d5bac, Source/wbfm.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/wcpAGC.c` | TAPR WDSP 2.10 @b02d5bac, Source/wcpAGC.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/wcpAGC.h` | TAPR WDSP 2.10 @b02d5bac, Source/wcpAGC.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/wisdom.c` | TAPR WDSP 2.10 @b02d5bac, Source/wisdom.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/zetaHat.c` | TAPR WDSP 2.10 @b02d5bac, Source/zetaHat.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/zetaHat.h` | TAPR WDSP 2.10 @b02d5bac, Source/zetaHat.h | Pinned file, byte-identical. |
