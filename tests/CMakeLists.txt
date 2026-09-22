@@ -234,6 +234,14 @@ endfunction()
 nereus_add_test(tst_setup_helpers)
 nereus_add_test(tst_smoke)
 
+# WDSP 2.10 migration: retain the real CFC Qg/Qe frequency response.
+if(TARGET wdsp_static)
+    nereus_add_test(tst_wdsp210_cfc_compat WdspCfcProbe.c EXTRA_LABELS core)
+    set_source_files_properties(WdspCfcProbe.c PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(tst_wdsp210_cfc_compat PRIVATE ${FFTW3_INCLUDE_DIRS})
+    target_compile_definitions(tst_wdsp210_cfc_compat PRIVATE WDSP_STATIC_BUILD)
+endif()
+
 # ── Issue #75: receiver leak across disconnect/reconnect ──────────────────
 nereus_add_test(tst_receiver_manager_reconnect)
 
