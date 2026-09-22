@@ -25,6 +25,11 @@
 //                 removed with its only listener (MainWindow.cpp:8132);
 //                 pollSMeter() itself is unchanged. J.J. Boyd (KG4VCF), with
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-22: R-R3-13: pollRemoteRxMeters() feeds the -400 dBm no-reading
+//                 sentinel to the S-meter and the flags in every RX mode when
+//                 there is no reading (disconnected, snapshot not ready, no
+//                 slice). J.J. Boyd (KG4VCF), with AI-assisted transformation
+//                 via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -385,6 +390,11 @@ void MeterPoller::pollRemoteRxMeters()
     auto finiteOr = [](double value, double fallback) {
         return std::isfinite(value) ? value : fallback;
     };
+    // NereusSDR (R-R3-13): with no reading (disconnected, snapshot not
+    // ready, no slice) the S-meter and the flags get the -400 dBm
+    // no-reading sentinel in every RX mode, which both show as "--".  The
+    // -140 floor below applies only while a slice reading exists.
+    constexpr double kNoReadingDbm = -400.0;
     const double peak = slice ? finiteOr(slice->signalPeakDbm(), -140.0) : -140.0;
     const double average = slice ? finiteOr(slice->signalAverageDbm(), -140.0) : -140.0;
     const double maxBin = slice && m_remoteMaxBinSource
@@ -397,13 +407,13 @@ void MeterPoller::pollRemoteRxMeters()
         target->updateMeterValue(MeterBinding::SignalMaxBin, maxBin);
     }
     if (!m_sMeter) { return; }
-    double level = peak;
+    double level = slice ? peak : kNoReadingDbm;
     switch (m_sMeter->rxMode()) {
     case SMeterWidget::RxMode::SMeter:
     case SMeterWidget::RxMode::SMeterPeak:
         break;
     case SMeterWidget::RxMode::SignalAverage:
-        level = average;
+        level = slice ? average : kNoReadingDbm;
         break;
     case SMeterWidget::RxMode::MaxBin:
         level = maxBin;
@@ -416,7 +426,7 @@ void MeterPoller::pollRemoteRxMeters()
     if (!m_remoteModel) { return; }
     for (const SliceModel* flagSlice : m_remoteModel->slices()) {
         if (!flagSlice) { continue; }
-        double flagLevel = -140.0;
+        double flagLevel = kNoReadingDbm;
         if (ready) {
             switch (m_sMeter->rxMode()) {
             case SMeterWidget::RxMode::SMeter:
@@ -431,7 +441,8 @@ void MeterPoller::pollRemoteRxMeters()
                 break;
             }
         }
-        emit remoteSliceLevelUpdated(flagSlice->sliceIndex(), finiteOr(flagLevel, -140.0));
+        emit remoteSliceLevelUpdated(flagSlice->sliceIndex(),
+                                     ready ? finiteOr(flagLevel, -140.0) : kNoReadingDbm);
     }
 }
 

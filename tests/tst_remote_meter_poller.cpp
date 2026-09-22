@@ -108,22 +108,34 @@ private slots:
         tick();
         QCOMPARE(meter.levelDbm(), -30.0f);
 
+        // R-R3-13: with no reading the meter gets the -400 dBm no-reading
+        // sentinel in every RX mode and shows "--", not "-140 dBm" / "S0".
+        QSignalSpy flags(&poller, &MeterPoller::remoteSliceLevelUpdated);
         model->setStationConnectionState(ConnectionState::Disconnected);
         snapshotReady = false;
-        tick();
-        QCOMPARE(meter.levelDbm(), -140.0f);
+        for (const char* mode : {"S-Meter", "Sig Avg", "Signal Peak", "Max Bin"}) {
+            meter.setRxMode(QString::fromLatin1(mode));
+            tick();
+            QCOMPARE(meter.levelDbm(), -400.0f);
+            QCOMPARE(meter.sUnitsText(), QStringLiteral("--"));
+            QVERIFY(!flags.isEmpty());
+            QCOMPARE(flags.constLast().at(1).toDouble(), -400.0);
+        }
+        meter.setRxMode("S-Meter");
         // Capabilities can mark the radio connected before the new model
         // snapshot arrives. Retained readings must not become live again.
         model->setStationConnectionState(ConnectionState::Connected);
         tick();
-        QCOMPARE(meter.levelDbm(), -140.0f);
+        QCOMPARE(meter.levelDbm(), -400.0f);
+        QCOMPARE(flags.constLast().at(1).toDouble(), -400.0);
         slice->setSignalPeakDbm(-74);
         snapshotReady = true;
         tick();
         QCOMPARE(meter.levelDbm(), -74.0f);
+        QCOMPARE(flags.constLast().at(1).toDouble(), -74.0);
         model.reset();
         tick();
-        QCOMPARE(meter.levelDbm(), -140.0f);
+        QCOMPARE(meter.levelDbm(), -400.0f);
     }
 };
 QTEST_MAIN(TestRemoteMeterPoller)
