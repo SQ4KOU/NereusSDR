@@ -20,6 +20,7 @@
 #include "core/session/media/DisplayCodec.h"
 #include "core/session/media/MediaPeer.h"
 #include "core/session/media/OpusAudioCodec.h"
+#include "core/session/media/RemoteAudioContext.h"
 #include "core/session/media/SpectrumEndpoint.h"
 #include "core/settings/SettingsProxy.h"
 #include "models/RadioModel.h"
@@ -86,29 +87,6 @@ bool jsonUint32(const QJsonObject& object, const char* key, quint32& value)
         return false;
     }
     value = static_cast<quint32>(parsed);
-    return true;
-}
-
-bool jsonUint16(const QJsonObject& object, const char* key, quint16& value)
-{
-    double parsed = 0.0;
-    if (!jsonNumber(object, key, 0, std::numeric_limits<quint16>::max(), parsed, true)) {
-        return false;
-    }
-    value = static_cast<quint16>(parsed);
-    return true;
-}
-
-bool exactKeys(const QJsonObject& object, std::initializer_list<const char*> keys)
-{
-    if (object.size() != static_cast<qsizetype>(keys.size())) {
-        return false;
-    }
-    for (const char* key : keys) {
-        if (!object.contains(QLatin1String(key))) {
-            return false;
-        }
-    }
     return true;
 }
 
@@ -410,38 +388,30 @@ private:
 
     bool acceptAudioContext(const QJsonObject& payload)
     {
-        quint32 revision = 0;
-        quint32 generation = 0;
-        quint32 ssrc = 0;
-        quint16 firstSequence = 0;
-        double firstTimestamp = 0.0;
-        if (!m_audioRequested
-            || !exactKeys(payload, {"op", "connectionId", "revision", "generation",
-                                    "enabled", "ssrc", "firstSequence", "firstTimestamp"})
-            || payload.value(QStringLiteral("op")) != QLatin1String("audio-context")
-            || payload.value(QStringLiteral("connectionId")).toString() != m_connectionId
-            || !jsonUint32(payload, "revision", revision) || revision != kRevision
-            || !jsonUint32(payload, "generation", generation)
-            || !payload.value(QStringLiteral("enabled")).isBool()
-            || !jsonUint32(payload, "ssrc", ssrc) || !m_peer || ssrc != m_peer->audioSsrc()
-            || !jsonUint16(payload, "firstSequence", firstSequence)
-            || !jsonNumber(payload, "firstTimestamp", 0,
-                           std::numeric_limits<quint32>::max(), firstTimestamp, true)) {
+        // The shared wire codec, in the shape this session negotiated
+        // (minor 8 adds the encoder profile or the off reason), then this
+        // probe's identity checks.
+        const std::optional<RemoteAudioContextMessage> context = decodeRemoteAudioContext(
+            payload, m_client->remoteAudioStatusAvailable());
+        if (!m_audioRequested || !context || context->connectionId != m_connectionId
+            || context->revision != kRevision || !m_peer
+            || context->ssrc != m_peer->audioSsrc()) {
             return false;
         }
+        const quint32 generation = context->generation;
         if (m_audioGeneration != 0
             && (generation == m_audioGeneration
                 || quint32(generation - m_audioGeneration) >= 0x80000000U)) {
             return false;
         }
         m_audioGeneration = generation;
-        m_audioSsrc = ssrc;
-        m_audioFirstSequence = firstSequence;
-        m_audioFirstTimestamp = static_cast<quint32>(firstTimestamp);
+        m_audioSsrc = context->ssrc;
+        m_audioFirstSequence = context->firstSequence;
+        m_audioFirstTimestamp = context->firstTimestamp;
         // The answerer's ready callback can precede the offerer's. Core
         // then reports disabled until its own peer is ready, followed by a
         // newer enabled context. Keep waiting within the bounded probe.
-        m_audioContextAccepted = payload.value(QStringLiteral("enabled")).toBool();
+        m_audioContextAccepted = context->enabled;
         m_audioHavePrevious = false;
         m_audioDecoder.reset();
         return true;
