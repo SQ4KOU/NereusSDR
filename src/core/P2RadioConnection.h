@@ -397,6 +397,7 @@ private:
     bool isSelectedSourceAddress(const QHostAddress& sender) const;
     void noteAcceptedInboundDatagram(quint64 datagramGeneration);
     void stopForEstablishedSilence();
+    void discardWidebandFrames();
 
     static void writeBE32(char* buf, int offset, quint32 value);
 

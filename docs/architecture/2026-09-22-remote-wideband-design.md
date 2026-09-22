@@ -267,6 +267,16 @@ transmit permission or menu redesign is part of this contract.
   FFT output at full and quarter amplitude, plus all five detector references
   when ADC and DDC rates change independently. Existing local wing behavior
   remains covered. Build-start load: 6.96 / 9.39 / 7.86.
+- [x] Retire incomplete P2 capture bursts at a changed ADC enable bit and
+  every connection-generation boundary. The regression first emitted one
+  obsolete frame after disable/re-enable and after disconnect; it now emits
+  none until a fresh seq=0 burst. Duplicate enable and another ADC's toggle
+  preserve live capture. Also retire accumulator state before notifying direct
+  observers: a reentrant next-burst start previously emitted the old row twice.
+  Five freshly built focused targets pass (6.04 seconds): P2 enable bytes,
+  frame accumulator, established silence, thread marshalling and wideband
+  worker ownership. This fixes partial packet assembly; tagged FFT/media
+  source-generation retirement remains the next distinct boundary.
 - [ ] Tagged source/demand, negotiated endpoint, GUI parity, combined full
   suite and native/hardware acceptance remain pending. This checkpoint is
   not deployed. The installed software remains `55e7d49f`.

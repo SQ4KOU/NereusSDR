@@ -54,7 +54,7 @@
 //   2026-05-04 — setMicPTT renamed to setMicPTTDisabled (issue #182): direct polarity matches Thetis console.cs:19757-19766 [v2.10.3.13+501e3f51]; default MicState::micControl flipped 0x24→0x20 so PTT is enabled at firmware out of the box. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-04-28 — setMicXlr (G.6): byte 50 bit 5 (0x20), P2-only, polarity 1=XLR. deskhpsdr new_protocol.c:1500-1502 [@120188f]. MicState::micControl default updated 0x04 -> 0x24. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-22 — Established UDP silence: Thetis ChannelMaster/network.c:655-666 [v2.10.3.15]; stop/report, daemon-owned recovery.
-//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
+//                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex. Also retire incomplete wideband bursts at capture/connection changes.
 // =================================================================
 
 /*
@@ -578,6 +578,7 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
     }
 
     ++m_connectionGeneration;
+    discardWidebandFrames();
     m_linkLossLatched = false;
     m_establishedSilenceGeneration = 0;
     m_establishedSilenceDeadline = QDeadlineTimer();
@@ -767,6 +768,7 @@ void P2RadioConnection::disconnect()
     m_intentionalDisconnect = true;
     m_linkLossLatched = true;
     ++m_connectionGeneration;
+    discardWidebandFrames();
     m_establishedSilenceGeneration = 0;
     m_establishedSilenceDeadline = QDeadlineTimer();
 
@@ -1357,9 +1359,19 @@ void P2RadioConnection::setWidebandEnabled(int adcIndex, bool on)
     if (newMask == m_wbEnableMask) {
         return;
     }
+    // Nereus capture lifetime: trailing packets after an enable transition
+    // cannot finish the previous burst. Other ADCs retain their own state.
+    m_wbAccumulators[adcIndex]->discardPartialFrame();
     m_wbEnableMask = newMask;
     if (m_state == ConnectionState::Connected) {
         sendCmdGeneral();
+    }
+}
+
+void P2RadioConnection::discardWidebandFrames()
+{
+    for (WidebandFrameAccumulator* accumulator : m_wbAccumulators) {
+        accumulator->discardPartialFrame();
     }
 }
 
@@ -2222,6 +2234,7 @@ void P2RadioConnection::stopForEstablishedSilence()
     m_linkLossLatched = true;
     m_intentionalDisconnect = true;
     ++m_connectionGeneration;
+    discardWidebandFrames();
     m_establishedSilenceGeneration = 0;
     m_establishedSilenceDeadline = QDeadlineTimer();
 
@@ -3260,6 +3273,7 @@ void P2RadioConnection::onConnectTimeout()
     m_intentionalDisconnect = true;
     m_linkLossLatched = true;
     ++m_connectionGeneration;
+    discardWidebandFrames();
     m_establishedSilenceGeneration = 0;
     m_establishedSilenceDeadline = QDeadlineTimer();
     if (m_keepAliveTimer) { m_keepAliveTimer->stop(); }
