@@ -63,6 +63,17 @@ fixed 167-file registry, checking current hashes against the frozen manifest:
 additions are not implicitly allowed. DSP/runtime source remains unchanged
 from the full-suite run.
 
+The subsequent checker correction audits the cumulative merge-base-to-index
+snapshot, including both committed branch changes and staged additions. Source
+blobs and all four provenance registries come from that same index snapshot;
+an unstaged clean file or registry entry cannot mask a staged violation. The
+full-tree mode retains its worktree sweep. Nine isolated real-Git regression
+cases cover new/modified staged source, matching staged registration, unstaged
+masking, committed PR content, a verified `R100` rename, deletion, and full-tree
+behavior. The complete Python compliance suite passes **20/20**. This changes
+tooling and tests only, so the unchanged runtime's 718-test evidence above is
+retained rather than rerun.
+
 Local detailed logs are retained under `~/.config/nereus/work/` as
 `r3-wdsp-combined-build.log`, `r3-wdsp-combined-tests.log`,
 `r3-wdsp-combined-load.log`, `r3-wdsp-combined-skips.log` and
