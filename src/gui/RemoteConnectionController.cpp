@@ -1,10 +1,13 @@
 // no-port-check: NereusSDR-original. R3 Core session presentation and actions.
 #include "RemoteConnectionController.h"
 #include "core/session/StationClient.h"
+#include "gui/RemoteAudioStatus.h"
+#include "gui/RemoteMediaController.h"
 #include "models/RadioModel.h"
 #include <QDialogButtonBox>
 #include <QLabel>
 #include <QPushButton>
+#include <QTimer>
 #include <QUrl>
 #include <QVBoxLayout>
 #include <utility>
@@ -157,7 +160,7 @@ void RemoteConnectionController::recoverMediaSession(quint32 expectedEpoch,
 }
 
 RemoteConnectionPanel::RemoteConnectionPanel(RemoteConnectionController* controller,
-                                           QWidget* parent)
+                                           QWidget* parent, RemoteMediaController* media)
     : QDialog(parent)
 {
     setWindowTitle(tr("Core connection"));
@@ -168,6 +171,30 @@ RemoteConnectionPanel::RemoteConnectionPanel(RemoteConnectionController* control
     details->setWordWrap(true);
     details->setTextInteractionFlags(Qt::TextSelectableByMouse);
     layout->addWidget(details);
+
+    // The "Remote audio" section: only with a media controller, so a panel
+    // built without one (there is no such call site today, but tests build
+    // one directly) stays exactly as it was before R-R3-23.
+    QLabel* audioDetails = nullptr;
+    QPushButton* retryButton = nullptr;
+    if (media) {
+        audioDetails = new QLabel(this);
+        audioDetails->setObjectName(QStringLiteral("remoteAudioDetails"));
+        audioDetails->setTextFormat(Qt::PlainText);
+        audioDetails->setWordWrap(true);
+        audioDetails->setTextInteractionFlags(Qt::TextSelectableByMouse);
+        layout->addWidget(audioDetails);
+        retryButton = new QPushButton(tr("Retry audio"), this);
+        retryButton->setObjectName(QStringLiteral("retryRemoteAudio"));
+        retryButton->setAutoDefault(false);
+        layout->addWidget(retryButton);
+        connect(retryButton, &QPushButton::clicked,
+                media, &RemoteMediaController::retryAudio);
+        // Collect the fixed height below into one gap above the buttons
+        // instead of it spreading between the two text sections.
+        layout->addStretch(1);
+    }
+
     auto* buttons = new QDialogButtonBox(this);
     auto* dial = buttons->addButton(tr("Connect"), QDialogButtonBox::ActionRole);
     dial->setObjectName(QStringLiteral("connectCore"));
@@ -186,6 +213,29 @@ RemoteConnectionPanel::RemoteConnectionPanel(RemoteConnectionController* control
     };
     connect(controller, &RemoteConnectionController::changed, this, refresh);
     refresh();
-    resize(440, 170);
+
+    if (media) {
+        const auto refreshAudio = [media, audioDetails, retryButton] {
+            audioDetails->setText(formatRemoteAudioDetails(media->audioStatus(),
+                                                            media->audioTelemetry()));
+            retryButton->setEnabled(media->audioStatus().retryAvailable);
+        };
+        connect(media, &RemoteMediaController::audioStatusChanged, this, refreshAudio);
+        // audioStatusChanged() fires only when the derived status changes;
+        // the numeric health measurements move continuously while playing,
+        // so this section also polls once a second while it is visible.
+        auto* audioTimer = new QTimer(this);
+        audioTimer->setObjectName(QStringLiteral("remoteAudioPanelTimer"));
+        audioTimer->setInterval(1000);
+        connect(audioTimer, &QTimer::timeout, this, [this, refreshAudio] {
+            if (isVisible()) { refreshAudio(); }
+        });
+        audioTimer->start();
+        refreshAudio();
+    }
+
+    // 420 comfortably fits the densest realistic content: the Core section,
+    // a Problem line, a wrapped Codec line and all four health lines.
+    resize(440, media ? 420 : 170);
 }
 } // namespace NereusSDR

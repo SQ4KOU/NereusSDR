@@ -1,5 +1,6 @@
 // no-port-check: NereusSDR-original. Observational Core/GUI telemetry adapter.
 #include "RemoteTelemetryController.h"
+#include "gui/RemoteAudioStatus.h"
 #include "gui/RemoteMediaController.h"
 #include "core/session/StationClient.h"
 #include <QStringList>
@@ -298,7 +299,13 @@ QString RemoteTelemetryController::bannerText() const
     }
     if (m_view.opusRxKbps) { parts << tr("Opus %1 kbps").arg(number(m_view.opusRxKbps)); }
     parts << tr("Core RTT %1 ms").arg(m_view.coreRttMs ? QString::number(*m_view.coreRttMs) : QStringLiteral("—"));
-    parts << (m_view.playbackActive ? tr("Audio playing")
+    // R-R3-23: with a media controller, its own persistent status (which
+    // survives a fault the receiver does not recover from by itself) is the
+    // banner word; the running/decoding heuristic below is only a fallback
+    // for callers with no media controller, so existing deterministic
+    // banner tests built without one keep their exact wording.
+    parts << (m_media ? remoteAudioBannerWord(m_media->audioStatus().state)
+        : m_view.playbackActive ? tr("Audio playing")
         : m_view.playback.running ? tr("Audio waiting") : tr("Audio stopped"));
     return parts.join(QStringLiteral("  ·  "));
 }
@@ -341,6 +348,19 @@ QString RemoteTelemetryController::detailText() const
         text << tr("Playback interruptions this GUI run: %1 underflows / %2 overflows, including retired audio contexts.")
             .arg(*p.lifetimeUnderflows).arg(*p.lifetimeOverflows);
     }
+    // R-R3-23: each measurement labelled with what it is, not protocol jargon.
+    text << (p.arrivalJitterMs
+        ? tr("Arrival jitter: %1 ms, measured on this computer.").arg(qRound(*p.arrivalJitterMs))
+        : tr("Arrival jitter: not measured yet."));
+    text << (p.expectedPackets > 0
+        ? tr("Missing packets: %1 of %2, sequence numbers never received.")
+              .arg(p.missingPackets).arg(p.expectedPackets)
+        : tr("Missing packets: none received yet."));
+    text << tr("Gaps filled: %1, concealed 40 ms intervals.").arg(p.concealedPackets);
+    text << (p.speakerQueuedMs
+        ? tr("Speaker buffer: %1 ms, audio queued for this computer's speaker, not total delay.")
+              .arg(qRound(*p.speakerQueuedMs))
+        : tr("Speaker buffer: not measured yet."));
     text << tr("Transport acceptance does not prove delivery. Concealment and source drops are events, not a packet-loss percentage.");
     return text.join(QLatin1Char('\n'));
 }

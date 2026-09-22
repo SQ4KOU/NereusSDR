@@ -1179,7 +1179,7 @@ void MainWindow::showRemoteConnectionPanel()
 {
     if (!m_remoteConnection) { return; }
     if (!m_remoteConnectionPanel) {
-        m_remoteConnectionPanel = new RemoteConnectionPanel(m_remoteConnection, this);
+        m_remoteConnectionPanel = new RemoteConnectionPanel(m_remoteConnection, this, m_remoteMedia);
     }
     m_remoteConnectionPanel->show();
     m_remoteConnectionPanel->raise();

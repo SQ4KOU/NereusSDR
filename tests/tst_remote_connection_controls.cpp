@@ -1,13 +1,17 @@
 // no-port-check: NereusSDR-original. Remote GUI connection and hydration boundaries.
 #include <QTest>
 #include <QCoreApplication>
+#include <QDir>
 #include <QFile>
 #include <QLabel>
 #include <QMenu>
+#include <QPixmap>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTcpServer>
+#include <QTimer>
 #include <QWebSocketServer>
 #include <QSslSocket>
 
@@ -19,8 +23,10 @@
 #include "core/session/IStationLink.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
+#include "core/session/media/DaemonMediaController.h"
 #include "core/settings/SettingsProxy.h"
 #include "gui/MainWindow.h"
+#include "gui/RemoteAudioStatus.h"
 #include "gui/RemoteConnectionController.h"
 #include "gui/RemoteDiagnosticsDialog.h"
 #include "gui/RemoteMediaController.h"
@@ -29,6 +35,7 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "fakes/LoopbackTransport.h"
+#include "fakes/RemoteAudioSessionHarness.h"
 
 using namespace NereusSDR;
 
@@ -101,6 +108,30 @@ QAction* networkDiagnosticsToolsAction(MainWindow& window)
         }
     }
     return nullptr;
+}
+
+// R-R3-23 Task 4: how many "op":"audio" control messages the station side
+// has received so far.
+int countAudioControlMessages(const QSignalSpy& spy)
+{
+    int count = 0;
+    for (const auto& call : spy) {
+        if (call.at(0).toJsonObject().value(QStringLiteral("op"))
+            == QLatin1String("audio")) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+// What the controller logs when a playing speaker stops reporting timing.
+// Mirrors tst_remote_media_controller.cpp's speakerTimingLostLog(): the
+// worker's pacing check or its next write notices first.
+QRegularExpression remoteAudioSpeakerTimingLostLog()
+{
+    return QRegularExpression(QStringLiteral(
+        "^Remote audio playback failed: (Speaker device timing became unavailable"
+        "|Could not write remote audio to the speaker device) \\[ageMs="));
 }
 
 class TestRemoteConnectionControls : public QObject {
@@ -250,6 +281,84 @@ private slots:
         QTRY_VERIFY(client.isHandshakeComplete());
         QVERIFY(client.sessionEpoch() > epoch);
         stop->click();
+    }
+
+    // R-R3-23 Task 4: the panel's "Remote audio" section over a real media
+    // session. A real speaker fault (PacedAudioBus withdrawing its device
+    // timing, never a receiver signal emitted directly) enables Retry;
+    // clicking it sends a new "audio" control revision to Core.
+    void remoteAudioSectionTracksARealFaultAndRetrySendsANewRevision()
+    {
+        using State = RemoteAudioStatus::State;
+        Test::RemoteAudioSessionHarness h;
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
+        DaemonMediaController daemonMedia(&h.server, &h.station);
+        RemoteConnectionController controls(&h.client, &h.remote, {});
+        QSignalSpy coreControls(&h.server, &StationServer::mediaControlReceived);
+
+        // The station's two-slice tone and this computer's speaker, each
+        // paced every 10 ms, as the real audio session tests drive them.
+        QTimer sourceTimer;
+        sourceTimer.setInterval(10);
+        sourceTimer.setTimerType(Qt::PreciseTimer);
+        connect(&sourceTimer, &QTimer::timeout, &sourceTimer, [&h] { h.feedMixedTone(); });
+        QTimer speakerTimer;
+        speakerTimer.setInterval(10);
+        speakerTimer.setTimerType(Qt::PreciseTimer);
+        connect(&speakerTimer, &QTimer::timeout, &speakerTimer, [&h] {
+            h.remoteBus->render(Test::RemoteAudioSessionHarness::kFrames);
+        });
+        sourceTimer.start();
+        speakerTimer.start();
+
+        h.connectSession();
+        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state, State::Playing, 15000);
+
+        RemoteConnectionPanel panel(&controls, nullptr, &remoteMedia);
+        panel.show();
+        QTRY_VERIFY(panel.isVisible());
+        auto* audioDetails = panel.findChild<QLabel*>(QStringLiteral("remoteAudioDetails"));
+        auto* retry = panel.findChild<QPushButton*>(QStringLiteral("retryRemoteAudio"));
+        QVERIFY(audioDetails);
+        QVERIFY(retry);
+        QVERIFY(audioDetails->text().contains(QStringLiteral("Remote audio: Playing")));
+        QVERIFY(!retry->isEnabled());
+
+        // The speaker goes away mid-play and stops reporting its timing.
+        // The real receiver notices through AudioEngine; nothing fakes it.
+        QTest::ignoreMessage(QtWarningMsg, remoteAudioSpeakerTimingLostLog());
+        h.remoteBus->setOutputPacingAvailableForTesting(false);
+        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state, State::PlaybackProblem, 5000);
+        QTRY_VERIFY(retry->isEnabled());
+        QVERIFY(audioDetails->text().contains(QStringLiteral("Problem:")));
+        QVERIFY(audioDetails->text().contains(QStringLiteral("Arrival jitter")));
+
+        // The controller can inspect the rendering: one save under this
+        // test's own temporary directory, one alongside the plan for review.
+        QCoreApplication::processEvents();
+        QTemporaryDir captureDir;
+        QVERIFY(captureDir.isValid());
+        const QPixmap rendered = panel.grab();
+        QVERIFY(!rendered.isNull());
+        QVERIFY(rendered.save(captureDir.filePath(QStringLiteral("panel-capture.png")), "PNG"));
+        const QString sharedCaptureDir = QStringLiteral(
+            "/Users/j.j.boyd/.codex/worktrees/nereus-r2-integration/NereusSDR/"
+            ".crew/2026-09-22-remote-audio-status-plan");
+        QVERIFY(QDir().mkpath(sharedCaptureDir));
+        QVERIFY(rendered.save(sharedCaptureDir + QStringLiteral("/panel-capture.png"), "PNG"));
+
+        // The speaker is back; Retry asks Core again with a newer revision.
+        h.remoteBus->setOutputPacingAvailableForTesting(true);
+        const int audioRequestsBeforeRetry = countAudioControlMessages(coreControls);
+        retry->click();
+        QTRY_VERIFY(countAudioControlMessages(coreControls) > audioRequestsBeforeRetry);
+        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state, State::Playing, 15000);
+        QVERIFY(!retry->isEnabled());
+        QVERIFY(audioDetails->text().contains(QStringLiteral("Remote audio: Playing")));
+
+        sourceTimer.stop();
+        speakerTimer.stop();
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
     void failedConnectShowsReasonAndCancelStopsBackoff()

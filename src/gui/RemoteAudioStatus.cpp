@@ -6,6 +6,8 @@
 
 #include "gui/RemoteAudioStatus.h"
 
+#include <QStringList>
+
 namespace NereusSDR {
 namespace {
 
@@ -158,6 +160,37 @@ QString remoteAudioCodecText(const RemoteAudioStatus& status)
         .arg(profile.targetBitrate / 1000)
         .arg(packetMs)
         .arg(profile.audioBandwidthHz / 1000);
+}
+
+QString formatRemoteAudioDetails(const RemoteAudioStatus& status,
+                                 const RemoteAudioReceiverTelemetry& playback)
+{
+    using State = RemoteAudioStatus::State;
+    QStringList lines;
+    lines << QStringLiteral("Remote audio: %1").arg(remoteAudioHeadline(status.state));
+    if (status.problem) {
+        lines << QStringLiteral("Problem: %1").arg(remoteAudioProblemText(*status.problem));
+    }
+    lines << QStringLiteral("Codec: %1").arg(remoteAudioCodecText(status));
+    lines << QStringLiteral("Output: %1 (selected)").arg(status.selectedOutput);
+
+    const bool showHealth = status.state != State::NotConnected
+        && status.state != State::MutedHere && status.state != State::RadioOffline;
+    if (showHealth) {
+        lines << (playback.arrivalJitterMs
+            ? QStringLiteral("Arrival jitter: %1 ms").arg(qRound(*playback.arrivalJitterMs))
+            : QStringLiteral("Arrival jitter: not measured yet"));
+        lines << (playback.expectedPackets > 0
+            ? QStringLiteral("Missing packets: %1 of %2")
+                  .arg(playback.missingPackets).arg(playback.expectedPackets)
+            : QStringLiteral("Missing packets: none received yet"));
+        lines << QStringLiteral("Gaps filled: %1").arg(playback.concealedPackets);
+        lines << (playback.speakerQueuedMs
+            ? QStringLiteral("Speaker buffer: %1 ms on this computer")
+                  .arg(qRound(*playback.speakerQueuedMs))
+            : QStringLiteral("Speaker buffer: not measured yet"));
+    }
+    return lines.join(QLatin1Char('\n'));
 }
 
 bool remoteAudioFailureRecovered(const RemoteAudioFailure& failure, quint32 epoch,

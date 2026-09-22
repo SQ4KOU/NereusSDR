@@ -457,6 +457,135 @@ private slots:
         QVERIFY(!noProgress.recovered());
     }
 
+    // R-R3-23 Task 4: the Core connection panel's formatted section, one
+    // scenario per acceptance row.
+    void formatRemoteAudioDetailsCoversEveryRow()
+    {
+        // Playing, with a reported codec: every line present, health
+        // measurements formatted and rounded.
+        {
+            RemoteAudioStatus status;
+            status.state = State::Playing;
+            status.detailNegotiated = true;
+            status.encoder = defaultProfile();
+            status.selectedOutput = QStringLiteral("System default");
+            RemoteAudioReceiverTelemetry playback;
+            playback.arrivalJitterMs = 3.2;
+            playback.missingPackets = 2;
+            playback.expectedPackets = 100;
+            playback.concealedPackets = 5;
+            playback.speakerQueuedMs = 118.7;
+            QCOMPARE(formatRemoteAudioDetails(status, playback), QStringLiteral(
+                "Remote audio: Playing\n"
+                "Codec: Opus stereo, 24 kbit/s target, 40 ms packets, audio up to 8 kHz\n"
+                "Output: System default (selected)\n"
+                "Arrival jitter: 3 ms\n"
+                "Missing packets: 2 of 100\n"
+                "Gaps filled: 5\n"
+                "Speaker buffer: 119 ms on this computer"));
+        }
+
+        // A minor-7 Core: no codec detail, health still measured and shown.
+        {
+            RemoteAudioStatus status;
+            status.state = State::Playing;
+            status.detailNegotiated = false;
+            status.selectedOutput = QStringLiteral("System default");
+            RemoteAudioReceiverTelemetry playback;
+            playback.arrivalJitterMs = 1.4;
+            playback.missingPackets = 0;
+            playback.expectedPackets = 50;
+            playback.concealedPackets = 0;
+            playback.speakerQueuedMs = 12.0;
+            QCOMPARE(formatRemoteAudioDetails(status, playback), QStringLiteral(
+                "Remote audio: Playing\n"
+                "Codec: Not reported by this Core\n"
+                "Output: System default (selected)\n"
+                "Arrival jitter: 1 ms\n"
+                "Missing packets: 0 of 50\n"
+                "Gaps filled: 0\n"
+                "Speaker buffer: 12 ms on this computer"));
+        }
+
+        // PlaybackProblem: the Problem line appears, health stays visible.
+        {
+            RemoteAudioStatus status;
+            status.state = State::PlaybackProblem;
+            status.detailNegotiated = true;
+            status.problem = Fault::SpeakerStalled;
+            status.selectedOutput = QStringLiteral("USB DAC");
+            RemoteAudioReceiverTelemetry playback;
+            playback.arrivalJitterMs = 0.4;
+            playback.missingPackets = 7;
+            playback.expectedPackets = 200;
+            playback.concealedPackets = 3;
+            playback.speakerQueuedMs = 0.0;
+            QCOMPARE(formatRemoteAudioDetails(status, playback), QStringLiteral(
+                "Remote audio: Playback problem on this computer\n"
+                "Problem: The speaker device stopped playing audio.\n"
+                "Codec: Audio is off\n"
+                "Output: USB DAC (selected)\n"
+                "Arrival jitter: 0 ms\n"
+                "Missing packets: 7 of 200\n"
+                "Gaps filled: 3\n"
+                "Speaker buffer: 0 ms on this computer"));
+        }
+
+        // MutedHere: health is omitted, but a problem behind the mute still
+        // shows (matches the real session: mute is what shows, the problem
+        // stays behind it).
+        {
+            RemoteAudioStatus status;
+            status.state = State::MutedHere;
+            status.detailNegotiated = true;
+            status.encoder = defaultProfile();
+            status.selectedOutput = QStringLiteral("System default");
+            status.problem = Fault::SpeakerStalled;
+            RemoteAudioReceiverTelemetry playback;
+            playback.arrivalJitterMs = 5.0;
+            playback.missingPackets = 1;
+            playback.expectedPackets = 10;
+            playback.concealedPackets = 2;
+            playback.speakerQueuedMs = 15.0;
+            QCOMPARE(formatRemoteAudioDetails(status, playback), QStringLiteral(
+                "Remote audio: Muted on this computer\n"
+                "Problem: The speaker device stopped playing audio.\n"
+                "Codec: Opus stereo, 24 kbit/s target, 40 ms packets, audio up to 8 kHz\n"
+                "Output: System default (selected)"));
+        }
+
+        // Unmeasured values: "not measured yet" / "none received yet", and
+        // a Core that negotiated detail but has no encoder in the current
+        // (disabled) context reads "Audio is off".
+        {
+            RemoteAudioStatus status;
+            status.state = State::WaitingForAudio;
+            status.detailNegotiated = true;
+            status.selectedOutput = QStringLiteral("System default");
+            RemoteAudioReceiverTelemetry playback;
+            QCOMPARE(formatRemoteAudioDetails(status, playback), QStringLiteral(
+                "Remote audio: Waiting for audio from Core\n"
+                "Codec: Audio is off\n"
+                "Output: System default (selected)\n"
+                "Arrival jitter: not measured yet\n"
+                "Missing packets: none received yet\n"
+                "Gaps filled: 0\n"
+                "Speaker buffer: not measured yet"));
+        }
+
+        // NotConnected and RadioOffline also omit health, like MutedHere.
+        {
+            RemoteAudioReceiverTelemetry playback;
+            playback.arrivalJitterMs = 9.0;
+            RemoteAudioStatus notConnected;
+            notConnected.state = State::NotConnected;
+            QVERIFY(!formatRemoteAudioDetails(notConnected, playback).contains(QStringLiteral("Arrival jitter")));
+            RemoteAudioStatus offline;
+            offline.state = State::RadioOffline;
+            QVERIFY(!formatRemoteAudioDetails(offline, playback).contains(QStringLiteral("Arrival jitter")));
+        }
+    }
+
     void failureClearingIsWrapAware()
     {
         RemoteAudioFailure nearWrap = recordedFailure();

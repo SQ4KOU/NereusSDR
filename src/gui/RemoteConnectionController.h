@@ -9,6 +9,7 @@
 namespace NereusSDR {
 class RadioModel;
 class StationClient;
+class RemoteMediaController;
 
 // Uses session state, never radio connectivity, to decide whether an
 // operator can connect or cancel. The same controller backs all surfaces.
@@ -42,10 +43,14 @@ private:
 
 // A small modeless view of the configured Core. Full station selection and
 // pairing remain a separate surface; this view always describes the live client.
+// With a media controller, it also shows a "Remote audio" section (current
+// status, codec, output and health) and a Retry button; without one the
+// panel is unchanged.
 class RemoteConnectionPanel final : public QDialog {
     Q_OBJECT
 public:
     explicit RemoteConnectionPanel(RemoteConnectionController* controller,
-                                   QWidget* parent = nullptr);
+                                   QWidget* parent = nullptr,
+                                   RemoteMediaController* media = nullptr);
 };
 } // namespace NereusSDR

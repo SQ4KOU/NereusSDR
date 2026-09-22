@@ -1,16 +1,34 @@
 // no-port-check: NereusSDR-original. Remote telemetry lifecycle/presentation.
 #include <QTest>
+#include <QRegularExpression>
 #include <QTemporaryDir>
+#include <QTimer>
 #include "core/AppSettings.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
+#include "core/session/media/DaemonMediaController.h"
 #include "core/settings/SettingsProxy.h"
+#include "gui/RemoteAudioStatus.h"
+#include "gui/RemoteMediaController.h"
 #include "gui/RemoteTelemetryController.h"
 #include "models/RadioModel.h"
 #include "fakes/LoopbackTransport.h"
+#include "fakes/RemoteAudioSessionHarness.h"
 
 using namespace NereusSDR;
 using Metric = TelemetryHistory::Metric;
+
+namespace {
+// What the controller logs when a playing speaker stops reporting timing.
+// Mirrors tst_remote_media_controller.cpp's speakerTimingLostLog(): the
+// worker's pacing check or its next write notices first.
+QRegularExpression remoteAudioSpeakerTimingLostLog()
+{
+    return QRegularExpression(QStringLiteral(
+        "^Remote audio playback failed: (Speaker device timing became unavailable"
+        "|Could not write remote audio to the speaker device) \\[ageMs="));
+}
+} // namespace
 
 class ObservedLoopback final : public Test::LoopbackTransport {
 public:
@@ -77,6 +95,11 @@ private slots:
         QVERIFY(!controller.current().playbackActive); // running alone is not playback
         QVERIFY(controller.bannerText().contains(QStringLiteral("Radio ↓12.5 ↑0.1 Mbps")));
         QVERIFY(controller.bannerText().contains(QStringLiteral("Core RTT 83 ms")));
+        // R-R3-23 Task 4: unmeasured wording before any packet/health values.
+        QVERIFY(controller.detailText().contains(QStringLiteral("Arrival jitter: not measured yet.")));
+        QVERIFY(controller.detailText().contains(QStringLiteral("Missing packets: none received yet.")));
+        QVERIFY(controller.detailText().contains(QStringLiteral("Gaps filled: 0, concealed 40 ms intervals.")));
+        QVERIFY(controller.detailText().contains(QStringLiteral("Speaker buffer: not measured yet.")));
 
         now += 1000;
         guiWire->observation.receivedPayloadBytes += 2000;
@@ -85,6 +108,10 @@ private slots:
         playback.deviceConsumedFrames = 48000;
         playback.lastAdmittedPacketAgeMs = 20;
         playback.lastDeviceProgressAgeMs = 5;
+        playback.arrivalJitterMs = 3.7;
+        playback.missingPackets = 2;
+        playback.expectedPackets = 100;
+        playback.speakerQueuedMs = 41.2;
         controller.sampleNow();
         QCOMPARE(controller.current().controlRxKbps, std::optional<double>(16.0));
         QCOMPARE(controller.current().controlTxKbps, std::optional<double>(32.0));
@@ -93,6 +120,12 @@ private slots:
         QCOMPARE(controller.history().series(Metric::PlaybackDecodedPacketsPerSecond, now, 60).points.last().value, 25.0);
         QVERIFY(controller.detailText().contains(QStringLiteral("excluding media")));
         QVERIFY(controller.detailText().contains(QStringLiteral("measured 20000 ms ago")));
+        // R-R3-23 Task 4: measured values, rounded, labelled with what they
+        // are, no RTP/generation words.
+        QVERIFY(controller.detailText().contains(QStringLiteral("Arrival jitter: 4 ms, measured on this computer.")));
+        QVERIFY(controller.detailText().contains(QStringLiteral("Missing packets: 2 of 100, sequence numbers never received.")));
+        QVERIFY(controller.detailText().contains(QStringLiteral("Gaps filled: 0, concealed 40 ms intervals.")));
+        QVERIFY(controller.detailText().contains(QStringLiteral("Speaker buffer: 41 ms, audio queued for this computer's speaker, not total delay.")));
 
         // The previous context failed and restarted entirely between polls.
         // Its per-context counters have reset; the actual interruption remains.
@@ -147,6 +180,54 @@ private slots:
         QVERIFY(series.points.last().breakBefore);
         QVERIFY(!controller.current().controlRxKbps); // new transport baseline
         client.disconnectFromStation(QStringLiteral("done"));
+    }
+
+    // R-R3-23 Task 4: with a real media controller, bannerText()'s audio
+    // word is the GUI's own persistent remote audio status, not the
+    // running/decoding heuristic. Mute and a real speaker fault (PacedAudioBus
+    // withdrawing its device timing, never a receiver signal emitted
+    // directly) both drive it through a real session.
+    void bannerWordTracksMuteAndARealSpeakerFaultThroughMediaController()
+    {
+        using State = RemoteAudioStatus::State;
+        Test::RemoteAudioSessionHarness h;
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
+        DaemonMediaController daemonMedia(&h.server, &h.station);
+        RemoteTelemetryController controller(&h.client, &remoteMedia);
+
+        QTimer sourceTimer;
+        sourceTimer.setInterval(10);
+        sourceTimer.setTimerType(Qt::PreciseTimer);
+        connect(&sourceTimer, &QTimer::timeout, &sourceTimer, [&h] { h.feedMixedTone(); });
+        QTimer speakerTimer;
+        speakerTimer.setInterval(10);
+        speakerTimer.setTimerType(Qt::PreciseTimer);
+        connect(&speakerTimer, &QTimer::timeout, &speakerTimer, [&h] {
+            h.remoteBus->render(Test::RemoteAudioSessionHarness::kFrames);
+        });
+        sourceTimer.start();
+        speakerTimer.start();
+
+        h.connectSession();
+        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state, State::Playing, 15000);
+        controller.sampleNow();
+        QVERIFY(controller.bannerText().contains(QStringLiteral("Audio playing")));
+
+        h.remote.audioEngine()->setMasterMuted(true);
+        QCOMPARE(remoteMedia.audioStatus().state, State::MutedHere);
+        QVERIFY(controller.bannerText().contains(QStringLiteral("Audio muted")));
+
+        h.remote.audioEngine()->setMasterMuted(false);
+        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state, State::Playing, 15000);
+
+        QTest::ignoreMessage(QtWarningMsg, remoteAudioSpeakerTimingLostLog());
+        h.remoteBus->setOutputPacingAvailableForTesting(false);
+        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state, State::PlaybackProblem, 5000);
+        QVERIFY(controller.bannerText().contains(QStringLiteral("Audio unavailable")));
+
+        sourceTimer.stop();
+        speakerTimer.stop();
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
     void trafficSeparatesOpusAndResetsEachLifetime()

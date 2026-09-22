@@ -70,6 +70,17 @@ QString remoteAudioProblemText(RemoteAudioReceiver::Fault fault);
 /// was but the current context carries no encoder.
 QString remoteAudioCodecText(const RemoteAudioStatus& status);
 
+/// The Core connection panel's "Remote audio" section, one line per item
+/// joined with '\n': headline, problem (only when status.problem is set),
+/// codec, output, then four measurement lines (arrival jitter, missing
+/// packets, gaps filled, speaker buffer) each showing "not measured yet" (or
+/// "none received yet" for missing packets) until playback has a value. The
+/// four measurement lines are omitted together when status.state is
+/// NotConnected, MutedHere or RadioOffline. Numbers are integers; jitter and
+/// the speaker buffer are rounded.
+QString formatRemoteAudioDetails(const RemoteAudioStatus& status,
+                                 const RemoteAudioReceiverTelemetry& playback);
+
 /// The identity a persistent playback failure is recorded against: the
 /// session (epoch and connection), the accepted audio context it happened
 /// in, and the receiver generation that was playing, or trying to play, it.
