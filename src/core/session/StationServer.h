@@ -360,6 +360,13 @@ public:
     /// late work must never target a replacement session.
     bool sendMediaControl(const QJsonObject& payload, quint64 expectedEpoch);
 
+    /// Observations are independently available even in a control-only session.
+    /// Configure before accepting a client; never change negotiated support live.
+    void setTelemetryEnabled(bool enabled);
+    bool telemetryAvailable() const;
+    quint64 sessionEpoch() const { return m_mediaSessionEpoch; }
+    bool sendTelemetry(const StationTelemetrySnapshot& snapshot, quint64 expectedEpoch);
+
     /// The capability descriptor this daemon would advertise right now.
     /// Public so a caller (and this task's tests) can inspect what a
     /// client is about to be told without standing up a client.
@@ -371,6 +378,8 @@ public:
     SettingsProxyServer* settingsServer() const { return m_settingsServer; }
 
 signals:
+    void telemetrySessionStarted(quint64 epoch);
+    void telemetrySessionEnded(quint64 epoch);
     void mediaSessionStarted(quint64 epoch);
     void mediaSessionEnded(quint64 epoch);
     void mediaControlReceived(const QJsonObject& payload, quint64 epoch);
@@ -476,6 +485,7 @@ private:
     QHash<SessionTransport*, Peer> m_peers;
     SessionTransport* m_session = nullptr;
     bool m_mediaEnabled = false;
+    bool m_telemetryEnabled = false;
     quint64 m_mediaSessionEpoch = 0;
 
     QTimer* m_heartbeatTimer = nullptr;

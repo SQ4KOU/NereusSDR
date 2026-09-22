@@ -4,6 +4,8 @@
 #include <QElapsedTimer>
 #include <QSignalSpy>
 #include <cmath>
+#include <chrono>
+#include <thread>
 #include "core/AudioEngine.h"
 #include "core/session/media/OpusAudioCodec.h"
 #include "core/session/media/RemoteAudioReceiver.h"
@@ -34,6 +36,157 @@ private slots:
         engine.endRemotePlayback();
         QVERIFY(!engine.remotePlaybackPacing());
         QVERIFY(!engine.writeRemotePlayback(pcm));
+    }
+    void telemetryTracksActualReceiverActivityAndContext()
+    {
+        AudioEngine engine;
+        engine.setVolume(1.0f);
+        auto sink = std::make_unique<PacedAudioBus>();
+        auto* bus = sink.get();
+        engine.setSpeakersBusForTest(std::move(sink));
+        RemoteAudioReceiver receiver(&engine);
+        QVERIFY(receiver.start(321, 0));
+
+        const auto started = receiver.telemetry();
+        QVERIFY(started.running);
+        QCOMPARE(started.acceptedPackets, quint64(0));
+        QCOMPARE(started.decodedPackets, quint64(0));
+        QCOMPARE(started.rejectedHeaders, quint64(0));
+        QCOMPARE(started.deviceConsumedFrames, quint64(0));
+        QVERIFY(!started.lastAdmittedPacketAgeMs);
+        QVERIFY(!started.lastDeviceProgressAgeMs);
+
+        receiver.submit(QByteArrayLiteral("not an RTP packet"));
+        QCOMPARE(receiver.telemetry().rejectedHeaders, quint64(1));
+
+        OpusAudioEncoder encoder;
+        const QVector<float> pcm(3840, 0.1f);
+        const auto encoded = encoder.encode(pcm, 7, 0, 321);
+        QCOMPARE(encoded.status, OpusAudioCodecStatus::Accepted);
+        receiver.submit(encoded.packet);
+        receiver.submit(encoded.packet); // Actual jitter-buffer duplicate decision.
+
+        QTimer device;
+        device.setTimerType(Qt::PreciseTimer);
+        device.setInterval(1);
+        QElapsedTimer deviceClock;
+        deviceClock.start();
+        quint64 renderedFrames = 0;
+        connect(&device, &QTimer::timeout, this, [&] {
+            const quint64 due = quint64(deviceClock.nsecsElapsed()) * 48000 / 1'000'000'000;
+            while (due >= renderedFrames + 480) {
+                bus->render(480);
+                renderedFrames += 480;
+            }
+        });
+        device.start();
+
+        int packet = 1;
+        QTimer source;
+        source.setTimerType(Qt::PreciseTimer);
+        source.setInterval(1);
+        QElapsedTimer sourceClock;
+        sourceClock.start();
+        connect(&source, &QTimer::timeout, this, [&] {
+            const int duePackets = int(sourceClock.elapsed() / 40) + 1;
+            while (packet < duePackets) {
+                const auto next = encoder.encode(pcm, quint16(packet), quint32(packet) * 1920, 321);
+                if (next.status == OpusAudioCodecStatus::Accepted) {
+                    receiver.submit(next.packet);
+                }
+                ++packet;
+            }
+        });
+        source.start();
+        QTRY_VERIFY_WITH_TIMEOUT([&] {
+            const auto snapshot = receiver.telemetry();
+            return snapshot.acceptedPackets > 0 && snapshot.duplicatePackets == 1
+                && snapshot.decodedPackets > 0 && snapshot.deviceConsumedFrames > 0
+                && snapshot.lastAdmittedPacketAgeMs.has_value()
+                && snapshot.lastDeviceProgressAgeMs.has_value();
+        }(), 1000);
+
+        const auto active = receiver.telemetry();
+        QVERIFY(active.running);
+        QCOMPARE(active.rejectedHeaders, quint64(1));
+        QCOMPARE(active.duplicatePackets, quint64(1));
+        source.stop();
+        device.stop();
+        receiver.stop();
+
+        const auto stopped = receiver.telemetry();
+        QVERIFY(!stopped.running);
+        QVERIFY(stopped.acceptedPackets > 0);
+        QVERIFY(stopped.decodedPackets > 0);
+        QCOMPARE(stopped.rejectedHeaders, quint64(1));
+        QCOMPARE(stopped.duplicatePackets, quint64(1));
+        QVERIFY(stopped.lastAdmittedPacketAgeMs);
+        QVERIFY(stopped.lastDeviceProgressAgeMs);
+
+        QVERIFY(receiver.start(321, 1920));
+        const auto restarted = receiver.telemetry();
+        QVERIFY(restarted.running);
+        QVERIFY(restarted.generation > stopped.generation);
+        QCOMPARE(restarted.acceptedPackets, quint64(0));
+        QCOMPARE(restarted.decodedPackets, quint64(0));
+        QCOMPARE(restarted.rejectedHeaders, quint64(0));
+        QCOMPARE(restarted.deviceConsumedFrames, quint64(0));
+        QVERIFY(!restarted.lastAdmittedPacketAgeMs);
+        QVERIFY(!restarted.lastDeviceProgressAgeMs);
+        receiver.stop();
+    }
+    void telemetryLifetimeInterruptionsSurviveContextRestart()
+    {
+        AudioEngine engine;
+        engine.setVolume(1.0f);
+        auto sink = std::make_unique<PacedAudioBus>();
+        auto* bus = sink.get();
+        engine.setSpeakersBusForTest(std::move(sink));
+        RemoteAudioReceiver receiver(&engine);
+        QVERIFY(receiver.start(654, 0));
+
+        const auto baseline = receiver.telemetry();
+        QVERIFY(baseline.lifetimeUnderflows);
+        QVERIFY(baseline.lifetimeOverflows);
+        QCOMPARE(*baseline.lifetimeUnderflows, quint64(0));
+        QCOMPARE(*baseline.lifetimeOverflows, quint64(0));
+
+        OpusAudioEncoder encoder;
+        const auto encoded = encoder.encode(QVector<float>(3840, 0.1f), 0, 0, 654);
+        QCOMPARE(encoded.status, OpusAudioCodecStatus::Accepted);
+        receiver.submit(encoded.packet);
+
+        // Deliberately outpace 48 kHz while the real worker drains its WDSP
+        // matcher. This exercises the same interruption/restart path that a
+        // stalled producer would use, rather than changing matcher counters.
+        QSignalSpy restarts(&receiver, &RemoteAudioReceiver::restartRequested);
+        // QtTest coalesces GUI timers, which can turn a nominal 1 ms timer
+        // into normal-rate consumption. Drive the fake device independently,
+        // just as the actual device callback is independent of the GUI loop.
+        std::jthread device([bus](std::stop_token stop) {
+            while (!stop.stop_requested()) {
+                bus->render(480);
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        });
+        QTRY_VERIFY_WITH_TIMEOUT(receiver.rateMatcherUnderflows() > 0 && !restarts.isEmpty(), 1500);
+        device.request_stop();
+        device.join();
+
+        // Do not sample the retired context. A restart entirely between
+        // telemetry polls must still retain the interruption in the lifetime
+        // total while the new context's counters start from zero.
+        receiver.stop();
+        QVERIFY(receiver.start(654, 1920));
+        const auto restarted = receiver.telemetry();
+        QVERIFY(restarted.running);
+        QCOMPARE(restarted.underflows, 0);
+        QCOMPARE(restarted.overflows, 0);
+        QVERIFY(restarted.lifetimeUnderflows);
+        QVERIFY(*restarted.lifetimeUnderflows > 0);
+        QVERIFY(restarted.lifetimeOverflows);
+        QCOMPARE(*restarted.lifetimeOverflows, quint64(0));
+        receiver.stop();
     }
     void rtpPlaybackLossAndFreshGeneration_data()
     {

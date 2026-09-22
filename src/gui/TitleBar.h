@@ -71,6 +71,7 @@
 #include "core/ConnectionState.h"
 
 #include <QQueue>
+#include <QSize>
 #include <QTimer>
 #include <QWidget>
 
@@ -130,6 +131,13 @@ public:
     // Remote mode reports Core session state; local-radio rates are unavailable.
     void setRemoteStatusText(const QString& text);
     QString remoteStatusText() const { return m_remoteStatusText; }
+    // Telemetry supplements the remote session status. It intentionally does
+    // not replace it: authentication/session state and measurements answer
+    // different operator questions.
+    void setRemoteTelemetryText(const QString& text);
+    QString remoteTelemetryText() const { return m_remoteTelemetryText; }
+
+    QSize sizeHint() const override;
 
 public slots:
     // Throttled activity tick — nudges a repaint so the pulse looks "live".
@@ -150,9 +158,11 @@ private:
     QColor stateDotColor() const;
     QColor rttColor(int rttMs) const;
     QColor audioPipColor(AudioEngine::FlowState s) const;
+    QString remotePresentationText() const;
 
     ConnectionState         m_state{ConnectionState::Disconnected};
     QString                 m_remoteStatusText;
+    QString                 m_remoteTelemetryText;
     double                  m_rxMbps{0.0};
     double                  m_txMbps{0.0};
     int                     m_rttMs{-1};

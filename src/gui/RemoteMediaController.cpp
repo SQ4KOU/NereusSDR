@@ -312,6 +312,10 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
 RemoteMediaController::~RemoteMediaController() { stop(); }
 quint64 RemoteMediaController::receivedDisplayFrames() const { return d->frames; }
 int RemoteMediaController::activeEndpointCount() const { return int(d->bindings.size()); }
+RemoteAudioReceiverTelemetry RemoteMediaController::audioTelemetry() const
+{
+    return d->audio->telemetry();
+}
 
 void RemoteMediaController::stop()
 {

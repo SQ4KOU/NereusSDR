@@ -42,15 +42,26 @@
 // =================================================================
 
 #include <QByteArray>
+#include <QElapsedTimer>
 #include <QObject>
 #include <QPointer>
 #include <QString>
+#include <optional>
 
 QT_BEGIN_NAMESPACE
 class QWebSocket;
 QT_END_NAMESPACE
 
 namespace NereusSDR {
+
+// UTF-8 application payload totals, not TLS/WebSocket wire traffic and not
+// media bandwidth. Pong RTT is observational; it never drives liveness.
+struct SessionTransportTelemetry {
+    quint64 receivedPayloadBytes = 0;
+    quint64 acceptedPayloadBytes = 0;
+    std::optional<quint64> pongRttMs;
+    std::optional<qint64> pongAgeMs;
+};
 
 class SessionTransport : public QObject {
     Q_OBJECT
@@ -80,6 +91,10 @@ public:
     /// Human-readable peer identification for logs ("127.0.0.1:54321").
     /// Never used as an identity for authorisation.
     virtual QString peerDescription() const = 0;
+
+    /// Read only on the transport's owner thread. Unsupported test/custom
+    /// transports return absent rather than a fabricated zero measurement.
+    virtual std::optional<SessionTransportTelemetry> telemetry() const { return std::nullopt; }
 
 signals:
     void textReceived(const QByteArray& wire);
@@ -127,6 +142,7 @@ public:
     void closeLink(const QString& reason) override;
     bool isOpen() const override;
     QString peerDescription() const override;
+    std::optional<SessionTransportTelemetry> telemetry() const override;
 
     QWebSocket* socket() const { return m_socket; }
 
@@ -139,6 +155,8 @@ private:
     // own accessors need the complete type.
     QWebSocket* m_socket = nullptr;
     bool m_closing = false;
+    SessionTransportTelemetry m_telemetry;
+    QElapsedTimer m_pongAge;
 };
 
 } // namespace NereusSDR

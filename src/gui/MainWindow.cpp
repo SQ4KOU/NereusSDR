@@ -243,6 +243,8 @@ warren@wpratt.com
 #include "MainWindow.h"
 #include "ConnectionPanel.h"
 #include "NetworkDiagnosticsDialog.h"
+#include "RemoteDiagnosticsDialog.h"
+#include "RemoteTelemetryController.h"
 #include "SupportDialog.h"
 #include "AboutDialog.h"
 #include "SpectrumWidget.h"
@@ -630,7 +632,11 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent)
         // against PR #158, MainWindow.cpp:482).
         connect(seg, &ConnectionSegment::rttClicked, this, [this]() {
             if (!m_radioModel->ownsLocalDsp()) {
-                connectionRequestedByOperator();
+                if (m_stationClient && m_stationClient->isHandshakeComplete()) {
+                    openNetworkDiagnostics();
+                } else {
+                    connectionRequestedByOperator();
+                }
                 return;
             }
             const auto state = m_radioModel->connectionState();
@@ -922,6 +928,8 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent)
 
 MainWindow::~MainWindow()
 {
+    delete m_remoteTelemetry;
+    m_remoteTelemetry = nullptr;
     // Join remote playback before QObject destroys the earlier-created
     // RadioModel child and its speaker AudioEngine.
     delete m_remoteMedia;
@@ -979,6 +987,13 @@ void MainWindow::connectToStation()
                 this, &MainWindow::applyRemoteRoleGating);
         m_remoteMedia = new RemoteMediaController(m_stationClient, m_radioModel,
                                                m_panStack, m_stationClient);
+        m_remoteTelemetry = new RemoteTelemetryController(
+            m_stationClient, m_remoteMedia, this);
+        connect(m_remoteTelemetry, &RemoteTelemetryController::changed, this, [this] {
+            if (m_titleBar) {
+                m_titleBar->connectionSegment()->setRemoteTelemetryText(m_remoteTelemetry->bannerText());
+            }
+        });
         connect(m_remoteMedia, &RemoteMediaController::errorOccurred, this, [this](const QString& reason) {
             qCWarning(lcConnection) << "Station media:" << reason;
             showToast(tr("Station media: %1").arg(reason), ToastSeverity::Warning, 5000);
@@ -1084,6 +1099,7 @@ void MainWindow::refreshRemoteConnectionUi()
         auto* segment = m_titleBar->connectionSegment();
         segment->setState(m_remoteConnection->state());
         segment->setRemoteStatusText(m_remoteConnection->statusText());
+        segment->setRemoteTelemetryText(m_remoteTelemetry ? m_remoteTelemetry->bannerText() : QString{});
     }
     if (m_stationBlock) {
         m_stationBlock->setRadioName(tr("Core %1").arg(m_remoteConnection->endpointText()));
@@ -9801,6 +9817,7 @@ bool MainWindow::eventFilter(QObject* watched, QEvent* event)
         auto* helpEvent = static_cast<QHelpEvent*>(event);
         QToolTip::showText(helpEvent->globalPos(),
                            m_remoteConnection ? m_remoteConnection->detailText()
+                               + (m_remoteTelemetry ? QLatin1Char('\n') + m_remoteTelemetry->detailText() : QString{})
                                               : m_radioModel->buildConnectionTooltip(),
                            m_titleBar->connectionSegment());
         return true;
@@ -9938,16 +9955,11 @@ void MainWindow::showConnectionPanel()
 
 void MainWindow::openNetworkDiagnostics()
 {
-    // Every figure this dialog paints is sourced from THIS process's
-    // RadioConnection (nullptr in Role::Remote -- NetworkDiagnosticsDialog
-    // null-guards it, so the window opens and reads zero) or from its
-    // AudioEngine (constructed but never started, so the audio section
-    // reads a device that is not running). Neither says anything about the
-    // link that matters to a remote operator, which is the Core session.
-    // R3's connection panel reports its current state and failure reason.
-    // Radio-path counters and R5 reachability diagnostics are separate work.
     if (m_radioModel != nullptr && !m_radioModel->ownsLocalDsp()) {
-        showRemoteConnectionPanel();
+        if (!m_remoteTelemetry) { showRemoteConnectionPanel(); return; }
+        auto* dlg = new RemoteDiagnosticsDialog(m_remoteTelemetry, this);
+        dlg->setAttribute(Qt::WA_DeleteOnClose);
+        dlg->show();
         return;
     }
 

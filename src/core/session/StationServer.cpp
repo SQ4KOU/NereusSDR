@@ -510,6 +510,7 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
             m_radioModel->clearStreamCtunPins();
         }
         emit mediaSessionEnded(m_mediaSessionEpoch);
+        emit telemetrySessionEnded(m_mediaSessionEpoch);
         // Stop draining deltas into nothing. StateMirror keeps watching --
         // the daemon's own state is not the session's to tear down -- and
         // the next attachSession() clears whatever the coalescer holds
@@ -853,6 +854,9 @@ void StationServer::promoteToSession(SessionTransport* transport)
     if (m_session == transport && mediaAvailable()) {
         emit mediaSessionStarted(m_mediaSessionEpoch);
     }
+    if (m_session == transport && telemetryAvailable()) {
+        emit telemetrySessionStarted(m_mediaSessionEpoch);
+    }
 }
 
 // ── Mirror wiring ────────────────────────────────────────────────────────
@@ -1010,6 +1014,31 @@ void StationServer::setMediaEnabled(bool enabled)
     }
 }
 
+void StationServer::setTelemetryEnabled(bool enabled)
+{
+    if (!m_session) { m_telemetryEnabled = enabled; }
+}
+
+bool StationServer::telemetryAvailable() const
+{
+    const auto it = m_peers.constFind(m_session);
+    return m_telemetryEnabled && it != m_peers.cend() && it->authenticated
+        && it->snapshotComplete && it->agreedMinor >= kStationTelemetrySessionProtocolMinor;
+}
+
+bool StationServer::sendTelemetry(const StationTelemetrySnapshot& snapshot,
+                                  quint64 expectedEpoch)
+{
+    if (!telemetryAvailable() || expectedEpoch != m_mediaSessionEpoch) { return false; }
+    SessionMessage message;
+    message.kind = SessionMessageKind::StationTelemetry;
+    message.telemetry = snapshot;
+    const QByteArray wire = SessionMessages::encode(message);
+    if (wire.isEmpty()) { return false; }
+    m_session->sendText(wire);
+    return true;
+}
+
 bool StationServer::mediaAvailable() const
 {
     const auto it = m_peers.constFind(m_session);
@@ -1077,6 +1106,7 @@ StationCapabilities StationServer::buildCapabilities() const
     caps.txPermitted = false;
     caps.remoteMediaVersion = m_mediaEnabled ? 1 : 0;
     caps.remoteCtunVersion = 1;
+    caps.stationTelemetryVersion = m_telemetryEnabled ? 1 : 0;
 
     return caps;
 }

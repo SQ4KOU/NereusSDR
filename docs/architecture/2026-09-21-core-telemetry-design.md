@@ -110,12 +110,18 @@ No added pings. RTT has its own age: a 1 Hz telemetry update does not renew an
 old RTT measurement. A session pong is normally 20 seconds apart; do not expire
 it at the three-second station snapshot threshold. Use the existing heartbeat
 period to bound RTT freshness separately and clear it immediately on teardown.
+RTT charts are explicitly labelled last-observed gauges: hold the last measured
+value between pings while its age advances; expire Core RTT after 60 seconds.
+Holding a gauge does not represent a fresh RTT measurement or add new pings.
 
 Expose a thread-safe, read-only receiver diagnostic snapshot from
 `RemoteAudioReceiver`, including generation and running state. Reuse the actual
 admission decisions and counters. A snapshot must not access worker-owned jitter
 or resampler objects concurrently, block the audio callback, or alter restart
-policy. Derive playback activity from actual decoded/device progress, not from
+policy. Preserve lifetime underflow/overflow totals across receiver context
+restarts, including events at worker exit, so an interruption between GUI
+polls remains observable. Unavailable lifecycle snapshots must not reset those
+baselines. Derive playback activity from actual decoded/device progress, not from
 `isRunning()` alone. Preserve output mute/volume behavior.
 
 ## Current display and history
@@ -136,8 +142,8 @@ for reconnect, media-context changes and metric unavailability as applicable.
 Do not repeatedly append a stale station value as if newly measured.
 
 Adapt Aether's retention: one hour of raw samples, then minute buckets through
-seven days. Store per-metric valid weights/sums so repeated compaction preserves
-averages; unavailable fields do not contribute zero. Windows up to five minutes
+seven days. Store per-metric valid weights and weighted means so repeated compaction
+preserves averages without overflowing sums of finite values; unavailable fields do not contribute zero. Windows up to five minutes
 use raw points; longer windows use `max(5 s, range/300)` buckets at their centres.
 Keep gaps at more than three expected intervals, and explicit breaks for a
 disconnect even if it lasts less than that. Bucket compaction must preserve

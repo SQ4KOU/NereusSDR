@@ -118,6 +118,7 @@
 #include <QJsonObject>
 
 #include "core/session/MirrorSchema.h"
+#include "core/session/StationTelemetry.h"
 
 namespace NereusSDR {
 
@@ -151,6 +152,8 @@ enum class SessionMessageKind {
     SettingsReject,
     // R3: bounded control/signalling for the separate encrypted media peer.
     MediaControl,
+    // R3: bounded, capability-gated station observations. Never a command.
+    StationTelemetry,
 };
 
 /// The session protocol's own semantic version, advertised by BOTH ends in
@@ -170,10 +173,12 @@ enum class SessionMessageKind {
 /// provisional. R3 swapping the codec under the same object model is a
 /// minor bump at most.
 inline constexpr quint16 kSessionProtocolMajor = 1;
-inline constexpr quint16 kSessionProtocolMinor = 2;
+inline constexpr quint16 kSessionProtocolMinor = 3;
 inline constexpr quint16 kMediaSessionProtocolMinor = 1;
 inline constexpr quint16 kRemoteCtunSessionProtocolMinor = 2;
+inline constexpr quint16 kStationTelemetrySessionProtocolMinor = 3;
 inline constexpr qsizetype kMaxMediaControlBytes = 128 * 1024;
+inline constexpr qsizetype kMaxStationTelemetryBytes = 16 * 1024;
 
 /// One property's WIRE DECLARATION: name, ordinal and kind, carrying no
 /// live value. This is what a Schema message announces once per class per
@@ -203,6 +208,8 @@ struct SessionSchemaField {
 ///                          affectedKeys
 struct SessionMessage {
     SessionMessageKind kind = SessionMessageKind::Delta;
+
+    StationTelemetrySnapshot telemetry;
 
     QByteArray className;
     QList<SessionSchemaField> fields;

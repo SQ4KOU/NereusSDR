@@ -1,0 +1,210 @@
+// =================================================================
+// tests/tst_remote_diagnostics.cpp  (NereusSDR)
+// =================================================================
+// NereusSDR-original coverage for the remote telemetry presentation.
+// =================================================================
+
+#include <QtTest/QtTest>
+
+#include <QComboBox>
+#include <QLabel>
+#include <QPixmap>
+#include <QTabWidget>
+#include <QTemporaryDir>
+
+#include <optional>
+
+#include "core/AppSettings.h"
+#include "core/session/SessionTransport.h"
+#include "core/session/StationClient.h"
+#include "core/session/StationServer.h"
+#include "core/settings/SettingsProxy.h"
+#include "fakes/LoopbackTransport.h"
+#include "gui/RemoteDiagnosticsDialog.h"
+#include "gui/RemoteTelemetryController.h"
+#include "gui/TimeSeriesGraphWidget.h"
+#include "models/RadioModel.h"
+
+using namespace NereusSDR;
+
+namespace {
+
+class ObservedLoopback final : public Test::LoopbackTransport {
+public:
+    ObservedLoopback() : LoopbackTransport(QStringLiteral("GUI")) {}
+
+    SessionTransportTelemetry observation;
+
+    std::optional<SessionTransportTelemetry> telemetry() const override
+    {
+        return isOpen() ? std::optional{observation} : std::nullopt;
+    }
+};
+
+const TimeSeriesGraphWidget::Series* namedSeries(const TimeSeriesGraphWidget* graph,
+                                                  const QString& label)
+{
+    for (const TimeSeriesGraphWidget::Series& series : graph->series()) {
+        if (series.label == label) {
+            return &series;
+        }
+    }
+    return nullptr;
+}
+
+} // namespace
+
+class TstRemoteDiagnostics : public QObject {
+    Q_OBJECT
+
+private slots:
+    void constructionAndControllerLifecycleAreSafe()
+    {
+        RemoteDiagnosticsDialog nullDialog(nullptr);
+        QVERIFY(nullDialog.findChild<QTabWidget*>(QStringLiteral("remoteDiagnosticsTabs")));
+        QCOMPARE(nullDialog.rangeSeconds(), 5 * 60);
+
+        auto* controller = new RemoteTelemetryController(nullptr, nullptr);
+        RemoteDiagnosticsDialog dialog(controller);
+        dialog.show();
+        QTRY_VERIFY(dialog.isVisible());
+        delete controller;
+        QTRY_VERIFY(dialog.controller() == nullptr);
+        auto* detail = dialog.findChild<QLabel*>(QStringLiteral("remoteDiagnosticsDetail"));
+        QVERIFY(detail);
+        QVERIFY(detail->text().contains(QStringLiteral("unavailable")));
+    }
+
+    void authenticatedTelemetryDrivesVisibleProductionGraphs()
+    {
+        QTemporaryDir directory;
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        StationServer server(&station, settings, directory.path());
+        server.setTelemetryEnabled(true);
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        qint64 now = 10000;
+        RemoteAudioReceiverTelemetry playback;
+        RemoteTelemetryController controller(&client, nullptr, nullptr,
+            [&] { return now; }, [&] { return playback; });
+
+        auto* guiWire = new ObservedLoopback;
+        auto* coreWire = new Test::LoopbackTransport(QStringLiteral("Core"));
+        guiWire->linkTo(coreWire);
+        server.acceptTransport(coreWire);
+        client.startSession(guiWire, server.token());
+        QTRY_VERIFY(client.isHandshakeComplete());
+
+        guiWire->observation.pongRttMs = 83;
+        guiWire->observation.pongAgeMs = 20;
+        playback.running = true;
+        playback.generation = 4;
+        controller.sampleNow(); // Establish transport/playback counter baselines.
+
+        StationTelemetrySnapshot sample;
+        sample.sequence = 1;
+        sample.sampledElapsedMs = 200;
+        sample.radio.connected = true;
+        sample.radio.rxMbps = 12.5;
+        sample.radio.txMbps = 0.1;
+        sample.radio.rttMs = 7;
+        sample.radio.rttAgeMs = 10;
+        sample.audio.active = true;
+        sample.audio.contextGeneration = 2;
+        sample.audio.sourceFramesPerSecond = 48.0;
+        sample.audio.encodedPacketsPerSecond = 25.0;
+        sample.audio.sendAcceptedPerSecond = 24.0;
+        sample.audio.sendRejectedPerSecond = 1.0;
+        sample.audio.sourceDropsPerSecond = 2.0;
+        QVERIFY(server.sendTelemetry(sample, server.sessionEpoch()));
+        QTRY_COMPARE(controller.current().state, RemoteTelemetryView::State::Current);
+
+        now += 1000;
+        guiWire->observation.receivedPayloadBytes += 2000;
+        guiWire->observation.acceptedPayloadBytes += 4000;
+        playback.decodedPackets = 25;
+        playback.concealedPackets = 2;
+        playback.latePackets = 1;
+        playback.underflows = 3;
+        playback.overflows = 4;
+        playback.lastAdmittedPacketAgeMs = 20;
+        playback.lastDeviceProgressAgeMs = 5;
+        controller.sampleNow();
+
+        RemoteDiagnosticsDialog dialog(&controller);
+        dialog.show();
+        QTRY_VERIFY(dialog.isVisible());
+        auto* radioGraph = dynamic_cast<TimeSeriesGraphWidget*>(dialog.findChild<QWidget*>(
+            QStringLiteral("remoteRadioLinkGraph")));
+        auto* controlGraph = dynamic_cast<TimeSeriesGraphWidget*>(dialog.findChild<QWidget*>(
+            QStringLiteral("remoteControlPayloadGraph")));
+        auto* rttGraph = dynamic_cast<TimeSeriesGraphWidget*>(dialog.findChild<QWidget*>(
+            QStringLiteral("remoteRoundTripGraph")));
+        QVERIFY(radioGraph);
+        QVERIFY(controlGraph);
+        QVERIFY(rttGraph);
+        auto* selector = dialog.findChild<QComboBox*>(QStringLiteral("remoteDiagnosticsRange"));
+        QVERIFY(selector);
+        selector->setCurrentIndex(selector->findData(15 * 60));
+        QCOMPARE(dialog.rangeSeconds(), 15 * 60);
+        // These two readings are only one second apart. Inspect raw history;
+        // a 15-minute view legitimately omits their incomplete 5s bucket.
+        selector->setCurrentIndex(selector->findData(60));
+        QCOMPARE(dialog.rangeSeconds(), 60);
+        QTRY_VERIFY(namedSeries(radioGraph, QStringLiteral("Radio RX")) != nullptr);
+
+        const auto* radioRx = namedSeries(radioGraph, QStringLiteral("Radio RX"));
+        const auto* radioTx = namedSeries(radioGraph, QStringLiteral("Radio TX"));
+        QVERIFY(radioRx && radioTx);
+        QVERIFY(!radioRx->points.isEmpty() && !radioTx->points.isEmpty());
+        QCOMPARE(radioRx->unitSuffix, QStringLiteral(" Mbps"));
+        QCOMPARE(radioRx->points.constLast().y(), 12.5);
+        QCOMPARE(radioTx->points.constLast().y(), 0.1);
+
+        const auto* controlRx = namedSeries(controlGraph, QStringLiteral("Control RX"));
+        const auto* controlTx = namedSeries(controlGraph, QStringLiteral("Control TX"));
+        QVERIFY(controlRx && controlTx);
+        QVERIFY(!controlRx->points.isEmpty() && !controlTx->points.isEmpty());
+        QCOMPARE(controlRx->unitSuffix, QStringLiteral(" kbit/s"));
+        QCOMPARE(controlRx->points.constLast().y(), 16.0);
+        QCOMPARE(controlTx->points.constLast().y(), 32.0);
+
+        const auto* radioRtt = namedSeries(rttGraph, QStringLiteral("Last radio RTT"));
+        const auto* coreRtt = namedSeries(rttGraph, QStringLiteral("Last Core RTT"));
+        QVERIFY(radioRtt && coreRtt);
+        QVERIFY(!radioRtt->points.isEmpty() && !coreRtt->points.isEmpty());
+        QCOMPARE(radioRtt->unitSuffix, QStringLiteral(" ms"));
+        QCOMPARE(radioRtt->points.constLast().y(), 7.0);
+        QCOMPARE(coreRtt->points.constLast().y(), 83.0);
+        QVERIFY(rttGraph->toolTip().contains(QStringLiteral("hold the last measurement")));
+
+        const QPixmap rendered = dialog.grab();
+        QVERIFY(!rendered.isNull());
+
+        client.disconnectFromStation(QStringLiteral("test reconnect"));
+        QCoreApplication::processEvents();
+        ++now;
+        auto* replacementGui = new ObservedLoopback;
+        auto* replacementCore = new Test::LoopbackTransport(QStringLiteral("replacement"));
+        replacementGui->linkTo(replacementCore);
+        server.acceptTransport(replacementCore);
+        client.startSession(replacementGui, server.token());
+        QTRY_VERIFY(client.isHandshakeComplete());
+        sample.sequence = 1;
+        sample.sampledElapsedMs = 0;
+        sample.radio.rxMbps = 14.5;
+        QVERIFY(server.sendTelemetry(sample, server.sessionEpoch()));
+        QTRY_COMPARE(controller.current().state, RemoteTelemetryView::State::Current);
+        QTRY_VERIFY(namedSeries(radioGraph, QStringLiteral("Radio RX")) != nullptr
+                     && namedSeries(radioGraph, QStringLiteral("Radio RX"))->points.size() == 2);
+        radioRx = namedSeries(radioGraph, QStringLiteral("Radio RX"));
+        QVERIFY(radioRx->breakBefore.constLast());
+        QCOMPARE(radioRx->points.constLast().y(), 14.5);
+        client.disconnectFromStation(QStringLiteral("done"));
+    }
+};
+
+QTEST_MAIN(TstRemoteDiagnostics)
+#include "tst_remote_diagnostics.moc"

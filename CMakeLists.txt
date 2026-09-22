@@ -947,6 +947,7 @@ set(CORE_SOURCES
     # R3 daemon session owner for media peer, spectrum endpoints, and the
     # existing mixed-audio Opus path.
     src/core/session/media/DaemonMediaController.cpp
+    src/core/daemon/DaemonTelemetryController.cpp
     # R3 bounded bridge from the AudioEngine master mix to daemon media.
     src/core/session/media/DaemonAudioSource.cpp
     src/core/session/media/DaemonAudioSender.cpp
@@ -1011,6 +1012,7 @@ set(CORE_SOURCES
     # about MirrorUpdate, never a model class -- so it stays out of the
     # ObjectRegistry.cpp block above.
     src/core/session/SessionMessages.cpp
+    src/core/session/StationTelemetry.cpp
     # R2 Task 11: command verbs. Turns a decoded CommandInvoke SessionMessage
     # into the corresponding RadioModel call (addSlice / removeSlice /
     # requestSliceSampleRate / addSliceOnPan) and reports back what actually
@@ -1149,6 +1151,8 @@ set(GUI_SOURCES
     src/gui/SliceFlagPresentationBinding.cpp
     src/gui/SliceFlagPresentationBinding.h
     src/gui/RemoteMediaController.cpp
+    src/gui/RemoteTelemetryController.cpp
+    src/gui/RemoteDiagnosticsDialog.cpp
     src/gui/RemoteConnectionController.cpp
     src/gui/AmpViewChart.cpp
     src/gui/AmpViewWindow.cpp
@@ -1237,6 +1241,9 @@ set(GUI_SOURCES
     src/gui/widgets/TxBoundConfirmDialog.h
     src/gui/NetworkDiagnosticsDialog.cpp
     src/gui/NetworkDiagnosticsDialog.h
+    src/gui/TelemetryHistory.cpp
+    src/gui/TelemetryHistory.h
+    src/gui/TimeSeriesGraphWidget.h
     src/gui/DiversityDialog.cpp
     src/gui/DiversityDialog.h
     src/gui/DssRenderer.cpp

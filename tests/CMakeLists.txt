@@ -4323,6 +4323,10 @@ nereus_add_test(tst_audio_engine_flow_state)
 # 4 tests: null-safe construction, refresh on disconnected model, reset
 # clears counters, signal-wire safety. QTEST_MAIN — needs QApplication.
 nereus_add_test(tst_network_diagnostics_dialog)
+nereus_add_test(tst_telemetry_history)
+nereus_add_test(tst_time_series_graph)
+nereus_add_test(tst_remote_telemetry fakes/LoopbackTransport.cpp)
+nereus_add_test(tst_remote_diagnostics fakes/LoopbackTransport.cpp)
 
 # ── Bottom-banner cleanup Task A1: ChromeFoldPlan pure fold math ─────────
 # 9 tests: required-width gap/padding accounting, per-rung folding,
@@ -6785,6 +6789,11 @@ nereus_add_test(tst_certificate_store)
 # (its Qt stack answers every ping automatically). TciServer's in-tree ping
 # timer, which this task was pointed at as precedent, explicitly does not
 # track pongs and would not pass this slot.
+nereus_add_test(tst_station_telemetry
+    EXTRA_LABELS session)
+nereus_add_test(tst_session_transport_telemetry
+    EXTRA_LABELS session)
+
 nereus_add_test(tst_station_session
     fakes/LoopbackTransport.cpp)
 
@@ -6829,6 +6838,7 @@ nereus_add_test(tst_remote_audio_clock)
 # allow parallel-suite scheduling headroom without shortening the drift gate.
 set_tests_properties(tst_remote_audio_clock PROPERTIES TIMEOUT 180)
 nereus_add_test(tst_daemon_audio_session fakes/LoopbackTransport.cpp)
+nereus_add_test(tst_daemon_telemetry fakes/LoopbackTransport.cpp)
 nereus_add_test(tst_remote_audio_receiver)
 nereus_add_test(tst_remote_audio_session fakes/LoopbackTransport.cpp)
 

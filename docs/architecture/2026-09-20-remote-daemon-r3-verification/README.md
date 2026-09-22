@@ -3,25 +3,28 @@
 This ledger separates the recovered integration baseline, component evidence
 and real remote receive acceptance. A component pass does not close R3.
 
-## RADE multislice source checkpoint, September 21
+## Current checkpoint dd2a9ebf, September 21, 21:11
 
-R-R3-31 now routes RADE input and decoded audio through its owning slice rather
-than implicitly stealing slice A. Generation/identity checks reject retired
-worker and decoder events; acquisition silence preserves the mixed-audio cadence,
-and warming targets remain outside the mixer until current output is ready.
-The consolidated review's unkey and replacement-test findings are corrected.
-All 685 test executables pass after building every target, with eleven existing
-inner Qt skips and no new skips. See [RADE multislice](rade-multislice.md) for the
-reproducer, first-run clock timeout, final verification and live acceptance limits.
-Matching installation is next; the installed d9c7bce1 evidence below remains the
-current hardware baseline until that completes.
+Signed `dd2a9ebf` is installed in matching Core and GUI builds. It includes
+R-R3-31's owning-slice RADE routing, decoder/worker lifetime guards, unsynchronised
+quiet cadence and warming-target mixer admission. All 685 desktop test
+executables passed with eleven existing inner Qt skips, followed by the native
+production build and matching GUI identity/signature checks. The corrected
+native test-helper guard is documented with the original failure.
+See [RADE multislice](rade-multislice.md) for the reproducer, review corrections,
+installed hashes, rollback and short live session evidence. Hardware two-pan
+listening failed with stuttering on A while B used RADE; a measured Core source
+rate deficit is under investigation. Sustained operation remains open.
 
-The user selected banner plus connection/audio graphs as the first telemetry
-pass. [The agreed design](../2026-09-21-core-telemetry-design.md) and tasks 4e/5b
-preserve the scope and sequence. The Aether port and telemetry collectors are
-being verified in isolation; no telemetry work in progress is installed.
+The approved banner plus connection/audio telemetry is now integrated in the
+primary worktree after focused checks and one consolidated review. The complete
+build and all 692 test executables pass, with eleven existing inner Qt skips.
+It is not installed yet; the live RADE cadence failure takes priority. See
+[telemetry verification](core-telemetry.md) and the
+[agreed design](../2026-09-21-core-telemetry-design.md). CPU and memory history
+remain follow-on work.
 
-## Current checkpoint d9c7bce1, September 21, 19:47
+## Previous checkpoint d9c7bce1, September 21, 19:47
 
 Signed `d9c7bce1` is installed in the macOS GUI and on the Rock. It includes
 the VFO callback lifetime correction and the preceding signed TGXL connection

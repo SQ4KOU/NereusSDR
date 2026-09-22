@@ -238,6 +238,7 @@
 #include "core/session/SessionMessages.h"
 #include "core/session/StateMirror.h"
 #include "core/session/StationCapabilities.h"
+#include "core/session/SessionTransport.h"
 
 QT_BEGIN_NAMESPACE
 class QTimer;
@@ -394,6 +395,8 @@ public:
 
     bool mediaAvailable() const;
     bool remoteCtunAvailable() const;
+    bool telemetryAvailable() const;
+    std::optional<SessionTransportTelemetry> transportTelemetry() const;
     bool sendMediaControl(const QJsonObject& payload, quint32 expectedEpoch);
 
     /// Non-zero when the station's AppSettings schema version differs from
@@ -476,6 +479,8 @@ signals:
     void mediaControlReceived(const QJsonObject& payload, quint32 epoch);
     /// Retires media even when a deliberate redial silently supersedes a link.
     void mediaSessionEnded(quint32 epoch);
+    void telemetryReceived(const StationTelemetrySnapshot& snapshot, quint32 epoch);
+    void telemetrySessionEnded(quint32 epoch);
     /// The full section 7.0 sequence completed, snapshot-complete marker
     /// included. Parent section 12.2 gates TX on exactly this point.
     void handshakeComplete();
@@ -706,6 +711,8 @@ private:
 
     /// See sessionEpoch(). Bumped in attachTransport().
     quint32 m_sessionEpoch = 0;
+    quint32 m_lastTelemetrySequence = 0;
+    qint64 m_lastTelemetrySampleElapsedMs = -1;
 
     // ---- Task 19: automatic reconnect ----
 

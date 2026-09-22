@@ -149,8 +149,44 @@ void ConnectionSegment::setRemoteStatusText(const QString& text)
 {
     if (m_remoteStatusText == text) { return; }
     m_remoteStatusText = text;
-    setAccessibleName(text);
+    setAccessibleName(remotePresentationText());
+    updateGeometry();
     update();
+}
+
+void ConnectionSegment::setRemoteTelemetryText(const QString& text)
+{
+    if (m_remoteTelemetryText == text) { return; }
+    m_remoteTelemetryText = text;
+    setAccessibleName(remotePresentationText());
+    updateGeometry();
+    update();
+}
+
+QSize ConnectionSegment::sizeHint() const
+{
+    QFont metricFont(QStringLiteral("SF Mono"), 10, QFont::DemiBold);
+    const QFontMetrics metrics(metricFont);
+    const QString text = remotePresentationText();
+    if (!text.isEmpty()) {
+        // Dot + its gap + text + trailing breathing room. The title bar has
+        // stretches on either side, so reporting the real preferred width
+        // prevents its remote measurements from being elided by the old 200px
+        // minimum-size floor.
+        return {8 + 10 + 8 + metrics.horizontalAdvance(text) + 10, 30};
+    }
+    return {200, 30};
+}
+
+QString ConnectionSegment::remotePresentationText() const
+{
+    if (m_remoteStatusText.isEmpty()) {
+        return m_remoteTelemetryText;
+    }
+    if (m_remoteTelemetryText.isEmpty()) {
+        return m_remoteStatusText;
+    }
+    return m_remoteStatusText + QStringLiteral("  ·  ") + m_remoteTelemetryText;
 }
 
 void ConnectionSegment::setRttMs(int ms)
@@ -293,10 +329,11 @@ void ConnectionSegment::paintEvent(QPaintEvent*)
     int x = dotRect.right() + 8;
     const int textY = height() / 2 + 4;
 
-    if (!m_remoteStatusText.isEmpty()) {
+    const QString remoteText = remotePresentationText();
+    if (!remoteText.isEmpty()) {
         p.setPen(QColor("#c8d8e8"));
         p.drawText(x, textY, p.fontMetrics().elidedText(
-            m_remoteStatusText, Qt::ElideRight, width() - x - 6));
+            remoteText, Qt::ElideRight, width() - x - 6));
         m_lastRttX1 = x;
         m_lastRttX2 = width();
         m_lastPipX1 = m_lastPipX2 = 0;
@@ -378,7 +415,7 @@ void ConnectionSegment::mousePressEvent(QMouseEvent* event)
         return;
     }
     if (event->button() == Qt::LeftButton) {
-        if (!m_remoteStatusText.isEmpty()) {
+        if (!remotePresentationText().isEmpty()) {
             emit rttClicked();
             return;
         }

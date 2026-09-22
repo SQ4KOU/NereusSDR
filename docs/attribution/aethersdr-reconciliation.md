@@ -1405,3 +1405,16 @@ Angle control can drive them later in the plan.
 | NereusSDR file | AetherSDR source | Derivation | Attribution |
 | --- | --- | --- | --- |
 | `src/core/session/media/DssWideRow.cpp` | `src/gui/DssRenderer.cpp:183-216` [@1872028c] | Moves the existing peak-preserving row reduction into a bounded Core helper alongside the NereusSDR wide crop. Output width is explicit; rows already within the limit retain their samples. | AetherSDR project GPLv3 and Jeremy (KK7GWY)/contributors credit retained in the new source file. Upstream has no per-file header. |
+
+## September 21, 2026 telemetry graph port
+
+These additions are genuine Aether derivations. The original source has no
+per-file copyright header; each Nereus file records the project URL, primary
+author, project GPLv3 licence, pinned revision and modification history.
+See [telemetry provenance](AETHER-TELEMETRY-PROVENANCE.md) for the port boundary.
+
+| NereusSDR file | Classification | Upstream source at `0dea0dd7d73e25a40c8c01d46873af5834e23921` |
+| --- | --- | --- |
+| `src/gui/TimeSeriesGraphWidget.h` | A: copied and adapted Qt graph | `src/gui/TimeSeriesGraphWidget.h` |
+| `src/gui/TelemetryHistory.h` | A: adapted bounded history contract | `src/gui/NetworkDiagnosticsDialog.{h,cpp}` |
+| `src/gui/TelemetryHistory.cpp` | A: adapted sampling and bucket query behavior, Nereus validity/segment/weight rules | `src/gui/NetworkDiagnosticsDialog.{h,cpp}` |

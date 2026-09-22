@@ -645,6 +645,8 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
     // first session is epoch 1; 0 means "never attached"). See
     // sessionEpoch()'s doc comment.
     ++m_sessionEpoch;
+    m_lastTelemetrySequence = 0;
+    m_lastTelemetrySampleElapsedMs = -1;
 
     // These three describe THIS session. Carrying them across a reconnect
     // would let a difference the station has since fixed keep showing up
@@ -654,8 +656,16 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
     m_unapplied.clear();
     m_pendingStationSchemas.clear();
 
+    const quint32 epoch = m_sessionEpoch;
     connect(transport, &SessionTransport::textReceived, this,
-            &StationClient::onTransportText);
+            [this, transport, epoch](const QByteArray& wire) {
+        // Disconnecting does not cancel already queued deliveries. A delayed
+        // observation or snapshot from a replaced transport cannot become part
+        // of its successor, even if a later allocation reuses the address.
+        if (m_transport == transport && m_sessionEpoch == epoch) {
+            onTransportText(wire);
+        }
+    });
     connect(transport, &SessionTransport::pongReceived, this,
             [this]() { m_pingsAwaitingPong = 0; });
     connect(transport, &SessionTransport::closed, this, &StationClient::onTransportClosed);
@@ -831,6 +841,7 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
         }
     }
     emit mediaSessionEnded(m_sessionEpoch);
+    emit telemetrySessionEnded(m_sessionEpoch);
     if (reportSessionEnd) {
         emit sessionEnded(reason);
     }
@@ -975,6 +986,15 @@ void StationClient::onTransportText(const QByteArray& wire)
     }
 
     switch (message.kind) {
+    case SessionMessageKind::StationTelemetry:
+        if (telemetryAvailable()
+            && message.telemetry.sequence > m_lastTelemetrySequence
+            && message.telemetry.sampledElapsedMs >= m_lastTelemetrySampleElapsedMs) {
+            m_lastTelemetrySequence = message.telemetry.sequence;
+            m_lastTelemetrySampleElapsedMs = message.telemetry.sampledElapsedMs;
+            emit telemetryReceived(message.telemetry, m_sessionEpoch);
+        }
+        break;
     case SessionMessageKind::MediaControl:
         if (mediaAvailable()) {
             emit mediaControlReceived(message.mediaPayload, m_sessionEpoch);
@@ -1981,6 +2001,20 @@ bool StationClient::remoteCtunAvailable() const
         && m_transport && m_transport->isOpen()
         && m_agreedMinor >= kRemoteCtunSessionProtocolMinor
         && m_capabilities.remoteCtunVersion >= 1;
+}
+
+bool StationClient::telemetryAvailable() const
+{
+    return m_sessionActive && m_authenticated && m_handshakeComplete
+        && m_transport && m_transport->isOpen()
+        && m_agreedMinor >= kStationTelemetrySessionProtocolMinor
+        && m_capabilities.stationTelemetryVersion >= 1;
+}
+
+std::optional<SessionTransportTelemetry> StationClient::transportTelemetry() const
+{
+    if (!m_sessionActive || !m_handshakeComplete || !m_transport) { return std::nullopt; }
+    return m_transport->telemetry();
 }
 
 bool StationClient::mediaAvailable() const

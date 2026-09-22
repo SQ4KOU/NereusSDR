@@ -133,6 +133,7 @@ namespace NereusSDR {
 class RadioModel;
 class StationServer;
 class DaemonMediaController;
+class DaemonTelemetryController;
 class DaemonAgcSource;
 class SliceModel;
 class StepAttenuatorController;
@@ -427,6 +428,9 @@ private:
     /// Must be destroyed before StationServer/RadioModel: it owns queued
     /// source, peer and endpoint work referring to both.
     std::unique_ptr<DaemonMediaController> m_mediaController;
+    /// Destroyed before media/server/model so no timer or queued observation
+    /// can publish into a retiring session.
+    std::unique_ptr<DaemonTelemetryController> m_telemetryController;
     std::unique_ptr<DaemonAgcSource> m_agcSource;
     FftTopology m_topology;
 

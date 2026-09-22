@@ -11,6 +11,7 @@
 #include "HardwareProfile.h"
 
 #include <QDateTime>
+#include <QElapsedTimer>
 #include <QList>
 #include <QObject>
 #include <QVector>
@@ -150,6 +151,14 @@ public:
     void notePingSent();
     void notePingReceived();
 
+public slots:
+    // Owner-thread observation used by the daemon telemetry collector. The
+    // rolling-rate lists above are connection-thread state and must never be
+    // traversed directly from the daemon control thread. This request adds no
+    // radio packet and does not alter ping matching or connection liveness.
+    void collectTelemetryObservation(quint64 requestId);
+
+public:
     // Voltage signal handlers — called by P1/P2 after extracting raw ADC counts.
     // Apply per-board scaling and emit supplyVoltsChanged / userAdc0Changed
     // when the value changes by more than 50 mV (identical-raw suppression).
@@ -513,6 +522,14 @@ signals:
     // Drives the ConnectionSegment "X ms" latency readout (sub-PR-2).
     void pingRttMeasured(int rttMs);
 
+    // Reply to collectTelemetryObservation(), emitted on this object's owning
+    // connection thread. hasRtt=false means no valid C&C RTT has completed on
+    // this connection. rttAgeMs is the age of the actual measurement and is
+    // never renewed merely because another observation was requested.
+    void telemetryObservationReady(quint64 requestId, double rxMbps,
+                                   double txMbps, bool hasRtt,
+                                   qint64 rttMs, qint64 rttAgeMs);
+
     // PSU supply voltage (V) from supply_volts (P1 AIN6 / P2 bytes 45-46).
     // Converted via Hermes DC-volts formula (console.cs computeHermesDCVoltage()
     // [v2.10.3.13]). Emitted at most once per 50 mV change.
@@ -666,6 +683,8 @@ private:
 
     // Ping RTT state. Zero means no outstanding ping.
     qint64 m_pingSentMs{0};
+    int m_lastPingRttMs{-1};
+    QElapsedTimer m_lastPingRttAge;
 
     // Voltage conversion helpers.
     // convertSupplyVolts: 3.3V ADC ref + (4.7+0.82)/0.82 divider — Thetis-faithful

@@ -283,6 +283,7 @@ constexpr KindName kKindNames[] = {
     { SessionMessageKind::SettingsValue, "settings.value" },
     { SessionMessageKind::SettingsReject, "settings.reject" },
     { SessionMessageKind::MediaControl, "media.control" },
+    { SessionMessageKind::StationTelemetry, "station.metrics.v1" },
 };
 
 struct WireKindName {
@@ -581,6 +582,12 @@ QByteArray SessionMessages::encode(const SessionMessage& message)
     o.insert(QStringLiteral("type"), QString::fromUtf8(kindName(message.kind)));
 
     switch (message.kind) {
+    case SessionMessageKind::StationTelemetry: {
+        const auto payload = StationTelemetryCodec::encode(message.telemetry);
+        if (!payload) { return {}; }
+        o.insert(QStringLiteral("payload"), *payload);
+        break;
+    }
     case SessionMessageKind::MediaControl:
         o.insert(QStringLiteral("payload"), message.mediaPayload);
         break;
@@ -696,6 +703,10 @@ QByteArray SessionMessages::encode(const SessionMessage& message)
     }
 
     const QByteArray wire = QJsonDocument(o).toJson(QJsonDocument::Compact);
+    if (message.kind == SessionMessageKind::StationTelemetry
+        && wire.size() > kMaxStationTelemetryBytes) {
+        return {};
+    }
     if (message.kind == SessionMessageKind::MediaControl
         && wire.size() > kMaxMediaControlBytes) {
         return {};
@@ -722,6 +733,11 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
     }
     if (kind == SessionMessageKind::MediaControl
         && (wire.size() > kMaxMediaControlBytes
+            || !o.value(QStringLiteral("payload")).isObject())) {
+        return false;
+    }
+    if (kind == SessionMessageKind::StationTelemetry
+        && (wire.size() > kMaxStationTelemetryBytes
             || !o.value(QStringLiteral("payload")).isObject())) {
         return false;
     }
@@ -855,6 +871,12 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
     message.kind = kind;
 
     switch (kind) {
+    case SessionMessageKind::StationTelemetry:
+        if (!StationTelemetryCodec::decode(o.value(QStringLiteral("payload")).toObject(),
+                                           &message.telemetry)) {
+            return false;
+        }
+        break;
     case SessionMessageKind::MediaControl:
         message.mediaPayload = o.value(QStringLiteral("payload")).toObject();
         break;

@@ -33,6 +33,19 @@ struct RemoteAudioReceiver::Private {
     std::atomic<int> underflows{0};
     std::atomic<int> overflows{0};
     std::atomic<quint64> rejectedHeaders{0};
+    std::atomic<quint64> lifetimeUnderflows{0};
+    std::atomic<quint64> lifetimeOverflows{0};
+    std::atomic<quint64> telemetryGeneration{0};
+    std::atomic<quint64> telemetrySequence{0}; // owner lifecycle mutations
+    std::atomic<quint64> accepted{0};
+    std::atomic<quint64> late{0};
+    std::atomic<quint64> invalid{0};
+    std::atomic<quint64> duplicate{0};
+    std::atomic<quint64> deviceConsumedFrames{0};
+    std::atomic<qint64> lastAdmittedPacketNs{0};
+    std::atomic<qint64> lastDeviceProgressNs{0};
+    std::atomic<bool> hasLastAdmittedPacket{false};
+    std::atomic<bool> hasLastDeviceProgress{false};
     bool overflow = false; // under mutex
     quint32 ssrc = 0;
     quint64 generation = 0; // owner thread only
@@ -46,10 +59,57 @@ quint64 RemoteAudioReceiver::concealedPackets() const { return d->concealed.load
 int RemoteAudioReceiver::rateMatcherUnderflows() const { return d->underflows.load(); }
 int RemoteAudioReceiver::rateMatcherOverflows() const { return d->overflows.load(); }
 
+RemoteAudioReceiverTelemetry RemoteAudioReceiver::telemetry() const
+{
+    const auto ageMs = [](qint64 eventNs) {
+        return std::max<qint64>(0, (monotonicNs() - eventNs) / 1'000'000);
+    };
+    // A lifecycle change can race a reader. The owner brackets stop and a
+    // successful-start reset with an odd sequence. Bounded retries avoid
+    // attaching a retired context's counters to the next context without
+    // making packet submission, the worker, or the device callback wait.
+    for (int attempt = 0; attempt < 3; ++attempt) {
+        const quint64 sequence = d->telemetrySequence.load();
+        if (sequence & 1) { continue; }
+        const quint64 generation = d->telemetryGeneration.load();
+        RemoteAudioReceiverTelemetry snapshot;
+        snapshot.generation = generation;
+        snapshot.running = d->running.load();
+        snapshot.acceptedPackets = d->accepted.load();
+        snapshot.decodedPackets = d->decoded.load();
+        snapshot.concealedPackets = d->concealed.load();
+        snapshot.latePackets = d->late.load();
+        snapshot.invalidPackets = d->invalid.load();
+        snapshot.duplicatePackets = d->duplicate.load();
+        snapshot.rejectedHeaders = d->rejectedHeaders.load();
+        snapshot.deviceConsumedFrames = d->deviceConsumedFrames.load();
+        snapshot.underflows = d->underflows.load();
+        snapshot.overflows = d->overflows.load();
+        snapshot.lifetimeUnderflows = d->lifetimeUnderflows.load();
+        snapshot.lifetimeOverflows = d->lifetimeOverflows.load();
+        if (d->hasLastAdmittedPacket.load()) {
+            snapshot.lastAdmittedPacketAgeMs = ageMs(d->lastAdmittedPacketNs.load());
+        }
+        if (d->hasLastDeviceProgress.load()) {
+            snapshot.lastDeviceProgressAgeMs = ageMs(d->lastDeviceProgressNs.load());
+        }
+        if (d->telemetrySequence.load() == sequence) {
+            return snapshot;
+        }
+    }
+    // A snapshot sampled in the middle of an owner lifecycle transition is
+    // intentionally unavailable instead of combining observations from two
+    // contexts. The next 1 Hz collection tick obtains the settled snapshot.
+    RemoteAudioReceiverTelemetry unavailable;
+    unavailable.generation = d->telemetryGeneration.load();
+    return unavailable;
+}
+
 void RemoteAudioReceiver::stop()
 {
-    ++d->generation;
+    d->telemetrySequence.fetch_add(1);
     d->running.store(false);
+    ++d->generation;
     if (d->worker.joinable()) {
         d->worker.request_stop();
         d->wake.notify_one();
@@ -61,6 +121,7 @@ void RemoteAudioReceiver::stop()
         d->overflow = false;
     }
     if (d->engine) { d->engine->endRemotePlayback(); }
+    d->telemetrySequence.fetch_add(1);
 }
 
 bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
@@ -71,13 +132,25 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
         emit errorOccurred(error.isEmpty() ? QStringLiteral("Speaker playback is unavailable") : error);
         return false;
     }
+    d->telemetrySequence.fetch_add(1);
     d->ssrc = ssrc;
     d->decoded.store(0);
     d->concealed.store(0);
     d->underflows.store(0);
     d->overflows.store(0);
     d->rejectedHeaders.store(0);
+    d->accepted.store(0);
+    d->late.store(0);
+    d->invalid.store(0);
+    d->duplicate.store(0);
+    d->deviceConsumedFrames.store(0);
+    d->hasLastAdmittedPacket.store(false);
+    d->hasLastDeviceProgress.store(false);
+    d->lastAdmittedPacketNs.store(0);
+    d->lastDeviceProgressNs.store(0);
+    d->telemetryGeneration.fetch_add(1);
     d->running.store(true);
+    d->telemetrySequence.fetch_add(1);
     const quint64 generation = d->generation;
     d->worker = std::jthread([this, ssrc, firstTimestamp, generation](std::stop_token stop) {
         AudioJitterBuffer jitter;
@@ -91,9 +164,26 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
         qint64 previousWake = startedAt;
         qint64 maxWakeGap = 0;
         quint64 accepted = 0, late = 0, invalid = 0, duplicate = 0;
+        quint64 publishedUnderflows = 0, publishedOverflows = 0;
+        const auto publishMatcherStats = [&] {
+            const auto stats = matcher.stats();
+            const quint64 underflows = std::max(0, stats.underflows);
+            const quint64 overflows = std::max(0, stats.overflows);
+            d->underflows.store(stats.underflows);
+            d->overflows.store(stats.overflows);
+            if (underflows > publishedUnderflows) {
+                d->lifetimeUnderflows.fetch_add(underflows - publishedUnderflows);
+                publishedUnderflows = underflows;
+            }
+            if (overflows > publishedOverflows) {
+                d->lifetimeOverflows.fetch_add(overflows - publishedOverflows);
+                publishedOverflows = overflows;
+            }
+            return stats;
+        };
         const auto notify = [&](const QString& reason, bool fatal = false) {
             d->running.store(false);
-            const auto stats = matcher.stats();
+            const auto stats = publishMatcherStats();
             const auto pacing = d->engine->remotePlaybackPacing();
             const qint64 now = monotonicNs();
             // Bounded, restart-only diagnostics distinguish capture/network
@@ -138,6 +228,8 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
         }
         bool playing = false;
         quint64 lastDeviceFrames = 0;
+        const quint64 deviceConsumedBase = initialPacing->consumedFrames;
+        quint64 telemetryDeviceFrames = deviceConsumedBase;
         qint64 lastDeviceProgress = lastPacket;
         while (!stop.stop_requested()) {
             std::deque<Private::Packet> incoming;
@@ -172,11 +264,23 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
                 switch (admitted) {
                 case AudioJitterBuffer::Admission::Accepted:
                     ++accepted;
+                    ++d->accepted;
                     lastPacket = packet.arrival;
+                    d->lastAdmittedPacketNs.store(packet.arrival);
+                    d->hasLastAdmittedPacket.store(true);
                     break;
-                case AudioJitterBuffer::Admission::Late: ++late; break;
-                case AudioJitterBuffer::Admission::Invalid: ++invalid; break;
-                case AudioJitterBuffer::Admission::Duplicate: ++duplicate; break;
+                case AudioJitterBuffer::Admission::Late:
+                    ++late;
+                    ++d->late;
+                    break;
+                case AudioJitterBuffer::Admission::Invalid:
+                    ++invalid;
+                    ++d->invalid;
+                    break;
+                case AudioJitterBuffer::Admission::Duplicate:
+                    ++duplicate;
+                    ++d->duplicate;
+                    break;
                 case AudioJitterBuffer::Admission::OutsideWindow: break;
                 }
             }
@@ -217,6 +321,12 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
             if (pacing->consumedFrames != lastDeviceFrames) {
                 lastDeviceFrames = pacing->consumedFrames;
                 lastDeviceProgress = now;
+                if (pacing->consumedFrames != telemetryDeviceFrames) {
+                    telemetryDeviceFrames = pacing->consumedFrames;
+                    d->deviceConsumedFrames.store(telemetryDeviceFrames - deviceConsumedBase);
+                    d->lastDeviceProgressNs.store(now);
+                    d->hasLastDeviceProgress.store(true);
+                }
             } else if (now - lastDeviceProgress > 500'000'000) {
                 notify(QStringLiteral("Speaker device stopped consuming audio"), true);
                 return;
@@ -241,9 +351,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
                 pacing = d->engine->remotePlaybackPacing();
                 if (!pacing) { break; }
             }
-            const auto stats = matcher.stats();
-            d->underflows.store(stats.underflows);
-            d->overflows.store(stats.overflows);
+            const auto stats = publishMatcherStats();
             if (stats.underflows || stats.overflows) {
                 notify(QStringLiteral("Remote audio exceeded its continuous clock buffer (%1 underflows, %2 overflows)")
                     .arg(stats.underflows).arg(stats.overflows));

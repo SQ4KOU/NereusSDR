@@ -36,6 +36,13 @@ void RadioConnection::setState(ConnectionState newState)
 {
     ConnectionState expected = m_state.load();
     if (expected != newState) {
+        if (newState != ConnectionState::Connected) {
+            // An RTT belongs to one live radio transport. Reusing the same
+            // QObject for a reconnect must not make the old measurement look
+            // like evidence from the replacement transport.
+            m_lastPingRttMs = -1;
+            m_lastPingRttAge.invalidate();
+        }
         m_state.store(newState);
         emit connectionStateChanged(newState);
     }
@@ -76,6 +83,14 @@ double RadioConnection::rxByteRate(int windowMs) const
     return rateFromSamples(m_rxSamples, windowMs);
 }
 
+void RadioConnection::collectTelemetryObservation(quint64 requestId)
+{
+    const bool hasRtt = m_lastPingRttMs >= 0 && m_lastPingRttAge.isValid();
+    emit telemetryObservationReady(requestId, rxByteRate(1000), txByteRate(1000),
+                                   hasRtt, hasRtt ? m_lastPingRttMs : 0,
+                                   hasRtt ? m_lastPingRttAge.elapsed() : 0);
+}
+
 double RadioConnection::rateFromSamples(const QList<ByteSample>& samples, int windowMs)
 {
     const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
@@ -105,6 +120,8 @@ void RadioConnection::notePingReceived()
     const qint64 elapsed = nowMs - m_pingSentMs;
     m_pingSentMs = 0;
     if (elapsed >= 0 && elapsed <= 5000) {
+        m_lastPingRttMs = static_cast<int>(elapsed);
+        m_lastPingRttAge.start();
         emit pingRttMeasured(static_cast<int>(elapsed));
     }
 }

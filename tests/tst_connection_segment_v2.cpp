@@ -20,6 +20,8 @@
 // =================================================================
 
 #include <QtTest/QtTest>
+#include <QColor>
+#include <QPixmap>
 #include <QSignalSpy>
 
 #include "core/AudioEngine.h"
@@ -90,6 +92,32 @@ private slots:
 
         seg.setAudioFlowState(AudioEngine::FlowState::Dead);
         QCOMPARE(seg.audioFlowState(), AudioEngine::FlowState::Dead);
+    }
+
+    void remoteTelemetryRendersWithStatusAndRemainsClickable() {
+        ConnectionSegment seg;
+        seg.setRemoteStatusText(QStringLiteral("Core connected"));
+        const int statusWidth = seg.sizeHint().width();
+
+        seg.setRemoteTelemetryText(
+            QStringLiteral("Radio ↓12.4 ↑0.8 Mbps  ·  Core 18 ms  ·  Audio playing"));
+        QVERIFY(seg.sizeHint().width() > statusWidth);
+        QCOMPARE(seg.remoteTelemetryText(),
+                 QStringLiteral("Radio ↓12.4 ↑0.8 Mbps  ·  Core 18 ms  ·  Audio playing"));
+        QCOMPARE(seg.accessibleName(),
+                 QStringLiteral("Core connected  ·  Radio ↓12.4 ↑0.8 Mbps  ·  Core 18 ms  ·  Audio playing"));
+
+        seg.resize(seg.sizeHint());
+        QPixmap rendered(seg.size());
+        rendered.fill(Qt::magenta);
+        seg.render(&rendered);
+        QVERIFY(!rendered.isNull());
+        QCOMPARE(rendered.toImage().pixelColor(0, seg.height() / 2), QColor("#0f1420"));
+
+        QSignalSpy clicked(&seg, &ConnectionSegment::rttClicked);
+        QTest::mouseClick(&seg, Qt::LeftButton, Qt::NoModifier,
+                          QPoint(seg.width() / 2, seg.height() / 2));
+        QCOMPARE(clicked.count(), 1);
     }
 };
 

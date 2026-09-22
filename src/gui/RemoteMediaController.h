@@ -2,6 +2,7 @@
 // no-port-check: NereusSDR-original. Remote daemon R3 receive display wiring.
 
 #include "core/session/media/MediaPeer.h"
+#include "core/session/media/RemoteAudioReceiver.h"
 #include <QObject>
 #include <memory>
 
@@ -22,6 +23,7 @@ public:
 
     quint64 receivedDisplayFrames() const;
     int activeEndpointCount() const;
+    RemoteAudioReceiverTelemetry audioTelemetry() const;
 
 signals:
     void recoveryRequested(quint32 expectedEpoch, const QString& reason);

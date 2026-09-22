@@ -197,6 +197,9 @@ private slots:
     void mediaEnvelopeIsBoundedAndTyped();
     void mediaRejectsPreAuthenticationAndOldProtocol();
     void mediaRequiresReadySessionAndRejectsPriorEpoch();
+    void telemetryRequiresReadySessionAndRejectsPriorEpoch();
+    void telemetryDoesNotRequireMediaAndRejectsOldProtocol();
+    void telemetryClientWaitsForCapabilityAndSnapshot();
 
     // ---- Version policy (task 18 step 1) ----
     void majorVersionMismatchRefusesNamingBothVersions();
@@ -363,6 +366,134 @@ void TstStationSession::mediaRequiresReadySessionAndRejectsPriorEpoch()
     client.disconnectFromStation(QStringLiteral("media test complete"));
     QTRY_VERIFY(!server.mediaAvailable());
     QVERIFY(!client.sendMediaControl(payload, client.sessionEpoch()));
+}
+
+void TstStationSession::telemetryRequiresReadySessionAndRejectsPriorEpoch()
+{
+    QTemporaryDir settingsDir;
+    AppSettings settings(settingsDir.filePath(QStringLiteral("telemetry.settings")));
+    auto model = makeStationRadioModel(0);
+    StationServer server(model.get(), settings, m_securityDir.path());
+    server.setTelemetryEnabled(true);
+    RadioModel remote(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&remote, &proxy);
+    QSignalSpy samples(&client, &StationClient::telemetryReceived);
+    QSignalSpy ended(&server, &StationServer::telemetrySessionEnded);
+    StationTelemetrySnapshot snapshot;
+    snapshot.sequence = 1;
+    QVERIFY(!server.sendTelemetry(snapshot, server.sessionEpoch()));
+    QVERIFY(!client.telemetryAvailable());
+    auto connectPair = [&] {
+        auto* station = new LoopbackTransport(QStringLiteral("metrics-station"), this);
+        auto* peer = new LoopbackTransport(QStringLiteral("metrics-client"), this);
+        station->linkTo(peer);
+        client.startSession(peer, server.token());
+        server.acceptTransport(station);
+    };
+    connectPair();
+    QTRY_VERIFY(client.telemetryAvailable());
+    const quint64 oldServerEpoch = server.sessionEpoch();
+    const quint32 oldClientEpoch = client.sessionEpoch();
+    QVERIFY(server.sendTelemetry(snapshot, oldServerEpoch));
+    QTRY_COMPARE(samples.count(), 1);
+    QCOMPARE(samples.first().at(1).toUInt(), oldClientEpoch);
+    QVERIFY(server.sendTelemetry(snapshot, oldServerEpoch)); // duplicate ignored
+    snapshot.sequence = 2;
+    snapshot.sampledElapsedMs = 1000;
+    QVERIFY(server.sendTelemetry(snapshot, oldServerEpoch));
+    QTRY_COMPARE(samples.count(), 2);
+    QCOMPARE(qvariant_cast<StationTelemetrySnapshot>(samples.last().at(0)).sequence, 2u);
+    snapshot.sequence = 3;
+    snapshot.sampledElapsedMs = 500; // a regressing producer sample is ignored
+    QVERIFY(server.sendTelemetry(snapshot, oldServerEpoch));
+    connectPair();
+    QTRY_VERIFY(client.telemetryAvailable());
+    QVERIFY(server.sessionEpoch() != oldServerEpoch);
+    QVERIFY(client.sessionEpoch() != oldClientEpoch);
+    QVERIFY(!ended.isEmpty());
+    QVERIFY(!server.sendTelemetry(snapshot, oldServerEpoch));
+    snapshot.sequence = 1; // new epoch establishes a new sequence baseline
+    snapshot.sampledElapsedMs = 0;
+    QVERIFY(server.sendTelemetry(snapshot, server.sessionEpoch()));
+    QTRY_COMPARE(samples.count(), 3);
+    QCOMPARE(samples.last().at(1).toUInt(), client.sessionEpoch());
+    client.disconnectFromStation(QStringLiteral("telemetry complete"));
+    QTRY_VERIFY(!server.telemetryAvailable());
+    QVERIFY(!client.telemetryAvailable());
+    QVERIFY(!server.sendTelemetry(snapshot, server.sessionEpoch()));
+}
+
+void TstStationSession::telemetryDoesNotRequireMediaAndRejectsOldProtocol()
+{
+    QTemporaryDir settingsDir;
+    AppSettings settings(settingsDir.filePath(QStringLiteral("telemetry-old.settings")));
+    auto model = makeStationRadioModel(0);
+    StationServer server(model.get(), settings, m_securityDir.path());
+    server.setTelemetryEnabled(true);
+    QVERIFY(!server.mediaAvailable());
+    auto* station = new LoopbackTransport(QStringLiteral("old-metrics-station"), this);
+    auto* peer = new LoopbackTransport(QStringLiteral("old-metrics-client"), this);
+    station->linkTo(peer);
+    server.acceptTransport(station);
+    StationTelemetrySnapshot snapshot;
+    snapshot.sequence = 1;
+    QVERIFY(!server.sendTelemetry(snapshot, server.sessionEpoch()));
+    peer->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor, kStationTelemetrySessionProtocolMinor - 1, 6,
+        QStringLiteral("older-client"))));
+    peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
+    QTRY_VERIFY(server.hasAuthenticatedSession());
+    QVERIFY(!server.telemetryAvailable());
+    QVERIFY(!server.sendTelemetry(snapshot, server.sessionEpoch()));
+    QVERIFY(peer->isOpen());
+
+    RadioModel remote(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&remote, &proxy);
+    auto* newerStation = new LoopbackTransport(QStringLiteral("new-metrics-station"), this);
+    auto* newerPeer = new LoopbackTransport(QStringLiteral("new-metrics-client"), this);
+    newerStation->linkTo(newerPeer);
+    client.startSession(newerPeer, server.token());
+    server.acceptTransport(newerStation);
+    QTRY_VERIFY(client.telemetryAvailable());
+    QVERIFY(server.telemetryAvailable());
+    QVERIFY(!server.mediaAvailable());
+    QVERIFY(!client.mediaAvailable());
+}
+
+void TstStationSession::telemetryClientWaitsForCapabilityAndSnapshot()
+{
+    RadioModel remote(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&remote, &proxy);
+    QSignalSpy samples(&client, &StationClient::telemetryReceived);
+    auto* station = new LoopbackTransport(QStringLiteral("raw-metrics-station"), this);
+    auto* peer = new LoopbackTransport(QStringLiteral("raw-metrics-client"), this);
+    station->linkTo(peer);
+    client.startSession(peer, QStringLiteral("test-token"));
+    SessionMessage sample;
+    sample.kind = SessionMessageKind::StationTelemetry;
+    sample.telemetry.sequence = 1;
+    const auto send = [&](const SessionMessage& message) {
+        station->sendText(SessionMessages::encode(message));
+    };
+    send(sample); // before hello/authentication
+    send(SessionMessages::hello(kSessionProtocolMajor, kSessionProtocolMinor, 6,
+                                QStringLiteral("station")));
+    send(SessionMessages::authResult(true, {}, false));
+    StationCapabilities caps;
+    caps.stationTelemetryVersion = 1;
+    send(SessionMessages::capabilities(caps.toUpdates()));
+    send(sample); // capability present, but snapshot not ready
+    QTRY_VERIFY(!peer->receivedKinds().isEmpty());
+    QCoreApplication::processEvents();
+    QCOMPARE(samples.count(), 0);
+    QVERIFY(!client.telemetryAvailable());
+    send(SessionMessages::snapshotComplete());
+    QTRY_VERIFY(client.telemetryAvailable());
+    send(sample);
+    QTRY_COMPARE(samples.count(), 1);
 }
 
 // ── TokenStore ───────────────────────────────────────────────────────────

@@ -12,6 +12,7 @@
 
 #include "core/daemon/DaemonApp.h"
 #include "core/daemon/DaemonAgcSource.h"
+#include "core/daemon/DaemonTelemetryController.h"
 
 #include "core/AppSettings.h"
 #include "core/CoreInit.h"
@@ -197,13 +198,13 @@ void DaemonApp::stop()
     // cannot bind a previous run's address after teardown.
     cancelStationServerListenRetry();
 
-    // BEFORE the m_radioModel guard below, and before anything else: a
-    // StationServer can exist without a RadioModel only transiently, but
-    // tearing it down first is what lets connected clients be told the
-    // station is going away while there is still a station to speak for
-    // them. It also has to go before m_radioModel.reset() regardless --
-    // its StateMirror and ObjectRegistry hold QPointers into that model
-    // and every SliceModel under it.
+    // BEFORE the m_radioModel guard below: stop the telemetry timer and
+    // pending owner-thread observations, then retire media, then the server.
+    // A StationServer can exist without a RadioModel only transiently; it has
+    // to go before m_radioModel.reset() because its StateMirror and
+    // ObjectRegistry hold QPointers into that model and every SliceModel under
+    // it. The station is still alive while connected clients are detached.
+    m_telemetryController.reset();
     m_mediaController.reset();
     m_stationServer.reset();
     m_agcSource.reset();
@@ -382,6 +383,12 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
     m_stationServer->setMediaEnabled(true);
     m_mediaController = std::make_unique<DaemonMediaController>(
         m_stationServer.get(), m_radioModel.get(), this);
+    // Install every source before advertising the capability. A client can
+    // authenticate immediately after listen(), so there must be no window in
+    // which telemetry is negotiated without a collector to publish it.
+    m_telemetryController = std::make_unique<DaemonTelemetryController>(
+        m_stationServer.get(), m_radioModel.get(), m_mediaController.get(), this);
+    m_stationServer->setTelemetryEnabled(m_telemetryController != nullptr);
     m_stationListenBind = cfg.remoteBind;
     m_stationListenPort = static_cast<quint16>(cfg.remotePort);
     attemptStationServerListen();

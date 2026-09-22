@@ -51,15 +51,22 @@ WebSocketTransport::WebSocketTransport(QWebSocket* socket, quint64 maxIncomingBy
     m_socket->setMaxAllowedIncomingFrameSize(maxIncomingBytes);
 
     connect(m_socket, &QWebSocket::textMessageReceived, this,
-            [this](const QString& message) { emit textReceived(message.toUtf8()); });
+            [this](const QString& message) {
+        const QByteArray wire = message.toUtf8();
+        m_telemetry.receivedPayloadBytes += static_cast<quint64>(wire.size());
+        emit textReceived(wire);
+    });
 
     // QWebSocket::pong carries the round-trip time and the payload we sent.
-    // Neither is used: the fact that it arrived at all is the entire
-    // signal, and reading elapsedTime here would invite treating a slow
-    // link as a dead one, which is exactly the false positive the
-    // miss-count design avoids.
+    // Elapsed time is an observation for the diagnostics UI only. Heartbeat
+    // still consumes the unchanged arrival-only pongReceived signal: a slow
+    // RTT must never be treated as a missing pong.
     connect(m_socket, &QWebSocket::pong, this,
-            [this](quint64, const QByteArray&) { emit pongReceived(); });
+            [this](quint64 elapsedMs, const QByteArray&) {
+        m_telemetry.pongRttMs = elapsedMs;
+        m_pongAge.start();
+        emit pongReceived();
+    });
 
     connect(m_socket, &QWebSocket::disconnected, this,
             [this]() { emit closed(); });
@@ -72,7 +79,9 @@ void WebSocketTransport::sendText(const QByteArray& wire)
     if (!isOpen()) {
         return;
     }
-    m_socket->sendTextMessage(QString::fromUtf8(wire));
+    if (m_socket->sendTextMessage(QString::fromUtf8(wire)) >= 0) {
+        m_telemetry.acceptedPayloadBytes += static_cast<quint64>(wire.size());
+    }
 }
 
 void WebSocketTransport::ping()
@@ -117,6 +126,14 @@ QString WebSocketTransport::peerDescription() const
     return QStringLiteral("%1:%2")
         .arg(m_socket->peerAddress().toString())
         .arg(m_socket->peerPort());
+}
+
+std::optional<SessionTransportTelemetry> WebSocketTransport::telemetry() const
+{
+    if (!isOpen()) { return std::nullopt; }
+    SessionTransportTelemetry snapshot = m_telemetry;
+    if (m_pongAge.isValid()) { snapshot.pongAgeMs = m_pongAge.elapsed(); }
+    return snapshot;
 }
 
 } // namespace NereusSDR

@@ -869,6 +869,7 @@ private:
     // stack (StationClient.h drags in the whole message codec).
     class StationClient* m_stationClient{nullptr};
     class RemoteMediaController* m_remoteMedia{nullptr};
+    class RemoteTelemetryController* m_remoteTelemetry{nullptr};
     class RemoteConnectionController* m_remoteConnection{nullptr};
     class RemoteConnectionPanel* m_remoteConnectionPanel{nullptr};
     bool m_stationDisconnectRequested{false};
