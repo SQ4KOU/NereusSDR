@@ -48,7 +48,7 @@ Their presence in the build does not make remote transmit an R3 feature.
 | R3 accepted | Multiple pans and slices remain usable through reconnect and sustained reception; connection, audio and receive-safe accessory controls show accepted station state | Four-pan measurements, two-hour audio run, install/boot/reconnect checks, visible-control and accessory acceptance |
 | R4 | Remote microphone/PTT and transmit operation | TX chain and watchdog/starvation/handoff safety acceptance together |
 | R5 | Remote access across difficult internet connections without a required VPN | Direct/relay racing, dual-stack and CGNAT-to-CGNAT evidence |
-| R6 | Routine installation and use without development-session help | Full station selection/pairing UX, reachability diagnostics, packaging and documentation; basic connection controls and visible state are R3 requirements |
+| R6 | Routine installation and use without development-session help | Remaining pairing/administration UX, reachability diagnostics, packaging and documentation; basic station selection, connection controls and visible state are now R3 requirements |
 
 R1/R2 establish the split and control foundation. They are not a completed
 remote receiver. Codec tests, dependency probes and successful builds are
@@ -56,23 +56,44 @@ supporting evidence; no R3 checkpoint is complete until its operator-visible
 result is demonstrated. There is no separate executable named NereusUI yet;
 this plan uses the existing NereusSDR executable in remote station mode.
 
-**Current remaining order, September 22:** RADE routing, Core telemetry,
-bandwidth graphs and the Core-owned accessory controls have software
-implementations installed through `3402d171`. Selected-radio late startup and
-established-silence recovery pass focused checks and all 698 test executables
-and are installed as `55e7d49f`. Initial automatic GUI reconnect passed, but
-the Rock subsequently became unreachable by SSH/ping; resolve that host
-reachability failure and finish hardware acceptance next (6). Finish
-real TGXL admission and visible-control acceptance (4a/4c/4d); restore receiver membership across Core
-restart (R-R3-34); the parallel WDSP per-slice persistence work is now serially
-integrated at signed source `fe9e0dc1` (fresh GUI/daemon build and 718/718
-combined tests passed; [evidence](2026-09-20-remote-daemon-r3-verification/combined-wdsp210.md)).
-Receiver membership and pan bindings remain distinct open work. Finish
-wideband parity and sustained mixed audio with operator
-feedback (4b/5/5a). Then complete capacity, boot/reconnect and two-hour
-acceptance (6). Receive-only R5 traversal follows,
-then safeguarded R4 TX and R6 selection/pairing/packaging. Installed software
-does not close the outstanding hardware and sustained-listening checks.
+**Current remaining order, September 22 (operator clarification):** the goal
+includes receive, transmit, traversal, station selection and standalone desktop
+operation. The operator's question about TX timing was not a request to jump
+phases. Preserve the saved R5-before-R4 sequence; any future ordering change
+must be explicit. Bringing basic connection selection forward is the operator's
+new priority, not a substitution for the full plan.
+
+1. **Finish the current display checkpoint.** Signed source `fc129a39` contains
+   R-R3-37; matching GUI/Core and all-tests build passed, with 730/730 CTest
+   executables passing. Runtime limits and deployment acceptance remain pending.
+2. **Implement the Core/radio and local-radio selector (new task 4g).** Promote
+   the basic selection flow from R6, preserving the identity design's three
+   groups and the desktop's self-contained local capability. Complete its
+   design and lifecycle tests before replacing the current single-Core panel.
+3. **Close the remaining R3 behavior and operator checks:** visible menus and
+   connection actions, actual TGXL identity/admission, wideband/3D parity,
+   mixed SSB/RADE and Opus health/controls, and optional-capture startup. The
+   receive-layout and pan-lifetime software corrections are already implemented;
+   their real Core-restart acceptance remains open. New gaps attach to these
+   named work items instead of silently displacing them.
+4. **Complete R3 capacity and installation acceptance (task 6).** Measure the
+   Rock and separate Pi 4 floor, install a matching recoverable checkpoint,
+   and verify boot/reconnect plus the two-hour listening run. Pending hardware
+   observations do not prohibit independent source work on the roadmap.
+5. **R5 traversal, then R4 safeguarded remote TX**, as previously ordered. R4
+   includes microphone uplink, Core TX integration, PTT/MOX, unkey-confirmed
+   handoff, watchdog, starvation handling and TX timeout together. PR #291's
+   old prerequisite is satisfied: merged August 2 at `7e681cc1`, which is an
+   ancestor of this integration branch. The green R3 suite does not close
+   skipped TX harness/RADE cases; those remain explicit R4 coverage work.
+6. **R6 remaining operations:** complete pairing/administration, packaging,
+   reachability guidance and documentation. Basic usable selection is step 2,
+   rather than being held for this final phase.
+
+Installed matching Core/GUI remains `55e7d49f`. Source completion, deployment,
+and operator acceptance are separate evidence. R4 remains part of the objective;
+R3's current TX-disabled runtime is an intermediate boundary, not the product's
+final feature scope.
 
 ## Network decisions carried forward
 
@@ -123,7 +144,7 @@ by the earlier brainstorming, and this review does not present them as such.
 | R-R3-07 | Audio jitter, loss and independent clocks are handled continuously. Client playback mute flushes queued audio and can suspend encoding without mutating station slice gain. |
 | R-R3-08 | Two FFT tiers can coexist per stream, with explicit capacity refusal/downgrade. Four pans share a session-wide display budget; hidden endpoints are explicitly disabled. |
 | R-R3-09 | Frequency/context changes, slice ID reuse, layout changes, float/dock and reconnect do not apply stale media or leak endpoints. |
-| R-R3-10 | Installable GUI/Core builds preserve local direct mode, source attribution and settings ownership. Remote receive requires real hardware and long-session evidence. |
+| R-R3-10 | The desktop package retains self-contained local radio/DSP operation when no external Core is available, alongside remote-Core mode. Preserve source attribution and settings ownership. A future bundled local-Core process may change internals but cannot require a separate Core host or manual service setup. Remote receive requires real hardware and long-session evidence. |
 | R-R3-11 | Core restores station RF gain controls and produces antenna-calibrated display levels. The remote GUI applies no second local calibration; local direct rendering retains its existing calibration. |
 | R-R3-12 | Remote Clarity receives Core's unsmoothed full-source noise-floor estimate before display reduction/quantization, with station calibration applied once. The GUI retains its existing smoothing, deadband, TX/manual-override gates and palette; stale or inactive endpoint measurements cannot drive the active pan. |
 | R-R3-13 | Remote applet and slice S-meters select Core's independent calibrated peak/average readings, or the decoded display's passband Max Bin. They follow active slice identity and never poll local DSP or add client calibration. Disconnect clears the live reading, and reconnect waits for the current snapshot; RX telemetry remains read-only. |
@@ -151,6 +172,7 @@ by the earlier brainstorming, and this review does not present them as such.
 | R-R3-35 | Telemetry graphs expose measured Core↔GUI traffic in kbit/s or Mbit/s, including direction and total, with Opus audio separately visible. State the accounting boundary (payload versus transport/wire overhead) and include both control and media without double counting. Show client audio buffering delay separately from control RTT; never present RTT or half-RTT as measured one-way Opus latency. Unknown measurements and reconnects produce explicit gaps. |
 | R-R3-36 | Receive startup and reconnect remain responsive when an optional host microphone cannot open. Unneeded capture must not block receive initialization. Preserve microphone metering/PC transmit availability and safe teardown; native device acceptance is separate from deterministic DSP/loopback lifecycle tests. |
 | R-R3-37 | Core advertises and independently enforces measured aggregate display byte and spectrum sample limits. Favor the active pan, reduce background FPS then pixels, and restore requested quality when headroom returns. Account PureSignal display traffic; keep Opus independent. Revisioned outcomes preserve reservations across refusal, stale replies and reconnects. Production limits require hardware measurements. |
+| R-R3-38 | One connection-selection flow exposes local radios, LAN Core/radio pairs and saved stations. Show Core identity, its configured/connected radio, and separate Core/radio availability. Select, connect, cancel, disconnect and switch without editing launch arguments or restarting manually. Retire prior session/media/settings ownership before activating another target; preserve local direct operation and authenticated station authority. |
 
 The September 21 user request explicitly adds banner telemetry restoration and
 the current Aether telemetry graph port. Upstream was fetched from
@@ -494,7 +516,7 @@ load separately; R3 parity remains open until those observations pass.
 **Requirements:** R-R3-02/09/10/16/17/21/24.
 **Dependencies:** existing StationClient lifecycle and task 4a connection
 entry points. This closes the interaction gaps identified by audit C01-C04
-and C10; it does not replace the R6 station-selection design.
+and C10; task 4g now brings basic station selection forward from R6.
 
 **Owned files:** `src/gui/{MainWindow,SetupDialog}.*`, affected setup/applets,
 `src/core/session/StationClient.*`, `src/models/RadioModel.*`,
@@ -834,6 +856,50 @@ alone and a Core restart are distinct lifecycle boundaries.
 real restart acceptance. Do not fix the observation by silently increasing a
 hard-coded startup slice count or duplicating receivers during client attach.
 
+## 4g. Select a Core/radio pair or a local radio
+
+**Priority:** next source deliverable after the display-capacity checkpoint,
+promoted from R6 by the September 22 operator request. **Requirements:**
+R-R3-10/16/17/21/38. **Existing design:** identity/pairing §6 already specifies
+“Radios on this network”, “Stations on this network”, and “Your stations”.
+This is completion of that product flow, not a new competing connection design.
+
+**Current evidence:** `MainWindow` constructs either a Local or Remote model
+from `RemoteStationOptions`; both are built into the existing desktop. The
+local `ConnectionPanel` lists radios, while `RemoteConnectionPanel` only handles
+one configured Core. Setup stores one URL/token/fingerprint tuple and explicitly
+requires the next launch to change roles. No complete station picker is claimed.
+
+**Expected presentation:** each remote entry identifies both the Core and its
+radio, for example “Rock 5C → Saturn G2”, with Core connectivity distinct from
+radio availability. Local radios clearly use this computer's Core/DSP. Choosing
+an existing pair does not silently reconfigure which radio its Core owns. Core
+radio reassignment, if offered, needs a separate authoritative station command
+and identity/ownership acceptance. Persist client credentials locally.
+
+- [ ] Produce the concrete selection design and implementation steps from the
+  existing panels, startup, settings-proxy and station-lifecycle source. Include
+  a reviewable screen layout and explicit switching/error states.
+- [ ] Implement saved targets and explicit local/remote selection; migrate the
+  existing configured station without losing its trust information. Keep the
+  existing pinned TLS/token contract until the identity/pairing migration is
+  implemented; a basic picker must not weaken authentication.
+- [ ] Add Core discovery and Core/radio identity presentation from the existing
+  dual-stack discovery design. Distinguish advertised/cached labels from the
+  authenticated current station snapshot and keep manual address entry useful.
+- [ ] Connect all entry points to the selector. Switching retires the old
+  control/media session, retries, model/render ownership and settings proxy
+  before activating the new local or remote target. No overlapping radio owner,
+  stale callback, credential crossover or accidental switch on an offline row.
+- [ ] Verify local direct operation, Core A→Core B, local→remote→local, wrong
+  identity, unavailable Core, connected Core/offline radio, cancel/reconnect,
+  settings isolation and visible selection/status. Use isolated fake/loopback
+  tests first and then an operator checkpoint with actual radios/Core.
+
+Full key pairing, revocation and administration remain tracked by R6 and the
+identity design; their absence must remain visible rather than represented by
+nonfunctional controls. Standalone desktop operation remains a product invariant.
+
 ## 5. Deliver mixed stereo Opus with continuous playback
 
 First sound is implemented and heard on the bench. Remaining playback
@@ -864,6 +930,17 @@ existing TX safeguards and verify failure/stop/reconnect with injected devices;
 keep direct native input opening as a separate acceptance check. This audit
 does not yet choose an asynchronous native-open lifecycle or alter production
 microphone behavior.
+
+The follow-up source audit also found a source-selection gap to fix before
+capture becomes demand-driven: `AudioEngine::isPcMicOverrideActive()` requires
+an open bus, so a selected but absent/closed PC mic skips the worker's override
+and can leave radio-mic samples in the normal and RADE input paths. The normal
+path can also feed those samples into VOX detection. Separate source intent
+from capture readiness, verify silence/refusal when the selected input is
+unavailable, and preserve non-PC/generated-audio paths. The existing
+`MoxController::setMox()` precheck precedes RF side effects and is the shared
+admission boundary; release must remain unconditional. This is recorded source
+evidence, not a completed fix or an approved asynchronous capture lifecycle.
 
 **Requirements:** R-R3-02, 03, 06, 07, 09. **Dependencies:** 1 and 4's session
 lifecycle; audio codec unit work can precede GUI spectrum completion.

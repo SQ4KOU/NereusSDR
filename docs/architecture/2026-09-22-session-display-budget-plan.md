@@ -181,7 +181,8 @@ mid-phase, retirement during send, old peer fallback and real graph/status text.
   resolve actionable findings and rerun affected checks.
 - [x] Build `NereusSDR`, `nereusd` and `all_tests`, then unfiltered
   `ctest --test-dir build-integration -j6 --output-on-failure`. Record host load.
-- [ ] Save a signed local checkpoint with required hooks and accurate build tag.
+- [x] Save signed local checkpoint `fc129a39` with required hooks.
+- [ ] Refresh and verify the matching binaries’ post-checkpoint build tag.
 - [ ] When installation/hardware access is authorized, measure the design's
   Rock 5C workloads and select enabled production values from evidence. Repeat
   the independent Pi 4 floor obligation; do not infer it from Rock results.

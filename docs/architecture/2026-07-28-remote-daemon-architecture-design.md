@@ -646,6 +646,14 @@ connection.** The two binaries must never hold the radio concurrently.
 **v1 adds the daemon and remote client mode. The existing in-process local
 path is left untouched.**
 
+**Operator clarification, September 22, 2026:** the desktop application must
+retain Core/radio/DSP capability when an external Core is unavailable. This is
+a lasting product requirement. If the later loopback architecture below is
+adopted, the desktop package must include and manage that local Core itself;
+it cannot require an SBC, a separately installed service or manual daemon
+startup. The current local direct path remains supported. The identity design's
+§6 local-radio group and R3 task 4g expose this choice alongside remote stations.
+
 The end state is that the GUI always talks to a daemon, including locally over
 loopback. That is architecturally correct and removes dual-mode entirely. It is
 not the first step, because `RadioModel` owns `WdspEngine` in-process, so

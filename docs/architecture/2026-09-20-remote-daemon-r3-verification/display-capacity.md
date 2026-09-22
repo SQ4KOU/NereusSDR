@@ -35,7 +35,8 @@ Focused checks on macOS 27.0 / Qt 6.11:
 | Status overlay render and hit regions | Rendered fixture inspected; second status row does not activate RF badges |
 | Consolidated independent source review | Four findings corrected, regression-covered; no remaining blocking source finding |
 | Matching GUI/Core/all-tests build and unfiltered full suite | Passed: 730/730 CTest targets, 286.68 s |
-| Signed local checkpoint / matching build identity | Pending |
+| Signed local checkpoint | `fc129a39`, verified GPG signature; mandatory hooks passed |
+| Matching post-checkpoint build identity | Pending refresh |
 
 Review corrections cover retirement during a pending subscribe, authoritative
 zero-charge retirement at the latest operation revision, failed source-update
@@ -48,6 +49,12 @@ The final GUI fixture explicitly requests 30 FPS, applies PS3 byte pressure with
 a generous independent sample limit, and awaits queued restoration acknowledgment.
 A process-specific settings profile prevents parallel tests from changing its
 request inputs. No production cap was selected from those test values.
+
+The commit hook required the per-pan sender's established `sw` identifier.
+A local-variable-only rename satisfied it without changing the gesture target
+or callback. Matching GUI/Core/all-tests binaries rebuilt and the GUI controller
+passed again in 12.80 s. The unfiltered suite above remains the behavioral
+verification; the rename introduced no behavioral change.
 
 Full-run load averages were 5.92 / 6.39 / 5.52 before the build,
 17.12 / 10.51 / 7.39 before CTest, and 12.23 / 10.88 / 8.40 afterward.
