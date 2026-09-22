@@ -239,3 +239,40 @@ review has no remaining actionable findings after the session-teardown fix.
 Logs: `r3-four-o3a-reviewed-{build,test,cases}.log`. This gate establishes
 the software checkpoint; matching native installation and real-device
 observations are recorded separately below.
+
+### Matching installation and live observations, September 22
+
+Signed software `3402d171` is installed on both the Rock and Mac. All 143
+overlay source hashes matched the signed checkpoint before the native build;
+staged dependency checks passed. GUI private-library UUIDs match the build,
+and strict/deep code-signature verification passed. Core is active with zero
+automatic restarts. Rollback is retained at
+`/var/lib/nereus-build/rollback-c9065756-before-3402d171/`.
+
+The running Core owns TCP 4992 and the authenticated listener at port 50055.
+A read-only loopback `sub slice all` observation returned the actual current
+TX-bound receive slice as `RF_frequency=3.865100 mode=LSB`, matching the GUI.
+This is real headless initial-state evidence; retune/rebind/removal are covered
+by the loopback regression suite, not a new physical-radio tuning test.
+The native Settings tree did not expose a usable navigation action through
+the current UI automation, so visual acceptance of the new 4O3A page remains
+pending; its pending/error/availability behavior passed the GUI tests.
+
+The old Core session ended during installation around 00:36:58. Without a
+manual connection action, the GUI reauthenticated at 00:37:16 and resumed
+Opus reception. Live spectrum, waterfall and meter were visible; all three
+telemetry tabs showed current measurements and the restart gap. Samples were
+about 550–580 kbps total Core application traffic, 23–24 kbps Opus payload,
+25–26 kbps audio-track messages and 24–29 ms speaker buffering. These are
+observations, not fixed-rate or end-to-end latency guarantees.
+
+TGXL discovery remains separate from TCP admission. After installation,
+connect-time timeouts and fresh SYN-SENT attempts still occur; no tuner
+identity was admitted. The observed retries no longer show the previous
+source-bind/invalid-descriptor failure. No RF, tuner actuation, pairing or
+network configuration was used. Audio soak remains open; the receive log
+still has occasional approximately 80 ms RTP-arrival gaps.
+
+Private evidence: `r3-four-o3a-native-build.log`, `r3-four-o3a-install.log`,
+`r3-four-o3a-gui-identity.json`, `r3-four-o3a-live-core.log`,
+`r3-four-o3a-listener-observation.log`, and `r3-four-o3a-retry-live.log`.

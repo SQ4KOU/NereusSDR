@@ -56,16 +56,16 @@ supporting evidence; no R3 checkpoint is complete until its operator-visible
 result is demonstrated. There is no separate executable named NereusUI yet;
 this plan uses the existing NereusSDR executable in remote station mode.
 
-**Current remaining order, September 21:** repair second-slice RADE routing
-and mixed-audio continuity (R-R3-31); restore Core-banner telemetry and port
-the current Aether telemetry graphing surface (R-R3-32/33), alongside the
-remaining connection controls, snapshot hydration and capability gating
-(4a/4c); repair station accessory connection/status behind the installed
-receive-only guards (4d);
-finish wideband parity and sustained audio with operator feedback (4b/5/5a);
-run capacity, boot/reconnect and two-hour acceptance (6). Receive-only R5
-traversal follows, then safeguarded R4 TX and R6 selection/pairing/packaging.
-The audit is complete; these newly identified implementation tasks are open.
+**Current remaining order, September 22:** RADE routing, Core telemetry,
+bandwidth graphs and the Core-owned accessory controls have software
+implementations installed through `3402d171`. Finish real TGXL admission and
+visible-control acceptance (4a/4c/4d); restore receiver membership across Core
+restart (R-R3-34), integrating the parallel WDSP per-slice persistence work
+serially first; finish wideband parity and sustained mixed audio with operator
+feedback (4b/5/5a). Then complete capacity, late-radio/silence recovery,
+boot/reconnect and two-hour acceptance (6). Receive-only R5 traversal follows,
+then safeguarded R4 TX and R6 selection/pairing/packaging. Installed software
+does not close the outstanding hardware and sustained-listening checks.
 
 ## Network decisions carried forward
 
@@ -1021,8 +1021,8 @@ whole-plan review loops.
 | BPF and Auto AGC-T indicators | Source implementation and focused tests pass | R-R3-14/15: station filter snapshot/reconnect, headless per-stream AGC source, active-applet/flag bindings implemented; live 20m filter and AGC floor observed, complete band/reconnect acceptance pending |
 | Manual Core reconnect | Configured-endpoint controls installed; title-panel path verified | Title opens details; manual Disconnect/Connect restored receive at `8c011066`. New `706b9a5f` also automatically resumed after Core installation. New media-only recovery has pinned-TLS integration coverage; a real media-only drop and remaining UI entry points need acceptance. |
 | Visible controls and snapshot hydration | Bounded task 4c implementation installed at `95b19467` | Startup implicit slice creation is fixed and covered; fresh live attach displayed one slice. TX applet/PureSignal/filter-match, FIR and tuner gates are implemented. Phone/CW, XIT, TX settings and other remaining surfaces are listed in the control matrix. |
-| Station accessories / TGXL | Receive-only guards, status adapter and lifecycle repair installed; task 4d remains open | Snapshot replay is non-actuating; raw transmit writes and automatic tuner carrier requests are refused. Owned retry cancellation and stale-socket guards are installed via `3a589945`/`d9c7bce1`. Core connected at .234:9010 and received actual tuner info. Ordered live configuration, positive identity admission and headless frequency/mode propagation remain unfinished; ANT1–3 are intentionally gated in this receive-only checkpoint. |
+| Station accessories / TGXL | Core-owned control/status and headless tracking installed in `3402d171`; real TGXL admission pending | Typed master/configuration, identity checks, cancellation and fresh-socket retries pass automated tests. Core's live listener reports the actual bound frequency/mode. Current tuner TCP attempts time out despite discovery; no identity acceptance is claimed. The new Settings page still needs visual acceptance. ANT1–3 remain receive-only gated. |
 | Second-pan RADE | R-R3-31 playback correction installed at signed `200d2a0e`; listening acceptance still open | Owning-slice routing, lifecycle guards, the upstream 4096-frame mixer correction, and demand-only admitted-packet release are installed. The burst/loss regression, consolidated review and 692 desktop tests pass. Ordinary receive has shown no further GUI underflow restart after startup recovery; the one-SSB/one-RADE operator check remains pending. Leaving RADE on both receivers resolved the earlier audible problem. Sender scheduling and sustained operation remain open; see [RADE verification](2026-09-20-remote-daemon-r3-verification/rade-multislice.md). |
-| Core banner and telemetry graphs | R-R3-32/33 installed in `200d2a0e`; all three graph tabs observed live | Latest fetched Aether source is `0dea0dd7`; authenticated collectors, graph/history port and consolidated review pass, as do all 692 desktop tests and the native build. Font-measured gutter correction is installed and readability verified; receive-only reconnect gaps remain pending. CPU/memory history remains follow-on work; see [design](2026-09-21-core-telemetry-design.md). |
+| Core banner and telemetry graphs | R-R3-32/33/35 installed; all three tabs and restart gaps observed live | Aether graph/history port uses fetched source `0dea0dd7`. Total/directional Core application traffic, separate Opus bandwidth and speaker buffering are visible in matching `3402d171`; RTT is separately labeled. All 696 desktop tests and native build passed. CPU/memory history and capture-to-playback latency remain follow-on work; see [design](2026-09-21-core-telemetry-design.md). |
 | Audio controls and diagnostics | R-R3-23 open; task 5a | Fixed 24 kbit/s stereo is active; persistent profile/health/output feedback and measured 24/48 comparison remain. A selectable quality profile needs an acknowledged Core contract; no adaptive-rate claim. |
 | Boot recovery | R-R3-26 included in installed `8c011066`; late-address boot pending | Listener retries reuse station identity and cancel on stop; 682 test executables pass. Separate R-R3-27 covers one-shot initial radio discovery. |
