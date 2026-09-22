@@ -36,6 +36,11 @@
 // behaviour behind them is exercised through SetupDialog, which CAN be
 // stood up against a Role::Remote model.
 //
+// That stopped being true with R-R3-38. GuiSessionCoordinator builds each
+// MainWindow with ConnectionStartup::Deferred, so nothing is dialled or
+// scanned until asked, and the Tools menu test entries case at the bottom
+// of this file drives real windows through it.
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-08-08 -- New test file for remote-daemon R2 Task 20. J.J. Boyd
@@ -51,28 +56,46 @@
 //                 button's missing follow of a refusal. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-22 -- The Tools menu's two developer test entries are
+//                 disabled in a remote session (R-R3-21, R-R3-25),
+//                 checked through real windows. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
 
+#include <QAction>
 #include <QApplication>
 #include <QCheckBox>
+#include <QFile>
+#include <QHostAddress>
 #include <QMap>
 #include <QMetaObject>
 #include <QPushButton>
+#include <QScopeGuard>
 #include <QSignalSpy>
 #include <QStringList>
+#include <QTemporaryDir>
+#include <QWebSocketServer>
 #include <QWidget>
+
+#include <chrono>
 
 #include "core/AppSettings.h"
 #include "core/MoxController.h"
+#include "core/RadioDiscovery.h"
 #include "core/WdspTypes.h"
 #include "core/session/RemoteStationOptions.h"
+#include "core/session/SessionTransport.h"
+#include "core/session/StationClient.h"
+#include "core/session/StationServer.h"
 #include "core/settings/ISettingsBackend.h"
 #include "core/settings/SettingsProxy.h"
 #include "core/settings/SettingsScope.h"
+#include "gui/GuiSessionCoordinator.h"
 #include "gui/MainWindow.h"
 #include "gui/SetupDialog.h"
+#include "gui/StationStartupSelection.h"
 #include "gui/applets/TxApplet.h"
 #include "gui/setup/DspOptionsPage.h"
 #include "models/RadioModel.h"
@@ -107,6 +130,29 @@ public:
     QStringList handledKeys() const override { return {}; }
 };
 
+// R-R3-21 / R-R3-25: the Tools menu's two developer test entries, and the
+// TX Equalizer entry whose remote tooltip they are required to share.
+const QString kTestToastActionName   = QStringLiteral("toolsTestAntennaSwitchToast");
+const QString kTestReRouteActionName = QStringLiteral("toolsTestTxBoundReRoute");
+const QString kTxEqualizerActionName = QStringLiteral("toolsTxEqualizer");
+
+// MainWindow answers antennaAutoSwitched with an AntennaSwitchToast tool
+// window and txBoundReRouteRequested with a modal TxBoundConfirmDialog,
+// whose exec() would block the test. Neither is what the test entries
+// case asserts: it asks whether an entry reaches RadioModel at all, and
+// watches RadioModel's own signals for that. So the window's two
+// consumers are detached first. False means one of them was not there to
+// detach, i.e. the wiring moved and the case needs another look.
+bool detachTestSurfaceConsumers(MainWindow* window)
+{
+    RadioModel* const model = window->radioModel();
+    const bool toast = QObject::disconnect(
+        model, &RadioModel::antennaAutoSwitched, window, nullptr);
+    const bool reRoute = QObject::disconnect(
+        model, &RadioModel::txBoundReRouteRequested, window, nullptr);
+    return toast && reRoute;
+}
+
 } // namespace
 
 class TstRemoteGuiGating : public QObject {
@@ -115,6 +161,12 @@ class TstRemoteGuiGating : public QObject {
 private slots:
     void initTestCase()
     {
+        // Before the first AppSettings::instance() call, so the singleton
+        // resolves to this run's own file. The test entries case builds
+        // MainWindows, which save; parallel ctest jobs must not share a
+        // settings file (the same arrangement as tst_gui_session_coordinator).
+        AppSettings::setProfileOverride(QStringLiteral("remote-gui-gating-%1")
+                                            .arg(QCoreApplication::applicationPid()));
         if (!qApp) {
             static int argc = 0;
             new QApplication(argc, nullptr);
@@ -126,6 +178,13 @@ private slots:
     {
         AppSettings::instance().setRemoteBackend(nullptr);
         AppSettings::instance().clear();
+    }
+
+    void cleanupTestCase()
+    {
+        const QString path = AppSettings::instance().filePath();
+        QFile::remove(path);
+        QFile::remove(path + QStringLiteral(".bak"));
     }
 
     // ====================================================================
@@ -1025,6 +1084,173 @@ private slots:
         QCheckBox* const highRes = page.highResolutionFilterCharacteristicsCheckBox();
         QVERIFY(highRes != nullptr);
         QVERIFY(highRes->isEnabled());
+    }
+
+    // ====================================================================
+    // R-R3-21 / R-R3-25: the Tools menu's two developer test entries.
+    //
+    // "Test antenna switch toast" and "Test TX-bound re-route dialog" fake
+    // an antenna switch and a TX-bound antenna re-route on this window's
+    // own RadioModel. Nothing on the Core stands behind either, so a
+    // remote session gives them the transmit gate and the tooltip the
+    // other unavailable transmit controls carry. Local direct mode keeps
+    // them exactly as they were.
+    //
+    // Real windows, through GuiSessionCoordinator: the production path
+    // from local mode to a Core session and back again.
+    // ====================================================================
+    void toolsMenuTestEntriesAreDisabledInARemoteSession()
+    {
+        // The arrangement tst_gui_session_coordinator makes first: no VAX
+        // first-run dialog, and no discovery broadcast from the local
+        // windows onto the LAN.
+        AppSettings::instance().setValue(QStringLiteral("audio/FirstRunComplete"),
+                                         QStringLiteral("True"));
+        RadioDiscovery::clearHoldOffForTest();
+        {
+            RadioDiscovery discovery;
+            discovery.holdOffScans(std::chrono::minutes{5});
+        }
+        const auto releaseHoldOff = qScopeGuard([] {
+            RadioDiscovery::clearHoldOffForTest();
+        });
+
+        // A Core on loopback. Its model has no radio behind it, which is
+        // all this needs: the handshake is what makes the session
+        // Core-connected.
+        QTemporaryDir stationDir;
+        QVERIFY(stationDir.isValid());
+        AppSettings stationSettings(stationDir.filePath(QStringLiteral("station.settings")));
+
+        // Both ends of a real session have run CoreInit::initialize()'s
+        // settings migrations before it opens. StationClient warns when
+        // the client has not, and each end warns when their versions
+        // differ. Which version does not matter here, only that both
+        // ends have one and it is the same.
+        constexpr int kMigratedSchema = 6;
+        AppSettings::instance().ensureSettingsAtVersion(kMigratedSchema);
+        stationSettings.ensureSettingsAtVersion(kMigratedSchema);
+
+        RadioModel station;
+        StationServer server(&station, stationSettings, stationDir.path());
+        QWebSocketServer listener(QStringLiteral("core"), QWebSocketServer::NonSecureMode);
+        QVERIFY(listener.listen(QHostAddress::LocalHost, 0));
+        connect(&listener, &QWebSocketServer::newConnection, &server, [&listener, &server] {
+            server.acceptTransport(new WebSocketTransport(
+                listener.nextPendingConnection(), StationServer::kMaxIncomingMessageBytes));
+        });
+        StationStartupSelection core;
+        core.connection.url = QStringLiteral("ws://127.0.0.1:%1").arg(listener.serverPort());
+        core.connection.token = server.token();
+        core.connection.allowUnpinned = true;
+        core.savedId = QStringLiteral("core");
+
+        GuiSessionCoordinator sessions;
+        QString localToastTip;
+        QString localReRouteTip;
+        QString remoteReason;
+
+        // ---- Local direct mode: live, and as it has always been ----
+        {
+            QVERIFY(sessions.replace({}, false));
+            MainWindow* const window = sessions.window();
+            QVERIFY(window->radioModel()->ownsLocalDsp());
+            QAction* const toast = window->findChild<QAction*>(kTestToastActionName);
+            QAction* const reRoute = window->findChild<QAction*>(kTestReRouteActionName);
+            QVERIFY(toast != nullptr);
+            QVERIFY(reRoute != nullptr);
+            QCOMPARE(toast->text(), QStringLiteral("Test antenna switch &toast"));
+            QCOMPARE(reRoute->text(), QStringLiteral("Test TX-bound &re-route dialog"));
+            QVERIFY(toast->isEnabled());
+            QVERIFY(reRoute->isEnabled());
+            localToastTip = toast->toolTip();
+            localReRouteTip = reRoute->toolTip();
+            QVERIFY(!localToastTip.isEmpty());
+            QVERIFY(!localReRouteTip.isEmpty());
+
+            QVERIFY(detachTestSurfaceConsumers(window));
+            QSignalSpy switched(window->radioModel(), &RadioModel::antennaAutoSwitched);
+            QSignalSpy reRouted(window->radioModel(), &RadioModel::txBoundReRouteRequested);
+            toast->trigger();
+            reRoute->trigger();
+            // Non-vacuity for the remote half: the same trigger on a live
+            // entry does reach RadioModel.
+            QCOMPARE(switched.count(), 1);
+            QCOMPARE(reRouted.count(), 1);
+        }
+
+        // ---- Connected to a Core: disabled, with the transmit reason ----
+        {
+            QVERIFY(sessions.replace(core, true));
+            MainWindow* const window = sessions.window();
+            QVERIFY(!window->radioModel()->ownsLocalDsp());
+            QAction* const toast = window->findChild<QAction*>(kTestToastActionName);
+            QAction* const reRoute = window->findChild<QAction*>(kTestReRouteActionName);
+            QAction* const txEqualizer = window->findChild<QAction*>(kTxEqualizerActionName);
+            QVERIFY(toast != nullptr);
+            QVERIFY(reRoute != nullptr);
+            QVERIFY(txEqualizer != nullptr);
+            // Unavailable from the start, before the handshake lands.
+            QVERIFY(!toast->isEnabled());
+            QVERIFY(!reRoute->isEnabled());
+
+            auto* const client = window->findChild<StationClient*>();
+            QVERIFY(client != nullptr);
+            QTRY_VERIFY(client->isHandshakeComplete());
+            QVERIFY2(!client->capabilities().txPermitted,
+                     "the Core advertises txPermitted=false in R3; this case is "
+                     "the receive-only session an operator actually has");
+
+            QVERIFY(!toast->isEnabled());
+            QVERIFY(!reRoute->isEnabled());
+            QVERIFY(!txEqualizer->isEnabled());
+            remoteReason = txEqualizer->toolTip();
+            QVERIFY2(remoteReason.contains(QStringLiteral("transmit")),
+                     qPrintable(QStringLiteral("the TX Equalizer entry no longer "
+                                               "carries the remote transmit reason: %1")
+                                    .arg(remoteReason)));
+            QCOMPARE(toast->toolTip(), remoteReason);
+            QCOMPARE(reRoute->toolTip(), remoteReason);
+
+            QVERIFY(detachTestSurfaceConsumers(window));
+            QSignalSpy switched(window->radioModel(), &RadioModel::antennaAutoSwitched);
+            QSignalSpy reRouted(window->radioModel(), &RadioModel::txBoundReRouteRequested);
+            toast->trigger();
+            reRoute->trigger();
+            // Past the disabled action to the handlers themselves, which
+            // refuse the way the TX Equalizer entry's handler does.
+            emit toast->triggered(false);
+            emit reRoute->triggered(false);
+            QCOMPARE(switched.count(), 0);
+            QCOMPARE(reRouted.count(), 0);
+        }
+
+        // ---- Back to local mode: live again, local tooltips back ----
+        {
+            QVERIFY(sessions.replace({}, false));
+            MainWindow* const window = sessions.window();
+            QVERIFY(window->radioModel()->ownsLocalDsp());
+            QAction* const toast = window->findChild<QAction*>(kTestToastActionName);
+            QAction* const reRoute = window->findChild<QAction*>(kTestReRouteActionName);
+            QVERIFY(toast != nullptr);
+            QVERIFY(reRoute != nullptr);
+            QVERIFY(toast->isEnabled());
+            QVERIFY(reRoute->isEnabled());
+            QCOMPARE(toast->toolTip(), localToastTip);
+            QCOMPARE(reRoute->toolTip(), localReRouteTip);
+            QVERIFY(localToastTip != remoteReason);
+            QVERIFY(localReRouteTip != remoteReason);
+
+            QVERIFY(detachTestSurfaceConsumers(window));
+            QSignalSpy switched(window->radioModel(), &RadioModel::antennaAutoSwitched);
+            QSignalSpy reRouted(window->radioModel(), &RadioModel::txBoundReRouteRequested);
+            toast->trigger();
+            reRoute->trigger();
+            QCOMPARE(switched.count(), 1);
+            QCOMPARE(reRouted.count(), 1);
+        }
+
+        sessions.shutdown();
     }
 };
 

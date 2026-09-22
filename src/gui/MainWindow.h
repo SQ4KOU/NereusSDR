@@ -901,6 +901,11 @@ private:
     QAction* m_actPureSignal{nullptr};
     QAction* m_actTxEqualizer{nullptr};
     QAction* m_actDspPureSignal{nullptr};
+    // Tools menu developer test entries (antenna switch toast, TX-bound
+    // re-route dialog). Kept so applyRemoteRoleGating() can give them the
+    // transmit gate in a remote session (R-R3-21, R-R3-25).
+    QAction* m_actTestAntennaToast{nullptr};
+    QAction* m_actTestTxBoundReRoute{nullptr};
 
     // Phase 3J-2 H1: Tools > Spot Hub... and Tools > FreeDV Reporter...
     // modeless singleton dialogs. Lazy-constructed on first

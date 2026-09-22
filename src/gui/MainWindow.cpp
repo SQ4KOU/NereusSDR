@@ -470,6 +470,23 @@ QVector<DetectedCable> detectedForFirstRun()
     return out;
 #endif
 }
+
+// Local tooltips of the Tools menu's two developer test entries. Defined
+// once because applyRemoteRoleGating() swaps them for the remote transmit
+// reason and has to be able to put them back.
+QString testAntennaToastToolTip()
+{
+    return QStringLiteral("Phase 3F closeout: fire the AntennaSwitchToast surface "
+                          "for visual verification. Real auto-switch firing wires "
+                          "when the conflict-detection state machine ships.");
+}
+
+QString testTxBoundReRouteToolTip()
+{
+    return QStringLiteral("Phase 3F closeout: open the TxBoundConfirmDialog surface "
+                          "for visual verification. Real emission from addSliceOnPan "
+                          "wires when the conflict-detection state machine ships.");
+}
 } // namespace
 
 MainWindow::MainWindow(QWidget* parent)
@@ -7544,15 +7561,20 @@ void MainWindow::buildMenuBar()
     // re-route dialog render correctly without needing to trigger a real
     // antenna conflict. Removed when full conflict-detection state machine
     // lands and the test surfaces become unnecessary.
+    //
+    // R-R3-21 / R-R3-25: in a remote session both would fake an antenna
+    // event the Core never had, so applyRemoteRoleGating() gives them the
+    // transmit gate, and each handler refuses the same way the TX
+    // Equalizer entry's does. Local direct mode is unchanged.
     toolsMenu->addSeparator();
     {
         QAction* testToastAct = toolsMenu->addAction(
             QStringLiteral("Test antenna switch &toast"));
-        testToastAct->setToolTip(
-            QStringLiteral("Phase 3F closeout: fire the AntennaSwitchToast surface "
-                            "for visual verification. Real auto-switch firing wires "
-                            "when the conflict-detection state machine ships."));
+        m_actTestAntennaToast = testToastAct;
+        testToastAct->setObjectName(QStringLiteral("toolsTestAntennaSwitchToast"));
+        testToastAct->setToolTip(testAntennaToastToolTip());
         connect(testToastAct, &QAction::triggered, this, [this]() {
+            if (!transmitControlsPermitted()) { return; }
             if (m_radioModel) {
                 m_radioModel->emitAntennaAutoSwitched(
                     0, QStringLiteral("ANT1"), QStringLiteral("ANT2"));
@@ -7562,11 +7584,11 @@ void MainWindow::buildMenuBar()
     {
         QAction* testReRouteAct = toolsMenu->addAction(
             QStringLiteral("Test TX-bound &re-route dialog"));
-        testReRouteAct->setToolTip(
-            QStringLiteral("Phase 3F closeout: open the TxBoundConfirmDialog surface "
-                            "for visual verification. Real emission from addSliceOnPan "
-                            "wires when the conflict-detection state machine ships."));
+        m_actTestTxBoundReRoute = testReRouteAct;
+        testReRouteAct->setObjectName(QStringLiteral("toolsTestTxBoundReRoute"));
+        testReRouteAct->setToolTip(testTxBoundReRouteToolTip());
         connect(testReRouteAct, &QAction::triggered, this, [this]() {
+            if (!transmitControlsPermitted()) { return; }
             if (m_radioModel) {
                 m_radioModel->requestTxBoundReRoute(
                     QStringLiteral("ANT2"), QStringLiteral("ANT1"));
@@ -10121,6 +10143,19 @@ void MainWindow::applyRemoteRoleGating()
         m_actTxEqualizer->setEnabled(transmitPermitted);
         m_actTxEqualizer->setToolTip(transmitPermitted
             ? tr("Open the TX equalizer.") : transmitReason);
+    }
+    // The Tools menu's developer test entries fake an antenna switch and a
+    // TX-bound re-route that nothing on the Core stands behind, so they
+    // follow the same gate and give the same reason.
+    if (m_actTestAntennaToast) {
+        m_actTestAntennaToast->setEnabled(transmitPermitted);
+        m_actTestAntennaToast->setToolTip(transmitPermitted
+            ? testAntennaToastToolTip() : transmitReason);
+    }
+    if (m_actTestTxBoundReRoute) {
+        m_actTestTxBoundReRoute->setEnabled(transmitPermitted);
+        m_actTestTxBoundReRoute->setToolTip(transmitPermitted
+            ? testTxBoundReRouteToolTip() : transmitReason);
     }
     if (m_tunerApplet) {
         m_tunerApplet->setTransmitPermitted(transmitPermitted, transmitReason);
