@@ -102,6 +102,10 @@ private slots:
         QVERIFY(details->text().contains(controls.endpointText()));
         QVERIFY(!dial->isEnabled());
         QVERIFY(stop->isEnabled());
+        const QString refused = QStringLiteral("Receiver 2 (pan-1): no DDC is available. The saved layout is retained.");
+        QVERIFY(remote.applyStationReceiveLayoutStatus("receiveLayoutRestoreState", "degraded"));
+        QVERIFY(remote.applyStationReceiveLayoutStatus("receiveLayoutRestoreMessage", refused));
+        QVERIFY(details->text().contains(refused));
         const auto epoch = client.sessionEpoch();
         controls.connectToStation(); // Duplicate surface must not replace the live client.
         QCOMPARE(client.sessionEpoch(), epoch);
@@ -110,6 +114,7 @@ private slots:
         QVERIFY(dial->isEnabled());
         QVERIFY(!stop->isEnabled());
         QCOMPARE(controls.statusText(), QStringLiteral("Core disconnected"));
+        QVERIFY(!details->text().contains(refused)); // retained snapshot is stale while disconnected
         dial->click();
         QTRY_VERIFY(client.isHandshakeComplete());
         QVERIFY(client.sessionEpoch() > epoch);

@@ -56,6 +56,23 @@ int SliceStreamAllocator::firstFreeStream() const
     return -1;
 }
 
+SliceStreamAllocator::Placement SliceStreamAllocator::joinStream(
+    int streamIndex, double frequencyHz) const
+{
+    Placement placement;
+    if (streamIndex < 0 || streamIndex >= m_streams.size()
+        || !windowContains(m_streams.at(streamIndex), frequencyHz)) {
+        placement.reason = QStringLiteral(
+            "The saved frequency is outside this pan's receiver window (stream %1). "
+            "Retune it into that window or place it on a separate pan.").arg(streamIndex);
+        return placement;
+    }
+    placement.outcome = Outcome::JoinedExisting;
+    placement.streamIndex = streamIndex;
+    placement.shiftOffsetHz = frequencyHz - m_streams.at(streamIndex).centreHz;
+    return placement;
+}
+
 SliceStreamAllocator::Placement
 SliceStreamAllocator::placeSlice(double frequencyHz,
                                  bool preferOwnStream) const

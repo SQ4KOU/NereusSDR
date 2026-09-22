@@ -149,6 +149,7 @@ by the earlier brainstorming, and this review does not present them as such.
 | R-R3-33 | Inspect freshly fetched AetherSDR upstream and port its applicable telemetry history/graphing UI with source attribution. Adapt data ownership to Nereus Core/GUI while preserving meaningful graph behavior, bounded history, sampling and gaps. Do not copy Flex-specific transport assumptions or label inferred loss/latency as measured telemetry. Verify direct and remote modes, reconnect, stale data and rendering overhead. |
 | R-R3-34 | Core persists and restores the operator's receive slices and their identities, frequencies/modes and pan bindings across restart. Unsupported or failed restoration is explicit, with actionable recovery; an attached GUI cannot retain an apparently configured but empty second pan without explanation. Reconcile daemon configured slice count, station persistence and snapshot hydration; cover at least the observed two-receiver restart. |
 | R-R3-35 | Telemetry graphs expose measured Core↔GUI traffic in kbit/s or Mbit/s, including direction and total, with Opus audio separately visible. State the accounting boundary (payload versus transport/wire overhead) and include both control and media without double counting. Show client audio buffering delay separately from control RTT; never present RTT or half-RTT as measured one-way Opus latency. Unknown measurements and reconnects produce explicit gaps. |
+| R-R3-36 | Receive startup and reconnect remain responsive when an optional host microphone cannot open. Unneeded capture must not block receive initialization. Preserve microphone metering/PC transmit availability and safe teardown; native device acceptance is separate from deterministic DSP/loopback lifecycle tests. |
 
 The September 21 user request explicitly adds banner telemetry restoration and
 the current Aether telemetry graph port. Upstream was fetched from
@@ -752,15 +753,25 @@ alone and a Core restart are distinct lifecycle boundaries.
   of all legacy `Slice<N>` band settings. Pending hydration must avoid starting
   RADE through a mode setter before connection/resource validation. Exact
   persistence interfaces are defined in the
-  [receive-layout design](2026-09-22-core-receive-layout-design.md); runtime
-  restoration/status integration and lifecycle tests remain to implement.
+  [receive-layout design](2026-09-22-core-receive-layout-design.md).
   The data-only store now persists a validated per-radio layout and explicit
   RADE receive-audio owner; its disk round trips and rejection behavior pass
   within the fresh 719-test suite. See the
   [foundation evidence](2026-09-20-remote-daemon-r3-verification/receive-layout-store.md).
-- [ ] Restore saved slice identities, frequencies/modes and view bindings, with
+  Passive Local-model hydration now reconciles stable objects and restores
+  tuning/preferences without decoder startup or bootstrap settings writes;
+  [hydration evidence](2026-09-20-remote-daemon-r3-verification/receive-layout-hydration.md)
+  records the initial passive checkpoint. Runtime integration now covers daemon
+  startup/count precedence, board/pan resource admission, sparse-ID DSP startup,
+  explicit RADE receive ownership, settings capture/retry and authenticated GUI
+  reseeding. Consolidated review corrections and the in-process recovery
+  identity fix pass. The final matching build passes; the unfiltered suite is
+  722/724, with two unchanged native microphone-opening timeouts still open.
+  See the [runtime evidence](2026-09-20-remote-daemon-r3-verification/receive-layout-runtime.md).
+  Hardware restart acceptance remains open.
+- [x] Restore saved slice identities, frequencies/modes and view bindings, with
   capability/resource validation and safe fallback for a changed radio.
-- [ ] Reconcile the attached GUI from the restored snapshot; removed or refused
+- [x] Reconcile the attached GUI from the restored snapshot; removed or refused
   receivers must be explicit and must retire stale media/control callbacks.
 - [ ] Test a real two-slice Core stop/start and authenticated client reconnect,
   then repeat the two-pan receive-only hardware checkpoint.
@@ -775,6 +786,30 @@ First sound is implemented and heard on the bench. Remaining playback
 interruptions, the profile comparison and final two-hour stability run are
 separate open gates. Follow the current remaining order above; R5 traversal
 is not a prerequisite for LAN listening.
+
+**New startup gap (R-R3-36):** an independently installed Mac application
+blocked for 541.93 seconds opening its default microphone before PortAudio
+returned an internal error. The same boundary stalled four native lifecycle
+tests. Test-only audio-device injection now keeps those DSP/loopback tests
+deterministic across reconnects; production microphone startup is unchanged.
+Plan a receive-startup/capture-demand boundary with explicit failure reporting
+and safe teardown. A timeout around a non-cancellable native open is not by
+itself a safe recovery mechanism. Native device acceptance remains required.
+
+The bounded source audit identifies `AudioEngine::start()`'s unconditional
+`ensureTxInputOpen()` as the receive-startup coupling. Remote GUI models already
+skip this local startup path, but receive-only daemon models do not. Explicit
+device changes in `setTxInputConfig()` also open capture synchronously. PC-mic
+TX consumes that bus through `TxWorkerThread`; microphone meters only poll it,
+and the current Test Mic control starts a meter timer without opening capture.
+The next implementation must make capture demand explicit and observable,
+trace the local MOX admission boundary before changing TX preparation, and
+define how meter visibility/Test Mic requests capture. A restored PC-mic source
+preference alone must not be confused with an active capture request. Preserve
+existing TX safeguards and verify failure/stop/reconnect with injected devices;
+keep direct native input opening as a separate acceptance check. This audit
+does not yet choose an asynchronous native-open lifecycle or alter production
+microphone behavior.
 
 **Requirements:** R-R3-02, 03, 06, 07, 09. **Dependencies:** 1 and 4's session
 lifecycle; audio codec unit work can precede GUI spectrum completion.

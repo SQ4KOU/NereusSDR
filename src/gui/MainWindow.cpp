@@ -1011,6 +1011,27 @@ void MainWindow::connectToStation()
             showToast(tr("Connected to station %1").arg(m_station.url),
                       ToastSeverity::Info, 3000);
         });
+        const auto explainReceiveLayout = [this] {
+            if (!m_stationClient->isHandshakeComplete()) { return; }
+            const QString state = m_radioModel->receiveLayoutRestoreState();
+            const QString message = m_radioModel->receiveLayoutRestoreMessage();
+            if (state == QLatin1String("accepted")) {
+                m_lastReceiveLayoutWarning.clear();
+            } else if ((state == QLatin1String("invalid")
+                        || state == QLatin1String("degraded")
+                        || state == QLatin1String("fallback"))
+                       && !message.isEmpty() && message != m_lastReceiveLayoutWarning) {
+                m_lastReceiveLayoutWarning = message;
+                showToast(tr("%1 Details remain in Core connection.").arg(message),
+                          ToastSeverity::Warning, 10000);
+            }
+        };
+        // State/detail arrive as a property bag. Queue evaluation so a paired
+        // update is settled before presenting why a saved pan has no receiver.
+        connect(m_radioModel, &RadioModel::receiveLayoutRestoreStatusChanged,
+                this, explainReceiveLayout, Qt::QueuedConnection);
+        connect(m_stationClient, &StationClient::stateSnapshotApplied,
+                this, explainReceiveLayout, Qt::QueuedConnection);
         connect(m_stationClient, &StationClient::sessionEnded, this,
                 [this](const QString& reason) {
             if (m_stationDisconnectRequested

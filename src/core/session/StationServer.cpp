@@ -203,6 +203,13 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     // there is none.
     connect(m_mirror, &StateMirror::sessionMessageReady, this,
             [this](const SessionMessage& message) { sendToSession(message); });
+    connect(radioModel, &RadioModel::receiveLayoutHydrated, this, [this] {
+        if (m_session && m_mirrorBuilt) {
+            // Shared slice QObjects were restored without individual notify
+            // signals. Re-seed their entire settled state on the same session.
+            m_mirror->attachSession();
+        }
+    });
     connect(m_dispatcher, &SessionCommandDispatcher::commandResultReady, this,
             [this](const SessionMessage& result) { sendToSession(result); });
     connect(m_settingsServer, &SettingsProxyServer::outboundValueChanged, this,

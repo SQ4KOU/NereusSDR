@@ -193,7 +193,12 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
                 // The echo guard, checked FIRST, before this handler asks
                 // anything else about the change -- exactly where
                 // StateMirror::onWatchedPropertyChanged checks its own.
-                if (m_applyingInbound || !m_forwardLocalChanges) {
+                // Before the first snapshot is complete, local changes have
+                // no authenticated station state to merge with.  A later
+                // schema burst on an established session is different: keep
+                // genuine operator edits coalesced while its snapshot owns
+                // the wire, then flush them after SnapshotComplete.
+                if (m_applyingInbound || (!m_forwardLocalChanges && !m_handshakeComplete)) {
                     return;
                 }
                 QObject* object = m_objects.value(objectKey).data();
@@ -641,6 +646,15 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
     m_linkUp = false;
     m_sessionActive = true;
 
+    // These are optional, remote-only fields.  A fresh peer may predate
+    // them, in which case its snapshot cannot overwrite a status received
+    // from the previous station.  Do this at the attach boundary rather
+    // than on a same-session re-seed, whose status remains authoritative.
+    if (m_radioModel != nullptr) {
+        m_radioModel->applyStationReceiveLayoutStatus("receiveLayoutRestoreState", {});
+        m_radioModel->applyStationReceiveLayoutStatus("receiveLayoutRestoreMessage", {});
+    }
+
     // Per-attach, never carried across one. A reconnect re-dials and gets
     // a fresh TLS handshake, possibly against a different certificate, so
     // a pin satisfied by the PREVIOUS session says nothing about this one.
@@ -1071,7 +1085,8 @@ void StationClient::onTransportText(const QByteArray& wire)
             handlePropertyResult(message);
         }
         break;
-    case SessionMessageKind::SnapshotComplete:
+    case SessionMessageKind::SnapshotComplete: {
+        const bool firstSnapshot = !m_handshakeComplete;
         // BEFORE anything below, and in particular before
         // m_forwardLocalChanges goes true: this marker is the FIRST moment
         // the station's full object set is known, and it is the only
@@ -1106,9 +1121,13 @@ void StationClient::onTransportText(const QByteArray& wire)
         // the station its own state back.
         m_forwardLocalChanges = true;
         m_writeFlushTimer->start();
-        qCInfo(lcStationClient) << "Session established with" << m_capabilities.stationName;
-        emit handshakeComplete();
+        if (firstSnapshot) {
+            qCInfo(lcStationClient) << "Session established with" << m_capabilities.stationName;
+            emit handshakeComplete();
+        }
+        emit stateSnapshotApplied();
         break;
+    }
     case SessionMessageKind::CommandResult:
         handleCommandResult(message);
         break;
@@ -1378,6 +1397,9 @@ void StationClient::handleSettingsReject(const SessionMessage& message)
 
 void StationClient::handleSchema(const SessionMessage& message)
 {
+    // Schema messages open a full snapshot burst, including a same-session
+    // reseed after Core discovers its radio. Pause writes until its marker.
+    m_forwardLocalChanges = false;
     // Task 18 step 8: schema skew caught by NAME comparison at handshake.
     // MirrorSchema's ordinals are dense and per-class, so two builds that
     // declare different property sets assign DIFFERENT ordinals to the
@@ -1740,6 +1762,13 @@ bool StationClient::applyOne(QObject* target, const MirrorProperty& prop,
     }
 
     // Strategy 1: a real Q_PROPERTY WRITE.
+    // A lock prevents GUI-originated tuning, never an authoritative station
+    // snapshot/delta. Apply without temporarily unlocking observable state.
+    if (className == "SliceModel" && prop.name == "frequency") {
+        auto* slice = qobject_cast<SliceModel*>(target);
+        const QVariant frequency = MirrorSchema::decode(prop, update.value);
+        return slice && frequency.isValid() && slice->applyStationFrequency(frequency.toDouble());
+    }
     if (prop.isWritable) {
         return schema.write(prop, target, update.value);
     }
@@ -1839,6 +1868,9 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
     if (target == m_radioModel.data() && className == "RadioModel") {
         if (propertyName == "settingsSaveError") {
             m_radioModel->applyStationSettingsSaveError(native.toString());
+            return true;
+        }
+        if (m_radioModel->applyStationReceiveLayoutStatus(propertyName, native.toString())) {
             return true;
         }
         return m_radioModel->applyStationFilterValue(propertyName, native);
@@ -1959,6 +1991,11 @@ void StationClient::watchForOutbound(const QByteArray& objectKey, QObject* objec
 
 void StationClient::onWriteFlushTick()
 {
+    // handleSchema() pauses the wire for a full snapshot burst.  Preserve
+    // coalesced operator edits until SnapshotComplete reopens this gate.
+    if (!m_forwardLocalChanges) {
+        return;
+    }
     const QList<QPair<QByteArray, QList<MirrorUpdate>>> pending = m_outboundCoalescer.flush();
     for (const auto& batch : pending) {
         QObject* object = m_objects.value(batch.first).data();

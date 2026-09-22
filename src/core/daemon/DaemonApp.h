@@ -436,6 +436,8 @@ private:
 #ifdef NEREUS_BUILD_TESTS
     std::function<QList<RadioInfo>()> m_discoveryProviderForTest;
     bool m_synchronousWdspForTest {false};
+    // Install test audio devices before discovery can enter real DSP startup.
+    std::function<void(RadioModel*)> m_radioInitializerForTest;
     std::optional<HPSDRHW> m_testBoard;
     QString m_testRadioMac;
 #endif

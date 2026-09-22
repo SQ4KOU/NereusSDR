@@ -5,10 +5,37 @@
 // use; no Thetis logic is ported or reimplemented here.
 
 #include "ConnectableRadioModel.h"
+#include "FakeAudioBus.h"
+
+#include "core/AudioEngine.h"
 
 #include <QtTest/QtTest>
 
 namespace NereusSDR::Test {
+
+namespace {
+
+void installOpenAudioBuses(AudioEngine& engine)
+{
+    AudioFormat format;
+    format.sampleRate = 48000;
+    format.channels = 2;
+    format.sample = AudioFormat::Sample::Float32;
+
+    auto speakers = std::make_unique<FakeAudioBus>(QStringLiteral("Fake speakers"));
+    auto txInput = std::make_unique<FakeAudioBus>(QStringLiteral("Fake TX input"));
+    const bool speakersOpened = speakers->open(format);
+    const bool txInputOpened = txInput->open(format);
+    Q_ASSERT(speakersOpened);
+    Q_ASSERT(txInputOpened);
+    Q_UNUSED(speakersOpened);
+    Q_UNUSED(txInputOpened);
+
+    engine.setSpeakersBusForTest(std::move(speakers));
+    engine.setTxInputBusForTest(std::move(txInput));
+}
+
+} // namespace
 
 ConnectableRadioModel::~ConnectableRadioModel() = default;
 
@@ -38,6 +65,12 @@ std::unique_ptr<ConnectableRadioModel> ConnectableRadioModel::create(
     harness->m_info.name            = QStringLiteral("ConnectableRadioModel fake");
 
     harness->m_model = std::make_unique<NereusSDR::RadioModel>(role);
+    // This fixture verifies the real WDSP, receiver, radio-loopback and
+    // reconnect lifecycle. Physical host audio is an unrelated integration
+    // boundary with its own PortAudio coverage. stop() releases its buses, so
+    // install fresh opened fakes before every start(), including reconnects.
+    harness->m_model->audioEngine()->setStartInitializerForTest(
+        installOpenAudioBuses);
 
     // Arm the synchronous test-only WdspEngine init path BEFORE calling
     // connectToRadio(). Order matters: connectToRadio() wires its

@@ -367,6 +367,12 @@ void AudioEngine::start()
         return;
     }
 
+#ifdef NEREUS_BUILD_TESTS
+    if (m_startInitializerForTest) {
+        m_startInitializerForTest(*this);
+    }
+#endif
+
     // Pre-register every slice id this radio can host with MasterMixer,
     // before any audio-thread accumulate() can race against a main-thread
     // unordered_map insert+rehash on first-block (design-decision D6,

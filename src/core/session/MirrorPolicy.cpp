@@ -316,6 +316,8 @@ const MirrorPolicy::Entry kEntries[] = {
 
     // ---- RadioModel (5 entries) ----
     { "RadioModel", "settingsSaveError", MirrorDirection::Outbound },
+    { "RadioModel", "receiveLayoutRestoreState", MirrorDirection::Outbound },
+    { "RadioModel", "receiveLayoutRestoreMessage", MirrorDirection::Outbound },
     { "RadioModel", "name", MirrorDirection::Outbound },
     { "RadioModel", "model", MirrorDirection::Outbound },
     { "RadioModel", "version", MirrorDirection::Outbound },

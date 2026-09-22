@@ -494,6 +494,9 @@ signals:
     /// The full section 7.0 sequence completed, snapshot-complete marker
     /// included. Parent section 12.2 gates TX on exactly this point.
     void handshakeComplete();
+    /// Every full state publication, including reseeding an existing session.
+    /// Does not recreate media or reset the session epoch.
+    void stateSnapshotApplied();
 
     /// The session ended, with the station's own reason where it gave one
     /// (a version refusal, a failed authentication, or being displaced by

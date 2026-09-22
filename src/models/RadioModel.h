@@ -71,6 +71,7 @@
 // Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
 
 #include "core/ConnectionState.h"
+#include "core/ReceiveLayoutStore.h"
 #include "core/PgxlConnection.h"
 #include "core/Rf2ksConnection.h"
 #include "core/TgxlConnection.h"
@@ -247,6 +248,8 @@ class RadioModel : public QObject {
     Q_OBJECT
 
     Q_PROPERTY(QString settingsSaveError READ settingsSaveError NOTIFY settingsSaveErrorChanged)
+    Q_PROPERTY(QString receiveLayoutRestoreState READ receiveLayoutRestoreState NOTIFY receiveLayoutRestoreStatusChanged)
+    Q_PROPERTY(QString receiveLayoutRestoreMessage READ receiveLayoutRestoreMessage NOTIFY receiveLayoutRestoreStatusChanged)
     Q_PROPERTY(QString name        READ name        NOTIFY infoChanged)
     Q_PROPERTY(QString model       READ model       NOTIFY infoChanged)
     Q_PROPERTY(QString version     READ version     NOTIFY infoChanged)
@@ -2835,6 +2838,10 @@ signals:
     void settingsSaveErrorChanged(const QString& reason);
     void sliceAdded(int index);
     void sliceRemoved(int index);
+    // A restored shared slice may have changed many preferences silently.
+    // Consumers must publish a complete snapshot, not duplicate sliceAdded.
+    void receiveLayoutHydrated();
+    void receiveLayoutRestoreStatusChanged();
 
     /// Phase 3F Sub-Epic F Task 5: emitted after the per-ADC wideband FFT
     /// completes.  adcIndex is 0 or 1; dbmBins is 8192 entries (kOutputBins
@@ -3383,6 +3390,25 @@ public:
     void flushPendingSettingsSave();
     QString settingsSaveError() const { return m_settingsSaveError; }
     void applyStationSettingsSaveError(const QString& reason);
+    // R-R3-34: seed a validated local layout before any radio/DSP resources
+    // exist. Preserves shared QObject identities, descriptor order and IDs.
+    // Does not admit streams/decoders or enable persistence. The startup owner
+    // must complete resource admission before permitting settings writeback.
+    bool hydrateReceiveLayout(const QString& radioMac,
+                              const ReceiveLayoutStore::LoadResult& layout,
+                              QString* error = nullptr);
+    bool receiveLayoutPendingAdmission() const { return m_receiveLayoutPendingAdmission; }
+    std::optional<int> restoredRadeReceiveOwner() const { return m_restoredRadeReceiveOwner; }
+    // Daemon startup opts into per-radio membership persistence. An empty MAC
+    // waits for first discovery; a repeated selected MAC never reloads edits.
+    void prepareReceiveLayout(const QString& radioMac);
+    bool receiveLayoutOverridesConfiguredCount() const { return m_receiveLayoutOverridesCount; }
+    QString receiveLayoutRestoreState() const { return m_receiveLayoutRestoreState; }
+    QString receiveLayoutRestoreMessage() const { return m_receiveLayoutRestoreMessage; }
+    bool applyStationReceiveLayoutStatus(const QByteArray& property, const QString& value);
+    // Called after the radio/worker startup boundary (or the existing primed
+    // daemon fixture). Binding and any required RADE owner must be accepted.
+    void completeReceiveLayoutStartup();
     bool setNnrDiagnosticMode(int sliceId, int testMode, int outputMode,
                               QString* reason = nullptr);
 
@@ -3537,7 +3563,7 @@ public:
     /// pan and a slice want different answers. Ignored on a retune, which
     /// already owns a stream.
     bool bindSliceToStream(SliceModel* slice, double frequencyHz,
-                           bool preferOwnStream = false);
+                           bool preferOwnStream = false, int requiredStream = -1);
 
     /// Mirror a stream's liveness into ReceiverManager's active-receiver set,
     /// which is what decides whether that hardware DDC's samples are forwarded
@@ -3693,14 +3719,19 @@ private:
     /// has always done and remains its only behaviour; any other value is
     /// used verbatim, and checking it for collision first is the caller's
     /// job (addSliceWithStationId does).
-    int addSliceImpl(int requestedId, const QString& initialPanId);
+    int addSliceImpl(int requestedId, const QString& initialPanId,
+                     const ReceiveSliceState* restoreSeed = nullptr);
 
     /// Remote-daemon R2: shared body of removeSlice() and
     /// removeSliceWithStationId(), for the same reason addSliceImpl above
     /// is shared. removeSlice() now sends a verb on a Role::Remote model,
     /// so the session's own inbound destroy needs a way past that branch
     /// to the removal itself.
-    void removeSliceImpl(int sliceId);
+    void removeSliceImpl(int sliceId, bool persist = true);
+    void bindReceiveLayoutSlices();
+    bool activateRestoredRadeReceiveOwner(QString* error);
+    void setReceiveLayoutRestoreStatus(const QString& state, const QString& message);
+    bool captureReceiveLayout(QString* error);
 
     struct RadeRxTarget {
         int sliceId{-1};
@@ -4063,6 +4094,15 @@ private:
 
     // Settings save coalescing
     bool m_settingsSaveScheduled{false};
+    bool m_receiveLayoutHydrating{false};
+    bool m_receiveLayoutPendingAdmission{false};
+    bool m_receiveLayoutManaged{false};
+    bool m_receiveLayoutOverridesCount{false};
+    bool m_receiveLayoutProtected{false};
+    QString m_receiveLayoutMac;
+    std::optional<int> m_restoredRadeReceiveOwner;
+    QString m_receiveLayoutRestoreState;
+    QString m_receiveLayoutRestoreMessage;
     bool m_settingsRetryScheduled{false};
     QString m_settingsSaveError;
     QSet<int> m_dirtySettingsSliceIds;

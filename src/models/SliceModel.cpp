@@ -127,10 +127,12 @@
 #include "core/RadeChannel.h"
 #include "core/WdspEngine.h"
 #include "core/accessories/AlexController.h"
+#include "core/session/MirrorEnumDomain.h"
 #include "core/SkuUiProfile.h"  // issue #257 — rxOnlyLabels lookup in refreshAntennasFromAlex
 #include "models/RadioModel.h"
 
 #include <QFile>
+#include <QSignalBlocker>
 #include <QStandardPaths>
 
 #include <algorithm>
@@ -211,6 +213,21 @@ void SliceModel::setFrequency(double freq)
     // 3G-10 S2.9: client-side lock guard. When locked, setFrequency is a
     // no-op — prevents accidental tuning. The hardware VFO is not changed.
     if (m_locked) { return; }
+    applyFrequency(freq);
+}
+
+bool SliceModel::applyStationFrequency(double freq)
+{
+    const auto* radio = qobject_cast<const RadioModel*>(parent());
+    if (!radio || radio->role() != RadioModel::Role::Remote || !std::isfinite(freq)) {
+        return false;
+    }
+    applyFrequency(freq);
+    return true;
+}
+
+void SliceModel::applyFrequency(double freq)
+{
     if (!qFuzzyCompare(m_frequency, freq)) {
         m_frequency = freq;
         emit frequencyChanged(freq);
@@ -2169,6 +2186,86 @@ QString slicePrefix(int sliceIndex)
 QString boolStr(bool v) { return v ? QStringLiteral("True") : QStringLiteral("False"); }
 
 } // namespace
+
+bool SliceModel::restoreReceiveState(double frequencyHz, DSPMode mode)
+{
+    // ReceiveLayoutStore validates descriptors before they reach this seam,
+    // but preserve the admission boundary here because this is public API.
+    if (!std::isfinite(frequencyHz)
+        || frequencyHz < kMinReceiveFrequencyHz
+        || frequencyHz > kMaxReceiveFrequencyHz
+        || !MirrorEnumDomain::contains(QMetaType::fromType<DSPMode>(),
+                                       static_cast<int>(mode))) {
+        return false;
+    }
+
+    // A SliceModel alone cannot establish Local ownership or prove that no
+    // DSP resources exist.  The restore seam is deliberately Local-only,
+    // including for tests.
+    auto* radio = qobject_cast<RadioModel*>(parent());
+    if (radio == nullptr || radio->role() != RadioModel::Role::Local
+        || radio->connection() != nullptr) {
+        return false;
+    }
+
+    WdspEngine* const engine = radio->wdspEngine();
+    if (engine == nullptr || engine->isInitialized()) {
+        return false;
+    }
+    for (int channelId = WdspEngine::kFirstSliceChannelId;
+         channelId < WdspEngine::kMaxSliceChannels; ++channelId) {
+        if (engine->rxChannel(channelId) != nullptr
+            || engine->radeChannel(channelId) != nullptr) {
+            return false;
+        }
+    }
+
+    const Band manifestBand = bandFromFrequency(frequencyHz);
+    auto& settings = AppSettings::instance();
+    const QString legacyPrefix = bandPrefix(m_sliceIndex, manifestBand);
+    bool legacyModeMatchesManifest = false;
+    if (settings.contains(legacyPrefix + QStringLiteral("DspMode"))) {
+        bool validInteger = false;
+        const int legacyModeValue = settings.value(
+            legacyPrefix + QStringLiteral("DspMode")).toInt(&validInteger);
+        legacyModeMatchesManifest = validInteger
+            && MirrorEnumDomain::contains(QMetaType::fromType<DSPMode>(), legacyModeValue)
+            && legacyModeValue == static_cast<int>(mode);
+    }
+    const QSignalBlocker blockSignals(this);
+
+    // restoreFromSettings assigns the legacy mode directly, so it is safe
+    // before DSP admission.  It also restores per-MAC NNR through its stable
+    // slice identity.  The offline gate above is required because an NNR
+    // applier may otherwise reach a live RxChannel.
+    restoreFromSettings(manifestBand);
+
+    // The layout manifest is authoritative for tuning.  Do not call the
+    // setters: a saved Locked flag must not veto the seed, and setDspMode()
+    // can create a RADE channel.
+    m_frequency = frequencyHz;
+    m_currentBand = manifestBand;
+    m_dspMode = mode;
+
+    // restoreFromSettings already made the full legacy (mode-specific, then
+    // band-level) filter selection when its valid stored mode matches this
+    // manifest mode.  Otherwise the legacy filter could belong to another
+    // mode, or have no compatible mode sentinel at all, so use only the
+    // manifest-mode half of setDspMode's read path and its default fallback.
+    if (!legacyModeMatchesManifest) {
+        const QString modePrefix = bandModePrefix(m_sliceIndex, manifestBand, mode);
+        if (settings.contains(modePrefix + QStringLiteral("FilterLow"))
+            && settings.contains(modePrefix + QStringLiteral("FilterHigh"))) {
+            m_filterLow = settings.value(modePrefix + QStringLiteral("FilterLow")).toInt();
+            m_filterHigh = settings.value(modePrefix + QStringLiteral("FilterHigh")).toInt();
+        } else {
+            const auto filter = defaultFilterForMode(mode);
+            m_filterLow = filter.first;
+            m_filterHigh = filter.second;
+        }
+    }
+    return true;
+}
 
 // DspMode is the sentinel: if present under the per-band namespace,
 // the band is treated as visited. Alternatives (Frequency, FilterLow)

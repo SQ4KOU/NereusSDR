@@ -115,8 +115,12 @@ from the original manifest; fallback must not overwrite that manifest.
 
 Skip legacy active-A tuning recall when manifest tuning was restored. Valid
 saved membership also suppresses both configured-count top-ups (initial
-startup and first Connected). Same-radio in-process recovery continues to
-preserve live objects rather than reread an older saved layout.
+startup and first Connected). Same-radio in-process recovery preserves live objects rather than rereading an
+older saved layout or repeating destructive startup admission. Each distinct
+pan reclaims an independent DDC. Live members that have diverged beyond their
+pan's other windows can reclaim another available stream without losing their
+identity. RADE ownership refreshes once after the new workers are wired; the
+later Connected notification does not repeat that publication.
 
 RADE startup follows accepted stream bindings and worker attachment, restoring
 the explicit saved receive-audio owner, including B when A owns TX. Other
@@ -136,6 +140,67 @@ station mirror. These are distinct from disk-save errors. The GUI uses them
 after snapshot reconciliation to explain missing receivers/empty pans, and
 must not recreate a rejected receiver automatically.
 
+### Passive model hydration interface
+
+`SliceModel::restoreReceiveState(double frequencyHz, DSPMode mode)` restores
+legacy preferences and then seeds manifest tuning without signals, settings
+writes or decoder activation. It requires an offline Local RadioModel parent
+with no initialized DSP or RX/RADE channel. The manifest bypasses a persisted
+frequency lock. A compatible legacy filter remains usable when its valid
+stored mode matches; otherwise only the manifest mode's filter or its existing
+default is accepted.
+
+`RadioModel::hydrateReceiveLayout(const QString& radioMac,
+const ReceiveLayoutStore::LoadResult&, QString* error = nullptr)` validates
+identity and the complete loaded record before reconciling objects. It also
+refuses existing stream bindings. Shared IDs retain their QObject; missing
+IDs are seeded before `sliceAdded`, and extras retire without persistence.
+Descriptor order and active identity remain distinct. The final
+`receiveLayoutHydrated` notification requests a complete settled snapshot,
+not duplicate create events for retained objects.
+
+`receiveLayoutPendingAdmission()` remains true afterward and suppresses both
+scheduled and forced legacy saves. `restoredRadeReceiveOwner()` preserves the
+explicit receive target independently of active/TX selection. These are
+startup preparation interfaces. DaemonApp now calls them before bootstrap or
+first-radio discovery; runtime admission, snapshot reseeding and writeback are
+integrated in the subsequent runtime checkpoint.
+
+### Runtime integration
+
+Daemon startup opts into per-radio layout capture. Empty identity stays pending
+without reading a guessed namespace; repeated discovery of the selected MAC
+never reloads disk over live edits. Loaded membership suppresses both configured
+slice-count top-ups. If every descriptor is refused, ordinary configured
+fallback membership is allowed while the original record remains protected.
+
+Admission checks stable IDs against the board's actual channel range. Each
+pan receives its own stream, and subsequent members must fit that same stream;
+a nearby window belonging to another pan cannot absorb them. Refusals identify
+the receiver, pan and resource reason. Invalid/degraded records remain protected
+from automatic capture. Accepted layouts use the existing coalesced atomic
+AppSettings save, retry/error surface and immediate shutdown flush.
+
+The saved RADE receive owner is activated after channels and workers exist.
+Reconnect refreshes its worker generation without duplicating channel wiring.
+Live capture requires an explicit owner whenever any RADE modes remain: the
+store's legacy single-mode inference must not promote a different receiver
+after the operator removes the current owner. That unresolved capture reports
+a settings-save error and retains the previous manifest.
+
+The station sends a full same-session snapshot after passive hydration. The
+client adopts retained identities, bypasses the operator frequency lock only
+for authoritative station values, and emits a separate state-snapshot signal
+without repeating the session/media handshake. Real operator edits during a
+reseed are coalesced until its completion marker; inbound changes never echo.
+Optional restore status is reset at a new attach so an older peer cannot inherit
+the previous station's warning. Core connection details retain refusal reasons
+while the session is connected; the GUI also warns when restoration is refused.
+
+The existing active receiver identity is preserved if it survives hydration.
+Descriptor order and active focus are deliberately separate; the manifest does
+not persist or invent a new active/TX selection.
+
 ## Implementation and verification
 
 - [x] Add the bounded manifest codec/adapter and named receive limits. Own:
@@ -147,19 +212,22 @@ must not recreate a rejected receiver automatically.
   restoration. Completed with explicit RADE receive-owner preservation;
   [verification](2026-09-20-remote-daemon-r3-verification/receive-layout-store.md)
   records 41 Qt checks and the fresh 719-test full suite.
-- [ ] Implement side-effect-free Local-model hydration, delayed per-slice
+- [x] Implement side-effect-free Local-model hydration, delayed per-slice
   runtime admission and save suppression. Own: `RadioModel`, `SliceModel` and
   their focused tests. Verify no offline RADE creation, no bootstrap save,
   actual resource rejection, distinct-pan stream allocation, and the saved
   RADE receive owner's activation and retirement. Include membership
-  without ID 0 and assert no phantom active channel/mixer enrollment. Finalize the exact
-  runtime helpers against these lifecycle seams before writing them.
-- [ ] Wire `DaemonApp` startup, first discovery, configured-count precedence,
+  without ID 0 and assert no phantom active channel/mixer enrollment.
+  These paths pass focused native/lifecycle checks and the full run's
+  receive-layout tests. The full 722/724 result retains two native capture-open
+  timeouts, and hardware acceptance remains open; see the
+  [runtime evidence](2026-09-20-remote-daemon-r3-verification/receive-layout-runtime.md).
+- [x] Wire `DaemonApp` startup, first discovery, configured-count precedence,
   coalesced capture and immediate shutdown flush. Verify two DaemonApp
   lifetimes with an actual settings file: cfg=1 restoring two slices;
   noncontiguous IDs; deleted B staying deleted; MAC mismatch; pending offline
   listener; changed capacities; failed save retry; first-responder selection.
-- [ ] Mirror restoration status and reconcile GUI membership/pan explanation.
+- [x] Mirror restoration status and reconcile GUI membership/pan explanation.
   Verify authenticated snapshot/reconnect and stale media/control retirement,
   without client-side addSlice repair. Finalize read-only state fields and UI
   consumer together; protocol compatibility must be explicit.
@@ -167,6 +235,8 @@ must not recreate a rejected receiver automatically.
   repository's required final full suite. Retain valid evidence for unchanged
   native DSP. Then perform the operator's two-pan receive-only Core restart
   checkpoint on the Rock; hardware acceptance remains pending until observed.
+  The consolidated review and required unfiltered run are recorded; the two
+  native input-open timeouts keep the full-suite acceptance gate open.
 
 No public push, hardware deployment, RF/tuner actuation, pairing/interlock or
 network configuration change is part of this source checkpoint.

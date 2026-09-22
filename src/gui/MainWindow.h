@@ -872,6 +872,7 @@ private:
     class RemoteTelemetryController* m_remoteTelemetry{nullptr};
     class RemoteConnectionController* m_remoteConnection{nullptr};
     class RemoteConnectionPanel* m_remoteConnectionPanel{nullptr};
+    QString m_lastReceiveLayoutWarning;
     bool m_stationDisconnectRequested{false};
 
     // Phase 3M-4 Task 8: PsForm modeless dialog (Tools > PureSignal...).

@@ -348,6 +348,14 @@ public:
     // Plan: 3M-1b E.1.
     void setTxInputBusForTest(std::unique_ptr<IAudioBus> bus);
 
+    // Persistent test seam — prepare dependencies before every start().
+    // stop() intentionally releases all buses, so reconnect fixtures use
+    // this callback to install fresh opened fakes for each lifecycle.
+    void setStartInitializerForTest(std::function<void(AudioEngine&)> initializer)
+    {
+        m_startInitializerForTest = std::move(initializer);
+    }
+
     // Test seam — inject a fake IAudioBus into the VAX-TX slot so unit
     // tests can exercise pullVaxTxMic without standing up a real
     // CoreAudioHalBus / PipeWireBus. Takes ownership of `bus`.
@@ -827,6 +835,7 @@ private:
 
 #ifdef NEREUS_BUILD_TESTS
     std::function<void()> m_withdrawalPublishedHookForTest;
+    std::function<void(AudioEngine&)> m_startInitializerForTest;
 #endif
 
     // Speakers format last negotiated. frames passed to rxBlockReady may

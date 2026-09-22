@@ -36,6 +36,10 @@ RemoteConnectionController::RemoteConnectionController(
             this, &RemoteConnectionController::changed);
     connect(model, &RadioModel::infoChanged,
             this, &RemoteConnectionController::changed);
+    connect(model, &RadioModel::receiveLayoutRestoreStatusChanged,
+            this, &RemoteConnectionController::changed);
+    connect(client, &StationClient::stateSnapshotApplied,
+            this, &RemoteConnectionController::changed);
 }
 
 QString RemoteConnectionController::endpointText() const
@@ -93,6 +97,10 @@ QString RemoteConnectionController::detailText() const
 {
     QString text = tr("Core: %1\n%2\n%3")
         .arg(endpointText(), statusText(), radioText());
+    if (state() == ConnectionState::Connected && m_model
+        && !m_model->receiveLayoutRestoreMessage().isEmpty()) {
+        text += tr("\nReceivers: %1").arg(m_model->receiveLayoutRestoreMessage());
+    }
     if (m_client && m_client->isReconnectPending()) {
         text += tr("\nRetry delay: %1 s. Disconnect cancels automatic retries.")
             .arg((m_retryDelayMs + 999) / 1000);

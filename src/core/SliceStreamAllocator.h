@@ -82,6 +82,9 @@ public:
     /// a 2-DDC board "no third independent window" is the truth.
     Placement placeSlice(double frequencyHz,
                          bool preferOwnStream = false) const;
+    // Restore a later member of a known pan onto that pan's existing window.
+    // Refuse an out-of-window frequency without borrowing a different pan.
+    Placement joinStream(int streamIndex, double frequencyHz) const;
 
     /// Where should an existing slice go after retuning to `frequencyHz`?
     ///

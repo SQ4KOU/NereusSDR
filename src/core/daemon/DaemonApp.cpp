@@ -86,6 +86,9 @@ bool DaemonApp::start(const DaemonConfig& cfg)
     m_radioModel = std::make_unique<RadioModel>();
 #ifdef NEREUS_BUILD_TESTS
     m_radioModel->wdspEngine()->setSynchronousInitForTest(m_synchronousWdspForTest);
+    if (m_radioInitializerForTest) {
+        m_radioInitializerForTest(m_radioModel.get());
+    }
 #endif
     const quint64 runGeneration = m_radioRecoveryGeneration;
     connect(m_radioModel.get(), &RadioModel::connectionStateChanged, this,
@@ -175,6 +178,7 @@ bool DaemonApp::start(const DaemonConfig& cfg)
         // and configureStreamPool() sizes the stream allocator the same
         // way connectToRadio() does right before creating Slice A.
         m_radioModel->setBoardForTest(*m_testBoard);
+        m_radioModel->prepareReceiveLayout(m_testRadioMac);
         const auto& primedCaps = m_radioModel->boardCapabilities();
         const int poolSlices = primedCaps.maxSlices > 0 ? primedCaps.maxSlices : 1;
         m_radioModel->configureStreamPool(primedCaps.userDdcCount, poolSlices,
@@ -187,9 +191,17 @@ bool DaemonApp::start(const DaemonConfig& cfg)
         // client can observe the disconnected state while a radio powers up.
         m_radioRecoveryEnabled = true;
         radioMac = cfg.radioMac;
+        m_radioModel->prepareReceiveLayout(radioMac);
     }
 
     createConfiguredSlices(cfg.sliceCount);
+#ifdef NEREUS_BUILD_TESTS
+    if (m_testBoard.has_value()) {
+        m_radioModel->bindUnboundSlices();
+        createConfiguredSlices(cfg.sliceCount); // all-refused manifests use normal fallback count
+        m_radioModel->completeReceiveLayoutStartup();
+    }
+#endif
     configureStepAttenuatorController(radioMac);
     mintFftEndpoints();
 
@@ -652,6 +664,7 @@ void DaemonApp::finishRadioDiscovery(const QList<RadioInfo>& found)
     const bool preserve = m_radioAttempted;
     m_radioAttempted = true;
     if (!preserve) {
+        m_radioModel->prepareReceiveLayout(m_selectedRadioMac);
         applyConfigToSettings(m_radioConfig, m_selectedRadioMac);
     }
     m_radioConnectInProgress = true;
@@ -688,6 +701,7 @@ void DaemonApp::onRadioStateForRecovery(ConnectionState state)
         return;
     }
     if (state == ConnectionState::Connected) {
+        m_radioModel->completeReceiveLayoutStartup();
         m_radioRetryNextMs = m_radioRetryInitialMs;
         if (!m_radioConnectedBefore) {
             createConfiguredSlices(m_radioConfig.sliceCount);
@@ -720,6 +734,9 @@ void DaemonApp::retireRadioAndRetry()
 
 void DaemonApp::createConfiguredSlices(int sliceCountRequested)
 {
+    if (m_radioModel->receiveLayoutOverridesConfiguredCount()) {
+        return;
+    }
     // caps.maxSlices directly, NOT the maxSlices() accessor: that
     // accessor returns 1 until RadioModel::isConnected() is true.
     // RadioModel::connectToRadio() itself reads boardCapabilities()

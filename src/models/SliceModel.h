@@ -503,6 +503,9 @@ public:
 
     double frequency() const { return m_frequency; }
     void setFrequency(double freq);
+    // Authoritative Core state must update a locked Remote view. Ordinary
+    // operator tuning still uses setFrequency and keeps the lock guard.
+    bool applyStationFrequency(double freq);
 
     // ---- Demodulation mode ----
 
@@ -1076,6 +1079,18 @@ public:
 
     void saveToSettings(NereusSDR::Band band);
     void restoreFromSettings(NereusSDR::Band band);
+
+    // Seed a manifest-validated receive descriptor while its Local RadioModel
+    // is completely offline.  This is intentionally narrower than the normal
+    // setters: it restores ordinary legacy preferences, then makes the
+    // manifest frequency/mode and that mode's filter authoritative without
+    // signals, wire commands, DSP work, or RADE channel construction.
+    //
+    // A parentless SliceModel is refused.  It cannot prove the Local role or
+    // that no RadioModel-owned receive resources are live, including in unit
+    // tests; exercise this path with an offline Local RadioModel parent.
+    bool restoreReceiveState(double frequencyHz, NereusSDR::DSPMode mode);
+
     static void migrateLegacyKeys();
 
     // Reads the persisted "last band" marker for this slice index from
@@ -1275,6 +1290,7 @@ signals:
     void lastRadeRxCallsignChanged(const QString& callsign);
 
 private:
+    void applyFrequency(double freq);
     // Phase 3R Task J3 - resolves the RadeChannel model-path argument
     // used when setDspMode transitions into DSPMode::RADE_U or
     // DSPMode::RADE_L.  Lookup

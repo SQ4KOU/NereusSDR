@@ -1,5 +1,7 @@
 // no-port-check: NereusSDR-original daemon lifecycle regression tests.
 #include <QtTest/QtTest>
+#include <QFile>
+#include <QPointer>
 #include <QThread>
 #include <QSemaphore>
 #include <QScopeGuard>
@@ -8,6 +10,8 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include "core/AppSettings.h"
+#include "core/AudioEngine.h"
 #include "core/RadioConnection.h"
 #include "core/P2RadioConnection.h"
 #include "core/WidebandFrameAccumulator.h"
@@ -17,6 +21,7 @@
 #define private public
 #include "core/daemon/DaemonApp.h"
 #undef private
+#include "fakes/FakeAudioBus.h"
 #include "fakes/P1FakeRadio.h"
 #include "fakes/P2FakeRadio.h"
 
@@ -24,6 +29,33 @@ using namespace NereusSDR;
 using NereusSDR::Test::P1FakeRadio;
 
 namespace {
+void installOpenAudioBuses(AudioEngine& engine)
+{
+    AudioFormat format;
+    format.sampleRate = 48000;
+    format.channels = 2;
+    format.sample = AudioFormat::Sample::Float32;
+
+    auto speakers = std::make_unique<FakeAudioBus>(QStringLiteral("Fake speakers"));
+    auto txInput = std::make_unique<FakeAudioBus>(QStringLiteral("Fake TX input"));
+    const bool speakersOpened = speakers->open(format);
+    const bool txInputOpened = txInput->open(format);
+    Q_ASSERT(speakersOpened);
+    Q_ASSERT(txInputOpened);
+    Q_UNUSED(speakersOpened);
+    Q_UNUSED(txInputOpened);
+
+    engine.setSpeakersBusForTest(std::move(speakers));
+    engine.setTxInputBusForTest(std::move(txInput));
+}
+
+void configureAudioForEachStart(RadioModel* model)
+{
+    Q_ASSERT(model);
+    Q_ASSERT(model->audioEngine());
+    model->audioEngine()->setStartInitializerForTest(installOpenAudioBuses);
+}
+
 RadioInfo infoFor(const P1FakeRadio& fake)
 {
     RadioInfo info;
@@ -39,6 +71,7 @@ RadioInfo infoFor(const P1FakeRadio& fake)
 void prepare(DaemonApp& app)
 {
     app.m_synchronousWdspForTest = true;
+    app.m_radioInitializerForTest = configureAudioForEachStart;
     app.m_radioRetryInitialMs = 10;
     app.m_radioRetryMaximumMs = 40;
     RadioDiscovery::clearHoldOffForTest();
@@ -61,6 +94,30 @@ void feedWidebandBurst(P2RadioConnection* connection)
 class TestDaemonRadioRecovery : public QObject {
     Q_OBJECT
 private slots:
+    void initTestCase()
+    {
+        // The process-wide singleton otherwise shares the Qt test sandbox
+        // with concurrent executables. Give this lifecycle fixture its own
+        // file before the first AppSettings::instance() access.
+        AppSettings::setProfileOverride(QStringLiteral("daemon-radio-recovery-%1")
+                                        .arg(QCoreApplication::applicationPid()));
+    }
+
+    void init()
+    {
+        // A prior slot may persist receive membership for the same fake MAC.
+        // Empty both the singleton and its file so every scenario starts from
+        // an explicit no-manifest state.
+        AppSettings::instance().clear();
+        QString error;
+        QVERIFY2(AppSettings::instance().save(&error), qPrintable(error));
+    }
+
+    void cleanupTestCase()
+    {
+        QFile::remove(AppSettings::instance().filePath());
+    }
+
     void realP2SilenceRebuildsOnlySelectedRadio()
     {
         NereusSDR::Test::P2FakeRadio fake;
@@ -386,8 +443,8 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(app.m_radioModel->isConnected(), 10000);
         QTRY_COMPARE(app.sliceCount(), 2);
         RadioModel* const model = app.m_radioModel.get();
-        SliceModel* const a = model->slices().first();
-        SliceModel* const b = model->slices().last();
+        const QPointer<SliceModel> a = model->slices().first();
+        const QPointer<SliceModel> b = model->slices().last();
         a->setFrequency(3865100);
         b->setFrequency(14225000);
         b->setDspMode(DSPMode::USB);
@@ -399,10 +456,12 @@ private slots:
         QTRY_VERIFY(!model->connection());
         QCOMPARE(model->connectionState(), ConnectionState::Disconnected);
         QVERIFY(!model->wdspEngine()->isInitialized());
+        QVERIFY2(a, "loss retirement deleted the original Slice A object");
+        QVERIFY2(b, "loss retirement deleted the original Slice B object");
         QVERIFY(a->streamIndex() < 0);
         QVERIFY(b->streamIndex() < 0);
         QCOMPARE(app.m_selectedRadioMac, info.macAddress);
-        QCOMPARE(model->activeSlice(), b);
+        QCOMPARE(model->activeSlice(), b.data());
         const int afterLoss = scans.load();
         RadioDiscovery::clearHoldOffForTest();
         app.m_radioRetryTimer->start(0);
@@ -410,9 +469,12 @@ private slots:
         QVERIFY(!model->connection());
         offerSelected = true;
         QTRY_VERIFY_WITH_TIMEOUT(model->isConnected(), 10000);
-        QCOMPARE(model->slices().first(), a);
-        QCOMPARE(model->slices().last(), b);
-        QCOMPARE(model->activeSlice(), b);
+        QCOMPARE(model->slices().size(), 2);
+        QVERIFY2(a, "recovery deleted the original Slice A object");
+        QVERIFY2(b, "recovery deleted the original Slice B object");
+        QCOMPARE(model->slices().first(), a.data());
+        QCOMPARE(model->slices().last(), b.data());
+        QCOMPARE(model->activeSlice(), b.data());
         QCOMPARE(a->frequency(), 3865100.0);
         QCOMPARE(b->frequency(), 14225000.0);
         QVERIFY(model->receiveOnlyStationPolicy());
