@@ -13,8 +13,8 @@
 // I2 RX-path contracts:
 //
 //   4. startInitializesRade              start("dummy") opens librade and isActive() flips true
-//   5. processIqEmitsSyncFalseOnNoise    feeding random I/Q noise emits syncChanged(false)
-//                                        and no rxSpeechReady chunks
+//   5. processIqEmitsSyncFalseOnNoise    feeding random I/Q noise preserves
+//                                        one quiet speech chunk per input
 //   6. processIqAccumulatesAcrossChunks  small chunks accumulate; rade_rx fires only
 //                                        once a rade_nin()-sized buffer is ready
 //   7. stopReleasesResources             start("dummy") then stop() tears down cleanly
@@ -65,6 +65,7 @@ private slots:
 
     // I2 RX-path tests
     void startInitializesRade();
+    void shortInputEmitsSameSizedQuietPadding();
     void processIqEmitsSyncFalseOnNoise();
     void processIqAccumulatesAcrossMultipleChunks();
     void stopReleasesResources();
@@ -230,9 +231,16 @@ void TestRadeChannel::processIqEmitsSyncFalseOnNoise()
                  "syncChanged emitted true on pure-noise input");
     }
 
-    // No rxSpeechReady chunks should be emitted because the codec
-    // never synced and so never produced decoded features.
-    QCOMPARE(speechSpy.count(), 0);
+    // AetherSDR's source contract emits one same-sized quiet block whenever
+    // decoder output is short. NereusSDR's MasterMixer has no timeout, so
+    // preserving this input cadence is what lets ordinary co-hosted slices
+    // continue while RADE is unsynchronised.
+    QCOMPARE(speechSpy.count(), kNumChunks);
+    for (const auto& args : speechSpy) {
+        const QByteArray pcm = args.value(0).toByteArray();
+        QCOMPARE(pcm.size(),
+                 kChunkSamples * 2 * static_cast<int>(sizeof(float)));
+    }
 
     // At least one rade_rx() must have been called given the input
     // volume; otherwise the accumulator is broken.
@@ -241,6 +249,21 @@ void TestRadeChannel::processIqEmitsSyncFalseOnNoise()
                             .arg(kNumChunks)));
 
     ch.stop();
+}
+
+void TestRadeChannel::shortInputEmitsSameSizedQuietPadding()
+{
+    RadeChannel ch;
+    QVERIFY(ch.start("dummy"));
+    QSignalSpy speechSpy(&ch, &RadeChannel::rxSpeechReady);
+    constexpr int kFrames = 64;
+    ch.processIq(makeSyntheticIq(kFrames));
+    QCOMPARE(speechSpy.count(), 1);
+    const QByteArray pcm = speechSpy.first().first().toByteArray();
+    QCOMPARE(pcm.size(), kFrames * 2 * static_cast<int>(sizeof(float)));
+    for (char byte : pcm) {
+        QCOMPARE(byte, '\0');
+    }
 }
 
 void TestRadeChannel::processIqAccumulatesAcrossMultipleChunks()

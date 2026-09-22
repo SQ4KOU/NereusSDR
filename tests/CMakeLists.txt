@@ -788,6 +788,14 @@ nereus_add_test(tst_rx_dsp_worker_buffer_sizing)
 # chunk, and an unbound stream processes nothing.
 nereus_add_test(tst_rx_dsp_worker_multi_slice)
 
+# Remote Daemon R3 R-R3-31: selecting RADE RX on slice B must leave slice A
+# on the ordinary AudioEngine path, route only B's demodulated audio to RADE,
+# and keep the already-enrolled A+B master mix producing while B is unsynced.
+# Uses real RxChannel processing and fake AudioEngine buses; no RF or media
+# transport is involved. NereusSDR-native ownership orchestration.
+nereus_add_test(tst_rade_rx_multislice_routing)
+target_compile_definitions(tst_rade_rx_multislice_routing PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3G-10 VFO DSP parity + AetherSDR flag port ─────────────────────
 nereus_add_test(tst_vfo_level_bar)
 nereus_add_test(tst_scrollable_label)

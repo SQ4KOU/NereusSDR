@@ -15,6 +15,9 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-21 — Multi-slice RADE RX ownership and lifetime orchestration by
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 OpenAI Codex.
 //   2026-05-03 — Phase 4 Agent 4A of issue #167 (PA calibration safety
 //                 hotfix — K2GX field report).  Drive-slider lambda
 //                 (lines ~830) and TUNE-engagement path (lines ~4280)
@@ -2179,6 +2182,14 @@ RadioModel::RadioModel(Role role, QObject* parent)
         if (m_audioEngine) {
             connect(m_moxController, &MoxController::moxStateChanged,
                     m_audioEngine, &AudioEngine::setMoxState);
+            // AudioEngine restores its captured TX slice on the falling
+            // edge. A selected RADE owner that has not produced a current
+            // block must remain outside MasterMixer's no-timeout barrier;
+            // onRadeSpeechReady is the sole admission edge for that target.
+            // This connection is deliberately installed after AudioEngine's
+            // so it can preserve that stronger readiness condition.
+            connect(m_moxController, &MoxController::moxStateChanged,
+                    this, &RadioModel::onRadeMoxStateChanged);
         }
     }
 
@@ -5601,6 +5612,13 @@ void RadioModel::removeSliceImpl(int sliceId)
     // victim itself, in which case fall back to slice 1.
     //
     SliceModel* victim = m_slices.at(position);
+    if (m_radeRxTarget.slice == victim) {
+        // Retire the exact QObject identity while it is still present in the
+        // slice list. The worker acknowledgment arrives after its old route
+        // is gone; by then sliceById/streamIndex prevent a reused numeric ID
+        // from being re-admitted on the victim's behalf.
+        clearRadeRxTarget(m_radeRxTarget.ownerSerial);
+    }
     if (victim->isTxSlice() && m_txSliceArbiter) {
         const int fallbackPosition = (position == 0) ? 1 : 0;
         SliceModel* fallback = m_slices.at(fallbackPosition);
@@ -5767,6 +5785,270 @@ void RadioModel::requestTxBoundReRoute(const QString& proposedAntenna,
 // the wiring captures the slice ID at wire time so the receiving slot
 // knows which slice to apply the update to.
 
+void RadioModel::resetRadeRxSpeechState()
+{
+    m_radeRxSpeechL.reset();
+    m_radeRxSpeechR.reset();
+    m_radeRxLScratch.clear();
+    m_radeRxRScratch.clear();
+}
+
+bool RadioModel::canAdmitRadeSlice(int sliceId,
+                                  const SliceModel* slice) const
+{
+    if (slice == nullptr || sliceById(sliceId) != slice
+        || slice->streamIndex() < 0
+        || !m_streamAllocator.isStreamActive(slice->streamIndex())) {
+        return false;
+    }
+    // AudioEngine withdraws the TX-bound slice for the duration of MOX.
+    // A late decoder callback must not undo that independent safety gate.
+    if (mox() && slice->isTxSlice()) {
+        return false;
+    }
+    return true;
+}
+
+void RadioModel::queueRadeRxBinding(int sliceId, quint64 generation)
+{
+    RxDspWorker* const worker = m_dspWorker;
+    if (worker == nullptr) {
+        return;
+    }
+    QMetaObject::invokeMethod(
+        worker, "setRadeRxBinding", Qt::QueuedConnection,
+        Q_ARG(int, sliceId), Q_ARG(quint64, generation));
+}
+
+void RadioModel::attachRadeRxWorker(RxDspWorker* worker)
+{
+    if (m_dspWorker == worker && m_radeIqConnection
+        && m_radeBindingAppliedConnection) {
+        return;
+    }
+    QObject::disconnect(m_radeIqConnection);
+    QObject::disconnect(m_radeBindingAppliedConnection);
+    m_radeIqConnection = {};
+    m_radeBindingAppliedConnection = {};
+    m_dspWorker = worker;
+    if (worker == nullptr) {
+        // No old worker callback may be admitted after this edge.
+        if (++m_nextRadeRxWorkerGeneration == 0) {
+            ++m_nextRadeRxWorkerGeneration;
+        }
+        m_radeRxTarget.workerGeneration = m_nextRadeRxWorkerGeneration;
+        return;
+    }
+
+    m_radeIqConnection = connect(
+        worker, &RxDspWorker::radeIqReady, this,
+        [this, worker](const QByteArray& iq, quint64 generation) {
+            onRadeIqReady(worker, iq, generation);
+        }, Qt::QueuedConnection);
+    m_radeBindingAppliedConnection = connect(
+        worker, &RxDspWorker::radeRxBindingApplied, this,
+        [this, worker](quint64 generation) {
+            onRadeRxBindingApplied(worker, generation);
+        }, Qt::QueuedConnection);
+
+    if (++m_nextRadeRxWorkerGeneration == 0) {
+        ++m_nextRadeRxWorkerGeneration;
+    }
+    m_radeRxTarget.workerGeneration = m_nextRadeRxWorkerGeneration;
+    const QList<PendingRadeRestore> pendingRestores =
+        m_pendingRadeRestores.values();
+    m_pendingRadeRestores.clear();
+    for (const PendingRadeRestore& pending : pendingRestores) {
+        m_pendingRadeRestores.insert(m_radeRxTarget.workerGeneration,
+                                     pending);
+    }
+    resetRadeRxSpeechState();
+    if (m_radeRxTarget.channel && m_radeRxTarget.slice
+        && m_audioEngine
+        && canAdmitRadeSlice(m_radeRxTarget.sliceId,
+                             m_radeRxTarget.slice)) {
+        m_audioEngine->setSliceStreaming(m_radeRxTarget.sliceId, false);
+        m_radeRxTarget.admitted = false;
+    }
+    queueRadeRxBinding(m_radeRxTarget.channel ? m_radeRxTarget.sliceId : -1,
+                       m_radeRxTarget.workerGeneration);
+}
+
+void RadioModel::attachDspWorkerForTest(RxDspWorker* worker)
+{
+    attachRadeRxWorker(worker);
+}
+
+quint64 RadioModel::publishRadeRxTarget(int sliceId, RadeChannel* channel,
+                                        SliceModel* slice)
+{
+    if (m_radeRxTarget.channel == channel
+        && m_radeRxTarget.slice == slice
+        && m_radeRxTarget.sliceId == sliceId) {
+        return m_radeRxTarget.ownerSerial;
+    }
+
+    const PendingRadeRestore prior{m_radeRxTarget.sliceId,
+                                   m_radeRxTarget.slice};
+    if (++m_nextRadeRxOwnerSerial == 0) {
+        ++m_nextRadeRxOwnerSerial;
+    }
+    if (++m_nextRadeRxWorkerGeneration == 0) {
+        ++m_nextRadeRxWorkerGeneration;
+    }
+    if (prior.slice) {
+        m_pendingRadeRestores.insert(m_nextRadeRxWorkerGeneration, prior);
+    }
+
+    m_radeRxTarget = RadeRxTarget{sliceId, m_nextRadeRxOwnerSerial,
+                                  m_nextRadeRxWorkerGeneration,
+                                  channel, slice, false};
+    resetRadeRxSpeechState();
+    if (m_audioEngine && canAdmitRadeSlice(sliceId, slice)) {
+        // Do not enroll a RADE owner until a current padded/decoded block is
+        // ready. That keeps a failed/warming codec out of MasterMixer's
+        // no-timeout barrier.
+        m_audioEngine->setSliceStreaming(sliceId, false);
+    }
+    queueRadeRxBinding(sliceId, m_radeRxTarget.workerGeneration);
+    return m_radeRxTarget.ownerSerial;
+}
+
+void RadioModel::clearRadeRxTarget(quint64 ownerSerial)
+{
+    if (ownerSerial == 0 || ownerSerial != m_radeRxTarget.ownerSerial) {
+        return;
+    }
+    if (++m_nextRadeRxWorkerGeneration == 0) {
+        ++m_nextRadeRxWorkerGeneration;
+    }
+    const quint64 generation = m_nextRadeRxWorkerGeneration;
+    if (m_radeRxTarget.slice) {
+        m_pendingRadeRestores.insert(
+            generation, PendingRadeRestore{m_radeRxTarget.sliceId,
+                                            m_radeRxTarget.slice});
+    }
+    m_radeRxTarget = RadeRxTarget{-1, 0, generation, nullptr, nullptr, false};
+    resetRadeRxSpeechState();
+    queueRadeRxBinding(-1, generation);
+}
+
+void RadioModel::onRadeRxBindingApplied(RxDspWorker* worker,
+                                        quint64 generation)
+{
+    if (worker != m_dspWorker) {
+        return;
+    }
+    const QList<PendingRadeRestore> priors =
+        m_pendingRadeRestores.values(generation);
+    if (priors.isEmpty()) {
+        return;
+    }
+    m_pendingRadeRestores.remove(generation);
+    for (const PendingRadeRestore& prior : priors) {
+        if (m_audioEngine && canAdmitRadeSlice(prior.sliceId, prior.slice)
+            && !(m_radeRxTarget.slice == prior.slice
+                 && m_radeRxTarget.sliceId == prior.sliceId)) {
+            m_audioEngine->setSliceStreaming(prior.sliceId, true);
+        }
+    }
+}
+
+void RadioModel::onRadeIqReady(RxDspWorker* worker, const QByteArray& iq,
+                               quint64 generation)
+{
+    if (worker != m_dspWorker || generation == 0
+        || generation != m_radeRxTarget.workerGeneration
+        || !m_radeRxTarget.channel || !m_radeRxTarget.slice
+        || !canAdmitRadeSlice(m_radeRxTarget.sliceId,
+                              m_radeRxTarget.slice)) {
+        return;
+    }
+    m_radeRxCodecGenerationInCall = generation;
+    m_radeRxTarget.channel->processIq(iq);
+    m_radeRxCodecGenerationInCall = 0;
+}
+
+void RadioModel::onRadeSpeechReady(RadeChannel* channel, SliceModel* slice,
+                                   int sliceId, const QByteArray& pcm)
+{
+    if (channel == nullptr || slice == nullptr || m_dspWorker == nullptr
+        || m_radeRxCodecGenerationInCall == 0
+        || m_radeRxCodecGenerationInCall
+               != m_radeRxTarget.workerGeneration
+        || m_radeRxTarget.channel != channel
+        || m_radeRxTarget.slice != slice
+        || m_radeRxTarget.sliceId != sliceId
+        || !canAdmitRadeSlice(sliceId, slice)) {
+        return;
+    }
+    constexpr int kBytesPerStereoFrame = 2 * static_cast<int>(sizeof(float));
+    if (pcm.isEmpty() || (pcm.size() % kBytesPerStereoFrame) != 0) {
+        return;
+    }
+    const int frames24k = pcm.size() / kBytesPerStereoFrame;
+    const float* const stereo24k =
+        reinterpret_cast<const float*>(pcm.constData());
+    if (!m_radeRxSpeechL || !m_radeRxSpeechR) {
+        m_radeRxSpeechL =
+            std::make_unique<Resampler>(24000.0, 48000.0, 4096);
+        m_radeRxSpeechR =
+            std::make_unique<Resampler>(24000.0, 48000.0, 4096);
+    }
+    m_radeRxLScratch.resize(static_cast<size_t>(frames24k));
+    m_radeRxRScratch.resize(static_cast<size_t>(frames24k));
+    for (int i = 0; i < frames24k; ++i) {
+        m_radeRxLScratch[static_cast<size_t>(i)] = stereo24k[2 * i];
+        m_radeRxRScratch[static_cast<size_t>(i)] = stereo24k[2 * i + 1];
+    }
+    const QByteArray upL =
+        m_radeRxSpeechL->process(m_radeRxLScratch.data(), frames24k);
+    const QByteArray upR =
+        m_radeRxSpeechR->process(m_radeRxRScratch.data(), frames24k);
+    const int frames48k = std::min(upL.size(), upR.size())
+        / static_cast<int>(sizeof(float));
+    if (frames48k <= 0) {
+        return;
+    }
+
+    // Resampler work can emit diagnostics; re-check the exact identities
+    // before admitting or queueing the resulting block.
+    if (m_dspWorker == nullptr || m_radeRxTarget.channel != channel
+        || m_radeRxTarget.slice != slice
+        || m_radeRxTarget.sliceId != sliceId
+        || !canAdmitRadeSlice(sliceId, slice)) {
+        return;
+    }
+    QByteArray pcm48k(frames48k * kBytesPerStereoFrame, Qt::Uninitialized);
+    float* const interleaved = reinterpret_cast<float*>(pcm48k.data());
+    const float* const left = reinterpret_cast<const float*>(upL.constData());
+    const float* const right = reinterpret_cast<const float*>(upR.constData());
+    for (int i = 0; i < frames48k; ++i) {
+        interleaved[2 * i] = left[i];
+        interleaved[2 * i + 1] = right[i];
+    }
+
+    const quint64 generation = m_radeRxTarget.workerGeneration;
+    if (!m_radeRxTarget.admitted) {
+        m_audioEngine->setSliceStreaming(sliceId, true);
+        m_radeRxTarget.admitted = true;
+    }
+    QMetaObject::invokeMethod(
+        m_dspWorker, "routeRadeSpeech", Qt::QueuedConnection,
+        Q_ARG(int, sliceId), Q_ARG(quint64, generation),
+        Q_ARG(QByteArray, pcm48k));
+}
+
+void RadioModel::onRadeMoxStateChanged(bool active)
+{
+    if (active || m_audioEngine == nullptr || m_radeRxTarget.admitted
+        || !m_radeRxTarget.channel || !m_radeRxTarget.slice
+        || txBoundSlice() != m_radeRxTarget.slice) {
+        return;
+    }
+    m_audioEngine->setSliceStreaming(m_radeRxTarget.sliceId, false);
+}
+
 void RadioModel::wireRadeChannel(int sliceId, RadeChannel* channel,
                                  SliceModel* slice)
 {
@@ -5802,109 +6084,19 @@ void RadioModel::wireRadeChannel(int sliceId, RadeChannel* channel,
                 emit radeFreqOffsetChanged(sliceId, hz);
             });
 
-    // Phase 3R Task J4: route decoded RADE speech into AudioEngine's
-    // speakers bus through the same rxBlockReady entry point WDSP's
-    // RxChannel uses (via RxDspWorker).  RadeChannel emits a QByteArray
-    // of interleaved float32 stereo PCM (24 kHz from the RX path
-    // upsampler at RadeChannel.cpp:513-520 [Phase 3R I2]); AudioEngine
-    // expects (const float*, int frames) of interleaved stereo float
-    // (AudioEngine.h:306 rxBlockReady), so the adapter lambda below
-    // reinterprets the byte buffer and calls through.  The byte count
-    // must be a multiple of (2 * sizeof(float)) = 8; partial blocks are
-    // dropped rather than risk a half-frame push past MasterMixer.
-    if (m_audioEngine != nullptr) {
-        connect(channel, &RadeChannel::rxSpeechReady, this,
-                [this, sliceId](const QByteArray& pcm) {
-                    // One-shot first-fire tracer (off by default;
-                    // enable with
-                    //   QT_LOGGING_RULES="nereus.rade.debug=true").
-                    // Useful for confirming RADE actually decoded
-                    // anything during a bench session — without
-                    // sync the codec emits nothing, so absence
-                    // means "RADE never decoded", not "audio path
-                    // broken".
-                    static int s_rxSpeechFirstLog = 0;
-                    if (s_rxSpeechFirstLog < 3) {
-                        qCDebug(lcRade)
-                            << "rxSpeechReady fire #"
-                            << (s_rxSpeechFirstLog + 1)
-                            << "sliceId=" << sliceId
-                            << "bytes=" << pcm.size();
-                        ++s_rxSpeechFirstLog;
-                    }
-                    if (m_audioEngine == nullptr) {
-                        return;
-                    }
-                    constexpr int kBytesPerStereoFrame =
-                        2 * static_cast<int>(sizeof(float));
-                    const int bytes = pcm.size();
-                    if (bytes <= 0 || (bytes % kBytesPerStereoFrame) != 0) {
-                        return;
-                    }
-                    const int frames24k = bytes / kBytesPerStereoFrame;
-                    const float* stereo24k =
-                        reinterpret_cast<const float*>(pcm.constData());
-
-                    // Phase 3R K-bench (bench feedback): RadeChannel
-                    // emits at 24 kHz stereo float32 but AudioEngine's
-                    // speakers bus runs at 48 kHz. Pushing 24 kHz
-                    // samples without upsampling makes the audio play
-                    // at 2x speed ("chipmunk sounding"). Upsample
-                    // 24 -> 48 kHz here, one resampler per leg, so
-                    // AudioEngine's MasterMixer sees the expected
-                    // 48 kHz rate.
-                    if (!m_radeRxSpeechL
-                        || !m_radeRxSpeechR) {
-                        m_radeRxSpeechL =
-                            std::make_unique<Resampler>(
-                                24000.0, 48000.0, 4096);
-                        m_radeRxSpeechR =
-                            std::make_unique<Resampler>(
-                                24000.0, 48000.0, 4096);
-                    }
-                    // Deinterleave stereo -> two mono buffers (RADE
-                    // emits L==R dual-mono anyway, but keep both legs
-                    // separate so the upsampler sees a self-consistent
-                    // stream per channel).
-                    m_radeRxLScratch.resize(
-                        static_cast<size_t>(frames24k));
-                    m_radeRxRScratch.resize(
-                        static_cast<size_t>(frames24k));
-                    for (int i = 0; i < frames24k; ++i) {
-                        m_radeRxLScratch[static_cast<size_t>(i)] =
-                            stereo24k[2 * i + 0];
-                        m_radeRxRScratch[static_cast<size_t>(i)] =
-                            stereo24k[2 * i + 1];
-                    }
-                    QByteArray upL = m_radeRxSpeechL->process(
-                        m_radeRxLScratch.data(), frames24k);
-                    QByteArray upR = m_radeRxSpeechR->process(
-                        m_radeRxRScratch.data(), frames24k);
-                    const int upBytes = std::min(upL.size(),
-                                                 upR.size());
-                    const int frames48k =
-                        upBytes / static_cast<int>(sizeof(float));
-                    if (frames48k <= 0) {
-                        return;  // resampler warmup
-                    }
-                    // Re-interleave at 48 kHz.
-                    m_radeRxInterleaved48k.resize(
-                        static_cast<size_t>(frames48k) * 2);
-                    const float* l = reinterpret_cast<const float*>(
-                        upL.constData());
-                    const float* r = reinterpret_cast<const float*>(
-                        upR.constData());
-                    for (int i = 0; i < frames48k; ++i) {
-                        m_radeRxInterleaved48k[
-                            static_cast<size_t>(2 * i + 0)] = l[i];
-                        m_radeRxInterleaved48k[
-                            static_cast<size_t>(2 * i + 1)] = r[i];
-                    }
-                    m_audioEngine->rxBlockReady(
-                        sliceId, m_radeRxInterleaved48k.data(),
-                        frames48k);
-                });
-    }
+    // Return decoded RADE speech through RxDspWorker so AudioEngine has one
+    // serialized producer for ordinary and RADE RX blocks. The QPointers and
+    // current-target checks in onRadeSpeechReady reject queued emissions from
+    // removed slices and replaced channels.
+    const QPointer<RadeChannel> safeChannel(channel);
+    const QPointer<SliceModel> safeSlice(slice);
+    connect(channel, &RadeChannel::rxSpeechReady, this,
+            [this, safeChannel, safeSlice, sliceId](const QByteArray& pcm) {
+                if (!safeChannel || !safeSlice) {
+                    return;
+                }
+                onRadeSpeechReady(safeChannel, safeSlice, sliceId, pcm);
+            });
 
     // ── Phase 3R K-bench (source-first reframe): TX modem audio ────────
     //
@@ -6039,30 +6231,17 @@ void RadioModel::wireRadeChannel(int sliceId, RadeChannel* channel,
                 Qt::QueuedConnection);
     }
 
-    // Phase 3R K-bench: tell RxDspWorker about the RadeChannel so it can
-    // route incoming I/Q (decimated to 24 kHz) to RadeChannel::processIq
-    // when WDSP RxChannel(0) is absent. Without this, RADE RX hears
-    // silence — the I/Q from the radio gets dropped in RxDspWorker's
-    // rxCh==null path.
-    if (m_dspWorker) {
-        m_dspWorker->setRadeChannel(channel);
-    }
+    // Publish the exact owner before accepting any codec callback. The worker
+    // carries only the stable slice ID plus a unique generation; QObject
+    // lifetime remains on this main-thread side.
+    const quint64 ownerSerial = publishRadeRxTarget(sliceId, channel, slice);
     connect(channel, &QObject::destroyed, this,
-            [this]() {
+            [this, ownerSerial]() {
                 if (m_txWorker) {
                     m_txWorker->setRadeChannel(nullptr);
                 }
-                if (m_dspWorker) {
-                    m_dspWorker->setRadeChannel(nullptr);
-                }
+                clearRadeRxTarget(ownerSerial);
             });
-
-    // The slice pointer is currently unused at wire time. Slot bodies
-    // dereference via sliceById(sliceId), which is the safer route because
-    // it handles the slice-was-deleted race naturally. The parameter
-    // remains in the signature so Phase J's call sites read with the
-    // intended slice context.
-    Q_UNUSED(slice);
 }
 
 bool RadioModel::radeSynced(int sliceId) const
@@ -8683,9 +8862,7 @@ void RadioModel::connectToRadio(const RadioInfo& info)
                                     &TxWorkerThread::radeMicBlockReady,
                                     radeCh, &RadeChannel::txEncode,
                                     Qt::QueuedConnection);
-                            if (m_dspWorker) {
-                                m_dspWorker->setRadeChannel(radeCh);
-                            }
+                            publishRadeRxTarget(sliceId, radeCh, txRadeSlice);
                         }
                     }
                 }
@@ -9306,6 +9483,7 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
     // panel via SetRXAPanelBinaural).
     m_dspWorker->setBufferSizes(wdspInSize, 64);
     m_dspWorker->moveToThread(m_dspThread);
+    attachRadeRxWorker(m_dspWorker);
 
     // 2026-05-25 KG4VCF bench fix: elevate the DSP thread to real-time
     // audio scheduling so heavy system load (parallel compiles, Spotlight
@@ -9376,28 +9554,9 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
     reconcileExternalDiversityRoute(
         computeDdcAssignment().value_or(NereusSDR::DdcAssignment{}));
 
-    // Phase 3R K-bench: retroactive RADE RX wire-up.
-    //
-    // Same lifecycle gotcha as the TxWorker retroactive create at
-    // line ~3700: wireRadeChannel ran earlier (at WDSP-init time)
-    // when m_dspWorker was still nullptr, so its
-    //   if (m_dspWorker) { m_dspWorker->setRadeChannel(channel); }
-    // block silently no-op'd. m_dspWorker is alive now; push the
-    // current RadeChannel pointer so RxDspWorker can route I/Q to
-    // RadeChannel::processIq on the RADE branch.
-    if (m_activeSlice && m_wdspEngine) {
-        const DSPMode mode = m_activeSlice->dspMode();
-        if (mode == DSPMode::RADE_U || mode == DSPMode::RADE_L) {
-            RadeChannel* radeCh =
-                m_wdspEngine->radeChannel(m_activeSlice->sliceIndex());
-            if (radeCh != nullptr) {
-                qCInfo(lcDsp)
-                    << "RADE: retroactive RxDspWorker wire-up for"
-                       "slice" << m_activeSlice->sliceIndex();
-                m_dspWorker->setRadeChannel(radeCh);
-            }
-        }
-    }
+    // attachRadeRxWorker above replays the explicitly published RADE owner.
+    // Do not infer one from the active VFO here: the selected RADE target is
+    // a mode-publication decision and can legitimately be slice B.
 
     // Phase 3Q-6: forward frame ticks to RadioModel::frameReceived() so
     // TitleBar::ConnectionSegment can pulse its activity LED. Using a
@@ -12391,13 +12550,13 @@ void RadioModel::teardownConnection()
     if (m_dspWorker != nullptr) {
         QObject::disconnect(m_connection, nullptr, m_dspWorker, nullptr);
         QObject::disconnect(m_receiverManager, nullptr, m_dspWorker, nullptr);
+        attachRadeRxWorker(nullptr);
     }
     if (m_dspThread != nullptr) {
         m_dspThread->quit();
         m_dspThread->wait();
         delete m_dspThread;
         m_dspThread = nullptr;
-        m_dspWorker = nullptr;
     }
 
     // Stop audio output

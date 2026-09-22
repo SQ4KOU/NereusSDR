@@ -56,9 +56,12 @@ supporting evidence; no R3 checkpoint is complete until its operator-visible
 result is demonstrated. There is no separate executable named NereusUI yet;
 this plan uses the existing NereusSDR executable in remote station mode.
 
-**Current remaining order, September 21:** finish basic connection controls,
-snapshot hydration and capability gating (4a/4c); block receive-only accessory
-tuning side effects, then repair station accessory connection/status (4d);
+**Current remaining order, September 21:** repair second-slice RADE routing
+and mixed-audio continuity (R-R3-31); restore Core-banner telemetry and port
+the current Aether telemetry graphing surface (R-R3-32/33), alongside the
+remaining connection controls, snapshot hydration and capability gating
+(4a/4c); repair station accessory connection/status behind the installed
+receive-only guards (4d);
 finish wideband parity and sustained audio with operator feedback (4b/5/5a);
 run capacity, boot/reconnect and two-hour acceptance (6). Receive-only R5
 traversal follows, then safeguarded R4 TX and R6 selection/pairing/packaging.
@@ -134,6 +137,17 @@ by the earlier brainstorming, and this review does not present them as such.
 | R-R3-28 | Unexpected media transport failure/closure must recover through a fresh authenticated session even when Core control remains connected. Recovery reuses the configured endpoint, certificate pin, pairing, bounded backoff and authoritative snapshot; manual Disconnect/teardown cancels it. Stale peer callbacks cannot reconnect a newer or intentionally stopped session. Ordinary audio jitter/device errors and permanent protocol refusals do not trigger whole-session retry. |
 | R-R3-29 | An established radio stream that stops delivering data must not remain indefinitely presented as healthy. Detect and report receive silence using the protocol's authoritative behavior, safely retire stale DSP/media state, and provide cancellable recovery of the selected radio. Verify separately from initial discovery, first-packet connection timeout and GUI/Core media loss; preserve receive-only/TX safety policy. |
 | R-R3-30 | Mirrored model updates cannot target a destroyed or replaced GUI widget. Pan layout changes, slice rehoming/removal and reconnect must retire widget-bound callbacks while preserving updates to the replacement view. Reproduce the observed VFO AGC update crash and cover the actual widget lifetime boundary. |
+| R-R3-31 | RADE receives the audio of its owning slice, including slice B on a second pan, without redirecting or silencing another slice. Switching an already-streaming slice to RADE, decoder acquisition/loss of sync, channel replacement and worker restart preserve the one mixed stereo output and reject stale input/decoded speech. Existing mixer cadence and per-slice controls remain authoritative. |
+| R-R3-32 | The Core-connected banner restores useful live telemetry in remote mode. Distinguish radio-to-Core measurements, Core-to-GUI transport health and GUI-local playback; values identify their source and units. Authentication alone cannot imply healthy radio/media, stale or unavailable data is explicit, and reconnect cannot display old measurements as current. |
+| R-R3-33 | Inspect freshly fetched AetherSDR upstream and port its applicable telemetry history/graphing UI with source attribution. Adapt data ownership to Nereus Core/GUI while preserving meaningful graph behavior, bounded history, sampling and gaps. Do not copy Flex-specific transport assumptions or label inferred loss/latency as measured telemetry. Verify direct and remote modes, reconnect, stale data and rendering overhead. |
+
+The September 21 user request explicitly adds banner telemetry restoration and
+the current Aether telemetry graph port. Upstream was fetched from
+`ten9876/AetherSDR`; the audit uses immutable commit `0dea0dd7` (September 21),
+in a separate checkout so the existing Aether feature branch is preserved.
+The source audit must identify the actual graph classes, license/provenance,
+metric owners and integration tests before production porting begins. The
+same user report reconfirms RADE-U on the second pan failing and muting pan 1.
 
 The authorized radio is the ANAN-G2/Saturn, MAC `2C:CF:67:AB:FC:F4`, board
 `0x0A`; the September 20 instruction supersedes the old G2E-only bench rows.
@@ -615,6 +629,44 @@ unavailable. Actual tuner operation and pairing/interlock changes remain R4.
 the lead settles command and capability contracts. Keep hardware and shared
 session/MainWindow edits serial; use one integrated risk-focused review.
 
+## 4e. Restore the Core banner and connection/audio history
+
+**Requirements:** R-R3-32/33. **Dependencies:** task 4c's current connection
+controller, authenticated session and existing audio diagnostics. User chose
+banner and connection/audio graphs first; Core CPU/memory history follows.
+
+**Design:** [Core telemetry contract](2026-09-21-core-telemetry-design.md).
+This records the freshly fetched Aether source revision, owned measurements,
+wire contract, validity, history bounds and concrete acceptance cases.
+
+**Owned files:** new `src/core/session/StationTelemetry.*`,
+`src/core/daemon/DaemonTelemetryController.*`, `src/gui/RemoteTelemetryController.*`,
+`src/gui/RemoteDiagnosticsDialog.*`, `src/gui/TelemetryHistory.*` and ported
+`src/gui/TimeSeriesGraphWidget.h`; existing session messages/capabilities/
+client/server/transport, daemon wiring, remote audio receiver, MainWindow and
+TitleBar; focused telemetry/session/history/widget tests and attribution.
+
+**Interfaces:** Core publishes a capability-gated `station.metrics.v1`
+observation at 1 Hz. GUI combines that with its own control-link and playback
+observations. A typed remote banner replaces the text-only paint override.
+No station setting, radio action or heartbeat/retry decision is driven by these
+measurements. Never equate transport send acceptance with packet delivery.
+
+- [x] Fetch current Aether upstream into an isolated source snapshot and audit
+  graph/history licensing, data sources, gaps and lifecycle semantics.
+- [x] Settle the first scope with the operator and record the concrete design.
+- [ ] Implement and test the bounded typed collector/session contract.
+- [ ] Add observational GUI transport and receiver diagnostics.
+- [ ] Port/adapt Aether graph/history behavior with attribution and gap tests.
+- [ ] Wire live banner and remote Network Diagnostics, including older-Core,
+  stale and reconnect states; preserve direct-mode behavior.
+- [ ] Verify the integrated checkpoint and live receive-only Rock 5C session.
+
+**Verification:** follow the design's codec/lifecycle, real collector,
+history, widget and live acceptance cases. Register and build focused tests
+before running them. One combined full suite and consolidated review precede
+the signed installation; hardware/readability evidence is recorded separately.
+
 ## 5. Deliver mixed stereo Opus with continuous playback
 
 First sound is implemented and heard on the bench. Remaining playback
@@ -732,6 +784,59 @@ regressions if negotiation is introduced. Lead/operator compare the same
 stereo reception at both rates and record preference plus measured costs.
 No selector is required merely to make already-working Opus decoding operate.
 
+## 5b. Preserve both receivers when RADE is selected on slice B
+
+**Requirements:** R-R3-03/06/09/31. **Dependencies:** existing one-active-RADE
+scope, SliceModel mode ownership and the master mixer's explicit membership.
+This repairs the reported second-pan RADE-U failure; it introduces no new
+active-VFO selection policy or transmit behavior.
+
+**Owned files:** `src/models/{RadioModel,RxDspWorker}.*`,
+`src/core/RadeChannel.cpp`, `tests/tst_rade_rx_multislice_routing.cpp`,
+affected RADE lifecycle tests and Aether attribution.
+
+**Interfaces:** publish the true owning slice identity and a generation to the
+DSP worker at all existing RADE publication sites. Keep QObject lifetime on its
+owning thread; the DSP worker must not dereference a raw RadeChannel. Queue
+current decoded speech back through the DSP thread before AudioEngine so the
+master mixer has one producer. Replacing/clearing the binding retires prior
+I/Q, decoded speech and resampler history. An obsolete destroy callback cannot
+clear a replacement owner, including when a slice ID is reused.
+
+- [x] Reproduce the real two-slice routing/mixer failure before changing it.
+  With both ordinary slices already producing, selecting B yielded
+  `Aordinary=0 Bordinary=96 radeAfterA=44 radeAfterB=44`; master pushes stayed
+  at one. The regression uses actual WDSP channels and the real audio mixer.
+- [ ] Route only the selected slice to RADE and retain other slice audio.
+  Withdraw the selected slice from the mix until current valid output is
+  available; mode exit, slice removal, worker replacement and MOX lifecycle
+  must not prematurely re-admit an obsolete producer.
+- [ ] Restore Aether's existing same-sized quiet output for active decoder
+  input without enough decoded speech (`RADEEngine.cpp:496–504` at
+  `0dea0dd7`). The removed padding's old timer-driven assumption no longer
+  matches Nereus's per-slice mixer barrier. Preserve decoder/DSP parameters;
+  do not add a mixer timeout to disguise missing production.
+- [ ] Cover stale queued I/Q/speech, old-owner destruction, removed/reused
+  slice IDs and worker teardown/restart. Prove a failed/warming/unsynced B
+  decoder cannot stall A's mixed output.
+- [ ] Run affected RADE/mixer/audio regressions, consolidated review and full
+  suite; install a signed matching checkpoint and perform the receive-only
+  two-pan RADE smoke with the user.
+
+**Acceptance:** A remains audible when B enters/leaves RADE-U, including
+without a decodable signal; only B's post-demodulated input reaches its decoder.
+Valid B speech joins the existing mixed stereo output with B's controls. Late
+old output cannot re-enrol removed slices or reach replacement decoders.
+Selecting ordinary receive restores its current path without a GUI/Core restart.
+
+**Verification:** build `tst_rade_rx_multislice_routing`, `tst_rade_channel`,
+affected RadioModel RADE tests and master-mixer/audio targets before focused
+`ctest`. Use a deterministic valid decoder fixture where available; do not
+claim on-air RADE decoding from an unsynced-noise test. Run full integration
+checks once the combined correction is stable. Hardware acceptance includes
+ordinary A + RADE B, ordinary B restoration, and pan/slice replacement while
+receiving; no RF or tuner actuation.
+
 ## 6. Capacity, installation and release evidence
 
 **Requirements:** all. **Dependencies:** integrated receive path.
@@ -814,7 +919,7 @@ whole-plan review loops.
 | --- | --- | --- |
 | R2 baseline | Preserved rollback checkpoint `14124e7c` | Authenticated control/tuning/meter baseline retained; installed runtime advanced to `ea55d24a` |
 | Combined open-PR recovery | Complete source checkpoint `14124e7c` | GUI/Core build and unfiltered 662/662 desktop tests pass; fixture-path workaround recorded separately |
-| Native combined Core | Installed signed `706b9a5f`, rollback `8c011066` | Native build/stage/install and GUI signature passed. Full 682-test suite passed. Automatic full-Core restart recovery and a smooth short receive checkpoint are accepted; live media-only loss and the soak remain open. See [verification ledger](2026-09-20-remote-daemon-r3-verification/README.md). |
+| Native combined Core | Installed signed `d9c7bce1`, rollback `706b9a5f` | Matching Core/GUI include the TGXL lifecycle and VFO callback repairs. The baseline passed 684 test executables; the RADE repair is the next deployment checkpoint. Automatic full-Core restart recovery is observed; live media-only loss and the soak remain open. See [verification ledger](2026-09-20-remote-daemon-r3-verification/README.md). |
 | Plan review and mixed-stereo choice | Lead, recorded | Current review; user confirmed mixed stereo and Opus |
 | Direct media transport | Production adapter and MediaPeer integrated | Real encrypted peers, bounded callbacks, stop/restart/delete regressions pass; live display capture passes: Ethernet, 969-byte maximum IP packet; separate SRTP-size proof pending |
 | Headless FFT and display codec | Implemented and component-tested | Independent Wide/Fine sources, retune input reset, independent planes, crop clamp, bounded codec and recovery tests pass; authenticated daemon-to-GUI regression and live Saturn display pass |
@@ -827,6 +932,8 @@ whole-plan review loops.
 | BPF and Auto AGC-T indicators | Source implementation and focused tests pass | R-R3-14/15: station filter snapshot/reconnect, headless per-stream AGC source, active-applet/flag bindings implemented; live 20m filter and AGC floor observed, complete band/reconnect acceptance pending |
 | Manual Core reconnect | Configured-endpoint controls installed; title-panel path verified | Title opens details; manual Disconnect/Connect restored receive at `8c011066`. New `706b9a5f` also automatically resumed after Core installation. New media-only recovery has pinned-TLS integration coverage; a real media-only drop and remaining UI entry points need acceptance. |
 | Visible controls and snapshot hydration | Bounded task 4c implementation installed at `95b19467` | Startup implicit slice creation is fixed and covered; fresh live attach displayed one slice. TX applet/PureSignal/filter-match, FIR and tuner gates are implemented. Phone/CW, XIT, TX settings and other remaining surfaces are listed in the control matrix. |
-| Station accessories / TGXL | Receive-only guards and 13-field telemetry adapter installed; task 4d remains open | Snapshot replay is non-actuating; raw transmit writes and automatic tuner carrier requests are refused. Positive device identity, retry cancellation, Core-owned configuration/actions and headless frequency/mode propagation remain. The user corrected the local GUI endpoint to the reachable tuner at .234:9010; status responses now arrive. Core connected at .234:9010 after restart and received actual tuner info. Ordered live configuration and positive identity admission remain unfinished; ANT1–3 are intentionally gated in this receive-only checkpoint. |
+| Station accessories / TGXL | Receive-only guards, status adapter and lifecycle repair installed; task 4d remains open | Snapshot replay is non-actuating; raw transmit writes and automatic tuner carrier requests are refused. Owned retry cancellation and stale-socket guards are installed via `3a589945`/`d9c7bce1`. Core connected at .234:9010 and received actual tuner info. Ordered live configuration, positive identity admission and headless frequency/mode propagation remain unfinished; ANT1–3 are intentionally gated in this receive-only checkpoint. |
+| Second-pan RADE | R-R3-31 implemented; focused routing/lifecycle checks pass | Owning-slice routing, worker/decoder lifetime guards, unsynchronised quiet cadence and warming-target mix admission are repaired. Two independent review findings are corrected. Final full-suite gate and matching receive-only installation precede hardware acceptance; see [RADE verification](2026-09-20-remote-daemon-r3-verification/rade-multislice.md). |
+| Core banner and telemetry graphs | R-R3-32/33 approved; isolated implementation under verification | User chose banner plus connection/audio graphs first. Latest fetched Aether source is `0dea0dd7`; graph/history port and authenticated collectors are implemented in a separate worktree. Combined review, integration and live acceptance remain. Core CPU/memory history is follow-on work; see [design](2026-09-21-core-telemetry-design.md). |
 | Audio controls and diagnostics | R-R3-23 open; task 5a | Fixed 24 kbit/s stereo is active; persistent profile/health/output feedback and measured 24/48 comparison remain. A selectable quality profile needs an acknowledged Core contract; no adaptive-rate claim. |
 | Boot recovery | R-R3-26 included in installed `8c011066`; late-address boot pending | Listener retries reuse station identity and cancel on stop; 682 test executables pass. Separate R-R3-27 covers one-shot initial radio discovery. |

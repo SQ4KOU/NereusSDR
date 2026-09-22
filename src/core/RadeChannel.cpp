@@ -121,6 +121,9 @@
 //                 baseband directly. txEncode / resetTx slot bodies
 //                 remain TODO-marked for I3.
 //                 AI tooling: Anthropic Claude Code.
+//   2026-09-21  J.J. Boyd / KG4VCF  Restored AetherSDR's input-cadenced
+//                 quiet padding for no-timeout multi-slice mixing, with
+//                 AI-assisted implementation via OpenAI Codex.
 //   2026-05-11  J.J. Boyd / KG4VCF  Phase 3R Task I3. TX path body
 //                 lands. txEncode() ports the feedTxAudio body at
 //                 AetherSDR src/core/RADEEngine.cpp:134-198 [@0cd4559]
@@ -620,14 +623,15 @@ void RadeChannel::processIq(const QByteArray& iqSamples)
     if (m_rxOutAccum.size() >= outChunkBytes) {
         emit rxSpeechReady(m_rxOutAccum.left(outChunkBytes));
         m_rxOutAccum.remove(0, outChunkBytes);
+    } else {
+        // Preserve one output event per accepted input block while the neural
+        // decoder is warming or unsynchronised. MasterMixer is a readiness
+        // barrier with no timeout, so omitting this block after the RADE
+        // slice has joined would stall every ordinary co-hosted slice.
+        // AetherSDR RADEEngine.cpp:496-504 [@0dea0dd7] uses the same-sized
+        // zero pad for this exact accumulator-short case.
+        emit rxSpeechReady(QByteArray(outChunkBytes, '\0'));
     }
-    // Note: AetherSDR emits a silence pad when the output accumulator
-    // is short. We choose NOT to emit a silence pad on the no-sync
-    // case because NereusSDR's audio engine is timer-driven and a
-    // missing chunk does not stall the speaker bus; emitting silence
-    // would just clobber whatever non-RADE audio is also feeding the
-    // bus. If a future caller needs deterministic pacing, expose a
-    // setting on the wrapper instead of forcing it here.
 
     // Step 8: sample sync / SNR / freq-offset.
     // From AetherSDR src/core/RADEEngine.cpp:290-298 [@0cd4559].

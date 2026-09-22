@@ -14,6 +14,9 @@
 //                 Claude Code.
 //                 Structural pattern follows AetherSDR (ten9876/AetherSDR,
 //                 GPLv3).
+//   2026-09-21 — Multi-slice RADE RX ownership and lifetime orchestration by
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 OpenAI Codex.
 // =================================================================
 
 //=================================================================
@@ -112,6 +115,7 @@
 #include <QDateTime>
 #include <QHash>
 #include <QObject>
+#include <QPointer>
 #include <QMap>
 #include <QSet>     // Phase 3F: panBypassState takes PanadapterApplet::associatedSlices
 #include <QString>
@@ -1935,7 +1939,7 @@ public:
     // reproduce connectToRadio's real ordering (pool sized and slices bound
     // FIRST, worker constructed second) and assert the bindings still reach
     // it. Non-owning, exactly like the production m_dspWorker.
-    void attachDspWorkerForTest(RxDspWorker* w) { m_dspWorker = w; }
+    void attachDspWorkerForTest(RxDspWorker* w);
     // Phase 3F Sub-Epic I closeout, defect F3: force the radio-state inputs
     // the codec branches on, so the PureSignal and diversity branches are
     // reachable without standing up a connection, a WDSP engine and a
@@ -3642,6 +3646,34 @@ private:
     /// to the removal itself.
     void removeSliceImpl(int sliceId);
 
+    struct RadeRxTarget {
+        int sliceId{-1};
+        quint64 ownerSerial{0};
+        quint64 workerGeneration{0};
+        QPointer<RadeChannel> channel;
+        QPointer<SliceModel> slice;
+        bool admitted{false};
+    };
+
+    struct PendingRadeRestore {
+        int sliceId{-1};
+        QPointer<SliceModel> slice;
+    };
+
+    quint64 publishRadeRxTarget(int sliceId, RadeChannel* channel,
+                                SliceModel* slice);
+    void clearRadeRxTarget(quint64 ownerSerial);
+    void attachRadeRxWorker(RxDspWorker* worker);
+    void queueRadeRxBinding(int sliceId, quint64 generation);
+    void onRadeRxBindingApplied(RxDspWorker* worker, quint64 generation);
+    void onRadeIqReady(RxDspWorker* worker, const QByteArray& iq,
+                       quint64 generation);
+    void onRadeSpeechReady(RadeChannel* channel, SliceModel* slice,
+                           int sliceId, const QByteArray& pcm);
+    void onRadeMoxStateChanged(bool active);
+    bool canAdmitRadeSlice(int sliceId, const SliceModel* slice) const;
+    void resetRadeRxSpeechState();
+
     /// Remote-daemon R2 Task 5: the actual sizing body, shared by
     /// configureStreamPool (gated on Role::Local) and
     /// configureStreamPoolForTest (unconditional). See both definitions.
@@ -3665,6 +3697,13 @@ private:
     // connection from ReceiverManager::iqDataForReceiver.
     RxDspWorker*     m_dspWorker{nullptr};
     QThread*         m_dspThread{nullptr};
+    QMetaObject::Connection m_radeIqConnection;
+    QMetaObject::Connection m_radeBindingAppliedConnection;
+    RadeRxTarget m_radeRxTarget;
+    QMultiHash<quint64, PendingRadeRestore> m_pendingRadeRestores;
+    quint64 m_nextRadeRxOwnerSerial{0};
+    quint64 m_nextRadeRxWorkerGeneration{0};
+    quint64 m_radeRxCodecGenerationInCall{0};
 
     // Sub-models
     MeterModel    m_meterModel;
@@ -4327,7 +4366,6 @@ private:
     std::unique_ptr<Resampler> m_radeRxSpeechR;
     std::vector<float>         m_radeRxLScratch;
     std::vector<float>         m_radeRxRScratch;
-    std::vector<float>         m_radeRxInterleaved48k;
 
     // Stage C2 — filter preset user-override store.
     // Constructed in RadioModel ctor; QObject child so dtor cleans up.

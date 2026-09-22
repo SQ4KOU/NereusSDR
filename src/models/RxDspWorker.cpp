@@ -10,6 +10,9 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-21 — Slice-owned, generation-guarded RADE RX routing by J.J.
+//                 Boyd (KG4VCF), with AI-assisted implementation via
+//                 OpenAI Codex.
 // =================================================================
 
 //=================================================================
@@ -67,7 +70,6 @@
 #include "core/LogCategories.h"
 #include "core/RxChannel.h"
 #include "core/WdspEngine.h"
-#include "core/RadeChannel.h"
 #include "core/Resampler.h"
 #include "core/audio/RealtimeAudioPriority.h"
 
@@ -432,41 +434,43 @@ void RxDspWorker::setSampleRate(double rate)
     m_sampleRate = rate;
 }
 
-void RxDspWorker::setRadeChannel(RadeChannel* channel)
+void RxDspWorker::setRadeRxBinding(int sliceId, quint64 generation)
 {
-    // Disconnect the previous receiver before swapping the pointer.
-    // Qt's queued-connection delivery is safe across QObject
-    // destruction on its own (~QObject + removePostedEvents handle
-    // pending calls under the connection-list lock), but an explicit
-    // disconnect tightens the contract and avoids stale slot calls
-    // if the previous channel outlives this swap.
-    if (auto* prev = m_radeChannel.load(std::memory_order_acquire)) {
-        disconnect(this, &RxDspWorker::radeIqReady,
-                   prev, &RadeChannel::processIq);
+    const int normalizedSlice = generation != 0 ? sliceId : -1;
+    if (m_radeRxSliceId == normalizedSlice
+        && m_radeRxGeneration == generation) {
+        emit radeRxBindingApplied(generation);
+        return;
     }
 
-    m_radeChannel.store(channel, std::memory_order_release);
+    m_radeRxSliceId = normalizedSlice;
+    m_radeRxGeneration = generation;
+    m_radeRxDownsamplerI.reset();
+    m_radeRxDownsamplerQ.reset();
+    m_radeRxDownsamplerSrcRate = 0.0;
+    m_radeRxIqScratch.clear();
 
-    if (channel != nullptr) {
-        // Cross-thread queued connection: RxDspWorker lives on the
-        // DSP thread, RadeChannel lives on the main thread (created
-        // by WdspEngine, parent owned by RadioModel).  Replacing the
-        // earlier QMetaObject::invokeMethod(raw_ptr, ...,
-        // Qt::QueuedConnection) with a Qt-native signal/slot
-        // connection closes the UAF gap PR #238 review P1 #3
-        // flagged: queued events for a destroyed receiver are
-        // dropped under Qt's connection-list lock, instead of
-        // calling into freed memory.
-        connect(this, &RxDspWorker::radeIqReady,
-                channel, &RadeChannel::processIq,
-                Qt::QueuedConnection);
+    qCDebug(lcDsp).noquote()
+        << QString("RxDspWorker::setRadeRxBinding(slice=%1, generation=%2)")
+               .arg(sliceId)
+               .arg(generation);
+    emit radeRxBindingApplied(generation);
+}
+
+void RxDspWorker::routeRadeSpeech(int sliceId, quint64 generation,
+                                  QByteArray pcm48k)
+{
+    if (generation == 0 || generation != m_radeRxGeneration
+        || sliceId != m_radeRxSliceId || m_audioEngine == nullptr) {
+        return;
     }
-
-    // Lifecycle tracer (off by default; enable with
-    // QT_LOGGING_RULES="nereus.dsp.debug=true").
-    qCDebug(lcDsp).noquote() << QString("RxDspWorker::setRadeChannel(%1)")
-                                    .arg(reinterpret_cast<quintptr>(channel),
-                                         0, 16);
+    constexpr int kBytesPerStereoFrame = 2 * static_cast<int>(sizeof(float));
+    if (pcm48k.isEmpty() || (pcm48k.size() % kBytesPerStereoFrame) != 0) {
+        return;
+    }
+    m_audioEngine->rxBlockReady(
+        sliceId, reinterpret_cast<const float*>(pcm48k.constData()),
+        pcm48k.size() / kBytesPerStereoFrame);
 }
 
 void RxDspWorker::processIqBatch(int receiverIndex,
@@ -668,31 +672,24 @@ void RxDspWorker::processIqBatch(int receiverIndex,
                 // SetRXAPanelBinaural(channel, 0)), so we use outI as
                 // the mono audio source.
                 //
-                // Phase 3F Sub-Epic I Task 4: the fork is SLICE 0 ONLY.
-                // RADE owns exactly one channel and one speaker path, so
-                // multi-slice RADE stays a documented deferral (RADE on A
-                // while SSB on B, Phase 3F future). Without this gate a
-                // secondary slice would take the fork, discard its own WDSP
-                // audio below, and fall silent.
-                RadeChannel* radeCh =
-                    (sliceIdx == 0)
-                        ? m_radeChannel.load(std::memory_order_acquire)
-                        : nullptr;
+                const quint64 radeGeneration = m_radeRxGeneration;
+                const bool routesToRade = radeGeneration != 0
+                    && sliceIdx == m_radeRxSliceId;
                 // One-shot tracer (off by default; enable with
                 // QT_LOGGING_RULES="nereus.dsp.debug=true") to confirm
                 // the RADE RX fork is reaching the codec during bench
                 // shakedown.
                 static int s_rxRadeDiagCount = 0;
-                if (radeCh != nullptr && s_rxRadeDiagCount < 3) {
+                if (routesToRade && s_rxRadeDiagCount < 3) {
                     qCDebug(lcDsp).noquote()
-                        << QString("RxDspWorker RADE fork #%1: radeCh=%2 "
-                                   "outSize=%3 (audio rate=48kHz)")
+                        << QString("RxDspWorker RADE fork #%1: "
+                                   "generation=%2 outSize=%3 (audio rate=48kHz)")
                             .arg(s_rxRadeDiagCount + 1)
-                            .arg(reinterpret_cast<quintptr>(radeCh), 0, 16)
+                            .arg(radeGeneration)
                             .arg(outSize);
                     ++s_rxRadeDiagCount;
                 }
-                if (radeCh != nullptr && outSize > 0) {
+                if (routesToRade && outSize > 0) {
                     // Lazy-build 48→24 audio downsampler. Single resampler
                     // (real audio); no Q-leg needed since RADE expects
                     // imag=0.
@@ -735,17 +732,7 @@ void RxDspWorker::processIqBatch(int receiverIndex,
                             dst[2 * i + 0] = srcAudio[i];   // real = audio
                             dst[2 * i + 1] = 0.0f;          // imag = 0
                         }
-                        // Post to RadeChannel on the main thread via the
-                        // queued radeIqReady signal connection (set in
-                        // setRadeChannel).  Using signal/slot instead of
-                        // QMetaObject::invokeMethod(raw_ptr, ...) closes
-                        // the use-after-free gap PR #238 review P1 #3
-                        // flagged: Qt drops queued slot calls under the
-                        // connection-list lock when the receiver
-                        // QObject is destroyed.  radeCh is still loaded
-                        // above as a cheap gate so we skip the
-                        // downsample work when no channel is wired.
-                        emit radeIqReady(m_radeRxIqScratch);
+                        emit radeIqReady(m_radeRxIqScratch, radeGeneration);
                     }
                 }
 
@@ -754,7 +741,7 @@ void RxDspWorker::processIqBatch(int receiverIndex,
                 // rxSpeechReady signal (wired in J4 to AudioEngine)
                 // owns the speaker path. Otherwise route WDSP's decoded
                 // audio to AudioEngine as before.
-                if (radeCh == nullptr) {
+                if (!routesToRade) {
                     // Phase 3F Sub-Epic I Task 4: slice 0 keeps
                     // m_interleavedOut to itself because the anti-VOX fork
                     // below reads it as the cancellation reference; a

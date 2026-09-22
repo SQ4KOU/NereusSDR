@@ -3,6 +3,62 @@
 This ledger separates the recovered integration baseline, component evidence
 and real remote receive acceptance. A component pass does not close R3.
 
+## RADE multislice source checkpoint, September 21
+
+R-R3-31 now routes RADE input and decoded audio through its owning slice rather
+than implicitly stealing slice A. Generation/identity checks reject retired
+worker and decoder events; acquisition silence preserves the mixed-audio cadence,
+and warming targets remain outside the mixer until current output is ready.
+The consolidated review's unkey and replacement-test findings are corrected.
+All 685 test executables pass after building every target, with eleven existing
+inner Qt skips and no new skips. See [RADE multislice](rade-multislice.md) for the
+reproducer, first-run clock timeout, final verification and live acceptance limits.
+Matching installation is next; the installed d9c7bce1 evidence below remains the
+current hardware baseline until that completes.
+
+The user selected banner plus connection/audio graphs as the first telemetry
+pass. [The agreed design](../2026-09-21-core-telemetry-design.md) and tasks 4e/5b
+preserve the scope and sequence. The Aether port and telemetry collectors are
+being verified in isolation; no telemetry work in progress is installed.
+
+## Current checkpoint d9c7bce1, September 21, 19:47
+
+Signed `d9c7bce1` is installed in the macOS GUI and on the Rock. It includes
+the VFO callback lifetime correction and the preceding signed TGXL connection
+lifecycle fix (`3a589945`). The fresh full suite passed 684/684 executables in
+144.54 seconds, with eleven pre-existing inner Qt skips; the new regression has
+none. The independent VFO review was clean. See [VFO lifetime](vfo-lifetime.md)
+and [TGXL lifecycle](tgxl-recovery.md) for separate regression evidence.
+
+All 63 packaged source hashes matched. Native build/staging and dependency
+checks passed. The installed Core library hash is
+`367e55fb46d6212e25923db571aa9e2ed963e00f6a5926be92cf1ea8b943c881`;
+nereusd and RADE hashes remain the same as the preceding checkpoint below.
+Rollback is available at
+`/var/lib/nereus-build/rollback-706b9a5f-before-d9c7bce1/`.
+
+The GUI's executable tag and both private library UUIDs matched the freshly
+built artifacts, its bundle passed strict/deep signature verification, and its
+new VFO binding symbol was present. GUI PID 76366 opened with saved profile
+`radxa_5c_r3` and endpoint `.106:50055`. At 19:45 it visibly showed live 80m
+reception at 3.927 MHz LSB, with matching flag/applet meters (-82 dBm at that
+observation). The initial speaker-open delay caused a packet backlog and one
+500 ms receive timeout, followed by automatic audio-context recovery.
+
+The GUI remained open across Core installation. It observed shutdown at
+19:46:40, retried and authenticated at 19:46:58, then resumed Opus reception.
+Core PID 7205 is active with zero service restarts and a listener on `.106`.
+The first two-second diagnostic contained 96,128 source frames, 50 encoded
+and accepted packets, zero encoder errors and zero source drops. The user's
+Settings dialog was open at the final visual inspection and was left intact;
+the post-installation media recovery evidence is the handshake/audio log and
+Core diagnostics, not a new unobscured waterfall screenshot.
+
+Live two-pan to one-pan crash acceptance, the separate RADE slice-routing
+repair and sustained listening remain open. TGXL positive identity, live Core
+configuration and the intentionally disabled antenna/RF actions are not closed
+by its lifecycle fix. No RF action or OS/VPN/switch/network change was performed.
+
 ## Latest live interruption, September 21, 19:09–19:20
 
 The earlier smooth checkpoint did not establish continuous acceptance. GUI
@@ -41,9 +97,9 @@ At 19:30 the reopened GUI also logged a 1.036-second owner-thread packet delay,
 an underflow and two subsequent stream-gap recoveries. Later packet reception
 resumed. The restored single-slice state is still not a soak pass.
 
-## Current receive status, September 21, checkpoint 706b9a5f
+## Previous receive status, September 21, checkpoint 706b9a5f
 
-Signed `706b9a5f` is installed on the Rock and in the matching macOS GUI.
+Signed `706b9a5f` was installed on the Rock and in the matching macOS GUI.
 It adds typed media-loss recovery through the existing authenticated reconnect
 path. All 55 packaged source hashes matched; the native build/stage, updated
 Core-library hash and exported typed-failure symbols, install with rollback,

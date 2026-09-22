@@ -12,6 +12,9 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-21 — Slice-owned, generation-guarded RADE RX routing by J.J.
+//                 Boyd (KG4VCF), with AI-assisted implementation via
+//                 OpenAI Codex.
 // =================================================================
 
 //=================================================================
@@ -76,7 +79,6 @@ namespace NereusSDR {
 
 class WdspEngine;
 class AudioEngine;
-class RadeChannel;
 class Resampler;
 struct AudioPriorityToken;   // src/core/audio/RealtimeAudioPriority.h
 
@@ -263,17 +265,17 @@ public slots:
     /// chunk size no channel is configured for.
     void clearStreamInputChunks();
 
-    // Phase 3R K-bench: set the active RadeChannel for I/Q routing.
-    // When non-null AND WDSP rxChannel(0) returns null (slice is in
-    // RADE mode), processIqBatch decimates each chunk to 24 kHz I/Q
-    // and posts it to radeCh->processIq via Qt::QueuedConnection
-    // (RadeChannel lives on the main thread). RadioModel pushes this
-    // pointer from wireRadeChannel (set) and the channel's destroyed
-    // signal (clear).
-    //
-    // Cross-thread queued slot. Atomic raw pointer write; ownership
-    // remains with WdspEngine::m_radeChannels.
-    void setRadeChannel(RadeChannel* channel);
+    // Select the single slice whose decoded WDSP audio feeds RADE. This
+    // slot runs on the DSP thread. A unique generation belongs to one
+    // RadioModel target/worker epoch; queued IQ and speech carrying an old
+    // generation are rejected after a mode swap, slice removal or worker
+    // replacement. sliceId < 0 disables the route.
+    void setRadeRxBinding(int sliceId, quint64 generation);
+
+    // Return one decoded 48 kHz stereo speech block to AudioEngine on the
+    // same DSP thread that publishes every ordinary RX block. The binding
+    // check prevents late channel events from entering a replacement slice.
+    void routeRadeSpeech(int sliceId, quint64 generation, QByteArray pcm48k);
 
     // 2026-05-25 KG4VCF bench fix: real-time scheduling priority for
     // audio DSP work.  Connected by RadioModel to m_dspThread's
@@ -343,27 +345,18 @@ signals:
     //  cadence argument is preserved at the bottom of the drain loop in
     //  RxDspWorker.cpp.)
 
-    // Phase 3R K-bench: per-batch RADE feed.  Emitted from the DSP
+    // Phase 3R K-bench: per-batch RADE feed. Emitted from the DSP
     // thread with a 24 kHz interleaved-float32 I/Q buffer (real=audio,
     // imag=0) that mirrors the freedv-gui / AetherSDR RADE input
-    // shape.  Connected to RadeChannel::processIq via
-    // Qt::QueuedConnection inside setRadeChannel().
-    //
-    // Why a signal instead of QMetaObject::invokeMethod on a raw
-    // pointer (the original K-bench shape):  invokeMethod(raw_ptr,
-    // ..., Qt::QueuedConnection) packs the raw pointer into a
-    // QMetaCallEvent posted to the target's thread; Qt does not
-    // dis-arm those events when the target QObject is destroyed
-    // out from under us, so a teardown that races the DSP thread
-    // can deliver a queued slot call to a freed RadeChannel
-    // (use-after-free).  Replacing the invoke with a connected
-    // signal moves the lifetime contract into Qt's metaobject
-    // system: ~QObject auto-disconnects and removePostedEvents
-    // drops in-flight slot calls under a connection-list lock, so
-    // a worker that emits during teardown is safe.
-    //
-    // (review finding 2026-05-12, PR #238 — P1 #3).
-    void radeIqReady(QByteArray iq);
+    // shape. RadioModel validates generation and QObject identities before
+    // forwarding it to the current RadeChannel.
+    void radeIqReady(QByteArray iq, quint64 generation);
+
+    // Acknowledges that the DSP thread has crossed a binding boundary. The
+    // main thread may restore the prior slice to MasterMixer only after this
+    // edge; restoring earlier lets a late block from the old binding enroll a
+    // removed or reused slice ID.
+    void radeRxBindingApplied(quint64 generation);
 
 private:
     WdspEngine*      m_wdspEngine{nullptr};
@@ -510,17 +503,18 @@ private:
     int m_lastEmittedInSize{-1};
     int m_lastEmittedOutSize{-1};
 
-    // Phase 3R K-bench: RADE RX path. m_radeChannel is the active
-    // RadeChannel for slice 0; when non-null AND m_wdspEngine has no
-    // RxChannel for slice 0, processIqBatch routes I/Q through the
-    // decimators below to RadeChannel::processIq instead of WDSP.
+    // Phase 3R K-bench: RADE RX path. Both fields are worker-thread-owned.
+    // When generation is non-zero, processIqBatch routes only the selected
+    // slice through the decimator and suppresses only that slice's ordinary
+    // audio. All other slices continue through AudioEngine.
     //
     // The decimators run at the configured radio rate (m_sampleRate,
     // typically 48 / 96 / 192 kHz) and produce 24 kHz I/Q matching
     // RadeChannel's processIq expectation. Built lazily on first use
     // and rebuilt if m_sampleRate changes. Two parallel resamplers
     // (one per leg) so the I and Q channels stay aligned.
-    std::atomic<RadeChannel*>   m_radeChannel{nullptr};
+    int                         m_radeRxSliceId{-1};
+    quint64                     m_radeRxGeneration{0};
     std::unique_ptr<Resampler>  m_radeRxDownsamplerI;
     std::unique_ptr<Resampler>  m_radeRxDownsamplerQ;
     double                      m_radeRxDownsamplerSrcRate{0.0};
