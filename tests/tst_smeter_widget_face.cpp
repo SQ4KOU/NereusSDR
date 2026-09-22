@@ -10,9 +10,13 @@
 //     one entry per FaceStyle, the current one checked
 //   - every face renders: the card centre differs between a light and a dark
 //     theme, and the pointer moves when the level changes
+//   - no reading (R-R3-13): a level at or below -400 dBm, or a non-finite
+//     one, reads "--" and "-- dBm" in every RX mode, the pointer rests at
+//     the scale minimum and both peak markers clear; the next real level
+//     (-130 dBm included) formats exactly as before
 //
 // Set NEREUS_SMETER_DUMP_DIR to a directory to write a PNG of every face
-// (RX, and TX power) for eyeballing.
+// (RX, TX power, and no reading) for eyeballing.
 //
 // NereusSDR-native test file; no upstream equivalent.
 
@@ -20,6 +24,8 @@
 #include <QAction>
 #include <QImage>
 #include <QMenu>
+
+#include <limits>
 
 #include "gui/SMeterWidget.h"
 #include "gui/VintageMeterFace.h"
@@ -37,6 +43,9 @@ private slots:
     void menuHasMeterFaceSubmenu();
     void everyFaceRenders();
     void pointerMovesWithLevel();
+    void noReadingShowsDashes_data();
+    void noReadingShowsDashes();
+    void realLevelAfterNoReadingDisplaysAsBefore();
 
 private:
     static QImage grab(SMeterWidget& w, float needleSettleDbm);
@@ -138,6 +147,10 @@ void SMeterWidgetFaceTest::everyFaceRenders()
             w.setTxMeters(87.0f, 1.3f);
             QTest::qWait(500);
             w.grab().save(QString("%1/smeter_face_%2_tx.png").arg(dumpDir).arg(i));
+            w.setTransmitting(false);
+            w.setLevel(-400.0f);
+            QTRY_COMPARE(w.testNeedleFraction(), 0.0f);
+            w.grab().save(QString("%1/smeter_face_%2_noreading.png").arg(dumpDir).arg(i));
         }
     }
     QVERIFY2(cream.lightness() > 170, qPrintable(cream.name()));
@@ -150,6 +163,89 @@ void SMeterWidgetFaceTest::pointerMovesWithLevel()
     const QImage low  = grab(w, -121.0f);   // S1
     const QImage high = grab(w, -33.0f);    // S9+40
     QVERIFY(low != high);
+}
+
+void SMeterWidgetFaceTest::noReadingShowsDashes_data()
+{
+    QTest::addColumn<QString>("rxMode");
+    QTest::addColumn<float>("dbm");
+    const float nan = std::numeric_limits<float>::quiet_NaN();
+    const float inf = std::numeric_limits<float>::infinity();
+    for (const char* mode : {"Signal", "Sig Avg", "Signal Peak", "Max Bin"}) {
+        QTest::addRow("%s, -400", mode) << QString(mode) << -400.0f;
+        QTest::addRow("%s, -1000", mode) << QString(mode) << -1000.0f;
+        QTest::addRow("%s, NaN", mode) << QString(mode) << nan;
+        QTest::addRow("%s, -inf", mode) << QString(mode) << -inf;
+        QTest::addRow("%s, +inf", mode) << QString(mode) << inf;
+    }
+}
+
+void SMeterWidgetFaceTest::noReadingShowsDashes()
+{
+    QFETCH(QString, rxMode);
+    QFETCH(float, dbm);
+
+    SMeterWidget w;
+    w.setRxMode(rxMode);
+    // A real reading first: a -60 dBm peak held over a -100 dBm level, so the
+    // peak hold line (and in Signal Peak mode the peak marker) is showing.
+    w.setLevel(-60.0f);
+    w.setLevel(-100.0f);
+    QCOMPARE(w.testDbmReadout(),
+             QString(rxMode == "Signal Peak" ? "-60 dBm" : "-100 dBm"));
+    QVERIFY(w.testPeakMarkersShown());
+
+    w.setLevel(dbm);
+    QCOMPARE(w.testSUnitsReadout(), QString("--"));
+    QCOMPARE(w.testDbmReadout(), QString("-- dBm"));
+    QCOMPARE(w.sUnitsText(), QString("--"));
+    QCOMPARE(w.testNeedleTarget(), 0.0f);
+    QVERIFY(!w.testPeakMarkersShown());
+
+    // Both paint paths draw the no-reading state.
+    w.resize(300, 150);
+    QVERIFY(!w.grab().isNull());
+    w.setFaceStyle(SMeterWidget::FaceStyle::Classic);
+    QVERIFY(!w.grab().isNull());
+}
+
+void SMeterWidgetFaceTest::realLevelAfterNoReadingDisplaysAsBefore()
+{
+    SMeterWidget w;   // Signal mode: init() cleared AppSettings
+
+    // -130 dBm is below S0 and formats as it always has.
+    w.setLevel(-130.0f);
+    QCOMPARE(w.testSUnitsReadout(), QString("S0"));
+    QCOMPARE(w.testDbmReadout(), QString("-130 dBm"));
+
+    // Pointer up at S9, then no reading: it falls back and comes to rest at
+    // the scale minimum.
+    w.setLevel(-73.0f);
+    QCOMPARE(w.testSUnitsReadout(), QString("S9"));
+    QCOMPARE(w.testDbmReadout(), QString("-73 dBm"));
+    QTRY_COMPARE(w.testNeedleFraction(), 0.6f);
+    w.setLevel(-400.0f);
+    QCOMPARE(w.testDbmReadout(), QString("-- dBm"));
+    QCOMPARE(w.testNeedleTarget(), 0.0f);
+    QTRY_COMPARE(w.testNeedleFraction(), 0.0f);
+
+    // The next real level displays exactly as before.
+    w.setLevel(-130.0f);
+    QCOMPARE(w.testSUnitsReadout(), QString("S0"));
+    QCOMPARE(w.testDbmReadout(), QString("-130 dBm"));
+    QCOMPARE(w.sUnitsText(), QString("S0"));
+    QCOMPARE(w.levelDbm(), -130.0f);
+
+    // NaN, then a real level: readouts, pointer and peak hold all return.
+    w.setLevel(std::numeric_limits<float>::quiet_NaN());
+    QCOMPARE(w.testSUnitsReadout(), QString("--"));
+    QCOMPARE(w.testDbmReadout(), QString("-- dBm"));
+    QVERIFY(!w.testPeakMarkersShown());
+    w.setLevel(-73.0f);
+    QCOMPARE(w.testSUnitsReadout(), QString("S9"));
+    QCOMPARE(w.testDbmReadout(), QString("-73 dBm"));
+    QCOMPARE(w.testNeedleTarget(), 0.6f);
+    QVERIFY(w.testPeakMarkersShown());
 }
 
 QTEST_MAIN(SMeterWidgetFaceTest)

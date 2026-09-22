@@ -49,6 +49,16 @@
 //                 SMeter_FaceStyle.  The static face is cached in a pixmap;
 //                 only pointer, markers and readouts are drawn per frame.
 //                 NereusSDR-native; no upstream equivalent.
+//   2026-09-22  No-reading display (R-R3-13) by J.J. Boyd (KG4VCF), with
+//                 AI-assisted transformation via Anthropic Claude Code.
+//                 kNoReadingDbm + m_noReading: a level at or below -400 dBm,
+//                 or a non-finite one, is no reading.  Both faces then show
+//                 "--" and "-- dBm", the pointer rests at the scale minimum
+//                 and the peak markers clear until the next real value.
+//                 rxSUnitsReadout() / rxDbmReadout() / peakMarkerVisible() /
+//                 peakHoldLineVisible() hold the readout text and marker
+//                 conditions both faces share.  Test seams added.
+//                 NereusSDR-native; no upstream equivalent.
 // =================================================================
 #pragma once
 
@@ -91,10 +101,11 @@ public:
     QSize sizeHint() const override { return {280, 140}; }
     QSize minimumSizeHint() const override { return {200, 100}; }
 
-    // Current reading in dBm.
+    // Current reading in dBm; -400 (kNoReadingDbm) when there is no reading.
     float levelDbm() const { return m_levelDbm; }
 
-    // Reading as S-units string (e.g. "S7", "S9+20").
+    // Reading as S-units string (e.g. "S7", "S9+20"), or "--" when there is
+    // no reading.
     QString sUnitsText() const;
 
     // From AetherSDR src/gui/SMeterWidget.h:32-34 [@0cd4559]
@@ -150,6 +161,18 @@ public:
     // Test-only: read the configurable peak hold level in dBm.
     // Production code reads m_peakHoldDbm indirectly via paintEvent.
     float testPeakLevel() const { return m_peakHoldDbm; }
+
+    // Test-only: the RX readouts both faces draw (S-units on the left, dBm
+    // on the right), and whether either peak marker would be drawn.
+    // NereusSDR-native test seams; no upstream equivalent.
+    QString testSUnitsReadout() const { return rxSUnitsReadout(); }
+    QString testDbmReadout() const { return rxDbmReadout(); }
+    bool testPeakMarkersShown() const { return peakMarkerVisible() || peakHoldLineVisible(); }
+
+    // Test-only: where the pointer is heading and where it is now
+    // (0.0 = scale minimum, 1.0 = scale maximum).
+    float testNeedleTarget() const { return m_targetNeedleFraction; }
+    float testNeedleFraction() const { return m_needleFraction; }
 
 public slots:
     // Update the displayed RX level (S-meter dBm).
@@ -213,6 +236,18 @@ private:
     void animateNeedle();
     void updatePeakHoldValue();
 
+    // RX readouts both faces draw: S-units ("S7", "S9+20") and dBm
+    // ("-97 dBm") for the value on display, or "--" and "-- dBm" when there
+    // is no reading.  NereusSDR-native.
+    QString rxSUnitsReadout() const;
+    QString rxDbmReadout() const;
+
+    // Whether a face draws the RX Signal Peak marker / the peak hold line.
+    // The conditions both faces share; false while there is no reading.
+    // NereusSDR-native.
+    bool peakMarkerVisible() const;
+    bool peakHoldLineVisible() const;
+
     // Connect to RadioModel's cross-vendor external-amp aggregator signals.
     // Called from the RadioModel* constructor overload only.
     // NereusSDR-native. Task 13.
@@ -248,6 +283,10 @@ private:
     float   m_levelDbm{-127.0f};    // current RX reading
     float   m_peakDbm{-127.0f};     // RX peak hold
     QString m_source{"S-Meter Peak"};
+
+    // No reading: set by setLevel() for a level at or below kNoReadingDbm
+    // or a non-finite one, cleared by the next real level.  NereusSDR-native.
+    bool    m_noReading{false};
 
     // Visual-change guard for animateNeedle's update() throttle.  Stores
     // the needle fraction last drawn so we can skip the repaint when the
@@ -304,6 +343,12 @@ private:
     static constexpr float S9_DBM  = -73.0f;
     static constexpr float MAX_DBM = -13.0f;  // S9+60
     static constexpr float DB_PER_S = 6.0f;
+
+    // At or below this level, or not finite, the widget has no reading.
+    // -400 dBm is the value MeterPoller feeds when Max Bin has nothing to
+    // report, locally (passed through unchanged) and on a remote GUI with
+    // no reading.  NereusSDR-native.
+    static constexpr float kNoReadingDbm = -400.0f;
 
     // From AetherSDR src/gui/SMeterWidget.h:119-122 [@0cd4559]
     // NereusSDR bench-2026-05-24: bumped 8 -> 33 ms (125 Hz -> 30 Hz).

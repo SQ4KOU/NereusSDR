@@ -54,8 +54,20 @@
 //                 lance pointer, S-units and dBm readouts flanking the hub).
 //                 "Meter Face" context submenu + SMeter_FaceStyle persistence.
 //                 NereusSDR-native; no upstream equivalent.
+//   2026-09-22  No-reading display (R-R3-13) by J.J. Boyd (KG4VCF), with
+//                 AI-assisted transformation via Anthropic Claude Code.
+//                 setLevel() treats a level at or below -400 dBm, or a
+//                 non-finite one, as no reading: both faces show "--" and
+//                 "-- dBm", the pointer falls to the scale minimum and both
+//                 peak markers clear; the next real level displays as before.
+//                 The RX readout text and the peak-marker conditions moved
+//                 unchanged out of paintClassic() / paintVintage() into
+//                 shared helpers.  sUnitsText() returns "--" with no reading.
+//                 NereusSDR-native; no upstream equivalent.
 // =================================================================
 #include "SMeterWidget.h"
+
+#include <cmath>
 
 #include <QActionGroup>
 #include <QContextMenuEvent>
@@ -181,6 +193,29 @@ void SMeterWidget::connectToRadioModel(RadioModel* model)
 
 void SMeterWidget::setLevel(float dbm)
 {
+    // No reading (R-R3-13, NereusSDR-native).  A level at or below the
+    // -400 dBm sentinel, or a non-finite one, is not a signal: the readouts
+    // show "--", the pointer falls to the scale minimum (the sentinel maps
+    // there through dbmToFraction) and both peak markers clear, so the next
+    // real level starts afresh.  Repeats change nothing and repaint nothing.
+    if (!std::isfinite(dbm) || dbm <= kNoReadingDbm) {
+        if (m_noReading) {
+            return;
+        }
+        m_noReading = true;
+        m_levelDbm = kNoReadingDbm;
+        m_peakDbm = kNoReadingDbm;
+        m_peakDecay.stop();
+        m_peakHoldDbm = kNoReadingDbm;
+        m_peakHoldDecayStartDbm = kNoReadingDbm;
+        m_peakHoldTimerRunning = false;
+        updateNeedleTarget();
+        if (!m_transmitting) {
+            update();
+        }
+        return;
+    }
+
     // Sub-perceivable change guard.  MeterPoller pushes this 10 times a
     // second; radio noise causes the dBm reading to wiggle by a few tenths
     // even on a quiet band.  Below 0.5 dB the needle position is the same
@@ -188,9 +223,11 @@ void SMeterWidget::setLevel(float dbm)
     // rebuild + repaint for those sub-threshold ticks was the largest
     // single contributor to the macOS paint-pipeline saturation observed
     // in the 2026-05-24 bench profile.
-    if (std::abs(dbm - m_levelDbm) < 0.5f) {
+    // NereusSDR (R-R3-13): never skip the first real level after no reading.
+    if (!m_noReading && std::abs(dbm - m_levelDbm) < 0.5f) {
         return;
     }
+    m_noReading = false;
     m_levelDbm = dbm;
 
     // Peak hold (existing needle/triangle behavior)
@@ -432,6 +469,10 @@ void SMeterWidget::testAdvanceTime(int ms)
 
 QString SMeterWidget::sUnitsText() const
 {
+    // NereusSDR: no reading has no S-unit value (R-R3-13).
+    if (m_noReading) {
+        return QStringLiteral("--");
+    }
     if (m_levelDbm <= S0_DBM) return "S0";
     if (m_levelDbm <= S9_DBM) {
         const int s = qRound((m_levelDbm - S0_DBM) / DB_PER_S);
@@ -439,6 +480,50 @@ QString SMeterWidget::sUnitsText() const
     }
     const int over = qRound(m_levelDbm - S9_DBM);
     return QString("S9+%1").arg(over);
+}
+
+// --- RX readouts and peak markers --------------------------------------------
+// Shared by paintClassic() and paintVintage().  The S-unit / dBm formatting
+// and the two marker conditions are the ones both paint bodies used inline,
+// moved here unchanged; only the no-reading cases are new.  NereusSDR-native
+// (R-R3-13).
+
+QString SMeterWidget::rxSUnitsReadout() const
+{
+    if (m_noReading) {
+        return QStringLiteral("--");
+    }
+    const float displayDbm = (m_rxMode == RxMode::SMeterPeak) ? m_peakDbm : m_levelDbm;
+    if (displayDbm <= S0_DBM) {
+        return QStringLiteral("S0");
+    }
+    if (displayDbm <= S9_DBM) {
+        return QString("S%1").arg(qBound(0, qRound((displayDbm - S0_DBM) / DB_PER_S), 9));
+    }
+    return QString("S9+%1").arg(qRound(displayDbm - S9_DBM));
+}
+
+QString SMeterWidget::rxDbmReadout() const
+{
+    if (m_noReading) {
+        return QStringLiteral("-- dBm");
+    }
+    const float displayDbm = (m_rxMode == RxMode::SMeterPeak) ? m_peakDbm : m_levelDbm;
+    return QString("%1 dBm").arg(displayDbm, 0, 'f', 0);
+}
+
+// Peak marker (classic triangle / vintage wedge): RX Signal Peak mode only.
+bool SMeterWidget::peakMarkerVisible() const
+{
+    return !m_noReading && !m_transmitting && m_rxMode == RxMode::SMeterPeak
+        && m_peakDbm > m_levelDbm + 1.0f;
+}
+
+// Peak hold line: configurable overlay, independent of RX mode.
+bool SMeterWidget::peakHoldLineVisible() const
+{
+    return !m_noReading && m_peakHoldEnabled && !m_transmitting
+        && m_peakHoldDbm > S0_DBM + 1.0f;
 }
 
 // --- Mapping -----------------------------------------------------------------
@@ -505,6 +590,9 @@ void SMeterWidget::paintEvent(QPaintEvent*)
 }
 
 // The AetherSDR paint body, unchanged.
+// NereusSDR 2026-09-22 (R-R3-13): the RX readout text and the two peak-marker
+// conditions now come from the helpers above, shared with paintVintage(), so
+// both faces show the no-reading display.
 void SMeterWidget::paintClassic(QPainter& p)
 {
     const int w = width();
@@ -745,8 +833,7 @@ void SMeterWidget::paintClassic(QPainter& p)
     }
 
     // Draw peak marker (small triangle) - only in RX S-Meter Peak mode
-    if (!m_transmitting && m_rxMode == RxMode::SMeterPeak
-        && m_peakDbm > m_levelDbm + 1.0f) {
+    if (peakMarkerVisible()) {
         const float frac = dbmToFraction(m_peakDbm);
         const float angle = fractionToAngle(frac);
         const float markerR = radius - 2;
@@ -772,8 +859,7 @@ void SMeterWidget::paintClassic(QPainter& p)
     }
 
     // -- Draw peak hold line (configurable overlay, independent of RX mode) ---
-    if (m_peakHoldEnabled && !m_transmitting
-        && m_peakHoldDbm > S0_DBM + 1.0f) {
+    if (peakHoldLineVisible()) {
         float frac = dbmToFraction(m_peakHoldDbm);
         if (m_peakHoldDbm <= m_levelDbm + 0.01f) {
             frac = m_needleFraction;
@@ -833,22 +919,13 @@ void SMeterWidget::paintClassic(QPainter& p)
         p.setPen(QColor(0x80, 0x90, 0xa0));
         p.drawText((w - sfm.horizontalAdvance(m_source)) / 2, topY, m_source);
 
-        const float displayDbm = (m_rxMode == RxMode::SMeterPeak) ? m_peakDbm : m_levelDbm;
-
         p.setFont(valFont);
         p.setPen(QColor(0x00, 0xb4, 0xd8));
         // Show S-units based on the displayed value
-        QString sText;
-        if (displayDbm <= S0_DBM) {
-            sText = "S0";
-        } else if (displayDbm <= S9_DBM) {
-            sText = QString("S%1").arg(qBound(0, qRound((displayDbm - S0_DBM) / DB_PER_S), 9));
-        } else {
-            sText = QString("S9+%1").arg(qRound(displayDbm - S9_DBM));
-        }
+        const QString sText = rxSUnitsReadout();
         p.drawText(6, topY, sText);
 
-        const QString dbmText = QString("%1 dBm").arg(displayDbm, 0, 'f', 0);
+        const QString dbmText = rxDbmReadout();
         p.setPen(QColor(0xc8, 0xd8, 0xe8));
         p.drawText(w - vfm.horizontalAdvance(dbmText) - 6, topY, dbmText);
     }
@@ -990,15 +1067,8 @@ void SMeterWidget::paintVintage(QPainter& p)
             case TxMode::Compression: rightText = QString("%1 dB").arg(m_compLevel, 0, 'f', 0); break;
             }
         } else {
-            const float displayDbm = (m_rxMode == RxMode::SMeterPeak) ? m_peakDbm : m_levelDbm;
-            if (displayDbm <= S0_DBM) {
-                leftText = "S0";
-            } else if (displayDbm <= S9_DBM) {
-                leftText = QString("S%1").arg(qBound(0, qRound((displayDbm - S0_DBM) / DB_PER_S), 9));
-            } else {
-                leftText = QString("S9+%1").arg(qRound(displayDbm - S9_DBM));
-            }
-            rightText = QString("%1 dBm").arg(displayDbm, 0, 'f', 0);
+            leftText  = rxSUnitsReadout();
+            rightText = rxDbmReadout();
         }
 
         const double gap  = std::max(12.0, 44.0 * u);
@@ -1020,8 +1090,7 @@ void SMeterWidget::paintVintage(QPainter& p)
     }
 
     // -- Peak marker (RX Signal Peak mode): wedge riding outside the arc ------
-    if (!m_transmitting && m_rxMode == RxMode::SMeterPeak
-        && m_peakDbm > m_levelDbm + 1.0f) {
+    if (peakMarkerVisible()) {
         const float frac = dbmToFraction(m_peakDbm);
         const double a = qDegreesToRadians(VintageMeterFace::angleDeg(frac));
         const QPointF radial(std::sin(a), -std::cos(a));
@@ -1040,8 +1109,7 @@ void SMeterWidget::paintVintage(QPainter& p)
     }
 
     // -- Peak hold line (same rules as the classic face) ----------------------
-    if (m_peakHoldEnabled && !m_transmitting
-        && m_peakHoldDbm > S0_DBM + 1.0f) {
+    if (peakHoldLineVisible()) {
         float frac = dbmToFraction(m_peakHoldDbm);
         if (m_peakHoldDbm <= m_levelDbm + 0.01f) {
             frac = m_needleFraction;
