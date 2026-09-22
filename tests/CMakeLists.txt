@@ -5739,6 +5739,7 @@ nereus_add_test(tst_tgxl_connection_ping)
 nereus_add_test(tst_tgxl_connection_reconnect)
 nereus_add_test(tst_tgxl_connection_identity)
 nereus_add_test(tst_tgxl_station_identity)
+nereus_add_test(tst_station_accessory_state)
 nereus_add_test(tst_remote_peripherals)
 
 # Task 59: auto-reconnect exponential backoff (1/2/5/10/30/60 s, cap at 60 s).

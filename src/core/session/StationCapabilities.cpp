@@ -57,6 +57,7 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         intEntry("remoteCtunVersion", remoteCtunVersion),
         intEntry("stationTelemetryVersion", stationTelemetryVersion),
         intEntry("remoteTgxlConfigVersion", remoteTgxlConfigVersion),
+        intEntry("remoteFourO3AControlVersion", remoteFourO3AControlVersion),
         intEntry("settingsSchemaVersion", settingsSchemaVersion),
     };
 }
@@ -118,6 +119,10 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
         } else if (u.name == "remoteTgxlConfigVersion") {
             const qlonglong version = u.value.toLongLong();
             caps.remoteTgxlConfigVersion = version >= 0 && version <= 65535
+                ? static_cast<int>(version) : 0;
+        } else if (u.name == "remoteFourO3AControlVersion") {
+            const qlonglong version = u.value.toLongLong();
+            caps.remoteFourO3AControlVersion = version >= 0 && version <= 65535
                 ? static_cast<int>(version) : 0;
         } else if (u.name == "settingsSchemaVersion") {
             caps.settingsSchemaVersion = static_cast<qint32>(u.value.toLongLong());

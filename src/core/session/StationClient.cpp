@@ -766,6 +766,10 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     m_linkUp = false;
     m_heartbeatTimer->stop();
     m_writeFlushTimer->stop();
+    // Results from the retired session can no longer arrive. Keeping its
+    // unanswered commands would suppress completions for fresh requests
+    // after reconnect (including the 4O3A master and C-Tune controls).
+    m_pendingCommands.clear();
 
     // Fix round 1, Important 1: disconnect the dead transport's signals to
     // this object. Without this, m_transport stays fully wired
@@ -840,6 +844,11 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
         // TunerModel's observational station-state adapter; this never
         // opens a local socket or issues an RF command.
         if (m_radioModel->role() == RadioModel::Role::Remote) {
+            // 4O3A state is station-owned admission state, not retained
+            // client display state.  Do this before a replacement snapshot
+            // can arrive, so a disconnected station is never presented as
+            // still listening on this machine.
+            m_radioModel->clearRemoteFourO3AState();
             if (TunerModel* const tuner = m_radioModel->tunerModel()) {
                 TunerModel::StationConnectionState disconnected;
                 disconnected.configuredHost = tuner->configuredHost();
@@ -1687,6 +1696,11 @@ bool StationClient::applyOne(QObject* target, const MirrorProperty& prop,
     // Adding a pair here means having read the hook
     // body and confirmed it writes state rather than sending a command.
     static const QSet<QByteArray> kClientStateApplyHooks = {
+        // R-R3-22: RadioModel assigns these only in Role::Remote; it never
+        // calls the listener-owning setter or persists a GUI-local setting.
+        QByteArrayLiteral("RadioModel.fourO3AEnabled"),
+        QByteArrayLiteral("RadioModel.fourO3AListening"),
+        QByteArrayLiteral("RadioModel.fourO3AListenerError"),
         QByteArrayLiteral("SliceModel.signalStrengthDbm"),
         QByteArrayLiteral("SliceModel.signalPeakDbm"),
         QByteArrayLiteral("SliceModel.signalAverageDbm"),
@@ -1977,6 +1991,15 @@ StationClient::CommandOutcome StationClient::requestDisconnectTgxl()
     return sendCommand("disconnectTgxl", -1, {}, QStringLiteral("the TGXL disconnect"));
 }
 
+StationClient::CommandOutcome StationClient::requestFourO3AEnabled(bool enabled)
+{
+    if (!remoteFourO3AControlAvailable()) {
+        return { false, QStringLiteral("The station does not support remote 4O3A control.") };
+    }
+    return sendCommand("setFourO3AEnabled", -1, { boolArgument("enabled", enabled) },
+                       QStringLiteral("the 4O3A master change"));
+}
+
 void StationClient::handleCommandResult(const SessionMessage& message)
 {
     // Taken, not read: an id is answered exactly once, and leaving the
@@ -1987,6 +2010,20 @@ void StationClient::handleCommandResult(const SessionMessage& message)
     // five typed verbs, looks like -- so the signal below still fires and
     // only the operator-facing routing is skipped.
     const PendingCommand pending = m_pendingCommands.take(message.commandId);
+
+    const bool isFourO3ACommand = pending.verb == "setFourO3AEnabled";
+    bool newerFourO3ACommand = false;
+    if (isFourO3ACommand) {
+        for (auto it = m_pendingCommands.cbegin(); it != m_pendingCommands.cend(); ++it) {
+            if (it.value().verb == pending.verb) {
+                newerFourO3ACommand = true;
+                break;
+            }
+        }
+        if (!newerFourO3ACommand && !m_radioModel.isNull()) {
+            m_radioModel->reportStationFourO3ACommandFinished(message.accepted, message.reason);
+        }
+    }
 
     if (!message.accepted && !m_radioModel.isNull()) {
         // The station's OWN reason, relayed verbatim. Wording a refusal
@@ -2058,6 +2095,14 @@ bool StationClient::remoteTgxlConfigAvailable() const
         && m_transport && m_transport->isOpen()
         && m_agreedMinor >= kRemoteTgxlConfigSessionProtocolMinor
         && m_capabilities.remoteTgxlConfigVersion >= 1;
+}
+
+bool StationClient::remoteFourO3AControlAvailable() const
+{
+    return m_sessionActive && m_authenticated && m_handshakeComplete
+        && m_transport && m_transport->isOpen()
+        && m_agreedMinor >= kRemoteFourO3AControlSessionProtocolMinor
+        && m_capabilities.remoteFourO3AControlVersion >= 1;
 }
 
 bool StationClient::telemetryAvailable() const

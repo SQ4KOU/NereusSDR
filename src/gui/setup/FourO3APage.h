@@ -74,6 +74,11 @@ private slots:
     // state of every peripheral-bearing control on connectionStateChanged.
     void refreshConnectionBanner();
 
+    // The station's CommandResult is a transport acknowledgement, while
+    // the mirrored fields remain the only source for the check state and
+    // listener health.  This slot only ends the visible pending state.
+    void onStationFourO3ACommandFinished(bool accepted, const QString& reason);
+
 private:
     // Build the General tab content as a composite widget: master toggle
     // group + FlexAPI listener status row + embedded PeripheralsPage +
@@ -100,6 +105,10 @@ private:
     // Per-radio peripherals refactor (2026-05-26): banner at top of the
     // General tab; refreshConnectionBanner updates its text + style.
     QLabel*               m_connectionBanner{nullptr};
+
+    bool                   m_remoteMasterPending{false};
+    bool                   m_remoteMasterResultIsError{false};
+    QString                m_remoteMasterResult;
 
     // Embedded existing pages.  We keep raw pointers so the master
     // toggle can enable/disable them as a unit.  Owned by the tab

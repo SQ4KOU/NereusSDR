@@ -9508,71 +9508,8 @@ void MainWindow::wireSliceToSpectrum()
     // active. The handler there keeps this one's semantics (name only; the
     // legacy freqHz / mode args stay for SpectrumOverlayPanel's kBands table).
 
-    // Phase 3P-II Task 65: notify PGXL of band changes so the amplifier can
-    // switch its bias / antenna profile when the operator crosses a band boundary.
-    // Gate: no-op if PGXL is not connected at the time of the band change.
-    // Use the slice's actual frequency rather than a band center lookup because
-    // Band.h has no centerFreqHz() helper (not needed elsewhere).
-    connect(slice, &SliceModel::bandChanged,
-            this, [this](NereusSDR::Band /*b*/) {
-        PgxlConnection* pgxl = m_radioModel->pgxlConnection();
-        if (!pgxl || !pgxl->isConnected()) { return; }
-        SliceModel* s = m_radioModel->activeSlice();
-        if (!s) { return; }
-        pgxl->setBand(static_cast<int>(s->frequency()));
-    });
-
-    // Bench-fix 2026-05-19: also push on within-band frequency changes so
-    // PGXL sees every tune, not just band-boundary crossings.
-    // bandChanged fires only when the slice crosses a band edge; within-band
-    // tunes (e.g. 7.200 -> 7.250 MHz) never trigger it, leaving PGXL's
-    // bandA field stale until the operator crosses into an adjacent band.
-    // Operator confirmed on-bench: after pairing PGXL via the serial field,
-    // frequency changes from the tune wheel were not visible in PGXL status.
-    // Debounced: a 200 ms QTimer::singleShot coalesces a burst of tune-wheel
-    // clicks into one outbound command. m_pgxlBandPushTokenMs is the last
-    // token; only the most recently scheduled callback fires the push.
-    connect(slice, &SliceModel::frequencyChanged,
-            this, [this](qint64 hz) {
-        Q_UNUSED(hz);
-        const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
-        m_pgxlBandPushTokenMs = nowMs;
-        QTimer::singleShot(200, this, [this, nowMs]() {
-            if (m_pgxlBandPushTokenMs != nowMs) { return; }
-            PgxlConnection* pgxl = m_radioModel->pgxlConnection();
-            if (!pgxl || !pgxl->isConnected()) { return; }
-            SliceModel* s = m_radioModel->activeSlice();
-            if (!s) { return; }
-            pgxl->setBand(static_cast<int>(s->frequency()));
-        });
-    });
-
-    // SmartSDR API responder: also push slice freq/mode and TX state into the
-    // TCP 4992 listener so PGXL/TGXL (acting as SmartSDR clients) pull current
-    // band data via the documented API path rather than relying solely on the
-    // explicit `flexradio band=N` push above. This is what `bsrcA=FLEX` on the
-    // PGXL status frame consumes: the FlexRadio's slice 0 RF_frequency, mode,
-    // and transmit MOX state.
-    if (auto* l = m_radioModel->smartSdrListener()) {
-        // Push current state immediately so the listener doesn't sit on
-        // the constructor default (14.250 MHz USB) until the operator first
-        // turns the dial. Without this, PGXL would see a misleading band
-        // until the first frequency change.
-        l->setSliceFrequencyHz(/*sliceId=*/0, slice->frequency());
-        l->setSliceMode(/*sliceId=*/0, SliceModel::modeName(slice->dspMode()));
-    }
-    connect(slice, &SliceModel::frequencyChanged,
-            this, [this](qint64 hz) {
-        if (auto* l = m_radioModel->smartSdrListener()) {
-            l->setSliceFrequencyHz(/*sliceId=*/0, hz);
-        }
-    });
-    connect(slice, &SliceModel::dspModeChanged,
-            this, [this](NereusSDR::DSPMode mode) {
-        if (auto* l = m_radioModel->smartSdrListener()) {
-            l->setSliceMode(/*sliceId=*/0, SliceModel::modeName(mode));
-        }
-    });
+    // Accessory frequency/mode propagation belongs to RadioModel's TX-bound
+    // slice wiring, so local and headless Core use the same owner (R-R3-22).
 
     // Phase 3P-II review fix C1: keep TunerApplet m_currentBand in sync so
     // right-click Save/Recall/Clear actions always address the actual current

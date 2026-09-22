@@ -70,6 +70,11 @@ MirrorUpdate strArg(const QByteArray& name, const QString& value)
     return MirrorUpdate{ 0, name, MirrorWireKind::Utf8, QVariant(value) };
 }
 
+MirrorUpdate boolArg(const QByteArray& name, bool value)
+{
+    return MirrorUpdate{ 0, name, MirrorWireKind::Bool, QVariant(value) };
+}
+
 // Flattens every batch StateMirror emits, same shape as
 // tst_mirror_forwarder.cpp / tst_mirror_inbound.cpp's own Collector
 // (separate translation unit, so its own copy -- see either file's header
@@ -301,6 +306,24 @@ private slots:
             QVERIFY(!result.accepted);
             QVERIFY2(result.reason != QStringLiteral("unrecognised command verb"),
                      qPrintable(result.reason));
+            QVERIFY(result.affectedKeys.isEmpty());
+        }
+    }
+
+    void fourO3ACommandRejectsMalformedAndDuplicateEnabledArguments()
+    {
+        RadioModel model;
+        DispatchHarness harness(&model);
+
+        harness.invoke("setFourO3AEnabled", 1, {});
+        harness.invoke("setFourO3AEnabled", 2, { intArg("enabled", 1) });
+        harness.invoke("setFourO3AEnabled", 3,
+                       { boolArg("enabled", true), boolArg("enabled", false) });
+
+        QCOMPARE(harness.results.size(), 3);
+        for (const SessionMessage& result : harness.results) {
+            QVERIFY(!result.accepted);
+            QVERIFY(result.reason != QStringLiteral("unrecognised command verb"));
             QVERIFY(result.affectedKeys.isEmpty());
         }
     }

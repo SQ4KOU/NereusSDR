@@ -178,6 +178,10 @@ inline constexpr quint16 kMediaSessionProtocolMinor = 1;
 inline constexpr quint16 kRemoteCtunSessionProtocolMinor = 2;
 inline constexpr quint16 kStationTelemetrySessionProtocolMinor = 3;
 inline constexpr quint16 kRemoteTgxlConfigSessionProtocolMinor = 4;
+// Both R3 accessory controls belong to minor 4. Separate capabilities let
+// intermediate development builds expose TGXL configuration before the
+// master/listener controls are available.
+inline constexpr quint16 kRemoteFourO3AControlSessionProtocolMinor = 4;
 inline constexpr qsizetype kMaxMediaControlBytes = 128 * 1024;
 inline constexpr qsizetype kMaxStationTelemetryBytes = 16 * 1024;
 

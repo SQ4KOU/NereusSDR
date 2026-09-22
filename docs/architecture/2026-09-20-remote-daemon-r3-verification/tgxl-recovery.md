@@ -180,3 +180,62 @@ including the simulated audio clock. The eleven existing inner Qt skips remain;
 no new regression was skipped. Logs: `r3-tgxl-reviewed-recheck-{build,test}.log`.
 The integrated review findings are corrected and checked. This is a source
 checkpoint; receive-only real-TGXL identity/connection acceptance is still pending.
+
+
+## September 22 follow-on: live observation and remaining controls
+
+The matching `c9065756` Core/GUI installation includes the reviewed TGXL
+identity/configuration work. Read-only capture after installation confirms
+TunerGenius discovery from the expected tuner on UDP 9010. TCP observations
+show Core in SYN-SENT with retransmitted requests and no reply, so actual
+identity admission is not yet accepted. Service logs separately reproduce
+`Invalid socket descriptor` during retries after asynchronous connect timeout.
+Private evidence: `r3-tgxl-postinstall-health.log` and
+`r3-tgxl-connection-passive.log`. No network configuration or RF action was used.
+
+The remaining typed master/listener state and Core-owned frequency propagation
+are now under implementation, together with the proven socket-engine reuse
+repair. New model tests use actual loopback listeners (including occupied-port
+failure) and a loopback PGXL with acknowledged pairing. Session tests cross the
+authenticated boundary and GUI tests cover pending/refused/reconnect states.
+These changes have not yet passed their build/test gate or been installed.
+
+
+The first focused run passed **9/10 executables in 58.94 seconds**. The
+new authenticated listener test exposed a production admission omission:
+StationClient's inbound state-apply allowlist did not include the three new
+RadioModel observation fields, so Core bound successfully while the GUI
+remained stale. The client now admits only those exact field names through
+the inspected Remote-only assignment hook. Rebuilt model, GUI and authenticated
+session checks passed **3/3 in 11.27 seconds**. Logs:
+`r3-four-o3a-focused-test.log`, `r3-four-o3a-state-apply-{build,test}.log`.
+An earlier compile failure was a missing SmartSdrApiListener test include,
+corrected before this runtime gate. The full suite and integrated review are
+still pending.
+
+The socket-engine explanation is confirmed against the Rock's upstream Qt
+6.8.2 source, not only the Mac's Qt version: asynchronous timeout publishes
+Unconnected without resetting the engine; abort/close skip the reset in that
+state. Each physical retry now owns a fresh socket, and the retired socket is
+destroyed through deleteLater after its callbacks are disconnected. Direct
+failure-observer replacement/cancellation and retirement are covered by the
+passing reconnect executable. See the official
+[Qt 6.8.2 socket implementation](https://code.qt.io/cgit/qt/qtbase.git/tree/src/network/socket/qabstractsocket.cpp?h=v6.8.2).
+This does not establish why the tuner currently sends no SYN-ACK.
+
+The consolidated review found that an unanswered command survived session
+teardown and suppressed completion of the next 4O3A request after reconnect.
+Two regressions reproduced the missing completion for both link loss and
+direct session replacement. Clearing the retired session's pending commands
+fixes both paths. Rebuilt authenticated-session and peripheral-page checks
+passed **2/2 in 9.29 seconds**, including the new reconnect rows. Logs:
+`r3-four-o3a-reconnect-red-test.log` and
+`r3-four-o3a-reconnect-green-{build,test}.log`.
+
+Final source gate: rebuilt `all_tests` and `nereusd`, then the unfiltered suite
+passed **696/696 executables in 139.53 seconds**. Eleven existing inner Qt
+skips remain; none of the new regressions were skipped. The consolidated
+review has no remaining actionable findings after the session-teardown fix.
+Logs: `r3-four-o3a-reviewed-{build,test,cases}.log`. This gate establishes
+the software checkpoint; matching native installation and real-device
+observations are recorded separately below.

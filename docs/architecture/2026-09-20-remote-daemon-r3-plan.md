@@ -571,32 +571,54 @@ the remote toggle must never start the GUI's local listener. Preserve direct loc
 Finish headless frequency/mode propagation after that ownership boundary is
 settled. Keep the existing receive-only guards throughout these changes.
 
+**September 22 follow-on contract:** `remoteFourO3AControlVersion=1` is a
+separate capability within accessory protocol minor 4. The exact typed Bool
+command is accepted after validation and durable per-MAC intent storage;
+acceptance does not claim a successful bind. Read-only `fourO3AEnabled`,
+`fourO3AListening`, and `fourO3AListenerError` report actual Core state. A
+repeated enable retries a failed bind; disable always cancels pending accessory
+work. The GUI shows pending/result state, clears it across session replacement,
+and assigns inbound fields without touching its own listener or settings.
+Headless propagation follows `txBoundSlice()`, retaining the existing SmartSDR
+slice-0 representation and PGXL 200 ms within-band debounce. Unrelated viewed
+slices cannot drive it. Real loopback listener and acknowledged PGXL fixtures
+cover initial state, retune, mode, rebind, removal and canceled debounce.
+
+
 **September 21 software checkpoint:** Core-owned identity/configuration and the
 remote Peripherals/applet path are implemented with negotiated minor 4 support.
 The integrated review corrections include durable endpoint saves, MAC-scope
 reset, identity-sensitive discovery, retry/cancel state, session-loss clearing,
-and the legacy native accessory proxy's receive-only guard. Hardware acceptance
-and the typed master/listener/headless frequency follow-on remain open; this is
-not completion of all task 4d controls.
+and the legacy native accessory proxy's receive-only guard.
+
+**September 22 software follow-on:** the typed remote master, actual listener
+state/error, Core-owned TX-bound frequency/mode propagation and fresh-socket
+retry lifecycle are implemented. Authenticated tests caught and corrected the
+new state fields' client admission; review caught unanswered requests surviving
+session replacement, now covered for both dropped and directly replaced links.
+Real TGXL connection/identity acceptance remains open: discovery is visible,
+but the latest Core TCP observation is SYN-SENT with no reply. See the
+[verification ledger](2026-09-20-remote-daemon-r3-verification/tgxl-recovery.md)
+for build, review and installation evidence.
 
 - [x] Establish regressions for remote band-change auto-recall and applet
   reactions to `isTuning`. Guard RX-only operation and telemetry replay from
   autotune/carrier/operate/bypass/relay/antenna commands; preserve the existing
   local-direct workflow. This guard is part of the telemetry change, not a
   later R4 cleanup. Do not enable remote TX as a connection repair.
-- [ ] Validate TGXL identity before declaring connected/present or enabling
+- [x] Validate TGXL identity before declaring connected/present or enabling
   commands. Derive supported model aliases and serial correlation from actual
   discovery/info evidence; a V banner alone is insufficient. Reject a PGXL
   response and show expected versus observed device. Bound handshake timeout.
-- [ ] Implement unconditional cancellation across connecting, handshaking,
+- [x] Implement unconditional cancellation across connecting, handshaking,
   connected and backoff states for disable, disconnect, radio teardown and
   endpoint replacement. A cancellable timer or generation check must prevent
   an old captured endpoint from redialling after replacement.
-- [ ] Route basic remote configuration/apply/connect/disconnect to Core;
+- [x] Route basic remote configuration/apply/connect/disconnect to Core;
   show selected endpoint, identity, pending state and error. Apply all 13 tuner
   snapshot/update fields safely, including false/zero values and disconnect.
   Gate applet orchestration while retaining read-only visual updates.
-- [ ] Move existing SmartSDR frequency/mode seeding and PGXL band propagation
+- [x] Move existing SmartSDR frequency/mode seeding and PGXL band propagation
   from MainWindow to the authoritative Core slice wiring. Follow the stable
   TX-bound slice, including binding change/removal, and remove duplicate GUI
   sends. Retain source attribution and current wire behavior.

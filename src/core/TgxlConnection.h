@@ -22,6 +22,9 @@
 //   2026-09-21  J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 OpenAI Codex: added opt-in, sequence-correlated native-info
 //                 identity admission for Core-owned station connections.
+//   2026-09-22  J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 OpenAI Codex: retire each failed Qt socket before retry so
+//                 asynchronous timeout state cannot leak into source binding.
 // =================================================================
 #pragma once
 
@@ -63,8 +66,8 @@ public:
 
     bool    isConnected() const { return m_connected; }
     QString version()     const { return m_version; }
-    QString peerAddress() const { return m_socket.peerAddress().toString(); }
-    quint16 peerPort()    const { return m_socket.peerPort(); }
+    QString peerAddress() const { return m_socket->peerAddress().toString(); }
+    quint16 peerPort()    const { return m_socket->peerPort(); }
     quint64 socketAttemptToken() const { return m_socketAttemptGeneration; }
     bool identityAdmissionRequired() const { return m_identityAdmissionRequired; }
     TgxlIdentityInfo identityInfo() const { return m_identityInfo; }
@@ -113,6 +116,7 @@ public:
     quint64 testActiveSocketAttemptGeneration() const {
         return m_socketAttemptGeneration;
     }
+    QTcpSocket* testSocketForTesting() const { return m_socket; }
     void testInjectLineForSocketAttempt(const QString& line,
                                         quint64 attemptGeneration);
     void testInjectFailureForSocketAttempt(quint64 attemptGeneration);
@@ -198,7 +202,7 @@ private:
     // OS default route in that case.
     SourceBindResult bindSourceForHost(const QString& host);
 
-    QTcpSocket m_socket;
+    QTcpSocket* m_socket{nullptr};
     QTimer     m_pollTimer;       // 1/sec status poll
     QByteArray m_readBuf;
     quint32    m_seq{0};

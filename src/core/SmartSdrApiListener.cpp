@@ -40,7 +40,7 @@ bool SmartSdrApiListener::start()
 {
     // AnyIPv4 (not Any) because Qt's default Any binds IPv6-only on macOS,
     // which silently blocks IPv4 clients like Windows PowerGeniusDesktop.
-    return start(QHostAddress::AnyIPv4, 4992);
+    return start(m_listenAddress, m_listenPort);
 }
 
 bool SmartSdrApiListener::start(QHostAddress bindAddr, quint16 port)
@@ -50,11 +50,15 @@ bool SmartSdrApiListener::start(QHostAddress bindAddr, quint16 port)
     }
     bool ok = m_server.listen(bindAddr, port);
     if (!ok) {
+        m_lastListenError = m_server.errorString();
+        emit statusChanged();
         qCWarning(lcSmartSdr) << "failed to bind"
                                << bindAddr.toString() << ":" << port
                                << ":" << m_server.errorString();
         return false;
     }
+    m_lastListenError.clear();
+    emit statusChanged();
     // 2026-05-21 4o3a-lan-ptt-pcap-divergence.md §8 C1: generate synthetic
     // local-client handle once per listener boot. Stable for the lifetime
     // of this start() call. Consumed by every interlock S-frame builder.
@@ -100,6 +104,8 @@ void SmartSdrApiListener::stop()
     // one.  m_lastTuneInitiator likewise.
     m_localClientHandle.clear();
     m_lastTuneInitiator.clear();
+    m_lastListenError.clear();
+    emit statusChanged();
 }
 
 bool SmartSdrApiListener::isListening() const

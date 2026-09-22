@@ -61,6 +61,10 @@ public:
     bool start(QHostAddress bindAddr, quint16 port);
     void stop();
     bool isListening() const;
+    QString lastListenError() const { return m_lastListenError; }
+    // Loopback/ephemeral fixture seam; production retains AnyIPv4:4992.
+    void setListenEndpointForTesting(QHostAddress address, quint16 port)
+    { m_listenAddress = address; m_listenPort = port; }
 
     // Test-only convenience: return the actual port the server bound to.
     // When start() picked an ephemeral port (port=0), this is the kernel-
@@ -127,6 +131,7 @@ public:
     QString localClientHandle() const { return m_localClientHandle; }
 
 signals:
+    void statusChanged();
     void clientConnected(const QString& peerHost, quint16 peerPort);
     void lineReceived(const QString& peerHost, quint16 peerPort,
                       const QString& line);
@@ -199,6 +204,9 @@ private slots:
     void onPeriodicTick();
 
 private:
+    QHostAddress m_listenAddress{QHostAddress::AnyIPv4};
+    quint16 m_listenPort{4992};
+    QString m_lastListenError;
     // Per-socket session state.
     struct ClientState {
         QByteArray readBuffer;     // line accumulator (CR-terminated)

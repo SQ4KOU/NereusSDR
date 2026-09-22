@@ -232,6 +232,8 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleConfigureTgxl(invoke);
     } else if (invoke.commandVerb == "disconnectTgxl") {
         handleDisconnectTgxl(invoke);
+    } else if (invoke.commandVerb == "setFourO3AEnabled") {
+        handleSetFourO3AEnabled(invoke);
     } else {
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("unrecognised command verb"), {});
@@ -632,6 +634,26 @@ void SessionCommandDispatcher::handleDisconnectTgxl(const SessionMessage& invoke
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    reason.isEmpty() ? QStringLiteral("TGXL disconnect was refused") : reason,
                    {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+void SessionCommandDispatcher::handleSetFourO3AEnabled(const SessionMessage& invoke)
+{
+    QVariant enabled;
+    if (!hasExactlyArguments(invoke.arguments, { "enabled" })
+        || !findArgument(invoke.arguments, "enabled", &enabled)
+        || enabled.typeId() != QMetaType::Bool) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("setFourO3AEnabled requires exactly one enabled boolean argument"), {});
+        return;
+    }
+
+    QString reason;
+    if (!m_radioModel->setFourO3AEnabledForStation(enabled.toBool(), &reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("4O3A master change was refused") : reason, {});
         return;
     }
     emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});

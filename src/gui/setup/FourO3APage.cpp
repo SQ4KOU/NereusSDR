@@ -32,12 +32,14 @@
 #include "TgxlAdvancedPage.h"
 
 #include "core/SmartSdrApiListener.h"
+#include "core/session/IStationLink.h"
 #include "models/RadioModel.h"
 
 #include <QCheckBox>
 #include <QGroupBox>
 #include <QHBoxLayout>
 #include <QLabel>
+#include <QSignalBlocker>
 #include <QTabWidget>
 #include <QTimer>
 #include <QVBoxLayout>
@@ -100,6 +102,15 @@ FourO3APage::FourO3APage(RadioModel* model, QWidget* parent)
     if (m_model) {
         connect(m_model, &RadioModel::connectionStateChanged,
                 this, &FourO3APage::refreshConnectionBanner);
+        connect(m_model, &RadioModel::stationLinkStateChanged,
+                this, &FourO3APage::refreshConnectionBanner);
+        connect(m_model, &RadioModel::fourO3AStatusChanged,
+                this, [this]() {
+                    refreshConnectionBanner();
+                    refreshFlexApiStatus();
+                });
+        connect(m_model, &RadioModel::stationFourO3ACommandFinished,
+                this, &FourO3APage::onStationFourO3ACommandFinished);
     }
     refreshConnectionBanner();  // initial paint
 
@@ -134,6 +145,7 @@ QWidget* FourO3APage::buildGeneralTab()
     auto* masterBox = new QGroupBox(tr("Master Switch"), tab);
     auto* masterLayout = new QVBoxLayout(masterBox);
     m_masterToggle = new QCheckBox(tr("Enable 4O3A integration"), masterBox);
+    m_masterToggle->setObjectName(QStringLiteral("fourO3AMasterToggle"));
     m_masterToggle->setToolTip(
         tr("Gates the FlexAPI listener on TCP 4992 and the PGXL / TGXL "
            "auto-connect paths.  Off by default; turn on only when you "
@@ -160,6 +172,7 @@ QWidget* FourO3APage::buildGeneralTab()
     auto* statusBox = new QGroupBox(tr("FlexAPI Listener"), tab);
     auto* statusLayout = new QHBoxLayout(statusBox);
     m_flexApiStatusLabel = new QLabel(tr("Status: \xE2\x97\x8B Idle"), statusBox);
+    m_flexApiStatusLabel->setObjectName(QStringLiteral("fourO3AListenerStatus"));
     m_flexApiStatusLabel->setToolTip(
         tr("Live state of the TCP 4992 SmartSDR API listener.  Reflects "
            "the master toggle above plus any external bind errors."));
@@ -187,7 +200,35 @@ QWidget* FourO3APage::buildGeneralTab()
 
 void FourO3APage::onMasterToggled(bool checked)
 {
-    if (!m_model || m_model->role() == RadioModel::Role::Remote) {
+    if (!m_model) {
+        return;
+    }
+    if (m_model->role() == RadioModel::Role::Remote) {
+        auto* const link = m_model->stationLink();
+        const bool available = link && link->remoteFourO3AControlAvailable()
+            && !m_model->currentRadioMac().isEmpty();
+        if (!available) {
+            m_remoteMasterResultIsError = true;
+            m_remoteMasterResult = tr("Core 4O3A control is unavailable for this session.");
+            refreshConnectionBanner();
+            refreshFlexApiStatus();
+            return;
+        }
+        const IStationLink::CommandOutcome outcome = link->requestFourO3AEnabled(checked);
+        if (outcome.sent) {
+            m_remoteMasterPending = true;
+            m_remoteMasterResultIsError = false;
+            m_remoteMasterResult.clear();
+        } else {
+            m_remoteMasterPending = false;
+            m_remoteMasterResultIsError = true;
+            m_remoteMasterResult = outcome.reason;
+        }
+        // The QCheckBox has already followed the click. Restore the Core
+        // snapshot immediately: no local listener or preference is changed
+        // while a request is in flight.
+        refreshConnectionBanner();
+        refreshFlexApiStatus();
         return;
     }
     m_model->setFourO3AEnabled(checked);
@@ -200,6 +241,19 @@ void FourO3APage::onMasterToggled(bool checked)
     // toggle reachable so the operator can flip it back on.
     if (m_peripheralsPage) { m_peripheralsPage->setEnabled(checked); }
     if (m_pgxlInterlockPage) { m_pgxlInterlockPage->setEnabled(checked); }
+}
+
+void FourO3APage::onStationFourO3ACommandFinished(bool accepted, const QString& reason)
+{
+    m_remoteMasterPending = false;
+    m_remoteMasterResultIsError = !accepted;
+    m_remoteMasterResult = accepted
+        ? tr("Core accepted the request; waiting for its listener status.")
+        : (reason.isEmpty()
+               ? tr("Core refused the 4O3A request.")
+               : reason);
+    refreshConnectionBanner();
+    refreshFlexApiStatus();
 }
 
 void FourO3APage::applyMasterGateToTabs(bool enabled)
@@ -230,10 +284,32 @@ void FourO3APage::refreshConnectionBanner()
         return;
     }
     if (m_model && m_model->role() == RadioModel::Role::Remote) {
-        m_connectionBanner->setText(tr("TGXL connections are managed by Core."));
+        const auto* const link = m_model->stationLink();
+        const bool ready = link && link->remoteFourO3AControlAvailable();
+        const bool haveMac = !m_model->currentRadioMac().isEmpty();
+        if (!ready || !haveMac) {
+            // A result from the retired session will never arrive. Do not
+            // carry its pending latch into the next authenticated session.
+            m_remoteMasterPending = false;
+            m_remoteMasterResult.clear();
+            m_remoteMasterResultIsError = false;
+        }
+        m_connectionBanner->setText(ready && haveMac
+            ? tr("4O3A integration is managed by Core for %1.").arg(m_model->currentRadioMac())
+            : tr("4O3A integration is managed by Core; wait for a ready station session."));
         if (m_masterToggle) {
-            m_masterToggle->setEnabled(false);
-            m_masterToggle->setToolTip(tr("The 4O3A master switch is configured at Core. Remote master control is not available yet."));
+            const QSignalBlocker blocker(m_masterToggle);
+            m_masterToggle->setChecked(m_model->fourO3AEnabled());
+            m_masterToggle->setEnabled(ready && haveMac && !m_remoteMasterPending);
+            if (m_remoteMasterPending) {
+                m_masterToggle->setText(tr("Enable 4O3A integration (request pending)"));
+                m_masterToggle->setToolTip(tr("Waiting for Core to acknowledge and mirror the 4O3A state."));
+            } else {
+                m_masterToggle->setText(tr("Enable 4O3A integration"));
+                m_masterToggle->setToolTip(ready && haveMac
+                    ? tr("Ask Core to change its 4O3A master switch. The check state follows Core's snapshot.")
+                    : tr("Core 4O3A control requires a ready session and connected station radio."));
+            }
         }
         applyMasterGateToTabs(false);
         return;
@@ -284,8 +360,32 @@ void FourO3APage::refreshFlexApiStatus()
 {
     if (!m_flexApiStatusLabel) { return; }
     if (m_model && m_model->role() == RadioModel::Role::Remote) {
-        m_flexApiStatusLabel->setText(tr("Core listener status is not available yet."));
-        m_flexApiStatusLabel->setToolTip(tr("This remote GUI does not open a local FlexAPI listener."));
+        const auto* const link = m_model->stationLink();
+        const bool ready = link && link->remoteFourO3AControlAvailable()
+            && !m_model->currentRadioMac().isEmpty();
+        if (!ready) {
+            m_flexApiStatusLabel->setText(tr("Status: \xE2\x97\x8B Core session unavailable"));
+            m_flexApiStatusLabel->setStyleSheet(QStringLiteral("color: #888;"));
+        } else if (m_model->fourO3AListening()) {
+            m_flexApiStatusLabel->setText(tr("Status: \xE2\x97\x8F Core listening on TCP 4992"));
+            m_flexApiStatusLabel->setStyleSheet(QStringLiteral("color: #4CAF50;"));
+        } else if (!m_model->fourO3AListenerError().isEmpty()) {
+            m_flexApiStatusLabel->setText(
+                tr("Status: \xE2\x97\x8F Core listener error: %1")
+                    .arg(m_model->fourO3AListenerError()));
+            m_flexApiStatusLabel->setStyleSheet(QStringLiteral("color: #E53935;"));
+        } else if (m_remoteMasterResultIsError && !m_remoteMasterResult.isEmpty()) {
+            m_flexApiStatusLabel->setText(tr("Status: %1").arg(m_remoteMasterResult));
+            m_flexApiStatusLabel->setStyleSheet(QStringLiteral("color: #E53935;"));
+        } else if (m_model->fourO3AEnabled()) {
+            m_flexApiStatusLabel->setText(tr("Status: \xE2\x97\x8B Core listener starting"));
+            m_flexApiStatusLabel->setStyleSheet(QStringLiteral("color: #ffcc66;"));
+        } else {
+            m_flexApiStatusLabel->setText(tr("Status: \xE2\x97\x8B Disabled at Core"));
+            m_flexApiStatusLabel->setStyleSheet(QStringLiteral("color: #888;"));
+        }
+        m_flexApiStatusLabel->setToolTip(
+            tr("Core owns the TCP 4992 listener. This remote GUI only displays its mirrored status."));
         return;
     }
     SmartSdrApiListener* listener =

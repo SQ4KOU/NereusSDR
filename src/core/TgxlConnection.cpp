@@ -19,6 +19,9 @@
 //                 lifecycle [@1e0718ad]. Endpoint/attempt generations,
 //                 exponential backoff, and explicit source-bind fallback
 //                 are NereusSDR-native.
+//   2026-09-22  J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 OpenAI Codex: retire each failed Qt socket before retry so
+//                 asynchronous timeout state cannot leak into source binding.
 // =================================================================
 #include "TgxlConnection.h"
 #include "AppSettings.h"
@@ -38,6 +41,7 @@ static constexpr int kTgxlBackoffSec[] = {1, 2, 5, 10, 30, 60};
 // From AetherSDR src/core/TgxlConnection.cpp:6 [@0cd4559]
 TgxlConnection::TgxlConnection(QObject* parent)
     : QObject(parent)
+    , m_socket(new QTcpSocket(this))
 {
     m_pollTimer.setInterval(1000);  // 1 Hz per AetherSDR [@0cd4559]
     connect(&m_pollTimer, &QTimer::timeout, this, &TgxlConnection::pollStatus);
@@ -82,7 +86,7 @@ TgxlConnection::~TgxlConnection()
     m_keepaliveTimer.stop();
     m_pingTimeoutTimer.stop();
     retireSocketAttempt();
-    m_socket.abort();
+    m_socket->abort();
 }
 
 void TgxlConnection::setIdentityAdmissionRequired(bool required)
@@ -95,7 +99,7 @@ void TgxlConnection::setIdentityAdmissionRequired(bool required)
     // any legacy/admission attempt is live, retire that attempt rather than
     // reinterpret its V/info state under a weaker or stronger policy.
     if (m_connected
-        || m_socket.state() != QAbstractSocket::UnconnectedState
+        || m_socket->state() != QAbstractSocket::UnconnectedState
         || m_connectTimer.isActive()
         || m_reconnectTimer.isActive()
         || m_identityTimer.isActive()) {
@@ -171,10 +175,10 @@ void TgxlConnection::connectToTgxl(const QString& host, quint16 port)
     // endpoint. A different endpoint is an intentional replacement and must
     // invalidate both an active socket and any captured retry.
     if (sameEndpoint
-        && (m_socket.state() != QAbstractSocket::UnconnectedState
+        && (m_socket->state() != QAbstractSocket::UnconnectedState
             || m_connectTimer.isActive())) {
         qCDebug(lcTgxl) << "connectToTgxl: socket already in state"
-                        << m_socket.state() << "- ignoring duplicate";
+                        << m_socket->state() << "- ignoring duplicate";
         return;
     }
 
@@ -244,7 +248,7 @@ TgxlConnection::bindSourceForHost(const QString& host)
         return SourceBindResult::NotRequested;
     }
     QPointer<TgxlConnection> self(this);
-    const bool bound = m_socket.bind(src, /*port=*/0);
+    const bool bound = m_socket->bind(src, /*port=*/0);
     if (!self) {
         return SourceBindResult::Failed;
     }
@@ -254,7 +258,7 @@ TgxlConnection::bindSourceForHost(const QString& host)
         return SourceBindResult::Bound;
     } else {
         qCWarning(lcTgxl) << "source bind to" << src.toString()
-                          << "failed:" << m_socket.errorString()
+                          << "failed:" << m_socket->errorString()
                           << "-- resetting before OS default routing";
         return SourceBindResult::Failed;
     }
@@ -331,7 +335,7 @@ void TgxlConnection::failIdentityAdmission(quint64 socketAttemptToken,
     // aborting and let the existing endpoint-generation backoff own redial.
     m_suppressSocketReconnect = true;
     retireSocketAttempt();
-    m_socket.abort();
+    m_socket->abort();
     if (!self || !requestIsCurrent(host, port, endpointGeneration)) {
         return;
     }
@@ -341,7 +345,18 @@ void TgxlConnection::failIdentityAdmission(quint64 socketAttemptToken,
 
 void TgxlConnection::beginSocketAttempt(quint64 endpointGeneration)
 {
+    QTcpSocket* retiredSocket = m_socket;
     retireSocketAttempt();
+    // Qt's asynchronous connect timeout transitions QAbstractSocket to
+    // UnconnectedState without resetting its internal socket engine. abort()
+    // also does not reset an already-unconnected socket, so reusing that
+    // object can make the next source bind fail with InvalidSocketError.
+    // Give every physical attempt a new socket object and native engine. The
+    // retired socket can still be the sender of an error callback whose direct
+    // consumer requested this attempt, so defer its destruction until that
+    // signal delivery has unwound.
+    retiredSocket->deleteLater();
+    m_socket = new QTcpSocket(this);
     ++m_nextSocketAttemptGeneration;
     if (m_nextSocketAttemptGeneration == 0) {
         ++m_nextSocketAttemptGeneration; // zero is the offline-parser seam
@@ -351,16 +366,16 @@ void TgxlConnection::beginSocketAttempt(quint64 endpointGeneration)
     m_socketAttemptEndpointGeneration = endpointGeneration;
 
     m_socketConnectedConnection = connect(
-        &m_socket, &QTcpSocket::connected, this,
+        m_socket, &QTcpSocket::connected, this,
         [this, attempt] { onConnected(attempt); });
     m_socketDisconnectedConnection = connect(
-        &m_socket, &QTcpSocket::disconnected, this,
+        m_socket, &QTcpSocket::disconnected, this,
         [this, attempt] { onDisconnected(attempt); });
     m_socketReadyReadConnection = connect(
-        &m_socket, &QTcpSocket::readyRead, this,
+        m_socket, &QTcpSocket::readyRead, this,
         [this, attempt] { onReadyRead(attempt); });
     m_socketErrorConnection = connect(
-        &m_socket, &QTcpSocket::errorOccurred, this,
+        m_socket, &QTcpSocket::errorOccurred, this,
         [this, attempt](QAbstractSocket::SocketError) { onError(attempt); });
 }
 
@@ -393,11 +408,11 @@ void TgxlConnection::onConnectTimeout()
     // diagnostics, but let this one controlled dial decide whether a retry is
     // needed after the socket reaches a stable state.
     m_suppressSocketReconnect = true;
-    if (m_socket.state() != QAbstractSocket::UnconnectedState) {
+    if (m_socket->state() != QAbstractSocket::UnconnectedState) {
         qCDebug(lcTgxl) << "TgxlConnection: resetting socket from state"
-                        << m_socket.state() << "before dial";
+                        << m_socket->state() << "before dial";
         QPointer<TgxlConnection> self(this);
-        m_socket.abort();
+        m_socket->abort();
         if (!self) {
             return;
         }
@@ -413,7 +428,7 @@ void TgxlConnection::onConnectTimeout()
         m_suppressSocketReconnect = false;
         return;
     }
-    if (m_socket.state() != QAbstractSocket::UnconnectedState) {
+    if (m_socket->state() != QAbstractSocket::UnconnectedState) {
         m_suppressSocketReconnect = false;
         qCWarning(lcTgxl) << "TgxlConnection: socket did not reset; retrying later";
         scheduleReconnect();
@@ -433,7 +448,7 @@ void TgxlConnection::onConnectTimeout()
         // A failed bind can leave the native descriptor unusable. Explicitly
         // reset, validate, then make exactly one OS-default-routing dial.
         self = this;
-        m_socket.abort();
+        m_socket->abort();
         if (!self) {
             return;
         }
@@ -441,7 +456,7 @@ void TgxlConnection::onConnectTimeout()
             m_suppressSocketReconnect = false;
             return;
         }
-        if (m_socket.state() != QAbstractSocket::UnconnectedState) {
+        if (m_socket->state() != QAbstractSocket::UnconnectedState) {
             m_suppressSocketReconnect = false;
             qCWarning(lcTgxl) << "TgxlConnection: failed source bind did not reset;"
                                  " retrying later";
@@ -456,7 +471,7 @@ void TgxlConnection::onConnectTimeout()
         return;
     }
     qCDebug(lcTgxl) << "TgxlConnection: connecting to" << host << ":" << port;
-    m_socket.connectToHost(host, port);
+    m_socket->connectToHost(host, port);
 }
 
 // From AetherSDR src/core/TgxlConnection.cpp:32 [@0cd4559]
@@ -477,9 +492,9 @@ void TgxlConnection::disconnect()
     m_keepaliveTimer.stop();
     m_connected = false;
     const bool notifyDisconnected =
-        m_socket.state() != QAbstractSocket::UnconnectedState;
+        m_socket->state() != QAbstractSocket::UnconnectedState;
     retireSocketAttempt();
-    m_socket.abort();
+    m_socket->abort();
     if (notifyDisconnected) {
         // The real socket callback was deliberately retired before aborting.
         // Preserve the public lifecycle notification and touch no members
@@ -528,7 +543,7 @@ void TgxlConnection::onDisconnected(quint64 attemptGeneration)
     // bench audit trail shows the root cause. errorString() is populated by
     // Qt when the disconnect was caused by a network error; empty string means
     // a clean (operator-initiated) close.
-    const QString err = m_socket.errorString();
+    const QString err = m_socket->errorString();
     if (err.isEmpty()) {
         qCInfo(lcTgxl) << "TGXL disconnected cleanly";
     } else {
@@ -546,7 +561,7 @@ void TgxlConnection::onDisconnected(quint64 attemptGeneration)
     // PR #279 review #3 (2026-05-23): only auto-reconnect on network
     // drops, not user-initiated disconnects.  disconnect() (the
     // Peripherals Disconnect button path) sets m_userInitiatedDisconnect
-    // before calling m_socket.disconnectFromHost(), and the flag is
+    // before stopping the socket, and the flag is
     // cleared by connectToTgxl() on the next intentional connect.
     if (m_userInitiatedDisconnect) {
         qCInfo(lcTgxl)
@@ -568,7 +583,7 @@ void TgxlConnection::onError(quint64 attemptGeneration)
         return;
     }
     const quint64 generation = m_endpointGeneration;
-    const QString err = m_socket.errorString();
+    const QString err = m_socket->errorString();
     if (m_connected) {
         // Transient socket noise on an established connection (e.g., brief
         // network blip during status polling). Log it; don't overwrite the
@@ -607,7 +622,7 @@ void TgxlConnection::onReadyRead(quint64 attemptGeneration)
     if (!socketAttemptIsCurrent(attemptGeneration)) {
         return;
     }
-    QByteArray chunk = m_socket.readAll();
+    QByteArray chunk = m_socket->readAll();
     m_bytesIn += quint64(chunk.size());
     m_readBuf.append(chunk);
 
@@ -655,8 +670,8 @@ void TgxlConnection::processLine(const QString& line,
             if (!self || !socketAttemptIsCurrent(attemptGeneration)) {
                 return;
             }
-            const QString address = m_socket.peerAddress().toString();
-            const quint16 port = m_socket.peerPort();
+            const QString address = m_socket->peerAddress().toString();
+            const quint16 port = m_socket->peerPort();
             emit identityProtocolProgress(attemptGeneration, address, port, m_version);
             return;
         }
@@ -740,8 +755,8 @@ void TgxlConnection::processLine(const QString& line,
                 m_identityStatus = fields;
                 m_identityInfo = {
                     identityAttempt,
-                    m_socket.peerAddress().toString(),
-                    m_socket.peerPort(),
+                    m_socket->peerAddress().toString(),
+                    m_socket->peerPort(),
                     serial,
                     fields.value(QStringLiteral("version")),
                     fields.value(QStringLiteral("nickname"))
@@ -890,7 +905,7 @@ quint32 TgxlConnection::writeProtocolCommand(const QString& cmd)
 {
     quint32 seq = ++m_seq;
     QString line = QString("C%1|%2\n").arg(seq).arg(cmd);
-    m_socket.write(line.toUtf8());
+    m_socket->write(line.toUtf8());
     qCDebug(lcTgxl) << "TgxlConnection: sent" << line.trimmed();
     // Phase 3P-II bench-diagnostic logging (remove after pairing protocol confirmed)
     qCInfo(lcTgxl) << "TX seq=" << seq << "cmd:" << cmd;

@@ -134,6 +134,44 @@ private slots:
         QVERIFY(conn.testReconnectPending());
     }
 
+    void retryRetiresTheFailedQtSocket()
+    {
+        const quint16 deadPort = closedLoopbackPort();
+        QVERIFY(deadPort != 0);
+
+        TgxlConnection conn;
+        conn.testSetReconnectBackoffUnitMs(kBackoffUnitMs);
+        QSignalSpy attempts(&conn, &TgxlConnection::reconnectAttempt);
+        QSignalSpy failures(&conn, &TgxlConnection::connectionFailed);
+
+        conn.connectToTgxl(QStringLiteral("127.0.0.1"), deadPort);
+        QTRY_VERIFY_WITH_TIMEOUT(conn.testActiveSocketAttemptGeneration() != 0,
+                                 2000);
+        const quint64 failedAttempt =
+            conn.testActiveSocketAttemptGeneration();
+        QPointer<QTcpSocket> failedSocket = conn.testSocketForTesting();
+        QVERIFY(!failedSocket.isNull());
+
+        QTRY_COMPARE_WITH_TIMEOUT(attempts.size(), 1, 2000);
+        QTRY_VERIFY_WITH_TIMEOUT(
+            conn.testActiveSocketAttemptGeneration() != failedAttempt, 2000);
+
+        // Qt's asynchronous connect timeout leaves QAbstractSocket in public
+        // UnconnectedState without resetting its internal socket engine. A
+        // later bind() on that same object can therefore report
+        // InvalidSocketError. A physical retry must own a fresh QTcpSocket;
+        // localhost refusal keeps this regression bounded while enforcing the
+        // lifecycle invariant required by the real timeout path.
+        QTRY_VERIFY_WITH_TIMEOUT(failedSocket.isNull(), 2000);
+        QVERIFY(conn.testSocketForTesting() != nullptr);
+        QTRY_VERIFY_WITH_TIMEOUT(failures.size() >= 2, 2000);
+        for (const QList<QVariant>& failure : failures) {
+            QVERIFY2(!failure.at(0).toString().contains(
+                         QStringLiteral("Invalid socket descriptor")),
+                     qPrintable(failure.at(0).toString()));
+        }
+    }
+
     void sourceBindErrorReentryMakesOneOsFallbackDial()
     {
         QTcpServer server;
@@ -218,6 +256,58 @@ private slots:
 
         conn.connectToTgxl(QStringLiteral("127.0.0.1"), deadPort);
         QTRY_COMPARE_WITH_TIMEOUT(attempts.size(), 1, 2000);
+        QTcpServer oldEndpoint;
+        QVERIFY(oldEndpoint.listen(QHostAddress::LocalHost, deadPort));
+        QSignalSpy staleConnections(&oldEndpoint, &QTcpServer::newConnection);
+        QTest::qWait(kRetryObservationMs);
+        QCOMPARE(staleConnections.size(), 0);
+        QVERIFY(!conn.testReconnectPending());
+    }
+
+    void connectionFailureConsumerMayReplaceEndpoint()
+    {
+        const quint16 deadPort = closedLoopbackPort();
+        QVERIFY(deadPort != 0);
+        QTcpServer replacement;
+        QVERIFY(replacement.listen(QHostAddress::LocalHost, 0));
+        int accepted = 0;
+        QList<QPointer<QTcpSocket>> peers;
+        connect(&replacement, &QTcpServer::newConnection, this, [&] {
+            answerVersion(replacement, accepted, peers);
+        });
+
+        TgxlConnection conn;
+        bool replaced = false;
+        connect(&conn, &TgxlConnection::connectionFailed, &conn,
+                [&conn, &replacement, &replaced](const QString&) {
+            if (replaced) {
+                return;
+            }
+            replaced = true;
+            conn.connectToTgxl(QStringLiteral("127.0.0.1"),
+                               replacement.serverPort());
+        }, Qt::DirectConnection);
+
+        conn.connectToTgxl(QStringLiteral("127.0.0.1"), deadPort);
+        QTRY_VERIFY_WITH_TIMEOUT(conn.isConnected(), 2000);
+        QCOMPARE(accepted, 1);
+        QCOMPARE(conn.peerPort(), replacement.serverPort());
+        QVERIFY(!conn.testReconnectPending());
+    }
+
+    void connectionFailureConsumerMayDisconnect()
+    {
+        const quint16 deadPort = closedLoopbackPort();
+        QVERIFY(deadPort != 0);
+        TgxlConnection conn;
+        QSignalSpy failures(&conn, &TgxlConnection::connectionFailed);
+        connect(&conn, &TgxlConnection::connectionFailed, &conn,
+                [&conn](const QString&) { conn.disconnect(); },
+                Qt::DirectConnection);
+
+        conn.connectToTgxl(QStringLiteral("127.0.0.1"), deadPort);
+        QTRY_COMPARE_WITH_TIMEOUT(failures.size(), 1, 2000);
+
         QTcpServer oldEndpoint;
         QVERIFY(oldEndpoint.listen(QHostAddress::LocalHost, deadPort));
         QSignalSpy staleConnections(&oldEndpoint, &QTcpServer::newConnection);

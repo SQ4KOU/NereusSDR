@@ -858,6 +858,7 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // with the transmitter unkeyed.
     connect(m_txSliceArbiter, &TxSliceArbiter::txBoundSliceChanged,
             this, [this](int, int) {
+        rebindAccessorySlice();
         pushTxFrequencyFromTxSlice();
         pushTxModeAndBandpass();
         applyTxAntennaFromBoundSlice();
@@ -1195,6 +1196,17 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // still provides the live toggle path used by the General tab's
     // master toggle.
     m_smartSdrListener = new SmartSdrApiListener(this);
+    connect(m_smartSdrListener, &SmartSdrApiListener::statusChanged,
+            this, &RadioModel::fourO3AStatusChanged);
+    m_accessoryBandTimer = new QTimer(this);
+    m_accessoryBandTimer->setSingleShot(true);
+    m_accessoryBandTimer->setInterval(200); // Existing MainWindow tune-wheel debounce.
+    connect(m_accessoryBandTimer, &QTimer::timeout, this, &RadioModel::publishAccessoryBand);
+    connect(m_pgxlConnection, &PgxlConnection::connected, this, &RadioModel::publishAccessoryBand);
+    connect(m_pgxlConnection, &PgxlConnection::pairingResult, this,
+            [this](bool accepted, const QString&) {
+                if (accepted) { publishAccessoryBand(); }
+            }, Qt::QueuedConnection); // Pair parser clears its pending sequence after emitting.
     qCInfo(lcConnection) << "SmartSDR API listener constructed; start deferred"
                           << "to Connected handler (per-MAC FourO3A_Enabled gate)";
     // LAN PTT wiring: TGXL emits `C<seq>|transmit tune on` when its
@@ -2257,8 +2269,30 @@ RadioModel::~RadioModel()
 // connected falls through to the same generic refusal for the reason given
 // in the header: Task 3 already re-points it at m_connectionState and Task
 // 18 owns driving it, so this does not build a second path into it.
-QString RadioModel::applyMirroredValue(const QByteArray& propertyName, const QVariant& /*value*/)
+QString RadioModel::applyMirroredValue(const QByteArray& propertyName, const QVariant& value)
 {
+    // R-R3-22 inbound observations are client-only assignment, never the
+    // local setter (which owns persistence/listener/socket lifecycle).
+    if (m_role == Role::Remote) {
+        if (propertyName == "fourO3AEnabled" || propertyName == "fourO3AListening") {
+            if (value.typeId() != QMetaType::Bool) { return QStringLiteral("Expected a boolean 4O3A observation."); }
+            bool& current = propertyName == "fourO3AEnabled" ? m_remoteFourO3AEnabled : m_remoteFourO3AListening;
+            if (current != value.toBool()) {
+                current = value.toBool();
+                if (propertyName == "fourO3AEnabled") { emit fourO3AEnabledChanged(current); }
+                emit fourO3AStatusChanged();
+            }
+            return {};
+        }
+        if (propertyName == "fourO3AListenerError") {
+            if (value.typeId() != QMetaType::QString) { return QStringLiteral("Expected a text 4O3A error."); }
+            if (m_remoteFourO3AListenerError != value.toString()) {
+                m_remoteFourO3AListenerError = value.toString();
+                emit fourO3AStatusChanged();
+            }
+            return {};
+        }
+    }
     return QStringLiteral(
         "RadioModel::%1 is hardware identity or connection-lifecycle state "
         "this model only learns from the radio (or the session) itself; "
@@ -2703,6 +2737,49 @@ void RadioModel::setStepAttController(StepAttenuatorController* c)
     }
 }
 
+// R-R3-22: moved from MainWindow's existing PGXL/SmartSDR wiring. A
+// headless Core has no window, and the viewed slice is not necessarily TX.
+// Thetis console.cs:31889-31893,32865-32869 [v2.10.3.15] selects the TX VFO.
+// No RF action is added here; existing frequency/mode wire forms are retained.
+void RadioModel::rebindAccessorySlice()
+{
+    QObject::disconnect(m_accessoryFrequencyConnection);
+    QObject::disconnect(m_accessoryModeConnection);
+    QObject::disconnect(m_accessoryBandConnection);
+    if (m_accessoryBandTimer) { m_accessoryBandTimer->stop(); }
+    if (m_role != Role::Local || !m_smartSdrListener) { return; }
+    SliceModel* const bound = txBoundSlice();
+    if (!bound) { return; }
+    m_smartSdrListener->setSliceFrequencyHz(0, bound->frequency());
+    m_smartSdrListener->setSliceMode(0, SliceModel::modeName(bound->dspMode()));
+    m_accessoryFrequencyConnection = connect(bound, &SliceModel::frequencyChanged,
+        this, [this, bound](qint64 hz) {
+            if (txBoundSlice() != bound) { return; }
+            m_smartSdrListener->setSliceFrequencyHz(0, hz);
+            m_accessoryBandTimer->start();
+        });
+    m_accessoryModeConnection = connect(bound, &SliceModel::dspModeChanged,
+        this, [this, bound](DSPMode mode) {
+            if (txBoundSlice() == bound) {
+                m_smartSdrListener->setSliceMode(0, SliceModel::modeName(mode));
+            }
+        });
+    m_accessoryBandConnection = connect(bound, &SliceModel::bandChanged,
+        this, [this, bound](Band) {
+            if (txBoundSlice() == bound) { publishAccessoryBand(); }
+        });
+    publishAccessoryBand();
+}
+
+void RadioModel::publishAccessoryBand()
+{
+    if (m_role != Role::Local || !fourO3AEnabled()
+        || !m_pgxlConnection || !m_pgxlConnection->isConnected()) { return; }
+    if (SliceModel* const bound = txBoundSlice()) {
+        m_pgxlConnection->setBand(static_cast<int>(bound->frequency()));
+    }
+}
+
 // ── 4O3A master toggle (Settings -> CAT & Network -> 4O3A General tab) ──────
 //
 // Persists per-MAC under hardware/<mac>/peripherals/FourO3A_Enabled
@@ -2716,17 +2793,15 @@ void RadioModel::setStepAttController(StepAttenuatorController* c)
 // reach this entry point.
 void RadioModel::setFourO3AEnabled(bool enabled)
 {
-    // A remote GUI cannot own the station's listener. The typed Core master
-    // command is a separate Task 4d follow-on; never start a local listener.
-    if (m_role == Role::Remote) { return; }
-    const bool current = fourO3AEnabled();
-    if (current == enabled) {
-        return;  // idempotent
+    if (m_role == Role::Remote || currentRadioMac().isEmpty()) { return; }
+    const bool changed = fourO3AEnabled() != enabled;
+    if (changed) {
+        setPeripheralValue(QStringLiteral("FourO3A_Enabled"),
+                           enabled ? QStringLiteral("True") : QStringLiteral("False"));
+        AppSettings::instance().save();
     }
-    setPeripheralValue(QStringLiteral("FourO3A_Enabled"),
-                       enabled ? QStringLiteral("True") : QStringLiteral("False"));
-    AppSettings::instance().save();
-
+    // Even repeated requests reconcile actual state: enable retries a failed
+    // bind; disable unconditionally cancels a pending accessory attempt.
     if (!m_smartSdrListener) {
         return;  // ctor should always create it; defensive null guard
     }
@@ -2742,10 +2817,9 @@ void RadioModel::setFourO3AEnabled(bool enabled)
             }
         }
     } else {
-        if (m_smartSdrListener->isListening()) {
-            m_smartSdrListener->stop();
-            qCInfo(lcConnection) << "4O3A disabled: SmartSDR API listener stopped";
-        }
+        m_smartSdrListener->stop(); // Also clears a prior failed-bind observation.
+        if (m_accessoryBandTimer) { m_accessoryBandTimer->stop(); }
+        qCInfo(lcConnection) << "4O3A disabled: SmartSDR API listener stopped";
 
         // Tear down any live PGXL / TGXL TCP socket. Without this, an
         // already-connected PGXL keeps sending statusUpdated frames,
@@ -2778,13 +2852,49 @@ void RadioModel::setFourO3AEnabled(bool enabled)
     }
 
     emit fourO3AEnabledChanged(enabled);
+    emit fourO3AStatusChanged();
 }
 
 bool RadioModel::fourO3AEnabled() const
 {
+    if (m_role == Role::Remote) { return m_remoteFourO3AEnabled; }
     return peripheralValue(QStringLiteral("FourO3A_Enabled"),
                            QStringLiteral("False"))
         == QStringLiteral("True");
+}
+
+bool RadioModel::fourO3AListening() const
+{
+    return m_role == Role::Remote ? m_remoteFourO3AListening
+        : m_smartSdrListener && m_smartSdrListener->isListening();
+}
+
+QString RadioModel::fourO3AListenerError() const
+{
+    return m_role == Role::Remote ? m_remoteFourO3AListenerError
+        : m_smartSdrListener ? m_smartSdrListener->lastListenError() : QString{};
+}
+
+bool RadioModel::setFourO3AEnabledForStation(bool enabled, QString* reason)
+{
+    if (m_role != Role::Local || !m_stationTgxl || currentRadioMac().isEmpty()) {
+        if (reason) { *reason = QStringLiteral("Connect Core to a radio before changing its 4O3A integration."); }
+        return false;
+    }
+    setFourO3AEnabled(enabled);
+    if (reason) { reason->clear(); }
+    return true; // Persisted intent; actual bind success is a separate observation.
+}
+
+void RadioModel::clearRemoteFourO3AState()
+{
+    if (m_role != Role::Remote) { return; }
+    const bool wasEnabled = m_remoteFourO3AEnabled;
+    m_remoteFourO3AEnabled = false;
+    m_remoteFourO3AListening = false;
+    m_remoteFourO3AListenerError.clear();
+    if (wasEnabled) { emit fourO3AEnabledChanged(false); }
+    emit fourO3AStatusChanged();
 }
 
 void RadioModel::enableStationAccessoryIdentity()
@@ -3005,8 +3115,14 @@ void RadioModel::applyPeripheralsForCurrentMac()
         // differ from the previously connected radio).
         emit fourO3AEnabledChanged(true);
     } else {
+        // A radio scope replacement can arrive without an intervening
+        // enabled-state change. Never retain the previous scope's listener.
+        if (m_smartSdrListener) { m_smartSdrListener->stop(); }
+        if (m_pgxlConnection) { m_pgxlConnection->disconnect(); }
         emit fourO3AEnabledChanged(false);
     }
+
+    emit fourO3AStatusChanged();
 
     // ── RF-Kit RF2K-S ───────────────────────────────────────────────────
     if (rfKitEnabled() && m_rfKitConnection) {
@@ -3107,7 +3223,7 @@ void RadioModel::teardownPeripherals()
         m_rfKitConnection->disconnect();
         qCInfo(lcConnection) << "Peripherals teardown: RF-Kit disconnected";
     }
-    if (m_smartSdrListener && m_smartSdrListener->isListening()) {
+    if (m_smartSdrListener) {
         m_smartSdrListener->stop();
         qCInfo(lcConnection) << "Peripherals teardown: SmartSDR API stopped";
     }
@@ -3121,6 +3237,8 @@ void RadioModel::teardownPeripherals()
         m_tgxlConnection->disconnect();
         qCInfo(lcConnection) << "Peripherals teardown: TGXL disconnected";
     }
+    if (m_accessoryBandTimer) { m_accessoryBandTimer->stop(); }
+    emit fourO3AStatusChanged();
 }
 
 void RadioModel::migratePeripheralGlobalsIfNeeded()

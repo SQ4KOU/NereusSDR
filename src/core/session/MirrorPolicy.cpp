@@ -277,6 +277,12 @@ const MirrorPolicy::Entry kEntries[] = {
     { "RadioModel", "rxFilter1Band", MirrorDirection::Outbound },
     { "RadioModel", "rxFilter1Reason", MirrorDirection::Outbound },
     { "RadioModel", "rfKitEnabled", MirrorDirection::Bidirectional },
+    // The 4O3A listener and its bind error exist only at Core. A remote
+    // client renders these observational values and must never write one
+    // back into a listener, socket, or per-MAC settings scope.
+    { "RadioModel", "fourO3AEnabled", MirrorDirection::Outbound },
+    { "RadioModel", "fourO3AListening", MirrorDirection::Outbound },
+    { "RadioModel", "fourO3AListenerError", MirrorDirection::Outbound },
 
     // ---- PanadapterModel (4 entries) ----
     { "PanadapterModel", "centerFrequency", MirrorDirection::Bidirectional },

@@ -77,6 +77,7 @@
 #include "models/TransmitModel.h"
 #include "models/TunerModel.h"
 #include "core/TgxlConnection.h"
+#include "core/SmartSdrApiListener.h"
 
 #include "fakes/LoopbackTransport.h"
 
@@ -201,6 +202,11 @@ private slots:
     void telemetryDoesNotRequireMediaAndRejectsOldProtocol();
     void telemetryClientWaitsForCapabilityAndSnapshot();
     void remoteTgxlClientRequiresHandshakeMinorAndCapability();
+    void remoteFourO3AClientRequiresHandshakeMinorAndCapability();
+    void remoteFourO3AServerRejectsPreAuthAndOldMinor();
+    void remoteFourO3AAuthenticatedRoundTripMirrorsActualListenerState();
+    void remoteFourO3AUnansweredCommandDoesNotSurviveSession_data();
+    void remoteFourO3AUnansweredCommandDoesNotSurviveSession();
     void remoteTgxlCommandIsGatedAtAuthenticatedServerBoundary();
     void remoteTgxlConfigureAcceptanceStartsIdentityOnly();
 
@@ -577,6 +583,230 @@ void TstStationSession::remoteTgxlClientRequiresHandshakeMinorAndCapability()
     olderStation->sendText(SessionMessages::encode(SessionMessages::snapshotComplete()));
     QTRY_VERIFY(olderClient.isHandshakeComplete());
     QVERIFY(!olderClient.remoteTgxlConfigAvailable());
+}
+
+void TstStationSession::remoteFourO3AClientRequiresHandshakeMinorAndCapability()
+{
+    RadioModel remote(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&remote, &proxy);
+
+    QVERIFY(!client.remoteFourO3AControlAvailable());
+    QVERIFY(!client.requestFourO3AEnabled(true).sent);
+
+    auto* station = new LoopbackTransport(QStringLiteral("four-o3a-station"), this);
+    auto* peer = new LoopbackTransport(QStringLiteral("four-o3a-client"), this);
+    station->linkTo(peer);
+    client.startSession(peer, QStringLiteral("test-token"));
+    station->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor, kSessionProtocolMinor, 6, QStringLiteral("station"))));
+    station->sendText(SessionMessages::encode(SessionMessages::authResult(true, {}, false)));
+    StationCapabilities caps;
+    caps.remoteFourO3AControlVersion = 1;
+    station->sendText(SessionMessages::encode(SessionMessages::capabilities(caps.toUpdates())));
+    station->sendText(SessionMessages::encode(SessionMessages::snapshotComplete()));
+    QTRY_VERIFY(client.remoteFourO3AControlAvailable());
+
+    const IStationLink::CommandOutcome requested = client.requestFourO3AEnabled(true);
+    QVERIFY2(requested.sent, qPrintable(requested.reason));
+    QTRY_VERIFY(station->receivedKinds().contains(QByteArrayLiteral("command.invoke")));
+    const SessionMessage command = decodeOrFail(station->received().last());
+    QCOMPARE(command.commandVerb, QByteArrayLiteral("setFourO3AEnabled"));
+    QCOMPARE(command.arguments.size(), 1);
+    QCOMPARE(command.arguments.first().name, QByteArrayLiteral("enabled"));
+    QCOMPARE(command.arguments.first().kind, MirrorWireKind::Bool);
+    QVERIFY(command.arguments.first().value.toBool());
+    // No command can start the Remote model's local listener.
+    QVERIFY(!remote.smartSdrListener()->isListening());
+
+    RadioModel olderRemote(RadioModel::Role::Remote);
+    SettingsProxy olderProxy;
+    StationClient olderClient(&olderRemote, &olderProxy);
+    auto* olderStation = new LoopbackTransport(QStringLiteral("four-o3a-older-station"), this);
+    auto* olderPeer = new LoopbackTransport(QStringLiteral("four-o3a-older-client"), this);
+    olderStation->linkTo(olderPeer);
+    olderClient.startSession(olderPeer, QStringLiteral("test-token"));
+    olderStation->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor,
+        static_cast<quint16>(kRemoteFourO3AControlSessionProtocolMinor - 1), 6,
+        QStringLiteral("older-station"))));
+    olderStation->sendText(SessionMessages::encode(SessionMessages::authResult(true, {}, false)));
+    olderStation->sendText(SessionMessages::encode(SessionMessages::capabilities(caps.toUpdates())));
+    olderStation->sendText(SessionMessages::encode(SessionMessages::snapshotComplete()));
+    QTRY_VERIFY(olderClient.isHandshakeComplete());
+    QVERIFY(!olderClient.remoteFourO3AControlAvailable());
+}
+
+void TstStationSession::remoteFourO3AServerRejectsPreAuthAndOldMinor()
+{
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(settingsDir.filePath(QStringLiteral("four-o3a.settings")));
+    auto stationModel = makeStationRadioModel(0);
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+
+    const SessionMessage request = SessionMessages::commandInvoke(
+        "setFourO3AEnabled", 41,
+        { MirrorUpdate{0, "enabled", MirrorWireKind::Bool, true} });
+
+    auto* unauthStation = new LoopbackTransport(QStringLiteral("four-o3a-unauth-station"), this);
+    auto* unauthPeer = new LoopbackTransport(QStringLiteral("four-o3a-unauth-peer"), this);
+    unauthStation->linkTo(unauthPeer);
+    server.acceptTransport(unauthStation);
+    unauthPeer->sendText(SessionMessages::encode(request));
+    QTRY_VERIFY(!unauthPeer->isOpen());
+
+    auto* oldStation = new LoopbackTransport(QStringLiteral("four-o3a-old-station"), this);
+    auto* oldPeer = new LoopbackTransport(QStringLiteral("four-o3a-old-peer"), this);
+    oldStation->linkTo(oldPeer);
+    server.acceptTransport(oldStation);
+    oldPeer->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor,
+        static_cast<quint16>(kRemoteFourO3AControlSessionProtocolMinor - 1), 6,
+        QStringLiteral("older-client"))));
+    oldPeer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
+    QTRY_VERIFY(server.hasAuthenticatedSession());
+    oldPeer->clearReceived();
+    oldPeer->sendText(SessionMessages::encode(request));
+    QTRY_VERIFY(oldPeer->receivedKinds().contains(QByteArrayLiteral("command.result")));
+    SessionMessage result;
+    for (const QByteArray& wire : oldPeer->received()) {
+        const SessionMessage candidate = decodeOrFail(wire);
+        if (candidate.kind == SessionMessageKind::CommandResult
+            && candidate.commandId == request.commandId) {
+            result = candidate;
+            break;
+        }
+    }
+    QCOMPARE(result.kind, SessionMessageKind::CommandResult);
+    QVERIFY(!result.accepted);
+    QVERIFY(result.reason.contains(QStringLiteral("newer station protocol")));
+}
+
+void TstStationSession::remoteFourO3AAuthenticatedRoundTripMirrorsActualListenerState()
+{
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(settingsDir.filePath(QStringLiteral("four-o3a-roundtrip.settings")));
+    auto stationModel = makeStationRadioModel(0);
+    stationModel->enableStationAccessoryIdentity();
+    stationModel->smartSdrListener()->setListenEndpointForTesting(QHostAddress::LocalHost, 0);
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+
+    RadioModel remote(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&remote, &proxy);
+    QSignalSpy finished(&remote, &RadioModel::stationFourO3ACommandFinished);
+    auto* station = new LoopbackTransport(QStringLiteral("four-o3a-roundtrip-station"), this);
+    auto* peer = new LoopbackTransport(QStringLiteral("four-o3a-roundtrip-client"), this);
+    station->linkTo(peer);
+    client.startSession(peer, server.token());
+    server.acceptTransport(station);
+
+    QTRY_VERIFY(client.remoteFourO3AControlAvailable());
+    QVERIFY(!remote.currentRadioMac().isEmpty());
+    QVERIFY(!remote.fourO3AEnabled());
+    QVERIFY(!remote.fourO3AListening());
+    QVERIFY(remote.fourO3AListenerError().isEmpty());
+
+    const IStationLink::CommandOutcome enabled = client.requestFourO3AEnabled(true);
+    QVERIFY2(enabled.sent, qPrintable(enabled.reason));
+    // The remote model owns no listener. It remains false until the Core
+    // snapshot/delta arrives after the accepted CommandResult.
+    QVERIFY(!remote.smartSdrListener()->isListening());
+    QTRY_VERIFY(!finished.isEmpty());
+    QCOMPARE(finished.last().at(0).toBool(), true);
+    QTRY_VERIFY(stationModel->fourO3AEnabled());
+    QTRY_VERIFY(stationModel->fourO3AListening());
+    QTRY_VERIFY(remote.fourO3AEnabled());
+    QTRY_VERIFY(remote.fourO3AListening());
+    QVERIFY(remote.fourO3AListenerError().isEmpty());
+    QVERIFY(!remote.smartSdrListener()->isListening());
+    QCOMPARE(stationModel->peripheralValue(QStringLiteral("FourO3A_Enabled")),
+             QStringLiteral("True"));
+
+    // A real occupied endpoint is accepted as intent but mirrored as the
+    // listener failure it is; no invented listening success is possible.
+    const IStationLink::CommandOutcome disabled = client.requestFourO3AEnabled(false);
+    QVERIFY2(disabled.sent, qPrintable(disabled.reason));
+    QTRY_VERIFY(!remote.fourO3AEnabled());
+    QTRY_VERIFY(!stationModel->fourO3AListening());
+    QTcpServer blocker;
+    QVERIFY(blocker.listen(QHostAddress::LocalHost, 0));
+    stationModel->smartSdrListener()->setListenEndpointForTesting(
+        QHostAddress::LocalHost, blocker.serverPort());
+    const IStationLink::CommandOutcome bindFailure = client.requestFourO3AEnabled(true);
+    QVERIFY2(bindFailure.sent, qPrintable(bindFailure.reason));
+    QTRY_VERIFY(remote.fourO3AEnabled());
+    QTRY_VERIFY(!remote.fourO3AListening());
+    QTRY_VERIFY(!remote.fourO3AListenerError().isEmpty());
+    QVERIFY(!remote.smartSdrListener()->isListening());
+
+    // Link loss clears the remote-only snapshot cache, including a real
+    // listener error, without starting a local listener or writing a local
+    // setting on the GUI model.
+    station->closeLink(QStringLiteral("four-o3a roundtrip teardown"));
+    QTRY_VERIFY(!remote.fourO3AEnabled());
+    QTRY_VERIFY(!remote.fourO3AListening());
+    QTRY_VERIFY(remote.fourO3AListenerError().isEmpty());
+    QVERIFY(!remote.smartSdrListener()->isListening());
+}
+
+void TstStationSession::remoteFourO3AUnansweredCommandDoesNotSurviveSession_data()
+{
+    QTest::addColumn<bool>("closeBeforeReplacement");
+    QTest::newRow("link-loss") << true;
+    QTest::newRow("direct-replacement") << false;
+}
+
+void TstStationSession::remoteFourO3AUnansweredCommandDoesNotSurviveSession()
+{
+    QFETCH(bool, closeBeforeReplacement);
+    RadioModel remote(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&remote, &proxy);
+    QSignalSpy finished(&remote, &RadioModel::stationFourO3ACommandFinished);
+    const auto attach = [&]() {
+        auto* station = new LoopbackTransport(QStringLiteral("four-o3a-command-station"), this);
+        auto* peer = new LoopbackTransport(QStringLiteral("four-o3a-command-client"), this);
+        station->linkTo(peer);
+        client.startSession(peer, QStringLiteral("test-token"));
+        station->sendText(SessionMessages::encode(SessionMessages::hello(
+            kSessionProtocolMajor, kSessionProtocolMinor, 6, QStringLiteral("station"))));
+        station->sendText(SessionMessages::encode(SessionMessages::authResult(true, {}, false)));
+        StationCapabilities caps;
+        caps.remoteFourO3AControlVersion = 1;
+        station->sendText(SessionMessages::encode(SessionMessages::capabilities(caps.toUpdates())));
+        station->sendText(SessionMessages::encode(SessionMessages::snapshotComplete()));
+        return station;
+    };
+
+    auto* firstStation = attach();
+    QTRY_VERIFY(client.remoteFourO3AControlAvailable());
+    QVERIFY(client.requestFourO3AEnabled(true).sent);
+    QTRY_VERIFY(firstStation->receivedKinds().contains(QByteArrayLiteral("command.invoke")));
+    const SessionMessage abandoned = decodeOrFail(firstStation->received().last());
+    QCOMPARE(abandoned.commandVerb, QByteArrayLiteral("setFourO3AEnabled"));
+    QVERIFY(finished.isEmpty());
+    // The old request never receives a result. Both a link loss and a
+    // directly adopted replacement must retire its pending completion.
+    if (closeBeforeReplacement) {
+        firstStation->closeLink(QStringLiteral("lost before command result"));
+        QTRY_VERIFY(!client.remoteFourO3AControlAvailable());
+    }
+
+    auto* currentStation = attach();
+    QTRY_VERIFY(client.remoteFourO3AControlAvailable());
+    QVERIFY(client.requestFourO3AEnabled(false).sent);
+    QTRY_VERIFY(currentStation->receivedKinds().contains(QByteArrayLiteral("command.invoke")));
+    const SessionMessage current = decodeOrFail(currentStation->received().last());
+    QCOMPARE(current.commandVerb, QByteArrayLiteral("setFourO3AEnabled"));
+    QVERIFY(current.commandId != abandoned.commandId);
+    currentStation->sendText(SessionMessages::encode(SessionMessages::commandResult(
+        current.commandVerb, current.commandId, true, {}, {})));
+    QTRY_COMPARE(finished.count(), 1);
+    QVERIFY(finished.first().at(0).toBool());
+    QVERIFY(!remote.smartSdrListener()->isListening());
 }
 
 void TstStationSession::remoteTgxlCommandIsGatedAtAuthenticatedServerBoundary()

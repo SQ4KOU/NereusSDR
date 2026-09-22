@@ -248,6 +248,10 @@ class RadioModel : public QObject {
     Q_PROPERTY(bool    connected   READ isConnected NOTIFY connectionStateChanged)
     Q_PROPERTY(bool rfKitEnabled READ rfKitEnabled WRITE setRfKitEnabled
                NOTIFY rfKitEnabledChanged)
+    // R-R3-22: station-owned configuration/status; changes use a typed verb.
+    Q_PROPERTY(bool fourO3AEnabled READ fourO3AEnabled NOTIFY fourO3AStatusChanged)
+    Q_PROPERTY(bool fourO3AListening READ fourO3AListening NOTIFY fourO3AStatusChanged)
+    Q_PROPERTY(QString fourO3AListenerError READ fourO3AListenerError NOTIFY fourO3AStatusChanged)
     // Station-owned preselector telemetry, never remotely writable.
     Q_PROPERTY(int rxFilter0Mode READ rxFilter0Mode NOTIFY filterStateChanged)
     Q_PROPERTY(int rxFilter0Effective READ rxFilter0Effective NOTIFY filterStateChanged)
@@ -1591,6 +1595,12 @@ public:
     // persisted, FourO3APage updates its enabled state.
     void setFourO3AEnabled(bool enabled);
     bool fourO3AEnabled() const;
+    bool fourO3AListening() const;
+    QString fourO3AListenerError() const;
+    bool setFourO3AEnabledForStation(bool enabled, QString* reason);
+    void clearRemoteFourO3AState();
+    void reportStationFourO3ACommandFinished(bool accepted, const QString& reason)
+    { emit stationFourO3ACommandFinished(accepted, reason); }
 
     // R3 station-owned accessory lifecycle. Installed by DaemonApp before
     // radio startup, independently of the temporary receive-only policy.
@@ -2773,6 +2783,8 @@ signals:
     // wiring) react to grey out / hide the Amplifier and Tuner applets
     // when 4O3A is off.
     void fourO3AEnabledChanged(bool enabled);
+    void fourO3AStatusChanged();
+    void stationFourO3ACommandFinished(bool accepted, const QString& reason);
     // Fires when the RF-Kit master toggle flips (Setup -> CAT & Network ->
     // RF-Kit -> General). Consumers (e.g. MainWindow applet visibility)
     // react to show/hide the RF2K-S applet.
@@ -4609,6 +4621,15 @@ private:
     // line PGXL sends so we can design the response layer in a follow-up.
     // Phase 3P-II follow-up: replace with a full SmartSDR API server.
     class SmartSdrApiListener* m_smartSdrListener{nullptr};
+    bool m_remoteFourO3AEnabled{false};
+    bool m_remoteFourO3AListening{false};
+    QString m_remoteFourO3AListenerError;
+    QTimer* m_accessoryBandTimer{nullptr};
+    QMetaObject::Connection m_accessoryFrequencyConnection;
+    QMetaObject::Connection m_accessoryModeConnection;
+    QMetaObject::Connection m_accessoryBandConnection;
+    void rebindAccessorySlice();
+    void publishAccessoryBand();
 };
 
 } // namespace NereusSDR

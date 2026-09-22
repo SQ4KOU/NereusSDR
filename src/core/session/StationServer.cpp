@@ -632,6 +632,13 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
 
     switch (message.kind) {
     case SessionMessageKind::CommandInvoke:
+        if (message.commandVerb == "setFourO3AEnabled"
+            && it->agreedMinor < kRemoteFourO3AControlSessionProtocolMinor) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                QStringLiteral("Remote 4O3A control requires a newer station protocol."), {}));
+            break;
+        }
         if ((message.commandVerb == "configureTgxl" || message.commandVerb == "disconnectTgxl")
             && it->agreedMinor < kRemoteTgxlConfigSessionProtocolMinor) {
             send(transport, SessionMessages::commandResult(
@@ -1115,6 +1122,7 @@ StationCapabilities StationServer::buildCapabilities() const
     caps.remoteCtunVersion = 1;
     caps.stationTelemetryVersion = m_telemetryEnabled ? 1 : 0;
     caps.remoteTgxlConfigVersion = m_radioModel->stationAccessoryIdentityEnabled() ? 1 : 0;
+    caps.remoteFourO3AControlVersion = m_radioModel->stationAccessoryIdentityEnabled() ? 1 : 0;
 
     return caps;
 }

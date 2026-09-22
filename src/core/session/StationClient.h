@@ -396,6 +396,7 @@ public:
     bool mediaAvailable() const;
     bool remoteCtunAvailable() const;
     bool remoteTgxlConfigAvailable() const override;
+    bool remoteFourO3AControlAvailable() const override;
     bool telemetryAvailable() const;
     std::optional<SessionTransportTelemetry> transportTelemetry() const;
     bool sendMediaControl(const QJsonObject& payload, quint32 expectedEpoch);
@@ -470,6 +471,7 @@ public:
     CommandOutcome requestStreamCentre(int sliceId, double centreHz) override;
     CommandOutcome requestConfigureTgxl(const QString& host, quint16 port) override;
     CommandOutcome requestDisconnectTgxl() override;
+    CommandOutcome requestFourO3AEnabled(bool enabled) override;
 
     void setHeartbeatIntervalMs(int ms);
     int heartbeatIntervalMs() const { return m_heartbeatIntervalMs; }

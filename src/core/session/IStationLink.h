@@ -112,10 +112,17 @@ public:
     virtual CommandOutcome requestDisconnectTgxl()
     { return { false, QStringLiteral("Remote TGXL configuration is not supported by this station link.") }; }
 
+    // Task 4d remote 4O3A master control.  The station owns both the
+    // persisted per-MAC intent and the listener; a remote GUI only asks it
+    // to change that intent and waits for its mirrored state to return.
+    virtual CommandOutcome requestFourO3AEnabled(bool)
+    { return { false, QStringLiteral("Remote 4O3A control is not supported by this station link.") }; }
+
     /// Feature gate for accessory controls.  The default keeps every
     /// existing link inert until it explicitly implements the negotiated
     /// station capability.
     virtual bool remoteTgxlConfigAvailable() const { return false; }
+    virtual bool remoteFourO3AControlAvailable() const { return false; }
 };
 
 } // namespace NereusSDR

@@ -158,6 +158,7 @@ private:
     void handleRequestStreamCentre(const NereusSDR::SessionMessage& invoke);
     void handleConfigureTgxl(const NereusSDR::SessionMessage& invoke);
     void handleDisconnectTgxl(const NereusSDR::SessionMessage& invoke);
+    void handleSetFourO3AEnabled(const NereusSDR::SessionMessage& invoke);
 
     void emitResult(const QByteArray& verb, quint32 commandId, bool accepted,
                     const QString& reason, const QList<QByteArray>& affectedKeys);

@@ -27,8 +27,12 @@ namespace {
 class RecordingTgxlLink final : public IStationLink {
 public:
     bool available{true};
+    bool fourO3AAvailable{false};
     int configureCalls{0};
     int disconnectCalls{0};
+    int fourO3ACalls{0};
+    bool requestedFourO3AEnabled{false};
+    CommandOutcome fourO3AOutcome{true, {}};
     QString configuredHost;
     quint16 configuredPort{0};
 
@@ -53,6 +57,13 @@ public:
     }
 
     bool remoteTgxlConfigAvailable() const override { return available; }
+    CommandOutcome requestFourO3AEnabled(bool enabled) override
+    {
+        ++fourO3ACalls;
+        requestedFourO3AEnabled = enabled;
+        return fourO3AOutcome;
+    }
+    bool remoteFourO3AControlAvailable() const override { return fourO3AAvailable; }
 };
 
 TunerModel::StationConnectionState state(TunerModel::ConnectionPhase phase,
@@ -77,6 +88,7 @@ private slots:
     void remoteTgxlDraftUsesStationLinkAndSurvivesUnrelatedSnapshots();
     void unknownCapabilityKeepsRemoteTgxlInert();
     void remoteParentPageExposesOnlyStationBackedControls();
+    void remoteMasterShowsPendingAndRefusalWithoutLocalActivation();
 };
 
 void RemotePeripheralsTest::remoteParentPageExposesOnlyStationBackedControls()
@@ -105,6 +117,47 @@ void RemotePeripheralsTest::remoteParentPageExposesOnlyStationBackedControls()
     QVERIFY(actualPage);
     QVERIFY(actualPage->isEnabled());
     QVERIFY(actualPage->findChild<PeripheralsPage*>()->isEnabled());
+}
+
+void RemotePeripheralsTest::remoteMasterShowsPendingAndRefusalWithoutLocalActivation()
+{
+    RadioModel model(RadioModel::Role::Remote);
+    RadioInfo info;
+    info.macAddress = QStringLiteral("AA:BB:CC:DD:EE:99");
+    model.setLastRadioInfoForTest(info);
+    model.setConnectionStateForTest(ConnectionState::Connected);
+    RecordingTgxlLink link;
+    link.fourO3AAvailable = true;
+    model.attachStation(&link);
+
+    FourO3APage page(&model);
+    auto* master = page.findChild<QCheckBox*>(QStringLiteral("fourO3AMasterToggle"));
+    auto* status = page.findChild<QLabel*>(QStringLiteral("fourO3AListenerStatus"));
+    QVERIFY(master && status);
+    QVERIFY(master->isEnabled());
+    QVERIFY(QMetaObject::invokeMethod(&page, "onMasterToggled", Qt::DirectConnection,
+                                      Q_ARG(bool, true)));
+    QCOMPARE(link.fourO3ACalls, 1);
+    QVERIFY(link.requestedFourO3AEnabled);
+    QVERIFY(!master->isChecked());
+    QVERIFY(!master->isEnabled());
+    QVERIFY(master->text().contains(QStringLiteral("pending")));
+    QVERIFY(!model.smartSdrListener()->isListening());
+
+    model.reportStationFourO3ACommandFinished(false, QStringLiteral("Core refused test request"));
+    QVERIFY(master->isEnabled());
+    QVERIFY(!master->text().contains(QStringLiteral("pending")));
+    QVERIFY(status->text().contains(QStringLiteral("refused test request")));
+    QVERIFY(QMetaObject::invokeMethod(&page, "onMasterToggled", Qt::DirectConnection,
+                                     Q_ARG(bool, true)));
+    QVERIFY(!master->isEnabled());
+    link.fourO3AAvailable = false;
+    model.reportStationLinkStateChanged();
+    QVERIFY(!master->text().contains(QStringLiteral("pending")));
+    link.fourO3AAvailable = true;
+    model.reportStationLinkStateChanged();
+    QVERIFY(master->isEnabled());
+    QTRY_VERIFY(!status->text().contains(QStringLiteral("refused test request")));
 }
 
 void RemotePeripheralsTest::remoteTgxlDraftUsesStationLinkAndSurvivesUnrelatedSnapshots()
