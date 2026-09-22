@@ -66,7 +66,41 @@ host audio APIs or deferred harness coverage; none of the new recovery cases
 was skipped. Logs: `r3-recovery-all-{build,test,load,skips}.log`. The recorded
 pre-suite load averages were 15.86 / 10.16 / 7.57.
 
-Native installation and real-radio acceptance are pending. This checkpoint
-does not close the two-hour listening soak, IQ-only health policy,
+Matching native Core and GUI installation is recorded below. Real-radio
+loss/resume acceptance remains pending. This checkpoint does not close the two-hour listening soak, IQ-only health policy,
 Core-restart receiver persistence or the separate P2 Setup Network WDT parity
 audit.
+
+
+## Installed checkpoint and interrupted live acceptance
+
+Signed software **55e7d49f** was installed on the Rock 5C and in the saved
+`radxa_5c_r3` GUI profile on September 22. All 154 packaged source hashes were
+verified before the native build and staged daemon/license installation.
+The GUI build tag, private-library UUIDs and strict/deep code signature passed.
+Rollback retains the previous 3402d171 binaries and private configuration.
+
+The service stopped cleanly at 01:54:20 EDT and restarted with zero automatic
+restarts. Core control listened at 01:54:21.928; the existing GUI automatically
+completed its handshake at 01:54:23.076 while the radio was still offline.
+The selected Saturn delivered first I/Q at 01:54:28.512, and the GUI reported
+48 kHz stereo Opus at 01:54:28.729. The late-radio control/capability path was
+therefore exercised during normal startup. This was not a physical absent-radio
+or power-cycle recovery test.
+
+At approximately 01:54:53, all observed traffic from the Rock stopped. Audio
+reported no playable packets at 01:54:54; the media peer declared failure at
+01:55:21 and the GUI entered automatic retry. Subsequent TCP attempts timed
+out. SSH and ping also failed at both known Rock addresses (.106 and .105),
+while the router (.1) and Saturn (.45) continued to respond normally. The Mac
+route was its local en0 interface, with address .30. The MikroTik management
+address .85 did not respond in this check either. This evidence establishes
+loss of host reachability; it does not establish whether the cause was board
+power, Ethernet, OS failure or application load. Board inspection and recovered
+system logs are required before assigning a cause.
+
+**Hardware acceptance remains open.** The installation and initial automatic
+GUI reconnect succeeded, but sustained reception and physical radio-loss
+recovery are not accepted. Private logs: `r3-recovery-native-build.log`,
+`r3-recovery-install.log`, `r3-recovery-live-core.log`,
+`r3-recovery-live-followup-core.log` and the saved-profile GUI log.

@@ -56,7 +56,7 @@ review. Receive-only policy remains in force throughout recovery.
 
 Implementation, focused checks and the full 698-executable suite pass; see
 [verification evidence](2026-09-20-remote-daemon-r3-verification/radio-recovery.md)
-for the remaining installation and hardware acceptance gates.
+for matching installation evidence and the open hardware acceptance gates.
 
 ## Verification
 

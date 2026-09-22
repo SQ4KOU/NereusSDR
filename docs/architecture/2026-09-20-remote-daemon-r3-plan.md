@@ -59,8 +59,10 @@ this plan uses the existing NereusSDR executable in remote station mode.
 **Current remaining order, September 22:** RADE routing, Core telemetry,
 bandwidth graphs and the Core-owned accessory controls have software
 implementations installed through `3402d171`. Selected-radio late startup and
-established-silence recovery now pass focused checks and all 698 test
-executables; complete matching installation and hardware acceptance next (6). Finish
+established-silence recovery pass focused checks and all 698 test executables
+and are installed as `55e7d49f`. Initial automatic GUI reconnect passed, but
+the Rock subsequently became unreachable by SSH/ping; resolve that host
+reachability failure and finish hardware acceptance next (6). Finish
 real TGXL admission and visible-control acceptance (4a/4c/4d); restore receiver membership across Core
 restart (R-R3-34), integrating the parallel WDSP per-slice persistence work
 serially first; finish wideband parity and sustained mixed audio with operator
@@ -966,8 +968,9 @@ rules, configuration sample and the R3 verification ledger.
   the current control backoff resets at handshake, so it cannot by itself prove
   growing backoff across those media failures. See [recovery evidence](2026-09-20-remote-daemon-r3-verification/media-recovery.md).
 - [ ] R-R3-29: established P2 receive-silence recovery is implemented and
-  passes real-loopback checks and the full 698-test suite; installation and
-  physical radio-loss/resume acceptance remain pending. The source audit found Thetis ChannelMaster
+  passes real-loopback checks and the full 698-test suite. Matching Core/GUI
+  `55e7d49f` is installed; physical radio-loss/resume acceptance remains pending
+  after the Rock became unreachable during the initial live check. The source audit found Thetis ChannelMaster
   `network.c:655-666` uses a three-second all-inbound-UDP deadline followed by
   SendStop/zero notification; it does not itself implement automatic reconnect.
   Keep that source behavior distinct from a separately justified Nereus retry
@@ -981,8 +984,9 @@ rules, configuration sample and the R3 verification ledger.
   startup discovery; Core control stays responsive and existing GUI sessions
   receive late capabilities/settings while retaining their slice objects.
   Focused wrong-radio, cancellation, stop-during-setup and preservation checks
-  pass, including the full 698-test suite. Installation and actual late-radio
-  startup acceptance remain pending; established-radio loss is tested separately under R-R3-29.
+  pass, including the full 698-test suite. Matching `55e7d49f` is installed;
+  the GUI authenticated before radio arrival during normal startup, but actual
+  absent-radio startup acceptance remains pending; established-radio loss is tested separately under R-R3-29.
 - [ ] Install a signed checkpoint with a recoverable previous binary/library
   set, preserve private station configuration, and verify boot, clean stop,
   client reconnect and live media. Provide a launcher using private pairing
@@ -1029,4 +1033,4 @@ whole-plan review loops.
 | Second-pan RADE | R-R3-31 playback correction installed at signed `200d2a0e`; listening acceptance still open | Owning-slice routing, lifecycle guards, the upstream 4096-frame mixer correction, and demand-only admitted-packet release are installed. The burst/loss regression, consolidated review and 692 desktop tests pass. Ordinary receive has shown no further GUI underflow restart after startup recovery; the one-SSB/one-RADE operator check remains pending. Leaving RADE on both receivers resolved the earlier audible problem. Sender scheduling and sustained operation remain open; see [RADE verification](2026-09-20-remote-daemon-r3-verification/rade-multislice.md). |
 | Core banner and telemetry graphs | R-R3-32/33/35 installed; all three tabs and restart gaps observed live | Aether graph/history port uses fetched source `0dea0dd7`. Total/directional Core application traffic, separate Opus bandwidth and speaker buffering are visible in matching `3402d171`; RTT is separately labeled. All 696 desktop tests and native build passed. CPU/memory history and capture-to-playback latency remain follow-on work; see [design](2026-09-21-core-telemetry-design.md). |
 | Audio controls and diagnostics | R-R3-23 open; task 5a | Fixed 24 kbit/s stereo is active; persistent profile/health/output feedback and measured 24/48 comparison remain. A selectable quality profile needs an acknowledged Core contract; no adaptive-rate claim. |
-| Boot recovery | R-R3-26 included in installed `8c011066`; late-address boot pending | Listener retries reuse station identity and cancel on stop; 682 test executables pass. Separate R-R3-27 covers one-shot initial radio discovery. |
+| Boot and radio recovery | R-R3-26 installed; R-R3-27/29 installed in `55e7d49f`; physical acceptance open | All 698 executables pass. Normal restart exercised GUI authentication before Saturn I/Q arrival. The Rock then became unreachable by SSH/ping; host diagnosis, late-network boot and physical radio-loss recovery remain pending. See [evidence](2026-09-20-remote-daemon-r3-verification/radio-recovery.md). |
