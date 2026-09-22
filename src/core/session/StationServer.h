@@ -170,6 +170,7 @@
 #include <QString>
 
 #include <memory>
+#include <functional>
 
 #include "core/session/SessionMessages.h"
 #include "core/session/StationCapabilities.h"
@@ -356,6 +357,13 @@ public:
     void setMediaEnabled(bool enabled);
     bool mediaAvailable() const;
     bool remoteWidebandAvailable() const;
+    bool setDisplayBudgetLimits(const DisplayBudgetLimits& limits);
+    std::optional<DisplayBudgetLimits> displayBudgetLimits() const { return m_displayBudget; }
+    void setDisplayBudgetEnforcementEnabled(bool enabled);
+    bool displayBudgetAvailable() const;
+    void publishDisplayBudgetCapabilities();
+    using Ps3DisplayAdmissionHandler = std::function<bool(bool, QString*)>;
+    void setPs3DisplayAdmissionHandler(Ps3DisplayAdmissionHandler handler);
     quint64 mediaSessionEpoch() const { return m_mediaSessionEpoch; }
     /// expectedEpoch is captured by the producer when its session starts;
     /// late work must never target a replacement session.
@@ -379,6 +387,7 @@ public:
     SettingsProxyServer* settingsServer() const { return m_settingsServer; }
 
 signals:
+    void displayBudgetChanged();
     void telemetrySessionStarted(quint64 epoch);
     void telemetrySessionEnded(quint64 epoch);
     void mediaSessionStarted(quint64 epoch);
@@ -494,6 +503,8 @@ private:
     QHash<SessionTransport*, Peer> m_peers;
     SessionTransport* m_session = nullptr;
     bool m_mediaEnabled = false;
+    bool m_displayBudgetEnforcementEnabled = false;
+    std::optional<DisplayBudgetLimits> m_displayBudget;
     bool m_telemetryEnabled = false;
     quint64 m_mediaSessionEpoch = 0;
 

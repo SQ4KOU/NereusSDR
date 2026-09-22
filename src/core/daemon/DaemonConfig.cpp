@@ -101,6 +101,16 @@ DaemonConfig DaemonConfig::fromFile(const QString& path, QString* errorOut)
             }
         } else if (key == QLatin1String("remote_bind")) {
             cfg.remoteBind = value;
+        } else if (key == QLatin1String("display_application_bytes_per_second")
+                   || key == QLatin1String("spectrum_sample_units_per_second")) {
+            bool ok = false;
+            const quint64 parsed = value.toULongLong(&ok, 10);
+            const quint64 limit = ok && !value.startsWith(QLatin1Char('-')) ? parsed : 0;
+            if (key == QLatin1String("display_application_bytes_per_second")) {
+                cfg.displayApplicationBytesPerSecond = limit;
+            } else {
+                cfg.spectrumSampleUnitsPerSecond = limit;
+            }
         } else {
             qCWarning(lcApp) << "nereusd.conf" << path << "line" << lineNo
                               << "unknown key, ignored:" << key;
@@ -115,6 +125,15 @@ DaemonConfig DaemonConfig::fromFile(const QString& path, QString* errorOut)
 
 bool DaemonConfig::validate(QString* errorOut) const
 {
+    if ((displayApplicationBytesPerSecond || spectrumSampleUnitsPerSecond)
+        && !displayBudgetLimits()) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("display_application_bytes_per_second and "
+                "spectrum_sample_units_per_second must both be positive integers "
+                "no greater than 9007199254740991");
+        }
+        return false;
+    }
     if (sliceCount < 1) {
         if (errorOut) {
             *errorOut = QStringLiteral("slice_count must be at least 1, got %1")
@@ -146,6 +165,16 @@ bool DaemonConfig::validate(QString* errorOut) const
         errorOut->clear();
     }
     return true;
+}
+
+std::optional<DisplayBudgetLimits> DaemonConfig::displayBudgetLimits() const
+{
+    if (!displayApplicationBytesPerSecond || !spectrumSampleUnitsPerSecond) {
+        return std::nullopt;
+    }
+    const DisplayBudgetLimits limits{*displayApplicationBytesPerSecond,
+                                    *spectrumSampleUnitsPerSecond, 1};
+    return limits.isValid() ? std::optional{limits} : std::nullopt;
 }
 
 QString resolveDaemonProfileArgument(const QString& requested, bool wasSet, QString* errorOut)

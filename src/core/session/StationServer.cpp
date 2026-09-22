@@ -1164,6 +1164,39 @@ void StationServer::setTelemetryEnabled(bool enabled)
     if (!m_session) { m_telemetryEnabled = enabled; }
 }
 
+bool StationServer::setDisplayBudgetLimits(const DisplayBudgetLimits& limits)
+{
+    if (!limits.isValid()) { return false; }
+    if (m_displayBudget) {
+        if (*m_displayBudget == limits) { return true; }
+        const quint32 delta = limits.generation - m_displayBudget->generation;
+        if (delta == 0 || delta >= 0x80000000u) { return false; }
+    }
+    m_displayBudget = limits;
+    const QPointer<StationServer> self(this);
+    emit displayBudgetChanged(); // The sender sees new limits before publication.
+    if (self) { self->publishDisplayBudgetCapabilities(); }
+    return true;
+}
+
+void StationServer::setDisplayBudgetEnforcementEnabled(bool enabled)
+{
+    m_displayBudgetEnforcementEnabled = enabled;
+    publishDisplayBudgetCapabilities();
+}
+
+void StationServer::setPs3DisplayAdmissionHandler(Ps3DisplayAdmissionHandler handler)
+{
+    m_dispatcher->setPs3DisplayAdmissionHandler(std::move(handler));
+}
+
+void StationServer::publishDisplayBudgetCapabilities()
+{
+    if (mediaAvailable()) {
+        sendToSession(SessionMessages::capabilities(buildCapabilities().toUpdates()));
+    }
+}
+
 bool StationServer::telemetryAvailable() const
 {
     const auto it = m_peers.constFind(m_session);
@@ -1196,6 +1229,13 @@ bool StationServer::remoteWidebandAvailable() const
     const auto it = m_peers.constFind(m_session);
     return mediaAvailable() && it != m_peers.cend()
         && it->agreedMinor >= kRemoteWidebandSessionProtocolMinor;
+}
+
+bool StationServer::displayBudgetAvailable() const
+{
+    const auto it = m_peers.constFind(m_session);
+    return mediaAvailable() && m_displayBudgetEnforcementEnabled && m_displayBudget
+        && it != m_peers.cend() && it->agreedMinor >= kRemoteDisplayBudgetSessionProtocolMinor;
 }
 
 bool StationServer::sendMediaControl(const QJsonObject& payload, quint64 expectedEpoch)
@@ -1258,6 +1298,11 @@ StationCapabilities StationServer::buildCapabilities() const
     caps.txPermitted = false;
     caps.remoteMediaVersion = m_mediaEnabled ? 1 : 0;
     caps.remoteWidebandDisplayVersion = m_mediaEnabled ? 1 : 0;
+    if (m_mediaEnabled && m_displayBudgetEnforcementEnabled && m_displayBudget) {
+        caps.remoteDisplayBudgetVersion = 1;
+        caps.displayBudget = m_displayBudget;
+        caps.remotePs3DisplaySubscribed = m_radioModel->pureSignalFacade()->remoteAmpViewSubscribed();
+    }
     caps.remoteCtunVersion = 1;
     caps.stationTelemetryVersion = m_telemetryEnabled ? 1 : 0;
     caps.remoteTgxlConfigVersion = m_radioModel->stationAccessoryIdentityEnabled() ? 1 : 0;

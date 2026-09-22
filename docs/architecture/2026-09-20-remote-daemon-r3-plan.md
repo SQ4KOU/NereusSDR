@@ -150,6 +150,7 @@ by the earlier brainstorming, and this review does not present them as such.
 | R-R3-34 | Core persists and restores the operator's receive slices and their identities, frequencies/modes and pan bindings across restart. Unsupported or failed restoration is explicit, with actionable recovery; an attached GUI cannot retain an apparently configured but empty second pan without explanation. Reconcile daemon configured slice count, station persistence and snapshot hydration; cover at least the observed two-receiver restart. |
 | R-R3-35 | Telemetry graphs expose measured Core↔GUI traffic in kbit/s or Mbit/s, including direction and total, with Opus audio separately visible. State the accounting boundary (payload versus transport/wire overhead) and include both control and media without double counting. Show client audio buffering delay separately from control RTT; never present RTT or half-RTT as measured one-way Opus latency. Unknown measurements and reconnects produce explicit gaps. |
 | R-R3-36 | Receive startup and reconnect remain responsive when an optional host microphone cannot open. Unneeded capture must not block receive initialization. Preserve microphone metering/PC transmit availability and safe teardown; native device acceptance is separate from deterministic DSP/loopback lifecycle tests. |
+| R-R3-37 | Core advertises and independently enforces measured aggregate display byte and spectrum sample limits. Favor the active pan, reduce background FPS then pixels, and restore requested quality when headroom returns. Account PureSignal display traffic; keep Opus independent. Revisioned outcomes preserve reservations across refusal, stale replies and reconnects. Production limits require hardware measurements. |
 
 The September 21 user request explicitly adds banner telemetry restoration and
 the current Aether telemetry graph port. Upstream was fetched from
@@ -1098,16 +1099,24 @@ rules, configuration sample and the R3 verification ledger.
   endpoints; reduce display rate/pixels before impairing audio or control.
   Per parent architecture §9.5, the GUI divides Core's advertised total across
   endpoints and Core validates/enforces that ceiling. The logical pane lifetime
-  above replaces the `isVisible()` heuristic. No total budget or
-  focus-share values have yet been measured/selected; do not derive them from
+  above replaces the `isVisible()` heuristic. The operator approved the
+  active-pan policy in the [September 22 design](2026-09-22-session-display-budget-design.md)
+  and [implementation plan](2026-09-22-session-display-budget-plan.md), tracked
+  by R-R3-37. The software allocator, acknowledged transitions, visible status
+  and Core enforcement are implemented and component-tested; real-hardware
+  exercise remains open. No production byte/sample limits have been measured; do not derive them from
   the single-pan 969-byte observation or the eight-endpoint admission cap.
-- [ ] Verify the budget against actual sender time, including rapid endpoint
+- [x] Verify the budget against actual sender time, including rapid endpoint
   replacement and context renewal. `SpectrumEndpoint::configure()` resets
   per-endpoint cadence, so an admission sum alone cannot enforce the session's
   sustained send rate. Define the burst allowance and preserve enforcement
   state through reconfiguration within the same session. Distinguish spectrum
   application bytes from full display-channel traffic, wire overhead and CPU
-  work; keep Opus independent. Numeric limits and allocation policy remain open.
+  work; keep Opus independent. Real-controller tests with injected monotonic
+  time now prove bounded byte/sample sends across churn, failed sends and
+  production/peer restart; actual codec/chunk sizes are checked independently.
+  Production limits and hardware acceptance remain open. See
+  [display-capacity evidence](2026-09-20-remote-daemon-r3-verification/display-capacity.md).
 - [ ] Measure full-span/noise and deep-zoom cases with both FFT tiers, WDSP,
   stereo Opus and 3D enabled on the Rock 5C. Report actual effective limits;
   preserve the separate Pi 4 hardware-floor obligation until measured there.
@@ -1193,6 +1202,7 @@ whole-plan review loops.
 | Tuning waterfall continuity | Visual regression corrected; focused tests pass | R-R3-04/09/10: subscription/context renewal preserves painted 2D/3D history while rejecting stale incoming planes; accepted RF geometry reprojects existing rows. Full-suite and live tuning gates remain recorded in the verification ledger. |
 | Remote C-Tune control parity | R-R3-18 installed at `501b2701`; reported gestures accepted | Authenticated stream pin/centre commands, stream-lifetime guards, gesture-time pan selection, refusal rollback and reducer initialization pass the 681/681 combined suite. Matching Core/GUI are running; operator confirmed both wheel tuning and in-band scale zoom behave smoothly. Broader multi-slice hardware checks remain in task 6. |
 | Wideband zoom parity | R-R3-20 source integration implemented; full acceptance open | Core now composes tagged ADC wings with the DDC island in negotiated display rows; GUI admits the descriptor, restores the source zoom ceiling and preserves history. Twelve focused checks pass. Total-session allocation, native ARM installation and real Saturn RF/filter/gesture/network/audio evidence remain pending; the installed build still has the DDC-only limit. See [contract](2026-09-22-remote-wideband-design.md). |
+| Session display capacity | R-R3-37 software verified; hardware limits pending | Active pan priority, deterministic quality reduction/restoration, Core byte/sample pacing and PS3 accounting pass focused controller tests. Consolidated review findings are resolved; matching GUI/Core build and unfiltered 730/730 suite pass. Production values and Rock/Pi hardware acceptance remain open; see [evidence](2026-09-20-remote-daemon-r3-verification/display-capacity.md). |
 | Applet S-meter | Live applet/flag agreement at `706b9a5f` | Matching -65 dBm observed after automatic Core restart recovery; prior no-signal reports remain documented with their source/connection failures. Sustained acceptance remains open. |
 | BPF and Auto AGC-T indicators | Source implementation and focused tests pass | R-R3-14/15: station filter snapshot/reconnect, headless per-stream AGC source, active-applet/flag bindings implemented; live 20m filter and AGC floor observed, complete band/reconnect acceptance pending |
 | Manual Core reconnect | Configured-endpoint controls installed; title-panel path verified | Title opens details; manual Disconnect/Connect restored receive at `8c011066`. New `706b9a5f` also automatically resumed after Core installation. New media-only recovery has pinned-TLS integration coverage; a real media-only drop and remaining UI entry points need acceptance. |

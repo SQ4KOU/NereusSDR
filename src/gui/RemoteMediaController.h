@@ -4,6 +4,7 @@
 #include "core/session/media/MediaPeer.h"
 #include "core/session/media/RemoteAudioReceiver.h"
 #include <QObject>
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -18,9 +19,13 @@ class PanadapterStack;
 class RemoteMediaController final : public QObject {
     Q_OBJECT
 public:
+    using AllocationClock = std::function<qint64()>;
+
     RemoteMediaController(StationClient* client, RadioModel* model,
                           PanadapterStack* stack, QObject* parent = nullptr,
-                          MediaPeer::TransportFactory factory = {});
+                          MediaPeer::TransportFactory factory = {},
+                          AllocationClock allocationClock = {},
+                          int allocationAckTimeoutMs = 10'000);
     ~RemoteMediaController() override;
 
     quint64 receivedDisplayFrames() const;
@@ -40,7 +45,10 @@ private:
     void stop();
     void requestRecovery(quint32 expectedEpoch, const QString& reason);
     void refreshSubscriptions();
+    void refreshBudgetSubscriptions();
     bool retireSubscriptions(const QList<quint32>& endpointIds);
+    void receiveAllocationResult(const QJsonObject& payload);
+    void setPanStatus(const QString& panId, const QString& status);
     void refreshCtunState();
     void receiveControl(const QJsonObject& payload, quint32 epoch);
     void receiveDisplay(const QByteArray& packet);

@@ -395,6 +395,9 @@ public:
 
     bool mediaAvailable() const;
     bool remoteWidebandAvailable() const;
+    std::optional<DisplayBudgetLimits> remoteDisplayBudgetLimits() const;
+    bool remotePs3DisplaySubscribed() const;
+    quint32 requestPs3DisplaySubscription(bool enabled);
     bool remoteCtunAvailable() const;
     bool remoteTgxlConfigAvailable() const override;
     bool remoteFourO3AControlAvailable() const override;
@@ -483,6 +486,12 @@ public:
     int maxMissedPongs() const { return m_maxMissedPongs; }
 
 signals:
+    void displayBudgetChanged();
+    void ps3DisplaySubscriptionRequested(bool enabled);
+    /// Published before transport callbacks can deliver a synchronous reply.
+    void ps3DisplaySubscriptionStarted(quint32 commandId, bool enabled);
+    void ps3DisplaySubscriptionFinished(quint32 commandId, bool enabled,
+                                        bool accepted, const QString& reason);
     void propertyWriteCompleted(const QByteArray& objectKey, const QByteArray& property,
                                 quint32 writeId, bool accepted, const QString& reason);
     /// Refresh connection controls after a dial, closure or retry cancellation.
@@ -723,6 +732,7 @@ private:
         bool requestedPin = false;
     };
     QHash<quint32, PendingCommand> m_pendingCommands;
+    std::optional<QPair<quint32, bool>> m_pendingPs3Display;
 
     // ---- Task 19: stale state and session epoch ----
 

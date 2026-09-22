@@ -56,6 +56,13 @@ DaemonApp::~DaemonApp()
 
 bool DaemonApp::start(const DaemonConfig& cfg)
 {
+    if ((cfg.displayApplicationBytesPerSecond || cfg.spectrumSampleUnitsPerSecond)
+        && !cfg.displayBudgetLimits()) {
+        QString configurationError;
+        cfg.validate(&configurationError);
+        qCWarning(lcApp) << "DaemonApp: invalid configuration:" << configurationError;
+        return false;
+    }
     // Defensive: no test calls start() twice without an intervening
     // stop(), but leaking the previous RadioModel (socket, WdspEngine,
     // discovery timers, ...) would be a silent resource leak the moment
@@ -434,6 +441,9 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
     // Set before listen() so the first authenticated client sees the media
     // capability, never a control-only session that cannot be upgraded.
     m_stationServer->setMediaEnabled(true);
+    if (const auto limits = cfg.displayBudgetLimits()) {
+        m_stationServer->setDisplayBudgetLimits(*limits);
+    }
     m_mediaController = std::make_unique<DaemonMediaController>(
         m_stationServer.get(), m_radioModel.get(), this);
     // Install every source before advertising the capability. A client can

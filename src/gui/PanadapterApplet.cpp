@@ -32,6 +32,7 @@
 #include <QPushButton>
 #include <QResizeEvent>
 #include <QVBoxLayout>
+#include <algorithm>
 
 namespace NereusSDR {
 
@@ -221,6 +222,18 @@ int PanadapterApplet::statusChainIndex() const
     return m_statusOverlay ? m_statusOverlay->chainIndex() : 0;
 }
 
+void PanadapterApplet::setRemoteDisplayStatus(const QString& status)
+{
+    if (!m_statusOverlay || m_statusOverlay->remoteDisplayStatus() == status) { return; }
+    m_statusOverlay->setRemoteDisplayStatus(status);
+    repositionStatusOverlay();
+}
+
+QString PanadapterApplet::remoteDisplayStatus() const
+{
+    return m_statusOverlay ? m_statusOverlay->remoteDisplayStatus() : QString();
+}
+
 // Phase 3F: WIDE pill forwarder. Kept separate from updateStatusOverlay
 // because the two have different triggers and different sources: the slice
 // fields refresh when the active slice changes, whereas the bypass state is
@@ -256,9 +269,11 @@ void PanadapterApplet::repositionStatusOverlay()
     // would put the overlay back over the strip for the frame that matters.
     const int stripH = (m_isFloating && m_floatTitleBar)
                            ? m_floatTitleBar->height() : 0;
-    m_statusOverlay->setGeometry(width() - hint.width() - 8 - reserved,
+    const int overlayWidth = m_statusOverlay->remoteDisplayStatus().isEmpty()
+        ? hint.width() : std::min(hint.width(), std::max(44, width() - reserved - 16));
+    m_statusOverlay->setGeometry(width() - overlayWidth - 8 - reserved,
                                  stripH + 8,
-                                 hint.width(), hint.height());
+                                 overlayWidth, hint.height());
 }
 
 void PanadapterApplet::setWideBpf(bool wide, const QString& reason)

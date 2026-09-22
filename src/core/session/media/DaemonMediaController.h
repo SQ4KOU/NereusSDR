@@ -9,16 +9,19 @@
 #include "core/NoiseFloorEstimator.h"
 #include "core/session/media/DaemonAudioSender.h"
 #include "core/session/media/DaemonSpectrumSource.h"
+#include "core/session/media/DisplayBudget.h"
 #include "core/session/media/DisplayCodec.h"
 #include "core/session/media/MediaPeer.h"
 #include "core/session/media/SpectrumEndpoint.h"
 
 #include <QElapsedTimer>
+#include <QJsonObject>
 #include <QMap>
 #include <QPointer>
 #include <QTimer>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <map>
 #include <optional>
@@ -53,9 +56,11 @@ struct DaemonAudioDiagnostics {
 class DaemonMediaController final : public QObject {
     Q_OBJECT
 public:
+    using MonotonicClock = std::function<qint64()>;
     explicit DaemonMediaController(StationServer* server, RadioModel* radioModel,
                                    QObject* parent = nullptr,
-                                   MediaPeer::TransportFactory peerFactory = {});
+                                   MediaPeer::TransportFactory peerFactory = {},
+                                   MonotonicClock monotonicClock = {});
     ~DaemonMediaController() override;
 
     /// Small read-only lifecycle telemetry for daemon diagnostics and core
@@ -66,6 +71,13 @@ public:
 
 private:
     struct EndpointEntry;
+    struct AllocationRecord {
+        QJsonObject request;
+        quint32 revision{0};
+        bool accepted{false};
+        bool explicitlyRetired{false};
+        QString reason;
+    };
     struct SourceRuntime;
 
     void onSessionStarted(quint64 epoch);
@@ -91,7 +103,7 @@ private:
     void clearSession();
     void clearProduction();
     QList<quint32> endpointIds() const;
-    void removeEndpoint(quint32 endpointId);
+    void removeEndpoint(quint32 endpointId, bool retainOperation = true);
     bool reconcileSource(const MediaSourceKey& key);
     void releaseSourceIfUnused(const MediaSourceKey& key);
     void configureEndpointFromFrame(EndpointEntry& endpoint,
@@ -101,6 +113,29 @@ private:
                                                double stationOffsetDb);
     void sendRejected(const QString& connectionId, quint32 endpointId,
                       quint32 revision, const QString& reason);
+    void sendAllocationResult(const QString& connectionId, quint32 endpointId,
+                              quint32 revision, bool accepted, const QString& reason);
+    bool rejectAllocation(const QJsonObject& control, quint32 endpointId,
+                          quint32 revision, const QString& reason,
+                          bool remember = true);
+    bool displayBudgetWireAvailable() const;
+    bool displayPacingRequired() const;
+    qint64 displayNowNs() const;
+    void beginDisplayBudgetIfNeeded();
+    void refreshDisplayBudgetPacer();
+    DisplayBudgetCharge currentSpectrumCharge() const;
+    std::optional<DisplayBudgetCharge> proposedSpectrumCharge(
+        quint32 endpointId, const DisplayBudgetCharge& replacement) const;
+    bool spectrumAdmissionFits(quint32 endpointId,
+                               const DisplayBudgetCharge& replacement) const;
+    bool admitPs3Display(bool enabled, QString* refusal);
+    void onRemoteAmpViewSubscriptionChanged(bool subscribed);
+    void rememberNonliveOperation(quint32 endpointId, const AllocationRecord& record);
+    void forgetNonliveOperation(quint32 endpointId);
+    void clearAllocationIdentity();
+    void promoteLatestPs3Frame();
+    bool trySendPs3(MediaPeer* peer, quint64 epoch, qint64 nowNs);
+    bool trySendSpectrum(MediaPeer* peer, quint64 epoch, qint64 nowNs);
     void reconcileAudio();
     void stopAudioCapture();
     void sendAudioContext(bool enabled);
@@ -117,12 +152,17 @@ private:
     DaemonSpectrumSource m_source;
     NoiseFloorEstimator m_noiseFloorEstimator;
     MediaPeer::TransportFactory m_peerFactory;
+    MonotonicClock m_monotonicClock;
     std::unique_ptr<MediaPeer> m_peer;
     std::unique_ptr<DaemonAudioSender> m_audioSender;
     std::map<quint32, EndpointEntry> m_endpoints;
     QMap<MediaSourceKey, SourceRuntime> m_sources;
     QTimer m_sendTimer;
     QTimer m_audioDiagnosticsTimer;
+    QElapsedTimer m_displayClock;
+    DisplayBudgetPacer m_displayPacer;
+    bool m_displayPacerInitialized{false};
+    quint64 m_lastSessionEpoch{0};
     quint64 m_epoch{0};
     quint32 m_nextContextGeneration{0};
     quint32 m_audioRevision{0};
@@ -133,7 +173,13 @@ private:
     QElapsedTimer m_audioDiagnosticsClock;
     qint64 m_audioDiagnosticsLastLogMs{0};
     int m_roundRobinCursor{0};
-    QList<QByteArray> m_ps3Chunks;
+    QList<QByteArray> m_ps3CurrentChunks;
+    QList<QByteArray> m_ps3LatestChunks;
+    bool m_ps3CurrentAttempted{false};
+    bool m_lastDisplayAttemptWasPs3{false};
+    quint32 m_endpointHighWater{0};
+    std::map<quint32, AllocationRecord> m_nonliveOperations;
+    QList<quint32> m_nonliveOperationOrder;
 };
 
 } // namespace NereusSDR

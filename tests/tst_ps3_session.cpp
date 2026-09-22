@@ -17,6 +17,8 @@
 #include "core/session/SessionCommandDispatcher.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
+#include "core/session/media/DaemonMediaController.h"
+#include "core/session/media/DisplayBudget.h"
 #include "core/settings/SettingsProxy.h"
 #include "models/RadioModel.h"
 #include "models/PureSignalSettings.h"
@@ -163,6 +165,73 @@ private slots:
         facade->receiveDisplaySnapshot(frame);
         QCOMPARE(displayed.size(), 1);
         QVERIFY(!facade->displaySnapshot());
+    }
+
+    void remoteDisplaySubscriptionPublishesOnlyAcceptedStateChanges()
+    {
+        RadioModel radio;
+        PureSignalSessionFacade* facade = radio.pureSignalFacade();
+        QSignalSpy changes(facade,
+                           &PureSignalSessionFacade::remoteAmpViewSubscriptionChanged);
+
+        facade->setRemoteAmpViewSubscribed(true);
+        QCOMPARE(changes.size(), 1);
+        QCOMPARE(changes.constLast().constFirst().toBool(), true);
+        facade->setRemoteAmpViewSubscribed(true);
+        QCOMPARE(changes.size(), 1);
+
+        facade->resetSession();
+        QCOMPARE(changes.size(), 2);
+        QCOMPARE(changes.constLast().constFirst().toBool(), false);
+        facade->resetSession();
+        QCOMPARE(changes.size(), 2);
+    }
+
+    void ps3BudgetAdmissionPrecedesFacadeMutation()
+    {
+#ifndef HAVE_WDSP
+        QSKIP("requires PS3 display capability");
+#else
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        RadioModel station;
+        StationServer server(&station, AppSettings::instance(), directory.path());
+        server.setMediaEnabled(true);
+        DaemonMediaController controller(&server, &station);
+        QVERIFY(server.setDisplayBudgetLimits({1, 1, 1}));
+
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        auto* coreEnd = new Test::LoopbackTransport("station");
+        auto* guiEnd = new Test::LoopbackTransport("gui");
+        coreEnd->linkTo(guiEnd);
+        client.startSession(guiEnd, server.token());
+        server.acceptTransport(coreEnd);
+        QTRY_VERIFY(client.isHandshakeComplete());
+        QTRY_VERIFY(client.remoteDisplayBudgetLimits().has_value());
+
+        QSignalSpy replies(&client, &StationClient::commandResponse);
+        const quint32 refusedId = client.requestPs3DisplaySubscription(true);
+        QVERIFY(refusedId != 0);
+        QTRY_VERIFY(!replies.isEmpty());
+        SessionMessage reply = qvariant_cast<SessionMessage>(replies.constLast().constFirst());
+        QCOMPARE(reply.commandId, refusedId);
+        QVERIFY(!reply.accepted);
+        QVERIFY(!station.pureSignalFacade()->remoteAmpViewSubscribed());
+
+        const DisplayBudgetCharge charge = ps3DisplayCharge();
+        QVERIFY(server.setDisplayBudgetLimits({charge.applicationBytesPerSecond, 1, 2}));
+        QTRY_COMPARE(client.remoteDisplayBudgetLimits()->generation, quint32{2});
+        const quint32 acceptedId = client.requestPs3DisplaySubscription(true);
+        QVERIFY(acceptedId != 0);
+        QTRY_VERIFY(replies.size() >= 2);
+        reply = qvariant_cast<SessionMessage>(replies.constLast().constFirst());
+        QCOMPARE(reply.commandId, acceptedId);
+        QVERIFY(reply.accepted);
+        QVERIFY(station.pureSignalFacade()->remoteAmpViewSubscribed());
+        QTRY_VERIFY(client.remotePs3DisplaySubscribed());
+#endif
     }
 
     void stationRejectsActuationEvenIfClientBypassesDisabledControls()

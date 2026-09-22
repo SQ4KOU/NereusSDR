@@ -157,6 +157,48 @@ private slots:
     void initTestCase() { AppSettings::instance().clear(); }
     void cleanup()      { AppSettings::instance().clear(); }
 
+    void remote_display_status_is_visible_without_radio_command_hit_regions()
+    {
+        PanadapterApplet pan(QStringLiteral("remote-status"));
+        pan.resize(800, 300);
+        pan.setWideBpf(true, QStringLiteral("Receive preselector bypassed"));
+        pan.setRemoteDisplayStatus(QStringLiteral("Display paused: Core capacity"));
+        QCOMPARE(pan.remoteDisplayStatus(), QStringLiteral("Display paused: Core capacity"));
+        auto* overlay = pan.findChild<SpectrumStatusOverlay*>();
+        QVERIFY(overlay);
+        QCOMPARE(overlay->height(), 44);
+        QVERIFY(overlay->toolTip().contains(pan.remoteDisplayStatus()));
+        QVERIFY(overlay->toolTip().contains(pan.wideReason()));
+
+        QSignalSpy chain(overlay, &SpectrumStatusOverlay::chainTagClicked);
+        QSignalSpy wide(overlay, &SpectrumStatusOverlay::wideBadgeClicked);
+        const QRect chainRect = overlay->badgeRect(SpectrumStatusOverlay::Badge::ChainTag);
+        const QRect wideRect = overlay->badgeRect(SpectrumStatusOverlay::Badge::Wide);
+        QTest::mouseClick(overlay, Qt::LeftButton, Qt::NoModifier,
+                          QPoint(chainRect.center().x(), 33));
+        QTest::mouseClick(overlay, Qt::LeftButton, Qt::NoModifier,
+                          QPoint(wideRect.center().x(), 33));
+        QCOMPARE(chain.size(), 0);
+        QCOMPARE(wide.size(), 0);
+        QTest::mouseClick(overlay, Qt::LeftButton, Qt::NoModifier, chainRect.center());
+        QTest::mouseClick(overlay, Qt::LeftButton, Qt::NoModifier, wideRect.center());
+        QCOMPARE(chain.size(), 1);
+        QCOMPARE(wide.size(), 1);
+
+        // Optional test-only capture for inspecting the actual painted row.
+        const QString capture = qEnvironmentVariable("NEREUS_DISPLAY_STATUS_CAPTURE");
+        if (!capture.isEmpty()) {
+            QImage rendered(overlay->size(), QImage::Format_ARGB32_Premultiplied);
+            rendered.fill(Qt::transparent);
+            overlay->render(&rendered);
+            QVERIFY(rendered.save(capture));
+        }
+
+        pan.setRemoteDisplayStatus({});
+        QCOMPARE(overlay->height(), 22);
+        QCOMPARE(overlay->toolTip(), pan.wideReason());
+    }
+
     // ── The defect: a pan painted placeholders, not its slice ─────────────
 
     // Everything the overlay shows is a construction-time constant until

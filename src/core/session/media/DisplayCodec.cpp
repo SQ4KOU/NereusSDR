@@ -21,7 +21,7 @@ namespace {
 
 constexpr quint32 kMagic = 0x4e534443U; // "NSDC"
 constexpr quint8 kVersion = 1;
-constexpr quint16 kHeaderBytes = 42;
+constexpr quint16 kHeaderBytes = DisplayCodecEncoder::kHeaderBytes;
 constexpr quint8 kFlagKeyframe = 0x01;
 constexpr quint8 kFlagWaterfallAdvance = 0x02;
 constexpr quint8 kFlagWide = 0x04;

@@ -70,6 +70,7 @@ struct DisplayCodecDecodeResult {
 /// honest across a long delta chain.
 class DisplayCodecEncoder {
 public:
+    static constexpr quint16 kHeaderBytes = 42;
     static constexpr int kMaxPlanes = 3;
     static constexpr int kMaxSamplesPerPlane = 4096;
     static constexpr int kMaxEncodedBytes = 16 * 1024;

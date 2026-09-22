@@ -76,6 +76,7 @@ signals:
     void displaySnapshotReady(const NereusSDR::Ps3Snapshot& snapshot);
     void displayInvalidated();
     void displaySubscriptionRequested(bool subscribed);
+    void remoteAmpViewSubscriptionChanged(bool subscribed);
 
 private:
     struct PendingOperation {

@@ -30,7 +30,7 @@ Q_LOGGING_CATEGORY(lcDaemonMedia, "nereus.daemon.media")
 namespace {
 
 constexpr int kMaxEndpoints = 8;
-constexpr int kSenderIntervalMs = 5;
+constexpr int kRecentAllocationRecords = 64;
 constexpr int kMaxKeyframesPerSecond = 5;
 constexpr qint64 kNoiseFloorMinimumIntervalNs = 500'000'000;
 constexpr float kNoiseFloorMinimumDbm = -400.0f;
@@ -220,6 +220,8 @@ struct DaemonMediaController::EndpointEntry {
     double sourceCentreHz{0.0};
     double sourceSampleRateHz{0.0};
     SpectrumEndpointRequest request;
+    SpectrumDisplayCost displayCost;
+    AllocationRecord allocation;
     bool widebandNegotiated{false};
     bool widebandWanted{false};
     std::unique_ptr<WidebandDemandLease> widebandDemand;
@@ -242,17 +244,20 @@ struct DaemonMediaController::SourceRuntime {
 DaemonMediaController::DaemonMediaController(StationServer* server,
                                                RadioModel* radioModel,
                                                QObject* parent,
-                                               MediaPeer::TransportFactory peerFactory)
+                                               MediaPeer::TransportFactory peerFactory,
+                                               MonotonicClock monotonicClock)
     : QObject(parent)
     , m_server(server)
     , m_radioModel(radioModel)
     , m_source(this)
     , m_peerFactory(std::move(peerFactory))
+    , m_monotonicClock(std::move(monotonicClock))
     , m_sendTimer(this)
     , m_audioDiagnosticsTimer(this)
 {
+    m_displayClock.start();
     m_source.setRadioModel(radioModel);
-    m_sendTimer.setInterval(kSenderIntervalMs);
+    m_sendTimer.setInterval(kDisplaySenderIntervalMs);
     connect(&m_sendTimer, &QTimer::timeout, this, &DaemonMediaController::onSendTick);
     m_audioDiagnosticsTimer.setInterval(kAudioDiagnosticsLogIntervalMs);
     connect(&m_audioDiagnosticsTimer, &QTimer::timeout, this, [this] {
@@ -267,6 +272,11 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
             this, &DaemonMediaController::onSessionEnded);
     connect(m_server, &StationServer::mediaControlReceived,
             this, &DaemonMediaController::onControl);
+    connect(m_server, &StationServer::displayBudgetChanged,
+            this, [this] {
+        beginDisplayBudgetIfNeeded();
+        refreshDisplayBudgetPacer();
+    });
     connect(&m_source, &DaemonSpectrumSource::frameAvailable,
             this, &DaemonMediaController::onSourceFrame);
     connect(m_radioModel, &RadioModel::streamCentreChanged,
@@ -285,7 +295,14 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
     connect(m_radioModel, &RadioModel::streamAdcRoutingChanged, this,
             [this]() { onWidebandSourceChanged(-1); }, Qt::QueuedConnection);
     connect(m_radioModel->pureSignalFacade(), &PureSignalSessionFacade::displayInvalidated,
-            this, [this]() { m_ps3Chunks.clear(); });
+            this, [this]() {
+        m_ps3CurrentChunks.clear();
+        m_ps3LatestChunks.clear();
+        m_ps3CurrentAttempted = false;
+    });
+    connect(m_radioModel->pureSignalFacade(),
+            &PureSignalSessionFacade::remoteAmpViewSubscriptionChanged,
+            this, &DaemonMediaController::onRemoteAmpViewSubscriptionChanged);
     connect(m_radioModel->pureSignalFacade(), &PureSignalSessionFacade::displaySnapshotReady,
             this, [this](const Ps3Snapshot& snapshot) {
         if (m_epoch == 0 || !m_peer || !m_peer->isReady()
@@ -295,15 +312,44 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
         // One latest snapshot, including headers, remains bounded to 160 KiB.
         // The facade samples at <=10 Hz; ordinary MediaPeer sends preserve
         // the 64 KiB message limit and account every chunk in R35 telemetry.
-        m_ps3Chunks = Ps3DisplayCodec::encode(snapshot);
-        if (!m_ps3Chunks.isEmpty() && !m_sendTimer.isActive()) {
+        QList<QByteArray> encoded = Ps3DisplayCodec::encode(snapshot);
+        if (encoded.isEmpty()) {
+            return;
+        }
+        if (m_ps3CurrentChunks.isEmpty() || !m_ps3CurrentAttempted) {
+            m_ps3CurrentChunks = std::move(encoded);
+            m_ps3CurrentAttempted = false;
+        } else {
+            m_ps3LatestChunks = std::move(encoded);
+        }
+        if (!m_sendTimer.isActive()) {
             m_sendTimer.start();
         }
     });
+    const QPointer<DaemonMediaController> self(this);
+    m_server->setPs3DisplayAdmissionHandler([self](bool enabled, QString* refusal) {
+        if (!self) {
+            if (refusal) { *refusal = QStringLiteral("display budget authority retired"); }
+            return false;
+        }
+        return self->admitPs3Display(enabled, refusal);
+    });
+    // The command gate and accepted-state notification are both installed
+    // before capability publication can advertise budget enforcement.
+    m_server->setDisplayBudgetEnforcementEnabled(true);
 }
 
 DaemonMediaController::~DaemonMediaController()
 {
+    if (m_radioModel) {
+        m_radioModel->pureSignalFacade()->disconnect(this);
+    }
+    if (m_server) {
+        m_server->disconnect(this);
+        m_server->setPs3DisplayAdmissionHandler({});
+        m_server->setDisplayBudgetEnforcementEnabled(false);
+    }
+    m_displayPacer.endSession();
     clearSession();
 }
 
@@ -329,16 +375,256 @@ DaemonAudioDiagnostics DaemonMediaController::audioDiagnostics() const
     return snapshotAudioDiagnostics();
 }
 
+qint64 DaemonMediaController::displayNowNs() const
+{
+    return m_monotonicClock ? m_monotonicClock() : m_displayClock.nsecsElapsed();
+}
+
+bool DaemonMediaController::displayBudgetWireAvailable() const
+{
+    return m_server && m_server->displayBudgetAvailable();
+}
+
+bool DaemonMediaController::displayPacingRequired() const
+{
+    return m_server && m_server->displayBudgetLimits().has_value();
+}
+
+DisplayBudgetCharge DaemonMediaController::currentSpectrumCharge() const
+{
+    QList<DisplayBudgetCharge> charges;
+    charges.reserve(static_cast<qsizetype>(m_endpoints.size()));
+    for (const auto& [unused, entry] : m_endpoints) {
+        Q_UNUSED(unused);
+        charges.append(entry.displayCost.charge);
+    }
+    return sumDisplayCharges(charges).value_or(DisplayBudgetCharge{});
+}
+
+std::optional<DisplayBudgetCharge> DaemonMediaController::proposedSpectrumCharge(
+    quint32 endpointId, const DisplayBudgetCharge& replacement) const
+{
+    QList<DisplayBudgetCharge> charges;
+    charges.reserve(static_cast<qsizetype>(m_endpoints.size() + 1));
+    bool replaced = false;
+    for (const auto& [currentId, entry] : m_endpoints) {
+        if (currentId == endpointId) {
+            charges.append(replacement);
+            replaced = true;
+        } else {
+            charges.append(entry.displayCost.charge);
+        }
+    }
+    if (!replaced) {
+        charges.append(replacement);
+    }
+    return sumDisplayCharges(charges);
+}
+
+bool DaemonMediaController::spectrumAdmissionFits(
+    quint32 endpointId, const DisplayBudgetCharge& replacement) const
+{
+    const auto limits = m_server ? m_server->displayBudgetLimits() : std::nullopt;
+    if (!limits) {
+        return true;
+    }
+    const auto existing = m_endpoints.find(endpointId);
+    if (existing != m_endpoints.end()) {
+        const DisplayBudgetCharge old = existing->second.displayCost.charge;
+        if (replacement.applicationBytesPerSecond <= old.applicationBytesPerSecond
+            && replacement.spectrumSampleUnitsPerSecond
+                <= old.spectrumSampleUnitsPerSecond
+            && replacement.messagesPerSecond <= old.messagesPerSecond) {
+            return true;
+        }
+    }
+    const auto spectrum = proposedSpectrumCharge(endpointId, replacement);
+    if (!spectrum) {
+        return false;
+    }
+    const bool ps3Enabled = m_radioModel
+        && m_radioModel->pureSignalFacade()->remoteAmpViewSubscribed();
+    const auto combined = sumDisplayCharges(
+        {*spectrum, ps3Enabled ? ps3DisplayCharge() : DisplayBudgetCharge{}});
+    return combined && displayChargeFits(*limits, *combined);
+}
+
+void DaemonMediaController::beginDisplayBudgetIfNeeded()
+{
+    if (m_displayPacerInitialized || m_epoch == 0 || !m_server) {
+        return;
+    }
+    const auto limits = m_server->displayBudgetLimits();
+    if (!limits) {
+        return;
+    }
+    m_displayPacerInitialized = m_displayPacer.beginSession(
+        m_epoch, *limits, displayNowNs());
+}
+
+void DaemonMediaController::refreshDisplayBudgetPacer()
+{
+    beginDisplayBudgetIfNeeded();
+    if (!m_displayPacerInitialized || !m_server) {
+        return;
+    }
+    const auto limits = m_server->displayBudgetLimits();
+    if (!limits) {
+        return;
+    }
+    const bool ps3Enabled = m_radioModel
+        && m_radioModel->pureSignalFacade()->remoteAmpViewSubscribed();
+    if (!m_displayPacer.update(*limits, currentSpectrumCharge(), ps3Enabled,
+                               displayNowNs())) {
+        qCWarning(lcDaemonMedia) << "refused invalid display pacer state update";
+    }
+}
+
+bool DaemonMediaController::admitPs3Display(bool enabled, QString* refusal)
+{
+    const bool current = m_radioModel
+        && m_radioModel->pureSignalFacade()->remoteAmpViewSubscribed();
+    if (enabled == current || !enabled) {
+        return true;
+    }
+    const auto limits = m_server ? m_server->displayBudgetLimits() : std::nullopt;
+    if (!limits) {
+        return true;
+    }
+    const auto combined = sumDisplayCharges({currentSpectrumCharge(), ps3DisplayCharge()});
+    if (combined && displayChargeFits(*limits, *combined)) {
+        return true;
+    }
+    if (refusal) {
+        *refusal = QStringLiteral("PureSignal display does not fit the session display budget");
+    }
+    return false;
+}
+
+void DaemonMediaController::onRemoteAmpViewSubscriptionChanged(bool subscribed)
+{
+    if (!subscribed) {
+        m_ps3CurrentChunks.clear();
+        m_ps3LatestChunks.clear();
+        m_ps3CurrentAttempted = false;
+    }
+    refreshDisplayBudgetPacer();
+    if (m_server) {
+        m_server->publishDisplayBudgetCapabilities();
+    }
+}
+
+void DaemonMediaController::rememberNonliveOperation(
+    quint32 endpointId, const AllocationRecord& record)
+{
+    forgetNonliveOperation(endpointId);
+    m_nonliveOperations.emplace(endpointId, record);
+    m_nonliveOperationOrder.append(endpointId);
+    while (m_nonliveOperationOrder.size() > kRecentAllocationRecords) {
+        const quint32 oldest = m_nonliveOperationOrder.takeFirst();
+        m_nonliveOperations.erase(oldest);
+    }
+}
+
+void DaemonMediaController::forgetNonliveOperation(quint32 endpointId)
+{
+    m_nonliveOperations.erase(endpointId);
+    m_nonliveOperationOrder.removeAll(endpointId);
+}
+
+void DaemonMediaController::clearAllocationIdentity()
+{
+    m_endpointHighWater = 0;
+    m_nonliveOperations.clear();
+    m_nonliveOperationOrder.clear();
+}
+
+void DaemonMediaController::sendAllocationResult(
+    const QString& connectionId, quint32 endpointId, quint32 revision,
+    bool accepted, const QString& reason)
+{
+    if (connectionId.isEmpty() || !m_server) {
+        return;
+    }
+    const auto limits = m_server->displayBudgetLimits();
+    if (!limits) {
+        return;
+    }
+    quint32 acceptedRevision = 0;
+    DisplayBudgetCharge retained;
+    const auto current = m_endpoints.find(endpointId);
+    if (current != m_endpoints.end()) {
+        acceptedRevision = current->second.revision;
+        retained = current->second.displayCost.charge;
+    }
+    sendControl({
+        {QStringLiteral("op"), QStringLiteral("allocation-result")},
+        {QStringLiteral("connectionId"), connectionId},
+        {QStringLiteral("endpointId"), static_cast<qint64>(endpointId)},
+        {QStringLiteral("revision"), static_cast<qint64>(revision)},
+        {QStringLiteral("accepted"), accepted},
+        {QStringLiteral("reason"), reason},
+        {QStringLiteral("budgetGeneration"), static_cast<qint64>(limits->generation)},
+        {QStringLiteral("acceptedRevision"), static_cast<qint64>(acceptedRevision)},
+        {QStringLiteral("applicationBytesPerSecond"),
+         static_cast<qint64>(retained.applicationBytesPerSecond)},
+        {QStringLiteral("spectrumSampleUnitsPerSecond"),
+         static_cast<qint64>(retained.spectrumSampleUnitsPerSecond)},
+        {QStringLiteral("messagesPerSecond"), static_cast<qint64>(retained.messagesPerSecond)},
+    });
+}
+
+bool DaemonMediaController::rejectAllocation(
+    const QJsonObject& control, quint32 endpointId, quint32 revision,
+    const QString& reason, bool remember)
+{
+    const QString connectionId = control.value(QStringLiteral("connectionId")).toString();
+    if (displayBudgetWireAvailable()) {
+        if (remember) {
+            AllocationRecord record{control, revision, false, false, reason};
+            auto active = m_endpoints.find(endpointId);
+            if (active != m_endpoints.end()) {
+                if (!staleOrEqualRevision(revision, active->second.allocation.revision)) {
+                    active->second.allocation = std::move(record);
+                }
+            } else {
+                const auto recent = m_nonliveOperations.find(endpointId);
+                if (recent == m_nonliveOperations.end()
+                    || (!recent->second.explicitlyRetired
+                        && !staleOrEqualRevision(revision, recent->second.revision))) {
+                    rememberNonliveOperation(endpointId, record);
+                }
+            }
+        }
+        sendAllocationResult(connectionId, endpointId, revision, false, reason);
+    } else {
+        sendRejected(connectionId, endpointId, revision, reason);
+    }
+    return false;
+}
+
 void DaemonMediaController::onSessionStarted(quint64 epoch)
 {
+    if (epoch == 0 || epoch <= m_lastSessionEpoch) {
+        return;
+    }
+    if (m_epoch != 0) {
+        m_displayPacer.endSession();
+        m_displayPacerInitialized = false;
+    }
     clearSession();
+    m_lastSessionEpoch = epoch;
     m_epoch = epoch;
+    beginDisplayBudgetIfNeeded();
+    refreshDisplayBudgetPacer();
 }
 
 void DaemonMediaController::onSessionEnded(quint64 epoch)
 {
     if (epoch == m_epoch) {
         clearSession();
+        m_displayPacer.endSession();
+        m_displayPacerInitialized = false;
         m_epoch = 0;
     }
 }
@@ -425,6 +711,14 @@ bool DaemonMediaController::acceptPeerControl(const QJsonObject& control)
 
 bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
 {
+    const bool revisioned = displayBudgetWireAvailable();
+    quint32 endpointId = 0;
+    quint32 revision = 0;
+    const bool validIdentity = m_peer
+        && canonicalConnectionId(control.value(QStringLiteral("connectionId")))
+        && control.value(QStringLiteral("connectionId")).toString() == m_peer->connectionId()
+        && exactUnsigned(control.value(QStringLiteral("endpointId")), endpointId, true)
+        && exactUnsigned(control.value(QStringLiteral("revision")), revision, true);
     const bool widebandNegotiated = control.contains(QStringLiteral("extendedView"));
     QJsonObject legacyShape = control;
     if (widebandNegotiated) { legacyShape.remove(QStringLiteral("extendedView")); }
@@ -434,13 +728,57 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
                              "tier", "fftSize", "windowType", "centreHz", "spanHz", "pixels",
                              "fps", "framesPerLine", "trace", "waterfall", "minDbm", "maxDbm",
                              "wideSpanFactor"})
-        || !m_peer || !canonicalConnectionId(control.value(QStringLiteral("connectionId")))
-        || control.value(QStringLiteral("connectionId")).toString() != m_peer->connectionId()) {
+        || !validIdentity) {
+        if (revisioned && validIdentity) {
+            const bool remember = m_endpoints.contains(endpointId)
+                || m_nonliveOperations.contains(endpointId)
+                || endpointId > m_endpointHighWater;
+            m_endpointHighWater = std::max(m_endpointHighWater, endpointId);
+            return rejectAllocation(control, endpointId, revision,
+                                    QStringLiteral("invalid subscription"), remember);
+        }
         return false;
     }
 
-    quint32 endpointId = 0;
-    quint32 revision = 0;
+    if (revisioned) {
+        auto active = m_endpoints.find(endpointId);
+        if (active != m_endpoints.end()) {
+            const AllocationRecord& prior = active->second.allocation;
+            if (revision == prior.revision && control == prior.request) {
+                const bool accepted = prior.accepted;
+                sendAllocationResult(m_peer->connectionId(), endpointId, revision,
+                                     accepted, prior.reason);
+                return accepted;
+            }
+            if (staleOrEqualRevision(revision, prior.revision)) {
+                return rejectAllocation(control, endpointId, revision,
+                                        QStringLiteral("stale revision"), false);
+            }
+        } else {
+            auto recent = m_nonliveOperations.find(endpointId);
+            if (recent != m_nonliveOperations.end()) {
+                const AllocationRecord prior = recent->second;
+                if (revision == prior.revision && control == prior.request) {
+                    sendAllocationResult(m_peer->connectionId(), endpointId, revision,
+                                         prior.accepted, prior.reason);
+                    return prior.accepted;
+                }
+                if (prior.explicitlyRetired
+                    || staleOrEqualRevision(revision, prior.revision)) {
+                    return rejectAllocation(control, endpointId, revision,
+                                            prior.explicitlyRetired
+                                                ? QStringLiteral("endpoint identifier retired")
+                                                : QStringLiteral("stale revision"),
+                                            false);
+                }
+            } else if (endpointId <= m_endpointHighWater) {
+                return rejectAllocation(control, endpointId, revision,
+                                        QStringLiteral("endpoint identifier retired"), false);
+            }
+        }
+        m_endpointHighWater = std::max(m_endpointHighWater, endpointId);
+    }
+
     int sliceId = -1;
     int fftSize = 0;
     int windowType = 0;
@@ -451,9 +789,7 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     double maxDbm = 0.0;
     FftTier tier = FftTier::Wide;
     SpectrumEndpointRequest request;
-    if (!exactUnsigned(control.value(QStringLiteral("endpointId")), endpointId, true)
-        || !exactUnsigned(control.value(QStringLiteral("revision")), revision, true)
-        || !exactInt(control.value(QStringLiteral("sliceId")), 0, std::numeric_limits<int>::max(), sliceId)
+    if (!exactInt(control.value(QStringLiteral("sliceId")), 0, std::numeric_limits<int>::max(), sliceId)
         || !parseTier(control.value(QStringLiteral("tier")), tier)
         || !exactInt(control.value(QStringLiteral("fftSize")), 1024,
                      FFTEngine::maximumFftSize(), fftSize)
@@ -479,13 +815,19 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
         || !std::isfinite(maxDbm - minDbm)
         || !validRequestedFrequencyRange(request.centreHz, request.spanHz,
                                          request.requestedWideSpanFactor)) {
-        sendRejected(m_peer->connectionId(), endpointId, revision, QStringLiteral("invalid subscription"));
-        return false;
+        return rejectAllocation(control, endpointId, revision,
+                                QStringLiteral("invalid subscription"));
+    }
+    const auto displayCost = spectrumDisplayCost(
+        pixels, fps, request.requestedWideSpanFactor > 1.0);
+    if (!displayCost || !spectrumAdmissionFits(endpointId, displayCost->charge)) {
+        return rejectAllocation(control, endpointId, revision,
+                                QStringLiteral("session display budget exceeded"));
     }
     SliceModel* slice = m_radioModel ? m_radioModel->sliceById(sliceId) : nullptr;
     if (!slice || slice->streamIndex() < 0 || !m_radioModel->streamActive(slice->streamIndex())) {
-        sendRejected(m_peer->connectionId(), endpointId, revision, QStringLiteral("slice is unavailable"));
-        return false;
+        return rejectAllocation(control, endpointId, revision,
+                                QStringLiteral("slice is unavailable"));
     }
     const MediaSourceKey source{slice->streamIndex(), tier};
     const double sourceCentreHz = m_radioModel->streamCentreHz(source.streamIndex);
@@ -495,26 +837,24 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
         || sourceSampleRateHz <= 0.0 || !std::isfinite(sourceHalfRate)
         || !std::isfinite(sourceCentreHz - sourceHalfRate)
         || !std::isfinite(sourceCentreHz + sourceHalfRate)) {
-        sendRejected(m_peer->connectionId(), endpointId, revision,
-                     QStringLiteral("source geometry is unavailable"));
-        return false;
+        return rejectAllocation(control, endpointId, revision,
+                                QStringLiteral("source geometry is unavailable"));
     }
     auto existing = m_endpoints.find(endpointId);
     if (existing != m_endpoints.end()
         && staleOrEqualRevision(revision, existing->second.revision)) {
-        sendRejected(m_peer->connectionId(), endpointId, revision, QStringLiteral("stale revision"));
-        return false;
+        return rejectAllocation(control, endpointId, revision,
+                                QStringLiteral("stale revision"), false);
     }
     if (existing == m_endpoints.end() && m_endpoints.size() >= kMaxEndpoints) {
-        sendRejected(m_peer->connectionId(), endpointId, revision, QStringLiteral("endpoint limit reached"));
-        return false;
+        return rejectAllocation(control, endpointId, revision,
+                                QStringLiteral("endpoint limit reached"));
     }
     for (auto it = m_endpoints.cbegin(); it != m_endpoints.cend(); ++it) {
         if (it->first != endpointId && it->second.request.source == source
             && it->second.sourceWindowType != windowType) {
-            sendRejected(m_peer->connectionId(), endpointId, revision,
-                         QStringLiteral("incompatible source window"));
-            return false;
+            return rejectAllocation(control, endpointId, revision,
+                                    QStringLiteral("incompatible source window"));
         }
     }
 
@@ -531,9 +871,8 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     const bool extendedAllowed = request.extendedView && adcRate.has_value();
     if ((!requestOverlapsSource(request, sourceCentreHz, sourceSampleRateHz) && !extendedAllowed)
         || (extendedAllowed && request.spanHz > std::max(sourceSampleRateHz, *adcRate / 2.0))) {
-        sendRejected(m_peer->connectionId(), endpointId, revision,
-                     QStringLiteral("requested crop is outside source coverage"));
-        return false;
+        return rejectAllocation(control, endpointId, revision,
+                                QStringLiteral("requested crop is outside source coverage"));
     }
     EndpointEntry entry;
     entry.widebandNegotiated = widebandNegotiated;
@@ -542,6 +881,12 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     entry.sourceFftSize = fftSize;
     entry.sourceWindowType = windowType;
     entry.request = request;
+    entry.displayCost = *displayCost;
+    entry.allocation = {control, revision, true, false, {}};
+    if (!reconcileWidebandDemand(entry)) {
+        return rejectAllocation(control, endpointId, revision,
+                                QStringLiteral("wideband source is unavailable"));
+    }
     std::optional<EndpointEntry> replaced;
     MediaSourceKey replacedSource;
     if (existing != m_endpoints.end()) {
@@ -551,41 +896,95 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     }
     m_endpoints.emplace(endpointId, std::move(entry));
     if (!reconcileSource(source)) {
-        removeEndpoint(endpointId);
+        m_endpoints.erase(endpointId);
+        releaseSourceIfUnused(source);
         if (replaced.has_value()) {
             m_endpoints.emplace(endpointId, std::move(*replaced));
             reconcileSource(replacedSource);
         }
-        sendRejected(m_peer->connectionId(), endpointId, revision,
-                     QStringLiteral("source configuration rejected"));
-        return false;
-    }
-    if (!reconcileWidebandDemand(m_endpoints.at(endpointId))) {
-        removeEndpoint(endpointId);
-        if (replaced) {
-            m_endpoints.emplace(endpointId, std::move(*replaced));
-            reconcileSource(replacedSource);
-        }
-        sendRejected(m_peer->connectionId(), endpointId, revision,
-                     QStringLiteral("wideband source is unavailable"));
-        return false;
+        return rejectAllocation(control, endpointId, revision,
+                                QStringLiteral("source configuration rejected"));
     }
     if (replaced.has_value() && !(replacedSource == source)) {
         releaseSourceIfUnused(replacedSource);
+    }
+    forgetNonliveOperation(endpointId);
+    refreshDisplayBudgetPacer();
+    if (revisioned) {
+        sendAllocationResult(m_peer->connectionId(), endpointId, revision, true, {});
     }
     return true;
 }
 
 bool DaemonMediaController::handleUnsubscribe(const QJsonObject& control)
 {
+    const bool revisioned = displayBudgetWireAvailable();
     quint32 endpointId = 0;
-    if (!exactKeys(control, {"op", "connectionId", "endpointId"}) || !m_peer
-        || !canonicalConnectionId(control.value(QStringLiteral("connectionId")))
-        || control.value(QStringLiteral("connectionId")).toString() != m_peer->connectionId()
-        || !exactUnsigned(control.value(QStringLiteral("endpointId")), endpointId, true)) {
+    quint32 revision = 0;
+    const bool shapeValid = revisioned
+        ? exactKeys(control, {"op", "connectionId", "endpointId", "revision"})
+        : exactKeys(control, {"op", "connectionId", "endpointId"});
+    const bool validIdentity = m_peer
+        && canonicalConnectionId(control.value(QStringLiteral("connectionId")))
+        && control.value(QStringLiteral("connectionId")).toString() == m_peer->connectionId()
+        && exactUnsigned(control.value(QStringLiteral("endpointId")), endpointId, true)
+        && (!revisioned
+            || exactUnsigned(control.value(QStringLiteral("revision")), revision, true));
+    if (!shapeValid || !validIdentity) {
+        if (revisioned && validIdentity) {
+            const bool remember = m_endpoints.contains(endpointId)
+                || m_nonliveOperations.contains(endpointId)
+                || endpointId > m_endpointHighWater;
+            m_endpointHighWater = std::max(m_endpointHighWater, endpointId);
+            return rejectAllocation(control, endpointId, revision,
+                                    QStringLiteral("invalid unsubscription"), remember);
+        }
         return false;
     }
-    removeEndpoint(endpointId);
+    if (!revisioned) {
+        removeEndpoint(endpointId);
+        return true;
+    }
+
+    auto active = m_endpoints.find(endpointId);
+    if (active != m_endpoints.end()) {
+        const AllocationRecord& prior = active->second.allocation;
+        if (revision == prior.revision && control == prior.request) {
+            const bool accepted = prior.accepted;
+            sendAllocationResult(m_peer->connectionId(), endpointId, revision,
+                                 accepted, prior.reason);
+            return accepted;
+        }
+        if (staleOrEqualRevision(revision, prior.revision)) {
+            return rejectAllocation(control, endpointId, revision,
+                                    QStringLiteral("stale revision"), false);
+        }
+    } else {
+        auto recent = m_nonliveOperations.find(endpointId);
+        if (recent != m_nonliveOperations.end()) {
+            const AllocationRecord prior = recent->second;
+            if (revision == prior.revision && control == prior.request) {
+                sendAllocationResult(m_peer->connectionId(), endpointId, revision,
+                                     prior.accepted, prior.reason);
+                return prior.accepted;
+            }
+            if (prior.explicitlyRetired || staleOrEqualRevision(revision, prior.revision)) {
+                return rejectAllocation(control, endpointId, revision,
+                                        prior.explicitlyRetired
+                                            ? QStringLiteral("endpoint identifier retired")
+                                            : QStringLiteral("stale revision"),
+                                        false);
+            }
+        } else if (endpointId <= m_endpointHighWater) {
+            return rejectAllocation(control, endpointId, revision,
+                                    QStringLiteral("endpoint identifier retired"), false);
+        }
+    }
+    m_endpointHighWater = std::max(m_endpointHighWater, endpointId);
+    removeEndpoint(endpointId, false);
+    rememberNonliveOperation(endpointId,
+        AllocationRecord{control, revision, true, true, {}});
+    sendAllocationResult(m_peer->connectionId(), endpointId, revision, true, {});
     return true;
 }
 
@@ -678,8 +1077,9 @@ void DaemonMediaController::onSourceFrame(MediaSourceKey key)
             || entry.endpoint.context().sourceGeneration != frame.generation
             || entry.endpoint.context().codec.contextGeneration == 0
             || entry.endpoint.context().wideband != *wideband) {
+            const QPointer<DaemonMediaController> self(this);
             configureEndpointFromFrame(entry, frame);
-            if (m_peer.get() != peer || m_epoch != epoch) { return; }
+            if (!self || m_peer.get() != peer || m_epoch != epoch) { return; }
         }
     }
 
@@ -720,8 +1120,9 @@ void DaemonMediaController::onSourceFrame(MediaSourceKey key)
                 };
                 const quint32 revision = entry.revision;
                 const quint32 generation = entry.endpoint.context().codec.contextGeneration;
+                const QPointer<DaemonMediaController> self(this);
                 const bool sent = sendControl(message);
-                if (m_peer.get() != peer || m_epoch != epoch) { return; }
+                if (!self || m_peer.get() != peer || m_epoch != epoch) { return; }
                 it = m_endpoints.find(endpointId);
                 if (sent && it != m_endpoints.end() && it->second.revision == revision
                     && it->second.endpoint.configured()
@@ -839,8 +1240,9 @@ void DaemonMediaController::sendContext(EndpointEntry& entry)
     const quint32 endpointId = context.codec.endpointId;
     const quint32 revision = entry.revision;
     const quint32 generation = context.codec.contextGeneration;
+    const QPointer<DaemonMediaController> self(this);
     const bool sent = sendControl(message);
-    if (m_peer.get() != peer || m_epoch != epoch) { return; }
+    if (!self || m_peer.get() != peer || m_epoch != epoch) { return; }
     auto it = m_endpoints.find(endpointId);
     if (it != m_endpoints.end() && it->second.revision == revision
         && it->second.endpoint.configured()
@@ -849,29 +1251,59 @@ void DaemonMediaController::sendContext(EndpointEntry& entry)
     }
 }
 
-void DaemonMediaController::onSendTick()
+void DaemonMediaController::promoteLatestPs3Frame()
 {
-    if (!m_peer || !m_peer->isReady()) {
-        return;
+    m_ps3CurrentChunks = std::move(m_ps3LatestChunks);
+    m_ps3LatestChunks.clear();
+    m_ps3CurrentAttempted = false;
+}
+
+bool DaemonMediaController::trySendPs3(MediaPeer* peer, quint64 epoch, qint64 nowNs)
+{
+    if (m_ps3CurrentChunks.isEmpty()) {
+        promoteLatestPs3Frame();
     }
-    MediaPeer* const peer = m_peer.get();
-    const quint64 epoch = m_epoch;
-    if (!m_radioModel || !m_radioModel->pureSignalFacade()->remoteAmpViewSubscribed()) {
-        m_ps3Chunks.clear();
+    if (m_ps3CurrentChunks.isEmpty()) {
+        return false;
     }
-    if (!m_ps3Chunks.isEmpty()) {
-        const QByteArray chunk = m_ps3Chunks.takeFirst();
-        const bool sent = peer->sendDisplay(chunk);
-        if (m_peer.get() != peer || m_epoch != epoch) { return; }
-        if (!sent) {
-            // A rejected send may already have buffered bytes. Never retry
-            // this sequence; the next snapshot replaces the partial frame.
-            m_ps3Chunks.clear();
-        }
-        return;
+    const QByteArray chunk = m_ps3CurrentChunks.constFirst();
+    if (chunk.isEmpty() || chunk.size() > static_cast<qsizetype>(kMaximumPs3DisplayChunkBytes)) {
+        m_ps3CurrentChunks.clear();
+        promoteLatestPs3Frame();
+        return false;
     }
+    if (displayPacingRequired()
+        && (!m_displayPacerInitialized
+            || !m_displayPacer.canSpendPs3(static_cast<quint64>(chunk.size()), nowNs))) {
+        return false;
+    }
+    if (displayPacingRequired()
+        && !m_displayPacer.spendPs3(static_cast<quint64>(chunk.size()), nowNs)) {
+        return false;
+    }
+    m_ps3CurrentAttempted = true;
+    m_ps3CurrentChunks.removeFirst();
+    m_lastDisplayAttemptWasPs3 = true;
+    const QPointer<DaemonMediaController> self(this);
+    const bool sent = peer->sendDisplay(chunk);
+    if (!self || m_peer.get() != peer || m_epoch != epoch) {
+        return true;
+    }
+    if (!sent) {
+        // A rejected send may already have buffered bytes. Never retry the
+        // failed sequence or any of its remaining chunks.
+        m_ps3CurrentChunks.clear();
+    }
+    if (m_ps3CurrentChunks.isEmpty()) {
+        promoteLatestPs3Frame();
+    }
+    return true;
+}
+
+bool DaemonMediaController::trySendSpectrum(MediaPeer* peer, quint64 epoch, qint64 nowNs)
+{
     if (m_endpoints.empty()) {
-        return;
+        return false;
     }
     const QList<quint32> ids = endpointIds();
     for (int offset = 0; offset < ids.size(); ++offset) {
@@ -883,20 +1315,34 @@ void DaemonMediaController::onSendTick()
         if (!entry.latestInput.has_value() || !entry.contextSent) {
             continue;
         }
-        const DaemonSpectrumFrame frame = std::move(*entry.latestInput);
-        entry.latestInput.reset();
+        if (displayPacingRequired()
+            && (!m_displayPacerInitialized
+                || !m_displayPacer.canSpendSpectrum(entry.displayCost.maximumFrameBytes,
+                                                    entry.displayCost.maximumFrameSampleUnits,
+                                                    nowNs))) {
+            continue;
+        }
+        const DaemonSpectrumFrame frame = *entry.latestInput;
         const quint32 revision = entry.revision;
         const auto currentWideband = widebandContext(entry);
         if (!currentWideband) { entry.contextSent = false; continue; }
         if (*currentWideband != entry.endpoint.context().wideband) {
+            const QPointer<DaemonMediaController> self(this);
             configureEndpointFromFrame(entry, frame);
-            if (m_peer.get() != peer || m_epoch != epoch) { return; }
+            if (!self || m_peer.get() != peer || m_epoch != epoch) { return true; }
         }
         // The reliable context send may also retire/rebind this endpoint.
         it = m_endpoints.find(endpointId);
         if (it == m_endpoints.end() || it->second.revision != revision
             || !it->second.contextSent) { continue; }
         EndpointEntry& current = it->second;
+        if (displayPacingRequired()
+            && (!m_displayPacerInitialized
+                || !m_displayPacer.canSpendSpectrum(current.displayCost.maximumFrameBytes,
+                                                    current.displayCost.maximumFrameSampleUnits,
+                                                    nowNs))) {
+            continue;
+        }
         current.latestInput.reset();
         const auto adcFrame = currentWideband->active && m_radioModel
             ? m_radioModel->latestWidebandSpectrum(currentWideband->physicalAdcIndex)
@@ -905,13 +1351,30 @@ void DaemonMediaController::onSendTick()
             current.endpoint.consume(frame, current.stationOffsetDb, adcFrame);
         m_roundRobinCursor = (index + 1) % ids.size();
         if (!reduced.has_value()) {
-            return;
+            continue;
         }
         const QByteArray bytes = current.encoder.encode(*reduced, current.forceKeyframe);
         const quint32 generation = current.endpoint.context().codec.contextGeneration;
+        const quint64 samples = static_cast<quint64>(reduced->traceDbm.size())
+            + static_cast<quint64>(reduced->waterfallDbm.size())
+            + static_cast<quint64>(reduced->wideDbm.size());
+        if (bytes.isEmpty()) {
+            continue;
+        }
+        if (bytes.size() > static_cast<qsizetype>(current.displayCost.maximumFrameBytes)
+            || samples > current.displayCost.maximumFrameSampleUnits
+            || (displayPacingRequired()
+                && !m_displayPacer.spendSpectrum(static_cast<quint64>(bytes.size()),
+                                                 samples, nowNs))) {
+            qCWarning(lcDaemonMedia) << "spectrum codec exceeded admitted display cost";
+            current.forceKeyframe = true;
+            continue;
+        }
         current.forceKeyframe = false;
-        const bool sent = !bytes.isEmpty() && peer->sendDisplay(bytes);
-        if (m_peer.get() != peer || m_epoch != epoch) { return; }
+        m_lastDisplayAttemptWasPs3 = false;
+        const QPointer<DaemonMediaController> self(this);
+        const bool sent = peer->sendDisplay(bytes);
+        if (!self || m_peer.get() != peer || m_epoch != epoch) { return true; }
         it = m_endpoints.find(endpointId);
         if (!sent && it != m_endpoints.end() && it->second.revision == revision
             && it->second.endpoint.configured()
@@ -920,7 +1383,30 @@ void DaemonMediaController::onSendTick()
             // Do not resend this sequence; force a fresh keyframe later.
             it->second.forceKeyframe = true;
         }
+        return true;
+    }
+    return false;
+}
+
+void DaemonMediaController::onSendTick()
+{
+    if (!m_peer || !m_peer->isReady()) {
         return;
+    }
+    MediaPeer* const peer = m_peer.get();
+    const quint64 epoch = m_epoch;
+    if (!m_radioModel || !m_radioModel->pureSignalFacade()->remoteAmpViewSubscribed()) {
+        m_ps3CurrentChunks.clear();
+        m_ps3LatestChunks.clear();
+        m_ps3CurrentAttempted = false;
+    }
+    const qint64 nowNs = displayNowNs();
+    if (m_lastDisplayAttemptWasPs3) {
+        if (trySendSpectrum(peer, epoch, nowNs)) { return; }
+        trySendPs3(peer, epoch, nowNs);
+    } else {
+        if (trySendPs3(peer, epoch, nowNs)) { return; }
+        trySendSpectrum(peer, epoch, nowNs);
     }
 }
 
@@ -992,21 +1478,29 @@ void DaemonMediaController::onWidebandSourceChanged(int)
         }
         if (context && entry.latestInput && !entry.contextSent) {
             const auto frame = *entry.latestInput;
+            const QPointer<DaemonMediaController> self(this);
             configureEndpointFromFrame(entry, frame);
-            if (m_peer.get() != peer || m_epoch != epoch) { return; }
+            if (!self || m_peer.get() != peer || m_epoch != epoch) { return; }
         }
     }
 }
 
-void DaemonMediaController::removeEndpoint(quint32 endpointId)
+void DaemonMediaController::removeEndpoint(quint32 endpointId, bool retainOperation)
 {
     auto it = m_endpoints.find(endpointId);
     if (it == m_endpoints.end()) {
         return;
     }
     const MediaSourceKey key = it->second.request.source;
+    if (retainOperation && displayBudgetWireAvailable()) {
+        AllocationRecord retired = it->second.allocation;
+        retired.accepted = false;
+        retired.reason = QStringLiteral("display source retired");
+        rememberNonliveOperation(endpointId, retired);
+    }
     m_endpoints.erase(it);
     releaseSourceIfUnused(key);
+    refreshDisplayBudgetPacer();
 }
 
 void DaemonMediaController::releaseSourceIfUnused(const MediaSourceKey& key)
@@ -1104,11 +1598,13 @@ void DaemonMediaController::onStreamGeometryChanged(int streamIndex, double, int
             if (entry.request.source == key
                 && !requestOverlapsSource(entry.request, centreHz, sampleRateHz)
                 && !(entry.request.extendedView && adcRate)) {
-                const quint32 revision = entry.revision;
+                const quint32 revision = displayBudgetWireAvailable()
+                    ? entry.allocation.revision : entry.revision;
                 removeEndpoint(endpointId);
+                const QPointer<DaemonMediaController> self(this);
                 sendRejected(m_peer ? m_peer->connectionId() : QString(), endpointId, revision,
                              QStringLiteral("source retune no longer covers requested crop"));
-                if (m_peer.get() != peer || m_epoch != epoch) { return; }
+                if (!self || m_peer.get() != peer || m_epoch != epoch) { return; }
             }
         }
         if (!m_sources.contains(key)) {
@@ -1122,20 +1618,21 @@ void DaemonMediaController::onStreamGeometryChanged(int streamIndex, double, int
             }
         }
         if (!reconcileSource(key)) {
-            // A retuned/disconnected stream must never keep emitting frames
-            // labelled with its former geometry. The GUI will resubscribe if
-            // a later binding makes this slice available again.
+            // The old geometry is no longer usable. Retire its reservations
+            // explicitly so a client can retry instead of believing a source
+            // that no longer exists still owns a live display allocation.
             m_source.deactivate(key);
             m_sources.remove(key);
-            for (auto& [unused, entry] : m_endpoints) {
-                Q_UNUSED(unused);
-                if (entry.request.source == key) {
-                    entry.endpoint.reset();
-                    entry.encoder.reset();
-                    entry.latestInput.reset();
-                    entry.contextSent = false;
-                    entry.lastNoiseFloorTimestampNs = -1;
-                }
+            for (quint32 endpointId : endpointIds()) {
+                const auto it = m_endpoints.find(endpointId);
+                if (it == m_endpoints.end() || !(it->second.request.source == key)) { continue; }
+                const quint32 revision = displayBudgetWireAvailable()
+                    ? it->second.allocation.revision : it->second.revision;
+                removeEndpoint(endpointId);
+                const QPointer<DaemonMediaController> self(this);
+                sendRejected(m_peer ? m_peer->connectionId() : QString(), endpointId, revision,
+                             QStringLiteral("source configuration became unavailable"));
+                if (!self || m_peer.get() != peer || m_epoch != epoch) { return; }
             }
         }
     }
@@ -1152,11 +1649,13 @@ void DaemonMediaController::onStreamBindingsChanged(int streamIndex, const QVect
         SliceModel* slice = m_radioModel ? m_radioModel->sliceById(entry.sliceId) : nullptr;
         if (entry.request.source.streamIndex == streamIndex
             && (!slice || slice->streamIndex() != streamIndex)) {
-            const quint32 revision = entry.revision;
+            const quint32 revision = displayBudgetWireAvailable()
+                ? entry.allocation.revision : entry.revision;
             removeEndpoint(endpointId);
+            const QPointer<DaemonMediaController> self(this);
             sendRejected(m_peer ? m_peer->connectionId() : QString(), endpointId, revision,
                          QStringLiteral("slice stream binding changed"));
-            if (m_peer.get() != peer || m_epoch != epoch) { return; }
+            if (!self || m_peer.get() != peer || m_epoch != epoch) { return; }
         }
     }
 }
@@ -1170,11 +1669,13 @@ void DaemonMediaController::onSliceRemoved(int sliceId)
         if (it == m_endpoints.end()) { continue; }
         const EndpointEntry& entry = it->second;
         if (entry.sliceId == sliceId) {
-            const quint32 revision = entry.revision;
+            const quint32 revision = displayBudgetWireAvailable()
+                ? entry.allocation.revision : entry.revision;
             removeEndpoint(endpointId);
+            const QPointer<DaemonMediaController> self(this);
             sendRejected(m_peer ? m_peer->connectionId() : QString(), endpointId, revision,
                          QStringLiteral("slice removed"));
-            if (m_peer.get() != peer || m_epoch != epoch) { return; }
+            if (!self || m_peer.get() != peer || m_epoch != epoch) { return; }
         }
     }
 }
@@ -1207,13 +1708,14 @@ void DaemonMediaController::reconcileAudio()
                         ++m_audioDiagnostics.sendAttempts;
                         ++m_audioDiagnostics.sendInFlight;
                     }
+                    const QPointer<DaemonMediaController> self(this);
                     const bool accepted = peer->sendRtp(packet);
                     // The transport can synchronously retire or replace this
                     // session. Resolve only into the context that initiated
                     // this send, never a replacement that appeared mid-call.
                     // Retirement finalizes any remaining in-flight attempt as
                     // unresolved, without treating it as a packet-loss event.
-                    if (activeContext && m_audioSender.get() == sender
+                    if (self && activeContext && m_audioSender.get() == sender
                         && m_epoch == epoch && m_peer.get() == peer
                         && m_audioDiagnostics.activeContext
                         && m_audioDiagnostics.contextGeneration == contextGeneration) {
@@ -1372,6 +1874,7 @@ void DaemonMediaController::clearSession()
         peer->deleteLater();
     }
     clearProduction();
+    clearAllocationIdentity();
 }
 
 QList<quint32> DaemonMediaController::endpointIds() const
@@ -1388,14 +1891,25 @@ QList<quint32> DaemonMediaController::endpointIds() const
 void DaemonMediaController::clearProduction()
 {
     m_sendTimer.stop();
-    m_ps3Chunks.clear();
+    m_ps3CurrentChunks.clear();
+    m_ps3LatestChunks.clear();
+    m_ps3CurrentAttempted = false;
     const QList<MediaSourceKey> keys = m_sources.keys();
     for (const MediaSourceKey& key : keys) {
         m_source.deactivate(key);
     }
     m_sources.clear();
+    if (displayBudgetWireAvailable()) {
+        for (const auto& [endpointId, entry] : m_endpoints) {
+            AllocationRecord retired = entry.allocation;
+            retired.accepted = false;
+            retired.reason = QStringLiteral("display production retired");
+            rememberNonliveOperation(endpointId, retired);
+        }
+    }
     m_endpoints.clear();
     m_roundRobinCursor = 0;
+    refreshDisplayBudgetPacer();
 }
 
 bool DaemonMediaController::sendControl(const QJsonObject& payload) const
@@ -1407,6 +1921,13 @@ void DaemonMediaController::sendRejected(const QString& connectionId, quint32 en
                                          quint32 revision, const QString& reason)
 {
     if (connectionId.isEmpty()) {
+        return;
+    }
+    if (endpointId != 0 && revision != 0 && displayBudgetWireAvailable()) {
+        // Involuntary source retirement uses the same authoritative resource
+        // result as a requested allocation. Budget-aware clients ignore the
+        // legacy endpoint rejection shape and must learn the released charge.
+        sendAllocationResult(connectionId, endpointId, revision, false, reason);
         return;
     }
     sendControl({

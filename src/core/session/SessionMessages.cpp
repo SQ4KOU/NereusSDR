@@ -469,7 +469,8 @@ bool fromJsonValue(MirrorWireKind kind, const QJsonValue& json, QVariant* out)
             static_cast<double>(std::numeric_limits<qlonglong>::min());
         constexpr double kOnePastMaxAsDouble = -kMinAsDouble;
         const double raw = json.toDouble();
-        if (!(raw >= kMinAsDouble && raw < kOnePastMaxAsDouble)) {
+        if (!(raw >= kMinAsDouble && raw < kOnePastMaxAsDouble)
+            || std::floor(raw) != raw) {
             return false;
         }
         *out = QVariant(static_cast<qlonglong>(raw));

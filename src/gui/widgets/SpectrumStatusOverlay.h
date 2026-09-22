@@ -10,9 +10,9 @@
 //
 // NereusSDR-original; no upstream port. Top-right per-pan overlay
 // widget for Phase 3F multi-slice UI atlas. Paint-based (QPainter,
-// not a QPushButton tree) for performance. Shows the slice letter
-// badge, frequency.kHz + mode text, CH N tag, and optional pills
-// for TX, WIDE BPF, DIV (diversity), and PS HOLD. Hit-tests in
+// not a QPushButton tree) for performance. Shows the CH N tag and
+// optional pills for TX, WIDE BPF, DIV (diversity), and PS HOLD,
+// with an optional second row for remote display status. Hit-tests in
 // mousePressEvent emit txBadgeClicked / wideBadgeClicked /
 // chainTagClicked signals for parent consumption.
 //
@@ -35,7 +35,7 @@
 namespace NereusSDR {
 
 /// Top-right per-pan overlay widget. Mirror of SpectrumOverlayPanel pattern.
-/// Shows: slice letter badge, freq, mode, CH N tag, TX/WIDE/DIV/PS HOLD pills.
+/// Shows CH N, TX/WIDE/DIV/PS HOLD pills and optional remote display status.
 /// Click WIDE -> opens FilterPolicyDialog (parent-wired). Click TX -> requests
 /// TxSliceArbiter handoff (parent-wired). Click CH tag -> chain swap menu
 /// (parent-wired).
@@ -86,6 +86,11 @@ public:
     void setPsPaused(bool paused);
     bool psPaused() const { return m_psPaused; }
 
+    /// Remote display observation, distinct from the radio's RF/status pills.
+    /// Empty hides the second row. The full text remains in the tooltip.
+    void setRemoteDisplayStatus(const QString& status);
+    QString remoteDisplayStatus() const { return m_remoteDisplayStatus; }
+
     /// The clickable badges, in the order paintEvent lays them out.
     enum class Badge { ChainTag, Tx, Wide };
 
@@ -102,8 +107,8 @@ public:
     /// would silently start clicking empty background whenever the layout
     /// moved. Same reasoning as the wideBpf() / chainIndex() read-backs.
     ///
-    /// Only the horizontal extent is meaningful; the region spans the full
-    /// widget height, which is exactly what mousePressEvent tests.
+    /// The region covers the badge row only; the remote display status row
+    /// is observational and cannot activate a radio command.
     QRect badgeRect(Badge badge) const;
 
 signals:
@@ -121,10 +126,8 @@ public:
     /// why the status strip, and with it the WIDE badge, appeared to be
     /// missing entirely. Bench-caught 2026-07-26.
     ///
-    /// Width tracks minimumWidth(), which paintEvent keeps at the true content
-    /// extent (`setMinimumWidth(x + kRightPad)`), so the hint self-corrects as
-    /// pills light and go dark. The constructor seeds it with the no-pill
-    /// width so the very first layout, before any paint, is already right.
+    /// Width derives from current pill flags and remote status text before
+    /// painting, so a newly lit pill is placed correctly on its first frame.
     QSize sizeHint() const override;
 
 protected:
@@ -141,6 +144,8 @@ private:
     QString  m_wideReason;
     bool     m_diversityActive {false};
     bool     m_psPaused {false};
+    QString  m_remoteDisplayStatus;
+    void updateStatusToolTip();
 };
 
 } // namespace NereusSDR

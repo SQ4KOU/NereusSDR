@@ -668,6 +668,9 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
     ++m_sessionEpoch;
     m_lastTelemetrySequence = 0;
     m_lastTelemetrySampleElapsedMs = -1;
+    m_capabilities.remoteDisplayBudgetVersion = 0;
+    m_capabilities.displayBudget.reset();
+    m_capabilities.remotePs3DisplaySubscribed = false;
 
     // These three describe THIS session. Carrying them across a reconnect
     // would let a difference the station has since fixed keep showing up
@@ -796,6 +799,7 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     // unanswered commands would suppress completions for fresh requests
     // after reconnect (including the 4O3A master and C-Tune controls).
     m_pendingCommands.clear();
+    m_pendingPs3Display.reset();
 
     // Fix round 1, Important 1: disconnect the dead transport's signals to
     // this object. Without this, m_transport stays fully wired
@@ -1231,7 +1235,29 @@ void StationClient::handleAuthResult(const SessionMessage& message)
 
 void StationClient::handleCapabilities(const SessionMessage& message)
 {
-    m_capabilities = StationCapabilities::fromUpdates(message.updates);
+    const QPointer<StationClient> self(this);
+    const quint32 epoch = m_sessionEpoch;
+    const auto previousBudget = remoteDisplayBudgetLimits();
+    const bool previousPs3 = remotePs3DisplaySubscribed();
+    StationCapabilities incoming = StationCapabilities::fromUpdates(message.updates);
+    // A complete descriptor is authoritative for this authenticated epoch.
+    // Malformed, partial or stale updates cannot turn a known cap into the
+    // legacy fallback. A fresh attach clears it before accepting a new peer.
+    if (m_capabilities.displayBudget) {
+        bool retain = !incoming.displayBudget;
+        if (incoming.displayBudget) {
+            const quint32 delta = incoming.displayBudget->generation
+                - m_capabilities.displayBudget->generation;
+            retain = delta >= 0x80000000u
+                || (delta == 0 && *incoming.displayBudget != *m_capabilities.displayBudget);
+        }
+        if (retain) {
+            incoming.remoteDisplayBudgetVersion = m_capabilities.remoteDisplayBudgetVersion;
+            incoming.displayBudget = m_capabilities.displayBudget;
+            incoming.remotePs3DisplaySubscribed = m_capabilities.remotePs3DisplaySubscribed;
+        }
+    }
+    m_capabilities = incoming;
 
     if (m_capabilities.effectiveMaxSlices < m_capabilities.boardMaxSlices) {
         qCInfo(lcStationClient)
@@ -1241,12 +1267,17 @@ void StationClient::handleCapabilities(const SessionMessage& message)
     }
 
     if (m_radioModel.isNull()) {
+        if (previousBudget != remoteDisplayBudgetLimits()
+            || previousPs3 != remotePs3DisplaySubscribed()) {
+            emit displayBudgetChanged();
+        }
         return;
     }
     // The step that makes three earlier tasks mean anything: identity,
     // board capabilities, the EFFECTIVE slice limit, userDdcCount, and the
     // connection state, all through one production entry point.
     m_radioModel->applyStationCapabilities(m_capabilities);
+    if (!self || m_sessionEpoch != epoch || !m_sessionActive || !m_radioModel) { return; }
     // A station may update its advertised optional capabilities after the
     // initial snapshot.  Once the session is established, this can change
     // whether the typed remote TGXL controls are available without a radio
@@ -1255,7 +1286,9 @@ void StationClient::handleCapabilities(const SessionMessage& message)
         m_radioModel->pureSignalFacade()->setRemoteCapabilities(
             m_agreedMinor >= kDspControlSessionProtocolMinor && m_capabilities.psAlgorithmVersion == 3,
             m_capabilities.txPermitted);
+        if (!self || m_sessionEpoch != epoch || !m_sessionActive || !m_radioModel) { return; }
         m_radioModel->reportStationLinkStateChanged();
+        if (!self || m_sessionEpoch != epoch || !m_sessionActive || !m_radioModel) { return; }
     }
 
     // The singletons exist from RadioModel's own construction, so they can
@@ -1268,7 +1301,6 @@ void StationClient::handleCapabilities(const SessionMessage& message)
 
     m_objects.insert("pureSignal", m_radioModel->pureSignalFacade());
     m_objects.insert("dspAssets", m_radioModel->dspAssets());
-    QPointer<StationClient> self(this);
     m_radioModel->pureSignalFacade()->setRemoteRequestHandler(
         [self](Ps3Action action, const QVariantMap& arguments) -> quint32 {
         if (!self || !self->propertyResultsAvailable() || self->m_capabilities.psAlgorithmVersion != 3) {
@@ -1281,9 +1313,8 @@ void StationClient::handleCapabilities(const SessionMessage& message)
                this, nullptr);
     connect(m_radioModel->pureSignalFacade(), &PureSignalSessionFacade::displaySubscriptionRequested,
             this, [this](bool enabled) {
-        if (m_handshakeComplete && m_capabilities.psDisplayVersion > 0 && mediaAvailable()) {
-            invokeCommand("ps3.subscribeDisplay", {{0, "enabled", MirrorWireKind::Bool, enabled}});
-        }
+        if (remoteDisplayBudgetLimits()) { emit ps3DisplaySubscriptionRequested(enabled); }
+        else { requestPs3DisplaySubscription(enabled); }
     });
     m_radioModel->dspAssets()->setRemoteRequestHandler(
         [self](const QByteArray& verb, const QVariantMap& arguments) -> quint32 {
@@ -1313,6 +1344,10 @@ void StationClient::handleCapabilities(const SessionMessage& message)
         const QByteArray key = QByteArray(kPanKeyPrefix) + QByteArray::number(i);
         m_objects.insert(key, pans.at(i));
         watchForOutbound(key, pans.at(i));
+    }
+    if (previousBudget != remoteDisplayBudgetLimits()
+        || previousPs3 != remotePs3DisplaySubscribed()) {
+        emit displayBudgetChanged();
     }
 }
 
@@ -2242,6 +2277,16 @@ StationClient::CommandOutcome StationClient::requestFourO3AEnabled(bool enabled)
 
 void StationClient::handleCommandResult(const SessionMessage& message)
 {
+    if (message.commandVerb == "ps3.subscribeDisplay" && m_pendingPs3Display
+        && m_pendingPs3Display->first == message.commandId) {
+        const bool enabled = m_pendingPs3Display->second;
+        m_pendingPs3Display.reset();
+        const QPointer<StationClient> self(this);
+        const quint32 epoch = m_sessionEpoch;
+        emit ps3DisplaySubscriptionFinished(message.commandId, enabled,
+                                             message.accepted, message.reason);
+        if (!self || m_sessionEpoch != epoch || !m_sessionActive) { return; }
+    }
     // Taken, not read: an id is answered exactly once, and leaving the
     // entry behind would grow this map for the life of the session.
     // A result for an id this client does not hold is not an error worth
@@ -2398,6 +2443,40 @@ bool StationClient::remoteWidebandAvailable() const
 {
     return mediaAvailable() && m_agreedMinor >= kRemoteWidebandSessionProtocolMinor
         && m_capabilities.remoteWidebandDisplayVersion >= 1;
+}
+
+std::optional<DisplayBudgetLimits> StationClient::remoteDisplayBudgetLimits() const
+{
+    if (!mediaAvailable() || m_agreedMinor < kRemoteDisplayBudgetSessionProtocolMinor
+        || m_capabilities.remoteDisplayBudgetVersion < 1) { return std::nullopt; }
+    return m_capabilities.displayBudget;
+}
+
+bool StationClient::remotePs3DisplaySubscribed() const
+{
+    return remoteDisplayBudgetLimits() && m_capabilities.remotePs3DisplaySubscribed;
+}
+
+quint32 StationClient::requestPs3DisplaySubscription(bool enabled)
+{
+    if (!mediaAvailable() || m_capabilities.psDisplayVersion < 1) { return 0; }
+    if (!remoteDisplayBudgetLimits()) {
+        return invokeCommand("ps3.subscribeDisplay", {{0, "enabled", MirrorWireKind::Bool, enabled}});
+    }
+    // One acknowledged transition at a time. Arm its identity before either
+    // notification or transport can reenter; no guessed release on timeout.
+    if (m_pendingPs3Display) { return 0; }
+    const quint32 id = m_nextCommandId++;
+    if (m_nextCommandId == 0) { ++m_nextCommandId; }
+    m_pendingPs3Display = qMakePair(id, enabled);
+    const QPointer<StationClient> self(this);
+    const quint32 epoch = m_sessionEpoch;
+    emit ps3DisplaySubscriptionStarted(id, enabled);
+    if (!self || m_sessionEpoch != epoch || !mediaAvailable()
+        || !m_pendingPs3Display || m_pendingPs3Display->first != id) { return 0; }
+    send(SessionMessages::commandInvoke("ps3.subscribeDisplay", id,
+        {{0, "enabled", MirrorWireKind::Bool, enabled}}));
+    return id;
 }
 
 bool StationClient::sendMediaControl(const QJsonObject& payload, quint32 expectedEpoch)

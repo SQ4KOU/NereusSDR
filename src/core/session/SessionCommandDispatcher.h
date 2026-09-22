@@ -110,6 +110,8 @@
 #include <QObject>
 #include <QPointer>
 #include <QHash>
+#include <functional>
+#include <utility>
 
 #include "core/session/SessionMessages.h"
 
@@ -121,6 +123,9 @@ class SessionCommandDispatcher : public QObject {
     Q_OBJECT
 
 public:
+    using Ps3DisplayAdmissionHandler = std::function<bool(bool, QString*)>;
+    void setPs3DisplayAdmissionHandler(Ps3DisplayAdmissionHandler handler)
+    { m_ps3DisplayAdmission = std::move(handler); }
     /// `radioModel` is watched via QPointer, not owned: this class outlives
     /// or is outlived by it depending on which a future session's lifetime
     /// (Task 18) ties to which, and neither ordering should crash.
@@ -151,6 +156,7 @@ signals:
     void commandResultReady(const NereusSDR::SessionMessage& result);
 
 private:
+    Ps3DisplayAdmissionHandler m_ps3DisplayAdmission;
     void handleAddSlice(const NereusSDR::SessionMessage& invoke);
     void handleRemoveSlice(const NereusSDR::SessionMessage& invoke);
     void handleRequestSliceSampleRate(const NereusSDR::SessionMessage& invoke);

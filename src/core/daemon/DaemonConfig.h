@@ -20,7 +20,8 @@
 // still starts an older one instead of refusing to boot. A malformed value
 // for a known numeric key (sample_rate_hz, slice_count) is likewise logged
 // and the field is left at whatever it already was, rather than being
-// clobbered with 0.
+// clobbered with 0. The optional display-limit pair is stricter: an explicit
+// malformed or incomplete pair fails validate(), never disables enforcement.
 //
 // sliceCount's further clamp to the connected board's
 // BoardCapabilities::maxSlices happens once a radio is actually discovered
@@ -39,6 +40,9 @@
 // =================================================================
 
 #include <QString>
+#include <optional>
+
+#include "core/session/media/DisplayBudget.h"
 
 namespace NereusSDR {
 
@@ -95,6 +99,12 @@ struct DaemonConfig {
     // tst_daemon_config's sampleFileKeysAndParserKeysAgree pins.
     int     remotePort {0};
     QString remoteBind {QStringLiteral("127.0.0.1")};
+
+    // Optional measured limits, supplied as a pair. A malformed explicit
+    // value becomes zero so validate() fails instead of disabling the cap.
+    std::optional<quint64> displayApplicationBytesPerSecond;
+    std::optional<quint64> spectrumSampleUnitsPerSecond;
+    std::optional<DisplayBudgetLimits> displayBudgetLimits() const;
 
     // Reads and parses `path`. If the file cannot be opened, returns
     // defaults() with *errorOut set to a human-readable message describing

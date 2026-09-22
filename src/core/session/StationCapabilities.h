@@ -69,6 +69,7 @@
 
 #include "core/HpsdrModel.h"
 #include "core/session/MirrorSchema.h"
+#include "core/session/media/DisplayBudget.h"
 
 namespace NereusSDR {
 
@@ -108,6 +109,9 @@ struct StationCapabilities {
     /// media controller is installed; negotiated session minor still gates it.
     int remoteMediaVersion = 0;
     int remoteWidebandDisplayVersion = 0;
+    int remoteDisplayBudgetVersion = 0;
+    std::optional<DisplayBudgetLimits> displayBudget;
+    bool remotePs3DisplaySubscribed = false;
     int remoteCtunVersion = 0;
     int stationTelemetryVersion = 0;
     int remoteTgxlConfigVersion = 0;

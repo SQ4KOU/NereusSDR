@@ -16,6 +16,8 @@
 #include "core/session/StationCapabilities.h"
 
 #include "core/BoardCapabilities.h"
+#include <QSet>
+#include <limits>
 
 namespace NereusSDR {
 
@@ -41,7 +43,9 @@ MirrorUpdate boolEntry(const char* name, bool value)
 
 QList<MirrorUpdate> StationCapabilities::toUpdates() const
 {
-    return {
+    const bool hasBudget = remoteDisplayBudgetVersion > 0 && displayBudget
+        && displayBudget->isValid();
+    QList<MirrorUpdate> updates{
         stringEntry("stationName", stationName),
         stringEntry("radioModel", radioModelName),
         stringEntry("firmwareVersion", firmwareVersion),
@@ -55,6 +59,7 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         boolEntry("txPermitted", txPermitted),
         intEntry("remoteMediaVersion", remoteMediaVersion),
         intEntry("remoteWidebandDisplayVersion", remoteWidebandDisplayVersion),
+        intEntry("remoteDisplayBudgetVersion", hasBudget ? remoteDisplayBudgetVersion : 0),
         intEntry("remoteCtunVersion", remoteCtunVersion),
         intEntry("stationTelemetryVersion", stationTelemetryVersion),
         intEntry("remoteTgxlConfigVersion", remoteTgxlConfigVersion),
@@ -68,13 +73,59 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         intEntry("psDisplayVersion", psDisplayVersion),
         intEntry("settingsSchemaVersion", settingsSchemaVersion),
     };
+    if (hasBudget) {
+        updates.append(intEntry("displayApplicationBytesPerSecond",
+                                static_cast<qint64>(displayBudget->applicationBytesPerSecond)));
+        updates.append(intEntry("spectrumSampleUnitsPerSecond",
+                                static_cast<qint64>(displayBudget->spectrumSampleUnitsPerSecond)));
+        updates.append(intEntry("displayBudgetGeneration", displayBudget->generation));
+        updates.append(boolEntry("remotePs3DisplaySubscribed", remotePs3DisplaySubscribed));
+    }
+    return updates;
 }
 
 StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& updates)
 {
     StationCapabilities caps;
+    DisplayBudgetLimits budget;
+    QSet<QByteArray> budgetFields;
+    bool invalidBudget = false;
     for (const MirrorUpdate& u : updates) {
-        if (u.name == "stationName") {
+        if (u.name == "remoteDisplayBudgetVersion"
+            || u.name == "displayApplicationBytesPerSecond"
+            || u.name == "spectrumSampleUnitsPerSecond"
+            || u.name == "displayBudgetGeneration"
+            || u.name == "remotePs3DisplaySubscribed") {
+            if (budgetFields.contains(u.name)) { invalidBudget = true; }
+            budgetFields.insert(u.name);
+            if (u.name == "remotePs3DisplaySubscribed") {
+                if (u.kind != MirrorWireKind::Bool || u.value.typeId() != QMetaType::Bool) {
+                    invalidBudget = true;
+                } else {
+                    caps.remotePs3DisplaySubscribed = u.value.toBool();
+                }
+                continue;
+            }
+            if (u.kind != MirrorWireKind::Int64 || u.value.typeId() != QMetaType::LongLong) {
+                invalidBudget = true;
+                continue;
+            }
+            const qint64 value = u.value.toLongLong();
+            if (u.name == "remoteDisplayBudgetVersion") {
+                if (value < 0 || value > 65535) { invalidBudget = true; }
+                else { caps.remoteDisplayBudgetVersion = static_cast<int>(value); }
+            } else if (u.name == "displayBudgetGeneration") {
+                if (value <= 0 || quint64(value) > std::numeric_limits<quint32>::max()) {
+                    invalidBudget = true;
+                } else { budget.generation = static_cast<quint32>(value); }
+            } else if (value <= 0) {
+                invalidBudget = true;
+            } else if (u.name == "displayApplicationBytesPerSecond") {
+                budget.applicationBytesPerSecond = static_cast<quint64>(value);
+            } else {
+                budget.spectrumSampleUnitsPerSecond = static_cast<quint64>(value);
+            }
+        } else if (u.name == "stationName") {
             caps.stationName = u.value.toString();
         } else if (u.name == "radioModel") {
             caps.radioModelName = u.value.toString();
@@ -155,6 +206,13 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
         // Anything else: ignored on purpose. See fromUpdates()'s doc
         // comment -- a newer daemon advertising more is the expected
         // forward-compatible case, not an error.
+    }
+    if (!invalidBudget && budgetFields.size() == 5
+        && caps.remoteDisplayBudgetVersion > 0 && budget.isValid()) {
+        caps.displayBudget = budget;
+    } else {
+        caps.remoteDisplayBudgetVersion = 0;
+        caps.remotePs3DisplaySubscribed = false;
     }
     return caps;
 }

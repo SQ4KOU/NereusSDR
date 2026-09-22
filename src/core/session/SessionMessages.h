@@ -174,7 +174,7 @@ enum class SessionMessageKind {
 /// provisional. R3 swapping the codec under the same object model is a
 /// minor bump at most.
 inline constexpr quint16 kSessionProtocolMajor = 1;
-inline constexpr quint16 kSessionProtocolMinor = 6;
+inline constexpr quint16 kSessionProtocolMinor = 7;
 inline constexpr quint16 kMediaSessionProtocolMinor = 1;
 inline constexpr quint16 kRemoteCtunSessionProtocolMinor = 2;
 inline constexpr quint16 kStationTelemetrySessionProtocolMinor = 3;
@@ -185,6 +185,7 @@ inline constexpr quint16 kRemoteTgxlConfigSessionProtocolMinor = 4;
 inline constexpr quint16 kRemoteFourO3AControlSessionProtocolMinor = 4;
 inline constexpr quint16 kDspControlSessionProtocolMinor = 5;
 inline constexpr quint16 kRemoteWidebandSessionProtocolMinor = 6;
+inline constexpr quint16 kRemoteDisplayBudgetSessionProtocolMinor = 7;
 inline constexpr qsizetype kMaxMediaControlBytes = 128 * 1024;
 inline constexpr qsizetype kMaxStationTelemetryBytes = 16 * 1024;
 

@@ -6894,6 +6894,9 @@ nereus_add_test(tst_remote_audio_session fakes/LoopbackTransport.cpp)
 
 # Remote Daemon R3, Task 3: bounded native trace, waterfall, and DSS codec.
 nereus_add_test(tst_display_codec)
+nereus_add_test(tst_display_budget)
+nereus_add_test(tst_display_budget_contract fakes/LoopbackTransport.cpp)
+nereus_add_test(tst_remote_display_allocator)
 
 # Remote Daemon R3, Task 2: synthetic live stream I/Q reaches a daemon-owned
 # FFT source with tier isolation and bounded source lifecycle.

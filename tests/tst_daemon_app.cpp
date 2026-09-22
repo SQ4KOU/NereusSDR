@@ -68,6 +68,20 @@ using namespace NereusSDR;
 class TstDaemonApp : public QObject {
     Q_OBJECT
 private slots:
+    void malformedDisplayLimitsCannotReplaceARunningDaemon()
+    {
+        DaemonApp app;
+        app.primeBoardForTest(HPSDRHW::HermesLite);
+        QVERIFY(app.start(DaemonConfig::defaults()));
+        RadioModel* const running = app.m_radioModel.get();
+        QVERIFY(running);
+        DaemonConfig invalid = DaemonConfig::defaults();
+        invalid.displayApplicationBytesPerSecond = 1000;
+        QVERIFY(!app.start(invalid));
+        QCOMPARE(app.m_radioModel.get(), running);
+        app.stop();
+    }
+
     void installsReceiveOnlyPolicyBeforeStationStartup()
     {
         DaemonConfig cfg = DaemonConfig::defaults();
@@ -392,6 +406,9 @@ private slots:
         probe.close();
         cfg.remotePort = static_cast<int>(freePort);
         cfg.remoteBind = QStringLiteral("127.0.0.1");
+        // Synthetic limits verify the real config consumer, not board capacity.
+        cfg.displayApplicationBytesPerSecond = 2000000;
+        cfg.spectrumSampleUnitsPerSecond = 1000000;
 
         DaemonApp app;
         app.primeBoardForTest(HPSDRHW::HermesLite);
@@ -401,6 +418,10 @@ private slots:
         QVERIFY2(server != nullptr, "remote_port was set but no StationServer exists");
         QVERIFY2(server->isListening(), qPrintable(server->lastError()));
         QCOMPARE(server->serverPort(), freePort);
+        QVERIFY(server->displayBudgetLimits());
+        QCOMPARE(server->displayBudgetLimits()->applicationBytesPerSecond, quint64{2000000});
+        QCOMPARE(server->displayBudgetLimits()->spectrumSampleUnitsPerSecond, quint64{1000000});
+        QVERIFY(server->buildCapabilities().displayBudget);
 
         // Step 4's other half: the pairing material an operator has to
         // carry to the client by hand exists and is non-empty.

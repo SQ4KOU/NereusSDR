@@ -14,9 +14,11 @@
 #include "gui/StyleConstants.h"
 
 #include <QFont>
+#include <QFontMetrics>
 #include <QMouseEvent>
 #include <QPainter>
 #include <QRect>
+#include <algorithm>
 
 namespace NereusSDR {
 
@@ -61,7 +63,12 @@ QSize SpectrumStatusOverlay::sizeHint() const
     const int lit = (m_txBound ? 1 : 0) + (m_wideBpf ? 1 : 0)
                   + (m_diversityActive ? 1 : 0) + (m_psPaused ? 1 : 0);
     w += lit * (kInterPillGap + kPillWidth);
-    return QSize(w + kRightPad, kOverlayHeight);
+    if (!m_remoteDisplayStatus.isEmpty()) {
+        const QFontMetrics metrics(QFont(QStringLiteral("monospace"), 9));
+        w = std::max(w, std::min(360, metrics.horizontalAdvance(m_remoteDisplayStatus)
+                                     + kLeftMargin));
+    }
+    return QSize(w + kRightPad, kOverlayHeight * (m_remoteDisplayStatus.isEmpty() ? 1 : 2));
 }
 
 void SpectrumStatusOverlay::setSliceLetter(QChar letter)
@@ -107,10 +114,9 @@ void SpectrumStatusOverlay::setWideBpf(bool wide, const QString& reason)
     // The reason was stored and never read: AlexAdcState::reasonText is
     // documented "for WIDE badge tooltip" (AlexController.h:97) but nothing
     // surfaced it, so the pill said WIDE and nothing said why. This overlay
-    // carries no other tooltip, so hanging it on the widget is the whole
-    // disambiguation surface: the badge states the RF fact (the preselector
-    // is bypassed) and the tooltip names which of the causes produced it.
-    setToolTip(wide ? reason : QString());
+    // keeps that RF reason alongside any remote-display observation: the
+    // badge states the preselector is bypassed, and the tooltip says why.
+    updateStatusToolTip();
     update();
 }
 
@@ -128,6 +134,27 @@ void SpectrumStatusOverlay::setPsPaused(bool paused)
     update();
 }
 
+void SpectrumStatusOverlay::setRemoteDisplayStatus(const QString& status)
+{
+    const QString text = status.simplified().left(512);
+    if (m_remoteDisplayStatus == text) { return; }
+    m_remoteDisplayStatus = text;
+    setFixedHeight(kOverlayHeight * (text.isEmpty() ? 1 : 2));
+    updateStatusToolTip();
+    updateGeometry();
+    update();
+}
+
+void SpectrumStatusOverlay::updateStatusToolTip()
+{
+    QString text = m_remoteDisplayStatus;
+    if (m_wideBpf && !m_wideReason.isEmpty()) {
+        if (!text.isEmpty()) { text += QLatin1Char('\n'); }
+        text += m_wideReason;
+    }
+    setToolTip(text);
+}
+
 void SpectrumStatusOverlay::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
@@ -139,7 +166,7 @@ void SpectrumStatusOverlay::paintEvent(QPaintEvent*)
     p.drawRoundedRect(rect().adjusted(0, 0, -1, -1), 3, 3);
 
     int x = kLeftMargin;
-    const int y = (height() - kBadgeSize) / 2;
+    const int y = (kOverlayHeight - kBadgeSize) / 2;
 
     // Slice letter, frequency and mode are deliberately NOT painted here.
     //
@@ -196,6 +223,16 @@ void SpectrumStatusOverlay::paintEvent(QPaintEvent*)
                  QColor(0x90, 0x60, 0x00));
     }
 
+    if (!m_remoteDisplayStatus.isEmpty()) {
+        p.setFont(QFont(QStringLiteral("monospace"), 9));
+        p.setPen(QColor(Style::kTitleText));
+        const QRect statusRect(kLeftMargin, kOverlayHeight,
+                               std::max(0, width() - kLeftMargin - kRightPad), kOverlayHeight);
+        const QString visible = p.fontMetrics().elidedText(m_remoteDisplayStatus,
+                                                          Qt::ElideRight, statusRect.width());
+        p.drawText(statusRect, Qt::AlignLeft | Qt::AlignVCenter, visible);
+    }
+
     // NOT setMinimumWidth(x + kRightPad) any more. Growing the minimum here
     // let setGeometry's clamp expand the widget rightward from its fixed x
     // after the parent had already placed it, which is how the strip crept
@@ -205,17 +242,16 @@ void SpectrumStatusOverlay::paintEvent(QPaintEvent*)
 
 QRect SpectrumStatusOverlay::badgeRect(Badge badge) const
 {
-    // Layout mirrors paintEvent. Only the horizontal extent is tested, so the
-    // region spans the full height; that is the hit rule, stated rather than
-    // narrowed. Kept as the single source of the hit geometry so
-    // mousePressEvent and any caller reading a region back cannot drift.
+    // Layout mirrors paintEvent. Only the first row contains command badges;
+    // the optional remote-status row is observation only. Shared hit geometry
+    // keeps mousePressEvent and callers reading a region back in agreement.
 
     // CH tag is first now: the slice badge and freq/mode text they used to sit
     // behind are no longer painted (see paintEvent). This offset MUST track
     // paintEvent's `x` or every pill becomes unclickable or hits its neighbour.
     int hitX = kLeftMargin;
     if (badge == Badge::ChainTag) {
-        return QRect(hitX, 0, kChTagWidth, height());
+        return QRect(hitX, 0, kChTagWidth, kOverlayHeight);
     }
     hitX += kChTagWidth + kInterPillGap;
 
@@ -224,7 +260,7 @@ QRect SpectrumStatusOverlay::badgeRect(Badge badge) const
     // and the pill itself has no region at all.
     if (m_txBound) {
         if (badge == Badge::Tx) {
-            return QRect(hitX, 0, kPillWidth, height());
+            return QRect(hitX, 0, kPillWidth, kOverlayHeight);
         }
         hitX += kPillWidth + kInterPillGap;
     } else if (badge == Badge::Tx) {
@@ -232,7 +268,7 @@ QRect SpectrumStatusOverlay::badgeRect(Badge badge) const
     }
     if (m_wideBpf) {
         if (badge == Badge::Wide) {
-            return QRect(hitX, 0, kPillWidth, height());
+            return QRect(hitX, 0, kPillWidth, kOverlayHeight);
         }
         hitX += kPillWidth + kInterPillGap;
     } else if (badge == Badge::Wide) {
@@ -245,9 +281,9 @@ void SpectrumStatusOverlay::mousePressEvent(QMouseEvent* event)
 {
     // Hit-test the badges through badgeRect so the regions that respond are
     // the regions callers can read back.
-    const int clickX = event->pos().x();
-    const auto hits = [clickX](const QRect& r) {
-        return r.isValid() && clickX >= r.left() && clickX < r.left() + r.width();
+    const QPoint position = event->pos();
+    const auto hits = [position](const QRect& r) {
+        return r.isValid() && r.contains(position);
     };
 
     if (hits(badgeRect(Badge::ChainTag))) {

@@ -64,6 +64,16 @@ remote_port = 0
 # Default: 127.0.0.1
 remote_bind = 127.0.0.1
 
+# Optional measured display limits. Set BOTH keys to positive integers after
+# measuring this Core host and link; no universal capacity is assumed here.
+# Application bytes include spectrum and PureSignal display messages, but not
+# Opus audio, control, encryption or network overhead. Spectrum sample units
+# count the independent trace, waterfall and optional wide plane; not FFT CPU.
+# Omitting both preserves legacy display behavior. A partial/invalid pair is
+# a startup error. Examples use placeholders deliberately, not suggested rates:
+# display_application_bytes_per_second = <measured bytes per second>
+# spectrum_sample_units_per_second = <measured spectrum samples per second>
+
 # Logging verbosity is NOT set here. Use Qt's own QT_LOGGING_RULES
 # environment variable, which takes precedence over the filter rules
 # NereusSDR installs at startup, and which systemd can set for you:

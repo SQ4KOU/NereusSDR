@@ -1094,6 +1094,7 @@ set(CORE_SOURCES
     src/core/session/media/MediaPeer.cpp
     src/core/session/media/OpusAudioCodec.cpp
     src/core/session/media/DisplayCodec.cpp
+    src/core/session/media/DisplayBudget.cpp
     src/core/session/media/DssWideRow.cpp
     src/core/session/media/SpectrumEndpoint.cpp
     src/core/session/media/WidebandDisplayContext.cpp
@@ -1173,6 +1174,7 @@ set(GUI_SOURCES
     src/gui/SliceFlagPresentationBinding.cpp
     src/gui/SliceFlagPresentationBinding.h
     src/gui/RemoteMediaController.cpp
+    src/gui/RemoteDisplayAllocator.cpp
     src/gui/RemoteTelemetryController.cpp
     src/gui/RemoteDiagnosticsDialog.cpp
     src/gui/RemoteConnectionController.cpp

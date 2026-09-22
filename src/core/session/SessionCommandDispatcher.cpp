@@ -338,7 +338,21 @@ void SessionCommandDispatcher::handlePureSignalAction(const SessionMessage& invo
                        QStringLiteral("A display subscription requires one boolean enabled value."), {});
             return;
         }
-        facade->setRemoteAmpViewSubscribed(arguments->value("enabled").toBool());
+        const bool enabled = arguments->value("enabled").toBool();
+        QString refusal;
+        const QPointer<SessionCommandDispatcher> self(this);
+        const QPointer<PureSignalSessionFacade> currentFacade(facade);
+        const QString owner = m_sessionOwner;
+        const Ps3DisplayAdmissionHandler admission = m_ps3DisplayAdmission;
+        if (admission && !admission(enabled, &refusal)) {
+            if (self && owner == m_sessionOwner) {
+                emitResult(invoke.commandVerb, invoke.commandId, false, refusal, {});
+            }
+            return;
+        }
+        if (!self || !currentFacade || owner != m_sessionOwner) { return; }
+        facade->setRemoteAmpViewSubscribed(enabled);
+        if (!self || owner != m_sessionOwner) { return; }
         emitResult(invoke.commandVerb, invoke.commandId, true, {}, {"pureSignal"});
         return;
     }

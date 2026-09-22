@@ -1,5 +1,7 @@
 // no-port-check: NereusSDR-original. Authenticated GUI subscription lifecycle.
 #include <QTest>
+#include <QCoreApplication>
+#include <QFile>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QScopeGuard>
@@ -8,6 +10,7 @@
 #include <cmath>
 #include <functional>
 #include <memory>
+#include <utility>
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/ClarityController.h"
@@ -15,7 +18,9 @@
 #include "core/session/StationServer.h"
 #include "core/settings/SettingsProxy.h"
 #include "core/session/media/DisplayCodec.h"
+#include "core/session/media/DisplayBudget.h"
 #include "core/session/media/DaemonMediaController.h"
+#include "core/session/media/SpectrumEndpoint.h"
 #include "core/session/media/WidebandDisplayContext.h"
 #include "core/session/PureSignalSessionFacade.h"
 #include "core/session/Ps3DisplayCodec.h"
@@ -75,6 +80,28 @@ public:
     std::function<void()> beforeClose;
 };
 
+class HoldingAllocationResultTransport final : public Test::LoopbackTransport {
+public:
+    HoldingAllocationResultTransport() : LoopbackTransport(QStringLiteral("station")) {}
+    void sendText(const QByteArray& wire) override
+    {
+        if (wire.contains("\"op\":\"allocation-result\"") && !passNext) {
+            held.append(wire);
+            return;
+        }
+        passNext = false;
+        LoopbackTransport::sendText(wire);
+    }
+    void passNextAllocationResult() { passNext = true; }
+    void releaseHeld()
+    {
+        const QList<QByteArray> messages = std::exchange(held, {});
+        for (const QByteArray& wire : messages) { LoopbackTransport::sendText(wire); }
+    }
+    QList<QByteArray> held;
+    bool passNext = false;
+};
+
 QJsonObject lastControl(const QSignalSpy& spy, const QString& op)
 {
     for (auto it = spy.crbegin(); it != spy.crend(); ++it) {
@@ -91,11 +118,36 @@ int countControl(const QSignalSpy& spy, const QString& op)
     }
     return count;
 }
+QList<QJsonObject> controlsFor(const QSignalSpy& spy, const QString& op)
+{
+    QList<QJsonObject> controls;
+    for (const auto& call : spy) {
+        const QJsonObject control = call.at(0).toJsonObject();
+        if (control.value(QStringLiteral("op")) == op) { controls.append(control); }
+    }
+    return controls;
+}
 } // namespace
 
 class TestRemoteMediaController : public QObject {
     Q_OBJECT
 private slots:
+    void initTestCase()
+    {
+        const QString profile = QStringLiteral("remote-media-controller-%1")
+                                    .arg(QCoreApplication::applicationPid());
+        AppSettings::setProfileOverride(profile);
+        QCOMPARE(AppSettings::instance().filePath(), AppSettings::resolveSettingsPath(profile));
+        AppSettings::instance().clear();
+    }
+
+    void cleanupTestCase()
+    {
+        const QString path = AppSettings::instance().filePath();
+        QFile::remove(path);
+        QFile::remove(path + QStringLiteral(".bak"));
+    }
+
     void pureSignalChunksShareMediaWithoutChangingMessageLimit()
     {
         QTemporaryDir dir;
@@ -614,13 +666,17 @@ private slots:
         QTemporaryDir dir;
         AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
         auto& appSettings = AppSettings::instance();
+        const bool hadWindow = appSettings.contains(QStringLiteral("DisplayFftWindow"));
+        const bool hadFft = appSettings.contains(QStringLiteral("DisplayFftSize"));
         const QVariant savedWindow = appSettings.value(QStringLiteral("DisplayFftWindow"));
         const QVariant savedFft = appSettings.value(QStringLiteral("DisplayFftSize"));
         appSettings.setValue(QStringLiteral("DisplayFftWindow"), QString::number(int(WindowFunction::Hann)));
         appSettings.setValue(QStringLiteral("DisplayFftSize"), QStringLiteral("4096"));
         const auto restore = qScopeGuard([&] {
-            appSettings.setValue(QStringLiteral("DisplayFftWindow"), savedWindow);
-            appSettings.setValue(QStringLiteral("DisplayFftSize"), savedFft);
+            if (hadWindow) { appSettings.setValue(QStringLiteral("DisplayFftWindow"), savedWindow); }
+            else { appSettings.remove(QStringLiteral("DisplayFftWindow")); }
+            if (hadFft) { appSettings.setValue(QStringLiteral("DisplayFftSize"), savedFft); }
+            else { appSettings.remove(QStringLiteral("DisplayFftSize")); }
         });
         RadioModel station;
         station.setBoardForTest(HPSDRHW::Saturn);
@@ -1047,6 +1103,571 @@ private slots:
         QTRY_COMPARE(daemon.activeEndpointCount(), 0);
         QTRY_COMPARE(daemon.activeSourceCount(), 0);
         client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    void staleZeroAllocationResultCannotRetireNewerReservation()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        const int sliceId = station.addSlice();
+        QVERIFY(station.sliceById(sliceId));
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        QVERIFY(server.setDisplayBudgetLimits({10'000'000, 10'000'000, 1}));
+        QPointer<DisplayTransport> sourceMedia;
+        DaemonMediaController daemon(&server, &station, nullptr,
+            [&sourceMedia](QObject* owner) -> IMediaTransport* {
+                sourceMedia = new DisplayTransport(owner);
+                return sourceMedia;
+            });
+
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        PanadapterStack stack;
+        PanadapterApplet* applet = stack.addPanadapter(QStringLiteral("pan-0"));
+        applet->setActiveSliceIndex(sliceId);
+        SpectrumWidget* widget = applet->spectrumWidget();
+        widget->setDisplayWindowPreservingHistory(
+            station.streamCentreHz(station.sliceById(sliceId)->streamIndex()), 48000);
+        QPointer<DisplayTransport> sinkMedia;
+        RemoteMediaController controller(&client, &remote, &stack, nullptr,
+            [&sinkMedia](QObject* owner) -> IMediaTransport* {
+                sinkMedia = new DisplayTransport(owner);
+                return sinkMedia;
+            });
+        QSignalSpy outbound(&server, &StationServer::mediaControlReceived);
+        QSignalSpy inbound(&client, &StationClient::mediaControlReceived);
+        auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(client.remoteDisplayBudgetLimits().has_value());
+        QTRY_VERIFY(sourceMedia && sinkMedia);
+        sourceMedia->activate();
+        sinkMedia->activate();
+        QTRY_COMPARE(countControl(outbound, QStringLiteral("subscribe")), 1);
+        QTRY_COMPARE(countControl(inbound, QStringLiteral("allocation-result")), 1);
+        const QJsonObject first = lastControl(outbound, QStringLiteral("subscribe"));
+        const quint32 firstRevision = quint32(first.value(QStringLiteral("revision")).toDouble());
+        const quint32 endpointId = quint32(first.value(QStringLiteral("endpointId")).toDouble());
+
+        widget->setCenterFrequency(widget->centerFrequency() + 500);
+        QTRY_COMPARE(countControl(outbound, QStringLiteral("subscribe")), 2);
+        QTRY_COMPARE(countControl(inbound, QStringLiteral("allocation-result")), 2);
+        const QJsonObject second = lastControl(outbound, QStringLiteral("subscribe"));
+        QVERIFY(quint32(second.value(QStringLiteral("revision")).toDouble()) > firstRevision);
+        QVERIFY(applet->remoteDisplayStatus().startsWith(QStringLiteral("Display target")));
+
+        const QJsonObject stale{
+            {QStringLiteral("op"), QStringLiteral("allocation-result")},
+            {QStringLiteral("connectionId"), first.value(QStringLiteral("connectionId"))},
+            {QStringLiteral("endpointId"), static_cast<qint64>(endpointId)},
+            {QStringLiteral("revision"), static_cast<qint64>(firstRevision)},
+            {QStringLiteral("accepted"), false},
+            {QStringLiteral("reason"), QStringLiteral("delayed refusal")},
+            {QStringLiteral("budgetGeneration"), 1},
+            {QStringLiteral("acceptedRevision"), 0},
+            {QStringLiteral("applicationBytesPerSecond"), 0},
+            {QStringLiteral("spectrumSampleUnitsPerSecond"), 0},
+            {QStringLiteral("messagesPerSecond"), 0}};
+        QVERIFY(server.sendMediaControl(stale, server.mediaSessionEpoch()));
+        QTRY_COMPARE(countControl(inbound, QStringLiteral("allocation-result")), 3);
+
+        QTimer* subscriptionTimer = nullptr;
+        for (QTimer* timer : controller.findChildren<QTimer*>()) {
+            if (timer->interval() == 100) { subscriptionTimer = timer; break; }
+        }
+        QVERIFY(subscriptionTimer);
+        QVERIFY(QMetaObject::invokeMethod(subscriptionTimer, "timeout", Qt::DirectConnection));
+        QCOMPARE(countControl(outbound, QStringLiteral("subscribe")), 2);
+        QCOMPARE(controller.activeEndpointCount(), 1);
+        QVERIFY(applet->remoteDisplayStatus().startsWith(QStringLiteral("Display target")));
+    }
+
+    void missingAllocationAcknowledgementStallsThenLateResultReconciles()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        const int sliceId = station.addSlice();
+        QVERIFY(station.sliceById(sliceId));
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        QVERIFY(server.setDisplayBudgetLimits({10'000'000, 10'000'000, 1}));
+        QPointer<DisplayTransport> sourceMedia;
+        DaemonMediaController daemon(&server, &station, nullptr,
+            [&sourceMedia](QObject* owner) -> IMediaTransport* {
+                sourceMedia = new DisplayTransport(owner);
+                return sourceMedia;
+            });
+
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        PanadapterStack stack;
+        PanadapterApplet* applet = stack.addPanadapter(QStringLiteral("pan-0"));
+        applet->setActiveSliceIndex(sliceId);
+        applet->spectrumWidget()->setDisplayWindowPreservingHistory(
+            station.streamCentreHz(station.sliceById(sliceId)->streamIndex()), 48000);
+        qint64 nowMs = 0;
+        QPointer<DisplayTransport> sinkMedia;
+        RemoteMediaController controller(&client, &remote, &stack, nullptr,
+            [&sinkMedia](QObject* owner) -> IMediaTransport* {
+                sinkMedia = new DisplayTransport(owner);
+                return sinkMedia;
+            }, [&nowMs] { return nowMs; }, 10'000);
+        QSignalSpy outbound(&server, &StationServer::mediaControlReceived);
+        auto* stationLink = new HoldingAllocationResultTransport;
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(client.remoteDisplayBudgetLimits().has_value());
+        QTRY_VERIFY(sourceMedia && sinkMedia);
+        sourceMedia->activate();
+        sinkMedia->activate();
+        QTRY_COMPARE(countControl(outbound, QStringLiteral("subscribe")), 1);
+        QTRY_COMPARE(stationLink->held.size(), 1);
+        QVERIFY(applet->remoteDisplayStatus().contains(QStringLiteral("pending")));
+
+        QTimer* subscriptionTimer = nullptr;
+        for (QTimer* timer : controller.findChildren<QTimer*>()) {
+            if (timer->interval() == 100) { subscriptionTimer = timer; break; }
+        }
+        QVERIFY(subscriptionTimer);
+        nowMs = 10'000;
+        QVERIFY(QMetaObject::invokeMethod(subscriptionTimer, "timeout", Qt::DirectConnection));
+        QCOMPARE(countControl(outbound, QStringLiteral("subscribe")), 1);
+        QVERIFY(applet->remoteDisplayStatus().contains(QStringLiteral("stalled")));
+        QVERIFY(client.mediaAvailable());
+
+        stationLink->releaseHeld();
+        QTRY_VERIFY(applet->remoteDisplayStatus().startsWith(QStringLiteral("Display target")));
+        QCOMPARE(countControl(outbound, QStringLiteral("subscribe")), 1);
+        QCOMPARE(controller.activeEndpointCount(), 1);
+    }
+
+    void budgetFocusSwapReducesBeforeGrowthAndRestoresOnRecovery()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        auto& appSettings = AppSettings::instance();
+        const bool hadFps = appSettings.contains(QStringLiteral("DisplaySpectrumFps"));
+        const QVariant savedFps = appSettings.value(QStringLiteral("DisplaySpectrumFps"));
+        appSettings.setValue(QStringLiteral("DisplaySpectrumFps"), QStringLiteral("30"));
+        const auto restoreFps = qScopeGuard([&] {
+            if (hadFps) { appSettings.setValue(QStringLiteral("DisplaySpectrumFps"), savedFps); }
+            else { appSettings.remove(QStringLiteral("DisplaySpectrumFps")); }
+        });
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        const int sliceId = station.addSlice();
+        QVERIFY(station.sliceById(sliceId));
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        PanadapterStack stack;
+        const QStringList panIds{QStringLiteral("pan-0"), QStringLiteral("pan-1"),
+                                 QStringLiteral("pan-2"), QStringLiteral("pan-3")};
+        stack.applyLayout(QStringLiteral("2x2"), panIds);
+        for (PanadapterApplet* applet : stack.allApplets()) {
+            applet->setActiveSliceIndex(sliceId);
+            applet->spectrumWidget()->setDisplayWindowPreservingHistory(
+                station.streamCentreHz(station.sliceById(sliceId)->streamIndex()), 48000);
+            applet->spectrumWidget()->setWfUpdatePeriodMs(20);
+        }
+        stack.resize(1600, 900);
+        stack.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&stack));
+        stack.setActivePan(QStringLiteral("pan-0"));
+        QList<DisplayBudgetCharge> constrainedCharges;
+        for (PanadapterApplet* applet : stack.allApplets()) {
+            const int requestedPixels = qBound(
+                1, applet->spectrumWidget()->width()
+                    - applet->spectrumWidget()->reservedRightEdgeWidth(),
+                SpectrumEndpoint::kMaxPixels);
+            const int fps = applet->panId() == QStringLiteral("pan-0") ? 30 : 10;
+            const auto cost = spectrumDisplayCost(requestedPixels, fps, false);
+            QVERIFY(cost.has_value());
+            constrainedCharges.append(cost->charge);
+        }
+        const auto constrained = sumDisplayCharges(constrainedCharges);
+        QVERIFY(constrained.has_value());
+
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        QVERIFY(server.setDisplayBudgetLimits({constrained->applicationBytesPerSecond,
+                                               constrained->spectrumSampleUnitsPerSecond, 1}));
+        QPointer<DisplayTransport> sourceMedia;
+        DaemonMediaController daemon(&server, &station, nullptr,
+            [&sourceMedia](QObject* owner) -> IMediaTransport* {
+                sourceMedia = new DisplayTransport(owner);
+                return sourceMedia;
+            });
+        QPointer<DisplayTransport> sinkMedia;
+        RemoteMediaController controller(&client, &remote, &stack, nullptr,
+            [&sinkMedia](QObject* owner) -> IMediaTransport* {
+                sinkMedia = new DisplayTransport(owner);
+                return sinkMedia;
+            });
+        QSignalSpy outbound(&server, &StationServer::mediaControlReceived);
+        auto* stationLink = new HoldingAllocationResultTransport;
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(client.remoteDisplayBudgetLimits().has_value());
+        QTRY_VERIFY(sourceMedia && sinkMedia);
+        sourceMedia->activate();
+        sinkMedia->activate();
+        QTRY_COMPARE(countControl(outbound, QStringLiteral("subscribe")), 4);
+        QTRY_COMPARE(stationLink->held.size(), 4);
+        stationLink->releaseHeld();
+        QTRY_VERIFY([&] {
+            for (PanadapterApplet* applet : stack.allApplets()) {
+                if (!applet->remoteDisplayStatus().startsWith(QStringLiteral("Display target"))) {
+                    return false;
+                }
+            }
+            return true;
+        }());
+
+        const QList<QJsonObject> initial = controlsFor(outbound, QStringLiteral("subscribe"));
+        const auto activeInitial = std::find_if(initial.cbegin(), initial.cend(),
+            [](const QJsonObject& control) {
+                return control.value(QStringLiteral("fps")).toInt() == 30;
+            });
+        QVERIFY(activeInitial != initial.cend());
+        const quint32 oldActiveEndpoint = quint32(
+            activeInitial->value(QStringLiteral("endpointId")).toInteger());
+
+        stack.setActivePan(QStringLiteral("pan-1"));
+        QTRY_COMPARE(countControl(outbound, QStringLiteral("subscribe")), 5);
+        QTRY_COMPARE(stationLink->held.size(), 1);
+        const QJsonObject reduction = lastControl(outbound, QStringLiteral("subscribe"));
+        QCOMPARE(quint32(reduction.value(QStringLiteral("endpointId")).toInteger()),
+                 oldActiveEndpoint);
+        QCOMPARE(reduction.value(QStringLiteral("fps")).toInt(), 10);
+        QTimer* subscriptionTimer = nullptr;
+        for (QTimer* timer : controller.findChildren<QTimer*>()) {
+            if (timer->interval() == 100) { subscriptionTimer = timer; break; }
+        }
+        QVERIFY(subscriptionTimer);
+        QVERIFY(QMetaObject::invokeMethod(subscriptionTimer, "timeout", Qt::DirectConnection));
+        QCOMPARE(countControl(outbound, QStringLiteral("subscribe")), 5);
+
+        stationLink->releaseHeld();
+        QTRY_COMPARE(countControl(outbound, QStringLiteral("subscribe")), 6);
+        QTRY_COMPARE(stationLink->held.size(), 1);
+        const QJsonObject growth = lastControl(outbound, QStringLiteral("subscribe"));
+        QVERIFY(quint32(growth.value(QStringLiteral("endpointId")).toInteger())
+                != oldActiveEndpoint);
+        QCOMPARE(growth.value(QStringLiteral("fps")).toInt(), 30);
+        stationLink->releaseHeld();
+
+        QVERIFY(server.setDisplayBudgetLimits({10'000'000, 10'000'000, 2}));
+        QTRY_VERIFY(countControl(outbound, QStringLiteral("subscribe")) > 6);
+        QTRY_VERIFY(!stationLink->held.isEmpty());
+        stationLink->releaseHeld();
+        QTRY_VERIFY([&] {
+            for (PanadapterApplet* applet : stack.allApplets()) {
+                const QString status = applet->remoteDisplayStatus();
+                if (!status.startsWith(QStringLiteral("Display target"))
+                    || status.contains(QStringLiteral("requested"))) {
+                    return false;
+                }
+            }
+            return true;
+        }());
+    }
+
+    void budgetRetirementWaitsForPendingSubscribeThenReleasesReservation()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        const int sliceId = station.addSlice();
+        QVERIFY(station.sliceById(sliceId));
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        QVERIFY(server.setDisplayBudgetLimits({10'000'000, 10'000'000, 1}));
+        QPointer<DisplayTransport> sourceMedia;
+        DaemonMediaController daemon(&server, &station, nullptr,
+            [&sourceMedia](QObject* owner) -> IMediaTransport* {
+                sourceMedia = new DisplayTransport(owner);
+                return sourceMedia;
+            });
+
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        PanadapterStack stack;
+        PanadapterApplet* applet = stack.addPanadapter(QStringLiteral("pan-0"));
+        applet->setActiveSliceIndex(sliceId);
+        applet->spectrumWidget()->setDisplayWindowPreservingHistory(
+            station.streamCentreHz(station.sliceById(sliceId)->streamIndex()), 48000);
+        QPointer<DisplayTransport> sinkMedia;
+        RemoteMediaController controller(&client, &remote, &stack, nullptr,
+            [&sinkMedia](QObject* owner) -> IMediaTransport* {
+                sinkMedia = new DisplayTransport(owner);
+                return sinkMedia;
+            });
+        QSignalSpy outbound(&server, &StationServer::mediaControlReceived);
+        auto* stationLink = new HoldingAllocationResultTransport;
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(client.remoteDisplayBudgetLimits().has_value());
+        QTRY_VERIFY(sourceMedia && sinkMedia);
+        sourceMedia->activate();
+        sinkMedia->activate();
+        QTRY_COMPARE(countControl(outbound, QStringLiteral("subscribe")), 1);
+        QTRY_COMPARE(stationLink->held.size(), 1);
+        QCOMPARE(controller.activeEndpointCount(), 1);
+
+        QPointer<PanadapterApplet> retiredApplet(applet);
+        stack.removePanadapter(QStringLiteral("pan-0"));
+        QTRY_VERIFY(retiredApplet.isNull());
+        QCOMPARE(countControl(outbound, QStringLiteral("unsubscribe")), 0);
+        QCOMPARE(controller.activeEndpointCount(), 1);
+
+        stationLink->releaseHeld();
+        QTRY_COMPARE(countControl(outbound, QStringLiteral("unsubscribe")), 1);
+        QTRY_COMPARE(stationLink->held.size(), 1);
+        QCOMPARE(controller.activeEndpointCount(), 1);
+
+        stationLink->releaseHeld();
+        QTRY_COMPARE(controller.activeEndpointCount(), 0);
+        QCOMPARE(countControl(outbound, QStringLiteral("unsubscribe")), 1);
+    }
+
+    void matchingSourceRetirementClearsAcceptedReservationDuringPendingUpdate()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        const int sliceId = station.addSlice();
+        QVERIFY(station.sliceById(sliceId));
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        QVERIFY(server.setDisplayBudgetLimits({10'000'000, 10'000'000, 1}));
+        QPointer<DisplayTransport> sourceMedia;
+        DaemonMediaController daemon(&server, &station, nullptr,
+            [&sourceMedia](QObject* owner) -> IMediaTransport* {
+                sourceMedia = new DisplayTransport(owner);
+                return sourceMedia;
+            });
+
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        PanadapterStack stack;
+        PanadapterApplet* applet = stack.addPanadapter(QStringLiteral("pan-0"));
+        applet->setActiveSliceIndex(sliceId);
+        SpectrumWidget* widget = applet->spectrumWidget();
+        widget->setDisplayWindowPreservingHistory(
+            station.streamCentreHz(station.sliceById(sliceId)->streamIndex()), 48000);
+        QPointer<DisplayTransport> sinkMedia;
+        RemoteMediaController controller(&client, &remote, &stack, nullptr,
+            [&sinkMedia](QObject* owner) -> IMediaTransport* {
+                sinkMedia = new DisplayTransport(owner);
+                return sinkMedia;
+            });
+        QSignalSpy outbound(&server, &StationServer::mediaControlReceived);
+        auto* stationLink = new HoldingAllocationResultTransport;
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(client.remoteDisplayBudgetLimits().has_value());
+        QTRY_VERIFY(sourceMedia && sinkMedia);
+        sourceMedia->activate();
+        sinkMedia->activate();
+        QTRY_COMPARE(countControl(outbound, QStringLiteral("subscribe")), 1);
+        QTRY_COMPARE(stationLink->held.size(), 1);
+        stationLink->releaseHeld();
+        QTRY_VERIFY(applet->remoteDisplayStatus().startsWith(QStringLiteral("Display target")));
+
+        widget->setCenterFrequency(widget->centerFrequency() + 500);
+        QTRY_COMPARE(countControl(outbound, QStringLiteral("subscribe")), 2);
+        QTRY_COMPARE(stationLink->held.size(), 1);
+        const QJsonObject pending = lastControl(outbound, QStringLiteral("subscribe"));
+        const int subscriptions = countControl(outbound, QStringLiteral("subscribe"));
+        const QJsonObject retired{
+            {QStringLiteral("op"), QStringLiteral("allocation-result")},
+            {QStringLiteral("connectionId"), pending.value(QStringLiteral("connectionId"))},
+            {QStringLiteral("endpointId"), pending.value(QStringLiteral("endpointId"))},
+            {QStringLiteral("revision"), pending.value(QStringLiteral("revision"))},
+            {QStringLiteral("accepted"), false},
+            {QStringLiteral("reason"), QStringLiteral("source retired")},
+            {QStringLiteral("budgetGeneration"), 1},
+            {QStringLiteral("acceptedRevision"), 0},
+            {QStringLiteral("applicationBytesPerSecond"), 0},
+            {QStringLiteral("spectrumSampleUnitsPerSecond"), 0},
+            {QStringLiteral("messagesPerSecond"), 0}};
+        stationLink->passNextAllocationResult();
+        QVERIFY(server.sendMediaControl(retired, server.mediaSessionEpoch()));
+        QTRY_VERIFY(applet->remoteDisplayStatus().contains(QStringLiteral("source retired")));
+        QCOMPARE(controller.activeEndpointCount(), 1);
+
+        QTimer* subscriptionTimer = nullptr;
+        for (QTimer* timer : controller.findChildren<QTimer*>()) {
+            if (timer->interval() == 100) { subscriptionTimer = timer; break; }
+        }
+        QVERIFY(subscriptionTimer);
+        QVERIFY(QMetaObject::invokeMethod(subscriptionTimer, "timeout", Qt::DirectConnection));
+        QCOMPARE(countControl(outbound, QStringLiteral("subscribe")), subscriptions);
+
+        stationLink->releaseHeld();
+        QCoreApplication::processEvents();
+        QCOMPARE(countControl(outbound, QStringLiteral("subscribe")), subscriptions);
+        QVERIFY(applet->remoteDisplayStatus().contains(QStringLiteral("source retired")));
+    }
+
+    void ps3EnableWaitsForReductionAndRefusalRestoresQualityWithoutRetry()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        auto& appSettings = AppSettings::instance();
+        const bool hadFps = appSettings.contains(QStringLiteral("DisplaySpectrumFps"));
+        const QVariant savedFps = appSettings.value(QStringLiteral("DisplaySpectrumFps"));
+        appSettings.setValue(QStringLiteral("DisplaySpectrumFps"), QStringLiteral("30"));
+        const auto restoreFps = qScopeGuard([&] {
+            if (hadFps) { appSettings.setValue(QStringLiteral("DisplaySpectrumFps"), savedFps); }
+            else { appSettings.remove(QStringLiteral("DisplaySpectrumFps")); }
+        });
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        const int sliceId = station.addSlice();
+        QVERIFY(station.sliceById(sliceId));
+        const auto floor = spectrumDisplayCost(256, 10, false);
+        QVERIFY(floor.has_value());
+        const auto ps3AndFloor = sumDisplayCharges({ps3DisplayCharge(), floor->charge});
+        QVERIFY(ps3AndFloor.has_value());
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        QVERIFY(server.setDisplayBudgetLimits({ps3AndFloor->applicationBytesPerSecond,
+                                               10'000'000, 1}));
+        QPointer<DisplayTransport> sourceMedia;
+        DaemonMediaController daemon(&server, &station, nullptr,
+            [&sourceMedia](QObject* owner) -> IMediaTransport* {
+                sourceMedia = new DisplayTransport(owner);
+                return sourceMedia;
+            });
+        server.setPs3DisplayAdmissionHandler([](bool enabled, QString* refusal) {
+            if (!enabled) { return true; }
+            if (refusal) { *refusal = QStringLiteral("test PS3 refusal"); }
+            return false;
+        });
+
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        PanadapterStack stack;
+        PanadapterApplet* applet = stack.addPanadapter(QStringLiteral("pan-0"));
+        applet->setActiveSliceIndex(sliceId);
+        SpectrumWidget* widget = applet->spectrumWidget();
+        widget->setDisplayWindowPreservingHistory(
+            station.streamCentreHz(station.sliceById(sliceId)->streamIndex()), 48000);
+        widget->setWfUpdatePeriodMs(20);
+        stack.resize(1200, 600);
+        stack.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&stack));
+        QPointer<DisplayTransport> sinkMedia;
+        RemoteMediaController controller(&client, &remote, &stack, nullptr,
+            [&sinkMedia](QObject* owner) -> IMediaTransport* {
+                sinkMedia = new DisplayTransport(owner);
+                return sinkMedia;
+            });
+        QSignalSpy outbound(&server, &StationServer::mediaControlReceived);
+        QSignalSpy started(&client, &StationClient::ps3DisplaySubscriptionStarted);
+        QSignalSpy finished(&client, &StationClient::ps3DisplaySubscriptionFinished);
+        auto* stationLink = new HoldingAllocationResultTransport;
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(client.remoteDisplayBudgetLimits().has_value());
+        QTRY_VERIFY(sourceMedia && sinkMedia);
+        sourceMedia->activate();
+        sinkMedia->activate();
+        QTRY_COMPARE(countControl(outbound, QStringLiteral("subscribe")), 1);
+        QTRY_COMPARE(stationLink->held.size(), 1);
+        const QJsonObject original = lastControl(outbound, QStringLiteral("subscribe"));
+        QVERIFY(original.value(QStringLiteral("pixels")).toInt() > 256
+                || original.value(QStringLiteral("fps")).toInt() > 10);
+        stationLink->releaseHeld();
+        QTRY_VERIFY(applet->remoteDisplayStatus().startsWith(QStringLiteral("Display target")));
+
+        remote.pureSignalFacade()->setAmpViewSubscribed(true);
+        QTRY_COMPARE(countControl(outbound, QStringLiteral("subscribe")), 2);
+        QTRY_COMPARE(stationLink->held.size(), 1);
+        QCOMPARE(started.size(), 0);
+        const QJsonObject reduction = lastControl(outbound, QStringLiteral("subscribe"));
+        QVERIFY(reduction.value(QStringLiteral("pixels")).toInt()
+                <= original.value(QStringLiteral("pixels")).toInt());
+        QVERIFY(reduction.value(QStringLiteral("fps")).toInt()
+                <= original.value(QStringLiteral("fps")).toInt());
+
+        QTimer* subscriptionTimer = nullptr;
+        for (QTimer* timer : controller.findChildren<QTimer*>()) {
+            if (timer->interval() == 100) { subscriptionTimer = timer; break; }
+        }
+        QVERIFY(subscriptionTimer);
+        QVERIFY(QMetaObject::invokeMethod(subscriptionTimer, "timeout", Qt::DirectConnection));
+        QCOMPARE(countControl(outbound, QStringLiteral("subscribe")), 2);
+        QCOMPARE(started.size(), 0);
+
+        stationLink->releaseHeld();
+        QTRY_COMPARE(started.size(), 1);
+        QTRY_COMPARE(finished.size(), 1);
+        QCOMPARE(finished.first().at(1).toBool(), true);
+        QCOMPARE(finished.first().at(2).toBool(), false);
+        QVERIFY(finished.first().at(3).toString().contains(QStringLiteral("test PS3 refusal")));
+        QTRY_COMPARE(countControl(outbound, QStringLiteral("subscribe")), 3);
+        QTRY_COMPARE(stationLink->held.size(), 1);
+        const QJsonObject restored = lastControl(outbound, QStringLiteral("subscribe"));
+        QCOMPARE(restored.value(QStringLiteral("pixels")), original.value(QStringLiteral("pixels")));
+        QCOMPARE(restored.value(QStringLiteral("fps")), original.value(QStringLiteral("fps")));
+        stationLink->releaseHeld();
+        QTRY_VERIFY(applet->remoteDisplayStatus().contains(QStringLiteral("test PS3 refusal")));
+        // The refusal is already visible while the restored allocation's
+        // queued acknowledgment is still in flight. Wait for accepted quality.
+        QTRY_VERIFY(!applet->remoteDisplayStatus().contains(QStringLiteral("requested")));
+        QVERIFY(!client.remotePs3DisplaySubscribed());
+
+        for (int attempt = 0; attempt < 3; ++attempt) {
+            QVERIFY(QMetaObject::invokeMethod(subscriptionTimer, "timeout", Qt::DirectConnection));
+        }
+        QCOMPARE(countControl(outbound, QStringLiteral("subscribe")), 3);
+        QCOMPARE(started.size(), 1);
+        QCOMPARE(finished.size(), 1);
     }
 
     void contextMediaAndRetirementStayInAuthenticatedSession()

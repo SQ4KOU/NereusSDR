@@ -146,6 +146,8 @@ public:
     qint64  statusFrequencyHz() const;
     QString statusMode() const;
     int     statusChainIndex() const;
+    void setRemoteDisplayStatus(const QString& status);
+    QString remoteDisplayStatus() const;
 
     /// Phase 3F: light (or clear) this pan's WIDE pill.
     /// A pan shows WIDE when the RX preselector chain feeding it is bypassed

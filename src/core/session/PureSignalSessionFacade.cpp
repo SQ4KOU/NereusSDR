@@ -7,6 +7,7 @@
 #include "core/dsp/DspAssetService.h"
 #include "core/dsp/DspAssetValidation.h"
 #include "core/session/Ps3DisplayCodec.h"
+#include "core/session/media/DisplayBudget.h"
 #include "models/PureSignalSettings.h"
 #include "models/RadioModel.h"
 #include <QDateTime>
@@ -157,7 +158,7 @@ PureSignalSessionFacade::PureSignalSessionFacade(RadioModel* radio, PureSignal* 
                                                  QObject* parent)
     : QObject(parent), m_radio(radio)
 {
-    m_displayTimer.setInterval(100);
+    m_displayTimer.setInterval(kPs3DisplayPollIntervalMs);
     connect(&m_displayTimer, &QTimer::timeout, this, &PureSignalSessionFacade::acquireDisplay);
     if (radio) {
         connect(radio, &RadioModel::pureSignalCoordinatorReady, this,
@@ -637,6 +638,7 @@ void PureSignalSessionFacade::resetSession()
     ++m_displayGeneration;
     m_displaySequence = 0;
     m_display.reset();
+    const bool remoteDisplayWasSubscribed = m_remoteAmpViewSubscribed;
     m_remoteAmpViewSubscribed = false;
     // Keep a save's path until its native completion or coordinator teardown.
     // Retiring a session must not race the writer or publish its old result.
@@ -662,9 +664,15 @@ void PureSignalSessionFacade::resetSession()
         m_lastError.clear();
         m_remoteRequest = {};
     }
-    emit displayInvalidated();
-    emit statusChanged();
     reconcileDisplayTimer();
+    const QPointer<PureSignalSessionFacade> self(this);
+    emit displayInvalidated();
+    if (!self) { return; }
+    if (remoteDisplayWasSubscribed) {
+        emit remoteAmpViewSubscriptionChanged(false);
+        if (!self) { return; }
+    }
+    emit statusChanged();
 }
 void PureSignalSessionFacade::setAmpViewSubscribed(bool subscribed)
 {
@@ -679,8 +687,12 @@ void PureSignalSessionFacade::setAmpViewSubscribed(bool subscribed)
 }
 void PureSignalSessionFacade::setRemoteAmpViewSubscribed(bool subscribed)
 {
+    if (m_remoteAmpViewSubscribed == subscribed) {
+        return;
+    }
     m_remoteAmpViewSubscribed = subscribed;
     reconcileDisplayTimer();
+    emit remoteAmpViewSubscriptionChanged(subscribed);
 }
 void PureSignalSessionFacade::reconcileDisplayTimer()
 {

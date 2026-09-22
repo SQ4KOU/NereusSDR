@@ -57,7 +57,9 @@ private slots:
         f.write("radio_mac = 00:1C:2D:05:37:2A\n"
                 "sample_rate_hz = 384000\n"
                 "slice_count = 3\n"
-                "audio_device = hw:CARD=Device\n");
+                "audio_device = hw:CARD=Device\n"
+                "display_application_bytes_per_second = 2400000\n"
+                "spectrum_sample_units_per_second = 1800000\n");
         f.flush();
         QString err;
         DaemonConfig c = DaemonConfig::fromFile(f.fileName(), &err);
@@ -67,6 +69,15 @@ private slots:
         QCOMPARE(c.sliceCount, 3);
         QCOMPARE(c.audioDevice, QStringLiteral("hw:CARD=Device"));
         QVERIFY(c.sampleRateExplicit);
+        QVERIFY(c.displayApplicationBytesPerSecond.has_value());
+        QVERIFY(c.spectrumSampleUnitsPerSecond.has_value());
+        QCOMPARE(*c.displayApplicationBytesPerSecond, quint64(2400000));
+        QCOMPARE(*c.spectrumSampleUnitsPerSecond, quint64(1800000));
+        const std::optional<DisplayBudgetLimits> limits = c.displayBudgetLimits();
+        QVERIFY(limits.has_value());
+        QCOMPARE(limits->applicationBytesPerSecond, quint64(2400000));
+        QCOMPARE(limits->spectrumSampleUnitsPerSecond, quint64(1800000));
+        QCOMPARE(limits->generation, quint32(1));
     }
 
     // sampleRateHz always holds a usable rate (validate() rejects <= 0), so
@@ -138,6 +149,8 @@ private slots:
             // AND the sample file.
             QStringLiteral("remote_port"),
             QStringLiteral("remote_bind"),
+            QStringLiteral("display_application_bytes_per_second"),
+            QStringLiteral("spectrum_sample_units_per_second"),
         };
 
         // Each documented key parses without an "unknown key" complaint.
@@ -151,7 +164,9 @@ private slots:
                 "slice_count = 2\n"
                 "audio_device = default\n"
                 "remote_port = 4711\n"
-                "remote_bind = 0.0.0.0\n");
+                "remote_bind = 0.0.0.0\n"
+                "display_application_bytes_per_second = 2400000\n"
+                "spectrum_sample_units_per_second = 1800000\n");
         f.flush();
         QString err;
         const DaemonConfig c = DaemonConfig::fromFile(f.fileName(), &err);
@@ -162,6 +177,11 @@ private slots:
         QCOMPARE(c.audioDevice, QStringLiteral("default"));
         QCOMPARE(c.remotePort, 4711);
         QCOMPARE(c.remoteBind, QStringLiteral("0.0.0.0"));
+        const std::optional<DisplayBudgetLimits> limits = c.displayBudgetLimits();
+        QVERIFY(limits.has_value());
+        QCOMPARE(limits->applicationBytesPerSecond, quint64(2400000));
+        QCOMPARE(limits->spectrumSampleUnitsPerSecond, quint64(1800000));
+        QCOMPARE(limits->generation, quint32(1));
 
         // And the shipped sample file documents exactly those keys, no
         // more. Parsed straight out of the packaging file so the two
@@ -173,7 +193,22 @@ private slots:
         QStringList found;
         QTextStream ts(&sample);
         while (!ts.atEnd()) {
-            QString line = ts.readLine();
+            QString line = ts.readLine().trimmed();
+            // Optional settings are documented as commented placeholder
+            // assignments so copying the sample cannot accidentally enable
+            // an unmeasured production limit. They still belong to the
+            // parser/sample parity contract.
+            if (line.startsWith(QLatin1Char('#'))) {
+                line.remove(0, 1);
+                line = line.trimmed();
+                const int eq = line.indexOf(QLatin1Char('='));
+                const QString placeholder = eq > 0 ? line.mid(eq + 1).trimmed() : QString();
+                if (eq > 0 && placeholder.startsWith(QLatin1Char('<'))
+                    && placeholder.endsWith(QLatin1Char('>'))) {
+                    found << line.left(eq).trimmed();
+                }
+                continue;
+            }
             const int hash = line.indexOf(QLatin1Char('#'));
             if (hash >= 0) { line.truncate(hash); }
             line = line.trimmed();
@@ -184,6 +219,101 @@ private slots:
         QStringList expected = documented;
         expected.sort();
         QCOMPARE(found, expected);
+    }
+
+    void absentDisplayBudgetPairPreservesLegacyMode()
+    {
+        QTemporaryFile f;
+        QVERIFY(f.open());
+        f.write("radio_mac = aa:bb:cc:dd:ee:ff\n");
+        f.flush();
+
+        QString err;
+        const DaemonConfig c = DaemonConfig::fromFile(f.fileName(), &err);
+        QVERIFY2(err.isEmpty(), qPrintable(err));
+        QVERIFY(!c.displayApplicationBytesPerSecond.has_value());
+        QVERIFY(!c.spectrumSampleUnitsPerSecond.has_value());
+        QVERIFY(!c.displayBudgetLimits().has_value());
+        QVERIFY(c.validate(&err));
+    }
+
+    void rejectsInvalidDisplayBudgetPair_data()
+    {
+        QTest::addColumn<QByteArray>("contents");
+
+        QTest::newRow("application-only")
+            << QByteArray("display_application_bytes_per_second = 1\n");
+        QTest::newRow("samples-only")
+            << QByteArray("spectrum_sample_units_per_second = 1\n");
+        QTest::newRow("zero-application")
+            << QByteArray("display_application_bytes_per_second = 0\n"
+                          "spectrum_sample_units_per_second = 1\n");
+        QTest::newRow("zero-samples")
+            << QByteArray("display_application_bytes_per_second = 1\n"
+                          "spectrum_sample_units_per_second = 0\n");
+        QTest::newRow("negative-application")
+            << QByteArray("display_application_bytes_per_second = -1\n"
+                          "spectrum_sample_units_per_second = 1\n");
+        QTest::newRow("negative-samples")
+            << QByteArray("display_application_bytes_per_second = 1\n"
+                          "spectrum_sample_units_per_second = -1\n");
+        QTest::newRow("fractional-application")
+            << QByteArray("display_application_bytes_per_second = 1.5\n"
+                          "spectrum_sample_units_per_second = 1\n");
+        QTest::newRow("fractional-samples")
+            << QByteArray("display_application_bytes_per_second = 1\n"
+                          "spectrum_sample_units_per_second = 1.5\n");
+        QTest::newRow("malformed-application")
+            << QByteArray("display_application_bytes_per_second = many\n"
+                          "spectrum_sample_units_per_second = 1\n");
+        QTest::newRow("malformed-samples")
+            << QByteArray("display_application_bytes_per_second = 1\n"
+                          "spectrum_sample_units_per_second = many\n");
+        QTest::newRow("above-json-safe-application")
+            << QByteArray("display_application_bytes_per_second = 9007199254740992\n"
+                          "spectrum_sample_units_per_second = 1\n");
+        QTest::newRow("above-json-safe-samples")
+            << QByteArray("display_application_bytes_per_second = 1\n"
+                          "spectrum_sample_units_per_second = 9007199254740992\n");
+        QTest::newRow("quint64-overflow")
+            << QByteArray("display_application_bytes_per_second = 18446744073709551616\n"
+                          "spectrum_sample_units_per_second = 1\n");
+    }
+
+    void rejectsInvalidDisplayBudgetPair()
+    {
+        QFETCH(QByteArray, contents);
+        QTemporaryFile f;
+        QVERIFY(f.open());
+        QCOMPARE(f.write(contents), qint64(contents.size()));
+        f.flush();
+
+        QString parseError;
+        const DaemonConfig c = DaemonConfig::fromFile(f.fileName(), &parseError);
+        QVERIFY2(parseError.isEmpty(), qPrintable(parseError));
+        QString validationError;
+        QVERIFY(!c.validate(&validationError));
+        QVERIFY2(validationError.contains(QStringLiteral("display_application_bytes_per_second")),
+                 qPrintable(validationError));
+        QVERIFY(!c.displayBudgetLimits().has_value());
+    }
+
+    void acceptsJsonSafeDisplayBudgetMaximum()
+    {
+        QTemporaryFile f;
+        QVERIFY(f.open());
+        f.write("display_application_bytes_per_second = 9007199254740991\n"
+                "spectrum_sample_units_per_second = 9007199254740991\n");
+        f.flush();
+
+        QString err;
+        const DaemonConfig c = DaemonConfig::fromFile(f.fileName(), &err);
+        QVERIFY2(err.isEmpty(), qPrintable(err));
+        QVERIFY(c.validate(&err));
+        const std::optional<DisplayBudgetLimits> limits = c.displayBudgetLimits();
+        QVERIFY(limits.has_value());
+        QCOMPARE(limits->applicationBytesPerSecond, quint64(9007199254740991ULL));
+        QCOMPARE(limits->spectrumSampleUnitsPerSecond, quint64(9007199254740991ULL));
     }
 
     // Remote Daemon R2 Task 18: the listener is OPT IN. A default-
