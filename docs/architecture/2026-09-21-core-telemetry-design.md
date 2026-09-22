@@ -69,6 +69,13 @@ network, encoder, jitter/matcher and device latency. Missing counter providers,
 peer changes, context changes and decreasing counters establish fresh baselines
 and explicit graph gaps. Measured silence remains zero.
 
+September 22 follow-up: the running development GUI exposed an empty-state
+presentation gap. While disconnected, the graph returned before painting its
+legend, hiding the bandwidth units and the distinction between total traffic
+and Opus. Empty graphs now retain their existing series names, units and
+legend selection without synthesizing zero-valued samples. This is a GUI
+presentation correction; it adds no counters or audio-latency estimate.
+
 Fetched `ten9876/AetherSDR` upstream/main on September 21 and inspected
 `0dea0dd7d73e25a40c8c01d46873af5834e23921` in a detached source worktree.
 The user's Aether feature checkout was preserved.

@@ -725,6 +725,13 @@ true capture-to-playback one-way latency remains unavailable until its timing
 contract is implemented. Cover counter resets, silence/zero traffic, media
 context changes, reconnect gaps, and actual graph labels/rendering.
 
+September 22 presentation correction: inspecting the running disconnected GUI
+showed that empty graphs hid all series labels and units. The graph now retains
+unit-bearing, selectable legends while measurements are unavailable. The
+production widget was rendered and visually checked with total/directional
+kbps, separate Opus/audio-packet kbps and speaker-buffer ms. This source change
+is not yet installed; existing traffic counters and RTT semantics are unchanged.
+
 **Design:** [Core telemetry contract](2026-09-21-core-telemetry-design.md).
 This records the freshly fetched Aether source revision, owned measurements,
 wire contract, validity, history bounds and concrete acceptance cases.
@@ -1029,13 +1036,26 @@ receiving; no RF or tuner actuation.
 **Files:** daemon/client capability policy, endpoint budget allocator, install
 rules, configuration sample and the R3 verification ledger.
 
+- [x] Use logical `PanadapterStack` membership for remote pane subscriptions.
+  A float/dock or layout reparent retains its endpoint and painted history;
+  `panRetired` releases it, and stack destruction releases remaining endpoints
+  even when the controller survives. A reused pan ID receives a fresh endpoint.
+  Retire local bindings before sending unsubscribe so synchronous session
+  closure cannot invalidate an in-flight cleanup loop. This establishes stable
+  allocation inputs; it does not implement the session-wide budget below.
+  The old float/hide behavior failed the new integration regression before
+  correction. Pane/layout/floating tests and six focused media/telemetry/recovery
+  targets pass; a consolidated independent review found no actionable issues.
+  Matching GUI/Core/all-tests builds pass. The unfiltered desktop suite passes
+  725/727 in 338.49 seconds, with the same two native microphone-open timeouts
+  (`tst_port_audio_bus`, `tst_audio_engine_speakers_live_reconfig`). R-R3-36 and
+  the full-suite gate remain open. Hardware float/dock acceptance is pending.
 - [ ] Exercise one pan, four docked pans, floating pans and multiple slices
   sharing a stream. Allocate the session budget across focused/background
   endpoints; reduce display rate/pixels before impairing audio or control.
   Per parent architecture §9.5, the GUI divides Core's advertised total across
-  endpoints and Core validates/enforces that ceiling. Replace the current
-  `isVisible()` subscription heuristic with stable pane-intent handling:
-  transient dock/float hides must not flap capture demand. No total budget or
+  endpoints and Core validates/enforces that ceiling. The logical pane lifetime
+  above replaces the `isVisible()` heuristic. No total budget or
   focus-share values have yet been measured/selected; do not derive them from
   the single-pan 969-byte observation or the eight-endpoint admission cap.
 - [ ] Measure full-span/noise and deep-zoom cases with both FFT tiers, WDSP,

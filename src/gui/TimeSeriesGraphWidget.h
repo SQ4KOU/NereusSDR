@@ -17,6 +17,8 @@
 //                 Aether collectors, Flex transport, or radio-model logic is used.
 //                 Measured the axis gutter from actual unit/value labels to
 //                 keep remote audio frame and packet rates readable.
+//   2026-09-22 -- Keep unit-bearing legends visible for unavailable telemetry
+//                 by J.J. Boyd (KG4VCF), with AI assistance via OpenAI Codex.
 // =================================================================
 
 #pragma once
@@ -243,8 +245,16 @@ protected:
             return !series.points.isEmpty();
         });
         if (!hasPoints || plot.width() < 20 || plot.height() < 20) {
+            // An unavailable measurement is not zero. Keep its named,
+            // unit-bearing legend interactive so the operator can identify
+            // what is pending and clear a no-data selection.
+            const QFontMetrics metrics(normalFont);
+            const int emptyLegendRows = legendRowCount(metrics, 84, true, true);
+            plot = rect().adjusted(84, 30, -14,
+                -42 - (emptyLegendRows - 1) * kLegendRowHeight);
             painter.setPen(QColor("#8d99ad"));
             painter.drawText(plot, Qt::AlignCenter, "Collecting graph data");
+            drawLegend(&painter, plot, true, true);
             return;
         }
 
@@ -650,17 +660,27 @@ private:
         const Series* series{nullptr};
     };
 
-    QVector<LegendSlot> legendLayout(const QFontMetrics& fm, int left = 84) const
+    QString legendText(const Series& series, bool includeUnit) const
+    {
+        if (!includeUnit) {
+            return series.label;
+        }
+        const QString unit = (series.unitSuffix.isEmpty() ? m_suffix : series.unitSuffix).trimmed();
+        return unit.isEmpty() ? series.label : QString("%1 (%2)").arg(series.label, unit);
+    }
+
+    QVector<LegendSlot> legendLayout(const QFontMetrics& fm, int left = 84,
+                                     bool includeEmpty = false, bool includeUnit = false) const
     {
         QVector<LegendSlot> entries;
         const int right = width() - 14; // = the plot's right edge
         int x = left;
         int row = 0;
         for (const Series& series : m_series) {
-            if (series.points.isEmpty()) {
+            if (!includeEmpty && series.points.isEmpty()) {
                 continue;
             }
-            const int labelWidth = fm.horizontalAdvance(series.label);
+            const int labelWidth = fm.horizontalAdvance(legendText(series, includeUnit));
             if (x != left && x + labelWidth + 26 > right) {
                 x = left;
                 ++row;
@@ -671,18 +691,23 @@ private:
         return entries;
     }
 
-    int legendRowCount(const QFontMetrics& fm, int left = 84) const
+    int legendRowCount(const QFontMetrics& fm, int left = 84,
+                       bool includeEmpty = false, bool includeUnit = false) const
     {
-        const QVector<LegendSlot> entries = legendLayout(fm, left);
+        const QVector<LegendSlot> entries = legendLayout(fm, left, includeEmpty, includeUnit);
         return entries.isEmpty() ? 1 : entries.last().row + 1;
     }
 
-    void drawLegend(QPainter* painter, const QRectF& plot)
+    void drawLegend(QPainter* painter, const QRectF& plot,
+                    bool includeEmpty = false, bool includeUnit = false)
     {
         m_legendHits.clear();
         const int top = static_cast<int>(plot.bottom()) + 12;
-        for (const LegendSlot& slot : legendLayout(QFontMetrics(painter->font()), static_cast<int>(plot.left()))) {
+        for (const LegendSlot& slot : legendLayout(QFontMetrics(painter->font()),
+                                                    static_cast<int>(plot.left()),
+                                                    includeEmpty, includeUnit)) {
             const Series& series = *slot.series;
+            const QString text = legendText(series, includeUnit);
             const int x = slot.x;
             const int y = top + slot.row * kLegendRowHeight;
             const bool selected = m_selectedLabels.isEmpty() || m_selectedLabels.contains(series.label);
@@ -694,7 +719,7 @@ private:
             painter->drawLine(x, y + 7, x + 14, y + 7);
             painter->setPen(textColor);
             painter->drawText(x + 18, y, slot.labelWidth + 8, 16,
-                              Qt::AlignLeft | Qt::AlignVCenter, series.label);
+                              Qt::AlignLeft | Qt::AlignVCenter, text);
             m_legendHits.push_back({hitRect, series.label});
         }
     }

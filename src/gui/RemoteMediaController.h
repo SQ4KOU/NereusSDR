@@ -12,7 +12,8 @@ class StationClient;
 class RadioModel;
 class PanadapterStack;
 
-/// Owns the GUI's media session and one bounded subscription per visible pan.
+/// Owns the GUI's media session and one bounded subscription per logical pan.
+/// Layout reparenting does not retire a pan; removing it from the stack does.
 /// Display data never passes through the control/property mirror.
 class RemoteMediaController final : public QObject {
     Q_OBJECT
@@ -39,6 +40,7 @@ private:
     void stop();
     void requestRecovery(quint32 expectedEpoch, const QString& reason);
     void refreshSubscriptions();
+    bool retireSubscriptions(const QList<quint32>& endpointIds);
     void refreshCtunState();
     void receiveControl(const QJsonObject& payload, quint32 epoch);
     void receiveDisplay(const QByteArray& packet);

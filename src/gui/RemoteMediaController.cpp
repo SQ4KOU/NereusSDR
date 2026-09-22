@@ -260,6 +260,17 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
     d->timer = new QTimer(this);
     d->timer->setInterval(100);
     connect(d->timer, &QTimer::timeout, this, &RemoteMediaController::refreshSubscriptions);
+    if (stack) {
+        connect(stack, &PanadapterStack::panRetired,
+                this, &RemoteMediaController::refreshSubscriptions);
+        connect(stack, &QObject::destroyed, this, [this] {
+            d->stack = nullptr;
+            QList<quint32> endpoints;
+            for (const auto& [id, binding] : d->bindings) { endpoints.append(id); }
+            d->ctunStreams.clear();
+            retireSubscriptions(endpoints);
+        });
+    }
     connect(client, &StationClient::handshakeComplete, this, &RemoteMediaController::start);
     connect(client, &StationClient::mediaSessionEnded, this, [this](quint32 epoch) {
         if (epoch == d->epoch) {
@@ -317,16 +328,10 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
             // The daemon retires FFT production when the radio disconnects,
             // even if this authenticated station session remains connected.
             // Retire our observations too so identical settings resubscribe.
-            for (auto& [id, binding] : d->bindings) {
-                send({{QStringLiteral("op"), QStringLiteral("unsubscribe")},
-                      {QStringLiteral("endpointId"), double(id)}});
-                if (binding.widget) {
-                    binding.widget->clearRemoteSpectrum();
-                    binding.widget->applyRemoteCtunState(false, false);
-                }
-            }
-            d->bindings.clear();
+            QList<quint32> endpoints;
+            for (const auto& [id, binding] : d->bindings) { endpoints.append(id); }
             d->ctunStreams.clear();
+            if (!retireSubscriptions(endpoints)) { return; }
             requestAudio();
         } else {
             refreshSubscriptions();
@@ -455,6 +460,31 @@ bool RemoteMediaController::send(QJsonObject payload)
     return d->client->sendMediaControl(payload, d->epoch);
 }
 
+bool RemoteMediaController::retireSubscriptions(const QList<quint32>& endpointIds)
+{
+    const QPointer<RemoteMediaController> self(this);
+    const QPointer<MediaPeer> peer = d->peer;
+    const quint32 epoch = d->epoch;
+    const QString connectionId = d->connectionId;
+    for (quint32 id : endpointIds) {
+        const auto found = d->bindings.find(id);
+        if (found == d->bindings.end()) { continue; }
+        QPointer<SpectrumWidget> widget = found->second.widget;
+        // Retire local ownership before sending: a synchronous transport
+        // failure can end the session and clear every binding inside send().
+        d->bindings.erase(found);
+        if (widget) {
+            widget->clearRemoteSpectrum();
+            widget->applyRemoteCtunState(false, false);
+        }
+        send({{QStringLiteral("op"), QStringLiteral("unsubscribe")},
+              {QStringLiteral("endpointId"), double(id)}});
+        if (!self || d->peer != peer || d->epoch != epoch
+            || d->connectionId != connectionId) { return false; }
+    }
+    return true;
+}
+
 void RemoteMediaController::refreshSubscriptions()
 {
     if (!d->client || !d->client->mediaAvailable() || d->epoch != d->client->sessionEpoch()
@@ -462,16 +492,26 @@ void RemoteMediaController::refreshSubscriptions()
         return;
     }
     if (!d->model->isConnected()) { return; }
+    const QPointer<RemoteMediaController> self(this);
+    const QPointer<MediaPeer> peer = d->peer;
+    const quint32 epoch = d->epoch;
+    const QString connectionId = d->connectionId;
+    const auto current = [this, self, peer, epoch, connectionId] {
+        return self && d->peer == peer && d->epoch == epoch
+            && d->connectionId == connectionId && d->stack && d->model;
+    };
     struct Desired {
-        SpectrumWidget* widget;
-        SliceModel* slice;
+        QPointer<SpectrumWidget> widget;
+        QPointer<SliceModel> slice;
         QJsonObject request;
     };
     QList<Desired> desired;
     for (PanadapterApplet* applet : d->stack->allApplets()) {
         SpectrumWidget* widget = applet->spectrumWidget();
         SliceModel* slice = d->model->sliceById(applet->activeSliceIndex());
-        if (!widget || !widget->isVisible() || !slice || slice->streamIndex() < 0) { continue; }
+        // The stack's membership is pane intent. Float/dock and layout
+        // rebuilding temporarily hide the same renderer without disabling it.
+        if (!widget || !slice || slice->streamIndex() < 0) { continue; }
         QJsonObject request = requestFor(widget, slice,
                                          d->client->remoteWidebandAvailable());
         if (!request.isEmpty()) { desired.append({widget, slice, std::move(request)}); }
@@ -481,7 +521,8 @@ void RemoteMediaController::refreshSubscriptions()
     // first; updating them individually would reject each against its peers.
     // The reliable control stream preserves all unsubscriptions before adds.
     QHash<SpectrumWidget*, double> retainedSourceCentres;
-    for (auto it = d->bindings.begin(); it != d->bindings.end();) {
+    QList<quint32> retiredEndpoints;
+    for (auto it = d->bindings.begin(); it != d->bindings.end(); ++it) {
         const auto next = std::find_if(desired.cbegin(), desired.cend(),
             [&it](const Desired& item) {
                 return item.widget == it->second.widget && item.slice == it->second.slice;
@@ -489,7 +530,7 @@ void RemoteMediaController::refreshSubscriptions()
         const bool windowChanged = next != desired.cend()
             && next->request.value(QStringLiteral("windowType"))
                 != it->second.observed.value(QStringLiteral("windowType"));
-        if (next != desired.cend() && !windowChanged) { ++it; continue; }
+        if (next != desired.cend() && !windowChanged) { continue; }
         // A cohost selection changes the endpoint's slice identity, not its
         // physical receive window. Retain that accepted geometry for an
         // immediate rejected gesture while the replacement awaits its FFT.
@@ -500,14 +541,15 @@ void RemoteMediaController::refreshSubscriptions()
                 retainedSourceCentres.insert(item.widget, it->second.sourceCentreHz);
             }
         }
-        send({{QStringLiteral("op"), QStringLiteral("unsubscribe")},
-              {QStringLiteral("endpointId"), double(it->first)}});
-        if (it->second.widget) { it->second.widget->clearRemoteSpectrum(); }
-        it = d->bindings.erase(it);
+        retiredEndpoints.append(it->first);
     }
+    if (!retireSubscriptions(retiredEndpoints) || !current()) { return; }
     for (const Desired& item : desired) {
         SpectrumWidget* widget = item.widget;
         SliceModel* slice = item.slice;
+        if (!widget || !slice || currentSliceForPan(d->model, d->stack, widget) != slice) {
+            continue;
+        }
         auto found = std::find_if(d->bindings.begin(), d->bindings.end(),
             [widget, slice](const auto& entry) {
                 return entry.second.widget == widget && entry.second.slice == slice;
@@ -583,15 +625,23 @@ void RemoteMediaController::refreshSubscriptions()
         widget->invalidateRemoteSpectrumFrame();
         request.insert(QStringLiteral("op"), QStringLiteral("subscribe"));
         request.insert(QStringLiteral("endpointId"), double(id));
-        request.insert(QStringLiteral("revision"), double(binding.revision));
-        if (!send(request)) { binding.observed = {}; }
+        const quint32 revision = binding.revision;
+        request.insert(QStringLiteral("revision"), double(revision));
+        const bool sent = send(request);
+        if (!current()) { return; }
+        // An observer can retire or renew this endpoint during the send.
+        // Never retain a Binding reference across that callback boundary.
+        found = d->bindings.find(id);
+        if (!sent && found != d->bindings.end() && found->second.revision == revision) {
+            found->second.observed = {};
+        }
     }
     refreshCtunState();
 }
 
 void RemoteMediaController::refreshCtunState()
 {
-    if (!d->model || !d->client) { return; }
+    if (!d->model || !d->client || !d->stack) { return; }
     QSet<int> occupied;
     for (SliceModel* slice : d->model->slices()) {
         if (slice->streamIndex() >= 0) { occupied.insert(slice->streamIndex()); }
@@ -714,7 +764,7 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
             || generation != binding.context.codec.contextGeneration
             || !number(payload, "floorDbm", -400, 100, floor)
             || !d->model || !d->model->isConnected() || !d->stack
-            || !binding.slice || !binding.widget->isVisible()
+            || !binding.slice
             || d->stack->spectrum(d->stack->activePanId()) != binding.widget
             || binding.observedStream != binding.slice->streamIndex()
             || binding.observedStreamEpoch != binding.slice->streamEpoch()

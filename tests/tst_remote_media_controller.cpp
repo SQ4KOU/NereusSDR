@@ -3,8 +3,11 @@
 #include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QScopeGuard>
+#include <QTimer>
 #include <algorithm>
 #include <cmath>
+#include <functional>
+#include <memory>
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/ClarityController.h"
@@ -54,6 +57,24 @@ public:
 };
 
 namespace {
+class ClosingGuiControlTransport final : public Test::LoopbackTransport {
+public:
+    ClosingGuiControlTransport() : LoopbackTransport(QStringLiteral("client")) {}
+    void sendText(const QByteArray& wire) override
+    {
+        if (!closeOnOp.isEmpty()
+            && wire.contains(QByteArray("\"op\":\"") + closeOnOp + '"')) {
+            closeOnOp.clear();
+            if (beforeClose) { beforeClose(); }
+            closeLink(QStringLiteral("test synchronous GUI send closure"));
+            return;
+        }
+        LoopbackTransport::sendText(wire);
+    }
+    QByteArray closeOnOp;
+    std::function<void()> beforeClose;
+};
+
 QJsonObject lastControl(const QSignalSpy& spy, const QString& op)
 {
     for (auto it = spy.crbegin(); it != spy.crend(); ++it) {
@@ -750,6 +771,284 @@ private slots:
         client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
+    void synchronousControlClosureRetiresGuiBindings_data()
+    {
+        QTest::addColumn<QString>("trigger");
+        QTest::newRow("pane removal") << QStringLiteral("remove");
+        QTest::newRow("stack destruction") << QStringLiteral("destroy");
+        QTest::newRow("radio disconnect") << QStringLiteral("disconnect");
+        QTest::newRow("subscription renewal") << QStringLiteral("renew");
+    }
+
+    void synchronousControlClosureRetiresGuiBindings()
+    {
+        QFETCH(QString, trigger);
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        const int sliceId = station.addSlice();
+        QVERIFY(station.sliceById(sliceId));
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        QPointer<DisplayTransport> sourceMedia;
+        DaemonMediaController daemon(&server, &station, nullptr,
+            [&sourceMedia](QObject* owner) -> IMediaTransport* {
+                sourceMedia = new DisplayTransport(owner);
+                return sourceMedia;
+            });
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        auto stack = std::make_unique<PanadapterStack>();
+        stack->applyLayout(QStringLiteral("2v"),
+                           {QStringLiteral("pan-0"), QStringLiteral("pan-1")});
+        for (PanadapterApplet* applet : stack->allApplets()) {
+            applet->setActiveSliceIndex(sliceId);
+            applet->spectrumWidget()->setDisplayWindowPreservingHistory(
+                station.streamCentreHz(station.sliceById(sliceId)->streamIndex()), 48000);
+        }
+        QPointer<DisplayTransport> sinkMedia;
+        RemoteMediaController controller(&client, &remote, stack.get(), nullptr,
+            [&sinkMedia](QObject* owner) -> IMediaTransport* {
+                sinkMedia = new DisplayTransport(owner);
+                return sinkMedia;
+            });
+        auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+        auto* clientLink = new ClosingGuiControlTransport;
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(client.isHandshakeComplete());
+        QTRY_VERIFY(sourceMedia && sinkMedia);
+        sourceMedia->activate();
+        sinkMedia->activate();
+        QTRY_COMPARE(controller.activeEndpointCount(), 2);
+        QTRY_COMPARE(daemon.activeEndpointCount(), 2);
+        int endpointCountAtClose = -1;
+        clientLink->beforeClose = [&] { endpointCountAtClose = controller.activeEndpointCount(); };
+        clientLink->closeOnOp = trigger == QLatin1String("renew") ? "subscribe" : "unsubscribe";
+        if (trigger == QLatin1String("remove")) {
+            stack->removePanadapter(QStringLiteral("pan-0"));
+        } else if (trigger == QLatin1String("destroy")) {
+            stack.reset();
+        } else if (trigger == QLatin1String("disconnect")) {
+            station.setConnectionStateForTest(ConnectionState::Disconnected);
+        } else {
+            SpectrumWidget* widget = stack->spectrum(QStringLiteral("pan-0"));
+            widget->setDisplayWindowPreservingHistory(widget->centerFrequency(), 24000);
+        }
+        QTRY_VERIFY(endpointCountAtClose >= 0);
+        // A removal releases its binding before the send can re-enter stop().
+        QCOMPARE(endpointCountAtClose, trigger == QLatin1String("renew") ? 2 : 1);
+        QTRY_VERIFY(!client.mediaAvailable());
+        QCOMPARE(controller.activeEndpointCount(), 0);
+        QTRY_COMPARE(daemon.activeEndpointCount(), 0);
+        QTRY_COMPARE(daemon.activeSourceCount(), 0);
+    }
+
+    void logicalPanLifecycleKeepsMediaAcrossReparentAndRetiresItOnRemoval()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        const int sliceId = station.addSlice();
+        SliceModel* stationSlice = station.sliceById(sliceId);
+        QVERIFY(stationSlice);
+        const int stream = stationSlice->streamIndex();
+        QVERIFY(stream >= 0);
+        const double centre = station.streamCentreHz(stream);
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        QPointer<DisplayTransport> sourceMedia;
+        DaemonMediaController daemon(&server, &station, nullptr,
+            [&sourceMedia](QObject* owner) -> IMediaTransport* {
+                sourceMedia = new DisplayTransport(owner);
+                return sourceMedia;
+            });
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        auto stack = std::make_unique<PanadapterStack>();
+        PanadapterApplet* first = stack->addPanadapter(QStringLiteral("pan-0"));
+        first->setActiveSliceIndex(sliceId);
+        SpectrumWidget* firstWidget = first->spectrumWidget();
+        firstWidget->setDisplayWindowPreservingHistory(centre, 48000);
+        firstWidget->setSpectrumRenderMode(int(SpectrumRenderMode::Mode3D));
+        firstWidget->setWfUpdatePeriodMs(20);
+        stack->resize(600, 400);
+        stack->show();
+        QVERIFY(QTest::qWaitForWindowExposed(stack.get()));
+        QPointer<DisplayTransport> sinkMedia;
+        RemoteMediaController controller(&client, &remote, stack.get(), nullptr,
+            [&sinkMedia](QObject* owner) -> IMediaTransport* {
+                sinkMedia = new DisplayTransport(owner);
+                return sinkMedia;
+            });
+        QSignalSpy controls(&server, &StationServer::mediaControlReceived);
+        QSignalSpy frames(&controller, &RemoteMediaController::displayFrameReceived);
+        auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(client.isHandshakeComplete());
+        QTRY_VERIFY(sourceMedia && sinkMedia);
+        sourceMedia->other = sinkMedia;
+        sinkMedia->other = sourceMedia;
+        sourceMedia->activate();
+        sinkMedia->activate();
+        QTRY_COMPARE(daemon.activeEndpointCount(), 1);
+        QTRY_COMPARE(daemon.activeSourceCount(), 1);
+        QTRY_COMPARE(controller.activeEndpointCount(), 1);
+        const QJsonObject firstSubscription = lastControl(controls, QStringLiteral("subscribe"));
+        const quint32 firstEndpoint = quint32(firstSubscription.value(QStringLiteral("endpointId")).toDouble());
+        QVERIFY(firstEndpoint != 0);
+
+        QVector<float> iq(2048);
+        for (int i = 0; i < iq.size(); i += 2) {
+            iq[i] = 0.01f * std::cos(double(i) * 0.17);
+            iq[i + 1] = 0.01f * std::sin(double(i) * 0.17);
+        }
+        const auto feedFirst = [&] {
+            QMetaObject::invokeMethod(&station, "rawIqDataForStream", Qt::DirectConnection,
+                Q_ARG(int, stream), Q_ARG(QVector<float>, iq));
+            return !firstWidget->renderedPixels().isEmpty()
+                && firstWidget->dssRowsPushedForTest() > 0;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(feedFirst(), 5000);
+        const int rowsBeforeReparent = firstWidget->dssRowsPushedForTest();
+        const QByteArray stalePacket = sourceMedia->displayPackets.constLast();
+        QVERIFY(!stalePacket.isEmpty());
+
+        QTimer* subscriptionTimer = nullptr;
+        for (QTimer* timer : controller.findChildren<QTimer*>()) {
+            if (timer->interval() == 100) {
+                QVERIFY(!subscriptionTimer);
+                subscriptionTimer = timer;
+            }
+        }
+        QVERIFY(subscriptionTimer);
+        const auto fireSubscriptionTimer = [&] {
+            QVERIFY(QMetaObject::invokeMethod(subscriptionTimer, "timeout", Qt::DirectConnection));
+        };
+        const int subscriptionsBeforeReparent = countControl(controls, QStringLiteral("subscribe"));
+        const int unsubscriptionsBeforeReparent = countControl(controls, QStringLiteral("unsubscribe"));
+
+        stack->floatPanadapter(QStringLiteral("pan-0"));
+        QVERIFY(!firstWidget->isVisible());
+        fireSubscriptionTimer();
+        QCOMPARE(countControl(controls, QStringLiteral("subscribe")), subscriptionsBeforeReparent);
+        QCOMPARE(countControl(controls, QStringLiteral("unsubscribe")), unsubscriptionsBeforeReparent);
+        QCOMPARE(controller.activeEndpointCount(), 1);
+        QCOMPARE(daemon.activeEndpointCount(), 1);
+        QCOMPARE(firstWidget->dssRowsPushedForTest(), rowsBeforeReparent);
+        QTRY_VERIFY(firstWidget->isVisible());
+
+        stack->dockPanadapter(QStringLiteral("pan-0"));
+        QVERIFY(!firstWidget->isVisible());
+        fireSubscriptionTimer();
+        QCOMPARE(countControl(controls, QStringLiteral("subscribe")), subscriptionsBeforeReparent);
+        QCOMPARE(countControl(controls, QStringLiteral("unsubscribe")), unsubscriptionsBeforeReparent);
+        QCOMPARE(controller.activeEndpointCount(), 1);
+        QCOMPARE(daemon.activeEndpointCount(), 1);
+        QCOMPARE(firstWidget->dssRowsPushedForTest(), rowsBeforeReparent);
+        QTRY_VERIFY(firstWidget->isVisible());
+
+        // Rebuilding a layout around the same logical pan may renew runtime
+        // geometry, but it must retain the endpoint identity and its history.
+        stack->applyLayout(QStringLiteral("1"), {QStringLiteral("pan-0")});
+        QTRY_VERIFY(firstWidget->isVisible());
+        QTRY_COMPARE(controller.activeEndpointCount(), 1);
+        QCOMPARE(countControl(controls, QStringLiteral("unsubscribe")), unsubscriptionsBeforeReparent);
+        for (const auto& call : controls) {
+            const QJsonObject control = call.at(0).toJsonObject();
+            if (control.value(QStringLiteral("op")) == QLatin1String("subscribe")) {
+                QCOMPARE(quint32(control.value(QStringLiteral("endpointId")).toDouble()), firstEndpoint);
+            }
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(feedFirst()
+            && firstWidget->dssRowsPushedForTest() > rowsBeforeReparent, 5000);
+
+        // A layout shrink is a real retirement, unlike the reparenting above.
+        PanadapterApplet* second = stack->addPanadapter(QStringLiteral("pan-1"));
+        second->setActiveSliceIndex(sliceId);
+        second->spectrumWidget()->setDisplayWindowPreservingHistory(centre, 48000);
+        stack->applyLayout(QStringLiteral("2v"),
+                           {QStringLiteral("pan-0"), QStringLiteral("pan-1")});
+        QTRY_COMPARE(daemon.activeEndpointCount(), 2);
+        QTRY_COMPARE(daemon.activeSourceCount(), 1);
+        QPointer<PanadapterApplet> retiredByLayout(second);
+        QPointer<SpectrumWidget> retiredWidgetByLayout(second->spectrumWidget());
+        stack->applyLayout(QStringLiteral("1"), {QStringLiteral("pan-0")});
+        QTRY_COMPARE(daemon.activeEndpointCount(), 1);
+        QTRY_COMPARE(daemon.activeSourceCount(), 1);
+        QTRY_COMPARE(controller.activeEndpointCount(), 1);
+        QTRY_COMPARE(countControl(controls, QStringLiteral("unsubscribe")),
+                     unsubscriptionsBeforeReparent + 1);
+        QTRY_VERIFY(retiredByLayout.isNull());
+        QTRY_VERIFY(retiredWidgetByLayout.isNull());
+
+        // Last logical pan removal releases its endpoint and source. Do not
+        // touch the pointers after this deferred QObject destruction path.
+        QPointer<PanadapterApplet> retiredFirst(first);
+        QPointer<SpectrumWidget> retiredFirstWidget(firstWidget);
+        stack->removePanadapter(QStringLiteral("pan-0"));
+        QTRY_COMPARE(daemon.activeEndpointCount(), 0);
+        QTRY_COMPARE(daemon.activeSourceCount(), 0);
+        QTRY_COMPARE(controller.activeEndpointCount(), 0);
+        QTRY_COMPARE(countControl(controls, QStringLiteral("unsubscribe")),
+                     unsubscriptionsBeforeReparent + 2);
+        QTRY_VERIFY(retiredFirst.isNull());
+        QTRY_VERIFY(retiredFirstWidget.isNull());
+
+        // Reusing the pan id creates a fresh endpoint. A retained packet for
+        // the retired id must not be decoded into that replacement widget.
+        PanadapterApplet* replacement = stack->addPanadapter(QStringLiteral("pan-0"));
+        replacement->setActiveSliceIndex(sliceId);
+        SpectrumWidget* replacementWidget = replacement->spectrumWidget();
+        replacementWidget->setDisplayWindowPreservingHistory(centre, 48000);
+        replacementWidget->setSpectrumRenderMode(int(SpectrumRenderMode::Mode3D));
+        replacementWidget->setWfUpdatePeriodMs(20);
+        replacement->show();
+        QTRY_COMPARE(daemon.activeEndpointCount(), 1);
+        QTRY_COMPARE(daemon.activeSourceCount(), 1);
+        const QJsonObject replacementSubscription = lastControl(controls, QStringLiteral("subscribe"));
+        const quint32 replacementEndpoint = quint32(
+            replacementSubscription.value(QStringLiteral("endpointId")).toDouble());
+        QVERIFY(replacementEndpoint != 0);
+        QVERIFY(replacementEndpoint != firstEndpoint);
+        const int framesBeforeStaleDelivery = frames.size();
+        sinkMedia->deliver(stalePacket);
+        QCOMPARE(frames.size(), framesBeforeStaleDelivery);
+        QVERIFY(replacementWidget->renderedPixels().isEmpty());
+        const auto feedReplacement = [&] {
+            QMetaObject::invokeMethod(&station, "rawIqDataForStream", Qt::DirectConnection,
+                Q_ARG(int, stream), Q_ARG(QVector<float>, iq));
+            return !replacementWidget->renderedPixels().isEmpty();
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(feedReplacement(), 5000);
+
+        // Controller outlives the stack. Stack destruction must retire its
+        // current logical pan rather than retaining a dangling binding.
+        QPointer<PanadapterStack> destroyedStack(stack.get());
+        QPointer<SpectrumWidget> destroyedWidget(replacementWidget);
+        stack.reset();
+        QTRY_VERIFY(destroyedStack.isNull());
+        QTRY_VERIFY(destroyedWidget.isNull());
+        QTRY_COMPARE(controller.activeEndpointCount(), 0);
+        QTRY_COMPARE(daemon.activeEndpointCount(), 0);
+        QTRY_COMPARE(daemon.activeSourceCount(), 0);
+        client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
     void contextMediaAndRetirementStayInAuthenticatedSession()
     {
         QTemporaryDir dir;
@@ -942,8 +1241,12 @@ private slots:
         context.insert(QStringLiteral("wideband"), availableWideband(false));
         QVERIFY(server.sendMediaControl(context, server.mediaSessionEpoch()));
         QTRY_COMPARE(countControl(controls, QStringLiteral("keyframe")), 1);
+        // Temporary render hides also preserve the active pan's Clarity
+        // observations. Logical retirement below still rejects later samples.
+        widget->hide();
         deliverFloor(noiseFloor);
         QCOMPARE(floors.size(), 1);
+        widget->show();
         QCOMPARE(clarity.smoothedFloor(), -132.375f);
         QCOMPARE(widget->wfActiveLowThreshold(), -137.375f);
         QCOMPARE(widget->wfActiveHighThreshold(), -77.375f);
@@ -1029,17 +1332,22 @@ private slots:
         media->deliver(encoder.encode(frame));
         QCOMPARE(frames.count(), 3);
         QTRY_COMPARE(widget->dssRowsPushedForTest(), 3);
-        applet->hide();
+        // Logical pan retirement, rather than a transient QWidget hide,
+        // terminates this endpoint. Keep guarded pointers because the stack
+        // deletes the applet after emitting panRetired().
+        QPointer<PanadapterApplet> retiredApplet(applet);
+        QPointer<SpectrumWidget> retiredWidget(widget);
+        stack.removePanadapter(QStringLiteral("pan-0"));
         QTRY_COMPARE(countControl(controls, QStringLiteral("unsubscribe")), 1);
         QCOMPARE(controller.activeEndpointCount(), 0);
         deliverFloor(noiseFloor);
         QCOMPARE(floors.size(), 2);
         media->deliver(packet);
         QCOMPARE(frames.count(), 3);
+        QTRY_VERIFY(retiredApplet.isNull());
+        QTRY_VERIFY(retiredWidget.isNull());
         client.disconnectFromStation(QStringLiteral("test complete"));
         QVERIFY(!media || !media->active);
-        QVERIFY(widget->renderedPixels().isEmpty());
-        QCOMPARE(widget->dssRowsPushedForTest(), 0);
     }
 };
 QTEST_MAIN(TestRemoteMediaController)
