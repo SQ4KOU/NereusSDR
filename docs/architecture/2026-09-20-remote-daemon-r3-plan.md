@@ -681,7 +681,11 @@ measurements. Never equate transport send acceptance with packet delivery.
 - [x] Port/adapt Aether graph/history behavior with attribution and gap tests.
 - [x] Wire live banner and remote Network Diagnostics, including older-Core,
   stale and reconnect states; preserve direct-mode behavior.
-- [ ] Verify the integrated checkpoint and live receive-only Rock 5C session.
+- [x] Verify the integrated checkpoint and live receive-only Rock 5C session.
+  Matching `c9065756` passed 695/695 executable tests, native installation,
+  banner/all-three-tab readability and real restart/reconnect history gaps.
+  R-R3-35 adds total/directional Core–GUI traffic, separate Opus/track kbps,
+  and speaker-buffer ms. Audio soak and true end-to-end delay remain separate.
 
 **Verification:** follow the design's codec/lifecycle, real collector,
 history, widget and live acceptance cases. Register and build focused tests

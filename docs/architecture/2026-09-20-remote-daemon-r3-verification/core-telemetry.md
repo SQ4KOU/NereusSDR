@@ -130,3 +130,31 @@ with eleven existing inner Qt skips. Logs:
 `r3-bandwidth-reviewed-test.log`. Native installation and live graph acceptance
 remain pending; these software checks do not establish end-to-end audio latency
 or resolve the separate hardware audio-soak requirement.
+
+
+## R-R3-35 matching live installation, c9065756
+
+The signed checkpoint was installed on September 21 at 23:56 EDT after all
+139 source-overlay hashes matched and the Rock 5C production build, staged
+runtime dependencies and `--help` passed. The matching Mac GUI passed strict,
+deep code-signature verification and private Core/GUI library UUID checks,
+and ran with the saved `radxa_5c_r3` profile. The service remained active with
+zero automatic restarts; a recoverable `200d2a0e` installation was retained.
+Private proof: `r3-bandwidth-native-build.log`, `r3-bandwidth-install.log`,
+`r3-bandwidth-gui-identity.json`, and `r3-bandwidth-core-startup.log`.
+
+The live banner fit at the operator's window size. Connection visibly showed
+Core→GUI, GUI→Core and total with kbps labels (about 550–570 kbps after restart);
+Audio showed about 24 kbps Opus payload and 26 kbps binary audio-track traffic.
+The Round trip / buffering tab separately showed sampled speaker-ring duration
+around 20 ms. All three tabs were visually inspected in the actual application;
+these observations are samples, not fixed bandwidth or latency promises.
+
+The Core restart ended the session at 23:55:56 and the GUI automatically
+reauthenticated at 23:56:14. Traffic, audio and buffering histories retained a
+visible gap and resumed after fresh baselines. The Audio tab was left visible.
+This completes the R-R3-35 software, installation and graph-readability check.
+It does not measure capture-to-playback latency or close the audio soak: an
+underflow-triggered audio restart was still logged before the Core installation.
+The separate R-R3-34 receiver-persistence gap also reproduced: Core restarted
+with its configured single receiver and the GUI retired the missing second slice.
