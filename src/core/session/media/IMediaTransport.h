@@ -15,7 +15,16 @@
 #include <QObject>
 #include <QString>
 
+#include <optional>
+
 namespace NereusSDR {
+
+struct MediaTransportTelemetry {
+    quint64 receivedDisplayPayloadBytes = 0;
+    quint64 submittedDisplayPayloadBytes = 0;
+    quint64 receivedRtpBytes = 0;
+    quint64 submittedRtpBytes = 0;
+};
 
 class IMediaTransport : public QObject {
     Q_OBJECT
@@ -60,6 +69,16 @@ public:
     virtual bool sendRtp(const QByteArray& packet) = 0;
 
     virtual bool isReady() const = 0;
+
+    /// Cumulative application payload bytes for the current transport start.
+    /// Submitted values count preflight-valid calls into the transport
+    /// library, including calls which return false or throw; they do not
+    /// assert network delivery or SCTP queue acceptance. Unsupported
+    /// transports return nullopt.
+    virtual std::optional<MediaTransportTelemetry> telemetry() const
+    {
+        return std::nullopt;
+    }
 
 signals:
     void localDescription(const QString& sdp, const QString& type);

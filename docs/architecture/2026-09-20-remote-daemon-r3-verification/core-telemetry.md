@@ -87,3 +87,46 @@ live Core observations, with unavailable radio RTT called out and its historical
 samples retained as history. The Audio plots distinguish red Core source-drop
 events from GUI underflows/overflows; source drops remain under investigation.
 Receive-only reconnect gap acceptance and the real audio soak remain open.
+
+
+## R-R3-35 bandwidth and speaker-buffer extension
+
+The GUI now collects application traffic across control and media. The
+Connection tab starts with Core→GUI received, GUI→Core outgoing, and total;
+all share adaptive SI kbps/Mbps units. Audio starts with bounded binary
+media-track bytes and validated Opus payload in kbps. Both are subsets of total,
+not additional traffic. The delay tab includes worker-sampled speaker PCM-ring
+buffering in ms. Control RTT remains a round trip; capture-to-playback latency
+is not measured. The banner adds Core→GUI, GUI→Core and total with shared adaptive kbps/Mbps units, plus the separate Opus payload rate.
+
+Counter boundaries are explicit: GUI control text plus bounded display and
+audio-track callbacks; receive counts precede local queue pruning. Outgoing
+media counts submissions after adapter validation, including transport false
+returns or exceptions. It does not prove delivery, and the figures exclude
+framing, encryption, ICE, VPN and lower network overhead. Opus bytes come from
+actual validated RTP parsing, including variable header/extension/padding
+handling, at the receiver boundary after the media queue. Duplicates count as
+traffic, while invalid packets do not count as Opus payload.
+
+The rebuilt seven affected executables passed in **13.88 seconds**:
+`media_transport`, `media_peer`, `opus_audio_codec`, `remote_audio_receiver`,
+`remote_telemetry`, `remote_diagnostics`, and `telemetry_history`. Coverage
+includes real encrypted peers, exact byte counts, invalid-send exclusion,
+parser payload lengths, a gated worker for deterministic ingress overflow,
+measured queue duration, true elapsed rates, no double counting, independent
+lifetime resets, unknown versus zero, graph units/rendering and reconnect gaps.
+Logs: `r3-bandwidth-focused-{build,test}.log`. The upstream transport API offers
+no deterministic public hook for a post-validation false/throw; its submitted
+counter placement is source-reviewed, with successful and preflight-refused
+calls covered by real transport tests.
+
+The consolidated independent review found one banner presentation gap: it
+showed only aggregate traffic with a fixed Mbps unit. The corrected banner
+includes both directions and total, with assertions for kbps and Mbps. The
+rebuilt presentation checks passed **2/2**. The final `all_tests`/`nereusd`
+build and unfiltered suite then passed **695/695 executables in 139.81 seconds**,
+with eleven existing inner Qt skips. Logs:
+`r3-bandwidth-reviewed-build.log`, `r3-bandwidth-banner-reviewed-test.log`, and
+`r3-bandwidth-reviewed-test.log`. Native installation and live graph acceptance
+remain pending; these software checks do not establish end-to-end audio latency
+or resolve the separate hardware audio-soak requirement.

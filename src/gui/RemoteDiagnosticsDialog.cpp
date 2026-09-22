@@ -44,7 +44,7 @@ struct GraphSeriesSpec {
 TimeSeriesGraphWidget::Series toGraphSeries(const TelemetryHistory& history,
                                              Metric metric,
                                              const GraphSeriesSpec& spec,
-                                             qint64 nowMs, int rangeSeconds)
+                                             qint64 nowMs, int rangeSeconds, double scale = 1.0)
 {
     const TelemetryHistory::Series source = history.series(metric, nowMs, rangeSeconds);
     TimeSeriesGraphWidget::Series result;
@@ -55,7 +55,7 @@ TimeSeriesGraphWidget::Series toGraphSeries(const TelemetryHistory& history,
     result.points.reserve(source.points.size());
     result.breakBefore.reserve(source.points.size());
     for (const TelemetryHistory::Point& point : source.points) {
-        result.points.append({point.seconds, point.value});
+        result.points.append({point.seconds, point.value * scale});
         result.breakBefore.append(point.breakBefore);
     }
     return result;
@@ -63,12 +63,12 @@ TimeSeriesGraphWidget::Series toGraphSeries(const TelemetryHistory& history,
 
 void setGraph(TimeSeriesGraphWidget* graph, const TelemetryHistory& history,
               qint64 nowMs, int rangeSeconds,
-              std::initializer_list<GraphSeriesSpec> specs)
+              std::initializer_list<GraphSeriesSpec> specs, double scale = 1.0)
 {
     QVector<TimeSeriesGraphWidget::Series> series;
     series.reserve(static_cast<qsizetype>(specs.size()));
     for (const GraphSeriesSpec& spec : specs) {
-        series.append(toGraphSeries(history, spec.metric, spec, nowMs, rangeSeconds));
+        series.append(toGraphSeries(history, spec.metric, spec, nowMs, rangeSeconds, scale));
     }
     graph->setSeries(std::move(series), rangeSeconds);
 }
@@ -141,6 +141,9 @@ void RemoteDiagnosticsDialog::buildUi()
     auto* tabs = new QTabWidget(this);
     tabs->setObjectName(QStringLiteral("remoteDiagnosticsTabs"));
     QWidget* connection = buildTab(tr("Connection"));
+    m_totalTrafficGraph = addGraph(connection, tr("Total Core ↔ GUI application traffic"), tr(" kbps"));
+    m_totalTrafficGraph->setObjectName(QStringLiteral("remoteTotalTrafficGraph"));
+    m_totalTrafficGraph->setToolTip(tr("Control, display and RTP observed at the GUI. Opus is included. Excludes transport, encryption, VPN and network overhead; outgoing media counts submissions, not confirmed delivery."));
     m_radioLinkGraph = addGraph(connection, tr("Radio link throughput"), tr(" Mbps"));
     m_radioLinkGraph->setObjectName(QStringLiteral("remoteRadioLinkGraph"));
     m_controlPayloadGraph = addGraph(connection, tr("Control payload throughput"), tr(" kbit/s"));
@@ -151,11 +154,17 @@ void RemoteDiagnosticsDialog::buildUi()
     m_roundTripGraph = addGraph(roundTrip, tr("Round-trip time"), tr(" ms"));
     m_roundTripGraph->setObjectName(QStringLiteral("remoteRoundTripGraph"));
     m_roundTripGraph->setToolTip(tr("RTT graphs hold the last measurement between pings; age advances independently and stale values disappear."));
+    m_speakerBufferGraph = addGraph(roundTrip, tr("Client speaker buffering — not end-to-end latency"), tr(" ms"));
+    m_speakerBufferGraph->setObjectName(QStringLiteral("remoteSpeakerBufferGraph"));
+    m_speakerBufferGraph->setToolTip(tr("Sampled PCM speaker-ring duration only. Excludes network, encoder, jitter/matcher and audio-device delay."));
     m_packetAgeGraph = addGraph(roundTrip, tr("Last admitted audio packet age"), tr(" ms"));
     m_packetAgeGraph->setObjectName(QStringLiteral("remotePacketAgeGraph"));
-    tabs->addTab(roundTrip, tr("Round trip"));
+    tabs->addTab(roundTrip, tr("Round trip / buffering"));
 
     QWidget* audio = buildTab(tr("Audio"));
+    m_opusTrafficGraph = addGraph(audio, tr("Opus audio traffic received at GUI"), tr(" kbps"));
+    m_opusTrafficGraph->setObjectName(QStringLiteral("remoteOpusTrafficGraph"));
+    m_opusTrafficGraph->setToolTip(tr("Audio packets count binary audio-track messages, including RTP headers; valid Opus payload excludes headers. Both are subsets of total traffic. Transport/network overhead is excluded. Opus transmit is inactive in receive-only mode."));
     m_audioPacketsGraph = addGraph(audio, tr("Audio packet activity"), tr(" packets/s"));
     m_audioPacketsGraph->setObjectName(QStringLiteral("remoteAudioPacketsGraph"));
     m_sourceFramesGraph = addGraph(audio, tr("Core source frames"), tr(" frames/s"));
@@ -256,6 +265,27 @@ void RemoteDiagnosticsDialog::refreshGraphs()
     }
     const auto& history = m_controller->history();
     const qint64 nowMs = m_controller->nowMs();
+    // All directions share one unit over the selected history range.
+    double trafficMaximumKbps = 0;
+    for (const auto metric : {Metric::CoreGuiRxKbps, Metric::CoreGuiTxKbps, Metric::CoreGuiTotalKbps}) {
+        for (const auto& point : history.series(metric, nowMs, m_rangeSeconds).points) {
+            trafficMaximumKbps = std::max(trafficMaximumKbps, point.value);
+        }
+    }
+    const bool megabits = trafficMaximumKbps >= 1000.0;
+    const char* trafficUnit = megabits ? " Mbps" : " kbps";
+    setGraph(m_totalTrafficGraph, history, nowMs, m_rangeSeconds, {
+        {Metric::CoreGuiRxKbps, "Core → GUI received", "#00b4d8", trafficUnit},
+        {Metric::CoreGuiTxKbps, "GUI → Core outgoing", "#5fff8a", trafficUnit},
+        {Metric::CoreGuiTotalKbps, "Total", "#ffd700", trafficUnit},
+    }, megabits ? 0.001 : 1.0);
+    setGraph(m_opusTrafficGraph, history, nowMs, m_rangeSeconds, {
+        {Metric::AudioRtpRxKbps, "Audio packets", "#00b4d8", " kbps"},
+        {Metric::OpusPayloadRxKbps, "Opus payload", "#5fa8ff", " kbps"},
+    });
+    setGraph(m_speakerBufferGraph, history, nowMs, m_rangeSeconds, {
+        {Metric::SpeakerBufferMs, "Speaker buffer", "#5fff8a", " ms"},
+    });
     setGraph(m_radioLinkGraph, history, nowMs, m_rangeSeconds, {
         {Metric::RadioRxMbps, "Radio RX", "#00b4d8", " Mbps"},
         {Metric::RadioTxMbps, "Radio TX", "#5fff8a", " Mbps"},

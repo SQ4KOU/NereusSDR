@@ -46,6 +46,9 @@ private:
     QTimer m_refreshTimer;
     QComboBox* m_rangeSelector{nullptr};
     QLabel* m_detailLabel{nullptr};
+    TimeSeriesGraphWidget* m_totalTrafficGraph{nullptr};
+    TimeSeriesGraphWidget* m_opusTrafficGraph{nullptr};
+    TimeSeriesGraphWidget* m_speakerBufferGraph{nullptr};
     TimeSeriesGraphWidget* m_radioLinkGraph{nullptr};
     TimeSeriesGraphWidget* m_controlPayloadGraph{nullptr};
     TimeSeriesGraphWidget* m_roundTripGraph{nullptr};

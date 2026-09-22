@@ -36,9 +36,9 @@ QString number(std::optional<double> value, int decimals = 1)
 
 RemoteTelemetryController::RemoteTelemetryController(
     StationClient* client, RemoteMediaController* media, QObject* parent,
-    Clock clock, PlaybackObserver playback)
+    Clock clock, PlaybackObserver playback, TrafficObserver traffic)
     : QObject(parent), m_client(client), m_media(media),
-      m_now(std::move(clock)), m_playback(std::move(playback))
+      m_now(std::move(clock)), m_playback(std::move(playback)), m_traffic(std::move(traffic))
 {
     m_clock.start();
     m_timer.setInterval(1000);
@@ -68,9 +68,10 @@ qint64 RemoteTelemetryController::nowMs() const
 
 void RemoteTelemetryController::clearSession()
 {
-    breakRange(m_history, Metric::RadioRxMbps, Metric::PlaybackPacketAgeMs);
+    breakRange(m_history, Metric::RadioRxMbps, Metric::SpeakerBufferMs);
     m_station.reset();
     m_transportBaseline.reset();
+    m_mediaBaseline.reset();
     m_playbackBaseline.reset();
     m_playbackEventsBaseline.reset();
     m_lastTickMs = -1;
@@ -161,6 +162,9 @@ void RemoteTelemetryController::sampleNow()
     TelemetryHistory::Sample observation{now, m_epoch, {}};
     auto& values = observation.values;
     m_view.controlRxKbps.reset(); m_view.controlTxKbps.reset();
+    m_view.coreGuiRxKbps.reset(); m_view.coreGuiTxKbps.reset();
+    m_view.coreGuiTotalKbps.reset(); m_view.opusRxKbps.reset();
+    m_view.audioRtpRxKbps.reset();
     m_view.coreRttMs.reset(); m_view.coreRttAgeMs.reset();
     const auto transport = m_client->transportTelemetry();
     if (transport) {
@@ -180,6 +184,40 @@ void RemoteTelemetryController::sampleNow()
     values[index(Metric::SessionPayloadRxKbps)] = m_view.controlRxKbps;
     values[index(Metric::SessionPayloadTxKbps)] = m_view.controlTxKbps;
 
+    const auto media = m_traffic ? m_traffic()
+        : m_media ? m_media->trafficTelemetry() : std::nullopt;
+    const bool mediaContinuous = media && m_mediaBaseline
+        && media->generation == m_mediaBaseline->generation && elapsed > 0
+        && media->traffic.receivedDisplayPayloadBytes >= m_mediaBaseline->traffic.receivedDisplayPayloadBytes
+        && media->traffic.receivedRtpBytes >= m_mediaBaseline->traffic.receivedRtpBytes
+        && media->traffic.submittedDisplayPayloadBytes >= m_mediaBaseline->traffic.submittedDisplayPayloadBytes
+        && media->traffic.submittedRtpBytes >= m_mediaBaseline->traffic.submittedRtpBytes;
+    if (mediaContinuous) {
+        const auto& current = media->traffic;
+        const auto& previous = m_mediaBaseline->traffic;
+        const auto displayRx = rate(current.receivedDisplayPayloadBytes, previous.receivedDisplayPayloadBytes, elapsed);
+        const auto rtpRx = rate(current.receivedRtpBytes, previous.receivedRtpBytes, elapsed);
+        if (rtpRx) { m_view.audioRtpRxKbps = *rtpRx * 8.0 / 1000.0; }
+        const auto displayTx = rate(current.submittedDisplayPayloadBytes, previous.submittedDisplayPayloadBytes, elapsed);
+        const auto rtpTx = rate(current.submittedRtpBytes, previous.submittedRtpBytes, elapsed);
+        if (displayRx && rtpRx && m_view.controlRxKbps) {
+            m_view.coreGuiRxKbps = *m_view.controlRxKbps + (*displayRx + *rtpRx) * 8.0 / 1000.0;
+        }
+        if (displayTx && rtpTx && m_view.controlTxKbps) {
+            m_view.coreGuiTxKbps = *m_view.controlTxKbps + (*displayTx + *rtpTx) * 8.0 / 1000.0;
+        }
+        if (m_view.coreGuiRxKbps && m_view.coreGuiTxKbps) {
+            m_view.coreGuiTotalKbps = *m_view.coreGuiRxKbps + *m_view.coreGuiTxKbps;
+        }
+    }
+    // Each media lifetime has its own counters. Missing/new peers produce
+    // a gap; they must never turn an unknown media rate into control-only zero.
+    m_mediaBaseline = media;
+    values[index(Metric::CoreGuiRxKbps)] = m_view.coreGuiRxKbps;
+    values[index(Metric::CoreGuiTxKbps)] = m_view.coreGuiTxKbps;
+    values[index(Metric::CoreGuiTotalKbps)] = m_view.coreGuiTotalKbps;
+    values[index(Metric::AudioRtpRxKbps)] = m_view.audioRtpRxKbps;
+
     const auto playback = m_playback ? m_playback()
         : m_media ? m_media->audioTelemetry() : RemoteAudioReceiverTelemetry{};
     m_view.playback = playback;
@@ -187,10 +225,15 @@ void RemoteTelemetryController::sampleNow()
         && playback.lastDeviceProgressAgeMs && *playback.lastDeviceProgressAgeMs < 500;
     if (m_playbackBaseline && playback.generation != m_playbackBaseline->generation) {
         breakRange(m_history, Metric::PlaybackDecodedPacketsPerSecond, Metric::PlaybackPacketAgeMs);
+        breakRange(m_history, Metric::OpusPayloadRxKbps, Metric::SpeakerBufferMs);
     }
     if (playback.running && m_playbackBaseline && m_playbackBaseline->running
         && playback.generation == m_playbackBaseline->generation && elapsed > 0) {
         const auto& previous = *m_playbackBaseline;
+        if (mediaContinuous) {
+            const auto opus = rate(playback.receivedOpusPayloadBytes, previous.receivedOpusPayloadBytes, elapsed);
+            if (opus) { m_view.opusRxKbps = *opus * 8.0 / 1000.0; }
+        }
         values[index(Metric::PlaybackDecodedPacketsPerSecond)] = rate(playback.decodedPackets, previous.decodedPackets, elapsed);
         values[index(Metric::PlaybackConcealedPacketsPerSecond)] = rate(playback.concealedPackets, previous.concealedPackets, elapsed);
         values[index(Metric::PlaybackLatePacketsPerSecond)] = rate(playback.latePackets, previous.latePackets, elapsed);
@@ -217,10 +260,14 @@ void RemoteTelemetryController::sampleNow()
     if (playback.running && playback.lastAdmittedPacketAgeMs) {
         values[index(Metric::PlaybackPacketAgeMs)] = double(*playback.lastAdmittedPacketAgeMs);
     }
+    values[index(Metric::OpusPayloadRxKbps)] = m_view.opusRxKbps;
+    if (playback.running) {
+        values[index(Metric::SpeakerBufferMs)] = playback.speakerQueuedMs;
+    }
     m_playbackBaseline = playback;
     m_lastTickMs = now;
     m_history.append(observation, mask(Metric::SessionPayloadRxKbps, Metric::SessionRttMs)
-        | mask(Metric::PlaybackDecodedPacketsPerSecond, Metric::PlaybackPacketAgeMs));
+        | mask(Metric::PlaybackDecodedPacketsPerSecond, Metric::SpeakerBufferMs));
     refreshCurrent(now);
     emit changed();
 }
@@ -239,7 +286,18 @@ QString RemoteTelemetryController::bannerText() const
             : tr("Radio offline"));
         break;
     }
-    parts << tr("Core %1 ms").arg(m_view.coreRttMs ? QString::number(*m_view.coreRttMs) : QStringLiteral("—"));
+    if (m_view.coreGuiTotalKbps) {
+        const bool megabits = *m_view.coreGuiTotalKbps >= 1000.0;
+        const double divisor = megabits ? 1000.0 : 1.0;
+        const auto rateText = [divisor](std::optional<double> kbps) {
+            return number(kbps ? std::optional<double>(*kbps / divisor) : std::nullopt);
+        };
+        parts << tr("Core ↓%1 ↑%2 total %3 %4")
+            .arg(rateText(m_view.coreGuiRxKbps), rateText(m_view.coreGuiTxKbps),
+                 rateText(m_view.coreGuiTotalKbps), megabits ? tr("Mbps") : tr("kbps"));
+    }
+    if (m_view.opusRxKbps) { parts << tr("Opus %1 kbps").arg(number(m_view.opusRxKbps)); }
+    parts << tr("Core RTT %1 ms").arg(m_view.coreRttMs ? QString::number(*m_view.coreRttMs) : QStringLiteral("—"));
     parts << (m_view.playbackActive ? tr("Audio playing")
         : m_view.playback.running ? tr("Audio waiting") : tr("Audio stopped"));
     return parts.join(QStringLiteral("  ·  "));
@@ -252,6 +310,13 @@ QString RemoteTelemetryController::detailText() const
     if (m_view.stationAgeMs) { text << tr("Core measurements received %1 ms ago.").arg(*m_view.stationAgeMs); }
     text << tr("Radio rates: Core ↔ radio, in Mbps. Control payload: GUI ↔ Core, excluding media and transport overhead.");
     text << tr("Control payload RX %1 / TX %2 kbit/s").arg(number(m_view.controlRxKbps), number(m_view.controlTxKbps));
+    text << tr("GUI-observed application traffic: Core→GUI %1 / GUI→Core %2 / total %3 kbps.")
+        .arg(number(m_view.coreGuiRxKbps), number(m_view.coreGuiTxKbps), number(m_view.coreGuiTotalKbps));
+    text << tr("Total includes control text, display and audio-track messages. Valid Opus payload received: %1 kbps, already included in total. Opus transmit is inactive in receive-only mode.")
+        .arg(number(m_view.opusRxKbps));
+    text << tr("Binary audio-track messages received: %1 kbps, including RTP headers and packets later dropped locally. The Opus payload subset counts validated receiver submissions, including duplicates.")
+        .arg(number(m_view.audioRtpRxKbps));
+    text << tr("Application bytes exclude transport, encryption, VPN and network overhead. Outgoing media counts submissions to the transport, including queued or failed sends; it does not prove delivery.");
     text << (m_view.coreRttAgeMs ? tr("Core RTT: WebSocket round trip, measured %1 ms ago.").arg(*m_view.coreRttAgeMs)
         : tr("Core RTT: no recent pong measurement."));
     text << (m_view.radio.rttMs && m_view.radio.rttAgeMs
@@ -263,6 +328,9 @@ QString RemoteTelemetryController::detailText() const
              number(m_view.coreAudio.sendAcceptedPerSecond), number(m_view.coreAudio.sendRejectedPerSecond),
              number(m_view.coreAudio.sourceDropsPerSecond));
     const auto& p = m_view.playback;
+    text << tr("Client speaker buffering: %1 ms (sampled PCM ring only). This excludes network, encoder, jitter/matcher and audio-device delay.")
+        .arg(number(p.running ? p.speakerQueuedMs : std::nullopt));
+    text << tr("End-to-end Opus latency is not measured. Core RTT is a control round trip, not one-way audio latency; RTT/2 is not used.");
     text << tr("Playback context %1: admitted %2, decoded %3, concealed %4, late %5, invalid %6, duplicate %7, rejected headers %8.")
         .arg(p.generation).arg(p.acceptedPackets).arg(p.decodedPackets).arg(p.concealedPackets)
         .arg(p.latePackets).arg(p.invalidPackets).arg(p.duplicatePackets).arg(p.rejectedHeaders);

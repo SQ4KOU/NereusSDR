@@ -14,6 +14,7 @@
 #include "core/session/media/IMediaTransport.h"
 
 #include <memory>
+#include <optional>
 
 namespace NereusSDR {
 
@@ -41,6 +42,7 @@ public:
     bool sendRtp(const QByteArray& packet) override;
 
     bool isReady() const override;
+    std::optional<MediaTransportTelemetry> telemetry() const override;
 
 private:
     struct Private;

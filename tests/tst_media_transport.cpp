@@ -25,6 +25,7 @@ class TestMediaTransport : public QObject {
 
 private slots:
     void encryptedPeersCarryDisplayAndRtp();
+    void telemetryCountsValidatedTrafficAndResets();
     void boundedInputsRefuseBeforeTransport();
     void stopCancelsOldCallbacksAndRecreates();
     void signalRestartDropsRemainingOldGenerationMedia();
@@ -150,6 +151,87 @@ void TestMediaTransport::encryptedPeersCarryDisplayAndRtp()
     QCOMPARE(displayReceived.last().at(0).toByteArray(), boundaryDisplay);
     QCOMPARE(rtpReceived.last().at(0).toByteArray(), boundaryRtp);
     QVERIFY(!offerer.sendRtp(rtpPacket(9, 15, kTestAudioSsrc + 1)));
+
+    offerer.stop();
+    answerer.stop();
+}
+
+void TestMediaTransport::telemetryCountsValidatedTrafficAndResets()
+{
+    LibDataChannelMediaTransport offerer;
+    LibDataChannelMediaTransport answerer;
+    QSignalSpy displayReceived(&answerer, &IMediaTransport::displayReceived);
+    QSignalSpy rtpReceived(&answerer, &IMediaTransport::rtpReceived);
+    startPair(offerer, answerer);
+
+    QVERIFY(offerer.telemetry().has_value());
+    QVERIFY(answerer.telemetry().has_value());
+    const auto countersAreZero = [](const MediaTransportTelemetry& telemetry) {
+        return telemetry.receivedDisplayPayloadBytes == 0
+            && telemetry.submittedDisplayPayloadBytes == 0
+            && telemetry.receivedRtpBytes == 0
+            && telemetry.submittedRtpBytes == 0;
+    };
+    QVERIFY(countersAreZero(*offerer.telemetry()));
+    QVERIFY(countersAreZero(*answerer.telemetry()));
+
+    const QByteArray display = QByteArrayLiteral("observed-display-payload");
+    const QByteArray rtp = rtpPacket(40, 37);
+    QVERIFY(offerer.sendDisplay(display));
+    QTRY_COMPARE_WITH_TIMEOUT(displayReceived.size(), 1, 5000);
+    QVERIFY(offerer.sendRtp(rtp));
+    QTRY_COMPARE_WITH_TIMEOUT(rtpReceived.size(), 1, 5000);
+
+    const auto trafficArrived = [&answerer, &display, &rtp] {
+        const auto snapshot = answerer.telemetry();
+        return snapshot
+            && snapshot->receivedDisplayPayloadBytes
+                == static_cast<quint64>(display.size())
+            && snapshot->receivedRtpBytes == static_cast<quint64>(rtp.size());
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(trafficArrived(), 5000);
+    const MediaTransportTelemetry submitted = *offerer.telemetry();
+    QCOMPARE(submitted.submittedDisplayPayloadBytes,
+             static_cast<quint64>(display.size()));
+    QCOMPARE(submitted.submittedRtpBytes, static_cast<quint64>(rtp.size()));
+    QCOMPARE(submitted.receivedDisplayPayloadBytes, quint64(0));
+    QCOMPARE(submitted.receivedRtpBytes, quint64(0));
+
+    // These fail the adapter's own preflight and never become submissions.
+    QVERIFY(!offerer.sendDisplay(QByteArray{}));
+    QVERIFY(!offerer.sendDisplay(QByteArray(
+        IMediaTransport::kMaxDisplayMessageBytes + 1, 'x')));
+    QVERIFY(!offerer.sendRtp(QByteArray(
+        IMediaTransport::kMinRawRtpBytes - 1, 'x')));
+    QVERIFY(!offerer.sendRtp(QByteArray(
+        IMediaTransport::kMaxRawRtpBytes + 1, 'x')));
+    QVERIFY(!offerer.sendRtp(rtpPacket(41, 15, kTestAudioSsrc + 1)));
+    const MediaTransportTelemetry afterInvalid = *offerer.telemetry();
+    QCOMPARE(afterInvalid.receivedDisplayPayloadBytes,
+             submitted.receivedDisplayPayloadBytes);
+    QCOMPARE(afterInvalid.submittedDisplayPayloadBytes,
+             submitted.submittedDisplayPayloadBytes);
+    QCOMPARE(afterInvalid.receivedRtpBytes, submitted.receivedRtpBytes);
+    QCOMPARE(afterInvalid.submittedRtpBytes, submitted.submittedRtpBytes);
+
+    offerer.stop();
+    answerer.stop();
+    QVERIFY(!offerer.telemetry().has_value());
+    QVERIFY(!answerer.telemetry().has_value());
+
+    // A new start owns a new callback bridge and therefore fresh counters.
+    QSignalSpy offerReady(&offerer, &IMediaTransport::ready);
+    QSignalSpy answerReady(&answerer, &IMediaTransport::ready);
+    QVERIFY(answerer.start({IMediaTransport::Role::Answerer,
+                            kTestAudioSsrc}));
+    QVERIFY(offerer.start({IMediaTransport::Role::Offerer,
+                           kTestAudioSsrc}));
+    QVERIFY(offerer.telemetry().has_value());
+    QVERIFY(answerer.telemetry().has_value());
+    QVERIFY(countersAreZero(*offerer.telemetry()));
+    QVERIFY(countersAreZero(*answerer.telemetry()));
+    QTRY_COMPARE_WITH_TIMEOUT(offerReady.size(), 1, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(answerReady.size(), 1, 10000);
 
     offerer.stop();
     answerer.stop();

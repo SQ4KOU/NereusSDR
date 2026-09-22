@@ -19,8 +19,14 @@
 #include <QString>
 
 #include <functional>
+#include <optional>
 
 namespace NereusSDR {
+
+struct MediaPeerTelemetry {
+    quint64 generation = 0;
+    MediaTransportTelemetry traffic;
+};
 
 class MediaPeer final : public QObject {
     Q_OBJECT
@@ -42,6 +48,7 @@ public:
     bool isReady() const;
     QString connectionId() const;
     quint32 audioSsrc() const;
+    std::optional<MediaPeerTelemetry> telemetry() const;
 
 signals:
     void controlReady(const QJsonObject& control);

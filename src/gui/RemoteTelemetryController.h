@@ -4,6 +4,7 @@
 #include "core/session/StationTelemetry.h"
 #include "core/session/SessionTransport.h"
 #include "core/session/media/RemoteAudioReceiver.h"
+#include "core/session/media/MediaPeer.h"
 #include <QElapsedTimer>
 #include <QObject>
 #include <QPointer>
@@ -21,6 +22,8 @@ struct RemoteTelemetryView {
     StationRadioTelemetry radio;
     StationAudioTelemetry coreAudio;
     std::optional<double> controlRxKbps, controlTxKbps;
+    std::optional<double> coreGuiRxKbps, coreGuiTxKbps, coreGuiTotalKbps;
+    std::optional<double> opusRxKbps, audioRtpRxKbps;
     std::optional<quint64> coreRttMs;
     std::optional<qint64> coreRttAgeMs;
     RemoteAudioReceiverTelemetry playback;
@@ -34,9 +37,11 @@ class RemoteTelemetryController final : public QObject {
 public:
     using Clock = std::function<qint64()>;
     using PlaybackObserver = std::function<RemoteAudioReceiverTelemetry()>;
+    using TrafficObserver = std::function<std::optional<MediaPeerTelemetry>()>;
     RemoteTelemetryController(StationClient* client, RemoteMediaController* media,
                               QObject* parent = nullptr,
-                              Clock clock = {}, PlaybackObserver playback = {});
+                              Clock clock = {}, PlaybackObserver playback = {},
+                              TrafficObserver traffic = {});
     const RemoteTelemetryView& current() const { return m_view; }
     const TelemetryHistory& history() const { return m_history; }
     qint64 nowMs() const;
@@ -55,6 +60,7 @@ private:
     QElapsedTimer m_clock;
     Clock m_now;
     PlaybackObserver m_playback;
+    TrafficObserver m_traffic;
     QTimer m_timer;
     TelemetryHistory m_history;
     RemoteTelemetryView m_view;
@@ -64,6 +70,7 @@ private:
     bool m_stationWasStale = false;
     std::optional<SessionTransportTelemetry> m_transportBaseline;
     std::optional<RemoteAudioReceiverTelemetry> m_playbackBaseline;
+    std::optional<MediaPeerTelemetry> m_mediaBaseline;
     struct PlaybackEvents {
         quint64 underflows = 0, overflows = 0;
         qint64 sampledMs = 0;

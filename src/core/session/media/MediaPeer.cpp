@@ -448,6 +448,20 @@ quint32 MediaPeer::audioSsrc() const
     return d->audioSsrc;
 }
 
+std::optional<MediaPeerTelemetry> MediaPeer::telemetry() const
+{
+    if (!d->started || !d->transport) {
+        return std::nullopt;
+    }
+    IMediaTransport* const transport = d->transport.data();
+    const quint64 generation = d->generation;
+    const std::optional<MediaTransportTelemetry> traffic = transport->telemetry();
+    if (!traffic || !isCurrent(transport, generation)) {
+        return std::nullopt;
+    }
+    return MediaPeerTelemetry{generation, *traffic};
+}
+
 bool MediaPeer::isCurrent(const IMediaTransport* transport,
                           quint64 generation) const
 {

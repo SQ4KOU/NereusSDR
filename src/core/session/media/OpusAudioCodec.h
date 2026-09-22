@@ -63,6 +63,9 @@ struct OpusRtpInspection {
     OpusAudioCodecStatus status {OpusAudioCodecStatus::InvalidInput};
     quint16 sequence {0};
     quint32 timestamp {0};
+    // Validated Opus payload only: RTP CSRC, extension and padding bytes are
+    // excluded by the parser before this observer-facing value is published.
+    qsizetype payloadBytes {0};
     OpusPacketInfo packetInfo;
 };
 

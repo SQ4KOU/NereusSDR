@@ -135,6 +135,103 @@ private slots:
         QVERIFY(!restarted.lastDeviceProgressAgeMs);
         receiver.stop();
     }
+    void telemetryCountsValidOpusPayloadAndSamplesSpeakerQueue()
+    {
+        AudioEngine engine;
+        engine.setVolume(1.0f);
+        auto sink = std::make_unique<PacedAudioBus>();
+        auto* bus = sink.get();
+        engine.setSpeakersBusForTest(std::move(sink));
+        RemoteAudioReceiver receiver(&engine);
+        QVERIFY(receiver.start(987, 0));
+
+        OpusAudioEncoder encoder;
+        const QVector<float> pcm(3840, 0.1f);
+        const auto malformed = encoder.encode(pcm, 0, 0, 987);
+        const auto wrongSsrc = encoder.encode(pcm, 1, 1920, 988);
+        QCOMPARE(malformed.status, OpusAudioCodecStatus::Accepted);
+        QCOMPARE(wrongSsrc.status, OpusAudioCodecStatus::Accepted);
+        QByteArray invalid = malformed.packet;
+        invalid[0] = static_cast<char>(0x40);
+        receiver.submit(invalid);
+        receiver.submit(wrongSsrc.packet);
+        QCOMPARE(receiver.telemetry().receivedOpusPayloadBytes, quint64(0));
+        QCOMPARE(receiver.telemetry().rejectedHeaders, quint64(2));
+
+        QVector<QByteArray> packets;
+        quint64 expectedBytes = 0;
+        for (int index = 0; index < 3; ++index) {
+            const auto encoded = encoder.encode(pcm, quint16(index + 2),
+                                                quint32(index) * 1920u, 987);
+            QCOMPARE(encoded.status, OpusAudioCodecStatus::Accepted);
+            const auto inspected = inspectOpusRtp(encoded.packet, 987);
+            QCOMPARE(inspected.status, OpusAudioCodecStatus::Accepted);
+            expectedBytes += quint64(inspected.payloadBytes);
+            packets.append(encoded.packet);
+            receiver.submit(encoded.packet);
+        }
+        // A duplicate remains received traffic even when jitter ordering later
+        // rejects it as non-unique media.
+        const auto duplicate = inspectOpusRtp(packets.first(), 987);
+        expectedBytes += quint64(duplicate.payloadBytes);
+        receiver.submit(packets.first());
+        QCOMPARE(receiver.telemetry().receivedOpusPayloadBytes, expectedBytes);
+
+        QTRY_VERIFY_WITH_TIMEOUT([&] {
+            const auto snapshot = receiver.telemetry();
+            return snapshot.decodedPackets > 0 && snapshot.speakerQueuedMs.has_value()
+                && *snapshot.speakerQueuedMs == 20.0;
+        }(), 500);
+        const auto active = receiver.telemetry();
+        QVERIFY(active.speakerQueuedMs);
+        const auto pacing = bus->outputPacing();
+        QVERIFY(pacing);
+        QCOMPARE(*active.speakerQueuedMs, double(pacing->queuedFrames) / 48.0);
+        QCOMPARE(*active.speakerQueuedMs, 20.0);
+
+        receiver.stop();
+        const auto stopped = receiver.telemetry();
+        QCOMPARE(stopped.receivedOpusPayloadBytes, expectedBytes);
+        QVERIFY(!stopped.speakerQueuedMs);
+        QVERIFY(receiver.start(987, 5760));
+        QCOMPARE(receiver.telemetry().receivedOpusPayloadBytes, quint64(0));
+        receiver.stop();
+    }
+    void telemetryCountsValidPayloadBeforeIncomingQueueDrops()
+    {
+        AudioEngine engine;
+        auto sink = std::make_unique<PacedAudioBus>();
+        auto* bus = sink.get();
+        // beginRemotePlayback() makes one synchronous pacing read. Block the
+        // worker's following initial read so every packet in this burst has
+        // crossed submit() before the bounded incoming queue is examined.
+        bus->blockOutputPacingAfterCallsForTesting(1);
+        engine.setSpeakersBusForTest(std::move(sink));
+        RemoteAudioReceiver receiver(&engine);
+        struct ReleasePacingGate {
+            PacedAudioBus* bus;
+            ~ReleasePacingGate() { bus->releaseOutputPacingGateForTesting(); }
+        } releaseGate{bus};
+        QVERIFY(receiver.start(654, 0));
+        QVERIFY(bus->waitForOutputPacingGateForTesting(std::chrono::milliseconds(250)));
+        OpusAudioEncoder encoder;
+        const auto encoded = encoder.encode(QVector<float>(3840, 0.1f), 0, 0, 654);
+        QCOMPARE(encoded.status, OpusAudioCodecStatus::Accepted);
+        const auto inspected = inspectOpusRtp(encoded.packet, 654);
+        QCOMPARE(inspected.status, OpusAudioCodecStatus::Accepted);
+
+        // submit() accounts at the validated RTP boundary. This burst exceeds
+        // the local eight-packet queue, so later queue admission cannot turn
+        // valid inbound traffic into an undercount.
+        constexpr int kBurstPackets = 32;
+        for (int index = 0; index < kBurstPackets; ++index) {
+            receiver.submit(encoded.packet);
+        }
+        QCOMPARE(receiver.telemetry().receivedOpusPayloadBytes,
+                 quint64(kBurstPackets) * quint64(inspected.payloadBytes));
+        releaseGate.bus->releaseOutputPacingGateForTesting();
+        receiver.stop();
+    }
     void telemetryLifetimeInterruptionsSurviveContextRestart()
     {
         AudioEngine engine;

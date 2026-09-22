@@ -51,6 +51,12 @@ public:
         PlaybackUnderflowsPerSecond,
         PlaybackOverflowsPerSecond,
         PlaybackPacketAgeMs,
+        CoreGuiRxKbps,
+        CoreGuiTxKbps,
+        CoreGuiTotalKbps,
+        AudioRtpRxKbps,
+        OpusPayloadRxKbps,
+        SpeakerBufferMs,
         Count,
     };
 

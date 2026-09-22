@@ -5,6 +5,7 @@
 #include "core/session/media/RemoteAudioReceiver.h"
 #include <QObject>
 #include <memory>
+#include <optional>
 
 namespace NereusSDR {
 class StationClient;
@@ -23,6 +24,7 @@ public:
 
     quint64 receivedDisplayFrames() const;
     int activeEndpointCount() const;
+    std::optional<MediaPeerTelemetry> trafficTelemetry() const;
     RemoteAudioReceiverTelemetry audioTelemetry() const;
 
 signals:

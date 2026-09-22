@@ -155,6 +155,7 @@ OpusRtpInspection inspectOpusRtp(const QByteArray& packet, quint32 expectedSsrc)
     }
     result.sequence = parsed.sequence;
     result.timestamp = parsed.timestamp;
+    result.payloadBytes = parsed.payload.size();
     return result;
 }
 

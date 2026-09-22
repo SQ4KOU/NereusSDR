@@ -63,7 +63,7 @@ QByteArray rtpPacket(quint16 sequence, quint32 ssrc)
     return packet;
 }
 
-class FakeTransport final : public IMediaTransport {
+class FakeTransport : public IMediaTransport {
 public:
     explicit FakeTransport(QObject* parent = nullptr) : IMediaTransport(parent) {}
 
@@ -106,7 +106,6 @@ public:
     }
 
     bool isReady() const override { return readyState; }
-
     void fireLocalDescription(const QString& sdp, const QString& type)
     {
         emit localDescription(sdp, type);
@@ -141,6 +140,18 @@ public:
     QList<QByteArray> sentRtp;
 };
 
+class ObservableFakeTransport final : public FakeTransport {
+public:
+    using FakeTransport::FakeTransport;
+
+    std::optional<MediaTransportTelemetry> telemetry() const override
+    {
+        return observedTelemetry;
+    }
+
+    std::optional<MediaTransportTelemetry> observedTelemetry;
+};
+
 } // namespace
 
 class TestMediaPeer : public QObject {
@@ -151,6 +162,7 @@ private slots:
     void outboundControlIsScopedAndBounded();
     void oldQueuedCallbacksCannotEnterNewGeneration();
     void terminalConnectionFailureIsTypedAndGenerationScoped();
+    void telemetryDefaultsUnsupportedAndRejectsStaleGeneration();
     void signalHandlersMayRestartOrDeletePeer();
     void realPeersExchangeQueuedControlAndDirectMedia();
 };
@@ -184,6 +196,58 @@ void TestMediaPeer::terminalConnectionFailureIsTypedAndGenerationScoped()
     QVERIFY(stale);
     stale->fireConnectionFailed(QStringLiteral("stale peer failed"));
     QCOMPARE(failures.size(), 1);
+}
+
+void TestMediaPeer::telemetryDefaultsUnsupportedAndRejectsStaleGeneration()
+{
+    QPointer<FakeTransport> unsupported;
+    MediaPeer unsupportedPeer(
+        nullptr, [&unsupported](QObject* parent) -> IMediaTransport* {
+            unsupported = new FakeTransport(parent);
+            return unsupported;
+        });
+    QVERIFY(unsupportedPeer.start(IMediaTransport::Role::Answerer,
+                                  QLatin1String(kConnectionA)));
+    QVERIFY(unsupported);
+    QVERIFY(!unsupportedPeer.telemetry().has_value());
+
+    QList<QPointer<ObservableFakeTransport>> transports;
+    MediaPeer peer(nullptr, [&transports](QObject* parent) -> IMediaTransport* {
+        auto* transport = new ObservableFakeTransport(parent);
+        transports.push_back(transport);
+        return transport;
+    });
+
+    QVERIFY(peer.start(IMediaTransport::Role::Answerer,
+                       QLatin1String(kConnectionA)));
+    ObservableFakeTransport* first = transports.constLast();
+    QVERIFY(!peer.telemetry().has_value());
+    first->observedTelemetry = MediaTransportTelemetry{11, 12, 13, 14};
+    const auto firstSnapshot = peer.telemetry();
+    QVERIFY(firstSnapshot.has_value());
+    QVERIFY(firstSnapshot->generation != 0);
+    QCOMPARE(firstSnapshot->traffic.receivedDisplayPayloadBytes, quint64(11));
+    QCOMPARE(firstSnapshot->traffic.submittedDisplayPayloadBytes, quint64(12));
+    QCOMPARE(firstSnapshot->traffic.receivedRtpBytes, quint64(13));
+    QCOMPARE(firstSnapshot->traffic.submittedRtpBytes, quint64(14));
+
+    peer.stop();
+    QVERIFY(!peer.telemetry().has_value());
+    QVERIFY(peer.start(IMediaTransport::Role::Answerer,
+                       QLatin1String(kConnectionB)));
+    ObservableFakeTransport* second = transports.constLast();
+    QVERIFY(second != first);
+    first->observedTelemetry = MediaTransportTelemetry{91, 92, 93, 94};
+    QVERIFY(!peer.telemetry().has_value());
+
+    second->observedTelemetry = MediaTransportTelemetry{21, 22, 23, 24};
+    const auto secondSnapshot = peer.telemetry();
+    QVERIFY(secondSnapshot.has_value());
+    QVERIFY(secondSnapshot->generation != firstSnapshot->generation);
+    QCOMPARE(secondSnapshot->traffic.receivedDisplayPayloadBytes, quint64(21));
+    QCOMPARE(secondSnapshot->traffic.submittedDisplayPayloadBytes, quint64(22));
+    QCOMPARE(secondSnapshot->traffic.receivedRtpBytes, quint64(23));
+    QCOMPARE(secondSnapshot->traffic.submittedRtpBytes, quint64(24));
 }
 
 void TestMediaPeer::strictControlBuffersCandidatesAndEnforcesCap()
@@ -438,6 +502,21 @@ void TestMediaPeer::realPeersExchangeQueuedControlAndDirectMedia()
     QTRY_COMPARE_WITH_TIMEOUT(rtpReceived.size(), 1, 5000);
     QCOMPARE(displayReceived.at(0).at(0).toByteArray(), display);
     QCOMPARE(rtpReceived.at(0).at(0).toByteArray(), rtp);
+    const auto offerTelemetry = offerer.telemetry();
+    QVERIFY(offerTelemetry.has_value());
+    QCOMPARE(offerTelemetry->traffic.submittedDisplayPayloadBytes,
+             static_cast<quint64>(display.size()));
+    QCOMPARE(offerTelemetry->traffic.submittedRtpBytes,
+             static_cast<quint64>(rtp.size()));
+    const auto answerTrafficArrived = [&answerer, &display, &rtp] {
+        const auto snapshot = answerer.telemetry();
+        return snapshot
+            && snapshot->traffic.receivedDisplayPayloadBytes
+                == static_cast<quint64>(display.size())
+            && snapshot->traffic.receivedRtpBytes
+                == static_cast<quint64>(rtp.size());
+    };
+    QTRY_VERIFY_WITH_TIMEOUT(answerTrafficArrived(), 5000);
 }
 
 QTEST_GUILESS_MAIN(TestMediaPeer)

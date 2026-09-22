@@ -16,6 +16,7 @@
 #include <rtc/rtc.hpp>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <deque>
 #include <limits>
@@ -72,6 +73,10 @@ struct CallbackBridge {
     std::shared_ptr<rtc::Track> track;
     bool dataChannelAssigned = false;
     bool trackAssigned = false;
+    std::atomic<quint64> receivedDisplayPayloadBytes{0};
+    std::atomic<quint64> submittedDisplayPayloadBytes{0};
+    std::atomic<quint64> receivedRtpBytes{0};
+    std::atomic<quint64> submittedRtpBytes{0};
 };
 
 void queueEvent(const std::weak_ptr<CallbackBridge>& weak,
@@ -115,6 +120,8 @@ void queueDisplay(const std::weak_ptr<CallbackBridge>& weak, rtc::binary data)
         }
         return;
     }
+    bridge->receivedDisplayPayloadBytes.fetch_add(
+        static_cast<quint64>(data.size()), std::memory_order_relaxed);
     while (!bridge->displayMessages.empty()
            && (bridge->displayMessages.size() >= kMaxPendingDisplayMessages
                || bridge->displayBytes + data.size() > kMaxPendingDisplayBytes)) {
@@ -144,6 +151,8 @@ void queueRtp(const std::weak_ptr<CallbackBridge>& weak, rtc::binary data)
         }
         return;
     }
+    bridge->receivedRtpBytes.fetch_add(
+        static_cast<quint64>(data.size()), std::memory_order_relaxed);
     if (bridge->lastRtpReceipt != std::chrono::steady_clock::time_point {}) {
         bridge->maxRtpCallbackGap = std::max(
             bridge->maxRtpCallbackGap, receivedAt - bridge->lastRtpReceipt);
@@ -535,6 +544,12 @@ bool LibDataChannelMediaTransport::sendDisplay(const QByteArray& message)
         || d->display->bufferedAmount() != 0) {
         return false;
     }
+    const std::shared_ptr<CallbackBridge> bridge = d->bridge;
+    if (!bridge) {
+        return false;
+    }
+    bridge->submittedDisplayPayloadBytes.fetch_add(
+        static_cast<quint64>(message.size()), std::memory_order_relaxed);
     try {
         return d->display->send(
             reinterpret_cast<const rtc::byte*>(message.constData()),
@@ -553,6 +568,12 @@ bool LibDataChannelMediaTransport::sendRtp(const QByteArray& packet)
         || rtpSsrc(packet) != d->localAudioSsrc) {
         return false;
     }
+    const std::shared_ptr<CallbackBridge> bridge = d->bridge;
+    if (!bridge) {
+        return false;
+    }
+    bridge->submittedRtpBytes.fetch_add(
+        static_cast<quint64>(packet.size()), std::memory_order_relaxed);
     try {
         return d->audio->send(
             reinterpret_cast<const rtc::byte*>(packet.constData()),
@@ -566,6 +587,21 @@ bool LibDataChannelMediaTransport::sendRtp(const QByteArray& packet)
 bool LibDataChannelMediaTransport::isReady() const
 {
     return d->ready;
+}
+
+std::optional<MediaTransportTelemetry>
+LibDataChannelMediaTransport::telemetry() const
+{
+    if (!d->started || !d->bridge) {
+        return std::nullopt;
+    }
+    const std::shared_ptr<CallbackBridge> bridge = d->bridge;
+    return MediaTransportTelemetry{
+        bridge->receivedDisplayPayloadBytes.load(std::memory_order_relaxed),
+        bridge->submittedDisplayPayloadBytes.load(std::memory_order_relaxed),
+        bridge->receivedRtpBytes.load(std::memory_order_relaxed),
+        bridge->submittedRtpBytes.load(std::memory_order_relaxed),
+    };
 }
 
 void LibDataChannelMediaTransport::drainCallbacks()

@@ -87,8 +87,9 @@ private slots:
         StationClient client(&remote, &proxy);
         qint64 now = 10000;
         RemoteAudioReceiverTelemetry playback;
+        std::optional<MediaPeerTelemetry> media{MediaPeerTelemetry{1, {}}};
         RemoteTelemetryController controller(&client, nullptr, nullptr,
-            [&] { return now; }, [&] { return playback; });
+            [&] { return now; }, [&] { return playback; }, [&] { return media; });
 
         auto* guiWire = new ObservedLoopback;
         auto* coreWire = new Test::LoopbackTransport(QStringLiteral("Core"));
@@ -124,6 +125,10 @@ private slots:
         now += 1000;
         guiWire->observation.receivedPayloadBytes += 2000;
         guiWire->observation.acceptedPayloadBytes += 4000;
+        media->traffic.receivedDisplayPayloadBytes += 100000;
+        media->traffic.receivedRtpBytes += 3500;
+        playback.receivedOpusPayloadBytes += 3000;
+        playback.speakerQueuedMs = 20.0;
         playback.decodedPackets = 25;
         playback.concealedPackets = 2;
         playback.latePackets = 1;
@@ -136,6 +141,26 @@ private slots:
         RemoteDiagnosticsDialog dialog(&controller);
         dialog.show();
         QTRY_VERIFY(dialog.isVisible());
+        auto* totalGraph = dynamic_cast<TimeSeriesGraphWidget*>(dialog.findChild<QWidget*>(
+            QStringLiteral("remoteTotalTrafficGraph")));
+        auto* opusGraph = dynamic_cast<TimeSeriesGraphWidget*>(dialog.findChild<QWidget*>(
+            QStringLiteral("remoteOpusTrafficGraph")));
+        auto* bufferGraph = dynamic_cast<TimeSeriesGraphWidget*>(dialog.findChild<QWidget*>(
+            QStringLiteral("remoteSpeakerBufferGraph")));
+        QVERIFY(totalGraph && opusGraph && bufferGraph);
+        const auto* total = namedSeries(totalGraph, QStringLiteral("Total"));
+        const auto* opus = namedSeries(opusGraph, QStringLiteral("Opus payload"));
+        const auto* buffer = namedSeries(bufferGraph, QStringLiteral("Speaker buffer"));
+        QVERIFY(total && opus && buffer);
+        QCOMPARE(total->unitSuffix, QStringLiteral(" kbps"));
+        QCOMPARE(opus->unitSuffix, QStringLiteral(" kbps"));
+        QCOMPARE(buffer->unitSuffix, QStringLiteral(" ms"));
+        QCOMPARE(total->points.last().y(), 876.0);
+        QCOMPARE(opus->points.last().y(), 24.0);
+        QCOMPARE(namedSeries(opusGraph, QStringLiteral("Audio packets"))->points.last().y(), 28.0);
+        QCOMPARE(buffer->points.last().y(), 20.0);
+        QVERIFY(totalGraph->toolTip().contains(QStringLiteral("Opus is included")));
+        QVERIFY(bufferGraph->toolTip().contains(QStringLiteral("Excludes network")));
         auto* radioGraph = dynamic_cast<TimeSeriesGraphWidget*>(dialog.findChild<QWidget*>(
             QStringLiteral("remoteRadioLinkGraph")));
         auto* controlGraph = dynamic_cast<TimeSeriesGraphWidget*>(dialog.findChild<QWidget*>(
@@ -182,6 +207,17 @@ private slots:
 
         const QPixmap rendered = dialog.grab();
         QVERIFY(!rendered.isNull());
+
+        now += 1000;
+        media->traffic.receivedDisplayPayloadBytes += 200000;
+        controller.sampleNow();
+        QVERIFY(QMetaObject::invokeMethod(&dialog, "refresh", Qt::DirectConnection));
+        total = namedSeries(totalGraph, QStringLiteral("Total"));
+        QVERIFY(total);
+        QCOMPARE(total->unitSuffix, QStringLiteral(" Mbps"));
+        QCOMPARE(total->points.last().y(), 1.6);
+        QCOMPARE(namedSeries(totalGraph, QStringLiteral("Core → GUI received"))->unitSuffix, total->unitSuffix);
+        QCOMPARE(namedSeries(totalGraph, QStringLiteral("GUI → Core outgoing"))->unitSuffix, total->unitSuffix);
 
         client.disconnectFromStation(QStringLiteral("test reconnect"));
         QCoreApplication::processEvents();

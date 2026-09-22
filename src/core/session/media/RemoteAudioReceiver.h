@@ -23,6 +23,9 @@ struct RemoteAudioReceiverTelemetry {
     quint64 invalidPackets = 0;
     quint64 duplicatePackets = 0;
     quint64 rejectedHeaders = 0;
+    // Valid RTP/profile payload bytes received in this context. This counts
+    // duplicates and packets later dropped by the bounded local queue.
+    quint64 receivedOpusPayloadBytes = 0;
     quint64 deviceConsumedFrames = 0;
     int underflows = 0;
     int overflows = 0;
@@ -32,6 +35,9 @@ struct RemoteAudioReceiverTelemetry {
     std::optional<quint64> lifetimeOverflows;
     std::optional<qint64> lastAdmittedPacketAgeMs;
     std::optional<qint64> lastDeviceProgressAgeMs;
+    // Worker-observed speaker queue duration. It is unavailable before a
+    // pacing sample, and for stopped or failed contexts.
+    std::optional<double> speakerQueuedMs;
 };
 
 // One generation of bounded RTP receive, Opus decoding and WDSP rate matching.

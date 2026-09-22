@@ -144,6 +144,32 @@ private slots:
         QCOMPARE(decoder.decodeRtp(QByteArray(941, '\0'), kSsrc).status, OpusAudioCodecStatus::Oversized);
     }
 
+    void inspectionReportsPayloadAfterCsrcExtensionAndPadding()
+    {
+        OpusAudioEncoder encoder;
+        const OpusRtpEncodeResult encoded = encode(encoder);
+        QCOMPARE(encoded.status, OpusAudioCodecStatus::Accepted);
+
+        // Wrap a real profile-valid Opus payload in every variable RTP
+        // header component. The observer reports only the encoded payload,
+        // excluding the CSRC, extension and trailing padding bytes.
+        QByteArray decorated;
+        decorated.reserve(encoded.packet.size() + 15);
+        decorated.append(static_cast<char>(0xb1)); // V2, P, X, one CSRC
+        decorated.append(encoded.packet.at(1));
+        decorated.append(encoded.packet.mid(2, 10));
+        decorated.append("\x01\x02\x03\x04", 4); // one CSRC
+        decorated.append("\xbe\xde\x00\x01", 4); // one extension word
+        decorated.append("\x00\x00\x00\x00", 4);
+        decorated.append(encoded.packet.mid(OpusAudioCodecConfig::kRtpHeaderBytes));
+        decorated.append("\x00\x00\x03", 3); // three padding bytes
+
+        const OpusRtpInspection inspected = inspectOpusRtp(decorated, kSsrc);
+        QCOMPARE(inspected.status, OpusAudioCodecStatus::Accepted);
+        QCOMPARE(inspected.payloadBytes,
+                 qsizetype(encoded.packet.size() - OpusAudioCodecConfig::kRtpHeaderBytes));
+    }
+
     void resetAndInputValidation()
     {
         OpusAudioEncoder encoder;

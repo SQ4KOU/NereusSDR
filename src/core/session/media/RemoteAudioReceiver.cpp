@@ -41,7 +41,10 @@ struct RemoteAudioReceiver::Private {
     std::atomic<quint64> late{0};
     std::atomic<quint64> invalid{0};
     std::atomic<quint64> duplicate{0};
+    std::atomic<quint64> receivedOpusPayloadBytes{0};
     std::atomic<quint64> deviceConsumedFrames{0};
+    // -1 is deliberately distinct from a measured empty speaker queue.
+    std::atomic<int> speakerQueuedFrames{-1};
     std::atomic<qint64> lastAdmittedPacketNs{0};
     std::atomic<qint64> lastDeviceProgressNs{0};
     std::atomic<bool> hasLastAdmittedPacket{false};
@@ -82,6 +85,7 @@ RemoteAudioReceiverTelemetry RemoteAudioReceiver::telemetry() const
         snapshot.invalidPackets = d->invalid.load();
         snapshot.duplicatePackets = d->duplicate.load();
         snapshot.rejectedHeaders = d->rejectedHeaders.load();
+        snapshot.receivedOpusPayloadBytes = d->receivedOpusPayloadBytes.load();
         snapshot.deviceConsumedFrames = d->deviceConsumedFrames.load();
         snapshot.underflows = d->underflows.load();
         snapshot.overflows = d->overflows.load();
@@ -92,6 +96,12 @@ RemoteAudioReceiverTelemetry RemoteAudioReceiver::telemetry() const
         }
         if (d->hasLastDeviceProgress.load()) {
             snapshot.lastDeviceProgressAgeMs = ageMs(d->lastDeviceProgressNs.load());
+        }
+        if (snapshot.running) {
+            const int queuedFrames = d->speakerQueuedFrames.load();
+            if (queuedFrames >= 0) {
+                snapshot.speakerQueuedMs = double(queuedFrames) / 48.0;
+            }
         }
         if (d->telemetrySequence.load() == sequence) {
             return snapshot;
@@ -109,6 +119,7 @@ void RemoteAudioReceiver::stop()
 {
     d->telemetrySequence.fetch_add(1);
     d->running.store(false);
+    d->speakerQueuedFrames.store(-1);
     ++d->generation;
     if (d->worker.joinable()) {
         d->worker.request_stop();
@@ -143,7 +154,9 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
     d->late.store(0);
     d->invalid.store(0);
     d->duplicate.store(0);
+    d->receivedOpusPayloadBytes.store(0);
     d->deviceConsumedFrames.store(0);
+    d->speakerQueuedFrames.store(-1);
     d->hasLastAdmittedPacket.store(false);
     d->hasLastDeviceProgress.store(false);
     d->lastAdmittedPacketNs.store(0);
@@ -165,6 +178,9 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
         qint64 maxWakeGap = 0;
         quint64 accepted = 0, late = 0, invalid = 0, duplicate = 0;
         quint64 publishedUnderflows = 0, publishedOverflows = 0;
+        const auto publishSpeakerQueue = [&](const std::optional<IAudioBus::OutputPacing>& pacing) {
+            d->speakerQueuedFrames.store(pacing ? pacing->queuedFrames : -1);
+        };
         const auto publishMatcherStats = [&] {
             const auto stats = matcher.stats();
             const quint64 underflows = std::max(0, stats.underflows);
@@ -182,6 +198,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
             return stats;
         };
         const auto notify = [&](const QString& reason, bool fatal = false) {
+            d->speakerQueuedFrames.store(-1);
             d->running.store(false);
             const auto stats = publishMatcherStats();
             const auto pacing = d->engine->remotePlaybackPacing();
@@ -211,6 +228,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
             notify(QStringLiteral("Speaker device timing is unavailable"), true);
             return;
         }
+        publishSpeakerQueue(initialPacing);
         const int initialTarget = std::max(960, initialPacing->callbackFrames + 480);
         if (initialTarget + 480 > initialPacing->capacityFrames) {
             notify(QStringLiteral("Speaker callback exceeds remote playback capacity"), true);
@@ -312,7 +330,10 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
                 else { ++d->decoded; }
                 playing = true;
             }
-            if (!playing) { continue; }
+            if (!playing) {
+                publishSpeakerQueue(d->engine->remotePlaybackPacing());
+                continue;
+            }
             auto pacing = d->engine->remotePlaybackPacing();
             if (!pacing) {
                 notify(QStringLiteral("Speaker device timing became unavailable"), true);
@@ -370,6 +391,10 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
                 if (!pacing) { break; }
             }
             const auto stats = publishMatcherStats();
+            // The final pacing read in every playback iteration observes the
+            // queue after bounded replenishment. It remains worker-only and
+            // does not participate in device callback scheduling.
+            publishSpeakerQueue(d->engine->remotePlaybackPacing());
             if (stats.underflows || stats.overflows) {
                 notify(QStringLiteral("Remote audio exceeded its continuous clock buffer (%1 underflows, %2 overflows)")
                     .arg(stats.underflows).arg(stats.overflows));
@@ -388,6 +413,10 @@ void RemoteAudioReceiver::submit(const QByteArray& packet)
         ++d->rejectedHeaders;
         return;
     }
+    // Traffic is measured at the valid RTP/profile boundary, before the
+    // bounded process-local arrival queue can discard a burst. A duplicate
+    // is still received traffic even if jitter ordering later rejects it.
+    d->receivedOpusPayloadBytes.fetch_add(quint64(header.payloadBytes));
     {
         std::lock_guard<std::mutex> lock(d->mutex);
         if (d->incoming.size() >= AudioJitterBuffer::kMaxPackets) { d->overflow = true; }

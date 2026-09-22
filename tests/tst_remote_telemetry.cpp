@@ -76,7 +76,7 @@ private slots:
         QCOMPARE(controller.current().coreRttMs, std::optional<quint64>(83));
         QVERIFY(!controller.current().playbackActive); // running alone is not playback
         QVERIFY(controller.bannerText().contains(QStringLiteral("Radio ↓12.5 ↑0.1 Mbps")));
-        QVERIFY(controller.bannerText().contains(QStringLiteral("Core 83 ms")));
+        QVERIFY(controller.bannerText().contains(QStringLiteral("Core RTT 83 ms")));
 
         now += 1000;
         guiWire->observation.receivedPayloadBytes += 2000;
@@ -147,6 +147,114 @@ private slots:
         QVERIFY(series.points.last().breakBefore);
         QVERIFY(!controller.current().controlRxKbps); // new transport baseline
         client.disconnectFromStation(QStringLiteral("done"));
+    }
+
+    void trafficSeparatesOpusAndResetsEachLifetime()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        StationServer server(&station, settings, dir.path());
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        qint64 now = 10000;
+        RemoteAudioReceiverTelemetry playback;
+        playback.running = true;
+        playback.generation = 7;
+        playback.speakerQueuedMs = 25.0;
+        std::optional<MediaPeerTelemetry> media{MediaPeerTelemetry{3, {}}};
+        RemoteTelemetryController controller(&client, nullptr, nullptr,
+            [&] { return now; }, [&] { return playback; }, [&] { return media; });
+        auto* gui = new ObservedLoopback;
+        auto* core = new Test::LoopbackTransport(QStringLiteral("Core"));
+        gui->linkTo(core);
+        server.acceptTransport(core);
+        client.startSession(gui, server.token());
+        QTRY_VERIFY(client.isHandshakeComplete());
+        QVERIFY(!controller.current().coreGuiTotalKbps);
+        QVERIFY(!controller.current().opusRxKbps);
+
+        now += 2000; // actual elapsed time, not a presumed one-second tick
+        gui->observation.receivedPayloadBytes = 1000;
+        gui->observation.acceptedPayloadBytes = 500;
+        media->traffic.receivedDisplayPayloadBytes = 100000;
+        media->traffic.receivedRtpBytes = 10000;
+        media->traffic.submittedDisplayPayloadBytes = 200;
+        media->traffic.submittedRtpBytes = 300;
+        playback.receivedOpusPayloadBytes = 9000; // subset, never add twice
+        controller.sampleNow();
+        QCOMPARE(controller.current().coreGuiRxKbps, std::optional<double>(444.0));
+        QCOMPARE(controller.current().coreGuiTxKbps, std::optional<double>(4.0));
+        QCOMPARE(controller.current().coreGuiTotalKbps, std::optional<double>(448.0));
+        QCOMPARE(controller.current().opusRxKbps, std::optional<double>(36.0));
+        QCOMPARE(controller.current().audioRtpRxKbps, std::optional<double>(40.0));
+        QVERIFY(controller.bannerText().contains(QStringLiteral("Core ↓444.0 ↑4.0 total 448.0 kbps")));
+        QCOMPARE(controller.history().series(Metric::SpeakerBufferMs, now, 60).points.last().value, 25.0);
+        QVERIFY(controller.detailText().contains(QStringLiteral("End-to-end Opus latency is not measured")));
+        QVERIFY(controller.detailText().contains(QStringLiteral("already included in total")));
+
+        now += 1000;
+        media->traffic.receivedDisplayPayloadBytes += 200000;
+        controller.sampleNow();
+        QVERIFY(controller.bannerText().contains(QStringLiteral("Core ↓1.6 ↑0.0 total 1.6 Mbps")));
+
+        now += 1000;
+        controller.sampleNow();
+        QCOMPARE(controller.current().coreGuiTotalKbps, std::optional<double>(0.0));
+        QCOMPARE(controller.current().opusRxKbps, std::optional<double>(0.0));
+
+        // An audio restart gaps Opus but does not discard media totals.
+        now += 1000;
+        ++playback.generation;
+        playback.receivedOpusPayloadBytes = 0;
+        playback.speakerQueuedMs.reset();
+        media->traffic.receivedRtpBytes += 500;
+        controller.sampleNow();
+        QCOMPARE(controller.current().coreGuiTotalKbps, std::optional<double>(4.0));
+        QVERIFY(!controller.current().opusRxKbps);
+        now += 1000;
+        playback.receivedOpusPayloadBytes = 500;
+        controller.sampleNow();
+        QCOMPARE(controller.current().opusRxKbps, std::optional<double>(4.0));
+        QVERIFY(controller.history().series(Metric::OpusPayloadRxKbps, now, 60).points.last().breakBefore);
+
+        // A peer replacement gaps total and Opus, with independent baselines.
+        now += 1000;
+        media = MediaPeerTelemetry{4, {}};
+        playback.receivedOpusPayloadBytes += 500;
+        controller.sampleNow();
+        QVERIFY(!controller.current().coreGuiTotalKbps);
+        QVERIFY(!controller.current().opusRxKbps);
+        now += 1000;
+        controller.sampleNow();
+        QCOMPARE(controller.current().coreGuiTotalKbps, std::optional<double>(0.0));
+        QVERIFY(controller.history().series(Metric::CoreGuiTotalKbps, now, 60).points.last().breakBefore);
+
+        now += 1000;
+        media.reset();
+        controller.sampleNow();
+        QVERIFY(!controller.current().coreGuiTotalKbps); // unknown is not control-only zero
+        QVERIFY(!controller.current().opusRxKbps);
+        now += 1000;
+        media = MediaPeerTelemetry{4, {}};
+        controller.sampleNow();
+        QVERIFY(!controller.current().coreGuiTotalKbps);
+        now += 1000;
+        media->traffic.receivedDisplayPayloadBytes = 1000;
+        controller.sampleNow();
+        QCOMPARE(controller.current().coreGuiTotalKbps, std::optional<double>(8.0));
+        now += 1000;
+        media->traffic.receivedDisplayPayloadBytes = 1; // counter reset, no negative rate
+        controller.sampleNow();
+        QVERIFY(!controller.current().coreGuiTotalKbps);
+        now += 1000;
+        controller.sampleNow();
+        QCOMPARE(controller.current().coreGuiTotalKbps, std::optional<double>(0.0));
+        QVERIFY(controller.history().series(Metric::CoreGuiTotalKbps, now, 60).points.last().breakBefore);
+        client.disconnectFromStation(QStringLiteral("done"));
+        QVERIFY(!controller.current().coreGuiTotalKbps);
+        QVERIFY(!controller.current().opusRxKbps);
     }
 
     void olderCoreIsExplicitlyUnsupported()

@@ -2,6 +2,8 @@
 // no-port-check: NereusSDR-original deterministic speaker sink for remote audio tests.
 #include "core/IAudioBus.h"
 #include <QVector>
+#include <chrono>
+#include <condition_variable>
 #include <deque>
 #include <mutex>
 
@@ -22,8 +24,37 @@ public:
     qint64 pull(char*, qint64) override { return 0; }
     void flush() override { std::lock_guard<std::mutex> lock(mutex); queue.clear(); ++flushes; }
     std::optional<OutputPacing> outputPacing() const override {
-        std::lock_guard<std::mutex> lock(mutex);
+        std::unique_lock<std::mutex> lock(mutex);
+        ++outputPacingCalls;
+        if (blockOutputPacingAfterCalls >= 0
+            && outputPacingCalls > blockOutputPacingAfterCalls) {
+            pacingGateEntered = true;
+            pacingGateChanged.notify_all();
+            pacingGateChanged.wait(lock, [this] { return releaseOutputPacingGate; });
+        }
         return OutputPacing{consumed, int(queue.size()) / 2, 4800, callbackFrames};
+    }
+    // Test-only worker gate. Configure it before beginRemotePlayback(); the
+    // first pacing read belongs to that synchronous setup and the receiver
+    // worker blocks on the following read. releaseOutputPacingGateForTesting
+    // must run before a receiver stop joins that worker.
+    void blockOutputPacingAfterCallsForTesting(int calls)
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        blockOutputPacingAfterCalls = calls;
+        releaseOutputPacingGate = false;
+        pacingGateEntered = false;
+    }
+    bool waitForOutputPacingGateForTesting(std::chrono::milliseconds timeout)
+    {
+        std::unique_lock<std::mutex> lock(mutex);
+        return pacingGateChanged.wait_for(lock, timeout, [this] { return pacingGateEntered; });
+    }
+    void releaseOutputPacingGateForTesting()
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        releaseOutputPacingGate = true;
+        pacingGateChanged.notify_all();
     }
     void render(int frames) {
         std::lock_guard<std::mutex> lock(mutex);
@@ -45,6 +76,11 @@ private:
     bool active = true;
     NereusSDR::AudioFormat format;
     mutable std::mutex mutex;
+    mutable std::condition_variable pacingGateChanged;
     std::deque<float> queue;
     quint64 consumed = 0;
+    mutable int outputPacingCalls = 0;
+    int blockOutputPacingAfterCalls = -1;
+    mutable bool pacingGateEntered = false;
+    bool releaseOutputPacingGate = false;
 };
