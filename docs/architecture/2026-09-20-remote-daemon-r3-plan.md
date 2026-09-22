@@ -448,9 +448,14 @@ reinterpret `FftTier::Wide` or transmit unrestricted full FFT arrays.
   after correction. The combined GUI/Core/test build succeeds; the unfiltered
   suite passes 723/725 executables, with the same two native microphone-open
   timeouts recorded at the preceding checkpoint (R-R3-36 remains open).
-  Separate ADC capture versus filter-chain
-  bypass demand, remote transport, GUI admission and hardware acceptance
-  remain open. Task 6's
+  The model now aggregates physical-ADC capture separately from filter-chain
+  bypass and provides endpoint-owner leases with release/remap/retirement
+  coverage. Eight matching focused demand checks pass, including actual
+  daemon teardown. The matching combined GUI/Core/test build succeeds and
+  the unfiltered demand suite passes 724/726 executables, with the same two
+  native microphone-open timeouts; the full-suite gate remains unmet.
+  Wiring those leases to remote endpoint lifetimes,
+  remote transport, GUI admission and hardware acceptance remain open. Task 6's
   missing session allocator is now an explicit acceptance dependency.
 - [ ] Carry Core-produced, calibrated wideband display data through the
   authenticated session under the existing datagram and session budgets.

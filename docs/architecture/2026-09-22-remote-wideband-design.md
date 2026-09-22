@@ -122,7 +122,8 @@ parallel WDSP/NNR/PS3 lifecycle work.
 ## Negotiation and context
 
 Use a new named session-minor feature gate, allocated against the serially
-integrated protocol constants (the current base is minor 4). Advertise
+integrated protocol constants. DSP/WDSP controls now occupy minor 5, so the
+wideband gate must follow it; do not reuse the earlier minor-4 baseline. Advertise
 `remoteWidebandDisplayVersion = 1` only with the implemented media controller.
 Older peers retain the strict current subscription/context shape and DDC
 zoom ceiling.
@@ -192,6 +193,22 @@ Two pans sharing a source keep it enabled until the last consumer retires.
 Hide/remove/rebind/session retirement/radio loss release remote requests;
 recovery must not resurrect old-session requests. New mirrored status reports
 effective capture/filter state, not client intent.
+
+The Core ownership seam is `RadioModel::acquireWidebandDemand(sliceId)`,
+`setWidebandDemandActive(token, active)` and `releaseWidebandDemand(token)`.
+Acquisition returns an inactive, nonzero owner token bound to the actual slice
+object. Core resolves that slice's current published ADC and filter chain;
+callers cannot supply either routing index. Multiple owners and the existing
+local slice request are ORed into separate physical capture and chain bypass
+arrays. Tokens retire on slice removal, radio loss and teardown; token numbers
+are never reused during the model's lifetime. Deactivation hides wings without
+destroying an endpoint; release is idempotent and retires its token.
+
+Reconciliation retries after reentrant filter observers change ownership,
+before sending an obsolete capture snapshot. Physical ADC mask changes remain
+marshalled to the P2 connection thread. The endpoint controller must acquire,
+activate and release these tokens at the context/lifetime boundaries above;
+the model seam alone does not establish remote endpoint integration.
 
 The GUI uses accepted source availability for the existing zoom ceiling:
 `max(ddcRate, adcRate / 2)` only when permission and source availability hold.
@@ -338,9 +355,38 @@ transmit permission or menu redesign is part of this contract.
   passing full-suite gate. No timeout or test was weakened or excluded; the
   separate R-R3-36 native capture-startup gap remains open. Private evidence:
   `r3-wideband-source-final-{build,tests,load}.log`.
-- [ ] Separately aggregated physical-ADC capture and filter-chain bypass
-  demand, negotiated endpoints, GUI parity and native/hardware acceptance
-  remain pending. Real Saturn cadence still determines the freshness policy;
+- [x] Separate physical-ADC capture from filter-chain bypass and add inactive
+  Core endpoint-owner leases, ORed with local slice demand. The synthetic
+  two-ADC/one-chain regression first sent capture mask `1` for a slice on
+  ADC1; it now sends `2` while bypassing only chain 0. Source mapping and
+  ownership remain distinct: removing one consumer preserves the others,
+  remapping follows the published ADC, and removal/reconnect cannot reuse an
+  old token. Direct filter observers cannot restore a released request from
+  an older reconciliation snapshot. Existing P2 worker marshalling remains
+  in force and now explicitly checks ADC1.
+  Eight matching focused targets pass (51.38 seconds), including local chain
+  aggregation, owner lifetimes, P2 marshalling, actual Alex policy wire pushes,
+  pan badges, real daemon recovery, worker lifetime and the no-GUI Core guard.
+  The daemon teardown observer also attempts acquisition and reactivation
+  while the old P2 object is still live; both are refused. Private evidence:
+  `r3-wideband-demand-red-test.log` and
+  `r3-wideband-demand-focused-{build,tests}.log`. An additional two-ADC test
+  passes in both release orders: only the retiring ADC's bit clears, and
+  their shared filter chain stays bypassed until both owners release.
+  Its matching target passes in 0.73 seconds
+  (`r3-wideband-demand-shared-adcs-{build,tests}.log`). The consolidated
+  independent review found no concrete defects in the scoped demand/lifetime
+  changes. The matching combined GUI/Core/all-tests build succeeds. The
+  unfiltered suite passes 724/726 executables in 307.92 seconds, with 12 inner
+  Qt skips and the same two native microphone-open timeouts as the source
+  checkpoint: `tst_port_audio_bus` (`openInputSucceedsOnDefaultDevice`) and
+  `tst_audio_engine_speakers_live_reconfig` (`setTxInputConfigEmitsSignal`).
+  Build-start load was 1.27 / 1.43 / 2.00. This is not a passing full-suite
+  gate; R-R3-36 remains open. No tests were excluded or weakened. Private
+  evidence: `r3-wideband-demand-final-{build,tests,load}.log`.
+- [ ] Wire demand-owner lifetimes into negotiated endpoints, then complete
+  GUI parity and native/hardware acceptance. Real Saturn cadence still
+  determines the freshness policy;
   no TTL has been guessed. The source cache is not connected to remote display
   endpoints. This checkpoint is not deployed; the installed software remains
   `55e7d49f`.

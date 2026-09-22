@@ -330,6 +330,11 @@ private slots:
         QVERIFY(delayed->producedAtNs <= beforeRelease);
         QVERIFY(delayed->source.sourceGeneration > renewed->source.sourceGeneration);
 
+        const int demandSlice = model->slices().first()->sliceIndex();
+        const auto demandOwner = model->acquireWidebandDemand(demandSlice);
+        QVERIFY(demandOwner != 0);
+        QVERIFY(model->setWidebandDemandActive(demandOwner, true));
+
         // Complete another FFT while the owner thread is synchronously
         // waiting. Its publication is now queued here but not delivered.
         // Retiring the connection must also reject this later race window.
@@ -343,14 +348,19 @@ private slots:
         QVERIFY(frameProcessed.tryAcquire(1, 1000));
         int retirementNotifications = 0;
         bool retiredSourceOffered = false;
+        bool retiredDemandAdmitted = false;
         connect(model, &RadioModel::widebandSourceChanged, model, [&](int) {
             ++retirementNotifications;
             retiredSourceOffered |= model->widebandAdcRateHz(0).has_value()
                 || model->widebandAdcRateHz(1).has_value();
+            retiredDemandAdmitted |= model->acquireWidebandDemand(demandSlice) != 0
+                || model->setWidebandDemandActive(demandOwner, true);
         }, Qt::DirectConnection);
         model->disconnectFromRadio();
         QVERIFY(retirementNotifications > 0);
         QVERIFY(!retiredSourceOffered);
+        QVERIFY(!retiredDemandAdmitted);
+        QVERIFY(!model->setWidebandDemandActive(demandOwner, true));
         QVERIFY(!model->latestWidebandSpectrum(0));
         QVERIFY(!model->widebandAdcRateHz(0));
         QCoreApplication::processEvents();

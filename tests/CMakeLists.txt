@@ -6035,6 +6035,7 @@ nereus_add_test(tst_p2_wideband_marshalling)
 # live slices on it, gated on BoardCapabilities::widebandAdcs, not the edge
 # from whichever slice happened to change last.
 nereus_add_test(tst_wideband_chain_state)
+nereus_add_test(tst_wideband_demand_owners)
 
 # Codex review, PR #293: shrinking the pan layout must rehome the slices whose
 # panes were deleted, not orphan them holding a DDC.

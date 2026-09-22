@@ -759,56 +759,22 @@ public:
     int adcForStream(int stream) const;
     int sliceAdcIndex(int sliceId) const;
 
-    /// The wideband state a chain should actually be in, as opposed to what
-    /// one slice just asked for.
-    ///
-    /// Codex review, PR #293. The widebandExtensionRequestedChanged handler
-    /// forwarded the changing slice's boolean straight through, so on a chain
-    /// hosting two slices whichever one cleared last switched the chain off
-    /// while the other was still zoomed out: the Alex preselector came back in
-    /// and the P2 wideband-enable bit dropped underneath a live extended view.
-    /// The answer is a property of the chain, not of the slice that moved, so
-    /// it is recomputed here as an OR across every live slice on it.
-    ///
-    /// Also the one place BoardCapabilities::widebandAdcs is honoured. That
-    /// field was declared per SKU and read by nothing, so a board that cannot
-    /// stream wideband at all still had its preselector forced into bypass by
-    /// a zoom it could never satisfy, costing receive filtering for nothing.
+    /// Effective demand is the OR of local slice requests and active endpoint
+    /// owners. Physical ADC capture and filter-chain bypass are independent.
     bool widebandActiveForChain(int chainIdx) const;
-
-    /// Test seam for the above. Read-only, no production caller.
     bool widebandActiveForChainForTest(int chainIdx) const {
         return widebandActiveForChain(chainIdx);
     }
+    void reconcileWidebandDemand();
 
-    /// Recompute widebandActiveForChain(chainIdx) and push the answer to the
-    /// Alex preselector and, on Protocol 2, to the radio's wideband enable
-    /// mask.
-    ///
-    /// Codex review round 3, PR #293. The first fix recomputed on the request
-    /// property's own edges, which is not the only way the answer changes:
-    /// removing the slice that was the sole requester alters it without any
-    /// property moving, so the chain stayed bypassed and the radio kept
-    /// streaming wideband until some unrelated slice happened to toggle. Both
-    /// callers go through here so there is one push and not two copies of it.
-    void pushWidebandStateForChain(int chainIdx);
-
-    /// Push every filter chain's wideband state.
-    ///
-    /// Codex review round 4, PR #293, and the reason this is a sweep rather
-    /// than another trigger. The answer for a chain changes on more inputs
-    /// than one signal can name: a slice's request moving, a slice being
-    /// removed, and a slice migrating between chains when its antenna moves
-    /// its DDC to the other ADC. Each of those was found in a separate review
-    /// round, because each was wired as its own hook and the next one was
-    /// always missing.
-    ///
-    /// Reconciling every chain from current state instead makes the operation
-    /// idempotent and complete: any input can change however it likes, and one
-    /// sweep afterwards is correct. Called from publishDdcAssignment, which
-    /// already recomputes DDC, chain and psPaused for every slice the same
-    /// way, so chain migration is covered by construction.
-    void reconcileWidebandForAllChains();
+    /// Owner-thread, Core-only leases for remote display endpoints. Acquisition
+    /// is inactive and binds the actual SliceModel, not a reusable numeric ID.
+    /// Zero is invalid. Deactivate when wings are hidden; release when the
+    /// endpoint retires. Slice removal and radio loss invalidate its token.
+    using WidebandDemandToken = quint64;
+    WidebandDemandToken acquireWidebandDemand(int sliceId);
+    bool setWidebandDemandActive(WidebandDemandToken token, bool active);
+    void releaseWidebandDemand(WidebandDemandToken token);
 
     /// Operator-facing sentence naming WHY the given chain is bypassed.
     /// One string per cause, per design doc §16.4.4. Public so the Filter
@@ -2235,6 +2201,16 @@ public:
     // push (root cause of the v0.4.0 PureSignal-broken-on-Hermes bug).
     void setHpsdrModelForTest(HPSDRModel m) {
         applyHpsdrModel(m);
+    }
+
+    // Synthetic routing topology for ADC-versus-filter-chain regressions.
+    // Copies the selected profile; it does not change any production SKU.
+    void setWidebandTopologyForTest(int adcCount, int widebandAdcs, int chains) {
+        m_testWidebandCaps = boardCapabilities();
+        m_testWidebandCaps->adcCount = adcCount;
+        m_testWidebandCaps->widebandAdcs = widebandAdcs;
+        m_testWidebandCaps->rxFilterChainCount = chains;
+        reconcileWidebandDemand();
     }
 
     // Remote-daemon R2 Task 5 test seam: sizes m_streamAllocator via the
@@ -3878,6 +3854,23 @@ private:
     // Indexed by adcIndex (0 or 1). Constructed in the RadioModel ctor with
     // a default 122.88 MHz ADC sample rate. Owned via QObject parent.
     std::array<NereusSDR::WidebandFftEngine*, 2> m_widebandFftEngines{};
+    struct WidebandDemandOwner {
+        QPointer<SliceModel> slice;
+        bool active{false};
+    };
+    struct WidebandDemandState {
+        std::array<bool, WidebandSpectrumCache::kMaxSources> capture{};
+        std::array<bool, 2> bypass{}; // AlexController's two filter-chain slots.
+    };
+    struct WidebandDemandRoute { int adc; int chain; };
+    std::optional<WidebandDemandRoute> widebandDemandRoute(const SliceModel* slice) const;
+    WidebandDemandState widebandDemandState() const;
+    void retireWidebandDemand();
+    QHash<WidebandDemandToken, WidebandDemandOwner> m_widebandDemands;
+    WidebandDemandToken m_lastWidebandDemandToken{0};
+    bool m_widebandDemandRetiring{false};
+    bool m_reconcilingWidebandDemand{false};
+    bool m_widebandDemandDirty{false};
     WidebandSpectrumCache m_widebandSpectrumCache;
     std::array<std::shared_ptr<const std::atomic<quint64>>, 2> m_widebandCaptureEpochs{};
     void invalidateWidebandSpectrum(int adc);
@@ -4139,6 +4132,7 @@ private:
     bool m_republishingAlexBpf{false};
 
 #ifdef NEREUS_BUILD_TESTS
+    std::optional<BoardCapabilities> m_testWidebandCaps;
     quint16 m_testP2OutboundBase {0};
     quint16 m_testP2InputBase {0};
     int m_testP2FirstIqMs {2000};

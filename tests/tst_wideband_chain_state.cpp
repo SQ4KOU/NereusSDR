@@ -58,6 +58,7 @@ void declareP2Radio(RadioModel& model, HPSDRModel board)
     RadioInfo info;
     info.protocol = ProtocolVersion::Protocol2;
     model.setLastRadioInfoForTest(info);
+    model.configureStreamPool(4, 4, 192000);
 }
 
 } // namespace
@@ -65,6 +66,40 @@ void declareP2Radio(RadioModel& model, HPSDRModel board)
 class TestWidebandChainState : public QObject {
     Q_OBJECT
 private slots:
+
+    void physical_adc_capture_is_independent_of_its_filter_chain()
+    {
+        P2RadioConnection conn;
+        RadioModel model;
+        model.injectConnectionForTest(&conn);
+        declareP2Radio(model, HPSDRModel::ANAN_G2);
+        // An explicit synthetic topology, not a claim about this P2 SKU.
+        model.setWidebandTopologyForTest(2, 2, 1);
+        model.configureStreamPool(4, 4, 192000);
+        SliceModel* slice = model.sliceById(model.addSlice());
+        QVERIFY(slice);
+        QVERIFY(slice->streamIndex() >= 0);
+
+        DdcAssignment assignment{};
+        assignment.streamDdc[slice->streamIndex()] = 2;
+        assignment.rate[2] = 192000;
+        assignment.ddcEnable = 0x04;
+        assignment.adcCtrl1 = (1 << 4); // DDC2 on physical ADC1.
+        model.publishDdcAssignmentForTest(assignment);
+        QCOMPARE(model.sliceAdcIndex(slice->sliceIndex()), 1);
+        QCOMPARE(slice->chainIndex(), 0);
+
+        slice->setWidebandExtensionRequested(true);
+        QCOMPARE(cmdGeneralWbMask(conn), quint8(0x02));
+        QCOMPARE(model.alexController().adcState(0).effective,
+                 AlexController::BpfEffective::WidebandLocked);
+        QVERIFY(model.alexController().adcState(1).effective
+                != AlexController::BpfEffective::WidebandLocked);
+        slice->setWidebandExtensionRequested(false);
+        QCOMPARE(cmdGeneralWbMask(conn), quint8(0));
+        QVERIFY(model.alexController().adcState(0).effective
+                != AlexController::BpfEffective::WidebandLocked);
+    }
 
     // Two slices, one chain. The chain stays wideband until the LAST of them
     // stops asking.
@@ -256,8 +291,7 @@ private slots:
             "the chain the slice left must stop being held wideband");
         QVERIFY2(model.widebandActiveForChainForTest(1),
             "the chain it moved to must pick the request up");
-        QVERIFY2((cmdGeneralWbMask(conn) & 0x01) == 0x00,
-            "and the old chain's wideband stream must stop");
+        QCOMPARE(cmdGeneralWbMask(conn) & 0x03, 0x02);
     }
 
     // Codex review round 5, P2. The round-2 gate tested widebandAdcs <= 0,

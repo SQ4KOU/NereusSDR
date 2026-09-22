@@ -3346,6 +3346,9 @@ bool RadioModel::isRfKitInOperate() const
 const BoardCapabilities& RadioModel::boardCapabilities() const
 {
 #ifdef NEREUS_BUILD_TESTS
+    if (m_testWidebandCaps) {
+        return *m_testWidebandCaps;
+    }
     if (m_testCapsOverride) {
         static BoardCapabilities overrideCaps{};
         overrideCaps.hasAlex     = m_testCapsHasAlex;
@@ -6001,7 +6004,7 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
     // Phase 3F Sub-Epic F Task 11: when the operator flips this slice's
     // wideband-extension flag (e.g. zoom-out past DDC bandwidth, or
     // explicit Extended-view request from F Task 13), bypass the Alex
-    // BPF on the slice's ADC (Sub-Epic B Task 14-15 effective-state
+    // BPF on the slice's filter chain (Sub-Epic B Task 14-15 effective-state
     // machine drives the BpfMode::WidebandLocked branch) AND flip the
     // matching CmdGeneral byte 23 wb_enable bit on the P2 connection
     // (Sub-Epic F Task 1 wiring) so the radio starts streaming the
@@ -6012,7 +6015,7 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
         // committed it, so the sweep reads the new value along with every
         // other slice's. Sweeping rather than pushing just this slice's chain
         // keeps one entry point for the whole reconciliation.
-        reconcileWidebandForAllChains();
+        reconcileWidebandDemand();
     });
 
     if (!m_activeSlice) {
@@ -6130,6 +6133,14 @@ void RadioModel::removeSliceImpl(int sliceId, bool persist)
         m_txSliceArbiter->requestHandoff(fallback->sliceIndex());
     }
 
+    for (auto it = m_widebandDemands.begin(); it != m_widebandDemands.end();) {
+        if (it->slice == victim) {
+            it = m_widebandDemands.erase(it);
+        } else {
+            ++it;
+        }
+    }
+
     SliceModel* slice = m_slices.takeAt(position);
 
     // Reassert the invariant after the victim leaves the list.
@@ -6138,7 +6149,7 @@ void RadioModel::removeSliceImpl(int sliceId, bool persist)
     }
 
     // No explicit wideband push here. removeSlice reaches
-    // reconcileWidebandForAllChains through requestDdcAssignment below, which
+    // reconcileWidebandDemand through requestDdcAssignment below, which
     // calls invokeCodecDdcAssignment and then publishDdcAssignment directly on
     // this thread. Round 3 added a hook here; round 4 replaced the whole
     // per-trigger approach with that sweep, and a second call would be exactly
@@ -7275,6 +7286,7 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
         teardownConnection();
     }
 
+    m_widebandDemandRetiring = false;
     m_lastRadioInfo = info;
     m_pureSignalSettings->load(info.macAddress);
     m_dspAssets->setRadioIdentity(info.macAddress);
@@ -13433,6 +13445,7 @@ void RadioModel::teardownConnection()
     // Retire every availability offer before notifying observers. The P2
     // object and Connected state remain live during the rest of teardown.
     m_widebandCaptureEpochs = {};
+    retireWidebandDemand();
     for (int adc = 0; adc < WidebandSpectrumCache::kMaxSources; ++adc) {
         invalidateWidebandSpectrum(adc);
     }
@@ -13944,7 +13957,11 @@ void RadioModel::setConnectionState(ConnectionState s)
     if (m_connectionState == s) {
         return;
     }
+    const bool wasConnected = m_connectionState == ConnectionState::Connected;
     m_connectionState = s;
+    if (s == ConnectionState::Connected) {
+        m_widebandDemandRetiring = false;
+    }
     // Phase 3Q sub-PR-3: track when we become connected so
     // connectionUptimeText() can produce a human-readable elapsed time.
     if (s == ConnectionState::Connected) {
@@ -13954,7 +13971,14 @@ void RadioModel::setConnectionState(ConnectionState s)
         m_connectionSampleRateHz = 0;
         m_connectionActiveRxCount = 0;       // Task 1.7: reset on disconnect
     }
-    emit connectionStateChanged(s);
+    if (wasConnected && s != ConnectionState::Connected) {
+        retireWidebandDemand();
+    }
+    // Retirement can notify direct filter observers. A reentrant transition
+    // has already published its own state and must not be followed by ours.
+    if (m_connectionState == s) {
+        emit connectionStateChanged(s);
+    }
 }
 
 void RadioModel::onConnectionStateChanged(ConnectionState state)
@@ -17093,119 +17117,143 @@ QStringList RadioModel::pansWithoutSlices(const QStringList& panIds) const
     return empty;
 }
 
-// Codex review round 4, PR #293. See RadioModel.h for why this is a sweep.
-void RadioModel::reconcileWidebandForAllChains()
+// NereusSDR-original ownership glue. The published codec ADC map remains
+// authoritative; chainForStream alone resolves the preselector-bank fold.
+std::optional<RadioModel::WidebandDemandRoute>
+RadioModel::widebandDemandRoute(const SliceModel* slice) const
 {
-    const int chains = std::max(1, boardCapabilities().rxFilterChainCount);
-    for (int chain = 0; chain < chains; ++chain) {
-        pushWidebandStateForChain(chain);
+    if (role() != Role::Local || m_widebandDemandRetiring
+        || m_lastRadioInfo.protocol != ProtocolVersion::Protocol2
+        || !slice || sliceById(slice->sliceIndex()) != slice) {
+        return std::nullopt;
     }
+    const int stream = slice->streamIndex();
+    if (stream < 0 || stream >= m_streamAllocator.streamCount()) {
+        return std::nullopt;
+    }
+    const auto& caps = boardCapabilities();
+    const int adc = adcForStream(stream);
+    const int chain = chainForStream(stream);
+    if (adc < 0 || adc >= WidebandSpectrumCache::kMaxSources
+        || adc >= caps.adcCount || adc >= caps.widebandAdcs
+        || chain < 0 || chain >= 2 || chain >= caps.rxFilterChainCount) {
+        return std::nullopt;
+    }
+    return WidebandDemandRoute{adc, chain};
 }
 
-// Codex review rounds 2 and 3, PR #293. See RadioModel.h.
-void RadioModel::pushWidebandStateForChain(int chainIdx)
+RadioModel::WidebandDemandState RadioModel::widebandDemandState() const
 {
-    if (chainIdx < 0) {
-        return;
+    WidebandDemandState state;
+    const auto add = [this, &state](const SliceModel* slice) {
+        if (const auto route = widebandDemandRoute(slice)) {
+            state.capture[route->adc] = true;
+            state.bypass[route->chain] = true;
+        }
+    };
+    for (const SliceModel* slice : m_slices) {
+        if (slice && slice->widebandExtensionRequested()) {
+            add(slice);
+        }
     }
-    // The chain's state, not any one slice's edge. Recomputed across every
-    // live slice on the chain, so it is correct whether a request just moved,
-    // a slice was just removed, or anything else changed the answer.
-    const bool on = widebandActiveForChain(chainIdx);
-    m_alexController.setWidebandActive(chainIdx, on);
-    //
-    // ── Phase 3F Sub-Epic I closeout: marshal to the connection thread ──
-    //
-    // Third instance of the pattern fixed for applyDdcAssignment in
-    // invokeCodecDdcAssignment, and already done correctly by the
-    // setAlexRxBpf push in republishAlexAdcSlices.
-    //
-    // setWidebandEnabled writes m_wbEnableMask and, when connected,
-    // calls sendCmdGeneral(), which writes the QUdpSocket. RadioModel
-    // runs on the GUI thread and the connection was moved onto
-    // m_connThread (see connectToRadio), so calling it directly tore the
-    // mask against the connection thread's own frame composition -- byte
-    // 23 of CmdGeneral is that mask (Thetis ChannelMaster/network.c:879
-    // [v2.10.3.15]) -- and drove QUdpSocket::writeDatagram from a thread
-    // that owns neither the socket nor its notifier.
-    //
-    // Same marshalling shape as the neighbouring pushes: the functor
-    // overload of QMetaObject::invokeMethod with default
-    // Qt::AutoConnection, which is a plain call when the target already
-    // lives on this thread (tests, and the pre-thread window at
-    // construction) and a queued QMetaCallEvent when it does not.
-    //
-    // No qRegisterMetaType is needed. The functor overload packages the
-    // whole lambda into the event, so chainIdx and on travel as ordinary
-    // by-value captures; the metatype system is only involved for the
-    // Q_ARG / string-name overload or for a queued signal-slot
-    // connection carrying them as parameters.
-    if (auto* p2 = qobject_cast<NereusSDR::P2RadioConnection*>(m_connection)) {
-        QMetaObject::invokeMethod(p2, [p2, chainIdx, on]() {
-            p2->setWidebandEnabled(chainIdx, on);
-        });
+    for (const WidebandDemandOwner& owner : m_widebandDemands) {
+        if (owner.active) {
+            add(owner.slice.data());
+        }
     }
+    return state;
 }
 
-// Codex review, PR #293. See RadioModel.h for why this is a chain property
-// rather than a slice one.
 bool RadioModel::widebandActiveForChain(int chainIdx) const
 {
-    if (chainIdx < 0) {
+    const auto state = widebandDemandState();
+    return chainIdx >= 0 && chainIdx < int(state.bypass.size())
+        && state.bypass[chainIdx];
+}
+
+RadioModel::WidebandDemandToken RadioModel::acquireWidebandDemand(int sliceId)
+{
+    SliceModel* slice = sliceById(sliceId);
+    if (!isConnected() || !qobject_cast<P2RadioConnection*>(m_connection)
+        || !widebandDemandRoute(slice)
+        || m_lastWidebandDemandToken == std::numeric_limits<WidebandDemandToken>::max()) {
+        return 0;
+    }
+    const auto token = ++m_lastWidebandDemandToken;
+    m_widebandDemands.insert(token, {slice, false});
+    return token;
+}
+
+bool RadioModel::setWidebandDemandActive(WidebandDemandToken token, bool active)
+{
+    auto owner = m_widebandDemands.find(token);
+    if (owner == m_widebandDemands.end()) {
         return false;
     }
-
-    // Two gates, because the board row and the live connection are two
-    // different facts and this branch has already been bitten by treating
-    // one as the other.
-    //
-    // Gate 1, the capability. widebandAdcs is the number of ADCs on this
-    // board that can carry a wideband stream; 0 means the board has no such
-    // mechanism at all, which is every Protocol 1 SKU in the table
-    // ("wideband mechanism differs; deferred to 3F-W", BoardCapabilities.cpp).
-    //
-    // Gated on the count being zero rather than on chainIdx < widebandAdcs,
-    // deliberately. A chain index is not an ADC index: ANAN-100D and 200D
-    // carry .adcCount == 2 behind one preselector chain, so comparing one
-    // against the other is the exact ADC-count-versus-chain-count confusion
-    // that has already produced defects on this branch. The zero test is the
-    // part that is unambiguous and it covers the reported case. Narrowing
-    // further needs the chain-to-ADC mapping to be settled first; that is
-    // recorded as a follow-up rather than guessed at here.
-    if (boardCapabilities().widebandAdcs <= 0) {
+    if (!owner->slice || sliceById(owner->slice->sliceIndex()) != owner->slice.data()) {
+        m_widebandDemands.erase(owner);
+        reconcileWidebandDemand();
         return false;
     }
-
-    // Gate 2, the live protocol. Codex review round 6, PR #293.
-    //
-    // The capability row carries a nominal .protocol, and round 5 corrected
-    // two rows whose value contradicted it. That was necessary and it is not
-    // sufficient: a row's protocol is what the board usually speaks, not what
-    // THIS connection is speaking. ANVELINAPRO3 and REDPITAYA both have real
-    // Protocol 1 codecs (P1RadioConnection::selectCodec) and both resolve to
-    // the kOrionMKII row, which declares Protocol2 with widebandAdcs = 2. So
-    // a live P1 connection reaches this function with a row that advertises
-    // wideband, and the extended-view path would then bypass the Alex
-    // preselector for a stream P1 has no way to deliver: receive filtering
-    // lost, nothing gained.
-    //
-    // m_lastRadioInfo.protocol is what discovery reported for the radio we
-    // actually connected to, set in connectToRadio before any of this runs.
-    // Deliberately NOT a qobject_cast on the connection: that is untestable
-    // against the RadioConnection-derived mocks in tst_alex_bpf_policy_push
-    // and tst_pan_wide_badge, and an untestable gate is how the row error
-    // survived in the first place.
-    if (m_lastRadioInfo.protocol != ProtocolVersion::Protocol2) {
+    if (active && (!isConnected() || !qobject_cast<P2RadioConnection*>(m_connection)
+                   || !widebandDemandRoute(owner->slice.data()))) {
+        owner->active = false;
+        reconcileWidebandDemand();
         return false;
     }
+    owner->active = active;
+    reconcileWidebandDemand();
+    return true;
+}
 
-    // Any live slice on this chain still asking is enough to hold it on.
-    for (const SliceModel* s : m_slices) {
-        if (!s) { continue; }
-        if (s->chainIndex() != chainIdx) { continue; }
-        if (s->widebandExtensionRequested()) { return true; }
+void RadioModel::releaseWidebandDemand(WidebandDemandToken token)
+{
+    if (m_widebandDemands.remove(token) != 0) {
+        reconcileWidebandDemand();
     }
-    return false;
+}
+
+void RadioModel::retireWidebandDemand()
+{
+    // Clear before any filter/source signal can reenter the public owner API.
+    m_widebandDemandRetiring = true;
+    m_widebandDemands.clear();
+    reconcileWidebandDemand();
+}
+
+void RadioModel::reconcileWidebandDemand()
+{
+    m_widebandDemandDirty = true;
+    if (m_reconcilingWidebandDemand) {
+        return;
+    }
+    m_reconcilingWidebandDemand = true;
+    const auto reset = qScopeGuard([this] { m_reconcilingWidebandDemand = false; });
+    do {
+        m_widebandDemandDirty = false;
+        const auto state = widebandDemandState();
+        for (int chain = 0; chain < int(state.bypass.size()); ++chain) {
+            m_alexController.setWidebandActive(chain, state.bypass[chain]);
+            if (m_widebandDemandDirty) {
+                break;
+            }
+        }
+        // A direct filter observer may have retired an owner. Do not send
+        // the old capture mask after that callback changed the aggregate.
+        if (m_widebandDemandDirty) {
+            continue;
+        }
+        if (auto* p2 = qobject_cast<P2RadioConnection*>(m_connection)) {
+            // Preserve connection-thread ownership of the mask and UDP socket.
+            // CmdGeneral byte 23 is per physical ADC, never per filter chain.
+            const QPointer<P2RadioConnection> connection(p2);
+            QMetaObject::invokeMethod(p2, [connection, capture = state.capture]() {
+                for (int adc = 0; connection && adc < int(capture.size()); ++adc) {
+                    connection->setWidebandEnabled(adc, capture[adc]);
+                }
+            });
+        }
+    } while (m_widebandDemandDirty);
 }
 
 std::optional<NereusSDR::DdcAssignment> RadioModel::computeDdcAssignment() const
@@ -17422,7 +17470,7 @@ void RadioModel::publishDdcAssignment(const NereusSDR::DdcAssignment& assignment
     // all chains from current state rather than trying to name which ones
     // changed. Idempotent, so running it on every assignment costs nothing
     // when nothing moved.
-    reconcileWidebandForAllChains();
+    reconcileWidebandDemand();
 
     // ── Phase 3F Sub-Epic I closeout, defect F3 ─────────────────────────
     //
@@ -17643,9 +17691,9 @@ void RadioModel::invokeCodecDdcAssignment()
         // One piece of publishDdcAssignment's work is not a claim about the
         // codec's answer and still has to happen.
         //
-        // reconcileWidebandForAllChains takes no assignment and reads none: it
-        // recomputes each filter chain's wideband state from the live slices'
-        // chainIndex and widebandExtensionRequested. It sits inside the
+        // reconcileWidebandDemand takes no assignment and reads none: it
+        // recomputes ADC capture and filter-chain demand from the current
+        // stream ADC mapping and all live local/endpoint requests. It sits inside the
         // publish because the slice restamp immediately above it can move a
         // slice between chains, so the reconcile has to follow it -- not
         // because it depends on the assignment.
@@ -17655,7 +17703,7 @@ void RadioModel::invokeCodecDdcAssignment()
         // Skipping it here left the radio streaming a wideband chain whose
         // last requester was gone (tst_wideband_chain_state,
         // removing_the_last_requester_clears_the_chain).
-        reconcileWidebandForAllChains();
+        reconcileWidebandDemand();
         return;
     }
     const NereusSDR::DdcAssignment assignment = *computed;
