@@ -1182,6 +1182,7 @@ set(GUI_SOURCES
     src/gui/SliceFlagPresentationBinding.cpp
     src/gui/SliceFlagPresentationBinding.h
     src/gui/RemoteMediaController.cpp
+    src/gui/RemoteAudioStatus.cpp
     src/gui/RemoteDisplayAllocator.cpp
     src/gui/RemoteTelemetryController.cpp
     src/gui/RemoteDiagnosticsDialog.cpp
