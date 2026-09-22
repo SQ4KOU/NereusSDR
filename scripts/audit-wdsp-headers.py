@@ -4,7 +4,7 @@
 Compliance Plan Task 11. ``verify-thetis-headers.py --kind=wdsp`` (Task 7)
 enforces the GPLv2-or-later markers with an explicit exemption set;
 this script is the independent census that re-verifies the
-WDSP-PROVENANCE.md claim (132 full-header files + 10 exempt utilities).
+WDSP-PROVENANCE.md claim (162 full-header files + 5 exempt utilities).
 
 Use this whenever the WDSP vendored tree is re-synced from upstream to
 catch drift before the verifier's exemption set goes stale.
@@ -24,25 +24,13 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parent.parent
 WDSP_SRC = REPO / "third_party" / "wdsp" / "src"
 
-# Expected classification totals per WDSP-PROVENANCE.md.
-# Updated 2026-04-23: Sub-epic C-1 added rnnr.c/.h + sbnr.c/.h (4 new GPLv2-or-later files).
-# Updated 2026-05-04: issue #167 Phase 1 Agent 1C added txgain_stub.c
-# (NereusSDR-original glue stub authored by J.J. Boyd KG4VCF, GPLv2-or-later
-# permission block) bumping the count from 132 to 133.
-# Updated 2026-05-07: Phase 3M-4 Task 3 added ps_sync_stub.c
-# (NereusSDR-original glue stub authored by J.J. Boyd KG4VCF, GPLv2-or-later
-# permission block) bumping the count from 133 to 134.
-# Used to flag drift when the census shifts without a docs update.
+# Pinned TAPR WDSP 2.10 plus retained Nereus extensions, audited 2026-09-22.
+# The two Nereus ABI headers have full grants; obsolete FDnoiseIQ/fastmath
+# are removed, while pinned calculus.c/.h now have upstream grants.
 EXPECTED = {
-    # Bumped 134 -> 135 for third_party/wdsp/src/netinterface_stub.c, the
-    # NereusSDR-original glue stub that exports SetADCSupply + LRAudioSwap
-    # against the bundled wdsp_static library while the broader ChannelMaster
-    # module remains un-ported.  Stub carries a GPL-2-or-later header
-    # matching the rest of the WDSP tree, so the census classification is
-    # correct; only the expected count needed adjustment.
-    "gpl2-or-later": 135,
+    "gpl2-or-later": 162,
     "copyright-no-permission-block": 0,
-    "no-header": 10,
+    "no-header": 5,
 }
 
 
@@ -52,7 +40,8 @@ def classify(text: str) -> str:
     #   "either version 2\nof the License, or (at your option) any later version."
     import re
     head = text[:2000]
-    flat = re.sub(r"\s+", " ", head)
+    # Both plain and star-prefixed block comments carry the same grant.
+    flat = re.sub(r"\s+", " ", re.sub(r"(?m)^\s*\* ?", "", head))
     perm_markers = (
         "either version 2 of the License, or",
         "any later version",

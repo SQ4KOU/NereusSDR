@@ -111,6 +111,13 @@ struct StationCapabilities {
     int stationTelemetryVersion = 0;
     int remoteTgxlConfigVersion = 0;
     int remoteFourO3AControlVersion = 0;
+    int wdspVersion = 0;
+    int wdspCompatibilityVersion = 0;
+    int nnrVersion = 0;
+    int psAlgorithmVersion = 0;
+    int propertyResultVersion = 0;
+    int dspAssetVersion = 0;
+    int psDisplayVersion = 0;
 
     /// The daemon's own AppSettings SettingsSchemaVersion, read by that
     /// key name from its own store. See StationClient's schema-skew check.

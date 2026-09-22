@@ -841,6 +841,18 @@ set(CORE_SOURCES
     src/core/NbFamily.h
     src/core/dsp/ChannelConfig.h
     src/core/dsp/RxChannelState.h
+    src/core/dsp/NnrSettings.h
+    src/core/dsp/NnrAdapter.cpp
+    src/core/dsp/Ps3Snapshot.h
+    src/core/dsp/Ps3DisplayAdapter.cpp
+    src/core/dsp/DspAssetValidation.cpp
+    src/core/dsp/DspAssetService.cpp
+    src/core/dsp/DspAssetService.h
+    src/core/session/PureSignalSessionFacade.cpp
+    src/core/session/PureSignalSessionFacade.h
+    src/core/session/Ps3DisplayCodec.cpp
+    src/core/session/Ps3DisplayCodec.h
+    src/core/dsp/DspAssetStore.cpp
     src/core/MoxController.cpp
     src/core/MicProfileManager.cpp
     src/core/ParaEqEnvelope.cpp
@@ -1135,6 +1147,8 @@ set(MODEL_SOURCES
     src/models/Band.cpp
     src/models/BandDefaults.cpp
     src/models/BandPlanManager.cpp
+    src/models/PureSignalSettings.cpp
+    src/models/PureSignalSettings.h
     src/models/SliceModel.cpp
     src/models/PanadapterModel.cpp
     src/models/MeterModel.cpp
@@ -1159,6 +1173,8 @@ set(GUI_SOURCES
     src/gui/RemoteConnectionController.cpp
     src/gui/AmpViewChart.cpp
     src/gui/AmpViewWindow.cpp
+    src/gui/DspAssetDialog.cpp
+    src/gui/DspAssetDialog.h
     src/gui/PsaIndicatorWidget.cpp
     src/gui/PsaIndicatorWidget.h
     src/gui/PsForm.cpp
@@ -1188,6 +1204,8 @@ set(GUI_SOURCES
     src/gui/widgets/DexpPeakMeter.h
     src/gui/widgets/DexpPeakMeter.cpp
     src/gui/widgets/DspParamPopup.cpp
+    src/gui/widgets/NnrControls.cpp
+    src/gui/widgets/NnrControls.h
     src/gui/widgets/FilterPassbandWidget.cpp
     src/gui/widgets/FilterPresetEditDialog.cpp
     src/gui/widgets/GradientPickerWidget.h

@@ -151,6 +151,24 @@ void WdspEngine::prepareConfigDir(const QString& configDir)
     }
 }
 
+bool WdspEngine::setNnrModelPaths(const std::array<QString, 2>& paths, QString* reason)
+{
+    if (reason) reason->clear();
+    if (m_initialized || m_initializationInProgress || !m_rxChannels.empty()) {
+        if (reason) *reason = QStringLiteral("NNR model changes apply after disconnecting and reconnecting the station.");
+        return false;
+    }
+    for (const QString& path : paths) {
+        const auto encoded = QFile::encodeName(path);
+        if (encoded.size() >= 512 || encoded.contains('\0')) {
+            if (reason) *reason = QStringLiteral("The NNR model path exceeds the engine's supported length.");
+            return false;
+        }
+    }
+    m_nnrModelPaths = paths;
+    return true;
+}
+
 bool WdspEngine::initialize(const QString& configDir)
 {
     if (m_initialized) {
@@ -159,6 +177,18 @@ bool WdspEngine::initialize(const QString& configDir)
     }
 
 #ifdef HAVE_WDSP
+    if (m_initializationInProgress) {
+        qCWarning(lcDsp) << "WDSP initialization is already in progress";
+        return false;
+    }
+    m_initializationInProgress = true;
+    // Empty explicitly selects embedded weights, avoiding upstream's default
+    // search in the working directory. Both process-global paths are fixed
+    // before finishInitialization can open even a feedback receiver.
+    for (int slot = 0; slot < 2; ++slot) {
+        const auto path = QFile::encodeName(m_nnrModelPaths[slot]);
+        SetNNRModelPathSlot(slot, path.constData());
+    }
     prepareConfigDir(configDir);
 
 #ifdef NEREUS_BUILD_TESTS
@@ -268,6 +298,7 @@ bool WdspEngine::initialize(const QString& configDir)
 
 void WdspEngine::finishInitialization(bool wisdomWasRebuilt)
 {
+    m_initializationInProgress = false;
 #ifdef HAVE_WDSP
     qCInfo(lcDsp) << "WDSP wisdom initialized";
 

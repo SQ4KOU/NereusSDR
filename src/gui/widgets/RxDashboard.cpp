@@ -285,13 +285,13 @@ void RxDashboard::onAgcChanged(int agcMode)
 
 void RxDashboard::onNrChanged(int nrSlot)
 {
-    // NrSlot: Off=0, NR1=1, NR2=2, NR3=3, NR4=4, DFNR=5, BNR=6, MNR=7
+    // NrSlot: Off=0, NR1=1, NR2=2, NR3=3, NR4=4, DFNR=5, BNR=6, MNR=7, NNR=8
     if (nrSlot <= 0) {
         emit badgeAvailabilityChanged(8, false);
         return;
     }
     static const char* kNrLabels[] = {
-        "Off", "NR1", "NR2", "NR3", "NR4", "DFNR", "BNR", "MNR"
+        "Off", "NR1", "NR2", "NR3", "NR4", "DFNR", "BNR", "MNR", "NNR"
     };
     constexpr int kNrCount = static_cast<int>(
         sizeof(kNrLabels) / sizeof(kNrLabels[0]));

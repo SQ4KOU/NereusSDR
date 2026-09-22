@@ -58,6 +58,13 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         intEntry("stationTelemetryVersion", stationTelemetryVersion),
         intEntry("remoteTgxlConfigVersion", remoteTgxlConfigVersion),
         intEntry("remoteFourO3AControlVersion", remoteFourO3AControlVersion),
+        intEntry("wdspVersion", wdspVersion),
+        intEntry("wdspCompatibilityVersion", wdspCompatibilityVersion),
+        intEntry("nnrVersion", nnrVersion),
+        intEntry("psAlgorithmVersion", psAlgorithmVersion),
+        intEntry("propertyResultVersion", propertyResultVersion),
+        intEntry("dspAssetVersion", dspAssetVersion),
+        intEntry("psDisplayVersion", psDisplayVersion),
         intEntry("settingsSchemaVersion", settingsSchemaVersion),
     };
 }
@@ -124,6 +131,19 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
             const qlonglong version = u.value.toLongLong();
             caps.remoteFourO3AControlVersion = version >= 0 && version <= 65535
                 ? static_cast<int>(version) : 0;
+        } else if (u.name == "wdspVersion" || u.name == "wdspCompatibilityVersion"
+                   || u.name == "nnrVersion" || u.name == "psAlgorithmVersion"
+                   || u.name == "propertyResultVersion" || u.name == "dspAssetVersion"
+                   || u.name == "psDisplayVersion") {
+            const qlonglong raw = u.value.toLongLong();
+            const int version = raw >= 0 && raw <= 65535 ? static_cast<int>(raw) : 0;
+            if (u.name == "wdspVersion") caps.wdspVersion = version;
+            else if (u.name == "wdspCompatibilityVersion") caps.wdspCompatibilityVersion = version;
+            else if (u.name == "nnrVersion") caps.nnrVersion = version;
+            else if (u.name == "psAlgorithmVersion") caps.psAlgorithmVersion = version;
+            else if (u.name == "propertyResultVersion") caps.propertyResultVersion = version;
+            else if (u.name == "dspAssetVersion") caps.dspAssetVersion = version;
+            else caps.psDisplayVersion = version;
         } else if (u.name == "settingsSchemaVersion") {
             caps.settingsSchemaVersion = static_cast<qint32>(u.value.toLongLong());
         }

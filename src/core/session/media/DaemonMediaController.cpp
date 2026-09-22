@@ -11,6 +11,8 @@
 #include "core/session/media/DaemonAudioSender.h"
 #include "core/session/media/MediaPeer.h"
 #include "models/RadioModel.h"
+#include "core/session/PureSignalSessionFacade.h"
+#include "core/session/Ps3DisplayCodec.h"
 #include "models/SliceModel.h"
 
 #include <QJsonArray>
@@ -257,6 +259,22 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
             this, &DaemonMediaController::onSliceRemoved);
     connect(m_radioModel, &RadioModel::connectionStateChanged,
             this, &DaemonMediaController::onRadioConnectionStateChanged);
+    connect(m_radioModel->pureSignalFacade(), &PureSignalSessionFacade::displayInvalidated,
+            this, [this]() { m_ps3Chunks.clear(); });
+    connect(m_radioModel->pureSignalFacade(), &PureSignalSessionFacade::displaySnapshotReady,
+            this, [this](const Ps3Snapshot& snapshot) {
+        if (m_epoch == 0 || !m_peer || !m_peer->isReady()
+            || !m_radioModel->pureSignalFacade()->remoteAmpViewSubscribed()) {
+            return;
+        }
+        // One latest snapshot, including headers, remains bounded to 160 KiB.
+        // The facade samples at <=10 Hz; ordinary MediaPeer sends preserve
+        // the 64 KiB message limit and account every chunk in R35 telemetry.
+        m_ps3Chunks = Ps3DisplayCodec::encode(snapshot);
+        if (!m_ps3Chunks.isEmpty() && !m_sendTimer.isActive()) {
+            m_sendTimer.start();
+        }
+    });
 }
 
 DaemonMediaController::~DaemonMediaController()
@@ -744,7 +762,22 @@ void DaemonMediaController::sendContext(EndpointEntry& entry)
 
 void DaemonMediaController::onSendTick()
 {
-    if (!m_peer || !m_peer->isReady() || m_endpoints.empty()) {
+    if (!m_peer || !m_peer->isReady()) {
+        return;
+    }
+    if (!m_radioModel || !m_radioModel->pureSignalFacade()->remoteAmpViewSubscribed()) {
+        m_ps3Chunks.clear();
+    }
+    if (!m_ps3Chunks.isEmpty()) {
+        const QByteArray chunk = m_ps3Chunks.takeFirst();
+        if (!m_peer->sendDisplay(chunk)) {
+            // A rejected send may already have buffered bytes. Never retry
+            // this sequence; the next snapshot replaces the partial frame.
+            m_ps3Chunks.clear();
+        }
+        return;
+    }
+    if (m_endpoints.empty()) {
         return;
     }
     QList<quint32> ids;
@@ -1137,6 +1170,7 @@ void DaemonMediaController::clearSession()
 void DaemonMediaController::clearProduction()
 {
     m_sendTimer.stop();
+    m_ps3Chunks.clear();
     const QList<MediaSourceKey> keys = m_sources.keys();
     for (const MediaSourceKey& key : keys) {
         m_source.deactivate(key);

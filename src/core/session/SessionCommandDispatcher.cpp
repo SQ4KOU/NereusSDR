@@ -31,6 +31,9 @@
 #include "core/session/SessionCommandDispatcher.h"
 
 #include "core/session/ObjectRegistry.h"
+#include "core/dsp/DspAssetService.h"
+#include "DspCommandValues.h"
+#include "PureSignalSessionFacade.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -199,6 +202,45 @@ SessionCommandDispatcher::SessionCommandDispatcher(RadioModel* radioModel, QObje
     : QObject(parent)
     , m_radioModel(radioModel)
 {
+    if (radioModel) {
+        connect(radioModel->pureSignalFacade(), &PureSignalSessionFacade::actionResult,
+                this, [this](quint32 id, Ps3ActionPhase phase, const QString& reason,
+                             QVariantMap values) {
+            const auto found = m_pureSignalCommands.constFind(id);
+            if (found == m_pureSignalCommands.cend()) {
+                return;
+            }
+            const PendingPureSignalCommand command = *found;
+            QString state;
+            switch (phase) {
+            case Ps3ActionPhase::Accepted: state = "accepted"; break;
+            case Ps3ActionPhase::Pending: state = "pending"; break;
+            case Ps3ActionPhase::Completed: state = "completed"; break;
+            case Ps3ActionPhase::Failed: state = "failed"; break;
+            }
+            if (phase == Ps3ActionPhase::Completed || phase == Ps3ActionPhase::Failed) {
+                m_pureSignalCommands.remove(id);
+            }
+            values.insert("phase", state);
+            emit commandResultReady(SessionMessages::commandResult(command.verb, command.commandId,
+                phase != Ps3ActionPhase::Failed, reason, {"pureSignal"},
+                dspCommandValues(values).value_or(QList<MirrorUpdate>{})));
+        });
+    }
+}
+
+void SessionCommandDispatcher::setSessionOwner(const QString& owner)
+{
+    m_pureSignalCommands.clear();
+    if (m_radioModel && !m_sessionOwner.isEmpty()) {
+        m_radioModel->dspAssets()->cancelOwner(m_sessionOwner);
+        for (SliceModel* slice : m_radioModel->slices()) {
+            // Diagnostic modes are operator actions. A new session always
+            // starts on normal audio and never replays a prior test signal.
+            m_radioModel->setNnrDiagnosticMode(slice->sliceIndex(), 0, 1);
+        }
+    }
+    m_sessionOwner = owner;
 }
 
 void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
@@ -211,6 +253,44 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
     if (m_radioModel.isNull()) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("no radio model attached"), {});
+        return;
+    }
+
+    if (invoke.commandVerb.startsWith("ps3.")) {
+        handlePureSignalAction(invoke);
+        return;
+    }
+
+    if (invoke.commandVerb.startsWith("dspAssets.")) {
+        const auto arguments = dspCommandValues(invoke.arguments);
+        const auto result = arguments && !m_sessionOwner.isEmpty()
+            ? m_radioModel->dspAssets()->execute(invoke.commandVerb, *arguments, m_sessionOwner)
+            : DspAssetServiceResult{false, QStringLiteral("Malformed DSP asset request."), {}};
+        const auto values = dspCommandValues(result.values);
+        emit commandResultReady(SessionMessages::commandResult(invoke.commandVerb,
+            invoke.commandId, result.accepted, result.reason, {}, values.value_or(QList<MirrorUpdate>{})));
+        return;
+    }
+    if (invoke.commandVerb == "nnr.applyModelSelection") {
+        quint32 revision = 0;
+        QString reason;
+        const bool shape = hasExactlyArguments(invoke.arguments, {"revision"});
+        const QVariant value = shape ? invoke.arguments.first().value : QVariant();
+        const bool integer = value.typeId() == QMetaType::Int || value.typeId() == QMetaType::UInt
+            || value.typeId() == QMetaType::LongLong || value.typeId() == QMetaType::ULongLong;
+        bool converted = false;
+        const qlonglong wide = value.toLongLong(&converted);
+        const bool valid = shape && integer && converted
+            && invoke.arguments.first().kind == MirrorWireKind::Int64
+            && wide > 0 && wide <= std::numeric_limits<quint32>::max();
+        if (valid) {
+            revision = static_cast<quint32>(wide);
+        }
+        const bool accepted = valid && m_radioModel->applyNnrModelSelection(revision, &reason);
+        if (!valid) {
+            reason = QStringLiteral("Model application requires the current selection revision.");
+        }
+        emitResult(invoke.commandVerb, invoke.commandId, accepted, reason, {"dspAssets"});
         return;
     }
 
@@ -234,10 +314,103 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleDisconnectTgxl(invoke);
     } else if (invoke.commandVerb == "setFourO3AEnabled") {
         handleSetFourO3AEnabled(invoke);
+    } else if (invoke.commandVerb == "nnr.setDiagnostics" || invoke.commandVerb == "nnr.resetTuning") {
+        handleNnrAction(invoke);
     } else {
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("unrecognised command verb"), {});
     }
+}
+
+void SessionCommandDispatcher::handlePureSignalAction(const SessionMessage& invoke)
+{
+    PureSignalSessionFacade* facade = m_radioModel->pureSignalFacade();
+    const auto arguments = dspCommandValues(invoke.arguments);
+    if (m_sessionOwner.isEmpty() || invoke.commandId == 0 || !arguments) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("Malformed PureSignal request or retired session."), {});
+        return;
+    }
+    if (invoke.commandVerb == "ps3.subscribeDisplay") {
+        if (arguments->size() != 1 || !arguments->contains("enabled")
+            || arguments->value("enabled").typeId() != QMetaType::Bool) {
+            emitResult(invoke.commandVerb, invoke.commandId, false,
+                       QStringLiteral("A display subscription requires one boolean enabled value."), {});
+            return;
+        }
+        facade->setRemoteAmpViewSubscribed(arguments->value("enabled").toBool());
+        emitResult(invoke.commandVerb, invoke.commandId, true, {}, {"pureSignal"});
+        return;
+    }
+    const auto action = PureSignalSessionFacade::actionForVerb(invoke.commandVerb);
+    if (!action) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("Unknown PureSignal action."), {});
+        return;
+    }
+    const bool stop = *action == Ps3Action::OffReset
+        || (*action == Ps3Action::SetTwoTone && arguments->size() == 1
+            && arguments->value("enabled").typeId() == QMetaType::Bool
+            && !arguments->value("enabled").toBool());
+    // The session currently advertises txPermitted=false. Keep the same hard
+    // gate here even when a client bypasses its disabled controls. R4 owns
+    // replacing this gate with negotiated, station-authorized transmit.
+    if (!stop && *action != Ps3Action::SaveCorrection) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("Remote PureSignal actuation requires R4 transmit support."), {});
+        return;
+    }
+    for (const PendingPureSignalCommand& command : std::as_const(m_pureSignalCommands)) {
+        if (command.commandId == invoke.commandId) {
+            emitResult(invoke.commandVerb, invoke.commandId, false,
+                       QStringLiteral("This PureSignal command identity is already pending."), {});
+            return;
+        }
+    }
+    const quint32 id = facade->requestAction(*action, *arguments);
+    if (!id) {
+        emitResult(invoke.commandVerb, invoke.commandId, false, facade->lastActionError(), {});
+        return;
+    }
+    m_pureSignalCommands.insert(id, {invoke.commandId, invoke.commandVerb});
+    emit commandResultReady(SessionMessages::commandResult(invoke.commandVerb, invoke.commandId,
+        true, {}, {}, {{0, "phase", MirrorWireKind::Utf8, QStringLiteral("accepted")}}));
+}
+
+void SessionCommandDispatcher::handleNnrAction(const SessionMessage& invoke)
+{
+    const bool diagnostics = invoke.commandVerb == "nnr.setDiagnostics";
+    const bool shapeValid = diagnostics
+        ? hasExactlyArguments(invoke.arguments, {"sliceId", "testMode", "outputMode"})
+        : hasExactlyArguments(invoke.arguments, {"sliceId"});
+    int sliceId = -1;
+    int testMode = 0;
+    int outputMode = 1;
+    bool typesValid = shapeValid && findIntArgument(invoke.arguments, "sliceId", &sliceId) == ArgumentStatus::Ok;
+    for (const auto& argument : invoke.arguments) {
+        typesValid = typesValid && argument.kind == MirrorWireKind::Int64;
+    }
+    if (diagnostics) {
+        typesValid = typesValid && findIntArgument(invoke.arguments, "testMode", &testMode) == ArgumentStatus::Ok
+            && findIntArgument(invoke.arguments, "outputMode", &outputMode) == ArgumentStatus::Ok;
+    }
+    SliceModel* slice = typesValid ? m_radioModel->sliceById(sliceId) : nullptr;
+    if (!slice) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("Unknown receiver or invalid NNR action arguments."), {});
+        return;
+    }
+    QString reason;
+    bool accepted = false;
+    if (diagnostics) {
+        accepted = m_radioModel->setNnrDiagnosticMode(sliceId, testMode, outputMode, &reason);
+    } else {
+        slice->resetNnrTuning();
+        reason = slice->nnrLastError();
+        accepted = reason.isEmpty();
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, accepted, reason,
+               accepted ? QList<QByteArray>{ObjectRegistry::keyForSlice(sliceId)} : QList<QByteArray>{});
 }
 
 void SessionCommandDispatcher::emitResult(const QByteArray& verb, quint32 commandId,

@@ -178,6 +178,12 @@ public:
     // Wisdom runs async — listen to initializedChanged for completion.
     bool initialize(const QString& configDir);
 
+    // Station-owned validated model paths, resolved by DspAssetStore. Empty
+    // selects the bundled slot. Changes require the established disconnect /
+    // reconnect lifecycle and cannot silently change models in live channels.
+    bool setNnrModelPaths(const std::array<QString, 2>& paths, QString* reason = nullptr);
+    std::array<QString, 2> nnrModelPaths() const { return m_nnrModelPaths; }
+
 #ifdef NEREUS_BUILD_TESTS
     // Test-only seam (remote-daemon R2 Task 2). Arm this BEFORE calling
     // initialize(). When set, initialize() skips spawning the WisdomThread
@@ -683,6 +689,8 @@ signals:
 
 private:
     bool m_initialized{false};
+    bool m_initializationInProgress{false};
+    std::array<QString, 2> m_nnrModelPaths{};
     QString m_configDir;
 
     // True when wisdom was regenerated this session.

@@ -252,6 +252,7 @@ warren@wpratt.com
 #include "SampleRateCatalog.h"  // bufferSizeForRate() — for setSampleRate()
 #include "WdspEngine.h"
 #include "wdsp_api.h"
+#include "dsp/NnrAdapter.h"
 
 #include <QElapsedTimer>
 
@@ -1094,18 +1095,67 @@ void RxChannel::setSbnrAlgo(SbnrAlgo a)
 // All four Run flags are written on every call so exactly 0 or 1 is active.
 // ---------------------------------------------------------------------------
 
-void RxChannel::setActiveNr(NrSlot slot)
+bool RxChannel::setNnrTuning(const NnrSettings& settings, QString* reason)
 {
-    m_activeNr.store(slot, std::memory_order_release);
+    if (const auto accepted = NnrAdapter::apply(m_channelId, settings, reason)) {
+        m_nnrTuning = *accepted;
+        return true;
+    }
+    return false;
+}
+
+NnrSettings RxChannel::nnrTuning() const
+{
+    return NnrAdapter::readSettings(m_channelId).value_or(m_nnrTuning);
+}
+
+NnrDiagnostics RxChannel::nnrDiagnostics() const
+{
+    return NnrAdapter::diagnostics(m_channelId);
+}
+
+bool RxChannel::setNnrDiagnostics(int testMode, int outputMode, QString* reason)
+{
+    return NnrAdapter::setDiagnostics(m_channelId, testMode, outputMode, reason);
+}
+
+bool RxChannel::setActiveNr(NrSlot slot)
+{
+    if (static_cast<int>(slot) < 0 || static_cast<int>(slot) > static_cast<int>(NrSlot::NNR))
+        return false;
+    if (slot == NrSlot::NNR) {
+        const auto state = nnrDiagnostics();
+        if (!state.ready || !state.rateSupported || !setNnrTuning(m_nnrTuning))
+            return false;
+    }
+
+    // Disable NNR before changing any retained NR run flag. Readiness and
+    // full tuning are accepted before enabling it below.
+    NnrAdapter::setRunning(m_channelId, false);
 
 #ifdef HAVE_WDSP
     // From Thetis console.cs:43297-43450 SelectNR() [v2.10.3.13] —
     // flip all four WDSP NR Run flags so exactly zero or one is active.
-    SetRXAANRRun (m_channelId, (slot == NrSlot::NR1) ? 1 : 0);
-    SetRXAEMNRRun(m_channelId, (slot == NrSlot::NR2) ? 1 : 0);
-    SetRXARNNRRun(m_channelId, (slot == NrSlot::NR3) ? 1 : 0);
-    SetRXASBNRRun(m_channelId, (slot == NrSlot::NR4) ? 1 : 0);
+    if (NnrAdapter::diagnostics(m_channelId).available) {
+        SetRXAANRRun (m_channelId, (slot == NrSlot::NR1) ? 1 : 0);
+        SetRXAEMNRRun(m_channelId, (slot == NrSlot::NR2) ? 1 : 0);
+        SetRXARNNRRun(m_channelId, (slot == NrSlot::NR3) ? 1 : 0);
+        SetRXASBNRRun(m_channelId, (slot == NrSlot::NR4) ? 1 : 0);
+    }
 #endif
+
+    if (slot == NrSlot::NNR && !NnrAdapter::setRunning(m_channelId, true)) {
+        // Channel lifetime is serialized by WdspEngine. If that boundary was
+        // nevertheless lost, report bypass instead of a running NNR claim.
+        m_activeNr.store(NrSlot::Off, std::memory_order_release);
+        m_dfnrActive.store(false, std::memory_order_release);
+        m_bnrActive.store(false, std::memory_order_release);
+        m_mnrActive.store(false, std::memory_order_release);
+        m_nrEnabled.store(false);
+        m_emnrEnabled.store(false);
+        return false;
+    }
+    m_activeNr.store(slot, std::memory_order_release);
 
     // Post-WDSP filter flags.  Filter instances added in Tasks 9-11; for now
     // these atomics just record intent so flag-flipping can be tested before
@@ -1118,8 +1168,9 @@ void RxChannel::setActiveNr(NrSlot slot)
     // until Task 12 retires setEmnrEnabled / setNrEnabled.  Not strictly
     // required for correctness, but avoids surprising readers of the old API.
     m_nrEnabled  .store(slot == NrSlot::NR1 || slot == NrSlot::NR2 ||
-                        slot == NrSlot::NR3 || slot == NrSlot::NR4);
+                        slot == NrSlot::NR3 || slot == NrSlot::NR4 || slot == NrSlot::NNR);
     m_emnrEnabled.store(slot == NrSlot::NR2);
+    return true;
 }
 
 // ---------------------------------------------------------------------------
@@ -2064,6 +2115,8 @@ RxChannelState RxChannel::captureState() const
     // Noise reduction
     s.nrEnabled           = m_nrEnabled.load();
     s.nrMode              = m_nrMode;
+    s.activeNr            = activeNr();
+    s.nnrTuning           = nnrTuning();
     s.anfEnabled          = m_anfEnabled.load();
 
     // EQ
@@ -2115,6 +2168,8 @@ void RxChannel::applyState(const RxChannelState& s)
     // Noise reduction
     setNrEnabled(s.nrEnabled);
     setNrMode(s.nrMode);
+    setNnrTuning(s.nnrTuning);
+    setActiveNr(s.activeNr);
     setAnfEnabled(s.anfEnabled);
 
     // EQ

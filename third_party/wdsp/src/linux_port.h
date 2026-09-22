@@ -83,13 +83,16 @@ typedef pthread_mutex_t *LPCRITICAL_SECTION;
 #define Sleep(ms) usleep(ms*1000)
 
 #define CreateSemaphore(a,b,c,d) LinuxCreateSemaphore(a,b,c,d)
+#define CreateSemaphoreW(a,b,c,d) LinuxCreateSemaphore(a,b,c,0)
 #define WaitForSingleObject(x, y) LinuxWaitForSingleObject(x, y)
+#define WaitForMultipleObjects(n, h, all, ms) LinuxWaitForMultipleObjects(n, h, all, ms)
 #define ReleaseSemaphore(x,y,z) LinuxReleaseSemaphore(x,y,z)
 #define SetEvent(x) LinuxSetEvent(x)
 #define ResetEvent(x) LinuxResetEvent(x)
 
 #define AllocConsole() ((void)0)
 #define FreeConsole()  ((void)0)
+#define OutputDebugStringA(text) fputs((text), stderr)
 
 // Windows AVRT (multimedia thread scheduling) — no-ops on POSIX
 #define AvSetMmThreadCharacteristics(name, idx) ((HANDLE)0)
@@ -106,10 +109,15 @@ typedef pthread_mutex_t *LPCRITICAL_SECTION;
 #endif
 
 #define INFINITE -1
+#define WAIT_OBJECT_0 0u
+#define WAIT_TIMEOUT 258u
+#define WAIT_FAILED 0xffffffffu
 
 void QueueUserWorkItem(void *function,void *context,int flags);
 
 void InitializeCriticalSectionAndSpinCount(pthread_mutex_t *mutex,int count);
+
+#define InitializeCriticalSection(mutex) InitializeCriticalSectionAndSpinCount((mutex), 0)
 
 void EnterCriticalSection(pthread_mutex_t *mutex);
 
@@ -121,6 +129,9 @@ void DeleteCriticalSection(pthread_mutex_t *mutex);
 sem_t *LinuxCreateSemaphore(int attributes,int initial_count,int maximum_count,char *name);
 
 int LinuxWaitForSingleObject(sem_t *sem,int x);
+
+unsigned int LinuxWaitForMultipleObjects(unsigned int count, HANDLE* handles,
+	int wait_all, int milliseconds);
 
 void LinuxReleaseSemaphore(sem_t *sem,int release_count, int* previous_count);
 
@@ -139,4 +150,3 @@ void SetThreadPriority(HANDLE thread, int priority);
 int CloseHandle(HANDLE hObject);
 
 #endif
-

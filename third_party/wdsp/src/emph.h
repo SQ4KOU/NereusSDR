@@ -32,22 +32,8 @@ warren@wpratt.com
 
 #ifndef _emphp_h
 #define _emphp_h
-#include "firmin.h"
-typedef struct _emphp
-{
-	int run;
-	int position;
-	int size;
-	int nc;
-	int mp;
-	double* in;
-	double* out;
-	int ctype;
-	double f_low;
-	double f_high;
-	double rate;
-	FIRCORE p;
-} emphp, *EMPHP;
+
+typedef struct _emphp* EMPHP;
 
 extern EMPHP create_emphp (int run, int position, int size, int nc, int mp, 
 	double* in, double* out, int rate, int ctype, double f_low, double f_high);
@@ -58,17 +44,21 @@ extern void flush_emphp (EMPHP a);
 
 extern void xemphp (EMPHP a, int position);
 
+extern int getRun_emphp (EMPHP a);
+
 extern void setBuffers_emphp (EMPHP a, double* in, double* out);
 
 extern void setSamplerate_emphp (EMPHP a, int rate);
 
 extern void setSize_emphp (EMPHP a, int size);
 
-void SetTXAFMEmphMP (int channel, int mp);
+__declspec (dllexport) void SetTXAFMEmphMP (int channel, int mp);
 
-void SetTXAFMEmphNC (int channel, int nc);
+__declspec (dllexport) void SetTXAFMEmphNC (int channel, int nc);
 
-void SetTXAFMPreEmphFreqs(int channel, double low, double high);
+__declspec (dllexport) void SetTXAFMPreEmphFreqs(int channel, double low, double high);
+
+extern void SetTXAFMPreEmphRun(int channel, int run);
 
 #endif
 

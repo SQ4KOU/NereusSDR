@@ -14,6 +14,8 @@
 #include "gui/PanadapterStack.h"
 #include "gui/SpectrumWidget.h"
 #include "models/RadioModel.h"
+#include "core/session/PureSignalSessionFacade.h"
+#include "core/session/Ps3DisplayCodec.h"
 #include "models/SliceModel.h"
 
 #include <QElapsedTimer>
@@ -177,6 +179,8 @@ struct RemoteMediaController::Private {
     quint32 epoch = 0;
     quint32 nextEndpoint = 1;
     quint64 frames = 0;
+    Ps3DisplayAssembler ps3Assembler;
+    quint64 ps3Generation = 0;
     std::unique_ptr<RemoteAudioReceiver> audio;
     quint32 audioRevision = 0;
     quint32 audioGeneration = 0;
@@ -323,6 +327,8 @@ RemoteAudioReceiverTelemetry RemoteMediaController::audioTelemetry() const
 
 void RemoteMediaController::stop()
 {
+    d->ps3Generation = 0;
+    d->ps3Assembler.reset(0);
     d->timer->stop();
     d->audio->stop();
     d->audioEnabled = false;
@@ -779,6 +785,21 @@ void RemoteMediaController::requestKeyframe(quint32 endpointId)
 
 void RemoteMediaController::receiveDisplay(const QByteArray& packet)
 {
+    if (packet.startsWith("PS3D")) {
+        if (!d->client || !d->model || d->client->capabilities().psDisplayVersion != 1
+            || !d->model->pureSignalFacade()->ampViewSubscribed()) {
+            return;
+        }
+        PureSignalSessionFacade* facade = d->model->pureSignalFacade();
+        if (d->ps3Generation != facade->displayGeneration()) {
+            d->ps3Generation = facade->displayGeneration();
+            d->ps3Assembler.reset(d->ps3Generation);
+        }
+        if (const auto snapshot = d->ps3Assembler.accept(packet)) {
+            facade->receiveDisplaySnapshot(*snapshot);
+        }
+        return;
+    }
     // Route only the documented v1 prefix. The decoder validates the complete
     // envelope and bounds before any plane can reach the renderer.
     if (packet.size() < 42 || packet.size() > DisplayCodecEncoder::kMaxEncodedBytes

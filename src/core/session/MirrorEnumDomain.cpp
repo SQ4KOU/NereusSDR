@@ -79,7 +79,8 @@ const DomainTable& table()
         declare<NbMode>(&t, { NbMode::Off, NbMode::NB, NbMode::NB2 });
 
         declare<NrSlot>(&t, { NrSlot::Off, NrSlot::NR1, NrSlot::NR2, NrSlot::NR3,
-                              NrSlot::NR4, NrSlot::DFNR, NrSlot::BNR, NrSlot::MNR });
+                              NrSlot::NR4, NrSlot::DFNR, NrSlot::BNR, NrSlot::MNR,
+                              NrSlot::NNR });
 
         declare<NrPosition>(&t, { NrPosition::PreAgc, NrPosition::PostAgc });
 

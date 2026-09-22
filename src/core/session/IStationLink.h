@@ -123,6 +123,11 @@ public:
     /// station capability.
     virtual bool remoteTgxlConfigAvailable() const { return false; }
     virtual bool remoteFourO3AControlAvailable() const { return false; }
+    virtual CommandOutcome requestApplyNnrModels(quint32)
+    { return { false, QStringLiteral("NNR model application is not supported by this station link.") }; }
+    virtual bool nnrControlAvailable() const { return false; }
+    virtual CommandOutcome requestNnrDiagnostics(int, int, int)
+    { return { false, QStringLiteral("NNR diagnostics are not supported by this station link.") }; }
 };
 
 } // namespace NereusSDR

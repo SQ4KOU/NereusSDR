@@ -36,6 +36,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonValue>
+#include <QSet>
 
 #include <cmath>
 #include <limits>
@@ -106,7 +107,8 @@ SessionMessage SessionMessages::commandInvoke(const QByteArray& verb, quint32 co
 
 SessionMessage SessionMessages::commandResult(const QByteArray& verb, quint32 commandId,
                                               bool accepted, const QString& reason,
-                                              const QList<QByteArray>& affectedKeys)
+                                              const QList<QByteArray>& affectedKeys,
+                                              const QList<MirrorUpdate>& values)
 {
     SessionMessage m;
     m.kind = SessionMessageKind::CommandResult;
@@ -115,6 +117,7 @@ SessionMessage SessionMessages::commandResult(const QByteArray& verb, quint32 co
     m.accepted = accepted;
     m.reason = reason;
     m.affectedKeys = affectedKeys;
+    m.updates = values;
     return m;
 }
 
@@ -181,12 +184,26 @@ SessionMessage SessionMessages::sessionEnd(const QString& reason, bool retryable
 }
 
 SessionMessage SessionMessages::propertyWrite(const QByteArray& objectKey,
-                                              const QList<MirrorUpdate>& updates)
+                                              const QList<MirrorUpdate>& updates,
+                                              quint32 writeId)
 {
     SessionMessage m;
     m.kind = SessionMessageKind::PropertyWrite;
     m.objectKey = objectKey;
     m.updates = updates;
+    m.writeId = writeId;
+    return m;
+}
+
+SessionMessage SessionMessages::propertyResult(const QByteArray& objectKey,
+                                               quint32 writeId,
+                                               const QList<SessionPropertyResult>& results)
+{
+    SessionMessage m;
+    m.kind = SessionMessageKind::PropertyResult;
+    m.objectKey = objectKey;
+    m.writeId = writeId;
+    m.propertyResults = results;
     return m;
 }
 
@@ -241,10 +258,12 @@ SessionMessage SessionMessages::settingsValueAbsent(const QString& key,
 }
 
 SessionMessage SessionMessages::settingsReject(const QString& key, bool hasRestoredValue,
-                                               const QString& restoredValue)
+                                               const QString& restoredValue,
+                                               const QString& reason)
 {
     SessionMessage m;
     m.kind = SessionMessageKind::SettingsReject;
+    m.reason = reason;
     m.objectKey = key.toUtf8();
     if (hasRestoredValue) {
         m.updates = { settingsEntry(key, restoredValue) };
@@ -277,6 +296,7 @@ constexpr KindName kKindNames[] = {
     { SessionMessageKind::Capabilities, "capabilities" },
     { SessionMessageKind::SessionEnd, "session.end" },
     { SessionMessageKind::PropertyWrite, "property.write" },
+    { SessionMessageKind::PropertyResult, "property.result" },
     { SessionMessageKind::SettingsSnapshot, "settings.snapshot" },
     { SessionMessageKind::SettingsWrite, "settings.write" },
     { SessionMessageKind::SettingsRemove, "settings.remove" },
@@ -645,6 +665,13 @@ QByteArray SessionMessages::encode(const SessionMessage& message)
             affected.append(QString::fromUtf8(key));
         }
         o.insert(QStringLiteral("affected"), affected);
+        if (!message.updates.isEmpty()) {
+            QJsonArray values;
+            for (const auto& value : message.updates) {
+                values.append(updateToJson(value));
+            }
+            o.insert(QStringLiteral("values"), values);
+        }
         break;
     }
     case SessionMessageKind::Hello:
@@ -677,11 +704,32 @@ QByteArray SessionMessages::encode(const SessionMessage& message)
         break;
     case SessionMessageKind::PropertyWrite: {
         o.insert(QStringLiteral("key"), QString::fromUtf8(message.objectKey));
+        if (message.writeId != 0) {
+            o.insert(QStringLiteral("writeId"), static_cast<double>(message.writeId));
+        }
         QJsonArray props;
         for (const MirrorUpdate& u : message.updates) {
             props.append(updateToJson(u));
         }
         o.insert(QStringLiteral("properties"), props);
+        break;
+    }
+    case SessionMessageKind::PropertyResult: {
+        o.insert(QStringLiteral("key"), QString::fromUtf8(message.objectKey));
+        o.insert(QStringLiteral("writeId"), static_cast<double>(message.writeId));
+        QJsonArray results;
+        for (const auto& result : message.propertyResults) {
+            QJsonObject entry;
+            entry.insert(QStringLiteral("property"), QString::fromUtf8(result.property));
+            entry.insert(QStringLiteral("accepted"), result.accepted);
+            entry.insert(QStringLiteral("reason"), result.reason);
+            entry.insert(QStringLiteral("hasValue"), result.hasValue);
+            if (result.hasValue) {
+                entry.insert(QStringLiteral("value"), updateToJson(result.value));
+            }
+            results.append(entry);
+        }
+        o.insert(QStringLiteral("results"), results);
         break;
     }
     case SessionMessageKind::SettingsWrite:
@@ -694,6 +742,9 @@ QByteArray SessionMessages::encode(const SessionMessage& message)
             entries.append(updateToJson(u));
         }
         o.insert(QStringLiteral("properties"), entries);
+        if (message.kind == SessionMessageKind::SettingsReject && !message.reason.isEmpty()) {
+            o.insert(QStringLiteral("reason"), message.reason);
+        }
         if (message.kind == SessionMessageKind::SettingsWrite
             || message.kind == SessionMessageKind::SettingsValue) {
             o.insert(QStringLiteral("origin"), message.originTag);
@@ -753,11 +804,25 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
     const bool needsKey = kind == SessionMessageKind::ObjectCreate
         || kind == SessionMessageKind::ObjectDestroy || kind == SessionMessageKind::Delta
         || kind == SessionMessageKind::PropertyWrite
+        || kind == SessionMessageKind::PropertyResult
         || kind == SessionMessageKind::SettingsWrite
         || kind == SessionMessageKind::SettingsRemove
         || kind == SessionMessageKind::SettingsValue
         || kind == SessionMessageKind::SettingsReject;
     if (needsKey && !o.value(QStringLiteral("key")).isString()) {
+        return false;
+    }
+    if (kind == SessionMessageKind::PropertyResult
+        || (kind == SessionMessageKind::PropertyWrite && o.contains(QStringLiteral("writeId")))) {
+        const QJsonValue id = o.value(QStringLiteral("writeId"));
+        const double raw = id.toDouble(-1);
+        if (!id.isDouble() || !(raw >= 1.0 && raw <= 4294967295.0)
+            || std::floor(raw) != raw) {
+            return false;
+        }
+    }
+    if (kind == SessionMessageKind::PropertyResult
+        && !o.value(QStringLiteral("results")).isArray()) {
         return false;
     }
     const bool needsClass = kind == SessionMessageKind::Schema
@@ -918,7 +983,15 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
         break;
     case SessionMessageKind::CommandInvoke: {
         message.commandVerb = o.value(QStringLiteral("verb")).toString().toUtf8();
-        message.commandId = static_cast<quint32>(o.value(QStringLiteral("id")).toDouble());
+        const bool dspCommand = message.commandVerb.startsWith("nnr.")
+            || message.commandVerb.startsWith("ps3.") || message.commandVerb.startsWith("dspAssets.");
+        const double commandId = o.value(QStringLiteral("id")).toDouble(0.0);
+        if (dspCommand && (!o.value(QStringLiteral("id")).isDouble()
+            || !std::isfinite(commandId) || commandId < 1.0 || commandId > 4294967295.0
+            || std::floor(commandId) != commandId)) {
+            return false;
+        }
+        message.commandId = static_cast<quint32>(commandId);
         const QJsonArray args = o.value(QStringLiteral("args")).toArray();
         message.arguments.reserve(args.size());
         for (const QJsonValue& v : args) {
@@ -932,7 +1005,15 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
     }
     case SessionMessageKind::CommandResult: {
         message.commandVerb = o.value(QStringLiteral("verb")).toString().toUtf8();
-        message.commandId = static_cast<quint32>(o.value(QStringLiteral("id")).toDouble());
+        const bool dspCommand = message.commandVerb.startsWith("nnr.")
+            || message.commandVerb.startsWith("ps3.") || message.commandVerb.startsWith("dspAssets.");
+        const double commandId = o.value(QStringLiteral("id")).toDouble(0.0);
+        if (dspCommand && (!o.value(QStringLiteral("id")).isDouble()
+            || !std::isfinite(commandId) || commandId < 1.0 || commandId > 4294967295.0
+            || std::floor(commandId) != commandId)) {
+            return false;
+        }
+        message.commandId = static_cast<quint32>(commandId);
         message.accepted = o.value(QStringLiteral("accepted")).toBool();
         message.reason = o.value(QStringLiteral("reason")).toString();
         const QJsonArray affected = o.value(QStringLiteral("affected")).toArray();
@@ -944,6 +1025,25 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
                 return false;
             }
             message.affectedKeys.append(v.toString().toUtf8());
+        }
+        if (o.contains(QStringLiteral("values"))) {
+            if (!o.value(QStringLiteral("values")).isArray()) {
+                return false;
+            }
+            const QJsonArray values = o.value(QStringLiteral("values")).toArray();
+            if (values.size() > 128) {
+                return false;
+            }
+            QSet<QByteArray> names;
+            for (const QJsonValue& value : values) {
+                MirrorUpdate update;
+                if (!updateFromJson(value, &update) || update.name.isEmpty()
+                    || names.contains(update.name)) {
+                    return false;
+                }
+                names.insert(update.name);
+                message.updates.append(update);
+            }
         }
         break;
     }
@@ -973,6 +1073,46 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
         message.reason = o.value(QStringLiteral("reason")).toString();
         message.retryable = o.value(QStringLiteral("retryable")).toBool();
         break;
+    case SessionMessageKind::PropertyResult: {
+        message.objectKey = o.value(QStringLiteral("key")).toString().toUtf8();
+        message.writeId = static_cast<quint32>(o.value(QStringLiteral("writeId")).toDouble());
+        const QJsonArray entries = o.value(QStringLiteral("results")).toArray();
+        if (entries.size() > 512) {
+            return false;
+        }
+        QSet<QByteArray> seen;
+        for (const QJsonValue& v : entries) {
+            if (!v.isObject()) {
+                return false;
+            }
+            const QJsonObject entry = v.toObject();
+            if (!entry.value(QStringLiteral("property")).isString()
+                || !entry.value(QStringLiteral("accepted")).isBool()
+                || !entry.value(QStringLiteral("reason")).isString()
+                || !entry.value(QStringLiteral("hasValue")).isBool()) {
+                return false;
+            }
+            SessionPropertyResult result;
+            result.property = entry.value(QStringLiteral("property")).toString().toUtf8();
+            if (result.property.isEmpty() || seen.contains(result.property)) {
+                return false;
+            }
+            seen.insert(result.property);
+            result.accepted = entry.value(QStringLiteral("accepted")).toBool();
+            result.reason = entry.value(QStringLiteral("reason")).toString();
+            result.hasValue = entry.value(QStringLiteral("hasValue")).toBool();
+            if (result.hasValue
+                && (!updateFromJson(entry.value(QStringLiteral("value")), &result.value)
+                    || result.value.name != result.property)) {
+                return false;
+            }
+            if (result.accepted && (!result.hasValue || !result.reason.isEmpty())) {
+                return false;
+            }
+            message.propertyResults.append(result);
+        }
+        break;
+    }
     case SessionMessageKind::Capabilities:
     case SessionMessageKind::SettingsSnapshot:
     case SessionMessageKind::PropertyWrite:
@@ -983,6 +1123,12 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
         if (kind != SessionMessageKind::Capabilities
             && kind != SessionMessageKind::SettingsSnapshot) {
             message.objectKey = o.value(QStringLiteral("key")).toString().toUtf8();
+        }
+        if (kind == SessionMessageKind::PropertyWrite) {
+            message.writeId = static_cast<quint32>(o.value(QStringLiteral("writeId")).toDouble());
+        }
+        if (kind == SessionMessageKind::SettingsReject) {
+            message.reason = o.value(QStringLiteral("reason")).toString();
         }
         if (kind == SessionMessageKind::SettingsWrite
             || kind == SessionMessageKind::SettingsValue) {

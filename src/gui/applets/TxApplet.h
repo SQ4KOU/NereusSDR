@@ -79,6 +79,8 @@
 //                 Setup → Transmit → DEXP/VOX (mirrors PhoneCwApplet's DEXP
 //                 button pattern).  100 ms VOX peak-meter poller moves with
 //                 the row.  DEXP row stays on PhoneCwApplet — only VOX moves.
+//   2026-09-22 — Routed the PS-A toggle through RadioModel's shared
+//                 PureSignalSessionFacade for local and remote sessions.
 // =================================================================
 
 //=================================================================
@@ -164,6 +166,7 @@ namespace NereusSDR {
 class HGauge;
 class MicProfileManager;
 class PureSignal;
+class PureSignalSessionFacade;
 class TwoToneController;
 class TxCfcDialog;
 class DexpPeakMeter;
@@ -357,6 +360,7 @@ private slots:
 private:
     void buildUI();
     void wireControls();  // called after buildUI() — attaches signals/slots
+    void syncPsaFromFacade();
     // K.2: slot called when SliceModel::dspModeChanged fires (via RadioModel).
     // Updates m_moxBtn->setToolTip(tooltipForMode(mode)).
     void onMoxModeChanged(DSPMode mode);
@@ -451,21 +455,9 @@ private:
     QPushButton* m_twoToneBtn = nullptr;
     // 9. PS-A (Phase 3M-4 Task 13)
     QPushButton* m_psaBtn     = nullptr;
-    // Late-bound PureSignal coordinator pointer.  Set by setPureSignal()
-    // (test seam) or by RadioModel::pureSignalCoordinatorReady on connect.
-    // Null until WDSP-init lambda fires; the m_psaBtn::toggled lambda
-    // null-guards on this so pre-coordinator clicks are safely no-op'd.
-    //
-    // PR #212 follow-up bench fix (J.J. KG4VCF, 2026-05-07): converted from
-    // raw pointer to QPointer to fix EXC_BAD_ACCESS crash on radio-disconnect
-    // teardown.  RadioModel destroys PureSignal during disconnect, then
-    // emits pureSignalCoordinatorReady(nullptr) to clear bindings via
-    // setPureSignal(nullptr).  setPureSignal's `disconnect(m_ps, nullptr,
-    // this, nullptr)` call dereferenced the freed PureSignal pointer.
-    // QPointer auto-nulls on QObject destruction, so the m_ps null-guard
-    // at setPureSignal:2010 now properly skips the redundant disconnect
-    // (Qt auto-disconnects on sender destruction anyway).
-    QPointer<NereusSDR::PureSignal> m_ps;
+    // Shared session facade owned by RadioModel. setPureSignal() changes its
+    // local coordinator only for the established standalone test seam.
+    QPointer<NereusSDR::PureSignalSessionFacade> m_psFacade;
     // ── Plan 4 Cluster C (Task 4 / D2+D3+D9-status): TX BW spinbox row ─────────
     // Low/High cutoff spinboxes (Hz) — bidirectional with TransmitModel::filterLow
     // and filterHigh via the filterChanged(int,int) signal.

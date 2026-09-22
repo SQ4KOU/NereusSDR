@@ -130,21 +130,16 @@ SAMPHIRE_AUTHORED_SOURCES = {
 # added upstream fails the check until a human confirms the exemption is
 # intentional.
 #
-# Documented in docs/attribution/WDSP-PROVENANCE.md under "10 files have
-# no license headers (non-copyrightable or build infrastructure)".
+# Documented in docs/attribution/WDSP-PROVENANCE.md under "License census".
+# Pinned WDSP 2.10 gives calculus.c/.h full headers; FDnoiseIQ and fastmath
+# are no longer in this tree. New Nereus ABI headers carry their own grants.
 WDSP_HEADER_EXEMPTIONS = {
-    # Data tables (lookup arrays, not copyrightable expression)
-    "calculus.c",
-    "calculus.h",
-    "FDnoiseIQ.c",
-    "FDnoiseIQ.h",
     # MSVC IDE artifacts (generated, no human authorship)
     "resource.h",
     "resource1.h",
     # Minimal wrappers (version stubs, empty headers)
     "version.c",
     "version.h",
-    "fastmath.h",
     # FFTW3 third-party header vendored into WDSP (GPLv2-or-later; the
     # full GPLv2 text lives at third_party/fftw3/COPYING, and the
     # standalone FFTW3 provenance doc is
@@ -350,6 +345,14 @@ def verify_aethersdr_kind():
 
 def verify_wdsp_kind():
     paths = list_wdsp_sources()
+    # Pinned 2.10 also has source-derived C++ boundary adapters. Keep their
+    # grants under the WDSP gate rather than inventing Thetis attribution.
+    adapters = [
+        "src/core/dsp/DspAssetValidation.cpp",
+        "src/core/dsp/Ps3DisplayAdapter.cpp",
+        "src/core/dsp/Ps3DisplayAdapter.h",
+    ]
+    paths.extend(adapters)
     if not paths:
         print(f"ERROR: no sources found under {WDSP_SRC_DIR}", file=sys.stderr)
         return None
@@ -357,7 +360,9 @@ def verify_wdsp_kind():
     failures = 0
     for rel in paths:
         path = REPO / rel
-        missing = check_required_markers(path, markers)
+        required = markers + (["Ported from TAPR", "Modification history (NereusSDR)"]
+                              if rel in adapters else [])
+        missing = check_required_markers(path, required)
         if missing:
             failures += 1
             print(f"FAIL [wdsp] {rel} — missing-markers: {', '.join(missing)}")

@@ -58,6 +58,8 @@
 //                 poller (now TxApplet::pollVoxMeter) and the right-click
 //                 → Setup → Transmit → DEXP/VOX signal handling.  DEXP row
 //                 stays on PhoneCwApplet — only VOX moves.
+//   2026-09-22 — Routed the PS-A toggle through RadioModel's shared
+//                 PureSignalSessionFacade for local and remote sessions.
 // =================================================================
 
 //=================================================================
@@ -172,8 +174,10 @@
 #include "core/MoxController.h"
 #include "core/PureSignal.h"
 #include "core/RadioStatus.h"
+#include "core/session/PureSignalSessionFacade.h"
 #include "core/TwoToneController.h"
 #include "core/TxChannel.h"
+#include "models/PureSignalSettings.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -1427,7 +1431,7 @@ void TxApplet::wireControls()
         m_twoToneCtrl->setActive(on);
     });
 
-    // ── Phase 3M-4 Task 13: PS-A button wiring ───────────────────────────────
+    // ── Phase 3M-4 / WDSP 2.10: PS-A button wiring ──────────────────────────
     // Source-first port of Thetis chkFWCATUBypass:
     //   - Left-click toggle drives PureSignal::setAutoCalEnabled (mirrors
     //     chkFWCATUBypass_Click, console.cs:36762 [v2.10.3.13]).
@@ -1437,10 +1441,8 @@ void TxApplet::wireControls()
     //                                                              EventArgs.Empty);
     //     ).
     //
-    // Coordinator is late-bound — wired via setPureSignal() when
-    // RadioModel::pureSignalCoordinatorReady fires post-WDSP-init.  The
-    // toggled lambda below null-guards on m_ps so pre-coordinator clicks
-    // are safely no-op'd.
+    // Production always uses RadioModel's one session facade. The local
+    // coordinator remains late-bound behind that facade.
     if (m_psaBtn) {
         // Right-click → emit openPureSignalDialogRequested.  Wired
         // unconditionally so the seam exists even when no PureSignal
@@ -1451,24 +1453,36 @@ void TxApplet::wireControls()
             emit openPureSignalDialogRequested();
         });
 
-        // Left-click toggle → PureSignal::setAutoCalEnabled (when bound).
-        // Guarded on m_updatingFromModel to prevent echo loops when the
-        // coordinator's autoCalEnabledChanged signal flips us back.
+        // The checked state expresses automatic-calibration intent. Turning
+        // it off uses the acknowledged Off/reset action.
         connect(m_psaBtn, &QPushButton::toggled, this, [this](bool on) {
-            if (m_updatingFromModel) { return; }
-            if (m_ps) { m_ps->setAutoCalEnabled(on); }
+            if (m_updatingFromModel || !m_psFacade) {
+                return;
+            }
+            const Ps3Action action = on
+                ? Ps3Action::StartAutomatic : Ps3Action::OffReset;
+            if (m_psFacade->requestAction(action) == 0) {
+                syncPsaFromFacade();
+            }
         });
 
-        // If a coordinator is already live (e.g. test injects via
-        // RadioModel::pureSignal() returning non-null at construction),
-        // wire it now.  Otherwise wait for the late-bind signal.
         if (m_model) {
+            m_psFacade = m_model->pureSignalFacade();
+            if (m_psFacade) {
+                connect(m_psFacade, &PureSignalSessionFacade::statusChanged,
+                        this, &TxApplet::syncPsaFromFacade);
+                if (PureSignalSettings* settings = m_psFacade->settings()) {
+                    connect(settings, &PureSignalSettings::autoCalEnabledChanged,
+                            this, &TxApplet::syncPsaFromFacade);
+                }
+            }
             if (PureSignal* ps = m_model->pureSignal()) {
                 setPureSignal(ps);
             }
             connect(m_model, &RadioModel::pureSignalCoordinatorReady, this,
                     &TxApplet::setPureSignal);
         }
+        syncPsaFromFacade();
     }
 
     // ── Initial sync from model ──────────────────────────────────────────────
@@ -2076,6 +2090,7 @@ void TxApplet::setTransmitPermitted(bool permitted, const QString& unavailableRe
     apply(m_txFilterHighSpin);
     apply(m_twoToneBtn);
     apply(m_psaBtn);
+    syncPsaFromFacade();
 }
 
 // ---------------------------------------------------------------------------
@@ -2095,48 +2110,30 @@ void TxApplet::setBoardCapabilities(const NereusSDR::BoardCapabilities& caps)
 // ---------------------------------------------------------------------------
 // Phase 3M-4 Task 13 — setPureSignal (late-bound coordinator)
 //
-// Re-arm the [PS-A] toggle's bidirectional binding when the PureSignal
-// coordinator becomes available (post-WDSP-init).  Disconnects the prior
-// coordinator's autoCalEnabledChanged echo before rewiring; the toggled
-// lambda in wireControls() reads m_ps live so it picks up the new pointer
-// without rewiring.
-//
-// Pass nullptr to clear bindings on teardown (RadioModel emits this at
-// disconnect via pureSignalCoordinatorReady(nullptr)).
+// Retain the established test/late-bind slot while keeping one facade per
+// RadioModel. The facade owns coordinator signal wiring and session state.
 // ---------------------------------------------------------------------------
 void TxApplet::setPureSignal(NereusSDR::PureSignal* coordinator)
 {
-    if (m_ps == coordinator) { return; }
-
-    if (m_ps) {
-        // Drop the prior coordinator's signal subscriptions targeting us.
-        disconnect(m_ps, nullptr, this, nullptr);
+    if (m_psFacade) {
+        m_psFacade->setCoordinator(coordinator);
     }
-    m_ps = coordinator;
+    syncPsaFromFacade();
+}
 
-    if (!m_psaBtn) { return; }
-
-    if (m_ps) {
-        connect(m_ps, &NereusSDR::PureSignal::autoCalEnabledChanged, this,
-                [this](bool on) {
-            if (!m_psaBtn) { return; }
-            QSignalBlocker blk(m_psaBtn);
-            m_updatingFromModel = true;
-            m_psaBtn->setChecked(on);
-            m_updatingFromModel = false;
-        });
-        // Initial sync from coordinator state.
-        QSignalBlocker blk(m_psaBtn);
-        m_updatingFromModel = true;
-        m_psaBtn->setChecked(m_ps->isAutoCalEnabled());
-        m_updatingFromModel = false;
-    } else {
-        // Coordinator gone — reset toggle state (safe default).
-        QSignalBlocker blk(m_psaBtn);
-        m_updatingFromModel = true;
-        m_psaBtn->setChecked(false);
-        m_updatingFromModel = false;
+void TxApplet::syncPsaFromFacade()
+{
+    if (!m_psaBtn) {
+        return;
     }
+    const bool automaticIntent = m_psFacade && m_psFacade->settings()
+        ? m_psFacade->settings()->autoCalEnabled() : false;
+    const QSignalBlocker blocker(m_psaBtn);
+    m_updatingFromModel = true;
+    m_psaBtn->setChecked(automaticIntent);
+    m_psaBtn->setEnabled(m_transmitPermitted && m_psFacade
+                         && m_psFacade->available() && m_psFacade->canActuate());
+    m_updatingFromModel = false;
 }
 
 // ---------------------------------------------------------------------------

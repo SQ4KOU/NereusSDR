@@ -211,6 +211,11 @@ public slots:
     // [v2.10.3.13]: psFbDdc=0, txMonDdc=1 for all current models).
     void setActive(bool active, int txMonDdc, int psFbDdc);
 
+    // Retire the native target before RadioModel destroys the TXA channel.
+    // Any queued paired packet after this call is dropped by the channel-id
+    // guard and can no longer reach pscc with a stale TXA index.
+    void retireSession();
+
 private:
     // Drains kBlockSize samples from each ring (when both have ≥
     // kBlockSize available), de-interleaves into double tx/rx

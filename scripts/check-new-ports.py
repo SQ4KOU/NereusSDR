@@ -368,7 +368,13 @@ def main():
         mode_label = "full-tree"
     else:
         files = diffed_files()
-        listed = parse_provenance_paths()
+        # A changed WDSP/Core adapter has the same recorded provenance as
+        # it does in the full-tree audit; source family does not depend on
+        # whether this invocation happens to inspect a PR diff.
+        listed = parse_provenance_paths(
+            PROVENANCE, WDSP_PROVENANCE, AETHER_RECONCILIATION,
+            FREEDV_PROVENANCE,
+        )
         mode_label = "diff"
     if not files:
         print("No added/modified files in diff range — nothing to check.")

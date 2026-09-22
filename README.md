@@ -154,7 +154,9 @@ sha256sum -c SHA256SUMS.txt
 **Working now:**
 - OpenHPSDR Protocol 1 and Protocol 2 radio discovery, connection, and per-MAC persistence across the full ANAN / Hermes / Metis / Red Pitaya family
 - Per-MAC hardware sample-rate selection (P1 up to 192 / 384 kHz; P2 up to 1536 kHz)
-- WDSP v1.29 DSP engine — USB/LSB/AM/CW/DIGI/FM demodulation with full RX DSP parity (AGC advanced, EMNR, SNB, APF, 3-variant squelch, NB1/NB2 advanced, RIT/XIT, mute/pan/binaural, frequency lock, mode containers)
+- WDSP 2.10 DSP engine — USB/LSB/AM/CW/DIGI/FM demodulation with full RX DSP parity (AGC advanced, EMNR, SNB, APF, 3-variant squelch, NB1/NB2 advanced, RIT/XIT, mute/pan/binaural, frequency lock, mode containers)
+- NNR Standard/Premium noise reduction with per-radio/per-slice persistent tuning, right-click controls, and station-owned model assets
+- PureSignal 3 settings, correction assets, and AmpView shared by local and remote GUI sessions; remote actuation awaits R4. See the [operator notes](docs/architecture/wdsp210-operator-notes.md) and [software/hardware verification status](docs/architecture/wdsp210-verification/README.md)
 - Per-slice-per-band persistence of DSP state (`Slice<N>/Band<key>/*`)
 - Auto AGC-T with noise-floor tracker + MOX guard
 - Step attenuator (Classic + Adaptive auto-attenuation) and ADC-overload OVL badge

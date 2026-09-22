@@ -76,6 +76,12 @@ void PsccPump::setActive(bool active, int txMonDdc, int psFbDdc)
                   << "psFbDdc=" << psFbDdc;
 }
 
+void PsccPump::retireSession()
+{
+    setActive(false, m_txMonDdc, m_psFbDdc);
+    m_txChannelId = -1;
+}
+
 void PsccPump::onDdcConfigChanged(const PsDdcConfig& cfg)
 {
     // From Thetis console.cs:8186-8538 UpdateDDCs [v2.10.3.13] +
@@ -175,7 +181,7 @@ void PsccPump::onPsPairedIqData(int psFbDdc, const QVector<float>& psFbSamples,
     // from the same packet, so cross-stream sample alignment is
     // guaranteed by construction.  No ring buffers, no drain loop.
 
-    if (!m_active) {
+    if (!m_active || m_txChannelId < 0) {
         return;
     }
 

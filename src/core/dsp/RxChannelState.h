@@ -3,6 +3,7 @@
 #pragma once
 
 #include "models/SliceModel.h"   // for Mode enum (alias of DSPMode)
+#include "NnrSettings.h"
 
 namespace NereusSDR {
 
@@ -37,6 +38,8 @@ struct RxChannelState {
     int    nbMode                   = 0;
     bool   nrEnabled                = false;
     int    nrMode                   = 0;
+    NrSlot activeNr                 = NrSlot::Off;
+    NnrSettings nnrTuning;
     bool   anfEnabled               = false;
 
     // EQ

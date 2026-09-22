@@ -119,8 +119,8 @@ public:
     // Load settings from disk. Called once at startup.
     void load();
 
-    // Save settings to disk.
-    void save();
+    // Atomic persistence; failure leaves in-memory preferences available for retry.
+    bool save(QString* error = nullptr);
 
     // Get/set top-level settings.
     QVariant value(const QString& key, const QVariant& defaultValue = {}) const;
@@ -463,6 +463,13 @@ public:
     // Last-connected MAC (for auto-reconnect, Task 17).
     QString lastConnected() const;
     void    setLastConnected(const QString& macKey);
+
+    // Stable namespace for the new DSP settings. Invalid/non-MAC identities
+    // return empty, so an unconnected radio cannot inherit another's tuning.
+    static QString normalizedRadioMac(const QString& mac);
+    // Called during load, before a new connection can change lastConnected.
+    // Migrates only legacy NR selection for the saved owner, preserving keys.
+    void migrateLegacyNnrSettings();
 
     // Discovery profile preference.
     DiscoveryProfile discoveryProfile() const;

@@ -37,6 +37,7 @@
 #include <memory>
 
 #include "core/RxChannel.h"
+#include "core/dsp/DspAssetService.h"
 #include "core/WdspEngine.h"
 #include "models/SliceModel.h"
 #include "fakes/ConnectableRadioModel.h"
@@ -62,6 +63,8 @@ private slots:
         b->setFrequency(14225000);
         b->setDspMode(DSPMode::USB);
         b->setPanKey(QStringLiteral("pan-1"));
+        a->setNnrAlpha(1.75);
+        b->setNnrAlpha(2.25);
         model.setActiveSlice(b->sliceIndex());
         QSignalSpy activeChanges(&model, &RadioModel::activeSliceChanged);
         QSignalSpy removed(&model, &RadioModel::sliceRemoved);
@@ -84,6 +87,24 @@ private slots:
         QVERIFY(a->streamIndex() >= 0);
         QVERIFY(b->streamIndex() >= 0);
         QVERIFY(!model.mox());
+        QCOMPARE(a->nnrAlpha(), 1.75);
+        QCOMPARE(b->nnrAlpha(), 2.25);
+        QCOMPARE(model.rxChannelForSlice(a->sliceIndex())->nnrTuning().alpha, 1.75);
+        QCOMPARE(model.rxChannelForSlice(b->sliceIndex())->nnrTuning().alpha, 2.25);
+
+        // Model application uses this same preserving seam while B remains
+        // active; receiver A must still seed its own native configuration.
+        QString reason;
+        RadioDiscovery::clearHoldOffForTest();
+        QVERIFY2(model.applyNnrModelSelection(model.dspAssets()->selectionRevision(), &reason),
+                 qPrintable(reason));
+        QTRY_COMPARE_WITH_TIMEOUT(model.connectionState(), ConnectionState::Connected, 10000);
+        QCOMPARE(model.activeSlice(), b);
+        QCOMPARE(model.slices().first(), a);
+        QCOMPARE(model.rxChannelForSlice(a->sliceIndex())->nnrTuning().alpha, 1.75);
+        QCOMPARE(model.rxChannelForSlice(b->sliceIndex())->nnrTuning().alpha, 2.25);
+        QCOMPARE(activeChanges.count(), 0);
+        QCOMPARE(removed.count(), 0);
 
         RadioInfo other = harness->radioInfo();
         other.macAddress = QStringLiteral("bb:bb:cc:11:22:33");

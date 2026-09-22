@@ -293,7 +293,11 @@ void DaemonApp::stop()
     // "stop() leaves sliceCount() == 0." Reset before emitting so any
     // radioConnected(false) listener already sees a consistent
     // (sliceCount() == 0) state if it queries back into this object.
+    m_radioModel->flushPendingSettingsSave();
     m_radioModel.reset();
+    // Teardown also saves controller state. Commit the final accepted Core
+    // configuration while AppSettings and the daemon profile still exist.
+    AppSettings::instance().save();
     m_stepAttController.reset();
     m_stepAttControllerConfigured = false;
 

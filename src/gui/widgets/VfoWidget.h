@@ -575,6 +575,8 @@ signals:
 
     // --- NR setup dialog request (right-click on any NR bank button → Task 18) ---
     void openNrSetupRequested(NereusSDR::NrSlot slot);
+    void openNrSetupForSliceRequested(NereusSDR::NrSlot slot, int sliceId);
+    void openNnrModelsRequested(int sliceId);
 
     // --- Setup dialog request (e.g. AGC-T right-click → open settings) ---
     void openSetupRequested();
@@ -631,6 +633,8 @@ private:
     void showNr2Popup(const QPoint& globalPos);
     void showNr3Popup(const QPoint& globalPos);
     void showNr4Popup(const QPoint& globalPos);
+    void showNnrPopup(const QPoint& globalPos);
+    void requestNrSetup(NereusSDR::NrSlot slot);
     void showDfnrPopup(const QPoint& globalPos);
     void showBnrPopup(const QPoint& globalPos);
     void showMnrPopup(const QPoint& globalPos);
@@ -786,6 +790,7 @@ private:
     QPushButton* m_dfnrBtn = nullptr;
     QPushButton* m_bnrBtn  = nullptr;
     QPushButton* m_mnrBtn  = nullptr;
+    QPushButton* m_nnrBtn  = nullptr;
     QPushButton*        m_anfToggle{nullptr};
     QPushButton*        m_snbToggle{nullptr};
     QPushButton*        m_apfToggle{nullptr};

@@ -98,6 +98,7 @@ class QTableWidget;
 namespace NereusSDR {
 
 class RadioModel;
+class NnrControls;
 enum class AGCMode : int;
 
 // ── AGC / ALC ─────────────────────────────────────────────────────────────────
@@ -140,10 +141,11 @@ public:
 
     // Programmatically select a sub-tab by NrSlot. Used by MainWindow to
     // route "More Settings…" popup clicks to the correct filter's sub-tab.
-    void selectSubtab(NereusSDR::NrSlot slot);
+    void selectSubtab(NereusSDR::NrSlot slot, int openerSliceId = -1);
 
 private:
     QTabWidget* m_tabs{nullptr};  // owned by content layout
+    NnrControls* m_nnrControls{nullptr};
 };
 
 // ── NB / SNB ──────────────────────────────────────────────────────────────────

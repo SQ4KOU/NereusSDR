@@ -294,6 +294,12 @@ QMap<QString, QString> SettingsProxyServer::buildSnapshot(const QString& connect
 SettingsApplyResult SettingsProxyServer::applyInboundWrite(const QString& key, const QVariant& value,
                                                            const QString& originTag)
 {
+    if (isModelOwnedDspSettingsKey(key)) {
+        SettingsApplyResult result;
+        result.reason = QStringLiteral("Use the station DSP controls; raw settings writes cannot bypass model validation.");
+        result.restoredValue = m_appSettings.value(key);
+        return result;
+    }
     if (classifySettingsKey(key) != SettingsScope::Station) {
         SettingsApplyResult result;
         result.accepted = false;

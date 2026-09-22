@@ -485,8 +485,26 @@ const Rule kWholeKeys[] = {
 
 } // namespace
 
+bool isModelOwnedDspSettingsKey(QStringView rawKey)
+{
+    const QString key = rawKey.toString().toLower();
+    if (key.startsWith(QStringLiteral("dspassets/"))) {
+        return true;
+    }
+    if (!key.startsWith(QStringLiteral("hardware/"))) {
+        return false;
+    }
+    const QStringList parts = key.split(QLatin1Char('/'));
+    return (parts.size() >= 4 && parts[2] == QStringLiteral("puresignal"))
+        || (parts.size() >= 6 && parts[2] == QStringLiteral("slices")
+            && parts[4] == QStringLiteral("nnr"));
+}
+
 SettingsScope classifySettingsKey(QStringView rawKey)
 {
+    if (isModelOwnedDspSettingsKey(rawKey)) {
+        return SettingsScope::Station;
+    }
     const QStringView key = stripPanSuffix(rawKey);
 
     for (const Rule& r : kExceptions) {
