@@ -58,6 +58,7 @@
 // =================================================================
 
 #include <QString>
+#include <QtGlobal>
 
 namespace NereusSDR {
 
@@ -103,6 +104,18 @@ public:
     { return { false, QStringLiteral("Remote C-Tune is not supported by this station link.") }; }
     virtual CommandOutcome requestStreamCentre(int, double)
     { return { false, QStringLiteral("Remote C-Tune is not supported by this station link.") }; }
+
+    // Task 4d remote TGXL configuration.  Defaults preserve existing test
+    // links and transports which have not negotiated the accessory feature.
+    virtual CommandOutcome requestConfigureTgxl(const QString&, quint16)
+    { return { false, QStringLiteral("Remote TGXL configuration is not supported by this station link.") }; }
+    virtual CommandOutcome requestDisconnectTgxl()
+    { return { false, QStringLiteral("Remote TGXL configuration is not supported by this station link.") }; }
+
+    /// Feature gate for accessory controls.  The default keeps every
+    /// existing link inert until it explicitly implements the negotiated
+    /// station capability.
+    virtual bool remoteTgxlConfigAvailable() const { return false; }
 };
 
 } // namespace NereusSDR

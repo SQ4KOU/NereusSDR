@@ -3,7 +3,7 @@
 This ledger separates the recovered integration baseline, component evidence
 and real remote receive acceptance. A component pass does not close R3.
 
-## Prepared packet-burst playback correction
+## Installed packet-burst playback correction, 200d2a0e
 
 The actual receiver now uses an already-admitted expected packet when its next
 speaker refill would otherwise underflow. It preserves ordering, normal hold,
@@ -13,7 +13,19 @@ one deliberate concealment. Seven affected targets, the native-block readiness
 check, the complete build and all 692 test executables pass; eleven existing
 inner Qt skips remain. One independent review is resolved, with strengthened
 tests rerun successfully. The same checkpoint corrects clipped graph labels.
-Matching Core/GUI installation and live acceptance are next.
+Matching Core/GUI `200d2a0e` are installed; all 115 source-overlay hashes, native
+production staging/dependencies and GUI identity/signature checks passed. Core
+PID 17097 was active with zero restarts; GUI PID 39092 opened saved profile
+`radxa_5c_r3` and authenticated at 22:22:39. The initial speaker-open backlog
+recovered automatically into context 3. Live Connection, Round trip and Audio
+graphs are readable, including the formerly clipped packet/frame units.
+
+The Core restart recreated only receiver A, leaving the second GUI pan empty.
+Receiver B was recreated through +RX; the operator then selected 80m LSB and
+continued tuning. RADE listening acceptance is pending the operator comparison;
+this interval must not be reported as a RADE soak. Multi-slice restart restore
+is recorded as R-R3-34. Rollback is
+`/var/lib/nereus-build/rollback-0b408427-before-200d2a0e/`.
 
 ## Installed checkpoint 0b408427, September 21, 21:42
 

@@ -5,13 +5,14 @@
 // NereusSDR-native UDP listener for PowerGeniusXL / TeragenXL
 // announcements on ports 9008 and 9010. Parses device model,
 // IP address, version, serial, and nickname using the official
-// FlexRadio regex. Deduplicates by serial number before emitting
-// the deviceDiscovered signal.
+// FlexRadio regex. Legacy users deduplicate by serial number; station-owned
+// identity admission can opt into endpoint-sensitive deduplication.
 //
 // Design reference: docs/architecture/2026-05-18-pgxl-tgxl-and-analog-smeter-plan.md (section 6.3)
 // Regex pattern and wire format: FlexRadio LAN discovery protocol
 //
-// AI tooling: Anthropic Claude Code.
+// AI tooling: Anthropic Claude Code; modified by J.J. Boyd (KG4VCF),
+// September 2026, AI-assisted via OpenAI Codex.
 
 #include "LanDiscovery.h"
 #include <QRegularExpression>
@@ -30,7 +31,7 @@ LanDiscovery::LanDiscovery(QObject* parent) : QObject(parent) {
 }
 
 void LanDiscovery::start(int timeoutMs) {
-    m_seenSerials.clear();
+    m_seenIdentities.clear();
     m_sock9008.bind(QHostAddress::AnyIPv4, 9008,
         QUdpSocket::ShareAddress | QUdpSocket::ReuseAddressHint);
     m_sock9010.bind(QHostAddress::AnyIPv4, 9010,
@@ -65,8 +66,8 @@ void LanDiscovery::onTimeout() {
     emit scanFinished();
 }
 
-void LanDiscovery::injectDatagramForTesting(const QString& payload) {
-    parseAnnouncement(payload, 9008);  // port arbitrary for tests
+void LanDiscovery::injectDatagramForTesting(const QString& payload, quint16 receivedPort) {
+    parseAnnouncement(payload, receivedPort);
 }
 
 void LanDiscovery::parseAnnouncement(const QString& payload, quint16 port) {
@@ -74,9 +75,15 @@ void LanDiscovery::parseAnnouncement(const QString& payload, quint16 port) {
         R"(^(?<model>\S+)\s+ip=(?<ip>\d+\.\d+\.\d+\.\d+)\s+v=(?<v>\S+)\s+serial=(?<serial>\S+)\s+nickname=(?<nick>\S+)$)");
     auto m = rx.match(payload);
     if (!m.hasMatch()) return;
-    QString serial = m.captured("serial");
-    if (m_seenSerials.contains(serial)) return;
-    m_seenSerials.insert(serial);
+    const QString serial = m.captured("serial");
+    QString identity = serial;
+    if (m_identitySensitiveDeduplication) {
+        identity = QStringLiteral("%1\x1f%2\x1f%3\x1f%4")
+                       .arg(m.captured("model"), m.captured("ip"),
+                            QString::number(port), serial);
+    }
+    if (m_seenIdentities.contains(identity)) return;
+    m_seenIdentities.insert(identity);
     emit deviceDiscovered(m.captured("model"),
                           m.captured("ip"),
                           port,

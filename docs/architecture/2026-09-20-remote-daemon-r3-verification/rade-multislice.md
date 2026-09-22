@@ -219,3 +219,16 @@ anchor behaves identically before/after early release; the API comment now
 precisely identifies the preserved empty-queue deadline. No production behavior
 changed after the full gate. Matching installation and repeated RADE listening
 remain pending.
+
+## Demand-release installation, 200d2a0e
+
+Matching signed Core and GUI `200d2a0e` were installed at 22:22. All 115 source
+hashes and the native tests-off build/stage pass. Installed Core SHA-256 is
+`81dc65540024580dc3c339e780fdb773c66d99164c1af3818e4319eb66b50fc1`.
+Rollback is `/var/lib/nereus-build/rollback-0b408427-before-200d2a0e/`.
+The GUI executable/private libraries and strict/deep signature match; the saved
+profile and pairing are unchanged. Initial device-open backlog caused one
+arrival-queue restart, then playback resumed in context 3. Core's restart
+restored only A. B was recreated through the actual GUI, and the operator
+continued tuning it in ordinary LSB. The new RADE comparison is pending; neither
+a RADE listening pass nor sustained remote-audio acceptance is claimed.

@@ -17,6 +17,7 @@
 #include <QHostAddress>
 
 #include "core/SmartSdrApiListener.h"
+#include "models/RadioModel.h"
 
 using NereusSDR::SmartSdrApiListener;
 
@@ -116,7 +117,55 @@ private slots:
     void c5_unkeyEmitsUnkeyRequestedThenTwoReadyFrames();
     void c5b_wireDrivenTuneOffPreservesAmpTgReason();
     void c6_pttAPushesAreReplacedWithAmplifierStateBroadcasts();
+    void receiveOnlyStationBlocksNativeAccessoryProxy_data();
+    void receiveOnlyStationBlocksNativeAccessoryProxy();
 };
+
+void SmartSdrApiListenerPttChainTest::receiveOnlyStationBlocksNativeAccessoryProxy_data()
+{
+    QTest::addColumn<QString>("product");
+    QTest::addColumn<bool>("receiveOnly");
+    QTest::newRow("tuner-local") << QStringLiteral("TunerGeniusXL") << false;
+    QTest::newRow("tuner-receive-only") << QStringLiteral("TunerGeniusXL") << true;
+    QTest::newRow("amplifier-local") << QStringLiteral("PowerGeniusXL") << false;
+    QTest::newRow("amplifier-receive-only") << QStringLiteral("PowerGeniusXL") << true;
+}
+
+void SmartSdrApiListenerPttChainTest::receiveOnlyStationBlocksNativeAccessoryProxy()
+{
+    QFETCH(QString, product); QFETCH(bool, receiveOnly);
+    NereusSDR::RadioModel model;
+    model.setReceiveOnlyStationPolicy(receiveOnly);
+    // Offline native-parser seams prove the proxy output without dialing a
+    // physical amp/tuner. Input traverses the real registered-handle TCP path.
+    model.tgxlConnection()->injectLineForTesting(QStringLiteral("V1.2.17"));
+    model.pgxlConnection()->injectLineForTesting(QStringLiteral("V3.8.8"));
+    QSignalSpy tgxlFrames(model.tgxlConnection(), &NereusSDR::TgxlConnection::testFrameWrittenForTesting);
+    QSignalSpy pgxlFrames(model.pgxlConnection(), &NereusSDR::PgxlConnection::testFrameWrittenForTesting);
+    auto* listener = model.smartSdrListener();
+    QVERIFY(listener->start(QHostAddress::LocalHost, 0));
+    QTcpSocket client;
+    client.connectToHost(QHostAddress::LocalHost, listener->serverPort());
+    QVERIFY(client.waitForConnected(1000));
+    const auto banner = QString::fromUtf8(drain(&client));
+    const auto handle = QRegularExpression(QStringLiteral("(?:^|\\n)H([A-Fa-f0-9]+)\\n")).match(banner);
+    QVERIFY(handle.hasMatch());
+    registerFakeAmp(&client, product, QStringLiteral("TEST"));
+    client.write(QStringLiteral("C3|amplifier set 0x%1 operate=1\n").arg(handle.captured(1)).toUtf8());
+    client.flush();
+    const auto reply = drain(&client);
+    QVERIFY(reply.contains("R3|0|"));
+    const auto countOperate = [](const QSignalSpy& frames) {
+        int count = 0;
+        for (const auto& args : frames) {
+            if (args.first().toString().endsWith(QStringLiteral("|operate=1"))) { ++count; }
+        }
+        return count;
+    };
+    const int actual = countOperate(tgxlFrames) + countOperate(pgxlFrames);
+    QCOMPARE(actual, receiveOnly ? 0 : 1);
+    listener->stop();
+}
 
 // Task 0 smoke test: prove the harness machinery works end-to-end.
 // Start the listener on loopback + ephemeral port, connect a QTcpSocket,

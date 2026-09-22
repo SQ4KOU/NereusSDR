@@ -73,6 +73,7 @@ bool DaemonApp::start(const DaemonConfig& cfg)
     // callback: the daemon owns real hardware even though its model has the
     // normal local role.
     m_radioModel->setReceiveOnlyStationPolicy(true);
+    m_radioModel->enableStationAccessoryIdentity();
     m_stepAttController = std::make_unique<StepAttenuatorController>();
     m_radioModel->setStepAttController(m_stepAttController.get());
     m_stepAttController->setReceiverManager(m_radioModel->receiverManager());

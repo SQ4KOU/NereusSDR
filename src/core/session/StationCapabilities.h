@@ -109,6 +109,7 @@ struct StationCapabilities {
     int remoteMediaVersion = 0;
     int remoteCtunVersion = 0;
     int stationTelemetryVersion = 0;
+    int remoteTgxlConfigVersion = 0;
 
     /// The daemon's own AppSettings SettingsSchemaVersion, read by that
     /// key name from its own store. See StationClient's schema-skew check.

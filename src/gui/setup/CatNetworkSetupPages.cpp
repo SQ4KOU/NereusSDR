@@ -12,6 +12,7 @@
 // the same rule src/main.cpp applies to --station, so a value the field
 // accepts is a value the next launch will actually dial.
 #include "core/session/RemoteStationOptions.h"
+#include "core/session/IStationLink.h"
 #include "models/RadioModel.h"
 
 #include <QNetworkInterface>
@@ -1159,6 +1160,23 @@ PeripheralsPage::PeripheralsPage(RadioModel* model, QWidget* parent)
 
 void PeripheralsPage::wireStatusSignals()
 {
+    if (isRemoteMode()) {
+        // Remote mode only projects Core-owned state. It must not subscribe
+        // to, scan for, or dial a Mac-local TGXL/PGXL socket.
+        auto* tuner = m_model ? m_model->tunerModel() : nullptr;
+        if (tuner) {
+            connect(tuner, &TunerModel::stationConnectionChanged,
+                    this, &PeripheralsPage::refreshRemoteTgxlRow);
+        }
+        if (m_model) {
+            connect(m_model, &RadioModel::connectionStateChanged,
+                    this, &PeripheralsPage::refreshRemoteTgxlRow);
+            connect(m_model, &RadioModel::stationLinkStateChanged,
+                    this, &PeripheralsPage::refreshRemoteTgxlRow);
+        }
+        refreshRemoteTgxlRow();
+        return;
+    }
     // Row index map: 0 = TGXL, 1 = PGXL (matches buildRow call order above).
     // m_statusLabels and m_connectBtns are sized to 2 before this runs.
 
@@ -1261,13 +1279,24 @@ void PeripheralsPage::buildRow(int row, const QString& name,
     ipEdit->setPlaceholderText(QStringLiteral("192.168.1.42"));
     ipEdit->setToolTip(tr("IP address or hostname of the %1 on your LAN. "
                           "Leave blank to disable auto-connect.").arg(name));
-    const QString savedIp = model
+    const bool remote = model && model->role() == RadioModel::Role::Remote;
+    const bool remoteTgxl = remote && idx == 0;
+    const auto* tuner = model ? model->tunerModel() : nullptr;
+    const QString savedIp = remoteTgxl && tuner
+        ? tuner->configuredHost()
+        : model
         ? model->peripheralValue(ipKey)
         : QString{};
     ipEdit->setText(savedIp);
+    ipEdit->setObjectName(idx == 0
+                              ? QStringLiteral("tgxlHostEdit")
+                              : QStringLiteral("pgxlHostEdit"));
+    if (remoteTgxl) {
+        m_lastDisplayedCoreTgxlHost = savedIp;
+    }
     connect(ipEdit, &QLineEdit::textChanged, this,
             [model, ipKey](const QString& text) {
-                if (model) {
+                if (model && model->role() != RadioModel::Role::Remote) {
                     model->setPeripheralValue(ipKey, text);
                 }
             });
@@ -1279,14 +1308,22 @@ void PeripheralsPage::buildRow(int row, const QString& name,
     portSpin->setRange(1, 65535);
     portSpin->setToolTip(tr("TCP port the %1 listens on (default %2).")
                              .arg(name).arg(defaultPort));
-    const int savedPort = model
+    const int savedPort = remoteTgxl && tuner && tuner->configuredPort() > 0
+        ? tuner->configuredPort()
+        : model
         ? model->peripheralValue(portKey,
                                  QString::number(static_cast<int>(defaultPort))).toInt()
         : static_cast<int>(defaultPort);
     portSpin->setValue(savedPort);
+    portSpin->setObjectName(idx == 0
+                                ? QStringLiteral("tgxlPortSpin")
+                                : QStringLiteral("pgxlPortSpin"));
+    if (remoteTgxl) {
+        m_lastDisplayedCoreTgxlPort = tuner ? tuner->configuredPort() : 0;
+    }
     connect(portSpin, QOverload<int>::of(&QSpinBox::valueChanged), this,
             [model, portKey](int v) {
-                if (model) {
+                if (model && model->role() != RadioModel::Role::Remote) {
                     model->setPeripheralValue(portKey, QString::number(v));
                 }
             });
@@ -1294,6 +1331,9 @@ void PeripheralsPage::buildRow(int row, const QString& name,
 
     // Column 3: Scan LAN button.
     auto* scanBtn = new QPushButton(tr("Scan LAN"), this);
+    scanBtn->setObjectName(idx == 0
+                               ? QStringLiteral("tgxlScanButton")
+                               : QStringLiteral("pgxlScanButton"));
     scanBtn->setStyleSheet(QString::fromLatin1(Style::kButtonStyle));
     scanBtn->setToolTip(tr("Listen for %1 announcements on the LAN for 3 seconds.").arg(name));
     // Capture idx by value for the slot dispatch.
@@ -1304,6 +1344,9 @@ void PeripheralsPage::buildRow(int row, const QString& name,
 
     // Column 4: Connect / Disconnect button.
     auto* connectBtn = new QPushButton(tr("Connect"), this);
+    connectBtn->setObjectName(idx == 0
+                                  ? QStringLiteral("tgxlConnectButton")
+                                  : QStringLiteral("pgxlConnectButton"));
     connectBtn->setStyleSheet(QString::fromLatin1(Style::kButtonStyle));
     connectBtn->setToolTip(tr("Connect to or disconnect from the %1.").arg(name));
     m_connectBtns[idx] = connectBtn;
@@ -1314,13 +1357,99 @@ void PeripheralsPage::buildRow(int row, const QString& name,
 
     // Column 5: status label.
     auto* statusLabel = new QLabel(tr("Disconnected"), this);
+    statusLabel->setObjectName(idx == 0
+                                   ? QStringLiteral("tgxlStatusLabel")
+                                   : QStringLiteral("pgxlStatusLabel"));
     statusLabel->setStyleSheet(QString::fromLatin1(Style::kSecondaryLabelStyle));
     m_statusLabels[idx] = statusLabel;
     m_grid->addWidget(statusLabel, row, 5);
+
+    if (remote && idx == 1) {
+        ipEdit->setEnabled(false);
+        portSpin->setEnabled(false);
+        scanBtn->setEnabled(false);
+        connectBtn->setEnabled(false);
+        const QString reason = tr("Remote PGXL connection control is not available yet.");
+        connectBtn->setToolTip(reason);
+        statusLabel->setText(reason);
+    }
+}
+
+bool PeripheralsPage::isRemoteMode() const
+{
+    return m_model && m_model->role() == RadioModel::Role::Remote;
+}
+
+void PeripheralsPage::refreshRemoteTgxlRow()
+{
+    if (!isRemoteMode() || !m_grid || m_statusLabels.size() < 2) {
+        return;
+    }
+    auto* tuner = m_model->tunerModel();
+    auto* link = m_model->stationLink();
+    auto* ipEdit = qobject_cast<QLineEdit*>(m_grid->itemAtPosition(1, 1)->widget());
+    auto* portSpin = qobject_cast<QSpinBox*>(m_grid->itemAtPosition(1, 2)->widget());
+    auto* scanButton = qobject_cast<QPushButton*>(m_grid->itemAtPosition(1, 3)->widget());
+    auto* connectButton = m_connectBtns[0];
+    auto* status = m_statusLabels[0];
+    if (!tuner || !ipEdit || !portSpin || !scanButton || !connectButton || !status) {
+        return;
+    }
+    const bool available = link && link->remoteTgxlConfigAvailable();
+    scanButton->setEnabled(false);
+    scanButton->setToolTip(tr("LAN scanning runs at the station and is unavailable from this remote GUI."));
+    const QString coreHost = tuner->configuredHost();
+    const quint16 corePort = static_cast<quint16>(tuner->configuredPort());
+    if (coreHost != m_lastDisplayedCoreTgxlHost
+        || corePort != m_lastDisplayedCoreTgxlPort) {
+        ipEdit->setText(coreHost);
+        if (corePort > 0) {
+            portSpin->setValue(corePort);
+        }
+        m_lastDisplayedCoreTgxlHost = coreHost;
+        m_lastDisplayedCoreTgxlPort = corePort;
+    }
+    const auto phase = tuner->connectionPhase();
+    const bool active = phase == TunerModel::ConnectionPhase::Discovering
+        || phase == TunerModel::ConnectionPhase::Connecting
+        || phase == TunerModel::ConnectionPhase::Identifying
+        || phase == TunerModel::ConnectionPhase::Retrying;
+    const bool connected = phase == TunerModel::ConnectionPhase::Connected;
+    connectButton->setText(connected ? tr("Disconnect") : active ? tr("Cancel") : tr("Connect"));
+    connectButton->setEnabled(available);
+    ipEdit->setEnabled(available && !connected && !active);
+    portSpin->setEnabled(available && !connected && !active);
+    if (!available) {
+        const QString reason = tr("Remote TGXL control is unavailable because this station does not support it.");
+        status->setText(reason);
+        connectButton->setToolTip(reason);
+        return;
+    }
+    QString text;
+    switch (phase) {
+    case TunerModel::ConnectionPhase::Disabled: text = tr("Disabled at station"); break;
+    case TunerModel::ConnectionPhase::Disconnected: text = tr("Disconnected"); break;
+    case TunerModel::ConnectionPhase::Discovering: text = tr("Discovering at station"); break;
+    case TunerModel::ConnectionPhase::Connecting: text = tr("Connecting at station"); break;
+    case TunerModel::ConnectionPhase::Identifying: text = tr("Identifying device"); break;
+    case TunerModel::ConnectionPhase::Retrying:
+        text = tuner->connectionError().isEmpty()
+            ? tr("Retrying at station")
+            : tr("Retrying at station: %1").arg(tuner->connectionError());
+        break;
+    case TunerModel::ConnectionPhase::Connected:
+        text = tr("Connected: %1 %2").arg(tuner->deviceModel(), tuner->deviceSerial()); break;
+    case TunerModel::ConnectionPhase::Error: text = tr("Error: %1").arg(tuner->connectionError()); break;
+    }
+    status->setText(text);
+    connectButton->setToolTip(QString());
 }
 
 void PeripheralsPage::onScanLan(int rowIdx)
 {
+    if (isRemoteMode()) {
+        return;
+    }
     // rowIdx is 0-based (0 = TGXL, 1 = PGXL). Grid row = rowIdx + 1 because
     // row 0 is the header. Column 1 = IP edit, column 2 = port spin.
     const int gridRow = rowIdx + 1;
@@ -1359,20 +1488,35 @@ void PeripheralsPage::onConnect(int rowIdx)
     }
 
     const int gridRow = rowIdx + 1;
-
-    auto* ipEdit   = qobject_cast<QLineEdit*>(
-                         m_grid->itemAtPosition(gridRow, 1)->widget());
-    auto* portSpin = qobject_cast<QSpinBox*>(
-                         m_grid->itemAtPosition(gridRow, 2)->widget());
-
+    auto* ipEdit = qobject_cast<QLineEdit*>(m_grid->itemAtPosition(gridRow, 1)->widget());
+    auto* portSpin = qobject_cast<QSpinBox*>(m_grid->itemAtPosition(gridRow, 2)->widget());
     if (!ipEdit || !portSpin) {
-        qCWarning(lcPeripherals) << "onConnect: could not find row widgets for rowIdx"
-                                 << rowIdx;
+        qCWarning(lcPeripherals) << "onConnect: could not find row widgets for rowIdx" << rowIdx;
         return;
     }
-
     const QString host = ipEdit->text().trimmed();
     const quint16 port = static_cast<quint16>(portSpin->value());
+
+    if (isRemoteMode()) {
+        if (rowIdx != 0) { return; }
+        auto* link = m_model->stationLink();
+        if (!link || !link->remoteTgxlConfigAvailable()) {
+            refreshRemoteTgxlRow();
+            return;
+        }
+        auto* tuner = m_model->tunerModel();
+        const bool active = tuner && (tuner->connectionPhase() == TunerModel::ConnectionPhase::Connected
+            || tuner->connectionPhase() == TunerModel::ConnectionPhase::Discovering
+            || tuner->connectionPhase() == TunerModel::ConnectionPhase::Connecting
+            || tuner->connectionPhase() == TunerModel::ConnectionPhase::Identifying
+            || tuner->connectionPhase() == TunerModel::ConnectionPhase::Retrying);
+        const auto outcome = active ? link->requestDisconnectTgxl()
+            : link->requestConfigureTgxl(host, port);
+        if (!outcome.sent && !m_statusLabels.isEmpty()) {
+            m_statusLabels[0]->setText(outcome.reason);
+        }
+        return;
+    }
 
     if (rowIdx == 1) {
         // PGXL row.

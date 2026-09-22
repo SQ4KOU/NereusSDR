@@ -342,6 +342,7 @@ warren@wpratt.com
 // Passive SmartSDR API listener on TCP 4992. Bench-recon stub: logs every
 // line PGXL sends so we can design the response layer in a follow-up.
 #include "core/SmartSdrApiListener.h"
+#include "core/StationTgxlController.h"
 
 #include <algorithm>
 #include <cmath>
@@ -356,6 +357,8 @@ warren@wpratt.com
 #include <QStandardPaths>
 #include <QThread>
 #include <QTimer>
+#include <QUrl>
+#include <QRegularExpression>
 #include <QVector>
 
 namespace NereusSDR {
@@ -1459,6 +1462,10 @@ RadioModel::RadioModel(Role role, QObject* parent)
                              const QString& key,
                              const QString& value) {
             if (!m_smartSdrListener) { return; }
+            if (receiveOnlyTxOperationsBlocked()) {
+                qCWarning(lcConnection) << "amplifier set proxy blocked in receive-only station";
+                return;
+            }
             const QString model = m_smartSdrListener->ampModelForHandle(ampHandle);
             if (model.isEmpty()) {
                 qCWarning(lcConnection)
@@ -2709,6 +2716,9 @@ void RadioModel::setStepAttController(StepAttenuatorController* c)
 // reach this entry point.
 void RadioModel::setFourO3AEnabled(bool enabled)
 {
+    // A remote GUI cannot own the station's listener. The typed Core master
+    // command is a separate Task 4d follow-on; never start a local listener.
+    if (m_role == Role::Remote) { return; }
     const bool current = fourO3AEnabled();
     if (current == enabled) {
         return;  // idempotent
@@ -2741,11 +2751,13 @@ void RadioModel::setFourO3AEnabled(bool enabled)
         // already-connected PGXL keeps sending statusUpdated frames,
         // m_hasAmplifier stays true, and the S-Meter keeps showing the
         // 2 kW PGXL scale even though the operator just disabled 4O3A.
-        if (m_pgxlConnection && m_pgxlConnection->isConnected()) {
+        if (m_pgxlConnection) {
             m_pgxlConnection->disconnect();
             qCInfo(lcConnection) << "4O3A disabled: PGXL TCP disconnected";
         }
-        if (m_tgxlConnection && m_tgxlConnection->isConnected()) {
+        if (m_stationTgxl) {
+            m_stationTgxl->cancel(true);
+        } else if (m_tgxlConnection) {
             m_tgxlConnection->disconnect();
             qCInfo(lcConnection) << "4O3A disabled: TGXL TCP disconnected";
         }
@@ -2773,6 +2785,63 @@ bool RadioModel::fourO3AEnabled() const
     return peripheralValue(QStringLiteral("FourO3A_Enabled"),
                            QStringLiteral("False"))
         == QStringLiteral("True");
+}
+
+void RadioModel::enableStationAccessoryIdentity()
+{
+    if (m_role != Role::Local || m_stationTgxl) { return; }
+    m_stationTgxl = new StationTgxlController(m_tgxlConnection, m_tunerModel, this);
+    m_stationTgxl->cancel(!fourO3AEnabled());
+}
+
+bool RadioModel::configureTgxlForStation(const QString& inputHost, quint16 port, QString* reason)
+{
+    const auto refuse = [reason](const QString& text) {
+        if (reason) { *reason = text; }
+        return false;
+    };
+    if (m_role != Role::Local || !m_stationTgxl) {
+        return refuse(QStringLiteral("Station accessory configuration is unavailable."));
+    }
+    if (currentRadioMac().isEmpty()) {
+        return refuse(QStringLiteral("Connect Core to a radio before configuring its TGXL."));
+    }
+    if (!fourO3AEnabled()) {
+        return refuse(QStringLiteral("Enable 4O3A on Core before connecting the TGXL."));
+    }
+    const QString host = inputHost.trimmed();
+    bool validHost = !host.isEmpty() && host.size() <= 253;
+    if (validHost && QHostAddress(host).isNull()) {
+        const QByteArray ace = QUrl::toAce(host);
+        static const QRegularExpression label(QStringLiteral("^[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?$"));
+        validHost = !ace.isEmpty() && ace.size() <= 253;
+        auto labels = QString::fromLatin1(ace).split(QLatin1Char('.'));
+        if (labels.size() > 1 && labels.last().isEmpty()) { labels.removeLast(); }
+        for (const auto& part : labels) { validHost = validHost && label.match(part).hasMatch(); }
+    }
+    if (!validHost || port == 0) {
+        return refuse(QStringLiteral("Enter a valid TGXL IP address or hostname and TCP port 1–65535."));
+    }
+
+    // One accepted command owns both endpoint fields. Neither persistence
+    // signal independently dials a socket; validation precedes every write.
+    setPeripheralValue(QStringLiteral("TGXL_ManualIp"), host);
+    setPeripheralValue(QStringLiteral("TGXL_ManualPort"), QString::number(port));
+    AppSettings::instance().save();
+    m_stationTgxl->start(host, port);
+    if (reason) { reason->clear(); }
+    return true; // Identification has started; connection is a later snapshot.
+}
+
+bool RadioModel::disconnectTgxlForStation(QString* reason)
+{
+    if (m_role != Role::Local || !m_stationTgxl) {
+        if (reason) { *reason = QStringLiteral("Station accessory configuration is unavailable."); }
+        return false;
+    }
+    m_stationTgxl->cancel(!fourO3AEnabled());
+    if (reason) { reason->clear(); }
+    return true;
 }
 
 bool RadioModel::rfKitEnabled() const
@@ -2963,6 +3032,19 @@ void RadioModel::applyPeripheralsForCurrentMac()
         emit rfKitEnabledChanged(false);
     }
 
+    // Publish the current radio's saved endpoint even when disabled or
+    // unconfigured. Cancellation within a scope retains its draft; moving to
+    // another MAC must replace it before any connection can start.
+    const QString tgxlIp = peripheralValue(QStringLiteral("TGXL_ManualIp"));
+    bool tgxlPortOk = false;
+    const uint savedTgxlPort = peripheralValue(QStringLiteral("TGXL_ManualPort"),
+        QStringLiteral("9010")).toUInt(&tgxlPortOk);
+    const quint16 tgxlPort = tgxlPortOk && savedTgxlPort <= 65535
+        ? quint16(savedTgxlPort) : 0;
+    if (m_stationTgxl) {
+        m_stationTgxl->resetScope(tgxlIp, tgxlPort, fourO3AOn);
+    }
+
     // ── PGXL / TGXL (gated on 4O3A master) ──────────────────────────────
     // Without the 4O3A gate, a saved PGXL_ManualIp would dial out even
     // with 4O3A disabled, get a statusUpdated back, flip m_hasAmplifier
@@ -2983,14 +3065,23 @@ void RadioModel::applyPeripheralsForCurrentMac()
             ++started;
         }
 
-        const QString tgxlIp =
-            peripheralValue(QStringLiteral("TGXL_ManualIp"));
         if (!tgxlIp.isEmpty() && m_tgxlConnection
             && !m_tgxlConnection->isConnected()) {
-            const quint16 p = static_cast<quint16>(
-                peripheralValue(QStringLiteral("TGXL_ManualPort"),
-                                QStringLiteral("9010")).toUInt());
-            m_tgxlConnection->connectToTgxl(tgxlIp, p);
+            const quint16 p = tgxlPort;
+            if (m_stationTgxl) {
+                QString reason;
+                if (!configureTgxlForStation(tgxlIp, p, &reason)) {
+                    TunerModel::StationConnectionState state;
+                    state.configuredHost = tgxlIp;
+                    state.configuredPort = p;
+                    state.phase = TunerModel::ConnectionPhase::Error;
+                    state.error = reason;
+                    m_tunerModel->setStationConnectionState(state);
+                    return;
+                }
+            } else {
+                m_tgxlConnection->connectToTgxl(tgxlIp, p);
+            }
             qCInfo(lcConnection) << "TGXL auto-connect for MAC" << mac
                                   << ":" << tgxlIp << ":" << p;
             ++started;
@@ -3020,11 +3111,13 @@ void RadioModel::teardownPeripherals()
         m_smartSdrListener->stop();
         qCInfo(lcConnection) << "Peripherals teardown: SmartSDR API stopped";
     }
-    if (m_pgxlConnection && m_pgxlConnection->isConnected()) {
+    if (m_pgxlConnection) {
         m_pgxlConnection->disconnect();
         qCInfo(lcConnection) << "Peripherals teardown: PGXL disconnected";
     }
-    if (m_tgxlConnection && m_tgxlConnection->isConnected()) {
+    if (m_stationTgxl) {
+        m_stationTgxl->cancel();
+    } else if (m_tgxlConnection) {
         m_tgxlConnection->disconnect();
         qCInfo(lcConnection) << "Peripherals teardown: TGXL disconnected";
     }

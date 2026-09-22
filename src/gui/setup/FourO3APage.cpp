@@ -63,12 +63,22 @@ FourO3APage::FourO3APage(RadioModel* model, QWidget* parent)
     // its content is already structured per the mockup (identity,
     // operation, telemetry, fault history).  Page constructor takes
     // a RadioModel pointer so it can wire to PgxlConnection signals.
-    m_pgxlAdvancedPage = new PgxlAdvancedPage(m_model);
-    m_tabs->addTab(m_pgxlAdvancedPage, tr("PowerGenius XL"));
+    if (m_model && m_model->role() == RadioModel::Role::Remote) {
+        // Advanced pages bind local accessory sockets. Keep their places
+        // visibly unavailable until remote administration is implemented.
+        m_tabs->addTab(new QWidget(m_tabs), tr("PowerGenius XL"));
+        m_tabs->addTab(new QWidget(m_tabs), tr("Tuner Genius XL"));
+        for (int i = 1; i < m_tabs->count(); ++i) {
+            m_tabs->setTabToolTip(i, tr("Remote accessory administration is not available yet."));
+        }
+    } else {
+        m_pgxlAdvancedPage = new PgxlAdvancedPage(m_model);
+        m_tabs->addTab(m_pgxlAdvancedPage, tr("PowerGenius XL"));
 
-    // Tab 3: Tuner Genius XL.  Same pattern as Tab 2.
-    m_tgxlAdvancedPage = new TgxlAdvancedPage(m_model);
-    m_tabs->addTab(m_tgxlAdvancedPage, tr("Tuner Genius XL"));
+        // Tab 3: Tuner Genius XL.  Same pattern as Tab 2.
+        m_tgxlAdvancedPage = new TgxlAdvancedPage(m_model);
+        m_tabs->addTab(m_tgxlAdvancedPage, tr("Tuner Genius XL"));
+    }
 
     // 2026-05-22 menu cleanup: Diagnostics tab removed. Connection
     // State duplicated the General tab's FlexAPI status row and the
@@ -166,8 +176,10 @@ QWidget* FourO3APage::buildGeneralTab()
     layout->addWidget(m_peripheralsPage);
 
     // ── PGXL Interlock ────────────────────────────────────────────
-    m_pgxlInterlockPage = new PgxlInterlockPage(m_model, tab);
-    layout->addWidget(m_pgxlInterlockPage);
+    if (!m_model || m_model->role() != RadioModel::Role::Remote) {
+        m_pgxlInterlockPage = new PgxlInterlockPage(m_model, tab);
+        layout->addWidget(m_pgxlInterlockPage);
+    }
 
     layout->addStretch();
     return tab;
@@ -175,7 +187,7 @@ QWidget* FourO3APage::buildGeneralTab()
 
 void FourO3APage::onMasterToggled(bool checked)
 {
-    if (!m_model) {
+    if (!m_model || m_model->role() == RadioModel::Role::Remote) {
         return;
     }
     m_model->setFourO3AEnabled(checked);
@@ -193,6 +205,13 @@ void FourO3APage::onMasterToggled(bool checked)
 void FourO3APage::applyMasterGateToTabs(bool enabled)
 {
     if (!m_tabs) { return; }
+    if (m_model && m_model->role() == RadioModel::Role::Remote) {
+        for (int i = 1; i < m_tabs->count(); ++i) { m_tabs->setTabEnabled(i, false); }
+        // Core refuses configure when its master is off. The row still needs
+        // to show that reason and let an operator cancel existing work.
+        if (m_peripheralsPage) { m_peripheralsPage->setEnabled(true); }
+        return;
+    }
     // Tab 0 (General) stays enabled so the master toggle is always
     // reachable; tabs 1, 2, 3 (PowerGenius XL / Tuner Genius XL /
     // Diagnostics) gate on the master state.
@@ -208,6 +227,15 @@ void FourO3APage::applyMasterGateToTabs(bool enabled)
 void FourO3APage::refreshConnectionBanner()
 {
     if (!m_connectionBanner) {
+        return;
+    }
+    if (m_model && m_model->role() == RadioModel::Role::Remote) {
+        m_connectionBanner->setText(tr("TGXL connections are managed by Core."));
+        if (m_masterToggle) {
+            m_masterToggle->setEnabled(false);
+            m_masterToggle->setToolTip(tr("The 4O3A master switch is configured at Core. Remote master control is not available yet."));
+        }
+        applyMasterGateToTabs(false);
         return;
     }
     // Use the per-MAC scope as the "connected" gate so unit tests that
@@ -255,6 +283,11 @@ void FourO3APage::refreshConnectionBanner()
 void FourO3APage::refreshFlexApiStatus()
 {
     if (!m_flexApiStatusLabel) { return; }
+    if (m_model && m_model->role() == RadioModel::Role::Remote) {
+        m_flexApiStatusLabel->setText(tr("Core listener status is not available yet."));
+        m_flexApiStatusLabel->setToolTip(tr("This remote GUI does not open a local FlexAPI listener."));
+        return;
+    }
     SmartSdrApiListener* listener =
         m_model ? m_model->smartSdrListener() : nullptr;
     const bool listening = listener && listener->isListening();

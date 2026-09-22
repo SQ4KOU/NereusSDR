@@ -30,6 +30,52 @@ TunerModel::TunerModel(QObject* parent)
 {
 }
 
+void TunerModel::setStationConnectionState(const StationConnectionState& state)
+{
+    const bool connected = state.phase == ConnectionPhase::Connected;
+    const bool presenceChanged_ = m_present != connected;
+    const bool directChanged = hasDirectConnection() != connected;
+    const bool ipChanged = m_ip != (connected ? state.peerAddress : QString{});
+    const bool tuningChanged_ = !connected && m_tuning;
+    const bool antennaChanged = !connected && m_antA != 0;
+    const bool relaysChanged = !connected && (m_relayC1 != 0 || m_relayL != 0 || m_relayC2 != 0);
+    const bool metersChanged_ = !connected && (m_fwd != 0.0f || m_swr != 1.0f);
+
+    m_configuredHost = state.configuredHost;
+    m_configuredPort = state.configuredPort;
+    m_connectionPhase = state.phase;
+    m_connectionError = state.error;
+    m_deviceModel = state.deviceModel;
+    m_deviceSerial = state.deviceSerial;
+    m_deviceVersion = state.deviceVersion;
+    m_deviceNickname = state.deviceNickname;
+    m_stationDirectConnectionValid = true;
+    m_stationDirectConnection = connected;
+    m_present = connected;
+    m_ip = connected ? state.peerAddress : QString{};
+
+    if (!connected) {
+        // A non-admitted station lifecycle state must not leave live RF
+        // telemetry looking current. These are direct assignments only;
+        // remote receipt never translates into TGXL commands.
+        m_relayC1 = m_relayL = m_relayC2 = 0;
+        m_operate = m_bypass = m_tuning = false;
+        m_antA = 0;
+        m_oneByThree = false;
+        m_fwd = 0.0f;
+        m_swr = 1.0f;
+    }
+
+    if (presenceChanged_) { emit presenceChanged(connected); }
+    if (directChanged) { emit directConnectionChanged(); }
+    if (tuningChanged_) { emit tuningChanged(false); }
+    if (antennaChanged) { emit antennaAChanged(0); }
+    if (relaysChanged) { emit relayChanged(); }
+    if (metersChanged_) { emit metersChanged(m_fwd, m_swr); }
+    if (!connected || antennaChanged || ipChanged) { emit stateChanged(); }
+    emit stationConnectionChanged();
+}
+
 // ── Status parsing ──────────────────────────────────────────────────────────
 
 // From AetherSDR src/models/TunerModel.cpp:applyStatus [@0cd4559]
@@ -285,6 +331,39 @@ QString TunerModel::applyMirroredValue(const QByteArray& propertyName, const QVa
 
 bool TunerModel::applyStationValue(const QByteArray& propertyName, const QVariant& value)
 {
+    if (propertyName == QByteArrayLiteral("configuredHost")) {
+        if (m_configuredHost != value.toString()) { m_configuredHost = value.toString(); emit stationConnectionChanged(); }
+        return true;
+    }
+    if (propertyName == QByteArrayLiteral("configuredPort")) {
+        if (m_configuredPort != value.toInt()) { m_configuredPort = value.toInt(); emit stationConnectionChanged(); }
+        return true;
+    }
+    if (propertyName == QByteArrayLiteral("connectionPhase")) {
+        const auto phase = static_cast<ConnectionPhase>(value.toInt());
+        if (m_connectionPhase != phase) { m_connectionPhase = phase; emit stationConnectionChanged(); }
+        return true;
+    }
+    if (propertyName == QByteArrayLiteral("connectionError")) {
+        if (m_connectionError != value.toString()) { m_connectionError = value.toString(); emit stationConnectionChanged(); }
+        return true;
+    }
+    if (propertyName == QByteArrayLiteral("deviceModel")) {
+        if (m_deviceModel != value.toString()) { m_deviceModel = value.toString(); emit stationConnectionChanged(); }
+        return true;
+    }
+    if (propertyName == QByteArrayLiteral("deviceSerial")) {
+        if (m_deviceSerial != value.toString()) { m_deviceSerial = value.toString(); emit stationConnectionChanged(); }
+        return true;
+    }
+    if (propertyName == QByteArrayLiteral("deviceVersion")) {
+        if (m_deviceVersion != value.toString()) { m_deviceVersion = value.toString(); emit stationConnectionChanged(); }
+        return true;
+    }
+    if (propertyName == QByteArrayLiteral("deviceNickname")) {
+        if (m_deviceNickname != value.toString()) { m_deviceNickname = value.toString(); emit stationConnectionChanged(); }
+        return true;
+    }
     // This is intentionally a direct state adapter. Calling the public
     // command slots here would invert a Core telemetry update into a second
     // hardware command from the GUI process.

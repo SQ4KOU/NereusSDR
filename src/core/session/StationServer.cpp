@@ -632,6 +632,13 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
 
     switch (message.kind) {
     case SessionMessageKind::CommandInvoke:
+        if ((message.commandVerb == "configureTgxl" || message.commandVerb == "disconnectTgxl")
+            && it->agreedMinor < kRemoteTgxlConfigSessionProtocolMinor) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                QStringLiteral("Remote TGXL configuration requires a newer station protocol."), {}));
+            break;
+        }
         if ((message.commandVerb == "requestStreamCtunPinned"
              || message.commandVerb == "requestStreamCentre")
             && it->agreedMinor < kRemoteCtunSessionProtocolMinor) {
@@ -1107,6 +1114,7 @@ StationCapabilities StationServer::buildCapabilities() const
     caps.remoteMediaVersion = m_mediaEnabled ? 1 : 0;
     caps.remoteCtunVersion = 1;
     caps.stationTelemetryVersion = m_telemetryEnabled ? 1 : 0;
+    caps.remoteTgxlConfigVersion = m_radioModel->stationAccessoryIdentityEnabled() ? 1 : 0;
 
     return caps;
 }

@@ -8805,7 +8805,7 @@ void MainWindow::openTciSetupPage()
 //   "pgxlAdvanced"  -> "PGXL Advanced"
 //   "tgxlAdvanced"  -> "TGXL Advanced"
 //   "pgxlInterlock" -> "PGXL Interlock"
-//   "peripherals"   -> "Peripherals"
+//   "peripherals"   -> "4O3A" (General tab contains Peripherals)
 //
 // Pattern matches openTciSetupPage(): fresh SetupDialog with WA_DeleteOnClose
 // so geometry is not preserved across opens (consistent with all other Setup
@@ -8816,7 +8816,7 @@ void MainWindow::openSetup(const QString& pageKey)
         {QStringLiteral("pgxlAdvanced"),  QStringLiteral("PGXL Advanced")},
         {QStringLiteral("tgxlAdvanced"),  QStringLiteral("TGXL Advanced")},
         {QStringLiteral("pgxlInterlock"), QStringLiteral("PGXL Interlock")},
-        {QStringLiteral("peripherals"),   QStringLiteral("Peripherals")},
+        {QStringLiteral("peripherals"),   QStringLiteral("4O3A")},
         // Phase 3P-III Task 14: RF-Kit setup page (Setup > CAT & Network > RF-Kit).
         {QStringLiteral("rfKit"),         QStringLiteral("RF-Kit")},
     };

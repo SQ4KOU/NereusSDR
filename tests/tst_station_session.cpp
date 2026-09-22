@@ -200,6 +200,9 @@ private slots:
     void telemetryRequiresReadySessionAndRejectsPriorEpoch();
     void telemetryDoesNotRequireMediaAndRejectsOldProtocol();
     void telemetryClientWaitsForCapabilityAndSnapshot();
+    void remoteTgxlClientRequiresHandshakeMinorAndCapability();
+    void remoteTgxlCommandIsGatedAtAuthenticatedServerBoundary();
+    void remoteTgxlConfigureAcceptanceStartsIdentityOnly();
 
     // ---- Version policy (task 18 step 1) ----
     void majorVersionMismatchRefusesNamingBothVersions();
@@ -230,6 +233,7 @@ private slots:
     void reconnectSurvivesTheOldTransportClosing();
     void heartbeatTimeoutReportsTheSessionAsEnded();
     void tunerPropertiesHydrateWithoutClientCommands();
+    void remoteTgxlStateClearsOnSessionLossRetainingConfiguredEndpoint();
     void handshakeDeadlineDropsASilentPeer();
     void peerLimitRefusesFurtherConnections();
     void listenIsIdempotent();
@@ -494,6 +498,220 @@ void TstStationSession::telemetryClientWaitsForCapabilityAndSnapshot()
     QTRY_VERIFY(client.telemetryAvailable());
     send(sample);
     QTRY_COMPARE(samples.count(), 1);
+}
+
+void TstStationSession::remoteTgxlClientRequiresHandshakeMinorAndCapability()
+{
+    RadioModel remote(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&remote, &proxy);
+    QSignalSpy availabilityChanged(&remote, &RadioModel::stationLinkStateChanged);
+
+    // A client with no negotiated station is inert; neither typed request
+    // may fall through to a local accessory connection.
+    QVERIFY(!client.remoteTgxlConfigAvailable());
+    QVERIFY(!client.requestConfigureTgxl(QStringLiteral("192.0.2.10"), 9010).sent);
+    QVERIFY(!client.requestDisconnectTgxl().sent);
+
+    auto* station = new LoopbackTransport(QStringLiteral("tgxl-station"), this);
+    auto* peer = new LoopbackTransport(QStringLiteral("tgxl-client"), this);
+    station->linkTo(peer);
+    client.startSession(peer, QStringLiteral("test-token"));
+
+    station->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor, kSessionProtocolMinor, 6, QStringLiteral("station"))));
+    station->sendText(SessionMessages::encode(SessionMessages::authResult(true, {}, false)));
+    StationCapabilities caps;
+    caps.remoteTgxlConfigVersion = 1;
+    station->sendText(SessionMessages::encode(SessionMessages::capabilities(caps.toUpdates())));
+    station->sendText(SessionMessages::encode(SessionMessages::snapshotComplete()));
+    QTRY_VERIFY(client.remoteTgxlConfigAvailable());
+    QTRY_VERIFY(availabilityChanged.count() >= 1);
+
+    const IStationLink::CommandOutcome configured =
+        client.requestConfigureTgxl(QStringLiteral("192.0.2.10"), 9010);
+    QVERIFY2(configured.sent, qPrintable(configured.reason));
+    // The client sends on peer; LoopbackTransport delivers that wire to the
+    // linked station endpoint.  Assert the actual receiving route rather
+    // than the sender's inbound capture.
+    QTRY_VERIFY(station->receivedKinds().contains(QByteArrayLiteral("command.invoke")));
+    const QList<QByteArray> sent = station->received();
+    const SessionMessage command = decodeOrFail(sent.last());
+    QCOMPARE(command.kind, SessionMessageKind::CommandInvoke);
+    QCOMPARE(command.commandVerb, QByteArrayLiteral("configureTgxl"));
+    QCOMPARE(command.arguments.size(), 2);
+    QCOMPARE(command.arguments.at(0).name, QByteArrayLiteral("host"));
+    QCOMPARE(command.arguments.at(0).kind, MirrorWireKind::Utf8);
+    QCOMPARE(command.arguments.at(0).value.toString(), QStringLiteral("192.0.2.10"));
+    QCOMPARE(command.arguments.at(1).name, QByteArrayLiteral("port"));
+    QCOMPARE(command.arguments.at(1).kind, MirrorWireKind::Int64);
+    QCOMPARE(command.arguments.at(1).value.toLongLong(), qint64(9010));
+
+    const IStationLink::CommandOutcome disconnected = client.requestDisconnectTgxl();
+    QVERIFY2(disconnected.sent, qPrintable(disconnected.reason));
+    QTRY_VERIFY(station->receivedKinds().count(QByteArrayLiteral("command.invoke")) == 2);
+    const QList<QByteArray> afterDisconnect = station->received();
+    const SessionMessage disconnect = decodeOrFail(afterDisconnect.last());
+    QCOMPARE(disconnect.kind, SessionMessageKind::CommandInvoke);
+    QCOMPARE(disconnect.commandVerb, QByteArrayLiteral("disconnectTgxl"));
+    QVERIFY(disconnect.arguments.isEmpty());
+
+    const int availableSignalCount = availabilityChanged.count();
+    station->closeLink(QStringLiteral("test teardown"));
+    QTRY_VERIFY(!client.remoteTgxlConfigAvailable());
+    QTRY_VERIFY(availabilityChanged.count() > availableSignalCount);
+
+    RadioModel olderRemote(RadioModel::Role::Remote);
+    SettingsProxy olderProxy;
+    StationClient olderClient(&olderRemote, &olderProxy);
+    auto* olderStation = new LoopbackTransport(QStringLiteral("tgxl-older-station"), this);
+    auto* olderPeer = new LoopbackTransport(QStringLiteral("tgxl-older-client"), this);
+    olderStation->linkTo(olderPeer);
+    olderClient.startSession(olderPeer, QStringLiteral("test-token"));
+    olderStation->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor,
+        static_cast<quint16>(kRemoteTgxlConfigSessionProtocolMinor - 1),
+        6, QStringLiteral("older-station"))));
+    olderStation->sendText(SessionMessages::encode(SessionMessages::authResult(true, {}, false)));
+    olderStation->sendText(SessionMessages::encode(SessionMessages::capabilities(caps.toUpdates())));
+    olderStation->sendText(SessionMessages::encode(SessionMessages::snapshotComplete()));
+    QTRY_VERIFY(olderClient.isHandshakeComplete());
+    QVERIFY(!olderClient.remoteTgxlConfigAvailable());
+}
+
+void TstStationSession::remoteTgxlCommandIsGatedAtAuthenticatedServerBoundary()
+{
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+    auto stationModel = makeStationRadioModel(0);
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+
+    auto* station = new LoopbackTransport(QStringLiteral("tgxl-server"), this);
+    auto* peer = new LoopbackTransport(QStringLiteral("tgxl-peer"), this);
+    station->linkTo(peer);
+    server.acceptTransport(station);
+    peer->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor, static_cast<quint16>(kRemoteTgxlConfigSessionProtocolMinor - 1),
+        6, QStringLiteral("older-client"))));
+    peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
+    QTRY_VERIFY(server.hasAuthenticatedSession());
+    peer->clearReceived();
+
+    peer->sendText(SessionMessages::encode(SessionMessages::commandInvoke(
+        "configureTgxl", 17,
+        { MirrorUpdate{ 0, "host", MirrorWireKind::Utf8, QStringLiteral("192.0.2.10") },
+          MirrorUpdate{ 0, "port", MirrorWireKind::Int64, qint64(9010) } })));
+    QTRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("command.result")));
+    SessionMessage result;
+    for (const QByteArray& wire : peer->received()) {
+        const SessionMessage candidate = decodeOrFail(wire);
+        if (candidate.kind == SessionMessageKind::CommandResult
+            && candidate.commandId == quint32(17)) {
+            result = candidate;
+            break;
+        }
+    }
+    QCOMPARE(result.kind, SessionMessageKind::CommandResult);
+    QVERIFY(!result.accepted);
+    QVERIFY(result.reason.contains(QStringLiteral("newer station protocol")));
+
+    // With the negotiated minor this reaches the dispatcher and model
+    // policy. The fixture intentionally lacks station accessory identity,
+    // so it must refuse without mutating an accessory.
+    auto* currentStation = new LoopbackTransport(QStringLiteral("tgxl-current-server"), this);
+    auto* currentPeer = new LoopbackTransport(QStringLiteral("tgxl-current-peer"), this);
+    currentStation->linkTo(currentPeer);
+    server.acceptTransport(currentStation);
+    currentPeer->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor, kSessionProtocolMinor, 6, QStringLiteral("current-client"))));
+    currentPeer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
+    QTRY_VERIFY(currentPeer->receivedKinds().contains(QByteArrayLiteral("auth.result")));
+    QTRY_VERIFY(server.hasAuthenticatedSession());
+    currentPeer->clearReceived();
+    currentPeer->sendText(SessionMessages::encode(SessionMessages::commandInvoke(
+        "configureTgxl", 18,
+        { MirrorUpdate{ 0, "host", MirrorWireKind::Utf8, QStringLiteral("192.0.2.10") },
+          MirrorUpdate{ 0, "port", MirrorWireKind::Int64, qint64(9010) } })));
+    QTRY_VERIFY(currentPeer->receivedKinds().contains(QByteArrayLiteral("command.result")));
+    SessionMessage currentResult;
+    for (const QByteArray& wire : currentPeer->received()) {
+        const SessionMessage candidate = decodeOrFail(wire);
+        if (candidate.kind == SessionMessageKind::CommandResult
+            && candidate.commandId == quint32(18)) {
+            currentResult = candidate;
+            break;
+        }
+    }
+    QCOMPARE(currentResult.kind, SessionMessageKind::CommandResult);
+    QVERIFY(!currentResult.accepted);
+    QVERIFY(currentResult.reason != QStringLiteral("unrecognised command verb"));
+    QVERIFY(!currentResult.reason.contains(QStringLiteral("newer station protocol")));
+}
+
+void TstStationSession::remoteTgxlConfigureAcceptanceStartsIdentityOnly()
+{
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+
+    // This is a genuine station-side admission path.  A listening test peer
+    // lets us prove acceptance starts native identification, while withholding
+    // the TGXL version/identity exchange proves accepted does not mean the
+    // device state has been hydrated or declared connected.
+    QTcpServer tgxl;
+    QVERIFY(tgxl.listen(QHostAddress::LocalHost, 0));
+    auto stationModel = makeStationRadioModel(0);
+    stationModel->setPeripheralValue(QStringLiteral("FourO3A_Enabled"), QStringLiteral("True"));
+    stationModel->enableStationAccessoryIdentity();
+    TunerModel* const tuner = stationModel->tunerModel();
+    QVERIFY(tuner != nullptr);
+    AppSettings::instance().save(); // Establish the pre-command on-disk state.
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+
+    auto* station = new LoopbackTransport(QStringLiteral("tgxl-accepted-server"), this);
+    auto* peer = new LoopbackTransport(QStringLiteral("tgxl-accepted-peer"), this);
+    station->linkTo(peer);
+    server.acceptTransport(station);
+    peer->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor, kSessionProtocolMinor, 6, QStringLiteral("current-client"))));
+    peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
+    QTRY_VERIFY(server.hasAuthenticatedSession());
+    peer->clearReceived();
+
+    peer->sendText(SessionMessages::encode(SessionMessages::commandInvoke(
+        "configureTgxl", 19,
+        { MirrorUpdate{ 0, "host", MirrorWireKind::Utf8, QStringLiteral("127.0.0.1") },
+          MirrorUpdate{ 0, "port", MirrorWireKind::Int64, qint64(tgxl.serverPort()) } })));
+    QTRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("command.result")));
+    SessionMessage result;
+    for (const QByteArray& wire : peer->received()) {
+        const SessionMessage candidate = decodeOrFail(wire);
+        if (candidate.kind == SessionMessageKind::CommandResult
+            && candidate.commandId == quint32(19)) {
+            result = candidate;
+            break;
+        }
+    }
+    QCOMPARE(result.kind, SessionMessageKind::CommandResult);
+    QVERIFY2(result.accepted, qPrintable(result.reason));
+    QCOMPARE(stationModel->peripheralValue(QStringLiteral("TGXL_ManualIp")),
+             QStringLiteral("127.0.0.1"));
+    QCOMPARE(stationModel->peripheralValue(QStringLiteral("TGXL_ManualPort")),
+             QString::number(tgxl.serverPort()));
+    AppSettings persisted(AppSettings::instance().filePath());
+    persisted.load();
+    QCOMPARE(persisted.hardwareValue(stationModel->currentRadioMac(),
+                  QStringLiteral("peripherals/TGXL_ManualIp")).toString(), QStringLiteral("127.0.0.1"));
+    QCOMPARE(persisted.hardwareValue(stationModel->currentRadioMac(),
+                  QStringLiteral("peripherals/TGXL_ManualPort")).toString(), QString::number(tgxl.serverPort()));
+    QTRY_VERIFY(tgxl.hasPendingConnections());
+    QVERIFY(stationModel->tgxlConnection()->identityInfo().serial.isEmpty());
+    QVERIFY(!tuner->hasDirectConnection());
+    QVERIFY(!tuner->isPresent());
+
+    QString reason;
+    QVERIFY2(stationModel->disconnectTgxlForStation(&reason), qPrintable(reason));
 }
 
 // ── TokenStore ───────────────────────────────────────────────────────────
@@ -1746,6 +1964,88 @@ void TstStationSession::tunerPropertiesHydrateWithoutClientCommands()
     QTRY_COMPARE(clientSlice->signalStrengthDbm(), -91.0);
     QVERIFY(!client.unappliedProperties().contains(
         QByteArrayLiteral("SliceModel.signalStrengthDbm")));
+}
+
+void TstStationSession::remoteTgxlStateClearsOnSessionLossRetainingConfiguredEndpoint()
+{
+    // The state arrives through the actual authenticated snapshot path.  A
+    // remote GUI must not retain an admitted device or its live telemetry
+    // after that session ends, but its configured endpoint remains a useful
+    // draft for the next station connection.
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(
+        settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+    auto stationModel = makeStationRadioModel(0);
+    TunerModel* const stationTuner = stationModel->tunerModel();
+    QVERIFY(stationTuner != nullptr);
+    TunerModel::StationConnectionState state;
+    state.configuredHost = QStringLiteral("tgxl.example.test");
+    state.configuredPort = 9010;
+    state.phase = TunerModel::ConnectionPhase::Connected;
+    state.peerAddress = QStringLiteral("192.0.2.34");
+    state.deviceModel = QStringLiteral("TunerGeniusXL");
+    state.deviceSerial = QStringLiteral("241288-1");
+    state.deviceVersion = QStringLiteral("1.2.17");
+    state.deviceNickname = QStringLiteral("Station TGXL");
+    stationTuner->setStationConnectionState(state);
+    stationTuner->applyStatus({
+        {QStringLiteral("relayC1"), QStringLiteral("42")},
+        {QStringLiteral("relayL"), QStringLiteral("199")},
+        {QStringLiteral("relayC2"), QStringLiteral("88")},
+        {QStringLiteral("operate"), QStringLiteral("1")},
+        {QStringLiteral("bypass"), QStringLiteral("1")},
+        {QStringLiteral("tuning"), QStringLiteral("1")},
+        {QStringLiteral("antA"), QStringLiteral("2")},
+        {QStringLiteral("3way"), QStringLiteral("1")},
+        {QStringLiteral("fwd"), QStringLiteral("12.5")},
+        {QStringLiteral("swr"), QStringLiteral("1.4")},
+    });
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("tgxl-state-station"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("tgxl-state-client"), this);
+    stationEnd->linkTo(clientEnd);
+    client.startSession(clientEnd, server.token());
+    server.acceptTransport(stationEnd);
+    QTRY_VERIFY(client.isHandshakeComplete());
+
+    TunerModel* const clientTuner = clientModel.tunerModel();
+    QVERIFY(clientTuner != nullptr);
+    QTRY_VERIFY(clientTuner->hasDirectConnection());
+    QVERIFY(clientTuner->isPresent());
+    QCOMPARE(clientTuner->configuredHost(), state.configuredHost);
+    QCOMPARE(clientTuner->configuredPort(), int(state.configuredPort));
+    QCOMPARE(clientTuner->deviceSerial(), state.deviceSerial);
+    QCOMPARE(clientTuner->fwdPower(), 12.5f);
+    QCOMPARE(clientTuner->swr(), 1.4f);
+
+    clientEnd->closeLink(QStringLiteral("station link lost"));
+    QTRY_VERIFY(!client.isHandshakeComplete());
+    QVERIFY(!clientTuner->hasDirectConnection());
+    QVERIFY(!clientTuner->isPresent());
+    QCOMPARE(clientTuner->connectionPhase(), TunerModel::ConnectionPhase::Disconnected);
+    QCOMPARE(clientTuner->configuredHost(), state.configuredHost);
+    QCOMPARE(clientTuner->configuredPort(), int(state.configuredPort));
+    QVERIFY(clientTuner->connectionError().isEmpty());
+    QVERIFY(clientTuner->deviceModel().isEmpty());
+    QVERIFY(clientTuner->deviceSerial().isEmpty());
+    QVERIFY(clientTuner->deviceVersion().isEmpty());
+    QVERIFY(clientTuner->deviceNickname().isEmpty());
+    QVERIFY(clientTuner->tgxlIp().isEmpty());
+    QCOMPARE(clientTuner->relayC1(), 0);
+    QCOMPARE(clientTuner->relayL(), 0);
+    QCOMPARE(clientTuner->relayC2(), 0);
+    QVERIFY(!clientTuner->isOperate());
+    QVERIFY(!clientTuner->isBypass());
+    QVERIFY(!clientTuner->isTuning());
+    QCOMPARE(clientTuner->antennaA(), 0);
+    QVERIFY(!clientTuner->hasAntennaSwitch());
+    QCOMPARE(clientTuner->fwdPower(), 0.0f);
+    QCOMPARE(clientTuner->swr(), 1.0f);
 }
 
 void TstStationSession::receiveOnlyStationBlocksRemoteBandRecall()

@@ -254,6 +254,14 @@ const MirrorPolicy::Entry kEntries[] = {
     { "TunerModel", "tgxlIp", MirrorDirection::Outbound },
     { "TunerModel", "fwdPower", MirrorDirection::Outbound },
     { "TunerModel", "swr", MirrorDirection::Outbound },
+    { "TunerModel", "configuredHost", MirrorDirection::Outbound },
+    { "TunerModel", "configuredPort", MirrorDirection::Outbound },
+    { "TunerModel", "connectionPhase", MirrorDirection::Outbound },
+    { "TunerModel", "connectionError", MirrorDirection::Outbound },
+    { "TunerModel", "deviceModel", MirrorDirection::Outbound },
+    { "TunerModel", "deviceSerial", MirrorDirection::Outbound },
+    { "TunerModel", "deviceVersion", MirrorDirection::Outbound },
+    { "TunerModel", "deviceNickname", MirrorDirection::Outbound },
 
     // ---- RadioModel (5 entries) ----
     { "RadioModel", "name", MirrorDirection::Outbound },

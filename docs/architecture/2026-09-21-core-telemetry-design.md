@@ -38,6 +38,37 @@ values and source labels accompany the charts; no invented health score.
 
 ## Source-first port boundary
 
+### September 21 bandwidth and audio-delay extension (R-R3-35)
+
+The operator requests total Core↔GUI bandwidth and separate Opus bandwidth
+graphs. The implementation must count actual control and media bytes in both
+directions, graph direction and sum, and label payload versus transport/wire
+accounting. Packets/s and decoded frames/s remain useful but do not substitute
+for kbit/s or Mbit/s. Obtain counters at the actual send/receive boundary and
+avoid summing an audio subset twice. Establish fresh baselines after counter,
+transport or audio-context resets; unavailable data is not zero.
+
+Core RTT measures the control-channel round trip. It does not measure Opus
+capture-to-playback latency. Graph safely sampled client audio queue duration
+as buffering delay, explicitly excluding unmeasured network/encoder/device
+delay. Do not estimate one-way latency from RTT and label it as measured.
+True end-to-end audio latency requires a separate timing contract.
+
+The first bandwidth increment uses GUI-local observations and requires no wire
+version bump: control text bytes plus display and raw RTP bytes at the media
+transport boundary. Receive counts precede bounded local queue drops. Outgoing
+media records validated submissions to the transport API, including queued or
+failed sends; it is not a delivery/wire-byte measurement. Crypto, framing,
+ICE, VPN and lower network overhead are excluded. The separate audio graph
+shows raw received RTP and validated Opus payload as subsets already included
+in total. Opus validation occurs after the bounded media handoff, so locally
+dropped-before-validation RTP remains visible in the RTP/total series only.
+The total/direction graph shares adaptive SI kbps/Mbps units; audio uses kbps.
+Speaker buffering is a worker-observed PCM ring duration at 48 kHz and excludes
+network, encoder, jitter/matcher and device latency. Missing counter providers,
+peer changes, context changes and decreasing counters establish fresh baselines
+and explicit graph gaps. Measured silence remains zero.
+
 Fetched `ten9876/AetherSDR` upstream/main on September 21 and inspected
 `0dea0dd7d73e25a40c8c01d46873af5834e23921` in a detached source worktree.
 The user's Aether feature checkout was preserved.

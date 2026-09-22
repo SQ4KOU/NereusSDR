@@ -66,6 +66,32 @@ bool findArgument(const QList<MirrorUpdate>& arguments, const QByteArray& name, 
     return false;
 }
 
+bool findUtf8Argument(const QList<MirrorUpdate>& arguments, const QByteArray& name,
+                      QString* out)
+{
+    for (const MirrorUpdate& arg : arguments) {
+        if (arg.name == name) {
+            if (arg.kind != MirrorWireKind::Utf8 || arg.value.typeId() != QMetaType::QString) {
+                return false;
+            }
+            *out = arg.value.toString();
+            return true;
+        }
+    }
+    return false;
+}
+
+bool hasWireKind(const QList<MirrorUpdate>& arguments, const QByteArray& name,
+                 MirrorWireKind kind)
+{
+    for (const MirrorUpdate& arg : arguments) {
+        if (arg.name == name) {
+            return arg.kind == kind;
+        }
+    }
+    return false;
+}
+
 // What findIntArgument() found. Three states rather than a bool, because
 // "you did not send sliceId" and "the sliceId you sent is not a number
 // this station can act on" are different things to tell a peer, and the
@@ -202,6 +228,10 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleRequestStreamCtunPinned(invoke);
     } else if (invoke.commandVerb == "requestStreamCentre") {
         handleRequestStreamCentre(invoke);
+    } else if (invoke.commandVerb == "configureTgxl") {
+        handleConfigureTgxl(invoke);
+    } else if (invoke.commandVerb == "disconnectTgxl") {
+        handleDisconnectTgxl(invoke);
     } else {
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("unrecognised command verb"), {});
@@ -563,6 +593,48 @@ void SessionCommandDispatcher::handleRequestStreamCentre(const SessionMessage& i
         affected.append(ObjectRegistry::keyForSlice(id));
     }
     emitResult(invoke.commandVerb, invoke.commandId, true, QString(), affected);
+}
+
+void SessionCommandDispatcher::handleConfigureTgxl(const SessionMessage& invoke)
+{
+    QString host;
+    int port = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "host", "port" })
+        || !findUtf8Argument(invoke.arguments, "host", &host)
+        || !hasWireKind(invoke.arguments, "port", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "port", &port) != ArgumentStatus::Ok
+        || port < 1 || port > 65535) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("invalid host or port argument"), {});
+        return;
+    }
+
+    QString reason;
+    if (!m_radioModel->configureTgxlForStation(host, static_cast<quint16>(port), &reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("TGXL configuration was refused") : reason,
+                   {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+void SessionCommandDispatcher::handleDisconnectTgxl(const SessionMessage& invoke)
+{
+    if (!hasExactlyArguments(invoke.arguments, {})) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("disconnectTgxl takes no arguments"), {});
+        return;
+    }
+
+    QString reason;
+    if (!m_radioModel->disconnectTgxlForStation(&reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("TGXL disconnect was refused") : reason,
+                   {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
 }
 
 } // namespace NereusSDR

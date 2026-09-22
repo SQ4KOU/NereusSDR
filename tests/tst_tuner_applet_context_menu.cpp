@@ -46,7 +46,7 @@ private slots:
     void remoteTuningTelemetryUpdatesVisualsWithoutCarrierOrchestration();
     void receiveOnlyPermissionKeepsAccessoryCommandsDisabled();
     void remoteDisconnectMarksCachedTelemetryStale();
-    void remoteConnectionActionIsUnavailableButLocalActionRemains();
+    void remoteConnectionActionNavigatesToPeripheralsAndLocalActionRemains();
 };
 
 // Triggering "Save current tune memory" must store C1=42, L=199, C2=88
@@ -232,12 +232,13 @@ void TunerAppletContextMenuTest::remoteDisconnectMarksCachedTelemetryStale()
     QVERIFY(!localApplet.staleIndicatorVisibleForTesting());
 }
 
-void TunerAppletContextMenuTest::remoteConnectionActionIsUnavailableButLocalActionRemains()
+void TunerAppletContextMenuTest::remoteConnectionActionNavigatesToPeripheralsAndLocalActionRemains()
 {
     const auto findConnectionAction = [](QMenu* menu) -> QAction* {
         for (QAction* action : menu->actions()) {
             if (action->text() == QStringLiteral("Disconnect")
-                || action->text() == QStringLiteral("Reconnect")) {
+                || action->text() == QStringLiteral("Reconnect")
+                || action->text() == QStringLiteral("Configure remote TGXL...")) {
                 return action;
             }
         }
@@ -246,14 +247,29 @@ void TunerAppletContextMenuTest::remoteConnectionActionIsUnavailableButLocalActi
 
     RadioModel remoteModel(RadioModel::Role::Remote);
     TunerApplet remoteApplet(&remoteModel, remoteModel.tunerModel());
-    QSignalSpy remoteToggle(&remoteApplet, &TunerApplet::connectionToggleRequested);
+    QSignalSpy remoteNavigation(&remoteApplet, &TunerApplet::navigationRequested);
     QMenu* remoteMenu = remoteApplet.buildContextMenuForTesting();
+    QAction* remoteAdvancedAction = nullptr;
+    for (QAction* action : remoteMenu->actions()) {
+        if (action->text() == QStringLiteral("Open TGXL Advanced...")) {
+            remoteAdvancedAction = action;
+            break;
+        }
+    }
+    QVERIFY(remoteAdvancedAction != nullptr);
+    QVERIFY(!remoteAdvancedAction->isEnabled());
+    QCOMPARE(remoteAdvancedAction->toolTip(),
+             QStringLiteral("TGXL Advanced administration is unavailable from a remote station."));
+    remoteAdvancedAction->trigger();
+    QCOMPARE(remoteNavigation.count(), 0);
+
     QAction* const remoteAction = findConnectionAction(remoteMenu);
     QVERIFY(remoteAction != nullptr);
-    QVERIFY(!remoteAction->isEnabled());
-    QVERIFY(!remoteAction->toolTip().isEmpty());
+    QCOMPARE(remoteAction->text(), QStringLiteral("Configure remote TGXL..."));
+    QVERIFY(remoteAction->isEnabled());
     remoteAction->trigger();
-    QCOMPARE(remoteToggle.count(), 0);
+    QCOMPARE(remoteNavigation.count(), 1);
+    QCOMPARE(remoteNavigation.takeFirst().at(0).toString(), QStringLiteral("peripherals"));
     remoteMenu->deleteLater();
 
     RadioModel localModel;

@@ -77,3 +77,13 @@ verification. The operator closed the dialog during live listening; it was
 left closed. Roundtrip-tab readability, receive-only reconnect gaps and final
 layout acceptance remain pending. Ongoing RADE-related playback underflows
 are tracked separately and prevent any smooth-audio acceptance claim.
+
+## Readability verified on installed 200d2a0e
+
+At 22:23–22:24, the production Connection, Round trip and Audio tabs were
+visually inspected after the matching installation. Packet and frame units,
+current-value hints and legends now fit. The banner and history update from
+live Core observations, with unavailable radio RTT called out and its historical
+samples retained as history. The Audio plots distinguish red Core source-drop
+events from GUI underflows/overflows; source drops remain under investigation.
+Receive-only reconnect gap acceptance and the real audio soak remain open.

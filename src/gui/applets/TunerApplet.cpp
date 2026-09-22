@@ -35,6 +35,7 @@
 #include "gui/RelayBar.h"
 #include "models/RadioModel.h"
 #include "models/TunerModel.h"
+#include "core/session/IStationLink.h"
 
 #include <QContextMenuEvent>
 #include <QDateTime>
@@ -766,6 +767,11 @@ QMenu* TunerApplet::buildContextMenu(QObject* menuParent)
 
     // Open TGXL Advanced...
     auto* openAdvancedAction = menu->addAction(QStringLiteral("Open TGXL Advanced..."));
+    if (m_model && m_model->role() == RadioModel::Role::Remote) {
+        openAdvancedAction->setEnabled(false);
+        openAdvancedAction->setToolTip(
+            QStringLiteral("TGXL Advanced administration is unavailable from a remote station."));
+    }
     connect(openAdvancedAction, &QAction::triggered, this, [this]() {
         emit navigationRequested(QStringLiteral("tgxlAdvanced"));
     });
@@ -820,21 +826,37 @@ QMenu* TunerApplet::buildContextMenu(QObject* menuParent)
 
     menu->addSeparator();
 
-    // Disconnect or Reconnect depending on current state
-    const QString toggleLabel = m_tgxlConnected
-        ? QStringLiteral("Disconnect")
-        : QStringLiteral("Reconnect");
-    auto* toggleAction = menu->addAction(toggleLabel);
     const bool remote = m_model && m_model->role() == RadioModel::Role::Remote;
     if (remote) {
-        toggleAction->setEnabled(false);
-        toggleAction->setToolTip(
-            QStringLiteral("Remote tuner connection control is not available yet"));
+        const bool connected = m_tunerModel
+            && m_tunerModel->connectionPhase() == TunerModel::ConnectionPhase::Connected;
+        auto* remoteAction = menu->addAction(connected
+            ? QStringLiteral("Disconnect") : QStringLiteral("Configure remote TGXL..."));
+        auto* link = m_model->stationLink();
+        if (connected && link && link->remoteTgxlConfigAvailable()) {
+            connect(remoteAction, &QAction::triggered, this, [this]() {
+                auto* currentLink = m_model ? m_model->stationLink() : nullptr;
+                if (currentLink && currentLink->remoteTgxlConfigAvailable()) {
+                    currentLink->requestDisconnectTgxl();
+                }
+            });
+        } else {
+            if (connected) {
+                remoteAction->setEnabled(false);
+                remoteAction->setToolTip(QStringLiteral("Remote TGXL control is unavailable on this station."));
+            }
+            connect(remoteAction, &QAction::triggered, this, [this]() {
+                emit navigationRequested(QStringLiteral("peripherals"));
+            });
+        }
+    } else {
+        const QString toggleLabel = m_tgxlConnected
+            ? QStringLiteral("Disconnect") : QStringLiteral("Reconnect");
+        auto* toggleAction = menu->addAction(toggleLabel);
+        connect(toggleAction, &QAction::triggered, this, [this]() {
+            emit connectionToggleRequested();
+        });
     }
-    connect(toggleAction, &QAction::triggered, this, [this]() {
-        if (m_model && m_model->role() == RadioModel::Role::Remote) { return; }
-        emit connectionToggleRequested();
-    });
 
     // Copy diagnostics to clipboard
     auto* copyDiagAction = menu->addAction(QStringLiteral("Copy diagnostics to clipboard"));

@@ -109,3 +109,74 @@ Before installation, the existing 706b9a5f GUI crashed during a mirrored AGC
 update, and the still-running Core was subsequently observed producing zero
 audio frames. These are separate live acceptance failures, under investigation;
 the passing TGXL suite does not establish their resolution.
+
+## Core-owned identity and configuration, September 21
+
+Task 4d now adds a separate daemon accessory identity policy. The ordinary
+local GUI keeps its established handshake. Core treats the version banner as
+protocol progress, obtains sequence-correlated native `info`, and admits only
+after a fresh station-side discovery record names `TunerGenius` or
+`TunerGeniusXL` at the actual TCP peer address and received discovery port with
+the same serial. Every physical retry needs fresh admission. Version, nickname,
+and serial format alone do not establish product identity.
+
+The identity regression first passed its legacy control case and failed five
+new cases. The implemented boundary passes no-version and missing-info
+timeouts, nonzero/malformed info, mismatched serial, pre-admission command and
+telemetry suppression, buffered antenna-switch metadata, endpoint replacement,
+cancellation, and fresh retry tokens. The Core coordinator regression then
+failed eight cases against inert configuration methods before integration.
+It now uses real loopback TCP peers and captured discovery/info grammar to
+cover supported aliases, wrong product/serial, wrong discovery port, bounded
+scan failure, A-to-B replacement, disconnect, master disable, and radio teardown.
+
+Authenticated `configureTgxl(host, port)` and `disconnectTgxl()` negotiate
+protocol minor 4 and `remoteTgxlConfigVersion=1`. Complete endpoint validation,
+current radio MAC scope, and the existing 4O3A master gate precede persistence
+or dialing. An accepted command means identification started, not connected.
+Core publishes eight read-only connection/identity properties in addition to
+the existing 13 tuner telemetry fields. Inbound GUI updates never invoke
+hardware commands, and disconnected states clear live values.
+
+Remote Peripherals sends one typed endpoint request, preserves unsent drafts,
+reports station identification/retry/error state, and cancels through Core.
+Its local accessory sockets and LAN scan remain inert. Old or disconnected
+station links show an explicit unavailable state. RF-facing tuner controls
+remain receive-only gated.
+
+Seven Core-focused executables passed in **13.95 seconds**; eight session,
+model, schema, daemon and GUI-focused executables passed in **18.30 seconds**.
+Logs: `r3-tgxl-core-green-{build,test}.log` and
+`r3-tgxl-integrated-green-{build,test}.log`. Review corrections and the final
+unfiltered suite are recorded below. This source is not yet installed;
+receive-only real-tuner acceptance remains pending. The separate 4O3A master
+command and headless frequency/mode propagation remain open Task 4d work.
+
+The single integrated review found additional boundary gaps. Fresh regressions
+reproduced missing disk persistence, receive-only native accessory proxy
+writes, serial-only discovery suppression, retry phase loss, and stale admitted
+tuner state after session loss. Endpoint persistence now saves both validated
+fields before dialing. The real loopback SmartSDR parser regression verifies
+that receive-only Core forwards no native TGXL/PGXL writes while the established
+local path still works. Session teardown clears admission and live tuner values
+but retains the endpoint; the remote Advanced action is explicitly unavailable.
+Those three affected executables passed together in **27.18 seconds**.
+The discovery/retry/MAC-scope correction gate passed five affected executables
+in **5.98 seconds**. Both MAC regressions fail at the intended endpoint
+assertions before the fix: cold disabled configuration is missing, and switching
+to an empty/disabled radio scope retains the old host. The implementation
+publishes every newly selected MAC scope before any optional connection.
+
+The first full run passed **694/695**; the audio-clock simulation passed in
+138.97 seconds. The remaining failure exposed an existing test ordering race:
+a spy saw the RadioConnection emission before the collector received its queued
+slot. An owner-thread barrier and explicit queued-event delivery now establish
+the actual observation boundary before advancing the test clock. The unchanged
+production collector then passed its focused executable in **1.11 seconds**;
+the final unfiltered recheck follows below.
+
+Final rebuilt unfiltered gate: **695/695 executables passed in 133.64 seconds**,
+including the simulated audio clock. The eleven existing inner Qt skips remain;
+no new regression was skipped. Logs: `r3-tgxl-reviewed-recheck-{build,test}.log`.
+The integrated review findings are corrected and checked. This is a source
+checkpoint; receive-only real-TGXL identity/connection acceptance is still pending.

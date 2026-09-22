@@ -20,6 +20,7 @@
 
 #include "core/WdspTypes.h"
 #include "models/Band.h"
+#include "models/TunerModel.h"
 
 #include <QHash>
 
@@ -91,6 +92,17 @@ const DomainTable& table()
         declare<SbnrAlgo>(&t, { SbnrAlgo::Algo1, SbnrAlgo::Algo2, SbnrAlgo::Algo3 });
 
         declare<FmTxMode>(&t, { FmTxMode::High, FmTxMode::Simplex, FmTxMode::Low });
+
+        declare<TunerModel::ConnectionPhase>(&t, {
+            TunerModel::ConnectionPhase::Disabled,
+            TunerModel::ConnectionPhase::Disconnected,
+            TunerModel::ConnectionPhase::Discovering,
+            TunerModel::ConnectionPhase::Connecting,
+            TunerModel::ConnectionPhase::Identifying,
+            TunerModel::ConnectionPhase::Retrying,
+            TunerModel::ConnectionPhase::Connected,
+            TunerModel::ConnectionPhase::Error,
+        });
 
         // From src/models/Band.h. Count is deliberately ABSENT: it is an
         // iteration bound and AlexController's "no slice in this slot"

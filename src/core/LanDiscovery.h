@@ -5,13 +5,14 @@
 // NereusSDR-native UDP listener for PowerGeniusXL / TeragenXL
 // announcements on ports 9008 and 9010. Parses device model,
 // IP address, version, serial, and nickname using the official
-// FlexRadio regex. Deduplicates by serial number before emitting
-// the deviceDiscovered signal.
+// FlexRadio regex. Legacy users deduplicate by serial number; station-owned
+// identity admission can opt into endpoint-sensitive deduplication.
 //
 // Design reference: docs/architecture/2026-05-18-pgxl-tgxl-and-analog-smeter-plan.md (section 6.3)
 // Regex pattern and wire format: FlexRadio LAN discovery protocol
 //
-// AI tooling: Anthropic Claude Code.
+// AI tooling: Anthropic Claude Code; modified by J.J. Boyd (KG4VCF),
+// September 2026, AI-assisted via OpenAI Codex.
 
 #pragma once
 
@@ -28,11 +29,17 @@ class LanDiscovery : public QObject {
 public:
     explicit LanDiscovery(QObject* parent = nullptr);
 
+    // Preserve the established serial-only behavior by default. Station-side
+    // identity admission needs each endpoint candidate because filtering is
+    // performed by the owner after deviceDiscovered is emitted.
+    void setIdentitySensitiveDeduplication(bool enabled) {
+        m_identitySensitiveDeduplication = enabled;
+    }
     void start(int timeoutMs = 3000);
     void stop();
 
     // Test hook: feed a raw datagram payload as if it arrived on UDP.
-    void injectDatagramForTesting(const QString& payload);
+    void injectDatagramForTesting(const QString& payload, quint16 receivedPort = 9008);
 
 signals:
     void deviceDiscovered(const QString& model,
@@ -54,7 +61,8 @@ private:
     QUdpSocket m_sock9008;
     QUdpSocket m_sock9010;
     QTimer     m_timeout;
-    QSet<QString> m_seenSerials;
+    QSet<QString> m_seenIdentities;
+    bool m_identitySensitiveDeduplication{false};
 };
 
 }  // namespace NereusSDR

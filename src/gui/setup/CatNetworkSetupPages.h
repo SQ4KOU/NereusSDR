@@ -277,6 +277,8 @@ private:
     // to m_statusLabels[1] (PGXL) and m_statusLabels[0] (TGXL) respectively.
     // Called at end of constructor after both rows are built.
     void wireStatusSignals();
+    void refreshRemoteTgxlRow();
+    bool isRemoteMode() const;
 
     RadioModel*   m_model{nullptr};
     QGridLayout*  m_grid{nullptr};
@@ -285,6 +287,12 @@ private:
     QVector<QLabel*>       m_statusLabels;
     // Per-row Connect buttons; label toggles "Connect" / "Disconnect".
     QVector<QPushButton*>  m_connectBtns;
+
+    // The endpoint Core last reported.  Keep this independently of the edit
+    // controls so a phase/error/identity update cannot replace an operator's
+    // unsent remote-TGXL draft.
+    QString m_lastDisplayedCoreTgxlHost;
+    quint16 m_lastDisplayedCoreTgxlPort{0};
 };
 
 } // namespace NereusSDR

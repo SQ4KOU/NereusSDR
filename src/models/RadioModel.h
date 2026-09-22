@@ -225,6 +225,7 @@ class RadeChannel;
 // upsample RadeChannel's 24 kHz baseband output to the radio's TX
 // I/Q wire rate before m_connection->sendTxIq.  Lives in core/Resampler.h.
 class Resampler;
+class StationTgxlController;
 
 // RadioModel is the central data model for a connected radio.
 // It owns the RadioConnection (on a worker thread), ReceiverManager,
@@ -293,7 +294,9 @@ public:
     // whoever constructs the link owns its lifetime, RadioModel never
     // allocates or deletes it.
     void attachStation(NereusSDR::IStationLink* link) { m_station = link; }
+    IStationLink* stationLink() const { return m_station; }
     void detachStation() { m_station = nullptr; }
+    void reportStationLinkStateChanged() { emit stationLinkStateChanged(); }
 
     // ── Remote-daemon R2 Task 18: the production handshake entry points ──
     //
@@ -1589,6 +1592,13 @@ public:
     void setFourO3AEnabled(bool enabled);
     bool fourO3AEnabled() const;
 
+    // R3 station-owned accessory lifecycle. Installed by DaemonApp before
+    // radio startup, independently of the temporary receive-only policy.
+    void enableStationAccessoryIdentity();
+    bool stationAccessoryIdentityEnabled() const { return m_stationTgxl != nullptr; }
+    bool configureTgxlForStation(const QString& host, quint16 port, QString* reason);
+    bool disconnectTgxlForStation(QString* reason);
+
     // Phase 3P-III RF-Kit RF2K-S master toggle.
     // Persisted per-MAC under hardware/<mac>/peripherals/RfKit_Enabled.
     // Default OFF on first run. When true the Rf2ksApplet and Setup tab
@@ -1747,6 +1757,7 @@ public:
     double rxMeterOffsetDb() const;
 
 signals:
+    void stationLinkStateChanged();
     void filterStateChanged();
     // Emitted when rxMeterOffsetDb() changes (model swap, preamp change,
     // step-att enable/disable, attenuator dB change, or AppSettings
@@ -4480,6 +4491,7 @@ private:
     // once in the ctor). Raw pointer pattern follows m_moxController et al.
     PgxlConnection* m_pgxlConnection{nullptr};
     TgxlConnection* m_tgxlConnection{nullptr};
+    StationTgxlController* m_stationTgxl{nullptr};
     TunerModel*     m_tunerModel{nullptr};
 
     // Phase 3P-III: RF-Kit RF2K-S connection. unique_ptr with Qt parent=this

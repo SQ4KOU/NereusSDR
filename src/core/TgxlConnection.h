@@ -19,6 +19,9 @@
 //                 lifecycle [@1e0718ad]. Endpoint/attempt generations,
 //                 exponential backoff, and explicit source-bind fallback
 //                 are NereusSDR-native.
+//   2026-09-21  J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 OpenAI Codex: added opt-in, sequence-correlated native-info
+//                 identity admission for Core-owned station connections.
 // =================================================================
 #pragma once
 
@@ -31,6 +34,15 @@
 #include <QString>
 
 namespace NereusSDR {
+
+struct TgxlIdentityInfo {
+    quint64 socketAttemptToken{0};
+    QString peerAddress;
+    quint16 peerPort{0};
+    QString serial;
+    QString version;
+    QString nickname;
+};
 
 // Direct TCP connection to a 4O3A Tuner Genius XL on port 9010.
 // Provides manual relay control (C1/L/C2) via the TGXL's native protocol,
@@ -53,6 +65,17 @@ public:
     QString version()     const { return m_version; }
     QString peerAddress() const { return m_socket.peerAddress().toString(); }
     quint16 peerPort()    const { return m_socket.peerPort(); }
+    quint64 socketAttemptToken() const { return m_socketAttemptGeneration; }
+    bool identityAdmissionRequired() const { return m_identityAdmissionRequired; }
+    TgxlIdentityInfo identityInfo() const { return m_identityInfo; }
+    bool reconnectPending() const noexcept { return m_reconnectTimer.isActive(); }
+
+    // Opt-in station-owned identity boundary. The default is deliberately
+    // false so the established local-direct V-banner handshake is unchanged.
+    void setIdentityAdmissionRequired(bool required);
+    bool admitIdentity(quint64 socketAttemptToken,
+                       const QString& expectedSerial);
+    bool rejectIdentity(quint64 socketAttemptToken, const QString& reason);
 
     // Read-only metric accessors for ConnectionDiagnostics polling (1 Hz).
     quint64 framesIn()         const noexcept { return m_framesIn; }
@@ -85,7 +108,7 @@ public:
     void testSetReconnectBackoffUnitMs(int ms) {
         m_reconnectBackoffUnitMs = ms > 0 ? ms : 1;
     }
-    bool testReconnectPending() const { return m_reconnectTimer.isActive(); }
+    bool testReconnectPending() const { return reconnectPending(); }
     void testForceSourceBindFailureOnce() { m_testForceSourceBindFailure = true; }
     quint64 testActiveSocketAttemptGeneration() const {
         return m_socketAttemptGeneration;
@@ -93,6 +116,7 @@ public:
     void testInjectLineForSocketAttempt(const QString& line,
                                         quint64 attemptGeneration);
     void testInjectFailureForSocketAttempt(quint64 attemptGeneration);
+    void testSetIdentityTimeoutMs(int ms) { m_identityTimeoutMs = ms > 0 ? ms : 1; }
 
 public slots:
     void connectToTgxl(const QString& host, quint16 port = 9010);
@@ -126,6 +150,13 @@ signals:
     void ifconfResponse(const QMap<QString,QString>& fields);
     void saveAcknowledged();
     void reconnectAttempt(int attemptNumber, int backoffMs);
+    void identityProtocolProgress(quint64 socketAttemptToken,
+                                  const QString& peerAddress,
+                                  quint16 peerPort,
+                                  const QString& version);
+    void nativeInfoReceived(const NereusSDR::TgxlIdentityInfo& info);
+    void identityAdmissionFailed(quint64 socketAttemptToken,
+                                 const QString& reason);
 
     // Test seam: emitted from sendCommand so tests can assert frame format.
     void testFrameWrittenForTesting(const QString& frame);
@@ -137,6 +168,7 @@ private slots:
     void scheduleReconnect();
     void onReconnectTimeout();
     void onConnectTimeout();
+    void onIdentityTimeout();
 
 private:
     enum class SourceBindResult { NotRequested, Bound, Failed };
@@ -152,6 +184,10 @@ private:
     bool socketAttemptIsCurrent(quint64 attemptGeneration) const;
     void beginSocketAttempt(quint64 endpointGeneration);
     void retireSocketAttempt();
+    void clearIdentityAttempt();
+    void failIdentityAdmission(quint64 socketAttemptToken,
+                               const QString& reason);
+    quint32 writeProtocolCommand(const QString& cmd);
 
     // 2026-05-26 KG4VCF: probe the kernel for the local source IP
     // it would use to reach `host` and explicitly bind m_socket to
@@ -180,6 +216,7 @@ private:
     QTimer  m_pingTimeoutTimer;
     QTimer  m_reconnectTimer;
     QTimer  m_connectTimer;
+    QTimer  m_identityTimer;
     int     m_reconnectBackoffUnitMs{1000};
     int     m_reconnectAttempts{0};
     quint64 m_endpointGeneration{0};
@@ -208,6 +245,13 @@ private:
     QString m_lastHost;
     quint16 m_lastPort{9010};
     bool    m_testForceSourceBindFailure{false};
+    bool    m_identityAdmissionRequired{false};
+    int     m_identityTimeoutMs{5000};
+    TgxlIdentityInfo m_identityInfo;
+    QMap<QString, QString> m_identityStatus;
+    quint32 m_pendingIdentityInfoSeq{0};
 };
 
 }  // namespace NereusSDR
+
+Q_DECLARE_METATYPE(NereusSDR::TgxlIdentityInfo)

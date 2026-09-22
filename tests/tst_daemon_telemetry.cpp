@@ -286,6 +286,11 @@ private slots:
         nowMs = 100;
         controller.sampleNow();
         QTRY_VERIFY(newReplies.count() >= 1);
+        // The spy can observe the owner-thread emission before the queued
+        // collector slot runs. Wait for the emit to finish, then deliver the
+        // collector's queued observation before advancing the sample clock.
+        QVERIFY(QMetaObject::invokeMethod(newConnection, [] {}, Qt::BlockingQueuedConnection));
+        QCoreApplication::sendPostedEvents(&controller, QEvent::MetaCall);
         nowMs = 1000;
         controller.sampleNow();
         QTRY_COMPARE(samples.count(), 2);

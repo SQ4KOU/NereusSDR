@@ -173,10 +173,11 @@ enum class SessionMessageKind {
 /// provisional. R3 swapping the codec under the same object model is a
 /// minor bump at most.
 inline constexpr quint16 kSessionProtocolMajor = 1;
-inline constexpr quint16 kSessionProtocolMinor = 3;
+inline constexpr quint16 kSessionProtocolMinor = 4;
 inline constexpr quint16 kMediaSessionProtocolMinor = 1;
 inline constexpr quint16 kRemoteCtunSessionProtocolMinor = 2;
 inline constexpr quint16 kStationTelemetrySessionProtocolMinor = 3;
+inline constexpr quint16 kRemoteTgxlConfigSessionProtocolMinor = 4;
 inline constexpr qsizetype kMaxMediaControlBytes = 128 * 1024;
 inline constexpr qsizetype kMaxStationTelemetryBytes = 16 * 1024;
 
@@ -240,6 +241,8 @@ struct SessionMessage {
     ///   requestSliceSampleRate -- {"sliceId": Int64, "rateHz": Int64}
     ///   addSliceOnPan          -- {"panId": Utf8}
     ///   requestStreamCtunPinned -- {"sliceId": Int64, "pinned": Bool}
+    ///   configureTgxl          -- {"host": Utf8, "port": Int64}
+    ///   disconnectTgxl         -- {}
     ///   requestStreamCentre     -- {"sliceId": Int64, "centreHz": Double}
     QList<MirrorUpdate> arguments;
 

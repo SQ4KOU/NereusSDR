@@ -833,6 +833,27 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
         m_settingsProxy->setReady(false);
     }
     if (!m_radioModel.isNull()) {
+        // Fixed tuner telemetry is an admission snapshot, unlike the
+        // retained slice model.  Once a remote session is inactive it must
+        // not appear to have a live TGXL.  Keep the endpoint as a reconnect
+        // draft, but clear device identity, live state and meters through
+        // TunerModel's observational station-state adapter; this never
+        // opens a local socket or issues an RF command.
+        if (m_radioModel->role() == RadioModel::Role::Remote) {
+            if (TunerModel* const tuner = m_radioModel->tunerModel()) {
+                TunerModel::StationConnectionState disconnected;
+                disconnected.configuredHost = tuner->configuredHost();
+                disconnected.configuredPort = static_cast<quint16>(
+                    qBound(0, tuner->configuredPort(), 65535));
+                disconnected.phase = TunerModel::ConnectionPhase::Disconnected;
+                tuner->setStationConnectionState(disconnected);
+            }
+        }
+        // The remote accessory controls derive their enabled state from
+        // StationClient's negotiated session state.  ConnectionState alone
+        // does not change for every close/retry path, so publish this
+        // boundary explicitly after the availability predicates are false.
+        m_radioModel->reportStationLinkStateChanged();
         m_radioModel->setStationConnectionState(ConnectionState::Disconnected);
         m_radioModel->clearStationFilterState();
         for (SliceModel* slice : m_radioModel->slices()) {
@@ -1033,7 +1054,10 @@ void StationClient::onTransportText(const QByteArray& wire)
         // reconcileSlicesAgainstStation().
         reconcileSlicesAgainstStation();
         m_handshakeComplete = true;
-        if (m_radioModel) { m_radioModel->setStationFilterSnapshotReady(); }
+        if (m_radioModel) {
+            m_radioModel->setStationFilterSnapshotReady();
+            m_radioModel->reportStationLinkStateChanged();
+        }
         // Task 19: this is a PROVEN success, the moment isStale() (once it
         // has ever been true) goes false again, and the only place that
         // resets the reconnect backoff on the strength of an actually
@@ -1173,6 +1197,13 @@ void StationClient::handleCapabilities(const SessionMessage& message)
     // board capabilities, the EFFECTIVE slice limit, userDdcCount, and the
     // connection state, all through one production entry point.
     m_radioModel->applyStationCapabilities(m_capabilities);
+    // A station may update its advertised optional capabilities after the
+    // initial snapshot.  Once the session is established, this can change
+    // whether the typed remote TGXL controls are available without a radio
+    // connection-state transition.
+    if (m_handshakeComplete) {
+        m_radioModel->reportStationLinkStateChanged();
+    }
 
     // The singletons exist from RadioModel's own construction, so they can
     // be mapped and watched as soon as capabilities land, rather than
@@ -1928,6 +1959,24 @@ StationClient::CommandOutcome StationClient::requestStreamCentre(int sliceId, do
                        QStringLiteral("the C-Tune centre change"));
 }
 
+StationClient::CommandOutcome StationClient::requestConfigureTgxl(const QString& host, quint16 port)
+{
+    if (!remoteTgxlConfigAvailable()) {
+        return { false, QStringLiteral("The station does not support remote TGXL configuration.") };
+    }
+    return sendCommand("configureTgxl", -1,
+                       { stringArgument("host", host), intArgument("port", port) },
+                       QStringLiteral("the TGXL configuration"));
+}
+
+StationClient::CommandOutcome StationClient::requestDisconnectTgxl()
+{
+    if (!remoteTgxlConfigAvailable()) {
+        return { false, QStringLiteral("The station does not support remote TGXL configuration.") };
+    }
+    return sendCommand("disconnectTgxl", -1, {}, QStringLiteral("the TGXL disconnect"));
+}
+
 void StationClient::handleCommandResult(const SessionMessage& message)
 {
     // Taken, not read: an id is answered exactly once, and leaving the
@@ -2001,6 +2050,14 @@ bool StationClient::remoteCtunAvailable() const
         && m_transport && m_transport->isOpen()
         && m_agreedMinor >= kRemoteCtunSessionProtocolMinor
         && m_capabilities.remoteCtunVersion >= 1;
+}
+
+bool StationClient::remoteTgxlConfigAvailable() const
+{
+    return m_sessionActive && m_authenticated && m_handshakeComplete
+        && m_transport && m_transport->isOpen()
+        && m_agreedMinor >= kRemoteTgxlConfigSessionProtocolMinor
+        && m_capabilities.remoteTgxlConfigVersion >= 1;
 }
 
 bool StationClient::telemetryAvailable() const

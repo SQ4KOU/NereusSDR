@@ -264,6 +264,47 @@ private slots:
                  "a non-string affected-key entry must be rejected");
     }
 
+    // ── TGXL station accessory commands ─────────────────────────────────
+
+    void tgxlCommandsRejectMalformedWireShapesAtTheirOwnBoundary()
+    {
+        RadioModel model;
+        DispatchHarness harness(&model);
+
+        // These must be recognised as TGXL commands and rejected by the
+        // TGXL argument boundary.  A generic "unrecognised command verb"
+        // response would leave malformed requests indistinguishable from a
+        // peer using an entirely unsupported verb.
+        harness.invoke("configureTgxl", 1, {});
+        harness.invoke("configureTgxl", 2,
+                       { strArg("host", QStringLiteral("192.0.2.10")) });
+        harness.invoke("configureTgxl", 3,
+                       { strArg("host", QStringLiteral("192.0.2.10")),
+                         intArg("port", 0) });
+        harness.invoke("configureTgxl", 4,
+                       { intArg("host", 1), intArg("port", 9010) });
+        harness.invoke("configureTgxl", 5,
+                       { strArg("host", QStringLiteral("192.0.2.10")),
+                         intArg("port", 65536) });
+        harness.invoke("configureTgxl", 6,
+                       { strArg("host", QStringLiteral("192.0.2.10")),
+                         MirrorUpdate{ 0, "port", MirrorWireKind::Enum, QVariant(qint64(9010)) } });
+        harness.invoke("configureTgxl", 7,
+                       { strArg("host", QStringLiteral("192.0.2.10")),
+                         intArg("port", 9010),
+                         intArg("port", 9011) });
+        harness.invoke("disconnectTgxl", 8,
+                       { strArg("host", QStringLiteral("192.0.2.10")) });
+
+        QCOMPARE(harness.results.size(), 8);
+        for (const SessionMessage& result : harness.results) {
+            QVERIFY(!result.accepted);
+            QVERIFY2(result.reason != QStringLiteral("unrecognised command verb"),
+                     qPrintable(result.reason));
+            QVERIFY(result.affectedKeys.isEmpty());
+        }
+    }
+
     // ── Step 1: the central id-vs-position divergence test ──────────────
 
     void removingASliceOverTheWireDivergesIdsFromPositionsAndSetActiveSliceByIdPicksTheId()
