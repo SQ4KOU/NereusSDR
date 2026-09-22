@@ -4,6 +4,7 @@
 #include "core/session/media/MediaPeer.h"
 #include "core/session/media/RemoteAudioContext.h"
 #include "core/session/media/RemoteAudioReceiver.h"
+#include "gui/RemoteAudioStatus.h"
 #include <QObject>
 #include <functional>
 #include <memory>
@@ -38,6 +39,16 @@ public:
     std::optional<RemoteAudioContextMessage> acceptedAudioContext() const; // nullopt before the first accepted context and after stop()
     /// Core and this GUI agreed the minor-8 audio-context detail.
     bool audioDetailNegotiated() const; // d->client && d->client->remoteAudioStatusAvailable()
+    /// This computer's remote audio status. It is recomputed whenever
+    /// something it depends on changes; audioStatusChanged() fires only when
+    /// the value does.
+    RemoteAudioStatus audioStatus() const;
+
+public slots:
+    /// Ask Core for audio again: a new request, enabled per mute and radio
+    /// state like every request. A no-op without a media session or while
+    /// muted on this computer. It never clears a playback problem by itself.
+    void retryAudio();
 
 signals:
     void recoveryRequested(quint32 expectedEpoch, const QString& reason);
@@ -46,6 +57,7 @@ signals:
     /// Once per accepted audio context, after playback was started or
     /// stopped for it. A malformed or stale context emits nothing.
     void audioContextAccepted();
+    void audioStatusChanged();
 
 private:
     struct Private;
@@ -63,6 +75,7 @@ private:
     void receiveDisplay(const QByteArray& packet);
     void requestKeyframe(quint32 endpointId);
     void requestAudio();
+    void refreshAudioStatus();
     bool send(QJsonObject payload);
 };
 } // namespace NereusSDR

@@ -2,6 +2,7 @@
 
 #include "gui/RemoteMediaController.h"
 #include "core/AppSettings.h"
+#include "core/AudioDeviceConfig.h"
 #include "core/AudioEngine.h"
 #include "core/session/media/RemoteAudioReceiver.h"
 #include "core/ClarityController.h"
@@ -28,6 +29,7 @@
 #include <QPointer>
 #include <QScopeGuard>
 #include <QSet>
+#include <QSignalBlocker>
 #include <QTimer>
 #include <QUuid>
 #include <QtEndian>
@@ -42,6 +44,22 @@ Q_LOGGING_CATEGORY(lcRemoteMedia, "nereus.remote.media")
 namespace {
 constexpr int kMaxEndpoints = 8;
 constexpr int kDefaultAllocationAckTimeoutMs = 10'000;
+// The audio status refresh, which runs only while a receiver runs or a
+// playback problem awaits recovery.
+constexpr int kAudioStatusRefreshMs = 250;
+// Speaker progress this recent means audio is playing now: the window the
+// title bar has always used.
+constexpr qint64 kPlaybackProgressWindowMs = 500;
+
+// The speaker device the operator selected. It names the selection, which is
+// not proof that the device is the one in use.
+QString selectedSpeakerOutput()
+{
+    const AudioDeviceConfig speakers =
+        AudioDeviceConfig::loadFromSettings(QStringLiteral("audio/Speakers"));
+    return speakers.deviceName.isEmpty() ? QStringLiteral("System default")
+                                         : speakers.deviceName;
+}
 
 bool number(const QJsonObject& object, const char* key, double low, double high,
             double& value, bool integer = false)
@@ -339,6 +357,15 @@ struct RemoteMediaController::Private {
     bool preparingAudio = false;
     bool audioEnabled = false;
     bool audioRetryPending = false;
+    // A persistent local playback failure and the identity it was recorded
+    // against; only matching recovery with real speaker progress clears it.
+    std::optional<RemoteAudioFailure> audioFailure;
+    // An interruption whose automatic retry is scheduled, until the next
+    // accepted context or stop().
+    bool audioRestarting = false;
+    QString selectedOutput;
+    RemoteAudioStatus audioStatus;
+    QTimer* audioStatusTimer = nullptr;
     bool recoveryRequested = false;
     qint64 lastAudioRequestMs = -1000;
     bool desiredPs3 = false;
@@ -378,35 +405,63 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
     d->allocationAckTimeoutMs = allocationAckTimeoutMs > 0
         ? allocationAckTimeoutMs : kDefaultAllocationAckTimeoutMs;
     d->audio = std::make_unique<RemoteAudioReceiver>(model->audioEngine());
-    connect(d->audio.get(), &RemoteAudioReceiver::errorOccurred, this, [this](const QString& reason) {
+    d->selectedOutput = selectedSpeakerOutput();
+    d->audioStatusTimer = new QTimer(this);
+    d->audioStatusTimer->setObjectName(QStringLiteral("remoteAudioStatusTimer"));
+    d->audioStatusTimer->setInterval(kAudioStatusRefreshMs);
+    connect(d->audioStatusTimer, &QTimer::timeout,
+            this, &RemoteMediaController::refreshAudioStatus);
+    connect(d->audio.get(), &RemoteAudioReceiver::errorOccurred, this,
+            [this](const QString& reason, RemoteAudioReceiver::Fault fault) {
+        // Record the failure against this session and context as they stand
+        // now, before the disable below advances the audio revision.
+        d->audioFailure = RemoteAudioFailure{fault, d->epoch, d->connectionId,
+                                             d->audioGeneration,
+                                             d->audio->telemetry().generation};
+        // The receiver's detail is for diagnosis; the operator sees the
+        // plain-English problem below.
+        qCWarning(lcRemoteMedia).noquote()
+            << QStringLiteral("Remote audio playback failed: %1").arg(reason);
         d->audioEnabled = false;
         d->audio->stop();
+        const QPointer<RemoteMediaController> self(this);
         if (d->peer && d->peer->isReady()) {
             ++d->audioRevision;
             if (!d->audioRevision) { ++d->audioRevision; }
             send({{QStringLiteral("op"), QStringLiteral("audio")},
                   {QStringLiteral("revision"), double(d->audioRevision)},
                   {QStringLiteral("enabled"), false}});
+            if (!self) { return; }
         }
-        emit errorOccurred(reason);
+        refreshAudioStatus();
+        if (!self) { return; }
+        emit errorOccurred(remoteAudioProblemText(fault));
     });
-    connect(d->audio.get(), &RemoteAudioReceiver::restartRequested, this, [this](const QString& reason) {
+    connect(d->audio.get(), &RemoteAudioReceiver::restartRequested, this,
+            [this](const QString& reason, RemoteAudioReceiver::Fault) {
         qCWarning(lcRemoteMedia) << reason;
         d->audio->stop();
-        if (d->audioRetryPending) { return; }
-        d->audioRetryPending = true;
-        const QString connection = d->connectionId;
-        const quint32 revision = d->audioRevision;
-        const int delay = int(std::max<qint64>(0, 1000 - (d->clock.elapsed() - d->lastAudioRequestMs)));
-        QTimer::singleShot(delay, this, [this, connection, revision] {
-            if (connection != d->connectionId || revision != d->audioRevision) { return; }
-            d->audioRetryPending = false;
-            requestAudio();
-        });
+        d->audioRestarting = true;
+        if (!d->audioRetryPending) {
+            d->audioRetryPending = true;
+            const QString connection = d->connectionId;
+            const quint32 revision = d->audioRevision;
+            const int delay = int(std::max<qint64>(0, 1000 - (d->clock.elapsed() - d->lastAudioRequestMs)));
+            QTimer::singleShot(delay, this, [this, connection, revision] {
+                if (connection != d->connectionId || revision != d->audioRevision) { return; }
+                d->audioRetryPending = false;
+                requestAudio();
+            });
+        }
+        refreshAudioStatus();
     });
     connect(model->audioEngine(), &AudioEngine::masterMutedChanged,
             this, &RemoteMediaController::requestAudio);
     connect(model->audioEngine(), &AudioEngine::speakersConfigChanged, this, [this] {
+        d->selectedOutput = selectedSpeakerOutput();
+        // Opening the speaker for playback can report its configuration from
+        // inside the receiver's start(); the accepted context that started it
+        // refreshes the status once start() returns.
         if (!d->preparingAudio) { requestAudio(); }
     });
     d->timer = new QTimer(this);
@@ -573,9 +628,15 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
     if (client && client->mediaAvailable()) {
         start();
     }
+    refreshAudioStatus();
 }
 
-RemoteMediaController::~RemoteMediaController() { stop(); }
+RemoteMediaController::~RemoteMediaController()
+{
+    // Nothing observes a status change while this controller is destroyed.
+    const QSignalBlocker blocker(this);
+    stop();
+}
 quint64 RemoteMediaController::receivedDisplayFrames() const { return d->frames; }
 int RemoteMediaController::activeEndpointCount() const { return int(d->bindings.size()); }
 std::optional<MediaPeerTelemetry> RemoteMediaController::trafficTelemetry() const
@@ -594,6 +655,59 @@ bool RemoteMediaController::audioDetailNegotiated() const
 {
     return d->client && d->client->remoteAudioStatusAvailable();
 }
+RemoteAudioStatus RemoteMediaController::audioStatus() const
+{
+    return d->audioStatus;
+}
+
+void RemoteMediaController::retryAudio()
+{
+    if (!d->peer || !d->model || d->model->audioEngine()->masterMuted()) { return; }
+    requestAudio();
+}
+
+void RemoteMediaController::refreshAudioStatus()
+{
+    const RemoteAudioReceiverTelemetry playback = d->audio->telemetry();
+    if (d->audioFailure
+        && remoteAudioFailureRecovered(*d->audioFailure, d->epoch, d->connectionId,
+                                       d->acceptedAudioContext, playback)) {
+        d->audioFailure.reset();
+    }
+    RemoteAudioStatusInputs inputs;
+    inputs.mediaSession = !d->peer.isNull();
+    inputs.muted = d->model && d->model->audioEngine()->masterMuted();
+    inputs.radioConnected = d->model && d->model->isConnected();
+    inputs.context = d->acceptedAudioContext;
+    inputs.receiverRunning = playback.running;
+    inputs.playing = playback.running && playback.decodedPackets > 0
+        && playback.lastDeviceProgressAgeMs
+        && *playback.lastDeviceProgressAgeMs < kPlaybackProgressWindowMs;
+    inputs.restarting = d->audioRestarting;
+    if (d->audioFailure) { inputs.problem = d->audioFailure->fault; }
+
+    RemoteAudioStatus status;
+    status.state = deriveRemoteAudioState(inputs);
+    status.detailNegotiated = audioDetailNegotiated();
+    if (d->acceptedAudioContext) { status.encoder = d->acceptedAudioContext->encoder; }
+    status.selectedOutput = d->selectedOutput;
+    status.problem = inputs.problem;
+    status.retryAvailable = inputs.mediaSession && !inputs.muted
+        && (status.state == RemoteAudioStatus::State::PlaybackProblem
+            || status.state == RemoteAudioStatus::State::CoreCouldNotStart);
+
+    // Speaker progress and recovery are observed, not signalled, so poll
+    // them while there is something to watch, and only then.
+    const bool watch = playback.running || d->audioFailure.has_value();
+    if (watch && !d->audioStatusTimer->isActive()) {
+        d->audioStatusTimer->start();
+    } else if (!watch && d->audioStatusTimer->isActive()) {
+        d->audioStatusTimer->stop();
+    }
+    if (status == d->audioStatus) { return; }
+    d->audioStatus = status;
+    emit audioStatusChanged();
+}
 
 void RemoteMediaController::stop()
 {
@@ -606,6 +720,9 @@ void RemoteMediaController::stop()
     d->audioRevision = 0;
     d->audioGeneration = 0;
     d->acceptedAudioContext.reset();
+    // A playback problem belongs to its session and ends with it.
+    d->audioFailure.reset();
+    d->audioRestarting = false;
     d->connectionId.clear();
     d->pendingPs3.reset();
     d->ps3Refused = false;
@@ -630,6 +747,8 @@ void RemoteMediaController::stop()
     d->bindings.clear();
     d->ctunStreams.clear();
     const QPointer<RemoteMediaController> self(this);
+    refreshAudioStatus();
+    if (!self) { return; }
     for (const auto& [widget, panId] : retiredWidgets) {
         if (widget) {
             widget->clearRemoteSpectrum();
@@ -660,7 +779,11 @@ void RemoteMediaController::requestRecovery(quint32 expectedEpoch, const QString
 
 void RemoteMediaController::start()
 {
+    // stop() reports the retired audio status, and a listener may retire
+    // this controller in turn.
+    const QPointer<RemoteMediaController> self(this);
     stop();
+    if (!self) { return; }
     if (!d->client || !d->client->mediaAvailable()) {
         return;
     }
@@ -710,7 +833,9 @@ void RemoteMediaController::start()
     });
     connect(peer, &MediaPeer::errorOccurred, this, [this, current](const QString& reason) {
         if (current()) {
+            const QPointer<RemoteMediaController> self(this);
             stop();
+            if (!self) { return; }
             emit errorOccurred(reason);
         }
     });
@@ -719,6 +844,9 @@ void RemoteMediaController::start()
         return;
     }
     send({{QStringLiteral("op"), QStringLiteral("start")}});
+    if (!self) { return; }
+    // A media session now exists: audio is awaited from Core.
+    refreshAudioStatus();
 }
 
 bool RemoteMediaController::send(QJsonObject payload)
@@ -1508,15 +1636,23 @@ void RemoteMediaController::requestAudio()
     d->audio->stop();
     d->audioEnabled = false;
     d->audioRetryPending = false;
+    // Every request follows a mute, speaker, radio or retry change (or the
+    // media link becoming ready), each of which the status reflects.
     if (!d->peer || !d->peer->isReady() || !d->model || !d->client
-        || !d->client->mediaAvailable()) { return; }
+        || !d->client->mediaAvailable()) {
+        refreshAudioStatus();
+        return;
+    }
     ++d->audioRevision;
     if (!d->audioRevision) { ++d->audioRevision; }
     d->lastAudioRequestMs = d->clock.elapsed();
     const bool enabled = d->model->isConnected() && !d->model->audioEngine()->masterMuted();
+    const QPointer<RemoteMediaController> self(this);
     send({{QStringLiteral("op"), QStringLiteral("audio")},
           {QStringLiteral("revision"), double(d->audioRevision)},
           {QStringLiteral("enabled"), enabled}});
+    if (!self) { return; }
+    refreshAudioStatus();
 }
 
 void RemoteMediaController::receiveAllocationResult(const QJsonObject& payload)
@@ -1695,13 +1831,15 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
             || context->ssrc != d->peer->audioSsrc()) { return; }
         d->audioGeneration = context->generation;
         d->acceptedAudioContext = context;
+        // Core has answered: any automatic retry in flight is over.
+        d->audioRestarting = false;
         d->audio->stop();
         d->audioEnabled = false;
+        // start() can report a speaker failure synchronously, and a listener
+        // to that report, or to the status change, may retire this controller.
+        const QPointer<RemoteMediaController> self(this);
         if (context->enabled && d->model
             && d->model->isConnected() && !d->model->audioEngine()->masterMuted()) {
-            // start() can report a speaker failure synchronously, and a
-            // listener to that report may retire this controller.
-            const QPointer<RemoteMediaController> self(this);
             d->preparingAudio = true;
             const bool started = d->audio->start(context->ssrc, context->firstTimestamp);
             if (!self) { return; }
@@ -1714,6 +1852,8 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
                            .arg(context->generation);
             }
         }
+        refreshAudioStatus();
+        if (!self) { return; }
         emit audioContextAccepted();
         return;
     }
@@ -1728,7 +1868,9 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
         && payload.value(QStringLiteral("revision")).toDouble() == 0
         && payload.value(QStringLiteral("reason")).isString()) {
         const QString reason = payload.value(QStringLiteral("reason")).toString().left(512);
+        const QPointer<RemoteMediaController> self(this);
         stop();
+        if (!self) { return; }
         emit errorOccurred(reason);
         return;
     }

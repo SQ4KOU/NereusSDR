@@ -32,6 +32,7 @@ public:
             pacingGateChanged.notify_all();
             pacingGateChanged.wait(lock, [this] { return releaseOutputPacingGate; });
         }
+        if (!outputPacingAvailable) { return std::nullopt; }
         return OutputPacing{consumed, int(queue.size()) / 2, 4800, callbackFrames};
     }
     // Test-only worker gate. Configure it before beginRemotePlayback(); the
@@ -55,6 +56,15 @@ public:
         std::lock_guard<std::mutex> lock(mutex);
         releaseOutputPacingGate = true;
         pacingGateChanged.notify_all();
+    }
+    // Test-only device loss. A speaker that goes away stops reporting its
+    // playback timing: while unavailable, outputPacing() answers nullopt, so
+    // remote playback cannot begin and a playing receiver loses its device
+    // clock through the real AudioEngine path. Callable from any thread.
+    void setOutputPacingAvailableForTesting(bool available)
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        outputPacingAvailable = available;
     }
     void render(int frames) {
         std::lock_guard<std::mutex> lock(mutex);
@@ -83,4 +93,5 @@ private:
     int blockOutputPacingAfterCalls = -1;
     mutable bool pacingGateEntered = false;
     bool releaseOutputPacingGate = false;
+    bool outputPacingAvailable = true;
 };

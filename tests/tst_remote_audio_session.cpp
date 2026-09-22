@@ -20,6 +20,8 @@
 #include "core/settings/SettingsProxy.h"
 #include "fakes/LoopbackTransport.h"
 #include "fakes/PacedAudioBus.h"
+#include "fakes/RemoteAudioSessionHarness.h"
+#include "gui/RemoteAudioStatus.h"
 #include "gui/RemoteMediaController.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -43,52 +45,6 @@ namespace {
 
 constexpr int kFrames = 480;
 constexpr double kPi = 3.14159265358979323846;
-
-// Test-only control link, so compatibility can be exercised without any
-// production test hook. With a hello minor set on both ends, a current Core
-// and a current GUI each believe the other speaks that minor. A one-shot
-// forge puts a forged copy of the next audio context on the wire just
-// ahead of the real one.
-class RewritingTransport final : public Test::LoopbackTransport {
-public:
-    using Forge = std::function<QJsonObject(const QJsonObject& real)>;
-
-    RewritingTransport(const QString& description, std::optional<quint16> helloMinor)
-        : LoopbackTransport(description), m_helloMinor(helloMinor) {}
-
-    void sendText(const QByteArray& wire) override
-    {
-        const bool mayRewrite = (m_helloMinor && wire.contains("\"hello\""))
-            || (forgeNextAudioContext && wire.contains("\"audio-context\""));
-        SessionMessage message;
-        if (mayRewrite && SessionMessages::decode(wire, &message)) {
-            if (m_helloMinor && message.kind == SessionMessageKind::Hello) {
-                ++rewrittenHellos;
-                LoopbackTransport::sendText(SessionMessages::encode(SessionMessages::hello(
-                    message.protocolMajor, *m_helloMinor, message.settingsSchemaVersion,
-                    message.peerName)));
-                return;
-            }
-            if (forgeNextAudioContext && message.kind == SessionMessageKind::MediaControl
-                && message.mediaPayload.value(QStringLiteral("op"))
-                    == QLatin1String("audio-context")) {
-                SessionMessage forged = message;
-                forged.mediaPayload = std::exchange(forgeNextAudioContext, {})(
-                    message.mediaPayload);
-                ++forgedContexts;
-                LoopbackTransport::sendText(SessionMessages::encode(forged));
-            }
-        }
-        LoopbackTransport::sendText(wire);
-    }
-
-    int rewrittenHellos = 0;
-    int forgedContexts = 0;
-    Forge forgeNextAudioContext;
-
-private:
-    std::optional<quint16> m_helloMinor;
-};
 
 // The encoder object a default Core announces.
 QJsonObject defaultEncoderJson()
@@ -205,89 +161,8 @@ double toneAmplitude(const QVector<float>& samples, int channel, double hz,
     return frames > 0 ? 2.0 * std::hypot(cosine, sine) / frames : 0.0;
 }
 
-struct Harness {
-    QTemporaryDir directory;
-    AppSettings settings;
-    RadioModel station;
-    StationServer server;
-    RadioModel remote{RadioModel::Role::Remote};
-    SettingsProxy settingsProxy;
-    StationClient client{&remote, &settingsProxy};
-    AudioEngine* stationAudio{nullptr};
-    PacedAudioBus* remoteBus{nullptr};
-    int sliceA{-1};
-    int sliceB{-1};
-    qint64 stationFrames{0};
-
-    Harness()
-        : settings(directory.filePath(QStringLiteral("station.settings")))
-        , server(&station, settings, directory.path())
-    {
-        Q_ASSERT(directory.isValid());
-        station.setBoardForTest(HPSDRHW::Saturn);
-        station.configureStreamPool(/*userDdcCount=*/5, /*maxSlices=*/5,
-                                    /*defaultRateHz=*/192000);
-        station.setConnectionStateForTest(ConnectionState::Connected);
-        stationAudio = station.audioEngine();
-        Q_ASSERT(stationAudio != nullptr);
-        stationAudio->masterMixForTest().setRampFrames(1);
-        stationAudio->masterMixForTest().setSlewUpFrames(0);
-        sliceA = station.addSlice();
-        sliceB = station.addSlice();
-        Q_ASSERT(sliceA >= 0 && sliceB >= 0);
-        stationAudio->setSliceStreaming(sliceA, true);
-        stationAudio->setSliceStreaming(sliceB, true);
-        stationAudio->masterMixForTest().setSliceGain(sliceA, 0.60f, -0.95f);
-        stationAudio->masterMixForTest().setSliceGain(sliceB, 0.45f, 0.95f);
-        station.sliceById(sliceA)->setAudioPan(-0.95);
-        station.sliceById(sliceB)->setAudioPan(0.95);
-        server.setMediaEnabled(true);
-
-        remote.setConnectionStateForTest(ConnectionState::Connected);
-        auto bus = std::make_unique<PacedAudioBus>();
-        remoteBus = bus.get();
-        remote.audioEngine()->setSpeakersBusForTest(std::move(bus));
-    }
-
-    // helloMinor, when set, is what both ends announce, so both negotiate
-    // down to it. forgeFirstContext, when set, puts one forged copy on the
-    // wire ahead of Core's first audio context.
-    void connectSession(std::optional<quint16> helloMinor = std::nullopt,
-                        RewritingTransport::Forge forgeFirstContext = {})
-    {
-        auto* station = new RewritingTransport(QStringLiteral("station"), helloMinor);
-        auto* clientEnd = new RewritingTransport(QStringLiteral("client"), helloMinor);
-        station->forgeNextAudioContext = std::move(forgeFirstContext);
-        stationLink = station;
-        station->linkTo(clientEnd);
-        client.startSession(clientEnd, server.token());
-        server.acceptTransport(station);
-        QTRY_VERIFY(server.mediaAvailable());
-        if (helloMinor) {
-            QCOMPARE(station->rewrittenHellos, 1);
-            QCOMPARE(clientEnd->rewrittenHellos, 1);
-            QCOMPARE(client.agreedMinor(), *helloMinor);
-        }
-    }
-
-    QPointer<RewritingTransport> stationLink;
-
-    void feedMixedTone()
-    {
-        QVector<float> a(kFrames * 2);
-        QVector<float> b(kFrames * 2);
-        for (int frame = 0; frame < kFrames; ++frame) {
-            const double time = static_cast<double>(stationFrames + frame) / 48000.0;
-            const float first = static_cast<float>(0.22 * std::sin(2.0 * kPi * 617.0 * time));
-            const float second = static_cast<float>(0.19 * std::sin(2.0 * kPi * 1579.0 * time));
-            a[frame * 2] = a[frame * 2 + 1] = first;
-            b[frame * 2] = b[frame * 2 + 1] = second;
-        }
-        stationFrames += kFrames;
-        stationAudio->rxBlockReady(sliceA, a.constData(), kFrames);
-        stationAudio->rxBlockReady(sliceB, b.constData(), kFrames);
-    }
-};
+// The shared real session: Core and GUI over DTLS/SRTP, paced GUI speaker.
+using Harness = Test::RemoteAudioSessionHarness;
 
 } // namespace
 
@@ -369,6 +244,10 @@ private slots:
         QVERIFY(h.remoteBus->peakQueued > 0);
         QVERIFY(h.remoteBus->peakQueued <= 1440);
         QCOMPARE(remoteErrors.count(), 0);
+        // This computer says it is playing, and names the profile Core reported.
+        QTRY_COMPARE(remoteMedia.audioStatus().state, RemoteAudioStatus::State::Playing);
+        QCOMPARE(remoteAudioCodecText(remoteMedia.audioStatus()),
+                 QStringLiteral("Opus stereo, 24 kbit/s target, 40 ms packets, audio up to 8 kHz"));
 
         const double stationPanA = h.station.sliceById(h.sliceA)->audioPan();
         const double stationPanB = h.station.sliceById(h.sliceB)->audioPan();
@@ -378,6 +257,9 @@ private slots:
         const bool stationMutedB = h.station.sliceById(h.sliceB)->muted();
         const int flushesBeforeMute = h.remoteBus->flushes;
         h.remote.audioEngine()->setMasterMuted(true);
+        // Muting is this computer's own choice, and it says so at once.
+        QCOMPARE(remoteMedia.audioStatus().state, RemoteAudioStatus::State::MutedHere);
+        QVERIFY(!remoteMedia.audioStatus().retryAvailable);
         QTRY_VERIFY_WITH_TIMEOUT(!latestAudioContext(controls)
                                      .value(QStringLiteral("enabled")).toBool(), 5000);
         QCOMPARE(latestAudioContext(controls).size(), 9);
@@ -393,6 +275,10 @@ private slots:
         QVERIFY(h.remoteBus->flushes > flushesBeforeMute);
         QVERIFY(h.remoteBus->outputPacing().has_value());
         QCOMPARE(h.remoteBus->outputPacing()->queuedFrames, 0);
+        // Still muted here once Core has stopped, with no codec in use; the
+        // station's own slice gain, pan and mute are untouched.
+        QCOMPARE(remoteMedia.audioStatus().state, RemoteAudioStatus::State::MutedHere);
+        QCOMPARE(remoteAudioCodecText(remoteMedia.audioStatus()), QStringLiteral("Audio is off"));
         QCOMPARE(h.station.sliceById(h.sliceA)->audioPan(), stationPanA);
         QCOMPARE(h.station.sliceById(h.sliceB)->audioPan(), stationPanB);
         QCOMPARE(h.station.sliceById(h.sliceA)->afGain(), stationAfGainA);
@@ -413,6 +299,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(channelEnergy(h.remoteBus->heard, 0, heardBeforeResume) > 0.5
                                  && channelEnergy(h.remoteBus->heard, 1, heardBeforeResume) > 0.5,
                                  10000);
+        QTRY_COMPARE(remoteMedia.audioStatus().state, RemoteAudioStatus::State::Playing);
 
         h.client.disconnectFromStation(QStringLiteral("test reconnect"));
         QTRY_VERIFY_WITH_TIMEOUT(!h.client.mediaAvailable(), 5000);
