@@ -4251,6 +4251,99 @@ void RadioModel::deactivateSliceChannel(int sliceId)
     }
 }
 
+namespace {
+
+// R-R3-34. The receiver a slice rejoins: the first one already placed for its
+// own pan whose window covers the frequency. -1 means the slice needs a
+// receiver of its own, which the caller requests with preferOwnStream so it
+// never shares another pan's receiver. Radio recovery and startup restore both
+// place slices this way. Live operation can leave one pan on two receivers (a
+// slice tuned out of a shared window takes a new receiver, and a slice moved
+// to another pan keeps its own), and neither path may undo that.
+int panStreamCovering(const SliceStreamAllocator& allocator,
+                      const QList<int>& panStreams, double frequencyHz)
+{
+    for (int stream : panStreams) {
+        if (allocator.joinStream(stream, frequencyHz).outcome
+            == SliceStreamAllocator::Outcome::JoinedExisting) {
+            return stream;
+        }
+    }
+    return -1;
+}
+
+// The letter the operator sees for a slice id. Mirrors SliceModel::sliceLetter()
+// (what every VFO flag and slice button shows); restore messages also need it
+// for a receiver whose SliceModel is already gone.
+QChar receiverLetter(int sliceId)
+{
+    return QChar(QLatin1Char(static_cast<char>('A' + sliceId)));
+}
+
+// The letters a radio with `channelLimit` slice channels can host. Binding
+// only runs once the radio has receivers, and every capability row with
+// receivers allows at least two channels.
+QString supportedReceivers(int channelLimit)
+{
+    if (channelLimit <= 1) {
+        return RadioModel::tr("receiver A");
+    }
+    if (channelLimit == 2) {
+        return RadioModel::tr("receivers A and B");
+    }
+    return RadioModel::tr("receivers A to %1").arg(receiverLetter(channelLimit - 1));
+}
+
+// Restore status text is a run of plain sentences that ends, exactly once, with
+// this one. Every step composes through withKeptLayout, so a later step adds a
+// sentence without doubling the ending or a full stop.
+QString keptLayoutSentence()
+{
+    return RadioModel::tr("Your saved layout is kept.");
+}
+
+QString withKeptLayout(const QStringList& sentences)
+{
+    QStringList all;
+    for (const QString& sentence : sentences) {
+        if (!sentence.isEmpty()) {
+            all.append(sentence);
+        }
+    }
+    all.append(keptLayoutSentence());
+    return all.join(QLatin1Char(' '));
+}
+
+// What an earlier step already reported, without its ending. A pending status
+// ("waiting for ...") reported nothing and contributes nothing.
+QStringList reportedRestoreSentences(const QString& message)
+{
+    const QString kept = keptLayoutSentence();
+    if (!message.endsWith(kept)) {
+        return {};
+    }
+    return {message.chopped(kept.size()).trimmed()};
+}
+
+// A reason written elsewhere, as one sentence with one full stop.
+QString asSentence(QString text)
+{
+    text = text.trimmed();
+    while (text.endsWith(QLatin1Char('.'))) {
+        text.chop(1);
+    }
+    return text.isEmpty() ? QString() : text + QLatin1Char('.');
+}
+
+// Said once for the saved RADE receiver when that receiver is not restored.
+QString radeAudioAwaitsReceiver(int sliceId)
+{
+    return RadioModel::tr("RADE audio from receiver %1 stays off until that receiver is back.")
+        .arg(receiverLetter(sliceId));
+}
+
+} // namespace
+
 void RadioModel::bindUnboundSlices()
 {
     if (m_receiveLayoutManaged && !m_receiveLayoutMac.isEmpty()) {
@@ -4272,15 +4365,8 @@ void RadioModel::bindUnboundSlices()
             }
             const QString pan = slice->panKey().isEmpty()
                 ? QStringLiteral("pan-0") : slice->panKey();
-            int matchingStream = -1;
-            using Outcome = SliceStreamAllocator::Outcome;
-            for (int stream : recoveredPans.value(pan)) {
-                if (m_streamAllocator.joinStream(stream, slice->frequency()).outcome
-                    == Outcome::JoinedExisting) {
-                    matchingStream = stream;
-                    break;
-                }
-            }
+            const int matchingStream = panStreamCovering(
+                m_streamAllocator, recoveredPans.value(pan), slice->frequency());
             const bool bound = matchingStream >= 0
                 ? bindSliceToStream(slice, slice->frequency(), false, matchingStream)
                 : bindSliceToStream(slice, slice->frequency(), true);
@@ -4308,29 +4394,52 @@ void RadioModel::bindReceiveLayoutSlices()
     m_receiveLayoutPendingAdmission = true;
     const int channelLimit = std::min(boardCapabilities().maxSlices,
                                        WdspEngine::kMaxSliceChannels);
-    QHash<QString, int> acceptedPans;
+    // The saved layout records each slice's pan, not which slices shared a
+    // receiver, so startup places slices exactly as recovery does
+    // (panStreamCovering): rejoin a receiver of the same pan when one covers
+    // the frequency, otherwise take a new receiver. The Rock's 2026-09-22
+    // restart refused a 40 m RADE slice that pan 0 had been running beside a
+    // 20 m one, because this path forced it into pan 0's first window. A slice
+    // is refused only when this radio has no such receiver id, or no receiver
+    // is free.
+    QHash<QString, QList<int>> restoredPans;
     QList<int> refusedIds;
     QStringList refusals;
     for (SliceModel* slice : std::as_const(m_slices)) {
         const int id = slice->sliceIndex();
         const QString pan = slice->panKey().isEmpty()
             ? QStringLiteral("pan-0") : slice->panKey();
-        QString reason;
-        if (id < 0 || id >= channelLimit) {
-            reason = tr("receiver ID is outside this radio's channel range [0, %1)")
-                         .arg(channelLimit);
-        } else if (slice->streamIndex() < 0
-                   && !bindSliceToStream(slice, slice->frequency(),
-                                          !acceptedPans.contains(pan),
-                                          acceptedPans.value(pan, -1))) {
-            reason = m_lastPlacementRejectReason;
+        const bool idSupported = id >= 0 && id < channelLimit;
+        if (idSupported && slice->streamIndex() < 0) {
+            const int covering = panStreamCovering(
+                m_streamAllocator, restoredPans.value(pan), slice->frequency());
+            // A new receiver is refused only when none is free; a covering
+            // one always takes the slice.
+            if (covering >= 0) {
+                bindSliceToStream(slice, slice->frequency(), false, covering);
+            } else {
+                bindSliceToStream(slice, slice->frequency(), true);
+            }
         }
-        if (reason.isEmpty() && slice->streamIndex() >= 0) {
-            acceptedPans.insert(pan, slice->streamIndex());
-        } else {
-            refusedIds.append(id);
-            refusals.append(tr("Receiver %1 (%2): %3").arg(id).arg(pan,
-                reason.isEmpty() ? tr("no receive stream is available") : reason));
+        if (idSupported && slice->streamIndex() >= 0) {
+            QList<int>& panStreams = restoredPans[pan];
+            if (!panStreams.contains(slice->streamIndex())) {
+                panStreams.append(slice->streamIndex());
+            }
+            continue;
+        }
+        refusedIds.append(id);
+        const QString letter(slice->sliceLetter());
+        const QString mhz = QString::number(slice->frequency() / 1.0e6, 'f', 4);
+        const QString mode = SliceModel::modeName(slice->dspMode());
+        refusals.append(idSupported
+            ? tr("Receiver %1 (%2 MHz %3) could not be restored because all of the "
+                 "radio's receivers are in use. Add it again with +RX after closing "
+                 "another receiver.").arg(letter, mhz, mode)
+            : tr("Receiver %1 (%2 MHz %3) could not be restored because this radio "
+                 "supports only %4.").arg(letter, mhz, mode, supportedReceivers(channelLimit)));
+        if (m_restoredRadeReceiveOwner == id) {
+            refusals.append(radeAudioAwaitsReceiver(id));
         }
     }
     if (refusedIds.isEmpty()) {
@@ -4361,8 +4470,7 @@ void RadioModel::bindReceiveLayoutSlices()
     }
     setReceiveLayoutRestoreStatus(allRefused ? QStringLiteral("fallback")
                                               : QStringLiteral("degraded"),
-        tr("Saved receive layout was not fully restored. %1. The saved layout is retained.")
-            .arg(refusals.join(QStringLiteral("; "))));
+                                  withKeptLayout(refusals));
 }
 
 void RadioModel::republishAllStreamBindings()
@@ -13151,7 +13259,7 @@ void RadioModel::prepareReceiveLayout(const QString& radioMac)
     const auto layout = ReceiveLayoutStore::load(AppSettings::instance(), radioMac);
     if (layout.state == ReceiveLayoutStore::LoadState::Missing) {
         setReceiveLayoutRestoreStatus(QStringLiteral("pending"),
-                                      tr("No saved layout; waiting to admit configured receivers."));
+                                      tr("No saved layout; waiting to start the configured receivers."));
         return;
     }
     QString error = layout.error;
@@ -13163,9 +13271,11 @@ void RadioModel::prepareReceiveLayout(const QString& radioMac)
         return;
     }
     m_receiveLayoutProtected = true;
+    // The store's reasons already end in a full stop; asSentence keeps one.
     setReceiveLayoutRestoreStatus(QStringLiteral("invalid"),
-        tr("Saved receive layout could not be loaded: %1. Using configured receivers; the saved record is retained.")
-            .arg(error));
+        withKeptLayout({tr("The saved receive layout could not be loaded."),
+                        asSentence(error),
+                        tr("The configured receivers are used instead.")}));
 }
 
 bool RadioModel::activateRestoredRadeReceiveOwner(QString* error)
@@ -13175,10 +13285,19 @@ bool RadioModel::activateRestoredRadeReceiveOwner(QString* error)
     }
     const int id = *m_restoredRadeReceiveOwner;
     SliceModel* slice = sliceById(id);
-    if (!slice || !canAdmitRadeSlice(id, slice)
-        || (slice->dspMode() != DSPMode::RADE_U && slice->dspMode() != DSPMode::RADE_L)
+    if (!slice) {
+        *error = radeAudioAwaitsReceiver(id);
+        return false;
+    }
+    if (slice->dspMode() != DSPMode::RADE_U && slice->dspMode() != DSPMode::RADE_L) {
+        *error = tr("RADE audio from receiver %1 stays off because that receiver is no "
+                    "longer in RADE mode.").arg(receiverLetter(id));
+        return false;
+    }
+    if (!canAdmitRadeSlice(id, slice)
         || !m_dspWorker || !m_wdspEngine || !m_wdspEngine->rxChannel(id)) {
-        *error = tr("Saved RADE receive-audio owner %1 has no admitted receive path.").arg(id);
+        *error = tr("RADE audio from receiver %1 stays off because that receiver is not "
+                    "running.").arg(receiverLetter(id));
         return false;
     }
     RadeChannel* channel = m_wdspEngine->radeChannel(id);
@@ -13201,13 +13320,15 @@ bool RadioModel::activateRestoredRadeReceiveOwner(QString* error)
         publishRadeRxTarget(id, channel, slice);
     }
     if (!channel) {
-        *error = tr("Could not create saved RADE receive-audio owner %1.").arg(id);
+        *error = tr("RADE audio from receiver %1 stays off because its RADE decoder could "
+                    "not be created.").arg(receiverLetter(id));
         return false;
     }
     if (!channel->isActive()) {
         const QString modelPath = AppSettings::instance().value("Rade/ModelPath").toString();
         if (!channel->start(modelPath.isEmpty() ? QStringLiteral("dummy") : modelPath)) {
-            *error = tr("Could not start saved RADE receive-audio owner %1.").arg(id);
+            *error = tr("RADE audio from receiver %1 stays off because its RADE decoder could "
+                        "not start.").arg(receiverLetter(id));
             return false;
         }
     }
@@ -13220,12 +13341,18 @@ void RadioModel::completeReceiveLayoutStartup()
         || !m_receiveLayoutPendingAdmission) {
         return;
     }
-    QString error;
-    if (!activateRestoredRadeReceiveOwner(&error)) {
+    QString radeNote;
+    if (!activateRestoredRadeReceiveOwner(&radeNote)) {
         m_receiveLayoutProtected = true;
-        setReceiveLayoutRestoreStatus(QStringLiteral("degraded"),
-            m_receiveLayoutRestoreMessage + QLatin1Char(' ')
-                + tr("%1 The saved layout is retained.").arg(error));
+        // Binding already said this when it refused the receiver itself
+        // (G2, 2026-09-22 native check: the owner line used to follow the
+        // refusal and repeat its ending). Say it once.
+        const int owner = m_restoredRadeReceiveOwner.value_or(-1);
+        if (!m_receiveLayoutRestoreMessage.contains(radeAudioAwaitsReceiver(owner))) {
+            QStringList notes = reportedRestoreSentences(m_receiveLayoutRestoreMessage);
+            notes.append(radeNote);
+            setReceiveLayoutRestoreStatus(QStringLiteral("degraded"), withKeptLayout(notes));
+        }
     }
     const bool allBound = !m_slices.isEmpty()
         && std::all_of(m_slices.cbegin(), m_slices.cend(), [](const SliceModel* slice) {
@@ -13233,15 +13360,17 @@ void RadioModel::completeReceiveLayoutStartup()
         });
     if (!allBound) {
         m_receiveLayoutProtected = true;
-        setReceiveLayoutRestoreStatus(QStringLiteral("fallback"),
-            tr("Receive startup has unbound receivers. The saved layout is retained; check radio resources."));
+        QStringList notes = reportedRestoreSentences(m_receiveLayoutRestoreMessage);
+        notes.append(tr("Some receivers did not start; check the radio."));
+        setReceiveLayoutRestoreStatus(QStringLiteral("fallback"), withKeptLayout(notes));
     }
     m_receiveLayoutPendingAdmission = false;
     if (m_receiveLayoutProtected) {
         return;
     }
-    setReceiveLayoutRestoreStatus(QStringLiteral("accepted"),
-                                  tr("All receive-layout resources were accepted."));
+    // Nothing to explain: the Core connection panel shows no receiver line
+    // and the GUI raises no warning for an accepted restore.
+    setReceiveLayoutRestoreStatus(QStringLiteral("accepted"), QString());
     for (SliceModel* slice : std::as_const(m_slices)) {
         scheduleSettingsSave(slice);
     }

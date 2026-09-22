@@ -175,11 +175,18 @@ slice-count top-ups. If every descriptor is refused, ordinary configured
 fallback membership is allowed while the original record remains protected.
 
 Admission checks stable IDs against the board's actual channel range. Each
-pan receives its own stream, and subsequent members must fit that same stream;
-a nearby window belonging to another pan cannot absorb them. Refusals identify
-the receiver, pan and resource reason. Invalid/degraded records remain protected
-from automatic capture. Accepted layouts use the existing coalesced atomic
-AppSettings save, retry/error surface and immediate shutdown flush.
+pan receives its own stream. A later member rejoins a stream its own pan
+already holds when that window covers it, and otherwise takes a new stream,
+exactly as recovery places it; a window belonging to another pan never absorbs
+it. (Amended after the 2026-09-22 native check: requiring later members to fit
+their pan's first stream refused a 40 m RADE receiver that live use had put on
+a 20 m pan, because a pan move keeps the moved receiver's own stream.) A member
+is refused only for an unsupported ID or when no stream is free. Refusals name
+the receiver letter, frequency and mode in plain words and end once with "Your
+saved layout is kept."; an accepted restore reports no message. Invalid/degraded
+records remain protected from automatic capture. Accepted layouts use the
+existing coalesced atomic AppSettings save, retry/error surface and immediate
+shutdown flush.
 
 The saved RADE receive owner is activated after channels and workers exist.
 Reconnect refreshes its worker generation without duplicating channel wiring.

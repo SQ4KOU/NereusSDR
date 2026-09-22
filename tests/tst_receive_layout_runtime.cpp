@@ -96,6 +96,26 @@ DaemonConfig configWithCount(int count)
     return config;
 }
 
+const QString kKeptLayout = QStringLiteral("Your saved layout is kept.");
+
+// The operator reads restore messages in the Core connection panel and in a
+// warning toast. Empty when the text is plain and ends exactly once.
+QString restoreMessageProblem(const QString& message)
+{
+    const QStringList internal{QStringLiteral(".."), QStringLiteral("stream"),
+                               QStringLiteral("owner"), QStringLiteral("admitted"),
+                               QStringLiteral("pan-")};
+    for (const QString& word : internal) {
+        if (message.contains(word)) {
+            return QStringLiteral("\"%1\" in: %2").arg(word, message);
+        }
+    }
+    if (!message.endsWith(kKeptLayout) || message.count(kKeptLayout) != 1) {
+        return QStringLiteral("must end once with \"%1\": %2").arg(kKeptLayout, message);
+    }
+    return {};
+}
+
 } // namespace
 
 class TstReceiveLayoutRuntime : public QObject {
@@ -279,6 +299,9 @@ private slots:
             app.primeBoardForTest(HPSDRHW::HermesLite, kMacA);
             QVERIFY(app.start(configWithCount(1)));
             QCOMPARE(model(app)->receiveLayoutRestoreState(), QStringLiteral("invalid"));
+            const QString problem =
+                restoreMessageProblem(model(app)->receiveLayoutRestoreMessage());
+            QVERIFY2(problem.isEmpty(), qPrintable(problem));
             app.stop();
         }
         QCOMPARE(rawLayoutFromDisk(kMacA), invalid);
@@ -295,6 +318,10 @@ private slots:
             app.primeBoardForTest(HPSDRHW::HermesII, kMacA);
             QVERIFY(app.start(configWithCount(1)));
             QCOMPARE(model(app)->receiveLayoutRestoreState(), QStringLiteral("degraded"));
+            QCOMPARE(model(app)->receiveLayoutRestoreMessage(),
+                     QStringLiteral("Receiver C (10.1000 MHz AM) could not be restored "
+                                    "because this radio supports only receivers A and B. "
+                                    "Your saved layout is kept."));
             QVERIFY(model(app)->sliceById(0) != nullptr);
             QVERIFY(model(app)->sliceById(1) != nullptr);
             QVERIFY(model(app)->sliceById(2) == nullptr);
@@ -354,7 +381,10 @@ private slots:
         QVERIFY(radio->sliceById(0)->streamIndex() != radio->sliceById(2)->streamIndex());
         QVERIFY(!radio->sliceById(4));
         QCOMPARE(radio->receiveLayoutRestoreState(), QStringLiteral("degraded"));
-        QVERIFY(radio->receiveLayoutRestoreMessage().contains("Receiver 4 (pan-2)"));
+        QCOMPARE(radio->receiveLayoutRestoreMessage(),
+                 QStringLiteral("Receiver E (14.2950 MHz USB) could not be restored because "
+                                "all of the radio's receivers are in use. Add it again with "
+                                "+RX after closing another receiver. Your saved layout is kept."));
         radio->sliceById(0)->setFrequency(14296000);
         radio->flushPendingSettingsSave();
         app.stop();
@@ -378,21 +408,118 @@ private slots:
 
     void laterPanMemberCannotBorrowAnotherPansWindow()
     {
+        // Pan 0 ran two bands on two receivers, as live tuning and radio
+        // recovery allow. 7.201 MHz lies outside pan 0's 20 m receiver and
+        // inside pan 1's 40 m one: it gets a receiver of its own and stays
+        // on pan 0, never sharing the other pan's receiver.
+        QVERIFY(saveLayout(kMacA, {{0, "pan-0", 14293000, DSPMode::USB},
+                                   {2, "pan-1", 7200000, DSPMode::LSB},
+                                   {4, "pan-0", 7201000, DSPMode::LSB}}));
+        DaemonApp app;
+        app.primeBoardForTest(HPSDRHW::Saturn, kMacA); // ANAN-G2: five receivers
+        QVERIFY(app.start(configWithCount(1)));
+        RadioModel* radio = model(app);
+        QCOMPARE(radio->slices().size(), 3);
+        QCOMPARE(radio->receiveLayoutRestoreState(), QStringLiteral("accepted"));
+        QVERIFY2(radio->receiveLayoutRestoreMessage().isEmpty(),
+                 qPrintable(radio->receiveLayoutRestoreMessage()));
+        QVERIFY(sliceMatches(radio, 4, 7'201'000.0, DSPMode::LSB, QStringLiteral("pan-0")));
+        const int later = radio->sliceById(4)->streamIndex();
+        QVERIFY(later >= 0);
+        QVERIFY(later != radio->sliceById(0)->streamIndex());
+        QVERIFY(later != radio->sliceById(2)->streamIndex());
+        app.stop();
+        const auto saved = layoutFromDisk(kMacA);
+        QCOMPARE(saved.slices.size(), 3);
+        QCOMPARE(saved.slices.at(2).id, 4);
+        QCOMPARE(saved.slices.at(2).panKey, QStringLiteral("pan-0"));
+    }
+
+    void laterPanMemberIsRefusedWhenEveryReceiverIsInUse()
+    {
+        // Same layout on a board whose two receivers the first two pans
+        // already hold. Refused, and still not folded into pan 1's receiver.
         QVERIFY(saveLayout(kMacA, {{0, "pan-0", 14293000, DSPMode::USB},
                                    {2, "pan-1", 7200000, DSPMode::LSB},
                                    {4, "pan-0", 7201000, DSPMode::LSB}}));
         const QString original = rawLayoutFromDisk(kMacA);
         DaemonApp app;
-        app.primeBoardForTest(HPSDRHW::HermesLite, kMacA);
+        app.primeBoardForTest(HPSDRHW::HermesLite, kMacA); // two receivers
         QVERIFY(app.start(configWithCount(1)));
         RadioModel* radio = model(app);
         QCOMPARE(radio->slices().size(), 2);
         QVERIFY(!radio->sliceById(4));
+        QVERIFY(radio->sliceById(0)->streamIndex() != radio->sliceById(2)->streamIndex());
         QCOMPARE(radio->receiveLayoutRestoreState(), QStringLiteral("degraded"));
-        QVERIFY(radio->receiveLayoutRestoreMessage().contains("Receiver 4 (pan-0)"));
-        QVERIFY(radio->receiveLayoutRestoreMessage().contains("outside this pan"));
+        QCOMPARE(radio->receiveLayoutRestoreMessage(),
+                 QStringLiteral("Receiver E (7.2010 MHz LSB) could not be restored because "
+                                "all of the radio's receivers are in use. Add it again with "
+                                "+RX after closing another receiver. Your saved layout is kept."));
         app.stop();
         QCOMPARE(rawLayoutFromDisk(kMacA), original);
+    }
+
+    void refusedRadeReceiverSaysOnceThatItsAudioStaysOff()
+    {
+        // The Rock's two-band pan 0, with a third pan listed ahead of B so
+        // it takes the radio's last receiver. B carried the RADE audio.
+        QString error;
+        QVERIFY2(ReceiveLayoutStore::stage(AppSettings::instance(), kMacA,
+                     {{0, "pan-0", 14290000, DSPMode::USB},
+                      {2, "pan-1", 3700000, DSPMode::LSB},
+                      {1, "pan-0", 7227600, DSPMode::RADE_U}},
+                     &error, std::optional<int>(1)),
+                 qPrintable(error));
+        QVERIFY2(AppSettings::instance().save(&error), qPrintable(error));
+        const QString original = rawLayoutFromDisk(kMacA);
+        DaemonApp app;
+        app.primeBoardForTest(HPSDRHW::HermesLite, kMacA); // two receivers
+        QVERIFY(app.start(configWithCount(1)));
+        RadioModel* radio = model(app);
+        QCOMPARE(radio->slices().size(), 2);
+        QVERIFY(!radio->sliceById(1));
+        QCOMPARE(radio->receiveLayoutRestoreState(), QStringLiteral("degraded"));
+        QCOMPARE(radio->receiveLayoutRestoreMessage(),
+                 QStringLiteral("Receiver B (7.2276 MHz RADE-U) could not be restored because "
+                                "all of the radio's receivers are in use. Add it again with "
+                                "+RX after closing another receiver. RADE audio from receiver "
+                                "B stays off until that receiver is back. Your saved layout "
+                                "is kept."));
+        app.stop();
+        QCOMPARE(rawLayoutFromDisk(kMacA), original);
+    }
+
+    void rockRecordPlacesBothBandsOnPanZero()
+    {
+        // The record the Rock refused at its 14:39 restart, as stored.
+        const QString rock = QStringLiteral(
+            R"({"radeRxOwnerId":1,"slices":[)"
+            R"({"id":0,"panKey":"pan-0","frequencyHz":14290000,"dspMode":1},)"
+            R"({"id":1,"panKey":"pan-0","frequencyHz":7227600,"dspMode":12}],"version":1})");
+        AppSettings::instance().setHardwareValue(AppSettings::normalizedRadioMac(kMacA),
+                                                 QLatin1String(kLayoutKey), rock);
+        QVERIFY(AppSettings::instance().save());
+        DaemonApp app;
+        app.primeBoardForTest(HPSDRHW::Saturn, kMacA); // ANAN-G2, as on the Rock
+        QVERIFY(app.start(configWithCount(1)));
+        RadioModel* radio = model(app);
+        QCOMPARE(radio->slices().size(), 2);
+        QVERIFY(sliceMatches(radio, 0, 14'290'000.0, DSPMode::USB, QStringLiteral("pan-0")));
+        QVERIFY(sliceMatches(radio, 1, 7'227'600.0, DSPMode::RADE_U, QStringLiteral("pan-0")));
+        QVERIFY(radio->sliceById(0)->streamIndex() >= 0);
+        QVERIFY(radio->sliceById(1)->streamIndex() >= 0);
+        QVERIFY(radio->sliceById(1)->streamIndex() != radio->sliceById(0)->streamIndex());
+        QCOMPARE(radio->restoredRadeReceiveOwner(), std::optional<int>(1));
+        // Placement refused nothing. A primed board has no DSP worker, so the
+        // RADE decoder cannot start here, and that is the one thing reported;
+        // tst_daemon_radio_recovery's livePanMoveSurvivesCoreRestart covers
+        // the running path to an accepted restore.
+        QCOMPARE(radio->receiveLayoutRestoreState(), QStringLiteral("degraded"));
+        QCOMPARE(radio->receiveLayoutRestoreMessage(),
+                 QStringLiteral("RADE audio from receiver B stays off because that receiver "
+                                "is not running. Your saved layout is kept."));
+        app.stop();
+        QCOMPARE(rawLayoutFromDisk(kMacA), rock);
     }
 
     void allUnsupportedIdsUseExplicitFallbackWithoutErasingSavedState()
@@ -406,7 +533,10 @@ private slots:
         QCOMPARE(radio->slices().size(), 2);
         QVERIFY(!radio->receiveLayoutOverridesConfiguredCount());
         QCOMPARE(radio->receiveLayoutRestoreState(), QStringLiteral("fallback"));
-        QVERIFY(radio->receiveLayoutRestoreMessage().contains("Receiver 4 (pan-3)"));
+        QCOMPARE(radio->receiveLayoutRestoreMessage(),
+                 QStringLiteral("Receiver E (7.2000 MHz LSB) could not be restored because "
+                                "this radio supports only receivers A and B. Your saved layout "
+                                "is kept."));
         QVERIFY(radio->sliceById(0));
         QVERIFY(radio->sliceById(0)->streamIndex() >= 0);
         QVERIFY(!radio->sliceById(4));

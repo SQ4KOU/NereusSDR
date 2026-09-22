@@ -13,11 +13,16 @@
 #include <optional>
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#include "core/RadeChannel.h"
 #include "core/RadioConnection.h"
 #include "core/P2RadioConnection.h"
+#include "core/ReceiveLayoutStore.h"
+#include "core/RxChannel.h"
 #include "core/WidebandFrameAccumulator.h"
 #include "core/WidebandFftEngine.h"
 #include "core/WdspEngine.h"
+#include "core/session/ObjectRegistry.h"
+#include "core/session/StateMirror.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #define private public
@@ -577,6 +582,142 @@ private slots:
         QCoreApplication::processEvents();
         QVERIFY(!model->connection());
         app.stop();
+    }
+
+    // R-R3-34, native check G1 (2026-09-22). The operator collapsed the GUI
+    // to one pane, which moves a RADE receiver on 40 m onto pan 0 by writing
+    // nothing but its panKey. Core kept that receiver on its own DDC, and the
+    // layout it saved was exactly the Rock's record. The next Core start
+    // forced the receiver into pan 0's 20 m window and refused it. Built from
+    // live use, not a hand-written record, so the saved form is whatever Core
+    // really writes.
+    void livePanMoveSurvivesCoreRestart()
+    {
+        NereusSDR::Test::P2FakeRadio fake;
+        QVERIFY(fake.start());
+        RadioInfo info = fake.radioInfo();
+        info.name = QStringLiteral("Fake P2 ANAN-G2");
+        info.boardType = HPSDRHW::Saturn; // ANAN-G2 capability row: five receivers
+        DaemonConfig cfg = DaemonConfig::defaults();
+        cfg.radioMac = info.macAddress;
+        cfg.sliceCount = 1;
+        cfg.sampleRateHz = 48000;
+
+        QTimer ingress;
+        ingress.setInterval(5);
+        connect(&ingress, &QTimer::timeout, &fake, [&fake]() {
+            if (fake.hasClient()) {
+                fake.sendDdc(2);
+                fake.sendDdc(3);
+                fake.sendStatus();
+            }
+        });
+        ingress.start();
+        const auto startDaemon = [&](DaemonApp& app) -> RadioModel* {
+            prepare(app);
+            app.m_discoveryProviderForTest = [info]() { return QList<RadioInfo>{info}; };
+            if (!app.start(cfg)) {
+                return nullptr;
+            }
+            // Discovery completes on a later event-loop turn, so the loopback
+            // ports are in place before the connection is created. The
+            // timeouts are the production ones.
+            app.m_radioModel->configureP2TransportForTest(
+                fake.outboundPortBase(), fake.inputRolePortBase(), 2000, 3000);
+            return app.m_radioModel.get();
+        };
+
+        {
+            DaemonApp app;
+            RadioModel* const model = startDaemon(app);
+            QVERIFY(model);
+            QTRY_VERIFY_WITH_TIMEOUT(model->isConnected(), 15000);
+            QTRY_COMPARE(app.sliceCount(), 1);
+            QTRY_COMPARE(model->receiveLayoutRestoreState(), QStringLiteral("accepted"));
+            SliceModel* const a = model->sliceById(0);
+            QVERIFY(a);
+            QCOMPARE(model->addSlice(QStringLiteral("pan-1")), 1);
+            SliceModel* const b = model->sliceById(1);
+            QVERIFY(b);
+
+            {
+                // A GUI edit reaches Core as StationServer::handlePropertyWrite
+                // -> StateMirror::applyInbound, over the same StateMirror and
+                // ObjectRegistry pair StationServer builds for the session.
+                StateMirror mirror;
+                ObjectRegistry registry(model, &mirror);
+                registry.backfillExistingSlices();
+                const auto write = [&mirror](int id, const QByteArray& property,
+                                             const QVariant& value) {
+                    return mirror.applyInbound(ObjectRegistry::keyForSlice(id),
+                                               property, value);
+                };
+                QVERIFY(write(0, "frequency", 14'290'000.0).accepted);
+                QVERIFY(write(0, "dspMode", int(DSPMode::USB)).accepted);
+                QVERIFY(write(1, "frequency", 7'227'600.0).accepted);
+                QVERIFY(write(1, "dspMode", int(DSPMode::RADE_U)).accepted);
+                // MainWindow::applyPanLayout("1") -> rehomeSlicesToPans writes
+                // only panKey on each remote slice.
+                QVERIFY(write(1, "panKey", QStringLiteral("pan-0")).accepted);
+            }
+
+            // The move is a label change: B keeps its own receiver running.
+            QCOMPARE(b->panKey(), QStringLiteral("pan-0"));
+            QCOMPARE(b->frequency(), 7'227'600.0);
+            QCOMPARE(b->dspMode(), DSPMode::RADE_U);
+            QVERIFY(a->streamIndex() >= 0);
+            QVERIFY(b->streamIndex() >= 0);
+            QVERIFY(b->streamIndex() != a->streamIndex());
+            RxChannel* const bChannel = model->wdspEngine()->rxChannel(1);
+            QVERIFY(bChannel && bChannel->isActive());
+            QCOMPARE(model->restoredRadeReceiveOwner(), std::optional<int>(1));
+            RadeChannel* const bRade = model->wdspEngine()->radeChannel(1);
+            QVERIFY(bRade && bRade->isActive());
+            app.stop();
+        }
+
+        // What a process restart reads: the file, not this process's memory.
+        AppSettings::instance().clear();
+        AppSettings::instance().load();
+        const auto saved = ReceiveLayoutStore::load(AppSettings::instance(), info.macAddress);
+        QCOMPARE(static_cast<int>(saved.state),
+                 static_cast<int>(ReceiveLayoutStore::LoadState::Loaded));
+        QCOMPARE(saved.radeRxOwnerId, std::optional<int>(1));
+        QCOMPARE(saved.slices.size(), 2);
+        QCOMPARE(saved.slices.at(0).id, 0);
+        QCOMPARE(saved.slices.at(0).panKey, QStringLiteral("pan-0"));
+        QCOMPARE(saved.slices.at(0).frequencyHz, 14'290'000.0);
+        QCOMPARE(saved.slices.at(0).dspMode, DSPMode::USB);
+        QCOMPARE(saved.slices.at(1).id, 1);
+        QCOMPARE(saved.slices.at(1).panKey, QStringLiteral("pan-0"));
+        QCOMPARE(saved.slices.at(1).frequencyHz, 7'227'600.0);
+        QCOMPARE(saved.slices.at(1).dspMode, DSPMode::RADE_U);
+
+        {
+            DaemonApp app;
+            RadioModel* const model = startDaemon(app);
+            QVERIFY(model);
+            QTRY_VERIFY_WITH_TIMEOUT(model->isConnected(), 15000);
+            QTRY_COMPARE(model->receiveLayoutRestoreState(), QStringLiteral("accepted"));
+            QVERIFY2(model->receiveLayoutRestoreMessage().isEmpty(),
+                     qPrintable(model->receiveLayoutRestoreMessage()));
+            QCOMPARE(model->slices().size(), 2);
+            SliceModel* const a = model->sliceById(0);
+            SliceModel* const b = model->sliceById(1);
+            QVERIFY(a && b);
+            QCOMPARE(a->frequency(), 14'290'000.0);
+            QCOMPARE(a->dspMode(), DSPMode::USB);
+            QCOMPARE(b->frequency(), 7'227'600.0);
+            QCOMPARE(b->dspMode(), DSPMode::RADE_U);
+            QCOMPARE(b->panKey(), QStringLiteral("pan-0"));
+            QVERIFY(a->streamIndex() >= 0);
+            QVERIFY(b->streamIndex() >= 0);
+            QVERIFY(b->streamIndex() != a->streamIndex());
+            QCOMPARE(model->restoredRadeReceiveOwner(), std::optional<int>(1));
+            RadeChannel* const bRade = model->wdspEngine()->radeChannel(1);
+            QVERIFY(bRade && bRade->isActive());
+            app.stop();
+        }
     }
 };
 
