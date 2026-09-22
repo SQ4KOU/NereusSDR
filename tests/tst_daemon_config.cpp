@@ -43,6 +43,38 @@ using namespace NereusSDR;
 class TstDaemonConfig : public QObject {
     Q_OBJECT
 private slots:
+    void rejectsMalformedRadioIdentityBeforeStartingListener()
+    {
+        DaemonConfig cfg = DaemonConfig::defaults();
+        QString error;
+        for (const QString& value : {QString(), QStringLiteral("aa:BB:01:02:03:04")}) {
+            cfg.radioMac = value;
+            QVERIFY(cfg.validate(&error));
+        }
+        for (const QString& value : {QStringLiteral("aa:bb:cc"), QStringLiteral("gg:01:02:03:04:05"),
+                                    QStringLiteral("aa-bb-cc-dd-ee-ff"), QStringLiteral("aa:bb:cc:dd:ee:ff\n")}) {
+            cfg.radioMac = value;
+            QVERIFY(!cfg.validate(&error));
+            QVERIFY(error.contains(QStringLiteral("radio_mac")));
+        }
+    }
+
+    void coreNameBoundsUseUtf8Bytes()
+    {
+        DaemonConfig cfg = DaemonConfig::defaults();
+        QString error;
+        cfg.coreName = QString::fromUtf8("🛰 Shack");
+        QVERIFY(cfg.validate(&error));
+        cfg.coreName = QString(128, QLatin1Char('A'));
+        QVERIFY(cfg.validate(&error));
+        cfg.coreName = QString(65, QChar(0x00e9));
+        QVERIFY(!cfg.validate(&error));
+        cfg.coreName = QStringLiteral("Shack\nForged");
+        QVERIFY(!cfg.validate(&error));
+        cfg.coreName = QString(QChar(0xd800));
+        QVERIFY(!cfg.validate(&error));
+    }
+
     void defaultsAreValid()
     {
         QString err;
@@ -149,6 +181,7 @@ private slots:
             // AND the sample file.
             QStringLiteral("remote_port"),
             QStringLiteral("remote_bind"),
+            QStringLiteral("core_name"),
             QStringLiteral("display_application_bytes_per_second"),
             QStringLiteral("spectrum_sample_units_per_second"),
         };
@@ -165,6 +198,7 @@ private slots:
                 "audio_device = default\n"
                 "remote_port = 4711\n"
                 "remote_bind = 0.0.0.0\n"
+                "core_name = Rock 5C\n"
                 "display_application_bytes_per_second = 2400000\n"
                 "spectrum_sample_units_per_second = 1800000\n");
         f.flush();
@@ -177,6 +211,7 @@ private slots:
         QCOMPARE(c.audioDevice, QStringLiteral("default"));
         QCOMPARE(c.remotePort, 4711);
         QCOMPARE(c.remoteBind, QStringLiteral("0.0.0.0"));
+        QCOMPARE(c.coreName, QStringLiteral("Rock 5C"));
         const std::optional<DisplayBudgetLimits> limits = c.displayBudgetLimits();
         QVERIFY(limits.has_value());
         QCOMPARE(limits->applicationBytesPerSecond, quint64(2400000));

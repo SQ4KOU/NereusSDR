@@ -90,8 +90,10 @@ new priority, not a substitution for the full plan.
    reachability guidance and documentation. Basic usable selection is step 2,
    rather than being held for this final phase.
 
-Installed matching Core/GUI remains `55e7d49f`. Source completion, deployment,
-and operator acceptance are separate evidence. R4 remains part of the objective;
+The last matching installed Core/GUI checkpoint was `55e7d49f`. After a reboot,
+empty installation files required restoring the verified `3402d171` Core; the
+matching selector installation is pending (see its evidence). Source completion,
+deployment and operator acceptance are separate evidence. R4 remains part of the objective;
 R3's current TX-disabled runtime is an intermediate boundary, not the product's
 final feature scope.
 
@@ -864,11 +866,17 @@ R-R3-10/16/17/21/38. **Existing design:** identity/pairing §6 already specifies
 “Radios on this network”, “Stations on this network”, and “Your stations”.
 This is completion of that product flow, not a new competing connection design.
 
-**Current evidence:** `MainWindow` constructs either a Local or Remote model
-from `RemoteStationOptions`; both are built into the existing desktop. The
-local `ConnectionPanel` lists radios, while `RemoteConnectionPanel` only handles
-one configured Core. Setup stores one URL/token/fingerprint tuple and explicitly
-requires the next launch to change roles. No complete station picker is claimed.
+**Current evidence:** the unified Connections screen and session coordinator
+are implemented in the desktop. They expose local radios, saved Core/radio pairs
+and untrusted LAN announcements, with explicit connect/disconnect/retry actions.
+The desktop retains its embedded Core/DSP. Saved targets migrate the previous
+single-station tuple without weakening its pin/token contract. Whole-session
+switching, actual two-Core/TLS tests and widget renders pass. Matching GUI/Core
+and all-tests build passes with 738/738 CTest executables; installed hardware
+acceptance remains open and is tracked in the
+[selector evidence](2026-09-20-remote-daemon-r3-verification/station-selection.md).
+See the [design](2026-09-22-station-selection-design.md) and
+[implementation steps](2026-09-22-station-selection-plan.md).
 
 **Expected presentation:** each remote entry identifies both the Core and its
 radio, for example “Rock 5C → Saturn G2”, with Core connectivity distinct from
@@ -877,17 +885,17 @@ an existing pair does not silently reconfigure which radio its Core owns. Core
 radio reassignment, if offered, needs a separate authoritative station command
 and identity/ownership acceptance. Persist client credentials locally.
 
-- [ ] Produce the concrete selection design and implementation steps from the
+- [x] Produce the concrete selection design and implementation steps from the
   existing panels, startup, settings-proxy and station-lifecycle source. Include
   a reviewable screen layout and explicit switching/error states.
-- [ ] Implement saved targets and explicit local/remote selection; migrate the
+- [x] Implement saved targets and explicit local/remote selection; migrate the
   existing configured station without losing its trust information. Keep the
   existing pinned TLS/token contract until the identity/pairing migration is
   implemented; a basic picker must not weaken authentication.
-- [ ] Add Core discovery and Core/radio identity presentation from the existing
+- [x] Add Core discovery and Core/radio identity presentation from the existing
   dual-stack discovery design. Distinguish advertised/cached labels from the
   authenticated current station snapshot and keep manual address entry useful.
-- [ ] Connect all entry points to the selector. Switching retires the old
+- [x] Connect all entry points to the selector. Switching retires the old
   control/media session, retries, model/render ownership and settings proxy
   before activating the new local or remote target. No overlapping radio owner,
   stale callback, credential crossover or accidental switch on an offline row.
@@ -1279,6 +1287,7 @@ whole-plan review loops.
 | Tuning waterfall continuity | Visual regression corrected; focused tests pass | R-R3-04/09/10: subscription/context renewal preserves painted 2D/3D history while rejecting stale incoming planes; accepted RF geometry reprojects existing rows. Full-suite and live tuning gates remain recorded in the verification ledger. |
 | Remote C-Tune control parity | R-R3-18 installed at `501b2701`; reported gestures accepted | Authenticated stream pin/centre commands, stream-lifetime guards, gesture-time pan selection, refusal rollback and reducer initialization pass the 681/681 combined suite. Matching Core/GUI are running; operator confirmed both wheel tuning and in-band scale zoom behave smoothly. Broader multi-slice hardware checks remain in task 6. |
 | Wideband zoom parity | R-R3-20 source integration implemented; full acceptance open | Core now composes tagged ADC wings with the DDC island in negotiated display rows; GUI admits the descriptor, restores the source zoom ceiling and preserves history. Twelve focused checks pass. Total-session allocation, native ARM installation and real Saturn RF/filter/gesture/network/audio evidence remain pending; the installed build still has the DDC-only limit. See [contract](2026-09-22-remote-wideband-design.md). |
+| Core/radio and local-radio selector | R-R3-38 implemented; installation acceptance pending | Unified Connections, saved-target migration, actual two-Core/TLS switching and embedded local Core are implemented. Consolidated source review corrections are complete; native multicast, renderer retirement and operator use remain open. See [evidence](2026-09-20-remote-daemon-r3-verification/station-selection.md). |
 | Session display capacity | R-R3-37 software verified; hardware limits pending | Active pan priority, deterministic quality reduction/restoration, Core byte/sample pacing and PS3 accounting pass focused controller tests. Consolidated review findings are resolved; matching GUI/Core build and unfiltered 730/730 suite pass. Production values and Rock/Pi hardware acceptance remain open; see [evidence](2026-09-20-remote-daemon-r3-verification/display-capacity.md). |
 | Applet S-meter | Live applet/flag agreement at `706b9a5f` | Matching -65 dBm observed after automatic Core restart recovery; prior no-signal reports remain documented with their source/connection failures. Sustained acceptance remains open. |
 | BPF and Auto AGC-T indicators | Source implementation and focused tests pass | R-R3-14/15: station filter snapshot/reconnect, headless per-stream AGC source, active-applet/flag bindings implemented; live 20m filter and AGC floor observed, complete band/reconnect acceptance pending |

@@ -617,6 +617,11 @@ private slots:
 
         QWidget* page = dialog.realizePageForTest(QStringLiteral("Remote Station"));
         QVERIFY(page != nullptr);
+        QSignalSpy requests(&dialog, &SetupDialog::connectionsRequested);
+        auto* button = page->findChild<QPushButton*>(QStringLiteral("remoteStationConnections"));
+        QVERIFY(button);
+        button->click();
+        QCOMPARE(requests.count(), 1);
         QVERIFY2(page->isEnabled(),
                  "the Remote Station page was disabled by the local-DSP gate; "
                  "it must not touch this process's DSP at all");

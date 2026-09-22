@@ -544,9 +544,7 @@ bool StationClient::ensurePinSatisfied()
     const QString pinned = m_lastFingerprint.toUpper();
     const QString actual = formatFingerprint(peer.digest(QCryptographicHash::Sha256));
     if (actual != pinned) {
-        m_lastError = QStringLiteral("Station certificate fingerprint does not match. "
-                                     "Expected %1, got %2.")
-                          .arg(pinned, actual);
+        m_lastError = QStringLiteral("Station certificate fingerprint does not match the saved pin.");
         qCWarning(lcStationClient) << m_lastError;
         // See the ordering note above: endSession, then abort.
         endSession(m_lastError, /*attemptReconnect=*/false);

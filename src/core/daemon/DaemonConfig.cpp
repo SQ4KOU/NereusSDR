@@ -11,6 +11,7 @@
 #include "core/LogCategories.h"
 
 #include <QFile>
+#include <QRegularExpression>
 #include <QTextStream>
 
 namespace NereusSDR {
@@ -99,6 +100,8 @@ DaemonConfig DaemonConfig::fromFile(const QString& path, QString* errorOut)
                                   << "remote_port is not a number, keeping"
                                   << cfg.remotePort << ":" << value;
             }
+        } else if (key == QLatin1String("core_name")) {
+            cfg.coreName = value;
         } else if (key == QLatin1String("remote_bind")) {
             cfg.remoteBind = value;
         } else if (key == QLatin1String("display_application_bytes_per_second")
@@ -125,6 +128,20 @@ DaemonConfig DaemonConfig::fromFile(const QString& path, QString* errorOut)
 
 bool DaemonConfig::validate(QString* errorOut) const
 {
+    static const QRegularExpression radioMacPattern(QStringLiteral("\\A(?:[0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}\\z"));
+    if (!radioMac.isEmpty() && !radioMacPattern.match(radioMac).hasMatch()) {
+        if (errorOut) { *errorOut = QStringLiteral("radio_mac must be empty or six colon-separated hexadecimal pairs"); }
+        return false;
+    }
+    const QByteArray nameBytes = coreName.toUtf8();
+    bool invalidName = nameBytes.size() > 128 || QString::fromUtf8(nameBytes) != coreName;
+    for (QChar character : coreName) {
+        invalidName = invalidName || character.category() == QChar::Other_Control;
+    }
+    if (invalidName) {
+        if (errorOut) { *errorOut = QStringLiteral("core_name must be valid UTF-8 without control characters, at most 128 bytes"); }
+        return false;
+    }
     if ((displayApplicationBytesPerSecond || spectrumSampleUnitsPerSecond)
         && !displayBudgetLimits()) {
         if (errorOut) {

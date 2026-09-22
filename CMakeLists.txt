@@ -1085,6 +1085,10 @@ set(CORE_SOURCES
     src/core/session/SessionTransport.cpp
     src/core/session/StationCapabilities.cpp
     src/core/session/StationServer.cpp
+    src/core/session/StationLanAnnouncement.cpp
+    src/core/session/StationLanCache.cpp
+    src/core/session/StationLanDiscovery.cpp
+    src/core/session/StationLanAnnouncer.cpp
     src/core/session/StationClient.cpp
     # R3 media transport, signalling, display, spectrum, and Opus building
     # blocks. IMediaTransport carries Q_OBJECT and is listed so AUTOMOC emits
@@ -1178,6 +1182,13 @@ set(GUI_SOURCES
     src/gui/RemoteTelemetryController.cpp
     src/gui/RemoteDiagnosticsDialog.cpp
     src/gui/RemoteConnectionController.cpp
+    src/gui/CoreTargetStore.cpp
+    src/gui/StationStartupSelection.cpp
+    src/gui/StationLanSelection.cpp
+    src/gui/GuiSessionCoordinator.cpp
+    src/gui/GuiConnectionController.cpp
+    src/gui/ConnectionSelector.cpp
+    src/gui/CoreTargetEditor.cpp
     src/gui/AmpViewChart.cpp
     src/gui/AmpViewWindow.cpp
     src/gui/DspAssetDialog.cpp

@@ -349,11 +349,13 @@ bool StationServer::listen(const QHostAddress& address, quint16 port)
 
     qCInfo(lcStation) << "Station listening on wss://" << address.toString() << ":"
                       << m_wsServer->serverPort();
+    emit listeningChanged(true);
     return true;
 }
 
 void StationServer::close()
 {
+    const bool wasListening = isListening();
     const QList<SessionTransport*> transports = m_peers.keys();
     for (SessionTransport* transport : transports) {
         dropPeer(transport, QStringLiteral("station shutting down"), true,
@@ -368,6 +370,7 @@ void StationServer::close()
     if (m_deltaFlushTimer != nullptr) {
         m_deltaFlushTimer->stop();
     }
+    if (wasListening) { emit listeningChanged(false); }
 }
 
 bool StationServer::isListening() const
@@ -378,6 +381,11 @@ bool StationServer::isListening() const
 quint16 StationServer::serverPort() const
 {
     return m_wsServer != nullptr ? m_wsServer->serverPort() : 0;
+}
+
+QHostAddress StationServer::serverAddress() const
+{
+    return isListening() ? m_wsServer->serverAddress() : QHostAddress{};
 }
 
 QString StationServer::token() const

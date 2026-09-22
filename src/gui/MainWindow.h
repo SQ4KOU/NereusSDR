@@ -159,6 +159,7 @@ class MainWindow : public QMainWindow {
     Q_OBJECT
 
 public:
+    enum class ConnectionStartup { Automatic, Deferred };
     explicit MainWindow(QWidget* parent = nullptr);
 
     /// Remote-daemon R2 Task 20: the remote-station overload.
@@ -185,8 +186,21 @@ public:
     /// window, and tst_remote_gui_gating pins that nothing in RadioModel
     /// construction flips ready().
     explicit MainWindow(const RemoteStationOptions& station,
-                        QWidget* parent = nullptr);
+                        QWidget* parent = nullptr,
+                        ConnectionStartup startup = ConnectionStartup::Automatic);
     ~MainWindow() override;
+
+    // R-R3-38: construct each immutable-role session before starting it.
+    // Only the coordinator uses retirement; ordinary Close still quits.
+    void startInitialConnection();
+    void retireForSessionSwitch();
+    void setConnectionPickerManaged(bool managed);
+    RadioModel* radioModel() const { return m_radioModel; }
+
+signals:
+    void connectionsRequested();
+
+public:
 
     // ── Phase 3M-0 Task 14 test accessors ────────────────────────────────
     // TX Inhibit no longer has a label of its own. It paints onto the TX
@@ -413,6 +427,7 @@ private slots:
     /// frequencies arrive already resolved in the emitting pan's own
     /// frequency mapping, so nothing here consults an active pan.
     void onNotchCreateRequested(const QString& panId, double freqHz, bool narrow);
+    void onPanNotchCreateRequested(double freqHz, bool narrow);
     void onNotchMoveRequested(int id, double newFreqHz);
     void onNotchWidthRequested(int id, double widthHz);
     void onNotchActiveRequested(int id, bool active);
@@ -667,6 +682,7 @@ private slots:
                                 double dbmOffset);
 
 private:
+    void ensureRemoteSession();
     void buildUI();
     void buildMenuBar();
     void buildStatusBar();
@@ -874,6 +890,9 @@ private:
     class RemoteConnectionPanel* m_remoteConnectionPanel{nullptr};
     QString m_lastReceiveLayoutWarning;
     bool m_stationDisconnectRequested{false};
+    bool m_initialConnectionStarted{false};
+    bool m_retiringSession{false};
+    bool m_connectionPickerManaged{false};
 
     // Phase 3M-4 Task 8: PsForm modeless dialog (Tools > PureSignal...).
     // Lazy-constructed on first openPureSignalDialog() call; lives for the

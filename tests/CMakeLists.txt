@@ -6694,6 +6694,17 @@ nereus_add_test(tst_remote_gui_gating)
 target_compile_definitions(tst_remote_gui_gating PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_remote_connection_controls fakes/LoopbackTransport.cpp)
 
+# R-R3-38: client-only saved Core credentials and coherent CLI selection.
+nereus_add_test(tst_core_target_store)
+nereus_add_test(tst_station_startup_selection)
+nereus_add_test(tst_gui_session_coordinator)
+target_compile_definitions(tst_gui_session_coordinator PRIVATE NEREUS_BUILD_TESTS)
+nereus_add_test(tst_connection_selector)
+nereus_add_test(tst_station_lan_cache)
+nereus_add_test(tst_station_lan_transport)
+nereus_add_test(tst_station_lan_selection)
+nereus_add_test(tst_gui_connection_controller)
+
 # Remote Daemon R3 R-R3-30: a secondary slice flag may be destroyed and
 # replaced while its SliceModel and MainWindow remain alive during a pan-layout
 # rehome. Every direct model-to-flag presentation edge must therefore share the

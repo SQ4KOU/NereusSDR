@@ -36,7 +36,7 @@ Focused checks on macOS 27.0 / Qt 6.11:
 | Consolidated independent source review | Four findings corrected, regression-covered; no remaining blocking source finding |
 | Matching GUI/Core/all-tests build and unfiltered full suite | Passed: 730/730 CTest targets, 286.68 s |
 | Signed local checkpoint | `fc129a39`, verified GPG signature; mandatory hooks passed |
-| Matching post-checkpoint build identity | Pending refresh |
+| Matching post-checkpoint build identity | GUI/Core rebuilt at signed roadmap checkpoint `3031a2f5`; generated header and actual GUI binary carry the matching tag |
 
 Review corrections cover retirement during a pending subscribe, authoritative
 zero-charge retirement at the latest operation revision, failed source-update
@@ -83,5 +83,6 @@ ctest --test-dir build-integration -j6 --output-on-failure
   application traffic from encrypted/network overhead.
 
 This source increment has not been deployed or manually exercised on the radio.
-The installed matching Core/GUI remains `55e7d49f`. It does not complete R3 or the
+The installed matching Core/GUI was `55e7d49f` at this source checkpoint; later
+recovery is recorded in [selector evidence](station-selection.md). This does not complete R3 or the
 entire Core/GUI plan, and makes no NAT-traversal, TX, or production-capacity claim.

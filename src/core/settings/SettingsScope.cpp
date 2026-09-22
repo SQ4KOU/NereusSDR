@@ -302,6 +302,10 @@ const Rule kPrefixes[] = {
     // bare default so a future reader sees this was reviewed, not missed.
     { "radios/", SettingsScope::OperatorLocal },
 
+    // R-R3-38: client target selection and each Core's trust tuple never
+    // belong to the selected station's settings snapshot.
+    { "ConnectionTargets/", SettingsScope::OperatorLocal },
+
     // PGXL / TGXL / RF2K-S: physically attached to the station (the
     // amplifier/tuner sits at the radio site, not on an operator's
     // remote laptop). Connection config, pairing state, identity/nickname,

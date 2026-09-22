@@ -118,6 +118,7 @@ namespace NereusSDR {
 
 class RadioModel;
 class StationServer;
+class StationLanAnnouncer;
 class DaemonMediaController;
 class DaemonTelemetryController;
 class DaemonAgcSource;
@@ -273,6 +274,7 @@ signals:
 
 private:
     // R-R3-27/29: control remains available while discovery runs elsewhere.
+    void updateStationAnnouncement();
     void attemptRadioDiscovery();
     void finishRadioDiscovery(const QList<RadioInfo>& found);
     void scheduleRadioDiscovery();
@@ -405,6 +407,7 @@ private:
     // live peer sockets that must be told the station is going away while
     // there is still a station to speak for.
     std::unique_ptr<StationServer> m_stationServer;
+    std::unique_ptr<StationLanAnnouncer> m_stationAnnouncer;
     QTimer* m_stationListenRetryTimer {nullptr};
     int m_stationListenRetryInitialMs {1000};
     int m_stationListenRetryMaximumMs {30000};

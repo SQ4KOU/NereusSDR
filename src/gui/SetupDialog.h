@@ -57,6 +57,7 @@ public:
     void setTciServer(class NereusSDR::TciServer* server);
 
 signals:
+    void connectionsRequested();
     // Phase 3M-3a-ii Batch 6 (Task 3): forwarded from CfcSetupPage's
     // [Configure CFC bands…] button.  MainWindow connects this to the
     // TxApplet::requestOpenCfcDialog() slot so the modeless TxCfcDialog

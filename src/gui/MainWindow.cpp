@@ -481,7 +481,8 @@ MainWindow::MainWindow(QWidget* parent)
     // used for RadioModel's own two constructors.
 }
 
-MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent)
+MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
+                       ConnectionStartup startup)
     : QMainWindow(parent)
     , m_station(station)
     , m_radioModel(new RadioModel(m_station.isRemote() ? RadioModel::Role::Remote
@@ -638,6 +639,10 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent)
         // instead of opening the connection panel (Codex P2 review
         // against PR #158, MainWindow.cpp:482).
         connect(seg, &ConnectionSegment::rttClicked, this, [this]() {
+            if (m_connectionPickerManaged) {
+                connectionRequestedByOperator();
+                return;
+            }
             if (!m_radioModel->ownsLocalDsp()) {
                 if (m_stationClient && m_stationClient->isHandshakeComplete()) {
                     openNetworkDiagnostics();
@@ -780,19 +785,9 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent)
         }
     });
 
-    // Remote-daemon R2 Task 20: neither of the next two runs on a remote
-    // client. Discovery would flood the LAN looking for a radio this
-    // process must not dial, and tryAutoReconnect() ends in
-    // connectToRadio() -- which early-returns on a Role::Remote model but
-    // only after opening the connection panel on its failure paths.
-    if (m_radioModel->ownsLocalDsp()) {
-        // Start discovery in background so radios are found before the user opens the panel
-        m_radioModel->discovery()->startDiscovery();
-
-        // Auto-reconnect to last radio — deferred so the event loop is running
-        // before any signal/slot activity (e.g. discovery radioDiscovered).
-        QTimer::singleShot(0, this, &MainWindow::tryAutoReconnect);
-    }
+    // R-R3-38: local discovery/auto-connect starts in startInitialConnection,
+    // after the coordinator has retired the previous window and installed
+    // this one. Standalone construction retains Automatic startup below.
 
     // Phase 3J-2 + 3R M3: restore each spot client's auto-connect /
     // auto-start state. Sibling to tryAutoReconnect above; deferred via
@@ -928,20 +923,78 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent)
     // already had its say. It is a no-op in local direct mode.
     applyRemoteRoleGating();
 
-    if (m_station.isRemote()) {
-        connectToStation();
-    }
+    ensureRemoteSession();
+    if (startup == ConnectionStartup::Automatic) { startInitialConnection(); }
 }
 
 MainWindow::~MainWindow()
 {
+    m_shuttingDown = true;
+    // QWidget deletes children after this class's members are destroyed.
+    // A toast's destroyed callback edits m_toasts, so retire it while that
+    // list is still alive. Otherwise station replacement corrupts freed
+    // memory whenever a connection/retry notice is still visible.
+    while (!m_toasts.isEmpty()) {
+        const QPointer<StatusToast> toast = m_toasts.takeLast();
+        if (toast) {
+            disconnect(toast, nullptr, this, nullptr);
+            delete toast.data();
+        }
+    }
+    if (m_stationClient) {
+        m_stationClient->disconnectFromStation(QStringLiteral("client shutting down"));
+    }
     delete m_remoteTelemetry;
     m_remoteTelemetry = nullptr;
     // Join remote playback before QObject destroys the earlier-created
     // RadioModel child and its speaker AudioEngine.
     delete m_remoteMedia;
     m_remoteMedia = nullptr;
+    delete m_remoteConnectionPanel;
+    m_remoteConnectionPanel = nullptr;
+    delete m_remoteConnection;
+    m_remoteConnection = nullptr;
+    delete m_stationClient;
+    m_stationClient = nullptr;
     if (m_panStack) { m_panStack->prepareShutdown(); }
+}
+
+void MainWindow::startInitialConnection()
+{
+    if (m_shuttingDown || m_initialConnectionStarted) { return; }
+    m_initialConnectionStarted = true;
+    if (m_station.isRemote()) {
+        connectToStation();
+    } else {
+        m_radioModel->discovery()->startDiscovery();
+        QTimer::singleShot(0, this, &MainWindow::tryAutoReconnect);
+    }
+}
+
+void MainWindow::retireForSessionSwitch()
+{
+    m_retiringSession = true;
+    // closeEvent includes saved geometry, FFT worker retirement and orderly
+    // disconnect. Explicitly send it even for an unshown startup window.
+    QCloseEvent event;
+    closeEvent(&event);
+    hide();
+}
+
+void MainWindow::setConnectionPickerManaged(bool managed)
+{
+    m_connectionPickerManaged = managed;
+    if (managed && m_actConnect) {
+        m_actConnect->setEnabled(true);
+        m_actConnect->setToolTip(tr("Choose a Core/radio pair or a radio for this computer"));
+    }
+    if (m_actManageRadios) {
+        m_actManageRadios->setText(managed ? tr("&Connections…") : tr("&Manage Radios…"));
+        m_actManageRadios->setToolTip(managed
+            ? tr("Choose a Core/radio pair or a radio for this computer")
+            : tr("Open the Connection Panel (radio list + ↻ Scan)"));
+    }
+    applyRemoteRoleGating();
 }
 
 // ---------------------------------------------------------------------------
@@ -956,13 +1009,20 @@ MainWindow::~MainWindow()
 // ---------------------------------------------------------------------------
 void MainWindow::connectToStation()
 {
-    if (!m_station.isRemote() || m_radioModel == nullptr) {
+    if (m_shuttingDown || !m_station.isRemote() || m_radioModel == nullptr) {
         return;
     }
 
     if (m_stationClient != nullptr && m_stationClient->isConnectionActive()) {
         return;
     }
+    ensureRemoteSession();
+    if (m_remoteConnection) { m_remoteConnection->connectToStation(); }
+}
+
+void MainWindow::ensureRemoteSession()
+{
+    if (!m_station.isRemote() || !m_radioModel || m_shuttingDown) { return; }
     // A manual reconnect must reuse the same client, model attachment and
     // media controller. Their per-session state is retired by StationClient.
     if (m_stationClient == nullptr) {
@@ -1011,8 +1071,8 @@ void MainWindow::connectToStation()
                 Qt::QueuedConnection);
 
         connect(m_stationClient, &StationClient::handshakeComplete, this, [this]() {
-            qCInfo(lcConnection) << "Station handshake complete:" << m_station.url;
-            showToast(tr("Connected to station %1").arg(m_station.url),
+            qCInfo(lcConnection) << "Station handshake complete:" << m_remoteConnection->endpointText();
+            showToast(tr("Connected to station %1").arg(m_remoteConnection->endpointText()),
                       ToastSeverity::Info, 3000);
         });
         const auto explainReceiveLayout = [this] {
@@ -1082,7 +1142,6 @@ void MainWindow::connectToStation()
         });
     }
 
-    m_remoteConnection->connectToStation();
 }
 
 void MainWindow::disconnectFromStation()
@@ -1098,6 +1157,11 @@ void MainWindow::disconnectFromStation()
 
 void MainWindow::connectionRequestedByOperator()
 {
+    if (m_shuttingDown) { return; }
+    if (m_connectionPickerManaged) {
+        emit connectionsRequested();
+        return;
+    }
     if (!m_station.isRemote()) {
         showConnectionPanel();
         return;
@@ -2191,16 +2255,11 @@ void MainWindow::wirePanNotchHandlers()
         connect(applet, &PanadapterApplet::activeSliceChanged,
                 this, &MainWindow::refreshPanNotchMinWidth,
                 Qt::UniqueConnection);
-        // The pan identity is bound here rather than added to the signal:
-        // SpectrumWidget does not know its own pan id, and the wiring loop
-        // does. Without it the handler would fall back to activeSlice(), which
-        // is not necessarily the slice on the pan that was clicked. Codex
-        // review of PR #313.
-        const QString panId = applet->panId();
-        connect(sw, &SpectrumWidget::notchCreateRequested, this,
-                [this, panId](double freqHz, bool narrow) {
-                    onNotchCreateRequested(panId, freqHz, narrow);
-                },
+        // UniqueConnection requires a member slot. Qt rejects a lambda
+        // here (and asserts in Debug), leaving notch-create disconnected.
+        // Resolve the emitting pan at delivery, never through activeSlice.
+        connect(sw, &SpectrumWidget::notchCreateRequested,
+                this, &MainWindow::onPanNotchCreateRequested,
                 Qt::UniqueConnection);
         connect(sw, &SpectrumWidget::notchMoveRequested,
                 this, &MainWindow::onNotchMoveRequested,
@@ -2220,6 +2279,18 @@ void MainWindow::wirePanNotchHandlers()
         connect(sw, &SpectrumWidget::notchRemoveRequested,
                 this, &MainWindow::onNotchRemoveRequested,
                 Qt::UniqueConnection);
+    }
+}
+
+void MainWindow::onPanNotchCreateRequested(double freqHz, bool narrow)
+{
+    SpectrumWidget* sw = qobject_cast<SpectrumWidget*>(sender());
+    if (!sw || !m_panStack) { return; }
+    for (PanadapterApplet* applet : m_panStack->allApplets()) {
+        if (applet && applet->spectrumWidget() == sw) {
+            onNotchCreateRequested(applet->panId(), freqHz, narrow);
+            return;
+        }
     }
 }
 
@@ -6475,6 +6546,10 @@ void MainWindow::buildMenuBar()
     m_actConnect = radioMenu->addAction(QStringLiteral("&Connect"),
         QKeySequence(Qt::CTRL | Qt::Key_K),
         this, [this]() {
+            if (m_connectionPickerManaged) {
+                connectionRequestedByOperator();
+                return;
+            }
             if (!m_radioModel->ownsLocalDsp()) {
                 connectToStation();
                 return;
@@ -6606,7 +6681,7 @@ void MainWindow::buildMenuBar()
         const QString lastMac = s.lastConnected();
         const bool hasReconnectTarget =
             !lastMac.isEmpty() && s.savedRadio(lastMac).has_value();
-        m_actConnect->setEnabled(hasReconnectTarget);
+        m_actConnect->setEnabled(m_connectionPickerManaged || hasReconnectTarget);
     }
     m_actDisconnect->setEnabled(false);
     m_actProtocolInfo->setEnabled(false);
@@ -8653,7 +8728,7 @@ StatusToast* MainWindow::showToast(const QString& message,
                                    ToastSeverity severity,
                                    int timeoutMs)
 {
-    if (message.isEmpty()) { return nullptr; }
+    if (m_shuttingDown || message.isEmpty()) { return nullptr; }
 
     // Drop dead entries first so a repeat check and the restack below
     // both see only live toasts.
@@ -9009,6 +9084,8 @@ void MainWindow::setVoltsAmpsVisible(bool visible)
 void MainWindow::wireSetupDialog(SetupDialog* dialog)
 {
     if (!dialog) { return; }
+    connect(dialog, &SetupDialog::connectionsRequested,
+            this, &MainWindow::connectionRequestedByOperator);
     if (m_txApplet) {
         connect(dialog, &SetupDialog::cfcDialogRequested,
                 m_txApplet, &TxApplet::requestOpenCfcDialog);
@@ -9915,6 +9992,11 @@ void MainWindow::applyDarkTheme()
 
 void MainWindow::showConnectionPanel()
 {
+    if (m_shuttingDown) { return; }
+    if (m_connectionPickerManaged) {
+        emit connectionsRequested();
+        return;
+    }
     // ── Remote-daemon R2 Task 20 ─────────────────────────────────────────
     // This is the local radio panel, including its automatic reopen paths.
     // Explicit operator connection gestures use connectionRequestedByOperator.
@@ -10037,8 +10119,10 @@ void MainWindow::applyRemoteRoleGating()
         m_pureSignalApplet->setVisible(ps3Supported);
     }
     if (m_actConnect != nullptr) {
-        m_actConnect->setEnabled(m_station.isRemote() && !active);
-        m_actConnect->setToolTip(tr("Connect to the configured Core station"));
+        m_actConnect->setEnabled(m_connectionPickerManaged || (m_station.isRemote() && !active));
+        m_actConnect->setToolTip(m_connectionPickerManaged
+            ? tr("Choose a Core/radio pair or a radio for this computer")
+            : tr("Connect to the configured Core station"));
     }
     if (m_actDisconnect != nullptr) {
         m_actDisconnect->setEnabled(active);
@@ -10046,10 +10130,12 @@ void MainWindow::applyRemoteRoleGating()
             tr("Disconnect from Core and stop automatic connection attempts"));
     }
     if (m_actManageRadios != nullptr) {
-        m_actManageRadios->setEnabled(false);
+        m_actManageRadios->setEnabled(m_connectionPickerManaged);
         m_actManageRadios->setToolTip(
-            tr("Unavailable: the station is selected with --station, not from "
-               "the radio list."));
+            m_connectionPickerManaged
+                ? tr("Choose a Core/radio pair or a radio for this computer")
+                : tr("Unavailable: the station is selected with --station, not from "
+                     "the radio list."));
     }
     // Protocol Info dereferences connection()->radioInfo() unguarded, so it
     // is not merely useless here, it is a crash.
@@ -11189,7 +11275,7 @@ void MainWindow::onConnectionStateChanged()
             !connected
             && !lastMac.isEmpty()
             && s.savedRadio(lastMac).has_value();
-        m_actConnect->setEnabled(hasReconnectTarget);
+        m_actConnect->setEnabled(m_connectionPickerManaged || hasReconnectTarget);
         m_actDisconnect->setEnabled(connected);
         m_actProtocolInfo->setEnabled(connected);
     }
@@ -11223,6 +11309,7 @@ void MainWindow::onConnectionStateChanged()
 // so the background probe does not flash the ConnectionPanel while in flight.
 void MainWindow::tryAutoReconnect()
 {
+    if (m_shuttingDown || !m_radioModel->ownsLocalDsp()) { return; }
     AppSettings& s = AppSettings::instance();
 
     // --- Step 1: Collect all autoConnect-flagged saved radios ---
@@ -11283,9 +11370,12 @@ void MainWindow::tryAutoReconnect()
         m_radioModel->setAutoConnectInProgress(true, chosenMac);
 
         // Listen for a radio that matches our chosen MAC
-        QMetaObject::Connection* connPtr = new QMetaObject::Connection;
+        // Both the discovery callback and its timeout own this handle. A
+        // station switch may destroy the window before either fires.
+        auto connPtr = std::make_shared<QMetaObject::Connection>();
         *connPtr = connect(disc, &RadioDiscovery::radioDiscovered,
             this, [this, chosenMac, connPtr](const RadioInfo& found) {
+            if (m_shuttingDown) { return; }
             if (found.macAddress != chosenMac) {
                 return;
             }
@@ -11296,7 +11386,6 @@ void MainWindow::tryAutoReconnect()
                                  << found.displayName()
                                  << found.address.toString();
             QObject::disconnect(*connPtr);
-            delete connPtr;
             m_autoReconnectInProgress = false;
             // Note: do NOT disarm m_radioModel->setAutoConnectInProgress here —
             // connectToRadio runs asynchronously and we want connectFailed to
@@ -11324,7 +11413,6 @@ void MainWindow::tryAutoReconnect()
             qCInfo(lcConnection) << "Auto-reconnect: 3-second timeout — radio not found";
             // Disconnect the listener so it doesn't fire on later scans
             QObject::disconnect(*connPtr);
-            delete connPtr;
             m_autoReconnectInProgress = false;
             // Disarm RadioModel flag — the Timeout path is surfaced here directly
             // (not via connectFailed, which only fires after a reply is received).
@@ -11513,6 +11601,11 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // ConnectionPanel on Disconnect" slot below doesn't re-trigger
     // discovery via ConnectionPanel's ctor while teardown runs.
     m_shuttingDown = true;
+    m_autoReconnectInProgress = false;
+    if (m_stationClient) {
+        m_stationDisconnectRequested = true;
+        m_stationClient->disconnectFromStation(QStringLiteral("client shutting down"));
+    }
 
     // Capture GUI-local DSP dialog preferences while these windows still
     // exist and before the final AppSettings flush. QObject destruction is
@@ -11594,7 +11687,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // cleanup — that caused QThreadStoragePrivate::finish to fire a qWarning
     // against a destructed QRegularExpression in the PII-redaction message
     // handler, segfaulting every close (~100 diagnostic reports in one day).
-    QCoreApplication::quit();
+    if (!m_retiringSession) { QCoreApplication::quit(); }
 }
 
 // =============================================================================

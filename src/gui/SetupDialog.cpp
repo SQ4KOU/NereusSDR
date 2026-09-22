@@ -817,10 +817,12 @@ void SetupDialog::buildTree()
         }
         return fourO3A;
     });
-    // Remote-daemon R2 Task 20: the --station / --token field group. One
-    // leaf, no discovery browser and no pairing flow; see
-    // RemoteStationPage's class comment for what is deliberately absent.
-    registerPage(cat, "Remote Station", [] { return new RemoteStationPage; });
+    registerPage(cat, "Remote Station", [this] {
+        auto* page = new RemoteStationPage;
+        connect(page, &RemoteStationPage::connectionsRequested,
+                this, &SetupDialog::connectionsRequested);
+        return page;
+    });
     registerPage(cat, "RF-Kit",       [this] { return new RfKitPage(m_model); });
     registerPage(cat, "TCP/IP CAT",   [] { return new CatTcpIpPage;       });
     registerPage(cat, "MIDI Control", [] { return new CatMidiControlPage;  });

@@ -291,6 +291,7 @@ public:
     void close();
     bool isListening() const;
     quint16 serverPort() const;
+    QHostAddress serverAddress() const;
     QString lastError() const { return m_lastError; }
 
     /// The generated pre-shared token and the TLS fingerprint a client has
@@ -387,6 +388,7 @@ public:
     SettingsProxyServer* settingsServer() const { return m_settingsServer; }
 
 signals:
+    void listeningChanged(bool listening);
     void displayBudgetChanged();
     void telemetrySessionStarted(quint64 epoch);
     void telemetrySessionEnded(quint64 epoch);

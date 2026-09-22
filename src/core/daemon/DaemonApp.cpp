@@ -23,12 +23,14 @@
 #include "core/TxSliceArbiter.h"
 #include "core/WdspEngine.h"
 #include "core/session/StationServer.h"
+#include "core/session/StationLanAnnouncer.h"
 #include "core/session/media/DaemonMediaController.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
 #include <QEventLoop>
 #include <QHostAddress>
+#include <QHostInfo>
 #include <QThread>
 #include <QTimer>
 
@@ -236,6 +238,7 @@ void DaemonApp::stop()
     m_radioRecoveryEnabled = false;
     cancelRadioDiscovery();
     cancelStationServerListenRetry();
+    m_stationAnnouncer.reset();
     if (m_radioConnectInProgress) {
         // A cold WDSP initialization pumps a nested event loop. Never delete
         // the RadioModel from inside its still-running connect stack. Its
@@ -452,9 +455,55 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
     m_telemetryController = std::make_unique<DaemonTelemetryController>(
         m_stationServer.get(), m_radioModel.get(), m_mediaController.get(), this);
     m_stationServer->setTelemetryEnabled(m_telemetryController != nullptr);
+    m_stationAnnouncer = std::make_unique<StationLanAnnouncer>();
+    connect(m_stationServer.get(), &StationServer::listeningChanged,
+            this, &DaemonApp::updateStationAnnouncement);
+    connect(m_radioModel.get(), &RadioModel::connectionStateChanged,
+            this, &DaemonApp::updateStationAnnouncement);
+    connect(m_radioModel.get(), &RadioModel::infoChanged,
+            this, &DaemonApp::updateStationAnnouncement);
     m_stationListenBind = cfg.remoteBind;
     m_stationListenPort = static_cast<quint16>(cfg.remotePort);
     attemptStationServerListen();
+}
+
+namespace {
+QString announcementName(const QString& input, const QString& fallback)
+{
+    QString result;
+    int bytes = 0;
+    for (char32_t codepoint : input.toUcs4()) {
+        if (QChar::category(codepoint) == QChar::Other_Control) { continue; }
+        const QString character = QString::fromUcs4(&codepoint, 1);
+        const int size = character.toUtf8().size();
+        if (bytes + size > kStationLanMaxCoreNameBytes) { break; }
+        result += character;
+        bytes += size;
+    }
+    return result.trimmed().isEmpty() ? fallback : result.trimmed();
+}
+}
+
+void DaemonApp::updateStationAnnouncement()
+{
+    if (!m_stationAnnouncer) { return; }
+    if (!m_stationServer || !m_stationServer->isListening() || !m_radioModel) {
+        m_stationAnnouncer->stop();
+        return;
+    }
+    StationLanAnnouncement announcement;
+    announcement.controlPort = m_stationServer->serverPort();
+    announcement.fingerprint = m_stationServer->certificateFingerprint();
+    announcement.coreName = announcementName(m_radioConfig.coreName.isEmpty()
+        ? QHostInfo::localHostName() : m_radioConfig.coreName, QStringLiteral("Nereus Core"));
+    announcement.radioConnected = m_radioModel->isConnected();
+    announcement.radioName = announcementName(m_radioModel->name().isEmpty()
+        ? m_radioModel->model() : m_radioModel->name(),
+        announcement.radioConnected ? QStringLiteral("Radio") : QString());
+    announcement.radioMac = m_radioModel->currentRadioMac().toUpper();
+    if (announcement.radioMac.isEmpty()) { announcement.radioMac = m_selectedRadioMac.toUpper(); }
+    if (announcement.radioMac.isEmpty()) { announcement.radioMac = QStringLiteral("00:00:00:00:00:00"); }
+    m_stationAnnouncer->update(m_stationServer->serverAddress(), announcement);
 }
 
 void DaemonApp::attemptStationServerListen()

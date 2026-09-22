@@ -60,6 +60,7 @@
 #undef private
 #include "core/daemon/DaemonConfig.h"
 #include "core/session/StationServer.h"
+#include "core/session/StationLanAnnouncer.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -418,6 +419,21 @@ private slots:
         QVERIFY2(server != nullptr, "remote_port was set but no StationServer exists");
         QVERIFY2(server->isListening(), qPrintable(server->lastError()));
         QCOMPARE(server->serverPort(), freePort);
+        QCOMPARE(server->serverAddress(), QHostAddress(QHostAddress::LocalHost));
+        QVERIFY(app.m_stationAnnouncer);
+        QVERIFY(!app.m_stationAnnouncer->isActive()); // loopback never advertises LAN reachability.
+        QSignalSpy listening(server, &StationServer::listeningChanged);
+        server->close();
+        QCOMPARE(listening.count(), 1);
+        QCOMPARE(listening.first().first().toBool(), false);
+        QVERIFY(server->serverAddress().isNull());
+        QVERIFY(!app.m_stationAnnouncer->isActive());
+        QVERIFY(server->listen(QHostAddress::LocalHost, freePort));
+        QCOMPARE(listening.count(), 2);
+        QCOMPARE(listening.last().first().toBool(), true);
+        QVERIFY(server->listen(QHostAddress::LocalHost, freePort));
+        QCOMPARE(listening.count(), 2); // idempotent listen cannot restart announcements.
+        QVERIFY(!app.m_stationAnnouncer->isActive());
         QVERIFY(server->displayBudgetLimits());
         QCOMPARE(server->displayBudgetLimits()->applicationBytesPerSecond, quint64{2000000});
         QCOMPARE(server->displayBudgetLimits()->spectrumSampleUnitsPerSecond, quint64{1000000});

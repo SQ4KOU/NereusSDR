@@ -1,4 +1,4 @@
-#include "gui/MainWindow.h"
+#include "gui/GuiConnectionController.h"
 #include "gui/styles/AppTheme.h"
 #include "core/AppSettings.h"
 #include "core/AudioDeviceConfig.h"
@@ -8,10 +8,6 @@
 #include "core/audio/RealtimeAudioPriority.h"
 #include "core/RadioConnection.h"
 #include "core/mmio/ExternalVariableEngine.h"
-// Remote-daemon R2 Task 20: --station / --token and the client-side
-// settings backend they bring with them.
-#include "core/session/RemoteStationOptions.h"
-#include "core/settings/SettingsProxy.h"
 
 // Generated into the build tree by cmake/NereusBuildTag.cmake, once per
 // build, so NEREUSSDR_BUILD_TAG names the commit actually being compiled
@@ -34,7 +30,6 @@
 #include <QFile>
 #include <QStandardPaths>
 #include <QStringList>
-#include <memory>
 
 // Parse --profile <name> out of argv *before* constructing QApplication so
 // AppSettings can pin the right path on first access. QCommandLineParser
@@ -171,7 +166,7 @@ int main(int argc, char* argv[])
     // than in the early argv scan, because nothing they affect happens
     // before this point. The profile scan has to be early (AppSettings
     // resolves its path on first access); the station does not.
-    NereusSDR::RemoteStationOptions station;
+    NereusSDR::StationStartupRequest request;
     {
         QCommandLineParser parser;
         parser.setApplicationDescription(
@@ -192,8 +187,8 @@ int main(int argc, char* argv[])
             QStringLiteral(
                 "Drive a radio owned by a nereusd station instead of one "
                 "attached to this machine. Takes a wss:// (or ws://) URL. "
-                "Without this, NereusSDR runs in local direct mode exactly "
-                "as before."),
+                "Without this, use the saved connection selection. "
+                "Use --local to select this computer's Core."),
             QStringLiteral("wss://host:port"));
         parser.addOption(stationOpt);
 
@@ -201,7 +196,7 @@ int main(int argc, char* argv[])
             QStringLiteral("token"),
             QStringLiteral(
                 "Shared token for --station, as printed by nereusd on its "
-                "first run. Overrides the value saved in Setup."),
+                "first run. Overrides the selected Core's saved token."),
             QStringLiteral("token"));
         parser.addOption(tokenOpt);
 
@@ -219,16 +214,26 @@ int main(int argc, char* argv[])
                 "pinned fingerprint. Bench use only."));
         parser.addOption(allowUnpinnedOpt);
 
+        QCommandLineOption localOpt(
+            QStringLiteral("local"),
+            QStringLiteral("Use this computer's built-in Core for local radios."));
+        parser.addOption(localOpt);
+
         parser.process(app);
 
         // Command-line values only. The saved-Setup fallback cannot be read
         // yet: AppSettings is not loaded until CoreInit::initialize() below,
         // and a value() call before that returns the ship default rather
         // than what the operator saved. Resolved after CoreInit instead.
-        station.url         = parser.value(stationOpt);
-        station.token       = parser.value(tokenOpt);
-        station.fingerprint = parser.value(fingerprintOpt);
-        station.allowUnpinned = parser.isSet(allowUnpinnedOpt);
+        request.connection.url = parser.value(stationOpt);
+        request.connection.token = parser.value(tokenOpt);
+        request.connection.fingerprint = parser.value(fingerprintOpt);
+        request.connection.allowUnpinned = parser.isSet(allowUnpinnedOpt);
+        request.stationSpecified = parser.isSet(stationOpt);
+        request.tokenSpecified = parser.isSet(tokenOpt);
+        request.fingerprintSpecified = parser.isSet(fingerprintOpt);
+        request.allowUnpinnedSpecified = parser.isSet(allowUnpinnedOpt);
+        request.local = parser.isSet(localOpt);
     }
 
     // Fusion style as a clean cross-platform base, then layer the
@@ -269,81 +274,13 @@ int main(int argc, char* argv[])
     // their transport workers before the main window is shown.
     NereusSDR::ExternalVariableEngine::instance().init();
 
-    // ── Remote-daemon R2 Task 20: resolve the station, then install the
-    //    settings proxy BEFORE the window exists ──────────────────────────
-    //
-    // Saved-Setup fallback runs here, after CoreInit::initialize() has
-    // actually loaded AppSettings. Command line wins: an operator who typed
-    // --station on a machine that also has one saved means the one they
-    // just typed.
-    {
-        NereusSDR::AppSettings& s = NereusSDR::AppSettings::instance();
-        if (station.url.isEmpty()) {
-            station.url = s.value(QStringLiteral("RemoteStationUrl"),
-                                  QString()).toString();
-        }
-        if (station.token.isEmpty()) {
-            station.token = s.value(QStringLiteral("RemoteStationToken"),
-                                    QString()).toString();
-        }
-        if (station.fingerprint.isEmpty()) {
-            station.fingerprint =
-                s.value(QStringLiteral("RemoteStationFingerprint"),
-                        QString()).toString();
-        }
-        if (!station.allowUnpinned) {
-            station.allowUnpinned =
-                s.value(QStringLiteral("RemoteStationAllowUnpinned"),
-                        QStringLiteral("False")).toString()
-                == QStringLiteral("True");
-        }
-
-        // A malformed URL falls back to local direct mode with a message on
-        // stderr, rather than starting a GUI whose every control silently
-        // does nothing because its RadioModel is Remote and nothing was
-        // ever dialled.
-        QString whyNot;
-        if (!station.url.isEmpty()
-            && !NereusSDR::RemoteStationOptions::isValidStationUrl(station.url,
-                                                                   &whyNot)) {
-            fprintf(stderr,
-                    "NereusSDR: ignoring station address '%s': %s\n"
-                    "           Starting in local direct mode.\n",
-                    station.url.toLocal8Bit().constData(),
-                    whyNot.toLocal8Bit().constData());
-            station.url.clear();
-        }
-    }
-
-    // The proxy MUST be installed before MainWindow constructs its
-    // RadioModel, and MUST still report ready() == false while that
-    // construction runs. SliceModel, NotchModel, FilterPresetStore and
-    // TciServer all seed Station-classified keys if absent in their
-    // constructors; what keeps those ship defaults out of the STATION store
-    // is entirely that the proxy is not ready yet and drops the write. See
-    // SettingsProxy.h's "ready()==false is load-bearing beyond this class"
-    // section, which names R2 Task 20 as the task that had to confirm the
-    // ordering rather than inherit it. tst_remote_gui_gating pins it.
-    //
-    // Declared before `window` so it outlives it: MainWindow's destructor
-    // can still touch AppSettings, and AppSettings would then be holding a
-    // dangling backend if these two were the other way round.
-    std::unique_ptr<NereusSDR::SettingsProxy> settingsProxy;
-    if (station.isRemote()) {
-        settingsProxy = std::make_unique<NereusSDR::SettingsProxy>();
-        NereusSDR::AppSettings::instance().setRemoteBackend(settingsProxy.get());
-        qDebug() << "Remote station mode:" << station.url;
-    }
-
-    NereusSDR::MainWindow window(station);
-    window.show();
-
+    // R-R3-38: one application owner replaces complete local/remote sessions.
+    // It resolves credentials as a single target tuple, installs a fresh proxy
+    // before each remote model, and retires the window before its backend.
+    NereusSDR::GuiConnectionController connections;
+    connections.start(request);
     const int rc = app.exec();
-
-    // Detach before the proxy is destroyed. AppSettings is a singleton and
-    // outlives both, so leaving the pointer in place would be a dangling
-    // read on any late settings access during static teardown.
-    NereusSDR::AppSettings::instance().setRemoteBackend(nullptr);
+    connections.shutdown();
 
     // Graceful shutdown so worker threads drain before the engine
     // singleton is destroyed.

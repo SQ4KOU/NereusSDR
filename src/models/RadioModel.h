@@ -1883,6 +1883,9 @@ public:
     // UI components (TitleBar, ConnectionPanel, status bar, spectrum overlay)
     // read this instead of deriving state from RadioConnection directly.
     ConnectionState connectionState() const { return m_connectionState; }
+    // Nereus session ownership: connect may pump a nested wisdom event loop.
+    // Its owner must keep this model alive until the synchronous call returns.
+    bool localConnectionSetupActive() const { return m_localConnectionSetupActive; }
 
     // Test-only: allow tests to drive transitions without standing up
     // a fake RadioConnection. Production transitions go through the
@@ -4033,6 +4036,7 @@ private:
     // Phase 3Q-1: RadioModel-level connection state machine.
     // Drives UI (TitleBar, ConnectionPanel, status bar, spectrum overlay).
     ConnectionState m_connectionState{ConnectionState::Disconnected};
+    bool m_localConnectionSetupActive{false};
 
     // Remote-daemon R2 Task 4: set once at construction (see the Role
     // constructor overload above), never mutated afterward.

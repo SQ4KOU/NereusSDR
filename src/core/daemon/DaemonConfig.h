@@ -97,6 +97,7 @@ struct DaemonConfig {
     // packaging/nereusd.conf.sample, and note that a key reaching this
     // struct must reach behaviour AND the sample, which
     // tst_daemon_config's sampleFileKeysAndParserKeysAgree pins.
+    QString coreName;                         // empty = machine hostname for LAN discovery
     int     remotePort {0};
     QString remoteBind {QStringLiteral("127.0.0.1")};
 

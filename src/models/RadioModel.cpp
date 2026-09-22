@@ -7281,6 +7281,13 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
         return;
     }
 
+    // Nereus-original lifetime boundary for whole-GUI session replacement.
+    // Wisdom initialization below can deliver another queued selection while
+    // this call still owns the model. Never retire/re-enter it from that loop.
+    if (m_localConnectionSetupActive) { return; }
+    m_localConnectionSetupActive = true;
+    const auto finishSetup = qScopeGuard([this] { m_localConnectionSetupActive = false; });
+
     // Tear down any existing connection
     if (m_connection) {
         teardownConnection();

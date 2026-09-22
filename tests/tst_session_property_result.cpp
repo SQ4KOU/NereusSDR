@@ -4,6 +4,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QTemporaryDir>
+#include <QFile>
 #include "core/AppSettings.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationClient.h"
@@ -56,7 +57,20 @@ MirrorUpdate real(const char* name, double value)
 class TestSessionPropertyResult : public QObject {
     Q_OBJECT
 private slots:
+    void initTestCase()
+    {
+        // This test deliberately reloads its atomic settings file. Other
+        // executables run in parallel and share the default Qt test sandbox.
+        AppSettings::setProfileOverride(QStringLiteral("property-result-%1")
+            .arg(QCoreApplication::applicationPid()));
+    }
     void init() { AppSettings::instance().clear(); }
+    void cleanupTestCase()
+    {
+        const QString path = AppSettings::instance().filePath();
+        QFile::remove(path);
+        QFile::remove(path + QStringLiteral(".bak"));
+    }
 
     void codecPreservesReadbackAndRejectsFractionalSequences()
     {
