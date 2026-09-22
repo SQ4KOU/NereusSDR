@@ -104,7 +104,10 @@ QString restoreMessageProblem(const QString& message)
 {
     const QStringList internal{QStringLiteral(".."), QStringLiteral("stream"),
                                QStringLiteral("owner"), QStringLiteral("admitted"),
-                               QStringLiteral("pan-")};
+                               QStringLiteral("pan-"), QStringLiteral("pan key"),
+                               QStringLiteral("DDC"), QStringLiteral("schema"),
+                               QStringLiteral("slice ID"), QStringLiteral("DSP mode"),
+                               QStringLiteral("JSON")};
     for (const QString& word : internal) {
         if (message.contains(word)) {
             return QStringLiteral("\"%1\" in: %2").arg(word, message);
@@ -302,6 +305,11 @@ private slots:
             const QString problem =
                 restoreMessageProblem(model(app)->receiveLayoutRestoreMessage());
             QVERIFY2(problem.isEmpty(), qPrintable(problem));
+            QCOMPARE(model(app)->receiveLayoutRestoreMessage(),
+                     QStringLiteral("The saved receive layout could not be loaded. "
+                                    "It is damaged or was written by a different version "
+                                    "of this program. The configured receivers are used "
+                                    "instead. Your saved layout is kept."));
             app.stop();
         }
         QCOMPARE(rawLayoutFromDisk(kMacA), invalid);
@@ -328,6 +336,64 @@ private slots:
             app.stop();
         }
         QCOMPARE(rawLayoutFromDisk(kMacA), original);
+    }
+
+    // R-R3-34: a layout the store refuses reaches the operator as plain
+    // sentences; the store's own reason ("pan key", "receive owner") is
+    // only logged.
+    void refusedLayoutReasonsReachTheOperatorInPlainWords_data()
+    {
+        QTest::addColumn<QString>("from");
+        QTest::addColumn<QString>("to");
+        QTest::addColumn<QString>("expected");
+        QTest::newRow("non-canonical panadapter")
+            << QStringLiteral("\"panKey\":\"pan-1\"")
+            << QStringLiteral("\"panKey\":\"pan-01\"")
+            << QStringLiteral("The saved receive layout could not be loaded. It places "
+                              "a receiver on a panadapter this program does not "
+                              "recognize. The configured receivers are used instead. "
+                              "Your saved layout is kept.");
+        QTest::newRow("missing RADE audio receiver")
+            << QStringLiteral("\"radeRxOwnerId\":2")
+            << QStringLiteral("\"radeRxOwnerId\":null")
+            << QStringLiteral("The saved receive layout could not be loaded. It has more "
+                              "than one receiver in RADE mode and does not say which one "
+                              "plays RADE audio. The configured receivers are used "
+                              "instead. Your saved layout is kept.");
+    }
+
+    void refusedLayoutReasonsReachTheOperatorInPlainWords()
+    {
+        QFETCH(QString, from);
+        QFETCH(QString, to);
+        QFETCH(QString, expected);
+        const QList<ReceiveSliceState> twoRade{
+            {0, QStringLiteral("pan-0"), 14'236'000.0, DSPMode::RADE_U},
+            {2, QStringLiteral("pan-1"), 7'177'000.0, DSPMode::RADE_L},
+        };
+        QString error;
+        QVERIFY2(ReceiveLayoutStore::stage(AppSettings::instance(), kMacA, twoRade,
+                                           &error, 2), qPrintable(error));
+        const QString normalized = AppSettings::normalizedRadioMac(kMacA);
+        const QString valid = AppSettings::instance()
+            .hardwareValue(normalized, QLatin1String(kLayoutKey)).toString();
+        QVERIFY2(valid.contains(from), qPrintable(valid));
+        const QString broken = QString(valid).replace(from, to);
+        AppSettings::instance().setHardwareValue(normalized, QLatin1String(kLayoutKey),
+                                                 broken);
+        QVERIFY(AppSettings::instance().save());
+        {
+            DaemonApp app;
+            app.primeBoardForTest(HPSDRHW::HermesLite, kMacA);
+            QVERIFY(app.start(configWithCount(1)));
+            QCOMPARE(model(app)->receiveLayoutRestoreState(), QStringLiteral("invalid"));
+            const QString message = model(app)->receiveLayoutRestoreMessage();
+            const QString problem = restoreMessageProblem(message);
+            QVERIFY2(problem.isEmpty(), qPrintable(problem));
+            QCOMPARE(message, expected);
+            app.stop();
+        }
+        QCOMPARE(rawLayoutFromDisk(kMacA), broken);
     }
 
     void immediateStopCapturesTunePanAndMembershipWithoutIdZero()

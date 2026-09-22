@@ -4325,14 +4325,61 @@ QStringList reportedRestoreSentences(const QString& message)
     return {message.chopped(kept.size()).trimmed()};
 }
 
-// A reason written elsewhere, as one sentence with one full stop.
-QString asSentence(QString text)
+// A saved-layout problem as the operator reads it (R-R3-34). ReceiveLayoutStore
+// and hydrateReceiveLayout() word their reasons for developers ("pan key",
+// "slice ID", "schema"); the raw reason goes to the log and the operator gets
+// one plain sentence about the layout, or nothing when the reason has no
+// operator meaning beyond "could not be loaded / saved".
+QString plainReceiveLayoutProblem(const QString& reason)
 {
-    text = text.trimmed();
-    while (text.endsWith(QLatin1Char('.'))) {
-        text.chop(1);
+    const auto has = [&reason](const char* text) {
+        return reason.contains(QLatin1String(text), Qt::CaseInsensitive);
+    };
+    if (has("duplicate slice ID")) {
+        static const QRegularExpression idPattern(QStringLiteral("slice ID (\\d+)"));
+        const QRegularExpressionMatch match = idPattern.match(reason);
+        bool ok = false;
+        const int id = match.hasMatch() ? match.captured(1).toInt(&ok) : -1;
+        if (ok && id >= 0 && id < WdspEngine::kMaxSliceChannels) {
+            return RadioModel::tr("It lists receiver %1 twice.").arg(receiverLetter(id));
+        }
+        return RadioModel::tr("It lists the same receiver twice.");
     }
-    return text.isEmpty() ? QString() : text + QLatin1Char('.');
+    if (has("slice ID") || has("between 1 and") || has("slice count")) {
+        return RadioModel::tr("It lists no receivers, or receivers this program "
+                              "does not support.");
+    }
+    if (has("pan key")) {
+        return RadioModel::tr("It places a receiver on a panadapter this program "
+                              "does not recognize.");
+    }
+    if (has("frequency")) {
+        return RadioModel::tr("It holds a receiver frequency outside the range "
+                              "this program can tune.");
+    }
+    if (has("DSP mode")) {
+        return RadioModel::tr("It holds a receiver mode this program does not "
+                              "recognize.");
+    }
+    if (has("multiple RADE slices")) {
+        return RadioModel::tr("It has more than one receiver in RADE mode and "
+                              "does not say which one plays RADE audio.");
+    }
+    if (has("RADE receive owner")) {
+        return RadioModel::tr("The receiver it names for RADE audio is not in "
+                              "RADE mode.");
+    }
+    if (has("storage budget")) {
+        return RadioModel::tr("It is larger than this program can store.");
+    }
+    if (has("MAC address")) {
+        return RadioModel::tr("The radio has not identified itself yet.");
+    }
+    if (has("JSON") || has("schema") || has("invalid slice")) {
+        return RadioModel::tr("It is damaged or was written by a different "
+                              "version of this program.");
+    }
+    return {};
 }
 
 // Said once for the saved RADE receiver when that receiver is not restored.
@@ -13286,10 +13333,11 @@ void RadioModel::prepareReceiveLayout(const QString& radioMac)
         return;
     }
     m_receiveLayoutProtected = true;
-    // The store's reasons already end in a full stop; asSentence keeps one.
+    // The operator reads a plain sentence; the store's own reason is logged.
+    qCWarning(lcConnection) << "Receive layout: saved layout not loaded:" << error;
     setReceiveLayoutRestoreStatus(QStringLiteral("invalid"),
         withKeptLayout({tr("The saved receive layout could not be loaded."),
-                        asSentence(error),
+                        plainReceiveLayoutProblem(error),
                         tr("The configured receivers are used instead.")}));
 }
 
@@ -13408,12 +13456,29 @@ bool RadioModel::captureReceiveLayout(QString* error)
         // Capturing live state cannot: retiring B must not promote an idle
         // RADE-mode A into a new audio owner on the next process start.
         if (error) {
-            *error = tr("Receive layout was not saved: RADE audio has no selected owner. Select the intended receiver's mode again.");
+            *error = tr("Your receivers were not saved because it is not clear which "
+                        "receiver should play RADE audio. Select RADE mode again on "
+                        "the receiver you want to hear.");
         }
         return false;
     }
-    return ReceiveLayoutStore::stage(AppSettings::instance(), m_receiveLayoutMac,
-                                      slices, error, m_restoredRadeReceiveOwner);
+    QString reason;
+    if (ReceiveLayoutStore::stage(AppSettings::instance(), m_receiveLayoutMac,
+                                  slices, &reason, m_restoredRadeReceiveOwner)) {
+        if (error) {
+            error->clear();
+        }
+        return true;
+    }
+    // The operator reads a plain sentence; the store's own reason is logged.
+    qCWarning(lcConnection) << "Receive layout: not saved:" << reason;
+    if (error) {
+        const QString problem = plainReceiveLayoutProblem(reason);
+        *error = problem.isEmpty()
+            ? tr("Your receivers were not saved.")
+            : tr("Your receivers were not saved. %1").arg(problem);
+    }
+    return false;
 }
 
 bool RadioModel::hydrateReceiveLayout(const QString& radioMac,

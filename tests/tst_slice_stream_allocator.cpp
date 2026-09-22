@@ -86,7 +86,10 @@ private slots:
         const auto r = alloc.placeSlice(14200000.0, /*preferOwnStream=*/true);
 
         QCOMPARE(r.outcome, SliceStreamAllocator::Outcome::Rejected);
-        QVERIFY(!r.reason.isEmpty());
+        QCOMPARE(r.reason,
+                 QStringLiteral("All 2 of the radio's receivers are in use, so a new "
+                                "panadapter cannot have its own. Close a panadapter, or "
+                                "add this receiver to an existing panadapter instead."));
     }
 
     void slice_outside_every_window_claims_a_free_stream()
@@ -139,7 +142,13 @@ private slots:
         const auto r = alloc.placeSlice(7150000.0);
 
         QCOMPARE(r.outcome, SliceStreamAllocator::Outcome::Rejected);
-        QVERIFY(!r.reason.isEmpty());
+        // Plain English (R-R3-34); U+00A0 keeps "7.1500" and "MHz" together.
+        QCOMPARE(r.reason,
+                 QStringLiteral("The radio's only receiver is in use and it does not "
+                                "cover 7.1500\u00A0MHz. Retune or close another "
+                                "receiver, or choose a higher sample rate so each one "
+                                "covers more."));
+        QVERIFY(!r.reason.contains(QStringLiteral("DDC")));
     }
 
     void retune_inside_the_window_only_moves_the_shift()
