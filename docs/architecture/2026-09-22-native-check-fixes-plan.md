@@ -249,3 +249,60 @@ ctest --test-dir /Users/j.j.boyd/.codex/worktrees/nereus-r2-integration/NereusSD
 **Execution note (advisory):** sonnet.
 
 - [ ] **Step 1:** Gate the actions, add the test, run the commands, commit.
+
+## Task 4: RADE transmit filter applies to a slice restored in RADE mode
+
+**Requirements:** R-R3-24 (hydration shows the station's actual state),
+R-R3-21.
+
+Diagnosis (read-only, 2026-09-22): `TransmitModel::filterLow/filterHigh`
+(`src/models/TransmitModel.h:306-307`, setters persist per radio
+`TransmitModel.cpp:2924-2947`) are mirrored both ways
+(`src/core/session/MirrorPolicy.cpp:258-259`), so the GUI shows the Core's
+values. The only code that applies RADE's transmit passband is the
+`SliceModel::dspModeChanged` handler in `RadioModel::wireSliceSignals()`
+(`src/models/RadioModel.cpp:11139-11149`: entering RADE_U/RADE_L sets
+650/2350, leaving sets 100/3900). At Core boot, `addSliceImpl()` restores a
+saved slice's mode with `SliceModel::restoreReceiveState()`
+(`RadioModel.cpp:5668-5672`) before `wireSliceSignals(slice)`
+(`RadioModel.cpp:6041`) attaches that handler, so a slice restored already in
+RADE-U never applies 650/2350 and the persisted 100/3900 stays. Correct RADE-U
+passband is 650..2350 Hz (`src/core/WdspTypes.h:165-167`,
+`SliceModel.cpp:1918-1926`, `2021-2025`).
+
+**Files:**
+- Modify: `src/models/RadioModel.cpp` (factor the handler body into one helper and apply it once after wiring when the slice is already in a RADE mode, under exactly the same conditions the handler uses)
+- Test: `tests/tst_receive_layout_hydration.cpp`
+
+**Interfaces:**
+- Consumes: nothing new.
+- Produces: no public API change (a private helper is fine).
+
+**Acceptance:**
+- Pre-seed the persisted transmit filter to 100/3900 for the test radio,
+  hydrate a slice straight into RADE_U, and assert `filterLow() == 650` and
+  `filterHigh() == 2350` immediately after hydration returns, with no mode
+  change. Same for RADE_L (use the values the existing handler applies for
+  RADE_L).
+- A slice hydrated into a non-RADE mode leaves the transmit filter exactly
+  as loaded (no 100/3900 write).
+- The existing edge-triggered behavior (enter RADE, leave RADE) is
+  unchanged; existing tests (`tst_rade_tx_filters`, `tst_tx_bandwidth_persistence`,
+  `tst_radio_model_push_tx_mode_and_bandpass`) pass unchanged.
+- Whatever condition the handler uses to decide which slice drives the
+  transmit filter (for example only the transmit slice) is reused exactly;
+  if it has none, record that in the report rather than inventing one.
+
+**Verification:** hydration state: regression test first (fails on the
+current tree), then the fix.
+```sh
+cmake --build /Users/j.j.boyd/.codex/worktrees/nereus-r2-integration/NereusSDR/build-integration --target tst_receive_layout_hydration tst_rade_tx_filters tst_tx_bandwidth_persistence tst_radio_model_push_tx_mode_and_bandpass -j6
+ctest --test-dir /Users/j.j.boyd/.codex/worktrees/nereus-r2-integration/NereusSDR/build-integration -R '^(tst_receive_layout_hydration|tst_rade_tx_filters|tst_tx_bandwidth_persistence|tst_radio_model_push_tx_mode_and_bandpass)$' --no-tests=error --output-on-failure
+```
+Hardware (pending, controller/operator): after install, the GUI's TX BW
+shows 650-2350 Hz right after launch with slice A in RADE-U.
+
+**Execution note (advisory):** sonnet.
+
+- [ ] **Step 1:** Add the regression, confirm it fails, apply the helper,
+  run the commands, commit.
