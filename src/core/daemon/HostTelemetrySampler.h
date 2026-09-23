@@ -12,6 +12,7 @@
 
 #include <QByteArray>
 #include <QElapsedTimer>
+#include <QList>
 #include <QString>
 #include <QVector>
 
@@ -51,6 +52,17 @@ public:
     /// and when a counter went backwards.
     StationHostTelemetry sample();
 
+    /// Cores whose combined busy share sample() also measures, from the
+    /// per-core lines of proc/stat (R-R3-40: the display load governor's
+    /// housekeeping cores). A different set restarts only this measurement;
+    /// the telemetry values and their baselines are untouched. Empty: none.
+    void setWatchedCpus(const QList<int>& cpus);
+    QList<int> watchedCpus() const { return m_watchedCpus; }
+    /// Busy share of the watched cores between the last two samples, 0..100.
+    /// Absent under the same rules as systemCpuPercent, and when a watched
+    /// core has no line (offline) in either sample.
+    std::optional<double> watchedCpuPercent() const { return m_watchedCpuPercent; }
+
 private:
     struct ThermalZone {
         QByteArray tempPath;
@@ -77,6 +89,9 @@ private:
     };
     std::optional<SystemBaseline> m_systemBaseline;
     std::optional<ProcessBaseline> m_processBaseline;
+    QList<int> m_watchedCpus;
+    std::optional<SystemBaseline> m_watchedBaseline;
+    std::optional<double> m_watchedCpuPercent;
 };
 
 /// The Core's one host sampler, shared by every reader on its event loop:
@@ -106,6 +121,14 @@ public:
 
     /// The latest reading, sampled now when the cached one is too old.
     StationHostTelemetry reading();
+
+    /// The display load governor's cores (the housekeeping cores while
+    /// thread placement is active; empty otherwise). Changing them restarts
+    /// only governorCpuPercent()'s interval.
+    void setGovernorCpus(const QList<int>& cpus);
+    /// Busy share of the governor's cores from the same sample as reading(),
+    /// sampled now when the cached one is too old. Absent without cores.
+    std::optional<double> governorCpuPercent();
 
 private:
     std::unique_ptr<HostTelemetrySampler> m_sampler;

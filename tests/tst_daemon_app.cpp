@@ -41,6 +41,9 @@
 //   2026-09-20: cover DaemonApp's RadioModel teardown state relay,
 //               by J.J. Boyd (KG4VCF), with AI-assisted implementation
 //               via OpenAI Codex.
+//   2026-09-23: cover the display load governor's wiring (R-R3-08,
+//               R-R3-37, R-R3-40), by J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 
 #include <QtTest/QtTest>
 
@@ -59,12 +62,32 @@
 #include "core/daemon/DaemonApp.h"
 #undef private
 #include "core/daemon/DaemonConfig.h"
+#include "core/daemon/DisplayLoadInputs.h"
+#include "core/session/media/DisplayLoadGovernor.h"
 #include "core/session/StationServer.h"
 #include "core/session/StationLanAnnouncer.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
 using namespace NereusSDR;
+
+namespace {
+
+// A loopback listener on a port the OS just said was free, so a parallel
+// ctest shard cannot collide with it.
+DaemonConfig listenerConfig()
+{
+    DaemonConfig cfg = DaemonConfig::defaults();
+    QTcpServer probe;
+    if (probe.listen(QHostAddress::LocalHost, 0)) {
+        cfg.remotePort = static_cast<int>(probe.serverPort());
+        probe.close();
+    }
+    cfg.remoteBind = QStringLiteral("127.0.0.1");
+    return cfg;
+}
+
+} // namespace
 
 class TstDaemonApp : public QObject {
     Q_OBJECT
@@ -448,6 +471,163 @@ private slots:
         // RadioModel its mirror holds QPointers into.
         app.stop();
         QVERIFY(app.stationServer() == nullptr);
+    }
+
+    // R-R3-08/37/40 (final review M1): the display load governor's wiring.
+    // With display_adaptive on and no limits configured, the Core holds the
+    // computed ceiling, and only an app that knows the budget reason is put
+    // in budget mode (no peer here, so none is); off, nothing is advertised
+    // and no governor runs.
+    void computedCeilingOnlyWithAdaptationOn()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend, so a wss listener cannot bind.");
+        }
+        {
+            DaemonApp app;
+            app.primeBoardForTest(HPSDRHW::HermesLite);
+            QVERIFY(app.start(listenerConfig()));
+            StationServer* const server = app.stationServer();
+            QVERIFY(server);
+            QCOMPARE(server->configuredDisplayBudgetLimits(),
+                     std::optional<DisplayBudgetLimits>(DisplayLoadGovernor::computedCeiling()));
+            QVERIFY(!server->displayBudgetLimits()); // no minor-11 app attached
+            QVERIFY(!server->buildCapabilities().displayBudget);
+            QVERIFY(app.m_displayGovernor);
+            QVERIFY(app.m_displayGovernorTimer);
+            QVERIFY(!app.m_displayGovernorTimer->isActive()); // no media session yet
+            app.stop();
+        }
+        {
+            DaemonConfig cfg = listenerConfig();
+            cfg.displayAdaptive = false;
+            DaemonApp app;
+            app.primeBoardForTest(HPSDRHW::HermesLite);
+            QVERIFY(app.start(cfg));
+            StationServer* const server = app.stationServer();
+            QVERIFY(server);
+            QVERIFY(!server->configuredDisplayBudgetLimits());
+            QVERIFY(!server->displayBudgetLimits());
+            QVERIFY(!app.m_displayGovernor);
+            QVERIFY(!app.m_displayGovernorTimer);
+            app.stop();
+        }
+    }
+
+    // The governor measures busy receivers only (idle is not a measurement),
+    // steps the budget through StationServer, and the session's end puts the
+    // ceiling back. Uses the configured pair as the ceiling so the budget is
+    // in force without an attached app.
+    void governorStepsOnMeasuredLoadAndResetsAtSessionEnd()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend, so a wss listener cannot bind.");
+        }
+        const DisplayBudgetLimits ceiling = DisplayLoadGovernor::computedCeiling();
+        DaemonConfig cfg = listenerConfig();
+        cfg.displayApplicationBytesPerSecond = ceiling.applicationBytesPerSecond;
+        cfg.spectrumSampleUnitsPerSecond = ceiling.spectrumSampleUnitsPerSecond;
+        qint64 now = 0;
+        bool idle = true;
+        const DisplayBudgetCharge pan = spectrumDisplayCost(1024, 30, false)->charge;
+        const DisplayBudgetCharge accepted = *sumDisplayCharges({pan, pan, pan, pan});
+        DaemonApp app;
+        app.setDisplayLoadSourcesForTest(
+            [&idle] {
+                DisplayLoadInputs inputs;
+                ReceiverDspLoad load;
+                load.load = 0.95;
+                load.idle = idle;
+                inputs.receivers.append({0, load});
+                return inputs;
+            },
+            [&now] { return now; }, [&accepted] { return accepted; });
+        app.primeBoardForTest(HPSDRHW::HermesLite);
+        QVERIFY(app.start(cfg));
+        StationServer* const server = app.stationServer();
+        QVERIFY(server);
+        QCOMPARE(server->displayBudgetLimits()->generation, quint32{1});
+
+        // Idle receivers: nothing measured, nothing changes.
+        for (now = 0; now <= 30'000; now += 500) {
+            app.evaluateDisplayLoad();
+        }
+        QCOMPARE(server->displayBudgetLimits()->generation, quint32{1});
+        QCOMPARE(server->displayBudgetReason(), DisplayBudgetReason::None);
+
+        // Busy: one step after the busy hold, in force at StationServer and
+        // in the governor.
+        idle = false;
+        const qint64 start = now;
+        for (; now < start + DisplayLoadGovernor::kBusyHoldMs; now += 500) {
+            app.evaluateDisplayLoad();
+            QCOMPARE(server->displayBudgetLimits()->generation, quint32{1});
+        }
+        app.evaluateDisplayLoad();
+        QCOMPARE(server->displayBudgetLimits()->generation, quint32{2});
+        QCOMPARE(server->displayBudgetReason(), DisplayBudgetReason::CoreBusy);
+        QVERIFY(server->displayBudgetLimits()->spectrumSampleUnitsPerSecond
+                < accepted.spectrumSampleUnitsPerSecond);
+        QCOMPARE(app.m_displayGovernor->steps(), 1);
+
+        // The media session ends: back to the ceiling, reason cleared.
+        emit server->mediaSessionEnded(1);
+        QCOMPARE(server->displayBudgetLimits()->generation, quint32{3});
+        QCOMPARE(server->displayBudgetLimits()->spectrumSampleUnitsPerSecond,
+                 ceiling.spectrumSampleUnitsPerSecond);
+        QCOMPARE(server->displayBudgetReason(), DisplayBudgetReason::None);
+        QCOMPARE(app.m_displayGovernor->steps(), 0);
+        app.stop();
+    }
+
+    // Final review M5: a step StationServer refuses is not in force in the
+    // governor, and the next proposal follows the published generation.
+    void aRefusedStepIsNotTakenAndTheNextFollowsThePublishedGeneration()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend, so a wss listener cannot bind.");
+        }
+        const DisplayBudgetLimits ceiling = DisplayLoadGovernor::computedCeiling();
+        DaemonConfig cfg = listenerConfig();
+        cfg.displayApplicationBytesPerSecond = ceiling.applicationBytesPerSecond;
+        cfg.spectrumSampleUnitsPerSecond = ceiling.spectrumSampleUnitsPerSecond;
+        qint64 now = 0;
+        const DisplayBudgetCharge pan = spectrumDisplayCost(1024, 30, false)->charge;
+        const DisplayBudgetCharge accepted = *sumDisplayCharges({pan, pan, pan, pan});
+        DaemonApp app;
+        app.setDisplayLoadSourcesForTest(
+            [] {
+                DisplayLoadInputs inputs;
+                ReceiverDspLoad load;
+                load.load = 0.95;
+                inputs.receivers.append({0, load});
+                return inputs;
+            },
+            [&now] { return now; }, [&accepted] { return accepted; });
+        app.primeBoardForTest(HPSDRHW::HermesLite);
+        QVERIFY(app.start(cfg));
+        StationServer* const server = app.stationServer();
+        QVERIFY(server);
+        // Something else published generation 10 behind the governor's back.
+        QVERIFY(server->setDisplayBudgetLimits(
+            DisplayBudgetLimits{ceiling.applicationBytesPerSecond,
+                                ceiling.spectrumSampleUnitsPerSecond, 10}));
+        for (now = 0; now <= DisplayLoadGovernor::kBusyHoldMs; now += 500) {
+            app.evaluateDisplayLoad();
+        }
+        // The proposal at generation 2 was refused: nothing in force.
+        QCOMPARE(server->displayBudgetLimits()->generation, quint32{10});
+        QCOMPARE(app.m_displayGovernor->steps(), 0);
+        QVERIFY(!app.m_displayGovernor->settling());
+        // Busy on: the next proposal is generation 11 and is taken.
+        for (; now <= 2 * DisplayLoadGovernor::kBusyHoldMs + 500; now += 500) {
+            app.evaluateDisplayLoad();
+        }
+        QCOMPARE(server->displayBudgetLimits()->generation, quint32{11});
+        QCOMPARE(server->displayBudgetReason(), DisplayBudgetReason::CoreBusy);
+        QCOMPARE(app.m_displayGovernor->steps(), 1);
+        QCOMPARE(app.m_displayGovernor->limits(), *server->displayBudgetLimits());
+        app.stop();
     }
 
     void occupiedRemotePortRecoversWithoutRecreatingStationState()

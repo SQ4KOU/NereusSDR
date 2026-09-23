@@ -927,6 +927,7 @@ void TstDaemonMediaController::coreBusyLowersThenRestoresTheBudget()
     QCOMPARE(lowered->reason, DisplayBudgetReason::CoreBusy);
     QVERIFY(lowered->limits.spectrumSampleUnitsPerSecond < requested.spectrumSampleUnitsPerSecond);
     QVERIFY(harness.server.setDisplayBudgetLimits(lowered->limits, lowered->reason));
+    governor.accept(*lowered);
     QTRY_COMPARE(harness.client.remoteDisplayBudgetLimits()->generation, quint32{2});
     QCOMPARE(harness.client.remoteDisplayBudgetReason(), DisplayBudgetReason::CoreBusy);
 
@@ -949,8 +950,11 @@ void TstDaemonMediaController::coreBusyLowersThenRestoresTheBudget()
     QTRY_VERIFY(allocationFor(controls, 97, 3).value(QStringLiteral("accepted")).toBool());
     QCOMPARE(harness.controller.acceptedDisplayCharge(), reduced);
 
+    // The step settles on a calm load, then the calm hold restores it.
     std::optional<DisplayLoadDecision> restored;
-    for (qint64 t = 10'000; t <= 10'000 + DisplayLoadGovernor::kCalmHoldMs && !restored;
+    for (qint64 t = 10'000;
+         t <= 10'000 + DisplayLoadGovernor::kSettleMs + DisplayLoadGovernor::kCalmHoldMs
+         && !restored;
          t += 500) {
         DisplayLoadReading reading;
         reading.nowMs = t;
@@ -961,6 +965,7 @@ void TstDaemonMediaController::coreBusyLowersThenRestoresTheBudget()
     QVERIFY(restored.has_value());
     QCOMPARE(restored->reason, DisplayBudgetReason::None);
     QVERIFY(harness.server.setDisplayBudgetLimits(restored->limits, restored->reason));
+    governor.accept(*restored);
     QTRY_COMPARE(harness.client.remoteDisplayBudgetLimits()->generation, quint32{3});
     QCOMPARE(harness.client.remoteDisplayBudgetReason(), DisplayBudgetReason::None);
     QCOMPARE(harness.client.remoteDisplayBudgetLimits()->spectrumSampleUnitsPerSecond,

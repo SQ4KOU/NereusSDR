@@ -53,9 +53,31 @@ struct DisplayLoadDecision {
 /// kStepDownScale of what is accepted now, never below floorCharge(). Calm
 /// (every measurement under the calm thresholds, no late block, input wait
 /// under kCalmInputDelayMs) held for kCalmHoldMs undoes one step. Readings
-/// in between hold. A reading without any measurement changes nothing and
-/// restarts both holds. Every change carries the next limits generation;
-/// the reason is CoreBusy while any step is in force.
+/// in between hold. Every change carries the next limits generation; the
+/// reason is CoreBusy while any step is in force.
+///
+/// Settling: after each step down nothing more is cut for kSettleMs, long
+/// enough for the app to act on the new limits (its allocation
+/// acknowledgement timeout) plus one load interval to measure the result.
+/// Then the step is judged against the reading that caused it:
+///  - relief of at least kReliefMargin, still busy: step again at once;
+///  - relief of at least kReliefMargin, no longer busy: keep the step;
+///  - less relief: the step saved nothing, so it is undone (the reason
+///    clears when no other step remains) and the governor holds, cutting
+///    nothing more, until the load falls to calm or rises kClearRiseMargin
+///    above where it stood when the step was undone.
+/// Loads are compared as a fraction of their busy threshold (pressure()),
+/// so a receiver load and a CPU percentage share one scale.
+///
+/// No measurement at all (macOS, no receivers, every receiver idle) holds
+/// and restarts both holds. Once such a gap has lasted kCalmHoldMs,
+/// absence counts as calm for restoring only: a cut never outlives the
+/// measurements that justified it, and absence never causes one.
+///
+/// Two-phase: update() only proposes a decision. The caller publishes it
+/// and calls accept() once the publication is accepted; a proposal that is
+/// not accepted changes nothing, and syncGeneration() lets the next one
+/// follow whatever generation is published.
 ///
 /// The busy threshold sits below the NNR step-back's 0.90 (held 2 s), so
 /// spectrum yields first.
@@ -70,6 +92,19 @@ public:
     static constexpr qint64 kCalmHoldMs = 10'000;
     static constexpr double kStepDownScale = 0.5;
     static constexpr int kMaximumSteps = 32;
+    /// The Core's load readings refresh this often
+    /// (ReceiverDspLoadSampler::kSampleIntervalMs; DaemonApp checks they
+    /// agree).
+    static constexpr qint64 kLoadIntervalMs = 500;
+    /// Time a step down gets before it is judged: the app's allocation
+    /// acknowledgement timeout plus one load interval.
+    static constexpr qint64 kSettleMs = kDisplayAllocationAckTimeoutMs + kLoadIntervalMs;
+    /// Hardware-pending tuning value: the least drop in pressure, as a
+    /// fraction of the busy threshold, that counts as relief from a step.
+    static constexpr double kReliefMargin = 0.05;
+    /// Hardware-pending tuning value: how far pressure must rise above its
+    /// level at an undone step before the governor cuts again.
+    static constexpr double kClearRiseMargin = 0.10;
     /// The floor keeps one active pan useful: the app's own reduction floors
     /// (RemoteDisplayAllocator.cpp kUsefulPixels, kUsefulFps).
     static constexpr int kFloorPixels = 256;
@@ -86,34 +121,70 @@ public:
     /// advertises when adaptation is on and no limits are configured, so
     /// apps plan in budget mode from the start.
     static DisplayBudgetLimits computedCeiling();
+    /// The reading's load as a fraction of its busy threshold: the larger of
+    /// receiver load over kBusyReceiverLoad and CPU over
+    /// kBusySystemCpuPercent. nullopt without a measurement.
+    static std::optional<double> pressure(const DisplayLoadReading& reading);
 
     explicit DisplayLoadGovernor(DisplayBudgetLimits ceiling);
 
-    /// A new decision when the limits change, otherwise nullopt.
+    /// A proposed decision when the limits should change, otherwise
+    /// nullopt. Nothing it proposes is in force until accept().
     std::optional<DisplayLoadDecision> update(const DisplayLoadReading& reading);
-    /// Back to the ceiling (the session ended). A decision only when a step
-    /// was in force.
+    /// The proposal from the latest update() was published: put it in
+    /// force. A decision that is not that proposal is ignored.
+    void accept(const DisplayLoadDecision& decision);
+    /// Publication refused because `generation` is already published:
+    /// the next proposal follows it.
+    void syncGeneration(quint32 generation);
+    /// Back to the ceiling (the session ended), in force at once. A
+    /// decision only when a step was in force.
     std::optional<DisplayLoadDecision> reset();
 
     DisplayBudgetLimits ceiling() const { return m_ceiling; }
-    DisplayBudgetLimits limits() const { return m_limits; }
-    DisplayBudgetReason reason() const
-    {
-        return m_previous.isEmpty() ? DisplayBudgetReason::None
-                                    : DisplayBudgetReason::CoreBusy;
-    }
-    int steps() const { return static_cast<int>(m_previous.size()); }
+    DisplayBudgetLimits limits() const { return m_state.limits; }
+    DisplayBudgetReason reason() const { return reasonFor(m_state); }
+    int steps() const { return static_cast<int>(m_state.previous.size()); }
+    /// A step is waiting to be judged.
+    bool settling() const { return m_state.settle.has_value(); }
+    /// An undone step is holding further cuts.
+    bool holding() const { return m_state.heldPressure.has_value(); }
 
 private:
-    std::optional<DisplayLoadDecision> stepDown(const DisplayBudgetCharge& accepted);
-    std::optional<DisplayLoadDecision> restoreStep();
-    quint32 nextGeneration() const;
+    struct Settle {
+        qint64 untilMs = 0;
+        double pressureAtStep = 0.0;
+    };
+    /// Everything a published decision changes.
+    struct State {
+        DisplayBudgetLimits limits;
+        QList<DisplayBudgetLimits> previous;
+        std::optional<Settle> settle;
+        std::optional<double> heldPressure;
+    };
+    struct Proposal {
+        DisplayLoadDecision decision;
+        State next;
+    };
+
+    static DisplayBudgetReason reasonFor(const State& state)
+    {
+        return state.previous.isEmpty() ? DisplayBudgetReason::None
+                                        : DisplayBudgetReason::CoreBusy;
+    }
+    std::optional<DisplayLoadDecision> propose(State next);
+    std::optional<DisplayLoadDecision> stepDown(State next, const DisplayLoadReading& reading,
+                                                double pressureNow);
+    std::optional<DisplayLoadDecision> restoreStep(State next);
+    std::optional<DisplayLoadDecision> calmReading(State next, qint64 nowMs, qint64 calmStartMs);
+    static quint32 nextGeneration(const DisplayBudgetLimits& limits);
 
     DisplayBudgetLimits m_ceiling;
-    DisplayBudgetLimits m_limits;
-    QList<DisplayBudgetLimits> m_previous;
+    State m_state;
+    std::optional<Proposal> m_proposal;
     std::optional<qint64> m_busySinceMs;
     std::optional<qint64> m_calmSinceMs;
+    std::optional<qint64> m_gapSinceMs;
 };
 
 } // namespace NereusSDR

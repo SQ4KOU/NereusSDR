@@ -8,11 +8,14 @@
 
 #include <QtTest>
 
+#include "core/daemon/DisplayLoadInputs.h"
 #include "core/daemon/HostTelemetrySampler.h"
 
 #include <QDir>
 #include <QFile>
 #include <QTemporaryDir>
+
+#include <memory>
 
 #ifdef Q_OS_UNIX
 #include <unistd.h>
@@ -305,6 +308,101 @@ private slots:
 #else
         QSKIP("file modes are a POSIX fixture");
 #endif
+    }
+
+    // R-R3-40/41 (final review I2): the display load governor's CPU input
+    // while thread placement is active is the housekeeping cores' share, from
+    // the per-core lines. A Rock-shaped load: four housekeeping cores at
+    // 100 % and four signal processing cores at 60 % average 80 %, under the
+    // 85 % busy threshold, while spectrum and sending are starved.
+    void watchedCoresAreMeasuredApartFromTheAggregate()
+    {
+        Fixture f;
+        f.standardProc();
+        const auto statWith = [](quint64 step) {
+            // Ticks after `step` intervals of 100 per core.
+            QByteArray text("cpu  ");
+            const quint64 busyAll = step * (4 * 100 + 4 * 60);
+            const quint64 idleAll = step * (4 * 40);
+            text += QByteArray::number(busyAll) + " 0 0 " + QByteArray::number(idleAll)
+                + " 0 0 0 0 0 0\n";
+            for (int cpu = 0; cpu < 8; ++cpu) {
+                const quint64 busy = step * (cpu < 4 ? 100 : 60);
+                const quint64 idle = step * (cpu < 4 ? 0 : 40);
+                text += "cpu" + QByteArray::number(cpu) + ' ' + QByteArray::number(busy)
+                    + " 0 0 " + QByteArray::number(idle) + " 0 0 0 0 0 0\n";
+            }
+            text += "intr 12345 0 0 0\nctxt 999\n";
+            return text;
+        };
+        f.write(QStringLiteral("proc/stat"), statWith(1));
+        auto sampler = std::make_unique<HostTelemetrySampler>(f.root());
+        sampler->setWatchedCpus({3, 1, 0, 2, 2}); // any order, duplicates
+        QCOMPARE(sampler->watchedCpus(), (QList<int>{0, 1, 2, 3}));
+        qint64 now = 0;
+        SharedHostSampler shared(std::move(sampler), [&now] { return now; });
+        QVERIFY(!shared.reading().systemCpuPercent.has_value());
+        QVERIFY(!shared.governorCpuPercent().has_value());
+
+        f.write(QStringLiteral("proc/stat"), statWith(2));
+        now = SharedHostSampler::kMinimumIntervalMs;
+        const StationHostTelemetry host = shared.reading();
+        QVERIFY(host.systemCpuPercent.has_value());
+        QCOMPARE(*host.systemCpuPercent, 80.0); // telemetry: every core
+        QCOMPARE(shared.governorCpuPercent(), std::optional<double>(100.0));
+
+        // What the governor does with each: the aggregate never steps down,
+        // the housekeeping share does after the busy hold.
+        PlacementPlan placed;
+        placed.active = true;
+        placed.housekeeping = {0, 1, 2, 3};
+        DisplayLoadInputs in;
+        in.systemCpuPercent = host.systemCpuPercent;
+        in.housekeepingCpuPercent = shared.governorCpuPercent();
+        const DisplayBudgetCharge pan = spectrumDisplayCost(1024, 30, false)->charge;
+        const auto run = [&](const PlacementPlan& plan) {
+            in.placement = plan;
+            DisplayLoadGovernor governor(DisplayLoadGovernor::computedCeiling());
+            int decisions = 0;
+            for (qint64 t = 0; t <= 5'000; t += 500) {
+                if (const auto d = governor.update(displayLoadReadingFrom(in, t, pan))) {
+                    governor.accept(*d);
+                    ++decisions;
+                }
+            }
+            return decisions;
+        };
+        QCOMPARE(run(placed), 1);
+        QCOMPARE(run(PlacementPlan{}), 0);
+
+        // A different set restarts only the watched measurement.
+        shared.setGovernorCpus({0, 1});
+        QVERIFY(!shared.governorCpuPercent().has_value());
+        QCOMPARE(shared.reading().systemCpuPercent, std::optional<double>(80.0));
+    }
+
+    void anOfflineWatchedCoreIsAbsent()
+    {
+        Fixture f;
+        f.write(QStringLiteral("proc/stat"),
+                "cpu  200 0 0 200 0 0 0 0 0 0\ncpu0 100 0 0 100 0 0 0 0 0 0\n"
+                "cpu2 100 0 0 100 0 0 0 0 0 0\n");
+        HostTelemetrySampler sampler(f.root());
+        sampler.setWatchedCpus({0, 1}); // cpu1 has no line
+        sampler.sample();
+        f.write(QStringLiteral("proc/stat"),
+                "cpu  400 0 0 200 0 0 0 0 0 0\ncpu0 200 0 0 100 0 0 0 0 0 0\n"
+                "cpu2 200 0 0 100 0 0 0 0 0 0\n");
+        const StationHostTelemetry host = sampler.sample();
+        QVERIFY(host.systemCpuPercent.has_value());
+        QVERIFY(!sampler.watchedCpuPercent().has_value());
+        sampler.setWatchedCpus({0});
+        sampler.sample();
+        f.write(QStringLiteral("proc/stat"),
+                "cpu  500 0 0 300 0 0 0 0 0 0\ncpu0 250 0 0 150 0 0 0 0 0 0\n"
+                "cpu2 250 0 0 150 0 0 0 0 0 0\n");
+        sampler.sample();
+        QCOMPARE(sampler.watchedCpuPercent(), std::optional<double>(50.0));
     }
 
     void disabledSamplerMeasuresNothing()

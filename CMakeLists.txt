@@ -974,6 +974,8 @@ set(CORE_SOURCES
     src/core/daemon/DaemonTelemetryController.cpp
     # R-R3-32/33: Linux procfs/sysfs host load for the Core telemetry.
     src/core/daemon/HostTelemetrySampler.cpp
+    # R-R3-40/41: the load readings the display load governor may act on.
+    src/core/daemon/DisplayLoadInputs.cpp
     # R3 bounded bridge from the AudioEngine master mix to daemon media.
     src/core/session/media/DaemonAudioSource.cpp
     src/core/session/media/DaemonAudioSender.cpp

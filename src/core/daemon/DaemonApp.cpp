@@ -12,12 +12,18 @@
 //               microphone capture, so nereusd never starts the capture
 //               helper, by J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-23: display load governor inputs follow thread placement, a
+//               step is accepted only once published, and a computed
+//               ceiling reaches only apps that know the budget reason
+//               (R-R3-08, R-R3-37, R-R3-40), by J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
 #include "core/daemon/DaemonAgcSource.h"
 #include "core/daemon/DaemonTelemetryController.h"
 #include "core/daemon/HostTelemetrySampler.h"
+#include "models/ReceiverDspLoadSampler.h"
 
 #include "core/AppSettings.h"
 #include "core/CoreInit.h"
@@ -464,6 +470,8 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
     std::optional<DisplayBudgetLimits> displayCeiling = cfg.displayBudgetLimits();
     if (cfg.displayAdaptive && !displayCeiling) {
         displayCeiling = DisplayLoadGovernor::computedCeiling();
+        // An app older than the budget reason keeps legacy mode exactly.
+        m_stationServer->setDisplayBudgetForReasonPeersOnly(true);
     }
     if (displayCeiling) {
         m_stationServer->setDisplayBudgetLimits(*displayCeiling);
@@ -530,48 +538,82 @@ QString announcementName(const QString& input, const QString& fallback)
 }
 }
 
-void DaemonApp::evaluateDisplayLoad()
+static_assert(DisplayLoadGovernor::kLoadIntervalMs == ReceiverDspLoadSampler::kSampleIntervalMs,
+              "the display load governor settles in load intervals");
+
+DisplayLoadInputs DaemonApp::gatherDisplayLoadInputs()
 {
-    if (!m_displayGovernor || !m_radioModel || !m_mediaController) {
-        return;
+    if (m_displayLoadInputsForTest) {
+        return m_displayLoadInputsForTest();
     }
-    // Cached readings only: RadioModel's 500 ms load snapshot and the shared
-    // host sampler. Neither takes a DSP lock or restarts another reader's
-    // interval.
-    DisplayLoadReading reading;
-    reading.nowMs = m_displayGovernorClock.elapsed();
+    DisplayLoadInputs inputs;
+    // The plan changes only when a channel or signal processing thread
+    // starts or stops; its mutex is taken only then.
+    ThreadPlacement& placement = ThreadPlacement::instance();
+    const quint64 revision = placement.planRevision();
+    if (m_placementPlanRevision != revision) {
+        m_placementPlan = placement.currentPlan();
+        m_placementPlanRevision = revision;
+    }
+    inputs.placement = m_placementPlan;
     for (SliceModel* slice : m_radioModel->slices()) {
         if (slice == nullptr) {
             continue;
         }
-        const std::optional<ReceiverDspLoad> load
-            = m_radioModel->receiverDspLoad(slice->sliceIndex());
-        // Idle is not proof of no load, so it is not a measurement either.
-        if (!load || load->idle || !std::isfinite(load->load)) {
-            continue;
+        const int sliceId = slice->sliceIndex();
+        if (const std::optional<ReceiverDspLoad> load = m_radioModel->receiverDspLoad(sliceId)) {
+            inputs.receivers.append({sliceId, *load});
         }
-        reading.highestReceiverLoad = std::max(reading.highestReceiverLoad.value_or(0.0),
-                                               load->load);
-        reading.lateBlocks += std::max<qint64>(0, load->lateBlocks);
-        reading.highestInputDelayMs = std::max(reading.highestInputDelayMs,
-                                               load->inputDelayMs);
     }
     if (m_hostSampler) {
-        reading.systemCpuPercent = m_hostSampler->reading().systemCpuPercent;
+        m_hostSampler->setGovernorCpus(inputs.placement.active ? inputs.placement.housekeeping
+                                                               : QList<int>{});
+        inputs.systemCpuPercent = m_hostSampler->reading().systemCpuPercent;
+        inputs.housekeepingCpuPercent = m_hostSampler->governorCpuPercent();
     }
-    reading.acceptedCharge = m_mediaController->acceptedDisplayCharge();
-    publishDisplayBudget(m_displayGovernor->update(reading));
+    return inputs;
 }
 
-void DaemonApp::publishDisplayBudget(const std::optional<DisplayLoadDecision>& decision)
+void DaemonApp::evaluateDisplayLoad()
+{
+    if (!m_displayGovernor || !m_radioModel || !m_mediaController || !m_stationServer) {
+        return;
+    }
+    // An app older than the budget reason plans without a budget (legacy
+    // mode): there is nothing for it to follow.
+    if (!m_stationServer->displayBudgetLimits()) {
+        return;
+    }
+    // Cached readings only: RadioModel's 500 ms load snapshot, the shared
+    // host sampler and the placement plan. None takes a DSP lock or
+    // restarts another reader's interval.
+    const qint64 nowMs = m_displayGovernorNowForTest ? m_displayGovernorNowForTest()
+                                                     : m_displayGovernorClock.elapsed();
+    const DisplayBudgetCharge accepted = m_acceptedDisplayChargeForTest
+        ? m_acceptedDisplayChargeForTest() : m_mediaController->acceptedDisplayCharge();
+    const DisplayLoadReading reading
+        = displayLoadReadingFrom(gatherDisplayLoadInputs(), nowMs, accepted);
+    const std::optional<DisplayLoadDecision> decision = m_displayGovernor->update(reading);
+    if (!decision) {
+        return;
+    }
+    if (publishDisplayBudget(decision)) {
+        m_displayGovernor->accept(*decision);
+    } else if (const auto published = m_stationServer->configuredDisplayBudgetLimits()) {
+        // Refused: the next proposal follows what is published.
+        m_displayGovernor->syncGeneration(published->generation);
+    }
+}
+
+bool DaemonApp::publishDisplayBudget(const std::optional<DisplayLoadDecision>& decision)
 {
     if (!decision || !m_stationServer) {
-        return;
+        return false;
     }
     if (!m_stationServer->setDisplayBudgetLimits(decision->limits, decision->reason)) {
         qCWarning(lcApp) << "DaemonApp: display budget generation"
                           << decision->limits.generation << "was not accepted";
-        return;
+        return false;
     }
     qCInfo(lcApp).nospace() << "DaemonApp: display budget "
                             << (decision->reason == DisplayBudgetReason::CoreBusy
@@ -579,6 +621,7 @@ void DaemonApp::publishDisplayBudget(const std::optional<DisplayLoadDecision>& d
                             << ": " << decision->limits.applicationBytesPerSecond
                             << " bytes/s, " << decision->limits.spectrumSampleUnitsPerSecond
                             << " samples/s (generation " << decision->limits.generation << ")";
+    return true;
 }
 
 void DaemonApp::updateStationAnnouncement()

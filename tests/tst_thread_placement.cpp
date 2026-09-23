@@ -621,6 +621,41 @@ private slots:
         }
     }
 
+    // R-R3-40: the display load governor keeps a copy of the plan and asks
+    // for it again, under the registry's mutex, only when planRevision()
+    // has moved; so every change of the plan must move it.
+    void planRevisionMovesWithEveryPlanChange()
+    {
+        SysfsFixture f;
+        layOutRk3588s(f);
+        QList<Call> calls;
+        qint64 current = 1;
+        ThreadPlacement placement;
+        const quint64 unstarted = placement.planRevision();
+        placement.start(f.read(), demand({0}, true),
+                        std::make_unique<RecordingApi>(&calls, &current), true);
+        const quint64 started = placement.planRevision();
+        QVERIFY(started != unstarted);
+        QCOMPARE(placement.currentPlan().cpuFor(ThreadRole::RxWorker, 0), -1);
+
+        placement.setChannelActive(ThreadRole::RxWorker, 0, true);
+        const quint64 active = placement.planRevision();
+        QVERIFY(active != started);
+        QCOMPARE(placement.currentPlan().cpuFor(ThreadRole::RxWorker, 0), 4);
+        // Nothing changed: the revision stands.
+        placement.setChannelActive(ThreadRole::RxWorker, 0, true);
+        QCOMPARE(placement.planRevision(), active);
+
+        current = 201;
+        placement.registerCurrentThread(ThreadRole::DspThread);
+        const quint64 dsp = placement.planRevision();
+        QVERIFY(dsp != active);
+        QVERIFY(placement.currentPlan().cpuFor(ThreadRole::DspThread) >= 0);
+        placement.forgetChannel(0);
+        QVERIFY(placement.planRevision() != dsp);
+        QCOMPARE(placement.currentPlan().cpuFor(ThreadRole::RxWorker, 0), -1);
+    }
+
     void priorityNotPermittedMakesNoNiceCalls()
     {
         SysfsFixture f;

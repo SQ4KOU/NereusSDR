@@ -14,6 +14,9 @@
 //               startup priority probe. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code
 //               (R-R3-41).
+//   2026-09-23: planRevision() moves on every plan change (R-R3-40).
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/platform/ThreadPlacement.h"
@@ -593,6 +596,7 @@ QString ThreadPlacement::start(const CpuTopology& topology,
     m_raisePriority = raisePriorityPermitted;
     m_placing = true;
     m_active.store(true, std::memory_order_release);
+    m_planRevision.fetch_add(1, std::memory_order_acq_rel);
     return activeLine(plan, raisePriorityPermitted);
 }
 
@@ -623,6 +627,7 @@ QString ThreadPlacement::startPriorityOnlyLocked(std::unique_ptr<ThreadSchedulin
     m_raisePriority = raisePriorityPermitted;
     m_placing = false;
     m_active.store(true, std::memory_order_release);
+    m_planRevision.fetch_add(1, std::memory_order_acq_rel);
     return priorityOnlyLine(reason, raisePriorityPermitted);
 }
 
@@ -736,6 +741,7 @@ void ThreadPlacement::applyLocked()
     for (Registered& thread : m_threads) {
         applyOneLocked(thread, plan);
     }
+    m_planRevision.fetch_add(1, std::memory_order_acq_rel);
 }
 
 void ThreadPlacement::registerCurrentThread(ThreadRole role, int channel)

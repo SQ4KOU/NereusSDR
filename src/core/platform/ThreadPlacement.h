@@ -20,6 +20,10 @@
 //               rather than inferred from the limit. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code
 //               (R-R3-41).
+//   2026-09-23: planRevision(), so the display load governor can keep a
+//               copy of the plan without taking the mutex every tick.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code (R-R3-40).
 // =================================================================
 
 #pragma once
@@ -216,6 +220,15 @@ public:
     /// The plan for the current demand (tests and diagnostics).
     PlacementPlan currentPlan() const;
 
+    /// Changes whenever the plan currentPlan() returns may have changed. A
+    /// reader that polls (the display load governor, every 500 ms) keeps
+    /// its copy of the plan and calls currentPlan(), which takes the
+    /// registry's mutex, only when this has moved. Lock-free.
+    quint64 planRevision() const noexcept
+    {
+        return m_planRevision.load(std::memory_order_acquire);
+    }
+
 private:
     struct Registered {
         qint64 threadId{0};
@@ -237,6 +250,7 @@ private:
 
     mutable QMutex m_mutex;
     std::atomic<bool> m_active{false};
+    std::atomic<quint64> m_planRevision{0};
     CpuTopology m_topology;
     PlacementPlan m_startupPlan;
     std::unique_ptr<ThreadSchedulingApi> m_api;

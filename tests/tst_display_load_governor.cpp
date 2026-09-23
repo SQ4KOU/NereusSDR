@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <functional>
 
+#include "core/daemon/DisplayLoadInputs.h"
 #include "core/session/media/DisplayLoadGovernor.h"
 
 using namespace NereusSDR;
@@ -62,6 +63,34 @@ DisplayBudgetLimits stepFrom(const DisplayBudgetCharge& base, quint32 generation
             generation};
 }
 
+// Proposes and, when there is a decision, accepts it (a publish the
+// StationServer accepted).
+std::optional<DisplayLoadDecision> step(DisplayLoadGovernor& governor,
+                                        const DisplayLoadReading& reading)
+{
+    const auto decision = governor.update(reading);
+    if (decision) {
+        governor.accept(*decision);
+    }
+    return decision;
+}
+
+// A load that each step relieves: `start` with no step in force, less
+// `perStep` for every step. The app's accepted charge follows the limits.
+std::function<DisplayLoadReading(qint64)> responsiveLoad(const DisplayLoadGovernor& governor,
+                                                          double start, double perStep)
+{
+    return [&governor, start, perStep](qint64 t) {
+        const DisplayBudgetLimits limits = governor.limits();
+        const DisplayBudgetCharge four = fourPans();
+        const DisplayBudgetCharge accepted{
+            std::min(limits.applicationBytesPerSecond, four.applicationBytesPerSecond),
+            std::min(limits.spectrumSampleUnitsPerSecond, four.spectrumSampleUnitsPerSecond),
+            four.messagesPerSecond};
+        return loadReading(t, start - perStep * governor.steps(), accepted);
+    };
+}
+
 // Feeds one reading every 500 ms (the load sampler's period) from `fromMs`
 // to `toMs` inclusive; returns every decision made.
 QList<DisplayLoadDecision> feed(DisplayLoadGovernor& governor, qint64 fromMs, qint64 toMs,
@@ -70,6 +99,7 @@ QList<DisplayLoadDecision> feed(DisplayLoadGovernor& governor, qint64 fromMs, qi
     QList<DisplayLoadDecision> decisions;
     for (qint64 t = fromMs; t <= toMs; t += 500) {
         if (const auto decision = governor.update(make(t))) {
+            governor.accept(*decision); // Published and accepted.
             decisions.append(*decision);
         }
     }
@@ -133,7 +163,7 @@ private slots:
         DisplayLoadReading gap;
         gap.nowMs = 102'000;
         gap.acceptedCharge = fourPans();
-        QVERIFY(!governor.update(gap));
+        QVERIFY(!step(governor, gap));
         QVERIFY(feed(governor, 102'500, 104'000,
                      [](qint64 t) { return loadReading(t, 0.9); }).isEmpty());
         QCOMPARE(governor.steps(), 0);
@@ -145,7 +175,7 @@ private slots:
         DisplayLoadGovernor governor(ceiling);
         QVERIFY(feed(governor, 0, 1'500,
                      [](qint64 t) { return loadReading(t, 0.75); }).isEmpty());
-        const auto decision = governor.update(loadReading(2'000, 0.75));
+        const auto decision = step(governor, loadReading(2'000, 0.75));
         QVERIFY(decision.has_value());
         QCOMPARE(decision->reason, DisplayBudgetReason::CoreBusy);
         QCOMPARE(decision->limits.generation, quint32{2});
@@ -157,14 +187,168 @@ private slots:
         QCOMPARE(governor.limits(), decision->limits);
         QCOMPARE(governor.steps(), 1);
 
-        // The next step needs a full hold of its own.
-        QVERIFY(feed(governor, 2'500, 3'500,
-                     [](qint64 t) { return loadReading(t, 0.8); }).isEmpty());
-        const auto second = governor.update(loadReading(4'000, 0.8));
-        QVERIFY(second.has_value());
-        QCOMPARE(second->limits,
-                 stepFrom({firstStep.applicationBytesPerSecond,
-                           firstStep.spectrumSampleUnitsPerSecond, 0}, 3));
+        QVERIFY(governor.settling());
+
+        // Nothing more is cut until the step has settled, however busy.
+        QVERIFY(feed(governor, 2'500, 2'000 + DisplayLoadGovernor::kSettleMs - 500,
+                     [](qint64 t) { return loadReading(t, 0.95); }).isEmpty());
+        // The step relieved the load (0.75 to 0.70 is 0.067 of the busy
+        // threshold) and it is no longer busy: the step stays, nothing more.
+        const auto second = step(governor,
+                                 loadReading(2'000 + DisplayLoadGovernor::kSettleMs, 0.70));
+        QVERIFY(!second.has_value());
+        QCOMPARE(governor.steps(), 1);
+        QVERIFY(!governor.settling());
+    }
+
+    void settleIsTheAllocationTimeoutPlusOneLoadInterval()
+    {
+        QCOMPARE(DisplayLoadGovernor::kSettleMs,
+                 qint64{kDisplayAllocationAckTimeoutMs} + DisplayLoadGovernor::kLoadIntervalMs);
+        QCOMPARE(DisplayLoadGovernor::kSettleMs, qint64{10'500});
+        QVERIFY(DisplayLoadGovernor::kReliefMargin > 0.0);
+        QVERIFY(DisplayLoadGovernor::kClearRiseMargin > DisplayLoadGovernor::kReliefMargin);
+    }
+
+    void aResponsiveLoadIsSteppedOncePerSettle()
+    {
+        DisplayLoadGovernor governor(DisplayLoadGovernor::computedCeiling());
+        // Each step takes 0.06 off the receiver load (0.08 of the busy
+        // threshold): relief every time, busy until the third step.
+        const auto decisions = feed(governor, 0, 60'000, responsiveLoad(governor, 0.92, 0.06));
+        QCOMPARE(decisions.size(), 3);
+        QList<qint64> times;
+        // Replay to find when each decision fell: the first after the busy
+        // hold, each later one exactly one settle after the one before.
+        DisplayLoadGovernor replay(DisplayLoadGovernor::computedCeiling());
+        const auto make = responsiveLoad(replay, 0.92, 0.06);
+        for (qint64 t = 0; t <= 60'000; t += 500) {
+            if (step(replay, make(t))) {
+                times.append(t);
+            }
+        }
+        QCOMPARE(times.size(), 3);
+        QCOMPARE(times.at(0), DisplayLoadGovernor::kBusyHoldMs);
+        QCOMPARE(times.at(1) - times.at(0), DisplayLoadGovernor::kSettleMs);
+        QCOMPARE(times.at(2) - times.at(1), DisplayLoadGovernor::kSettleMs);
+        for (int i = 0; i < decisions.size(); ++i) {
+            QCOMPARE(decisions.at(i).reason, DisplayBudgetReason::CoreBusy);
+            QCOMPARE(decisions.at(i).limits.generation, quint32(2 + i));
+        }
+        QCOMPARE(governor.steps(), 3);
+        // 0.92 - 3 x 0.06 = 0.74: no longer busy, not calm. Holds there.
+        QVERIFY(feed(governor, 60'500, 180'000,
+                     responsiveLoad(governor, 0.92, 0.06)).isEmpty());
+        QCOMPARE(governor.steps(), 3);
+    }
+
+    void aStepThatBringsNoReliefIsUndoneAndCutsStop()
+    {
+        const DisplayBudgetLimits ceiling = DisplayLoadGovernor::computedCeiling();
+        DisplayLoadGovernor governor(ceiling);
+        // The display is not what loads this receiver: a step changes
+        // nothing. One step, then its undo, then nothing for five minutes.
+        const auto decisions = feed(governor, 0, 300'000,
+                                    [](qint64 t) { return loadReading(t, 0.9); });
+        QCOMPARE(decisions.size(), 2);
+        QCOMPARE(decisions.at(0).reason, DisplayBudgetReason::CoreBusy);
+        QCOMPARE(decisions.at(0).limits.generation, quint32{2});
+        QCOMPARE(decisions.at(1).reason, DisplayBudgetReason::None);
+        QCOMPARE(decisions.at(1).limits.applicationBytesPerSecond,
+                 ceiling.applicationBytesPerSecond);
+        QCOMPARE(decisions.at(1).limits.spectrumSampleUnitsPerSecond,
+                 ceiling.spectrumSampleUnitsPerSecond);
+        QCOMPARE(decisions.at(1).limits.generation, quint32{3});
+        QCOMPARE(governor.steps(), 0);
+        QCOMPARE(governor.reason(), DisplayBudgetReason::None);
+        QVERIFY(governor.holding());
+
+        // A small rise is not a clear change: still no cut.
+        QVERIFY(feed(governor, 300'500, 320'000,
+                     [](qint64 t) { return loadReading(t, 0.9 + 0.05); }).isEmpty());
+        // A clear rise (more than kClearRiseMargin of the threshold) lets
+        // the governor try again, after a full busy hold.
+        const double clearRise = 0.9 + DisplayLoadGovernor::kClearRiseMargin
+            * DisplayLoadGovernor::kBusyReceiverLoad + 0.01;
+        QVERIFY(feed(governor, 320'500, 322'000,
+                     [clearRise](qint64 t) { return loadReading(t, clearRise); }).isEmpty());
+        const auto again = step(governor, loadReading(322'500, clearRise));
+        QVERIFY(again.has_value());
+        QCOMPARE(again->reason, DisplayBudgetReason::CoreBusy);
+        QVERIFY(!governor.holding());
+    }
+
+    void aHoldEndsWhenTheLoadFallsToCalm()
+    {
+        DisplayLoadGovernor governor(DisplayLoadGovernor::computedCeiling());
+        QCOMPARE(feed(governor, 0, 12'500,
+                      [](qint64 t) { return loadReading(t, 0.9); }).size(), 2);
+        QVERIFY(governor.holding());
+        QVERIFY(!step(governor, loadReading(13'000, 0.5)));
+        QVERIFY(!governor.holding());
+        // Busy again: an ordinary busy hold, then a step.
+        QVERIFY(feed(governor, 13'500, 15'000,
+                     [](qint64 t) { return loadReading(t, 0.9); }).isEmpty());
+        QVERIFY(step(governor, loadReading(15'500, 0.9)).has_value());
+    }
+
+    void anUnacceptedProposalChangesNothing()
+    {
+        const DisplayBudgetLimits ceiling = DisplayLoadGovernor::computedCeiling();
+        DisplayLoadGovernor governor(ceiling);
+        for (qint64 t = 0; t < 2'000; t += 500) {
+            QVERIFY(!governor.update(loadReading(t, 0.9)));
+        }
+        const auto proposed = governor.update(loadReading(2'000, 0.9));
+        QVERIFY(proposed.has_value());
+        QCOMPARE(proposed->limits.generation, quint32{2});
+        // Not accepted (the publish was refused): nothing is in force.
+        QCOMPARE(governor.limits(), ceiling);
+        QCOMPARE(governor.steps(), 0);
+        QVERIFY(!governor.settling());
+        // A later publish at generation 6 was accepted elsewhere: the next
+        // proposal follows it.
+        governor.syncGeneration(6);
+        const auto retried = governor.update(loadReading(4'000, 0.9));
+        QVERIFY(retried.has_value());
+        QCOMPARE(retried->limits.generation, quint32{7});
+        // Accepting a decision that is not the latest proposal does nothing.
+        governor.accept(*proposed);
+        QCOMPARE(governor.steps(), 0);
+        governor.accept(*retried);
+        QCOMPARE(governor.steps(), 1);
+        QCOMPARE(governor.limits(), retried->limits);
+        // An older generation never moves the governor backwards.
+        governor.syncGeneration(3);
+        QCOMPARE(governor.limits().generation, quint32{7});
+    }
+
+    void aSustainedGapRestoresButNeverCuts()
+    {
+        const DisplayBudgetLimits ceiling = DisplayLoadGovernor::computedCeiling();
+        DisplayLoadGovernor governor(ceiling);
+        QCOMPARE(feed(governor, 0, 2'000,
+                      [](qint64 t) { return loadReading(t, 0.9); }).size(), 1);
+        const auto absent = [](qint64 t) {
+            DisplayLoadReading reading;
+            reading.nowMs = t;
+            reading.acceptedCharge = fourPans();
+            return reading;
+        };
+        // Measurements stop (every receiver idle). Shorter than the calm
+        // hold: the cut stays.
+        QVERIFY(feed(governor, 2'500, 12'000, absent).isEmpty());
+        QCOMPARE(governor.steps(), 1);
+        // From kCalmHoldMs of gap on, absence counts as calm for restoring.
+        const auto restored = feed(governor, 12'500, 12'500, absent);
+        QCOMPARE(restored.size(), 1);
+        QCOMPARE(restored.first().reason, DisplayBudgetReason::None);
+        QCOMPARE(restored.first().limits.spectrumSampleUnitsPerSecond,
+                 ceiling.spectrumSampleUnitsPerSecond);
+        // And never as busy: nothing more for ten minutes.
+        QVERIFY(feed(governor, 13'000, 600'000, absent).isEmpty());
+        QCOMPARE(governor.limits().spectrumSampleUnitsPerSecond,
+                 ceiling.spectrumSampleUnitsPerSecond);
     }
 
     void systemCpuAloneStepsDown()
@@ -195,9 +379,11 @@ private slots:
     {
         const DisplayBudgetLimits ceiling = DisplayLoadGovernor::computedCeiling();
         DisplayLoadGovernor governor(ceiling);
-        const auto decisions = feed(governor, 0, 120'000,
-                                    [](qint64 t) { return loadReading(t, 1.2); });
-        QVERIFY(!decisions.isEmpty());
+        // Each step relieves a little but the Core stays busy.
+        const auto decisions = feed(governor, 0, 600'000, [&governor](qint64 t) {
+            return loadReading(t, 2.0 - 0.04 * governor.steps());
+        });
+        QVERIFY(decisions.size() > 1);
         const DisplayBudgetCharge floor = DisplayLoadGovernor::floorCharge();
         QCOMPARE(governor.limits().applicationBytesPerSecond, floor.applicationBytesPerSecond);
         QCOMPARE(governor.limits().spectrumSampleUnitsPerSecond,
@@ -208,8 +394,9 @@ private slots:
                     >= floor.spectrumSampleUnitsPerSecond);
         }
         // At the floor nothing more is published.
-        QVERIFY(feed(governor, 120'500, 140'000,
-                     [](qint64 t) { return loadReading(t, 1.2); }).isEmpty());
+        QVERIFY(feed(governor, 600'500, 700'000, [&governor](qint64 t) {
+            return loadReading(t, 2.0 - 0.04 * governor.steps());
+        }).isEmpty());
 
         // Nothing above the floor being sent: nothing to lower.
         DisplayLoadGovernor quiet(ceiling);
@@ -223,35 +410,45 @@ private slots:
     {
         const DisplayBudgetLimits ceiling = DisplayLoadGovernor::computedCeiling();
         DisplayLoadGovernor governor(ceiling);
-        QCOMPARE(feed(governor, 0, 4'000,
-                      [](qint64 t) { return loadReading(t, 0.9); }).size(), 2);
+        // Two relieving steps: at 2 s and one settle later.
+        const qint64 secondStepMs = 2'000 + DisplayLoadGovernor::kSettleMs;
+        QCOMPARE(feed(governor, 0, secondStepMs, [&governor](qint64 t) {
+            return loadReading(t, 0.9 - 0.06 * governor.steps());
+        }).size(), 2);
         QCOMPARE(governor.steps(), 2);
         const DisplayBudgetCharge accepted = fourPans();
+        // The second step settles on a calm load, which keeps it; the calm
+        // hold starts once it has settled.
+        QVERIFY(feed(governor, secondStepMs + 500,
+                     secondStepMs + DisplayLoadGovernor::kSettleMs - 500,
+                     [](qint64 t) { return loadReading(t, 0.5); }).isEmpty());
+        QCOMPARE(governor.steps(), 2);
+        const qint64 base = secondStepMs + DisplayLoadGovernor::kSettleMs - 4'500;
 
         // Calm: 9.5 s is not enough.
-        QVERIFY(feed(governor, 4'500, 14'000, [](qint64 t) {
+        QVERIFY(feed(governor, base + 4'500, base + 14'000, [](qint64 t) {
             DisplayLoadReading reading = loadReading(t, 0.5);
             reading.systemCpuPercent = 60.0;
             return reading;
         }).isEmpty());
-        const auto first = governor.update(loadReading(14'500, 0.5));
+        const auto first = step(governor, loadReading(base + 14'500, 0.5));
         QVERIFY(first.has_value());
         QCOMPARE(first->reason, DisplayBudgetReason::CoreBusy);
         QCOMPARE(first->limits, stepFrom(accepted, 4));
 
         // A late block restarts the calm hold.
-        QVERIFY(feed(governor, 15'000, 20'000,
+        QVERIFY(feed(governor, base + 15'000, base + 20'000,
                      [](qint64 t) { return loadReading(t, 0.5); }).isEmpty());
-        DisplayLoadReading late = loadReading(20'500, 0.5);
+        DisplayLoadReading late = loadReading(base + 20'500, 0.5);
         late.lateBlocks = 1;
-        QVERIFY(!governor.update(late));
+        QVERIFY(!step(governor, late));
         // So does a long input wait.
-        DisplayLoadReading waiting = loadReading(21'000, 0.5);
+        DisplayLoadReading waiting = loadReading(base + 21'000, 0.5);
         waiting.highestInputDelayMs = DisplayLoadGovernor::kCalmInputDelayMs;
-        QVERIFY(!governor.update(waiting));
-        QVERIFY(feed(governor, 21'500, 31'000,
+        QVERIFY(!step(governor, waiting));
+        QVERIFY(feed(governor, base + 21'500, base + 31'000,
                      [](qint64 t) { return loadReading(t, 0.5); }).isEmpty());
-        const auto restored = governor.update(loadReading(31'500, 0.5));
+        const auto restored = step(governor, loadReading(base + 31'500, 0.5));
         QVERIFY(restored.has_value());
         QCOMPARE(restored->reason, DisplayBudgetReason::None);
         QCOMPARE(restored->limits.applicationBytesPerSecond, ceiling.applicationBytesPerSecond);
@@ -261,7 +458,7 @@ private slots:
         QCOMPARE(governor.steps(), 0);
 
         // At the ceiling a calm Core publishes nothing.
-        QVERIFY(feed(governor, 32'000, 80'000,
+        QVERIFY(feed(governor, base + 32'000, base + 80'000,
                      [](qint64 t) { return loadReading(t, 0.1); }).isEmpty());
     }
 
@@ -278,6 +475,97 @@ private slots:
         QCOMPARE(reset->limits.applicationBytesPerSecond, ceiling.applicationBytesPerSecond);
         QCOMPARE(reset->limits.generation, quint32{3});
         QVERIFY(!governor.reset());
+    }
+
+    // R-R3-40/41 (final review I1): with thread placement giving a
+    // receiver's worker and the DSP thread cores of their own, the display
+    // runs elsewhere and lowering it cannot relieve that receiver.
+    void receiverLoadCountsOnlyWhereTheDisplayCanRelieveIt()
+    {
+        PlacementPlan placed;
+        placed.active = true;
+        placed.signalPool = {4, 5, 6, 7};
+        placed.housekeeping = {0, 1, 2, 3};
+        placed.assignments = {{ThreadRole::RxWorker, 0, 4}, {ThreadRole::DspThread, -1, 5}};
+        QVERIFY(!receiverSharesDisplayCores(placed, 0));
+        QVERIFY(receiverSharesDisplayCores(placed, 1)); // no core of its own
+        PlacementPlan noDspCore = placed;
+        noDspCore.assignments = {{ThreadRole::RxWorker, 0, 4}};
+        QVERIFY(receiverSharesDisplayCores(noDspCore, 0));
+        QVERIFY(receiverSharesDisplayCores(PlacementPlan{}, 0)); // not placed
+
+        const auto inputs = [](const PlacementPlan& plan, QList<int> slices) {
+            DisplayLoadInputs in;
+            in.placement = plan;
+            for (int slice : slices) {
+                ReceiverDspLoad load;
+                load.load = 0.85;
+                load.lateBlocks = 2;
+                load.inputDelayMs = 150;
+                in.receivers.append({slice, load});
+            }
+            return in;
+        };
+        const DisplayBudgetCharge accepted = fourPans();
+
+        // Placed: 0.85 held for a minute changes nothing.
+        DisplayLoadGovernor placedGovernor(DisplayLoadGovernor::computedCeiling());
+        const DisplayLoadReading placedReading
+            = displayLoadReadingFrom(inputs(placed, {0}), 0, accepted);
+        QVERIFY(!placedReading.highestReceiverLoad.has_value());
+        QCOMPARE(placedReading.lateBlocks, qint64{0});
+        QVERIFY(feed(placedGovernor, 0, 60'000, [&](qint64 t) {
+            return displayLoadReadingFrom(inputs(placed, {0}), t, accepted);
+        }).isEmpty());
+        QCOMPARE(placedGovernor.steps(), 0);
+
+        // Placement off: the same load steps down after the busy hold.
+        DisplayLoadGovernor offGovernor(DisplayLoadGovernor::computedCeiling());
+        const DisplayLoadReading offReading
+            = displayLoadReadingFrom(inputs(PlacementPlan{}, {0}), 0, accepted);
+        QCOMPARE(offReading.highestReceiverLoad, std::optional<double>(0.85));
+        QCOMPARE(offReading.lateBlocks, qint64{2});
+        QCOMPARE(offReading.highestInputDelayMs, qint64{150});
+        const auto offDecisions = feed(offGovernor, 0, 2'000, [&](qint64 t) {
+            return displayLoadReadingFrom(inputs(PlacementPlan{}, {0}), t, accepted);
+        });
+        QCOMPARE(offDecisions.size(), 1);
+        QCOMPARE(offDecisions.first().reason, DisplayBudgetReason::CoreBusy);
+
+        // Placed, but a second receiver shares the housekeeping cores: its
+        // load counts.
+        const DisplayLoadReading mixed = displayLoadReadingFrom(inputs(placed, {0, 1}), 0, accepted);
+        QCOMPARE(mixed.highestReceiverLoad, std::optional<double>(0.85));
+        QCOMPARE(mixed.lateBlocks, qint64{2});
+
+        // Idle receivers are never a measurement.
+        DisplayLoadInputs idle = inputs(PlacementPlan{}, {0});
+        idle.receivers[0].load.idle = true;
+        QVERIFY(!displayLoadReadingFrom(idle, 0, accepted).highestReceiverLoad.has_value());
+    }
+
+    // R-R3-40/41 (final review I2): while placing, the governor's CPU is the
+    // housekeeping cores' share, where spectrum, encoding, Opus and sending
+    // run; otherwise all cores. Telemetry's systemCpuPercent is untouched.
+    void cpuIsTheHousekeepingShareWhilePlacing()
+    {
+        PlacementPlan placed;
+        placed.active = true;
+        placed.housekeeping = {0, 1, 2, 3};
+        DisplayLoadInputs in;
+        in.systemCpuPercent = 80.0;
+        in.housekeepingCpuPercent = 100.0;
+        in.placement = placed;
+        QCOMPARE(displayLoadReadingFrom(in, 0, fourPans()).systemCpuPercent,
+                 std::optional<double>(100.0));
+        in.placement = PlacementPlan{};
+        QCOMPARE(displayLoadReadingFrom(in, 0, fourPans()).systemCpuPercent,
+                 std::optional<double>(80.0));
+        // Placing without a housekeeping reading yet: no CPU measurement,
+        // not the aggregate.
+        in.placement = placed;
+        in.housekeepingCpuPercent.reset();
+        QVERIFY(!displayLoadReadingFrom(in, 0, fourPans()).systemCpuPercent.has_value());
     }
 
     void aConfiguredCeilingBelowTheFloorIsNeverRaised()

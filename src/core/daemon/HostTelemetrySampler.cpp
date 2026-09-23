@@ -127,16 +127,12 @@ struct SystemTimes {
     quint64 idle = 0;
 };
 
-// The aggregate "cpu" line: user nice system idle iowait irq softirq steal
-// guest guest_nice, in USER_HZ ticks. guest and guest_nice are already
-// counted in user and nice, so only the first eight make up the total.
-// Idle time is idle plus iowait.
-bool readSystemTimes(const QByteArray& path, ReadBuffer& buffer, SystemTimes* times)
+// The counters after a "cpu" or "cpuN" label: user nice system idle iowait
+// irq softirq steal guest guest_nice, in USER_HZ ticks. guest and
+// guest_nice are already counted in user and nice, so only the first eight
+// make up the total. Idle time is idle plus iowait.
+bool parseCpuTimes(const char* p, const char* end, SystemTimes* times)
 {
-    const qsizetype length = readSmallFile(path, buffer);
-    if (length < 4 || std::memcmp(buffer.data(), "cpu ", 4) != 0) { return false; }
-    const char* p = buffer.data() + 4;
-    const char* const end = buffer.data() + length;
     std::array<quint64, 8> fields{};
     int count = 0;
     while (count < static_cast<int>(fields.size()) && parseUnsigned(p, end, &fields[count])) {
@@ -150,6 +146,52 @@ bool readSystemTimes(const QByteArray& path, ReadBuffer& buffer, SystemTimes* ti
     }
     times->total = total;
     times->idle = fields[3] + (count > 4 ? fields[4] : 0);
+    return true;
+}
+
+// The aggregate "cpu" line, the first line of proc/stat.
+bool parseSystemTimes(const char* data, qsizetype length, SystemTimes* times)
+{
+    if (length < 4 || std::memcmp(data, "cpu ", 4) != 0) { return false; }
+    return parseCpuTimes(data + 4, data + length, times);
+}
+
+// The per-core "cpuN" lines for `cpus`, summed. False when any of them is
+// missing (an offline core has no line) or unreadable. The per-core lines
+// follow the aggregate line, well inside the read buffer on any Core
+// computer; a line cut off by the buffer's end reads as missing.
+bool parseCpuSetTimes(const char* data, qsizetype length, const QList<int>& cpus,
+                      SystemTimes* times)
+{
+    if (cpus.isEmpty()) { return false; }
+    const char* const end = data + length;
+    const char* line = data;
+    SystemTimes sum;
+    int found = 0;
+    while (line < end) {
+        const char* newline = static_cast<const char*>(
+            std::memchr(line, '\n', static_cast<size_t>(end - line)));
+        if (!newline) { break; } // A cut-off last line is not trusted.
+        if (newline - line > 3 && std::memcmp(line, "cpu", 3) == 0
+            && line[3] >= '0' && line[3] <= '9') {
+            const char* p = line + 3;
+            quint64 number = 0;
+            if (parseUnsigned(p, newline, &number) && number <= quint64(std::numeric_limits<int>::max())
+                && cpus.contains(static_cast<int>(number))) {
+                SystemTimes core;
+                if (!parseCpuTimes(p, newline, &core)
+                    || sum.total > std::numeric_limits<quint64>::max() - core.total) {
+                    return false;
+                }
+                sum.total += core.total;
+                sum.idle += core.idle;
+                ++found;
+            }
+        }
+        line = newline + 1;
+    }
+    if (found != cpus.size()) { return false; }
+    *times = sum;
     return true;
 }
 
@@ -240,6 +282,17 @@ void HostTelemetrySampler::reset()
     }
 }
 
+void HostTelemetrySampler::setWatchedCpus(const QList<int>& cpus)
+{
+    QList<int> sorted = cpus;
+    std::sort(sorted.begin(), sorted.end());
+    sorted.erase(std::unique(sorted.begin(), sorted.end()), sorted.end());
+    if (sorted == m_watchedCpus) { return; }
+    m_watchedCpus = sorted;
+    m_watchedBaseline.reset();
+    m_watchedCpuPercent.reset();
+}
+
 void HostTelemetrySampler::discoverThermalZones()
 {
     m_zones.clear();
@@ -272,7 +325,25 @@ StationHostTelemetry HostTelemetrySampler::sample()
     ReadBuffer buffer;
 
     SystemTimes system;
-    const bool systemRead = readSystemTimes(m_procStatPath, buffer, &system);
+    SystemTimes watched;
+    const qsizetype statLength = readSmallFile(m_procStatPath, buffer);
+    const bool systemRead = statLength > 0
+        && parseSystemTimes(buffer.data(), statLength, &system);
+    const bool watchedRead = statLength > 0
+        && parseCpuSetTimes(buffer.data(), statLength, m_watchedCpus, &watched);
+    m_watchedCpuPercent.reset();
+    if (watchedRead && m_watchedBaseline && watched.total > m_watchedBaseline->total
+        && watched.idle >= m_watchedBaseline->idle
+        && watched.idle - m_watchedBaseline->idle <= watched.total - m_watchedBaseline->total) {
+        m_watchedCpuPercent = percent(
+            (watched.total - m_watchedBaseline->total) - (watched.idle - m_watchedBaseline->idle),
+            watched.total - m_watchedBaseline->total);
+    }
+    if (watchedRead) {
+        m_watchedBaseline = SystemBaseline{watched.total, watched.idle};
+    } else {
+        m_watchedBaseline.reset();
+    }
     quint64 processTicks = 0;
     const bool processRead = readProcessTicks(m_procSelfStatPath, buffer, &processTicks);
 
@@ -349,6 +420,17 @@ SharedHostSampler::SharedHostSampler(std::unique_ptr<HostTelemetrySampler> sampl
     if (!m_clock) {
         m_clock = [this] { return m_ownClock.elapsed(); };
     }
+}
+
+void SharedHostSampler::setGovernorCpus(const QList<int>& cpus)
+{
+    m_sampler->setWatchedCpus(cpus);
+}
+
+std::optional<double> SharedHostSampler::governorCpuPercent()
+{
+    reading();
+    return m_sampler->watchedCpuPercent();
 }
 
 StationHostTelemetry SharedHostSampler::reading()

@@ -92,10 +92,17 @@
 //   2026-09-23: display load governor and shared host sampler (R-R3-08,
 //               R-R3-37, R-R3-40). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-23: the governor acts only on load display cuts can relieve
+//               (thread placement), accepts a step only once published,
+//               and does not run for apps older than the budget reason
+//               (R-R3-08, R-R3-37, R-R3-40). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/RadioDiscovery.h"       // RadioInfo, RadioDiscovery, HPSDRHW
 #include "core/daemon/DaemonConfig.h"
+#include "core/daemon/DisplayLoadInputs.h"
+#include "core/platform/ThreadPlacement.h"
 #include "core/session/media/DisplayLoadGovernor.h"
 #include "core/spectrum/FftTopology.h"
 
@@ -103,11 +110,9 @@
 #include <QObject>
 #include "core/ConnectionState.h"
 
-#include <memory>
-#ifdef NEREUS_BUILD_TESTS
-#include <optional>
 #include <functional>
-#endif
+#include <memory>
+#include <optional>
 
 class QThread;
 class QTimer;
@@ -260,6 +265,20 @@ public:
     // step -- so that alone was not a real assertion on this behaviour.
     // Not part of the public API.
     void clearFftTopologyForTest() { clearFftTopology(); }
+
+    // Test-only seam for the display load governor (R-R3-08/37/40): the
+    // measured inputs (receiver loads, CPU readings, thread placement plan)
+    // the governor's clock and the accepted display charge, in place of
+    // RadioModel, the host sampler, ThreadPlacement, the elapsed timer and
+    // the media controller's endpoints. Set before start().
+    void setDisplayLoadSourcesForTest(std::function<DisplayLoadInputs()> inputs,
+                                      std::function<qint64()> clock,
+                                      std::function<DisplayBudgetCharge()> accepted)
+    {
+        m_displayLoadInputsForTest = std::move(inputs);
+        m_displayGovernorNowForTest = std::move(clock);
+        m_acceptedDisplayChargeForTest = std::move(accepted);
+    }
 #endif
 
 signals:
@@ -276,8 +295,11 @@ private:
     // R-R3-08/37/40: one display load evaluation, every
     // ReceiverDspLoadSampler::kSampleIntervalMs while a media session runs.
     void evaluateDisplayLoad();
+    // The measured inputs for one evaluation, from caches only.
+    DisplayLoadInputs gatherDisplayLoadInputs();
     // Publishes a governor decision as the next display-budget generation.
-    void publishDisplayBudget(const std::optional<DisplayLoadDecision>& decision);
+    // True when StationServer accepted it.
+    bool publishDisplayBudget(const std::optional<DisplayLoadDecision>& decision);
     // R-R3-27/29: control remains available while discovery runs elsewhere.
     void updateStationAnnouncement();
     void attemptRadioDiscovery();
@@ -435,6 +457,13 @@ private:
     std::unique_ptr<DisplayLoadGovernor> m_displayGovernor;
     std::unique_ptr<QTimer> m_displayGovernorTimer;
     QElapsedTimer m_displayGovernorClock;
+    /// ThreadPlacement's plan as of m_placementPlanRevision; refreshed (under
+    /// the registry's mutex) only when its revision moves.
+    PlacementPlan m_placementPlan;
+    std::optional<quint64> m_placementPlanRevision;
+    std::function<DisplayLoadInputs()> m_displayLoadInputsForTest;
+    std::function<qint64()> m_displayGovernorNowForTest;
+    std::function<DisplayBudgetCharge()> m_acceptedDisplayChargeForTest;
     std::unique_ptr<DaemonAgcSource> m_agcSource;
     FftTopology m_topology;
 
