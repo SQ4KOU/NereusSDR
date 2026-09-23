@@ -82,6 +82,10 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
                                 static_cast<qint64>(displayBudget->spectrumSampleUnitsPerSecond)));
         updates.append(intEntry("displayBudgetGeneration", displayBudget->generation));
         updates.append(boolEntry("remotePs3DisplaySubscribed", remotePs3DisplaySubscribed));
+        if (displayBudgetReason) {
+            updates.append(stringEntry("displayBudgetReason",
+                                       displayBudgetReasonWireName(*displayBudgetReason)));
+        }
     }
     return updates;
 }
@@ -92,8 +96,17 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
     DisplayBudgetLimits budget;
     QSet<QByteArray> budgetFields;
     bool invalidBudget = false;
+    int reasonEntries = 0;
+    std::optional<DisplayBudgetReason> reason;
     for (const MirrorUpdate& u : updates) {
-        if (u.name == "remoteDisplayBudgetVersion"
+        if (u.name == "displayBudgetReason") {
+            // Not one of the five budget fields: an older app ignores it,
+            // and a bad reason never costs this app its budget.
+            ++reasonEntries;
+            if (u.kind == MirrorWireKind::Utf8 && u.value.typeId() == QMetaType::QString) {
+                reason = displayBudgetReasonFromWireName(u.value.toString());
+            }
+        } else if (u.name == "remoteDisplayBudgetVersion"
             || u.name == "displayApplicationBytesPerSecond"
             || u.name == "spectrumSampleUnitsPerSecond"
             || u.name == "displayBudgetGeneration"
@@ -220,6 +233,9 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
     if (!invalidBudget && budgetFields.size() == 5
         && caps.remoteDisplayBudgetVersion > 0 && budget.isValid()) {
         caps.displayBudget = budget;
+        if (reasonEntries == 1) {
+            caps.displayBudgetReason = reason;
+        }
     } else {
         caps.remoteDisplayBudgetVersion = 0;
         caps.remotePs3DisplaySubscribed = false;

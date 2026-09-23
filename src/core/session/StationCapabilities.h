@@ -118,6 +118,14 @@ struct StationCapabilities {
     int remoteDisplayBudgetVersion = 0;
     std::optional<DisplayBudgetLimits> displayBudget;
     bool remotePs3DisplaySubscribed = false;
+    /// Why the advertised display budget is below the Core's ceiling
+    /// (R-R3-08, R-R3-37). A separate entry from the five budget fields,
+    /// which older apps require to be exactly five: sent only with a budget
+    /// and only to a peer that negotiated
+    /// kDisplayBudgetReasonSessionProtocolMinor, parsed on its own, and
+    /// dropped when the budget is not usable. nullopt: not sent, or a
+    /// reason this build does not know.
+    std::optional<DisplayBudgetReason> displayBudgetReason;
     int remoteCtunVersion = 0;
     /// 1: radio and audio telemetry. 2: adds the Core host section (CPU,
     /// memory, temperature). 3: adds the receivers section (each receiver's

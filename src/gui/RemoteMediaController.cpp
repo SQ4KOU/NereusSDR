@@ -387,6 +387,10 @@ struct RemoteMediaController::Private {
     std::map<quint32, Binding> bindings;
     // The status each pan was last given, before its grant line is added.
     QHash<QString, QString> panBaseStatus;
+    // R-R3-08/37: why each pan's display is below what it asked for, when
+    // the Core said (CoreBusy); None for a pan at its requested quality.
+    // The pan status builder maps it to words.
+    QHash<QString, DisplayBudgetReason> panBudgetReason;
     struct CtunState {
         quint64 epoch = 0;
         int requestSliceId = -1;
@@ -727,6 +731,10 @@ RemoteMediaController::~RemoteMediaController()
     stop();
 }
 quint64 RemoteMediaController::receivedDisplayFrames() const { return d->frames; }
+DisplayBudgetReason RemoteMediaController::panDisplayBudgetReason(const QString& panId) const
+{
+    return d->panBudgetReason.value(panId, DisplayBudgetReason::None);
+}
 int RemoteMediaController::activeEndpointCount() const { return int(d->bindings.size()); }
 std::optional<MediaPeerTelemetry> RemoteMediaController::trafficTelemetry() const
 {
@@ -887,6 +895,7 @@ void RemoteMediaController::stop()
         if (!self) { return; }
     }
     d->panBaseStatus.clear();
+    d->panBudgetReason.clear();
 }
 
 void RemoteMediaController::requestRecovery(quint32 expectedEpoch, const QString& reason)
@@ -1555,8 +1564,14 @@ void RemoteMediaController::refreshBudgetSubscriptions()
     QList<Candidate> increases;
     QList<quint32> eraseUnaccepted;
 
-    const auto statusFor = [now](const Private::Binding& binding,
-                                  const Desired& item) {
+    // R-R3-08/37: a reduction the Core made because it is busy says so;
+    // any other reduction keeps the general capacity wording.
+    const DisplayBudgetReason budgetReason = d->client->remoteDisplayBudgetReason();
+    const QString capacityWords = budgetReason == DisplayBudgetReason::CoreBusy
+        ? QStringLiteral("Core busy") : QStringLiteral("Core capacity");
+    const auto statusFor = [now, &capacityWords](const Private::Binding& binding,
+                                                 const Desired& item, bool& reduced) {
+        reduced = false;
         if (binding.pending && binding.pending->timedOut) {
             return QStringLiteral("Display allocation stalled: no Core acknowledgement");
         }
@@ -1587,8 +1602,9 @@ void RemoteMediaController::refreshBudgetSubscriptions()
         const int requestedPixels = item.original.value(QStringLiteral("pixels")).toInt();
         const int requestedFps = item.original.value(QStringLiteral("fps")).toInt();
         if (pixels != requestedPixels || fps != requestedFps) {
-            status += QStringLiteral(" (requested %1 px @ %2 fps; Core capacity)")
-                .arg(requestedPixels).arg(requestedFps);
+            reduced = true;
+            status += QStringLiteral(" (requested %1 px @ %2 fps; %3)")
+                .arg(requestedPixels).arg(requestedFps).arg(capacityWords);
         }
         if (binding.acceptedRequest.value(QStringLiteral("wideSpanFactor")).toDouble() > 1.0) {
             status += QStringLiteral("; WIDE plane reserved");
@@ -1612,9 +1628,11 @@ void RemoteMediaController::refreshBudgetSubscriptions()
                         .arg(found->second.refusalReason.left(384)));
                 continue;
             }
+            d->panBudgetReason.insert(item.panId, budgetReason);
             setPanStatus(item.panId, retainedPs3ExceedsCap
-                ? QStringLiteral("Display paused: Core capacity; accepted PureSignal reservation exceeds current cap")
-                : QStringLiteral("Display paused: Core capacity"));
+                ? QStringLiteral("Display paused: %1; accepted PureSignal reservation exceeds current cap")
+                      .arg(capacityWords)
+                : QStringLiteral("Display paused: %1").arg(capacityWords));
             if (!self) { return; }
             if (found == d->bindings.end()) { continue; }
             found->second.suspending = true;
@@ -1693,7 +1711,10 @@ void RemoteMediaController::refreshBudgetSubscriptions()
             binding.refusedIdentity.clear();
             binding.refusalReason.clear();
         }
-        QString status = statusFor(binding, item);
+        bool reduced = false;
+        QString status = statusFor(binding, item, reduced);
+        d->panBudgetReason.insert(item.panId,
+                                  reduced ? budgetReason : DisplayBudgetReason::None);
         if (d->ps3Refused && !d->ps3RefusalReason.isEmpty()) {
             status += QStringLiteral("; PureSignal display refused: %1")
                 .arg(d->ps3RefusalReason.left(256));
@@ -2058,7 +2079,12 @@ void RemoteMediaController::receiveAllocationResult(const QJsonObject& payload)
                 if (!self) { return; }
             }
             if (suspended) {
-                setPanStatus(panId, QStringLiteral("Display paused: Core capacity"));
+                const DisplayBudgetReason reason = d->client
+                    ? d->client->remoteDisplayBudgetReason() : DisplayBudgetReason::None;
+                d->panBudgetReason.insert(panId, reason);
+                setPanStatus(panId, reason == DisplayBudgetReason::CoreBusy
+                    ? QStringLiteral("Display paused: Core busy")
+                    : QStringLiteral("Display paused: Core capacity"));
             }
         } else {
             if (acceptedRevision != binding.acceptedRevision

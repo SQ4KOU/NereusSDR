@@ -557,6 +557,15 @@ DisplayBudgetCharge DaemonMediaController::currentSpectrumCharge() const
     return sumDisplayCharges(charges).value_or(DisplayBudgetCharge{});
 }
 
+DisplayBudgetCharge DaemonMediaController::acceptedDisplayCharge() const
+{
+    const bool ps3Enabled = m_radioModel
+        && m_radioModel->pureSignalFacade()->remoteAmpViewSubscribed();
+    return sumDisplayCharges({currentSpectrumCharge(),
+                              ps3Enabled ? ps3DisplayCharge() : DisplayBudgetCharge{}})
+        .value_or(DisplayBudgetCharge{});
+}
+
 std::optional<DisplayBudgetCharge> DaemonMediaController::proposedSpectrumCharge(
     quint32 endpointId, const DisplayBudgetCharge& replacement) const
 {

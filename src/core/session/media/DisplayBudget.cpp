@@ -65,6 +65,23 @@ bool spendablePs3Cost(quint64 bytes)
 
 } // namespace
 
+QString displayBudgetReasonWireName(DisplayBudgetReason reason)
+{
+    return reason == DisplayBudgetReason::CoreBusy ? QStringLiteral("coreBusy")
+                                                   : QStringLiteral("none");
+}
+
+std::optional<DisplayBudgetReason> displayBudgetReasonFromWireName(const QString& name)
+{
+    if (name == QLatin1String("none")) {
+        return DisplayBudgetReason::None;
+    }
+    if (name == QLatin1String("coreBusy")) {
+        return DisplayBudgetReason::CoreBusy;
+    }
+    return std::nullopt;
+}
+
 bool DisplayBudgetLimits::isValid() const
 {
     return applicationBytesPerSecond != 0

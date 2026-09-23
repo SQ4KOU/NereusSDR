@@ -368,8 +368,13 @@ public:
     /// The session agreed minor 9 or later: spectrum contexts report the
     /// grant Core made. Minor-8 peers keep the 19-key (20 with wideband) context.
     bool spectrumGrantAvailable() const;
-    bool setDisplayBudgetLimits(const DisplayBudgetLimits& limits);
+    /// Installs newer limits (a later generation) and why they are below the
+    /// Core's ceiling (R-R3-08, R-R3-37). A new reason needs a new
+    /// generation; the same limits with the same reason are accepted as-is.
+    bool setDisplayBudgetLimits(const DisplayBudgetLimits& limits,
+                                DisplayBudgetReason reason = DisplayBudgetReason::None);
     std::optional<DisplayBudgetLimits> displayBudgetLimits() const { return m_displayBudget; }
+    DisplayBudgetReason displayBudgetReason() const { return m_displayBudgetReason; }
     void setDisplayBudgetEnforcementEnabled(bool enabled);
     bool displayBudgetAvailable() const;
     void publishDisplayBudgetCapabilities();
@@ -517,6 +522,7 @@ private:
     bool m_mediaEnabled = false;
     bool m_displayBudgetEnforcementEnabled = false;
     std::optional<DisplayBudgetLimits> m_displayBudget;
+    DisplayBudgetReason m_displayBudgetReason = DisplayBudgetReason::None;
     bool m_telemetryEnabled = false;
     quint64 m_mediaSessionEpoch = 0;
 

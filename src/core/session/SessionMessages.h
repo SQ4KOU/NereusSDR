@@ -206,6 +206,10 @@ inline constexpr quint16 kReceiverLoadSessionProtocolMinor = 11;
 // Same unreleased step as receiver load. Minor-10 peers never see the
 // property and cannot send the command.
 inline constexpr quint16 kNnrLimitSessionProtocolMinor = 11;
+// The capability descriptor names why the display budget is below the
+// Core's ceiling (displayBudgetReason: the Core computer is busy). Same
+// unreleased step. Minor-10 peers receive exactly the five budget fields.
+inline constexpr quint16 kDisplayBudgetReasonSessionProtocolMinor = 11;
 inline constexpr qsizetype kMaxMediaControlBytes = 128 * 1024;
 
 // R-R3-16/17: how long either end waits for the connect sequence to finish

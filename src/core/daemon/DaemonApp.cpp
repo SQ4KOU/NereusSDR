@@ -17,6 +17,7 @@
 #include "core/daemon/DaemonApp.h"
 #include "core/daemon/DaemonAgcSource.h"
 #include "core/daemon/DaemonTelemetryController.h"
+#include "core/daemon/HostTelemetrySampler.h"
 
 #include "core/AppSettings.h"
 #include "core/CoreInit.h"
@@ -39,6 +40,7 @@
 #include <QTimer>
 
 #include <algorithm>
+#include <cmath>
 
 namespace NereusSDR {
 
@@ -271,7 +273,10 @@ void DaemonApp::stop()
     // to go before m_radioModel.reset() because its StateMirror and
     // ObjectRegistry hold QPointers into that model and every SliceModel under
     // it. The station is still alive while connected clients are detached.
+    m_displayGovernorTimer.reset();
+    m_displayGovernor.reset();
     m_telemetryController.reset();
+    m_hostSampler.reset();
     m_mediaController.reset();
     m_stationServer.reset();
     m_agcSource.reset();
@@ -452,8 +457,16 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
     // Set before listen() so the first authenticated client sees the media
     // capability, never a control-only session that cannot be upgraded.
     m_stationServer->setMediaEnabled(true);
-    if (const auto limits = cfg.displayBudgetLimits()) {
-        m_stationServer->setDisplayBudgetLimits(*limits);
+    // R-R3-08/37/40: with display_adaptive on, the Core always advertises a
+    // display budget, so apps plan in budget mode from the start and follow
+    // it down when the Core is busy: the configured pair when there is one,
+    // otherwise a ceiling no real layout reaches. Off: exactly as before.
+    std::optional<DisplayBudgetLimits> displayCeiling = cfg.displayBudgetLimits();
+    if (cfg.displayAdaptive && !displayCeiling) {
+        displayCeiling = DisplayLoadGovernor::computedCeiling();
+    }
+    if (displayCeiling) {
+        m_stationServer->setDisplayBudgetLimits(*displayCeiling);
     }
     m_mediaController = std::make_unique<DaemonMediaController>(
         m_stationServer.get(), m_radioModel.get(), this);
@@ -462,9 +475,32 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
     // Install every source before advertising the capability. A client can
     // authenticate immediately after listen(), so there must be no window in
     // which telemetry is negotiated without a collector to publish it.
+    m_hostSampler = std::make_shared<SharedHostSampler>();
     m_telemetryController = std::make_unique<DaemonTelemetryController>(
-        m_stationServer.get(), m_radioModel.get(), m_mediaController.get(), this);
+        m_stationServer.get(), m_radioModel.get(), m_mediaController.get(), this,
+        DaemonTelemetryController::MonotonicClock{},
+        DaemonTelemetryController::AudioDiagnosticsProvider{},
+        std::unique_ptr<HostTelemetrySampler>{},
+        DaemonTelemetryController::ReceiverLoadProvider{}, m_hostSampler);
     m_stationServer->setTelemetryEnabled(m_telemetryController != nullptr);
+    if (cfg.displayAdaptive && displayCeiling) {
+        m_displayGovernor = std::make_unique<DisplayLoadGovernor>(*displayCeiling);
+        m_displayGovernorClock.start();
+        m_displayGovernorTimer = std::make_unique<QTimer>();
+        m_displayGovernorTimer->setInterval(ReceiverDspLoadSampler::kSampleIntervalMs);
+        connect(m_displayGovernorTimer.get(), &QTimer::timeout,
+                this, &DaemonApp::evaluateDisplayLoad);
+        // Only a media session has display to lower. When it ends, the next
+        // one starts from the ceiling rather than from this one's load.
+        connect(m_stationServer.get(), &StationServer::mediaSessionStarted, this, [this] {
+            if (m_displayGovernorTimer) { m_displayGovernorTimer->start(); }
+        });
+        connect(m_stationServer.get(), &StationServer::mediaSessionEnded, this, [this] {
+            if (!m_displayGovernor || !m_displayGovernorTimer) { return; }
+            m_displayGovernorTimer->stop();
+            publishDisplayBudget(m_displayGovernor->reset());
+        });
+    }
     m_stationAnnouncer = std::make_unique<StationLanAnnouncer>();
     connect(m_stationServer.get(), &StationServer::listeningChanged,
             this, &DaemonApp::updateStationAnnouncement);
@@ -492,6 +528,57 @@ QString announcementName(const QString& input, const QString& fallback)
     }
     return result.trimmed().isEmpty() ? fallback : result.trimmed();
 }
+}
+
+void DaemonApp::evaluateDisplayLoad()
+{
+    if (!m_displayGovernor || !m_radioModel || !m_mediaController) {
+        return;
+    }
+    // Cached readings only: RadioModel's 500 ms load snapshot and the shared
+    // host sampler. Neither takes a DSP lock or restarts another reader's
+    // interval.
+    DisplayLoadReading reading;
+    reading.nowMs = m_displayGovernorClock.elapsed();
+    for (SliceModel* slice : m_radioModel->slices()) {
+        if (slice == nullptr) {
+            continue;
+        }
+        const std::optional<ReceiverDspLoad> load
+            = m_radioModel->receiverDspLoad(slice->sliceIndex());
+        // Idle is not proof of no load, so it is not a measurement either.
+        if (!load || load->idle || !std::isfinite(load->load)) {
+            continue;
+        }
+        reading.highestReceiverLoad = std::max(reading.highestReceiverLoad.value_or(0.0),
+                                               load->load);
+        reading.lateBlocks += std::max<qint64>(0, load->lateBlocks);
+        reading.highestInputDelayMs = std::max(reading.highestInputDelayMs,
+                                               load->inputDelayMs);
+    }
+    if (m_hostSampler) {
+        reading.systemCpuPercent = m_hostSampler->reading().systemCpuPercent;
+    }
+    reading.acceptedCharge = m_mediaController->acceptedDisplayCharge();
+    publishDisplayBudget(m_displayGovernor->update(reading));
+}
+
+void DaemonApp::publishDisplayBudget(const std::optional<DisplayLoadDecision>& decision)
+{
+    if (!decision || !m_stationServer) {
+        return;
+    }
+    if (!m_stationServer->setDisplayBudgetLimits(decision->limits, decision->reason)) {
+        qCWarning(lcApp) << "DaemonApp: display budget generation"
+                          << decision->limits.generation << "was not accepted";
+        return;
+    }
+    qCInfo(lcApp).nospace() << "DaemonApp: display budget "
+                            << (decision->reason == DisplayBudgetReason::CoreBusy
+                                    ? "lowered, Core busy" : "restored")
+                            << ": " << decision->limits.applicationBytesPerSecond
+                            << " bytes/s, " << decision->limits.spectrumSampleUnitsPerSecond
+                            << " samples/s (generation " << decision->limits.generation << ")";
 }
 
 void DaemonApp::updateStationAnnouncement()

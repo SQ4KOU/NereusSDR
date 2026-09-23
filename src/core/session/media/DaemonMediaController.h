@@ -110,6 +110,10 @@ public:
     /// The frame rate Core configured on the engine that feeds a live
     /// spectrum endpoint (R-R3-01, R-R3-08). Empty for an unknown endpoint.
     std::optional<int> spectrumSourceFps(quint32 endpointId) const;
+    /// Display traffic accepted now: every live spectrum endpoint's charge
+    /// plus PureSignal's display while it is subscribed (R-R3-08, R-R3-37).
+    /// What the display load governor scales when the Core is busy.
+    DisplayBudgetCharge acceptedDisplayCharge() const;
 
 private:
     struct EndpointEntry;

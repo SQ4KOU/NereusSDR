@@ -39,6 +39,9 @@
 //               Claude Code.
 //   2026-09-23: thread_placement key (R-R3-41). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-23: display_adaptive key (R-R3-08, R-R3-37, R-R3-40). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QString>
@@ -120,6 +123,15 @@ struct DaemonConfig {
     // thread free to run on any core. Anything else logs one warning and
     // keeps auto. Feeds startDaemonThreadPlacement() in server_main.cpp.
     bool    threadPlacement {true};
+
+    // R-R3-08/37/40: display_adaptive = on (default) lets the Core lower
+    // spectrum quality, background pans first, while its computer is busy,
+    // and restore it when there is room again (DisplayLoadGovernor, owned by
+    // DaemonApp). With it on, the Core always advertises a display budget:
+    // the configured pair below, or a ceiling computed for eight pans at
+    // their largest plus PureSignal. off keeps today's behaviour exactly.
+    // Anything else logs one warning and keeps on.
+    bool    displayAdaptive {true};
 
     // Optional measured limits, supplied as a pair. A malformed explicit
     // value becomes zero so validate() fails instead of disabling the cap.

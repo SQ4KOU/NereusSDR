@@ -48,7 +48,8 @@ public:
         MonotonicClock clock = {},
         AudioDiagnosticsProvider audioDiagnosticsProvider = {},
         std::unique_ptr<HostTelemetrySampler> hostSampler = {},
-        ReceiverLoadProvider receiverLoadProvider = {});
+        ReceiverLoadProvider receiverLoadProvider = {},
+        std::shared_ptr<SharedHostSampler> sharedHostSampler = {});
     ~DaemonTelemetryController() override;
 
     bool isCollecting() const noexcept { return m_epoch != 0; }
@@ -123,9 +124,13 @@ private:
     QElapsedTimer m_processClock;
     MonotonicClock m_clock;
     AudioDiagnosticsProvider m_audioDiagnosticsProvider;
-    // Reads this computer's procfs/sysfs (Linux only; disabled elsewhere).
-    // Its CPU baselines restart with each telemetry session.
-    std::unique_ptr<HostTelemetrySampler> m_hostSampler;
+    // Reads this computer's procfs/sysfs (Linux only; disabled elsewhere),
+    // shared with the display load governor when DaemonApp passes one
+    // (R-R3-40); otherwise this controller's own. The first reading in each
+    // telemetry session carries no CPU percentages, so no session reports
+    // an interval that began before it.
+    std::shared_ptr<SharedHostSampler> m_hostSampler;
+    bool m_hostCpuBaselinePending{false};
     ReceiverLoadProvider m_receiverLoadProvider;
     std::optional<RadioObservation> m_radioObservation;
     std::optional<AudioBaseline> m_audioBaseline;

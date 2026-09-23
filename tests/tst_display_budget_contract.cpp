@@ -134,6 +134,57 @@ void compareBudget(const std::optional<DisplayBudgetLimits>& actual,
     QCOMPARE(actual->generation, expected.generation);
 }
 
+
+// A GUI built before the reason: it speaks `minor` and records what the
+// Core sends. Returns the Core's end.
+LoopbackTransport* connectRawPeer(QObject* owner, StationServer& server, quint16 minor,
+                                  LoopbackTransport** peerOut)
+{
+    auto* core = new LoopbackTransport(QStringLiteral("core"), owner);
+    auto* peer = new LoopbackTransport(QStringLiteral("raw-gui"), owner);
+    core->linkTo(peer);
+    server.acceptTransport(core);
+    peer->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor, minor, 0, QStringLiteral("older-gui"))));
+    peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
+    *peerOut = peer;
+    return core;
+}
+
+// Every capabilities message a raw peer received, decoded, oldest first.
+QList<SessionMessage> receivedCapabilities(const LoopbackTransport* peer)
+{
+    QList<SessionMessage> messages;
+    for (const QByteArray& wire : peer->received()) {
+        SessionMessage message;
+        if (SessionMessages::decode(wire, &message)
+            && message.kind == SessionMessageKind::Capabilities) {
+            messages.append(message);
+        }
+    }
+    return messages;
+}
+
+QByteArray lastCapabilitiesWire(const LoopbackTransport* peer)
+{
+    QByteArray last;
+    for (const QByteArray& wire : peer->received()) {
+        SessionMessage message;
+        if (SessionMessages::decode(wire, &message)
+            && message.kind == SessionMessageKind::Capabilities) {
+            last = wire;
+        }
+    }
+    return last;
+}
+
+QList<QByteArray> updateNames(const QList<MirrorUpdate>& updates)
+{
+    QList<QByteArray> names;
+    for (const MirrorUpdate& update : updates) { names.append(update.name); }
+    return names;
+}
+
 } // namespace
 
 class TstDisplayBudgetContract : public QObject {
@@ -162,6 +213,7 @@ private slots:
         QCOMPARE(kRemoteDisplayBudgetSessionProtocolMinor, quint16(7));
         QCOMPARE(kRemoteAudioStatusSessionProtocolMinor, quint16(8));
         QCOMPARE(kRemoteSpectrumGrantSessionProtocolMinor, quint16(9));
+        QCOMPARE(kDisplayBudgetReasonSessionProtocolMinor, quint16(11));
 
         const StationCapabilities capabilities = budgetCapabilities();
         QCOMPARE(capabilities.remoteDisplayBudgetVersion, 1);
@@ -555,6 +607,198 @@ private slots:
         QVERIFY(!client.remoteDisplayBudgetLimits().has_value());
         QVERIFY(!client.remotePs3DisplaySubscribed());
         QCOMPARE(changes.count(), 2);
+    }
+
+
+    // R-R3-08/37: the reason is its own entry, parsed on its own. A bad or
+    // doubled reason never costs the app its budget; an unknown one reads
+    // as "not said".
+    void budgetReasonIsASeparateEntry()
+    {
+        StationCapabilities sent = budgetCapabilities(4);
+        sent.displayBudgetReason = DisplayBudgetReason::CoreBusy;
+        QList<MirrorUpdate> updates = sent.toUpdates();
+        const int index = updateIndex(updates, QByteArrayLiteral("displayBudgetReason"));
+        QCOMPARE(index, updates.size() - 1);
+        QCOMPARE(updates.at(index).kind, MirrorWireKind::Utf8);
+        QCOMPARE(updates.at(index).value.toString(), QStringLiteral("coreBusy"));
+
+        std::optional<SessionMessage> message = wireRoundTrip(updates);
+        QVERIFY(message.has_value());
+        StationCapabilities received = StationCapabilities::fromUpdates(message->updates);
+        compareBudget(received.displayBudget, limits(4));
+        QCOMPARE(received.displayBudgetReason, std::optional(DisplayBudgetReason::CoreBusy));
+
+        // Without the entry: budget intact, no reason.
+        QList<MirrorUpdate> absent = updates;
+        absent.removeAt(index);
+        received = StationCapabilities::fromUpdates(wireRoundTrip(absent)->updates);
+        compareBudget(received.displayBudget, limits(4));
+        QVERIFY(!received.displayBudgetReason.has_value());
+
+        // Wrong kind, doubled, or a word this build does not know.
+        QList<MirrorUpdate> wrongKind = updates;
+        wrongKind[index].kind = MirrorWireKind::Int64;
+        wrongKind[index].value = QVariant::fromValue<qlonglong>(1);
+        QList<MirrorUpdate> doubled = updates;
+        doubled.append(updates.at(index));
+        QList<MirrorUpdate> unknown = updates;
+        unknown[index].value = QStringLiteral("solarFlare");
+        for (const QList<MirrorUpdate>& variant : {wrongKind, doubled, unknown}) {
+            received = StationCapabilities::fromUpdates(wireRoundTrip(variant)->updates);
+            compareBudget(received.displayBudget, limits(4));
+            QCOMPARE(received.remoteDisplayBudgetVersion, 1);
+            QVERIFY(!received.displayBudgetReason.has_value());
+        }
+
+        // No usable budget, no reason.
+        QList<MirrorUpdate> noBudget = updates;
+        noBudget.removeAt(updateIndex(noBudget, QByteArrayLiteral("displayBudgetGeneration")));
+        received = StationCapabilities::fromUpdates(wireRoundTrip(noBudget)->updates);
+        QVERIFY(!received.displayBudget.has_value());
+        QVERIFY(!received.displayBudgetReason.has_value());
+
+        // A descriptor without a budget never carries the entry.
+        StationCapabilities control;
+        control.displayBudgetReason = DisplayBudgetReason::CoreBusy;
+        QCOMPARE(updateIndex(control.toUpdates(), QByteArrayLiteral("displayBudgetReason")), -1);
+    }
+
+    // R-R3-08/37 golden: a GUI from before the reason (minor 10) receives
+    // exactly today's descriptor, byte for byte, whatever the Core's reason;
+    // a minor-11 GUI receives the same entries plus the reason at the end.
+    void olderAppsReceiveTodaysCapabilityShape()
+    {
+        const QList<QByteArray> golden{
+            "stationName", "radioModel", "firmwareVersion", "macAddress", "board",
+            "radioConnected", "effectiveMaxSlices", "boardMaxSlices", "userDdcCount",
+            "pureSignalPresent", "txPermitted", "remoteMediaVersion",
+            "remoteWidebandDisplayVersion", "remoteAudioStatusVersion",
+            "spectrumGrantVersion", "remoteDisplayBudgetVersion", "remoteCtunVersion",
+            "stationTelemetryVersion", "remoteTgxlConfigVersion",
+            "remoteFourO3AControlVersion", "wdspVersion", "wdspCompatibilityVersion",
+            "nnrVersion", "psAlgorithmVersion", "propertyResultVersion", "dspAssetVersion",
+            "psDisplayVersion", "settingsSchemaVersion",
+            "displayApplicationBytesPerSecond", "spectrumSampleUnitsPerSecond",
+            "displayBudgetGeneration", "remotePs3DisplaySubscribed",
+        };
+
+        const auto capture = [this, &golden](quint16 minor, QByteArray* initial,
+                                             QByteArray* published) {
+            RadioModel station;
+            AppSettings settings(m_securityDir.filePath(
+                QStringLiteral("golden-%1.settings").arg(minor)));
+            StationServer server(&station, settings, m_securityDir.path());
+            server.setMediaEnabled(true);
+            QVERIFY(server.setDisplayBudgetLimits(limits(1), DisplayBudgetReason::None));
+            server.setDisplayBudgetEnforcementEnabled(true);
+            LoopbackTransport* peer = nullptr;
+            connectRawPeer(this, server, minor, &peer);
+            QTRY_COMPARE(receivedCapabilities(peer).size(), 1);
+            QTRY_VERIFY(server.mediaAvailable());
+            *initial = lastCapabilitiesWire(peer);
+
+            QVERIFY(server.setDisplayBudgetLimits(limits(2, kBytes / 2, kSamples / 2),
+                                                  DisplayBudgetReason::CoreBusy));
+            QTRY_VERIFY(receivedCapabilities(peer).size() >= 2);
+            *published = lastCapabilitiesWire(peer);
+            const SessionMessage last = receivedCapabilities(peer).constLast();
+            const QList<QByteArray> names = updateNames(last.updates);
+            if (minor < kDisplayBudgetReasonSessionProtocolMinor) {
+                QCOMPARE(names, golden);
+            } else {
+                QList<QByteArray> withReason = golden;
+                withReason.append("displayBudgetReason");
+                QCOMPARE(names, withReason);
+                const int reason = updateIndex(last.updates,
+                                               QByteArrayLiteral("displayBudgetReason"));
+                QCOMPARE(last.updates.at(reason).value.toString(),
+                         QStringLiteral("coreBusy"));
+            }
+            const StationCapabilities decoded = StationCapabilities::fromUpdates(last.updates);
+            compareBudget(decoded.displayBudget, limits(2, kBytes / 2, kSamples / 2));
+        };
+
+        QByteArray olderInitial;
+        QByteArray olderPublished;
+        capture(quint16(kDisplayBudgetReasonSessionProtocolMinor - 1), &olderInitial,
+                &olderPublished);
+        QByteArray currentInitial;
+        QByteArray currentPublished;
+        capture(kDisplayBudgetReasonSessionProtocolMinor, &currentInitial, &currentPublished);
+
+        // Byte for byte: the minor-11 descriptor with its reason entry
+        // removed is exactly what the older GUI got.
+        for (const auto& [older, current] : {std::pair{olderInitial, currentInitial},
+                                             std::pair{olderPublished, currentPublished}}) {
+            SessionMessage decoded;
+            QVERIFY(SessionMessages::decode(current, &decoded));
+            QList<MirrorUpdate> stripped = decoded.updates;
+            stripped.removeAt(updateIndex(stripped, QByteArrayLiteral("displayBudgetReason")));
+            QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)), older);
+            QVERIFY(!older.contains("displayBudgetReason"));
+        }
+    }
+
+    // R-R3-08/37: a minor-11 GUI follows the Core's reason with its limits
+    // and hears about each change; restore clears it.
+    void clientFollowsTheReasonWithItsLimits()
+    {
+        RadioModel station;
+        AppSettings settings(m_securityDir.filePath(QStringLiteral("reason.settings")));
+        StationServer server(&station, settings, m_securityDir.path());
+        server.setMediaEnabled(true);
+        QVERIFY(server.setDisplayBudgetLimits(limits(1)));
+        server.setDisplayBudgetEnforcementEnabled(true);
+
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        auto* core = new LoopbackTransport(QStringLiteral("core"), this);
+        auto* gui = new LoopbackTransport(QStringLiteral("gui"), this);
+        core->linkTo(gui);
+        QSignalSpy established(&client, &StationClient::handshakeComplete);
+        client.startSession(gui, server.token());
+        server.acceptTransport(core);
+        QTRY_COMPARE(established.count(), 1);
+        QCOMPARE(client.remoteDisplayBudgetReason(), DisplayBudgetReason::None);
+
+        QSignalSpy changes(&client, &StationClient::displayBudgetChanged);
+        QVERIFY(server.setDisplayBudgetLimits(limits(2, kBytes / 2, kSamples / 2),
+                                              DisplayBudgetReason::CoreBusy));
+        QTRY_COMPARE(changes.count(), 1);
+        QCOMPARE(client.remoteDisplayBudgetReason(), DisplayBudgetReason::CoreBusy);
+        compareBudget(client.remoteDisplayBudgetLimits(), limits(2, kBytes / 2, kSamples / 2));
+
+        // A new reason needs a new generation.
+        QVERIFY(!server.setDisplayBudgetLimits(limits(2, kBytes / 2, kSamples / 2),
+                                               DisplayBudgetReason::None));
+        QCOMPARE(server.displayBudgetReason(), DisplayBudgetReason::CoreBusy);
+
+        QVERIFY(server.setDisplayBudgetLimits(limits(3), DisplayBudgetReason::None));
+        QTRY_COMPARE(changes.count(), 2);
+        QCOMPARE(client.remoteDisplayBudgetReason(), DisplayBudgetReason::None);
+        compareBudget(client.remoteDisplayBudgetLimits(), limits(3));
+    }
+
+    // A Core that negotiated minor 10 cannot hand this GUI a reason, even if
+    // its descriptor carried one.
+    void clientIgnoresAReasonBelowMinorEleven()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        auto* station = new LoopbackTransport(QStringLiteral("minor-ten-station"), this);
+        auto* clientWire = new LoopbackTransport(QStringLiteral("minor-ten-client"), this);
+        station->linkTo(clientWire);
+        client.startSession(clientWire, QStringLiteral("token"));
+        StationCapabilities caps = budgetCapabilities(5);
+        caps.displayBudgetReason = DisplayBudgetReason::CoreBusy;
+        completeFakeStationHandshake(station, &client,
+                                     quint16(kDisplayBudgetReasonSessionProtocolMinor - 1),
+                                     caps);
+        compareBudget(client.remoteDisplayBudgetLimits(), limits(5));
+        QCOMPARE(client.remoteDisplayBudgetReason(), DisplayBudgetReason::None);
     }
 
 private:

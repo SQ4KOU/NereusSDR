@@ -81,12 +81,20 @@ audio_bitrate = 24000
 # core. Any other value is ignored with a warning.
 thread_placement = auto
 
+# Whether the Core lowers spectrum quality when its computer is busy, so
+# audio and receivers keep priority. on (the default) slows, then coarsens,
+# background pans first and the active pan last, tells each app why, and
+# restores quality when there is room again. off leaves spectrum quality to
+# the display limits below. Any other value is ignored with a warning.
+display_adaptive = on
+
 # Optional measured display limits. Set BOTH keys to positive integers after
 # measuring this Core host and link; no universal capacity is assumed here.
 # Application bytes include spectrum and PureSignal display messages, but not
 # Opus audio, control, encryption or network overhead. Spectrum sample units
 # count the independent trace, waterfall and optional wide plane; not FFT CPU.
-# Omitting both preserves legacy display behavior. A partial/invalid pair is
+# Omitting both with display_adaptive = off preserves legacy display behavior;
+# with it on, the Core uses its own ceiling. A partial/invalid pair is
 # a startup error. Examples use placeholders deliberately, not suggested rates:
 # display_application_bytes_per_second = <measured bytes per second>
 # spectrum_sample_units_per_second = <measured spectrum samples per second>

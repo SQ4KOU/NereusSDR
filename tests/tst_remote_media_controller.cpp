@@ -1933,6 +1933,145 @@ private slots:
         }());
     }
 
+    // R-R3-08/37: a Core-busy cut slows the background pans first and leaves
+    // the active pan alone; each reduced pan carries the reason in its state
+    // and says so in its status line. Restore clears both.
+    void coreBusyCutReducesBackgroundPansFirstAndRestoreClearsIt()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        auto& appSettings = AppSettings::instance();
+        const bool hadFps = appSettings.contains(QStringLiteral("DisplaySpectrumFps"));
+        const QVariant savedFps = appSettings.value(QStringLiteral("DisplaySpectrumFps"));
+        appSettings.setValue(QStringLiteral("DisplaySpectrumFps"), QStringLiteral("30"));
+        const auto restoreFps = qScopeGuard([&] {
+            if (hadFps) { appSettings.setValue(QStringLiteral("DisplaySpectrumFps"), savedFps); }
+            else { appSettings.remove(QStringLiteral("DisplaySpectrumFps")); }
+        });
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        const int sliceId = station.addSlice();
+        QVERIFY(station.sliceById(sliceId));
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        PanadapterStack stack;
+        const QStringList panIds{QStringLiteral("pan-0"), QStringLiteral("pan-1"),
+                                 QStringLiteral("pan-2"), QStringLiteral("pan-3")};
+        stack.applyLayout(QStringLiteral("2x2"), panIds);
+        for (PanadapterApplet* applet : stack.allApplets()) {
+            applet->setActiveSliceIndex(sliceId);
+            applet->spectrumWidget()->setDisplayWindowPreservingHistory(
+                station.streamCentreHz(station.sliceById(sliceId)->streamIndex()), 48000);
+            applet->spectrumWidget()->setWfUpdatePeriodMs(20);
+        }
+        stack.resize(1600, 900);
+        stack.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&stack));
+        stack.setActivePan(QStringLiteral("pan-0"));
+        // Exactly the active pan at 30 fps and three background pans at the
+        // 10 fps floor.
+        QList<DisplayBudgetCharge> cutCharges;
+        for (PanadapterApplet* applet : stack.allApplets()) {
+            const int requestedPixels = qBound(
+                1, applet->spectrumWidget()->width()
+                    - applet->spectrumWidget()->reservedRightEdgeWidth(),
+                SpectrumEndpoint::kMaxPixels);
+            const int fps = applet->panId() == QStringLiteral("pan-0") ? 30 : 10;
+            const auto cost = spectrumDisplayCost(requestedPixels, fps, false);
+            QVERIFY(cost.has_value());
+            cutCharges.append(cost->charge);
+        }
+        const auto cut = sumDisplayCharges(cutCharges);
+        QVERIFY(cut.has_value());
+
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        QVERIFY(server.setDisplayBudgetLimits({10'000'000, 10'000'000, 1}));
+        QPointer<DisplayTransport> sourceMedia;
+        DaemonMediaController daemon(&server, &station, nullptr,
+            [&sourceMedia](QObject* owner) -> IMediaTransport* {
+                sourceMedia = new DisplayTransport(owner);
+                return sourceMedia;
+            });
+        QPointer<DisplayTransport> sinkMedia;
+        RemoteMediaController controller(&client, &remote, &stack, nullptr,
+            [&sinkMedia](QObject* owner) -> IMediaTransport* {
+                sinkMedia = new DisplayTransport(owner);
+                return sinkMedia;
+            });
+        QSignalSpy outbound(&server, &StationServer::mediaControlReceived);
+        auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(client.remoteDisplayBudgetLimits().has_value());
+        QTRY_VERIFY(sourceMedia && sinkMedia);
+        sourceMedia->activate();
+        sinkMedia->activate();
+        QTRY_COMPARE(countControl(outbound, QStringLiteral("subscribe")), 4);
+
+        const auto statusOf = [&stack](const QString& panId) {
+            for (PanadapterApplet* applet : stack.allApplets()) {
+                if (applet->panId() == panId) { return applet->remoteDisplayStatus(); }
+            }
+            return QString();
+        };
+        const auto allAtRequestedQuality = [&] {
+            for (const QString& panId : panIds) {
+                const QString status = statusOf(panId);
+                if (!status.startsWith(QStringLiteral("Display target"))
+                    || status.contains(QStringLiteral("requested"))
+                    || controller.panDisplayBudgetReason(panId) != DisplayBudgetReason::None) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        QTRY_VERIFY(allAtRequestedQuality());
+
+        QVERIFY(server.setDisplayBudgetLimits(
+            {cut->applicationBytesPerSecond, cut->spectrumSampleUnitsPerSecond, 2},
+            DisplayBudgetReason::CoreBusy));
+        QTRY_COMPARE(client.remoteDisplayBudgetReason(), DisplayBudgetReason::CoreBusy);
+        QTRY_VERIFY([&] {
+            for (const QString& panId : panIds) {
+                const QString status = statusOf(panId);
+                const bool active = panId == QStringLiteral("pan-0");
+                if (active) {
+                    if (!status.contains(QStringLiteral("@ 30 fps"))
+                        || status.contains(QStringLiteral("requested"))
+                        || controller.panDisplayBudgetReason(panId)
+                            != DisplayBudgetReason::None) {
+                        return false;
+                    }
+                } else if (!status.contains(QStringLiteral("@ 10 fps"))
+                           || !status.contains(QStringLiteral("; Core busy)"))
+                           || controller.panDisplayBudgetReason(panId)
+                               != DisplayBudgetReason::CoreBusy) {
+                    return false;
+                }
+            }
+            return true;
+        }());
+        // Three reductions, all background pans to 10 fps; the active pan
+        // was never asked to change.
+        const QList<QJsonObject> subscribes = controlsFor(outbound, QStringLiteral("subscribe"));
+        QCOMPARE(subscribes.size(), 7);
+        for (int i = 4; i < subscribes.size(); ++i) {
+            QCOMPARE(subscribes.at(i).value(QStringLiteral("fps")).toInt(), 10);
+        }
+
+        QVERIFY(server.setDisplayBudgetLimits({10'000'000, 10'000'000, 3},
+                                              DisplayBudgetReason::None));
+        QTRY_COMPARE(client.remoteDisplayBudgetReason(), DisplayBudgetReason::None);
+        QTRY_VERIFY(allAtRequestedQuality());
+    }
+
     void budgetRetirementWaitsForPendingSubscribeThenReleasesReservation()
     {
         QTemporaryDir dir;

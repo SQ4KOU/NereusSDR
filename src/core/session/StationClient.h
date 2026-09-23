@@ -422,6 +422,11 @@ public:
     /// report the grant Core made for the endpoint.
     bool spectrumGrantAvailable() const;
     std::optional<DisplayBudgetLimits> remoteDisplayBudgetLimits() const;
+    /// Why the Core's display budget is below its ceiling (R-R3-08, R-R3-37):
+    /// CoreBusy while the Core computer is short of processing time. None
+    /// without a budget, before minor 11, or when Core did not say.
+    /// displayBudgetChanged() fires when it changes.
+    DisplayBudgetReason remoteDisplayBudgetReason() const;
     bool remotePs3DisplaySubscribed() const;
     quint32 requestPs3DisplaySubscription(bool enabled);
     bool remoteCtunAvailable() const;

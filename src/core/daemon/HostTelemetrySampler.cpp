@@ -337,4 +337,29 @@ StationHostTelemetry HostTelemetrySampler::sample()
     return host;
 }
 
+SharedHostSampler::SharedHostSampler(std::unique_ptr<HostTelemetrySampler> sampler,
+                                     MonotonicClock clock)
+    : m_sampler(std::move(sampler))
+    , m_clock(std::move(clock))
+{
+    if (!m_sampler) {
+        m_sampler = std::make_unique<HostTelemetrySampler>();
+    }
+    m_ownClock.start();
+    if (!m_clock) {
+        m_clock = [this] { return m_ownClock.elapsed(); };
+    }
+}
+
+StationHostTelemetry SharedHostSampler::reading()
+{
+    const qint64 nowMs = m_clock();
+    if (!m_sampledAtMs || nowMs < *m_sampledAtMs
+        || nowMs - *m_sampledAtMs >= kMinimumIntervalMs) {
+        m_cached = m_sampler->sample();
+        m_sampledAtMs = nowMs;
+    }
+    return m_cached;
+}
+
 } // namespace NereusSDR

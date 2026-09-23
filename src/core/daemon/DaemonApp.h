@@ -89,12 +89,17 @@
 //   2026-08-02: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-23: display load governor and shared host sampler (R-R3-08,
+//               R-R3-37, R-R3-40). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/RadioDiscovery.h"       // RadioInfo, RadioDiscovery, HPSDRHW
 #include "core/daemon/DaemonConfig.h"
+#include "core/session/media/DisplayLoadGovernor.h"
 #include "core/spectrum/FftTopology.h"
 
+#include <QElapsedTimer>
 #include <QObject>
 #include "core/ConnectionState.h"
 
@@ -115,6 +120,8 @@ class StationLanAnnouncer;
 class DaemonMediaController;
 class DaemonTelemetryController;
 class DaemonAgcSource;
+class DisplayLoadGovernor;
+class SharedHostSampler;
 class SliceModel;
 class StepAttenuatorController;
 
@@ -266,6 +273,11 @@ signals:
     void radioConnected(bool connected);
 
 private:
+    // R-R3-08/37/40: one display load evaluation, every
+    // ReceiverDspLoadSampler::kSampleIntervalMs while a media session runs.
+    void evaluateDisplayLoad();
+    // Publishes a governor decision as the next display-budget generation.
+    void publishDisplayBudget(const std::optional<DisplayLoadDecision>& decision);
     // R-R3-27/29: control remains available while discovery runs elsewhere.
     void updateStationAnnouncement();
     void attemptRadioDiscovery();
@@ -414,6 +426,15 @@ private:
     /// Destroyed before media/server/model so no timer or queued observation
     /// can publish into a retiring session.
     std::unique_ptr<DaemonTelemetryController> m_telemetryController;
+    /// R-R3-40: the Core's one host sampler, read by telemetry and the
+    /// display load governor alike.
+    std::shared_ptr<SharedHostSampler> m_hostSampler;
+    /// R-R3-08/37/40: present only with display_adaptive = on. Reads cached
+    /// load snapshots only, never under a DSP lock. Destroyed with the
+    /// media controller it reads.
+    std::unique_ptr<DisplayLoadGovernor> m_displayGovernor;
+    std::unique_ptr<QTimer> m_displayGovernorTimer;
+    QElapsedTimer m_displayGovernorClock;
     std::unique_ptr<DaemonAgcSource> m_agcSource;
     FftTopology m_topology;
 

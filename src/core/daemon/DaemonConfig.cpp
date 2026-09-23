@@ -122,6 +122,17 @@ DaemonConfig DaemonConfig::fromFile(const QString& path, QString* errorOut)
                                   << "thread_placement must be auto or off, keeping auto:"
                                   << value;
             }
+        } else if (key == QLatin1String("display_adaptive")) {
+            if (value == QLatin1String("on")) {
+                cfg.displayAdaptive = true;
+            } else if (value == QLatin1String("off")) {
+                cfg.displayAdaptive = false;
+            } else {
+                cfg.displayAdaptive = true;
+                qCWarning(lcApp) << "nereusd.conf" << path << "line" << lineNo
+                                  << "display_adaptive must be on or off, keeping on:"
+                                  << value;
+            }
         } else if (key == QLatin1String("core_name")) {
             cfg.coreName = value;
         } else if (key == QLatin1String("remote_bind")) {

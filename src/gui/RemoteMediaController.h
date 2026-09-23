@@ -1,6 +1,7 @@
 #pragma once
 // no-port-check: NereusSDR-original. Remote daemon R3 receive display wiring.
 
+#include "core/session/media/DisplayBudget.h"
 #include "core/session/media/MediaPeer.h"
 #include "core/session/media/RemoteAudioContext.h"
 #include "core/session/media/RemoteAudioReceiver.h"
@@ -93,6 +94,12 @@ public:
     /// something it depends on changes; audioStatusChanged() fires only when
     /// the value does.
     RemoteAudioStatus audioStatus() const;
+    /// Why a pan's display is below what it asked for (R-R3-08, R-R3-37):
+    /// CoreBusy when the Core lowered its display budget because its
+    /// computer is busy; None for a pan at its requested quality, a pan the
+    /// Core did not give a reason for, or an unknown pan. Set on every
+    /// budget replan with the pan's status line.
+    DisplayBudgetReason panDisplayBudgetReason(const QString& panId) const;
 
 public slots:
     /// Ask Core for audio again: a new request, enabled per mute and radio

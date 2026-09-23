@@ -11,9 +11,12 @@
 #include "core/session/StationTelemetry.h"
 
 #include <QByteArray>
+#include <QElapsedTimer>
 #include <QString>
 #include <QVector>
 
+#include <functional>
+#include <memory>
 #include <optional>
 
 namespace NereusSDR {
@@ -74,6 +77,42 @@ private:
     };
     std::optional<SystemBaseline> m_systemBaseline;
     std::optional<ProcessBaseline> m_processBaseline;
+};
+
+/// The Core's one host sampler, shared by every reader on its event loop:
+/// the 1 Hz telemetry and the display load governor (R-R3-40).
+///
+/// reading() returns the cached observation while it is younger than
+/// kMinimumIntervalMs and otherwise takes a new one, so readers at
+/// different cadences see the same reading and none of them restarts the
+/// CPU interval another reader relies on. Nothing here ever resets the
+/// sampler's baselines; a reader that must not report an interval started
+/// before it began (telemetry at a new session) drops the percentages from
+/// its own copy instead.
+class SharedHostSampler final {
+public:
+    using MonotonicClock = std::function<qint64()>;
+
+    /// Below the 1 Hz telemetry period, so each telemetry tick still gets a
+    /// fresh reading when it is the only reader, with room for timer jitter.
+    static constexpr qint64 kMinimumIntervalMs = 900;
+
+    /// A null sampler means the platform default; a null clock means this
+    /// object's own monotonic clock (milliseconds).
+    explicit SharedHostSampler(std::unique_ptr<HostTelemetrySampler> sampler = {},
+                               MonotonicClock clock = {});
+
+    bool isEnabled() const noexcept { return m_sampler->isEnabled(); }
+
+    /// The latest reading, sampled now when the cached one is too old.
+    StationHostTelemetry reading();
+
+private:
+    std::unique_ptr<HostTelemetrySampler> m_sampler;
+    MonotonicClock m_clock;
+    QElapsedTimer m_ownClock;
+    std::optional<qint64> m_sampledAtMs;
+    StationHostTelemetry m_cached;
 };
 
 } // namespace NereusSDR

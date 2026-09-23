@@ -189,6 +189,9 @@ private slots:
             QStringLiteral("audio_bitrate"),
             // R-R3-41: reaches startDaemonThreadPlacement() in server_main.
             QStringLiteral("thread_placement"),
+            // R-R3-08/37/40: reaches DaemonApp::startStationServer(), which
+            // owns the display load governor.
+            QStringLiteral("display_adaptive"),
         };
 
         // Each documented key parses without an "unknown key" complaint.
@@ -207,7 +210,8 @@ private slots:
                 "display_application_bytes_per_second = 2400000\n"
                 "spectrum_sample_units_per_second = 1800000\n"
                 "audio_bitrate = 48000\n"
-                "thread_placement = off\n");
+                "thread_placement = off\n"
+                "display_adaptive = off\n");
         f.flush();
         QString err;
         const DaemonConfig c = DaemonConfig::fromFile(f.fileName(), &err);
@@ -221,6 +225,7 @@ private slots:
         QCOMPARE(c.coreName, QStringLiteral("Rock 5C"));
         QCOMPARE(c.audioBitrate, 48000);
         QCOMPARE(c.threadPlacement, false);
+        QCOMPARE(c.displayAdaptive, false);
         const std::optional<DisplayBudgetLimits> limits = c.displayBudgetLimits();
         QVERIFY(limits.has_value());
         QCOMPARE(limits->applicationBytesPerSecond, quint64(2400000));
@@ -339,6 +344,42 @@ private slots:
         const DaemonConfig c = DaemonConfig::fromFile(f.fileName(), &err);
         QVERIFY2(err.isEmpty(), qPrintable(err));
         QCOMPARE(c.threadPlacement, expected);
+    }
+
+    // R-R3-08/37/40: display_adaptive is on (the default) or off; any other
+    // value logs one warning and keeps on.
+    void displayAdaptiveAcceptsOnOrOff_data()
+    {
+        QTest::addColumn<QByteArray>("text");
+        QTest::addColumn<bool>("expected");
+        QTest::addColumn<bool>("warns");
+        QTest::newRow("missing") << QByteArray("slice_count = 1\n") << true << false;
+        QTest::newRow("on") << QByteArray("display_adaptive = on\n") << true << false;
+        QTest::newRow("off") << QByteArray("display_adaptive = off\n") << false << false;
+        QTest::newRow("words") << QByteArray("display_adaptive = auto\n") << true << true;
+        QTest::newRow("off-then-bad")
+            << QByteArray("display_adaptive = off\ndisplay_adaptive = yes\n") << true << true;
+    }
+
+    void displayAdaptiveAcceptsOnOrOff()
+    {
+        QFETCH(QByteArray, text);
+        QFETCH(bool, expected);
+        QFETCH(bool, warns);
+        QTemporaryFile f;
+        QVERIFY(f.open());
+        f.write(text);
+        f.flush();
+        if (warns) {
+            QTest::ignoreMessage(QtWarningMsg,
+                QRegularExpression(QStringLiteral("display_adaptive must be on or off, keeping on")));
+        }
+        QTest::failOnWarning(QRegularExpression(QStringLiteral(".*")));
+        QString err;
+        const DaemonConfig c = DaemonConfig::fromFile(f.fileName(), &err);
+        QVERIFY2(err.isEmpty(), qPrintable(err));
+        QCOMPARE(c.displayAdaptive, expected);
+        QCOMPARE(DaemonConfig::defaults().displayAdaptive, true);
     }
 
     void validateRefusesAnUnsupportedAudioBitrate()

@@ -1115,6 +1115,7 @@ set(CORE_SOURCES
     src/core/session/media/OpusAudioCodec.cpp
     src/core/session/media/DisplayCodec.cpp
     src/core/session/media/DisplayBudget.cpp
+    src/core/session/media/DisplayLoadGovernor.cpp
     src/core/session/media/DssWideRow.cpp
     src/core/session/media/SpectrumEndpoint.cpp
     src/core/session/media/WidebandDisplayContext.cpp

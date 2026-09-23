@@ -16,6 +16,7 @@
 #include "core/session/media/SpectrumEndpoint.h"
 
 #include <QList>
+#include <QString>
 
 #include <optional>
 
@@ -66,6 +67,21 @@ struct DisplayBudgetLimits {
     bool isValid() const;
     bool operator==(const DisplayBudgetLimits&) const = default;
 };
+
+/// Why the Core's current display budget is below its ceiling (R-R3-08,
+/// R-R3-37). CoreBusy: the Core computer is short of processing time and
+/// lowered spectrum quality so audio and receive processing keep priority.
+/// Carried in the capability descriptor's displayBudgetReason entry, only to
+/// peers that negotiated kDisplayBudgetReasonSessionProtocolMinor.
+enum class DisplayBudgetReason : quint8 {
+    None = 0,
+    CoreBusy = 1,
+};
+
+/// "none" or "coreBusy".
+QString displayBudgetReasonWireName(DisplayBudgetReason reason);
+/// The reason a wire name names, or nullopt for a name this build does not know.
+std::optional<DisplayBudgetReason> displayBudgetReasonFromWireName(const QString& name);
 
 struct DisplayBudgetCharge {
     quint64 applicationBytesPerSecond = 0;

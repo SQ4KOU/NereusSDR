@@ -21,6 +21,7 @@
 #include "core/session/Ps3DisplayCodec.h"
 #include "core/session/PureSignalSessionFacade.h"
 #include "core/session/media/DaemonMediaController.h"
+#include "core/session/media/DisplayLoadGovernor.h"
 #include "core/session/media/DaemonAudioSource.h"
 #include "core/session/media/DisplayCodec.h"
 #include "core/session/media/DisplayBudget.h"
@@ -566,6 +567,7 @@ private slots:
     void rapidReplacementCannotMintSpectrumBurstCredit();
     void ps3PinsCurrentMultipartFrameAndPromotesOnlyLatest();
     void runtimeCapDecreaseAllowsOnlyComponentwiseReductions();
+    void coreBusyLowersThenRestoresTheBudget();
     void failedDisplayAttemptDebitsCreditAndRecoversWithKeyframe();
     void exhaustedDisplayCreditDoesNotBlockAudioRtp();
     void mediaPeerReplacementDoesNotMintDisplayCredit();
@@ -887,6 +889,89 @@ void TstDaemonMediaController::runtimeCapDecreaseAllowsOnlyComponentwiseReductio
     QVERIFY(!replayed.value(QStringLiteral("accepted")).toBool());
     QCOMPARE(replayed.value(QStringLiteral("acceptedRevision")).toInteger(), qint64{2});
     QCOMPARE(harness.controller.activeEndpointCount(), 1);
+    harness.finish();
+}
+
+// R-R3-08/37/40: the governor's step reaches the live session as a new
+// limits generation with its reason: the pacer takes it without complaint
+// (Harness fails on a refused pacer update), admission lets the endpoint
+// reduce but not grow, and the restore brings back the requested quality
+// and clears the reason.
+void TstDaemonMediaController::coreBusyLowersThenRestoresTheBudget()
+{
+    const DisplayBudgetLimits ceiling = DisplayLoadGovernor::computedCeiling();
+    Harness harness(ceiling);
+    harness.establishSession();
+    QSignalSpy controls(&harness.client, &StationClient::mediaControlReceived);
+    harness.startReadyPeer();
+    QCOMPARE(harness.client.remoteDisplayBudgetLimits()->generation, quint32{1});
+    QCOMPARE(harness.client.remoteDisplayBudgetReason(), DisplayBudgetReason::None);
+
+    const double centre = harness.radio.streamCentreHz(harness.streamIndex);
+    QJsonObject request = subscription(97, 1, harness.sliceId, centre);
+    QVERIFY(harness.client.sendMediaControl(request, harness.client.sessionEpoch()));
+    QTRY_VERIFY(allocationFor(controls, 97, 1).value(QStringLiteral("accepted")).toBool());
+    const DisplayBudgetCharge requested = spectrumDisplayCost(128, 60, false)->charge;
+    QCOMPARE(harness.controller.acceptedDisplayCharge(), requested);
+
+    DisplayLoadGovernor governor(ceiling);
+    std::optional<DisplayLoadDecision> lowered;
+    for (qint64 t = 0; t <= DisplayLoadGovernor::kBusyHoldMs && !lowered; t += 500) {
+        DisplayLoadReading reading;
+        reading.nowMs = t;
+        reading.highestReceiverLoad = 0.8;
+        reading.acceptedCharge = harness.controller.acceptedDisplayCharge();
+        lowered = governor.update(reading);
+    }
+    QVERIFY(lowered.has_value());
+    QCOMPARE(lowered->reason, DisplayBudgetReason::CoreBusy);
+    QVERIFY(lowered->limits.spectrumSampleUnitsPerSecond < requested.spectrumSampleUnitsPerSecond);
+    QVERIFY(harness.server.setDisplayBudgetLimits(lowered->limits, lowered->reason));
+    QTRY_COMPARE(harness.client.remoteDisplayBudgetLimits()->generation, quint32{2});
+    QCOMPARE(harness.client.remoteDisplayBudgetReason(), DisplayBudgetReason::CoreBusy);
+
+    // Growth no longer fits.
+    request.insert(QStringLiteral("revision"), 2);
+    request.insert(QStringLiteral("pixels"), 256);
+    QVERIFY(harness.client.sendMediaControl(request, harness.client.sessionEpoch()));
+    QTRY_VERIFY(!allocationFor(controls, 97, 2).isEmpty());
+    QVERIFY(!allocationFor(controls, 97, 2).value(QStringLiteral("accepted")).toBool());
+    QCOMPARE(allocationFor(controls, 97, 2).value(QStringLiteral("acceptedRevision")).toInteger(),
+             qint64{1});
+
+    // The reduction the app plans under the lowered cap is admitted.
+    const DisplayBudgetCharge reduced = spectrumDisplayCost(128, 50, false)->charge;
+    QVERIFY(displayChargeFits(lowered->limits, reduced));
+    request.insert(QStringLiteral("revision"), 3);
+    request.insert(QStringLiteral("pixels"), 128);
+    request.insert(QStringLiteral("fps"), 50);
+    QVERIFY(harness.client.sendMediaControl(request, harness.client.sessionEpoch()));
+    QTRY_VERIFY(allocationFor(controls, 97, 3).value(QStringLiteral("accepted")).toBool());
+    QCOMPARE(harness.controller.acceptedDisplayCharge(), reduced);
+
+    std::optional<DisplayLoadDecision> restored;
+    for (qint64 t = 10'000; t <= 10'000 + DisplayLoadGovernor::kCalmHoldMs && !restored;
+         t += 500) {
+        DisplayLoadReading reading;
+        reading.nowMs = t;
+        reading.highestReceiverLoad = 0.3;
+        reading.acceptedCharge = harness.controller.acceptedDisplayCharge();
+        restored = governor.update(reading);
+    }
+    QVERIFY(restored.has_value());
+    QCOMPARE(restored->reason, DisplayBudgetReason::None);
+    QVERIFY(harness.server.setDisplayBudgetLimits(restored->limits, restored->reason));
+    QTRY_COMPARE(harness.client.remoteDisplayBudgetLimits()->generation, quint32{3});
+    QCOMPARE(harness.client.remoteDisplayBudgetReason(), DisplayBudgetReason::None);
+    QCOMPARE(harness.client.remoteDisplayBudgetLimits()->spectrumSampleUnitsPerSecond,
+             ceiling.spectrumSampleUnitsPerSecond);
+
+    // The requested quality fits again.
+    request.insert(QStringLiteral("revision"), 4);
+    request.insert(QStringLiteral("fps"), 60);
+    QVERIFY(harness.client.sendMediaControl(request, harness.client.sessionEpoch()));
+    QTRY_VERIFY(allocationFor(controls, 97, 4).value(QStringLiteral("accepted")).toBool());
+    QCOMPARE(harness.controller.acceptedDisplayCharge(), requested);
     harness.finish();
 }
 

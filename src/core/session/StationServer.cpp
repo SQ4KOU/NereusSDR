@@ -1323,15 +1323,17 @@ void StationServer::setTelemetryEnabled(bool enabled)
     if (!m_session) { m_telemetryEnabled = enabled; }
 }
 
-bool StationServer::setDisplayBudgetLimits(const DisplayBudgetLimits& limits)
+bool StationServer::setDisplayBudgetLimits(const DisplayBudgetLimits& limits,
+                                           DisplayBudgetReason reason)
 {
     if (!limits.isValid()) { return false; }
     if (m_displayBudget) {
-        if (*m_displayBudget == limits) { return true; }
+        if (*m_displayBudget == limits && reason == m_displayBudgetReason) { return true; }
         const quint32 delta = limits.generation - m_displayBudget->generation;
         if (delta == 0 || delta >= 0x80000000u) { return false; }
     }
     m_displayBudget = limits;
+    m_displayBudgetReason = reason;
     const QPointer<StationServer> self(this);
     emit displayBudgetChanged(); // The sender sees new limits before publication.
     if (self) { self->publishDisplayBudgetCapabilities(); }
@@ -1488,6 +1490,13 @@ StationCapabilities StationServer::buildCapabilities() const
         caps.remoteDisplayBudgetVersion = 1;
         caps.displayBudget = m_displayBudget;
         caps.remotePs3DisplaySubscribed = m_radioModel->pureSignalFacade()->remoteAmpViewSubscribed();
+        // R-R3-08/37: only a peer that negotiated the reason receives it; an
+        // older one gets exactly the five budget fields it was built for.
+        const auto peer = m_peers.constFind(m_session);
+        if (peer != m_peers.cend()
+            && peer->agreedMinor >= kDisplayBudgetReasonSessionProtocolMinor) {
+            caps.displayBudgetReason = m_displayBudgetReason;
+        }
     }
     caps.remoteCtunVersion = 1;
     caps.stationTelemetryVersion = m_telemetryEnabled ? 3 : 0;

@@ -744,6 +744,7 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
     m_lastTelemetrySampleElapsedMs = -1;
     m_capabilities.remoteDisplayBudgetVersion = 0;
     m_capabilities.displayBudget.reset();
+    m_capabilities.displayBudgetReason.reset();
     m_capabilities.remotePs3DisplaySubscribed = false;
 
     // These three describe THIS session. Carrying them across a reconnect
@@ -1415,6 +1416,7 @@ void StationClient::handleCapabilities(const SessionMessage& message)
     const quint32 epoch = m_sessionEpoch;
     const auto previousBudget = remoteDisplayBudgetLimits();
     const bool previousPs3 = remotePs3DisplaySubscribed();
+    const DisplayBudgetReason previousReason = remoteDisplayBudgetReason();
     StationCapabilities incoming = StationCapabilities::fromUpdates(message.updates);
     // A complete descriptor is authoritative for this authenticated epoch.
     // Malformed, partial or stale updates cannot turn a known cap into the
@@ -1431,6 +1433,7 @@ void StationClient::handleCapabilities(const SessionMessage& message)
             incoming.remoteDisplayBudgetVersion = m_capabilities.remoteDisplayBudgetVersion;
             incoming.displayBudget = m_capabilities.displayBudget;
             incoming.remotePs3DisplaySubscribed = m_capabilities.remotePs3DisplaySubscribed;
+            incoming.displayBudgetReason = m_capabilities.displayBudgetReason;
         }
     }
     m_capabilities = incoming;
@@ -1444,7 +1447,8 @@ void StationClient::handleCapabilities(const SessionMessage& message)
 
     if (m_radioModel.isNull()) {
         if (previousBudget != remoteDisplayBudgetLimits()
-            || previousPs3 != remotePs3DisplaySubscribed()) {
+            || previousPs3 != remotePs3DisplaySubscribed()
+            || previousReason != remoteDisplayBudgetReason()) {
             emit displayBudgetChanged();
         }
         return;
@@ -1522,7 +1526,8 @@ void StationClient::handleCapabilities(const SessionMessage& message)
         watchForOutbound(key, pans.at(i));
     }
     if (previousBudget != remoteDisplayBudgetLimits()
-        || previousPs3 != remotePs3DisplaySubscribed()) {
+        || previousPs3 != remotePs3DisplaySubscribed()
+        || previousReason != remoteDisplayBudgetReason()) {
         emit displayBudgetChanged();
     }
 }
@@ -2665,6 +2670,15 @@ std::optional<DisplayBudgetLimits> StationClient::remoteDisplayBudgetLimits() co
     if (!mediaAvailable() || m_agreedMinor < kRemoteDisplayBudgetSessionProtocolMinor
         || m_capabilities.remoteDisplayBudgetVersion < 1) { return std::nullopt; }
     return m_capabilities.displayBudget;
+}
+
+DisplayBudgetReason StationClient::remoteDisplayBudgetReason() const
+{
+    if (!remoteDisplayBudgetLimits() || m_agreedMinor < kDisplayBudgetReasonSessionProtocolMinor
+        || !m_capabilities.displayBudgetReason) {
+        return DisplayBudgetReason::None;
+    }
+    return *m_capabilities.displayBudgetReason;
 }
 
 bool StationClient::remotePs3DisplaySubscribed() const

@@ -318,6 +318,54 @@ private slots:
         QCOMPARE(snapshot.host.memoryTotalKiB, std::optional<qint64>(8000000));
     }
 
+    // R-R3-40: telemetry and the display load governor read one shared host
+    // sampler. Both see the same reading, and neither read restarts the CPU
+    // interval the other relies on.
+    void sharedHostSamplerGivesTelemetryAndTheGovernorOneReading()
+    {
+        SessionHarness h;
+        HostFixture host;
+        qint64 nowMs = 0;
+        const auto shared = std::make_shared<SharedHostSampler>(
+            std::make_unique<HostTelemetrySampler>(host.directory.path()),
+            [&] { return nowMs; });
+        DaemonTelemetryController controller(
+            &h.server, &h.station, nullptr, nullptr, [&] { return nowMs; }, {}, {}, {},
+            shared);
+        controller.disableAutomaticSamplingForTest();
+        h.server.setTelemetryEnabled(true);
+        QSignalSpy samples(&h.client, &StationClient::telemetryReceived);
+        h.connectClient(this);
+        QTRY_VERIFY(h.client.telemetryAvailable());
+
+        nowMs = 1000;
+        controller.sampleNow();
+        QTRY_COMPARE(samples.count(), 1);
+        QVERIFY(!lastSnapshot(samples).host.systemCpuPercent);
+
+        host.cpu("cpu  300 0 300 1200 200 0 0 0 0 0\n", 60); // 1000 ticks, 400 busy
+        nowMs = 2000;
+        const StationHostTelemetry governorRead = shared->reading();
+        QCOMPARE(governorRead.systemCpuPercent, std::optional<double>(40.0));
+        nowMs = 2400;
+        controller.sampleNow();
+        QTRY_COMPARE(samples.count(), 2);
+        QCOMPARE(lastSnapshot(samples).host.systemCpuPercent, governorRead.systemCpuPercent);
+        QCOMPARE(lastSnapshot(samples).host.processCpuPercent, governorRead.processCpuPercent);
+
+        host.cpu("cpu  400 0 300 1400 300 0 0 0 0 0\n", 90); // 400 ticks, 100 busy
+        nowMs = 2600; // The governor's next tick: the cached reading, no new interval.
+        QCOMPARE(shared->reading().systemCpuPercent, std::optional<double>(40.0));
+        nowMs = 3400;
+        controller.sampleNow();
+        QTRY_COMPARE(samples.count(), 3);
+        // The interval runs from the 2000 ms sample: the read at 2600 ms did
+        // not restart it.
+        QCOMPARE(lastSnapshot(samples).host.systemCpuPercent, std::optional<double>(25.0));
+        nowMs = 3500;
+        QCOMPARE(shared->reading().systemCpuPercent, std::optional<double>(25.0));
+    }
+
     // R-R3-40: each 1 Hz sample carries the receivers' cached load to a
     // peer that negotiated it. The provider only reads; the controller
     // never samples the receivers itself.

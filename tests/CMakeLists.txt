@@ -7086,6 +7086,8 @@ nereus_add_test(tst_display_codec)
 nereus_add_test(tst_display_budget)
 nereus_add_test(tst_display_budget_contract fakes/LoopbackTransport.cpp)
 nereus_add_test(tst_remote_display_allocator)
+# R-R3-08/37/40: the Core lowers spectrum first when its computer is busy.
+nereus_add_test(tst_display_load_governor)
 
 # Remote Daemon R3, Task 2: synthetic live stream I/Q reaches a daemon-owned
 # FFT source with tier isolation and bounded source lifecycle.

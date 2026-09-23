@@ -31,22 +31,24 @@ DaemonTelemetryController::DaemonTelemetryController(
     DaemonMediaController* mediaController, QObject* parent,
     MonotonicClock clock, AudioDiagnosticsProvider audioDiagnosticsProvider,
     std::unique_ptr<HostTelemetrySampler> hostSampler,
-    ReceiverLoadProvider receiverLoadProvider)
+    ReceiverLoadProvider receiverLoadProvider,
+    std::shared_ptr<SharedHostSampler> sharedHostSampler)
     : QObject(parent)
     , m_server(server)
     , m_radioModel(radioModel)
     , m_mediaController(mediaController)
     , m_clock(std::move(clock))
     , m_audioDiagnosticsProvider(std::move(audioDiagnosticsProvider))
-    , m_hostSampler(std::move(hostSampler))
+    , m_hostSampler(std::move(sharedHostSampler))
     , m_receiverLoadProvider(std::move(receiverLoadProvider))
 {
-    if (!m_hostSampler) {
-        m_hostSampler = std::make_unique<HostTelemetrySampler>();
-    }
     m_processClock.start();
     if (!m_clock) {
         m_clock = [this] { return m_processClock.elapsed(); };
+    }
+    if (!m_hostSampler) {
+        m_hostSampler = std::make_shared<SharedHostSampler>(
+            std::move(hostSampler), [this] { return clockNowMs(); });
     }
     if (!m_audioDiagnosticsProvider) {
         m_audioDiagnosticsProvider = [this] {
@@ -103,7 +105,7 @@ void DaemonTelemetryController::onSessionStarted(quint64 epoch)
     m_sequence = 0;
     m_audioBaseline.reset();
     m_radioObservation.reset();
-    m_hostSampler->reset();
+    m_hostCpuBaselinePending = true;
     synchronizeRadioConnection();
     requestRadioObservation();
     if (m_automaticSamplingEnabled) {
@@ -358,7 +360,13 @@ void DaemonTelemetryController::sampleNow()
     snapshot.sampledElapsedMs = sampledElapsedMs;
     applyRadioObservation(snapshot, sampledElapsedMs);
     applyAudioObservation(snapshot, sampledElapsedMs);
-    snapshot.host = m_hostSampler->sample();
+    snapshot.host = m_hostSampler->reading();
+    if (m_hostCpuBaselinePending) {
+        // The shared reading's interval may have begun before this session.
+        m_hostCpuBaselinePending = false;
+        snapshot.host.systemCpuPercent.reset();
+        snapshot.host.processCpuPercent.reset();
+    }
     snapshot.receivers = m_receiverLoadProvider();
     m_server->sendTelemetry(snapshot, m_epoch);
     requestRadioObservation();
