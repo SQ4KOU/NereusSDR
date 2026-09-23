@@ -106,6 +106,8 @@ private slots:
         guiWire->observation.receivedPayloadBytes += 2000;
         guiWire->observation.acceptedPayloadBytes += 4000;
         playback.decodedPackets = 25;
+        playback.acceptedPackets = 27;
+        playback.startDiscardedPackets = 62;
         playback.deviceConsumedFrames = 48000;
         playback.lastAdmittedPacketAgeMs = 20;
         playback.lastDeviceProgressAgeMs = 5;
@@ -130,6 +132,11 @@ private slots:
         QVERIFY(controller.detailText().contains(QStringLiteral("Gaps filled: 0, concealed 40\u00A0ms intervals.")));
         QVERIFY(controller.detailText().contains(QStringLiteral("Speaker buffer: 41\u00A0ms, audio queued for this computer's speaker, not total delay.")));
         QVERIFY(controller.detailText().contains(QStringLiteral("Reorder buffer: 80\u00A0ms on this computer, packets held so that late arrivals play in order.")));
+        // Fix wave M1: the connect-time backlog discard is shown, and it is
+        // a separate count from "admitted" (the receiver excludes it).
+        QVERIFY2(controller.detailText().contains(QStringLiteral(
+                     "admitted 27, discarded before playback 62, decoded 25,")),
+                 qPrintable(controller.detailText()));
 
         // The previous context failed and restarted entirely between polls.
         // Its per-context counters have reset; the actual interruption remains.

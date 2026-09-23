@@ -814,6 +814,9 @@ private slots:
         // arrival, everything before the newest backlog packet is discarded
         // at start and never heard; loss accounting restarts with the kept one.
         QCOMPARE(telemetry.startDiscardedPackets, quint64(kBacklog - 1));
+        // Fix wave M1: packets admitted and then discarded at start count as
+        // discarded, not admitted, so the two counts reconcile.
+        QCOMPARE(telemetry.acceptedPackets, quint64(1 + kFollowing));
         QCOMPARE(telemetry.decodedPackets, quint64(1 + kFollowing));
         QCOMPARE(telemetry.concealedPackets, quint64(0));
         QCOMPARE(telemetry.missingPackets, quint64(0));

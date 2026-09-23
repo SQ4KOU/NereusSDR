@@ -16,6 +16,8 @@ class AudioEngine;
 struct RemoteAudioReceiverTelemetry {
     quint64 generation = 0;
     bool running = false;
+    // Admitted to the jitter queue and not later discarded at start: a packet
+    // trimmed with a connect-time backlog moves to startDiscardedPackets.
     quint64 acceptedPackets = 0;
     quint64 decodedPackets = 0;
     quint64 concealedPackets = 0;

@@ -327,7 +327,14 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
                 // Keep only the newest packet and restart the reorder window
                 // and its loss accounting from it: the dropped packets were
                 // never heard, so they are neither a gap nor a stream break.
-                d->startDiscarded.fetch_add(quint64(jitter.queuedPackets()) + (playable - 1));
+                // Packets already in the jitter queue were counted as
+                // admitted; they are discarded here instead, so move them to
+                // the start-discard count and "admitted" keeps only packets
+                // that can still play (fix wave M1).
+                const auto queued = quint64(jitter.queuedPackets());
+                accepted -= std::min(accepted, queued);
+                d->accepted.fetch_sub(std::min(d->accepted.load(), queued));
+                d->startDiscarded.fetch_add(queued + (playable - 1));
                 const quint32 anchor = batch[*newest].timestamp;
                 std::deque<Private::Packet> kept;
                 for (std::size_t i = 0; i < batch.size(); ++i) {

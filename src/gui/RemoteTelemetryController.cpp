@@ -338,8 +338,12 @@ QString RemoteTelemetryController::detailText() const
     text << tr("Client speaker buffering: %1 ms (sampled PCM ring only). This excludes network, encoder, jitter/matcher and audio-device delay.")
         .arg(number(p.running ? p.speakerQueuedMs : std::nullopt));
     text << tr("End-to-end Opus latency is not measured. Core RTT is a control round trip, not one-way audio latency; RTT/2 is not used.");
-    text << tr("Playback context %1: admitted %2, decoded %3, concealed %4, late %5, invalid %6, duplicate %7, rejected headers %8.")
-        .arg(p.generation).arg(p.acceptedPackets).arg(p.decodedPackets).arg(p.concealedPackets)
+    // Fix wave M1: "discarded before playback" is the connect-time backlog
+    // trimmed before anything was heard; the receiver keeps it out of
+    // "admitted", so the two counts do not overlap.
+    text << tr("Playback context %1: admitted %2, discarded before playback %3, decoded %4, concealed %5, late %6, invalid %7, duplicate %8, rejected headers %9.")
+        .arg(p.generation).arg(p.acceptedPackets).arg(p.startDiscardedPackets)
+        .arg(p.decodedPackets).arg(p.concealedPackets)
         .arg(p.latePackets).arg(p.invalidPackets).arg(p.duplicatePackets).arg(p.rejectedHeaders);
     text << tr("Playback underflows %1 / overflows %2; device consumed %3 frames; last admitted packet %4 ms ago.")
         .arg(p.underflows).arg(p.overflows).arg(p.deviceConsumedFrames)
