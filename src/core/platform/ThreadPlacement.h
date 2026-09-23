@@ -24,6 +24,10 @@
 //               copy of the plan without taking the mutex every tick.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code (R-R3-40).
+//   2026-09-23: appliedPlan(), the assignments whose move succeeded, so
+//               the governor judges by where threads actually run. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code (R-R3-40, R-R3-41).
 // =================================================================
 
 #pragma once
@@ -219,6 +223,13 @@ public:
 
     /// The plan for the current demand (tests and diagnostics).
     PlacementPlan currentPlan() const;
+    /// currentPlan() with only the assignments now in force: the role's
+    /// thread has registered and its move to that core succeeded. A role
+    /// whose move was refused, or whose thread has not registered yet,
+    /// is left out, so it counts as sharing the housekeeping cores
+    /// (R-R3-40: the display load governor's view). Takes the registry's
+    /// mutex; changes only when planRevision() moves.
+    PlacementPlan appliedPlan() const;
 
     /// Changes whenever the plan currentPlan() returns may have changed. A
     /// reader that polls (the display load governor, every 500 ms) keeps

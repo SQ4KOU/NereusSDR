@@ -36,8 +36,10 @@ struct DisplayLoadInputs {
     /// milliseconds (SharedHostSampler::cpuSampleBeganMsAgo). Absent with
     /// no CPU values.
     std::optional<qint64> cpuSampleBeganMsAgo;
-    /// The thread placement plan now in force; inactive when threads are not
-    /// placed (placement off, priority only, one core, not Linux).
+    /// The thread placement now in force (ThreadPlacement::appliedPlan):
+    /// only the roles whose thread really runs on its own core, so a
+    /// refused move counts as sharing. Inactive when threads are not placed
+    /// (placement off, priority only, one core, not Linux).
     PlacementPlan placement;
 };
 

@@ -17,6 +17,9 @@
 //   2026-09-23: planRevision() moves on every plan change (R-R3-40).
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-23: appliedPlan(): only the assignments whose move succeeded
+//               (R-R3-40, R-R3-41). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/platform/ThreadPlacement.h"
@@ -863,6 +866,35 @@ PlacementPlan ThreadPlacement::currentPlan() const
 {
     QMutexLocker lock(&m_mutex);
     return m_placing ? planThreadPlacement(m_topology, demandLocked()) : PlacementPlan{};
+}
+
+PlacementPlan ThreadPlacement::appliedPlan() const
+{
+    QMutexLocker lock(&m_mutex);
+    if (!m_placing) {
+        return PlacementPlan{};
+    }
+    PlacementPlan plan = planThreadPlacement(m_topology, demandLocked());
+    QList<RoleAssignment> inForce;
+    for (const RoleAssignment& assignment : std::as_const(plan.assignments)) {
+        if (assignment.cpu < 0) {
+            continue;
+        }
+        const bool applied = std::any_of(
+            m_threads.cbegin(), m_threads.cend(), [&assignment](const Registered& thread) {
+                // As in cpuFor(): only receive workers are told apart by
+                // channel.
+                return thread.role == assignment.role
+                    && (assignment.role != ThreadRole::RxWorker
+                        || thread.channel == assignment.channel)
+                    && thread.appliedCpus == QList<int>{assignment.cpu};
+            });
+        if (applied) {
+            inForce.append(assignment);
+        }
+    }
+    plan.assignments = inForce;
+    return plan;
 }
 
 // ---------------------------------------------------------------- nereusd

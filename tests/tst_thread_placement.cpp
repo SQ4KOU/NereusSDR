@@ -10,6 +10,7 @@
 
 #include <QtTest>
 
+#include "core/daemon/DisplayLoadInputs.h"
 #include "core/platform/ThreadPlacement.h"
 #include "core/wdsp_api.h"
 
@@ -838,6 +839,66 @@ private slots:
         QCOMPARE(lastNice(calls, 101), 0);
         QCOMPARE(lastCpus(calls, 200), QList<int>{5});
         QCOMPARE(lastNice(calls, 200), kDspNice);
+        QCOMPARE(catcher.warnings().size(), 1);
+    }
+
+    // R-R3-40/41: the display load governor leaves a receiver's load out
+    // only when its worker and the DSP thread really run on their own
+    // cores. A plan that gives them cores is not enough: a refused move
+    // leaves the worker on the housekeeping cores, beside the display.
+    void aRefusedMoveIsLeftOutOfTheAppliedPlan()
+    {
+        SysfsFixture f;
+        layOutRk3588s(f);
+        QList<Call> calls;
+        qint64 current = 1;
+        auto api = std::make_unique<RecordingApi>(&calls, &current);
+        RecordingApi* const recording = api.get();
+        ThreadPlacement placement;
+        WarningCatcher catcher;   // the one expected refusal warning
+        placement.start(f.read(), demand({0}, true), std::move(api), true);
+        current = 200;
+        placement.registerCurrentThread(ThreadRole::DspThread);
+        // Not registered yet: the plan gives RX0 a core, nothing runs there.
+        placement.setChannelActive(ThreadRole::RxWorker, 0, true);
+        const PlacementPlan planned = placement.currentPlan();
+        QVERIFY(planned.cpuFor(ThreadRole::RxWorker, 0) >= 0);
+        QVERIFY(planned.cpuFor(ThreadRole::DspThread) >= 0);
+        QCOMPARE(placement.appliedPlan().cpuFor(ThreadRole::RxWorker, 0), -1);
+        QCOMPARE(placement.appliedPlan().cpuFor(ThreadRole::DspThread),
+                 planned.cpuFor(ThreadRole::DspThread));
+
+        // RX0's worker starts and its move is refused.
+        recording->refuseCpus = {planned.cpuFor(ThreadRole::RxWorker, 0)};
+        current = 101;
+        placement.onWdspThreadStarted(kWdspThreadRxMain, 0);
+        QCOMPARE(lastCpus(calls, 101), QList<int>{planned.cpuFor(ThreadRole::RxWorker, 0)});
+        const PlacementPlan applied = placement.appliedPlan();
+        QVERIFY(applied.active);
+        QCOMPARE(applied.housekeeping, planned.housekeeping);
+        QCOMPARE(applied.cpuFor(ThreadRole::RxWorker, 0), -1);
+        QVERIFY(applied.cpuFor(ThreadRole::DspThread) >= 0);
+
+        // What the governor sees: RX0's load counts by the applied plan,
+        // and would have been left out by the plan alone.
+        DisplayLoadInputs inputs;
+        ReceiverDspLoad load;
+        load.load = 0.85;
+        inputs.receivers.append({0, load});
+        const DisplayBudgetCharge charge = spectrumDisplayCost(1024, 30, false)->charge;
+        inputs.placement = planned;
+        QVERIFY(!displayLoadReadingFrom(inputs, 0, charge).highestReceiverLoad.has_value());
+        inputs.placement = applied;
+        QCOMPARE(displayLoadReadingFrom(inputs, 0, charge).highestReceiverLoad,
+                 std::optional<double>(0.85));
+
+        // Once a move succeeds, the worker is on its own core and left out.
+        recording->refuseCpus.clear();
+        placement.onWdspThreadStarted(kWdspThreadRxMain, 0);
+        inputs.placement = placement.appliedPlan();
+        QCOMPARE(inputs.placement.cpuFor(ThreadRole::RxWorker, 0),
+                 planned.cpuFor(ThreadRole::RxWorker, 0));
+        QVERIFY(!displayLoadReadingFrom(inputs, 0, charge).highestReceiverLoad.has_value());
         QCOMPARE(catcher.warnings().size(), 1);
     }
 

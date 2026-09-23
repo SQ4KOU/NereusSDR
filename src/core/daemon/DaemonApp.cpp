@@ -552,7 +552,9 @@ DisplayLoadInputs DaemonApp::gatherDisplayLoadInputs()
     ThreadPlacement& placement = ThreadPlacement::instance();
     const quint64 revision = placement.planRevision();
     if (m_placementPlanRevision != revision) {
-        m_placementPlan = placement.currentPlan();
+        // Where threads actually run: a refused move leaves its role
+        // sharing the housekeeping cores.
+        m_placementPlan = placement.appliedPlan();
         m_placementPlanRevision = revision;
     }
     inputs.placement = m_placementPlan;
