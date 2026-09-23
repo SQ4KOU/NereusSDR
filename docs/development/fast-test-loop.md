@@ -97,6 +97,43 @@ change that: it makes each dependency cheap, not narrower. Use `-L` to get
 fast feedback while iterating; use the full suite before you call something
 done.
 
+## Test windows
+
+Tests run without windows by default. Every test registered through
+`nereus_add_test()` runs on Qt's `offscreen` platform, so a full run no
+longer flashes hundreds of windows across your desktop. The setting lives
+in the test's own ctest environment and overrides any `QT_QPA_PLATFORM`
+you export in your shell.
+
+To watch windows for one run, start the test executable directly instead
+of through ctest; ctest's environment does not apply then:
+
+```bash
+QT_QPA_PLATFORM=cocoa ./build/tests/tst_panadapter_stack_layouts   # macOS
+QT_QPA_PLATFORM=xcb   ./build/tests/tst_panadapter_stack_layouts   # Linux
+```
+
+To get windows back for a whole build, turn the option off and
+reconfigure (turn it back on the same way):
+
+```bash
+cmake -S . -B build -DNEREUS_TESTS_OFFSCREEN=OFF
+```
+
+A test that really needs the native platform (the native menu bar, a Retina
+pixel ratio, a Cocoa view, GPU rendering) is registered with
+`nereus_add_test(<name> NATIVE_WINDOW ...)`. It keeps real windows even with
+the default on and carries the `native-window` label:
+
+```bash
+ctest --test-dir build -L native-window    # only the tests that need windows
+ctest --test-dir build -LE native-window   # everything else
+```
+
+Reserve `NATIVE_WINDOW` for tests that need a capability the offscreen
+platform lacks. If a test fails off-screen because the product itself
+misbehaves without a native window, fix the product instead.
+
 ## Building tests is opt-in
 
 Test executables are `EXCLUDE_FROM_ALL`, so a routine build only builds the

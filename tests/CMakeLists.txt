@@ -20,6 +20,15 @@
 
 find_package(Qt6 REQUIRED COMPONENTS Test)
 
+# Test windows (2026-09-22). Every GUI-backed test used to open real
+# windows on the developer's desktop, thousands of them in a full run.
+# By default each test now runs on Qt's offscreen platform plugin, so
+# nothing is drawn on screen. Turn this OFF to watch native windows
+# again; a single test that genuinely needs the native platform opts
+# out with nereus_add_test(<name> NATIVE_WINDOW ...).
+option(NEREUS_TESTS_OFFSCREEN
+    "Run Qt tests on the offscreen platform (no windows on screen)" ON)
+
 # Sharding inputs (CI-only; default to "off" for local dev builds).
 # Validated once here so a typo in the matrix YAML fails configure
 # loudly instead of silently running every shard's full suite.
@@ -122,7 +131,12 @@ function(nereus_add_test name)
     #
     # Everything not consumed by the keyword stays ARGN's original
     # meaning: additional source files.
-    cmake_parse_arguments(_nat "" "" "EXTRA_LABELS" ${ARGN})
+    #
+    # NATIVE_WINDOW marks a test that needs something the offscreen
+    # platform cannot provide (native menu bar, Retina pixel ratio, a
+    # Cocoa view, GPU rendering). It keeps the native platform even when
+    # NEREUS_TESTS_OFFSCREEN is ON and gets the `native-window` label.
+    cmake_parse_arguments(_nat "NATIVE_WINDOW" "" "EXTRA_LABELS" ${ARGN})
     set(_extra_sources ${_nat_UNPARSED_ARGUMENTS})
 
     # Sharding gate — when this test's hash bucket doesn't match the
@@ -203,6 +217,10 @@ function(nereus_add_test name)
         list(APPEND _test_labels ${_nat_EXTRA_LABELS})
         list(REMOVE_DUPLICATES _test_labels)
     endif()
+    if(_nat_NATIVE_WINDOW)
+        list(REMOVE_ITEM _test_labels "unclassified")
+        list(APPEND _test_labels "native-window")
+    endif()
     set_tests_properties(${name} PROPERTIES
         LABELS "${_test_labels}"
         TIMEOUT 120)
@@ -210,9 +228,24 @@ function(nereus_add_test name)
     # Test executables sit in build/tests while the application DLLs sit in
     # build. Add that directory to PATH so Windows can load both shared
     # libraries. CMake before 3.22 has no ENVIRONMENT_MODIFICATION support.
+    # APPEND, not set: the offscreen entry below shares this list property.
     if(WIN32 AND CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
-        set_tests_properties(${name} PROPERTIES ENVIRONMENT_MODIFICATION
+        set_property(TEST ${name} APPEND PROPERTY ENVIRONMENT_MODIFICATION
             "PATH=path_list_prepend:$<TARGET_FILE_DIR:NereusSDRLib>")
+    endif()
+
+    # Offscreen by default (see NEREUS_TESTS_OFFSCREEN at the top of this
+    # file). `set:` overrides whatever QT_QPA_PLATFORM the caller exported,
+    # so a stray shell variable cannot bring windows back mid-run; turn the
+    # option OFF instead. CMake before 3.22 falls back to ENVIRONMENT.
+    if(NEREUS_TESTS_OFFSCREEN AND NOT _nat_NATIVE_WINDOW)
+        if(CMAKE_VERSION VERSION_GREATER_EQUAL 3.22)
+            set_property(TEST ${name} APPEND PROPERTY ENVIRONMENT_MODIFICATION
+                "QT_QPA_PLATFORM=set:offscreen")
+        else()
+            set_property(TEST ${name} APPEND PROPERTY ENVIRONMENT
+                "QT_QPA_PLATFORM=offscreen")
+        endif()
     endif()
 
     # Per-label build aggregates, so `ctest -L core` has a matching
