@@ -578,14 +578,18 @@ private slots:
         QCOMPARE(delays().constLast(), 1 * kUnitMs);
         QTRY_COMPARE_WITH_TIMEOUT(handshakes.size(), 5, 15000);
 
-        // Manual Disconnect during the backoff wait cancels it.
+        // Manual Disconnect during the backoff wait cancels it. A longer
+        // unit keeps the wait open while the poll below notices it.
         QTRY_COMPARE(built, 5);
         QVERIFY(transport);
+        constexpr int kLongUnitMs = 1000;
+        client.setReconnectBackoffUnitMs(kLongUnitMs);
         transport->failConnection(QStringLiteral("media peer connection failed"));
         QTRY_COMPARE_WITH_TIMEOUT(retries.size(), 5, 5000);
+        QCOMPARE(delays().constLast(), 2 * kLongUnitMs);
         QVERIFY(client.isReconnectPending());
         controls.disconnectFromStation();
-        QTest::qWait(10 * kUnitMs);
+        QTest::qWait(3 * kLongUnitMs);
         QCOMPARE(retries.size(), 5);
         QCOMPARE(handshakes.size(), 5);
         QVERIFY(!client.isConnectionActive());

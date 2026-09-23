@@ -621,12 +621,15 @@ private slots:
         auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
         auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
         stationLink->linkTo(clientLink);
+        // Started before the session, so it can only overstate the time
+        // since media started. The 20 ms allows Qt's coarse timers, which
+        // may fire up to 5% early.
         QElapsedTimer sinceStart;
+        sinceStart.start();
         client.startSession(clientLink, server.token());
         server.acceptTransport(stationLink);
         QTRY_VERIFY(client.isHandshakeComplete());
         QTRY_VERIFY(media);
-        sinceStart.start();
         const quint32 epoch = client.sessionEpoch();
 
         QTRY_COMPARE_WITH_TIMEOUT(recoveries.size(), 1, 5000);
