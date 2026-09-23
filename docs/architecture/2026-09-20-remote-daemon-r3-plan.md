@@ -1078,10 +1078,13 @@ receiver counters and session generation. Produce persistent status and a
 small operator-facing profile choice only if the measurements justify it.
 The currently fixed 24 kbit/s profile is not a negotiated quality selector.
 
-- [ ] Show current codec/rate, local output/mute and persistent output/media
+- [x] Show current codec/rate, local output/mute and persistent output/media
   error with a recovery action. Distinguish no signal from no media, local mute
   and output-device failure; show measured loss/jitter/buffer health with clear
-  meanings. Arrival spacing alone must not be labelled packet loss.
+  meanings. Arrival spacing alone must not be labelled packet loss. Source
+  complete; see
+  [remote audio status verification](2026-09-20-remote-daemon-r3-verification/remote-audio-status.md).
+  Hardware acceptance pending.
 - [ ] Complete the 24/48 kbit/s mixed-stereo listening/CPU/wire-rate comparison
   in task 5. Decide the offered quality profiles from those results. Preserve
   the selected mixed stereo ownership; do not silently substitute mono.
@@ -1326,5 +1329,5 @@ whole-plan review loops.
 | Station accessories / TGXL | Core-owned control/status and headless tracking installed in `3402d171`; real TGXL admission pending | Typed master/configuration, identity checks, cancellation and fresh-socket retries pass automated tests. Core's live listener reports the actual bound frequency/mode. Current tuner TCP attempts time out despite discovery; no identity acceptance is claimed. The new Settings page still needs visual acceptance. ANT1–3 remain receive-only gated. |
 | Second-pan RADE | R-R3-31 playback correction installed at signed `200d2a0e`; listening acceptance still open | Owning-slice routing, lifecycle guards, the upstream 4096-frame mixer correction, and demand-only admitted-packet release are installed. The burst/loss regression, consolidated review and 692 desktop tests pass. Ordinary receive has shown no further GUI underflow restart after startup recovery; the one-SSB/one-RADE operator check remains pending. Leaving RADE on both receivers resolved the earlier audible problem. Sender scheduling and sustained operation remain open; see [RADE verification](2026-09-20-remote-daemon-r3-verification/rade-multislice.md). |
 | Core banner and telemetry graphs | R-R3-32/33/35 installed; all three tabs and restart gaps observed live | Aether graph/history port uses fetched source `0dea0dd7`. Total/directional Core application traffic, separate Opus bandwidth and speaker buffering are visible in matching `3402d171`; RTT is separately labeled. All 696 desktop tests and native build passed. CPU/memory history and capture-to-playback latency remain follow-on work; see [design](2026-09-21-core-telemetry-design.md). |
-| Audio controls and diagnostics | R-R3-23 open; task 5a | Fixed 24 kbit/s stereo is active; persistent profile/health/output feedback and measured 24/48 comparison remain. A selectable quality profile needs an acknowledged Core contract; no adaptive-rate claim. |
+| Audio controls and diagnostics | R-R3-23 source complete for status/health/retry; task 5a items 2 and 3 open | Persistent codec/status/health display and Retry are implemented and evidenced; see [remote audio status verification](2026-09-20-remote-daemon-r3-verification/remote-audio-status.md). Fixed 24 kbit/s stereo is still active; the measured 24/48 comparison and any quality selector remain open. A selectable quality profile needs an acknowledged Core contract; no adaptive-rate claim. |
 | Boot and radio recovery | R-R3-26 installed; R-R3-27/29 installed in `55e7d49f`; physical acceptance open | All 698 executables pass. Normal restart exercised GUI authentication before Saturn I/Q arrival. The Rock then became unreachable by SSH/ping; host diagnosis, late-network boot and physical radio-loss recovery remain pending. See [evidence](2026-09-20-remote-daemon-r3-verification/radio-recovery.md). |

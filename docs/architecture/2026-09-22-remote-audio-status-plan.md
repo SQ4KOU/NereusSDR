@@ -39,8 +39,9 @@ and 3) are out of scope and stay open.
 - Work only in `/Users/j.j.boyd/.codex/worktrees/nereus-r2-integration/NereusSDR`,
   branch `codex/integrate-r2-main`, build directory `build-integration`.
   Never edit or build in `/Users/j.j.boyd/NereusSDR` or any other checkout.
-- Never stage or commit `docs/architecture/2026-09-22-optional-microphone-capture-design.md`
-  (an unapproved proposal that must stay untracked). Stage explicit paths only.
+- The microphone design (`docs/architecture/2026-09-22-optional-microphone-capture-design.md`)
+  was approved and committed in 5c4dbc23; it is not part of this plan. Stage
+  explicit paths only.
 - Every change traces to R-R3-23; R-R3-06/07/17/21 behavior is preserved.
 - Commits: GPG-signed (`git commit -S`), hooks run with
   `NEREUS_THETIS_DIR=/Users/j.j.boyd/Thetis`; never `--no-gpg-sign`, never

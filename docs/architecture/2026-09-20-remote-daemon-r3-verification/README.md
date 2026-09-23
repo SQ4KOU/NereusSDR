@@ -379,6 +379,11 @@ or spectrum. Reboot/reconnect passed earlier at `daf05135`; a new reboot at
 
 ## R3 component evidence
 
+- [Remote audio status and native-check fixes](remote-audio-status.md):
+  R-R3-23 task 5a item 1 (persistent codec/status/health display, Retry)
+  plus the R-R3-34, R-R3-13, R-R3-21/25, R-R3-24 and R-R3-17/38 native-check
+  fixes. Full gate at 9982cbed: build passed, unfiltered ctest 743/743
+  passed. Hardware and operator acceptance rows are pending.
 - [Pinned transport build and two-peer probe](transport-probe.md): encrypted
   display and RTP exchange and stop/recreate passed in the standalone harness.
   Production Qt transport and MediaPeer tests now pass, including callback

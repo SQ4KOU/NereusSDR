@@ -18,6 +18,8 @@ Setup page or an assertion that all station accessories work.
 | Tuner telemetry | Core TunerModel -> outbound mirror -> client-only assign/notify adapter | All 13 fields, false/zero updates and absence of accessory commands | Core connected after restart to .234:9010 and received actual tuner info; live configuration/identity admission remains pending |
 | Tuner TUNE / operate / antenna / relay / recall | Receive-only remote capability blocks commands; Core policy additionally guards autotune callbacks | Authenticated band change and telemetry replay issue no tune; MOX/TUNE admission blocked before radio connection and after session teardown | No RF or tuner actuation permitted in this checkpoint |
 | Tuner cached values after Core loss | Retained values explicitly marked stale; unsupported remote accessory reconnect disabled | Applet session presentation/command tests | Pending disconnect smoke |
+| Tools > Test antenna switch toast | Owner GUI-local test surface; disabled while connected to a Core with the standard remote transmit reason, enabled locally | `tst_remote_gui_gating`; cannot reach `emitAntennaAutoSwitched` while disabled | Commit b9e8811c; installed acceptance pending |
+| Tools > Test TX-bound re-route dialog | Owner GUI-local test surface; disabled while connected to a Core with the standard remote transmit reason, enabled locally | `tst_remote_gui_gating`; cannot reach `requestTxBoundReRoute` while disabled | Commit b9e8811c; installed acceptance pending |
 
 ## Current follow-ups (September 22)
 
