@@ -236,6 +236,38 @@ private slots:
         QVERIFY(reset->waterfallAdvance);
     }
 
+    // R-R3-08, R-R3-37: the sender orders endpoints by this deadline. It
+    // reads the schedule consume() keeps and never moves it.
+    void outputDeadlineReadsTheScheduleWithoutMovingIt()
+    {
+        SpectrumEndpoint endpoint;
+        SpectrumEndpointSourceContext source = sourceContext();
+        QVERIFY(!endpoint.outputDeadlineNs(1'000'000'000).has_value()); // Not configured.
+        QVERIFY(endpoint.configure(request(), source));
+        constexpr qint64 kPeriodNs = 1'000'000'000LL / 30;
+        // A first frame fills the period that starts with it.
+        QCOMPARE(endpoint.outputDeadlineNs(1'000'000'000),
+                 std::optional<qint64>(1'000'000'000 + kPeriodNs));
+        QCOMPARE(endpoint.outputDeadlineNs(1'000'000'000),
+                 std::optional<qint64>(1'000'000'000 + kPeriodNs));
+        QVERIFY(endpoint.consume(frame(source, 1'000'000'000)).has_value());
+        // Early and not newer: consume() would take nothing, so no deadline.
+        QVERIFY(!endpoint.outputDeadlineNs(1'010'000'000).has_value());
+        QVERIFY(!endpoint.outputDeadlineNs(1'000'000'000).has_value());
+        // On the calendar: the end of the next period.
+        QCOMPARE(endpoint.outputDeadlineNs(1'040'000'000),
+                 std::optional<qint64>(1'000'000'000 + 2 * kPeriodNs));
+        // A frame that already missed a whole slot starts a new one, as
+        // consume() would resynchronize it.
+        QCOMPARE(endpoint.outputDeadlineNs(1'100'000'000),
+                 std::optional<qint64>(1'100'000'000 + kPeriodNs));
+        // None of these reads moved the schedule.
+        QVERIFY(!endpoint.consume(frame(source, 1'010'000'000)).has_value());
+        QVERIFY(endpoint.consume(frame(source, 1'040'000'000)).has_value());
+        QCOMPARE(endpoint.outputDeadlineNs(1'080'000'000),
+                 std::optional<qint64>(1'000'000'000 + 3 * kPeriodNs));
+    }
+
     void cadenceScheduleToleratesNominalJitterAndPreservesWaterfallCadence()
     {
         SpectrumEndpoint endpoint;

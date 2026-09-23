@@ -107,6 +107,14 @@ public:
     /// production route.
     void submitIq(int streamIndex, const QVector<float>& interleavedIq);
 
+    /// Test seam: publishes one frame for an active source as its engine
+    /// would, stamped `producedAtNs` instead of the clock, with every bin at
+    /// `binLinear`, and emits frameAvailable now rather than queued. Lets a
+    /// test drive the source's cadence itself. False for an unknown source
+    /// or one whose engine has not yet taken its configuration.
+    bool publishFrameForTest(const MediaSourceKey& key, qint64 producedAtNs,
+                             float binLinear = 1.0e-6f);
+
 signals:
     /// At most one queued notification per active source exists at a time.
     /// Consumers call takeLatest() to acquire the current frame.

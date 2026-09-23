@@ -143,6 +143,15 @@ public:
         double stationOffsetDb = 0.0,
         const std::optional<WidebandSpectrumFrame>& widebandFrame = std::nullopt);
 
+    /// When a frame produced at `producedAtNs` must be sent by, in the
+    /// producer's clock, before this endpoint loses an output slot: the end
+    /// of the output period that frame would fill (R-R3-08, R-R3-37). For
+    /// an endpoint that takes every source frame this is the next source
+    /// frame. Read-only: only consume() advances the schedule. Empty when
+    /// consume() would take nothing from such a frame (not configured, not
+    /// newer than the last frame taken, or early).
+    std::optional<qint64> outputDeadlineNs(qint64 producedAtNs) const;
+
     void reset();
 
 private:

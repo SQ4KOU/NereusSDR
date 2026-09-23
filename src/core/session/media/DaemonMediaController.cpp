@@ -20,6 +20,7 @@
 #include <QJsonValue>
 #include <QLoggingCategory>
 #include <QUuid>
+#include <QVarLengthArray>
 
 #include <algorithm>
 #include <cmath>
@@ -1608,8 +1609,54 @@ bool DaemonMediaController::trySendSpectrum(MediaPeer* peer, quint64 epoch, qint
         return false;
     }
     const QList<quint32> ids = endpointIds();
+    // R-R3-08, R-R3-37: earliest deadline first. Each endpoint holds only
+    // its latest frame and the sender takes one message a tick, so at full
+    // use the endpoint whose frame stops being worth sending first goes
+    // first: a pan that takes every source frame loses one at the next
+    // frame, a slower pan only at the end of its own period. The deadline
+    // is counted in whole source frames after the held one, so endpoints
+    // of one source that fall due on the same frame tie exactly (an
+    // oversubscribed session keeps round-robin's even share). A tie goes
+    // to the faster endpoint (the app plans its active pan fastest), then
+    // to round-robin order. A frame consume() would drop sorts last.
+    struct Candidate {
+        qint64 deadlineNs;
+        int targetFps;
+        int offset;
+        int index;
+    };
+    QVarLengthArray<Candidate, 16> candidates;
     for (int offset = 0; offset < ids.size(); ++offset) {
         const int index = (m_roundRobinCursor + offset) % ids.size();
+        const auto found = m_endpoints.find(ids.at(index));
+        if (found == m_endpoints.end() || !found->second.latestInput.has_value()
+            || !found->second.contextSent) {
+            continue;
+        }
+        const SpectrumEndpoint& endpoint = found->second.endpoint;
+        const qint64 producedAtNs = found->second.latestInput->producedAtNs;
+        const std::optional<qint64> deadlineNs = endpoint.outputDeadlineNs(producedAtNs);
+        qint64 key = std::numeric_limits<qint64>::max();
+        if (deadlineNs) {
+            key = *deadlineNs;
+            const auto source = m_sources.constFind(found->second.request.source);
+            if (source != m_sources.cend() && source->config.fft.fps > 0) {
+                const qint64 sourcePeriodNs = 1'000'000'000LL / source->config.fft.fps;
+                const qint64 frames = std::max<qint64>(
+                    0, (*deadlineNs - producedAtNs + sourcePeriodNs / 2) / sourcePeriodNs);
+                key = producedAtNs + frames * sourcePeriodNs;
+            }
+        }
+        candidates.append({key, endpoint.context().targetFps, offset, index});
+    }
+    std::sort(candidates.begin(), candidates.end(),
+              [](const Candidate& a, const Candidate& b) {
+                  if (a.deadlineNs != b.deadlineNs) { return a.deadlineNs < b.deadlineNs; }
+                  if (a.targetFps != b.targetFps) { return a.targetFps > b.targetFps; }
+                  return a.offset < b.offset;
+              });
+    for (const Candidate& candidate : candidates) {
+        const int index = candidate.index;
         const quint32 endpointId = ids.at(index);
         auto it = m_endpoints.find(endpointId);
         if (it == m_endpoints.end()) { continue; }

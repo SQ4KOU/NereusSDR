@@ -387,6 +387,28 @@ std::optional<DisplayCodecFrame> SpectrumEndpoint::consume(
     return output;
 }
 
+std::optional<qint64> SpectrumEndpoint::outputDeadlineNs(qint64 producedAtNs) const
+{
+    if (!m_configured || producedAtNs < 0 || m_context.targetFps <= 0
+        || (m_hasProducerTimestamp && producedAtNs <= m_lastProducerTimestampNs)) {
+        return std::nullopt;
+    }
+    // The same period and early tolerance as consume().
+    const qint64 periodNs = 1'000'000'000LL / m_context.targetFps;
+    constexpr qint64 kEarlyToleranceDivisor = 20;
+    const qint64 earlyToleranceNs = periodNs / kEarlyToleranceDivisor;
+    if (m_nextOutputDueNs != 0 && producedAtNs < m_nextOutputDueNs - earlyToleranceNs) {
+        return std::nullopt;
+    }
+    // The slot this frame fills, as consume() would place it: on the
+    // calendar, or starting at the frame itself for a first frame or one
+    // that already missed a whole slot (consume() resynchronizes those, so
+    // an endpoint that has fallen behind is not urgent forever).
+    const bool onCalendar = m_nextOutputDueNs != 0
+        && producedAtNs < saturatingAdd(m_nextOutputDueNs, periodNs);
+    return saturatingAdd(onCalendar ? m_nextOutputDueNs : producedAtNs, periodNs);
+}
+
 void SpectrumEndpoint::reset()
 {
     m_configured = false;

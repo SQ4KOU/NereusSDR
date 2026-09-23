@@ -465,6 +465,35 @@ void DaemonSpectrumSource::queueConfiguredActivation(
     }, Qt::QueuedConnection);
 }
 
+bool DaemonSpectrumSource::publishFrameForTest(const MediaSourceKey& key,
+                                               qint64 producedAtNs, float binLinear)
+{
+    const auto it = m_sources.constFind(key);
+    if (it == m_sources.cend()) {
+        return false;
+    }
+    const QSharedPointer<FrameState> state = it->state;
+    {
+        QMutexLocker lock(&state->mutex);
+        if (!state->active || state->configurationPending) {
+            return false;
+        }
+        state->latest.source = key;
+        state->latest.generation = state->generation;
+        state->latest.centreHz = state->config.centreHz;
+        state->latest.sampleRateHz = state->config.sampleRateHz;
+        state->latest.producedAtNs = producedAtNs;
+        state->latest.binsLinear = QVector<float>(state->config.fft.fftSize, binLinear);
+        state->latest.windowEnb = 1.0;
+        state->latest.dbmOffset = 0.0;
+        state->hasLatest = true;
+        state->notificationQueued = true;
+        ++state->publishedFrames;
+    }
+    emit frameAvailable(key);
+    return true;
+}
+
 void DaemonSpectrumSource::publishFrame(
     const MediaSourceKey& key, const QSharedPointer<FrameState>& state,
     const QVector<float>& binsLinear, double windowEnb, double dbmOffset)
