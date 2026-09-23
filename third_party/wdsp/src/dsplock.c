@@ -104,6 +104,9 @@ boydsoftprez@gmail.com
 //                 channel whose worker never started logs once and does not
 //                 wait, by J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code (R-R3-39).
+//   2026-09-23 - Test-only WDSPGetTestLastWorkerExitWaitUs added by J.J.
+//                 Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code (R-R3-39).
 // =================================================================
 
 #include "comm.h"
@@ -142,6 +145,9 @@ static volatile long worker_exit_waits[MAX_CHANNELS];
 // 1 while the channel has a started worker that teardown has not yet waited
 // for; 0 before the first build, after teardown, or when the start failed.
 static volatile long worker_started[MAX_CHANNELS];
+// Test-only: how long the channel's latest teardown waited for its worker,
+// microseconds (control thread writes, test reads).
+static volatile long long last_exit_wait_us[MAX_CHANNELS];
 
 // Per-channel load counters (see WdspChannelLoad). Written only by the
 // channel's worker, read by GetChannelDspLoad from any thread.
@@ -492,6 +498,7 @@ void WdspWaitWorkerExit (int channel)
 		// exit pairing count is left as it is.
 		dprintf ("wdsp: channel %d has no DSP worker (it did not start); "
 			"teardown goes ahead without waiting\n", channel);
+		load_store64 (&last_exit_wait_us[channel], 0);
 		return;
 	}
 	expected = InterlockedIncrement (&worker_exit_waits[channel]);
@@ -516,6 +523,7 @@ void WdspWaitWorkerExit (int channel)
 			next_log += kWorkerExitLogIntervalMs * 1000;
 		}
 	}
+	load_store64 (&last_exit_wait_us[channel], (long long)(dsplock_now_us () - start));
 }
 
 PORT
@@ -568,6 +576,12 @@ long long TakeChannelDspIntervalMaxBlockUs (int channel)
 		return -1;
 	}
 	return load_exchange64 (&load_interval_max_us[channel], 0);
+}
+
+PORT
+long long WDSPGetTestLastWorkerExitWaitUs (int channel)
+{
+	return valid_channel (channel) ? load_read64 (&last_exit_wait_us[channel]) : -1;
 }
 
 PORT

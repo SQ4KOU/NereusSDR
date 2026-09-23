@@ -180,6 +180,11 @@
 //                 (R-R3-40). NereusSDR-original reader exported from
 //                 third_party/wdsp/src/dsplock.c; no Thetis counterpart.
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-23  WDSPGetTestLastWorkerExitWaitUs declaration added by J.J.
+//                 Boyd (KG4VCF) for the R3 channel shutdown test (R-R3-39).
+//                 NereusSDR-original test seam exported from
+//                 third_party/wdsp/src/dsplock.c; no Thetis counterpart.
+//                 AI-assisted implementation via Anthropic Claude Code.
 //   2026-09-23  WDSPSetTestProcessDelayUs declaration added by J.J. Boyd
 //                 (KG4VCF) for the R3 channel shutdown test (R-R3-39).
 //                 NereusSDR-original test seam exported from
@@ -347,6 +352,12 @@ void WDSPSetTestBlockDelayUs(int channel, int microseconds);
 // before its buffer exchange), so a teardown during the delay meets real DSP
 // work. 0 (the default) turns it off. Never call it in production code.
 void WDSPSetTestProcessDelayUs(int channel, int microseconds);
+
+// Test-only (NereusSDR dsplock.c): how long, in microseconds, the channel's
+// latest teardown waited for its worker to leave its loop (that wait alone,
+// not the rest of the teardown); -1 for an invalid channel. Never call it in
+// production code.
+long long WDSPGetTestLastWorkerExitWaitUs(int channel);
 
 // Test-only (NereusSDR dsplock.c): how many times this channel's DSP worker
 // has left its loop in this process. Never call it in production code.

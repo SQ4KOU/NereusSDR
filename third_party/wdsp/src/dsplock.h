@@ -71,6 +71,9 @@ boydsoftprez@gmail.com
 //                 channel whose worker never started logs once and does not
 //                 wait, by J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code (R-R3-39).
+//   2026-09-23 - Test-only WDSPGetTestLastWorkerExitWaitUs added by J.J.
+//                 Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code (R-R3-39).
 // =================================================================
 
 #ifndef _dsplock_h
@@ -154,6 +157,12 @@ PORT void WDSPSetTestBlockDelayUs (int channel, int microseconds);
 // Default 0 (off); when off the worker pays one relaxed load per processed
 // block. Not for production use.
 PORT void WDSPSetTestProcessDelayUs (int channel, int microseconds);
+
+// Test-only: how long, in microseconds, the channel's latest teardown spent
+// waiting for its worker to leave its loop (WdspWaitWorkerExit alone, not
+// the rest of the teardown); -1 for an invalid channel. Not for production
+// use.
+PORT long long WDSPGetTestLastWorkerExitWaitUs (int channel);
 
 // Test-only: how many times this channel's worker has left its loop in this
 // process. Not for production use.

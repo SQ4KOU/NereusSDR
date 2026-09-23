@@ -21,10 +21,12 @@
 //   forced here), then proves the channel's exit pairing is intact.
 #include <QtTest>
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <future>
 #include <thread>
+#include <vector>
 
 #include "core/wdsp_api.h"
 
@@ -61,8 +63,32 @@ constexpr std::chrono::milliseconds kIntoBlock{5};
 constexpr int kLongBlockDelayUs = 2500000;
 constexpr double kLongBlockMinCloseMs = 2000.0;
 
-// An idle worker must exit at once: well under the old fixed 25 ms sleep.
-constexpr double kIdleCloseLimitMs = 20.0;
+// An idle worker must exit at once. The old teardown slept a fixed 25 ms.
+// The bound is on teardown's wait for the worker alone
+// (WDSPGetTestLastWorkerExitWaitUs), not the whole CloseChannel, which also
+// joins the flush thread through destroy_iobuffs' Sleep(1) loop (a 15.6 ms
+// tick on Windows). An idle worker's exit is one wake-up of that worker: the
+// semaphore release wakes it, it passes its loop once and counts its exit.
+// So the wait may take the worst wake-up of this same worker measured just
+// before, in the same run (input released one block to it; the delay until
+// the block started is read from the start time the worker publishes), plus
+// teardown's poll step after its fine-poll phase (a Sleep(1): one timer
+// tick), plus a small margin. Unloaded that is a few ms, far under the old
+// fixed 25 ms; under a heavy build it grows with the measured wake-up, not
+// by guesswork (a separate thread handoff measured 0.02 ms while this
+// worker took 2.1 ms at load 30, so the worker itself is measured).
+constexpr int kWakeupSamples = 10;
+constexpr int kIdleCloses = 5;
+// Long enough that the reader sees the block in progress.
+constexpr int kWakeupBlockDelayUs = 5000;
+// Input buffers per worker block at these sizes (kDspSize / kInSize).
+constexpr int kBuffersPerBlock = kDspSize / kInSize;
+#ifdef Q_OS_WIN
+constexpr double kPollStepMs = 16.0;
+#else
+constexpr double kPollStepMs = 1.0;
+#endif
+constexpr double kIdleExitMarginMs = 2.0;
 constexpr std::chrono::milliseconds kIdleSettle{100};
 
 // A teardown that has not returned by now is hung, not slow: the longest
@@ -115,6 +141,48 @@ void putTheWorkerInsideAProcessedBlock()
 {
     WDSPSetTestProcessDelayUs(kChannel, kBlockDelayUs);
     putTheWorkerInsideABlock(0);
+}
+
+// Worst time, over kWakeupSamples tries, from releasing one block of input
+// to kChannel's idle worker to that worker starting the block: the wake-up
+// an idle worker's exit needs, on this machine under its current load.
+double worstWorkerWakeupMs()
+{
+    std::array<float, kInSize> inI{}, inQ{}, outI{}, outQ{};
+    WDSPSetTestBlockDelayUs(kChannel, kWakeupBlockDelayUs);
+    double worst = 0.0;
+    for (int sample = 0; sample < kWakeupSamples; ++sample) {
+        WdspChannelLoad before{};
+        GetChannelDspLoad(kChannel, &before);
+        int error = 0;
+        for (int buffer = 0; buffer + 1 < kBuffersPerBlock; ++buffer) {
+            fexchange2(kChannel, inI.data(), inQ.data(), outI.data(), outQ.data(), &error);
+        }
+        // The last buffer of the block releases the worker.
+        fexchange2(kChannel, inI.data(), inQ.data(), outI.data(), outQ.data(), &error);
+        const auto released = Clock::now();
+        const auto deadline = released + std::chrono::milliseconds(500);
+        while (Clock::now() < deadline) {
+            const auto readAt = Clock::now();
+            WdspChannelLoad load{};
+            GetChannelDspLoad(kChannel, &load);
+            if (load.currentBlockNs > 0) {
+                const auto started = readAt - std::chrono::nanoseconds(load.currentBlockNs);
+                worst = std::max(worst, std::max(0.0, std::chrono::duration<double, std::milli>(
+                                                          started - released).count()));
+                break;
+            }
+            if (load.blocks != before.blocks) {
+                break;   // missed it; the delay makes that rare
+            }
+            std::this_thread::sleep_for(std::chrono::microseconds(100));
+        }
+        // Let the block finish and the worker go idle again.
+        std::this_thread::sleep_for(std::chrono::microseconds(kWakeupBlockDelayUs)
+                                    + std::chrono::milliseconds(20));
+    }
+    WDSPSetTestBlockDelayUs(kChannel, 0);
+    return worst;
 }
 
 // Runs teardown on its own thread. Returns false if it has not returned
@@ -295,19 +363,40 @@ private slots:
 
     void idleWorkerExitsAtOnce()
     {
-        openChannel();
-        std::this_thread::sleep_for(kIdleSettle);
+        // Several idle closes; the median is checked. A fixed teardown delay
+        // shows in every close, while a woken worker that waits for a core
+        // on a saturated machine (seen once: 2.1 ms at load 30, where the
+        // same worker's measured wake-ups were 0.03 ms) shows in one.
+        std::vector<double> waits;
+        double worstWakeupMs = 0.0;
+        for (int close = 0; close < kIdleCloses; ++close) {
+            openChannel();
+            std::this_thread::sleep_for(kIdleSettle);
+            worstWakeupMs = std::max(worstWakeupMs, worstWorkerWakeupMs());
+            std::this_thread::sleep_for(kIdleSettle);
 
-        const int exitsBefore = WDSPGetTestWorkerExitCount(kChannel);
-        const auto start = Clock::now();
-        CloseChannel(kChannel);
-        g_channelOpen = false;
-        const double closeMs = msSince(start);
-        const int exitsAtReturn = WDSPGetTestWorkerExitCount(kChannel);
-        qInfo("CloseChannel with an idle worker took %.2f ms (limit %.1f); worker exits %d -> %d",
-              closeMs, kIdleCloseLimitMs, exitsBefore, exitsAtReturn);
-        QCOMPARE(exitsAtReturn, exitsBefore + 1);
-        QVERIFY2(closeMs <= kIdleCloseLimitMs, "closing an idle channel waited too long");
+            const int exitsBefore = WDSPGetTestWorkerExitCount(kChannel);
+            const auto start = Clock::now();
+            CloseChannel(kChannel);
+            g_channelOpen = false;
+            const double closeMs = msSince(start);
+            const double waitMs = WDSPGetTestLastWorkerExitWaitUs(kChannel) / 1000.0;
+            qInfo("idle close %d: CloseChannel %.2f ms, its wait for the worker %.2f ms",
+                  close + 1, closeMs, waitMs);
+            QCOMPARE(WDSPGetTestWorkerExitCount(kChannel), exitsBefore + 1);
+            QVERIFY2(waitMs >= 0.0, "teardown did not record its wait");
+            waits.push_back(waitMs);
+        }
+
+        std::sort(waits.begin(), waits.end());
+        const double medianMs = waits[waits.size() / 2];
+        const double limitMs = worstWakeupMs + kPollStepMs + kIdleExitMarginMs;
+        qInfo("CloseChannel with an idle worker: median wait for the worker %.2f ms, "
+              "longest %.2f ms (limit %.2f = worst wake-up %.2f + poll step %.1f + "
+              "margin %.1f)",
+              medianMs, waits.back(), limitMs, worstWakeupMs, kPollStepMs,
+              kIdleExitMarginMs);
+        QVERIFY2(medianMs <= limitMs, "teardown waited too long for an idle worker");
     }
 };
 
