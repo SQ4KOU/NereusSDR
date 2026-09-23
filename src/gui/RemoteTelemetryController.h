@@ -32,6 +32,11 @@ struct RemoteTelemetryView {
     // and whether this session's Core has reported any of it (R-R3-32/33).
     StationHostTelemetry coreHost;
     bool coreHostReported = false;
+    // Each Core receiver's latest processing load while station telemetry
+    // is current (absent when the Core does not measure receivers), and
+    // whether this session's Core has sent the receivers section (R-R3-40).
+    std::optional<QVector<StationReceiverTelemetry>> coreReceivers;
+    bool coreReceiversReported = false;
 };
 
 // All methods run on the GUI thread. Collection continues while the dialog is
@@ -82,6 +87,7 @@ private:
     std::optional<PlaybackEvents> m_playbackEventsBaseline;
     qint64 m_lastTickMs = -1;
     bool m_coreHostReported = false;
+    bool m_coreReceiversReported = false;
     std::optional<qint64> m_diagnosticsLogBaselineMs;
     void logDiagnostics(qint64 now) const;
 };

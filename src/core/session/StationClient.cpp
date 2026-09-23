@@ -31,6 +31,12 @@
 //                                    paths re-pointed off removeSlice().
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-40: station telemetry carries
+//                                    each receiver's processing load only
+//                                    for a peer that negotiated minor 11
+//                                    and stationTelemetryVersion 3.
+//                                    AI-assisted implementation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -1201,6 +1207,11 @@ void StationClient::onTransportText(const QByteArray& wire)
             if (m_agreedMinor < kCoreHostTelemetrySessionProtocolMinor
                 || m_capabilities.stationTelemetryVersion < 2) {
                 message.telemetry.host = {};
+            }
+            // Only a Core that negotiated receiver load may supply it.
+            if (m_agreedMinor < kReceiverLoadSessionProtocolMinor
+                || m_capabilities.stationTelemetryVersion < 3) {
+                message.telemetry.receivers.reset();
             }
             emit telemetryReceived(message.telemetry, m_sessionEpoch);
         }

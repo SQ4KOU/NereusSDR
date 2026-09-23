@@ -120,7 +120,9 @@ struct StationCapabilities {
     bool remotePs3DisplaySubscribed = false;
     int remoteCtunVersion = 0;
     /// 1: radio and audio telemetry. 2: adds the Core host section (CPU,
-    /// memory, temperature). Negotiated minor still gates each version.
+    /// memory, temperature). 3: adds the receivers section (each receiver's
+    /// processing load and input wait). Negotiated minor still gates each
+    /// version.
     int stationTelemetryVersion = 0;
     int remoteTgxlConfigVersion = 0;
     int remoteFourO3AControlVersion = 0;

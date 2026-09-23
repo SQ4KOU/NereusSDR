@@ -196,6 +196,19 @@ void RemoteDiagnosticsDialog::buildUi()
     m_coreCpuGraph->setVisible(false);
     m_coreMemoryGraph->setVisible(false);
     m_coreTemperatureGraph->setVisible(false);
+    // R-R3-40: how hard each receiver works on the Core. An older Core does
+    // not send it; the tab then says so, as it does for computer load.
+    m_coreReceiversUnavailableLabel = new QLabel(
+        tr("This Core does not report receiver processing."),
+        qobject_cast<QScrollArea*>(core)->widget());
+    m_coreReceiversUnavailableLabel->setObjectName(QStringLiteral("remoteCoreReceiversUnavailable"));
+    m_coreReceiversUnavailableLabel->setWordWrap(true);
+    coreLayout->insertWidget(coreLayout->count() - 1, m_coreReceiversUnavailableLabel);
+    m_coreReceiverGraph = addGraph(core, tr("Receiver processing"), tr("\u00A0%"));
+    m_coreReceiverGraph->setObjectName(QStringLiteral("remoteCoreReceiverGraph"));
+    m_coreReceiverGraph->setToolTip(tr("How long the Core computer takes to process each receiver's signal, as a share of real time. Below 100\u00A0% the receiver keeps up. At 100\u00A0% or more it cannot keep up, and the Core skips some of that receiver's signal to catch up, which you may hear as gaps."));
+    m_coreReceiverGraph->setReferenceLine(100.0, tr("Cannot keep up"));
+    m_coreReceiverGraph->setVisible(false);
     tabs->addTab(core, tr("Core"));
     root->addWidget(tabs, 1);
 
@@ -343,6 +356,7 @@ void RemoteDiagnosticsDialog::refreshGraphs()
         {Metric::PlaybackOverflowsPerSecond, "GUI overflows", "#ff8c00", " events/s"},
     });
     refreshCoreHostGraphs();
+    refreshCoreReceiverGraph();
 }
 
 void RemoteDiagnosticsDialog::refreshCoreHostGraphs()
@@ -411,6 +425,61 @@ void RemoteDiagnosticsDialog::refreshCoreHostGraphs()
         ? tr("The hottest temperature sensor on the Core computer.")
         : tr("The hottest temperature sensor on the Core computer: %1.")
               .arg(view.coreHost.hottestZoneName));
+}
+
+void RemoteDiagnosticsDialog::refreshCoreReceiverGraph()
+{
+    const auto& history = m_controller->history();
+    const qint64 nowMs = m_controller->nowMs();
+    const RemoteTelemetryView& view = m_controller->current();
+    constexpr int kSlots = TelemetryHistory::kCoreReceiverLoadSlots;
+
+    // The same rule as the computer-load graphs: while measurements arrive,
+    // whether this Core sends receiver processing decides; between sessions
+    // the retained history still shows.
+    bool hasHistory = false;
+    for (int slot = 0; slot < kSlots; ++slot) {
+        if (!history.series(TelemetryHistory::coreReceiverLoadMetric(slot), nowMs,
+                            m_rangeSeconds).points.isEmpty()) {
+            hasHistory = true;
+            break;
+        }
+    }
+    bool reports = false;
+    switch (view.state) {
+    case RemoteTelemetryView::State::Current:
+    case RemoteTelemetryView::State::Stale:
+        reports = view.coreReceiversReported;
+        break;
+    case RemoteTelemetryView::State::Unsupported:
+        reports = false;
+        break;
+    case RemoteTelemetryView::State::Disconnected:
+    case RemoteTelemetryView::State::Waiting:
+        reports = hasHistory;
+        break;
+    }
+    m_coreReceiversUnavailableLabel->setVisible(!reports);
+    m_coreReceiverGraph->setVisible(reports);
+    if (!reports) {
+        return;
+    }
+
+    // One series per receiver the range holds, named by its slice letter.
+    static constexpr std::array<const char*, kSlots> kColors{
+        "#00b4d8", "#5fff8a", "#ffd700", "#c792ea", "#ff8c00"};
+    QVector<TimeSeriesGraphWidget::Series> series;
+    for (int slot = 0; slot < kSlots; ++slot) {
+        const Metric metric = TelemetryHistory::coreReceiverLoadMetric(slot);
+        if (history.series(metric, nowMs, m_rangeSeconds).points.isEmpty()) {
+            continue;
+        }
+        TimeSeriesGraphWidget::Series graph = toGraphSeries(
+            history, metric, {metric, "", kColors[slot], "\u00A0%"}, nowMs, m_rangeSeconds);
+        graph.label = tr("Slice %1").arg(QChar(QLatin1Char('A').unicode() + slot));
+        series.append(std::move(graph));
+    }
+    m_coreReceiverGraph->setSeries(std::move(series), m_rangeSeconds);
 }
 
 void RemoteDiagnosticsDialog::refreshDetail()

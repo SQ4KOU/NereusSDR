@@ -87,7 +87,7 @@ qint64 RemoteTelemetryController::nowMs() const
 
 void RemoteTelemetryController::clearSession()
 {
-    breakRange(m_history, Metric::RadioRxMbps, Metric::CoreHottestZoneCelsius);
+    breakRange(m_history, Metric::RadioRxMbps, Metric::CoreReceiverLoadPercentSlot4);
     m_station.reset();
     m_transportBaseline.reset();
     m_mediaBaseline.reset();
@@ -97,6 +97,7 @@ void RemoteTelemetryController::clearSession()
     m_epoch = 0;
     m_stationWasStale = false;
     m_coreHostReported = false;
+    m_coreReceiversReported = false;
     m_diagnosticsLogBaselineMs.reset();
     m_view = {};
     emit changed();
@@ -136,9 +137,21 @@ void RemoteTelemetryController::receiveStation(
     values[index(Metric::CoreProcessResidentMiB)] = mebibytes(sample.host.processResidentKiB);
     values[index(Metric::CoreHottestZoneCelsius)] = sample.host.hottestZoneCelsius;
     if (!sample.host.isEmpty()) { m_coreHostReported = true; }
+    // R-R3-40: one slot per slice ID. A receiver missing from the sample, or
+    // idle in it, records a gap and never a zero; so does an older Core.
+    if (sample.receivers) {
+        m_coreReceiversReported = true;
+        for (const StationReceiverTelemetry& receiver : *sample.receivers) {
+            if (receiver.sliceId >= 0
+                && receiver.sliceId < TelemetryHistory::kCoreReceiverLoadSlots) {
+                values[index(TelemetryHistory::coreReceiverLoadMetric(receiver.sliceId))] =
+                    receiver.loadPercent;
+            }
+        }
+    }
     m_history.append(observation, mask(Metric::RadioRxMbps, Metric::RadioRttMs)
         | mask(Metric::AudioSourceFramesPerSecond, Metric::AudioSourceDropsPerSecond)
-        | mask(Metric::CoreSystemCpuPercent, Metric::CoreHottestZoneCelsius));
+        | mask(Metric::CoreSystemCpuPercent, Metric::CoreReceiverLoadPercentSlot4));
     refreshCurrent(m_stationReceivedMs);
     emit changed();
 }
@@ -150,6 +163,8 @@ void RemoteTelemetryController::refreshCurrent(qint64 now)
     m_view.coreAudio = {};
     m_view.coreHost = {};
     m_view.coreHostReported = m_coreHostReported;
+    m_view.coreReceivers.reset();
+    m_view.coreReceiversReported = m_coreReceiversReported;
     if (!m_client || !m_client->isHandshakeComplete()) {
         m_view = {};
         return;
@@ -164,7 +179,7 @@ void RemoteTelemetryController::refreshCurrent(qint64 now)
             if (!m_stationWasStale) {
                 breakRange(m_history, Metric::RadioRxMbps, Metric::RadioRttMs);
                 breakRange(m_history, Metric::AudioSourceFramesPerSecond, Metric::AudioSourceDropsPerSecond);
-                breakRange(m_history, Metric::CoreSystemCpuPercent, Metric::CoreHottestZoneCelsius);
+                breakRange(m_history, Metric::CoreSystemCpuPercent, Metric::CoreReceiverLoadPercentSlot4);
                 m_stationWasStale = true;
             }
         } else {
@@ -172,6 +187,7 @@ void RemoteTelemetryController::refreshCurrent(qint64 now)
             m_view.radio = m_station->radio;
             m_view.coreAudio = m_station->audio;
             m_view.coreHost = m_station->host;
+            m_view.coreReceivers = m_station->receivers;
             if (m_view.radio.rttAgeMs) {
                 *m_view.radio.rttAgeMs += age;
                 if (*m_view.radio.rttAgeMs > kRttFreshMs) {
@@ -359,6 +375,26 @@ void RemoteTelemetryController::logDiagnostics(qint64 now) const
            << QStringLiteral("coreHottestZone=%1").arg(host.hottestZoneName.isEmpty()
                   ? QStringLiteral("not measured")
                   : QLatin1Char('"') + host.hottestZoneName.simplified() + QLatin1Char('"'));
+    // R-R3-40: each Core receiver's processing load (percent of real time)
+    // and the wait of its latest input, as the Core last reported them.
+    const std::optional<QVector<StationReceiverTelemetry>> receivers =
+        m_station ? m_station->receivers : std::nullopt;
+    if (!receivers) {
+        fields << QStringLiteral("coreReceivers=not measured");
+    } else {
+        fields << QStringLiteral("coreReceivers=%1").arg(receivers->size());
+        for (const StationReceiverTelemetry& receiver : *receivers) {
+            const QString slice = receiver.sliceId < 26
+                ? QString(QChar(QLatin1Char('A').unicode() + receiver.sliceId))
+                : QString::number(receiver.sliceId);
+            fields << QStringLiteral("coreSlice%1LoadPercent=%2")
+                          .arg(slice, logged(receiver.loadPercent))
+                   << QStringLiteral("coreSlice%1InputDelayMs=%2")
+                          .arg(slice).arg(receiver.inputDelayMs)
+                   << QStringLiteral("coreSlice%1SkippedInputMs=%2")
+                          .arg(slice).arg(receiver.skippedInputMs);
+        }
+    }
     qCInfo(lcRemoteTelemetry).noquote()
         << QStringLiteral("Remote diagnostics:") << fields.join(QLatin1Char(' '));
 }

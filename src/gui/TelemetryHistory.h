@@ -19,6 +19,9 @@
 //   2026-09-23 -- R-R3-32/33: Core computer CPU, memory and temperature
 //                 metrics by J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-23 -- R-R3-40: one processing-load metric per receiver slot
+//                 by J.J. Boyd (KG4VCF), with AI-assisted implementation
+//                 via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -67,10 +70,29 @@ public:
         CoreMemoryAvailableMiB,
         CoreProcessResidentMiB,
         CoreHottestZoneCelsius,
+        // Each Core receiver's processing load in percent of real time
+        // (R-R3-40), one slot per slice ID 0-4. Absent when the Core did not
+        // measure that receiver in the sample.
+        CoreReceiverLoadPercentSlot0,
+        CoreReceiverLoadPercentSlot1,
+        CoreReceiverLoadPercentSlot2,
+        CoreReceiverLoadPercentSlot3,
+        CoreReceiverLoadPercentSlot4,
         Count,
     };
 
+    // Receivers with their own load history: slice IDs below this. The Core
+    // opens at most five slice channels (WdspEngine::kMaxSliceChannels).
+    static constexpr int kCoreReceiverLoadSlots = 5;
+    static constexpr Metric coreReceiverLoadMetric(int slot)
+    {
+        return static_cast<Metric>(static_cast<int>(Metric::CoreReceiverLoadPercentSlot0) + slot);
+    }
+
     static constexpr std::size_t kMetricCount = static_cast<std::size_t>(Metric::Count);
+    static_assert(static_cast<int>(Metric::CoreReceiverLoadPercentSlot4)
+                      - static_cast<int>(Metric::CoreReceiverLoadPercentSlot0) + 1
+                  == kCoreReceiverLoadSlots);
     static constexpr qint64 kExpectedSampleMs = 1000;
     static constexpr qint64 kRawRetentionMs = 60LL * 60LL * 1000LL;
     static constexpr qint64 kMinuteRetentionMs = 7LL * 24LL * 60LL * 60LL * 1000LL;

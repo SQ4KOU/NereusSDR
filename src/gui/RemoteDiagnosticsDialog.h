@@ -41,6 +41,7 @@ private:
                                     const QString& suffix);
     void refreshGraphs();
     void refreshCoreHostGraphs();
+    void refreshCoreReceiverGraph();
     void refreshDetail();
 
     QPointer<RemoteTelemetryController> m_controller;
@@ -61,6 +62,8 @@ private:
     TimeSeriesGraphWidget* m_coreCpuGraph{nullptr};
     TimeSeriesGraphWidget* m_coreMemoryGraph{nullptr};
     TimeSeriesGraphWidget* m_coreTemperatureGraph{nullptr};
+    QLabel* m_coreReceiversUnavailableLabel{nullptr};
+    TimeSeriesGraphWidget* m_coreReceiverGraph{nullptr};
     int m_rangeSeconds{5 * 60};
 };
 

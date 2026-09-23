@@ -1,11 +1,13 @@
 #pragma once
 // no-port-check: NereusSDR-original. Bounded observational Core telemetry
-// collection for R-R3-32/33; no radio, media, retry or liveness policy.
+// collection for R-R3-32/33 (and each receiver's processing load for
+// R-R3-40); no radio, media, retry or liveness policy.
 
 #include "core/daemon/HostTelemetrySampler.h"
 #include "core/session/StationTelemetry.h"
 #include "core/session/media/DaemonMediaController.h"
 #include "core/ConnectionState.h"
+#include "models/ReceiverDspLoadSampler.h"
 
 #include <QElapsedTimer>
 #include <QMetaObject>
@@ -31,6 +33,11 @@ class DaemonTelemetryController final : public QObject {
 public:
     using MonotonicClock = std::function<qint64()>;
     using AudioDiagnosticsProvider = std::function<DaemonAudioDiagnostics()>;
+    // Each receiver's latest processing load, or nullopt when nothing
+    // measures receivers. The default reads RadioModel::receiverDspLoad for
+    // every slice; it only reads the cached snapshot and never samples.
+    using ReceiverLoadProvider =
+        std::function<std::optional<QVector<StationReceiverTelemetry>>()>;
 
     static constexpr int kSamplePeriodMs = 1000;
     static constexpr int kObservationStalePeriods = 3;
@@ -40,10 +47,16 @@ public:
         DaemonMediaController* mediaController, QObject* parent = nullptr,
         MonotonicClock clock = {},
         AudioDiagnosticsProvider audioDiagnosticsProvider = {},
-        std::unique_ptr<HostTelemetrySampler> hostSampler = {});
+        std::unique_ptr<HostTelemetrySampler> hostSampler = {},
+        ReceiverLoadProvider receiverLoadProvider = {});
     ~DaemonTelemetryController() override;
 
     bool isCollecting() const noexcept { return m_epoch != 0; }
+
+    /// One receiver's wire entry from its cached load snapshot (R-R3-40):
+    /// load as a percentage of real time, absent when the receiver was idle.
+    static StationReceiverTelemetry receiverTelemetry(int sliceId,
+                                                      const ReceiverDspLoad& load);
 
     /// Runs the same bounded sample path as the 1 Hz timer. Public so tests
     /// and explicit host loops can sample without sleeping.
@@ -97,6 +110,7 @@ private:
     void applyAudioObservation(StationTelemetrySnapshot& snapshot,
                                qint64 sampledElapsedMs);
     void stopCollecting();
+    std::optional<QVector<StationReceiverTelemetry>> radioModelReceiverLoads() const;
 
     QPointer<StationServer> m_server;
     QPointer<RadioModel> m_radioModel;
@@ -112,6 +126,7 @@ private:
     // Reads this computer's procfs/sysfs (Linux only; disabled elsewhere).
     // Its CPU baselines restart with each telemetry session.
     std::unique_ptr<HostTelemetrySampler> m_hostSampler;
+    ReceiverLoadProvider m_receiverLoadProvider;
     std::optional<RadioObservation> m_radioObservation;
     std::optional<AudioBaseline> m_audioBaseline;
     quint64 m_epoch{0};

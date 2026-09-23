@@ -278,11 +278,11 @@ private slots:
             std::make_unique<HostTelemetrySampler>(host.directory.path()));
         controller.disableAutomaticSamplingForTest();
         h.server.setTelemetryEnabled(true);
-        QCOMPARE(h.server.buildCapabilities().stationTelemetryVersion, 2);
+        QCOMPARE(h.server.buildCapabilities().stationTelemetryVersion, 3);
         QSignalSpy samples(&h.client, &StationClient::telemetryReceived);
         h.connectClient(this);
         QTRY_VERIFY(h.client.telemetryAvailable());
-        QCOMPARE(h.client.agreedMinor(), kCoreHostTelemetrySessionProtocolMinor);
+        QVERIFY(h.client.agreedMinor() >= kCoreHostTelemetrySessionProtocolMinor);
 
         nowMs = 1000;
         controller.sampleNow();
@@ -316,6 +316,105 @@ private slots:
         snapshot = lastSnapshot(samples);
         QVERIFY(!snapshot.host.systemCpuPercent);
         QCOMPARE(snapshot.host.memoryTotalKiB, std::optional<qint64>(8000000));
+    }
+
+    // R-R3-40: each 1 Hz sample carries the receivers' cached load to a
+    // peer that negotiated it. The provider only reads; the controller
+    // never samples the receivers itself.
+    void receiverLoadRidesTheSample()
+    {
+        SessionHarness h;
+        qint64 nowMs = 0;
+        int reads = 0;
+        std::optional<QVector<StationReceiverTelemetry>> receivers;
+        DaemonTelemetryController controller(
+            &h.server, &h.station, nullptr, nullptr, [&] { return nowMs; }, {},
+            std::make_unique<HostTelemetrySampler>(QString()),
+            [&] { ++reads; return receivers; });
+        controller.disableAutomaticSamplingForTest();
+        h.server.setTelemetryEnabled(true);
+        QSignalSpy samples(&h.client, &StationClient::telemetryReceived);
+        h.connectClient(this);
+        QTRY_VERIFY(h.client.telemetryAvailable());
+        QCOMPARE(h.client.agreedMinor(), kReceiverLoadSessionProtocolMinor);
+
+        // Nothing measures receivers: the section stays absent.
+        nowMs = 1000;
+        controller.sampleNow();
+        QTRY_COMPARE(samples.count(), 1);
+        QVERIFY(!lastSnapshot(samples).receivers);
+        QCOMPARE(reads, 1);
+
+        StationReceiverTelemetry a;
+        a.sliceId = 0;
+        a.loadPercent = 55.0;
+        a.inputDelayMs = 6;
+        a.skippedInputMs = 0;
+        StationReceiverTelemetry b;
+        b.sliceId = 3;
+        b.inputDelayMs = 510;
+        b.skippedInputMs = 2000;
+        receivers = QVector<StationReceiverTelemetry>{a, b};
+        nowMs = 2000;
+        controller.sampleNow();
+        QTRY_COMPARE(samples.count(), 2);
+        const StationTelemetrySnapshot snapshot = lastSnapshot(samples);
+        QVERIFY(snapshot.receivers);
+        QCOMPARE(snapshot.receivers->size(), 2);
+        QCOMPARE(snapshot.receivers->at(0).loadPercent, std::optional<double>(55.0));
+        QCOMPARE(snapshot.receivers->at(1).sliceId, 3);
+        QVERIFY(!snapshot.receivers->at(1).loadPercent);
+        QCOMPARE(snapshot.receivers->at(1).inputDelayMs, 510LL);
+        QCOMPARE(snapshot.receivers->at(1).skippedInputMs, 2000LL);
+        QCOMPARE(reads, 2);
+    }
+
+    // The default provider reads RadioModel. A model with no receiver
+    // snapshot yet reports a measured, empty list rather than nothing.
+    void defaultReceiverLoadReadsTheRadioModel()
+    {
+        SessionHarness h;
+        qint64 nowMs = 0;
+        DaemonTelemetryController controller(
+            &h.server, &h.station, nullptr, nullptr, [&] { return nowMs; }, {},
+            std::make_unique<HostTelemetrySampler>(QString()));
+        controller.disableAutomaticSamplingForTest();
+        h.server.setTelemetryEnabled(true);
+        QSignalSpy samples(&h.client, &StationClient::telemetryReceived);
+        h.connectClient(this);
+        QTRY_VERIFY(h.client.telemetryAvailable());
+        nowMs = 1000;
+        controller.sampleNow();
+        QTRY_COMPARE(samples.count(), 1);
+        const StationTelemetrySnapshot snapshot = lastSnapshot(samples);
+        QVERIFY(snapshot.receivers);
+        QVERIFY(snapshot.receivers->isEmpty());
+    }
+
+    // A snapshot becomes a wire entry: the load fraction as a percentage,
+    // left absent when the receiver was idle (which is not proof of no load).
+    void receiverLoadSnapshotBecomesAWireEntry()
+    {
+        ReceiverDspLoad busy;
+        busy.load = 1.25;
+        busy.inputDelayMs = 40;
+        busy.droppedInputMs = 300;
+        StationReceiverTelemetry entry = DaemonTelemetryController::receiverTelemetry(2, busy);
+        QCOMPARE(entry.sliceId, 2);
+        QCOMPARE(entry.loadPercent, std::optional<double>(125.0));
+        QCOMPARE(entry.inputDelayMs, 40LL);
+        QCOMPARE(entry.skippedInputMs, 300LL);
+
+        ReceiverDspLoad idle;
+        idle.idle = true;
+        idle.inputDelayMs = 0;
+        entry = DaemonTelemetryController::receiverTelemetry(1, idle);
+        QVERIFY(!entry.loadPercent);
+        QCOMPARE(entry.inputDelayMs, 0LL);
+
+        ReceiverDspLoad zero; // measured and genuinely light
+        entry = DaemonTelemetryController::receiverTelemetry(0, zero);
+        QCOMPARE(entry.loadPercent, std::optional<double>(0.0));
     }
 
     // The embedded Core on macOS and Windows has no procfs: the host

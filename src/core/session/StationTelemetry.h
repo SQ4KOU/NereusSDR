@@ -4,6 +4,7 @@
 #include <QJsonObject>
 #include <QMetaType>
 #include <QString>
+#include <QVector>
 #include <optional>
 
 namespace NereusSDR {
@@ -57,6 +58,27 @@ struct StationHostTelemetry {
     }
 };
 
+// Most receivers the codec accepts in one sample. Slice IDs are WDSP channel
+// ids, below WdspEngine::kMaxSliceChannels (5); the bound leaves room without
+// letting a peer send an unbounded list.
+inline constexpr qsizetype kMaxStationReceivers = 16;
+
+// One receiver's processing on the Core over its latest load interval
+// (R-R3-40, R-R3-32, R-R3-33). Sent only to a peer that negotiated receiver
+// load (session minor 11, stationTelemetryVersion 3).
+struct StationReceiverTelemetry {
+    int sliceId = 0;                    // 0-65535, unique within a sample
+    // Mean processing time per block as a percentage of the block's real
+    // time: 100 means the receiver cannot keep up. Absent when the receiver
+    // processed nothing in the interval, which is not proof of no load
+    // (ReceiverDspLoad::idle).
+    std::optional<double> loadPercent;
+    qint64 inputDelayMs = 0;            // wait of its latest input batch
+    qint64 skippedInputMs = 0;          // input skipped to bound that wait,
+                                        // total since the Core started
+                                        // processing its receivers
+};
+
 struct StationTelemetrySnapshot {
     quint32 sequence = 0;
     // Relative to the producer's session clock. Never subtract from a GUI
@@ -65,6 +87,10 @@ struct StationTelemetrySnapshot {
     StationRadioTelemetry radio;
     StationAudioTelemetry audio;
     StationHostTelemetry host;
+    // Absent: the Core did not measure its receivers (an older Core, or one
+    // with no radio model). Present and empty: it measured, and no receiver
+    // had a load reading yet. On the wire an absent list omits "receivers".
+    std::optional<QVector<StationReceiverTelemetry>> receivers;
 };
 
 namespace StationTelemetryCodec {

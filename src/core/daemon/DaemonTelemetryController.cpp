@@ -5,8 +5,10 @@
 #include "core/RadioConnection.h"
 #include "core/session/StationServer.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
 
 #include <algorithm>
+#include <cmath>
 #include <utility>
 
 namespace NereusSDR {
@@ -28,7 +30,8 @@ DaemonTelemetryController::DaemonTelemetryController(
     StationServer* server, RadioModel* radioModel,
     DaemonMediaController* mediaController, QObject* parent,
     MonotonicClock clock, AudioDiagnosticsProvider audioDiagnosticsProvider,
-    std::unique_ptr<HostTelemetrySampler> hostSampler)
+    std::unique_ptr<HostTelemetrySampler> hostSampler,
+    ReceiverLoadProvider receiverLoadProvider)
     : QObject(parent)
     , m_server(server)
     , m_radioModel(radioModel)
@@ -36,6 +39,7 @@ DaemonTelemetryController::DaemonTelemetryController(
     , m_clock(std::move(clock))
     , m_audioDiagnosticsProvider(std::move(audioDiagnosticsProvider))
     , m_hostSampler(std::move(hostSampler))
+    , m_receiverLoadProvider(std::move(receiverLoadProvider))
 {
     if (!m_hostSampler) {
         m_hostSampler = std::make_unique<HostTelemetrySampler>();
@@ -49,6 +53,10 @@ DaemonTelemetryController::DaemonTelemetryController(
             return m_mediaController ? m_mediaController->audioDiagnostics()
                                      : DaemonAudioDiagnostics{};
         };
+    }
+
+    if (!m_receiverLoadProvider) {
+        m_receiverLoadProvider = [this] { return radioModelReceiverLoads(); };
     }
 
     m_timer.setInterval(kSamplePeriodMs);
@@ -290,6 +298,49 @@ void DaemonTelemetryController::applyAudioObservation(
     m_audioBaseline = current;
 }
 
+StationReceiverTelemetry DaemonTelemetryController::receiverTelemetry(
+    int sliceId, const ReceiverDspLoad& load)
+{
+    StationReceiverTelemetry receiver;
+    receiver.sliceId = sliceId;
+    // Idle means nothing was processed in the interval, which is not proof
+    // of no load (ReceiverDspLoad::idle): leave the load absent.
+    if (!load.idle && std::isfinite(load.load) && load.load >= 0.0) {
+        receiver.loadPercent = load.load * 100.0;
+    }
+    receiver.inputDelayMs = std::max<qint64>(0, load.inputDelayMs);
+    receiver.skippedInputMs = std::max<qint64>(0, load.droppedInputMs);
+    return receiver;
+}
+
+std::optional<QVector<StationReceiverTelemetry>>
+DaemonTelemetryController::radioModelReceiverLoads() const
+{
+    if (!m_radioModel) {
+        return std::nullopt;
+    }
+    // R-R3-40: the snapshot RadioModel's sampler cached at its latest
+    // 500 ms tick. A slice with no snapshot yet (no WDSP channel, or only
+    // its first reading so far) is left out rather than reported as zero.
+    QVector<StationReceiverTelemetry> receivers;
+    for (SliceModel* slice : m_radioModel->slices()) {
+        if (slice == nullptr || receivers.size() >= kMaxStationReceivers) {
+            continue;
+        }
+        const int sliceId = slice->sliceIndex();
+        const std::optional<ReceiverDspLoad> load = m_radioModel->receiverDspLoad(sliceId);
+        if (!load) {
+            continue;
+        }
+        receivers.append(receiverTelemetry(sliceId, *load));
+    }
+    std::sort(receivers.begin(), receivers.end(),
+              [](const StationReceiverTelemetry& a, const StationReceiverTelemetry& b) {
+                  return a.sliceId < b.sliceId;
+              });
+    return receivers;
+}
+
 void DaemonTelemetryController::sampleNow()
 {
     if (m_epoch == 0 || !m_server) {
@@ -308,6 +359,7 @@ void DaemonTelemetryController::sampleNow()
     applyRadioObservation(snapshot, sampledElapsedMs);
     applyAudioObservation(snapshot, sampledElapsedMs);
     snapshot.host = m_hostSampler->sample();
+    snapshot.receivers = m_receiverLoadProvider();
     m_server->sendTelemetry(snapshot, m_epoch);
     requestRadioObservation();
 }

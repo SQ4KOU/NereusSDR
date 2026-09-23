@@ -1,6 +1,8 @@
 // no-port-check: NereusSDR-original. See StationTelemetry.h.
 #include "core/session/StationTelemetry.h"
 
+#include <QJsonArray>
+
 #include <array>
 #include <cmath>
 #include <limits>
@@ -148,6 +150,85 @@ bool encodeHost(const StationHostTelemetry& host, QJsonObject* object)
     return true;
 }
 
+constexpr qint64 kMaxReceiverSliceId = 65535;
+
+bool validReceiver(const StationReceiverTelemetry& receiver)
+{
+    return receiver.sliceId >= 0 && receiver.sliceId <= kMaxReceiverSliceId
+        && (!receiver.loadPercent
+            || (std::isfinite(*receiver.loadPercent) && *receiver.loadPercent >= 0))
+        && receiver.inputDelayMs >= 0 && receiver.skippedInputMs >= 0
+        && static_cast<double>(receiver.inputDelayMs) <= kMaxExactJsonInteger
+        && static_cast<double>(receiver.skippedInputMs) <= kMaxExactJsonInteger;
+}
+
+bool uniqueSliceIds(const QVector<StationReceiverTelemetry>& receivers)
+{
+    for (qsizetype i = 0; i < receivers.size(); ++i) {
+        for (qsizetype j = i + 1; j < receivers.size(); ++j) {
+            if (receivers[i].sliceId == receivers[j].sliceId) { return false; }
+        }
+    }
+    return true;
+}
+
+// The receivers section is optional as a whole. Inside it every entry names
+// its slice and carries its input wait and skipped input; its load is
+// absent when the receiver processed nothing in the interval.
+bool decodeReceivers(const QJsonObject& object,
+                     std::optional<QVector<StationReceiverTelemetry>>* receivers)
+{
+    const QString key = QStringLiteral("receivers");
+    if (!object.contains(key)) { receivers->reset(); return true; }
+    if (!object.value(key).isArray()) { return false; }
+    const QJsonArray array = object.value(key).toArray();
+    if (array.size() > kMaxStationReceivers) { return false; }
+    QVector<StationReceiverTelemetry> decoded;
+    decoded.reserve(array.size());
+    for (const QJsonValue& value : array) {
+        if (!value.isObject()) { return false; }
+        const QJsonObject entry = value.toObject();
+        StationReceiverTelemetry receiver;
+        qint64 sliceId = 0;
+        if (!integer(entry.value(QStringLiteral("sliceId")), kMaxReceiverSliceId, &sliceId)
+            || !integer(entry.value(QStringLiteral("inputDelayMs")), kMaxExactJsonInteger,
+                        &receiver.inputDelayMs)
+            || !integer(entry.value(QStringLiteral("skippedInputMs")), kMaxExactJsonInteger,
+                        &receiver.skippedInputMs)
+            || !optionalRate(entry, QStringLiteral("loadPercent"), &receiver.loadPercent)) {
+            return false;
+        }
+        receiver.sliceId = static_cast<int>(sliceId);
+        decoded.append(receiver);
+    }
+    if (!uniqueSliceIds(decoded)) { return false; }
+    *receivers = decoded;
+    return true;
+}
+
+bool encodeReceivers(const std::optional<QVector<StationReceiverTelemetry>>& receivers,
+                     QJsonObject* object)
+{
+    if (!receivers) { return true; }
+    if (receivers->size() > kMaxStationReceivers || !uniqueSliceIds(*receivers)) {
+        return false;
+    }
+    QJsonArray array;
+    for (const StationReceiverTelemetry& receiver : *receivers) {
+        if (!validReceiver(receiver)) { return false; }
+        QJsonObject entry{
+            {QStringLiteral("sliceId"), receiver.sliceId},
+            {QStringLiteral("inputDelayMs"), receiver.inputDelayMs},
+            {QStringLiteral("skippedInputMs"), receiver.skippedInputMs}};
+        if (receiver.loadPercent) {
+            entry.insert(QStringLiteral("loadPercent"), *receiver.loadPercent);
+        }
+        array.append(entry);
+    }
+    object->insert(QStringLiteral("receivers"), array);
+    return true;
+}
+
 bool putRate(QJsonObject& object, const QString& key, std::optional<double> value)
 {
     if (!value) { return true; }
@@ -203,7 +284,10 @@ bool StationTelemetryCodec::decode(const QJsonObject& object,
             return false;
         }
     }
-    if (!decodeHost(object, &decoded.host)) { return false; }
+    if (!decodeHost(object, &decoded.host)
+        || !decodeReceivers(object, &decoded.receivers)) {
+        return false;
+    }
     *snapshot = decoded;
     return true;
 }
@@ -235,7 +319,10 @@ std::optional<QJsonObject> StationTelemetryCodec::encode(
         {QStringLiteral("sampledElapsedMs"), snapshot.sampledElapsedMs},
         {QStringLiteral("radio"), radio},
         {QStringLiteral("audio"), audio}};
-    if (!encodeHost(snapshot.host, &object)) { return std::nullopt; }
+    if (!encodeHost(snapshot.host, &object)
+        || !encodeReceivers(snapshot.receivers, &object)) {
+        return std::nullopt;
+    }
     StationTelemetrySnapshot checked;
     if (!decode(object, &checked)) { return std::nullopt; }
     return object;

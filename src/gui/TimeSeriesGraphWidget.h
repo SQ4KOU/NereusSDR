@@ -19,6 +19,10 @@
 //                 keep remote audio frame and packet rates readable.
 //   2026-09-22 -- Keep unit-bearing legends visible for unavailable telemetry
 //                 by J.J. Boyd (KG4VCF), with AI assistance via OpenAI Codex.
+//   2026-09-23 -- R-R3-40: an optional labelled reference line (the receiver
+//                 load graph's 100 % "Cannot keep up") by J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #pragma once
@@ -203,6 +207,24 @@ public:
         update();
     }
 
+    // Nereus: a dashed horizontal line at a fixed value, named on the plot.
+    // The y axis always reaches it, so a limit stays in view even while
+    // every series sits far below it. A non-finite value removes the line.
+    void setReferenceLine(double value, QString label)
+    {
+        if (std::isfinite(value)) {
+            m_referenceValue = value;
+            m_referenceLabel = std::move(label);
+        } else {
+            m_referenceValue.reset();
+            m_referenceLabel.clear();
+        }
+        update();
+    }
+
+    std::optional<double> referenceValue() const { return m_referenceValue; }
+    QString referenceLabel() const { return m_referenceLabel; }
+
     // Highlight time spans where adaptive throttle was active.
     // Each pair is (startRatio, endRatio) in [0,1] over the visible range.
     void setThrottleSpans(QVector<QPair<double,double>> spans)
@@ -264,6 +286,9 @@ protected:
             for (const QPointF& point : series.points) {
                 maxY = std::max(maxY, point.y());
             }
+        }
+        if (m_referenceValue) {
+            maxY = std::max(maxY, *m_referenceValue);
         }
         const QString axisSuffix = activeAxisSuffix(visibleSeries);
 
@@ -414,6 +439,20 @@ protected:
                     painter.fillRect(QRectF(x0, plot.top(), x1 - x0, plot.height()), bandColor);
             }
             painter.setBrush(Qt::NoBrush);
+        }
+
+        if (m_referenceValue && !m_logScale
+            && *m_referenceValue >= minY && *m_referenceValue <= maxY) {
+            const double yRatio = (*m_referenceValue - minY) / std::max(0.001, maxY - minY);
+            const double y = plot.bottom() - plot.height() * yRatio;
+            const QColor referenceColor("#ff6060");
+            painter.setPen(QPen(referenceColor, 1, Qt::DashLine));
+            painter.drawLine(QPointF(plot.left(), y), QPointF(plot.right(), y));
+            if (!m_referenceLabel.isEmpty()) {
+                painter.setPen(referenceColor);
+                painter.drawText(QRectF(plot.left(), y - 17, plot.width() - 4, 16),
+                                 Qt::AlignRight | Qt::AlignVCenter, m_referenceLabel);
+            }
         }
 
         for (const Series& series : visibleSeries) {
@@ -735,6 +774,8 @@ private:
     std::optional<double> m_fixedMinY;
     std::optional<double> m_fixedMaxY;
     QVector<QPair<double,double>> m_throttleSpans;
+    std::optional<double> m_referenceValue;
+    QString m_referenceLabel;
 };
 
 } // namespace NereusSDR

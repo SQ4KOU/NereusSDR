@@ -1,4 +1,5 @@
 // no-port-check: NereusSDR-original telemetry wire contract tests (R-R3-32).
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QTest>
 #include <limits>
@@ -41,6 +42,25 @@ StationHostTelemetry measuredHost()
     host.hottestZoneCelsius = 52.5;
     host.hottestZoneName = QStringLiteral("bigcore0-thermal");
     return host;
+}
+
+QVector<StationReceiverTelemetry> measuredReceivers()
+{
+    StationReceiverTelemetry a;
+    a.sliceId = 0;
+    a.loadPercent = 42.5;
+    a.inputDelayMs = 3;
+    a.skippedInputMs = 0; // A measured zero must survive.
+    StationReceiverTelemetry b;
+    b.sliceId = 2;
+    b.loadPercent = 131.25; // Over 100: this receiver cannot keep up.
+    b.inputDelayMs = 480;
+    b.skippedInputMs = 1250;
+    StationReceiverTelemetry idle;
+    idle.sliceId = 4; // processed nothing: load absent, never zero
+    idle.inputDelayMs = 0;
+    idle.skippedInputMs = 7;
+    return {a, b, idle};
 }
 }
 
@@ -295,6 +315,177 @@ private slots:
         QVERIFY(!StationTelemetryCodec::encode(sample));
     }
 
+    // R-R3-40: the receivers section in its three shapes. Absent means the
+    // Core did not measure receivers; an empty list means it measured and
+    // no receiver had a reading; each entry's load is absent when that
+    // receiver processed nothing.
+    void receiversSectionRoundTripsInEveryShape()
+    {
+        StationTelemetrySnapshot withReceivers = measured();
+        withReceivers.host = measuredHost();
+        withReceivers.receivers = measuredReceivers();
+        const auto payload = StationTelemetryCodec::encode(withReceivers);
+        QVERIFY(payload);
+        const QJsonArray array = payload->value("receivers").toArray();
+        QCOMPARE(array.size(), 3);
+        QCOMPARE(array.at(0).toObject().keys(),
+                 (QStringList{"inputDelayMs", "loadPercent", "skippedInputMs", "sliceId"}));
+        QCOMPARE(array.at(2).toObject().keys(),
+                 (QStringList{"inputDelayMs", "skippedInputMs", "sliceId"}));
+        StationTelemetrySnapshot decoded;
+        QVERIFY(StationTelemetryCodec::decode(*payload, &decoded));
+        QVERIFY(decoded.receivers);
+        QCOMPARE(decoded.receivers->size(), 3);
+        const StationReceiverTelemetry& a = decoded.receivers->at(0);
+        QCOMPARE(a.sliceId, 0);
+        QCOMPARE(a.loadPercent, std::optional<double>(42.5));
+        QCOMPARE(a.inputDelayMs, 3LL);
+        QCOMPARE(a.skippedInputMs, 0LL);
+        const StationReceiverTelemetry& b = decoded.receivers->at(1);
+        QCOMPARE(b.sliceId, 2);
+        QCOMPARE(b.loadPercent, std::optional<double>(131.25));
+        QCOMPARE(b.inputDelayMs, 480LL);
+        QCOMPARE(b.skippedInputMs, 1250LL);
+        const StationReceiverTelemetry& idle = decoded.receivers->at(2);
+        QCOMPARE(idle.sliceId, 4);
+        QVERIFY(!idle.loadPercent);
+        QCOMPARE(idle.skippedInputMs, 7LL);
+        QCOMPARE(decoded.host.hottestZoneName, QStringLiteral("bigcore0-thermal"));
+
+        // Measured with no receiver reading: an empty list, kept distinct
+        // from absent.
+        StationTelemetrySnapshot none = measured();
+        none.receivers = QVector<StationReceiverTelemetry>{};
+        const auto nonePayload = StationTelemetryCodec::encode(none);
+        QVERIFY(nonePayload);
+        QVERIFY(nonePayload->value("receivers").isArray());
+        QVERIFY(StationTelemetryCodec::decode(*nonePayload, &decoded));
+        QVERIFY(decoded.receivers);
+        QVERIFY(decoded.receivers->isEmpty());
+
+        // Without the section the payload is the version 2 payload byte for
+        // byte, and decoding it clears any receivers the destination held.
+        StationTelemetrySnapshot versionTwo = withReceivers;
+        versionTwo.receivers.reset();
+        const auto plain = StationTelemetryCodec::encode(versionTwo);
+        QVERIFY(plain);
+        QVERIFY(!plain->contains("receivers"));
+        QJsonObject stripped = *payload;
+        stripped.remove("receivers");
+        QCOMPARE(QJsonDocument(stripped).toJson(QJsonDocument::Compact),
+                 QJsonDocument(*plain).toJson(QJsonDocument::Compact));
+        decoded = withReceivers;
+        QVERIFY(StationTelemetryCodec::decode(*plain, &decoded));
+        QVERIFY(!decoded.receivers);
+
+        // Unknown receiver fields from a later version are ignored.
+        QJsonObject future = *plain;
+        future.insert("receivers", QJsonArray{QJsonObject{
+            {"sliceId", 1}, {"inputDelayMs", 0}, {"skippedInputMs", 0},
+            {"futureReceiverValue", 9}}});
+        QVERIFY(StationTelemetryCodec::decode(future, &decoded));
+        QVERIFY(decoded.receivers);
+        QCOMPARE(decoded.receivers->size(), 1);
+        QCOMPARE(decoded.receivers->at(0).sliceId, 1);
+    }
+
+    void malformedReceiversSectionIsTransactional_data()
+    {
+        QTest::addColumn<QJsonObject>("payload");
+        StationTelemetrySnapshot sample = measured();
+        sample.receivers = measuredReceivers();
+        const QJsonObject valid = *StationTelemetryCodec::encode(sample);
+        auto receiverField = [&](const char* name, const char* key, const QJsonValue& value) {
+            QJsonArray receivers = valid.value("receivers").toArray();
+            QJsonObject first = receivers.at(0).toObject();
+            if (value.isUndefined()) {
+                first.remove(QString::fromLatin1(key));
+            } else {
+                first.insert(QString::fromLatin1(key), value);
+            }
+            receivers.replace(0, first);
+            QJsonObject broken = valid;
+            broken.insert("receivers", receivers);
+            QTest::newRow(name) << broken;
+        };
+        QJsonObject notArray = valid;
+        notArray.insert("receivers", QJsonObject{});
+        QTest::newRow("receivers-not-array") << notArray;
+        QJsonObject entryNotObject = valid;
+        entryNotObject.insert("receivers", QJsonArray{3});
+        QTest::newRow("entry-not-object") << entryNotObject;
+        QJsonArray tooMany;
+        for (int i = 0; i <= kMaxStationReceivers; ++i) {
+            tooMany.append(QJsonObject{{"sliceId", i}, {"inputDelayMs", 0},
+                                       {"skippedInputMs", 0}});
+        }
+        QJsonObject overLimit = valid;
+        overLimit.insert("receivers", tooMany);
+        QTest::newRow("too-many-receivers") << overLimit;
+        QJsonArray duplicated = valid.value("receivers").toArray();
+        duplicated.append(duplicated.at(0));
+        QJsonObject duplicate = valid;
+        duplicate.insert("receivers", duplicated);
+        QTest::newRow("duplicate-slice") << duplicate;
+        receiverField("missing-slice", "sliceId", QJsonValue(QJsonValue::Undefined));
+        receiverField("negative-slice", "sliceId", -1);
+        receiverField("slice-over-limit", "sliceId", 65536);
+        receiverField("fractional-slice", "sliceId", 1.5);
+        receiverField("negative-load", "loadPercent", -0.5);
+        receiverField("string-load", "loadPercent", "42.5");
+        receiverField("null-load-is-not-absence", "loadPercent", QJsonValue(QJsonValue::Null));
+        receiverField("missing-input-delay", "inputDelayMs", QJsonValue(QJsonValue::Undefined));
+        receiverField("negative-input-delay", "inputDelayMs", -1);
+        receiverField("fractional-input-delay", "inputDelayMs", 3.5);
+        receiverField("missing-skipped-input", "skippedInputMs", QJsonValue(QJsonValue::Undefined));
+        receiverField("negative-skipped-input", "skippedInputMs", -1);
+    }
+
+    void malformedReceiversSectionIsTransactional()
+    {
+        QFETCH(QJsonObject, payload);
+        StationTelemetrySnapshot previous = measured();
+        previous.receivers = measuredReceivers();
+        previous.sequence = 88;
+        QVERIFY(!StationTelemetryCodec::decode(payload, &previous));
+        QCOMPARE(previous.sequence, 88u);
+        QVERIFY(previous.receivers);
+        QCOMPARE(previous.receivers->size(), 3);
+    }
+
+    void encoderRefusesInvalidReceivers()
+    {
+        auto sample = measured();
+        sample.receivers = measuredReceivers();
+        (*sample.receivers)[0].loadPercent = std::numeric_limits<double>::quiet_NaN();
+        QVERIFY(!StationTelemetryCodec::encode(sample));
+        sample.receivers = measuredReceivers();
+        (*sample.receivers)[0].loadPercent = std::numeric_limits<double>::infinity();
+        QVERIFY(!StationTelemetryCodec::encode(sample));
+        sample.receivers = measuredReceivers();
+        (*sample.receivers)[0].loadPercent = -1.0;
+        QVERIFY(!StationTelemetryCodec::encode(sample));
+        sample.receivers = measuredReceivers();
+        (*sample.receivers)[1].sliceId = 0; // duplicate
+        QVERIFY(!StationTelemetryCodec::encode(sample));
+        sample.receivers = measuredReceivers();
+        (*sample.receivers)[1].sliceId = -1;
+        QVERIFY(!StationTelemetryCodec::encode(sample));
+        sample.receivers = measuredReceivers();
+        (*sample.receivers)[1].inputDelayMs = -1;
+        QVERIFY(!StationTelemetryCodec::encode(sample));
+        sample.receivers = measuredReceivers();
+        (*sample.receivers)[1].skippedInputMs = -1;
+        QVERIFY(!StationTelemetryCodec::encode(sample));
+        sample.receivers = QVector<StationReceiverTelemetry>(kMaxStationReceivers + 1);
+        for (int i = 0; i < sample.receivers->size(); ++i) {
+            (*sample.receivers)[i].sliceId = i;
+        }
+        QVERIFY(!StationTelemetryCodec::encode(sample));
+        sample.receivers->removeLast();
+        QVERIFY(StationTelemetryCodec::encode(sample)); // the limit itself is fine
+    }
+
     void olderCapabilitiesDefaultToUnsupported()
     {
         QCOMPARE(StationCapabilities::fromUpdates({}).stationTelemetryVersion, 0);
@@ -303,6 +494,8 @@ private slots:
         QCOMPARE(StationCapabilities::fromUpdates(caps.toUpdates()).stationTelemetryVersion, 1);
         caps.stationTelemetryVersion = 2; // adds the Core host section
         QCOMPARE(StationCapabilities::fromUpdates(caps.toUpdates()).stationTelemetryVersion, 2);
+        caps.stationTelemetryVersion = 3; // adds the receivers section
+        QCOMPARE(StationCapabilities::fromUpdates(caps.toUpdates()).stationTelemetryVersion, 3);
         caps.stationTelemetryVersion = -1;
         QCOMPARE(StationCapabilities::fromUpdates(caps.toUpdates()).stationTelemetryVersion, 0);
     }

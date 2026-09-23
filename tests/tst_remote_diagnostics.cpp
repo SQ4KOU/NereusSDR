@@ -399,6 +399,131 @@ private slots:
         QVERIFY(graphsHidden());
         client.disconnectFromStation(QStringLiteral("done"));
     }
+
+    // R-R3-40: the Core tab graphs each receiver's processing in percent of
+    // real time against a 100 % "Cannot keep up" line, or says in one line
+    // that this Core does not report it.
+    void coreTabGraphsReceiverProcessingOrSaysItIsNotReported()
+    {
+        RemoteDiagnosticsDialog nullDialog(nullptr);
+        auto* nullLabel = nullDialog.findChild<QLabel*>(
+            QStringLiteral("remoteCoreReceiversUnavailable"));
+        QVERIFY(nullLabel);
+        QVERIFY(!nullLabel->isHidden());
+        QVERIFY(nullDialog.findChild<QWidget*>(QStringLiteral("remoteCoreReceiverGraph"))->isHidden());
+
+        QTemporaryDir directory;
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        StationServer server(&station, settings, directory.path());
+        server.setTelemetryEnabled(true);
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        qint64 now = 10000;
+        RemoteAudioReceiverTelemetry playback;
+        RemoteTelemetryController controller(&client, nullptr, nullptr,
+            [&] { return now; }, [&] { return playback; });
+        const auto connect = [&](const QString& name) {
+            auto* guiWire = new ObservedLoopback;
+            auto* coreWire = new Test::LoopbackTransport(name);
+            guiWire->linkTo(coreWire);
+            server.acceptTransport(coreWire);
+            client.startSession(guiWire, server.token());
+            QTRY_VERIFY(client.isHandshakeComplete());
+        };
+        connect(QStringLiteral("Core"));
+
+        RemoteDiagnosticsDialog dialog(&controller);
+        dialog.show();
+        QTRY_VERIFY(dialog.isVisible());
+        auto* label = dialog.findChild<QLabel*>(QStringLiteral("remoteCoreReceiversUnavailable"));
+        auto* graph = dynamic_cast<TimeSeriesGraphWidget*>(dialog.findChild<QWidget*>(
+            QStringLiteral("remoteCoreReceiverGraph")));
+        QVERIFY(label && graph);
+        QCOMPARE(label->text(), QStringLiteral("This Core does not report receiver processing."));
+        QCOMPARE(graph->referenceValue(), std::optional<double>(100.0));
+        QCOMPARE(graph->referenceLabel(), QStringLiteral("Cannot keep up"));
+        // Plain words for the operator: no internal names in the tooltip.
+        const QString tip = graph->toolTip();
+        QVERIFY(tip.contains(QStringLiteral("100\u00A0%")));
+        QVERIFY(tip.contains(QStringLiteral("cannot keep up")));
+        for (const char* internal : {"WDSP", "DSP", "block", "slot", "telemetry", "minor", "idle"}) {
+            QVERIFY2(!tip.contains(QLatin1String(internal), Qt::CaseInsensitive), internal);
+        }
+        const auto refresh = [&] {
+            QVERIFY(QMetaObject::invokeMethod(&dialog, "refresh", Qt::DirectConnection));
+        };
+
+        // A Core without the receivers section: the line, no graph.
+        StationTelemetrySnapshot sample;
+        sample.sequence = 1;
+        sample.sampledElapsedMs = 100;
+        QVERIFY(server.sendTelemetry(sample, server.sessionEpoch()));
+        QTRY_COMPARE(controller.current().state, RemoteTelemetryView::State::Current);
+        refresh();
+        QVERIFY(!label->isHidden());
+        QVERIFY(graph->isHidden());
+
+        // Receivers A and C: one series each, named by slice letter.
+        StationReceiverTelemetry a;
+        a.sliceId = 0;
+        a.loadPercent = 35.0;
+        StationReceiverTelemetry c;
+        c.sliceId = 2;
+        c.loadPercent = 120.0;
+        now += 1000;
+        sample.sequence = 2;
+        sample.sampledElapsedMs = 1100;
+        sample.receivers = QVector<StationReceiverTelemetry>{a, c};
+        QVERIFY(server.sendTelemetry(sample, server.sessionEpoch()));
+        QTRY_VERIFY(controller.current().coreReceiversReported);
+        refresh();
+        QVERIFY(label->isHidden());
+        QVERIFY(!graph->isHidden());
+        QCOMPARE(graph->series().size(), 2);
+        const auto* sliceA = namedSeries(graph, QStringLiteral("Slice A"));
+        const auto* sliceC = namedSeries(graph, QStringLiteral("Slice C"));
+        QVERIFY(sliceA && sliceC);
+        QVERIFY(!namedSeries(graph, QStringLiteral("Slice B")));
+        QCOMPARE(sliceA->points.constLast().y(), 35.0);
+        QCOMPARE(sliceC->points.constLast().y(), 120.0);
+        QCOMPARE(sliceA->unitSuffix, QStringLiteral("\u00A0%"));
+        QVERIFY(!dialog.grab().isNull());
+
+        // A Core that measures receivers but has no reading yet: the graph
+        // stays, since the Core does report receiver processing.
+        client.disconnectFromStation(QStringLiteral("reconnect"));
+        QTRY_COMPARE(controller.current().state, RemoteTelemetryView::State::Disconnected);
+        refresh();
+        QVERIFY(!graph->isHidden()); // retained history between sessions
+        now += 1000;
+        connect(QStringLiteral("quiet Core"));
+        StationTelemetrySnapshot quiet;
+        quiet.sequence = 1;
+        quiet.sampledElapsedMs = 0;
+        quiet.receivers = QVector<StationReceiverTelemetry>{};
+        QVERIFY(server.sendTelemetry(quiet, server.sessionEpoch()));
+        QTRY_VERIFY(controller.current().coreReceiversReported);
+        refresh();
+        QVERIFY(label->isHidden());
+        QVERIFY(!graph->isHidden());
+        client.disconnectFromStation(QStringLiteral("reconnect"));
+        QTRY_COMPARE(controller.current().state, RemoteTelemetryView::State::Disconnected);
+
+        // An older Core again: the line, whatever history holds.
+        now += 1000;
+        connect(QStringLiteral("older Core"));
+        StationTelemetrySnapshot bare;
+        bare.sequence = 1;
+        bare.sampledElapsedMs = 0;
+        QVERIFY(server.sendTelemetry(bare, server.sessionEpoch()));
+        QTRY_COMPARE(controller.current().state, RemoteTelemetryView::State::Current);
+        refresh();
+        QVERIFY(!label->isHidden());
+        QVERIFY(graph->isHidden());
+        client.disconnectFromStation(QStringLiteral("done"));
+    }
 };
 
 QTEST_MAIN(TstRemoteDiagnostics)

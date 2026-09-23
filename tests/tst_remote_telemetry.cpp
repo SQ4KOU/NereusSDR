@@ -488,6 +488,98 @@ private slots:
         QCOMPARE(g_diagnosticsLines.size(), 2);
     }
 
+    // R-R3-40: each receiver's load reaches the view and its own history
+    // slot; an idle receiver leaves a gap. The soak line carries each
+    // receiver's load and input delay, and says when none were measured.
+    void coreReceiverLoadReachesHistoryAndDiagnosticsLine()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        StationServer server(&station, settings, dir.path());
+        server.setTelemetryEnabled(true);
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        qint64 now = 10000;
+        RemoteAudioReceiverTelemetry playback;
+        RemoteTelemetryController controller(&client, nullptr, nullptr,
+            [&] { return now; }, [&] { return playback; });
+        DiagnosticsCapture capture;
+
+        auto* guiWire = new ObservedLoopback;
+        auto* coreWire = new Test::LoopbackTransport(QStringLiteral("Core"));
+        guiWire->linkTo(coreWire);
+        server.acceptTransport(coreWire);
+        client.startSession(guiWire, server.token());
+        QTRY_VERIFY(client.isHandshakeComplete());
+        QVERIFY(!controller.current().coreReceiversReported);
+
+        // No receivers section: not reported, and the log says so.
+        StationTelemetrySnapshot sample;
+        sample.sequence = 1;
+        sample.sampledElapsedMs = 100;
+        QVERIFY(server.sendTelemetry(sample, server.sessionEpoch()));
+        QTRY_COMPARE(controller.current().state, RemoteTelemetryView::State::Current);
+        QVERIFY(!controller.current().coreReceiversReported);
+        QVERIFY(!controller.current().coreReceivers);
+        now += 60000; // one interval after the handshake's baseline
+        controller.sampleNow();
+        QCOMPARE(g_diagnosticsLines.size(), 1);
+        QVERIFY2(g_diagnosticsLines.constLast().endsWith(QStringLiteral(" coreReceivers=not measured")),
+                 qPrintable(g_diagnosticsLines.constLast()));
+
+        StationReceiverTelemetry a;
+        a.sliceId = 0;
+        a.loadPercent = 62.5;
+        a.inputDelayMs = 12;
+        a.skippedInputMs = 0;
+        StationReceiverTelemetry b;
+        b.sliceId = 1;
+        b.loadPercent = 140.0; // cannot keep up
+        b.inputDelayMs = 480;
+        b.skippedInputMs = 750;
+        sample.sequence = 2;
+        sample.sampledElapsedMs = 120100;
+        sample.receivers = QVector<StationReceiverTelemetry>{a, b};
+        QVERIFY(server.sendTelemetry(sample, server.sessionEpoch()));
+        QTRY_VERIFY(controller.current().coreReceiversReported);
+        QVERIFY(controller.current().coreReceivers);
+        QCOMPARE(controller.current().coreReceivers->size(), 2);
+        const auto sliceA = TelemetryHistory::coreReceiverLoadMetric(0);
+        const auto sliceB = TelemetryHistory::coreReceiverLoadMetric(1);
+        QCOMPARE(controller.history().series(sliceA, now, 60).points.constLast().value, 62.5);
+        QCOMPARE(controller.history().series(sliceB, now, 60).points.constLast().value, 140.0);
+
+        // Slice B idle in the next sample: a gap, never a zero.
+        b.loadPercent.reset();
+        sample.sequence = 3;
+        sample.sampledElapsedMs = 121100;
+        sample.receivers = QVector<StationReceiverTelemetry>{a, b};
+        now += 1000;
+        QVERIFY(server.sendTelemetry(sample, server.sessionEpoch()));
+        QTRY_COMPARE(controller.history().series(sliceA, now, 60).points.size(), 2);
+        QCOMPARE(controller.history().series(sliceB, now, 60).points.size(), 1);
+        QCOMPARE(controller.history().series(sliceB, now, 60).points.constLast().value, 140.0);
+
+        now += 59000;
+        controller.sampleNow();
+        QCOMPARE(g_diagnosticsLines.size(), 2);
+        const QString line = g_diagnosticsLines.constLast();
+        QVERIFY2(line.endsWith(QStringLiteral(
+                     " coreReceivers=2"
+                     " coreSliceALoadPercent=62.5 coreSliceAInputDelayMs=12 coreSliceASkippedInputMs=0"
+                     " coreSliceBLoadPercent=not measured coreSliceBInputDelayMs=480"
+                     " coreSliceBSkippedInputMs=750")),
+                 qPrintable(line));
+
+        // A new session forgets that this Core reported receivers.
+        client.disconnectFromStation(QStringLiteral("done"));
+        QTRY_COMPARE(controller.current().state, RemoteTelemetryView::State::Disconnected);
+        QVERIFY(!controller.current().coreReceiversReported);
+        QVERIFY(!controller.current().coreReceivers);
+    }
+
     void olderCoreIsExplicitlyUnsupported()
     {
         QTemporaryDir dir;

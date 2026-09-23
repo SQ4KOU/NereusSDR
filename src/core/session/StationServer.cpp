@@ -23,6 +23,12 @@
 //                                    one outbound frame, not N of each.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-40: station telemetry carries
+//                                    each receiver's processing load only
+//                                    for a peer that negotiated minor 11
+//                                    and stationTelemetryVersion 3.
+//                                    AI-assisted implementation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1279,6 +1285,11 @@ bool StationServer::sendTelemetry(const StationTelemetrySnapshot& snapshot,
     if (peer == m_peers.cend() || peer->agreedMinor < kCoreHostTelemetrySessionProtocolMinor) {
         message.telemetry.host = {};
     }
+    // Likewise a peer from before receiver load receives exactly the
+    // sections it negotiated, without "receivers".
+    if (peer == m_peers.cend() || peer->agreedMinor < kReceiverLoadSessionProtocolMinor) {
+        message.telemetry.receivers.reset();
+    }
     const QByteArray wire = SessionMessages::encode(message);
     if (wire.isEmpty()) { return false; }
     m_session->sendText(wire);
@@ -1388,7 +1399,7 @@ StationCapabilities StationServer::buildCapabilities() const
         caps.remotePs3DisplaySubscribed = m_radioModel->pureSignalFacade()->remoteAmpViewSubscribed();
     }
     caps.remoteCtunVersion = 1;
-    caps.stationTelemetryVersion = m_telemetryEnabled ? 2 : 0;
+    caps.stationTelemetryVersion = m_telemetryEnabled ? 3 : 0;
     caps.remoteTgxlConfigVersion = m_radioModel->stationAccessoryIdentityEnabled() ? 1 : 0;
     caps.remoteFourO3AControlVersion = m_radioModel->stationAccessoryIdentityEnabled() ? 1 : 0;
     caps.propertyResultVersion = 1;

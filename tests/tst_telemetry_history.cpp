@@ -304,6 +304,49 @@ private slots:
         QCOMPARE(radio.points.size(), 2);
         QVERIFY(!radio.points[1].breakBefore);
     }
+
+    // R-R3-40: each receiver slot is its own series, keyed by slice ID. Loads
+    // over 100 % are kept as measured, and an idle receiver (absent load)
+    // breaks only its own line.
+    void receiverLoadSlotsAreSeparateSeries()
+    {
+        using Metric = TelemetryHistory::Metric;
+        QCOMPARE(TelemetryHistory::kCoreReceiverLoadSlots, 5);
+        QCOMPARE(TelemetryHistory::coreReceiverLoadMetric(0),
+                 Metric::CoreReceiverLoadPercentSlot0);
+        QCOMPARE(TelemetryHistory::coreReceiverLoadMetric(4),
+                 Metric::CoreReceiverLoadPercentSlot4);
+        const Metric a = TelemetryHistory::coreReceiverLoadMetric(0);
+        const Metric c = TelemetryHistory::coreReceiverLoadMetric(2);
+        TelemetryHistory::MetricMask receivers;
+        for (int slot = 0; slot < TelemetryHistory::kCoreReceiverLoadSlots; ++slot) {
+            receivers.set(static_cast<std::size_t>(TelemetryHistory::coreReceiverLoadMetric(slot)));
+        }
+
+        TelemetryHistory history;
+        TelemetryHistory::Sample first{0, 1, {}};
+        first.values[static_cast<std::size_t>(a)] = 40.0;
+        first.values[static_cast<std::size_t>(c)] = 90.0;
+        TelemetryHistory::Sample second{1000, 1, {}};
+        second.values[static_cast<std::size_t>(a)] = 45.0; // slice C idle here
+        TelemetryHistory::Sample third{2000, 1, {}};
+        third.values[static_cast<std::size_t>(a)] = 50.0;
+        third.values[static_cast<std::size_t>(c)] = 135.0;
+        history.append(first, receivers);
+        history.append(second, receivers);
+        history.append(third, receivers);
+
+        const auto sliceA = history.series(a, 2000, 60);
+        QCOMPARE(sliceA.points.size(), 3);
+        QVERIFY(!sliceA.points[1].breakBefore);
+        QVERIFY(!sliceA.points[2].breakBefore);
+        const auto sliceC = history.series(c, 2000, 60);
+        QCOMPARE(sliceC.points.size(), 2);
+        QCOMPARE(sliceC.points[1].value, 135.0);
+        QVERIFY(sliceC.points[1].breakBefore);
+        QVERIFY(history.series(TelemetryHistory::coreReceiverLoadMetric(1), 2000, 60)
+                    .points.isEmpty());
+    }
 };
 
 QTEST_GUILESS_MAIN(TstTelemetryHistory)

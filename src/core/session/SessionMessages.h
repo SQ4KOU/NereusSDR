@@ -174,7 +174,7 @@ enum class SessionMessageKind {
 /// provisional. R3 swapping the codec under the same object model is a
 /// minor bump at most.
 inline constexpr quint16 kSessionProtocolMajor = 1;
-inline constexpr quint16 kSessionProtocolMinor = 10;
+inline constexpr quint16 kSessionProtocolMinor = 11;
 inline constexpr quint16 kMediaSessionProtocolMinor = 1;
 inline constexpr quint16 kRemoteCtunSessionProtocolMinor = 2;
 inline constexpr quint16 kStationTelemetrySessionProtocolMinor = 3;
@@ -197,6 +197,10 @@ inline constexpr quint16 kRemoteSpectrumGrantSessionProtocolMinor = 9;
 // in an optional host section (stationTelemetryVersion 2). Minor-9 peers
 // receive exactly the radio and audio sections.
 inline constexpr quint16 kCoreHostTelemetrySessionProtocolMinor = 10;
+// Station telemetry carries each receiver's processing load, input wait and
+// skipped input in an optional receivers section (stationTelemetryVersion 3).
+// Minor-10 peers receive exactly the radio, audio and host sections.
+inline constexpr quint16 kReceiverLoadSessionProtocolMinor = 11;
 inline constexpr qsizetype kMaxMediaControlBytes = 128 * 1024;
 
 // R-R3-16/17: how long either end waits for the connect sequence to finish

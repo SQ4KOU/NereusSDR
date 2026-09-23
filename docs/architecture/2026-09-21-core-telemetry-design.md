@@ -124,7 +124,11 @@ session kind, encoded as `station.metrics.v1`. Advertise capability
 later minor additions with task 4d; do not reuse the telemetry threshold for a
 different feature. Protocol minor 10 adds the optional Core host section and
 advertises `stationTelemetryVersion = 2`; minor-9 and older peers keep version 1
-without the host section. The snapshot is observational; it is neither a mirrored
+without the host section. Protocol minor 11 adds the optional `receivers`
+section (per slice: `sliceId`, `loadPercent`, `inputDelayMs`,
+`skippedInputMs`; see `docs/architecture/2026-09-23-r3-dsp-overload-plan.md`
+Task 6) and advertises `stationTelemetryVersion = 3`; minor-10 peers receive
+exactly the radio, audio and host sections. The snapshot is observational; it is neither a mirrored
 property nor an inbound command.
 
 The typed snapshot contains a sequence, Core sample elapsed milliseconds,

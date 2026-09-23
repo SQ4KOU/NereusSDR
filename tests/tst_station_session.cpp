@@ -291,6 +291,10 @@ private slots:
     void hostTelemetryIsOmittedForMinorNinePeer();
     void clientKeepsHostTelemetryOnlyWhenNegotiated_data();
     void clientKeepsHostTelemetryOnlyWhenNegotiated();
+    void receiverLoadReachesVersionThreePeer();
+    void receiverLoadIsOmittedForMinorTenPeer();
+    void clientKeepsReceiverLoadOnlyWhenNegotiated_data();
+    void clientKeepsReceiverLoadOnlyWhenNegotiated();
     void remoteTgxlClientRequiresHandshakeMinorAndCapability();
     void remoteFourO3AClientRequiresHandshakeMinorAndCapability();
     void remoteFourO3AServerRejectsPreAuthAndOldMinor();
@@ -628,10 +632,24 @@ StationHostTelemetry hostSample()
     host.hottestZoneName = QStringLiteral("bigcore0-thermal");
     return host;
 }
+
+QVector<StationReceiverTelemetry> receiverSample()
+{
+    StationReceiverTelemetry a;
+    a.sliceId = 0;
+    a.loadPercent = 37.5;
+    a.inputDelayMs = 4;
+    a.skippedInputMs = 0;
+    StationReceiverTelemetry b;
+    b.sliceId = 1;
+    b.inputDelayMs = 0; // processed nothing this interval: load absent
+    b.skippedInputMs = 250;
+    return {a, b};
+}
 } // namespace
 
-// R-R3-32/33: a current GUI and Core negotiate minor 10 and telemetry
-// version 2, and the host section arrives intact.
+// R-R3-32/33: a current GUI and Core negotiate the current minor and
+// telemetry version 3, and the host section arrives intact.
 void TstStationSession::hostTelemetryReachesVersionTwoPeer()
 {
     QTemporaryDir settingsDir;
@@ -639,7 +657,7 @@ void TstStationSession::hostTelemetryReachesVersionTwoPeer()
     auto model = makeStationRadioModel(0);
     StationServer server(model.get(), settings, m_securityDir.path());
     server.setTelemetryEnabled(true);
-    QCOMPARE(server.buildCapabilities().stationTelemetryVersion, 2);
+    QCOMPARE(server.buildCapabilities().stationTelemetryVersion, 3);
     RadioModel remote(RadioModel::Role::Remote);
     SettingsProxy proxy;
     StationClient client(&remote, &proxy);
@@ -650,7 +668,7 @@ void TstStationSession::hostTelemetryReachesVersionTwoPeer()
     client.startSession(peer, server.token());
     server.acceptTransport(station);
     QTRY_VERIFY(client.telemetryAvailable());
-    QCOMPARE(client.agreedMinor(), kCoreHostTelemetrySessionProtocolMinor);
+    QCOMPARE(client.agreedMinor(), kSessionProtocolMinor);
 
     StationTelemetrySnapshot snapshot;
     snapshot.sequence = 1;
@@ -692,6 +710,7 @@ void TstStationSession::hostTelemetryIsOmittedForMinorNinePeer()
     snapshot.sequence = 2;
     snapshot.sampledElapsedMs = 1000;
     snapshot.host = hostSample();
+    snapshot.receivers = receiverSample();
     QVERIFY(server.sendTelemetry(snapshot, server.sessionEpoch()));
     QByteArray wire;
     QTRY_VERIFY([&] {
@@ -713,6 +732,7 @@ void TstStationSession::hostTelemetryIsOmittedForMinorNinePeer()
     withoutHost.kind = SessionMessageKind::StationTelemetry;
     withoutHost.telemetry = snapshot;
     withoutHost.telemetry.host = {};
+    withoutHost.telemetry.receivers.reset();
     QCOMPARE(wire, SessionMessages::encode(withoutHost));
 }
 
@@ -764,6 +784,161 @@ void TstStationSession::clientKeepsHostTelemetryOnlyWhenNegotiated()
     const auto received = qvariant_cast<StationTelemetrySnapshot>(samples.first().at(0));
     QCOMPARE(!received.host.isEmpty(), kept);
     QCOMPARE(received.host.hottestZoneName.isEmpty(), !kept);
+}
+
+// R-R3-40: a current GUI and Core negotiate minor 11 and telemetry version
+// 3, and each receiver's load arrives intact next to the host section.
+void TstStationSession::receiverLoadReachesVersionThreePeer()
+{
+    QTemporaryDir settingsDir;
+    AppSettings settings(settingsDir.filePath(QStringLiteral("receiver-load.settings")));
+    auto model = makeStationRadioModel(0);
+    StationServer server(model.get(), settings, m_securityDir.path());
+    server.setTelemetryEnabled(true);
+    QCOMPARE(server.buildCapabilities().stationTelemetryVersion, 3);
+    RadioModel remote(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&remote, &proxy);
+    QSignalSpy samples(&client, &StationClient::telemetryReceived);
+    auto* station = new LoopbackTransport(QStringLiteral("receiver-load-station"), this);
+    auto* peer = new LoopbackTransport(QStringLiteral("receiver-load-client"), this);
+    station->linkTo(peer);
+    client.startSession(peer, server.token());
+    server.acceptTransport(station);
+    QTRY_VERIFY(client.telemetryAvailable());
+    QCOMPARE(kSessionProtocolMinor, kReceiverLoadSessionProtocolMinor);
+    QCOMPARE(client.agreedMinor(), kReceiverLoadSessionProtocolMinor);
+
+    StationTelemetrySnapshot snapshot;
+    snapshot.sequence = 1;
+    snapshot.host = hostSample();
+    snapshot.receivers = receiverSample();
+    QVERIFY(server.sendTelemetry(snapshot, server.sessionEpoch()));
+    QTRY_COMPARE(samples.count(), 1);
+    const auto received = qvariant_cast<StationTelemetrySnapshot>(samples.first().at(0));
+    QVERIFY(received.receivers);
+    QCOMPARE(received.receivers->size(), 2);
+    QCOMPARE(received.receivers->at(0).sliceId, 0);
+    QCOMPARE(received.receivers->at(0).loadPercent, std::optional<double>(37.5));
+    QCOMPARE(received.receivers->at(0).inputDelayMs, 4LL);
+    QCOMPARE(received.receivers->at(1).sliceId, 1);
+    QVERIFY(!received.receivers->at(1).loadPercent);
+    QCOMPARE(received.receivers->at(1).skippedInputMs, 250LL);
+    QCOMPARE(received.host.hottestZoneName, QStringLiteral("bigcore0-thermal"));
+
+    // Measured with no receiver reading yet stays distinct from absent.
+    snapshot.sequence = 2;
+    snapshot.receivers = QVector<StationReceiverTelemetry>{};
+    QVERIFY(server.sendTelemetry(snapshot, server.sessionEpoch()));
+    QTRY_COMPARE(samples.count(), 2);
+    const auto empty = qvariant_cast<StationTelemetrySnapshot>(samples.last().at(0));
+    QVERIFY(empty.receivers);
+    QVERIFY(empty.receivers->isEmpty());
+    client.disconnectFromStation(QStringLiteral("receiver load complete"));
+}
+
+// A minor-10 GUI receives exactly the telemetry a minor-10 Core sends:
+// radio, audio and host, and no receivers section.
+void TstStationSession::receiverLoadIsOmittedForMinorTenPeer()
+{
+    QTemporaryDir settingsDir;
+    AppSettings settings(settingsDir.filePath(QStringLiteral("receiver-load-old.settings")));
+    auto model = makeStationRadioModel(0);
+    StationServer server(model.get(), settings, m_securityDir.path());
+    server.setTelemetryEnabled(true);
+    auto* station = new LoopbackTransport(QStringLiteral("minor10-metrics-station"), this);
+    auto* peer = new LoopbackTransport(QStringLiteral("minor10-metrics-client"), this);
+    station->linkTo(peer);
+    server.acceptTransport(station);
+    peer->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor, kReceiverLoadSessionProtocolMinor - 1, 6,
+        QStringLiteral("minor-10-client"))));
+    peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
+    QTRY_VERIFY(server.telemetryAvailable());
+    peer->clearReceived();
+
+    StationTelemetrySnapshot snapshot;
+    snapshot.sequence = 3;
+    snapshot.sampledElapsedMs = 2000;
+    snapshot.host.systemCpuPercent = 23.5;
+    snapshot.host.memoryTotalKiB = 8000000;
+    snapshot.receivers = receiverSample();
+    QVERIFY(server.sendTelemetry(snapshot, server.sessionEpoch()));
+    QByteArray wire;
+    QTRY_VERIFY([&] {
+        for (const QByteArray& message : peer->received()) {
+            if (QJsonDocument::fromJson(message).object().value(QStringLiteral("type"))
+                    == QStringLiteral("station.metrics.v1")) {
+                wire = message;
+                return true;
+            }
+        }
+        return false;
+    }());
+    // Today's minor-10 wire, written out: the host section and nothing more.
+    const QByteArray golden =
+        R"({"payload":{"audio":{"active":false,"contextGeneration":0},)"
+        R"("host":{"memoryTotalKiB":8000000,"systemCpuPercent":23.5},)"
+        R"("radio":{"connected":false},"sampledElapsedMs":2000,"sequence":3},)"
+        R"("type":"station.metrics.v1"})";
+    QCOMPARE(wire, golden);
+    SessionMessage withoutReceivers;
+    withoutReceivers.kind = SessionMessageKind::StationTelemetry;
+    withoutReceivers.telemetry = snapshot;
+    withoutReceivers.telemetry.receivers.reset();
+    QCOMPARE(wire, SessionMessages::encode(withoutReceivers));
+}
+
+// The GUI accepts receiver load only from a Core that negotiated both minor
+// 11 and telemetry version 3; anything else is delivered without it.
+void TstStationSession::clientKeepsReceiverLoadOnlyWhenNegotiated_data()
+{
+    QTest::addColumn<int>("minor");
+    QTest::addColumn<int>("version");
+    QTest::addColumn<bool>("kept");
+    QTest::newRow("minor 11, version 3")
+        << int(kReceiverLoadSessionProtocolMinor) << 3 << true;
+    QTest::newRow("minor 11, version 2")
+        << int(kReceiverLoadSessionProtocolMinor) << 2 << false;
+    QTest::newRow("minor 10, version 3")
+        << int(kReceiverLoadSessionProtocolMinor - 1) << 3 << false;
+}
+
+void TstStationSession::clientKeepsReceiverLoadOnlyWhenNegotiated()
+{
+    QFETCH(int, minor);
+    QFETCH(int, version);
+    QFETCH(bool, kept);
+    RadioModel remote(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&remote, &proxy);
+    QSignalSpy samples(&client, &StationClient::telemetryReceived);
+    auto* station = new LoopbackTransport(QStringLiteral("raw-receivers-station"), this);
+    auto* peer = new LoopbackTransport(QStringLiteral("raw-receivers-client"), this);
+    station->linkTo(peer);
+    client.startSession(peer, QStringLiteral("test-token"));
+    const auto send = [&](const SessionMessage& message) {
+        station->sendText(SessionMessages::encode(message));
+    };
+    send(SessionMessages::hello(kSessionProtocolMajor, static_cast<quint16>(minor), 6,
+                                QStringLiteral("station")));
+    send(SessionMessages::authResult(true, {}, false));
+    StationCapabilities caps;
+    caps.stationTelemetryVersion = version;
+    send(SessionMessages::capabilities(caps.toUpdates()));
+    send(SessionMessages::snapshotComplete());
+    QTRY_VERIFY(client.telemetryAvailable());
+    SessionMessage sample;
+    sample.kind = SessionMessageKind::StationTelemetry;
+    sample.telemetry.sequence = 1;
+    sample.telemetry.host = hostSample();
+    sample.telemetry.receivers = receiverSample();
+    send(sample);
+    QTRY_COMPARE(samples.count(), 1);
+    const auto received = qvariant_cast<StationTelemetrySnapshot>(samples.first().at(0));
+    QCOMPARE(received.receivers.has_value(), kept);
+    // The host section follows its own negotiation, untouched by this one.
+    QCOMPARE(received.host.isEmpty(), version < 2);
 }
 
 void TstStationSession::remoteTgxlClientRequiresHandshakeMinorAndCapability()
