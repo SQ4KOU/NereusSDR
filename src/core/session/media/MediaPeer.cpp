@@ -79,18 +79,24 @@ bool isDescriptionType(const QString& type)
     return type == QLatin1String("offer") || type == QLatin1String("answer");
 }
 
-quint32 audioSsrcForConnection(const QString& connectionId)
+// The first four bytes of SHA-256(identity), big-endian.
+quint32 digestSsrc(const QByteArray& identity)
 {
-    QByteArray identity("NereusSDR/media-audio-ssrc/v1:");
-    identity.append(connectionId.toUtf8());
     const QByteArray digest = QCryptographicHash::hash(
         identity, QCryptographicHash::Sha256);
     const auto* bytes = reinterpret_cast<const unsigned char*>(
         digest.constData());
-    const quint32 derived = (static_cast<quint32>(bytes[0]) << 24)
+    return (static_cast<quint32>(bytes[0]) << 24)
         | (static_cast<quint32>(bytes[1]) << 16)
         | (static_cast<quint32>(bytes[2]) << 8)
         | static_cast<quint32>(bytes[3]);
+}
+
+quint32 audioSsrcForConnection(const QString& connectionId)
+{
+    QByteArray identity("NereusSDR/media-audio-ssrc/v1:");
+    identity.append(connectionId.toUtf8());
+    const quint32 derived = digestSsrc(identity);
     return derived == 0 ? 1 : derived;
 }
 
@@ -111,6 +117,8 @@ struct MediaPeer::Private {
     QString connectionId;
     IMediaTransport::Role role = IMediaTransport::Role::Answerer;
     quint32 audioSsrc = 0;
+    // R-R3-43: empty unless receiver audio streams were asked for.
+    QList<quint32> receiverAudioSsrcs;
     quint64 generation = 0;
     int remoteCandidateControls = 0;
     int localCandidateControls = 0;
@@ -142,7 +150,8 @@ MediaPeer::~MediaPeer()
 }
 
 bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
-                      int audioTargetBitrate, bool offerLosslessAudio)
+                      int audioTargetBitrate, bool offerLosslessAudio,
+                      bool receiverAudioStreams)
 {
     d->startRefusal = StartRefusal::None;
     if (d->started || !isCanonicalConnectionId(connectionId)) {
@@ -176,6 +185,8 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
     d->connectionId = connectionId;
     d->role = role;
     d->audioSsrc = audioSsrcForConnection(connectionId);
+    d->receiverAudioSsrcs = receiverAudioStreams
+        ? receiverAudioSsrcsForConnection(connectionId) : QList<quint32>{};
     d->remoteCandidateControls = 0;
     d->localCandidateControls = 0;
     d->remoteDescriptionAccepted = false;
@@ -261,9 +272,11 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
                 if (!isCurrentGeneration()) {
                     return;
                 }
+                // R-R3-43: the main stream or a declared receiver stream;
+                // anything else is refused and reported, as always.
                 if (packet.size() < IMediaTransport::kMinRawRtpBytes
                     || packet.size() > IMediaTransport::kMaxRawRtpBytes
-                    || rtpSsrc(packet) != self->d->audioSsrc) {
+                    || !self->isDeclaredAudioSsrc(rtpSsrc(packet))) {
                     emit self->errorOccurred(
                         QStringLiteral("invalid raw RTP packet rejected"));
                     return;
@@ -316,6 +329,7 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
     d->transportStartError = false;
     IMediaTransport::StartOptions options{role, d->audioSsrc, audioTargetBitrate};
     options.offerLosslessAudio = offerLosslessAudio;
+    options.receiverAudioSsrcs = d->receiverAudioSsrcs;
     const bool backendStarted = transport->start(options);
     if (!self) {
         return false;
@@ -362,6 +376,7 @@ void MediaPeer::stopInternal(bool notify)
     d->pendingCandidates.clear();
     d->connectionId.clear();
     d->audioSsrc = 0;
+    d->receiverAudioSsrcs.clear();
 
     QPointer<IMediaTransport> transport = d->transport;
     d->transport.clear();
@@ -490,7 +505,7 @@ bool MediaPeer::sendRtp(const QByteArray& packet)
     return d->started && d->transport
         && packet.size() >= IMediaTransport::kMinRawRtpBytes
         && packet.size() <= IMediaTransport::kMaxRawRtpBytes
-        && rtpSsrc(packet) == d->audioSsrc
+        && isDeclaredAudioSsrc(rtpSsrc(packet))
         && d->transport->sendRtp(packet);
 }
 
@@ -513,6 +528,36 @@ QString MediaPeer::connectionId() const
 quint32 MediaPeer::audioSsrc() const
 {
     return d->audioSsrc;
+}
+
+QList<quint32> MediaPeer::receiverAudioSsrcs() const
+{
+    return d->receiverAudioSsrcs;
+}
+
+QList<quint32> MediaPeer::receiverAudioSsrcsForConnection(const QString& connectionId)
+{
+    const quint32 mainSsrc = audioSsrcForConnection(connectionId);
+    QList<quint32> ssrcs;
+    ssrcs.reserve(IMediaTransport::kMaxReceiverAudioStreams);
+    for (int receiver = 0; receiver < IMediaTransport::kMaxReceiverAudioStreams; ++receiver) {
+        QByteArray identity("NereusSDR/media-receiver-ssrc/v1:");
+        identity.append(QByteArray::number(receiver));
+        identity.append(':');
+        identity.append(connectionId.toUtf8());
+        quint32 ssrc = digestSsrc(identity);
+        while (ssrc == 0 || ssrc == mainSsrc || ssrcs.contains(ssrc)) {
+            ++ssrc;
+        }
+        ssrcs.append(ssrc);
+    }
+    return ssrcs;
+}
+
+bool MediaPeer::isDeclaredAudioSsrc(quint32 ssrc) const
+{
+    return ssrc != 0
+        && (ssrc == d->audioSsrc || d->receiverAudioSsrcs.contains(ssrc));
 }
 
 std::optional<MediaPeerTelemetry> MediaPeer::telemetry() const

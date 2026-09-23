@@ -8,7 +8,9 @@
 
 #include "core/session/media/MediaPeer.h"
 
+#include <QCryptographicHash>
 #include <QPointer>
+#include <QSet>
 #include <QSignalSpy>
 #include <QThread>
 #include <QtTest>
@@ -73,6 +75,7 @@ public:
         started = startSucceeds;
         startedRole = options.role;
         startedSsrc = options.localAudioSsrc;
+        startedReceiverSsrcs = options.receiverAudioSsrcs;
         return started;
     }
 
@@ -135,6 +138,7 @@ public:
     bool readyState = false;
     Role startedRole = Role::Answerer;
     quint32 startedSsrc = 0;
+    QList<quint32> startedReceiverSsrcs;
     QList<QPair<QString, QString>> descriptions;
     QList<QPair<QString, QString>> candidates;
     QList<QByteArray> sentDisplay;
@@ -167,6 +171,9 @@ private slots:
     void signalHandlersMayRestartOrDeletePeer();
     void realPeersExchangeQueuedControlAndDirectMedia();
     void startRefusalsAreTyped();
+    void receiverSsrcsAreDerivedAndDistinct();
+    void receiverStreamsFollowTheStartOption();
+    void realPeersCarryDeclaredReceiverStreams();
 };
 
 void TestMediaPeer::terminalConnectionFailureIsTypedAndGenerationScoped()
@@ -587,6 +594,186 @@ void TestMediaPeer::startRefusalsAreTyped()
     MediaPeer empty(nullptr, [](QObject*) -> IMediaTransport* { return nullptr; });
     QVERIFY(!empty.start(IMediaTransport::Role::Answerer, QLatin1String(kConnectionA)));
     QCOMPARE(empty.lastStartRefusal(), Refusal::InvalidTransport);
+}
+
+// R-R3-43: receiver n's SSRC is the first four big-endian bytes of
+// SHA-256("NereusSDR/media-receiver-ssrc/v1:<n>:" + connection id), distinct
+// from the main SSRC, from each other and from zero, and the same on both
+// peers.
+void TestMediaPeer::receiverSsrcsAreDerivedAndDistinct()
+{
+    for (const char* connection : {kConnectionA, kConnectionB}) {
+        const QString connectionId = QLatin1String(connection);
+        const QList<quint32> ssrcs = MediaPeer::receiverAudioSsrcsForConnection(connectionId);
+        QCOMPARE(ssrcs.size(), IMediaTransport::kMaxReceiverAudioStreams);
+        QCOMPARE(MediaPeer::receiverAudioSsrcsForConnection(connectionId), ssrcs);
+
+        MediaPeer peer(nullptr, [](QObject* parent) -> IMediaTransport* {
+            return new FakeTransport(parent);
+        });
+        QVERIFY(peer.start(IMediaTransport::Role::Answerer, connectionId));
+        QSet<quint32> distinct{peer.audioSsrc()};
+        for (int receiver = 0; receiver < ssrcs.size(); ++receiver) {
+            const QByteArray digest = QCryptographicHash::hash(
+                QByteArray("NereusSDR/media-receiver-ssrc/v1:")
+                    + QByteArray::number(receiver) + ':' + connectionId.toUtf8(),
+                QCryptographicHash::Sha256);
+            const quint32 derived = (quint32(quint8(digest[0])) << 24)
+                | (quint32(quint8(digest[1])) << 16)
+                | (quint32(quint8(digest[2])) << 8) | quint32(quint8(digest[3]));
+            // No collision in these connections, so the digest stands as is.
+            QCOMPARE(ssrcs.at(receiver), derived);
+            QVERIFY(ssrcs.at(receiver) != 0);
+            distinct.insert(ssrcs.at(receiver));
+        }
+        QCOMPARE(distinct.size(), 1 + IMediaTransport::kMaxReceiverAudioStreams);
+    }
+    QVERIFY(MediaPeer::receiverAudioSsrcsForConnection(QLatin1String(kConnectionA))
+            != MediaPeer::receiverAudioSsrcsForConnection(QLatin1String(kConnectionB)));
+}
+
+// R-R3-43: without the option the transport is asked for nothing new and
+// only the main SSRC is sent or accepted, as today. With it, the transport
+// gets this connection's four receiver SSRCs and exactly that set passes
+// both filters; anything else is refused and reported, as always.
+void TestMediaPeer::receiverStreamsFollowTheStartOption()
+{
+    QList<QPointer<FakeTransport>> transports;
+    MediaPeer peer(nullptr, [&transports](QObject* parent) -> IMediaTransport* {
+        auto* transport = new FakeTransport(parent);
+        transports.push_back(transport);
+        return transport;
+    });
+    QSignalSpy received(&peer, &MediaPeer::rtpReceived);
+    QSignalSpy errors(&peer, &MediaPeer::errorOccurred);
+    const QList<quint32> receivers =
+        MediaPeer::receiverAudioSsrcsForConnection(QLatin1String(kConnectionA));
+
+    // Today.
+    QVERIFY(peer.start(IMediaTransport::Role::Answerer, QLatin1String(kConnectionA)));
+    FakeTransport* today = transports.constLast();
+    QVERIFY(today->startedReceiverSsrcs.isEmpty());
+    QVERIFY(peer.receiverAudioSsrcs().isEmpty());
+    today->fireReady();
+    QVERIFY(peer.sendRtp(rtpPacket(1, peer.audioSsrc())));
+    QVERIFY(!peer.sendRtp(rtpPacket(2, receivers.at(0))));
+    QCOMPARE(today->sentRtp.size(), 1);
+    today->fireRtp(rtpPacket(3, receivers.at(0)));
+    QCOMPARE(received.size(), 0);
+    QCOMPARE(errors.size(), 1);
+    QCOMPARE(errors.constLast().constFirst().toString(),
+             QStringLiteral("invalid raw RTP packet rejected"));
+    peer.stop();
+
+    // Asked for.
+    QVERIFY(peer.start(IMediaTransport::Role::Answerer, QLatin1String(kConnectionA),
+                       IMediaTransport::kDefaultAudioTargetBitrate, false, true));
+    FakeTransport* asked = transports.constLast();
+    QCOMPARE(asked->startedSsrc, peer.audioSsrc());
+    QCOMPARE(asked->startedReceiverSsrcs, receivers);
+    QCOMPARE(peer.receiverAudioSsrcs(), receivers);
+    asked->fireReady();
+    QList<QByteArray> sent{rtpPacket(10, peer.audioSsrc())};
+    for (const quint32 ssrc : receivers) {
+        sent << rtpPacket(static_cast<quint16>(11 + sent.size()), ssrc);
+    }
+    for (const QByteArray& packet : sent) {
+        QVERIFY(peer.sendRtp(packet));
+        asked->fireRtp(packet);
+    }
+    QCOMPARE(asked->sentRtp, sent);
+    QCOMPARE(received.size(), sent.size());
+    for (qsizetype index = 0; index < sent.size(); ++index) {
+        QCOMPARE(received.at(index).at(0).toByteArray(), sent.at(index));
+    }
+    QCOMPARE(errors.size(), 1);
+
+    // Undeclared: the connection B receiver ids and a neighbour of the main id.
+    const QList<quint32> undeclared{
+        MediaPeer::receiverAudioSsrcsForConnection(QLatin1String(kConnectionB)).at(0),
+        peer.audioSsrc() + 1,
+    };
+    for (const quint32 ssrc : undeclared) {
+        QVERIFY(!receivers.contains(ssrc));
+        QVERIFY(!peer.sendRtp(rtpPacket(30, ssrc)));
+        asked->fireRtp(rtpPacket(31, ssrc));
+    }
+    QCOMPARE(asked->sentRtp.size(), sent.size());
+    QCOMPARE(received.size(), sent.size());
+    QCOMPARE(errors.size(), 1 + undeclared.size());
+    QCOMPARE(errors.constLast().constFirst().toString(),
+             QStringLiteral("invalid raw RTP packet rejected"));
+
+    // Stopping forgets the set.
+    peer.stop();
+    QVERIFY(peer.receiverAudioSsrcs().isEmpty());
+}
+
+// R-R3-43 over real peers: when both ask, a receiver stream crosses beside
+// the main one and the offer declares it. When the Core declares receiver
+// streams but the GUI did not ask, the GUI refuses and reports them.
+void TestMediaPeer::realPeersCarryDeclaredReceiverStreams()
+{
+    for (const bool answererAsks : {true, false}) {
+        MediaPeer offerer;
+        MediaPeer answerer;
+        connect(&offerer, &MediaPeer::controlReady, &answerer,
+                [&answerer](const QJsonObject& control) {
+                    QVERIFY(answerer.acceptControl(control));
+                }, Qt::QueuedConnection);
+        connect(&answerer, &MediaPeer::controlReady, &offerer,
+                [&offerer](const QJsonObject& control) {
+                    QVERIFY(offerer.acceptControl(control));
+                }, Qt::QueuedConnection);
+        QSignalSpy offerReady(&offerer, &MediaPeer::ready);
+        QSignalSpy answerReady(&answerer, &MediaPeer::ready);
+        QSignalSpy offerControls(&offerer, &MediaPeer::controlReady);
+        QSignalSpy rtpReceived(&answerer, &MediaPeer::rtpReceived);
+        QSignalSpy answerErrors(&answerer, &MediaPeer::errorOccurred);
+        QVERIFY(answerer.start(IMediaTransport::Role::Answerer, QLatin1String(kConnectionA),
+                               IMediaTransport::kDefaultAudioTargetBitrate, false,
+                               answererAsks));
+        QVERIFY(offerer.start(IMediaTransport::Role::Offerer, QLatin1String(kConnectionA),
+                              IMediaTransport::kDefaultAudioTargetBitrate, false, true));
+        QTRY_COMPARE_WITH_TIMEOUT(offerReady.size(), 1, 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(answerReady.size(), 1, 10000);
+
+        const QList<quint32> receivers = offerer.receiverAudioSsrcs();
+        QCOMPARE(receivers.size(), IMediaTransport::kMaxReceiverAudioStreams);
+        QCOMPARE(answerer.receiverAudioSsrcs(),
+                 answererAsks ? receivers : QList<quint32>{});
+        QString offer;
+        for (const QList<QVariant>& arguments : offerControls) {
+            const QJsonObject control = arguments.at(0).toJsonObject();
+            if (control.value(QStringLiteral("op")).toString() == QStringLiteral("description")) {
+                offer = control.value(QStringLiteral("sdp")).toString();
+            }
+        }
+        for (int receiver = 0; receiver < receivers.size(); ++receiver) {
+            QVERIFY(offer.contains(QStringLiteral("a=ssrc:%1 cname:nereus-receiver-%2")
+                                       .arg(receivers.at(receiver))
+                                       .arg(receiver)));
+        }
+
+        const QByteArray main = rtpPacket(50, offerer.audioSsrc());
+        const QByteArray second = rtpPacket(51, receivers.at(1));
+        const QByteArray mainAfter = rtpPacket(52, offerer.audioSsrc());
+        QVERIFY(offerer.sendRtp(main));
+        QVERIFY(offerer.sendRtp(second));
+        QVERIFY(offerer.sendRtp(mainAfter));
+        if (answererAsks) {
+            QTRY_COMPARE_WITH_TIMEOUT(rtpReceived.size(), 3, 5000);
+            QCOMPARE(rtpReceived.at(1).at(0).toByteArray(), second);
+            QCOMPARE(answerErrors.size(), 0);
+        } else {
+            QTRY_COMPARE_WITH_TIMEOUT(rtpReceived.size(), 2, 5000);
+            QTRY_COMPARE_WITH_TIMEOUT(answerErrors.size(), 1, 5000);
+            QCOMPARE(answerErrors.constFirst().constFirst().toString(),
+                     QStringLiteral("invalid raw RTP packet rejected"));
+            QCOMPARE(rtpReceived.at(1).at(0).toByteArray(), mainAfter);
+        }
+        QCOMPARE(rtpReceived.at(0).at(0).toByteArray(), main);
+    }
 }
 
 QTEST_GUILESS_MAIN(TestMediaPeer)

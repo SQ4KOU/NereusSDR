@@ -15,6 +15,7 @@
 
 #include <QByteArray>
 #include <QJsonObject>
+#include <QList>
 #include <QObject>
 #include <QString>
 
@@ -43,9 +44,15 @@ public:
     // no audio and keeps the default.
     // offerLosslessAudio (R-R3-23): an offerer adds the L16 rtpmap to its
     // audio description; see IMediaTransport::StartOptions.
+    // receiverAudioStreams (R-R3-43): both sides set it for a GUI that asked
+    // for receiver audio. The offerer declares the
+    // IMediaTransport::kMaxReceiverAudioStreams receiver SSRCs of this
+    // connection beside the main one, and both sides send and accept
+    // exactly that set. Off, every description and filter is today's.
     bool start(IMediaTransport::Role role, const QString& connectionId,
                int audioTargetBitrate = IMediaTransport::kDefaultAudioTargetBitrate,
-               bool offerLosslessAudio = false);
+               bool offerLosslessAudio = false,
+               bool receiverAudioStreams = false);
     void stop();
 
     bool acceptControl(const QJsonObject& control);
@@ -79,6 +86,18 @@ public:
     bool losslessAudioNegotiated() const;
     QString connectionId() const;
     quint32 audioSsrc() const;
+    /// R-R3-43: the declared receiver audio SSRCs, receiver 0 first; empty
+    /// when receiver audio streams were not asked for or the peer is stopped.
+    QList<quint32> receiverAudioSsrcs() const;
+
+    /// R-R3-43: the SSRCs of receiver audio streams 0 to
+    /// IMediaTransport::kMaxReceiverAudioStreams - 1 for a connection.
+    /// Receiver n's is derived by SHA-256 over the ASCII
+    /// "NereusSDR/media-receiver-ssrc/v1:<n>:" followed by the connection id,
+    /// first four digest bytes big-endian. Zero, the main SSRC or an earlier
+    /// receiver's SSRC is replaced by the next integer (wrapping) until it is
+    /// none of these, so every id is distinct and both peers agree.
+    static QList<quint32> receiverAudioSsrcsForConnection(const QString& connectionId);
     std::optional<MediaPeerTelemetry> telemetry() const;
 
 signals:
@@ -97,6 +116,7 @@ private:
     Private* d;
 
     bool isCurrent(const IMediaTransport* transport, quint64 generation) const;
+    bool isDeclaredAudioSsrc(quint32 ssrc) const;
     void stopInternal(bool notify);
 };
 

@@ -46,6 +46,30 @@ an unsigned big-endian integer; zero maps to one. Both peers use this ID,
 and reject mismatching RTP. SSRC is a routing identity; authentication comes
 from the pinned WSS session and its negotiated DTLS peer.
 
+Receiver audio streams (R-R3-43) share the one audio m-line and its SRTP
+context with the main stream; only their SSRCs differ. Receiver stream `n`,
+for `n` from 0 to 3, has the SSRC formed the same way from the ASCII prefix
+`NereusSDR/media-receiver-ssrc/v1:`, the decimal `n`, a colon, then the
+canonical connection UUID. A value that is zero, equal to the main SSRC or
+equal to an earlier receiver's SSRC is replaced by the next integer (modulo
+2^32) until it is none of these, so the five IDs are distinct and both peers
+derive the same set. The receiver streams are declared only when both peers
+start the media connection with receiver audio (the GUI asked for it at
+`start`; the control that asks is defined with the receiver audio operation).
+Then Core's offer carries, after the main stream's
+`a=ssrc:<main> cname:nereus-mixed-stereo` line, one
+`a=ssrc:<receiver n> cname:nereus-receiver-<n>` line per receiver in order,
+and each peer sends and accepts exactly the main SSRC and the four receiver
+SSRCs. Without it the offer, the answer and every audio line are exactly as
+before, and only the main SSRC is sent or accepted. RTP with any other SSRC
+is refused and reported. The transport library itself does not refuse it:
+libdatachannel v0.24.5 hands every packet on a connection with one media
+line to that line's track whatever its SSRC (measured, not assumed), so the
+refusal is the media peer's receive filter. Each peer's queue of received
+RTP between drains holds 64 packets per declared stream, 256 ms of lossless
+audio (250 packets/s) for every stream: 64 packets without receiver
+streams, 320 with them; when full, the oldest packet is dropped.
+
 ## Display subscriptions
 
 GUI-to-Core `subscribe` has these exact additional fields:

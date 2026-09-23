@@ -38,7 +38,14 @@ constexpr int kOpusPayloadType = 111;
 constexpr std::size_t kMaxPendingEvents = 128;
 constexpr std::size_t kMaxPendingDisplayMessages = 8;
 constexpr std::size_t kMaxPendingDisplayBytes = 256 * 1024;
-constexpr std::size_t kMaxPendingRtpPackets = 64;
+// R-R3-43: every declared audio stream keeps the 256 ms of lossless cushion
+// the one main stream had: 64 packets at 250 packets/s.
+static_assert(IMediaTransport::kReceivedRtpPacketsPerStream * 1000
+                      / (PcmAudioCodecConfig::kSampleRate / PcmAudioCodecConfig::kPacketFrames)
+                  >= 256,
+              "each audio stream's receive queue must hold 256 ms of lossless audio");
+constexpr char kMainAudioStreamName[] = "nereus-mixed-stereo";
+constexpr char kReceiverAudioStreamPrefix[] = "nereus-receiver-";
 constexpr auto kRtpTimingWarningThreshold = std::chrono::milliseconds(80);
 constexpr auto kRtpTimingWarningInterval = std::chrono::seconds(1);
 
@@ -78,6 +85,9 @@ struct CallbackBridge {
     std::deque<rtc::binary> displayMessages;
     std::size_t displayBytes = 0;
     std::deque<PendingRtpPacket> rtpPackets;
+    // R-R3-43: kReceivedRtpPacketsPerStream for each declared audio stream.
+    std::size_t rtpPacketCapacity =
+        static_cast<std::size_t>(IMediaTransport::kReceivedRtpPacketsPerStream);
     std::chrono::steady_clock::time_point lastRtpReceipt;
     std::chrono::steady_clock::duration maxRtpCallbackGap {};
     std::size_t droppedRtpPackets = 0;
@@ -175,7 +185,7 @@ void queueRtp(const std::weak_ptr<CallbackBridge>& weak, rtc::binary data)
             bridge->maxRtpCallbackGap, receivedAt - bridge->lastRtpReceipt);
     }
     bridge->lastRtpReceipt = receivedAt;
-    if (bridge->rtpPackets.size() >= kMaxPendingRtpPackets) {
+    if (bridge->rtpPackets.size() >= bridge->rtpPacketCapacity) {
         bridge->rtpPackets.pop_front();
         ++bridge->droppedRtpPackets;
     }
@@ -263,6 +273,28 @@ quint32 rtpSsrc(const QByteArray& packet)
         | static_cast<quint32>(static_cast<quint8>(packet.at(11)));
 }
 
+// R-R3-43: the main stream or one of the declared receiver streams.
+bool isDeclaredAudioSsrc(quint32 ssrc, quint32 mainSsrc, const QList<quint32>& receiverSsrcs)
+{
+    return ssrc == mainSsrc || receiverSsrcs.contains(ssrc);
+}
+
+// R-R3-43: at most kMaxReceiverAudioStreams, none zero, none the main SSRC,
+// no repeats.
+bool validReceiverAudioSsrcs(quint32 mainSsrc, const QList<quint32>& receiverSsrcs)
+{
+    if (receiverSsrcs.size() > IMediaTransport::kMaxReceiverAudioStreams) {
+        return false;
+    }
+    for (qsizetype index = 0; index < receiverSsrcs.size(); ++index) {
+        const quint32 ssrc = receiverSsrcs.at(index);
+        if (ssrc == 0 || ssrc == mainSsrc || receiverSsrcs.indexOf(ssrc) != index) {
+            return false;
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 bool applyMediaSctpSettingsOnce()
@@ -321,6 +353,8 @@ struct LibDataChannelMediaTransport::Private {
     std::shared_ptr<rtc::Track> audio;
     Role role = Role::Answerer;
     quint32 localAudioSsrc = 0;
+    // R-R3-43: the declared receiver audio streams' SSRCs, empty for today.
+    QList<quint32> receiverAudioSsrcs;
     CandidatePolicy candidatePolicy = CandidatePolicy::HostOnly;
     bool started = false;
     bool ready = false;
@@ -350,13 +384,18 @@ LibDataChannelMediaTransport::~LibDataChannelMediaTransport()
 
 bool LibDataChannelMediaTransport::start(const StartOptions& options)
 {
-    if (d->started || options.localAudioSsrc == 0) {
+    if (d->started || options.localAudioSsrc == 0
+        || !validReceiverAudioSsrcs(options.localAudioSsrc, options.receiverAudioSsrcs)) {
         return false;
     }
 
     d->role = options.role;
     d->localAudioSsrc = options.localAudioSsrc;
+    d->receiverAudioSsrcs = options.receiverAudioSsrcs;
     d->bridge = std::make_shared<CallbackBridge>();
+    d->bridge->rtpPacketCapacity =
+        static_cast<std::size_t>(kReceivedRtpPacketsPerStream)
+        * static_cast<std::size_t>(1 + options.receiverAudioSsrcs.size());
     const std::weak_ptr<CallbackBridge> weak = d->bridge;
 
     try {
@@ -484,7 +523,14 @@ bool LibDataChannelMediaTransport::start(const StartOptions& options)
                 opus.addAudioCodec(PcmAudioCodecConfig::kPayloadType,
                                    l16RtpMapEncoding());
             }
-            opus.addSSRC(options.localAudioSsrc, "nereus-mixed-stereo");
+            opus.addSSRC(options.localAudioSsrc, kMainAudioStreamName);
+            // R-R3-43: receiver streams ride the same m-line, each declared
+            // by its own a=ssrc line after the main one, in list order. With
+            // none asked for, the offer is today's.
+            for (qsizetype index = 0; index < options.receiverAudioSsrcs.size(); ++index) {
+                opus.addSSRC(options.receiverAudioSsrcs.at(index),
+                             kReceiverAudioStreamPrefix + std::to_string(index));
+            }
             d->audio = d->peer->addTrack(opus);
             bindTrack(d->audio, weak);
         }
@@ -523,6 +569,7 @@ void LibDataChannelMediaTransport::stopInternal(bool notify)
     d->started = false;
     d->ready = false;
     d->localAudioSsrc = 0;
+    d->receiverAudioSsrcs.clear();
     d->remoteDescriptionAccepted = false;
     d->remoteDescribesLossless = false;
     d->acceptedCandidates = 0;
@@ -696,7 +743,7 @@ bool LibDataChannelMediaTransport::sendRtp(const QByteArray& packet)
     if (!d->ready || !d->audio || packet.size() < kMinRawRtpBytes
         || packet.size() > kMaxRawRtpBytes || d->audio->bufferedAmount() != 0
         || d->audio->maxMessageSize() < static_cast<std::size_t>(packet.size())
-        || rtpSsrc(packet) != d->localAudioSsrc) {
+        || !isDeclaredAudioSsrc(rtpSsrc(packet), d->localAudioSsrc, d->receiverAudioSsrcs)) {
         return false;
     }
     const std::shared_ptr<CallbackBridge> bridge = d->bridge;
