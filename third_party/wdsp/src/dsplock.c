@@ -1,7 +1,8 @@
 // no-port-check: NereusSDR-original WDSP scheduling glue. Not a port of
 // Thetis or WDSP logic; it schedules the existing per-channel csDSP lock so
 // control calls are not starved by a busy DSP worker, and lets channel
-// teardown wait for the worker to leave its loop.
+// teardown wait for the worker to leave its loop, and times each worker block
+// so the application can see how loaded each channel is.
 
 /*  dsplock.c
 
@@ -59,8 +60,18 @@ boydsoftprez@gmail.com
 // teardown of a channel waits for the Nth exit; a worker that has not yet
 // been scheduled still sees run cleared and exits at once.
 //
+// Load: WdspWorkerEnter reads a monotonic clock right after the worker
+// acquires csDSP and WdspWorkerLeave reads it again just before the release,
+// so the block time is the whole locked section (including the test block
+// delay). The worker alone adds that time to per-channel 64-bit atomic
+// counters; GetChannelDspLoad reads them without csDSP, so reading never
+// makes the worker wait. The cost to the worker is two clock reads and a few
+// atomic stores per block.
+//
 // Portability: Windows uses only Interlocked*, QueryPerformanceCounter and
-// SwitchToThread, which WDSP already relies on; POSIX uses GCC/Clang atomic
+// SwitchToThread, which WDSP already relies on (the load counters use
+// InterlockedExchangeAdd64, InterlockedExchange64 and
+// InterlockedCompareExchange64); POSIX uses GCC/Clang atomic
 // builtins, clock_gettime and nanosleep, as linux_port.c does.
 //
 // =================================================================
@@ -70,6 +81,9 @@ boydsoftprez@gmail.com
 //   2026-09-23 - Worker-exit signal and WdspWaitWorkerExit added by
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code (R-R3-39).
+//   2026-09-23 - Per-channel block timing and GetChannelDspLoad added by
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code (R-R3-40).
 // =================================================================
 
 #include "comm.h"
@@ -104,6 +118,16 @@ static volatile long worker_exits[MAX_CHANNELS];
 // Times teardown has waited for each channel's worker (control thread only).
 static volatile long worker_exit_waits[MAX_CHANNELS];
 
+// Per-channel load counters (see WdspChannelLoad). Written only by the
+// channel's worker, read by GetChannelDspLoad from any thread.
+static volatile long long load_blocks[MAX_CHANNELS];
+static volatile long long load_busy_ns[MAX_CHANNELS];
+static volatile long long load_late_blocks[MAX_CHANNELS];
+static volatile long long load_max_block_us[MAX_CHANNELS];
+static volatile long load_block_period_us[MAX_CHANNELS];
+// When the worker acquired csDSP for its current block (worker only).
+static int64_t block_start_ns[MAX_CHANNELS];
+
 static int64_t dsplock_now_us (void)
 {
 #ifdef _WIN32
@@ -116,6 +140,57 @@ static int64_t dsplock_now_us (void)
 	struct timespec now;
 	clock_gettime (CLOCK_MONOTONIC, &now);
 	return (int64_t)now.tv_sec * 1000000 + (int64_t)now.tv_nsec / 1000;
+#endif
+}
+
+static int64_t dsplock_now_ns (void)
+{
+#ifdef _WIN32
+	LARGE_INTEGER frequency, counter;
+	QueryPerformanceFrequency (&frequency);
+	QueryPerformanceCounter (&counter);
+	return (int64_t)(counter.QuadPart / frequency.QuadPart) * 1000000000
+		+ (int64_t)(counter.QuadPart % frequency.QuadPart) * 1000000000 / frequency.QuadPart;
+#else
+	struct timespec now;
+	clock_gettime (CLOCK_MONOTONIC, &now);
+	return (int64_t)now.tv_sec * 1000000000 + (int64_t)now.tv_nsec;
+#endif
+}
+
+static void load_add64 (volatile long long* target, long long value)
+{
+#ifdef _WIN32
+	InterlockedExchangeAdd64 (target, value);
+#else
+	__atomic_fetch_add (target, value, __ATOMIC_RELEASE);
+#endif
+}
+
+static void load_store64 (volatile long long* target, long long value)
+{
+#ifdef _WIN32
+	InterlockedExchange64 (target, value);
+#else
+	__atomic_store_n (target, value, __ATOMIC_RELEASE);
+#endif
+}
+
+static long long load_read64 (volatile long long* source)
+{
+#ifdef _WIN32
+	return InterlockedCompareExchange64 (source, 0, 0);
+#else
+	return __atomic_load_n (source, __ATOMIC_ACQUIRE);
+#endif
+}
+
+static long load_read32 (volatile long* source)
+{
+#ifdef _WIN32
+	return InterlockedCompareExchange (source, 0, 0);
+#else
+	return __atomic_load_n (source, __ATOMIC_ACQUIRE);
 #endif
 }
 
@@ -259,12 +334,41 @@ void WdspWorkerEnter (int channel)
 	EnterCriticalSection (&ch[channel].csDSP);
 	if (valid_channel (channel))
 	{
+		block_start_ns[channel] = dsplock_now_ns ();
 		test_block_delay (channel);
 	}
 }
 
+// Worker only, csDSP held: adds the block that just ended to the counters.
+static void record_block (int channel)
+{
+	const int64_t elapsed_ns = dsplock_now_ns () - block_start_ns[channel];
+	const long long elapsed_us = (long long)(elapsed_ns / 1000);
+	const int64_t size = ch[channel].dsp_size;
+	const int64_t rate = ch[channel].dsp_rate;
+	const long period_us = (size > 0 && rate > 0) ? (long)(size * 1000000 / rate) : 0L;
+	load_add64 (&load_busy_ns[channel], (long long)elapsed_ns);
+	if (period_us > 0 && elapsed_us > period_us)
+	{
+		load_add64 (&load_late_blocks[channel], 1);
+	}
+	if (elapsed_us > load_max_block_us[channel])
+	{
+		load_store64 (&load_max_block_us[channel], elapsed_us);
+	}
+	if (period_us != load_block_period_us[channel])
+	{
+		InterlockedExchange (&load_block_period_us[channel], period_us);
+	}
+	load_add64 (&load_blocks[channel], 1);
+}
+
 void WdspWorkerLeave (int channel)
 {
+	if (valid_channel (channel))
+	{
+		record_block (channel);
+	}
 	LeaveCriticalSection (&ch[channel].csDSP);
 }
 
@@ -316,6 +420,23 @@ void WDSPSetTestBlockDelayUs (int channel, int microseconds)
 		return;
 	}
 	InterlockedExchange (&test_block_delay_us[channel], microseconds > 0 ? (long)microseconds : 0L);
+}
+
+PORT
+int GetChannelDspLoad (int channel, WdspChannelLoad* out)
+{
+	if (!valid_channel (channel) || out == 0)
+	{
+		return -1;
+	}
+	// blocks first: the worker bumps it last, so every block it counts has
+	// already been added to the other fields.
+	out->blocks = load_read64 (&load_blocks[channel]);
+	out->busyNs = load_read64 (&load_busy_ns[channel]);
+	out->lateBlocks = load_read64 (&load_late_blocks[channel]);
+	out->maxBlockUs = load_read64 (&load_max_block_us[channel]);
+	out->blockPeriodUs = (int)load_read32 (&load_block_period_us[channel]);
+	return 0;
 }
 
 PORT

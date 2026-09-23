@@ -16,6 +16,10 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-23 - dspLoad() reader for the WDSP worker's per-block load
+//                 counters (R-R3-40) by J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
+//                 NereusSDR-original; no Thetis counterpart.
 // =================================================================
 
 //=================================================================
@@ -1916,6 +1920,31 @@ double RxChannel::getMeter(RxMeterType type) const
 #else
     Q_UNUSED(type);
     return -140.0;
+#endif
+}
+
+// NereusSDR-original (R-R3-40): reads the WDSP worker's load counters from
+// dsplock.c. GetChannelDspLoad takes no lock, so this never waits for the
+// worker.
+bool RxChannel::dspLoad(DspLoadCounters& out) const
+{
+    out = DspLoadCounters{};
+#ifdef HAVE_WDSP
+    if (!wdspChannelInRange()) {
+        return false;
+    }
+    WdspChannelLoad load{};
+    if (GetChannelDspLoad(m_channelId, &load) != 0) {
+        return false;
+    }
+    out.blocks        = load.blocks;
+    out.busyNs        = load.busyNs;
+    out.lateBlocks    = load.lateBlocks;
+    out.maxBlockUs    = load.maxBlockUs;
+    out.blockPeriodUs = load.blockPeriodUs;
+    return true;
+#else
+    return false;
 #endif
 }
 

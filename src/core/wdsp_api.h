@@ -168,6 +168,12 @@
 //                 NereusSDR-original test seam exported from
 //                 third_party/wdsp/src/dsplock.c; no Thetis counterpart.
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-23  WdspChannelLoad and GetChannelDspLoad declarations added
+//                 by J.J. Boyd (KG4VCF) for per-receiver DSP load
+//                 measurement (R-R3-40). NereusSDR-original reader exported
+//                 from third_party/wdsp/src/dsplock.c; no Thetis
+//                 counterpart. AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 /*  wdsp.cs
@@ -328,6 +334,26 @@ void WDSPSetTestBlockDelayUs(int channel, int microseconds);
 // Test-only (NereusSDR dsplock.c): how many times this channel's DSP worker
 // has left its loop in this process. Never call it in production code.
 int WDSPGetTestWorkerExitCount(int channel);
+
+// NereusSDR dsplock.c: one channel's worker load since the process started,
+// read without the channel's DSP lock (it never waits for the worker). Same
+// layout as WdspChannelLoad in third_party/wdsp/src/dsplock.h. Every field
+// only grows except blockPeriodUs, the block period (dsp_size / dsp_rate) of
+// the worker's latest block, 0 before its first block. Returns 0 on success,
+// -1 for an invalid channel or a null out. The guard lets a file include
+// both this header and dsplock.h.
+#ifndef NEREUS_WDSP_CHANNEL_LOAD_DEFINED
+#define NEREUS_WDSP_CHANNEL_LOAD_DEFINED
+typedef struct {
+    long long blocks;       // worker blocks completed
+    long long busyNs;       // total time the worker held the lock for them
+    long long lateBlocks;   // blocks longer than their block period
+    long long maxBlockUs;   // longest single block
+    int       blockPeriodUs;
+} WdspChannelLoad;
+#endif
+
+int GetChannelDspLoad(int channel, WdspChannelLoad* out);
 
 // ---------------------------------------------------------------------------
 // In-place filter-size / filter-type reconfigure (RXA.c / TXA.c)

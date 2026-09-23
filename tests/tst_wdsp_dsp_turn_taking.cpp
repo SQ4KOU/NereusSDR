@@ -1,6 +1,7 @@
 // no-port-check: NereusSDR-original linked-WDSP integration test. It drives a
 // real RX channel to prove control calls get a bounded turn at the channel's
-// DSP lock while the DSP worker is overloaded (R-R3-39).
+// DSP lock while the DSP worker is overloaded (R-R3-39), and that the
+// worker's per-block load counters measure that overload (R-R3-40).
 #include <QtTest>
 
 #include <algorithm>
@@ -45,6 +46,18 @@ constexpr double kBudgetMs = std::min(1000.0 * kDspSize / kSampleRate / 4.0, 20.
 constexpr double kSingleLimitMs = 30.0;
 constexpr double kBurstLimitMs = kBlockDelayMs + kBudgetMs + 10.0;
 constexpr double kMinThroughputRatio = 0.90;
+
+// Load counters (R-R3-40): block period is dsp_size / dsp_rate.
+constexpr int kBlockPeriodUs = static_cast<int>(1000000LL * kDspSize / kSampleRate);
+// A delay that is a large share of the period, so the chain's own work is a
+// small part of each measured block.
+constexpr int kLoadDelayUs = 40000;
+// A delay longer than the period: every block is late.
+constexpr int kLateDelayUs = 100000;
+constexpr std::chrono::milliseconds kLoadWindow{2000};
+constexpr double kLoadTolerance = 0.10;
+// Reading never waits for the worker's lock.
+constexpr double kReadLimitMs = 5.0;
 
 double msSince(Clock::time_point start)
 {
@@ -123,6 +136,71 @@ private slots:
         QVERIFY2(worstSingleMs <= kSingleLimitMs, "a single control call waited too long");
         QVERIFY2(burstMs <= kBurstLimitMs, "the control-call burst waited too long");
         QVERIFY2(ratio >= kMinThroughputRatio, "control calls cost the worker too much throughput");
+    }
+
+    void readerRejectsABadChannelOrOutput()
+    {
+        WdspChannelLoad load{};
+        QCOMPARE(GetChannelDspLoad(-1, &load), -1);
+        QCOMPARE(GetChannelDspLoad(1000, &load), -1);
+        QCOMPARE(GetChannelDspLoad(kChannel, nullptr), -1);
+    }
+
+    void measuredLoadMatchesTheBlockDelay()
+    {
+        WDSPSetTestBlockDelayUs(kChannel, kLoadDelayUs);
+        // Let any block started under the previous delay finish.
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+        WdspChannelLoad before{};
+        QCOMPARE(GetChannelDspLoad(kChannel, &before), 0);
+        double worstReadMs = 0.0;
+        const auto windowStart = Clock::now();
+        while (Clock::now() - windowStart < kLoadWindow) {
+            WdspChannelLoad sample{};
+            const auto start = Clock::now();
+            QCOMPARE(GetChannelDspLoad(kChannel, &sample), 0);
+            worstReadMs = std::max(worstReadMs, msSince(start));
+            std::this_thread::sleep_for(std::chrono::milliseconds(7));
+        }
+        WdspChannelLoad after{};
+        QCOMPARE(GetChannelDspLoad(kChannel, &after), 0);
+
+        const long long blocks = after.blocks - before.blocks;
+        QVERIFY2(blocks > 0, "the worker completed no blocks in the window");
+        const double meanBlockUs = (after.busyNs - before.busyNs) / 1000.0 / blocks;
+        const double load = meanBlockUs / after.blockPeriodUs;
+        const double expected = double(kLoadDelayUs) / kBlockPeriodUs;
+        qInfo("%lld blocks, mean block %.1f us, period %d us: load %.3f vs expected %.3f; "
+              "worst read %.3f ms",
+              blocks, meanBlockUs, after.blockPeriodUs, load, expected, worstReadMs);
+
+        QCOMPARE(after.blockPeriodUs, kBlockPeriodUs);
+        QVERIFY2(std::abs(load - expected) <= kLoadTolerance * expected,
+                 "measured load is not within 10% of delay / block period");
+        QCOMPARE(after.lateBlocks - before.lateBlocks, 0LL);
+        QVERIFY(after.maxBlockUs >= kLoadDelayUs);
+        QVERIFY2(worstReadMs <= kReadLimitMs, "reading the load waited for the worker");
+    }
+
+    void blocksLongerThanThePeriodCountAsLate()
+    {
+        WDSPSetTestBlockDelayUs(kChannel, kLateDelayUs);
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+
+        WdspChannelLoad before{};
+        QCOMPARE(GetChannelDspLoad(kChannel, &before), 0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1000));
+        WdspChannelLoad after{};
+        QCOMPARE(GetChannelDspLoad(kChannel, &after), 0);
+        WDSPSetTestBlockDelayUs(kChannel, kBlockDelayUs);
+
+        const long long blocks = after.blocks - before.blocks;
+        const long long late = after.lateBlocks - before.lateBlocks;
+        qInfo("%lld blocks, %lld late, longest %lld us", blocks, late, after.maxBlockUs);
+        QVERIFY(blocks > 0);
+        QCOMPARE(late, blocks);
+        QVERIFY(after.maxBlockUs >= kLateDelayUs);
     }
 
 private:

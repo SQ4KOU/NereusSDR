@@ -16,6 +16,10 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-23 - dspLoad() reader for the WDSP worker's per-block load
+//                 counters (R-R3-40) by J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
+//                 NereusSDR-original; no Thetis counterpart.
 // =================================================================
 
 //=================================================================
@@ -870,6 +874,27 @@ public:
     // --- Metering ---
 
     double getMeter(RxMeterType type) const;
+
+    // --- DSP load (R-R3-40, NereusSDR-original) ---
+    //
+    // Cumulative counters kept by this channel's WDSP worker since the
+    // process started (third_party/wdsp/src/dsplock.c). Every field only
+    // grows except blockPeriodUs, the block period (dsp_size / dsp_rate) of
+    // the worker's latest block, 0 before its first block. The WDSP channel
+    // id can be reused by a later channel, so callers compare two reads to
+    // get the load over an interval rather than reading one in isolation.
+    struct DspLoadCounters {
+        qint64 blocks{0};
+        qint64 busyNs{0};
+        qint64 lateBlocks{0};
+        qint64 maxBlockUs{0};
+        int    blockPeriodUs{0};
+    };
+
+    // Reads the counters without the channel's DSP lock, so it never waits
+    // for the worker; safe from any thread. Returns false (and leaves `out`
+    // zeroed) when the channel id is outside WDSP's range or WDSP is absent.
+    bool dspLoad(DspLoadCounters& out) const;
 
     // --- Per-mode DSP-Options live-apply (Task 4.2) ---
     //

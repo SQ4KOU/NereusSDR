@@ -44,6 +44,10 @@
 //                 Anthropic Claude Code. The generated-key record follows
 //                 two-tone's active state as well as MOX transitions.
 //                 NereusSDR-original; no Thetis logic.
+//   2026-09-23 : R-R3-40 by J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code. RxDspWorker is fed by the stamped I/Q
+//                 signal, and receiverDspLoad reports each slice's DSP
+//                 load. NereusSDR-original; no Thetis logic.
 //   2026-05-03 — Phase 4 Agent 4A of issue #167 (PA calibration safety
 //                 hotfix — K2GX field report).  Drive-slider lambda
 //                 (lines ~830) and TUNE-engagement path (lines ~4280)
@@ -4913,8 +4917,8 @@ void RadioModel::applyStreamDspGeometry()
                          && m_dspThread != nullptr && m_dspThread->isRunning()
                          && QThread::currentThread() != m_dspThread;
     if (quiesce) {
-        QObject::disconnect(m_receiverManager, &ReceiverManager::iqDataForReceiver,
-                            m_dspWorker, &RxDspWorker::processIqBatch);
+        QObject::disconnect(m_receiverManager, &ReceiverManager::iqDataForReceiverStamped,
+                            m_dspWorker, &RxDspWorker::processStampedIqBatch);
         QMetaObject::invokeMethod(m_dspWorker, &RxDspWorker::resetAccumulator,
                                   Qt::BlockingQueuedConnection);
     }
@@ -4975,8 +4979,8 @@ void RadioModel::applyStreamDspGeometry()
     }
 
     if (quiesce) {
-        connect(m_receiverManager, &ReceiverManager::iqDataForReceiver,
-                m_dspWorker, &RxDspWorker::processIqBatch,
+        connect(m_receiverManager, &ReceiverManager::iqDataForReceiverStamped,
+                m_dspWorker, &RxDspWorker::processStampedIqBatch,
                 Qt::QueuedConnection);
     }
 }
@@ -5788,6 +5792,45 @@ SliceModel* RadioModel::sliceById(int sliceId) const
         }
     }
     return nullptr;
+}
+
+std::optional<ReceiverDspLoad> RadioModel::receiverDspLoad(int sliceId)
+{
+    SliceModel* slice = sliceById(sliceId);
+    RxChannel* channel = (slice && m_wdspEngine)
+                             ? m_wdspEngine->rxChannel(sliceId)
+                             : nullptr;
+    RxChannel::DspLoadCounters now;
+    if (channel == nullptr || !channel->dspLoad(now)) {
+        return std::nullopt;
+    }
+
+    DspLoadBaseline& previous = m_dspLoadBaseline[sliceId];
+    // The counters only grow for one channel id; a smaller value means the
+    // baseline belongs to something else, so measure from zero.
+    if (now.blocks < previous.blocks || now.busyNs < previous.busyNs
+        || now.lateBlocks < previous.lateBlocks) {
+        previous = DspLoadBaseline{};
+    }
+
+    ReceiverDspLoad out;
+    const qint64 blocks = now.blocks - previous.blocks;
+    if (blocks > 0 && now.blockPeriodUs > 0) {
+        const double meanBlockNs =
+            static_cast<double>(now.busyNs - previous.busyNs) / blocks;
+        out.load = meanBlockNs / (1000.0 * now.blockPeriodUs);
+    }
+    out.lateBlocks = now.lateBlocks - previous.lateBlocks;
+    out.maxBlockUs = now.maxBlockUs;
+    previous = DspLoadBaseline{now.blocks, now.busyNs, now.lateBlocks};
+
+    if (m_dspWorker && slice->streamIndex() >= 0) {
+        const RxDspWorker::InputDelayStats input =
+            m_dspWorker->inputDelayStats(slice->streamIndex());
+        out.inputDelayMs   = input.inputDelayMs;
+        out.droppedInputMs = input.droppedInputMs;
+    }
+    return out;
 }
 
 bool RadioModel::requestTxHandoffToSlice(int sliceId)
@@ -10300,8 +10343,8 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
 
     connect(m_dspThread, &QThread::finished,
             m_dspWorker, &QObject::deleteLater);
-    connect(m_receiverManager, &ReceiverManager::iqDataForReceiver,
-            m_dspWorker, &RxDspWorker::processIqBatch,
+    connect(m_receiverManager, &ReceiverManager::iqDataForReceiverStamped,
+            m_dspWorker, &RxDspWorker::processStampedIqBatch,
             Qt::QueuedConnection);
 
     // External diversity needs both physical DDC legs. ReceiverManager maps
@@ -16422,8 +16465,8 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
     // is being reconfigured.  resetAccumulator() via BlockingQueuedConnection
     // ensures any in-flight batch completes before we proceed.
     if (m_dspWorker && m_receiverManager) {
-        QObject::disconnect(m_receiverManager, &ReceiverManager::iqDataForReceiver,
-                            m_dspWorker, &RxDspWorker::processIqBatch);
+        QObject::disconnect(m_receiverManager, &ReceiverManager::iqDataForReceiverStamped,
+                            m_dspWorker, &RxDspWorker::processStampedIqBatch);
         if (m_dspThread && m_dspThread->isRunning()) {
             QMetaObject::invokeMethod(m_dspWorker,
                                       &RxDspWorker::resetAccumulator,
@@ -16529,8 +16572,8 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
 
     // ── Step 10: Reconnect I/Q feed ──────────────────────────────────────
     if (m_dspWorker && m_receiverManager) {
-        connect(m_receiverManager, &ReceiverManager::iqDataForReceiver,
-                m_dspWorker, &RxDspWorker::processIqBatch,
+        connect(m_receiverManager, &ReceiverManager::iqDataForReceiverStamped,
+                m_dspWorker, &RxDspWorker::processStampedIqBatch,
                 Qt::QueuedConnection);
     }
 
@@ -16611,8 +16654,8 @@ qint64 RadioModel::setActiveRxCountLive(int newCount)
     // ── Step 1: Quiesce DSP worker ────────────────────────────────────────────
     // Same pattern as setSampleRateLive step 1: disconnect I/Q feed and flush.
     if (m_dspWorker && m_receiverManager) {
-        QObject::disconnect(m_receiverManager, &ReceiverManager::iqDataForReceiver,
-                            m_dspWorker, &RxDspWorker::processIqBatch);
+        QObject::disconnect(m_receiverManager, &ReceiverManager::iqDataForReceiverStamped,
+                            m_dspWorker, &RxDspWorker::processStampedIqBatch);
         if (m_dspThread && m_dspThread->isRunning()) {
             QMetaObject::invokeMethod(m_dspWorker,
                                       &RxDspWorker::resetAccumulator,
@@ -16707,8 +16750,8 @@ qint64 RadioModel::setActiveRxCountLive(int newCount)
 
     // ── Step 7: Reconnect DSP worker I/Q feed ─────────────────────────────────
     if (m_dspWorker && m_receiverManager) {
-        connect(m_receiverManager, &ReceiverManager::iqDataForReceiver,
-                m_dspWorker, &RxDspWorker::processIqBatch,
+        connect(m_receiverManager, &ReceiverManager::iqDataForReceiverStamped,
+                m_dspWorker, &RxDspWorker::processStampedIqBatch,
                 Qt::QueuedConnection);
     }
 

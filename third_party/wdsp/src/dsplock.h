@@ -1,7 +1,8 @@
 // no-port-check: NereusSDR-original WDSP scheduling glue. Not a port of
 // Thetis or WDSP logic; it schedules the existing per-channel csDSP lock so
 // control calls are not starved by a busy DSP worker, and lets channel
-// teardown wait for the worker to leave its loop.
+// teardown wait for the worker to leave its loop, and times each worker block
+// so the application can see how loaded each channel is.
 
 /*  dsplock.h
 
@@ -43,6 +44,10 @@ boydsoftprez@gmail.com
 // Channel teardown (pre_main_destroy) waits for the channel's worker to
 // signal that it has left its loop before any buffer is freed.
 //
+// Each worker block (csDSP acquired to csDSP released) is timed with a
+// monotonic clock; per-channel cumulative counters are written only by the
+// worker and read, without csDSP, through GetChannelDspLoad.
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-23 - Created by J.J. Boyd (KG4VCF), with AI-assisted
@@ -50,6 +55,9 @@ boydsoftprez@gmail.com
 //   2026-09-23 - Worker-exit signal and WdspWaitWorkerExit added by
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code (R-R3-39).
+//   2026-09-23 - Per-channel block timing and GetChannelDspLoad added by
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code (R-R3-40).
 // =================================================================
 
 #ifndef _dsplock_h
@@ -71,6 +79,33 @@ void WdspWorkerExited (int channel);
 // left its loop. Never gives up while the worker is still inside a block;
 // writes a dprintf line for every kWorkerExitLogIntervalMs of waiting.
 void WdspWaitWorkerExit (int channel);
+
+// One channel's worker load since the process started. Every field only
+// grows except blockPeriodUs, which is the block period (dsp_size / dsp_rate)
+// of the worker's latest block (0 before its first block).
+//   blocks      - worker blocks completed
+//   busyNs      - total time the worker held csDSP for those blocks
+//   lateBlocks  - blocks that took longer than their block period
+//   maxBlockUs  - longest single block
+// src/core/wdsp_api.h declares the same struct; the guard lets a file include
+// both headers.
+#ifndef NEREUS_WDSP_CHANNEL_LOAD_DEFINED
+#define NEREUS_WDSP_CHANNEL_LOAD_DEFINED
+typedef struct
+{
+	long long blocks;
+	long long busyNs;
+	long long lateBlocks;
+	long long maxBlockUs;
+	int blockPeriodUs;
+} WdspChannelLoad;
+#endif
+
+// Copies the channel's load counters into *out without taking csDSP, so it
+// never waits for the worker. Returns 0 on success, -1 for an invalid
+// channel or a null out. The fields are read one by one, so a block that
+// completes during the read may be counted in some fields and not others.
+PORT int GetChannelDspLoad (int channel, WdspChannelLoad* out);
 
 // Test-only: busy-wait this many microseconds inside the worker's locked
 // section on every block, to simulate an overloaded DSP chain. Default 0

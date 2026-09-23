@@ -30,6 +30,10 @@
 //                 Anthropic Claude Code. Tune and two-tone keying read at
 //                 check time (m_tuneKeyInFlight, m_generatedKeyLive).
 //                 NereusSDR-original; no Thetis logic.
+//   2026-09-23 : R-R3-40 by J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code. Per-receiver DSP load snapshot
+//                 (ReceiverDspLoad, receiverDspLoad) and the stamped I/Q
+//                 feed to RxDspWorker. NereusSDR-original; no Thetis logic.
 // =================================================================
 
 //=================================================================
@@ -247,6 +251,26 @@ class RadeChannel;
 // I/Q wire rate before m_connection->sendTxIq.  Lives in core/Resampler.h.
 class Resampler;
 class StationTgxlController;
+
+// R-R3-40: one receiver's DSP load, read with RadioModel::receiverDspLoad.
+struct ReceiverDspLoad {
+    // Mean WDSP worker block time / block period over the interval since
+    // the previous receiverDspLoad call for this slice (since the channel's
+    // counters started, on the first call). 1.0 = cannot keep up. 0.0 when
+    // the worker completed no block in the interval.
+    double load{0.0};
+    // Worker blocks longer than their block period, in the same interval.
+    qint64 lateBlocks{0};
+    // Longest single worker block on this receiver's WDSP channel id since
+    // the process started (a cumulative maximum, not per interval).
+    qint64 maxBlockUs{0};
+    // How long this receiver's latest I/Q batch waited before RxDspWorker
+    // processed it.
+    qint64 inputDelayMs{0};
+    // Input RxDspWorker skipped to keep that wait bounded, since the worker
+    // was created (cumulative).
+    qint64 droppedInputMs{0};
+};
 
 // RadioModel is the central data model for a connected radio.
 // It owns the RadioConnection (on a worker thread), ReceiverManager,
@@ -859,6 +883,13 @@ public:
     /// removal. The id doubles as the slice's WDSP RX channel id.
     /// For positional access, index slices() directly.
     SliceModel* sliceById(int sliceId) const;
+
+    /// R-R3-40: the DSP load of the slice with this ID (see sliceById), or
+    /// nullopt when there is no such slice or no WDSP channel for it. Reads
+    /// atomics only; never waits for the DSP worker or the DSP thread. Main
+    /// thread only: each call starts the next interval for `load` and
+    /// `lateBlocks`, so one periodic caller should own it.
+    std::optional<ReceiverDspLoad> receiverDspLoad(int sliceId);
 
     SliceModel* activeSlice() const { return m_activeSlice; }
 
@@ -3842,8 +3873,17 @@ private:
     QThread*         m_connThread{nullptr};
 
     // I/Q DSP worker (owned, lives on m_dspThread). Fed by a queued
-    // connection from ReceiverManager::iqDataForReceiver.
+    // connection from ReceiverManager::iqDataForReceiverStamped (R-R3-40).
     RxDspWorker*     m_dspWorker{nullptr};
+
+    // R-R3-40: the WDSP load counters at each slice's previous
+    // receiverDspLoad call, keyed by slice ID. Main thread only.
+    struct DspLoadBaseline {
+        qint64 blocks{0};
+        qint64 busyNs{0};
+        qint64 lateBlocks{0};
+    };
+    QHash<int, DspLoadBaseline> m_dspLoadBaseline;
     QThread*         m_dspThread{nullptr};
     QMetaObject::Connection m_radeIqConnection;
     QMetaObject::Connection m_radeBindingAppliedConnection;

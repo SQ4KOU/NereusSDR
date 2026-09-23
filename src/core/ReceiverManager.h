@@ -12,6 +12,11 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-23 - iqDataForReceiverStamped and enqueueClockNs (monotonic
+//                 enqueue stamp for the DSP input delay bound, R-R3-40) by
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code. NereusSDR-original; no Thetis
+//                 counterpart.
 // =================================================================
 
 //=================================================================
@@ -70,6 +75,8 @@
 #include <QMap>
 #include <QMutex>
 
+#include <chrono>
+
 #include "codec/CodecContext.h"   // PsDdcConfig + Q_DECLARE_METATYPE
 #include "HpsdrModel.h"           // HPSDRModel
 
@@ -103,6 +110,16 @@ class ReceiverManager : public QObject {
 public:
     explicit ReceiverManager(QObject* parent = nullptr);
     ~ReceiverManager() override;
+
+    // Monotonic clock (std::chrono::steady_clock, nanoseconds) used to stamp
+    // iqDataForReceiverStamped. RxDspWorker reads the same clock to measure
+    // how long a batch waited before processing (R-R3-40).
+    static qint64 enqueueClockNs() noexcept
+    {
+        return std::chrono::duration_cast<std::chrono::nanoseconds>(
+                   std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+    }
 
     // --- Configuration ---
     void setMaxReceivers(int max);
@@ -262,6 +279,14 @@ signals:
 
     // I/Q data routed to the appropriate receiver (by logical index).
     void iqDataForReceiver(int receiverIndex, const QVector<float>& samples);
+
+    // The same batch, emitted right after iqDataForReceiver with the
+    // enqueueClockNs() time it left this manager. RxDspWorker consumes it
+    // through a queued connection, so the stamp travels with the batch and
+    // the worker can tell how long the batch waited in its queue (R-R3-40).
+    void iqDataForReceiverStamped(int receiverIndex,
+                                  const QVector<float>& samples,
+                                  qint64 enqueuedNs);
 
     // Phase 3M-4 Task 6: emitted whenever ReceiverManager re-runs the
     // per-board PS DDC computation (either codec dispatch).  Carries the

@@ -10,6 +10,11 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-23 - iqDataForReceiverStamped and enqueueClockNs (monotonic
+//                 enqueue stamp for the DSP input delay bound, R-R3-40) by
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code. NereusSDR-original; no Thetis
+//                 counterpart.
 // =================================================================
 
 //=================================================================
@@ -359,6 +364,7 @@ void ReceiverManager::feedIqData(int hwReceiverIndex, const QVector<float>& samp
                                << "samples=" << samples.size();
         }
         emit iqDataForReceiver(logicalIndex, samples);
+        emit iqDataForReceiverStamped(logicalIndex, samples, enqueueClockNs());
         if (rxIt->wdspChannel >= 0) {
             emit iqDataForChannel(rxIt->wdspChannel, samples);
         }

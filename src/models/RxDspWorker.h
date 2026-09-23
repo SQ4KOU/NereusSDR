@@ -15,6 +15,10 @@
 //   2026-09-21 — Slice-owned, generation-guarded RADE RX routing by J.J.
 //                 Boyd (KG4VCF), with AI-assisted implementation via
 //                 OpenAI Codex.
+//   2026-09-23 - Receive input delay bound (processStampedIqBatch,
+//                 inputDelayStats, R-R3-40) by J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
+//                 NereusSDR-original; no Thetis counterpart.
 // =================================================================
 
 //=================================================================
@@ -68,6 +72,7 @@
 
 // Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
 
+#include <array>
 #include <atomic>
 #include <memory>
 #include <unordered_map>
@@ -100,7 +105,7 @@ struct AudioPriorityToken;   // src/core/audio/RealtimeAudioPriority.h
 // The worker is owned by RadioModel. It is constructed on the main
 // thread, given non-owning WdspEngine/AudioEngine pointers via
 // setEngines(), moved to RadioModel::m_dspThread, then driven by a
-// Qt::QueuedConnection from ReceiverManager::iqDataForReceiver.
+// Qt::QueuedConnection from ReceiverManager::iqDataForReceiverStamped.
 class RxDspWorker : public QObject {
     Q_OBJECT
 
@@ -155,12 +160,41 @@ public:
     // 48000.0 is the panel-side rate seen by AudioEngine and DEXP.
     void setSampleRate(double rate);
 
+    // ── Receive input delay bound (R-R3-40, NereusSDR-original) ─────────
+    //
+    // Each queued batch carries the time it left ReceiverManager. When the
+    // wait between that time and processing grows past the limit, the
+    // worker skips that receiver's batches, without processing them, until
+    // the wait falls below the resume level, so a DSP chain that cannot keep
+    // up loses input instead of falling ever further behind. One log line
+    // per episode says how much input was skipped.
+    static constexpr qint64 kDspInputDelayLimitMs  = 500;
+    static constexpr qint64 kDspInputDelayResumeMs = 250;
+    // Receivers (logical stream indices) tracked by the bound; a batch for
+    // an index outside [0, kMaxInputDelayReceivers) is processed unbounded.
+    static constexpr int kMaxInputDelayReceivers = 32;
+
+    struct InputDelayStats {
+        qint64 inputDelayMs{0};    // wait of the receiver's latest batch
+        qint64 droppedInputMs{0};  // input skipped since this worker started
+    };
+
+    // Safe from any thread (atomics). Zeroes for an untracked index.
+    InputDelayStats inputDelayStats(int receiverIndex) const;
+
     int inSize() const { return m_inSize.load(std::memory_order_relaxed); }
     int outSize() const { return m_outSize.load(std::memory_order_relaxed); }
     double sampleRate() const { return m_sampleRate; }
     static constexpr int kMaxSaneExternalDiversityChunk = 65536;
 
 #ifdef NEREUS_BUILD_TESTS
+    // Test-only: sleep this long at the start of every processed (not
+    // skipped) batch, to simulate a DSP chain slower than real time.
+    void setProcessingDelayUsForTest(int microseconds)
+    {
+        m_processingDelayUsForTest.store(microseconds, std::memory_order_relaxed);
+    }
+
     using ExternalDiversityOutputHookForTest =
         void (*)(int targetSlice, const float* i, const float* q, int samples);
     using ExternalDiversityRouteHookForTest =
@@ -185,6 +219,14 @@ public slots:
     // and forwards the decoded audio to AudioEngine.
     void processIqBatch(int receiverIndex,
                         const QVector<float>& interleavedIQ);
+
+    // Production entry (R-R3-40): the same batch with the
+    // ReceiverManager::enqueueClockNs() time it was queued. Applies the
+    // input delay bound above, then hands the batch to processIqBatch or
+    // skips it. batchProcessed fires for a skipped batch too.
+    void processStampedIqBatch(int receiverIndex,
+                               const QVector<float>& interleavedIQ,
+                               qint64 enqueuedNs);
 
     /// Feed one raw hardware-DDC stream into the paired diversity route.
     ///
@@ -447,6 +489,25 @@ private:
         m_externalDiversityOutputHookForTest{nullptr};
     ExternalDiversityRouteHookForTest
         m_externalDiversityRouteHookForTest{nullptr};
+#endif
+
+    // ── Receive input delay bound (R-R3-40) ────────────────────────────
+    // delayUs / droppedUs are written on the DSP thread and read from any
+    // thread; skipping / episodeSkippedUs are DSP-thread only.
+    struct InputDelayState {
+        std::atomic<qint64> delayUs{0};
+        std::atomic<qint64> droppedUs{0};
+        bool   skipping{false};
+        qint64 episodeSkippedUs{0};
+    };
+    std::array<InputDelayState, kMaxInputDelayReceivers> m_inputDelay;
+
+    // Wall-clock span of `samples` input samples on this stream, from its
+    // drain size (inSize = 64 * rate / 48000, see setStreamInputChunk).
+    qint64 inputSpanUs(int receiverIndex, qint64 samples) const;
+
+#ifdef NEREUS_BUILD_TESTS
+    std::atomic<int> m_processingDelayUsForTest{0};
 #endif
 
     int externalDiversityChunkSize() const;

@@ -13,6 +13,10 @@
 //   2026-09-21 — Slice-owned, generation-guarded RADE RX routing by J.J.
 //                 Boyd (KG4VCF), with AI-assisted implementation via
 //                 OpenAI Codex.
+//   2026-09-23 - Receive input delay bound (processStampedIqBatch,
+//                 inputDelayStats, R-R3-40) by J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
+//                 NereusSDR-original; no Thetis counterpart.
 // =================================================================
 
 //=================================================================
@@ -68,12 +72,15 @@
 
 #include "core/AudioEngine.h"
 #include "core/LogCategories.h"
+#include "core/ReceiverManager.h"
 #include "core/RxChannel.h"
 #include "core/WdspEngine.h"
 #include "core/Resampler.h"
 #include "core/audio/RealtimeAudioPriority.h"
 
 #include <algorithm>
+#include <chrono>
+#include <thread>
 
 namespace NereusSDR {
 
@@ -473,9 +480,96 @@ void RxDspWorker::routeRadeSpeech(int sliceId, quint64 generation,
         pcm48k.size() / kBytesPerStereoFrame);
 }
 
+RxDspWorker::InputDelayStats RxDspWorker::inputDelayStats(int receiverIndex) const
+{
+    InputDelayStats stats;
+    if (receiverIndex < 0 || receiverIndex >= kMaxInputDelayReceivers) {
+        return stats;
+    }
+    const InputDelayState& state = m_inputDelay[receiverIndex];
+    stats.inputDelayMs   = state.delayUs.load(std::memory_order_relaxed) / 1000;
+    stats.droppedInputMs = state.droppedUs.load(std::memory_order_relaxed) / 1000;
+    return stats;
+}
+
+qint64 RxDspWorker::inputSpanUs(int receiverIndex, qint64 samples) const
+{
+    const auto sizeIt = m_streamInSize.find(receiverIndex);
+    const qint64 inSize = (sizeIt != m_streamInSize.end() && sizeIt->second > 0)
+                              ? sizeIt->second
+                              : m_inSize.load(std::memory_order_relaxed);
+    if (inSize <= 0 || samples <= 0) {
+        return 0;
+    }
+    // rate = inSize * 48000 / 64, inverting the drain-size rule documented
+    // on setStreamInputChunk; span = samples / rate.
+    return samples * 64 * 1000000 / (inSize * 48000);
+}
+
+// R-R3-40. Runs on the DSP thread. Per batch this adds one clock read and one
+// relaxed atomic store; a skipped batch also adds one relaxed fetch_add. The
+// only log line is written once per episode, when it ends.
+void RxDspWorker::processStampedIqBatch(int receiverIndex,
+                                        const QVector<float>& interleavedIQ,
+                                        qint64 enqueuedNs)
+{
+    if (receiverIndex < 0 || receiverIndex >= kMaxInputDelayReceivers) {
+        processIqBatch(receiverIndex, interleavedIQ);
+        return;
+    }
+
+    InputDelayState& state = m_inputDelay[receiverIndex];
+    const qint64 delayUs =
+        std::max<qint64>(0, (ReceiverManager::enqueueClockNs() - enqueuedNs) / 1000);
+    state.delayUs.store(delayUs, std::memory_order_relaxed);
+
+    if (!state.skipping && delayUs > kDspInputDelayLimitMs * 1000) {
+        state.skipping = true;
+        state.episodeSkippedUs = 0;
+        // The stream's partial chunk is older than this batch; it goes with
+        // the skipped input rather than being joined to newer samples.
+        auto accIt = m_accums.find(receiverIndex);
+        if (accIt != m_accums.end() && !accIt->second.i.isEmpty()) {
+            const qint64 partialUs =
+                inputSpanUs(receiverIndex, accIt->second.i.size());
+            state.episodeSkippedUs += partialUs;
+            state.droppedUs.fetch_add(partialUs, std::memory_order_relaxed);
+            accIt->second.i.clear();
+            accIt->second.q.clear();
+        }
+    }
+
+    if (state.skipping) {
+        if (delayUs >= kDspInputDelayResumeMs * 1000) {
+            const qint64 spanUs =
+                inputSpanUs(receiverIndex, interleavedIQ.size() / 2);
+            state.episodeSkippedUs += spanUs;
+            state.droppedUs.fetch_add(spanUs, std::memory_order_relaxed);
+            emit batchProcessed();
+            return;
+        }
+        state.skipping = false;
+        qCWarning(lcDsp).noquote()
+            << QStringLiteral("Receive processing fell behind; skipped %1 ms "
+                              "of input to catch up.")
+                   .arg(state.episodeSkippedUs / 1000);
+        state.episodeSkippedUs = 0;
+    }
+
+    processIqBatch(receiverIndex, interleavedIQ);
+}
+
 void RxDspWorker::processIqBatch(int receiverIndex,
                                  const QVector<float>& interleavedIQ)
 {
+#ifdef NEREUS_BUILD_TESTS
+    if (const int delayUs =
+            m_processingDelayUsForTest.load(std::memory_order_relaxed);
+        delayUs > 0) {
+        std::this_thread::sleep_for(std::chrono::microseconds(delayUs));
+    }
+#endif
+
     // Snapshot the sizing for this batch so a concurrent
     // setBufferSizes() (e.g. mid-batch reconfigure) can't split a
     // single drain across two values. The fields are std::atomic<int>
