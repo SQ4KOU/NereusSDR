@@ -9,8 +9,12 @@
 // Modification history (NereusSDR):
 //   2026-09-21 -- Added by J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via OpenAI Codex.
+//   2026-09-23 -- Rehome handler-count regression (R-R3-30) added
+//                 by J.J. Boyd (KG4VCF), with AI-assisted implementation
+//                 via Anthropic Claude Code.
 // =================================================================
 
+#include <QComboBox>
 #include <QPointer>
 #include <QPushButton>
 #include <QSlider>
@@ -53,6 +57,18 @@ QSlider* sliderWithTooltipPrefix(VfoWidget* flag, const QString& prefix)
     for (QSlider* slider : sliders) {
         if (slider->toolTip().startsWith(prefix)) {
             return slider;
+        }
+    }
+    return nullptr;
+}
+
+QComboBox* modeCombo(VfoWidget* flag)
+{
+    const QList<QComboBox*> combos = flag->findChildren<QComboBox*>();
+    for (QComboBox* combo : combos) {
+        if (combo->findText(QStringLiteral("USB")) >= 0
+            && combo->findText(QStringLiteral("LSB")) >= 0) {
+            return combo;
         }
     }
     return nullptr;
@@ -175,6 +191,104 @@ private slots:
         QVERIFY(sqlButton->isChecked());
         QVERIFY(binButton->isChecked());
         QCOMPARE(agcSlider->value(), -73);
+    }
+
+    // R-R3-30: a layout rehome removes the slice's flag from every pan and
+    // wires a fresh one on the destination pan, as MainWindow's panKeyChanged
+    // handler does. The frequency, mode and filter handlers (and the other
+    // state presentation handlers) must retire with the flag they paint, so
+    // five rehomes leave exactly one live copy of each.
+    void rehomingRetiresStatePresentationHandlers()
+    {
+        SliceModel slice(1);
+        SpectrumWidget panA;
+        SpectrumWidget panB;
+
+        int frequencyRuns = 0;
+        int modeRuns = 0;
+        int filterRuns = 0;
+        const auto hooks = [&] {
+            SliceFlagHostHooks h;
+            h.frequencyChanged = [&frequencyRuns](double) { ++frequencyRuns; };
+            h.modeChanged = [&modeRuns](DSPMode) { ++modeRuns; };
+            h.filterChanged = [&filterRuns](int, int) { ++filterRuns; };
+            return h;
+        };
+
+        QList<QMetaObject::Connection> retiredConnections;
+        SpectrumWidget* host = &panA;
+        VfoWidget* flag = host->addVfoWidget(slice.sliceIndex());
+        QVERIFY(flag);
+        QList<QMetaObject::Connection> live =
+            wireSliceFlagStatePresentation(&slice, flag, hooks());
+        QCOMPARE(live.size(), 9);
+
+        for (int rehome = 0; rehome < 5; ++rehome) {
+            QPointer<VfoWidget> retired(flag);
+            panA.removeVfoWidget(slice.sliceIndex());
+            panB.removeVfoWidget(slice.sliceIndex());
+            QVERIFY(retired.isNull());
+            retiredConnections.append(live);
+
+            host = (host == &panA) ? &panB : &panA;
+            flag = host->addVfoWidget(slice.sliceIndex());
+            QVERIFY(flag);
+            live = wireSliceFlagStatePresentation(&slice, flag, hooks());
+            QCOMPARE(live.size(), 9);
+        }
+
+        // Every retired handler went with its flag. QObject::disconnect
+        // returns false only when Qt already retired the connection; any
+        // still-live handle is consumed here so the RED run stays safe.
+        int stillLive = 0;
+        for (const QMetaObject::Connection& connection : retiredConnections) {
+            if (QObject::disconnect(connection)) {
+                ++stillLive;
+            }
+        }
+        QCOMPARE(stillLive, 0);
+
+        // One change runs each presentation handler exactly once, and the
+        // surviving flag shows the new value (no suppression).
+        slice.setFrequency(14'074'000.0);
+        QCOMPARE(frequencyRuns, 1);
+        QCOMPARE(flag->frequency(), 14'074'000.0);
+
+        modeRuns = 0;
+        filterRuns = 0;
+        slice.setDspMode(DSPMode::CWU);
+        QCOMPARE(modeRuns, 1);
+        QComboBox* mode = modeCombo(flag);
+        QVERIFY(mode);
+        QCOMPARE(mode->currentText(), SliceModel::modeName(DSPMode::CWU));
+
+        filterRuns = 0;
+        slice.setFilter(-321, 654);
+        QCOMPARE(filterRuns, 1);
+        QCOMPARE(flag->filterLow(), -321);
+        QCOMPARE(flag->filterHigh(), 654);
+
+        // Removing the last flag retires the last set too; later model
+        // updates reach no handler at all.
+        host->removeVfoWidget(slice.sliceIndex());
+        for (const QMetaObject::Connection& connection : live) {
+            QVERIFY(!QObject::disconnect(connection));
+        }
+        frequencyRuns = 0;
+        modeRuns = 0;
+        filterRuns = 0;
+        slice.setFrequency(7'074'000.0);
+        slice.setDspMode(DSPMode::LSB);
+        slice.setFilter(-2850, -150);
+        slice.setAgcMode(AGCMode::Fast);
+        slice.setAfGain(12);
+        slice.setRfGain(34);
+        slice.setStepHz(500);
+        slice.setRxAntenna(QStringLiteral("ANT2"));
+        slice.setTxAntenna(QStringLiteral("ANT3"));
+        QCOMPARE(frequencyRuns, 0);
+        QCOMPARE(modeRuns, 0);
+        QCOMPARE(filterRuns, 0);
     }
 };
 

@@ -1658,10 +1658,15 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
             [slice](const QString& ant) { slice->setTxAntenna(ant); });
 
     // --- SliceModel -> VfoWidget (model updates repaint the flag) ---
-    QPointer<VfoWidget> flagPtr(newFlag);
-    connect(slice, &SliceModel::frequencyChanged, this,
-            [this, flagPtr, slice](double hz) {
-        if (flagPtr) { flagPtr->setFrequency(hz); }
+    //
+    // R-R3-30: every handler here is connected with the flag as its context
+    // (wireSliceFlagStatePresentation), so removing or rehoming the flag
+    // retires it. With MainWindow as the context, each rehome through
+    // panKeyChanged added one more frequency, mode and filter handler, and a
+    // deleted flag's handlers stayed live. The hooks below are the host-side
+    // half; the binding repaints the flag before calling them.
+    SliceFlagHostHooks hostHooks;
+    hostHooks.frequencyChanged = [this, slice](double hz) {
         if (m_handlingBandJump) { return; }
         // Keep the hosting pan's VFO marker on this slice as it tunes.
         // Resolved per-call rather than captured, because a slice can migrate
@@ -1715,7 +1720,7 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
             }
         }
         host->setVfoFrequency(hz);
-    });
+    };
     // Mode and filter drive the flag's LABELS and this pan's PASSBAND.
     //
     // The passband half was lost when the two flag-wiring paths were unified:
@@ -1727,9 +1732,7 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     //
     // Resolved through spectrumForSlice per call, so the passband lands on the
     // pan hosting this slice rather than on whichever pan is active.
-    connect(slice, &SliceModel::dspModeChanged, this,
-            [this, flagPtr, slice](DSPMode mode) {
-        if (flagPtr) { flagPtr->setMode(mode); }
+    hostHooks.modeChanged = [this, slice](DSPMode mode) {
         if (SpectrumWidget* host = spectrumForSlice(slice)) {
             // TX filter overlay maps audio Hz to the right sideband from this.
             host->setTxMode(mode);
@@ -1737,38 +1740,13 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
             // the offsets, changes with the mode.
             host->setFilterOffset(slice->filterLow(), slice->filterHigh());
         }
-    });
-    connect(slice, &SliceModel::filterChanged, this,
-            [this, flagPtr, slice](int low, int high) {
-        if (flagPtr) { flagPtr->setFilter(low, high); }
+    };
+    hostHooks.filterChanged = [this, slice](int low, int high) {
         if (SpectrumWidget* host = spectrumForSlice(slice)) {
             host->setFilterOffset(low, high);
         }
-    });
-    connect(slice, &SliceModel::agcModeChanged, this,
-            [flagPtr](AGCMode mode) {
-        if (flagPtr) { flagPtr->setAgcMode(mode); }
-    });
-    connect(slice, &SliceModel::afGainChanged, this,
-            [flagPtr](int gain) {
-        if (flagPtr) { flagPtr->setAfGain(gain); }
-    });
-    connect(slice, &SliceModel::rfGainChanged, this,
-            [flagPtr](int gain) {
-        if (flagPtr) { flagPtr->setRfGain(gain); }
-    });
-    connect(slice, &SliceModel::stepHzChanged, this,
-            [flagPtr](int hz) {
-        if (flagPtr) { flagPtr->setStepHz(hz); }
-    });
-    connect(slice, &SliceModel::rxAntennaChanged, this,
-            [flagPtr](const QString& ant) {
-        if (flagPtr) { flagPtr->setRxAntenna(ant); }
-    });
-    connect(slice, &SliceModel::txAntennaChanged, this,
-            [flagPtr](const QString& ant) {
-        if (flagPtr) { flagPtr->setTxAntenna(ant); }
-    });
+    };
+    wireSliceFlagStatePresentation(slice, newFlag, std::move(hostHooks));
 
 
     // ---- Moved from wireSliceToSpectrum (Slice A's private path) ----

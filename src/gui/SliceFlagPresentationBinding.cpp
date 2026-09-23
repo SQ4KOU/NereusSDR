@@ -9,6 +9,10 @@
 // Modification history (NereusSDR):
 //   2026-09-21 -- Extracted by J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via OpenAI Codex.
+//   2026-09-23 -- Frequency, mode, filter, AGC, gain, step and
+//                 antenna handlers moved here with the flag as context
+//                 (R-R3-30), by J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "SliceFlagPresentationBinding.h"
@@ -57,6 +61,47 @@ QList<QMetaObject::Connection> wireSliceFlagPresentation(
                                          flag, &VfoWidget::setBinauralEnabled));
     connections.append(QObject::connect(slice, &SliceModel::lockedChanged,
                                          flag, &VfoWidget::setLocked));
+    return connections;
+}
+
+QList<QMetaObject::Connection> wireSliceFlagStatePresentation(
+    SliceModel* slice, VfoWidget* flag, SliceFlagHostHooks hooks)
+{
+    if (!slice || !flag) {
+        return {};
+    }
+
+    // The flag is the context of every connection, so Qt disconnects them
+    // before the flag is freed; the lambdas may therefore use it directly.
+    QList<QMetaObject::Connection> connections;
+    connections.reserve(9);
+    connections.append(QObject::connect(slice, &SliceModel::frequencyChanged, flag,
+        [flag, hook = std::move(hooks.frequencyChanged)](double hz) {
+            flag->setFrequency(hz);
+            if (hook) { hook(hz); }
+        }));
+    connections.append(QObject::connect(slice, &SliceModel::dspModeChanged, flag,
+        [flag, hook = std::move(hooks.modeChanged)](DSPMode mode) {
+            flag->setMode(mode);
+            if (hook) { hook(mode); }
+        }));
+    connections.append(QObject::connect(slice, &SliceModel::filterChanged, flag,
+        [flag, hook = std::move(hooks.filterChanged)](int low, int high) {
+            flag->setFilter(low, high);
+            if (hook) { hook(low, high); }
+        }));
+    connections.append(QObject::connect(slice, &SliceModel::agcModeChanged,
+                                         flag, &VfoWidget::setAgcMode));
+    connections.append(QObject::connect(slice, &SliceModel::afGainChanged,
+                                         flag, &VfoWidget::setAfGain));
+    connections.append(QObject::connect(slice, &SliceModel::rfGainChanged,
+                                         flag, &VfoWidget::setRfGain));
+    connections.append(QObject::connect(slice, &SliceModel::stepHzChanged,
+                                         flag, &VfoWidget::setStepHz));
+    connections.append(QObject::connect(slice, &SliceModel::rxAntennaChanged,
+                                         flag, &VfoWidget::setRxAntenna));
+    connections.append(QObject::connect(slice, &SliceModel::txAntennaChanged,
+                                         flag, &VfoWidget::setTxAntenna));
     return connections;
 }
 
