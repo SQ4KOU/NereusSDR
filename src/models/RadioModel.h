@@ -26,6 +26,10 @@
 //                 Anthropic Claude Code. PC-microphone MOX admission
 //                 (pcCaptureGatesKeying / pcCaptureReady) and input-loss
 //                 release. NereusSDR-original; no Thetis logic.
+//   2026-09-22 : R-R3-36 fix wave by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. Tune and two-tone keying read at
+//                 check time (m_tuneKeyInFlight, m_generatedKeyLive).
+//                 NereusSDR-original; no Thetis logic.
 // =================================================================
 
 //=================================================================
@@ -4085,8 +4089,16 @@ private:
     // pre-check and the input-loss release only; the session demand stays
     // on pcCaptureRequired().
     bool pcCaptureGatesKeying() const;
+    bool generatedKeyInFlight() const;
     bool pcCaptureReady() const;
     void onCaptureStatusChanged(const CaptureSupervisor::Status& status);
+    // R-R3-36: true only across the m_moxController->setTune(true) call in
+    // setTune(), so the MOX pre-check recognises Tune's own key without
+    // trusting m_manualMox, which a refused Tune leaves set.
+    bool m_tuneKeyInFlight{false};
+    // R-R3-36: the key-up now live came from Tune or two-tone (set from
+    // moxChanging, cleared by any unkey).
+    bool m_generatedKeyLive{false};
     bool m_pcCaptureAllowed{true};
     bool m_pcCaptureSessionActive{false};
     CaptureSupervisor::Lease m_pcCaptureLease;

@@ -136,6 +136,7 @@ struct Rig {
     TxChannel tx{/*channelId=*/1};
     std::unique_ptr<RadioModel> model;
     CaptureSupervisor::Lease lease;
+    SliceModel* slice = nullptr;
 
     explicit Rig(const QString& scenario)
         : model(std::make_unique<RadioModel>())
@@ -147,7 +148,7 @@ struct Rig {
         model->injectTxChannelForTest(&tx);
         model->installBandPlanMoxCheckForTest();
         const int id = model->addSlice();
-        SliceModel* const slice = model->sliceById(id);
+        slice = model->sliceById(id);
         Q_ASSERT(slice);
         slice->setDspMode(DSPMode::USB);
         slice->setFrequency(14'200'000.0);
@@ -441,13 +442,192 @@ private slots:
         QCOMPARE(rig.conn.moxOnCalls, 1);
     }
 
-    // Keying that does not read the PC microphone is not released by a
-    // capture change.
-    void captureLossDoesNotReleaseTune()
+    // A refused Tune leaves no tune intent behind: a voice press that
+    // follows with capture not Ready is refused with the microphone text.
+    void refusedTuneThenVoicePressIsRefused_data()
+    {
+        QTest::addColumn<int>("ptt");
+        QTest::newRow("mox") << int(Ptt::Mox);
+        QTest::newRow("vox") << int(Ptt::Vox);
+        QTest::newRow("cat") << int(Ptt::Cat);
+    }
+    void refusedTuneThenVoicePressIsRefused()
+    {
+        QFETCH(int, ptt);
+        Rig rig(QStringLiteral("ready"));
+        QVERIFY(reachCaptureState(rig, QStringLiteral("closed")));
+        QSignalSpy rejected(rig.mox(), &MoxController::moxRejected);
+
+        // Out of band: the band plan refuses the Tune press.
+        rig.slice->setFrequency(4'500'000.0);
+        rig.model->setTune(true);
+        QCOMPARE(rejected.count(), 1);
+        QVERIFY(rejected.at(0).at(0).toString() != kRefusal);
+        QVERIFY(!rig.mox()->isMox());
+
+        // Back in band, a voice press reads the PC microphone.
+        rig.slice->setFrequency(14'200'000.0);
+        pressPtt(rig.mox(), static_cast<Ptt>(ptt));
+        QTest::qWait(50);
+        QCOMPARE(rejected.count(), 2);
+        QCOMPARE(rejected.at(1).at(0).toString(), kRefusal);
+        QVERIFY(!rig.mox()->isMox());
+        QCOMPARE(rig.conn.moxOnCalls, 0);
+        QCOMPARE(rig.conn.trxRelayCalls, 0);
+
+        rig.model->setTune(false);
+        QTest::qWait(250);
+    }
+
+    // Two-tone's 200 ms MOX-release settle is not two-tone keying: a voice
+    // press inside it with capture not Ready is refused, and two-tone's own
+    // key at the end of the walk is still admitted.
+    void twoToneSettleWindowVoicePressIsRefused()
     {
         Rig rig(QStringLiteral("ready"));
+        QVERIFY(reachCaptureState(rig, QStringLiteral("closed")));
+        TwoToneController* const twoTone = rig.model->twoToneController();
+        twoTone->setTxChannel(&rig.tx);
+        twoTone->setSettleDelaysMs(400, 0);
+
+        // Key with TCI audio (exempt), then drop TCI audio so two-tone's
+        // activation starts with MOX on and has to release and settle.
+        rig.tx.setTciAudioActive(true);
+        rig.mox()->setMox(true);
+        QTest::qWait(50);
+        QVERIFY(rig.mox()->isMox());
+        rig.tx.setTciAudioActive(false);
+        QSignalSpy rejected(rig.mox(), &MoxController::moxRejected);
+
+        twoTone->setActive(true);
+        QVERIFY(twoTone->isActivationInFlight());
+        QVERIFY(!rig.mox()->isMox());
+
+        rig.mox()->setMox(true);
+        QCOMPARE(rejected.count(), 1);
+        QCOMPARE(rejected.at(0).at(0).toString(), kRefusal);
+        QVERIFY(!rig.mox()->isMox());
+        QCOMPARE(rig.conn.moxOnCalls, 1);
+
+        twoTone->setActive(false);
+        QTest::qWait(600);
+        QVERIFY(!rig.mox()->isMox());
+        twoTone->setTxChannel(nullptr);
+    }
+
+    // Two-tone's own key is admitted with capture not Ready even when it
+    // follows the settle (the scoped key call, not a stale flag).
+    void twoToneKeysAfterSettleWithCaptureNotReady()
+    {
+        Rig rig(QStringLiteral("ready"));
+        QVERIFY(reachCaptureState(rig, QStringLiteral("closed")));
+        TwoToneController* const twoTone = rig.model->twoToneController();
+        twoTone->setTxChannel(&rig.tx);
+        twoTone->setSettleDelaysMs(100, 0);
+
+        rig.tx.setTciAudioActive(true);
+        rig.mox()->setMox(true);
+        QTest::qWait(50);
+        rig.tx.setTciAudioActive(false);
+        QSignalSpy rejected(rig.mox(), &MoxController::moxRejected);
+
+        twoTone->setActive(true);
+        QTRY_VERIFY_WITH_TIMEOUT(twoTone->isActive(), 2000);
+        QTest::qWait(50);
+        QVERIFY(rig.mox()->isMox());
+        QCOMPARE(rejected.count(), 0);
+        QCOMPARE(rig.conn.moxOnCalls, 2);
+
+        twoTone->setActive(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!rig.mox()->isMox(), 2000);
+        QTest::qWait(300);
+        twoTone->setTxChannel(nullptr);
+    }
+
+    // Input loss during a stale-flag window still releases a PC-mic key:
+    // after a refused Tune, and inside two-tone's MOX-release settle.
+    void inputLossDuringStaleWindowReleases_data()
+    {
+        QTest::addColumn<QString>("window");
+        QTest::newRow("refused-tune") << "refused-tune";
+        QTest::newRow("two-tone-settle") << "two-tone-settle";
+    }
+    void inputLossDuringStaleWindowReleases()
+    {
+        QFETCH(QString, window);
+        Rig rig(QStringLiteral("ready"));
+        rig.engine()->onMicSourceChanged(true);
         QVERIFY(reachCaptureState(rig, QStringLiteral("ready")));
-        rig.model->setTune(true);
+        TwoToneController* const twoTone = rig.model->twoToneController();
+
+        if (window == QLatin1String("refused-tune")) {
+            rig.slice->setFrequency(4'500'000.0);
+            rig.model->setTune(true);
+            QVERIFY(!rig.mox()->isMox());
+            rig.slice->setFrequency(14'200'000.0);
+        } else {
+            twoTone->setTxChannel(&rig.tx);
+            twoTone->setSettleDelaysMs(4000, 0);
+            rig.mox()->onVoxActive(true);
+            QTest::qWait(50);
+            QVERIFY(rig.mox()->isMox());
+            twoTone->setActive(true);
+            QVERIFY(twoTone->isActivationInFlight());
+            QVERIFY(!rig.mox()->isMox());
+        }
+
+        // PC-mic keying admitted with capture Ready.
+        QSignalSpy rejected(rig.mox(), &MoxController::moxRejected);
+        rig.mox()->setMox(true);
+        QTest::qWait(50);
+        QVERIFY(rig.mox()->isMox());
+        QCOMPARE(rejected.count(), 0);
+        const int off0 = rig.conn.moxOffCalls;
+        QSignalSpy aboutToEnd(rig.mox(), &MoxController::txAboutToEnd);
+
+        QTest::ignoreMessage(QtWarningMsg,
+                             QRegularExpression(QStringLiteral(
+                                 "^PC microphone left Ready while keyed; releasing MOX\\.")));
+        const qint64 pid = rig.engine()->captureHelperProcessIdForTest();
+        QVERIFY(pid > 0);
+        killProcess(pid);
+        QTRY_VERIFY_WITH_TIMEOUT(!rig.mox()->isMox(), 3000);
+        QTest::qWait(50);
+        QCOMPARE(aboutToEnd.count(), 1);
+        QCOMPARE(rig.conn.moxOffCalls, off0 + 1);
+        QVERIFY(twoTone->isActivationInFlight() == (window == QLatin1String("two-tone-settle")));
+
+        if (window == QLatin1String("refused-tune")) {
+            rig.model->setTune(false);
+        } else {
+            twoTone->setActive(false);
+        }
+        QTest::qWait(300);
+        QVERIFY(!rig.mox()->isMox());
+        twoTone->setTxChannel(nullptr);
+    }
+
+    // Keying that does not read the PC microphone is not released by a
+    // capture change.
+    void captureLossDoesNotReleaseTune_data()
+    {
+        QTest::addColumn<QString>("keying");
+        QTest::newRow("tune") << "tune";
+        QTest::newRow("two-tone") << "two-tone";
+    }
+    void captureLossDoesNotReleaseTune()
+    {
+        QFETCH(QString, keying);
+        Rig rig(QStringLiteral("ready"));
+        QVERIFY(reachCaptureState(rig, QStringLiteral("ready")));
+        TwoToneController* const twoTone = rig.model->twoToneController();
+        if (keying == QLatin1String("tune")) {
+            rig.model->setTune(true);
+        } else {
+            twoTone->setTxChannel(&rig.tx);
+            twoTone->setSettleDelaysMs(0, 0);
+            twoTone->setActive(true);
+        }
         QTest::qWait(50);
         QVERIFY(rig.mox()->isMox());
         QSignalSpy aboutToEnd(rig.mox(), &MoxController::txAboutToEnd);
@@ -458,9 +638,14 @@ private slots:
         QVERIFY(rig.mox()->isMox());
         QCOMPARE(aboutToEnd.count(), 0);
 
-        rig.model->setTune(false);
+        if (keying == QLatin1String("tune")) {
+            rig.model->setTune(false);
+        } else {
+            twoTone->setActive(false);
+        }
         QTRY_VERIFY_WITH_TIMEOUT(!rig.mox()->isMox(), 2000);
         QTest::qWait(250);
+        twoTone->setTxChannel(nullptr);
     }
 
     // PC-mic keying with capture Ready is admitted, and unkey is never

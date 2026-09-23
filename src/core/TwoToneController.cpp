@@ -13,6 +13,9 @@
 //                start()/stop() through Phase 3C
 //                TransmitModel::setPowerUsingTargetDbm with bTwoTone=true.
 //                See header for full attribution.
+//   2026-09-22 : R-R3-36 fix wave by J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code. m_keyingMox scoped around the
+//                activation walk's own setMox(true). NereusSDR-original.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis-derived activation flow
@@ -30,6 +33,7 @@
 #include "models/TransmitModel.h"
 
 #include <QLoggingCategory>
+#include <QScopedValueRollback>
 #include <QtMath>
 
 namespace NereusSDR {
@@ -383,7 +387,12 @@ void TwoToneController::continueActivation()
     // The (!console.MOX) check above corresponds to BandPlanGuard rejecting
     // the request.  The MoxController emits moxRejected(...) on rejection;
     // we catch that via onMoxRejected() and run the cleanup there.
-    m_moxController->setMox(true);
+    // R-R3-36: m_keyingMox marks this call (and only this call) as
+    // two-tone keying for the PC-microphone admission check.
+    {
+        const QScopedValueRollback<bool> keying(m_keyingMox, true);
+        m_moxController->setMox(true);
+    }
 
     // If the setMox call above resulted in immediate rejection (synchronous
     // moxRejected emission), m_active will already be false here and we

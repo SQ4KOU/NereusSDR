@@ -46,7 +46,8 @@
 //   2026-09-22 : R-R3-36 Task 7 by J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code. isActivationInFlight() getter for
 //                 the PC-microphone MOX admission check. NereusSDR-original;
-//                 no Thetis logic.
+//                 no Thetis logic. Fix wave: isKeyingMox(), true only
+//                 around the walk's own setMox(true) call.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis-derived activation
@@ -231,6 +232,11 @@ public:
     // own setMox(true) runs the MOX pre-check, so the PC-microphone
     // admission check reads this to recognise two-tone keying.
     bool isActivationInFlight() const noexcept { return m_activationInFlight; }
+    // R-R3-36: true only while the activation walk's own setMox(true) call
+    // runs, so the MOX pre-check can tell two-tone's key from any other
+    // press. Unlike isActivationInFlight() it is false through the MOX
+    // release settle, when a voice press may arrive.
+    bool isKeyingMox() const noexcept { return m_keyingMox; }
 
 public slots:
     // setActive — canonical entry point.  Drives the full activation /
@@ -313,6 +319,9 @@ private:
     // Whether we're currently in the middle of an activation walk.
     // Prevents re-entrant setActive(true) calls from double-engaging.
     bool m_activationInFlight{false};
+
+    // True only across the activation walk's own setMox(true) call.
+    bool m_keyingMox{false};
 
     // Freq2Delay sub-state — true if pulsed at the time we deferred Mag2.
     bool m_pulsedAtMag2Defer{false};

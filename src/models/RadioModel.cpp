@@ -35,6 +35,10 @@
 //                 that would read the PC microphone while capture is not
 //                 Ready, and losing capture while keyed releases MOX.
 //                 NereusSDR-original; no Thetis logic.
+//   2026-09-22 : R-R3-36 fix wave by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. Tune and two-tone keying read at
+//                 check time (m_tuneKeyInFlight, m_generatedKeyLive).
+//                 NereusSDR-original; no Thetis logic.
 //   2026-05-03 — Phase 4 Agent 4A of issue #167 (PA calibration safety
 //                 hotfix — K2GX field report).  Drive-slider lambda
 //                 (lines ~830) and TUNE-engagement path (lines ~4280)
@@ -376,6 +380,7 @@ warren@wpratt.com
 #include <QEventLoop>
 #include <QMetaObject>
 #include <QScopeGuard>
+#include <QScopedValueRollback>
 #include <QSignalBlocker>
 #include <QStandardPaths>
 #include <QThread>
@@ -848,6 +853,17 @@ RadioModel::RadioModel(Role role, QObject* parent)
     //udRX2StepAttData.Enabled = true; //[2.10.3.6]MW0LGE att_fixes  [console.cs:29648]
     // Display.TXAttenuatorOffset = 0; //[2.10.3.6]MW0LGE att_fixes  [console.cs:29659]
     m_moxController = new MoxController(this);
+
+    // R-R3-36: record whether the key-up now committing is Tune or
+    // two-tone keying. moxChanging fires synchronously inside setMox(true),
+    // after the pre-check and the interlock and before the commit, so the
+    // scoped key flags are still set when the key is generated. Any unkey
+    // clears it. pcCaptureGatesKeying() reads it to leave live generated
+    // keying alone on input loss.
+    connect(m_moxController, &MoxController::moxChanging, this,
+            [this](int, bool, bool newMox) {
+                m_generatedKeyLive = newMox && generatedKeyInFlight();
+            });
 
     // ── Remote-daemon R2 Task 20: arm the MOX refusal for Role::Remote ──
     //
@@ -10879,18 +10895,26 @@ bool RadioModel::pcCaptureGatesKeying() const
     if (m_txChannel != nullptr && m_txChannel->isTciAudioActive()) {
         return false;
     }
-    // Tune: MoxController::setTune(true) sets m_manualMox before it calls
-    // setMox(true), so the pre-check already sees it.
-    if (m_moxController != nullptr && m_moxController->isManualMox()) {
+    // Tune and two-tone: their own key calls are marked by scoped flags that
+    // are true only while that call runs. m_manualMox and two-tone's
+    // activation-in-flight are not used: a refused Tune leaves m_manualMox
+    // set, and two-tone stays in flight through its 200 ms MOX-release
+    // settle, so a voice press in either window would pass as generated.
+    if (generatedKeyInFlight()) {
         return false;
     }
-    // Two-tone: its activation walk keys MOX before it commits isActive().
-    if (m_twoToneController != nullptr
-        && (m_twoToneController->isActive()
-            || m_twoToneController->isActivationInFlight())) {
+    // Once keyed, generated keying counts only while that key is live, so
+    // input loss still releases a PC-mic key made in either window.
+    if (m_generatedKeyLive && m_moxController != nullptr && m_moxController->isMox()) {
         return false;
     }
     return true;
+}
+
+bool RadioModel::generatedKeyInFlight() const
+{
+    return m_tuneKeyInFlight
+        || (m_twoToneController != nullptr && m_twoToneController->isKeyingMox());
 }
 
 bool RadioModel::pcCaptureReady() const
@@ -15138,7 +15162,15 @@ void RadioModel::setTune(bool on)
         // Note: m_isTuning = true was moved earlier (after power-on guard) to
         // match Thetis console.cs:30010 [v2.10.3.13] ordering (G.4 fixup).
         if (m_moxController) {
+            // R-R3-36: mark this call as Tune keying for the PC-microphone
+            // admission check (covers every caller, TGXL and TCI included).
+            const QScopedValueRollback<bool> tuneKey(m_tuneKeyInFlight, true);
             m_moxController->setTune(true);
+            // Tune pressed while already keyed commits no new key-up; the
+            // carrier now comes from the tune tone either way.
+            if (m_moxController->isMox()) {
+                m_generatedKeyLive = true;
+            }
         }
 
     } else {
