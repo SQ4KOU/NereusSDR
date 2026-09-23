@@ -862,7 +862,17 @@ void TstSessionLinkLoss::unpinnedRefusalDoesNotLeaveAPendingRetryArmed()
     // token and fingerprint.
     const QUrl urlA(QStringLiteral("wss://127.0.0.1:%1").arg(deadPort));
     client.connectToStation(urlA, stationA.token(), stationA.certificateFingerprint());
-    QTRY_COMPARE_WITH_TIMEOUT(scheduled.count(), 1, 5000);
+    // Wait on the exact event, not a poll. QTRY_COMPARE polls in 50 ms
+    // qWait slices, the same length as this retry's first backoff step, so
+    // when the dead-port error landed early in a slice the armed retry
+    // fired, failed and scheduled attempt 2 before the poll ever saw a
+    // count of 1, and the count then only grew. QSignalSpy::wait() leaves
+    // its event loop on the emission itself, before the 50 ms retry timer
+    // can fire, so exactly one retry is armed when the refusal below runs.
+    if (scheduled.isEmpty()) {
+        QVERIFY2(scheduled.wait(5000), "the dial to the dead port never armed a retry");
+    }
+    QCOMPARE(scheduled.count(), 1);
     QVERIFY2(client.isReconnectPending(), "no retry was armed to test cancellation against");
 
     // The operator tries "B" -- any URL, since the refusal fires on the
