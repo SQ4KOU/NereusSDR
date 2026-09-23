@@ -56,6 +56,13 @@ public:
         // bitrate than this. Defaults to the encoder's own default target,
         // so a caller that names only role and SSRC keeps today's offer.
         int audioTargetBitrate = kDefaultAudioTargetBitrate;
+        // R-R3-23 lossless audio. An offerer adds the L16 rtpmap
+        // (PcmAudioCodecConfig::kPayloadType, "L16/48000/2") to its one audio
+        // m-line, after Opus, which stays first. Set only for a GUI that
+        // declared it understands the lossless profile, so every other GUI
+        // receives exactly today's offer. An answerer ignores it: its answer
+        // follows the offer.
+        bool offerLosslessAudio = false;
     };
 
     static constexpr qsizetype kMaxDescriptionBytes = 64 * 1024;
@@ -149,6 +156,12 @@ public:
     virtual bool sendRtp(const QByteArray& packet) = 0;
 
     virtual bool isReady() const = 0;
+
+    /// R-R3-23: true once both this side's description and the remote
+    /// description carry the L16 rtpmap on the audio m-line, so lossless
+    /// packets may be sent. False before negotiation and for a transport
+    /// without the lossless profile.
+    virtual bool losslessAudioNegotiated() const { return false; }
 
     /// Cumulative application payload bytes for the current transport start.
     /// Submitted values count preflight-valid calls into the transport

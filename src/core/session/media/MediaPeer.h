@@ -41,8 +41,11 @@ public:
     // audioTargetBitrate is the Opus target this side sends at; an offerer's
     // audio description never advertises more (R-R3-23). An answerer sends
     // no audio and keeps the default.
+    // offerLosslessAudio (R-R3-23): an offerer adds the L16 rtpmap to its
+    // audio description; see IMediaTransport::StartOptions.
     bool start(IMediaTransport::Role role, const QString& connectionId,
-               int audioTargetBitrate = IMediaTransport::kDefaultAudioTargetBitrate);
+               int audioTargetBitrate = IMediaTransport::kDefaultAudioTargetBitrate,
+               bool offerLosslessAudio = false);
     void stop();
 
     bool acceptControl(const QJsonObject& control);
@@ -72,6 +75,8 @@ public:
     StartRefusal lastStartRefusal() const;
 
     bool isReady() const;
+    /// Both descriptions carry the L16 rtpmap (R-R3-23).
+    bool losslessAudioNegotiated() const;
     QString connectionId() const;
     quint32 audioSsrc() const;
     std::optional<MediaPeerTelemetry> telemetry() const;

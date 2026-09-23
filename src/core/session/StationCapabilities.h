@@ -135,6 +135,13 @@ struct StationCapabilities {
     /// `notches` object and takes notch.add / notch.move / notch.setActive
     /// / notch.delete. 0 means a window keeps today's settings-based notches.
     int notchControlVersion = 0;
+    /// R-R3-23: 1 means the Core can send lossless audio (uncompressed
+    /// 16-bit stereo, L16) beside Opus. A GUI that sees it may add
+    /// audioProfileVersion to its media start (the offer then carries the
+    /// L16 format) and `profile` to its audio control; the audio context
+    /// then reports the profile running and any refusal. Nonzero only with
+    /// media; the Core's audio_lossless setting may still refuse.
+    int audioProfileVersion = 0;
 
     /// The daemon's own AppSettings SettingsSchemaVersion, read by that
     /// key name from its own store. See StationClient's schema-skew check.

@@ -1404,6 +1404,10 @@ StationCapabilities StationServer::buildCapabilities() const
     caps.remoteWidebandDisplayVersion = m_mediaEnabled ? 1 : 0;
     caps.remoteAudioStatusVersion = m_mediaEnabled ? 1 : 0;
     caps.spectrumGrantVersion = m_mediaEnabled ? 1 : 0;
+    // R-R3-23: lossless audio beside Opus. Advertised with media whatever
+    // nereusd.conf audio_lossless says, so a GUI can be told plainly when
+    // the Core's own setting refuses it.
+    caps.audioProfileVersion = m_mediaEnabled ? 1 : 0;
     if (m_mediaEnabled && m_displayBudgetEnforcementEnabled && m_displayBudget) {
         caps.remoteDisplayBudgetVersion = 1;
         caps.displayBudget = m_displayBudget;

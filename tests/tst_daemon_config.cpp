@@ -187,6 +187,8 @@ private slots:
             QStringLiteral("spectrum_sample_units_per_second"),
             // R-R3-23: reaches DaemonMediaController::setAudioTargetBitrate().
             QStringLiteral("audio_bitrate"),
+            // R-R3-23: reaches DaemonMediaController::setAudioLosslessAllowed().
+            QStringLiteral("audio_lossless"),
         };
 
         // Each documented key parses without an "unknown key" complaint.
@@ -204,7 +206,8 @@ private slots:
                 "core_name = Rock 5C\n"
                 "display_application_bytes_per_second = 2400000\n"
                 "spectrum_sample_units_per_second = 1800000\n"
-                "audio_bitrate = 48000\n");
+                "audio_bitrate = 48000\n"
+                "audio_lossless = deny\n");
         f.flush();
         QString err;
         const DaemonConfig c = DaemonConfig::fromFile(f.fileName(), &err);
@@ -217,6 +220,7 @@ private slots:
         QCOMPARE(c.remoteBind, QStringLiteral("0.0.0.0"));
         QCOMPARE(c.coreName, QStringLiteral("Rock 5C"));
         QCOMPARE(c.audioBitrate, 48000);
+        QCOMPARE(c.audioLosslessAllowed, false);
         const std::optional<DisplayBudgetLimits> limits = c.displayBudgetLimits();
         QVERIFY(limits.has_value());
         QCOMPARE(limits->applicationBytesPerSecond, quint64(2400000));
@@ -300,6 +304,48 @@ private slots:
         QVERIFY2(err.isEmpty(), qPrintable(err));
         QCOMPARE(c.audioBitrate, expected);
         QVERIFY(c.validate(&err));
+    }
+
+    // R-R3-23: lossless audio is allowed unless the file says deny. Any
+    // other value logs exactly one warning and keeps allow, like
+    // audio_bitrate, never a startup error.
+    void audioLosslessIsAllowOrDeny_data()
+    {
+        QTest::addColumn<QByteArray>("text");
+        QTest::addColumn<bool>("expected");
+        QTest::addColumn<bool>("warns");
+        QTest::newRow("missing") << QByteArray("slice_count = 1\n") << true << false;
+        QTest::newRow("allow") << QByteArray("audio_lossless = allow\n") << true << false;
+        QTest::newRow("deny") << QByteArray("audio_lossless = deny\n") << false << false;
+        QTest::newRow("Deny") << QByteArray("audio_lossless = Deny\n") << false << false;
+        QTest::newRow("comment") << QByteArray("audio_lossless = deny # digital modes off\n")
+                                 << false << false;
+        QTest::newRow("words") << QByteArray("audio_lossless = no\n") << true << true;
+        QTest::newRow("empty") << QByteArray("audio_lossless =\n") << true << true;
+        QTest::newRow("deny-then-bad")
+            << QByteArray("audio_lossless = deny\naudio_lossless = maybe\n") << true << true;
+    }
+
+    void audioLosslessIsAllowOrDeny()
+    {
+        QFETCH(QByteArray, text);
+        QFETCH(bool, expected);
+        QFETCH(bool, warns);
+        QTemporaryFile f;
+        QVERIFY(f.open());
+        f.write(text);
+        f.flush();
+        if (warns) {
+            QTest::ignoreMessage(QtWarningMsg,
+                QRegularExpression(QStringLiteral("audio_lossless must be allow or deny, keeping allow")));
+        }
+        QTest::failOnWarning(QRegularExpression(QStringLiteral(".*")));
+        QString err;
+        const DaemonConfig c = DaemonConfig::fromFile(f.fileName(), &err);
+        QVERIFY2(err.isEmpty(), qPrintable(err));
+        QCOMPARE(c.audioLosslessAllowed, expected);
+        QVERIFY(c.validate(&err));
+        QVERIFY(DaemonConfig::defaults().audioLosslessAllowed);
     }
 
     void validateRefusesAnUnsupportedAudioBitrate()

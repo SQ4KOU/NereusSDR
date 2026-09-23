@@ -142,7 +142,7 @@ MediaPeer::~MediaPeer()
 }
 
 bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
-                      int audioTargetBitrate)
+                      int audioTargetBitrate, bool offerLosslessAudio)
 {
     d->startRefusal = StartRefusal::None;
     if (d->started || !isCanonicalConnectionId(connectionId)) {
@@ -314,8 +314,9 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
 
     d->transportStarting = true;
     d->transportStartError = false;
-    const bool backendStarted =
-        transport->start({role, d->audioSsrc, audioTargetBitrate});
+    IMediaTransport::StartOptions options{role, d->audioSsrc, audioTargetBitrate};
+    options.offerLosslessAudio = offerLosslessAudio;
+    const bool backendStarted = transport->start(options);
     if (!self) {
         return false;
     }
@@ -497,6 +498,11 @@ bool MediaPeer::isReady() const
 {
     return d->started && d->ready && d->transport
         && d->transport->isReady();
+}
+
+bool MediaPeer::losslessAudioNegotiated() const
+{
+    return d->started && d->transport && d->transport->losslessAudioNegotiated();
 }
 
 QString MediaPeer::connectionId() const

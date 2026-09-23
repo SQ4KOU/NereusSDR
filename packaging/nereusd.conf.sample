@@ -75,6 +75,13 @@ core_name =
 # 24000 carries sound up to 8 kHz; 48000 carries sound up to 20 kHz.
 audio_bitrate = 24000
 
+# Lossless audio for digital modes: allow (default) or deny. With allow, a GUI
+# may ask for uncompressed 16-bit stereo audio instead of Opus, about
+# 1.54 Mbit/s of audio (about 1.65 Mbit/s on the network) for as long as it
+# is on. With deny, such a request is refused and Opus keeps playing. Any
+# other value is ignored with a warning.
+audio_lossless = allow
+
 # Optional measured display limits. Set BOTH keys to positive integers after
 # measuring this Core host and link; no universal capacity is assumed here.
 # Application bytes include spectrum and PureSignal display messages, but not

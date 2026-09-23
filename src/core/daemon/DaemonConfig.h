@@ -112,6 +112,15 @@ struct DaemonConfig {
     static constexpr int kHighAudioBitrate = 48000;
     int     audioBitrate {kDefaultAudioBitrate};
 
+    // R-R3-23: whether a GUI may switch this Core's audio to the lossless
+    // profile (uncompressed 16-bit stereo, about 1.54 Mbit/s of audio, for
+    // digital modes). nereusd.conf `audio_lossless = allow|deny`, default
+    // allow. Any other value logs one warning and keeps allow. With deny a
+    // request is refused and Opus keeps running. Feeds
+    // DaemonMediaController::setAudioLosslessAllowed() from
+    // DaemonApp::startStationServer().
+    bool    audioLosslessAllowed {true};
+
     // Optional measured limits, supplied as a pair. A malformed explicit
     // value becomes zero so validate() fails instead of disabling the cap.
     std::optional<quint64> displayApplicationBytesPerSecond;

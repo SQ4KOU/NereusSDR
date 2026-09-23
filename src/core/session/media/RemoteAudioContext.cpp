@@ -16,6 +16,7 @@ namespace {
 constexpr qsizetype kLegacyContextKeys = 8;
 constexpr qsizetype kDetailContextKeys = 9;
 constexpr qsizetype kEncoderKeys = 6;
+constexpr qsizetype kL16EncoderKeys = 6;
 constexpr double kMaxU32 = static_cast<double>(std::numeric_limits<quint32>::max());
 constexpr double kMaxSequence = static_cast<double>(std::numeric_limits<quint16>::max());
 constexpr int kMinimumTargetBitrate = 6'000;
@@ -129,8 +130,95 @@ std::optional<OpusEncoderProfile> remoteAudioEncoderFromJson(const QJsonValue& v
     return profile;
 }
 
+QString remoteAudioProfileToWire(RemoteAudioProfile profile)
+{
+    switch (profile) {
+    case RemoteAudioProfile::Opus:
+        return QStringLiteral("opus");
+    case RemoteAudioProfile::Lossless:
+        return QStringLiteral("lossless");
+    }
+    return {};
+}
+
+std::optional<RemoteAudioProfile> remoteAudioProfileFromWire(const QJsonValue& value)
+{
+    if (!value.isString()) {
+        return std::nullopt;
+    }
+    for (RemoteAudioProfile profile : {RemoteAudioProfile::Opus, RemoteAudioProfile::Lossless}) {
+        if (value.toString() == remoteAudioProfileToWire(profile)) {
+            return profile;
+        }
+    }
+    return std::nullopt;
+}
+
+QString remoteAudioProfileRefusalToWire(RemoteAudioProfileRefusal refusal)
+{
+    switch (refusal) {
+    case RemoteAudioProfileRefusal::NotAllowed:
+        return QStringLiteral("lossless-not-allowed");
+    case RemoteAudioProfileRefusal::Unavailable:
+        return QStringLiteral("lossless-unavailable");
+    }
+    return {};
+}
+
+std::optional<RemoteAudioProfileRefusal> remoteAudioProfileRefusalFromWire(
+    const QJsonValue& value)
+{
+    if (!value.isString()) {
+        return std::nullopt;
+    }
+    for (RemoteAudioProfileRefusal refusal :
+         {RemoteAudioProfileRefusal::NotAllowed, RemoteAudioProfileRefusal::Unavailable}) {
+        if (value.toString() == remoteAudioProfileRefusalToWire(refusal)) {
+            return refusal;
+        }
+    }
+    return std::nullopt;
+}
+
+QJsonObject remoteAudioL16EncoderToJson(const PcmEncoderProfile& profile)
+{
+    return {
+        {QStringLiteral("codec"), QStringLiteral("l16")},
+        {QStringLiteral("sampleRate"), static_cast<qint64>(profile.sampleRate)},
+        {QStringLiteral("channels"), static_cast<qint64>(profile.channels)},
+        {QStringLiteral("frameSamples"), static_cast<qint64>(profile.frameSamples)},
+        {QStringLiteral("bitsPerSample"), static_cast<qint64>(profile.bitsPerSample)},
+        {QStringLiteral("payloadType"), static_cast<qint64>(profile.payloadType)},
+    };
+}
+
+std::optional<PcmEncoderProfile> remoteAudioL16EncoderFromJson(const QJsonValue& value)
+{
+    if (!value.isObject()) {
+        return std::nullopt;
+    }
+    const QJsonObject object = value.toObject();
+    const QJsonValue codec = object.value(QStringLiteral("codec"));
+    const PcmEncoderProfile expected = l16EncoderProfile();
+    const auto exactly = [&object](const char* key, int wanted) {
+        double parsed = 0.0;
+        return integral(object.value(QLatin1String(key)), wanted, wanted, parsed);
+    };
+    // Six keys, each present with the one value this build plays.
+    if (object.size() != kL16EncoderKeys || !codec.isString()
+        || codec.toString() != QLatin1String("l16")
+        || !exactly("sampleRate", expected.sampleRate)
+        || !exactly("channels", expected.channels)
+        || !exactly("frameSamples", expected.frameSamples)
+        || !exactly("bitsPerSample", expected.bitsPerSample)
+        || !exactly("payloadType", expected.payloadType)) {
+        return std::nullopt;
+    }
+    return expected;
+}
+
 QJsonObject encodeRemoteAudioContext(const RemoteAudioContextMessage& message,
-                                     bool detailNegotiated)
+                                     bool detailNegotiated, bool profileNegotiated)
 {
     // The minor-7 context, key for key and number type for number type.
     QJsonObject payload{
@@ -145,6 +233,28 @@ QJsonObject encodeRemoteAudioContext(const RemoteAudioContextMessage& message,
     };
     if (!detailNegotiated) {
         return payload;
+    }
+    if (profileNegotiated) {
+        const RemoteAudioProfile profile = message.profile.value_or(RemoteAudioProfile::Opus);
+        payload.insert(QStringLiteral("profile"), remoteAudioProfileToWire(profile));
+        if (profile == RemoteAudioProfile::Opus && message.profileRefusal) {
+            payload.insert(QStringLiteral("profileRefusal"),
+                           remoteAudioProfileRefusalToWire(*message.profileRefusal));
+        }
+        if (profile == RemoteAudioProfile::Lossless) {
+            if (message.enabled && message.losslessEncoder) {
+                payload.insert(QStringLiteral("encoder"),
+                               remoteAudioL16EncoderToJson(*message.losslessEncoder));
+            } else if (message.enabled) {
+                payload.insert(QStringLiteral("enabled"), false);
+                payload.insert(QStringLiteral("reason"), remoteAudioOffReasonToWire(
+                                   RemoteAudioOffReason::EncoderUnavailable));
+            } else if (message.offReason) {
+                payload.insert(QStringLiteral("reason"),
+                               remoteAudioOffReasonToWire(*message.offReason));
+            }
+            return payload;
+        }
     }
     if (message.enabled && !message.encoder) {
         // A minor-8 GUI refuses an enabled context without its encoder, so
@@ -162,8 +272,14 @@ QJsonObject encodeRemoteAudioContext(const RemoteAudioContextMessage& message,
 }
 
 std::optional<RemoteAudioContextMessage> decodeRemoteAudioContext(const QJsonObject& payload,
-                                                                  bool detailNegotiated)
+                                                                  bool detailNegotiated,
+                                                                  bool profileNegotiated)
 {
+    profileNegotiated = profileNegotiated && detailNegotiated;
+    // The profile shape adds "profile" and, beside profile opus only,
+    // "profileRefusal"; the rest is checked as the detail shape.
+    const qsizetype profileKeys = profileNegotiated
+        ? 1 + (payload.contains(QStringLiteral("profileRefusal")) ? 1 : 0) : 0;
     const QJsonValue op = payload.value(QStringLiteral("op"));
     const QJsonValue connectionId = payload.value(QStringLiteral("connectionId"));
     const QJsonValue enabled = payload.value(QStringLiteral("enabled"));
@@ -174,7 +290,8 @@ std::optional<RemoteAudioContextMessage> decodeRemoteAudioContext(const QJsonObj
     double firstTimestamp = 0.0;
     // With the key count fixed, the eight keys each present and valid means
     // the legacy shape has no other key, and the detail shape has one more.
-    if (payload.size() != (detailNegotiated ? kDetailContextKeys : kLegacyContextKeys)
+    if (payload.size()
+            != (detailNegotiated ? kDetailContextKeys : kLegacyContextKeys) + profileKeys
         || !op.isString() || op.toString() != QLatin1String("audio-context")
         || !connectionId.isString() || !enabled.isBool()
         || !integral(payload.value(QStringLiteral("revision")), 1.0, kMaxU32, revision)
@@ -197,9 +314,31 @@ std::optional<RemoteAudioContextMessage> decodeRemoteAudioContext(const QJsonObj
     if (!detailNegotiated) {
         return message;
     }
+    if (profileNegotiated) {
+        message.profile = remoteAudioProfileFromWire(payload.value(QStringLiteral("profile")));
+        if (!message.profile) {
+            return std::nullopt;
+        }
+        if (payload.contains(QStringLiteral("profileRefusal"))) {
+            message.profileRefusal = remoteAudioProfileRefusalFromWire(
+                payload.value(QStringLiteral("profileRefusal")));
+            if (!message.profileRefusal || *message.profile != RemoteAudioProfile::Opus) {
+                return std::nullopt;
+            }
+        }
+    }
+    const bool lossless = message.profile == RemoteAudioProfile::Lossless;
     if (message.enabled) {
         if (payload.contains(QStringLiteral("reason"))) {
             return std::nullopt;
+        }
+        if (lossless) {
+            message.losslessEncoder =
+                remoteAudioL16EncoderFromJson(payload.value(QStringLiteral("encoder")));
+            if (!message.losslessEncoder) {
+                return std::nullopt;
+            }
+            return message;
         }
         message.encoder = remoteAudioEncoderFromJson(payload.value(QStringLiteral("encoder")));
         if (!message.encoder) {

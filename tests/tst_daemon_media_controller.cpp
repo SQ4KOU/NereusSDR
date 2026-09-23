@@ -27,6 +27,7 @@
 #include "core/session/media/IMediaTransport.h"
 #include "core/session/media/LibDataChannelMediaTransport.h"
 #include "core/session/media/OpusAudioCodec.h"
+#include "core/session/media/PcmAudioCodec.h"
 #include "core/session/media/RemoteAudioContext.h"
 #include "core/session/media/RemoteSpectrumContext.h"
 #include "core/settings/SettingsProxy.h"
@@ -146,10 +147,14 @@ public:
         return readyState;
     }
     bool isReady() const override { return readyState; }
+    bool losslessAudioNegotiated() const override { return losslessNegotiated; }
     void becomeReady() { readyState = true; emit ready(); }
 
     bool started{false};
     bool readyState{false};
+    // Whether the (simulated) answer kept the L16 rtpmap; the real library's
+    // answer does (tst_media_transport answerKeepsTheLosslessRtpMap).
+    bool losslessNegotiated{false};
     StartOptions startOptions{Role::Answerer, 0};
     QList<QByteArray> displays;
     QList<QByteArray> rtpPackets;
@@ -332,6 +337,22 @@ QJsonObject audioControl(quint32 revision, bool enabled)
             {QStringLiteral("connectionId"), QLatin1String(kConnectionId)},
             {QStringLiteral("revision"), static_cast<qint64>(revision)},
             {QStringLiteral("enabled"), enabled}};
+}
+
+// R-R3-23: the audio control of a GUI that understands audio profiles.
+QJsonObject audioControl(quint32 revision, bool enabled, const QString& profile)
+{
+    QJsonObject control = audioControl(revision, enabled);
+    control.insert(QStringLiteral("profile"), profile);
+    return control;
+}
+
+// The media start of a GUI that understands audio profiles.
+QJsonObject profileStart()
+{
+    return {{QStringLiteral("op"), QStringLiteral("start")},
+            {QStringLiteral("connectionId"), QLatin1String(kConnectionId)},
+            {QStringLiteral("audioProfileVersion"), 1}};
 }
 
 // Every audio context a raw control peer has received, in arrival order.
@@ -555,6 +576,10 @@ private slots:
     void minorSevenPeerReceivesLegacyAudioContexts();
     void minorEightAudioContextsCarryEncoderOrReason();
     void configuredAudioBitrateReachesOfferAndContext();
+    void losslessRequestSwitchesAtABlockBoundaryAndAcknowledges();
+    void losslessRefusalKeepsOpusAndSaysWhy_data();
+    void losslessRefusalKeepsOpusAndSaysWhy();
+    void minorSevenPeerCannotAskForAnAudioProfile();
     void minorEightPeerReceivesTodaysSpectrumContext();
     void minorNinePeerReceivesTheGrant();
     void currentMinorSpectrumContextsReportTheGrant();
@@ -2815,6 +2840,257 @@ void TstDaemonMediaController::destroyingControllerWithLiveBudgetSessionIsQuiet(
     QCOMPARE(h->controller.activeEndpointCount(), 1);
     // No finish(): the controller goes while the session is live.
     h.reset();
+}
+
+namespace {
+
+// The audio contexts a GUI has received so far, in order.
+QList<QJsonObject> audioContextsIn(const QSignalSpy& controls)
+{
+    QList<QJsonObject> found;
+    for (const auto& call : controls) {
+        const QJsonObject message = call.at(0).toJsonObject();
+        if (message.value(QStringLiteral("op")) == QLatin1String("audio-context")) {
+            found.append(message);
+        }
+    }
+    return found;
+}
+
+void feedAudioBlock(Harness& h)
+{
+    AudioEngine* const engine = h.radio.audioEngine();
+    const QVector<float> left(64 * 2, 0.20f);
+    const QVector<float> right(64 * 2, 0.30f);
+    for (int delivered = 0; delivered < DaemonAudioSource::kBlockFrames; delivered += 64) {
+        engine->rxBlockReady(h.sliceId, left.constData(), 64);
+        engine->rxBlockReady(h.spareSliceId, right.constData(), 64);
+    }
+}
+
+quint16 rtpSequence(const QByteArray& packet)
+{
+    return qFromBigEndian<quint16>(packet.constData() + 2);
+}
+
+quint32 rtpTimestamp(const QByteArray& packet)
+{
+    return qFromBigEndian<quint32>(packet.constData() + 4);
+}
+
+} // namespace
+
+// R-R3-23: a capable GUI asks for lossless. The offer carried the L16
+// format, the Core switches at the next capture block (capture restarts,
+// so queued Opus audio is flushed), acknowledges with the profile it runs
+// and the l16 encoder shape, and sends ten L16 packets per block continuing
+// the RTP clock. Asking for Opus again goes straight back; a stale revision
+// is ignored.
+void TstDaemonMediaController::losslessRequestSwitchesAtABlockBoundaryAndAcknowledges()
+{
+    OpusAudioEncoder encoder;
+    if (!encoder.isReady()) {
+        QSKIP("Opus encoder is unavailable in this build");
+    }
+    Harness h;
+    AudioEngine* const engine = h.radio.audioEngine();
+    engine->masterMixForTest().setRampFrames(1);
+    engine->masterMixForTest().setSlewUpFrames(0);
+    engine->setSliceStreaming(h.sliceId, true);
+    engine->setSliceStreaming(h.spareSliceId, true);
+    h.establishSession();
+    const StationCapabilities caps = h.server.buildCapabilities();
+    QCOMPARE(caps.audioProfileVersion, 1);
+    QCOMPARE(StationCapabilities::fromUpdates(caps.toUpdates()).audioProfileVersion, 1);
+    QCOMPARE(h.client.capabilities().audioProfileVersion, 1);
+
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    QVERIFY(h.client.sendMediaControl(profileStart(), h.client.sessionEpoch()));
+    QTRY_VERIFY(h.mediaTransport);
+    QVERIFY(h.mediaTransport->startOptions.offerLosslessAudio);
+    h.mediaTransport->losslessNegotiated = true;
+    h.mediaTransport->becomeReady();
+
+    // Opus first, in the profile shape: profile "opus", no refusal.
+    QVERIFY(h.client.sendMediaControl(audioControl(1, true, QStringLiteral("opus")),
+                                      h.client.sessionEpoch()));
+    QTRY_COMPARE(audioContextsIn(controls).size(), 1);
+    QJsonObject context = audioContextsIn(controls).constLast();
+    QCOMPARE(context.size(), 10);
+    QCOMPARE(context.value(QStringLiteral("profile")).toString(), QStringLiteral("opus"));
+    QVERIFY(context.value(QStringLiteral("enabled")).toBool());
+    QCOMPARE(context.value(QStringLiteral("encoder")).toObject()
+                 .value(QStringLiteral("codec")).toString(), QStringLiteral("opus"));
+    QVERIFY(decodeRemoteAudioContext(context, true, true).has_value());
+    feedAudioBlock(h);
+    QTRY_COMPARE(h.mediaTransport->rtpPackets.size(), 1);
+    QCOMPARE(audioRtpPayloadType(h.mediaTransport->rtpPackets.constFirst()),
+             OpusAudioCodecConfig::kPayloadType);
+
+    // Lossless: acknowledged with the profile and the l16 encoder shape.
+    QVERIFY(h.client.sendMediaControl(audioControl(2, true, QStringLiteral("lossless")),
+                                      h.client.sessionEpoch()));
+    QTRY_COMPARE(audioContextsIn(controls).size(), 2);
+    context = audioContextsIn(controls).constLast();
+    QCOMPARE(context.size(), 10);
+    QCOMPARE(context.value(QStringLiteral("revision")).toInteger(), qint64{2});
+    QVERIFY(context.value(QStringLiteral("enabled")).toBool());
+    QCOMPARE(context.value(QStringLiteral("profile")).toString(), QStringLiteral("lossless"));
+    QCOMPARE(context.value(QStringLiteral("encoder")).toObject(),
+             remoteAudioL16EncoderToJson(l16EncoderProfile()));
+    QVERIFY(!context.contains(QStringLiteral("profileRefusal")));
+    const std::optional<RemoteAudioContextMessage> decoded =
+        decodeRemoteAudioContext(context, true, true);
+    QVERIFY(decoded.has_value());
+    QCOMPARE(decoded->profile, std::optional{RemoteAudioProfile::Lossless});
+    QCOMPARE(h.controller.audioProfile(), RemoteAudioProfile::Lossless);
+    // The next block boundary: sequence and timestamp continue from the
+    // Opus packet already sent.
+    QCOMPARE(decoded->firstSequence, static_cast<quint16>(
+        rtpSequence(h.mediaTransport->rtpPackets.constFirst()) + 1));
+    QCOMPARE(decoded->firstTimestamp,
+             rtpTimestamp(h.mediaTransport->rtpPackets.constFirst()) + 1920U);
+
+    feedAudioBlock(h);
+    QTRY_COMPARE(h.mediaTransport->rtpPackets.size(), 11);
+    for (int index = 0; index < 10; ++index) {
+        const QByteArray& packet = h.mediaTransport->rtpPackets.at(1 + index);
+        const PcmRtpDecodeResult l16 = decodeL16Rtp(packet, decoded->ssrc);
+        QCOMPARE(l16.status, OpusAudioCodecStatus::Accepted);
+        QCOMPARE(l16.sequence, static_cast<quint16>(decoded->firstSequence + index));
+        QCOMPARE(l16.timestamp, decoded->firstTimestamp + 192U * index);
+        QVERIFY(packet.size() <= IMediaTransport::kMaxRawRtpBytes);
+    }
+
+    // A stale revision asking for Opus is ignored.
+    QVERIFY(h.client.sendMediaControl(audioControl(2, true, QStringLiteral("opus")),
+                                      h.client.sessionEpoch()));
+    QVERIFY(h.client.sendMediaControl(audioControl(1, true, QStringLiteral("opus")),
+                                      h.client.sessionEpoch()));
+    QTest::qWait(50);
+    QCOMPARE(audioContextsIn(controls).size(), 2);
+    QCOMPARE(h.controller.audioProfile(), RemoteAudioProfile::Lossless);
+
+    // Back to Opus at the next block, with the Opus encoder still there.
+    QVERIFY(h.client.sendMediaControl(audioControl(3, true, QStringLiteral("opus")),
+                                      h.client.sessionEpoch()));
+    QTRY_COMPARE(audioContextsIn(controls).size(), 3);
+    context = audioContextsIn(controls).constLast();
+    QCOMPARE(context.value(QStringLiteral("profile")).toString(), QStringLiteral("opus"));
+    QCOMPARE(context.value(QStringLiteral("firstTimestamp")).toInteger(),
+             qint64{decoded->firstTimestamp + 1920U});
+    feedAudioBlock(h);
+    QTRY_COMPARE(h.mediaTransport->rtpPackets.size(), 12);
+    QCOMPARE(audioRtpPayloadType(h.mediaTransport->rtpPackets.constLast()),
+             OpusAudioCodecConfig::kPayloadType);
+    h.finish();
+}
+
+void TstDaemonMediaController::losslessRefusalKeepsOpusAndSaysWhy_data()
+{
+    QTest::addColumn<bool>("allowed");
+    QTest::addColumn<bool>("declareAtStart");
+    QTest::addColumn<QString>("refusal");
+    QTest::newRow("core-setting-deny") << false << true << QStringLiteral("lossless-not-allowed");
+    QTest::newRow("not-agreed-for-this-connection")
+        << true << false << QStringLiteral("lossless-unavailable");
+}
+
+// A refusal leaves Opus running and says why, as a machine code the GUI
+// turns into plain words.
+void TstDaemonMediaController::losslessRefusalKeepsOpusAndSaysWhy()
+{
+    QFETCH(bool, allowed);
+    QFETCH(bool, declareAtStart);
+    QFETCH(QString, refusal);
+    OpusAudioEncoder encoder;
+    if (!encoder.isReady()) {
+        QSKIP("Opus encoder is unavailable in this build");
+    }
+    Harness h;
+    h.controller.setAudioLosslessAllowed(allowed);
+    h.establishSession();
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    QVERIFY(h.client.sendMediaControl(
+        declareAtStart ? profileStart()
+                       : QJsonObject{{QStringLiteral("op"), QStringLiteral("start")},
+                                     {QStringLiteral("connectionId"),
+                                      QLatin1String(kConnectionId)}},
+        h.client.sessionEpoch()));
+    QTRY_VERIFY(h.mediaTransport);
+    // A Core that denies lossless never offers it; a GUI that did not
+    // declare the profile gets today's offer.
+    QVERIFY(!h.mediaTransport->startOptions.offerLosslessAudio);
+    h.mediaTransport->becomeReady();
+
+    g_daemonMediaMessages.clear();
+    const QtMessageHandler previous = qInstallMessageHandler(captureDaemonMediaMessages);
+    const auto restore = qScopeGuard([previous] { qInstallMessageHandler(previous); });
+    QVERIFY(h.client.sendMediaControl(audioControl(1, true, QStringLiteral("lossless")),
+                                      h.client.sessionEpoch()));
+    QTRY_COMPARE(audioContextsIn(controls).size(), 1);
+    const QJsonObject context = audioContextsIn(controls).constLast();
+    QCOMPARE(context.size(), 11);
+    QVERIFY(context.value(QStringLiteral("enabled")).toBool());
+    QCOMPARE(context.value(QStringLiteral("profile")).toString(), QStringLiteral("opus"));
+    QCOMPARE(context.value(QStringLiteral("profileRefusal")).toString(), refusal);
+    QCOMPARE(context.value(QStringLiteral("encoder")).toObject()
+                 .value(QStringLiteral("codec")).toString(), QStringLiteral("opus"));
+    const std::optional<RemoteAudioContextMessage> decoded =
+        decodeRemoteAudioContext(context, true, true);
+    QVERIFY(decoded.has_value());
+    QVERIFY(decoded->encoder.has_value());
+    QCOMPARE(h.controller.audioProfile(), RemoteAudioProfile::Opus);
+    // The Core's log line names the cause once.
+    QCOMPARE(g_daemonMediaMessages.filter(
+                 QStringLiteral("lossless audio refused (%1").arg(refusal)).size(), 1);
+    h.finish();
+}
+
+// An older GUI (minor 7) has no detail shape to carry a profile: the Core
+// refuses the new keys outright, and its plain start and audio control
+// still get today's offer and today's eight-key context.
+void TstDaemonMediaController::minorSevenPeerCannotAskForAnAudioProfile()
+{
+    OpusAudioEncoder encoder;
+    if (!encoder.isReady()) {
+        QSKIP("Opus encoder is unavailable in this build");
+    }
+    Harness h;
+    auto* station = new Test::LoopbackTransport(QStringLiteral("minor7-station"), this);
+    auto* peer = new Test::LoopbackTransport(QStringLiteral("minor7-peer"), this);
+    station->linkTo(peer);
+    h.server.acceptTransport(station);
+    peer->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor, kRemoteAudioStatusSessionProtocolMinor - 1, 0,
+        QStringLiteral("minor-7 client"))));
+    peer->sendText(SessionMessages::encode(SessionMessages::authRequest(h.server.token())));
+    QTRY_VERIFY(h.server.mediaAvailable());
+    QVERIFY(!h.server.remoteAudioStatusAvailable());
+    const auto send = [&](const QJsonObject& payload) {
+        SessionMessage message;
+        message.kind = SessionMessageKind::MediaControl;
+        message.mediaPayload = payload;
+        peer->sendText(SessionMessages::encode(message));
+    };
+    send(profileStart());
+    QTest::qWait(50);
+    QVERIFY(!h.mediaTransport);
+    send({{QStringLiteral("op"), QStringLiteral("start")},
+          {QStringLiteral("connectionId"), QLatin1String(kConnectionId)}});
+    QTRY_VERIFY(h.mediaTransport);
+    QVERIFY(!h.mediaTransport->startOptions.offerLosslessAudio);
+    h.mediaTransport->losslessNegotiated = true; // even so, never used
+    h.mediaTransport->becomeReady();
+
+    send(audioControl(1, true, QStringLiteral("lossless")));
+    QTest::qWait(50);
+    QVERIFY(receivedAudioContexts(*peer).isEmpty());
+    send(audioControl(1, true));
+    QTRY_COMPARE(receivedAudioContexts(*peer).size(), 1);
+    QVERIFY(hasLegacyAudioContextShape(receivedAudioContexts(*peer).constLast()));
+    QCOMPARE(h.controller.audioProfile(), RemoteAudioProfile::Opus);
+    peer->closeLink(QStringLiteral("test complete"));
 }
 
 QTEST_MAIN(TstDaemonMediaController)
