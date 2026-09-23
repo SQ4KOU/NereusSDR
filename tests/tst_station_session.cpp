@@ -310,6 +310,7 @@ private slots:
     void schemaSkewIsCaughtByNameComparison();
     void receiveOnlyStationBlocksRemoteBandRecall();
     void receiveOnlyStationRefusesTransmitPropertyWrites();
+    void receiveOnlyStationRefusesTransmitDspOptionsSettingsWrites();
     void receiveOnlyPolicySurvivesRadioTeardown();
 
     // ---- Fix round 1 ----
@@ -2813,6 +2814,61 @@ void TstStationSession::receiveOnlyStationRefusesTransmitPropertyWrites()
     QTRY_VERIFY(!clientTx.isMox());
     QTRY_VERIFY(!clientTx.isTune());
     QTRY_COMPARE(clientTx.power(), settledPower);
+}
+
+void TstStationSession::receiveOnlyStationRefusesTransmitDspOptionsSettingsWrites()
+{
+    // R-R3-21. The DSP > Options TX combos write station transmit settings:
+    // DspOptions keys are Station-scoped (SettingsScope.cpp), so a remote
+    // window's write would otherwise land in the Core's store. A receive-only
+    // Core refuses them for the same reason it refuses direct TransmitModel
+    // writes, and the GUI learns it through the ordinary settings rejection.
+    // Receive DSP options are still the operator's to change.
+    const QString txKey = QStringLiteral("DspOptionsBufferSizePhoneTx");
+    const QString rxKey = QStringLiteral("DspOptionsBufferSizePhoneRx");
+
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(
+        settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+    stationSettings.setValue(txKey, QStringLiteral("1024"));
+    stationSettings.setValue(rxKey, QStringLiteral("1024"));
+
+    auto stationModel = makeStationRadioModel(0);
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    QVERIFY(stationModel->receiveOnlyStationPolicy());
+
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
+    stationEnd->linkTo(clientEnd);
+
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    client.startSession(clientEnd, server.token());
+    server.acceptTransport(stationEnd);
+    QTRY_COMPARE(completed.count(), 1);
+    QVERIFY(proxy.ready());
+    QCOMPARE(proxy.value(txKey, QString()).toString(), QStringLiteral("1024"));
+
+    QSignalSpy rejected(&proxy, &SettingsProxy::valueRejected);
+    QSignalSpy toast(&clientModel, &RadioModel::sliceAddRejected);
+    proxy.setValue(txKey, QStringLiteral("2048"));
+    QTRY_COMPARE(rejected.count(), 1);
+    QCOMPARE(rejected.first().at(0).toString(), txKey);
+    QCOMPARE(rejected.first().at(1).toString(), QStringLiteral("1024"));
+    QCOMPARE(stationSettings.value(txKey).toString(), QStringLiteral("1024"));
+    QCOMPARE(proxy.value(txKey, QString()).toString(), QStringLiteral("1024"));
+    QCOMPARE(toast.count(), 1);
+    QCOMPARE(toast.first().at(0).toString(),
+             QStringLiteral("Transmit configuration is unavailable on this receive-only station."));
+
+    proxy.setValue(rxKey, QStringLiteral("2048"));
+    QTRY_COMPARE(stationSettings.value(rxKey).toString(), QStringLiteral("2048"));
+    QCOMPARE(rejected.count(), 1);
+    QCOMPARE(stationSettings.value(txKey).toString(), QStringLiteral("1024"));
 }
 
 void TstStationSession::receiveOnlyPolicySurvivesRadioTeardown()

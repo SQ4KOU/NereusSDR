@@ -64,8 +64,10 @@ public:
     // follows the negotiated transmit permission (a remote model starts
     // denied; MainWindow::applyRemoteRoleGating pushes the Core's answer).
     // Reset vocoder acts on this computer's own RADE channel, which a
-    // remote window never has, so remotely it stays unavailable with the
-    // same reason. Local direct mode is unchanged.
+    // remote window never has, so remotely it stays unavailable: with the
+    // transmit reason while transmit is denied, and with a reason naming
+    // the station computer once it is permitted. Local direct mode is
+    // unchanged.
     void setTransmitPermitted(bool permitted, const QString& reason = QString());
 
     // Test seams (Phase 3R L2).  Exposed so tst_rade_applet can verify

@@ -189,9 +189,11 @@ DspOptionsPage::DspOptionsPage(RadioModel* model, QWidget* parent)
 {
     buildUI();
 
-    // R-R3-21: on a remote-station model the TX combos only reach this
-    // window's own settings and inert TX channel, so they start unavailable
-    // and follow the transmit permission SetupDialog pushes.
+    // R-R3-21: on a remote-station model the TX combos write the station's
+    // transmit settings (the DspOptions keys are station-scoped,
+    // SettingsScope.cpp), so they start unavailable and follow the transmit
+    // permission SetupDialog pushes. A receive-only Core also refuses those
+    // writes itself (StationServer::handleSettingsWrite).
     if (model && !model->ownsLocalDsp()) {
         setTransmitPermitted(false, QString());
     }

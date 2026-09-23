@@ -71,6 +71,21 @@ constexpr const char* kRadioKey = "radio";
 constexpr const char* kTransmitKey = "transmit";
 constexpr const char* kTunerKey = "tuner";
 
+// The one reason a receive-only Core gives for every transmit
+// configuration write it refuses: direct TransmitModel property writes and
+// the DSP > Options TX settings keys alike (R-R3-21).
+constexpr const char* kReceiveOnlyTransmitReason =
+    "Transmit configuration is unavailable on this receive-only station.";
+
+// DSP > Options TX combos persist to DspOptions<Setting><Mode>Tx
+// (DspOptionsPage::buildUI). The DspOptions prefix is Station-scoped, so
+// these keys are station transmit settings; their Rx siblings are not.
+bool isTransmitDspOptionsKey(const QString& key)
+{
+    return key.startsWith(QLatin1String("DspOptions"))
+        && key.endsWith(QLatin1String("Tx"));
+}
+
 QByteArray panKey(int index)
 {
     return QByteArrayLiteral("pan:") + QByteArray::number(index);
@@ -1033,7 +1048,7 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
             continue;
         }
         if (receiveOnlyTransmitWrite) {
-            refusals.insert(update.name, QStringLiteral("Transmit configuration is unavailable on this receive-only station."));
+            refusals.insert(update.name, QString::fromLatin1(kReceiveOnlyTransmitReason));
             continue;
         }
         if (!negotiated && (message.objectKey == "pureSignalSettings"
@@ -1105,6 +1120,18 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
         return;
     }
     const QString key = QString::fromUtf8(message.objectKey);
+    // A receive-only Core refuses DSP > Options TX writes exactly as it
+    // refuses direct TransmitModel writes (handlePropertyWrite above), and
+    // hands back its own value so the remote combo settles on it.
+    if (isTransmitDspOptionsKey(key) && !m_radioModel.isNull()
+        && m_radioModel->receiveOnlyStationPolicy()) {
+        const QString reason = QString::fromLatin1(kReceiveOnlyTransmitReason);
+        const QVariant restored = m_settings.value(key);
+        qCWarning(lcStation) << "Refused remote settings write" << key << ":" << reason;
+        send(transport, SessionMessages::settingsReject(key, restored.isValid(),
+                                                        restored.toString(), reason));
+        return;
+    }
     const SettingsApplyResult result =
         m_settingsServer->applyInboundWrite(key, message.updates.first().value,
                                             message.originTag);

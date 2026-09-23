@@ -113,7 +113,7 @@ operator receive session. The three exceptions found are listed under
 | Phone/CW applet: MIC, PROC, VAX source, DEXP | Transmit | `PhoneCwApplet::setTransmitPermitted` `:1207-1249` | `tst_remote_tx_widgets` |
 | Phone/CW applet: compression, mic profile/source, MON, AM carrier, CW and FM pages | Placeholder | NYI overlays | n/a |
 | RADE applet: profile combo | **Transmit (gated here)** | `MicProfileManager::setActiveProfile`, the same mic profile Audio > TX Profile gates; `RadeApplet::setTransmitPermitted`, starts denied on a remote model, pushed from `applyRemoteRoleGating()` | `tst_remote_gui_gating` (`remoteRadeAppletFollowsTheTransmitPermission`, real window in `toolsMenuTestEntriesAreDisabledInARemoteSession`), `tst_remote_window_harness` (`capabilityChangeRegatesWithoutReconnect`) |
-| RADE applet: Reset vocoder | **Unavailable (gated here)** | local `WdspEngine::radeChannel()`; on a remote model disabled with the transmit reason and the window's own DSP is never looked up | `tst_remote_gui_gating` (`remoteRadeAppletFollowsTheTransmitPermission`); hardware pending (S1) |
+| RADE applet: Reset vocoder | **Unavailable (gated here)** | local `WdspEngine::radeChannel()`; on a remote model always disabled and the window's own DSP is never looked up; while transmit is denied it gives the transmit reason, once transmit is permitted "The RADE vocoder runs on the station computer and cannot be reset from a remote window." | `tst_remote_gui_gating` (`remoteRadeAppletFollowsTheTransmitPermission`), `tst_remote_window_harness` (`capabilityChangeRegatesWithoutReconnect`); hardware pending (S1) |
 | VAX applet: RX gain/mute x4, TX gain | **Unavailable (gated here)** | local `AudioEngine` VAX buses; remote audio plays through the speakers only (`AudioEngine::writeRemotePlayback`) | `tst_remote_gui_gating` (`remoteVaxSurfacesAreUnavailable`) |
 | PureSignal applet | Station-backed (PS3 facade); hidden unless PS3 is advertised `:10227-10234` | `PureSignalSessionFacade::requestAction` | `tst_ps3_session` |
 | AM Mod Monitor applet | GUI-local display of a transmit analyser; no remote feed | `RadioModel::setAmModFeedbackWanted`, `ModMon/*` keys | hardware pending (S1) |
@@ -162,7 +162,7 @@ visible and are not listed.
 | DSP > CFC | **Transmit (gated here)** | `TransmitModel` phase rotator, CFC, CESSB; opens the TX CFC editor | `tst_remote_gui_gating` (`remoteTransmitOnlySetupLeavesFollowThePermission`) |
 | DSP > TNF | Station-backed setting, not applied live (F1) | `NotchModel`, `addNotchForSlice` | see F1 |
 | DSP > Filter Presets | GUI-local | `FilterPresetStore` (`filters/...`, OperatorLocal); buttons then write `SliceModel::setFilter` | n/a |
-| DSP > Options | Station-backed settings, local apply (F2); high-resolution graph unavailable; the nine TX combos **Transmit (gated here)** | `DspOptions*` keys; `rebuildDspOptionsForMode` is local-only; FIR graph checkbox disabled remotely; `DspOptionsPage::setTransmitPermitted` gates the SSB/AM, FM and Digital TX buffer, filter size and filter type combos | `tst_remote_gui_gating` (high-resolution cases, `remoteDspOptionsTransmitCombosFollowThePermission`); hardware pending (S1) |
+| DSP > Options | Station-backed settings, local apply (F2); high-resolution graph unavailable; the nine TX combos **Transmit (gated here)** | `DspOptions*` keys; `rebuildDspOptionsForMode` is local-only; FIR graph checkbox disabled remotely; `DspOptionsPage::setTransmitPermitted` gates the SSB/AM, FM and Digital TX buffer, filter size and filter type combos; the receive-only Core refuses `DspOptions*Tx` settings writes with the TransmitModel refusal reason (`StationServer::handleSettingsWrite`) and still accepts the RX keys | `tst_remote_gui_gating` (high-resolution cases, `remoteDspOptionsTransmitCombosFollowThePermission`), `tst_station_session` (`receiveOnlyStationRefusesTransmitDspOptionsSettingsWrites`); hardware pending (S1) |
 | Display > Spectrum Defaults, Spectrum Peaks, Waterfall Defaults, Grid & Scales, Multimeter, 3D View | GUI-local display; `DisplayFft*`, `DisplaySpectrumFps`, `MultimeterDelayMs` are Station keys; grid dB writes the mirrored `PanadapterModel` | `SpectrumWidget`, `FFTEngine`, `MeterPoller` setters | `tst_remote_fft_production`, `tst_remote_spectrum_render`; hardware pending (S1) |
 | Display > RX2 Display | Placeholder | all controls disabled | n/a |
 | Display > TX Display | GUI-local display of TX; TxAnalyzer absent remotely, setters null-guarded | `SpectrumWidget` TX setters | n/a |
@@ -204,7 +204,8 @@ visible and are not listed.
   the nine DSP > Options TX combos follow the transmit permission
   (`SetupPage::setTransmitPermitted`, pushed by `SetupDialog` to every
   realized page); the RADE applet profile combo follows it and Reset
-  vocoder carries the same reason remotely; the RF-Kit RF2K-S OPERATE,
+  vocoder carries the transmit reason remotely while transmit is denied
+  and a station-computer reason once it is permitted; the RF-Kit RF2K-S OPERATE,
   antenna buttons and Disconnect/Reconnect carry the amplifier reason. The
   default reason before the station answers is now "Transmit controls are
   unavailable until the station confirms transmit permission." on the TX,
@@ -233,17 +234,22 @@ suites listed in the verification line, pass unchanged.
   groups and the DSP > Options TX buffer/filter combos were not
   transmit-gated. The TX Leveler and ALC setters are not mirrored
   (`MirrorPolicy.cpp`), so an edit landed only in this window's own
-  TransmitModel, the same reason CFC and Two-Tone are gated; the TX combos
-  reach only this window's settings and inert TX channel. All of them now
-  follow the transmit permission; the pages stay available for their
-  receive halves.
+  TransmitModel, the same reason CFC and Two-Tone are gated. The TX combos
+  write `DspOptions*Tx`, and the `DspOptions` keys are station-scoped
+  (`SettingsScope.cpp:366`), so each edit was a write to the Core's
+  station transmit settings. All of them now follow the transmit
+  permission, and the receive-only Core also refuses `DspOptions*Tx`
+  settings writes the way it refuses TransmitModel writes; the pages stay
+  available for their receive halves.
 - **F4, closed here.** The RX applet's XIT row and filter-preset Shift-click
   were transmit gestures outside the flag's gate; both now follow the
   permission (see "Gating added").
 - **F5, closed in the fix wave.** The profile combo set a TX mic profile
   without the transmit gate, and Reset vocoder was disabled without a
   stated reason. The combo now follows the permission and Reset vocoder
-  gives the transmit reason remotely.
+  gives the transmit reason remotely while transmit is denied, and once it
+  is permitted says the vocoder runs on the station computer and cannot be
+  reset from a remote window.
 - **F6, TCI server in a remote window.** A remote window runs its own TCI
   server against the mirrored model. Receive state follows the Core; TX
   audio would feed this window's inert TX channel. Whether the server should

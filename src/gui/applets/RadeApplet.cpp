@@ -334,9 +334,16 @@ void RadeApplet::updateTransmitControlAvailability()
     }
     if (m_resetButton && isRemoteModel()) {
         // The constructor set a reason before any refresh reaches here.
+        // While transmit is denied the transmit reason is the whole story;
+        // once it is permitted the button is still unavailable, because the
+        // vocoder lives on the Core, and the reason says that instead.
+        const QString reason = m_transmitPermitted
+            ? tr("The RADE vocoder runs on the station computer and cannot be "
+                 "reset from a remote window.")
+            : m_transmitReason;
         m_resetButton->setEnabled(false);
-        m_resetButton->setToolTip(m_transmitReason);
-        m_resetButton->setAccessibleDescription(m_transmitReason);
+        m_resetButton->setToolTip(reason);
+        m_resetButton->setAccessibleDescription(reason);
     }
 }
 

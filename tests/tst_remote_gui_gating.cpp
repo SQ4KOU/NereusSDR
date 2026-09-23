@@ -1746,8 +1746,10 @@ private slots:
     //
     // DSP > AGC/ALC carries the TX Leveler and TX ALC groups and DSP >
     // Options carries a TX combo per mode for buffer size, filter size and
-    // filter type. None of those settings reach the Core from a remote
-    // window, so each follows the transmit permission the rest of the
+    // filter type. The TX Leveler and TX ALC edits are not mirrored, so they
+    // would land only in this window's TransmitModel; the DSP > Options TX
+    // combos write station transmit settings (the DspOptions keys are
+    // station-scoped). Each follows the transmit permission the rest of the
     // transmit surfaces follow. The pages stay live for their receive
     // halves.
     // ====================================================================
@@ -1966,9 +1968,15 @@ private slots:
         QVERIFY(combo->isEnabled());
         QVERIFY(combo->toolTip() != reason);
         QVERIFY(!reset->isEnabled());
-        QVERIFY2(isPlainOperatorReason(reset->toolTip()), qPrintable(reset->toolTip()));
+        const QString coreVocoder = QStringLiteral(
+            "The RADE vocoder runs on the station computer and cannot be reset "
+            "from a remote window.");
+        QCOMPARE(reset->toolTip(), coreVocoder);
+        QCOMPARE(reset->accessibleDescription(), coreVocoder);
         applet.setTransmitPermitted(false, reason);
         QVERIFY(!combo->isEnabled());
+        QCOMPARE(reset->toolTip(), reason);
+        QCOMPARE(reset->accessibleDescription(), reason);
 
         RadioModel local;
         local.addSlice();

@@ -370,7 +370,9 @@ private slots:
                 // would. The window keeps its retained slices across a drop,
                 // so without an empty pan the reconnect could not create
                 // anything whether or not the guard held; this makes the
-                // reconnect half test the guard on its own.
+                // reconnect half test the guard on its own. The single-pan
+                // row cannot test the populatePanSlices guard on reconnect:
+                // its only pan always holds the Core's only slice.
                 for (SliceModel* slice : h.station().slicesOnPan(panIds.constLast())) {
                     h.station().removeSlice(slice->sliceIndex());
                 }
@@ -466,8 +468,14 @@ private slots:
         QVERIFY(txEq->toolTip() != reason);
         QVERIFY(radeProfile->isEnabled());
         QVERIFY(radeProfile->toolTip() != reason);
-        // Reset vocoder stays unavailable: the vocoder runs on the Core.
-        QVERIFY(!rade->resetVocoderButtonForTest()->isEnabled());
+        // Reset vocoder stays unavailable: the vocoder runs on the Core,
+        // and once transmit is permitted it says so instead of the
+        // transmit reason.
+        QPushButton* const radeReset = rade->resetVocoderButtonForTest();
+        QVERIFY(!radeReset->isEnabled());
+        QCOMPARE(radeReset->toolTip(),
+                 QStringLiteral("The RADE vocoder runs on the station computer and "
+                                "cannot be reset from a remote window."));
 
         StationCapabilities withdrawn = h.server().buildCapabilities();
         withdrawn.txPermitted = false;
@@ -476,6 +484,7 @@ private slots:
         QCOMPARE(txEq->toolTip(), reason);
         QVERIFY(!radeProfile->isEnabled());
         QCOMPARE(radeProfile->toolTip(), reason);
+        QCOMPARE(radeReset->toolTip(), reason);
 
         QCOMPARE(client->sessionEpoch(), epoch);
         QCOMPARE(h.acceptedConnections(), 1);
