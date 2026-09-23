@@ -415,6 +415,73 @@ private slots:
         QVERIFY(!displayLoadReadingFrom(in, 5'000, pan).systemCpuSampleStartMs.has_value());
     }
 
+    // R-R3-40: /proc/stat has one line per core, so a large computer's file
+    // is far longer than the read buffer, and its "intr" line alone can be
+    // longer still. The last cores' lines are read like the first.
+    void aLargeCpuCountIsReadWhole()
+    {
+        constexpr int kCpus = 128;
+        const auto statWith = [](quint64 step) {
+            // Large counters, as on a long-running machine, make each line
+            // about 90 bytes: the 128 core lines alone pass the 8 KiB read
+            // buffer.
+            constexpr quint64 kBase = 10'000'000'000'000'000ULL;
+            const QByteArray rest = " " + QByteArray::number(kBase) + " "
+                + QByteArray::number(kBase);
+            QByteArray text;
+            quint64 busyAll = 0;
+            quint64 idleAll = 0;
+            QByteArray cores;
+            for (int cpu = 0; cpu < kCpus; ++cpu) {
+                // The last eight cores are fully busy, the rest half busy.
+                const bool top = cpu >= kCpus - 8;
+                const quint64 busy = kBase + step * (top ? 100 : 50);
+                const quint64 idle = kBase + step * (top ? 0 : 50);
+                busyAll += busy;
+                idleAll += idle;
+                // user nice system idle iowait irq softirq steal guest
+                // guest_nice: nice and system are constant, the rest zero.
+                cores += "cpu" + QByteArray::number(cpu) + ' ' + QByteArray::number(busy)
+                    + rest + ' ' + QByteArray::number(idle) + " 0 0 0 0 0 0\n";
+            }
+            text += "cpu  " + QByteArray::number(busyAll) + ' '
+                + QByteArray::number(kBase * kCpus) + ' ' + QByteArray::number(kBase * kCpus)
+                + ' ' + QByteArray::number(idleAll) + " 0 0 0 0 0 0\n";
+            text += cores;
+            text += "intr 123456789";
+            for (int irq = 0; irq < 4'000; ++irq) {
+                text += " 12345";
+            }
+            text += "\nctxt 999\nbtime 1700000000\n";
+            return text;
+        };
+        Fixture f;
+        f.standardProc();
+        f.write(QStringLiteral("proc/stat"), statWith(1));
+        QVERIFY(statWith(1).indexOf("cpu127 ") > 8192);
+        QVERIFY(statWith(1).size() - statWith(1).indexOf("intr") > 8192);
+        HostTelemetrySampler sampler(f.root());
+        QList<int> top;
+        for (int cpu = kCpus - 8; cpu < kCpus; ++cpu) {
+            top.append(cpu);
+        }
+        sampler.setWatchedCpus(top);
+        sampler.sample();
+        f.write(QStringLiteral("proc/stat"), statWith(2));
+        const StationHostTelemetry host = sampler.sample();
+        // 120 cores at 50 % and 8 at 100 %.
+        QVERIFY(host.systemCpuPercent.has_value());
+        QCOMPARE(*host.systemCpuPercent, (120.0 * 50.0 + 8.0 * 100.0) / 128.0);
+        QCOMPARE(sampler.watchedCpuPercent(), std::optional<double>(100.0));
+
+        // A core past the last line (offline, or never there) is absent.
+        sampler.setWatchedCpus({kCpus});
+        sampler.sample();
+        f.write(QStringLiteral("proc/stat"), statWith(3));
+        sampler.sample();
+        QVERIFY(!sampler.watchedCpuPercent().has_value());
+    }
+
     void anOfflineWatchedCoreIsAbsent()
     {
         Fixture f;

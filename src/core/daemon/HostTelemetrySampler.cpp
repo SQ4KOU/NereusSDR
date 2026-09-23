@@ -25,8 +25,9 @@ namespace NereusSDR {
 namespace {
 
 // Large enough for /proc/meminfo and /proc/self/status on the Rock (each
-// well under 2 KiB) and for the aggregate first line of /proc/stat on any
-// machine. A value past the end of the buffer reads as absent.
+// well under 2 KiB). A value past the end of the buffer reads as absent.
+// /proc/stat is read through it in chunks (readProcStat), so its per-core
+// lines fit whatever the number of cores.
 constexpr qsizetype kReadBufferBytes = 8192;
 using ReadBuffer = std::array<char, kReadBufferBytes>;
 
@@ -149,50 +150,127 @@ bool parseCpuTimes(const char* p, const char* end, SystemTimes* times)
     return true;
 }
 
-// The aggregate "cpu" line, the first line of proc/stat.
-bool parseSystemTimes(const char* data, qsizetype length, SystemTimes* times)
-{
-    if (length < 4 || std::memcmp(data, "cpu ", 4) != 0) { return false; }
-    return parseCpuTimes(data + 4, data + length, times);
-}
+// What readProcStat() found: the aggregate "cpu" line and the watched
+// cores' "cpuN" lines summed.
+struct ProcStatTimes {
+    bool systemRead = false;
+    SystemTimes system;
+    bool watchedRead = false;
+    SystemTimes watched;
+};
 
-// The per-core "cpuN" lines for `cpus`, summed. False when any of them is
-// missing (an offline core has no line) or unreadable. The per-core lines
-// follow the aggregate line, well inside the read buffer on any Core
-// computer; a line cut off by the buffer's end reads as missing.
-bool parseCpuSetTimes(const char* data, qsizetype length, const QList<int>& cpus,
-                      SystemTimes* times)
+// Reads proc/stat's cpu lines through `buffer` a chunk at a time, keeping
+// any part line for the next chunk, so a computer with many cores (one
+// line each) is read whole; nothing is allocated. The aggregate line must
+// be the first line. The watched cores' lines are summed; the set reads as
+// absent when any of them has no line (an offline core) or is unreadable.
+// Reading stops at the first line after the cpu lines (the next, "intr",
+// can itself be longer than the buffer). A line cut off at the end of the
+// file, or one longer than the buffer, is not trusted.
+ProcStatTimes readProcStat(const QByteArray& path, ReadBuffer& buffer, const QList<int>& cpus)
 {
-    if (cpus.isEmpty()) { return false; }
-    const char* const end = data + length;
-    const char* line = data;
-    SystemTimes sum;
-    int found = 0;
-    while (line < end) {
-        const char* newline = static_cast<const char*>(
-            std::memchr(line, '\n', static_cast<size_t>(end - line)));
-        if (!newline) { break; } // A cut-off last line is not trusted.
-        if (newline - line > 3 && std::memcmp(line, "cpu", 3) == 0
-            && line[3] >= '0' && line[3] <= '9') {
-            const char* p = line + 3;
-            quint64 number = 0;
-            if (parseUnsigned(p, newline, &number) && number <= quint64(std::numeric_limits<int>::max())
-                && cpus.contains(static_cast<int>(number))) {
-                SystemTimes core;
-                if (!parseCpuTimes(p, newline, &core)
-                    || sum.total > std::numeric_limits<quint64>::max() - core.total) {
-                    return false;
-                }
-                sum.total += core.total;
-                sum.idle += core.idle;
-                ++found;
-            }
+    ProcStatTimes result;
+    if (path.isEmpty()) { return result; }
+#ifdef Q_OS_UNIX
+    int fd = -1;
+    do {
+        fd = ::open(path.constData(), O_RDONLY | O_CLOEXEC);
+    } while (fd < 0 && errno == EINTR);
+    if (fd < 0) { return result; }
+    const auto readSome = [fd](char* into, qsizetype room) -> qsizetype {
+        for (;;) {
+            const ssize_t got = ::read(fd, into, static_cast<size_t>(room));
+            if (got < 0 && errno == EINTR) { continue; }
+            return got < 0 ? -1 : static_cast<qsizetype>(got);
         }
-        line = newline + 1;
+    };
+#else
+    QFile file(QFile::decodeName(path));
+    if (!file.open(QIODevice::ReadOnly)) { return result; }
+    const auto readSome = [&file](char* into, qsizetype room) -> qsizetype {
+        const qint64 got = file.read(into, room);
+        return got < 0 ? -1 : static_cast<qsizetype>(got);
+    };
+#endif
+    bool failed = false;
+    bool eof = false;
+    bool firstLine = true;
+    bool pastCpuLines = false;
+    bool watchedBad = false;
+    int found = 0;
+    SystemTimes sum;
+    qsizetype filled = 0;
+    while (!failed && !pastCpuLines) {
+        while (!eof && filled < kReadBufferBytes) {
+            const qsizetype got = readSome(buffer.data() + filled, kReadBufferBytes - filled);
+            if (got < 0) { failed = true; break; }
+            if (got == 0) { eof = true; break; }
+            filled += got;
+        }
+        if (failed) { break; }
+        const char* const begin = buffer.data();
+        const char* const end = begin + filled;
+        const char* line = begin;
+        while (line < end) {
+            const char* newline = static_cast<const char*>(
+                std::memchr(line, '\n', static_cast<size_t>(end - line)));
+            if (!newline) {
+                // A part line: once it plainly is not a cpu line, the cpu
+                // lines are over, however long it runs.
+                pastCpuLines = end - line >= 4
+                    && !(std::memcmp(line, "cpu", 3) == 0
+                         && (line[3] == ' ' || (line[3] >= '0' && line[3] <= '9')));
+                break;
+            }
+            if (firstLine) {
+                firstLine = false;
+                result.systemRead = newline - line >= 4 && std::memcmp(line, "cpu ", 4) == 0
+                    && parseCpuTimes(line + 4, newline, &result.system);
+            } else if (newline - line > 3 && std::memcmp(line, "cpu", 3) == 0
+                       && line[3] >= '0' && line[3] <= '9') {
+                const char* p = line + 3;
+                quint64 number = 0;
+                if (parseUnsigned(p, newline, &number)
+                    && number <= quint64(std::numeric_limits<int>::max())
+                    && cpus.contains(static_cast<int>(number))) {
+                    SystemTimes core;
+                    if (!parseCpuTimes(p, newline, &core)
+                        || sum.total > std::numeric_limits<quint64>::max() - core.total) {
+                        watchedBad = true;
+                    } else {
+                        sum.total += core.total;
+                        sum.idle += core.idle;
+                        ++found;
+                    }
+                }
+            } else {
+                pastCpuLines = true;
+                break;
+            }
+            line = newline + 1;
+        }
+        if (pastCpuLines) { break; }
+        const qsizetype consumed = line - begin;
+        if (consumed == 0) {
+            // No whole line: the end of the file after a cut-off line, or a
+            // cpu line longer than the buffer.
+            failed = !eof;
+            break;
+        }
+        std::memmove(buffer.data(), line, static_cast<size_t>(filled - consumed));
+        filled -= consumed;
     }
-    if (found != cpus.size()) { return false; }
-    *times = sum;
-    return true;
+#ifdef Q_OS_UNIX
+    ::close(fd);
+#endif
+    if (failed) {
+        return ProcStatTimes{};
+    }
+    result.watchedRead = !cpus.isEmpty() && !watchedBad && found == cpus.size();
+    if (result.watchedRead) {
+        result.watched = sum;
+    }
+    return result;
 }
 
 // /proc/self/stat: the command name sits in parentheses and may itself hold
@@ -324,13 +402,11 @@ StationHostTelemetry HostTelemetrySampler::sample()
     if (!m_enabled) { return host; }
     ReadBuffer buffer;
 
-    SystemTimes system;
-    SystemTimes watched;
-    const qsizetype statLength = readSmallFile(m_procStatPath, buffer);
-    const bool systemRead = statLength > 0
-        && parseSystemTimes(buffer.data(), statLength, &system);
-    const bool watchedRead = statLength > 0
-        && parseCpuSetTimes(buffer.data(), statLength, m_watchedCpus, &watched);
+    const ProcStatTimes stat = readProcStat(m_procStatPath, buffer, m_watchedCpus);
+    const SystemTimes& system = stat.system;
+    const SystemTimes& watched = stat.watched;
+    const bool systemRead = stat.systemRead;
+    const bool watchedRead = stat.watchedRead;
     m_watchedCpuPercent.reset();
     if (watchedRead && m_watchedBaseline && watched.total > m_watchedBaseline->total
         && watched.idle >= m_watchedBaseline->idle
