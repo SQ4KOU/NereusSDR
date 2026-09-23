@@ -6,13 +6,17 @@
 #include "core/AppSettings.h"
 #include "core/RadioConnection.h"
 #include "core/daemon/DaemonTelemetryController.h"
+#include "core/daemon/HostTelemetrySampler.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "core/settings/SettingsProxy.h"
 #include "fakes/LoopbackTransport.h"
 #include "models/RadioModel.h"
 
+#include <QDir>
+#include <QFile>
 #include <QPointer>
+#include <QRegularExpression>
 #include <QSemaphore>
 #include <QTemporaryDir>
 #include <QThread>
@@ -128,6 +132,39 @@ struct ThreadConnection {
     QPointer<NullRadioConnection> connection{new NullRadioConnection};
 };
 
+// A procfs/sysfs tree under a temporary root, so no test reads the build
+// machine's own /proc or /sys.
+struct HostFixture {
+    QTemporaryDir directory;
+
+    void write(const QString& relative, const QByteArray& contents)
+    {
+        const QString path = directory.filePath(relative);
+        QDir().mkpath(QFileInfo(path).path());
+        QFile file(path);
+        QVERIFY(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+        QCOMPARE(file.write(contents), contents.size());
+    }
+
+    void cpu(const QByteArray& statLine, quint64 processTicks)
+    {
+        write(QStringLiteral("proc/stat"), statLine);
+        write(QStringLiteral("proc/self/stat"),
+              "77 (nereusd) S 1 77 77 0 -1 0 0 0 0 0 "
+                  + QByteArray::number(processTicks) + " 0 0 0 20 0 4 0\n");
+    }
+
+    HostFixture()
+    {
+        cpu("cpu  100 0 100 700 100 0 0 0 0 0\n", 10);
+        write(QStringLiteral("proc/meminfo"),
+              "MemTotal:        8000000 kB\nMemAvailable:    6500000 kB\n");
+        write(QStringLiteral("proc/self/status"), "Name:\tnereusd\nVmRSS:\t   51234 kB\n");
+        write(QStringLiteral("sys/class/thermal/thermal_zone0/type"), "soc-thermal\n");
+        write(QStringLiteral("sys/class/thermal/thermal_zone0/temp"), "47500\n");
+    }
+};
+
 } // namespace
 
 class TstDaemonTelemetry final : public QObject {
@@ -227,6 +264,81 @@ private slots:
         snapshot = lastSnapshot(samples);
         QVERIFY(snapshot.audio.active);
         QVERIFY(!snapshot.audio.sourceFramesPerSecond);
+    }
+
+    // R-R3-32/33: the 1 Hz sample carries the Core's host load to a peer
+    // that negotiated it; CPU needs two samples within one session.
+    void hostTelemetryRidesTheSampleAndRestartsPerSession()
+    {
+        SessionHarness h;
+        HostFixture host;
+        qint64 nowMs = 0;
+        DaemonTelemetryController controller(
+            &h.server, &h.station, nullptr, nullptr, [&] { return nowMs; }, {},
+            std::make_unique<HostTelemetrySampler>(host.directory.path()));
+        controller.disableAutomaticSamplingForTest();
+        h.server.setTelemetryEnabled(true);
+        QCOMPARE(h.server.buildCapabilities().stationTelemetryVersion, 2);
+        QSignalSpy samples(&h.client, &StationClient::telemetryReceived);
+        h.connectClient(this);
+        QTRY_VERIFY(h.client.telemetryAvailable());
+        QCOMPARE(h.client.agreedMinor(), kCoreHostTelemetrySessionProtocolMinor);
+
+        nowMs = 1000;
+        controller.sampleNow();
+        QTRY_COMPARE(samples.count(), 1);
+        StationTelemetrySnapshot snapshot = lastSnapshot(samples);
+        QVERIFY(!snapshot.host.systemCpuPercent);
+        QVERIFY(!snapshot.host.processCpuPercent);
+        QCOMPARE(snapshot.host.memoryTotalKiB, std::optional<qint64>(8000000));
+        QCOMPARE(snapshot.host.memoryAvailableKiB, std::optional<qint64>(6500000));
+        QCOMPARE(snapshot.host.processResidentKiB, std::optional<qint64>(51234));
+        QCOMPARE(snapshot.host.hottestZoneCelsius, std::optional<double>(47.5));
+        QCOMPARE(snapshot.host.hottestZoneName, QStringLiteral("soc-thermal"));
+
+        host.cpu("cpu  300 0 300 1200 200 0 0 0 0 0\n", 60); // 1000 ticks, 400 busy
+        nowMs = 2000;
+        controller.sampleNow();
+        QTRY_COMPARE(samples.count(), 2);
+        snapshot = lastSnapshot(samples);
+        QCOMPARE(snapshot.host.systemCpuPercent, std::optional<double>(40.0));
+        QCOMPARE(snapshot.host.processCpuPercent, std::optional<double>(5.0));
+
+        // A new session does not report an interval that spans the gap.
+        h.client.disconnectFromStation(QStringLiteral("host telemetry epoch"));
+        QTRY_VERIFY(!controller.isCollecting());
+        h.connectClient(this);
+        QTRY_VERIFY(h.client.telemetryAvailable());
+        host.cpu("cpu  400 0 300 1400 300 0 0 0 0 0\n", 90);
+        nowMs = 3000;
+        controller.sampleNow();
+        QTRY_COMPARE(samples.count(), 3);
+        snapshot = lastSnapshot(samples);
+        QVERIFY(!snapshot.host.systemCpuPercent);
+        QCOMPARE(snapshot.host.memoryTotalKiB, std::optional<qint64>(8000000));
+    }
+
+    // The embedded Core on macOS and Windows has no procfs: the host
+    // section stays absent and sampling logs nothing.
+    void disabledHostSamplerSendsNoHostSectionAndLogsNothing()
+    {
+        SessionHarness h;
+        qint64 nowMs = 0;
+        DaemonTelemetryController controller(
+            &h.server, &h.station, nullptr, nullptr, [&] { return nowMs; }, {},
+            std::make_unique<HostTelemetrySampler>(QString()));
+        controller.disableAutomaticSamplingForTest();
+        h.server.setTelemetryEnabled(true);
+        QSignalSpy samples(&h.client, &StationClient::telemetryReceived);
+        h.connectClient(this);
+        QTRY_VERIFY(h.client.telemetryAvailable());
+        QTest::failOnWarning(QRegularExpression(QStringLiteral(".*")));
+        for (int i = 1; i <= 3; ++i) {
+            nowMs = i * 1000;
+            controller.sampleNow();
+            QTRY_COMPARE(samples.count(), i);
+            QVERIFY(lastSnapshot(samples).host.isEmpty());
+        }
     }
 
     void queuedRadioReadsRejectAReplyFromTheReplacedConnection()

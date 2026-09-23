@@ -7025,6 +7025,8 @@ nereus_add_test(tst_daemon_audio_transitions
 # about seven times the measurement.
 set_tests_properties(tst_daemon_audio_transitions PROPERTIES TIMEOUT 300)
 nereus_add_test(tst_daemon_telemetry fakes/LoopbackTransport.cpp)
+# R-R3-32/33: Core host sampler against fixture procfs/sysfs trees.
+nereus_add_test(tst_host_telemetry_sampler EXTRA_LABELS core)
 nereus_add_test(tst_remote_audio_receiver)
 nereus_add_test(tst_remote_audio_session fakes/LoopbackTransport.cpp)
 # R-R3-23: the audio-context wire codec in both negotiated shapes.

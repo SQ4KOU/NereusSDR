@@ -29,6 +29,19 @@ StationTelemetrySnapshot measured()
     sample.audio.sendRejectedPerSecond = 1;
     return sample;
 }
+
+StationHostTelemetry measuredHost()
+{
+    StationHostTelemetry host;
+    host.systemCpuPercent = 37.5;
+    host.processCpuPercent = 0.0; // A measured zero must survive.
+    host.memoryAvailableKiB = 6500000;
+    host.memoryTotalKiB = 8000000;
+    host.processResidentKiB = 51234;
+    host.hottestZoneCelsius = 52.5;
+    host.hottestZoneName = QStringLiteral("bigcore0-thermal");
+    return host;
+}
 }
 
 class TestStationTelemetry : public QObject {
@@ -161,12 +174,135 @@ private slots:
         QVERIFY(!SessionMessages::decode(QJsonDocument(envelope).toJson(), &previous));
     }
 
+    // R-R3-32/33: the host section in both shapes. A snapshot with host
+    // values carries a "host" object; one without it encodes exactly as
+    // before, and a decoder sees the section absent either way.
+    void hostSectionRoundTripsInBothShapes()
+    {
+        StationTelemetrySnapshot withHost = measured();
+        withHost.host = measuredHost();
+        const auto payload = StationTelemetryCodec::encode(withHost);
+        QVERIFY(payload);
+        const QJsonObject host = payload->value("host").toObject();
+        QCOMPARE(host.size(), 7);
+        StationTelemetrySnapshot decoded;
+        QVERIFY(StationTelemetryCodec::decode(*payload, &decoded));
+        QCOMPARE(decoded.host.systemCpuPercent, std::optional<double>(37.5));
+        QCOMPARE(decoded.host.processCpuPercent, std::optional<double>(0.0));
+        QCOMPARE(decoded.host.memoryAvailableKiB, std::optional<qint64>(6500000));
+        QCOMPARE(decoded.host.memoryTotalKiB, std::optional<qint64>(8000000));
+        QCOMPARE(decoded.host.processResidentKiB, std::optional<qint64>(51234));
+        QCOMPARE(decoded.host.hottestZoneCelsius, std::optional<double>(52.5));
+        QCOMPARE(decoded.host.hottestZoneName, QStringLiteral("bigcore0-thermal"));
+
+        // Without host values the payload is today's four keys, byte for byte.
+        const auto plain = StationTelemetryCodec::encode(measured());
+        QVERIFY(plain);
+        QVERIFY(!plain->contains("host"));
+        QCOMPARE(plain->keys(), (QStringList{"audio", "radio", "sampledElapsedMs", "sequence"}));
+        QJsonObject stripped = *payload;
+        stripped.remove("host");
+        QCOMPARE(QJsonDocument(stripped).toJson(QJsonDocument::Compact),
+                 QJsonDocument(*plain).toJson(QJsonDocument::Compact));
+
+        // A version 1 payload decodes with the host section absent and
+        // replaces any host values the destination held.
+        decoded = withHost;
+        QVERIFY(StationTelemetryCodec::decode(*plain, &decoded));
+        QVERIFY(decoded.host.isEmpty());
+
+        // Partial sections: only what was measured is sent.
+        StationTelemetrySnapshot partial = measured();
+        partial.host.memoryTotalKiB = 8000000;
+        partial.host.hottestZoneCelsius = -12.5; // sub-zero is a reading
+        const auto partialPayload = StationTelemetryCodec::encode(partial);
+        QVERIFY(partialPayload);
+        QCOMPARE(partialPayload->value("host").toObject().keys(),
+                 (QStringList{"hottestZoneCelsius", "memoryTotalKiB"}));
+        QVERIFY(StationTelemetryCodec::decode(*partialPayload, &decoded));
+        QVERIFY(!decoded.host.systemCpuPercent);
+        QVERIFY(!decoded.host.memoryAvailableKiB);
+        QCOMPARE(decoded.host.hottestZoneCelsius, std::optional<double>(-12.5));
+        QVERIFY(decoded.host.hottestZoneName.isEmpty());
+
+        // An empty host object means nothing measured, and unknown host
+        // fields from a later version are ignored.
+        QJsonObject future = *plain;
+        future.insert("host", QJsonObject{{"futureHostValue", 3}});
+        QVERIFY(StationTelemetryCodec::decode(future, &decoded));
+        QVERIFY(decoded.host.isEmpty());
+    }
+
+    void malformedHostSectionIsTransactional_data()
+    {
+        QTest::addColumn<QJsonObject>("payload");
+        StationTelemetrySnapshot sample = measured();
+        sample.host = measuredHost();
+        const QJsonObject valid = *StationTelemetryCodec::encode(sample);
+        auto hostField = [&](const char* name, const char* key, const QJsonValue& value) {
+            QJsonObject host = valid.value("host").toObject();
+            host.insert(QString::fromLatin1(key), value);
+            QJsonObject broken = valid;
+            broken.insert("host", host);
+            QTest::newRow(name) << broken;
+        };
+        QJsonObject notObject = valid;
+        notObject.insert("host", 1);
+        QTest::newRow("host-not-object") << notObject;
+        hostField("cpu-over-100", "systemCpuPercent", 100.5);
+        hostField("negative-cpu", "processCpuPercent", -1);
+        hostField("string-cpu", "systemCpuPercent", "37.5");
+        hostField("null-is-not-absence", "systemCpuPercent", QJsonValue(QJsonValue::Null));
+        hostField("fractional-kib", "memoryTotalKiB", 8000000.5);
+        hostField("negative-kib", "processResidentKiB", -1);
+        hostField("below-absolute-zero", "hottestZoneCelsius", -274);
+        hostField("empty-zone-name", "hottestZoneName", "");
+        hostField("long-zone-name", "hottestZoneName",
+                  QString(kMaxHostZoneNameLength + 1, QChar('z')));
+        hostField("numeric-zone-name", "hottestZoneName", 3);
+        hostField("name-without-temperature", "hottestZoneCelsius",
+                  QJsonValue(QJsonValue::Undefined));
+    }
+
+    void malformedHostSectionIsTransactional()
+    {
+        QFETCH(QJsonObject, payload);
+        StationTelemetrySnapshot previous = measured();
+        previous.host = measuredHost();
+        previous.sequence = 88;
+        QVERIFY(!StationTelemetryCodec::decode(payload, &previous));
+        QCOMPARE(previous.sequence, 88u);
+        QCOMPARE(previous.host.systemCpuPercent, std::optional<double>(37.5));
+    }
+
+    void encoderRefusesInvalidHostValues()
+    {
+        auto sample = measured();
+        sample.host = measuredHost();
+        sample.host.systemCpuPercent = std::numeric_limits<double>::quiet_NaN();
+        QVERIFY(!StationTelemetryCodec::encode(sample));
+        sample.host = measuredHost();
+        sample.host.processCpuPercent = 101.0;
+        QVERIFY(!StationTelemetryCodec::encode(sample));
+        sample.host = measuredHost();
+        sample.host.hottestZoneCelsius = std::numeric_limits<double>::infinity();
+        QVERIFY(!StationTelemetryCodec::encode(sample));
+        sample.host = measuredHost();
+        sample.host.hottestZoneCelsius.reset(); // a name needs its reading
+        QVERIFY(!StationTelemetryCodec::encode(sample));
+        sample.host = measuredHost();
+        sample.host.memoryTotalKiB = -1;
+        QVERIFY(!StationTelemetryCodec::encode(sample));
+    }
+
     void olderCapabilitiesDefaultToUnsupported()
     {
         QCOMPARE(StationCapabilities::fromUpdates({}).stationTelemetryVersion, 0);
         StationCapabilities caps;
         caps.stationTelemetryVersion = 1;
         QCOMPARE(StationCapabilities::fromUpdates(caps.toUpdates()).stationTelemetryVersion, 1);
+        caps.stationTelemetryVersion = 2; // adds the Core host section
+        QCOMPARE(StationCapabilities::fromUpdates(caps.toUpdates()).stationTelemetryVersion, 2);
         caps.stationTelemetryVersion = -1;
         QCOMPARE(StationCapabilities::fromUpdates(caps.toUpdates()).stationTelemetryVersion, 0);
     }

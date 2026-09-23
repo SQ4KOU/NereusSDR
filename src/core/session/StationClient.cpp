@@ -1123,6 +1123,11 @@ void StationClient::onTransportText(const QByteArray& wire)
             && message.telemetry.sampledElapsedMs >= m_lastTelemetrySampleElapsedMs) {
             m_lastTelemetrySequence = message.telemetry.sequence;
             m_lastTelemetrySampleElapsedMs = message.telemetry.sampledElapsedMs;
+            // Only a Core that negotiated host telemetry may supply it.
+            if (m_agreedMinor < kCoreHostTelemetrySessionProtocolMinor
+                || m_capabilities.stationTelemetryVersion < 2) {
+                message.telemetry.host = {};
+            }
             emit telemetryReceived(message.telemetry, m_sessionEpoch);
         }
         break;

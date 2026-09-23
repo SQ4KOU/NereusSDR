@@ -1219,6 +1219,12 @@ bool StationServer::sendTelemetry(const StationTelemetrySnapshot& snapshot,
     SessionMessage message;
     message.kind = SessionMessageKind::StationTelemetry;
     message.telemetry = snapshot;
+    // A peer from before host telemetry receives exactly the radio and audio
+    // sections it was built for.
+    const auto peer = m_peers.constFind(m_session);
+    if (peer == m_peers.cend() || peer->agreedMinor < kCoreHostTelemetrySessionProtocolMinor) {
+        message.telemetry.host = {};
+    }
     const QByteArray wire = SessionMessages::encode(message);
     if (wire.isEmpty()) { return false; }
     m_session->sendText(wire);
@@ -1328,7 +1334,7 @@ StationCapabilities StationServer::buildCapabilities() const
         caps.remotePs3DisplaySubscribed = m_radioModel->pureSignalFacade()->remoteAmpViewSubscribed();
     }
     caps.remoteCtunVersion = 1;
-    caps.stationTelemetryVersion = m_telemetryEnabled ? 1 : 0;
+    caps.stationTelemetryVersion = m_telemetryEnabled ? 2 : 0;
     caps.remoteTgxlConfigVersion = m_radioModel->stationAccessoryIdentityEnabled() ? 1 : 0;
     caps.remoteFourO3AControlVersion = m_radioModel->stationAccessoryIdentityEnabled() ? 1 : 0;
     caps.propertyResultVersion = 1;

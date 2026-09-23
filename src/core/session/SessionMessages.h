@@ -174,7 +174,7 @@ enum class SessionMessageKind {
 /// provisional. R3 swapping the codec under the same object model is a
 /// minor bump at most.
 inline constexpr quint16 kSessionProtocolMajor = 1;
-inline constexpr quint16 kSessionProtocolMinor = 9;
+inline constexpr quint16 kSessionProtocolMinor = 10;
 inline constexpr quint16 kMediaSessionProtocolMinor = 1;
 inline constexpr quint16 kRemoteCtunSessionProtocolMinor = 2;
 inline constexpr quint16 kStationTelemetrySessionProtocolMinor = 3;
@@ -193,6 +193,10 @@ inline constexpr quint16 kRemoteAudioStatusSessionProtocolMinor = 8;
 // tier, requested and granted points, and what limited them. Minor-8 peers
 // keep the 19-key (20 with wideband) context.
 inline constexpr quint16 kRemoteSpectrumGrantSessionProtocolMinor = 9;
+// Station telemetry carries the Core computer's CPU, memory and temperature
+// in an optional host section (stationTelemetryVersion 2). Minor-9 peers
+// receive exactly the radio and audio sections.
+inline constexpr quint16 kCoreHostTelemetrySessionProtocolMinor = 10;
 inline constexpr qsizetype kMaxMediaControlBytes = 128 * 1024;
 inline constexpr qsizetype kMaxStationTelemetryBytes = 16 * 1024;
 

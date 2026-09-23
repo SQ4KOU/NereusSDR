@@ -2,6 +2,7 @@
 // no-port-check: NereusSDR-original. Bounded observational Core telemetry
 // collection for R-R3-32/33; no radio, media, retry or liveness policy.
 
+#include "core/daemon/HostTelemetrySampler.h"
 #include "core/session/StationTelemetry.h"
 #include "core/session/media/DaemonMediaController.h"
 #include "core/ConnectionState.h"
@@ -14,6 +15,7 @@
 
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <optional>
 
 namespace NereusSDR {
@@ -37,7 +39,8 @@ public:
         StationServer* server, RadioModel* radioModel,
         DaemonMediaController* mediaController, QObject* parent = nullptr,
         MonotonicClock clock = {},
-        AudioDiagnosticsProvider audioDiagnosticsProvider = {});
+        AudioDiagnosticsProvider audioDiagnosticsProvider = {},
+        std::unique_ptr<HostTelemetrySampler> hostSampler = {});
     ~DaemonTelemetryController() override;
 
     bool isCollecting() const noexcept { return m_epoch != 0; }
@@ -106,6 +109,9 @@ private:
     QElapsedTimer m_processClock;
     MonotonicClock m_clock;
     AudioDiagnosticsProvider m_audioDiagnosticsProvider;
+    // Reads this computer's procfs/sysfs (Linux only; disabled elsewhere).
+    // Its CPU baselines restart with each telemetry session.
+    std::unique_ptr<HostTelemetrySampler> m_hostSampler;
     std::optional<RadioObservation> m_radioObservation;
     std::optional<AudioBaseline> m_audioBaseline;
     quint64 m_epoch{0};

@@ -27,14 +27,19 @@ std::optional<double> rate(std::uint64_t current, std::uint64_t previous,
 DaemonTelemetryController::DaemonTelemetryController(
     StationServer* server, RadioModel* radioModel,
     DaemonMediaController* mediaController, QObject* parent,
-    MonotonicClock clock, AudioDiagnosticsProvider audioDiagnosticsProvider)
+    MonotonicClock clock, AudioDiagnosticsProvider audioDiagnosticsProvider,
+    std::unique_ptr<HostTelemetrySampler> hostSampler)
     : QObject(parent)
     , m_server(server)
     , m_radioModel(radioModel)
     , m_mediaController(mediaController)
     , m_clock(std::move(clock))
     , m_audioDiagnosticsProvider(std::move(audioDiagnosticsProvider))
+    , m_hostSampler(std::move(hostSampler))
 {
+    if (!m_hostSampler) {
+        m_hostSampler = std::make_unique<HostTelemetrySampler>();
+    }
     m_processClock.start();
     if (!m_clock) {
         m_clock = [this] { return m_processClock.elapsed(); };
@@ -90,6 +95,7 @@ void DaemonTelemetryController::onSessionStarted(quint64 epoch)
     m_sequence = 0;
     m_audioBaseline.reset();
     m_radioObservation.reset();
+    m_hostSampler->reset();
     synchronizeRadioConnection();
     requestRadioObservation();
     if (m_automaticSamplingEnabled) {
@@ -301,6 +307,7 @@ void DaemonTelemetryController::sampleNow()
     snapshot.sampledElapsedMs = sampledElapsedMs;
     applyRadioObservation(snapshot, sampledElapsedMs);
     applyAudioObservation(snapshot, sampledElapsedMs);
+    snapshot.host = m_hostSampler->sample();
     m_server->sendTelemetry(snapshot, m_epoch);
     requestRadioObservation();
 }

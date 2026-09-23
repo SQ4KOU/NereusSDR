@@ -969,6 +969,8 @@ set(CORE_SOURCES
     # existing mixed-audio Opus path.
     src/core/session/media/DaemonMediaController.cpp
     src/core/daemon/DaemonTelemetryController.cpp
+    # R-R3-32/33: Linux procfs/sysfs host load for the Core telemetry.
+    src/core/daemon/HostTelemetrySampler.cpp
     # R3 bounded bridge from the AudioEngine master mix to daemon media.
     src/core/session/media/DaemonAudioSource.cpp
     src/core/session/media/DaemonAudioSender.cpp
