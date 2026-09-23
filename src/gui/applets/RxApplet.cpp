@@ -14,6 +14,13 @@
 //                 Claude Code.
 //                 Structural pattern follows AetherSDR (ten9876/AetherSDR,
 //                 GPLv3).
+//   2026-09-23 - R-R3-21: the ATT/S-ATT row and the RX1 preamp toggle are
+//                 disabled with a plain reason on a remote-station model,
+//                 where no local step attenuator is wired; the XIT row and
+//                 the filter-preset Shift-click TX match follow the
+//                 negotiated transmit permission. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 //=================================================================
@@ -201,6 +208,30 @@ RxApplet::RxApplet(SliceModel* slice, RadioModel* model, QWidget* parent)
     }
 
     syncFromModel();
+
+    // R-R3-21: a remote-station model starts with transmit denied until the
+    // handshake grants it, as TxApplet and the VFO flag do.
+    if (m_model && !m_model->ownsLocalDsp()) {
+        setTransmitPermitted(false);
+    }
+
+    // R-R3-21: on a remote-station model the step attenuator controller is
+    // never wired to a radio connection (MainWindow only wires it when a
+    // local connection exists), the RX1 preamp toggle casts the absent
+    // local connection, and nothing reports the station's own attenuator
+    // back. The row would accept input and move nothing, so it says so.
+    if (m_model && !m_model->ownsLocalDsp()) {
+        const QString reason = tr(
+            "The attenuator and preamp cannot be changed from a remote window yet.");
+        for (QWidget* w : {static_cast<QWidget*>(m_attStack),
+                           static_cast<QWidget*>(m_attLabel),
+                           static_cast<QWidget*>(m_rx1PreampToggle)}) {
+            if (w) {
+                w->setEnabled(false);
+                w->setToolTip(reason);
+            }
+        }
+    }
 }
 
 void RxApplet::buildUi()
@@ -637,6 +668,7 @@ void RxApplet::buildUi()
         row->addWidget(m_attLabel);
 
         m_attStack = new QStackedWidget(this);
+        m_attStack->setObjectName(QStringLiteral("RxAttenuatorStack"));
         m_attStack->setFixedHeight(20);
 
         // Page 0: Preamp combo (ATT mode — step att disabled).
@@ -968,6 +1000,7 @@ void RxApplet::buildUi()
         // RX1 preamp toggle (dual-ADC boards only) ────────────────────────
         if (dualAdc) {
             m_rx1PreampToggle = new QCheckBox(QStringLiteral("RX1 preamp"), this);
+            m_rx1PreampToggle->setObjectName(QStringLiteral("RxRx1PreampToggle"));
             m_rx1PreampToggle->setStyleSheet(QStringLiteral(
                 "QCheckBox { color: %1; font-size: 10px; }"
                 "QCheckBox::indicator { width: 12px; height: 12px; }").arg(Style::kTitleText));
@@ -1084,7 +1117,8 @@ void RxApplet::rebuildFilterButtons(DSPMode mode)
             // values to TX audio Hz: LSB family flips magnitude order, USB
             // family is identity, symmetric uses (0, |high|).
             if (QGuiApplication::keyboardModifiers() & Qt::ShiftModifier) {
-                if (!m_model) { return; }
+                // R-R3-21: the TX passband match is a transmit write.
+                if (!m_model || !m_transmitPermitted) { return; }
                 const bool isSymmetric =
                     mode == DSPMode::AM || mode == DSPMode::SAM
                  || mode == DSPMode::DSB || mode == DSPMode::FM
@@ -1293,6 +1327,41 @@ void RxApplet::setAntennaList(const QStringList& ants)
 }
 
 // Phase 3P-I-a T16 — hide antenna buttons on boards without Alex.
+// R-R3-21: XIT offsets the transmit frequency, so its row follows the
+// negotiated transmit permission like the VFO flag's XIT. Prior enabled
+// state and tooltips are restored when permission returns; no model state
+// is written here.
+void RxApplet::setTransmitPermitted(bool permitted, const QString& reason)
+{
+    m_transmitPermitted = permitted;
+    const QString text = reason.isEmpty()
+        ? tr("Transmit controls are unavailable until the station handshake "
+             "confirms transmit permission.")
+        : reason;
+    static constexpr auto kSavedTooltip = "RxAppletSavedTransmitTooltip";
+    static constexpr auto kSavedEnabled = "RxAppletSavedTransmitEnabled";
+    for (QWidget* control : {static_cast<QWidget*>(m_xitOnBtn),
+                             static_cast<QWidget*>(m_xitZero),
+                             static_cast<QWidget*>(m_xitMinus),
+                             static_cast<QWidget*>(m_xitLabel),
+                             static_cast<QWidget*>(m_xitPlus)}) {
+        if (!control) { continue; }
+        if (!permitted) {
+            if (!control->property(kSavedTooltip).isValid()) {
+                control->setProperty(kSavedTooltip, control->toolTip());
+                control->setProperty(kSavedEnabled, control->isEnabled());
+            }
+            control->setEnabled(false);
+            control->setToolTip(text);
+        } else if (control->property(kSavedTooltip).isValid()) {
+            control->setEnabled(control->property(kSavedEnabled).toBool());
+            control->setToolTip(control->property(kSavedTooltip).toString());
+            control->setProperty(kSavedTooltip, QVariant());
+            control->setProperty(kSavedEnabled, QVariant());
+        }
+    }
+}
+
 // HL2 / Atlas / bare-ADC SKUs have no antenna relay; the buttons
 // would be zombie controls (visible but no-op) and would mislead users.
 // Matches VfoWidget::setBoardCapabilities (T15) one-for-one so the whole

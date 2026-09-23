@@ -15,10 +15,16 @@
 //                 Layout from AetherSDR src/gui/AmpApplet.{h,cpp} [@0cd4559].
 //                 Changes from upstream: AppletWidget base; RadioModel* ctor;
 //                 NereusSDR HGauge setter API replaces positional constructor.
+//   2026-09-23  R-R3-21: on a remote-station model OPERATE and the
+//                 Disconnect/Reconnect action are disabled with a plain
+//                 reason; they act on this computer's own PGXL socket.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include "AmpApplet.h"
 #include "gui/HGauge.h"
+#include "models/RadioModel.h"
 
 #include <QContextMenuEvent>
 #include <QHBoxLayout>
@@ -146,6 +152,19 @@ AmpApplet::AmpApplet(RadioModel* model, QWidget* parent)
     telRow->addWidget(m_operateBtn, 1);
 
     vbox->addLayout(telRow);
+
+    // R-R3-21: OPERATE drives this computer's own PgxlConnection
+    // (MainWindow's operateToggled handler), which a remote window never
+    // connects: the amplifier sits at the station.
+    if (m_model && !m_model->ownsLocalDsp()) {
+        m_operateBtn->setEnabled(false);
+        m_operateBtn->setToolTip(remoteUnavailableReason());
+    }
+}
+
+QString AmpApplet::remoteUnavailableReason()
+{
+    return tr("Amplifier control is not available from a remote window yet.");
 }
 
 // From AetherSDR src/gui/AmpApplet.cpp:79-82 [@0cd4559]
@@ -268,6 +287,12 @@ QMenu* AmpApplet::buildContextMenu(QObject* menuParent)
     connect(toggleAction, &QAction::triggered, this, [this]() {
         emit connectionToggleRequested();
     });
+    // R-R3-21: the toggle connects this computer's own PGXL socket.
+    if (m_model && !m_model->ownsLocalDsp()) {
+        toggleAction->setEnabled(false);
+        toggleAction->setToolTip(remoteUnavailableReason());
+        menu->setToolTipsVisible(true);
+    }
 
     // Copy diagnostics to clipboard
     auto* copyDiagAction = menu->addAction(QStringLiteral("Copy diagnostics to clipboard"));

@@ -1,9 +1,12 @@
 # R3 remote control acceptance matrix
 
 Requirements: R-R3-16/17/21/22/24/25. Execution uses
-`yonder-cost-aware-execution`. This matrix records the bounded connection,
-capability and telemetry checkpoint; it is not a completed audit of every
-Setup page or an assertion that all station accessories work.
+`yonder-cost-aware-execution`. The first tables record the bounded
+connection, capability and telemetry checkpoint. The complete owner-by-owner
+inventory of every visible menu item, applet control group and Setup leaf is
+the "Visible control inventory by owner" section below (September 23); it is
+not an assertion that all station accessories work, and its live checks are
+hardware pending.
 
 ## Changed controls and ownership
 
@@ -20,6 +23,216 @@ Setup page or an assertion that all station accessories work.
 | Tuner cached values after Core loss | Retained values explicitly marked stale; unsupported remote accessory reconnect disabled | Applet session presentation/command tests | Pending disconnect smoke |
 | Tools > Test antenna switch toast | Owner GUI-local test surface; disabled while connected to a Core with the standard remote transmit reason, enabled locally | `tst_remote_gui_gating`; cannot reach `emitAntennaAutoSwitched` while disabled | Commit b9e8811c; installed acceptance pending |
 | Tools > Test TX-bound re-route dialog | Owner GUI-local test surface; disabled while connected to a Core with the standard remote transmit reason, enabled locally | `tst_remote_gui_gating`; cannot reach `requestTxBoundReRoute` while disabled | Commit b9e8811c; installed acceptance pending |
+
+## Visible control inventory by owner (R-R3-21), September 23
+
+This is the full inventory of what a remote receive session shows: every
+menu item, every applet control group, the VFO flag, the overlay and chrome,
+and every Setup leaf. It was read from source at `afa926a8` (MainWindow
+`buildMenuBar()` `MainWindow.cpp:6568-7712`, `applyRemoteRoleGating()`
+`:10173-10269`, each applet, and each Setup factory in `SetupDialog.cpp`),
+and the gating it found is fixed in the same change. Line numbers are at
+`afa926a8`.
+
+**Owner key.**
+- **GUI-local**: acts on this window only (layout, display, local playback,
+  preferences). Correct in a remote session.
+- **Station-backed**: reaches the Core through a mirrored property
+  (`MirrorPolicy.cpp`: 142 SliceModel, 15 TransmitModel, 21 TunerModel, 19
+  RadioModel, 4 PanadapterModel entries), a session verb
+  (`SessionCommandDispatcher.cpp:297-317`: addSlice, removeSlice,
+  addSliceOnPan, setActiveSliceById, requestSliceSampleRate,
+  requestStreamCtunPinned, requestStreamCentre, configureTgxl,
+  disconnectTgxl, setFourO3AEnabled, nnr.*, dspAssets.*, ps3.*), or a
+  Station-scoped settings key through `SettingsProxy` (`SettingsScope.cpp`).
+- **Transmit**: follows the negotiated `txPermitted` through
+  `MainWindow::transmitControlsPermitted()` (`:10166`) with the reason
+  "Remote transmit controls are not available from this Core yet."; the
+  Core still refuses transmit writes under its receive-only policy
+  (`StationServer.cpp:1021-1037`).
+- **Unavailable**: acts on this computer's own radio connection, DSP,
+  amplifier socket or VAX buses and moves nothing on a Core. Disabled with a
+  plain reason, or not shown at all (noted).
+- **Placeholder**: an existing disabled "NYI" item; unchanged.
+
+**Generic mirrored DSP setters were traced, not assumed broken.** Every
+receive DSP control on the flag, the RX applet, the DSP menu and Setup
+AGC/ALC, NR/ANF (NR1-NR4, DFNR, MNR, NNR) and NB/SNB writes a SliceModel
+setter. On a remote model those properties are Bidirectional in
+`MirrorPolicy.cpp` and forwarded by `MirrorForwarder`; local RadioModel's
+`wireSliceSignals()` returns early without a connection
+(`RadioModel.cpp:11337`), so no local DSP is touched. Automated evidence is
+the mirror suites (`tst_mirror_forwarder`, `tst_mirror_inbound`,
+`tst_slice_mirror_identity`) and the real-window RIT case in
+`tst_remote_tx_presentation`
+(`authenticatedRemoteControlsCannotWriteXitButRitStillWorks`). The audible
+effect of each setting on the Core is **hardware pending (S1)**, the
+operator receive session. The three exceptions found are listed under
+"Findings not gated here" below.
+
+### Menu bar
+
+| Menu > item | Owner | Handler / property | Acceptance |
+| --- | --- | --- | --- |
+| File > Settings..., Tools > TCI Server... | GUI-local shell; pages per the Setup table | `createSetupDialog()` `:10129`, refused with a toast until the station settings snapshot is ready | `tst_remote_gui_gating` (`setupGateFollowsTheInstalledProxyThroughItsStates`) |
+| File > Profiles > (4 items); Radio > Antenna Setup, Transverters; View > Display Mode, UI Scale, Minimal Mode, Keyboard Shortcuts; DSP > Equalizer, Diversity...; Band > VHF, GEN, Band Stacking; Tools > CWX, Memory Manager, CAT Control, VAX Audio, MIDI Mapping, Macro Buttons; Help > Getting Started, Help, Data Modes, What's New | Placeholder | disabled "NYI" actions | n/a |
+| File > Quit | GUI-local | `QApplication::quit` | n/a |
+| Radio > Connect, Disconnect | Station-backed (session) | `connectToStation()` / `disconnectFromStation()` through RemoteConnectionController; enable rules `:10236-10245` | `tst_remote_connection_controls`, `tst_gui_connection_controller`; hardware pending (S1) |
+| Radio > Manage Radios / Connections | GUI-local (picker) | `showConnectionPanel()`; disabled with the `--station` reason when not picker-managed `:10247` | `tst_station_startup_selection`, `tst_gui_session_coordinator` |
+| Radio > Protocol Info | Unavailable | always disabled remotely with "the radio's protocol details live on the station" `:10257` | `tst_remote_gui_gating` (`mainWindowExposesTheRemoteGatingSlots`); hardware pending (S1) |
+| View > Pan Layout... | Station-backed (layout verbs after hydrate) | `showPanLayoutDialog()` `:10886`, `applyPanLayout()` refuses before handshake `:10776` | `tst_pan_layout_dialog_gating`; hardware pending (S1) |
+| View > Add slice on active pan | Station-backed | `RadioModel::addSliceOnPan` -> `requestAddSliceOnPan` verb | `tst_remote_slice_commands` |
+| View > Float active pan | GUI-local | `PanadapterStack::floatPanadapter` | n/a |
+| View > Band Plan (font sizes, plan list) | GUI-local display | `SpectrumWidget::setBandPlanFontSize`, `setActivePlan`; `BandPlanName` is Station-scoped | hardware pending (S1) |
+| View > Dark Theme, Performance Overlay | GUI-local | log only / `SpectrumWidget::setShowPerfOverlay` | n/a |
+| DSP > NR (Off..BNR), NB, ANF, SNB, APF, BIN, AGC | Station-backed | active `SliceModel` `setActiveNr`, `setNbMode`, `setAnfEnabled`, `setSnbEnabled`, `setApfEnabled`, `setBinauralEnabled`, `setAgcMode` (mirrored) | mirror suites; hardware pending (S1) |
+| DSP > TNF, status bar TNF light | Station-backed setting, **not applied live** (finding F1) | `NotchModel::setGlobalEnabled` -> `NotchGlobalEnabled` (Station key) | hardware pending (S1); see F1 |
+| DSP > PureSignal..., Tools > PureSignal... | Station-backed (PS3 facade) | `openPureSignalDialog()`; enabled only when the Core advertises PureSignal 3 `:10220` | `tst_ps3_session`, `tst_ps3_lifecycle` |
+| Band > HF bands, WWV | Station-backed | active `SliceModel::setFrequency` | mirror suites; hardware pending (S1) |
+| Mode > LSB..RADE-L | Station-backed | active `SliceModel::setDspMode` | `tst_mode_menu_rade`, mirror suites; hardware pending (S1) |
+| Containers > New, Edit, Reset Default Layout | GUI-local | `ContainerManager`, `ContainerSettingsDialog` | n/a |
+| Containers > Applets section; panel banner menu | GUI-local | `AppletVisibilityController::setVisible`; availability per applet below | n/a |
+| Tools > Spot Hub..., FreeDV Reporter... | Station-backed spot clients (Station keys); tune writes the active slice | `openSpotHub()`, `openFreeDVReporter()`; remote auto-start gated to Local (`RadioModel.cpp:2615`) | hardware pending (S1) |
+| Tools > TX Equalizer... | Transmit | `m_actTxEqualizer`, refused in handler `:7523` | `tst_remote_gui_gating` (`toolsMenuTestEntriesAreDisabledInARemoteSession`), `tst_remote_tx_presentation` |
+| Tools > Diversity... | Station-backed | `DiversityDialog` -> `SliceModel::setDiversity*` (mirrored) | hardware pending (S1) |
+| Tools > Network Diagnostics... | GUI-local (remote branch) | `openNetworkDiagnostics()` -> `RemoteDiagnosticsDialog` | `tst_remote_connection_controls`, `tst_remote_diagnostics` |
+| Tools > Support Bundle... | GUI-local | `SupportBundle::createBundle`; `connection()` null-checked | n/a |
+| Tools > Test antenna switch toast, Test TX-bound re-route dialog | Transmit | disabled with the transmit reason `:10205-10214` | `tst_remote_gui_gating` (`toolsMenuTestEntriesAreDisabledInARemoteSession`) |
+| Help > Diagnose audio backend (Linux), About | GUI-local | local `AudioEngine` diagnosis (remote playback uses it) / `AboutDialog` | n/a |
+
+### Applets, VFO flag, overlay and chrome
+
+| Surface > control group | Owner | Handler / property | Acceptance |
+| --- | --- | --- | --- |
+| RX applet: slice tabs, lock, mode, step, filter passband and preset buttons, pan, SQL, AGC mode/AUTO/AGC-T, RIT | Station-backed | `SliceModel` setters (mirrored); slice tabs via `setActiveSliceById` verb | mirror suites, `tst_remote_slice_commands`; hardware pending (S1) |
+| RX applet: RX and TX antenna popups | Station-backed | `SliceModel::setRxAntenna` / `setTxAntenna`; TX antenna deliberately not transmit-gated (TRX receive routing) | `tst_rxapplet_antenna_buttons`; hardware pending (S1) |
+| RX applet: XIT on, zero, minus, plus | **Transmit (gated here)** | `SliceModel::setXitEnabled/Hz`; `RxApplet::setTransmitPermitted` from `applyRemoteRoleGating()` | `tst_remote_gui_gating` (`remoteRxAppletXitFollowsTheTransmitPermission`, real window in `toolsMenuTestEntriesAreDisabledInARemoteSession`) |
+| RX applet: ATT/S-ATT spin, preamp combo, RX1 preamp | **Unavailable (gated here)** | `StepAttenuatorController`, never wired without a local connection (`MainWindow.cpp:11031`); `P2RadioConnection` cast | `tst_remote_gui_gating` (`remoteRxAppletAttenuatorRowIsUnavailable`) |
+| RX applet: filter preset Shift-click (TX filter match) | **Transmit (gated here)** | `TransmitModel::setFilterLow/High`, skipped while transmit is not permitted | code path shared with the XIT gate; hardware pending (S1) |
+| TX applet: RF/tune power, TUNE, MOX, VOX, MON, LEV, EQ, CFC, profile, TX BW, 2-Tone, PS-A, EQ/CFC right-click | Transmit | `TxApplet::setTransmitPermitted` `TxApplet.cpp:2039-2091` | `tst_remote_gui_gating`, `tst_remote_tx_widgets`, `tst_remote_tx_presentation` |
+| Phone/CW applet: MIC, PROC, VAX source, DEXP | Transmit | `PhoneCwApplet::setTransmitPermitted` `:1207-1249` | `tst_remote_tx_widgets` |
+| Phone/CW applet: compression, mic profile/source, MON, AM carrier, CW and FM pages | Placeholder | NYI overlays | n/a |
+| RADE applet: profile combo | Transmit-side, **not gated** (finding F5) | `MicProfileManager::setActiveProfile` | n/a |
+| RADE applet: Reset vocoder | Unavailable | local `WdspEngine::radeChannel()`; disabled while no local channel exists (`RadeApplet.cpp:262-274`), without a reason (F5) | hardware pending (S1) |
+| VAX applet: RX gain/mute x4, TX gain | **Unavailable (gated here)** | local `AudioEngine` VAX buses; remote audio plays through the speakers only (`AudioEngine::writeRemotePlayback`) | `tst_remote_gui_gating` (`remoteVaxSurfacesAreUnavailable`) |
+| PureSignal applet | Station-backed (PS3 facade); hidden unless PS3 is advertised `:10227-10234` | `PureSignalSessionFacade::requestAction` | `tst_ps3_session` |
+| AM Mod Monitor applet | GUI-local display of a transmit analyser; no remote feed | `RadioModel::setAmModFeedbackWanted`, `ModMon/*` keys | hardware pending (S1) |
+| Power Genius applet: OPERATE, Disconnect/Reconnect | **Unavailable (gated here)** | this computer's `PgxlConnection` (`MainWindow.cpp:11113`, `:11210`) | `tst_remote_gui_gating` (`remoteAmplifierAppletControlsAreUnavailable`) |
+| Power Genius applet: gauges, Open PGXL Advanced | GUI-local display / Setup 4O3A (remote placeholder tabs) | availability follows the mirrored `fourO3AEnabled` | `tst_remote_peripherals` |
+| Tuner Genius applet | Transmit + Core-owned accessory | `TunerApplet::setTransmitPermitted`, `setStationConnected`; remote menu uses `requestDisconnectTgxl` | `tst_station_accessory_state`, `tst_remote_peripherals` |
+| RF-Kit RF2K-S applet | Unavailable (not shown) | availability is `rfKitEnabled()`, a per-MAC peripheral key that reads False with no radio MAC (`RadioModel.cpp:3042`, `:3135`) | hardware pending (S1) |
+| TCI Server and TCI Clients applets | GUI-local server on this computer | local `TciServer` start/stop, gains, client close | hardware pending (S1); open question in F6 |
+| S-meter header and right-click menu | GUI-local | `SMeter_*`, `PeakHold*` keys; needle fed by `MeterPoller::setRemoteRadioModel` | `tst_remote_meter_poller` |
+| VFO flag: frequency, wheel, AF, AGC, pan, mute, BIN, SQL, AGC-T/AUTO, NB, NR bank and popups, ANF, SNB, APF, FM/DIG/RTTY containers, mode, filters, RIT, step, lock, close, sample rate, antenna picker | Station-backed | `SliceModel` setters (mirrored), `removeSlice` / `requestSliceSampleRate` verbs | mirror suites, `tst_remote_slice_commands`, `tst_nnr_controls`; hardware pending (S1) |
+| VFO flag: XIT, TX badge, Make TX slice, BYPS, filter Shift-click | Transmit | `VfoWidget::setTransmitPermitted` `:3214-3254`, MainWindow `:1784-1792` | `tst_remote_tx_presentation` |
+| VFO flag: VAX tab selector | **Unavailable (gated here)** | `SliceModel::setVaxChannel`; `vaxChannel` is not a mirrored property | `tst_remote_gui_gating` (`remoteVaxSurfacesAreUnavailable`) |
+| VFO flag: record/play | Placeholder | signals with no consumer | n/a |
+| Overlay: +RX, BAND, RX/TX antenna combos | Station-backed | `addSliceOnPan` verb, `onBandButtonClicked`, `SliceModel::setRx/TxAntenna` | `tst_spectrum_overlay_panel`, `tst_remote_slice_commands` |
+| Overlay: +TNF | Station-backed setting, not applied live (F1) | `RadioModel::addNotchForSlice` -> `NotchModel` | see F1 |
+| Overlay: display flyout (scheme, gains, fill, cursor, Clarity re-tune, More) | GUI-local display | `SpectrumWidget` setters, `ClarityController` | `tst_remote_spectrum_render`; hardware pending (S1) |
+| Overlay: VAX channel combo | **Unavailable (gated here)** | as the flag's VAX selector | `tst_remote_gui_gating` (`remoteVaxSurfacesAreUnavailable`) |
+| Overlay: ATT, IQ combo, RF gain, WNB, zoom buttons | Placeholder / unwired | disabled or no consumer | n/a |
+| Title bar connection segment, audio pip, right-click | GUI-local, opens station session actions | `openNetworkDiagnostics`, `connectionRequestedByOperator`, `showSegmentContextMenu` remote branch | `tst_remote_connection_controls`; hardware pending (S1) |
+| Master output: volume, mute, output device | GUI-local, drives remote playback | local `AudioEngine`; `RemoteMediaController.cpp:534-541` follows mute and device | `tst_remote_audio_receiver`, `tst_remote_media_controller`; hardware pending (S1) |
+| Status bar: +PAN, panel toggle, station block, TCI indicator, RX dashboard, system tile, TGXL chip | GUI-local / station session | as above; station block -> `connectionRequestedByOperator` | `tst_station_block`, `tst_remote_receive_indicators` |
+| Status bar: PSA indicator menu | GUI-local preference (no local PureSignal remotely) | `InvertRedBluePsa`, `HideFeedbackLevel` | n/a |
+| Status bar: CWX, DVK, FDX | Placeholder | inert labels | n/a |
+
+Applets not constructed (EQ, FM, Digital, Diversity, CWX, DVK, CAT) are not
+visible and are not listed.
+
+### Setup leaves
+
+| Leaf | Owner | Handler / property | Acceptance |
+| --- | --- | --- | --- |
+| General > Startup & Preferences, UI Scale & Theme, Navigation | Placeholder | no writes | n/a |
+| General > Options: Hardware Configuration, Options groups | GUI-local, except `Region` (Station); `ExtendedTxAllowed`, `RxOnly`, `PreventTxOnDifferentBandToRx`, `NetworkWatchdogEnabled` are OperatorLocal and have no remote effect | AppSettings | hardware pending (S1) |
+| General > Options: Step Attenuator, Auto Attenuate | **Unavailable (gated here)** | unwired local `StepAttenuatorController` | `tst_remote_gui_gating` (`remoteGeneralOptionsDisablesOnlyTheAttenuatorGroups`) |
+| Hardware > Hardware Config, DDC Routing | **Unavailable (gated here)** | `HardwarePage` never learns a MAC remotely (`currentRadioChanged` is local-connect only, `RadioModel.cpp:14541`), so `onTabSettingChanged` drops every edit; DDC override keys are per-MAC and unread | `tst_remote_gui_gating` (`remoteDeclaredUnavailableSetupLeavesSayWhy`) |
+| PA > PA Gain, Watt Meter, PA Values | Unavailable (not shown) | category hidden: remote capabilities are the Unknown board's, `hasPaProfile` false | `tst_remote_gui_gating` (`remotePaCategoryIsNotShown`) |
+| Audio > Devices, VAX, TCI, Advanced | Unavailable (local-DSP gate; reason added here) | pages and `AudioBackendStrip` reach `audioEngine()`. Speaker output for remote playback is chosen from the title bar master output. Devices carries the microphone status and Retry; a remote window never holds a capture lease | `tst_remote_gui_gating` (`remoteLocalDspSetupPagesShowAPlainReason`, `everyRemoteSetupPageIsEitherLocalDspFreeOrDisabled`) |
+| Audio > TX Input | Transmit and unavailable (both gates) | TX input device, Test Mic and Retry; transmit reason first, local reason once transmit is permitted | `tst_remote_gui_gating` (`remoteTxInputShowsTheReasonThatCurrentlyApplies`), `tst_remote_tx_presentation` |
+| Audio > TX Profile | Transmit | `MicProfileManager`, `TransmitModel` | `tst_remote_tx_presentation` |
+| DSP > AGC/ALC (RX AGC) | Station-backed | `SliceModel` AGC setters | mirror suites; hardware pending (S1) |
+| DSP > AGC/ALC (TX Leveler, TX ALC groups) | Transmit-side, **not gated** (F3) | `TransmitModel::setTxLeveler*`, `setTxAlc*` | n/a |
+| DSP > NR/ANF | Station-backed, except the NR3 model selector (F2) | `SliceModel` NR setters; NNR through the station NNR capability | `tst_nnr_controls`, mirror suites; hardware pending (S1) |
+| DSP > NB/SNB | Station-backed | `SliceModel` NB/SNB setters | `tst_mirror_inbound` (peer NB cases); hardware pending (S1) |
+| DSP > CW, AM/SAM, FM | Placeholder | all groups disabled | n/a |
+| DSP > CFC | **Transmit (gated here)** | `TransmitModel` phase rotator, CFC, CESSB; opens the TX CFC editor | `tst_remote_gui_gating` (`remoteTransmitOnlySetupLeavesFollowThePermission`) |
+| DSP > TNF | Station-backed setting, not applied live (F1) | `NotchModel`, `addNotchForSlice` | see F1 |
+| DSP > Filter Presets | GUI-local | `FilterPresetStore` (`filters/...`, OperatorLocal); buttons then write `SliceModel::setFilter` | n/a |
+| DSP > Options | Station-backed settings, local apply (F2); high-resolution graph unavailable | `DspOptions*` keys; `rebuildDspOptionsForMode` is local-only; FIR graph checkbox disabled remotely | `tst_remote_gui_gating` (high-resolution cases); hardware pending (S1) |
+| Display > Spectrum Defaults, Spectrum Peaks, Waterfall Defaults, Grid & Scales, Multimeter, 3D View | GUI-local display; `DisplayFft*`, `DisplaySpectrumFps`, `MultimeterDelayMs` are Station keys; grid dB writes the mirrored `PanadapterModel` | `SpectrumWidget`, `FFTEngine`, `MeterPoller` setters | `tst_remote_fft_production`, `tst_remote_spectrum_render`; hardware pending (S1) |
+| Display > RX2 Display | Placeholder | all controls disabled | n/a |
+| Display > TX Display | GUI-local display of TX; TxAnalyzer absent remotely, setters null-guarded | `SpectrumWidget` TX setters | n/a |
+| Transmit > Power, TX Profiles, Speech Processor, DEXP/VOX | Transmit | existing six-leaf pass | `tst_remote_tx_presentation` |
+| Appearance > Colors & Theme, Meter Styles | GUI-local | `SpectrumWidget` colours, `AppearanceSmallModeFilterOnVfos` | n/a |
+| Appearance > Gradients, Skins, Collapsible Display | Placeholder | disabled | n/a |
+| CAT & Network > Serial Ports, TCP/IP CAT, MIDI Control | Placeholder | no writes | n/a |
+| CAT & Network > TCI Server | GUI-local server; `Tci*` keys are Station-scoped | `CatTciServerPage`, local `TciServer` restart | hardware pending (S1); F6 |
+| CAT & Network > 4O3A | Station-backed | remote master toggle through `requestFourO3AEnabled`, placeholder PGXL/TGXL tabs, no interlock page | `tst_remote_peripherals` |
+| CAT & Network > Remote Station | GUI-local | `connectionsRequested` -> `connectionRequestedByOperator` | `tst_remote_gui_gating` (`theRemoteStationPageStaysUsableOnARemoteModel`) |
+| CAT & Network > RF-Kit | **Unavailable (gated here)** | `RfKitPage` connects this computer's own `RfKitConnection` (`RfKitPage.cpp:174-190`) | `tst_remote_gui_gating` (`remoteDeclaredUnavailableSetupLeavesSayWhy`) |
+| Keyboard > Shortcuts | Placeholder | no writes | n/a |
+| Test > Two-Tone IMD | **Transmit (gated here)** | `TransmitModel::setTwoTone*` (not mirrored) | `tst_remote_gui_gating` (`remoteTransmitOnlySetupLeavesFollowThePermission`) |
+| Diagnostics > Radio Status, Connection Quality, Logs, Logging & Performance | GUI-local | read-only or local keys | n/a |
+| Diagnostics > Settings Validation, Export / Import | GUI-local file operations | `settingsHygiene()`, AppSettings file copy | hardware pending (S1) |
+| Diagnostics > Signal Generator, Hardware Tests | Placeholder | NYI | n/a |
+
+### Gating added by this pass
+
+- Setup leaves disabled with a visible reason above the page and as the page
+  and leaf tooltip: DSP > CFC and Test > Two-Tone IMD follow the transmit
+  permission; Hardware Config, DDC Routing and RF-Kit are declared
+  unavailable in a remote session (`SetupDialog::markRemoteUnavailable`).
+- Pages the local-DSP gate disables (Audio > Devices, TX Input, VAX, TCI,
+  Advanced) now show the reason "These settings control audio and signal
+  processing on this computer. While connected to a Core, the Core does that
+  work, so they cannot be changed here." instead of an unexplained grey page.
+- The RX applet ATT/S-ATT row and RX1 preamp, and the General > Options Step
+  Attenuator and Auto Attenuate groups: "The attenuator and preamp cannot be
+  changed from a remote window yet."
+- The RX applet's XIT row and its filter-preset Shift-click TX passband
+  match follow the negotiated transmit permission, as the VFO flag's XIT
+  and Shift-click already did.
+- The VAX applet, the VFO flag's VAX selector and the overlay VAX combo:
+  "VAX audio channels are not available while connected to a Core."
+- Power Genius OPERATE and its Disconnect/Reconnect action: "Amplifier
+  control is not available from a remote window yet."
+
+All of these are role-based or permission-based and never run in local
+direct mode; the local halves of each new case, and the existing local
+suites listed in the verification line, pass unchanged.
+
+### Findings not gated here
+
+- **F1, TNF is not applied live on the Core.** DSP > TNF, the status-bar TNF
+  light, overlay +TNF and notch editing write `NotchModel`, whose state
+  persists under Station-scoped `Notch*` keys. The Core accepts the write
+  (`SettingsProxyServer::applyInboundWrite`) but only reads those keys at
+  construction (`RadioModel.cpp:1828`), and a remote model has no local
+  channels to apply them to, so the notch is drawn remotely and not applied
+  until the Core restarts. TNF is a receive function, so it is not disabled
+  here; it needs a Core-side live apply or a mirrored notch object.
+- **F2, settings written to the Core with a local-only apply.** The NR3 model
+  selector writes `Nr3ModelPath` and calls `RNNRloadModel()` in this
+  process; DSP > Options buffer and filter combos write `DspOptions*` and
+  call the local `rebuildDspOptionsForMode()`. Whether the Core applies
+  either before its next restart is **hardware pending (S1)**.
+- **F3, transmit sections inside receive pages.** DSP > AGC/ALC TX Leveler
+  and TX ALC groups and the DSP > Options TX buffer/filter combos are not
+  transmit-gated; the pages stay available for their receive halves. The
+  Core refuses TransmitModel writes under its receive-only policy.
+- **F4, closed here.** The RX applet's XIT row and filter-preset Shift-click
+  were transmit gestures outside the flag's gate; both now follow the
+  permission (see "Gating added").
+- **F5, RADE applet.** The profile combo sets a TX mic profile without the
+  transmit gate, and Reset vocoder is disabled without a stated reason.
+- **F6, TCI server in a remote window.** A remote window runs its own TCI
+  server against the mirrored model. Receive state follows the Core; TX
+  audio would feed this window's inert TX channel. Whether the server should
+  run remotely at all is a product decision, not decided here.
+
 
 ## Current follow-ups (September 22)
 

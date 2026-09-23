@@ -64,6 +64,14 @@
 //                 mic, since PC-mic keying now waits for a ready
 //                 microphone. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-23 -- R-R3-21 control inventory: DSP > CFC and Test >
+//                 Two-Tone IMD follow the transmit permission, a page the
+//                 local-DSP gate disables now says why, and the controls
+//                 the inventory found acting on this computer's own radio
+//                 connection, amplifier socket or VAX buses are disabled
+//                 with a plain reason in a remote session. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -71,19 +79,27 @@
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
+#include <QComboBox>
 #include <QFile>
 #include <QHostAddress>
+#include <QLabel>
+#include <QGroupBox>
 #include <QMap>
+#include <QMenu>
 #include <QMetaObject>
 #include <QPushButton>
 #include <QScopeGuard>
 #include <QSignalSpy>
+#include <QSpinBox>
 #include <QStringList>
 #include <QTemporaryDir>
+#include <QTreeWidget>
+#include <QTreeWidgetItemIterator>
 #include <QWebSocketServer>
 #include <QWidget>
 
 #include <chrono>
+#include <memory>
 
 #include "core/AppSettings.h"
 #include "core/MoxController.h"
@@ -100,8 +116,15 @@
 #include "gui/MainWindow.h"
 #include "gui/SetupDialog.h"
 #include "gui/StationStartupSelection.h"
+#include "gui/SpectrumOverlayPanel.h"
+#include "gui/applets/AmpApplet.h"
+#include "gui/applets/RxApplet.h"
 #include "gui/applets/TxApplet.h"
+#include "gui/applets/VaxApplet.h"
 #include "gui/setup/DspOptionsPage.h"
+#include "gui/setup/GeneralOptionsPage.h"
+#include "gui/widgets/VaxChannelSelector.h"
+#include "gui/widgets/VfoWidget.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -155,6 +178,33 @@ bool detachTestSurfaceConsumers(MainWindow* window)
     const bool reRoute = QObject::disconnect(
         model, &RadioModel::txBoundReRouteRequested, window, nullptr);
     return toast && reRoute;
+}
+
+// The Setup tree leaf registered under `label` (first match), for its
+// tooltip. Setup's leaves are the second level of the tree.
+QTreeWidgetItem* setupLeaf(SetupDialog& dialog, const QString& label)
+{
+    auto* tree = dialog.findChild<QTreeWidget*>();
+    if (tree == nullptr) { return nullptr; }
+    for (QTreeWidgetItemIterator it(tree); *it; ++it) {
+        if ((*it)->parent() != nullptr && (*it)->text(0) == label) {
+            return *it;
+        }
+    }
+    return nullptr;
+}
+
+// Operator strings stay plain English: no internal subsystem, roadmap or
+// capability names in a reason an operator reads.
+bool isPlainOperatorReason(const QString& reason)
+{
+    for (const char* jargon : {"DSP", "WDSP", "txPermitted", "capabilit", "R3", "R4",
+                               "handshake", "protocol", "Role"}) {
+        if (reason.contains(QLatin1String(jargon), Qt::CaseInsensitive)) {
+            return false;
+        }
+    }
+    return !reason.isEmpty();
 }
 
 } // namespace
@@ -1095,6 +1145,492 @@ private slots:
     }
 
     // ====================================================================
+    // R-R3-21 control inventory: the two Setup leaves the audit found
+    // transmit-only but not following the transmit permission.
+    //
+    // DSP > CFC holds the Phase Rotator, CFC and CESSB, all TX stages, and
+    // its [Configure CFC bands] button opens the TX CFC editor. Test >
+    // Two-Tone IMD writes the two-tone test settings of a keyed test
+    // transmission. Neither writes anything the Core mirrors, so on a
+    // receive-only session each was a live-looking page whose edits
+    // landed in this window's own TransmitModel and nowhere else.
+    // ====================================================================
+    void remoteTransmitOnlySetupLeavesFollowThePermission_data()
+    {
+        QTest::addColumn<QString>("label");
+        QTest::newRow("CFC") << QStringLiteral("CFC");
+        QTest::newRow("Two-Tone IMD") << QStringLiteral("Two-Tone IMD");
+    }
+
+    void remoteTransmitOnlySetupLeavesFollowThePermission()
+    {
+        QFETCH(QString, label);
+        const QString reason = QStringLiteral("Remote transmit is unavailable");
+
+        RadioModel remote(RadioModel::Role::Remote);
+        SetupDialog dialog(&remote);
+        dialog.setTransmitPermitted(false, reason);
+        QSignalSpy cfcEditor(&dialog, &SetupDialog::cfcDialogRequested);
+
+        const int handOutsBefore = remote.localDspHandOutCount();
+        dialog.selectPage(label);
+        QWidget* const page = dialog.realizedPageForTest(label);
+        QVERIFY(page != nullptr);
+        // Neither page reaches this process's DSP, so the transmit gate is
+        // the only thing disabling it; the case below proves the gate, not
+        // the resource audit.
+        QCOMPARE(remote.localDspHandOutCount(), handOutsBefore);
+        QVERIFY(!page->isEnabled());
+        QCOMPARE(page->toolTip(), reason);
+        QTreeWidgetItem* const leaf = setupLeaf(dialog, label);
+        QVERIFY(leaf != nullptr);
+        QCOMPARE(leaf->toolTip(0), reason);
+        auto* const notice = dialog.findChild<QLabel*>(QStringLiteral("setupTransmitUnavailable"));
+        QVERIFY(notice != nullptr);
+        QVERIFY(!notice->isHidden());
+        QCOMPARE(notice->text(), reason);
+
+        // Activation reaches nothing: every button, check box and spin box
+        // on the page is driven, and no transmit setting moves.
+        const TransmitModel& tx = remote.transmitModel();
+        const bool cfc = tx.cfcEnabled();
+        const bool cfcPostEq = tx.cfcPostEqEnabled();
+        const int precomp = tx.cfcPrecompDb();
+        const bool phaseRotator = tx.phaseRotatorEnabled();
+        const bool cessb = tx.cessbOn();
+        const int freq1 = tx.twoToneFreq1();
+        const int freq2 = tx.twoToneFreq2();
+        const bool pulsed = tx.twoTonePulsed();
+        const bool invert = tx.twoToneInvert();
+        for (QAbstractButton* button : page->findChildren<QAbstractButton*>()) {
+            QVERIFY2(!button->isEnabled(), qPrintable(button->text()));
+            button->click();
+        }
+        for (QSpinBox* spin : page->findChildren<QSpinBox*>()) {
+            QVERIFY(!spin->isEnabled());
+            QTest::keyClick(spin, Qt::Key_Up);
+        }
+        QCOMPARE(tx.cfcEnabled(), cfc);
+        QCOMPARE(tx.cfcPostEqEnabled(), cfcPostEq);
+        QCOMPARE(tx.cfcPrecompDb(), precomp);
+        QCOMPARE(tx.phaseRotatorEnabled(), phaseRotator);
+        QCOMPARE(tx.cessbOn(), cessb);
+        QCOMPARE(tx.twoToneFreq1(), freq1);
+        QCOMPARE(tx.twoToneFreq2(), freq2);
+        QCOMPARE(tx.twoTonePulsed(), pulsed);
+        QCOMPARE(tx.twoToneInvert(), invert);
+        QCOMPARE(cfcEditor.count(), 0);
+
+        // A Core that permits transmit lifts the gate, and withdrawing it
+        // puts it back.
+        dialog.setTransmitPermitted(true);
+        QVERIFY(page->isEnabled());
+        QVERIFY(page->toolTip().isEmpty());
+        QVERIFY(leaf->toolTip(0).isEmpty());
+        QVERIFY(notice->isHidden());
+        dialog.setTransmitPermitted(false, reason);
+        QVERIFY(!page->isEnabled());
+        QVERIFY(!notice->isHidden());
+
+        // The reason MainWindow actually passes is plain English.
+        dialog.setTransmitPermitted(false);
+        QVERIFY2(isPlainOperatorReason(notice->text()), qPrintable(notice->text()));
+
+        // Local direct mode: unchanged, live, no reason shown.
+        RadioModel local;
+        SetupDialog localDialog(&local);
+        localDialog.selectPage(label);
+        QWidget* const localPage = localDialog.realizedPageForTest(label);
+        QVERIFY(localPage != nullptr);
+        QVERIFY(localPage->isEnabled());
+        QVERIFY(localPage->toolTip().isEmpty());
+        QVERIFY(localDialog.findChild<QLabel*>(
+                    QStringLiteral("setupTransmitUnavailable"))->isHidden());
+    }
+
+    // ====================================================================
+    // R-R3-21: a page the local-DSP gate disables says why.
+    //
+    // The gate (SetupDialog::realizePage) disabled the Audio leaves on a
+    // remote model but gave no reason, so the operator saw a greyed page
+    // and nothing else. Devices and TX Input also carry the microphone
+    // status, Retry and (TX Input) Test Mic controls; a remote window never
+    // captures a microphone, and those controls are disabled with the page.
+    // ====================================================================
+    void remoteLocalDspSetupPagesShowAPlainReason_data()
+    {
+        QTest::addColumn<QString>("label");
+        for (const char* label : {"Devices", "VAX", "TCI", "Advanced"}) {
+            QTest::newRow(label) << QString::fromLatin1(label);
+        }
+    }
+
+    void remoteLocalDspSetupPagesShowAPlainReason()
+    {
+        QFETCH(QString, label);
+        RadioModel remote(RadioModel::Role::Remote);
+        SetupDialog dialog(&remote);
+        dialog.setTransmitPermitted(false, QStringLiteral("Remote transmit is unavailable"));
+
+        const int handOutsBefore = remote.localDspHandOutCount();
+        dialog.selectPage(label);
+        QWidget* const page = dialog.realizedPageForTest(label);
+        QVERIFY(page != nullptr);
+        QVERIFY2(remote.localDspHandOutCount() > handOutsBefore,
+                 "the page no longer reaches local DSP; re-audit its row in "
+                 "remote-controls.md before changing this case");
+        QVERIFY(!page->isEnabled());
+
+        auto* const localNotice = dialog.findChild<QLabel*>(QStringLiteral("setupLocalUnavailable"));
+        auto* const txNotice = dialog.findChild<QLabel*>(QStringLiteral("setupTransmitUnavailable"));
+        QVERIFY(localNotice != nullptr);
+        QVERIFY(txNotice != nullptr);
+        QVERIFY(!localNotice->isHidden());
+        QVERIFY(txNotice->isHidden());
+        const QString reason = localNotice->text();
+        QVERIFY2(isPlainOperatorReason(reason), qPrintable(reason));
+        QCOMPARE(page->toolTip(), reason);
+        QTreeWidgetItem* const leaf = setupLeaf(dialog, label);
+        QVERIFY(leaf != nullptr);
+        QCOMPARE(leaf->toolTip(0), reason);
+
+        // A transmit permission does not make this computer's audio engine
+        // the station's; the page and its reason stay.
+        dialog.setTransmitPermitted(true);
+        QVERIFY(!page->isEnabled());
+        QVERIFY(!localNotice->isHidden());
+
+        if (label == QStringLiteral("Devices")) {
+            auto* const retry = page->findChild<QPushButton*>(QStringLiteral("retryCapture"));
+            QVERIFY(retry != nullptr);
+            QVERIFY(!retry->isEnabled());
+        }
+
+        // Moving to a receive page that is available hides the notice.
+        dialog.selectPage(QStringLiteral("NR/ANF"));
+        QVERIFY(localNotice->isHidden());
+        QVERIFY(txNotice->isHidden());
+    }
+
+    // TX Input carries both gates. While transmit is not permitted the
+    // transmit reason is the one shown; once it is, the page stays
+    // disabled for its local resource and says so.
+    void remoteTxInputShowsTheReasonThatCurrentlyApplies()
+    {
+        const QString txReason = QStringLiteral("Remote transmit is unavailable");
+        RadioModel remote(RadioModel::Role::Remote);
+        SetupDialog dialog(&remote);
+        dialog.setTransmitPermitted(false, txReason);
+        dialog.selectPage(QStringLiteral("TX Input"));
+        QWidget* const page = dialog.realizedPageForTest(QStringLiteral("TX Input"));
+        QVERIFY(page != nullptr);
+        auto* const localNotice = dialog.findChild<QLabel*>(QStringLiteral("setupLocalUnavailable"));
+        auto* const txNotice = dialog.findChild<QLabel*>(QStringLiteral("setupTransmitUnavailable"));
+
+        QVERIFY(!page->isEnabled());
+        QVERIFY(!txNotice->isHidden());
+        QVERIFY(localNotice->isHidden());
+        QCOMPARE(page->toolTip(), txReason);
+        // Test Mic and Retry are disabled with the page: a remote window
+        // never holds a microphone capture demand.
+        for (QPushButton* button : page->findChildren<QPushButton*>()) {
+            if (button->text() == QStringLiteral("Test Mic")
+                || button->objectName() == QStringLiteral("retryCapture")) {
+                QVERIFY2(!button->isEnabled(), qPrintable(button->text()));
+            }
+        }
+
+        dialog.setTransmitPermitted(true);
+        QVERIFY(!page->isEnabled());
+        QVERIFY(txNotice->isHidden());
+        QVERIFY(!localNotice->isHidden());
+        QCOMPARE(page->toolTip(), localNotice->text());
+    }
+
+    // Local direct mode never runs the local-DSP gate: no Audio page is
+    // disabled and the notice never shows.
+    void localSetupNeverShowsTheLocalUnavailableNotice()
+    {
+        RadioModel local;
+        SetupDialog dialog(&local);
+        auto* const localNotice = dialog.findChild<QLabel*>(QStringLiteral("setupLocalUnavailable"));
+        QVERIFY(localNotice != nullptr);
+        for (const char* label : {"Devices", "TX Input", "VAX", "TCI", "Advanced"}) {
+            const QString name = QString::fromLatin1(label);
+            dialog.selectPage(name);
+            QWidget* const page = dialog.realizedPageForTest(name);
+            QVERIFY(page != nullptr);
+            QVERIFY2(page->isEnabled(), label);
+            QVERIFY2(page->toolTip().isEmpty(), label);
+            QVERIFY2(localNotice->isHidden(), label);
+        }
+    }
+
+    // ====================================================================
+    // R-R3-21: Setup leaves declared unavailable in a remote session.
+    //
+    // Hardware Config and DDC Routing act on this computer's own radio
+    // connection: on a remote model currentRadioChanged never fires, so
+    // HardwarePage never learns a MAC and drops every edit. RF-Kit
+    // connects this computer's own amplifier socket. None reaches local
+    // DSP, so the resource audit does not catch them; they are declared.
+    // ====================================================================
+    void remoteDeclaredUnavailableSetupLeavesSayWhy_data()
+    {
+        QTest::addColumn<QString>("label");
+        QTest::addColumn<QString>("reasonWord");
+        QTest::newRow("Hardware Config") << QStringLiteral("Hardware Config")
+                                         << QStringLiteral("hardware");
+        QTest::newRow("DDC Routing") << QStringLiteral("DDC Routing")
+                                     << QStringLiteral("hardware");
+        QTest::newRow("RF-Kit") << QStringLiteral("RF-Kit") << QStringLiteral("Amplifier");
+    }
+
+    void remoteDeclaredUnavailableSetupLeavesSayWhy()
+    {
+        QFETCH(QString, label);
+        QFETCH(QString, reasonWord);
+
+        RadioModel remote(RadioModel::Role::Remote);
+        SetupDialog dialog(&remote);
+
+        // The leaf says why before the page is ever opened.
+        QTreeWidgetItem* const leaf = setupLeaf(dialog, label);
+        QVERIFY(leaf != nullptr);
+        const QString reason = leaf->toolTip(0);
+        QVERIFY2(reason.contains(reasonWord), qPrintable(reason));
+        QVERIFY2(isPlainOperatorReason(reason), qPrintable(reason));
+        QVERIFY(!dialog.isPageRealizedForTest(label));
+
+        dialog.selectPage(label);
+        QWidget* const page = dialog.realizedPageForTest(label);
+        QVERIFY(page != nullptr);
+        QVERIFY(!page->isEnabled());
+        QCOMPARE(page->toolTip(), reason);
+        auto* const notice = dialog.findChild<QLabel*>(QStringLiteral("setupLocalUnavailable"));
+        QVERIFY(notice != nullptr);
+        QVERIFY(!notice->isHidden());
+        QCOMPARE(notice->text(), reason);
+
+        // Not a transmit gate: a Core that permits transmit changes nothing.
+        dialog.setTransmitPermitted(true);
+        QVERIFY(!page->isEnabled());
+        QVERIFY(!notice->isHidden());
+
+        // Local direct mode: live, no reason.
+        RadioModel local;
+        SetupDialog localDialog(&local);
+        QTreeWidgetItem* const localLeaf = setupLeaf(localDialog, label);
+        QVERIFY(localLeaf != nullptr);
+        QVERIFY(localLeaf->toolTip(0).isEmpty());
+        localDialog.selectPage(label);
+        QWidget* const localPage = localDialog.realizedPageForTest(label);
+        QVERIFY(localPage != nullptr);
+        QVERIFY(localPage->isEnabled());
+        QVERIFY(localDialog.findChild<QLabel*>(
+                    QStringLiteral("setupLocalUnavailable"))->isHidden());
+    }
+
+    // The PA category is not shown in a remote session: a remote model has
+    // no hardware profile, so its capabilities are the Unknown board's and
+    // hasPaProfile is false (SetupDialog::applyPaVisibility). The inventory
+    // records it as unavailable by absence; this pins that.
+    void remotePaCategoryIsNotShown()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        SetupDialog dialog(&remote);
+        auto* tree = dialog.findChild<QTreeWidget*>();
+        QVERIFY(tree != nullptr);
+        QTreeWidgetItem* pa = nullptr;
+        for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+            if (tree->topLevelItem(i)->text(0) == QStringLiteral("PA")) {
+                pa = tree->topLevelItem(i);
+            }
+        }
+        QVERIFY(pa != nullptr);
+        QVERIFY(pa->isHidden());
+    }
+
+    // General > Options keeps its Region and Options groups; only the two
+    // attenuator groups, which drive the unwired local step attenuator,
+    // are unavailable.
+    void remoteGeneralOptionsDisablesOnlyTheAttenuatorGroups()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        GeneralOptionsPage page(&remote);
+        for (const char* name : {"grpStepAttenuator", "grpAutoAttRx1"}) {
+            auto* group = page.findChild<QGroupBox*>(QLatin1String(name));
+            QVERIFY2(group != nullptr, name);
+            QVERIFY2(!group->isEnabled(), name);
+            QVERIFY2(isPlainOperatorReason(group->toolTip()), qPrintable(group->toolTip()));
+        }
+        auto* hardware = page.findChild<QGroupBox*>(QStringLiteral("grpHardwareConfig"));
+        QVERIFY(hardware != nullptr);
+        QVERIFY(hardware->isEnabled());
+
+        RadioModel local;
+        GeneralOptionsPage localPage(&local);
+        auto* localStepAtt = localPage.findChild<QGroupBox*>(QStringLiteral("grpStepAttenuator"));
+        QVERIFY(localStepAtt != nullptr);
+        QVERIFY(localStepAtt->isEnabled());
+        QVERIFY(localStepAtt->toolTip().isEmpty());
+    }
+
+    // ====================================================================
+    // R-R3-21: applet and flag controls the inventory found acting on this
+    // computer's own radio connection, amplifier socket or VAX buses.
+    // ====================================================================
+    void remoteRxAppletAttenuatorRowIsUnavailable()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        RxApplet applet(nullptr, &remote);
+        auto* att = applet.findChild<QWidget*>(QStringLiteral("RxAttenuatorStack"));
+        QVERIFY(att != nullptr);
+        QVERIFY(!att->isEnabled());
+        QVERIFY2(isPlainOperatorReason(att->toolTip()), qPrintable(att->toolTip()));
+        QVERIFY(att->toolTip().contains(QStringLiteral("attenuator")));
+
+        RadioModel local;
+        RxApplet localApplet(nullptr, &local);
+        auto* localAtt = localApplet.findChild<QWidget*>(QStringLiteral("RxAttenuatorStack"));
+        QVERIFY(localAtt != nullptr);
+        QVERIFY(localAtt->isEnabled());
+        QVERIFY(localAtt->toolTip().isEmpty());
+    }
+
+    // The RX applet's XIT row offsets the transmit frequency, so it takes
+    // the transmit permission the VFO flag's XIT takes. A remote model
+    // starts denied; clicking writes nothing; permission restores it.
+    void remoteRxAppletXitFollowsTheTransmitPermission()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        SliceModel slice(0);
+        RxApplet applet(&slice, &remote);
+        QPushButton* xit = nullptr;
+        for (QPushButton* b : applet.findChildren<QPushButton*>()) {
+            if (b->text() == QStringLiteral("XIT")) { xit = b; }
+        }
+        QVERIFY(xit != nullptr);
+        QVERIFY(!xit->isEnabled());
+        QVERIFY(xit->toolTip().contains(QStringLiteral("transmit")));
+
+        QSignalSpy xitChanged(&slice, &SliceModel::xitEnabledChanged);
+        xit->click();
+        QCOMPARE(xitChanged.count(), 0);
+        QVERIFY(!slice.xitEnabled());
+
+        const QString reason = QStringLiteral("Remote transmit is unavailable");
+        applet.setTransmitPermitted(false, reason);
+        QCOMPARE(xit->toolTip(), reason);
+        applet.setTransmitPermitted(true);
+        QVERIFY(xit->isEnabled());
+        QVERIFY(xit->toolTip() != reason);
+
+        RadioModel local;
+        SliceModel localSlice(0);
+        RxApplet localApplet(&localSlice, &local);
+        for (QPushButton* b : localApplet.findChildren<QPushButton*>()) {
+            if (b->text() == QStringLiteral("XIT")) {
+                QVERIFY(b->isEnabled());
+                b->click();
+            }
+        }
+        QVERIFY(localSlice.xitEnabled());
+    }
+
+    void remoteVaxSurfacesAreUnavailable()
+    {
+        const QString vaxWord = QStringLiteral("VAX");
+        RadioModel remote(RadioModel::Role::Remote);
+        RadioModel local;
+
+        // VAX applet: the whole applet.
+        VaxApplet remoteApplet(&remote, remote.audioEngine());
+        QVERIFY(!remoteApplet.isEnabled());
+        QVERIFY(remoteApplet.toolTip().contains(vaxWord));
+        QVERIFY2(isPlainOperatorReason(remoteApplet.toolTip()),
+                 qPrintable(remoteApplet.toolTip()));
+        VaxApplet localApplet(&local, local.audioEngine());
+        QVERIFY(localApplet.isEnabled());
+
+        // VFO flag's VAX tab selector.
+        VfoWidget remoteFlag;
+        remoteFlag.setRadioModel(&remote);
+        auto* selector = remoteFlag.findChild<VaxChannelSelector*>();
+        QVERIFY(selector != nullptr);
+        QVERIFY(!selector->isEnabled());
+        QCOMPARE(selector->toolTip(), remoteApplet.toolTip());
+        VfoWidget localFlag;
+        localFlag.setRadioModel(&local);
+        auto* localSelector = localFlag.findChild<VaxChannelSelector*>();
+        QVERIFY(localSelector != nullptr);
+        QVERIFY(localSelector->isEnabled());
+
+        // Spectrum overlay VAX flyout, bound to a slice.
+        SliceModel slice(0);
+        QWidget host;
+        auto* panel = new SpectrumOverlayPanel(&host);
+        panel->setSliceResolver([&slice]() { return &slice; });
+        panel->setRadioModel(&remote);
+        auto* combo = host.findChild<QComboBox*>(QStringLiteral("vaxCombo"));
+        QVERIFY(combo != nullptr);
+        QVERIFY(!combo->isEnabled());
+        QCOMPARE(combo->toolTip(), remoteApplet.toolTip());
+
+        QWidget localHost;
+        auto* localPanel = new SpectrumOverlayPanel(&localHost);
+        localPanel->setSliceResolver([&slice]() { return &slice; });
+        localPanel->setRadioModel(&local);
+        auto* localCombo = localHost.findChild<QComboBox*>(QStringLiteral("vaxCombo"));
+        QVERIFY(localCombo != nullptr);
+        QVERIFY(localCombo->isEnabled());
+    }
+
+    void remoteAmplifierAppletControlsAreUnavailable()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        AmpApplet applet(&remote);
+        QSignalSpy toggles(&applet, &AmpApplet::connectionToggleRequested);
+        QSignalSpy operate(&applet, &AmpApplet::operateToggled);
+
+        QPushButton* operateBtn = nullptr;
+        for (QPushButton* b : applet.findChildren<QPushButton*>()) {
+            if (b->text() == QStringLiteral("OPERATE")) { operateBtn = b; }
+        }
+        QVERIFY(operateBtn != nullptr);
+        QVERIFY(!operateBtn->isEnabled());
+        operateBtn->click();
+        QCOMPARE(operate.count(), 0);
+
+        std::unique_ptr<QMenu> menu(applet.buildContextMenuForTesting());
+        QAction* toggle = nullptr;
+        for (QAction* a : menu->actions()) {
+            if (a->text() == QStringLiteral("Reconnect")
+                || a->text() == QStringLiteral("Disconnect")) {
+                toggle = a;
+            }
+        }
+        QVERIFY(toggle != nullptr);
+        QVERIFY(!toggle->isEnabled());
+        QVERIFY2(isPlainOperatorReason(toggle->toolTip()), qPrintable(toggle->toolTip()));
+        QCOMPARE(toggle->toolTip(), operateBtn->toolTip());
+        toggle->trigger();
+        QCOMPARE(toggles.count(), 0);
+
+        RadioModel local;
+        AmpApplet localApplet(&local);
+        std::unique_ptr<QMenu> localMenu(localApplet.buildContextMenuForTesting());
+        QSignalSpy localToggles(&localApplet, &AmpApplet::connectionToggleRequested);
+        for (QAction* a : localMenu->actions()) {
+            if (a->text() == QStringLiteral("Reconnect")) {
+                QVERIFY(a->isEnabled());
+                a->trigger();
+            }
+        }
+        QCOMPARE(localToggles.count(), 1);
+    }
+
+    // ====================================================================
     // R-R3-21 / R-R3-25: the Tools menu's two developer test entries.
     //
     // "Test antenna switch toast" and "Test TX-bound re-route dialog" fake
@@ -1219,6 +1755,18 @@ private slots:
                                     .arg(remoteReason)));
             QCOMPARE(toast->toolTip(), remoteReason);
             QCOMPARE(reRoute->toolTip(), remoteReason);
+
+            // R-R3-21: the RX applet's XIT row gets the same reason through
+            // applyRemoteRoleGating once the handshake lands.
+            auto* const rxApplet = window->findChild<RxApplet*>();
+            QVERIFY(rxApplet != nullptr);
+            QPushButton* rxXit = nullptr;
+            for (QPushButton* b : rxApplet->findChildren<QPushButton*>()) {
+                if (b->text() == QStringLiteral("XIT")) { rxXit = b; }
+            }
+            QVERIFY(rxXit != nullptr);
+            QVERIFY(!rxXit->isEnabled());
+            QCOMPARE(rxXit->toolTip(), remoteReason);
 
             QVERIFY(detachTestSurfaceConsumers(window));
             QSignalSpy switched(window->radioModel(), &RadioModel::antennaAutoSwitched);

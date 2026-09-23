@@ -18,6 +18,10 @@
 //                 Claude Code.
 //                 Structural pattern follows AetherSDR (ten9876/AetherSDR,
 //                 GPLv3).
+//   2026-09-23 - R-R3-21: the VAX tab's channel selector is disabled with a
+//                 plain reason on a remote-station model. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 //=================================================================
@@ -3208,6 +3212,14 @@ void VfoWidget::setRadioModel(RadioModel* model)
     m_radioModel = model;
     if (model && model->role() == RadioModel::Role::Remote) {
         setTransmitPermitted(false);
+        // R-R3-21: a slice's VAX channel is not mirrored to the Core and
+        // remote audio plays through the speakers only, so the selector
+        // would move nothing. Same reason the VAX applet gives.
+        if (m_vaxSelector) {
+            m_vaxSelector->setEnabled(false);
+            m_vaxSelector->setToolTip(
+                tr("VAX audio channels are not available while connected to a Core."));
+        }
     }
 }
 

@@ -34,6 +34,10 @@
 //                 audio/SendIqToVax stored-but-not-active). J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-23 - R-R3-21: the VAX channel combo stays disabled, with a
+//                 plain reason, on a remote-station model. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "SpectrumOverlayPanel.h"
@@ -1070,8 +1074,14 @@ void SpectrumOverlayPanel::bindToPanSlice()
             m_updatingFromModel = false;
         });
 
-        m_vaxCmb->setEnabled(true);
-        m_vaxCmb->setToolTip("Route this slice's RX audio to a VAX channel");
+        // R-R3-21: a slice's VAX channel is not mirrored to the Core and
+        // remote audio plays through the speakers only, so on a remote
+        // model the combo would move nothing.
+        const bool vaxAvailable = m_radioModel->ownsLocalDsp();
+        m_vaxCmb->setEnabled(vaxAvailable);
+        m_vaxCmb->setToolTip(vaxAvailable
+            ? QStringLiteral("Route this slice's RX audio to a VAX channel")
+            : tr("VAX audio channels are not available while connected to a Core."));
         if (m_rxAntCmb) { m_rxAntCmb->setEnabled(true); }
         if (m_txAntCmb) { m_txAntCmb->setEnabled(true); }
 

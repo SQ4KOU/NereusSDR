@@ -18,6 +18,9 @@
 //                 (KG4VCF), with AI-assisted transformation via
 //                 Anthropic Claude Code. Phase 3O Sub-Phase 9 Task 9.2b.
 //                 See VaxApplet.h for full provenance / scope notes.
+//   2026-09-23 - R-R3-21: unavailable, with a plain reason, on a
+//                 remote-station model. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "VaxApplet.h"
@@ -101,6 +104,15 @@ VaxApplet::VaxApplet(RadioModel* model, AudioEngine* audio, QWidget* parent)
     buildUi();
     connectSliceTagsTracking();
     setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
+
+    // R-R3-21: VAX buses are fed by this computer's own receive DSP. While
+    // connected to a Core, received audio plays through the speakers only
+    // (AudioEngine::writeRemotePlayback) and the slice's VAX channel is not
+    // mirrored, so every gain and mute here would move nothing.
+    if (m_model && !m_model->ownsLocalDsp()) {
+        setEnabled(false);
+        setToolTip(tr("VAX audio channels are not available while connected to a Core."));
+    }
 }
 
 void VaxApplet::buildUi()

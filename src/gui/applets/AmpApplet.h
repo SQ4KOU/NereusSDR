@@ -114,6 +114,10 @@ private:
     // From AetherSDR src/gui/AmpApplet.h:29 [@0cd4559]
     void updatePowerLabel();
 
+    // R-R3-21: why OPERATE and the connection toggle are unavailable in a
+    // remote session.
+    static QString remoteUnavailableReason();
+
     // Phase 3P-II Phase 4 Task 88: builds the context menu.
     // parent is the QObject* parent for the returned heap-allocated QMenu.
     QMenu* buildContextMenu(QObject* menuParent);

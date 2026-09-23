@@ -216,6 +216,12 @@ public slots:
     // Called by MainWindow on currentRadioChanged after setBoardCapabilities.
     void setHpsdrSku(NereusSDR::HPSDRModel sku);
 
+    // R-R3-21: the negotiated transmit permission, as TxApplet and the VFO
+    // flag take it. Gates the XIT row and the filter-preset Shift-click TX
+    // passband match. A remote-station model starts denied; local direct
+    // mode is permitted and MainWindow never calls this there.
+    void setTransmitPermitted(bool permitted, const QString& reason = QString());
+
 #ifdef NEREUS_BUILD_TESTS
 public:
     // Test-only: returns current step-att spinbox maximum (for range assertions).
@@ -346,6 +352,7 @@ private:
     TriBtn*      m_ritPlus     = nullptr;
 
     // Control 16: XIT
+    bool         m_transmitPermitted = true;  // R-R3-21
     QPushButton* m_xitOnBtn    = nullptr;
     QLabel*      m_xitLabel    = nullptr;
     QPushButton* m_xitZero     = nullptr;

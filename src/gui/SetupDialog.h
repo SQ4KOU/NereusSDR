@@ -127,7 +127,11 @@ private:
         QWidget*                  widget     = nullptr;
         int                       stackIndex = -1;
         bool                      requiresTransmit = false;
+        // Unavailable in a remote session: set by the local-DSP gate, or by
+        // a non-empty remoteUnavailableReason on a page registered through
+        // markRemoteUnavailable(). R-R3-21.
         bool                      localDspUnavailable = false;
+        QString                   remoteUnavailableReason;
     };
 
     // Registration phase: create the tree leaf and record its factory. The
@@ -136,6 +140,12 @@ private:
                                   std::function<QWidget*()> factory,
                                   bool requiresTransmit = false);
     void refreshTransmitPresentation();
+
+    // R-R3-21: a leaf whose controls act on this computer's own radio
+    // connection or accessories and move nothing on a Core. In a remote
+    // session the page is disabled with `reason` above it; local direct
+    // mode is untouched.
+    void markRemoteUnavailable(QTreeWidgetItem* leaf, const QString& reason);
 
     // Realization phase: build the page if it has not been built yet, add it
     // to the stack, and return it. Returns nullptr for an out-of-range index
@@ -159,6 +169,12 @@ private:
     QLabel*         m_transmitNotice = nullptr;
     bool            m_transmitPermitted = false;
     QString         m_transmitReason;
+    // R-R3-21: the visible reason for a page the local-DSP gate disabled.
+    // Shown above the page (objectName "setupLocalUnavailable") and as the
+    // page's and its tree leaf's tooltip. Never shown in local direct mode,
+    // where the gate does not run.
+    QLabel*         m_localUnavailableNotice = nullptr;
+    QString         m_localUnavailableReason;
 
     std::vector<PageEntry> m_pages;
 

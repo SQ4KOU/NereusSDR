@@ -46,6 +46,11 @@
 //                 Construction-timing change only: no page's layout,
 //                 controls, defaults, or behaviour are touched.
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-23: R-R3-21 remote control inventory. DSP > CFC and Test >
+//                 Two-Tone IMD follow the negotiated transmit permission;
+//                 a page the local-DSP gate disables shows a plain reason
+//                 above it and as its tooltip. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "SetupDialog.h"
@@ -154,6 +159,10 @@ SetupDialog::SetupDialog(RadioModel* model, QWidget* parent)
 {
     m_transmitPermitted = model && model->ownsLocalDsp();
     m_transmitReason = tr("Remote transmit controls are not available from this Core yet.");
+    m_localUnavailableReason = tr(
+        "These settings control audio and signal processing on this computer. "
+        "While connected to a Core, the Core does that work, so they cannot be "
+        "changed here.");
     setWindowTitle("NereusSDR Settings");
     setMinimumSize(820, 600);
     resize(900, 650);
@@ -193,6 +202,14 @@ SetupDialog::SetupDialog(RadioModel* model, QWidget* parent)
     m_transmitNotice->setStyleSheet(QStringLiteral("QLabel { color: #c8d8e8; background: #1a2a3a; }"));
     m_transmitNotice->hide();
     pageLayout->addWidget(m_transmitNotice);
+    m_localUnavailableNotice = new QLabel(m_localUnavailableReason, pageContainer);
+    m_localUnavailableNotice->setObjectName(QStringLiteral("setupLocalUnavailable"));
+    m_localUnavailableNotice->setWordWrap(true);
+    m_localUnavailableNotice->setMargin(12);
+    m_localUnavailableNotice->setStyleSheet(
+        QStringLiteral("QLabel { color: #c8d8e8; background: #1a2a3a; }"));
+    m_localUnavailableNotice->hide();
+    pageLayout->addWidget(m_localUnavailableNotice);
     pageLayout->addWidget(m_stack, 1);
     splitter->addWidget(m_tree);
     splitter->addWidget(pageContainer);
@@ -260,6 +277,9 @@ SetupDialog::SetupDialog(RadioModel* model, QWidget* parent)
     // the three PA page widgets do not exist yet. Each PA factory re-applies
     // the live caps to its own page at realization time.
     applyPaVisibility(capsForModel(m_model));
+
+    // R-R3-21: leaf tooltips for remote-unavailable pages from the start.
+    refreshTransmitPresentation();
 }
 
 // ── showEvent ─────────────────────────────────────────────────────────────────
@@ -389,9 +409,18 @@ QWidget* SetupDialog::realizePage(int entryIndex)
     // factory move) cannot zero the outer page's tally on its way through.
     // The names below are therefore the running set for the whole dialog,
     // not this page's alone; the verdict is per-page, the names are a hint.
-    if (gateRemotePages && m_model->localDspHandOutCount() > handOutsBefore) {
+    if (gateRemotePages && !entry.remoteUnavailableReason.isEmpty()) {
+        // Declared unavailable at registration (markRemoteUnavailable): the
+        // page works on this computer's own radio connection or accessories.
         entry.localDspUnavailable = true;
         page->setEnabled(false);
+    } else if (gateRemotePages && m_model->localDspHandOutCount() > handOutsBefore) {
+        entry.localDspUnavailable = true;
+        page->setEnabled(false);
+        // R-R3-21: disabled with a visible reason, not just greyed out.
+        // refreshTransmitPresentation() below owns the tooltip and the
+        // notice, so a page that is also a transmit page (TX Input) gets
+        // the one reason that currently applies.
         qCWarning(lcSetupTiming)
             << "Setup page" << entry.label
             << "reached local DSP on a remote-station model and has been "
@@ -427,28 +456,70 @@ void SetupDialog::setTransmitPermitted(bool permitted, const QString& reason)
 
 void SetupDialog::refreshTransmitPresentation()
 {
+    // The reason a page is unavailable, if it is. The transmit reason wins
+    // on a page that carries both gates: it is the one a Core that later
+    // permits transmit would lift, and the local-DSP reason takes over then.
+    const auto unavailableReason = [this](const PageEntry& entry) -> QString {
+        if (entry.requiresTransmit && !m_transmitPermitted) {
+            return m_transmitReason;
+        }
+        if (entry.localDspUnavailable) {
+            return entry.remoteUnavailableReason.isEmpty()
+                ? m_localUnavailableReason : entry.remoteUnavailableReason;
+        }
+        return QString();
+    };
+    const bool remoteSession = (m_model != nullptr) && !m_model->ownsLocalDsp();
+
     bool showNotice = false;
+    bool showLocalNotice = false;
+    QString localNoticeText = m_localUnavailableReason;
     for (const PageEntry& entry : m_pages) {
-        if (!entry.requiresTransmit || !entry.widget) { continue; }
-        // A negotiated TX permission cannot make this client's absent DSP
-        // available. Preserve the independent resource gate and child rules.
-        entry.widget->setEnabled(m_transmitPermitted && !entry.localDspUnavailable);
-        entry.widget->setToolTip(m_transmitPermitted ? QString() : m_transmitReason);
-        if (m_stack->currentWidget() == entry.widget && !m_transmitPermitted) {
-            showNotice = true;
+        if (!entry.widget) { continue; }
+        if (entry.requiresTransmit) {
+            // A negotiated TX permission cannot make this client's absent DSP
+            // available. Preserve the independent resource gate and child rules.
+            entry.widget->setEnabled(m_transmitPermitted && !entry.localDspUnavailable);
+        }
+        if (!entry.requiresTransmit && !entry.localDspUnavailable) { continue; }
+        entry.widget->setToolTip(unavailableReason(entry));
+        if (m_stack->currentWidget() == entry.widget) {
+            if (entry.requiresTransmit && !m_transmitPermitted) {
+                showNotice = true;
+            } else if (entry.localDspUnavailable) {
+                showLocalNotice = true;
+                localNoticeText = unavailableReason(entry);
+            }
         }
     }
     QTreeWidgetItemIterator it(m_tree);
     while (*it) {
         const int index = (*it)->data(0, Qt::UserRole).toInt();
-        if (index >= 0 && index < static_cast<int>(m_pages.size())
-            && m_pages[static_cast<std::size_t>(index)].requiresTransmit) {
-            (*it)->setToolTip(0, m_transmitPermitted ? QString() : m_transmitReason);
+        if (index >= 0 && index < static_cast<int>(m_pages.size())) {
+            const PageEntry& entry = m_pages[static_cast<std::size_t>(index)];
+            if (entry.requiresTransmit || entry.localDspUnavailable) {
+                (*it)->setToolTip(0, unavailableReason(entry));
+            } else if (remoteSession && !entry.remoteUnavailableReason.isEmpty()) {
+                // Declared unavailable but not visited yet: the leaf already
+                // says why before the operator opens it.
+                (*it)->setToolTip(0, entry.remoteUnavailableReason);
+            }
         }
         ++it;
     }
     m_transmitNotice->setText(m_transmitReason);
     m_transmitNotice->setVisible(showNotice);
+    m_localUnavailableNotice->setText(localNoticeText);
+    m_localUnavailableNotice->setVisible(showLocalNotice);
+}
+
+void SetupDialog::markRemoteUnavailable(QTreeWidgetItem* leaf, const QString& reason)
+{
+    const int index = leaf ? leaf->data(0, Qt::UserRole).toInt() : -1;
+    if (index < 0 || index >= static_cast<int>(m_pages.size())) {
+        return;
+    }
+    m_pages[static_cast<std::size_t>(index)].remoteUnavailableReason = reason;
 }
 
 int SetupDialog::pageEntryIndex(const QString& label) const
@@ -557,19 +628,28 @@ void SetupDialog::buildTree()
     // Task 3.6: ANAN-8000DLE volts/amps toggle — forward signal up to
     // SetupDialog so MainWindow's wireSetupDialog() can connect it to
     // setVoltsAmpsVisible().
-    registerPage(hardware, "Hardware Config", [this]() -> QWidget* {
+    //
+    // R-R3-21: both Hardware leaves act on this computer's own radio
+    // connection. On a remote model currentRadioChanged never fires, so the
+    // tabs never learn a MAC and HardwarePage::onTabSettingChanged drops
+    // every edit; the DDC Routing keys are per-MAC too.
+    const QString hardwareReason = tr(
+        "The radio's hardware settings cannot be changed from a remote window yet.");
+    QTreeWidgetItem* const hardwareConfigLeaf =
+        registerPage(hardware, "Hardware Config", [this]() -> QWidget* {
         auto* hwPage = new HardwarePage(m_model);
         connect(hwPage, &HardwarePage::anan8000DleVoltsAmpsChanged,
                 this,   &SetupDialog::anan8000DleVoltsAmpsChanged);
         return hwPage;
     });
+    markRemoteUnavailable(hardwareConfigLeaf, hardwareReason);
 
     // Phase 3F Sub-Epic E Tasks 8-10: DDC Routing power-user override page.
     // Skeleton-only landing; per-DDC table + override schema follow once
     // codec layer (Sub-Epic B) is in place.
-    registerPage(hardware, "DDC Routing", [this]() -> QWidget* {
+    markRemoteUnavailable(registerPage(hardware, "DDC Routing", [this]() -> QWidget* {
         return new HardwareDdcRoutingPage(m_model);
-    });
+    }), hardwareReason);
 
     // ── PA ────────────────────────────────────────────────────────────────────
     // Top-level PA category mirrors Thetis tpPowerAmplifier
@@ -691,12 +771,17 @@ void SetupDialog::buildTree()
     // cfcDialogRequested signal so MainWindow can route it to the
     // TxApplet::requestOpenCfcDialog() slot (the same modeless dialog
     // instance is shared with the [CFC] right-click on the TxApplet).
+    //
+    // R-R3-21: a transmit page. Phase Rotator, CFC and CESSB are all TXA
+    // stages, and the [Configure CFC bands] button opens the TX CFC editor,
+    // so the page follows the negotiated transmit permission like the six
+    // Transmit/Audio TX leaves.
     registerPage(dsp, "CFC", [this]() -> QWidget* {
         auto* cfcPage = new CfcSetupPage(m_model);
         connect(cfcPage, &CfcSetupPage::openCfcDialogRequested,
                 this,    &SetupDialog::cfcDialogRequested);
         return cfcPage;
-    });
+    }, true);
 
     registerPage(dsp, "TNF", [this] { return new MnfSetupPage(m_model); });
     // Stage C2: user-customisable filter preset editor (10 slots × 12 modes).
@@ -878,7 +963,12 @@ void SetupDialog::buildTree()
                 this, &SetupDialog::connectionsRequested);
         return page;
     });
-    registerPage(cat, "RF-Kit",       [this] { return new RfKitPage(m_model); });
+    // R-R3-21: RfKitPage connects this computer's own RfKitConnection to
+    // the amplifier (RfKitPage.cpp connectToAmp), which a remote window
+    // must not do: the amplifier sits at the station.
+    markRemoteUnavailable(
+        registerPage(cat, "RF-Kit", [this] { return new RfKitPage(m_model); }),
+        tr("Amplifier control is not available from a remote window yet."));
     registerPage(cat, "TCP/IP CAT",   [] { return new CatTcpIpPage;       });
     registerPage(cat, "MIDI Control", [] { return new CatMidiControlPage;  });
 
@@ -893,7 +983,10 @@ void SetupDialog::buildTree()
     // ── Test ──────────────────────────────────────────────────────────────────
     // Phase 3M-1c H.1: top-level Test category for the Two-Tone IMD page.
     QTreeWidgetItem* test = addCategory("Test");
-    registerPage(test, "Two-Tone IMD", [this] { return new TestTwoTonePage(m_model); });
+    // R-R3-21: a transmit page. Every control writes the TransmitModel's
+    // two-tone test settings, which drive a keyed two-tone transmission.
+    registerPage(test, "Two-Tone IMD", [this] { return new TestTwoTonePage(m_model); },
+                 true);
 
     tick("Test");
 

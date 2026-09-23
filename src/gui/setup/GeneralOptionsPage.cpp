@@ -10,6 +10,10 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-23 - R-R3-21: the Step Attenuator and Auto Attenuate groups are
+//                 disabled with a plain reason on a remote-station model.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -165,6 +169,22 @@ GeneralOptionsPage::GeneralOptionsPage(RadioModel* model, QWidget* parent)
         // loadSettings) doesn't show stale defaults. See the function-level
         // comment in initFromController() for the full lazy-construct trace.
         initFromController();
+    }
+
+    // R-R3-21: on a remote-station model the step attenuator controller is
+    // never wired to a radio connection (MainWindow wires it only for a
+    // local connection) and nothing reports the station's attenuator back,
+    // so these two groups would accept input and move nothing. The
+    // Hardware Configuration and Options groups are left as they are.
+    if (model && !model->ownsLocalDsp()) {
+        const QString reason = tr(
+            "The attenuator and preamp cannot be changed from a remote window yet.");
+        for (const char* name : {"grpStepAttenuator", "grpAutoAttRx1", "grpAutoAttRx2"}) {
+            if (auto* group = findChild<QGroupBox*>(QLatin1String(name))) {
+                group->setEnabled(false);
+                group->setToolTip(reason);
+            }
+        }
     }
 }
 
@@ -476,6 +496,7 @@ void GeneralOptionsPage::buildOptionsGroup()
 void GeneralOptionsPage::buildStepAttGroup()
 {
     auto* group = new QGroupBox(QStringLiteral("Step Attenuator"), this);
+    group->setObjectName(QStringLiteral("grpStepAttenuator"));
     auto* vbox  = new QVBoxLayout(group);
     vbox->setSpacing(6);
 
@@ -561,6 +582,7 @@ void GeneralOptionsPage::buildAutoAttGroup()
                              QCheckBox*& chkUndo, QSpinBox*& spnHold)
     {
         auto* group = new QGroupBox(title, this);
+        group->setObjectName(QStringLiteral("grpAutoAttRx%1").arg(rx + 1));
         auto* vbox  = new QVBoxLayout(group);
         vbox->setSpacing(6);
 
