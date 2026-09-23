@@ -347,6 +347,13 @@ struct RemoteMediaController::Private {
         SpectrumEndpointContext context;
         /// What Core granted, as the accepted minor-9 context reported it.
         std::optional<SpectrumContextGrant> grant;
+        /// R-R3-01/R-R3-08/R-R3-37: Core granted fewer pixels than asked
+        /// with no limit named (a lone pan kept at the charge it was first
+        /// admitted at). The same request goes out once more as an
+        /// increase; askedAgain is that request, so a second short answer
+        /// to it is not asked again.
+        bool askAgain = false;
+        QJsonObject askedAgain;
         double sourceCentreHz = 0;
         DisplayCodecDecoder decoder;
         qint64 lastKeyframeMs = -1000;
@@ -1626,7 +1633,11 @@ void RemoteMediaController::refreshBudgetSubscriptions()
         setPanStatus(item.panId, status);
         if (!self) { return; }
         if (binding.pending || binding.refusedIdentity == identity) { continue; }
+        if (binding.askAgain && binding.acceptedRequest != target) {
+            binding.askAgain = false; // A new request supersedes it.
+        }
         if (binding.acceptedRevision != 0 && binding.acceptedRequest == target
+            && !binding.askAgain
             && binding.observedStream == item.slice->streamIndex()
             && binding.observedStreamEpoch == item.slice->streamEpoch()) {
             continue;
@@ -1650,6 +1661,10 @@ void RemoteMediaController::refreshBudgetSubscriptions()
         auto found = d->bindings.find(candidate.endpointId);
         if (found == d->bindings.end() || found->second.pending) { return; }
         Private::Binding& binding = found->second;
+        if (binding.askAgain) {
+            binding.askAgain = false;
+            binding.askedAgain = candidate.request;
+        }
         ++binding.revision;
         if (binding.revision == 0) { ++binding.revision; }
         const quint32 revision = binding.revision;
@@ -2161,6 +2176,14 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
                    .arg(binding.panId, grantLogLine(*decoded->grant));
     }
     binding.grant = decoded->grant;
+    // A grant short of the request with no limit named is not final: ask
+    // for the same request once more. Core then grants it, names a limit,
+    // or refuses it (refusedIdentity stops a repeat).
+    const bool shortWithoutReason = budgetMode && decoded->grant
+        && decoded->grant->limit == SpectrumLimitReason::None
+        && decoded->grant->grantedPixels < decoded->grant->requestedPixels;
+    binding.askAgain = shortWithoutReason && binding.askedAgain != binding.acceptedRequest;
+    const bool askAgain = binding.askAgain;
     binding.context = context;
     binding.contextRevision = revision;
     binding.sourceCentreHz = sourceCentre;
@@ -2200,6 +2223,10 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
     }
     refreshCtunState();
     requestKeyframe(endpointId);
+    if (askAgain) {
+        if (!self || d->connectionId != connectionId) { return; }
+        refreshSubscriptions();
+    }
 }
 
 void RemoteMediaController::requestKeyframe(quint32 endpointId)

@@ -152,6 +152,12 @@ QJsonObject lastControl(const QSignalSpy& spy, const QString& op)
     }
     return {};
 }
+// budgetModePaintsWhenCoreGrantsFewerPixels: what happens to the pan that
+// sized a shared engine.
+constexpr int kStays = 0;
+constexpr int kLeaves = 1;
+constexpr int kLeavesCoreRefuses = 2;
+
 int countControl(const QSignalSpy& spy, const QString& op)
 {
     int count = 0;
@@ -1485,6 +1491,21 @@ private slots:
         StationServer server(&station, settings, dir.path());
         server.setMediaEnabled(true);
         QVERIFY(server.setDisplayBudgetLimits({10'000'000, 10'000'000, 1}));
+        // Refused row: Core's state moves ahead of the GUI's view. When the
+        // survivor asks again, Core already holds PureSignal display, which
+        // the GUI has not heard of yet. Connected before Core's own handler,
+        // so it runs first.
+        const auto armedEndpoint = std::make_shared<quint32>(0);
+        connect(&server, &StationServer::mediaControlReceived, &station,
+            [&station, armedEndpoint](const QJsonObject& control) {
+                if (*armedEndpoint != 0
+                    && control.value(QStringLiteral("op")) == QLatin1String("subscribe")
+                    && quint32(control.value(QStringLiteral("endpointId")).toDouble())
+                        == *armedEndpoint) {
+                    *armedEndpoint = 0;
+                    station.pureSignalFacade()->setRemoteAmpViewSubscribed(true);
+                }
+            });
         QPointer<DisplayTransport> sourceMedia;
         DaemonMediaController daemon(&server, &station, nullptr,
             [&sourceMedia](QObject* owner) -> IMediaTransport* {
@@ -1571,6 +1592,21 @@ private slots:
         StationServer server(&station, settings, dir.path());
         server.setMediaEnabled(true);
         QVERIFY(server.setDisplayBudgetLimits({10'000'000, 10'000'000, 1}));
+        // Refused row: Core's state moves ahead of the GUI's view. When the
+        // survivor asks again, Core already holds PureSignal display, which
+        // the GUI has not heard of yet. Connected before Core's own handler,
+        // so it runs first.
+        const auto armedEndpoint = std::make_shared<quint32>(0);
+        connect(&server, &StationServer::mediaControlReceived, &station,
+            [&station, armedEndpoint](const QJsonObject& control) {
+                if (*armedEndpoint != 0
+                    && control.value(QStringLiteral("op")) == QLatin1String("subscribe")
+                    && quint32(control.value(QStringLiteral("endpointId")).toDouble())
+                        == *armedEndpoint) {
+                    *armedEndpoint = 0;
+                    station.pureSignalFacade()->setRemoteAmpViewSubscribed(true);
+                }
+            });
         QPointer<DisplayTransport> sourceMedia;
         DaemonMediaController daemon(&server, &station, nullptr,
             [&sourceMedia](QObject* owner) -> IMediaTransport* {
@@ -1775,6 +1811,21 @@ private slots:
         StationServer server(&station, settings, dir.path());
         server.setMediaEnabled(true);
         QVERIFY(server.setDisplayBudgetLimits({10'000'000, 10'000'000, 1}));
+        // Refused row: Core's state moves ahead of the GUI's view. When the
+        // survivor asks again, Core already holds PureSignal display, which
+        // the GUI has not heard of yet. Connected before Core's own handler,
+        // so it runs first.
+        const auto armedEndpoint = std::make_shared<quint32>(0);
+        connect(&server, &StationServer::mediaControlReceived, &station,
+            [&station, armedEndpoint](const QJsonObject& control) {
+                if (*armedEndpoint != 0
+                    && control.value(QStringLiteral("op")) == QLatin1String("subscribe")
+                    && quint32(control.value(QStringLiteral("endpointId")).toDouble())
+                        == *armedEndpoint) {
+                    *armedEndpoint = 0;
+                    station.pureSignalFacade()->setRemoteAmpViewSubscribed(true);
+                }
+            });
         QPointer<DisplayTransport> sourceMedia;
         DaemonMediaController daemon(&server, &station, nullptr,
             [&sourceMedia](QObject* owner) -> IMediaTransport* {
@@ -1840,6 +1891,21 @@ private slots:
         StationServer server(&station, settings, dir.path());
         server.setMediaEnabled(true);
         QVERIFY(server.setDisplayBudgetLimits({10'000'000, 10'000'000, 1}));
+        // Refused row: Core's state moves ahead of the GUI's view. When the
+        // survivor asks again, Core already holds PureSignal display, which
+        // the GUI has not heard of yet. Connected before Core's own handler,
+        // so it runs first.
+        const auto armedEndpoint = std::make_shared<quint32>(0);
+        connect(&server, &StationServer::mediaControlReceived, &station,
+            [&station, armedEndpoint](const QJsonObject& control) {
+                if (*armedEndpoint != 0
+                    && control.value(QStringLiteral("op")) == QLatin1String("subscribe")
+                    && quint32(control.value(QStringLiteral("endpointId")).toDouble())
+                        == *armedEndpoint) {
+                    *armedEndpoint = 0;
+                    station.pureSignalFacade()->setRemoteAmpViewSubscribed(true);
+                }
+            });
         QPointer<DisplayTransport> sourceMedia;
         DaemonMediaController daemon(&server, &station, nullptr,
             [&sourceMedia](QObject* owner) -> IMediaTransport* {
@@ -2577,17 +2643,24 @@ private slots:
     {
         QTest::addColumn<int>("minor");
         QTest::addColumn<bool>("shared");
+        QTest::addColumn<int>("leave");
         const int grant = int(kRemoteSpectrumGrantSessionProtocolMinor);
-        QTest::newRow("minor 9 crop past the source edge") << grant << false;
-        QTest::newRow("minor 9 shared engine") << grant << true;
-        QTest::newRow("minor 8 crop past the source edge") << grant - 1 << false;
-        QTest::newRow("minor 8 shared engine") << grant - 1 << true;
+        QTest::newRow("minor 9 crop past the source edge") << grant << false << kStays;
+        QTest::newRow("minor 9 shared engine") << grant << true << kStays;
+        QTest::newRow("minor 8 crop past the source edge") << grant - 1 << false << kStays;
+        QTest::newRow("minor 8 shared engine") << grant - 1 << true << kStays;
+        // R-R3-01, R-R3-08, R-R3-37: the pan that sized the engine leaves.
+        QTest::newRow("minor 9 shared engine, first pan leaves")
+            << grant << true << kLeaves;
+        QTest::newRow("minor 9 shared engine, first pan leaves, Core refuses more")
+            << grant << true << kLeavesCoreRefuses;
     }
 
     void budgetModePaintsWhenCoreGrantsFewerPixels()
     {
         QFETCH(int, minor);
         QFETCH(bool, shared);
+        QFETCH(int, leave);
         const bool grantAgreed = minor >= kRemoteSpectrumGrantSessionProtocolMinor;
         QTemporaryDir dir;
         AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
@@ -2612,6 +2685,21 @@ private slots:
         StationServer server(&station, settings, dir.path());
         server.setMediaEnabled(true);
         QVERIFY(server.setDisplayBudgetLimits({10'000'000, 10'000'000, 1}));
+        // Refused row: Core's state moves ahead of the GUI's view. When the
+        // survivor asks again, Core already holds PureSignal display, which
+        // the GUI has not heard of yet. Connected before Core's own handler,
+        // so it runs first.
+        const auto armedEndpoint = std::make_shared<quint32>(0);
+        connect(&server, &StationServer::mediaControlReceived, &station,
+            [&station, armedEndpoint](const QJsonObject& control) {
+                if (*armedEndpoint != 0
+                    && control.value(QStringLiteral("op")) == QLatin1String("subscribe")
+                    && quint32(control.value(QStringLiteral("endpointId")).toDouble())
+                        == *armedEndpoint) {
+                    *armedEndpoint = 0;
+                    station.pureSignalFacade()->setRemoteAmpViewSubscribed(true);
+                }
+            });
         QPointer<DisplayTransport> sourceMedia;
         DaemonMediaController daemon(&server, &station, nullptr,
             [&sourceMedia](QObject* owner) -> IMediaTransport* {
@@ -2692,6 +2780,9 @@ private slots:
 
         // The limited pan really was granted fewer pixels than it asked for.
         bool reduced = false;
+        quint32 limitedEndpoint = 0;
+        QJsonObject limitedRequest;
+        int limitedGrantedPixels = 0;
         for (const QJsonObject& context : controlsFor(inbound, QStringLiteral("context"))) {
             const auto decoded = decodeRemoteSpectrumContext(context, grantAgreed);
             QVERIFY(decoded.has_value());
@@ -2701,6 +2792,9 @@ private slots:
                     && decoded->traceSamples
                         < request.value(QStringLiteral("pixels")).toInt()) {
                     reduced = true;
+                    limitedEndpoint = decoded->endpointId;
+                    limitedRequest = request;
+                    limitedGrantedPixels = decoded->traceSamples;
                     if (grantAgreed) {
                         QCOMPARE(decoded->grant->limit, shared
                             ? SpectrumLimitReason::SharedEngine
@@ -2711,6 +2805,122 @@ private slots:
         }
         QVERIFY(reduced);
         QCOMPARE(countControl(inbound, QStringLiteral("rejected")), 0);
+
+        if (leave != kStays) {
+            const auto requestsFromLimited = [&] {
+                int count = 0;
+                for (const QJsonObject& request
+                     : controlsFor(outbound, QStringLiteral("subscribe"))) {
+                    if (quint32(request.value(QStringLiteral("endpointId")).toDouble())
+                        == limitedEndpoint) { ++count; }
+                }
+                return count;
+            };
+            const int requestedPixels = limitedRequest.value(QStringLiteral("pixels")).toInt();
+            QVERIFY(limitedGrantedPixels < requestedPixels);
+            if (leave == kLeavesCoreRefuses) {
+                // Core takes PureSignal display just as the survivor asks
+                // again (armedEndpoint above): the GUI's own budget check
+                // passes, and Core's admission refuses the survivor any more
+                // pixels. The limits leave room for the survivor's granted
+                // pixels plus PureSignal, and for both pans as they were.
+                const int fps = limitedRequest.value(QStringLiteral("fps")).toInt();
+                const bool wide = limitedRequest.value(QStringLiteral("wideSpanFactor"))
+                    .toDouble() > 1.0;
+                const auto granted = spectrumDisplayCost(limitedGrantedPixels, fps, wide);
+                const auto full = spectrumDisplayCost(requestedPixels, fps, wide);
+                QVERIFY(granted && full);
+                quint64 others = 0;
+                for (const QJsonObject& request
+                     : controlsFor(outbound, QStringLiteral("subscribe"))) {
+                    if (quint32(request.value(QStringLiteral("endpointId")).toDouble())
+                        != limitedEndpoint) {
+                        const auto cost = spectrumDisplayCost(
+                            request.value(QStringLiteral("pixels")).toInt(),
+                            request.value(QStringLiteral("fps")).toInt(),
+                            request.value(QStringLiteral("wideSpanFactor")).toDouble() > 1.0);
+                        QVERIFY(cost);
+                        others = std::max(others, cost->charge.applicationBytesPerSecond);
+                    }
+                }
+                const quint64 ps3 = ps3DisplayCharge().applicationBytesPerSecond;
+                const quint64 limit = granted->charge.applicationBytesPerSecond + ps3;
+                QVERIFY(full->charge.applicationBytesPerSecond
+                        > granted->charge.applicationBytesPerSecond);
+                QVERIFY(others + full->charge.applicationBytesPerSecond <= limit);
+                const int before = requestsFromLimited();
+                QVERIFY(server.setDisplayBudgetLimits({limit, 10'000'000, 2}));
+                QTRY_COMPARE(client.remoteDisplayBudgetLimits()->generation, quint32(2));
+                QTest::qWait(100);
+                QCOMPARE(requestsFromLimited(), before);
+                *armedEndpoint = limitedEndpoint;
+            }
+            const int requestsBeforeLeave = requestsFromLimited();
+            stack.removePanadapter(QStringLiteral("first"));
+            QTRY_COMPARE(daemon.activeEndpointCount(), 1);
+            const auto survivorContext = [&]() -> std::optional<SpectrumContextMessage> {
+                std::optional<SpectrumContextMessage> latest;
+                for (const QJsonObject& context
+                     : controlsFor(inbound, QStringLiteral("context"))) {
+                    const auto decoded = decodeRemoteSpectrumContext(context, grantAgreed);
+                    if (decoded && decoded->endpointId == limitedEndpoint) { latest = decoded; }
+                }
+                return latest;
+            };
+            if (leave == kLeaves) {
+                // The same request goes out again and Core grants all of it.
+                // Core renews the survivor's context on the engine's next frame.
+                QTRY_VERIFY_WITH_TIMEOUT(
+                    (feed(), requestsFromLimited() == requestsBeforeLeave + 1), 5000);
+                const QJsonObject again = controlsFor(outbound, QStringLiteral("subscribe")).last();
+                QCOMPARE(quint32(again.value(QStringLiteral("endpointId")).toDouble()),
+                         limitedEndpoint);
+                QCOMPARE(again.value(QStringLiteral("pixels")).toInt(), requestedPixels);
+                QTRY_VERIFY_WITH_TIMEOUT((feed(), survivorContext()
+                    && survivorContext()->traceSamples == requestedPixels), 5000);
+                QCOMPARE(survivorContext()->grant->grantedPixels, requestedPixels);
+                QCOMPARE(survivorContext()->grant->limit, SpectrumLimitReason::None);
+                QTRY_VERIFY2_WITH_TIMEOUT(paints(limited),
+                    qPrintable(limited->remoteDisplayStatus()), 5000);
+                QVERIFY2(!limited->remoteDisplayStatus().contains(QStringLiteral("points:")),
+                         qPrintable(limited->remoteDisplayStatus()));
+            } else {
+                // Core refuses once; the refusal is not asked again.
+                const auto refusals = [&] {
+                    int count = 0;
+                    for (const QJsonObject& result
+                         : controlsFor(inbound, QStringLiteral("allocation-result"))) {
+                        if (quint32(result.value(QStringLiteral("endpointId")).toDouble())
+                                == limitedEndpoint
+                            && !result.value(QStringLiteral("accepted")).toBool()) {
+                            ++count;
+                        }
+                    }
+                    return count;
+                };
+                QTRY_COMPARE_WITH_TIMEOUT((feed(), refusals()), 1, 5000);
+                QCOMPARE(requestsFromLimited(), requestsBeforeLeave + 1);
+                QElapsedTimer settle;
+                settle.start();
+                while (settle.elapsed() < 1000) {
+                    feed();
+                    QTest::qWait(20);
+                }
+                QCOMPARE(requestsFromLimited(), requestsBeforeLeave + 1);
+                QCOMPARE(refusals(), 1);
+                for (const QJsonObject& result
+                     : controlsFor(inbound, QStringLiteral("allocation-result"))) {
+                    if (!result.value(QStringLiteral("accepted")).toBool()) {
+                        QCOMPARE(result.value(QStringLiteral("reason")).toString(),
+                                 QStringLiteral("session display budget exceeded"));
+                    }
+                }
+                // The pan keeps painting what Core already granted.
+                QVERIFY(paints(limited));
+                QVERIFY(survivorContext());
+                QCOMPARE(survivorContext()->traceSamples, limitedGrantedPixels);
+            }
+        }
         client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
