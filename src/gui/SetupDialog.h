@@ -17,6 +17,7 @@
 #include <QStackedWidget>
 #include <QSplitter>
 #include <QLabel>
+#include <QPointer>
 
 #include <functional>
 #include <vector>
@@ -32,6 +33,7 @@ struct BoardCapabilities;
 struct RadioInfo;
 class TciServer;
 class CatTciServerPage;
+class SettingsProxy;
 
 // R-R3-21 / R-R3-23: what a Setup page's settings belong to. Every page
 // registration names one; registerPage() has no default, so a new page
@@ -71,6 +73,20 @@ public:
     // Navigate to a page by its label text (e.g. "AGC/ALC").
     void selectPage(const QString& label);
     void setTransmitPermitted(bool permitted, const QString& reason = QString());
+
+    // R-R3-21 / R-R3-10 / R-R3-17: whether the Core's settings can be
+    // changed from this window. MainWindow pushes it (applyRemoteRoleGating):
+    // false in a remote window while it is disconnected from its Core or has
+    // not received the Core's settings yet. While false, Core pages are
+    // disabled with `reason` above them and as their tooltip, and Mixed pages
+    // disable only their Core controls (SetupPage::setStationSettingsAvailable);
+    // this computer's own pages stay usable. A Core page opened before the
+    // first settings snapshot is not built at all: it shows the reason until
+    // the Core's values arrive. When the settings become available again,
+    // every realized Core and Mixed page built from an older snapshot is
+    // rebuilt so it shows the Core's current values. Always true in a local
+    // window, where none of this runs.
+    void setStationSettingsAvailable(bool available, const QString& reason = QString());
 
     // Phase 3J-1 bench fix (2026-05-11): wire the live TciServer state into
     // the CatTciServerPage's Server group box title and Status label.  Pass
@@ -154,6 +170,20 @@ private:
         // markRemoteUnavailable(). R-R3-21.
         bool                      localDspUnavailable = false;
         QString                   remoteUnavailableReason;
+        // R-R3-21: a copy of the factory for Core and Mixed pages, so a page
+        // realized from an older settings snapshot (or before the first one)
+        // can be rebuilt with the Core's current values. Empty for
+        // ThisComputer pages, which never hold the Core's settings.
+        std::function<QWidget*()> rebuildFactory;
+        // The settings snapshot generation the page was built from.
+        int                       builtGeneration = 0;
+        // A Core page opened before the Core's settings ever arrived: an
+        // empty stand-in, replaced by the real page once they are available.
+        bool                      placeholder = false;
+        // The page root was disabled because the Core's settings are
+        // unavailable (not for any other reason), so it is enabled again,
+        // and its tooltip cleared, when they return.
+        bool                      stationDisabled = false;
     };
 
     // Registration phase: create the tree leaf and record its factory. The
@@ -175,6 +205,28 @@ private:
     // to the stack, and return it. Returns nullptr for an out-of-range index
     // or a factory that yielded nothing.
     QWidget* realizePage(int entryIndex);
+
+    // R-R3-21: true in a window driving a remote Core (the local-DSP gate,
+    // the station gate and the rebuild only ever run there).
+    bool remoteSession() const;
+
+    // R-R3-21: the Core's settings have reached this window at least once
+    // (so a Core page built now shows the Core's values, not ship
+    // defaults). True when no settings proxy is installed.
+    bool stationSnapshotHeld() const;
+
+    // R-R3-21: a new settings snapshot was applied. Counts it and queues a
+    // rebuild of the pages built from an older one.
+    void onStationSnapshotApplied();
+
+    // R-R3-21: while the Core's settings are available, rebuild every
+    // realized Core and Mixed page built from an older snapshot, and every
+    // placeholder. Guarded against re-entry.
+    void rebuildStalePages();
+
+    // Clears the cross-page pointers that point into a page about to be
+    // replaced; the page's factory sets them again.
+    void forgetPagePointersInside(const QWidget* page);
 
     // Realize (if needed) and raise the page for the given registry index.
     void showPageAt(int entryIndex);
@@ -203,6 +255,15 @@ private:
     // where the gate does not run.
     QLabel*         m_localUnavailableNotice = nullptr;
     QString         m_localUnavailableReason;
+    // R-R3-21: the Core's settings availability (see
+    // setStationSettingsAvailable) and its notice (objectName
+    // "setupStationUnavailable").
+    bool            m_stationAvailable = true;
+    QString         m_stationReason;
+    QLabel*         m_stationNotice = nullptr;
+    QPointer<SettingsProxy> m_settingsProxy;
+    int             m_snapshotGeneration = 0;
+    bool            m_rebuildingPages = false;
 
     std::vector<PageEntry> m_pages;
 
@@ -332,6 +393,17 @@ public:
             return nullptr;
         }
         return m_pages[static_cast<std::size_t>(index)].widget;
+    }
+
+    // R-R3-21: the pushed availability of the Core's settings.
+    bool stationSettingsAvailableForTest() const { return m_stationAvailable; }
+
+    // R-R3-21: true while a leaf shows the stand-in for a Core page opened
+    // before the Core's settings arrived. False for unknown labels.
+    bool isPagePlaceholderForTest(const QString& label) const
+    {
+        const int index = pageEntryIndex(label);
+        return index >= 0 && m_pages[static_cast<std::size_t>(index)].placeholder;
     }
 
     // R-R3-23: the scope a leaf was registered with, by REGISTRY INDEX

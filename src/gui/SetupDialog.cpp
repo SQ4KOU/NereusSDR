@@ -64,11 +64,26 @@
 //                 TX Input work in a remote window; TX Input gates its
 //                 own Core controls. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-23: R-R3-21 / R-R3-10 / R-R3-17. Setup opens in a remote
+//                 window whether or not it is connected. While the Core's
+//                 settings are unavailable (setStationSettingsAvailable),
+//                 Core pages are disabled with "Connect to the Core to
+//                 change these." and Mixed pages disable only their Core
+//                 controls; a Core page opened before the first settings
+//                 snapshot is a stand-in, not a page built from ship
+//                 defaults. Each Core and Mixed page keeps a copy of its
+//                 factory and is rebuilt from the Core's current values
+//                 once they are available again. NR/ANF becomes Core: every
+//                 control on it writes the Core's receiver or chooses the
+//                 Core's models. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "SetupDialog.h"
 #include "SetupPage.h"
+#include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
+#include "core/settings/SettingsProxy.h"
 #include "core/PureSignal.h"
 #include "models/RadioModel.h"
 
@@ -130,6 +145,7 @@
 #include <QShowEvent>
 #include <QElapsedTimer>
 #include <QLoggingCategory>
+#include <QScopeGuard>
 
 #include <utility>
 
@@ -176,6 +192,20 @@ SetupDialog::SetupDialog(RadioModel* model, QWidget* parent)
         "These settings control audio and signal processing on this computer. "
         "While connected to a Core, the Core does that work, so they cannot be "
         "changed here.");
+    m_stationReason = tr("Connect to the Core to change these.");
+    // R-R3-21: the same predicate MainWindow pushes from; a local window
+    // has no settings proxy, so this is true there and never changes.
+    m_stationAvailable = !(model && !model->ownsLocalDsp())
+        || setupDialogAllowedForCurrentBackend();
+    if (model && !model->ownsLocalDsp()) {
+        // dynamic_cast: the backend interface is not a QObject (see
+        // setupDialogAllowedForCurrentBackend()).
+        m_settingsProxy = dynamic_cast<SettingsProxy*>(AppSettings::instance().remoteBackend());
+        if (m_settingsProxy) {
+            connect(m_settingsProxy, &SettingsProxy::snapshotApplied,
+                    this, [this](int) { onStationSnapshotApplied(); });
+        }
+    }
     setWindowTitle("NereusSDR Settings");
     setMinimumSize(820, 600);
     resize(900, 650);
@@ -223,6 +253,14 @@ SetupDialog::SetupDialog(RadioModel* model, QWidget* parent)
         QStringLiteral("QLabel { color: #c8d8e8; background: #1a2a3a; }"));
     m_localUnavailableNotice->hide();
     pageLayout->addWidget(m_localUnavailableNotice);
+    m_stationNotice = new QLabel(m_stationReason, pageContainer);
+    m_stationNotice->setObjectName(QStringLiteral("setupStationUnavailable"));
+    m_stationNotice->setWordWrap(true);
+    m_stationNotice->setMargin(12);
+    m_stationNotice->setStyleSheet(
+        QStringLiteral("QLabel { color: #c8d8e8; background: #1a2a3a; }"));
+    m_stationNotice->hide();
+    pageLayout->addWidget(m_stationNotice);
     pageLayout->addWidget(m_stack, 1);
     splitter->addWidget(m_tree);
     splitter->addWidget(pageContainer);
@@ -358,8 +396,16 @@ QTreeWidgetItem* SetupDialog::registerPage(QTreeWidgetItem* parent,
 {
     auto* item = new QTreeWidgetItem(parent, QStringList{label});
     item->setData(0, Qt::UserRole, static_cast<int>(m_pages.size()));
-    m_pages.push_back(PageEntry{label, scope, std::move(factory), nullptr, -1,
-                               requiresTransmit, false});
+    PageEntry entry;
+    entry.label = label;
+    entry.scope = scope;
+    entry.requiresTransmit = requiresTransmit;
+    if (scope != SetupScope::ThisComputer) {
+        // R-R3-21: kept so the page can be rebuilt from a newer snapshot.
+        entry.rebuildFactory = factory;
+    }
+    entry.factory = std::move(factory);
+    m_pages.push_back(std::move(entry));
     if (requiresTransmit && !m_transmitPermitted) {
         item->setToolTip(0, m_transmitReason);
     }
@@ -379,6 +425,24 @@ QWidget* SetupDialog::realizePage(int entryIndex)
     if (!entry.factory) {
         // Already attempted and yielded nothing; do not retry or re-warn.
         return nullptr;
+    }
+
+    // R-R3-21: a Core page opened in a remote window that has never received
+    // the Core's settings. Building it now would show this computer's ship
+    // defaults as if they were the Core's (and a constructor that seeds a
+    // default would record it as an edit), so it gets an empty stand-in
+    // with the reason above it. The factory is kept; rebuildStalePages()
+    // replaces the stand-in once the Core's settings are available.
+    if (remoteSession() && entry.scope == SetupScope::Core && !m_stationAvailable
+        && !stationSnapshotHeld()) {
+        auto* placeholder = new QWidget;
+        placeholder->setObjectName(QStringLiteral("setupStationPlaceholder"));
+        placeholder->setEnabled(false);
+        entry.placeholder = true;
+        entry.widget = placeholder;
+        entry.stackIndex = m_stack->addWidget(placeholder);
+        refreshTransmitPresentation();
+        return placeholder;
     }
 
     // Move the factory out before invoking it so a page whose construction
@@ -474,6 +538,9 @@ QWidget* SetupDialog::realizePage(int entryIndex)
 
     entry.widget     = page;
     entry.stackIndex = m_stack->addWidget(page);
+    entry.placeholder = false;
+    entry.stationDisabled = false;
+    entry.builtGeneration = m_snapshotGeneration;
     refreshTransmitPresentation();
     qCDebug(lcSetupTiming) << "realized page" << entry.label
                            << "elapsed (ms):" << realizeTimer.elapsed();
@@ -485,9 +552,103 @@ void SetupDialog::showPageAt(int entryIndex)
     if (realizePage(entryIndex) == nullptr) {
         return;
     }
-    m_stack->setCurrentIndex(
-        m_pages[static_cast<std::size_t>(entryIndex)].stackIndex);
+    // By widget, not by stored index: a rebuilt page is appended to the
+    // stack, so stored indices are not stable across rebuilds.
+    m_stack->setCurrentWidget(m_pages[static_cast<std::size_t>(entryIndex)].widget);
     refreshTransmitPresentation();
+}
+
+bool SetupDialog::remoteSession() const
+{
+    return m_model != nullptr && !m_model->ownsLocalDsp();
+}
+
+bool SetupDialog::stationSnapshotHeld() const
+{
+    return m_settingsProxy.isNull() || m_settingsProxy->hasReceivedSnapshot();
+}
+
+void SetupDialog::setStationSettingsAvailable(bool available, const QString& reason)
+{
+    m_stationReason = reason.isEmpty() ? tr("Connect to the Core to change these.") : reason;
+    const bool becameAvailable = available && !m_stationAvailable;
+    m_stationAvailable = available;
+    if (becameAvailable) {
+        // Every return of the Core's settings follows a new snapshot, so
+        // the pages built while they were away are rebuilt now.
+        rebuildStalePages();
+    }
+    refreshTransmitPresentation();
+}
+
+void SetupDialog::onStationSnapshotApplied()
+{
+    ++m_snapshotGeneration;
+    // Queued: the proxy emits this from inside applySnapshot(), before the
+    // session marks the settings ready, and a page must not be rebuilt
+    // (constructed) from inside that call. A snapshot that arrives while
+    // the settings are unavailable is picked up by the rebuild that
+    // setStationSettingsAvailable(true) runs.
+    QMetaObject::invokeMethod(this, [this] {
+        rebuildStalePages();
+        refreshTransmitPresentation();
+    }, Qt::QueuedConnection);
+}
+
+void SetupDialog::forgetPagePointersInside(const QWidget* page)
+{
+    const auto inside = [page](const QWidget* candidate) {
+        return candidate != nullptr && (candidate == page || page->isAncestorOf(candidate));
+    };
+    if (inside(m_tciServerPage))  { m_tciServerPage = nullptr; }
+    if (inside(m_paGainPage))     { m_paGainPage = nullptr; }
+    if (inside(m_paWattMeterPage)) { m_paWattMeterPage = nullptr; }
+    if (inside(m_paValuesPage))   { m_paValuesPage = nullptr; }
+}
+
+void SetupDialog::rebuildStalePages()
+{
+    if (m_rebuildingPages || !m_stationAvailable || !remoteSession()) {
+        return;
+    }
+    m_rebuildingPages = true;
+    const auto done = qScopeGuard([this] { m_rebuildingPages = false; });
+
+    for (std::size_t i = 0; i < m_pages.size(); ++i) {
+        PageEntry& entry = m_pages[i];
+        if (entry.widget == nullptr || entry.scope == SetupScope::ThisComputer) {
+            continue;
+        }
+        if (!entry.placeholder && entry.builtGeneration == m_snapshotGeneration) {
+            continue;  // already shows the newest snapshot
+        }
+        if (!entry.placeholder) {
+            if (!entry.rebuildFactory) {
+                continue;
+            }
+            entry.factory = entry.rebuildFactory;
+        }
+        QWidget* const old = entry.widget;
+        const bool wasCurrent = m_stack->currentWidget() == old;
+        forgetPagePointersInside(old);
+        entry.widget = nullptr;
+        entry.stackIndex = -1;
+        entry.placeholder = false;
+        entry.stationDisabled = false;
+        entry.localDspUnavailable = false;
+        QWidget* const fresh = realizePage(static_cast<int>(i));
+        if (wasCurrent && fresh != nullptr) {
+            m_stack->setCurrentWidget(fresh);
+        }
+        m_stack->removeWidget(old);
+        old->hide();
+        old->setParent(nullptr);
+        old->deleteLater();
+        if (fresh == nullptr) {
+            qCWarning(lcSetupTiming) << "rebuilding Setup page" << entry.label
+                                     << "yielded nothing";
+        }
+    }
 }
 
 void SetupDialog::setTransmitPermitted(bool permitted, const QString& reason)
@@ -503,7 +664,19 @@ void SetupDialog::refreshTransmitPresentation()
     // The reason a page is unavailable, if it is. The transmit reason wins
     // on a page that carries both gates: it is the one a Core that later
     // permits transmit would lift, and the local-DSP reason takes over then.
-    const auto unavailableReason = [this](const PageEntry& entry) -> QString {
+    //
+    // R-R3-21: on a Core page in a remote window without the Core's
+    // settings, "Connect to the Core to change these." comes first, for the
+    // same reason: connecting is the first thing that has to happen.
+    const bool remoteSession = this->remoteSession();
+    const bool stationBlocked = remoteSession && !m_stationAvailable;
+    const auto coreBlocked = [stationBlocked](const PageEntry& entry) {
+        return stationBlocked && entry.scope == SetupScope::Core;
+    };
+    const auto unavailableReason = [this, &coreBlocked](const PageEntry& entry) -> QString {
+        if (coreBlocked(entry)) {
+            return m_stationReason;
+        }
         if (entry.requiresTransmit && !m_transmitPermitted) {
             return m_transmitReason;
         }
@@ -513,12 +686,12 @@ void SetupDialog::refreshTransmitPresentation()
         }
         return QString();
     };
-    const bool remoteSession = (m_model != nullptr) && !m_model->ownsLocalDsp();
 
     bool showNotice = false;
     bool showLocalNotice = false;
+    bool showStationNotice = false;
     QString localNoticeText = m_localUnavailableReason;
-    for (const PageEntry& entry : m_pages) {
+    for (PageEntry& entry : m_pages) {
         if (!entry.widget) { continue; }
         // R-R3-21: a receive page's own transmit section (AGC/ALC TX groups,
         // DSP Options TX combos) follows the same permission. The page may
@@ -530,16 +703,30 @@ void SetupDialog::refreshTransmitPresentation()
         }
         for (SetupPage* setupPage : setupPages) {
             setupPage->setTransmitPermitted(m_transmitPermitted, m_transmitReason);
+            // R-R3-21: a Mixed page gates its own Core controls.
+            setupPage->setStationSettingsAvailable(!stationBlocked, m_stationReason);
         }
+        const bool blocked = coreBlocked(entry);
         if (entry.requiresTransmit) {
             // A negotiated TX permission cannot make this client's absent DSP
             // available. Preserve the independent resource gate and child rules.
-            entry.widget->setEnabled(m_transmitPermitted && !entry.localDspUnavailable);
+            entry.widget->setEnabled(m_transmitPermitted && !entry.localDspUnavailable
+                                     && !blocked);
+        } else if (blocked && !entry.stationDisabled) {
+            entry.widget->setEnabled(false);
+        } else if (!blocked && entry.stationDisabled) {
+            entry.widget->setEnabled(!entry.localDspUnavailable && !entry.placeholder);
+            if (!entry.localDspUnavailable) {
+                entry.widget->setToolTip(QString());
+            }
         }
-        if (!entry.requiresTransmit && !entry.localDspUnavailable) { continue; }
+        entry.stationDisabled = blocked;
+        if (!entry.requiresTransmit && !entry.localDspUnavailable && !blocked) { continue; }
         entry.widget->setToolTip(unavailableReason(entry));
         if (m_stack->currentWidget() == entry.widget) {
-            if (entry.requiresTransmit && !m_transmitPermitted) {
+            if (blocked) {
+                showStationNotice = true;
+            } else if (entry.requiresTransmit && !m_transmitPermitted) {
                 showNotice = true;
             } else if (entry.localDspUnavailable) {
                 showLocalNotice = true;
@@ -552,12 +739,16 @@ void SetupDialog::refreshTransmitPresentation()
         const int index = (*it)->data(0, Qt::UserRole).toInt();
         if (index >= 0 && index < static_cast<int>(m_pages.size())) {
             const PageEntry& entry = m_pages[static_cast<std::size_t>(index)];
-            if (entry.requiresTransmit || entry.localDspUnavailable) {
+            if (coreBlocked(entry) || entry.requiresTransmit || entry.localDspUnavailable) {
                 (*it)->setToolTip(0, unavailableReason(entry));
             } else if (remoteSession && !entry.remoteUnavailableReason.isEmpty()) {
                 // Declared unavailable but not visited yet: the leaf already
                 // says why before the operator opens it.
                 (*it)->setToolTip(0, entry.remoteUnavailableReason);
+            } else if (remoteSession && entry.scope == SetupScope::Core) {
+                // R-R3-21: the Core's settings are back; the leaf no longer
+                // carries the station reason.
+                (*it)->setToolTip(0, QString());
             }
         }
         ++it;
@@ -566,6 +757,8 @@ void SetupDialog::refreshTransmitPresentation()
     m_transmitNotice->setVisible(showNotice);
     m_localUnavailableNotice->setText(localNoticeText);
     m_localUnavailableNotice->setVisible(showLocalNotice);
+    m_stationNotice->setText(m_stationReason);
+    m_stationNotice->setVisible(showStationNotice);
 }
 
 void SetupDialog::markRemoteUnavailable(QTreeWidgetItem* leaf, const QString& reason)
@@ -828,7 +1021,9 @@ void SetupDialog::buildTree()
     // ── DSP ───────────────────────────────────────────────────────────────────
     QTreeWidgetItem* dsp = addCategory("DSP");
     registerPage(dsp, "AGC/ALC", SetupScope::Core, [this] { return new AgcAlcSetupPage(m_model); });
-    registerPage(dsp, "NR/ANF", SetupScope::Mixed,  [this] { return new NrAnfSetupPage(m_model);  });
+    // R-R3-21: Core, not Mixed. Every control writes the active receiver
+    // (mirrored to the Core) or chooses among the Core's own models.
+    registerPage(dsp, "NR/ANF", SetupScope::Core,   [this] { return new NrAnfSetupPage(m_model);  });
     registerPage(dsp, "NB/SNB", SetupScope::Core,  [this] { return new NbSnbSetupPage(m_model);  });
     registerPage(dsp, "CW", SetupScope::Core,      [this] { return new CwSetupPage(m_model);     });
     registerPage(dsp, "AM/SAM", SetupScope::Core,  [this] { return new AmSamSetupPage(m_model);  });

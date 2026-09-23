@@ -32,6 +32,11 @@
 //   2026-05-01 — Skeleton created in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-23 - R-R3-21 / R-R3-10: the S-meter sample interval is the Core's
+//                 setting, disabled while a remote window does not have
+//                 the Core's settings.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -107,6 +112,11 @@ class MultimeterPage : public SetupPage {
     Q_OBJECT
 public:
     explicit MultimeterPage(RadioModel* model, QWidget* parent = nullptr);
+
+    // R-R3-21 / R-R3-10: the meter sample interval is the Core's (it samples the
+    // meter), so it is disabled while the Core's settings are unavailable;
+    // the rest of the page is this computer's display.
+    void setStationSettingsAvailable(bool available, const QString& reason) override;
 
 signals:
     /// Emitted when the user clicks the "← Spectrum defaults" cross-link.

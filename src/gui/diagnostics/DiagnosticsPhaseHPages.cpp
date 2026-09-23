@@ -10,6 +10,11 @@
 //   2026-04-20 — Original implementation for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-23 - R-R3-21 / R-R3-10: Settings Validation's Reset and Forget change
+//                 the radio's settings, which a remote window holds on
+//                 the Core; they are disabled while it does not have them.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include "DiagnosticsPhaseHPages.h"
@@ -157,6 +162,11 @@ void SettingsValidationPage::refresh()
         m_issueList->addItem(QStringLiteral("[%1] %2 — %3")
                                  .arg(sev, issue.summary, issue.detail));
     }
+}
+
+void SettingsValidationPage::setStationSettingsAvailable(bool available, const QString& reason)
+{
+    gateStationControls({m_resetBtn, m_forgetBtn}, available, reason);
 }
 
 void SettingsValidationPage::onResetClicked()

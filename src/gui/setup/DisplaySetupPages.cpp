@@ -10,6 +10,11 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-23 - R-R3-21 / R-R3-10: Spectrum Defaults, Grid & Scales and
+//                 TX Display disable only their Core controls while a
+//                 remote window does not have the Core's settings.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -153,6 +158,13 @@ void SpectrumDefaultsPage::pushFps(int fps)
         QSignalBlocker block(m_fpSpin);
         m_fpSpin->setValue(fps);
     }
+}
+
+void SpectrumDefaultsPage::setStationSettingsAvailable(bool available, const QString& reason)
+{
+    gateStationControls({m_fftSizeSlider, m_windowCombo, m_hzPerBinTargetSpin,
+                         m_fpSlider, m_fpSpin},
+                        available, reason);
 }
 
 void SpectrumDefaultsPage::loadFromRenderer()
@@ -1881,6 +1893,11 @@ void GridScalesPage::applyBandSlot(PanadapterModel* pan)
     }
 }
 
+void GridScalesPage::setStationSettingsAvailable(bool available, const QString& reason)
+{
+    gateStationControls({m_dbMaxSpin, m_dbMinSpin, m_copyWfToSpecBtn}, available, reason);
+}
+
 void GridScalesPage::loadFromRenderer()
 {
     auto* sw  = model() ? model()->spectrumWidget() : nullptr;
@@ -2282,6 +2299,14 @@ TxDisplayPage::TxDisplayPage(RadioModel* model, QWidget* parent)
     : SetupPage(QStringLiteral("TX Display"), model, parent)
 {
     buildUI();
+}
+
+void TxDisplayPage::setStationSettingsAvailable(bool available, const QString& reason)
+{
+    gateStationControls({m_txFftSizeSlider, m_txWindowCombo, m_txPanDetectorCombo,
+                         m_txPanAveragingCombo, m_txPanAvTimeSpin, m_txPanNormalizeCheck,
+                         m_txWfDetectorCombo, m_txWfAveragingCombo, m_txWfAvTimeSpin},
+                        available, reason);
 }
 
 void TxDisplayPage::buildUI()

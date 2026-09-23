@@ -19,6 +19,11 @@
 //   2026-04-20 — Original implementation for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-23 - R-R3-21 / R-R3-10: Settings Validation's Reset and Forget change
+//                 the radio's settings, which a remote window holds on
+//                 the Core; they are disabled while it does not have them.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -59,6 +64,11 @@ class SettingsValidationPage : public SetupPage {
     Q_OBJECT
 public:
     explicit SettingsValidationPage(RadioModel* model = nullptr, QWidget* parent = nullptr);
+
+    // R-R3-21 / R-R3-10: Reset and Forget change the radio's settings, which are
+    // the Core's in a remote window, so they are disabled while the Core's
+    // settings are unavailable. Refresh only reads.
+    void setStationSettingsAvailable(bool available, const QString& reason) override;
 
 private slots:
     void refresh();

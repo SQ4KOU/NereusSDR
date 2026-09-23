@@ -12,6 +12,11 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-23 - R-R3-21 / R-R3-10: Spectrum Defaults, Grid & Scales and
+//                 TX Display disable only their Core controls while a
+//                 remote window does not have the Core's settings.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -84,6 +89,11 @@ class SpectrumDefaultsPage : public SetupPage {
     Q_OBJECT
 public:
     explicit SpectrumDefaultsPage(RadioModel* model, QWidget* parent = nullptr);
+
+    // R-R3-21 / R-R3-10: the FFT size, window, Hz/bin target and frame rate are the
+    // Core's settings (it computes the spectrum a remote window shows), so
+    // they are disabled while the Core's settings are unavailable.
+    void setStationSettingsAvailable(bool available, const QString& reason) override;
 
 signals:
     /// Emitted when the user clicks "Configure peaks →".
@@ -253,6 +263,11 @@ class GridScalesPage : public SetupPage {
 public:
     explicit GridScalesPage(RadioModel* model, QWidget* parent = nullptr);
 
+    // R-R3-21 / R-R3-10: the per-band dB max and min (and the copy from the
+    // waterfall thresholds, which writes them) set the Core's panadapter
+    // range, so they are disabled while the Core's settings are unavailable.
+    void setStationSettingsAvailable(bool available, const QString& reason) override;
+
 private:
     void buildUI();
     void loadFromRenderer();
@@ -323,6 +338,11 @@ class TxDisplayPage : public SetupPage {
     Q_OBJECT
 public:
     explicit TxDisplayPage(RadioModel* model, QWidget* parent = nullptr);
+
+    // R-R3-21 / R-R3-10: the TX analyzer settings (FFT size, window, panadapter
+    // and waterfall detector, averaging, time and normalize) are the Core's,
+    // so they are disabled while the Core's settings are unavailable.
+    void setStationSettingsAvailable(bool available, const QString& reason) override;
 
 private:
     void buildUI();

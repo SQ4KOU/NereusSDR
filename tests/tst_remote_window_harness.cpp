@@ -23,6 +23,11 @@
 //                                    operator's Disconnect. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R3 remote window Setup plan, Task 2
+//                                    (R-R3-21, R-R3-10, R-R3-17): Setup
+//                                    opens on a disconnected window.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -30,6 +35,8 @@
 #include <QAction>
 #include <QApplication>
 #include <QComboBox>
+#include <QLabel>
+#include <QStackedWidget>
 #include <QLoggingCategory>
 #include <QMenu>
 #include <QPointer>
@@ -38,6 +45,8 @@
 #include <QTimer>
 #include <QTreeWidget>
 
+#include "core/AppSettings.h"
+#include "core/AudioEngine.h"
 #include "core/session/StationCapabilities.h"
 #include "core/session/StationClient.h"
 #include "gui/MainWindow.h"
@@ -46,6 +55,7 @@
 #include "gui/SpectrumWidget.h"
 #include "gui/TitleBar.h"
 #include "gui/applets/RadeApplet.h"
+#include "gui/setup/DeviceCard.h"
 #include "gui/widgets/StationBlock.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -130,23 +140,54 @@ bool openCorePanelFromTitleMenu(RemoteWindowHarness& h)
     return chosen && corePanelVisible(h);
 }
 
-// The Setup dialog's Remote Station page, reached the way an operator
-// reaches it: File > Settings..., then its entry in the page tree.
-QPushButton* openSetupConnectionsButton(RemoteWindowHarness& h)
+// File > Settings..., as the operator opens it.
+SetupDialog* openSettings(RemoteWindowHarness& h)
 {
     QAction* settings = h.menuAction(QStringLiteral("&File"), QStringLiteral("&Settings..."));
     if (!settings) { return nullptr; }
     settings->trigger();
-    SetupDialog* dialog = h.window()->findChild<SetupDialog*>();
-    if (!dialog) { return nullptr; }
-    auto* tree = dialog->findChild<QTreeWidget*>();
-    if (!tree) { return nullptr; }
-    const auto found = tree->findItems(QStringLiteral("Remote Station"),
-                                       Qt::MatchExactly | Qt::MatchRecursive);
+    return h.window()->findChild<SetupDialog*>();
+}
+
+// Selects a Setup leaf in the page tree and returns the page on screen.
+QWidget* showSetupLeaf(SetupDialog* dialog, const QString& label)
+{
+    auto* tree = dialog ? dialog->findChild<QTreeWidget*>() : nullptr;
+    auto* stack = dialog ? dialog->findChild<QStackedWidget*>() : nullptr;
+    if (!tree || !stack) { return nullptr; }
+    const auto found = tree->findItems(label, Qt::MatchExactly | Qt::MatchRecursive);
     if (found.isEmpty()) { return nullptr; }
     tree->setCurrentItem(found.first());
+    return stack->currentWidget();
+}
+
+// The Setup dialog's Remote Station page, reached the way an operator
+// reaches it: File > Settings..., then its entry in the page tree.
+QPushButton* openSetupConnectionsButton(RemoteWindowHarness& h)
+{
+    SetupDialog* dialog = openSettings(h);
+    if (!showSetupLeaf(dialog, QStringLiteral("Remote Station"))) { return nullptr; }
     return dialog->findChild<QPushButton*>(QStringLiteral("remoteStationConnections"));
 }
+
+DeviceCard* deviceCardOf(QWidget* page, const QString& title)
+{
+    for (DeviceCard* card : page->findChildren<DeviceCard*>()) {
+        if (card->title() == title) { return card; }
+    }
+    return nullptr;
+}
+
+// A card's buffer-size combo: the one whose first entry is 64 samples.
+QComboBox* deviceCardBufferCombo(DeviceCard* card)
+{
+    for (QComboBox* combo : card->findChildren<QComboBox*>()) {
+        if (combo->count() > 1 && combo->itemData(0).toInt() == 64) { return combo; }
+    }
+    return nullptr;
+}
+
+const QString kStationReason = QStringLiteral("Connect to the Core to change these.");
 
 QStringList sliceIds(const RadioModel& model)
 {
@@ -209,18 +250,14 @@ private slots:
         int expectedDials = 1;
         QPointer<QPushButton> setupConnections;
         if (entry == kSetupConnections) {
-            // A remote window opens Setup only while it holds the Core's
-            // settings (the gate in MainWindow::createSetupDialog), so the
-            // operator's route is: Setup opened during a session, the
-            // session ended, then Connections... in the Setup still open.
-            QVERIFY(connectFromRadioMenu(h));
+            // R-R3-21 / R-R3-10: Setup opens on the disconnected window
+            // itself (it used to be refused until the Core's settings
+            // arrived), and Remote Station is this computer's page.
             setupConnections = openSetupConnectionsButton(h);
             QVERIFY(setupConnections);
-            QVERIFY(disconnectFromRadioMenu(h));
-            QTRY_VERIFY(!client->isConnectionActive());
+            QVERIFY(setupConnections->isEnabled());
             QTest::qWait(kSettleMs);
-            QCOMPARE(h.acceptedConnections(), 1);
-            expectedDials = 2;
+            QCOMPARE(h.acceptedConnections(), 0);
         }
 
         switch (entry) {
@@ -598,6 +635,91 @@ private slots:
         QTest::qWait(kSettleMs);
         QCOMPARE(h.addSliceCommands().size(), 1);
         QCOMPARE(h.acceptedConnections(), 2);
+    }
+
+    // R-R3-21 / R-R3-10 / R-R3-17: a remote window that has never
+    // connected opens Setup. This computer's settings work (a Devices
+    // change sticks and is the one used once connected); the Core's
+    // settings wait, with the reason, and nothing reaches the Core; once
+    // connected the Core's pages are built from the Core's values; after
+    // Disconnect they are disabled again.
+    void disconnectedWindowSetupKeepsThisComputersSettings()
+    {
+        RemoteWindowHarness h;
+        QVERIFY(h.start());
+        StationClient* const client = h.client();
+        QTest::qWait(kSettleMs);
+        QVERIFY(!client->isConnectionActive());
+        QSignalSpy writes(&h.proxy(), &SettingsProxy::outboundWriteRequested);
+        QSignalSpy removes(&h.proxy(), &SettingsProxy::outboundRemoveRequested);
+        // Seeds the window's own models made at startup, before Setup.
+        const QSet<QString> seededAtStartup = h.proxy().droppedWhileOffline();
+
+        SetupDialog* const dialog = openSettings(h);
+        QVERIFY(dialog);
+        QVERIFY(dialog->isVisible());
+        auto* const notice = dialog->findChild<QLabel*>(QStringLiteral("setupStationUnavailable"));
+        QVERIFY(notice);
+
+        // A Core page: a stand-in with the reason, not ship defaults.
+        QWidget* nb = showSetupLeaf(dialog, QStringLiteral("NB/SNB"));
+        QVERIFY(nb);
+        QCOMPARE(nb->objectName(), QStringLiteral("setupStationPlaceholder"));
+        QVERIFY(!nb->isEnabled());
+        QVERIFY(notice->isVisible());
+        QCOMPARE(notice->text(), kStationReason);
+
+        // This computer's microphone buffer, on Devices.
+        QWidget* const devices = showSetupLeaf(dialog, QStringLiteral("Devices"));
+        QVERIFY(devices);
+        QVERIFY(devices->isEnabled());
+        QVERIFY(!notice->isVisible());
+        DeviceCard* const mic = deviceCardOf(devices, QStringLiteral("TX Input (Microphone)"));
+        QVERIFY(mic);
+        QVERIFY(mic->isEnabled());
+        QComboBox* const buffer = deviceCardBufferCombo(mic);
+        QVERIFY(buffer);
+        const int next = (buffer->currentIndex() + 1) % buffer->count();
+        const int samples = buffer->itemData(next).toInt();
+        buffer->setCurrentIndex(next);  // the card saves after its 200 ms debounce
+        const QString bufferKey = QStringLiteral("audio/TxInput/BufferSamples");
+        QTRY_COMPARE(AppSettings::instance().value(bufferKey).toString(), QString::number(samples));
+        QTRY_COMPARE(h.remoteModel()->localAudioDevices()->txInputConfig().bufferSamples, samples);
+
+        // Nothing towards the Core, and nothing held to be sent later.
+        QCOMPARE(writes.size(), 0);
+        QCOMPARE(removes.size(), 0);
+        QVERIFY((h.proxy().droppedWhileOffline() - seededAtStartup).isEmpty());
+        QCOMPARE(h.acceptedConnections(), 0);
+
+        // Connect from the window. The Core's page is built from the
+        // Core's settings and is live.
+        QVERIFY(connectFromRadioMenu(h));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            (nb = showSetupLeaf(dialog, QStringLiteral("NB/SNB")))
+                && nb->objectName() != QStringLiteral("setupStationPlaceholder")
+                && nb->isEnabled(),
+            5000);
+        QVERIFY(!notice->isVisible());
+
+        // The Devices change stuck and is the one the window uses; it never
+        // went to the Core.
+        QCOMPARE(AppSettings::instance().value(bufferKey).toString(), QString::number(samples));
+        QCOMPARE(h.remoteModel()->localAudioDevices()->txInputConfig().bufferSamples, samples);
+        QVERIFY(!h.stationSettings().contains(bufferKey));
+        QVERIFY(showSetupLeaf(dialog, QStringLiteral("Devices"))->isEnabled());
+
+        // The operator's Disconnect: the Core's page is disabled again,
+        // with the reason, and still shows the Core's last values.
+        QVERIFY(disconnectFromRadioMenu(h));
+        QTRY_VERIFY(!client->isConnectionActive());
+        nb = showSetupLeaf(dialog, QStringLiteral("NB/SNB"));
+        QTRY_VERIFY(!nb->isEnabled());
+        QCOMPARE(nb->objectName() == QStringLiteral("setupStationPlaceholder"), false);
+        QVERIFY(notice->isVisible());
+        QCOMPARE(notice->text(), kStationReason);
+        QVERIFY(showSetupLeaf(dialog, QStringLiteral("Devices"))->isEnabled());
+        QCOMPARE(h.acceptedConnections(), 1);
     }
 
     // R-R3-21: a capability change from the Core re-gates the window on the

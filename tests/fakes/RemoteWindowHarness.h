@@ -188,12 +188,19 @@ public:
     /// Core sends this capability descriptor on the live session.
     void pushCapabilities(const StationCapabilities& capabilities);
 
+    /// The Core's own settings store (what the Core holds, as opposed to
+    /// what the window caches).
+    AppSettings& stationSettings() { return m_stationSettings; }
+
     /// Every addSlice / addSliceOnPan command the Core received, as
     /// "<verb>:<pan>".
     QStringList addSliceCommands() const { return m_addSliceCommands; }
 
     // ---- The window ----
     MainWindow* window() const { return m_window.get(); }
+    /// The window's settings proxy: the one path from this window's
+    /// settings to the Core.
+    SettingsProxy& proxy() { return m_proxy; }
     RadioModel* remoteModel() const;
     StationClient* client() const;
     RemoteConnectionController* controls() const;

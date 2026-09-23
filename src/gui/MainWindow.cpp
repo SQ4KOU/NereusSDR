@@ -11,6 +11,12 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-21 / R-R3-10 / R-R3-17: Setup
+//                 opens in a remote window whether or not it is connected;
+//                 createSetupDialog() and applyRemoteRoleGating() push the
+//                 Core's settings availability instead of refusing with a
+//                 toast. AI-assisted implementation via Anthropic Claude
+//                 Code.
 //   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-23: the title-bar master output
 //                 reaches this computer's engine through
 //                 RadioModel::localAudioDevices(), and a remote window
@@ -10194,39 +10200,36 @@ void MainWindow::openNetworkDiagnostics()
 
 SetupDialog* MainWindow::createSetupDialog()
 {
-    // The gate. In local direct mode AppSettings holds no remote backend,
-    // so setupDialogAllowedForCurrentBackend() returns true without looking
-    // at anything and the three lines below are exactly what every call
-    // site used to run inline.
-    //
-    // On a remote client it is the difference between a Setup dialog that
-    // shows the station's settings and one that shows this machine's ship
-    // defaults and then writes them into the station on first touch. See
-    // SettingsProxy.h's Setup-gate section: ready() alone is not enough,
-    // because a freshly reserved daemon profile is ready and empty.
-    if (!setupDialogAllowedForCurrentBackend()) {
-        // Deliberately not a modal error. The condition clears on its own
-        // the moment the snapshot lands, usually within a second of the
-        // handshake, so the operator's next click succeeds and a dialog
-        // they had to dismiss would have been the more annoying half of
-        // the interaction.
-        showToast(tr("Setup is not ready yet: this window is still waiting "
-                     "for the station's settings. Try again once the link "
-                     "reports connected."),
-                  ToastSeverity::Warning, 5000);
-        qCInfo(lcConnection)
-            << "Setup dialog refused: the station's settings snapshot has not "
-               "arrived, and opening Setup now would seed this client's ship "
-               "defaults into the station store.";
-        return nullptr;
-    }
-
+    // R-R3-21 / R-R3-10: Setup opens in every state. A remote window that is
+    // disconnected, or still waiting for the Core's settings, keeps this
+    // computer's own settings usable; the Core's settings stay disabled
+    // with a reason until they arrive (SetupDialog::setStationSettingsAvailable).
+    // That replaces the old refusal toast. What the refusal protected is
+    // still protected: a Core page is not built before the Core's settings
+    // arrive, so it cannot show (or write) this computer's ship defaults,
+    // and SettingsProxy sends nothing while it is not ready. In local
+    // direct mode the settings are always available and nothing changes.
     auto* dialog = new SetupDialog(m_radioModel, this);
     dialog->setTransmitPermitted(transmitControlsPermitted(),
         tr("Remote transmit controls are not available from this Core yet."));
+    dialog->setStationSettingsAvailable(stationSettingsAvailable(), stationSettingsReason());
     dialog->setAttribute(Qt::WA_DeleteOnClose);
     wireSetupDialog(dialog);
     return dialog;
+}
+
+bool MainWindow::stationSettingsAvailable() const
+{
+    // setupDialogAllowedForCurrentBackend(): true in local direct mode (no
+    // settings proxy); in a remote window, true only while the session is
+    // ready and holds the Core's settings snapshot.
+    return (m_radioModel != nullptr && m_radioModel->ownsLocalDsp())
+        || setupDialogAllowedForCurrentBackend();
+}
+
+QString MainWindow::stationSettingsReason() const
+{
+    return tr("Connect to the Core to change these.");
 }
 
 bool MainWindow::transmitControlsPermitted() const
@@ -10265,8 +10268,14 @@ void MainWindow::applyRemoteRoleGating()
     for (VfoWidget* flag : m_vfoWidgetsBySlice) {
         if (flag) { flag->setTransmitPermitted(transmitPermitted, transmitReason); }
     }
+    // R-R3-21 / R-R3-10: the Core's settings availability too. Pushed on
+    // every link change: StationClient marks the settings not ready before
+    // it reports a lost or closed session, and ready (with the snapshot)
+    // before it reports the session established.
+    const bool stationAvailable = stationSettingsAvailable();
     for (SetupDialog* dialog : findChildren<SetupDialog*>()) {
         dialog->setTransmitPermitted(transmitPermitted, transmitReason);
+        dialog->setStationSettingsAvailable(stationAvailable, stationSettingsReason());
     }
     if (m_actTxEqualizer) {
         m_actTxEqualizer->setEnabled(transmitPermitted);

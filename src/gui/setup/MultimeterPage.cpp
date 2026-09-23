@@ -32,6 +32,11 @@
 //   2026-05-01 — Skeleton created in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-23 - R-R3-21 / R-R3-10: the S-meter sample interval is the Core's
+//                 setting, disabled while a remote window does not have
+//                 the Core's settings.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -361,6 +366,11 @@ void MultimeterPage::connectSignals()
     // Cross-link
     connect(m_backBtn, &QPushButton::clicked, this,
             &MultimeterPage::backToSpectrumDefaultsRequested);
+}
+
+void MultimeterPage::setStationSettingsAvailable(bool available, const QString& reason)
+{
+    gateStationControls({m_delayMs}, available, reason);
 }
 
 }  // namespace NereusSDR

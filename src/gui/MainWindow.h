@@ -566,27 +566,24 @@ private slots:
     void showRemoteConnectionPanel();
     void refreshRemoteConnectionUi();
     bool transmitControlsPermitted() const;
+    /// R-R3-21 / R-R3-10: whether the Core's settings can be changed from
+    /// this window (always in local direct mode; in a remote window only
+    /// while connected and holding the Core's settings snapshot), and the
+    /// reason shown while they cannot.
+    bool stationSettingsAvailable() const;
+    QString stationSettingsReason() const;
 
     /// The one place in src/gui that runs `new SetupDialog`.
     ///
     /// Remote-daemon R2 Task 20, fix round 2. Twelve call sites all did the
-    /// identical construct / WA_DeleteOnClose / wireSetupDialog() shape, so
-    /// the remote gate had nowhere to live and, until this landed,
-    /// SettingsProxy::setupDialogAllowed() had no production caller at all.
+    /// identical construct / WA_DeleteOnClose / wireSetupDialog() shape.
     ///
-    /// Returns nullptr when the gate refuses, having already told the
-    /// operator why through the status-bar toast. Callers that navigate to
-    /// a page afterwards must null-check.
-    ///
-    /// A no-op in local direct mode: AppSettings has no remote backend
-    /// there, setupDialogAllowedForCurrentBackend() returns true
-    /// unconditionally, and this is the same three lines it replaced.
-    ///
-    /// The gate matters because a freshly reserved daemon profile reports
-    /// ready() with zero station settings. Open Setup then and 187 widget
-    /// constructors each read their AppSettings default, and the first
-    /// interaction writes a ship default into the STATION store as if the
-    /// operator had chosen it.
+    /// R-R3-21 / R-R3-10: never refuses. A remote window opens Setup
+    /// connected or not; the dialog is told whether the Core's settings are
+    /// available (setStationSettingsAvailable) and disables the Core's pages
+    /// and controls until they are. A Core page opened before the Core's
+    /// settings first arrive is not built, so no widget reads or writes a
+    /// ship default as if it were the Core's. Callers still null-check.
     ///
     /// A slot rather than a plain method so it stays resolvable off
     /// MainWindow::staticMetaObject: MainWindow cannot be constructed in a

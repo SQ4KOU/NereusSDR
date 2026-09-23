@@ -104,6 +104,8 @@
 #include <QSlider>
 #include <QSignalSpy>
 #include <QSpinBox>
+#include <QStackedWidget>
+#include <QPointer>
 #include <QStringList>
 #include <QTemporaryDir>
 #include <QTreeWidget>
@@ -296,6 +298,48 @@ QString widgetStateOf(QWidget* root)
         }
     }
     return state.join(QLatin1Char(','));
+}
+
+// R-R3-21: the Core settings reason MainWindow pushes to a disconnected
+// remote window's Setup dialog.
+const QString kStationReason = QStringLiteral("Connect to the Core to change these.");
+
+// Shows the leaf at a registry index (labels are not unique: "Options"
+// is both General and DSP) the way the operator does, by selecting it in
+// the tree, and returns the page now on screen.
+QWidget* showSetupLeafAt(SetupDialog& dialog, int entryIndex)
+{
+    auto* tree = dialog.findChild<QTreeWidget*>();
+    auto* stack = dialog.findChild<QStackedWidget*>();
+    if (tree == nullptr || stack == nullptr) { return nullptr; }
+    for (QTreeWidgetItemIterator it(tree); *it; ++it) {
+        if ((*it)->data(0, Qt::UserRole).toInt() == entryIndex) {
+            tree->setCurrentItem(*it);
+            return stack->currentWidget();
+        }
+    }
+    return nullptr;
+}
+
+QTreeWidgetItem* setupLeafAt(SetupDialog& dialog, int entryIndex)
+{
+    auto* tree = dialog.findChild<QTreeWidget*>();
+    if (tree == nullptr) { return nullptr; }
+    for (QTreeWidgetItemIterator it(tree); *it; ++it) {
+        if ((*it)->data(0, Qt::UserRole).toInt() == entryIndex) { return *it; }
+    }
+    return nullptr;
+}
+
+// The controls on `page` that carry `reason` as their accessible
+// description: the ones a gate disabled with that reason.
+QList<QWidget*> controlsGatedWith(QWidget* page, const QString& reason)
+{
+    QList<QWidget*> gated;
+    for (QWidget* w : page->findChildren<QWidget*>()) {
+        if (w->accessibleDescription() == reason) { gated << w; }
+    }
+    return gated;
 }
 
 } // namespace
@@ -1606,6 +1650,296 @@ private slots:
             QVERIFY2(page->isEnabled(), label);
             QVERIFY2(page->toolTip().isEmpty(), label);
             QVERIFY2(localNotice->isHidden(), label);
+        }
+    }
+
+    // ====================================================================
+    // R-R3-21 / R-R3-10 / R-R3-17: Setup in a disconnected remote window.
+    //
+    // The per-page table. MainWindow pushes "Connect to the Core to change
+    // these." while the window has no live session with the Core's
+    // settings. ThisComputer pages stay usable; Core pages are disabled
+    // with that reason (and, before the Core's settings ever arrived, are
+    // not built at all); Mixed pages disable exactly their Core controls.
+    // Realizing every page writes nothing towards the Core, not even an
+    // edit the proxy would hold for later.
+    // ====================================================================
+    void disconnectedRemoteSetupPerPageTable()
+    {
+        SettingsProxy proxy;  // never ready, no snapshot: never connected
+        AppSettings::instance().setRemoteBackend(&proxy);
+        QSignalSpy writes(&proxy, &SettingsProxy::outboundWriteRequested);
+        QSignalSpy removes(&proxy, &SettingsProxy::outboundRemoveRequested);
+
+        RadioModel remote(RadioModel::Role::Remote);
+        // The model's own constructors seed a few station keys while the
+        // proxy is not ready (BandPlanManager's "BandPlanName"; see
+        // SettingsProxy.h, "ready()==false is load-bearing"). That is not
+        // Setup's doing, so it is the baseline the pages must not add to.
+        const QSet<QString> seededByTheModel = proxy.droppedWhileOffline();
+        SetupDialog dialog(&remote);
+        // The dialog reads the same predicate MainWindow pushes from.
+        QVERIFY(!dialog.stationSettingsAvailableForTest());
+        dialog.setTransmitPermitted(false, QStringLiteral("Remote transmit is unavailable"));
+        dialog.setStationSettingsAvailable(false, kStationReason);
+        QVERIFY(OperatorWording::isPlain(kStationReason));
+
+        auto* const notice = dialog.findChild<QLabel*>(QStringLiteral("setupStationUnavailable"));
+        QVERIFY(notice != nullptr);
+
+        // Mixed pages: how many Core controls each disables. A Mixed page
+        // not listed has none (Filter Presets, Spectrum Peaks, Waterfall
+        // Defaults, 3D View, Export / Import), or is already unavailable as
+        // a whole in a remote window (VAX, Advanced: local-DSP gate).
+        const QMap<QString, int> coreControls{
+            {QStringLiteral("Options"), 1},             // General: Region
+            {QStringLiteral("Spectrum Defaults"), 5},   // FFT size, window, Hz/bin, fps x2
+            {QStringLiteral("Grid & Scales"), 3},       // dB max, dB min, copy
+            {QStringLiteral("Multimeter"), 1},          // sample interval
+            {QStringLiteral("TX Display"), 9},          // TX analyzer
+            {QStringLiteral("Settings Validation"), 2}, // Reset, Forget
+        };
+        const QStringList wholePageLocalDsp{QStringLiteral("VAX"), QStringLiteral("Advanced")};
+
+        const QStringList labels = dialog.pageLabelsForTest();
+        int thisComputer = 0;
+        int core = 0;
+        int mixed = 0;
+        for (int i = 0; i < dialog.registeredPageCountForTest(); ++i) {
+            const QString& label = labels.at(i);
+            QWidget* const page = showSetupLeafAt(dialog, i);
+            if (page == nullptr) { continue; }  // hidden PA leaves still realize; none yield null
+            const QList<QWidget*> gated = controlsGatedWith(page, kStationReason);
+            switch (dialog.pageScopeAtForTest(i)) {
+            case SetupScope::ThisComputer:
+                ++thisComputer;
+                QVERIFY2(page->isEnabled(), qPrintable(label));
+                QVERIFY2(notice->isHidden(), qPrintable(label));
+                QVERIFY2(gated.isEmpty(), qPrintable(label));
+                break;
+            case SetupScope::Core:
+                ++core;
+                QVERIFY2(!page->isEnabled(), qPrintable(label));
+                // Never connected: a stand-in, not a page built from this
+                // computer's ship defaults.
+                QCOMPARE(page->objectName(), QStringLiteral("setupStationPlaceholder"));
+                QVERIFY2(!notice->isHidden(), qPrintable(label));
+                QCOMPARE(notice->text(), kStationReason);
+                QCOMPARE(page->toolTip(), kStationReason);
+                QCOMPARE(setupLeafAt(dialog, i)->toolTip(0), kStationReason);
+                break;
+            case SetupScope::Mixed: {
+                ++mixed;
+                QVERIFY2(notice->isHidden(), qPrintable(label));
+                QCOMPARE(page->objectName() == QStringLiteral("setupStationPlaceholder"), false);
+                if (wholePageLocalDsp.contains(label)) {
+                    QVERIFY2(!page->isEnabled(), qPrintable(label));
+                    break;
+                }
+                QVERIFY2(page->isEnabled(), qPrintable(label));
+                if (label == QStringLiteral("TX Input")) {
+                    // The controls held for the radio: the Core reason wins
+                    // over the transmit reason while disconnected.
+                    auto* const txInput = page->findChild<AudioTxInputPage*>();
+                    QVERIFY(txInput != nullptr);
+                    for (QWidget* held : {static_cast<QWidget*>(txInput->micSourceGroup()),
+                                          static_cast<QWidget*>(txInput->micGainSlider())}) {
+                        QVERIFY(!held->isEnabled());
+                        QCOMPARE(held->toolTip(), kStationReason);
+                    }
+                    QVERIFY(txInput->deviceCombo()->isEnabled());
+                    QVERIFY(txInput->testMicButton()->isEnabled());
+                    QVERIFY(gated.size() >= 2);
+                    break;
+                }
+                QVERIFY2(gated.size() == coreControls.value(label, 0),
+                         qPrintable(QStringLiteral("%1: %2 controls gated, expected %3")
+                                        .arg(label).arg(gated.size())
+                                        .arg(coreControls.value(label, 0))));
+                for (QWidget* control : gated) {
+                    QVERIFY2(!control->isEnabled(), qPrintable(label));
+                    QCOMPARE(control->toolTip(), kStationReason);
+                }
+                break;
+            }
+            }
+        }
+        QVERIFY(thisComputer >= 15);
+        QVERIFY(core >= 25);
+        QVERIFY(mixed >= 10);
+
+        // Nothing towards the Core: nothing sent, and nothing held as an
+        // edit to be reported as lost on the next connect.
+        QCOMPARE(writes.size(), 0);
+        QCOMPARE(removes.size(), 0);
+        const QSet<QString> heldByPages = proxy.droppedWhileOffline() - seededByTheModel;
+        QStringList held(heldByPages.cbegin(), heldByPages.cend());
+        held.sort();
+        QVERIFY2(held.isEmpty(), qPrintable(held.join(QStringLiteral(", "))));
+    }
+
+    // R-R3-21: once the Core's settings arrive, a page realized before them
+    // (or while disconnected) is rebuilt and shows the Core's values; a
+    // later snapshot on the live session rebuilds it again; losing the Core
+    // disables its pages again without rebuilding anything.
+    void reconnectRebuildsSetupPagesFromTheCoresValues()
+    {
+        SettingsProxy proxy;
+        AppSettings::instance().setRemoteBackend(&proxy);
+        RadioModel remote(RadioModel::Role::Remote);
+        SetupDialog dialog(&remote);
+        dialog.setStationSettingsAvailable(false, kStationReason);
+        auto* const stack = dialog.findChild<QStackedWidget*>();
+
+        // Before any snapshot: the Mixed pages show this computer's
+        // defaults for the Core's settings (disabled), the Core page is a
+        // stand-in.
+        dialog.selectPage(QStringLiteral("Options"));   // General
+        QPointer<QWidget> oldOptions = dialog.realizedPageForTest(QStringLiteral("Options"));
+        QVERIFY(oldOptions);
+        auto* region = oldOptions->findChild<QComboBox*>(QStringLiteral("comboFRSRegion"));
+        QVERIFY(region != nullptr);
+        QCOMPARE(region->currentText(), QStringLiteral("United States"));
+        QVERIFY(!region->isEnabled());
+        dialog.selectPage(QStringLiteral("NB/SNB"));
+        QVERIFY(dialog.isPagePlaceholderForTest(QStringLiteral("NB/SNB")));
+        QPointer<QWidget> oldNb = dialog.realizedPageForTest(QStringLiteral("NB/SNB"));
+        dialog.selectPage(QStringLiteral("Multimeter"));
+        QPointer<QWidget> oldMultimeter = dialog.realizedPageForTest(QStringLiteral("Multimeter"));
+        QList<QWidget*> delay = controlsGatedWith(oldMultimeter, kStationReason);
+        QCOMPARE(delay.size(), 1);
+        QCOMPARE(qobject_cast<QSpinBox*>(delay.first())->value(), 100);
+
+        // Connected: the snapshot, then ready, then (in a later event, when
+        // the session reports itself established) MainWindow's push. The
+        // snapshot's own queued rebuild runs first and finds the settings
+        // still unavailable, so it is the push that rebuilds.
+        proxy.applySnapshot({{QLatin1String(AppSettings::kDaemonProfileSeededKey), QStringLiteral("True")},
+                             {QStringLiteral("Region"), QStringLiteral("Japan")},
+                             {QStringLiteral("MultimeterDelayMs"), QStringLiteral("250")}});
+        proxy.setReady(true);
+        QCoreApplication::processEvents();
+        QVERIFY(oldOptions && oldNb && oldMultimeter);
+        dialog.setStationSettingsAvailable(true, kStationReason);
+        QTRY_VERIFY(!oldOptions && !oldNb && !oldMultimeter);
+
+        QWidget* const options = dialog.realizedPageForTest(QStringLiteral("Options"));
+        region = options->findChild<QComboBox*>(QStringLiteral("comboFRSRegion"));
+        QCOMPARE(region->currentText(), QStringLiteral("Japan"));
+        QVERIFY(region->isEnabled());
+        QVERIFY(!dialog.isPagePlaceholderForTest(QStringLiteral("NB/SNB")));
+        QWidget* const nb = dialog.realizedPageForTest(QStringLiteral("NB/SNB"));
+        QVERIFY(nb->isEnabled());
+        QVERIFY(nb->toolTip().isEmpty());
+        QVERIFY(setupLeaf(dialog, QStringLiteral("NB/SNB"))->toolTip(0).isEmpty());
+        QVERIFY(dialog.findChild<QLabel*>(QStringLiteral("setupStationUnavailable"))->isHidden());
+        QWidget* const multimeter = dialog.realizedPageForTest(QStringLiteral("Multimeter"));
+        // The page on screen is still the one the operator was looking at.
+        QCOMPARE(stack->currentWidget(), multimeter);
+        QVERIFY(controlsGatedWith(multimeter, kStationReason).isEmpty());
+        int delayMs = -1;
+        for (QSpinBox* spin : multimeter->findChildren<QSpinBox*>()) {
+            if (spin->value() == 250) { delayMs = spin->value(); }
+        }
+        QCOMPARE(delayMs, 250);
+
+        // A later snapshot on the same live session (a Core whose radio
+        // came online sends one): rebuilt again, queued.
+        QPointer<QWidget> connectedOptions = options;
+        proxy.applySnapshot({{QStringLiteral("Region"), QStringLiteral("Italy")}});
+        QTRY_VERIFY(!connectedOptions);
+        region = dialog.realizedPageForTest(QStringLiteral("Options"))
+                     ->findChild<QComboBox*>(QStringLiteral("comboFRSRegion"));
+        QCOMPARE(region->currentText(), QStringLiteral("Italy"));
+
+        // The Core goes away: nothing is rebuilt, the Core's pages and
+        // controls are disabled with the reason, and they keep showing the
+        // Core's last values.
+        QPointer<QWidget> nbAfter = dialog.realizedPageForTest(QStringLiteral("NB/SNB"));
+        QPointer<QWidget> optionsAfter = dialog.realizedPageForTest(QStringLiteral("Options"));
+        proxy.setReady(false);
+        dialog.setStationSettingsAvailable(false, kStationReason);
+        QCoreApplication::processEvents();
+        QVERIFY(nbAfter && optionsAfter);
+        QVERIFY(!nbAfter->isEnabled());
+        QCOMPARE(nbAfter->toolTip(), kStationReason);
+        QVERIFY(!region->isEnabled());
+        QCOMPARE(region->currentText(), QStringLiteral("Italy"));
+        dialog.selectPage(QStringLiteral("NB/SNB"));
+        QCOMPARE(dialog.findChild<QLabel*>(QStringLiteral("setupStationUnavailable"))->text(),
+                 kStationReason);
+        QVERIFY(!dialog.findChild<QLabel*>(QStringLiteral("setupStationUnavailable"))->isHidden());
+    }
+
+    // R-R3-21: a page whose construction pushes availability again (the
+    // push can arrive from anywhere on the main thread) does not start a
+    // second rebuild from inside its own construction: every page is built
+    // once per snapshot, one at a time. A return of availability without a
+    // new snapshot rebuilds nothing.
+    void setupPageRebuildIsGuardedAgainstReentry()
+    {
+        SettingsProxy proxy;
+        AppSettings::instance().setRemoteBackend(&proxy);
+        RadioModel remote(RadioModel::Role::Remote);
+        SetupDialog dialog(&remote);
+        dialog.setStationSettingsAvailable(false, kStationReason);
+
+        int builds = 0;
+        int building = 0;
+        bool nested = false;
+        const auto probe = [&] {
+            ++builds;
+            nested = nested || building > 0;
+            ++building;
+            dialog.setStationSettingsAvailable(false, kStationReason);
+            dialog.setStationSettingsAvailable(true, kStationReason);
+            --building;
+            return new QWidget;
+        };
+        const int first = dialog.registerPageForTest(QStringLiteral("Probe one"),
+                                                     SetupScope::Mixed, probe);
+        const int second = dialog.registerPageForTest(QStringLiteral("Probe two"),
+                                                      SetupScope::Mixed, probe);
+        dialog.setStationSettingsAvailable(false, kStationReason);
+        QVERIFY(dialog.realizePageAtForTest(first) != nullptr);
+        dialog.setStationSettingsAvailable(false, kStationReason);
+        QVERIFY(dialog.realizePageAtForTest(second) != nullptr);
+        QCOMPARE(builds, 2);
+
+        // A new snapshot while unavailable, then availability returns: both
+        // are rebuilt, each once, neither inside the other.
+        dialog.setStationSettingsAvailable(false, kStationReason);
+        proxy.applySnapshot({{QStringLiteral("Region"), QStringLiteral("Italy")}});
+        dialog.setStationSettingsAvailable(true, kStationReason);
+        QCOMPARE(builds, 4);
+        QVERIFY(!nested);
+        QTest::qWait(50);  // the snapshot's queued rebuild finds nothing stale
+        QCOMPARE(builds, 4);
+
+        dialog.setStationSettingsAvailable(false, kStationReason);
+        dialog.setStationSettingsAvailable(true, kStationReason);
+        QCoreApplication::processEvents();
+        QCOMPARE(builds, 4);  // no new snapshot since they were built
+    }
+
+    // Local direct mode: the push has no effect. Core pages are built and
+    // live, Mixed pages gate nothing, no notice.
+    void localSetupIgnoresStationSettingsAvailability()
+    {
+        RadioModel local;
+        SetupDialog dialog(&local);
+        QVERIFY(dialog.stationSettingsAvailableForTest());
+        dialog.setStationSettingsAvailable(false, kStationReason);
+        for (const char* label : {"NB/SNB", "Multimeter", "Options", "Spectrum Defaults"}) {
+            const QString name = QString::fromLatin1(label);
+            dialog.selectPage(name);
+            QWidget* const page = dialog.realizedPageForTest(name);
+            QVERIFY2(page != nullptr, label);
+            QVERIFY2(page->isEnabled(), label);
+            QVERIFY2(!dialog.isPagePlaceholderForTest(name), label);
+            QVERIFY2(controlsGatedWith(page, kStationReason).isEmpty(), label);
+            QVERIFY2(dialog.findChild<QLabel*>(QStringLiteral("setupStationUnavailable"))->isHidden(),
+                     label);
         }
     }
 
