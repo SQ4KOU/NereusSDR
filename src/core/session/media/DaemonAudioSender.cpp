@@ -101,6 +101,19 @@ bool DaemonAudioSender::setProfile(RemoteAudioProfile profile)
     return true;
 }
 
+bool DaemonAudioSender::setSliceSource(int sliceId)
+{
+    if (m_running) {
+        return false;
+    }
+    return m_source->setSliceSource(sliceId);
+}
+
+int DaemonAudioSender::sliceSource() const noexcept
+{
+    return m_source->sliceSource();
+}
+
 void DaemonAudioSender::setPacingClockForTest(PacingClock clock)
 {
     if (clock) { m_pacingClock = std::move(clock); }

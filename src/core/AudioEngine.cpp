@@ -19,6 +19,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-23 : R-R3-43 Task 2 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. Per-slice receiver audio taps
+//                 beside the VAX tee; the VAX tee undoes the feeding
+//                 slice's own AF gain, not receiver 1's.
 //   2026-09-22 : R-R3-36 fix wave by J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code. isCaptureReaderOpen() for the MOX
 //                 admission check.
@@ -1206,6 +1210,157 @@ void AudioEngine::clearMasterMixAudioTap(MasterMixAudioTap* tap)
     m_masterMixTapAdmissionClosed.store(false, std::memory_order_seq_cst);
 }
 
+void AudioEngine::closeAndDrainSliceTap(SliceTapSlot& slot)
+{
+    // As the master tap: close first, then wait for an admitted callback.
+    // The callback re-checks the gate after incrementing, so one that
+    // raced this store cannot use a pointer being replaced.
+    slot.admissionClosed.store(true, std::memory_order_seq_cst);
+    unsigned calls = slot.callsInFlight.load(std::memory_order_seq_cst);
+    while (calls != 0) {
+        slot.callsInFlight.wait(calls, std::memory_order_relaxed);
+        calls = slot.callsInFlight.load(std::memory_order_seq_cst);
+    }
+}
+
+bool AudioEngine::setSliceAudioTap(int sliceId, SliceAudioTap* tap)
+{
+    if (sliceId < 0 || tap == nullptr) {
+        return false;
+    }
+    std::lock_guard<std::mutex> controlLock(m_sliceTapControlMutex);
+    SliceTapSlot* target = nullptr;
+    for (SliceTapSlot& slot : m_sliceTaps) {
+        if (slot.tap.load(std::memory_order_seq_cst) == tap) {
+            target = &slot;
+            break;
+        }
+    }
+    if (target == nullptr) {
+        for (SliceTapSlot& slot : m_sliceTaps) {
+            if (slot.tap.load(std::memory_order_seq_cst) == nullptr) {
+                target = &slot;
+                break;
+            }
+        }
+    }
+    if (target == nullptr) {
+        return false;
+    }
+    closeAndDrainSliceTap(*target);
+    target->sliceId.store(sliceId, std::memory_order_seq_cst);
+    target->tap.store(tap, std::memory_order_seq_cst);
+    target->admissionClosed.store(false, std::memory_order_seq_cst);
+    return true;
+}
+
+void AudioEngine::clearSliceAudioTap(SliceAudioTap* tap)
+{
+    if (tap == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> controlLock(m_sliceTapControlMutex);
+    for (SliceTapSlot& slot : m_sliceTaps) {
+        if (slot.tap.load(std::memory_order_seq_cst) != tap) {
+            continue;
+        }
+        closeAndDrainSliceTap(slot);
+        slot.tap.store(nullptr, std::memory_order_seq_cst);
+        slot.sliceId.store(-1, std::memory_order_seq_cst);
+        slot.admissionClosed.store(false, std::memory_order_seq_cst);
+    }
+}
+
+int AudioEngine::sliceAudioTapCount() const
+{
+    int count = 0;
+    for (const SliceTapSlot& slot : m_sliceTaps) {
+        if (slot.tap.load(std::memory_order_seq_cst) != nullptr) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+float AudioEngine::afGainInverseForSlice(int sliceId) const noexcept
+{
+    // Sub-Epic I invariant: a slice's WDSP RX channel id is its slice id.
+    // The same unlocked lookup the VAX tee has always made on this thread.
+    if (m_radio && m_radio->wdspEngine()) {
+        if (RxChannel* rx = m_radio->wdspEngine()->rxChannel(sliceId)) {
+            const double afGain = rx->afGain();
+            if (afGain > 0.001) {
+                return static_cast<float>(1.0 / afGain);
+            }
+        }
+    }
+    return 1.0f;
+}
+
+void AudioEngine::feedSliceTaps(int sliceId, const float* samples, int frames) noexcept
+{
+    // Scaled once, on the first tap that wants this slice; a block no tap
+    // wants costs four atomic loads.
+    const float* scaled = nullptr;
+    for (SliceTapSlot& slot : m_sliceTaps) {
+        if (slot.sliceId.load(std::memory_order_relaxed) != sliceId
+            || slot.admissionClosed.load(std::memory_order_seq_cst)) {
+            continue;
+        }
+        slot.callsInFlight.fetch_add(1, std::memory_order_seq_cst);
+        if (!slot.admissionClosed.load(std::memory_order_seq_cst)
+            && slot.sliceId.load(std::memory_order_seq_cst) == sliceId) {
+            if (SliceAudioTap* tap = slot.tap.load(std::memory_order_seq_cst)) {
+                if (scaled == nullptr) {
+                    const float afInverse = afGainInverseForSlice(sliceId);
+                    if (afInverse == 1.0f) {
+                        scaled = samples;
+                    } else {
+                        // Its own scratch: the VAX tee's and the mix's are
+                        // separate. Grows once per thread, then no allocation.
+                        static thread_local std::vector<float> tapScratch;
+                        const int stereoFloats = frames * 2;
+                        if (static_cast<int>(tapScratch.size()) < stereoFloats) {
+                            tapScratch.resize(static_cast<size_t>(stereoFloats));
+                        }
+                        for (int i = 0; i < stereoFloats; ++i) {
+                            tapScratch[i] = samples[i] * afInverse;
+                        }
+                        scaled = tapScratch.data();
+                    }
+                }
+                tap->consume(scaled, frames, kMasterMixSampleRateHz);
+            }
+        }
+        if (slot.callsInFlight.fetch_sub(1, std::memory_order_seq_cst) == 1) {
+            slot.callsInFlight.notify_all();
+        }
+    }
+}
+
+void AudioEngine::skipSliceTaps(int sliceId, int frames) noexcept
+{
+    if (frames <= 0) {
+        return;
+    }
+    for (SliceTapSlot& slot : m_sliceTaps) {
+        if (slot.sliceId.load(std::memory_order_relaxed) != sliceId
+            || slot.admissionClosed.load(std::memory_order_seq_cst)) {
+            continue;
+        }
+        slot.callsInFlight.fetch_add(1, std::memory_order_seq_cst);
+        if (!slot.admissionClosed.load(std::memory_order_seq_cst)
+            && slot.sliceId.load(std::memory_order_seq_cst) == sliceId) {
+            if (SliceAudioTap* tap = slot.tap.load(std::memory_order_seq_cst)) {
+                tap->skip(frames, kMasterMixSampleRateHz);
+            }
+        }
+        if (slot.callsInFlight.fetch_sub(1, std::memory_order_seq_cst) == 1) {
+            slot.callsInFlight.notify_all();
+        }
+    }
+}
+
 void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
 {
     if (m_mixAdmissionClosed.load(std::memory_order_acquire)) {
@@ -1272,6 +1427,9 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     // it.
     if (m_moxActive.load(std::memory_order_acquire)
         && sliceId == m_moxWithdrawnSlice.load(std::memory_order_acquire)) {
+        // R-R3-43: a receiver tap hears nothing either, but is told how
+        // many frames were withheld so its positions keep real time.
+        skipSliceTaps(sliceId, frames);
         return;  // silenced — TX-bound slice's RX audio gated during MOX
     }
 
@@ -1311,6 +1469,12 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     // the master-mix `mix` scratch below) so the unity-gain fast path
     // stays zero-copy. See docs/architecture/2026-04-19-vax-design.md
     // §3.4 and §6.4.
+    // R-R3-43 receiver taps: the same point and the same channel-independent
+    // scaling as the VAX tee below (1 / the slice's AF gain, no VAX channel
+    // gain or mute), so a remote VAX or TCI app gets the level a local one
+    // would.
+    feedSliceTaps(sliceId, samples, frames);
+
     const int vaxCh = slice->vaxChannel();
     if (vaxCh >= 1 && vaxCh <= 4) {
         const int vaxIdx = vaxCh - 1;
@@ -1349,16 +1513,11 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
                 // were already multiplied by ~0 inside WDSP); proper
                 // VAX-independent-of-mute requires the larger pre-PanelGain1
                 // tap (Option C in 2026-05-08 design discussion).
-                float afInverse = 1.0f;
-                if (m_radio && m_radio->wdspEngine()) {
-                    if (RxChannel* rx = m_radio->wdspEngine()->rxChannel(0)) {
-                        const double afGain = rx->afGain();
-                        if (afGain > 0.001) {
-                            afInverse = static_cast<float>(1.0 / afGain);
-                        }
-                    }
-                }
-
+                //
+                // R-R3-43: the AF gain undone is the feeding slice's own,
+                // from its WDSP RX channel. This used to read channel 0's,
+                // receiver 1's, for every slice.
+                const float afInverse = afGainInverseForSlice(sliceId);
                 const float gain = gainUser * afInverse;
 
                 const qint64 payloadBytes =

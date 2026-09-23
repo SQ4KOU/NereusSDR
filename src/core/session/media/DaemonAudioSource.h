@@ -2,8 +2,9 @@
 // =================================================================
 // src/core/session/media/DaemonAudioSource.h  (NereusSDR)
 // =================================================================
-// Bounded bridge from AudioEngine's borrowed post-master-mix callback to
-// owned 40 ms stereo blocks for the remote Opus sender.
+// Bounded bridge from AudioEngine's borrowed post-master-mix callback, or
+// (R-R3-43) one receiver's own tap, to owned 40 ms stereo blocks for the
+// remote audio sender.
 // =================================================================
 
 #pragma once
@@ -82,6 +83,17 @@ public:
     /// current one.
     bool setCaptureClock(CaptureClock clock);
 
+    /// R-R3-43: which audio this source captures. kMasterMix (the default)
+    /// is the master mix, exactly as before; a slice id >= 0 is that
+    /// receiver's own audio from AudioEngine's slice tap (before mute, pan
+    /// and the mix, with its AF gain undone as local VAX has it). Frames the
+    /// MOX gate withholds advance the position without samples, so the loss
+    /// shows as an integral packet gap, as dropped ingress does. Refused
+    /// (false) while running, or for a negative id other than kMasterMix.
+    static constexpr int kMasterMix = -1;
+    bool setSliceSource(int sliceId);
+    int sliceSource() const noexcept { return m_sliceId; }
+
     // The AudioEngine is non-owning. Changing engines stops capture first,
     // preventing a completed block from a previous station from surviving a
     // reconnect.
@@ -91,6 +103,7 @@ public:
     // Control-thread lifecycle. start() discards all prior partial and queued
     // audio before installing the synchronous tap. stop() detaches the tap
     // before clearing state, so no callback can append old audio afterward.
+    // A slice source that finds every slice tap slot taken stays stopped.
     void start();
     void stop();
     bool isRunning() const noexcept;
@@ -125,8 +138,11 @@ public:
 private:
     class Bridge;
 
+    void detachFromEngine();
+
     QPointer<AudioEngine> m_audioEngine;
     std::unique_ptr<Bridge> m_bridge;
+    int m_sliceId{kMasterMix};
 };
 
 } // namespace NereusSDR
