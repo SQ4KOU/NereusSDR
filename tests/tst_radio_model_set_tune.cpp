@@ -25,17 +25,25 @@
 //  16. AM mode: not swapped (isLsbFamily(AM) == false → no setDspMode).
 //  17. FM mode: not swapped (isLsbFamily(FM) == false → no setDspMode).
 //  18. DIGL/DIGU isLsbFamily predicate: DIGL → true, DIGU → false (tone sign).
+//  19. R-R3-21: keying refused by the band plan runs the TUN-off path at once
+//      (Tune flag, manual MOX, CW mode, power and TX VFO restored; no
+//      tuneRefused, the MOX refusal already reached the operator).
+//  20. R-R3-21: after a refused press, the next accepted press saves the
+//      true CW mode, not the CW-to-SSB switched one.
+//  21. R-R3-21: keying refused by the TX interlock takes the same path.
 
 #include <QtTest/QtTest>
 #include <QObject>
 #include <QSignalSpy>
 #include <QCoreApplication>
+#include <QScopeGuard>
 
 #include "core/AppSettings.h"
 #include "core/MoxController.h"
 #include "core/PaProfileManager.h"
 #include "core/RadioConnection.h"
 #include "core/TxChannel.h"
+#include "core/TxInterlockPolicy.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -65,6 +73,8 @@ class MockConnection : public RadioConnection {
 public:
     // Ordered log of setTxDrive() argument values.
     QList<int> txDriveLog;
+    // Ordered log of setTxFrequency() argument values (TUNE VFO offset).
+    QList<quint64> txFreqLog;
 
     explicit MockConnection(QObject* parent = nullptr)
         : RadioConnection(parent)
@@ -77,7 +87,7 @@ public:
     void connectToRadio(const NereusSDR::RadioInfo&) override {}
     void disconnect() override {}
     void setReceiverFrequency(int, quint64) override {}
-    void setTxFrequency(quint64) override {}
+    void setTxFrequency(quint64 hz) override { txFreqLog.append(hz); }
     void setActiveReceiverCount(int) override {}
     void setSampleRate(int) override {}
     void setAttenuator(int) override {}
@@ -173,6 +183,44 @@ static void setupModel(RadioModel& model, MockConnection*& mockConn)
     // Add a slice so m_activeSlice is non-null.
     model.addSlice();
     // Slice 0 is active after addSlice.
+}
+
+// ── R-R3-21 refused-Tune helpers (tests 19-21) ──────────────────────────────
+// Shared rig: CWU on 20 m, HERMES PA profile, 80 % drive, so a refused
+// press that skipped the TUN-off path would leave the slice in USB, the
+// Tune flag latched and the tune power on the slider.
+static void setupRefusalRig(RadioModel& model, MockConnection*& conn,
+                            SliceModel*& slice)
+{
+    setupModel(model, conn);
+    slice = model.activeSlice();
+    if (slice == nullptr) {
+        return;
+    }
+    slice->setDspMode(DSPMode::CWU);
+    slice->setFrequency(14'030'000.0);
+    if (PaProfileManager* pm = model.paProfileManager()) {
+        pm->setMacAddress(QStringLiteral("AABBCCDDEEFF"));
+        pm->load(HPSDRModel::HERMES);
+    }
+    model.transmitModel().setPower(80);
+}
+
+static void verifyRestored(RadioModel& model, MockConnection* conn,
+                           SliceModel* slice)
+{
+    QVERIFY2(!model.moxController()->isMox(), "keying was refused");
+    QVERIFY2(!model.isTune(), "a refused Tune must clear the Tune flag");
+    QVERIFY2(!model.moxController()->isManualMox(),
+             "the TUNE button reads manual MOX; it must drop back");
+    QVERIFY2(!model.transmitModel().isTune(),
+             "TransmitModel::tune must not stay on the tune-power source");
+    QVERIFY2(!model.tuneOffPendingForTest(),
+             "the TUN-off completion runs at once, not after a settle");
+    QCOMPARE(slice->dspMode(), DSPMode::CWU);
+    QCOMPARE(model.transmitModel().power(), 80);
+    QVERIFY(!conn->txFreqLog.isEmpty());
+    QCOMPARE(conn->txFreqLog.last(), quint64(14'030'000));
 }
 
 // ── Test class ────────────────────────────────────────────────────────────────
@@ -1003,6 +1051,117 @@ private slots:
         model.setTune(false);
         pump();
 
+        model.injectConnectionForTest(nullptr);
+    }
+
+    // ── 19-21. R-R3-21: a refused Tune restores the true state ───────────────
+    // From Thetis console.cs:30132-30140 [v2.10.3.15]: when chkMOX.Checked =
+    // true leaves _mox false, chkTUN.Checked = false runs the TUN-off branch.
+    //
+    void bandPlanRefusedTuneRunsTunOffPath()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        SliceModel* slice = nullptr;
+        setupRefusalRig(model, conn, slice);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        // Detach before connOwner frees the mock, even when a check fails.
+        const auto detach = qScopeGuard([&model]() {
+            model.injectConnectionForTest(nullptr);
+        });
+        QVERIFY(slice != nullptr);
+
+        model.moxController()->setMoxCheck([]() {
+            return safety::BandPlanGuard::MoxCheckResult{
+                false, QStringLiteral("Out of band")};
+        });
+
+        QSignalSpy refused(&model, &RadioModel::tuneRefused);
+        QSignalSpy rejected(model.moxController(), &MoxController::moxRejected);
+        QSignalSpy manual(model.moxController(), &MoxController::manualMoxChanged);
+
+        model.setTune(true);
+
+        verifyRestored(model, conn, slice);
+        QCOMPARE(rejected.count(), 1);
+        QCOMPARE(refused.count(), 0);  // no second toast
+        QVERIFY(!manual.isEmpty());
+        QCOMPARE(manual.last().at(0).toBool(), false);
+
+        // The stale settle timer must not undo or repeat anything.
+        pump();
+        verifyRestored(model, conn, slice);
+
+        model.injectConnectionForTest(nullptr);
+    }
+
+    void refusedTuneThenAcceptedTuneSavesTrueMode()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        SliceModel* slice = nullptr;
+        setupRefusalRig(model, conn, slice);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        // Detach before connOwner frees the mock, even when a check fails.
+        const auto detach = qScopeGuard([&model]() {
+            model.injectConnectionForTest(nullptr);
+        });
+        QVERIFY(slice != nullptr);
+
+        model.moxController()->setMoxCheck([]() {
+            return safety::BandPlanGuard::MoxCheckResult{
+                false, QStringLiteral("Out of band")};
+        });
+        model.setTune(true);  // refused
+
+        // Next press, straight away, now allowed.
+        model.moxController()->setMoxCheck({});
+        model.setTune(true);
+        pump();
+        QVERIFY(model.moxController()->isMox());
+        QVERIFY(model.isTune());
+        QCOMPARE(slice->dspMode(), DSPMode::USB);
+
+        // Unkey restores the mode the operator was really in.
+        model.setTune(false);
+        pump();
+        QVERIFY(!model.moxController()->isMox());
+        QVERIFY(!model.isTune());
+        QCOMPARE(slice->dspMode(), DSPMode::CWU);
+        QCOMPARE(model.transmitModel().power(), 80);
+
+        model.injectConnectionForTest(nullptr);
+    }
+
+    void interlockRefusedTuneRunsTunOffPath()
+    {
+        TxInterlockPolicy policy;  // outlives the model
+        policy.setMode(TxInterlockPolicy::Block);
+
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        SliceModel* slice = nullptr;
+        setupRefusalRig(model, conn, slice);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        // Detach before connOwner frees the mock, even when a check fails.
+        const auto detach = qScopeGuard([&model]() {
+            model.injectConnectionForTest(nullptr);
+        });
+        QVERIFY(slice != nullptr);
+
+        model.moxController()->setInterlockPolicy(&policy);
+        model.moxController()->onAmpStateChanged(/*hasAmp=*/true,
+                                                 /*inOperate=*/false);
+        QSignalSpy denied(&policy, &TxInterlockPolicy::denied);
+        QSignalSpy refused(&model, &RadioModel::tuneRefused);
+
+        model.setTune(true);
+
+        QCOMPARE(denied.count(), 1);
+        QCOMPARE(refused.count(), 0);
+        verifyRestored(model, conn, slice);
+
+        model.moxController()->setInterlockPolicy(nullptr);
         model.injectConnectionForTest(nullptr);
     }
 };

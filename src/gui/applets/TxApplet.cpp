@@ -1005,12 +1005,12 @@ void TxApplet::wireControls()
     connect(m_tuneBtn, &QPushButton::toggled, this, [this](bool on) {
         if (m_updatingFromModel) { return; }
         if (!m_model) { return; }
+        // R-R3-21: the button's text and checked state are written only by
+        // the Tune state and refusal handlers below (manualMoxChanged,
+        // tuneRefused). Writing "TUNING..." here, after setTune returned,
+        // painted a refused press as tuning: the refusal had already reset
+        // the button inside this call.
         m_model->setTune(on);
-        if (on) {
-            m_tuneBtn->setText(QStringLiteral("TUNING..."));
-        } else {
-            m_tuneBtn->setText(QStringLiteral("TUNE"));
-        }
     });
 
     // Reverse: tuneRefused → uncheck TUN button + clear text.

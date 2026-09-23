@@ -2504,6 +2504,13 @@ nereus_add_test(tst_tx_applet_tune_wiring)
 # console.cs:17513 [v2.10.3.13].
 nereus_add_test(tst_tx_applet_rf_power_per_band)
 
+# ── R-R3-21: TUNE button follows the true Tune state ─────────────────────────
+# Drives a real TxApplet: a band-plan-refused press leaves the button
+# unchecked and reading "TUNE"; an accepted press reads "TUNING..." and
+# unkeys cleanly; a refused press does not spoil the next one.
+nereus_add_test(tst_tx_applet_tune_state)
+target_compile_definitions(tst_tx_applet_tune_state PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3M-1b (relocated): PhoneCwApplet Mic Gain slider ──────────────────
 # Verifies the model-layer contracts that PhoneCwApplet's Mic Gain slider depends on
 # (relocated from TxApplet J.1 per JJ feedback 2026-04-28):

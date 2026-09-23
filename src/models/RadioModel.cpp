@@ -10923,8 +10923,9 @@ bool RadioModel::pcCaptureGatesKeying() const
     }
     // Tune and two-tone: their own key calls are marked by scoped flags that
     // are true only while that call runs. m_manualMox and two-tone's
-    // activation-in-flight are not used: a refused Tune leaves m_manualMox
-    // set, and two-tone stays in flight through its 200 ms MOX-release
+    // activation-in-flight are not used: m_manualMox is set before Tune's
+    // key is tried (a refused key clears it again only when the TUN-off path
+    // runs), and two-tone stays in flight through its 200 ms MOX-release
     // settle, so a voice press in either window would pass as generated.
     if (generatedKeyInFlight()) {
         return false;
@@ -15192,14 +15193,50 @@ void RadioModel::setTune(bool on)
         // Note: m_isTuning = true was moved earlier (after power-on guard) to
         // match Thetis console.cs:30010 [v2.10.3.13] ordering (G.4 fixup).
         if (m_moxController) {
-            // R-R3-36: mark this call as Tune keying for the PC-microphone
-            // admission check (covers every caller, TGXL and TCI included).
-            const QScopedValueRollback<bool> tuneKey(m_tuneKeyInFlight, true);
-            m_moxController->setTune(true);
-            // Tune pressed while already keyed commits no new key-up; the
-            // carrier now comes from the tune tone either way.
-            if (m_moxController->isMox()) {
-                m_generatedKeyLive = true;
+            bool keyed = false;
+            {
+                // R-R3-36: mark this call as Tune keying for the PC-microphone
+                // admission check (covers every caller, TGXL and TCI included).
+                const QScopedValueRollback<bool> tuneKey(m_tuneKeyInFlight, true);
+                m_moxController->setTune(true);
+                keyed = m_moxController->isMox();
+                // Tune pressed while already keyed commits no new key-up; the
+                // carrier now comes from the tune tone either way.
+                if (keyed) {
+                    m_generatedKeyLive = true;
+                }
+            }
+
+            // ── Keying refused: run the TUN-off path ─────────────────────────
+            // R-R3-21 / local TX safety. From Thetis console.cs:30132-30140
+            // [v2.10.3.15]:
+            //   chkMOX.Checked = true;
+            //   await Task.Delay(100); // MW0LGE_21k8
+            //   // go for it
+            //   if (!_mox)
+            //   {
+            //       chkTUN.Checked = false;
+            //       return;
+            //   }
+            // chkTUN.Checked = false re-enters chkTUN_CheckedChanged's else
+            // branch, which restores the tone, the CW mode and the power.
+            //
+            // NereusSDR glue: MoxController::setMox(true) refuses (band plan
+            // or TX interlock) synchronously and commits m_mox synchronously
+            // when it accepts, so isMox() is read right after the call rather
+            // than after Thetis's 100 ms wait. The TUN-off completion is then
+            // run at once instead of after its settle delay: the delay exists
+            // to let a running TXA chain stop before gen1 is cut, and no TX
+            // started here. Completing now also means a second press cannot
+            // save the CW-to-SSB switched mode as the original.
+            //
+            // MoxController::setTune(true) set m_manualMox and emitted
+            // manualMoxChanged(true) before the refusal; setTune(false) below
+            // clears it, so the TUNE button follows the true state. No
+            // tuneRefused here: the MOX refusal already reached the operator.
+            if (!keyed) {
+                setTune(false);
+                completeTuneOff();
             }
         }
 
