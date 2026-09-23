@@ -1,8 +1,10 @@
 // no-port-check: NereusSDR-original. Remote GUI connection and hydration boundaries.
 #include <QTest>
 #include <QCoreApplication>
+#include <QDialogButtonBox>
 #include <QFile>
 #include <QLabel>
+#include <QLayout>
 #include <QMenu>
 #include <QPixmap>
 #include <QPushButton>
@@ -314,8 +316,12 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state, State::Playing, 15000);
 
         RemoteConnectionPanel panel(&controls, nullptr, &remoteMedia);
+        auto* audioTimer = panel.findChild<QTimer*>(QStringLiteral("remoteAudioPanelTimer"));
+        QVERIFY(audioTimer);
+        QVERIFY(!audioTimer->isActive()); // built but never shown: no polling
         panel.show();
         QTRY_VERIFY(panel.isVisible());
+        QVERIFY(audioTimer->isActive());
         auto* audioDetails = panel.findChild<QLabel*>(QStringLiteral("remoteAudioDetails"));
         auto* retry = panel.findChild<QPushButton*>(QStringLiteral("retryRemoteAudio"));
         QVERIFY(audioDetails);
@@ -354,6 +360,26 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state, State::Playing, 15000);
         QVERIFY(!retry->isEnabled());
         QVERIFY(audioDetails->text().contains(QStringLiteral("Remote audio: Playing")));
+
+        // The height follows the wrapped text: every section fits inside
+        // the panel with no fixed gap left below the buttons.
+        QCoreApplication::processEvents();
+        const int contentHeight = panel.layout()->totalHeightForWidth(panel.width());
+        QVERIFY(contentHeight > 0);
+        QCOMPARE(panel.height(), contentHeight);
+        auto* close = panel.findChild<QDialogButtonBox*>();
+        QVERIFY(close);
+        QVERIFY(audioDetails->geometry().bottom() < retry->geometry().top());
+        QVERIFY(close->geometry().bottom() < panel.height());
+
+        // Hidden, the panel stops polling; shown again, it resumes.
+        panel.hide();
+        QVERIFY(!audioTimer->isActive());
+        panel.show();
+        QTRY_VERIFY(panel.isVisible());
+        QVERIFY(audioTimer->isActive());
+        panel.hide();
+        QVERIFY(!audioTimer->isActive());
 
         sourceTimer.stop();
         speakerTimer.stop();

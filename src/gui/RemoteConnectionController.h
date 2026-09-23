@@ -6,6 +6,10 @@
 #include <QPointer>
 #include <QDialog>
 
+#include <functional>
+
+class QTimer;
+
 namespace NereusSDR {
 class RadioModel;
 class StationClient;
@@ -52,5 +56,14 @@ public:
     explicit RemoteConnectionPanel(RemoteConnectionController* controller,
                                    QWidget* parent = nullptr,
                                    RemoteMediaController* media = nullptr);
+protected:
+    void showEvent(QShowEvent* event) override;
+    void hideEvent(QHideEvent* event) override;
+private:
+    // Height follows the wrapped text at the current width.
+    void fitHeightToContent();
+    // Polls the audio health once a second, only while the panel is shown.
+    QTimer* m_audioTimer = nullptr;
+    std::function<void()> m_refreshAudio;
 };
 } // namespace NereusSDR

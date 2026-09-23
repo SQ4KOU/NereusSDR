@@ -190,9 +190,6 @@ RemoteConnectionPanel::RemoteConnectionPanel(RemoteConnectionController* control
         layout->addWidget(retryButton);
         connect(retryButton, &QPushButton::clicked,
                 media, &RemoteMediaController::retryAudio);
-        // Collect the fixed height below into one gap above the buttons
-        // instead of it spreading between the two text sections.
-        layout->addStretch(1);
     }
 
     auto* buttons = new QDialogButtonBox(this);
@@ -206,36 +203,76 @@ RemoteConnectionPanel::RemoteConnectionPanel(RemoteConnectionController* control
     connect(dial, &QPushButton::clicked, controller, &RemoteConnectionController::connectToStation);
     connect(stop, &QPushButton::clicked, controller, &RemoteConnectionController::disconnectFromStation);
     connect(close, &QPushButton::clicked, this, &QDialog::close);
-    const auto refresh = [controller, details, dial, stop] {
-        details->setText(controller->detailText());
+    const auto refresh = [this, controller, details, dial, stop] {
+        const QString text = controller->detailText();
+        const bool textChanged = details->text() != text;
+        details->setText(text);
         dial->setEnabled(controller->canConnect());
         stop->setEnabled(controller->canDisconnect());
+        if (textChanged) { fitHeightToContent(); }
     };
     connect(controller, &RemoteConnectionController::changed, this, refresh);
     refresh();
 
     if (media) {
-        const auto refreshAudio = [media, audioDetails, retryButton] {
-            audioDetails->setText(formatRemoteAudioDetails(media->audioStatus(),
-                                                            media->audioTelemetry()));
-            retryButton->setEnabled(media->audioStatus().retryAvailable);
+        QPointer<RemoteMediaController> guardedMedia(media);
+        m_refreshAudio = [this, guardedMedia, audioDetails, retryButton] {
+            if (!guardedMedia) { return; }
+            const QString text = formatRemoteAudioDetails(guardedMedia->audioStatus(),
+                                                          guardedMedia->audioTelemetry());
+            const bool textChanged = audioDetails->text() != text;
+            audioDetails->setText(text);
+            retryButton->setEnabled(guardedMedia->audioStatus().retryAvailable);
+            if (textChanged) { fitHeightToContent(); }
         };
-        connect(media, &RemoteMediaController::audioStatusChanged, this, refreshAudio);
+        connect(media, &RemoteMediaController::audioStatusChanged, this,
+                [this] { m_refreshAudio(); });
         // audioStatusChanged() fires only when the derived status changes;
         // the numeric health measurements move continuously while playing,
-        // so this section also polls once a second while it is visible.
-        auto* audioTimer = new QTimer(this);
-        audioTimer->setObjectName(QStringLiteral("remoteAudioPanelTimer"));
-        audioTimer->setInterval(1000);
-        connect(audioTimer, &QTimer::timeout, this, [this, refreshAudio] {
-            if (isVisible()) { refreshAudio(); }
-        });
-        audioTimer->start();
-        refreshAudio();
+        // so this section also polls once a second, but only while the
+        // panel is shown (showEvent / hideEvent start and stop it).
+        m_audioTimer = new QTimer(this);
+        m_audioTimer->setObjectName(QStringLiteral("remoteAudioPanelTimer"));
+        m_audioTimer->setInterval(1000);
+        connect(m_audioTimer, &QTimer::timeout, this, [this] { m_refreshAudio(); });
+        m_refreshAudio();
     }
 
-    // 420 comfortably fits the densest realistic content: the Core section,
-    // a Problem line, a wrapped Codec line and all four health lines.
-    resize(440, media ? 420 : 170);
+    // Width is a starting size the operator may change; the height always
+    // follows the wrapped text, so nothing is clipped at larger fonts and no
+    // fixed gap is left below short content.
+    resize(440, height());
+    fitHeightToContent();
+}
+
+void RemoteConnectionPanel::fitHeightToContent()
+{
+    QLayout* const top = layout();
+    if (!top) { return; }
+    top->activate();
+    const int contentHeight = top->totalHeightForWidth(width());
+    if (contentHeight > 0) {
+        resize(width(), contentHeight);
+    } else {
+        adjustSize();
+    }
+}
+
+void RemoteConnectionPanel::showEvent(QShowEvent* event)
+{
+    QDialog::showEvent(event);
+    if (m_audioTimer) {
+        m_refreshAudio();
+        m_audioTimer->start();
+    }
+    fitHeightToContent();
+}
+
+void RemoteConnectionPanel::hideEvent(QHideEvent* event)
+{
+    if (m_audioTimer) {
+        m_audioTimer->stop();
+    }
+    QDialog::hideEvent(event);
 }
 } // namespace NereusSDR
