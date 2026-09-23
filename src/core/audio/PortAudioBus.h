@@ -13,6 +13,12 @@
 // callback drains it to the device. Input: the audio callback captures
 // from the device into the ring, pull() drains it. Host-API / device
 // enumeration helpers are available statically (Task 3.3).
+//
+// Modification history (NereusSDR):
+//   2026-09-22: strict named-input resolution, open-failure stage and
+//               opened-device accessors for the nereus-audio-capture
+//               helper (R-R3-36). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -63,6 +69,26 @@ public:
 
     // Call before open(). m_cfg is read on the main thread in open() only.
     void setConfig(const PortAudioConfig& cfg);
+
+    // When set before open(), a missing named input device fails open()
+    // with errorString() starting "device-not-found:" instead of falling
+    // back to a default device.  Only input opens are affected; an empty
+    // deviceName still resolves the platform default.  Off by default, so
+    // every existing caller keeps the fallback.  Used by the
+    // nereus-audio-capture helper (R-R3-36).
+    void setStrictInputDevice(bool strict) { m_strictInputDevice = strict; }
+
+    // Which step of the last open() failed; None after a successful open.
+    enum class OpenFailure { None, DeviceNotFound, OpenFailed, StartFailed };
+    OpenFailure lastOpenFailure() const { return m_openFailure; }
+
+    // Describe the stream the last successful open() actually opened:
+    // the resolved device's name, the rate the stream runs at on the
+    // device (before resampling) and its channel count.  Empty / 0 while
+    // closed.
+    QString openedDeviceName() const { return m_openedDeviceName; }
+    int     openedNativeRate() const { return m_stream ? m_nativeSampleRate : 0; }
+    int     openedStreamChannels() const;
 
     struct HostApiInfo {
         int     index;
@@ -161,6 +187,9 @@ private:
     AudioFormat     m_negFormat;
     QString         m_backendName;
     QString         m_err;
+    bool            m_strictInputDevice{false};
+    OpenFailure     m_openFailure{OpenFailure::None};
+    QString         m_openedDeviceName;
 
     // macOS mic-input quality fix (2026-05-26):
     // When the device's native sample rate differs from the requested

@@ -1381,6 +1381,13 @@ nereus_add_test(tst_audio_device_config_roundtrip)
 # incremental reader, PCM and JSON codecs, malformed-input rejections.
 nereus_add_test(tst_capture_protocol)
 
+# R-R3-36 Task 2: the nereus-audio-capture helper as a real process. The
+# test re-executes itself as the helper (--capture-helper, through
+# src/capture_main.cpp) and as the scripted fake (--fake-capture-child),
+# so no separately built executable is needed. Only a nonexistent device
+# is ever requested; no real microphone is opened.
+nereus_add_test(tst_capture_helper_process fakes/FakeCaptureChild.cpp)
+
 # ── Phase 3O Sub-Phase 12 Task 12.2 Step 0: AudioEngine speakers live-reconfig ─
 # Verifies speakersConfigChanged / headphonesConfigChanged / txInputConfigChanged
 # / vaxConfigChanged signals, mutex safety in rxBlockReady (try_lock), and

@@ -892,6 +892,7 @@ set(CORE_SOURCES
     src/core/audio/RadioMicSource.cpp
     src/core/audio/VaxTxMicSource.cpp
     src/core/audio/CaptureProtocol.cpp
+    src/core/audio/CaptureHelper.cpp
     src/core/audio/CompositeTxMicRouter.cpp
     src/core/audio/PortAudioBus.cpp
     src/core/audio/QAudioSinkAdapter.cpp
@@ -1662,6 +1663,19 @@ add_executable(nereusd src/server_main.cpp)
 target_link_libraries(nereusd PRIVATE NereusCore)
 
 # --------------------------------------------------------------------------
+# nereus-audio-capture -- private microphone helper process (R-R3-36; see
+# docs/architecture/2026-09-22-optional-microphone-capture-design.md).
+# NereusSDR and nereusd start it over inherited pipes so a native input
+# open that never returns cannot stall them. Links NereusCore only, like
+# nereusd, and is part of the default build so it is always produced from
+# the same revision as its parent.
+# --------------------------------------------------------------------------
+add_executable(nereus-audio-capture src/capture_main.cpp)
+target_link_libraries(nereus-audio-capture PRIVATE NereusCore)
+# nereus_apply_warnings(nereus-audio-capture) is applied below, after the
+# function is defined (next to nereus-media-probe).
+
+# --------------------------------------------------------------------------
 # NereusCore / NereusGui dependency application (R1 Task 1; see
 # docs/architecture/2026-07-28-remote-daemon-architecture-design.md section 4.1)
 #
@@ -2075,6 +2089,7 @@ add_executable(nereus-media-probe EXCLUDE_FROM_ALL
     tools/nereus-media-probe.cpp)
 target_link_libraries(nereus-media-probe PRIVATE NereusCore)
 nereus_apply_warnings(nereus-media-probe)
+nereus_apply_warnings(nereus-audio-capture)
 
 if(NEREUSSDR_LTO_AVAILABLE)
     nereus_apply_core_deps(NereusCore_LTO)

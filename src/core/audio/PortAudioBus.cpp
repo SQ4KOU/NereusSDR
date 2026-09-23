@@ -9,6 +9,13 @@
 // PHILOSOPHICAL context only (Thetis uses paWinWasapiExclusive on
 // Windows for OS-side SRC bypass; we use device-native-rate open on
 // macOS for the same end), not as a port.  No Thetis bytes ported.
+//
+// Modification history (NereusSDR):
+//   2026-09-22: strict named-input resolution (setStrictInputDevice),
+//               lastOpenFailure() and opened-device accessors for the
+//               nereus-audio-capture helper (R-R3-36). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "PortAudioBus.h"
@@ -47,9 +54,15 @@ namespace {
 //      This is the critical fallback for the #112 scenario — even when
 //      there is no ALSA default, PortAudio typically still enumerates
 //      "hw:0,0" etc., which at least lets audio reach the user.
+//
+// strictNamed: when true and deviceName is non-empty, step 1 is the only
+// step; a name that matches nothing returns paNoDevice instead of falling
+// through to the defaults (the capture helper's "never silently switch
+// microphones" rule, R-R3-36).
 PaDeviceIndex resolveDevice(const PortAudioConfig& inCfg,
                             bool wantOutput,
-                            int requestedChannels)
+                            int requestedChannels,
+                            bool strictNamed = false)
 {
     const int deviceCount = Pa_GetDeviceCount();
     if (deviceCount <= 0) {
@@ -160,6 +173,9 @@ PaDeviceIndex resolveDevice(const PortAudioConfig& inCfg,
         if (substringMatch != paNoDevice) { return substringMatch; }
         if (crossApiExact  != paNoDevice) { return crossApiExact; }
         if (crossApiSub    != paNoDevice) { return crossApiSub; }
+        if (strictNamed) {
+            return paNoDevice;
+        }
         // Named device not found: fall through to defaults rather than
         // erroring out — better silent fallback than no audio at all.
     }
@@ -283,20 +299,31 @@ bool PortAudioBus::open(const AudioFormat& format) {
     m_resumeAfterDiscard = false;
 
     const bool wantOutput = (m_cfg.direction == AudioDirection::Output);
+    m_openFailure = OpenFailure::None;
+    m_openedDeviceName.clear();
 
     PaStreamParameters params;
     PaError err = paNoError;
     const PaDeviceInfo* di = nullptr;
 
-    params.device = resolveDevice(m_cfg, wantOutput, format.channels);
+    // Strict resolution applies only to a named input device (R-R3-36).
+    const bool strictNamed = !wantOutput && m_strictInputDevice
+                             && !m_cfg.deviceName.trimmed().isEmpty();
+    params.device = resolveDevice(m_cfg, wantOutput, format.channels, strictNamed);
     if (params.device == paNoDevice) {
-        m_err = wantOutput
-            ? QStringLiteral("No output device found")
-            : QStringLiteral("No input device found");
+        m_openFailure = OpenFailure::DeviceNotFound;
+        if (strictNamed) {
+            m_err = QStringLiteral("device-not-found: ") + m_cfg.deviceName.trimmed();
+        } else {
+            m_err = wantOutput
+                ? QStringLiteral("No output device found")
+                : QStringLiteral("No input device found");
+        }
         return false;
     }
     di = Pa_GetDeviceInfo(params.device);
     if (di == nullptr) {
+        m_openFailure = OpenFailure::OpenFailed;
         m_err = QStringLiteral("Pa_GetDeviceInfo returned null for resolved device");
         return false;
     }
@@ -356,6 +383,7 @@ bool PortAudioBus::open(const AudioFormat& format) {
         paClipOff, &PortAudioBus::paCallback, this);
 
     if (err != paNoError) {
+        m_openFailure = OpenFailure::OpenFailed;
         m_err = QString::fromUtf8(Pa_GetErrorText(err));
         m_stream = nullptr;
         m_negFormat = {};
@@ -434,6 +462,7 @@ bool PortAudioBus::open(const AudioFormat& format) {
     // Callback-visible state is now fully published; safe to start.
     err = Pa_StartStream(m_stream);
     if (err != paNoError) {
+        m_openFailure = OpenFailure::StartFailed;
         m_err = QString::fromUtf8(Pa_GetErrorText(err));
         Pa_CloseStream(m_stream);
         m_stream = nullptr;
@@ -456,7 +485,15 @@ bool PortAudioBus::open(const AudioFormat& format) {
     } else {
         m_backendName.clear();
     }
+    m_openedDeviceName = (di->name != nullptr) ? QString::fromUtf8(di->name) : QString();
     return true;
+}
+
+int PortAudioBus::openedStreamChannels() const {
+    if (!m_stream) {
+        return 0;
+    }
+    return (m_inputStreamChannels > 0) ? m_inputStreamChannels : m_negFormat.channels;
 }
 
 void PortAudioBus::close() {
@@ -471,6 +508,7 @@ void PortAudioBus::close() {
     m_inputResampler.reset();
     m_resampleScratch.clear();
     m_nativeSampleRate = 0;
+    m_openedDeviceName.clear();
     // Pa_StopStream joins the callback before this reset. Reopening must not
     // inherit queued output, a prior discard floor, or device consumption.
     m_ringRead.store(0, std::memory_order_relaxed);
