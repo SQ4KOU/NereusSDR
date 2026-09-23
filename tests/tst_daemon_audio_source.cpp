@@ -9,8 +9,11 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
+#include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
+#include <optional>
 #include <thread>
 
 using namespace NereusSDR;
@@ -105,6 +108,43 @@ void verifyStereoConstant(const DaemonAudioBlock& block, float left, float right
                                   .arg(right, 0, 'g', 8)));
         }
     }
+}
+
+// Feeds `callbacks` 64-frame DSP periods whose left channel carries the
+// absolute source frame index and whose right channel carries its negation,
+// so any lost, repeated or reordered frame is visible at the exact boundary.
+void feedRamp(AudioEngine* engine, int sliceId, quint64& nextFrame, int callbacks)
+{
+    QVector<float> block(kDspFrames * 2);
+    for (int callback = 0; callback < callbacks; ++callback) {
+        for (int frame = 0; frame < kDspFrames; ++frame) {
+            const float value = static_cast<float>(nextFrame + static_cast<quint64>(frame));
+            block[frame * 2] = value;
+            block[frame * 2 + 1] = -value;
+        }
+        engine->rxBlockReady(sliceId, block.constData(), kDspFrames);
+        nextFrame += kDspFrames;
+    }
+}
+
+// Returns an empty string when `block` is the ramp starting at firstFrame,
+// otherwise a description of the first mismatching frame.
+QString rampMismatch(const DaemonAudioBlock& block, quint64 firstFrame)
+{
+    if (block.pcmInterleaved.size() != DaemonAudioSource::kBlockSamples) {
+        return QStringLiteral("block has %1 samples").arg(block.pcmInterleaved.size());
+    }
+    for (int frame = 0; frame < DaemonAudioSource::kBlockFrames; ++frame) {
+        const float expected = static_cast<float>(firstFrame + static_cast<quint64>(frame));
+        if (block.pcmInterleaved[frame * 2] != expected
+            || block.pcmInterleaved[frame * 2 + 1] != -expected) {
+            return QStringLiteral("ramp break at source frame %1: got (%2, %3)")
+                .arg(firstFrame + static_cast<quint64>(frame))
+                .arg(block.pcmInterleaved[frame * 2], 0, 'f', 1)
+                .arg(block.pcmInterleaved[frame * 2 + 1], 0, 'f', 1);
+        }
+    }
+    return {};
 }
 
 class BlockingTap final : public MasterMixAudioTap {
@@ -228,6 +268,7 @@ private slots:
                  quint64{DaemonAudioSource::kBlockFrames * 2});
         verifyStereoConstant(*followingBlock, 0.25f, -0.50f);
         QCOMPARE(source.dropCount(), std::uint64_t{1});
+        QCOMPARE(source.telemetry().invalidIngressDrops, std::uint64_t{1});
     }
 
     void boundedQueueDropsNewestCompletedBlock()
@@ -277,6 +318,8 @@ private slots:
                  std::uint64_t{DaemonAudioSource::kQueueBlocks + 2}
                      * DaemonAudioSource::kBlockFrames);
         QCOMPARE(active.sourceDropEvents, std::uint64_t{1});
+        QCOMPARE(active.ringFullDrops, std::uint64_t{1});
+        QCOMPARE(active.contentionLosses, std::uint64_t{0});
         source.stop();
         QCOMPARE(source.telemetry().capturedValidRateFrames,
                  active.capturedValidRateFrames);
@@ -284,6 +327,197 @@ private slots:
         source.start();
         QCOMPARE(source.telemetry().capturedValidRateFrames, std::uint64_t{0});
         QCOMPARE(source.telemetry().sourceDropEvents, std::uint64_t{0});
+    }
+
+    void consumerCriticalSectionDoesNotLoseIngress()
+    {
+        Harness harness;
+        DaemonAudioSource source;
+        source.setAudioEngine(harness.engine);
+        source.start();
+        harness.engine->setSliceStreaming(harness.sliceB, false);
+
+        constexpr int kCallbacksPerBlock = DaemonAudioSource::kBlockFrames / kDspFrames;
+        quint64 nextFrame = 0;
+        feedRamp(harness.engine, harness.sliceA, nextFrame, kCallbacksPerBlock);
+
+        // Hold a consumer inside takeBlock()'s locked section while the DSP
+        // thread keeps producing. The producer must never wait, and it must
+        // not lose audio merely because the consumer owned the lock.
+        QSemaphore entered;
+        QSemaphore release;
+        source.setTakeBlockLockedHookForTest([&] {
+            entered.release();
+            release.acquire();
+        });
+        std::optional<DaemonAudioBlock> first;
+        std::thread consumer([&] { first = source.takeBlock(); });
+        QVERIFY2(entered.tryAcquire(1, 1000),
+                 "the consumer did not enter takeBlock's locked section");
+
+        // A whole packet completes during the hold, plus part of the next.
+        feedRamp(harness.engine, harness.sliceA, nextFrame, kCallbacksPerBlock + 10);
+        release.release();
+        consumer.join();
+        // Clear only after the consumer has left the hook it was running.
+        source.setTakeBlockLockedHookForTest({});
+
+        feedRamp(harness.engine, harness.sliceA, nextFrame, kCallbacksPerBlock - 10);
+
+        QVERIFY(first.has_value());
+        QCOMPARE(first->samplePosition, quint64{0});
+        QVERIFY2(rampMismatch(*first, 0).isEmpty(), qPrintable(rampMismatch(*first, 0)));
+        for (quint64 expected : {quint64{DaemonAudioSource::kBlockFrames},
+                                 quint64{DaemonAudioSource::kBlockFrames * 2}}) {
+            const auto block = source.takeBlock();
+            QVERIFY2(block.has_value(), qPrintable(QStringLiteral(
+                "missing block at source frame %1").arg(expected)));
+            QCOMPARE(block->samplePosition, expected);
+            const QString mismatch = rampMismatch(*block, expected);
+            QVERIFY2(mismatch.isEmpty(), qPrintable(mismatch));
+        }
+        QVERIFY(!source.takeBlock().has_value());
+        QCOMPARE(source.dropCount(), std::uint64_t{0});
+        const DaemonAudioSourceTelemetry telemetry = source.telemetry();
+        QVERIFY(telemetry.contentionRetries >= 1);
+        QCOMPARE(telemetry.contentionLosses, std::uint64_t{0});
+        QCOMPARE(telemetry.ringFullDrops, std::uint64_t{0});
+        QCOMPARE(telemetry.invalidIngressDrops, std::uint64_t{0});
+        QCOMPARE(telemetry.sourceDropEvents, std::uint64_t{0});
+    }
+
+    void secondPacketDuringHeldLockIsAContentionLossOnTheGrid()
+    {
+        Harness harness;
+        DaemonAudioSource source;
+        source.setAudioEngine(harness.engine);
+        source.start();
+        harness.engine->setSliceStreaming(harness.sliceB, false);
+
+        constexpr int kCallbacksPerBlock = DaemonAudioSource::kBlockFrames / kDspFrames;
+        quint64 nextFrame = 0;
+        feedRamp(harness.engine, harness.sliceA, nextFrame, kCallbacksPerBlock);
+
+        QSemaphore entered;
+        QSemaphore release;
+        source.setTakeBlockLockedHookForTest([&] {
+            entered.release();
+            release.acquire();
+        });
+        std::optional<DaemonAudioBlock> first;
+        std::thread consumer([&] { first = source.takeBlock(); });
+        QVERIFY2(entered.tryAcquire(1, 1000),
+                 "the consumer did not enter takeBlock's locked section");
+
+        // Two whole packets complete while the consumer holds the lock for
+        // more than 40 ms. The first stays pending; the second is the one
+        // audio loss, and it still consumes its 1,920 grid frames.
+        feedRamp(harness.engine, harness.sliceA, nextFrame, kCallbacksPerBlock * 2);
+        release.release();
+        consumer.join();
+        // Clear only after the consumer has left the hook it was running.
+        source.setTakeBlockLockedHookForTest({});
+        feedRamp(harness.engine, harness.sliceA, nextFrame, kCallbacksPerBlock);
+
+        QVERIFY(first.has_value());
+        QCOMPARE(first->samplePosition, quint64{0});
+        for (quint64 expected : {quint64{DaemonAudioSource::kBlockFrames},
+                                 quint64{DaemonAudioSource::kBlockFrames * 3}}) {
+            const auto block = source.takeBlock();
+            QVERIFY(block.has_value());
+            QCOMPARE(block->samplePosition, expected);
+            const QString mismatch = rampMismatch(*block, expected);
+            QVERIFY2(mismatch.isEmpty(), qPrintable(mismatch));
+        }
+        QVERIFY(!source.takeBlock().has_value());
+        const DaemonAudioSourceTelemetry telemetry = source.telemetry();
+        QCOMPARE(telemetry.contentionLosses, std::uint64_t{1});
+        QCOMPARE(telemetry.ringFullDrops, std::uint64_t{0});
+        QCOMPARE(telemetry.invalidIngressDrops, std::uint64_t{0});
+        QCOMPARE(telemetry.sourceDropEvents, std::uint64_t{1});
+        QCOMPARE(source.dropCount(), std::uint64_t{1});
+    }
+
+    void pacedProducerAgainstTightConsumerLosesNothing()
+    {
+        // Real-time soak: a DSP-cadence producer thread (64 frames every
+        // 1.333 ms, the ANAN-G2 P2 192 kHz period) against a consumer that
+        // polls takeBlock() as fast as it can. Short by default for CI; set
+        // NEREUS_AUDIO_SOURCE_SOAK_MS for a longer run.
+        bool envOk = false;
+        int soakMs = qEnvironmentVariableIntValue("NEREUS_AUDIO_SOURCE_SOAK_MS", &envOk);
+        if (!envOk || soakMs <= 0) {
+            soakMs = 2000;
+        }
+        constexpr int kCallbacksPerBlock = DaemonAudioSource::kBlockFrames / kDspFrames;
+        const auto period = std::chrono::nanoseconds(1'333'333);
+        const int blocks = std::max(
+            1, static_cast<int>(std::chrono::milliseconds(soakMs) / period)
+                   / kCallbacksPerBlock);
+
+        Harness harness;
+        DaemonAudioSource source;
+        source.setAudioEngine(harness.engine);
+        source.start();
+        harness.engine->setSliceStreaming(harness.sliceB, false);
+
+        std::atomic<bool> consumerDone{false};
+        std::thread producer([&] {
+            quint64 nextFrame = 0;
+            auto deadline = std::chrono::steady_clock::now();
+            for (int callback = 0; callback < blocks * kCallbacksPerBlock; ++callback) {
+                std::this_thread::sleep_until(deadline);
+                deadline += period;
+                feedRamp(harness.engine, harness.sliceA, nextFrame, 1);
+            }
+            // A finished packet may still be pending hand-over; it is retried
+            // on the next callback, so keep the DSP cadence going (short of
+            // completing another packet) until the consumer has everything.
+            for (int extra = 0; extra < kCallbacksPerBlock - 1
+                 && !consumerDone.load(std::memory_order_acquire); ++extra) {
+                std::this_thread::sleep_until(deadline);
+                deadline += period;
+                feedRamp(harness.engine, harness.sliceA, nextFrame, 1);
+            }
+        });
+
+        QString failure;
+        int received = 0;
+        const auto giveUp = std::chrono::steady_clock::now()
+            + std::chrono::milliseconds(soakMs) + std::chrono::seconds(5);
+        while (received < blocks && std::chrono::steady_clock::now() < giveUp) {
+            const auto block = source.takeBlock();
+            if (!block.has_value()) {
+                std::this_thread::yield();
+                continue;
+            }
+            const quint64 expected =
+                static_cast<quint64>(received) * DaemonAudioSource::kBlockFrames;
+            if (failure.isEmpty()) {
+                if (block->samplePosition != expected) {
+                    failure = QStringLiteral("block %1 at source frame %2, expected %3")
+                                  .arg(received).arg(block->samplePosition).arg(expected);
+                } else {
+                    failure = rampMismatch(*block, expected);
+                }
+            }
+            ++received;
+        }
+        consumerDone.store(true, std::memory_order_release);
+        producer.join();
+
+        const DaemonAudioSourceTelemetry telemetry = source.telemetry();
+        qInfo("soak %d ms: %d/%d packets, contentionRetries=%llu contentionLosses=%llu "
+              "ringFullDrops=%llu invalidIngressDrops=%llu",
+              soakMs, received, blocks,
+              static_cast<unsigned long long>(telemetry.contentionRetries),
+              static_cast<unsigned long long>(telemetry.contentionLosses),
+              static_cast<unsigned long long>(telemetry.ringFullDrops),
+              static_cast<unsigned long long>(telemetry.invalidIngressDrops));
+        QVERIFY2(failure.isEmpty(), qPrintable(failure));
+        QCOMPARE(received, blocks);
+        QCOMPARE(telemetry.contentionLosses, std::uint64_t{0});
+        QCOMPARE(telemetry.sourceDropEvents, std::uint64_t{0});
     }
 
     void stopAndRestartDiscardOldAndStoppedAudio()

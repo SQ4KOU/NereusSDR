@@ -1864,6 +1864,10 @@ void DaemonMediaController::maybeLogAudioDiagnostics(bool final)
         << " elapsedMs=" << snapshot.elapsedMs
         << " sourceFrames=" << snapshot.sender.source.capturedValidRateFrames
         << " sourceDropEvents=" << snapshot.sender.source.sourceDropEvents
+        << " sourceContentionRetries=" << snapshot.sender.source.contentionRetries
+        << " sourceContentionLosses=" << snapshot.sender.source.contentionLosses
+        << " sourceRingFullDrops=" << snapshot.sender.source.ringFullDrops
+        << " sourceInvalidIngressDrops=" << snapshot.sender.source.invalidIngressDrops
         << " consumed=" << snapshot.sender.consumedBlocks
         << " encoded=" << snapshot.sender.encodedPackets
         << " encodeFailures=" << snapshot.sender.encodeFailures

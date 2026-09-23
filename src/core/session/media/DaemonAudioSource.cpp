@@ -17,64 +17,89 @@ namespace NereusSDR {
 
 class DaemonAudioSource::Bridge final : public MasterMixAudioTap {
 public:
+    // Threading contract. consume() runs on the one DSP thread that drains
+    // MasterMixer (its producers are serialised on that thread), so the
+    // assembly state below is producer-owned and needs no lock. The control
+    // thread touches it only in start() and stop(), which run while
+    // AudioEngine's tap gate keeps consume() out; the gate's seq_cst
+    // admission counter orders those writes against the next callback.
+    // m_mutex guards only the ready ring shared with the consumer, and the
+    // producer only ever try-locks it.
     void start()
     {
         std::lock_guard<std::mutex> lock(m_mutex);
         resetLocked();
-        m_dropCount.store(0, std::memory_order_relaxed);
+        resetProducerState();
+        m_contentionRetries.store(0, std::memory_order_relaxed);
+        m_contentionLosses.store(0, std::memory_order_relaxed);
+        m_ringFullDrops.store(0, std::memory_order_relaxed);
+        m_invalidIngressDrops.store(0, std::memory_order_relaxed);
         m_nextFramePosition.store(0, std::memory_order_relaxed);
-        m_running = true;
+        m_running.store(true, std::memory_order_release);
     }
 
     void stop()
     {
         std::lock_guard<std::mutex> lock(m_mutex);
-        m_running = false;
+        m_running.store(false, std::memory_order_release);
         resetLocked();
+        resetProducerState();
     }
 
     bool isRunning() const noexcept
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
-        return m_running;
+        return m_running.load(std::memory_order_acquire);
     }
 
     std::optional<DaemonAudioBlock> takeBlock()
     {
-        {
-            std::lock_guard<std::mutex> lock(m_mutex);
-            if (!m_running || m_readyCount == 0) {
-                return std::nullopt;
-            }
+        // Lock-free fast path: the sender polls every 10 ms and usually ends
+        // its drain on an empty ring, so an empty or stopped bridge answers
+        // without touching the lock the producer hands packets over with.
+        if (!m_running.load(std::memory_order_acquire)
+            || m_readyCount.load(std::memory_order_acquire) == 0) {
+            return std::nullopt;
         }
 
         DaemonAudioBlock block;
         block.pcmInterleaved.resize(DaemonAudioSource::kBlockSamples);
         {
             // QVector allocation is deliberately outside the shared bridge
-            // mutex. The DSP callback only contends with this fixed-size copy
-            // and ring bookkeeping.
+            // mutex. The critical section is one fixed-size copy plus ring
+            // bookkeeping, and the producer never waits for it: a hand-over
+            // that finds the lock busy stays pending and retries later.
             std::lock_guard<std::mutex> lock(m_mutex);
-            if (!m_running || m_readyCount == 0) {
+#ifdef NEREUS_BUILD_TESTS
+            if (m_takeBlockLockedHookForTest) {
+                m_takeBlockLockedHookForTest();
+            }
+#endif
+            const int readyCount = m_readyCount.load(std::memory_order_relaxed);
+            if (!m_running.load(std::memory_order_relaxed) || readyCount == 0) {
                 return std::nullopt;
             }
             block.samplePosition = m_readyPositions[m_readIndex];
             std::memcpy(block.pcmInterleaved.data(), m_ready[m_readIndex].data(),
                         sizeof(float) * DaemonAudioSource::kBlockSamples);
             m_readIndex = (m_readIndex + 1) % DaemonAudioSource::kQueueBlocks;
-            --m_readyCount;
+            m_readyCount.store(readyCount - 1, std::memory_order_release);
         }
         return block;
     }
 
-    std::uint64_t dropCount() const noexcept
+    DaemonAudioSourceTelemetry telemetry() const noexcept
     {
-        return m_dropCount.load(std::memory_order_relaxed);
-    }
-
-    std::uint64_t capturedValidRateFrames() const noexcept
-    {
-        return m_nextFramePosition.load(std::memory_order_relaxed);
+        DaemonAudioSourceTelemetry snapshot;
+        snapshot.capturedValidRateFrames =
+            m_nextFramePosition.load(std::memory_order_relaxed);
+        snapshot.contentionRetries = m_contentionRetries.load(std::memory_order_relaxed);
+        snapshot.contentionLosses = m_contentionLosses.load(std::memory_order_relaxed);
+        snapshot.ringFullDrops = m_ringFullDrops.load(std::memory_order_relaxed);
+        snapshot.invalidIngressDrops =
+            m_invalidIngressDrops.load(std::memory_order_relaxed);
+        snapshot.sourceDropEvents = snapshot.contentionLosses + snapshot.ringFullDrops
+            + snapshot.invalidIngressDrops;
+        return snapshot;
     }
 
     void dropIngressForTest(int frames) noexcept
@@ -83,55 +108,53 @@ public:
             return;
         }
 
-        // This is the same externally observable state left by a valid
-        // callback that reserved its source position but lost the try-lock.
+        // Models a valid-rate callback whose source frames were reserved but
+        // whose samples never reached the bridge. The next accepted callback
+        // sees the reservation gap and realigns to the packet grid.
         m_nextFramePosition.fetch_add(static_cast<quint64>(frames),
                                       std::memory_order_relaxed);
-        m_dropCount.fetch_add(1, std::memory_order_relaxed);
+        m_invalidIngressDrops.fetch_add(1, std::memory_order_relaxed);
         m_discontinuity.store(true, std::memory_order_release);
     }
 
     void consume(const float* samples, int frames, int sampleRateHz) noexcept override
     {
         if (samples == nullptr || frames <= 0 || sampleRateHz != DaemonAudioSource::kSampleRateHz) {
-            m_dropCount.fetch_add(1, std::memory_order_relaxed);
+            m_invalidIngressDrops.fetch_add(1, std::memory_order_relaxed);
             m_discontinuity.store(true, std::memory_order_release);
             return;
         }
         const quint64 callbackFirstFrame =
             m_nextFramePosition.fetch_add(static_cast<quint64>(frames),
                                           std::memory_order_relaxed);
+        if (!m_running.load(std::memory_order_acquire)) {
+            return;
+        }
 
-        std::unique_lock<std::mutex> lock(m_mutex, std::try_to_lock);
-        if (!lock.owns_lock()) {
-            // Do not wait for the consumer. The next accepted callback drops
-            // a partial block so it cannot join samples across this gap.
-            m_dropCount.fetch_add(1, std::memory_order_relaxed);
-            m_discontinuity.store(true, std::memory_order_release);
-            return;
+        // A packet the consumer's critical section kept us from handing
+        // over last time gets one more non-blocking attempt per callback.
+        if (m_pendingValid) {
+            tryHandOverPending();
         }
-        if (!m_running) {
-            return;
-        }
+
         const bool hadDiscontinuity =
             m_discontinuity.exchange(false, std::memory_order_acq_rel);
-        // Multiple producers are not assumed to arrive in reservation order.
-        // An older callback that wins the mutex after a newer one would make
-        // packet contents run backward in time, so reject it and let the next
-        // accepted ingress establish a clean block boundary.
+        // Defensive: reservations are made in callback order on the single
+        // producer thread, so an older reservation cannot follow a newer one.
+        // Should that contract ever break, reject the callback rather than
+        // let packet contents run backward in time.
         if (callbackFirstFrame < m_lastAcceptedEndFrame) {
-            discardPartialAndRealignLocked(m_lastAcceptedEndFrame);
-            m_dropCount.fetch_add(1, std::memory_order_relaxed);
+            discardPartialAndRealign(m_lastAcceptedEndFrame);
+            m_invalidIngressDrops.fetch_add(1, std::memory_order_relaxed);
             return;
         }
         if (hadDiscontinuity || callbackFirstFrame > m_lastAcceptedEndFrame) {
-            // A valid-rate callback reserved earlier may have lost the
-            // try-lock before it could publish the discontinuity flag. Do
-            // not append this later reservation to the old partial block.
-            // Discard through the next original 40 ms boundary so the next
-            // emitted RTP packet can represent the loss as an integral packet
-            // gap rather than an unaligned timestamp step.
-            discardPartialAndRealignLocked(callbackFirstFrame);
+            // Reserved source frames never reached the bridge. Do not join
+            // this later reservation to the old partial block. Discard
+            // through the next original 40 ms boundary so the next emitted
+            // RTP packet represents the loss as an integral packet gap
+            // rather than an unaligned timestamp step.
+            discardPartialAndRealign(callbackFirstFrame);
         }
         m_lastAcceptedEndFrame = callbackFirstFrame + static_cast<quint64>(frames);
 
@@ -153,7 +176,7 @@ public:
                 - (m_fillSamples / DaemonAudioSource::kChannels);
             const int copyFrames = std::min(freeFrames, frames - consumedFrames);
             const int copySamples = copyFrames * DaemonAudioSource::kChannels;
-            std::memcpy(m_assembling.data() + m_fillSamples,
+            std::memcpy(m_assembly[m_assemblingSlot].data() + m_fillSamples,
                         samples + static_cast<size_t>(consumedFrames)
                             * DaemonAudioSource::kChannels,
                         static_cast<size_t>(copySamples) * sizeof(float));
@@ -161,22 +184,15 @@ public:
             consumedFrames += copyFrames;
 
             if (m_fillSamples == DaemonAudioSource::kBlockSamples) {
-                if (m_readyCount == DaemonAudioSource::kQueueBlocks) {
-                    // Drop the newest completed block. Keeping queued blocks
-                    // gives the consumer a continuous prefix and avoids any
-                    // producer-side allocation or blocking.
-                    m_dropCount.fetch_add(1, std::memory_order_relaxed);
-                } else {
-                    std::memcpy(m_ready[m_writeIndex].data(), m_assembling.data(),
-                                sizeof(float) * DaemonAudioSource::kBlockSamples);
-                    m_readyPositions[m_writeIndex] = m_assemblingFirstFrame;
-                    m_writeIndex = (m_writeIndex + 1) % DaemonAudioSource::kQueueBlocks;
-                    ++m_readyCount;
-                }
+                completeAssembledPacket();
                 m_fillSamples = 0;
             }
         }
     }
+
+#ifdef NEREUS_BUILD_TESTS
+    std::function<void()> m_takeBlockLockedHookForTest;
+#endif
 
 private:
     static quint64 nextBlockBoundary(quint64 frame) noexcept
@@ -187,7 +203,68 @@ private:
             : frame + (DaemonAudioSource::kBlockFrames - remainder);
     }
 
-    void discardPartialAndRealignLocked(quint64 firstAvailableFrame) noexcept
+    // Producer thread only. The just-filled assembly slot holds one whole
+    // packet at m_assemblingFirstFrame.
+    void completeAssembledPacket() noexcept
+    {
+        std::unique_lock<std::mutex> lock(m_mutex, std::try_to_lock);
+        if (!lock.owns_lock()) {
+            m_contentionRetries.fetch_add(1, std::memory_order_relaxed);
+            if (m_pendingValid) {
+                // A second packet completed while the first still waits for
+                // the lock (the consumer held it for a whole 40 ms). Drop
+                // the newest, as the full-ring rule does, so the pending
+                // packet and the queued ones stay a continuous prefix. The
+                // dropped packet's frames stay reserved, so the next packet
+                // keeps its true grid position and RTP shows the gap.
+                m_contentionLosses.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+            // Keep the finished packet where it is and assemble the next
+            // one into the other slot. No copy, no wait.
+            m_pendingValid = true;
+            m_pendingSlot = m_assemblingSlot;
+            m_pendingFirstFrame = m_assemblingFirstFrame;
+            m_assemblingSlot = 1 - m_assemblingSlot;
+            return;
+        }
+        if (m_pendingValid) {
+            pushLocked(m_pendingSlot, m_pendingFirstFrame);
+            m_pendingValid = false;
+        }
+        pushLocked(m_assemblingSlot, m_assemblingFirstFrame);
+    }
+
+    // Producer thread only.
+    void tryHandOverPending() noexcept
+    {
+        std::unique_lock<std::mutex> lock(m_mutex, std::try_to_lock);
+        if (!lock.owns_lock()) {
+            m_contentionRetries.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+        pushLocked(m_pendingSlot, m_pendingFirstFrame);
+        m_pendingValid = false;
+    }
+
+    void pushLocked(int slot, quint64 firstFrame) noexcept
+    {
+        const int readyCount = m_readyCount.load(std::memory_order_relaxed);
+        if (readyCount == DaemonAudioSource::kQueueBlocks) {
+            // Drop the newest completed block. Keeping queued blocks gives
+            // the consumer a continuous prefix and avoids any producer-side
+            // allocation or blocking.
+            m_ringFullDrops.fetch_add(1, std::memory_order_relaxed);
+            return;
+        }
+        std::memcpy(m_ready[m_writeIndex].data(), m_assembly[slot].data(),
+                    sizeof(float) * DaemonAudioSource::kBlockSamples);
+        m_readyPositions[m_writeIndex] = firstFrame;
+        m_writeIndex = (m_writeIndex + 1) % DaemonAudioSource::kQueueBlocks;
+        m_readyCount.store(readyCount + 1, std::memory_order_release);
+    }
+
+    void discardPartialAndRealign(quint64 firstAvailableFrame) noexcept
     {
         m_fillSamples = 0;
         m_discardBeforeFrame = nextBlockBoundary(firstAvailableFrame);
@@ -195,31 +272,53 @@ private:
 
     void resetLocked()
     {
-        m_fillSamples = 0;
         m_readIndex = 0;
         m_writeIndex = 0;
-        m_readyCount = 0;
+        m_readyCount.store(0, std::memory_order_release);
+    }
+
+    // Control thread, only while the engine's tap gate excludes consume().
+    void resetProducerState() noexcept
+    {
+        m_fillSamples = 0;
+        m_assemblingSlot = 0;
+        m_pendingValid = false;
+        m_pendingSlot = 0;
+        m_pendingFirstFrame = 0;
         m_assemblingFirstFrame = 0;
         m_lastAcceptedEndFrame = 0;
         m_discardBeforeFrame = 0;
         m_discontinuity.store(false, std::memory_order_release);
     }
 
+    // Shared with the consumer; guarded by m_mutex. m_readyCount is also
+    // read without the lock by takeBlock()'s empty-ring fast path.
     mutable std::mutex m_mutex;
-    std::array<float, DaemonAudioSource::kBlockSamples> m_assembling{};
     std::array<std::array<float, DaemonAudioSource::kBlockSamples>,
                DaemonAudioSource::kQueueBlocks> m_ready{};
     std::array<quint64, DaemonAudioSource::kQueueBlocks> m_readyPositions{};
-    int m_fillSamples = 0;
     int m_readIndex = 0;
     int m_writeIndex = 0;
-    int m_readyCount = 0;
+    std::atomic<int> m_readyCount{0};
+
+    // Producer-owned assembly: two packet slots, one being filled and one
+    // that may hold a finished packet awaiting hand-over.
+    std::array<std::array<float, DaemonAudioSource::kBlockSamples>, 2> m_assembly{};
+    int m_assemblingSlot = 0;
+    int m_fillSamples = 0;
+    bool m_pendingValid = false;
+    int m_pendingSlot = 0;
+    quint64 m_pendingFirstFrame = 0;
     quint64 m_assemblingFirstFrame = 0;
     quint64 m_lastAcceptedEndFrame = 0;
     quint64 m_discardBeforeFrame = 0;
-    bool m_running = false;
+
+    std::atomic<bool> m_running{false};
     std::atomic<bool> m_discontinuity{false};
-    std::atomic<std::uint64_t> m_dropCount{0};
+    std::atomic<std::uint64_t> m_contentionRetries{0};
+    std::atomic<std::uint64_t> m_contentionLosses{0};
+    std::atomic<std::uint64_t> m_ringFullDrops{0};
+    std::atomic<std::uint64_t> m_invalidIngressDrops{0};
     std::atomic<quint64> m_nextFramePosition{0};
 };
 
@@ -285,17 +384,24 @@ std::optional<DaemonAudioBlock> DaemonAudioSource::takeBlock()
 
 std::uint64_t DaemonAudioSource::dropCount() const noexcept
 {
-    return m_bridge->dropCount();
+    return m_bridge->telemetry().sourceDropEvents;
 }
 
 DaemonAudioSourceTelemetry DaemonAudioSource::telemetry() const noexcept
 {
-    return {m_bridge->capturedValidRateFrames(), m_bridge->dropCount()};
+    return m_bridge->telemetry();
 }
 
 void DaemonAudioSource::dropIngressForTest(int frames) noexcept
 {
     m_bridge->dropIngressForTest(frames);
 }
+
+#ifdef NEREUS_BUILD_TESTS
+void DaemonAudioSource::setTakeBlockLockedHookForTest(std::function<void()> hook)
+{
+    m_bridge->m_takeBlockLockedHookForTest = std::move(hook);
+}
+#endif
 
 } // namespace NereusSDR

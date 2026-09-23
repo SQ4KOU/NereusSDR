@@ -13,6 +13,7 @@
 #include <QVector>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -32,11 +33,24 @@ struct DaemonAudioBlock {
 };
 
 /// Snapshot of capture-bridge activity for one source lifetime.  Frames count
-/// valid-rate master-mix ingress; drop events combine rejected ingress and
-/// bounded completed-block drops, so they are deliberately not packet loss.
+/// valid-rate master-mix ingress.  sourceDropEvents is the sum of the three
+/// loss counters (contentionLosses + ringFullDrops + invalidIngressDrops);
+/// contentionRetries records deferred hand-overs that lost no audio.  Drop
+/// events are bridge events, deliberately not a packet-loss percentage.
 struct DaemonAudioSourceTelemetry {
     std::uint64_t capturedValidRateFrames = 0;
     std::uint64_t sourceDropEvents = 0;
+    // Failed non-blocking hand-over attempts of a finished packet because the
+    // consumer held the bridge lock. Each one is retried; no audio is lost.
+    std::uint64_t contentionRetries = 0;
+    // Finished packets lost because the previous one was still waiting for
+    // the lock when this one completed.
+    std::uint64_t contentionLosses = 0;
+    // Finished packets dropped because the bounded ready ring was full.
+    std::uint64_t ringFullDrops = 0;
+    // Rejected ingress callbacks (null, empty or wrong-rate), plus the
+    // injected ingress loss of dropIngressForTest().
+    std::uint64_t invalidIngressDrops = 0;
 };
 
 class DaemonAudioSource final : public QObject {
@@ -70,19 +84,27 @@ public:
     // empty.
     std::optional<DaemonAudioBlock> takeBlock();
 
-    // Counts rejected ingress events and completed blocks discarded because
-    // the fixed ring was full. It is diagnostic only; audio loss is expected
-    // under overload and never causes the DSP callback to wait.
+    // Total audio-loss events: rejected ingress, packets lost to lock
+    // contention and completed blocks discarded because the fixed ring was
+    // full (telemetry().sourceDropEvents). It is diagnostic only; audio loss
+    // is expected under overload and never causes the DSP callback to wait.
     std::uint64_t dropCount() const noexcept;
 
     /// Read-only capture diagnostics. Values survive stop() and reset only on
     /// the next successful start(). Safe for the control thread to sample.
     DaemonAudioSourceTelemetry telemetry() const noexcept;
 
-    // Test seam: models a valid master-mix callback rejected by the
-    // nonblocking bridge after its source frames have been reserved. It does
-    // not inject samples and is used to verify packet-grid recovery.
+    // Test seam: models a valid master-mix callback whose source frames were
+    // reserved but whose samples never reached the bridge. It does not
+    // inject samples and is used to verify packet-grid recovery. Counted as
+    // an invalid-ingress drop.
     void dropIngressForTest(int frames) noexcept;
+
+#ifdef NEREUS_BUILD_TESTS
+    // Deterministic race seam: runs on the consumer thread inside
+    // takeBlock() while it holds the bridge lock, before the ring is read.
+    void setTakeBlockLockedHookForTest(std::function<void()> hook);
+#endif
 
 private:
     class Bridge;
