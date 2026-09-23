@@ -225,7 +225,15 @@ bool DisplayBudgetPacer::beginSession(quint64 epoch, DisplayBudgetLimits limits,
                      kMaximumDisplayMessageBytes};
     m_spectrumBytes = {kMaximumSpectrumDisplayFrameBytes, 0, 0,
                        kMaximumSpectrumDisplayFrameBytes};
-    m_ps3Bytes = {kMaximumPs3DisplayChunkBytes, 0, 0, kMaximumPs3DisplayChunkBytes};
+    // R-R3-08/37: PureSignal's burst is one whole snapshot, not one chunk.
+    // Its bucket refills at exactly its charge (one worst-case snapshot per
+    // 100 ms poll), so with room for one chunk it filled while a chunk
+    // waited for the sender and lost that credit: about one snapshot in
+    // twenty was overtaken by the next before it went out. One snapshot of
+    // room lets each go whole; the charge still bounds the rate.
+    const quint64 ps3FrameBytes = ps3DisplayCharge().applicationBytesPerSecond
+        * static_cast<quint64>(kPs3DisplayPollIntervalNs) / kNanosecondsPerSecond;
+    m_ps3Bytes = {ps3FrameBytes, 0, 0, ps3FrameBytes};
     m_spectrumSamples = {kMaximumSpectrumDisplayFrameSampleUnits, 0, 0,
                          kMaximumSpectrumDisplayFrameSampleUnits};
     return true;

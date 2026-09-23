@@ -574,6 +574,7 @@ private slots:
     void runtimeCapDecreaseAllowsOnlyComponentwiseReductions();
     void coreBusyLowersThenRestoresTheBudget();
     void eightWidePansAtTheCeilingGetTheirPlannedFrameRates();
+    void pureSignalKeepsItsDisplayShareWhileSpectrumIsContended();
     void failedDisplayAttemptDebitsCreditAndRecoversWithKeyframe();
     void exhaustedDisplayCreditDoesNotBlockAudioRtp();
     void mediaPeerReplacementDoesNotMintDisplayCredit();
@@ -995,130 +996,168 @@ void TstDaemonMediaController::coreBusyLowersThenRestoresTheBudget()
     harness.finish();
 }
 
+namespace {
+
+// One deterministic run of eight wide pans at 4096 px asking for 60 fps on
+// one source (see eightWidePansAtTheCeilingGetTheirPlannedFrameRates).
+struct EightPanRun {
+    static constexpr int kPans = 8;
+    static constexpr int kPixels = 4096;
+    static constexpr int kFps = 60;
+    static constexpr qint64 kMeasureNs = 10'000'000'000;
+    QList<int> fps;       // what each endpoint subscribed at (0: paused)
+    QList<int> received;  // spectrum frames sent in the measured window
+    int total = 0;        // every spectrum frame in the window
+    int ps3Messages = 0;  // PureSignal display chunks in the window
+    int admitted = 0;
+
+    double seconds() const { return double(kMeasureNs) / 1e9; }
+    QString line() const
+    {
+        QStringList parts;
+        for (int pan = 0; pan < received.size(); ++pan) {
+            parts.append(QStringLiteral("%1/%2").arg(received.at(pan) / seconds(), 0, 'f', 1)
+                             .arg(fps.at(pan)));
+        }
+        return QStringLiteral("%1 admitted, spectrum %2 fps, PureSignal %3 chunks/s; "
+                              "received/subscribed per pan: %4")
+            .arg(admitted).arg(total / seconds(), 0, 'f', 1)
+            .arg(ps3Messages / seconds(), 0, 'f', 1).arg(parts.join(QStringLiteral(", ")));
+    }
+};
+
+// Budget mode subscribes what the app plans under the computed ceiling
+// (RemoteDisplayAllocator, with PureSignal's share when it is on), legacy
+// mode what the pans ask for. The test drives the source's 60 fps frames,
+// PureSignal's 100 ms snapshots and the 5 ms sender ticks on one simulated
+// clock, so nothing follows the computer's load.
+void runEightWidePans(bool budget, bool pureSignal, EightPanRun& result)
+{
+    constexpr int kPans = EightPanRun::kPans;
+    constexpr qint64 kStartNs = 1'000'000'000;
+    constexpr qint64 kWarmupNs = 1'000'000'000;
+    constexpr qint64 kSourceFps = 60;
+    const DisplayBudgetLimits ceiling = DisplayLoadGovernor::computedCeiling();
+    Harness h(budget ? std::optional<DisplayBudgetLimits>(ceiling) : std::nullopt);
+    h.useManualDisplayTicks();
+    h.establishSession();
+    h.startReadyPeer();
+    QList<RemoteDisplayIntent> intents;
+    for (int pan = 0; pan < kPans; ++pan) {
+        intents.append({QStringLiteral("pan-%1").arg(pan), EightPanRun::kPixels,
+                        EightPanRun::kFps, true, 20, pan == 0});
+    }
+    QList<int> pixels(kPans, EightPanRun::kPixels);
+    QList<int> framesPerLine(kPans, 1);
+    result.fps = QList<int>(kPans, EightPanRun::kFps);
+    if (budget) {
+        QString error;
+        const auto allocation = allocateRemoteDisplay(ceiling, intents, pureSignal, &error);
+        QVERIFY2(allocation.has_value(), qPrintable(error));
+        for (const RemoteDisplayQuality& quality : allocation->pans) {
+            const int pan = quality.panId.mid(4).toInt();
+            result.fps[pan] = quality.suspended ? 0 : quality.fps;
+            pixels[pan] = quality.pixels;
+            framesPerLine[pan] = quality.framesPerLine;
+        }
+    }
+    PureSignalSessionFacade* const facade = h.radio.pureSignalFacade();
+    if (pureSignal) {
+        facade->setRemoteAmpViewSubscribed(true);
+    }
+    const double centre = h.radio.streamCentreHz(h.streamIndex);
+    for (int pan = 0; pan < kPans; ++pan) {
+        if (result.fps.at(pan) == 0) { continue; }
+        QJsonObject request = subscription(quint32(pan + 1), 1, h.sliceId, centre,
+                                           EightPanRun::kPixels);
+        request.insert(QStringLiteral("pixels"), pixels.at(pan));
+        request.insert(QStringLiteral("fps"), result.fps.at(pan));
+        request.insert(QStringLiteral("spanHz"), 192000.0);
+        request.insert(QStringLiteral("wideSpanFactor"), 2.0);
+        request.insert(QStringLiteral("framesPerLine"), framesPerLine.at(pan));
+        QVERIFY(h.client.sendMediaControl(request, h.client.sessionEpoch()));
+    }
+    const int admitted = int(std::count_if(result.fps.cbegin(), result.fps.cend(),
+                                           [](int fps) { return fps > 0; }));
+    QTRY_COMPARE_WITH_TIMEOUT(h.controller.activeEndpointCount(), admitted, 10'000);
+    result.admitted = h.controller.activeEndpointCount();
+    auto* source = h.controller.findChild<DaemonSpectrumSource*>();
+    QVERIFY(source);
+    const QList<MediaSourceKey> keys = source->activeSources();
+    QCOMPARE(keys.size(), 1);
+    const MediaSourceKey key = keys.constFirst();
+    // The engine takes its configuration on its own thread; after that
+    // every frame comes from here, never from I/Q (none is fed).
+    h.nowNs = kStartNs;
+    QTRY_VERIFY_WITH_TIMEOUT(source->publishFrameForTest(key, kStartNs), 10'000);
+
+    // Source frame k at kStartNs + k / 60 s, PureSignal snapshot n at
+    // kStartNs + n x 100 ms, sender tick j at kStartNs + j x 5 ms. Events at
+    // the same instant: the frame, then the snapshot, then the tick.
+    const qint64 endNs = kStartNs + kWarmupNs + EightPanRun::kMeasureNs;
+    const quint64 generation = facade->displayGeneration();
+    qint64 frame = 1;
+    qint64 snapshot = 0;
+    qint64 tick = 1;
+    qsizetype first = -1;
+    for (;;) {
+        const qint64 frameNs = kStartNs + frame * 1'000'000'000 / kSourceFps;
+        const qint64 snapshotNs = pureSignal ? kStartNs + snapshot * kPs3DisplayPollIntervalNs
+                                             : std::numeric_limits<qint64>::max();
+        const qint64 tickNs = kStartNs + tick * kDisplaySenderIntervalNs;
+        const qint64 nowNs = std::min({frameNs, snapshotNs, tickNs});
+        if (nowNs >= endNs) { break; }
+        if (first < 0 && nowNs >= kStartNs + kWarmupNs) {
+            first = h.mediaTransport->displays.size();
+        }
+        h.nowNs = nowNs;
+        if (frameNs == nowNs) {
+            QVERIFY(source->publishFrameForTest(key, frameNs));
+            ++frame;
+        } else if (snapshotNs == nowNs) {
+            facade->displaySnapshotReady(maximumPs3Snapshot(generation, quint64(snapshot + 1)));
+            ++snapshot;
+        } else {
+            h.sendDisplayTick();
+            ++tick;
+        }
+    }
+    result.received = QList<int>(kPans, 0);
+    for (qsizetype i = first; i < h.mediaTransport->displays.size(); ++i) {
+        const QByteArray& bytes = h.mediaTransport->displays.at(i);
+        if (bytes.startsWith(QByteArrayLiteral("PS3D"))) {
+            ++result.ps3Messages;
+            continue;
+        }
+        if (bytes.size() < 12) { continue; }
+        const quint32 endpoint = qFromBigEndian<quint32>(bytes.constData() + 8);
+        if (endpoint >= 1 && endpoint <= quint32(kPans)) { ++result.received[int(endpoint - 1)]; }
+    }
+    for (int count : std::as_const(result.received)) { result.total += count; }
+    h.finish();
+}
+
+} // namespace
+
 // R-R3-08, R-R3-37: at the computed ceiling, eight pans at 4096 px, 60 fps
 // with the wide plane get what the app plans for them. The app plans exactly
 // the sender's 200 messages a second (the active pan at 60, the other seven
 // at 20), so the sender must send each endpoint before the frame it holds
 // stops being worth sending: earliest deadline first, the active pan first
-// on a tie. Deterministic: the test drives the source's 60 fps frames and
-// the 5 ms sender ticks on one simulated clock, so the numbers do not follow
-// the computer's load. Legacy mode (no budget) is measured alongside.
+// on a tie. Deterministic (runEightWidePans). Legacy mode (no budget) is
+// measured alongside and keeps its even share.
 void TstDaemonMediaController::eightWidePansAtTheCeilingGetTheirPlannedFrameRates()
 {
-    constexpr int kPans = 8;
-    constexpr int kPixels = 4096;
-    constexpr int kFps = 60;
-    constexpr qint64 kStartNs = 1'000'000'000;
-    constexpr qint64 kWarmupNs = 1'000'000'000;
-    constexpr qint64 kMeasureNs = 10'000'000'000;
-    constexpr qint64 kSourceFps = 60;
-    struct Run {
-        QList<int> fps;       // what each endpoint subscribed at (0: paused)
-        QList<int> received;  // frames sent in the measured window
-        int total = 0;
-        int admitted = 0;
-    };
-    const DisplayBudgetLimits ceiling = DisplayLoadGovernor::computedCeiling();
-    const auto run = [&](bool budget, Run& result) {
-        Harness h(budget ? std::optional<DisplayBudgetLimits>(ceiling) : std::nullopt);
-        h.useManualDisplayTicks();
-        h.establishSession();
-        h.startReadyPeer();
-        QList<RemoteDisplayIntent> intents;
-        for (int pan = 0; pan < kPans; ++pan) {
-            intents.append({QStringLiteral("pan-%1").arg(pan), kPixels, kFps, true, 20, pan == 0});
-        }
-        QList<int> pixels(kPans, kPixels);
-        QList<int> framesPerLine(kPans, 1);
-        result.fps = QList<int>(kPans, kFps);
-        if (budget) {
-            QString error;
-            const auto allocation = allocateRemoteDisplay(ceiling, intents, false, &error);
-            QVERIFY2(allocation.has_value(), qPrintable(error));
-            for (const RemoteDisplayQuality& quality : allocation->pans) {
-                const int pan = quality.panId.mid(4).toInt();
-                result.fps[pan] = quality.suspended ? 0 : quality.fps;
-                pixels[pan] = quality.pixels;
-                framesPerLine[pan] = quality.framesPerLine;
-            }
-        }
-        const double centre = h.radio.streamCentreHz(h.streamIndex);
-        for (int pan = 0; pan < kPans; ++pan) {
-            if (result.fps.at(pan) == 0) { continue; }
-            QJsonObject request = subscription(quint32(pan + 1), 1, h.sliceId, centre, kPixels);
-            request.insert(QStringLiteral("pixels"), pixels.at(pan));
-            request.insert(QStringLiteral("fps"), result.fps.at(pan));
-            request.insert(QStringLiteral("spanHz"), 192000.0);
-            request.insert(QStringLiteral("wideSpanFactor"), 2.0);
-            request.insert(QStringLiteral("framesPerLine"), framesPerLine.at(pan));
-            QVERIFY(h.client.sendMediaControl(request, h.client.sessionEpoch()));
-        }
-        const int admitted = int(std::count_if(result.fps.cbegin(), result.fps.cend(),
-                                               [](int fps) { return fps > 0; }));
-        QTRY_COMPARE_WITH_TIMEOUT(h.controller.activeEndpointCount(), admitted, 10'000);
-        result.admitted = h.controller.activeEndpointCount();
-        auto* source = h.controller.findChild<DaemonSpectrumSource*>();
-        QVERIFY(source);
-        const QList<MediaSourceKey> keys = source->activeSources();
-        QCOMPARE(keys.size(), 1);
-        const MediaSourceKey key = keys.constFirst();
-        // The engine takes its configuration on its own thread; after that
-        // every frame comes from this test, never from I/Q (none is fed).
-        h.nowNs = kStartNs;
-        QTRY_VERIFY_WITH_TIMEOUT(source->publishFrameForTest(key, kStartNs), 10'000);
-
-        // One clock for the source and the sender: frame k at
-        // kStartNs + k / 60 s, sender tick j at kStartNs + j x 5 ms. A frame
-        // due at the same instant as a tick arrives first.
-        const qint64 endNs = kStartNs + kWarmupNs + kMeasureNs;
-        qint64 frame = 1;
-        qint64 tick = 1;
-        qsizetype first = -1;
-        for (;;) {
-            const qint64 frameNs = kStartNs + frame * 1'000'000'000 / kSourceFps;
-            const qint64 tickNs = kStartNs + tick * kDisplaySenderIntervalNs;
-            const qint64 nowNs = std::min(frameNs, tickNs);
-            if (nowNs >= endNs) { break; }
-            if (first < 0 && nowNs >= kStartNs + kWarmupNs) {
-                first = h.mediaTransport->displays.size();
-            }
-            h.nowNs = nowNs;
-            if (frameNs <= tickNs) {
-                QVERIFY(source->publishFrameForTest(key, frameNs));
-                ++frame;
-            } else {
-                h.sendDisplayTick();
-                ++tick;
-            }
-        }
-        result.received = QList<int>(kPans, 0);
-        for (qsizetype i = first; i < h.mediaTransport->displays.size(); ++i) {
-            const QByteArray& bytes = h.mediaTransport->displays.at(i);
-            if (bytes.size() < 12) { continue; }
-            const quint32 endpoint = qFromBigEndian<quint32>(bytes.constData() + 8);
-            if (endpoint >= 1 && endpoint <= quint32(kPans)) { ++result.received[int(endpoint - 1)]; }
-        }
-        for (int count : std::as_const(result.received)) { result.total += count; }
-        h.finish();
-    };
-    Run legacy;
-    run(false, legacy);
+    constexpr int kPans = EightPanRun::kPans;
+    EightPanRun legacy;
+    runEightWidePans(false, false, legacy);
     if (QTest::currentTestFailed()) { return; }
-    Run budget;
-    run(true, budget);
+    EightPanRun budget;
+    runEightWidePans(true, false, budget);
     if (QTest::currentTestFailed()) { return; }
-    const double seconds = double(kMeasureNs) / 1e9;
-    const auto line = [seconds](const Run& r) {
-        QStringList parts;
-        for (int pan = 0; pan < r.received.size(); ++pan) {
-            parts.append(QStringLiteral("%1/%2").arg(r.received.at(pan) / seconds, 0, 'f', 1)
-                             .arg(r.fps.at(pan)));
-        }
-        return QStringLiteral("%1 admitted, total %2 fps; received/subscribed per pan: %3")
-            .arg(r.admitted).arg(r.total / seconds, 0, 'f', 1).arg(parts.join(QStringLiteral(", ")));
-    };
-    qInfo().noquote() << "legacy:" << line(legacy);
-    qInfo().noquote() << "ceiling:" << line(budget);
+    const double seconds = budget.seconds();
+    qInfo().noquote() << "legacy:" << legacy.line();
+    qInfo().noquote() << "ceiling:" << budget.line();
     QCOMPARE(legacy.admitted, kPans);
     QCOMPARE(budget.admitted, kPans);
     // Legacy mode asks for 480 frames a second: the sender stays full and
@@ -1126,21 +1165,51 @@ void TstDaemonMediaController::eightWidePansAtTheCeilingGetTheirPlannedFrameRate
     for (int pan = 0; pan < kPans; ++pan) {
         QVERIFY2(legacy.received.at(pan)
                      >= int(kDisplaySenderMessagesPerSecond / kPans * seconds) - 1,
-                 qPrintable(line(legacy)));
+                 qPrintable(legacy.line()));
     }
     // The app plans the active pan (pan-0) at the full 60 fps.
-    QCOMPARE(budget.fps.at(0), kFps);
+    QCOMPARE(budget.fps.at(0), EightPanRun::kFps);
     // The active pan receives its planned rate: every one of its frames in
-    // the window, allowing one at the window's edge.
-    QVERIFY2(budget.received.at(0) >= int(kFps * seconds) - 1, qPrintable(line(budget)));
-    // Each background pan receives its planned rate the same way.
-    for (int pan = 1; pan < kPans; ++pan) {
+    // the window, allowing one at the window's edge. Each background pan
+    // receives its planned rate the same way.
+    for (int pan = 0; pan < kPans; ++pan) {
         QVERIFY2(budget.received.at(pan) >= int(budget.fps.at(pan) * seconds) - 1,
-                 qPrintable(line(budget)));
+                 qPrintable(budget.line()));
     }
     // At least 195 of the sender's 200 messages a second.
-    QVERIFY2(budget.total >= int(195 * seconds), qPrintable(line(budget)));
+    QVERIFY2(budget.total >= int(195 * seconds), qPrintable(budget.line()));
     QVERIFY(budget.total <= int(kDisplaySenderMessagesPerSecond * seconds));
+}
+
+// R-R3-08, R-R3-37: PureSignal's display keeps its share while spectrum
+// fills the sender. The same eight pans, with the AmpView open: the app
+// plans spectrum beside PureSignal's reserved share, and every 100 ms
+// snapshot still goes out whole while the active pan keeps its 60 fps.
+void TstDaemonMediaController::pureSignalKeepsItsDisplayShareWhileSpectrumIsContended()
+{
+    constexpr int kPans = EightPanRun::kPans;
+    EightPanRun run;
+    runEightWidePans(true, true, run);
+    if (QTest::currentTestFailed()) { return; }
+    qInfo().noquote() << "ceiling with PureSignal:" << run.line();
+    const double seconds = run.seconds();
+    QCOMPARE(run.admitted, kPans);
+    // Spectrum wants more than the sender has left beside PureSignal.
+    const int asked = kPans * EightPanRun::kFps;
+    QVERIFY(asked + int(ps3DisplayCharge().messagesPerSecond)
+            > int(kDisplaySenderMessagesPerSecond));
+    // PureSignal: every chunk of every snapshot in the window, allowing one
+    // snapshot at the window's edge.
+    const int ps3PerSecond = int(ps3DisplayCharge().messagesPerSecond);
+    const int chunksPerSnapshot = ps3PerSecond * int(kPs3DisplayPollIntervalMs) / 1000;
+    QVERIFY2(run.ps3Messages >= int(ps3PerSecond * seconds) - chunksPerSnapshot,
+             qPrintable(run.line()));
+    // Spectrum still gets what the app planned beside it.
+    QCOMPARE(run.fps.at(0), EightPanRun::kFps);
+    for (int pan = 0; pan < kPans; ++pan) {
+        QVERIFY2(run.received.at(pan) >= int(run.fps.at(pan) * seconds) - 1,
+                 qPrintable(run.line()));
+    }
 }
 
 void TstDaemonMediaController::failedDisplayAttemptDebitsCreditAndRecoversWithKeyframe()

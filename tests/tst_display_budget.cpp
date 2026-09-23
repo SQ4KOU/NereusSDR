@@ -471,15 +471,49 @@ private slots:
         QVERIFY(!pacer.canSpendSpectrum(1, 1, 1'000'000'000));
     }
 
+    // R-R3-08/37: PureSignal's own bucket holds one whole worst-case
+    // snapshot, so its chunks go out on consecutive sender ticks; one chunk
+    // of room lost credit each poll and dropped about one snapshot in
+    // twenty. A roomy global budget keeps the global bucket out of the way.
+    void ps3BurstIsOneWholeSnapshot()
+    {
+        const DisplayBudgetCharge ps3 = ps3DisplayCharge();
+        const quint64 snapshotBytes = ps3.applicationBytesPerSecond
+            / (1'000 / kPs3DisplayPollIntervalMs);
+        QVERIFY(snapshotBytes > 2 * quint64{kMaximumPs3DisplayChunkBytes});
+        const DisplayBudgetLimits roomy = limits(100 * ps3.applicationBytesPerSecond, 1);
+        DisplayBudgetPacer pacer;
+        QVERIFY(pacer.beginSession(14, roomy, 0));
+        QVERIFY(pacer.update(roomy, {}, true, 0));
+        // Three chunks on three 5 ms ticks: the whole snapshot.
+        QVERIFY(pacer.spendPs3(kMaximumPs3DisplayChunkBytes, 0));
+        QVERIFY(pacer.spendPs3(kMaximumPs3DisplayChunkBytes, 5'000'000));
+        QVERIFY(pacer.spendPs3(snapshotBytes - 2 * quint64{kMaximumPs3DisplayChunkBytes},
+                               10'000'000));
+        // Then nothing more than the charge accrues: the next worst-case
+        // snapshot's first chunk waits.
+        QVERIFY(!pacer.canSpendPs3(kMaximumPs3DisplayChunkBytes, 15'000'000));
+        // A full poll interval later the whole next snapshot has room again.
+        QVERIFY(pacer.spendPs3(kMaximumPs3DisplayChunkBytes, 110'000'000));
+        QVERIFY(pacer.spendPs3(kMaximumPs3DisplayChunkBytes, 115'000'000));
+    }
+
     void ps3DisableReenableRetainsItsDrainedBucket()
     {
         const DisplayBudgetCharge ps3 = ps3DisplayCharge();
-        const DisplayBudgetLimits cap = limits(ps3.applicationBytesPerSecond, 1);
+        // A roomy global budget, so only PureSignal's own bucket is drained.
+        const DisplayBudgetLimits cap = limits(100 * ps3.applicationBytesPerSecond, 1);
+        const quint64 snapshotBytes = ps3.applicationBytesPerSecond
+            / (1'000 / kPs3DisplayPollIntervalMs);
         DisplayBudgetPacer pacer;
         QVERIFY(pacer.beginSession(13, cap, 0));
         QVERIFY(pacer.update(cap, {}, true, 0));
+        // Drain the whole snapshot burst.
         QVERIFY(pacer.spendPs3(kMaximumPs3DisplayChunkBytes, 0));
-        QVERIFY(pacer.update(cap, {}, false, 0));
+        QVERIFY(pacer.spendPs3(kMaximumPs3DisplayChunkBytes, 5'000'000));
+        QVERIFY(pacer.spendPs3(snapshotBytes - 2 * quint64{kMaximumPs3DisplayChunkBytes},
+                               10'000'000));
+        QVERIFY(pacer.update(cap, {}, false, 10'000'000));
         QVERIFY(pacer.update(cap, {}, true, 1'000'000'000));
         QVERIFY(!pacer.canSpendPs3(kMaximumPs3DisplayChunkBytes, 1'000'000'000));
         QVERIFY(pacer.canSpendPs3(kMaximumPs3DisplayChunkBytes, 2'000'000'000));
