@@ -334,6 +334,97 @@ private slots:
         QCOMPARE(status.active_model_slot, 1);
     }
 
+    // R-R3-40: the worker's "off" step (applied in xnnr, with the channel
+    // found through the owner the request recorded) updates the receive
+    // bandpass as the locked NNR setters do. NNR running raises that
+    // bandpass's gain to 2 (RXAbp1Check); a step that left it there would
+    // play about 6 dB louder than NNR switched off by the operator. The
+    // level is read on the AGC meter, which follows the bandpass; the AGC
+    // runs at a fixed gain so it cannot even the difference out.
+    void workerOffStepUpdatesTheBandpassLikeTheOperatorsOff()
+    {
+        using Clock = std::chrono::steady_clock;
+        constexpr int kChannel = 13;   // outside WdspEngine's reserved ids
+        constexpr int kInSize = 1024;
+        constexpr int kDspSize = 4096;
+        constexpr int kRate = 48000;
+        constexpr int kAgcAverageMeter = 6;   // RXA_AGC_AV (RXA.h rxaMeterType)
+        // Blocks for the meter's average to settle after a change.
+        constexpr int kSettleBlocks = 16;
+
+        OpenChannel(kChannel, kInSize, kDspSize, kRate, kRate, kRate,
+                    0, 1, 0.010, 0.025, 0.000, 0.010,
+                    0);   // bfo off: the feeder never waits for output
+        const auto closeChannel = qScopeGuard([&] { CloseChannel(kChannel); });
+        NNRConfiguration standard{0, 0, -25.0, 1.0, 10.0, 2.0, 12.0, 0.0, 0.0};
+        NNRRuntimeStatus status{};
+        QVERIFY(ConfigureRXANNR(kChannel, &standard, &status));
+        SetRXAAGCMode(kChannel, 0);   // fixed gain: the AGC would even out the bandpass gain
+        SetRXANNRRun(kChannel, 1);
+
+        std::atomic<bool> stop{false};
+        std::thread feeder([&] {
+            std::array<float, kInSize> inI{}, inQ{}, outI{}, outQ{};
+            const auto period = std::chrono::duration_cast<Clock::duration>(
+                std::chrono::duration<double>(double(kInSize) / kRate / 2.0));
+            auto next = Clock::now();
+            double phase = 0.0;
+            while (!stop.load()) {
+                for (int i = 0; i < kInSize; ++i) {
+                    inI[i] = static_cast<float>(0.01 * std::cos(phase));
+                    inQ[i] = static_cast<float>(0.01 * std::sin(phase));
+                    phase = std::fmod(phase + 2.0 * std::numbers::pi * 1000.0 / kRate,
+                                      2.0 * std::numbers::pi);
+                }
+                int error = 0;
+                fexchange2(kChannel, inI.data(), inQ.data(), outI.data(), outQ.data(), &error);
+                next += period;
+                std::this_thread::sleep_until(next);
+            }
+        });
+        const auto stopFeeder = qScopeGuard([&] {
+            stop.store(true);
+            feeder.join();
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        });
+        // Waits, without the DSP lock, for the worker to finish more blocks.
+        const auto waitBlocks = [&](int count) {
+            WdspChannelLoad load{};
+            GetChannelDspLoad(kChannel, &load);
+            const long long target = load.blocks + count;
+            const auto deadline = Clock::now() + std::chrono::seconds(10);
+            while (load.blocks < target && Clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+                GetChannelDspLoad(kChannel, &load);
+            }
+            return load.blocks >= target;
+        };
+
+        QVERIFY(waitBlocks(kSettleBlocks));
+        const double running = GetRXAMeter(kChannel, kAgcAverageMeter);
+
+        RequestRXANNRLimit(kChannel, 2);   // no locked NNR call until it applies
+        QVERIFY(waitBlocks(kSettleBlocks));
+        QVERIFY(GetRXANNRStatus(kChannel, &status));   // reads, never applies
+        QCOMPARE(status.limit, 2);
+        QVERIFY(!status.running);
+        const double workerOff = GetRXAMeter(kChannel, kAgcAverageMeter);
+
+        RequestRXANNRLimit(kChannel, 0);
+        QVERIFY(waitBlocks(kSettleBlocks));
+        QVERIFY(GetRXANNRStatus(kChannel, &status));
+        QCOMPARE(status.limit, 0);
+        QVERIFY(status.running);
+        SetRXANNRRun(kChannel, 0);         // the operator's off, locked
+        QVERIFY(waitBlocks(kSettleBlocks));
+        const double operatorOff = GetRXAMeter(kChannel, kAgcAverageMeter);
+
+        qInfo("AGC meter: NNR running %.2f dB, worker off step %.2f dB, operator off %.2f dB",
+              running, workerOff, operatorOff);
+        QVERIFY2(std::abs(workerOff - operatorOff) < 1.5,
+                 "the worker's off step left the NNR bandpass gain in place");
+    }
+
     // R-R3-40: RxChannel carries the limit to WDSP and across a rebuild, and
     // an "off" limit accepts NNR as selected while holding it off.
     void rxChannelLimitClampsAndSurvivesARebuild()
@@ -372,6 +463,27 @@ private slots:
         QVERIFY(m_a->setNnrTuning(settings));
         QVERIFY(m_a->nnrDiagnostics().running);
         QCOMPARE(m_a->nnrDiagnostics().actualModelSlot, 1);
+    }
+
+    // R-R3-40: the legacy model setter (no NereusSDR caller) requests its
+    // model through the runtime limit instead of switching past it.
+    void legacyModelSetterGoesThroughTheLimit()
+    {
+        const int channel = m_a->channelId();
+        auto settings = m_a->nnrTuning();
+        settings.modelSlot = 0;
+        QVERIFY(m_a->setNnrTuning(settings));
+        QVERIFY(m_a->requestNnrLimit(1));
+        QCOMPARE(SetRXANNRModel(channel, 1), 0);   // applies the pending limit first
+        NNRRuntimeStatus status{};
+        QVERIFY(GetRXANNRStatus(channel, &status));
+        QCOMPARE(status.limit, 1);
+        QCOMPARE(status.configuration.model_slot, 1);
+        QCOMPARE(status.active_model_slot, 0);
+        QVERIFY(m_a->requestNnrLimit(0));
+        QCOMPARE(SetRXANNRModel(channel, 1), 1);
+        QVERIFY(m_a->setNnrTuning(settings));   // back to the fixture's choice
+        QCOMPARE(m_a->nnrDiagnostics().actualModelSlot, 0);
     }
 
     void modelPathsStayFixedUntilReconnect()

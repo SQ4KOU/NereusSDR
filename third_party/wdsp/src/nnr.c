@@ -34,7 +34,9 @@ warren@wpratt.com
 // block (xnnr), under the lock it already holds, by running the standard
 // model only or no NNR. The caller's configuration and run request are kept
 // and return when the limit is cleared. The status reports the applied limit
-// and the model actually running.
+// and the model actually running. Later the same day: a request seen before
+// its owner channel stays pending (nnr_sync_limit), and SetRXANNRModel
+// requests its model through the limit instead of switching past it.
 
 #include "comm.h"
 #include "nnet.h"
@@ -236,6 +238,10 @@ static void nnr_sync_limit (NNR a, int channel)
 	int want = (int)_InterlockedAnd (&a->limit_request, ~0L);
 	int slot, was_run;
 	if (want == a->limit || want < 0 || want > 2) return;
+	/* RequestRXANNRLimit's two stores are separate, so the worker can see a
+	 * request before its owner channel. It stays pending until the owner is
+	 * seen, so the bandpass update below is never skipped. */
+	if (channel < 0 || channel >= MAX_CHANNELS) return;
 	a->limit = want;
 	was_run = a->run;
 	slot = nnr_effective_slot (a);
@@ -248,11 +254,8 @@ static void nnr_sync_limit (NNR a, int channel)
 	if (a->run != was_run)
 	{
 		flush_nnr (a);
-		if (channel >= 0 && channel < MAX_CHANNELS)
-		{
-			RXAbp1Check (channel);
-			RXAbp1Set (channel);
-		}
+		RXAbp1Check (channel);
+		RXAbp1Set (channel);
 	}
 }
 
@@ -786,8 +789,16 @@ SetRXANNRModel (int channel, int slot)
 {
 	if (!nnr_channel_valid (channel)) return -1;
 	int now;
+	NNR a;
 	EnterCriticalSection (&ch[channel].csDSP);
-	now = setModel_nnr (rxa[channel].nnr.p, slot);
+	a = rxa[channel].nnr.p;
+	/* NereusSDR (R-R3-40): the slot is the caller's requested model, run
+	 * through the runtime limit as ConfigureRXANNR does; a slot that is not
+	 * loaded leaves the request unchanged. Returns the model running. */
+	nnr_sync_limit (a, channel);
+	if (slot >= 0 && slot < NNET_NSLOTS && ok_nnet (a->nets[slot]))
+		a->requested_model = slot;
+	now = setModel_nnr (a, nnr_effective_slot (a));
 	LeaveCriticalSection (&ch[channel].csDSP);
 	return now;
 }
