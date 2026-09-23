@@ -9419,7 +9419,9 @@ void SpectrumWidget::contextMenuEvent(QContextMenuEvent* event)
     }
     // Anywhere else, let it reach the pan applet as before.
     event->ignore();
-    QRhiWidget::contextMenuEvent(event);
+    // SpectrumBaseClass, not QRhiWidget: the CPU-only build
+    // (-DNEREUS_GPU_SPECTRUM=OFF, the Rock's Core) derives from QWidget.
+    SpectrumBaseClass::contextMenuEvent(event);
 }
 
 void SpectrumWidget::mouseReleaseEvent(QMouseEvent* event)
