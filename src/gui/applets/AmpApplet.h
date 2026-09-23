@@ -64,6 +64,11 @@ public:
     // commit 067d2d5b).
     QMenu* buildContextMenuForTesting() { return buildContextMenu(this); }
 
+    // R-R3-21: why OPERATE and the connection toggle are unavailable in a
+    // remote session. Public so the RF-Kit applet, which drives the same
+    // kind of station-side amplifier, gives the same reason.
+    static QString remoteUnavailableReason();
+
 signals:
     // Emitted when the user clicks the OPERATE/STANDBY button.
     // requestedOperate=true means the user wants to enter OPERATE state.
@@ -113,10 +118,6 @@ protected:
 private:
     // From AetherSDR src/gui/AmpApplet.h:29 [@0cd4559]
     void updatePowerLabel();
-
-    // R-R3-21: why OPERATE and the connection toggle are unavailable in a
-    // remote session.
-    static QString remoteUnavailableReason();
 
     // Phase 3P-II Phase 4 Task 88: builds the context menu.
     // parent is the QObject* parent for the returned heap-allocated QMenu.

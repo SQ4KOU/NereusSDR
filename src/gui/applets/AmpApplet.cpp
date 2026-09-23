@@ -18,6 +18,7 @@
 //   2026-09-23  R-R3-21: on a remote-station model OPERATE and the
 //                 Disconnect/Reconnect action are disabled with a plain
 //                 reason; they act on this computer's own PGXL socket.
+//                 The reason is public so the RF-Kit applet shares it.
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
 // =================================================================

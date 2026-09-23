@@ -13,7 +13,8 @@
 // Modification history (NereusSDR):
 //   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-21: the RX applet takes the
 //                 negotiated transmit permission for its XIT row and TX
-//                 passband Shift-click. AI-assisted implementation via
+//                 passband Shift-click, and the RADE applet for its
+//                 profile combo and Reset vocoder. AI-assisted implementation via
 //                 Anthropic Claude Code.
 //   2026-09-22 — J.J. Boyd (KG4VCF). Invoke the Aether-derived pan-stack
 //                 shutdown before QWidget destroys its graphics backend.
@@ -10173,6 +10174,10 @@ void MainWindow::applyRemoteRoleGating()
     // R-R3-21: the RX applet's XIT row and TX passband Shift-click.
     if (m_rxApplet) {
         m_rxApplet->setTransmitPermitted(transmitPermitted, transmitReason);
+    }
+    // R-R3-21: the RADE applet's profile combo writes the TX mic profile.
+    if (m_radeApplet) {
+        m_radeApplet->setTransmitPermitted(transmitPermitted, transmitReason);
     }
     for (VfoWidget* flag : m_vfoWidgetsBySlice) {
         if (flag) { flag->setTransmitPermitted(transmitPermitted, transmitReason); }

@@ -105,6 +105,7 @@ protected:
 
 private:
     QMenu* buildContextMenu(QObject* menuParent);
+    bool   isRemoteModel() const;
 
     // Section A widgets.
     QLabel*      m_deviceLabel{nullptr};

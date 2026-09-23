@@ -4,9 +4,14 @@
 //   2026-05-24  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude.
 //   Layout patterns from src/gui/applets/AmpApplet.{h,cpp} (which is
 //   an AetherSDR port). The RF-Kit-specific content is original.
+//   2026-09-23  R-R3-21: on a remote-station model OPERATE, the antenna
+//   buttons and Disconnect/Reconnect are disabled with the amplifier
+//   reason AmpApplet gives; they drive this computer's own RF2K-S
+//   connection. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "Rf2ksApplet.h"
+#include "AmpApplet.h"
 #include "gui/HGauge.h"
 #include "gui/StyleConstants.h"
 #include "models/RadioModel.h"
@@ -176,6 +181,28 @@ Rf2ksApplet::Rf2ksApplet(RadioModel* model, QWidget* parent)
     tunerLay->addLayout(actionRow);
 
     root->addWidget(tunerWrap);
+
+    // R-R3-21: rfKitEnabled is mirrored from the Core, so a Core with RF-Kit
+    // enabled shows this applet in a remote window. OPERATE and the antenna
+    // buttons drive this computer's own Rf2ksConnection (MainWindow's
+    // handlers), which a remote window never opens: the amplifier sits at
+    // the station. Same reason the Power Genius applet gives.
+    if (isRemoteModel()) {
+        const QString reason = AmpApplet::remoteUnavailableReason();
+        m_operateBtn->setEnabled(false);
+        m_operateBtn->setToolTip(reason);
+        m_operateBtn->setAccessibleDescription(reason);
+        for (QPushButton* btn : std::as_const(m_antennaButtons)) {
+            btn->setEnabled(false);
+            btn->setToolTip(reason);
+            btn->setAccessibleDescription(reason);
+        }
+    }
+}
+
+bool Rf2ksApplet::isRemoteModel() const
+{
+    return m_model && !m_model->ownsLocalDsp();
 }
 
 // ---------- Section A slots ----------
@@ -297,7 +324,9 @@ void Rf2ksApplet::setAntennas(const QList<RfKitAntenna>& list)
         const QString label = m_antennaLabels.value(a.number,
             QStringLiteral("ANT %1").arg(a.number));
         btn->setText(label);
-        btn->setEnabled(a.state != RfKitAntenna::State::Disabled);
+        // R-R3-21: an amplifier report never re-enables a remote window's
+        // antenna buttons.
+        btn->setEnabled(!isRemoteModel() && a.state != RfKitAntenna::State::Disabled);
         setButtonActive(btn, a.state == RfKitAntenna::State::Active);
     }
 }
@@ -386,6 +415,12 @@ QMenu* Rf2ksApplet::buildContextMenu(QObject* menuParent)
         emit navigationRequested(QStringLiteral("rfKit"));
     });
     connect(disco, &QAction::triggered, this, &Rf2ksApplet::connectionToggleRequested);
+    // R-R3-21: the toggle opens or closes this computer's own RF2K-S link.
+    if (isRemoteModel()) {
+        disco->setEnabled(false);
+        disco->setToolTip(AmpApplet::remoteUnavailableReason());
+        menu->setToolTipsVisible(true);
+    }
     connect(diag,  &QAction::triggered, this, &Rf2ksApplet::diagnosticsCopyRequested);
     return menu;
 }

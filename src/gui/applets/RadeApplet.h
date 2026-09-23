@@ -60,6 +60,13 @@ public:
     QString appletId()    const override { return QStringLiteral("RADE"); }
     QString appletTitle() const override { return QStringLiteral("RADE"); }
     void syncFromModel() override;
+    // R-R3-21: the profile combo writes the TX microphone profile, so it
+    // follows the negotiated transmit permission (a remote model starts
+    // denied; MainWindow::applyRemoteRoleGating pushes the Core's answer).
+    // Reset vocoder acts on this computer's own RADE channel, which a
+    // remote window never has, so remotely it stays unavailable with the
+    // same reason. Local direct mode is unchanged.
+    void setTransmitPermitted(bool permitted, const QString& reason = QString());
 
     // Test seams (Phase 3R L2).  Exposed so tst_rade_applet can verify
     // text / colour / wiring without depending on widget geometry.
@@ -107,6 +114,11 @@ private:
     // Update m_syncIndicator stylesheet for the current sync + SNR pair.
     void repaintSyncIndicator();
 
+    // Applies m_transmitPermitted / m_transmitReason to the profile combo
+    // and, on a remote model, to Reset vocoder.
+    void updateTransmitControlAvailability();
+    bool isRemoteModel() const;
+
     // Active sync + SNR state cached for the indicator colour logic
     // (sync false -> grey, sync true & snr < 5 -> yellow,
     // sync true & snr >= 5 -> green).
@@ -119,6 +131,9 @@ private:
     QLabel*      m_freqOffsetLabel{nullptr};
     QLabel*      m_lastDecodedLabel{nullptr};
     QPushButton* m_resetButton{nullptr};
+
+    bool    m_transmitPermitted{true};
+    QString m_transmitReason;
 };
 
 }  // namespace NereusSDR

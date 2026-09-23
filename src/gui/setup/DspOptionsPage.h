@@ -119,6 +119,11 @@ public:
         return m_highResFilterChars;
     }
 
+    // R-R3-21: the TX combos (buffer size, filter size and filter type for
+    // SSB/AM, FM and Digital) follow the transmit permission; the RX combos
+    // and the rest of the page do not.
+    void setTransmitPermitted(bool permitted, const QString& reason) override;
+
 private:
     void buildUI();
 

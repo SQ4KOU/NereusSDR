@@ -2040,8 +2040,8 @@ void TxApplet::setTransmitPermitted(bool permitted, const QString& unavailableRe
 {
     m_transmitPermitted = permitted;
     const QString reason = unavailableReason.isEmpty()
-        ? tr("Transmit controls are unavailable until the station handshake "
-             "confirms transmit permission.")
+        ? tr("Transmit controls are unavailable until the station confirms "
+             "transmit permission.")
         : unavailableReason;
 
     const auto apply = [permitted, &reason](QWidget* control) {

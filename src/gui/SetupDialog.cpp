@@ -49,7 +49,10 @@
 //   2026-09-23: R-R3-21 remote control inventory. DSP > CFC and Test >
 //                 Two-Tone IMD follow the negotiated transmit permission;
 //                 a page the local-DSP gate disables shows a plain reason
-//                 above it and as its tooltip. J.J. Boyd (KG4VCF), with
+//                 above it and as its tooltip. The permission is also
+//                 pushed to every realized page, so a receive page's own
+//                 transmit section (AGC/ALC TX groups, DSP Options TX
+//                 combos) follows it. J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
@@ -476,6 +479,17 @@ void SetupDialog::refreshTransmitPresentation()
     QString localNoticeText = m_localUnavailableReason;
     for (const PageEntry& entry : m_pages) {
         if (!entry.widget) { continue; }
+        // R-R3-21: a receive page's own transmit section (AGC/ALC TX groups,
+        // DSP Options TX combos) follows the same permission. The page may
+        // sit inside a wrapper (the audio backend strip), so reach it
+        // wherever it is.
+        QList<SetupPage*> setupPages = entry.widget->findChildren<SetupPage*>();
+        if (auto* self = qobject_cast<SetupPage*>(entry.widget)) {
+            setupPages.prepend(self);
+        }
+        for (SetupPage* setupPage : setupPages) {
+            setupPage->setTransmitPermitted(m_transmitPermitted, m_transmitReason);
+        }
         if (entry.requiresTransmit) {
             // A negotiated TX permission cannot make this client's absent DSP
             // available. Preserve the independent resource gate and child rules.

@@ -102,6 +102,8 @@
 #include <memory>
 
 #include "core/AppSettings.h"
+#include "core/AudioEngine.h"
+#include "core/MicProfileManager.h"
 #include "core/MoxController.h"
 #include "core/RadioDiscovery.h"
 #include "core/WdspTypes.h"
@@ -118,10 +120,14 @@
 #include "gui/StationStartupSelection.h"
 #include "gui/SpectrumOverlayPanel.h"
 #include "gui/applets/AmpApplet.h"
+#include "gui/applets/PhoneCwApplet.h"
+#include "gui/applets/RadeApplet.h"
+#include "gui/applets/Rf2ksApplet.h"
 #include "gui/applets/RxApplet.h"
 #include "gui/applets/TxApplet.h"
 #include "gui/applets/VaxApplet.h"
 #include "gui/setup/DspOptionsPage.h"
+#include "gui/setup/DspSetupPages.h"
 #include "gui/setup/GeneralOptionsPage.h"
 #include "gui/widgets/VaxChannelSelector.h"
 #include "gui/widgets/VfoWidget.h"
@@ -192,6 +198,23 @@ QTreeWidgetItem* setupLeaf(SetupDialog& dialog, const QString& label)
         }
     }
     return nullptr;
+}
+
+// The value of every spin box, combo box and check box under `root`, in
+// child order: a before/after fingerprint for "activation moved nothing".
+QString widgetStateOf(QWidget* root)
+{
+    QStringList state;
+    for (QWidget* w : root->findChildren<QWidget*>()) {
+        if (auto* spin = qobject_cast<QSpinBox*>(w)) {
+            state << QString::number(spin->value());
+        } else if (auto* combo = qobject_cast<QComboBox*>(w)) {
+            state << QString::number(combo->currentIndex());
+        } else if (auto* button = qobject_cast<QAbstractButton*>(w); button && button->isCheckable()) {
+            state << (button->isChecked() ? QStringLiteral("1") : QStringLiteral("0"));
+        }
+    }
+    return state.join(QLatin1Char(','));
 }
 
 // Operator strings stay plain English: no internal subsystem, roadmap or
@@ -1084,7 +1107,10 @@ private slots:
 
         QVERIFY(!tune->isEnabled());
         QVERIFY(!mox->isEnabled());
-        QVERIFY(mox->toolTip().contains(QStringLiteral("station handshake")));
+        QCOMPARE(mox->toolTip(),
+                 QStringLiteral("Transmit controls are unavailable until the station "
+                                "confirms transmit permission."));
+        QVERIFY2(isPlainOperatorReason(mox->toolTip()), qPrintable(mox->toolTip()));
 
         QSignalSpy moxRejected(model.moxController(), &MoxController::moxRejected);
         QSignalSpy tuneRefused(&model, &RadioModel::tuneRefused);
@@ -1458,11 +1484,27 @@ private slots:
     {
         RadioModel remote(RadioModel::Role::Remote);
         GeneralOptionsPage page(&remote);
-        for (const char* name : {"grpStepAttenuator", "grpAutoAttRx1"}) {
+        // A remote model builds no step attenuator controller, so what must
+        // not move is the widgets' own state (and so anything they persist).
+        QVERIFY(remote.stepAttController() == nullptr);
+        for (const char* name : {"grpStepAttenuator", "grpAutoAttRx1", "grpAutoAttRx2"}) {
             auto* group = page.findChild<QGroupBox*>(QLatin1String(name));
             QVERIFY2(group != nullptr, name);
             QVERIFY2(!group->isEnabled(), name);
             QVERIFY2(isPlainOperatorReason(group->toolTip()), qPrintable(group->toolTip()));
+            // Activation reaches nothing.
+            const QString before = widgetStateOf(group);
+            QVERIFY2(!before.isEmpty(), name);
+            for (QAbstractButton* button : group->findChildren<QAbstractButton*>()) {
+                button->click();
+            }
+            for (QSpinBox* spin : group->findChildren<QSpinBox*>()) {
+                QTest::keyClick(spin, Qt::Key_Up);
+            }
+            for (QComboBox* combo : group->findChildren<QComboBox*>()) {
+                QTest::keyClick(combo, Qt::Key_Down);
+            }
+            QCOMPARE(widgetStateOf(group), before);
         }
         auto* hardware = page.findChild<QGroupBox*>(QStringLiteral("grpHardwareConfig"));
         QVERIFY(hardware != nullptr);
@@ -1489,6 +1531,28 @@ private slots:
         QVERIFY(!att->isEnabled());
         QVERIFY2(isPlainOperatorReason(att->toolTip()), qPrintable(att->toolTip()));
         QVERIFY(att->toolTip().contains(QStringLiteral("attenuator")));
+
+        // Activation reaches nothing: the step spin, the preamp combo and
+        // (where the board shows it) the RX1 preamp toggle.
+        QVERIFY(remote.stepAttController() == nullptr);
+        const QString attBefore = widgetStateOf(&applet);
+        auto* spin = att->findChild<QSpinBox*>();
+        auto* combo = att->findChild<QComboBox*>();
+        QVERIFY(spin != nullptr);
+        QVERIFY(combo != nullptr);
+        QVERIFY(!spin->isEnabled());
+        QVERIFY(!combo->isEnabled());
+        const int spinBefore = spin->value();
+        const int comboBefore = combo->currentIndex();
+        QTest::keyClick(spin, Qt::Key_Up);
+        QTest::keyClick(combo, Qt::Key_Down);
+        if (auto* preamp = applet.findChild<QCheckBox*>(QStringLiteral("RxRx1PreampToggle"))) {
+            QVERIFY(!preamp->isEnabled());
+            preamp->click();
+        }
+        QCOMPARE(spin->value(), spinBefore);
+        QCOMPARE(combo->currentIndex(), comboBefore);
+        QCOMPARE(widgetStateOf(&applet), attBefore);
 
         RadioModel local;
         RxApplet localApplet(nullptr, &local);
@@ -1553,6 +1617,28 @@ private slots:
         VaxApplet localApplet(&local, local.audioEngine());
         QVERIFY(localApplet.isEnabled());
 
+        // Activation on the remote applet reaches no VAX bus.
+        {
+            QSignalSpy muted(remote.audioEngine(), &AudioEngine::vaxMutedChanged);
+            QSignalSpy rxGain(remote.audioEngine(), &AudioEngine::vaxRxGainChanged);
+            QSignalSpy txGain(remote.audioEngine(), &AudioEngine::vaxTxGainChanged);
+            int buttons = 0;
+            for (QAbstractButton* button : remoteApplet.findChildren<QAbstractButton*>()) {
+                ++buttons;
+                button->click();
+            }
+            QVERIFY(buttons > 0);
+            for (QWidget* w : remoteApplet.findChildren<QWidget*>()) {
+                QTest::keyClick(w, Qt::Key_Up);
+            }
+            QCOMPARE(muted.count(), 0);
+            QCOMPARE(rxGain.count(), 0);
+            QCOMPARE(txGain.count(), 0);
+            for (int ch = 1; ch <= 4; ++ch) {
+                QVERIFY(!remote.audioEngine()->vaxMuted(ch));
+            }
+        }
+
         // VFO flag's VAX tab selector.
         VfoWidget remoteFlag;
         remoteFlag.setRadioModel(&remote);
@@ -1560,11 +1646,28 @@ private slots:
         QVERIFY(selector != nullptr);
         QVERIFY(!selector->isEnabled());
         QCOMPARE(selector->toolTip(), remoteApplet.toolTip());
+        {
+            QSignalSpy picked(selector, &VaxChannelSelector::valueChanged);
+            const int before = selector->value();
+            for (QAbstractButton* button : selector->findChildren<QAbstractButton*>()) {
+                QTest::mouseClick(button, Qt::LeftButton);
+            }
+            QCOMPARE(picked.count(), 0);
+            QCOMPARE(selector->value(), before);
+        }
         VfoWidget localFlag;
         localFlag.setRadioModel(&local);
         auto* localSelector = localFlag.findChild<VaxChannelSelector*>();
         QVERIFY(localSelector != nullptr);
         QVERIFY(localSelector->isEnabled());
+        {
+            // Non-vacuity: the same clicks do pick a channel locally.
+            QSignalSpy picked(localSelector, &VaxChannelSelector::valueChanged);
+            for (QAbstractButton* button : localSelector->findChildren<QAbstractButton*>()) {
+                QTest::mouseClick(button, Qt::LeftButton);
+            }
+            QVERIFY(picked.count() > 0);
+        }
 
         // Spectrum overlay VAX flyout, bound to a slice.
         SliceModel slice(0);
@@ -1576,6 +1679,14 @@ private slots:
         QVERIFY(combo != nullptr);
         QVERIFY(!combo->isEnabled());
         QCOMPARE(combo->toolTip(), remoteApplet.toolTip());
+        {
+            QSignalSpy vaxChanged(&slice, &SliceModel::vaxChannelChanged);
+            const int before = slice.vaxChannel();
+            QTest::keyClick(combo, Qt::Key_Down);
+            QTest::keyClick(combo, Qt::Key_Down);
+            QCOMPARE(vaxChanged.count(), 0);
+            QCOMPARE(slice.vaxChannel(), before);
+        }
 
         QWidget localHost;
         auto* localPanel = new SpectrumOverlayPanel(&localHost);
@@ -1628,6 +1739,409 @@ private slots:
             }
         }
         QCOMPARE(localToggles.count(), 1);
+    }
+
+    // ====================================================================
+    // R-R3-21 fix wave: transmit sections inside receive Setup pages.
+    //
+    // DSP > AGC/ALC carries the TX Leveler and TX ALC groups and DSP >
+    // Options carries a TX combo per mode for buffer size, filter size and
+    // filter type. None of those settings reach the Core from a remote
+    // window, so each follows the transmit permission the rest of the
+    // transmit surfaces follow. The pages stay live for their receive
+    // halves.
+    // ====================================================================
+    void remoteAgcAlcTransmitGroupsFollowThePermission()
+    {
+        const QString reason = QStringLiteral("Remote transmit is unavailable");
+        const auto findGroup = [](QWidget* page, const QString& title) {
+            for (QGroupBox* group : page->findChildren<QGroupBox*>()) {
+                if (group->title() == title) { return group; }
+            }
+            return static_cast<QGroupBox*>(nullptr);
+        };
+
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.addSliceWithStationId(0, QStringLiteral("pan-0"));
+        QVERIFY(remote.activeSlice() != nullptr);
+        SetupDialog dialog(&remote);
+        dialog.setTransmitPermitted(false, reason);
+        dialog.selectPage(QStringLiteral("AGC/ALC"));
+        QWidget* const page = dialog.realizedPageForTest(QStringLiteral("AGC/ALC"));
+        QVERIFY(page != nullptr);
+        QVERIFY(page->isEnabled());
+        QGroupBox* const leveler = findGroup(page, QStringLiteral("TX Leveler"));
+        QGroupBox* const alc = findGroup(page, QStringLiteral("TX ALC"));
+        QVERIFY(leveler != nullptr);
+        QVERIFY(alc != nullptr);
+        for (QGroupBox* group : {leveler, alc}) {
+            QVERIFY2(!group->isEnabled(), qPrintable(group->title()));
+            QCOMPARE(group->toolTip(), reason);
+            QCOMPARE(group->accessibleDescription(), reason);
+        }
+        // The receive AGC controls on the same page stay live.
+        for (QGroupBox* group : page->findChildren<QGroupBox*>()) {
+            if (group != leveler && group != alc && !leveler->isAncestorOf(group)
+                && !alc->isAncestorOf(group) && group->title().startsWith(QStringLiteral("AGC"))) {
+                QVERIFY2(group->isEnabled(), qPrintable(group->title()));
+            }
+        }
+
+        // Activation writes nothing.
+        const TransmitModel& tx = remote.transmitModel();
+        const bool levelerOn = tx.txLevelerOn();
+        const int levelerMax = tx.txLevelerMaxGain();
+        const int levelerDecay = tx.txLevelerDecay();
+        const int alcMax = tx.txAlcMaxGain();
+        const int alcDecay = tx.txAlcDecay();
+        for (QGroupBox* group : {leveler, alc}) {
+            for (QAbstractButton* button : group->findChildren<QAbstractButton*>()) {
+                button->click();
+            }
+            for (QSpinBox* spin : group->findChildren<QSpinBox*>()) {
+                QVERIFY(!spin->isEnabled());
+                QTest::keyClick(spin, Qt::Key_Up);
+            }
+        }
+        QCOMPARE(tx.txLevelerOn(), levelerOn);
+        QCOMPARE(tx.txLevelerMaxGain(), levelerMax);
+        QCOMPARE(tx.txLevelerDecay(), levelerDecay);
+        QCOMPARE(tx.txAlcMaxGain(), alcMax);
+        QCOMPARE(tx.txAlcDecay(), alcDecay);
+
+        // Permission restores the groups and their own tooltips; withdrawing
+        // it gates them again with the reason MainWindow passes.
+        dialog.setTransmitPermitted(true);
+        for (QGroupBox* group : {leveler, alc}) {
+            QVERIFY(group->isEnabled());
+            QVERIFY(group->toolTip().isEmpty());
+            QVERIFY(group->accessibleDescription().isEmpty());
+        }
+        dialog.setTransmitPermitted(false);
+        QVERIFY(!leveler->isEnabled());
+        QVERIFY2(isPlainOperatorReason(leveler->toolTip()), qPrintable(leveler->toolTip()));
+
+        // A page built on its own for a remote model starts denied.
+        AgcAlcSetupPage standalone(&remote);
+        QGroupBox* const standaloneLeveler = findGroup(&standalone, QStringLiteral("TX Leveler"));
+        QVERIFY(standaloneLeveler != nullptr);
+        QVERIFY(!standaloneLeveler->isEnabled());
+
+        // Local direct mode: live, and the controls still write.
+        RadioModel local;
+        local.addSlice();
+        SetupDialog localDialog(&local);
+        localDialog.selectPage(QStringLiteral("AGC/ALC"));
+        QWidget* const localPage = localDialog.realizedPageForTest(QStringLiteral("AGC/ALC"));
+        QVERIFY(localPage != nullptr);
+        QGroupBox* const localLeveler = findGroup(localPage, QStringLiteral("TX Leveler"));
+        QVERIFY(localLeveler != nullptr);
+        QVERIFY(localLeveler->isEnabled());
+        QVERIFY(localLeveler->toolTip().isEmpty());
+        const bool localOn = local.transmitModel().txLevelerOn();
+        localLeveler->findChild<QCheckBox*>()->click();
+        QCOMPARE(local.transmitModel().txLevelerOn(), !localOn);
+    }
+
+    void remoteDspOptionsTransmitCombosFollowThePermission()
+    {
+        const QString reason = QStringLiteral("Remote transmit is unavailable");
+        const QStringList txKeys = {
+            QStringLiteral("DspOptionsBufferSizePhoneTx"),
+            QStringLiteral("DspOptionsBufferSizeFmTx"),
+            QStringLiteral("DspOptionsBufferSizeDigTx"),
+            QStringLiteral("DspOptionsFilterSizePhoneTx"),
+            QStringLiteral("DspOptionsFilterSizeFmTx"),
+            QStringLiteral("DspOptionsFilterSizeDigTx"),
+            QStringLiteral("DspOptionsFilterTypePhoneTx"),
+            QStringLiteral("DspOptionsFilterTypeFmTx"),
+            QStringLiteral("DspOptionsFilterTypeDigTx"),
+        };
+
+        RadioModel remote(RadioModel::Role::Remote);
+        SetupDialog dialog(&remote);
+        dialog.setTransmitPermitted(false, reason);
+        // "Options" is also a General leaf; select the one under DSP.
+        auto* tree = dialog.findChild<QTreeWidget*>();
+        QVERIFY(tree != nullptr);
+        for (QTreeWidgetItemIterator it(tree); *it; ++it) {
+            if ((*it)->text(0) == QStringLiteral("Options") && (*it)->parent()
+                && (*it)->parent()->text(0) == QStringLiteral("DSP")) {
+                tree->setCurrentItem(*it);
+            }
+        }
+        DspOptionsPage* page = dialog.findChild<DspOptionsPage*>();
+        QVERIFY(page != nullptr);
+        QVERIFY(page->isEnabled());
+
+        QMap<QString, QVariant> before;
+        for (const QString& key : txKeys) {
+            auto* combo = page->findChild<QComboBox*>(key);
+            QVERIFY2(combo != nullptr, qPrintable(key));
+            QVERIFY2(!combo->isEnabled(), qPrintable(key));
+            QCOMPARE(combo->toolTip(), reason);
+            QCOMPARE(combo->accessibleDescription(), reason);
+            before.insert(key, AppSettings::instance().value(key));
+            QTest::keyClick(combo, Qt::Key_Down);
+        }
+        for (const QString& key : txKeys) {
+            QCOMPARE(AppSettings::instance().value(key), before.value(key));
+        }
+        // The receive combos beside them stay live.
+        auto* phoneRx = page->findChild<QComboBox*>(QStringLiteral("DspOptionsBufferSizePhoneRx"));
+        QVERIFY(phoneRx != nullptr);
+        QVERIFY(phoneRx->isEnabled());
+
+        dialog.setTransmitPermitted(true);
+        for (const QString& key : txKeys) {
+            auto* combo = page->findChild<QComboBox*>(key);
+            QVERIFY2(combo->isEnabled(), qPrintable(key));
+            QVERIFY(combo->toolTip() != reason);
+            QVERIFY(combo->accessibleDescription().isEmpty());
+        }
+
+        DspOptionsPage standalone(&remote);
+        QVERIFY(!standalone.findChild<QComboBox*>(txKeys.first())->isEnabled());
+
+        RadioModel local;
+        DspOptionsPage localPage(&local);
+        for (const QString& key : txKeys) {
+            auto* combo = localPage.findChild<QComboBox*>(key);
+            QVERIFY2(combo != nullptr, qPrintable(key));
+            QVERIFY2(combo->isEnabled(), qPrintable(key));
+        }
+        auto* localCombo = localPage.findChild<QComboBox*>(txKeys.first());
+        const QString localBefore = localCombo->currentText();
+        QTest::keyClick(localCombo, Qt::Key_Down);
+        QVERIFY(localCombo->currentText() != localBefore);
+        QCOMPARE(AppSettings::instance().value(txKeys.first()).toString(),
+                 localCombo->currentText());
+    }
+
+    // ====================================================================
+    // R-R3-21 fix wave: the RADE applet. Its profile combo writes the same
+    // microphone profile Audio > TX Profile gates, and Reset vocoder acts on
+    // a RADE channel only this computer's own DSP could hold.
+    // ====================================================================
+    void remoteRadeAppletFollowsTheTransmitPermission()
+    {
+        const QString reason = QStringLiteral("Remote transmit is unavailable");
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.addSliceWithStationId(0, QStringLiteral("pan-0"));
+        QVERIFY(remote.activeSlice() != nullptr);
+        MicProfileManager* const mgr = remote.micProfileManager();
+        QVERIFY(mgr != nullptr);
+        mgr->setMacAddress(QStringLiteral("00:11:22:33:44:55"));
+        mgr->load();
+        QVERIFY(mgr->profileNames().size() > 1);
+
+        remote.resetLocalDspHandOutAudit();
+        RadeApplet applet(&remote);
+        QComboBox* const combo = applet.profileComboForTest();
+        QPushButton* const reset = applet.resetVocoderButtonForTest();
+        QVERIFY(combo != nullptr);
+        QVERIFY(reset != nullptr);
+        QVERIFY(!combo->isEnabled());
+        QVERIFY(!reset->isEnabled());
+        QVERIFY2(isPlainOperatorReason(combo->toolTip()), qPrintable(combo->toolTip()));
+        QVERIFY2(isPlainOperatorReason(reset->toolTip()), qPrintable(reset->toolTip()));
+
+        applet.setTransmitPermitted(false, reason);
+        QCOMPARE(combo->toolTip(), reason);
+        QCOMPARE(reset->toolTip(), reason);
+
+        const QString activeBefore = mgr->activeProfileName();
+        QTest::keyClick(combo, Qt::Key_Down);
+        emit combo->textActivated(combo->itemText(combo->count() - 1));
+        QCOMPARE(mgr->activeProfileName(), activeBefore);
+        reset->click();
+        emit mgr->profileListChanged();
+        QVERIFY(!combo->isEnabled());
+        // Nothing here looked up this window's own DSP.
+        QCOMPARE(remote.localDspHandOutCount(), 0);
+
+        // Permission restores the profile combo. Reset vocoder stays
+        // unavailable: the vocoder runs on the Core.
+        applet.setTransmitPermitted(true);
+        QVERIFY(combo->isEnabled());
+        QVERIFY(combo->toolTip() != reason);
+        QVERIFY(!reset->isEnabled());
+        QVERIFY2(isPlainOperatorReason(reset->toolTip()), qPrintable(reset->toolTip()));
+        applet.setTransmitPermitted(false, reason);
+        QVERIFY(!combo->isEnabled());
+
+        RadioModel local;
+        local.addSlice();
+        MicProfileManager* const localMgr = local.micProfileManager();
+        localMgr->setMacAddress(QStringLiteral("00:11:22:33:44:55"));
+        localMgr->load();
+        RadeApplet localApplet(&local);
+        QComboBox* const localCombo = localApplet.profileComboForTest();
+        QVERIFY(localCombo->isEnabled());
+        QVERIFY(localCombo->toolTip().isEmpty());
+        const QString target = localCombo->itemText(0) != localMgr->activeProfileName()
+            ? localCombo->itemText(0) : localCombo->itemText(1);
+        emit localCombo->textActivated(target);
+        QCOMPARE(localMgr->activeProfileName(), target);
+    }
+
+    // ====================================================================
+    // R-R3-21 fix wave: the RF-Kit RF2K-S applet. A Core with RF-Kit
+    // enabled shows it in a remote window (rfKitEnabled is mirrored), and
+    // OPERATE, the antenna buttons and Disconnect/Reconnect drive this
+    // computer's own RF2K-S connection, the amplifier the station owns.
+    // ====================================================================
+    void remoteRfKitAppletControlsAreUnavailable()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        Rf2ksApplet applet(&remote);
+        QSignalSpy operate(&applet, &Rf2ksApplet::operateToggled);
+        QSignalSpy antenna(&applet, &Rf2ksApplet::antennaRequested);
+        QSignalSpy toggles(&applet, &Rf2ksApplet::connectionToggleRequested);
+
+        QPushButton* operateBtn = nullptr;
+        for (QPushButton* b : applet.findChildren<QPushButton*>()) {
+            if (b->text() == QStringLiteral("STANDBY")) { operateBtn = b; }
+        }
+        QVERIFY(operateBtn != nullptr);
+        QVERIFY(!operateBtn->isEnabled());
+        QCOMPARE(operateBtn->toolTip(), AmpApplet::remoteUnavailableReason());
+        QVERIFY2(isPlainOperatorReason(operateBtn->toolTip()), qPrintable(operateBtn->toolTip()));
+        operateBtn->click();
+        applet.clickOperateButtonForTesting();
+        QCOMPARE(operate.count(), 0);
+
+        // The amplifier reporting its antennas must not re-enable them.
+        QList<RfKitAntenna> antennas;
+        for (int i = 1; i <= 4; ++i) {
+            RfKitAntenna a;
+            a.type = RfKitAntenna::Type::Internal;
+            a.number = i;
+            a.state = RfKitAntenna::State::Available;
+            antennas << a;
+        }
+        applet.setAntennas(antennas);
+        for (int i = 1; i <= 4; ++i) {
+            QVERIFY(!applet.antennaButtonIsEnabledForTesting(i));
+            applet.clickAntennaButtonForTesting(i);
+        }
+        QCOMPARE(antenna.count(), 0);
+
+        std::unique_ptr<QMenu> menu(applet.buildContextMenuForTesting());
+        QAction* toggle = nullptr;
+        for (QAction* a : menu->actions()) {
+            if (a->text() == QStringLiteral("Reconnect")
+                || a->text() == QStringLiteral("Disconnect")) {
+                toggle = a;
+            }
+        }
+        QVERIFY(toggle != nullptr);
+        QVERIFY(!toggle->isEnabled());
+        QCOMPARE(toggle->toolTip(), operateBtn->toolTip());
+        toggle->trigger();
+        QCOMPARE(toggles.count(), 0);
+
+        RadioModel local;
+        Rf2ksApplet localApplet(&local);
+        QSignalSpy localOperate(&localApplet, &Rf2ksApplet::operateToggled);
+        QSignalSpy localAntenna(&localApplet, &Rf2ksApplet::antennaRequested);
+        QSignalSpy localToggles(&localApplet, &Rf2ksApplet::connectionToggleRequested);
+        localApplet.clickOperateButtonForTesting();
+        QCOMPARE(localOperate.count(), 1);
+        localApplet.setAntennas(antennas);
+        QVERIFY(localApplet.antennaButtonIsEnabledForTesting(1));
+        localApplet.clickAntennaButtonForTesting(1);
+        QCOMPARE(localAntenna.count(), 1);
+        std::unique_ptr<QMenu> localMenu(localApplet.buildContextMenuForTesting());
+        for (QAction* a : localMenu->actions()) {
+            if (a->text() == QStringLiteral("Reconnect")) {
+                QVERIFY(a->isEnabled());
+                a->trigger();
+            }
+        }
+        QCOMPARE(localToggles.count(), 1);
+    }
+
+    // ====================================================================
+    // R-R3-21 fix wave: the RX applet's Shift-click on a filter preset also
+    // matches the TX passband. That half is a transmit write.
+    // ====================================================================
+    void remoteRxAppletShiftClickLeavesTheTxFilterAlone()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        SliceModel slice(0);
+        slice.setDspMode(DSPMode::USB);
+        RxApplet applet(&slice, &remote);
+        applet.show();
+        TransmitModel& tx = remote.transmitModel();
+        const int lowBefore = tx.filterLow();
+        const int highBefore = tx.filterHigh();
+        QSignalSpy txFilterChanged(&tx, &TransmitModel::filterChanged);
+        int presets = 0;
+        for (QPushButton* b : applet.findChildren<QPushButton*>()) {
+            if (!b->isCheckable() || !b->toolTip().contains(QStringLiteral(" Hz to "))) {
+                continue;
+            }
+            ++presets;
+            QTest::mouseClick(b, Qt::LeftButton, Qt::ShiftModifier);
+        }
+        QVERIFY(presets > 1);
+        QCOMPARE(txFilterChanged.count(), 0);
+        QCOMPARE(tx.filterLow(), lowBefore);
+        QCOMPARE(tx.filterHigh(), highBefore);
+
+        // Local direct mode: the same Shift-click moves the TX passband,
+        // so the remote half above is not vacuous.
+        RadioModel local;
+        SliceModel localSlice(0);
+        localSlice.setDspMode(DSPMode::USB);
+        RxApplet localApplet(&localSlice, &local);
+        localApplet.show();
+        TransmitModel& localTx = local.transmitModel();
+        QSignalSpy localTxFilterChanged(&localTx, &TransmitModel::filterChanged);
+        for (QPushButton* b : localApplet.findChildren<QPushButton*>()) {
+            if (!b->isCheckable() || !b->toolTip().contains(QStringLiteral(" Hz to "))) {
+                continue;
+            }
+            QTest::mouseClick(b, Qt::LeftButton, Qt::ShiftModifier);
+        }
+        QVERIFY(localTxFilterChanged.count() > 0);
+    }
+
+    // ====================================================================
+    // R-R3-21 fix wave: the default reason every transmit surface shows
+    // before MainWindow pushes its own is plain English too.
+    // ====================================================================
+    void defaultTransmitReasonsArePlainEnglish()
+    {
+        const QString expected = QStringLiteral(
+            "Transmit controls are unavailable until the station confirms "
+            "transmit permission.");
+        const auto reasonsOn = [](QWidget* root) {
+            QStringList reasons;
+            for (QWidget* w : root->findChildren<QWidget*>()) {
+                if (w->toolTip().startsWith(QStringLiteral("Transmit controls are unavailable"))) {
+                    reasons << w->toolTip();
+                }
+            }
+            return reasons;
+        };
+
+        RadioModel remote(RadioModel::Role::Remote);
+        SliceModel slice(0);
+        TxApplet tx(&remote);
+        RxApplet rx(&slice, &remote);
+        PhoneCwApplet phone(&remote);
+        VfoWidget flag;
+        flag.setRadioModel(&remote);
+        for (QWidget* surface : std::initializer_list<QWidget*>{&tx, &rx, &phone, &flag}) {
+            const QStringList reasons = reasonsOn(surface);
+            QVERIFY2(!reasons.isEmpty(), surface->metaObject()->className());
+            for (const QString& reason : reasons) {
+                QCOMPARE(reason, expected);
+                QVERIFY2(isPlainOperatorReason(reason), qPrintable(reason));
+            }
+        }
     }
 
     // ====================================================================
@@ -1768,6 +2282,14 @@ private slots:
             QVERIFY(!rxXit->isEnabled());
             QCOMPARE(rxXit->toolTip(), remoteReason);
 
+            // The RADE applet's profile combo and Reset vocoder get it too.
+            auto* const rade = window->findChild<RadeApplet*>();
+            QVERIFY(rade != nullptr);
+            QVERIFY(!rade->profileComboForTest()->isEnabled());
+            QCOMPARE(rade->profileComboForTest()->toolTip(), remoteReason);
+            QVERIFY(!rade->resetVocoderButtonForTest()->isEnabled());
+            QCOMPARE(rade->resetVocoderButtonForTest()->toolTip(), remoteReason);
+
             QVERIFY(detachTestSurfaceConsumers(window));
             QSignalSpy switched(window->radioModel(), &RadioModel::antennaAutoSwitched);
             QSignalSpy reRouted(window->radioModel(), &RadioModel::txBoundReRouteRequested);
@@ -1794,6 +2316,10 @@ private slots:
             QVERIFY(reRoute->isEnabled());
             QCOMPARE(toast->toolTip(), localToastTip);
             QCOMPARE(reRoute->toolTip(), localReRouteTip);
+            auto* const rade = window->findChild<RadeApplet*>();
+            QVERIFY(rade != nullptr);
+            QVERIFY(rade->profileComboForTest()->isEnabled());
+            QVERIFY(rade->profileComboForTest()->toolTip() != remoteReason);
             QVERIFY(localToastTip != remoteReason);
             QVERIFY(localReRouteTip != remoteReason);
 

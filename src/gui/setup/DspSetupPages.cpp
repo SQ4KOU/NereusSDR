@@ -13,6 +13,9 @@
 //   2026-05-04 — Issue #175 Wave 1: dropped misplaced AM TX / Carrier
 //                 Level stub from AmSamSetupPage (control belongs at
 //                 Thetis grpTXAM on tpTransmit, not the DSP/AM tab).
+//   2026-09-23 - R-R3-21: AgcAlcSetupPage TX Leveler and TX ALC groups
+//                 follow the remote transmit permission. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -265,6 +268,7 @@ AgcAlcSetupPage::AgcAlcSetupPage(RadioModel* model, QWidget* parent)
     TransmitModel& tx = model->transmitModel();
 
     QGroupBox* txLevGrp = addSection("TX Leveler");
+    m_txLevelerGrp = txLevGrp;
     QVBoxLayout* txLevLay = qobject_cast<QVBoxLayout*>(txLevGrp->layout());
 
     m_txLevelerOnChk = new QCheckBox("Enable");
@@ -333,6 +337,7 @@ AgcAlcSetupPage::AgcAlcSetupPage(RadioModel* model, QWidget* parent)
     // 38793-38866 [v2.10.3.13].
     //
     QGroupBox* txAlcGrp = addSection("TX ALC");
+    m_txAlcGrp = txAlcGrp;
     QVBoxLayout* txAlcLay = qobject_cast<QVBoxLayout*>(txAlcGrp->layout());
 
     m_txAlcMaxGainSpin = new QSpinBox;
@@ -372,6 +377,22 @@ AgcAlcSetupPage::AgcAlcSetupPage(RadioModel* model, QWidget* parent)
         QSignalBlocker b(m_txAlcDecaySpin);
         m_txAlcDecaySpin->setValue(ms);
     });
+
+    // R-R3-21: TX Leveler and TX ALC settings stay in this window's own
+    // TransmitModel on a remote-station model (the Core mirrors neither),
+    // so both groups start unavailable there and follow the transmit
+    // permission SetupDialog pushes.
+    if (!model->ownsLocalDsp()) {
+        setTransmitPermitted(false, QString());
+    }
+}
+
+void AgcAlcSetupPage::setTransmitPermitted(bool permitted, const QString& reason)
+{
+    gateTransmitControls({m_txLevelerGrp, m_txAlcGrp}, permitted,
+        reason.isEmpty()
+            ? tr("Remote transmit controls are not available from this Core yet.")
+            : reason);
 }
 
 // From Thetis v2.10.3.13 setup.cs:5046-5076 — CustomRXAGCEnabled

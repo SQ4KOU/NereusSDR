@@ -37,6 +37,10 @@
 //                 Anthropic Claude Code.
 //                 Task 4.1: DspOptionsPage skeleton + 18 controls.
 //                 Mirrors Thetis DSP Options tab (design Section 4A).
+//   2026-09-23 - R-R3-21: the nine TX buffer/filter combos follow the
+//                 remote transmit permission; each combo is named after
+//                 its settings key. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -184,6 +188,24 @@ DspOptionsPage::DspOptionsPage(RadioModel* model, QWidget* parent)
     : SetupPage("Options", model, parent)
 {
     buildUI();
+
+    // R-R3-21: on a remote-station model the TX combos only reach this
+    // window's own settings and inert TX channel, so they start unavailable
+    // and follow the transmit permission SetupDialog pushes.
+    if (model && !model->ownsLocalDsp()) {
+        setTransmitPermitted(false, QString());
+    }
+}
+
+void DspOptionsPage::setTransmitPermitted(bool permitted, const QString& reason)
+{
+    gateTransmitControls({m_bufPhoneTx, m_bufFmTx, m_bufDigTx,
+                          m_filtSizePhoneTx, m_filtSizeFmTx, m_filtSizeDigTx,
+                          m_filtTypePhoneTx, m_filtTypeFmTx, m_filtTypeDigTx},
+                         permitted,
+                         reason.isEmpty()
+                             ? tr("Remote transmit controls are not available from this Core yet.")
+                             : reason);
 }
 
 // ── Per-mode live-apply wiring (Task 4.2) ─────────────────────────────────────
@@ -312,6 +334,7 @@ void DspOptionsPage::buildUI()
         form->setContentsMargins(8, 4, 8, 6);
 
         outRx = makeCombo(g, items);
+        outRx->setObjectName(keyPrefix + modeKey + QStringLiteral("Rx"));
         outRx->setToolTip(comboTooltip);
         loadCombo(outRx, keyPrefix + modeKey + QStringLiteral("Rx"), rxDef);
         wireComboWithLiveApply(outRx, comboMode,
@@ -320,6 +343,7 @@ void DspOptionsPage::buildUI()
 
         if (!txDef.isEmpty()) {
             outTx = makeCombo(g, items);
+            outTx->setObjectName(keyPrefix + modeKey + QStringLiteral("Tx"));
             outTx->setToolTip(comboTooltip);
             loadCombo(outTx, keyPrefix + modeKey + QStringLiteral("Tx"), txDef);
             wireComboWithLiveApply(outTx, comboMode,

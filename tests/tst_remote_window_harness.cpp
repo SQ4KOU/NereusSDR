@@ -22,6 +22,7 @@
 #include <QtTest/QtTest>
 
 #include <QAction>
+#include <QComboBox>
 #include <QLoggingCategory>
 #include <QPointer>
 #include <QPushButton>
@@ -35,6 +36,7 @@
 #include "gui/SetupDialog.h"
 #include "gui/SpectrumWidget.h"
 #include "gui/TitleBar.h"
+#include "gui/applets/RadeApplet.h"
 #include "gui/widgets/StationBlock.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -449,6 +451,12 @@ private slots:
         QVERIFY(!txEq->isEnabled());
         const QString reason = txEq->toolTip();
         QVERIFY(!reason.isEmpty());
+        // The RADE applet's profile combo follows the same push.
+        auto* rade = h.window()->findChild<RadeApplet*>();
+        QVERIFY(rade);
+        QComboBox* const radeProfile = rade->profileComboForTest();
+        QVERIFY(!radeProfile->isEnabled());
+        QCOMPARE(radeProfile->toolTip(), reason);
 
         StationCapabilities granted = h.server().buildCapabilities();
         granted.txPermitted = true;
@@ -456,12 +464,18 @@ private slots:
         QTRY_VERIFY(txEq->isEnabled());
         QVERIFY(client->capabilities().txPermitted);
         QVERIFY(txEq->toolTip() != reason);
+        QVERIFY(radeProfile->isEnabled());
+        QVERIFY(radeProfile->toolTip() != reason);
+        // Reset vocoder stays unavailable: the vocoder runs on the Core.
+        QVERIFY(!rade->resetVocoderButtonForTest()->isEnabled());
 
         StationCapabilities withdrawn = h.server().buildCapabilities();
         withdrawn.txPermitted = false;
         h.pushCapabilities(withdrawn);
         QTRY_VERIFY(!txEq->isEnabled());
         QCOMPARE(txEq->toolTip(), reason);
+        QVERIFY(!radeProfile->isEnabled());
+        QCOMPARE(radeProfile->toolTip(), reason);
 
         QCOMPARE(client->sessionEpoch(), epoch);
         QCOMPARE(h.acceptedConnections(), 1);

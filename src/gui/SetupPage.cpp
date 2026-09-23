@@ -19,12 +19,17 @@
 //                 via Anthropic Claude Code.
 //                 Shared setup-page style constants mirror AetherSDR
 //                 `src/gui/RadioSetupDialog.{h,cpp}`.
+//   2026-09-23 - R-R3-21: setTransmitPermitted hook and
+//                 gateTransmitControls helper for transmit sections on
+//                 receive pages. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include "SetupPage.h"
 #include "StyleConstants.h"
 
 #include <QScrollArea>
+#include <QVariant>
 #include <QFrame>
 
 namespace NereusSDR {
@@ -110,6 +115,38 @@ void SetupPage::markNyi(QWidget* widget, const QString& phase)
 }
 
 // ── Section helper ────────────────────────────────────────────────────────────
+
+void SetupPage::setTransmitPermitted(bool /*permitted*/, const QString& /*reason*/)
+{
+}
+
+void SetupPage::gateTransmitControls(const QList<QWidget*>& controls, bool permitted,
+                                     const QString& reason)
+{
+    static constexpr auto kSavedTooltip = "SetupPageSavedTransmitTooltip";
+    static constexpr auto kSavedDescription = "SetupPageSavedTransmitDescription";
+    static constexpr auto kSavedEnabled = "SetupPageSavedTransmitEnabled";
+    for (QWidget* control : controls) {
+        if (!control) { continue; }
+        if (!permitted) {
+            if (!control->property(kSavedTooltip).isValid()) {
+                control->setProperty(kSavedTooltip, control->toolTip());
+                control->setProperty(kSavedDescription, control->accessibleDescription());
+                control->setProperty(kSavedEnabled, control->isEnabled());
+            }
+            control->setEnabled(false);
+            control->setToolTip(reason);
+            control->setAccessibleDescription(reason);
+        } else if (control->property(kSavedTooltip).isValid()) {
+            control->setEnabled(control->property(kSavedEnabled).toBool());
+            control->setToolTip(control->property(kSavedTooltip).toString());
+            control->setAccessibleDescription(control->property(kSavedDescription).toString());
+            control->setProperty(kSavedTooltip, QVariant());
+            control->setProperty(kSavedDescription, QVariant());
+            control->setProperty(kSavedEnabled, QVariant());
+        }
+    }
+}
 
 QGroupBox* SetupPage::addSection(const QString& title)
 {

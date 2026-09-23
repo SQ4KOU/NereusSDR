@@ -108,8 +108,15 @@ class AgcAlcSetupPage : public SetupPage {
 public:
     explicit AgcAlcSetupPage(RadioModel* model, QWidget* parent = nullptr);
 
+    // R-R3-21: the TX Leveler and TX ALC groups follow the transmit
+    // permission; the receive AGC groups on the page do not.
+    void setTransmitPermitted(bool permitted, const QString& reason) override;
+
 private:
     void updateCustomGating(AGCMode mode);
+
+    QGroupBox*  m_txLevelerGrp{nullptr};
+    QGroupBox*  m_txAlcGrp{nullptr};
 
     QComboBox*  m_agcModeCombo{nullptr};
     QSpinBox*   m_agcAttack{nullptr};

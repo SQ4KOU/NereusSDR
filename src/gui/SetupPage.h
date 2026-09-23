@@ -35,6 +35,12 @@ public:
     QString pageTitle() const { return m_title; }
     virtual void syncFromModel();
 
+    // R-R3-21: a receive page can hold a transmit section. SetupDialog pushes
+    // the negotiated transmit permission to every realized page; a page with
+    // such a section overrides this and gates just that section, leaving the
+    // rest of the page live. The default does nothing.
+    virtual void setTransmitPermitted(bool permitted, const QString& reason);
+
     // ── Static NYI marker ─────────────────────────────────────────────────────
     // Marks a widget as Not Yet Implemented: disables it and sets a tooltip.
     static void markNyi(QWidget* widget, const QString& phase);
@@ -69,6 +75,13 @@ public:
     QLineEdit* addLabeledEdit(const QString& label, const QString& placeholder = {});
 
 protected:
+    // R-R3-21: disables each control with `reason` as its tooltip and
+    // accessible description while transmit is not permitted, and puts back
+    // the enabled state, tooltip and description each had once it is. Safe
+    // to call repeatedly with the same state.
+    static void gateTransmitControls(const QList<QWidget*>& controls, bool permitted,
+                                     const QString& reason);
+
     QVBoxLayout* contentLayout() { return m_contentLayout; }
     RadioModel*  model()         { return m_model; }
 
