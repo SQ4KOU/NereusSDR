@@ -12,6 +12,9 @@
 #include <QJsonObject>
 #include <QTemporaryDir>
 
+#include <cstdlib>
+#include <cstring>
+
 using namespace NereusSDR;
 
 class TestDspAssetStore : public QObject
@@ -268,6 +271,25 @@ private slots:
         QVERIFY(!scoped.accepted);
         QCOMPARE(scoped.error, QStringLiteral("NR3 models belong to the Core, not to one radio."));
         QCOMPARE(store.assets().size(), 0);
+    }
+
+    // The Rock's nereusd died here at startup. rnnoise_model_from_buffer
+    // never sets the model's FILE* and rnnoise_model_free fcloses it when it
+    // is not null. glibc hands the block of that size freed last straight
+    // back without clearing it (macOS clears freed blocks, so the Mac never
+    // saw it), so leave a dirty block of the model's size (32 bytes on
+    // 64-bit) just before each trial load.
+    void nr3TrialLoadIgnoresStaleHeapBytes()
+    {
+        const QByteArray model = bundledSmallNr3Model();
+        QVERIFY(!model.isEmpty());
+        for (int round = 0; round < 4; ++round) {
+            void* volatile dirty = std::malloc(32);
+            QVERIFY(dirty != nullptr);
+            std::memset(dirty, 0xa5, 32);
+            std::free(dirty);
+            QVERIFY(DspAssetValidation::validateNr3Model(model).accepted);
+        }
     }
 
     void validatesFixedWdspPathCapacitiesInEncodedBytes()
