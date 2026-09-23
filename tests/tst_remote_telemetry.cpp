@@ -98,8 +98,9 @@ private slots:
         // R-R3-23 Task 4: unmeasured wording before any packet/health values.
         QVERIFY(controller.detailText().contains(QStringLiteral("Arrival jitter: not measured yet.")));
         QVERIFY(controller.detailText().contains(QStringLiteral("Missing packets: none received yet.")));
-        QVERIFY(controller.detailText().contains(QStringLiteral("Gaps filled: 0, concealed 40 ms intervals.")));
+        QVERIFY(controller.detailText().contains(QStringLiteral("Gaps filled: 0, concealed 40\u00A0ms intervals.")));
         QVERIFY(controller.detailText().contains(QStringLiteral("Speaker buffer: not measured yet.")));
+        QVERIFY(controller.detailText().contains(QStringLiteral("Reorder buffer: not measured yet.")));
 
         now += 1000;
         guiWire->observation.receivedPayloadBytes += 2000;
@@ -112,6 +113,7 @@ private slots:
         playback.missingPackets = 2;
         playback.expectedPackets = 100;
         playback.speakerQueuedMs = 41.2;
+        playback.reorderQueuedMs = 80.0;
         controller.sampleNow();
         QCOMPARE(controller.current().controlRxKbps, std::optional<double>(16.0));
         QCOMPARE(controller.current().controlTxKbps, std::optional<double>(32.0));
@@ -122,10 +124,12 @@ private slots:
         QVERIFY(controller.detailText().contains(QStringLiteral("measured 20000 ms ago")));
         // R-R3-23 Task 4: measured values, rounded, labelled with what they
         // are, no RTP/generation words.
-        QVERIFY(controller.detailText().contains(QStringLiteral("Arrival jitter: 4 ms, measured on this computer.")));
+        // U+00A0 keeps each number on the same line as its unit.
+        QVERIFY(controller.detailText().contains(QStringLiteral("Arrival jitter: 4\u00A0ms, measured on this computer.")));
         QVERIFY(controller.detailText().contains(QStringLiteral("Missing packets: 2 of 100, sequence numbers never received.")));
-        QVERIFY(controller.detailText().contains(QStringLiteral("Gaps filled: 0, concealed 40 ms intervals.")));
-        QVERIFY(controller.detailText().contains(QStringLiteral("Speaker buffer: 41 ms, audio queued for this computer's speaker, not total delay.")));
+        QVERIFY(controller.detailText().contains(QStringLiteral("Gaps filled: 0, concealed 40\u00A0ms intervals.")));
+        QVERIFY(controller.detailText().contains(QStringLiteral("Speaker buffer: 41\u00A0ms, audio queued for this computer's speaker, not total delay.")));
+        QVERIFY(controller.detailText().contains(QStringLiteral("Reorder buffer: 80\u00A0ms on this computer, packets held so that late arrivals play in order.")));
 
         // The previous context failed and restarted entirely between polls.
         // Its per-context counters have reset; the actual interruption remains.

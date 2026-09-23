@@ -344,7 +344,7 @@ private slots:
 
         status.encoder = defaultProfile();
         QCOMPARE(remoteAudioCodecText(status),
-                 QStringLiteral("Opus stereo, 24 kbit/s target, 40 ms packets, audio up to 8 kHz"));
+                 QStringLiteral("Opus stereo, 24\u00A0kbit/s target, 40\u00A0ms packets, audio up to 8\u00A0kHz"));
 
         // Every number comes from the reported profile, never an assumed one.
         OpusEncoderProfile other = defaultProfile();
@@ -353,13 +353,13 @@ private slots:
         other.frameSamples = 960;
         status.encoder = other;
         QCOMPARE(remoteAudioCodecText(status),
-                 QStringLiteral("Opus stereo, 48 kbit/s target, 20 ms packets, audio up to 12 kHz"));
+                 QStringLiteral("Opus stereo, 48\u00A0kbit/s target, 20\u00A0ms packets, audio up to 12\u00A0kHz"));
         other = defaultProfile();
         other.channels = 1;
         other.audioBandwidthHz = 20'000;
         status.encoder = other;
         QCOMPARE(remoteAudioCodecText(status),
-                 QStringLiteral("Opus mono, 24 kbit/s target, 40 ms packets, audio up to 20 kHz"));
+                 QStringLiteral("Opus mono, 24\u00A0kbit/s target, 40\u00A0ms packets, audio up to 20\u00A0kHz"));
 
         // A minor-7 Core cannot report one, whatever the value holds.
         status.detailNegotiated = false;
@@ -476,14 +476,16 @@ private slots:
             playback.expectedPackets = 100;
             playback.concealedPackets = 5;
             playback.speakerQueuedMs = 118.7;
+            // The reorder buffer is for the telemetry details, not this panel.
+            playback.reorderQueuedMs = 80.0;
             QCOMPARE(formatRemoteAudioDetails(status, playback), QStringLiteral(
                 "Remote audio: Playing\n"
-                "Codec: Opus stereo, 24 kbit/s target, 40 ms packets, audio up to 8 kHz\n"
+                "Codec: Opus stereo, 24\u00A0kbit/s target, 40\u00A0ms packets, audio up to 8\u00A0kHz\n"
                 "Output: System default (selected)\n"
-                "Arrival jitter: 3 ms\n"
+                "Arrival jitter: 3\u00A0ms\n"
                 "Missing packets: 2 of 100\n"
                 "Gaps filled: 5\n"
-                "Speaker buffer: 119 ms on this computer"));
+                "Speaker buffer: 119\u00A0ms on this computer"));
         }
 
         // A minor-7 Core: no codec detail, health still measured and shown.
@@ -502,10 +504,10 @@ private slots:
                 "Remote audio: Playing\n"
                 "Codec: Not reported by this Core\n"
                 "Output: System default (selected)\n"
-                "Arrival jitter: 1 ms\n"
+                "Arrival jitter: 1\u00A0ms\n"
                 "Missing packets: 0 of 50\n"
                 "Gaps filled: 0\n"
-                "Speaker buffer: 12 ms on this computer"));
+                "Speaker buffer: 12\u00A0ms on this computer"));
         }
 
         // PlaybackProblem: the Problem line appears, health stays visible.
@@ -526,10 +528,10 @@ private slots:
                 "Problem: The speaker device stopped playing audio.\n"
                 "Codec: Audio is off\n"
                 "Output: USB DAC (selected)\n"
-                "Arrival jitter: 0 ms\n"
+                "Arrival jitter: 0\u00A0ms\n"
                 "Missing packets: 7 of 200\n"
                 "Gaps filled: 3\n"
-                "Speaker buffer: 0 ms on this computer"));
+                "Speaker buffer: 0\u00A0ms on this computer"));
         }
 
         // MutedHere: health is omitted, but a problem behind the mute still
@@ -551,7 +553,7 @@ private slots:
             QCOMPARE(formatRemoteAudioDetails(status, playback), QStringLiteral(
                 "Remote audio: Muted on this computer\n"
                 "Problem: The speaker device stopped playing audio.\n"
-                "Codec: Opus stereo, 24 kbit/s target, 40 ms packets, audio up to 8 kHz\n"
+                "Codec: Opus stereo, 24\u00A0kbit/s target, 40\u00A0ms packets, audio up to 8\u00A0kHz\n"
                 "Output: System default (selected)"));
         }
 

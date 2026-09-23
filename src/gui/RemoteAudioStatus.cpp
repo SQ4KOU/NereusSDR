@@ -142,12 +142,13 @@ QString remoteAudioCodecText(const RemoteAudioStatus& status)
     } else if (profile.channels == 1) {
         channels = QStringLiteral("mono");
     } else {
-        channels = QStringLiteral("%1 channels").arg(profile.channels);
+        channels = QStringLiteral("%1\u00A0channels").arg(profile.channels);
     }
     const qint64 packetMs = profile.sampleRate > 0
         ? qint64(profile.frameSamples) * 1000 / profile.sampleRate : 0;
     // A target, not measured traffic: constrained VBR spends less on quiet audio.
-    return QStringLiteral("Opus %1, %2 kbit/s target, %3 ms packets, audio up to %4 kHz")
+    // U+00A0 between each number and its unit keeps them on one line.
+    return QStringLiteral("Opus %1, %2\u00A0kbit/s target, %3\u00A0ms packets, audio up to %4\u00A0kHz")
         .arg(channels)
         .arg(profile.targetBitrate / 1000)
         .arg(packetMs)
@@ -169,8 +170,9 @@ QString formatRemoteAudioDetails(const RemoteAudioStatus& status,
     const bool showHealth = status.state != State::NotConnected
         && status.state != State::MutedHere && status.state != State::RadioOffline;
     if (showHealth) {
+        // U+00A0 between each number and its unit keeps them on one line.
         lines << (playback.arrivalJitterMs
-            ? QStringLiteral("Arrival jitter: %1 ms").arg(qRound(*playback.arrivalJitterMs))
+            ? QStringLiteral("Arrival jitter: %1\u00A0ms").arg(qRound(*playback.arrivalJitterMs))
             : QStringLiteral("Arrival jitter: not measured yet"));
         lines << (playback.expectedPackets > 0
             ? QStringLiteral("Missing packets: %1 of %2")
@@ -178,7 +180,7 @@ QString formatRemoteAudioDetails(const RemoteAudioStatus& status,
             : QStringLiteral("Missing packets: none received yet"));
         lines << QStringLiteral("Gaps filled: %1").arg(playback.concealedPackets);
         lines << (playback.speakerQueuedMs
-            ? QStringLiteral("Speaker buffer: %1 ms on this computer")
+            ? QStringLiteral("Speaker buffer: %1\u00A0ms on this computer")
                   .arg(qRound(*playback.speakerQueuedMs))
             : QStringLiteral("Speaker buffer: not measured yet"));
     }
