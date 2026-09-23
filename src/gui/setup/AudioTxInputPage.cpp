@@ -8,6 +8,9 @@
 // Phase 3M-1b Task I.1 (2026-04-28): Top-level mic-source selector.
 // Phase 3M-1b Task I.2 (2026-04-28): PC Mic group box (5 rows: backend,
 //   device, buffer size, Test Mic + VU, Mic Gain).
+// R-R3-36 Task 6 (2026-09-22): PC Mic controls edit the shared
+//   audio/TxInput config; Test Mic holds a real capture demand; microphone
+//   status and Retry beside Test Mic.
 //
 // Written by J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
@@ -15,9 +18,11 @@
 // no-port-check: NereusSDR-original file; no Thetis logic ported here.
 
 #include "AudioTxInputPage.h"
+#include "CaptureStatusText.h"
 
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
+#include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
 #include "core/AudioEngine.h"
 #include "gui/HGauge.h"
@@ -28,6 +33,7 @@
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
+#include <QHideEvent>
 #include <QLabel>
 #include <QRadioButton>
 #include <QSignalBlocker>
@@ -132,44 +138,6 @@ AudioTxInputPage::AudioTxInputPage(RadioModel* model, QWidget* parent)
         // Apply the current model state at construction.
         syncButtonsFromModel(tx->micSource());
 
-        // Seed the PC Mic group controls from model session state.
-        // Backend combo: resolve -1 to the OS default if the model still
-        // holds the initial sentinel.
-        const int storedApi = tx->pcMicHostApiIndex();
-        const int effectiveApi = (storedApi == -1) ? defaultHostApiIndex() : storedApi;
-        if (m_backendCombo) {
-            const QVector<PortAudioBus::HostApiInfo> apis = PortAudioBus::hostApis();
-            for (int i = 0; i < apis.size(); ++i) {
-                if (apis[i].index == effectiveApi) {
-                    QSignalBlocker blk(m_backendCombo);
-                    m_backendCombo->setCurrentIndex(i);
-                    break;
-                }
-            }
-        }
-        populateDeviceCombo(effectiveApi);
-
-        // Seed device combo selection from stored device name.
-        const QString storedDevice = tx->pcMicDeviceName();
-        if (m_deviceCombo && !storedDevice.isEmpty()) {
-            const int idx = m_deviceCombo->findText(storedDevice);
-            if (idx >= 0) {
-                QSignalBlocker blk(m_deviceCombo);
-                m_deviceCombo->setCurrentIndex(idx);
-            }
-        }
-
-        // Seed buffer slider from stored buffer samples.
-        const int storedBuf = tx->pcMicBufferSamples();
-        if (m_bufferSlider) {
-            const int pos = kBufferSizes.indexOf(storedBuf);
-            if (pos >= 0) {
-                QSignalBlocker blk(m_bufferSlider);
-                m_bufferSlider->setValue(pos);
-            }
-            updateBufferLabel(storedBuf);
-        }
-
         // Seed mic gain slider — clamp stored model value to the per-board
         // slider range so a value persisted for a different board doesn't
         // land outside the slider bounds.
@@ -262,33 +230,27 @@ AudioTxInputPage::AudioTxInputPage(RadioModel* model, QWidget* parent)
             QSignalBlocker blk(m_saturnMicBoostChk);
             m_saturnMicBoostChk->setChecked(tx->micBoost());
         }
-
-        // Live model → UI connections for PC Mic session state.
-        // Buffer samples: model change → slider position.
-        connect(tx, &TransmitModel::pcMicBufferSamplesChanged,
-                this, [this](int samples) {
-                    if (!m_bufferSlider) { return; }
-                    const int pos = kBufferSizes.indexOf(samples);
-                    if (pos >= 0) {
-                        QSignalBlocker blk(m_bufferSlider);
-                        m_bufferSlider->setValue(pos);
-                    }
-                    updateBufferLabel(samples);
-                });
-
-        // Host API index: model change → backend combo selection.
-        connect(tx, &TransmitModel::pcMicHostApiIndexChanged,
-                this, [this](int hostApiIndex) {
-                    if (!m_backendCombo) { return; }
-                    for (int i = 0; i < m_backendCombo->count(); ++i) {
-                        if (m_backendCombo->itemData(i).toInt() == hostApiIndex) {
-                            QSignalBlocker blk(m_backendCombo);
-                            m_backendCombo->setCurrentIndex(i);
-                            break;
-                        }
-                    }
-                });
     }
+
+    // R-R3-36: the PC Mic controls show the one audio/TxInput config the
+    // engine holds (the Devices page edits the same one) and follow every
+    // change to it, whichever page made it.
+    if (AudioEngine* eng = engine()) {
+        applyTxInputConfigToControls(eng->txInputConfig());
+        connect(eng, &AudioEngine::txInputConfigChanged,
+                this, &AudioTxInputPage::applyTxInputConfigToControls);
+        connect(eng, &AudioEngine::captureStatusChanged,
+                this, [this](const CaptureSupervisor::Status&) { refreshCaptureStatus(); });
+        connect(m_retryCaptureBtn, &QPushButton::clicked,
+                this, [this]() {
+                    if (AudioEngine* e = engine()) {
+                        e->retryCapture();
+                    }
+                });
+    } else {
+        applyTxInputConfigToControls(AudioDeviceConfig{});
+    }
+    refreshCaptureStatus();
 
     // Set up the VU timer (10 ms refresh, stopped until Test Mic is pressed).
     m_vuTimer = new QTimer(this);
@@ -298,9 +260,104 @@ AudioTxInputPage::AudioTxInputPage(RadioModel* model, QWidget* parent)
 
 AudioTxInputPage::~AudioTxInputPage()
 {
+    // R-R3-36: a destroyed page gives up its Test Mic capture demand.
+    m_testMicLease.release();
     // Stop VU timer on destruction to prevent dangling callbacks.
     if (m_vuTimer) {
         m_vuTimer->stop();
+    }
+}
+
+// R-R3-36: a hidden page (another Setup page selected, the dialog closed)
+// stops its Test Mic, which releases the capture demand.
+void AudioTxInputPage::hideEvent(QHideEvent* event)
+{
+    if (m_testMicBtn && m_testMicBtn->isChecked()) {
+        m_testMicBtn->setChecked(false);
+    }
+    SetupPage::hideEvent(event);
+}
+
+// ---------------------------------------------------------------------------
+// Shared audio/TxInput config (R-R3-36)
+// ---------------------------------------------------------------------------
+
+AudioEngine* AudioTxInputPage::engine()
+{
+    return model() ? model()->audioEngine() : nullptr;
+}
+
+void AudioTxInputPage::applyTxInputConfigToControls(const AudioDeviceConfig& cfg)
+{
+    m_applyingTxInputConfig = true;
+
+    // Backend: -1 (PortAudio default) is shown as the OS-default API.
+    const int effectiveApi = (cfg.hostApiIndex == -1) ? defaultHostApiIndex()
+                                                      : cfg.hostApiIndex;
+    if (m_backendCombo) {
+        const int idx = m_backendCombo->findData(effectiveApi);
+        if (idx >= 0) {
+            QSignalBlocker blk(m_backendCombo);
+            m_backendCombo->setCurrentIndex(idx);
+        }
+    }
+    populateDeviceCombo(effectiveApi);
+
+    // Device: empty is the "(default)" entry. A named device that is not
+    // present stays selected under its own name, so the page never shows a
+    // different microphone than the one configured.
+    if (m_deviceCombo) {
+        QSignalBlocker blk(m_deviceCombo);
+        int idx = 0;
+        if (!cfg.deviceName.isEmpty()) {
+            idx = m_deviceCombo->findData(cfg.deviceName);
+            if (idx < 0) {
+                m_deviceCombo->addItem(
+                    QStringLiteral("%1 (not available)").arg(cfg.deviceName),
+                    cfg.deviceName);
+                idx = m_deviceCombo->count() - 1;
+            }
+        }
+        m_deviceCombo->setCurrentIndex(idx);
+    }
+
+    // Buffer.
+    if (m_bufferSlider) {
+        const int pos = kBufferSizes.indexOf(cfg.bufferSamples);
+        if (pos >= 0) {
+            QSignalBlocker blk(m_bufferSlider);
+            m_bufferSlider->setValue(pos);
+        }
+    }
+    updateBufferLabel(cfg.bufferSamples);
+
+    m_applyingTxInputConfig = false;
+}
+
+// Persists exactly as the Devices page TX Input card does, then hands the
+// config to the engine (which reports it back through txInputConfigChanged).
+void AudioTxInputPage::commitTxInputConfig(const AudioDeviceConfig& cfg)
+{
+    AudioEngine* eng = engine();
+    if (!eng) {
+        return;
+    }
+    cfg.saveToSettings(QStringLiteral("audio/TxInput"));
+    AppSettings::instance().save();
+    eng->setTxInputConfig(cfg);
+}
+
+void AudioTxInputPage::refreshCaptureStatus()
+{
+    AudioEngine* eng = engine();
+    const CaptureSupervisor::Status status =
+        eng ? eng->captureStatus() : CaptureSupervisor::Status{};
+    if (m_captureStatusLabel) {
+        m_captureStatusLabel->setText(captureStatusText(status));
+    }
+    if (m_retryCaptureBtn) {
+        m_retryCaptureBtn->setEnabled(
+            eng != nullptr && status.state == CaptureSupervisor::Status::State::Failed);
     }
 }
 
@@ -412,7 +469,7 @@ void AudioTxInputPage::buildPcMicGroup(QVBoxLayout* parentLayout)
     m_testMicBtn = new QPushButton(QStringLiteral("Test Mic"), this);
     m_testMicBtn->setCheckable(true);
     m_testMicBtn->setToolTip(
-        QStringLiteral("Click to sample the selected PC mic and see the live level"));
+        QStringLiteral("Click to open the selected PC mic and see the live level"));
 
     m_vuBar = new HGauge(this);
     m_vuBar->setRange(0.0, 100.0);
@@ -428,6 +485,19 @@ void AudioTxInputPage::buildPcMicGroup(QVBoxLayout* parentLayout)
 
     connect(m_testMicBtn, &QPushButton::toggled,
             this, &AudioTxInputPage::onTestMicToggled);
+
+    // ── Microphone status + Retry (R-R3-36) ───────────────────────────────────
+    m_captureStatusLabel = new QLabel(this);
+    m_captureStatusLabel->setObjectName(QStringLiteral("captureStatus"));
+    m_captureStatusLabel->setWordWrap(true);
+    m_retryCaptureBtn = new QPushButton(QStringLiteral("Retry microphone"), this);
+    m_retryCaptureBtn->setObjectName(QStringLiteral("retryCapture"));
+    m_retryCaptureBtn->setEnabled(false);
+
+    auto* statusRow = new QHBoxLayout();
+    statusRow->addWidget(m_captureStatusLabel, 1);
+    statusRow->addWidget(m_retryCaptureBtn);
+    grpLayout->addRow(QStringLiteral(""), statusRow);
 
     // ── Row 5: Mic Gain ───────────────────────────────────────────────────────
     // Range is read from BoardCapabilities::micGainMinDb / micGainMaxDb.
@@ -642,18 +712,23 @@ void AudioTxInputPage::syncButtonsFromModel(MicSource source)
 void AudioTxInputPage::onBackendChanged(int comboIndex)
 {
     if (!m_backendCombo) { return; }
+    if (m_applyingTxInputConfig) { return; }
 
     const int hostApiIndex = m_backendCombo->itemData(comboIndex).toInt();
 
     // Repopulate device combo for the new host API.
     populateDeviceCombo(hostApiIndex);
 
-    // Persist to TransmitModel session state.
-    if (model()) {
-        model()->transmitModel().setPcMicHostApiIndex(hostApiIndex);
-        // Device name resets to default when backend changes.
-        model()->transmitModel().setPcMicDeviceName(QString());
-    }
+    // R-R3-36: one audio/TxInput config. The Devices card stores the API by
+    // name (driverApi) and index; keep both in step. Device name resets to
+    // the default when the backend changes.
+    AudioEngine* eng = engine();
+    if (!eng) { return; }
+    AudioDeviceConfig cfg = eng->txInputConfig();
+    cfg.hostApiIndex = hostApiIndex;
+    cfg.driverApi = (hostApiIndex < 0) ? QString() : m_backendCombo->itemText(comboIndex);
+    cfg.deviceName.clear();
+    commitTxInputConfig(cfg);
 }
 
 // ---------------------------------------------------------------------------
@@ -663,13 +738,13 @@ void AudioTxInputPage::onBackendChanged(int comboIndex)
 void AudioTxInputPage::onDeviceChanged(int comboIndex)
 {
     if (!m_deviceCombo) { return; }
-    if (m_updatingFromModel) { return; }
+    if (m_updatingFromModel || m_applyingTxInputConfig) { return; }
 
-    const QString deviceName = m_deviceCombo->itemData(comboIndex).toString();
-
-    if (model()) {
-        model()->transmitModel().setPcMicDeviceName(deviceName);
-    }
+    AudioEngine* eng = engine();
+    if (!eng) { return; }
+    AudioDeviceConfig cfg = eng->txInputConfig();
+    cfg.deviceName = m_deviceCombo->itemData(comboIndex).toString();
+    commitTxInputConfig(cfg);
 }
 
 // ---------------------------------------------------------------------------
@@ -682,10 +757,13 @@ void AudioTxInputPage::onBufferSliderChanged(int sliderPos)
 
     const int samples = kBufferSizes[sliderPos];
     updateBufferLabel(samples);
+    if (m_applyingTxInputConfig) { return; }
 
-    if (model()) {
-        model()->transmitModel().setPcMicBufferSamples(samples);
-    }
+    AudioEngine* eng = engine();
+    if (!eng) { return; }
+    AudioDeviceConfig cfg = eng->txInputConfig();
+    cfg.bufferSamples = samples;
+    commitTxInputConfig(cfg);
 }
 
 // ---------------------------------------------------------------------------
@@ -695,17 +773,18 @@ void AudioTxInputPage::onBufferSliderChanged(int sliderPos)
 void AudioTxInputPage::onTestMicToggled(bool checked)
 {
     if (checked) {
-        // Start the 10 ms VU-poll timer.
-        // TODO [3M-1b I.x]: if m_txInputBus is not open, trigger
-        // AudioEngine to open the PC Mic capture stream with the current
-        // host API / device / buffer settings so the level reflects the
-        // actual hardware. For now, pcMicInputLevel() returns 0.0f when
-        // the bus is idle — the VU bar will show silent until TX is active.
+        // R-R3-36: a real capture demand; the selected input opens even
+        // before a radio is connected, and the status row reports progress.
+        if (AudioEngine* eng = engine()) {
+            m_testMicLease = eng->acquireCaptureDemand(CaptureSupervisor::Demand::TestMic);
+        }
         m_vuTimer->start();
         if (m_testMicBtn) {
             m_testMicBtn->setText(QStringLiteral("Stop Test"));
         }
     } else {
+        // Releases only this page's demand; an active session keeps its own.
+        m_testMicLease.release();
         m_vuTimer->stop();
         if (m_vuBar) {
             m_vuBar->setValue(0.0);
@@ -725,12 +804,9 @@ void AudioTxInputPage::onVuTimerTick()
     if (!m_vuBar) { return; }
 
     float level = 0.0f;
-    if (model() && model()->audioEngine()) {
-        // Bus-tap approach: read peak amplitude from m_txInputBus without
-        // consuming any samples. The PortAudioBus callback updates txLevel()
-        // (std::atomic<float>) every 10–20 ms. When the TX-input bus is not
-        // open (no active capture stream), pcMicInputLevel() returns 0.0f.
-        level = model()->audioEngine()->pcMicInputLevel();
+    if (AudioEngine* eng = engine()) {
+        // Peak level of the capture reader; 0.0f until capture is Ready.
+        level = eng->pcMicInputLevel();
     }
 
     // Scale from normalized [0.0, 1.0] to gauge range [0, 100].

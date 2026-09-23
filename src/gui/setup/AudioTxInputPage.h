@@ -23,8 +23,11 @@
 //   Row 4 — Test Mic button + live VU bar (10 ms QTimer, bus-tap)
 //   Row 5 — Mic Gain slider mirroring TxApplet (bidirectional sync)
 // PC Mic group is only visible when PC Mic radio button is selected.
-// TransmitModel session state: pcMicHostApiIndex, pcMicDeviceName,
-// pcMicBufferSamples (transient; AppSettings persistence deferred L.2).
+// R-R3-36 (2026-09-22): Backend / Device / Buffer read
+// AudioEngine::txInputConfig() and write through setTxInputConfig(),
+// persisted under audio/TxInput exactly as the Devices page TX Input card
+// does, so both pages edit one selection. TransmitModel's pcMic* fields
+// project that config (RadioModel wiring).
 //
 // Phase 3M-1b Task I.3 (2026-04-28): Radio Mic settings group with
 // per-family layout, capability-gated. Visible only when
@@ -61,11 +64,18 @@
 //                via Anthropic Claude Code.
 //   2026-04-28 — I.4 Per-board mic gain range written by J.J. Boyd (KG4VCF),
 //                with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-22 : R-R3-36 Task 6 by J.J. Boyd (KG4VCF), with AI-assisted
+//                implementation via Anthropic Claude Code. PC Mic controls
+//                edit the shared audio/TxInput config; Test Mic holds a
+//                real capture demand; microphone status and Retry beside
+//                Test Mic.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; no Thetis logic ported here.
 
 #include "gui/SetupPage.h"
+#include "core/AudioDeviceConfig.h"
+#include "core/audio/CaptureSupervisor.h"
 #include "core/audio/CompositeTxMicRouter.h"
 #include "core/HpsdrModel.h"
 
@@ -79,8 +89,11 @@
 #include <QSlider>
 #include <QTimer>
 
+class QHideEvent;
+
 namespace NereusSDR {
 
+class AudioEngine;
 class HGauge;
 
 // ---------------------------------------------------------------------------
@@ -109,14 +122,18 @@ class HGauge;
 // TODO [3M-1b I.x]: dynamic hasMicJack refresh on currentRadioChanged,
 // once RadioModel emits a capability-change signal.
 //
-// Test Mic implementation (bus-tap approach):
-//   On button press, a 10 ms QTimer polls AudioEngine::pcMicInputLevel()
-//   (which reads PortAudioBus::m_txLevel, updated by the PA callback).
-//   No separate capture stream is opened; the existing TX-input bus is
-//   reused. If m_txInputBus is null or not open, pcMicInputLevel() returns
-//   0.0f and the VU bar shows silent.
-//   TODO [3M-1b I.x]: connect Test Mic to PCMicSource open/close so the
-//   capture stream is started on demand when the test mic is active.
+// Test Mic implementation (R-R3-36):
+//   While Test Mic is checked the page holds a CaptureSupervisor TestMic
+//   lease from AudioEngine::acquireCaptureDemand(), so the selected input
+//   really opens, with or without a connected radio. The lease is released
+//   on Stop Test, when the page is hidden and when it is destroyed. A
+//   10 ms QTimer polls AudioEngine::pcMicInputLevel(), which reads the
+//   capture reader's level and is 0.0f until capture is Ready.
+//
+// Microphone status (R-R3-36): a label (objectName "captureStatus") shows
+//   captureStatusText(AudioEngine::captureStatus()) and a "Retry microphone"
+//   button (objectName "retryCapture"), enabled only in Failed, calls
+//   AudioEngine::retryCapture(). Both refresh on captureStatusChanged.
 // ---------------------------------------------------------------------------
 class AudioTxInputPage : public SetupPage {
     Q_OBJECT
@@ -135,6 +152,14 @@ public:
     QPushButton* testMicButton()   const { return m_testMicBtn; }
     HGauge*      vuBar()           const { return m_vuBar; }
     QSlider*     micGainSlider()   const { return m_micGainSlider; }
+    QLabel*      captureStatusLabel() const { return m_captureStatusLabel; }
+    QPushButton* retryCaptureButton() const { return m_retryCaptureBtn; }
+
+    // True while Test Mic holds its capture demand.
+    bool hasTestMicDemand() const { return m_testMicLease.isActive(); }
+
+protected:
+    void hideEvent(QHideEvent* event) override;
 
     // Expose Radio Mic per-family group boxes for test introspection (I.3).
     QGroupBox* hermesRadioMicGroup() const { return m_hermesGroup; }
@@ -195,6 +220,12 @@ private:
     void updateRadioMicGroupVisibility(MicSource source, HPSDRHW hw);
     static QString lineInBoostLabel(int sliderValue);
 
+    // R-R3-36: shared audio/TxInput config.
+    AudioEngine* engine();
+    void applyTxInputConfigToControls(const AudioDeviceConfig& cfg);
+    void commitTxInputConfig(const AudioDeviceConfig& cfg);
+    void refreshCaptureStatus();
+
     // Returns the latency string for `samples` samples at 48 kHz reference.
     static QString latencyString(int samples);
 
@@ -227,6 +258,15 @@ private:
     QPushButton* m_testMicBtn{nullptr};
     HGauge*      m_vuBar{nullptr};
     QTimer*      m_vuTimer{nullptr};
+    CaptureSupervisor::Lease m_testMicLease;
+
+    // Microphone status + Retry (R-R3-36)
+    QLabel*      m_captureStatusLabel{nullptr};
+    QPushButton* m_retryCaptureBtn{nullptr};
+
+    // True while applyTxInputConfigToControls() moves the PC Mic controls,
+    // so their change slots do not write the config back.
+    bool m_applyingTxInputConfig{false};
 
     // Row 5: Mic Gain
     QSlider*     m_micGainSlider{nullptr};

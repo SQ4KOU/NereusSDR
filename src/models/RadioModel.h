@@ -4073,6 +4073,9 @@ private:
     // m_pcCaptureSessionActive is true from AudioEngine::start() in the
     // local connect path until teardown has stopped the TX worker.
     void updatePcCaptureDemand();
+    // R-R3-36 Task 6: TransmitModel's pcMic* fields project the AudioEngine
+    // TX input config and their setters forward to it (constructor only).
+    void wirePcMicConfigProjection();
     bool m_pcCaptureAllowed{true};
     bool m_pcCaptureSessionActive{false};
     CaptureSupervisor::Lease m_pcCaptureLease;

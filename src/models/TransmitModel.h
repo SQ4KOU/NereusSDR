@@ -1333,12 +1333,16 @@ public:
 
     // ── PC Mic session state (3M-1b I.2) ─────────────────────────────────────
     //
-    // NereusSDR-native transient session state for the PC Mic configuration
-    // group (Setup → Audio → TX Input → PC Mic group box).
+    // NereusSDR-native PC Mic device selection.
     //
-    // These three properties survive Setup dialog close/reopen within the
-    // same session but are NOT persisted across app restarts — AppSettings
-    // persistence is deferred to Phase L.2.
+    // R-R3-36 (2026-09-22): these three properties are projections of the
+    // single AudioEngine TX input config (AudioDeviceConfig persisted under
+    // audio/TxInput, edited by Setup → Audio → Devices and TX Input).
+    // RadioModel mirrors that config into them on every
+    // AudioEngine::txInputConfigChanged, and a setter call here is
+    // forwarded by RadioModel to AudioEngine::setTxInputConfig (persisted
+    // under audio/TxInput). A TransmitModel with no RadioModel keeps the
+    // defaults below and forwards nothing.
     //
     // pcMicHostApiIndex: PortAudio host API index (-1 = PA default; on
     //   macOS this will be the CoreAudio index, on Linux PipeWire/Pulse,
@@ -1355,17 +1359,17 @@ public:
     //   power-of-2 list (64/128/256/512/1024/2048/4096/8192).
 
     /// PortAudio host API index for PC Mic capture.  -1 = OS default.
-    /// Session-transient; AppSettings persistence deferred to Phase L.2.
+    /// Projection of the audio/TxInput config (R-R3-36).
     int pcMicHostApiIndex() const noexcept { return m_pcMicHostApiIndex; }
 
     /// Device name for PC Mic capture within the selected host API.
     /// Empty = use the PA default device for that host API.
-    /// Session-transient; AppSettings persistence deferred to Phase L.2.
+    /// Projection of the audio/TxInput config (R-R3-36).
     QString pcMicDeviceName() const noexcept { return m_pcMicDeviceName; }
 
     /// Capture buffer size in samples per channel for PC Mic.
-    /// Default 512 samples (~10.7 ms @ 48 kHz reference rate).
-    /// Session-transient; AppSettings persistence deferred to Phase L.2.
+    /// Default 512 samples (~10.7 ms @ 48 kHz reference rate) until
+    /// RadioModel mirrors the config.  Projection of audio/TxInput (R-R3-36).
     int pcMicBufferSamples() const noexcept { return m_pcMicBufferSamples; }
 
     // ── Two-tone test properties (3M-1c B.2) ─────────────────────────────────
@@ -1869,17 +1873,17 @@ public slots:
     // ── PC Mic session-state setters (3M-1b I.2) ─────────────────────────────
     /// Set the PortAudio host API index for PC Mic capture.  Idempotent.
     /// -1 = let AudioEngine resolve the OS default.
-    /// AppSettings persistence deferred to Phase L.2.
+    /// RadioModel forwards the change to AudioEngine::setTxInputConfig.
     void setPcMicHostApiIndex(int index);
 
     /// Set the device name for PC Mic capture within the selected host API.
     /// Empty string = use the PA default device for that host API.
-    /// Idempotent; AppSettings persistence deferred to Phase L.2.
+    /// Idempotent; RadioModel forwards the change to the TX input config.
     void setPcMicDeviceName(const QString& name);
 
     /// Set the capture buffer size in samples per channel for PC Mic.
     /// No clamping — caller is responsible for valid power-of-2 values.
-    /// Idempotent; AppSettings persistence deferred to Phase L.2.
+    /// Idempotent; RadioModel forwards the change to the TX input config.
     void setPcMicBufferSamples(int samples);
 
     // ── Mic-jack flag setters (3M-1b C.2) ─────────────────────────────────

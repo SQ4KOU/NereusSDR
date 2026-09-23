@@ -1440,6 +1440,10 @@ nereus_add_test(tst_capture_session_demand
     fakes/ConnectableRadioModel.cpp)
 target_compile_definitions(tst_capture_session_demand PRIVATE NEREUS_BUILD_TESTS)
 
+# R-R3-36 Task 6: operator wording for every capture state and failure
+# reason, exact strings, no transport wording.
+nereus_add_test(tst_capture_status_text)
+
 # R-R3-36 Task 4: locateCaptureHelper() lookup order per platform against
 # temporary directory layouts (including none present), and the
 # supervisor's default program falling back to HelperMissing.
@@ -4204,7 +4208,11 @@ target_compile_definitions(tst_audio_tx_input_page_skeleton PRIVATE NEREUS_BUILD
 #  11-13. TransmitModel idempotency for 3 new PC Mic properties.
 #  14-15. PC Mic group box visibility gated by mic-source selection.
 # NEREUS_BUILD_TESTS required for RadioModel::setCapsHasMicJackForTest.
-nereus_add_test(tst_audio_tx_input_pc_mic_group)
+# R-R3-36 Task 6: the page and the Devices page edit one audio/TxInput
+# config, show the capture status with Retry, and Test Mic holds a real
+# capture demand. Re-executes itself as the scripted fake helper
+# (--fake-capture-child); no real microphone is opened.
+nereus_add_test(tst_audio_tx_input_pc_mic_group fakes/FakeCaptureChild.cpp)
 target_compile_definitions(tst_audio_tx_input_pc_mic_group PRIVATE NEREUS_BUILD_TESTS)
 
 # =============================================================================

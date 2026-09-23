@@ -24,6 +24,12 @@
 //                 the mic source is Pc, and releases it on source change and
 //                 in teardown after the TX worker has stopped.
 //                 NereusSDR-original; no Thetis logic.
+//   2026-09-22 : R-R3-36 Task 6 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. TransmitModel's pcMicHostApiIndex /
+//                 pcMicDeviceName / pcMicBufferSamples project the
+//                 AudioEngine TX input config (audio/TxInput) and their
+//                 setters forward to it, so there is one PC mic selection.
+//                 NereusSDR-original; no Thetis logic.
 //   2026-05-03 — Phase 4 Agent 4A of issue #167 (PA calibration safety
 //                 hotfix — K2GX field report).  Drive-slider lambda
 //                 (lines ~830) and TUNE-engagement path (lines ~4280)
@@ -285,6 +291,7 @@ warren@wpratt.com
 #include "core/TxWorkerThread.h"
 // 3M-1b L.1: concrete mic-source strategy objects.
 #include "core/audio/PcMicSource.h"
+#include "core/audio/PortAudioBus.h"
 #include "core/audio/RadioMicSource.h"
 #include "core/audio/RealtimeAudioPriority.h"
 #include "core/audio/VaxTxMicSource.h"
@@ -559,6 +566,7 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // R-R3-36: the PC microphone session demand follows the mic source.
     connect(&m_transmitModel, &TransmitModel::micSourceChanged, this,
             [this](MicSource) { updatePcCaptureDemand(); });
+    wirePcMicConfigProjection();
     connect(this, &RadioModel::connectionStateChanged, this, [this](ConnectionState state) {
         if (state == ConnectionState::Connected && m_pureSignal) {
             m_pureSignal->applyAcceptedSettingsToEngine();
@@ -13706,6 +13714,67 @@ bool RadioModel::pcCaptureRequired() const
 {
     return m_role == Role::Local && m_pcCaptureAllowed
         && m_transmitModel.micSource() == MicSource::Pc;
+}
+
+// R-R3-36: one PC mic selection. The AudioEngine TX input config
+// (persisted under audio/TxInput, edited by both Audio Setup pages) is the
+// owner; TransmitModel's three pcMic* fields mirror it, and a direct call
+// to one of their setters changes that one field of the config, persisted
+// the same way the Setup pages persist it. Each field is forwarded on its
+// own and only when it differs, so mirroring a whole new config back into
+// TransmitModel never writes a stale field over it.
+void RadioModel::wirePcMicConfigProjection()
+{
+    const auto project = [this](const AudioDeviceConfig& cfg) {
+        m_transmitModel.setPcMicHostApiIndex(cfg.hostApiIndex);
+        m_transmitModel.setPcMicDeviceName(cfg.deviceName);
+        m_transmitModel.setPcMicBufferSamples(cfg.bufferSamples);
+    };
+    project(m_audioEngine->txInputConfig());
+    connect(m_audioEngine, &AudioEngine::txInputConfigChanged, this, project);
+
+    const auto commit = [this](const AudioDeviceConfig& cfg) {
+        cfg.saveToSettings(QStringLiteral("audio/TxInput"));
+        AppSettings::instance().save();
+        m_audioEngine->setTxInputConfig(cfg);
+    };
+    connect(&m_transmitModel, &TransmitModel::pcMicHostApiIndexChanged, this,
+            [this, commit](int index) {
+                AudioDeviceConfig cfg = m_audioEngine->txInputConfig();
+                if (cfg.hostApiIndex == index) {
+                    return;
+                }
+                cfg.hostApiIndex = index;
+                cfg.driverApi.clear();
+                if (index >= 0) {
+                    const QVector<PortAudioBus::HostApiInfo> apis = PortAudioBus::hostApis();
+                    for (const PortAudioBus::HostApiInfo& api : apis) {
+                        if (api.index == index) {
+                            cfg.driverApi = api.name;
+                            break;
+                        }
+                    }
+                }
+                commit(cfg);
+            });
+    connect(&m_transmitModel, &TransmitModel::pcMicDeviceNameChanged, this,
+            [this, commit](const QString& name) {
+                AudioDeviceConfig cfg = m_audioEngine->txInputConfig();
+                if (cfg.deviceName == name) {
+                    return;
+                }
+                cfg.deviceName = name;
+                commit(cfg);
+            });
+    connect(&m_transmitModel, &TransmitModel::pcMicBufferSamplesChanged, this,
+            [this, commit](int samples) {
+                AudioDeviceConfig cfg = m_audioEngine->txInputConfig();
+                if (cfg.bufferSamples == samples) {
+                    return;
+                }
+                cfg.bufferSamples = samples;
+                commit(cfg);
+            });
 }
 
 void RadioModel::updatePcCaptureDemand()

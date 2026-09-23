@@ -41,6 +41,10 @@
 //                 pcMicBufferSamples transient properties (I.2, Phase 3M-1b)
 //                 NereusSDR-native, J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-22 : R-R3-36 Task 6: the three PC Mic properties become
+//                 projections of the audio/TxInput config (RadioModel
+//                 wiring). NereusSDR-native, J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-04-28 — AppSettings per-MAC persistence for 15 mic/VOX/MON properties
 //                 (L.2, Phase 3M-1b): loadFromSettings(mac) / persistToSettings(mac)
 //                 + auto-persist on each setter via persistOne().
@@ -2474,9 +2478,10 @@ void TransmitModel::setMicSourceLocked(bool lock)
 // configuration group (Setup → Audio → TX Input → PC Mic group box).
 //
 // All three setters are idempotent (no signal emitted on unchanged value).
-// None of these persist across app restarts — AppSettings persistence is
-// deferred to Phase L.2.  The properties survive Setup dialog close/reopen
-// within the same session, stored on TransmitModel (Option B from plan §2.5).
+// R-R3-36 (2026-09-22): they are projections of the AudioEngine TX input
+// config (audio/TxInput). RadioModel mirrors that config into them and
+// forwards a setter's change signal to AudioEngine::setTxInputConfig; this
+// class itself persists nothing for them.
 
 void TransmitModel::setPcMicHostApiIndex(int index)
 {
