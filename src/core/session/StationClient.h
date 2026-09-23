@@ -431,6 +431,18 @@ public:
     std::optional<SessionTransportTelemetry> transportTelemetry() const;
     bool sendMediaControl(const QJsonObject& payload, quint32 expectedEpoch);
 
+    /// R-R3-28. The media layer calls this once the media session it
+    /// started for `expectedEpoch` is ready. When media was negotiated,
+    /// this, not the control handshake, is what proves the session works
+    /// and resets the reconnect backoff: a Core whose control handshake
+    /// succeeds but whose media keeps failing must see its retries slow
+    /// down (1, 2, 5 s...) rather than retry at the first step forever.
+    /// Without negotiated media the handshake still resets it, as before.
+    /// A call naming any epoch but the current one, or made while media
+    /// is unavailable, changes nothing, so a late ready from a retired
+    /// peer cannot reset a newer session's schedule.
+    void noteMediaEstablished(quint32 expectedEpoch);
+
     /// Non-zero when the station's AppSettings schema version differs from
     /// this build's. Reported, never a refusal -- see the class comment.
     bool hasSettingsSchemaSkew() const { return m_settingsSchemaSkew; }
@@ -807,8 +819,9 @@ private:
     QTimer* m_reconnectTimer = nullptr;
 
     /// How many consecutive retry-eligible failures have happened since
-    /// the last PROVEN success (handshakeComplete) or the last DELIBERATE
-    /// fresh connectToStation() call -- both reset this to 0. Indexes
+    /// the last PROVEN success (handshakeComplete, or with negotiated media
+    /// noteMediaEstablished(), R-R3-28) or the last DELIBERATE fresh
+    /// connectToStation() call -- both reset this to 0. Indexes
     /// scheduleReconnect()'s backoff schedule.
     int m_reconnectAttempts = 0;
     int m_reconnectBackoffUnitMs = kDefaultReconnectBackoffUnitMs;

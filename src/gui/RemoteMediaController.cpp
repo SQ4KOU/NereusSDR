@@ -46,6 +46,16 @@ Q_LOGGING_CATEGORY(lcRemoteMedia, "nereus.remote.media")
 namespace {
 constexpr int kMaxEndpoints = 8;
 constexpr int kDefaultAllocationAckTimeoutMs = 10'000;
+// The derivation in RemoteMediaController.h, checked: the pinned library's
+// slowest serial failure (ICE 39.5 s, DTLS 31 s, SCTP 35 s) plus one control
+// heartbeat interval of margin.
+constexpr int kLibraryIcePacTimeoutMs = 39'500;   // libjuice agent.h:43
+constexpr int kLibraryDtlsHandshakeFailMs = 31'000; // dtlstransport.cpp:1024-1031
+constexpr int kLibrarySctpInitFailMs = 35'000;    // sctptransport.cpp:127-142
+static_assert(RemoteMediaController::kMediaEstablishmentDeadlineMs
+                  == kLibraryIcePacTimeoutMs + kLibraryDtlsHandshakeFailMs
+                         + kLibrarySctpInitFailMs + StationClient::kDefaultHeartbeatIntervalMs,
+              "media establishment deadline must match its derivation");
 // The audio status refresh, which runs only while a receiver runs or a
 // playback problem awaits recovery.
 constexpr int kAudioStatusRefreshMs = 250;
@@ -402,6 +412,12 @@ struct RemoteMediaController::Private {
     RemoteAudioStatus audioStatus;
     QTimer* audioStatusTimer = nullptr;
     bool recoveryRequested = false;
+    // R-R3-28: bounds a started media session that never becomes ready.
+    QTimer* establishTimer = nullptr;
+    int establishmentDeadlineMs = RemoteMediaController::kMediaEstablishmentDeadlineMs;
+    // While MediaPeer::start runs, a backend error is its refusal reason.
+    bool startingPeer = false;
+    QString startRefusal;
     qint64 lastAudioRequestMs = -1000;
     bool desiredPs3 = false;
     bool accountedPs3 = false;
@@ -425,7 +441,7 @@ struct RemoteMediaController::Private {
 
 RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* model,
     PanadapterStack* stack, QObject* parent, MediaPeer::TransportFactory factory,
-    AllocationClock allocationClock, int allocationAckTimeoutMs)
+    AllocationClock allocationClock, int allocationAckTimeoutMs, int establishmentDeadlineMs)
     : QObject(parent), d(std::make_unique<Private>())
 {
     d->client = client;
@@ -439,6 +455,24 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
     }
     d->allocationAckTimeoutMs = allocationAckTimeoutMs > 0
         ? allocationAckTimeoutMs : kDefaultAllocationAckTimeoutMs;
+    d->establishmentDeadlineMs = establishmentDeadlineMs > 0
+        ? establishmentDeadlineMs : kMediaEstablishmentDeadlineMs;
+    d->establishTimer = new QTimer(this);
+    d->establishTimer->setObjectName(QStringLiteral("remoteMediaEstablishTimer"));
+    d->establishTimer->setSingleShot(true);
+    d->establishTimer->setInterval(d->establishmentDeadlineMs);
+    connect(d->establishTimer, &QTimer::timeout, this, [this] {
+        // R-R3-28: negotiation that never reaches a terminal state. Only
+        // the session the timer was armed for, and only while not ready;
+        // stop() disarms it for every other outcome.
+        if (!d->peer || d->peer->isReady() || !d->client || !d->client->mediaAvailable()
+            || d->client->sessionEpoch() != d->epoch) {
+            return;
+        }
+        requestRecovery(d->epoch,
+            QStringLiteral("Station media did not connect within %1 seconds")
+                .arg(QString::number(d->establishmentDeadlineMs / 1000.0)));
+    });
     d->audio = std::make_unique<RemoteAudioReceiver>(model->audioEngine());
     d->selectedOutput = selectedSpeakerOutput();
     d->audioStatusTimer = new QTimer(this);
@@ -774,6 +808,7 @@ void RemoteMediaController::refreshAudioStatus()
 
 void RemoteMediaController::stop()
 {
+    d->establishTimer->stop();
     d->ps3Generation = 0;
     d->ps3Assembler.reset(0);
     d->timer->stop();
@@ -884,8 +919,12 @@ void RemoteMediaController::start()
     connect(peer, &MediaPeer::rtpReceived, this, [this, current](const QByteArray& packet) {
         if (current() && d->audioEnabled) { d->audio->submit(packet); }
     });
-    connect(peer, &MediaPeer::ready, this, [this, current] {
+    connect(peer, &MediaPeer::ready, this, [this, current, epoch] {
         if (current()) {
+            // Established: the deadline stands down, and only now does the
+            // session count as working for the reconnect backoff (R-R3-28).
+            d->establishTimer->stop();
+            d->client->noteMediaEstablished(epoch);
             if (!d->client->remoteDisplayBudgetLimits()) {
                 qCDebug(lcRemoteMedia)
                     << "Core supplied no aggregate display limits; using per-display subscriptions";
@@ -908,16 +947,40 @@ void RemoteMediaController::start()
     });
     connect(peer, &MediaPeer::errorOccurred, this, [this, current](const QString& reason) {
         if (current()) {
+            if (d->startingPeer) {
+                // Decided below, once start() says whether it refused.
+                if (d->startRefusal.isEmpty()) { d->startRefusal = reason; }
+                return;
+            }
             const QPointer<RemoteMediaController> self(this);
             stop();
             if (!self) { return; }
             emit errorOccurred(reason);
         }
     });
-    if (!peer->start(IMediaTransport::Role::Answerer, d->connectionId)) {
-        stop();
+    d->startingPeer = true;
+    d->startRefusal.clear();
+    const bool started = peer->start(IMediaTransport::Role::Answerer, d->connectionId);
+    if (!self) { return; }
+    d->startingPeer = false;
+    const QString startError = std::exchange(d->startRefusal, QString());
+    if (!started) {
+        // R-R3-28: a backend that refuses to start is a media failure like
+        // any other, not a silent stop. Plain reason, same retry path.
+        const QString reason = QStringLiteral("Station media could not start on this computer");
+        requestRecovery(epoch, startError.isEmpty()
+            ? reason : QStringLiteral("%1: %2").arg(reason, startError));
         return;
     }
+    if (!startError.isEmpty()) {
+        // Started, but reported an error on the way: handled exactly as an
+        // error after start always has been.
+        stop();
+        if (!self) { return; }
+        emit errorOccurred(startError);
+        return;
+    }
+    d->establishTimer->start();
     send({{QStringLiteral("op"), QStringLiteral("start")}});
     if (!self) { return; }
     // A media session now exists: audio is awaited from Core.

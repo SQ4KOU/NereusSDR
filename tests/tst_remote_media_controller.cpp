@@ -73,6 +73,27 @@ public:
     std::optional<MediaTransportTelemetry> traffic;
 };
 
+// A backend that refuses to start, optionally saying why first, as
+// LibDataChannelMediaTransport::start does when the peer cannot be built.
+class RefusingTransport final : public IMediaTransport {
+public:
+    RefusingTransport(QObject* parent, QString reason)
+        : IMediaTransport(parent), m_reason(std::move(reason)) {}
+    bool start(const StartOptions&) override
+    {
+        if (!m_reason.isEmpty()) { emit errorOccurred(m_reason); }
+        return false;
+    }
+    void stop() override {}
+    bool acceptDescription(const QString&, const QString&) override { return true; }
+    bool acceptCandidate(const QString&, const QString&) override { return true; }
+    bool sendDisplay(const QByteArray&) override { return false; }
+    bool sendRtp(const QByteArray&) override { return false; }
+    bool isReady() const override { return false; }
+private:
+    QString m_reason;
+};
+
 QStringList g_remoteMediaMessages;
 void captureRemoteMediaMessages(QtMsgType, const QMessageLogContext& context,
                                 const QString& message)
@@ -566,6 +587,167 @@ private slots:
         client.disconnectFromStation(QStringLiteral("operator disconnect"));
         QCoreApplication::processEvents();
         QCOMPARE(recoveries.size(), 0);
+    }
+
+    // R-R3-28. Media that never reaches ready (no answer, no candidates, no
+    // terminal state from the library) is bounded by the establishment
+    // deadline and then enters the same epoch-scoped recovery a typed
+    // failure does.
+    void mediaThatNeverConnectsRequestsRecoveryAtTheDeadline()
+    {
+        // The production deadline outlasts the pinned library's own slowest
+        // serial failure report (ICE 39.5 s + DTLS 31 s + SCTP 35 s; see the
+        // constant's derivation), so the library's reason wins when it comes.
+        QVERIFY(RemoteMediaController::kMediaEstablishmentDeadlineMs > 39'500 + 31'000 + 35'000);
+
+        constexpr int kDeadlineMs = 200;
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        QPointer<DisplayTransport> media;
+        RemoteMediaController controller(&client, &remote, nullptr, nullptr,
+            [&media](QObject* owner) -> IMediaTransport* {
+                media = new DisplayTransport(owner);
+                return media;
+            }, {}, 10'000, kDeadlineMs);
+        QSignalSpy recoveries(&controller, &RemoteMediaController::recoveryRequested);
+        QSignalSpy errors(&controller, &RemoteMediaController::errorOccurred);
+        auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        QElapsedTimer sinceStart;
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(client.isHandshakeComplete());
+        QTRY_VERIFY(media);
+        sinceStart.start();
+        const quint32 epoch = client.sessionEpoch();
+
+        QTRY_COMPARE_WITH_TIMEOUT(recoveries.size(), 1, 5000);
+        QVERIFY(sinceStart.elapsed() >= kDeadlineMs - 20);
+        QCOMPARE(recoveries.constFirst().at(0).toUInt(), epoch);
+        QCOMPARE(recoveries.constFirst().at(1).toString(),
+                 QStringLiteral("Station media did not connect within 0.2 seconds"));
+        QCOMPARE(errors.size(), 1);
+
+        // One recovery per establishment, not one per elapsed deadline.
+        QTest::qWait(kDeadlineMs * 2);
+        QCOMPARE(recoveries.size(), 1);
+    }
+
+    // R-R3-28. The deadline never pre-empts what the library reports, never
+    // fires once media is ready, and is cancelled by a deliberate end.
+    void establishmentDeadlineYieldsToReadyTypedFailureAndDisconnect()
+    {
+        constexpr int kDeadlineMs = 150;
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        QPointer<DisplayTransport> media;
+        RemoteMediaController controller(&client, &remote, nullptr, nullptr,
+            [&media](QObject* owner) -> IMediaTransport* {
+                media = new DisplayTransport(owner);
+                return media;
+            }, {}, 10'000, kDeadlineMs);
+        QSignalSpy recoveries(&controller, &RemoteMediaController::recoveryRequested);
+        auto connectSession = [&] {
+            media = nullptr;
+            auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+            auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+            stationLink->linkTo(clientLink);
+            client.startSession(clientLink, server.token());
+            server.acceptTransport(stationLink);
+            QTRY_VERIFY(client.isHandshakeComplete());
+            QTRY_VERIFY(media);
+        };
+
+        // The library's own typed reason arrives first and is the one reported.
+        connectSession();
+        media->failConnection(QStringLiteral("media peer connection failed"));
+        QTRY_COMPARE(recoveries.size(), 1);
+        QCOMPARE(recoveries.constFirst().at(1).toString(),
+                 QStringLiteral("media peer connection failed"));
+        QTest::qWait(kDeadlineMs * 3);
+        QCOMPARE(recoveries.size(), 1);
+
+        // Media that becomes ready is established; the deadline stands down.
+        client.disconnectFromStation(QStringLiteral("next case"));
+        connectSession();
+        media->activate();
+        QTest::qWait(kDeadlineMs * 3);
+        QCOMPARE(recoveries.size(), 1);
+
+        // Manual Disconnect during the wait cancels it. A newer session's
+        // deadline is its own: the retired one cannot fire into it.
+        client.disconnectFromStation(QStringLiteral("next case"));
+        connectSession();
+        QTest::qWait(kDeadlineMs / 2);
+        client.disconnectFromStation(QStringLiteral("operator disconnect"));
+        QTest::qWait(kDeadlineMs * 3);
+        QCOMPARE(recoveries.size(), 1);
+    }
+
+    // R-R3-28. A backend that refuses to start used to stop media silently.
+    // It now enters the same recovery with a plain reason, once.
+    void backendStartRefusalRequestsRecoveryWithAPlainReason()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        QString backendReason = QStringLiteral("could not create the peer connection");
+        int transportsBuilt = 0;
+        RemoteMediaController controller(&client, &remote, nullptr, nullptr,
+            [&backendReason, &transportsBuilt](QObject* owner) -> IMediaTransport* {
+                ++transportsBuilt;
+                return new RefusingTransport(owner, backendReason);
+            });
+        QSignalSpy recoveries(&controller, &RemoteMediaController::recoveryRequested);
+        QSignalSpy errors(&controller, &RemoteMediaController::errorOccurred);
+        auto connectSession = [&] {
+            auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+            auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+            stationLink->linkTo(clientLink);
+            client.startSession(clientLink, server.token());
+            server.acceptTransport(stationLink);
+            QTRY_VERIFY(client.isHandshakeComplete());
+        };
+
+        connectSession();
+        QTRY_COMPARE(recoveries.size(), 1);
+        QCOMPARE(transportsBuilt, 1);
+        QCOMPARE(recoveries.constLast().at(0).toUInt(), client.sessionEpoch());
+        QCOMPARE(recoveries.constLast().at(1).toString(),
+                 QStringLiteral("Station media could not start on this computer: "
+                                "could not create the peer connection"));
+        QCOMPARE(errors.size(), 1);
+        QCOMPARE(errors.constLast().at(0).toString(), recoveries.constLast().at(1).toString());
+
+        // A refusal that gives no reason still names what happened.
+        client.disconnectFromStation(QStringLiteral("next case"));
+        backendReason.clear();
+        connectSession();
+        QTRY_COMPARE(recoveries.size(), 2);
+        QCOMPARE(recoveries.constLast().at(1).toString(),
+                 QStringLiteral("Station media could not start on this computer"));
+        QCOMPARE(errors.size(), 2);
     }
 
     void remoteCtunProjectionPreservesPreferenceWithoutEcho()

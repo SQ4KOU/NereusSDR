@@ -1175,8 +1175,17 @@ void StationClient::onTransportText(const QByteArray& wire)
         // NEXT, unrelated drop start retrying at whatever the ORIGINAL
         // struggle's backoff had climbed to, possibly the 60 s ceiling,
         // rather than at the first, fast step.
+        //
+        // R-R3-28: when media was negotiated, the handshake alone no longer
+        // proves the session works. Media that fails after every good
+        // handshake would otherwise retry at the first step forever (the
+        // "Explicit remaining boundary" in the R3 media-recovery evidence).
+        // The reset then waits for noteMediaEstablished(); without media it
+        // happens here, as it always has.
         m_everConnected = true;
-        m_reconnectAttempts = 0;
+        if (!mediaAvailable()) {
+            m_reconnectAttempts = 0;
+        }
         // Only now: everything that moved before this point was the
         // station's own burst landing, and forwarding any of it would tell
         // the station its own state back.
@@ -2546,6 +2555,17 @@ quint32 StationClient::requestPs3DisplaySubscription(bool enabled)
     send(SessionMessages::commandInvoke("ps3.subscribeDisplay", id,
         {{0, "enabled", MirrorWireKind::Bool, enabled}}));
     return id;
+}
+
+void StationClient::noteMediaEstablished(quint32 expectedEpoch)
+{
+    // R-R3-28. The deferred half of the SnapshotComplete reset: with media
+    // negotiated, this is the proven success. Epoch-scoped so a ready from
+    // a retired peer cannot reset a newer session's schedule.
+    if (expectedEpoch == 0 || expectedEpoch != m_sessionEpoch || !mediaAvailable()) {
+        return;
+    }
+    m_reconnectAttempts = 0;
 }
 
 bool StationClient::sendMediaControl(const QJsonObject& payload, quint32 expectedEpoch)

@@ -57,6 +57,7 @@
 #include <QUrl>
 
 #include <algorithm>
+#include <functional>
 #include <memory>
 
 #include "core/AppSettings.h"
@@ -151,6 +152,10 @@ private slots:
     void startSessionClearsAnyPreviouslyLatchedRedialTarget();
     void automaticRetryReconnectsToASuccessfulHandshake();
     void operatorConnectionActivityIsIndependentOfRadioState();
+
+    // ---- R-R3-28: backoff across media failures after good handshakes ----
+    void mediaSessionBackoffResetsOnlyOnceMediaIsEstablished();
+    void sessionWithoutMediaResetsBackoffAtTheHandshake();
 
     // ---- R-R3-17: actionable reason for a blocked local network ----
     void hostUnreachableOnLocalNetworkNamesTheMacOsSetting();
@@ -1141,4 +1146,127 @@ void TstSessionLinkLoss::otherFailuresKeepTheSocketText()
 }
 
 QTEST_MAIN(TstSessionLinkLoss)
+// ── R-R3-28 ──────────────────────────────────────────────────────────────
+
+namespace {
+
+/// Drives `rounds` retry-eligible closures of a live wss session, each
+/// after a good handshake, and returns the delay each retry was scheduled
+/// with. `beforeFailure` runs on each established session first.
+QList<int> retryDelaysAcrossFailures(StationClient& client, QSignalSpy& completed,
+                                     QSignalSpy& scheduled, int rounds,
+                                     const std::function<void()>& beforeFailure = {})
+{
+    QList<int> delays;
+    for (int round = 0; round < rounds; ++round) {
+        const int handshakes = completed.count();
+        const int retries = scheduled.count();
+        if (beforeFailure) {
+            beforeFailure();
+        }
+        client.disconnectFromStation(QStringLiteral("media peer connection failed"),
+                                     /*attemptReconnect=*/true);
+        if (scheduled.count() != retries + 1) {
+            return {};
+        }
+        delays.append(scheduled.constLast().at(1).toInt());
+        if (!QTest::qWaitFor([&] { return completed.count() == handshakes + 1; }, 15000)) {
+            return {};
+        }
+    }
+    return delays;
+}
+
+} // namespace
+
+void TstSessionLinkLoss::mediaSessionBackoffResetsOnlyOnceMediaIsEstablished()
+{
+    if (!QSslSocket::supportsSsl()) {
+        QSKIP(qPrintable(tlsSkipMessage()));
+    }
+    // media-recovery.md "Explicit remaining boundary": each good control
+    // handshake used to reset the backoff, so media that failed after
+    // every handshake retried at the first step forever. With media
+    // negotiated, only established media proves the session works.
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+    auto stationModel = makeStationRadioModel(0);
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    server.setMediaEnabled(true);
+    QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.lastError()));
+
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+    constexpr int kUnitMs = 20;
+    client.setReconnectBackoffUnitMs(kUnitMs);
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    QSignalSpy scheduled(&client, &StationClient::reconnectScheduled);
+
+    client.connectToStation(QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(server.serverPort())),
+                            server.token(), server.certificateFingerprint());
+    QTRY_COMPARE_WITH_TIMEOUT(completed.count(), 1, 15000);
+    QVERIFY(client.mediaAvailable());
+
+    // Three media failures after good handshakes: the schedule grows.
+    QCOMPARE(retryDelaysAcrossFailures(client, completed, scheduled, 3),
+             QList<int>({1 * kUnitMs, 2 * kUnitMs, 5 * kUnitMs}));
+
+    // A late ready naming a retired session changes nothing.
+    const quint32 retired = client.sessionEpoch() - 1;
+    QCOMPARE(retryDelaysAcrossFailures(client, completed, scheduled, 1,
+                                       [&] { client.noteMediaEstablished(retired); }),
+             QList<int>({10 * kUnitMs}));
+
+    // Established media on the current session starts the schedule over.
+    QCOMPARE(retryDelaysAcrossFailures(client, completed, scheduled, 1,
+                                       [&] { client.noteMediaEstablished(client.sessionEpoch()); }),
+             QList<int>({1 * kUnitMs}));
+
+    // Manual Disconnect during the wait cancels the retry.
+    client.disconnectFromStation(QStringLiteral("media peer connection failed"), true);
+    QVERIFY(client.isReconnectPending());
+    const int retries = scheduled.count();
+    client.disconnectFromStation(QStringLiteral("operator disconnect"));
+    QVERIFY(!client.isReconnectPending());
+    QTest::qWait(kUnitMs * 5);
+    QCOMPARE(scheduled.count(), retries);
+    QCOMPARE(completed.count(), 6);
+    server.close();
+}
+
+void TstSessionLinkLoss::sessionWithoutMediaResetsBackoffAtTheHandshake()
+{
+    if (!QSslSocket::supportsSsl()) {
+        QSKIP(qPrintable(tlsSkipMessage()));
+    }
+    // No media negotiated: the handshake is the whole session, and it
+    // resets the schedule exactly as before R-R3-28.
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+    auto stationModel = makeStationRadioModel(0);
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.lastError()));
+
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+    constexpr int kUnitMs = 20;
+    client.setReconnectBackoffUnitMs(kUnitMs);
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    QSignalSpy scheduled(&client, &StationClient::reconnectScheduled);
+
+    client.connectToStation(QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(server.serverPort())),
+                            server.token(), server.certificateFingerprint());
+    QTRY_COMPARE_WITH_TIMEOUT(completed.count(), 1, 15000);
+    QVERIFY(!client.mediaAvailable());
+
+    QCOMPARE(retryDelaysAcrossFailures(client, completed, scheduled, 3),
+             QList<int>({kUnitMs, kUnitMs, kUnitMs}));
+    client.disconnectFromStation(QStringLiteral("operator disconnect"));
+    server.close();
+}
+
 #include "tst_session_link_loss.moc"

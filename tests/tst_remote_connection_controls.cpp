@@ -52,6 +52,7 @@ public:
     bool isReady() const override { return m_ready; }
     void activate() { m_ready = true; emit ready(); }
     void closeUnexpectedly() { m_ready = false; emit closed(); }
+    void failConnection(const QString& reason) { emit connectionFailed(reason); }
 private:
     bool m_ready = false;
 };
@@ -506,6 +507,87 @@ private slots:
         const int retryCount = retries.size();
         QTest::qWait(100);
         QCOMPARE(retries.size(), retryCount);
+        QVERIFY(!client.isConnectionActive());
+    }
+
+    // R-R3-28 through the production chain: media that fails before ready
+    // after each good Core handshake retries with a growing delay, and only
+    // established media starts the schedule over.
+    void repeatedMediaFailuresBackOffUntilMediaIsEstablished()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt SSL support is unavailable");
+        }
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        QVERIFY(station.addSlice(QStringLiteral("pan-0")) >= 0);
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.lastError()));
+
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        constexpr int kUnitMs = 50;
+        client.setReconnectBackoffUnitMs(kUnitMs);
+        RemoteConnectionController controls(&client, &remote,
+            {QStringLiteral("wss://127.0.0.1:%1").arg(server.serverPort()),
+             server.token(), server.certificateFingerprint(), false});
+        QPointer<RecoveryMediaTransport> transport;
+        int built = 0;
+        RemoteMediaController media(&client, &remote, nullptr, nullptr,
+            [&transport, &built](QObject* owner) -> IMediaTransport* {
+                ++built;
+                transport = new RecoveryMediaTransport(owner);
+                return transport;
+            });
+        connect(&media, &RemoteMediaController::recoveryRequested,
+                &controls, &RemoteConnectionController::recoverMediaSession,
+                Qt::QueuedConnection);
+        QSignalSpy handshakes(&client, &StationClient::handshakeComplete);
+        QSignalSpy retries(&client, &StationClient::reconnectScheduled);
+        const auto delays = [&retries] {
+            QList<int> values;
+            for (const auto& call : retries) { values.append(call.at(1).toInt()); }
+            return values;
+        };
+
+        controls.connectToStation();
+        QTRY_COMPARE_WITH_TIMEOUT(handshakes.size(), 1, 15000);
+        for (int failure = 1; failure <= 3; ++failure) {
+            QTRY_COMPARE(built, failure);
+            QVERIFY(transport);
+            transport->failConnection(QStringLiteral("media peer connection failed"));
+            QTRY_COMPARE_WITH_TIMEOUT(retries.size(), failure, 5000);
+            QTRY_COMPARE_WITH_TIMEOUT(handshakes.size(), failure + 1, 15000);
+        }
+        QCOMPARE(delays(), QList<int>({1 * kUnitMs, 2 * kUnitMs, 5 * kUnitMs}));
+
+        // Media that becomes ready resets the schedule: its later loss
+        // retries at the first step again.
+        QTRY_COMPARE(built, 4);
+        QVERIFY(transport);
+        transport->activate();
+        transport->closeUnexpectedly();
+        QTRY_COMPARE_WITH_TIMEOUT(retries.size(), 4, 5000);
+        QCOMPARE(delays().constLast(), 1 * kUnitMs);
+        QTRY_COMPARE_WITH_TIMEOUT(handshakes.size(), 5, 15000);
+
+        // Manual Disconnect during the backoff wait cancels it.
+        QTRY_COMPARE(built, 5);
+        QVERIFY(transport);
+        transport->failConnection(QStringLiteral("media peer connection failed"));
+        QTRY_COMPARE_WITH_TIMEOUT(retries.size(), 5, 5000);
+        QVERIFY(client.isReconnectPending());
+        controls.disconnectFromStation();
+        QTest::qWait(10 * kUnitMs);
+        QCOMPARE(retries.size(), 5);
+        QCOMPARE(handshakes.size(), 5);
         QVERIFY(!client.isConnectionActive());
     }
 
