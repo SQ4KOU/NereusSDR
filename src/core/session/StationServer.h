@@ -217,7 +217,11 @@ public:
     /// is two small messages, so 30 s is far more than a real client needs
     /// even on a bad link, and short enough that a stuck peer clears
     /// without operator action.
-    static constexpr int kDefaultAuthDeadlineMs = 30000;
+    ///
+    /// R-R3-16/17: the value is kStationHandshakeDeadlineMs, shared with
+    /// StationClient's own deadline, and it now runs until the peer's
+    /// snapshot has been sent rather than until it authenticates.
+    static constexpr int kDefaultAuthDeadlineMs = kStationHandshakeDeadlineMs;
 
     /// Concurrent connections, authenticated or not. There is only ever
     /// ONE authenticated session (parent section 7.1), so this bounds
@@ -437,9 +441,9 @@ private:
         /// heartbeat tick declares death when it reaches maxMissedPongs().
         int pingsAwaitingPong = 0;
 
-        /// Owned single-shot authenticate-or-drop timer, parented to the
-        /// transport so it dies with it. Stopped the moment the peer
-        /// authenticates. An OWNED timer rather than static
+        /// Owned single-shot finish-the-handshake-or-drop timer, parented
+        /// to the transport so it dies with it. Stopped once the peer's
+        /// snapshot has been sent (R-R3-16/17). An OWNED timer rather than static
         /// QTimer::singleShot deliberately: the plan's own section 13 note
         /// records that PgxlConnection and TgxlConnection get that wrong,
         /// and cancellability matters more here because this subsystem

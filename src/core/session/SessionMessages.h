@@ -198,6 +198,16 @@ inline constexpr quint16 kRemoteSpectrumGrantSessionProtocolMinor = 9;
 // receive exactly the radio and audio sections.
 inline constexpr quint16 kCoreHostTelemetrySessionProtocolMinor = 10;
 inline constexpr qsizetype kMaxMediaControlBytes = 128 * 1024;
+
+// R-R3-16/17: how long either end waits for the connect sequence to finish
+// once a link exists. The GUI runs it from attaching a transport until the
+// snapshot-complete marker (StationClient::setHandshakeDeadlineMs); Core runs
+// it from accepting a peer until that peer's snapshot has been sent
+// (StationServer::setAuthDeadlineMs). One value on purpose: a Core whose event
+// loop stalls mid-connect must be abandoned by the GUI in the same bound the
+// Core uses to clear a peer that stalls, so neither end holds a half-made
+// session the other has already given up on for long.
+inline constexpr int kStationHandshakeDeadlineMs = 30000;
 inline constexpr qsizetype kMaxStationTelemetryBytes = 16 * 1024;
 
 /// One property's WIRE DECLARATION: name, ordinal and kind, carrying no

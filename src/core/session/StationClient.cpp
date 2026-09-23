@@ -287,6 +287,13 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     m_writeFlushTimer->setInterval(kDefaultWriteFlushMs);
     connect(m_writeFlushTimer, &QTimer::timeout, this, &StationClient::onWriteFlushTick);
 
+    // R-R3-16/17: owned and single-shot like m_reconnectTimer, so an
+    // operator Disconnect or a completed handshake can always stop it.
+    m_handshakeDeadlineTimer = new QTimer(this);
+    m_handshakeDeadlineTimer->setSingleShot(true);
+    connect(m_handshakeDeadlineTimer, &QTimer::timeout,
+            this, &StationClient::onHandshakeDeadline);
+
     // Task 19: the automatic-reconnect timer. Owned (parented to this,
     // dies with it), single-shot (armed fresh by scheduleReconnect() for
     // each attempt rather than ticking repeatedly), and stoppable from
@@ -757,6 +764,20 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
     // It starts on the first inbound frame instead (onTransportText), which
     // is the station's own Hello and therefore proof the link carries
     // traffic in both directions.
+    //
+    // R-R3-16/17: which left the wait BEFORE that frame unbounded. The
+    // 2026-09-23 incident sat there for 8.7 minutes: Core's event loop was
+    // blocked, so the TLS and WebSocket upgrade and Core's Hello all waited
+    // on it, and nothing on this side was counting. The handshake deadline
+    // covers exactly that window and the rest of the connect sequence. It
+    // is armed here rather than on QWebSocket::connected because the
+    // upgrade itself is part of what stalls, and it runs until the
+    // snapshot-complete marker, the point the session is usable.
+    if (m_handshakeDeadlineMs > 0) {
+        m_handshakeDeadlineTimer->start(m_handshakeDeadlineMs);
+    } else {
+        m_handshakeDeadlineTimer->stop();
+    }
     emit connectionActivityChanged();
 }
 
@@ -852,6 +873,7 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     m_linkUp = false;
     m_heartbeatTimer->stop();
     m_writeFlushTimer->stop();
+    m_handshakeDeadlineTimer->stop();
     // Results from the retired session can no longer arrive. Keeping its
     // unanswered commands would suppress completions for fresh requests
     // after reconnect (including the 4O3A master and C-Tune controls).
@@ -1001,6 +1023,58 @@ void StationClient::setHeartbeatIntervalMs(int ms)
 void StationClient::setMaxMissedPongs(int misses)
 {
     m_maxMissedPongs = misses < 1 ? 1 : misses;
+}
+
+// ── Handshake deadline (R-R3-16/17) ─────────────────────────────────────
+
+QString StationClient::handshakeDeadlineReason()
+{
+    return QStringLiteral("The station did not finish connecting.");
+}
+
+void StationClient::setHandshakeDeadlineMs(int ms)
+{
+    m_handshakeDeadlineMs = ms;
+    if (ms < 1) {
+        qCWarning(lcStationClient)
+            << "Handshake deadline disabled. A station that accepts the connection "
+               "but never finishes connecting will be waited on indefinitely.";
+    }
+}
+
+void StationClient::onHandshakeDeadline()
+{
+    if (!m_sessionActive || m_handshakeComplete) {
+        return;  // stopped too late to matter; nothing is waiting
+    }
+    qCWarning(lcStationClient) << "Station did not finish connecting within"
+                               << m_handshakeDeadlineMs << "ms; closing the link";
+
+    // Recorded as the reason before anything below can race a socket error
+    // into m_lastError (first error wins for this attempt, see
+    // dialStation()). It is what the link-lost toast and the Core
+    // connection status show.
+    const QString reason = handshakeDeadlineReason();
+    m_lastError = reason;
+
+    // A stalled station is the "no reason from the daemon, just silence"
+    // case the heartbeat timeout already treats as retry-eligible, so the
+    // next attempt follows the normal backoff. A handshake that stalls
+    // every time therefore slows down step by step rather than hammering
+    // a Core that is already struggling: nothing here resets the schedule.
+    //
+    // Hold the transport across the call: disconnectFromStation() ends the
+    // session first and then closes the link, and a QWebSocket still in its
+    // TLS or upgrade phase does not close on a close() request. Abort it so
+    // Core sees the connection go and can retire whatever it built for it.
+    const QPointer<SessionTransport> transport(m_transport);
+    disconnectFromStation(reason, /*attemptReconnect=*/true);
+    if (auto* ws = qobject_cast<WebSocketTransport*>(transport.data())) {
+        if (QWebSocket* socket = ws->socket();
+            socket != nullptr && socket->state() != QAbstractSocket::ConnectedState) {
+            socket->abort();
+        }
+    }
 }
 
 void StationClient::onHeartbeatTick()
@@ -1175,6 +1249,8 @@ void StationClient::onTransportText(const QByteArray& wire)
         // reconcileSlicesAgainstStation().
         reconcileSlicesAgainstStation();
         m_handshakeComplete = true;
+        // R-R3-16/17: the connect sequence finished inside its deadline.
+        m_handshakeDeadlineTimer->stop();
         if (m_radioModel) {
             m_radioModel->pureSignalFacade()->setRemoteCapabilities(
                 m_agreedMinor >= kDspControlSessionProtocolMinor && m_capabilities.psAlgorithmVersion == 3,

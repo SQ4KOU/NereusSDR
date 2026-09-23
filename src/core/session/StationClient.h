@@ -536,6 +536,20 @@ public:
     void setMaxMissedPongs(int misses);
     int maxMissedPongs() const { return m_maxMissedPongs; }
 
+    /// R-R3-16/17: the operator reason recorded when the handshake deadline
+    /// expires. Plain English on purpose; it reaches the link-lost toast
+    /// and the Core connection status unchanged.
+    static QString handshakeDeadlineReason();
+
+    /// R-R3-16/17: how long an attached transport may take to finish the
+    /// connect sequence (snapshot-complete marker included) before this
+    /// client closes it and schedules the next attempt with the normal
+    /// backoff. Production default kStationHandshakeDeadlineMs, shared with
+    /// StationServer. Values below 1 disable it. Applies from the next
+    /// attach; a test shrinks it so no real 30 s wait is needed.
+    void setHandshakeDeadlineMs(int ms);
+    int handshakeDeadlineMs() const { return m_handshakeDeadlineMs; }
+
 signals:
     void displayBudgetChanged();
     void ps3DisplaySubscriptionRequested(bool enabled);
@@ -637,6 +651,7 @@ private:
                     bool reportSessionEnd = true);
     void onHeartbeatTick();
     void onWriteFlushTick();
+    void onHandshakeDeadline();
 
     /// Task 19. Arms m_reconnectTimer at the current backoff step and
     /// advances the step for next time. Only ever called from endSession()
@@ -762,6 +777,13 @@ private:
 
     QTimer* m_heartbeatTimer = nullptr;
     QTimer* m_writeFlushTimer = nullptr;
+
+    /// R-R3-16/17. Owned single-shot, armed by attachTransport() and stopped
+    /// by the snapshot-complete marker or endSession(). The heartbeat cannot
+    /// cover this window: it starts on the station's first frame, and the
+    /// 2026-09-23 incident stalled before one ever arrived.
+    QTimer* m_handshakeDeadlineTimer = nullptr;
+    int m_handshakeDeadlineMs = kStationHandshakeDeadlineMs;
     int m_heartbeatIntervalMs = kDefaultHeartbeatIntervalMs;
     int m_maxMissedPongs = kDefaultMaxMissedPongs;
     int m_pingsAwaitingPong = 0;

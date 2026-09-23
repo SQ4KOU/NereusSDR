@@ -490,22 +490,25 @@ void StationServer::acceptTransport(SessionTransport* transport)
     peer.transport = transport;
     peer.description = transport->peerDescription();
 
-    // Authenticate-or-drop. Parented to the transport so it cannot outlive
-    // the peer it is about, and stopped the moment authentication
-    // succeeds. An OWNED single-shot timer, not static
-    // QTimer::singleShot: cancellability is the whole point.
+    // Finish-the-handshake-or-drop. Parented to the transport so it cannot
+    // outlive the peer it is about, and stopped once this peer's snapshot
+    // has been sent (promoteToSession()), not merely at authentication:
+    // R-R3-16/17 bounds the whole connect sequence with the same
+    // kStationHandshakeDeadlineMs the GUI uses. An OWNED single-shot timer,
+    // not static QTimer::singleShot: cancellability is the whole point.
+    //
+    // One log line per expiry: dropPeer()'s "Peer detached" line names the
+    // peer and this reason, and dropPeer() is also what retires a media
+    // context the peer holds (mediaSessionEnded when it is the session).
     if (m_authDeadlineMs > 0) {
         auto* deadline = new QTimer(transport);
         deadline->setSingleShot(true);
         deadline->setInterval(m_authDeadlineMs);
         connect(deadline, &QTimer::timeout, this, [this, transport]() {
             auto it = m_peers.find(transport);
-            if (it == m_peers.end() || it->authenticated) {
+            if (it == m_peers.end() || it->snapshotComplete) {
                 return;
             }
-            qCWarning(lcStation) << "Dropping" << it->description
-                                 << ": did not authenticate within" << m_authDeadlineMs
-                                 << "ms";
             dropPeer(transport, QStringLiteral("handshake deadline expired"), true,
                      /*retryable=*/true);
         });
@@ -852,9 +855,6 @@ void StationServer::handleAuthRequest(SessionTransport* transport,
     }
 
     it->authenticated = true;
-    if (it->authDeadline != nullptr) {
-        it->authDeadline->stop();
-    }
     send(transport, SessionMessages::authResult(true, QString(), /*retryable=*/false));
     promoteToSession(transport);
 }
@@ -919,6 +919,10 @@ void StationServer::promoteToSession(SessionTransport* transport)
         return;
     }
     m_peers[transport].snapshotComplete = true;
+    // R-R3-16/17: the connect sequence is finished; the deadline stands down.
+    if (QTimer* deadline = m_peers[transport].authDeadline) {
+        deadline->stop();
+    }
 
     if (!m_deltaFlushTimer->isActive()) {
         m_deltaFlushTimer->start();

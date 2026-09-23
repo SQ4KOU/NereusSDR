@@ -6975,6 +6975,14 @@ nereus_add_test(tst_session_transport_telemetry
 nereus_add_test(tst_station_session
     fakes/LoopbackTransport.cpp)
 
+# R-R3-16/17: a connect that never finishes setting up gives up and retries.
+# The GUI's handshake deadline against a silent Core, a Core blocked past the
+# deadline that recovers, the Core Connections status and Cancel, and Core's
+# own deadline for a GUI that never sends its hello. Deadlines are shortened
+# through the injectable value; the wss slots QSKIP without a TLS backend.
+nereus_add_test(tst_station_handshake_deadline
+    fakes/LoopbackTransport.cpp)
+
 # Remote Daemon R2, Task 19: link loss, daemon restart, and reconnect.
 # Nothing before this task defined what the client does with a mirror of
 # objects that no longer exist. Split the same way tst_station_session.cpp
