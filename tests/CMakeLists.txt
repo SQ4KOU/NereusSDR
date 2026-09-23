@@ -7002,6 +7002,20 @@ nereus_add_test(tst_remote_audio_clock)
 # is about twice the loaded measurement.
 set_tests_properties(tst_remote_audio_clock PROPERTIES TIMEOUT 400 PROCESSORS 2)
 nereus_add_test(tst_daemon_audio_session fakes/LoopbackTransport.cpp)
+# R-R3-06/07/09: the 48 kHz mixed-audio contract through live radio rate,
+# mode, band and slice-count changes, on a RadioModel genuinely connected to
+# a Protocol 1 fake with real WDSP (fakes/ConnectableRadioModel.h).
+nereus_add_test(tst_daemon_audio_transitions
+    fakes/LoopbackTransport.cpp
+    fakes/P1FakeRadio.cpp
+    fakes/ConnectableRadioModel.cpp)
+# Each of its four slots connects a fresh radio with real WDSP. The first
+# connect carries the process's FFTW planning at first channel use (see
+# tst_connectable_radio_model), about 30 s; later ones reuse those plans.
+# Measured 2026-09-23: about 42 s alone at load 4.6. The default 120 s is
+# under three times that, too close for a loaded -jN run; TIMEOUT 300 is
+# about seven times the measurement.
+set_tests_properties(tst_daemon_audio_transitions PROPERTIES TIMEOUT 300)
 nereus_add_test(tst_daemon_telemetry fakes/LoopbackTransport.cpp)
 nereus_add_test(tst_remote_audio_receiver)
 nereus_add_test(tst_remote_audio_session fakes/LoopbackTransport.cpp)
