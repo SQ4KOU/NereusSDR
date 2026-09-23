@@ -11319,7 +11319,8 @@ bool RadioModel::moveNotchFromStation(int id, double centreHz, double widthHz,
         }
         return false;
     }
-    const bool moved = nm->setCenter(id, centre) && nm->setWidth(id, width);
+    // One change: one revision, one channel update, never half a move.
+    const bool moved = nm->move(id, centre, width);
     if (!moved && reason) {
         *reason = QStringLiteral("The Core could not move that notch.");
     }

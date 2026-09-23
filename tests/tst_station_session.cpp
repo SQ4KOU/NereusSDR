@@ -3516,7 +3516,16 @@ void TstStationSession::olderAppIgnoresTheNotchesObjectGolden()
             const bool aboutNotches = m.objectKey == "notches"
                 || (m.kind == SessionMessageKind::Schema && m.className == "NotchModel");
             if (aboutNotches) {
-                if (keepNotches) { ++notchMessages; out.append(wire); }
+                if (keepNotches) {
+                    ++notchMessages;
+                    out.append(wire);
+                    // Fix wave minor 6: more notch changes cost an older app
+                    // no more lines. Each delta is sent three times.
+                    if (m.kind == SessionMessageKind::Delta) {
+                        out.append(wire);
+                        out.append(wire);
+                    }
+                }
                 continue;
             }
             out.append(wire);
@@ -3551,6 +3560,9 @@ void TstStationSession::olderAppIgnoresTheNotchesObjectGolden()
         "Station named an object this client cannot construct: \"notches\" \"NotchModel\"");
     QTest::ignoreMessage(QtWarningMsg,
         "Delta for an object this client does not hold: \"notches\"");
+    // Once per object: any further line for the same object fails the test.
+    QTest::failOnWarning(QRegularExpression(
+        QStringLiteral("^Delta for an object this client does not hold")));
     run(withNotches, replay(true));
     run(without, replay(false));
     QVERIFY(notchMessages >= 3);   // schema, object.create, delta

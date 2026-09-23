@@ -165,6 +165,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 
 namespace NereusSDR {
 
@@ -497,6 +498,44 @@ bool NotchModel::setWidth(int id, double widthHz)
         emit notchChanged(id);
         return true;
     }
+    persist();
+    bumpRevision();
+    emit notchChanged(id);
+    emit listChanged();
+    return true;
+}
+
+// R-R3-21 fix wave (NereusSDR-original composition): a remote window's
+// notch.move changes centre and width together. The checks are exactly
+// setCenter()'s (range, admin-busy, then rounding) and setWidth()'s (clamp,
+// then the edge limits), all made before either value changes, so a refused
+// move leaves the notch as it was and an accepted one is a single change.
+bool NotchModel::move(int id, double centerHz, double widthHz)
+{
+    if (m_mirrorMode) {
+        return false;
+    }
+    if (centerHz < kMinNotchCentreHz || centerHz > kMaxNotchCentreHz) {
+        return false;
+    }
+    if (m_adminBusy) {
+        return false;
+    }
+    centerHz = std::nearbyint(centerHz);
+    const int index = indexOfId(id);
+    if (index < 0) {
+        return false;
+    }
+    widthHz = std::clamp(widthHz, 0.0, kMaxNotchWidthHz);
+    if (centerHz - (widthHz / 2) < 0 || centerHz + (widthHz / 2) > kMaxNotchCentreHz) {
+        return false;
+    }
+    Notch& n = m_notches[index];
+    if (n.centerHz == centerHz && n.widthHz == widthHz) {
+        return true;
+    }
+    n.centerHz = centerHz;
+    n.widthHz = widthHz;
     persist();
     bumpRevision();
     emit notchChanged(id);
@@ -889,6 +928,24 @@ void NotchModel::setMirrorMode(bool on)
     m_haveMirrorList = false;
     m_mirrorList.clear();
     m_mirrorRevision = 0;
+    if (on) {
+        return;
+    }
+    // Fix wave minor 1: leaving mirror mode, the Core's list is not this
+    // window's. Drop it and go back to the window's own saved notches and
+    // flags, which mirror mode never wrote.
+    m_notches.clear();
+    if (AppSettings::instance().contains(QStringLiteral("NotchCount"))) {
+        restoreFromSettings(); // emits notchesReset and listChanged
+    } else {
+        if (AppSettings::instance().contains(QStringLiteral("NotchGlobalEnabled"))
+            || AppSettings::instance().contains(QStringLiteral("NotchAutoIncrease"))) {
+            restoreFromSettings();
+        }
+        bumpRevision();
+        emit notchesReset();
+        emit listChanged();
+    }
 }
 
 void NotchModel::setRemoteRequestHandler(RemoteRequestHandler handler)
@@ -1147,6 +1204,13 @@ void NotchModel::rebuildFromMirror()
 void NotchModel::replaceList(const QList<Notch>& next)
 {
     bool changed = false;
+    // Fix wave minor 1: ids this model mints later (a local add after
+    // leaving mirror mode, a restore) stay above every id it has held.
+    for (const Notch& n : next) {
+        if (n.id >= m_nextId && n.id < std::numeric_limits<int>::max()) {
+            m_nextId = n.id + 1;
+        }
+    }
 
     // Removals first, each announced with the position it held, as a local
     // remove would.

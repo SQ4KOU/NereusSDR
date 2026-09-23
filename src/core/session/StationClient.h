@@ -747,6 +747,8 @@ private:
     QSet<QByteArray> m_schemaOnlyOnStation;
     QSet<QByteArray> m_schemaOnlyLocal;
     QSet<QByteArray> m_unapplied;
+    // Object keys whose deltas this session dropped (logged once each).
+    QSet<QByteArray> m_unheldDeltaKeys;
 
     QHash<QByteArray, QPointer<QObject>> m_objects;
 

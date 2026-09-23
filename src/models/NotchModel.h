@@ -298,6 +298,10 @@ public:
     bool setWidth(int id, double widthHz);
     bool setActive(int id, bool active);
     bool removeNotch(int id);
+    // R-R3-21 fix wave: the Core's notch.move as one change. setCenter()'s
+    // and setWidth()'s checks, all made before anything applies; then one
+    // revision, one notchChanged and one listChanged. Local lists only.
+    bool move(int id, double centerHz, double widthHz);
 
     void setGlobalEnabled(bool on);
     void setAutoIncrease(bool on);

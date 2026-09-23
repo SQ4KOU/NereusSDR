@@ -124,6 +124,7 @@
 
 #include <QChar>
 #include <QLatin1String>
+#include <QRegularExpression>
 
 namespace NereusSDR {
 
@@ -495,9 +496,15 @@ const Rule kWholeKeys[] = {
 
 bool isModelOwnedNotchSettingsKey(QStringView rawKey)
 {
-    const QString key = rawKey.toString().toLower();
-    return key.startsWith(QStringLiteral("notch"))
-        && key != QStringLiteral("notchvisualenabled");
+    // Exactly the keys NotchModel::saveToSettings writes for the list and
+    // its two flags: NotchCount, Notch<N>Center|Width|Active (N written
+    // without leading zeros), NotchGlobalEnabled and NotchAutoIncrease.
+    // NotchVisualEnabled is the window's own display preference.
+    static const QRegularExpression kNotchKey(
+        QStringLiteral("^notch(?:count|globalenabled|autoincrease"
+                       "|(?:0|[1-9][0-9]*)(?:center|width|active))$"),
+        QRegularExpression::CaseInsensitiveOption);
+    return kNotchKey.matchView(rawKey).hasMatch();
 }
 
 bool isModelOwnedDspSettingsKey(QStringView rawKey)

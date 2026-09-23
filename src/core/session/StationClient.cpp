@@ -747,6 +747,7 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
     m_schemaOnlyOnStation.clear();
     m_schemaOnlyLocal.clear();
     m_unapplied.clear();
+    m_unheldDeltaKeys.clear();
     m_pendingStationSchemas.clear();
 
     const quint32 epoch = m_sessionEpoch;
@@ -1903,8 +1904,13 @@ void StationClient::handleDelta(const SessionMessage& message)
 {
     QObject* target = m_objects.value(message.objectKey).data();
     if (target == nullptr) {
-        qCWarning(lcStationClient) << "Delta for an object this client does not hold:"
-                                   << message.objectKey;
+        // Once per object per session: a newer Core's object this client
+        // does not hold (notches on an older app) changes often.
+        if (!m_unheldDeltaKeys.contains(message.objectKey)) {
+            m_unheldDeltaKeys.insert(message.objectKey);
+            qCWarning(lcStationClient) << "Delta for an object this client does not hold:"
+                                       << message.objectKey;
+        }
         return;
     }
     QList<MirrorUpdate> current;
