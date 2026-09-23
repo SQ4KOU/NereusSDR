@@ -829,44 +829,10 @@ private slots:
         QVERIFY(!controls.detailText().contains(QStringLiteral("private-token")));
     }
 
-    void attachingAndReconnectingHydratesOneSliceWithoutAdding()
-    {
-        QTemporaryDir dir;
-        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
-        RadioModel station;
-        station.setBoardForTest(HPSDRHW::Saturn);
-        station.configureStreamPool(5, 5, 192000);
-        station.setConnectionStateForTest(ConnectionState::Connected);
-        const int existing = station.addSlice(QStringLiteral("pan-0"));
-        QVERIFY(station.sliceById(existing));
-        StationServer server(&station, settings, dir.path());
-        RadioModel remote(RadioModel::Role::Remote);
-        SettingsProxy proxy;
-        StationClient client(&remote, &proxy);
-        QSignalSpy additions(&station, &RadioModel::sliceAdded);
-        connect(&remote, &RadioModel::connectionStateChanged, &client,
-                [&](ConnectionState state) {
-            if (state != ConnectionState::Connected) { return; }
-            QMetaObject::invokeMethod(&client, [&] {
-                MainWindow::populatePanSlices(&remote, {QStringLiteral("pan-0")},
-                                              false, client.isHandshakeComplete());
-            }, Qt::QueuedConnection);
-        });
-        for (int attachment = 0; attachment < 2; ++attachment) {
-            auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
-            auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
-            stationLink->linkTo(clientLink);
-            client.startSession(clientLink, server.token());
-            server.acceptTransport(stationLink);
-            QTRY_VERIFY(client.isHandshakeComplete());
-            QCoreApplication::processEvents();
-            QCOMPARE(station.slices().size(), 1);
-            QCOMPARE(remote.slices().size(), 1);
-            QCOMPARE(additions.size(), 0);
-            QVERIFY(remote.sliceById(existing));
-            client.disconnectFromStation(QStringLiteral("operator disconnect"));
-        }
-    }
+    // The extra-slice startup reproduction that used to live here copied
+    // MainWindow's populateEmptyPans hook into a lambda. It now runs through
+    // the real window: tst_remote_window_harness
+    // heldSnapshotCreatesNoSliceOnConnectOrReconnect (R-R3-24).
 
     void automaticPanRestorationNeverCreatesStationSlices()
     {

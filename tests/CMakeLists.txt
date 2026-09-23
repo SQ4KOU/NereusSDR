@@ -6799,6 +6799,14 @@ nereus_add_test(tst_station_lan_transport)
 nereus_add_test(tst_station_lan_selection)
 nereus_add_test(tst_gui_connection_controller)
 
+# R3 remote window harness plan, Task 2 (R-R3-16/17/21/24): one real remote
+# MainWindow dialling an in-process StationServer over a loopback ws://
+# listener. Connection entry points, backoff cancel, manual disconnect,
+# held first snapshot (the extra-slice startup reproduction) and a live
+# capability change, each driven through the window's own actions.
+# NereusSDR-native session boundary; no upstream port applies.
+nereus_add_test(tst_remote_window_harness fakes/RemoteWindowHarness.cpp)
+
 # Remote Daemon R3 R-R3-30: a secondary slice flag may be destroyed and
 # replaced while its SliceModel and MainWindow remain alive during a pan-layout
 # rehome. Every direct model-to-flag presentation edge must therefore share the
