@@ -306,3 +306,48 @@ shows 650-2350 Hz right after launch with slice A in RADE-U.
 
 - [ ] **Step 1:** Add the regression, confirm it fails, apply the helper,
   run the commands, commit.
+
+## Task 5: macOS local network permission and an actionable reconnect reason
+
+**Requirements:** R-R3-17 (failed attempts leave a useful reason and a
+recovery action), R-R3-38 (network and interface changes), R-R3-10.
+
+Evidence (2026-09-22): the operator's GUI lost its Core session at 16:49 when
+the Mac moved from ZeroTier to the station LAN (en0); for three hours every
+reconnect failed with "Host unreachable" every 60 s while the Core port
+answered from the shell and the Core stayed healthy. The bundle Info.plist has
+no `NSLocalNetworkUsageDescription`; the ad-hoc-signed development app is most
+likely blocked by macOS Local Network privacy, which reports EHOSTUNREACH.
+
+**Files:**
+- Modify: `CMakeLists.txt` (the macOS POST_BUILD step that already injects `NSMicrophoneUsageDescription` with PlistBuddy, `CMakeLists.txt:1618-1629`, also sets `NSLocalNetworkUsageDescription`)
+- Modify: the code that turns a station connection error into operator text (find where "Station connection error" reasons are produced for the Core connection panel and banner, in `src/core/session/StationClient.*` and/or `src/gui/RemoteConnectionController.*`)
+- Test: a unit test of the reason mapping (new or existing remote connection test target)
+
+**Interfaces:**
+- Consumes: nothing new.
+- Produces: a pure helper that maps a connection failure (socket error kind or text, target host) to operator text; no API change elsewhere.
+
+**Acceptance:**
+- The built bundle's Info.plist contains `NSLocalNetworkUsageDescription` =
+  "NereusSDR connects to your radios and NereusSDR Core stations on your local network."
+  (set with Set-or-Add like the microphone key, so rebuilds stay idempotent).
+- On macOS, when a connect attempt to a private or link-local address
+  (IPv4 10/8, 172.16/12, 192.168/16, 169.254/16; IPv6 fc00::/7, fe80::/10)
+  fails as host-unreachable, the operator reason reads exactly:
+  "Can't reach the Core at <host>. If this Mac is on the same network as the Core, macOS may be blocking NereusSDR from your local network: allow it in System Settings, Privacy & Security, Local Network, then press Connect."
+  The raw socket error still goes to the log. Other errors and non-private
+  hosts keep today's text. Non-macOS builds keep today's text.
+- Reconnect backoff behavior is unchanged.
+- Tests cover private IPv4, link-local IPv6, a public address (unchanged
+  text) and a non-host-unreachable error (unchanged text).
+
+**Verification:** unit test of the mapping; the Info.plist key is verified
+by the controller's final bundle build (do not build the app bundle in this
+task while the operator's GUI runs from it); native behavior (the macOS
+prompt and a working LAN reconnect) is pending the operator checkpoint.
+
+**Execution note (advisory):** opus.
+
+- [ ] **Step 1:** Add the Info.plist key and the reason mapping with its
+  test; run the covering tests; commit.
