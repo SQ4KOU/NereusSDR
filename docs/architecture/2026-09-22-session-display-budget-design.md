@@ -173,12 +173,53 @@ one-message-per-5-ms structural sender envelope (200 messages/s). PS3 is not
 charged to the spectrum sample ceiling: its arrays are a different workload.
 Its codec capability remains separate from display-budget capability.
 
-Use global byte pacing plus spectrum and PS3 class byte pacing at their
-accepted reservations, with one respective maximum message of burst. Maintain
-all credit across subscription changes; changing a class's rate cannot refill
-it. Try the other class in the same tick when the first has no eligible work,
-retaining spectrum's endpoint round robin. Target FPS remains a target, not a
-delivery guarantee; hardware acceptance must check starvation and responsiveness.
+Pace display with a global byte bucket at the budget's byte limit and one
+maximum display message (65,536 bytes) of burst, plus class buckets for
+spectrum and PS3. The global bucket bounds every burst: all display traffic
+still obeys `L*t + 65,536`.
+
+- PS3 is paced at its reservation (one worst-case snapshot per 100 ms poll)
+  with one whole worst-case snapshot (147,648 bytes) of burst. With room for
+  only one chunk its bucket filled while a chunk waited for the sender and
+  lost that credit: it slipped one 5 ms tick per cycle and delivered 28.6 of
+  its 30 chunks a second, about one snapshot in twenty overtaken by the next.
+  The rate is unchanged, so the reservation still bounds it.
+- Spectrum is paced to the budget less PS3's reservation while remote Amp
+  View is subscribed (the whole byte budget when it is not), and to the
+  budget's sample ceiling, with one worst-case spectrum frame of burst; never
+  below the admitted spectrum charge. Pacing to the admitted charge refilled
+  exactly one frame per 5 ms tick at the computed ceiling, so a tick that
+  came early lost its frame and eight wide pans received about three
+  quarters of what legacy mode sends. Every class still stays within the
+  limits, and each endpoint's own cadence keeps it to its admitted frame
+  rate.
+
+Maintain all credit across subscription changes; changing a class's rate
+cannot refill it. Each 5 ms tick sends at most one message and alternates
+which class it tries first; it tries the other class in the same tick when
+the first has no eligible work, so PS3 cannot starve the active pan.
+
+Spectrum picks its endpoint by the session's mode:
+
+- A budget session sends the endpoint whose held frame stops being worth
+  sending first (earliest deadline). Admission keeps the planned load within
+  the sender's 200 messages a second, so only the order decides whether each
+  pan gets its planned rate. At the computed ceiling the app plans exactly
+  200 (the active pan at 60 fps, seven more at 20), and round robin let the
+  background pans, which fall due on the same source frame, push the active
+  pan's frame out one time in three (46.6 of 60 fps). The deadline is
+  counted in whole source frames, so endpoints of one source that fall due
+  together tie exactly; a tie goes to the faster endpoint (the app plans its
+  active pan fastest), then to round-robin order.
+- A session without a budget (an older app) keeps endpoint round robin.
+  Nothing limits what it asks for, so it can ask for more than the sender
+  carries, and there earliest deadline starves pans on different sources: a
+  pan whose source frame falls due earlier keeps winning, and eight pans on
+  two sources received 60/60/0/0/60/20/0/0 fps. Round robin gives each its
+  even share (25 fps each of the 200).
+
+Target FPS remains a target, not a delivery guarantee; hardware acceptance
+must check starvation and responsiveness.
 
 Pin a PS3 snapshot once its first chunk is attempted. While completing it,
 retain only one replacing latest snapshot. Before the first chunk, a newer

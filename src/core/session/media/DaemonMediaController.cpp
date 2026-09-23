@@ -1720,16 +1720,27 @@ bool DaemonMediaController::trySendSpectrum(MediaPeer* peer, quint64 epoch, qint
         return false;
     }
     const QList<quint32> ids = endpointIds();
-    // R-R3-08, R-R3-37: earliest deadline first. Each endpoint holds only
-    // its latest frame and the sender takes one message a tick, so at full
-    // use the endpoint whose frame stops being worth sending first goes
-    // first: a pan that takes every source frame loses one at the next
-    // frame, a slower pan only at the end of its own period. The deadline
-    // is counted in whole source frames after the held one, so endpoints
-    // of one source that fall due on the same frame tie exactly (an
-    // oversubscribed session keeps round-robin's even share). A tie goes
-    // to the faster endpoint (the app plans its active pan fastest), then
-    // to round-robin order. A frame consume() would drop sorts last.
+    // R-R3-08, R-R3-37: in a budget session, earliest deadline first.
+    // Admission keeps the planned load within the sender's 200 messages a
+    // second there, so ordering decides only whether each endpoint gets its
+    // planned rate. Each endpoint holds only its latest frame and the
+    // sender takes one message a tick, so at full use the endpoint whose
+    // frame stops being worth sending first goes first: a pan that takes
+    // every source frame loses one at the next frame, a slower pan only at
+    // the end of its own period. The deadline is counted in whole source
+    // frames after the held one, so endpoints of one source that fall due
+    // on the same frame tie exactly. A tie goes to the faster endpoint (the
+    // app plans its active pan fastest), then to round-robin order. A frame
+    // consume() would drop sorts last.
+    //
+    // An older app's session (no budget) keeps plain round-robin. Nothing
+    // limits what it asks for, so it can ask for more than the sender
+    // carries, and there earliest deadline would starve pans: a pan whose
+    // source frame falls due earlier always wins again, and pans on a
+    // source whose frames arrive later never go (eight pans on two
+    // sources got 60/60/0/0/60/20/0/0 fps). Round-robin gives each its
+    // even share.
+    const bool earliestDeadlineFirst = displayPacingRequired();
     struct Candidate {
         qint64 deadlineNs;
         int targetFps;
@@ -1745,6 +1756,10 @@ bool DaemonMediaController::trySendSpectrum(MediaPeer* peer, quint64 epoch, qint
             continue;
         }
         const SpectrumEndpoint& endpoint = found->second.endpoint;
+        if (!earliestDeadlineFirst) {
+            candidates.append({0, 0, offset, index});
+            continue;
+        }
         const qint64 producedAtNs = found->second.latestInput->producedAtNs;
         const std::optional<qint64> deadlineNs = endpoint.outputDeadlineNs(producedAtNs);
         qint64 key = std::numeric_limits<qint64>::max();
@@ -1760,12 +1775,16 @@ bool DaemonMediaController::trySendSpectrum(MediaPeer* peer, quint64 epoch, qint
         }
         candidates.append({key, endpoint.context().targetFps, offset, index});
     }
-    std::sort(candidates.begin(), candidates.end(),
-              [](const Candidate& a, const Candidate& b) {
-                  if (a.deadlineNs != b.deadlineNs) { return a.deadlineNs < b.deadlineNs; }
-                  if (a.targetFps != b.targetFps) { return a.targetFps > b.targetFps; }
-                  return a.offset < b.offset;
-              });
+    if (earliestDeadlineFirst) {
+        std::sort(candidates.begin(), candidates.end(),
+                  [](const Candidate& a, const Candidate& b) {
+                      if (a.deadlineNs != b.deadlineNs) {
+                          return a.deadlineNs < b.deadlineNs;
+                      }
+                      if (a.targetFps != b.targetFps) { return a.targetFps > b.targetFps; }
+                      return a.offset < b.offset;
+                  });
+    }
     for (const Candidate& candidate : candidates) {
         const int index = candidate.index;
         const quint32 endpointId = ids.at(index);

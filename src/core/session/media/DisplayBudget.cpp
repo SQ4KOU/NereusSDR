@@ -177,10 +177,14 @@ void DisplayBudgetPacer::refill(Bucket& bucket, qint64 elapsedNs)
     }
 
     const quint64 room = bucket.capacity - bucket.credit;
-    // The most a bucket can ever need is its fixed burst room (<= 65,536).
-    // Decide saturation before multiplying a valid JSON rate by a qint64
-    // duration.  Below this threshold the exact product is bounded by
-    // room * 1e9, so portable quint64 arithmetic cannot overflow.
+    // The most a bucket can ever need is its fixed burst room: one display
+    // message for the global bucket (<= 65,536), one worst-case spectrum
+    // frame for the spectrum buckets, and one whole worst-case PureSignal
+    // snapshot for PureSignal's bucket (147,648, the largest; see
+    // beginSession). Decide saturation before multiplying a valid JSON rate
+    // by a qint64 duration.  Below this threshold the exact product is
+    // bounded by room * 1e9 (under 1.5e14), so portable quint64 arithmetic
+    // cannot overflow.
     const quint64 neededNumerator = room * kNanosecondsPerSecond - bucket.remainder;
     const quint64 timeToFullNs = (neededNumerator + bucket.rate - 1) / bucket.rate;
     if (static_cast<quint64>(elapsedNs) >= timeToFullNs) {
