@@ -161,7 +161,8 @@ signals:
     /// channel takes a new message again.
     void displayWritable();
     /// An error on the display channel itself (a failed display send or the
-    /// display channel's own error). Also reported through errorOccurred.
+    /// display channel's own error). Reported here only, not also through
+    /// errorOccurred.
     void displayErrorOccurred(const QString& message);
 };
 

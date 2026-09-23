@@ -952,7 +952,7 @@ void RemoteMediaController::start()
             requestRecovery(epoch, QStringLiteral("Station media connection closed"));
         }
     });
-    connect(peer, &MediaPeer::errorOccurred, this, [this, current](const QString& reason) {
+    const auto onPeerError = [this, current](const QString& reason) {
         if (current()) {
             if (d->startingPeer) {
                 // Decided below, once start() says whether it refused.
@@ -964,7 +964,11 @@ void RemoteMediaController::start()
             if (!self) { return; }
             emit errorOccurred(reason);
         }
-    });
+    };
+    connect(peer, &MediaPeer::errorOccurred, this, onPeerError);
+    // The transport reports a display-channel error only as a display
+    // error; this computer handles it as it handles any media error.
+    connect(peer, &MediaPeer::displayErrorOccurred, this, onPeerError);
     d->startingPeer = true;
     d->startRefusal.clear();
     const bool started = peer->start(IMediaTransport::Role::Answerer, d->connectionId);

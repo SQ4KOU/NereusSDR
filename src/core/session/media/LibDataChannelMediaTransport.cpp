@@ -625,12 +625,8 @@ LibDataChannelMediaTransport::submitDisplay(const QByteArray& message)
                    static_cast<std::size_t>(message.size()))
             ? DisplaySendResult::Sent : DisplaySendResult::Queued;
     } catch (const std::exception& error) {
-        const QString text = QString::fromUtf8(error.what());
-        const QPointer<LibDataChannelMediaTransport> self(this);
-        emit errorOccurred(text);
-        if (self) {
-            emit displayErrorOccurred(text);
-        }
+        // R-R3-05: a display error is reported once, as a display error.
+        emit displayErrorOccurred(QString::fromUtf8(error.what()));
         return DisplaySendResult::Refused;
     }
 }
@@ -758,10 +754,13 @@ void LibDataChannelMediaTransport::drainCallbacks()
             emit errorOccurred(QString::fromStdString(event.first));
             break;
         case CallbackEvent::Kind::DisplayError: {
+            // Reported once: as a display error while this display channel
+            // is current, otherwise as a plain error, as it always was.
             const QString text = QString::fromStdString(event.first);
-            emit errorOccurred(text);
             if (isCurrentGeneration()) {
                 emit displayErrorOccurred(text);
+            } else {
+                emit errorOccurred(text);
             }
             break;
         }

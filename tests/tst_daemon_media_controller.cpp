@@ -25,6 +25,7 @@
 #include "core/session/media/DisplayCodec.h"
 #include "core/session/media/DisplayBudget.h"
 #include "core/session/media/IMediaTransport.h"
+#include "core/session/media/LibDataChannelMediaTransport.h"
 #include "core/session/media/OpusAudioCodec.h"
 #include "core/session/media/RemoteAudioContext.h"
 #include "core/session/media/RemoteSpectrumContext.h"
@@ -41,9 +42,11 @@
 #include <QTemporaryDir>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <functional>
 #include <numbers>
+#include <thread>
 #include <utility>
 
 using namespace NereusSDR;
@@ -380,6 +383,8 @@ struct Harness {
     SettingsProxy settingsProxy;
     StationClient client{&remote, &settingsProxy};
     QPointer<FakeTransport> mediaTransport;
+    // When set, Core's media transport comes from here instead of a fake.
+    std::function<IMediaTransport*(QObject*)> realTransport;
     QPointer<ClosingControlTransport> stationTransport;
     qint64 nowNs{0};
     QPointer<QTimer> manualSender;
@@ -393,6 +398,7 @@ struct Harness {
         , server(&radio, settings, directory.path())
         , controller(&server, &radio, nullptr,
                      [this](QObject* parent) -> IMediaTransport* {
+                         if (realTransport) { return realTransport(parent); }
                          mediaTransport = new FakeTransport(parent);
                          return mediaTransport;
                      },
@@ -568,6 +574,7 @@ private slots:
     void regrantAfterNeighbourLeavesStaysWithinAdmittedCharge();
     void outOfRangeRequestsAreRejectedAndLeaveEndpointUntouched();
     void displayDiagnosticsMeasureSentFramesRefusalsAndErrors();
+    void realDisplayErrorIsCountedAndLoggedOnce();
     void displayDiagnosticsLineReportsBytesAndFragments();
     void staleEpochAndForeignConnectionLeaveEndpointsUntouched();
 };
@@ -1045,6 +1052,101 @@ void TstDaemonMediaController::displayDiagnosticsMeasureSentFramesRefusalsAndErr
     QVERIFY(finals.constFirst().contains(QStringLiteral("transportErrors=3")));
     harness.startReadyPeer();
     QCOMPARE(harness.controller.displayDiagnostics(), DaemonDisplayDiagnostics{});
+    harness.finish();
+}
+
+// R-R3-03/R-R3-05: a display error from the real libdatachannel transport,
+// through MediaPeer, reaches Core once: counted and logged as a display
+// error, never also logged as a media peer error.
+void TstDaemonMediaController::realDisplayErrorIsCountedAndLoggedOnce()
+{
+    g_daemonMediaMessages.clear();
+    const QtMessageHandler previous = qInstallMessageHandler(captureDaemonMediaMessages);
+    const auto restore = qScopeGuard([previous] { qInstallMessageHandler(previous); });
+
+    Harness harness;
+    QPointer<LibDataChannelMediaTransport> core;
+    harness.realTransport = [&core](QObject* parent) -> IMediaTransport* {
+        core = new LibDataChannelMediaTransport(parent);
+        return core;
+    };
+    harness.useManualDisplayTicks();
+    harness.establishSession();
+
+    // The far end answers Core's offer over the session, as a GUI does.
+    LibDataChannelMediaTransport far;
+    QSignalSpy farDisplays(&far, &IMediaTransport::displayReceived);
+    QVERIFY(far.start({IMediaTransport::Role::Answerer, 0x4e523302U}));
+    QSignalSpy controls(&harness.client, &StationClient::mediaControlReceived);
+    connect(&harness.client, &StationClient::mediaControlReceived, &far,
+            [&far](const QJsonObject& control) {
+        const QString op = control.value(QStringLiteral("op")).toString();
+        if (op == QLatin1String("description")) {
+            QVERIFY(far.acceptDescription(control.value(QStringLiteral("sdp")).toString(),
+                                          control.value(QStringLiteral("type")).toString()));
+        } else if (op == QLatin1String("candidate")) {
+            QVERIFY(far.acceptCandidate(control.value(QStringLiteral("candidate")).toString(),
+                                        control.value(QStringLiteral("mid")).toString()));
+        }
+    });
+    connect(&far, &IMediaTransport::localDescription, &harness.client,
+            [&harness](const QString& sdp, const QString& type) {
+        QVERIFY(harness.client.sendMediaControl({
+            {QStringLiteral("op"), QStringLiteral("description")},
+            {QStringLiteral("connectionId"), QLatin1String(kConnectionId)},
+            {QStringLiteral("sdp"), sdp},
+            {QStringLiteral("type"), type}}, harness.client.sessionEpoch()));
+    });
+    connect(&far, &IMediaTransport::localCandidate, &harness.client,
+            [&harness](const QString& candidate, const QString& mid) {
+        QVERIFY(harness.client.sendMediaControl({
+            {QStringLiteral("op"), QStringLiteral("candidate")},
+            {QStringLiteral("connectionId"), QLatin1String(kConnectionId)},
+            {QStringLiteral("candidate"), candidate},
+            {QStringLiteral("mid"), mid}}, harness.client.sessionEpoch()));
+    });
+    QVERIFY(harness.client.sendMediaControl({
+        {QStringLiteral("op"), QStringLiteral("start")},
+        {QStringLiteral("connectionId"), QLatin1String(kConnectionId)}},
+        harness.client.sessionEpoch()));
+    QTRY_VERIFY_WITH_TIMEOUT(core && core->isReady() && far.isReady(), 10'000);
+
+    QVERIFY(harness.client.sendMediaControl(
+        subscription(62, 1, harness.sliceId,
+                     harness.radio.streamCentreHz(harness.streamIndex)),
+        harness.client.sessionEpoch()));
+    QTRY_VERIFY(([&] {
+        harness.feedRadio();
+        return !messageFor(controls, QStringLiteral("context"), 62).isEmpty();
+    })());
+    int cycle = 0;
+    QTRY_VERIFY_WITH_TIMEOUT(([&] {
+        harness.feedRadio(0.125 + 0.0078125 * (++cycle % 16));
+        harness.sendDisplayTick();
+        return !farDisplays.isEmpty();
+    })(), 10'000);
+    QCOMPARE(harness.controller.displayDiagnostics().displayTransportErrors, quint64(0));
+
+    // A frame waits to be sent. The far end goes away; before Core's event
+    // loop hears of it, the next display send finds the channel closed and
+    // libdatachannel throws.
+    const quint64 submitted = core->telemetry()->submittedDisplayPayloadBytes;
+    harness.feedRadio(0.3125);
+    QTest::qWait(200);
+    far.stop();
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    harness.sendDisplayTick();
+    QVERIFY2(core, "Core retired its transport before the send");
+    QVERIFY2(core->telemetry()->submittedDisplayPayloadBytes > submitted,
+             "no display frame was waiting to be sent");
+
+    QCOMPARE(harness.controller.displayDiagnostics().displayTransportErrors, quint64(1));
+    const QStringList displayErrors =
+        g_daemonMediaMessages.filter(QStringLiteral("media transport error:"));
+    QCOMPARE(displayErrors.size(), 1);
+    QVERIFY2(displayErrors.constFirst().contains(QStringLiteral("DataChannel")),
+             qPrintable(displayErrors.constFirst()));
+    QCOMPARE(g_daemonMediaMessages.filter(QStringLiteral("media peer error:")).size(), 0);
     harness.finish();
 }
 
