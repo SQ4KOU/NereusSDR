@@ -8,6 +8,7 @@
 // Phase 3F Sub-Epic I closeout, defect F1: bindings reach a late worker.
 // =================================================================
 #include <QtTest/QtTest>
+#include <QRegularExpression>
 #include <QSignalSpy>
 #include "core/DdcAssignment.h"
 #include "core/P1RadioConnection.h"
@@ -832,6 +833,10 @@ private slots:
         // The message must talk about staying put, not about adding a slice.
         const QString reason = spy.at(0).at(1).toString();
         QVERIFY(reason.contains(QLatin1String("stayed on")));
+        // R-R3-34: the frequency and its unit stay on one line.
+        QVERIFY2(reason.contains(QRegularExpression(
+                     QStringLiteral("stayed on [0-9.]+\u00A0MHz\\."))),
+                 qPrintable(reason));
 
         // The invariant that actually matters: whatever the VFO reads, the
         // DSP must be demodulating it. Reconstruct the demodulated frequency

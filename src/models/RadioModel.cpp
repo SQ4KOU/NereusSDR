@@ -6055,7 +6055,7 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
 
         emit sliceRetuneRejected(
             slice->sliceIndex(),
-            QStringLiteral("Slice %1 stayed on %2 MHz. %3")
+            QStringLiteral("Slice %1 stayed on %2\u00A0MHz. %3")
                 .arg(QChar('A' + slice->sliceIndex()))
                 .arg(lastGoodHz / 1.0e6, 0, 'f', 4)
                 .arg(m_lastPlacementRejectReason));

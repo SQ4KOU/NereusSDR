@@ -247,13 +247,6 @@ constexpr const char* kLabelStyle =
 constexpr const char* kSectionHeaderStyle =
     "color: #8aa8c0; font-weight: bold; font-size: 12px;";
 
-constexpr const char* kSpinStyle =
-    "background: #0a0a18;"
-    "color: #c8d8e8;"
-    "border: 1px solid #1e2e3e;"
-    "border-radius: 3px;"
-    "padding: 2px;";
-
 QPushButton* makeBtn(const QString& text, QWidget* parent)
 {
     QPushButton* btn = new QPushButton(text, parent);
