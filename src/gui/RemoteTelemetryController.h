@@ -28,6 +28,10 @@ struct RemoteTelemetryView {
     std::optional<qint64> coreRttAgeMs;
     RemoteAudioReceiverTelemetry playback;
     bool playbackActive = false;
+    // The Core computer's latest load while station telemetry is current,
+    // and whether this session's Core has reported any of it (R-R3-32/33).
+    StationHostTelemetry coreHost;
+    bool coreHostReported = false;
 };
 
 // All methods run on the GUI thread. Collection continues while the dialog is
@@ -77,5 +81,8 @@ private:
     };
     std::optional<PlaybackEvents> m_playbackEventsBaseline;
     qint64 m_lastTickMs = -1;
+    bool m_coreHostReported = false;
+    std::optional<qint64> m_diagnosticsLogBaselineMs;
+    void logDiagnostics(qint64 now) const;
 };
 } // namespace NereusSDR

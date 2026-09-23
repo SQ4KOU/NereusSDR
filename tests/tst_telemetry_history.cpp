@@ -7,6 +7,7 @@
 // =================================================================
 
 #include <QtTest/QtTest>
+#include <array>
 #include <limits>
 #include <cmath>
 
@@ -241,6 +242,67 @@ private slots:
         QCOMPARE(series.points.size(), 1);
         QCOMPARE(series.points[0].seconds, 7.5);
         QCOMPARE(series.points[0].value, 12.0);
+    }
+
+    // R-R3-32/33: each Core computer value is its own series. A measured zero
+    // is kept, an absent value breaks only its own line, and a sample that
+    // updates only the Core values leaves the other series continuous.
+    void coreHostMetricsKeepZerosGapsAndTheirOwnLines()
+    {
+        using Metric = TelemetryHistory::Metric;
+        const std::array<Metric, 5> host{
+            Metric::CoreSystemCpuPercent, Metric::CoreProcessCpuPercent,
+            Metric::CoreMemoryAvailableMiB, Metric::CoreProcessResidentMiB,
+            Metric::CoreHottestZoneCelsius};
+        TelemetryHistory::MetricMask hostOnly;
+        for (const Metric metric : host) {
+            hostOnly.set(static_cast<std::size_t>(metric));
+        }
+        TelemetryHistory::MetricMask radioOnly;
+        radioOnly.set(static_cast<std::size_t>(Metric::RadioRxMbps));
+
+        TelemetryHistory history;
+        history.append(sample(0, 1, Metric::RadioRxMbps, 2.0), radioOnly);
+        TelemetryHistory::Sample first{0, 1, {}};
+        TelemetryHistory::Sample second{1000, 1, {}};
+        TelemetryHistory::Sample third{2000, 1, {}};
+        double value = 10.0;
+        for (const Metric metric : host) {
+            const auto slot = static_cast<std::size_t>(metric);
+            first.values[slot] = 0.0;
+            third.values[slot] = value;
+            value += 10.0;
+        }
+        // Only the process CPU is absent in the middle sample.
+        for (const Metric metric : host) {
+            if (metric != Metric::CoreProcessCpuPercent) {
+                second.values[static_cast<std::size_t>(metric)] = 1.0;
+            }
+        }
+        history.append(first, hostOnly);
+        history.append(second, hostOnly);
+        history.append(third, hostOnly);
+        history.append(sample(2000, 1, Metric::RadioRxMbps, 3.0), radioOnly);
+
+        value = 10.0;
+        for (const Metric metric : host) {
+            const auto series = history.series(metric, 2000, 60);
+            if (metric == Metric::CoreProcessCpuPercent) {
+                QCOMPARE(series.points.size(), 2);
+                QVERIFY(series.points[1].breakBefore);
+            } else {
+                QCOMPARE(series.points.size(), 3);
+                QCOMPARE(series.points[1].value, 1.0);
+                QVERIFY(!series.points[1].breakBefore);
+                QVERIFY(!series.points[2].breakBefore);
+            }
+            QCOMPARE(series.points.constFirst().value, 0.0);
+            QCOMPARE(series.points.constLast().value, value);
+            value += 10.0;
+        }
+        const auto radio = history.series(Metric::RadioRxMbps, 2000, 60);
+        QCOMPARE(radio.points.size(), 2);
+        QVERIFY(!radio.points[1].breakBefore);
     }
 };
 

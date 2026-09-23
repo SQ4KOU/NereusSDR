@@ -16,6 +16,9 @@
 //                 discontinuities, weighted compaction and fixed storage caps
 //                 by J.J. Boyd (KG4VCF), with AI-assisted adaptation via
 //                 OpenAI Codex.
+//   2026-09-23 -- R-R3-32/33: Core computer CPU, memory and temperature
+//                 metrics by J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -57,6 +60,13 @@ public:
         AudioRtpRxKbps,
         OpusPayloadRxKbps,
         SpeakerBufferMs,
+        // The Core computer's own load (R-R3-32, R-R3-33). Memory is stored
+        // in MiB; each value is absent when the Core did not measure it.
+        CoreSystemCpuPercent,
+        CoreProcessCpuPercent,
+        CoreMemoryAvailableMiB,
+        CoreProcessResidentMiB,
+        CoreHottestZoneCelsius,
         Count,
     };
 

@@ -40,6 +40,7 @@ private:
     TimeSeriesGraphWidget* addGraph(QWidget* tab, const QString& title,
                                     const QString& suffix);
     void refreshGraphs();
+    void refreshCoreHostGraphs();
     void refreshDetail();
 
     QPointer<RemoteTelemetryController> m_controller;
@@ -56,6 +57,10 @@ private:
     TimeSeriesGraphWidget* m_audioPacketsGraph{nullptr};
     TimeSeriesGraphWidget* m_sourceFramesGraph{nullptr};
     TimeSeriesGraphWidget* m_audioEventsGraph{nullptr};
+    QLabel* m_coreHostUnavailableLabel{nullptr};
+    TimeSeriesGraphWidget* m_coreCpuGraph{nullptr};
+    TimeSeriesGraphWidget* m_coreMemoryGraph{nullptr};
+    TimeSeriesGraphWidget* m_coreTemperatureGraph{nullptr};
     int m_rangeSeconds{5 * 60};
 };
 

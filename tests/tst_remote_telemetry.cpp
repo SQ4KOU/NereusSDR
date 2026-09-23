@@ -28,6 +28,22 @@ QRegularExpression remoteAudioSpeakerTimingLostLog()
         "^Remote audio playback failed: (Speaker device timing became unavailable"
         "|Could not write remote audio to the speaker device) \\[ageMs="));
 }
+// Captures the periodic diagnostics lines (R-R3-07/33) and passes every
+// message on to the handler that was installed before it.
+QStringList g_diagnosticsLines;
+QtMessageHandler g_previousHandler = nullptr;
+void captureDiagnostics(QtMsgType type, const QMessageLogContext& context, const QString& message)
+{
+    if (type == QtInfoMsg && context.category
+        && QLatin1String(context.category) == QLatin1String("nereus.remote.telemetry")) {
+        g_diagnosticsLines << message;
+    }
+    if (g_previousHandler) { g_previousHandler(type, context, message); }
+}
+struct DiagnosticsCapture {
+    DiagnosticsCapture() { g_diagnosticsLines.clear(); g_previousHandler = qInstallMessageHandler(captureDiagnostics); }
+    ~DiagnosticsCapture() { qInstallMessageHandler(g_previousHandler); g_previousHandler = nullptr; }
+};
 } // namespace
 
 class ObservedLoopback final : public Test::LoopbackTransport {
@@ -368,6 +384,108 @@ private slots:
         client.disconnectFromStation(QStringLiteral("done"));
         QVERIFY(!controller.current().coreGuiTotalKbps);
         QVERIFY(!controller.current().opusRxKbps);
+    }
+
+    // R-R3-32/33: host values reach the view and the history; absent values
+    // leave gaps. R-R3-07/33: one diagnostics line a minute for the soak.
+    void coreHostValuesAndPeriodicDiagnosticsLine()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        StationServer server(&station, settings, dir.path());
+        server.setTelemetryEnabled(true);
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        qint64 now = 10000;
+        RemoteAudioReceiverTelemetry playback;
+        RemoteTelemetryController controller(&client, nullptr, nullptr,
+            [&] { return now; }, [&] { return playback; });
+        DiagnosticsCapture capture;
+
+        auto* guiWire = new ObservedLoopback;
+        auto* coreWire = new Test::LoopbackTransport(QStringLiteral("Core"));
+        guiWire->linkTo(coreWire);
+        server.acceptTransport(coreWire);
+        client.startSession(guiWire, server.token());
+        QTRY_VERIFY(client.isHandshakeComplete());
+        QVERIFY(!controller.current().coreHostReported);
+
+        // A sample with no host section: gaps, not zeros.
+        StationTelemetrySnapshot sample;
+        sample.sequence = 1;
+        sample.sampledElapsedMs = 100;
+        QVERIFY(server.sendTelemetry(sample, server.sessionEpoch()));
+        QTRY_COMPARE(controller.current().state, RemoteTelemetryView::State::Current);
+        QVERIFY(!controller.current().coreHostReported);
+        QVERIFY(controller.history().series(Metric::CoreSystemCpuPercent, now, 60).points.isEmpty());
+
+        playback.running = true;
+        playback.generation = 3;
+        playback.acceptedPackets = 1500;
+        playback.startDiscardedPackets = 62;
+        playback.decodedPackets = 1490;
+        playback.concealedPackets = 4;
+        now += 59000;
+        controller.sampleNow();
+        QVERIFY2(g_diagnosticsLines.isEmpty(), qPrintable(g_diagnosticsLines.join(QLatin1Char('\n'))));
+        now += 1000;
+        controller.sampleNow();
+        QCOMPARE(g_diagnosticsLines.size(), 1);
+        QString line = g_diagnosticsLines.constLast();
+        QVERIFY(line.startsWith(QStringLiteral("Remote diagnostics: context=3 running=yes admitted=1500 startDiscardedPackets=62 decoded=1490 concealed=4 ")));
+        QVERIFY(line.contains(QStringLiteral(" driftRatio=not measured driftPpm=not measured ")));
+        QVERIFY(line.contains(QStringLiteral(" coreSystemCpuPercent=not measured coreProcessCpuPercent=not measured"
+            " coreMemoryAvailableKiB=not measured coreMemoryTotalKiB=not measured"
+            " coreProcessResidentKiB=not measured coreHottestZoneCelsius=not measured"
+            " coreHottestZone=not measured")));
+        QVERIFY(!line.contains(QLatin1Char('\n')));
+
+        sample.sequence = 2;
+        sample.sampledElapsedMs = 60100;
+        sample.host.systemCpuPercent = 30.0;
+        sample.host.processCpuPercent = 0.0; // measured zero is a value
+        sample.host.memoryAvailableKiB = 2 * 1024 * 1024;
+        sample.host.memoryTotalKiB = 8 * 1024 * 1024;
+        sample.host.processResidentKiB = 204800;
+        sample.host.hottestZoneCelsius = 54.5;
+        sample.host.hottestZoneName = QStringLiteral("soc-thermal");
+        QVERIFY(server.sendTelemetry(sample, server.sessionEpoch()));
+        QTRY_VERIFY(controller.current().coreHostReported);
+        QCOMPARE(controller.current().coreHost.systemCpuPercent, std::optional<double>(30.0));
+        QCOMPARE(controller.current().coreHost.hottestZoneName, QStringLiteral("soc-thermal"));
+        QCOMPARE(controller.history().series(Metric::CoreSystemCpuPercent, now, 60).points.constLast().value, 30.0);
+        QCOMPARE(controller.history().series(Metric::CoreProcessCpuPercent, now, 60).points.constLast().value, 0.0);
+        QCOMPARE(controller.history().series(Metric::CoreMemoryAvailableMiB, now, 60).points.constLast().value, 2048.0);
+        QCOMPARE(controller.history().series(Metric::CoreProcessResidentMiB, now, 60).points.constLast().value, 200.0);
+        QCOMPARE(controller.history().series(Metric::CoreHottestZoneCelsius, now, 60).points.constLast().value, 54.5);
+
+        playback.driftRatio = 1.000012;
+        playback.lifetimeUnderflows = 2;
+        playback.lifetimeOverflows = 0;
+        now += 30000;
+        controller.sampleNow();
+        QCOMPARE(g_diagnosticsLines.size(), 1);
+        now += 30000;
+        controller.sampleNow();
+        QCOMPARE(g_diagnosticsLines.size(), 2);
+        line = g_diagnosticsLines.constLast();
+        QVERIFY(line.contains(QStringLiteral(" lifetimeUnderflows=2 lifetimeOverflows=0 ")));
+        QVERIFY(line.contains(QStringLiteral(" driftRatio=1.000012000 driftPpm=12.0 ")));
+        QVERIFY(line.contains(QStringLiteral(" coreSystemCpuPercent=30.0 coreProcessCpuPercent=0.0"
+            " coreMemoryAvailableKiB=2097152 coreMemoryTotalKiB=8388608"
+            " coreProcessResidentKiB=204800 coreHottestZoneCelsius=54.5"
+            " coreHottestZone=\"soc-thermal\"")));
+
+        // A new session restarts the interval; nothing is logged while
+        // disconnected.
+        client.disconnectFromStation(QStringLiteral("done"));
+        QTRY_COMPARE(controller.current().state, RemoteTelemetryView::State::Disconnected);
+        QVERIFY(!controller.current().coreHostReported);
+        now += 120000;
+        controller.sampleNow();
+        QCOMPARE(g_diagnosticsLines.size(), 2);
     }
 
     void olderCoreIsExplicitlyUnsupported()

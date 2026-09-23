@@ -240,6 +240,145 @@ private slots:
         QCOMPARE(radioRx->points.constLast().y(), 14.5);
         client.disconnectFromStation(QStringLiteral("done"));
     }
+
+    // R-R3-32/33: the Core tab graphs the Core computer's load, or says in
+    // one line that this Core does not report it.
+    void coreTabGraphsHostLoadOrSaysItIsNotReported()
+    {
+        RemoteDiagnosticsDialog nullDialog(nullptr);
+        auto* nullLabel = nullDialog.findChild<QLabel*>(QStringLiteral("remoteCoreHostUnavailable"));
+        QVERIFY(nullLabel);
+        QVERIFY(!nullLabel->isHidden());
+        QVERIFY(nullDialog.findChild<QWidget*>(QStringLiteral("remoteCoreCpuGraph"))->isHidden());
+
+        QTemporaryDir directory;
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        StationServer server(&station, settings, directory.path());
+        server.setTelemetryEnabled(true);
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        qint64 now = 10000;
+        RemoteAudioReceiverTelemetry playback;
+        RemoteTelemetryController controller(&client, nullptr, nullptr,
+            [&] { return now; }, [&] { return playback; });
+
+        const auto connect = [&](const QString& name) {
+            auto* guiWire = new ObservedLoopback;
+            auto* coreWire = new Test::LoopbackTransport(name);
+            guiWire->linkTo(coreWire);
+            server.acceptTransport(coreWire);
+            client.startSession(guiWire, server.token());
+            QTRY_VERIFY(client.isHandshakeComplete());
+        };
+        connect(QStringLiteral("Core"));
+
+        RemoteDiagnosticsDialog dialog(&controller);
+        dialog.show();
+        QTRY_VERIFY(dialog.isVisible());
+        auto* tabs = dialog.findChild<QTabWidget*>(QStringLiteral("remoteDiagnosticsTabs"));
+        QVERIFY(tabs);
+        QCOMPARE(tabs->tabText(tabs->count() - 1), QStringLiteral("Core"));
+        auto* label = dialog.findChild<QLabel*>(QStringLiteral("remoteCoreHostUnavailable"));
+        auto* cpuGraph = dynamic_cast<TimeSeriesGraphWidget*>(dialog.findChild<QWidget*>(
+            QStringLiteral("remoteCoreCpuGraph")));
+        auto* memoryGraph = dynamic_cast<TimeSeriesGraphWidget*>(dialog.findChild<QWidget*>(
+            QStringLiteral("remoteCoreMemoryGraph")));
+        auto* temperatureGraph = dynamic_cast<TimeSeriesGraphWidget*>(dialog.findChild<QWidget*>(
+            QStringLiteral("remoteCoreTemperatureGraph")));
+        QVERIFY(label && cpuGraph && memoryGraph && temperatureGraph);
+        QCOMPARE(label->text(), QStringLiteral("This Core does not report computer load."));
+        const auto refresh = [&] {
+            QVERIFY(QMetaObject::invokeMethod(&dialog, "refresh", Qt::DirectConnection));
+        };
+        const auto graphsShown = [&] {
+            return !cpuGraph->isHidden() && !memoryGraph->isHidden()
+                && !temperatureGraph->isHidden();
+        };
+        const auto graphsHidden = [&] {
+            return cpuGraph->isHidden() && memoryGraph->isHidden()
+                && temperatureGraph->isHidden();
+        };
+
+        // A Core that measures nothing (not Linux): one line, no graphs.
+        StationTelemetrySnapshot sample;
+        sample.sequence = 1;
+        sample.sampledElapsedMs = 100;
+        QVERIFY(server.sendTelemetry(sample, server.sessionEpoch()));
+        QTRY_COMPARE(controller.current().state, RemoteTelemetryView::State::Current);
+        refresh();
+        QVERIFY(!label->isHidden());
+        QVERIFY(graphsHidden());
+
+        // A Linux Core: three graphs, no line.
+        now += 1000;
+        sample.sequence = 2;
+        sample.sampledElapsedMs = 1100;
+        sample.host.systemCpuPercent = 30.0;
+        sample.host.processCpuPercent = 5.0;
+        sample.host.memoryAvailableKiB = 800 * 1024;
+        sample.host.memoryTotalKiB = 4 * 1024 * 1024;
+        sample.host.processResidentKiB = 204800;
+        sample.host.hottestZoneCelsius = 54.5;
+        sample.host.hottestZoneName = QStringLiteral("soc-thermal");
+        QVERIFY(server.sendTelemetry(sample, server.sessionEpoch()));
+        QTRY_VERIFY(controller.current().coreHostReported);
+        refresh();
+        QVERIFY(label->isHidden());
+        QVERIFY(graphsShown());
+        QCOMPARE(namedSeries(cpuGraph, QStringLiteral("System"))->points.constLast().y(), 30.0);
+        QCOMPARE(namedSeries(cpuGraph, QStringLiteral("NereusSDR Core"))->points.constLast().y(), 5.0);
+        QCOMPARE(namedSeries(cpuGraph, QStringLiteral("System"))->unitSuffix, QStringLiteral("\u00A0%"));
+        const auto* available = namedSeries(memoryGraph, QStringLiteral("Available"));
+        const auto* resident = namedSeries(memoryGraph, QStringLiteral("Used by NereusSDR Core"));
+        QVERIFY(available && resident);
+        QCOMPARE(available->unitSuffix, QStringLiteral("\u00A0MiB"));
+        QCOMPARE(resident->unitSuffix, available->unitSuffix);
+        QCOMPARE(available->points.constLast().y(), 800.0);
+        QCOMPARE(resident->points.constLast().y(), 200.0);
+        const auto* hottest = namedSeries(temperatureGraph, QStringLiteral("Hottest sensor"));
+        QVERIFY(hottest);
+        QCOMPARE(hottest->unitSuffix, QStringLiteral("\u00A0°C"));
+        QCOMPARE(hottest->points.constLast().y(), 54.5);
+        QVERIFY(temperatureGraph->toolTip().contains(QStringLiteral("soc-thermal")));
+
+        // Memory moves to GiB for both series once a value in range reaches 1 GiB.
+        now += 1000;
+        sample.sequence = 3;
+        sample.sampledElapsedMs = 2100;
+        sample.host.memoryAvailableKiB = 2 * 1024 * 1024;
+        QVERIFY(server.sendTelemetry(sample, server.sessionEpoch()));
+        QTRY_COMPARE(controller.current().coreHost.memoryAvailableKiB,
+                     std::optional<qint64>(2 * 1024 * 1024));
+        refresh();
+        available = namedSeries(memoryGraph, QStringLiteral("Available"));
+        resident = namedSeries(memoryGraph, QStringLiteral("Used by NereusSDR Core"));
+        QCOMPARE(available->unitSuffix, QStringLiteral("\u00A0GiB"));
+        QCOMPARE(resident->unitSuffix, available->unitSuffix);
+        QCOMPARE(available->points.constLast().y(), 2.0);
+        QCOMPARE(resident->points.constLast().y(), 200.0 / 1024.0);
+        QVERIFY(!dialog.grab().isNull());
+
+        // Between sessions the retained history still shows.
+        client.disconnectFromStation(QStringLiteral("reconnect"));
+        QTRY_COMPARE(controller.current().state, RemoteTelemetryView::State::Disconnected);
+        refresh();
+        QVERIFY(graphsShown());
+
+        // The next Core reports no load: the line again, whatever history holds.
+        now += 1000;
+        connect(QStringLiteral("older Core"));
+        StationTelemetrySnapshot bare;
+        bare.sequence = 1;
+        bare.sampledElapsedMs = 0;
+        QVERIFY(server.sendTelemetry(bare, server.sessionEpoch()));
+        QTRY_COMPARE(controller.current().state, RemoteTelemetryView::State::Current);
+        refresh();
+        QVERIFY(!label->isHidden());
+        QVERIFY(graphsHidden());
+        client.disconnectFromStation(QStringLiteral("done"));
+    }
 };
 
 QTEST_MAIN(TstRemoteDiagnostics)

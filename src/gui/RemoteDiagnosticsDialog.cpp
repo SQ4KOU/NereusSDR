@@ -26,6 +26,8 @@
 #include <QTabWidget>
 #include <QVBoxLayout>
 
+#include <algorithm>
+#include <array>
 #include <initializer_list>
 #include <utility>
 
@@ -50,7 +52,7 @@ TimeSeriesGraphWidget::Series toGraphSeries(const TelemetryHistory& history,
     TimeSeriesGraphWidget::Series result;
     result.label = QObject::tr(spec.label);
     result.color = QColor(QLatin1String(spec.color));
-    result.unitSuffix = QLatin1String(spec.unit);
+    result.unitSuffix = QString::fromUtf8(spec.unit);
     result.maxConnectGapSeconds = source.maxConnectGapSeconds;
     result.points.reserve(source.points.size());
     result.breakBefore.reserve(source.points.size());
@@ -172,6 +174,29 @@ void RemoteDiagnosticsDialog::buildUi()
     m_audioEventsGraph = addGraph(audio, tr("Audio interruption events"), tr(" events/s"));
     m_audioEventsGraph->setObjectName(QStringLiteral("remoteAudioEventsGraph"));
     tabs->addTab(audio, tr("Audio"));
+
+    // R-R3-32/33: the Core computer's own load. An older or non-Linux Core
+    // does not send it; the tab then says so instead of drawing empty graphs.
+    QWidget* core = buildTab(tr("Core"));
+    auto* coreLayout = qobject_cast<QVBoxLayout*>(qobject_cast<QScrollArea*>(core)->widget()->layout());
+    m_coreHostUnavailableLabel = new QLabel(tr("This Core does not report computer load."),
+                                            qobject_cast<QScrollArea*>(core)->widget());
+    m_coreHostUnavailableLabel->setObjectName(QStringLiteral("remoteCoreHostUnavailable"));
+    m_coreHostUnavailableLabel->setWordWrap(true);
+    coreLayout->insertWidget(coreLayout->count() - 1, m_coreHostUnavailableLabel);
+    m_coreCpuGraph = addGraph(core, tr("Core computer CPU"), tr("\u00A0%"));
+    m_coreCpuGraph->setObjectName(QStringLiteral("remoteCoreCpuGraph"));
+    m_coreCpuGraph->setToolTip(tr("System is the whole Core computer. NereusSDR Core is its share of all processors together, so 100\u00A0% means every processor is busy."));
+    m_coreMemoryGraph = addGraph(core, tr("Core computer memory"), tr("\u00A0MiB"));
+    m_coreMemoryGraph->setObjectName(QStringLiteral("remoteCoreMemoryGraph"));
+    m_coreMemoryGraph->setToolTip(tr("Available is the memory the Core computer can still give to programs. Used by NereusSDR Core is the memory it holds."));
+    m_coreTemperatureGraph = addGraph(core, tr("Core computer temperature"), tr("\u00A0°C"));
+    m_coreTemperatureGraph->setObjectName(QStringLiteral("remoteCoreTemperatureGraph"));
+    m_coreTemperatureGraph->setToolTip(tr("The hottest temperature sensor on the Core computer."));
+    m_coreCpuGraph->setVisible(false);
+    m_coreMemoryGraph->setVisible(false);
+    m_coreTemperatureGraph->setVisible(false);
+    tabs->addTab(core, tr("Core"));
     root->addWidget(tabs, 1);
 
     auto* detailScroll = new QScrollArea(this);
@@ -317,6 +342,75 @@ void RemoteDiagnosticsDialog::refreshGraphs()
         {Metric::PlaybackUnderflowsPerSecond, "GUI underflows", "#ffd700", " events/s"},
         {Metric::PlaybackOverflowsPerSecond, "GUI overflows", "#ff8c00", " events/s"},
     });
+    refreshCoreHostGraphs();
+}
+
+void RemoteDiagnosticsDialog::refreshCoreHostGraphs()
+{
+    const auto& history = m_controller->history();
+    const qint64 nowMs = m_controller->nowMs();
+    const RemoteTelemetryView& view = m_controller->current();
+    const std::array<Metric, 5> kHostMetrics{
+        Metric::CoreSystemCpuPercent, Metric::CoreProcessCpuPercent,
+        Metric::CoreMemoryAvailableMiB, Metric::CoreProcessResidentMiB,
+        Metric::CoreHottestZoneCelsius};
+
+    // While the Core's measurements are arriving, whether it reports its load
+    // decides. Between sessions the retained history still shows.
+    bool reports = false;
+    switch (view.state) {
+    case RemoteTelemetryView::State::Current:
+    case RemoteTelemetryView::State::Stale:
+        reports = view.coreHostReported;
+        break;
+    case RemoteTelemetryView::State::Unsupported:
+        reports = false;
+        break;
+    case RemoteTelemetryView::State::Disconnected:
+    case RemoteTelemetryView::State::Waiting:
+        for (const Metric metric : kHostMetrics) {
+            if (!history.series(metric, nowMs, m_rangeSeconds).points.isEmpty()) {
+                reports = true;
+                break;
+            }
+        }
+        break;
+    }
+    m_coreHostUnavailableLabel->setVisible(!reports);
+    m_coreCpuGraph->setVisible(reports);
+    m_coreMemoryGraph->setVisible(reports);
+    m_coreTemperatureGraph->setVisible(reports);
+    if (!reports) {
+        return;
+    }
+
+    setGraph(m_coreCpuGraph, history, nowMs, m_rangeSeconds, {
+        {Metric::CoreSystemCpuPercent, "System", "#00b4d8", "\u00A0%"},
+        {Metric::CoreProcessCpuPercent, "NereusSDR Core", "#5fff8a", "\u00A0%"},
+    });
+    // Both series share one unit over the selected range, chosen the way the
+    // traffic graph chooses kbps or Mbps.
+    double memoryMaximumMiB = 0;
+    for (const auto metric : {Metric::CoreMemoryAvailableMiB, Metric::CoreProcessResidentMiB}) {
+        for (const auto& point : history.series(metric, nowMs, m_rangeSeconds).points) {
+            memoryMaximumMiB = std::max(memoryMaximumMiB, point.value);
+        }
+    }
+    const bool gibibytes = memoryMaximumMiB >= 1024.0;
+    const char* memoryUnit = gibibytes ? "\u00A0GiB" : "\u00A0MiB";
+    setGraph(m_coreMemoryGraph, history, nowMs, m_rangeSeconds, {
+        {Metric::CoreMemoryAvailableMiB, "Available", "#00b4d8", memoryUnit},
+        {Metric::CoreProcessResidentMiB, "Used by NereusSDR Core", "#ffd700", memoryUnit},
+    }, gibibytes ? 1.0 / 1024.0 : 1.0);
+    setGraph(m_coreTemperatureGraph, history, nowMs, m_rangeSeconds, {
+        {Metric::CoreHottestZoneCelsius, "Hottest sensor", "#ff8c00", "\u00A0°C"},
+    });
+    // The name stays from the last sample that carried one.
+    if (!view.coreHost.hottestZoneName.isEmpty()) {
+        m_coreTemperatureGraph->setToolTip(
+            tr("The hottest temperature sensor on the Core computer: %1.")
+                .arg(view.coreHost.hottestZoneName));
+    }
 }
 
 void RemoteDiagnosticsDialog::refreshDetail()

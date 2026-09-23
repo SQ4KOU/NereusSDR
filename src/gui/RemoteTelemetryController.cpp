@@ -3,12 +3,17 @@
 #include "gui/RemoteAudioStatus.h"
 #include "gui/RemoteMediaController.h"
 #include "core/session/StationClient.h"
+#include <QLoggingCategory>
 #include <QStringList>
+
+Q_LOGGING_CATEGORY(lcRemoteTelemetry, "nereus.remote.telemetry")
 
 namespace NereusSDR {
 namespace {
 using Metric = TelemetryHistory::Metric;
 constexpr qint64 kStationFreshMs = 3000;
+// R-R3-07/33: one diagnostics log line a minute for the two-hour soak.
+constexpr qint64 kDiagnosticsLogIntervalMs = 60000;
 // Session heartbeat pings are 20 seconds apart. A metrics tick is not a pong.
 constexpr qint64 kRttFreshMs = 60000;
 std::size_t index(Metric metric) { return static_cast<std::size_t>(metric); }
@@ -32,6 +37,19 @@ std::optional<double> rate(quint64 current, quint64 previous, qint64 elapsed)
 QString number(std::optional<double> value, int decimals = 1)
 {
     return value ? QString::number(*value, 'f', decimals) : QStringLiteral("—");
+}
+QString logged(std::optional<double> value, int decimals = 1)
+{
+    return value ? QString::number(*value, 'f', decimals) : QStringLiteral("not measured");
+}
+template <typename Integer>
+QString logged(std::optional<Integer> value)
+{
+    return value ? QString::number(*value) : QStringLiteral("not measured");
+}
+std::optional<double> mebibytes(std::optional<qint64> kibibytes)
+{
+    return kibibytes ? std::optional<double>(double(*kibibytes) / 1024.0) : std::nullopt;
 }
 }
 
@@ -69,7 +87,7 @@ qint64 RemoteTelemetryController::nowMs() const
 
 void RemoteTelemetryController::clearSession()
 {
-    breakRange(m_history, Metric::RadioRxMbps, Metric::SpeakerBufferMs);
+    breakRange(m_history, Metric::RadioRxMbps, Metric::CoreHottestZoneCelsius);
     m_station.reset();
     m_transportBaseline.reset();
     m_mediaBaseline.reset();
@@ -78,6 +96,8 @@ void RemoteTelemetryController::clearSession()
     m_lastTickMs = -1;
     m_epoch = 0;
     m_stationWasStale = false;
+    m_coreHostReported = false;
+    m_diagnosticsLogBaselineMs.reset();
     m_view = {};
     emit changed();
 }
@@ -108,8 +128,17 @@ void RemoteTelemetryController::receiveStation(
     values[index(Metric::AudioSendAcceptedPerSecond)] = sample.audio.sendAcceptedPerSecond;
     values[index(Metric::AudioSendRejectedPerSecond)] = sample.audio.sendRejectedPerSecond;
     values[index(Metric::AudioSourceDropsPerSecond)] = sample.audio.sourceDropsPerSecond;
+    // An older or non-Linux Core leaves every host value absent, which
+    // records a gap and never a zero.
+    values[index(Metric::CoreSystemCpuPercent)] = sample.host.systemCpuPercent;
+    values[index(Metric::CoreProcessCpuPercent)] = sample.host.processCpuPercent;
+    values[index(Metric::CoreMemoryAvailableMiB)] = mebibytes(sample.host.memoryAvailableKiB);
+    values[index(Metric::CoreProcessResidentMiB)] = mebibytes(sample.host.processResidentKiB);
+    values[index(Metric::CoreHottestZoneCelsius)] = sample.host.hottestZoneCelsius;
+    if (!sample.host.isEmpty()) { m_coreHostReported = true; }
     m_history.append(observation, mask(Metric::RadioRxMbps, Metric::RadioRttMs)
-        | mask(Metric::AudioSourceFramesPerSecond, Metric::AudioSourceDropsPerSecond));
+        | mask(Metric::AudioSourceFramesPerSecond, Metric::AudioSourceDropsPerSecond)
+        | mask(Metric::CoreSystemCpuPercent, Metric::CoreHottestZoneCelsius));
     refreshCurrent(m_stationReceivedMs);
     emit changed();
 }
@@ -119,6 +148,8 @@ void RemoteTelemetryController::refreshCurrent(qint64 now)
     m_view.stationAgeMs.reset();
     m_view.radio = {};
     m_view.coreAudio = {};
+    m_view.coreHost = {};
+    m_view.coreHostReported = m_coreHostReported;
     if (!m_client || !m_client->isHandshakeComplete()) {
         m_view = {};
         return;
@@ -133,12 +164,14 @@ void RemoteTelemetryController::refreshCurrent(qint64 now)
             if (!m_stationWasStale) {
                 breakRange(m_history, Metric::RadioRxMbps, Metric::RadioRttMs);
                 breakRange(m_history, Metric::AudioSourceFramesPerSecond, Metric::AudioSourceDropsPerSecond);
+                breakRange(m_history, Metric::CoreSystemCpuPercent, Metric::CoreHottestZoneCelsius);
                 m_stationWasStale = true;
             }
         } else {
             m_view.state = RemoteTelemetryView::State::Current;
             m_view.radio = m_station->radio;
             m_view.coreAudio = m_station->audio;
+            m_view.coreHost = m_station->host;
             if (m_view.radio.rttAgeMs) {
                 *m_view.radio.rttAgeMs += age;
                 if (*m_view.radio.rttAgeMs > kRttFreshMs) {
@@ -270,7 +303,62 @@ void RemoteTelemetryController::sampleNow()
     m_history.append(observation, mask(Metric::SessionPayloadRxKbps, Metric::SessionRttMs)
         | mask(Metric::PlaybackDecodedPacketsPerSecond, Metric::SpeakerBufferMs));
     refreshCurrent(now);
+    // The first line comes one interval after the session starts, then one
+    // per interval while it lasts.
+    if (!m_diagnosticsLogBaselineMs) {
+        m_diagnosticsLogBaselineMs = now;
+    } else if (now - *m_diagnosticsLogBaselineMs >= kDiagnosticsLogIntervalMs) {
+        m_diagnosticsLogBaselineMs = now;
+        logDiagnostics(now);
+    }
     emit changed();
+}
+
+void RemoteTelemetryController::logDiagnostics(qint64 now) const
+{
+    // R-R3-07/33: the soak reads the receiver counters and the Core
+    // computer's load from this one line. Absent values say so.
+    const auto& p = m_view.playback;
+    const StationHostTelemetry host = m_station ? m_station->host : StationHostTelemetry{};
+    const std::optional<double> driftPpm = p.driftRatio
+        ? std::optional<double>((*p.driftRatio - 1.0) * 1'000'000.0) : std::nullopt;
+    QStringList fields;
+    fields << QStringLiteral("context=%1").arg(p.generation)
+           << QStringLiteral("running=%1").arg(p.running ? QStringLiteral("yes") : QStringLiteral("no"))
+           << QStringLiteral("admitted=%1").arg(p.acceptedPackets)
+           << QStringLiteral("startDiscardedPackets=%1").arg(p.startDiscardedPackets)
+           << QStringLiteral("decoded=%1").arg(p.decodedPackets)
+           << QStringLiteral("concealed=%1").arg(p.concealedPackets)
+           << QStringLiteral("late=%1").arg(p.latePackets)
+           << QStringLiteral("invalid=%1").arg(p.invalidPackets)
+           << QStringLiteral("duplicate=%1").arg(p.duplicatePackets)
+           << QStringLiteral("rejectedHeaders=%1").arg(p.rejectedHeaders)
+           << QStringLiteral("expected=%1").arg(p.expectedPackets)
+           << QStringLiteral("missing=%1").arg(p.missingPackets)
+           << QStringLiteral("underflows=%1").arg(p.underflows)
+           << QStringLiteral("overflows=%1").arg(p.overflows)
+           << QStringLiteral("lifetimeUnderflows=%1").arg(logged(p.lifetimeUnderflows))
+           << QStringLiteral("lifetimeOverflows=%1").arg(logged(p.lifetimeOverflows))
+           << QStringLiteral("deviceConsumedFrames=%1").arg(p.deviceConsumedFrames)
+           << QStringLiteral("lastAdmittedPacketAgeMs=%1").arg(logged(p.lastAdmittedPacketAgeMs))
+           << QStringLiteral("arrivalJitterMs=%1").arg(logged(p.arrivalJitterMs))
+           << QStringLiteral("speakerQueuedMs=%1").arg(logged(p.speakerQueuedMs))
+           << QStringLiteral("reorderQueuedMs=%1").arg(logged(p.reorderQueuedMs))
+           << QStringLiteral("driftRatio=%1").arg(logged(p.driftRatio, 9))
+           << QStringLiteral("driftPpm=%1").arg(logged(driftPpm, 1))
+           << QStringLiteral("coreTelemetryAgeMs=%1").arg(logged(m_station
+                  ? std::optional<qint64>(qMax<qint64>(0, now - m_stationReceivedMs)) : std::nullopt))
+           << QStringLiteral("coreSystemCpuPercent=%1").arg(logged(host.systemCpuPercent))
+           << QStringLiteral("coreProcessCpuPercent=%1").arg(logged(host.processCpuPercent))
+           << QStringLiteral("coreMemoryAvailableKiB=%1").arg(logged(host.memoryAvailableKiB))
+           << QStringLiteral("coreMemoryTotalKiB=%1").arg(logged(host.memoryTotalKiB))
+           << QStringLiteral("coreProcessResidentKiB=%1").arg(logged(host.processResidentKiB))
+           << QStringLiteral("coreHottestZoneCelsius=%1").arg(logged(host.hottestZoneCelsius))
+           << QStringLiteral("coreHottestZone=%1").arg(host.hottestZoneName.isEmpty()
+                  ? QStringLiteral("not measured")
+                  : QLatin1Char('"') + host.hottestZoneName.simplified() + QLatin1Char('"'));
+    qCInfo(lcRemoteTelemetry).noquote()
+        << QStringLiteral("Remote diagnostics:") << fields.join(QLatin1Char(' '));
 }
 
 QString RemoteTelemetryController::bannerText() const
