@@ -3,6 +3,13 @@
 // =================================================================
 // 2026-05-25  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude.
 // See RealtimeAudioPriority.h for design rationale.
+//
+// Modification history (NereusSDR):
+//   2026-09-23  J.J. Boyd (KG4VCF): claimThreadPriorityRefusedWarning(),
+//               so nereusd's thread placement startup line can be the one
+//               priority refusal notice and the generic warning is not
+//               added on top of it (R-R3-41). AI-assisted implementation
+//               via Anthropic Claude Code.
 // =================================================================
 #include "RealtimeAudioPriority.h"
 

@@ -15,6 +15,11 @@
 // part of the application or its packages.
 //
 // =================================================================
+// Modification history (NereusSDR):
+//   2026-09-23: original implementation for NereusSDR by J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code (R-R3-40).
+// =================================================================
 
 #if defined(__linux__) && !defined(_GNU_SOURCE)
 #define _GNU_SOURCE
