@@ -147,6 +147,7 @@ bool sameSourceConfig(const DaemonSpectrumSourceConfig& left,
                       const DaemonSpectrumSourceConfig& right)
 {
     return left.fft.fps == right.fft.fps
+        && left.transformsFollowFrameRate == right.transformsFollowFrameRate
         && left.fft.fftSize == right.fft.fftSize
         && left.fft.windowType == right.fft.windowType
         && left.fft.hzPerBinTarget == right.fft.hzPerBinTarget
@@ -315,6 +316,17 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
             this, [this] {
         beginDisplayBudgetIfNeeded();
         refreshDisplayBudgetPacer();
+        // A Core-busy reason starting or ending changes how every source's
+        // transforms advance.
+        if (m_transformsFollowFrameRate != coreBusyLimitsSources()) {
+            m_transformsFollowFrameRate = coreBusyLimitsSources();
+            const QList<MediaSourceKey> keys = m_sources.keys();
+            for (const MediaSourceKey& key : keys) {
+                if (m_sources.value(key).configured) {
+                    reconcileSource(key);
+                }
+            }
+        }
     });
     connect(&m_source, &DaemonSpectrumSource::frameAvailable,
             this, &DaemonMediaController::onSourceFrame);
@@ -516,6 +528,26 @@ std::optional<SpectrumGrant> DaemonMediaController::spectrumGrant(quint32 endpoi
         return std::nullopt;
     }
     return it->second.grant;
+}
+
+bool DaemonMediaController::coreBusyLimitsSources() const
+{
+    return m_server && m_server->displayBudgetLimits()
+        && m_server->displayBudgetReason() == DisplayBudgetReason::CoreBusy;
+}
+
+std::optional<bool> DaemonMediaController::spectrumSourceTransformsFollowFrameRate(
+    quint32 endpointId) const
+{
+    const auto it = m_endpoints.find(endpointId);
+    if (it == m_endpoints.end()) {
+        return std::nullopt;
+    }
+    const auto source = m_sources.constFind(it->second.request.source);
+    if (source == m_sources.cend() || !source->configured) {
+        return std::nullopt;
+    }
+    return source->config.transformsFollowFrameRate;
 }
 
 std::optional<int> DaemonMediaController::spectrumSourceFps(quint32 endpointId) const
@@ -1901,6 +1933,12 @@ bool DaemonMediaController::reconcileSource(const MediaSourceKey& key)
     config.fft.fps = maximumFps;
     config.fft.windowType = windowType;
     config.maxPendingIqFloats = maximumFft * 4;
+    // R-R3-08/40: while the budget is lowered because the Core is busy, a
+    // lower frame rate must save FFT work too, so transforms follow the
+    // frame rate. The app's detail step changes pixels only: FFT work is
+    // set by the sample rate and frame rate, and a smaller FFT would not
+    // save any (it runs more often for the same samples).
+    config.transformsFollowFrameRate = coreBusyLimitsSources();
     if (!std::isfinite(config.centreHz) || config.sampleRateHz <= 0.0) {
         return false;
     }
@@ -1911,15 +1949,18 @@ bool DaemonMediaController::reconcileSource(const MediaSourceKey& key)
     // or leaving neither moves another pan nor holds it below its own rate.
     DaemonSpectrumSourceConfig sameRate = config;
     sameRate.fft.fps = runtime.config.fft.fps;
+    sameRate.transformsFollowFrameRate = runtime.config.transformsFollowFrameRate;
     const bool rateOnly = runtime.configured && sameSourceConfig(runtime.config, sameRate)
-        && runtime.config.fft.fps != config.fft.fps;
+        && (runtime.config.fft.fps != config.fft.fps
+            || runtime.config.transformsFollowFrameRate != config.transformsFollowFrameRate);
     const bool changed = !runtime.configured
         || (!rateOnly && !sameSourceConfig(runtime.config, config));
     bool accepted = true;
     if (!runtime.configured) {
         accepted = m_source.activate(key, config);
     } else if (rateOnly) {
-        accepted = m_source.updateFrameRate(key, config.fft.fps);
+        accepted = m_source.updateFrameRate(key, config.fft.fps,
+                                            config.transformsFollowFrameRate);
     } else if (changed) {
         accepted = m_source.update(key, config);
     }

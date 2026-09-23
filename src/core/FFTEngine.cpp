@@ -10,6 +10,11 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-23: setTransformsFollowFrameRate, NereusSDR-original: while
+//               nereusd's Core is busy a transform advances a whole frame
+//               period, so a lower frame rate saves FFT work (R-R3-08,
+//               R-R3-40). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -65,6 +70,7 @@
 
 #include <QElapsedTimer>
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -219,6 +225,11 @@ void FFTEngine::setOutputFps(int fps)
     m_targetFps.store(qBound(1, fps, 60));
 }
 
+void FFTEngine::setTransformsFollowFrameRate(bool on)
+{
+    m_transformsFollowFrameRate.store(on);
+}
+
 // From Thetis setup.designer.cs:33732 udDisplayDecimation [v2.10.3.13].
 // Range 1..32; 1 = no decimation (every sample is used).
 void FFTEngine::setDecimation(int factor)
@@ -249,6 +260,11 @@ void FFTEngine::feedIQ(const QVector<float>& interleavedIQ)
     // only every Nth sample pair is passed to the FFT accumulator.
     const int dec = m_decimation.load();
     const int numPairs = interleavedIQ.size() / 2;
+    // R-R3-08/40: a skip left from a transform while transforms followed
+    // the frame rate ends as soon as they no longer do.
+    if (!m_transformsFollowFrameRate.load()) {
+        m_skipPending = 0;
+    }
     for (int i = 0; i < numPairs; ++i) {
         if (dec > 1) {
             if (m_decimationCounter != 0) {
@@ -256,6 +272,11 @@ void FFTEngine::feedIQ(const QVector<float>& interleavedIQ)
                 continue;
             }
             m_decimationCounter = (m_decimationCounter + 1) % dec;
+        }
+        if (m_skipPending > 0) {
+            // Between two transforms' windows: not analysed.
+            --m_skipPending;
+            continue;
         }
         if (m_iqWritePos >= m_currentFftSize) {
             // Buffer full -- process and shift overlap region back to head.
@@ -293,6 +314,7 @@ void FFTEngine::resetInputHistory()
     // new-context frame through immediately.
     m_iqWritePos = 0;
     m_decimationCounter = 0;
+    m_skipPending = 0;
     m_frameTimerStarted = false;
     m_frameTimer.invalidate();
 }
@@ -634,7 +656,15 @@ void FFTEngine::processFrame()
     int advance = (sr > 0.0)
         ? static_cast<int>(std::round(sr / static_cast<double>(fps)))
         : m_currentFftSize;
-    advance = qBound(1, advance, m_currentFftSize);
+    advance = std::max(1, advance);
+    // R-R3-08/40 (NereusSDR-original): while transforms follow the frame
+    // rate, an advance past the FFT size skips the gap between windows, so
+    // transforms per second equal the frame rate. Otherwise the advance is
+    // clamped to the FFT size as before.
+    if (advance > m_currentFftSize && m_transformsFollowFrameRate.load()) {
+        m_skipPending = advance - m_currentFftSize;
+    }
+    advance = std::min(advance, m_currentFftSize);
     const int overlap = m_currentFftSize - advance;
     if (overlap > 0) {
         std::memmove(m_iqRaw,

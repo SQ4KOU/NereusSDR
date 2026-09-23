@@ -16,6 +16,12 @@
 // =================================================================
 #include <QtTest>
 #include "core/spectrum/FftEnginePool.h"
+#include "core/FFTEngine.h"
+
+#include <QLoggingCategory>
+#include <QScopeGuard>
+#include <QSignalSpy>
+#include <QThread>
 
 using namespace NereusSDR;
 
@@ -225,6 +231,66 @@ private slots:
 
         QCOMPARE(streamB->fftSize(), 4096);
         QCOMPARE(streamA->fftSize(), 4096);   // retroactively overwritten
+    }
+
+    // R-R3-08/R-R3-40: while the Core is busy, a transform advances a whole
+    // frame period, so transforms per second follow the frame rate and a
+    // lower rate saves FFT work. Off (the default, and always in the desktop
+    // app) nothing changes: a 4096-point FFT at 192 kHz runs a transform
+    // every 4096 samples whatever the frame rate. Counted over one second
+    // of samples.
+    void transformsFollowTheFrameRateOnlyWhenAsked_data()
+    {
+        QTest::addColumn<int>("fps");
+        QTest::addColumn<bool>("follow");
+        QTest::addColumn<int>("transforms");
+        // 1 + floor((192000 - 4096) / 4096) = 46 transforms, clamped
+        // advance, as before.
+        QTest::newRow("10 fps, default") << 10 << false << 46;
+        QTest::newRow("30 fps, default") << 30 << false << 46;
+        // Advance 192000 / fps: 1 + floor((192000 - 4096) / 19200) = 10,
+        // 1 + floor((192000 - 4096) / 6400) = 30.
+        QTest::newRow("10 fps, Core busy") << 10 << true << 10;
+        QTest::newRow("30 fps, Core busy") << 30 << true << 30;
+        // 192000 / 60 = 3200 is under the FFT size: overlapping windows,
+        // the same either way.
+        QTest::newRow("60 fps, default") << 60 << false << 59;
+        QTest::newRow("60 fps, Core busy") << 60 << true << 59;
+    }
+
+    void transformsFollowTheFrameRateOnlyWhenAsked()
+    {
+#ifndef HAVE_FFTW3
+        QSKIP("FFTEngine has no FFTW3 backend in this build");
+#else
+        QFETCH(int, fps);
+        QFETCH(bool, follow);
+        QFETCH(int, transforms);
+        // The engine's replan and memory-lock notes are not this test's.
+        QLoggingCategory::setFilterRules(
+            QStringLiteral("nereus.dsp.info=false\nnereus.memlock.info=false"));
+        const auto restoreRules = qScopeGuard([] { QLoggingCategory::setFilterRules({}); });
+        FFTEngine engine(0);
+        QVERIFY(!engine.transformsFollowFrameRate()); // Off unless asked.
+        engine.setSampleRate(192000.0);
+        engine.setFftSize(4096);
+        engine.setOutputFps(fps);
+        engine.setTransformsFollowFrameRate(follow);
+        QSignalSpy frames(&engine, &FFTEngine::fftReady);
+        // One second of samples in 64-pair batches. Each batch holds at
+        // most one transform; after one, wait out the engine's 5 ms
+        // back-to-back guard so no transform is deferred by it.
+        const int batchPairs = 64;
+        const QVector<float> batch(batchPairs * 2, 0.25f);
+        for (int fed = 0; fed < 192000; fed += batchPairs) {
+            const qsizetype before = frames.count();
+            engine.feedIQ(batch);
+            if (frames.count() != before) {
+                QThread::msleep(6);
+            }
+        }
+        QCOMPARE(frames.count(), transforms);
+#endif
     }
 
     // Coordinator decision beyond the brief's baseline three: the

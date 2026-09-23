@@ -913,6 +913,9 @@ void TstDaemonMediaController::coreBusyLowersThenRestoresTheBudget()
     QTRY_VERIFY(allocationFor(controls, 97, 1).value(QStringLiteral("accepted")).toBool());
     const DisplayBudgetCharge requested = spectrumDisplayCost(128, 60, false)->charge;
     QCOMPARE(harness.controller.acceptedDisplayCharge(), requested);
+    // Normal operation: transforms advance as they always have.
+    QCOMPARE(harness.controller.spectrumSourceTransformsFollowFrameRate(97),
+             std::optional<bool>(false));
 
     DisplayLoadGovernor governor(ceiling);
     std::optional<DisplayLoadDecision> lowered;
@@ -930,6 +933,10 @@ void TstDaemonMediaController::coreBusyLowersThenRestoresTheBudget()
     governor.accept(*lowered);
     QTRY_COMPARE(harness.client.remoteDisplayBudgetLimits()->generation, quint32{2});
     QCOMPARE(harness.client.remoteDisplayBudgetReason(), DisplayBudgetReason::CoreBusy);
+    // R-R3-08/40: while the Core is busy a lower frame rate must save FFT
+    // work, so the source's transforms follow its frame rate.
+    QCOMPARE(harness.controller.spectrumSourceTransformsFollowFrameRate(97),
+             std::optional<bool>(true));
 
     // Growth no longer fits.
     request.insert(QStringLiteral("revision"), 2);
@@ -968,6 +975,8 @@ void TstDaemonMediaController::coreBusyLowersThenRestoresTheBudget()
     governor.accept(*restored);
     QTRY_COMPARE(harness.client.remoteDisplayBudgetLimits()->generation, quint32{3});
     QCOMPARE(harness.client.remoteDisplayBudgetReason(), DisplayBudgetReason::None);
+    QCOMPARE(harness.controller.spectrumSourceTransformsFollowFrameRate(97),
+             std::optional<bool>(false));
     QCOMPARE(harness.client.remoteDisplayBudgetLimits()->spectrumSampleUnitsPerSecond,
              ceiling.spectrumSampleUnitsPerSecond);
 

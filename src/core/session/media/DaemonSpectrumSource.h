@@ -31,6 +31,11 @@ struct DaemonSpectrumSourceConfig {
     /// Explicit queue capacity in interleaved floats.  There is deliberately
     /// no guessed default: the service accepts a bounded ingress budget.
     int maxPendingIqFloats{0};
+    /// R-R3-08/40: the Core is busy, so each transform advances a whole
+    /// frame period (FFTEngine::setTransformsFollowFrameRate). Like the
+    /// frame rate it changes how far the window moves, not what a bin
+    /// represents.
+    bool transformsFollowFrameRate{false};
 };
 
 /// A complete, unreduced FFT frame.  `generation` changes on every accepted
@@ -70,12 +75,13 @@ public:
     bool update(const MediaSourceKey& key,
                 const DaemonSpectrumSourceConfig& config);
 
-    /// Changes only the engine's output frame rate. Frame rate sets how far
-    /// the FFT window advances between frames, not what a bin represents,
-    /// so the generation, queued input and overlap history all stand and no
-    /// consumer's context is renewed. Returns false for an unknown key or a
-    /// rate outside 1..60.
-    bool updateFrameRate(const MediaSourceKey& key, int fps);
+    /// Changes only the engine's output frame rate and whether transforms
+    /// follow it. Both set how far the FFT window advances between frames,
+    /// not what a bin represents, so the generation, queued input and
+    /// overlap history all stand and no consumer's context is renewed.
+    /// Returns false for an unknown key or a rate outside 1..60.
+    bool updateFrameRate(const MediaSourceKey& key, int fps,
+                         bool transformsFollowFrameRate = false);
 
     /// Stops a single source tier and releases its engine. Safe for an
     /// unknown key.  The other tier for the same stream remains active.

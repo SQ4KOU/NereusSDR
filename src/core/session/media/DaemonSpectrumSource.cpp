@@ -158,7 +158,8 @@ bool DaemonSpectrumSource::update(const MediaSourceKey& key,
     return true;
 }
 
-bool DaemonSpectrumSource::updateFrameRate(const MediaSourceKey& key, int fps)
+bool DaemonSpectrumSource::updateFrameRate(const MediaSourceKey& key, int fps,
+                                           bool transformsFollowFrameRate)
 {
     auto it = m_sources.find(key);
     if (it == m_sources.end() || !it->engine) {
@@ -170,17 +171,21 @@ bool DaemonSpectrumSource::updateFrameRate(const MediaSourceKey& key, int fps)
         config = it->state->config;
     }
     config.fft.fps = fps;
+    config.transformsFollowFrameRate = transformsFollowFrameRate;
     if (!isValidConfig(key, config)) {
         return false;
     }
     {
         QMutexLocker lock(&it->state->mutex);
         it->state->config.fft.fps = fps;
+        it->state->config.transformsFollowFrameRate = transformsFollowFrameRate;
     }
     // Queued behind any pending full configuration, which carries the rate
     // it was built with, so this newer rate is the one left applied.
-    QMetaObject::invokeMethod(it->engine, [engine = it->engine, fps]() {
+    QMetaObject::invokeMethod(it->engine, [engine = it->engine, fps,
+                                           transformsFollowFrameRate]() {
         if (engine) {
+            engine->setTransformsFollowFrameRate(transformsFollowFrameRate);
             engine->setOutputFps(fps);
         }
     }, Qt::QueuedConnection);
@@ -352,6 +357,7 @@ void DaemonSpectrumSource::applyEngineConfig(
     FFTEngine* engine, const DaemonSpectrumSourceConfig& config)
 {
     engine->setOutputFps(config.fft.fps);
+    engine->setTransformsFollowFrameRate(config.transformsFollowFrameRate);
     engine->setFftSizeBaseline(config.fft.fftSize);
     engine->setFftSize(config.fft.fftSize);
     engine->setWindowFunction(static_cast<WindowFunction>(config.fft.windowType));

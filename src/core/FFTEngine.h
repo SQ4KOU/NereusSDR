@@ -12,6 +12,11 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-23: setTransformsFollowFrameRate, NereusSDR-original: while
+//               nereusd's Core is busy a transform advances a whole frame
+//               period, so a lower frame rate saves FFT work (R-R3-08,
+//               R-R3-40). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -167,6 +172,17 @@ public:
     void setOutputFps(int fps);
     int  outputFps() const { return m_targetFps.load(); }
 
+    // NereusSDR-original (R-R3-08, R-R3-40), no Thetis equivalent. Off by
+    // default, and never turned on by the desktop app: only nereusd, while
+    // its display budget is lowered because the Core computer is busy.
+    // Off: each transform advances min(sampleRate / fps, fftSize) samples,
+    // so a small FFT runs more transforms than frames are sent. On: each
+    // transform advances sampleRate / fps samples, skipping the samples
+    // between one transform's window and the next, so transforms per
+    // second equal the frame rate and a lower rate saves FFT work.
+    void setTransformsFollowFrameRate(bool on);
+    bool transformsFollowFrameRate() const { return m_transformsFollowFrameRate.load(); }
+
     // setDecimation — apply I/Q decimation before FFT processing.
     // Only every Nth I/Q sample pair is passed to the FFT accumulator.
     // Higher decimation reduces effective bandwidth and FFT resolution,
@@ -264,6 +280,7 @@ private:
     std::atomic<double> m_hzPerBinTarget{0.0};
     std::atomic<double> m_sampleRate{48000.0};
     std::atomic<int>    m_targetFps{30};
+    std::atomic<bool>   m_transformsFollowFrameRate{false};
     // From Thetis setup.designer.cs:33732 udDisplayDecimation [v2.10.3.13].
     // Range 1..32; 1 = no decimation (pass every sample).
     std::atomic<int>    m_decimation{1};
@@ -271,6 +288,9 @@ private:
     // Internal state (only accessed on worker thread)
     int m_currentFftSize{0};  // last planned size (triggers replan on mismatch)
     int m_decimationCounter{0};  // counts input sample pairs; reset each decimation pass
+    // Input sample pairs still to pass over before the next transform's
+    // window starts (setTransformsFollowFrameRate only).
+    int m_skipPending{0};
 
 #ifdef HAVE_FFTW3
     // Raw (un-windowed) I/Q ring buffer.  feedIQ writes here.  processFrame

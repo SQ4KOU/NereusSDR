@@ -120,6 +120,13 @@ bool lowerPixels(const DisplayBudgetLimits& limits, QList<MutableQuality>& quali
     return fits(limits, qualities, ps3Enabled);
 }
 
+// The reduction order: background frame rate, background detail, then the
+// active pan's frame rate and detail. When the Core lowered the budget
+// because it is busy, a lower frame rate also lowers the Core's FFT work
+// (its sources then run one transform per frame, R-R3-08/40); a lower
+// detail saves the Core's reduction, encoding and bytes only, because FFT
+// work is set by the sample rate and frame rate, and a smaller FFT would
+// save none.
 bool reduceToFit(const DisplayBudgetLimits& limits, QList<MutableQuality>& qualities,
                  const QList<int>& backgrounds, const QList<int>& actives,
                  bool ps3Enabled)

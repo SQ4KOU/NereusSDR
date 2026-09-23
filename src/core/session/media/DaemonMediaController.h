@@ -110,6 +110,10 @@ public:
     /// The frame rate Core configured on the engine that feeds a live
     /// spectrum endpoint (R-R3-01, R-R3-08). Empty for an unknown endpoint.
     std::optional<int> spectrumSourceFps(quint32 endpointId) const;
+    /// Whether that engine's transforms follow its frame rate: true only
+    /// while the display budget is lowered because the Core is busy
+    /// (R-R3-08, R-R3-40). Empty for an unknown endpoint.
+    std::optional<bool> spectrumSourceTransformsFollowFrameRate(quint32 endpointId) const;
     /// Display traffic accepted now: every live spectrum endpoint's charge
     /// plus PureSignal's display while it is subscribed (R-R3-08, R-R3-37).
     /// What the display load governor scales when the Core is busy.
@@ -167,6 +171,9 @@ private:
                           bool remember = true);
     bool displayBudgetWireAvailable() const;
     bool displayPacingRequired() const;
+    /// R-R3-08/40: the budget in force is lowered because the Core is busy,
+    /// so every source's transforms follow its frame rate.
+    bool coreBusyLimitsSources() const;
     qint64 displayNowNs() const;
     void beginDisplayBudgetIfNeeded();
     void refreshDisplayBudgetPacer();
@@ -203,6 +210,8 @@ private:
     QPointer<StationServer> m_server;
     QPointer<RadioModel> m_radioModel;
     DaemonSpectrumSource m_source;
+    /// coreBusyLimitsSources() as last applied to the sources.
+    bool m_transformsFollowFrameRate = false;
     NoiseFloorEstimator m_noiseFloorEstimator;
     MediaPeer::TransportFactory m_peerFactory;
     MonotonicClock m_monotonicClock;
