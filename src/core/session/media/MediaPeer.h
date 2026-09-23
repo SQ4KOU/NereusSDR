@@ -38,7 +38,11 @@ public:
                        TransportFactory factory = {});
     ~MediaPeer() override;
 
-    bool start(IMediaTransport::Role role, const QString& connectionId);
+    // audioTargetBitrate is the Opus target this side sends at; an offerer's
+    // audio description never advertises more (R-R3-23). An answerer sends
+    // no audio and keeps the default.
+    bool start(IMediaTransport::Role role, const QString& connectionId,
+               int audioTargetBitrate = OpusAudioCodecConfig{}.bitrate);
     void stop();
 
     bool acceptControl(const QJsonObject& control);

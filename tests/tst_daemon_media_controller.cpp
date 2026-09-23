@@ -541,6 +541,7 @@ private slots:
     void olderPeerKeepsLegacyContextAndCannotAcquireWideband();
     void minorSevenPeerReceivesLegacyAudioContexts();
     void minorEightAudioContextsCarryEncoderOrReason();
+    void configuredAudioBitrateReachesOfferAndContext();
     void minorEightPeerReceivesTodaysSpectrumContext();
     void minorNineSpectrumContextsReportTheGrant();
     void localCaptureDuringConnectingGetsIdentityBeforeFirstAdcRow();
@@ -2528,6 +2529,50 @@ void TstDaemonMediaController::minorEightAudioContextsCarryEncoderOrReason()
     h.radio.setConnectionStateForTest(ConnectionState::Disconnected);
     expectOff(7, 3, "radio-offline");
     if (QTest::currentTestFailed()) { return; }
+    h.finish();
+}
+
+// R-R3-23: nereusd's audio_bitrate reaches both the offer (the transport's
+// start options, which set the SDP ceiling) and the encoder whose profile the
+// minor-8 audio context reports.
+void TstDaemonMediaController::configuredAudioBitrateReachesOfferAndContext()
+{
+    OpusAudioEncoder encoder;
+    if (!encoder.isReady()) {
+        QSKIP("Opus encoder is unavailable in this build");
+    }
+    Harness h;
+    QCOMPARE(h.controller.audioTargetBitrate(), 24000);
+    h.controller.setAudioTargetBitrate(48000);
+    h.establishSession();
+    QVERIFY(h.server.remoteAudioStatusAvailable());
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    QVERIFY(h.client.sendMediaControl({
+        {QStringLiteral("op"), QStringLiteral("start")},
+        {QStringLiteral("connectionId"), QLatin1String(kConnectionId)}},
+        h.client.sessionEpoch()));
+    QTRY_VERIFY(h.mediaTransport);
+    QCOMPARE(h.mediaTransport->startOptions.role, IMediaTransport::Role::Offerer);
+    QCOMPARE(h.mediaTransport->startOptions.audioTargetBitrate, 48000);
+
+    h.mediaTransport->becomeReady();
+    QVERIFY(h.client.sendMediaControl(audioControl(1, true), h.client.sessionEpoch()));
+    const auto enabledContext = [&controls]() -> QJsonObject {
+        for (const auto& call : controls) {
+            const QJsonObject message = call.at(0).toJsonObject();
+            if (message.value(QStringLiteral("op")) == QLatin1String("audio-context")
+                && message.value(QStringLiteral("enabled")).toBool()) {
+                return message;
+            }
+        }
+        return {};
+    };
+    QTRY_VERIFY(!enabledContext().isEmpty());
+    const std::optional<RemoteAudioContextMessage> decoded =
+        decodeRemoteAudioContext(enabledContext(), true);
+    QVERIFY(decoded.has_value());
+    QVERIFY(decoded->encoder.has_value());
+    QCOMPARE(decoded->encoder->targetBitrate, 48000);
     h.finish();
 }
 

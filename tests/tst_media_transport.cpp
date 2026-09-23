@@ -11,6 +11,7 @@
 #include <QElapsedTimer>
 #include <QPointer>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QSet>
 #include <QSignalSpy>
 #include <QtTest>
@@ -23,6 +24,24 @@ using namespace NereusSDR;
 namespace {
 
 constexpr quint32 kTestAudioSsrc = 0x4e523301U;
+
+// The Opus parameters every Core offered before R-R3-23, verbatim: an old
+// Core that a new GUI must still answer.
+constexpr const char* kOldCoreOpusParameters =
+    "minptime=10;maxaveragebitrate=96000;stereo=1;sprop-stereo=1;useinbandfec=1";
+
+// The single Opus a=fmtp line of an offer, without its prefix.
+QString opusFormatLine(const QString& sdp)
+{
+    const QString prefix = QStringLiteral("a=fmtp:111 ");
+    QStringList found;
+    for (const QString& line : sdp.split(QRegularExpression(QStringLiteral("\\r?\\n")))) {
+        if (line.startsWith(prefix)) {
+            found << line.mid(prefix.size());
+        }
+    }
+    return found.size() == 1 ? found.constFirst() : QString();
+}
 // Set only in the child process that checks when SCTP settings are applied.
 constexpr const char* kFirstPeerChildVariable = "NEREUS_TST_MEDIA_TRANSPORT_FIRST_PEER";
 
@@ -44,6 +63,10 @@ private slots:
     void stopCancelsOldCallbacksAndRecreates();
     void signalRestartDropsRemainingOldGenerationMedia();
     void deletionFromReceivedSignalIsSafe();
+    void offerDescribesTheRealEncoder_data();
+    void offerDescribesTheRealEncoder();
+    void answererAcceptsNewAndOldCoreOffers_data();
+    void answererAcceptsNewAndOldCoreOffers();
 
 private:
     static void wire(LibDataChannelMediaTransport& offerer,
@@ -602,6 +625,112 @@ void TestMediaTransport::deletionFromReceivedSignalIsSafe()
     QTRY_VERIFY_WITH_TIMEOUT(answerer.isNull(), 5000);
 
     offerer.stop();
+}
+
+
+// R-R3-23 and RFC 7587 section 6.1: the Core's send-only offer describes the
+// encoder it runs. No in-band FEC (the encoder has it off) and no average
+// bitrate ceiling above the configured target; stereo and minptime stay.
+void TestMediaTransport::offerDescribesTheRealEncoder_data()
+{
+    QTest::addColumn<int>("bitrate");
+    QTest::addColumn<bool>("defaulted");
+    QTest::newRow("default") << 24000 << true;
+    QTest::newRow("24000") << 24000 << false;
+    QTest::newRow("48000") << 48000 << false;
+}
+
+void TestMediaTransport::offerDescribesTheRealEncoder()
+{
+    QFETCH(int, bitrate);
+    QFETCH(bool, defaulted);
+    LibDataChannelMediaTransport offerer;
+    QSignalSpy descriptions(&offerer, &IMediaTransport::localDescription);
+    IMediaTransport::StartOptions options{IMediaTransport::Role::Offerer, kTestAudioSsrc};
+    if (!defaulted) {
+        options.audioTargetBitrate = bitrate;
+    }
+    QVERIFY(offerer.start(options));
+    QTRY_COMPARE_WITH_TIMEOUT(descriptions.count(), 1, 5000);
+    const QString offer = descriptions.at(0).at(0).toString();
+    QCOMPARE(descriptions.at(0).at(1).toString(), QStringLiteral("offer"));
+
+    const QString expected =
+        QStringLiteral("minptime=10;maxaveragebitrate=%1;stereo=1;sprop-stereo=1").arg(bitrate);
+    QCOMPARE(opusFormatLine(offer), expected);
+    QCOMPARE(opusOfferFormatParameters(bitrate), expected);
+    QVERIFY(!offer.contains(QStringLiteral("useinbandfec"), Qt::CaseInsensitive));
+    QVERIFY(offer.contains(QStringLiteral("a=rtpmap:111 opus/48000/2")));
+    QVERIFY(offer.contains(QStringLiteral("a=sendonly")));
+    offerer.stop();
+}
+
+// The GUI answers this Core's offer and an old Core's offer alike: the real
+// answerer negotiates, becomes ready and receives the audio track's RTP.
+void TestMediaTransport::answererAcceptsNewAndOldCoreOffers_data()
+{
+    QTest::addColumn<int>("bitrate");
+    QTest::addColumn<bool>("oldCore");
+    QTest::newRow("new-24000") << 24000 << false;
+    QTest::newRow("new-48000") << 48000 << false;
+    QTest::newRow("old-core") << 24000 << true;
+}
+
+void TestMediaTransport::answererAcceptsNewAndOldCoreOffers()
+{
+    QFETCH(int, bitrate);
+    QFETCH(bool, oldCore);
+    LibDataChannelMediaTransport offerer;
+    LibDataChannelMediaTransport answerer;
+
+    QString deliveredOffer;
+    connect(&offerer, &IMediaTransport::localDescription, &answerer,
+            [&answerer, &deliveredOffer, oldCore](const QString& sdp, const QString& type) {
+                QString offer = sdp;
+                if (oldCore) {
+                    const QString current = opusFormatLine(sdp);
+                    QVERIFY(!current.isEmpty());
+                    offer.replace(QStringLiteral("a=fmtp:111 ") + current,
+                                  QStringLiteral("a=fmtp:111 ")
+                                      + QLatin1String(kOldCoreOpusParameters));
+                }
+                deliveredOffer = offer;
+                QVERIFY2(answerer.acceptDescription(offer, type), "answerer rejected offer");
+            });
+    connect(&answerer, &IMediaTransport::localDescription, &offerer,
+            [&offerer](const QString& sdp, const QString& type) {
+                QVERIFY2(offerer.acceptDescription(sdp, type), "offerer rejected answer");
+            });
+    connect(&offerer, &IMediaTransport::localCandidate, &answerer,
+            [&answerer](const QString& candidate, const QString& mid) {
+                QVERIFY2(answerer.acceptCandidate(candidate, mid),
+                         "answerer rejected host candidate");
+            });
+    connect(&answerer, &IMediaTransport::localCandidate, &offerer,
+            [&offerer](const QString& candidate, const QString& mid) {
+                QVERIFY2(offerer.acceptCandidate(candidate, mid),
+                         "offerer rejected host candidate");
+            });
+
+    QSignalSpy offerReady(&offerer, &IMediaTransport::ready);
+    QSignalSpy answerReady(&answerer, &IMediaTransport::ready);
+    QSignalSpy answerErrors(&answerer, &IMediaTransport::errorOccurred);
+    QVERIFY(answerer.start({IMediaTransport::Role::Answerer, kTestAudioSsrc}));
+    QVERIFY(offerer.start({IMediaTransport::Role::Offerer, kTestAudioSsrc, bitrate}));
+    QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
+    QCOMPARE(opusFormatLine(deliveredOffer),
+             oldCore ? QString::fromLatin1(kOldCoreOpusParameters)
+                     : opusOfferFormatParameters(bitrate));
+
+    QSignalSpy rtpReceived(&answerer, &IMediaTransport::rtpReceived);
+    const QByteArray rtp = rtpPacket(21);
+    QVERIFY(offerer.sendRtp(rtp));
+    QTRY_COMPARE_WITH_TIMEOUT(rtpReceived.count(), 1, 5000);
+    QCOMPARE(rtpReceived.at(0).at(0).toByteArray(), rtp);
+    QCOMPARE(answerErrors.count(), 0);
+    offerer.stop();
+    answerer.stop();
 }
 
 QTEST_GUILESS_MAIN(TestMediaTransport)

@@ -408,6 +408,13 @@ int DaemonMediaController::activeSourceCount() const
     return active;
 }
 
+void DaemonMediaController::setAudioTargetBitrate(int bitsPerSecond)
+{
+    // Stored only: a peer and sender already built keep the target they
+    // were built with, so a live session never changes encoder mid-context.
+    m_audioTargetBitrate = bitsPerSecond;
+}
+
 DaemonAudioDiagnostics DaemonMediaController::audioDiagnostics() const
 {
     return snapshotAudioDiagnostics();
@@ -862,7 +869,8 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
             reconcileAudio();
         }
     });
-    if (!peer->start(IMediaTransport::Role::Offerer, connectionId)) {
+    if (!peer->start(IMediaTransport::Role::Offerer, connectionId,
+                     m_audioTargetBitrate)) {
         m_displayDiagnosticsTimer.stop();
         m_peer.reset();
         sendRejected(connectionId, 0, 0, QStringLiteral("media peer start failed"));
@@ -2029,7 +2037,10 @@ void DaemonMediaController::reconcileAudio()
     bool actualEnabled = false;
     if (shouldRun) {
         if (!m_audioSender) {
-            m_audioSender = std::make_unique<DaemonAudioSender>(m_radioModel->audioEngine());
+            OpusAudioCodecConfig codecConfig;
+            codecConfig.bitrate = m_audioTargetBitrate;
+            m_audioSender = std::make_unique<DaemonAudioSender>(
+                m_radioModel->audioEngine(), codecConfig);
             DaemonAudioSender* const sender = m_audioSender.get();
             connect(sender, &DaemonAudioSender::packetReady, this,
                     [this, sender](const QByteArray& packet) {

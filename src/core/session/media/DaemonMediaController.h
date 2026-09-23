@@ -96,6 +96,12 @@ public:
     int activeEndpointCount() const;
     int activeSourceCount() const;
     DaemonAudioDiagnostics audioDiagnostics() const;
+    /// The Opus target, bit/s, for audio this controller sends (R-R3-23:
+    /// nereusd's audio_bitrate). Applies to the next media peer and audio
+    /// sender it creates, so DaemonApp sets it before the listener opens.
+    /// Default is the encoder's own default target.
+    void setAudioTargetBitrate(int bitsPerSecond);
+    int audioTargetBitrate() const noexcept { return m_audioTargetBitrate; }
     DaemonDisplayDiagnostics displayDiagnostics() const;
     /// What Core granted a live spectrum endpoint: FFT size and tier after
     /// the largest-size and shared-engine rules, and pixels after the source
@@ -198,6 +204,7 @@ private:
     MonotonicClock m_monotonicClock;
     std::unique_ptr<MediaPeer> m_peer;
     std::unique_ptr<DaemonAudioSender> m_audioSender;
+    int m_audioTargetBitrate{OpusAudioCodecConfig{}.bitrate};
     std::map<quint32, EndpointEntry> m_endpoints;
     QMap<MediaSourceKey, SourceRuntime> m_sources;
     QTimer m_sendTimer;

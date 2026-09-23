@@ -11,6 +11,8 @@
 //
 // =================================================================
 
+#include "core/session/media/OpusAudioCodec.h"
+
 #include <QByteArray>
 #include <QObject>
 #include <QString>
@@ -46,6 +48,11 @@ public:
         // Per-session RTP routing identity. DTLS authenticates the peer;
         // this value is not an authentication token.
         quint32 localAudioSsrc;
+        // The Opus encoder target this side sends at, bit/s (R-R3-23). An
+        // offerer's audio description never advertises a higher average
+        // bitrate than this. Defaults to the encoder's own default target,
+        // so a caller that names only role and SSRC keeps today's offer.
+        int audioTargetBitrate = OpusAudioCodecConfig{}.bitrate;
     };
 
     static constexpr qsizetype kMaxDescriptionBytes = 64 * 1024;

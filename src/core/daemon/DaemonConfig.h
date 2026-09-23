@@ -101,6 +101,15 @@ struct DaemonConfig {
     int     remotePort {0};
     QString remoteBind {QStringLiteral("127.0.0.1")};
 
+    // R-R3-23: the Opus encoder target for station audio, bit/s. Only the
+    // two measured profiles are accepted (OpusAudioEncoder refuses any
+    // other); anything else in the file logs one warning and keeps 24000.
+    // Feeds DaemonMediaController::setAudioTargetBitrate() from
+    // DaemonApp::startStationServer().
+    static constexpr int kDefaultAudioBitrate = 24000;
+    static constexpr int kHighAudioBitrate = 48000;
+    int     audioBitrate {kDefaultAudioBitrate};
+
     // Optional measured limits, supplied as a pair. A malformed explicit
     // value becomes zero so validate() fails instead of disabling the cap.
     std::optional<quint64> displayApplicationBytesPerSecond;

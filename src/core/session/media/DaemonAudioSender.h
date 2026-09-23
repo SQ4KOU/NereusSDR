@@ -48,6 +48,12 @@ public:
     static constexpr int kMaxBlocksPerDrain = 4;
 
     explicit DaemonAudioSender(AudioEngine* audioEngine, QObject* parent = nullptr);
+    /// Encodes with `codecConfig` (R-R3-23: the Core's configured
+    /// audio_bitrate). An unsupported bitrate leaves the encoder unready, so
+    /// start() fails and encoderProfile() is empty, as for any encoder that
+    /// cannot initialise.
+    DaemonAudioSender(AudioEngine* audioEngine, const OpusAudioCodecConfig& codecConfig,
+                      QObject* parent = nullptr);
     ~DaemonAudioSender() override;
 
     bool start(quint32 ssrc, quint16 firstSequence, quint32 firstTimestamp);

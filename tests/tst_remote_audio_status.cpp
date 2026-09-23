@@ -16,6 +16,7 @@
 #include "gui/RemoteAudioStatus.h"
 #include "gui/RemoteGeneration.h"
 
+#include <QJsonObject>
 #include <QRegularExpression>
 
 #include <limits>
@@ -364,6 +365,40 @@ private slots:
         // A minor-7 Core cannot report one, whatever the value holds.
         status.detailNegotiated = false;
         QCOMPARE(remoteAudioCodecText(status), QStringLiteral("Not reported by this Core"));
+    }
+
+    // R-R3-23: a Core configured with audio_bitrate = 48000 encodes at that
+    // target, reports it in the minor-8 audio context, and the GUI names it.
+    void coreAt48000ReportsThatTargetInItsContext()
+    {
+        OpusAudioCodecConfig high;
+        high.bitrate = 48'000;
+        const OpusAudioEncoder encoder(high);
+        if (!encoder.isReady()) {
+            QSKIP("Opus encoder is unavailable in this build");
+        }
+        const std::optional<OpusEncoderProfile> profile = encoder.profile();
+        QVERIFY(profile.has_value());
+        QCOMPARE(profile->targetBitrate, 48'000);
+
+        std::optional<RemoteAudioContextMessage> context = contextOf(ContextKind::Enabled);
+        QVERIFY(context.has_value());
+        context->encoder = profile;
+        const QJsonObject wire = encodeRemoteAudioContext(*context, true);
+        QCOMPARE(wire.value(QStringLiteral("encoder")).toObject()
+                     .value(QStringLiteral("targetBitrate")).toInteger(),
+                 qint64{48'000});
+        const std::optional<RemoteAudioContextMessage> accepted =
+            decodeRemoteAudioContext(wire, true);
+        QVERIFY(accepted.has_value());
+        QVERIFY(accepted->encoder.has_value());
+        QCOMPARE(*accepted->encoder, *profile);
+
+        RemoteAudioStatus status;
+        status.detailNegotiated = true;
+        status.encoder = accepted->encoder;
+        QCOMPARE(remoteAudioCodecText(status),
+                 QStringLiteral("Opus stereo, 48\u00A0kbit/s target, 40\u00A0ms packets, audio up to 8\u00A0kHz"));
     }
 
     void operatorWordingCarriesNoProtocolTerms()

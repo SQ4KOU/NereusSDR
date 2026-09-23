@@ -35,6 +35,7 @@
 #include <QFile>
 #include <QTemporaryFile>
 #include <QTextStream>
+#include <QRegularExpression>
 #include "core/AppSettings.h"
 #include "core/daemon/DaemonConfig.h"
 
@@ -184,6 +185,8 @@ private slots:
             QStringLiteral("core_name"),
             QStringLiteral("display_application_bytes_per_second"),
             QStringLiteral("spectrum_sample_units_per_second"),
+            // R-R3-23: reaches DaemonMediaController::setAudioTargetBitrate().
+            QStringLiteral("audio_bitrate"),
         };
 
         // Each documented key parses without an "unknown key" complaint.
@@ -200,7 +203,8 @@ private slots:
                 "remote_bind = 0.0.0.0\n"
                 "core_name = Rock 5C\n"
                 "display_application_bytes_per_second = 2400000\n"
-                "spectrum_sample_units_per_second = 1800000\n");
+                "spectrum_sample_units_per_second = 1800000\n"
+                "audio_bitrate = 48000\n");
         f.flush();
         QString err;
         const DaemonConfig c = DaemonConfig::fromFile(f.fileName(), &err);
@@ -212,6 +216,7 @@ private slots:
         QCOMPARE(c.remotePort, 4711);
         QCOMPARE(c.remoteBind, QStringLiteral("0.0.0.0"));
         QCOMPARE(c.coreName, QStringLiteral("Rock 5C"));
+        QCOMPARE(c.audioBitrate, 48000);
         const std::optional<DisplayBudgetLimits> limits = c.displayBudgetLimits();
         QVERIFY(limits.has_value());
         QCOMPARE(limits->applicationBytesPerSecond, quint64(2400000));
@@ -254,6 +259,60 @@ private slots:
         QStringList expected = documented;
         expected.sort();
         QCOMPARE(found, expected);
+    }
+
+    // R-R3-23: 24000 and 48000 are the only encoder profiles. A missing key
+    // is 24000; any other value logs exactly one warning and keeps 24000,
+    // like remote_port's unparseable-value handling, never a startup error.
+    void audioBitrateAcceptsOnlyTheTwoProfiles_data()
+    {
+        QTest::addColumn<QByteArray>("text");
+        QTest::addColumn<int>("expected");
+        QTest::addColumn<bool>("warns");
+        QTest::newRow("missing") << QByteArray("slice_count = 1\n") << 24000 << false;
+        QTest::newRow("24000") << QByteArray("audio_bitrate = 24000\n") << 24000 << false;
+        QTest::newRow("48000") << QByteArray("audio_bitrate = 48000\n") << 48000 << false;
+        QTest::newRow("32000") << QByteArray("audio_bitrate = 32000\n") << 24000 << true;
+        QTest::newRow("zero") << QByteArray("audio_bitrate = 0\n") << 24000 << true;
+        QTest::newRow("negative") << QByteArray("audio_bitrate = -48000\n") << 24000 << true;
+        QTest::newRow("words") << QByteArray("audio_bitrate = fast\n") << 24000 << true;
+        QTest::newRow("empty") << QByteArray("audio_bitrate =\n") << 24000 << true;
+        QTest::newRow("48k-then-bad")
+            << QByteArray("audio_bitrate = 48000\naudio_bitrate = 96000\n") << 24000 << true;
+    }
+
+    void audioBitrateAcceptsOnlyTheTwoProfiles()
+    {
+        QFETCH(QByteArray, text);
+        QFETCH(int, expected);
+        QFETCH(bool, warns);
+        QTemporaryFile f;
+        QVERIFY(f.open());
+        f.write(text);
+        f.flush();
+        if (warns) {
+            QTest::ignoreMessage(QtWarningMsg,
+                QRegularExpression(QStringLiteral("audio_bitrate must be 24000 or 48000, keeping 24000")));
+        }
+        QTest::failOnWarning(QRegularExpression(QStringLiteral(".*")));
+        QString err;
+        const DaemonConfig c = DaemonConfig::fromFile(f.fileName(), &err);
+        QVERIFY2(err.isEmpty(), qPrintable(err));
+        QCOMPARE(c.audioBitrate, expected);
+        QVERIFY(c.validate(&err));
+    }
+
+    void validateRefusesAnUnsupportedAudioBitrate()
+    {
+        DaemonConfig c = DaemonConfig::defaults();
+        QCOMPARE(c.audioBitrate, 24000);
+        QString err;
+        QVERIFY(c.validate(&err));
+        c.audioBitrate = 48000;
+        QVERIFY(c.validate(&err));
+        c.audioBitrate = 96000;
+        QVERIFY(!c.validate(&err));
+        QVERIFY(err.contains(QStringLiteral("audio_bitrate")));
     }
 
     void absentDisplayBudgetPairPreservesLegacyMode()

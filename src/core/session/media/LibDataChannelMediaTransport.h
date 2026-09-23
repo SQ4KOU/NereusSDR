@@ -34,6 +34,13 @@ struct MediaSctpSettingsRecord {
 };
 MediaSctpSettingsRecord mediaSctpSettingsRecord();
 
+/// The Opus a=fmtp parameters a send-only offer carries for an encoder
+/// running at `targetBitrate` bit/s (R-R3-23). They describe the encoder the
+/// Core really runs: stereo, 10 ms minimum packet time, no in-band FEC (the
+/// encoder has it off, so useinbandfec is left at its RFC 7587 default of 0)
+/// and an average bitrate ceiling equal to the configured target.
+QString opusOfferFormatParameters(int targetBitrate);
+
 class LibDataChannelMediaTransport final : public IMediaTransport {
     Q_OBJECT
 

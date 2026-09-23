@@ -270,6 +270,19 @@ MediaSctpSettingsRecord mediaSctpSettingsRecord()
             g_peersCreated.load(std::memory_order_relaxed)};
 }
 
+QString opusOfferFormatParameters(int targetBitrate)
+{
+    // RFC 7587 section 6.1: sprop-stereo says what this sender sends
+    // (stereo); stereo, useinbandfec and maxaveragebitrate say what the
+    // receiver of the description prefers. The Core's offer is send-only,
+    // so those three are kept honest rather than aspirational: stereo is
+    // what the GUI decodes, useinbandfec is omitted (default 0) because
+    // OpusAudioEncoder sets OPUS_SET_INBAND_FEC(0), and maxaveragebitrate
+    // is the configured encoder target, never a higher ceiling (R-R3-23).
+    return QStringLiteral("minptime=10;maxaveragebitrate=%1;stereo=1;sprop-stereo=1")
+        .arg(targetBitrate);
+}
+
 struct LibDataChannelMediaTransport::Private {
     QTimer* drainTimer = nullptr;
     std::shared_ptr<CallbackBridge> bridge;
@@ -431,8 +444,8 @@ bool LibDataChannelMediaTransport::start(const StartOptions& options)
                                          rtc::Description::Direction::SendOnly);
             opus.addOpusCodec(
                 kOpusPayloadType,
-                "minptime=10;maxaveragebitrate=96000;stereo=1;"
-                "sprop-stereo=1;useinbandfec=1");
+                opusOfferFormatParameters(options.audioTargetBitrate)
+                    .toStdString());
             opus.addSSRC(options.localAudioSsrc, "nereus-mixed-stereo");
             d->audio = d->peer->addTrack(opus);
             bindTrack(d->audio, weak);

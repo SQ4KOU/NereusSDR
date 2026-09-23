@@ -280,6 +280,46 @@ private slots:
         QCOMPARE(packets.count(), 1);
         QVERIFY(!sender.isRunning());
     }
+
+    // R-R3-23: the Core's audio_bitrate reaches the encoder. The encoder's
+    // own profile (read back from libopus) is the evidence, and a sender
+    // built at 48000 still produces packets the default decoder accepts.
+    void configuredBitrateIsTheEncoderTarget()
+    {
+        const DaemonAudioSender defaultSender(nullptr);
+        QVERIFY(defaultSender.encoderProfile().has_value());
+        QCOMPARE(defaultSender.encoderProfile()->targetBitrate, 24'000);
+
+        OpusAudioCodecConfig high;
+        high.bitrate = 48'000;
+        Harness h;
+        h.engine->setSliceStreaming(h.sliceB, false);
+        DaemonAudioSender sender(h.engine, high);
+        const std::optional<OpusEncoderProfile> profile = sender.encoderProfile();
+        QVERIFY(profile.has_value());
+        QCOMPARE(profile->targetBitrate, 48'000);
+        // Only the bitrate moves; the rest of the profile is today's.
+        OpusEncoderProfile expected = *defaultSender.encoderProfile();
+        expected.targetBitrate = 48'000;
+        QCOMPARE(*profile, expected);
+
+        QSignalSpy packets(&sender, &DaemonAudioSender::packetReady);
+        QVERIFY(sender.start(kSsrc, 1, 0));
+        h.feedMixed(DaemonAudioSource::kBlockFrames, 0.30f, 0.30f, 0.0f, 0.0f);
+        sender.drain();
+        QCOMPARE(packets.count(), 1);
+        // reset() on start keeps the configured target.
+        QCOMPARE(sender.encoderProfile()->targetBitrate, 48'000);
+        OpusAudioDecoder decoder;
+        QCOMPARE(decoder.decodeRtp(packetAt(packets, 0), kSsrc).status,
+                 OpusAudioCodecStatus::Accepted);
+
+        OpusAudioCodecConfig unsupported;
+        unsupported.bitrate = 32'000;
+        DaemonAudioSender refused(h.engine, unsupported);
+        QVERIFY(!refused.encoderProfile().has_value());
+        QVERIFY(!refused.start(kSsrc, 1, 0));
+    }
 };
 
 QTEST_MAIN(TstDaemonAudioSender)

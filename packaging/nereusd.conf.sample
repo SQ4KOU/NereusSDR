@@ -71,6 +71,9 @@ remote_bind = 127.0.0.1
 # It never announces a token; the GUI still requires saved/verified credentials.
 core_name =
 
+# Opus audio target sent to GUIs, bit/s: 24000 (default) or 48000; any other value is ignored with a warning.
+audio_bitrate = 24000
+
 # Optional measured display limits. Set BOTH keys to positive integers after
 # measuring this Core host and link; no universal capacity is assumed here.
 # Application bytes include spectrum and PureSignal display messages, but not

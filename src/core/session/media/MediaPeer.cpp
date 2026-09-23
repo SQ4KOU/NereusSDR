@@ -131,7 +131,8 @@ MediaPeer::~MediaPeer()
     delete d;
 }
 
-bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId)
+bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
+                      int audioTargetBitrate)
 {
     if (d->started || !isCanonicalConnectionId(connectionId)) {
         return false;
@@ -294,7 +295,8 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId)
                 }
             });
 
-    const bool backendStarted = transport->start({role, d->audioSsrc});
+    const bool backendStarted =
+        transport->start({role, d->audioSsrc, audioTargetBitrate});
     if (!self || !self->isCurrent(transport, generation)) {
         return false;
     }

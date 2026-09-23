@@ -13,9 +13,16 @@
 namespace NereusSDR {
 
 DaemonAudioSender::DaemonAudioSender(AudioEngine* audioEngine, QObject* parent)
+    : DaemonAudioSender(audioEngine, OpusAudioCodecConfig{}, parent)
+{
+}
+
+DaemonAudioSender::DaemonAudioSender(AudioEngine* audioEngine,
+                                     const OpusAudioCodecConfig& codecConfig,
+                                     QObject* parent)
     : QObject(parent)
     , m_source(std::make_unique<DaemonAudioSource>())
-    , m_encoder(std::make_unique<OpusAudioEncoder>())
+    , m_encoder(std::make_unique<OpusAudioEncoder>(codecConfig))
 {
     m_source->setAudioEngine(audioEngine);
     m_drainTimer.setInterval(kDrainIntervalMs);

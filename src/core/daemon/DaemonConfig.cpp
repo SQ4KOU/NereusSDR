@@ -100,6 +100,17 @@ DaemonConfig DaemonConfig::fromFile(const QString& path, QString* errorOut)
                                   << "remote_port is not a number, keeping"
                                   << cfg.remotePort << ":" << value;
             }
+        } else if (key == QLatin1String("audio_bitrate")) {
+            bool ok = false;
+            const int v = value.toInt(&ok);
+            if (ok && (v == kDefaultAudioBitrate || v == kHighAudioBitrate)) {
+                cfg.audioBitrate = v;
+            } else {
+                cfg.audioBitrate = kDefaultAudioBitrate;
+                qCWarning(lcApp) << "nereusd.conf" << path << "line" << lineNo
+                                  << "audio_bitrate must be 24000 or 48000, keeping"
+                                  << cfg.audioBitrate << ":" << value;
+            }
         } else if (key == QLatin1String("core_name")) {
             cfg.coreName = value;
         } else if (key == QLatin1String("remote_bind")) {
@@ -162,6 +173,13 @@ bool DaemonConfig::validate(QString* errorOut) const
         if (errorOut) {
             *errorOut = QStringLiteral("sample_rate_hz must be positive, got %1")
                             .arg(sampleRateHz);
+        }
+        return false;
+    }
+    if (audioBitrate != kDefaultAudioBitrate && audioBitrate != kHighAudioBitrate) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("audio_bitrate must be 24000 or 48000, got %1")
+                            .arg(audioBitrate);
         }
         return false;
     }
