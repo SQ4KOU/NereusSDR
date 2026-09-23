@@ -40,12 +40,14 @@
 #include <QSet>
 #include <QSignalSpy>
 #include <QTemporaryDir>
+#include <QtEndian>
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <functional>
 #include <numbers>
+#include <numeric>
 #include <thread>
 #include <utility>
 
@@ -563,6 +565,7 @@ private slots:
     void mixedSpectrumAndPs3StayWithinInjectedIntervalBoundsAndBothProgress();
     void failedMiddlePs3ChunkDropsRemainderPromotesLatestAndDoesNotRefund();
     void ps3SnapshotCompletesWhileAcknowledgementsLag();
+    void spectrumAndPs3ShareALaggingWindowAndBothProgress();
     void radioProductionRestartWithinEpochDoesNotMintDisplayCredit();
     void replayedAllocationResultCanSynchronouslyRetireControllerState();
     void sourceRetirementPublishesZeroChargeAtLatestOperationRevision();
@@ -1449,6 +1452,117 @@ void TstDaemonMediaController::ps3SnapshotCompletesWhileAcknowledgementsLag()
     const DaemonDisplayDiagnostics diagnostics = harness.controller.displayDiagnostics();
     QCOMPARE(diagnostics.displayQueuedLate, quint64(harness.mediaTransport->queuedDisplays));
     QCOMPARE(diagnostics.displaySendRefusals, quint64(0));
+    harness.finish();
+}
+
+// R-R3-03/R-R3-05/R-R3-37: two spectrum endpoints and a PureSignal
+// snapshot share one display channel over a link whose acknowledgements lag
+// a send tick. Every acknowledgement cycle frees room for one small spectrum
+// frame beside the chunk that goes out, and the next chunk is then held by
+// the library. So while a snapshot is in flight spectrum gets about one
+// frame per chunk cycle, whatever the tick rate, and both kinds progress:
+// snapshots complete and each endpoint keeps receiving frames.
+void TstDaemonMediaController::spectrumAndPs3ShareALaggingWindowAndBothProgress()
+{
+    Harness harness;
+    harness.useManualDisplayTicks();
+    harness.establishSession();
+    QSignalSpy controls(&harness.client, &StationClient::mediaControlReceived);
+    harness.startReadyPeer();
+    harness.mediaTransport->sctpWindowBytes = IMediaTransport::kSctpSendBufferBytes;
+    const double centre = harness.radio.streamCentreHz(harness.streamIndex);
+    for (const quint32 endpointId : {63U, 64U}) {
+        QVERIFY(harness.client.sendMediaControl(
+            subscription(endpointId, 1, harness.sliceId, centre),
+            harness.client.sessionEpoch()));
+    }
+    QTRY_VERIFY(([&] {
+        harness.feedRadio();
+        return !messageFor(controls, QStringLiteral("context"), 63).isEmpty()
+            && !messageFor(controls, QStringLiteral("context"), 64).isEmpty();
+    })());
+
+    PureSignalSessionFacade* facade = harness.radio.pureSignalFacade();
+    facade->setRemoteAmpViewSubscribed(true);
+    const quint64 generation = facade->displayGeneration();
+    quint64 sequence = 0;
+    facade->displaySnapshotReady(maximumPs3Snapshot(generation, ++sequence));
+
+    // One cycle: new spectrum for both endpoints, several send ticks (more
+    // than the link can take), then the window is acknowledged.
+    constexpr int kCycles = 24;
+    constexpr int kTicksPerCycle = 4;
+    QList<int> spectrumPerCycle;
+    QList<int> ps3PerCycle;
+    for (int cycle = 0; cycle < kCycles; ++cycle) {
+        harness.nowNs += 50'000'000;
+        harness.feedRadio(0.125 + 0.0078125 * (cycle % 16));
+        QTest::qWait(20); // the FFT worker hands its frame back
+        // Keep a newer snapshot waiting, so one is always in flight.
+        facade->displaySnapshotReady(maximumPs3Snapshot(generation, ++sequence));
+        const QList<QByteArray> before = harness.mediaTransport->displays;
+        for (int tick = 0; tick < kTicksPerCycle; ++tick) { harness.sendDisplayTick(); }
+        harness.mediaTransport->acknowledgeDisplayWindow();
+        QCoreApplication::processEvents();
+        const QList<QByteArray> sent = harness.mediaTransport->displays.mid(before.size());
+        spectrumPerCycle.append(displayMessageCount(sent, QByteArrayLiteral("NSDC")));
+        ps3PerCycle.append(displayMessageCount(sent, QByteArrayLiteral("PS3D")));
+    }
+
+    const QList<QByteArray>& sent = harness.mediaTransport->displays;
+    QCOMPARE(QSet<QByteArray>(sent.cbegin(), sent.cend()).size(), sent.size()); // no resend
+    // Spectrum: at most one frame per chunk cycle, and it keeps coming.
+    const int spectrumTotal = displayMessageCount(sent, QByteArrayLiteral("NSDC"));
+    QVERIFY2(*std::max_element(spectrumPerCycle.cbegin(), spectrumPerCycle.cend()) <= 1,
+             qPrintable(QStringLiteral("spectrum per cycle %1").arg(
+                 [&] { QStringList parts; for (int n : spectrumPerCycle) {
+                           parts.append(QString::number(n)); } return parts.join(u' '); }())));
+    QVERIFY2(spectrumTotal >= kCycles / 2,
+             qPrintable(QStringLiteral("%1 spectrum frames in %2 cycles")
+                            .arg(spectrumTotal).arg(kCycles)));
+    QSet<quint32> endpoints;
+    for (const QByteArray& bytes : sent) {
+        if (bytes.startsWith(QByteArrayLiteral("NSDC"))) {
+            endpoints.insert(qFromBigEndian<quint32>(bytes.constData() + 8));
+        }
+    }
+    QCOMPARE(endpoints, QSet<quint32>({63U, 64U}));
+    // PureSignal: a chunk in most cycles, and whole snapshots complete.
+    QVERIFY(std::accumulate(ps3PerCycle.cbegin(), ps3PerCycle.cend(), 0) >= kCycles / 2);
+    Ps3DisplayAssembler assembler(generation);
+    int completed = 0;
+    for (const QByteArray& bytes : sent) {
+        if (!bytes.startsWith(QByteArrayLiteral("PS3D"))) { continue; }
+        QString error;
+        if (assembler.accept(bytes, &error)) { ++completed; }
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+    }
+    QVERIFY2(completed >= kCycles / 6,
+             qPrintable(QStringLiteral("%1 snapshots completed").arg(completed)));
+    QCOMPARE(harness.mediaTransport->busyDisplays, 0);
+    QCOMPARE(harness.controller.displayDiagnostics().displaySendRefusals, quint64(0));
+
+    // The limit is the snapshot's: with PureSignal display off, the same
+    // cycles carry a frame for each endpoint.
+    facade->setRemoteAmpViewSubscribed(false);
+    harness.mediaTransport->acknowledgeDisplayWindow();
+    QCoreApplication::processEvents();
+    int spectrumAlone = 0;
+    constexpr int kAloneCycles = 6;
+    for (int cycle = 0; cycle < kAloneCycles; ++cycle) {
+        harness.nowNs += 50'000'000;
+        harness.feedRadio(0.25 + 0.0078125 * cycle);
+        QTest::qWait(20);
+        const qsizetype before = harness.mediaTransport->displays.size();
+        for (int tick = 0; tick < kTicksPerCycle; ++tick) { harness.sendDisplayTick(); }
+        harness.mediaTransport->acknowledgeDisplayWindow();
+        QCoreApplication::processEvents();
+        spectrumAlone += displayMessageCount(
+            harness.mediaTransport->displays.mid(before), QByteArrayLiteral("NSDC"));
+    }
+    QVERIFY2(spectrumAlone >= 2 * kAloneCycles - 1,
+             qPrintable(QStringLiteral("%1 spectrum frames alone in %2 cycles")
+                            .arg(spectrumAlone).arg(kAloneCycles)));
     harness.finish();
 }
 
