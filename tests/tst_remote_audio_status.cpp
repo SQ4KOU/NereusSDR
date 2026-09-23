@@ -14,6 +14,7 @@
 #include "core/session/media/RemoteAudioContext.h"
 #include "core/session/media/RemoteAudioReceiver.h"
 #include "gui/RemoteAudioStatus.h"
+#include "gui/RemoteGeneration.h"
 
 #include <QRegularExpression>
 
@@ -602,6 +603,18 @@ private slots:
         QVERIFY(!farAhead.recovered(early));
         farAhead.context->generation = 10u + 0x7FFF'FFFFu;
         QVERIFY(farAhead.recovered(early));
+    }
+
+    // The one generation test RemoteMediaController and RemoteAudioStatus
+    // share.
+    void sharedGenerationTestIsWrapAware()
+    {
+        QVERIFY(!isNewerGeneration(5, 5));
+        QVERIFY(isNewerGeneration(6, 5));
+        QVERIFY(!isNewerGeneration(5, 6));
+        QVERIFY(isNewerGeneration(0, std::numeric_limits<quint32>::max()));
+        QVERIFY(isNewerGeneration(0x7FFF'FFFFu, 0));
+        QVERIFY(!isNewerGeneration(0x8000'0000u, 0));
     }
 };
 

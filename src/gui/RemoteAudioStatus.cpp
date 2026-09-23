@@ -5,19 +5,11 @@
 // =================================================================
 
 #include "gui/RemoteAudioStatus.h"
+#include "gui/RemoteGeneration.h"
 
 #include <QStringList>
 
 namespace NereusSDR {
-namespace {
-
-// Wrap-aware, the same test the GUI applies to every context generation.
-bool newerGeneration(quint32 next, quint32 previous)
-{
-    return next != previous && quint32(next - previous) < 0x80000000u;
-}
-
-} // namespace
 
 RemoteAudioStatus::State deriveRemoteAudioState(const RemoteAudioStatusInputs& in)
 {
@@ -199,7 +191,7 @@ bool remoteAudioFailureRecovered(const RemoteAudioFailure& failure, quint32 epoc
                                  const RemoteAudioReceiverTelemetry& playback)
 {
     return failure.epoch == epoch && failure.connectionId == connectionId
-        && context && newerGeneration(context->generation, failure.contextGeneration)
+        && context && isNewerGeneration(context->generation, failure.contextGeneration)
         && playback.running && playback.generation > failure.receiverGeneration
         && playback.deviceConsumedFrames > 0;
 }

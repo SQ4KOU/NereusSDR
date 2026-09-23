@@ -16,6 +16,7 @@
 #include "gui/PanadapterApplet.h"
 #include "gui/PanadapterStack.h"
 #include "gui/RemoteDisplayAllocator.h"
+#include "gui/RemoteGeneration.h"
 #include "gui/SpectrumWidget.h"
 #include "models/RadioModel.h"
 #include "core/session/PureSignalSessionFacade.h"
@@ -93,11 +94,6 @@ bool uint64(const QJsonObject& object, const char* key, quint64 maximum,
     }
     value = static_cast<quint64>(parsed);
     return true;
-}
-
-bool newer(quint32 next, quint32 previous)
-{
-    return next != previous && quint32(next - previous) < 0x80000000u;
 }
 
 // Log wording only: the profile Core reported for this context, never a
@@ -569,7 +565,7 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
                 // Wait for fresh source context before retrying this lifetime.
                 for (const auto& [id, binding] : d->bindings) {
                     if (binding.slice && binding.slice->streamIndex() == slice->streamIndex()
-                        && newer(binding.context.codec.contextGeneration, state->rejectedContext)) {
+                        && isNewerGeneration(binding.context.codec.contextGeneration, state->rejectedContext)) {
                         state->rejectedContext = binding.context.codec.contextGeneration;
                     }
                 }
@@ -1590,7 +1586,7 @@ void RemoteMediaController::refreshCtunState()
             && (state.initialized || state.pending || currentContext);
         if (available && currentContext && !state.initialized && !state.pending
             && (state.rejectedContext == 0
-                || newer(binding.context.codec.contextGeneration, state.rejectedContext))) {
+                || isNewerGeneration(binding.context.codec.contextGeneration, state.rejectedContext))) {
             // One hardware stream has one effective pin, even when several
             // pans show it. Restore once; mirrored truth then updates cohosts.
             // Never reassert competing saved preferences on every frame/ACK.
@@ -1827,7 +1823,7 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
         const std::optional<RemoteAudioContextMessage> context =
             decodeRemoteAudioContext(payload, audioDetailNegotiated());
         if (!context || context->revision != d->audioRevision
-            || !newer(context->generation, d->audioGeneration)
+            || !isNewerGeneration(context->generation, d->audioGeneration)
             || context->ssrc != d->peer->audioSsrc()) { return; }
         d->audioGeneration = context->generation;
         d->acceptedAudioContext = context;
@@ -1985,7 +1981,7 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
         if (context.wideband.active != needsWideband
             || (context.wideband.active && !permission)) { return; }
     }
-    if (binding.accepted && !newer(context.codec.contextGeneration,
+    if (binding.accepted && !isNewerGeneration(context.codec.contextGeneration,
                                   binding.context.codec.contextGeneration)) { return; }
     if ((wide == 0) != (context.wideSpanHz == 0)) { return; }
     context.codec.traceSamples = quint16(trace);
