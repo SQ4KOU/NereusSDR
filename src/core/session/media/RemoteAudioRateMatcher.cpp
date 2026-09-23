@@ -17,6 +17,10 @@
 //                 rmatch/varsamp engine. It adds no feedback or correction
 //                 math and preserves the engine's variable interpolation and
 //                 history across every valid push/take call.
+//   2026-09-23: J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code. stats() also reports WDSP getControlFlag()
+//                 (rmatch.h:157, rmatch.c:699-706) as controlActive, so a
+//                 caller can tell a measured ratio from the initial one.
 // =================================================================
 //
 // === Verbatim Thetis Project Files/Source/ChannelMaster/ivac.c header ===
@@ -144,6 +148,8 @@ void xrmatchIN(void* b, double* in);
 void getRMatchDiags(void* b, int* underflows, int* overflows, double* var,
                     int* ringsize, int* nring);
 void forceRMatchVar(void* b, int force, double fvar);
+// From Thetis Project Files/Source/wdsp/rmatch.h:157 [v2.10.3.15 @3759d09].
+void getControlFlag(void* ptr, int* control_flag);
 }
 #endif
 
@@ -346,6 +352,13 @@ RemoteAudioRateMatcherStats RemoteAudioRateMatcher::stats() const
         // its public-sized prefix. Include the bounded suffix so callers see
         // the fill available to playback, rather than artificial free room.
         result.ringFillFrames += m_outputCarryFrames - m_outputCarryOffsetFrames;
+        // From Thetis Project Files/Source/wdsp/rmatch.c:699-706 [v2.10.3.15 @3759d09]:
+        // getControlFlag(ptr, control_flag). rmatch sets control_flag once
+        // readsamps and writesamps both reach their startup counts
+        // (rmatch.c:356, 461); until then var holds its initial value.
+        int controlFlag = 0;
+        getControlFlag(m_matcher, &controlFlag);
+        result.controlActive = controlFlag != 0;
     }
 #endif
     return result;

@@ -17,6 +17,10 @@
 //                 145-168, and 254 [v2.10.3.15 @3759d09]. The existing
 //                 WDSP rmatch/varsamp engine retains its interpolation,
 //                 filter, ring, and adaptive-feedback history.
+//   2026-09-23: J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code. stats() also reports WDSP getControlFlag()
+//                 (rmatch.h:157, rmatch.c:699-706) as controlActive, so a
+//                 caller can tell a measured ratio from the initial one.
 // =================================================================
 //
 // === Verbatim Thetis Project Files/Source/ChannelMaster/ivac.c header ===
@@ -85,6 +89,11 @@ struct RemoteAudioRateMatcherStats {
     double currentRatio = 1.0;
     int ringCapacityFrames = 0;
     int ringFillFrames = 0;
+    // WDSP rmatch's control_flag (getControlFlag()): false until the
+    // create_rmatchV 3.0 s startup delay has passed for both the audio
+    // written and the audio read, and currentRatio is still the initial
+    // 1.0; true once the controller measures and adjusts it.
+    bool controlActive = false;
 };
 
 /// Bounded worker-thread-only bridge to WDSP rmatch for 48 kHz stereo audio.
@@ -118,7 +127,8 @@ public:
     bool canTakeWithoutUnderflow() const;
     void reset();
 
-    /// getRMatchDiags() projection: underflows, overflows, var, and ringsize.
+    /// getRMatchDiags() projection: underflows, overflows, var, and ringsize,
+    /// plus getControlFlag() as controlActive.
     /// ringFillFrames also includes the bounded native output suffix that has
     /// left WDSP but has not yet been returned by take().
     RemoteAudioRateMatcherStats stats() const;

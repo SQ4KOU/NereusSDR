@@ -535,8 +535,13 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
             const auto stats = publishMatcherStats();
             // The ratio the fault text reports, published every playback
             // iteration so a soak can record it without a fault (R-R3-07).
-            d->driftRatio.store(stats.currentRatio);
-            d->hasDriftRatio.store(true);
+            // Only once rmatch measures it: before its 3.0 s startup delay
+            // the ratio is the initial 1.0, which would read as a measured
+            // zero drift, so drift stays absent until then (review minor 3).
+            if (stats.controlActive) {
+                d->driftRatio.store(stats.currentRatio);
+                d->hasDriftRatio.store(true);
+            }
             // The final pacing read in every playback iteration observes the
             // queue after bounded replenishment. It remains worker-only and
             // does not participate in device callback scheduling.

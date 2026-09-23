@@ -63,8 +63,9 @@ struct RemoteAudioReceiverTelemetry {
     // 1.0; (ratio - 1) x 1e6 is the correction in parts per million. WDSP
     // holds the initial 1.0 until its 3.0 s startup delay of audio has passed
     // (third_party/wdsp/src/rmatch.c create_rmatchV), then adjusts it. A live
-    // gauge like speakerQueuedMs: absent until the worker reads it after
-    // playback begins, and for stopped or failed contexts.
+    // gauge like speakerQueuedMs: absent until rmatch has measured it (its
+    // startup delay has passed during playback), and for stopped or failed
+    // contexts.
     std::optional<double> driftRatio;
 };
 

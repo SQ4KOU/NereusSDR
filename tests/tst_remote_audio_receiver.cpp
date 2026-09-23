@@ -184,11 +184,26 @@ private slots:
         device.start();
         source.start();
 
-        QTRY_VERIFY_WITH_TIMEOUT(receiver.telemetry().driftRatio.has_value(), 1000);
+        // Review minor 3: the controller holds its initial ratio until
+        // create_rmatchV's 3.0 s startup delay of audio has passed, both
+        // written and read (rmatch.c:514, 356, 461). Before that there is
+        // no measurement, so none is reported, although audio plays.
+        constexpr quint64 kStartupFrames = 3 * 48'000;
+        bool earlyRatio = false;
+        QElapsedTimer early;
+        early.start();
+        while (receiver.telemetry().deviceConsumedFrames < 2 * 48'000 && early.elapsed() < 10'000) {
+            const auto snapshot = receiver.telemetry();
+            earlyRatio = earlyRatio || (snapshot.running && snapshot.driftRatio.has_value());
+            QTest::qWait(20);
+        }
+        QVERIFY(receiver.telemetry().deviceConsumedFrames >= 2 * 48'000);
+        QVERIFY2(!earlyRatio, "a drift ratio was reported before the matcher measured one");
+        QTRY_VERIFY_WITH_TIMEOUT(receiver.telemetry().driftRatio.has_value(), 5000);
+        // Device consumption trails matcher reads by at most its queue.
+        QVERIFY(receiver.telemetry().deviceConsumedFrames >= kStartupFrames - 24'000);
         // The ratio stays inside WDSP rmatch's own clamp (rmatch.c control():
-        // 0.96..1.04) and follows the controller as it adjusts. The
-        // controller holds its initial ratio until create_rmatchV's 3.0 s
-        // startup delay of audio has passed (rmatch.c:514); allow twice that.
+        // 0.96..1.04) and follows the controller as it adjusts.
         const double first = *receiver.telemetry().driftRatio;
         QVERIFY2(first >= 0.96 && first <= 1.04, qPrintable(QString::number(first, 'f', 7)));
         QTRY_VERIFY_WITH_TIMEOUT([&] {
