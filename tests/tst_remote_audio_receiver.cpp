@@ -136,6 +136,78 @@ private slots:
         QVERIFY(!restarted.lastDeviceProgressAgeMs);
         receiver.stop();
     }
+    // R-R3-07: the rate matcher's ratio, reported only in fault text before,
+    // is a live telemetry gauge: absent before playback, present and moving
+    // while audio plays, absent after stop and in a fresh context.
+    void telemetryPublishesDriftRatioWhilePlaying()
+    {
+        AudioEngine engine;
+        engine.setVolume(1.0f);
+        auto sink = std::make_unique<PacedAudioBus>();
+        auto* bus = sink.get();
+        engine.setSpeakersBusForTest(std::move(sink));
+        RemoteAudioReceiver receiver(&engine);
+        QVERIFY(receiver.start(654, 0));
+        QVERIFY(!receiver.telemetry().driftRatio);
+
+        OpusAudioEncoder encoder;
+        const QVector<float> pcm(3840, 0.1f);
+        QTimer device;
+        device.setTimerType(Qt::PreciseTimer);
+        device.setInterval(1);
+        QElapsedTimer deviceClock;
+        deviceClock.start();
+        quint64 renderedFrames = 0;
+        connect(&device, &QTimer::timeout, this, [&] {
+            const quint64 due = quint64(deviceClock.nsecsElapsed()) * 48000 / 1'000'000'000;
+            while (due >= renderedFrames + 480) {
+                bus->render(480);
+                renderedFrames += 480;
+            }
+        });
+        int packet = 0;
+        QTimer source;
+        source.setTimerType(Qt::PreciseTimer);
+        source.setInterval(1);
+        QElapsedTimer sourceClock;
+        sourceClock.start();
+        connect(&source, &QTimer::timeout, this, [&] {
+            const int duePackets = int(sourceClock.elapsed() / 40) + 1;
+            while (packet < duePackets) {
+                const auto next = encoder.encode(pcm, quint16(packet), quint32(packet) * 1920, 654);
+                if (next.status == OpusAudioCodecStatus::Accepted) {
+                    receiver.submit(next.packet);
+                }
+                ++packet;
+            }
+        });
+        device.start();
+        source.start();
+
+        QTRY_VERIFY_WITH_TIMEOUT(receiver.telemetry().driftRatio.has_value(), 1000);
+        // The ratio stays inside WDSP rmatch's own clamp (rmatch.c control():
+        // 0.96..1.04) and follows the controller as it adjusts. The
+        // controller holds its initial ratio until create_rmatchV's 3.0 s
+        // startup delay of audio has passed (rmatch.c:514); allow twice that.
+        const double first = *receiver.telemetry().driftRatio;
+        QVERIFY2(first >= 0.96 && first <= 1.04, qPrintable(QString::number(first, 'f', 7)));
+        QTRY_VERIFY_WITH_TIMEOUT([&] {
+            const auto snapshot = receiver.telemetry();
+            return snapshot.running && snapshot.driftRatio && *snapshot.driftRatio != first;
+        }(), 6000);
+        const auto playing = receiver.telemetry();
+        QVERIFY(*playing.driftRatio >= 0.96 && *playing.driftRatio <= 1.04);
+        QCOMPARE(playing.underflows, 0);
+        QCOMPARE(playing.overflows, 0);
+
+        source.stop();
+        device.stop();
+        receiver.stop();
+        QVERIFY(!receiver.telemetry().driftRatio);
+        QVERIFY(receiver.start(654, 0));
+        QVERIFY(!receiver.telemetry().driftRatio);
+        receiver.stop();
+    }
     void telemetryCountsValidOpusPayloadAndSamplesSpeakerQueue()
     {
         AudioEngine engine;

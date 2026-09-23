@@ -59,6 +59,10 @@ struct RemoteAudioReceiver::Private {
     std::atomic<bool> hasArrivalJitterMs{false};
     std::atomic<double> arrivalJitterMs{0.0};
     std::atomic<int> reorderQueuedPackets{-1};
+    // Rate matcher ratio, published by the playback loop (R-R3-07). Like
+    // reorderQueuedPackets it is reported only for a running context.
+    std::atomic<bool> hasDriftRatio{false};
+    std::atomic<double> driftRatio{1.0};
     bool overflow = false; // under mutex
     // Until the first packet is released for playback, a full arrival queue
     // drops its oldest packet instead of raising overflow. startBacklog
@@ -128,6 +132,9 @@ RemoteAudioReceiverTelemetry RemoteAudioReceiver::telemetry() const
                 snapshot.reorderQueuedMs = double(reorderQueued)
                     * (double(AudioJitterBuffer::kPacketDurationNs) / 1'000'000.0);
             }
+            if (d->hasDriftRatio.load()) {
+                snapshot.driftRatio = d->driftRatio.load();
+            }
         }
         if (d->telemetrySequence.load() == sequence) {
             return snapshot;
@@ -153,6 +160,8 @@ void RemoteAudioReceiver::stop()
         d->wake.notify_one();
         d->worker.join();
     }
+    // After the join, so a worker's last publication cannot outlive stop().
+    d->hasDriftRatio.store(false);
     {
         std::lock_guard<std::mutex> lock(d->mutex);
         d->incoming.clear();
@@ -197,6 +206,8 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
     d->hasArrivalJitterMs.store(false);
     d->arrivalJitterMs.store(0.0);
     d->reorderQueuedPackets.store(-1);
+    d->hasDriftRatio.store(false);
+    d->driftRatio.store(1.0);
     d->telemetryGeneration.fetch_add(1);
     {
         std::lock_guard<std::mutex> lock(d->mutex);
@@ -522,6 +533,10 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
                 if (!pacing) { break; }
             }
             const auto stats = publishMatcherStats();
+            // The ratio the fault text reports, published every playback
+            // iteration so a soak can record it without a fault (R-R3-07).
+            d->driftRatio.store(stats.currentRatio);
+            d->hasDriftRatio.store(true);
             // The final pacing read in every playback iteration observes the
             // queue after bounded replenishment. It remains worker-only and
             // does not participate in device callback scheduling.

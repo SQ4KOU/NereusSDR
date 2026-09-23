@@ -370,6 +370,12 @@ QString RemoteTelemetryController::detailText() const
         ? tr("Reorder buffer: %1\u00A0ms on this computer, packets held so that late arrivals play in order.")
               .arg(qRound(*p.reorderQueuedMs))
         : tr("Reorder buffer: not measured yet."));
+    // R-R3-07: the receiver reports its clock correction as a ratio near
+    // 1.0; shown here as (ratio - 1) x 1e6 parts per million.
+    text << (p.driftRatio
+        ? tr("Clock drift: %1\u00A0parts per million, the rate correction this computer applies to match the Core's audio clock.")
+              .arg(qRound((*p.driftRatio - 1.0) * 1'000'000.0))
+        : tr("Clock drift: not measured yet."));
     text << tr("Transport acceptance does not prove delivery. Concealment and source drops are events, not a packet-loss percentage.");
     return text.join(QLatin1Char('\n'));
 }

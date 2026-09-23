@@ -101,6 +101,8 @@ private slots:
         QVERIFY(controller.detailText().contains(QStringLiteral("Gaps filled: 0, concealed 40\u00A0ms intervals.")));
         QVERIFY(controller.detailText().contains(QStringLiteral("Speaker buffer: not measured yet.")));
         QVERIFY(controller.detailText().contains(QStringLiteral("Reorder buffer: not measured yet.")));
+        // R-R3-07: drift is absent until the receiver measures it.
+        QVERIFY(controller.detailText().contains(QStringLiteral("Clock drift: not measured yet.")));
 
         now += 1000;
         guiWire->observation.receivedPayloadBytes += 2000;
@@ -116,6 +118,7 @@ private slots:
         playback.expectedPackets = 100;
         playback.speakerQueuedMs = 41.2;
         playback.reorderQueuedMs = 80.0;
+        playback.driftRatio = 1.0000234;
         controller.sampleNow();
         QCOMPARE(controller.current().controlRxKbps, std::optional<double>(16.0));
         QCOMPARE(controller.current().controlTxKbps, std::optional<double>(32.0));
@@ -132,6 +135,12 @@ private slots:
         QVERIFY(controller.detailText().contains(QStringLiteral("Gaps filled: 0, concealed 40\u00A0ms intervals.")));
         QVERIFY(controller.detailText().contains(QStringLiteral("Speaker buffer: 41\u00A0ms, audio queued for this computer's speaker, not total delay.")));
         QVERIFY(controller.detailText().contains(QStringLiteral("Reorder buffer: 80\u00A0ms on this computer, packets held so that late arrivals play in order.")));
+        // R-R3-07: the ratio near 1.0 is shown as parts per million, with
+        // the number and unit on one line.
+        QVERIFY2(controller.detailText().contains(QStringLiteral(
+                     "Clock drift: 23\u00A0parts per million, the rate correction this computer applies to match the Core's audio clock.")),
+                 qPrintable(controller.detailText()));
+        QCOMPARE(controller.current().playback.driftRatio, std::optional<double>(1.0000234));
         // Fix wave M1: the connect-time backlog discard is shown, and it is
         // a separate count from "admitted" (the receiver excludes it).
         QVERIFY2(controller.detailText().contains(QStringLiteral(
@@ -169,6 +178,18 @@ private slots:
         guiWire->observation.pongAgeMs = 60001;
         controller.sampleNow();
         QVERIFY(!controller.current().coreRttMs);
+
+        // R-R3-07: the drift line follows each new measurement, below 1.0
+        // included, and returns to unmeasured when the receiver drops it.
+        now += 1000;
+        playback.driftRatio = 0.99998;
+        controller.sampleNow();
+        QVERIFY2(controller.detailText().contains(QStringLiteral("Clock drift: -20\u00A0parts per million,")),
+                 qPrintable(controller.detailText()));
+        now += 1000;
+        playback.driftRatio.reset();
+        controller.sampleNow();
+        QVERIFY(controller.detailText().contains(QStringLiteral("Clock drift: not measured yet.")));
 
         client.disconnectFromStation(QStringLiteral("operator disconnect"));
         QCOMPARE(controller.current().state, RemoteTelemetryView::State::Disconnected);

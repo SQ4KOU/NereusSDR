@@ -57,6 +57,15 @@ struct RemoteAudioReceiverTelemetry {
     // fields above, this is a live gauge: unavailable before a measurement
     // and for stopped or failed contexts, like speakerQueuedMs.
     std::optional<double> reorderQueuedMs;
+    // The continuous clock correction's current resample ratio (WDSP rmatch
+    // `var`, read through RemoteAudioRateMatcherStats::currentRatio), the
+    // same value restart fault text reports as `ratio=`. It is a ratio near
+    // 1.0; (ratio - 1) x 1e6 is the correction in parts per million. WDSP
+    // holds the initial 1.0 until its 3.0 s startup delay of audio has passed
+    // (third_party/wdsp/src/rmatch.c create_rmatchV), then adjusts it. A live
+    // gauge like speakerQueuedMs: absent until the worker reads it after
+    // playback begins, and for stopped or failed contexts.
+    std::optional<double> driftRatio;
 };
 
 // One generation of bounded RTP receive, Opus decoding and WDSP rate matching.
