@@ -84,6 +84,17 @@ private slots:
                                 " priority."));
     }
 
+    // R-R3-41: nereusd's thread placement startup line says itself that
+    // raised priority is not permitted; after it claims the warning, a later
+    // refusal logs nothing.
+    void claimedWarningIsNotRepeated()
+    {
+        QVERIFY(claimThreadPriorityRefusedWarning());
+        QVERIFY(!claimThreadPriorityRefusedWarning());
+        QVERIFY(!noteThreadPriorityRefused());
+        QVERIFY(capturedWarnings().isEmpty());
+    }
+
     void concurrentRefusalsStillWarnOnce()
     {
         constexpr int kThreads = 8;
