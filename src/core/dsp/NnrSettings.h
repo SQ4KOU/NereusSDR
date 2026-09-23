@@ -4,6 +4,9 @@
 // ranges approved in 2026-09-21-wdsp210-nnr-ps3-design.md section 6.
 // Modification history (NereusSDR):
 //   2026-09-21 — J.J. Boyd (KG4VCF), with OpenAI Codex assistance.
+//   2026-09-23 : NnrLimit, nnrLimitExplanation and the applied-limit
+//                readback (R-R3-40) by J.J. Boyd (KG4VCF), with Anthropic
+//                Claude Code assistance.
 #pragma once
 
 #include "core/WdspTypes.h"
@@ -46,6 +49,29 @@ struct NnrSettings {
 
 enum class NnrModelSource : int { Unavailable = 0, Bundled = 1, File = 2 };
 
+// R-R3-40: a runtime limit the Core sets when a receiver cannot keep up with
+// NNR. It never changes the saved choice; the operator can clear it.
+enum class NnrLimit : int { None = 0, StandardOnly = 1, Off = 2 };
+
+[[nodiscard]] inline bool isValidNnrLimit(int value) noexcept
+{
+    return value >= static_cast<int>(NnrLimit::None) && value <= static_cast<int>(NnrLimit::Off);
+}
+
+// What the operator reads while a limit is in force; empty when there is none.
+[[nodiscard]] inline QString nnrLimitExplanation(int limit)
+{
+    switch (limit) {
+    case static_cast<int>(NnrLimit::StandardOnly):
+        return QStringLiteral("Noise reduction is using the Standard model. "
+                              "This computer could not keep up with Premium.");
+    case static_cast<int>(NnrLimit::Off):
+        return QStringLiteral("Noise reduction was turned off. This computer could not keep up.");
+    default:
+        return {};
+    }
+}
+
 // Readback only. Diagnostic processing modes intentionally have no normal
 // save/load representation; they reset when the station session is replaced.
 struct NnrDiagnostics {
@@ -65,6 +91,10 @@ struct NnrDiagnostics {
     int outputMode{1};
     bool profilingAvailable{false};
     QString explanation;
+    // R-R3-40: the runtime limit WDSP has applied (NnrLimit) and whether NNR
+    // is requested on. Local readback only; not mirrored.
+    int appliedLimit{0};
+    bool requestedRun{false};
 };
 
 } // namespace NereusSDR

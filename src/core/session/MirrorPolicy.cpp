@@ -10,6 +10,9 @@
 //                                    direction table. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-40: SliceModel nnrLimit is
+//                                    Outbound. AI-assisted implementation
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -169,6 +172,10 @@ const MirrorPolicy::Entry kEntries[] = {
     { "SliceModel", "nnrModelSource", MirrorDirection::Outbound },
     { "SliceModel", "nnrStatus", MirrorDirection::Outbound },
     { "SliceModel", "nnrLastError", MirrorDirection::Outbound },
+    // R-R3-40: the Core's runtime step-back. Outbound only; the operator
+    // clears it with the nnr.tryAgain command or by choosing a model, and
+    // StationServer leaves it out for peers below minor 11.
+    { "SliceModel", "nnrLimit", MirrorDirection::Outbound },
     { "SliceModel", "nr1Taps", MirrorDirection::Bidirectional },
     { "SliceModel", "nr1Delay", MirrorDirection::Bidirectional },
     { "SliceModel", "nr1Gain", MirrorDirection::Bidirectional },

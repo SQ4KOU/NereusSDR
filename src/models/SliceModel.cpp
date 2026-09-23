@@ -20,6 +20,12 @@
 //                                    addition, no Thetis change. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-40: runtime NNR limit
+//                                    (setNnrLimit, requestNnrRetry, the
+//                                    nnrLimit mirror field); choosing a
+//                                    model while limited asks for a retry.
+//                                    NereusSDR-original. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1158,6 +1164,12 @@ bool SliceModel::applyNnrSettings(const NnrSettings& requested)
 
 void SliceModel::setNnrModelSlot(int value)
 {
+    // R-R3-40: choosing a model while the Core holds this receiver back is
+    // the operator asking for it again, even when it is the saved model
+    // (which the equality check below would otherwise ignore).
+    if (m_nnrLimit != 0) {
+        emit nnrRetryRequested();
+    }
     auto requested = m_nnrSettings;
     requested.modelSlot = value;
     applyNnrSettings(requested);
@@ -1226,6 +1238,18 @@ void SliceModel::resetNnrTuning()
     applyNnrSettings(defaults);
 }
 
+void SliceModel::setNnrLimit(int limit)
+{
+    if (!isValidNnrLimit(limit) || m_nnrLimit == limit) return;
+    m_nnrLimit = limit;
+    emit nnrLimitChanged(limit);
+}
+
+void SliceModel::requestNnrRetry()
+{
+    emit nnrRetryRequested();
+}
+
 void SliceModel::updateNnrDiagnostics(const NnrDiagnostics& diagnostics)
 {
     if (m_nnrDiagnostics == diagnostics) return;
@@ -1278,6 +1302,13 @@ bool SliceModel::applyStationNnrDiagnostic(const QByteArray& name, const QVarian
     else if (name == "nnrOutputMode") status.outputMode = value.toInt();
     else if (name == "nnrStatus") status.explanation = value.toString();
     else if (name == "nnrLastError") { setNnrLastError(value.toString()); return true; }
+    else if (name == "nnrLimit") {
+        bool ok = false;
+        const int limit = value.toInt(&ok);
+        if (!ok || !isValidNnrLimit(limit)) return false;
+        setNnrLimit(limit);
+        return true;
+    }
     else if (name == "nnrModelSource") {
         if (status.actualModelSlot >= 0 && status.actualModelSlot < 2) {
             status.modelSources[status.actualModelSlot] = value.toString() == QStringLiteral("Bundled")

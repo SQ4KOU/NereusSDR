@@ -37,6 +37,10 @@
 //                                    and stationTelemetryVersion 3.
 //                                    AI-assisted implementation via
 //                                    Anthropic Claude Code.
+//                                    Later the same day: the runtime NNR
+//                                    limit arrives as SliceModel nnrLimit,
+//                                    and the operator's retry is sent as
+//                                    nnr.tryAgain, both from minor 11.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -2187,6 +2191,18 @@ void StationClient::watchForOutbound(const QByteArray& objectKey, QObject* objec
             if (reason) { *reason = QStringLiteral("This station session does not support NNR."); }
             return false;
         });
+        // R-R3-40: the operator's retry goes to the station. A station
+        // echo (choosing the model the station reports) is not a retry.
+        disconnect(slice, &SliceModel::nnrRetryRequested, this, nullptr);
+        connect(slice, &SliceModel::nnrRetryRequested, this, [this, slice]() {
+            if (m_applyingInbound) {
+                return;
+            }
+            const auto outcome = requestNnrRetry(slice->sliceIndex());
+            if (!outcome.sent) {
+                slice->reportNnrEditResult(outcome.reason);
+            }
+        });
         disconnect(slice, &SliceModel::nnrDiagnosticsRequested, this, nullptr);
         connect(slice, &SliceModel::nnrDiagnosticsRequested, this,
                 [this, slice](int testMode, int outputMode) {
@@ -2428,6 +2444,21 @@ StationClient::CommandOutcome StationClient::requestNnrDiagnostics(int sliceId, 
     return sendCommand("nnr.setDiagnostics", sliceId,
         {intArgument("sliceId", sliceId), intArgument("testMode", testMode), intArgument("outputMode", outputMode)},
         QStringLiteral("the NNR diagnostic change"));
+}
+
+bool StationClient::nnrRetryAvailable() const
+{
+    return nnrControlAvailable() && m_agreedMinor >= kNnrLimitSessionProtocolMinor;
+}
+
+StationClient::CommandOutcome StationClient::requestNnrRetry(int sliceId)
+{
+    if (!nnrRetryAvailable()) {
+        return {false, QStringLiteral("This station cannot try noise reduction again. "
+                                      "Update the station software.")};
+    }
+    return sendCommand("nnr.tryAgain", sliceId, {intArgument("sliceId", sliceId)},
+        QStringLiteral("trying noise reduction again"));
 }
 
 StationClient::CommandOutcome StationClient::requestDisconnectTgxl()

@@ -295,6 +295,9 @@ private slots:
     void receiverLoadIsOmittedForMinorTenPeer();
     void clientKeepsReceiverLoadOnlyWhenNegotiated_data();
     void clientKeepsReceiverLoadOnlyWhenNegotiated();
+    void nnrLimitReachesMinorElevenPeerAndTryAgainClearsIt();
+    void nnrLimitIsOmittedForMinorTenPeer();
+    void clientSendsTryAgainOnlyAtMinorEleven();
     void remoteTgxlClientRequiresHandshakeMinorAndCapability();
     void remoteFourO3AClientRequiresHandshakeMinorAndCapability();
     void remoteFourO3AServerRejectsPreAuthAndOldMinor();
@@ -939,6 +942,178 @@ void TstStationSession::clientKeepsReceiverLoadOnlyWhenNegotiated()
     QCOMPARE(received.receivers.has_value(), kept);
     // The host section follows its own negotiation, untouched by this one.
     QCOMPARE(received.host.isEmpty(), version < 2);
+}
+
+// R-R3-40: a current GUI sees the Core's runtime NNR step-back and asks for
+// the saved choice back with nnr.tryAgain; a station echo of the model is
+// never taken as the operator asking. No schema-skew or apply warnings.
+void TstStationSession::nnrLimitReachesMinorElevenPeerAndTryAgainClearsIt()
+{
+    QTemporaryDir settingsDir;
+    AppSettings settings(settingsDir.filePath(QStringLiteral("nnr-limit.settings")));
+    auto model = makeStationRadioModel(0);
+    QVERIFY(!model->slices().isEmpty());
+    SliceModel* coreSlice = model->slices().first();
+    const int sliceId = coreSlice->sliceIndex();
+    StationServer server(model.get(), settings, m_securityDir.path());
+    RadioModel remote(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&remote, &proxy);
+    QStringList lines;
+    LogCapture capture(&lines);
+    auto* station = new LoopbackTransport(QStringLiteral("nnr-limit-station"), this);
+    auto* peer = new LoopbackTransport(QStringLiteral("nnr-limit-client"), this);
+    station->linkTo(peer);
+    client.startSession(peer, server.token());
+    server.acceptTransport(station);
+    QTRY_VERIFY(client.nnrRetryAvailable());
+    QCOMPARE(client.agreedMinor(), kNnrLimitSessionProtocolMinor);
+    QTRY_VERIFY(remote.sliceById(sliceId) != nullptr);
+    SliceModel* guiSlice = remote.sliceById(sliceId);
+    QCOMPARE(guiSlice->nnrLimit(), 0);
+
+    coreSlice->setNnrLimit(static_cast<int>(NnrLimit::StandardOnly));   // the Core stepped back
+    QTRY_COMPARE(guiSlice->nnrLimit(), static_cast<int>(NnrLimit::StandardOnly));
+    QCOMPARE(guiSlice->nnrLimitText(), QStringLiteral(
+        "Noise reduction is using the Standard model. This computer could not keep up with Premium."));
+
+    // The station changing the model is an echo, not the operator asking.
+    NnrSettings standard = coreSlice->nnrSettings();
+    standard.modelSlot = coreSlice->nnrModelSlot() == 1 ? 0 : 1;
+    QVERIFY(coreSlice->applyNnrSettings(standard));
+    QTRY_COMPARE(guiSlice->nnrModelSlot(), standard.modelSlot);
+    QTest::qWait(200);
+    QCOMPARE(coreSlice->nnrLimit(), static_cast<int>(NnrLimit::StandardOnly));
+
+    guiSlice->requestNnrRetry();   // "Try again" on the remote GUI
+    QTRY_COMPARE(coreSlice->nnrLimit(), 0);
+    QTRY_COMPARE(guiSlice->nnrLimit(), 0);
+    QVERIFY(guiSlice->nnrLastError().isEmpty());
+    QCOMPARE(coreSlice->nnrModelSlot(), standard.modelSlot);   // saved choice unchanged
+    for (const QString& line : std::as_const(lines)) {
+        QVERIFY2(!line.contains(QStringLiteral("schema skew")), qPrintable(line));
+        QVERIFY2(!(line.contains(QStringLiteral("No way to apply"))
+                   && line.contains(QStringLiteral("nnr"))), qPrintable(line));
+    }
+    client.disconnectFromStation(QStringLiteral("nnr limit complete"));
+}
+
+// A minor-10 GUI never sees nnrLimit (schema, object, delta), so it has
+// nothing to log as schema skew, and its nnr.tryAgain is refused.
+void TstStationSession::nnrLimitIsOmittedForMinorTenPeer()
+{
+    QTemporaryDir settingsDir;
+    AppSettings settings(settingsDir.filePath(QStringLiteral("nnr-limit-old.settings")));
+    auto model = makeStationRadioModel(0);
+    SliceModel* coreSlice = model->slices().first();
+    StationServer server(model.get(), settings, m_securityDir.path());
+    auto* station = new LoopbackTransport(QStringLiteral("minor10-nnr-station"), this);
+    auto* peer = new LoopbackTransport(QStringLiteral("minor10-nnr-client"), this);
+    station->linkTo(peer);
+    server.acceptTransport(station);
+    coreSlice->setNnrLimit(static_cast<int>(NnrLimit::StandardOnly));
+    peer->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor, kNnrLimitSessionProtocolMinor - 1, 6,
+        QStringLiteral("minor-10-client"))));
+    peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
+    QTRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("snapshot.complete")));
+
+    // Changes after the snapshot: the limit alone sends nothing; a limit
+    // change batched with another property sends only that property.
+    coreSlice->setNnrLimit(static_cast<int>(NnrLimit::Off));
+    coreSlice->setNnrLimit(static_cast<int>(NnrLimit::None));
+    coreSlice->setNnrAlpha(2.5);
+    coreSlice->setNnrLimit(static_cast<int>(NnrLimit::StandardOnly));
+    QTRY_VERIFY([&] {
+        for (const QByteArray& wire : peer->received()) {
+            if (wire.contains("\"nnrAlpha\"") && wire.contains("\"delta\"")) {
+                return true;
+            }
+        }
+        return false;
+    }());
+    QTest::qWait(200);
+    bool sawSliceSchema = false;
+    for (const QByteArray& wire : peer->received()) {
+        QVERIFY2(!wire.contains("nnrLimit"), wire.constData());
+        const SessionMessage message = decodeOrFail(wire);
+        if (message.kind == SessionMessageKind::Schema && message.className == "SliceModel") {
+            sawSliceSchema = true;
+        }
+        if (message.kind == SessionMessageKind::Delta) {
+            QVERIFY(!message.updates.isEmpty());
+        }
+    }
+    QVERIFY(sawSliceSchema);
+
+    peer->clearReceived();
+    peer->sendText(SessionMessages::encode(SessionMessages::commandInvoke(
+        "nnr.tryAgain", 31,
+        { MirrorUpdate{ 0, "sliceId", MirrorWireKind::Int64, qint64(coreSlice->sliceIndex()) } })));
+    SessionMessage result;
+    QTRY_VERIFY([&] {
+        for (const QByteArray& wire : peer->received()) {
+            const SessionMessage candidate = decodeOrFail(wire);
+            if (candidate.kind == SessionMessageKind::CommandResult
+                && candidate.commandId == quint32(31)) {
+                result = candidate;
+                return true;
+            }
+        }
+        return false;
+    }());
+    QVERIFY(!result.accepted);
+    QCOMPARE(result.reason, QStringLiteral(
+        "This station cannot try noise reduction again. Update the station software."));
+    QCOMPARE(coreSlice->nnrLimit(), static_cast<int>(NnrLimit::StandardOnly));
+}
+
+// The GUI sends nnr.tryAgain only to a Core that negotiated minor 11.
+void TstStationSession::clientSendsTryAgainOnlyAtMinorEleven()
+{
+    for (const quint16 minor : {quint16(kNnrLimitSessionProtocolMinor - 1),
+                                kNnrLimitSessionProtocolMinor}) {
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        auto* station = new LoopbackTransport(QStringLiteral("raw-nnr-station"), this);
+        auto* peer = new LoopbackTransport(QStringLiteral("raw-nnr-client"), this);
+        station->linkTo(peer);
+        client.startSession(peer, QStringLiteral("test-token"));
+        const auto send = [&](const SessionMessage& message) {
+            station->sendText(SessionMessages::encode(message));
+        };
+        send(SessionMessages::hello(kSessionProtocolMajor, minor, 6, QStringLiteral("station")));
+        send(SessionMessages::authResult(true, {}, false));
+        StationCapabilities caps;
+        caps.propertyResultVersion = 1;
+        caps.nnrVersion = 1;
+        send(SessionMessages::capabilities(caps.toUpdates()));
+        send(SessionMessages::snapshotComplete());
+        QTRY_VERIFY(client.nnrControlAvailable());
+        station->clearReceived();
+        const auto outcome = client.requestNnrRetry(0);
+        QCOMPARE(outcome.sent, minor >= kNnrLimitSessionProtocolMinor);
+        QCOMPARE(client.nnrRetryAvailable(), minor >= kNnrLimitSessionProtocolMinor);
+        const auto sawCommand = [&] {
+            for (const QByteArray& wire : station->received()) {
+                if (wire.contains("nnr.tryAgain")) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        if (outcome.sent) {
+            QTRY_VERIFY(sawCommand());
+        } else {
+            QTest::qWait(100);
+            QVERIFY(!sawCommand());
+        }
+        if (!outcome.sent) {
+            QCOMPARE(outcome.reason, QStringLiteral(
+                "This station cannot try noise reduction again. Update the station software."));
+        }
+    }
 }
 
 void TstStationSession::remoteTgxlClientRequiresHandshakeMinorAndCapability()

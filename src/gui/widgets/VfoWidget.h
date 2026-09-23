@@ -20,6 +20,9 @@
 //                 Claude Code.
 //                 Structural pattern follows AetherSDR (ten9876/AetherSDR,
 //                 GPLv3).
+//   2026-09-23 : R-R3-40 NNR step-back indicator on the NNR button, by
+//                 J.J. Boyd (KG4VCF), with Anthropic Claude Code
+//                 assistance.
 // =================================================================
 
 //=================================================================
@@ -638,6 +641,9 @@ private:
     void showNr3Popup(const QPoint& globalPos);
     void showNr4Popup(const QPoint& globalPos);
     void showNnrPopup(const QPoint& globalPos);
+    // R-R3-40: the small indicator on the NNR button while the Core holds
+    // the receiver below the saved NNR choice.
+    void onNnrLimitChanged(int limit);
     void requestNrSetup(NereusSDR::NrSlot slot);
     void showDfnrPopup(const QPoint& globalPos);
     void showBnrPopup(const QPoint& globalPos);
@@ -798,6 +804,8 @@ private:
     QPushButton* m_bnrBtn  = nullptr;
     QPushButton* m_mnrBtn  = nullptr;
     QPushButton* m_nnrBtn  = nullptr;
+    QLabel*      m_nnrLimitIndicator = nullptr;   // R-R3-40
+    QString      m_nnrToolTip;
     QPushButton*        m_anfToggle{nullptr};
     QPushButton*        m_snbToggle{nullptr};
     QPushButton*        m_apfToggle{nullptr};

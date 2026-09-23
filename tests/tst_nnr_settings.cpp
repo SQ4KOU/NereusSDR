@@ -1,5 +1,6 @@
 // no-port-check: NereusSDR-original acceptance tests for NNR configuration.
 #include <QtTest>
+#include <QSignalSpy>
 #include <QTemporaryDir>
 
 #include "core/AppSettings.h"
@@ -213,6 +214,80 @@ private slots:
         settings.migrateLegacyNnrSettings();
         QVERIFY(!settings.contains(prefix + "NrActive"));
         QCOMPARE(settings.value(prefix + "NnrAlpha").toDouble(), 2.0);
+    }
+
+    // R-R3-40: the runtime NNR limit is a slice property that is never saved,
+    // never changes the saved choice, and says why in plain words.
+    void runtimeLimitIsNeverSavedAndExplainsItself()
+    {
+        SliceModel slice;
+        slice.setSliceIndex(2);
+        slice.setSettingsRadioIdentity(radioA);
+        slice.setNnrModelSlot(1);
+        slice.setActiveNr(NrSlot::NNR);
+        QCOMPARE(slice.nnrLimit(), 0);
+        QVERIFY(slice.nnrLimitText().isEmpty());
+
+        QSignalSpy changed(&slice, &SliceModel::nnrLimitChanged);
+        slice.setNnrLimit(static_cast<int>(NnrLimit::StandardOnly));
+        slice.setNnrLimit(static_cast<int>(NnrLimit::StandardOnly));
+        slice.setNnrLimit(3);    // not a limit
+        slice.setNnrLimit(-1);
+        QCOMPARE(changed.count(), 1);
+        QCOMPARE(slice.nnrLimit(), 1);
+        QCOMPARE(slice.nnrLimitText(),
+                 QStringLiteral("Noise reduction is using the Standard model. "
+                                "This computer could not keep up with Premium."));
+        slice.setNnrLimit(static_cast<int>(NnrLimit::Off));
+        QCOMPARE(slice.nnrLimitText(),
+                 QStringLiteral("Noise reduction was turned off. This computer could not keep up."));
+        QCOMPARE(slice.nnrModelSlot(), 1);
+        QCOMPARE(slice.activeNr(), NrSlot::NNR);
+
+        slice.saveNnrSettings();
+        const QString prefix = slice.nnrSettingsPrefix();
+        for (const QString& key : AppSettings::instance().allKeys()) {
+            QVERIFY2(!(key.startsWith(prefix) && key.contains(QStringLiteral("Limit"))),
+                     qPrintable(key));
+        }
+        SliceModel restored;
+        restored.setSliceIndex(2);
+        restored.setSettingsRadioIdentity(radioA);
+        restored.restoreNnrSettings();
+        QCOMPARE(restored.nnrLimit(), 0);
+        QCOMPARE(restored.nnrModelSlot(), 1);
+        QCOMPARE(restored.activeNr(), NrSlot::NNR);
+    }
+
+    // Choosing a model while limited asks for the saved choice back, even
+    // the model already saved; without a limit it asks for nothing.
+    void choosingAModelWhileLimitedAsksToTryAgain()
+    {
+        SliceModel slice;
+        slice.setNnrModelSlot(1);
+        QSignalSpy retry(&slice, &SliceModel::nnrRetryRequested);
+        slice.setNnrModelSlot(1);
+        slice.setNnrModelSlot(0);
+        slice.setNnrModelSlot(1);
+        QCOMPARE(retry.count(), 0);
+        slice.setNnrLimit(static_cast<int>(NnrLimit::StandardOnly));
+        slice.setNnrModelSlot(1);   // the equality check would skip this
+        QCOMPARE(retry.count(), 1);
+        slice.requestNnrRetry();
+        QCOMPARE(retry.count(), 2);
+    }
+
+    // The station mirror carries the limit to a remote GUI.
+    void stationMirrorAppliesOnlyValidLimits()
+    {
+        SliceModel slice;
+        QVERIFY(slice.applyStationNnrDiagnostic("nnrLimit", 2));
+        QCOMPARE(slice.nnrLimit(), 2);
+        QVERIFY(slice.applyStationNnrDiagnostic("nnrLimit", 0));
+        QCOMPARE(slice.nnrLimit(), 0);
+        QVERIFY(!slice.applyStationNnrDiagnostic("nnrLimit", 3));
+        QVERIFY(!slice.applyStationNnrDiagnostic("nnrLimit", QStringLiteral("off")));
+        QCOMPARE(slice.nnrLimit(), 0);
     }
 };
 

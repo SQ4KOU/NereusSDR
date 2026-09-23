@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // NereusSDR-original WDSP 2.10 NNR controls.
+// 2026-09-23: R-R3-40 runtime step-back notice and "Try again" action, by
+// J.J. Boyd (KG4VCF), with Anthropic Claude Code assistance.
 
 #include "NnrControls.h"
 
@@ -104,6 +106,24 @@ void NnrControls::buildUi(Presentation presentation)
     m_model->setToolTip(tr("Select the neural model. The preference remains editable offline; "
                            "a connected radio may reject a model that is not installed."));
     quickForm->addRow(tr("Model"), m_model);
+
+    // R-R3-40: shown only while the Core holds this receiver below the saved
+    // choice because the computer could not keep up.
+    m_limitRow = new QWidget(quick);
+    m_limitRow->setObjectName(QStringLiteral("nnrLimitRow"));
+    auto* limitLayout = new QHBoxLayout(m_limitRow);
+    limitLayout->setContentsMargins(0, 0, 0, 0);
+    m_limitNotice = new QLabel(m_limitRow);
+    m_limitNotice->setObjectName(QStringLiteral("nnrLimitNotice"));
+    m_limitNotice->setWordWrap(true);
+    m_limitNotice->setStyleSheet(QStringLiteral("QLabel { color: #ffd166; }"));
+    m_tryAgain = new QPushButton(tr("Try again"), m_limitRow);
+    m_tryAgain->setObjectName(QStringLiteral("nnrTryAgainButton"));
+    m_tryAgain->setToolTip(tr("Run the saved noise reduction choice again."));
+    limitLayout->addWidget(m_limitNotice, 1);
+    limitLayout->addWidget(m_tryAgain);
+    m_limitRow->setVisible(false);
+    quickForm->addRow(m_limitRow);
 
     auto* suppression = new QWidget(quick);
     auto* suppressionRow = new QHBoxLayout(suppression);
@@ -270,6 +290,20 @@ void NnrControls::buildUi(Presentation presentation)
         }
         refresh();
     });
+    // Choosing the model already shown changes no index; while a step-back
+    // is in force it is still the operator asking for that model again.
+    connect(m_model, &QComboBox::activated, this, [this](int index) {
+        if (m_slice && index >= 0 && m_slice->nnrLimit() != 0) {
+            m_slice->setNnrModelSlot(m_model->itemData(index).toInt());
+        }
+        refresh();
+    });
+    connect(m_tryAgain, &QPushButton::clicked, this, [this] {
+        if (m_slice) {
+            m_slice->requestNnrRetry();
+        }
+        refresh();
+    });
     connect(m_maskFloor, &QDoubleSpinBox::valueChanged, this, [this](double value) {
         if (m_slice) {
             m_slice->setNnrMaskFloorDb(value);
@@ -355,6 +389,7 @@ void NnrControls::connectSlice()
     refreshConnection(&SliceModel::nnrConfigurationChanged);
     refreshConnection(&SliceModel::nnrDiagnosticsChanged);
     refreshConnection(&SliceModel::nnrLastErrorChanged);
+    refreshConnection(&SliceModel::nnrLimitChanged);
     m_sliceConnections.push_back(connect(m_slice.data(), &SliceModel::nnrEditRejected,
                                          this, [this](const QString&) { refresh(); }));
     m_sliceConnections.push_back(connect(m_slice.data(), &QObject::destroyed,
@@ -366,7 +401,7 @@ void NnrControls::setInteractive(bool enabled)
     const QVector<QWidget*> widgets{
         m_model, m_maskFloor, m_maskFloorSlider, m_position, m_alpha, m_alphaKnee,
         m_tau, m_maxGain, m_attack, m_release, m_testMode, m_outputMode,
-        m_reset, m_modelsButton, m_moreButton
+        m_reset, m_modelsButton, m_moreButton, m_tryAgain
     };
     for (QWidget* widget : widgets) {
         if (widget) {
@@ -386,8 +421,14 @@ void NnrControls::refresh()
         m_rateLatency->setText(QStringLiteral("—"));
         m_source->setText(QStringLiteral("—"));
         m_status->setText(tr("Reopen NNR controls for the current station session."));
+        m_limitRow->setVisible(false);
         return;
     }
+
+    const QString limitText = m_slice->nnrLimitText();
+    m_limitNotice->setText(limitText);
+    m_limitNotice->setToolTip(limitText);
+    m_limitRow->setVisible(!limitText.isEmpty());
 
     const auto setComboData = [](QComboBox* combo, int value) {
         QSignalBlocker blocker(combo);

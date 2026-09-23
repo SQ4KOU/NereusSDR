@@ -645,6 +645,12 @@ RadioModel::RadioModel(Role role, QObject* parent)
         m_dspLoadTimer->setInterval(ReceiverDspLoadSampler::kSampleIntervalMs);
         connect(m_dspLoadTimer, &QTimer::timeout,
                 this, &RadioModel::sampleReceiverDspLoad);
+        // R-R3-40: the NNR step-back reads the snapshot just taken (Qt runs
+        // the two slots in connection order).
+        m_nnrGovernorClock.start();
+        connect(m_dspLoadTimer, &QTimer::timeout, this, [this] {
+            governNnrLoad(m_nnrGovernorClock.elapsed());
+        });
         m_dspLoadTimer->start();
     }
 
@@ -3958,6 +3964,13 @@ void RadioModel::wireNnrSettings(SliceModel* slice)
         if (!channel) {
             return true;
         }
+        // R-R3-40: turning NNR on or off clears a runtime limit. Cleared
+        // before NNR goes on, and after it goes off, so an "off" limit never
+        // lets NNR run for a block in between.
+        const bool limited = slice->nnrLimit() != static_cast<int>(NnrLimit::None);
+        if (limited && requested == NrSlot::NNR) {
+            clearNnrLimit(slice);
+        }
         // R-R3-40: the receiver runs the operator's saved choice. Apply it
         // before switching NNR on, so a receiver that refused it earlier
         // (for example because the model was missing then) cannot run a
@@ -3967,6 +3980,9 @@ void RadioModel::wireNnrSettings(SliceModel* slice)
             return false;
         }
         const bool accepted = channel->setActiveNr(requested);
+        if (limited && requested != NrSlot::NNR) {
+            clearNnrLimit(slice);
+        }
         slice->updateNnrDiagnostics(channel->nnrDiagnostics());
         if (!accepted && reason) {
             *reason = slice->nnrStatus().isEmpty()
@@ -3984,6 +4000,9 @@ void RadioModel::wireNnrSettings(SliceModel* slice)
     });
     connect(slice, &SliceModel::activeNrChanged, this,
             [this, slice](NrSlot) { scheduleSettingsSave(slice); });
+    // R-R3-40: "Try again", or choosing a model while limited.
+    connect(slice, &SliceModel::nnrRetryRequested, this,
+            [this, slice]() { clearNnrLimit(slice); });
 }
 
 bool RadioModel::setNnrDiagnosticMode(int sliceId, int testMode, int outputMode, QString* reason)
@@ -4060,6 +4079,9 @@ void RadioModel::applyNnrStateToChannel(SliceModel* slice, RxChannel* channel)
         return;
     }
     QString reason;
+    // R-R3-40: a new or reopened channel starts with the slice's runtime
+    // limit, applied by the tuning call below.
+    channel->requestNnrLimit(slice->nnrLimit());
     const bool tuningAccepted = channel->setNnrTuning(slice->nnrSettings(), &reason);
     // A missing saved model must not enable a different model silently.
     // Retain the saved preference so the operator can repair the asset.
@@ -5867,6 +5889,103 @@ void RadioModel::sampleReceiverDspLoad()
     m_dspLoadSampler.update(readings);
 }
 
+// R-R3-40. Main thread, right after sampleReceiverDspLoad.
+void RadioModel::governNnrLoad(qint64 nowMs)
+{
+    governNnrLoadWith(nowMs, [this](int sliceId) -> std::optional<double> {
+        const std::optional<ReceiverDspLoad> load = receiverDspLoad(sliceId);
+        // Idle is "not measured", never "unloaded" (ReceiverDspLoad::idle).
+        if (!load || load->idle) {
+            return std::nullopt;
+        }
+        return load->load;
+    });
+}
+
+void RadioModel::governNnrLoadForTest(qint64 nowMs,
+                                      const QHash<int, std::optional<double>>& loads)
+{
+    governNnrLoadWith(nowMs, [&loads](int sliceId) {
+        return loads.value(sliceId, std::nullopt);
+    });
+}
+
+void RadioModel::governNnrLoadWith(qint64 nowMs,
+                                   const std::function<std::optional<double>(int)>& load)
+{
+    if (!m_wdspEngine) {
+        return;
+    }
+    for (SliceModel* slice : std::as_const(m_slices)) {
+        if (slice == nullptr) {
+            continue;
+        }
+        const int sliceId = slice->sliceIndex();
+        RxChannel* channel = m_wdspEngine->rxChannel(sliceId);
+        if (channel == nullptr) {
+            continue;
+        }
+        // Refresh the readback once the worker has run two blocks after the
+        // step (the first block to start after the request applies it). The
+        // block count is lock-free; the readback itself takes the DSP lock
+        // once, like any other NNR control call.
+        const auto pending = m_nnrLimitReadbackPending.constFind(sliceId);
+        if (pending != m_nnrLimitReadbackPending.cend()) {
+            RxChannel::DspLoadCounters counters;
+            if (!channel->dspLoad(counters) || counters.blocks >= pending.value() + 2) {
+                m_nnrLimitReadbackPending.remove(sliceId);
+                slice->updateNnrDiagnostics(channel->nnrDiagnostics());
+            }
+        }
+        NnrLoadGovernor::Receiver receiver;
+        receiver.nnrSelected = slice->activeNr() == NrSlot::NNR;
+        receiver.savedModelSlot = slice->nnrModelSlot();
+        receiver.limit = static_cast<NnrLimit>(slice->nnrLimit());
+        receiver.load = load(sliceId);
+        if (const std::optional<NnrLimit> next = m_nnrGovernor.observe(sliceId, nowMs, receiver)) {
+            applyNnrLimit(slice, *next);
+        }
+    }
+}
+
+void RadioModel::applyNnrLimit(SliceModel* slice, NnrLimit limit)
+{
+    RxChannel* channel = m_wdspEngine ? m_wdspEngine->rxChannel(slice->sliceIndex()) : nullptr;
+    if (channel == nullptr || !channel->requestNnrLimit(static_cast<int>(limit))) {
+        return;
+    }
+    RxChannel::DspLoadCounters counters;
+    m_nnrLimitReadbackPending.insert(slice->sliceIndex(),
+                                     channel->dspLoad(counters) ? counters.blocks : 0);
+    slice->setNnrLimit(static_cast<int>(limit));
+    qCInfo(lcDsp) << "Receiver" << slice->sliceIndex() << "could not keep up with"
+                  << (slice->nnrModelSlot() == 1 && limit == NnrLimit::StandardOnly
+                          ? "Premium noise reduction; using Standard"
+                          : "noise reduction; turned it off")
+                  << "until the operator tries again";
+}
+
+void RadioModel::clearNnrLimit(SliceModel* slice)
+{
+    if (slice == nullptr || slice->nnrLimit() == static_cast<int>(NnrLimit::None)) {
+        return;
+    }
+    const int sliceId = slice->sliceIndex();
+    m_nnrGovernor.reset(sliceId);
+    m_nnrLimitReadbackPending.remove(sliceId);
+    slice->setNnrLimit(static_cast<int>(NnrLimit::None));
+    RxChannel* channel = m_wdspEngine ? m_wdspEngine->rxChannel(sliceId) : nullptr;
+    if (channel == nullptr) {
+        return;
+    }
+    channel->requestNnrLimit(static_cast<int>(NnrLimit::None));
+    // An operator action: apply the saved choice now, under the DSP lock,
+    // so the readback shows it at once.
+    QString reason;
+    channel->setNnrTuning(slice->nnrSettings(), &reason);
+    slice->updateNnrDiagnostics(channel->nnrDiagnostics());
+}
+
 bool RadioModel::requestTxHandoffToSlice(int sliceId)
 {
     if (m_txSliceArbiter == nullptr) { return false; }
@@ -6444,6 +6563,8 @@ void RadioModel::removeSliceImpl(int sliceId, bool persist)
     // R-R3-40: a slice created later with this ID must not inherit this
     // one's load snapshot or measure from its baseline.
     m_dspLoadSampler.forget(sliceId);
+    m_nnrGovernor.forget(sliceId);
+    m_nnrLimitReadbackPending.remove(sliceId);
 
     // Reassert the invariant after the victim leaves the list.
     if (m_txSliceArbiter) {

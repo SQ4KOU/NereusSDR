@@ -530,6 +530,13 @@ public:
     CommandOutcome requestApplyNnrModels(quint32 revision) override;
     bool nnrControlAvailable() const override;
     CommandOutcome requestNnrDiagnostics(int sliceId, int testMode, int outputMode) override;
+    /// R-R3-40: the station can clear a runtime NNR limit on request
+    /// (negotiated minor 11 and NNR control).
+    bool nnrRetryAvailable() const;
+    /// R-R3-40: ask the station for the slice's saved NNR choice back
+    /// ("Try again", or choosing a model while limited). Sent for the
+    /// operator's own action only, never for a station echo.
+    CommandOutcome requestNnrRetry(int sliceId);
 
     void setHeartbeatIntervalMs(int ms);
     int heartbeatIntervalMs() const { return m_heartbeatIntervalMs; }

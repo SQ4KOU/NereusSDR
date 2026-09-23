@@ -23,7 +23,8 @@
 //                 day: the block in progress and the per-interval longest
 //                 block (takeDspIntervalMaxBlockUs).
 //                 Later the same day: setActiveNr(NNR) no longer re-applies
-//                 a stale cached NNR tuning.
+//                 a stale cached NNR tuning; requestNnrLimit and nnrLimit
+//                 (runtime NNR limit, carried across a rebuild).
 // =================================================================
 
 //=================================================================
@@ -1127,6 +1128,14 @@ bool RxChannel::setNnrDiagnostics(int testMode, int outputMode, QString* reason)
     return NnrAdapter::setDiagnostics(m_channelId, testMode, outputMode, reason);
 }
 
+bool RxChannel::requestNnrLimit(int limit)
+{
+    if (!NnrAdapter::requestLimit(m_channelId, limit))
+        return false;
+    m_nnrLimit.store(limit, std::memory_order_release);
+    return true;
+}
+
 bool RxChannel::setActiveNr(NrSlot slot)
 {
     if (static_cast<int>(slot) < 0 || static_cast<int>(slot) > static_cast<int>(NrSlot::NNR))
@@ -2168,6 +2177,7 @@ RxChannelState RxChannel::captureState() const
     s.nrMode              = m_nrMode;
     s.activeNr            = activeNr();
     s.nnrTuning           = nnrTuning();
+    s.nnrLimit            = nnrLimit();
     s.anfEnabled          = m_anfEnabled.load();
 
     // EQ
@@ -2219,6 +2229,7 @@ void RxChannel::applyState(const RxChannelState& s)
     // Noise reduction
     setNrEnabled(s.nrEnabled);
     setNrMode(s.nrMode);
+    requestNnrLimit(s.nnrLimit);   // before the tuning, which applies it
     setNnrTuning(s.nnrTuning);
     setActiveNr(s.activeNr);
     setAnfEnabled(s.anfEnabled);

@@ -2,6 +2,8 @@
 // No DSP algorithm is duplicated; all values come from locked WDSP readback.
 // Modification history (NereusSDR):
 //   2026-09-21 — J.J. Boyd (KG4VCF), with OpenAI Codex assistance.
+//   2026-09-23 : requestLimit and the applied-limit readback (R-R3-40) by
+//                J.J. Boyd (KG4VCF), with Anthropic Claude Code assistance.
 #include "NnrAdapter.h"
 
 #ifdef HAVE_WDSP
@@ -49,7 +51,11 @@ NnrDiagnostics NnrAdapter::diagnostics(int channelId)
     result.ready = status.ready != 0;
     result.running = status.running != 0;
     result.rateSupported = status.rate_supported != 0;
-    result.actualModelSlot = status.configuration.model_slot;
+    // The model running, not the accepted choice: a runtime limit can hold
+    // the receiver on the standard model while the choice stays premium.
+    result.actualModelSlot = status.active_model_slot;
+    result.appliedLimit = status.limit;
+    result.requestedRun = status.requested_run != 0;
     for (int i = 0; i < 2; ++i) {
         result.modelAvailable[i] = status.model_available[i] != 0;
         result.modelSources[i] = static_cast<NnrModelSource>(status.model_source[i]);
@@ -110,13 +116,29 @@ bool NnrAdapter::setRunning(int channelId, bool enabled, QString* reason)
         return false;
     }
     SetRXANNRRun(channelId, enabled ? 1 : 0);
-    return diagnostics(channelId).running == enabled;
+    const auto after = diagnostics(channelId);
+    // A runtime "off" limit holds NNR off while it stays requested on; the
+    // request is accepted and runs again once the limit is cleared.
+    return after.running == enabled
+        || (enabled && after.requestedRun && after.appliedLimit == static_cast<int>(NnrLimit::Off));
 #else
     Q_UNUSED(channelId);
     if (reason)
         *reason = QStringLiteral("NNR is not included in this build.");
     return !enabled;
 #endif
+}
+
+bool NnrAdapter::requestLimit(int channelId, int limit)
+{
+    if (!isValidNnrLimit(limit))
+        return false;
+#ifdef HAVE_WDSP
+    RequestRXANNRLimit(channelId, limit);
+#else
+    Q_UNUSED(channelId);
+#endif
+    return true;
 }
 
 bool NnrAdapter::setDiagnostics(int channelId, int testMode, int outputMode, QString* reason)

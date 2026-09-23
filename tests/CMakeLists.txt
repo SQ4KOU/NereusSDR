@@ -867,6 +867,11 @@ nereus_add_test(tst_rx_dsp_worker_input_delay)
 # receiver as idle. NereusSDR-original; no WDSP needed.
 nereus_add_test(tst_receiver_dsp_load_sampler)
 
+# R-R3-40: a receiver that cannot keep up with NNR steps back one level
+# (Premium to Standard to off) after 2 s at 0.90 load, then settles 5 s; it
+# never raises a level and never judges idle. NereusSDR-original; no WDSP.
+nereus_add_test(tst_nnr_load_governor EXTRA_LABELS core)
+
 # Remote Daemon R3 R-R3-31: selecting RADE RX on slice B must leave slice A
 # on the ordinary AudioEngine path, route only B's demodulated audio to RADE,
 # and keep the already-enrolled A+B master mix producing while B is unsynced.

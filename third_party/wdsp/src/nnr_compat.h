@@ -17,6 +17,8 @@
  */
 // no-port-check: NereusSDR-original ABI glue. DSP algorithms remain in nnr.c.
 // 2026-09-21: J.J. Boyd (KG4VCF), with OpenAI Codex assistance.
+// 2026-09-23: runtime NNR limit (R-R3-40) by J.J. Boyd (KG4VCF), with
+// Anthropic Claude Code assistance.
 #ifndef NEREUS_NNR_COMPAT_H
 #define NEREUS_NNR_COMPAT_H
 
@@ -49,6 +51,13 @@ typedef struct NNRRuntimeStatus {
     int test_mode;
     int output_mode;
     int profiling_available;
+    /* NereusSDR (R-R3-40): configuration.model_slot is the caller's accepted
+     * model; active_model_slot is the one running, limit the applied runtime
+     * limit (0 none, 1 standard model only, 2 off), requested_run the
+     * caller's run request. */
+    int active_model_slot;
+    int limit;
+    int requested_run;
 } NNRRuntimeStatus;
 
 /* Caller owns the channel lifetime. These never retain an output pointer.
@@ -58,6 +67,9 @@ int GetRXANNRStatus(int channel, NNRRuntimeStatus* out);
 int ConfigureRXANNR(int channel, const NNRConfiguration* requested,
                    NNRRuntimeStatus* accepted);
 int SetRXANNRDiagnostics(int channel, int test_mode, int output_mode);
+/* R-R3-40: never takes the channel DSP lock. limit: 0 none, 1 standard model
+ * only, 2 off. Applied by the channel's worker at its next block. */
+void RequestRXANNRLimit(int channel, int limit);
 
 #ifdef __cplusplus
 }

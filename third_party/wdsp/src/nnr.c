@@ -28,6 +28,13 @@ warren@wpratt.com
 // accepted configuration/readback under the channel DSP lock; safe optional
 // model handling; retain tuning on internal buffer/rate reconstruction.
 // Source DSP algorithms and all upstream attribution are retained.
+// NereusSDR modifications (2026-09-23, J.J. Boyd KG4VCF, with Anthropic
+// Claude Code): runtime NNR limit (R-R3-40). RequestRXANNRLimit stores a
+// request without the channel DSP lock; the worker applies it at its next
+// block (xnnr), under the lock it already holds, by running the standard
+// model only or no NNR. The caller's configuration and run request are kept
+// and return when the limit is cleared. The status reports the applied limit
+// and the model actually running.
 
 #include "comm.h"
 #include "nnet.h"
@@ -102,6 +109,15 @@ typedef struct _nnr
 
 	int nunder;
 	int nover;
+
+	/* NereusSDR (R-R3-40): runtime limit. requested_model is the caller's
+	 * accepted model; limit is the applied limit (0 none, 1 standard model
+	 * only, 2 off), changed only under the channel DSP lock. limit_request
+	 * and owner_channel are written without the lock by RequestRXANNRLimit. */
+	int requested_model;
+	int limit;
+	volatile long limit_request;
+	volatile long owner_channel;
 } nnr, * NNR;
 
 /* NereusSDR: these helpers expose values without leaking the opaque NNR or
@@ -117,10 +133,22 @@ static int nnr_channel_valid (int channel)
 		&& _InterlockedAnd (&ch[channel].run, 1) && rxa[channel].nnr.p != 0;
 }
 
+/* NereusSDR (R-R3-40): the model the limit lets run, and whether NNR runs. */
+static int nnr_effective_slot (NNR a)
+{
+	return a->limit >= 1 ? 0 : a->requested_model;
+}
+
+static int nnr_effective_run (NNR a)
+{
+	return a->requested_run && a->limit < 2 && nnr_rate_supported (a)
+		&& ok_nnet (a->net) && a->model == nnr_effective_slot (a);
+}
+
 static int nnr_copy_configuration (NNR a, NNRConfiguration* out)
 {
 	memset (out, 0, sizeof (*out));
-	out->model_slot = a->model;
+	out->model_slot = a->requested_model;
 	out->position = a->position;
 	out->mask_floor_db = a->mask_floor;
 	if (!ok_nnet (a->net)) return 0;
@@ -151,6 +179,9 @@ static void nnr_copy_status (NNR a, NNRRuntimeStatus* out)
 #ifdef NNET_PROFILE
 	out->profiling_available = 1;
 #endif
+	out->active_model_slot = a->model;
+	out->limit = a->limit;
+	out->requested_run = a->requested_run != 0;
 }
 
 static int nnr_between (double value, double lo, double hi)
@@ -174,8 +205,12 @@ static int nnr_configuration_valid (const NNRConfiguration* p)
 
 static void nnr_apply_configuration (NNR a, const NNRConfiguration* p)
 {
-	int reset = a->model != p->model_slot || a->position != p->position;
-	setModel_nnr (a, p->model_slot);
+	int slot;
+	int reset;
+	a->requested_model = p->model_slot;
+	slot = nnr_effective_slot (a);
+	reset = a->model != slot || a->position != p->position;
+	setModel_nnr (a, slot);
 	a->position = p->position;
 	a->mask_floor = p->mask_floor_db;
 	for (int k = 0; k < NNET_NSLOTS; ++k)
@@ -189,8 +224,36 @@ static void nnr_apply_configuration (NNR a, const NNRConfiguration* p)
 		setMaxGain_nnet (n, p->max_gain_db);
 		setSmooth_nnet (n, p->attack_ms, p->release_ms);
 	}
-	a->run = a->requested_run && nnr_rate_supported (a) && ok_nnet (a->net);
+	a->run = nnr_effective_run (a);
 	if (reset) flush_nnr (a);
+}
+
+/* NereusSDR (R-R3-40): apply a pending limit request. Caller holds the
+ * channel DSP lock. Model switches and NNR on/off take the same steps the
+ * locked setters take (setModel_nnr, flush_nnr, RXAbp1Check/RXAbp1Set). */
+static void nnr_sync_limit (NNR a, int channel)
+{
+	int want = (int)_InterlockedAnd (&a->limit_request, ~0L);
+	int slot, was_run;
+	if (want == a->limit || want < 0 || want > 2) return;
+	a->limit = want;
+	was_run = a->run;
+	slot = nnr_effective_slot (a);
+	if (slot != a->model)
+	{
+		setModel_nnr (a, slot);
+		flush_nnr (a);
+	}
+	a->run = nnr_effective_run (a);
+	if (a->run != was_run)
+	{
+		flush_nnr (a);
+		if (channel >= 0 && channel < MAX_CHANNELS)
+		{
+			RXAbp1Check (channel);
+			RXAbp1Set (channel);
+		}
+	}
 }
 
 static double nnr_i0 (double x)
@@ -469,7 +532,7 @@ static void calc_nnr (NNR a)
 	}
 
 	nnr_reset_state (a);
-	a->run = a->requested_run && nnr_rate_supported (a) && ok_nnet (a->net);
+	a->run = nnr_effective_run (a);
 
 	dprintf ("nnr: rate=%d nrate=%d decim=%d N=%d hop=%d bins=%d proto=%d prime=%d delay=%d (%.2f ms)\n",
 		a->rate, a->nrate, a->decim, a->fftsize, a->hop, a->nbins, a->nproto,
@@ -537,6 +600,7 @@ NNR create_nnr
 	a->lookahead  = lookahead;
 	a->mask_floor = mask_floor;
 	a->cmode      = cmode;
+	a->owner_channel = -1;
 	calc_nnr (a);
 	return a;
 }
@@ -554,6 +618,10 @@ void flush_nnr (NNR a)
 
 void xnnr (NNR a, int pos)
 {
+	/* NereusSDR (R-R3-40): one atomic read per call; a pending limit is
+	 * applied here, by the worker, under the DSP lock it already holds. */
+	if (_InterlockedAnd (&a->limit_request, ~0L) != a->limit)
+		nnr_sync_limit (a, (int)_InterlockedAnd (&a->owner_channel, ~0L));
 	if (a->run && a->position == pos)
 	{
 		int i;
@@ -597,6 +665,8 @@ void setSamplerate_nnr (NNR a, int rate)
 	calc_nnr (a);
 	if (have_saved && ok_nnet (a->nets[saved.model_slot]))
 		nnr_apply_configuration (a, &saved);
+	else
+		a->requested_model = a->model;
 	for (int k = 0; k < NNET_NSLOTS; ++k)
 		if (a->nets[k]) setMode_nnet (a->nets[k], test_mode);
 }
@@ -611,6 +681,8 @@ void setSize_nnr (NNR a, int size)
 	calc_nnr (a);
 	if (have_saved && ok_nnet (a->nets[saved.model_slot]))
 		nnr_apply_configuration (a, &saved);
+	else
+		a->requested_model = a->model;
 	for (int k = 0; k < NNET_NSLOTS; ++k)
 		if (a->nets[k]) setMode_nnet (a->nets[k], test_mode);
 }
@@ -675,8 +747,9 @@ SetRXANNRRun (int channel, int setit)
 	if (!nnr_channel_valid (channel)) return;
 	EnterCriticalSection (&ch[channel].csDSP);
 	NNR a = rxa[channel].nnr.p;
+	nnr_sync_limit (a, channel);
 	a->requested_run = setit != 0;
-	setit = a->requested_run && nnr_rate_supported (a) && ok_nnet (a->net);
+	setit = nnr_effective_run (a);
 	if (a->run != setit)
 	{
 		a->run = setit;
@@ -812,6 +885,7 @@ PORT int ConfigureRXANNR (int channel, const NNRConfiguration* requested,
         || !nnr_channel_valid (channel)) return 0;
     EnterCriticalSection (&ch[channel].csDSP);
     NNR a = rxa[channel].nnr.p;
+    nnr_sync_limit (a, channel);
     if (!ok_nnet (a->nets[requested->model_slot]))
     {
         nnr_copy_status (a, accepted);
@@ -842,4 +916,16 @@ PORT int SetRXANNRDiagnostics (int channel, int test_mode, int output_mode)
     flush_nnr (a);
     LeaveCriticalSection (&ch[channel].csDSP);
     return 1;
+}
+
+/* NereusSDR (R-R3-40): request a runtime limit without the channel DSP lock.
+ * 0 none, 1 standard model only, 2 off. The worker applies it at its next
+ * block; a locked NNR setter applies a pending request first. */
+PORT void RequestRXANNRLimit (int channel, int limit)
+{
+    NNR a;
+    if (limit < 0 || limit > 2 || !nnr_channel_valid (channel)) return;
+    a = rxa[channel].nnr.p;
+    InterlockedExchange (&a->owner_channel, (long)channel);
+    InterlockedExchange (&a->limit_request, (long)limit);
 }

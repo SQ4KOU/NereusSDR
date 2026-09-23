@@ -107,6 +107,9 @@ private slots:
     void onFilterChanged(int low, int high);
     void onAgcChanged(int agcMode);
     void onNrChanged(int nrSlot);
+    // R-R3-40: the NR badge warns while the Core holds NNR below the saved
+    // choice, with the reason as its tooltip.
+    void onNnrLimitChanged(int limit);
     void onNbChanged(int nbMode);
     void onApfChanged(bool active);
     void onSsqlChanged(bool active);
@@ -115,6 +118,7 @@ private:
     void buildUi();
 
     QChar        m_sliceLetter{QLatin1Char('A')};
+    int          m_nnrLimit{0};   // R-R3-40
     QLabel*      m_sliceTag{nullptr};
     SliceModel*  m_slice{nullptr};
     StatusBadge* m_modeBadge{nullptr};

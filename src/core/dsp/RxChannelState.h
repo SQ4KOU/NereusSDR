@@ -40,6 +40,9 @@ struct RxChannelState {
     int    nrMode                   = 0;
     NrSlot activeNr                 = NrSlot::Off;
     NnrSettings nnrTuning;
+    // R-R3-40 (2026-09-23): the runtime NNR limit (NnrLimit), so a rebuilt
+    // channel keeps the step the Core took. Never persisted.
+    int    nnrLimit                 = 0;
     bool   anfEnabled               = false;
 
     // EQ

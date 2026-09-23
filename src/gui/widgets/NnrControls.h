@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // NereusSDR-original WDSP 2.10 NNR controls.
+// 2026-09-23: R-R3-40 runtime step-back notice and "Try again" action, by
+// J.J. Boyd (KG4VCF), with Anthropic Claude Code assistance.
 #pragma once
 
 #include <QMetaObject>
@@ -53,6 +55,9 @@ private:
     QVector<QMetaObject::Connection> m_sliceConnections;
 
     QComboBox* m_model{nullptr};
+    QWidget* m_limitRow{nullptr};
+    QLabel* m_limitNotice{nullptr};
+    QPushButton* m_tryAgain{nullptr};
     QDoubleSpinBox* m_maskFloor{nullptr};
     QSlider* m_maskFloorSlider{nullptr};
     QComboBox* m_position{nullptr};

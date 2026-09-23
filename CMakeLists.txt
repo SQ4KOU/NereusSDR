@@ -844,6 +844,8 @@ set(CORE_SOURCES
     src/core/dsp/RxChannelState.h
     src/core/dsp/NnrSettings.h
     src/core/dsp/NnrAdapter.cpp
+    src/core/dsp/NnrLoadGovernor.cpp
+    src/core/dsp/NnrLoadGovernor.h
     src/core/dsp/Ps3Snapshot.h
     src/core/dsp/Ps3DisplayAdapter.cpp
     src/core/dsp/DspAssetValidation.cpp

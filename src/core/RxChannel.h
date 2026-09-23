@@ -485,6 +485,13 @@ public:
     NnrSettings nnrTuning() const;
     NnrDiagnostics nnrDiagnostics() const;
     bool setNnrDiagnostics(int testMode, int outputMode, QString* reason = nullptr);
+    // R-R3-40: runtime NNR limit (NnrLimit: 0 none, 1 standard model only,
+    // 2 off). Returns at once without the channel's DSP lock; the WDSP worker
+    // applies it at its next block. The saved tuning is unchanged, and the
+    // limit clamps whatever tuning is applied later. False for a value
+    // outside NnrLimit. Main/control thread.
+    bool requestNnrLimit(int limit);
+    int nnrLimit() const { return m_nnrLimit.load(std::memory_order_acquire); }
 
     // Per-knob convenience setters (single WDSP call each).
     // Gain/leakage are in raw WDSP domain (caller is responsible for 1e-6/1e-3 scaling).
@@ -1048,6 +1055,7 @@ private:
     Nr3Tuning m_nr3Tuning;
     Nr4Tuning m_nr4Tuning;
     NnrSettings m_nnrTuning;
+    std::atomic<int> m_nnrLimit{0};
 
     // Post-WDSP filter "on" flags.  Filter instances (DeepFilterFilter,
     // NvidiaBnrFilter, MacNRFilter) land in Tasks 9-11; these atomics exist now

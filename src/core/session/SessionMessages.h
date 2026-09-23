@@ -201,6 +201,11 @@ inline constexpr quint16 kCoreHostTelemetrySessionProtocolMinor = 10;
 // skipped input in an optional receivers section (stationTelemetryVersion 3).
 // Minor-10 peers receive exactly the radio, audio and host sections.
 inline constexpr quint16 kReceiverLoadSessionProtocolMinor = 11;
+// A receiver that cannot keep up with neural noise reduction is stepped back
+// at runtime: SliceModel's nnrLimit property and the nnr.tryAgain command.
+// Same unreleased step as receiver load. Minor-10 peers never see the
+// property and cannot send the command.
+inline constexpr quint16 kNnrLimitSessionProtocolMinor = 11;
 inline constexpr qsizetype kMaxMediaControlBytes = 128 * 1024;
 
 // R-R3-16/17: how long either end waits for the connect sequence to finish

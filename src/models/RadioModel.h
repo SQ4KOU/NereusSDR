@@ -108,6 +108,8 @@
 #include "core/TuneMemoryStore.h"
 #include "models/TunerModel.h"
 #include "models/ReceiverDspLoadSampler.h"
+#include "core/dsp/NnrLoadGovernor.h"
+#include <QElapsedTimer>
 #include "Band.h"
 #include "BandPlanManager.h"
 #include "SliceModel.h"
@@ -881,6 +883,19 @@ public:
     /// R-R3-40: take one load sample of every slice now (the sampler timer
     /// calls this every kSampleIntervalMs on a local model). Main thread.
     void sampleReceiverDspLoad();
+
+    /// R-R3-40: one check of every receiver running NNR (the sampler timer
+    /// calls this right after sampleReceiverDspLoad, local role only). A
+    /// receiver that cannot keep up steps back one level (NnrLoadGovernor):
+    /// the Core asks its WDSP channel for the limit without the DSP lock and
+    /// sets SliceModel::nnrLimit. The saved NNR choice is never changed.
+    /// nowMs is a monotonic clock. Main thread.
+    void governNnrLoad(qint64 nowMs);
+
+    /// Test seam for governNnrLoad: the same check with the given loads in
+    /// place of receiverDspLoad (a missing slice, or nullopt, is not
+    /// measured).
+    void governNnrLoadForTest(qint64 nowMs, const QHash<int, std::optional<double>>& loads);
 
     SliceModel* activeSlice() const { return m_activeSlice; }
 
@@ -3462,6 +3477,11 @@ private:
     void scheduleSettingsSave(SliceModel* slice = nullptr);
     void wireNnrSettings(SliceModel* slice);
     void applyNnrStateToChannel(SliceModel* slice, RxChannel* channel);
+    // R-R3-40: the runtime NNR limit (see governNnrLoad).
+    void governNnrLoadWith(qint64 nowMs,
+                           const std::function<std::optional<double>(int)>& load);
+    void applyNnrLimit(SliceModel* slice, NnrLimit limit);
+    void clearNnrLimit(SliceModel* slice);
 
 public:
     // Force-run any pending coalesced slice save synchronously. Call this
@@ -3872,6 +3892,12 @@ private:
     // role only). Main thread only.
     ReceiverDspLoadSampler m_dspLoadSampler;
     QTimer* m_dspLoadTimer{nullptr};
+    // R-R3-40: the NNR step-back decision, its monotonic clock, and the
+    // slices whose NNR readback is refreshed once their WDSP worker has run
+    // two blocks after a step (slice id -> worker block count at the step).
+    NnrLoadGovernor m_nnrGovernor;
+    QElapsedTimer m_nnrGovernorClock;
+    QHash<int, qint64> m_nnrLimitReadbackPending;
     QThread*         m_dspThread{nullptr};
     QMetaObject::Connection m_radeIqConnection;
     QMetaObject::Connection m_radeBindingAppliedConnection;

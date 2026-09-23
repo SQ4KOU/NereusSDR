@@ -19,6 +19,11 @@
 // can tell which slice the row describes. See
 // docs/architecture/2026-08-02-bottom-banner-and-pan-menu-design.md §4.2.
 //
+// 2026-09-23 update (R-R3-40): the NR badge shows the warning colour, and
+// the step-back reason as its tooltip, while the Core holds NNR below the
+// saved choice (SliceModel::nnrLimitChanged). J.J. Boyd (KG4VCF), with
+// Anthropic Claude Code assistance.
+//
 // Signal mapping verified against SliceModel.h 2026-04-30:
 //   agcModeChanged(AGCMode)  nbModeChanged(NbMode)
 //   dspModeChanged(DSPMode)  activeNrChanged(NrSlot)  apfEnabledChanged(bool)
@@ -204,6 +209,8 @@ void RxDashboard::bindSlice(SliceModel* slice)
             [this](AGCMode m) { onAgcChanged(static_cast<int>(m)); });
     connect(slice, &SliceModel::activeNrChanged,   this,
             [this](NrSlot s) { onNrChanged(static_cast<int>(s)); });
+    connect(slice, &SliceModel::nnrLimitChanged,   this,
+            &RxDashboard::onNnrLimitChanged);
     connect(slice, &SliceModel::nbModeChanged,     this,
             [this](NbMode m) { onNbChanged(static_cast<int>(m)); });
     connect(slice, &SliceModel::apfEnabledChanged, this,
@@ -216,6 +223,7 @@ void RxDashboard::bindSlice(SliceModel* slice)
     onModeChanged(static_cast<int>(slice->dspMode()));
     onFilterChanged(slice->filterLow(), slice->filterHigh());
     onAgcChanged(static_cast<int>(slice->agcMode()));
+    m_nnrLimit = slice->nnrLimit();
     onNrChanged(static_cast<int>(slice->activeNr()));
     onNbChanged(static_cast<int>(slice->nbMode()));
     onApfChanged(slice->apfEnabled());
@@ -299,9 +307,21 @@ void RxDashboard::onNrChanged(int nrSlot)
         ? QString::fromLatin1(kNrLabels[nrSlot])
         : QStringLiteral("NR");
     m_nrBadge->setLabel(name);
-    m_nrBadge->setVariant(StatusBadge::Variant::On);
-    m_nrBadge->setToolTip(tr("Noise reduction %1 active").arg(name));
+    const QString limitReason = nrSlot == static_cast<int>(NrSlot::NNR)
+        ? nnrLimitExplanation(m_nnrLimit) : QString();
+    m_nrBadge->setVariant(limitReason.isEmpty() ? StatusBadge::Variant::On
+                                                : StatusBadge::Variant::Warn);
+    m_nrBadge->setToolTip(limitReason.isEmpty()
+        ? tr("Noise reduction %1 active").arg(name) : limitReason);
     emit badgeAvailabilityChanged(8, true);
+}
+
+void RxDashboard::onNnrLimitChanged(int limit)
+{
+    m_nnrLimit = limit;
+    if (m_slice) {
+        onNrChanged(static_cast<int>(m_slice->activeNr()));
+    }
 }
 
 void RxDashboard::onNbChanged(int nbMode)

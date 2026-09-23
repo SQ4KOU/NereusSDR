@@ -29,6 +29,9 @@
 //                                    and stationTelemetryVersion 3.
 //                                    AI-assisted implementation via
 //                                    Anthropic Claude Code.
+//                                    Later the same day: SliceModel
+//                                    nnrLimit and the nnr.tryAgain command
+//                                    only for a peer at minor 11.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -76,6 +79,40 @@ Q_LOGGING_CATEGORY(lcStation, "nereus.station")
 constexpr const char* kRadioKey = "radio";
 constexpr const char* kTransmitKey = "transmit";
 constexpr const char* kTunerKey = "tuner";
+
+// R-R3-40: drops SliceModel's nnrLimit (minor 11) from a mirror message for
+// an older peer, which would otherwise log a schema skew. Returns false
+// when nothing is left worth sending.
+bool withoutNnrLimit(SessionMessage& message)
+{
+    static const QByteArray kName("nnrLimit");
+    switch (message.kind) {
+    case SessionMessageKind::Schema:
+        if (message.className == "SliceModel") {
+            message.fields.removeIf([](const SessionSchemaField& field) {
+                return field.name == kName;
+            });
+        }
+        return true;
+    case SessionMessageKind::ObjectCreate:
+        if (message.className == "SliceModel") {
+            message.updates.removeIf([](const MirrorUpdate& update) {
+                return update.name == kName;
+            });
+        }
+        return true;
+    case SessionMessageKind::Delta:
+        if (message.objectKey.startsWith("slice:")) {
+            message.updates.removeIf([](const MirrorUpdate& update) {
+                return update.name == kName;
+            });
+            return !message.updates.isEmpty();
+        }
+        return true;
+    default:
+        return true;
+    }
+}
 
 // The one reason a receive-only Core gives for every transmit
 // configuration write it refuses: direct TransmitModel property writes and
@@ -719,6 +756,14 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 QStringLiteral("This DSP action requires a newer station protocol."), {}));
             break;
         }
+        if (message.commandVerb == "nnr.tryAgain"
+            && it->agreedMinor < kNnrLimitSessionProtocolMinor) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                QStringLiteral("This station cannot try noise reduction again. "
+                               "Update the station software."), {}));
+            break;
+        }
         if ((message.commandVerb == "configureTgxl" || message.commandVerb == "disconnectTgxl")
             && it->agreedMinor < kRemoteTgxlConfigSessionProtocolMinor) {
             send(transport, SessionMessages::commandResult(
@@ -1213,6 +1258,14 @@ void StationServer::send(SessionTransport* transport, const SessionMessage& mess
 void StationServer::sendToSession(const SessionMessage& message)
 {
     if (m_session == nullptr) {
+        return;
+    }
+    const auto peer = m_peers.constFind(m_session);
+    if (peer != m_peers.cend() && peer->agreedMinor < kNnrLimitSessionProtocolMinor) {
+        SessionMessage older = message;
+        if (withoutNnrLimit(older)) {
+            m_session->sendText(SessionMessages::encode(older));
+        }
         return;
     }
     m_session->sendText(SessionMessages::encode(message));

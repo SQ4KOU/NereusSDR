@@ -7,15 +7,19 @@
 
 #include <array>
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <cmath>
 #include <limits>
 #include <memory>
 #include <numbers>
+#include <thread>
 
 #include "core/RxChannel.h"
 #include "core/WdspEngine.h"
 #include "core/dsp/NnrAdapter.h"
 #include "core/wdsp_api.h"
+#include "nnr_compat.h"
 
 extern "C" {
 extern const unsigned char nnr_model_1_data[];
@@ -194,6 +198,180 @@ private slots:
         QVERIFY(partial->setNnrTuning(requested));
         QCOMPARE(partial->nnrTuning().alpha, 2.5);
         m_engine->destroyRxChannel(4);
+    }
+
+    // R-R3-40: a runtime limit is requested without the channel's DSP lock,
+    // so the request returns while the worker is inside a long block; the
+    // worker applies it at a later block. The accepted configuration stays
+    // the caller's choice throughout, and clearing the limit restores it.
+    void limitRequestReturnsAtOnceAndTheWorkerAppliesIt()
+    {
+        using Clock = std::chrono::steady_clock;
+        // Outside WdspEngine's reserved ids (slices 0-4, TX 5, PS feedback 6).
+        constexpr int kChannel = 12;
+        constexpr int kInSize = 1024;
+        constexpr int kDspSize = 4096;
+        constexpr int kRate = 48000;
+        // Busy-wait inside every worker block (block period 85.3 ms), so the
+        // worker holds the DSP lock most of the time.
+        constexpr int kBlockDelayUs = 60000;
+        // A lock-free store. Anything near a block's length would mean the
+        // call waited for the lock; a quarter block leaves room for a busy
+        // machine descheduling the calling thread.
+        constexpr double kMaxRequestMs = kBlockDelayUs / 1000.0 / 4.0;
+
+        OpenChannel(kChannel, kInSize, kDspSize, kRate, kRate, kRate,
+                    0, 1, 0.010, 0.025, 0.000, 0.010,
+                    0);   // bfo off: the feeder never waits for output
+        const auto closeChannel = qScopeGuard([&] { CloseChannel(kChannel); });
+        NNRConfiguration premium{1, 0, -25.0, 1.0, 10.0, 2.0, 12.0, 0.0, 0.0};
+        NNRRuntimeStatus status{};
+        QVERIFY(ConfigureRXANNR(kChannel, &premium, &status));
+        SetRXANNRRun(kChannel, 1);
+        QVERIFY(GetRXANNRStatus(kChannel, &status));
+        QVERIFY(status.running);
+        QCOMPARE(status.active_model_slot, 1);
+        QCOMPARE(status.limit, 0);
+
+        std::atomic<bool> stop{false};
+        std::thread feeder([&] {
+            std::array<float, kInSize> inI{}, inQ{}, outI{}, outQ{};
+            const auto period = std::chrono::duration_cast<Clock::duration>(
+                std::chrono::duration<double>(double(kInSize) / kRate / 2.0));
+            auto next = Clock::now();
+            double phase = 0.0;
+            while (!stop.load()) {
+                for (int i = 0; i < kInSize; ++i) {
+                    inI[i] = static_cast<float>(0.01 * std::cos(phase));
+                    inQ[i] = static_cast<float>(0.01 * std::sin(phase));
+                    phase = std::fmod(phase + 2.0 * std::numbers::pi * 1000.0 / kRate,
+                                      2.0 * std::numbers::pi);
+                }
+                int error = 0;
+                fexchange2(kChannel, inI.data(), inQ.data(), outI.data(), outQ.data(), &error);
+                next += period;
+                std::this_thread::sleep_until(next);
+            }
+        });
+        const auto stopFeeder = qScopeGuard([&] {
+            WDSPSetTestBlockDelayUs(kChannel, 0);
+            stop.store(true);
+            feeder.join();
+            // Let the worker drain its backlog before the channel closes.
+            std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        });
+        WDSPSetTestBlockDelayUs(kChannel, kBlockDelayUs);
+
+        const auto blocks = [&] {
+            WdspChannelLoad load{};
+            GetChannelDspLoad(kChannel, &load);
+            return load;
+        };
+        // Waits, without the DSP lock, until the worker finished two more
+        // blocks: the next one to start runs xnnr with the request pending.
+        const auto waitTwoBlocks = [&] {
+            const long long start = blocks().blocks;
+            const auto deadline = Clock::now() + std::chrono::seconds(5);
+            while (blocks().blocks < start + 2 && Clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(2));
+            }
+            return blocks().blocks >= start + 2;
+        };
+        // Requests while the worker is inside a block, and proves it stayed
+        // inside that same block for the whole call.
+        const auto requestInsideABlock = [&](int limit, double* elapsedMs) {
+            const auto deadline = Clock::now() + std::chrono::seconds(5);
+            while (Clock::now() < deadline) {
+                const WdspChannelLoad before = blocks();
+                if (before.currentBlockNs == 0) {
+                    std::this_thread::sleep_for(std::chrono::microseconds(200));
+                    continue;
+                }
+                const auto t0 = Clock::now();
+                RequestRXANNRLimit(kChannel, limit);
+                *elapsedMs = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+                const WdspChannelLoad after = blocks();
+                if (after.blocks == before.blocks && after.currentBlockNs != 0)
+                    return true;
+                // The block ended during the call; the request stands, so
+                // prove it with the next block instead.
+            }
+            return false;
+        };
+
+        QVERIFY(waitTwoBlocks());
+        double elapsedMs = 0.0;
+        QVERIFY2(requestInsideABlock(1, &elapsedMs), "no request landed inside a worker block");
+        qInfo("standard-only request returned in %.1f us while the worker was inside a "
+              "%d ms block", elapsedMs * 1000.0, kBlockDelayUs / 1000);
+        QVERIFY2(elapsedMs < kMaxRequestMs, "the limit request waited for the DSP lock");
+        QVERIFY(waitTwoBlocks());
+        QVERIFY(GetRXANNRStatus(kChannel, &status));
+        QCOMPARE(status.limit, 1);
+        QCOMPARE(status.active_model_slot, 0);
+        QCOMPARE(status.configuration.model_slot, 1);   // the choice is kept
+        QVERIFY(status.running);
+
+        // A later configuration of Premium is clamped by the limit too.
+        QVERIFY(ConfigureRXANNR(kChannel, &premium, &status));
+        QCOMPARE(status.configuration.model_slot, 1);
+        QCOMPARE(status.active_model_slot, 0);
+
+        QVERIFY(requestInsideABlock(2, &elapsedMs));
+        QVERIFY2(elapsedMs < kMaxRequestMs, "the limit request waited for the DSP lock");
+        QVERIFY(waitTwoBlocks());
+        QVERIFY(GetRXANNRStatus(kChannel, &status));
+        QCOMPARE(status.limit, 2);
+        QVERIFY(!status.running);
+        QVERIFY(status.requested_run);
+        QCOMPARE(status.configuration.model_slot, 1);
+
+        QVERIFY(requestInsideABlock(0, &elapsedMs));
+        QVERIFY(waitTwoBlocks());
+        QVERIFY(GetRXANNRStatus(kChannel, &status));
+        QCOMPARE(status.limit, 0);
+        QVERIFY(status.running);
+        QCOMPARE(status.active_model_slot, 1);
+    }
+
+    // R-R3-40: RxChannel carries the limit to WDSP and across a rebuild, and
+    // an "off" limit accepts NNR as selected while holding it off.
+    void rxChannelLimitClampsAndSurvivesARebuild()
+    {
+        auto settings = m_a->nnrTuning();
+        settings.modelSlot = 1;
+        QVERIFY(m_a->setNnrTuning(settings));
+        QVERIFY(m_a->setActiveNr(NrSlot::NNR));
+        QVERIFY(!m_a->requestNnrLimit(3));
+        QVERIFY(m_a->requestNnrLimit(1));
+        QCOMPARE(m_a->nnrLimit(), 1);
+        // The locked tuning call applies the pending limit before it reads.
+        QVERIFY(m_a->setNnrTuning(settings));
+        QCOMPARE(m_a->nnrTuning().modelSlot, 1);
+        QCOMPARE(m_a->nnrDiagnostics().actualModelSlot, 0);
+        QCOMPARE(m_a->nnrDiagnostics().appliedLimit, 1);
+
+        ChannelConfig config;
+        config.sampleRate = 48000;
+        config.bufferSize = 256;
+        config.filterSize = 2048;
+        QVERIFY(m_engine->rebuildRxChannel(0, config) >= 0);
+        m_a = m_engine->rxChannel(0);
+        QVERIFY(m_a);
+        QCOMPARE(m_a->nnrLimit(), 1);
+        QCOMPARE(m_a->nnrTuning().modelSlot, 1);
+        QCOMPARE(m_a->nnrDiagnostics().actualModelSlot, 0);
+        QVERIFY(m_a->nnrDiagnostics().running);
+
+        QVERIFY(m_a->requestNnrLimit(2));
+        QVERIFY(m_a->setActiveNr(NrSlot::NR2));
+        QVERIFY(m_a->setActiveNr(NrSlot::NNR));   // selected, held off
+        QCOMPARE(m_a->activeNr(), NrSlot::NNR);
+        QVERIFY(!m_a->nnrDiagnostics().running);
+        QVERIFY(m_a->requestNnrLimit(0));
+        QVERIFY(m_a->setNnrTuning(settings));
+        QVERIFY(m_a->nnrDiagnostics().running);
+        QCOMPARE(m_a->nnrDiagnostics().actualModelSlot, 1);
     }
 
     void modelPathsStayFixedUntilReconnect()

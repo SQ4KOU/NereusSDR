@@ -18,6 +18,9 @@
 //                 GPLv3).
 //   2026-09-22 — Name the general receive bounds for Core layout validation,
 //                 by J.J. Boyd (KG4VCF), with OpenAI Codex assistance.
+//   2026-09-23 : R-R3-40 runtime NNR limit (nnrLimit, nnrRetryRequested),
+//                 by J.J. Boyd (KG4VCF), with Anthropic Claude Code
+//                 assistance.
 // =================================================================
 
 //=================================================================
@@ -371,6 +374,9 @@ class SliceModel : public QObject {
     Q_PROPERTY(QString nnrModelSource READ nnrModelSource NOTIFY nnrDiagnosticsChanged)
     Q_PROPERTY(QString nnrStatus READ nnrStatus NOTIFY nnrDiagnosticsChanged)
     Q_PROPERTY(QString nnrLastError READ nnrLastError NOTIFY nnrLastErrorChanged)
+    // R-R3-40: runtime NNR limit (NnrLimit) the Core set because the receiver
+    // could not keep up. Outbound only, never persisted.
+    Q_PROPERTY(int nnrLimit READ nnrLimit NOTIFY nnrLimitChanged)
 
 
     // NR1 (ANR) tuning — 5 knobs.
@@ -853,6 +859,18 @@ public:
     bool applyStationNnrDiagnostic(const QByteArray& name, const QVariant& value);
     void reportNnrEditResult(const QString& reason) { setNnrLastError(reason); }
 
+    // R-R3-40: the runtime NNR limit (NnrLimit: 0 none, 1 Standard only,
+    // 2 off). Set by the Core when this receiver cannot keep up, and on a
+    // remote GUI by the station mirror. Never saved: the operator's saved
+    // choice (nnrModelSlot, activeNr) is untouched while it is in force.
+    int nnrLimit() const { return m_nnrLimit; }
+    void setNnrLimit(int limit);
+    // The plain-English reason for the limit, empty when there is none.
+    QString nnrLimitText() const { return nnrLimitExplanation(m_nnrLimit); }
+    // The operator asks to try the saved choice again ("Try again").
+    // Emits nnrRetryRequested; the session owner clears the limit.
+    void requestNnrRetry();
+
     // Set identity before restore; the stable slice id is never a tab index.
     void setSettingsRadioIdentity(const QString& mac);
     QString settingsRadioIdentity() const { return m_settingsRadioMac; }
@@ -1223,6 +1241,10 @@ signals:
     void nnrDiagnosticsChanged();
     void nnrLastErrorChanged();
     void nnrEditRejected(const QString& reason);
+    void nnrLimitChanged(int limit);
+    // The operator wants the saved NNR choice back: "Try again", or choosing
+    // a model while a limit is in force.
+    void nnrRetryRequested();
 
     void nr1TapsChanged(int v);
     void nr1DelayChanged(int v);
@@ -1382,6 +1404,7 @@ private:
     NrSelectionApplier m_nrSelectionApplier;
     QString m_settingsRadioMac;
     QString m_nnrLastError;
+    int m_nnrLimit{0};   // R-R3-40 runtime only; see nnrLimit()
     void setNnrLastError(const QString& error);
 
 

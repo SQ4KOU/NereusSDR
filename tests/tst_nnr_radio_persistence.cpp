@@ -11,6 +11,7 @@
 #include "core/SampleRateCatalog.h"
 #include "core/WdspEngine.h"
 #include "core/dsp/ChannelConfig.h"
+#include "core/dsp/NnrLoadGovernor.h"
 #include "core/wdsp_api.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -217,6 +218,128 @@ private slots:
         QCOMPARE(slice->nnrActualModelSlot(), 1);
         model.flushPendingSettingsSave();
         QCOMPARE(settings.value("hardware/" + mac + "/slices/0/nnr/NnrModelSlot").toInt(), 1);
+    }
+
+    // R-R3-40: a receiver that cannot keep up steps back at runtime (Premium
+    // to Standard to off) while the saved choice stays Premium with NNR on;
+    // "Try again", choosing a model, NNR off and on, and a Core restart all
+    // bring the saved choice back.
+    void overloadStepsBackAtRuntimeAndTheOperatorGetsTheSavedChoiceBack()
+    {
+        const QString mac = QStringLiteral("00:1C:2D:03:04:0A");
+        const QString prefix = "hardware/" + mac + "/slices/0/nnr/";
+        auto& settings = AppSettings::instance();
+        settings.setValue(prefix + "NnrModelSlot", 1);
+        settings.setValue(prefix + "NrActive", static_cast<int>(NrSlot::NNR));
+
+        RadioModel model;
+        WdspEngine* engine = model.wdspEngine();
+        engine->m_initialized = true;   // friend access (NEREUS_BUILD_TESTS)
+        RadioInfo info;
+        info.macAddress = mac;
+        model.setLastRadioInfoForTest(info);
+        model.configureStreamPool(1, 1, kRateHz);
+        const int id = model.addSlice();
+        SliceModel* slice = model.sliceById(id);
+        QVERIFY(slice);
+        slice->setFrequency(14200000.0);
+        model.openRxChannelPool(1, bufferSizeForRate(kRateHz), kRateHz);
+        RxChannel* channel = engine->rxChannel(id);
+        QVERIFY(channel);
+        QCOMPARE(slice->activeNr(), NrSlot::NNR);
+        QCOMPARE(slice->nnrActualModelSlot(), 1);
+        QVERIFY(slice->nnrRunning());
+        QCOMPARE(slice->nnrLimit(), 0);
+
+        const qint64 tick = NnrLoadGovernor::kNnrCheckIntervalMs;
+        qint64 now = 0;
+        const QHash<int, std::optional<double>> overloaded{{id, 0.95}};
+        // Checks until the limit changes; returns how many it took.
+        const auto runUntilStep = [&](const QHash<int, std::optional<double>>& loads) {
+            const int before = slice->nnrLimit();
+            int checks = 0;
+            while (slice->nnrLimit() == before && checks < 40) {
+                model.governNnrLoadForTest(now, loads);
+                now += tick;
+                ++checks;
+            }
+            return checks;
+        };
+
+        QCOMPARE(runUntilStep(overloaded), 5);   // time base + 2 s
+        QCOMPARE(slice->nnrLimit(), static_cast<int>(NnrLimit::StandardOnly));
+        QCOMPARE(channel->nnrLimit(), static_cast<int>(NnrLimit::StandardOnly));
+        QCOMPARE(slice->nnrModelSlot(), 1);                 // saved choice kept
+        QCOMPARE(slice->activeNr(), NrSlot::NNR);
+        QCOMPARE(slice->nnrLimitText(),
+                 QStringLiteral("Noise reduction is using the Standard model. "
+                                "This computer could not keep up with Premium."));
+        // A tuning edit takes the DSP lock, which applies the pending limit:
+        // WDSP runs Standard, the accepted choice stays Premium.
+        slice->setNnrAlpha(2.0);
+        QCOMPARE(slice->nnrActualModelSlot(), 0);
+        QCOMPARE(slice->nnrModelSlot(), 1);
+        QCOMPARE(channel->nnrTuning().modelSlot, 1);
+        QVERIFY(slice->nnrRunning());
+
+        // Settle: nothing more for 5 s, then 2 s more of overload turns it off.
+        const int settleChecks = runUntilStep(overloaded);
+        QVERIFY2(settleChecks >= 10, "stepped again inside the settle time");
+        QCOMPARE(slice->nnrLimit(), static_cast<int>(NnrLimit::Off));
+        QCOMPARE(slice->nnrLimitText(),
+                 QStringLiteral("Noise reduction was turned off. This computer could not keep up."));
+        slice->setNnrAlpha(2.25);
+        QVERIFY(!slice->nnrRunning());
+        QCOMPARE(slice->activeNr(), NrSlot::NNR);
+        // Off is the floor, and light load never raises a level.
+        runUntilStep({{id, 0.1}});
+        QCOMPARE(slice->nnrLimit(), static_cast<int>(NnrLimit::Off));
+
+        model.flushPendingSettingsSave();
+        settings.clear();
+        settings.load();
+        QCOMPARE(settings.value(prefix + "NnrModelSlot").toInt(), 1);
+        QCOMPARE(settings.value(prefix + "NrActive").toInt(), static_cast<int>(NrSlot::NNR));
+        for (const QString& key : settings.allKeys()) {
+            QVERIFY2(!key.contains(QStringLiteral("NnrLimit"), Qt::CaseInsensitive)
+                         && !(key.startsWith(prefix) && key.contains(QStringLiteral("Limit"))),
+                     qPrintable(key));
+        }
+
+        // "Try again" runs the saved choice at once.
+        slice->requestNnrRetry();
+        QCOMPARE(slice->nnrLimit(), 0);
+        QCOMPARE(channel->nnrLimit(), 0);
+        QVERIFY(slice->nnrRunning());
+        QCOMPARE(slice->nnrActualModelSlot(), 1);
+
+        // Choosing the saved model again is the operator asking again too.
+        QCOMPARE(runUntilStep(overloaded), 5);
+        QCOMPARE(slice->nnrLimit(), static_cast<int>(NnrLimit::StandardOnly));
+        slice->setNnrModelSlot(1);
+        QCOMPARE(slice->nnrLimit(), 0);
+        QCOMPARE(slice->nnrActualModelSlot(), 1);
+
+        // So is turning NNR off and on.
+        QCOMPARE(runUntilStep(overloaded), 5);
+        slice->setActiveNr(NrSlot::Off);
+        QCOMPARE(slice->nnrLimit(), 0);
+        QVERIFY(!slice->nnrRunning());
+        // NNR off: an overloaded receiver gets no step.
+        QCOMPARE(runUntilStep(overloaded), 40);
+        QCOMPARE(slice->nnrLimit(), 0);
+        slice->setActiveNr(NrSlot::NNR);
+        QVERIFY(slice->nnrRunning());
+        QCOMPARE(slice->nnrActualModelSlot(), 1);
+
+        // A Core restart starts with no limit: it is never saved.
+        QCOMPARE(runUntilStep(overloaded), 5);
+        model.flushPendingSettingsSave();
+        RadioModel restarted;
+        restarted.setLastRadioInfoForTest(info);
+        const int restartedId = restarted.addSlice();
+        QCOMPARE(restarted.sliceById(restartedId)->nnrLimit(), 0);
+        QCOMPARE(restarted.sliceById(restartedId)->nnrModelSlot(), 1);
     }
 };
 

@@ -190,6 +190,11 @@
 //                 NereusSDR-original test seam exported from
 //                 third_party/wdsp/src/dsplock.c; no Thetis counterpart.
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-23  RequestRXANNRLimit declaration added by J.J. Boyd
+//                 (KG4VCF) for the NNR step-back under load (R-R3-40).
+//                 NereusSDR-original export from the NereusSDR-modified
+//                 third_party/wdsp/src/nnr.c; no Thetis counterpart.
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 /*  wdsp.cs
@@ -703,6 +708,10 @@ void SetRXANNRAlphaKnee(int channel, double kneeDb);
 void SetRXANNRTau(int channel, double seconds);
 void SetRXANNRMaxGain(int channel, double gainDb);
 void SetRXANNRSmooth(int channel, double attackMs, double releaseMs);
+// NereusSDR nnr.c (R-R3-40): runtime NNR limit. limit: 0 none, 1 standard
+// model only, 2 off. Never takes the channel DSP lock; the channel's worker
+// applies it at its next block. Same declaration as nnr_compat.h.
+void RequestRXANNRLimit(int channel, int limit);
 
 // ---------------------------------------------------------------------------
 // Spectral noise blanker (snb.h) — From Thetis dsp.cs P/Invoke declarations

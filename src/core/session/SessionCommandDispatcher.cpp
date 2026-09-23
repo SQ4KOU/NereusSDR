@@ -26,6 +26,11 @@
 //                                    id to 32 bits. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-40: nnr.tryAgain (a slice ID)
+//                                    clears the runtime NNR limit; the
+//                                    server admits it from minor 11.
+//                                    AI-assisted implementation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -314,7 +319,8 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleDisconnectTgxl(invoke);
     } else if (invoke.commandVerb == "setFourO3AEnabled") {
         handleSetFourO3AEnabled(invoke);
-    } else if (invoke.commandVerb == "nnr.setDiagnostics" || invoke.commandVerb == "nnr.resetTuning") {
+    } else if (invoke.commandVerb == "nnr.setDiagnostics" || invoke.commandVerb == "nnr.resetTuning"
+               || invoke.commandVerb == "nnr.tryAgain") {
         handleNnrAction(invoke);
     } else {
         emitResult(invoke.commandVerb, invoke.commandId, false,
@@ -418,6 +424,14 @@ void SessionCommandDispatcher::handleNnrAction(const SessionMessage& invoke)
     bool accepted = false;
     if (diagnostics) {
         accepted = m_radioModel->setNnrDiagnosticMode(sliceId, testMode, outputMode, &reason);
+    } else if (invoke.commandVerb == "nnr.tryAgain") {
+        // R-R3-40: the operator asks for the saved NNR choice back. The
+        // Core's RadioModel clears the runtime limit synchronously.
+        slice->requestNnrRetry();
+        accepted = slice->nnrLimit() == static_cast<int>(NnrLimit::None);
+        if (!accepted) {
+            reason = QStringLiteral("Noise reduction could not try again.");
+        }
     } else {
         slice->resetNnrTuning();
         reason = slice->nnrLastError();

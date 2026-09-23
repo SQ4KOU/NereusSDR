@@ -22,6 +22,10 @@
 //                 plain reason on a remote-station model. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-23 - R-R3-40: a small indicator on the NNR button, with the
+//                 step-back reason as its tooltip, while the Core holds the
+//                 receiver below the saved NNR choice. J.J. Boyd (KG4VCF),
+//                 with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1440,10 +1444,22 @@ void VfoWidget::buildDspTab()
     m_bnrBtn->setToolTip(QStringLiteral("BNR: NVIDIA noise reduction — left-click activates, right-click adjusts knobs"));
     m_mnrBtn->setToolTip(QStringLiteral("MNR: macOS noise reduction — left-click activates, right-click adjusts knobs"));
     m_nnrBtn->setToolTip(QStringLiteral("NNR: WDSP neural noise reduction — left-click activates, right-click adjusts settings"));
+    m_nnrToolTip = m_nnrBtn->toolTip();
     dspGrid->addWidget(m_nr4Btn,  1, 0);
     dspGrid->addWidget(m_dfnrBtn, 1, 1);
     dspGrid->addWidget(m_mnrBtn,  1, 2);
     dspGrid->addWidget(m_nnrBtn,  1, 3);
+    // R-R3-40: a small amber dot in the NNR button's corner while the Core
+    // holds the receiver below the saved choice. Mouse events pass through
+    // to the button, whose tooltip carries the same reason.
+    m_nnrLimitIndicator = new QLabel(m_nnrBtn->parentWidget());
+    m_nnrLimitIndicator->setObjectName(QStringLiteral("vfoNnrLimitIndicator"));
+    m_nnrLimitIndicator->setFixedSize(6, 6);
+    m_nnrLimitIndicator->setStyleSheet(
+        QStringLiteral("QLabel { background: #ffd166; border-radius: 3px; }"));
+    m_nnrLimitIndicator->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_nnrLimitIndicator->setVisible(false);
+    dspGrid->addWidget(m_nnrLimitIndicator, 1, 3, Qt::AlignTop | Qt::AlignRight);
 
 #ifndef HAVE_BNR
     m_bnrBtn->hide();  // Hidden permanently: NVIDIA BNR integration deferred.
@@ -2337,6 +2353,15 @@ void VfoWidget::onActiveNrChanged(NereusSDR::NrSlot slot)
     m_nnrBtn->setChecked(slot  == NereusSDR::NrSlot::NNR);
 }
 
+void VfoWidget::onNnrLimitChanged(int limit)
+{
+    if (!m_nnrBtn || !m_nnrLimitIndicator) { return; }  // not yet built
+    const QString reason = nnrLimitExplanation(limit);
+    m_nnrLimitIndicator->setVisible(!reason.isEmpty());
+    m_nnrLimitIndicator->setToolTip(reason);
+    m_nnrBtn->setToolTip(reason.isEmpty() ? m_nnrToolTip : reason);
+}
+
 void VfoWidget::setSnbEnabled(bool v)
 {
     if (m_snbToggle && m_snbToggle->isChecked() != v) {
@@ -2527,6 +2552,10 @@ void VfoWidget::setSlice(SliceModel* slice)
                    this, nullptr);
     }
 
+    if (m_slice) {
+        disconnect(m_slice, &SliceModel::nnrLimitChanged,
+                   this, &VfoWidget::onNnrLimitChanged);
+    }
     m_slice = QPointer<SliceModel>(slice);
     if (m_fmContainer) {
         m_fmContainer->setSlice(slice);
@@ -2543,7 +2572,10 @@ void VfoWidget::setSlice(SliceModel* slice)
         connect(slice, &SliceModel::activeNrChanged,
                 this, &VfoWidget::onActiveNrChanged);
         onActiveNrChanged(slice->activeNr());
+        connect(slice, &SliceModel::nnrLimitChanged,
+                this, &VfoWidget::onNnrLimitChanged, Qt::UniqueConnection);
     }
+    onNnrLimitChanged(slice ? slice->nnrLimit() : 0);
 
     // Phase 3R L1: SNR row binding. RadeChannel pushes snrDb via the
     // I5 signal-graph (RadeChannel::snrChanged -> RadioModel::onRadeSnrChanged
