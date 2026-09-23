@@ -3166,13 +3166,15 @@ void TstDaemonMediaController::minorEightPeerReceivesTodaysSpectrumContext()
     peer->closeLink(QStringLiteral("test complete"));
 }
 
-// R-R3-01/08: at minor 9 each context carries the grant Core recorded,
-// including what limited it.
+// R-R3-01/08: from minor 9 on, each context carries the grant Core recorded,
+// including what limited it. The harness negotiates the current minor, which
+// only has to have reached the grant minor; later minors keep the grant.
 void TstDaemonMediaController::minorNineSpectrumContextsReportTheGrant()
 {
     Harness h;
     h.establishSession();
-    QCOMPARE(h.client.agreedMinor(), kRemoteSpectrumGrantSessionProtocolMinor);
+    QCOMPARE(h.client.agreedMinor(), kSessionProtocolMinor);
+    QVERIFY(h.client.agreedMinor() >= kRemoteSpectrumGrantSessionProtocolMinor);
     QVERIFY(h.server.spectrumGrantAvailable());
     QVERIFY(h.client.spectrumGrantAvailable());
     QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
