@@ -34,6 +34,7 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
+#include <QElapsedTimer>
 #include <QJsonDocument>
 #include <QPointer>
 #include <QScopeGuard>
@@ -1136,14 +1137,51 @@ void TstDaemonMediaController::realDisplayErrorIsCountedAndLoggedOnce()
         harness.sendDisplayTick();
         return !farDisplays.isEmpty();
     })(), 10'000);
+    // Every frame Core has sent so far was produced before this point.
+    QElapsedTimer sinceLastSend;
+    sinceLastSend.start();
     QCOMPARE(harness.controller.displayDiagnostics().displayTransportErrors, quint64(0));
 
     // A frame waits to be sent. The far end goes away; before Core's event
     // loop hears of it, the next display send finds the channel closed and
     // libdatachannel throws.
+    //
+    // The send needs three things, and each is waited on rather than
+    // assumed after a fixed delay, which a loaded machine outruns:
+    //  - the channel holds no earlier message (a busy one is never offered
+    //    a frame);
+    //  - the frame is due: the endpoint drops a frame produced within one
+    //    output period (60 fps, plus 5% early tolerance) of the last one it
+    //    sent, so the frame must be published more than that after the
+    //    last send;
+    //  - Core holds that frame as its latest input. frameAvailable is
+    //    emitted on this thread and Core takes the source's latest frame
+    //    inside the emit, so an emit after a newer frame was published
+    //    hands Core a due frame. No display tick runs until the one below.
+    QTRY_VERIFY_WITH_TIMEOUT(!core->displayBusy(), 10'000);
+    constexpr qint64 kOutputPeriodMs = 1000 / 60 + 1;
+    QTRY_VERIFY(sinceLastSend.elapsed() > 2 * kOutputPeriodMs);
+    auto* source = harness.controller.findChild<DaemonSpectrumSource*>();
+    QVERIFY(source);
+    const QList<MediaSourceKey> sourceKeys = source->activeSources();
+    QCOMPARE(sourceKeys.size(), 1);
+    const MediaSourceKey sourceKey = sourceKeys.constFirst();
+    QSignalSpy sourceFrames(source, &DaemonSpectrumSource::frameAvailable);
+    const quint64 publishedBefore = source->publishedFrames(sourceKey);
     const quint64 submitted = core->telemetry()->submittedDisplayPayloadBytes;
-    harness.feedRadio(0.3125);
-    QTest::qWait(200);
+    bool duePublished = false;
+    QTRY_VERIFY_WITH_TIMEOUT(([&] {
+        if (!duePublished && source->publishedFrames(sourceKey) > publishedBefore) {
+            // An emit already seen may have taken an older frame.
+            duePublished = true;
+            sourceFrames.clear();
+        }
+        if (duePublished && !sourceFrames.isEmpty()) {
+            return true;
+        }
+        harness.feedRadio(0.3125);
+        return false;
+    })(), 10'000);
     far.stop();
     std::this_thread::sleep_for(std::chrono::seconds(2));
     harness.sendDisplayTick();
