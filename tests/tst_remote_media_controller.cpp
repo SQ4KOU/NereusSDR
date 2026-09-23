@@ -2669,6 +2669,108 @@ private slots:
         QVERIFY(!media || !media->active);
     }
 
+    // R-R3-01/08/37: outside budget mode Core's five-key per-pan refusal
+    // puts the budget-mode line on the pan, with no toast, until the pan's
+    // request changes. A retirement for a slice the operator removed or
+    // rebound is not shown as a refusal, even while this window still has
+    // the slice.
+    void perPanRefusalShowsPlainStatusLineOutsideBudgetMode()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::HermesLite);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        station.addSlice(QStringLiteral("pan-0"));
+        QVERIFY(!station.slices().isEmpty());
+        SliceModel* stationSlice = station.slices().first();
+        stationSlice->setStreamIndex(0);
+        stationSlice->setFrequency(14225000);
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true); // Display fixture opens no speaker.
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        PanadapterStack stack;
+        auto* applet = stack.addPanadapter(QStringLiteral("pan-0"));
+        applet->setActiveSliceIndex(stationSlice->sliceIndex());
+        auto* widget = applet->spectrumWidget();
+        widget->setDisplayWindowPreservingHistory(14225000, 24000);
+        stack.resize(600, 400);
+        stack.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&stack));
+        QPointer<DisplayTransport> media;
+        RemoteMediaController controller(&client, &remote, &stack, nullptr,
+            [&media](QObject* owner) -> IMediaTransport* {
+                media = new DisplayTransport(owner);
+                return media;
+            });
+        QSignalSpy errors(&controller, &RemoteMediaController::errorOccurred);
+        QSignalSpy controls(&server, &StationServer::mediaControlReceived);
+        QSignalSpy receivedControls(&client, &StationClient::mediaControlReceived);
+        auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(client.mediaAvailable());
+        QTRY_VERIFY(media);
+        media->activate();
+        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 1);
+        QVERIFY(!client.remoteDisplayBudgetLimits().has_value());
+        QVERIFY(applet->remoteDisplayStatus().isEmpty());
+
+        const auto refuse = [&](const QString& reason) {
+            const QJsonObject subscription = lastControl(controls, QStringLiteral("subscribe"));
+            const int before = countControl(receivedControls, QStringLiteral("rejected"));
+            // Exactly what DaemonMediaController::sendRejected() sends.
+            QVERIFY(server.sendMediaControl({
+                {QStringLiteral("op"), QStringLiteral("rejected")},
+                {QStringLiteral("connectionId"), subscription.value(QStringLiteral("connectionId"))},
+                {QStringLiteral("endpointId"), subscription.value(QStringLiteral("endpointId"))},
+                {QStringLiteral("revision"), subscription.value(QStringLiteral("revision"))},
+                {QStringLiteral("reason"), reason}}, server.mediaSessionEpoch()));
+            QTRY_COMPARE(countControl(receivedControls, QStringLiteral("rejected")), before + 1);
+        };
+        const QString refused =
+            QStringLiteral("Display allocation refused: requested crop is outside source coverage");
+
+        refuse(QStringLiteral("requested crop is outside source coverage"));
+        QTRY_COMPARE(applet->remoteDisplayStatus(), refused);
+        // The periodic refresh keeps the reason while the request stands.
+        QTest::qWait(250);
+        QCOMPARE(applet->remoteDisplayStatus(), refused);
+        QCOMPARE(errors.count(), 0);
+
+        // A new request clears it when it goes out.
+        widget->setDisplayWindowPreservingHistory(14226000, 24000);
+        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 2);
+        QTRY_VERIFY2(applet->remoteDisplayStatus().isEmpty(),
+                     qPrintable(applet->remoteDisplayStatus()));
+        QTest::qWait(250);
+        QVERIFY(applet->remoteDisplayStatus().isEmpty());
+
+        // Core retires the endpoint because the slice went or was rebound,
+        // and this window has not yet seen that change: no refusal line.
+        for (const QString& operatorChange : {QStringLiteral("slice removed"),
+                                              QStringLiteral("slice stream binding changed")}) {
+            refuse(operatorChange);
+            QTest::qWait(250);
+            QVERIFY2(applet->remoteDisplayStatus().isEmpty(),
+                     qPrintable(applet->remoteDisplayStatus()));
+            QVERIFY(remote.sliceById(stationSlice->sliceIndex()) != nullptr);
+            const int subscribes = countControl(controls, QStringLiteral("subscribe"));
+            widget->setDisplayWindowPreservingHistory(
+                widget->centerFrequency() + 1000, 24000);
+            QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), subscribes + 1);
+        }
+        QCOMPARE(errors.count(), 0);
+
+        client.disconnectFromStation(QStringLiteral("test complete"));
+        QVERIFY(!media || !media->active);
+    }
+
     // R-R3-01/09: a Core and a GUI that agree minor 8 keep today's context
     // and keep painting; minor 9 carries the grant. Each GUI accepts only
     // the shape it negotiated, so neither direction of a mixed pair breaks.

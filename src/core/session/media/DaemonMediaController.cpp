@@ -25,6 +25,7 @@
 #include <cmath>
 #include <limits>
 #include <utility>
+#include <vector>
 
 namespace NereusSDR {
 Q_LOGGING_CATEGORY(lcDaemonMedia, "nereus.daemon.media")
@@ -387,8 +388,13 @@ DaemonMediaController::~DaemonMediaController()
         m_server->setPs3DisplayAdmissionHandler({});
         m_server->setDisplayBudgetEnforcementEnabled(false);
     }
-    m_displayPacer.endSession();
+    // As onSessionEnded(): clear the session while the pacer session is
+    // live, then end the pacer and its initialised flag together, so the
+    // teardown never updates a pacer that has no session.
     clearSession();
+    m_displayPacer.endSession();
+    m_displayPacerInitialized = false;
+    m_epoch = 0;
 }
 
 int DaemonMediaController::activeEndpointCount() const
@@ -1781,44 +1787,63 @@ void DaemonMediaController::rebalanceSourceAfterDeparture(const MediaSourceKey& 
     if (runtime == m_sources.cend() || !runtime->configured) {
         return;
     }
-    EndpointEntry* alone = nullptr;
-    int remaining = 0;
-    for (auto& [unused, entry] : m_endpoints) {
-        Q_UNUSED(unused);
-        if (entry.request.source == key) {
-            alone = &entry;
-            ++remaining;
-        }
-    }
-    if (remaining == 0) {
+    const bool remaining = std::any_of(m_endpoints.cbegin(), m_endpoints.cend(),
+        [&key](const auto& endpoint) { return endpoint.second.request.source == key; });
+    if (!remaining) {
         return;
     }
-    // R-R3-01/R-R3-08: a pan held to a neighbour's engine size is granted
-    // its own request once it is the engine's only subscriber. Its renewed
-    // context carries the new grant. It never gains pixels its admitted
-    // display charge does not cover.
-    std::optional<EndpointEntry> previous;
-    if (remaining == 1 && alone->grant.reason == SpectrumLimitReason::SharedEngine) {
-        const int fftSize = std::min(alone->grant.requestedFftSize,
-                                     FFTEngine::maximumFftSize());
-        const int pixels = alone->chargeCoversRequest
-            ? alone->grant.requestedPixels : alone->request.pixels;
-        const auto displayCost = spectrumDisplayCost(
-            pixels, alone->request.targetFps, alone->request.requestedWideSpanFactor > 1.0);
-        if (fftSize > alone->sourceFftSize && displayCost) {
-            const int previousFftSize = alone->sourceFftSize;
-            const int previousPixels = alone->request.pixels;
-            const SpectrumDisplayCost previousCost = alone->displayCost;
-            alone->sourceFftSize = fftSize;
-            alone->request.pixels = pixels;
-            alone->displayCost = *displayCost;
-            if (!reconcileSource(key)) {
-                alone->sourceFftSize = previousFftSize;
-                alone->request.pixels = previousPixels;
-                alone->displayCost = previousCost;
-            }
-            return;
+    // R-R3-01/R-R3-08/R-R3-09/R-R3-37: every pan still held to the departed
+    // neighbour's engine size is granted its own request. The engine then
+    // runs at the largest of those requests (a pan that asked for less gets
+    // at least what it asked for), and the renewed contexts carry the new
+    // grants. A pan never gains pixels its admitted display charge does not
+    // cover (the GUI asks again for the rest, as it does for a lone pan).
+    // When no pan is held, only the rate can fall, which renews no context.
+    struct Regrant {
+        EndpointEntry* entry = nullptr;
+        int previousFftSize = 0;
+        int previousPixels = 0;
+        SpectrumDisplayCost previousCost;
+    };
+    std::vector<Regrant> regrants;
+    int engineFftSize = 0;
+    for (auto& [unused, entry] : m_endpoints) {
+        Q_UNUSED(unused);
+        if (!(entry.request.source == key)
+            || entry.grant.reason != SpectrumLimitReason::SharedEngine) {
+            continue;
         }
+        const int fftSize = std::min(entry.grant.requestedFftSize,
+                                     FFTEngine::maximumFftSize());
+        const int pixels = entry.chargeCoversRequest
+            ? entry.grant.requestedPixels : entry.request.pixels;
+        const auto displayCost = spectrumDisplayCost(
+            pixels, entry.request.targetFps, entry.request.requestedWideSpanFactor > 1.0);
+        if (fftSize <= entry.sourceFftSize || !displayCost) {
+            continue;
+        }
+        regrants.push_back({&entry, entry.sourceFftSize, entry.request.pixels,
+                            entry.displayCost});
+        engineFftSize = std::max(engineFftSize, fftSize);
+        entry.request.pixels = pixels;
+        entry.displayCost = *displayCost;
+    }
+    if (!regrants.empty()) {
+        // Every re-granted pan records the engine it now shares, as a pan
+        // that joins an engine does, so a later departure among them does
+        // not shrink the engine under the others.
+        for (const Regrant& regrant : regrants) {
+            regrant.entry->sourceFftSize = engineFftSize;
+        }
+        if (!reconcileSource(key)) {
+            // A source that cannot be reconfigured keeps every pan as it was.
+            for (const Regrant& regrant : regrants) {
+                regrant.entry->sourceFftSize = regrant.previousFftSize;
+                regrant.entry->request.pixels = regrant.previousPixels;
+                regrant.entry->displayCost = regrant.previousCost;
+            }
+        }
+        return;
     }
     // Otherwise only the rate can fall; that renews nothing. A source that
     // cannot be reconfigured keeps running as it was.

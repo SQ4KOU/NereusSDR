@@ -123,6 +123,7 @@ private:
     void setPanStatus(const QString& panId, const QString& status);
     QString statusWithGrant(const QString& panId, const QString& status) const;
     void refreshPanGrantStatus(const QString& panId);
+    QString perPanRefusalStatus(const QString& panId) const;
     void refreshCtunState();
     void receiveControl(const QJsonObject& payload, quint32 epoch);
     void receiveDisplay(const QByteArray& packet);

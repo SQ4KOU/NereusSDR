@@ -425,6 +425,10 @@ struct Harness {
         Q_ASSERT(streamIndex >= 0 && radio.streamActive(streamIndex));
         server.setMediaEnabled(true);
         if (limits) {
+            // R-R3-01/R-R3-08: the pacer never refuses an update in a
+            // budget session, including when the controller is torn down.
+            QTest::failOnWarning(QRegularExpression(
+                QStringLiteral("refused invalid display pacer state update")));
             QVERIFY(server.setDisplayBudgetLimits(*limits));
         }
     }
@@ -576,6 +580,8 @@ private slots:
     void grantReportsLargestSizeSharedEngineAndSourceBins();
     void budgetChargesGrantedPixels();
     void regrantAfterNeighbourLeavesStaysWithinAdmittedCharge();
+    void sharedEngineRegrantsEverySurvivorWhenItsSizerLeaves();
+    void destroyingControllerWithLiveBudgetSessionIsQuiet();
     void outOfRangeRequestsAreRejectedAndLeaveEndpointUntouched();
     void displayDiagnosticsMeasureSentFramesRefusalsAndErrors();
     void realDisplayErrorIsCountedAndLoggedOnce();
@@ -2574,6 +2580,105 @@ void TstDaemonMediaController::configuredAudioBitrateReachesOfferAndContext()
     QVERIFY(decoded->encoder.has_value());
     QCOMPARE(decoded->encoder->targetBitrate, 48000);
     h.finish();
+}
+
+// R-R3-01/R-R3-08/R-R3-09/R-R3-37: when the pan that sized a shared engine
+// leaves, every pan held to that engine is granted its own request, not
+// only a lone survivor. Each renews once, for the new engine size; a pan on
+// another engine is not renewed, and nothing renews when a pan that holds no
+// one else back leaves.
+void TstDaemonMediaController::sharedEngineRegrantsEverySurvivorWhenItsSizerLeaves()
+{
+    Harness h;
+    h.establishSession();
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    h.startReadyPeer();
+    const double centre = h.radio.streamCentreHz(h.streamIndex);
+    const auto contextCount = [&](quint32 endpointId, int count) {
+        QTRY_VERIFY(([&] {
+            h.feedRadio();
+            return messageCount(controls, QStringLiteral("context"), endpointId) >= count;
+        })());
+    };
+    const auto settle = [&] {
+        for (int i = 0; i < 20; ++i) { h.feedRadio(); QTest::qWait(10); }
+    };
+
+    // E1 sizes the "wide" engine at 1024; E2 (4096) and E3 (8192) join it
+    // and are held to 1024. E4 has an engine of its own.
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(1, 1, h.sliceId, centre, QStringLiteral("wide"), 1024),
+        h.client.sessionEpoch()));
+    contextCount(1, 1);
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(2, 1, h.sliceId, centre, QStringLiteral("wide"), 4096),
+        h.client.sessionEpoch()));
+    contextCount(2, 1);
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(3, 1, h.sliceId, centre, QStringLiteral("wide"), 8192),
+        h.client.sessionEpoch()));
+    contextCount(3, 1);
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(4, 1, h.sliceId, centre, QStringLiteral("fine"), 2048),
+        h.client.sessionEpoch()));
+    contextCount(4, 1);
+    settle();
+    for (quint32 held : {2U, 3U}) {
+        QCOMPARE(h.controller.spectrumGrant(held)->grantedFftSize, 1024);
+        QCOMPARE(h.controller.spectrumGrant(held)->reason, SpectrumLimitReason::SharedEngine);
+        QCOMPARE(messageFor(controls, QStringLiteral("context"), held)
+                     .value(QStringLiteral("limit")).toString(), QStringLiteral("shared"));
+    }
+    const int e2Contexts = messageCount(controls, QStringLiteral("context"), 2);
+    const int e3Contexts = messageCount(controls, QStringLiteral("context"), 3);
+    const int e4Contexts = messageCount(controls, QStringLiteral("context"), 4);
+
+    // E1 leaves: both pans held to its engine are re-granted. The engine
+    // runs at the larger request, and neither pan is told it is shared.
+    QVERIFY(h.client.sendMediaControl(unsubscription(1), h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 3);
+    contextCount(2, e2Contexts + 1);
+    contextCount(3, e3Contexts + 1);
+    settle();
+    QCOMPARE(messageCount(controls, QStringLiteral("context"), 2), e2Contexts + 1);
+    QCOMPARE(messageCount(controls, QStringLiteral("context"), 3), e3Contexts + 1);
+    QCOMPARE(messageCount(controls, QStringLiteral("context"), 4), e4Contexts);
+    for (quint32 regranted : {2U, 3U}) {
+        const QJsonObject context = messageFor(controls, QStringLiteral("context"), regranted);
+        QCOMPARE(context.value(QStringLiteral("grantedFftSize")).toInt(), 8192);
+        QCOMPARE(context.value(QStringLiteral("limit")).toString(), QStringLiteral("none"));
+        QCOMPARE(h.controller.spectrumGrant(regranted)->grantedFftSize, 8192);
+        QCOMPARE(h.controller.spectrumGrant(regranted)->reason, SpectrumLimitReason::None);
+    }
+
+    // E3 leaves. E2 is not held back by anyone, so nothing renews.
+    QVERIFY(h.client.sendMediaControl(unsubscription(3), h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 2);
+    settle();
+    QCOMPARE(messageCount(controls, QStringLiteral("context"), 2), e2Contexts + 1);
+    QCOMPARE(messageCount(controls, QStringLiteral("context"), 4), e4Contexts);
+    QCOMPARE(h.controller.spectrumGrant(2)->reason, SpectrumLimitReason::None);
+    h.finish();
+}
+
+// R-R3-01/R-R3-08: tearing the controller down with a budget session still
+// live ends the pacer without a refused update. The Harness fails the test
+// on that warning.
+void TstDaemonMediaController::destroyingControllerWithLiveBudgetSessionIsQuiet()
+{
+    auto h = std::make_unique<Harness>(DisplayBudgetLimits{10'000'000, 10'000'000, 7});
+    h->establishSession();
+    QVERIFY(h->server.displayBudgetAvailable());
+    QSignalSpy controls(&h->client, &StationClient::mediaControlReceived);
+    h->startReadyPeer();
+    const double centre = h->radio.streamCentreHz(h->streamIndex);
+    QVERIFY(h->client.sendMediaControl(subscription(1, 1, h->sliceId, centre),
+                                       h->client.sessionEpoch()));
+    QTRY_VERIFY(!allocationFor(controls, 1, 1).isEmpty());
+    QVERIFY(allocationFor(controls, 1, 1).value(QStringLiteral("accepted")).toBool());
+    QCOMPARE(h->controller.activeEndpointCount(), 1);
+    // No finish(): the controller goes while the session is live.
+    h.reset();
 }
 
 QTEST_MAIN(TstDaemonMediaController)

@@ -1135,11 +1135,11 @@ void RemoteMediaController::refreshSubscriptions()
             // This supported subscription mode does not indicate a display
             // failure or require operator action. Keep capability details in
             // diagnostics, and clear any status from a previous allocation.
-            // Only a limited grant is shown.
+            // Only a limited grant or a refusal is shown.
             if (applet->panId().isEmpty()) {
                 applet->setRemoteDisplayStatus(QString());
             } else {
-                setPanStatus(applet->panId(), QString());
+                setPanStatus(applet->panId(), perPanRefusalStatus(applet->panId()));
             }
         }
     }
@@ -1275,6 +1275,7 @@ void RemoteMediaController::refreshSubscriptions()
         if (binding.revision == 0) { ++binding.revision; }
         binding.accepted = false;
         binding.rejected = false;
+        binding.refusalReason.clear();
         binding.decoder.reset();
         // A tune/zoom renews this binding's codec, not its painted history.
         // New/replaced bindings were fully cleared above; rejection and
@@ -1312,6 +1313,29 @@ void RemoteMediaController::setPanStatus(const QString& panId, const QString& st
 void RemoteMediaController::refreshPanGrantStatus(const QString& panId)
 {
     setPanStatus(panId, d->panBaseStatus.value(panId));
+}
+
+QString RemoteMediaController::perPanRefusalStatus(const QString& panId) const
+{
+    // R-R3-01/08/37: outside budget mode a refused pan keeps the budget-mode
+    // line while the refused request is still the one it would send. A new
+    // request clears the reason when it goes out.
+    if (!d->model || !d->stack || !d->client) { return {}; }
+    for (const auto& [id, binding] : d->bindings) {
+        Q_UNUSED(id);
+        if (binding.panId != panId || !binding.rejected || binding.refusalReason.isEmpty()
+            || !binding.widget || !binding.slice
+            || currentSliceForPan(d->model, d->stack, binding.widget) != binding.slice
+            || binding.observedStream != binding.slice->streamIndex()
+            || binding.observedStreamEpoch != binding.slice->streamEpoch()
+            || requestFor(binding.widget, binding.slice,
+                          d->client->remoteWidebandAvailable()) != binding.observed) {
+            continue;
+        }
+        return QStringLiteral("Display allocation refused: %1")
+            .arg(binding.refusalReason.left(384));
+    }
+    return {};
 }
 
 QString RemoteMediaController::statusWithGrant(const QString& panId, const QString& status) const
@@ -2159,16 +2183,33 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
         return;
     }
     if (op == QLatin1String("rejected")) {
-        if (!budgetMode && revision == binding.revision && payload.size() == 6
+        // Core's per-endpoint refusal or retirement: op, connectionId,
+        // endpointId, revision and reason, as DaemonMediaController::
+        // sendRejected() sends them. R-R3-01/08/37: the pan says why, as a
+        // status line only (no toast), until its request changes.
+        if (!budgetMode && revision == binding.revision && payload.size() == 5
             && payload.value(QStringLiteral("reason")).isString()) {
+            const QString reason = payload.value(QStringLiteral("reason")).toString();
+            // Core retires an endpoint whose slice it removed or rebound
+            // (DaemonMediaController::onSliceRemoved / onStreamBindingsChanged).
+            // That state reaches this window over the control session, which
+            // is not ordered with the media channel, so the refusal can land
+            // while the slice still looks unchanged here. Those are the
+            // operator's own changes, not refusals: the pan goes blank and
+            // the mirrored change then retires or renews the binding.
+            const bool operatorChange = reason == QLatin1String("slice removed")
+                || reason == QLatin1String("slice stream binding changed");
             binding.accepted = false;
             binding.rejected = true;
+            binding.refusalReason = operatorChange ? QString()
+                : (reason.isEmpty() ? QStringLiteral("Core refused the display allocation.")
+                                    : reason.left(512));
             binding.decoder.reset();
             const QPointer<RemoteMediaController> self(this);
+            const QString panId = binding.panId;
             binding.widget->clearRemoteSpectrum();
-            if (self) {
-                emit errorOccurred(payload.value(QStringLiteral("reason")).toString().left(512));
-            }
+            if (!self) { return; }
+            setPanStatus(panId, perPanRefusalStatus(panId));
         }
         return;
     }
