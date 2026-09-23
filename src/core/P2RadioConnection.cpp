@@ -55,7 +55,7 @@
 //   2026-04-28 — setMicXlr (G.6): byte 50 bit 5 (0x20), P2-only, polarity 1=XLR. deskhpsdr new_protocol.c:1500-1502 [@120188f]. MicState::micControl default updated 0x04 -> 0x24. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-22 — Established UDP silence: Thetis ChannelMaster/network.c:655-666 [v2.10.3.15]; stop/report, daemon-owned recovery.
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex. Also retire incomplete wideband bursts at capture/connection changes.
-//   2026-09-23 - Established silence judged only when no datagram is waiting (R-R3-29): Thetis ChannelMaster/network.c:655-667 [v2.10.3.15].
+//   2026-09-23 - Established silence judged only when no datagram is waiting (R-R3-29): Thetis ChannelMaster/network.c:656-671 [v2.10.3.15].
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -2290,7 +2290,7 @@ void P2RadioConnection::onEstablishedSilenceTimeout()
         return;
     }
 
-    // From Thetis ChannelMaster/network.c:655-667 [v2.10.3.15]:
+    // From Thetis ChannelMaster/network.c:656-671 [v2.10.3.15]:
     //   DWORD retVal = WSAWaitForMultipleEvents(1, &prn->hDataEvent, FALSE,
     //                      prn->wdt ? 3000 : WSA_INFINITE, FALSE);
     //   if ((retVal == WSA_WAIT_FAILED) || (retVal == WSA_WAIT_TIMEOUT))

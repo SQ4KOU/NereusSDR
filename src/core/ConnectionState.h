@@ -1,4 +1,6 @@
 // src/core/ConnectionState.h  (NereusSDR)
+// no-port-check: NereusSDR-original enum. The Thetis cite on LinkLost is a
+// reference for the P2 silence rule implemented in P2RadioConnection.cpp.
 // NereusSDR-original — no Thetis upstream port.
 #pragma once
 
@@ -22,8 +24,8 @@ enum class ConnectionState : int {
                        // ep6 frame for 2 s (P1RadioConnection
                        // kWatchdogSilenceMs).  P2: no accepted inbound UDP
                        // for 3 s with nothing waiting on the socket
-                       // (P2RadioConnection kEstablishedSilenceTimeoutMs,
-                       // Thetis network.c:655-667).
+                       // (P2RadioConnection kEstablishedSilenceTimeoutMs).
+                       // From Thetis ChannelMaster/network.c:656-667 [v2.10.3.15]
                        // UI: red pulse, "Link lost — last frame Xs ago".
 };
 
