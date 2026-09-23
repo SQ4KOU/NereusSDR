@@ -290,6 +290,14 @@ void FFTEngine::feedIQ(const QVector<float>& interleavedIQ)
             if (m_iqWritePos >= m_currentFftSize) {
                 return;
             }
+            // R-R3-08/40 (NereusSDR-original): this sample triggered the
+            // transform and is the first after its window. When the
+            // transform opened a gap, it belongs to the gap, not to
+            // position 0 of the next window.
+            if (m_skipPending > 0) {
+                --m_skipPending;
+                continue;
+            }
         }
         // Swap I<->Q for spectrum display.  Matches Thetis analyzer.c:
         // 1757-1758 [v2.10.3.13].  Audio path (WDSP fexchange2) uses

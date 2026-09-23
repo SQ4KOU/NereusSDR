@@ -23,6 +23,8 @@
 #include <QSignalSpy>
 #include <QThread>
 
+#include <algorithm>
+
 using namespace NereusSDR;
 
 class TstFftEnginePool : public QObject {
@@ -290,6 +292,51 @@ private slots:
             }
         }
         QCOMPARE(frames.count(), transforms);
+#endif
+    }
+
+    // R-R3-08/40: the sample that completes a window's buffer triggers
+    // the transform and is the first sample after that window. When
+    // transforms follow the frame rate it belongs to the gap, never to
+    // the next window.
+    void noSampleBeforeTheGapEntersTheNextWindow()
+    {
+#ifndef HAVE_FFTW3
+        QSKIP("FFTEngine has no FFTW3 backend in this build");
+#else
+        QLoggingCategory::setFilterRules(
+            QStringLiteral("nereus.dsp.info=false\nnereus.memlock.info=false"));
+        const auto restoreRules = qScopeGuard([] { QLoggingCategory::setFilterRules({}); });
+        constexpr int kFftSize = 4096;
+        FFTEngine engine(0);
+        engine.setSampleRate(192000.0);
+        engine.setFftSize(kFftSize);
+        engine.setOutputFps(10); // advance 19200: a gap of 15104 samples
+        engine.setWindowFunction(WindowFunction::Rectangular);
+        engine.setTransformsFollowFrameRate(true);
+        QList<QVector<float>> frames;
+        connect(&engine, &FFTEngine::fftReadyLinear, this,
+                [&frames](int, const QVector<float>& bins, double, double) {
+                    frames.append(bins);
+                });
+        // One silent window, then the sample that triggers its transform:
+        // a loud one. Everything after it is silent.
+        QVector<float> first((kFftSize + 1) * 2, 0.0f);
+        first[kFftSize * 2] = 1.0f;
+        first[kFftSize * 2 + 1] = 1.0f;
+        engine.feedIQ(first);
+        QCOMPARE(frames.size(), 1);
+        // Wait out the engine's 5 ms back-to-back guard, then feed the gap
+        // and one more window, plus the sample that triggers it.
+        QThread::msleep(6);
+        const QVector<float> silent((192000 / 10) * 2, 0.0f);
+        engine.feedIQ(silent);
+        QCOMPARE(frames.size(), 2);
+        // The second window is all silence: the loud sample was not in it.
+        const QVector<float>& second = frames.at(1);
+        QCOMPARE(second.size(), kFftSize);
+        const float loudest = *std::max_element(second.cbegin(), second.cend());
+        QCOMPARE(loudest, 0.0f);
 #endif
     }
 
