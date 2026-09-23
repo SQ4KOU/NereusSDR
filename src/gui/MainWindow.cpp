@@ -2432,6 +2432,16 @@ void MainWindow::onNotchRequestRefused(const QString& reason)
     showToast(reason, ToastSeverity::Warning, 3000);
 }
 
+// Fix wave I3 (R-R3-21): a noise reducer a receiver would not turn on, for
+// example NR3 on a Core with no NR3 model. The receiver is unchanged; this
+// says why, in local and remote windows alike.
+void MainWindow::onNrSelectionRefused(const QString& reason)
+{
+    if (!reason.isEmpty()) {
+        showToast(reason, ToastSeverity::Warning, 3000);
+    }
+}
+
 // Repaint the status-bar TNF light. Both halves of what it shows can move
 // independently: the master enable from this label, the DSP menu or TCI, and
 // the count from any pan's panadapter or the MNF settings page.
@@ -3825,6 +3835,17 @@ void MainWindow::buildUI()
     // a reconnect this loop is what re-arms it; sliceAdded has already fired.
     for (SliceModel* existing : m_radioModel->slices()) {
         wireSliceStatusOverlayTriggers(existing);
+    }
+    // Fix wave I3: every receiver's refused noise-reducer choice is shown.
+    connect(m_radioModel, &RadioModel::sliceAdded, this, [this](int sliceId) {
+        if (SliceModel* slice = m_radioModel->sliceById(sliceId)) {
+            connect(slice, &SliceModel::nrSelectionRefused, this,
+                    &MainWindow::onNrSelectionRefused, Qt::UniqueConnection);
+        }
+    });
+    for (SliceModel* existing : m_radioModel->slices()) {
+        connect(existing, &SliceModel::nrSelectionRefused, this,
+                &MainWindow::onNrSelectionRefused, Qt::UniqueConnection);
     }
 
     // Phase 3F Sub-Epic D Task 13: bind newly-created slices to a pan
@@ -6991,7 +7012,17 @@ void MainWindow::buildMenuBar()
             QAction* a = nrMenu->addAction(QString::fromUtf8(nr.label),
                 this, [this, slot]() {
                     SliceModel* slice = m_radioModel->activeSlice();
-                    if (slice) { slice->setActiveNr(slot); }
+                    if (!slice) { return; }
+                    slice->setActiveNr(slot);
+                    // Fix wave I3: a refused choice leaves the check on the
+                    // reducer the receiver still runs.
+                    if (slice->activeNr() != slot) {
+                        for (QAction* action : m_nrGroup->actions()) {
+                            QSignalBlocker blocker(action);
+                            action->setChecked(action->data().toInt()
+                                               == static_cast<int>(slice->activeNr()));
+                        }
+                    }
                 });
             a->setData(static_cast<int>(slot));
             a->setCheckable(true);

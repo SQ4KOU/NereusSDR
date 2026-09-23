@@ -7,6 +7,7 @@
 #include "core/dsp/DspAssetService.h"
 
 #include <QCryptographicHash>
+#include <QScopeGuard>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -98,6 +99,7 @@ private slots:
     void nr3CommandsRequireExactShapes();
     void nr3LegacyPathImportsOnce();
     void nr3RemoteServiceMirrorsAndNeverLoads();
+    void nr3CannotRunWithoutAnyModelFile();
 };
 
 void TestDspAssetService::defaultsAndQueuedLocalRequest()
@@ -592,6 +594,53 @@ void TestDspAssetService::nr3RemoteServiceMirrorsAndNeverLoads()
     QCOMPARE(changed.count(), 3);
     QVERIFY(!service.execute("dspAssets.selectNr3Model", {{QStringLiteral("id"), largeId()}},
                              QStringLiteral("o")).accepted);
+}
+
+// Fix wave I3: with no usable NR3 model file at all, the Core says NR3
+// cannot run (nr3Runnable false, with the plain status) and loads nothing;
+// once a file is usable again it can. A window mirrors the flag, and reads
+// true until a Core says otherwise, so an older Core changes nothing.
+void TestDspAssetService::nr3CannotRunWithoutAnyModelFile()
+{
+    QTemporaryDir directory;
+    AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+    DspAssetService::setBundledNr3ModelPathsForTest(
+        [](const QString&) { return QString(); });
+    const auto restore = qScopeGuard([] { DspAssetService::setBundledNr3ModelPathsForTest({}); });
+    DspAssetService service(settings, true);
+    QVERIFY(!service.nr3Runnable());
+    const QString none = QStringLiteral("No NR3 model file was found on this Core, so NR3 cannot run.");
+    QCOMPARE(service.nr3ModelStatus(), none);
+    int loads = 0;
+    service.setNr3ModelLoader([&](const QString&) { ++loads; });
+    QString reason;
+    QVERIFY(!service.applyNr3Model(&reason));
+    QCOMPARE(reason, none);
+    QCOMPARE(loads, 0);
+    QVERIFY(!service.nr3Runnable());
+
+    QSignalSpy changed(&service, &DspAssetService::nr3SelectionChanged);
+    DspAssetService::setBundledNr3ModelPathsForTest({});
+    QVERIFY(service.applyNr3Model(&reason));
+    QVERIFY(service.nr3Runnable());
+    QCOMPARE(loads, 1);
+    QVERIFY(changed.count() >= 1);
+    QCOMPARE(service.nr3ModelStatus(), QStringLiteral("Using the bundled large model."));
+
+    DspAssetService remote(settings, false);
+    QVERIFY(remote.nr3Runnable());
+    QSignalSpy remoteChanged(&remote, &DspAssetService::nr3SelectionChanged);
+    QVERIFY(remote.applyRemoteProperty("nr3Runnable", false));
+    QVERIFY(!remote.nr3Runnable());
+    QCOMPARE(remoteChanged.count(), 1);
+    QVERIFY(!remote.applyRemoteProperty("nr3Runnable", QStringLiteral("false")));
+    QVERIFY(!remote.applyRemoteProperty("nr3Runnable", 0));
+    QVERIFY(!remote.nr3Runnable());
+    QVERIFY(remote.applyRemoteProperty("nr3Runnable", true));
+    QVERIFY(remote.nr3Runnable());
+    // A remote service keeps its own value when a local call tries.
+    QVERIFY(!service.applyRemoteProperty("nr3Runnable", false));
+    QVERIFY(service.nr3Runnable());
 }
 
 QTEST_GUILESS_MAIN(TestDspAssetService)

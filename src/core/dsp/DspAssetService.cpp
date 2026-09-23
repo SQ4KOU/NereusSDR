@@ -97,6 +97,13 @@ QString smallNr3Id() { return QString::fromLatin1(DspAssetService::kNr3BundledSm
 // Reads a model file with the size cap and runs the same trial load an
 // imported model gets. Used for the bundled files, which the store does not
 // hold.
+// Fix wave I3 test seam: see DspAssetService::setBundledNr3ModelPathsForTest.
+std::function<QString(const QString&)>& bundledNr3PathResolver()
+{
+    static std::function<QString(const QString&)> resolver;
+    return resolver;
+}
+
 bool nr3FileUsable(const QString& path)
 {
     if (path.isEmpty()) return false;
@@ -587,6 +594,7 @@ bool DspAssetService::isBundledNr3Id(const QString& id)
 
 QString DspAssetService::bundledNr3ModelPath(const QString& id)
 {
+    if (const auto& resolver = bundledNr3PathResolver()) return resolver(id);
     if (id == largeNr3Id()) return ModelPaths::rnnoiseDefaultLargeBin();
     if (id == smallNr3Id()) return ModelPaths::rnnoiseDefaultSmallBin();
     return {};
@@ -612,6 +620,19 @@ void DspAssetService::setRemoteNr3ModelsSupported(bool supported)
 void DspAssetService::setNr3ModelLoader(Nr3ModelLoader loader)
 {
     if (m_local) m_nr3Loader = std::move(loader);
+}
+
+void DspAssetService::setBundledNr3ModelPathsForTest(
+    std::function<QString(const QString&)> resolver)
+{
+    bundledNr3PathResolver() = std::move(resolver);
+}
+
+void DspAssetService::setNr3Runnable(bool runnable)
+{
+    if (m_nr3Runnable == runnable) return;
+    m_nr3Runnable = runnable;
+    emit nr3SelectionChanged();
 }
 
 void DspAssetService::setNr3Status(const QString& status)
@@ -641,6 +662,7 @@ QString DspAssetService::resolveNr3ModelPath(QString* resolvedId, QString* reaso
             const QString label = m_store->label(m_nr3Selected);
             setNr3Status(label.isEmpty() ? tr("Using an added NR3 model.")
                                          : tr("Using the NR3 model \"%1\".").arg(label));
+            setNr3Runnable(true);
             return path;
         }
         problem = tr("The chosen NR3 model is missing or damaged.");
@@ -663,12 +685,14 @@ QString DspAssetService::resolveNr3ModelPath(QString* resolvedId, QString* reaso
         if (resolvedId) *resolvedId = id;
         const QString using_ = tr("Using %1.").arg(bundledNr3Name(id));
         setNr3Status(problem.isEmpty() ? using_ : problem + QLatin1Char(' ') + using_);
+        setNr3Runnable(true);
         if (reason) *reason = problem;
         return path;
     }
 
     const QString none = tr("No NR3 model file was found on this Core, so NR3 cannot run.");
     setNr3Status(none);
+    setNr3Runnable(false);
     if (reason) *reason = none;
     return {};
 }
@@ -763,6 +787,12 @@ void DspAssetService::importLegacyNr3ModelPath()
 bool DspAssetService::applyRemoteProperty(const QByteArray& name, const QVariant& value)
 {
     if (m_local) return false;
+    if (name == "nr3Runnable") {
+        bool runnable = true;
+        if (!exactBool(value, &runnable)) return false;
+        setNr3Runnable(runnable);
+        return true;
+    }
     if (name == "nr3ModelAsset" || name == "nr3ModelStatus") {
         QString text;
         if (!exactString(value, &text)) return false;

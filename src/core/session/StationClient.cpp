@@ -2225,11 +2225,26 @@ void StationClient::watchForOutbound(const QByteArray& objectKey, QObject* objec
             return std::nullopt;
         });
         slice->setNrSelectionApplier([owner](NrSlot requested, QString* reason) {
-            if (requested != NrSlot::NNR || (owner && (owner->m_applyingInbound || owner->nnrControlAvailable()))) {
+            if (owner && owner->m_applyingInbound) {
                 return true;
             }
-            if (reason) { *reason = QStringLiteral("This station session does not support NNR."); }
-            return false;
+            if (requested == NrSlot::NNR && !(owner && owner->nnrControlAvailable())) {
+                if (reason) { *reason = QStringLiteral("This station session does not support NNR."); }
+                return false;
+            }
+            // Fix wave I3 (R-R3-21): the Core said it has no usable NR3
+            // model (mirrored nr3Runnable), so NR3 cannot run there.
+            DspAssetService* assets = owner && owner->m_radioModel
+                ? owner->m_radioModel->dspAssets() : nullptr;
+            if (requested == NrSlot::NR3 && assets && !assets->nr3Runnable()) {
+                if (reason) {
+                    *reason = assets->nr3ModelStatus().isEmpty()
+                        ? QStringLiteral("NR3 cannot run on this Core: no NR3 model file was found.")
+                        : assets->nr3ModelStatus();
+                }
+                return false;
+            }
+            return true;
         });
         disconnect(slice, &SliceModel::nnrDiagnosticsRequested, this, nullptr);
         connect(slice, &SliceModel::nnrDiagnosticsRequested, this,

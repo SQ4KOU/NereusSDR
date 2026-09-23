@@ -3953,6 +3953,17 @@ void RadioModel::wireNnrSettings(SliceModel* slice)
         return channel->nnrTuning();
     });
     slice->setNrSelectionApplier([this, slice](NrSlot requested, QString* reason) {
+        // Fix wave I3 (R-R3-21): with no usable NR3 model, WDSP's NR3 has
+        // no model and would pass audio through unchanged. Refuse turning
+        // it on, with the plain status, whether or not a channel is open.
+        if (requested == NrSlot::NR3 && m_dspAssets && !m_dspAssets->nr3Runnable()) {
+            if (reason) {
+                *reason = m_dspAssets->nr3ModelStatus().isEmpty()
+                    ? tr("NR3 cannot run on this Core: no NR3 model file was found.")
+                    : m_dspAssets->nr3ModelStatus();
+            }
+            return false;
+        }
         RxChannel* channel = m_wdspEngine ? m_wdspEngine->rxChannel(slice->sliceIndex()) : nullptr;
         if (!channel) {
             return true;

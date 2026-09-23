@@ -70,6 +70,7 @@ private slots:
     void refusedEditSnapsBackToAcceptedReadback();
     void resetPreservesModelAndNrSelection();
     void contextOpeningDoesNotEnableNnr();
+    void refusedNrChoiceSnapsBackAndSaysWhy();
     void bindingStaysWithOpenerAndInvalidatesOnDestruction();
     void stationSessionChangeInvalidatesBinding();
     void diagnosticActionIsTemporaryAndRequiresReadyRuntime();
@@ -176,6 +177,43 @@ void TestNnrControls::contextOpeningDoesNotEnableNnr()
     QCOMPARE(slice.activeNr(), NrSlot::Off);
     QCOMPARE(selectionSpy.count(), 0);
     QVERIFY(vfo.findChild<DspParamPopup*>());
+}
+
+// Fix wave I3: a noise reducer the receiver refuses (NR3 on a Core with no
+// NR3 model) leaves the VFO's buttons as the receiver has them and shows the
+// plain reason, whatever was on before.
+void TestNnrControls::refusedNrChoiceSnapsBackAndSaysWhy()
+{
+    SliceModel slice(7);
+    const QString why =
+        QStringLiteral("No NR3 model file was found on this Core, so NR3 cannot run.");
+    slice.setNrSelectionApplier([why](NrSlot requested, QString* reason) {
+        if (requested != NrSlot::NR3) { return true; }
+        if (reason) { *reason = why; }
+        return false;
+    });
+    VfoWidget vfo;
+    vfo.setSlice(&slice);
+    auto* nr2 = buttonWithText(vfo, QStringLiteral("NR2"));
+    auto* nr3 = buttonWithText(vfo, QStringLiteral("NR3"));
+    QVERIFY(nr2 && nr3);
+    QSignalSpy refused(&slice, &SliceModel::nrSelectionRefused);
+
+    nr3->click();
+    QCOMPARE(slice.activeNr(), NrSlot::Off);
+    QVERIFY(!nr3->isChecked());
+    QCOMPARE(refused.count(), 1);
+    QCOMPARE(refused.constFirst().at(0).toString(), why);
+    QCOMPARE(slice.nnrLastError(), why);
+    QCOMPARE(vfo.nrRefusalForTest(), why);
+
+    nr2->click();
+    QCOMPARE(slice.activeNr(), NrSlot::NR2);
+    nr3->click();
+    QCOMPARE(slice.activeNr(), NrSlot::NR2);
+    QVERIFY(nr2->isChecked());
+    QVERIFY(!nr3->isChecked());
+    QCOMPARE(refused.count(), 2);
 }
 
 void TestNnrControls::bindingStaysWithOpenerAndInvalidatesOnDestruction()

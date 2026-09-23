@@ -451,6 +451,8 @@ private slots:
     /// R-R3-21: the Core refused a remote window's notch move, toggle or
     /// delete. The reason is already a plain sentence.
     void onNotchRequestRefused(const QString& reason);
+    // Fix wave I3: a receiver refused a noise reducer (NR3 with no model).
+    void onNrSelectionRefused(const QString& reason);
 
     /// TNF: repaint the status-bar light from NotchModel. Driven by every
     /// signal that can change either half of what it shows.

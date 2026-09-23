@@ -1106,6 +1106,7 @@ void SliceModel::setActiveNr(NereusSDR::NrSlot slot)
     if (m_nrSelectionApplier && !m_nrSelectionApplier(slot, &reason)) {
         setNnrLastError(reason.isEmpty() ? QStringLiteral("The requested noise reducer is unavailable.") : reason);
         emit nnrEditRejected(m_nnrLastError);
+        emit nrSelectionRefused(m_nnrLastError);
         return;
     }
     m_activeNr = slot;

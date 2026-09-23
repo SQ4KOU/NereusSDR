@@ -49,6 +49,8 @@
 #include <QHostAddress>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QRegularExpression>
+#include <QScopeGuard>
 #include <QSignalSpy>
 #include <QSslSocket>
 #include <QTcpServer>
@@ -330,6 +332,7 @@ private slots:
     void acceptedReceiveDspOptionsWriteAppliesToMatchingSlices();
     void receiveOnlyPolicySurvivesRadioTeardown();
     void nr3ModelChoiceLoadsOnceOnTheCoreAndMirrors();
+    void nr3CannotRunIsRefusedOnTheCoreAndInTheWindow();
     void olderCoreLeavesTheNr3ModelUnchangeable();
     void olderAppNr3ModelPathWriteIsRefused();
     void remoteNotchEditKeepsTheCoresWholeList();
@@ -2848,6 +2851,82 @@ void TstStationSession::receiveOnlyStationRefusesTransmitPropertyWrites()
     QTRY_VERIFY(!clientTx.isMox());
     QTRY_VERIFY(!clientTx.isTune());
     QTRY_COMPARE(clientTx.power(), settledPower);
+}
+
+void TstStationSession::nr3CannotRunIsRefusedOnTheCoreAndInTheWindow()
+{
+    // Fix wave I3 (R-R3-21). A Core with no usable NR3 model file cannot run
+    // NR3 (WDSP would pass the audio through unchanged). It says so: turning
+    // NR3 on is refused with the plain sentence on the Core, and in a remote
+    // window, which learns it through the mirrored nr3Runnable flag and
+    // refuses without asking the Core. Other reducers still turn on. Once
+    // the Core has a model again, the window turns NR3 on.
+    DspAssetService::setBundledNr3ModelPathsForTest([](const QString&) { return QString(); });
+    const auto restorePaths = qScopeGuard([] {
+        DspAssetService::setBundledNr3ModelPathsForTest({});
+    });
+    const QString none =
+        QStringLiteral("No NR3 model file was found on this Core, so NR3 cannot run.");
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+    auto stationModel = makeStationRadioModel(0);
+    DspAssetService* core = stationModel->dspAssets();
+    QVERIFY(!core->nr3Runnable());
+    QCOMPARE(core->nr3ModelStatus(), none);
+
+    SliceModel* coreSlice = stationModel->slices().constFirst();
+    coreSlice->setActiveNr(NrSlot::Off);
+    QSignalSpy coreRefused(coreSlice, &SliceModel::nrSelectionRefused);
+    coreSlice->setActiveNr(NrSlot::NR3);
+    QCOMPARE(coreSlice->activeNr(), NrSlot::Off);
+    QCOMPARE(coreRefused.count(), 1);
+    QCOMPARE(coreRefused.constFirst().at(0).toString(), none);
+    QCOMPARE(coreSlice->nnrLastError(), none);
+
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
+    stationEnd->linkTo(clientEnd);
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    client.startSession(clientEnd, server.token());
+    server.acceptTransport(stationEnd);
+    QTRY_COMPARE(completed.count(), 1);
+
+    DspAssetService* window = clientModel.dspAssets();
+    QTRY_VERIFY(!window->nr3Runnable());
+    QTRY_COMPARE(window->nr3ModelStatus(), none);
+    QTRY_VERIFY(!clientModel.slices().isEmpty());
+    SliceModel* windowSlice = clientModel.slices().constFirst();
+    QSignalSpy windowRefused(windowSlice, &SliceModel::nrSelectionRefused);
+    windowSlice->setActiveNr(NrSlot::NR3);
+    QCOMPARE(windowSlice->activeNr(), NrSlot::Off);
+    QCOMPARE(windowRefused.count(), 1);
+    QCOMPARE(windowRefused.constFirst().at(0).toString(), none);
+    QTest::qWait(100);
+    QCOMPARE(coreSlice->activeNr(), NrSlot::Off);
+
+    // Another reducer still turns on from the window.
+    windowSlice->setActiveNr(NrSlot::NR2);
+    QCOMPARE(windowSlice->activeNr(), NrSlot::NR2);
+    QTRY_COMPARE(coreSlice->activeNr(), NrSlot::NR2);
+
+    // The model comes back: the Core says so and the window turns NR3 on.
+    DspAssetService::setBundledNr3ModelPathsForTest({});
+    QVERIFY(core->applyNr3Model());
+    QVERIFY(core->nr3Runnable());
+    QTRY_VERIFY(window->nr3Runnable());
+    windowSlice->setActiveNr(NrSlot::NR3);
+    QCOMPARE(windowSlice->activeNr(), NrSlot::NR3);
+    QTRY_COMPARE(coreSlice->activeNr(), NrSlot::NR3);
+    QCOMPARE(windowRefused.count(), 1);
+
+    windowSlice->setActiveNr(NrSlot::Off);
+    QTRY_COMPARE(coreSlice->activeNr(), NrSlot::Off);
+    AppSettings::instance().remove(QStringLiteral("DspAssets/Nr3Model"));
 }
 
 void TstStationSession::nr3ModelChoiceLoadsOnceOnTheCoreAndMirrors()

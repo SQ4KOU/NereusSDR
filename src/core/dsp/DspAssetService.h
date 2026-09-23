@@ -37,6 +37,11 @@ class DspAssetService final : public QObject {
     // about the model actually loaded.
     Q_PROPERTY(QString nr3ModelAsset READ nr3ModelAsset NOTIFY nr3SelectionChanged)
     Q_PROPERTY(QString nr3ModelStatus READ nr3ModelStatus NOTIFY nr3SelectionChanged)
+    // Fix wave I3: false when no usable NR3 model file exists on the Core,
+    // so NR3 cannot run (WDSP would pass audio through unchanged). A window
+    // reads true until a Core says otherwise, so an older Core changes
+    // nothing; nr3ModelStatus then carries the plain reason.
+    Q_PROPERTY(bool nr3Runnable READ nr3Runnable NOTIFY nr3SelectionChanged)
 
 public:
     using RemoteRequestHandler =
@@ -52,6 +57,9 @@ public:
     // Path of a bundled model file on this machine, or empty when the
     // install does not carry it.
     static QString bundledNr3ModelPath(const QString& id);
+    // Test seam: where the bundled model files are, instead of the install.
+    // An empty function restores the install lookup.
+    static void setBundledNr3ModelPathsForTest(std::function<QString(const QString&)> resolver);
 
     explicit DspAssetService(AppSettings& settings, bool local,
                              QObject* parent = nullptr);
@@ -70,6 +78,8 @@ public:
 
     QString nr3ModelAsset() const { return m_nr3Selected; }
     QString nr3ModelStatus() const { return m_nr3Status; }
+    // Local: the last resolve found a usable model file. Remote: mirrored.
+    bool nr3Runnable() const { return m_nr3Runnable; }
     // The id of the model last handed to the loader (local only).
     QString activeNr3ModelAsset() const { return m_nr3Active; }
     // Local: this build can load NR3 models. Remote: the Core advertised
@@ -118,6 +128,7 @@ private:
     bool setNr3Selection(const QString& id, QString* reason);
     void importLegacyNr3ModelPath();
     void setNr3Status(const QString& status);
+    void setNr3Runnable(bool runnable);
     DspAssetServiceResult reject(const QString& reason) const;
 
     AppSettings& m_settings;
@@ -137,6 +148,7 @@ private:
     QString m_nr3Selected;
     QString m_nr3Active;
     QString m_nr3Status;
+    bool m_nr3Runnable{true};
     bool m_remoteNr3Supported{false};
     Nr3ModelLoader m_nr3Loader;
 };

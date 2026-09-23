@@ -299,6 +299,7 @@ warren@wpratt.com
 #include <QVariant>
 #include <QFontDatabase>
 #include <QSignalBlocker>
+#include <QToolTip>
 
 #include <cmath>
 #include <algorithm>
@@ -1552,11 +1553,18 @@ void VfoWidget::buildDspTab()
     });
     // Sub-epic C-1: NR bank left-click = setActiveNr(slot) mutual exclusion.
     auto wireNrBtnToggle = [this](QPushButton* btn, NereusSDR::NrSlot slot) {
-        connect(btn, &QPushButton::toggled, this, [this, slot](bool on) {
+        connect(btn, &QPushButton::toggled, this, [this, btn, slot](bool on) {
             if (m_updatingFromModel || !m_slice) {
                 return;
             }
-            m_slice->setActiveNr(on ? slot : NereusSDR::NrSlot::Off);
+            m_lastNrButton = btn;
+            const NereusSDR::NrSlot requested = on ? slot : NereusSDR::NrSlot::Off;
+            m_slice->setActiveNr(requested);
+            // Fix wave I3: a refused choice (NR3 with no model on the Core)
+            // leaves the receiver as it was; the buttons follow it back.
+            if (m_slice && m_slice->activeNr() != requested) {
+                onActiveNrChanged(m_slice->activeNr());
+            }
         });
     };
     wireNrBtnToggle(m_nr1Btn,  NereusSDR::NrSlot::NR1);
@@ -2337,6 +2345,21 @@ void VfoWidget::onActiveNrChanged(NereusSDR::NrSlot slot)
     m_nnrBtn->setChecked(slot  == NereusSDR::NrSlot::NNR);
 }
 
+// Fix wave I3: say why a noise reducer did not turn on, at the button that
+// asked, in the receiver's plain words.
+void VfoWidget::onNrSelectionRefused(const QString& reason)
+{
+    m_nrRefusal = reason;
+    if (m_slice) {
+        onActiveNrChanged(m_slice->activeNr());
+    }
+    QWidget* anchor = m_lastNrButton ? static_cast<QWidget*>(m_lastNrButton.data())
+                                     : static_cast<QWidget*>(m_nr3Btn);
+    if (anchor && anchor->isVisible() && !reason.isEmpty()) {
+        QToolTip::showText(anchor->mapToGlobal(QPoint(0, anchor->height())), reason, anchor);
+    }
+}
+
 void VfoWidget::setSnbEnabled(bool v)
 {
     if (m_snbToggle && m_snbToggle->isChecked() != v) {
@@ -2527,6 +2550,9 @@ void VfoWidget::setSlice(SliceModel* slice)
                    this, nullptr);
     }
 
+    if (m_slice) {
+        disconnect(m_slice, &SliceModel::nrSelectionRefused, this, nullptr);
+    }
     m_slice = QPointer<SliceModel>(slice);
     if (m_fmContainer) {
         m_fmContainer->setSlice(slice);
@@ -2543,6 +2569,8 @@ void VfoWidget::setSlice(SliceModel* slice)
         connect(slice, &SliceModel::activeNrChanged,
                 this, &VfoWidget::onActiveNrChanged);
         onActiveNrChanged(slice->activeNr());
+        connect(slice, &SliceModel::nrSelectionRefused,
+                this, &VfoWidget::onNrSelectionRefused);
     }
 
     // Phase 3R L1: SNR row binding. RadeChannel pushes snrDb via the
