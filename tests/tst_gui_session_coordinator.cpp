@@ -17,6 +17,7 @@
 #include "gui/MainWindow.h"
 #include "gui/RemoteConnectionController.h"
 #include "gui/SpectrumWidget.h"
+#include "gui/meters/MeterPoller.h"
 #include "gui/widgets/StatusToast.h"
 #include "models/NotchModel.h"
 #include "models/RadioModel.h"
@@ -402,6 +403,28 @@ private slots:
         emit client->reconnectScheduled(1, 1000);
         QCOMPARE(toastsStartingWith(window, lost), 1);
         QCOMPARE(toastsStartingWith(window, retry), 1);
+        sessions.shutdown();
+    }
+
+    // Fix wave, Important 2 (R-R3-13): a local window shows no receive
+    // reading while its radio link is not up. On LinkLost the RX channels
+    // stay alive, so the poller cannot tell from the channel alone.
+    void localWindowMetersFollowRadioLink()
+    {
+        GuiSessionCoordinator sessions;
+        QVERIFY(sessions.replace({}, false));
+        MainWindow* window = sessions.window();
+        RadioModel* model = window->radioModel();
+        auto* poller = window->findChild<MeterPoller*>();
+        QVERIFY(poller);
+        emit model->connectionStateChanged(ConnectionState::Connected);
+        QVERIFY(poller->localRxReadingAvailable());
+        emit model->connectionStateChanged(ConnectionState::LinkLost);
+        QVERIFY(!poller->localRxReadingAvailable());
+        emit model->connectionStateChanged(ConnectionState::Connected);
+        QVERIFY(poller->localRxReadingAvailable());
+        emit model->connectionStateChanged(ConnectionState::Disconnected);
+        QVERIFY(!poller->localRxReadingAvailable());
         sessions.shutdown();
     }
 

@@ -137,6 +137,16 @@ public:
 
     void setRxChannel(RxChannel* channel);
 
+    // NereusSDR (R-R3-13): whether the local radio link is up. On a local
+    // LinkLost the RX channels stay alive but their meters stop updating
+    // (an inactive channel reads -140 dBm), so the channel pointer alone
+    // cannot say whether a reading exists. While false, poll() feeds the
+    // no-reading sentinel to the RX bindings and the analog S-meter, as it
+    // does with no channel. MainWindow drives it from connectionStateChanged
+    // (true only in Connected). Default true; remote windows ignore it.
+    void setLocalRxReadingAvailable(bool available);
+    bool localRxReadingAvailable() const { return m_localRxReadingAvailable; }
+
     // ── SMeterWidget feed (Task 41, Phase 3P-II) ──────────────────────────
     //
     // setSMeter: register the analog SMeterWidget (AppletPanelWidget header).
@@ -265,6 +275,7 @@ private:
 
     QTimer m_timer;
     QPointer<RxChannel> m_rxChannel;
+    bool m_localRxReadingAvailable{true};
 
     // Non-owning TX channel pointer (H.2).  Valid only while WdspEngine has
     // opened the TX channel (after createTxChannel()).  Guarded in poll().

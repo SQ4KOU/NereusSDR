@@ -124,6 +124,11 @@ void MeterPoller::setRxChannel(RxChannel* channel)
                       << (channel ? channel->channelId() : -1);
 }
 
+void MeterPoller::setLocalRxReadingAvailable(bool available)
+{
+    m_localRxReadingAvailable = available;
+}
+
 // H.2 (Phase 3M-1a): store non-owning pointer to the TX channel.
 // WdspEngine owns the object; call setTxChannel(nullptr) on radio disconnect.
 void MeterPoller::setTxChannel(TxChannel* channel)
@@ -334,10 +339,13 @@ void MeterPoller::poll()
     }
 
     // NereusSDR (R-R3-13): with no RX channel (never created, or destroyed:
-    // the QPointer clears) there is no reading.  Feed the -400 dBm sentinel
-    // to the RX bindings this loop drives so their items show "--" rather
-    // than the last value.  MeterWidget::updateMeterValue drops repeats.
-    if (!m_rxChannel) {
+    // the QPointer clears) there is no reading, and with the radio link not
+    // up (LinkLost keeps the channels alive, but their meters stop and an
+    // inactive one reads -140 dBm) there is none either.  Feed the -400 dBm
+    // sentinel to the RX bindings this loop drives and to the analog
+    // S-meter header, so each shows "--" rather than the last value.
+    // MeterWidget::updateMeterValue and SMeterWidget::setLevel drop repeats.
+    if (!m_rxChannel || !m_localRxReadingAvailable) {
         for (int bindingId = MeterBinding::SignalPeak;
              bindingId <= MeterBinding::AgcAvg; ++bindingId) {
             for (auto& guarded : m_targets) {
@@ -345,6 +353,9 @@ void MeterPoller::poll()
                 if (!target) { continue; }
                 target->updateMeterValue(bindingId, kNoMeterReadingDbm);
             }
+        }
+        if (SMeterWidget* sm = m_sMeter.data()) {
+            sm->setLevel(static_cast<float>(kNoMeterReadingDbm));
         }
         return;
     }

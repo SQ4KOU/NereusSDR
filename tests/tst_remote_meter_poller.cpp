@@ -3,6 +3,7 @@
 #include <QSignalSpy>
 
 #include "core/RadioStatus.h"
+#include "core/RxChannel.h"
 #include "gui/SMeterWidget.h"
 #include "gui/meters/MeterPoller.h"
 #include "gui/meters/MeterWidget.h"
@@ -180,12 +181,57 @@ private slots:
         bars.updateMeterValue(MeterBinding::SignalAvg, -75.0);
         QCOMPARE(peakText->displayText(), QStringLiteral("-71.0 dBm"));
 
+        SMeterWidget meter;
+        meter.setLevel(-71.0f);
+        QCOMPARE(meter.levelDbm(), -71.0f);
+
         MeterPoller poller;
         poller.addTarget(&bars);
+        poller.setSMeter(&meter);
         QVERIFY(QMetaObject::invokeMethod(&poller, "poll", Qt::DirectConnection));
         QCOMPARE(peakText->displayText(), QStringLiteral("-- dBm"));
         QCOMPARE(agcText->displayText(), QStringLiteral("-- dBm"));
         QCOMPARE(bar->valueText(), QStringLiteral("--"));
+        // Fix wave, Important 2: the analog S-meter header must not freeze
+        // on the last reading when the channel is gone either.
+        QCOMPARE(meter.levelDbm(), -400.0f);
+    }
+
+    void localLinkLostWithLiveChannelShowsNoReading()
+    {
+        // Fix wave, Important 2: on a local LinkLost the RX channels stay
+        // alive but WDSP meters stop updating, and an inactive channel reads
+        // -140 dBm, which would show as a number. While the radio link is
+        // not up, the poller shows no reading; once it is up again it reads
+        // the same channel.
+        MeterWidget bars;
+        auto* peakText = new TextItem(&bars);
+        peakText->setBindingId(MeterBinding::SignalPeak);
+        bars.addItem(peakText);
+        SMeterWidget meter;
+        RxChannel channel(0, 1024, 48000);
+
+        MeterPoller poller;
+        poller.addTarget(&bars);
+        poller.setSMeter(&meter);
+        poller.setRxChannel(&channel);
+        auto tick = [&]() {
+            QVERIFY(QMetaObject::invokeMethod(&poller, "poll", Qt::DirectConnection));
+        };
+        tick();
+        QCOMPARE(peakText->displayText(), QStringLiteral("-140.0 dBm"));
+        QVERIFY(meter.levelDbm() > -400.0f);
+
+        poller.setLocalRxReadingAvailable(false);
+        QVERIFY(!poller.localRxReadingAvailable());
+        tick();
+        QCOMPARE(peakText->displayText(), QStringLiteral("-- dBm"));
+        QCOMPARE(meter.levelDbm(), -400.0f);
+
+        poller.setLocalRxReadingAvailable(true);
+        tick();
+        QCOMPARE(peakText->displayText(), QStringLiteral("-140.0 dBm"));
+        QVERIFY(meter.levelDbm() > -400.0f);
     }
 };
 QTEST_MAIN(TestRemoteMeterPoller)

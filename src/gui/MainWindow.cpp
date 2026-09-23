@@ -5436,6 +5436,17 @@ void MainWindow::buildUI()
         if (rxCh) { m_meterPoller->setRxChannel(rxCh); }
     });
 
+    // NereusSDR (R-R3-13): a local LinkLost keeps the RX channels alive, so
+    // the poller cannot tell from the channel that no reading exists. Only
+    // a Connected link carries receive readings; every other state shows
+    // "--" on the container meters and the analog S-meter header.
+    connect(m_radioModel, &RadioModel::connectionStateChanged, m_meterPoller,
+            [poller = m_meterPoller](ConnectionState state) {
+        poller->setLocalRxReadingAvailable(state == ConnectionState::Connected);
+    });
+    m_meterPoller->setLocalRxReadingAvailable(
+        m_radioModel->connectionState() == ConnectionState::Connected);
+
     // H.2 (Phase 3M-1a): wire MoxController::moxStateChanged → MeterPoller::setInTx.
     // Switches the poll set between RX meters (TX off) and TX meters (TX on).
     // From Thetis dsp.cs:995-1050 [v2.10.3.13] CalculateTXMeter dispatch.
