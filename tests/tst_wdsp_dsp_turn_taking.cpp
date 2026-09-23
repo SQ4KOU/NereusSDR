@@ -227,6 +227,12 @@ private slots:
                  "the control-call burst waited for too many worker blocks");
         QVERIFY2(worstSingleMs <= singleLimitMs, "a single control call waited too long");
         QVERIFY2(burstMs <= burstLimitMs, "the control-call burst waited too long");
+        // The median hold-off is the real guard against a worker that
+        // over-defers to control calls. The throughput ratio below proves
+        // little on its own: its minimum is derived from the hold-off this
+        // same run measured, so a worker that holds off its whole budget
+        // lowers its own bar and still passes (seen: ratio 0.651 against a
+        // minimum of 0.628). Keep this check even if the ratio is loosened.
         QVERIFY2(medianAfterCallMs <= kBurstGraceMs + kSchedulingMarginMs,
                  "the worker held off too long after control calls finished");
         QVERIFY2(ratio >= minRatio, "control calls cost the worker too much throughput");

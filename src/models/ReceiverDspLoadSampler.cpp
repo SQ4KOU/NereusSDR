@@ -7,6 +7,7 @@
 // Modification history (NereusSDR):
 //   2026-09-23 - Created by J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code (R-R3-40).
+//                 Later the same day: first-reading baseline and forget().
 // =================================================================
 
 #include "models/ReceiverDspLoadSampler.h"
@@ -60,16 +61,23 @@ void ReceiverDspLoadSampler::update(const QHash<int, Reading>& readings)
 
     for (auto it = readings.constBegin(); it != readings.constEnd(); ++it) {
         const Reading& now = it.value();
-        Baseline previous = m_baselines.value(it.key());
-        // The counters only grow for one WDSP channel id; a smaller value
-        // means the baseline belongs to an earlier channel, so measure from
-        // zero.
-        if (now.blocks < previous.blocks || now.busyNs < previous.busyNs
-            || now.lateBlocks < previous.lateBlocks) {
-            previous = Baseline{};
+        const Baseline current{now.blocks, now.busyNs, now.lateBlocks};
+        baselines.insert(it.key(), current);
+        const auto previous = m_baselines.constFind(it.key());
+        // The first reading for a slice seeds its baseline and publishes
+        // nothing. dsplock.c keeps each channel id's counters for the whole
+        // process, so they may already hold an earlier slice's history.
+        if (previous == m_baselines.constEnd()) {
+            continue;
         }
-        snapshots.insert(it.key(), compute(now, previous));
-        baselines.insert(it.key(), Baseline{now.blocks, now.busyNs, now.lateBlocks});
+        // The counters never go backwards in production, since dsplock.c
+        // never resets them. Should one ever do so, the interval is unknown:
+        // start again from this reading rather than report a guess.
+        if (now.blocks < previous->blocks || now.busyNs < previous->busyNs
+            || now.lateBlocks < previous->lateBlocks) {
+            continue;
+        }
+        snapshots.insert(it.key(), compute(now, *previous));
     }
 
     m_baselines = std::move(baselines);
@@ -83,6 +91,12 @@ std::optional<ReceiverDspLoad> ReceiverDspLoadSampler::snapshot(int sliceId) con
         return std::nullopt;
     }
     return it.value();
+}
+
+void ReceiverDspLoadSampler::forget(int sliceId)
+{
+    m_baselines.remove(sliceId);
+    m_snapshots.remove(sliceId);
 }
 
 void ReceiverDspLoadSampler::clear()

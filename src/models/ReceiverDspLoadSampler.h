@@ -16,6 +16,8 @@
 // Modification history (NereusSDR):
 //   2026-09-23 - Created by J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//                 Later the same day: the first reading for a slice only
+//                 seeds its baseline, and forget() drops a removed slice.
 // =================================================================
 
 #pragma once
@@ -36,7 +38,13 @@ struct ReceiverDspLoad {
     // worker stuck in one long block never reads as unloaded.
     double load{0.0};
     // True when the worker finished no block in the interval and is not
-    // inside one: the receiver had no input to process. load is 0.0 then.
+    // inside one. load is 0.0 then.
+    //
+    // Idle is not proof of no load. The worker publishes a block's start
+    // only once it holds the DSP lock, so a worker waiting that whole
+    // interval for the lock (the control thread holding it) reads exactly
+    // like a receiver with no input. A reader deciding whether processing
+    // is too heavy must treat idle as "not measured", never as "unloaded".
     bool idle{false};
     // Worker blocks longer than their block period, finished in the interval.
     qint64 lateBlocks{0};
@@ -79,13 +87,22 @@ public:
 
     // Replaces every snapshot with one computed from these readings, keyed
     // by slice ID. A slice absent from `readings` loses its snapshot and its
-    // baseline. The first reading for a slice measures from the counters'
-    // start.
+    // baseline. The first reading for a slice only seeds its baseline and
+    // publishes no snapshot: the WDSP counters are cumulative for a channel
+    // id over the whole process (dsplock.c never resets them), so measuring
+    // from zero would report every earlier user of that id as this
+    // interval's load.
     void update(const QHash<int, Reading>& readings);
 
     // The latest snapshot for this slice, or nullopt when it had no reading
-    // at the latest update. Reading never changes anything.
+    // at the latest update or only its first one. Reading never changes
+    // anything.
     std::optional<ReceiverDspLoad> snapshot(int sliceId) const;
+
+    // Drops this slice's snapshot and baseline at once, so a slice created
+    // later with the same ID starts from a fresh baseline instead of
+    // inheriting the removed one's numbers.
+    void forget(int sliceId);
 
     void clear();
 

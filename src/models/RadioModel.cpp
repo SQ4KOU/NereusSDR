@@ -48,6 +48,11 @@
 //                 Claude Code. RxDspWorker is fed by the stamped I/Q
 //                 signal, and receiverDspLoad reports each slice's DSP
 //                 load. NereusSDR-original; no Thetis logic.
+//                 Later the same day: one periodic sampler
+//                 (m_dspLoadSampler, m_dspLoadTimer, sampleReceiverDspLoad)
+//                 owns the intervals and receiverDspLoad returns its cached
+//                 snapshot, only while the slice exists; removing a slice
+//                 drops its snapshot and baseline.
 //   2026-05-03 — Phase 4 Agent 4A of issue #167 (PA calibration safety
 //                 hotfix — K2GX field report).  Drive-slider lambda
 //                 (lines ~830) and TUNE-engagement path (lines ~4280)
@@ -5806,6 +5811,11 @@ SliceModel* RadioModel::sliceById(int sliceId) const
 
 std::optional<ReceiverDspLoad> RadioModel::receiverDspLoad(int sliceId) const
 {
+    // A removed slice has no load, even before the next sample drops its
+    // cached snapshot (removeSliceImpl also forgets it at once).
+    if (sliceById(sliceId) == nullptr) {
+        return std::nullopt;
+    }
     return m_dspLoadSampler.snapshot(sliceId);
 }
 
@@ -6420,6 +6430,9 @@ void RadioModel::removeSliceImpl(int sliceId, bool persist)
     }
 
     SliceModel* slice = m_slices.takeAt(position);
+    // R-R3-40: a slice created later with this ID must not inherit this
+    // one's load snapshot or measure from its baseline.
+    m_dspLoadSampler.forget(sliceId);
 
     // Reassert the invariant after the victim leaves the list.
     if (m_txSliceArbiter) {

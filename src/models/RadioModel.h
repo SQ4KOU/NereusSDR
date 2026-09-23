@@ -871,7 +871,9 @@ public:
     /// R-R3-40: the DSP load of the slice with this ID over the latest
     /// ReceiverDspLoadSampler::kSampleIntervalMs interval, or nullopt when
     /// there is no such slice or no WDSP channel for it (always nullopt on a
-    /// remote model). Returns the snapshot the periodic sampler cached;
+    /// remote model), and for a new slice until its second sample (the
+    /// first only seeds the baseline). Returns the snapshot the periodic
+    /// sampler cached;
     /// reading changes nothing, so any number of readers see the same
     /// values. Main thread only.
     std::optional<ReceiverDspLoad> receiverDspLoad(int sliceId) const;
