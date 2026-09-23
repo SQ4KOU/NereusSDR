@@ -157,8 +157,12 @@ Hardware (pending, controller): on the Rock, the values match `top` and
 - When the Core does not send host values (older Core, or not Linux), the tab
   shows one plain line: "This Core does not report computer load." and no
   empty graphs.
-- The periodic GUI diagnostics log line includes the latest host values so a
-  soak records them.
+- A periodic GUI diagnostics log line exists for the soak: one `qCInfo` line
+  every 60 s (named constant) from `RemoteTelemetryController::sampleNow()`,
+  carrying the remote audio receiver counters (including `driftRatio` and
+  `startDiscardedPackets`) and the latest Core host values. No such line
+  existed before this plan (the media establishment plan's Task 4 assumed one);
+  this task creates it. Absent values are printed as "not measured".
 
 **Verification:** GUI functional checks off-screen; the native look is the
 operator's checkpoint.
