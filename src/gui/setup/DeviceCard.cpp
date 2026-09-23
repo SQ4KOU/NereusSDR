@@ -7,6 +7,11 @@
 //
 // Sub-Phase 12 Task 12.2 (2026-04-20): Written by J.J. Boyd (KG4VCF),
 // AI-assisted via Anthropic Claude Code.
+// 2026-09-22 (R-R3-36 fix wave): a configured device that is not present
+// stays selected as "<name> (not available)", and a configured buffer
+// size the list lacks is added, so an unrelated edit never rewrites them.
+// The input card offers 4096 and 8192 samples like the TX Input page.
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "DeviceCard.h"
@@ -119,6 +124,8 @@ static const QStringList kChannels = {
 
 // Buffer sizes in samples. Derived ms shown next to the combo.
 static const QList<int> kBufferSizes = { 64, 128, 256, 512, 1024, 2048 };
+// The input card matches the TX Input page's buffer range.
+static const QList<int> kInputBufferSizes = { 64, 128, 256, 512, 1024, 2048, 4096, 8192 };
 
 // Compute derived milliseconds label from samples + sample rate.
 static QString bufferMs(int samples, int sampleRate)
@@ -263,7 +270,7 @@ void DeviceCard::buildLayout()
         bufRow->setSpacing(6);
         m_bufferSizeCombo = new QComboBox;
         m_bufferSizeCombo->setStyleSheet(QLatin1String(kComboStyle));
-        for (int sz : kBufferSizes) {
+        for (int sz : (m_role == Role::Input ? kInputBufferSizes : kBufferSizes)) {
             m_bufferSizeCombo->addItem(QStringLiteral("%1 samples").arg(sz),
                                        QVariant::fromValue(sz));
         }
@@ -427,15 +434,33 @@ void DeviceCard::populateDeviceCombo()
         }
     }
 
-    int restoreIdx = 0;
     for (int i = 0; i < devices.size(); ++i) {
         m_deviceCombo->addItem(devices[i].name,
                                QVariant::fromValue(devices[i].name));
-        if (devices[i].name == prevName) {
-            restoreIdx = i + 1;  // +1 for the "(platform default)" entry
+    }
+    selectDeviceName(prevName);
+}
+
+// ---------------------------------------------------------------------------
+// selectDeviceName — select a configured device, never a substitute
+// ---------------------------------------------------------------------------
+// R-R3-36: a named device that is not present is kept as
+// "<name> (not available)" with the name as its data, so the card shows it
+// and currentConfig() saves the same name back. Falling to
+// "(platform default)" would silently switch the device on the next edit.
+void DeviceCard::selectDeviceName(const QString& name)
+{
+    int idx = 0;
+    if (!name.isEmpty()) {
+        idx = m_deviceCombo->findData(QVariant::fromValue(name));
+        if (idx < 0) {
+            m_deviceCombo->addItem(
+                QStringLiteral("%1 (not available)").arg(name),
+                QVariant::fromValue(name));
+            idx = m_deviceCombo->count() - 1;
         }
     }
-    m_deviceCombo->setCurrentIndex(restoreIdx);
+    m_deviceCombo->setCurrentIndex(idx);
 }
 
 // ---------------------------------------------------------------------------
@@ -545,11 +570,10 @@ void DeviceCard::loadFromSettings()
 
     m_suppressSignals = true;
 
-    // Device name.
+    // Device name. A configured device that is not present stays selected.
     {
-        const int idx = m_deviceCombo->findData(
-            QVariant::fromValue(cfg.deviceName));
-        m_deviceCombo->setCurrentIndex(idx >= 0 ? idx : 0);
+        QSignalBlocker blocker(m_deviceCombo);
+        selectDeviceName(cfg.deviceName);
     }
 
     // Driver API — look up by display text (api.name is the item text, set in
@@ -589,8 +613,21 @@ void DeviceCard::loadFromSettings()
 
     // Buffer size.
     if (m_bufferSizeCombo) {
-        const int idx = m_bufferSizeCombo->findData(
+        int idx = m_bufferSizeCombo->findData(
             QVariant::fromValue(cfg.bufferSamples));
+        if (idx < 0 && cfg.bufferSamples > 0) {
+            // R-R3-36: keep a configured size the list lacks, in order,
+            // rather than falling to 256 and saving that on the next edit.
+            int insertAt = 0;
+            while (insertAt < m_bufferSizeCombo->count()
+                   && m_bufferSizeCombo->itemData(insertAt).toInt() < cfg.bufferSamples) {
+                ++insertAt;
+            }
+            m_bufferSizeCombo->insertItem(
+                insertAt, QStringLiteral("%1 samples").arg(cfg.bufferSamples),
+                QVariant::fromValue(cfg.bufferSamples));
+            idx = insertAt;
+        }
         m_bufferSizeCombo->setCurrentIndex(idx >= 0 ? idx : 2); // default 256
         // Update the derived-ms label.
         if (m_bufferMsLabel) {
