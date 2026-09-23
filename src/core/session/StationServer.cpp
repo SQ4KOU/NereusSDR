@@ -35,6 +35,10 @@
 //                                    a write's side effects; nnrStatus
 //                                    carries the step-back reason in the
 //                                    Core wording to every peer.
+//                                    Final review fix wave: a message is
+//                                    checked read-only for nnrLimit or
+//                                    nnrStatus first, and copied only
+//                                    when one is present.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -97,47 +101,78 @@ QVariant coreWordedNnrStatus(const QVariant& value)
     return value;
 }
 
+const QByteArray& nnrLimitName()
+{
+    static const QByteArray name("nnrLimit");
+    return name;
+}
+
+const QByteArray& nnrStatusName()
+{
+    static const QByteArray name("nnrStatus");
+    return name;
+}
+
+// R-R3-40: whether fitNnrLimitToPeer would change `message` for this peer.
+// Read-only, so the common case (no NNR field) neither copies nor detaches.
+bool needsNnrFit(const SessionMessage& message, quint16 agreedMinor)
+{
+    const bool older = agreedMinor < kNnrLimitSessionProtocolMinor;
+    const auto touches = [&](const QList<MirrorUpdate>& updates) {
+        return std::any_of(updates.cbegin(), updates.cend(), [&](const MirrorUpdate& u) {
+            return u.name == nnrStatusName() || (older && u.name == nnrLimitName());
+        });
+    };
+    switch (message.kind) {
+    case SessionMessageKind::Schema:
+        return older && message.className == "SliceModel"
+            && std::any_of(message.fields.cbegin(), message.fields.cend(),
+                           [](const SessionSchemaField& field) {
+                               return field.name == nnrLimitName();
+                           });
+    case SessionMessageKind::ObjectCreate:
+        return message.className == "SliceModel" && touches(message.updates);
+    case SessionMessageKind::Delta:
+        return message.objectKey.startsWith("slice:") && touches(message.updates);
+    default:
+        return false;
+    }
+}
+
+// Only removing nnrLimit can empty a slice delta; one left empty is not sent.
+bool worthSendingAfterNnrFit(const SessionMessage& message)
+{
+    return message.kind != SessionMessageKind::Delta || !message.objectKey.startsWith("slice:")
+        || !message.updates.isEmpty();
+}
+
 // R-R3-40: fits a mirror message to one peer. Every peer reads the Core's
 // step-back reason (nnrStatus) in the Core wording; a peer below minor 11
 // also loses SliceModel's nnrLimit, which it would otherwise log as a schema
 // skew. Returns false when nothing is left worth sending.
 bool fitNnrLimitToPeer(SessionMessage& message, quint16 agreedMinor)
 {
-    static const QByteArray kLimit("nnrLimit");
-    static const QByteArray kStatus("nnrStatus");
+    if (!needsNnrFit(message, agreedMinor)) {
+        return worthSendingAfterNnrFit(message);
+    }
     const bool older = agreedMinor < kNnrLimitSessionProtocolMinor;
-    const auto fitUpdates = [&](QList<MirrorUpdate>& updates) {
-        if (older) {
-            updates.removeIf([](const MirrorUpdate& update) { return update.name == kLimit; });
-        }
-        for (MirrorUpdate& update : updates) {
-            if (update.name == kStatus) {
-                update.value = coreWordedNnrStatus(update.value);
-            }
-        }
-    };
-    switch (message.kind) {
-    case SessionMessageKind::Schema:
-        if (older && message.className == "SliceModel") {
-            message.fields.removeIf([](const SessionSchemaField& field) {
-                return field.name == kLimit;
-            });
-        }
-        return true;
-    case SessionMessageKind::ObjectCreate:
-        if (message.className == "SliceModel") {
-            fitUpdates(message.updates);
-        }
-        return true;
-    case SessionMessageKind::Delta:
-        if (message.objectKey.startsWith("slice:")) {
-            fitUpdates(message.updates);
-            return !message.updates.isEmpty();
-        }
-        return true;
-    default:
+    if (message.kind == SessionMessageKind::Schema) {
+        message.fields.removeIf([](const SessionSchemaField& field) {
+            return field.name == nnrLimitName();
+        });
         return true;
     }
+    if (older) {
+        message.updates.removeIf([](const MirrorUpdate& update) {
+            return update.name == nnrLimitName();
+        });
+    }
+    for (MirrorUpdate& update : message.updates) {
+        if (update.name == nnrStatusName()) {
+            update.value = coreWordedNnrStatus(update.value);
+        }
+    }
+    return worthSendingAfterNnrFit(message);
 }
 
 // The one reason a receive-only Core gives for every transmit
@@ -1296,9 +1331,17 @@ void StationServer::sendToSession(const SessionMessage& message)
     case SessionMessageKind::ObjectCreate:
     case SessionMessageKind::Delta: {
         const auto peer = m_peers.constFind(m_session);
+        const quint16 minor = peer != m_peers.cend() ? peer->agreedMinor
+                                                     : kSessionProtocolMinor;
+        if (!needsNnrFit(message, minor)) {
+            // Most messages carry no NNR field: send them as they are.
+            if (worthSendingAfterNnrFit(message)) {
+                m_session->sendText(SessionMessages::encode(message));
+            }
+            return;
+        }
         SessionMessage fitted = message;
-        if (fitNnrLimitToPeer(fitted, peer != m_peers.cend() ? peer->agreedMinor
-                                                             : kSessionProtocolMinor)) {
+        if (fitNnrLimitToPeer(fitted, minor)) {
             m_session->sendText(SessionMessages::encode(fitted));
         }
         return;
