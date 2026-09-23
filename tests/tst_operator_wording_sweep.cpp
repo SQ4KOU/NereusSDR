@@ -75,6 +75,87 @@ QString joinedSource(const QString& path)
     return text;
 }
 
+// A source file's code with its comments blanked and adjacent string
+// literals joined ("a" "b" -> "ab"), so only text the program can produce
+// is left. Literals (plain, raw and character) are kept as written; a
+// comment that quotes a reason cannot stand in for the code that sends it.
+QString codeWithoutComments(const QString& path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text)) {
+        return {};
+    }
+    const QString text = QString::fromUtf8(file.readAll());
+    QString code;
+    code.reserve(text.size());
+    const qsizetype n = text.size();
+    const auto identifierChar = [](QChar c) { return c.isLetterOrNumber() || c == QLatin1Char('_'); };
+    qsizetype i = 0;
+    qsizetype lastLiteralEnd = -1;  // Just past the last string literal's closing quote.
+    while (i < n) {
+        const QChar c = text.at(i);
+        const QChar next = i + 1 < n ? text.at(i + 1) : QChar();
+        if (c == QLatin1Char('/') && next == QLatin1Char('/')) {
+            while (i < n && text.at(i) != QLatin1Char('\n')) {
+                ++i;
+            }
+            code += QLatin1Char(' ');
+            continue;
+        }
+        if (c == QLatin1Char('/') && next == QLatin1Char('*')) {
+            const qsizetype end = text.indexOf(QStringLiteral("*/"), i + 2);
+            i = end < 0 ? n : end + 2;
+            code += QLatin1Char(' ');
+            continue;
+        }
+        if (c == QLatin1Char('"') && i > 0 && text.at(i - 1) == QLatin1Char('R')
+            && (i < 2 || !identifierChar(text.at(i - 2))
+                || text.at(i - 2) == QLatin1Char('u') || text.at(i - 2) == QLatin1Char('L')
+                || text.at(i - 2) == QLatin1Char('8'))) {
+            // A raw literal: R"delim( ... )delim", copied as written.
+            const qsizetype open = text.indexOf(QLatin1Char('('), i + 1);
+            if (open < 0) {
+                code += text.mid(i);
+                break;
+            }
+            const QString close = QLatin1Char(')') + text.mid(i + 1, open - i - 1)
+                + QLatin1Char('"');
+            const qsizetype end = text.indexOf(close, open + 1);
+            const qsizetype stop = end < 0 ? n : end + close.size();
+            code += text.mid(i, stop - i);
+            i = stop;
+            lastLiteralEnd = -1;
+            continue;
+        }
+        const bool charLiteral = c == QLatin1Char('\'')
+            && (i == 0 || !text.at(i - 1).isLetterOrNumber());
+        if (c == QLatin1Char('"') || charLiteral) {
+            const qsizetype start = i;
+            ++i;
+            while (i < n && text.at(i) != c && text.at(i) != QLatin1Char('\n')) {
+                i += text.at(i) == QLatin1Char('\\') ? 2 : 1;
+            }
+            i = qMin(i + 1, n);
+            QString literal = text.mid(start, i - start);
+            if (!charLiteral && lastLiteralEnd >= 0
+                && code.mid(lastLiteralEnd).trimmed().isEmpty()) {
+                // "a" "b" reads as "ab", as the compiler joins them.
+                code.truncate(lastLiteralEnd - 1);
+                literal.remove(0, 1);
+            }
+            code += literal;
+            lastLiteralEnd = charLiteral ? -1 : code.size();
+            continue;
+        }
+        if (!c.isSpace()) {
+            lastLiteralEnd = -1;
+        }
+        code += c;
+        ++i;
+    }
+    return code;
+}
+
 // Every tr("...") literal in a source file, as written (escapes kept).
 QStringList trLiterals(const QString& source)
 {
@@ -420,7 +501,11 @@ private slots:
     // Fix wave M7: every exact reason the table translates is still written,
     // byte for byte, somewhere in the sources other than the table itself.
     // A Core or app rewording then fails here instead of silently showing
-    // the general sentence.
+    // the general sentence. Each key must be a whole string literal in code
+    // (comments do not count; adjacent literals are joined), so a key that
+    // is only part of a longer reason, or only quoted in a comment, is not
+    // mistaken for the reason itself. The media-start prefix is the start of
+    // a literal the transport's words are added to.
     void everyTableKeyIsStillInTheSources()
     {
         QString sources;
@@ -432,15 +517,79 @@ private slots:
             if (path.endsWith(QLatin1String("/OperatorReasonText.cpp"))) {
                 continue;
             }
-            sources += joinedSource(path);
+            sources += codeWithoutComments(path);
             sources += QLatin1Char('\n');
             ++files;
         }
         QVERIFY2(files >= 500, qPrintable(QString::number(files)));
         const QStringList keys = OperatorReasonText::tableKeys();
         QVERIFY2(keys.size() >= 140, qPrintable(QString::number(keys.size())));
+        const QString mediaStartPrefix = keys.constLast();
+        QVERIFY(mediaStartPrefix.startsWith(QLatin1String("Station media could not start")));
+        QStringList missing;
         for (const QString& key : keys) {
-            QVERIFY2(sources.contains(key), qPrintable(key));
+            const QString literal = key == mediaStartPrefix
+                ? QLatin1Char('"') + key
+                : QLatin1Char('"') + key + QLatin1Char('"');
+            if (!sources.contains(literal)) {
+                missing.append(key);
+            }
+        }
+        QVERIFY2(missing.isEmpty(), qPrintable(missing.join(QStringLiteral(" | "))));
+    }
+
+    // R3 post-merge follow-ups (R-R3-17, R-R3-21): this app's own "does not
+    // support" refusals, the NNR adapter's reasons and the Core's Tuner
+    // Genius XL checks are read from their sources and each is shown in user
+    // words that name the Core, never the station or PS3. A new or reworded
+    // one there fails here until the table has it.
+    void refusalsAndTunerChecksReadInUserWordsAtTheSource()
+    {
+        static const QRegularExpression literal(
+            QStringLiteral("QStringLiteral\\(\\s*\"((?:[^\"\\\\]|\\\\.)*)\"\\s*\\)"));
+        static const QRegularExpression placeholder(QStringLiteral("%[0-9]"));
+        static const QRegularExpression stationWord(
+            QStringLiteral("\\bstation\\b|\\bPS3\\b|does not support"),
+            QRegularExpression::CaseInsensitiveOption);
+        const auto reasonsIn = [](const char* file, const QRegularExpression& keep) {
+            QStringList found;
+            const QString code = codeWithoutComments(sourcePath(file));
+            QRegularExpressionMatchIterator it = literal.globalMatch(code);
+            while (it.hasNext()) {
+                const QString text = it.next().captured(1);
+                if (keep.match(text).hasMatch() && !found.contains(text)) {
+                    found.append(text);
+                }
+            }
+            return found;
+        };
+        const struct {
+            const char* file;
+            const char* keep;
+            int atLeast;
+        } sites[] = {
+            {"src/core/session/StationClient.cpp",
+             "^(The station does not support |This station cannot )", 7},
+            {"src/core/dsp/NnrAdapter.cpp", ".", 8},
+            {"src/core/TgxlConnection.cpp", "^TGXL [a-z]+ .* ", 6},
+            {"src/core/StationTgxlController.cpp",
+             "^(Expected TunerGenius|No matching TGXL)", 2},
+        };
+        for (const auto& site : sites) {
+            const QStringList reasons =
+                reasonsIn(site.file, QRegularExpression(QString::fromLatin1(site.keep)));
+            QVERIFY2(reasons.size() >= site.atLeast,
+                     qPrintable(QStringLiteral("%1: %2 reasons")
+                                    .arg(QLatin1String(site.file)).arg(reasons.size())));
+            for (QString reason : reasons) {
+                // Worded the way the site fills it in.
+                reason.replace(placeholder, QStringLiteral("7"));
+                const QString shown = OperatorReasonText::forDisplay(reason);
+                QVERIFY2(shown != reason, qPrintable(reason));
+                QVERIFY2(shown != QLatin1String("The reason is in the log."), qPrintable(reason));
+                QVERIFY2(OperatorWording::isPlain(shown), qPrintable(reason + QStringLiteral(" -> ") + shown));
+                QVERIFY2(!stationWord.match(shown).hasMatch(), qPrintable(reason + QStringLiteral(" -> ") + shown));
+            }
         }
     }
 
