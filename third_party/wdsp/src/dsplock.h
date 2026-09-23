@@ -1,6 +1,7 @@
 // no-port-check: NereusSDR-original WDSP scheduling glue. Not a port of
 // Thetis or WDSP logic; it schedules the existing per-channel csDSP lock so
-// control calls are not starved by a busy DSP worker.
+// control calls are not starved by a busy DSP worker, and lets channel
+// teardown wait for the worker to leave its loop.
 
 /*  dsplock.h
 
@@ -39,10 +40,16 @@ boydsoftprez@gmail.com
 // while announced waiters exist. Every other lock goes straight to the
 // platform call.
 //
+// Channel teardown (pre_main_destroy) waits for the channel's worker to
+// signal that it has left its loop before any buffer is freed.
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-23 - Created by J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code (R-R3-39).
+//   2026-09-23 - Worker-exit signal and WdspWaitWorkerExit added by
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code (R-R3-39).
 // =================================================================
 
 #ifndef _dsplock_h
@@ -57,10 +64,22 @@ void WdspEnterCS (LPCRITICAL_SECTION cs);
 void WdspWorkerEnter (int channel);
 void WdspWorkerLeave (int channel);
 
+// The channel worker calls this once, after its loop ends (main.c).
+void WdspWorkerExited (int channel);
+
+// Channel teardown (pre_main_destroy): returns once the channel's worker has
+// left its loop. Never gives up while the worker is still inside a block;
+// writes a dprintf line for every kWorkerExitLogIntervalMs of waiting.
+void WdspWaitWorkerExit (int channel);
+
 // Test-only: busy-wait this many microseconds inside the worker's locked
 // section on every block, to simulate an overloaded DSP chain. Default 0
 // (off); when off the worker pays one relaxed load per block. Not for
 // production use.
 PORT void WDSPSetTestBlockDelayUs (int channel, int microseconds);
+
+// Test-only: how many times this channel's worker has left its loop in this
+// process. Not for production use.
+PORT int WDSPGetTestWorkerExitCount (int channel);
 
 #endif

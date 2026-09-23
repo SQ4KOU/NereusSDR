@@ -24,6 +24,12 @@ warren@wpratt.com
 
 */
 
+// NereusSDR modifications (2026-09-23, J.J. Boyd KG4VCF, with Anthropic
+// Claude Code): pre_main_destroy waits for the channel's worker to leave its
+// loop (dsplock.c WdspWaitWorkerExit) instead of sleeping a fixed 25 ms, so
+// no buffer is freed while a slow block is still running. Source DSP flow and
+// all upstream attribution are retained.
+
 #include "comm.h"
 
 struct _ch ch[MAX_CHANNELS];
@@ -107,7 +113,7 @@ void pre_main_destroy (int channel)
 	InterlockedBitTestAndReset (&ch[channel].run, 0);
 	InterlockedBitTestAndSet (&ch[channel].iob.pc->exec_bypass, 0);
 	ReleaseSemaphore (a->Sem_BuffReady, 1, 0);
-	Sleep (25);
+	WdspWaitWorkerExit (channel);
 }
 
 void post_main_destroy (int channel)

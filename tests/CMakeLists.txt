@@ -294,6 +294,9 @@ if(TARGET wdsp_static)
     # control calls a bounded turn at csDSP (dsplock.c).
     # wdsp_static arrives through the core library, as for tst_wdsp_nnr.
     nereus_add_test(tst_wdsp_dsp_turn_taking EXTRA_LABELS core)
+    # R-R3-39: channel teardown and rebuilds wait for a slow DSP worker to
+    # leave its loop before freeing its memory (dsplock.c).
+    nereus_add_test(tst_wdsp_channel_shutdown EXTRA_LABELS core)
     nereus_add_test(tst_wdsp210_cfc_compat WdspCfcProbe.c EXTRA_LABELS core)
     set_source_files_properties(WdspCfcProbe.c PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(tst_wdsp210_cfc_compat PRIVATE ${FFTW3_INCLUDE_DIRS})

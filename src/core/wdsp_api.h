@@ -163,6 +163,11 @@
 //                 NereusSDR-original test seam exported from
 //                 third_party/wdsp/src/dsplock.c; no Thetis counterpart.
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-23  WDSPGetTestWorkerExitCount declaration added by J.J. Boyd
+//                 (KG4VCF) for the R3 channel shutdown test (R-R3-39).
+//                 NereusSDR-original test seam exported from
+//                 third_party/wdsp/src/dsplock.c; no Thetis counterpart.
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 /*  wdsp.cs
@@ -319,6 +324,10 @@ void SetOutputSamplerate(int channel, int samplerate);
 // overloaded DSP chain. 0 (the default) turns it off. Never call it in
 // production code.
 void WDSPSetTestBlockDelayUs(int channel, int microseconds);
+
+// Test-only (NereusSDR dsplock.c): how many times this channel's DSP worker
+// has left its loop in this process. Never call it in production code.
+int WDSPGetTestWorkerExitCount(int channel);
 
 // ---------------------------------------------------------------------------
 // In-place filter-size / filter-type reconfigure (RXA.c / TXA.c)

@@ -26,8 +26,8 @@ monolithic `wdsp.h` is not used as the application ABI. The obsolete local
 `FDnoiseIQ.c/.h` and `fastmath.h` were removed.
 
 Across the 169 current `.c` and `.h` files, 156 names come from the pinned
-tree and 13 are retained or new Nereus files. Of the pinned names, 125 remain
-byte-identical and 31 contain the reviewed integrations below. These counts
+tree and 13 are retained or new Nereus files. Of the pinned names, 124 remain
+byte-identical and 32 contain the reviewed integrations below. These counts
 describe source identity, not authorship: modified files retain their upstream
 notices and remain derived from WDSP.
 
@@ -62,6 +62,7 @@ upstream attribution.
 | POSIX/public-header portability | `extrapolate.c`, `nurbs_fit.c`, `wbfm.c`, `resample.h`, `comm.h` | Supply the audited aligned-allocation declarations, `INT_MAX` include, POSIX helper mappings, and standalone public-header spelling needed by the static macOS/Linux build. |
 | Opaque run diagnostics | `cfir.c/.h`, `emph.c/.h` | Add null-safe run readbacks so host diagnostics do not dereference pinned opaque handles. |
 | DSP lock turn-taking | `comm.h`, `main.c` | `comm.h` redirects `EnterCriticalSection` to the Nereus `dsplock.c` (`WdspEnterCS`), which recognises each channel's `csDSP` by address and counts threads waiting for it; every other lock takes the platform call unchanged. `main.c` takes and releases `csDSP` for each worker block through `WdspWorkerEnter`/`WdspWorkerLeave`, which hold off, within a bounded per-block budget, while control calls wait. Lock scheduling only; no DSP algorithm, constant or default changes (R-R3-39). |
+| Channel shutdown waits for its worker | `main.c`, `channel.c` | `main.c` signals the Nereus `dsplock.c` once after the worker's loop ends (`WdspWorkerExited`). `channel.c`'s `pre_main_destroy` calls `WdspWaitWorkerExit` in place of its fixed `Sleep (25)`, so `CloseChannel` and every rebuild that tears the channel down (`SetType`, `SetInputBuffsize`, `SetDSPBuffsize`, `SetInputSamplerate`, `SetDSPSamplerate`, `SetOutputSamplerate`, `SetAllRates`) free nothing while a block is still running. The wait never gives up while the worker is inside a block and writes one `dprintf` line per 2000 ms of waiting; an idle worker exits at once. Shutdown waiting only; no DSP algorithm, constant or default changes (R-R3-39). |
 | Filter-resize ownership | `emph.c`, `fmd.c` | Retain the replacement filter-curve object returned after freeing the old one. Pinned `b02d5bac` discarded that return value in both coefficient-count setters, causing a use-after-free on live RX/TX filter resize. |
 
 `linux_port.c/.h` remains the existing Warren Pratt NR0V and John Melton
@@ -108,7 +109,7 @@ lineage above retained in this record and in the sync log.
 
 | File | Purpose |
 | --- | --- |
-| `dsplock.c` / `dsplock.h` | Schedules each channel's existing `csDSP` lock: waiters announce themselves, and the worker gives them a bounded turn before its next block (R-R3-39). Also exports the test-only `WDSPSetTestBlockDelayUs` seam, off by default. |
+| `dsplock.c` / `dsplock.h` | Schedules each channel's existing `csDSP` lock: waiters announce themselves, and the worker gives them a bounded turn before its next block (R-R3-39). Counts each worker's exit and lets channel teardown wait for it (`WdspWorkerExited`, `WdspWaitWorkerExit`). Also exports the test-only `WDSPSetTestBlockDelayUs` and `WDSPGetTestWorkerExitCount` seams; the delay is off by default. |
 | `netinterface_stub.c` | Supplies the small `SetADCSupply`/`LRAudioSwap` ChannelMaster-facing surface until the wider module is present. |
 | `ps_sync_stub.c` | Supplies the retained `SetPSRxIdx`/`SetPSTxIdx` routing surface. |
 | `txgain_stub.c` | Supplies the retained fixed-I/Q-gain surface. |
@@ -170,8 +171,8 @@ replace or narrow those notices.
 
 These fixed repository paths register the 169 reviewed native files for the
 port checker. They do not automatically register future additions. Source
-hashes were checked against the pinned column of the frozen manifest: 125
-identical, 31 documented downstream variants and 13 local files. Grouped
+hashes were checked against the pinned column of the frozen manifest: 124
+identical, 32 documented downstream variants and 13 local files. Grouped
 source descriptions above retain the detailed lineage and license context.
 
 | File | Source / lineage | Current disposition |
@@ -202,7 +203,7 @@ source descriptions above retain the detailed lineage and license context.
 | `third_party/wdsp/src/cfcomp.h` | TAPR WDSP 2.10 @b02d5bac, Source/cfcomp.h | Pinned file with reviewed downstream changes; see the integration inventory above. |
 | `third_party/wdsp/src/cfir.c` | TAPR WDSP 2.10 @b02d5bac, Source/cfir.c | Pinned file with reviewed downstream changes; see the integration inventory above. |
 | `third_party/wdsp/src/cfir.h` | TAPR WDSP 2.10 @b02d5bac, Source/cfir.h | Pinned file with reviewed downstream changes; see the integration inventory above. |
-| `third_party/wdsp/src/channel.c` | TAPR WDSP 2.10 @b02d5bac, Source/channel.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/channel.c` | TAPR WDSP 2.10 @b02d5bac, Source/channel.c | Pinned file with reviewed downstream changes; see the integration inventory above. |
 | `third_party/wdsp/src/channel.h` | TAPR WDSP 2.10 @b02d5bac, Source/channel.h | Pinned file, byte-identical. |
 | `third_party/wdsp/src/cmath.c` | TAPR WDSP 2.10 @b02d5bac, Source/cmath.c | Pinned file, byte-identical. |
 | `third_party/wdsp/src/cmath.h` | TAPR WDSP 2.10 @b02d5bac, Source/cmath.h | Pinned file, byte-identical. |

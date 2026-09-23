@@ -27,7 +27,10 @@ warren@wpratt.com
 // NereusSDR modifications (2026-09-23, J.J. Boyd KG4VCF, with Anthropic
 // Claude Code): the worker takes and releases csDSP for each block through
 // dsplock.c (WdspWorkerEnter/WdspWorkerLeave) so waiting control calls get a
-// bounded turn. Source DSP flow and all upstream attribution are retained.
+// bounded turn. After its loop ends the worker signals channel teardown
+// through dsplock.c (WdspWorkerExited), so pre_main_destroy frees nothing
+// while a block is still running. Source DSP flow and all upstream
+// attribution are retained.
 
 #include "comm.h"
 
@@ -63,6 +66,7 @@ void wdspmain (void *pargs)
 		WdspWorkerLeave (channel);
 	}
 	if (hTask != 0) AvRevertMmThreadCharacteristics (hTask);
+	WdspWorkerExited (channel);
 }
 
 void create_main (int channel)

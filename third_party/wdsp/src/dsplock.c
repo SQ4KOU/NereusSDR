@@ -1,6 +1,7 @@
 // no-port-check: NereusSDR-original WDSP scheduling glue. Not a port of
 // Thetis or WDSP logic; it schedules the existing per-channel csDSP lock so
-// control calls are not starved by a busy DSP worker.
+// control calls are not starved by a busy DSP worker, and lets channel
+// teardown wait for the worker to leave its loop.
 
 /*  dsplock.c
 
@@ -49,6 +50,15 @@ boydsoftprez@gmail.com
 // together, and never waits longer than a per-block budget. The worker holds
 // no lock while it waits, so no lock-order edge is added.
 //
+// Teardown: pre_main_destroy used to sleep a fixed 25 ms after telling the
+// worker to stop, then free the channel's buffers and locks. A block slower
+// than that (a neural noise reduction block on a slow computer) was still
+// running when its memory went away. The worker now counts its exit after its
+// loop ends, and WdspWaitWorkerExit waits for that count. Each channel build
+// starts exactly one worker and each teardown stops exactly one, so the Nth
+// teardown of a channel waits for the Nth exit; a worker that has not yet
+// been scheduled still sees run cleared and exits at once.
+//
 // Portability: Windows uses only Interlocked*, QueryPerformanceCounter and
 // SwitchToThread, which WDSP already relies on; POSIX uses GCC/Clang atomic
 // builtins, clock_gettime and nanosleep, as linux_port.c does.
@@ -57,6 +67,9 @@ boydsoftprez@gmail.com
 // Modification history (NereusSDR):
 //   2026-09-23 - Created by J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code (R-R3-39).
+//   2026-09-23 - Worker-exit signal and WdspWaitWorkerExit added by
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code (R-R3-39).
 // =================================================================
 
 #include "comm.h"
@@ -74,11 +87,22 @@ static const int64_t kDspWorkerBurstGraceUs = 1000;
 // Pause between waiter checks while the worker holds off.
 static const long kDspWorkerPauseNs = 50000;
 
+// Teardown writes one log line per this much time spent waiting for a worker.
+static const int64_t kWorkerExitLogIntervalMs = 2000;
+// Teardown polls finely for this long (a worker that is idle or between
+// blocks exits well within it), then once per millisecond.
+static const int64_t kWorkerExitFastPollUs = 5000;
+
 // Threads currently blocked entering each channel's csDSP.
 static volatile long dsp_waiters[MAX_CHANNELS];
 
 // Test-only per-block busy-wait, microseconds; 0 = off.
 static volatile long test_block_delay_us[MAX_CHANNELS];
+
+// Times each channel's worker has left its loop.
+static volatile long worker_exits[MAX_CHANNELS];
+// Times teardown has waited for each channel's worker (control thread only).
+static volatile long worker_exit_waits[MAX_CHANNELS];
 
 static int64_t dsplock_now_us (void)
 {
@@ -112,6 +136,15 @@ static long load_waiters (int channel)
 	return InterlockedCompareExchange (&dsp_waiters[channel], 0, 0);
 #else
 	return __atomic_load_n (&dsp_waiters[channel], __ATOMIC_ACQUIRE);
+#endif
+}
+
+static long load_worker_exits (int channel)
+{
+#ifdef _WIN32
+	return InterlockedCompareExchange (&worker_exits[channel], 0, 0);
+#else
+	return __atomic_load_n (&worker_exits[channel], __ATOMIC_ACQUIRE);
 #endif
 }
 
@@ -235,6 +268,46 @@ void WdspWorkerLeave (int channel)
 	LeaveCriticalSection (&ch[channel].csDSP);
 }
 
+void WdspWorkerExited (int channel)
+{
+	if (valid_channel (channel))
+	{
+		InterlockedIncrement (&worker_exits[channel]);
+	}
+}
+
+void WdspWaitWorkerExit (int channel)
+{
+	long expected;
+	int64_t start, next_log;
+	if (!valid_channel (channel))
+	{
+		return;
+	}
+	expected = InterlockedIncrement (&worker_exit_waits[channel]);
+	start = dsplock_now_us ();
+	next_log = start + kWorkerExitLogIntervalMs * 1000;
+	while (load_worker_exits (channel) < expected)
+	{
+		int64_t now = dsplock_now_us ();
+		if (now - start < kWorkerExitFastPollUs)
+		{
+			dsplock_pause ();
+		}
+		else
+		{
+			Sleep (1);
+		}
+		now = dsplock_now_us ();
+		if (now >= next_log)
+		{
+			dprintf ("wdsp: channel %d teardown still waiting for its DSP worker "
+				"to finish a block (%d ms)\n", channel, (int)((now - start) / 1000));
+			next_log += kWorkerExitLogIntervalMs * 1000;
+		}
+	}
+}
+
 PORT
 void WDSPSetTestBlockDelayUs (int channel, int microseconds)
 {
@@ -243,4 +316,10 @@ void WDSPSetTestBlockDelayUs (int channel, int microseconds)
 		return;
 	}
 	InterlockedExchange (&test_block_delay_us[channel], microseconds > 0 ? (long)microseconds : 0L);
+}
+
+PORT
+int WDSPGetTestWorkerExitCount (int channel)
+{
+	return valid_channel (channel) ? (int)load_worker_exits (channel) : 0;
 }
