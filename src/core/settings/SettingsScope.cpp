@@ -357,7 +357,9 @@ const Rule kPrefixes[] = {
     // TNF (tunable notch filter): an actual WDSP notch in the RX audio
     // chain, not a display annotation. NotchModel state
     // (NotchGlobalEnabled/NotchVisualEnabled/NotchAutoIncrease/
-    // NotchCount/Notch<N>{Active,Center,Width}).
+    // NotchCount/Notch<N>{Active,Center,Width}). Since R-R3-21 all but
+    // NotchVisualEnabled are also model-owned (isModelOwnedNotchSettingsKey
+    // below): the Core changes its list only through notch.* commands.
     { "Notch", SettingsScope::Station },
 
     // Setup -> DSP page (DspOptionsPage.cpp): WDSP buffer/filter size,
@@ -491,10 +493,22 @@ const Rule kWholeKeys[] = {
 
 } // namespace
 
+bool isModelOwnedNotchSettingsKey(QStringView rawKey)
+{
+    const QString key = rawKey.toString().toLower();
+    return key.startsWith(QStringLiteral("notch"))
+        && key != QStringLiteral("notchvisualenabled");
+}
+
 bool isModelOwnedDspSettingsKey(QStringView rawKey)
 {
     const QString key = rawKey.toString().toLower();
     if (key.startsWith(QStringLiteral("dspassets/"))) {
+        return true;
+    }
+    // R-R3-21 / R-R3-09: the Core owns the notch list. An older app's
+    // whole-list rewrite would replace every notch the Core holds.
+    if (isModelOwnedNotchSettingsKey(rawKey)) {
         return true;
     }
     // R-R3-21: the Core picks its NR3 model from its own asset store. An
@@ -515,6 +529,9 @@ QString modelOwnedSettingsRefusal(QStringView rawKey)
 {
     if (rawKey.compare(QLatin1String("Nr3ModelPath"), Qt::CaseInsensitive) == 0) {
         return QStringLiteral("This Core keeps its own NR3 models. Update this app to choose one.");
+    }
+    if (isModelOwnedNotchSettingsKey(rawKey)) {
+        return QStringLiteral("This Core keeps its own notch list. Update this app to change notches.");
     }
     return QStringLiteral("Use the station DSP controls; raw settings writes cannot bypass model validation.");
 }

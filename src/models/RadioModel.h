@@ -2413,7 +2413,28 @@ public slots:
     /// pan.
     ///
     /// Returns the new notch id, or -1 if the model refused it.
+    ///
+    /// R-R3-21: on a remote window whose NotchModel mirrors the Core, this
+    /// sends notch.add for `slice` instead and returns -1; the Core clamps
+    /// the width to its own receiver, and its id arrives with its list.
     int addNotchForSlice(SliceModel* slice, double centerHz, double widthHz);
+
+public:
+    // ── R-R3-21 / R-R3-09: the Core's notch commands ────────────────────────
+    // A remote window changes the Core's list only through these, one notch
+    // at a time, so no window can replace another's notches. Each returns
+    // true when applied; otherwise `reason` is a plain refusal. The Core's
+    // NotchModel fans every change out to every receiver as a local edit
+    // does. Add refusals read as "Notch not added: <reason>." on the window,
+    // so they carry no final period; the others are whole sentences.
+    bool addNotchFromStation(int sliceId, double centreHz, double widthHz,
+                             int* id, QString* reason);
+    bool moveNotchFromStation(int id, double centreHz, double widthHz, QString* reason);
+    bool setNotchActiveFromStation(int id, bool active, QString* reason);
+    bool deleteNotchFromStation(int id, QString* reason);
+    quint32 notchListRevision() const;
+
+public slots:
 
     // ── Phase 3M-1a Task F.1: MoxController::hardwareFlipped fan-out ───────────
     // Slot connected to MoxController::hardwareFlipped(bool isTx).

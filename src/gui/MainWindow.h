@@ -448,6 +448,9 @@ private slots:
     /// TNF: surface a rejected add. Without this a +TNF press inside the
     /// 10 Hz dedupe window is silently ignored and the button reads as dead.
     void onNotchAddRejected(const QString& reason);
+    /// R-R3-21: the Core refused a remote window's notch move, toggle or
+    /// delete. The reason is already a plain sentence.
+    void onNotchRequestRefused(const QString& reason);
 
     /// TNF: repaint the status-bar light from NotchModel. Driven by every
     /// signal that can change either half of what it shows.

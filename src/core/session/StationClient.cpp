@@ -31,6 +31,10 @@
 //                                    paths re-pointed off removeSlice().
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-21 / R-R3-09: the window's
+//                                    NotchModel mirrors a notchControlVersion
+//                                    Core's list and sends notch.* requests.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -41,6 +45,7 @@
 #include "core/session/ObjectRegistry.h"
 #include "core/session/SessionTransport.h"
 #include "core/settings/SettingsProxy.h"
+#include "models/NotchModel.h"
 #include "models/PanadapterModel.h"
 #include "models/PureSignalSettings.h"
 #include "core/dsp/DspAssetService.h"
@@ -870,6 +875,11 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
         m_radioModel->dspAssets()->resetSession();
         m_radioModel->dspAssets()->setRemoteNr3ModelsSupported(false);
         m_radioModel->pureSignalFacade()->resetSession();
+        // The window keeps the Core's last notch list; unanswered requests
+        // and held edits belong to the retired session.
+        if (m_radioModel->notchModel()) {
+            m_radioModel->notchModel()->resetSession();
+        }
     }
     m_linkUp = false;
     m_heartbeatTimer->stop();
@@ -1503,6 +1513,34 @@ void StationClient::handleCapabilities(const SessionMessage& message)
     m_objects.insert("pureSignalSettings", m_radioModel->pureSignalSettings());
     watchForOutbound("pureSignalSettings", m_radioModel->pureSignalSettings());
 
+    // R-R3-21 / R-R3-09: a Core with notchControlVersion owns the notch
+    // list. The window mirrors it and asks for every change; it never
+    // writes or restores the Core's Notch* settings. Against an older Core
+    // nothing changes: the key is not registered, so its object (if any)
+    // is dropped, and the model keeps today's settings path.
+    if (NotchModel* notches = m_radioModel->notchModel()) {
+        const bool mirrored = m_agreedMinor >= kDspControlSessionProtocolMinor
+            && m_capabilities.notchControlVersion >= 1;
+        if (mirrored) {
+            notches->setMirrorMode(true);
+            notches->setRemoteRequestHandler(
+                [self](const QByteArray& verb, const QVariantMap& arguments) -> quint32 {
+                if (!self || !self->remoteNotchControlAvailable() || !verb.startsWith("notch.")) {
+                    return 0;
+                }
+                const auto values = dspCommandValues(arguments);
+                return values ? self->invokeCommand(verb, *values) : 0;
+            });
+            m_objects.insert("notches", notches);
+            watchForOutbound("notches", notches);
+        } else {
+            m_objects.remove("notches");
+            m_outboundMirror->unwatch("notches");
+            notches->setRemoteRequestHandler({});
+            notches->setMirrorMode(false);
+        }
+    }
+
     const QByteArray transmitKey(kTransmitKey);
     m_objects.insert(transmitKey, &m_radioModel->transmitModel());
     watchForOutbound(transmitKey, &m_radioModel->transmitModel());
@@ -2092,6 +2130,10 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
         auto* assets = qobject_cast<DspAssetService*>(target);
         return assets && assets->applyRemoteProperty(propertyName, native);
     }
+    if (className == "NotchModel") {
+        auto* notches = qobject_cast<NotchModel*>(target);
+        return notches && notches->applyRemoteProperty(propertyName, native);
+    }
     if (className == "PureSignalSettings") {
         auto* settings = qobject_cast<PureSignalSettings*>(target);
         return settings && settings->applyStationDiagnostic(propertyName, native);
@@ -2423,6 +2465,12 @@ bool StationClient::remoteNr3ModelsAvailable() const
         && m_capabilities.dspAssetVersion >= 2;
 }
 
+bool StationClient::remoteNotchControlAvailable() const
+{
+    return m_handshakeComplete && m_agreedMinor >= kDspControlSessionProtocolMinor
+        && m_capabilities.notchControlVersion >= 1;
+}
+
 bool StationClient::nnrControlAvailable() const
 {
     return propertyResultsAvailable() && m_capabilities.nnrVersion > 0;
@@ -2490,8 +2538,11 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         }
     }
 
+    // notch.* refusals are shown by NotchModel itself (notchAddRejected /
+    // notchRequestRefused), in the words the window uses for a local one.
     if (!message.accepted && !m_radioModel.isNull()
-        && !message.commandVerb.startsWith("ps3.") && !message.commandVerb.startsWith("dspAssets.")) {
+        && !message.commandVerb.startsWith("ps3.") && !message.commandVerb.startsWith("dspAssets.")
+        && !message.commandVerb.startsWith("notch.")) {
         // The station's OWN reason, relayed verbatim. Wording a refusal
         // here instead would put this client's guess in front of an
         // operator for a decision the daemon made -- and on a bench that
@@ -2540,6 +2591,11 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         }
     }
 
+    if (message.commandVerb.startsWith("notch.") && m_radioModel && m_radioModel->notchModel()) {
+        const auto values = dspCommandValues(message.updates);
+        m_radioModel->notchModel()->receiveRemoteResult(message.commandId, message.commandVerb,
+            message.accepted, message.reason, values.value_or(QVariantMap{}));
+    }
     if (message.commandVerb.startsWith("dspAssets.") && m_radioModel) {
         if (const auto values = dspCommandValues(message.updates)) {
             m_radioModel->dspAssets()->receiveRemoteResult(message.commandId, message.commandVerb,

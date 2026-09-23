@@ -532,6 +532,10 @@ public:
     // R-R3-21: the Core advertised dspAssetVersion 2 on a session that
     // negotiated DSP control, so its NR3 models can be listed and chosen.
     bool remoteNr3ModelsAvailable() const;
+    // R-R3-21 / R-R3-09: the Core advertised notchControlVersion 1 on a
+    // session that negotiated DSP control. The window's NotchModel mirrors
+    // the Core's list and sends notch.* requests.
+    bool remoteNotchControlAvailable() const;
     CommandOutcome requestNnrDiagnostics(int sliceId, int testMode, int outputMode) override;
 
     void setHeartbeatIntervalMs(int ms);

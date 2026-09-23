@@ -13,6 +13,8 @@
 //   section 5.5  restore order (model populated before any channel exists)
 //   section 8.1  RadioModel::notchModel() accessor
 //   section 11   tst_notch_channel_sync
+// R-R3-21 / R-R3-09: a remote window's notch.* commands, dispatched on the
+// Core, change the Core's list and every bound receiver's notches.
 //
 // Uses the WdspEngine NEREUS_BUILD_TESTS friend seam exactly as
 // tests/tst_stream_pool_binding.cpp does: priming m_initialized lets
@@ -30,6 +32,8 @@
 #include "core/SampleRateCatalog.h"
 #include "core/WdspEngine.h"
 #include "core/dsp/Notch.h"
+#include "core/session/SessionCommandDispatcher.h"
+#include "core/session/SessionMessages.h"
 #include "models/NotchModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -584,6 +588,104 @@ private slots:
         const Notch* n = nm->notchById(id);
         QVERIFY(n != nullptr);
         QCOMPARE(n->widthHz, minB);
+    }
+
+    // -- R-R3-21 / R-R3-09: the Core's notch commands ----------------------
+    //
+    // A remote window changes the Core's list one notch at a time through
+    // notch.add / notch.move / notch.setActive / notch.delete. Each goes
+    // through the Core's NotchModel, so every bound receiver follows, and
+    // the add is clamped to the named receiver's real minimum width.
+    void remote_notch_commands_reach_every_bound_channel()
+    {
+        RadioModel model;
+        WdspEngine* engine = model.wdspEngine();
+        engine->m_initialized = true;   // friend access (NEREUS_BUILD_TESTS)
+
+        model.configureStreamPool(5, 5, kRateHz);
+        const int a = model.addSlice();
+        model.sliceById(a)->setFrequency(kSliceAFreqHz);
+        const int b = model.addSlice();
+        model.sliceById(b)->setFrequency(kSliceBFreqHz);
+        model.openRxChannelPool(5, bufferSizeForRate(kRateHz), kRateHz);
+        RxChannel* chA = engine->rxChannel(a);
+        RxChannel* chB = engine->rxChannel(b);
+        QVERIFY(chA && chB);
+        chB->setFilterSizeSamples(1024);
+        const double minB = chB->minNotchWidthHz();
+        QVERIFY(minB > 250.0);
+
+        SessionCommandDispatcher dispatcher(&model);
+        QList<SessionMessage> results;
+        connect(&dispatcher, &SessionCommandDispatcher::commandResultReady, this,
+                [&results](const SessionMessage& m) { results.append(m); });
+        quint32 nextId = 1;
+        const auto invoke = [&](const QByteArray& verb, const QList<MirrorUpdate>& args) {
+            dispatcher.dispatch(SessionMessages::commandInvoke(verb, nextId++, args));
+            return results.isEmpty() ? SessionMessage{} : results.last();
+        };
+        const auto i64 = [](const QByteArray& name, qlonglong v) {
+            return MirrorUpdate{0, name, MirrorWireKind::Int64, v};
+        };
+        const auto f64 = [](const QByteArray& name, double v) {
+            return MirrorUpdate{0, name, MirrorWireKind::Float64, v};
+        };
+        const auto value = [](const SessionMessage& m, const QByteArray& name) {
+            for (const MirrorUpdate& u : m.updates) {
+                if (u.name == name) { return u.value; }
+            }
+            return QVariant();
+        };
+
+        SessionMessage r = invoke("notch.add",
+            {i64("sliceId", b), f64("centreHz", 14076500.0), f64("widthHz", 250.0)});
+        QVERIFY2(r.accepted, qPrintable(r.reason));
+        const int id = value(r, "id").toInt();
+        QVERIFY(id > 0);
+        QCOMPARE(value(r, "revision").toUInt(), model.notchModel()->revision());
+        QCOMPARE(chA->notchCount(), 1);
+        QCOMPARE(chB->notchCount(), 1);
+        QCOMPARE(model.notchModel()->notchById(id)->widthHz, minB);
+
+        r = invoke("notch.move",
+            {i64("id", id), f64("centreHz", 14076600.0), f64("widthHz", 600.0)});
+        QVERIFY2(r.accepted, qPrintable(r.reason));
+        r = invoke("notch.setActive",
+            {i64("id", id), MirrorUpdate{0, "active", MirrorWireKind::Bool, false}});
+        QVERIFY2(r.accepted, qPrintable(r.reason));
+        model.commitPendingNotchEdits();
+        for (RxChannel* ch : {chA, chB}) {
+            Notch got;
+            QVERIFY(ch->notchAt(0, got));
+            QCOMPARE(got.centerHz, 14076600.0);
+            QCOMPARE(got.widthHz, 600.0);
+            QVERIFY(!got.active);
+        }
+
+        // Refusals: a notch no longer on the Core, an unknown receiver, a
+        // move off the radio's range, and a wrong shape. None changes
+        // anything.
+        r = invoke("notch.move", {i64("id", id + 100), f64("centreHz", 1.4e7), f64("widthHz", 200.0)});
+        QVERIFY(!r.accepted);
+        QCOMPARE(r.reason, QStringLiteral("That notch is no longer on this Core."));
+        r = invoke("notch.add", {i64("sliceId", 99), f64("centreHz", 1.4e7), f64("widthHz", 200.0)});
+        QVERIFY(!r.accepted);
+        QCOMPARE(r.reason, QStringLiteral("That receiver is not on this Core"));
+        r = invoke("notch.move", {i64("id", id), f64("centreHz", 90000.0), f64("widthHz", 200.0)});
+        QVERIFY(!r.accepted);
+        QCOMPARE(r.reason,
+                 QStringLiteral("That notch would be outside the radio's tuning range."));
+        r = invoke("notch.delete", {i64("id", id), i64("extra", 1)});
+        QVERIFY(!r.accepted);
+        QCOMPARE(r.reason,
+                 QStringLiteral("This notch change is not one this Core understands."));
+        QCOMPARE(model.notchModel()->notchById(id)->centerHz, 14076600.0);
+
+        r = invoke("notch.delete", {i64("id", id)});
+        QVERIFY2(r.accepted, qPrintable(r.reason));
+        QCOMPARE(chA->notchCount(), 0);
+        QCOMPARE(chB->notchCount(), 0);
+        QVERIFY(model.notchModel()->notches().isEmpty());
     }
 };
 

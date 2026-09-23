@@ -131,6 +131,10 @@ struct StationCapabilities {
     int propertyResultVersion = 0;
     int dspAssetVersion = 0;
     int psDisplayVersion = 0;
+    /// R-R3-21 / R-R3-09: the Core owns the notch list, mirrors it as the
+    /// `notches` object and takes notch.add / notch.move / notch.setActive
+    /// / notch.delete. 0 means a window keeps today's settings-based notches.
+    int notchControlVersion = 0;
 
     /// The daemon's own AppSettings SettingsSchemaVersion, read by that
     /// key name from its own store. See StationClient's schema-skew check.

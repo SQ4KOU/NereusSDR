@@ -16,6 +16,9 @@
 //   2026-09-23 - R-R3-21: AgcAlcSetupPage TX Leveler and TX ALC groups
 //                 follow the remote transmit permission. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-21 / R-R3-09: the TNF page's row commit sends a
+//                 remote window's centre and width to the Core as one move.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2528,6 +2531,10 @@ void MnfSetupPage::commitRow(int notchId)
     NotchModel* nm = rm->notchModel();
     nm->setCenter(notchId, freqSpin->value());
     nm->setWidth(notchId, widthSpin->value());
+    // R-R3-21: on a remote window the two halves travel to the Core as one
+    // notch.move, sent now rather than at the end of a drag window. Nothing
+    // is held locally, so this is a no-op there.
+    nm->flushPendingMoves();
 }
 
 // ── MnfSetupPage::beginAdminEdit ──────────────────────────────────────────────

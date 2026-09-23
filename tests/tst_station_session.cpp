@@ -75,6 +75,7 @@
 #include "core/session/StationServer.h"
 #include "core/settings/SettingsProxy.h"
 #include "core/meters/SliceMeterPump.h"
+#include "models/NotchModel.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -331,6 +332,13 @@ private slots:
     void nr3ModelChoiceLoadsOnceOnTheCoreAndMirrors();
     void olderCoreLeavesTheNr3ModelUnchangeable();
     void olderAppNr3ModelPathWriteIsRefused();
+    void remoteNotchEditKeepsTheCoresWholeList();
+    void remoteNotchMoveToggleAndDeleteReachTheCore();
+    void remoteNotchRefusalsAreInPlainWords();
+    void coreNotchChangesReachTheWindow();
+    void appNotchSettingsWritesAreRefused();
+    void olderCoreKeepsTodaysNotchBehaviour();
+    void olderAppIgnoresTheNotchesObjectGolden();
 
     // ---- Fix round 1 ----
     void reconnectSurvivesTheOldTransportClosing();
@@ -2971,6 +2979,519 @@ void TstStationSession::olderAppNr3ModelPathWriteIsRefused()
     QCOMPARE(toast.count(), 2);
     QCOMPARE(toast.last().at(0).toString(),
              QStringLiteral("This Core keeps its own NR3 models. Update this app to choose one."));
+}
+
+namespace {
+
+// Install a client SettingsProxy as AppSettings' remote backend for one
+// scope, the way a remote window runs. Only around the window's own edit:
+// the Core model shares this process's AppSettings in these tests.
+struct RemoteSettingsScope {
+    explicit RemoteSettingsScope(SettingsProxy* proxy)
+    {
+        AppSettings::instance().setRemoteBackend(proxy);
+    }
+    ~RemoteSettingsScope() { AppSettings::instance().setRemoteBackend(nullptr); }
+};
+
+void removeLocalNotchKeys()
+{
+    auto& s = AppSettings::instance();
+    const QStringList keys = s.allKeys();
+    for (const QString& key : keys) {
+        if (key.startsWith(QStringLiteral("Notch"))) {
+            s.remove(key);
+        }
+    }
+}
+
+void writeCoreNotchList(AppSettings& settings, const QList<Notch>& notches)
+{
+    settings.setValue(QStringLiteral("NotchCount"), QString::number(notches.size()));
+    for (int i = 0; i < notches.size(); ++i) {
+        settings.setValue(QStringLiteral("Notch%1Center").arg(i),
+                          QString::number(notches.at(i).centerHz, 'f', 6));
+        settings.setValue(QStringLiteral("Notch%1Width").arg(i),
+                          QString::number(notches.at(i).widthHz, 'f', 6));
+        settings.setValue(QStringLiteral("Notch%1Active").arg(i), QStringLiteral("True"));
+    }
+}
+
+
+// A Core and a remote window joined over the loopback, for the notch tests.
+// Members are destroyed in reverse order: the window side first.
+struct NotchSession {
+    QTemporaryDir dir;
+    std::unique_ptr<AppSettings> stationSettings;
+    std::unique_ptr<RadioModel> core;
+    std::unique_ptr<StationServer> server;
+    std::unique_ptr<RadioModel> window;
+    std::unique_ptr<SettingsProxy> proxy;
+    std::unique_ptr<StationClient> client;
+    LoopbackTransport* stationEnd = nullptr;
+    LoopbackTransport* clientEnd = nullptr;
+};
+
+// Build the Core first (so a test can seed its list), then join a window.
+void joinNotchWindow(NotchSession& s, QObject* owner, const QString& securityDir)
+{
+    s.server = std::make_unique<StationServer>(s.core.get(), *s.stationSettings, securityDir);
+    s.window = std::make_unique<RadioModel>(RadioModel::Role::Remote);
+    s.proxy = std::make_unique<SettingsProxy>();
+    s.client = std::make_unique<StationClient>(s.window.get(), s.proxy.get());
+    s.stationEnd = new LoopbackTransport(QStringLiteral("station-end"), owner);
+    s.clientEnd = new LoopbackTransport(QStringLiteral("client-end"), owner);
+    s.stationEnd->linkTo(s.clientEnd);
+    QSignalSpy completed(s.client.get(), &StationClient::handshakeComplete);
+    s.client->startSession(s.clientEnd, s.server->token());
+    s.server->acceptTransport(s.stationEnd);
+    QTRY_COMPARE(completed.count(), 1);
+    QVERIFY(s.client->remoteNotchControlAvailable());
+    QVERIFY(s.window->notchModel()->mirrorMode());
+}
+
+void prepareNotchCore(NotchSession& s)
+{
+    QVERIFY(s.dir.isValid());
+    s.stationSettings = std::make_unique<AppSettings>(
+        s.dir.filePath(QStringLiteral("NereusSDR.settings")));
+    s.core = makeStationRadioModel(0);
+}
+
+bool sameNotchList(const NotchModel* a, const NotchModel* b)
+{
+    if (a->notches().size() != b->notches().size()) {
+        return false;
+    }
+    for (int i = 0; i < a->notches().size(); ++i) {
+        const Notch& x = a->notches().at(i);
+        const Notch& y = b->notches().at(i);
+        if (x.id != y.id || x.centerHz != y.centerHz || x.widthHz != y.widthHz
+            || x.active != y.active) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool hasNotchSettings(const AppSettings& settings)
+{
+    const QStringList keys = settings.allKeys();
+    for (const QString& key : keys) {
+        if (key.startsWith(QStringLiteral("Notch"))) {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+void TstStationSession::remoteNotchEditKeepsTheCoresWholeList()
+{
+    // R-R3-21 / R-R3-09, red first. The Core holds two notches. A remote
+    // window starts with an empty notch list (it read its settings before
+    // the Core's arrived), and its first notch add used to write the whole
+    // Notch* set from that empty list: NotchCount 1 replaced the Core's two
+    // saved notches, and the Core's live list never saw the add at all.
+    // The Core now owns the list: the window's add reaches the Core's list
+    // and every receiver, the Core's saved list is not rewritten by the
+    // window, and the window shows the Core's list with the Core's ids.
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+    removeLocalNotchKeys();
+
+    auto stationModel = makeStationRadioModel(0);
+    NotchModel* core = stationModel->notchModel();
+    QVERIFY(core->addNotch(7040000.0, 200.0) > 0);
+    QVERIFY(core->addNotch(7050000.0, 300.0) > 0);
+    QCOMPARE(core->notches().size(), 2);
+    writeCoreNotchList(stationSettings, core->notches());
+    removeLocalNotchKeys();
+
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
+    stationEnd->linkTo(clientEnd);
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    client.startSession(clientEnd, server.token());
+    server.acceptTransport(stationEnd);
+    QTRY_COMPARE(completed.count(), 1);
+    QVERIFY(proxy.ready());
+
+    SliceModel* remoteSlice = clientModel.sliceById(0);
+    QVERIFY(remoteSlice != nullptr);
+    {
+        RemoteSettingsScope scope(&proxy);
+        clientModel.addNotchForSlice(remoteSlice, 7060000.0, 250.0);
+    }
+
+    // The Core's live list gains the notch; nothing replaced it. The
+    // window's settings, when it wrote any, have landed by the time the
+    // window has heard back from the Core.
+    QTRY_VERIFY(stationEnd->receivedKinds().contains(QByteArrayLiteral("command.invoke"))
+                || stationSettings.value(QStringLiteral("NotchCount")).toString()
+                       != QStringLiteral("2"));
+    QCOMPARE(stationSettings.value(QStringLiteral("NotchCount")).toString(),
+             QStringLiteral("2"));
+    QTRY_COMPARE(core->notches().size(), 3);
+    QCOMPARE(core->notches().at(0).centerHz, 7040000.0);
+    QCOMPARE(core->notches().at(1).centerHz, 7050000.0);
+    QCOMPARE(core->notches().at(2).centerHz, 7060000.0);
+    // The window wrote no notch settings over the Core's saved list.
+    QCOMPARE(stationSettings.value(QStringLiteral("NotchCount")).toString(),
+             QStringLiteral("2"));
+    QCOMPARE(stationSettings.value(QStringLiteral("Notch1Center")).toDouble(), 7050000.0);
+    // The window shows the Core's whole list, under the Core's ids.
+    NotchModel* remote = clientModel.notchModel();
+    QTRY_COMPARE(remote->notches().size(), 3);
+    for (int i = 0; i < 3; ++i) {
+        QCOMPARE(remote->notches().at(i).id, core->notches().at(i).id);
+        QCOMPARE(remote->notches().at(i).centerHz, core->notches().at(i).centerHz);
+        QCOMPARE(remote->notches().at(i).widthHz, core->notches().at(i).widthHz);
+    }
+    removeLocalNotchKeys();
+}
+
+void TstStationSession::remoteNotchMoveToggleAndDeleteReachTheCore()
+{
+    // R-R3-21 / R-R3-09. Every window edit is one request on one notch,
+    // applied by the Core's own NotchModel; the window shows the result
+    // under the Core's ids and writes no notch settings of its own.
+    removeLocalNotchKeys();
+    NotchSession s;
+    prepareNotchCore(s);
+    if (QTest::currentTestFailed()) { return; }
+    NotchModel* core = s.core->notchModel();
+    const int first = core->addNotch(7040000.0, 200.0);
+    QVERIFY(first > 0);
+    joinNotchWindow(s, this, m_securityDir.path());
+    if (QTest::currentTestFailed()) { return; }
+    NotchModel* remote = s.window->notchModel();
+    QTRY_COMPARE(remote->notches().size(), 1);
+    QCOMPARE(remote->notches().first().id, first);
+
+    QVERIFY(remote->setCenter(first, 7041000.0));
+    QTRY_COMPARE(core->notchById(first)->centerHz, 7041000.0);
+    QVERIFY(remote->setWidth(first, 400.0));
+    QTRY_COMPARE(core->notchById(first)->widthHz, 400.0);
+    QVERIFY(remote->setActive(first, false));
+    QTRY_VERIFY(!core->notchById(first)->active);
+    QTRY_VERIFY(sameNotchList(core, remote));
+
+    s.window->addNotchForSlice(s.window->sliceById(0), 7060000.0, 250.0);
+    QTRY_COMPARE(core->notches().size(), 2);
+    const int second = core->notches().at(1).id;
+    QTRY_COMPARE(remote->notches().size(), 2);
+    QCOMPARE(remote->notches().at(1).id, second);
+
+    QVERIFY(remote->removeNotch(first));
+    QTRY_COMPARE(core->notches().size(), 1);
+    QCOMPARE(core->notches().first().id, second);
+    QTRY_VERIFY(sameNotchList(core, remote));
+    QTRY_COMPARE(remote->revision(), core->revision());
+
+    // Only the Core wrote notch settings, and not through the window.
+    QVERIFY(!hasNotchSettings(*s.stationSettings));
+    removeLocalNotchKeys();
+}
+
+void TstStationSession::remoteNotchRefusalsAreInPlainWords()
+{
+    // R-R3-21 / R-R3-09. A full list and a notch another window already
+    // removed are refused with plain reasons, and the window goes back to
+    // the Core's list.
+    removeLocalNotchKeys();
+    auto& local = AppSettings::instance();
+    local.setValue(QStringLiteral("NotchCount"), QString::number(NotchModel::kMaxNotches));
+    for (int i = 0; i < NotchModel::kMaxNotches; ++i) {
+        local.setValue(QStringLiteral("Notch%1Center").arg(i),
+                       QString::number(7000000.0 + i * 100.0, 'f', 6));
+        local.setValue(QStringLiteral("Notch%1Width").arg(i), QStringLiteral("50"));
+        local.setValue(QStringLiteral("Notch%1Active").arg(i), QStringLiteral("True"));
+    }
+    NotchSession s;
+    prepareNotchCore(s);
+    if (QTest::currentTestFailed()) { return; }
+    removeLocalNotchKeys();
+    NotchModel* core = s.core->notchModel();
+    QCOMPARE(core->notches().size(), NotchModel::kMaxNotches);
+    joinNotchWindow(s, this, m_securityDir.path());
+    if (QTest::currentTestFailed()) { return; }
+    NotchModel* remote = s.window->notchModel();
+    // The whole list travels, ids and all.
+    QTRY_COMPARE(remote->notches().size(), NotchModel::kMaxNotches);
+    QVERIFY(sameNotchList(core, remote));
+
+    QSignalSpy addRefused(remote, &NotchModel::notchAddRejected);
+    s.window->addNotchForSlice(s.window->sliceById(0), 14200000.0, 200.0);
+    QTRY_COMPARE(addRefused.count(), 1);
+    QCOMPARE(addRefused.first().at(0).toString(),
+             QStringLiteral("Maximum of 1024 notches reached"));
+    QCOMPARE(core->notches().size(), NotchModel::kMaxNotches);
+
+    // Another window (here the Core itself) removes a notch this window
+    // still shows; this window's toggle of it is refused and undone.
+    const int gone = core->notches().at(5).id;
+    QVERIFY(core->removeNotch(gone));
+    QSignalSpy refused(remote, &NotchModel::notchRequestRefused);
+    QVERIFY(remote->setActive(gone, false));
+    QTRY_COMPARE(refused.count(), 1);
+    QCOMPARE(refused.first().at(0).toString(),
+             QStringLiteral("That notch is no longer on this Core."));
+    QTRY_VERIFY(remote->notchById(gone) == nullptr);
+    QTRY_VERIFY(sameNotchList(core, remote));
+
+    // A malformed or stale request sent straight to the Core.
+    QSignalSpy results(s.client.get(), &StationClient::commandResult);
+    const quint32 stale = s.client->invokeCommand("notch.delete",
+        {{0, "id", MirrorWireKind::Int64, qlonglong(gone)}});
+    QVERIFY(stale != 0);
+    const quint32 malformed = s.client->invokeCommand("notch.delete",
+        {{0, "id", MirrorWireKind::Float64, double(gone)}});
+    QVERIFY(malformed != 0);
+    QTRY_COMPARE(results.count(), 2);
+    for (const QList<QVariant>& args : std::as_const(results)) {
+        QVERIFY(!args.at(1).toBool());
+        QCOMPARE(args.at(2).toString(), args.at(0).toUInt() == stale
+            ? QStringLiteral("That notch is no longer on this Core.")
+            : QStringLiteral("This notch change is not one this Core understands."));
+    }
+    removeLocalNotchKeys();
+}
+
+void TstStationSession::coreNotchChangesReachTheWindow()
+{
+    // R-R3-21 / R-R3-09. A change made on the Core (a TCI rx_nf_enable, a
+    // notch placed at the Core) reaches the window; the window's two
+    // switches reach the Core.
+    removeLocalNotchKeys();
+    NotchSession s;
+    prepareNotchCore(s);
+    if (QTest::currentTestFailed()) { return; }
+    joinNotchWindow(s, this, m_securityDir.path());
+    if (QTest::currentTestFailed()) { return; }
+    NotchModel* core = s.core->notchModel();
+    NotchModel* remote = s.window->notchModel();
+    QVERIFY(!core->globalEnabled());
+
+    s.core->setRxNf(0, true);   // the TCI rx_nf_enable path
+    QTRY_VERIFY(remote->globalEnabled());
+
+    const int placed = core->addNotch(14074000.0, 300.0);
+    QVERIFY(placed > 0);
+    QTRY_COMPARE(remote->notches().size(), 1);
+    QCOMPARE(remote->notches().first().id, placed);
+    QCOMPARE(remote->notches().first().widthHz, 300.0);
+
+    remote->setGlobalEnabled(false);
+    QTRY_VERIFY(!core->globalEnabled());
+    QVERIFY(core->autoIncrease());
+    remote->setAutoIncrease(false);
+    QTRY_VERIFY(!core->autoIncrease());
+    QVERIFY(!hasNotchSettings(*s.stationSettings));
+    removeLocalNotchKeys();
+}
+
+void TstStationSession::appNotchSettingsWritesAreRefused()
+{
+    // R-R3-21 / R-R3-09. An app's raw Notch* write or remove (what an older
+    // app sends on every notch edit) is refused with a plain reason, so it
+    // can no longer replace the Core's list. NotchVisualEnabled is a
+    // display preference and still lands.
+    removeLocalNotchKeys();
+    NotchSession s;
+    prepareNotchCore(s);
+    if (QTest::currentTestFailed()) { return; }
+    s.stationSettings->setValue(QStringLiteral("NotchCount"), QStringLiteral("2"));
+    joinNotchWindow(s, this, m_securityDir.path());
+    if (QTest::currentTestFailed()) { return; }
+    QVERIFY(s.proxy->ready());
+
+    const QString reason =
+        QStringLiteral("This Core keeps its own notch list. Update this app to change notches.");
+    QSignalSpy rejected(s.proxy.get(), &SettingsProxy::valueRejected);
+    QSignalSpy toast(s.window.get(), &RadioModel::sliceAddRejected);
+    s.proxy->setValue(QStringLiteral("NotchCount"), QStringLiteral("0"));
+    QTRY_COMPARE(rejected.count(), 1);
+    QCOMPARE(toast.last().at(0).toString(), reason);
+    QCOMPARE(s.stationSettings->value(QStringLiteral("NotchCount")).toString(),
+             QStringLiteral("2"));
+    s.proxy->setValue(QStringLiteral("NotchGlobalEnabled"), QStringLiteral("True"));
+    QTRY_COMPARE(rejected.count(), 2);
+    QVERIFY(!s.stationSettings->contains(QStringLiteral("NotchGlobalEnabled")));
+    s.proxy->remove(QStringLiteral("NotchCount"));
+    QTRY_COMPARE(rejected.count(), 3);
+    QCOMPARE(toast.last().at(0).toString(), reason);
+    QCOMPARE(s.stationSettings->value(QStringLiteral("NotchCount")).toString(),
+             QStringLiteral("2"));
+
+    s.proxy->setValue(QStringLiteral("NotchVisualEnabled"), QStringLiteral("True"));
+    QTRY_COMPARE(s.stationSettings->value(QStringLiteral("NotchVisualEnabled")).toString(),
+                 QStringLiteral("True"));
+    QCOMPARE(rejected.count(), 3);
+    removeLocalNotchKeys();
+}
+
+void TstStationSession::olderCoreKeepsTodaysNotchBehaviour()
+{
+    // R-R3-21 / R-R3-09. Against a Core without notchControlVersion the
+    // window keeps today's notches exactly: no mirror mode, a local add, no
+    // notch request. With the version, the add becomes a request.
+    for (const int version : {0, 1}) {
+        removeLocalNotchKeys();
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        auto* station = new LoopbackTransport(QStringLiteral("notch-station"), this);
+        auto* peer = new LoopbackTransport(QStringLiteral("notch-client"), this);
+        station->linkTo(peer);
+        client.startSession(peer, QStringLiteral("test-token"));
+        station->sendText(SessionMessages::encode(SessionMessages::hello(
+            kSessionProtocolMajor, kSessionProtocolMinor, 6, QStringLiteral("station"))));
+        station->sendText(SessionMessages::encode(SessionMessages::authResult(true, {}, false)));
+        StationCapabilities caps;
+        caps.propertyResultVersion = 1;
+        caps.notchControlVersion = version;
+        station->sendText(SessionMessages::encode(SessionMessages::capabilities(caps.toUpdates())));
+        station->sendText(SessionMessages::encode(SessionMessages::snapshotComplete()));
+        QTRY_VERIFY(client.isHandshakeComplete());
+
+        NotchModel* notches = remote.notchModel();
+        QCOMPARE(notches->mirrorMode(), version >= 1);
+        QCOMPARE(client.remoteNotchControlAvailable(), version >= 1);
+        station->clearReceived();
+        const int added = remote.addNotchForSlice(nullptr, 7040000.0, 200.0);
+        if (version == 0) {
+            QVERIFY(added > 0);
+            QCOMPARE(notches->notches().size(), 1);
+            QCOMPARE(AppSettings::instance().value(QStringLiteral("NotchCount")).toString(),
+                     QStringLiteral("1"));
+            QTest::qWait(50);
+            QVERIFY(!station->receivedKinds().contains(QByteArrayLiteral("command.invoke")));
+        } else {
+            QCOMPARE(added, -1);
+            QCOMPARE(notches->notches().size(), 0);
+            QTRY_VERIFY(station->receivedKinds().contains(QByteArrayLiteral("command.invoke")));
+            QVERIFY(!AppSettings::instance().contains(QStringLiteral("NotchCount")));
+        }
+    }
+    removeLocalNotchKeys();
+}
+
+void TstStationSession::olderAppIgnoresTheNotchesObjectGolden()
+{
+    // R-R3-21 / R-R3-09, golden. An app that does not know
+    // notchControlVersion (modelled by removing that entry: an older app
+    // ignores it) is handed this Core's real burst plus a later notch
+    // change. It ends in exactly the state it reaches from the same burst
+    // with every `notches` message removed, which is what an older Core
+    // sends: the new object changes nothing for it.
+    removeLocalNotchKeys();
+    QTemporaryDir dir;
+    QVERIFY(dir.isValid());
+    AppSettings stationSettings(dir.filePath(QStringLiteral("NereusSDR.settings")));
+    auto core = makeStationRadioModel(0);
+    QVERIFY(core->notchModel()->addNotch(7040000.0, 200.0) > 0);
+    removeLocalNotchKeys();
+    StationServer server(core.get(), stationSettings, m_securityDir.path());
+    auto* station = new LoopbackTransport(QStringLiteral("golden-station"), this);
+    auto* peer = new LoopbackTransport(QStringLiteral("golden-peer"), this);
+    station->linkTo(peer);
+    server.acceptTransport(station);
+    peer->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor, kSessionProtocolMinor, 6, QStringLiteral("older-app"))));
+    peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
+    QTRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("snapshot.complete")));
+    QVERIFY(core->notchModel()->addNotch(7050000.0, 200.0) > 0);
+    const auto hasNotchDelta = [peer]() {
+        for (const QByteArray& wire : peer->received()) {
+            const SessionMessage m = decodeOrFail(wire);
+            if (m.kind == SessionMessageKind::Delta && m.objectKey == "notches") {
+                return true;
+            }
+        }
+        return false;
+    };
+    QTRY_VERIFY(hasNotchDelta());
+    const QList<QByteArray> burst = peer->received();
+
+    int notchMessages = 0;
+    const auto replay = [&](bool keepNotches) {
+        QList<QByteArray> out;
+        for (const QByteArray& wire : burst) {
+            SessionMessage m = decodeOrFail(wire);
+            if (m.kind == SessionMessageKind::Capabilities) {
+                QList<MirrorUpdate> kept;
+                for (const MirrorUpdate& u : std::as_const(m.updates)) {
+                    if (u.name != "notchControlVersion") { kept.append(u); }
+                }
+                m.updates = kept;
+                out.append(SessionMessages::encode(m));
+                continue;
+            }
+            const bool aboutNotches = m.objectKey == "notches"
+                || (m.kind == SessionMessageKind::Schema && m.className == "NotchModel");
+            if (aboutNotches) {
+                if (keepNotches) { ++notchMessages; out.append(wire); }
+                continue;
+            }
+            out.append(wire);
+        }
+        return out;
+    };
+
+    struct Window {
+        RadioModel model{RadioModel::Role::Remote};
+        SettingsProxy proxy;
+        std::unique_ptr<StationClient> client;
+        LoopbackTransport* station = nullptr;
+    };
+    const auto run = [&](Window& w, const QList<QByteArray>& messages) {
+        w.client = std::make_unique<StationClient>(&w.model, &w.proxy);
+        w.station = new LoopbackTransport(QStringLiteral("replay-station"), this);
+        auto* clientEnd = new LoopbackTransport(QStringLiteral("replay-client"), this);
+        w.station->linkTo(clientEnd);
+        w.client->startSession(clientEnd, server.token());
+        for (const QByteArray& wire : messages) {
+            w.station->sendText(wire);
+        }
+    };
+    // The Core's own notch settings share this process's store; a window
+    // must start from the empty store a fresh remote window has.
+    removeLocalNotchKeys();
+    Window withNotches;
+    Window without;
+    // The only two lines the new object costs an older app: the tolerance
+    // StationClient already has for any object it does not hold.
+    QTest::ignoreMessage(QtWarningMsg,
+        "Station named an object this client cannot construct: \"notches\" \"NotchModel\"");
+    QTest::ignoreMessage(QtWarningMsg,
+        "Delta for an object this client does not hold: \"notches\"");
+    run(withNotches, replay(true));
+    run(without, replay(false));
+    QVERIFY(notchMessages >= 3);   // schema, object.create, delta
+    QTRY_VERIFY(withNotches.client->isHandshakeComplete());
+    QTRY_VERIFY(without.client->isHandshakeComplete());
+    QTest::qWait(50);
+
+    NotchModel* a = withNotches.model.notchModel();
+    NotchModel* b = without.model.notchModel();
+    QVERIFY(!a->mirrorMode());
+    QVERIFY(!b->mirrorMode());
+    QVERIFY(sameNotchList(a, b));
+    QCOMPARE(a->notches().size(), 0);
+    QCOMPARE(a->globalEnabled(), b->globalEnabled());
+    QCOMPARE(a->autoIncrease(), b->autoIncrease());
+    QCOMPARE(withNotches.model.slices().size(), without.model.slices().size());
+    QCOMPARE(withNotches.station->receivedKinds(), without.station->receivedKinds());
+    withNotches.client.reset();
+    without.client.reset();
+    removeLocalNotchKeys();
 }
 
 void TstStationSession::receiveOnlyStationRefusesTransmitDspOptionsSettingsWrites()

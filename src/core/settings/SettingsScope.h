@@ -83,6 +83,10 @@ SettingsScope classifySettingsKey(QStringView key);
 // Core models validate these values; the raw settings proxy may observe them
 // but cannot write/remove them around that acceptance boundary.
 bool isModelOwnedDspSettingsKey(QStringView key);
+// R-R3-21 / R-R3-09: the Core's notch list and its two flags (NotchCount,
+// Notch<N>{Center,Width,Active}, NotchGlobalEnabled, NotchAutoIncrease).
+// NotchVisualEnabled is each window's display preference and is not one.
+bool isModelOwnedNotchSettingsKey(QStringView key);
 // The reason a raw write or remove of a model-owned key is refused, in the
 // operator's words.
 QString modelOwnedSettingsRefusal(QStringView key);

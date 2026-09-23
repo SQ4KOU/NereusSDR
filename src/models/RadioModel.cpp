@@ -48,6 +48,11 @@
 //                 Claude Code. RxDspWorker is fed by the stamped I/Q
 //                 signal, and receiverDspLoad reports each slice's DSP
 //                 load. NereusSDR-original; no Thetis logic.
+//   2026-09-23 : R-R3-21 / R-R3-09 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. The Core's notch commands (add,
+//                 move, setActive, delete) for remote windows, and a
+//                 remote window's add routed as a request.
+//                 NereusSDR-original; no Thetis logic.
 //   2026-05-03 — Phase 4 Agent 4A of issue #167 (PA calibration safety
 //                 hotfix — K2GX field report).  Drive-slider lambda
 //                 (lines ~830) and TUNE-engagement path (lines ~4280)
@@ -11186,6 +11191,14 @@ int RadioModel::addNotchForSlice(SliceModel* slice, double centerHz,
         return -1;
     }
 
+    // R-R3-21: a remote window asks the Core, which owns the list and knows
+    // the receiver's real minimum width.
+    if (m_notchModel->mirrorMode()) {
+        SliceModel* target = slice ? slice : activeSlice();
+        m_notchModel->requestAdd(target ? target->sliceIndex() : -1, centerHz, widthHz);
+        return -1;
+    }
+
     // Clamp to what THIS slice's filter can actually realise. min_notch_width
     // is 1600 / (nc / 256) * (rate / 48000) (third_party/wdsp/src/nbp.c:88),
     // so at the smaller supported filter sizes it is 400 Hz (nc 1024) or
@@ -11219,6 +11232,115 @@ void RadioModel::commitPendingNotchEdits()
     if (m_notchEditTimer) {
         m_notchEditTimer->stop();
     }
+    // R-R3-21: a remote window's drag ends with its final notch.move.
+    if (m_notchModel) {
+        m_notchModel->flushPendingMoves();
+    }
+}
+
+// ── R-R3-21 / R-R3-09: the Core's notch commands ────────────────────────────
+// NereusSDR-original. The guards and clamps are NotchModel's own (its Thetis
+// cites live there); these only resolve the notch or receiver a remote
+// window named and turn a refusal into plain words.
+
+namespace {
+const QString kUnknownNotchReason =
+    QStringLiteral("That notch is no longer on this Core.");
+const QString kNotchListBusyReason =
+    QStringLiteral("The notch list is being edited on the Core. Try again when it is done.");
+}  // namespace
+
+quint32 RadioModel::notchListRevision() const
+{
+    return m_notchModel ? m_notchModel->revision() : 0;
+}
+
+bool RadioModel::addNotchFromStation(int sliceId, double centreHz, double widthHz,
+                                     int* id, QString* reason)
+{
+    if (!m_notchModel || m_notchModel->mirrorMode()) {
+        if (reason) { *reason = QStringLiteral("This Core cannot add notches"); }
+        return false;
+    }
+    SliceModel* slice = sliceById(sliceId);
+    if (!slice) {
+        if (reason) { *reason = QStringLiteral("That receiver is not on this Core"); }
+        return false;
+    }
+    // addNotch reports every refusal through notchAddRejected before it
+    // returns; the call is synchronous, so the capture cannot outlive it.
+    QString rejection;
+    const QMetaObject::Connection conn = connect(
+        m_notchModel.get(), &NotchModel::notchAddRejected, this,
+        [&rejection](const QString& why) { rejection = why; });
+    const int added = addNotchForSlice(slice, centreHz, widthHz);
+    QObject::disconnect(conn);
+    if (added < 0) {
+        if (reason) {
+            *reason = rejection.isEmpty() ? QStringLiteral("The Core refused it") : rejection;
+        }
+        return false;
+    }
+    if (id) { *id = added; }
+    return true;
+}
+
+bool RadioModel::moveNotchFromStation(int id, double centreHz, double widthHz,
+                                      QString* reason)
+{
+    NotchModel* nm = m_notchModel.get();
+    if (!nm || nm->mirrorMode() || !nm->notchById(id)) {
+        if (reason) { *reason = kUnknownNotchReason; }
+        return false;
+    }
+    if (nm->adminBusy()) {
+        if (reason) { *reason = kNotchListBusyReason; }
+        return false;
+    }
+    // Checked whole before either half applies, so a refused move changes
+    // nothing. The rules are setCenter's and setWidth's.
+    const double centre = std::nearbyint(centreHz);
+    const double width = std::clamp(widthHz, 0.0, NotchModel::kMaxNotchWidthHz);
+    if (centre < NotchModel::kMinNotchCentreHz || centre > NotchModel::kMaxNotchCentreHz
+        || centre - width / 2 < 0 || centre + width / 2 > NotchModel::kMaxNotchCentreHz) {
+        if (reason) {
+            *reason = QStringLiteral("That notch would be outside the radio's tuning range.");
+        }
+        return false;
+    }
+    const bool moved = nm->setCenter(id, centre) && nm->setWidth(id, width);
+    if (!moved && reason) {
+        *reason = QStringLiteral("The Core could not move that notch.");
+    }
+    return moved;
+}
+
+bool RadioModel::setNotchActiveFromStation(int id, bool active, QString* reason)
+{
+    NotchModel* nm = m_notchModel.get();
+    if (!nm || nm->mirrorMode() || !nm->notchById(id)) {
+        if (reason) { *reason = kUnknownNotchReason; }
+        return false;
+    }
+    if (nm->adminBusy()) {
+        if (reason) { *reason = kNotchListBusyReason; }
+        return false;
+    }
+    return nm->setActive(id, active);
+}
+
+bool RadioModel::deleteNotchFromStation(int id, QString* reason)
+{
+    NotchModel* nm = m_notchModel.get();
+    if (!nm || nm->mirrorMode() || !nm->notchById(id)) {
+        if (reason) { *reason = kUnknownNotchReason; }
+        return false;
+    }
+    if (nm->adminBusy()) {
+        if (reason) { *reason = kNotchListBusyReason; }
+        return false;
+    }
+    return nm->removeNotch(id);
 }
 
 void RadioModel::pushNotchOrigin(SliceModel* slice, RxChannel* ch,

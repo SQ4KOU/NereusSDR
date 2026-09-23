@@ -306,6 +306,15 @@ const MirrorPolicy::Entry kEntries[] = {
     { "DspAssetService", "nr3ModelAsset", MirrorDirection::Outbound },
     { "DspAssetService", "nr3ModelStatus", MirrorDirection::Outbound },
 
+    // R-R3-21 / R-R3-09 (notchControlVersion 1): the Core's notch list. The
+    // list and its revision are Outbound; a window changes the list only
+    // with the notch.* commands. The master enable and auto-increase are
+    // plain two-way switches.
+    { "NotchModel", "listJson", MirrorDirection::Outbound },
+    { "NotchModel", "revision", MirrorDirection::Outbound },
+    { "NotchModel", "globalEnabled", MirrorDirection::Bidirectional },
+    { "NotchModel", "autoIncrease", MirrorDirection::Bidirectional },
+
     // Normal PS3 configuration is distinct from operational arming/actions.
     { "PureSignalSettings", "autoCalEnabled", MirrorDirection::Bidirectional },
     { "PureSignalSettings", "runCalibrationProcessing", MirrorDirection::Bidirectional },

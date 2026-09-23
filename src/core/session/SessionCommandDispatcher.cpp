@@ -26,6 +26,10 @@
 //                                    id to 32 bits. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-21 / R-R3-09: notch.add,
+//                                    notch.move, notch.setActive and
+//                                    notch.delete on the Core's notch list.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -294,6 +298,11 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         return;
     }
 
+    if (invoke.commandVerb.startsWith("notch.")) {
+        handleNotchAction(invoke);
+        return;
+    }
+
     if (invoke.commandVerb == "addSlice") {
         handleAddSlice(invoke);
     } else if (invoke.commandVerb == "removeSlice") {
@@ -425,6 +434,89 @@ void SessionCommandDispatcher::handleNnrAction(const SessionMessage& invoke)
     }
     emitResult(invoke.commandVerb, invoke.commandId, accepted, reason,
                accepted ? QList<QByteArray>{ObjectRegistry::keyForSlice(sliceId)} : QList<QByteArray>{});
+}
+
+void SessionCommandDispatcher::handleNotchAction(const SessionMessage& invoke)
+{
+    // Exact shapes, exact wire kinds: a remote window's notch edit either
+    // names one notch (or one receiver, for an add) in the expected form or
+    // changes nothing.
+    const QByteArray& verb = invoke.commandVerb;
+    const auto kindIs = [&invoke](const QByteArray& name, MirrorWireKind kind) {
+        return hasWireKind(invoke.arguments, name, kind);
+    };
+    int id = -1;
+    int sliceId = -1;
+    double centreHz = 0.0;
+    double widthHz = 0.0;
+    bool active = false;
+    bool valid = false;
+    if (verb == "notch.add") {
+        valid = hasExactlyArguments(invoke.arguments, {"sliceId", "centreHz", "widthHz"})
+            && kindIs("sliceId", MirrorWireKind::Int64)
+            && findIntArgument(invoke.arguments, "sliceId", &sliceId) == ArgumentStatus::Ok
+            && kindIs("centreHz", MirrorWireKind::Float64)
+            && kindIs("widthHz", MirrorWireKind::Float64)
+            && findFiniteDoubleArgument(invoke.arguments, "centreHz", &centreHz)
+            && findFiniteDoubleArgument(invoke.arguments, "widthHz", &widthHz);
+    } else if (verb == "notch.move") {
+        valid = hasExactlyArguments(invoke.arguments, {"id", "centreHz", "widthHz"})
+            && kindIs("id", MirrorWireKind::Int64)
+            && findIntArgument(invoke.arguments, "id", &id) == ArgumentStatus::Ok
+            && kindIs("centreHz", MirrorWireKind::Float64)
+            && kindIs("widthHz", MirrorWireKind::Float64)
+            && findFiniteDoubleArgument(invoke.arguments, "centreHz", &centreHz)
+            && findFiniteDoubleArgument(invoke.arguments, "widthHz", &widthHz);
+    } else if (verb == "notch.setActive") {
+        QVariant raw;
+        valid = hasExactlyArguments(invoke.arguments, {"id", "active"})
+            && kindIs("id", MirrorWireKind::Int64)
+            && findIntArgument(invoke.arguments, "id", &id) == ArgumentStatus::Ok
+            && kindIs("active", MirrorWireKind::Bool)
+            && findArgument(invoke.arguments, "active", &raw)
+            && raw.typeId() == QMetaType::Bool;
+        active = raw.toBool();
+    } else if (verb == "notch.delete") {
+        valid = hasExactlyArguments(invoke.arguments, {"id"})
+            && kindIs("id", MirrorWireKind::Int64)
+            && findIntArgument(invoke.arguments, "id", &id) == ArgumentStatus::Ok;
+    } else {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("unrecognised command verb"), {});
+        return;
+    }
+    if (!valid) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("This notch change is not one this Core understands."), {});
+        return;
+    }
+
+    QString reason;
+    bool accepted = false;
+    int addedId = -1;
+    if (verb == "notch.add") {
+        accepted = m_radioModel->addNotchFromStation(sliceId, centreHz, widthHz, &addedId, &reason);
+    } else if (verb == "notch.move") {
+        accepted = m_radioModel->moveNotchFromStation(id, centreHz, widthHz, &reason);
+    } else if (verb == "notch.setActive") {
+        accepted = m_radioModel->setNotchActiveFromStation(id, active, &reason);
+    } else {
+        accepted = m_radioModel->deleteNotchFromStation(id, &reason);
+    }
+
+    QList<MirrorUpdate> values;
+    if (accepted) {
+        // The list revision after this change, so the window can hold its
+        // own view of the edit until the mirror has caught up with it.
+        values.append({0, "revision", MirrorWireKind::Int64,
+                       static_cast<qlonglong>(m_radioModel->notchListRevision())});
+        if (verb == "notch.add") {
+            values.append({0, "id", MirrorWireKind::Int64, static_cast<qlonglong>(addedId)});
+        }
+    }
+    emit commandResultReady(SessionMessages::commandResult(
+        verb, invoke.commandId, accepted, accepted ? QString() : reason,
+        accepted ? QList<QByteArray>{"notches"} : QList<QByteArray>{}, values));
 }
 
 void SessionCommandDispatcher::emitResult(const QByteArray& verb, quint32 commandId,

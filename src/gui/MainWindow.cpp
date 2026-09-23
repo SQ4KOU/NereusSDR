@@ -11,6 +11,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-21 / R-R3-09: a Core's refusal of
+//                 a remote window's notch move, toggle or delete is shown.
+//                 AI-assisted implementation via Anthropic Claude Code.
 //   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-21: the RX applet takes the
 //                 negotiated transmit permission for its XIT row and TX
 //                 passband Shift-click, and the RADE applet for its
@@ -2419,6 +2422,14 @@ void MainWindow::onAddTnfClicked(const QString& panId)
 void MainWindow::onNotchAddRejected(const QString& reason)
 {
     showToast(tnfAddRejectedNotice(reason), ToastSeverity::Warning, 3000);
+}
+
+// R-R3-21: a remote window's move, toggle or delete the Core refused (a notch
+// another window already removed, or the Core's own TNF page mid-edit). The
+// window has already put the Core's list back; this says why.
+void MainWindow::onNotchRequestRefused(const QString& reason)
+{
+    showToast(reason, ToastSeverity::Warning, 3000);
 }
 
 // Repaint the status-bar TNF light. Both halves of what it shows can move
@@ -7997,6 +8008,8 @@ void MainWindow::buildStatusBar()
                 &MainWindow::refreshTnfIndicator, Qt::UniqueConnection);
         connect(notches, &NotchModel::notchAddRejected, this,
                 &MainWindow::onNotchAddRejected, Qt::UniqueConnection);
+        connect(notches, &NotchModel::notchRequestRefused, this,
+                &MainWindow::onNotchRequestRefused, Qt::UniqueConnection);
         // Seed from whatever restoreFromSettings already loaded.
         refreshTnfIndicator();
     }
