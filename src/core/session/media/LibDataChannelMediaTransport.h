@@ -55,6 +55,8 @@ public:
     bool acceptCandidate(const QString& candidate, const QString& mid) override;
 
     bool sendDisplay(const QByteArray& message) override;
+    DisplaySendResult submitDisplay(const QByteArray& message) override;
+    bool displayBusy() const override;
     bool sendRtp(const QByteArray& packet) override;
 
     bool isReady() const override;

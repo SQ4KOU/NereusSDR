@@ -154,14 +154,26 @@ Each process applies these SCTP settings once, before its first media peer
 - Receive buffer 131,072 bytes (`kSctpReceiveBufferBytes`), twice the maximum
   message, so every message is delivered whole.
 
-When the send buffer is full, the Core refuses the next display frame instead
-of queueing it: libdatachannel holds at most the one message that did not fit,
-and the adapter refuses every further frame while that message waits. A
-refused spectrum frame is dropped, counted (`sendRefusals`), never resent, and
-the endpoint's next frame is a keyframe. A refused PureSignal chunk abandons
-the rest of its snapshot. A transport error counts (`transportErrors`), is
-logged once per distinct text per media peer, and is handled like a failed
-send. With a stalled receiver the sender holds at most the send buffer plus
+usrsctp takes a message only while it fits in the send buffer beside the data
+not yet acknowledged. When it does not, libdatachannel takes the message and
+holds it until there is room: that message is still sent, exactly once, is
+measured like any other, and is counted as `queuedLate`. While the library
+holds a message the display channel takes nothing more, and the Core offers
+nothing more: each spectrum endpoint keeps only its latest input, and a
+PureSignal snapshot keeps its place. When the held message goes out, the
+display channel reports that it is writable and the Core offers the next
+message at once, so a PureSignal snapshot advances at the link's
+acknowledgement pace instead of needing an acknowledgement within one send
+tick. A newer PureSignal snapshot still replaces the one waiting to start.
+
+A display message offered and not taken is a refusal (`sendRefusals`). A
+refused spectrum frame is dropped, never resent, and the endpoint's next
+frame is a keyframe. A PureSignal chunk refused only because the channel was
+busy is offered again later (it was never sent, so this is not a resend); a
+chunk the transport refused outright abandons the rest of its snapshot. An
+error on the display channel itself counts (`transportErrors`), is logged
+once per distinct text per media peer, and is handled like a failed send;
+signalling and other media errors are logged once but not counted. With a stalled receiver the sender holds at most the send buffer plus
 one message, and the whole path at most the two buffers plus two messages
 (`tst_media_transport`; 159,137 bytes measured against a 215,330-byte bound,
 where libdatachannel's defaults let 1,376,067 bytes pile up).

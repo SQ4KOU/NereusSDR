@@ -103,11 +103,34 @@ public:
     virtual bool acceptDescription(const QString& sdp, const QString& type) = 0;
     virtual bool acceptCandidate(const QString& candidate, const QString& mid) = 0;
 
+    /// What became of one display message handed to submitDisplay().
+    enum class DisplaySendResult {
+        /// The transport library passed it to SCTP at once.
+        Sent,
+        /// The library took it but holds it until SCTP has room; it is still
+        /// sent, exactly once. At most one message is ever held this way.
+        Queued,
+        /// Not taken: the library still holds an earlier message. The caller
+        /// may offer it (or a newer one) again after displayWritable().
+        Busy,
+        /// Not taken, and never will be: not ready, invalid, or failed.
+        Refused,
+    };
+    Q_ENUM(DisplaySendResult)
+
     /// Send without waiting for transport backpressure. The adapter adds no
-    /// application-side queue. False can also mean libdatachannel buffered a
-    /// display message, so callers must not retry the same bytes solely from
-    /// the return value.
+    /// application-side queue. True when the message was taken (Sent or
+    /// Queued), so it will be delivered unless the network loses it.
     virtual bool sendDisplay(const QByteArray& message) = 0;
+    /// sendDisplay() with the outcome spelled out. A transport without a
+    /// library-side hold reports only Sent or Refused.
+    virtual DisplaySendResult submitDisplay(const QByteArray& message)
+    {
+        return sendDisplay(message) ? DisplaySendResult::Sent : DisplaySendResult::Refused;
+    }
+    /// True while the library still holds a display message it took, so a
+    /// new one would be Busy. displayWritable() follows when it clears.
+    virtual bool displayBusy() const { return false; }
     virtual bool sendRtp(const QByteArray& packet) = 0;
 
     virtual bool isReady() const = 0;
@@ -134,6 +157,12 @@ signals:
     /// recovery never depends on matching an error string.
     void connectionFailed(const QString& message);
     void errorOccurred(const QString& message);
+    /// The display message the library held has gone to SCTP; the display
+    /// channel takes a new message again.
+    void displayWritable();
+    /// An error on the display channel itself (a failed display send or the
+    /// display channel's own error). Also reported through errorOccurred.
+    void displayErrorOccurred(const QString& message);
 };
 
 } // namespace NereusSDR

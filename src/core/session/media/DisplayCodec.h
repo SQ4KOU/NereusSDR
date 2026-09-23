@@ -83,6 +83,8 @@ public:
     /// or a context-shape change without a newer generation. A first frame,
     /// context change, every 120th frame, and requestKeyframe=true keyframe.
     QByteArray encode(const DisplayCodecFrame& frame, bool requestKeyframe = false);
+    /// Whether the frame the last non-empty encode() returned is a keyframe.
+    bool lastEncodedKeyframe() const { return m_hasHistory && m_sinceKeyframe == 0; }
     void reset();
 
 private:

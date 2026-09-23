@@ -54,17 +54,22 @@ struct DaemonAudioDiagnostics {
 };
 
 /// Real display traffic for the current media peer (R-R3-03, R-R3-05).
-/// Sizes are spectrum frames the transport accepted; fragments are SCTP DATA
-/// chunks, ceil(bytes / IMediaTransport::kSctpDataPayloadBytes). A refusal
-/// is a display message (spectrum frame or PureSignal chunk) the transport
-/// did not take at once; it is never retried. Every count starts again with
-/// each new media peer.
+/// Sizes are spectrum frames the transport took, including one the library
+/// queued; fragments are SCTP DATA chunks, ceil(bytes /
+/// IMediaTransport::kSctpDataPayloadBytes). A refusal is a display message
+/// (spectrum frame or PureSignal chunk) offered to the transport and not
+/// taken: a refused spectrum frame is dropped, a PureSignal chunk refused
+/// only because the channel was busy is offered again, never having been
+/// sent. queuedLate counts messages the library took but held until SCTP
+/// had room; each is still sent once. Transport errors are errors on the
+/// display channel only. Every count starts again with each new media peer.
 struct DaemonDisplayDiagnostics {
     quint32 displayMaxKeyframeBytes = 0;
     quint32 displayMaxDeltaBytes = 0;
     quint32 displayMaxFragments = 0;
     quint64 displaySendRefusals = 0;
     quint64 displayTransportErrors = 0;
+    quint64 displayQueuedLate = 0;
 
     bool operator==(const DaemonDisplayDiagnostics&) const = default;
 };
@@ -178,8 +183,9 @@ private:
     void maybeLogAudioDiagnostics(bool final);
     DaemonAudioDiagnostics snapshotAudioDiagnostics() const;
     void resetAudioSession();
-    void recordDisplaySent(const QByteArray& spectrumFrame);
+    void recordDisplaySent(const QByteArray& spectrumFrame, bool keyframe);
     void onMediaTransportError(const QString& message);
+    void onMediaPeerError(const QString& message);
     void logDisplayDiagnostics(bool final);
     bool sendControl(const QJsonObject& payload) const;
     quint32 nextContextGeneration();

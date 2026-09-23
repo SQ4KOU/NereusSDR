@@ -281,6 +281,18 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId)
                     emit self->errorOccurred(message);
                 }
             });
+    connect(transport, &IMediaTransport::displayErrorOccurred, this,
+            [self, isCurrentGeneration](const QString& message) {
+                if (isCurrentGeneration()) {
+                    emit self->displayErrorOccurred(message);
+                }
+            });
+    connect(transport, &IMediaTransport::displayWritable, this,
+            [self, isCurrentGeneration] {
+                if (isCurrentGeneration()) {
+                    emit self->displayWritable();
+                }
+            });
 
     const bool backendStarted = transport->start({role, d->audioSsrc});
     if (!self || !self->isCurrent(transport, generation)) {
@@ -421,6 +433,20 @@ bool MediaPeer::sendDisplay(const QByteArray& message)
     return d->started && d->transport && !message.isEmpty()
         && message.size() <= IMediaTransport::kMaxDisplayMessageBytes
         && d->transport->sendDisplay(message);
+}
+
+IMediaTransport::DisplaySendResult MediaPeer::submitDisplay(const QByteArray& message)
+{
+    if (!d->started || !d->transport || message.isEmpty()
+        || message.size() > IMediaTransport::kMaxDisplayMessageBytes) {
+        return IMediaTransport::DisplaySendResult::Refused;
+    }
+    return d->transport->submitDisplay(message);
+}
+
+bool MediaPeer::displayBusy() const
+{
+    return d->started && d->transport && d->transport->displayBusy();
 }
 
 bool MediaPeer::sendRtp(const QByteArray& packet)

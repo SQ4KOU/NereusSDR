@@ -45,6 +45,8 @@ struct CallbackEvent {
         Description,
         Candidate,
         Error,
+        DisplayError,
+        DisplayWritable,
         PeerClosed,
         PeerFailed,
     };
@@ -182,11 +184,18 @@ void bindDataChannel(const std::shared_ptr<rtc::DataChannel>& channel,
                      const std::weak_ptr<CallbackBridge>& weak)
 {
     channel->onError([weak](std::string error) {
-        queueEvent(weak, CallbackEvent::Kind::Error, std::move(error));
+        queueEvent(weak, CallbackEvent::Kind::DisplayError, std::move(error));
     });
     channel->onClosed([weak] {
         queueEvent(weak, CallbackEvent::Kind::PeerClosed,
                    "display data channel closed");
+    });
+    // Threshold 0: libdatachannel calls this when the one message it held
+    // for SCTP has gone (src/impl/channel.cpp:52-60), which is when the
+    // display channel takes a new message again.
+    channel->setBufferedAmountLowThreshold(0);
+    channel->onBufferedAmountLow([weak] {
+        queueEvent(weak, CallbackEvent::Kind::DisplayWritable);
     });
     channel->onMessage(
         [weak](rtc::binary data) { queueDisplay(weak, std::move(data)); },
@@ -584,25 +593,51 @@ bool LibDataChannelMediaTransport::acceptCandidate(const QString& candidate,
 
 bool LibDataChannelMediaTransport::sendDisplay(const QByteArray& message)
 {
+    const DisplaySendResult result = submitDisplay(message);
+    return result == DisplaySendResult::Sent || result == DisplaySendResult::Queued;
+}
+
+IMediaTransport::DisplaySendResult
+LibDataChannelMediaTransport::submitDisplay(const QByteArray& message)
+{
     if (!d->ready || !d->display || message.isEmpty()
-        || message.size() > kMaxDisplayMessageBytes
-        || d->display->bufferedAmount() != 0) {
-        return false;
+        || message.size() > kMaxDisplayMessageBytes) {
+        return DisplaySendResult::Refused;
+    }
+    // Latest-value-wins: while the library still holds a message, a new one
+    // is not taken, so at most one message ever waits behind SCTP.
+    if (d->display->bufferedAmount() != 0) {
+        return DisplaySendResult::Busy;
     }
     const std::shared_ptr<CallbackBridge> bridge = d->bridge;
     if (!bridge) {
-        return false;
+        return DisplaySendResult::Refused;
     }
     bridge->submittedDisplayPayloadBytes.fetch_add(
         static_cast<quint64>(message.size()), std::memory_order_relaxed);
     try {
+        // False means usrsctp had no room (its send buffer counts data not
+        // yet acknowledged, usrsctp fec583d5 sctp_output.c:14081-14099), so
+        // libdatachannel queued the message and sends it when room appears
+        // (v0.24.5 src/impl/sctptransport.cpp:374-393).
         return d->display->send(
-            reinterpret_cast<const rtc::byte*>(message.constData()),
-            static_cast<std::size_t>(message.size()));
+                   reinterpret_cast<const rtc::byte*>(message.constData()),
+                   static_cast<std::size_t>(message.size()))
+            ? DisplaySendResult::Sent : DisplaySendResult::Queued;
     } catch (const std::exception& error) {
-        emit errorOccurred(QString::fromUtf8(error.what()));
-        return false;
+        const QString text = QString::fromUtf8(error.what());
+        const QPointer<LibDataChannelMediaTransport> self(this);
+        emit errorOccurred(text);
+        if (self) {
+            emit displayErrorOccurred(text);
+        }
+        return DisplaySendResult::Refused;
     }
+}
+
+bool LibDataChannelMediaTransport::displayBusy() const
+{
+    return d->ready && d->display && d->display->bufferedAmount() != 0;
 }
 
 bool LibDataChannelMediaTransport::sendRtp(const QByteArray& packet)
@@ -721,6 +756,17 @@ void LibDataChannelMediaTransport::drainCallbacks()
             break;
         case CallbackEvent::Kind::Error:
             emit errorOccurred(QString::fromStdString(event.first));
+            break;
+        case CallbackEvent::Kind::DisplayError: {
+            const QString text = QString::fromStdString(event.first);
+            emit errorOccurred(text);
+            if (isCurrentGeneration()) {
+                emit displayErrorOccurred(text);
+            }
+            break;
+        }
+        case CallbackEvent::Kind::DisplayWritable:
+            emit displayWritable();
             break;
         case CallbackEvent::Kind::PeerFailed:
             // Terminal peer connectivity is a recovery decision for the

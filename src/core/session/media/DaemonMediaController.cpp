@@ -40,12 +40,9 @@ constexpr float kFftDbmFloor = -200.0f;
 constexpr float kFftPowerFloor = 1.0e-20f;
 constexpr qint64 kAudioDiagnosticsLogIntervalMs = 2'000;
 constexpr int kDisplayDiagnosticsLogIntervalMs = 10'000;
-// Distinct transport error texts logged per media peer; later ones are
-// still counted in displayTransportErrors.
+// Distinct media error texts logged per media peer; later display-channel
+// errors are still counted in displayTransportErrors.
 constexpr qsizetype kMaxLoggedTransportErrorKinds = 16;
-// display-codec-v1.md byte layout: flags at offset 5, 0x01 = keyframe.
-constexpr qsizetype kDisplayCodecFlagsOffset = 5;
-constexpr quint8 kDisplayCodecKeyframeFlag = 0x01;
 
 bool exactKeys(const QJsonObject& object, std::initializer_list<const char*> keys)
 {
@@ -425,24 +422,24 @@ QString daemonDisplayDiagnosticsLine(const DaemonDisplayDiagnostics& diagnostics
 {
     return QStringLiteral("largestKeyframe=%1 bytes/%2 fragments"
                           " largestDelta=%3 bytes/%4 fragments"
-                          " maxFragments=%5 sendRefusals=%6 transportErrors=%7")
+                          " maxFragments=%5 sendRefusals=%6 transportErrors=%7"
+                          " queuedLate=%8")
         .arg(diagnostics.displayMaxKeyframeBytes)
         .arg(IMediaTransport::sctpFragmentCount(diagnostics.displayMaxKeyframeBytes))
         .arg(diagnostics.displayMaxDeltaBytes)
         .arg(IMediaTransport::sctpFragmentCount(diagnostics.displayMaxDeltaBytes))
         .arg(diagnostics.displayMaxFragments)
         .arg(diagnostics.displaySendRefusals)
-        .arg(diagnostics.displayTransportErrors);
+        .arg(diagnostics.displayTransportErrors)
+        .arg(diagnostics.displayQueuedLate);
 }
 
-void DaemonMediaController::recordDisplaySent(const QByteArray& spectrumFrame)
+void DaemonMediaController::recordDisplaySent(const QByteArray& spectrumFrame, bool keyframe)
 {
-    if (spectrumFrame.size() <= kDisplayCodecFlagsOffset) {
+    if (spectrumFrame.isEmpty()) {
         return;
     }
     const auto bytes = static_cast<quint32>(spectrumFrame.size());
-    const bool keyframe = (static_cast<quint8>(spectrumFrame.at(kDisplayCodecFlagsOffset))
-                           & kDisplayCodecKeyframeFlag) != 0;
     quint32& largest = keyframe ? m_displayDiagnostics.displayMaxKeyframeBytes
                                 : m_displayDiagnostics.displayMaxDeltaBytes;
     largest = std::max(largest, bytes);
@@ -451,12 +448,26 @@ void DaemonMediaController::recordDisplaySent(const QByteArray& spectrumFrame)
         static_cast<quint32>(IMediaTransport::sctpFragmentCount(bytes)));
 }
 
-void DaemonMediaController::onMediaTransportError(const QString& message)
+void DaemonMediaController::onMediaPeerError(const QString& message)
 {
-    ++m_displayDiagnostics.displayTransportErrors;
+    // Signalling, factory and audio errors: logged once per text, not
+    // counted as display errors and no reason to restart the display.
     if (!m_loggedTransportErrorKinds.contains(message)
         && m_loggedTransportErrorKinds.size() < kMaxLoggedTransportErrorKinds) {
         m_loggedTransportErrorKinds.insert(message);
+        qCWarning(lcDaemonMedia).noquote()
+            << QStringLiteral("media peer error: %1 (repeats are not logged)")
+                   .arg(message.left(256));
+    }
+}
+
+void DaemonMediaController::onMediaTransportError(const QString& message)
+{
+    ++m_displayDiagnostics.displayTransportErrors;
+    const QString kind = QStringLiteral("display:") + message;
+    if (!m_loggedTransportErrorKinds.contains(kind)
+        && m_loggedTransportErrorKinds.size() < kMaxLoggedTransportErrorKinds) {
+        m_loggedTransportErrorKinds.insert(kind);
         qCWarning(lcDaemonMedia).noquote()
             << QStringLiteral("media transport error: %1 (repeats are counted, not logged)")
                    .arg(message.left(256));
@@ -817,7 +828,22 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
     connect(peer, &MediaPeer::errorOccurred, this,
             [this, peer, peerEpoch](const QString& message) {
         if (m_peer.get() == peer && m_epoch == peerEpoch) {
+            onMediaPeerError(message);
+        }
+    });
+    connect(peer, &MediaPeer::displayErrorOccurred, this,
+            [this, peer, peerEpoch](const QString& message) {
+        if (m_peer.get() == peer && m_epoch == peerEpoch) {
             onMediaTransportError(message);
+        }
+    });
+    // The display channel took its held message: offer the next one now
+    // rather than at the next tick, so a PureSignal snapshot advances at
+    // the link's acknowledgement pace. Nothing waits here; the tick sends
+    // whatever is latest.
+    connect(peer, &MediaPeer::displayWritable, this, [this, peer, peerEpoch]() {
+        if (m_peer.get() == peer && m_epoch == peerEpoch) {
+            onSendTick();
         }
     });
     connect(peer, &MediaPeer::controlReady, this,
@@ -1472,6 +1498,12 @@ bool DaemonMediaController::trySendPs3(MediaPeer* peer, quint64 epoch, qint64 no
         promoteLatestPs3Frame();
         return false;
     }
+    // While the library still holds a display message the chunk would not
+    // be taken. Keep it, spend nothing, and offer it again when the display
+    // channel clears (displayWritable) or at a later tick.
+    if (peer->displayBusy()) {
+        return false;
+    }
     if (displayPacingRequired()
         && (!m_displayPacerInitialized
             || !m_displayPacer.canSpendPs3(static_cast<quint64>(chunk.size()), nowNs))) {
@@ -1485,15 +1517,27 @@ bool DaemonMediaController::trySendPs3(MediaPeer* peer, quint64 epoch, qint64 no
     m_ps3CurrentChunks.removeFirst();
     m_lastDisplayAttemptWasPs3 = true;
     const QPointer<DaemonMediaController> self(this);
-    const bool sent = peer->sendDisplay(chunk);
+    const IMediaTransport::DisplaySendResult result = peer->submitDisplay(chunk);
     if (!self || m_peer.get() != peer || m_epoch != epoch) {
         return true;
     }
-    if (!sent) {
-        // A rejected send may already have buffered bytes. Never retry the
-        // failed sequence or any of its remaining chunks.
+    switch (result) {
+    case IMediaTransport::DisplaySendResult::Sent:
+        break;
+    case IMediaTransport::DisplaySendResult::Queued:
+        // Taken: the library sends it once SCTP has room.
+        ++m_displayDiagnostics.displayQueuedLate;
+        break;
+    case IMediaTransport::DisplaySendResult::Busy:
+        // Not taken, so nothing was sent: the same chunk goes next.
+        ++m_displayDiagnostics.displaySendRefusals;
+        m_ps3CurrentChunks.prepend(chunk);
+        break;
+    case IMediaTransport::DisplaySendResult::Refused:
+        // Never retry a failed sequence or any of its remaining chunks.
         ++m_displayDiagnostics.displaySendRefusals;
         m_ps3CurrentChunks.clear();
+        break;
     }
     if (m_ps3CurrentChunks.isEmpty()) {
         promoteLatestPs3Frame();
@@ -1503,7 +1547,9 @@ bool DaemonMediaController::trySendPs3(MediaPeer* peer, quint64 epoch, qint64 no
 
 bool DaemonMediaController::trySendSpectrum(MediaPeer* peer, quint64 epoch, qint64 nowNs)
 {
-    if (m_endpoints.empty()) {
+    // A frame would not be taken while the library holds a display message;
+    // each endpoint keeps only its latest input until the channel clears.
+    if (m_endpoints.empty() || peer->displayBusy()) {
         return false;
     }
     const QList<quint32> ids = endpointIds();
@@ -1555,6 +1601,7 @@ bool DaemonMediaController::trySendSpectrum(MediaPeer* peer, quint64 epoch, qint
             continue;
         }
         const QByteArray bytes = current.encoder.encode(*reduced, current.forceKeyframe);
+        const bool keyframe = current.encoder.lastEncodedKeyframe();
         const quint32 generation = current.endpoint.context().codec.contextGeneration;
         const quint64 samples = static_cast<quint64>(reduced->traceDbm.size())
             + static_cast<quint64>(reduced->waterfallDbm.size())
@@ -1574,21 +1621,28 @@ bool DaemonMediaController::trySendSpectrum(MediaPeer* peer, quint64 epoch, qint
         current.forceKeyframe = false;
         m_lastDisplayAttemptWasPs3 = false;
         const QPointer<DaemonMediaController> self(this);
-        const bool sent = peer->sendDisplay(bytes);
+        const IMediaTransport::DisplaySendResult result = peer->submitDisplay(bytes);
         if (!self || m_peer.get() != peer || m_epoch != epoch) { return true; }
+        const bool sent = result == IMediaTransport::DisplaySendResult::Sent
+            || result == IMediaTransport::DisplaySendResult::Queued;
         if (sent) {
-            recordDisplaySent(bytes);
+            // A queued frame is still delivered, so it is measured and the
+            // delta chain stands.
+            recordDisplaySent(bytes, keyframe);
+            if (result == IMediaTransport::DisplaySendResult::Queued) {
+                ++m_displayDiagnostics.displayQueuedLate;
+            }
         } else {
-            // The bounded transport is full (or failed): this frame is gone,
-            // never queued behind the link.
+            // Not taken (busy or failed): this frame is gone, never queued
+            // behind the link.
             ++m_displayDiagnostics.displaySendRefusals;
         }
         it = m_endpoints.find(endpointId);
         if (!sent && it != m_endpoints.end() && it->second.revision == revision
             && it->second.endpoint.configured()
             && it->second.endpoint.context().codec.contextGeneration == generation) {
-            // A false return can mean the backend accepted/buffered bytes.
-            // Do not resend this sequence; force a fresh keyframe later.
+            // The receiver never gets this frame: do not resend it, and
+            // restart the delta chain from a keyframe.
             it->second.forceKeyframe = true;
         }
         return true;

@@ -36,6 +36,7 @@
 #include <QJsonDocument>
 #include <QPointer>
 #include <QScopeGuard>
+#include <QSet>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 
@@ -81,11 +82,55 @@ public:
     bool acceptCandidate(const QString&, const QString&) override { return true; }
     bool sendDisplay(const QByteArray& bytes) override
     {
+        if (sctpWindowBytes > 0) {
+            const DisplaySendResult result = submitDisplay(bytes);
+            return result == DisplaySendResult::Sent || result == DisplaySendResult::Queued;
+        }
         if (!readyState) { return false; }
         displays.append(bytes);
         const auto callback = onDisplaySend;
         if (callback) { return callback(); }
         return true;
+    }
+    // With sctpWindowBytes set, models libdatachannel over usrsctp on a
+    // link whose acknowledgements have not come back: SCTP takes a message
+    // only while it fits beside the unacknowledged bytes; otherwise the
+    // library holds one message, and a further one is Busy until the held
+    // message goes out. `displays` records what went to SCTP, in order.
+    DisplaySendResult submitDisplay(const QByteArray& bytes) override
+    {
+        if (sctpWindowBytes <= 0 && nextSubmitResult) {
+            const DisplaySendResult result = *std::exchange(nextSubmitResult, std::nullopt);
+            if (readyState && (result == DisplaySendResult::Sent
+                               || result == DisplaySendResult::Queued)) {
+                displays.append(bytes);
+            }
+            return result;
+        }
+        if (sctpWindowBytes <= 0) { return IMediaTransport::submitDisplay(bytes); }
+        if (!readyState) { return DisplaySendResult::Refused; }
+        if (!heldDisplay.isEmpty()) {
+            ++busyDisplays;
+            return DisplaySendResult::Busy;
+        }
+        if (unacknowledgedBytes + bytes.size() <= sctpWindowBytes) {
+            unacknowledgedBytes += bytes.size();
+            displays.append(bytes);
+            return DisplaySendResult::Sent;
+        }
+        heldDisplay = bytes;
+        ++queuedDisplays;
+        return DisplaySendResult::Queued;
+    }
+    bool displayBusy() const override { return sctpWindowBytes > 0 && !heldDisplay.isEmpty(); }
+    // The peer acknowledges everything outstanding; a held message goes out.
+    void acknowledgeDisplayWindow()
+    {
+        unacknowledgedBytes = 0;
+        if (heldDisplay.isEmpty()) { return; }
+        unacknowledgedBytes = heldDisplay.size();
+        displays.append(std::exchange(heldDisplay, {}));
+        emit displayWritable();
     }
     bool sendRtp(const QByteArray& packet) override
     {
@@ -103,6 +148,13 @@ public:
     QList<QByteArray> rtpPackets;
     int rtpAttempts{0};
     std::function<bool()> onDisplaySend;
+    qsizetype sctpWindowBytes{0};
+    qsizetype unacknowledgedBytes{0};
+    QByteArray heldDisplay;
+    int busyDisplays{0};
+    int queuedDisplays{0};
+    // The outcome of the next submitDisplay() outside window mode.
+    std::optional<DisplaySendResult> nextSubmitResult;
 };
 
 class ClosingControlTransport final : public Test::LoopbackTransport {
@@ -504,6 +556,7 @@ private slots:
     void mediaPeerReplacementDoesNotMintDisplayCredit();
     void mixedSpectrumAndPs3StayWithinInjectedIntervalBoundsAndBothProgress();
     void failedMiddlePs3ChunkDropsRemainderPromotesLatestAndDoesNotRefund();
+    void ps3SnapshotCompletesWhileAcknowledgementsLag();
     void radioProductionRestartWithinEpochDoesNotMintDisplayCredit();
     void replayedAllocationResultCanSynchronouslyRetireControllerState();
     void sourceRetirementPublishesZeroChargeAtLatestOperationRevision();
@@ -941,11 +994,32 @@ void TstDaemonMediaController::displayDiagnosticsMeasureSentFramesRefusalsAndErr
     sendOneFrame();
     QVERIFY(!isKeyframe(harness.mediaTransport->displays.constLast()));
 
-    // Transport errors: each counts, each distinct text is logged once, and
-    // each forces the next frame to be a keyframe like a failed send.
-    emit harness.mediaTransport->errorOccurred(QStringLiteral("sctp send failed"));
-    emit harness.mediaTransport->errorOccurred(QStringLiteral("sctp send failed"));
-    emit harness.mediaTransport->errorOccurred(QStringLiteral("dtls record rejected"));
+    // A frame the library takes but holds until SCTP has room is still
+    // delivered: measured, counted as queued late, not refused, and the
+    // delta chain goes on.
+    harness.mediaTransport->nextSubmitResult = IMediaTransport::DisplaySendResult::Queued;
+    sendOneFrame();
+    QVERIFY(!isKeyframe(harness.mediaTransport->displays.constLast()));
+    QCOMPARE(harness.controller.displayDiagnostics().displayQueuedLate, quint64(1));
+    QCOMPARE(harness.controller.displayDiagnostics().displaySendRefusals, quint64(1));
+    sendOneFrame();
+    QVERIFY(!isKeyframe(harness.mediaTransport->displays.constLast()));
+
+    // A media error that is not about the display channel (signalling, the
+    // transport factory, audio) is logged once but is not a display error.
+    emit harness.mediaTransport->errorOccurred(QStringLiteral("remote candidate rejected"));
+    emit harness.mediaTransport->errorOccurred(QStringLiteral("remote candidate rejected"));
+    QCOMPARE(harness.controller.displayDiagnostics().displayTransportErrors, quint64(0));
+    QCOMPARE(g_daemonMediaMessages.filter(QStringLiteral("remote candidate rejected")).size(), 1);
+    sendOneFrame();
+    QVERIFY(!isKeyframe(harness.mediaTransport->displays.constLast()));
+
+    // Display-channel errors: each counts, each distinct text is logged
+    // once, and each forces the next frame to be a keyframe like a failed
+    // send.
+    emit harness.mediaTransport->displayErrorOccurred(QStringLiteral("sctp send failed"));
+    emit harness.mediaTransport->displayErrorOccurred(QStringLiteral("sctp send failed"));
+    emit harness.mediaTransport->displayErrorOccurred(QStringLiteral("dtls record rejected"));
     diagnostics = harness.controller.displayDiagnostics();
     QCOMPARE(diagnostics.displayTransportErrors, quint64(3));
     QCOMPARE(diagnostics.displaySendRefusals, quint64(1));
@@ -983,7 +1057,8 @@ void TstDaemonMediaController::displayDiagnosticsLineReportsBytesAndFragments()
     QCOMPARE(daemonDisplayDiagnosticsLine(small),
              QStringLiteral("largestKeyframe=2977 bytes/4 fragments"
                             " largestDelta=1800 bytes/3 fragments"
-                            " maxFragments=4 sendRefusals=0 transportErrors=0"));
+                            " maxFragments=4 sendRefusals=0 transportErrors=0"
+                            " queuedLate=0"));
 
     DaemonDisplayDiagnostics largest;
     largest.displayMaxKeyframeBytes = 9361; // 4096/4096 points with a 768-point 3D row
@@ -991,10 +1066,12 @@ void TstDaemonMediaController::displayDiagnosticsLineReportsBytesAndFragments()
     largest.displayMaxFragments = 11;
     largest.displaySendRefusals = 7;
     largest.displayTransportErrors = 2;
+    largest.displayQueuedLate = 3;
     QCOMPARE(daemonDisplayDiagnosticsLine(largest),
              QStringLiteral("largestKeyframe=9361 bytes/11 fragments"
                             " largestDelta=9361 bytes/11 fragments"
-                            " maxFragments=11 sendRefusals=7 transportErrors=2"));
+                            " maxFragments=11 sendRefusals=7 transportErrors=2"
+                            " queuedLate=3"));
     QCOMPARE(IMediaTransport::sctpFragmentCount(876), quint64(1));
     QCOMPARE(IMediaTransport::sctpFragmentCount(877), quint64(2));
     QCOMPARE(IMediaTransport::sctpFragmentCount(65536), quint64(75));
@@ -1212,6 +1289,64 @@ void TstDaemonMediaController::failedMiddlePs3ChunkDropsRemainderPromotesLatestA
         if (frame) { completed.append(frame->sequence); }
     }
     QCOMPARE(completed, QList<quint64>({2}));
+    harness.finish();
+}
+
+// R-R3-03/R-R3-05/R-R3-09: over a link whose acknowledgements take longer
+// than one send tick, SCTP takes a 49 KB PureSignal chunk only beside
+// little unacknowledged data. The library then holds one chunk and the next
+// is Busy. The snapshot must still complete: a held chunk counts as sent,
+// a Busy chunk waits for the display channel to clear, nothing is resent,
+// and a newer snapshot still replaces the one waiting to start.
+void TstDaemonMediaController::ps3SnapshotCompletesWhileAcknowledgementsLag()
+{
+    Harness harness;
+    harness.useManualDisplayTicks();
+    harness.establishSession();
+    harness.startReadyPeer();
+    harness.mediaTransport->sctpWindowBytes = IMediaTransport::kSctpSendBufferBytes;
+    PureSignalSessionFacade* facade = harness.radio.pureSignalFacade();
+    facade->setRemoteAmpViewSubscribed(true);
+    const quint64 generation = facade->displayGeneration();
+    QCOMPARE(Ps3DisplayCodec::encode(maximumPs3Snapshot(generation, 1)).size(), 3);
+
+    facade->displaySnapshotReady(maximumPs3Snapshot(generation, 1));
+    harness.sendDisplayTick();
+    QCOMPARE(harness.mediaTransport->displays.size(), 1);
+    harness.sendDisplayTick(); // the second chunk does not fit: the library holds it
+    QVERIFY(!harness.mediaTransport->heldDisplay.isEmpty());
+    for (int tick = 0; tick < 5; ++tick) { harness.sendDisplayTick(); }
+    QCOMPARE(harness.mediaTransport->displays.size(), 1);
+
+    // Two newer snapshots arrive while the first is still going out; only
+    // the newest waits to follow it.
+    facade->displaySnapshotReady(maximumPs3Snapshot(generation, 2));
+    facade->displaySnapshotReady(maximumPs3Snapshot(generation, 3));
+
+    for (int round = 0; round < 20 && harness.mediaTransport->displays.size() < 6; ++round) {
+        harness.mediaTransport->acknowledgeDisplayWindow();
+        QCoreApplication::processEvents();
+        harness.sendDisplayTick();
+    }
+    const QList<QByteArray>& sent = harness.mediaTransport->displays;
+    QCOMPARE(sent.size(), 6);
+    QCOMPARE(QSet<QByteArray>(sent.cbegin(), sent.cend()).size(), 6); // nothing resent
+    Ps3DisplayAssembler assembler(generation);
+    QList<quint64> completed;
+    for (const QByteArray& bytes : sent) {
+        QString error;
+        const auto frame = assembler.accept(bytes, &error);
+        QVERIFY2(error.isEmpty(), qPrintable(error));
+        if (frame) { completed.append(frame->sequence); }
+    }
+    QCOMPARE(completed, QList<quint64>({1, 3}));
+    // Core never offered a chunk while the library held one, and every held
+    // chunk is counted as queued late rather than refused.
+    QCOMPARE(harness.mediaTransport->busyDisplays, 0);
+    QVERIFY(harness.mediaTransport->queuedDisplays > 0);
+    const DaemonDisplayDiagnostics diagnostics = harness.controller.displayDiagnostics();
+    QCOMPARE(diagnostics.displayQueuedLate, quint64(harness.mediaTransport->queuedDisplays));
+    QCOMPARE(diagnostics.displaySendRefusals, quint64(0));
     harness.finish();
 }
 

@@ -43,6 +43,8 @@ public:
 
     bool acceptControl(const QJsonObject& control);
     bool sendDisplay(const QByteArray& message);
+    IMediaTransport::DisplaySendResult submitDisplay(const QByteArray& message);
+    bool displayBusy() const;
     bool sendRtp(const QByteArray& packet);
 
     bool isReady() const;
@@ -58,6 +60,8 @@ signals:
     void closed();
     void connectionFailed(const QString& message);
     void errorOccurred(const QString& message);
+    void displayWritable();
+    void displayErrorOccurred(const QString& message);
 
 private:
     struct Private;

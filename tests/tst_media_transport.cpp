@@ -10,6 +10,7 @@
 
 #include <QElapsedTimer>
 #include <QPointer>
+#include <QProcess>
 #include <QSet>
 #include <QSignalSpy>
 #include <QtTest>
@@ -22,6 +23,8 @@ using namespace NereusSDR;
 namespace {
 
 constexpr quint32 kTestAudioSsrc = 0x4e523301U;
+// Set only in the child process that checks when SCTP settings are applied.
+constexpr const char* kFirstPeerChildVariable = "NEREUS_TST_MEDIA_TRANSPORT_FIRST_PEER";
 
 } // namespace
 
@@ -29,10 +32,12 @@ class TestMediaTransport : public QObject {
     Q_OBJECT
 
 private slots:
-    // Must stay first: it observes the process before any peer exists.
+    // Observes a fresh child process, so its place in the list does not
+    // matter and it can run any number of times.
     void sctpSettingsAppliedOnceBeforeFirstPeer();
     void encryptedPeersCarryDisplayAndRtp();
     void stalledReceiverRefusesDisplayInsteadOfQueueing();
+    void heldDisplayMessageIsTakenAndSignalsWritable();
     void queuedDisplayOverflowDropsOldestAndCountsIt();
     void telemetryCountsValidatedTrafficAndResets();
     void boundedInputsRefuseBeforeTransport();
@@ -108,6 +113,28 @@ QByteArray TestMediaTransport::rtpPacket(quint16 sequence, qsizetype size,
 
 void TestMediaTransport::sctpSettingsAppliedOnceBeforeFirstPeer()
 {
+    // The settings are process-wide and applied once, so only a process in
+    // which no peer has existed yet can show when they were applied. Run the
+    // check in a fresh copy of this test binary running only this slot.
+    if (!qEnvironmentVariableIsSet(kFirstPeerChildVariable)) {
+        QProcess child;
+        QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+        environment.insert(QString::fromLatin1(kFirstPeerChildVariable), QStringLiteral("1"));
+        child.setProcessEnvironment(environment);
+        child.setProcessChannelMode(QProcess::MergedChannels);
+        child.start(QCoreApplication::applicationFilePath(),
+                    {QStringLiteral("sctpSettingsAppliedOnceBeforeFirstPeer")});
+        QVERIFY2(child.waitForStarted(10'000), qPrintable(child.errorString()));
+        QVERIFY2(child.waitForFinished(60'000), "first-peer child did not finish");
+        const QByteArray output = child.readAll();
+        QVERIFY2(child.exitStatus() == QProcess::NormalExit && child.exitCode() == 0,
+                 output.constData());
+        QVERIFY2(output.contains("PASS   : TestMediaTransport::"
+                                 "sctpSettingsAppliedOnceBeforeFirstPeer()"),
+                 output.constData());
+        return;
+    }
+
     const MediaSctpSettingsRecord before = mediaSctpSettingsRecord();
     QCOMPARE(before.applications, 0);
     QCOMPARE(before.peersCreated, quint64(0));
@@ -215,11 +242,15 @@ void TestMediaTransport::stalledReceiverRefusesDisplayInsteadOfQueueing()
     sinceAccepted.start();
     QElapsedTimer overall;
     overall.start();
+    // "Accepted" is a frame SCTP took at once, as it was before a frame the
+    // library holds was reported as taken; a held frame still counts in
+    // submittedDisplayPayloadBytes.
     while (sinceAccepted.elapsed() < 1000 && overall.elapsed() < 60'000) {
-        if (offerer.sendDisplay(frame)) {
+        const IMediaTransport::DisplaySendResult result = offerer.submitDisplay(frame);
+        if (result == IMediaTransport::DisplaySendResult::Sent) {
             ++accepted;
             sinceAccepted.restart();
-        } else {
+        } else if (result != IMediaTransport::DisplaySendResult::Queued) {
             ++refused;
         }
         QTest::qWait(1);
@@ -249,6 +280,43 @@ void TestMediaTransport::stalledReceiverRefusesDisplayInsteadOfQueueing()
     for (const QList<QVariant>& arguments : displayReceived) {
         QCOMPARE(arguments.at(0).toByteArray(), frame);
     }
+
+    offerer.stop();
+    answerer.stop();
+}
+
+// R-R3-03/R-R3-05: usrsctp takes a message only while it fits beside the
+// data not yet acknowledged, and its send buffer is the 64 KiB maximum
+// message. A second large message sent before the first is acknowledged is
+// taken by libdatachannel and held (Queued), not lost; a third is Busy; the
+// display channel reports writable once the held message has gone, and the
+// receiver gets both messages.
+void TestMediaTransport::heldDisplayMessageIsTakenAndSignalsWritable()
+{
+    LibDataChannelMediaTransport offerer;
+    LibDataChannelMediaTransport answerer;
+    QSignalSpy displayReceived(&answerer, &IMediaTransport::displayReceived);
+    QSignalSpy writable(&offerer, &IMediaTransport::displayWritable);
+    startPair(offerer, answerer);
+
+    constexpr qsizetype kChunkBytes = 49'216; // one PureSignal display chunk
+    const QByteArray first(kChunkBytes, char(0x11));
+    const QByteArray second(kChunkBytes, char(0x22));
+    const QByteArray third(kChunkBytes, char(0x33));
+    QCOMPARE(offerer.submitDisplay(first), IMediaTransport::DisplaySendResult::Sent);
+    QCOMPARE(offerer.submitDisplay(second), IMediaTransport::DisplaySendResult::Queued);
+    QVERIFY(offerer.displayBusy());
+    QCOMPARE(offerer.submitDisplay(third), IMediaTransport::DisplaySendResult::Busy);
+
+    QTRY_VERIFY_WITH_TIMEOUT(!writable.isEmpty(), 10'000);
+    QVERIFY(!offerer.displayBusy());
+    QTRY_COMPARE_WITH_TIMEOUT(displayReceived.count(), 2, 10'000);
+    QCOMPARE(displayReceived.at(0).at(0).toByteArray(), first);
+    QCOMPARE(displayReceived.at(1).at(0).toByteArray(), second);
+    // Busy was not taken: nothing more arrives.
+    QTest::qWait(200);
+    QCOMPARE(displayReceived.count(), 2);
+    QCOMPARE(offerer.telemetry()->submittedDisplayPayloadBytes, quint64(2 * kChunkBytes));
 
     offerer.stop();
     answerer.stop();
