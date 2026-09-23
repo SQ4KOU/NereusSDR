@@ -405,12 +405,12 @@ void RemoteDiagnosticsDialog::refreshCoreHostGraphs()
     setGraph(m_coreTemperatureGraph, history, nowMs, m_rangeSeconds, {
         {Metric::CoreHottestZoneCelsius, "Hottest sensor", "#ff8c00", "\u00A0°C"},
     });
-    // The name stays from the last sample that carried one.
-    if (!view.coreHost.hottestZoneName.isEmpty()) {
-        m_coreTemperatureGraph->setToolTip(
-            tr("The hottest temperature sensor on the Core computer: %1.")
-                .arg(view.coreHost.hottestZoneName));
-    }
+    // Only the current view names the sensor; without a name the tooltip is
+    // the generic one, so a previous Core's sensor name never lingers.
+    m_coreTemperatureGraph->setToolTip(view.coreHost.hottestZoneName.isEmpty()
+        ? tr("The hottest temperature sensor on the Core computer.")
+        : tr("The hottest temperature sensor on the Core computer: %1.")
+              .arg(view.coreHost.hottestZoneName));
 }
 
 void RemoteDiagnosticsDialog::refreshDetail()

@@ -366,6 +366,26 @@ private slots:
         refresh();
         QVERIFY(graphsShown());
 
+        // A different Core reports a temperature without naming its sensor:
+        // the tooltip must not carry the previous Core's sensor name.
+        now += 1000;
+        connect(QStringLiteral("unnamed-sensor Core"));
+        StationTelemetrySnapshot unnamed = sample;
+        unnamed.sequence = 1;
+        unnamed.sampledElapsedMs = 0;
+        unnamed.host.hottestZoneName.clear();
+        QVERIFY(server.sendTelemetry(unnamed, server.sessionEpoch()));
+        QTRY_COMPARE(controller.current().state, RemoteTelemetryView::State::Current);
+        QTRY_VERIFY(controller.current().coreHostReported);
+        refresh();
+        QVERIFY(graphsShown());
+        QVERIFY(controller.current().coreHost.hottestZoneName.isEmpty());
+        QCOMPARE(temperatureGraph->toolTip(),
+                 QStringLiteral("The hottest temperature sensor on the Core computer."));
+        QVERIFY(!temperatureGraph->toolTip().contains(QStringLiteral("soc-thermal")));
+        client.disconnectFromStation(QStringLiteral("reconnect"));
+        QTRY_COMPARE(controller.current().state, RemoteTelemetryView::State::Disconnected);
+
         // The next Core reports no load: the line again, whatever history holds.
         now += 1000;
         connect(QStringLiteral("older Core"));

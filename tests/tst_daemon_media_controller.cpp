@@ -547,7 +547,8 @@ private slots:
     void minorEightAudioContextsCarryEncoderOrReason();
     void configuredAudioBitrateReachesOfferAndContext();
     void minorEightPeerReceivesTodaysSpectrumContext();
-    void minorNineSpectrumContextsReportTheGrant();
+    void minorNinePeerReceivesTheGrant();
+    void currentMinorSpectrumContextsReportTheGrant();
     void localCaptureDuringConnectingGetsIdentityBeforeFirstAdcRow();
     void synchronousDisplayClosureRetiresDemandAndAllowsNewPeer_data();
     void synchronousDisplayClosureRetiresDemandAndAllowsNewPeer();
@@ -3271,10 +3272,83 @@ void TstDaemonMediaController::minorEightPeerReceivesTodaysSpectrumContext()
     peer->closeLink(QStringLiteral("test complete"));
 }
 
+// R-R3-01: a minor-9 GUI talking to today's Core (which negotiates down to
+// minor 9) still receives the grant in each spectrum context, with and
+// without wideband.
+void TstDaemonMediaController::minorNinePeerReceivesTheGrant()
+{
+    QVERIFY(kSessionProtocolMinor > kRemoteSpectrumGrantSessionProtocolMinor);
+    Harness h;
+    h.enableWidebandSource();
+    auto* station = new Test::LoopbackTransport(QStringLiteral("minor9-station"), this);
+    auto* peer = new Test::LoopbackTransport(QStringLiteral("minor9-peer"), this);
+    station->linkTo(peer);
+    h.server.acceptTransport(station);
+    peer->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor, kRemoteSpectrumGrantSessionProtocolMinor, 0,
+        QStringLiteral("minor-9 client"))));
+    peer->sendText(SessionMessages::encode(SessionMessages::authRequest(h.server.token())));
+    QTRY_VERIFY(h.server.mediaAvailable());
+    QVERIFY(h.server.remoteWidebandAvailable());
+    QVERIFY(h.server.spectrumGrantAvailable());
+    const auto send = [&](const QJsonObject& payload) {
+        SessionMessage message;
+        message.kind = SessionMessageKind::MediaControl;
+        message.mediaPayload = payload;
+        peer->sendText(SessionMessages::encode(message));
+    };
+    send({{QStringLiteral("op"), QStringLiteral("start")},
+          {QStringLiteral("connectionId"), QLatin1String(kConnectionId)}});
+    QTRY_VERIFY(h.mediaTransport);
+    h.mediaTransport->becomeReady();
+    const double centre = h.radio.streamCentreHz(h.streamIndex);
+    send(subscription(91, 1, h.sliceId, centre));
+    QJsonObject extended = subscription(92, 1, h.sliceId, centre);
+    extended.insert(QStringLiteral("extendedView"), true);
+    send(extended);
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 2);
+
+    const auto contextFor = [&](quint32 endpointId) {
+        QJsonObject latest;
+        for (const QByteArray& wire : peer->received()) {
+            SessionMessage message;
+            if (SessionMessages::decode(wire, &message)
+                && message.kind == SessionMessageKind::MediaControl
+                && message.mediaPayload.value(QStringLiteral("op")) == QLatin1String("context")
+                && message.mediaPayload.value(QStringLiteral("endpointId")).toInteger()
+                    == qint64{endpointId}) {
+                latest = message.mediaPayload;
+            }
+        }
+        return latest;
+    };
+    QTRY_VERIFY(([&] {
+        h.feedRadio();
+        return !contextFor(91).isEmpty() && !contextFor(92).isEmpty();
+    })());
+
+    for (const quint32 endpointId : {91u, 92u}) {
+        const QJsonObject context = contextFor(endpointId);
+        QVERIFY(context.contains(QStringLiteral("grantedFftSize")));
+        QVERIFY(context.contains(QStringLiteral("grantedPixels")));
+        QCOMPARE(context.contains(QStringLiteral("wideband")), endpointId == 92);
+        // What a minor-9 GUI accepts, and not what a minor-8 GUI accepts.
+        const std::optional<SpectrumContextMessage> decoded =
+            decodeRemoteSpectrumContext(context, true);
+        QVERIFY(decoded.has_value());
+        QVERIFY(!decodeRemoteSpectrumContext(context, false).has_value());
+        QVERIFY(decoded->grant.has_value());
+        const auto recorded = h.controller.spectrumGrant(endpointId);
+        QVERIFY(recorded.has_value());
+        QCOMPARE(*decoded->grant, spectrumContextGrant(*recorded));
+    }
+    peer->closeLink(QStringLiteral("test complete"));
+}
+
 // R-R3-01/08: from minor 9 on, each context carries the grant Core recorded,
 // including what limited it. The harness negotiates the current minor, which
 // only has to have reached the grant minor; later minors keep the grant.
-void TstDaemonMediaController::minorNineSpectrumContextsReportTheGrant()
+void TstDaemonMediaController::currentMinorSpectrumContextsReportTheGrant()
 {
     Harness h;
     h.establishSession();

@@ -436,7 +436,7 @@ private slots:
         QString line = g_diagnosticsLines.constLast();
         QVERIFY(line.startsWith(QStringLiteral("Remote diagnostics: context=3 running=yes admitted=1500 startDiscardedPackets=62 decoded=1490 concealed=4 ")));
         QVERIFY(line.contains(QStringLiteral(" driftRatio=not measured driftPpm=not measured ")));
-        QVERIFY(line.contains(QStringLiteral(" coreSystemCpuPercent=not measured coreProcessCpuPercent=not measured"
+        QVERIFY(line.contains(QStringLiteral(" coreSystemCpuPercent=not measured coreProcessCpuPercentOfAllCpus=not measured"
             " coreMemoryAvailableKiB=not measured coreMemoryTotalKiB=not measured"
             " coreProcessResidentKiB=not measured coreHottestZoneCelsius=not measured"
             " coreHottestZone=not measured")));
@@ -473,7 +473,7 @@ private slots:
         line = g_diagnosticsLines.constLast();
         QVERIFY(line.contains(QStringLiteral(" lifetimeUnderflows=2 lifetimeOverflows=0 ")));
         QVERIFY(line.contains(QStringLiteral(" driftRatio=1.000012000 driftPpm=12.0 ")));
-        QVERIFY(line.contains(QStringLiteral(" coreSystemCpuPercent=30.0 coreProcessCpuPercent=0.0"
+        QVERIFY(line.contains(QStringLiteral(" coreSystemCpuPercent=30.0 coreProcessCpuPercentOfAllCpus=0.0"
             " coreMemoryAvailableKiB=2097152 coreMemoryTotalKiB=8388608"
             " coreProcessResidentKiB=204800 coreHottestZoneCelsius=54.5"
             " coreHottestZone=\"soc-thermal\"")));

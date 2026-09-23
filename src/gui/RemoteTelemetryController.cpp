@@ -349,7 +349,9 @@ void RemoteTelemetryController::logDiagnostics(qint64 now) const
            << QStringLiteral("coreTelemetryAgeMs=%1").arg(logged(m_station
                   ? std::optional<qint64>(qMax<qint64>(0, now - m_stationReceivedMs)) : std::nullopt))
            << QStringLiteral("coreSystemCpuPercent=%1").arg(logged(host.systemCpuPercent))
-           << QStringLiteral("coreProcessCpuPercent=%1").arg(logged(host.processCpuPercent))
+           // nereusd's share of all CPUs together, not top's per-core figure
+           // (top's I toggle switches between the two).
+           << QStringLiteral("coreProcessCpuPercentOfAllCpus=%1").arg(logged(host.processCpuPercent))
            << QStringLiteral("coreMemoryAvailableKiB=%1").arg(logged(host.memoryAvailableKiB))
            << QStringLiteral("coreMemoryTotalKiB=%1").arg(logged(host.memoryTotalKiB))
            << QStringLiteral("coreProcessResidentKiB=%1").arg(logged(host.processResidentKiB))

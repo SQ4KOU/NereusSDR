@@ -122,7 +122,9 @@ Add `StationTelemetrySnapshot` in
 session kind, encoded as `station.metrics.v1`. Advertise capability
 `stationTelemetryVersion=1` at negotiated protocol minor 3 or newer. Coordinate
 later minor additions with task 4d; do not reuse the telemetry threshold for a
-different feature. The snapshot is observational; it is neither a mirrored
+different feature. Protocol minor 10 adds the optional Core host section and
+advertises `stationTelemetryVersion = 2`; minor-9 and older peers keep version 1
+without the host section. The snapshot is observational; it is neither a mirrored
 property nor an inbound command.
 
 The typed snapshot contains a sequence, Core sample elapsed milliseconds,

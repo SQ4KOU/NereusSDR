@@ -77,6 +77,25 @@ public:
         if (!temp.isNull()) { write(dir + QStringLiteral("temp"), temp); }
     }
 
+    // Real sysfs zones are symlinks from /sys/class/thermal into
+    // /sys/devices/virtual/thermal; this lays one out the same way.
+    void linkedZone(int number, const QByteArray& type, const QByteArray& temp)
+    {
+#ifdef Q_OS_UNIX
+        const QString target = QStringLiteral("sys/devices/virtual/thermal/thermal_zone%1").arg(number);
+        QVERIFY(QDir(m_dir.path()).mkpath(target));
+        if (!type.isNull()) { write(target + QStringLiteral("/type"), type); }
+        if (!temp.isNull()) { write(target + QStringLiteral("/temp"), temp); }
+        const QString link = m_dir.filePath(
+            QStringLiteral("sys/class/thermal/thermal_zone%1").arg(number));
+        QVERIFY(QFile::link(m_dir.filePath(target), link));
+        QVERIFY(QFileInfo(link).isSymLink());
+        QVERIFY(QFileInfo(link).isDir());
+#else
+        zone(number, type, temp);
+#endif
+    }
+
     void standardProc()
     {
         write(QStringLiteral("proc/stat"),
@@ -224,7 +243,7 @@ private slots:
         f.standardProc();
         // The RK3588S names its zones by block; values are millidegrees.
         f.zone(0, "soc-thermal\n", "45000\n");
-        f.zone(1, "bigcore0-thermal\n", "52500\n");
+        f.linkedZone(1, "bigcore0-thermal\n", "52500\n"); // a symlink, as in sysfs
         f.zone(2, "gpu-thermal\n", QByteArray());   // temp missing
         f.zone(3, "littlecore-thermal\n", "-5000\n"); // below zero is real
         f.zone(4, "center-thermal\n", "garbage\n");  // unreadable value
