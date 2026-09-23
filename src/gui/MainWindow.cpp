@@ -1070,6 +1070,18 @@ void MainWindow::ensureRemoteSession()
                 this, &MainWindow::refreshRemoteConnectionUi);
         connect(m_stationClient, &StationClient::connectionActivityChanged,
                 this, &MainWindow::applyRemoteRoleGating);
+        // R-R3-17: the Connections window and the Core panel disconnect (or
+        // cancel a pending retry) through RemoteConnectionController, not
+        // disconnectFromStation() below. With a retry pending there is no
+        // transport, so sessionEnded never reaches the toast handler. The
+        // link stays active through every backoff step, so it goes inactive
+        // only when the operator stops it or the Core refuses outright:
+        // either way the next failure the operator asks for is news.
+        connect(m_stationClient, &StationClient::connectionActivityChanged, this, [this] {
+            if (!m_stationClient->isConnectionActive()) {
+                clearStationLinkToastMemory();
+            }
+        });
         connect(m_radioModel, &RadioModel::stationLinkStateChanged,
                 this, &MainWindow::applyRemoteRoleGating);
         m_remoteMedia = new RemoteMediaController(m_stationClient, m_radioModel,

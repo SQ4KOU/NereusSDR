@@ -15,6 +15,7 @@
 #include "core/settings/SettingsProxy.h"
 #include "gui/GuiSessionCoordinator.h"
 #include "gui/MainWindow.h"
+#include "gui/RemoteConnectionController.h"
 #include "gui/SpectrumWidget.h"
 #include "gui/widgets/StatusToast.h"
 #include "models/NotchModel.h"
@@ -345,6 +346,60 @@ private slots:
         QVERIFY(!client->isConnectionActive());
         QCOMPARE(toastsStartingWith(window, lost), 0);
         failure(QStringLiteral("Connection refused"), 1);
+        QCOMPARE(toastsStartingWith(window, lost), 1);
+        QCOMPARE(toastsStartingWith(window, retry), 1);
+        sessions.shutdown();
+    }
+
+    // R-R3-17 fix wave, Important 1: the Connections window's Disconnect /
+    // "Cancel retry" and the Core panel's Disconnect reach
+    // RemoteConnectionController::disconnectFromStation() directly, not
+    // MainWindow::disconnectFromStation(). With a retry pending there is no
+    // transport, so sessionEnded never reaches the toast handler. Cancelling
+    // the retry must still forget the remembered reason, so the next
+    // explicit Connect that fails the same way is announced.
+    void cancellingRetryThroughControllerForgetsToastedReason()
+    {
+        QTemporaryDir stationDir;
+        AppSettings stationSettings(stationDir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        StationServer server(&station, stationSettings, stationDir.path());
+        QWebSocketServer listener(QStringLiteral("A"), QWebSocketServer::NonSecureMode);
+        QVERIFY(listener.listen(QHostAddress::LocalHost, 0));
+        connect(&listener, &QWebSocketServer::newConnection, &server, [&] {
+            server.acceptTransport(new WebSocketTransport(listener.nextPendingConnection(),
+                StationServer::kMaxIncomingMessageBytes));
+        });
+        auto a = core(QStringLiteral("a"), listener.serverPort());
+        a.connection.token = server.token();
+        GuiSessionCoordinator sessions;
+        QVERIFY(sessions.replace(a, true));
+        MainWindow* window = sessions.window();
+        StationClient* client = window->findChild<StationClient*>();
+        auto* controller = window->findChild<RemoteConnectionController*>();
+        QVERIFY(client);
+        QVERIFY(controller);
+        QTRY_VERIFY(client->isHandshakeComplete());
+        const QString lost = QStringLiteral("Station link lost: ");
+        const QString retry = QStringLiteral("Reconnecting to station");
+
+        // The link drops and a retry is pending: announced once.
+        dismissToasts(window);
+        client->setReconnectBackoffUnitMs(60000);
+        client->disconnectFromStation(QStringLiteral("Connection refused"), true);
+        QVERIFY(client->isReconnectPending());
+        QCOMPARE(toastsStartingWith(window, lost), 1);
+        QCOMPARE(toastsStartingWith(window, retry), 1);
+
+        // The operator cancels the retry from the Connections window.
+        dismissToasts(window);
+        controller->disconnectFromStation();
+        QVERIFY(!client->isConnectionActive());
+        QCOMPARE(toastsStartingWith(window, lost), 0);
+
+        // Their next Connect fails for the same reason: that is news again.
+        emit client->sessionEnded(QStringLiteral("Connection refused"));
+        emit client->reconnectScheduled(1, 1000);
         QCOMPARE(toastsStartingWith(window, lost), 1);
         QCOMPARE(toastsStartingWith(window, retry), 1);
         sessions.shutdown();

@@ -894,7 +894,8 @@ private:
     // R-R3-17: a failing redial repeats the same reason every backoff step
     // (up to once a minute). Toast each distinct reason once; the Connections
     // window, Core panel and title bar keep showing it persistently. Cleared
-    // by a completed handshake or an operator disconnect.
+    // by a completed handshake or whenever the link goes inactive (an
+    // operator disconnect or cancelled retry from any surface).
     QString m_lastStationLinkLostReason;
     QString m_lastReconnectToastReason;
     bool m_stationLinkLostSeen{false};
