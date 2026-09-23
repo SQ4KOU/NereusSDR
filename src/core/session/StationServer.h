@@ -161,6 +161,12 @@
 //                                    half of the wss session. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-08/37/40: displayBudgetLimits()
+//                                    is the budget in force for the
+//                                    session; a computed one reaches only
+//                                    minor-11 peers. AI-assisted
+//                                    implementation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include <QHash>
@@ -373,7 +379,20 @@ public:
     /// generation; the same limits with the same reason are accepted as-is.
     bool setDisplayBudgetLimits(const DisplayBudgetLimits& limits,
                                 DisplayBudgetReason reason = DisplayBudgetReason::None);
-    std::optional<DisplayBudgetLimits> displayBudgetLimits() const { return m_displayBudget; }
+    /// The budget in force for the current session: the limits last set,
+    /// except that with setDisplayBudgetForReasonPeersOnly(true) a peer
+    /// below kDisplayBudgetReasonSessionProtocolMinor (or no peer) has none
+    /// and keeps legacy mode.
+    std::optional<DisplayBudgetLimits> displayBudgetLimits() const;
+    /// The limits last set, whichever peer is attached.
+    std::optional<DisplayBudgetLimits> configuredDisplayBudgetLimits() const
+    {
+        return m_displayBudget;
+    }
+    /// True for a budget nereusd computed rather than read from its
+    /// configuration (display_adaptive on, no limits configured): only an
+    /// app that understands the budget reason is put in budget mode.
+    void setDisplayBudgetForReasonPeersOnly(bool reasonPeersOnly);
     DisplayBudgetReason displayBudgetReason() const { return m_displayBudgetReason; }
     void setDisplayBudgetEnforcementEnabled(bool enabled);
     bool displayBudgetAvailable() const;
@@ -522,6 +541,7 @@ private:
     bool m_mediaEnabled = false;
     bool m_displayBudgetEnforcementEnabled = false;
     std::optional<DisplayBudgetLimits> m_displayBudget;
+    bool m_displayBudgetForReasonPeersOnly = false;
     DisplayBudgetReason m_displayBudgetReason = DisplayBudgetReason::None;
     bool m_telemetryEnabled = false;
     quint64 m_mediaSessionEpoch = 0;

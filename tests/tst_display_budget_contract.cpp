@@ -27,6 +27,7 @@
 #include "core/session/StationCapabilities.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
+#include "core/session/media/DisplayLoadGovernor.h"
 #include "core/settings/SettingsProxy.h"
 #include "models/RadioModel.h"
 #include "fakes/LoopbackTransport.h"
@@ -738,6 +739,64 @@ private slots:
             QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)), older);
             QVERIFY(!older.contains("displayBudgetReason"));
         }
+    }
+
+    // R-R3-08/37 (final review I4): the budget nereusd computes when
+    // adaptation is on and nothing is configured is only for an app that
+    // knows the reason. An older app gets exactly the descriptor a Core
+    // without any budget sends, and hears nothing when the budget moves.
+    void computedCeilingSendsOlderAppsTheLegacyDescriptor()
+    {
+        const quint16 older = quint16(kDisplayBudgetReasonSessionProtocolMinor - 1);
+        const auto capture = [this, older](bool computed, QByteArray* wire,
+                                           LoopbackTransport** peerOut,
+                                           std::unique_ptr<StationServer>* serverOut,
+                                           std::unique_ptr<RadioModel>* stationOut,
+                                           std::unique_ptr<AppSettings>* settingsOut) {
+            *stationOut = std::make_unique<RadioModel>();
+            *settingsOut = std::make_unique<AppSettings>(m_securityDir.filePath(
+                QStringLiteral("legacy-%1.settings").arg(computed ? 1 : 0)));
+            *serverOut = std::make_unique<StationServer>(stationOut->get(), **settingsOut,
+                                                         m_securityDir.path());
+            StationServer& server = **serverOut;
+            server.setMediaEnabled(true);
+            if (computed) {
+                server.setDisplayBudgetForReasonPeersOnly(true);
+                QVERIFY(server.setDisplayBudgetLimits(DisplayLoadGovernor::computedCeiling()));
+            }
+            server.setDisplayBudgetEnforcementEnabled(true);
+            LoopbackTransport* peer = nullptr;
+            connectRawPeer(this, server, older, &peer);
+            QTRY_COMPARE(receivedCapabilities(peer).size(), 1);
+            QTRY_VERIFY(server.mediaAvailable());
+            *wire = lastCapabilitiesWire(peer);
+            *peerOut = peer;
+        };
+        QByteArray legacyWire;
+        QByteArray computedWire;
+        LoopbackTransport* legacyPeer = nullptr;
+        LoopbackTransport* computedPeer = nullptr;
+        // Declared so each server goes before the station and settings it uses.
+        std::unique_ptr<AppSettings> legacySettings;
+        std::unique_ptr<AppSettings> computedSettings;
+        std::unique_ptr<RadioModel> legacyStation;
+        std::unique_ptr<RadioModel> computedStation;
+        std::unique_ptr<StationServer> legacyServer;
+        std::unique_ptr<StationServer> computedServer;
+        capture(false, &legacyWire, &legacyPeer, &legacyServer, &legacyStation, &legacySettings);
+        capture(true, &computedWire, &computedPeer, &computedServer, &computedStation,
+                &computedSettings);
+        QVERIFY(!legacyWire.isEmpty());
+        QCOMPARE(computedWire, legacyWire);
+        QVERIFY(!computedWire.contains("displayBudgetGeneration"));
+        QVERIFY(!computedServer->displayBudgetLimits());
+        QVERIFY(!computedServer->displayBudgetAvailable());
+
+        // The governor lowers the budget: nothing reaches the older app.
+        QVERIFY(computedServer->setDisplayBudgetLimits(
+            limits(2, kBytes / 2, kSamples / 2), DisplayBudgetReason::CoreBusy));
+        QTest::qWait(50);
+        QCOMPARE(receivedCapabilities(computedPeer).size(), 1);
     }
 
     // R-R3-08/37: a minor-11 GUI follows the Core's reason with its limits

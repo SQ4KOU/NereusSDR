@@ -32,6 +32,12 @@ inline constexpr qint64 kDisplaySenderIntervalNs = qint64{kDisplaySenderInterval
 inline constexpr quint32 kDisplaySenderMessagesPerSecond =
     1'000 / kDisplaySenderIntervalMs;
 
+/// How long the app waits for the Core to acknowledge a display allocation
+/// before it calls the allocation stalled (RemoteMediaController.cpp). The
+/// Core's display load governor lets a budget step settle at least this long
+/// before judging it.
+inline constexpr int kDisplayAllocationAckTimeoutMs = 10'000;
+
 /// Current NSDC schema-1 header and daemon subscribe validation maximum
 /// (DisplayCodec.cpp and DaemonMediaController.cpp respectively).
 inline constexpr quint32 kDisplayCodecHeaderBytes = DisplayCodecEncoder::kHeaderBytes;

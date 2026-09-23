@@ -45,7 +45,7 @@ namespace NereusSDR {
 Q_LOGGING_CATEGORY(lcRemoteMedia, "nereus.remote.media")
 namespace {
 constexpr int kMaxEndpoints = 8;
-constexpr int kDefaultAllocationAckTimeoutMs = 10'000;
+constexpr int kDefaultAllocationAckTimeoutMs = kDisplayAllocationAckTimeoutMs;
 // The derivation in RemoteMediaController.h, checked: one control heartbeat
 // interval for Core's description, then the pinned library's slowest serial
 // failure (ICE 39.5 s, DTLS 31 s, SCTP 35 s) for the connection.
@@ -1605,6 +1605,10 @@ void RemoteMediaController::refreshBudgetSubscriptions()
             reduced = true;
             status += QStringLiteral(" (requested %1 px @ %2 fps; %3)")
                 .arg(requestedPixels).arg(requestedFps).arg(capacityWords);
+        } else if (!binding.pending) {
+            // R-R3-37: at the requested quality with nothing waiting, budget
+            // mode reads like legacy mode: no line.
+            return QString();
         }
         if (binding.acceptedRequest.value(QStringLiteral("wideSpanFactor")).toDouble() > 1.0) {
             status += QStringLiteral("; WIDE plane reserved");

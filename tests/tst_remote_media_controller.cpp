@@ -25,6 +25,7 @@
 #include "core/settings/SettingsProxy.h"
 #include "core/session/media/DisplayCodec.h"
 #include "core/session/media/DisplayBudget.h"
+#include "core/session/media/DisplayLoadGovernor.h"
 #include "core/session/media/DaemonMediaController.h"
 #include "core/session/media/RemoteAudioContext.h"
 #include "core/session/media/RemoteAudioReceiver.h"
@@ -1686,7 +1687,8 @@ private slots:
         QTRY_COMPARE(countControl(inbound, QStringLiteral("allocation-result")), 2);
         const QJsonObject second = lastControl(outbound, QStringLiteral("subscribe"));
         QVERIFY(quint32(second.value(QStringLiteral("revision")).toDouble()) > firstRevision);
-        QVERIFY(applet->remoteDisplayStatus().startsWith(QStringLiteral("Display target")));
+        // Accepted at the requested quality: no line, as in legacy mode.
+        QVERIFY(applet->remoteDisplayStatus().isEmpty());
 
         const QJsonObject stale{
             {QStringLiteral("op"), QStringLiteral("allocation-result")},
@@ -1711,7 +1713,7 @@ private slots:
         QVERIFY(QMetaObject::invokeMethod(subscriptionTimer, "timeout", Qt::DirectConnection));
         QCOMPARE(countControl(outbound, QStringLiteral("subscribe")), 2);
         QCOMPARE(controller.activeEndpointCount(), 1);
-        QVERIFY(applet->remoteDisplayStatus().startsWith(QStringLiteral("Display target")));
+        QVERIFY(applet->remoteDisplayStatus().isEmpty());
     }
 
     void missingAllocationAcknowledgementStallsThenLateResultReconciles()
@@ -1791,7 +1793,8 @@ private slots:
         QVERIFY(client.mediaAvailable());
 
         stationLink->releaseHeld();
-        QTRY_VERIFY(applet->remoteDisplayStatus().startsWith(QStringLiteral("Display target")));
+        // The late result is accepted: the stalled line clears.
+        QTRY_VERIFY(applet->remoteDisplayStatus().isEmpty());
         QCOMPARE(countControl(outbound, QStringLiteral("subscribe")), 1);
         QCOMPARE(controller.activeEndpointCount(), 1);
     }
@@ -1875,9 +1878,12 @@ private slots:
         QTRY_COMPARE(countControl(outbound, QStringLiteral("subscribe")), 4);
         QTRY_COMPARE(stationLink->held.size(), 4);
         stationLink->releaseHeld();
+        // Every pan accepted: a reduced one says so, one at its requested
+        // quality shows no line.
         QTRY_VERIFY([&] {
             for (PanadapterApplet* applet : stack.allApplets()) {
-                if (!applet->remoteDisplayStatus().startsWith(QStringLiteral("Display target"))) {
+                const QString status = applet->remoteDisplayStatus();
+                if (!status.isEmpty() && !status.startsWith(QStringLiteral("Display target"))) {
                     return false;
                 }
             }
@@ -1923,9 +1929,7 @@ private slots:
         stationLink->releaseHeld();
         QTRY_VERIFY([&] {
             for (PanadapterApplet* applet : stack.allApplets()) {
-                const QString status = applet->remoteDisplayStatus();
-                if (!status.startsWith(QStringLiteral("Display target"))
-                    || status.contains(QStringLiteral("requested"))) {
+                if (!applet->remoteDisplayStatus().isEmpty()) {
                     return false;
                 }
             }
@@ -2004,6 +2008,7 @@ private slots:
                 return sinkMedia;
             });
         QSignalSpy outbound(&server, &StationServer::mediaControlReceived);
+        QSignalSpy inbound(&client, &StationClient::mediaControlReceived);
         auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
         auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
         stationLink->linkTo(clientLink);
@@ -2014,6 +2019,7 @@ private slots:
         sourceMedia->activate();
         sinkMedia->activate();
         QTRY_COMPARE(countControl(outbound, QStringLiteral("subscribe")), 4);
+        QTRY_COMPARE(countControl(inbound, QStringLiteral("allocation-result")), 4);
 
         const auto statusOf = [&stack](const QString& panId) {
             for (PanadapterApplet* applet : stack.allApplets()) {
@@ -2021,11 +2027,11 @@ private slots:
             }
             return QString();
         };
+        // At the requested quality with nothing waiting a pan shows no line
+        // (legacy mode's look), and carries no reason.
         const auto allAtRequestedQuality = [&] {
             for (const QString& panId : panIds) {
-                const QString status = statusOf(panId);
-                if (!status.startsWith(QStringLiteral("Display target"))
-                    || status.contains(QStringLiteral("requested"))
+                if (!statusOf(panId).isEmpty()
                     || controller.panDisplayBudgetReason(panId) != DisplayBudgetReason::None) {
                     return false;
                 }
@@ -2043,8 +2049,7 @@ private slots:
                 const QString status = statusOf(panId);
                 const bool active = panId == QStringLiteral("pan-0");
                 if (active) {
-                    if (!status.contains(QStringLiteral("@ 30 fps"))
-                        || status.contains(QStringLiteral("requested"))
+                    if (!status.isEmpty()
                         || controller.panDisplayBudgetReason(panId)
                             != DisplayBudgetReason::None) {
                         return false;
@@ -2066,7 +2071,108 @@ private slots:
             QCOMPARE(subscribes.at(i).value(QStringLiteral("fps")).toInt(), 10);
         }
 
-        QVERIFY(server.setDisplayBudgetLimits({10'000'000, 10'000'000, 3},
+        // Final review M4: deeper cuts. The active pan changes only once
+        // every background pan is at its floor (256 px at 10 fps) or paused.
+        int activePixels = 0;
+        QList<DisplayBudgetCharge> floorCharges;
+        for (PanadapterApplet* applet : stack.allApplets()) {
+            const int requestedPixels = qBound(
+                1, applet->spectrumWidget()->width()
+                    - applet->spectrumWidget()->reservedRightEdgeWidth(),
+                SpectrumEndpoint::kMaxPixels);
+            if (applet->panId() == QStringLiteral("pan-0")) {
+                activePixels = requestedPixels;
+            } else {
+                QVERIFY(requestedPixels > 256);
+                floorCharges.append(spectrumDisplayCost(256, 10, false)->charge);
+            }
+        }
+        const auto backgroundsAtFloorOrPaused = [&] {
+            for (const QString& panId : panIds) {
+                if (panId == QStringLiteral("pan-0")) {
+                    continue;
+                }
+                const QString status = statusOf(panId);
+                const bool atFloor = status.startsWith(QStringLiteral("Display target 256 px @ 10 fps"))
+                    && status.contains(QStringLiteral("; Core busy)"));
+                const bool paused = status == QStringLiteral("Display paused: Core busy");
+                if (!(atFloor || paused)
+                    || controller.panDisplayBudgetReason(panId) != DisplayBudgetReason::CoreBusy) {
+                    return false;
+                }
+            }
+            return true;
+        };
+        // Room for the active pan as asked plus three floors: the active pan
+        // is untouched while the background pans go to their floor.
+        QList<DisplayBudgetCharge> roomForActive = floorCharges;
+        roomForActive.append(spectrumDisplayCost(activePixels, 30, false)->charge);
+        const auto deeper = sumDisplayCharges(roomForActive);
+        QVERIFY(deeper.has_value());
+        QVERIFY(server.setDisplayBudgetLimits(
+            {deeper->applicationBytesPerSecond, deeper->spectrumSampleUnitsPerSecond, 3},
+            DisplayBudgetReason::CoreBusy));
+        QTRY_VERIFY(backgroundsAtFloorOrPaused());
+        QTRY_VERIFY(statusOf(QStringLiteral("pan-0")).isEmpty());
+        QCOMPARE(controller.panDisplayBudgetReason(QStringLiteral("pan-0")),
+                 DisplayBudgetReason::None);
+        // Less than that: now the active pan gives way too, and the
+        // background pans stay at their floor or paused.
+        QList<DisplayBudgetCharge> activeCut = floorCharges;
+        activeCut.append(spectrumDisplayCost(activePixels, 10, false)->charge);
+        const auto deepest = sumDisplayCharges(activeCut);
+        QVERIFY(deepest.has_value());
+        QVERIFY(server.setDisplayBudgetLimits(
+            {deepest->applicationBytesPerSecond, deepest->spectrumSampleUnitsPerSecond, 4},
+            DisplayBudgetReason::CoreBusy));
+        QTRY_VERIFY(statusOf(QStringLiteral("pan-0")).contains(QStringLiteral("; Core busy)")));
+        QCOMPARE(controller.panDisplayBudgetReason(QStringLiteral("pan-0")),
+                 DisplayBudgetReason::CoreBusy);
+        QVERIFY(backgroundsAtFloorOrPaused());
+        // Replay what the app sent, in order: whenever the active pan's
+        // latest request is below what it asked for, every background pan's
+        // latest request is at its floor or released.
+        const quint32 activeEndpoint = [&] {
+            for (const QJsonObject& control : subscribes) {
+                if (control.value(QStringLiteral("fps")).toInt() == 30) {
+                    return quint32(control.value(QStringLiteral("endpointId")).toInteger());
+                }
+            }
+            return quint32{0};
+        }();
+        QVERIFY(activeEndpoint != 0);
+        QHash<quint32, std::pair<int, int>> latest; // endpoint -> pixels, fps
+        bool activeReduced = false;
+        for (const auto& call : outbound) {
+            const QJsonObject control = call.at(0).toJsonObject();
+            const QString op = control.value(QStringLiteral("op")).toString();
+            const quint32 endpoint = quint32(control.value(QStringLiteral("endpointId")).toInteger());
+            if (op == QStringLiteral("unsubscribe")) {
+                latest.remove(endpoint);
+            } else if (op == QStringLiteral("subscribe")) {
+                latest.insert(endpoint, {control.value(QStringLiteral("pixels")).toInt(),
+                                         control.value(QStringLiteral("fps")).toInt()});
+            } else {
+                continue;
+            }
+            const auto active = latest.constFind(activeEndpoint);
+            if (active == latest.cend()
+                || (active->first >= activePixels && active->second >= 30)) {
+                continue;
+            }
+            activeReduced = true;
+            for (auto it = latest.cbegin(); it != latest.cend(); ++it) {
+                if (it.key() != activeEndpoint) {
+                    QVERIFY2(it->first <= 256 && it->second <= 10,
+                             qPrintable(QStringLiteral("endpoint %1 at %2 px @ %3 fps while the "
+                                                       "active pan was reduced")
+                                            .arg(it.key()).arg(it->first).arg(it->second)));
+                }
+            }
+        }
+        QVERIFY(activeReduced);
+
+        QVERIFY(server.setDisplayBudgetLimits({10'000'000, 10'000'000, 5},
                                               DisplayBudgetReason::None));
         QTRY_COMPARE(client.remoteDisplayBudgetReason(), DisplayBudgetReason::None);
         QTRY_VERIFY(allAtRequestedQuality());
@@ -2216,7 +2322,7 @@ private slots:
         QTRY_COMPARE(countControl(outbound, QStringLiteral("subscribe")), 1);
         QTRY_COMPARE(stationLink->held.size(), 1);
         stationLink->releaseHeld();
-        QTRY_VERIFY(applet->remoteDisplayStatus().startsWith(QStringLiteral("Display target")));
+        QTRY_VERIFY(applet->remoteDisplayStatus().isEmpty());
 
         widget->setCenterFrequency(widget->centerFrequency() + 500);
         QTRY_COMPARE(countControl(outbound, QStringLiteral("subscribe")), 2);
@@ -2330,7 +2436,7 @@ private slots:
         QVERIFY(original.value(QStringLiteral("pixels")).toInt() > 256
                 || original.value(QStringLiteral("fps")).toInt() > 10);
         stationLink->releaseHeld();
-        QTRY_VERIFY(applet->remoteDisplayStatus().startsWith(QStringLiteral("Display target")));
+        QTRY_VERIFY(applet->remoteDisplayStatus().isEmpty());
 
         remote.pureSignalFacade()->setAmpViewSubscribed(true);
         QTRY_COMPARE(countControl(outbound, QStringLiteral("subscribe")), 2);
@@ -3009,6 +3115,99 @@ private slots:
             QVERIFY(!applet->remoteDisplayStatus().contains(QStringLiteral("Zoom detail")));
             QVERIFY(!applet->remoteDisplayStatus().contains(QStringLiteral("points:")));
         }
+        client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // R-R3-08/37 (final review I4): the budget nereusd computes when adaptation
+    // is on and nothing is configured reaches only an app that knows the
+    // budget reason. An older app keeps legacy mode exactly: no budget, no
+    // allocation results, no status line. A current app plans in budget mode
+    // and, at the quality it asked for with nothing waiting, shows no line
+    // either.
+    void computedCeilingLeavesOlderAppsInLegacyMode_data()
+    {
+        QTest::addColumn<int>("minor");
+        QTest::newRow("minor 10") << int(kDisplayBudgetReasonSessionProtocolMinor - 1);
+        QTest::newRow("minor 11") << int(kDisplayBudgetReasonSessionProtocolMinor);
+    }
+
+    void computedCeilingLeavesOlderAppsInLegacyMode()
+    {
+        QFETCH(int, minor);
+        const bool budgetMode = minor >= kDisplayBudgetReasonSessionProtocolMinor;
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        const int sliceId = station.addSlice();
+        auto* slice = station.sliceById(sliceId);
+        QVERIFY(slice);
+        const int stream = slice->streamIndex();
+        QVERIFY(stream >= 0);
+        const double centre = station.streamCentreHz(stream);
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        // What DaemonApp does with display_adaptive on and no limits set.
+        server.setDisplayBudgetForReasonPeersOnly(true);
+        QVERIFY(server.setDisplayBudgetLimits(DisplayLoadGovernor::computedCeiling()));
+        QPointer<DisplayTransport> sourceMedia;
+        DaemonMediaController daemon(&server, &station, nullptr,
+            [&sourceMedia](QObject* owner) -> IMediaTransport* {
+                sourceMedia = new DisplayTransport(owner);
+                return sourceMedia;
+            });
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true); // Display fixture opens no speaker.
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        PanadapterStack stack;
+        auto* applet = stack.addPanadapter(QStringLiteral("only"));
+        applet->setActiveSliceIndex(sliceId);
+        applet->spectrumWidget()->setDisplayWindowPreservingHistory(centre, 48000);
+        stack.resize(600, 400);
+        stack.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&stack));
+        QPointer<DisplayTransport> sinkMedia;
+        RemoteMediaController gui(&client, &remote, &stack, nullptr,
+            [&sinkMedia](QObject* owner) -> IMediaTransport* {
+                sinkMedia = new DisplayTransport(owner);
+                return sinkMedia;
+            });
+        QSignalSpy inbound(&client, &StationClient::mediaControlReceived);
+        QSignalSpy frames(&gui, &RemoteMediaController::displayFrameReceived);
+        auto* stationLink = new Test::RewritingTransport(QStringLiteral("station"),
+                                                         quint16(minor));
+        auto* clientLink = new Test::RewritingTransport(QStringLiteral("client"),
+                                                        quint16(minor));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(sourceMedia && sinkMedia);
+        QCOMPARE(client.agreedMinor(), quint16(minor));
+        QCOMPARE(server.displayBudgetLimits().has_value(), budgetMode);
+        QCOMPARE(server.buildCapabilities().displayBudget.has_value(), budgetMode);
+        QCOMPARE(client.remoteDisplayBudgetLimits().has_value(), budgetMode);
+        sourceMedia->other = sinkMedia;
+        sourceMedia->activate();
+        sinkMedia->activate();
+        QTRY_COMPARE(daemon.activeEndpointCount(), 1);
+        QVector<float> iq(2048);
+        for (int i = 0; i < iq.size(); i += 2) {
+            iq[i] = 0.01f * std::cos(double(i) * 0.17);
+            iq[i + 1] = 0.01f * std::sin(double(i) * 0.17);
+        }
+        const auto painted = [&] {
+            QMetaObject::invokeMethod(&station, "rawIqDataForStream", Qt::DirectConnection,
+                Q_ARG(int, stream), Q_ARG(QVector<float>, iq));
+            return frames.count() > 0
+                && !applet->spectrumWidget()->renderedPixels().isEmpty();
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(painted(), 5000);
+        QCOMPARE(countControl(inbound, QStringLiteral("allocation-result")) > 0, budgetMode);
+        QTRY_VERIFY2(applet->remoteDisplayStatus().isEmpty(),
+                     qPrintable(applet->remoteDisplayStatus()));
         client.disconnectFromStation(QStringLiteral("test complete"));
     }
 

@@ -39,6 +39,13 @@
 //                                    checked read-only for nnrLimit or
 //                                    nnrStatus first, and copied only
 //                                    when one is present.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-08/37/40: a computed display
+//                                    budget (adaptation on, nothing
+//                                    configured) is in force only for a
+//                                    peer at minor 11; older peers keep
+//                                    legacy mode. AI-assisted
+//                                    implementation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1379,7 +1386,11 @@ bool StationServer::setDisplayBudgetLimits(const DisplayBudgetLimits& limits,
     m_displayBudgetReason = reason;
     const QPointer<StationServer> self(this);
     emit displayBudgetChanged(); // The sender sees new limits before publication.
-    if (self) { self->publishDisplayBudgetCapabilities(); }
+    // A peer the computed budget does not reach heard of no budget, so a
+    // change to it is nothing to that peer (legacy mode exactly).
+    if (self && (!self->m_displayBudgetForReasonPeersOnly || self->displayBudgetLimits())) {
+        self->publishDisplayBudgetCapabilities();
+    }
     return true;
 }
 
@@ -1460,10 +1471,30 @@ bool StationServer::spectrumGrantAvailable() const
         && it->agreedMinor >= kRemoteSpectrumGrantSessionProtocolMinor;
 }
 
+void StationServer::setDisplayBudgetForReasonPeersOnly(bool reasonPeersOnly)
+{
+    m_displayBudgetForReasonPeersOnly = reasonPeersOnly;
+}
+
+std::optional<DisplayBudgetLimits> StationServer::displayBudgetLimits() const
+{
+    if (m_displayBudget && m_displayBudgetForReasonPeersOnly) {
+        // R-R3-08/37: a computed ceiling is only for an app that can be told
+        // why it is lowered. An older app keeps legacy mode exactly: no
+        // budget, no pacing, no allocation results.
+        const auto peer = m_peers.constFind(m_session);
+        if (peer == m_peers.cend()
+            || peer->agreedMinor < kDisplayBudgetReasonSessionProtocolMinor) {
+            return std::nullopt;
+        }
+    }
+    return m_displayBudget;
+}
+
 bool StationServer::displayBudgetAvailable() const
 {
     const auto it = m_peers.constFind(m_session);
-    return mediaAvailable() && m_displayBudgetEnforcementEnabled && m_displayBudget
+    return mediaAvailable() && m_displayBudgetEnforcementEnabled && displayBudgetLimits()
         && it != m_peers.cend() && it->agreedMinor >= kRemoteDisplayBudgetSessionProtocolMinor;
 }
 
@@ -1529,9 +1560,10 @@ StationCapabilities StationServer::buildCapabilities() const
     caps.remoteWidebandDisplayVersion = m_mediaEnabled ? 1 : 0;
     caps.remoteAudioStatusVersion = m_mediaEnabled ? 1 : 0;
     caps.spectrumGrantVersion = m_mediaEnabled ? 1 : 0;
-    if (m_mediaEnabled && m_displayBudgetEnforcementEnabled && m_displayBudget) {
+    const std::optional<DisplayBudgetLimits> budget = displayBudgetLimits();
+    if (m_mediaEnabled && m_displayBudgetEnforcementEnabled && budget) {
         caps.remoteDisplayBudgetVersion = 1;
-        caps.displayBudget = m_displayBudget;
+        caps.displayBudget = budget;
         caps.remotePs3DisplaySubscribed = m_radioModel->pureSignalFacade()->remoteAmpViewSubscribed();
         // R-R3-08/37: only a peer that negotiated the reason receives it; an
         // older one gets exactly the five budget fields it was built for.
