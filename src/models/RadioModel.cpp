@@ -30,6 +30,11 @@
 //                 AudioEngine TX input config (audio/TxInput) and their
 //                 setters forward to it, so there is one PC mic selection.
 //                 NereusSDR-original; no Thetis logic.
+//   2026-09-22 : R-R3-36 Task 7 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. The MOX pre-check refuses keying
+//                 that would read the PC microphone while capture is not
+//                 Ready, and losing capture while keyed releases MOX.
+//                 NereusSDR-original; no Thetis logic.
 //   2026-05-03 — Phase 4 Agent 4A of issue #167 (PA calibration safety
 //                 hotfix — K2GX field report).  Drive-slider lambda
 //                 (lines ~830) and TUNE-engagement path (lines ~4280)
@@ -566,6 +571,9 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // R-R3-36: the PC microphone session demand follows the mic source.
     connect(&m_transmitModel, &TransmitModel::micSourceChanged, this,
             [this](MicSource) { updatePcCaptureDemand(); });
+    // R-R3-36 Task 7: microphone loss while keyed releases MOX.
+    connect(m_audioEngine, &AudioEngine::captureStatusChanged,
+            this, &RadioModel::onCaptureStatusChanged);
     wirePcMicConfigProjection();
     connect(this, &RadioModel::connectionStateChanged, this, [this](ConnectionState state) {
         if (state == ConnectionState::Connected && m_pureSignal) {
@@ -10831,11 +10839,82 @@ void RadioModel::installBandPlanMoxCheck()
         const DSPMode mode = slice->dspMode();
         const Band txBand = bandFromFrequency(slice->frequency());
 
-        return m_bandPlan.checkMoxAllowed(region, freqHz, mode,
-                                          txBand, txBand,
-                                          /*preventDifferentBand=*/false,
-                                          /*extended=*/false);
+        const safety::BandPlanGuard::MoxCheckResult bandPlanResult =
+            m_bandPlan.checkMoxAllowed(region, freqHz, mode,
+                                       txBand, txBand,
+                                       /*preventDifferentBand=*/false,
+                                       /*extended=*/false);
+        if (!bandPlanResult.ok) {
+            return bandPlanResult;
+        }
+
+        // R-R3-36: PC-microphone keying waits for a ready microphone.
+        // Refused here, before any RF effect (this callback runs ahead of
+        // the safety effects and the state walk in MoxController::setMox),
+        // and never queued: capture becoming Ready later does not key, the
+        // operator presses again. Tune, two-tone and TCI audio do not read
+        // the PC microphone and key normally.
+        if (pcCaptureGatesKeying() && !pcCaptureReady()) {
+            return {false,
+                    QStringLiteral("Microphone is not ready. Check Audio "
+                                   "settings and retry.")};
+        }
+        return bandPlanResult;
     });
+}
+
+// R-R3-36: pcCaptureRequired() narrowed to the keying at hand. It is kept
+// separate from pcCaptureRequired() on purpose: that predicate drives the
+// session capture demand (updatePcCaptureDemand), and folding Tune,
+// two-tone or TCI audio into it would close and reopen the microphone
+// every time one of them starts and stops.
+bool RadioModel::pcCaptureGatesKeying() const
+{
+    if (!pcCaptureRequired()) {
+        return false;
+    }
+    // TCI audio: the TX worker takes TCI audio instead of the microphone
+    // while a TCI client holds the TX audio mutex. TciServer sets the gate
+    // (through MainWindow) before the same trx command keys MOX.
+    if (m_txChannel != nullptr && m_txChannel->isTciAudioActive()) {
+        return false;
+    }
+    // Tune: MoxController::setTune(true) sets m_manualMox before it calls
+    // setMox(true), so the pre-check already sees it.
+    if (m_moxController != nullptr && m_moxController->isManualMox()) {
+        return false;
+    }
+    // Two-tone: its activation walk keys MOX before it commits isActive().
+    if (m_twoToneController != nullptr
+        && (m_twoToneController->isActive()
+            || m_twoToneController->isActivationInFlight())) {
+        return false;
+    }
+    return true;
+}
+
+bool RadioModel::pcCaptureReady() const
+{
+    return m_audioEngine != nullptr
+        && m_audioEngine->captureStatus().state == CaptureSupervisor::Status::State::Ready;
+}
+
+// R-R3-36: losing the PC microphone while it is keyed releases MOX the
+// ordinary way. setMox(false) is never refused, and the TX worker reads
+// zeros from a capture that is not Ready until the release completes.
+void RadioModel::onCaptureStatusChanged(const CaptureSupervisor::Status& status)
+{
+    if (status.state == CaptureSupervisor::Status::State::Ready) {
+        return;
+    }
+    if (m_moxController == nullptr || !m_moxController->isMox()
+        || !pcCaptureGatesKeying()) {
+        return;
+    }
+    qCWarning(lcDsp) << "PC microphone left Ready while keyed; releasing MOX."
+                     << "state" << static_cast<int>(status.state)
+                     << "reason" << static_cast<int>(status.reason);
+    m_moxController->setMox(false);
 }
 
 void RadioModel::setReceiveOnlyStationPolicy(bool receiveOnly)

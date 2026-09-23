@@ -37,6 +37,10 @@
 //                 with AI-assisted implementation via Anthropic Claude Code.
 //                 Task: Phase 3M-1b Task K.2 — MOX rejection signal +
 //                 status-bar toast + TxApplet tooltip override. Closes Phase K.
+//   2026-09-22 : R-R3-36 Task 7 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. The RadioModel band-plan case keys
+//                 from the radio mic; new cases pin the pre-check order
+//                 (remote, band plan, PC microphone).
 // =================================================================
 
 // no-port-check: NereusSDR-original test file.
@@ -53,6 +57,7 @@
 #include "gui/applets/TxApplet.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "models/TransmitModel.h"
 
 using namespace NereusSDR;
 using namespace NereusSDR::safety;
@@ -322,6 +327,10 @@ private slots:
         model.configureStreamPool(/*userDdcCount=*/5, /*maxSlices=*/5, 192000);
         model.moxController()->setTimerIntervals(0, 0, 0, 0, 0, 0);
         model.installBandPlanMoxCheckForTest();
+        // This case is about the band plan: key from the radio mic so the
+        // R-R3-36 PC-microphone admission (capture is Closed here) stays
+        // out of the way.
+        model.transmitModel().setMicSource(MicSource::Radio);
 
         const int aId = model.addSlice();
         SliceModel* const a = model.sliceById(aId);
@@ -359,6 +368,71 @@ private slots:
         QVERIFY(model.moxController()->isMox());
         model.moxController()->setMox(false);
         QCoreApplication::processEvents();
+    }
+
+    // ── R-R3-36: PC-microphone admission follows the band plan ─────────────
+    //
+    // The pre-check keeps its order: remote refusal, then band plan, then
+    // the PC microphone. With PC mic selected and capture not Ready, an
+    // out-of-band request is refused for the band plan, an in-band one for
+    // the microphone, and neither advances the state machine.
+    void radioModelMoxCheckRefusesPcMicAfterTheBandPlan()
+    {
+        RadioModel model;
+        model.configureStreamPool(/*userDdcCount=*/5, /*maxSlices=*/5, 192000);
+        model.moxController()->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        model.installBandPlanMoxCheckForTest();
+        QCOMPARE(model.transmitModel().micSource(), MicSource::Pc);
+        QVERIFY(model.pcCaptureRequired());
+
+        const int aId = model.addSlice();
+        SliceModel* const a = model.sliceById(aId);
+        QVERIFY(a);
+        a->setDspMode(DSPMode::USB);
+        a->setFrequency(4'500'000.0);
+        QVERIFY(model.setActiveSliceById(aId));
+
+        QSignalSpy rejectedSpy(model.moxController(), &MoxController::moxRejected);
+        QSignalSpy txAboutToBeginSpy(model.moxController(), &MoxController::txAboutToBegin);
+        QSignalSpy hardwareFlippedSpy(model.moxController(), &MoxController::hardwareFlipped);
+        QSignalSpy stateChangedSpy(model.moxController(), &MoxController::stateChanged);
+
+        model.moxController()->setMox(true);
+        QCoreApplication::processEvents();
+        QCOMPARE(rejectedSpy.count(), 1);
+        QCOMPARE(rejectedSpy.at(0).at(0).toString(),
+                 QStringLiteral("Frequency outside TX-allowed range"));
+
+        a->setFrequency(14'200'000.0);
+        model.moxController()->setMox(true);
+        QCoreApplication::processEvents();
+        QCOMPARE(rejectedSpy.count(), 2);
+        QCOMPARE(rejectedSpy.at(1).at(0).toString(),
+                 QStringLiteral("Microphone is not ready. Check Audio settings and retry."));
+
+        QVERIFY(!model.moxController()->isMox());
+        QCOMPARE(model.moxController()->state(), MoxState::Rx);
+        QCOMPARE(txAboutToBeginSpy.count(), 0);
+        QCOMPARE(hardwareFlippedSpy.count(), 0);
+        QCOMPARE(stateChangedSpy.count(), 0);
+    }
+
+    // The remote refusal is unchanged and still comes first.
+    void remoteRefusalPrecedesPcMicAdmission()
+    {
+        RadioModel model(RadioModel::Role::Remote);
+        model.moxController()->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        QCOMPARE(model.transmitModel().micSource(), MicSource::Pc);
+
+        QSignalSpy rejectedSpy(model.moxController(), &MoxController::moxRejected);
+        model.moxController()->setMox(true);
+        QCoreApplication::processEvents();
+
+        QCOMPARE(rejectedSpy.count(), 1);
+        QCOMPARE(rejectedSpy.at(0).at(0).toString(),
+                 QStringLiteral("Remote transmit controls are not available "
+                                "from this Core yet."));
+        QVERIFY(!model.moxController()->isMox());
     }
 
     // ── 9-20: TxApplet::tooltipForMode static helper ────────────────────────────

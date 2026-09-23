@@ -43,6 +43,10 @@
 //                 audio_volume through TransmitModel::audioVolumeChanged
 //                 to RadioModel's TX path.  J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-22 : R-R3-36 Task 7 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. isActivationInFlight() getter for
+//                 the PC-microphone MOX admission check. NereusSDR-original;
+//                 no Thetis logic.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis-derived activation
@@ -222,6 +226,11 @@ public:
 
     // ── Getters ────────────────────────────────────────────────────────────
     bool isActive() const noexcept { return m_active; }
+    // R-R3-36: true from setActive(true) until the activation walk commits
+    // m_active or is abandoned. isActive() is still false while the walk's
+    // own setMox(true) runs the MOX pre-check, so the PC-microphone
+    // admission check reads this to recognise two-tone keying.
+    bool isActivationInFlight() const noexcept { return m_activationInFlight; }
 
 public slots:
     // setActive — canonical entry point.  Drives the full activation /

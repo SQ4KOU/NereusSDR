@@ -1440,6 +1440,13 @@ nereus_add_test(tst_capture_session_demand
     fakes/ConnectableRadioModel.cpp)
 target_compile_definitions(tst_capture_session_demand PRIVATE NEREUS_BUILD_TESTS)
 
+# R-R3-36 Task 7: PC-microphone MOX admission. Keying that reads the PC
+# microphone is refused before any RF effect while capture is not Ready;
+# exemptions, no replay, input-loss release. Fake helper only, mock radio.
+nereus_add_test(tst_capture_admission
+    fakes/FakeCaptureChild.cpp)
+target_compile_definitions(tst_capture_admission PRIVATE NEREUS_BUILD_TESTS)
+
 # R-R3-36 Task 6: operator wording for every capture state and failure
 # reason, exact strings, no transport wording.
 nereus_add_test(tst_capture_status_text)

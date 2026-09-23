@@ -22,6 +22,10 @@
 //                 (setPcCaptureAllowed / pcCaptureRequired and a
 //                 LocalSession capture lease). NereusSDR-original; no
 //                 Thetis logic.
+//   2026-09-22 : R-R3-36 Task 7 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. PC-microphone MOX admission
+//                 (pcCaptureGatesKeying / pcCaptureReady) and input-loss
+//                 release. NereusSDR-original; no Thetis logic.
 // =================================================================
 
 //=================================================================
@@ -4076,6 +4080,13 @@ private:
     // R-R3-36 Task 6: TransmitModel's pcMic* fields project the AudioEngine
     // TX input config and their setters forward to it (constructor only).
     void wirePcMicConfigProjection();
+    // R-R3-36 Task 7: pcCaptureRequired() less the keying that does not
+    // read the PC microphone (TCI audio, Tune, two-tone). Used by the MOX
+    // pre-check and the input-loss release only; the session demand stays
+    // on pcCaptureRequired().
+    bool pcCaptureGatesKeying() const;
+    bool pcCaptureReady() const;
+    void onCaptureStatusChanged(const CaptureSupervisor::Status& status);
     bool m_pcCaptureAllowed{true};
     bool m_pcCaptureSessionActive{false};
     CaptureSupervisor::Lease m_pcCaptureLease;

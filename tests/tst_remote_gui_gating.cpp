@@ -60,6 +60,10 @@
 //                 disabled in a remote session (R-R3-21, R-R3-25),
 //                 checked through real windows. J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-22 -- R-R3-36 Task 7: the local keying case selects the radio
+//                 mic, since PC-mic keying now waits for a ready
+//                 microphone. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -584,6 +588,10 @@ private slots:
         model.configureStreamPool(/*userDdcCount=*/5, /*maxSlices=*/5, 192000);
         model.moxController()->setTimerIntervals(0, 0, 0, 0, 0, 0);
         model.installBandPlanMoxCheckForTest();
+        // Key from the radio mic: with the PC mic selected the R-R3-36
+        // admission would refuse (no capture is Ready here), which is not
+        // what this case is about.
+        model.transmitModel().setMicSource(MicSource::Radio);
 
         const int aId = model.addSlice();
         SliceModel* const a = model.sliceById(aId);
