@@ -121,17 +121,17 @@ private slots:
         // A whole window logs every settings read at debug level; keep the
         // info and warning lines that explain a failure.
         QLoggingCategory::setFilterRules(QStringLiteral("nereus.*.debug=false"));
-        RemoteWindowHarness::useIsolatedProfile(QStringLiteral("remote-window-harness"));
+        QVERIFY(RemoteWindowHarness::useIsolatedProfile(QStringLiteral("remote-window-harness")));
     }
 
     void init()
     {
-        RemoteWindowHarness::clearIsolatedProfile();
+        QVERIFY(RemoteWindowHarness::clearIsolatedProfile());
     }
 
     void cleanupTestCase()
     {
-        RemoteWindowHarness::removeIsolatedProfile();
+        QVERIFY(RemoteWindowHarness::removeIsolatedProfile());
     }
 
     // R-R3-16: each disconnected entry point dials the configured Core once.
@@ -344,12 +344,43 @@ private slots:
         StationClient* const client = h.client();
         RadioModel* const remote = h.remoteModel();
         QSignalSpy stationAdds(&h.station(), &RadioModel::sliceAdded);
-        const QStringList stationIds = sliceIds(h.station());
-        QCOMPARE(stationIds.size(), stationSlices);
+        QSignalSpy connectedStates(remote, &RadioModel::connectionStateChanged);
+        QCOMPARE(sliceIds(h.station()).size(), stationSlices);
+        const QStringList panIds = MainWindow::panIdsForLayout(layout);
         // The saved layout was restored: its last pan exists.
-        QVERIFY(h.panSpectrum(MainWindow::panIdsForLayout(layout).constLast()));
+        QVERIFY(h.panSpectrum(panIds.constLast()));
 
+        const auto connectedCount = [&connectedStates] {
+            int n = 0;
+            for (const QList<QVariant>& args : connectedStates) {
+                if (args.constFirst().value<ConnectionState>() == ConnectionState::Connected) {
+                    ++n;
+                }
+            }
+            return n;
+        };
+
+        quint32 previousEpoch = client->sessionEpoch();
         for (int attachment = 0; attachment < 2; ++attachment) {
+            if (attachment == 1 && panIds.size() > 1) {
+                // Before the link drops, the Core closes whatever sits on the
+                // saved layout's last pan, the way an operator at the station
+                // would. The window keeps its retained slices across a drop,
+                // so without an empty pan the reconnect could not create
+                // anything whether or not the guard held; this makes the
+                // reconnect half test the guard on its own.
+                for (SliceModel* slice : h.station().slicesOnPan(panIds.constLast())) {
+                    h.station().removeSlice(slice->sliceIndex());
+                }
+                QTRY_VERIFY(remote->pansWithoutSlices(panIds).contains(panIds.constLast()));
+                QCOMPARE(sliceIds(*remote), sliceIds(h.station()));
+            }
+
+            // This attachment's baseline: nothing below may add to it.
+            const QStringList stationIds = sliceIds(h.station());
+            const int addsBefore = static_cast<int>(stationAdds.size());
+            const int connectedBefore = connectedCount();
+
             h.holdNextSnapshot();
             if (attachment == 0) {
                 h.startStartupConnection();
@@ -359,15 +390,21 @@ private slots:
             QTRY_VERIFY_WITH_TIMEOUT(h.acceptedConnections() == attachment + 1
                                      && h.snapshotHeld(), 10000);
 
-            // Capabilities say the radio is connected; the slices have not
-            // arrived. The window's connect handler queues its real
-            // populateEmptyPans(); give it every chance to run.
-            QTRY_VERIFY(remote->isConnected());
+            // Evidence of this attachment's own session before the negative
+            // check: a new epoch, and the window's model reporting the radio
+            // connected again from this session's capabilities. That report
+            // is what queues the window's real populateEmptyPans().
+            QTRY_VERIFY_WITH_TIMEOUT(client->sessionEpoch() != previousEpoch
+                                     && connectedCount() == connectedBefore + 1, 10000);
+            previousEpoch = client->sessionEpoch();
+            QVERIFY(remote->isConnected());
+            // The slices have not arrived; give the queued call every chance
+            // to run.
             QTest::qWait(kSettleMs);
             QVERIFY(!client->isHandshakeComplete());
             QVERIFY2(h.addSliceCommands().isEmpty(),
                      qPrintable(h.addSliceCommands().join(QLatin1Char(','))));
-            QCOMPARE(stationAdds.size(), 0);
+            QCOMPARE(static_cast<int>(stationAdds.size()), addsBefore);
             QCOMPARE(sliceIds(h.station()), stationIds);
 
             h.releaseSnapshot();
@@ -375,21 +412,22 @@ private slots:
             QTest::qWait(kSettleMs);
             QVERIFY2(h.addSliceCommands().isEmpty(),
                      qPrintable(h.addSliceCommands().join(QLatin1Char(','))));
-            QCOMPARE(stationAdds.size(), 0);
+            QCOMPARE(static_cast<int>(stationAdds.size()), addsBefore);
             QCOMPARE(sliceIds(h.station()), stationIds);
             QCOMPARE(sliceIds(*remote), stationIds);
         }
 
         // Hydration and layout restore did not create; an explicit operator
         // create still does, once, within the station's capacity.
+        const int slicesBeforeAdd = static_cast<int>(h.station().slices().size());
         QAction* add = h.menuAction(QStringLiteral("&View"),
                                     QStringLiteral("&Add slice on active pan"));
         QVERIFY(add);
         add->trigger();
         QTRY_COMPARE(h.addSliceCommands().size(), 1);
         QVERIFY(h.addSliceCommands().first().startsWith(QStringLiteral("addSliceOnPan:pan-")));
-        QTRY_COMPARE(h.station().slices().size(), stationSlices + 1);
-        QTRY_COMPARE(remote->slices().size(), stationSlices + 1);
+        QTRY_COMPARE(static_cast<int>(h.station().slices().size()), slicesBeforeAdd + 1);
+        QTRY_COMPARE(static_cast<int>(remote->slices().size()), slicesBeforeAdd + 1);
         QTest::qWait(kSettleMs);
         QCOMPARE(h.addSliceCommands().size(), 1);
         QCOMPARE(h.acceptedConnections(), 2);

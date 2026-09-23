@@ -128,12 +128,16 @@ public:
     };
 
     /// Points AppSettings at a profile of its own and empties it. Call
-    /// once from initTestCase(), before any window or harness exists.
-    static void useIsolatedProfile(const QString& tag);
-    /// Empties the isolated profile between cases.
-    static void clearIsolatedProfile();
+    /// once from initTestCase(), before any window or harness exists, and
+    /// QVERIFY the result: false means AppSettings was already on another
+    /// file, which is then left untouched.
+    [[nodiscard]] static bool useIsolatedProfile(const QString& tag);
+    /// Empties the isolated profile between cases. False, touching
+    /// nothing, unless AppSettings is still on the verified profile.
+    [[nodiscard]] static bool clearIsolatedProfile();
     /// Deletes the isolated profile's files. Call from cleanupTestCase().
-    static void removeIsolatedProfile();
+    /// Same refusal as clearIsolatedProfile().
+    [[nodiscard]] static bool removeIsolatedProfile();
 
     RemoteWindowHarness();
     explicit RemoteWindowHarness(const Options& options);

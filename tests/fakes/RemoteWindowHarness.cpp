@@ -96,25 +96,59 @@ void CoreSessionTransport::release()
 
 // ── RemoteWindowHarness ─────────────────────────────────────────────────
 
-void RemoteWindowHarness::useIsolatedProfile(const QString& tag)
+namespace {
+
+// The path useIsolatedProfile() verified, or empty before it has. clear and
+// remove act only while AppSettings still points at it, so nothing here can
+// ever empty or delete the shared test sandbox's default settings file that
+// parallel test binaries read.
+QString& isolatedProfilePath()
+{
+    static QString path;
+    return path;
+}
+
+bool pointsAtIsolatedProfile()
+{
+    const QString& expected = isolatedProfilePath();
+    return !expected.isEmpty() && AppSettings::instance().filePath() == expected;
+}
+
+} // namespace
+
+bool RemoteWindowHarness::useIsolatedProfile(const QString& tag)
 {
     const QString profile = QStringLiteral("%1-%2").arg(tag).arg(QCoreApplication::applicationPid());
     AppSettings::setProfileOverride(profile);
-    Q_ASSERT(AppSettings::instance().filePath() == AppSettings::resolveSettingsPath(profile));
-    clearIsolatedProfile();
+    const QString expected = AppSettings::resolveSettingsPath(profile);
+    if (AppSettings::instance().filePath() != expected) {
+        // Something reached AppSettings::instance() before this call, so the
+        // singleton already holds another file. Clearing it would wipe that
+        // file, so refuse and leave it alone.
+        qWarning("RemoteWindowHarness: AppSettings is not on the isolated profile "
+                 "(%s, expected %s); leaving it untouched.",
+                 qPrintable(AppSettings::instance().filePath()), qPrintable(expected));
+        return false;
+    }
+    isolatedProfilePath() = expected;
+    return clearIsolatedProfile();
 }
 
-void RemoteWindowHarness::clearIsolatedProfile()
+bool RemoteWindowHarness::clearIsolatedProfile()
 {
+    if (!pointsAtIsolatedProfile()) { return false; }
     AppSettings::instance().clear();
     AppSettings::instance().save();
+    return true;
 }
 
-void RemoteWindowHarness::removeIsolatedProfile()
+bool RemoteWindowHarness::removeIsolatedProfile()
 {
+    if (!pointsAtIsolatedProfile()) { return false; }
     const QString path = AppSettings::instance().filePath();
     QFile::remove(path);
     QFile::remove(path + QStringLiteral(".bak"));
+    return true;
 }
 
 RemoteWindowHarness::RemoteWindowHarness()
