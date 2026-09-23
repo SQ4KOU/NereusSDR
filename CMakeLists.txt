@@ -1110,6 +1110,7 @@ set(CORE_SOURCES
     src/core/session/media/LibDataChannelMediaTransport.cpp
     src/core/session/media/MediaPeer.cpp
     src/core/session/media/OpusAudioCodec.cpp
+    src/core/session/media/PcmAudioCodec.cpp
     src/core/session/media/DisplayCodec.cpp
     src/core/session/media/DisplayBudget.cpp
     src/core/session/media/DssWideRow.cpp

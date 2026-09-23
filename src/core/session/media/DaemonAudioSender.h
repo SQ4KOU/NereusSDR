@@ -9,6 +9,7 @@
 
 #include "core/session/media/DaemonAudioSource.h"
 #include "core/session/media/OpusAudioCodec.h"
+#include "core/session/media/PcmAudioCodec.h"
 
 #include <QObject>
 #include <QTimer>
@@ -23,8 +24,9 @@ class AudioEngine;
 class OpusAudioEncoder;
 
 /// Owner-thread packetisation diagnostics for one successful sender start.
-/// `encodedPackets` means Opus/RTP construction succeeded; it says nothing
-/// about later transport acceptance or network delivery.
+/// `encodedPackets` means RTP construction succeeded (one per Opus block, ten
+/// per lossless block); it says nothing about later transport acceptance or
+/// network delivery. `encodeFailures` counts blocks.
 struct DaemonAudioSenderTelemetry {
     DaemonAudioSourceTelemetry source;
     std::uint64_t consumedBlocks = 0;
@@ -35,12 +37,15 @@ struct DaemonAudioSenderTelemetry {
     quint32 lastEmittedTimestamp = 0;
 };
 
-/// Turns bounded post-master-mix blocks into RTP/Opus packets.
+/// Turns bounded post-master-mix blocks into RTP packets: one Opus packet per
+/// 1920-frame block, or (R-R3-23 lossless) ten L16 packets of 192 frames.
 ///
 /// Capture stays in DaemonAudioSource's DSP-safe bridge.  This QObject runs
 /// the encoder only on its owning control thread, through a 10 ms precise
 /// timer or the explicit drain() test seam.  It deliberately does not know
-/// peers, session epochs, mute policy, or transport.
+/// peers, session epochs, mute policy, or transport. The Opus encoder stays
+/// built while the lossless profile runs, so a return to Opus needs no new
+/// encoder.
 class DaemonAudioSender final : public QObject {
     Q_OBJECT
 public:
@@ -57,6 +62,13 @@ public:
     ~DaemonAudioSender() override;
 
     bool start(quint32 ssrc, quint16 firstSequence, quint32 firstTimestamp);
+
+    /// The profile the next start() runs (R-R3-23). Refused (false) while
+    /// running: a profile change is a new capture epoch, so the caller stops,
+    /// sets the profile and starts again, which flushes queued audio and
+    /// begins at the next block boundary. Default Opus.
+    bool setProfile(RemoteAudioProfile profile);
+    RemoteAudioProfile profile() const noexcept { return m_profile; }
     void stop();
     bool isRunning() const noexcept;
 
@@ -67,6 +79,10 @@ public:
     /// failed to initialise, in which case start() fails too, so a
     /// successful start() always has a profile to announce.
     std::optional<OpusEncoderProfile> encoderProfile() const;
+    /// The lossless profile the packetiser produces; always available.
+    PcmEncoderProfile losslessProfile() const { return m_packetiser.profile(); }
+    /// True when the selected profile's encoder can run.
+    bool profileReady() const;
 
     /// Read-only diagnostics. The snapshot remains available after stop() and
     /// resets only after a later successful start().
@@ -82,6 +98,8 @@ signals:
 private:
     std::unique_ptr<DaemonAudioSource> m_source;
     std::unique_ptr<OpusAudioEncoder> m_encoder;
+    PcmAudioPacketiser m_packetiser;
+    RemoteAudioProfile m_profile{RemoteAudioProfile::Opus};
     QTimer m_drainTimer;
     quint32 m_ssrc{0};
     quint32 m_baseTimestamp{0};

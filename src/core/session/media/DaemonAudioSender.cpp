@@ -12,6 +12,9 @@
 
 namespace NereusSDR {
 
+static_assert(PcmAudioCodecConfig::kBlockFrames == DaemonAudioSource::kBlockFrames,
+              "a lossless block must be the capture block the source delivers");
+
 DaemonAudioSender::DaemonAudioSender(AudioEngine* audioEngine, QObject* parent)
     : DaemonAudioSender(audioEngine, OpusAudioCodecConfig{}, parent)
 {
@@ -41,7 +44,7 @@ bool DaemonAudioSender::start(quint32 ssrc, quint16 firstSequence,
     // A start always defines a new capture/codec epoch, including a caller
     // reusing this object after an interrupted client connection.
     stop();
-    if (ssrc == 0 || !m_encoder->isReady() || m_source->audioEngine() == nullptr) {
+    if (ssrc == 0 || !profileReady() || m_source->audioEngine() == nullptr) {
         return false;
     }
 
@@ -78,6 +81,21 @@ bool DaemonAudioSender::isRunning() const noexcept
     return m_running && m_source && m_source->isRunning();
 }
 
+bool DaemonAudioSender::setProfile(RemoteAudioProfile profile)
+{
+    if (m_running) {
+        return false;
+    }
+    m_profile = profile;
+    return true;
+}
+
+bool DaemonAudioSender::profileReady() const
+{
+    return m_profile == RemoteAudioProfile::Lossless
+        ? m_packetiser.isReady() : (m_encoder && m_encoder->isReady());
+}
+
 std::optional<OpusEncoderProfile> DaemonAudioSender::encoderProfile() const
 {
     return m_encoder ? m_encoder->profile() : std::nullopt;
@@ -111,23 +129,38 @@ void DaemonAudioSender::drain()
         // unsigned addition intentionally supplies normal RTP wraparound.
         const quint32 timestamp = m_baseTimestamp
             + static_cast<quint32>(block->samplePosition);
-        const OpusRtpEncodeResult encoded = m_encoder->encode(
-            block->pcmInterleaved, m_nextSequence, timestamp, m_ssrc);
         m_nextTimestamp = timestamp + DaemonAudioSource::kBlockFrames;
-        if (encoded.status != OpusAudioCodecStatus::Accepted) {
+        QList<QByteArray> packets;
+        if (m_profile == RemoteAudioProfile::Lossless) {
+            // R-R3-23: ten 192-frame packets per block, sequence +1 and
+            // timestamp +192 each, so the next block continues the clock.
+            packets = m_packetiser.packetiseBlock(block->pcmInterleaved, m_nextSequence,
+                                                  timestamp, m_ssrc);
+        } else {
+            const OpusRtpEncodeResult encoded = m_encoder->encode(
+                block->pcmInterleaved, m_nextSequence, timestamp, m_ssrc);
+            if (encoded.status == OpusAudioCodecStatus::Accepted) {
+                packets.append(encoded.packet);
+            }
+        }
+        if (packets.isEmpty()) {
             ++m_telemetry.encodeFailures;
             continue;
         }
-        ++m_telemetry.encodedPackets;
-        m_telemetry.hasLastEmittedPacket = true;
-        m_telemetry.lastEmittedSequence = m_nextSequence;
-        m_telemetry.lastEmittedTimestamp = timestamp;
-        ++m_nextSequence;
-        emit packetReady(encoded.packet);
-        // A direct packetReady recipient may stop the sender or start a new
-        // capture epoch.  Do not consume old queued PCM into that new epoch.
-        if (m_lifecycleGeneration != drainGeneration || !isRunning()) {
-            return;
+        for (qsizetype index = 0; index < packets.size(); ++index) {
+            ++m_telemetry.encodedPackets;
+            m_telemetry.hasLastEmittedPacket = true;
+            m_telemetry.lastEmittedSequence = m_nextSequence;
+            m_telemetry.lastEmittedTimestamp = timestamp
+                + static_cast<quint32>(index * PcmAudioCodecConfig::kPacketFrames);
+            ++m_nextSequence;
+            emit packetReady(packets.at(index));
+            // A direct packetReady recipient may stop the sender or start a
+            // new capture epoch. Do not consume old queued PCM, or send the
+            // rest of this block, into that new epoch.
+            if (m_lifecycleGeneration != drainGeneration || !isRunning()) {
+                return;
+            }
         }
     }
 }

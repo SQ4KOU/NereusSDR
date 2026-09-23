@@ -79,62 +79,6 @@ quint32 readU32(const QByteArray& bytes, int offset)
         | static_cast<unsigned char>(bytes.at(offset + 3));
 }
 
-struct ParsedRtp {
-    quint16 sequence {0};
-    quint32 timestamp {0};
-    quint32 ssrc {0};
-    QByteArray payload;
-};
-
-OpusAudioCodecStatus parseRtp(const QByteArray& packet, ParsedRtp& parsed)
-{
-    if (packet.size() > OpusAudioCodecConfig::kMaxRtpPacketBytes) {
-        return OpusAudioCodecStatus::Oversized;
-    }
-    if (packet.size() < OpusAudioCodecConfig::kRtpHeaderBytes) {
-        return OpusAudioCodecStatus::MalformedRtp;
-    }
-    const quint8 first = static_cast<unsigned char>(packet.at(0));
-    const quint8 second = static_cast<unsigned char>(packet.at(1));
-    if ((first >> 6) != 2 || (second & 0x7f) != OpusAudioCodecConfig::kPayloadType) {
-        return OpusAudioCodecStatus::MalformedRtp;
-    }
-    int headerBytes = OpusAudioCodecConfig::kRtpHeaderBytes + (first & 0x0f) * 4;
-    if (headerBytes > packet.size()) {
-        return OpusAudioCodecStatus::MalformedRtp;
-    }
-    if ((first & 0x10) != 0) {
-        if (packet.size() - headerBytes < 4) {
-            return OpusAudioCodecStatus::MalformedRtp;
-        }
-        const quint16 extensionWords = readU16(packet, headerBytes + 2);
-        const int extensionBytes = 4 + static_cast<int>(extensionWords) * 4;
-        if (extensionBytes > packet.size() - headerBytes) {
-            return OpusAudioCodecStatus::MalformedRtp;
-        }
-        headerBytes += extensionBytes;
-    }
-    int payloadBytes = packet.size() - headerBytes;
-    if ((first & 0x20) != 0) {
-        if (payloadBytes == 0) {
-            return OpusAudioCodecStatus::MalformedRtp;
-        }
-        const int padding = static_cast<unsigned char>(packet.back());
-        if (padding <= 0 || padding > payloadBytes) {
-            return OpusAudioCodecStatus::MalformedRtp;
-        }
-        payloadBytes -= padding;
-    }
-    if (payloadBytes <= 0 || payloadBytes > OpusAudioCodecConfig::kMaxPayloadBytes) {
-        return OpusAudioCodecStatus::MalformedRtp;
-    }
-    parsed.sequence = readU16(packet, 2);
-    parsed.timestamp = readU32(packet, 4);
-    parsed.ssrc = readU32(packet, 8);
-    parsed.payload = packet.mid(headerBytes, payloadBytes);
-    return OpusAudioCodecStatus::Accepted;
-}
-
 OpusPacketInfo packetInfo(const QByteArray& payload)
 {
     OpusPacketInfo info;
@@ -174,11 +118,85 @@ int bandwidthForBitrate(int bitrate)
     }
 }
 
+int audioRtpPayloadType(const QByteArray& packet)
+{
+    if (packet.size() < OpusAudioCodecConfig::kRtpHeaderBytes
+        || (static_cast<quint8>(packet.at(0)) >> 6) != 2) {
+        return -1;
+    }
+    return static_cast<quint8>(packet.at(1)) & 0x7f;
+}
+
+OpusAudioCodecStatus parseAudioRtp(const QByteArray& packet, int payloadType,
+                                   AudioRtpPacket& parsed)
+{
+    if (packet.size() > OpusAudioCodecConfig::kMaxRtpPacketBytes) {
+        return OpusAudioCodecStatus::Oversized;
+    }
+    if (packet.size() < OpusAudioCodecConfig::kRtpHeaderBytes) {
+        return OpusAudioCodecStatus::MalformedRtp;
+    }
+    const quint8 first = static_cast<unsigned char>(packet.at(0));
+    const quint8 second = static_cast<unsigned char>(packet.at(1));
+    if ((first >> 6) != 2 || (second & 0x7f) != payloadType) {
+        return OpusAudioCodecStatus::MalformedRtp;
+    }
+    int headerBytes = OpusAudioCodecConfig::kRtpHeaderBytes + (first & 0x0f) * 4;
+    if (headerBytes > packet.size()) {
+        return OpusAudioCodecStatus::MalformedRtp;
+    }
+    if ((first & 0x10) != 0) {
+        if (packet.size() - headerBytes < 4) {
+            return OpusAudioCodecStatus::MalformedRtp;
+        }
+        const quint16 extensionWords = readU16(packet, headerBytes + 2);
+        const int extensionBytes = 4 + static_cast<int>(extensionWords) * 4;
+        if (extensionBytes > packet.size() - headerBytes) {
+            return OpusAudioCodecStatus::MalformedRtp;
+        }
+        headerBytes += extensionBytes;
+    }
+    int payloadBytes = packet.size() - headerBytes;
+    if ((first & 0x20) != 0) {
+        if (payloadBytes == 0) {
+            return OpusAudioCodecStatus::MalformedRtp;
+        }
+        const int padding = static_cast<unsigned char>(packet.back());
+        if (padding <= 0 || padding > payloadBytes) {
+            return OpusAudioCodecStatus::MalformedRtp;
+        }
+        payloadBytes -= padding;
+    }
+    if (payloadBytes <= 0 || payloadBytes > OpusAudioCodecConfig::kMaxPayloadBytes) {
+        return OpusAudioCodecStatus::MalformedRtp;
+    }
+    parsed.payloadType = payloadType;
+    parsed.sequence = readU16(packet, 2);
+    parsed.timestamp = readU32(packet, 4);
+    parsed.ssrc = readU32(packet, 8);
+    parsed.payload = packet.mid(headerBytes, payloadBytes);
+    return OpusAudioCodecStatus::Accepted;
+}
+
+QByteArray buildAudioRtp(int payloadType, quint16 sequence, quint32 timestamp,
+                         quint32 ssrc, const QByteArray& payload)
+{
+    QByteArray packet;
+    packet.reserve(OpusAudioCodecConfig::kRtpHeaderBytes + payload.size());
+    packet.append(static_cast<char>(0x80)); // V2, no CSRC/extension/padding
+    packet.append(static_cast<char>(payloadType & 0x7f));
+    appendU16(packet, sequence);
+    appendU32(packet, timestamp);
+    appendU32(packet, ssrc);
+    packet.append(payload);
+    return packet;
+}
+
 OpusRtpInspection inspectOpusRtp(const QByteArray& packet, quint32 expectedSsrc)
 {
     OpusRtpInspection result;
-    ParsedRtp parsed;
-    result.status = parseRtp(packet, parsed);
+    AudioRtpPacket parsed;
+    result.status = parseAudioRtp(packet, OpusAudioCodecConfig::kPayloadType, parsed);
     if (result.status != OpusAudioCodecStatus::Accepted) { return result; }
     if (parsed.ssrc != expectedSsrc) {
         result.status = OpusAudioCodecStatus::UnexpectedSsrc;
@@ -288,13 +306,8 @@ OpusRtpEncodeResult OpusAudioEncoder::encode(const QVector<float>& pcmInterleave
         result.status = OpusAudioCodecStatus::EncodeFailed;
         return result;
     }
-    result.packet.reserve(OpusAudioCodecConfig::kRtpHeaderBytes + encoded);
-    result.packet.append(static_cast<char>(0x80)); // V2, no CSRC/extension/padding
-    result.packet.append(static_cast<char>(OpusAudioCodecConfig::kPayloadType));
-    appendU16(result.packet, sequence);
-    appendU32(result.packet, timestamp);
-    appendU32(result.packet, ssrc);
-    result.packet.append(payload);
+    result.packet = buildAudioRtp(OpusAudioCodecConfig::kPayloadType, sequence,
+                                  timestamp, ssrc, payload);
     result.status = OpusAudioCodecStatus::Accepted;
     return result;
 }
@@ -335,8 +348,8 @@ OpusRtpDecodeResult OpusAudioDecoder::decodeRtp(const QByteArray& packet, quint3
     if (!isReady()) {
         return result;
     }
-    ParsedRtp parsed;
-    result.status = parseRtp(packet, parsed);
+    AudioRtpPacket parsed;
+    result.status = parseAudioRtp(packet, OpusAudioCodecConfig::kPayloadType, parsed);
     if (result.status != OpusAudioCodecStatus::Accepted) {
         return result;
     }

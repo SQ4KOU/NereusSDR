@@ -46,6 +46,39 @@ enum class OpusAudioCodecStatus {
     Oversized,
 };
 
+// ---- Profile-neutral RTP audio framing (R-R3-23) ----
+// Opus and the lossless L16 profile (PcmAudioCodec.h) share one RTP
+// boundary: the same 940-byte packet cap, the same RTP version 2 header and
+// the same CSRC, extension and padding rules. Only the payload type and the
+// payload differ, so a receiver reads the payload type first and hands the
+// packet to the matching decoder.
+
+/// One validated RTP audio packet: header fields and the payload alone.
+struct AudioRtpPacket {
+    int payloadType {0};
+    quint16 sequence {0};
+    quint32 timestamp {0};
+    quint32 ssrc {0};
+    QByteArray payload; // CSRC, extension and padding bytes excluded
+};
+
+/// The payload type of an RTP version 2 packet, or -1 when the packet is
+/// shorter than the fixed header or not version 2. Reads nothing else.
+int audioRtpPayloadType(const QByteArray& packet);
+
+/// Validates the RTP boundary for `payloadType`: at most
+/// OpusAudioCodecConfig::kMaxRtpPacketBytes (Oversized otherwise), version 2,
+/// that payload type, well-formed CSRC, extension and padding, and a
+/// non-empty payload no larger than kMaxPayloadBytes (MalformedRtp
+/// otherwise). The SSRC is reported, not checked.
+OpusAudioCodecStatus parseAudioRtp(const QByteArray& packet, int payloadType,
+                                   AudioRtpPacket& parsed);
+
+/// A 12-byte RTP version 2 header (no CSRC, extension, padding or marker)
+/// followed by `payload`.
+QByteArray buildAudioRtp(int payloadType, quint16 sequence, quint32 timestamp,
+                         quint32 ssrc, const QByteArray& payload);
+
 struct OpusPacketInfo {
     int channels {0};
     int bandwidth {0}; // Opus OPUS_BANDWIDTH_* value

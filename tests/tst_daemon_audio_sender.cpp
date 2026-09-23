@@ -11,6 +11,7 @@
 #include "core/session/media/DaemonAudioSender.h"
 #include "core/session/media/DaemonAudioSource.h"
 #include "core/session/media/OpusAudioCodec.h"
+#include "core/session/media/PcmAudioCodec.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -322,6 +323,125 @@ private slots:
         DaemonAudioSender refused(h.engine, unsupported);
         QVERIFY(!refused.encoderProfile().has_value());
         QVERIFY(!refused.start(kSsrc, 1, 0));
+    }
+
+    // R-R3-23 lossless: each 1920-frame capture block leaves as ten L16
+    // packets, sequence +1 and timestamp +192 per packet, continuing into
+    // the next block; the audio is the real master mix, 16-bit exact.
+    void losslessProfileSendsTenL16PacketsPerBlock()
+    {
+        Harness h;
+        h.engine->setSliceStreaming(h.sliceB, false);
+        DaemonAudioSender sender(h.engine);
+        QCOMPARE(sender.profile(), RemoteAudioProfile::Opus);
+        QVERIFY(sender.setProfile(RemoteAudioProfile::Lossless));
+        QCOMPARE(sender.losslessProfile(), l16EncoderProfile());
+        // The Opus encoder stays built for an instant return to Opus.
+        QVERIFY(sender.encoderProfile().has_value());
+        QSignalSpy packets(&sender, &DaemonAudioSender::packetReady);
+        constexpr quint16 firstSequence = 65530;
+        constexpr quint32 firstTimestamp = 0xfffffc00U;
+        QVERIFY(sender.start(kSsrc, firstSequence, firstTimestamp));
+        h.feedMixed(DaemonAudioSource::kBlockFrames * 2, 0.25f, -0.25f, 0.0f, 0.0f);
+        sender.drain();
+        QCOMPARE(packets.count(), 20);
+
+        for (int index = 0; index < packets.count(); ++index) {
+            const QByteArray packet = packetAt(packets, index);
+            QCOMPARE(packet.size(), PcmAudioCodecConfig::kRtpPacketBytes);
+            QVERIFY(packet.size() <= OpusAudioCodecConfig::kMaxRtpPacketBytes);
+            const PcmRtpDecodeResult decoded = decodeL16Rtp(packet, kSsrc);
+            QCOMPARE(decoded.status, OpusAudioCodecStatus::Accepted);
+            QCOMPARE(decoded.sequence, static_cast<quint16>(firstSequence + index));
+            QCOMPARE(decoded.timestamp, static_cast<quint32>(firstTimestamp + 192U * index));
+            if (index >= 10) {
+                // The mixer is past its ramp by the second block: steady
+                // left and right levels, each exactly a 16-bit code.
+                for (int frame = 0; frame < PcmAudioCodecConfig::kPacketFrames; ++frame) {
+                    const float left = decoded.pcmInterleaved.at(frame * 2);
+                    const float right = decoded.pcmInterleaved.at(frame * 2 + 1);
+                    QVERIFY(left != 0.0f && right != 0.0f);
+                    QCOMPARE(left * 32768.0f, std::round(left * 32768.0f));
+                }
+            }
+        }
+        QCOMPARE(sender.nextSequence(), static_cast<quint16>(firstSequence + 20));
+        QCOMPARE(sender.nextTimestamp(),
+                 static_cast<quint32>(firstTimestamp + 2 * DaemonAudioSource::kBlockFrames));
+        const auto telemetry = sender.telemetry();
+        QCOMPARE(telemetry.consumedBlocks, std::uint64_t{2});
+        QCOMPARE(telemetry.encodedPackets, std::uint64_t{20});
+        QCOMPARE(telemetry.encodeFailures, std::uint64_t{0});
+        QCOMPARE(telemetry.lastEmittedSequence, static_cast<quint16>(firstSequence + 19));
+        QCOMPARE(telemetry.lastEmittedTimestamp,
+                 static_cast<quint32>(firstTimestamp + 192U * 19));
+    }
+
+    // A profile change is a new capture epoch: refused while running; after
+    // stop, set and start, queued audio is flushed and the new profile begins
+    // at the caller's block boundary. Opus comes back without a new encoder.
+    void profileChangesOnlyBetweenEpochsAndFlushesQueuedAudio()
+    {
+        Harness h;
+        h.engine->setSliceStreaming(h.sliceB, false);
+        DaemonAudioSender sender(h.engine);
+        QSignalSpy packets(&sender, &DaemonAudioSender::packetReady);
+        QVERIFY(sender.start(kSsrc, 1, 0));
+        QVERIFY(!sender.setProfile(RemoteAudioProfile::Lossless));
+        QCOMPARE(sender.profile(), RemoteAudioProfile::Opus);
+        h.feedMixed(DaemonAudioSource::kBlockFrames, 0.20f, 0.20f, 0.0f, 0.0f);
+        sender.drain();
+        QCOMPARE(packets.count(), 1);
+
+        // Queued, never drained: stop() flushes it.
+        h.feedMixed(DaemonAudioSource::kBlockFrames, 0.20f, 0.20f, 0.0f, 0.0f);
+        const quint16 sequence = sender.nextSequence();
+        const quint32 timestamp = sender.nextTimestamp();
+        QCOMPARE(timestamp, quint32(1920));
+        sender.stop();
+        QVERIFY(sender.setProfile(RemoteAudioProfile::Lossless));
+        QVERIFY(sender.start(kSsrc, sequence, timestamp));
+        sender.drain();
+        QCOMPARE(packets.count(), 1);
+        h.feedMixed(DaemonAudioSource::kBlockFrames, 0.20f, 0.20f, 0.0f, 0.0f);
+        sender.drain();
+        QCOMPARE(packets.count(), 11);
+        const PcmRtpDecodeResult first = decodeL16Rtp(packetAt(packets, 1), kSsrc);
+        QCOMPARE(first.status, OpusAudioCodecStatus::Accepted);
+        QCOMPARE(first.sequence, sequence);
+        QCOMPARE(first.timestamp, timestamp);
+
+        sender.stop();
+        QVERIFY(sender.setProfile(RemoteAudioProfile::Opus));
+        QVERIFY(sender.start(kSsrc, sender.nextSequence(), sender.nextTimestamp()));
+        h.feedMixed(DaemonAudioSource::kBlockFrames, 0.20f, 0.20f, 0.0f, 0.0f);
+        sender.drain();
+        QCOMPARE(packets.count(), 12);
+        OpusAudioDecoder decoder;
+        const auto opus = decoder.decodeRtp(packetAt(packets, 11), kSsrc);
+        QCOMPARE(opus.status, OpusAudioCodecStatus::Accepted);
+        QCOMPARE(opus.sequence, static_cast<quint16>(sequence + 10));
+        QCOMPARE(opus.timestamp, timestamp + 1920U);
+    }
+
+    // A recipient that stops the sender mid-block ends that block: the rest
+    // of its ten packets are never emitted.
+    void losslessStopFromPacketReadyEndsTheBlock()
+    {
+        Harness h;
+        h.engine->setSliceStreaming(h.sliceB, false);
+        DaemonAudioSender sender(h.engine);
+        QVERIFY(sender.setProfile(RemoteAudioProfile::Lossless));
+        QSignalSpy packets(&sender, &DaemonAudioSender::packetReady);
+        QVERIFY(sender.start(kSsrc, 4, 400));
+        h.feedMixed(DaemonAudioSource::kBlockFrames * 2, 0.20f, 0.20f, 0.0f, 0.0f);
+        connect(&sender, &DaemonAudioSender::packetReady, &sender,
+                [&sender, &packets](const QByteArray&) {
+            if (packets.count() == 3) { sender.stop(); }
+        });
+        sender.drain();
+        QCOMPARE(packets.count(), 3);
+        QVERIFY(!sender.isRunning());
     }
 };
 

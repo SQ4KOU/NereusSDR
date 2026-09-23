@@ -7018,6 +7018,9 @@ nereus_add_test(tst_media_peer)
 # Remote Daemon R3, Task 5: the existing RADE-pinned Opus encodes and decodes
 # the bounded mixed-stereo RTP profile without a second codec build.
 nereus_add_test(tst_opus_audio_codec)
+# R-R3-23 lossless audio: L16 packetisation, 16-bit round trip and the
+# shared 940-byte RTP cap.
+nereus_add_test(tst_pcm_audio_codec)
 
 # Remote Daemon R3 audio source: bounded master-mix delivery and synchronous
 # tap retirement across an admitted DSP callback.
