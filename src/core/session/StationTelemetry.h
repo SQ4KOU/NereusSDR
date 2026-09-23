@@ -41,6 +41,13 @@ inline constexpr qsizetype kMaxHostZoneNameLength = 64;
 // a Core that does not measure a value, including every non-Linux Core,
 // leaves it absent. On the wire the section is omitted when nothing in it
 // was measured.
+//
+// Age: the Core samples its host once for every reader (SharedHostSampler,
+// shared by telemetry and the display load governor, R-R3-40), so a
+// snapshot can carry a reading up to one sampler period old
+// (SharedHostSampler::kMinimumIntervalMs, 900 ms), and the CPU percentages
+// cover the interval that ended then. Telemetry does not sample afresh:
+// that would restart the interval the governor measures.
 struct StationHostTelemetry {
     std::optional<double> systemCpuPercent;   // all CPUs, 0-100
     std::optional<double> processCpuPercent;  // nereusd share of all CPUs, 0-100
