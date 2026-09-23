@@ -31,13 +31,17 @@
 //                                    Anthropic Claude Code.
 //                                    Later the same day: SliceModel
 //                                    nnrLimit and the nnr.tryAgain command
-//                                    only for a peer at minor 11.
+//                                    only for a peer at minor 11, including
+//                                    a write's side effects; nnrStatus
+//                                    carries the step-back reason in the
+//                                    Core wording to every peer.
 // =================================================================
 
 #include "core/session/StationServer.h"
 
 #include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
+#include "core/dsp/NnrSettings.h"
 #include "core/security/CertificateStore.h"
 #include "core/security/TokenStore.h"
 #include "core/session/ObjectRegistry.h"
@@ -80,32 +84,54 @@ constexpr const char* kRadioKey = "radio";
 constexpr const char* kTransmitKey = "transmit";
 constexpr const char* kTunerKey = "tuner";
 
-// R-R3-40: drops SliceModel's nnrLimit (minor 11) from a mirror message for
-// an older peer, which would otherwise log a schema skew. Returns false
-// when nothing is left worth sending.
-bool withoutNnrLimit(SessionMessage& message)
+// R-R3-40: the Core's step-back reason in a slice's nnrStatus, reworded for
+// a remote window, which is not the computer that could not keep up.
+QVariant coreWordedNnrStatus(const QVariant& value)
 {
-    static const QByteArray kName("nnrLimit");
+    const QString text = value.toString();
+    for (const NnrLimit limit : {NnrLimit::StandardOnly, NnrLimit::Off}) {
+        if (text == nnrLimitExplanation(static_cast<int>(limit))) {
+            return nnrLimitExplanation(static_cast<int>(limit), NnrLimitSite::CoreComputer);
+        }
+    }
+    return value;
+}
+
+// R-R3-40: fits a mirror message to one peer. Every peer reads the Core's
+// step-back reason (nnrStatus) in the Core wording; a peer below minor 11
+// also loses SliceModel's nnrLimit, which it would otherwise log as a schema
+// skew. Returns false when nothing is left worth sending.
+bool fitNnrLimitToPeer(SessionMessage& message, quint16 agreedMinor)
+{
+    static const QByteArray kLimit("nnrLimit");
+    static const QByteArray kStatus("nnrStatus");
+    const bool older = agreedMinor < kNnrLimitSessionProtocolMinor;
+    const auto fitUpdates = [&](QList<MirrorUpdate>& updates) {
+        if (older) {
+            updates.removeIf([](const MirrorUpdate& update) { return update.name == kLimit; });
+        }
+        for (MirrorUpdate& update : updates) {
+            if (update.name == kStatus) {
+                update.value = coreWordedNnrStatus(update.value);
+            }
+        }
+    };
     switch (message.kind) {
     case SessionMessageKind::Schema:
-        if (message.className == "SliceModel") {
+        if (older && message.className == "SliceModel") {
             message.fields.removeIf([](const SessionSchemaField& field) {
-                return field.name == kName;
+                return field.name == kLimit;
             });
         }
         return true;
     case SessionMessageKind::ObjectCreate:
         if (message.className == "SliceModel") {
-            message.updates.removeIf([](const MirrorUpdate& update) {
-                return update.name == kName;
-            });
+            fitUpdates(message.updates);
         }
         return true;
     case SessionMessageKind::Delta:
         if (message.objectKey.startsWith("slice:")) {
-            message.updates.removeIf([](const MirrorUpdate& update) {
-                return update.name == kName;
-            });
+            fitUpdates(message.updates);
             return !message.updates.isEmpty();
         }
         return true;
@@ -1164,7 +1190,12 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
         }
     }
     if (!corrections.isEmpty()) {
-        send(transport, SessionMessages::delta(message.objectKey, corrections));
+        // A write's side effects can change nnrLimit (turning NNR off or
+        // choosing a model clears it), so they are fitted to this peer too.
+        SessionMessage delta = SessionMessages::delta(message.objectKey, corrections);
+        if (fitNnrLimitToPeer(delta, m_peers.value(transport).agreedMinor)) {
+            send(transport, delta);
+        }
     }
 }
 
@@ -1260,15 +1291,22 @@ void StationServer::sendToSession(const SessionMessage& message)
     if (m_session == nullptr) {
         return;
     }
-    const auto peer = m_peers.constFind(m_session);
-    if (peer != m_peers.cend() && peer->agreedMinor < kNnrLimitSessionProtocolMinor) {
-        SessionMessage older = message;
-        if (withoutNnrLimit(older)) {
-            m_session->sendText(SessionMessages::encode(older));
+    switch (message.kind) {
+    case SessionMessageKind::Schema:
+    case SessionMessageKind::ObjectCreate:
+    case SessionMessageKind::Delta: {
+        const auto peer = m_peers.constFind(m_session);
+        SessionMessage fitted = message;
+        if (fitNnrLimitToPeer(fitted, peer != m_peers.cend() ? peer->agreedMinor
+                                                             : kSessionProtocolMinor)) {
+            m_session->sendText(SessionMessages::encode(fitted));
         }
         return;
     }
-    m_session->sendText(SessionMessages::encode(message));
+    default:
+        m_session->sendText(SessionMessages::encode(message));
+        return;
+    }
 }
 
 void StationServer::setMediaEnabled(bool enabled)

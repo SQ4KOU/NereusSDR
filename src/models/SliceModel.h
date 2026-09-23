@@ -854,7 +854,13 @@ public:
     int nnrTestMode() const { return m_nnrDiagnostics.testMode; }
     int nnrOutputMode() const { return m_nnrDiagnostics.outputMode; }
     QString nnrModelSource() const;
-    QString nnrStatus() const { return m_nnrDiagnostics.explanation; }
+    // R-R3-40: while a limit is in force the status is its plain reason, so
+    // a remote GUI too old to know nnrLimit still reads why its model
+    // changed. Otherwise the receiver's own explanation.
+    QString nnrStatus() const
+    {
+        return m_nnrLimit != 0 ? nnrLimitText() : m_nnrDiagnostics.explanation;
+    }
     QString nnrLastError() const { return m_nnrLastError; }
     bool applyStationNnrDiagnostic(const QByteArray& name, const QVariant& value);
     void reportNnrEditResult(const QString& reason) { setNnrLastError(reason); }
@@ -865,8 +871,14 @@ public:
     // choice (nnrModelSlot, activeNr) is untouched while it is in force.
     int nnrLimit() const { return m_nnrLimit; }
     void setNnrLimit(int limit);
-    // The plain-English reason for the limit, empty when there is none.
-    QString nnrLimitText() const { return nnrLimitExplanation(m_nnrLimit); }
+    // The plain-English reason for the limit, empty when there is none. A
+    // limit that arrived through the station mirror names the Core
+    // computer; one set here names this computer.
+    QString nnrLimitText() const
+    {
+        return nnrLimitExplanation(m_nnrLimit, m_nnrLimitFromCore ? NnrLimitSite::CoreComputer
+                                                                  : NnrLimitSite::ThisComputer);
+    }
     // The operator asks to try the saved choice again ("Try again").
     // Emits nnrRetryRequested; the session owner clears the limit.
     void requestNnrRetry();
@@ -1405,6 +1417,7 @@ private:
     QString m_settingsRadioMac;
     QString m_nnrLastError;
     int m_nnrLimit{0};   // R-R3-40 runtime only; see nnrLimit()
+    bool m_nnrLimitFromCore{false};   // set by the station mirror; see nnrLimitText()
     void setNnrLastError(const QString& error);
 
 

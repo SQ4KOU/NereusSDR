@@ -223,7 +223,6 @@ void RxDashboard::bindSlice(SliceModel* slice)
     onModeChanged(static_cast<int>(slice->dspMode()));
     onFilterChanged(slice->filterLow(), slice->filterHigh());
     onAgcChanged(static_cast<int>(slice->agcMode()));
-    m_nnrLimit = slice->nnrLimit();
     onNrChanged(static_cast<int>(slice->activeNr()));
     onNbChanged(static_cast<int>(slice->nbMode()));
     onApfChanged(slice->apfEnabled());
@@ -307,8 +306,10 @@ void RxDashboard::onNrChanged(int nrSlot)
         ? QString::fromLatin1(kNrLabels[nrSlot])
         : QStringLiteral("NR");
     m_nrBadge->setLabel(name);
-    const QString limitReason = nrSlot == static_cast<int>(NrSlot::NNR)
-        ? nnrLimitExplanation(m_nnrLimit) : QString();
+    // The slice words the reason for this window: a remote window names
+    // the Core computer, a local one this computer.
+    const QString limitReason = nrSlot == static_cast<int>(NrSlot::NNR) && m_slice
+        ? m_slice->nnrLimitText() : QString();
     m_nrBadge->setVariant(limitReason.isEmpty() ? StatusBadge::Variant::On
                                                 : StatusBadge::Variant::Warn);
     m_nrBadge->setToolTip(limitReason.isEmpty()
@@ -316,9 +317,8 @@ void RxDashboard::onNrChanged(int nrSlot)
     emit badgeAvailabilityChanged(8, true);
 }
 
-void RxDashboard::onNnrLimitChanged(int limit)
+void RxDashboard::onNnrLimitChanged(int /*limit*/)
 {
-    m_nnrLimit = limit;
     if (m_slice) {
         onNrChanged(static_cast<int>(m_slice->activeNr()));
     }

@@ -1248,6 +1248,8 @@ void SliceModel::setNnrLimit(int limit)
     }
     m_nnrLimit = limit;
     emit nnrLimitChanged(limit);
+    // nnrStatus reads the limit's reason while one is in force.
+    emit nnrDiagnosticsChanged();
 }
 
 void SliceModel::requestNnrRetry()
@@ -1310,7 +1312,10 @@ bool SliceModel::applyStationNnrDiagnostic(const QByteArray& name, const QVarian
     else if (name == "nnrLimit") {
         bool ok = false;
         const int limit = value.toInt(&ok);
-        if (!ok || !isValidNnrLimit(limit)) return false;
+        if (!ok || !isValidNnrLimit(limit)) {
+            return false;
+        }
+        m_nnrLimitFromCore = true;   // the Core set it: say so in its reason
         setNnrLimit(limit);
         return true;
     }

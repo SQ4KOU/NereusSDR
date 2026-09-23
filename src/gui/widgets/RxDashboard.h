@@ -118,7 +118,6 @@ private:
     void buildUi();
 
     QChar        m_sliceLetter{QLatin1Char('A')};
-    int          m_nnrLimit{0};   // R-R3-40
     QLabel*      m_sliceTag{nullptr};
     SliceModel*  m_slice{nullptr};
     StatusBadge* m_modeBadge{nullptr};

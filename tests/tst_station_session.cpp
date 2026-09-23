@@ -58,6 +58,7 @@
 #include <QWebSocketProtocol>
 
 #include <memory>
+#include <optional>
 
 #include "core/AppSettings.h"
 #include "core/ConnectionState.h"
@@ -66,6 +67,7 @@
 #include "core/P1RadioConnection.h"
 #include "core/security/CertificateStore.h"
 #include "core/security/TokenStore.h"
+#include "core/session/ObjectRegistry.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/SessionTransport.h"
 #include "core/session/StateMirror.h"
@@ -297,6 +299,8 @@ private slots:
     void clientKeepsReceiverLoadOnlyWhenNegotiated();
     void nnrLimitReachesMinorElevenPeerAndTryAgainClearsIt();
     void nnrLimitIsOmittedForMinorTenPeer();
+    void minorTenWriteThatClearsTheLimitCarriesNoNnrLimit();
+    void minorTenPeerReadsWhyInNnrStatus();
     void clientSendsTryAgainOnlyAtMinorEleven();
     void remoteTgxlClientRequiresHandshakeMinorAndCapability();
     void remoteFourO3AClientRequiresHandshakeMinorAndCapability();
@@ -974,8 +978,11 @@ void TstStationSession::nnrLimitReachesMinorElevenPeerAndTryAgainClearsIt()
 
     coreSlice->setNnrLimit(static_cast<int>(NnrLimit::StandardOnly));   // the Core stepped back
     QTRY_COMPARE(guiSlice->nnrLimit(), static_cast<int>(NnrLimit::StandardOnly));
-    QCOMPARE(guiSlice->nnrLimitText(), QStringLiteral(
-        "Noise reduction is using the Standard model. This computer could not keep up with Premium."));
+    // A remote window names the Core computer, never "this computer".
+    const QString coreText = QStringLiteral(
+        "Noise reduction is using the Standard model. The Core computer could not keep up with Premium.");
+    QCOMPARE(guiSlice->nnrLimitText(), coreText);
+    QTRY_COMPARE(guiSlice->nnrStatus(), coreText);
 
     // The station changing the model is an echo, not the operator asking.
     NnrSettings standard = coreSlice->nnrSettings();
@@ -1018,8 +1025,9 @@ void TstStationSession::nnrLimitIsOmittedForMinorTenPeer()
     peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
     QTRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("snapshot.complete")));
 
-    // Changes after the snapshot: the limit alone sends nothing; a limit
-    // change batched with another property sends only that property.
+    // Changes after the snapshot: the limit itself never reaches this peer
+    // (a change sends only nnrStatus, its plain reason); a limit change
+    // batched with another property sends only the others.
     coreSlice->setNnrLimit(static_cast<int>(NnrLimit::Off));
     coreSlice->setNnrLimit(static_cast<int>(NnrLimit::None));
     coreSlice->setNnrAlpha(2.5);
@@ -1066,6 +1074,117 @@ void TstStationSession::nnrLimitIsOmittedForMinorTenPeer()
     QCOMPARE(result.reason, QStringLiteral(
         "This station cannot try noise reduction again. Update the station software."));
     QCOMPARE(coreSlice->nnrLimit(), static_cast<int>(NnrLimit::StandardOnly));
+}
+
+// R-R3-40: a minor-10 GUI turning NNR off while the Core holds a limit
+// clears it as a side effect; the write's corrections never carry nnrLimit
+// to that GUI.
+void TstStationSession::minorTenWriteThatClearsTheLimitCarriesNoNnrLimit()
+{
+    QTemporaryDir settingsDir;
+    AppSettings settings(settingsDir.filePath(QStringLiteral("nnr-limit-write.settings")));
+    auto model = makeStationRadioModel(0);
+    SliceModel* coreSlice = model->slices().first();
+    coreSlice->setActiveNr(NrSlot::NNR);
+    QCOMPARE(coreSlice->activeNr(), NrSlot::NNR);
+    StationServer server(model.get(), settings, m_securityDir.path());
+    auto* station = new LoopbackTransport(QStringLiteral("minor10-nnr-write-station"), this);
+    auto* peer = new LoopbackTransport(QStringLiteral("minor10-nnr-write-client"), this);
+    station->linkTo(peer);
+    server.acceptTransport(station);
+    peer->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor, kNnrLimitSessionProtocolMinor - 1, 6,
+        QStringLiteral("minor-10-client"))));
+    peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
+    QTRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("snapshot.complete")));
+
+    const QByteArray key = ObjectRegistry::keyForSlice(coreSlice->sliceIndex());
+    MirrorUpdate activeNr;
+    for (const QByteArray& wire : peer->received()) {
+        const SessionMessage message = decodeOrFail(wire);
+        if (message.kind == SessionMessageKind::ObjectCreate && message.objectKey == key) {
+            for (const MirrorUpdate& update : message.updates) {
+                if (update.name == "activeNr") {
+                    activeNr = update;
+                }
+            }
+        }
+    }
+    QCOMPARE(activeNr.name, QByteArray("activeNr"));
+
+    coreSlice->setNnrLimit(static_cast<int>(NnrLimit::StandardOnly));
+    QTest::qWait(100);
+    peer->clearReceived();
+    activeNr.value = qint64(static_cast<int>(NrSlot::NR2));
+    peer->sendText(SessionMessages::encode(SessionMessages::propertyWrite(key, {activeNr})));
+    QTRY_COMPARE(coreSlice->activeNr(), NrSlot::NR2);
+    QCOMPARE(coreSlice->nnrLimit(), 0);   // cleared as a side effect
+    QTRY_VERIFY([&] {
+        for (const QByteArray& wire : peer->received()) {
+            if (wire.contains("\"activeNr\"") && wire.contains("\"delta\"")) {
+                return true;
+            }
+        }
+        return false;
+    }());
+    QTest::qWait(200);
+    for (const QByteArray& wire : peer->received()) {
+        QVERIFY2(!wire.contains("nnrLimit"), wire.constData());
+        const SessionMessage message = decodeOrFail(wire);
+        if (message.kind == SessionMessageKind::Delta) {
+            QVERIFY(!message.updates.isEmpty());
+        }
+    }
+}
+
+// R-R3-40: a minor-10 GUI never sees nnrLimit, but its existing nnrStatus
+// text says why its model changed, naming the Core computer; the text goes
+// back to the receiver's own status when the limit clears.
+void TstStationSession::minorTenPeerReadsWhyInNnrStatus()
+{
+    QTemporaryDir settingsDir;
+    AppSettings settings(settingsDir.filePath(QStringLiteral("nnr-limit-status.settings")));
+    auto model = makeStationRadioModel(0);
+    SliceModel* coreSlice = model->slices().first();
+    StationServer server(model.get(), settings, m_securityDir.path());
+    auto* station = new LoopbackTransport(QStringLiteral("minor10-nnr-status-station"), this);
+    auto* peer = new LoopbackTransport(QStringLiteral("minor10-nnr-status-client"), this);
+    station->linkTo(peer);
+    server.acceptTransport(station);
+    peer->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor, kNnrLimitSessionProtocolMinor - 1, 6,
+        QStringLiteral("minor-10-client"))));
+    peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
+    QTRY_VERIFY(peer->receivedKinds().contains(QByteArrayLiteral("snapshot.complete")));
+    const QString normal = coreSlice->nnrStatus();
+
+    const auto lastStatus = [&]() -> std::optional<QString> {
+        std::optional<QString> status;
+        for (const QByteArray& wire : peer->received()) {
+            const SessionMessage message = decodeOrFail(wire);
+            if (message.kind != SessionMessageKind::Delta) {
+                continue;
+            }
+            for (const MirrorUpdate& update : message.updates) {
+                if (update.name == "nnrStatus") {
+                    status = update.value.toString();
+                }
+            }
+        }
+        return status;
+    };
+    peer->clearReceived();
+    coreSlice->setNnrLimit(static_cast<int>(NnrLimit::StandardOnly));
+    QTRY_COMPARE(lastStatus(), std::optional<QString>(QStringLiteral(
+        "Noise reduction is using the Standard model. The Core computer could not keep up with Premium.")));
+    coreSlice->setNnrLimit(static_cast<int>(NnrLimit::Off));
+    QTRY_COMPARE(lastStatus(), std::optional<QString>(QStringLiteral(
+        "Noise reduction was turned off. The Core computer could not keep up.")));
+    coreSlice->setNnrLimit(static_cast<int>(NnrLimit::None));
+    QTRY_COMPARE(lastStatus(), std::optional<QString>(normal));
+    for (const QByteArray& wire : peer->received()) {
+        QVERIFY2(!wire.contains("nnrLimit"), wire.constData());
+    }
 }
 
 // The GUI sends nnr.tryAgain only to a Core that negotiated minor 11.

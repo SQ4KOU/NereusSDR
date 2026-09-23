@@ -6,7 +6,8 @@
 //   2026-09-21 — J.J. Boyd (KG4VCF), with OpenAI Codex assistance.
 //   2026-09-23 : NnrLimit, nnrLimitExplanation and the applied-limit
 //                readback (R-R3-40) by J.J. Boyd (KG4VCF), with Anthropic
-//                Claude Code assistance.
+//                Claude Code assistance. NnrLimitSite (the Core wording for
+//                a remote window) added the same day.
 #pragma once
 
 #include "core/WdspTypes.h"
@@ -58,15 +59,26 @@ enum class NnrLimit : int { None = 0, StandardOnly = 1, Off = 2 };
     return value >= static_cast<int>(NnrLimit::None) && value <= static_cast<int>(NnrLimit::Off);
 }
 
+// Which computer the operator is told could not keep up: the one running
+// this window, or, in a remote window, the Core computer it is connected to.
+enum class NnrLimitSite : int { ThisComputer = 0, CoreComputer = 1 };
+
 // What the operator reads while a limit is in force; empty when there is none.
-[[nodiscard]] inline QString nnrLimitExplanation(int limit)
+[[nodiscard]] inline QString nnrLimitExplanation(
+    int limit, NnrLimitSite site = NnrLimitSite::ThisComputer)
 {
+    const bool core = site == NnrLimitSite::CoreComputer;
     switch (limit) {
     case static_cast<int>(NnrLimit::StandardOnly):
-        return QStringLiteral("Noise reduction is using the Standard model. "
-                              "This computer could not keep up with Premium.");
+        return core ? QStringLiteral("Noise reduction is using the Standard model. "
+                                     "The Core computer could not keep up with Premium.")
+                    : QStringLiteral("Noise reduction is using the Standard model. "
+                                     "This computer could not keep up with Premium.");
     case static_cast<int>(NnrLimit::Off):
-        return QStringLiteral("Noise reduction was turned off. This computer could not keep up.");
+        return core ? QStringLiteral("Noise reduction was turned off. "
+                                     "The Core computer could not keep up.")
+                    : QStringLiteral("Noise reduction was turned off. "
+                                     "This computer could not keep up.");
     default:
         return {};
     }

@@ -2356,7 +2356,9 @@ void VfoWidget::onActiveNrChanged(NereusSDR::NrSlot slot)
 void VfoWidget::onNnrLimitChanged(int limit)
 {
     if (!m_nnrBtn || !m_nnrLimitIndicator) { return; }  // not yet built
-    const QString reason = nnrLimitExplanation(limit);
+    // The slice words the reason for this window: a remote window names
+    // the Core computer, a local one this computer.
+    const QString reason = m_slice && limit != 0 ? m_slice->nnrLimitText() : QString();
     m_nnrLimitIndicator->setVisible(!reason.isEmpty());
     m_nnrLimitIndicator->setToolTip(reason);
     m_nnrBtn->setToolTip(reason.isEmpty() ? m_nnrToolTip : reason);

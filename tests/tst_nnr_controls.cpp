@@ -79,6 +79,7 @@ private slots:
     void compactAdvancedExpansionPersistsAsGuiPreference();
     void stepBackNoticeExplainsAndTryAgainAsksForTheSavedChoice();
     void stepBackIndicatorsOnTheVfoFlagAndDashboard();
+    void remoteWindowsNameTheCoreComputer();
 };
 
 namespace {
@@ -169,6 +170,44 @@ void TestNnrControls::stepBackIndicatorsOnTheVfoFlagAndDashboard()
     QVERIFY(!indicator->isHidden());
     slice.setNnrLimit(static_cast<int>(NnrLimit::None));
     QVERIFY(!indicator->isHidden());
+}
+
+// R-R3-40: in a remote window (the limit arrived from the Core through the
+// station mirror) every step-back text names the Core computer.
+void TestNnrControls::remoteWindowsNameTheCoreComputer()
+{
+    const QString coreStandard = QStringLiteral(
+        "Noise reduction is using the Standard model. The Core computer could not keep up with Premium.");
+    const QString coreOff = QStringLiteral(
+        "Noise reduction was turned off. The Core computer could not keep up.");
+    SliceModel slice(13);
+    slice.setActiveNr(NrSlot::NNR);
+    slice.setNnrModelSlot(1);
+    NnrControls controls(nullptr, &slice, NnrControls::Presentation::Compact);
+    auto* notice = control<QLabel>(controls, "nnrLimitNotice");
+    VfoWidget vfo;
+    vfo.setSlice(&slice);
+    auto* indicator = vfo.findChild<QLabel*>(QStringLiteral("vfoNnrLimitIndicator"));
+    auto* nnr = buttonWithText(vfo, QStringLiteral("NNR"));
+    QVERIFY(indicator);
+    QVERIFY(nnr);
+    RxDashboard dashboard;
+    dashboard.bindSlice(&slice);
+    StatusBadge* nrBadge = dashboard.badgeForRung(8);
+    QVERIFY(nrBadge);
+
+    QVERIFY(slice.applyStationNnrDiagnostic("nnrLimit", 1));
+    QCOMPARE(notice->text(), coreStandard);
+    QCOMPARE(indicator->toolTip(), coreStandard);
+    QCOMPARE(nnr->toolTip(), coreStandard);
+    QCOMPARE(nrBadge->toolTip(), coreStandard);
+    QCOMPARE(slice.nnrStatus(), coreStandard);
+
+    QVERIFY(slice.applyStationNnrDiagnostic("nnrLimit", 2));
+    QCOMPARE(notice->text(), coreOff);
+    QCOMPARE(indicator->toolTip(), coreOff);
+    QCOMPARE(nnr->toolTip(), coreOff);
+    QCOMPARE(nrBadge->toolTip(), coreOff);
 }
 
 void TestNnrControls::editsAllNineAcceptedPropertiesWithFractionalPrecision()
