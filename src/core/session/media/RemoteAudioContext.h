@@ -52,6 +52,8 @@ struct RemoteAudioContextMessage {
 // revision, generation, enabled, ssrc, firstSequence, firstTimestamp) with
 // today's JSON number types; encoder/offReason are not written.
 // detailNegotiated=true: those eight plus "encoder" (enabled) or "reason" (disabled).
+// An enabled message with no encoder is written disabled with reason
+// encoder-unavailable, the only shape a minor-8 GUI accepts for it.
 QJsonObject encodeRemoteAudioContext(const RemoteAudioContextMessage& message,
                                      bool detailNegotiated);
 

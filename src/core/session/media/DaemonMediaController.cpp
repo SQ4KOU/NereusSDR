@@ -1776,6 +1776,16 @@ void DaemonMediaController::sendAudioContext(bool enabled, RemoteAudioOffReason 
     if (!m_peer || m_audioRevision == 0) {
         return;
     }
+    const bool detailNegotiated = m_server && m_server->remoteAudioStatusAvailable();
+    if (enabled && detailNegotiated
+        && !(m_audioSender && m_audioSender->encoderProfile())) {
+        // A minor-8 GUI refuses an enabled context without its encoder
+        // profile. With no profile to report, stop the sender so no RTP
+        // flows under the context and say plainly why audio is off.
+        stopAudioCapture();
+        enabled = false;
+        reason = RemoteAudioOffReason::EncoderUnavailable;
+    }
     const quint32 contextGeneration = nextContextGeneration();
     if (enabled) {
         beginAudioDiagnostics(contextGeneration);
@@ -1796,8 +1806,7 @@ void DaemonMediaController::sendAudioContext(bool enabled, RemoteAudioOffReason 
         message.offReason = reason;
     }
     // A minor-7 peer gets exactly the eight keys it has always parsed.
-    sendControl(encodeRemoteAudioContext(
-        message, m_server && m_server->remoteAudioStatusAvailable()));
+    sendControl(encodeRemoteAudioContext(message, detailNegotiated));
 }
 
 DaemonAudioDiagnostics DaemonMediaController::snapshotAudioDiagnostics() const

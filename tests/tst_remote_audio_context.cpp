@@ -327,6 +327,26 @@ private slots:
         }
     }
 
+    // An enabled context with no encoder profile would reach a minor-8 GUI
+    // with eight keys and be refused, leaving it silent with no reason. It
+    // goes out disabled with reason encoder-unavailable instead, a shape
+    // the GUI decodes; the legacy shape is unchanged.
+    void enabledWithoutEncoderGoesOutAsEncoderUnavailable()
+    {
+        RemoteAudioContextMessage on = sampleMessage(true);
+        on.encoder.reset();
+        const QJsonObject detail = overTheWire(encodeRemoteAudioContext(on, true));
+        QCOMPARE(detail.size(), 9);
+        QCOMPARE(detail, sampleDetailDisabled(QStringLiteral("encoder-unavailable")));
+        const std::optional<RemoteAudioContextMessage> decoded =
+            decodeRemoteAudioContext(detail, true);
+        QVERIFY(decoded.has_value());
+        QVERIFY(!decoded->enabled);
+        QCOMPARE(decoded->offReason, std::optional(RemoteAudioOffReason::EncoderUnavailable));
+
+        QCOMPARE(encodeRemoteAudioContext(on, false), sampleLegacy(true));
+    }
+
     void legacyDecodingAcceptsWhatTheGuiAlwaysAccepted_data()
     {
         QTest::addColumn<QJsonObject>("payload");

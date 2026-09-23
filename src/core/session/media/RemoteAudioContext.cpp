@@ -146,9 +146,16 @@ QJsonObject encodeRemoteAudioContext(const RemoteAudioContextMessage& message,
     if (!detailNegotiated) {
         return payload;
     }
-    if (message.enabled && message.encoder) {
+    if (message.enabled && !message.encoder) {
+        // A minor-8 GUI refuses an enabled context without its encoder, so
+        // Core never sends one: without a profile there is no audio to
+        // describe. The caller stops its sender before it gets here.
+        payload.insert(QStringLiteral("enabled"), false);
+        payload.insert(QStringLiteral("reason"),
+                       remoteAudioOffReasonToWire(RemoteAudioOffReason::EncoderUnavailable));
+    } else if (message.enabled) {
         payload.insert(QStringLiteral("encoder"), remoteAudioEncoderToJson(*message.encoder));
-    } else if (!message.enabled && message.offReason) {
+    } else if (message.offReason) {
         payload.insert(QStringLiteral("reason"), remoteAudioOffReasonToWire(*message.offReason));
     }
     return payload;
