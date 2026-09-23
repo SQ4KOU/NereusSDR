@@ -225,6 +225,9 @@ suites listed in the verification line, pass unchanged.
   channels to apply them to, so the notch is drawn remotely and not applied
   until the Core restarts. TNF is a receive function, so it is not disabled
   here; it needs a Core-side live apply or a mirrored notch object.
+  Update, September 23: the Core now owns the notch list and a window with
+  capability `notchControlVersion=1` edits it with `notch.*` commands; see
+  [remote notch control version 1](../2026-09-23-remote-notch-control-v1.md).
 - **F2, settings written to the Core; DSP > Options now applied there.** The
   NR3 model selector writes `Nr3ModelPath` and calls `RNNRloadModel()` in
   this process; whether the Core applies it before its next restart is
