@@ -2569,6 +2569,151 @@ private slots:
         client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
+    // C1 (R-R3-01, R-R3-08, R-R3-09, R-R3-37): in budget mode a pan Core
+    // grants fewer pixels than it asked for still paints. A minor 9 GUI
+    // accepts the smaller granted charge; a minor 8 GUI, which knows nothing
+    // of grants, is charged exactly what it requested, as before.
+    void budgetModePaintsWhenCoreGrantsFewerPixels_data()
+    {
+        QTest::addColumn<int>("minor");
+        QTest::addColumn<bool>("shared");
+        const int grant = int(kRemoteSpectrumGrantSessionProtocolMinor);
+        QTest::newRow("minor 9 crop past the source edge") << grant << false;
+        QTest::newRow("minor 9 shared engine") << grant << true;
+        QTest::newRow("minor 8 crop past the source edge") << grant - 1 << false;
+        QTest::newRow("minor 8 shared engine") << grant - 1 << true;
+    }
+
+    void budgetModePaintsWhenCoreGrantsFewerPixels()
+    {
+        QFETCH(int, minor);
+        QFETCH(bool, shared);
+        const bool grantAgreed = minor >= kRemoteSpectrumGrantSessionProtocolMinor;
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        auto& appSettings = AppSettings::instance();
+        const bool hadFft = appSettings.contains(QStringLiteral("DisplayFftSize"));
+        const QVariant savedFft = appSettings.value(QStringLiteral("DisplayFftSize"));
+        appSettings.setValue(QStringLiteral("DisplayFftSize"), QStringLiteral("4096"));
+        const auto restoreFft = qScopeGuard([&] {
+            if (hadFft) { appSettings.setValue(QStringLiteral("DisplayFftSize"), savedFft); }
+            else { appSettings.remove(QStringLiteral("DisplayFftSize")); }
+        });
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        const int sliceId = station.addSlice();
+        auto* slice = station.sliceById(sliceId);
+        QVERIFY(slice);
+        const int stream = slice->streamIndex();
+        QVERIFY(stream >= 0);
+        const double centre = station.streamCentreHz(stream);
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        QVERIFY(server.setDisplayBudgetLimits({10'000'000, 10'000'000, 1}));
+        QPointer<DisplayTransport> sourceMedia;
+        DaemonMediaController daemon(&server, &station, nullptr,
+            [&sourceMedia](QObject* owner) -> IMediaTransport* {
+                sourceMedia = new DisplayTransport(owner);
+                return sourceMedia;
+            });
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true); // Display fixture opens no speaker.
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        PanadapterStack stack;
+        auto* first = stack.addPanadapter(QStringLiteral("first"));
+        first->setActiveSliceIndex(sliceId);
+        first->spectrumWidget()->setExtendedViewAllowed(false);
+        // Shared: a "fine" pan that sizes the engine. Edge: a crop that
+        // overlaps the source by 4 kHz, so fewer bins than pixels exist.
+        if (shared) {
+            first->spectrumWidget()->setDisplayWindowPreservingHistory(centre, 12000);
+        } else {
+            first->spectrumWidget()->setDisplayWindowPreservingHistory(centre + 116000, 48000);
+        }
+        stack.resize(600, 400);
+        stack.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&stack));
+        QPointer<DisplayTransport> sinkMedia;
+        RemoteMediaController gui(&client, &remote, &stack, nullptr,
+            [&sinkMedia](QObject* owner) -> IMediaTransport* {
+                sinkMedia = new DisplayTransport(owner);
+                return sinkMedia;
+            });
+        QSignalSpy outbound(&server, &StationServer::mediaControlReceived);
+        QSignalSpy inbound(&client, &StationClient::mediaControlReceived);
+        auto* stationLink = new Test::RewritingTransport(QStringLiteral("station"),
+                                                         quint16(minor));
+        auto* clientLink = new Test::RewritingTransport(QStringLiteral("client"),
+                                                        quint16(minor));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(client.remoteDisplayBudgetLimits().has_value());
+        QTRY_VERIFY(sourceMedia && sinkMedia);
+        QCOMPARE(gui.spectrumGrantNegotiated(), grantAgreed);
+        sourceMedia->other = sinkMedia;
+        sourceMedia->activate();
+        sinkMedia->activate();
+        QVector<float> iq(2048);
+        for (int i = 0; i < iq.size(); i += 2) {
+            iq[i] = 0.01f * std::cos(double(i) * 0.17);
+            iq[i + 1] = 0.01f * std::sin(double(i) * 0.17);
+        }
+        // Enough samples per poll for the longest FFT these rows use.
+        const auto feed = [&] {
+            for (int block = 0; block < 32; ++block) {
+                QMetaObject::invokeMethod(&station, "rawIqDataForStream", Qt::DirectConnection,
+                    Q_ARG(int, stream), Q_ARG(QVector<float>, iq));
+            }
+        };
+        const auto paints = [&](PanadapterApplet* applet) {
+            feed();
+            return !applet->spectrumWidget()->renderedPixels().isEmpty();
+        };
+        QTRY_VERIFY2_WITH_TIMEOUT(paints(first), qPrintable(first->remoteDisplayStatus()), 5000);
+
+        PanadapterApplet* limited = first;
+        if (shared) {
+            // A deeper zoom on the same receiver asks for a longer "fine"
+            // FFT than the first pan's engine; it is granted that engine.
+            limited = stack.addPanadapter(QStringLiteral("second"));
+            limited->setActiveSliceIndex(sliceId);
+            limited->spectrumWidget()->setExtendedViewAllowed(false);
+            limited->spectrumWidget()->setDisplayWindowPreservingHistory(centre, 6000);
+            QTRY_COMPARE(daemon.activeEndpointCount(), 2);
+        }
+        QTRY_VERIFY2_WITH_TIMEOUT(paints(limited), qPrintable(limited->remoteDisplayStatus()),
+                                  5000);
+        QVERIFY2(!limited->remoteDisplayStatus().contains(QStringLiteral("stalled")),
+                 qPrintable(limited->remoteDisplayStatus()));
+
+        // The limited pan really was granted fewer pixels than it asked for.
+        bool reduced = false;
+        for (const QJsonObject& context : controlsFor(inbound, QStringLiteral("context"))) {
+            const auto decoded = decodeRemoteSpectrumContext(context, grantAgreed);
+            QVERIFY(decoded.has_value());
+            for (const QJsonObject& request : controlsFor(outbound, QStringLiteral("subscribe"))) {
+                if (quint32(request.value(QStringLiteral("endpointId")).toDouble())
+                        == decoded->endpointId
+                    && decoded->traceSamples
+                        < request.value(QStringLiteral("pixels")).toInt()) {
+                    reduced = true;
+                    if (grantAgreed) {
+                        QCOMPARE(decoded->grant->limit, shared
+                            ? SpectrumLimitReason::SharedEngine
+                            : SpectrumLimitReason::SourceBins);
+                    }
+                }
+            }
+        }
+        QVERIFY(reduced);
+        QCOMPARE(countControl(inbound, QStringLiteral("rejected")), 0);
+        client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
     // R-R3-23 (a): a real speaker loss becomes a lasting playback problem
     // with Retry. Mute, unmute, a device change, a disabled context and
     // time do not clear it while the speaker is still gone.

@@ -1024,8 +1024,14 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
                                 QStringLiteral("requested crop is outside source coverage"));
     }
     grant.reason = grantReason(grant);
+    // A GUI that negotiated the grant accepts a charge no larger than it
+    // asked for, so the budget holds what is granted. An older GUI requires
+    // the charge for exactly its requested pixels; it is held to that, which
+    // still covers every sample the endpoint emits.
+    const int chargedPixels = m_server && m_server->spectrumGrantAvailable()
+        ? grant.grantedPixels : pixels;
     const auto displayCost = spectrumDisplayCost(
-        grant.grantedPixels, fps, request.requestedWideSpanFactor > 1.0);
+        chargedPixels, fps, request.requestedWideSpanFactor > 1.0);
     if (!displayCost || !spectrumAdmissionFits(endpointId, displayCost->charge)) {
         return rejectAllocation(control, endpointId, revision,
                                 QStringLiteral("session display budget exceeded"));

@@ -1896,7 +1896,11 @@ void RemoteMediaController::receiveAllocationResult(const QJsonObject& payload)
     const Private::Binding::Pending pending = *binding.pending;
     if (pending.kind == Private::Binding::PendingKind::Subscribe) {
         if (outcomeAccepted) {
-            if (acceptedRevision != revision || retained != pending.charge) { return; }
+            // Under the grant report Core charges the pixels it granted,
+            // which may be fewer than requested; it never charges more.
+            const bool chargeAccepted = spectrumGrantNegotiated()
+                ? nonIncreasing(retained, pending.charge) : retained == pending.charge;
+            if (acceptedRevision != revision || !chargeAccepted) { return; }
             binding.acceptedRevision = acceptedRevision;
             binding.acceptedCharge = retained;
             binding.acceptedRequest = pending.request;
