@@ -209,10 +209,16 @@ void TestDspAssetDialog::missingDesiredSelectionRemainsVisibleAndPending()
     QVERIFY(service.nnrModelSelectionPending());
     QVERIFY(status->text().contains(QStringLiteral("Pending")));
     // R-R3-21: the selection rows and their status are in user words.
+    int checked = 0;
     for (const QLabel* label : dialog.findChildren<QLabel*>()) {
-        QVERIFY2(label->text().isEmpty() || OperatorWording::isPlain(label->text()),
-                 qPrintable(label->text()));
+        if (label->text().isEmpty()) {
+            continue;
+        }
+        QVERIFY2(OperatorWording::isPlain(label->text()), qPrintable(label->text()));
+        ++checked;
     }
+    // Never passes on nothing: the status, both model rows and the details.
+    QVERIFY2(checked >= 4, qPrintable(QString::number(checked)));
 }
 
 void TestDspAssetDialog::refusedSelectionRestoresCoreState()

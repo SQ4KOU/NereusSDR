@@ -1835,6 +1835,9 @@ nereus_add_test(tst_pan_status_text)
 # product's one internal-term list.
 # NereusSDR-original: no upstream port.
 nereus_add_test(tst_operator_wording_sweep)
+# Fix wave M1/M7: the sweep reads the sources it checks.
+target_compile_definitions(tst_operator_wording_sweep PRIVATE
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # ── Phase 3F Sub-Epic E Task 3: per-pan status-overlay badge clicks ─────────
 # The badges paint on every pan (00ab9522 lit WIDE, 0896b4f3 drove the whole

@@ -165,7 +165,10 @@ private slots:
         QVERIFY2(controller.detailText().contains(QStringLiteral(
                      "accepted 27, discarded before playback 62, decoded 25,")),
                  qPrintable(controller.detailText()));
-        // R-R3-21: every line of the explanation is in user words.
+        // R-R3-21: every line of the explanation is in user words, and
+        // there are lines to check (fix wave M1).
+        QVERIFY2(controller.detailText().split(QLatin1Char('\n')).size() >= 10,
+                 qPrintable(controller.detailText()));
         for (const QString& line : controller.detailText().split(QLatin1Char('\n'))) {
             QVERIFY2(OperatorWording::isPlain(line), qPrintable(line));
         }

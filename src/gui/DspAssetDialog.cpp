@@ -127,8 +127,8 @@ DspAssetDialog::DspAssetDialog(RadioModel* radio, DspAssetService* service,
 {
     setObjectName(QStringLiteral("dspAssetDialog"));
     switch (kind) {
-    case DspAssetKind::NnrModel: setWindowTitle(tr("NNR Model Assets")); break;
-    case DspAssetKind::Ps3Correction: setWindowTitle(tr("PureSignal Correction Assets")); break;
+    case DspAssetKind::NnrModel: setWindowTitle(tr("NNR Model Files")); break;
+    case DspAssetKind::Ps3Correction: setWindowTitle(tr("PureSignal Correction Files")); break;
     case DspAssetKind::Nr3Model: setWindowTitle(tr("NR3 Models")); break;
     }
     setModal(false);
@@ -258,7 +258,7 @@ void DspAssetDialog::buildUi()
     m_details->setCheckable(true);
     m_details->setChecked(false);
     auto* detailsLayout = new QVBoxLayout(m_details);
-    m_detailsText = new QLabel(tr("Select an asset to inspect its metadata."), m_details);
+    m_detailsText = new QLabel(tr("Select a file to see its details."), m_details);
     m_detailsText->setObjectName(QStringLiteral("dspAssetDetailsText"));
     m_detailsText->setTextInteractionFlags(Qt::TextSelectableByMouse);
     m_detailsText->setWordWrap(true);
@@ -275,7 +275,7 @@ void DspAssetDialog::buildUi()
     m_importButton->setObjectName(QStringLiteral("dspAssetImportButton"));
     m_exportButton = new QPushButton(tr("Export\u2026"), this);
     m_exportButton->setObjectName(QStringLiteral("dspAssetExportButton"));
-    m_refreshButton = new QPushButton(tr("Refresh assets"), this);
+    m_refreshButton = new QPushButton(tr("Refresh files"), this);
     m_refreshButton->setObjectName(QStringLiteral("dspAssetRefreshButton"));
     buttons->addWidget(m_importButton);
     buttons->addWidget(m_exportButton);
@@ -322,7 +322,7 @@ void DspAssetDialog::buildUi()
             }
             m_detailsText->setText(text);
         } else {
-            m_detailsText->setText(tr("Select an asset to inspect its metadata."));
+            m_detailsText->setText(tr("Select a file to see its details."));
         }
         updateButtons();
     });
@@ -434,7 +434,7 @@ void DspAssetDialog::requestList()
     if (m_requestId != 0 || !m_service) {
         return;
     }
-    m_operationStatus->setText(tr("Refreshing station assets\u2026"));
+    m_operationStatus->setText(tr("Refreshing the Core's files\u2026"));
     beginRequest(Operation::List, "dspAssets.list", {});
 }
 
@@ -443,14 +443,14 @@ void DspAssetDialog::handleListReply(const QVariantMap& values)
     QString json;
     if (!isExactString(values.value(QStringLiteral("assets")), &json)
         || json.toUtf8().size() > kMaximumListJsonBytes) {
-        finishOperation(false, tr("The station returned an invalid or oversized asset list."));
+        finishOperation(false, tr("The Core sent a file list this app could not use."));
         return;
     }
     QJsonParseError error;
     const QJsonDocument document = QJsonDocument::fromJson(json.toUtf8(), &error);
     if (error.error != QJsonParseError::NoError || !document.isArray()
         || document.array().size() > kMaximumRows) {
-        finishOperation(false, tr("The station returned an invalid asset list."));
+        finishOperation(false, tr("The Core sent a file list this app could not use."));
         return;
     }
 
@@ -498,7 +498,7 @@ void DspAssetDialog::handleListReply(const QVariantMap& values)
     m_table->setRowCount(m_assets.size());
     for (int rowIndex = 0; rowIndex < m_assets.size(); ++rowIndex) {
         const AssetRow& asset = m_assets.at(rowIndex);
-        const QStringList text{asset.label.isEmpty() ? tr("Unnamed asset") : asset.label,
+        const QStringList text{asset.label.isEmpty() ? tr("Unnamed file") : asset.label,
                                asset.format,
                                asset.encoding,
                                humanSize(asset.size),
@@ -518,7 +518,7 @@ void DspAssetDialog::handleListReply(const QVariantMap& values)
         m_table->selectRow(0);
     }
     populateNnrSelectors();
-    finishOperation(true, tr("Station assets refreshed."));
+    finishOperation(true, tr("File list refreshed from the Core."));
 }
 
 void DspAssetDialog::populateNnrSelectors()
@@ -548,7 +548,7 @@ void DspAssetDialog::populateNnrSelectors()
                 tr("Missing \u2014 %1").arg(shortId(desired[slot])), desired[slot]);
             selected = m_slotSelectors[slot]->count() - 1;
             m_slotSelectors[slot]->setItemData(selected,
-                                               tr("This desired asset is missing or invalid."),
+                                               tr("The chosen file is missing on the Core or cannot be used."),
                                                Qt::ToolTipRole);
         }
         m_slotSelectors[slot]->setCurrentIndex(selected);
@@ -609,8 +609,8 @@ void DspAssetDialog::updateButtons()
         const bool canRestore = m_radio && m_radio->pureSignalFacade()->canActuate();
         m_restoreButton->setEnabled(available && hasSelection && canRestore);
         m_restoreButton->setToolTip(canRestore ? QString()
-            : tr("Restore applies a correction and requires transmit authorization. "
-                 "Remote operation becomes available with R4; import and export remain available."));
+            : tr("Restore applies a correction and requires permission to transmit. "
+                 "It is not yet available from a remote window; import and export work."));
     }
     for (QComboBox* selector : m_slotSelectors) {
         if (selector) {
@@ -663,7 +663,7 @@ bool DspAssetDialog::importFile(const QString& path, const QString& label)
         boundedLabel = QFileInfo(path).fileName();
     }
     if (boundedLabel.size() > 128) {
-        showError(tr("The asset label may contain at most 128 characters."));
+        showError(tr("The file label can be at most 128 characters."));
         return false;
     }
     const QString radioIdentity = currentRadioIdentity();
@@ -691,7 +691,7 @@ bool DspAssetDialog::importFile(const QString& path, const QString& label)
     m_importOffset = 0;
     m_importLabel = boundedLabel;
     m_importHash = QString::fromLatin1(hash.result().toHex());
-    m_operationStatus->setText(tr("Starting bounded import\u2026"));
+    m_operationStatus->setText(tr("Starting the import\u2026"));
     const QVariantMap args{{QStringLiteral("kind"), static_cast<int>(m_kind)},
                            {QStringLiteral("label"), m_importLabel},
                            {QStringLiteral("size"), m_importSize},
@@ -712,7 +712,7 @@ void DspAssetDialog::requestNextImportChunk()
 {
     if (!m_importFile || m_importTransferId.isEmpty()) {
         abortOperation(true);
-        finishOperation(false, tr("The import transfer was lost."));
+        finishOperation(false, tr("The import was lost. Start it again."));
         return;
     }
     if (m_importOffset == m_importSize) {
@@ -725,7 +725,7 @@ void DspAssetDialog::requestNextImportChunk()
     const QByteArray chunk = m_importFile->read(DspAssetStore::kTransferChunkBytes);
     if (chunk.isEmpty() || chunk.size() > DspAssetStore::kTransferChunkBytes
         || m_importOffset + chunk.size() > m_importSize) {
-        const QString reason = tr("Reading the import file failed before its advertised size.");
+        const QString reason = tr("The file could not be read to its end. Start the import again.");
         abortOperation(true);
         finishOperation(false, reason);
         return;
@@ -757,7 +757,7 @@ bool DspAssetDialog::exportAssetToFile(const QString& assetId, const QString& pa
     m_exportExpectedHash.clear();
     m_exportExpectedSize = -1;
     m_exportOffset = 0;
-    m_operationStatus->setText(tr("Starting bounded export\u2026"));
+    m_operationStatus->setText(tr("Starting the export\u2026"));
     requestNextExportChunk();
     return m_requestId != 0;
 }
@@ -766,7 +766,7 @@ void DspAssetDialog::requestNextExportChunk()
 {
     if (!m_exportFile || !m_exportHasher || m_exportAssetId.isEmpty()) {
         abortOperation(false);
-        finishOperation(false, tr("The export transfer was lost."));
+        finishOperation(false, tr("The export was lost. Start it again."));
         return;
     }
     if (!beginRequest(Operation::ExportChunk, "dspAssets.export",
@@ -810,7 +810,7 @@ void DspAssetDialog::onRequestCompleted(quint32 id, bool accepted,
         if (!isExactString(values.value(QStringLiteral("transferId")), &token)
             || token.isEmpty() || token.size() > 128) {
             abortOperation(false);
-            finishOperation(false, tr("The station returned an invalid import transfer ID."));
+            finishOperation(false, tr("The Core's answer to the import could not be used. Start it again."));
             return;
         }
         m_importTransferId = token;
@@ -823,7 +823,7 @@ void DspAssetDialog::onRequestCompleted(quint32 id, bool accepted,
         if (!isExactInteger(values.value(QStringLiteral("offset")), &offset)
             || offset != expected || offset > m_importSize) {
             abortOperation(true);
-            finishOperation(false, tr("The station acknowledged an unexpected import offset."));
+            finishOperation(false, tr("The import got out of step with the Core. Start it again."));
             return;
         }
         m_importOffset = offset;
@@ -833,7 +833,7 @@ void DspAssetDialog::onRequestCompleted(quint32 id, bool accepted,
     case Operation::FinishImport: {
         m_importFile.reset();
         m_importTransferId.clear();
-        finishOperation(true, tr("Asset imported and validated by the station."));
+        finishOperation(true, tr("File imported and checked by the Core."));
         requestList();
         break;
     }
@@ -852,7 +852,7 @@ void DspAssetDialog::onRequestCompleted(quint32 id, bool accepted,
             || offset != m_exportOffset || size <= 0 || size > kindSizeLimit()
             || !hashPattern.match(hash).hasMatch()) {
             abortOperation(false);
-            finishOperation(false, tr("The station returned invalid export metadata."));
+            finishOperation(false, tr("The Core's answer to the export could not be used. Start it again."));
             return;
         }
         if (m_exportExpectedSize < 0) {
@@ -860,7 +860,7 @@ void DspAssetDialog::onRequestCompleted(quint32 id, bool accepted,
             m_exportExpectedHash = hash;
         } else if (size != m_exportExpectedSize || hash != m_exportExpectedHash) {
             abortOperation(false);
-            finishOperation(false, tr("The export identity changed during transfer."));
+            finishOperation(false, tr("The file changed on the Core during the export. Start it again."));
             return;
         }
         const QByteArray ascii = encoded.toLatin1();
@@ -872,7 +872,7 @@ void DspAssetDialog::onRequestCompleted(quint32 id, bool accepted,
             || m_exportOffset + decoded.decoded.size() > m_exportExpectedSize
             || (!eof && decoded.decoded.isEmpty())) {
             abortOperation(false);
-            finishOperation(false, tr("The station returned invalid bounded export data."));
+            finishOperation(false, tr("The Core sent export data this app could not use. Start it again."));
             return;
         }
         if (m_exportFile->write(decoded.decoded) != decoded.decoded.size()) {
@@ -885,7 +885,7 @@ void DspAssetDialog::onRequestCompleted(quint32 id, bool accepted,
         if (!eof) {
             if (m_exportOffset >= m_exportExpectedSize) {
                 abortOperation(false);
-                finishOperation(false, tr("The station omitted the export end marker."));
+                finishOperation(false, tr("The export from the Core did not finish. Start it again."));
                 return;
             }
             m_operationStatus->setText(tr("Exporting %1 of %2\u2026")
@@ -898,12 +898,12 @@ void DspAssetDialog::onRequestCompleted(quint32 id, bool accepted,
         if (m_exportOffset != m_exportExpectedSize || actualHash != m_exportExpectedHash
             || !m_exportFile->commit()) {
             abortOperation(false);
-            finishOperation(false, tr("The export was incomplete or failed SHA-256 verification."));
+            finishOperation(false, tr("The exported file was incomplete or did not match its checksum."));
             return;
         }
         m_exportFile.reset();
         m_exportHasher.reset();
-        finishOperation(true, tr("Asset exported after size and SHA-256 verification."));
+        finishOperation(true, tr("File exported; its size and checksum match."));
         break;
     }
     case Operation::CancelImport:
@@ -925,7 +925,7 @@ void DspAssetDialog::selectNnrModel(int slot, int comboIndex)
         return;
     }
     m_selectingSlot = slot;
-    m_operationStatus->setText(tr("Saving the desired model selection\u2026"));
+    m_operationStatus->setText(tr("Saving the model choice\u2026"));
     if (!beginRequest(Operation::SelectModel, "dspAssets.selectNnrModel",
                       {{QStringLiteral("slot"), slot}, {QStringLiteral("id"), id}})) {
         populateNnrSelectors();
@@ -939,7 +939,7 @@ void DspAssetDialog::handleSelectionReply(bool accepted, const QString& reason,
     if (!accepted) {
         populateNnrSelectors();
         m_selectingSlot = -1;
-        finishOperation(false, reason.isEmpty() ? tr("The station refused the model selection.")
+        finishOperation(false, reason.isEmpty() ? tr("The Core refused the model choice.")
                                                 : reason);
         return;
     }
@@ -949,7 +949,7 @@ void DspAssetDialog::handleSelectionReply(bool accepted, const QString& reason,
     }
     m_selectingSlot = -1;
     populateNnrSelectors();
-    finishOperation(true, tr("Desired model saved. Reconnect explicitly to apply it."));
+    finishOperation(true, tr("Model choice saved. Reconnect to apply it."));
 }
 
 void DspAssetDialog::chooseImportFile()
@@ -971,7 +971,7 @@ void DspAssetDialog::chooseImportFile()
         return;
     }
     bool accepted = false;
-    QString label = QInputDialog::getText(this, tr("Asset label"), tr("Label"),
+    QString label = QInputDialog::getText(this, tr("File label"), tr("Label"),
                                           QLineEdit::Normal,
                                           QFileInfo(path).completeBaseName(), &accepted);
     if (!accepted) {
@@ -1013,11 +1013,11 @@ void DspAssetDialog::applyNnrModels()
         return;
     QString reason;
     if (!m_radio->applyNnrModelSelection(m_service->selectionRevision(), &reason)) {
-        showError(reason.isEmpty() ? tr("The station refused the reconnect request.") : reason);
+        showError(reason.isEmpty() ? tr("The Core refused the reconnect request.") : reason);
         return;
     }
     m_operationStatus->setText(reason.isEmpty()
-                                   ? tr("Reconnect requested. The station will report when models are active.")
+                                   ? tr("Reconnect requested. The Core reports when the models are active.")
                                    : OperatorReasonText::forDisplay(reason));
 }
 

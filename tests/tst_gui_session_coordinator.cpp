@@ -357,7 +357,9 @@ private slots:
         QCOMPARE(toastsStartingWith(window,
                      lost + QStringLiteral("The connection to the Core went quiet, so it was closed.")),
                  1);
-        for (StatusToast* toast : window->findChildren<StatusToast*>()) {
+        const QList<StatusToast*> toasts = window->findChildren<StatusToast*>();
+        QVERIFY2(toasts.size() >= 2, qPrintable(QString::number(toasts.size())));
+        for (StatusToast* toast : toasts) {
             QVERIFY2(OperatorWording::isPlain(toast->message()), qPrintable(toast->message()));
         }
         sessions.shutdown();

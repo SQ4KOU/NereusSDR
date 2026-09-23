@@ -5103,7 +5103,10 @@ void MainWindow::buildUI()
     connect(m_radioModel, &RadioModel::settingsSaveErrorChanged, this,
             [this](const QString& reason) {
         if (!reason.isEmpty()) {
-            showToast(reason, ToastSeverity::Error, 10000);
+            // A remote window's save error is the Core's text; shown in
+            // user words, logged raw (R-R3-21). Local text is plain and
+            // passes through unchanged.
+            showToast(OperatorReasonText::forDisplay(reason), ToastSeverity::Error, 10000);
         }
     });
     connect(m_radioModel, &RadioModel::sliceAddRejected, this,

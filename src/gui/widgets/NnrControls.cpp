@@ -426,7 +426,7 @@ void NnrControls::refresh()
                           .arg(yesNo(m_slice->nnrStandardAvailable()),
                                yesNo(m_slice->nnrPremiumAvailable()))
                           .arg(m_slice->nnrActualModelSlot()));
-    m_rateLatency->setText(tr("Receiver %1 Hz / model %2 Hz (%3) · %4 samples · %5 ms")
+    m_rateLatency->setText(tr("NNR processing %1 Hz / model %2 Hz (%3) · %4 samples · %5 ms")
                                .arg(m_slice->nnrDspRateHz())
                                .arg(m_slice->nnrNetworkRateHz())
                                .arg(m_slice->nnrRateSupported() ? tr("supported") : tr("unsupported"))

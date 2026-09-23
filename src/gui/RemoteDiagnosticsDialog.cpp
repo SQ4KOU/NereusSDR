@@ -145,7 +145,7 @@ void RemoteDiagnosticsDialog::buildUi()
     QWidget* connection = buildTab(tr("Connection"));
     m_totalTrafficGraph = addGraph(connection, tr("Total traffic between the Core and this app"), tr(" kbps"));
     m_totalTrafficGraph->setObjectName(QStringLiteral("remoteTotalTrafficGraph"));
-    m_totalTrafficGraph->setToolTip(tr("Control, display and audio traffic seen at this computer, audio included whether Opus or lossless. Excludes transport, encryption, VPN and network overhead; outgoing media counts submissions, not confirmed delivery."));
+    m_totalTrafficGraph->setToolTip(tr("Control, display and audio traffic seen at this computer, audio included whether Opus or lossless. Excludes encryption, VPN and network overhead; outgoing audio and display count what this app handed to the network, not confirmed delivery."));
     m_radioLinkGraph = addGraph(connection, tr("Radio link throughput"), tr(" Mbps"));
     m_radioLinkGraph->setObjectName(QStringLiteral("remoteRadioLinkGraph"));
     m_controlPayloadGraph = addGraph(connection, tr("Control traffic"), tr(" kbit/s"));

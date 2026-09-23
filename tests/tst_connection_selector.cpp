@@ -222,7 +222,7 @@ void ConnectionSelectorTest::editorValidatesAndPreservesSecrets()
     address->setText(QStringLiteral("https://not-a-station"));
     save->click();
     QCOMPARE(editor.result(), int(QDialog::Rejected));
-    QCOMPARE(error->text(), QStringLiteral("Enter a valid station address beginning with ws:// or wss://."));
+    QCOMPARE(error->text(), QStringLiteral("Enter a valid Core address beginning with ws:// or wss://."));
 
     address->setText(QStringLiteral(" wss://other.example:8443 "));
     token->setText(QStringLiteral(" token with spaces "));
@@ -259,7 +259,7 @@ void ConnectionSelectorTest::controlsRemainReadableAndReachable()
         {QStringLiteral("g2e"), ConnectionTargetKind::LocalRadio, QStringLiteral("ANAN G2E"),
          QStringLiteral("This computer's Core"), QStringLiteral("192.168.109.108"), QStringLiteral("Available"), true, true, true},
         {QStringLiteral("lan"), ConnectionTargetKind::LanCore, QStringLiteral("Rock 5C (advertised)"),
-         QStringLiteral("Saturn (advertised online)"), QStringLiteral("192.168.109.106:4433"), QStringLiteral("Saved pin available")},
+         QStringLiteral("Saturn (advertised online)"), QStringLiteral("192.168.109.106:4433"), QStringLiteral("Saved, ready to connect")},
         savedRow()
     });
     selector.setDiscoveryStatus(QStringLiteral("LAN discovery is active. Verify new Cores in Core setup."));

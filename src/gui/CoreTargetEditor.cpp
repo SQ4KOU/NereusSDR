@@ -36,7 +36,7 @@ CoreTargetEditor::CoreTargetEditor(const SavedCoreTarget& initial, QWidget* pare
 
     auto* layout = new QVBoxLayout(this);
     auto* explanation = new QLabel(
-        tr("Enter the Core address and its access token. A certificate pin must come from Core setup."),
+        tr("Enter the Core address and its pairing token. The certificate fingerprint must come from Core setup."),
         this);
     explanation->setObjectName(QStringLiteral("coreTargetEditorExplanation"));
     explanation->setTextFormat(Qt::PlainText);
@@ -57,7 +57,7 @@ CoreTargetEditor::CoreTargetEditor(const SavedCoreTarget& initial, QWidget* pare
     m_fingerprintEdit = new QLineEdit(initial.connection.fingerprint, this);
     m_fingerprintEdit->setObjectName(QStringLiteral("coreTargetEditorFingerprint"));
     m_fingerprintEdit->setMaxLength(kFingerprintMaximumLength);
-    m_allowUnpinnedCheck = new QCheckBox(tr("Allow unpinned certificate (bench only)"), this);
+    m_allowUnpinnedCheck = new QCheckBox(tr("Connect without a certificate fingerprint (bench only)"), this);
     m_allowUnpinnedCheck->setObjectName(QStringLiteral("coreTargetEditorAllowUnpinned"));
     m_allowUnpinnedCheck->setChecked(initial.connection.allowUnpinned);
     form->addRow(tr("Label:"), m_labelEdit);
@@ -111,7 +111,7 @@ bool CoreTargetEditor::validate()
 {
     if (!RemoteStationOptions::isValidStationUrl(m_addressEdit->text().trimmed())) {
         // Keep this fixed: QUrl's detailed error can reflect untrusted input.
-        m_errorLabel->setText(tr("Enter a valid station address beginning with ws:// or wss://."));
+        m_errorLabel->setText(tr("Enter a valid Core address beginning with ws:// or wss://."));
         m_errorLabel->setVisible(true);
         return false;
     }

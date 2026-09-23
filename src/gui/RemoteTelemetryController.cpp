@@ -434,14 +434,14 @@ QString RemoteTelemetryController::detailText() const
         .arg(number(m_view.audioPayloadRxKbps));
     text << tr("Audio packets received: %1 kbps, including packet headers and packets this computer later dropped. Audio content counts the sound in the packets it accepted, including duplicates.")
         .arg(number(m_view.audioRtpRxKbps));
-    text << tr("Application bytes exclude transport, encryption, VPN and network overhead. Outgoing media counts submissions to the transport, including queued or failed sends; it does not prove delivery.");
+    text << tr("These counts exclude encryption, VPN and network overhead. Outgoing audio and display count what this app handed to the network, including queued or failed sends; that does not prove delivery.");
     text << (m_view.coreRttAgeMs ? tr("Core RTT: round trip to the Core and back, measured %1 ms ago.").arg(*m_view.coreRttAgeMs)
         : tr("Core RTT: not measured recently."));
     text << (m_view.radio.rttMs && m_view.radio.rttAgeMs
         ? tr("Radio RTT: %1 ms, measured %2 ms ago.").arg(*m_view.radio.rttMs).arg(*m_view.radio.rttAgeMs)
         : tr("Radio RTT: unavailable."));
     text << tr("RTT graphs hold the last measurement between pings; age advances independently and stale values disappear.");
-    text << tr("Core audio: %1 frames/s; encoded %2, transport accepted %3, refused %4 packets/s; source drops %5 events/s.")
+    text << tr("Core audio: %1 frames/s; encoded %2, sent %3, not sent %4 packets/s; dropped before encoding %5 events/s.")
         .arg(number(m_view.coreAudio.sourceFramesPerSecond, 0), number(m_view.coreAudio.encodedPacketsPerSecond),
              number(m_view.coreAudio.sendAcceptedPerSecond), number(m_view.coreAudio.sendRejectedPerSecond),
              number(m_view.coreAudio.sourceDropsPerSecond));
@@ -470,7 +470,7 @@ QString RemoteTelemetryController::detailText() const
         .arg(p.generation).arg(p.acceptedPackets).arg(p.startDiscardedPackets)
         .arg(p.decodedPackets).arg(p.concealedPackets)
         .arg(p.latePackets).arg(p.invalidPackets).arg(p.duplicatePackets).arg(p.rejectedHeaders);
-    text << tr("Playback underflows %1 / overflows %2; device consumed %3 frames; last admitted packet %4 ms ago.")
+    text << tr("Playback underflows %1 / overflows %2; device consumed %3 frames; last accepted packet %4 ms ago.")
         .arg(p.underflows).arg(p.overflows).arg(p.deviceConsumedFrames)
         .arg(p.lastAdmittedPacketAgeMs ? QString::number(*p.lastAdmittedPacketAgeMs) : QStringLiteral("—"));
     if (p.lifetimeUnderflows && p.lifetimeOverflows) {
@@ -501,7 +501,7 @@ QString RemoteTelemetryController::detailText() const
         ? tr("Clock drift: %1\u00A0parts per million, the rate correction this computer applies to match the Core's audio clock.")
               .arg(qRound((*p.driftRatio - 1.0) * 1'000'000.0))
         : tr("Clock drift: not measured yet."));
-    text << tr("Transport acceptance does not prove delivery. Concealment and source drops are events, not a packet-loss percentage.");
+    text << tr("Sent does not prove delivered. Gaps filled and drops before encoding are events, not a packet-loss percentage.");
     return text.join(QLatin1Char('\n'));
 }
 } // namespace NereusSDR

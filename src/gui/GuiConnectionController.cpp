@@ -8,6 +8,7 @@
 #include "gui/ConnectionSelector.h"
 #include "gui/CoreTargetEditor.h"
 #include "gui/MainWindow.h"
+#include "gui/OperatorReasonText.h"
 #include "gui/StationLanSelection.h"
 #include "gui/RemoteConnectionController.h"
 #include "models/RadioModel.h"
@@ -223,7 +224,7 @@ void GuiConnectionController::refresh()
     m_selector->setDiscoveryStatus(m_lan.port() == 0
         ? tr("LAN discovery is not running. Saved and manual addresses remain available.")
         : m_lan.lastError().isEmpty() ? tr("LAN discovery is active. Verify new Cores in Core setup.")
-        : m_lan.lastError());
+        : OperatorReasonText::lanDiscoveryForDisplay(m_lan.lastError()));
     if (current.connection.isRemote() && !m_store.target(current.savedId)) {
         rows.append({QStringLiteral("current"), ConnectionTargetKind::SavedCore,
             tr("Current Core (not saved)"), m_remoteControls ? m_remoteControls->radioText() : QString(),
@@ -456,7 +457,7 @@ void GuiConnectionController::showDetails(const QString& key)
     if (key.startsWith(QLatin1String("saved:"))) {
         const auto target = m_store.target(key.mid(6));
         if (target) {
-            m_selector->setNotice(tr("Core: %1\nRadio: %2 (last known; not confirmed since connecting)")
+            m_selector->setNotice(tr("Core: %1\nRadio: %2 (as of the last connection to this Core)")
                 .arg(endpointText(target->connection), target->lastRadioName.isEmpty() ? tr("unknown") : target->lastRadioName));
         }
     } else if (key.startsWith(QLatin1String("lan:"))) {

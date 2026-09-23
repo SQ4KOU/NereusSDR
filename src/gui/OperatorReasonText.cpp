@@ -170,6 +170,35 @@ constexpr Entry kEntries[] = {
      "Audio and display stopped because a display message from the Core could not be used."},
     {"invalid raw RTP packet rejected", nullptr,
      "Audio and display stopped because an audio packet from the Core could not be used."},
+    // The media transport's own reasons, LibDataChannelMediaTransport.cpp.
+    // A failed connection is redialled (RemoteMediaController::
+    // requestRecovery, then RemoteConnectionController::recoverMediaSession,
+    // whose fallback reason is the last entry); every other one stops audio
+    // and display for this connection (settleWithoutRetry).
+    {"media peer connection failed", nullptr,
+     "The audio and display connection to the Core failed. This app reconnects to the Core."},
+    {"station media connection failed", nullptr,
+     "The audio and display connection to the Core failed. This app reconnects to the Core."},
+    {"media callback queue overflow", nullptr,
+     "Audio and display stopped because this computer fell behind handling them."},
+    {"oversized display message rejected", nullptr,
+     "Audio and display stopped because a display message from the Core could not be used."},
+    {"text display message rejected", nullptr,
+     "Audio and display stopped because a display message from the Core could not be used."},
+    {"invalid raw RTP packet size rejected", nullptr,
+     "Audio and display stopped because an audio packet from the Core could not be used."},
+    {"text RTP message rejected", nullptr,
+     "Audio and display stopped because an audio packet from the Core could not be used."},
+    {"oversized local description rejected", nullptr,
+     "Audio and display stopped because a setup message could not be used."},
+    {"oversized local candidate rejected", nullptr,
+     "Audio and display stopped because a setup message could not be used."},
+    {"unexpected display data channel rejected", nullptr,
+     "Audio and display stopped because the Core set up the display in a way this app does "
+     "not use. Updating this app or the Core may help."},
+    {"unexpected media track rejected", nullptr,
+     "Audio and display stopped because the Core set up the audio in a way this app does "
+     "not use. Updating this app or the Core may help."},
 
     // Requests the Core turned down: StationServer.cpp (an app too old for
     // the request) and SessionCommandDispatcher.cpp.
@@ -285,6 +314,77 @@ constexpr Entry kEntries[] = {
      "The connection to the Core changed, so this file operation stopped."},
     {"There is no station session.", nullptr,
      "This app is not connected to the Core."},
+
+    // Noise reduction status, NnrAdapter.cpp: shown in the NNR panel and
+    // when turning NNR on is refused.
+    {"NNR requires a DSP rate that is an integer multiple of its network rate.", nullptr,
+     "NNR cannot run at this receiver's processing rate, which must be a whole multiple of "
+     "the NNR model's rate. Use another noise reduction, or change the processing rate."},
+
+    // The Core's certificate, StationClient.cpp: shown after "Last failure:"
+    // and in the link-lost toast. "Certificate fingerprint" is the one name
+    // the Core setup window and the Connections window use for it.
+    {"No station certificate fingerprint to pin. Refusing to connect: an "
+     "unpinned self-signed certificate authenticates nothing.", nullptr,
+     "No certificate fingerprint is saved for this Core, so this app did not connect. "
+     "Copy the fingerprint from the Core's setup into this Core's entry."},
+    {"Refusing to authenticate: a station certificate fingerprint is pinned, but this "
+     "link presented no certificate to compare it against.", nullptr,
+     "The Core did not show a certificate, so this app could not check it against the "
+     "saved certificate fingerprint and did not connect."},
+    {"Station certificate fingerprint does not match the saved pin.", nullptr,
+     "The Core's certificate does not match the certificate fingerprint saved for it, so "
+     "this app did not connect. If the Core was set up again, save its new fingerprint "
+     "from the Core's setup."},
+
+    // LAN discovery, StationLanCache.cpp, StationLanAnnouncement.cpp and
+    // StationLanDiscovery.cpp: the Connections window's discovery line.
+    {"Station LAN announcement has an invalid source address.", nullptr,
+     "A Core announcement on this network could not be read, so that Core is not listed."},
+    {"Station LAN announcement has an unscoped link-local source.", nullptr,
+     "A Core announcement on this network could not be read, so that Core is not listed."},
+    {"Station LAN announcement has an invalid control port.", nullptr,
+     "A Core announcement on this network could not be read, so that Core is not listed."},
+    {"Station LAN announcement has an invalid fingerprint.", nullptr,
+     "A Core announcement on this network could not be read, so that Core is not listed."},
+    {"Station LAN announcement has an invalid Core name.", nullptr,
+     "A Core announcement on this network could not be read, so that Core is not listed."},
+    {"Station LAN announcement has an invalid radio name.", nullptr,
+     "A Core announcement on this network could not be read, so that Core is not listed."},
+    {"Station LAN announcement has an invalid radio MAC.", nullptr,
+     "A Core announcement on this network could not be read, so that Core is not listed."},
+    {"Station LAN announcement has an invalid radio connection state.", nullptr,
+     "A Core announcement on this network could not be read, so that Core is not listed."},
+    {"Station LAN announcement is too large.", nullptr,
+     "A Core announcement on this network could not be read, so that Core is not listed."},
+    {"Station LAN announcement is malformed.", nullptr,
+     "A Core announcement on this network could not be read, so that Core is not listed."},
+    {"Station LAN announcement has an unsupported schema.", nullptr,
+     "A Core on this network announced itself in a form this app does not know, so it is "
+     "not listed. Updating this app may help."},
+    {"Station LAN announcement has an unsupported service.", nullptr,
+     "A Core on this network announced itself in a form this app does not know, so it is "
+     "not listed. Updating this app may help."},
+    {"Station LAN announcement cache is full.", nullptr,
+     "More Cores are announcing on this network than this app lists, so some are missing. "
+     "Add a missing Core by its address."},
+    {"Station LAN announcement endpoint limit reached.", nullptr,
+     "More Cores are announcing on this network than this app lists, so some are missing. "
+     "Add a missing Core by its address."},
+    {"Station LAN discovery could not bind a UDP socket.", nullptr,
+     "This app could not listen for Cores on this network. Saved and typed addresses still work."},
+    {"Station LAN discovery could not read a UDP datagram.", nullptr,
+     "This app could not read an announcement on this network."},
+    {"Station LAN discovery ignored an oversized datagram.", nullptr,
+     "This app ignored an announcement on this network that was too large to come from a Core."},
+    {"Station LAN discovery IPv4 is unavailable.", nullptr,
+     "This app cannot listen for Cores on IPv4 networks."},
+    {"Station LAN discovery IPv6 is unavailable.", nullptr,
+     "This app cannot listen for Cores on IPv6 networks."},
+    {"Station LAN discovery has no eligible multicast interface.", nullptr,
+     "This computer has no network this app can listen for Cores on."},
+    {"Station LAN discovery could not join a multicast group.", nullptr,
+     "This app could not listen for Cores on every network."},
 };
 
 // Reasons worded around a value (a number, a pan's name, an action). The
@@ -344,6 +444,17 @@ const Pattern kPatterns[] = {
     {R"(^dspAssets\.[A-Za-z0-9]+ (has invalid or missing fields|field types or ranges are invalid|accepts no arguments)\.$)",
      nullptr, "The Core could not read this request.",
      "dspAssets.selectNr3Model has invalid or missing fields."},
+
+    // StationClient.cpp: a saved certificate fingerprint on an address with
+    // no secure connection to check it on.
+    {R"(^Refusing to connect to .*: a station certificate fingerprint is pinned, but )",
+     nullptr,
+     "This Core's address does not use a secure connection, so this app could not check "
+     "the saved certificate fingerprint and did not connect. Use an address that starts "
+     "with wss://.",
+     "Refusing to connect to ws://192.0.2.7:4433: a station certificate fingerprint is "
+     "pinned, but \"ws\" carries no TLS, so there is nothing to compare the fingerprint "
+     "against and the pairing token would travel in cleartext. Use wss://."},
 
     // StationClient.cpp: nothing was sent because the link is not up.
     {R"(^The station session is not established, so (.+) was not sent\.$)", nullptr,
@@ -558,6 +669,29 @@ QString panNextStep(const QString& wireReason)
         next = pattern->panNext;
     }
     return QString::fromLatin1(next ? next : kGeneralPanNext);
+}
+
+QString lanDiscoveryForDisplay(const QString& lastError)
+{
+    static const QRegularExpression boundary(QStringLiteral("(?<=\\.) (?=Station LAN )"));
+    QStringList shown;
+    for (const QString& part : lastError.split(boundary, Qt::SkipEmptyParts)) {
+        const QString text = forDisplay(part.trimmed());
+        if (!shown.contains(text)) {
+            shown.append(text);
+        }
+    }
+    return shown.join(QLatin1Char(' '));
+}
+
+QStringList tableKeys()
+{
+    QStringList keys;
+    for (const Entry& entry : kEntries) {
+        keys.append(QString::fromLatin1(entry.wire));
+    }
+    keys.append(QString::fromLatin1(kMediaStartPrefix));
+    return keys;
 }
 
 QStringList knownReasons()

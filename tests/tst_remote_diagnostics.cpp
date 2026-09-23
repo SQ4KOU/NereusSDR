@@ -213,18 +213,31 @@ private slots:
 
         // R-R3-21: every series name, graph explanation and detail line the
         // window shows is in user words.
+        int graphs = 0;
+        int seriesChecked = 0;
+        int graphTips = 0;
         for (QWidget* widget : dialog.findChildren<QWidget*>()) {
             const auto* graph = dynamic_cast<const TimeSeriesGraphWidget*>(widget);
             if (!graph) { continue; }
+            ++graphs;
             for (const TimeSeriesGraphWidget::Series& series : graph->series()) {
                 QVERIFY2(OperatorWording::isPlain(series.label), qPrintable(series.label));
+                ++seriesChecked;
             }
-            QVERIFY2(graph->toolTip().isEmpty() || OperatorWording::isPlain(graph->toolTip()),
-                     qPrintable(graph->toolTip()));
+            if (!graph->toolTip().isEmpty()) {
+                QVERIFY2(OperatorWording::isPlain(graph->toolTip()), qPrintable(graph->toolTip()));
+                ++graphTips;
+            }
         }
+        // Never passes on nothing (fix wave M1).
+        QVERIFY2(graphs >= 4, qPrintable(QString::number(graphs)));
+        QVERIFY2(seriesChecked >= 8, qPrintable(QString::number(seriesChecked)));
+        QVERIFY2(graphTips >= 2, qPrintable(QString::number(graphTips)));
         const auto* detailLabel = dialog.findChild<QLabel*>(QStringLiteral("remoteDiagnosticsDetail"));
         QVERIFY(detailLabel);
-        for (const QString& line : detailLabel->text().split(QLatin1Char('\n'))) {
+        const QStringList detailLines = detailLabel->text().split(QLatin1Char('\n'));
+        QVERIFY2(detailLines.size() >= 10, qPrintable(detailLabel->text()));
+        for (const QString& line : detailLines) {
             QVERIFY2(OperatorWording::isPlain(line), qPrintable(line));
         }
 

@@ -26,6 +26,10 @@
 //   2026-09-23  J.J. Boyd / KG4VCF  Shorter pan forms and a pan's next
 //                                    step per reason. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  Media transport, NNR rate, certificate
+//                                    and LAN discovery reasons; the table's
+//                                    keys for the source check. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -54,9 +58,20 @@ QStringList shortFormsForDisplay(const QString& wireReason);
 /// changes; this app's own limits say what lifts them.
 QString panNextStep(const QString& wireReason);
 
+/// LAN discovery's status: one or more sentences, each "Station LAN ...",
+/// joined by spaces (StationLanDiscovery::refreshLastError). Each is shown
+/// in user words and once, as forDisplay() shows it.
+QString lanDiscoveryForDisplay(const QString& lastError);
+
 /// Every reason the table knows (one example for each worded pattern), for
 /// tests that check its wording.
 QStringList knownReasons();
+
+/// The exact reasons the table matches, byte for byte as they are written
+/// where they come from, and the media-start prefix: what a test checks is
+/// still written in the sources, so a rewording there cannot silently fall
+/// back to the general sentence.
+QStringList tableKeys();
 
 /// The words nothing a user reads may use: internal subsystem, roadmap and
 /// wire terms. Each matches at the start of a word, case-insensitively, so
