@@ -11,14 +11,14 @@
 // RadioModel::setTune(true) returned, and a refused key (band plan or TX
 // interlock) left the Tune flag latched, so a refused press read as tuning
 // with the radio in RX. The button's text and checked state now come only
-// from MoxController::manualMoxChanged and RadioModel::tuneRefused.
+// from MoxController::manualMoxChanged and RadioModel::tuneRefused, and a
+// disconnect mid-Tune drops it back to "TUNE".
 //
 // Drives a real TxApplet on a RadioModel with a mock connection; runs on
 // the offscreen platform.
 // =================================================================
 
 #include <QtTest/QtTest>
-#include <QApplication>
 #include <QPushButton>
 #include <QSignalSpy>
 
@@ -127,14 +127,7 @@ class TestTxAppletTuneState : public QObject
     };
 
 private slots:
-    void initTestCase()
-    {
-        if (!qApp) {
-            static int argc = 0;
-            new QApplication(argc, nullptr);
-        }
-    }
-
+    // QTEST_MAIN creates the QApplication (this target links QtWidgets).
     void init()    { AppSettings::instance().clear(); }
     void cleanup() { AppSettings::instance().clear(); }
 
@@ -197,6 +190,33 @@ private slots:
         QVERIFY(rig.model->moxController()->isMox());
         QVERIFY(rig.tuneBtn->isChecked());
         QCOMPARE(rig.tuneBtn->text(), QStringLiteral("TUNING..."));
+    }
+
+    // A disconnect during Tune returns the button to "TUNE": teardown runs
+    // the Tune-off path, which releases the manual MOX the button reads.
+    void disconnectMidTuneShowsTune()
+    {
+        Rig rig;
+        QVERIFY(rig.tuneBtn != nullptr);
+
+        rig.tuneBtn->click();
+        pump();
+        QVERIFY(rig.tuneBtn->isChecked());
+        QCOMPARE(rig.tuneBtn->text(), QStringLiteral("TUNING..."));
+
+        rig.model->disconnectFromRadio();
+        pump();
+        QVERIFY(!rig.model->isTune());
+        QVERIFY(!rig.model->moxController()->isManualMox());
+        QVERIFY(!rig.tuneBtn->isChecked());
+        QCOMPARE(rig.tuneBtn->text(), QStringLiteral("TUNE"));
+
+        // Pressing TUNE off afterwards (the case the review found stuck)
+        // stays on "TUNE".
+        rig.model->setTune(false);
+        pump();
+        QVERIFY(!rig.tuneBtn->isChecked());
+        QCOMPARE(rig.tuneBtn->text(), QStringLiteral("TUNE"));
     }
 };
 

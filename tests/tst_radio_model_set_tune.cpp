@@ -31,6 +31,9 @@
 //  20. R-R3-21: after a refused press, the next accepted press saves the
 //      true CW mode, not the CW-to-SSB switched one.
 //  21. R-R3-21: keying refused by the TX interlock takes the same path.
+//      Refusals 19-21 also leave the PTT mode at None, not Manual.
+//  22. R-R3-21: a disconnect mid-Tune runs the TUN-off path (manual MOX
+//      released, CW mode, power and TX VFO restored).
 
 #include <QtTest/QtTest>
 #include <QObject>
@@ -217,6 +220,9 @@ static void verifyRestored(RadioModel& model, MockConnection* conn,
              "TransmitModel::tune must not stay on the tune-power source");
     QVERIFY2(!model.tuneOffPendingForTest(),
              "the TUN-off completion runs at once, not after a settle");
+    // Thetis never marks the PTT source manual on a refused key
+    // (console.cs:30144 [v2.10.3.15] runs only after the !_mox return).
+    QCOMPARE(model.moxController()->pttMode(), PttMode::None);
     QCOMPARE(slice->dspMode(), DSPMode::CWU);
     QCOMPARE(model.transmitModel().power(), 80);
     QVERIFY(!conn->txFreqLog.isEmpty());
@@ -1163,6 +1169,56 @@ private slots:
 
         model.moxController()->setInterlockPolicy(nullptr);
         model.injectConnectionForTest(nullptr);
+    }
+
+    // ── 22. R-R3-21: a disconnect mid-Tune runs the TUN-off path ─────────────
+    // Thetis chkPower_CheckedChanged (power going off; cited with its author
+    // tags in RadioModel::teardownConnection) sets chkMOX.Checked = false and
+    // chkTUN.Checked = false. The manual MOX is
+    // released (the TUNE button reads it), and the CW mode, power and TX VFO
+    // come back before the connection goes.
+    void disconnectMidTuneRunsTunOffPath()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        SliceModel* slice = nullptr;
+        setupRefusalRig(model, conn, slice);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        // Detach before connOwner frees the mock, even when a check fails.
+        const auto detach = qScopeGuard([&model]() {
+            model.injectConnectionForTest(nullptr);
+        });
+        QVERIFY(slice != nullptr);
+
+        model.setTune(true);
+        pump();
+        QVERIFY(model.moxController()->isMox());
+        QVERIFY(model.moxController()->isManualMox());
+        QVERIFY(model.isTune());
+        QCOMPARE(slice->dspMode(), DSPMode::USB);
+
+        QSignalSpy manual(model.moxController(), &MoxController::manualMoxChanged);
+        model.disconnectFromRadio();
+
+        QVERIFY(!model.isConnected());
+        QVERIFY(!model.moxController()->isMox());
+        QVERIFY2(!model.moxController()->isManualMox(),
+                 "the TUNE button reads manual MOX; it must drop back");
+        QCOMPARE(manual.count(), 1);
+        QCOMPARE(manual.last().at(0).toBool(), false);
+        QVERIFY(!model.isTune());
+        QVERIFY(!model.transmitModel().isTune());
+        QVERIFY(!model.tuneOffPendingForTest());
+        QCOMPARE(slice->dspMode(), DSPMode::CWU);
+        QCOMPARE(model.transmitModel().power(), 80);
+        QVERIFY(!conn->txFreqLog.isEmpty());
+        QCOMPARE(conn->txFreqLog.last(), quint64(14'030'000));
+
+        // Late MOX walk timers change nothing.
+        pump();
+        QVERIFY(!model.moxController()->isManualMox());
+        QCOMPARE(slice->dspMode(), DSPMode::CWU);
+        QCOMPARE(model.transmitModel().power(), 80);
     }
 };
 

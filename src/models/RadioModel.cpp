@@ -13959,6 +13959,27 @@ void RadioModel::teardownConnection()
         m_discovery->holdOffScans(kPostDisconnectScanQuietMs);
     }
 
+    // R-R3-21: a disconnect mid-Tune releases the manual MOX through the
+    // normal Tune-off path, so the TUNE button drops back to "TUNE" and the
+    // tone, the CW mode, the power and the TX VFO are restored before the
+    // saves below and while the connection and TX channel are still live.
+    // From Thetis console.cs:27484-27491 [v2.10.3.15] (chkPower_CheckedChanged,
+    // power going off):
+    //   m_frmCWXForm.StopEverything(chkPower.Checked); //[2.10.3]MW0LGE
+    //   chkMOX.Checked = false;
+    //   chkMOX.Enabled = false;
+    //   chkTUN.Checked = false;
+    //   chkTUN.Enabled = false;
+    //   chk2TONE.Checked = false;  // MW0LGE_21a
+    // chkTUN.Checked = false runs chkTUN_CheckedChanged's TUN-off branch.
+    // Two-tone is released further down (m_twoToneController). NereusSDR
+    // glue: the TUN-off completion runs at once, because the MoxController
+    // timers that would deliver rxReady cannot fire during this teardown.
+    if (m_isTuning) {
+        setTune(false);
+        completeTuneOff();
+    }
+
     // Flush any pending coalesced slice save FIRST so the user's last
     // AF / step / freq / lock / RIT tweak isn't lost to the 500 ms
     // debounce in scheduleSettingsSave(). The QTimer there can't fire
@@ -15234,9 +15255,18 @@ void RadioModel::setTune(bool on)
             // manualMoxChanged(true) before the refusal; setTune(false) below
             // clears it, so the TUNE button follows the true state. No
             // tuneRefused here: the MOX refusal already reached the operator.
+            //
+            // PTT mode: Thetis sets _current_ptt_mode = PTTMode.MANUAL only
+            // after the !_mox return above (console.cs:30144 [v2.10.3.15]),
+            // so a refused key never marks the PTT source as manual; with MOX
+            // off the mode is PTTMode.NONE (console.cs:29547 [v2.10.3.15],
+            // the TX-to-RX branch of chkMOX_CheckedChanged2). NereusSDR's
+            // MoxController::setTune(true) sets Manual before keying (its
+            // documented ordering deviation), so the refusal puts it back.
             if (!keyed) {
                 setTune(false);
                 completeTuneOff();
+                m_moxController->setPttMode(PttMode::None);
             }
         }
 
