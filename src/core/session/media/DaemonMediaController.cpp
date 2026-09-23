@@ -252,6 +252,10 @@ struct DaemonMediaController::EndpointEntry {
     double sourceSampleRateHz{0.0};
     SpectrumEndpointRequest request;
     SpectrumDisplayCost displayCost;
+    /// False when the GUI was told of a charge for fewer pixels than it
+    /// requested (minor 9 under the display budget); a later re-grant then
+    /// keeps within that charge.
+    bool chargeCoversRequest{true};
     SpectrumGrant grant;
     AllocationRecord allocation;
     bool widebandNegotiated{false};
@@ -488,6 +492,19 @@ std::optional<SpectrumGrant> DaemonMediaController::spectrumGrant(quint32 endpoi
         return std::nullopt;
     }
     return it->second.grant;
+}
+
+std::optional<int> DaemonMediaController::spectrumSourceFps(quint32 endpointId) const
+{
+    const auto it = m_endpoints.find(endpointId);
+    if (it == m_endpoints.end()) {
+        return std::nullopt;
+    }
+    const auto source = m_sources.constFind(it->second.request.source);
+    if (source == m_sources.cend() || !source->configured) {
+        return std::nullopt;
+    }
+    return source->config.fft.fps;
 }
 
 qint64 DaemonMediaController::displayNowNs() const
@@ -1047,6 +1064,7 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     entry.sourceWindowType = windowType;
     entry.request = request;
     entry.displayCost = *displayCost;
+    entry.chargeCoversRequest = chargedPixels >= pixels || !displayBudgetWireAvailable();
     entry.grant = grant;
     entry.allocation = {control, revision, true, false, {}};
     if (!reconcileWidebandDemand(entry)) {
@@ -1073,6 +1091,7 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     }
     if (replaced.has_value() && !(replacedSource == source)) {
         releaseSourceIfUnused(replacedSource);
+        rebalanceSourceAfterDeparture(replacedSource);
     }
     forgetNonliveOperation(endpointId);
     refreshDisplayBudgetPacer();
@@ -1328,7 +1347,15 @@ void DaemonMediaController::configureEndpointFromFrame(EndpointEntry& entry,
     // this context really delivers.
     entry.grant.grantedFftSize = sourceContext.fftBins;
     entry.grant.grantedPixels = entry.endpoint.context().codec.traceSamples;
-    entry.grant.reason = grantReason(entry.grant);
+    // The reason names what the source or engine limits. A pan held to its
+    // own admitted display charge is not told the receiver lacks detail.
+    SpectrumEndpointRequest asked = entry.request;
+    asked.pixels = entry.grant.requestedPixels;
+    SpectrumGrant reasonGrant = entry.grant;
+    reasonGrant.grantedPixels = SpectrumEndpoint::grantedPixels(
+        asked, sourceContext.fftBins, sourceContext.centreHz, sourceContext.sampleRateHz,
+        sourceContext.wideband.active);
+    entry.grant.reason = grantReason(reasonGrant);
     entry.encoder.reset();
     entry.sourceCentreHz = frame.centreHz;
     entry.sourceSampleRateHz = frame.sampleRateHz;
@@ -1681,7 +1708,59 @@ void DaemonMediaController::removeEndpoint(quint32 endpointId, bool retainOperat
     }
     m_endpoints.erase(it);
     releaseSourceIfUnused(key);
+    rebalanceSourceAfterDeparture(key);
     refreshDisplayBudgetPacer();
+}
+
+void DaemonMediaController::rebalanceSourceAfterDeparture(const MediaSourceKey& key)
+{
+    // A retired or unusable source is not rebuilt for its departed endpoint.
+    const auto runtime = m_sources.constFind(key);
+    if (runtime == m_sources.cend() || !runtime->configured) {
+        return;
+    }
+    EndpointEntry* alone = nullptr;
+    int remaining = 0;
+    for (auto& [unused, entry] : m_endpoints) {
+        Q_UNUSED(unused);
+        if (entry.request.source == key) {
+            alone = &entry;
+            ++remaining;
+        }
+    }
+    if (remaining == 0) {
+        return;
+    }
+    // R-R3-01/R-R3-08: a pan held to a neighbour's engine size is granted
+    // its own request once it is the engine's only subscriber. Its renewed
+    // context carries the new grant. It never gains pixels its admitted
+    // display charge does not cover.
+    std::optional<EndpointEntry> previous;
+    if (remaining == 1 && alone->grant.reason == SpectrumLimitReason::SharedEngine) {
+        const int fftSize = std::min(alone->grant.requestedFftSize,
+                                     FFTEngine::maximumFftSize());
+        const int pixels = alone->chargeCoversRequest
+            ? alone->grant.requestedPixels : alone->request.pixels;
+        const auto displayCost = spectrumDisplayCost(
+            pixels, alone->request.targetFps, alone->request.requestedWideSpanFactor > 1.0);
+        if (fftSize > alone->sourceFftSize && displayCost) {
+            const int previousFftSize = alone->sourceFftSize;
+            const int previousPixels = alone->request.pixels;
+            const SpectrumDisplayCost previousCost = alone->displayCost;
+            alone->sourceFftSize = fftSize;
+            alone->request.pixels = pixels;
+            alone->displayCost = *displayCost;
+            if (!reconcileSource(key)) {
+                alone->sourceFftSize = previousFftSize;
+                alone->request.pixels = previousPixels;
+                alone->displayCost = previousCost;
+            }
+            return;
+        }
+    }
+    // Otherwise only the rate can fall; that renews nothing. A source that
+    // cannot be reconfigured keeps running as it was.
+    reconcileSource(key);
 }
 
 void DaemonMediaController::releaseSourceIfUnused(const MediaSourceKey& key)
@@ -1729,10 +1808,25 @@ bool DaemonMediaController::reconcileSource(const MediaSourceKey& key)
     if (!std::isfinite(config.centreHz) || config.sampleRateHz <= 0.0) {
         return false;
     }
-    const bool changed = !runtime.configured || !sameSourceConfig(runtime.config, config);
-    const bool accepted = runtime.configured
-        ? (!sameSourceConfig(runtime.config, config) ? m_source.update(key, config) : true)
-        : m_source.activate(key, config);
+    // R-R3-01/R-R3-08: the engine runs at the highest rate its endpoints
+    // ask for, and each endpoint keeps its own cadence (SpectrumEndpoint::
+    // consume), whose averaging advances per emitted frame. A change of rate
+    // alone therefore renews no context: a neighbour joining, changing rate
+    // or leaving neither moves another pan nor holds it below its own rate.
+    DaemonSpectrumSourceConfig sameRate = config;
+    sameRate.fft.fps = runtime.config.fft.fps;
+    const bool rateOnly = runtime.configured && sameSourceConfig(runtime.config, sameRate)
+        && runtime.config.fft.fps != config.fft.fps;
+    const bool changed = !runtime.configured
+        || (!rateOnly && !sameSourceConfig(runtime.config, config));
+    bool accepted = true;
+    if (!runtime.configured) {
+        accepted = m_source.activate(key, config);
+    } else if (rateOnly) {
+        accepted = m_source.updateFrameRate(key, config.fft.fps);
+    } else if (changed) {
+        accepted = m_source.update(key, config);
+    }
     if (!accepted) {
         return false;
     }

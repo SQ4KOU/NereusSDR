@@ -157,6 +157,35 @@ bool DaemonSpectrumSource::update(const MediaSourceKey& key,
     return true;
 }
 
+bool DaemonSpectrumSource::updateFrameRate(const MediaSourceKey& key, int fps)
+{
+    auto it = m_sources.find(key);
+    if (it == m_sources.end() || !it->engine) {
+        return false;
+    }
+    DaemonSpectrumSourceConfig config;
+    {
+        QMutexLocker lock(&it->state->mutex);
+        config = it->state->config;
+    }
+    config.fft.fps = fps;
+    if (!isValidConfig(key, config)) {
+        return false;
+    }
+    {
+        QMutexLocker lock(&it->state->mutex);
+        it->state->config.fft.fps = fps;
+    }
+    // Queued behind any pending full configuration, which carries the rate
+    // it was built with, so this newer rate is the one left applied.
+    QMetaObject::invokeMethod(it->engine, [engine = it->engine, fps]() {
+        if (engine) {
+            engine->setOutputFps(fps);
+        }
+    }, Qt::QueuedConnection);
+    return true;
+}
+
 void DaemonSpectrumSource::deactivate(const MediaSourceKey& key)
 {
     auto it = m_sources.find(key);

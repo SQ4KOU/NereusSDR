@@ -96,6 +96,9 @@ public:
     /// the largest-size and shared-engine rules, and pixels after the source
     /// bin rule (R-R3-01, R-R3-08). Empty for an unknown endpoint.
     std::optional<SpectrumGrant> spectrumGrant(quint32 endpointId) const;
+    /// The frame rate Core configured on the engine that feeds a live
+    /// spectrum endpoint (R-R3-01, R-R3-08). Empty for an unknown endpoint.
+    std::optional<int> spectrumSourceFps(quint32 endpointId) const;
 
 private:
     struct EndpointEntry;
@@ -134,6 +137,7 @@ private:
     void removeEndpoint(quint32 endpointId, bool retainOperation = true);
     bool reconcileSource(const MediaSourceKey& key);
     void releaseSourceIfUnused(const MediaSourceKey& key);
+    void rebalanceSourceAfterDeparture(const MediaSourceKey& key);
     void configureEndpointFromFrame(EndpointEntry& endpoint,
                                     const DaemonSpectrumFrame& frame);
     void sendContext(EndpointEntry& endpoint);

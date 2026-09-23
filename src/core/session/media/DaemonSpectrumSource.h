@@ -70,6 +70,13 @@ public:
     bool update(const MediaSourceKey& key,
                 const DaemonSpectrumSourceConfig& config);
 
+    /// Changes only the engine's output frame rate. Frame rate sets how far
+    /// the FFT window advances between frames, not what a bin represents,
+    /// so the generation, queued input and overlap history all stand and no
+    /// consumer's context is renewed. Returns false for an unknown key or a
+    /// rate outside 1..60.
+    bool updateFrameRate(const MediaSourceKey& key, int fps);
+
     /// Stops a single source tier and releases its engine. Safe for an
     /// unknown key.  The other tier for the same stream remains active.
     void deactivate(const MediaSourceKey& key);

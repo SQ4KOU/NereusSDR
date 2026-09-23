@@ -509,8 +509,10 @@ private slots:
     void sourceRetirementPublishesZeroChargeAtLatestOperationRevision();
     void failedSourceUpdateReleasesAllocationAndCanRecover();
     void sharedEngineKeepsOtherPanWhileNeighbourChurns();
+    void sharedEngineKeepsOtherPanAcrossFrameRates();
     void grantReportsLargestSizeSharedEngineAndSourceBins();
     void budgetChargesGrantedPixels();
+    void regrantAfterNeighbourLeavesStaysWithinAdmittedCharge();
     void outOfRangeRequestsAreRejectedAndLeaveEndpointUntouched();
     void displayDiagnosticsMeasureSentFramesRefusalsAndErrors();
     void displayDiagnosticsLineReportsBytesAndFragments();
@@ -2269,6 +2271,135 @@ void TstDaemonMediaController::sharedEngineKeepsOtherPanWhileNeighbourChurns()
         return false;
     })());
     e1Untouched();
+
+    // The reverse: a pan that only shares E1's engine leaves, and E1 is
+    // still untouched.
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(3, 1, h.sliceId, centre, QStringLiteral("wide"), 4096),
+        h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 2);
+    QTRY_VERIFY(([&] {
+        h.feedRadio();
+        return messageCount(controls, QStringLiteral("context"), 3) == 1;
+    })());
+    QCOMPARE(h.controller.spectrumGrant(3)->grantedFftSize, 1024);
+    QCOMPARE(h.controller.spectrumGrant(3)->reason, SpectrumLimitReason::SharedEngine);
+    QVERIFY(h.client.sendMediaControl(unsubscription(3), h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 1);
+    for (int i = 0; i < 20; ++i) { h.feedRadio(); QTest::qWait(10); }
+    e1Untouched();
+
+    // E1 leaves. The pan that was held to E1's engine is now alone on it,
+    // so it is granted its own request, and its renewed context says so.
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(4, 1, h.sliceId, centre, QStringLiteral("wide"), 4096),
+        h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 2);
+    QTRY_VERIFY(([&] {
+        h.feedRadio();
+        return messageCount(controls, QStringLiteral("context"), 4) == 1;
+    })());
+    QCOMPARE(messageFor(controls, QStringLiteral("context"), 4)
+                 .value(QStringLiteral("limit")).toString(), QStringLiteral("shared"));
+    QVERIFY(h.client.sendMediaControl(unsubscription(1), h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 1);
+    QTRY_VERIFY(([&] {
+        h.feedRadio();
+        return messageCount(controls, QStringLiteral("context"), 4) == 2;
+    })());
+    const QJsonObject upgraded = messageFor(controls, QStringLiteral("context"), 4);
+    QCOMPARE(upgraded.value(QStringLiteral("grantedFftSize")).toInt(), 4096);
+    QCOMPARE(upgraded.value(QStringLiteral("limit")).toString(), QStringLiteral("none"));
+    QCOMPARE(h.controller.spectrumGrant(4)->grantedFftSize, 4096);
+    QCOMPARE(h.controller.spectrumGrant(4)->reason, SpectrumLimitReason::None);
+    h.finish();
+}
+
+// R-R3-01/R-R3-08: a neighbour's frame rate is not a reason to renew a pan.
+// The engine runs at the highest rate its pans ask for; each endpoint keeps
+// its own cadence, so no pan is held below the rate it requested and no pan
+// is renewed when a neighbour joins, changes rate or leaves.
+void TstDaemonMediaController::sharedEngineKeepsOtherPanAcrossFrameRates()
+{
+    Harness h;
+    h.establishSession();
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    h.startReadyPeer();
+    const double centre = h.radio.streamCentreHz(h.streamIndex);
+    const auto atFps = [&](quint32 endpointId, quint32 revision, int fps) {
+        QJsonObject request = tieredSubscription(endpointId, revision, h.sliceId, centre,
+                                                 QStringLiteral("wide"), 1024);
+        request.insert(QStringLiteral("fps"), fps);
+        return request;
+    };
+    const auto contextFor = [&](quint32 endpointId, int count) {
+        QTRY_VERIFY(([&] {
+            h.feedRadio();
+            return messageCount(controls, QStringLiteral("context"), endpointId) >= count;
+        })());
+    };
+    const auto settle = [&] {
+        for (int i = 0; i < 20; ++i) { h.feedRadio(); QTest::qWait(10); }
+    };
+
+    // E1 at 30 fps alone, then E2 on the same engine at 60, then at 15,
+    // then gone. E1 keeps one context and its bins throughout.
+    QVERIFY(h.client.sendMediaControl(atFps(1, 1, 30), h.client.sessionEpoch()));
+    contextFor(1, 1);
+    const QJsonObject e1 = messageFor(controls, QStringLiteral("context"), 1);
+    const auto e1Untouched = [&] {
+        QCOMPARE(messageCount(controls, QStringLiteral("context"), 1), 1);
+        const QJsonObject latest = messageFor(controls, QStringLiteral("context"), 1);
+        QCOMPARE(latest.value(QStringLiteral("contextGeneration")),
+                 e1.value(QStringLiteral("contextGeneration")));
+        QCOMPARE(latest.value(QStringLiteral("traceSamples")),
+                 e1.value(QStringLiteral("traceSamples")));
+        QCOMPARE(latest.value(QStringLiteral("fps")).toInt(), 30);
+    };
+    QCOMPARE(h.controller.spectrumSourceFps(1), std::optional<int>(30));
+
+    QVERIFY(h.client.sendMediaControl(atFps(2, 1, 60), h.client.sessionEpoch()));
+    contextFor(2, 1);
+    settle();
+    e1Untouched();
+    QCOMPARE(h.controller.spectrumSourceFps(2), std::optional<int>(60));
+    QCOMPARE(messageFor(controls, QStringLiteral("context"), 2)
+                 .value(QStringLiteral("fps")).toInt(), 60);
+
+    QVERIFY(h.client.sendMediaControl(atFps(2, 2, 15), h.client.sessionEpoch()));
+    QTRY_VERIFY(([&] {
+        h.feedRadio();
+        return messageFor(controls, QStringLiteral("context"), 2)
+            .value(QStringLiteral("revision")).toInt() == 2;
+    })());
+    settle();
+    e1Untouched();
+    QCOMPARE(h.controller.spectrumSourceFps(1), std::optional<int>(30));
+
+    QVERIFY(h.client.sendMediaControl(unsubscription(2), h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 1);
+    settle();
+    e1Untouched();
+
+    // The reverse order: a background pan at 15 fps is first, a focused pan
+    // at 60 joins. The focused pan's engine runs at its own rate, and the
+    // background pan is not renewed when the focused pan arrives or leaves.
+    QVERIFY(h.client.sendMediaControl(unsubscription(1), h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 0);
+    QVERIFY(h.client.sendMediaControl(atFps(3, 1, 15), h.client.sessionEpoch()));
+    contextFor(3, 1);
+    QVERIFY(h.client.sendMediaControl(atFps(4, 1, 60), h.client.sessionEpoch()));
+    contextFor(4, 1);
+    settle();
+    QCOMPARE(h.controller.spectrumSourceFps(4), std::optional<int>(60));
+    QCOMPARE(messageFor(controls, QStringLiteral("context"), 4)
+                 .value(QStringLiteral("fps")).toInt(), 60);
+    QCOMPARE(messageCount(controls, QStringLiteral("context"), 3), 1);
+    QVERIFY(h.client.sendMediaControl(unsubscription(4), h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 1);
+    settle();
+    QCOMPARE(messageCount(controls, QStringLiteral("context"), 3), 1);
+    QCOMPARE(h.controller.spectrumSourceFps(3), std::optional<int>(15));
     h.finish();
 }
 
@@ -2371,6 +2502,61 @@ void TstDaemonMediaController::budgetChargesGrantedPixels()
              static_cast<qint64>(charged.charge.spectrumSampleUnitsPerSecond));
     QCOMPARE(result.value(QStringLiteral("applicationBytesPerSecond")).toInteger(),
              static_cast<qint64>(charged.charge.applicationBytesPerSecond));
+    h.finish();
+}
+
+// R-R3-01/R-R3-08/R-R3-37: under the display budget a minor 9 GUI holds
+// the charge for the pixels it was granted. When the neighbour that held it
+// to a smaller engine leaves, the pan gets its own FFT size but no pixels
+// beyond that charge, and it is not told the receiver lacks detail.
+void TstDaemonMediaController::regrantAfterNeighbourLeavesStaysWithinAdmittedCharge()
+{
+    Harness h(DisplayBudgetLimits{10'000'000, 10'000'000, 7});
+    h.establishSession();
+    QVERIFY(h.server.displayBudgetAvailable());
+    QVERIFY(h.server.spectrumGrantAvailable());
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    h.startReadyPeer();
+    const double centre = h.radio.streamCentreHz(h.streamIndex);
+
+    QVERIFY(h.client.sendMediaControl(subscription(1, 1, h.sliceId, centre),
+                                      h.client.sessionEpoch()));
+    QTRY_VERIFY(!allocationFor(controls, 1, 1).isEmpty());
+    QJsonObject deep = tieredSubscription(2, 1, h.sliceId, centre,
+                                          QStringLiteral("wide"), 4096);
+    deep.insert(QStringLiteral("spanHz"), 6000.0);
+    QVERIFY(h.client.sendMediaControl(deep, h.client.sessionEpoch()));
+    QTRY_VERIFY(!allocationFor(controls, 2, 1).isEmpty());
+    QVERIFY(allocationFor(controls, 2, 1).value(QStringLiteral("accepted")).toBool());
+    const auto shared = h.controller.spectrumGrant(2);
+    QVERIFY(shared.has_value());
+    QCOMPARE(shared->reason, SpectrumLimitReason::SharedEngine);
+    QCOMPARE(shared->grantedFftSize, 1024);
+    const int admittedPixels = shared->grantedPixels;
+    QVERIFY(admittedPixels > 0 && admittedPixels < 128);
+    const SpectrumDisplayCost admitted = *spectrumDisplayCost(admittedPixels, 60, false);
+    QCOMPARE(allocationFor(controls, 2, 1).value(QStringLiteral("spectrumSampleUnitsPerSecond"))
+                 .toInteger(),
+             static_cast<qint64>(admitted.charge.spectrumSampleUnitsPerSecond));
+
+    QVERIFY(h.client.sendMediaControl({
+        {QStringLiteral("op"), QStringLiteral("unsubscribe")},
+        {QStringLiteral("connectionId"), QLatin1String(kConnectionId)},
+        {QStringLiteral("endpointId"), 1},
+        {QStringLiteral("revision"), 2}}, h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 1);
+    QTRY_VERIFY(([&] {
+        h.feedRadio();
+        return messageFor(controls, QStringLiteral("context"), 2)
+            .value(QStringLiteral("grantedFftSize")).toInt() == 4096;
+    })());
+    const QJsonObject context = messageFor(controls, QStringLiteral("context"), 2);
+    QCOMPARE(context.value(QStringLiteral("traceSamples")).toInt(), admittedPixels);
+    QCOMPARE(context.value(QStringLiteral("limit")).toString(), QStringLiteral("none"));
+    const auto regranted = h.controller.spectrumGrant(2);
+    QCOMPARE(regranted->grantedFftSize, 4096);
+    QCOMPARE(regranted->grantedPixels, admittedPixels);
+    QCOMPARE(regranted->reason, SpectrumLimitReason::None);
     h.finish();
 }
 
