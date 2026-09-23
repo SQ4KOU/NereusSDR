@@ -426,12 +426,14 @@ private:
     // (TnfModel.h:52 [@c6481cbf]) because its list mirrors radio state
     // rather than owning it; ours is the source of truth, so it follows
     // Thetis and WDSP instead (maintainer decision D-a, 2026-07-29).
-    bool m_globalEnabled{false};
+    static constexpr bool kDefaultGlobalEnabled = false;
+    bool m_globalEnabled{kDefaultGlobalEnabled};
 
     // WDSP creates nbp0 with autoincr = 1 (From WDSP RXA.c:105) and Thetis
     // ships chkMNFAutoIncrease checked, so the settings-page control starts
     // ON, not OFF.
-    bool m_autoIncrease{true};
+    static constexpr bool kDefaultAutoIncrease = true;
+    bool m_autoIncrease{kDefaultAutoIncrease};
 
     // Thetis chkVisualNotch carries no designer Checked assignment, so
     // WinForms leaves it unchecked.

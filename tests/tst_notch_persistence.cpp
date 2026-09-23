@@ -455,6 +455,40 @@ private slots:
         QVERIFY(m.addNotch(14074000.0) > 3);
     }
 
+    // Follow-up item 6 (R-R3-21): leaving mirror mode with nothing saved,
+    // the two switches go back to this window's defaults (master off, auto
+    // increase on), not the values the Core last mirrored, and nothing is
+    // written. A saved switch still wins over its default.
+    void leaving_mirror_mode_with_nothing_saved_resets_both_switches()
+    {
+        NotchModel m;
+        QVERIFY(!m.globalEnabled());
+        QVERIFY(m.autoIncrease());
+        m.setMirrorMode(true);
+        // What the mirror delivers from the Core (a property write).
+        m.setGlobalEnabled(true);
+        m.setAutoIncrease(false);
+        QVERIFY(m.globalEnabled());
+        QVERIFY(!m.autoIncrease());
+        QSignalSpy enabled(&m, &NotchModel::globalEnabledChanged);
+        QSignalSpy autoInc(&m, &NotchModel::autoIncreaseChanged);
+        m.setMirrorMode(false);
+        QVERIFY(!m.globalEnabled());
+        QVERIFY(m.autoIncrease());
+        QCOMPARE(enabled.count(), 1);
+        QCOMPARE(autoInc.count(), 1);
+        QVERIFY(!AppSettings::instance().contains(QStringLiteral("NotchGlobalEnabled")));
+        QVERIFY(!AppSettings::instance().contains(QStringLiteral("NotchAutoIncrease")));
+
+        AppSettings::instance().setValue(QStringLiteral("NotchAutoIncrease"),
+                                         QStringLiteral("False"));
+        m.setMirrorMode(true);
+        m.setGlobalEnabled(true);
+        m.setMirrorMode(false);
+        QVERIFY(!m.globalEnabled());
+        QVERIFY(!m.autoIncrease());
+    }
+
     // Fix wave minor 5 (R-R3-21): the Core's notch.move is one change: one
     // revision, one notchChanged, one listChanged, both values at once; a
     // refused move changes nothing.

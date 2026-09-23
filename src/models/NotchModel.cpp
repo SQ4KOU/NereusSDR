@@ -935,6 +935,13 @@ void NotchModel::setMirrorMode(bool on)
     // window's. Drop it and go back to the window's own saved notches and
     // flags, which mirror mode never wrote.
     m_notches.clear();
+    // Follow-up item 6: the two switches start from this window's defaults,
+    // not the Core's mirrored values; a saved switch then replaces its
+    // default below. Nothing is written while they are reset.
+    m_restoring = true;
+    setGlobalEnabled(kDefaultGlobalEnabled);
+    setAutoIncrease(kDefaultAutoIncrease);
+    m_restoring = false;
     if (AppSettings::instance().contains(QStringLiteral("NotchCount"))) {
         restoreFromSettings(); // emits notchesReset and listChanged
     } else {

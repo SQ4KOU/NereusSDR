@@ -35,8 +35,10 @@ whenever it runs; it does not depend on a radio or on WDSP.
 
 The Core watches `RadioModel::notchModel()` under object key `notches`, class
 `NotchModel`. An older app holds no object for this key: it records the
-schema as skew and drops the object's deltas, logging that once per object
-rather than once per delta.
+schema as skew and drops the object's deltas. An app from this build on logs
+that once per object for each connection; an app built before the R3 audio
+and DSP control batch logs one line per delta, and only notch edits produce
+them.
 
 | Property | Direction | Type | Meaning |
 | --- | --- | --- | --- |
