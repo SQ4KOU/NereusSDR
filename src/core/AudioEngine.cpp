@@ -19,6 +19,12 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-22 : R-R3-36 Task 5 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. ensureTxInputOpen() removed: start()
+//                 opens no input. The engine owns a CaptureSupervisor built
+//                 in the constructor with the persisted audio/TxInput config;
+//                 the TX path reads its stable reader, stop() leaves it alone,
+//                 and setTxInputConfig() only reconfigures the supervisor.
 //   2026-09-22 — R-R3-36 prerequisite by J.J. Boyd (KG4VCF), AI-assisted
 //                 via OpenAI Codex. Adds a source-intent-only PC-mic query
 //                 while preserving the existing combined readiness query.
@@ -112,6 +118,7 @@
 #include "LogCategories.h"
 #include "RxChannel.h"        // afGain() — for VAX AF-bypass
 #include "WdspEngine.h"       // rxChannel(0) lookup
+#include "audio/CaptureAudioBus.h"
 #include "audio/PortAudioBus.h"
 #include "../models/RadioModel.h"
 #include "../models/SliceModel.h"
@@ -126,6 +133,8 @@
 #include "core/audio/PipeWireBus.h"
 #include "core/audio/PipeWireThreadLoop.h"
 #endif
+
+#include <QCoreApplication>
 
 #include <portaudio.h>
 
@@ -230,6 +239,20 @@ AudioEngine::AudioEngine(QObject* parent)
     // (dexp.c:288 [v2.10.3.15]), for far longer than 5 ms after an unkey.
     m_antiVoxMix.setSlewUpFrames(0);
 
+    // R-R3-36: the PC microphone is captured by the supervised helper
+    // process, and only while someone holds a capture demand. Creating the
+    // supervisor applies the persisted selection without opening anything.
+    m_txInputConfig =
+        AudioDeviceConfig::loadFromSettings(QStringLiteral("audio/TxInput"));
+    // The supervisor needs an application object: its I/O thread runs an
+    // event loop and its status reaches this thread through queued calls.
+    // Every process that captures has one; an engine built without one
+    // (application-less unit tests) has no capture input, exactly like an
+    // engine whose capture never became Ready.
+    if (QCoreApplication::instance() != nullptr) {
+        installCaptureSupervisor({});
+    }
+
     // (Phase 3M-1c bench-fix-A added an m_micPumpTimer here that drove
     //  pullTxMic at 5 ms cadence to keep the D.1 720-sample accumulator
     //  ticking after the E.1 push-slot refactor dropped TxChannel's
@@ -245,6 +268,10 @@ AudioEngine::~AudioEngine()
     // (m_pwLoop declared LAST → destroyed LAST) is the second line of defense.
     // See AudioEngine.h §"FORWARD CONTRACT #1 — DECLARED LAST".
     stop();
+    // Bounded (stop deadline plus slack); kills a helper that ignores Stop.
+    if (m_captureSupervisor) {
+        m_captureSupervisor->shutdown();
+    }
     if (m_paInitialized) {
         Pa_Terminate();
         m_paInitialized = false;
@@ -397,7 +424,9 @@ void AudioEngine::start()
     preregisterSlices(m_radio ? m_radio->boardCapabilities().maxSlices : 1);
 
     ensureSpeakersOpen();
-    ensureTxInputOpen();
+    // R-R3-36: no TX input is opened here. PC microphone capture starts only
+    // when RadioModel (local session with PC mic selected) or Test Mic
+    // acquires a capture demand, and it never blocks this call.
 
     // Sub-Phase 8.5: eagerly construct platform-native VAX RX buses + the
     // VAX TX virtual bus on macOS / Linux so coreaudiod / pactl publish the
@@ -470,6 +499,9 @@ void AudioEngine::stop()
         m_speakersBus.reset();
     }
     m_headphonesBus.reset();
+    // Drops only a test-injected TX input. The capture supervisor and its
+    // reader outlive stop(): the TX worker may still be reading it until
+    // RadioModel has stopped the worker and released its demand (R-R3-36).
     m_txInputBus.reset();
     // Reset VAX TX before iterating m_vaxBus so the close ordering is
     // TX-first then RX-1..4 — symmetric with the start() construction
@@ -834,33 +866,45 @@ void AudioEngine::ensureSpeakersOpen()
     }
 }
 
-void AudioEngine::ensureTxInputOpen()
+void AudioEngine::installCaptureSupervisor(CaptureSupervisor::Options options)
 {
-    if (m_txInputBus && m_txInputBus->isOpen()) {
-        return;
-    }
-    if (!m_paInitialized) {
-        return;
-    }
+    m_captureSupervisor.reset();
+    m_captureSupervisor = std::make_unique<CaptureSupervisor>(std::move(options));
+    connect(m_captureSupervisor.get(), &CaptureSupervisor::statusChanged,
+            this, &AudioEngine::captureStatusChanged);
+    m_captureSupervisor->configure(m_txInputConfig);
+}
 
-    // Phase 3M-1b: open the platform-default mic on start() so the
-    // PhoneCwApplet mic-level meter (and PcMicSource on TX) has signal
-    // without requiring the user to visit Setup → Audio → Devices.
-    // Persisted choice (audio/TxInput keys) takes priority on subsequent
-    // launches; first run with no keys returns a default-constructed
-    // AudioDeviceConfig (empty deviceName → platform-default mic).
-    const AudioDeviceConfig cfg =
-        AudioDeviceConfig::loadFromSettings(QStringLiteral("audio/TxInput"));
-
-    m_txInputBus = makeBus(cfg, /*capture=*/true);
+IAudioBus* AudioEngine::txInputSource() const noexcept
+{
     if (m_txInputBus) {
-        qCInfo(lcAudio) << "TX input bus opened (eager) @"
-                        << m_txInputBus->negotiatedFormat().sampleRate << "Hz /"
-                        << m_txInputBus->negotiatedFormat().channels << "ch"
-                        << "[" << m_txInputBus->backendName() << "]";
-        emit txInputConfigChanged(cfg);
-    } else {
-        qCWarning(lcAudio) << "TX input bus open failed — mic level meter inert";
+        return m_txInputBus.get();
+    }
+    return m_captureSupervisor ? m_captureSupervisor->reader() : nullptr;
+}
+
+AudioDeviceConfig AudioEngine::txInputConfig() const
+{
+    return m_txInputConfig;
+}
+
+CaptureSupervisor::Status AudioEngine::captureStatus() const
+{
+    return m_captureSupervisor ? m_captureSupervisor->status() : CaptureSupervisor::Status{};
+}
+
+CaptureSupervisor::Lease AudioEngine::acquireCaptureDemand(CaptureSupervisor::Demand demand)
+{
+    if (!m_captureSupervisor) {
+        return CaptureSupervisor::Lease();
+    }
+    return m_captureSupervisor->acquire(demand);
+}
+
+void AudioEngine::retryCapture()
+{
+    if (m_captureSupervisor) {
+        m_captureSupervisor->retry();
     }
 }
 
@@ -979,17 +1023,13 @@ void AudioEngine::setHeadphonesConfig(const AudioDeviceConfig& cfg)
 
 void AudioEngine::setTxInputConfig(const AudioDeviceConfig& cfg)
 {
-    // TX pull() wiring lands in Phase 3M. We declare ownership + setter
-    // per the Sub-Phase 4 plan so the bus is construction-ready; the bus
-    // is inert until TxChannel starts pulling.
-    m_txInputBus.reset();
-    if (!m_paInitialized) {
-        return;
-    }
-    m_txInputBus = makeBus(cfg, /*capture=*/true);
-    if (m_txInputBus) {
-        qCInfo(lcAudio) << "TX input bus opened"
-                        << "[" << m_txInputBus->backendName() << "]";
+    // R-R3-36: no native bus is reset or opened here, so the TX worker's
+    // reader is never replaced under it. The supervisor retires the old
+    // input and, if capture is demanded, prepares the new one on its own
+    // thread.
+    m_txInputConfig = cfg;
+    if (m_captureSupervisor) {
+        m_captureSupervisor->configure(cfg);
     }
     emit txInputConfigChanged(cfg);
 }
@@ -1099,6 +1139,19 @@ void AudioEngine::setHeadphonesBusForTest(std::unique_ptr<IAudioBus> bus)
 void AudioEngine::setTxInputBusForTest(std::unique_ptr<IAudioBus> bus)
 {
     m_txInputBus = std::move(bus);
+}
+
+void AudioEngine::setCaptureSupervisorOptionsForTest(CaptureSupervisor::Options options)
+{
+    Q_ASSERT_X(!m_captureSupervisor || !m_captureSupervisor->hasDemand(),
+               "AudioEngine::setCaptureSupervisorOptionsForTest",
+               "capture demand is active");
+    installCaptureSupervisor(std::move(options));
+}
+
+qint64 AudioEngine::captureHelperProcessIdForTest() const
+{
+    return m_captureSupervisor ? m_captureSupervisor->helperProcessId() : 0;
 }
 
 void AudioEngine::setVaxTxBusForTest(std::unique_ptr<IAudioBus> bus)
@@ -1477,7 +1530,8 @@ bool AudioEngine::isPcMicOverrideActive() const noexcept
     if (!isPcMicSelected()) {
         return false;
     }
-    return (m_txInputBus != nullptr) && m_txInputBus->isOpen();
+    const IAudioBus* bus = txInputSource();
+    return (bus != nullptr) && bus->isOpen();
 }
 
 void AudioEngine::onMicSourceChanged(bool selectedSourceIsPc)
@@ -1506,11 +1560,14 @@ void AudioEngine::onMicSourceChangedVax(bool selectedSourceIsVax)
 int AudioEngine::pullTxMic(float* dst, int n)
 {
     // Plan: 3M-1b E.1. Pre-code review §0.3 (PcMicSource arch).
-    if (m_txInputBus == nullptr || dst == nullptr || n <= 0) {
+    // R-R3-36: the capture reader (or an injected test bus); the reader
+    // returns nothing unless capture is Ready.
+    IAudioBus* const bus = txInputSource();
+    if (bus == nullptr || dst == nullptr || n <= 0) {
         return 0;
     }
 
-    const AudioFormat fmt = m_txInputBus->negotiatedFormat();
+    const AudioFormat fmt = bus->negotiatedFormat();
     const int channels = (fmt.channels > 0) ? fmt.channels : 1;
 
     int bytesPerSample = 0;
@@ -1536,7 +1593,7 @@ int AudioEngine::pullTxMic(float* dst, int n)
         scratch.resize(static_cast<size_t>(needBytes));
     }
 
-    const qint64 gotBytes = m_txInputBus->pull(scratch.data(), needBytes);
+    const qint64 gotBytes = bus->pull(scratch.data(), needBytes);
     if (gotBytes <= 0) {
         return 0;
     }
@@ -1900,20 +1957,19 @@ float AudioEngine::vaxTxLevel() const
 
 // ── PC Mic input level (3M-1b I.2) ───────────────────────────────────────────
 //
-// Provides a peak-amplitude readout from the TX-input bus (the PC's capture
-// device, owned by m_txInputBus).  The PortAudioBus audio callback updates
-// m_txLevel (std::atomic<float>) each callback cycle; this accessor reads
-// it lock-free from the main thread.
+// Provides a peak-amplitude readout from the TX input (R-R3-36: the capture
+// supervisor's reader, whose level is the peak of the latest PCM record from
+// the helper, or an injected test bus).  Lock-free read from the main thread.
 //
-// Returns 0.0f when m_txInputBus is null (mic not configured) or the bus is
-// not open (stream not started yet, or startup failed).
+// Returns 0.0f when capture is not Ready (no demand, still opening, or
+// failed).
 //
 // Used by AudioTxInputPage's Test Mic VU bar (I.2) to show live mic level
 // without opening a separate capture stream.
 
 float AudioEngine::pcMicInputLevel() const
 {
-    const IAudioBus* bus = m_txInputBus.get();
+    const IAudioBus* bus = txInputSource();
     if (bus == nullptr || !bus->isOpen()) {
         return 0.0f;
     }

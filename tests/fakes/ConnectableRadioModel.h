@@ -44,6 +44,7 @@
 
 #include "P1FakeRadio.h"
 
+#include <functional>
 #include <memory>
 
 namespace NereusSDR::Test {
@@ -89,9 +90,16 @@ public:
     // QVERIFY(...) to the caller. On a Local timeout, both the
     // partially-connected model and the fake are torn down before
     // returning null; nothing leaks.
+    //
+    // R-R3-36 Task 5: beforeConnect, when set, runs on the built model
+    // immediately before connectToRadio() (after the fixture's own audio
+    // test initializer is installed, so it may replace it), letting a test
+    // install capture supervisor options or policy flags that must be in
+    // place before the connect path starts the AudioEngine.
     static std::unique_ptr<ConnectableRadioModel> create(
         int timeoutMs = 10000,
-        NereusSDR::RadioModel::Role role = NereusSDR::RadioModel::Role::Local);
+        NereusSDR::RadioModel::Role role = NereusSDR::RadioModel::Role::Local,
+        std::function<void(NereusSDR::RadioModel&)> beforeConnect = {});
 
     NereusSDR::RadioModel&       model()       { return *m_model; }
     const NereusSDR::RadioModel& model() const { return *m_model; }

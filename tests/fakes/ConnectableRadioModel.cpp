@@ -40,7 +40,8 @@ void installOpenAudioBuses(AudioEngine& engine)
 ConnectableRadioModel::~ConnectableRadioModel() = default;
 
 std::unique_ptr<ConnectableRadioModel> ConnectableRadioModel::create(
-    int timeoutMs, NereusSDR::RadioModel::Role role)
+    int timeoutMs, NereusSDR::RadioModel::Role role,
+    std::function<void(NereusSDR::RadioModel&)> beforeConnect)
 {
     // ConnectableRadioModel's constructor is private (see the header), so
     // std::make_unique can't reach it from outside the class; new + wrap
@@ -83,6 +84,10 @@ std::unique_ptr<ConnectableRadioModel> ConnectableRadioModel::create(
     // Harmless to arm for Role::Remote too: initialize() is never called
     // on that path, so the flag just goes unread.
     harness->m_model->wdspEngine()->setSynchronousInitForTest(true);
+
+    if (beforeConnect) {
+        beforeConnect(*harness->m_model);
+    }
 
     harness->m_model->connectToRadio(harness->m_info);
 

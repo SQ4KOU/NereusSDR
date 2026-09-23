@@ -21,6 +21,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-22 : R-R3-36 Task 5 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. The engine owns a CaptureSupervisor
+//                 and reads the PC microphone through its stable reader;
+//                 start() no longer opens any input, and capture opens only
+//                 on demand (acquireCaptureDemand).
 //   2026-09-22 — R-R3-36 prerequisite by J.J. Boyd (KG4VCF), AI-assisted
 //                 via OpenAI Codex. Separates selected PC-mic source intent
 //                 from capture-bus readiness for fail-silent TX routing.
@@ -111,6 +116,7 @@
 
 #include "AudioDeviceConfig.h"
 #include "IAudioBus.h"
+#include "audio/CaptureSupervisor.h"
 #include "audio/MasterMixer.h"
 
 #if defined(Q_OS_LINUX)
@@ -315,7 +321,20 @@ public:
     bool writeRemotePlayback(const QVector<float>& stereo);
 
     void setHeadphonesConfig(const AudioDeviceConfig& cfg);
+    // R-R3-36: stores the TX input selection and hands it to the capture
+    // supervisor. Never opens a device and never waits; capture opens only
+    // while someone holds a demand (acquireCaptureDemand).
     void setTxInputConfig(const AudioDeviceConfig& cfg);
+    AudioDeviceConfig txInputConfig() const;
+
+    // R-R3-36: PC microphone capture runs in the supervised helper process.
+    // captureStatus() is the supervisor's last published status;
+    // acquireCaptureDemand() returns one unit of demand (the first active
+    // lease starts capture, releasing the last stops it); retryCapture()
+    // starts a new attempt after a failure. Owner (GUI) thread only.
+    CaptureSupervisor::Status captureStatus() const;
+    CaptureSupervisor::Lease acquireCaptureDemand(CaptureSupervisor::Demand demand);
+    void retryCapture();
 
     // Per-VAX device configuration. On Mac/Linux the VAX slots are populated
     // eagerly by start() with the platform-native virtual bus
@@ -349,7 +368,15 @@ public:
     // tests can exercise pullTxMic without standing up a real PortAudio
     // capture device. Takes ownership of `bus`.
     // Plan: 3M-1b E.1.
+    // An injected bus takes precedence over the capture supervisor's reader.
     void setTxInputBusForTest(std::unique_ptr<IAudioBus> bus);
+
+    // R-R3-36: replaces the capture supervisor with one built from these
+    // options (the scripted fake helper in tests). Valid only while no
+    // capture demand is active (asserts otherwise).
+    void setCaptureSupervisorOptionsForTest(CaptureSupervisor::Options options);
+    // The running capture helper's process id, 0 when none.
+    qint64 captureHelperProcessIdForTest() const;
 
     // Persistent test seam — prepare dependencies before every start().
     // stop() intentionally releases all buses, so reconnect fixtures use
@@ -495,7 +522,8 @@ public:
     /// Returns true when PC mic is selected and capture is ready. Gated by:
     ///   1. m_micSourceWantsPc (true iff TransmitModel::micSource ==
     ///      MicSource::Pc; updated by onMicSourceChanged()).
-    ///   2. m_txInputBus exists and is open.
+    ///   2. the TX input (the capture reader, or an injected test bus) is
+    ///      open; the capture reader is open only while capture is Ready.
     ///
     /// Both conditions must be true. Existing callers that need the combined
     /// readiness predicate retain this API; worker source routing uses
@@ -622,9 +650,10 @@ public:
     float vaxRxLevel(int channel) const;
     float vaxTxLevel() const;
 
-    // Peak input level (0.0–1.0 normalized) from the PC Mic capture bus
-    // (m_txInputBus). Used by AudioTxInputPage's Test Mic VU bar (I.2).
-    // Returns 0.0f when m_txInputBus is null or not open. Safe to call
+    // Peak input level (0.0–1.0 normalized) from the PC Mic capture input
+    // (the capture reader, or an injected test bus). Used by
+    // AudioTxInputPage's Test Mic VU bar (I.2). Returns 0.0f when capture
+    // is not Ready. Safe to call
     // from the main thread — reads std::atomic<float> in IAudioBus.
     float pcMicInputLevel() const;
 
@@ -718,6 +747,8 @@ signals:
     void speakersConfigChanged(NereusSDR::AudioDeviceConfig cfg);
     void headphonesConfigChanged(NereusSDR::AudioDeviceConfig cfg);
     void txInputConfigChanged(NereusSDR::AudioDeviceConfig cfg);
+    // R-R3-36: re-emits CaptureSupervisor::statusChanged on the owner thread.
+    void captureStatusChanged(const NereusSDR::CaptureSupervisor::Status& status);
     void vaxConfigChanged(int channel, NereusSDR::AudioDeviceConfig cfg);
 
 #if defined(Q_OS_LINUX)
@@ -768,14 +799,13 @@ private:
     // audible without a Setup→Audio→Devices UI in Sub-Phase 4.
     void ensureSpeakersOpen();
 
-    // Open m_txInputBus with the persisted device or platform-default mic
-    // capture so PhoneCwApplet's mic-level meter has signal without
-    // requiring Setup configuration. Users can override later via
-    // Setup → Audio → Devices (or → TX Input). Loaded from
-    // audio/TxInput AppSettings keys (loadFromSettings returns a
-    // default-constructed config on first run → empty deviceName →
-    // platform default mic).
-    void ensureTxInputOpen();
+    // R-R3-36: (re)creates m_captureSupervisor from options, forwards its
+    // status and applies m_txInputConfig. Never opens capture by itself.
+    void installCaptureSupervisor(CaptureSupervisor::Options options);
+
+    // The input the TX path reads: an injected test bus when present,
+    // otherwise the capture supervisor's stable reader.
+    IAudioBus* txInputSource() const noexcept;
 
     RadioModel* m_radio{nullptr};
 
@@ -789,7 +819,16 @@ private:
     std::unique_ptr<IAudioBus> m_speakersBus;
     bool m_remotePlayback{false}; // protected by m_speakersBusMutex
     std::unique_ptr<IAudioBus> m_headphonesBus;
+    // Test-injected TX input only (setTxInputBusForTest); production reads
+    // the capture supervisor's reader. R-R3-36.
     std::unique_ptr<IAudioBus> m_txInputBus;
+
+    // R-R3-36: the persisted audio/TxInput selection and the supervisor of
+    // the capture helper. Created in the constructor; lives until the
+    // engine is destroyed, so its reader pointer stays valid for the TX
+    // worker across start()/stop().
+    AudioDeviceConfig m_txInputConfig;
+    std::unique_ptr<CaptureSupervisor> m_captureSupervisor;
 
     // (Phase 3M-1c D.1 added a kMicBlockFrames=720-sample mic-block
     //  accumulator + clearMicBuffer + bench-fix-A pumpMic timer.  The

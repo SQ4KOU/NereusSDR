@@ -17,6 +17,11 @@
 //   2026-09-21 — Multi-slice RADE RX ownership and lifetime orchestration by
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 OpenAI Codex.
+//   2026-09-22 : R-R3-36 Task 5 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. PC microphone session demand
+//                 (setPcCaptureAllowed / pcCaptureRequired and a
+//                 LocalSession capture lease). NereusSDR-original; no
+//                 Thetis logic.
 // =================================================================
 
 //=================================================================
@@ -71,6 +76,7 @@
 // Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
 
 #include "core/ConnectionState.h"
+#include "core/audio/CaptureSupervisor.h"
 #include "core/ReceiveLayoutStore.h"
 #include "core/spectrum/WidebandSpectrumCache.h"
 #include "core/PgxlConnection.h"
@@ -298,6 +304,20 @@ public:
     Role role() const { return m_role; }
     void setReceiveOnlyStationPolicy(bool receiveOnly);
     bool receiveOnlyStationPolicy() const { return m_receiveOnlyStationPolicy; }
+
+    // R-R3-36: PC microphone session demand. While a local radio
+    // connection is up, PC capture is allowed and the mic source is Pc,
+    // this model holds one LocalSession capture lease on its AudioEngine
+    // (acquired after AudioEngine::start() returns, released when the
+    // source leaves Pc and in teardown after the TX worker has stopped).
+    // Default true; DaemonApp sets false before connecting so nereusd
+    // never starts the capture helper. A Role::Remote model never holds a
+    // lease. Owner thread only.
+    void setPcCaptureAllowed(bool allowed);
+    bool pcCaptureAllowed() const { return m_pcCaptureAllowed; }
+    // True when the mic source is Pc and local keying would read PC
+    // capture (a Role::Local model with PC capture allowed).
+    bool pcCaptureRequired() const;
 
     // Remote-daemon R2 Task 4: non-owning attach point for the
     // control-plane station-link seam (core/session/IStationLink.h). A
@@ -4048,6 +4068,14 @@ private:
     // constructor overload above), never mutated afterward.
     Role m_role{Role::Local};
     bool m_receiveOnlyStationPolicy{false};
+
+    // R-R3-36: PC microphone session demand (see setPcCaptureAllowed).
+    // m_pcCaptureSessionActive is true from AudioEngine::start() in the
+    // local connect path until teardown has stopped the TX worker.
+    void updatePcCaptureDemand();
+    bool m_pcCaptureAllowed{true};
+    bool m_pcCaptureSessionActive{false};
+    CaptureSupervisor::Lease m_pcCaptureLease;
 
     // Remote-daemon R2 Task 20: the reach-through audit described on
     // localDspHandOutCount() above. Written only while m_role ==

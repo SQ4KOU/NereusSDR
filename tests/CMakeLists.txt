@@ -1395,6 +1395,18 @@ nereus_add_test(tst_capture_helper_process fakes/FakeCaptureChild.cpp)
 # hanging child. No real microphone is opened.
 nereus_add_test(tst_capture_supervisor fakes/FakeCaptureChild.cpp)
 
+# R-R3-36 Task 5: AudioEngine and RadioModel PC microphone session demand.
+# start() opens no input; a hanging helper never delays start, connect or
+# disconnect; the local session holds a capture lease only while PC mic is
+# selected; a daemon-flagged model never starts the helper. Re-executes
+# itself as the scripted fake helper (--fake-capture-child); no real
+# microphone is opened.
+nereus_add_test(tst_capture_session_demand
+    fakes/FakeCaptureChild.cpp
+    fakes/P1FakeRadio.cpp
+    fakes/ConnectableRadioModel.cpp)
+target_compile_definitions(tst_capture_session_demand PRIVATE NEREUS_BUILD_TESTS)
+
 # R-R3-36 Task 4: locateCaptureHelper() lookup order per platform against
 # temporary directory layouts (including none present), and the
 # supervisor's default program falling back to HelperMissing.

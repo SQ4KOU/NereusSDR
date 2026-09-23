@@ -8,6 +8,10 @@
 //   2026-09-20: relay RadioModel connection state without dereferencing a
 //               RadioModel being destroyed, by J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via OpenAI Codex.
+//   2026-09-22: R-R3-36 Task 5: the daemon's RadioModel never demands PC
+//               microphone capture, so nereusd never starts the capture
+//               helper, by J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -93,6 +97,10 @@ bool DaemonApp::start(const DaemonConfig& cfg)
     NereusSDR::CoreInit::initialize();
 
     m_radioModel = std::make_unique<RadioModel>();
+    // R-R3-36: nereusd never opens a microphone. Set before anything below
+    // can connect the model, so no local-session capture demand is ever
+    // taken and the capture helper is never started.
+    m_radioModel->setPcCaptureAllowed(false);
 #ifdef NEREUS_BUILD_TESTS
     m_radioModel->wdspEngine()->setSynchronousInitForTest(m_synchronousWdspForTest);
     if (m_radioInitializerForTest) {

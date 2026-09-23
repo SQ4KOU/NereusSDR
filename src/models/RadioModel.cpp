@@ -18,6 +18,12 @@
 //   2026-09-21 — Multi-slice RADE RX ownership and lifetime orchestration by
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 OpenAI Codex.
+//   2026-09-22 : R-R3-36 Task 5 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. The local session holds a PC
+//                 microphone capture lease after AudioEngine::start() while
+//                 the mic source is Pc, and releases it on source change and
+//                 in teardown after the TX worker has stopped.
+//                 NereusSDR-original; no Thetis logic.
 //   2026-05-03 — Phase 4 Agent 4A of issue #167 (PA calibration safety
 //                 hotfix — K2GX field report).  Drive-slider lambda
 //                 (lines ~830) and TUNE-engagement path (lines ~4280)
@@ -550,6 +556,9 @@ RadioModel::RadioModel(Role role, QObject* parent)
     , m_wdspEngine(new WdspEngine(this))
 {
     m_role = role;
+    // R-R3-36: the PC microphone session demand follows the mic source.
+    connect(&m_transmitModel, &TransmitModel::micSourceChanged, this,
+            [this](MicSource) { updatePcCaptureDemand(); });
     connect(this, &RadioModel::connectionStateChanged, this, [this](ConnectionState state) {
         if (state == ConnectionState::Connected && m_pureSignal) {
             m_pureSignal->applyAcceptedSettingsToEngine();
@@ -7990,6 +7999,11 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
         // distortion-at-high-volume root cause prior to 2026-05-07.
         // Start audio output
         m_audioEngine->start();
+        // R-R3-36: start() opened no microphone. With the local session up,
+        // PC capture is demanded now if PC mic is selected; the helper opens
+        // it on its own thread, so receive startup never waits for it.
+        m_pcCaptureSessionActive = true;
+        updatePcCaptureDemand();
         qCInfo(lcDsp) << "WDSP ready — bound receive channels active, audio started";
     }, Qt::SingleShotConnection);
     QString nnrPathError;
@@ -13679,6 +13693,33 @@ void RadioModel::saveSliceState(SliceModel* slice)
     m_transmitModel.save();
 }
 
+void RadioModel::setPcCaptureAllowed(bool allowed)
+{
+    if (m_pcCaptureAllowed == allowed) {
+        return;
+    }
+    m_pcCaptureAllowed = allowed;
+    updatePcCaptureDemand();
+}
+
+bool RadioModel::pcCaptureRequired() const
+{
+    return m_role == Role::Local && m_pcCaptureAllowed
+        && m_transmitModel.micSource() == MicSource::Pc;
+}
+
+void RadioModel::updatePcCaptureDemand()
+{
+    const bool wanted = m_pcCaptureSessionActive && pcCaptureRequired()
+        && m_audioEngine != nullptr;
+    if (wanted && !m_pcCaptureLease.isActive()) {
+        m_pcCaptureLease =
+            m_audioEngine->acquireCaptureDemand(CaptureSupervisor::Demand::LocalSession);
+    } else if (!wanted && m_pcCaptureLease.isActive()) {
+        m_pcCaptureLease.release();
+    }
+}
+
 void RadioModel::teardownConnection()
 {
     if (!m_connection) {
@@ -13857,6 +13898,10 @@ void RadioModel::teardownConnection()
         }
         m_txWorker.reset();
     }
+    // R-R3-36: the TX worker has stopped reading the capture reader, so
+    // the local session's capture demand can go now.
+    m_pcCaptureSessionActive = false;
+    updatePcCaptureDemand();
     // Phase 3M-1c TX pump v3: drop the connection's view of the mic
     // source BEFORE destroying it.  Otherwise the next inbound mic
     // frame would dereference a freed TxMicSource.

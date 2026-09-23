@@ -118,6 +118,9 @@ public:
     // Diagnostics: the running helper's process id, 0 when none.
     qint64 helperProcessId() const;
 
+    // True while at least one Lease is active.  Owner thread only.
+    bool hasDemand() const { return !m_leases.isEmpty(); }
+
 signals:
     void statusChanged(const NereusSDR::CaptureSupervisor::Status& status);
 
