@@ -17,6 +17,7 @@
 #include <QLineEdit>
 #include <QPointer>
 #include <QPushButton>
+#include <QSignalSpy>
 #include <QTemporaryDir>
 #include <QTimer>
 #include <QWebSocketServer>
@@ -31,7 +32,9 @@
 #include "gui/CoreTargetEditor.h"
 #include "gui/CoreTargetStore.h"
 #include "gui/GuiConnectionController.h"
+#include "gui/GuiSessionCoordinator.h"
 #include "gui/MainWindow.h"
+#include "gui/RemoteConnectionController.h"
 #include "models/RadioModel.h"
 
 using namespace NereusSDR;
@@ -142,6 +145,7 @@ private slots:
     void selectingAndCancellingEditLeaveLiveAAndDoNotDialB();
     void explicitConnectToSavedBReplacesWholeLiveA();
     void disconnectCancelsRetryWithoutUsingHighlightedB();
+    void connectionsDisconnectReopensConnectionsOnceWithoutDialling();
     void persistentLocalChoiceReturnsToEmbeddedCoreWithoutRadioAutoconnect();
     void savedCoreEditsDoNotChangeCurrentTupleBeforeConnect();
     void corruptStartupDocumentShowsIdleLocalAndNotice();
@@ -307,6 +311,53 @@ void TestGuiConnectionController::disconnectCancelsRetryWithoutUsingHighlightedB
     QCOMPARE(controller.sessions()->window(), firstWindow);
     QCOMPARE(controller.sessions()->selection().savedId, QStringLiteral("a"));
     QVERIFY(!cores.secondServer.hasAuthenticatedSession());
+    controller.shutdown();
+}
+
+// R-R3-16 / R-R3-38: the Connections window's Disconnect is the operator's
+// own, so it reaches RemoteConnectionController::operatorDisconnected and
+// asks for Connections exactly once. Nothing dials: the Core holds no session afterwards.
+void TestGuiConnectionController::connectionsDisconnectReopensConnectionsOnceWithoutDialling()
+{
+    LoopbackCores cores;
+    QVERIFY(cores.start());
+    QVERIFY(installTargets({cores.firstTarget()}, QStringLiteral("a")));
+
+    GuiConnectionController controller;
+    controller.start({});
+    QTRY_VERIFY(cores.firstServer.hasAuthenticatedSession());
+    MainWindow* window = controller.sessions()->window();
+    QPointer<StationClient> client = window->findChild<StationClient*>();
+    auto* remoteControls = window->findChild<RemoteConnectionController*>();
+    QVERIFY(client);
+    QVERIFY(remoteControls);
+    QTRY_VERIFY(client->isHandshakeComplete());
+    // These loopback Cores name no radio, so the old automatic open (which
+    // needs a radio name) could not fire here either way; the remote
+    // window harness covers that half with a named radio.
+
+    controller.showConnections();
+    QVERIFY(controller.selector()->isVisible());
+    QSignalSpy operatorDisconnects(remoteControls,
+                                   &RemoteConnectionController::operatorDisconnected);
+    QSignalSpy windowRequests(window, &MainWindow::connectionsRequested);
+    QSignalSpy pickerRequests(controller.sessions(), &GuiSessionCoordinator::connectionsRequested);
+    auto* disconnect = button(controller.selector(), QStringLiteral("connectionSelectorDisconnect"));
+    QVERIFY(disconnect != nullptr && disconnect->isEnabled());
+    disconnect->click();
+    QTRY_COMPARE(pickerRequests.size(), 1);
+    QTRY_VERIFY(!cores.firstServer.hasAuthenticatedSession());
+    // Long enough for any queued reopen or dial to have run.
+    QTest::qWait(300);
+
+    QCOMPARE(operatorDisconnects.size(), 1);
+    QCOMPARE(windowRequests.size(), 1);
+    QCOMPARE(pickerRequests.size(), 1);
+    QVERIFY(controller.selector()->isVisible());
+    QVERIFY(!client->isConnectionActive());
+    QVERIFY(!client->isReconnectPending());
+    QVERIFY(!cores.firstServer.hasAuthenticatedSession());
+    QCOMPARE(controller.sessions()->window(), window);
     controller.shutdown();
 }
 

@@ -17,16 +17,25 @@
 //   2026-09-23  J.J. Boyd / KG4VCF  R3 remote window harness plan, Task 2.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R3 remote window Setup plan, Task 3
+//                                    (R-R3-16, R-R3-17, R-R3-38):
+//                                    Connections opens only after the
+//                                    operator's Disconnect. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include <QtTest/QtTest>
 
 #include <QAction>
+#include <QApplication>
 #include <QComboBox>
 #include <QLoggingCategory>
+#include <QMenu>
 #include <QPointer>
 #include <QPushButton>
 #include <QSignalSpy>
+#include <QTimer>
 #include <QTreeWidget>
 
 #include "core/session/StationCapabilities.h"
@@ -57,7 +66,8 @@ constexpr int kStationBlock = 1;
 constexpr int kDisconnectedPan = 2;
 constexpr int kSetupConnections = 3;
 
-// Cancel surfaces (cancelDuringBackoffStopsTheRetry).
+// Disconnect surfaces (cancelDuringBackoffStopsTheRetry,
+// operatorDisconnectOpensConnectionsOnce).
 constexpr int kRadioMenuDisconnect = 0;
 constexpr int kCorePanelDisconnect = 1;
 
@@ -82,6 +92,42 @@ bool disconnectFromRadioMenu(RemoteWindowHarness& h)
     if (!disconnect || !disconnect->isEnabled()) { return false; }
     disconnect->trigger();
     return true;
+}
+
+bool corePanelVisible(RemoteWindowHarness& h)
+{
+    auto* panel = h.window()->findChild<RemoteConnectionPanel*>();
+    return panel && panel->isVisible();
+}
+
+// The Core panel, reached the way an operator reaches it on a connected
+// window: right-click the title bar's connection segment and choose
+// "Core connection details..." from the menu it opens.
+bool openCorePanelFromTitleMenu(RemoteWindowHarness& h)
+{
+    ConnectionSegment* segment = h.titleSegment();
+    if (!segment) { return false; }
+    bool chosen = false;
+    QTimer poll;
+    poll.setInterval(10);
+    QObject::connect(&poll, &QTimer::timeout, &poll, [&] {
+        auto* menu = qobject_cast<QMenu*>(QApplication::activePopupWidget());
+        if (!menu) { return; }
+        poll.stop();
+        for (QAction* action : menu->actions()) {
+            if (action->text() == QStringLiteral("Core connection details...")) {
+                menu->setActiveAction(action);
+                QTest::keyClick(menu, Qt::Key_Return);
+                chosen = true;
+                return;
+            }
+        }
+        menu->close();
+    });
+    poll.start();
+    QTest::mouseClick(segment, Qt::RightButton, Qt::NoModifier, segment->rect().center());
+    poll.stop();
+    return chosen && corePanelVisible(h);
 }
 
 // The Setup dialog's Remote Station page, reached the way an operator
@@ -283,22 +329,26 @@ private slots:
         QVERIFY(!disconnect->isEnabled());
     }
 
-    // R-R3-16: after a manual Disconnect the window's automatic reopen
-    // path still runs. It must never dial. What it opens depends on mode:
-    // with the Connections picker managing the window it asks for
-    // Connections; in direct mode (a --station window) it opens nothing.
-    void manualDisconnectThenAutomaticReopen_data()
+    // R-R3-16 / R-R3-38: the operator's own Disconnect opens Connections
+    // exactly once with the picker managing the window, and shows the Core
+    // panel in direct mode (a --station window has no picker). Neither
+    // dials: the Core still accepted exactly one connection. The window's
+    // automatic open on a Disconnected state is for local models only, so
+    // it adds no second open here.
+    void operatorDisconnectOpensConnectionsOnce_data()
     {
         QTest::addColumn<bool>("picker");
-        QTest::addColumn<int>("connectionsOpened");
-        QTest::newRow("direct mode") << false << 0;
-        QTest::newRow("picker mode") << true << 1;
+        QTest::addColumn<int>("surface");
+        QTest::newRow("direct, Radio > Disconnect") << false << kRadioMenuDisconnect;
+        QTest::newRow("direct, Core panel Disconnect") << false << kCorePanelDisconnect;
+        QTest::newRow("picker, Radio > Disconnect") << true << kRadioMenuDisconnect;
+        QTest::newRow("picker, Core panel Disconnect") << true << kCorePanelDisconnect;
     }
 
-    void manualDisconnectThenAutomaticReopen()
+    void operatorDisconnectOpensConnectionsOnce()
     {
         QFETCH(bool, picker);
-        QFETCH(int, connectionsOpened);
+        QFETCH(int, surface);
         RemoteWindowHarness h;
         QVERIFY(h.start());
         // GuiConnectionController makes this call on every window it
@@ -312,15 +362,128 @@ private slots:
         QVERIFY(h.remoteModel()->isConnected());
         QVERIFY(!h.remoteModel()->name().isEmpty());
 
+        QPointer<RemoteConnectionPanel> panel;
+        if (surface == kCorePanelDisconnect) {
+            QVERIFY(openCorePanelFromTitleMenu(h));
+            panel = h.window()->findChild<RemoteConnectionPanel*>();
+            QVERIFY(panel);
+            QVERIFY(panel->isVisible());
+        } else {
+            QVERIFY(!corePanelVisible(h));
+        }
+
         QSignalSpy connectionsRequested(h.window(), &MainWindow::connectionsRequested);
-        QVERIFY(disconnectFromRadioMenu(h));
+        QSignalSpy operatorDisconnects(h.controls(),
+                                       &RemoteConnectionController::operatorDisconnected);
+        if (surface == kRadioMenuDisconnect) {
+            QVERIFY(disconnectFromRadioMenu(h));
+        } else {
+            auto* stop = panel->findChild<QPushButton*>(QStringLiteral("disconnectCore"));
+            QVERIFY(stop);
+            QVERIFY(stop->isEnabled());
+            stop->click();
+        }
         QTest::qWait(kSettleMs);
 
-        QCOMPARE(connectionsRequested.size(), connectionsOpened);
+        QCOMPARE(operatorDisconnects.size(), 1);
+        QCOMPARE(connectionsRequested.size(), picker ? 1 : 0);
+        if (!picker || surface == kCorePanelDisconnect) {
+            // Direct mode shows the Core panel; a panel the operator
+            // already had open stays open.
+            QVERIFY(corePanelVisible(h));
+        } else {
+            QVERIFY(!corePanelVisible(h));
+        }
         QCOMPARE(h.acceptedConnections(), 1);
         QVERIFY(!client->isConnectionActive());
         QVERIFY(!client->isReconnectPending());
         QCOMPARE(h.controls()->statusText(), QStringLiteral("Core disconnected"));
+    }
+
+    // R-R3-16 / R-R3-17: link loss is not the operator's Disconnect.
+    // Nothing opens; the title bar says the window is retrying; the retry
+    // reaches the Core.
+    void linkLossOpensNothingAndRetries_data()
+    {
+        QTest::addColumn<bool>("picker");
+        QTest::newRow("direct mode") << false;
+        QTest::newRow("picker mode") << true;
+    }
+
+    void linkLossOpensNothingAndRetries()
+    {
+        QFETCH(bool, picker);
+        RemoteWindowHarness::Options options;
+        // Long enough to read the retrying state before the redial.
+        options.backoffUnitMs = 1000;
+        RemoteWindowHarness h(options);
+        QVERIFY(h.start());
+        h.window()->setConnectionPickerManaged(picker);
+        StationClient* const client = h.client();
+        h.startStartupConnection();
+        QTRY_VERIFY_WITH_TIMEOUT(client->isHandshakeComplete(), 10000);
+        QVERIFY(!corePanelVisible(h));
+
+        QSignalSpy connectionsRequested(h.window(), &MainWindow::connectionsRequested);
+        QSignalSpy operatorDisconnects(h.controls(),
+                                       &RemoteConnectionController::operatorDisconnected);
+        QSignalSpy retries(client, &StationClient::reconnectScheduled);
+        h.dropLink();
+        QTRY_VERIFY_WITH_TIMEOUT(client->isReconnectPending(), 5000);
+        QCOMPARE(retries.size(), 1);
+        QCOMPARE(h.controls()->state(), ConnectionState::LinkLost);
+        QCOMPARE(h.titleSegment()->remoteStatusText(),
+                 QStringLiteral("Retrying Core (attempt 1)"));
+
+        // The redial happens, and still nothing opened.
+        QTRY_VERIFY_WITH_TIMEOUT(h.acceptedConnections() == 2
+                                 && client->isHandshakeComplete(), 10000);
+        QTest::qWait(kSettleMs);
+        QCOMPARE(connectionsRequested.size(), 0);
+        QCOMPARE(operatorDisconnects.size(), 0);
+        QVERIFY(!corePanelVisible(h));
+        QCOMPARE(h.titleSegment()->remoteStatusText(), QStringLiteral("Core connected"));
+    }
+
+    // R-R3-17: a Core session whose radio is offline is not a disconnected
+    // window. Nothing opens; the station block says the radio is offline;
+    // the session stays up.
+    void radioOfflineOpensNothing_data()
+    {
+        QTest::addColumn<bool>("picker");
+        QTest::newRow("direct mode") << false;
+        QTest::newRow("picker mode") << true;
+    }
+
+    void radioOfflineOpensNothing()
+    {
+        QFETCH(bool, picker);
+        RemoteWindowHarness h;
+        QVERIFY(h.start());
+        h.window()->setConnectionPickerManaged(picker);
+        StationClient* const client = h.client();
+        h.startStartupConnection();
+        QTRY_VERIFY_WITH_TIMEOUT(client->isHandshakeComplete(), 10000);
+        QVERIFY(h.remoteModel()->isConnected());
+        QVERIFY(!h.remoteModel()->name().isEmpty());
+        QVERIFY(!corePanelVisible(h));
+
+        QSignalSpy connectionsRequested(h.window(), &MainWindow::connectionsRequested);
+        QSignalSpy operatorDisconnects(h.controls(),
+                                       &RemoteConnectionController::operatorDisconnected);
+        h.reportRadioOffline();
+        QTRY_VERIFY_WITH_TIMEOUT(!h.remoteModel()->isConnected(), 5000);
+        QCOMPARE(h.remoteModel()->connectionState(), ConnectionState::Disconnected);
+        QTest::qWait(kSettleMs);
+
+        QCOMPARE(h.stationBlock()->hardwareLine(), QStringLiteral("Radio offline"));
+        QCOMPARE(h.controls()->state(), ConnectionState::Connected);
+        QCOMPARE(h.titleSegment()->remoteStatusText(), QStringLiteral("Core connected"));
+        QCOMPARE(connectionsRequested.size(), 0);
+        QCOMPARE(operatorDisconnects.size(), 0);
+        QVERIFY(!corePanelVisible(h));
+        QVERIFY(client->isHandshakeComplete());
+        QCOMPARE(h.acceptedConnections(), 1);
     }
 
     // R-R3-24: the extra-slice startup reproduction through the real

@@ -268,6 +268,11 @@ void RemoteWindowHarness::dropLink(const QString& reason)
     if (m_link) { m_link->closeLink(reason); }
 }
 
+void RemoteWindowHarness::reportRadioOffline()
+{
+    m_station.setConnectionStateForTest(ConnectionState::Disconnected);
+}
+
 void RemoteWindowHarness::pushCapabilities(const StationCapabilities& capabilities)
 {
     if (m_link) {

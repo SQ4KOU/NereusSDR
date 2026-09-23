@@ -4,6 +4,7 @@
 #include <QFile>
 #include <QPointer>
 #include <QTemporaryDir>
+#include <QUrl>
 #include <QTcpServer>
 #include <QWebSocketServer>
 
@@ -403,6 +404,69 @@ private slots:
         emit client->reconnectScheduled(1, 1000);
         QCOMPARE(toastsStartingWith(window, lost), 1);
         QCOMPARE(toastsStartingWith(window, retry), 1);
+        sessions.shutdown();
+    }
+
+    // R-R3-16 / R-R3-38: the picker opens Connections only after the
+    // operator's own Disconnect. A retry after link loss and a disconnect
+    // the app did not ask for (here another window taking over the Core's
+    // one session) ask for nothing; the operator's Disconnect, even while
+    // a retry waits, asks exactly once.
+    void pickerOpensConnectionsOnlyForOperatorDisconnect()
+    {
+        QTemporaryDir stationDir;
+        AppSettings stationSettings(stationDir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        StationServer server(&station, stationSettings, stationDir.path());
+        server.setHeartbeatIntervalMs(0);
+        QWebSocketServer listener(QStringLiteral("A"), QWebSocketServer::NonSecureMode);
+        QVERIFY(listener.listen(QHostAddress::LocalHost, 0));
+        connect(&listener, &QWebSocketServer::newConnection, &server, [&] {
+            server.acceptTransport(new WebSocketTransport(listener.nextPendingConnection(),
+                StationServer::kMaxIncomingMessageBytes));
+        });
+        // The other window's client, built before the session installs its
+        // settings proxy so its model writes nothing through it.
+        RadioModel otherRemote(RadioModel::Role::Remote);
+        SettingsProxy otherProxy;
+        StationClient other(&otherRemote, &otherProxy);
+        auto a = core(QStringLiteral("a"), listener.serverPort());
+        a.connection.token = server.token();
+        GuiSessionCoordinator sessions;
+        QVERIFY(sessions.replace(a, true));
+        MainWindow* window = sessions.window();
+        StationClient* client = window->findChild<StationClient*>();
+        auto* controller = window->findChild<RemoteConnectionController*>();
+        QVERIFY(client);
+        QVERIFY(controller);
+        QTRY_VERIFY(client->isHandshakeComplete());
+        QSignalSpy picker(&sessions, &GuiSessionCoordinator::connectionsRequested);
+
+        // Link loss: the window retries and asks for nothing.
+        client->setReconnectBackoffUnitMs(60000);
+        client->disconnectFromStation(QStringLiteral("Connection refused"), true);
+        QVERIFY(client->isReconnectPending());
+        QTest::qWait(100);
+        QCOMPARE(picker.count(), 0);
+
+        // The operator cancels the retry: one request.
+        controller->disconnectFromStation();
+        QTRY_COMPARE(picker.count(), 1);
+        QTest::qWait(100);
+        QCOMPARE(picker.count(), 1);
+
+        // Another window takes the Core's one session over. That ends this
+        // session without the operator here asking: nothing opens.
+        controller->connectToStation();
+        QTRY_VERIFY(client->isHandshakeComplete());
+        picker.clear();
+        other.connectToStation(QUrl(a.connection.url), a.connection.token, {}, true);
+        QTRY_VERIFY(other.isHandshakeComplete());
+        QTRY_VERIFY(!client->isConnectionActive());
+        QVERIFY(!client->isReconnectPending());
+        QTest::qWait(100);
+        QCOMPARE(picker.count(), 0);
+        other.disconnectFromStation(QStringLiteral("operator disconnect"));
         sessions.shutdown();
     }
 

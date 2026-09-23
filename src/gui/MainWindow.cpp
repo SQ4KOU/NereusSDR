@@ -1073,6 +1073,22 @@ void MainWindow::ensureRemoteSession()
             m_stationClient, m_radioModel, m_station, this);
         connect(m_remoteConnection, &RemoteConnectionController::changed,
                 this, &MainWindow::refreshRemoteConnectionUi);
+        // R-R3-16 / R-R3-38: Connections opens only after the operator's
+        // own Disconnect (Radio > Disconnect, the Connections window, the
+        // Core panel), never on link loss or an offline radio: the window
+        // retries and says so in its title bar and station block instead.
+        // With the picker managing this window that is the Connections
+        // window; a --station window has no picker, so it shows the Core
+        // panel, which never dials by itself.
+        connect(m_remoteConnection, &RemoteConnectionController::operatorDisconnected,
+                this, [this] {
+            if (m_shuttingDown || m_retiringSession) { return; }
+            if (m_connectionPickerManaged) {
+                emit connectionsRequested();
+                return;
+            }
+            showRemoteConnectionPanel();
+        });
         connect(m_stationClient, &StationClient::connectionActivityChanged,
                 this, &MainWindow::applyRemoteRoleGating);
         // R-R3-17: the Connections window and the Core panel disconnect (or
@@ -11350,7 +11366,12 @@ void MainWindow::onConnectionStateChanged()
         // at startup is Disconnected which should not open the panel either —
         // the radio-name check below handles that case.
         // The panel itself is non-modal (show/raise), matching the current pattern.
-        if (!m_autoReconnectInProgress && !m_shuttingDown) {
+        // R-R3-16: local models only. A remote window opens Connections on
+        // the operator's own Disconnect (RemoteConnectionController::
+        // operatorDisconnected); a Disconnected state it reaches through
+        // link loss or an offline radio at the Core opens nothing.
+        if (!m_autoReconnectInProgress && !m_shuttingDown
+            && m_radioModel->ownsLocalDsp()) {
             // Only open if we were previously connected (transition from Connected,
             // not the initial Disconnected state at startup). We detect this by
             // checking if the model has ever reported a radio name — set on connect.

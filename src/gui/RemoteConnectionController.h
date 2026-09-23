@@ -35,6 +35,13 @@ public slots:
     void recoverMediaSession(quint32 expectedEpoch, const QString& reason);
 signals:
     void changed();
+    // R-R3-16 / R-R3-38: the operator disconnected (or cancelled a pending
+    // retry) through disconnectFromStation(). Every operator Disconnect
+    // surface calls that slot, so this is the one signal the window uses
+    // to open Connections. Link loss, a Core that reports its radio
+    // offline and every disconnect the app starts itself (a Core refusal,
+    // preemption, shutdown) never emit it.
+    void operatorDisconnected();
 private:
     QPointer<StationClient> m_client;
     QPointer<RadioModel> m_model;

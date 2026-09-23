@@ -133,6 +133,7 @@ void RemoteConnectionController::disconnectFromStation()
     m_pendingMediaRecoveryEpoch = 0;
     m_client->disconnectFromStation(QStringLiteral("operator disconnect"));
     emit changed();
+    emit operatorDisconnected();
 }
 
 void RemoteConnectionController::recoverMediaSession(quint32 expectedEpoch,

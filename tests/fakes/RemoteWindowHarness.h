@@ -26,6 +26,9 @@
 //   - The Core's capabilities carry Options::radioName: the bench Core
 //     model has no connected radio to name, and a real Core always sends
 //     one (the window's retained-name reopen path depends on it).
+//   - reportRadioOffline() takes the Core's radio offline with the
+//     session still up, so the window receives the same "connected"
+//     delta a real Core sends when its radio drops.
 //   - pushCapabilities() sends a capability descriptor on the live
 //     session, the same message StationServer sends when its advertised
 //     capabilities change after the snapshot.
@@ -49,6 +52,10 @@
 //   2026-09-23  J.J. Boyd / KG4VCF  R3 remote window harness plan, Task 2.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R3 remote window Setup plan, Task 3:
+//                                    reportRadioOffline(). AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include <QByteArray>
@@ -171,6 +178,12 @@ public:
 
     /// Core closes the live session.
     void dropLink(const QString& reason = QStringLiteral("Core link dropped"));
+
+    /// The Core's radio goes offline while the session stays up: the
+    /// station model reports Disconnected, and the Core mirrors its
+    /// RadioModel "connected" property to the window as it would for a
+    /// real radio that dropped.
+    void reportRadioOffline();
 
     /// Core sends this capability descriptor on the live session.
     void pushCapabilities(const StationCapabilities& capabilities);
