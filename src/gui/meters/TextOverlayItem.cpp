@@ -10,6 +10,10 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-23: R-R3-13: %VALUE% shows "--" with no reading
+//                 (isNoMeterReading); resolvedText1() / resolvedText2()
+//                 read-only accessors. J.J. Boyd (KG4VCF), with AI-assisted
+//                 transformation via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -99,8 +103,11 @@ QString TextOverlayItem::resolveText(const QString& templateText) const
                     m_precision = precision;
                 }
             } else if (token == QLatin1String("VALUE")) {
-                // Base meter value with current precision
-                result += QString::number(m_value, 'f', precision);
+                // Base meter value with current precision.
+                // NereusSDR (R-R3-13): "--" with no reading.
+                result += isNoMeterReading(m_value)
+                    ? QStringLiteral("--")
+                    : QString::number(m_value, 'f', precision);
             } else if (m_variables.contains(token)) {
                 // Named variable from external registry
                 result += m_variables[token];

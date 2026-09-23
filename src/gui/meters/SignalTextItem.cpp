@@ -11,6 +11,11 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-23: R-R3-13: no reading (isNoMeterReading) shows "--" with the
+//                 unit and drops the smoothed value and peak to the -140 dBm
+//                 floor; valueText() / peakValueText() read-only accessors.
+//                 J.J. Boyd (KG4VCF), with AI-assisted transformation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -136,6 +141,15 @@ void SignalTextItem::setValue(double v)
 {
     MeterItem::setValue(v);
 
+    // NereusSDR (R-R3-13): no reading.  The text shows "--" (valueText),
+    // the bar falls to its -140 dBm floor and the peak hold clears.
+    if (isNoMeterReading(v)) {
+        m_smoothedDbm = -140.0f;
+        m_peakDbm = -140.0f;
+        m_peakHoldCounter = 0;
+        return;
+    }
+
     const float fv = static_cast<float>(v);
 
     // From Thetis line 20353-20354: attack/decay exponential smoothing
@@ -223,6 +237,30 @@ QString SignalTextItem::formatValue(float dbm) const
 }
 
 // ---------------------------------------------------------------------------
+// noReadingText() / valueText() / peakValueText()
+// NereusSDR (R-R3-13): "--" keeps the unit each format shows today.
+// ---------------------------------------------------------------------------
+QString SignalTextItem::noReadingText() const
+{
+    switch (m_units) {
+        case Units::Dbm:    return QStringLiteral("-- dBm");
+        case Units::SUnits: return QStringLiteral("--");
+        case Units::Uv:     return QStringLiteral("-- uV");
+    }
+    return QStringLiteral("-- dBm");
+}
+
+QString SignalTextItem::valueText() const
+{
+    return isNoMeterReading(m_value) ? noReadingText() : formatValue(m_smoothedDbm);
+}
+
+QString SignalTextItem::peakValueText() const
+{
+    return isNoMeterReading(m_value) ? noReadingText() : formatValue(m_peakDbm);
+}
+
+// ---------------------------------------------------------------------------
 // paint()
 // From Thetis clsSignalText.renderSignalText() (MeterManager.cs:20420+)
 // ---------------------------------------------------------------------------
@@ -251,7 +289,7 @@ void SignalTextItem::paint(QPainter& p, int widgetW, int widgetH)
         p.setFont(mainFont);
         p.setPen(m_colour);
 
-        const QString text = formatValue(m_smoothedDbm);
+        const QString text = valueText();
         p.drawText(rect, Qt::AlignCenter, text);
     }
 
@@ -283,7 +321,7 @@ void SignalTextItem::paint(QPainter& p, int widgetW, int widgetH)
         p.setFont(peakFont);
         p.setPen(m_peakColour);
 
-        const QString peakText = formatValue(m_peakDbm);
+        const QString peakText = peakValueText();
         const QRect peakRect(rect.left(), rect.top(),
                               rect.width(), rect.height() / 3);
         p.drawText(peakRect, Qt::AlignRight | Qt::AlignTop, peakText);

@@ -90,8 +90,17 @@ private slots:
         slice->setSignalPeakDbm(-52);
         SMeterWidget meter;
         meter.setRxMode("S-Meter");
+        MeterWidget bars;
+        auto* peakText = new TextItem(&bars);
+        auto* averageText = new TextItem(&bars);
+        peakText->setBindingId(MeterBinding::SignalPeak);
+        averageText->setBindingId(MeterBinding::SignalAvg);
+        bars.addItem(peakText);
+        bars.addItem(averageText);
+        slice->setSignalAverageDbm(-66);
         MeterPoller poller;
         poller.setSMeter(&meter);
+        poller.addTarget(&bars);
         bool snapshotReady = true;
         poller.setRemoteRadioModel(model.get(), [&]() { return snapshotReady; });
         auto tick = [&]() {
@@ -99,6 +108,8 @@ private slots:
         };
         tick();
         QCOMPARE(meter.levelDbm(), -52.0f);
+        QCOMPARE(peakText->displayText(), QStringLiteral("-52.0 dBm"));
+        QCOMPARE(averageText->displayText(), QStringLiteral("-66.0 dBm"));
 
         model->radioStatus().setTransmitting(true);
         slice->setSignalPeakDbm(-30);
@@ -120,6 +131,11 @@ private slots:
             QCOMPARE(meter.sUnitsText(), QStringLiteral("--"));
             QVERIFY(!flags.isEmpty());
             QCOMPARE(flags.constLast().at(1).toDouble(), -400.0);
+            // The container meter items show no reading too, not -140.
+            QCOMPARE(peakText->value(), -400.0);
+            QCOMPARE(averageText->value(), -400.0);
+            QCOMPARE(peakText->displayText(), QStringLiteral("-- dBm"));
+            QCOMPARE(averageText->displayText(), QStringLiteral("-- dBm"));
         }
         meter.setRxMode("S-Meter");
         // Capabilities can mark the radio connected before the new model
@@ -128,14 +144,48 @@ private slots:
         tick();
         QCOMPARE(meter.levelDbm(), -400.0f);
         QCOMPARE(flags.constLast().at(1).toDouble(), -400.0);
+        QCOMPARE(peakText->displayText(), QStringLiteral("-- dBm"));
         slice->setSignalPeakDbm(-74);
         snapshotReady = true;
         tick();
         QCOMPARE(meter.levelDbm(), -74.0f);
         QCOMPARE(flags.constLast().at(1).toDouble(), -74.0);
+        QCOMPARE(peakText->displayText(), QStringLiteral("-74.0 dBm"));
+        QCOMPARE(averageText->displayText(), QStringLiteral("-66.0 dBm"));
         model.reset();
         tick();
         QCOMPARE(meter.levelDbm(), -400.0f);
+        QCOMPARE(peakText->displayText(), QStringLiteral("-- dBm"));
+        QCOMPARE(averageText->displayText(), QStringLiteral("-- dBm"));
+    }
+
+    void localPollWithoutRxChannelShowsNoReading()
+    {
+        // R-R3-13: a local window with no RX channel (none yet, or the
+        // QPointer cleared when the channel was destroyed) feeds the
+        // no-reading sentinel instead of leaving the last value frozen.
+        MeterWidget bars;
+        auto* peakText = new TextItem(&bars);
+        auto* agcText = new TextItem(&bars);
+        auto* bar = new BarItem(&bars);
+        peakText->setBindingId(MeterBinding::SignalPeak);
+        agcText->setBindingId(MeterBinding::AgcAvg);
+        bar->setBindingId(MeterBinding::SignalAvg);
+        bar->setShowValue(true);
+        bars.addItem(peakText);
+        bars.addItem(agcText);
+        bars.addItem(bar);
+        bars.updateMeterValue(MeterBinding::SignalPeak, -71.0);
+        bars.updateMeterValue(MeterBinding::AgcAvg, -90.0);
+        bars.updateMeterValue(MeterBinding::SignalAvg, -75.0);
+        QCOMPARE(peakText->displayText(), QStringLiteral("-71.0 dBm"));
+
+        MeterPoller poller;
+        poller.addTarget(&bars);
+        QVERIFY(QMetaObject::invokeMethod(&poller, "poll", Qt::DirectConnection));
+        QCOMPARE(peakText->displayText(), QStringLiteral("-- dBm"));
+        QCOMPARE(agcText->displayText(), QStringLiteral("-- dBm"));
+        QCOMPARE(bar->valueText(), QStringLiteral("--"));
     }
 };
 QTEST_MAIN(TestRemoteMeterPoller)

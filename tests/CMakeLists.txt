@@ -2471,6 +2471,9 @@ nereus_add_test(tst_spectrum_widget_mox_overlay)
 # Derives from Thetis dsp.cs:995-1050 [v2.10.3.13] CalculateTXMeter dispatch.
 nereus_add_test(tst_meter_poller_tx_bindings)
 nereus_add_test(tst_remote_meter_poller)
+# R-R3-13: every numeric container meter item shows no reading (-400 dBm
+# sentinel or non-finite) as "--" and a real -140 dBm floor as a number.
+nereus_add_test(tst_meter_item_no_reading)
 
 # ── RX meter cal offset port (Thetis-faithful) ───────────────────────────────
 # Verifies the per-radio factory default lookup (rxMeterCalOffsetDefaultFor)

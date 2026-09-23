@@ -30,6 +30,13 @@
 //                 there is no reading (disconnected, snapshot not ready, no
 //                 slice). J.J. Boyd (KG4VCF), with AI-assisted transformation
 //                 via Anthropic Claude Code.
+//   2026-09-23: R-R3-13: the container meter items learned the no-reading
+//                 rule (isNoMeterReading), so pollRemoteRxMeters() now feeds
+//                 the -400 dBm sentinel to SignalPeak / SignalAvg with no
+//                 reading (was the -140 floor), and poll() feeds it to the
+//                 RX bindings once the local RX channel is gone instead of
+//                 leaving them frozen. J.J. Boyd (KG4VCF), with AI-assisted
+//                 transformation via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -326,7 +333,21 @@ void MeterPoller::poll()
         return;  // don't poll RX meters while transmitting
     }
 
-    if (!m_rxChannel) { return; }
+    // NereusSDR (R-R3-13): with no RX channel (never created, or destroyed:
+    // the QPointer clears) there is no reading.  Feed the -400 dBm sentinel
+    // to the RX bindings this loop drives so their items show "--" rather
+    // than the last value.  MeterWidget::updateMeterValue drops repeats.
+    if (!m_rxChannel) {
+        for (int bindingId = MeterBinding::SignalPeak;
+             bindingId <= MeterBinding::AgcAvg; ++bindingId) {
+            for (auto& guarded : m_targets) {
+                MeterWidget* target = guarded.data();
+                if (!target) { continue; }
+                target->updateMeterValue(bindingId, kNoMeterReadingDbm);
+            }
+        }
+        return;
+    }
 
     // Thetis-faithful RX meter cal offset for the SignalPeak / SignalAvg
     // bindings (RXA_S_PK / RXA_S_AV).  ADC_PK / ADC_AV / AGC_PK / AGC_AV /
@@ -391,12 +412,13 @@ void MeterPoller::pollRemoteRxMeters()
         return std::isfinite(value) ? value : fallback;
     };
     // NereusSDR (R-R3-13): with no reading (disconnected, snapshot not
-    // ready, no slice) the S-meter and the flags get the -400 dBm
-    // no-reading sentinel in every RX mode, which both show as "--".  The
+    // ready, no slice) the S-meter, the flags and the container meter
+    // items (SignalPeak / SignalAvg / SignalMaxBin) all get the -400 dBm
+    // no-reading sentinel in every RX mode, which each shows as "--".  The
     // -140 floor below applies only while a slice reading exists.
-    constexpr double kNoReadingDbm = -400.0;
-    const double peak = slice ? finiteOr(slice->signalPeakDbm(), -140.0) : -140.0;
-    const double average = slice ? finiteOr(slice->signalAverageDbm(), -140.0) : -140.0;
+    constexpr double kNoReadingDbm = kNoMeterReadingDbm;
+    const double peak = slice ? finiteOr(slice->signalPeakDbm(), -140.0) : kNoReadingDbm;
+    const double average = slice ? finiteOr(slice->signalAverageDbm(), -140.0) : kNoReadingDbm;
     const double maxBin = slice && m_remoteMaxBinSource
         ? finiteOr(m_remoteMaxBinSource(slice), -400.0) : -400.0;
     for (const auto& guarded : m_targets) {

@@ -15,6 +15,11 @@
 //                 Claude Code.
 //                 Structural pattern follows AetherSDR (ten9876/AetherSDR,
 //                 GPLv3).
+//   2026-09-23: R-R3-13: isNoMeterReading() shared no-reading predicate
+//                 (-400 dBm sentinel or non-finite); TextItem, BarItem and
+//                 NeedleItem show "--" and rest at the scale minimum, with
+//                 read-only text accessors for tests. J.J. Boyd (KG4VCF),
+//                 with AI-assisted transformation via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -117,6 +122,7 @@ mw0lge@grange-lane.co.uk
 #include <QPointF>
 #include <QString>
 #include <QUuid>
+#include <cmath>
 #include <limits>
 
 class QPainter;
@@ -130,6 +136,18 @@ namespace NereusSDR {
 // Thetis MeterManager.cs:2258-2318 ReadingName(). Returns an empty
 // QString for unmapped binding IDs (ScaleItem skips empty titles).
 QString readingName(int bindingId);
+
+// No reading (R-R3-13, NereusSDR-native).  The same rule the analog
+// SMeterWidget and the slice flag VfoLevelBar use: a value at or below the
+// -400 dBm sentinel, or a non-finite one, is not a signal.  Every numeric
+// meter item consults this before formatting or plotting a value, so a
+// poller can feed the sentinel when there is nothing to show and the item
+// shows "--" instead of a floor number or a frozen last value.
+inline constexpr double kNoMeterReadingDbm = -400.0;
+inline bool isNoMeterReading(double dbm)
+{
+    return !std::isfinite(dbm) || dbm <= kNoMeterReadingDbm;
+}
 
 
 class MeterItem : public QObject {
@@ -457,6 +475,13 @@ public:
     // by ShowPeakValue text render and (in A3) the peak-hold marker.
     double peakValue() const { return m_peakValue; }
 
+    // Smoothed value the bar draws, and the ShowValue / ShowPeakValue text
+    // it draws (R-R3-13: "--" with no reading).  Read-only; paint() uses
+    // the same text.
+    double smoothedValue() const { return m_smoothedValue; }
+    QString valueText() const;
+    QString peakValueText() const;
+
     /// Snap the smoothed value + peak-hold marker to the supplied target
     /// value, bypassing the attack/decay smoothing that setValue() applies.
     /// Used on TX-end transitions: a single setValue(0) only decays one
@@ -744,6 +769,10 @@ public:
     void setMinValidValue(double v) { m_minValidValue = v; }
     double minValidValue() const { return m_minValidValue; }
 
+    // The text paint() draws: the label, the idle text, the formatted
+    // value, or "--" with the unit when there is no reading (R-R3-13).
+    QString displayText() const;
+
     Layer renderLayer() const override { return Layer::OverlayDynamic; }
     void paint(QPainter& p, int widgetW, int widgetH) override;
     QString serialize() const override;
@@ -861,6 +890,12 @@ public:
     // post-smoothing value without round-tripping through paint
     // geometry.
     float smoothedValue() const { return m_smoothedDbm; }
+
+    // The two readouts paintOverlayDynamic() draws for an uncalibrated
+    // needle: S-units (left) and the value in the selected unit (right).
+    // Both show "--" with no reading (R-R3-13).
+    QString sUnitsReadout() const;
+    QString valueReadout() const;
 
     // Multi-layer: participates in all 4 pipeline layers
     bool participatesIn(Layer layer) const override;

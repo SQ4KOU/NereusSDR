@@ -10,6 +10,11 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-23: R-R3-13: CompactHBar readout drops its below-range idle
+//                 text; no reading now shows "-- dBm" through the shared
+//                 isNoMeterReading rule and a real reading below the bar's
+//                 range stays a number. J.J. Boyd (KG4VCF), with AI-assisted
+//                 transformation via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -493,8 +498,9 @@ ItemGroup* ItemGroup::createCompactHBarPreset(int bindingId, double minVal, doub
     readout->setBold(true);
     readout->setSuffix(QStringLiteral(" dBm"));
     readout->setDecimals(1);
-    readout->setIdleText(QStringLiteral("\u2014 dBm"));
-    readout->setMinValidValue(minVal);
+    // NereusSDR (R-R3-13): no idle threshold.  No reading (the -400 dBm
+    // sentinel) shows "-- dBm" through TextItem's shared no-reading rule;
+    // a real reading below minVal is still a reading and shows its number.
     readout->setZOrder(10);
     group->addItem(readout);
 
