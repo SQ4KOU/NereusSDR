@@ -37,6 +37,7 @@
 #include <QtEndian>
 #include <algorithm>
 #include <cmath>
+#include <deque>
 #include <limits>
 #include <map>
 #include <utility>
@@ -66,6 +67,8 @@ constexpr int kAudioStatusRefreshMs = 250;
 // are RemoteAudioLinkTrial::kWindowMs long; a 1 s sample closes each within
 // a second of its end.
 constexpr int kLinkTrialSampleMs = 1000;
+// R-R3-35: probes kept awaiting their echo; an older one is forgotten.
+constexpr std::size_t kMaxPendingClockProbes = 8;
 // The receiver restarts that say audio arrived badly, which the link trial
 // counts. Speaker, decoder and clock faults are this computer's own.
 bool linkInterruption(RemoteAudioReceiver::Fault fault)
@@ -96,6 +99,14 @@ QString selectedSpeakerOutput()
         AudioDeviceConfig::loadFromSettings(QStringLiteral("audio/Speakers"));
     return speakers.deviceName.isEmpty() ? QStringLiteral("System default")
                                          : speakers.deviceName;
+}
+
+// A clock reading in whole nanoseconds, never negative (R-R3-35).
+bool nanoseconds(const QJsonObject& object, const char* key, qint64& value)
+{
+    const QJsonValue json = object.value(QLatin1String(key));
+    value = json.isDouble() ? json.toInteger(-1) : -1;
+    return value >= 0;
 }
 
 bool number(const QJsonObject& object, const char* key, double low, double high,
@@ -454,6 +465,14 @@ struct RemoteMediaController::Private {
     bool losslessFallback = false;
     RemoteAudioLinkTrial linkTrial;
     QTimer* linkTrialTimer = nullptr;
+    // R-R3-35 measured delay, per media session: the clock offset from
+    // probe echoes, the Core's newest capture from the latest echo, the
+    // probes awaiting an echo (id, t0) and the 1 s probe timer.
+    AudioClockEstimator clockEstimator;
+    std::optional<AudioCaptureAnchor> captureAnchor;
+    std::deque<std::pair<quint32, qint64>> pendingClockProbes;
+    quint32 nextClockProbeId = 0;
+    QTimer* clockProbeTimer = nullptr;
     // A persistent local playback failure and the identity it was recorded
     // against; only matching recovery with real speaker progress clears it.
     std::optional<RemoteAudioFailure> audioFailure;
@@ -543,6 +562,10 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
     d->linkTrialTimer->setInterval(kLinkTrialSampleMs);
     connect(d->linkTrialTimer, &QTimer::timeout,
             this, &RemoteMediaController::checkLosslessLink);
+    d->clockProbeTimer = new QTimer(this);
+    d->clockProbeTimer->setObjectName(QStringLiteral("remoteAudioClockProbeTimer"));
+    d->clockProbeTimer->setInterval(kClockProbeIntervalMs);
+    connect(d->clockProbeTimer, &QTimer::timeout, this, &RemoteMediaController::sendClockProbe);
     d->audioStatusTimer = new QTimer(this);
     d->audioStatusTimer->setObjectName(QStringLiteral("remoteAudioStatusTimer"));
     d->audioStatusTimer->setInterval(kAudioStatusRefreshMs);
@@ -848,6 +871,95 @@ bool RemoteMediaController::audioProfileNegotiated() const
     return audioDetailNegotiated() && d->client->capabilities().audioProfileVersion >= 1;
 }
 
+bool RemoteMediaController::audioClockNegotiated() const
+{
+    return d->client && d->client->mediaAvailable()
+        && d->client->capabilities().audioClockVersion >= 1;
+}
+
+RemoteAudioDelayReport RemoteMediaController::audioDelay() const
+{
+    RemoteAudioDelayReport report;
+    report.measurable = !d->peer.isNull() && audioClockNegotiated();
+    if (!report.measurable || !d->audioEnabled) {
+        return report;
+    }
+    const RemoteAudioReceiverTelemetry playback = d->audio->telemetry();
+    if (!playback.running) {
+        return report;
+    }
+    AudioDelayInputs inputs;
+    inputs.offset = d->clockEstimator.offset(d->audio->nowNs());
+    inputs.capture = d->captureAnchor;
+    inputs.playingGeneration = d->audioGeneration;
+    inputs.playout = playback.playout;
+    inputs.release = playback.release;
+    report.estimate = measureAudioDelay(inputs);
+    return report;
+}
+
+void RemoteMediaController::reconcileClockProbe()
+{
+    // R-R3-35: probe once a second while this computer plays the Core's
+    // audio, and only to a Core that answers.
+    const bool probe = d->peer && audioClockNegotiated() && d->audioEnabled
+        && d->audio->isRunning();
+    if (probe && !d->clockProbeTimer->isActive()) {
+        d->clockProbeTimer->start();
+    } else if (!probe && d->clockProbeTimer->isActive()) {
+        d->clockProbeTimer->stop();
+    }
+}
+
+void RemoteMediaController::sendClockProbe()
+{
+    if (!d->peer || !audioClockNegotiated()) {
+        return;
+    }
+    const quint32 id = ++d->nextClockProbeId;
+    const qint64 sentNs = d->audio->nowNs();
+    d->pendingClockProbes.emplace_back(id, sentNs);
+    while (d->pendingClockProbes.size() > kMaxPendingClockProbes) {
+        d->pendingClockProbes.pop_front();
+    }
+    send({{QStringLiteral("op"), QStringLiteral("clock-probe")},
+          {QStringLiteral("id"), qint64(id)},
+          {QStringLiteral("t0"), sentNs}});
+}
+
+void RemoteMediaController::receiveClockEcho(const QJsonObject& payload, qint64 receivedNs)
+{
+    double idValue = 0;
+    double generation = 0;
+    double rtpTimestamp = 0;
+    qint64 t0 = 0, t1 = 0, t2 = 0, capturedNs = 0;
+    if (payload.size() != 9
+        || !number(payload, "id", 0, std::numeric_limits<quint32>::max(), idValue, true)
+        || !nanoseconds(payload, "t0", t0) || !nanoseconds(payload, "t1", t1)
+        || !nanoseconds(payload, "t2", t2) || !nanoseconds(payload, "capturedNs", capturedNs)
+        || !number(payload, "generation", 0, std::numeric_limits<quint32>::max(), generation, true)
+        || !number(payload, "rtpTimestamp", 0, std::numeric_limits<quint32>::max(),
+                   rtpTimestamp, true)) {
+        return;
+    }
+    const quint32 id = quint32(idValue);
+    // Only an answer to a probe this session sent, with the time it sent.
+    const auto pending = std::find_if(d->pendingClockProbes.begin(), d->pendingClockProbes.end(),
+        [id](const std::pair<quint32, qint64>& probe) { return probe.first == id; });
+    if (pending == d->pendingClockProbes.end() || pending->second != t0) {
+        return;
+    }
+    d->pendingClockProbes.erase(pending);
+    if (!d->clockEstimator.addSample({t0, t1, t2, receivedNs})) {
+        return;
+    }
+    if (generation != 0) {
+        d->captureAnchor = AudioCaptureAnchor{quint32(generation), quint32(rtpTimestamp), capturedNs};
+    } else {
+        d->captureAnchor.reset();
+    }
+}
+
 void RemoteMediaController::setAudioProfileChoice(RemoteAudioProfile profile)
 {
     const bool changed = profile != d->audioProfileChoice;
@@ -954,6 +1066,7 @@ void RemoteMediaController::refreshAudioStatus()
         }
     }
 
+    reconcileClockProbe();
     // Speaker progress and recovery are observed, not signalled, so poll
     // them while there is something to watch, and only then.
     const bool watch = playback.running || d->audioFailure.has_value();
@@ -986,6 +1099,12 @@ void RemoteMediaController::stop()
     d->losslessFallback = false;
     d->linkTrial.end();
     d->linkTrialTimer->stop();
+    // R-R3-35: the clock offset and the Core's capture belong to this
+    // session; a reconnect measures afresh.
+    d->clockProbeTimer->stop();
+    d->clockEstimator.reset();
+    d->captureAnchor.reset();
+    d->pendingClockProbes.clear();
     // A playback problem belongs to its session and ends with it.
     d->audioFailure.reset();
     d->audioRestarting = false;
@@ -2236,11 +2355,17 @@ void RemoteMediaController::receiveAllocationResult(const QJsonObject& payload)
 
 void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 epoch)
 {
+    // R-R3-35: a clock echo's arrival time (t3), read before anything else.
+    const qint64 receivedNs = d->audio->nowNs();
     if (!d->client || !d->client->mediaAvailable() || epoch != d->epoch
         || !d->peer || payload.value(QStringLiteral("connectionId")) != d->connectionId) { return; }
     const QString op = payload.value(QStringLiteral("op")).toString();
     if (op == QLatin1String("allocation-result")) {
         receiveAllocationResult(payload);
+        return;
+    }
+    if (op == QLatin1String("clock-echo")) {
+        if (audioClockNegotiated()) { receiveClockEcho(payload, receivedNs); }
         return;
     }
     if (op == QLatin1String("audio-context")) {
@@ -2254,6 +2379,9 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
             || context->ssrc != d->peer->audioSsrc()) { return; }
         d->audioGeneration = context->generation;
         d->acceptedAudioContext = context;
+        // R-R3-35: the Core's capture of the previous context no longer
+        // describes what plays; the next echo brings this one's.
+        d->captureAnchor.reset();
         // Core has answered: any automatic retry in flight is over.
         d->audioRestarting = false;
         d->audio->stop();

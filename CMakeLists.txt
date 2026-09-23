@@ -1295,6 +1295,8 @@ set(GUI_SOURCES
     src/gui/widgets/TxBoundConfirmDialog.h
     src/gui/NetworkDiagnosticsDialog.cpp
     src/gui/NetworkDiagnosticsDialog.h
+    src/gui/AudioClockEstimator.cpp
+    src/gui/AudioClockEstimator.h
     src/gui/TelemetryHistory.cpp
     src/gui/TelemetryHistory.h
     src/gui/TimeSeriesGraphWidget.h

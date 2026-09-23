@@ -55,9 +55,10 @@ std::optional<double> mebibytes(std::optional<qint64> kibibytes)
 
 RemoteTelemetryController::RemoteTelemetryController(
     StationClient* client, RemoteMediaController* media, QObject* parent,
-    Clock clock, PlaybackObserver playback, TrafficObserver traffic)
+    Clock clock, PlaybackObserver playback, TrafficObserver traffic, DelayObserver delay)
     : QObject(parent), m_client(client), m_media(media),
-      m_now(std::move(clock)), m_playback(std::move(playback)), m_traffic(std::move(traffic))
+      m_now(std::move(clock)), m_playback(std::move(playback)), m_traffic(std::move(traffic)),
+      m_delay(std::move(delay))
 {
     m_clock.start();
     m_timer.setInterval(1000);
@@ -87,7 +88,7 @@ qint64 RemoteTelemetryController::nowMs() const
 
 void RemoteTelemetryController::clearSession()
 {
-    breakRange(m_history, Metric::RadioRxMbps, Metric::CoreHottestZoneCelsius);
+    breakRange(m_history, Metric::RadioRxMbps, Metric::AudioDeliveryDelayMs);
     m_station.reset();
     m_transportBaseline.reset();
     m_mediaBaseline.reset();
@@ -260,6 +261,7 @@ void RemoteTelemetryController::sampleNow()
     if (m_playbackBaseline && playback.generation != m_playbackBaseline->generation) {
         breakRange(m_history, Metric::PlaybackDecodedPacketsPerSecond, Metric::PlaybackPacketAgeMs);
         breakRange(m_history, Metric::AudioPayloadRxKbps, Metric::SpeakerBufferMs);
+        breakRange(m_history, Metric::AudioDelayMs, Metric::AudioDeliveryDelayMs);
     }
     if (playback.running && m_playbackBaseline && m_playbackBaseline->running
         && playback.generation == m_playbackBaseline->generation && elapsed > 0) {
@@ -298,10 +300,20 @@ void RemoteTelemetryController::sampleNow()
     if (playback.running) {
         values[index(Metric::SpeakerBufferMs)] = playback.speakerQueuedMs;
     }
+    // R-R3-35: the measured delay, only while it is measured; anything
+    // else (no echo, a new audio context, an older Core) is a gap.
+    m_view.audioDelay = m_delay ? m_delay()
+        : m_media ? m_media->audioDelay() : RemoteAudioDelayReport{};
+    if (const auto& estimate = m_view.audioDelay.estimate) {
+        values[index(Metric::AudioDelayMs)] = estimate->delayMs;
+        values[index(Metric::AudioDelayAccuracyMs)] = estimate->boundMs;
+        values[index(Metric::AudioDeliveryDelayMs)] = estimate->deliveryMs;
+    }
     m_playbackBaseline = playback;
     m_lastTickMs = now;
     m_history.append(observation, mask(Metric::SessionPayloadRxKbps, Metric::SessionRttMs)
-        | mask(Metric::PlaybackDecodedPacketsPerSecond, Metric::SpeakerBufferMs));
+        | mask(Metric::PlaybackDecodedPacketsPerSecond, Metric::SpeakerBufferMs)
+        | mask(Metric::AudioDelayMs, Metric::AudioDeliveryDelayMs));
     refreshCurrent(now);
     // The first line comes one interval after the session starts, then one
     // per interval while it lasts.
@@ -346,6 +358,15 @@ void RemoteTelemetryController::logDiagnostics(qint64 now) const
            << QStringLiteral("reorderQueuedMs=%1").arg(logged(p.reorderQueuedMs))
            << QStringLiteral("driftRatio=%1").arg(logged(p.driftRatio, 9))
            << QStringLiteral("driftPpm=%1").arg(logged(driftPpm, 1))
+           << QStringLiteral("audioDelayMs=%1").arg(logged(m_view.audioDelay.estimate
+                  ? std::optional<double>(m_view.audioDelay.estimate->delayMs) : std::nullopt))
+           << QStringLiteral("audioDelayAccuracyMs=%1").arg(logged(m_view.audioDelay.estimate
+                  ? std::optional<double>(m_view.audioDelay.estimate->boundMs) : std::nullopt))
+           << QStringLiteral("audioDelayIncludesDevice=%1").arg(m_view.audioDelay.estimate
+                  ? (m_view.audioDelay.estimate->includesDevice ? QStringLiteral("yes") : QStringLiteral("no"))
+                  : QStringLiteral("not measured"))
+           << QStringLiteral("deliveryDelayMs=%1").arg(logged(m_view.audioDelay.estimate
+                  ? m_view.audioDelay.estimate->deliveryMs : std::nullopt))
            << QStringLiteral("coreTelemetryAgeMs=%1").arg(logged(m_station
                   ? std::optional<qint64>(qMax<qint64>(0, now - m_stationReceivedMs)) : std::nullopt))
            << QStringLiteral("coreSystemCpuPercent=%1").arg(logged(host.systemCpuPercent))
@@ -427,7 +448,21 @@ QString RemoteTelemetryController::detailText() const
     const auto& p = m_view.playback;
     text << tr("Client speaker buffering: %1 ms (sampled PCM ring only). This excludes network, encoder, jitter/matcher and audio-device delay.")
         .arg(number(p.running ? p.speakerQueuedMs : std::nullopt));
-    text << tr("End-to-end audio latency is not measured. Core RTT is a control round trip, not one-way audio latency; RTT/2 is not used.");
+    // R-R3-35: a Core that answers clock probes gets the measured delay; an
+    // older one keeps exactly the line it always had.
+    const RemoteAudioDelayReport& delay = m_view.audioDelay;
+    if (!delay.measurable) {
+        text << tr("End-to-end audio latency is not measured. Core RTT is a control round trip, not one-way audio latency; RTT/2 is not used.");
+    } else if (delay.estimate) {
+        text << tr("Audio delay: %1, from the Core's audio to this computer's speaker. The \u00B1 is how accurately this computer knows the Core's clock; half the round trip is never shown as the delay.")
+            .arg(remoteAudioDelayText(*delay.estimate));
+        const QString delivery = remoteAudioDeliveryText(*delay.estimate);
+        text << (delivery.isEmpty()
+            ? tr("Delivery delay: not measured yet.")
+            : tr("Delivery delay: %1, from the Core's audio to this computer's player, before the speaker queue.").arg(delivery));
+    } else {
+        text << tr("Audio delay: not measured yet. It needs audio playing and answers from the Core.");
+    }
     // Fix wave M1: "discarded before playback" is the connect-time backlog
     // trimmed before anything was heard; the receiver keeps it out of
     // "admitted", so the two counts do not overlap.

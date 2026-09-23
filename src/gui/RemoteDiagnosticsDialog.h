@@ -54,6 +54,7 @@ private:
     TimeSeriesGraphWidget* m_controlPayloadGraph{nullptr};
     TimeSeriesGraphWidget* m_roundTripGraph{nullptr};
     TimeSeriesGraphWidget* m_packetAgeGraph{nullptr};
+    TimeSeriesGraphWidget* m_audioDelayGraph{nullptr};
     TimeSeriesGraphWidget* m_audioPacketsGraph{nullptr};
     TimeSeriesGraphWidget* m_sourceFramesGraph{nullptr};
     TimeSeriesGraphWidget* m_audioEventsGraph{nullptr};

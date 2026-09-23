@@ -75,6 +75,7 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         intEntry("psDisplayVersion", psDisplayVersion),
         intEntry("notchControlVersion", notchControlVersion),
         intEntry("audioProfileVersion", audioProfileVersion),
+        intEntry("audioClockVersion", audioClockVersion),
         intEntry("settingsSchemaVersion", settingsSchemaVersion),
     };
     if (hasBudget) {
@@ -203,7 +204,7 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "nnrVersion" || u.name == "psAlgorithmVersion"
                    || u.name == "propertyResultVersion" || u.name == "dspAssetVersion"
                    || u.name == "psDisplayVersion" || u.name == "notchControlVersion"
-                   || u.name == "audioProfileVersion") {
+                   || u.name == "audioProfileVersion" || u.name == "audioClockVersion") {
             const qlonglong raw = u.value.toLongLong();
             const int version = raw >= 0 && raw <= 65535 ? static_cast<int>(raw) : 0;
             if (u.name == "wdspVersion") caps.wdspVersion = version;
@@ -214,6 +215,7 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
             else if (u.name == "dspAssetVersion") caps.dspAssetVersion = version;
             else if (u.name == "notchControlVersion") caps.notchControlVersion = version;
             else if (u.name == "audioProfileVersion") caps.audioProfileVersion = version;
+            else if (u.name == "audioClockVersion") caps.audioClockVersion = version;
             else caps.psDisplayVersion = version;
         } else if (u.name == "settingsSchemaVersion") {
             caps.settingsSchemaVersion = static_cast<qint32>(u.value.toLongLong());

@@ -104,6 +104,17 @@ public:
     /// Core advertising audioProfileVersion 1 or later. Without it the GUI
     /// sends exactly today's media start and audio controls.
     bool audioProfileNegotiated() const;
+    /// R-R3-35: this Core answers audio clock probes (audioClockVersion 1 or
+    /// later). Without it no probe is sent and no delay is measured.
+    bool audioClockNegotiated() const;
+    /// R-R3-35: the measured audio delay now. measurable follows
+    /// audioClockNegotiated() while a media session exists; estimate is
+    /// present only while audio plays, echoes arrive (the newest younger
+    /// than AudioClockEstimator::kEchoStaleNs) and the Core's capture
+    /// belongs to the audio context being played.
+    RemoteAudioDelayReport audioDelay() const;
+    /// R-R3-35: how often a clock probe goes out while audio plays.
+    static constexpr int kClockProbeIntervalMs = 1000;
 
 public slots:
     /// Ask Core for audio again: a new request, enabled per mute and radio
@@ -148,6 +159,9 @@ private:
     void refreshAudioStatus();
     void checkLosslessLink();
     void fallBackToOpus(const QString& cause);
+    void sendClockProbe();
+    void reconcileClockProbe();
+    void receiveClockEcho(const QJsonObject& payload, qint64 receivedNs);
     bool send(QJsonObject payload);
 };
 } // namespace NereusSDR

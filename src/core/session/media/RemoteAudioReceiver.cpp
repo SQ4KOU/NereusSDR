@@ -17,10 +17,13 @@
 
 namespace NereusSDR {
 namespace {
-qint64 monotonicNs()
+// The default receiver clock: steady time since this process first read it,
+// so values stay small enough to cross the control channel exactly.
+qint64 defaultClockNs()
 {
+    static const std::chrono::steady_clock::time_point base = std::chrono::steady_clock::now();
     return std::chrono::duration_cast<std::chrono::nanoseconds>(
-        std::chrono::steady_clock::now().time_since_epoch()).count();
+        std::chrono::steady_clock::now() - base).count();
 }
 
 // The packet shape each profile's context carries (R-R3-23).
@@ -131,9 +134,36 @@ struct RemoteAudioReceiver::Private {
     std::atomic<qint64> packetDurationNs{AudioJitterBuffer::kDefaultPacketDurationNs};
     quint32 ssrc = 0;
     quint64 generation = 0; // owner thread only
+    // R-R3-35. The clock is set once at construction. The playout and
+    // release points are published by the worker and read by telemetry();
+    // the worker is never the device callback, so a short lock is fine.
+    RemoteAudioReceiver::Clock clock;
+    qint64 now() const { return clock(); }
+    std::mutex pointsMutex;
+    std::optional<RemoteAudioPlayoutPoint> playout;
+    std::optional<RemoteAudioReleasePoint> release;
+    void clearPoints()
+    {
+        std::lock_guard<std::mutex> lock(pointsMutex);
+        playout.reset();
+        release.reset();
+    }
 };
-RemoteAudioReceiver::RemoteAudioReceiver(AudioEngine* engine, QObject* parent)
-    : QObject(parent), d(std::make_unique<Private>()) { d->engine = engine; }
+
+qint64 RemoteAudioPlayoutPoint::playoutNs() const
+{
+    const qint64 queuedFrames = qint64(matcherFillFrames) + qint64(speakerQueuedFrames);
+    return measuredNs + queuedFrames * 1'000'000'000 / PcmAudioCodecConfig::kSampleRate
+        + deviceLatencyNs.value_or(0);
+}
+
+RemoteAudioReceiver::RemoteAudioReceiver(AudioEngine* engine, QObject* parent, Clock clock)
+    : QObject(parent), d(std::make_unique<Private>())
+{
+    d->engine = engine;
+    d->clock = clock ? std::move(clock) : Clock(defaultClockNs);
+}
+qint64 RemoteAudioReceiver::nowNs() const { return d->now(); }
 RemoteAudioReceiver::~RemoteAudioReceiver() { stop(); }
 bool RemoteAudioReceiver::isRunning() const { return d->running.load(); }
 RemoteAudioProfile RemoteAudioReceiver::profile() const { return d->profile.load(); }
@@ -144,8 +174,8 @@ int RemoteAudioReceiver::rateMatcherOverflows() const { return d->overflows.load
 
 RemoteAudioReceiverTelemetry RemoteAudioReceiver::telemetry() const
 {
-    const auto ageMs = [](qint64 eventNs) {
-        return std::max<qint64>(0, (monotonicNs() - eventNs) / 1'000'000);
+    const auto ageMs = [this](qint64 eventNs) {
+        return std::max<qint64>(0, (d->now() - eventNs) / 1'000'000);
     };
     // A lifecycle change can race a reader. The owner brackets stop and a
     // successful-start reset with an odd sequence. Bounded retries avoid
@@ -196,6 +226,9 @@ RemoteAudioReceiverTelemetry RemoteAudioReceiver::telemetry() const
             if (d->hasDriftRatio.load()) {
                 snapshot.driftRatio = d->driftRatio.load();
             }
+            std::lock_guard<std::mutex> lock(d->pointsMutex);
+            snapshot.playout = d->playout;
+            snapshot.release = d->release;
         }
         if (d->telemetrySequence.load() == sequence) {
             return snapshot;
@@ -223,6 +256,7 @@ void RemoteAudioReceiver::stop()
     }
     // After the join, so a worker's last publication cannot outlive stop().
     d->hasDriftRatio.store(false);
+    d->clearPoints();
     {
         std::lock_guard<std::mutex> lock(d->mutex);
         d->incoming.clear();
@@ -272,6 +306,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
     d->reorderQueuedPackets.store(-1);
     d->hasDriftRatio.store(false);
     d->driftRatio.store(1.0);
+    d->clearPoints();
     d->telemetryGeneration.fetch_add(1);
     {
         std::lock_guard<std::mutex> lock(d->mutex);
@@ -310,7 +345,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
         RemoteAudioRateMatcher matcher;
         // Named apart from publishMatcherStats()'s local `stats` below.
         RtpReceptionStats receptionStats;
-        const qint64 startedAt = monotonicNs();
+        const qint64 startedAt = d->now();
         qint64 lastPacket = startedAt;
         qint64 previousArrival = 0;
         qint64 maxArrivalGap = 0;
@@ -343,7 +378,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
             d->running.store(false);
             const auto stats = publishMatcherStats();
             const auto pacing = d->engine->remotePlaybackPacing();
-            const qint64 now = monotonicNs();
+            const qint64 now = d->now();
             // Bounded, restart-only diagnostics distinguish capture/network
             // loss from a stalled consumer without logging media or secrets.
             const QString detail = reason + QStringLiteral(
@@ -445,6 +480,16 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
                 jitter.reset(batch[*oldest].timestamp);
             }
         };
+        // R-R3-35: the end RTP time of the newest packet in the rate
+        // matcher, for the playout point.
+        std::optional<quint32> pushedEnd;
+        const auto noteReleased = [&](quint32 timestamp, bool concealed, qint64 atNs) {
+            pushedEnd = timestamp + quint32(packetFrames);
+            if (!concealed) {
+                std::lock_guard<std::mutex> lock(d->pointsMutex);
+                d->release = RemoteAudioReleasePoint{*pushedEnd, atNs};
+            }
+        };
         quint64 lastDeviceFrames = 0;
         const quint64 deviceConsumedBase = initialPacing->consumedFrames;
         quint64 telemetryDeviceFrames = deviceConsumedBase;
@@ -465,7 +510,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
                 d->startBacklog = false;
             }
             if (stop.stop_requested()) { break; }
-            const qint64 wakeAt = monotonicNs();
+            const qint64 wakeAt = d->now();
             maxWakeGap = std::max(maxWakeGap, wakeAt - previousWake);
             previousWake = wakeAt;
             if (overflow) {
@@ -519,7 +564,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
                 d->arrivalJitterMs.store(*measuredJitterMs);
                 d->hasArrivalJitterMs.store(true);
             }
-            const qint64 now = monotonicNs();
+            const qint64 now = d->now();
             if (now - lastPacket > 500'000'000) {
                 notify(QStringLiteral("Remote audio had no admitted/playable packets for 500 ms"),
                        Fault::NoPackets);
@@ -543,6 +588,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
                 }
                 if (frame->concealed()) { ++d->concealed; }
                 else { ++d->decoded; }
+                noteReleased(frame->timestamp, frame->concealed(), now);
                 playing = true;
                 if (!released) {
                     // Playback has begun; the normal overflow rule applies.
@@ -608,6 +654,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
                         return;
                     }
                     ++d->decoded;
+                    noteReleased(present->timestamp, false, d->now());
                 }
                 const QVector<float> pcm = matcher.take();
                 if (pcm.size() != 960 || !d->engine->writeRemotePlayback(pcm)) {
@@ -631,7 +678,17 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
             // The final pacing read in every playback iteration observes the
             // queue after bounded replenishment. It remains worker-only and
             // does not participate in device callback scheduling.
-            publishSpeakerQueue(d->engine->remotePlaybackPacing());
+            const auto finalPacing = d->engine->remotePlaybackPacing();
+            const qint64 measuredAt = d->now();
+            publishSpeakerQueue(finalPacing);
+            // R-R3-35: the newest matched sample is heard after the matcher
+            // fill and the speaker queue have played, then the device.
+            if (finalPacing && pushedEnd) {
+                std::lock_guard<std::mutex> lock(d->pointsMutex);
+                d->playout = RemoteAudioPlayoutPoint{*pushedEnd, measuredAt,
+                    std::max(0, stats.ringFillFrames), std::max(0, finalPacing->queuedFrames),
+                    finalPacing->deviceLatencyNs};
+            }
             if (stats.underflows || stats.overflows) {
                 notify(QStringLiteral("Remote audio exceeded its continuous clock buffer (%1 underflows, %2 overflows)")
                     .arg(stats.underflows).arg(stats.overflows), Fault::ClockBuffer);
@@ -668,7 +725,7 @@ void RemoteAudioReceiver::submit(const QByteArray& packet)
                 ++d->startDiscarded;
                 d->startBacklog = true;
             }
-            d->incoming.push_back({packet, header.timestamp, monotonicNs(), header.sequence});
+            d->incoming.push_back({packet, header.timestamp, d->now(), header.sequence});
         }
     }
     d->wake.notify_one();

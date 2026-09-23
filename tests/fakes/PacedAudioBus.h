@@ -33,7 +33,8 @@ public:
             pacingGateChanged.wait(lock, [this] { return releaseOutputPacingGate; });
         }
         if (!outputPacingAvailable) { return std::nullopt; }
-        return OutputPacing{consumed, int(queue.size()) / 2, 4800, callbackFrames};
+        return OutputPacing{consumed, int(queue.size()) / 2, 4800, callbackFrames,
+                            deviceLatencyNs};
     }
     // Test-only worker gate. Configure it before beginRemotePlayback(); the
     // first pacing read belongs to that synchronous setup and the receiver
@@ -90,6 +91,8 @@ public:
     int flushes = 0;
     int peakQueued = 0;
     int callbackFrames = 480;
+    // R-R3-35: what this bus reports as its device latency (none: unknown).
+    std::optional<qint64> deviceLatencyNs;
 private:
     bool active = true;
     NereusSDR::AudioFormat format;

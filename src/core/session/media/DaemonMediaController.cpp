@@ -805,11 +805,14 @@ void DaemonMediaController::onRadioConnectionStateChanged(ConnectionState state)
 
 void DaemonMediaController::onControl(const QJsonObject& control, quint64 epoch)
 {
+    // R-R3-35: a clock probe's arrival time (t1), read before anything else.
+    const qint64 receivedNs = displayNowNs();
     if (!m_server || !m_server->mediaAvailable() || epoch == 0 || epoch != m_epoch
         || !control.value(QStringLiteral("op")).isString()) {
         return;
     }
     const QString op = control.value(QStringLiteral("op")).toString();
+    if (op == QLatin1String("clock-probe")) { handleClockProbe(control, receivedNs); return; }
     if (op == QLatin1String("start")) { handleStart(control); return; }
     if (op == QLatin1String("subscribe")) { handleSubscribe(control); return; }
     if (op == QLatin1String("unsubscribe")) { handleUnsubscribe(control); return; }
@@ -1292,6 +1295,44 @@ bool DaemonMediaController::handleAudio(const QJsonObject& control)
     // capture unavailable pending peer readiness or station reconnect.
     reconcileAudio();
     return true;
+}
+
+bool DaemonMediaController::handleClockProbe(const QJsonObject& control, qint64 receivedNs)
+{
+    quint32 id = 0;
+    const QJsonValue t0 = control.value(QStringLiteral("t0"));
+    const qint64 sentNs = t0.isDouble() ? t0.toInteger(-1) : -1;
+    if (!exactKeys(control, {"op", "connectionId", "id", "t0"}) || !m_peer
+        || !canonicalConnectionId(control.value(QStringLiteral("connectionId")))
+        || control.value(QStringLiteral("connectionId")).toString() != m_peer->connectionId()
+        || !exactUnsigned(control.value(QStringLiteral("id")), id) || sentNs < 0) {
+        return false;
+    }
+    // The newest captured block of the running audio context, so the GUI
+    // can map what it plays onto this clock. Nothing while audio is off.
+    qint64 generation = 0;
+    qint64 rtpTimestamp = 0;
+    qint64 capturedNs = 0;
+    if (m_audioDiagnostics.activeContext && m_audioSender && m_audioSender->isRunning()) {
+        const DaemonAudioSenderTelemetry sender = m_audioSender->telemetry();
+        if (sender.hasCaptureStamp) {
+            generation = m_audioDiagnostics.contextGeneration;
+            rtpTimestamp = sender.captureTimestamp;
+            capturedNs = sender.captureNs;
+        }
+    }
+    return sendControl({
+        {QStringLiteral("op"), QStringLiteral("clock-echo")},
+        {QStringLiteral("connectionId"), m_peer->connectionId()},
+        {QStringLiteral("id"), static_cast<qint64>(id)},
+        {QStringLiteral("t0"), sentNs},
+        {QStringLiteral("t1"), receivedNs},
+        {QStringLiteral("generation"), generation},
+        {QStringLiteral("rtpTimestamp"), rtpTimestamp},
+        {QStringLiteral("capturedNs"), capturedNs},
+        // Last, just before the reply leaves.
+        {QStringLiteral("t2"), displayNowNs()},
+    });
 }
 
 void DaemonMediaController::admitAudioProfile()
@@ -2136,6 +2177,9 @@ void DaemonMediaController::reconcileAudio()
             codecConfig.bitrate = m_audioTargetBitrate;
             m_audioSender = std::make_unique<DaemonAudioSender>(
                 m_radioModel->audioEngine(), codecConfig);
+            // R-R3-35: capture times on the clock clock-echo reports. The
+            // sender stops its DSP tap before this controller goes away.
+            m_audioSender->setCaptureClock([this] { return displayNowNs(); });
             DaemonAudioSender* const sender = m_audioSender.get();
             connect(sender, &DaemonAudioSender::packetReady, this,
                     [this, sender](const QByteArray& packet) {

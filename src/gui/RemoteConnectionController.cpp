@@ -249,7 +249,8 @@ RemoteConnectionPanel::RemoteConnectionPanel(RemoteConnectionController* control
         m_refreshAudio = [this, guardedMedia, audioDetails, retryButton, qualityChoice] {
             if (!guardedMedia) { return; }
             const QString text = formatRemoteAudioDetails(guardedMedia->audioStatus(),
-                                                          guardedMedia->audioTelemetry());
+                                                          guardedMedia->audioTelemetry(),
+                                                          guardedMedia->audioDelay());
             const bool textChanged = audioDetails->text() != text;
             audioDetails->setText(text);
             retryButton->setEnabled(guardedMedia->audioStatus().retryAvailable);

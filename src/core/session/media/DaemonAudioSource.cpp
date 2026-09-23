@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstring>
 #include <mutex>
 
@@ -17,6 +18,26 @@ namespace NereusSDR {
 
 class DaemonAudioSource::Bridge final : public MasterMixAudioTap {
 public:
+    Bridge()
+        : m_captureClock([] {
+            return static_cast<qint64>(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now().time_since_epoch()).count());
+        })
+    {
+    }
+
+    // Control thread, only while stopped: consume() reads the clock.
+    bool setCaptureClock(DaemonAudioSource::CaptureClock clock)
+    {
+        if (m_running.load(std::memory_order_acquire)) {
+            return false;
+        }
+        if (clock) {
+            m_captureClock = std::move(clock);
+        }
+        return true;
+    }
+
     // Threading contract. consume() runs on the one DSP thread that drains
     // MasterMixer (its producers are serialised on that thread), so the
     // assembly state below is producer-owned and needs no lock. The control
@@ -79,6 +100,7 @@ public:
                 return std::nullopt;
             }
             block.samplePosition = m_readyPositions[m_readIndex];
+            block.capturedNs = m_readyCapturedNs[m_readIndex];
             std::memcpy(block.pcmInterleaved.data(), m_ready[m_readIndex].data(),
                         sizeof(float) * DaemonAudioSource::kBlockSamples);
             m_readIndex = (m_readIndex + 1) % DaemonAudioSource::kQueueBlocks;
@@ -207,6 +229,9 @@ private:
     // packet at m_assemblingFirstFrame.
     void completeAssembledPacket() noexcept
     {
+        // R-R3-35: the block is complete now; a hand-over deferred by lock
+        // contention keeps this time, not the later hand-over's.
+        const qint64 capturedNs = m_captureClock();
         std::unique_lock<std::mutex> lock(m_mutex, std::try_to_lock);
         if (!lock.owns_lock()) {
             m_contentionRetries.fetch_add(1, std::memory_order_relaxed);
@@ -225,14 +250,15 @@ private:
             m_pendingValid = true;
             m_pendingSlot = m_assemblingSlot;
             m_pendingFirstFrame = m_assemblingFirstFrame;
+            m_pendingCapturedNs = capturedNs;
             m_assemblingSlot = 1 - m_assemblingSlot;
             return;
         }
         if (m_pendingValid) {
-            pushLocked(m_pendingSlot, m_pendingFirstFrame);
+            pushLocked(m_pendingSlot, m_pendingFirstFrame, m_pendingCapturedNs);
             m_pendingValid = false;
         }
-        pushLocked(m_assemblingSlot, m_assemblingFirstFrame);
+        pushLocked(m_assemblingSlot, m_assemblingFirstFrame, capturedNs);
     }
 
     // Producer thread only.
@@ -243,11 +269,11 @@ private:
             m_contentionRetries.fetch_add(1, std::memory_order_relaxed);
             return;
         }
-        pushLocked(m_pendingSlot, m_pendingFirstFrame);
+        pushLocked(m_pendingSlot, m_pendingFirstFrame, m_pendingCapturedNs);
         m_pendingValid = false;
     }
 
-    void pushLocked(int slot, quint64 firstFrame) noexcept
+    void pushLocked(int slot, quint64 firstFrame, qint64 capturedNs) noexcept
     {
         const int readyCount = m_readyCount.load(std::memory_order_relaxed);
         if (readyCount == DaemonAudioSource::kQueueBlocks) {
@@ -260,6 +286,7 @@ private:
         std::memcpy(m_ready[m_writeIndex].data(), m_assembly[slot].data(),
                     sizeof(float) * DaemonAudioSource::kBlockSamples);
         m_readyPositions[m_writeIndex] = firstFrame;
+        m_readyCapturedNs[m_writeIndex] = capturedNs;
         m_writeIndex = (m_writeIndex + 1) % DaemonAudioSource::kQueueBlocks;
         m_readyCount.store(readyCount + 1, std::memory_order_release);
     }
@@ -285,6 +312,7 @@ private:
         m_pendingValid = false;
         m_pendingSlot = 0;
         m_pendingFirstFrame = 0;
+        m_pendingCapturedNs = 0;
         m_assemblingFirstFrame = 0;
         m_lastAcceptedEndFrame = 0;
         m_discardBeforeFrame = 0;
@@ -297,6 +325,7 @@ private:
     std::array<std::array<float, DaemonAudioSource::kBlockSamples>,
                DaemonAudioSource::kQueueBlocks> m_ready{};
     std::array<quint64, DaemonAudioSource::kQueueBlocks> m_readyPositions{};
+    std::array<qint64, DaemonAudioSource::kQueueBlocks> m_readyCapturedNs{};
     int m_readIndex = 0;
     int m_writeIndex = 0;
     std::atomic<int> m_readyCount{0};
@@ -309,10 +338,13 @@ private:
     bool m_pendingValid = false;
     int m_pendingSlot = 0;
     quint64 m_pendingFirstFrame = 0;
+    qint64 m_pendingCapturedNs = 0;
     quint64 m_assemblingFirstFrame = 0;
     quint64 m_lastAcceptedEndFrame = 0;
     quint64 m_discardBeforeFrame = 0;
 
+    // Written only while stopped (setCaptureClock); read by consume().
+    DaemonAudioSource::CaptureClock m_captureClock;
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_discontinuity{false};
     std::atomic<std::uint64_t> m_contentionRetries{0};
@@ -370,6 +402,11 @@ void DaemonAudioSource::stop()
         m_audioEngine->clearMasterMixAudioTap(m_bridge.get());
     }
     m_bridge->stop();
+}
+
+bool DaemonAudioSource::setCaptureClock(CaptureClock clock)
+{
+    return m_bridge->setCaptureClock(std::move(clock));
 }
 
 bool DaemonAudioSource::isRunning() const noexcept

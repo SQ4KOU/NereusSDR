@@ -19,6 +19,9 @@
 //   2026-09-23 -- R-R3-32/33: Core computer CPU, memory and temperature
 //                 metrics by J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-23 -- R-R3-35/33: measured audio delay, its accuracy and the
+//                 delivery delay by J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -67,6 +70,13 @@ public:
         CoreMemoryAvailableMiB,
         CoreProcessResidentMiB,
         CoreHottestZoneCelsius,
+        // R-R3-35: the measured audio delay (Core capture to playout here),
+        // its accuracy (the +- half-width, never a delay) and the delivery
+        // delay (Core capture to leaving the reorder buffer). Absent while
+        // not measured.
+        AudioDelayMs,
+        AudioDelayAccuracyMs,
+        AudioDeliveryDelayMs,
         Count,
     };
 

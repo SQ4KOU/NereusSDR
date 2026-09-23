@@ -142,6 +142,12 @@ struct StationCapabilities {
     /// then reports the profile running and any refusal. Nonzero only with
     /// media; the Core's audio_lossless setting may still refuse.
     int audioProfileVersion = 0;
+    /// R-R3-35: 1 means the Core answers the media control
+    /// {op:"clock-probe", id, t0} with {op:"clock-echo", id, t0, t1, t2,
+    /// generation, rtpTimestamp, capturedNs}, so a GUI can measure how far
+    /// behind real time its audio plays. Nonzero only with media. A GUI that
+    /// does not see it sends no probe and shows no measured delay.
+    int audioClockVersion = 0;
 
     /// The daemon's own AppSettings SettingsSchemaVersion, read by that
     /// key name from its own store. See StationClient's schema-skew check.

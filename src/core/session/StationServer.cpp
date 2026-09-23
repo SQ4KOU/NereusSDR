@@ -1408,6 +1408,8 @@ StationCapabilities StationServer::buildCapabilities() const
     // nereusd.conf audio_lossless says, so a GUI can be told plainly when
     // the Core's own setting refuses it.
     caps.audioProfileVersion = m_mediaEnabled ? 1 : 0;
+    // R-R3-35: the Core answers audio clock probes whenever media is on.
+    caps.audioClockVersion = m_mediaEnabled ? 1 : 0;
     if (m_mediaEnabled && m_displayBudgetEnforcementEnabled && m_displayBudget) {
         caps.remoteDisplayBudgetVersion = 1;
         caps.displayBudget = m_displayBudget;

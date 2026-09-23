@@ -580,6 +580,7 @@ private slots:
     void losslessRefusalKeepsOpusAndSaysWhy_data();
     void losslessRefusalKeepsOpusAndSaysWhy();
     void minorSevenPeerCannotAskForAnAudioProfile();
+    void clockProbeIsAnsweredWithTheCoreClockAndCapture();
     void minorEightPeerReceivesTodaysSpectrumContext();
     void minorNinePeerReceivesTheGrant();
     void currentMinorSpectrumContextsReportTheGrant();
@@ -3091,6 +3092,142 @@ void TstDaemonMediaController::minorSevenPeerCannotAskForAnAudioProfile()
     QVERIFY(hasLegacyAudioContextShape(receivedAudioContexts(*peer).constLast()));
     QCOMPARE(h.controller.audioProfile(), RemoteAudioProfile::Opus);
     peer->closeLink(QStringLiteral("test complete"));
+}
+
+namespace {
+
+QJsonObject clockProbe(qint64 id, qint64 t0)
+{
+    return {{QStringLiteral("op"), QStringLiteral("clock-probe")},
+            {QStringLiteral("connectionId"), QLatin1String(kConnectionId)},
+            {QStringLiteral("id"), id},
+            {QStringLiteral("t0"), t0}};
+}
+
+QList<QJsonObject> clockEchoesIn(const QSignalSpy& controls)
+{
+    QList<QJsonObject> found;
+    for (const auto& call : controls) {
+        const QJsonObject message = call.at(0).toJsonObject();
+        if (message.value(QStringLiteral("op")) == QLatin1String("clock-echo")) {
+            found.append(message);
+        }
+    }
+    return found;
+}
+
+} // namespace
+
+// R-R3-35: the Core advertises audioClockVersion 1 with media and answers a
+// clock probe with its own clock on arrival (t1) and just before the reply
+// (t2), plus the newest captured audio block of the running context: its
+// end as an RTP time and the capture clock's reading then, for Opus and for
+// lossless. Before audio runs the capture fields are 0. Malformed probes
+// get no answer.
+void TstDaemonMediaController::clockProbeIsAnsweredWithTheCoreClockAndCapture()
+{
+    OpusAudioEncoder encoder;
+    if (!encoder.isReady()) {
+        QSKIP("Opus encoder is unavailable in this build");
+    }
+    Harness h;
+    AudioEngine* const engine = h.radio.audioEngine();
+    engine->masterMixForTest().setRampFrames(1);
+    engine->masterMixForTest().setSlewUpFrames(0);
+    engine->setSliceStreaming(h.sliceId, true);
+    engine->setSliceStreaming(h.spareSliceId, true);
+    h.establishSession();
+    const StationCapabilities caps = h.server.buildCapabilities();
+    QCOMPARE(caps.audioClockVersion, 1);
+    QCOMPARE(StationCapabilities::fromUpdates(caps.toUpdates()).audioClockVersion, 1);
+    QCOMPARE(h.client.capabilities().audioClockVersion, 1);
+
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    QVERIFY(h.client.sendMediaControl(profileStart(), h.client.sessionEpoch()));
+    QTRY_VERIFY(h.mediaTransport);
+    h.mediaTransport->losslessNegotiated = true;
+    h.mediaTransport->becomeReady();
+
+    // Malformed probes first, then one good one: only the good one is
+    // answered, and nothing of audio yet.
+    const auto epoch = h.client.sessionEpoch();
+    QJsonObject extra = clockProbe(9, 1);
+    extra.insert(QStringLiteral("extra"), 1);
+    QJsonObject stranger = clockProbe(9, 1);
+    stranger.insert(QStringLiteral("connectionId"),
+                    QStringLiteral("00000000-0000-4000-8000-000000000001"));
+    QJsonObject noId = clockProbe(9, 1);
+    noId.remove(QStringLiteral("id"));
+    for (const QJsonObject& bad : {extra, stranger, noId, clockProbe(9, -5),
+                                   clockProbe(-1, 5)}) {
+        QVERIFY(h.client.sendMediaControl(bad, epoch));
+    }
+    h.nowNs = 2'000'000'000;
+    QVERIFY(h.client.sendMediaControl(clockProbe(1, 123'456'789), epoch));
+    QTRY_COMPARE(clockEchoesIn(controls).size(), 1);
+    QJsonObject echo = clockEchoesIn(controls).constFirst();
+    QCOMPARE(sortedKeys(echo), (QStringList{
+        QStringLiteral("capturedNs"), QStringLiteral("connectionId"), QStringLiteral("generation"),
+        QStringLiteral("id"), QStringLiteral("op"), QStringLiteral("rtpTimestamp"),
+        QStringLiteral("t0"), QStringLiteral("t1"), QStringLiteral("t2")}));
+    QCOMPARE(echo.value(QStringLiteral("connectionId")).toString(), QLatin1String(kConnectionId));
+    QCOMPARE(echo.value(QStringLiteral("id")).toInteger(), qint64{1});
+    QCOMPARE(echo.value(QStringLiteral("t0")).toInteger(), qint64{123'456'789});
+    QCOMPARE(echo.value(QStringLiteral("t1")).toInteger(), qint64{2'000'000'000});
+    QCOMPARE(echo.value(QStringLiteral("t2")).toInteger(), qint64{2'000'000'000});
+    QCOMPARE(echo.value(QStringLiteral("generation")).toInteger(), qint64{0});
+    QCOMPARE(echo.value(QStringLiteral("rtpTimestamp")).toInteger(), qint64{0});
+    QCOMPARE(echo.value(QStringLiteral("capturedNs")).toInteger(), qint64{0});
+
+    // Opus audio: the block completes at Core time 7 s.
+    QVERIFY(h.client.sendMediaControl(audioControl(1, true, QStringLiteral("opus")), epoch));
+    QTRY_COMPARE(audioContextsIn(controls).size(), 1);
+    const qint64 opusGeneration =
+        audioContextsIn(controls).constLast().value(QStringLiteral("generation")).toInteger();
+    h.nowNs = 7'000'000'000;
+    feedAudioBlock(h);
+    QTRY_COMPARE(h.mediaTransport->rtpPackets.size(), 1);
+    const quint32 opusTimestamp = rtpTimestamp(h.mediaTransport->rtpPackets.constFirst());
+    h.nowNs = 7'250'000'000;
+    QVERIFY(h.client.sendMediaControl(clockProbe(2, 200), epoch));
+    QTRY_COMPARE(clockEchoesIn(controls).size(), 2);
+    echo = clockEchoesIn(controls).constLast();
+    QCOMPARE(echo.value(QStringLiteral("t1")).toInteger(), qint64{7'250'000'000});
+    QCOMPARE(echo.value(QStringLiteral("generation")).toInteger(), opusGeneration);
+    QCOMPARE(echo.value(QStringLiteral("rtpTimestamp")).toInteger(),
+             qint64{opusTimestamp + 1920U});
+    QCOMPARE(echo.value(QStringLiteral("capturedNs")).toInteger(), qint64{7'000'000'000});
+
+    // Lossless: the same, for the block its ten packets came from.
+    QVERIFY(h.client.sendMediaControl(audioControl(2, true, QStringLiteral("lossless")), epoch));
+    QTRY_COMPARE(audioContextsIn(controls).size(), 2);
+    const qint64 losslessGeneration =
+        audioContextsIn(controls).constLast().value(QStringLiteral("generation")).toInteger();
+    QVERIFY(losslessGeneration != opusGeneration);
+    h.nowNs = 9'000'000'000;
+    feedAudioBlock(h);
+    QTRY_VERIFY(h.mediaTransport->rtpPackets.size() >= 2);
+    const quint32 losslessTimestamp = rtpTimestamp(h.mediaTransport->rtpPackets.at(1));
+    QCOMPARE(audioRtpPayloadType(h.mediaTransport->rtpPackets.at(1)),
+             PcmAudioCodecConfig::kPayloadType);
+    h.nowNs = 9'100'000'000;
+    QVERIFY(h.client.sendMediaControl(clockProbe(3, 300), epoch));
+    QTRY_COMPARE(clockEchoesIn(controls).size(), 3);
+    echo = clockEchoesIn(controls).constLast();
+    QCOMPARE(echo.value(QStringLiteral("generation")).toInteger(), losslessGeneration);
+    QCOMPARE(echo.value(QStringLiteral("rtpTimestamp")).toInteger(),
+             qint64{losslessTimestamp + 1920U});
+    QCOMPARE(echo.value(QStringLiteral("capturedNs")).toInteger(), qint64{9'000'000'000});
+
+    // Audio off: the capture fields go back to 0.
+    QVERIFY(h.client.sendMediaControl(audioControl(3, false, QStringLiteral("lossless")), epoch));
+    QTRY_COMPARE(audioContextsIn(controls).size(), 3);
+    QVERIFY(h.client.sendMediaControl(clockProbe(4, 400), epoch));
+    QTRY_COMPARE(clockEchoesIn(controls).size(), 4);
+    echo = clockEchoesIn(controls).constLast();
+    QCOMPARE(echo.value(QStringLiteral("generation")).toInteger(), qint64{0});
+    QCOMPARE(echo.value(QStringLiteral("capturedNs")).toInteger(), qint64{0});
+    h.finish();
 }
 
 QTEST_MAIN(TstDaemonMediaController)

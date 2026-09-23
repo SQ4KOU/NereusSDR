@@ -161,6 +161,11 @@ void RemoteDiagnosticsDialog::buildUi()
     m_speakerBufferGraph->setToolTip(tr("Sampled PCM speaker-ring duration only. Excludes network, encoder, jitter/matcher and audio-device delay."));
     m_packetAgeGraph = addGraph(roundTrip, tr("Last admitted audio packet age"), tr(" ms"));
     m_packetAgeGraph->setObjectName(QStringLiteral("remotePacketAgeGraph"));
+    // R-R3-35: measured, not half a round trip. A Core that does not answer
+    // clock probes leaves it empty.
+    m_audioDelayGraph = addGraph(roundTrip, tr("Audio delay"), tr(" ms"));
+    m_audioDelayGraph->setObjectName(QStringLiteral("remoteAudioDelayGraph"));
+    m_audioDelayGraph->setToolTip(tr("How far behind the Core's audio this computer plays it. Delivery is the part up to this computer's player, before the speaker queue. Accuracy is how well this computer knows the Core's clock, not a delay. When the speaker device does not report its own delay, it is not counted."));
     tabs->addTab(roundTrip, tr("Round trip / buffering"));
 
     QWidget* audio = buildTab(tr("Audio"));
@@ -325,6 +330,11 @@ void RemoteDiagnosticsDialog::refreshGraphs()
     });
     setGraph(m_packetAgeGraph, history, nowMs, m_rangeSeconds, {
         {Metric::PlaybackPacketAgeMs, "Packet age", "#c792ea", " ms"},
+    });
+    setGraph(m_audioDelayGraph, history, nowMs, m_rangeSeconds, {
+        {Metric::AudioDelayMs, "Audio delay", "#5fff8a", " ms"},
+        {Metric::AudioDeliveryDelayMs, "Delivery", "#00b4d8", " ms"},
+        {Metric::AudioDelayAccuracyMs, "Accuracy (\u00B1)", "#ffd700", " ms"},
     });
     setGraph(m_audioPacketsGraph, history, nowMs, m_rangeSeconds, {
         {Metric::AudioEncodedPacketsPerSecond, "Core encoded", "#00b4d8", " packets/s"},

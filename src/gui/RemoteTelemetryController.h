@@ -1,6 +1,7 @@
 #pragma once
 // no-port-check: NereusSDR-original. Observational Core/GUI telemetry adapter.
 #include "gui/TelemetryHistory.h"
+#include "gui/RemoteAudioStatus.h"
 #include "core/session/StationTelemetry.h"
 #include "core/session/SessionTransport.h"
 #include "core/session/media/RemoteAudioReceiver.h"
@@ -32,6 +33,10 @@ struct RemoteTelemetryView {
     // and whether this session's Core has reported any of it (R-R3-32/33).
     StationHostTelemetry coreHost;
     bool coreHostReported = false;
+    // R-R3-35: the measured audio delay at the latest sample. measurable is
+    // false for a Core that does not answer clock probes, and the text then
+    // reads as before.
+    RemoteAudioDelayReport audioDelay;
 };
 
 // All methods run on the GUI thread. Collection continues while the dialog is
@@ -42,10 +47,11 @@ public:
     using Clock = std::function<qint64()>;
     using PlaybackObserver = std::function<RemoteAudioReceiverTelemetry()>;
     using TrafficObserver = std::function<std::optional<MediaPeerTelemetry>()>;
+    using DelayObserver = std::function<RemoteAudioDelayReport()>;
     RemoteTelemetryController(StationClient* client, RemoteMediaController* media,
                               QObject* parent = nullptr,
                               Clock clock = {}, PlaybackObserver playback = {},
-                              TrafficObserver traffic = {});
+                              TrafficObserver traffic = {}, DelayObserver delay = {});
     const RemoteTelemetryView& current() const { return m_view; }
     const TelemetryHistory& history() const { return m_history; }
     qint64 nowMs() const;
@@ -65,6 +71,7 @@ private:
     Clock m_now;
     PlaybackObserver m_playback;
     TrafficObserver m_traffic;
+    DelayObserver m_delay;
     QTimer m_timer;
     TelemetryHistory m_history;
     RemoteTelemetryView m_view;

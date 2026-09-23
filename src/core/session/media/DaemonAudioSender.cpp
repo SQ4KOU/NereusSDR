@@ -106,6 +106,18 @@ void DaemonAudioSender::setPacingClockForTest(PacingClock clock)
     if (clock) { m_pacingClock = std::move(clock); }
 }
 
+bool DaemonAudioSender::setCaptureClock(DaemonAudioSource::CaptureClock clock)
+{
+    return m_source->setCaptureClock(std::move(clock));
+}
+
+void DaemonAudioSender::noteCaptured(const DaemonAudioBlock& block, quint32 timestamp)
+{
+    m_telemetry.hasCaptureStamp = true;
+    m_telemetry.captureTimestamp = timestamp + static_cast<quint32>(DaemonAudioSource::kBlockFrames);
+    m_telemetry.captureNs = block.capturedNs;
+}
+
 bool DaemonAudioSender::profileReady() const
 {
     return m_profile == RemoteAudioProfile::Lossless
@@ -150,6 +162,7 @@ void DaemonAudioSender::drain()
         const quint32 timestamp = m_baseTimestamp
             + static_cast<quint32>(block->samplePosition);
         m_nextTimestamp = timestamp + DaemonAudioSource::kBlockFrames;
+        noteCaptured(*block, timestamp);
         const OpusRtpEncodeResult encoded = m_encoder->encode(
             block->pcmInterleaved, m_nextSequence, timestamp, m_ssrc);
         if (encoded.status != OpusAudioCodecStatus::Accepted) {
@@ -197,6 +210,7 @@ void DaemonAudioSender::drainLossless(quint64 drainGeneration)
             const quint32 timestamp = m_baseTimestamp
                 + static_cast<quint32>(block->samplePosition);
             m_nextTimestamp = timestamp + DaemonAudioSource::kBlockFrames;
+            noteCaptured(*block, timestamp);
             // R-R3-23: ten 192-frame packets per block, sequence +1 and
             // timestamp +192 each, so the next block continues the clock.
             // Sequence numbers are given out here, so nextSequence() is the

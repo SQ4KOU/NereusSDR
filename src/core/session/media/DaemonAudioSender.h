@@ -37,6 +37,13 @@ struct DaemonAudioSenderTelemetry {
     bool hasLastEmittedPacket = false;
     quint16 lastEmittedSequence = 0;
     quint32 lastEmittedTimestamp = 0;
+    // R-R3-35: the newest block taken from capture. captureTimestamp is the
+    // RTP time at the block's end (its timestamp plus 1920), and
+    // captureNs the capture clock's reading when that end was captured. A
+    // GUI maps its playback onto the Core's clock with this pair.
+    bool hasCaptureStamp = false;
+    quint32 captureTimestamp = 0;
+    qint64 captureNs = 0;
 };
 
 /// Turns bounded post-master-mix blocks into RTP packets: one Opus packet per
@@ -120,6 +127,9 @@ public:
     /// Test seam: the clock the lossless allowance reads. Takes effect at
     /// the next start(). Default: a monotonic QElapsedTimer.
     void setPacingClockForTest(PacingClock clock);
+    /// R-R3-35: the clock capture times are read from (see
+    /// DaemonAudioSource::setCaptureClock). Refused while running.
+    bool setCaptureClock(DaemonAudioSource::CaptureClock clock);
 
 signals:
     void packetReady(const QByteArray& packet);
@@ -131,6 +141,7 @@ private:
         quint32 timestamp{0};
     };
     void drainLossless(quint64 drainGeneration);
+    void noteCaptured(const DaemonAudioBlock& block, quint32 timestamp);
 
     std::unique_ptr<DaemonAudioSource> m_source;
     std::unique_ptr<OpusAudioEncoder> m_encoder;

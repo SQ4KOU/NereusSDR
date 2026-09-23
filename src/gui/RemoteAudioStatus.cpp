@@ -206,8 +206,28 @@ QString remoteAudioQualityText(const RemoteAudioStatus& status)
     return QStringLiteral("%1 (chosen)").arg(remoteAudioProfileName(status.chosenProfile));
 }
 
+QString remoteAudioDelayText(const AudioDelayEstimate& estimate)
+{
+    const AudioDelayDisplay shown = roundAudioDelay(estimate.delayMs, estimate.boundMs);
+    // U+00A0 between each number and its unit keeps them on one line.
+    const QString text = QStringLiteral("%1\u00A0ms \u00B1 %2\u00A0ms")
+                             .arg(shown.valueMs).arg(shown.accuracyMs);
+    return estimate.includesDevice ? text
+                                   : text + QStringLiteral(", not counting the speaker device");
+}
+
+QString remoteAudioDeliveryText(const AudioDelayEstimate& estimate)
+{
+    if (!estimate.deliveryMs || !estimate.deliveryBoundMs) {
+        return {};
+    }
+    const AudioDelayDisplay shown = roundAudioDelay(*estimate.deliveryMs, *estimate.deliveryBoundMs);
+    return QStringLiteral("%1\u00A0ms \u00B1 %2\u00A0ms").arg(shown.valueMs).arg(shown.accuracyMs);
+}
+
 QString formatRemoteAudioDetails(const RemoteAudioStatus& status,
-                                 const RemoteAudioReceiverTelemetry& playback)
+                                 const RemoteAudioReceiverTelemetry& playback,
+                                 const RemoteAudioDelayReport& delay)
 {
     using State = RemoteAudioStatus::State;
     QStringList lines;
@@ -240,6 +260,12 @@ QString formatRemoteAudioDetails(const RemoteAudioStatus& status,
             ? QStringLiteral("Speaker buffer: %1\u00A0ms on this computer")
                   .arg(qRound(*playback.speakerQueuedMs))
             : QStringLiteral("Speaker buffer: not measured yet"));
+        // R-R3-35: only a Core that answers clock probes adds this line.
+        if (delay.measurable) {
+            lines << (delay.estimate
+                ? QStringLiteral("Audio delay: %1").arg(remoteAudioDelayText(*delay.estimate))
+                : QStringLiteral("Audio delay: not measured yet"));
+        }
     }
     return lines.join(QLatin1Char('\n'));
 }

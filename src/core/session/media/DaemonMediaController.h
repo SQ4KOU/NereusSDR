@@ -84,6 +84,10 @@ QString daemonDisplayDiagnosticsLine(const DaemonDisplayDiagnostics& diagnostics
 class DaemonMediaController final : public QObject {
     Q_OBJECT
 public:
+    /// Monotonic nanoseconds, never negative. Besides display pacing it is
+    /// the Core's audio clock (R-R3-35): clock-echo times and the capture
+    /// times of audio blocks, which the DSP thread reads, so an injected
+    /// clock must be safe to call from any thread.
     using MonotonicClock = std::function<qint64()>;
     explicit DaemonMediaController(StationServer* server, RadioModel* radioModel,
                                    QObject* parent = nullptr,
@@ -149,6 +153,14 @@ private:
     bool handleUnsubscribe(const QJsonObject& control);
     bool handleKeyframe(const QJsonObject& control);
     bool handleAudio(const QJsonObject& control);
+    /// R-R3-35: answers {op:"clock-probe", connectionId, id, t0} with
+    /// {op:"clock-echo", connectionId, id, t0, t1, t2, generation,
+    /// rtpTimestamp, capturedNs}. t1 is the Core clock on entry to
+    /// onControl(), t2 just before the reply. generation is the running
+    /// audio context and rtpTimestamp/capturedNs the newest captured block's
+    /// end (DaemonAudioSenderTelemetry::captureTimestamp/captureNs); all
+    /// three are 0 when no audio context is capturing.
+    bool handleClockProbe(const QJsonObject& control, qint64 receivedNs);
     bool acceptPeerControl(const QJsonObject& control);
 
     void clearSession();

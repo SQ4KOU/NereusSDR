@@ -4458,6 +4458,8 @@ nereus_add_test(tst_audio_engine_flow_state)
 # clears counters, signal-wire safety. QTEST_MAIN — needs QApplication.
 nereus_add_test(tst_network_diagnostics_dialog)
 nereus_add_test(tst_telemetry_history)
+# R-R3-35: clock offset from probe exchanges and the measured audio delay.
+nereus_add_test(tst_audio_clock_estimator)
 nereus_add_test(tst_time_series_graph)
 nereus_add_test(tst_remote_telemetry fakes/LoopbackTransport.cpp)
 nereus_add_test(tst_remote_diagnostics fakes/LoopbackTransport.cpp)

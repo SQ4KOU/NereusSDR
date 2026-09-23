@@ -561,6 +561,56 @@ private slots:
         }
     }
 
+    // R-R3-35: the connection panel's delay line. Only a Core that answers
+    // clock probes adds it; the figure carries its accuracy, says when the
+    // speaker device is not counted, and uses no internal terms.
+    void audioDelayLineOnlyWhenTheCoreCanMeasureIt()
+    {
+        RemoteAudioStatus status;
+        status.state = State::Playing;
+        status.detailNegotiated = true;
+        status.encoder = defaultProfile();
+        status.selectedOutput = QStringLiteral("System default");
+        RemoteAudioReceiverTelemetry playback;
+        const QString today = formatRemoteAudioDetails(status, playback);
+        QCOMPARE(formatRemoteAudioDetails(status, playback, RemoteAudioDelayReport{}), today);
+        QVERIFY(!today.contains(QStringLiteral("Audio delay")));
+
+        RemoteAudioDelayReport delay;
+        delay.measurable = true;
+        QCOMPARE(formatRemoteAudioDetails(status, playback, delay),
+                 today + QStringLiteral("\nAudio delay: not measured yet"));
+        delay.estimate = AudioDelayEstimate{85.4, 0.4, false, 60.0, 0.4};
+        QCOMPARE(formatRemoteAudioDetails(status, playback, delay),
+                 today + QStringLiteral("\nAudio delay: 85\u00A0ms \u00B1 1\u00A0ms, "
+                                        "not counting the speaker device"));
+        delay.estimate->includesDevice = true;
+        delay.estimate->delayMs = 102.6;
+        delay.estimate->boundMs = 1.2;
+        QCOMPARE(remoteAudioDelayText(*delay.estimate),
+                 QStringLiteral("103\u00A0ms \u00B1 2\u00A0ms"));
+        QCOMPARE(remoteAudioDeliveryText(*delay.estimate),
+                 QStringLiteral("60\u00A0ms \u00B1 1\u00A0ms"));
+        delay.estimate->deliveryMs.reset();
+        QVERIFY(remoteAudioDeliveryText(*delay.estimate).isEmpty());
+        // Muted here: no health lines, so no delay line either.
+        status.state = State::MutedHere;
+        QVERIFY(!formatRemoteAudioDetails(status, playback, delay).contains(
+            QStringLiteral("Audio delay")));
+
+        static const QRegularExpression forbidden(
+            QStringLiteral("\\bRTP\\b|\\bPCM\\b|payload|codec|SSRC|\\bpeer\\b|"
+                           "protocol|session|capabilit|revision|generation|minor|epoch|"
+                           "telemetry|handshake|snapshot|endpoint|RTT"),
+            QRegularExpression::CaseInsensitiveOption);
+        AudioDelayEstimate estimate{85.4, 0.4, false, 60.0, 0.4};
+        for (const QString& text : {remoteAudioDelayText(estimate),
+                                    remoteAudioDeliveryText(estimate)}) {
+            QVERIFY2(!forbidden.match(text).hasMatch(), qPrintable(text));
+            QVERIFY2(!text.contains(QChar(0x2014)), qPrintable(text));
+        }
+    }
+
     // R-R3-23 link trial: the rule, sample by sample. Each window is
     // RemoteAudioLinkTrial::kWindowMs; 250 packets a second is lossless.
     void linkTrialConstantsAreTheDocumentedOnes()

@@ -1285,6 +1285,106 @@ private slots:
         QCOMPARE(errors.count(), 0);
         receiver.stop();
     }
+    // R-R3-35: the receiver's clock is injected (here the steady clock plus
+    // 5 s, as a Core-independent domain) and every time it reports is on
+    // it. While lossless audio plays it publishes when a known RTP time
+    // will be heard (the newest matched packet's end, behind the matcher
+    // fill, the speaker queue and the device's reported latency) and when
+    // the newest packet left the reorder buffer. Both vanish with stop().
+    void playoutAndReleaseTimesUseTheInjectedClock()
+    {
+        constexpr quint32 kSsrc = 435;
+        constexpr qint64 kOffsetNs = 5'000'000'000;
+        constexpr qint64 kDeviceNs = 12'000'000;
+        AudioEngine engine;
+        engine.setVolume(1.0f);
+        auto sink = std::make_unique<PacedAudioBus>();
+        auto* bus = sink.get();
+        bus->deviceLatencyNs = kDeviceNs;
+        engine.setSpeakersBusForTest(std::move(sink));
+        QElapsedTimer steady;
+        steady.start();
+        RemoteAudioReceiver receiver(&engine, nullptr,
+                                     [&steady] { return kOffsetNs + steady.nsecsElapsed(); });
+        QVERIFY(receiver.nowNs() >= kOffsetNs);
+        QSignalSpy errors(&receiver, &RemoteAudioReceiver::errorOccurred);
+        QSignalSpy restarts(&receiver, &RemoteAudioReceiver::restartRequested);
+        QVERIFY(receiver.start(kSsrc, 0, RemoteAudioProfile::Lossless));
+        QVERIFY(!receiver.telemetry().playout);
+        QVERIFY(!receiver.telemetry().release);
+
+        QTimer device;
+        device.setTimerType(Qt::PreciseTimer);
+        device.setInterval(1);
+        QElapsedTimer deviceClock;
+        deviceClock.start();
+        quint64 renderedFrames = 0;
+        connect(&device, &QTimer::timeout, this, [&] {
+            const quint64 due = quint64(deviceClock.nsecsElapsed()) * 48000 / 1'000'000'000;
+            while (due >= renderedFrames + 480) {
+                bus->render(480);
+                renderedFrames += 480;
+            }
+        });
+        device.start();
+        int packet = 0;
+        QTimer source;
+        source.setTimerType(Qt::PreciseTimer);
+        source.setInterval(1);
+        QElapsedTimer sourceClock;
+        sourceClock.start();
+        connect(&source, &QTimer::timeout, this, [&] {
+            const int duePackets = int(sourceClock.elapsed() / 4);
+            while (packet < duePackets) {
+                receiver.submit(losslessTonePacket(packet, kSsrc));
+                ++packet;
+            }
+        });
+        source.start();
+        QTRY_VERIFY_WITH_TIMEOUT(receiver.decodedPackets() >= 150 || !errors.isEmpty()
+                                 || !restarts.isEmpty(), 5000);
+        QVERIFY2(errors.isEmpty(), errors.isEmpty() ? "" : qPrintable(errors.first().first().toString()));
+        QVERIFY2(restarts.isEmpty(), restarts.isEmpty() ? "" : qPrintable(restarts.first().first().toString()));
+        const qint64 readNs = receiver.nowNs();
+        const auto telemetry = receiver.telemetry();
+        const qint64 submittedEnd = qint64(packet) * PcmAudioCodecConfig::kPacketFrames;
+        source.stop();
+
+        QVERIFY(telemetry.playout);
+        const RemoteAudioPlayoutPoint& playout = *telemetry.playout;
+        // On the injected clock, measured within the last second.
+        QVERIFY(playout.measuredNs <= readNs);
+        QVERIFY(readNs - playout.measuredNs < 1'000'000'000);
+        // A packet end on the lossless grid, of audio that was sent.
+        QCOMPARE(playout.rtpTimestamp % quint32(PcmAudioCodecConfig::kPacketFrames), 0U);
+        QVERIFY(playout.rtpTimestamp > 0);
+        QVERIFY(qint64(playout.rtpTimestamp) <= submittedEnd);
+        QVERIFY(playout.speakerQueuedFrames >= 0 && playout.speakerQueuedFrames <= 4800);
+        QVERIFY(playout.matcherFillFrames >= 0);
+        QCOMPARE(playout.deviceLatencyNs, std::optional<qint64>(kDeviceNs));
+        QCOMPARE(playout.playoutNs(), playout.measuredNs
+            + qint64(playout.matcherFillFrames + playout.speakerQueuedFrames)
+                * 1'000'000'000 / 48000 + kDeviceNs);
+
+        QVERIFY(telemetry.release);
+        const RemoteAudioReleasePoint& release = *telemetry.release;
+        QCOMPARE(release.rtpTimestamp % quint32(PcmAudioCodecConfig::kPacketFrames), 0U);
+        QVERIFY(release.releasedNs >= kOffsetNs && release.releasedNs <= readNs);
+        QVERIFY(qint64(release.rtpTimestamp) <= submittedEnd);
+        // Arrival ages are on the same clock, so they stay small.
+        QVERIFY(telemetry.lastAdmittedPacketAgeMs && *telemetry.lastAdmittedPacketAgeMs < 1000);
+
+        receiver.stop();
+        device.stop();
+        const auto stopped = receiver.telemetry();
+        QVERIFY(!stopped.playout);
+        QVERIFY(!stopped.release);
+        // A new context starts with neither.
+        QVERIFY(receiver.start(kSsrc, 0, RemoteAudioProfile::Lossless));
+        QVERIFY(!receiver.telemetry().playout);
+        QVERIFY(!receiver.telemetry().release);
+        receiver.stop();
+    }
 };
 QTEST_GUILESS_MAIN(TstRemoteAudioReceiver)
 #include "tst_remote_audio_receiver.moc"

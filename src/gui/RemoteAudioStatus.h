@@ -15,6 +15,7 @@
 #include "core/session/media/PcmAudioCodec.h"
 #include "core/session/media/RemoteAudioContext.h"
 #include "core/session/media/RemoteAudioReceiver.h"
+#include "gui/AudioClockEstimator.h"
 
 #include <QString>
 #include <QtGlobal>
@@ -111,8 +112,27 @@ QString remoteAudioQualityText(const RemoteAudioStatus& status);
 /// four measurement lines are omitted together when status.state is
 /// NotConnected, MutedHere or RadioOffline. Numbers are integers; jitter and
 /// the speaker buffer are rounded.
+/// R-R3-35: the measured audio delay as this computer can report it.
+/// measurable: this Core answers clock probes (audioClockVersion), so the
+/// delay can be measured on this connection; an older Core cannot, and
+/// every place that shows the delay then reads exactly as before.
+struct RemoteAudioDelayReport {
+    bool measurable = false;
+    std::optional<AudioDelayEstimate> estimate;
+    bool operator==(const RemoteAudioDelayReport&) const = default;
+};
+/// "85 ms ± 1 ms", adding ", not counting the speaker device" when the
+/// device's own latency is unknown. The ± is the accuracy; the value is
+/// never half a round trip.
+QString remoteAudioDelayText(const AudioDelayEstimate& estimate);
+/// The delivery delay (Core to this computer's player), "62 ms ± 1 ms";
+/// empty when not measured.
+QString remoteAudioDeliveryText(const AudioDelayEstimate& estimate);
+/// With delay.measurable and a health section, a line "Audio delay: ..."
+/// (or "Audio delay: not measured yet") follows the speaker buffer line.
 QString formatRemoteAudioDetails(const RemoteAudioStatus& status,
-                                 const RemoteAudioReceiverTelemetry& playback);
+                                 const RemoteAudioReceiverTelemetry& playback,
+                                 const RemoteAudioDelayReport& delay = {});
 
 /// The identity a persistent playback failure is recorded against: the
 /// session (epoch and connection), the accepted audio context it happened

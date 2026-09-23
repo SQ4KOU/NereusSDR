@@ -3,11 +3,37 @@
 #include "core/session/media/PcmAudioCodec.h"
 #include <QObject>
 #include <QByteArray>
+#include <functional>
 #include <memory>
 #include <optional>
 
 namespace NereusSDR {
 class AudioEngine;
+
+// R-R3-35: when a known RTP time will be heard. rtpTimestamp is the end of
+// the newest packet handed to the rate matcher; behind it, when the worker
+// read them at measuredNs, sat matcherFillFrames in the rate matcher and
+// speakerQueuedFrames in the speaker queue, and then the device's own
+// latency when the backend reports it. All times are the receiver clock's.
+struct RemoteAudioPlayoutPoint {
+    quint32 rtpTimestamp = 0;
+    qint64 measuredNs = 0;
+    int matcherFillFrames = 0;
+    int speakerQueuedFrames = 0;
+    std::optional<qint64> deviceLatencyNs;
+    /// measuredNs plus the queued frames at 48 kHz, plus the device
+    /// latency when known.
+    qint64 playoutNs() const;
+    bool operator==(const RemoteAudioPlayoutPoint&) const = default;
+};
+
+// R-R3-35: the end RTP time of the newest received (not concealed) packet
+// released from the reorder buffer, and when it was released.
+struct RemoteAudioReleasePoint {
+    quint32 rtpTimestamp = 0;
+    qint64 releasedNs = 0;
+    bool operator==(const RemoteAudioReleasePoint&) const = default;
+};
 
 // Read-only diagnostics for one remote playback context. generation advances
 // only after a successful start. Packet counters stay available after stop for
@@ -70,6 +96,11 @@ struct RemoteAudioReceiverTelemetry {
     // startup delay has passed during playback), and for stopped or failed
     // contexts.
     std::optional<double> driftRatio;
+    // R-R3-35 live gauges, like speakerQueuedMs: absent before the worker
+    // has played or released a packet in this context, and for stopped or
+    // failed contexts.
+    std::optional<RemoteAudioPlayoutPoint> playout;
+    std::optional<RemoteAudioReleasePoint> release;
 };
 
 // One generation of bounded RTP receive, decoding and WDSP rate matching.
@@ -93,8 +124,16 @@ public:
     };
     Q_ENUM(Fault)
 
-    explicit RemoteAudioReceiver(AudioEngine* engine, QObject* parent = nullptr);
+    /// Monotonic nanoseconds, never negative, callable from any thread.
+    using Clock = std::function<qint64()>;
+
+    /// `clock` (R-R3-35) stamps arrivals, playout and release times. Empty:
+    /// std::chrono::steady_clock, counted from this process's first use.
+    explicit RemoteAudioReceiver(AudioEngine* engine, QObject* parent = nullptr,
+                                 Clock clock = {});
     ~RemoteAudioReceiver() override;
+    /// The receiver clock now; the playout and release points use it.
+    qint64 nowNs() const;
     bool start(quint32 ssrc, quint32 firstTimestamp,
                RemoteAudioProfile profile = RemoteAudioProfile::Opus);
     /// The profile of the current (or last) context.

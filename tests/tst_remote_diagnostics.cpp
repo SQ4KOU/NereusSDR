@@ -403,6 +403,81 @@ private slots:
         QVERIFY(graphsHidden());
         client.disconnectFromStation(QStringLiteral("done"));
     }
+
+    // R-R3-35: the Round trip tab graphs the measured audio delay, its
+    // delivery part and its accuracy, each labelled as what it is; the
+    // tooltip says the accuracy is not a delay. A reconnect leaves a gap,
+    // and the detail text shows the figure.
+    void audioDelayGraphShowsTheMeasuredDelayAndGapsOnReconnect()
+    {
+        QTemporaryDir directory;
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        StationServer server(&station, settings, directory.path());
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        qint64 now = 10000;
+        RemoteAudioReceiverTelemetry playback;
+        playback.running = true;
+        playback.generation = 2;
+        RemoteAudioDelayReport delay;
+        delay.measurable = true;
+        RemoteTelemetryController controller(&client, nullptr, nullptr,
+            [&] { return now; }, [&] { return playback; }, {}, [&] { return delay; });
+        const auto connect = [&] {
+            auto* gui = new ObservedLoopback;
+            auto* core = new Test::LoopbackTransport(QStringLiteral("Core"));
+            gui->linkTo(core);
+            server.acceptTransport(core);
+            client.startSession(gui, server.token());
+            QTRY_VERIFY(client.isHandshakeComplete());
+        };
+        connect();
+        delay.estimate = AudioDelayEstimate{85.2, 0.6, false, 61.0, 0.6};
+        now += 1000;
+        controller.sampleNow();
+        delay.estimate = AudioDelayEstimate{86.0, 0.5, false, 62.0, 0.5};
+        now += 1000;
+        controller.sampleNow();
+
+        RemoteDiagnosticsDialog dialog(&controller);
+        dialog.show();
+        QTRY_VERIFY(dialog.isVisible());
+        auto* selector = dialog.findChild<QComboBox*>(QStringLiteral("remoteDiagnosticsRange"));
+        QVERIFY(selector);
+        selector->setCurrentIndex(selector->findData(60));
+        auto* graph = dynamic_cast<TimeSeriesGraphWidget*>(dialog.findChild<QWidget*>(
+            QStringLiteral("remoteAudioDelayGraph")));
+        QVERIFY(graph);
+        const auto* delayed = namedSeries(graph, QStringLiteral("Audio delay"));
+        const auto* delivery = namedSeries(graph, QStringLiteral("Delivery"));
+        const auto* accuracy = namedSeries(graph, QString::fromUtf8("Accuracy (\u00B1)"));
+        QVERIFY(delayed && delivery && accuracy);
+        QCOMPARE(delayed->unitSuffix, QStringLiteral(" ms"));
+        QCOMPARE(delayed->points.constLast().y(), 86.0);
+        QCOMPARE(delivery->points.constLast().y(), 62.0);
+        QCOMPARE(accuracy->points.constLast().y(), 0.5);
+        QVERIFY(graph->toolTip().contains(QStringLiteral("not a delay")));
+        auto* detail = dialog.findChild<QLabel*>(QStringLiteral("remoteDiagnosticsDetail"));
+        QVERIFY(detail);
+        QVERIFY2(detail->text().contains(QString::fromUtf8(
+            "Audio delay: 86\u00A0ms \u00B1 1\u00A0ms, not counting the speaker device")),
+                 qPrintable(detail->text()));
+
+        client.disconnectFromStation(QStringLiteral("test reconnect"));
+        QCoreApplication::processEvents();
+        ++now;
+        connect();
+        now += 1000;
+        controller.sampleNow();
+        QVERIFY(QMetaObject::invokeMethod(&dialog, "refresh", Qt::DirectConnection));
+        delayed = namedSeries(graph, QStringLiteral("Audio delay"));
+        QVERIFY(delayed && delayed->points.size() >= 3);
+        // The first figure after the reconnect starts a new line.
+        QVERIFY(delayed->breakBefore.at(2));
+        client.disconnectFromStation(QStringLiteral("done"));
+    }
 };
 
 QTEST_MAIN(TstRemoteDiagnostics)

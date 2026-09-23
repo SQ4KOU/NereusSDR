@@ -27,9 +27,14 @@ class AudioEngine;
 // Completed blocks resume only on the original 1,920-frame grid after a
 // partial ingress loss, making that loss visible as an integer packet gap in
 // RTP without exposing an unaligned packet timestamp.
+//
+// capturedNs (R-R3-35) is the capture clock's reading when the block's last
+// frame reached the bridge, that is when the block was complete. Sample
+// position samplePosition + kBlockFrames is the one captured at that time.
 struct DaemonAudioBlock {
     QVector<float> pcmInterleaved;
     quint64 samplePosition = 0;
+    qint64 capturedNs = 0;
 };
 
 /// Snapshot of capture-bridge activity for one source lifetime.  Frames count
@@ -63,8 +68,19 @@ public:
     static constexpr int kBlockSamples = kBlockFrames * kChannels;
     static constexpr int kQueueBlocks = 4;  // 160 ms maximum queued audio
 
+    /// Monotonic nanoseconds. It is read on the DSP thread each time a
+    /// block completes, so it must be safe to call from any thread and must
+    /// never block.
+    using CaptureClock = std::function<qint64()>;
+
     explicit DaemonAudioSource(QObject* parent = nullptr);
     ~DaemonAudioSource() override;
+
+    /// R-R3-35: the clock DaemonAudioBlock::capturedNs is read from. Default
+    /// std::chrono::steady_clock. Refused (false) while running, because the
+    /// DSP thread reads it; set it before start(). An empty clock keeps the
+    /// current one.
+    bool setCaptureClock(CaptureClock clock);
 
     // The AudioEngine is non-owning. Changing engines stops capture first,
     // preventing a completed block from a previous station from surviving a

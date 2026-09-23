@@ -35,6 +35,10 @@ public:
         int queuedFrames = 0;
         int capacityFrames = 0;
         int callbackFrames = 0; // largest/configured output callback quantum
+        // R-R3-35: how long audio the device callback has taken still takes
+        // to be heard, as the backend reports it. Absent when the backend
+        // does not know it.
+        std::optional<qint64> deviceLatencyNs;
     };
 
     virtual ~IAudioBus() = default;
