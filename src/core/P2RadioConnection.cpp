@@ -55,6 +55,8 @@
 //   2026-04-28 — setMicXlr (G.6): byte 50 bit 5 (0x20), P2-only, polarity 1=XLR. deskhpsdr new_protocol.c:1500-1502 [@120188f]. MicState::micControl default updated 0x04 -> 0x24. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-22 — Established UDP silence: Thetis ChannelMaster/network.c:655-666 [v2.10.3.15]; stop/report, daemon-owned recovery.
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex. Also retire incomplete wideband bursts at capture/connection changes.
+//   2026-09-23 - Established silence judged only when no datagram is waiting (R-R3-29): Thetis ChannelMaster/network.c:655-667 [v2.10.3.15].
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -526,7 +528,9 @@ void P2RadioConnection::init()
     // is reached only from SendStart():362-369, SendStop():372-376, and
     // per-control state changes; only CmdGeneral() is periodic, from
     // KeepAliveLoop():1428-1437 (`if (prn->run && prn->wdt) CmdGeneral();`),
-    // whose job is feeding the board's ~2 s deadman.
+    // whose job is feeding the board's watchdog (CmdGeneral byte 38 carries
+    // prn->wdt, network.c:897-898).  The radio-side watchdog interval is not
+    // stated anywhere in the Thetis tree; Thetis only sends every 500 ms.
     //
     // NereusSDR already pushes every state change immediately (11 change-driven
     // sendCmdHighPriority sites, 4 for CmdRx, 10 for CmdTx), so the wheel was
@@ -2284,6 +2288,52 @@ void P2RadioConnection::onEstablishedSilenceTimeout()
         m_establishedSilenceTimer->start(
             static_cast<int>(std::max<qint64>(1, remainingMs)));
         return;
+    }
+
+    // From Thetis ChannelMaster/network.c:655-667 [v2.10.3.15]:
+    //   DWORD retVal = WSAWaitForMultipleEvents(1, &prn->hDataEvent, FALSE,
+    //                      prn->wdt ? 3000 : WSA_INFINITE, FALSE);
+    //   if ((retVal == WSA_WAIT_FAILED) || (retVal == WSA_WAIT_TIMEOUT))
+    //   {
+    //       HaveSync = 0; //send console LOS
+    //       SendStop();
+    //       ...
+    //       continue;
+    //   }
+    //   else
+    //   {
+    //       WSAEnumNetworkEvents(listenSock, prn->hDataEvent, ...);
+    //       if (prn->wsaProcessEvents.lNetworkEvents & FD_READ)
+    // The FD_READ event stays signalled while a datagram is waiting, so the
+    // wait only times out when nothing is waiting. A Qt timer can be
+    // dispatched ahead of readyRead work already queued behind a stalled
+    // event loop; read what is waiting first (each accepted datagram
+    // refreshes the deadline) and judge silence again afterwards.
+    if (m_socket && m_socket->hasPendingDatagrams()) {
+        const quint64 wakeGeneration = m_connectionGeneration;
+        onReadyRead();
+        // Direct observers of the signals emitted while reading may have
+        // closed or replaced this connection; never act on a newer one.
+        if (!m_running || m_linkLossLatched
+            || m_connectionGeneration != wakeGeneration
+            || state() != ConnectionState::Connected
+            || m_establishedSilenceGeneration != m_connectionGeneration
+            || !m_establishedSilenceTimer) {
+            return;
+        }
+        if (!m_establishedSilenceDeadline.hasExpired()) {
+            const qint64 remainingMs =
+                m_establishedSilenceDeadline.remainingTime();
+            m_establishedSilenceTimer->start(
+                static_cast<int>(std::max<qint64>(1, remainingMs)));
+            return;
+        }
+        // More arrived while reading, none of it accepted yet. Return to
+        // the event loop and check again rather than spinning here.
+        if (m_socket && m_socket->hasPendingDatagrams()) {
+            m_establishedSilenceTimer->start(1);
+            return;
+        }
     }
 
     stopForEstablishedSilence();

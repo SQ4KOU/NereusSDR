@@ -9,9 +9,31 @@
 #include <QtGlobal>
 #include <QLoggingCategory>
 
+#include <atomic>
+
 Q_LOGGING_CATEGORY(lcRtAudio, "nereussdr.rt_audio")
 
 namespace NereusSDR {
+
+namespace {
+std::atomic<bool> g_threadPriorityRefusedWarned{false};
+} // namespace
+
+bool noteThreadPriorityRefused()
+{
+    if (g_threadPriorityRefusedWarned.exchange(true)) {
+        return false;
+    }
+    qCWarning(lcRtAudio).noquote()
+        << "Raised thread priority was refused; audio and signal"
+           " processing threads run at normal priority.";
+    return true;
+}
+
+void resetThreadPriorityRefusedForTest()
+{
+    g_threadPriorityRefusedWarned.store(false);
+}
 
 // Token struct holds whatever platform-specific state is needed to
 // undo the elevation in leave().  Per-platform members are gated so
@@ -229,6 +251,7 @@ AudioPriorityToken* elevateAudioThreadPriority()
         qCInfo(lcRtAudio) << "pthread_setschedparam(SCHED_FIFO) failed"
                           << "(errno" << err << strerror(err) << ")."
                           << "Operator may need CAP_SYS_NICE or rtprio rlimit.";
+        noteThreadPriorityRefused();
     }
     return token;
 }
@@ -251,19 +274,29 @@ void elevateGuiMainThreadPriority()
     // effective than SCHED_FIFO but available without privilege.
     // Caller can set rtprio rlimit / CAP_SYS_NICE to get a stronger
     // effect.
+    // nice() may legitimately return -1, so failure is judged from errno;
+    // clear it first so a stale value cannot report a false refusal.
+    errno = 0;
     if (nice(-5) == -1 && errno != 0) {
+        const int err = errno;
         qCInfo(lcRtAudio) << "nice(-5) for GUI main thread failed (errno"
-                          << errno << strerror(errno) << "); continuing"
+                          << err << strerror(err) << "); continuing"
                           << "at default.";
+        noteThreadPriorityRefused();
     }
 }
 
 void elevateComputeThreadPriority()
 {
+    // nice() may legitimately return -1, so failure is judged from errno;
+    // clear it first so a stale value cannot report a false refusal.
+    errno = 0;
     if (nice(-3) == -1 && errno != 0) {
+        const int err = errno;
         qCInfo(lcRtAudio) << "nice(-3) for compute thread failed (errno"
-                          << errno << strerror(errno) << "); continuing"
+                          << err << strerror(err) << "); continuing"
                           << "at default.";
+        noteThreadPriorityRefused();
     }
 }
 
@@ -272,10 +305,15 @@ void elevateLatencyCriticalThreadPriority()
     // Same -5 nice as the GUI main thread on Linux -- USER_INTERACTIVE
     // tier equivalent.  Requires CAP_SYS_NICE or rtprio rlimit for
     // strongest effect; soft-fails to current nice otherwise.
+    // nice() may legitimately return -1, so failure is judged from errno;
+    // clear it first so a stale value cannot report a false refusal.
+    errno = 0;
     if (nice(-5) == -1 && errno != 0) {
+        const int err = errno;
         qCInfo(lcRtAudio) << "nice(-5) for latency-critical thread failed (errno"
-                          << errno << strerror(errno) << "); continuing"
+                          << err << strerror(err) << "); continuing"
                           << "at default.";
+        noteThreadPriorityRefused();
     }
 }
 

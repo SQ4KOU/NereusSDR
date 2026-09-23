@@ -8,6 +8,7 @@
 
 #include <QSignalSpy>
 #include <QStringList>
+#include <QThread>
 #include <QTimer>
 
 #include <functional>
@@ -129,6 +130,39 @@ private slots:
         QCOMPARE(iqSpy.count(), iqAfterStop);
         QCOMPARE(errorSpy.count(), 1);
         QCOMPARE(connection.state(), ConnectionState::LinkLost);
+    }
+
+    void datagramWaitingAtExpiryIsProcessedNotDeclaredLost()
+    {
+        P2FakeRadio fake;
+        QVERIFY(fake.start());
+        P2RadioConnection connection;
+        configureConnection(connection, fake);
+        QVERIFY(establish(connection, fake));
+
+        QSignalSpy errorSpy(&connection, &RadioConnection::errorOccurred);
+
+        // A valid status datagram reaches the socket, then the event loop
+        // stalls past the deadline so the wakeup runs ahead of readyRead.
+        // Thetis only declares loss when its wait times out with nothing
+        // received; a datagram that is waiting must be read first.
+        fake.sendStatus();
+        QThread::msleep(static_cast<unsigned long>(kEstablishedTimeoutMs + 80));
+        connection.runEstablishedSilenceWakeupForTest();
+
+        QCOMPARE(errorSpy.count(), 0);
+        QCOMPARE(connection.state(), ConnectionState::Connected);
+        QTest::qWait(50);
+        QCOMPARE(fake.stopCount(), 0);
+
+        // With nothing waiting, the same wakeup past the deadline is loss.
+        QThread::msleep(static_cast<unsigned long>(kEstablishedTimeoutMs + 80));
+        connection.runEstablishedSilenceWakeupForTest();
+        QCOMPARE(connection.state(), ConnectionState::LinkLost);
+        QCOMPARE(errorSpy.count(), 1);
+        QCOMPARE(errorSpy.at(0).at(0).value<RadioConnectionError>(),
+                 RadioConnectionError::NoDataTimeout);
+        QTRY_COMPARE_WITH_TIMEOUT(fake.stopCount(), 1, 1000);
     }
 
     void statusOnlyTrafficKeepsEstablishedLinkAlive()

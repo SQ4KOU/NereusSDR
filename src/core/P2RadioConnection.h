@@ -1024,6 +1024,10 @@ public:
         m_establishedSilenceTimeoutMs = std::max(1, establishedTimeoutMs);
     }
 
+    // Deliver the established-silence wakeup now, as if the Qt timer had
+    // been dispatched ahead of any readyRead work already queued behind it.
+    void runEstablishedSilenceWakeupForTest() { onEstablishedSilenceTimeout(); }
+
 #endif
 };
 

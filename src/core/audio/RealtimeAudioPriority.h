@@ -97,4 +97,15 @@ void elevateComputeThreadPriority();
 // the time slice race.
 void elevateLatencyCriticalThreadPriority();
 
+// Record that the OS refused a priority elevation for the calling thread.
+// The first refusal in the process logs one plain-English warning; every
+// later refusal logs nothing here (per-thread detail stays at info level
+// at the call site).  Returns true only for the call that logged it.
+// Thread-safe.  Exposed so the once-only rule is testable on every
+// platform; production callers are the Linux elevation paths.
+bool noteThreadPriorityRefused();
+
+// Test seam: forget that the warning was logged.
+void resetThreadPriorityRefusedForTest();
+
 } // namespace NereusSDR

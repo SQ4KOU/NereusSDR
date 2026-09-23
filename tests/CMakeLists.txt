@@ -6828,6 +6828,7 @@ nereus_add_test(tst_receive_layout_native fakes/P1FakeRadio.cpp)
 nereus_add_test(tst_receive_slice_seed)
 nereus_add_test(tst_p2_established_silence fakes/P2FakeRadio.cpp)
 target_compile_definitions(tst_p2_established_silence PRIVATE NEREUS_BUILD_TESTS)
+nereus_add_test(tst_realtime_audio_priority)
 nereus_add_test(tst_daemon_radio_recovery fakes/P1FakeRadio.cpp fakes/P2FakeRadio.cpp)
 target_compile_definitions(tst_daemon_radio_recovery PRIVATE NEREUS_BUILD_TESTS)
 
