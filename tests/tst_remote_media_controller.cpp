@@ -49,6 +49,7 @@
 #include "models/SliceModel.h"
 #include "fakes/LoopbackTransport.h"
 #include "OperatorWording.h"
+#include "gui/OperatorReasonText.h"
 #include "fakes/RemoteAudioSessionHarness.h"
 
 using namespace NereusSDR;
@@ -412,7 +413,11 @@ bool refusedFor(const RemoteMediaController& controller, const PanadapterApplet*
         && !applet->remoteDisplayStatus().isEmpty()
         && OperatorWording::isPlain(applet->remoteDisplayStatus())
         && OperatorWording::isPlain(applet->remoteDisplayExplanation())
-        && !applet->remoteDisplayExplanation().contains(reason);
+        // R-R3-21: the reason in user words; a reason already in user words
+        // is shown as sent, one in internal terms never is.
+        && applet->remoteDisplayExplanation().contains(OperatorReasonText::forDisplay(reason))
+        && (OperatorWording::isPlain(reason)
+            || !applet->remoteDisplayExplanation().contains(reason));
 }
 } // namespace
 
@@ -2357,8 +2362,9 @@ private slots:
                         .contains(QStringLiteral("test PS3 refusal")));
         QCOMPARE(controller.panDisplayState(applet->panId()).pureSignal,
                  PanDisplayState::PureSignal::Refused);
-        // The raw reason is logged, never shown.
-        QVERIFY(!applet->remoteDisplayExplanation().contains(QStringLiteral("test PS3 refusal")));
+        // A reason already in user words is shown as sent (R-R3-21); the raw
+        // reason is also logged.
+        QVERIFY(applet->remoteDisplayExplanation().contains(QStringLiteral("test PS3 refusal")));
         // The refusal is already visible while the restored allocation's
         // queued acknowledgment is still in flight. Wait for accepted quality.
         QTRY_VERIFY(!controller.panDisplayState(applet->panId()).reduced());
@@ -3779,7 +3785,7 @@ private slots:
         QCOMPARE(choice->itemText(0), QStringLiteral("Opus"));
         QCOMPARE(choice->itemText(1), QStringLiteral("Lossless"));
         QCOMPARE(choice->currentText(), QStringLiteral("Opus"));
-        QVERIFY(details->text().contains(QStringLiteral("Audio quality: Opus\nCodec: Opus")));
+        QVERIFY(details->text().contains(QStringLiteral("Audio quality: Opus\nAudio format: Opus")));
 
         choice->setCurrentIndex(1);
         QCOMPARE(remoteMedia.audioProfileChoice(), RemoteAudioProfile::Lossless);

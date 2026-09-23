@@ -13,6 +13,7 @@
 #include "gui/RemoteMediaController.h"
 #include "gui/RemoteTelemetryController.h"
 #include "models/RadioModel.h"
+#include "OperatorWording.h"
 #include "fakes/LoopbackTransport.h"
 #include "fakes/RemoteAudioSessionHarness.h"
 
@@ -82,7 +83,8 @@ private slots:
         client.startSession(guiWire, server.token());
         QTRY_VERIFY(client.isHandshakeComplete());
         QCOMPARE(controller.current().state, RemoteTelemetryView::State::Waiting);
-        QVERIFY(controller.bannerText().contains(QStringLiteral("waiting for telemetry")));
+        QVERIFY(controller.bannerText().contains(QStringLiteral("waiting for measurements")));
+        QVERIFY2(OperatorWording::isPlain(controller.bannerText()), qPrintable(controller.bannerText()));
 
         guiWire->observation.pongRttMs = 83;
         guiWire->observation.pongAgeMs = 20000; // older than station freshness, still valid RTT
@@ -142,7 +144,7 @@ private slots:
         QVERIFY(controller.current().playbackActive);
         QCOMPARE(controller.history().rawObservationCount(Metric::RadioRxMbps), 1);
         QCOMPARE(controller.history().series(Metric::PlaybackDecodedPacketsPerSecond, now, 60).points.last().value, 25.0);
-        QVERIFY(controller.detailText().contains(QStringLiteral("excluding media")));
+        QVERIFY(controller.detailText().contains(QStringLiteral("not counting audio, display or network overhead")));
         QVERIFY(controller.detailText().contains(QStringLiteral("measured 20000 ms ago")));
         // R-R3-23 Task 4: measured values, rounded, labelled with what they
         // are, no RTP/generation words.
@@ -161,8 +163,13 @@ private slots:
         // Fix wave M1: the connect-time backlog discard is shown, and it is
         // a separate count from "admitted" (the receiver excludes it).
         QVERIFY2(controller.detailText().contains(QStringLiteral(
-                     "admitted 27, discarded before playback 62, decoded 25,")),
+                     "accepted 27, discarded before playback 62, decoded 25,")),
                  qPrintable(controller.detailText()));
+        // R-R3-21: every line of the explanation is in user words.
+        for (const QString& line : controller.detailText().split(QLatin1Char('\n'))) {
+            QVERIFY2(OperatorWording::isPlain(line), qPrintable(line));
+        }
+        QVERIFY2(OperatorWording::isPlain(controller.bannerText()), qPrintable(controller.bannerText()));
 
         // The previous context failed and restarted entirely between polls.
         // Its per-context counters have reset; the actual interruption remains.
@@ -190,7 +197,8 @@ private slots:
         QCOMPARE(controller.current().state, RemoteTelemetryView::State::Stale);
         QVERIFY(!controller.current().radio.rxMbps);
         QCOMPARE(controller.history().rawObservationCount(Metric::RadioRxMbps), 1);
-        QVERIFY(controller.bannerText().contains(QStringLiteral("telemetry stale")));
+        QVERIFY(controller.bannerText().contains(QStringLiteral("measurements out of date")));
+        QVERIFY2(OperatorWording::isPlain(controller.bannerText()), qPrintable(controller.bannerText()));
         QCOMPARE(controller.current().coreRttMs, std::optional<quint64>(83));
         guiWire->observation.pongAgeMs = 60001;
         controller.sampleNow();
@@ -506,7 +514,8 @@ private slots:
         client.startSession(gui, server.token());
         QTRY_VERIFY(client.isHandshakeComplete());
         QCOMPARE(controller.current().state, RemoteTelemetryView::State::Unsupported);
-        QVERIFY(controller.bannerText().contains(QStringLiteral("telemetry unsupported")));
+        QVERIFY(controller.bannerText().contains(QStringLiteral("measurements not offered")));
+        QVERIFY2(OperatorWording::isPlain(controller.bannerText()), qPrintable(controller.bannerText()));
         QVERIFY(!controller.current().radio.rxMbps);
         client.disconnectFromStation(QStringLiteral("done"));
     }

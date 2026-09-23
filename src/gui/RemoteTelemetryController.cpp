@@ -389,9 +389,9 @@ QString RemoteTelemetryController::bannerText() const
     QStringList parts;
     switch (m_view.state) {
     case RemoteTelemetryView::State::Disconnected: return {};
-    case RemoteTelemetryView::State::Unsupported: parts << tr("telemetry unsupported"); break;
-    case RemoteTelemetryView::State::Waiting: parts << tr("waiting for telemetry"); break;
-    case RemoteTelemetryView::State::Stale: parts << tr("telemetry stale"); break;
+    case RemoteTelemetryView::State::Unsupported: parts << tr("measurements not offered"); break;
+    case RemoteTelemetryView::State::Waiting: parts << tr("waiting for measurements"); break;
+    case RemoteTelemetryView::State::Stale: parts << tr("measurements out of date"); break;
     case RemoteTelemetryView::State::Current:
         parts << (m_view.radio.connected
             ? tr("Radio ↓%1 ↑%2 Mbps").arg(number(m_view.radio.rxMbps), number(m_view.radio.txMbps))
@@ -423,20 +423,20 @@ QString RemoteTelemetryController::bannerText() const
 
 QString RemoteTelemetryController::detailText() const
 {
-    if (m_view.state == RemoteTelemetryView::State::Disconnected) { return tr("Current telemetry unavailable while disconnected."); }
+    if (m_view.state == RemoteTelemetryView::State::Disconnected) { return tr("No current measurements while disconnected."); }
     QStringList text{bannerText()};
     if (m_view.stationAgeMs) { text << tr("Core measurements received %1 ms ago.").arg(*m_view.stationAgeMs); }
-    text << tr("Radio rates: Core ↔ radio, in Mbps. Control payload: GUI ↔ Core, excluding media and transport overhead.");
-    text << tr("Control payload RX %1 / TX %2 kbit/s").arg(number(m_view.controlRxKbps), number(m_view.controlTxKbps));
-    text << tr("GUI-observed application traffic: Core→GUI %1 / GUI→Core %2 / total %3 kbps.")
+    text << tr("Radio rates: between the Core and the radio, in Mbps. Control traffic: between this app and the Core, not counting audio, display or network overhead.");
+    text << tr("Control traffic received %1 / sent %2 kbit/s").arg(number(m_view.controlRxKbps), number(m_view.controlTxKbps));
+    text << tr("Traffic seen by this app: Core→app %1 / app→Core %2 / total %3 kbps.")
         .arg(number(m_view.coreGuiRxKbps), number(m_view.coreGuiTxKbps), number(m_view.coreGuiTotalKbps));
-    text << tr("Total includes control text, display and audio-track messages. Valid audio content received (Opus or lossless): %1 kbps, already included in total. Audio transmit is inactive in receive-only mode.")
+    text << tr("Total includes control, display and audio messages. Audio content received (Opus or lossless): %1 kbps, already included in total. No audio is sent to the Core in receive-only mode.")
         .arg(number(m_view.audioPayloadRxKbps));
-    text << tr("Binary audio-track messages received: %1 kbps, including RTP headers and packets later dropped locally. The audio content subset counts validated receiver submissions, including duplicates.")
+    text << tr("Audio packets received: %1 kbps, including packet headers and packets this computer later dropped. Audio content counts the sound in the packets it accepted, including duplicates.")
         .arg(number(m_view.audioRtpRxKbps));
     text << tr("Application bytes exclude transport, encryption, VPN and network overhead. Outgoing media counts submissions to the transport, including queued or failed sends; it does not prove delivery.");
-    text << (m_view.coreRttAgeMs ? tr("Core RTT: WebSocket round trip, measured %1 ms ago.").arg(*m_view.coreRttAgeMs)
-        : tr("Core RTT: no recent pong measurement."));
+    text << (m_view.coreRttAgeMs ? tr("Core RTT: round trip to the Core and back, measured %1 ms ago.").arg(*m_view.coreRttAgeMs)
+        : tr("Core RTT: not measured recently."));
     text << (m_view.radio.rttMs && m_view.radio.rttAgeMs
         ? tr("Radio RTT: %1 ms, measured %2 ms ago.").arg(*m_view.radio.rttMs).arg(*m_view.radio.rttAgeMs)
         : tr("Radio RTT: unavailable."));
@@ -446,7 +446,7 @@ QString RemoteTelemetryController::detailText() const
              number(m_view.coreAudio.sendAcceptedPerSecond), number(m_view.coreAudio.sendRejectedPerSecond),
              number(m_view.coreAudio.sourceDropsPerSecond));
     const auto& p = m_view.playback;
-    text << tr("Client speaker buffering: %1 ms (sampled PCM ring only). This excludes network, encoder, jitter/matcher and audio-device delay.")
+    text << tr("Speaker buffering on this computer: %1 ms (audio waiting for the speaker only). This excludes network, encoder, arrival smoothing and audio-device delay.")
         .arg(number(p.running ? p.speakerQueuedMs : std::nullopt));
     // R-R3-35: a Core that answers clock probes gets the measured delay; an
     // older one keeps exactly the line it always had.
@@ -466,7 +466,7 @@ QString RemoteTelemetryController::detailText() const
     // Fix wave M1: "discarded before playback" is the connect-time backlog
     // trimmed before anything was heard; the receiver keeps it out of
     // "admitted", so the two counts do not overlap.
-    text << tr("Playback context %1: admitted %2, discarded before playback %3, decoded %4, concealed %5, late %6, invalid %7, duplicate %8, rejected headers %9.")
+    text << tr("Audio stream %1: accepted %2, discarded before playback %3, decoded %4, concealed %5, late %6, invalid %7, duplicate %8, rejected headers %9.")
         .arg(p.generation).arg(p.acceptedPackets).arg(p.startDiscardedPackets)
         .arg(p.decodedPackets).arg(p.concealedPackets)
         .arg(p.latePackets).arg(p.invalidPackets).arg(p.duplicatePackets).arg(p.rejectedHeaders);
@@ -474,7 +474,7 @@ QString RemoteTelemetryController::detailText() const
         .arg(p.underflows).arg(p.overflows).arg(p.deviceConsumedFrames)
         .arg(p.lastAdmittedPacketAgeMs ? QString::number(*p.lastAdmittedPacketAgeMs) : QStringLiteral("—"));
     if (p.lifetimeUnderflows && p.lifetimeOverflows) {
-        text << tr("Playback interruptions this GUI run: %1 underflows / %2 overflows, including retired audio contexts.")
+        text << tr("Playback interruptions since this app started: %1 underflows / %2 overflows, including earlier audio streams.")
             .arg(*p.lifetimeUnderflows).arg(*p.lifetimeOverflows);
     }
     // R-R3-23: each measurement labelled with what it is, not protocol jargon.

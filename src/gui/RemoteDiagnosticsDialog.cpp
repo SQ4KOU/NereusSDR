@@ -143,12 +143,12 @@ void RemoteDiagnosticsDialog::buildUi()
     auto* tabs = new QTabWidget(this);
     tabs->setObjectName(QStringLiteral("remoteDiagnosticsTabs"));
     QWidget* connection = buildTab(tr("Connection"));
-    m_totalTrafficGraph = addGraph(connection, tr("Total Core ↔ GUI application traffic"), tr(" kbps"));
+    m_totalTrafficGraph = addGraph(connection, tr("Total traffic between the Core and this app"), tr(" kbps"));
     m_totalTrafficGraph->setObjectName(QStringLiteral("remoteTotalTrafficGraph"));
     m_totalTrafficGraph->setToolTip(tr("Control, display and audio traffic seen at this computer, audio included whether Opus or lossless. Excludes transport, encryption, VPN and network overhead; outgoing media counts submissions, not confirmed delivery."));
     m_radioLinkGraph = addGraph(connection, tr("Radio link throughput"), tr(" Mbps"));
     m_radioLinkGraph->setObjectName(QStringLiteral("remoteRadioLinkGraph"));
-    m_controlPayloadGraph = addGraph(connection, tr("Control payload throughput"), tr(" kbit/s"));
+    m_controlPayloadGraph = addGraph(connection, tr("Control traffic"), tr(" kbit/s"));
     m_controlPayloadGraph->setObjectName(QStringLiteral("remoteControlPayloadGraph"));
     tabs->addTab(connection, tr("Connection"));
 
@@ -156,10 +156,10 @@ void RemoteDiagnosticsDialog::buildUi()
     m_roundTripGraph = addGraph(roundTrip, tr("Round-trip time"), tr(" ms"));
     m_roundTripGraph->setObjectName(QStringLiteral("remoteRoundTripGraph"));
     m_roundTripGraph->setToolTip(tr("RTT graphs hold the last measurement between pings; age advances independently and stale values disappear."));
-    m_speakerBufferGraph = addGraph(roundTrip, tr("Client speaker buffering — not end-to-end latency"), tr(" ms"));
+    m_speakerBufferGraph = addGraph(roundTrip, tr("Speaker buffering on this computer (not total delay)"), tr(" ms"));
     m_speakerBufferGraph->setObjectName(QStringLiteral("remoteSpeakerBufferGraph"));
-    m_speakerBufferGraph->setToolTip(tr("Sampled PCM speaker-ring duration only. Excludes network, encoder, jitter/matcher and audio-device delay."));
-    m_packetAgeGraph = addGraph(roundTrip, tr("Last admitted audio packet age"), tr(" ms"));
+    m_speakerBufferGraph->setToolTip(tr("Audio waiting for this computer's speaker only. Excludes network, encoder, arrival smoothing and audio-device delay."));
+    m_packetAgeGraph = addGraph(roundTrip, tr("Time since the last audio packet"), tr(" ms"));
     m_packetAgeGraph->setObjectName(QStringLiteral("remotePacketAgeGraph"));
     // R-R3-35: measured, not half a round trip. A Core that does not answer
     // clock probes leaves it empty.
@@ -305,8 +305,8 @@ void RemoteDiagnosticsDialog::refreshGraphs()
     const bool megabits = trafficMaximumKbps >= 1000.0;
     const char* trafficUnit = megabits ? " Mbps" : " kbps";
     setGraph(m_totalTrafficGraph, history, nowMs, m_rangeSeconds, {
-        {Metric::CoreGuiRxKbps, "Core → GUI received", "#00b4d8", trafficUnit},
-        {Metric::CoreGuiTxKbps, "GUI → Core outgoing", "#5fff8a", trafficUnit},
+        {Metric::CoreGuiRxKbps, "Core → app received", "#00b4d8", trafficUnit},
+        {Metric::CoreGuiTxKbps, "App → Core outgoing", "#5fff8a", trafficUnit},
         {Metric::CoreGuiTotalKbps, "Total", "#ffd700", trafficUnit},
     }, megabits ? 0.001 : 1.0);
     setGraph(m_audioTrafficGraph, history, nowMs, m_rangeSeconds, {
@@ -321,8 +321,8 @@ void RemoteDiagnosticsDialog::refreshGraphs()
         {Metric::RadioTxMbps, "Radio TX", "#5fff8a", " Mbps"},
     });
     setGraph(m_controlPayloadGraph, history, nowMs, m_rangeSeconds, {
-        {Metric::SessionPayloadRxKbps, "Control RX", "#5fa8ff", " kbit/s"},
-        {Metric::SessionPayloadTxKbps, "Control TX", "#ffd700", " kbit/s"},
+        {Metric::SessionPayloadRxKbps, "Control received", "#5fa8ff", " kbit/s"},
+        {Metric::SessionPayloadTxKbps, "Control sent", "#ffd700", " kbit/s"},
     });
     setGraph(m_roundTripGraph, history, nowMs, m_rangeSeconds, {
         {Metric::RadioRttMs, "Last radio RTT", "#00b4d8", " ms"},
@@ -340,17 +340,17 @@ void RemoteDiagnosticsDialog::refreshGraphs()
         {Metric::AudioEncodedPacketsPerSecond, "Core encoded", "#00b4d8", " packets/s"},
         {Metric::AudioSendAcceptedPerSecond, "Core accepted", "#5fff8a", " packets/s"},
         {Metric::AudioSendRejectedPerSecond, "Core refused", "#ff6060", " packets/s"},
-        {Metric::PlaybackDecodedPacketsPerSecond, "GUI decoded", "#5fa8ff", " packets/s"},
-        {Metric::PlaybackConcealedPacketsPerSecond, "GUI concealed", "#ffd700", " packets/s"},
-        {Metric::PlaybackLatePacketsPerSecond, "GUI late", "#ff8c00", " packets/s"},
+        {Metric::PlaybackDecodedPacketsPerSecond, "Decoded here", "#5fa8ff", " packets/s"},
+        {Metric::PlaybackConcealedPacketsPerSecond, "Filled in here", "#ffd700", " packets/s"},
+        {Metric::PlaybackLatePacketsPerSecond, "Late here", "#ff8c00", " packets/s"},
     });
     setGraph(m_sourceFramesGraph, history, nowMs, m_rangeSeconds, {
         {Metric::AudioSourceFramesPerSecond, "Core source", "#00b4d8", " frames/s"},
     });
     setGraph(m_audioEventsGraph, history, nowMs, m_rangeSeconds, {
         {Metric::AudioSourceDropsPerSecond, "Core source drops", "#ff6060", " events/s"},
-        {Metric::PlaybackUnderflowsPerSecond, "GUI underflows", "#ffd700", " events/s"},
-        {Metric::PlaybackOverflowsPerSecond, "GUI overflows", "#ff8c00", " events/s"},
+        {Metric::PlaybackUnderflowsPerSecond, "Underflows here", "#ffd700", " events/s"},
+        {Metric::PlaybackOverflowsPerSecond, "Overflows here", "#ff8c00", " events/s"},
     });
     refreshCoreHostGraphs();
 }
@@ -430,7 +430,7 @@ void RemoteDiagnosticsDialog::refreshDetail()
     }
     m_detailLabel->setText(m_controller
         ? m_controller->detailText()
-        : tr("Remote telemetry controller is unavailable."));
+        : tr("Measurements are not available in this window."));
 }
 
 } // namespace NereusSDR

@@ -1,6 +1,7 @@
 // no-port-check: NereusSDR-original. R3 Core session presentation and actions.
 #include "RemoteConnectionController.h"
 #include "core/session/StationClient.h"
+#include "gui/OperatorReasonText.h"
 #include "gui/RemoteAudioStatus.h"
 #include "gui/RemoteMediaController.h"
 #include "models/RadioModel.h"
@@ -113,7 +114,9 @@ QString RemoteConnectionController::detailText() const
     }
     if (m_client && !m_client->isHandshakeComplete() && !m_operatorDisconnected
         && !m_client->lastError().isEmpty()) {
-        text += tr("\nLast failure: %1").arg(m_client->lastError());
+        // The raw reason is in the log; shown here in user words (R-R3-17).
+        text += tr("\nLast failure: %1")
+                    .arg(OperatorReasonText::forDisplay(m_client->lastError()));
     }
     return text;
 }

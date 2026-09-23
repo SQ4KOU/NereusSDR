@@ -1829,6 +1829,13 @@ nereus_add_test(tst_pan_status_overlay)
 # NereusSDR-original: no upstream port.
 nereus_add_test(tst_pan_status_text)
 
+# R-R3-17 / R-R3-21 / R-R3-23 / R-R3-35: the wording sweep. Every sentence the
+# reason table can show, the rules for a reason it does not know, the remote
+# audio words and the rewritten NNR and 4O3A controls, checked against the
+# product's one internal-term list.
+# NereusSDR-original: no upstream port.
+nereus_add_test(tst_operator_wording_sweep)
+
 # ── Phase 3F Sub-Epic E Task 3: per-pan status-overlay badge clicks ─────────
 # The badges paint on every pan (00ab9522 lit WIDE, 0896b4f3 drove the whole
 # overlay from live state) but MainWindow connected txBadgeClicked /

@@ -272,6 +272,7 @@ warren@wpratt.com
 #include "NnrControls.h"
 #include "VaxChannelSelector.h"
 #include "gui/AntennaPopupBuilder.h"
+#include "gui/OperatorReasonText.h"
 #include "gui/applets/NyiOverlay.h"
 #include "core/BoardCapabilities.h"
 #include "core/SkuUiProfile.h"
@@ -2349,14 +2350,15 @@ void VfoWidget::onActiveNrChanged(NereusSDR::NrSlot slot)
 // asked, in the receiver's plain words.
 void VfoWidget::onNrSelectionRefused(const QString& reason)
 {
-    m_nrRefusal = reason;
+    // A Core refusal is shown in user words; the raw text is logged.
+    m_nrRefusal = reason.isEmpty() ? reason : OperatorReasonText::forDisplay(reason);
     if (m_slice) {
         onActiveNrChanged(m_slice->activeNr());
     }
     QWidget* anchor = m_lastNrButton ? static_cast<QWidget*>(m_lastNrButton.data())
                                      : static_cast<QWidget*>(m_nr3Btn);
-    if (anchor && anchor->isVisible() && !reason.isEmpty()) {
-        QToolTip::showText(anchor->mapToGlobal(QPoint(0, anchor->height())), reason, anchor);
+    if (anchor && anchor->isVisible() && !m_nrRefusal.isEmpty()) {
+        QToolTip::showText(anchor->mapToGlobal(QPoint(0, anchor->height())), m_nrRefusal, anchor);
     }
 }
 

@@ -2526,6 +2526,13 @@ StationClient::CommandOutcome StationClient::requestFourO3AEnabled(bool enabled)
 
 void StationClient::handleCommandResult(const SessionMessage& message)
 {
+    // R-R3-21: the app shows a refusal in user words (OperatorReasonText),
+    // so the Core's own text is kept here, each time, as it arrived.
+    if (!message.accepted) {
+        qCInfo(lcStationClient).noquote()
+            << "Station refused" << QString::fromUtf8(message.commandVerb)
+            << "command" << message.commandId << ":" << message.reason;
+    }
     if (message.commandVerb == "ps3.subscribeDisplay" && m_pendingPs3Display
         && m_pendingPs3Display->first == message.commandId) {
         const bool enabled = m_pendingPs3Display->second;

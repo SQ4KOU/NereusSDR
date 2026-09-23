@@ -8,6 +8,7 @@
 #include <QSpinBox>
 #include <QCheckBox>
 
+#include "OperatorWording.h"
 #include "core/PgxlConnection.h"
 #include "core/TgxlConnection.h"
 #include "core/SmartSdrApiListener.h"
@@ -148,6 +149,14 @@ void RemotePeripheralsTest::remoteMasterShowsPendingAndRefusalWithoutLocalActiva
     QVERIFY(master->isEnabled());
     QVERIFY(!master->text().contains(QStringLiteral("pending")));
     QVERIFY(status->text().contains(QStringLiteral("refused test request")));
+    // R-R3-21: a refusal in the Core's own terms is shown in user words.
+    model.reportStationFourO3ACommandFinished(
+        false, QStringLiteral("Remote 4O3A control requires a newer station protocol."));
+    QVERIFY2(status->text().contains(QStringLiteral("Update this app to control 4O3A on this Core.")),
+             qPrintable(status->text()));
+    QVERIFY(OperatorWording::isPlain(status->text()));
+    QVERIFY(OperatorWording::isPlain(master->toolTip()));
+    model.reportStationFourO3ACommandFinished(false, QStringLiteral("Core refused test request"));
     QVERIFY(QMetaObject::invokeMethod(&page, "onMasterToggled", Qt::DirectConnection,
                                      Q_ARG(bool, true)));
     QVERIFY(!master->isEnabled());

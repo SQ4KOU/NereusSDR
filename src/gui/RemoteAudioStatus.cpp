@@ -241,7 +241,7 @@ QString formatRemoteAudioDetails(const RemoteAudioStatus& status,
             lines << remoteAudioQualityReasonText(*status.qualityReason);
         }
     }
-    lines << QStringLiteral("Codec: %1").arg(remoteAudioCodecText(status));
+    lines << QStringLiteral("Audio format: %1").arg(remoteAudioCodecText(status));
     lines << QStringLiteral("Output: %1 (selected)").arg(status.selectedOutput);
 
     const bool showHealth = status.state != State::NotConnected

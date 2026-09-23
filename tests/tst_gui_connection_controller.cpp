@@ -23,6 +23,7 @@
 
 #include <chrono>
 
+#include "OperatorWording.h"
 #include "core/AppSettings.h"
 #include "core/RadioDiscovery.h"
 #include "core/session/StationClient.h"
@@ -197,7 +198,8 @@ void TestGuiConnectionController::managedConnectActionOpensSelectorForEmptyLocal
     QVERIFY(details && details->isEnabled());
     details->click();
     auto* notice = controller.selector()->findChild<QLabel*>(QStringLiteral("connectionSelectorNotice"));
-    QVERIFY(notice && notice->text().contains(QStringLiteral("This desktop includes Core and DSP")));
+    QVERIFY(notice && notice->text().contains(QStringLiteral("This computer runs its own Core")));
+    QVERIFY(OperatorWording::isPlain(notice->text()));
     QVERIFY(window->radioModel()->connectionState() == ConnectionState::Disconnected);
     controller.shutdown();
 }

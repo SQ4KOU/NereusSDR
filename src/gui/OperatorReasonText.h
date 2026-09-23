@@ -11,12 +11,18 @@
 //
 // The reasons themselves never change: older apps compare some of them as
 // exact text, and the log keeps the raw text. Only what a user reads is
-// translated, here, when it is shown (R-R3-21, R-R3-37).
+// translated, here, when it is shown (R-R3-17, R-R3-21, R-R3-23, R-R3-35,
+// R-R3-37).
 //
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-23  J.J. Boyd / KG4VCF  Created. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  Link, audio and display, command and
+//                                    model refusal reasons; unknown reasons
+//                                    shown as sent when plain; the one
+//                                    internal-term list. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -25,14 +31,27 @@
 
 namespace NereusSDR::OperatorReasonText {
 
-/// A sentence in user words saying why, for a reason as the Core sent it.
-/// An unknown reason gets a general sentence, never the raw text.
+/// A sentence in user words saying why, for a reason as the Core sent it
+/// or this computer recorded it. A reason the table does not know is shown
+/// as sent when it names no internal term; otherwise, and for an empty
+/// reason, a general sentence. Each reason shown in other words is written
+/// to the log once, raw, so the log always has it.
 QString forDisplay(const QString& wireReason);
 
 /// A short line for a narrow pan, for the same reason.
 QString shortForDisplay(const QString& wireReason);
 
-/// Every reason the table knows, for tests that check its wording.
+/// Every reason the table knows (one example for each worded pattern), for
+/// tests that check its wording.
 QStringList knownReasons();
+
+/// The words nothing a user reads may use: internal subsystem, roadmap and
+/// wire terms. Each matches at the start of a word, case-insensitively, so
+/// "capabilit" also catches "capabilities" and "plane" does not catch
+/// "airplane". Tests use this same list (tests/OperatorWording.h).
+const QStringList& internalTerms();
+
+/// The first internal term `text` names, or an empty string.
+QString internalTermIn(const QString& text);
 
 } // namespace NereusSDR::OperatorReasonText

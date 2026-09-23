@@ -6,6 +6,7 @@
 #include "core/AppSettings.h"
 #include "core/dsp/DspAssetService.h"
 #include "core/session/PureSignalSessionFacade.h"
+#include "gui/OperatorReasonText.h"
 #include "gui/StyleConstants.h"
 #include "models/RadioModel.h"
 
@@ -165,7 +166,7 @@ DspAssetDialog::DspAssetDialog(RadioModel* radio, DspAssetService* service,
         }
         connect(m_service, &QObject::destroyed, this, [this] {
             abortOperation(false);
-            showError(tr("The station asset service is no longer available."));
+            showError(tr("Model and correction files are no longer available from this Core."));
         });
     }
     if (m_radio) {
@@ -178,7 +179,7 @@ DspAssetDialog::DspAssetDialog(RadioModel* radio, DspAssetService* service,
     }
 
     if (!m_service) {
-        showError(tr("DSP asset management is not available for this station."));
+        showError(tr("Model and correction files cannot be managed on this Core."));
         updateButtons();
         return;
     }
@@ -207,7 +208,7 @@ void DspAssetDialog::buildUi()
         auto* selectionGroup = new QGroupBox(tr("Model selection"), this);
         selectionGroup->setObjectName(QStringLiteral("nnrAssetSelectionGroup"));
         auto* form = new QFormLayout(selectionGroup);
-        const std::array<QString, 2> names{tr("Standard slot"), tr("Premium slot")};
+        const std::array<QString, 2> names{tr("Standard model"), tr("Premium model")};
         for (int slot = 0; slot < 2; ++slot) {
             auto* row = new QWidget(selectionGroup);
             auto* rowLayout = new QHBoxLayout(row);
@@ -316,7 +317,8 @@ void DspAssetDialog::buildUi()
                 text += tr("\nCompatibility: %1").arg(asset.compatibility);
             }
             if (!asset.validationError.isEmpty()) {
-                text += tr("\nValidation: %1").arg(asset.validationError);
+                text += tr("\nValidation: %1")
+                            .arg(OperatorReasonText::forDisplay(asset.validationError));
             }
             m_detailsText->setText(text);
         } else {
@@ -418,7 +420,7 @@ bool DspAssetDialog::beginRequest(Operation operation, const QByteArray& verb,
     m_requestId = m_service->request(verb, args);
     if (m_requestId == 0) {
         m_operation = Operation::Idle;
-        showError(tr("The station could not start the DSP asset request."));
+        showError(tr("This request could not be sent to the Core."));
         emit operationFinished(false, m_operationStatus->text());
         updateButtons();
         return false;
@@ -565,7 +567,8 @@ void DspAssetDialog::updateSelectionSummary()
     for (int slot = 0; slot < 2; ++slot) {
         m_actualLabels[slot]->setText(tr("Active: %1").arg(shortId(active[slot])));
     }
-    QString status = m_service->nnrModelStatus();
+    const QString rawStatus = m_service->nnrModelStatus();
+    QString status = rawStatus.isEmpty() ? rawStatus : OperatorReasonText::forDisplay(rawStatus);
     if (m_service->nnrModelSelectionPending()) {
         status = tr("Pending reconnect. %1").arg(status);
     }
@@ -618,8 +621,9 @@ void DspAssetDialog::updateButtons()
 
 void DspAssetDialog::showError(const QString& error)
 {
+    // A Core refusal is shown in user words; the raw text is logged.
     if (m_operationStatus) {
-        m_operationStatus->setText(error);
+        m_operationStatus->setText(OperatorReasonText::forDisplay(error));
     }
 }
 
@@ -628,7 +632,8 @@ void DspAssetDialog::finishOperation(bool accepted, const QString& reason)
     m_requestId = 0;
     m_operation = Operation::Idle;
     if (!reason.isEmpty()) {
-        m_operationStatus->setText(reason);
+        // Shown in user words; operationFinished() keeps the raw reason.
+        m_operationStatus->setText(OperatorReasonText::forDisplay(reason));
     }
     updateButtons();
     emit operationFinished(accepted, reason);
@@ -786,7 +791,7 @@ void DspAssetDialog::onRequestCompleted(quint32 id, bool accepted,
         return;
     }
     if (!accepted) {
-        const QString message = reason.isEmpty() ? tr("The station refused the DSP asset request.")
+        const QString message = reason.isEmpty() ? tr("The Core refused this request.")
                                                   : reason;
         const bool importActive = completed == Operation::BeginImport
                                   || completed == Operation::ImportChunk
@@ -952,7 +957,7 @@ void DspAssetDialog::chooseImportFile()
     QString filter;
     switch (m_kind) {
     case DspAssetKind::NnrModel:
-        filter = tr("WDSP neural models (*.bin *.nn);;All files (*)");
+        filter = tr("Neural models (*.bin *.nn);;All files (*)");
         break;
     case DspAssetKind::Ps3Correction:
         filter = tr("PureSignal v2 corrections (*.txt *.ps3);;All files (*)");
@@ -961,7 +966,7 @@ void DspAssetDialog::chooseImportFile()
         filter = tr("NR3 models (*.bin *.rnnn);;All files (*)");
         break;
     }
-    const QString path = QFileDialog::getOpenFileName(this, tr("Import DSP asset"), {}, filter);
+    const QString path = QFileDialog::getOpenFileName(this, tr("Import file"), {}, filter);
     if (path.isEmpty()) {
         return;
     }
@@ -994,7 +999,7 @@ void DspAssetDialog::chooseExportFile()
     if (suggested.isEmpty()) {
         suggested = QStringLiteral("dsp-asset");
     }
-    const QString path = QFileDialog::getSaveFileName(this, tr("Export DSP asset"),
+    const QString path = QFileDialog::getSaveFileName(this, tr("Export file"),
                                                        suggested + suffix);
     if (!path.isEmpty()) {
         exportAssetToFile(id, path);
@@ -1013,7 +1018,7 @@ void DspAssetDialog::applyNnrModels()
     }
     m_operationStatus->setText(reason.isEmpty()
                                    ? tr("Reconnect requested. The station will report when models are active.")
-                                   : reason);
+                                   : OperatorReasonText::forDisplay(reason));
 }
 
 void DspAssetDialog::restoreSelectedCorrection()
@@ -1067,7 +1072,7 @@ void DspAssetDialog::retireForSessionChange()
         return;
     }
     abortOperation(true);
-    showError(tr("The station session changed. Reopen the asset manager to refresh its state."));
+    showError(tr("The connection to the Core changed. Reopen this window to see the Core's files again."));
     hide();
 }
 
@@ -1222,11 +1227,13 @@ void Nr3ModelPicker::updateState()
     if (!supported) {
         m_status->setText(tr("This Core cannot change the NR3 model."));
     } else if (!m_selectFailure.isEmpty()) {
-        m_status->setText(m_selectFailure);
+        // Shown in user words; selectionFinished() keeps the raw reason.
+        m_status->setText(OperatorReasonText::forDisplay(m_selectFailure));
     } else if (!idle) {
         m_status->setText(tr("Changing the NR3 model…"));
     } else {
-        m_status->setText(m_service->nr3ModelStatus());
+        const QString status = m_service->nr3ModelStatus();
+        m_status->setText(status.isEmpty() ? status : OperatorReasonText::forDisplay(status));
     }
 }
 

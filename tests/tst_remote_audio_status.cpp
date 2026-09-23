@@ -489,7 +489,7 @@ private slots:
         QCOMPARE(formatRemoteAudioDetails(status, playback), QStringLiteral(
             "Remote audio: Playing\n"
             "Audio quality: Lossless\n"
-            "Codec: Lossless stereo, 16-bit, 1536\u00A0kbit/s, 4\u00A0ms packets\n"
+            "Audio format: Lossless stereo, 16-bit, 1536\u00A0kbit/s, 4\u00A0ms packets\n"
             "Output: System default (selected)\n"
             "Arrival jitter: not measured yet\n"
             "Missing packets: none received yet\n"
@@ -505,7 +505,7 @@ private slots:
             "Remote audio: Playing\n"
             "Audio quality: Opus\n"
             "This Core does not allow lossless audio.\n"
-            "Codec: Opus stereo, 24\u00A0kbit/s target")));
+            "Audio format: Opus stereo, 24\u00A0kbit/s target")));
 
         // The link trial failed.
         status.qualityReason = RemoteAudioQualityReason::NetworkTooSlow;
@@ -814,7 +814,7 @@ private slots:
             playback.reorderQueuedMs = 80.0;
             QCOMPARE(formatRemoteAudioDetails(status, playback), QStringLiteral(
                 "Remote audio: Playing\n"
-                "Codec: Opus stereo, 24\u00A0kbit/s target, 40\u00A0ms packets, audio up to 8\u00A0kHz\n"
+                "Audio format: Opus stereo, 24\u00A0kbit/s target, 40\u00A0ms packets, audio up to 8\u00A0kHz\n"
                 "Output: System default (selected)\n"
                 "Arrival jitter: 3\u00A0ms\n"
                 "Missing packets: 2 of 100\n"
@@ -836,7 +836,7 @@ private slots:
             playback.speakerQueuedMs = 12.0;
             QCOMPARE(formatRemoteAudioDetails(status, playback), QStringLiteral(
                 "Remote audio: Playing\n"
-                "Codec: Not reported by this Core\n"
+                "Audio format: Not reported by this Core\n"
                 "Output: System default (selected)\n"
                 "Arrival jitter: 1\u00A0ms\n"
                 "Missing packets: 0 of 50\n"
@@ -860,7 +860,7 @@ private slots:
             QCOMPARE(formatRemoteAudioDetails(status, playback), QStringLiteral(
                 "Remote audio: Playback problem on this computer\n"
                 "Problem: The speaker device stopped playing audio.\n"
-                "Codec: Audio is off\n"
+                "Audio format: Audio is off\n"
                 "Output: USB DAC (selected)\n"
                 "Arrival jitter: 0\u00A0ms\n"
                 "Missing packets: 7 of 200\n"
@@ -887,7 +887,7 @@ private slots:
             QCOMPARE(formatRemoteAudioDetails(status, playback), QStringLiteral(
                 "Remote audio: Muted on this computer\n"
                 "Problem: The speaker device stopped playing audio.\n"
-                "Codec: Opus stereo, 24\u00A0kbit/s target, 40\u00A0ms packets, audio up to 8\u00A0kHz\n"
+                "Audio format: Opus stereo, 24\u00A0kbit/s target, 40\u00A0ms packets, audio up to 8\u00A0kHz\n"
                 "Output: System default (selected)"));
         }
 
@@ -902,7 +902,7 @@ private slots:
             RemoteAudioReceiverTelemetry playback;
             QCOMPARE(formatRemoteAudioDetails(status, playback), QStringLiteral(
                 "Remote audio: Waiting for audio from Core\n"
-                "Codec: Audio is off\n"
+                "Audio format: Audio is off\n"
                 "Output: System default (selected)\n"
                 "Arrival jitter: not measured yet\n"
                 "Missing packets: none received yet\n"

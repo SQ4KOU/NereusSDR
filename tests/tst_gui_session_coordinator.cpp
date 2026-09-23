@@ -7,6 +7,7 @@
 #include <QTcpServer>
 #include <QWebSocketServer>
 
+#include "OperatorWording.h"
 #include "core/AppSettings.h"
 #include "core/RadioDiscovery.h"
 #include "core/WdspEngine.h"
@@ -305,7 +306,7 @@ private slots:
         StationClient* client = window->findChild<StationClient*>();
         QVERIFY(client);
         QTRY_VERIFY(client->isHandshakeComplete());
-        const QString lost = QStringLiteral("Station link lost: ");
+        const QString lost = QStringLiteral("Link to the Core lost: ");
         const QString retry = QStringLiteral("Reconnecting to station");
         const auto failure = [&](const QString& reason, int attempt) {
             dismissToasts(window);
@@ -349,6 +350,16 @@ private slots:
         failure(QStringLiteral("Connection refused"), 1);
         QCOMPARE(toastsStartingWith(window, lost), 1);
         QCOMPARE(toastsStartingWith(window, retry), 1);
+
+        // R-R3-17/21: a reason in the Core's own terms is toasted in user
+        // words; the comparison above still ran on the raw text.
+        failure(QStringLiteral("heartbeat timeout"), 1);
+        QCOMPARE(toastsStartingWith(window,
+                     lost + QStringLiteral("The connection to the Core went quiet, so it was closed.")),
+                 1);
+        for (StatusToast* toast : window->findChildren<StatusToast*>()) {
+            QVERIFY2(OperatorWording::isPlain(toast->message()), qPrintable(toast->message()));
+        }
         sessions.shutdown();
     }
 
@@ -381,7 +392,7 @@ private slots:
         QVERIFY(client);
         QVERIFY(controller);
         QTRY_VERIFY(client->isHandshakeComplete());
-        const QString lost = QStringLiteral("Station link lost: ");
+        const QString lost = QStringLiteral("Link to the Core lost: ");
         const QString retry = QStringLiteral("Reconnecting to station");
 
         // The link drops and a retry is pending: announced once.

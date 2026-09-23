@@ -19,6 +19,7 @@
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "core/settings/SettingsProxy.h"
+#include "OperatorWording.h"
 #include "fakes/LoopbackTransport.h"
 #include "gui/RemoteDiagnosticsDialog.h"
 #include "gui/RemoteTelemetryController.h"
@@ -72,7 +73,8 @@ private slots:
         QTRY_VERIFY(dialog.controller() == nullptr);
         auto* detail = dialog.findChild<QLabel*>(QStringLiteral("remoteDiagnosticsDetail"));
         QVERIFY(detail);
-        QVERIFY(detail->text().contains(QStringLiteral("unavailable")));
+        QVERIFY(detail->text().contains(QStringLiteral("not available")));
+        QVERIFY(OperatorWording::isPlain(detail->text()));
     }
 
     void authenticatedTelemetryDrivesVisibleProductionGraphs()
@@ -192,8 +194,8 @@ private slots:
         QCOMPARE(radioRx->points.constLast().y(), 12.5);
         QCOMPARE(radioTx->points.constLast().y(), 0.1);
 
-        const auto* controlRx = namedSeries(controlGraph, QStringLiteral("Control RX"));
-        const auto* controlTx = namedSeries(controlGraph, QStringLiteral("Control TX"));
+        const auto* controlRx = namedSeries(controlGraph, QStringLiteral("Control received"));
+        const auto* controlTx = namedSeries(controlGraph, QStringLiteral("Control sent"));
         QVERIFY(controlRx && controlTx);
         QVERIFY(!controlRx->points.isEmpty() && !controlTx->points.isEmpty());
         QCOMPARE(controlRx->unitSuffix, QStringLiteral(" kbit/s"));
@@ -209,6 +211,23 @@ private slots:
         QCOMPARE(coreRtt->points.constLast().y(), 83.0);
         QVERIFY(rttGraph->toolTip().contains(QStringLiteral("hold the last measurement")));
 
+        // R-R3-21: every series name, graph explanation and detail line the
+        // window shows is in user words.
+        for (QWidget* widget : dialog.findChildren<QWidget*>()) {
+            const auto* graph = dynamic_cast<const TimeSeriesGraphWidget*>(widget);
+            if (!graph) { continue; }
+            for (const TimeSeriesGraphWidget::Series& series : graph->series()) {
+                QVERIFY2(OperatorWording::isPlain(series.label), qPrintable(series.label));
+            }
+            QVERIFY2(graph->toolTip().isEmpty() || OperatorWording::isPlain(graph->toolTip()),
+                     qPrintable(graph->toolTip()));
+        }
+        const auto* detailLabel = dialog.findChild<QLabel*>(QStringLiteral("remoteDiagnosticsDetail"));
+        QVERIFY(detailLabel);
+        for (const QString& line : detailLabel->text().split(QLatin1Char('\n'))) {
+            QVERIFY2(OperatorWording::isPlain(line), qPrintable(line));
+        }
+
         const QPixmap rendered = dialog.grab();
         QVERIFY(!rendered.isNull());
 
@@ -220,8 +239,8 @@ private slots:
         QVERIFY(total);
         QCOMPARE(total->unitSuffix, QStringLiteral(" Mbps"));
         QCOMPARE(total->points.last().y(), 1.6);
-        QCOMPARE(namedSeries(totalGraph, QStringLiteral("Core → GUI received"))->unitSuffix, total->unitSuffix);
-        QCOMPARE(namedSeries(totalGraph, QStringLiteral("GUI → Core outgoing"))->unitSuffix, total->unitSuffix);
+        QCOMPARE(namedSeries(totalGraph, QStringLiteral("Core → app received"))->unitSuffix, total->unitSuffix);
+        QCOMPARE(namedSeries(totalGraph, QStringLiteral("App → Core outgoing"))->unitSuffix, total->unitSuffix);
 
         client.disconnectFromStation(QStringLiteral("test reconnect"));
         QCoreApplication::processEvents();

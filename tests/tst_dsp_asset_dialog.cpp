@@ -3,6 +3,7 @@
 
 #include <QtTest/QtTest>
 
+#include "OperatorWording.h"
 #include "core/AppSettings.h"
 #include "core/dsp/DspAssetService.h"
 #include "core/session/PureSignalSessionFacade.h"
@@ -207,6 +208,11 @@ void TestDspAssetDialog::missingDesiredSelectionRemainsVisibleAndPending()
     QVERIFY(combo->currentText().contains(QStringLiteral("Missing")));
     QVERIFY(service.nnrModelSelectionPending());
     QVERIFY(status->text().contains(QStringLiteral("Pending")));
+    // R-R3-21: the selection rows and their status are in user words.
+    for (const QLabel* label : dialog.findChildren<QLabel*>()) {
+        QVERIFY2(label->text().isEmpty() || OperatorWording::isPlain(label->text()),
+                 qPrintable(label->text()));
+    }
 }
 
 void TestDspAssetDialog::refusedSelectionRestoresCoreState()

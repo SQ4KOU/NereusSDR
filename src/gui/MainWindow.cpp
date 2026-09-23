@@ -254,6 +254,7 @@ warren@wpratt.com
 #include "MainWindow.h"
 #include "ConnectionPanel.h"
 #include "NetworkDiagnosticsDialog.h"
+#include "OperatorReasonText.h"
 #include "RemoteDiagnosticsDialog.h"
 #include "RemoteTelemetryController.h"
 #include "SupportDialog.h"
@@ -1102,8 +1103,11 @@ void MainWindow::ensureRemoteSession()
             }
         });
         connect(m_remoteMedia, &RemoteMediaController::errorOccurred, this, [this](const QString& reason) {
+            // The raw reason is for the log; the toast says it in user
+            // words (R-R3-21, R-R3-23).
             qCWarning(lcConnection) << "Station media:" << reason;
-            showToast(tr("Station media: %1").arg(reason), ToastSeverity::Warning, 5000);
+            showToast(tr("Audio and display: %1").arg(OperatorReasonText::forDisplay(reason)),
+                      ToastSeverity::Warning, 5000);
         });
         connect(m_remoteMedia, &RemoteMediaController::recoveryRequested,
                 m_remoteConnection, &RemoteConnectionController::recoverMediaSession,
@@ -1154,7 +1158,10 @@ void MainWindow::ensureRemoteSession()
             }
             m_stationLinkLostSeen = true;
             m_lastStationLinkLostReason = reason;
-            showToast(tr("Station link lost: %1").arg(reason),
+            // The raw reason is logged above and compared as text here;
+            // only the toast is in user words (R-R3-17, R-R3-21).
+            showToast(tr("Link to the Core lost: %1")
+                          .arg(OperatorReasonText::forDisplay(reason)),
                       ToastSeverity::Warning, 5000);
         });
         connect(m_stationClient, &StationClient::reconnectScheduled, this,
@@ -2421,7 +2428,8 @@ void MainWindow::onAddTnfClicked(const QString& panId)
 // nothing at all, which reads as a dead button.
 void MainWindow::onNotchAddRejected(const QString& reason)
 {
-    showToast(tnfAddRejectedNotice(reason), ToastSeverity::Warning, 3000);
+    showToast(tnfAddRejectedNotice(OperatorReasonText::forDisplay(reason)),
+              ToastSeverity::Warning, 3000);
 }
 
 // R-R3-21: a remote window's move, toggle or delete the Core refused (a notch
@@ -2429,7 +2437,7 @@ void MainWindow::onNotchAddRejected(const QString& reason)
 // window has already put the Core's list back; this says why.
 void MainWindow::onNotchRequestRefused(const QString& reason)
 {
-    showToast(reason, ToastSeverity::Warning, 3000);
+    showToast(OperatorReasonText::forDisplay(reason), ToastSeverity::Warning, 3000);
 }
 
 // Fix wave I3 (R-R3-21): a noise reducer a receiver would not turn on, for
@@ -2438,7 +2446,7 @@ void MainWindow::onNotchRequestRefused(const QString& reason)
 void MainWindow::onNrSelectionRefused(const QString& reason)
 {
     if (!reason.isEmpty()) {
-        showToast(reason, ToastSeverity::Warning, 3000);
+        showToast(OperatorReasonText::forDisplay(reason), ToastSeverity::Warning, 3000);
     }
 }
 
@@ -5105,7 +5113,8 @@ void MainWindow::buildUI()
     });
     connect(m_radioModel, &RadioModel::sliceAddRejected, this,
             [this](const QString& reason) {
-        showToast(reason, ToastSeverity::Warning, 4000);
+        // A remote window's refusal is the Core's text; shown in user words.
+        showToast(OperatorReasonText::forDisplay(reason), ToastSeverity::Warning, 4000);
     });
 
     // Phase 3F Sub-Epic I closeout, defect F4.
@@ -5117,7 +5126,7 @@ void MainWindow::buildUI()
     // needs time to read.
     connect(m_radioModel, &RadioModel::sliceRetuneRejected, this,
             [this](int, const QString& reason) {
-        showToast(reason, ToastSeverity::Warning, 6000);
+        showToast(OperatorReasonText::forDisplay(reason), ToastSeverity::Warning, 6000);
     });
 
     // Phase 3F Sub-Epic I closeout, defect F3.
@@ -7854,7 +7863,11 @@ QString MainWindow::tnfAddRejectedNotice(const QString& reason)
     // ("A notch already exists within 10 Hz"), so this only names what was
     // refused. Without it a +TNF press inside the dedupe window is entirely
     // silent (plan correction 16).
-    return QStringLiteral("Notch not added: %1.").arg(reason);
+    // A reason that is already a sentence keeps its own full stop.
+    const bool sentence = reason.endsWith(QLatin1Char('.')) || reason.endsWith(QLatin1Char('!'))
+        || reason.endsWith(QLatin1Char('?'));
+    return sentence ? QStringLiteral("Notch not added: %1").arg(reason)
+                    : QStringLiteral("Notch not added: %1.").arg(reason);
 }
 
 void MainWindow::buildStatusBar()
@@ -10283,8 +10296,8 @@ void MainWindow::applyRemoteRoleGating()
         m_actManageRadios->setToolTip(
             m_connectionPickerManaged
                 ? tr("Choose a Core/radio pair or a radio for this computer")
-                : tr("Unavailable: the station is selected with --station, not from "
-                     "the radio list."));
+                : tr("Unavailable: this window was started for one Core with "
+                     "--station, so the radio list cannot change it."));
     }
     // Protocol Info dereferences connection()->radioInfo() unguarded, so it
     // is not merely useless here, it is a crash.
@@ -10293,8 +10306,8 @@ void MainWindow::applyRemoteRoleGating()
         // Fix round 1: was the one gated action with no explanation while
         // the other three carried one.
         m_actProtocolInfo->setToolTip(
-            tr("Unavailable: the radio's protocol details live on the "
-               "station, not in this window."));
+            tr("Unavailable: the radio's details are on the Core, "
+               "not in this window."));
     }
 }
 
@@ -10424,12 +10437,12 @@ void MainWindow::showStationContextMenu(const QPoint& globalPos)
         disconnectAction->setToolTip(remoteWhy);
         editAction->setEnabled(false);
         editAction->setToolTip(
-            tr("Unavailable: the station is selected with --station, not from "
-               "the radio list."));
+            tr("Unavailable: this window was started for one Core with "
+               "--station, so the radio list cannot change it."));
         forgetAction->setEnabled(false);
         forgetAction->setToolTip(
-            tr("Unavailable: the station is selected with --station, not from "
-               "the radio list."));
+            tr("Unavailable: this window was started for one Core with "
+               "--station, so the radio list cannot change it."));
     }
 
     menu.exec(globalPos);
@@ -10810,7 +10823,8 @@ void MainWindow::applyPanLayout(const QString& layoutId)
     if (!m_panStack) { return; }
     if (m_station.isRemote()
         && (!m_stationClient || !m_stationClient->isHandshakeComplete())) {
-        showToast(tr("Wait for the Core snapshot before changing the pan layout."),
+        showToast(tr("Wait until this window has the Core's settings before changing "
+                     "the pan layout."),
                   ToastSeverity::Info, 3000);
         return;
     }
