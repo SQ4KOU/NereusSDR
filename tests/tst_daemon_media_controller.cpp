@@ -2654,7 +2654,7 @@ void TstDaemonMediaController::minorEightAudioContextsCarryEncoderOrReason()
 
 // R-R3-23: nereusd's audio_bitrate reaches both the offer (the transport's
 // start options, which set the SDP ceiling) and the encoder whose profile the
-// minor-8 audio context reports.
+// minor-8 audio context reports, with the fullband sound 48 kbit/s codes.
 void TstDaemonMediaController::configuredAudioBitrateReachesOfferAndContext()
 {
     OpusAudioEncoder encoder;
@@ -2693,6 +2693,7 @@ void TstDaemonMediaController::configuredAudioBitrateReachesOfferAndContext()
     QVERIFY(decoded.has_value());
     QVERIFY(decoded->encoder.has_value());
     QCOMPARE(decoded->encoder->targetBitrate, 48000);
+    QCOMPARE(decoded->encoder->audioBandwidthHz, 20000); // fullband at 48 kbit/s
     h.finish();
 }
 

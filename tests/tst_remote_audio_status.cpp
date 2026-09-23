@@ -368,7 +368,8 @@ private slots:
     }
 
     // R-R3-23: a Core configured with audio_bitrate = 48000 encodes at that
-    // target, reports it in the minor-8 audio context, and the GUI names it.
+    // target with fullband sound, reports both in the minor-8 audio context,
+    // and the GUI names them from the report alone.
     void coreAt48000ReportsThatTargetInItsContext()
     {
         OpusAudioCodecConfig high;
@@ -380,6 +381,7 @@ private slots:
         const std::optional<OpusEncoderProfile> profile = encoder.profile();
         QVERIFY(profile.has_value());
         QCOMPARE(profile->targetBitrate, 48'000);
+        QCOMPARE(profile->audioBandwidthHz, 20'000);
 
         std::optional<RemoteAudioContextMessage> context = contextOf(ContextKind::Enabled);
         QVERIFY(context.has_value());
@@ -388,6 +390,9 @@ private slots:
         QCOMPARE(wire.value(QStringLiteral("encoder")).toObject()
                      .value(QStringLiteral("targetBitrate")).toInteger(),
                  qint64{48'000});
+        QCOMPARE(wire.value(QStringLiteral("encoder")).toObject()
+                     .value(QStringLiteral("audioBandwidthHz")).toInteger(),
+                 qint64{20'000});
         const std::optional<RemoteAudioContextMessage> accepted =
             decodeRemoteAudioContext(wire, true);
         QVERIFY(accepted.has_value());
@@ -398,7 +403,7 @@ private slots:
         status.detailNegotiated = true;
         status.encoder = accepted->encoder;
         QCOMPARE(remoteAudioCodecText(status),
-                 QStringLiteral("Opus stereo, 48\u00A0kbit/s target, 40\u00A0ms packets, audio up to 8\u00A0kHz"));
+                 QStringLiteral("Opus stereo, 48\u00A0kbit/s target, 40\u00A0ms packets, audio up to 20\u00A0kHz"));
     }
 
     void operatorWordingCarriesNoProtocolTerms()

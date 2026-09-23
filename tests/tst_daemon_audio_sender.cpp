@@ -298,9 +298,12 @@ private slots:
         const std::optional<OpusEncoderProfile> profile = sender.encoderProfile();
         QVERIFY(profile.has_value());
         QCOMPARE(profile->targetBitrate, 48'000);
-        // Only the bitrate moves; the rest of the profile is today's.
+        // Only the bitrate and the bandwidth it forces move: 48 kbit/s codes
+        // fullband, sound up to 20 kHz; the rest of the profile is today's.
         OpusEncoderProfile expected = *defaultSender.encoderProfile();
+        QCOMPARE(expected.audioBandwidthHz, 8'000);
         expected.targetBitrate = 48'000;
+        expected.audioBandwidthHz = 20'000;
         QCOMPARE(*profile, expected);
 
         QSignalSpy packets(&sender, &DaemonAudioSender::packetReady);

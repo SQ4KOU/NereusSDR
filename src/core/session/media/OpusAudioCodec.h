@@ -29,6 +29,12 @@ struct OpusAudioCodecConfig {
     int bitrate {24'000}; // the measured default; 48 kbit/s is the only alternate
 };
 
+/// The coded audio bandwidth the encoder forces for a supported target
+/// bitrate, as an Opus OPUS_BANDWIDTH_* value: 24000 bit/s codes wideband
+/// (sound up to 8 kHz), 48000 bit/s codes fullband (sound up to 20 kHz).
+/// Returns 0 for any other bitrate, which the encoder and decoder refuse.
+int bandwidthForBitrate(int bitrate);
+
 enum class OpusAudioCodecStatus {
     Accepted,
     Concealed,
@@ -95,7 +101,8 @@ public:
 
     bool isReady() const;
     /// Sample rate and target bitrate are read back from libopus. The coded
-    /// bandwidth is the forced bandwidth the constructor configured:
+    /// bandwidth is the forced bandwidth the constructor configured from
+    /// bandwidthForBitrate():
     /// OPUS_GET_BANDWIDTH describes the last encoded frame instead, and reads
     /// FULLBAND after construction and after reset(), which is exactly when
     /// Core announces a new audio context. Valid immediately after

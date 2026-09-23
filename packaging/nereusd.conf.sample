@@ -72,6 +72,7 @@ remote_bind = 127.0.0.1
 core_name =
 
 # Opus audio target sent to GUIs, bit/s: 24000 (default) or 48000; any other value is ignored with a warning.
+# 24000 carries sound up to 8 kHz; 48000 carries sound up to 20 kHz.
 audio_bitrate = 24000
 
 # Optional measured display limits. Set BOTH keys to positive integers after

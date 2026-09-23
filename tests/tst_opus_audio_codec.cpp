@@ -51,6 +51,23 @@ QVector<float> continuousStereoTones(int frameIndex, double leftHz, double right
     return pcm;
 }
 
+// One 40 ms frame of a phase-continuous two-tone program, the same `lowHz` +
+// `highHz` pair on both channels.
+QVector<float> continuousTonePair(int frameIndex, double lowHz, double highHz)
+{
+    QVector<float> pcm(OpusAudioCodecConfig::kFrameSamples * OpusAudioCodecConfig::kChannels);
+    for (int sample = 0; sample < OpusAudioCodecConfig::kFrameSamples; ++sample) {
+        const double time = static_cast<double>(
+            frameIndex * OpusAudioCodecConfig::kFrameSamples + sample)
+            / OpusAudioCodecConfig::kSampleRate;
+        const float value = static_cast<float>(0.25 * std::sin(2.0 * M_PI * lowHz * time)
+                                               + 0.25 * std::sin(2.0 * M_PI * highHz * time));
+        pcm[sample * 2] = value;
+        pcm[sample * 2 + 1] = value;
+    }
+    return pcm;
+}
+
 QVector<float> stereoTones(float leftHz = 700.0f, float rightHz = 1700.0f)
 {
     QVector<float> pcm(OpusAudioCodecConfig::kFrameSamples * OpusAudioCodecConfig::kChannels);
@@ -136,7 +153,8 @@ private slots:
         OpusAudioCodecConfig config;
         config.bitrate = 48'000;
         OpusAudioEncoder alternate(config);
-        const OpusEncoderProfile expected{48'000, 2, 1'920, 48'000, 8'000};
+        // R-R3-23: 48 kbit/s codes fullband, sound up to 20 kHz.
+        const OpusEncoderProfile expected{48'000, 2, 1'920, 48'000, 20'000};
         QVERIFY(alternate.profile().has_value());
         QCOMPARE(*alternate.profile(), expected);
         alternate.reset();
@@ -150,12 +168,36 @@ private slots:
         QVERIFY(!unready.profile().has_value());
     }
 
+    // R-R3-23: the two supported targets and the bandwidth each forces.
+    void bandwidthFollowsTheBitrate()
+    {
+        QCOMPARE(bandwidthForBitrate(24'000), OPUS_BANDWIDTH_WIDEBAND);
+        QCOMPARE(bandwidthForBitrate(48'000), OPUS_BANDWIDTH_FULLBAND);
+        QCOMPARE(bandwidthForBitrate(32'000), 0);
+        QCOMPARE(bandwidthForBitrate(0), 0);
+    }
+
+    void everyPacketMatchesTheReportedProfile_data()
+    {
+        QTest::addColumn<int>("bitrate");
+        QTest::addColumn<int>("bandwidth");
+        QTest::addColumn<int>("bandwidthHz");
+        QTest::newRow("24 kbit/s wideband") << 24'000 << int(OPUS_BANDWIDTH_WIDEBAND) << 8'000;
+        QTest::newRow("48 kbit/s fullband") << 48'000 << int(OPUS_BANDWIDTH_FULLBAND) << 20'000;
+    }
+
     void everyPacketMatchesTheReportedProfile()
     {
-        OpusAudioEncoder encoder;
+        QFETCH(int, bitrate);
+        QFETCH(int, bandwidth);
+        QFETCH(int, bandwidthHz);
+        OpusAudioCodecConfig config;
+        config.bitrate = bitrate;
+        OpusAudioEncoder encoder(config);
         const std::optional<OpusEncoderProfile> profile = encoder.profile();
         QVERIFY(profile.has_value());
-        QCOMPARE(profile->audioBandwidthHz, 8'000); // what OPUS_BANDWIDTH_WIDEBAND codes
+        QCOMPARE(profile->targetBitrate, bitrate);
+        QCOMPARE(profile->audioBandwidthHz, bandwidthHz);
         // Two seconds of a 997/1703 Hz stereo program per context, with the
         // reset Core performs between contexts.
         constexpr int kFramesPerContext = 50;
@@ -169,7 +211,7 @@ private slots:
                 QCOMPARE(inspected.status, OpusAudioCodecStatus::Accepted);
                 QCOMPARE(inspected.packetInfo.channels, profile->channels);
                 QCOMPARE(inspected.packetInfo.samplesPerChannel, profile->frameSamples);
-                QCOMPARE(inspected.packetInfo.bandwidth, OPUS_BANDWIDTH_WIDEBAND);
+                QCOMPARE(inspected.packetInfo.bandwidth, bandwidth);
             }
             encoder.reset();
             QVERIFY(encoder.profile().has_value());
@@ -186,12 +228,61 @@ private slots:
         const OpusRtpEncodeResult encoded = encode(encoder);
         QCOMPARE(encoded.status, OpusAudioCodecStatus::Accepted);
         QCOMPARE(encoded.packetInfo.channels, 2);
-        QCOMPARE(encoded.packetInfo.bandwidth, OPUS_BANDWIDTH_WIDEBAND);
+        QCOMPARE(encoded.packetInfo.bandwidth, OPUS_BANDWIDTH_FULLBAND);
         QCOMPARE(decoder.decodeRtp(encoded.packet, kSsrc).status, OpusAudioCodecStatus::Accepted);
         const OpusRtpDecodeResult concealed = decoder.decodeMissing();
         QCOMPARE(concealed.status, OpusAudioCodecStatus::Concealed);
         QCOMPARE(concealed.pcmInterleaved.size(), 3840);
         for (float sample : concealed.pcmInterleaved) { QVERIFY(std::isfinite(sample)); }
+    }
+
+    // R-R3-23: a 15 kHz tone above a 1 kHz tone survives encode and decode at
+    // 48 kbit/s (fullband) and is cut at 24 kbit/s (wideband, 8 kHz).
+    void highToneSurvivesOnlyAtFullband_data()
+    {
+        QTest::addColumn<int>("bitrate");
+        QTest::addColumn<bool>("keepsHighTone");
+        QTest::newRow("24 kbit/s") << 24'000 << false;
+        QTest::newRow("48 kbit/s") << 48'000 << true;
+    }
+
+    void highToneSurvivesOnlyAtFullband()
+    {
+        QFETCH(int, bitrate);
+        QFETCH(bool, keepsHighTone);
+        OpusAudioCodecConfig config;
+        config.bitrate = bitrate;
+        OpusAudioEncoder encoder(config);
+        OpusAudioDecoder decoder(config);
+        QVERIFY(encoder.isReady());
+        QVERIFY(decoder.isReady());
+        constexpr double kLowHz = 1'000.0;
+        constexpr double kHighHz = 15'000.0;
+        // One second of program, so the encoder has settled; measure the
+        // last decoded frame. Both tones fit a whole number of cycles in a
+        // frame, so frequencyEnergy sees no leakage between them.
+        constexpr int kFrames = 25;
+        QVector<float> decodedPcm;
+        for (int frame = 0; frame < kFrames; ++frame) {
+            const OpusRtpEncodeResult encoded = encoder.encode(
+                continuousTonePair(frame, kLowHz, kHighHz), static_cast<quint16>(frame),
+                static_cast<quint32>(frame * OpusAudioCodecConfig::kFrameSamples), kSsrc);
+            QCOMPARE(encoded.status, OpusAudioCodecStatus::Accepted);
+            const OpusRtpDecodeResult decoded = decoder.decodeRtp(encoded.packet, kSsrc);
+            QCOMPARE(decoded.status, OpusAudioCodecStatus::Accepted);
+            decodedPcm = decoded.pcmInterleaved;
+        }
+        for (int channel = 0; channel < OpusAudioCodecConfig::kChannels; ++channel) {
+            const double low = frequencyEnergy(decodedPcm, channel, static_cast<float>(kLowHz));
+            const double high = frequencyEnergy(decodedPcm, channel, static_cast<float>(kHighHz));
+            QVERIFY(low > 0.0);
+            const double ratio = high / low;
+            if (keepsHighTone) {
+                QVERIFY2(ratio > 0.25, qPrintable(QStringLiteral("15/1 kHz energy ratio %1").arg(ratio)));
+            } else {
+                QVERIFY2(ratio < 0.001, qPrintable(QStringLiteral("15/1 kHz energy ratio %1").arg(ratio)));
+            }
+        }
     }
 
     void sequenceAndTimestampWrap()

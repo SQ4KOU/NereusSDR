@@ -5,7 +5,8 @@
 // no-port-check: NereusSDR-original. Remote daemon R3 Task 5.
 // Profile values are pinned by
 // docs/architecture/2026-09-20-remote-daemon-r3-verification/opus-profile-probe.c
-// against Opus 940d4e5af64351ca8ba8390df3f555484c567fbb.
+// against Opus 940d4e5af64351ca8ba8390df3f555484c567fbb: 24 kbit/s codes
+// wideband (8 kHz) and 48 kbit/s codes fullband (20 kHz), stereo, 40 ms.
 //
 // =================================================================
 
@@ -19,13 +20,6 @@
 
 namespace NereusSDR {
 namespace {
-
-// The one coded bandwidth this profile forces, passed to OPUS_SET_BANDWIDTH
-// and reported by OpusAudioEncoder::profile(). libopus has no getter for a
-// forced bandwidth (OPUS_GET_BANDWIDTH reports the last encoded frame), so
-// profile() reports this value and the codec tests check it against the
-// TOC bandwidth of every packet the encoder produces.
-constexpr opus_int32 kEncoderBandwidth = OPUS_BANDWIDTH_WIDEBAND;
 
 int audioBandwidthHz(opus_int32 bandwidth)
 {
@@ -47,7 +41,7 @@ int audioBandwidthHz(opus_int32 bandwidth)
 
 bool validConfig(const OpusAudioCodecConfig& config)
 {
-    return config.bitrate == 24'000 || config.bitrate == 48'000;
+    return bandwidthForBitrate(config.bitrate) != 0;
 }
 
 bool finitePcm(const QVector<float>& pcm)
@@ -163,6 +157,23 @@ bool validPacketInfo(const OpusPacketInfo& info)
 
 } // namespace
 
+// R-R3-23: the coded bandwidth each supported target forces, passed to
+// OPUS_SET_BANDWIDTH and reported by OpusAudioEncoder::profile(). libopus
+// has no getter for a forced bandwidth (OPUS_GET_BANDWIDTH reports the last
+// encoded frame), so profile() reports this value and the codec tests check
+// it against the TOC bandwidth of every packet the encoder produces.
+int bandwidthForBitrate(int bitrate)
+{
+    switch (bitrate) {
+    case 24'000:
+        return OPUS_BANDWIDTH_WIDEBAND;
+    case 48'000:
+        return OPUS_BANDWIDTH_FULLBAND;
+    default:
+        return 0;
+    }
+}
+
 OpusRtpInspection inspectOpusRtp(const QByteArray& packet, quint32 expectedSsrc)
 {
     OpusRtpInspection result;
@@ -187,6 +198,7 @@ OpusRtpInspection inspectOpusRtp(const QByteArray& packet, quint32 expectedSsrc)
 struct OpusAudioEncoder::State {
     OpusEncoder* encoder {nullptr};
     OpusAudioCodecConfig config;
+    opus_int32 bandwidth {0}; // forced OPUS_BANDWIDTH_* for config.bitrate
 
     ~State() { opus_encoder_destroy(encoder); }
 };
@@ -206,12 +218,13 @@ OpusAudioEncoder::OpusAudioEncoder(const OpusAudioCodecConfig& config)
     int error = OPUS_OK;
     std::unique_ptr<State> state = std::make_unique<State>();
     state->config = config;
+    state->bandwidth = bandwidthForBitrate(config.bitrate);
     state->encoder = opus_encoder_create(OpusAudioCodecConfig::kSampleRate,
                                          OpusAudioCodecConfig::kChannels,
                                          OPUS_APPLICATION_AUDIO, &error);
     if (state->encoder == nullptr || error != OPUS_OK
         || opus_encoder_ctl(state->encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_MUSIC)) != OPUS_OK
-        || opus_encoder_ctl(state->encoder, OPUS_SET_BANDWIDTH(kEncoderBandwidth)) != OPUS_OK
+        || opus_encoder_ctl(state->encoder, OPUS_SET_BANDWIDTH(state->bandwidth)) != OPUS_OK
         || opus_encoder_ctl(state->encoder, OPUS_SET_BITRATE(config.bitrate)) != OPUS_OK
         || opus_encoder_ctl(state->encoder, OPUS_SET_VBR(1)) != OPUS_OK
         || opus_encoder_ctl(state->encoder, OPUS_SET_VBR_CONSTRAINT(1)) != OPUS_OK
@@ -246,7 +259,7 @@ std::optional<OpusEncoderProfile> OpusAudioEncoder::profile() const
     profile.channels = OpusAudioCodecConfig::kChannels;
     profile.frameSamples = OpusAudioCodecConfig::kFrameSamples;
     profile.targetBitrate = bitrate;
-    profile.audioBandwidthHz = audioBandwidthHz(kEncoderBandwidth);
+    profile.audioBandwidthHz = audioBandwidthHz(m_state->bandwidth);
     return profile;
 }
 
