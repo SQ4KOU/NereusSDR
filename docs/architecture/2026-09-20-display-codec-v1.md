@@ -104,3 +104,69 @@ Any malformed packet (including unknown flags, invalid floats/context, bad
 plane count/length, block overrun, invalid packing, truncation, or packet over
 the codec bound) returns `Rejected` without changing the prior accepted frame
 or reconstruction history.
+
+## Measured sizes and fragments (R-R3-03, R-R3-05)
+
+A plane of `n` samples costs at most `A(n) = 3 + 5*ceil(n/128) + n` bytes:
+the 3-byte plane header, one 5-byte block header per 128 samples, and one
+byte per sample. A keyframe is exactly that worst case, because every block is
+absolute and the encoder then picks 128-sample blocks:
+
+    keyframe = 42 + 2*A(pixels) + A(wide)     (A(0) = 0 without a 3D row)
+
+A delta is never larger: a residual block costs no more than the absolute
+block it falls back to, and the encoder takes the cheapest block size.
+`tst_display_budget` checks both rules over every combination of 15 pixel
+counts and 6 wide-row lengths with noisy, drifting and flat rows.
+
+The transport sends a display message of `n` bytes as `ceil(n / 876)` SCTP
+DATA chunks, one UDP datagram each. 876 is the DATA payload left in the
+1000-byte media packet budget: libdatachannel sets the SCTP path MTU to
+1000 - 12 - 48 - 8 - 40 = 892, usrsctp adds its 12-byte common header
+back (904) and fragments at 904 - 12 - 16 = 876
+(`IMediaTransport::kSctpDataPayloadBytes`).
+
+| Shape (trace/waterfall/3D) | Keyframe bytes | Fragments |
+| --- | ---: | ---: |
+| 1024/1024/none | 2,176 | 3 |
+| 1024/1024/768 | 2,977 | 4 |
+| 4096/4096/none | 8,560 | 10 |
+| 4096/4096/768 | 9,361 | 11 |
+| PureSignal chunk, 64 KiB | 65,536 | 75 |
+
+The channel is unordered with no retransmission, so losing any fragment loses
+the whole message; larger frames are proportionally more exposed to loss.
+Core logs the largest keyframe and delta it actually sent, with their
+fragment counts, as `daemon display diagnostics` (every 10 seconds while they
+change, and once when the media peer ends). The Rock check at 4096 points,
+60 fps with 3D, is that this line never exceeds 9,361 bytes / 11 fragments and
+that a capture shows no media datagram above 1000 bytes (969 on IPv4).
+
+## Transport limits (R-R3-04, R-R3-09)
+
+Display frames follow latest-value-wins at the producer, never a queue.
+Each process applies these SCTP settings once, before its first media peer
+(`applyMediaSctpSettingsOnce()`):
+
+- Send buffer 65,536 bytes (`kSctpSendBufferBytes`), down from the library's
+  1 MiB. It cannot be smaller: it is the 64 KiB maximum message that
+  PureSignal chunks need.
+- Receive buffer 131,072 bytes (`kSctpReceiveBufferBytes`), twice the maximum
+  message, so every message is delivered whole.
+
+When the send buffer is full, the Core refuses the next display frame instead
+of queueing it: libdatachannel holds at most the one message that did not fit,
+and the adapter refuses every further frame while that message waits. A
+refused spectrum frame is dropped, counted (`sendRefusals`), never resent, and
+the endpoint's next frame is a keyframe. A refused PureSignal chunk abandons
+the rest of its snapshot. A transport error counts (`transportErrors`), is
+logged once per distinct text per media peer, and is handled like a failed
+send. With a stalled receiver the sender holds at most the send buffer plus
+one message, and the whole path at most the two buffers plus two messages
+(`tst_media_transport`; 159,137 bytes measured against a 215,330-byte bound,
+where libdatachannel's defaults let 1,376,067 bytes pile up).
+
+The GUI keeps at most 8 received display messages or 256 KiB between drains,
+dropping the oldest first. Each dropped message is counted
+(`displayMessagesDropped`) apart from the received bytes, which count every
+arrival, and the GUI log reports drops at most every 10 seconds.

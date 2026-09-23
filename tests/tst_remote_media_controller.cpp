@@ -61,6 +61,7 @@ public:
     }
     bool sendRtp(const QByteArray&) override { return active; }
     bool isReady() const override { return active; }
+    std::optional<MediaTransportTelemetry> telemetry() const override { return traffic; }
     void activate() { active = true; emit ready(); }
     void deliver(const QByteArray& packet) { emit displayReceived(packet); }
     void failConnection(const QString& reason) { emit connectionFailed(reason); }
@@ -69,7 +70,17 @@ public:
     bool active = false;
     QPointer<DisplayTransport> other;
     QList<QByteArray> displayPackets;
+    std::optional<MediaTransportTelemetry> traffic;
 };
+
+QStringList g_remoteMediaMessages;
+void captureRemoteMediaMessages(QtMsgType, const QMessageLogContext& context,
+                                const QString& message)
+{
+    if (context.category && QByteArray(context.category) == "nereus.remote.media") {
+        g_remoteMediaMessages.append(message);
+    }
+}
 
 namespace {
 class ClosingGuiControlTransport final : public Test::LoopbackTransport {
@@ -438,6 +449,79 @@ private slots:
         }
         QCoreApplication::processEvents();
         QCOMPARE(recoveries.size(), 1);
+    }
+
+    void displayDropsAreCountedApartFromBytesAndReported()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        QPointer<DisplayTransport> media;
+        qint64 nowMs = 1'000;
+        RemoteMediaController controller(&client, &remote, nullptr, nullptr,
+            [&media](QObject* owner) -> IMediaTransport* {
+                media = new DisplayTransport(owner);
+                return media;
+            },
+            [&nowMs] { return nowMs; });
+        QCOMPARE(controller.displayMessagesDropped(), quint64(0));
+
+        auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(client.isHandshakeComplete());
+        QTRY_VERIFY(media);
+        media->activate();
+
+        g_remoteMediaMessages.clear();
+        const QtMessageHandler previous = qInstallMessageHandler(captureRemoteMediaMessages);
+        const auto restore = qScopeGuard([previous] { qInstallMessageHandler(previous); });
+        const auto reports = [] {
+            return g_remoteMediaMessages.filter(QStringLiteral("Remote display: skipped"));
+        };
+
+        MediaTransportTelemetry traffic;
+        traffic.receivedDisplayPayloadBytes = 90'000;
+        media->traffic = traffic;
+        media->deliver(QByteArrayLiteral("not-a-display-frame"));
+        QCOMPARE(controller.displayMessagesDropped(), quint64(0));
+        QVERIFY(reports().isEmpty());
+
+        // Drops are their own count; received bytes still count every arrival.
+        traffic.displayMessagesDropped = 3;
+        media->traffic = traffic;
+        media->deliver(QByteArrayLiteral("not-a-display-frame"));
+        QCOMPARE(controller.displayMessagesDropped(), quint64(3));
+        QCOMPARE(controller.trafficTelemetry()->traffic.receivedDisplayPayloadBytes,
+                 quint64(90'000));
+        QCOMPARE(reports().size(), 1);
+        QCOMPARE(reports().constLast(),
+                 QStringLiteral("Remote display: skipped 3 late updates on this computer "
+                                "to keep the picture current (3 this session)"));
+
+        // At most one report every ten seconds.
+        traffic.displayMessagesDropped = 5;
+        media->traffic = traffic;
+        nowMs += 1'000;
+        media->deliver(QByteArrayLiteral("not-a-display-frame"));
+        QCOMPARE(reports().size(), 1);
+        nowMs += 10'000;
+        media->deliver(QByteArrayLiteral("not-a-display-frame"));
+        QCOMPARE(reports().size(), 2);
+        QCOMPARE(reports().constLast(),
+                 QStringLiteral("Remote display: skipped 2 late updates on this computer "
+                                "to keep the picture current (5 this session)"));
+
+        client.disconnectFromStation(QStringLiteral("test complete"));
+        QTRY_COMPARE(controller.displayMessagesDropped(), quint64(0));
     }
 
     void deliberateSessionEndAndGenericMediaErrorDoNotRequestRecovery()

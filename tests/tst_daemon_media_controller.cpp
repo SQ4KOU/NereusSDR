@@ -51,6 +51,21 @@ namespace {
 
 constexpr char kConnectionId[] = "11111111-2222-4333-8444-555555555555";
 
+// Messages the controller wrote to its own log category while installed.
+QStringList g_daemonMediaMessages;
+void captureDaemonMediaMessages(QtMsgType, const QMessageLogContext& context,
+                                const QString& message)
+{
+    if (context.category && QByteArray(context.category) == "nereus.daemon.media") {
+        g_daemonMediaMessages.append(message);
+    }
+}
+
+bool isKeyframe(const QByteArray& frame)
+{
+    return frame.size() > 5 && (static_cast<quint8>(frame.at(5)) & 0x01) != 0;
+}
+
 class FakeTransport final : public IMediaTransport {
 public:
     explicit FakeTransport(QObject* parent = nullptr) : IMediaTransport(parent) {}
@@ -497,6 +512,8 @@ private slots:
     void grantReportsLargestSizeSharedEngineAndSourceBins();
     void budgetChargesGrantedPixels();
     void outOfRangeRequestsAreRejectedAndLeaveEndpointUntouched();
+    void displayDiagnosticsMeasureSentFramesRefusalsAndErrors();
+    void displayDiagnosticsLineReportsBytesAndFragments();
     void staleEpochAndForeignConnectionLeaveEndpointsUntouched();
 };
 
@@ -853,6 +870,132 @@ void TstDaemonMediaController::failedDisplayAttemptDebitsCreditAndRecoversWithKe
         harness.mediaTransport->displays.constLast());
     QCOMPARE(recovered.disposition, DisplayCodecDisposition::Accepted);
     harness.finish();
+}
+
+void TstDaemonMediaController::displayDiagnosticsMeasureSentFramesRefusalsAndErrors()
+{
+    g_daemonMediaMessages.clear();
+    const QtMessageHandler previous = qInstallMessageHandler(captureDaemonMediaMessages);
+    const auto restore = qScopeGuard([previous] { qInstallMessageHandler(previous); });
+
+    Harness harness;
+    harness.useManualDisplayTicks();
+    harness.establishSession();
+    QSignalSpy controls(&harness.client, &StationClient::mediaControlReceived);
+    harness.startReadyPeer();
+    QCOMPARE(harness.controller.displayDiagnostics(), DaemonDisplayDiagnostics{});
+    QJsonObject request = subscription(
+        61, 1, harness.sliceId, harness.radio.streamCentreHz(harness.streamIndex));
+    request.insert(QStringLiteral("pixels"), 1024);
+    request.insert(QStringLiteral("spanHz"), 192000.0);
+    request.insert(QStringLiteral("fftSize"), 4096);
+    QVERIFY(harness.client.sendMediaControl(request, harness.client.sessionEpoch()));
+    QTRY_VERIFY(([&] {
+        harness.feedRadio();
+        return !messageFor(controls, QStringLiteral("context"), 61).isEmpty();
+    })());
+
+    int cycle = 0;
+    const auto sendOneFrame = [&harness, &cycle] {
+        const qsizetype before = harness.mediaTransport->displays.size();
+        QTRY_VERIFY(([&] {
+            harness.feedRadio(0.125 + 0.0078125 * (++cycle % 16));
+            harness.sendDisplayTick();
+            return harness.mediaTransport->displays.size() == before + 1;
+        })());
+    };
+    QList<QByteArray> accepted;
+    for (int i = 0; i < 4; ++i) {
+        sendOneFrame();
+        accepted.append(harness.mediaTransport->displays.constLast());
+    }
+
+    // 1024/1024 points, no 3D row: 42 + 2 * (3 + 5 * 8 + 1024) = 2176 bytes.
+    QVERIFY(isKeyframe(accepted.constFirst()));
+    QCOMPARE(accepted.constFirst().size(),
+             int(kDisplayCodecHeaderBytes + 2 * displayCodecWorstCasePlaneBytes(1024)));
+    QCOMPARE(accepted.constFirst().size(), 2176);
+    quint32 largestDelta = 0;
+    for (qsizetype i = 1; i < accepted.size(); ++i) {
+        QVERIFY(!isKeyframe(accepted.at(i)));
+        QVERIFY(accepted.at(i).size() <= accepted.constFirst().size());
+        largestDelta = std::max(largestDelta, quint32(accepted.at(i).size()));
+    }
+    DaemonDisplayDiagnostics diagnostics = harness.controller.displayDiagnostics();
+    QCOMPARE(diagnostics.displayMaxKeyframeBytes, quint32(2176));
+    QCOMPARE(diagnostics.displayMaxDeltaBytes, largestDelta);
+    QCOMPARE(diagnostics.displayMaxFragments, quint32(3)); // ceil(2176 / 876)
+    QCOMPARE(diagnostics.displaySendRefusals, quint64(0));
+    QCOMPARE(diagnostics.displayTransportErrors, quint64(0));
+
+    // A full transport refuses the frame: counted, never resent, never
+    // measured, and the next frame that goes is a keyframe.
+    harness.mediaTransport->onDisplaySend = [] { return false; };
+    sendOneFrame();
+    harness.mediaTransport->onDisplaySend = {};
+    QCOMPARE(harness.controller.displayDiagnostics().displaySendRefusals, quint64(1));
+    sendOneFrame();
+    QVERIFY(isKeyframe(harness.mediaTransport->displays.constLast()));
+    sendOneFrame();
+    QVERIFY(!isKeyframe(harness.mediaTransport->displays.constLast()));
+
+    // Transport errors: each counts, each distinct text is logged once, and
+    // each forces the next frame to be a keyframe like a failed send.
+    emit harness.mediaTransport->errorOccurred(QStringLiteral("sctp send failed"));
+    emit harness.mediaTransport->errorOccurred(QStringLiteral("sctp send failed"));
+    emit harness.mediaTransport->errorOccurred(QStringLiteral("dtls record rejected"));
+    diagnostics = harness.controller.displayDiagnostics();
+    QCOMPARE(diagnostics.displayTransportErrors, quint64(3));
+    QCOMPARE(diagnostics.displaySendRefusals, quint64(1));
+    QCOMPARE(g_daemonMediaMessages.filter(QStringLiteral("media transport error:")).size(), 2);
+    QCOMPARE(g_daemonMediaMessages.filter(QStringLiteral("sctp send failed")).size(), 1);
+    sendOneFrame();
+    QVERIFY(isKeyframe(harness.mediaTransport->displays.constLast()));
+    QCOMPARE(harness.controller.displayDiagnostics().displayMaxKeyframeBytes, quint32(2176));
+
+    // Retiring the peer writes the final line; a new peer starts from zero.
+    harness.mediaTransport->onDisplaySend = [transport = harness.mediaTransport] {
+        emit transport->closed();
+        return true;
+    };
+    sendOneFrame();
+    QTRY_VERIFY(harness.mediaTransport.isNull());
+    const QStringList finals =
+        g_daemonMediaMessages.filter(QStringLiteral("daemon display diagnostics final"));
+    QCOMPARE(finals.size(), 1);
+    QVERIFY2(finals.constFirst().contains(
+                 QStringLiteral("largestKeyframe=2176 bytes/3 fragments")),
+             qPrintable(finals.constFirst()));
+    QVERIFY(finals.constFirst().contains(QStringLiteral("transportErrors=3")));
+    harness.startReadyPeer();
+    QCOMPARE(harness.controller.displayDiagnostics(), DaemonDisplayDiagnostics{});
+    harness.finish();
+}
+
+void TstDaemonMediaController::displayDiagnosticsLineReportsBytesAndFragments()
+{
+    DaemonDisplayDiagnostics small;
+    small.displayMaxKeyframeBytes = 2977; // 1024/1024 points with a 768-point 3D row
+    small.displayMaxDeltaBytes = 1800;
+    small.displayMaxFragments = 4;
+    QCOMPARE(daemonDisplayDiagnosticsLine(small),
+             QStringLiteral("largestKeyframe=2977 bytes/4 fragments"
+                            " largestDelta=1800 bytes/3 fragments"
+                            " maxFragments=4 sendRefusals=0 transportErrors=0"));
+
+    DaemonDisplayDiagnostics largest;
+    largest.displayMaxKeyframeBytes = 9361; // 4096/4096 points with a 768-point 3D row
+    largest.displayMaxDeltaBytes = 9361;
+    largest.displayMaxFragments = 11;
+    largest.displaySendRefusals = 7;
+    largest.displayTransportErrors = 2;
+    QCOMPARE(daemonDisplayDiagnosticsLine(largest),
+             QStringLiteral("largestKeyframe=9361 bytes/11 fragments"
+                            " largestDelta=9361 bytes/11 fragments"
+                            " maxFragments=11 sendRefusals=7 transportErrors=2"));
+    QCOMPARE(IMediaTransport::sctpFragmentCount(876), quint64(1));
+    QCOMPARE(IMediaTransport::sctpFragmentCount(877), quint64(2));
+    QCOMPARE(IMediaTransport::sctpFragmentCount(65536), quint64(75));
 }
 
 void TstDaemonMediaController::exhaustedDisplayCreditDoesNotBlockAudioRtp()

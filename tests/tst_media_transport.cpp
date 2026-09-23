@@ -8,9 +8,14 @@
 
 #include "core/session/media/LibDataChannelMediaTransport.h"
 
+#include <QElapsedTimer>
 #include <QPointer>
+#include <QSet>
 #include <QSignalSpy>
 #include <QtTest>
+
+#include <chrono>
+#include <thread>
 
 using namespace NereusSDR;
 
@@ -24,7 +29,11 @@ class TestMediaTransport : public QObject {
     Q_OBJECT
 
 private slots:
+    // Must stay first: it observes the process before any peer exists.
+    void sctpSettingsAppliedOnceBeforeFirstPeer();
     void encryptedPeersCarryDisplayAndRtp();
+    void stalledReceiverRefusesDisplayInsteadOfQueueing();
+    void queuedDisplayOverflowDropsOldestAndCountsIt();
     void telemetryCountsValidatedTrafficAndResets();
     void boundedInputsRefuseBeforeTransport();
     void stopCancelsOldCallbacksAndRecreates();
@@ -97,6 +106,37 @@ QByteArray TestMediaTransport::rtpPacket(quint16 sequence, qsizetype size,
     return packet;
 }
 
+void TestMediaTransport::sctpSettingsAppliedOnceBeforeFirstPeer()
+{
+    const MediaSctpSettingsRecord before = mediaSctpSettingsRecord();
+    QCOMPARE(before.applications, 0);
+    QCOMPARE(before.peersCreated, quint64(0));
+
+    {
+        LibDataChannelMediaTransport offerer;
+        LibDataChannelMediaTransport answerer;
+        startPair(offerer, answerer);
+        const MediaSctpSettingsRecord first = mediaSctpSettingsRecord();
+        QCOMPARE(first.applications, 1);
+        QCOMPARE(first.peersCreatedBeforeApplication, quint64(0));
+        QCOMPARE(first.peersCreated, quint64(2));
+        offerer.stop();
+        answerer.stop();
+    }
+
+    // Later calls and later peers never apply the settings again.
+    QVERIFY(!applyMediaSctpSettingsOnce());
+    LibDataChannelMediaTransport offerer;
+    LibDataChannelMediaTransport answerer;
+    startPair(offerer, answerer);
+    const MediaSctpSettingsRecord second = mediaSctpSettingsRecord();
+    QCOMPARE(second.applications, 1);
+    QCOMPARE(second.peersCreatedBeforeApplication, quint64(0));
+    QCOMPARE(second.peersCreated, quint64(4));
+    offerer.stop();
+    answerer.stop();
+}
+
 void TestMediaTransport::encryptedPeersCarryDisplayAndRtp()
 {
     LibDataChannelMediaTransport offerer;
@@ -156,6 +196,109 @@ void TestMediaTransport::encryptedPeersCarryDisplayAndRtp()
     answerer.stop();
 }
 
+void TestMediaTransport::stalledReceiverRefusesDisplayInsteadOfQueueing()
+{
+    LibDataChannelMediaTransport offerer;
+    LibDataChannelMediaTransport answerer;
+    QSignalSpy displayReceived(&answerer, &IMediaTransport::displayReceived);
+    startPair(offerer, answerer);
+
+    // The largest spectrum frame: 4096/4096 points plus a 768-point 3D row.
+    constexpr qsizetype kFrameBytes = 9361;
+    const QByteArray frame(kFrameBytes, char(0x3c));
+    answerer.setDisplayReceiveStalledForTest(true);
+
+    // Offer frames until the sender has refused every one for a full second.
+    int accepted = 0;
+    int refused = 0;
+    QElapsedTimer sinceAccepted;
+    sinceAccepted.start();
+    QElapsedTimer overall;
+    overall.start();
+    while (sinceAccepted.elapsed() < 1000 && overall.elapsed() < 60'000) {
+        if (offerer.sendDisplay(frame)) {
+            ++accepted;
+            sinceAccepted.restart();
+        } else {
+            ++refused;
+        }
+        QTest::qWait(1);
+    }
+    QVERIFY2(overall.elapsed() < 60'000, "the sender never started refusing");
+    QVERIFY(accepted > 0);
+    QVERIFY(refused > 0);
+
+    // Everything handed to the library is either held by this sender (its
+    // SCTP send buffer plus the one message libdatachannel queues when that
+    // buffer is full) or on the stalled receiver (its SCTP receive window
+    // plus the one message blocked in the delivery callback). With
+    // libdatachannel's 1 MiB defaults this is about 2 MiB.
+    const quint64 submitted = offerer.telemetry()->submittedDisplayPayloadBytes;
+    const quint64 bound = quint64(IMediaTransport::kSctpSendBufferBytes)
+        + quint64(IMediaTransport::kSctpReceiveBufferBytes)
+        + 2 * quint64(kFrameBytes);
+    QVERIFY2(submitted <= bound,
+             qPrintable(QStringLiteral("sender held %1 bytes in %2 frames, bound %3")
+                            .arg(submitted).arg(accepted).arg(bound)));
+
+    // Once the receiver drains again the sender recovers, and every frame
+    // that arrives is whole.
+    answerer.setDisplayReceiveStalledForTest(false);
+    QTRY_VERIFY_WITH_TIMEOUT(offerer.sendDisplay(frame), 10'000);
+    QTRY_VERIFY_WITH_TIMEOUT(!displayReceived.isEmpty(), 10'000);
+    for (const QList<QVariant>& arguments : displayReceived) {
+        QCOMPARE(arguments.at(0).toByteArray(), frame);
+    }
+
+    offerer.stop();
+    answerer.stop();
+}
+
+void TestMediaTransport::queuedDisplayOverflowDropsOldestAndCountsIt()
+{
+    LibDataChannelMediaTransport offerer;
+    LibDataChannelMediaTransport answerer;
+    QSignalSpy displayReceived(&answerer, &IMediaTransport::displayReceived);
+    startPair(offerer, answerer);
+
+    QList<QByteArray> sent;
+    quint64 sentBytes = 0;
+    for (int i = 0; i < 9; ++i) {
+        sent.append(QStringLiteral("queued-display-%1").arg(i).toUtf8());
+        sentBytes += quint64(sent.last().size());
+        QVERIFY(offerer.sendDisplay(sent.last()));
+    }
+    // Keep this thread out of its event loop, so no drain runs, until the
+    // library has delivered all nine messages into the receive queue.
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (answerer.telemetry()->receivedDisplayPayloadBytes < sentBytes
+           && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    QCOMPARE(answerer.telemetry()->receivedDisplayPayloadBytes, sentBytes);
+    QCOMPARE(answerer.telemetry()->displayMessagesDropped, quint64(1));
+
+    // One drain hands over the newest eight; the eight-message rule dropped
+    // exactly one, and received bytes still count all nine arrivals.
+    QTRY_COMPARE_WITH_TIMEOUT(displayReceived.count(), 8, 5000);
+    QTest::qWait(50);
+    QCOMPARE(displayReceived.count(), 8);
+    QSet<QByteArray> delivered;
+    for (const QList<QVariant>& arguments : displayReceived) {
+        delivered.insert(arguments.at(0).toByteArray());
+    }
+    QCOMPARE(delivered.size(), 8);
+    for (const QByteArray& message : delivered) {
+        QVERIFY(sent.contains(message));
+    }
+    QCOMPARE(answerer.telemetry()->displayMessagesDropped, quint64(1));
+    QCOMPARE(answerer.telemetry()->receivedDisplayPayloadBytes, sentBytes);
+    QCOMPARE(offerer.telemetry()->displayMessagesDropped, quint64(0));
+
+    offerer.stop();
+    answerer.stop();
+}
+
 void TestMediaTransport::telemetryCountsValidatedTrafficAndResets()
 {
     LibDataChannelMediaTransport offerer;
@@ -169,6 +312,7 @@ void TestMediaTransport::telemetryCountsValidatedTrafficAndResets()
     const auto countersAreZero = [](const MediaTransportTelemetry& telemetry) {
         return telemetry.receivedDisplayPayloadBytes == 0
             && telemetry.submittedDisplayPayloadBytes == 0
+            && telemetry.displayMessagesDropped == 0
             && telemetry.receivedRtpBytes == 0
             && telemetry.submittedRtpBytes == 0;
     };

@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <deque>
 #include <limits>
 #include <mutex>
@@ -58,8 +59,15 @@ struct PendingRtpPacket {
     std::chrono::steady_clock::time_point receivedAt;
 };
 
+std::once_flag g_sctpSettingsOnce;
+std::atomic<int> g_sctpSettingsApplications{0};
+std::atomic<quint64> g_peersCreated{0};
+std::atomic<quint64> g_peersCreatedBeforeSctpSettings{0};
+
 struct CallbackBridge {
     std::mutex mutex;
+    std::condition_variable displayReceiveGate;
+    bool displayReceiveStalledForTest = false;
     bool cancelled = false;
     bool overflowReported = false;
     std::deque<CallbackEvent> events;
@@ -77,6 +85,7 @@ struct CallbackBridge {
     std::atomic<quint64> submittedDisplayPayloadBytes{0};
     std::atomic<quint64> receivedRtpBytes{0};
     std::atomic<quint64> submittedRtpBytes{0};
+    std::atomic<quint64> displayMessagesDropped{0};
 };
 
 void queueEvent(const std::weak_ptr<CallbackBridge>& weak,
@@ -109,7 +118,10 @@ void queueDisplay(const std::weak_ptr<CallbackBridge>& weak, rtc::binary data)
     if (!bridge) {
         return;
     }
-    std::lock_guard lock(bridge->mutex);
+    std::unique_lock lock(bridge->mutex);
+    bridge->displayReceiveGate.wait(lock, [&bridge] {
+        return !bridge->displayReceiveStalledForTest || bridge->cancelled;
+    });
     if (bridge->cancelled) {
         return;
     }
@@ -127,6 +139,7 @@ void queueDisplay(const std::weak_ptr<CallbackBridge>& weak, rtc::binary data)
                || bridge->displayBytes + data.size() > kMaxPendingDisplayBytes)) {
         bridge->displayBytes -= bridge->displayMessages.front().size();
         bridge->displayMessages.pop_front();
+        bridge->displayMessagesDropped.fetch_add(1, std::memory_order_relaxed);
     }
     bridge->displayBytes += data.size();
     bridge->displayMessages.push_back(std::move(data));
@@ -219,6 +232,35 @@ quint32 rtpSsrc(const QByteArray& packet)
 
 } // namespace
 
+bool applyMediaSctpSettingsOnce()
+{
+    bool applied = false;
+    std::call_once(g_sctpSettingsOnce, [&applied] {
+        rtc::SctpSettings settings;
+        settings.sendBufferSize =
+            static_cast<std::size_t>(IMediaTransport::kSctpSendBufferBytes);
+        settings.recvBufferSize =
+            static_cast<std::size_t>(IMediaTransport::kSctpReceiveBufferBytes);
+        // Every other field stays unset, which keeps libdatachannel's own
+        // defaults. Before global initialisation the library stores these
+        // for its first peer; afterwards it applies them to new sockets
+        // (libdatachannel v0.24.5 src/impl/init.cpp:105-111, 144-145).
+        rtc::SetSctpSettings(std::move(settings));
+        g_peersCreatedBeforeSctpSettings.store(
+            g_peersCreated.load(std::memory_order_relaxed), std::memory_order_relaxed);
+        g_sctpSettingsApplications.fetch_add(1, std::memory_order_relaxed);
+        applied = true;
+    });
+    return applied;
+}
+
+MediaSctpSettingsRecord mediaSctpSettingsRecord()
+{
+    return {g_sctpSettingsApplications.load(std::memory_order_relaxed),
+            g_peersCreatedBeforeSctpSettings.load(std::memory_order_relaxed),
+            g_peersCreated.load(std::memory_order_relaxed)};
+}
+
 struct LibDataChannelMediaTransport::Private {
     QTimer* drainTimer = nullptr;
     std::shared_ptr<CallbackBridge> bridge;
@@ -275,7 +317,9 @@ bool LibDataChannelMediaTransport::start(const StartOptions& options)
         config.enableIceTcp = false;
         config.iceServers.clear();
 
+        applyMediaSctpSettingsOnce();
         d->peer = std::make_shared<rtc::PeerConnection>(std::move(config));
+        g_peersCreated.fetch_add(1, std::memory_order_relaxed);
         d->peer->onLocalDescription([weak](rtc::Description description) {
             const std::string sdp = description.generateSdp();
             const std::string type = description.typeString();
@@ -427,6 +471,7 @@ void LibDataChannelMediaTransport::stopInternal(bool notify)
     if (d->bridge) {
         std::lock_guard lock(d->bridge->mutex);
         d->bridge->cancelled = true;
+        d->bridge->displayReceiveGate.notify_all();
         d->bridge->events.clear();
         d->bridge->displayMessages.clear();
         d->bridge->displayBytes = 0;
@@ -601,7 +646,19 @@ LibDataChannelMediaTransport::telemetry() const
         bridge->submittedDisplayPayloadBytes.load(std::memory_order_relaxed),
         bridge->receivedRtpBytes.load(std::memory_order_relaxed),
         bridge->submittedRtpBytes.load(std::memory_order_relaxed),
+        bridge->displayMessagesDropped.load(std::memory_order_relaxed),
     };
+}
+
+void LibDataChannelMediaTransport::setDisplayReceiveStalledForTest(bool stalled)
+{
+    const std::shared_ptr<CallbackBridge> bridge = d->bridge;
+    if (!bridge) {
+        return;
+    }
+    std::lock_guard lock(bridge->mutex);
+    bridge->displayReceiveStalledForTest = stalled;
+    bridge->displayReceiveGate.notify_all();
 }
 
 void LibDataChannelMediaTransport::drainCallbacks()

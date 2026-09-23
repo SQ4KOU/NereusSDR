@@ -18,6 +18,22 @@
 
 namespace NereusSDR {
 
+/// Applies the IMediaTransport::kSctp* buffer sizes to libdatachannel's
+/// process-wide SCTP settings. Only the first call in a process applies them
+/// and returns true. LibDataChannelMediaTransport::start() calls it before it
+/// creates any peer, so the daemon and the GUI both get the limits before
+/// their first media peer; calling it earlier is harmless.
+bool applyMediaSctpSettingsOnce();
+
+/// What applyMediaSctpSettingsOnce() did in this process: how many times the
+/// settings were applied (0 or 1) and how many peers existed at that moment.
+struct MediaSctpSettingsRecord {
+    int applications = 0;
+    quint64 peersCreatedBeforeApplication = 0;
+    quint64 peersCreated = 0;
+};
+MediaSctpSettingsRecord mediaSctpSettingsRecord();
+
 class LibDataChannelMediaTransport final : public IMediaTransport {
     Q_OBJECT
 
@@ -43,6 +59,11 @@ public:
 
     bool isReady() const override;
     std::optional<MediaTransportTelemetry> telemetry() const override;
+
+    /// Test seam: while stalled, the library thread that delivers received
+    /// display messages waits instead of handing them over, so SCTP stops
+    /// reading and the peer's send side fills. stop() always releases it.
+    void setDisplayReceiveStalledForTest(bool stalled);
 
 private:
     struct Private;

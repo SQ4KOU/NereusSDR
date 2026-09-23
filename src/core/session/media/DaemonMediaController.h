@@ -19,6 +19,8 @@
 #include <QJsonObject>
 #include <QMap>
 #include <QPointer>
+#include <QSet>
+#include <QString>
 #include <QTimer>
 
 #include <cstdint>
@@ -51,6 +53,26 @@ struct DaemonAudioDiagnostics {
     std::uint64_t sendUnresolvedAtRetirement = 0;
 };
 
+/// Real display traffic for the current media peer (R-R3-03, R-R3-05).
+/// Sizes are spectrum frames the transport accepted; fragments are SCTP DATA
+/// chunks, ceil(bytes / IMediaTransport::kSctpDataPayloadBytes). A refusal
+/// is a display message (spectrum frame or PureSignal chunk) the transport
+/// did not take at once; it is never retried. Every count starts again with
+/// each new media peer.
+struct DaemonDisplayDiagnostics {
+    quint32 displayMaxKeyframeBytes = 0;
+    quint32 displayMaxDeltaBytes = 0;
+    quint32 displayMaxFragments = 0;
+    quint64 displaySendRefusals = 0;
+    quint64 displayTransportErrors = 0;
+
+    bool operator==(const DaemonDisplayDiagnostics&) const = default;
+};
+
+/// The periodic journal line for these diagnostics, e.g.
+/// "largestKeyframe=2977 bytes/4 fragments largestDelta=... ".
+QString daemonDisplayDiagnosticsLine(const DaemonDisplayDiagnostics& diagnostics);
+
 /// Owns one authenticated daemon media session: strict control validation,
 /// actual RadioModel I/Q to bounded source, per-endpoint reduction/codec and
 /// one-at-a-time media sends. The caller owns StationServer and RadioModel.
@@ -69,6 +91,7 @@ public:
     int activeEndpointCount() const;
     int activeSourceCount() const;
     DaemonAudioDiagnostics audioDiagnostics() const;
+    DaemonDisplayDiagnostics displayDiagnostics() const;
     /// What Core granted a live spectrum endpoint: FFT size and tier after
     /// the largest-size and shared-engine rules, and pixels after the source
     /// bin rule (R-R3-01, R-R3-08). Empty for an unknown endpoint.
@@ -151,6 +174,9 @@ private:
     void maybeLogAudioDiagnostics(bool final);
     DaemonAudioDiagnostics snapshotAudioDiagnostics() const;
     void resetAudioSession();
+    void recordDisplaySent(const QByteArray& spectrumFrame);
+    void onMediaTransportError(const QString& message);
+    void logDisplayDiagnostics(bool final);
     bool sendControl(const QJsonObject& payload) const;
     quint32 nextContextGeneration();
 
@@ -179,6 +205,10 @@ private:
     DaemonAudioDiagnostics m_audioDiagnostics;
     QElapsedTimer m_audioDiagnosticsClock;
     qint64 m_audioDiagnosticsLastLogMs{0};
+    QTimer m_displayDiagnosticsTimer;
+    DaemonDisplayDiagnostics m_displayDiagnostics;
+    DaemonDisplayDiagnostics m_displayDiagnosticsLogged;
+    QSet<QString> m_loggedTransportErrorKinds;
     int m_roundRobinCursor{0};
     QList<QByteArray> m_ps3CurrentChunks;
     QList<QByteArray> m_ps3LatestChunks;

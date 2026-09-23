@@ -380,6 +380,9 @@ struct RemoteMediaController::Private {
     quint32 epoch = 0;
     quint32 nextEndpoint = 1;
     quint64 frames = 0;
+    // Display drops already written to the log, and when (allocationClock).
+    quint64 displayDropsReported = 0;
+    qint64 displayDropsReportedAtMs = 0;
     Ps3DisplayAssembler ps3Assembler;
     quint64 ps3Generation = 0;
     std::unique_ptr<RemoteAudioReceiver> audio;
@@ -675,6 +678,30 @@ std::optional<MediaPeerTelemetry> RemoteMediaController::trafficTelemetry() cons
 {
     return d->peer ? d->peer->telemetry() : std::nullopt;
 }
+quint64 RemoteMediaController::displayMessagesDropped() const
+{
+    const std::optional<MediaPeerTelemetry> traffic = trafficTelemetry();
+    return traffic ? traffic->traffic.displayMessagesDropped : 0;
+}
+
+void RemoteMediaController::reportDisplayDrops()
+{
+    // The drop rule itself lives in the transport (8 messages or 256 KiB,
+    // oldest first); this only reports it, at most every 10 seconds.
+    constexpr qint64 kDisplayDropReportIntervalMs = 10'000;
+    const quint64 dropped = displayMessagesDropped();
+    if (dropped <= d->displayDropsReported) { return; }
+    const qint64 now = d->allocationClock();
+    if (d->displayDropsReported != 0
+        && now - d->displayDropsReportedAtMs < kDisplayDropReportIntervalMs) { return; }
+    qCInfo(lcRemoteMedia).noquote()
+        << QStringLiteral("Remote display: skipped %1 late updates on this computer "
+                          "to keep the picture current (%2 this session)")
+               .arg(dropped - d->displayDropsReported)
+               .arg(dropped);
+    d->displayDropsReported = dropped;
+    d->displayDropsReportedAtMs = now;
+}
 RemoteAudioReceiverTelemetry RemoteMediaController::audioTelemetry() const
 {
     return d->audio->telemetry();
@@ -846,8 +873,13 @@ void RemoteMediaController::start()
     connect(peer, &MediaPeer::controlReady, this, [this, current](const QJsonObject& payload) {
         if (current()) { send(payload); }
     });
+    d->displayDropsReported = 0;
+    d->displayDropsReportedAtMs = 0;
     connect(peer, &MediaPeer::displayReceived, this, [this, current](const QByteArray& packet) {
-        if (current()) { receiveDisplay(packet); }
+        if (!current()) { return; }
+        // Rendering can end this session; report drops for it first.
+        reportDisplayDrops();
+        receiveDisplay(packet);
     });
     connect(peer, &MediaPeer::rtpReceived, this, [this, current](const QByteArray& packet) {
         if (current() && d->audioEnabled) { d->audio->submit(packet); }

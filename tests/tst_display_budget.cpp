@@ -10,6 +10,9 @@
 
 #include "core/session/Ps3DisplayCodec.h"
 #include "core/session/media/DisplayBudget.h"
+#include "core/session/media/IMediaTransport.h"
+
+#include <QRandomGenerator>
 
 #include <limits>
 
@@ -60,6 +63,42 @@ Ps3Snapshot maximumPs3Snapshot()
     fill(snapshot.xaCorrection, snapshot.correctionCount);
     fill(snapshot.yaCorrection, snapshot.correctionCount);
     return snapshot;
+}
+
+DisplayCodecFrame spectrumFrame(int pixels, int wide)
+{
+    DisplayCodecFrame frame;
+    frame.context.endpointId = 3;
+    frame.context.contextGeneration = 1;
+    frame.context.minDbm = -160.0f;
+    frame.context.maxDbm = 0.0f;
+    frame.context.traceSamples = static_cast<quint16>(pixels);
+    frame.context.waterfallSamples = static_cast<quint16>(pixels);
+    frame.context.wideSamples = static_cast<quint16>(wide);
+    frame.traceDbm.resize(pixels);
+    frame.waterfallDbm.resize(pixels);
+    frame.wideDbm.resize(wide);
+    return frame;
+}
+
+// Rows of three characters: full-range noise, a slow drift, a flat floor.
+void fillRow(QVector<float>& row, QRandomGenerator& random, int character)
+{
+    float level = -100.0f;
+    for (float& value : row) {
+        switch (character) {
+        case 0:
+            value = -170.0f + 180.0f * static_cast<float>(random.generateDouble());
+            break;
+        case 1:
+            level += -1.5f + 3.0f * static_cast<float>(random.generateDouble());
+            value = level;
+            break;
+        default:
+            value = -120.0f;
+            break;
+        }
+    }
 }
 
 SpectrumDisplayCost cost(int pixels, int fps, bool wide)
@@ -116,6 +155,65 @@ private slots:
         QCOMPARE(ps3.messagesPerSecond,
                  static_cast<quint32>(chunks.size() * (1'000 / kPs3DisplayPollIntervalMs)));
         QCOMPARE(ps3.messagesPerSecond, quint32{30});
+    }
+
+    // R-R3-03: the frame sizes the Core logs are the codec's worst case. A
+    // keyframe is exactly 42 + 2*A(pixels) + A(wide), with
+    // A(n) = 3 + 5*ceil(n/128) + n, whatever the row holds; no delta is
+    // larger. At 876 bytes per SCTP fragment, 1024/1024/768 is 2,977 bytes
+    // in 4 fragments and 4096/4096/768 is 9,361 bytes in 11.
+    void keyframesMatchTheSizeRuleAndDeltasNeverExceedThem()
+    {
+        QCOMPARE(kDisplayCodecHeaderBytes + 2 * displayCodecWorstCasePlaneBytes(1024)
+                     + displayCodecWorstCasePlaneBytes(768),
+                 quint32{2'977});
+        QCOMPARE(IMediaTransport::sctpFragmentCount(2'977), quint64{4});
+        QCOMPARE(kDisplayCodecHeaderBytes + 2 * displayCodecWorstCasePlaneBytes(4096)
+                     + displayCodecWorstCasePlaneBytes(768),
+                 quint32{9'361});
+        QCOMPARE(IMediaTransport::sctpFragmentCount(9'361), quint64{11});
+
+        QRandomGenerator random(0x52523303u);
+        const QList<int> pixelCounts{1, 2, 16, 17, 127, 128, 129, 255, 256, 700,
+                                     1024, 2048, 3001, 4095, 4096};
+        const QList<int> wideCounts{0, 1, 128, 129, 500, 768};
+        int shapes = 0;
+        for (int pixels : pixelCounts) {
+            for (int wide : wideCounts) {
+                const quint32 keyframeBytes = kDisplayCodecHeaderBytes
+                    + 2 * displayCodecWorstCasePlaneBytes(quint32(pixels))
+                    + displayCodecWorstCasePlaneBytes(quint32(wide));
+                for (int character = 0; character < 3; ++character) {
+                    DisplayCodecEncoder encoder;
+                    DisplayCodecFrame frame = spectrumFrame(pixels, wide);
+                    for (quint32 sequence = 1; sequence <= 8; ++sequence) {
+                        frame.encoderSequence = sequence;
+                        frame.producerTimestamp = sequence;
+                        frame.waterfallAdvance = (sequence % 2) == 0;
+                        // Later frames change character, so deltas see both
+                        // small residuals and full-range jumps.
+                        const int rowCharacter = (character + int(sequence / 3)) % 3;
+                        fillRow(frame.traceDbm, random, rowCharacter);
+                        fillRow(frame.waterfallDbm, random, rowCharacter);
+                        fillRow(frame.wideDbm, random, rowCharacter);
+                        const bool keyframe = sequence == 1 || sequence == 6;
+                        const QByteArray encoded = encoder.encode(frame, keyframe);
+                        QVERIFY(!encoded.isEmpty());
+                        QCOMPARE((static_cast<quint8>(encoded.at(5)) & 0x01) != 0, keyframe);
+                        if (keyframe) {
+                            QCOMPARE(quint32(encoded.size()), keyframeBytes);
+                        } else {
+                            QVERIFY2(quint32(encoded.size()) <= keyframeBytes,
+                                     qPrintable(QStringLiteral("%1/%2 delta %3 > %4")
+                                                    .arg(pixels).arg(wide)
+                                                    .arg(encoded.size()).arg(keyframeBytes)));
+                        }
+                    }
+                }
+                ++shapes;
+            }
+        }
+        QCOMPARE(shapes, int(pixelCounts.size() * wideCounts.size()));
     }
 
     void checkedLedgerAndDescriptorValidation()

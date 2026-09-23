@@ -24,6 +24,11 @@ struct MediaTransportTelemetry {
     quint64 submittedDisplayPayloadBytes = 0;
     quint64 receivedRtpBytes = 0;
     quint64 submittedRtpBytes = 0;
+    /// Received display messages this side discarded, oldest first, because
+    /// more than kMaxPendingDisplayMessages (or their byte bound) were waiting
+    /// for one drain. Each discarded message was already counted in
+    /// receivedDisplayPayloadBytes, which measures arrival, not use.
+    quint64 displayMessagesDropped = 0;
 };
 
 class IMediaTransport : public QObject {
@@ -51,6 +56,43 @@ public:
     static constexpr qsizetype kMinRawRtpBytes = 12;
     static constexpr int kMaxRemoteCandidates = 64;
     static constexpr int kConfiguredMtuBytes = 1000;
+
+    // Process-wide SCTP limits, applied once before the first peer in each
+    // process (applyMediaSctpSettingsOnce() in the libdatachannel adapter).
+    // Latest-value-wins at the producer: a slow link must refuse new display
+    // frames, not hold seconds of stale ones. libdatachannel v0.24.5 defaults
+    // both buffers to 1 MiB (src/impl/sctptransport.cpp:101-106).
+    //
+    // Send buffer: the floor is the 64 KiB maximum message, which PureSignal
+    // display chunks need. libdatachannel raises SO_SNDBUF to that size on
+    // every socket anyway (sctptransport.cpp:299-310), and usrsctp refuses a
+    // message larger than the buffer (usrsctp fec583d5
+    // sctp_output.c:14090-14096), so the buffer cannot be smaller.
+    static constexpr int kSctpSendBufferBytes = 65536;
+    // Receive buffer: twice the maximum message. usrsctp holds a message
+    // until it reaches half the receive buffer before partial delivery
+    // (sctp_indata.c:1078, 1131), so the window always admits a whole 64 KiB
+    // message, and libdatachannel joins partial reads up to end of record
+    // (sctptransport.cpp:498-533): every message reaches the callback whole.
+    static constexpr int kSctpReceiveBufferBytes = 131072;
+    // User bytes carried by one SCTP DATA chunk, which is one UDP datagram.
+    // libdatachannel disables path MTU discovery and sets the SCTP path MTU
+    // to 1000 - 12 (SCTP) - 48 (DTLS) - 8 (UDP) - 40 (IPv6) = 892
+    // (sctptransport.cpp:247); usrsctp adds the 12-byte SCTP common header
+    // back for its AF_CONN socket, 904 (sctp_pcb.c:4465-4481), and subtracts
+    // that header plus the 16-byte DATA chunk header to fragment:
+    // 904 - 12 - 16 = 876 (sctp_output.c:6856-6905). A display message of
+    // n bytes therefore leaves as ceil(n / 876) datagrams.
+    static constexpr int kSctpDataPayloadBytes = 876;
+
+    static constexpr quint64 sctpFragmentCount(quint64 messageBytes)
+    {
+        return (messageBytes + kSctpDataPayloadBytes - 1) / kSctpDataPayloadBytes;
+    }
+    static_assert(kSctpSendBufferBytes >= kMaxDisplayMessageBytes,
+                  "the SCTP send buffer must hold the largest display message");
+    static_assert(kSctpReceiveBufferBytes >= 2 * kMaxDisplayMessageBytes,
+                  "the SCTP receive buffer must deliver the largest message whole");
 
     explicit IMediaTransport(QObject* parent = nullptr) : QObject(parent) {}
     ~IMediaTransport() override = default;

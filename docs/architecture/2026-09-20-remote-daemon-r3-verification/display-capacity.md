@@ -71,6 +71,40 @@ NEREUS_THETIS_DIR=/path/to/Thetis cmake --build build-integration --target Nereu
 ctest --test-dir build-integration -j6 --output-on-failure
 ```
 
+## Bounded display transport and measured frames (R-R3-03, R-R3-04, R-R3-05, R-R3-09)
+
+September 23, 2026. The rule and the new limits are recorded in the
+[display codec v1 spec](../2026-09-20-display-codec-v1.md) under "Measured
+sizes and fragments" and "Transport limits".
+
+- Each process applies SCTP send buffer 65,536 bytes and receive buffer
+  131,072 bytes once, before its first media peer; libdatachannel's defaults
+  were 1 MiB each. The daemon and the GUI share the one adapter call site.
+- With the receiver stalled, the sender refused new display frames instead of
+  queueing them. Before the change 1,376,067 bytes of 9,361-byte frames piled
+  up behind the link (the regression test failed); after it, 159,137 bytes,
+  against a bound of both buffers plus two messages (215,330 bytes). The
+  sender recovered and every delivered frame arrived whole once the receiver
+  drained again. A 64 KiB message still crosses the encrypted loopback.
+- Core counts each refused display message and each transport error, logs
+  each distinct error once per media peer, forces a keyframe after either,
+  and logs the largest keyframe and delta actually sent with their fragment
+  counts. Counters restart with each media peer.
+- The GUI keeps its 8-message / 256 KiB oldest-first drop rule and now counts
+  each dropped message apart from received bytes; nine messages queued before
+  one drain drop exactly one.
+
+Focused checks on macOS 27.0 / Qt 6.11, load averages 4.00 / 4.03 / 4.83
+before CTest and 2.99 / 3.77 / 4.69 after: six CTest targets passed in 44.43 s
+(`tst_media_transport` 11 cases, `tst_media_peer` 9, `tst_daemon_media_controller`
+42, `tst_display_budget` 11, `tst_display_codec` 11,
+`tst_remote_media_controller` 32).
+
+Pending on the Rock (controller and operator): at 4096 points, 60 fps with
+3D, the journal's `daemon display diagnostics` line shows a largest frame of
+at most 9,361 bytes / 11 fragments, and a packet capture shows every media
+datagram at 1000 bytes or less (969 on IPv4).
+
 ## Pending acceptance
 
 ### September 22 operating-message correction

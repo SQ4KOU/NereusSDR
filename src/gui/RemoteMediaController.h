@@ -33,6 +33,10 @@ public:
     quint64 receivedDisplayFrames() const;
     int activeEndpointCount() const;
     std::optional<MediaPeerTelemetry> trafficTelemetry() const;
+    /// Display updates this computer received but discarded, oldest first,
+    /// because newer ones arrived before it could show them. Zero without a
+    /// media session; each session starts from zero.
+    quint64 displayMessagesDropped() const;
     RemoteAudioReceiverTelemetry audioTelemetry() const;
     /// The audio context most recently accepted from Core. Its encoder and
     /// off reason are present only when audioDetailNegotiated().
@@ -77,6 +81,7 @@ private:
     void refreshCtunState();
     void receiveControl(const QJsonObject& payload, quint32 epoch);
     void receiveDisplay(const QByteArray& packet);
+    void reportDisplayDrops();
     void requestKeyframe(quint32 endpointId);
     void requestAudio();
     void refreshAudioStatus();

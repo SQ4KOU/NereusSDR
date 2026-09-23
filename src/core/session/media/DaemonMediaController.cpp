@@ -39,6 +39,13 @@ constexpr float kNoiseFloorMaximumDbm = 100.0f;
 constexpr float kFftDbmFloor = -200.0f;
 constexpr float kFftPowerFloor = 1.0e-20f;
 constexpr qint64 kAudioDiagnosticsLogIntervalMs = 2'000;
+constexpr int kDisplayDiagnosticsLogIntervalMs = 10'000;
+// Distinct transport error texts logged per media peer; later ones are
+// still counted in displayTransportErrors.
+constexpr qsizetype kMaxLoggedTransportErrorKinds = 16;
+// display-codec-v1.md byte layout: flags at offset 5, 0x01 = keyframe.
+constexpr qsizetype kDisplayCodecFlagsOffset = 5;
+constexpr quint8 kDisplayCodecKeyframeFlag = 0x01;
 
 bool exactKeys(const QJsonObject& object, std::initializer_list<const char*> keys)
 {
@@ -279,6 +286,7 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
     , m_monotonicClock(std::move(monotonicClock))
     , m_sendTimer(this)
     , m_audioDiagnosticsTimer(this)
+    , m_displayDiagnosticsTimer(this)
 {
     m_displayClock.start();
     m_source.setRadioModel(radioModel);
@@ -287,6 +295,10 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
     m_audioDiagnosticsTimer.setInterval(kAudioDiagnosticsLogIntervalMs);
     connect(&m_audioDiagnosticsTimer, &QTimer::timeout, this, [this] {
         maybeLogAudioDiagnostics(false);
+    });
+    m_displayDiagnosticsTimer.setInterval(kDisplayDiagnosticsLogIntervalMs);
+    connect(&m_displayDiagnosticsTimer, &QTimer::timeout, this, [this] {
+        logDisplayDiagnostics(false);
     });
     if (!m_server || !m_radioModel) {
         return;
@@ -398,6 +410,75 @@ int DaemonMediaController::activeSourceCount() const
 DaemonAudioDiagnostics DaemonMediaController::audioDiagnostics() const
 {
     return snapshotAudioDiagnostics();
+}
+
+DaemonDisplayDiagnostics DaemonMediaController::displayDiagnostics() const
+{
+    return m_displayDiagnostics;
+}
+
+QString daemonDisplayDiagnosticsLine(const DaemonDisplayDiagnostics& diagnostics)
+{
+    return QStringLiteral("largestKeyframe=%1 bytes/%2 fragments"
+                          " largestDelta=%3 bytes/%4 fragments"
+                          " maxFragments=%5 sendRefusals=%6 transportErrors=%7")
+        .arg(diagnostics.displayMaxKeyframeBytes)
+        .arg(IMediaTransport::sctpFragmentCount(diagnostics.displayMaxKeyframeBytes))
+        .arg(diagnostics.displayMaxDeltaBytes)
+        .arg(IMediaTransport::sctpFragmentCount(diagnostics.displayMaxDeltaBytes))
+        .arg(diagnostics.displayMaxFragments)
+        .arg(diagnostics.displaySendRefusals)
+        .arg(diagnostics.displayTransportErrors);
+}
+
+void DaemonMediaController::recordDisplaySent(const QByteArray& spectrumFrame)
+{
+    if (spectrumFrame.size() <= kDisplayCodecFlagsOffset) {
+        return;
+    }
+    const auto bytes = static_cast<quint32>(spectrumFrame.size());
+    const bool keyframe = (static_cast<quint8>(spectrumFrame.at(kDisplayCodecFlagsOffset))
+                           & kDisplayCodecKeyframeFlag) != 0;
+    quint32& largest = keyframe ? m_displayDiagnostics.displayMaxKeyframeBytes
+                                : m_displayDiagnostics.displayMaxDeltaBytes;
+    largest = std::max(largest, bytes);
+    m_displayDiagnostics.displayMaxFragments = std::max(
+        m_displayDiagnostics.displayMaxFragments,
+        static_cast<quint32>(IMediaTransport::sctpFragmentCount(bytes)));
+}
+
+void DaemonMediaController::onMediaTransportError(const QString& message)
+{
+    ++m_displayDiagnostics.displayTransportErrors;
+    if (!m_loggedTransportErrorKinds.contains(message)
+        && m_loggedTransportErrorKinds.size() < kMaxLoggedTransportErrorKinds) {
+        m_loggedTransportErrorKinds.insert(message);
+        qCWarning(lcDaemonMedia).noquote()
+            << QStringLiteral("media transport error: %1 (repeats are counted, not logged)")
+                   .arg(message.left(256));
+    }
+    // Treat it as a failed display send: nothing already encoded is resent.
+    // Every spectrum endpoint restarts from a keyframe, and a PureSignal
+    // snapshot already partly sent is abandoned for the next one.
+    for (auto& [endpointId, entry] : m_endpoints) {
+        Q_UNUSED(endpointId);
+        entry.forceKeyframe = true;
+    }
+    if (m_ps3CurrentAttempted) {
+        m_ps3CurrentChunks.clear();
+    }
+}
+
+void DaemonMediaController::logDisplayDiagnostics(bool final)
+{
+    if (m_displayDiagnostics == m_displayDiagnosticsLogged) {
+        return;
+    }
+    m_displayDiagnosticsLogged = m_displayDiagnostics;
+    qCInfo(lcDaemonMedia).noquote()
+        << QStringLiteral("daemon display diagnostics %1 %2")
+               .arg(final ? QStringLiteral("final") : QStringLiteral("periodic"),
+                    daemonDisplayDiagnosticsLine(m_displayDiagnostics));
 }
 
 std::optional<SpectrumGrant> DaemonMediaController::spectrumGrant(quint32 endpointId) const
@@ -712,6 +793,16 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
     m_peer = std::make_unique<MediaPeer>(this, m_peerFactory);
     MediaPeer* const peer = m_peer.get();
     const quint64 peerEpoch = m_epoch;
+    m_displayDiagnostics = {};
+    m_displayDiagnosticsLogged = {};
+    m_loggedTransportErrorKinds.clear();
+    m_displayDiagnosticsTimer.start();
+    connect(peer, &MediaPeer::errorOccurred, this,
+            [this, peer, peerEpoch](const QString& message) {
+        if (m_peer.get() == peer && m_epoch == peerEpoch) {
+            onMediaTransportError(message);
+        }
+    });
     connect(peer, &MediaPeer::controlReady, this,
             [this, peer, peerEpoch](const QJsonObject& outbound) {
         if (m_peer.get() == peer && m_epoch == peerEpoch) {
@@ -729,6 +820,7 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
         }
     });
     if (!peer->start(IMediaTransport::Role::Offerer, connectionId)) {
+        m_displayDiagnosticsTimer.stop();
         m_peer.reset();
         sendRejected(connectionId, 0, 0, QStringLiteral("media peer start failed"));
         return false;
@@ -1367,6 +1459,7 @@ bool DaemonMediaController::trySendPs3(MediaPeer* peer, quint64 epoch, qint64 no
     if (!sent) {
         // A rejected send may already have buffered bytes. Never retry the
         // failed sequence or any of its remaining chunks.
+        ++m_displayDiagnostics.displaySendRefusals;
         m_ps3CurrentChunks.clear();
     }
     if (m_ps3CurrentChunks.isEmpty()) {
@@ -1450,6 +1543,13 @@ bool DaemonMediaController::trySendSpectrum(MediaPeer* peer, quint64 epoch, qint
         const QPointer<DaemonMediaController> self(this);
         const bool sent = peer->sendDisplay(bytes);
         if (!self || m_peer.get() != peer || m_epoch != epoch) { return true; }
+        if (sent) {
+            recordDisplaySent(bytes);
+        } else {
+            // The bounded transport is full (or failed): this frame is gone,
+            // never queued behind the link.
+            ++m_displayDiagnostics.displaySendRefusals;
+        }
         it = m_endpoints.find(endpointId);
         if (!sent && it != m_endpoints.end() && it->second.revision == revision
             && it->second.endpoint.configured()
@@ -1975,6 +2075,10 @@ void DaemonMediaController::clearSession()
     // Sender remains owned by this controller; stop its timer/capture while
     // the current peer is still identifiable, then retire the peer.
     resetAudioSession();
+    if (m_peer) {
+        logDisplayDiagnostics(true);
+    }
+    m_displayDiagnosticsTimer.stop();
     MediaPeer* const peer = m_peer.release();
     if (peer) {
         peer->disconnect(this);
