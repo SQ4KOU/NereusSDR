@@ -19,7 +19,7 @@
 //                 via Anthropic Claude Code.
 //                 LevelBar widget ported from AetherSDR
 //                 `src/gui/VfoWidget.cpp:38-64`.
-//   2026-09-22 — No-reading display (R-R3-13) by J.J. Boyd (KG4VCF),
+//   2026-09-22: No-reading display (R-R3-13) by J.J. Boyd (KG4VCF),
 //                 with AI-assisted transformation via Anthropic Claude
 //                 Code.  A level at or below -400 dBm, or a non-finite
 //                 one, empties the bar and shows "-- dBm".
