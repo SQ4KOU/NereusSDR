@@ -19,6 +19,9 @@
 //                 createTxChannel until 2026-05-03.  See WdspEngine.cpp
 //                 for the full root-cause / port narrative.
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-23 : R-R3-40 by J.J. Boyd (KG4VCF): test-only friendship for
+//                 the NNR slice-state test. AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 /*  cmaster.cs
@@ -140,6 +143,9 @@ class TestNotchChannelSync;
 // TNF Task 9: the MNF Settings page test primes the engine so it can open one
 // real RX channel and check the minimum-notch-width readout against it.
 class TestMnfSetupPage;
+// R-R3-40: the NNR slice-state test opens real RX channels under a
+// RadioModel so the model the receiver runs can be read back from WDSP.
+class TestNnrRadioPersistence;
 #endif
 
 namespace NereusSDR {
@@ -874,6 +880,9 @@ private:
     // opens one real RX channel so RXANBPGetMinNotchWidth has an rxa[].nbp0
     // to read.
     friend class ::TestMnfSetupPage;
+    // R-R3-40: same friendship for the NNR slice-state test, which opens
+    // real RX channels so the running model can be read back from WDSP.
+    friend class ::TestNnrRadioPersistence;
 #endif
 };
 

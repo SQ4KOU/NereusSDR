@@ -22,6 +22,8 @@
 //                 NereusSDR-original; no Thetis counterpart. Later the same
 //                 day: the block in progress and the per-interval longest
 //                 block (takeDspIntervalMaxBlockUs).
+//                 Later the same day: setActiveNr(NNR) no longer re-applies
+//                 a stale cached NNR tuning.
 // =================================================================
 
 //=================================================================
@@ -1130,8 +1132,13 @@ bool RxChannel::setActiveNr(NrSlot slot)
     if (static_cast<int>(slot) < 0 || static_cast<int>(slot) > static_cast<int>(NrSlot::NNR))
         return false;
     if (slot == NrSlot::NNR) {
+        // R-R3-40: enable the configuration WDSP last accepted. Never re-apply
+        // m_nnrTuning here: it starts as the default (Standard) and changes
+        // only when an apply succeeds, so after a refused apply it is stale,
+        // and re-applying it ran Standard while the slice showed Premium.
+        // The owner (RadioModel) applies the saved choice before this call.
         const auto state = nnrDiagnostics();
-        if (!state.ready || !state.rateSupported || !setNnrTuning(m_nnrTuning))
+        if (!state.ready || !state.rateSupported)
             return false;
     }
 

@@ -2,11 +2,51 @@
 #include <QtTest>
 #include <QDir>
 #include <QFile>
+#include <QScopeGuard>
+#include <QTemporaryDir>
+#include <QtEndian>
 #include "core/AppSettings.h"
+#include "core/RadioDiscovery.h"
+#include "core/RxChannel.h"
+#include "core/SampleRateCatalog.h"
+#include "core/WdspEngine.h"
+#include "core/dsp/ChannelConfig.h"
+#include "core/wdsp_api.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
+extern "C" {
+extern const unsigned char nnr_model_1_data[];
+extern const unsigned int nnr_model_1_size;
+}
+
 using namespace NereusSDR;
+
+namespace {
+constexpr int kRateHz = 48000;
+
+// The bundled premium model with one required tensor renamed: the file
+// opens, but the network cannot be built, so the premium slot of every
+// channel opened while this path is set is unavailable.
+QString writeUnusablePremiumModel(const QTemporaryDir& directory)
+{
+    QByteArray broken(reinterpret_cast<const char*>(nnr_model_1_data), nnr_model_1_size);
+    const auto count = qFromLittleEndian<quint32>(broken.constData() + 12);
+    for (quint32 i = 0; i < count; ++i) {
+        const int offset = 32 + static_cast<int>(i) * 72;
+        if (broken.mid(offset, 6) == "enc1_w") {
+            broken[offset] = 'x';
+            const QString path = directory.filePath(QStringLiteral("unusable-premium.bin"));
+            QFile file(path);
+            if (!file.open(QIODevice::WriteOnly) || file.write(broken) != broken.size()) {
+                return {};
+            }
+            return path;
+        }
+    }
+    return {};
+}
+} // namespace
 
 class TestNnrRadioPersistence : public QObject {
     Q_OBJECT
@@ -105,6 +145,78 @@ private slots:
         QCOMPARE(b->nnrAlpha(), 3.0);
         QCOMPARE(b->activeNr(), NrSlot::NNR);
         QVERIFY(!b->nnrRunning()); // Saved intent is not a live receiver.
+    }
+
+    // R-R3-40 stale-cache regression. The slice's saved choice is Premium,
+    // but the premium model was not usable when its receiver opened, so the
+    // receiver refused it. Once the receiver is rebuilt with Premium
+    // available, turning NNR on must run Premium, and choosing Premium again
+    // must never be ignored. Before the fix, RxChannel re-applied a cached
+    // tuning that defaults to Standard and only changes on success, so WDSP
+    // ran Standard while the slice showed Premium, and the equality check
+    // in SliceModel ignored re-selecting Premium.
+    void runningModelFollowsTheSavedChoice()
+    {
+        const QString mac = QStringLiteral("00:1C:2D:03:04:09");
+        auto& settings = AppSettings::instance();
+        settings.setValue("hardware/" + mac + "/slices/0/nnr/NnrModelSlot", 1);
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString unusable = writeUnusablePremiumModel(directory);
+        QVERIFY(!unusable.isEmpty());
+        const QByteArray encoded = QFile::encodeName(unusable);
+        SetNNRModelPathSlot(1, encoded.constData());
+        const auto restorePath = qScopeGuard([] { SetNNRModelPathSlot(1, ""); });
+
+        RadioModel model;
+        WdspEngine* engine = model.wdspEngine();
+        engine->m_initialized = true;   // friend access (NEREUS_BUILD_TESTS)
+        RadioInfo info;
+        info.macAddress = mac;
+        model.setLastRadioInfoForTest(info);
+        model.configureStreamPool(1, 1, kRateHz);
+        const int id = model.addSlice();
+        SliceModel* slice = model.sliceById(id);
+        QVERIFY(slice);
+        QCOMPARE(slice->nnrModelSlot(), 1);
+        slice->setFrequency(14200000.0);
+        model.openRxChannelPool(1, bufferSizeForRate(kRateHz), kRateHz);
+        QVERIFY(engine->rxChannel(id));
+        QVERIFY(!engine->rxChannel(id)->nnrDiagnostics().modelAvailable[1]);
+        QCOMPARE(slice->nnrModelSlot(), 1);   // the saved choice is kept
+
+        // Premium becomes usable; the receiver is rebuilt underneath the slice.
+        SetNNRModelPathSlot(1, "");
+        ChannelConfig config;
+        config.sampleRate = kRateHz;
+        config.bufferSize = bufferSizeForRate(kRateHz);
+        config.filterSize = 4096;
+        QVERIFY(engine->rebuildRxChannel(id, config) >= 0);
+        RxChannel* channel = engine->rxChannel(id);
+        QVERIFY(channel);
+        QVERIFY(channel->nnrDiagnostics().modelAvailable[1]);
+
+        slice->setActiveNr(NrSlot::NNR);
+        QCOMPARE(slice->activeNr(), NrSlot::NNR);
+        const int afterSelect = channel->nnrDiagnostics().actualModelSlot;
+        const bool runningAfterSelect = channel->nnrDiagnostics().running;
+        const int shownAfterSelect = slice->nnrActualModelSlot();
+
+        slice->setNnrModelSlot(1);   // the operator chooses Premium again
+        const int afterReselect = channel->nnrDiagnostics().actualModelSlot;
+        qInfo("slice shows model %d; WDSP runs model %d after NNR on (running %d, "
+              "shown actual %d), model %d after choosing Premium again",
+              slice->nnrModelSlot(), afterSelect, int(runningAfterSelect),
+              shownAfterSelect, afterReselect);
+        QVERIFY(runningAfterSelect);
+        QCOMPARE(afterSelect, 1);
+        QCOMPARE(shownAfterSelect, 1);
+        QCOMPARE(afterReselect, 1);
+        QCOMPARE(slice->nnrModelSlot(), 1);
+        QCOMPARE(slice->nnrActualModelSlot(), 1);
+        model.flushPendingSettingsSave();
+        QCOMPARE(settings.value("hardware/" + mac + "/slices/0/nnr/NnrModelSlot").toInt(), 1);
     }
 };
 

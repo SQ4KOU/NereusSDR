@@ -53,6 +53,9 @@
 //                 owns the intervals and receiverDspLoad returns its cached
 //                 snapshot, only while the slice exists; removing a slice
 //                 drops its snapshot and baseline.
+//                 Later the same day: turning NNR on applies the slice's
+//                 saved NNR choice first, so the receiver never runs a
+//                 model other than the one the slice shows.
 //   2026-05-03 — Phase 4 Agent 4A of issue #167 (PA calibration safety
 //                 hotfix — K2GX field report).  Drive-slider lambda
 //                 (lines ~830) and TUNE-engagement path (lines ~4280)
@@ -3954,6 +3957,14 @@ void RadioModel::wireNnrSettings(SliceModel* slice)
         RxChannel* channel = m_wdspEngine ? m_wdspEngine->rxChannel(slice->sliceIndex()) : nullptr;
         if (!channel) {
             return true;
+        }
+        // R-R3-40: the receiver runs the operator's saved choice. Apply it
+        // before switching NNR on, so a receiver that refused it earlier
+        // (for example because the model was missing then) cannot run a
+        // different model while the slice shows the saved one.
+        if (requested == NrSlot::NNR && !channel->setNnrTuning(slice->nnrSettings(), reason)) {
+            slice->updateNnrDiagnostics(channel->nnrDiagnostics());
+            return false;
         }
         const bool accepted = channel->setActiveNr(requested);
         slice->updateNnrDiagnostics(channel->nnrDiagnostics());
