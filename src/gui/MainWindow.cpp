@@ -11,6 +11,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-23: the title-bar master output
+//                 reaches this computer's engine through
+//                 RadioModel::localAudioDevices(), and a remote window
+//                 skips the VAX first-run check. AI-assisted
+//                 implementation via Anthropic Claude Code.
 //   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-21 / R-R3-09: a Core's refusal of
 //                 a remote window's notch move, toggle or delete is shown.
 //                 AI-assisted implementation via Anthropic Claude Code.
@@ -568,7 +573,11 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
     // promotion of the menu bar to the native global bar — menus render
     // in-window alongside the master-output controls (explicit design
     // choice, user-approved option D for Sub-Phase 10).
-    m_titleBar = new TitleBar(m_radioModel->audioEngine(), this);
+    // R-R3-23: the master output (volume, mute, output device) is this
+    // computer's, and drives remote playback in a remote window, so it
+    // reaches the engine through localAudioDevices(), not the audited
+    // local-DSP accessor.
+    m_titleBar = new TitleBar(m_radioModel->localAudioDevices(), this);
     m_titleBar->setMenuBar(menuBar());
     setMenuWidget(m_titleBar);
 
@@ -585,7 +594,7 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
         AudioDeviceConfig cfg = AudioDeviceConfig::loadFromSettings(
             QStringLiteral("audio/Speakers"));
         cfg.deviceName = name;
-        if (auto* engine = m_radioModel->audioEngine()) {
+        if (auto* engine = m_radioModel->localAudioDevices()) {
             engine->setSpeakersConfig(cfg);
         }
     });
@@ -11653,6 +11662,15 @@ void MainWindow::tryAutoReconnect()
 // NereusSDR-original; no Thetis equivalent.
 void MainWindow::checkVaxFirstRun()
 {
+    // R-R3-23: skipped in a remote window, as the Linux audio first-run
+    // below already is. A remote window opens no VAX outputs (the VAX
+    // applet and Setup page say so), so offering to bind virtual cables
+    // to them would set up something that does nothing, and would record
+    // audio/FirstRunComplete and the cable fingerprint for a later local
+    // session that never saw the dialog.
+    if (!m_radioModel->ownsLocalDsp()) {
+        return;
+    }
     auto& s = AppSettings::instance();
     const bool firstRunDone =
         (s.value(QStringLiteral("audio/FirstRunComplete"),

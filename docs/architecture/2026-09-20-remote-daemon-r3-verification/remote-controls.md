@@ -135,7 +135,7 @@ operator receive session. The three exceptions found are listed under
 | Overlay: VAX channel combo | **Unavailable (gated here)** | as the flag's VAX selector | `tst_remote_gui_gating` (`remoteVaxSurfacesAreUnavailable`) |
 | Overlay: ATT, IQ combo, RF gain, WNB, zoom buttons | Placeholder / unwired | disabled or no consumer | n/a |
 | Title bar connection segment, audio pip, right-click | GUI-local, opens station session actions | `openNetworkDiagnostics`, `connectionRequestedByOperator`, `showSegmentContextMenu` remote branch | `tst_remote_connection_controls`; hardware pending (S1) |
-| Master output: volume, mute, output device | GUI-local, drives remote playback | local `AudioEngine`; `RemoteMediaController.cpp:534-541` follows mute and device | `tst_remote_audio_receiver`, `tst_remote_media_controller`; hardware pending (S1) |
+| Master output: volume, mute, output device | GUI-local, drives remote playback | local `AudioEngine` through `RadioModel::localAudioDevices()`; `RemoteMediaController.cpp:534-541` follows mute and device; the picked device is saved to `audio/Speakers/DeviceName` before it is announced, so remote playback re-reads the new device (`MasterOutputWidget::selectOutputDevice`) | `tst_remote_audio_receiver`, `tst_remote_media_controller`, `tst_master_output_widget` (`pickedDeviceIsSavedBeforeItIsAnnounced`); hardware pending (S1) |
 | Status bar: +PAN, panel toggle, station block, TCI indicator, RX dashboard, system tile, TGXL chip | GUI-local / station session | as above; station block -> `connectionRequestedByOperator` | `tst_station_block`, `tst_remote_receive_indicators` |
 | Status bar: PSA indicator menu | GUI-local preference (no local PureSignal remotely) | `InvertRedBluePsa`, `HideFeedbackLevel` | n/a |
 | Status bar: CWX, DVK, FDX | Placeholder | inert labels | n/a |
@@ -152,8 +152,9 @@ visible and are not listed.
 | General > Options: Step Attenuator, Auto Attenuate | **Unavailable (gated here)** | unwired local `StepAttenuatorController` | `tst_remote_gui_gating` (`remoteGeneralOptionsDisablesOnlyTheAttenuatorGroups`) |
 | Hardware > Hardware Config, DDC Routing | **Unavailable (gated here)** | `HardwarePage` never learns a MAC remotely (`currentRadioChanged` is local-connect only, `RadioModel.cpp:14541`), so `onTabSettingChanged` drops every edit; DDC override keys are per-MAC and unread | `tst_remote_gui_gating` (`remoteDeclaredUnavailableSetupLeavesSayWhy`) |
 | PA > PA Gain, Watt Meter, PA Values | Unavailable (not shown) | category hidden: remote capabilities are the Unknown board's, `hasPaProfile` false | `tst_remote_gui_gating` (`remotePaCategoryIsNotShown`) |
-| Audio > Devices, VAX, TCI, Advanced | Unavailable (local-DSP gate; reason added here) | pages and `AudioBackendStrip` reach `audioEngine()`. Speaker output for remote playback is chosen from the title bar master output. Devices carries the microphone status and Retry; a remote window never holds a capture lease | `tst_remote_gui_gating` (`remoteLocalDspSetupPagesShowAPlainReason`, `everyRemoteSetupPageIsEitherLocalDspFreeOrDisabled`) |
-| Audio > TX Input | Transmit and unavailable (both gates) | TX input device, Test Mic and Retry; transmit reason first, local reason once transmit is permitted | `tst_remote_gui_gating` (`remoteTxInputShowsTheReasonThatCurrentlyApplies`), `tst_remote_tx_presentation` |
+| Audio > Devices | GUI-local (scope ThisComputer), usable connected or not | Speakers, Headphones and Microphone cards pick this computer's devices through `RadioModel::localAudioDevices()`, which the local-DSP audit does not count; a card saves `audio/{Speakers,Headphones,TxInput}/*` then hands the config to the engine, and remote playback re-reads `audio/Speakers` on `speakersConfigChanged`. The title-bar picker is a shortcut to the same setting. Headphones behaves as it does locally. Remote playback still refuses speaker formats other than 48 kHz stereo (receiver audio plan). Microphone status and Retry follow this computer's capture | `tst_remote_gui_gating` (`remoteDevicesPageWorksOnThisComputer`, `everyRemoteSetupPageIsEitherLocalDspFreeOrDisabled`), `tst_settings_scope` (card keys); speaker restart on a real device hardware pending (S1) |
+| Audio > VAX, TCI, Advanced | Unavailable (local-DSP gate; reason added here) | VAX and Advanced reach `audioEngine()` themselves; TCI reached it only through the backend strip, which no longer counts, so it is declared unavailable with the same reason (`markRemoteUnavailable`). Advanced Reset in a remote window removes only this computer's `audio/*` keys (never `audio/DspRate`, `audio/DspBlockSize`) and re-creates no VAX output; local Reset unchanged | `tst_remote_gui_gating` (`remoteLocalDspSetupPagesShowAPlainReason`), `tst_audio_advanced_page` |
+| Audio > TX Input | Mixed: this computer's PC microphone usable; mic source, Mic Gain and radio microphone hardware **Transmit (gated here)** | PC Mic backend, device, buffer, Test Mic and Retry through `RadioModel::localAudioDevices()`, saved to `audio/TxInput/*`; Test Mic opens this computer's microphone and meters it. `AudioTxInputPage::setTransmitPermitted` gates the Mic Source group, Mic Gain and the Hermes / Orion-MkII / Saturn radio mic groups with the transmit reason. No longer a whole-page transmit leaf | `tst_remote_gui_gating` (`remoteTxInputKeepsThisComputersMicrophoneUsable`), `tst_audio_tx_input_pc_mic_group` (`testMic_opensThisComputersMicrophoneInARemoteWindow`) |
 | Audio > TX Profile | Transmit | `MicProfileManager`, `TransmitModel` | `tst_remote_tx_presentation` |
 | DSP > AGC/ALC (RX AGC) | Station-backed | `SliceModel` AGC setters | mirror suites; hardware pending (S1) |
 | DSP > AGC/ALC (TX Leveler, TX ALC groups) | **Transmit (gated here)** | `TransmitModel::setTxLeveler*`, `setTxAlc*`, not mirrored; `AgcAlcSetupPage::setTransmitPermitted` (group enable, tooltip, accessible description), pushed by `SetupDialog` | `tst_remote_gui_gating` (`remoteAgcAlcTransmitGroupsFollowThePermission`) |
@@ -187,10 +188,18 @@ visible and are not listed.
   and leaf tooltip: DSP > CFC and Test > Two-Tone IMD follow the transmit
   permission; Hardware Config, DDC Routing and RF-Kit are declared
   unavailable in a remote session (`SetupDialog::markRemoteUnavailable`).
-- Pages the local-DSP gate disables (Audio > Devices, TX Input, VAX, TCI,
-  Advanced) now show the reason "These settings control audio and signal
-  processing on this computer. While connected to a Core, the Core does that
-  work, so they cannot be changed here." instead of an unexplained grey page.
+- Pages the local-DSP gate disables (Audio > VAX, TCI, Advanced) now show
+  the reason "These settings control audio and signal processing on this
+  computer. While connected to a Core, the Core does that work, so they
+  cannot be changed here." instead of an unexplained grey page. Audio >
+  Devices and TX Input were in this list until the R3 remote window Setup
+  plan (Task 1): every Setup page now declares a scope (`SetupScope`:
+  ThisComputer, Core, Mixed), the backend strip no longer counts as local
+  DSP, and those two pages work in a remote window (rows above). A
+  ThisComputer page that reaches an audited accessor is disabled, logged at
+  critical and fails the Setup sweep. A remote window also skips the VAX
+  first-run check (`tst_remote_gui_gating`,
+  `vaxFirstRunCheckRunsOnlyInALocalWindow`).
 - The RX applet ATT/S-ATT row and RX1 preamp, and the General > Options Step
   Attenuator and Auto Attenuate groups: "The attenuator and preamp cannot be
   changed from a remote window yet."
@@ -369,7 +378,7 @@ commands or Core's independent refusal of TX writes.
 | TX-slice badge and menu | Retain the indicator; suppress badge handoff and disable the actual dynamically constructed context action. Tests execute the nested menu and verify no remote handoff, with local handoff retained. |
 | RX-bypass-on-TX | Disable BYPS and its writer callback. Do not restrict the TX-labelled antenna selector used for TRX receive routing. |
 | TX Equalizer | Disable the actual Tools QAction and guard activation. The applet's alternate context callback is also guarded. Tests show no remote editor and successful local editor launch. |
-| TX-specific Setup | Six explicit leaves: Audio TX Input/TX Profile; Transmit Power/TX Profiles/Speech Processor/DEXP/VOX. Content remains readable with a visible reason; editing and TX-EQ cross-links are disabled. Tests cover each page, local enablement, permission changes and preservation of the independent local-DSP gate. |
+| TX-specific Setup | Six explicit leaves: Audio TX Input/TX Profile; Transmit Power/TX Profiles/Speech Processor/DEXP/VOX (since September 23, Audio TX Input gates only its controls held for the radio; see the Setup leaves table). Content remains readable with a visible reason; editing and TX-EQ cross-links are disabled. Tests cover each page, local enablement, permission changes and preservation of the independent local-DSP gate. |
 
 VAX Setup configures receive export through the audio engine. It retains its
 existing resource restriction; it is not newly labelled a TX-only page.

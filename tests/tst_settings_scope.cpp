@@ -450,6 +450,42 @@ private slots:
         QTest::newRow("tx/preconnect/Mic_Source is OperatorLocal (local mic device)")
             << QStringLiteral("tx/preconnect/Mic_Source") << int(SettingsScope::OperatorLocal);
 
+        // R-R3-23 / R-R3-36: Setup > Audio > Devices (a ThisComputer page)
+        // and the PC Mic half of TX Input save these in a remote window.
+        // Every field AudioDeviceConfig::saveToSettings writes under the
+        // three card prefixes, plus the Headphones enable, must stay on
+        // this computer: were one Station, picking a sound card in a
+        // remote window would write it to the Core. Built by concatenation
+        // (AudioDeviceConfig.cpp), so the completeness sweep cannot see
+        // them; these rows are their only cover.
+        for (const char* card : {"Speakers", "Headphones", "TxInput"}) {
+            for (const char* field : {"DriverApi", "DeviceName", "SampleRate", "BitDepth",
+                                      "Channels", "BufferSamples", "ExclusiveMode",
+                                      "EventDriven", "BypassMixer", "ManualLatencyMs"}) {
+                const QString key = QStringLiteral("audio/%1/%2")
+                                        .arg(QLatin1String(card), QLatin1String(field));
+                QTest::newRow(qPrintable(key + QStringLiteral(" is OperatorLocal (this computer's device)")))
+                    << key << int(SettingsScope::OperatorLocal);
+            }
+        }
+        QTest::newRow("audio/Headphones/Enabled is OperatorLocal (this computer's device)")
+            << QStringLiteral("audio/Headphones/Enabled") << int(SettingsScope::OperatorLocal);
+        // The radio's own microphone input stays with the radio: TX Input's
+        // mic source selector is a Core control in a remote window.
+        QTest::newRow("hardware/<mac>/tx/Mic_Source is Station (the radio's mic input)")
+            << QStringLiteral("hardware/00:1C:2D:05:37:2A/tx/Mic_Source")
+            << int(SettingsScope::Station);
+        // R-R3-10: what a remote window's Advanced Reset removes (this
+        // computer's audio/* keys) and what it leaves for the Core.
+        for (const char* key : {"audio/VacFeedback/1/Gain", "audio/SendIqToVax",
+                                "audio/TxMonitorToVax", "audio/MuteVaxDuringTxOnOtherSlice",
+                                "audio/FirstRunComplete", "audio/LastDetectedCables",
+                                "audio/Vax1/DeviceName"}) {
+            QTest::newRow(qPrintable(QStringLiteral("%1 is OperatorLocal (Advanced Reset removes it)")
+                                         .arg(QLatin1String(key))))
+                << QString::fromLatin1(key) << int(SettingsScope::OperatorLocal);
+        }
+
         // A realistic fully-qualified hardwareValue-routed key (a real
         // MAC-shaped segment this time, not "oc") -- proves the
         // "hardware/" prefix rule Task 15 actually relies on, since every

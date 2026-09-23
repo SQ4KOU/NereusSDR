@@ -64,6 +64,14 @@
 //                 mic, since PC-mic keying now waits for a ready
 //                 microphone. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-23 -- R-R3-23 / R-R3-36: the Setup sweep reads each page's
+//                 scope and is proved against a deliberately wrong
+//                 ThisComputer page; Audio > Devices and TX Input work in a
+//                 remote window (TX Input gates only the controls held for
+//                 the radio); a remote window runs no VAX first-run check;
+//                 and (R-R3-16) a local window still opens Connections when
+//                 its radio drops. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 //   2026-09-23 -- R-R3-21 control inventory: DSP > CFC and Test >
 //                 Two-Tone IMD follow the transmit permission, a page the
 //                 local-DSP gate disables now says why, and the controls
@@ -90,7 +98,10 @@
 #include <QMenu>
 #include <QMetaObject>
 #include <QPushButton>
+#include <QRadioButton>
+#include <QRegularExpression>
 #include <QScopeGuard>
+#include <QSlider>
 #include <QSignalSpy>
 #include <QSpinBox>
 #include <QStringList>
@@ -128,6 +139,11 @@
 #include "gui/applets/RxApplet.h"
 #include "gui/applets/TxApplet.h"
 #include "gui/applets/VaxApplet.h"
+#include "gui/HGauge.h"
+#include "gui/VaxFirstRunDialog.h"
+#include "gui/setup/AudioDevicesPage.h"
+#include "gui/setup/AudioTxInputPage.h"
+#include "gui/setup/DeviceCard.h"
 #include "gui/setup/DspOptionsPage.h"
 #include "gui/setup/DspSetupPages.h"
 #include "gui/setup/GeneralOptionsPage.h"
@@ -197,6 +213,69 @@ QTreeWidgetItem* setupLeaf(SetupDialog& dialog, const QString& label)
     for (QTreeWidgetItemIterator it(tree); *it; ++it) {
         if ((*it)->parent() != nullptr && (*it)->text(0) == label) {
             return *it;
+        }
+    }
+    return nullptr;
+}
+
+// R-R3-23: realizes every registered Setup leaf against `model` (a
+// Role::Remote one) and returns the leaves that break the gate's rule:
+//   - a Core or Mixed page that reached this process's DSP and was left
+//     enabled (the rule since R2 Task 20);
+//   - a ThisComputer page that reached this process's DSP at all, or came
+//     up disabled. Such a page is supposed to work in a remote window, so
+//     either is a bug in the page, even though the gate disables it.
+// Iterates by INDEX: two leaves share the label "Options". `reachedCount`
+// counts the pages that reached local DSP while being realized here.
+QStringList remoteSetupSweepOffenders(RadioModel& model, SetupDialog& dialog,
+                                      int* reachedCount = nullptr)
+{
+    QStringList offenders;
+    int reached = 0;
+    const QStringList labels = dialog.pageLabelsForTest();
+    const int pageCount = dialog.registeredPageCountForTest();
+    for (int i = 0; i < pageCount; ++i) {
+        const int before = model.localDspHandOutCount();
+        QWidget* page = dialog.realizePageAtForTest(i);
+        if (page == nullptr) {
+            continue;  // a factory that yields nothing has nothing to gate
+        }
+        const bool reachedLocalDsp = model.localDspHandOutCount() > before;
+        if (reachedLocalDsp) {
+            ++reached;
+        }
+        if (dialog.pageScopeAtForTest(i) == SetupScope::ThisComputer) {
+            if (reachedLocalDsp || !page->isEnabled()) {
+                offenders << labels.at(i);
+            }
+        } else if (reachedLocalDsp && page->isEnabled()) {
+            offenders << labels.at(i);
+        }
+    }
+    if (reachedCount != nullptr) {
+        *reachedCount = reached;
+    }
+    return offenders;
+}
+
+// The Devices page's card titled `title`.
+DeviceCard* deviceCardOf(QWidget* page, const QString& title)
+{
+    for (DeviceCard* card : page->findChildren<DeviceCard*>()) {
+        if (card->title() == title) {
+            return card;
+        }
+    }
+    return nullptr;
+}
+
+// The microphone card's buffer-size combo (its items start at 64 samples;
+// no other card combo's do).
+QComboBox* deviceCardBufferCombo(DeviceCard* card)
+{
+    for (QComboBox* combo : card->findChildren<QComboBox*>()) {
+        if (combo->count() > 1 && combo->itemData(0).toInt() == 64) {
+            return combo;
         }
     }
     return nullptr;
@@ -388,28 +467,16 @@ private slots:
         // twice and never builds the DSP one -- while still reporting a
         // clean sweep, which is the worst possible failure for a test
         // whose whole job is coverage. Fix round 1, Minor 2.
-        QStringList offenders;
-        int reachedCount = 0;
-        const QStringList labels = dialog.pageLabelsForTest();
+        //
+        // R-R3-23: scope-aware. A ThisComputer page (Audio > Devices, the
+        // General placeholders, Remote Station, ...) must neither reach
+        // local DSP nor come up disabled; see remoteSetupSweepOffenders.
         const int pageCount = dialog.registeredPageCountForTest();
         QVERIFY(pageCount > 0);
-        QCOMPARE(labels.size(), pageCount);
+        QCOMPARE(dialog.pageLabelsForTest().size(), pageCount);
 
-        for (int i = 0; i < pageCount; ++i) {
-            const int before = model.localDspHandOutCount();
-            QWidget* page = dialog.realizePageAtForTest(i);
-            if (page == nullptr) {
-                continue;  // a factory that yields nothing has nothing to gate
-            }
-            const bool reachedLocalDsp = model.localDspHandOutCount() > before;
-            if (!reachedLocalDsp) {
-                continue;
-            }
-            ++reachedCount;
-            if (page->isEnabled()) {
-                offenders << labels.at(i);
-            }
-        }
+        int reachedCount = 0;
+        const QStringList offenders = remoteSetupSweepOffenders(model, dialog, &reachedCount);
 
         // Minor 2's fix, pinned: the sweep must have BUILT every leaf. With
         // the previous label-driven loop this read pageCount - 1, because
@@ -419,8 +486,9 @@ private slots:
 
         QVERIFY2(offenders.isEmpty(),
                  qPrintable(QStringLiteral(
-                     "%1 Setup page(s) bound themselves to this process's DSP "
-                     "on a remote-station model and were left enabled: %2")
+                     "%1 Setup page(s) broke the remote gate: a Core or Mixed "
+                     "page reached this process's DSP and stayed enabled, or a "
+                     "ThisComputer page reached it or came up disabled: %2")
                                 .arg(offenders.size())
                                 .arg(offenders.join(QStringLiteral(", ")))));
 
@@ -431,6 +499,72 @@ private slots:
                  "no Setup page reached local DSP at all, so the gate above "
                  "was never exercised -- either the enumeration changed or "
                  "the audit stopped arming");
+
+        // And the scopes the plan fixes (R-R3-23).
+        const QStringList labels = dialog.pageLabelsForTest();
+        const auto scopeOf = [&](const QString& label) {
+            return dialog.pageScopeAtForTest(static_cast<int>(labels.indexOf(label)));
+        };
+        QCOMPARE(scopeOf(QStringLiteral("Devices")), SetupScope::ThisComputer);
+        QCOMPARE(scopeOf(QStringLiteral("TX Input")), SetupScope::Mixed);
+        QCOMPARE(scopeOf(QStringLiteral("Advanced")), SetupScope::Mixed);
+    }
+
+    // R-R3-23: the sweep catches a ThisComputer page that reaches an
+    // audited accessor. Proved with a page that does so on purpose: it is
+    // disabled, the critical log names the accessor, and the sweep lists
+    // it. A Core page doing the same is disabled with no critical log and
+    // is not an offender (the gate working as designed).
+    void aThisComputerPageThatReachesLocalDspFailsTheSweep()
+    {
+        RadioModel model(RadioModel::Role::Remote);
+        SetupDialog dialog(&model);
+        const QString wrongLabel = QStringLiteral("Deliberately wrong page");
+        const QString coreLabel = QStringLiteral("Deliberately gated Core page");
+        const int wrong = dialog.registerPageForTest(
+            wrongLabel, SetupScope::ThisComputer, [&model]() -> QWidget* {
+                (void)model.wdspEngine();
+                return new QWidget;
+            });
+        const int core = dialog.registerPageForTest(
+            coreLabel, SetupScope::Core, [&model]() -> QWidget* {
+                (void)model.receiverManager();
+                return new QWidget;
+            });
+
+        // Realized first, on its own, so the log can name exactly the one
+        // accessor it reached.
+        QTest::ignoreMessage(QtCriticalMsg, QRegularExpression(
+            QStringLiteral("^Setup page \"?%1\"? is declared ThisComputer but "
+                           "reached wdspEngine on a remote-station model")
+                .arg(QRegularExpression::escape(wrongLabel))));
+        QWidget* const wrongPage = dialog.realizePageAtForTest(wrong);
+        QVERIFY(wrongPage != nullptr);
+        QVERIFY(!wrongPage->isEnabled());
+
+        // No critical line for the Core page: captured around its
+        // realization, then the previous handler is put back.
+        static QStringList criticals;
+        criticals.clear();
+        static QtMessageHandler previous = nullptr;
+        previous = qInstallMessageHandler(
+            [](QtMsgType type, const QMessageLogContext& context, const QString& msg) {
+                if (type == QtCriticalMsg) {
+                    criticals << msg;
+                    return;
+                }
+                if (previous != nullptr) {
+                    previous(type, context, msg);
+                }
+            });
+        QWidget* const corePage = dialog.realizePageAtForTest(core);
+        qInstallMessageHandler(previous);
+        QVERIFY(corePage != nullptr);
+        QVERIFY(!corePage->isEnabled());
+        QVERIFY2(criticals.isEmpty(), qPrintable(criticals.join(QLatin1Char('\n'))));
+
+        const QStringList offenders = remoteSetupSweepOffenders(model, dialog);
+        QCOMPARE(offenders, QStringList{wrongLabel});
     }
 
     // Local direct mode is the regression risk. The same sweep against a
@@ -1268,21 +1402,25 @@ private slots:
     //
     // The gate (SetupDialog::realizePage) disabled the Audio leaves on a
     // remote model but gave no reason, so the operator saw a greyed page
-    // and nothing else. Devices and TX Input also carry the microphone
-    // status, Retry and (TX Input) Test Mic controls; a remote window never
-    // captures a microphone, and those controls are disabled with the page.
+    // and nothing else. R-R3-23 narrowed the set: Devices and TX Input
+    // pick this computer's devices and now work (cases below). VAX and
+    // Advanced still reach this process's engine themselves; TCI reached it
+    // only through the backend strip, which no longer counts, so it keeps
+    // its remote behaviour by declaration, with the same reason.
     // ====================================================================
     void remoteLocalDspSetupPagesShowAPlainReason_data()
     {
         QTest::addColumn<QString>("label");
-        for (const char* label : {"Devices", "VAX", "TCI", "Advanced"}) {
-            QTest::newRow(label) << QString::fromLatin1(label);
-        }
+        QTest::addColumn<bool>("reachesLocalDsp");
+        QTest::newRow("VAX") << QStringLiteral("VAX") << true;
+        QTest::newRow("TCI") << QStringLiteral("TCI") << false;
+        QTest::newRow("Advanced") << QStringLiteral("Advanced") << true;
     }
 
     void remoteLocalDspSetupPagesShowAPlainReason()
     {
         QFETCH(QString, label);
+        QFETCH(bool, reachesLocalDsp);
         RadioModel remote(RadioModel::Role::Remote);
         SetupDialog dialog(&remote);
         dialog.setTransmitPermitted(false, QStringLiteral("Remote transmit is unavailable"));
@@ -1291,9 +1429,9 @@ private slots:
         dialog.selectPage(label);
         QWidget* const page = dialog.realizedPageForTest(label);
         QVERIFY(page != nullptr);
-        QVERIFY2(remote.localDspHandOutCount() > handOutsBefore,
-                 "the page no longer reaches local DSP; re-audit its row in "
-                 "remote-controls.md before changing this case");
+        QVERIFY2((remote.localDspHandOutCount() > handOutsBefore) == reachesLocalDsp,
+                 "whether the page reaches local DSP changed; re-audit its row "
+                 "in remote-controls.md before changing this case");
         QVERIFY(!page->isEnabled());
 
         auto* const localNotice = dialog.findChild<QLabel*>(QStringLiteral("setupLocalUnavailable"));
@@ -1315,51 +1453,141 @@ private slots:
         QVERIFY(!page->isEnabled());
         QVERIFY(!localNotice->isHidden());
 
-        if (label == QStringLiteral("Devices")) {
-            auto* const retry = page->findChild<QPushButton*>(QStringLiteral("retryCapture"));
-            QVERIFY(retry != nullptr);
-            QVERIFY(!retry->isEnabled());
-        }
-
         // Moving to a receive page that is available hides the notice.
         dialog.selectPage(QStringLiteral("NR/ANF"));
         QVERIFY(localNotice->isHidden());
         QVERIFY(txNotice->isHidden());
     }
 
-    // TX Input carries both gates. While transmit is not permitted the
-    // transmit reason is the one shown; once it is, the page stays
-    // disabled for its local resource and says so.
-    void remoteTxInputShowsTheReasonThatCurrentlyApplies()
+    // R-R3-23: Audio > Devices in a remote window picks this computer's
+    // speakers, headphones and microphone as it always has, whatever the
+    // transmit permission. Nothing counted by the local-DSP audit is
+    // reached, so the page is enabled with no reason shown, and a card
+    // change is saved to this computer's audio/* keys and handed to the
+    // engine that plays remote audio.
+    void remoteDevicesPageWorksOnThisComputer()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        SetupDialog dialog(&remote);
+        dialog.setTransmitPermitted(false, QStringLiteral("Remote transmit is unavailable"));
+
+        const int handOutsBefore = remote.localDspHandOutCount();
+        dialog.selectPage(QStringLiteral("Devices"));
+        QWidget* const page = dialog.realizedPageForTest(QStringLiteral("Devices"));
+        QVERIFY(page != nullptr);
+        QCOMPARE(remote.localDspHandOutCount(), handOutsBefore);
+        QVERIFY(page->isEnabled());
+        QVERIFY(page->toolTip().isEmpty());
+        QVERIFY(dialog.findChild<QLabel*>(QStringLiteral("setupLocalUnavailable"))->isHidden());
+        QVERIFY(dialog.findChild<QLabel*>(QStringLiteral("setupTransmitUnavailable"))->isHidden());
+        QTreeWidgetItem* const leaf = setupLeaf(dialog, QStringLiteral("Devices"));
+        QVERIFY(leaf != nullptr);
+        QVERIFY(leaf->toolTip(0).isEmpty());
+
+        for (const char* title : {"Speakers", "Headphones", "TX Input (Microphone)"}) {
+            DeviceCard* const card = deviceCardOf(page, QString::fromLatin1(title));
+            QVERIFY2(card != nullptr, title);
+            QVERIFY2(card->isEnabled(), title);
+        }
+
+        // The microphone choice: saved to audio/TxInput/* and handed to the
+        // engine (the one Test Mic and a later remote microphone open).
+        DeviceCard* const mic = deviceCardOf(page, QStringLiteral("TX Input (Microphone)"));
+        QComboBox* const buffer = deviceCardBufferCombo(mic);
+        QVERIFY(buffer != nullptr);
+        const int next = (buffer->currentIndex() + 1) % buffer->count();
+        const int samples = buffer->itemData(next).toInt();
+        // The card debounces its buffer combo by 200 ms, then saves and
+        // hands the config on.
+        buffer->setCurrentIndex(next);
+        QTRY_COMPARE(remote.localAudioDevices()->txInputConfig().bufferSamples, samples);
+        QCOMPARE(AppSettings::instance().value(QStringLiteral("audio/TxInput/BufferSamples"))
+                     .toString(),
+                 QString::number(samples));
+        QCOMPARE(remote.localDspHandOutCount(), handOutsBefore);
+    }
+
+    // R-R3-36: TX Input is Mixed. This computer's PC microphone (backend,
+    // device, buffer, Test Mic) works in a remote window; the mic source,
+    // Mic Gain and the radio's microphone hardware follow the transmit
+    // permission with its reason, and move nothing while it is withheld.
+    void remoteTxInputKeepsThisComputersMicrophoneUsable()
     {
         const QString txReason = QStringLiteral("Remote transmit is unavailable");
         RadioModel remote(RadioModel::Role::Remote);
         SetupDialog dialog(&remote);
         dialog.setTransmitPermitted(false, txReason);
-        dialog.selectPage(QStringLiteral("TX Input"));
-        QWidget* const page = dialog.realizedPageForTest(QStringLiteral("TX Input"));
-        QVERIFY(page != nullptr);
-        auto* const localNotice = dialog.findChild<QLabel*>(QStringLiteral("setupLocalUnavailable"));
-        auto* const txNotice = dialog.findChild<QLabel*>(QStringLiteral("setupTransmitUnavailable"));
 
-        QVERIFY(!page->isEnabled());
-        QVERIFY(!txNotice->isHidden());
-        QVERIFY(localNotice->isHidden());
-        QCOMPARE(page->toolTip(), txReason);
-        // Test Mic and Retry are disabled with the page: a remote window
-        // never holds a microphone capture demand.
-        for (QPushButton* button : page->findChildren<QPushButton*>()) {
-            if (button->text() == QStringLiteral("Test Mic")
-                || button->objectName() == QStringLiteral("retryCapture")) {
-                QVERIFY2(!button->isEnabled(), qPrintable(button->text()));
-            }
+        const int handOutsBefore = remote.localDspHandOutCount();
+        dialog.selectPage(QStringLiteral("TX Input"));
+        QWidget* const container = dialog.realizedPageForTest(QStringLiteral("TX Input"));
+        QVERIFY(container != nullptr);
+        QCOMPARE(remote.localDspHandOutCount(), handOutsBefore);
+        QVERIFY(container->isEnabled());
+        auto* const page = container->findChild<AudioTxInputPage*>();
+        QVERIFY(page != nullptr);
+        QVERIFY(dialog.findChild<QLabel*>(QStringLiteral("setupLocalUnavailable"))->isHidden());
+        QVERIFY(dialog.findChild<QLabel*>(QStringLiteral("setupTransmitUnavailable"))->isHidden());
+
+        // This computer's microphone.
+        QVERIFY(page->backendCombo()->isEnabled());
+        QVERIFY(page->deviceCombo()->isEnabled());
+        QVERIFY(page->bufferSlider()->isEnabled());
+        QVERIFY(page->testMicButton()->isEnabled());
+
+        // The controls held for the radio: disabled, with the reason.
+        QList<QWidget*> held{page->micSourceGroup(), page->micGainSlider()};
+        for (QGroupBox* group : {page->hermesRadioMicGroup(), page->orionRadioMicGroup(),
+                                 page->saturnRadioMicGroup()}) {
+            if (group != nullptr) { held << group; }
+        }
+        for (QWidget* control : held) {
+            QVERIFY(control != nullptr);
+            QVERIFY2(!control->isEnabled(), qPrintable(control->objectName()));
+            QCOMPARE(control->toolTip(), txReason);
         }
 
+        // Activation moves nothing held for the radio.
+        TransmitModel& tx = remote.transmitModel();
+        const MicSource source = tx.micSource();
+        const int micGain = tx.micGainDb();
+        for (QRadioButton* button : page->micSourceGroup()->findChildren<QRadioButton*>()) {
+            button->click();
+        }
+        QTest::keyClick(page->micGainSlider(), Qt::Key_Right);
+        QCOMPARE(tx.micSource(), source);
+        QCOMPARE(tx.micGainDb(), micGain);
+
+        // The microphone choice is saved to this computer's audio/TxInput.
+        QSlider* const buffer = page->bufferSlider();
+        const int next = (buffer->value() + 1) % (buffer->maximum() + 1);
+        buffer->setValue(next);
+        const int samples = AudioTxInputPage::kBufferSizes.at(next);
+        QCOMPARE(AppSettings::instance().value(QStringLiteral("audio/TxInput/BufferSamples"))
+                     .toString(),
+                 QString::number(samples));
+        QCOMPARE(remote.localAudioDevices()->txInputConfig().bufferSamples, samples);
+
+        // A Core that permits transmit lifts the held controls' gate.
         dialog.setTransmitPermitted(true);
-        QVERIFY(!page->isEnabled());
-        QVERIFY(txNotice->isHidden());
-        QVERIFY(!localNotice->isHidden());
-        QCOMPARE(page->toolTip(), localNotice->text());
+        QVERIFY(page->micSourceGroup()->isEnabled());
+        QVERIFY(page->micGainSlider()->isEnabled());
+        QVERIFY(page->micGainSlider()->toolTip() != txReason);
+        dialog.setTransmitPermitted(false, txReason);
+        QVERIFY(!page->micSourceGroup()->isEnabled());
+        QVERIFY(page->bufferSlider()->isEnabled());
+
+        // Local direct mode: every control live.
+        RadioModel local;
+        SetupDialog localDialog(&local);
+        localDialog.selectPage(QStringLiteral("TX Input"));
+        QWidget* const localContainer = localDialog.realizedPageForTest(QStringLiteral("TX Input"));
+        QVERIFY(localContainer != nullptr && localContainer->isEnabled());
+        auto* const localPage = localContainer->findChild<AudioTxInputPage*>();
+        QVERIFY(localPage != nullptr);
+        QVERIFY(localPage->micSourceGroup()->isEnabled());
+        QVERIFY(localPage->micGainSlider()->isEnabled());
+        QVERIFY(localPage->micGainSlider()->toolTip() != txReason);
     }
 
     // Local direct mode never runs the local-DSP gate: no Audio page is
@@ -2330,6 +2558,94 @@ private slots:
         }
 
         sessions.shutdown();
+    }
+
+    // ====================================================================
+    // R-R3-16 (carried from the Connections task): a LOCAL window still
+    // opens Connections on its own when its radio drops. Since R-R3-16 the
+    // automatic open in MainWindow::onConnectionStateChanged runs only
+    // for a model that owns its local DSP; this pins that the local half
+    // still behaves exactly as before. The open keys on a radio name the
+    // model learns on connect, so setNameForTest stands in for a connect.
+    // ====================================================================
+    void localWindowDisconnectStillOpensConnections()
+    {
+        AppSettings::instance().setValue(QStringLiteral("audio/FirstRunComplete"),
+                                         QStringLiteral("True"));
+        RadioDiscovery::clearHoldOffForTest();
+        {
+            RadioDiscovery discovery;
+            discovery.holdOffScans(std::chrono::minutes{5});
+        }
+        const auto releaseHoldOff = qScopeGuard([] {
+            RadioDiscovery::clearHoldOffForTest();
+        });
+
+        MainWindow window({}, nullptr, MainWindow::ConnectionStartup::Deferred);
+        window.setConnectionPickerManaged(true);
+        RadioModel* const model = window.radioModel();
+        QVERIFY(model->ownsLocalDsp());
+        QSignalSpy requests(&window, &MainWindow::connectionsRequested);
+
+        // No radio name yet (the startup case): a disconnected state opens
+        // nothing.
+        model->setConnectionStateForTest(ConnectionState::Connecting);
+        model->setConnectionStateForTest(ConnectionState::Disconnected);
+        QCOMPARE(requests.count(), 0);
+
+        // After a connect has named the radio, losing it opens Connections,
+        // once.
+        model->setNameForTest(QStringLiteral("ANAN-G2"));
+        model->setConnectionStateForTest(ConnectionState::Connecting);
+        requests.clear();
+        model->setConnectionStateForTest(ConnectionState::Disconnected);
+        QCOMPARE(requests.count(), 1);
+    }
+
+    // ====================================================================
+    // R-R3-23: a remote window runs no VAX first-run check, as it already
+    // runs no Linux audio first-run. It opens no VAX outputs, so the dialog
+    // would offer to bind cables to nothing, and it would record
+    // audio/FirstRunComplete and the cable fingerprint for a later local
+    // session that never saw it. A local window still runs it.
+    // ====================================================================
+    void vaxFirstRunCheckRunsOnlyInALocalWindow()
+    {
+        RadioDiscovery::clearHoldOffForTest();
+        {
+            RadioDiscovery discovery;
+            discovery.holdOffScans(std::chrono::minutes{5});
+        }
+        const auto releaseHoldOff = qScopeGuard([] {
+            RadioDiscovery::clearHoldOffForTest();
+        });
+
+        // Migrated settings, so the remote window's StationClient does not
+        // warn that CoreInit has not run (as the Tools menu case above).
+        AppSettings::instance().ensureSettingsAtVersion(6);
+        {
+            SettingsProxy proxy;
+            AppSettings::instance().setRemoteBackend(&proxy);
+            const auto dropBackend = qScopeGuard([] {
+                AppSettings::instance().setRemoteBackend(nullptr);
+            });
+            MainWindow remote({QStringLiteral("ws://127.0.0.1:1"), {}, {}, true}, nullptr,
+                              MainWindow::ConnectionStartup::Deferred);
+            QVERIFY(!remote.radioModel()->ownsLocalDsp());
+            QCoreApplication::processEvents();
+            QVERIFY(remote.findChild<VaxFirstRunDialog*>() == nullptr);
+            QVERIFY(!AppSettings::instance().contains(QStringLiteral("audio/FirstRunComplete")));
+            QVERIFY(!AppSettings::instance().contains(QStringLiteral("audio/LastDetectedCables")));
+        }
+
+        // Non-vacuity: the same settings, a local window, and the check runs
+        // (it always records the cable fingerprint, and with first-run not
+        // yet complete it shows the dialog).
+        MainWindow local({}, nullptr, MainWindow::ConnectionStartup::Deferred);
+        QVERIFY(local.radioModel()->ownsLocalDsp());
+        QCoreApplication::processEvents();
+        QVERIFY(AppSettings::instance().contains(QStringLiteral("audio/LastDetectedCables")));
+        QVERIFY(local.findChild<VaxFirstRunDialog*>() != nullptr);
     }
 };
 

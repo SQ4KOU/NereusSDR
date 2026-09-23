@@ -54,6 +54,16 @@
 //                 transmit section (AGC/ALC TX groups, DSP Options TX
 //                 combos) follows it. J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-23: R-R3-23 / R-R3-36. Every page registration names a
+//                 SetupScope (ThisComputer, Core, Mixed). The local-DSP
+//                 gate applies to Core and Mixed pages as before; a
+//                 ThisComputer page that reaches an audited accessor is
+//                 disabled and logged at critical. The audio backend
+//                 strip reaches the engine through
+//                 RadioModel::localAudioDevices(), so Audio > Devices and
+//                 TX Input work in a remote window; TX Input gates its
+//                 own Core controls. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "SetupDialog.h"
@@ -342,12 +352,13 @@ void SetupDialog::setTciServer(NereusSDR::TciServer* server)
 
 QTreeWidgetItem* SetupDialog::registerPage(QTreeWidgetItem* parent,
                                           const QString& label,
+                                          SetupScope scope,
                                           std::function<QWidget*()> factory,
                                           bool requiresTransmit)
 {
     auto* item = new QTreeWidgetItem(parent, QStringList{label});
     item->setData(0, Qt::UserRole, static_cast<int>(m_pages.size()));
-    m_pages.push_back(PageEntry{label, std::move(factory), nullptr, -1,
+    m_pages.push_back(PageEntry{label, scope, std::move(factory), nullptr, -1,
                                requiresTransmit, false});
     if (requiresTransmit && !m_transmitPermitted) {
         item->setToolTip(0, m_transmitReason);
@@ -395,8 +406,18 @@ QWidget* SetupDialog::realizePage(int entryIndex)
     //
     // Local direct mode never reaches the branch: ownsLocalDsp() is true,
     // and RadioModel's audit is not even armed for Role::Local.
+    //
+    // R-R3-23: the gate reads the page's declared scope. Core and Mixed
+    // pages keep it exactly as above. A ThisComputer page is expected to
+    // reach nothing the audit counts (this computer's sound devices come
+    // through RadioModel::localAudioDevices(), which it does not count), so
+    // if one does, that is a bug in the page, not a remote-mode state: it
+    // is disabled all the same and logged at critical with the accessor,
+    // and tst_remote_gui_gating's sweep fails on it.
     const bool gateRemotePages = (m_model != nullptr) && !m_model->ownsLocalDsp();
     const int handOutsBefore = (m_model != nullptr) ? m_model->localDspHandOutCount() : 0;
+    const QSet<QByteArray> handOutNamesBefore =
+        (m_model != nullptr) ? m_model->localDspHandOutNames() : QSet<QByteArray>{};
 
     QElapsedTimer realizeTimer;
     realizeTimer.start();
@@ -422,13 +443,33 @@ QWidget* SetupDialog::realizePage(int entryIndex)
         page->setEnabled(false);
         // R-R3-21: disabled with a visible reason, not just greyed out.
         // refreshTransmitPresentation() below owns the tooltip and the
-        // notice, so a page that is also a transmit page (TX Input) gets
-        // the one reason that currently applies.
-        qCWarning(lcSetupTiming)
-            << "Setup page" << entry.label
-            << "reached local DSP on a remote-station model and has been "
-               "disabled; accessors reached so far in this dialog:"
-            << m_model->localDspHandOutNames().values();
+        // notice, so a page that is also a transmit page gets the one
+        // reason that currently applies.
+        if (entry.scope == SetupScope::ThisComputer) {
+            // The accessors this factory reached for the first time, or the
+            // running set when every one of them was already reached by an
+            // earlier page (the audit is dialog-wide; see above).
+            QSet<QByteArray> reached = m_model->localDspHandOutNames();
+            const QSet<QByteArray> fresh = reached - handOutNamesBefore;
+            if (!fresh.isEmpty()) {
+                reached = fresh;
+            }
+            qCCritical(lcSetupTiming).noquote()
+                << "Setup page" << entry.label
+                << "is declared ThisComputer but reached"
+                << QString::fromLatin1(QList<QByteArray>(reached.cbegin(), reached.cend())
+                                           .join(", "))
+                << "on a remote-station model; it has been disabled. "
+                   "Reach this computer's sound devices through "
+                   "RadioModel::localAudioDevices(), or register the page as "
+                   "Core or Mixed.";
+        } else {
+            qCWarning(lcSetupTiming)
+                << "Setup page" << entry.label
+                << "reached local DSP on a remote-station model and has been "
+                   "disabled; accessors reached so far in this dialog:"
+                << m_model->localDspHandOutNames().values();
+        }
     }
 
     entry.widget     = page;
@@ -555,7 +596,8 @@ QWidget* SetupDialog::wrapWithAudioBackendStrip(SetupPage* page)
     auto* lay = new QVBoxLayout(container);
     lay->setContentsMargins(0, 0, 0, 0);
     lay->setSpacing(0);
-    lay->addWidget(new AudioBackendStrip(m_model->audioEngine(), container));
+    lay->addWidget(new AudioBackendStrip(
+        m_model ? m_model->localAudioDevices() : nullptr, container));
     lay->addWidget(page);
     return container;
 }
@@ -600,13 +642,13 @@ void SetupDialog::buildTree()
 
     // ── General ──────────────────────────────────────────────────────────────
     QTreeWidgetItem* general = addCategory("General");
-    registerPage(general, "Startup & Preferences",
+    registerPage(general, "Startup & Preferences", SetupScope::ThisComputer,
                  [this] { return new StartupPrefsPage(m_model); });
-    registerPage(general, "UI Scale & Theme",
+    registerPage(general, "UI Scale & Theme", SetupScope::ThisComputer,
                  [this] { return new UiScalePage(m_model); });
-    registerPage(general, "Navigation",
+    registerPage(general, "Navigation", SetupScope::ThisComputer,
                  [this] { return new NavigationPage(m_model); });
-    registerPage(general, "Options", [this]() -> QWidget* {
+    registerPage(general, "Options", SetupScope::Mixed, [this]() -> QWidget* {
         // Phase 3M-4 Task 11: forward GeneralOptionsPage's PureSignal Info
         // Bar checkbox signals to the live PureSignal coordinator so the
         // bottom-banner FB indicator reflects the new state without having
@@ -650,7 +692,7 @@ void SetupDialog::buildTree()
     const QString hardwareReason = tr(
         "The radio's hardware settings cannot be changed from a remote window yet.");
     QTreeWidgetItem* const hardwareConfigLeaf =
-        registerPage(hardware, "Hardware Config", [this]() -> QWidget* {
+        registerPage(hardware, "Hardware Config", SetupScope::Core, [this]() -> QWidget* {
         auto* hwPage = new HardwarePage(m_model);
         connect(hwPage, &HardwarePage::anan8000DleVoltsAmpsChanged,
                 this,   &SetupDialog::anan8000DleVoltsAmpsChanged);
@@ -661,7 +703,7 @@ void SetupDialog::buildTree()
     // Phase 3F Sub-Epic E Tasks 8-10: DDC Routing power-user override page.
     // Skeleton-only landing; per-DDC table + override schema follow once
     // codec layer (Sub-Epic B) is in place.
-    markRemoteUnavailable(registerPage(hardware, "DDC Routing", [this]() -> QWidget* {
+    markRemoteUnavailable(registerPage(hardware, "DDC Routing", SetupScope::Core, [this]() -> QWidget* {
         return new HardwareDdcRoutingPage(m_model);
     }), hardwareReason);
 
@@ -691,13 +733,13 @@ void SetupDialog::buildTree()
     // #272 / #301: each PA factory re-applies the live BoardCapabilities to
     // its own page, because applyPaVisibility() ran in the ctor (or on an
     // earlier currentRadioChanged) while the page pointer was still null.
-    m_paGainItem = registerPage(m_paCategoryItem, "PA Gain", [this]() -> QWidget* {
+    m_paGainItem = registerPage(m_paCategoryItem, "PA Gain", SetupScope::Core, [this]() -> QWidget* {
         m_paGainPage = new PaGainByBandPage(m_model);
         m_paGainPage->applyCapabilityVisibility(capsForModel(m_model));
         return m_paGainPage;
     });
 
-    m_paWattMeterItem = registerPage(m_paCategoryItem, "Watt Meter",
+    m_paWattMeterItem = registerPage(m_paCategoryItem, "Watt Meter", SetupScope::Core,
                                      [this]() -> QWidget* {
         m_paWattMeterPage = new PaWattMeterPage(m_model);
         m_paWattMeterPage->applyCapabilityVisibility(capsForModel(m_model));
@@ -727,7 +769,7 @@ void SetupDialog::buildTree()
         return m_paWattMeterPage;
     });
 
-    m_paValuesItem = registerPage(m_paCategoryItem, "PA Values", [this]() -> QWidget* {
+    m_paValuesItem = registerPage(m_paCategoryItem, "PA Values", SetupScope::Core, [this]() -> QWidget* {
         m_paValuesPage = new PaValuesPage(m_model);
         m_paValuesPage->applyCapabilityVisibility(capsForModel(m_model));
         return m_paValuesPage;
@@ -741,15 +783,29 @@ void SetupDialog::buildTree()
 
     // ── Audio ─────────────────────────────────────────────────────────────────
     QTreeWidgetItem* audio = addCategory("Audio");
-    registerPage(audio, "Devices",
+    // R-R3-23: Devices picks this computer's speakers, headphones and
+    // microphone, which a remote window uses too (remote playback, Test
+    // Mic), so it works in every window, connected or not.
+    registerPage(audio, "Devices", SetupScope::ThisComputer,
                  [this] { return wrapWithAudioBackendStrip(new AudioDevicesPage(m_model)); });
-    registerPage(audio, "TX Input",  // I.1
-                 [this] { return wrapWithAudioBackendStrip(new AudioTxInputPage(m_model)); }, true);
-    registerPage(audio, "VAX",
+    // R-R3-36: the PC microphone device, backend, buffer and Test Mic are
+    // this computer's; the mic source, mic gain and radio microphone
+    // hardware controls follow the transmit permission inside the page
+    // (AudioTxInputPage::setTransmitPermitted), so the leaf itself is no
+    // longer a whole-page transmit leaf.
+    registerPage(audio, "TX Input", SetupScope::Mixed,  // I.1
+                 [this] { return wrapWithAudioBackendStrip(new AudioTxInputPage(m_model)); });
+    registerPage(audio, "VAX", SetupScope::Mixed,
                  [this] { return wrapWithAudioBackendStrip(new AudioVaxPage(m_model)); });
-    registerPage(audio, "TCI",
-                 [this] { return wrapWithAudioBackendStrip(new AudioTciPage(m_model)); });
-    registerPage(audio, "Advanced",
+    // R-R3-21: Audio > TCI reached this process's audio engine only through
+    // the backend strip, which no longer counts (see
+    // wrapWithAudioBackendStrip). Its remote behaviour is unchanged in this
+    // plan: declared unavailable with the reason the local-DSP gate gave it.
+    markRemoteUnavailable(
+        registerPage(audio, "TCI", SetupScope::Core,
+                     [this] { return wrapWithAudioBackendStrip(new AudioTciPage(m_model)); }),
+        m_localUnavailableReason);
+    registerPage(audio, "Advanced", SetupScope::Mixed,
                  [this] { return wrapWithAudioBackendStrip(new AudioAdvancedPage(m_model)); });
     // Phase 3M-1c J.3: TX Profile editor.
     //
@@ -760,7 +816,7 @@ void SetupDialog::buildTree()
     // RadioModel::connectToRadio().  Before any radio has connected the
     // manager is unscoped and every mutator silently no-ops; the page still
     // renders correctly (combo is empty) and Setup → TX Profile is harmless.
-    registerPage(audio, "TX Profile", [this]() -> QWidget* {
+    registerPage(audio, "TX Profile", SetupScope::Core, [this]() -> QWidget* {
         return new TxProfileSetupPage(
             m_model,
             m_model ? m_model->micProfileManager() : nullptr,
@@ -771,12 +827,12 @@ void SetupDialog::buildTree()
 
     // ── DSP ───────────────────────────────────────────────────────────────────
     QTreeWidgetItem* dsp = addCategory("DSP");
-    registerPage(dsp, "AGC/ALC", [this] { return new AgcAlcSetupPage(m_model); });
-    registerPage(dsp, "NR/ANF",  [this] { return new NrAnfSetupPage(m_model);  });
-    registerPage(dsp, "NB/SNB",  [this] { return new NbSnbSetupPage(m_model);  });
-    registerPage(dsp, "CW",      [this] { return new CwSetupPage(m_model);     });
-    registerPage(dsp, "AM/SAM",  [this] { return new AmSamSetupPage(m_model);  });
-    registerPage(dsp, "FM",      [this] { return new FmSetupPage(m_model);     });
+    registerPage(dsp, "AGC/ALC", SetupScope::Core, [this] { return new AgcAlcSetupPage(m_model); });
+    registerPage(dsp, "NR/ANF", SetupScope::Mixed,  [this] { return new NrAnfSetupPage(m_model);  });
+    registerPage(dsp, "NB/SNB", SetupScope::Core,  [this] { return new NbSnbSetupPage(m_model);  });
+    registerPage(dsp, "CW", SetupScope::Core,      [this] { return new CwSetupPage(m_model);     });
+    registerPage(dsp, "AM/SAM", SetupScope::Core,  [this] { return new AmSamSetupPage(m_model);  });
+    registerPage(dsp, "FM", SetupScope::Core,      [this] { return new FmSetupPage(m_model);     });
     // (DSP > "VOX/DEXP" placeholder removed in 3M-3a-iii Task 16 — the wired
     //  page lives at Transmit > "DEXP/VOX" (DexpVoxPage from Task 14).)
 
@@ -790,16 +846,16 @@ void SetupDialog::buildTree()
     // stages, and the [Configure CFC bands] button opens the TX CFC editor,
     // so the page follows the negotiated transmit permission like the six
     // Transmit/Audio TX leaves.
-    registerPage(dsp, "CFC", [this]() -> QWidget* {
+    registerPage(dsp, "CFC", SetupScope::Core, [this]() -> QWidget* {
         auto* cfcPage = new CfcSetupPage(m_model);
         connect(cfcPage, &CfcSetupPage::openCfcDialogRequested,
                 this,    &SetupDialog::cfcDialogRequested);
         return cfcPage;
     }, true);
 
-    registerPage(dsp, "TNF", [this] { return new MnfSetupPage(m_model); });
+    registerPage(dsp, "TNF", SetupScope::Core, [this] { return new MnfSetupPage(m_model); });
     // Stage C2: user-customisable filter preset editor (10 slots × 12 modes).
-    registerPage(dsp, "Filter Presets", [this]() -> QWidget* {
+    registerPage(dsp, "Filter Presets", SetupScope::Mixed, [this]() -> QWidget* {
         return new FilterPresetsSetupPage(
             m_model ? m_model->filterPresetStore() : nullptr,
             m_model);
@@ -808,7 +864,7 @@ void SetupDialog::buildTree()
     // Task 4.1: DSP → Options page (buffer/filter size+type, impulse cache,
     // high-res filter characteristics, time-to-last-change readout).
     // Mirrors Thetis tpDSPOptions tab (design Section 4A).
-    registerPage(dsp, "Options", [this] { return new DspOptionsPage(m_model); });
+    registerPage(dsp, "Options", SetupScope::Core, [this] { return new DspOptionsPage(m_model); });
 
     tick("DSP");
 
@@ -821,7 +877,7 @@ void SetupDialog::buildTree()
     // #272 / #301: the cross-links go through selectPage(), which drives the
     // nav tree, so the destination page is realized by the tree-selection
     // handler. No sibling-page pointer is needed here.
-    registerPage(display, "Spectrum Defaults", [this]() -> QWidget* {
+    registerPage(display, "Spectrum Defaults", SetupScope::Mixed, [this]() -> QWidget* {
         auto* specDefaultsPage = new SpectrumDefaultsPage(m_model);
         connect(specDefaultsPage, &SpectrumDefaultsPage::navigateToSpectrumPeaksRequested,
                 this, [this]() { selectPage(QStringLiteral("Spectrum Peaks")); });
@@ -832,36 +888,36 @@ void SetupDialog::buildTree()
     });
 
     // Task 2.4: Spectrum Peaks page — skeleton with APH + Blob controls + back cross-link.
-    registerPage(display, "Spectrum Peaks", [this]() -> QWidget* {
+    registerPage(display, "Spectrum Peaks", SetupScope::Mixed, [this]() -> QWidget* {
         auto* specPeaksPage = new SpectrumPeaksPage(m_model);
         connect(specPeaksPage, &SpectrumPeaksPage::backToSpectrumDefaultsRequested,
                 this, [this]() { selectPage(QStringLiteral("Spectrum Defaults")); });
         return specPeaksPage;
     });
 
-    registerPage(display, "Waterfall Defaults",
+    registerPage(display, "Waterfall Defaults", SetupScope::Mixed,
                  [this] { return new WaterfallDefaultsPage(m_model); });
-    registerPage(display, "Grid & Scales",
+    registerPage(display, "Grid & Scales", SetupScope::Mixed,
                  [this] { return new GridScalesPage(m_model); });
 
     // Task 3.1: Display → Multimeter — 8 multimeter globals + unit-mode + signal history.
     // Folded from Thetis Display→General Multimeter group per design Section 3A.
     // Cross-link: ← Spectrum Defaults / SpectrumDefaultsPage → Multimeter.
-    registerPage(display, "Multimeter", [this]() -> QWidget* {
+    registerPage(display, "Multimeter", SetupScope::Mixed, [this]() -> QWidget* {
         auto* multimeterPage = new MultimeterPage(m_model);
         connect(multimeterPage, &MultimeterPage::backToSpectrumDefaultsRequested,
                 this, [this]() { selectPage(QStringLiteral("Spectrum Defaults")); });
         return multimeterPage;
     });
 
-    registerPage(display, "RX2 Display", [this] { return new Rx2DisplayPage(m_model); });
-    registerPage(display, "TX Display",  [this] { return new TxDisplayPage(m_model);  });
+    registerPage(display, "RX2 Display", SetupScope::ThisComputer, [this] { return new Rx2DisplayPage(m_model); });
+    registerPage(display, "TX Display", SetupScope::Mixed,  [this] { return new TxDisplayPage(m_model);  });
 
     // 3D Stacked-Trace Spectrum Plan Task 15: mirrors the Task 13 overlay
     // menu's six 3D controls into Setup -> Display. Constructed against
     // the SpectrumWidget directly (not RadioModel, unlike every page
     // above) per Display3DSetupPage's own class-header comment.
-    registerPage(display, "3D View", [this]() -> QWidget* {
+    registerPage(display, "3D View", SetupScope::Mixed, [this]() -> QWidget* {
         return new Display3DSetupPage(m_model ? m_model->spectrumWidget() : nullptr);
     });
 
@@ -869,14 +925,14 @@ void SetupDialog::buildTree()
 
     // ── Transmit ──────────────────────────────────────────────────────────────
     QTreeWidgetItem* transmit = addCategory("Transmit");
-    registerPage(transmit, "Power",       [this] { return new PowerPage(m_model);      }, true);
-    registerPage(transmit, "TX Profiles", [this] { return new TxProfilesPage(m_model); }, true);
+    registerPage(transmit, "Power", SetupScope::Core,       [this] { return new PowerPage(m_model);      }, true);
+    registerPage(transmit, "TX Profiles", SetupScope::Core, [this] { return new TxProfilesPage(m_model); }, true);
 
     // SpeechProcessorPage is the TX dashboard (3M-3a-i Batch 5).  Its
     // openSetupRequested(category, page) signal feeds straight back into
     // selectPage() so the cross-link buttons jump within the same dialog
     // instance — no MainWindow round-trip required.
-    registerPage(transmit, "Speech Processor", [this]() -> QWidget* {
+    registerPage(transmit, "Speech Processor", SetupScope::Core, [this]() -> QWidget* {
         auto* speechPage = new SpeechProcessorPage(m_model);
         connect(speechPage, &SpeechProcessorPage::openSetupRequested,
                 this, [this](const QString& /*category*/, const QString& page) {
@@ -896,7 +952,7 @@ void SetupDialog::buildTree()
     // from the legacy DSP > VOX/DEXP placeholder above (line 245), which
     // remains a lightweight 4-control disabled stub for back-compat with
     // the Thetis tpDSPVOX tab IA.
-    registerPage(transmit, "DEXP/VOX", [this] { return new DexpVoxPage(m_model); }, true);
+    registerPage(transmit, "DEXP/VOX", SetupScope::Core, [this] { return new DexpVoxPage(m_model); }, true);
 
     // 2026-05-22 menu cleanup: the standalone "PGXL Interlock" entry that
     // previously lived here is removed. The same controls live under
@@ -907,23 +963,23 @@ void SetupDialog::buildTree()
 
     // ── Appearance ────────────────────────────────────────────────────────────
     QTreeWidgetItem* appearance = addCategory("Appearance");
-    registerPage(appearance, "Colors & Theme",
+    registerPage(appearance, "Colors & Theme", SetupScope::ThisComputer,
                  [this] { return new ColorsThemePage(m_model); });
-    registerPage(appearance, "Meter Styles",
+    registerPage(appearance, "Meter Styles", SetupScope::ThisComputer,
                  [this] { return new MeterStylesPage(m_model); });
-    registerPage(appearance, "Gradients",
+    registerPage(appearance, "Gradients", SetupScope::ThisComputer,
                  [this] { return new GradientsPage(m_model); });
-    registerPage(appearance, "Skins",
+    registerPage(appearance, "Skins", SetupScope::ThisComputer,
                  [this] { return new SkinsPage(m_model); });
-    registerPage(appearance, "Collapsible Display",
+    registerPage(appearance, "Collapsible Display", SetupScope::ThisComputer,
                  [this] { return new CollapsibleDisplayPage(m_model); });
 
     tick("Appearance");
 
     // ── CAT & Network ─────────────────────────────────────────────────────────
     QTreeWidgetItem* cat = addCategory("CAT & Network");
-    registerPage(cat, "Serial Ports", [] { return new CatSerialPortsPage; });
-    registerPage(cat, "TCI Server", [this]() -> QWidget* {
+    registerPage(cat, "Serial Ports", SetupScope::ThisComputer, [] { return new CatSerialPortsPage; });
+    registerPage(cat, "TCI Server", SetupScope::Core, [this]() -> QWidget* {
         // Phase 3J-1 review P2.4: forward CatTciServerPage::tciServerEnableToggled
         // through SetupDialog so wireSetupDialog() can connect it to the live
         // TciServer::start() / stop() path in MainWindow.
@@ -960,7 +1016,7 @@ void SetupDialog::buildTree()
     // inside FourO3APage's construction below so the SetupDialog
     // signal still fires through to TunerApplet::onAntennaLabelChanged
     // via wireSetupDialog().
-    registerPage(cat, "4O3A", [this]() -> QWidget* {
+    registerPage(cat, "4O3A", SetupScope::Core, [this]() -> QWidget* {
         auto* fourO3A = new FourO3APage(m_model);
         // Phase 3P-II Phase 4 Task 95 forwarding lives on FourO3APage
         // now; surface the embedded TGXL page's antennaLabelChanged
@@ -971,7 +1027,7 @@ void SetupDialog::buildTree()
         }
         return fourO3A;
     });
-    registerPage(cat, "Remote Station", [this] {
+    registerPage(cat, "Remote Station", SetupScope::ThisComputer, [this] {
         auto* page = new RemoteStationPage;
         connect(page, &RemoteStationPage::connectionsRequested,
                 this, &SetupDialog::connectionsRequested);
@@ -981,16 +1037,16 @@ void SetupDialog::buildTree()
     // the amplifier (RfKitPage.cpp connectToAmp), which a remote window
     // must not do: the amplifier sits at the station.
     markRemoteUnavailable(
-        registerPage(cat, "RF-Kit", [this] { return new RfKitPage(m_model); }),
+        registerPage(cat, "RF-Kit", SetupScope::Core, [this] { return new RfKitPage(m_model); }),
         tr("Amplifier control is not available from a remote window yet."));
-    registerPage(cat, "TCP/IP CAT",   [] { return new CatTcpIpPage;       });
-    registerPage(cat, "MIDI Control", [] { return new CatMidiControlPage;  });
+    registerPage(cat, "TCP/IP CAT", SetupScope::ThisComputer,   [] { return new CatTcpIpPage;       });
+    registerPage(cat, "MIDI Control", SetupScope::ThisComputer, [] { return new CatMidiControlPage;  });
 
     tick("CAT & Network");
 
     // ── Keyboard ──────────────────────────────────────────────────────────────
     QTreeWidgetItem* keyboard = addCategory("Keyboard");
-    registerPage(keyboard, "Shortcuts", [] { return new KeyboardShortcutsPage; });
+    registerPage(keyboard, "Shortcuts", SetupScope::ThisComputer, [] { return new KeyboardShortcutsPage; });
 
     tick("Keyboard");
 
@@ -999,28 +1055,28 @@ void SetupDialog::buildTree()
     QTreeWidgetItem* test = addCategory("Test");
     // R-R3-21: a transmit page. Every control writes the TransmitModel's
     // two-tone test settings, which drive a keyed two-tone transmission.
-    registerPage(test, "Two-Tone IMD", [this] { return new TestTwoTonePage(m_model); },
+    registerPage(test, "Two-Tone IMD", SetupScope::Core, [this] { return new TestTwoTonePage(m_model); },
                  true);
 
     tick("Test");
 
     // ── Diagnostics ───────────────────────────────────────────────────────────
     QTreeWidgetItem* diagnostics = addCategory("Diagnostics");
-    registerPage(diagnostics, "Radio Status",
+    registerPage(diagnostics, "Radio Status", SetupScope::Core,
                  [this] { return new RadioStatusPage(m_model); });
-    registerPage(diagnostics, "Connection Quality",
+    registerPage(diagnostics, "Connection Quality", SetupScope::Core,
                  [this] { return new ConnectionQualityPage(m_model); });
-    registerPage(diagnostics, "Settings Validation",
+    registerPage(diagnostics, "Settings Validation", SetupScope::Mixed,
                  [this] { return new SettingsValidationPage(m_model); });
-    registerPage(diagnostics, "Export / Import",
+    registerPage(diagnostics, "Export / Import", SetupScope::Mixed,
                  [this] { return new ExportImportConfigPage(m_model); });
-    registerPage(diagnostics, "Logs",
+    registerPage(diagnostics, "Logs", SetupScope::ThisComputer,
                  [] { return new LogsPage; });
-    registerPage(diagnostics, "Signal Generator",
+    registerPage(diagnostics, "Signal Generator", SetupScope::Core,
                  [] { return new DiagSignalGeneratorPage; });
-    registerPage(diagnostics, "Hardware Tests",
+    registerPage(diagnostics, "Hardware Tests", SetupScope::Core,
                  [] { return new DiagHardwareTestsPage; });
-    registerPage(diagnostics, "Logging & Performance",
+    registerPage(diagnostics, "Logging & Performance", SetupScope::ThisComputer,
                  [] { return new DiagLoggingPage; });
 
     tick("Diagnostics");

@@ -44,6 +44,12 @@
 //  20.  Cross-page config: the TX Input page, the Devices card and the
 //       TransmitModel setters all edit one audio/TxInput config.
 //  21.  Existing persisted audio/TxInput values are loaded, not rewritten.
+//
+// R-R3-36 (2026-09-23, J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+// Claude Code):
+//  22.  In a remote window Test Mic opens this computer's microphone and
+//       meters it, without the page reaching the audited local-DSP
+//       accessors.
 // Every capture demand here uses the scripted fake helper (this binary
 // re-executed with --fake-capture-child); no real microphone is opened.
 
@@ -578,6 +584,42 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(processIsGone(pid), 5000);
         QTRY_COMPARE(label->text(), QStringLiteral("Microphone not in use"));
         QCOMPARE(page.vuBar()->value(), 0.0);
+    }
+
+    // ── 22. Test Mic in a remote window (R-R3-36) ─────────────────────────────
+    //
+    // The microphone is this computer's in a remote window too: the page
+    // reaches the engine through RadioModel::localAudioDevices(), so the
+    // Setup gate leaves it enabled, and Test Mic takes the same capture
+    // demand and meters the same level it does locally.
+
+    void testMic_opensThisComputersMicrophoneInARemoteWindow()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        AudioEngine* engine = remote.localAudioDevices();
+        AudioTxInputPage page(&remote);
+        QCOMPARE(remote.localDspHandOutCount(), 0);
+
+        // Before any demand, as setCaptureSupervisorOptionsForTest needs.
+        CaptureSupervisor::Options options;
+        options.program = QCoreApplication::applicationFilePath();
+        options.arguments = {QStringLiteral("--fake-capture-child"), QStringLiteral("ready")};
+        options.openTimeoutMs = 10000;
+        engine->setCaptureSupervisorOptionsForTest(options);
+
+        page.testMicButton()->setChecked(true);
+        QVERIFY(page.hasTestMicDemand());
+        QTRY_COMPARE_WITH_TIMEOUT(engine->captureStatus().state, CaptureState::Ready, 5000);
+        const qint64 pid = engine->captureHelperProcessIdForTest();
+        QVERIFY(pid > 0);
+        QTRY_VERIFY(statusLabelOf(&page)->text().startsWith(QStringLiteral("Microphone ready: ")));
+        QTRY_VERIFY_WITH_TIMEOUT(page.vuBar()->value() > 1.0, 3000);
+
+        page.testMicButton()->setChecked(false);
+        QVERIFY(!page.hasTestMicDemand());
+        QTRY_COMPARE_WITH_TIMEOUT(engine->captureStatus().state, CaptureState::Closed, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(processIsGone(pid), 5000);
+        QCOMPARE(remote.localDspHandOutCount(), 0);
     }
 
     // ── 18. Hide and destruction release the demand ───────────────────────────

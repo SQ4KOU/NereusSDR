@@ -11,6 +11,12 @@
 // 2026-09-22: R-R3-36 Task 6 by J.J. Boyd (KG4VCF), with AI-assisted
 // implementation via Anthropic Claude Code. Microphone status and Retry
 // below the TX Input card; the card follows the shared TX input config.
+//
+// 2026-09-23: R-R3-23 by J.J. Boyd (KG4VCF), with AI-assisted
+// implementation via Anthropic Claude Code. The page reaches the engine
+// through RadioModel::localAudioDevices(): it picks this computer's
+// devices, which a remote window uses for remote playback and Test Mic, so
+// it works there as it does locally.
 // =================================================================
 
 #include "AudioDevicesPage.h"
@@ -31,7 +37,9 @@ namespace NereusSDR {
 
 AudioDevicesPage::AudioDevicesPage(RadioModel* model, QWidget* parent)
     : SetupPage(QStringLiteral("Devices"), model, parent)
-    , m_engine(model ? model->audioEngine() : nullptr)
+    // R-R3-23: this computer's devices, not the local DSP; see
+    // RadioModel::localAudioDevices().
+    , m_engine(model ? model->localAudioDevices() : nullptr)
 {
     // ── Speakers card ────────────────────────────────────────────────────
     m_speakersCard = new DeviceCard(

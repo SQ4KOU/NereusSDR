@@ -33,6 +33,27 @@ struct RadioInfo;
 class TciServer;
 class CatTciServerPage;
 
+// R-R3-21 / R-R3-23: what a Setup page's settings belong to. Every page
+// registration names one; registerPage() has no default, so a new page
+// cannot be added without deciding.
+//
+//   ThisComputer -- only this computer's own settings and devices (sound
+//                   cards, window preferences). Works the same in a remote
+//                   window, connected or not, so the local-DSP gate does
+//                   not apply to it. Reaching an audited RadioModel
+//                   accessor (audioEngine(), wdspEngine(),
+//                   receiverManager()) from one is a bug: the page is
+//                   disabled, the accessor is logged at critical, and the
+//                   Setup sweep test fails.
+//   Core         -- settings the Core holds for the station.
+//   Mixed        -- some of each. Core and Mixed pages keep the local-DSP
+//                   gate exactly as it was before scopes existed.
+enum class SetupScope {
+    ThisComputer,
+    Core,
+    Mixed,
+};
+
 // Main settings dialog with tree-based navigation.
 // Left pane: QTreeWidget with top-level category items.
 // Right pane: QStackedWidget showing the selected page.
@@ -123,6 +144,7 @@ private:
     // once; `widget` and `stackIndex` are the cached result.
     struct PageEntry {
         QString                   label;
+        SetupScope                scope = SetupScope::Core;
         std::function<QWidget*()> factory;
         QWidget*                  widget     = nullptr;
         int                       stackIndex = -1;
@@ -136,7 +158,9 @@ private:
 
     // Registration phase: create the tree leaf and record its factory. The
     // leaf's Qt::UserRole holds the m_pages index (categories hold -1).
+    // `scope` is required (R-R3-23): see SetupScope.
     QTreeWidgetItem* registerPage(QTreeWidgetItem* parent, const QString& label,
+                                  SetupScope scope,
                                   std::function<QWidget*()> factory,
                                   bool requiresTransmit = false);
     void refreshTransmitPresentation();
@@ -161,6 +185,10 @@ private:
     // Builds the AudioBackendStrip + page container used by Setup -> Audio.
     // A member function rather than a buildTree() local because the audio
     // page factories call it after buildTree() has already returned.
+    // R-R3-23: the strip (backend, Rescan, Open logs) acts on this
+    // computer's sound system, so it reaches the engine through
+    // RadioModel::localAudioDevices() and does not trip the local-DSP gate
+    // on the page it wraps.
     QWidget* wrapWithAudioBackendStrip(SetupPage* page);
 
     RadioModel*      m_model   = nullptr;
@@ -304,6 +332,25 @@ public:
             return nullptr;
         }
         return m_pages[static_cast<std::size_t>(index)].widget;
+    }
+
+    // R-R3-23: the scope a leaf was registered with, by REGISTRY INDEX
+    // (labels are not unique; see pageLabelsForTest).
+    SetupScope pageScopeAtForTest(int entryIndex) const
+    {
+        return m_pages[static_cast<std::size_t>(entryIndex)].scope;
+    }
+
+    // R-R3-23: register one extra leaf under a "Test" category of its own,
+    // after buildTree(), so the sweep can be proved against a page that
+    // breaks the ThisComputer rule on purpose. Returns its registry index.
+    int registerPageForTest(const QString& label, SetupScope scope,
+                            std::function<QWidget*()> factory)
+    {
+        auto* category = new QTreeWidgetItem(m_tree, QStringList{QStringLiteral("Test pages")});
+        category->setData(0, Qt::UserRole, -1);
+        QTreeWidgetItem* leaf = registerPage(category, label, scope, std::move(factory));
+        return leaf->data(0, Qt::UserRole).toInt();
     }
 #endif
 };

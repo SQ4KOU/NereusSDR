@@ -1523,6 +1523,13 @@ target_compile_definitions(tst_audio_vax_page_auto_detect PRIVATE NEREUS_BUILD_T
 nereus_add_test(tst_audio_engine_reset_audio_settings)
 target_compile_definitions(tst_audio_engine_reset_audio_settings PRIVATE NEREUS_BUILD_TESTS)
 
+# R3 remote window Setup plan, Task 1 (R-R3-10, R-R3-23): Setup > Audio >
+# Advanced Reset. A remote window removes only this computer's audio/* keys
+# (none the Core holds, nothing sent to it) and re-creates no VAX output;
+# local Reset is unchanged.
+nereus_add_test(tst_audio_advanced_page)
+target_compile_definitions(tst_audio_advanced_page PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3P-B Task 10: per-ADC OVL split + RX1 preamp byte 1403 bit 1 ─────
 # Single-ADC boards (HL2/Hermes): 1 OVL badge.
 # Dual-ADC boards (OrionMKII, p2PreampPerAdc=true): 2 OVL badges.

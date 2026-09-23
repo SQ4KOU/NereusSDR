@@ -69,6 +69,12 @@
 //                edit the shared audio/TxInput config; Test Mic holds a
 //                real capture demand; microphone status and Retry beside
 //                Test Mic.
+//   2026-09-23 : R-R3-36 by J.J. Boyd (KG4VCF), with AI-assisted
+//                implementation via Anthropic Claude Code. The PC Mic
+//                controls reach this computer's engine through
+//                RadioModel::localAudioDevices() and work in a remote
+//                window; the mic source, Mic Gain and radio mic groups
+//                follow the transmit permission (setTransmitPermitted).
 // =================================================================
 
 // no-port-check: NereusSDR-original file; no Thetis logic ported here.
@@ -162,6 +168,16 @@ public:
     QGroupBox* hermesRadioMicGroup() const { return m_hermesGroup; }
     QGroupBox* orionRadioMicGroup()  const { return m_orionGroup; }
     QGroupBox* saturnRadioMicGroup() const { return m_saturnGroup; }
+    QGroupBox* micSourceGroup()      const { return m_micSourceGroup; }
+
+    // R-R3-36: the page is Mixed. The PC microphone device, backend,
+    // buffer, Test Mic and Retry are this computer's and stay usable in a
+    // remote window. The mic source selector, Mic Gain and the radio's own
+    // microphone hardware groups are transmit settings held for the radio,
+    // so they follow the negotiated transmit permission with its reason.
+    // SetupDialog pushes the permission to every realized page; locally it
+    // is always granted, so nothing changes there.
+    void setTransmitPermitted(bool permitted, const QString& reason) override;
 
 protected:
     void hideEvent(QHideEvent* event) override;
@@ -233,6 +249,7 @@ private:
     static int defaultHostApiIndex();
 
     // ── Source selector (I.1) ─────────────────────────────────────────────
+    QGroupBox*     m_micSourceGroup{nullptr};
     QButtonGroup*  m_buttonGroup{nullptr};
     QRadioButton*  m_pcMicBtn{nullptr};
     QRadioButton*  m_radioMicBtn{nullptr};

@@ -45,7 +45,23 @@ If you are adding a call: add or bump the entry AND check whether the
 surface you are adding it to is reachable in remote mode. If it is a Setup
 page, it will be enabled and dead there. If you are removing one: drop the
 count, and drop the entry entirely when it reaches zero.
+
+CHECK 3 -- localAudioDevices() is ALLOW-LISTED in src/.
+
+R3 remote window Setup plan, Task 1 (R-R3-23). RadioModel::localAudioDevices()
+returns the same AudioEngine as audioEngine() but does NOT bump the
+local-DSP hand-out audit, because a remote window's engine is live for this
+computer's own sound devices: it plays remote audio through the speakers and
+opens the microphone for Test Mic. That makes it an escape hatch from the
+Setup gate, so it is allowed only in the files below, each of which uses the
+engine for this computer's devices and nothing else. A call anywhere else in
+src/ fails; a new caller has to come here and say why the engine is live for
+it on a remote model. RadioModel.h, where it is defined, is not a caller.
+
+Usage: verify-no-gui-dsp-access.py [--root PATH]. --root checks another
+checkout (or a copy of one), which is how a check is shown to fail.
 """
+import argparse
 import pathlib
 import re
 import sys
@@ -77,6 +93,26 @@ FOR_SLICE_INVENTORY = {
     "src/gui/setup/DspOptionsPage.cpp": 1,
     # Setup > DSP > MNF's minimum-notch-width readout.
     "src/gui/setup/DspSetupPages.cpp": 1,
+}
+
+
+# Check 3's pattern and allow-list (repo-relative paths). The definition
+# site is listed separately: it declares the accessor, it does not call it.
+LOCAL_AUDIO_PATTERN = re.compile(r"\blocalAudioDevices\s*\(")
+LOCAL_AUDIO_DEFINITION = "src/models/RadioModel.h"
+LOCAL_AUDIO_ALLOWLIST = {
+    # wrapWithAudioBackendStrip(): the backend strip (backend name, Rescan,
+    # Open logs) above every Setup > Audio page.
+    "src/gui/SetupDialog.cpp",
+    # Setup > Audio > Devices: Speakers, Headphones and Microphone cards.
+    "src/gui/setup/AudioDevicesPage.cpp",
+    # Setup > Audio > TX Input: PC microphone device, backend, buffer and
+    # Test Mic.
+    "src/gui/setup/AudioTxInputPage.cpp",
+    # The title-bar master output (volume, mute, output device picker).
+    "src/gui/MainWindow.cpp",
+    # Remote playback through this computer's speakers.
+    "src/gui/RemoteMediaController.cpp",
 }
 
 
@@ -168,11 +204,57 @@ def check_rx_channel_for_slice_inventory() -> int:
     return 0
 
 
+def check_local_audio_devices_allowlist() -> int:
+    """Check 3: localAudioDevices() is called only from LOCAL_AUDIO_ALLOWLIST."""
+    failures = []
+    calls = 0
+    src = ROOT / "src"
+    for pattern in ("*.cpp", "*.h", "*.mm"):
+        for path in sorted(src.rglob(pattern)):
+            rel = path.relative_to(ROOT).as_posix()
+            if rel == LOCAL_AUDIO_DEFINITION:
+                continue
+            for num, line in enumerate(path.read_text().splitlines(), 1):
+                stripped = line.strip()
+                if _is_comment_line(stripped):
+                    continue
+                hits = len(LOCAL_AUDIO_PATTERN.findall(line))
+                if not hits:
+                    continue
+                calls += hits
+                if rel not in LOCAL_AUDIO_ALLOWLIST:
+                    failures.append(f"{rel}:{num}: {stripped}")
+
+    if failures:
+        print("[gui-dsp-access] RadioModel::localAudioDevices() is called outside")
+        print("its allow-list in scripts/verify-no-gui-dsp-access.py. It hands out")
+        print("the audio engine without the local-DSP audit, so the Setup gate")
+        print("cannot see a page that uses it. Use audioEngine() instead, or add")
+        print("the file to LOCAL_AUDIO_ALLOWLIST with the reason the engine is")
+        print("live for it in a remote window (this computer's own devices).")
+        for f in failures:
+            print(f"  {f}")
+        return 1
+    print(f"[gui-dsp-access] OK: {calls} localAudioDevices() call(s) in src/, "
+          f"all in allow-listed files")
+    return 0
+
+
 def main() -> int:
-    # Both checks always run, so one invocation reports every problem
-    # rather than hiding the second behind the first.
+    global ROOT, GUI
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    parser.add_argument("--root", type=pathlib.Path, default=None,
+                        help="check this checkout instead of the one holding "
+                             "this script")
+    args = parser.parse_args()
+    if args.root is not None:
+        ROOT = args.root.resolve()
+        GUI = ROOT / "src" / "gui"
+    # All checks always run, so one invocation reports every problem
+    # rather than hiding one behind another.
     rc = check_rx_channel_ban()
     rc |= check_rx_channel_for_slice_inventory()
+    rc |= check_local_audio_devices_allowlist()
     return rc
 
 if __name__ == "__main__":
