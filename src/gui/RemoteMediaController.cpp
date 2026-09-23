@@ -40,6 +40,7 @@
 #include <deque>
 #include <limits>
 #include <map>
+#include <mutex>
 #include <utility>
 
 namespace NereusSDR {
@@ -475,6 +476,43 @@ struct RemoteMediaController::Private {
     Ps3DisplayAssembler ps3Assembler;
     quint64 ps3Generation = 0;
     std::unique_ptr<RemoteAudioReceiver> audio;
+    // R-R3-43: the sinks one receiver stream hands audio to. Its worker
+    // delivers under the mutex; release removes a sink under it, so a sink
+    // is never called after releaseReceiverAudio() returns.
+    struct ReceiverFanout {
+        int sliceId = -1;
+        std::mutex mutex;
+        QList<IReceiverPcmSink*> sinks;
+    };
+    // R-R3-43: one wanted receiver stream, kept while any sink wants it
+    // (across media connections). Everything but the sinks and the receiver
+    // belongs to the current media connection and is reset with it.
+    struct ReceiverStream {
+        QList<IReceiverPcmSink*> sinks;
+        std::shared_ptr<ReceiverFanout> fanout;
+        std::unique_ptr<RemoteAudioReceiver> receiver;
+        quint32 generation = 0;                        // newest accepted context
+        std::optional<RemoteAudioContextMessage> context;
+        quint32 ssrc = 0;                              // while the receiver runs
+        std::optional<RemoteAudioProfile> runningProfile;
+        bool stopped = false;                          // the sinks were told stopReason
+        QString stopReason;
+        // The Core forgot this request (slice-removed or receiver-limit):
+        // asked again only when that can change, never in a loop.
+        std::optional<RemoteAudioOffReason> heldBy;
+        bool faulted = false; // this computer stopped it; asked again only by a new choice
+        bool retryPending = false;
+        qint64 lastRequestMs = -1000;
+    };
+    std::map<int, ReceiverStream> receiverStreams;
+    // R-R3-43: the last receiver-audio revision sent for each slice id on
+    // this media connection. The Core remembers them for the whole
+    // connection, so a slice id's revision only ever grows, even when a new
+    // slice reuses the id; a new connection starts afresh.
+    QHash<int, quint32> receiverRevisions;
+    // R-R3-43: the receiver stream ids this media connection declared.
+    QList<quint32> receiverSsrcs;
+    bool destroying = false;
     std::optional<RemoteAudioContextMessage> acceptedAudioContext;
     quint32 audioRevision = 0;
     quint32 audioGeneration = 0;
@@ -658,6 +696,26 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
     });
     connect(model->audioEngine(), &AudioEngine::masterMutedChanged,
             this, &RemoteMediaController::requestAudio);
+    // R-R3-43: a slice id the Core had removed may come back (the Core
+    // reuses ids); a consumer still waiting on it is asked for once more.
+    connect(model, &RadioModel::sliceAdded, this, [this] {
+        if (!d->model || !d->peer || !d->peer->isReady() || !receiverAudioNegotiated()) {
+            return;
+        }
+        QList<int> back;
+        for (const auto& [sliceId, stream] : d->receiverStreams) {
+            if (stream.heldBy == RemoteAudioOffReason::SliceRemoved
+                && d->model->sliceById(sliceId)) {
+                back.append(sliceId);
+            }
+        }
+        const QPointer<RemoteMediaController> self(this);
+        for (int sliceId : back) {
+            sendReceiverAudioRequest(sliceId, true);
+            if (!self) { return; }
+        }
+        if (!back.isEmpty()) { refreshAudioStatus(); }
+    });
     connect(model->audioEngine(), &AudioEngine::speakersConfigChanged, this, [this] {
         d->selectedOutput = selectedSpeakerOutput();
         // Opening the speaker for playback can report its configuration from
@@ -836,9 +894,19 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
 
 RemoteMediaController::~RemoteMediaController()
 {
-    // Nothing observes a status change while this controller is destroyed.
+    // Nothing observes a status change while this controller is destroyed,
+    // and no consumer is told anything: they may already be gone.
     const QSignalBlocker blocker(this);
+    d->destroying = true;
     stop();
+    for (auto& [sliceId, stream] : d->receiverStreams) {
+        {
+            std::lock_guard<std::mutex> lock(stream.fanout->mutex);
+            stream.fanout->sinks.clear();
+        }
+        stream.receiver->stop();
+    }
+    d->receiverStreams.clear();
 }
 quint64 RemoteMediaController::receivedDisplayFrames() const { return d->frames; }
 DisplayBudgetReason RemoteMediaController::panDisplayBudgetReason(const QString& panId) const
@@ -907,6 +975,20 @@ bool RemoteMediaController::audioClockNegotiated() const
 {
     return d->client && d->client->mediaAvailable()
         && d->client->capabilities().audioClockVersion >= 1;
+}
+
+bool RemoteMediaController::receiverAudioNegotiated() const
+{
+    return audioProfileNegotiated() && d->client->capabilities().receiverAudioVersion >= 1;
+}
+
+QHash<int, RemoteAudioReceiverTelemetry> RemoteMediaController::receiverAudioTelemetry() const
+{
+    QHash<int, RemoteAudioReceiverTelemetry> telemetry;
+    for (const auto& [sliceId, stream] : d->receiverStreams) {
+        telemetry.insert(sliceId, stream.receiver->telemetry());
+    }
+    return telemetry;
 }
 
 RemoteAudioDelayReport RemoteMediaController::audioDelay() const
@@ -1002,8 +1084,17 @@ void RemoteMediaController::setAudioProfileChoice(RemoteAudioProfile profile)
     const bool wasFallback = std::exchange(d->losslessFallback, false);
     d->linkTrial.end();
     d->linkTrialTimer->stop();
-    if ((changed || wasFallback) && audioProfileNegotiated() && d->peer && d->peer->isReady()
-        && d->model && !d->model->audioEngine()->masterMuted()) {
+    const bool askAgain = (changed || wasFallback) && audioProfileNegotiated() && d->peer
+        && d->peer->isReady();
+    if (askAgain) {
+        // R-R3-43: every receiver stream follows the one choice, muted
+        // speakers or not; a stream this computer stopped gets its chance.
+        for (auto& [sliceId, stream] : d->receiverStreams) { stream.faulted = false; }
+        const QPointer<RemoteMediaController> self(this);
+        requestWantedReceiverAudio();
+        if (!self) { return; }
+    }
+    if (askAgain && d->model && !d->model->audioEngine()->masterMuted()) {
         requestAudio();
         return;
     }
@@ -1016,7 +1107,18 @@ void RemoteMediaController::checkLosslessLink()
         d->linkTrialTimer->stop();
         return;
     }
-    if (d->linkTrial.observe(d->clock.elapsed(), d->audio->telemetry())
+    // R-R3-43: every lossless stream the link carries, the speakers' mix
+    // and each receiver stream, judged together.
+    std::vector<RemoteAudioLinkTrial::StreamSample> samples;
+    if (d->acceptedAudioContext && d->acceptedAudioContext->losslessEncoder) {
+        samples.push_back({-1, d->audio->telemetry()});
+    }
+    for (const auto& [sliceId, stream] : d->receiverStreams) {
+        if (stream.context && stream.context->losslessEncoder) {
+            samples.push_back({sliceId, stream.receiver->telemetry()});
+        }
+    }
+    if (d->linkTrial.observe(d->clock.elapsed(), samples)
         == RemoteAudioLinkTrial::Verdict::Failed) {
         fallBackToOpus(QStringLiteral("%1% of lossless packets lost or filled in over %2 s")
             .arg(100.0 * d->linkTrial.lastWindowLoss().value_or(0.0), 0, 'f', 1)
@@ -1035,6 +1137,10 @@ void RemoteMediaController::fallBackToOpus(const QString& cause)
                .arg(cause);
     const QPointer<RemoteMediaController> self(this);
     requestAudio();
+    if (!self) { return; }
+    // R-R3-43: one fallback moves every receiver stream to Opus too, with
+    // this one notice.
+    requestWantedReceiverAudio();
     if (!self) { return; }
     emit errorOccurred(text);
 }
@@ -1098,6 +1204,20 @@ void RemoteMediaController::refreshAudioStatus()
         }
     }
 
+    // R-R3-43: each wanted receiver stream, by slice id.
+    for (const auto& [sliceId, stream] : d->receiverStreams) {
+        RemoteReceiverAudioStatus receiver;
+        receiver.sliceId = sliceId;
+        if (stream.stopped) {
+            receiver.state = RemoteReceiverAudioStatus::State::Stopped;
+            receiver.stopReason = stream.stopReason;
+        } else if (stream.receiver->isRunning()) {
+            receiver.state = RemoteReceiverAudioStatus::State::Receiving;
+            receiver.runningProfile = stream.runningProfile;
+        }
+        status.receivers.append(receiver);
+    }
+
     reconcileClockProbe();
     // Speaker progress and recovery are observed, not signalled, so poll
     // them while there is something to watch, and only then.
@@ -1140,6 +1260,22 @@ void RemoteMediaController::stop()
     // A playback problem belongs to its session and ends with it.
     d->audioFailure.reset();
     d->audioRestarting = false;
+    // R-R3-43: receiver streams stop with the media connection. Their
+    // sinks stay registered and are asked for again on the next one.
+    d->receiverRevisions.clear();
+    d->receiverSsrcs.clear();
+    QList<int> interrupted;
+    for (auto& [sliceId, stream] : d->receiverStreams) {
+        stream.receiver->stop();
+        stream.ssrc = 0;
+        stream.generation = 0;
+        stream.context.reset();
+        stream.runningProfile.reset();
+        stream.heldBy.reset();
+        stream.faulted = false;
+        stream.retryPending = false;
+        interrupted.append(sliceId);
+    }
     d->connectionId.clear();
     d->pendingPs3.reset();
     d->ps3Refused = false;
@@ -1164,6 +1300,13 @@ void RemoteMediaController::stop()
     d->bindings.clear();
     d->ctunStreams.clear();
     const QPointer<RemoteMediaController> self(this);
+    if (!d->destroying) {
+        for (int sliceId : interrupted) {
+            notifyReceiverStopped(sliceId, remoteAudioOffReasonToWire(
+                RemoteAudioOffReason::MediaNotReady));
+            if (!self) { return; }
+        }
+    }
     refreshAudioStatus();
     if (!self) { return; }
     for (const auto& [widget, panId] : retiredWidgets) {
@@ -1251,7 +1394,25 @@ void RemoteMediaController::start()
         receiveDisplay(packet);
     });
     connect(peer, &MediaPeer::rtpReceived, this, [this, current](const QByteArray& packet) {
-        if (current() && d->audioEnabled) { d->audio->submit(packet); }
+        if (!current()) { return; }
+        // R-R3-43: split by stream id before the speakers' gate, so a
+        // receiver stream reaches its consumers while the speakers are
+        // muted. A receiver stream nobody plays now (stopping, restarting)
+        // is dropped; everything else goes to the speakers' receiver as
+        // before.
+        if (!d->receiverSsrcs.isEmpty() && packet.size() >= 12) {
+            const quint32 ssrc = qFromBigEndian<quint32>(packet.constData() + 8);
+            if (d->receiverSsrcs.contains(ssrc)) {
+                for (auto& [sliceId, stream] : d->receiverStreams) {
+                    if (stream.ssrc == ssrc) {
+                        stream.receiver->submit(packet);
+                        break;
+                    }
+                }
+                return;
+            }
+        }
+        if (d->audioEnabled) { d->audio->submit(packet); }
     });
     connect(peer, &MediaPeer::ready, this, [this, current, epoch] {
         if (current()) {
@@ -1265,7 +1426,11 @@ void RemoteMediaController::start()
             }
             d->timer->start();
             refreshSubscriptions();
+            const QPointer<RemoteMediaController> self(this);
             requestAudio();
+            if (!self || !current()) { return; }
+            // R-R3-43: each receiver stream an app wants, after the mix.
+            requestWantedReceiverAudio();
         }
     });
     connect(peer, &MediaPeer::connectionFailed, this,
@@ -1296,9 +1461,14 @@ void RemoteMediaController::start()
     d->startingPeer = true;
     d->startRefusal.clear();
     const QPointer<MediaPeer> startedPeer(peer);
-    const bool started = peer->start(IMediaTransport::Role::Answerer, d->connectionId);
+    // R-R3-43: the receiver stream ids are declared only when this GUI will
+    // say so in its start below.
+    const bool started = peer->start(IMediaTransport::Role::Answerer, d->connectionId,
+                                     IMediaTransport::kDefaultAudioTargetBitrate,
+                                     /*offerLosslessAudio=*/false, receiverAudioNegotiated());
     if (!self) { return; }
     d->startingPeer = false;
+    d->receiverSsrcs = started && startedPeer ? startedPeer->receiverAudioSsrcs() : QList<quint32>{};
     const QString startError = std::exchange(d->startRefusal, QString());
     if (!started) {
         // R-R3-28, amended 2026-09-23: a refusal is never a silent stop, and
@@ -1339,8 +1509,21 @@ void RemoteMediaController::start()
     if (audioProfileNegotiated()) {
         startControl.insert(QStringLiteral("audioProfileVersion"), 1);
     }
+    // R-R3-43: likewise receiver audio, only to a Core that offers it.
+    if (receiverAudioNegotiated()) {
+        startControl.insert(QStringLiteral("receiverAudioVersion"), 1);
+    }
     send(startControl);
     if (!self) { return; }
+    if (!receiverAudioNegotiated()) {
+        // An older Core: no request goes out, and each consumer is told why.
+        QList<int> wanted;
+        for (const auto& [sliceId, stream] : d->receiverStreams) { wanted.append(sliceId); }
+        for (int sliceId : wanted) {
+            notifyReceiverStopped(sliceId, QString::fromLatin1(kReceiverAudioUnavailableReason));
+            if (!self) { return; }
+        }
+    }
     // A media session now exists: audio is awaited from Core.
     refreshAudioStatus();
 }
@@ -2243,6 +2426,304 @@ void RemoteMediaController::requestAudio()
     refreshAudioStatus();
 }
 
+// ---- R-R3-43: receiver audio streams for apps on this computer ----
+
+void RemoteMediaController::requestReceiverAudio(int sliceId, IReceiverPcmSink* sink)
+{
+    if (!sink || sliceId < 0) { return; }
+    auto found = d->receiverStreams.find(sliceId);
+    const bool first = found == d->receiverStreams.end();
+    if (first) {
+        Private::ReceiverStream stream;
+        stream.fanout = std::make_shared<Private::ReceiverFanout>();
+        stream.fanout->sliceId = sliceId;
+        const std::shared_ptr<Private::ReceiverFanout> fanout = stream.fanout;
+        // Runs on the receiver's worker thread; see IReceiverPcmSink.
+        stream.receiver = std::make_unique<RemoteAudioReceiver>(
+            RemoteAudioReceiver::PcmSinkMode{[fanout](const float* pcm, int frames) {
+                std::lock_guard<std::mutex> lock(fanout->mutex);
+                for (IReceiverPcmSink* consumer : std::as_const(fanout->sinks)) {
+                    consumer->receiverAudioBlock(fanout->sliceId, pcm, frames);
+                }
+            }});
+        RemoteAudioReceiver* const receiver = stream.receiver.get();
+        connect(receiver, &RemoteAudioReceiver::restartRequested, this,
+                [this, sliceId, receiver](const QString& reason, RemoteAudioReceiver::Fault fault) {
+            onReceiverRestart(sliceId, receiver, reason, fault);
+        });
+        connect(receiver, &RemoteAudioReceiver::errorOccurred, this,
+                [this, sliceId, receiver](const QString& reason, RemoteAudioReceiver::Fault fault) {
+            onReceiverError(sliceId, receiver, reason, fault);
+        });
+        found = d->receiverStreams.emplace(sliceId, std::move(stream)).first;
+    } else if (found->second.sinks.contains(sink)) {
+        return;
+    }
+    Private::ReceiverStream& stream = found->second;
+    stream.sinks.append(sink);
+    {
+        std::lock_guard<std::mutex> lock(stream.fanout->mutex);
+        stream.fanout->sinks.append(sink);
+    }
+    const QPointer<RemoteMediaController> self(this);
+    if (first || stream.heldBy) {
+        // A new consumer is a new demand: a stream the Core forgot (its
+        // slice was gone, or it had no room) is asked for again, once.
+        if (!d->peer) {
+            notifyReceiverStopped(sliceId, remoteAudioOffReasonToWire(
+                RemoteAudioOffReason::MediaNotReady));
+        } else if (!receiverAudioNegotiated()) {
+            notifyReceiverStopped(sliceId, QString::fromLatin1(kReceiverAudioUnavailableReason));
+        } else if (d->peer->isReady()) {
+            sendReceiverAudioRequest(sliceId, true);
+        }
+    } else if (stream.stopped) {
+        // A later consumer hears why the shared stream is stopped.
+        const QString reason = stream.stopReason;
+        sink->receiverAudioStopped(sliceId, reason);
+    }
+    if (!self) { return; }
+    refreshAudioStatus();
+}
+
+void RemoteMediaController::releaseReceiverAudio(int sliceId, IReceiverPcmSink* sink)
+{
+    const auto found = d->receiverStreams.find(sliceId);
+    if (found == d->receiverStreams.end() || !found->second.sinks.contains(sink)) { return; }
+    Private::ReceiverStream& stream = found->second;
+    stream.sinks.removeAll(sink);
+    {
+        // After this, the worker cannot reach the sink.
+        std::lock_guard<std::mutex> lock(stream.fanout->mutex);
+        stream.fanout->sinks.removeAll(sink);
+    }
+    if (!stream.sinks.isEmpty()) { return; }
+    // The last consumer went: stop the stream here and at the Core.
+    std::unique_ptr<RemoteAudioReceiver> receiver = std::move(stream.receiver);
+    receiver->stop();
+    disconnect(receiver.get(), nullptr, this, nullptr);
+    // This may run inside the receiver's own signal; it goes when that is over.
+    receiver.release()->deleteLater();
+    const bool askedThisConnection = d->receiverRevisions.contains(sliceId);
+    const bool forgotten = stream.heldBy.has_value();
+    d->receiverStreams.erase(found);
+    const QPointer<RemoteMediaController> self(this);
+    if (askedThisConnection && !forgotten && d->peer && d->peer->isReady()
+        && receiverAudioNegotiated()) {
+        sendReceiverAudioRequest(sliceId, false);
+        if (!self) { return; }
+    }
+    // A stream the Core had no room for may fit now.
+    if (d->peer && d->peer->isReady() && receiverAudioNegotiated()) {
+        QList<int> waiting;
+        for (const auto& [id, other] : d->receiverStreams) {
+            if (other.heldBy == RemoteAudioOffReason::ReceiverLimit) { waiting.append(id); }
+        }
+        for (int id : waiting) {
+            if (d->receiverStreams.count(id) == 0) { continue; }
+            sendReceiverAudioRequest(id, true);
+            if (!self) { return; }
+        }
+    }
+    reconcileLinkTrial();
+    refreshAudioStatus();
+}
+
+void RemoteMediaController::sendReceiverAudioRequest(int sliceId, bool enabled)
+{
+    if (!d->peer || !d->peer->isReady() || !receiverAudioNegotiated()) { return; }
+    // Never lower than any revision this connection sent for the slice id.
+    quint32& revision = d->receiverRevisions[sliceId];
+    ++revision;
+    if (!revision) { ++revision; }
+    const auto found = d->receiverStreams.find(sliceId);
+    if (found != d->receiverStreams.end()) {
+        found->second.heldBy.reset();
+        found->second.retryPending = false;
+        found->second.lastRequestMs = d->clock.elapsed();
+    }
+    // The one quality choice, as the speakers' stream asks for it.
+    const RemoteAudioProfile profile =
+        d->audioProfileChoice == RemoteAudioProfile::Lossless && !d->losslessFallback
+        ? RemoteAudioProfile::Lossless : RemoteAudioProfile::Opus;
+    send(QJsonObject{{QStringLiteral("op"), QStringLiteral("receiver-audio")},
+                     {QStringLiteral("sliceId"), sliceId},
+                     {QStringLiteral("revision"), double(revision)},
+                     {QStringLiteral("enabled"), enabled},
+                     {QStringLiteral("profile"), remoteAudioProfileToWire(profile)}});
+}
+
+void RemoteMediaController::requestWantedReceiverAudio()
+{
+    if (!d->peer || !d->peer->isReady() || !receiverAudioNegotiated()) { return; }
+    QList<int> wanted;
+    for (const auto& [sliceId, stream] : d->receiverStreams) {
+        if (!stream.faulted) { wanted.append(sliceId); }
+    }
+    const QPointer<RemoteMediaController> self(this);
+    for (int sliceId : wanted) {
+        if (d->receiverStreams.count(sliceId) == 0) { continue; }
+        sendReceiverAudioRequest(sliceId, true);
+        if (!self) { return; }
+    }
+    refreshAudioStatus();
+}
+
+void RemoteMediaController::receiveReceiverAudioContext(const QJsonObject& payload)
+{
+    const std::optional<RemoteReceiverAudioContextMessage> message =
+        decodeReceiverAudioContext(payload);
+    if (!message) { return; }
+    const int sliceId = message->sliceId;
+    const auto found = d->receiverStreams.find(sliceId);
+    // A released stream's late answer changes nothing.
+    if (found == d->receiverStreams.end()) { return; }
+    Private::ReceiverStream& stream = found->second;
+    const RemoteAudioContextMessage& context = message->context;
+    if (context.revision != d->receiverRevisions.value(sliceId)
+        || !isNewerGeneration(context.generation, stream.generation)) { return; }
+    if (context.enabled && !d->receiverSsrcs.contains(context.ssrc)) { return; }
+    stream.generation = context.generation;
+    stream.context = context;
+    stream.retryPending = false;
+    stream.receiver->stop();
+    stream.ssrc = 0;
+    stream.runningProfile.reset();
+    const QPointer<RemoteMediaController> self(this);
+    if (context.enabled) {
+        const RemoteAudioProfile profile = context.losslessEncoder
+            ? RemoteAudioProfile::Lossless : RemoteAudioProfile::Opus;
+        if (stream.receiver->start(context.ssrc, context.firstTimestamp, profile)) {
+            stream.ssrc = context.ssrc;
+            stream.runningProfile = profile;
+            stream.stopped = false;
+            stream.stopReason.clear();
+            stream.faulted = false;
+            qCInfo(lcRemoteMedia).noquote()
+                << QStringLiteral("Remote receiver audio for slice %1: %2, context %3")
+                       .arg(sliceId).arg(reportedAudioProfile(context)).arg(context.generation);
+        }
+    } else {
+        const RemoteAudioOffReason reason =
+            context.offReason.value_or(RemoteAudioOffReason::EncoderUnavailable);
+        if (reason == RemoteAudioOffReason::SliceRemoved
+            || reason == RemoteAudioOffReason::ReceiverLimit) {
+            // The Core dropped the request; see sliceAdded and release.
+            stream.heldBy = reason;
+        }
+        // The Core confirming a stop this computer made keeps this
+        // computer's own reason.
+        if (!(reason == RemoteAudioOffReason::ClientDisabled && stream.faulted)) {
+            notifyReceiverStopped(sliceId, remoteAudioOffReasonToWire(reason));
+            if (!self) { return; }
+        }
+    }
+    reconcileLinkTrial();
+    refreshAudioStatus();
+}
+
+void RemoteMediaController::notifyReceiverStopped(int sliceId, const QString& reason)
+{
+    const auto found = d->receiverStreams.find(sliceId);
+    if (found == d->receiverStreams.end()) { return; }
+    Private::ReceiverStream& stream = found->second;
+    if (stream.stopped && stream.stopReason == reason) { return; }
+    stream.stopped = true;
+    stream.stopReason = reason;
+    qCInfo(lcRemoteMedia).noquote()
+        << QStringLiteral("Remote receiver audio for slice %1 stopped: %2").arg(sliceId).arg(reason);
+    // A consumer may release itself, or another, from inside the notice.
+    const QList<IReceiverPcmSink*> sinks = stream.sinks;
+    const QPointer<RemoteMediaController> self(this);
+    for (IReceiverPcmSink* sink : sinks) {
+        const auto still = d->receiverStreams.find(sliceId);
+        if (still == d->receiverStreams.end()) { return; }
+        if (!still->second.sinks.contains(sink)) { continue; }
+        sink->receiverAudioStopped(sliceId, reason);
+        if (!self) { return; }
+    }
+}
+
+void RemoteMediaController::onReceiverRestart(int sliceId, RemoteAudioReceiver* receiver,
+                                              const QString& reason,
+                                              RemoteAudioReceiver::Fault fault)
+{
+    const auto found = d->receiverStreams.find(sliceId);
+    if (found == d->receiverStreams.end() || found->second.receiver.get() != receiver) { return; }
+    Private::ReceiverStream& stream = found->second;
+    qCWarning(lcRemoteMedia).noquote()
+        << QStringLiteral("Remote receiver audio for slice %1: %2").arg(sliceId).arg(reason);
+    stream.receiver->stop();
+    stream.ssrc = 0;
+    // R-R3-23: a lossless receiver stream's restart counts against the one
+    // link trial, as the speakers' does.
+    if (stream.context && stream.context->losslessEncoder && d->linkTrial.active()
+        && linkInterruption(fault)
+        && d->linkTrial.noteInterruption(d->clock.elapsed())
+            == RemoteAudioLinkTrial::Verdict::Failed) {
+        fallBackToOpus(QStringLiteral("receiver stream restarts while lossless audio plays"));
+        return;
+    }
+    if (!stream.retryPending) {
+        stream.retryPending = true;
+        const QString connection = d->connectionId;
+        const quint32 revision = d->receiverRevisions.value(sliceId);
+        const int delay = int(std::max<qint64>(
+            0, 1000 - (d->clock.elapsed() - stream.lastRequestMs)));
+        QTimer::singleShot(delay, this, [this, sliceId, connection, revision] {
+            const auto again = d->receiverStreams.find(sliceId);
+            if (again == d->receiverStreams.end() || !again->second.retryPending
+                || connection != d->connectionId
+                || revision != d->receiverRevisions.value(sliceId)) { return; }
+            again->second.retryPending = false;
+            sendReceiverAudioRequest(sliceId, true);
+        });
+    }
+    refreshAudioStatus();
+}
+
+void RemoteMediaController::onReceiverError(int sliceId, RemoteAudioReceiver* receiver,
+                                            const QString& reason,
+                                            RemoteAudioReceiver::Fault fault)
+{
+    const auto found = d->receiverStreams.find(sliceId);
+    if (found == d->receiverStreams.end() || found->second.receiver.get() != receiver) { return; }
+    Private::ReceiverStream& stream = found->second;
+    qCWarning(lcRemoteMedia).noquote()
+        << QStringLiteral("Remote receiver audio for slice %1 failed: %2").arg(sliceId).arg(reason);
+    stream.receiver->stop();
+    stream.ssrc = 0;
+    stream.runningProfile.reset();
+    stream.faulted = true;
+    stream.retryPending = false;
+    const QPointer<RemoteMediaController> self(this);
+    sendReceiverAudioRequest(sliceId, false);
+    if (!self) { return; }
+    notifyReceiverStopped(sliceId, remoteAudioProblemText(fault));
+    if (!self) { return; }
+    reconcileLinkTrial();
+    refreshAudioStatus();
+}
+
+void RemoteMediaController::reconcileLinkTrial()
+{
+    // R-R3-23, R-R3-43: one trial while any lossless stream plays.
+    bool lossless = d->audioEnabled && d->acceptedAudioContext
+        && d->acceptedAudioContext->losslessEncoder;
+    for (const auto& [sliceId, stream] : d->receiverStreams) {
+        if (stream.receiver->isRunning() && stream.runningProfile == RemoteAudioProfile::Lossless) {
+            lossless = true;
+        }
+    }
+    if (lossless && !d->linkTrial.active()) {
+        d->linkTrial.begin(d->clock.elapsed());
+        d->linkTrialTimer->start();
+    } else if (!lossless && d->linkTrial.active()) {
+        d->linkTrial.end();
+        d->linkTrialTimer->stop();
+    }
+}
+
 void RemoteMediaController::receiveAllocationResult(const QJsonObject& payload)
 {
     if (payload.size() != 11 || !payload.value(QStringLiteral("accepted")).isBool()
@@ -2469,18 +2950,15 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
         // R-R3-23: the link trial runs while lossless audio plays. A
         // restart's new lossless context continues it; anything else ends
         // it (mute, a radio drop, Opus), and lossless later begins anew.
-        if (d->audioEnabled && context->losslessEncoder) {
-            if (!d->linkTrial.active()) {
-                d->linkTrial.begin(d->clock.elapsed());
-                d->linkTrialTimer->start();
-            }
-        } else if (d->linkTrial.active()) {
-            d->linkTrial.end();
-            d->linkTrialTimer->stop();
-        }
+        // R-R3-43: unless a receiver stream still plays lossless.
+        reconcileLinkTrial();
         refreshAudioStatus();
         if (!self) { return; }
         emit audioContextAccepted();
+        return;
+    }
+    if (op == QLatin1String("receiver-audio-context")) {
+        if (receiverAudioNegotiated()) { receiveReceiverAudioContext(payload); }
         return;
     }
     if (op == QLatin1String("description") || op == QLatin1String("candidate")) {

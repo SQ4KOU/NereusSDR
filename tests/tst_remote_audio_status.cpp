@@ -696,6 +696,50 @@ private slots:
         QCOMPARE(window(100), Verdict::Continue); // 8% once
         QCOMPARE(window(0), Verdict::Continue);
     }
+    // R-R3-43: one trial over every lossless stream. Two streams that each
+    // lose 1.5% pass alone and together; a stream losing 4.8% fails the
+    // window for all of them, even beside a clean one that dilutes it to
+    // 2.4%. Each stream counts from its own generation, and a stream that
+    // leaves and comes back counts from zero.
+    void linkTrialCountsEveryLosslessStream()
+    {
+        using Verdict = RemoteAudioLinkTrial::Verdict;
+        using Sample = RemoteAudioLinkTrial::StreamSample;
+        const auto stream = [](int key, quint64 generation, quint64 expected, quint64 lost) {
+            Sample sample;
+            sample.stream = key;
+            sample.playback.running = true;
+            sample.playback.generation = generation;
+            sample.playback.expectedPackets = expected;
+            sample.playback.missingPackets = lost;
+            sample.playback.concealedPackets = lost;
+            sample.playback.decodedPackets = expected - lost;
+            return sample;
+        };
+        RemoteAudioLinkTrial trial;
+        trial.begin(0);
+        QCOMPARE(trial.observe(1'000, {stream(-1, 1, 0, 0), stream(1, 3, 0, 0)}),
+                 Verdict::Continue);
+        QCOMPARE(trial.observe(5'000, {stream(-1, 1, 1250, 19), stream(1, 3, 1250, 19)}),
+                 Verdict::Continue);
+        QVERIFY(std::abs(*trial.lastWindowLoss() - 38.0 / 2500.0) < 1e-9);
+
+        trial.begin(0);
+        QCOMPARE(trial.observe(1'000, {stream(-1, 1, 0, 0), stream(2, 1, 0, 0)}),
+                 Verdict::Continue);
+        QCOMPARE(trial.observe(5'000, {stream(-1, 1, 1250, 0), stream(2, 1, 1250, 60)}),
+                 Verdict::Failed);
+        QVERIFY(std::abs(*trial.lastWindowLoss() - 60.0 / 2500.0) < 1e-9);
+
+        // Stream 4 leaves; back on the same key with a counter below its old
+        // base (a new receiver), it still counts everything it has played.
+        trial.begin(0);
+        QCOMPARE(trial.observe(1'000, {stream(4, 1, 0, 0)}), Verdict::Continue);
+        QCOMPARE(trial.observe(2'000, {stream(4, 1, 100, 0)}), Verdict::Continue);
+        QCOMPARE(trial.observe(3'000, std::vector<Sample>{}), Verdict::Continue);
+        QCOMPARE(trial.observe(5'000, {stream(4, 1, 50, 5)}), Verdict::Failed);
+        QVERIFY(std::abs(*trial.lastWindowLoss() - 5.0 / 150.0) < 1e-9);
+    }
     void linkTrialCountsInterruptions()
     {
         using Verdict = RemoteAudioLinkTrial::Verdict;

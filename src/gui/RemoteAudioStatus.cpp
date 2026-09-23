@@ -5,6 +5,7 @@
 // =================================================================
 
 #include "gui/RemoteAudioStatus.h"
+#include "gui/OperatorReasonText.h"
 #include "gui/RemoteGeneration.h"
 
 #include <QStringList>
@@ -225,9 +226,27 @@ QString remoteAudioDeliveryText(const AudioDelayEstimate& estimate)
     return QStringLiteral("%1\u00A0ms \u00B1 %2\u00A0ms").arg(shown.valueMs).arg(shown.accuracyMs);
 }
 
+QString remoteReceiverAudioStateText(const RemoteReceiverAudioStatus& receiver)
+{
+    using State = RemoteReceiverAudioStatus::State;
+    switch (receiver.state) {
+    case State::Waiting:
+        return QStringLiteral("Waiting for the Core");
+    case State::Receiving:
+        return receiver.runningProfile
+            ? QStringLiteral("Receiving, %1").arg(remoteAudioProfileName(*receiver.runningProfile))
+            : QStringLiteral("Receiving");
+    case State::Stopped:
+        return QStringLiteral("Stopped. %1")
+            .arg(OperatorReasonText::forDisplay(receiver.stopReason));
+    }
+    return {};
+}
+
 QString formatRemoteAudioDetails(const RemoteAudioStatus& status,
                                  const RemoteAudioReceiverTelemetry& playback,
-                                 const RemoteAudioDelayReport& delay)
+                                 const RemoteAudioDelayReport& delay,
+                                 const QHash<int, RemoteAudioReceiverTelemetry>& receiverPlayback)
 {
     using State = RemoteAudioStatus::State;
     QStringList lines;
@@ -267,6 +286,34 @@ QString formatRemoteAudioDetails(const RemoteAudioStatus& status,
                 : QStringLiteral("Audio delay: not measured yet"));
         }
     }
+    // R-R3-43: each receiver's own stream to apps, apart from the speakers.
+    for (const RemoteReceiverAudioStatus& receiver : status.receivers) {
+        // The letter the operator sees for the slice (RadioModel.cpp's
+        // receiverLetter): slice id 0 is receiver A.
+        const QChar letter(QLatin1Char(static_cast<char>('A' + std::clamp(receiver.sliceId, 0, 25))));
+        lines << QStringLiteral("Receiver %1 for apps: %2")
+                     .arg(letter, remoteReceiverAudioStateText(receiver));
+        if (receiver.state != RemoteReceiverAudioStatus::State::Receiving) {
+            continue;
+        }
+        const auto measured = receiverPlayback.constFind(receiver.sliceId);
+        if (measured == receiverPlayback.constEnd()) {
+            continue;
+        }
+        const RemoteAudioReceiverTelemetry& stream = *measured;
+        // U+00A0 between each number and its unit keeps them on one line.
+        lines << QStringLiteral("Receiver %1: arrival jitter %2, missing packets %3, "
+                                "gaps filled %4")
+                     .arg(letter,
+                          stream.arrivalJitterMs
+                              ? QStringLiteral("%1\u00A0ms").arg(qRound(*stream.arrivalJitterMs))
+                              : QStringLiteral("not measured yet"),
+                          stream.expectedPackets > 0
+                              ? QStringLiteral("%1 of %2").arg(stream.missingPackets)
+                                    .arg(stream.expectedPackets)
+                              : QStringLiteral("none received yet"))
+                     .arg(stream.concealedPackets);
+    }
     return lines.join(QLatin1Char('\n'));
 }
 
@@ -296,14 +343,33 @@ void RemoteAudioLinkTrial::end()
 RemoteAudioLinkTrial::Verdict RemoteAudioLinkTrial::observe(
     qint64 nowMs, const RemoteAudioReceiverTelemetry& playback)
 {
+    return observe(nowMs, std::vector<StreamSample>{StreamSample{0, playback}});
+}
+
+RemoteAudioLinkTrial::Verdict RemoteAudioLinkTrial::observe(
+    qint64 nowMs, const std::vector<StreamSample>& streams)
+{
     if (!m_active) {
         return Verdict::Continue;
     }
-    if (playback.running) {
-        if (m_generation != playback.generation) {
+    // A stream no longer sampled is forgotten, so a new one on its key
+    // counts from zero.
+    for (auto it = m_streams.begin(); it != m_streams.end();) {
+        const bool sampled = std::any_of(streams.cbegin(), streams.cend(),
+            [&](const StreamSample& sample) { return sample.stream == it->first; });
+        it = sampled ? std::next(it) : m_streams.erase(it);
+    }
+    for (const StreamSample& sample : streams) {
+        const RemoteAudioReceiverTelemetry& playback = sample.playback;
+        if (!playback.running) {
+            continue;
+        }
+        auto [found, fresh] = m_streams.try_emplace(sample.stream);
+        StreamBase& stream = found->second;
+        if (fresh || stream.generation != playback.generation) {
             // A fresh receiver counts from zero.
-            m_generation = playback.generation;
-            m_base = {};
+            stream.generation = playback.generation;
+            stream.base = {};
         }
         const Counters now{playback.expectedPackets, playback.missingPackets,
                            playback.concealedPackets,
@@ -311,11 +377,11 @@ RemoteAudioLinkTrial::Verdict RemoteAudioLinkTrial::observe(
         const auto grow = [](quint64 value, quint64 base) {
             return value > base ? value - base : 0;
         };
-        m_window.expected += grow(now.expected, m_base.expected);
-        m_window.missing += grow(now.missing, m_base.missing);
-        m_window.concealed += grow(now.concealed, m_base.concealed);
-        m_window.played += grow(now.played, m_base.played);
-        m_base = now;
+        m_window.expected += grow(now.expected, stream.base.expected);
+        m_window.missing += grow(now.missing, stream.base.missing);
+        m_window.concealed += grow(now.concealed, stream.base.concealed);
+        m_window.played += grow(now.played, stream.base.played);
+        stream.base = now;
     }
     if (nowMs - m_windowStartMs < kWindowMs) {
         return Verdict::Continue;

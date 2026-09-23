@@ -147,6 +147,24 @@ constexpr Entry kEntries[] = {
     {"link closed", nullptr,
      "The connection to the Core closed."},
 
+    // Why a receiver's audio for an app on this computer (TCI, VAX) is not
+    // coming (R-R3-43): the receiver audio context's wire reasons,
+    // RemoteAudioContext.cpp. The speakers' own status words these in
+    // RemoteAudioStatus.cpp.
+    {"client-disabled", nullptr,
+     "This app stopped asking for this receiver's audio."},
+    {"media-not-ready", nullptr,
+     "Audio from the Core is not ready yet. This app asks for it again when it is."},
+    {"radio-offline", nullptr,
+     "The radio at the station is offline. This receiver's audio comes back with the radio."},
+    {"encoder-unavailable", nullptr,
+     "The Core could not start this receiver's audio."},
+    {"slice-removed", nullptr,
+     "This receiver is no longer on the Core."},
+    {"receiver-limit", nullptr,
+     "The Core is already sending audio for as many receivers as it can. Stop the audio "
+     "for another receiver to hear this one."},
+
     // Audio and display from the Core: the Core's refusals
     // (DaemonMediaController::sendRejected) and this computer's own
     // (RemoteMediaController.cpp, MediaPeer.cpp).

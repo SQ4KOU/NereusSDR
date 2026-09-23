@@ -20,6 +20,10 @@
 // audioProfileVersion), so tests can prove such a Core sees exactly the
 // behaviour it did. R-R3-35: hideAudioClock likewise makes the Core look
 // like one from before measured audio delay (no audioClockVersion).
+// R-R3-43: hideReceiverAudio likewise makes the Core look like one from
+// before receiver audio streams (no receiverAudioVersion). The station's
+// two slices carry their own tones, 617 Hz on slice A and 1579 Hz on slice
+// B, so a receiver stream shows which slice it carries.
 //
 // =================================================================
 
@@ -30,6 +34,7 @@
 #include "core/session/StationClient.h"
 #include "core/session/StationCapabilities.h"
 #include "core/session/StationServer.h"
+#include "core/session/media/IReceiverPcmSink.h"
 #include "core/settings/SettingsProxy.h"
 #include "gui/RemoteAudioStatus.h"
 #include "models/RadioModel.h"
@@ -37,6 +42,7 @@
 #include "LoopbackTransport.h"
 #include "PacedAudioBus.h"
 
+#include <QHash>
 #include <QJsonObject>
 #include <QPointer>
 #include <QTemporaryDir>
@@ -46,6 +52,7 @@
 #include <cmath>
 #include <functional>
 #include <memory>
+#include <mutex>
 #include <optional>
 #include <utility>
 
@@ -89,14 +96,16 @@ public:
     {
         const bool mayRewrite = (m_helloMinor && wire.contains("\"hello\""))
             || (forgeNextAudioContext && wire.contains("\"audio-context\""))
-            || ((hideAudioProfile || hideAudioClock) && wire.contains("\"capabilities\""));
+            || ((hideAudioProfile || hideAudioClock || hideReceiverAudio)
+                && wire.contains("\"capabilities\""));
         SessionMessage message;
         if (mayRewrite && SessionMessages::decode(wire, &message)) {
-            if ((hideAudioProfile || hideAudioClock)
+            if ((hideAudioProfile || hideAudioClock || hideReceiverAudio)
                 && message.kind == SessionMessageKind::Capabilities) {
                 StationCapabilities capabilities = StationCapabilities::fromUpdates(message.updates);
                 if (hideAudioProfile) { capabilities.audioProfileVersion = 0; }
                 if (hideAudioClock) { capabilities.audioClockVersion = 0; }
+                if (hideReceiverAudio) { capabilities.receiverAudioVersion = 0; }
                 ++hiddenAudioProfiles;
                 LoopbackTransport::sendText(SessionMessages::encode(
                     SessionMessages::capabilities(capabilities.toUpdates())));
@@ -128,10 +137,75 @@ public:
     Forge forgeNextAudioContext;
     bool hideAudioProfile = false;
     bool hideAudioClock = false;
+    bool hideReceiverAudio = false;
 
 private:
     std::optional<quint16> m_helloMinor;
 };
+
+// R-R3-43: an app on the remote computer that listens to receiver
+// streams: every block and every stop, per slice, safe across the receive
+// worker threads that deliver them.
+class CollectingReceiverSink final : public IReceiverPcmSink {
+public:
+    void receiverAudioBlock(int sliceId, const float* pcm, int frames) override
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        QVector<float>& audio = m_audio[sliceId];
+        audio.append(QVector<float>(pcm, pcm + qsizetype(frames) * 2));
+        ++m_blocks[sliceId];
+    }
+    void receiverAudioStopped(int sliceId, const QString& reason) override
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        m_stops.append({sliceId, reason});
+    }
+    QVector<float> audio(int sliceId) const
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_audio.value(sliceId);
+    }
+    int frames(int sliceId) const
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return int(m_audio.value(sliceId).size() / 2);
+    }
+    int blocks(int sliceId) const
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_blocks.value(sliceId);
+    }
+    QList<std::pair<int, QString>> stops() const
+    {
+        std::lock_guard<std::mutex> lock(m_mutex);
+        return m_stops;
+    }
+
+private:
+    mutable std::mutex m_mutex;
+    QHash<int, QVector<float>> m_audio;
+    QHash<int, int> m_blocks;
+    QList<std::pair<int, QString>> m_stops;
+};
+
+// The amplitude of one tone in one channel of interleaved stereo, from
+// firstFrame on.
+inline double toneAmplitude(const QVector<float>& samples, int channel, double hz,
+                            int firstFrame = 0)
+{
+    constexpr double kTwoPi = 2.0 * 3.14159265358979323846;
+    double cosine = 0.0;
+    double sine = 0.0;
+    int frames = 0;
+    for (int frame = firstFrame; frame * 2 + channel < samples.size(); ++frame) {
+        const double phase = kTwoPi * hz * static_cast<double>(frame) / 48000.0;
+        const double sample = samples.at(frame * 2 + channel);
+        cosine += sample * std::cos(phase);
+        sine += sample * std::sin(phase);
+        ++frames;
+    }
+    return frames > 0 ? 2.0 * std::hypot(cosine, sine) / frames : 0.0;
+}
 
 struct RemoteAudioSessionHarness {
     static constexpr int kFrames = 480;
@@ -191,6 +265,7 @@ struct RemoteAudioSessionHarness {
         station->forgeNextAudioContext = std::move(forgeFirstContext);
         station->hideAudioProfile = hideAudioProfile;
         station->hideAudioClock = hideAudioClock;
+        station->hideReceiverAudio = hideReceiverAudio;
         stationLink = station;
         station->linkTo(clientEnd);
         client.startSession(clientEnd, server.token());
@@ -201,12 +276,13 @@ struct RemoteAudioSessionHarness {
             QCOMPARE(clientEnd->rewrittenHellos, 1);
             QCOMPARE(client.agreedMinor(), *helloMinor);
         }
-        if (hideAudioProfile || hideAudioClock) {
+        if (hideAudioProfile || hideAudioClock || hideReceiverAudio) {
             // On a reconnect the server can still report media from the
             // session being replaced; wait for this link's capabilities.
             QTRY_VERIFY(station->hiddenAudioProfiles >= 1 && client.isHandshakeComplete());
             if (hideAudioProfile) { QCOMPARE(client.capabilities().audioProfileVersion, 0); }
             if (hideAudioClock) { QCOMPARE(client.capabilities().audioClockVersion, 0); }
+            if (hideReceiverAudio) { QCOMPARE(client.capabilities().receiverAudioVersion, 0); }
         }
     }
 
@@ -215,6 +291,13 @@ struct RemoteAudioSessionHarness {
     // Set before connectSession(): the Core appears to predate measured
     // audio delay (R-R3-35).
     bool hideAudioClock = false;
+    // Set before connectSession(): the Core appears to predate receiver
+    // audio streams (R-R3-43).
+    bool hideReceiverAudio = false;
+
+    // The station's two slice tones.
+    static constexpr double kSliceAToneHz = 617.0;
+    static constexpr double kSliceBToneHz = 1579.0;
 
     QPointer<RewritingTransport> stationLink;
 
@@ -224,8 +307,8 @@ struct RemoteAudioSessionHarness {
         QVector<float> b(kFrames * 2);
         for (int frame = 0; frame < kFrames; ++frame) {
             const double time = static_cast<double>(stationFrames + frame) / 48000.0;
-            const float first = static_cast<float>(0.22 * std::sin(2.0 * kPi * 617.0 * time));
-            const float second = static_cast<float>(0.19 * std::sin(2.0 * kPi * 1579.0 * time));
+            const float first = static_cast<float>(0.22 * std::sin(2.0 * kPi * kSliceAToneHz * time));
+            const float second = static_cast<float>(0.19 * std::sin(2.0 * kPi * kSliceBToneHz * time));
             a[frame * 2] = a[frame * 2 + 1] = first;
             b[frame * 2] = b[frame * 2 + 1] = second;
         }

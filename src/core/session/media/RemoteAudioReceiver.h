@@ -157,10 +157,37 @@ public:
     /// Monotonic nanoseconds, never negative, callable from any thread.
     using Clock = std::function<qint64()>;
 
+    /// R-R3-43: where a receiver without a speaker hands its audio: frames
+    /// of interleaved stereo 48 kHz float, in stream order. Called on the
+    /// receive worker thread, never the GUI or a device callback thread;
+    /// it must return quickly.
+    using PcmSink = std::function<void(const float* interleavedStereo, int frames)>;
+
+    /// R-R3-43: the PCM-sink mode. No speaker, no rate matcher and no
+    /// AudioEngine: each packet is released by the jitter hold, so the
+    /// Core's RTP clock paces the sink. A lost Opus packet is concealed and
+    /// a lost lossless packet is silence, as for the speaker. The sink mode
+    /// never asks for a restart because packets stopped: while the Core is
+    /// quiet the sink hears missing-packet audio (silence) for 500 ms and
+    /// then nothing, and the next packet to arrive starts the stream again
+    /// on its own timestamp. A stream gap, an arrival burst or a decode
+    /// failure still asks for a restart, and a decoder that cannot start is
+    /// still an error.
+    struct PcmSinkMode {
+        PcmSink sink;
+    };
+
     /// `clock` (R-R3-35) stamps arrivals, playout and release times. Empty:
     /// std::chrono::steady_clock, counted from this process's first use.
     explicit RemoteAudioReceiver(AudioEngine* engine, QObject* parent = nullptr,
                                  Clock clock = {});
+    /// A receiver in the PCM-sink mode (see PcmSinkMode). Its telemetry
+    /// counts frames handed to the sink as deviceConsumedFrames, with
+    /// lastDeviceProgressAgeMs from the newest hand-off; it reports no
+    /// speaker queue, drift ratio or playout point.
+    RemoteAudioReceiver(PcmSinkMode mode, QObject* parent = nullptr, Clock clock = {});
+    /// True for a receiver built in the PCM-sink mode.
+    bool isPcmSink() const;
     ~RemoteAudioReceiver() override;
     /// The receiver clock now; the playout and release points use it.
     qint64 nowNs() const;

@@ -2,11 +2,13 @@
 // no-port-check: NereusSDR-original. Remote daemon R3 receive display wiring.
 
 #include "core/session/media/DisplayBudget.h"
+#include "core/session/media/IReceiverPcmSink.h"
 #include "core/session/media/MediaPeer.h"
 #include "core/session/media/RemoteAudioContext.h"
 #include "core/session/media/RemoteAudioReceiver.h"
 #include "gui/PanStatusText.h"
 #include "gui/RemoteAudioStatus.h"
+#include <QHash>
 #include <QObject>
 #include <functional>
 #include <memory>
@@ -115,6 +117,31 @@ public:
     /// R-R3-35: this Core answers audio clock probes (audioClockVersion 1 or
     /// later). Without it no probe is sent and no delay is measured.
     bool audioClockNegotiated() const;
+    /// R-R3-43: this Core can send a receiver's audio on its own stream:
+    /// audioProfileNegotiated() and a Core advertising receiverAudioVersion
+    /// 1 or later. Only then does the media start carry
+    /// receiverAudioVersion and a receiver-audio request go out; otherwise
+    /// the controls on the wire are exactly today's.
+    bool receiverAudioNegotiated() const;
+    /// R-R3-43: the stop reason a consumer gets from a Core that cannot send
+    /// a receiver's audio. Plain words, shown as it is.
+    static constexpr const char* kReceiverAudioUnavailableReason =
+        "This Core cannot send a receiver's audio.";
+    /// R-R3-43: an app on this computer (TCI, VAX) wants the Core's slice
+    /// `sliceId` audio, without a speaker. Reference-counted per slice: the
+    /// first sink asks the Core for the slice's stream, later sinks share
+    /// it. The stream follows the one audio quality choice and runs while
+    /// the speakers are muted. The sink stays registered across media
+    /// reconnects until released; see IReceiverPcmSink for what it is told.
+    /// Adding a sink that is already registered for the slice does nothing.
+    /// GUI thread only.
+    void requestReceiverAudio(int sliceId, IReceiverPcmSink* sink);
+    /// R-R3-43: undoes one requestReceiverAudio(). When it returns, `sink`
+    /// is not called again for this slice; the last sink's release asks the
+    /// Core to stop the stream. GUI thread only.
+    void releaseReceiverAudio(int sliceId, IReceiverPcmSink* sink);
+    /// R-R3-43: each wanted receiver stream's measured health, by slice id.
+    QHash<int, RemoteAudioReceiverTelemetry> receiverAudioTelemetry() const;
     /// R-R3-35: the measured audio delay now. measurable follows
     /// audioClockNegotiated() while a media session exists; estimate is
     /// present only while audio plays, echoes arrive (the newest younger
@@ -172,6 +199,15 @@ private:
     void reportDisplayDrops();
     void requestKeyframe(quint32 endpointId);
     void requestAudio();
+    void sendReceiverAudioRequest(int sliceId, bool enabled);
+    void requestWantedReceiverAudio();
+    void receiveReceiverAudioContext(const QJsonObject& payload);
+    void notifyReceiverStopped(int sliceId, const QString& reason);
+    void onReceiverRestart(int sliceId, RemoteAudioReceiver* receiver, const QString& reason,
+                           RemoteAudioReceiver::Fault fault);
+    void onReceiverError(int sliceId, RemoteAudioReceiver* receiver, const QString& reason,
+                         RemoteAudioReceiver::Fault fault);
+    void reconcileLinkTrial();
     void refreshAudioStatus();
     void checkLosslessLink();
     void fallBackToOpus(const QString& cause);
