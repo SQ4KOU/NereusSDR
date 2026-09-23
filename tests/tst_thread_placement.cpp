@@ -116,13 +116,23 @@ public:
     bool setAffinity(qint64 threadId, const QList<int>& cpus) override
     {
         m_calls->append({Call::Affinity, threadId, cpus, 0});
-        return true;
+        for (int cpu : cpus) {
+            if (refuseCpus.contains(cpu)) {
+                return false;
+            }
+        }
+        return !refuseAffinity;
     }
     bool setNice(qint64 threadId, int nice) override
     {
         m_calls->append({Call::Nice, threadId, {}, nice});
-        return true;
+        return !refuseNice;
     }
+
+    bool refuseAffinity{false};   ///< every move is refused (recorded anyway)
+    bool refuseNice{false};       ///< every nice change is refused
+    QList<int> refuseCpus;        ///< a move onto any of these is refused
+    QString lastError() const override { return QStringLiteral("refused by the test"); }
 
 private:
     QList<Call>* m_calls;
@@ -149,6 +159,68 @@ int lastNice(const QList<Call>& calls, qint64 tid)
     }
     return 999;
 }
+
+// A thread's nice level: the last one it was given, else the process's 0.
+int niceOf(const QList<Call>& calls, qint64 tid)
+{
+    const int nice = lastNice(calls, tid);
+    return nice == 999 ? 0 : nice;
+}
+
+// What a housekeeping thread (spectrum, networking) ends at in nereusd on
+// Linux: it asks for nice -5 itself (elevateLatencyCriticalThreadPriority,
+// FftEnginePool.cpp and RadioModel.cpp's connection thread) unless placement
+// owns thread priority, and LimitNICE=-10 lets that call succeed.
+constexpr int kHousekeepingOwnNice = -5;
+
+int housekeepingNice(const ThreadPlacement& placement)
+{
+    return placement.isActive() ? 0 : kHousekeepingOwnNice;
+}
+
+// Starts every signal processing role the way nereusd does (receive worker
+// active, DSP thread, transmitting) and returns their thread IDs.
+QList<qint64> runEveryDspRole(ThreadPlacement& placement, qint64* current)
+{
+    *current = 101;
+    placement.onWdspThreadStarted(kWdspThreadRxMain, 0);
+    placement.setChannelActive(ThreadRole::RxWorker, 0, true);
+    *current = 200;
+    placement.registerCurrentThread(ThreadRole::DspThread);
+    *current = 105;
+    placement.onWdspThreadStarted(kWdspThreadTxMain, 5);
+    *current = 300;
+    placement.registerCurrentThread(ThreadRole::TxWorkerThread);
+    placement.setChannelActive(ThreadRole::TxWorker, 5, true);
+    return {101, 200, 105, 300};
+}
+
+int affinityCalls(const QList<Call>& calls)
+{
+    int n = 0;
+    for (const Call& c : calls) {
+        n += c.kind == Call::Affinity ? 1 : 0;
+    }
+    return n;
+}
+
+// Collects the warnings placement logs while one is alive.
+class WarningCatcher {
+public:
+    WarningCatcher() { s_warnings.clear(); m_previous = qInstallMessageHandler(&handler); }
+    ~WarningCatcher() { qInstallMessageHandler(m_previous); }
+    QStringList warnings() const { return s_warnings; }
+
+private:
+    static void handler(QtMsgType type, const QMessageLogContext&, const QString& text)
+    {
+        if (type == QtWarningMsg && text.startsWith(QLatin1String("Thread placement"))) {
+            s_warnings.append(text);
+        }
+    }
+    static inline QStringList s_warnings;
+    QtMessageHandler m_previous{nullptr};
+};
 
 int niceCalls(const QList<Call>& calls)
 {
@@ -301,10 +373,14 @@ private slots:
         const QString line = placement.start(f.read(), demand({0}, true),
                                              std::make_unique<RecordingApi>(&calls, &current),
                                              true);
+        // No thread moves, but nereusd still owns priority (Important 1).
         QCOMPARE(line, QStringLiteral("Thread placement: every thread may run on any core,"
-                                      " because only one processor core is available."));
-        QVERIFY(!placement.isActive());
+                                      " because only one processor core is available;"
+                                      " signal processing priority raised."));
+        QVERIFY(placement.isActive());
+        QVERIFY(!placement.isPlacing());
         QVERIFY(calls.isEmpty());
+        QVERIFY(!placement.currentPlan().active);
     }
 
     void gapsInTheOnlineListAreRespected()
@@ -461,7 +537,8 @@ private slots:
         QCOMPARE(lastCpus(calls, 102), QList<int>{6});
 
         // Transmit worker and pump: the worker gets 7 while transmitting;
-        // the pump, with no fast core left, runs on housekeeping, raised.
+        // the pump, with no fast core left, runs on housekeeping at normal
+        // priority, level with spectrum and networking there.
         current = 105;
         placement.onWdspThreadStarted(kWdspThreadTxMain, 5);
         QCOMPARE(lastCpus(calls, 105), hk);
@@ -473,7 +550,7 @@ private slots:
         QCOMPARE(lastCpus(calls, 105), QList<int>{7});
         QCOMPARE(lastNice(calls, 105), kDspNice);
         QCOMPARE(lastCpus(calls, 300), hk);
-        QCOMPARE(lastNice(calls, 300), kDspNice);
+        QCOMPARE(lastNice(calls, 300), 0);
 
         // RX0 stops: back to housekeeping at normal priority; the rest
         // move up.
@@ -484,6 +561,8 @@ private slots:
         QCOMPARE(lastCpus(calls, 200), QList<int>{5});
         QCOMPARE(lastCpus(calls, 105), QList<int>{6});
         QCOMPARE(lastCpus(calls, 300), QList<int>{7});
+        // With a core of its own, the pump is raised.
+        QCOMPARE(lastNice(calls, 300), kDspNice);
 
         // Transmit ends.
         placement.setChannelActive(ThreadRole::TxWorker, 5, false);
@@ -563,6 +642,230 @@ private slots:
         QCOMPARE(niceCalls(calls), 0);
     }
 
+    void dspNeverBelowHousekeepingWithoutPlacement_data()
+    {
+        QTest::addColumn<QString>("how");
+        QTest::addColumn<bool>("permitted");
+        for (const bool permitted : {true, false}) {
+            const char* p = permitted ? " (raise permitted)" : " (raise not permitted)";
+            QTest::newRow(qPrintable(QStringLiteral("one core") + QLatin1String(p)))
+                << QStringLiteral("one core") << permitted;
+            QTest::newRow(qPrintable(QStringLiteral("moves refused") + QLatin1String(p)))
+                << QStringLiteral("moves refused") << permitted;
+            QTest::newRow(qPrintable(QStringLiteral("off in nereusd.conf") + QLatin1String(p)))
+                << QStringLiteral("off") << permitted;
+        }
+    }
+
+    void dspNeverBelowHousekeepingWithoutPlacement()
+    {
+        // Important 1: when placement is inactive, no signal processing
+        // role may end at a lower priority (higher nice) than spectrum or
+        // networking.
+        QFETCH(QString, how);
+        QFETCH(bool, permitted);
+        SysfsFixture f;
+        if (how == QLatin1String("one core")) {
+            f.online("0");
+        } else {
+            layOutRk3588s(f);
+        }
+        QList<Call> calls;
+        qint64 current = 1;
+        auto api = std::make_unique<RecordingApi>(&calls, &current);
+        api->refuseAffinity = how == QLatin1String("moves refused");
+        ThreadPlacement placement;
+        if (how == QLatin1String("off")) {
+            placement.startPriorityOnly(std::move(api), permitted,
+                                        QStringLiteral("thread_placement is off in nereusd.conf"));
+        } else {
+            placement.start(f.read(), demand({0}, true, true, true), std::move(api), permitted);
+        }
+        const int movesAtStart = affinityCalls(calls);
+
+        const QList<qint64> dsp = runEveryDspRole(placement, &current);
+        for (qint64 tid : dsp) {
+            QVERIFY2(niceOf(calls, tid) <= housekeepingNice(placement),
+                     qPrintable(QStringLiteral("thread %1 at nice %2, housekeeping at %3")
+                                    .arg(tid).arg(niceOf(calls, tid))
+                                    .arg(housekeepingNice(placement))));
+            // Priority only: every busy role is raised when permitted.
+            QCOMPARE(niceOf(calls, tid), permitted ? kDspNice : 0);
+        }
+        QVERIFY(!placement.isPlacing());
+        // No thread is moved after startup, flush threads and FFTW included.
+        current = 400;
+        placement.onWdspThreadStarted(kWdspThreadFlush, 0);
+        current = 500;
+        placement.placeCurrentThreadOnFastCore();
+        QCOMPARE(affinityCalls(calls), movesAtStart);
+        if (permitted) {
+            QCOMPARE(lastNice(calls, 400), 0);
+        }
+
+        // A receive worker that stops goes back to normal priority.
+        placement.setChannelActive(ThreadRole::RxWorker, 0, false);
+        QCOMPARE(niceOf(calls, 101), 0);
+    }
+
+    void priorityOnlyStartupLines()
+    {
+        {
+            QList<Call> calls;
+            qint64 current = 1;
+            ThreadPlacement placement;
+            QCOMPARE(placement.startPriorityOnly(
+                         std::make_unique<RecordingApi>(&calls, &current), true,
+                         QStringLiteral("thread_placement is off in nereusd.conf")),
+                     QStringLiteral("Thread placement: every thread may run on any core,"
+                                    " because thread_placement is off in nereusd.conf;"
+                                    " signal processing priority raised."));
+        }
+        {
+            QList<Call> calls;
+            qint64 current = 1;
+            ThreadPlacement placement;
+            QCOMPARE(placement.startPriorityOnly(
+                         std::make_unique<RecordingApi>(&calls, &current), false,
+                         QStringLiteral("thread_placement is off in nereusd.conf")),
+                     QStringLiteral("Thread placement: every thread may run on any core,"
+                                    " because thread_placement is off in nereusd.conf;"
+                                    " raising signal processing priority is not permitted,"
+                                    " so it runs at normal priority."));
+        }
+        {
+            SysfsFixture f;
+            layOutRk3588s(f);
+            QList<Call> calls;
+            qint64 current = 1;
+            auto api = std::make_unique<RecordingApi>(&calls, &current);
+            api->refuseAffinity = true;
+            ThreadPlacement placement;
+            QCOMPARE(placement.start(f.read(), demand({0}, true, true, true), std::move(api),
+                                     true),
+                     QStringLiteral("Thread placement: every thread may run on any core,"
+                                    " because the system refused to move threads;"
+                                    " signal processing priority raised."));
+            QVERIFY(placement.isActive());
+            QVERIFY(!placement.isPlacing());
+        }
+    }
+
+    void aRoleWithoutItsOwnCoreIsNotRaised()
+    {
+        // Minor 2: while placing, raised priority goes only with a core of
+        // its own. Two cores: RX0 takes 1; the DSP thread runs on 0 with
+        // everything else, at normal priority.
+        SysfsFixture f;
+        f.online("0-1");
+        QList<Call> calls;
+        qint64 current = 1;
+        ThreadPlacement placement;
+        placement.start(f.read(), demand({0}, true),
+                        std::make_unique<RecordingApi>(&calls, &current), true);
+        placement.setChannelActive(ThreadRole::RxWorker, 0, true);
+        current = 101;
+        placement.onWdspThreadStarted(kWdspThreadRxMain, 0);
+        current = 200;
+        placement.registerCurrentThread(ThreadRole::DspThread);
+        QCOMPARE(lastCpus(calls, 101), QList<int>{1});
+        QCOMPARE(lastNice(calls, 101), kDspNice);
+        QCOMPARE(lastCpus(calls, 200), QList<int>{0});
+        QCOMPARE(lastNice(calls, 200), 0);
+        // RX0 stops: the DSP thread takes core 1 and is raised there.
+        placement.setChannelActive(ThreadRole::RxWorker, 0, false);
+        QCOMPARE(lastCpus(calls, 200), QList<int>{1});
+        QCOMPARE(lastNice(calls, 200), kDspNice);
+        QCOMPARE(lastNice(calls, 101), 0);
+    }
+
+    void transmitKeyMovesOnTheRk3588s()
+    {
+        // Minor 3 (recorded, not changed): the order of dedicated cores is
+        // recomputed on every change, so keying and unkeying one slice on
+        // the Rock moves these threads each time. The Rock check expects
+        // exactly these moves (se.nr_migrations grows by them per key and
+        // unkey), and no others.
+        SysfsFixture f;
+        layOutRk3588s(f);
+        const CpuTopology rk = f.read();
+        const PlacementPlan receiving = planThreadPlacement(rk, demand({0}, true));
+        QCOMPARE(receiving.cpuFor(ThreadRole::RxWorker, 0), 4);
+        QCOMPARE(receiving.cpuFor(ThreadRole::DspThread), 5);
+        // Keyed: RX0 stops (RadioModel stops the transmitting slice's
+        // receiver), the transmit channel and its pump start.
+        const PlacementPlan keyed = planThreadPlacement(rk, demand({}, true, true, true));
+        QCOMPARE(keyed.cpuFor(ThreadRole::RxWorker, 0), -1);  // 4 -> 0-3
+        QCOMPARE(keyed.cpuFor(ThreadRole::DspThread), 4);     // 5 -> 4
+        QCOMPARE(keyed.cpuFor(ThreadRole::TxWorker), 5);      // 0-3 -> 5
+        QCOMPARE(keyed.cpuFor(ThreadRole::TxWorkerThread), 6);  // 0-3 -> 6
+        // Unkeyed: the reverse.
+        const PlacementPlan back = planThreadPlacement(rk, demand({0}, true));
+        QCOMPARE(back.cpuFor(ThreadRole::RxWorker, 0), 4);
+        QCOMPARE(back.cpuFor(ThreadRole::DspThread), 5);
+    }
+
+    void refusalsAreWarnedOnce()
+    {
+        // Minor 5: the first refusal of each kind is one warning; repeats
+        // are not, however often the plan is applied.
+        SysfsFixture f;
+        layOutRk3588s(f);
+        QList<Call> calls;
+        qint64 current = 1;
+        auto api = std::make_unique<RecordingApi>(&calls, &current);
+        api->refuseCpus = {4};   // an offline or forbidden core
+        api->refuseNice = true;
+        ThreadPlacement placement;
+        WarningCatcher catcher;
+        placement.start(f.read(), demand({0}, true), std::move(api), true);
+        QVERIFY(placement.isPlacing());
+        current = 101;
+        placement.onWdspThreadStarted(kWdspThreadRxMain, 0);
+        current = 200;
+        placement.registerCurrentThread(ThreadRole::DspThread);
+        for (int i = 0; i < 5; ++i) {
+            placement.setChannelActive(ThreadRole::RxWorker, 0, true);
+            placement.setChannelActive(ThreadRole::RxWorker, 0, false);
+        }
+        const QStringList warnings = catcher.warnings();
+        QCOMPARE(warnings.size(), 2);
+        QVERIFY(warnings.at(0).contains(QLatin1String("refused to change")));
+        QVERIFY(warnings.at(1).contains(QLatin1String("refused to move")));
+        QVERIFY(warnings.at(1).contains(QLatin1String("cores 4")));
+    }
+
+    void aFinishedWorkerIsForgotten()
+    {
+        // Minor 4: a worker reports that it is about to end; if its
+        // channel's rebuild never starts a new one, the old thread ID is
+        // not touched again.
+        SysfsFixture f;
+        layOutRk3588s(f);
+        QList<Call> calls;
+        qint64 current = 1;
+        ThreadPlacement placement;
+        placement.start(f.read(), demand({0}, true),
+                        std::make_unique<RecordingApi>(&calls, &current), true);
+        placement.setChannelActive(ThreadRole::RxWorker, 0, true);
+        current = 101;
+        placement.onWdspThreadStarted(kWdspThreadRxMain, 0);
+        QCOMPARE(lastCpus(calls, 101), QList<int>{4});
+        placement.onWdspThreadStarted(kWdspThreadWorkerExit, 0);
+        const int before = calls.size();
+        current = 200;
+        placement.registerCurrentThread(ThreadRole::DspThread);
+        placement.setChannelActive(ThreadRole::RxWorker, 0, false);
+        placement.setChannelActive(ThreadRole::RxWorker, 0, true);
+        for (int i = before; i < calls.size(); ++i) {
+            QVERIFY(calls.at(i).threadId != 101);
+        }
+        // The channel's state is kept for the worker that replaces it.
+        current = 111;
+        placement.onWdspThreadStarted(kWdspThreadRxMain, 0);
+        QCOMPARE(lastCpus(calls, 111), QList<int>{4});
+    }
+
     void anInactiveRegistryDoesNothing()
     {
         // The GUI never starts placement: every entry point is a no-op.
@@ -619,6 +922,24 @@ private slots:
         QVERIFY(readBack);
         QVERIFY(reniced);
         QCOMPARE(niceRead, 5);
+
+        // The startup probe puts the thread's own level back either way.
+        int niceBefore = 99;
+        int niceAfter = 98;
+        bool permitted = false;
+        std::thread prober([&]() {
+            const auto tid = static_cast<id_t>(::syscall(SYS_gettid));
+            ::setpriority(PRIO_PROCESS, tid, 3);
+            errno = 0;
+            niceBefore = getpriority(PRIO_PROCESS, tid);
+            permitted = canRaiseCurrentThreadPriority(kDspNice);
+            errno = 0;
+            niceAfter = getpriority(PRIO_PROCESS, tid);
+        });
+        prober.join();
+        QCOMPARE(niceBefore, 3);
+        QCOMPARE(niceAfter, 3);
+        Q_UNUSED(permitted);
 #endif
     }
 };

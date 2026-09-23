@@ -8,6 +8,12 @@
 //   2026-09-23: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code (R-R3-41).
+//   2026-09-23: fix wave after the final review (see ThreadPlacement.h):
+//               priority-only mode, raised priority only with a core of
+//               its own while placing, worker exit, refusals logged once,
+//               startup priority probe. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code
+//               (R-R3-41).
 // =================================================================
 
 #include "core/platform/ThreadPlacement.h"
@@ -78,22 +84,34 @@ int clockDomainOf(const CpuTopology& topology, int cpu)
     return topology.clockDomains.size() + cpu;
 }
 
+QString priorityClause(bool raisePriority)
+{
+    return raisePriority
+        ? QStringLiteral("signal processing priority raised.")
+        : QStringLiteral("raising signal processing priority is not"
+                         " permitted, so it runs at normal priority.");
+}
+
 QString activeLine(const PlacementPlan& plan, bool raisePriority)
 {
     return QStringLiteral("Thread placement: signal processing runs on cores %1,"
                           " everything else on cores %2 (%3); %4")
         .arg(formatCpuList(plan.signalCores()), formatCpuList(plan.housekeeping),
-             plan.reason,
-             raisePriority
-                 ? QStringLiteral("signal processing priority raised.")
-                 : QStringLiteral("raising signal processing priority is not"
-                                  " permitted, so it runs at normal priority."));
+             plan.reason, priorityClause(raisePriority));
 }
 
 QString inactiveLine(const QString& reason)
 {
     return QStringLiteral("Thread placement: every thread may run on any core,"
                           " because %1.").arg(reason);
+}
+
+// Priority only: no thread is moved, but signal processing still gets its
+// priority, above spectrum and networking or level with them.
+QString priorityOnlyLine(const QString& reason, bool raisePriority)
+{
+    return QStringLiteral("Thread placement: every thread may run on any core,"
+                          " because %1; %2").arg(reason, priorityClause(raisePriority));
 }
 
 bool isChannelRole(ThreadRole role)
@@ -453,10 +471,7 @@ public:
             }
         }
         if (::sched_setaffinity(static_cast<pid_t>(threadId), sizeof(set), &set) != 0) {
-            const int err = errno;
-            qCInfo(lcApp) << "Thread placement: could not move thread" << threadId
-                          << "to cores" << formatCpuList(cpus) << "(errno" << err
-                          << std::strerror(err) << ")";
+            recordError(errno);
             return false;
         }
         return true;
@@ -465,14 +480,24 @@ public:
     bool setNice(qint64 threadId, int nice) override
     {
         if (::setpriority(PRIO_PROCESS, static_cast<id_t>(threadId), nice) != 0) {
-            const int err = errno;
-            qCInfo(lcApp) << "Thread placement: could not set thread" << threadId
-                          << "to nice" << nice << "(errno" << err
-                          << std::strerror(err) << ")";
+            recordError(errno);
             return false;
         }
         return true;
     }
+
+    // The caller logs, once per kind of refusal (ThreadPlacement).
+    QString lastError() const override { return m_lastError; }
+
+private:
+    void recordError(int err)
+    {
+        m_lastError = QStringLiteral("errno %1, %2")
+                          .arg(err)
+                          .arg(QString::fromLocal8Bit(std::strerror(err)));
+    }
+
+    QString m_lastError;
 };
 #endif
 
@@ -487,6 +512,28 @@ std::unique_ptr<ThreadSchedulingApi> makeSystemThreadSchedulingApi()
 #endif
 }
 
+bool canRaiseCurrentThreadPriority(int nice)
+{
+#ifdef Q_OS_LINUX
+    const auto tid = static_cast<id_t>(::syscall(SYS_gettid));
+    // getpriority can return -1 as a real level, so errno decides.
+    errno = 0;
+    const int before = ::getpriority(PRIO_PROCESS, tid);
+    if (before == -1 && errno != 0) {
+        return false;
+    }
+    if (::setpriority(PRIO_PROCESS, tid, nice) != 0) {
+        return false;
+    }
+    // Going back to a level at or above the one just set is always allowed.
+    ::setpriority(PRIO_PROCESS, tid, before);
+    return true;
+#else
+    Q_UNUSED(nice);
+    return false;
+#endif
+}
+
 // ---------------------------------------------------------------- registry
 
 ThreadPlacement::ThreadPlacement() = default;
@@ -496,6 +543,12 @@ ThreadPlacement& ThreadPlacement::instance()
 {
     static ThreadPlacement placement;
     return placement;
+}
+
+bool ThreadPlacement::isPlacing() const
+{
+    QMutexLocker lock(&m_mutex);
+    return m_active.load(std::memory_order_acquire) && m_placing;
 }
 
 bool ThreadPlacement::managesThreadPriority()
@@ -519,22 +572,98 @@ QString ThreadPlacement::start(const CpuTopology& topology,
 {
     QMutexLocker lock(&m_mutex);
     if (m_active.load(std::memory_order_acquire)) {
-        return activeLine(m_startupPlan, m_raisePriority);
+        return QStringLiteral("Thread placement: already started.");
     }
     const PlacementPlan plan = planThreadPlacement(topology, startupDemand);
-    if (!plan.active || !api) {
-        return inactiveLine(plan.reason);
+    if (!api) {
+        return inactiveLine(plan.active ? QStringLiteral("the system refused to move threads")
+                                        : plan.reason);
+    }
+    if (!plan.active) {
+        return startPriorityOnlyLocked(std::move(api), raisePriorityPermitted, plan.reason);
     }
     // Every thread created after this one starts on the housekeeping cores.
     if (!api->setAffinity(api->currentThreadId(), plan.housekeeping)) {
-        return inactiveLine(QStringLiteral("the system refused to move threads"));
+        return startPriorityOnlyLocked(std::move(api), raisePriorityPermitted,
+                                       QStringLiteral("the system refused to move threads"));
     }
     m_topology = topology;
     m_startupPlan = plan;
     m_api = std::move(api);
     m_raisePriority = raisePriorityPermitted;
+    m_placing = true;
     m_active.store(true, std::memory_order_release);
     return activeLine(plan, raisePriorityPermitted);
+}
+
+QString ThreadPlacement::startPriorityOnly(std::unique_ptr<ThreadSchedulingApi> api,
+                                           bool raisePriorityPermitted,
+                                           const QString& reason)
+{
+    QMutexLocker lock(&m_mutex);
+    if (m_active.load(std::memory_order_acquire)) {
+        return QStringLiteral("Thread placement: already started.");
+    }
+    if (!api) {
+        return inactiveLine(reason);
+    }
+    return startPriorityOnlyLocked(std::move(api), raisePriorityPermitted, reason);
+}
+
+QString ThreadPlacement::startPriorityOnlyLocked(std::unique_ptr<ThreadSchedulingApi> api,
+                                                 bool raisePriorityPermitted,
+                                                 const QString& reason)
+{
+    // Important 1 (final review): spectrum and networking skip their own
+    // nice calls whenever this registry is started, so it must start here
+    // too, or signal processing would sit below them.
+    m_topology = CpuTopology{};
+    m_startupPlan = PlacementPlan{};
+    m_api = std::move(api);
+    m_raisePriority = raisePriorityPermitted;
+    m_placing = false;
+    m_active.store(true, std::memory_order_release);
+    return priorityOnlyLine(reason, raisePriorityPermitted);
+}
+
+bool ThreadPlacement::setAffinityLocked(qint64 threadId, const QList<int>& cpus)
+{
+    if (m_api->setAffinity(threadId, cpus)) {
+        return true;
+    }
+    // A refusal repeats on every later change (an offline core, a
+    // restricted mask), so only the first is worth a warning.
+    if (!m_affinityRefusalLogged) {
+        m_affinityRefusalLogged = true;
+        qCWarning(lcApp).noquote()
+            << QStringLiteral("Thread placement: the system refused to move a signal"
+                              " processing thread to cores %1 (%2); later refusals"
+                              " are not logged.")
+                   .arg(formatCpuList(cpus), m_api->lastError());
+    } else {
+        qCDebug(lcApp) << "Thread placement: move of thread" << threadId << "to cores"
+                       << formatCpuList(cpus) << "refused:" << m_api->lastError();
+    }
+    return false;
+}
+
+bool ThreadPlacement::setNiceLocked(qint64 threadId, int nice)
+{
+    if (m_api->setNice(threadId, nice)) {
+        return true;
+    }
+    if (!m_niceRefusalLogged) {
+        m_niceRefusalLogged = true;
+        qCWarning(lcApp).noquote()
+            << QStringLiteral("Thread placement: the system refused to change a signal"
+                              " processing thread's priority (%1); later refusals"
+                              " are not logged.")
+                   .arg(m_api->lastError());
+    } else {
+        qCDebug(lcApp) << "Thread placement: priority change of thread" << threadId
+                       << "to" << nice << "refused:" << m_api->lastError();
+    }
+    return false;
 }
 
 PlacementDemand ThreadPlacement::demandLocked() const
@@ -578,15 +707,21 @@ bool ThreadPlacement::roleActiveLocked(ThreadRole role, int channel) const
 
 void ThreadPlacement::applyOneLocked(Registered& thread, const PlacementPlan& plan)
 {
-    const int cpu = plan.active ? plan.cpuFor(thread.role, thread.channel) : -1;
-    const QList<int> cpus = cpu >= 0 ? QList<int>{cpu} : m_startupPlan.housekeeping;
-    if (cpus != thread.appliedCpus && m_api->setAffinity(thread.threadId, cpus)) {
-        thread.appliedCpus = cpus;
+    bool raised = roleActiveLocked(thread.role, thread.channel);
+    if (m_placing) {
+        const int cpu = plan.active ? plan.cpuFor(thread.role, thread.channel) : -1;
+        const QList<int> cpus = cpu >= 0 ? QList<int>{cpu} : m_startupPlan.housekeeping;
+        if (cpus != thread.appliedCpus && setAffinityLocked(thread.threadId, cpus)) {
+            thread.appliedCpus = cpus;
+        }
+        // A role left without a core of its own shares the housekeeping
+        // cores; raised there, it would crowd spectrum and networking.
+        raised = cpu >= 0;
     }
     if (m_raisePriority) {
-        const int nice = roleActiveLocked(thread.role, thread.channel) ? kDspNice : 0;
+        const int nice = raised ? kDspNice : 0;
         if ((!thread.niceApplied || nice != thread.appliedNice)
-            && m_api->setNice(thread.threadId, nice)) {
+            && setNiceLocked(thread.threadId, nice)) {
             thread.appliedNice = nice;
             thread.niceApplied = true;
         }
@@ -595,7 +730,8 @@ void ThreadPlacement::applyOneLocked(Registered& thread, const PlacementPlan& pl
 
 void ThreadPlacement::applyLocked()
 {
-    const PlacementPlan plan = planThreadPlacement(m_topology, demandLocked());
+    const PlacementPlan plan = m_placing ? planThreadPlacement(m_topology, demandLocked())
+                                         : PlacementPlan{};
     for (Registered& thread : m_threads) {
         applyOneLocked(thread, plan);
     }
@@ -684,12 +820,24 @@ void ThreadPlacement::onWdspThreadStarted(int kind, int channel)
         registerCurrentThread(ThreadRole::TxWorker, channel);
         return;
     }
+    if (kind == kWdspThreadWorkerExit) {
+        // A worker about to end: forget it now, before its ID can be
+        // reused. A rebuild whose new worker never starts would otherwise
+        // leave this entry behind.
+        deregisterCurrentThread();
+        return;
+    }
+    if (kind != kWdspThreadFlush) {
+        return;
+    }
     // A flush thread runs with everything else, whichever thread created it.
     QMutexLocker lock(&m_mutex);
     const qint64 threadId = m_api->currentThreadId();
-    m_api->setAffinity(threadId, m_startupPlan.housekeeping);
+    if (m_placing) {
+        setAffinityLocked(threadId, m_startupPlan.housekeeping);
+    }
     if (m_raisePriority) {
-        m_api->setNice(threadId, 0);
+        setNiceLocked(threadId, 0);
     }
 }
 
@@ -699,15 +847,15 @@ void ThreadPlacement::placeCurrentThreadOnFastCore()
         return;
     }
     QMutexLocker lock(&m_mutex);
-    if (!m_startupPlan.signalPool.isEmpty()) {
-        m_api->setAffinity(m_api->currentThreadId(), {m_startupPlan.signalPool.first()});
+    if (m_placing && !m_startupPlan.signalPool.isEmpty()) {
+        setAffinityLocked(m_api->currentThreadId(), {m_startupPlan.signalPool.first()});
     }
 }
 
 PlacementPlan ThreadPlacement::currentPlan() const
 {
     QMutexLocker lock(&m_mutex);
-    return planThreadPlacement(m_topology, demandLocked());
+    return m_placing ? planThreadPlacement(m_topology, demandLocked()) : PlacementPlan{};
 }
 
 // ---------------------------------------------------------------- nereusd
@@ -715,9 +863,25 @@ PlacementPlan ThreadPlacement::currentPlan() const
 void startDaemonThreadPlacement(bool enabled, int sliceCount)
 {
 #ifdef Q_OS_LINUX
+    // Raised priority is tried once on this (main) thread and put back, so
+    // the startup line says what the system actually allows (LimitNICE=-10
+    // in the unit, or root). No other thread exists yet to inherit it.
+    const bool raisePermitted = canRaiseCurrentThreadPriority(kDspNice);
+    ThreadPlacement& placement = ThreadPlacement::instance();
+    const auto logStartupLine = [&](const QString& line) {
+        if (placement.isActive() && !raisePermitted) {
+            // This line is the refusal notice; the generic one is not repeated.
+            claimThreadPriorityRefusedWarning();
+            qCWarning(lcApp).noquote() << line;
+        } else {
+            qCInfo(lcApp).noquote() << line;
+        }
+    };
+
     if (!enabled) {
-        qCInfo(lcApp).noquote()
-            << inactiveLine(QStringLiteral("thread_placement is off in nereusd.conf"));
+        logStartupLine(placement.startPriorityOnly(
+            makeSystemThreadSchedulingApi(), raisePermitted,
+            QStringLiteral("thread_placement is off in nereusd.conf")));
         return;
     }
 
@@ -739,14 +903,6 @@ void startDaemonThreadPlacement(bool enabled, int sliceCount)
         qCDebug(lcApp) << "Thread placement:" << problem;
     }
 
-    // RLIMIT_NICE allows a nice level down to 20 - limit (systemd's
-    // LimitNICE=-10 sets 30); root may always lower it.
-    struct rlimit limit {};
-    const bool raisePermitted = ::geteuid() == 0
-        || (::getrlimit(RLIMIT_NICE, &limit) == 0
-            && (limit.rlim_cur == RLIM_INFINITY
-                || limit.rlim_cur >= static_cast<rlim_t>(20 - kDspNice)));
-
     PlacementDemand demand;
     for (int channel = 0; channel < std::max(1, sliceCount); ++channel) {
         demand.rxChannels.append(channel);
@@ -755,16 +911,8 @@ void startDaemonThreadPlacement(bool enabled, int sliceCount)
     demand.txWorker = true;
     demand.txWorkerThread = true;
 
-    ThreadPlacement& placement = ThreadPlacement::instance();
-    const QString line = placement.start(topology, demand,
-                                         makeSystemThreadSchedulingApi(), raisePermitted);
-    if (placement.isActive() && !raisePermitted) {
-        // This line is the refusal notice; the generic one is not repeated.
-        claimThreadPriorityRefusedWarning();
-        qCWarning(lcApp).noquote() << line;
-    } else {
-        qCInfo(lcApp).noquote() << line;
-    }
+    logStartupLine(placement.start(topology, demand, makeSystemThreadSchedulingApi(),
+                                   raisePermitted));
 #else
     Q_UNUSED(enabled);
     Q_UNUSED(sliceCount);

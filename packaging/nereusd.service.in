@@ -182,8 +182,11 @@ LimitRTPRIO=99
 # systemd service anyway on a kernel with CONFIG_RT_GROUP_SCHED and the
 # cgroup v2 cpu controller (the Rock's 6.1 kernel: every such request
 # returns EPERM), and a never-sleeping real-time thread would starve its
-# core's kernel threads. LimitRTPRIO above stays for thread_placement = off,
-# where the DSP thread still asks for SCHED_FIFO.
+# core's kernel threads. With thread_placement = off nothing is moved, but
+# the same threads still get nice -10 and still do not ask for SCHED_FIFO,
+# so spectrum and networking (which skip their own nice -5 whenever nereusd
+# manages priority) never run above signal processing. LimitRTPRIO above is
+# left as it was; nereusd's signal processing threads no longer use it.
 #
 # systemd's LimitNICE= takes either a raw RLIMIT_NICE value (0..40, no sign)
 # or, with a leading "+" or "-", a nice level (-20..19). "-10" is the nice

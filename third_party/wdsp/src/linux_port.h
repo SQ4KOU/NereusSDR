@@ -10,6 +10,10 @@
 //                place and prioritise each channel's worker and flush
 //                threads as they start (R-R3-41). J.J. Boyd (KG4VCF), with
 //                AI assistance from Anthropic Claude Code.
+//   2026-09-23 - WDSP_THREAD_WORKER_EXIT: the hook also hears from a channel
+//                worker just before it ends, so the application forgets
+//                its thread ID (R-R3-41). J.J. Boyd (KG4VCF), with AI
+//                assistance from Anthropic Claude Code.
 
 /*  linux_port.h
 
@@ -158,10 +162,14 @@ HANDLE wdsp_beginthread( void( __cdecl *start_address )( void * ), unsigned stac
 #define WDSP_THREAD_RX_MAIN 1
 #define WDSP_THREAD_TX_MAIN 2
 #define WDSP_THREAD_FLUSH 3
+// NereusSDR: a channel worker reports this kind, on itself, just after its
+// start routine returns and before the thread ends.
+#define WDSP_THREAD_WORKER_EXIT 4
 
 // NereusSDR: install (or, with 0, remove) a function each reported WDSP
 // thread calls once on itself, before its start routine runs, with its kind
-// and channel. The hook runs on the new thread; it must not wait for the
+// and channel; a channel worker calls it once more, with
+// WDSP_THREAD_WORKER_EXIT, after its start routine returns. The hook runs on the new thread; it must not wait for the
 // thread that created it. Not built on Windows, where WDSP threads start
 // through the platform _beginthread.
 void WDSPSetThreadStartHook (void (*hook)(int kind, int channel));

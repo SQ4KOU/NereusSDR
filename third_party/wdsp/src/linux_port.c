@@ -47,6 +47,12 @@ john.d.melton@googlemail.com
 //                routine runs (R-R3-41). Thread start only; no DSP change.
 //                J.J. Boyd (KG4VCF), with AI assistance from Anthropic
 //                Claude Code.
+//   2026-09-23 - A channel worker also calls the hook with
+//                WDSP_THREAD_WORKER_EXIT once its start routine returns,
+//                so the application forgets a finished worker before its
+//                thread ID can be reused (R-R3-41). No DSP change.
+//                J.J. Boyd (KG4VCF), with AI assistance from Anthropic
+//                Claude Code.
 
 #include "linux_port.h"
 #include "comm.h"
@@ -308,6 +314,14 @@ static void *wdsp_thread_trampoline(void *p)
 	if (hook != 0 && kind != 0)
 		hook(kind, channel);
 	start.start_address(start.arglist);
+	// NereusSDR: a worker is gone once wdspmain returns; say so while this
+	// thread's ID is still its own.
+	if (kind == WDSP_THREAD_RX_MAIN || kind == WDSP_THREAD_TX_MAIN)
+	{
+		hook = __atomic_load_n(&wdsp_thread_start_hook, __ATOMIC_ACQUIRE);
+		if (hook != 0)
+			hook(WDSP_THREAD_WORKER_EXIT, channel);
+	}
 	return 0;
 }
 

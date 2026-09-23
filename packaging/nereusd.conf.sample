@@ -78,7 +78,8 @@ audio_bitrate = 24000
 # each busy receiver and the transmitter a fast processor core of its own,
 # chosen from the kernel's core capacity data, and keeps networking, display
 # and everything else on the other cores. off lets every thread run on any
-# core. Any other value is ignored with a warning.
+# core. Either way signal processing gets raised priority where the system
+# permits it. Any other value is ignored with a warning.
 thread_placement = auto
 
 # Whether the Core lowers spectrum quality when its computer is busy, so

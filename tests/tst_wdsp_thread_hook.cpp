@@ -1,7 +1,8 @@
 // no-port-check: NereusSDR-original linked-WDSP integration test. It opens
 // real WDSP channels to prove linux_port.c's thread-start hook (R-R3-41)
 // fires once for each channel worker and flush thread, on that new thread,
-// with the right kind and channel, and that each thread is named for its job.
+// with the right kind and channel, and that each thread is named for its job;
+// and that a worker reports, once, on itself, that it is about to end.
 #include <QtTest>
 
 #include <QMutex>
@@ -41,25 +42,31 @@ void recordStart(int kind, int channel)
     g_starts.append({kind, channel, pthread_self(), QByteArray(name)});
 }
 
-QList<Start> startsFor(int channel)
+// Starts (every kind but a worker's exit report) or exits for a channel.
+QList<Start> recordsFor(int channel, bool exits)
 {
     QMutexLocker lock(&g_mutex);
     QList<Start> out;
     for (const Start& s : std::as_const(g_starts)) {
-        if (s.channel == channel) {
+        if (s.channel == channel && (s.kind == kWdspThreadWorkerExit) == exits) {
             out.append(s);
         }
     }
     return out;
 }
 
+QList<Start> startsFor(int channel)
+{
+    return recordsFor(channel, false);
+}
+
 // The hook runs on the new thread, which may not have run yet when
-// OpenChannel returns.
-bool waitForStarts(int channel, int count)
+// OpenChannel returns; a worker's exit report can follow CloseChannel.
+bool waitForRecords(int channel, int count, bool exits)
 {
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (std::chrono::steady_clock::now() < deadline) {
-        if (startsFor(channel).size() >= count) {
+        if (recordsFor(channel, exits).size() >= count) {
             return true;
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1));
@@ -116,11 +123,18 @@ private slots:
 
         WDSPSetThreadStartHook(&recordStart);
         openChannel(channel, type);
-        QVERIFY(waitForStarts(channel, 2));
+        QVERIFY(waitForRecords(channel, 2, false));
         // Nothing else starts for this channel.
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         const QList<Start> starts = startsFor(channel);
+        QVERIFY(recordsFor(channel, true).isEmpty());
         CloseChannel(channel);
+        // The worker reports once, on itself, that it is about to end.
+        QVERIFY(waitForRecords(channel, 1, true));
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        const QList<Start> exits = recordsFor(channel, true);
+        QCOMPARE(exits.size(), 1);
+        QCOMPARE(exits.first().name, workerName);
 
         QCOMPARE(starts.size(), 2);
         int workers = 0;
@@ -139,6 +153,11 @@ private slots:
         }
         QCOMPARE(workers, 1);
         QCOMPARE(flushes, 1);
+        for (const Start& s : starts) {
+            if (s.kind == workerKind) {
+                QVERIFY(pthread_equal(s.thread, exits.first().thread));
+            }
+        }
         QVERIFY(!pthread_equal(starts.at(0).thread, starts.at(1).thread));
     }
 
@@ -148,7 +167,9 @@ private slots:
         openChannel(kRxChannel, 0);
         std::this_thread::sleep_for(std::chrono::milliseconds(50));
         CloseChannel(kRxChannel);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
         QVERIFY(startsFor(kRxChannel).isEmpty());
+        QVERIFY(recordsFor(kRxChannel, true).isEmpty());
     }
 };
 

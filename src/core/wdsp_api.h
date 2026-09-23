@@ -201,6 +201,9 @@
 //                 export from third_party/wdsp/src/linux_port.c (not built
 //                 on Windows); no Thetis counterpart. AI-assisted
 //                 implementation via Anthropic Claude Code.
+//                 Later the same day: kWdspThreadWorkerExit, the hook's
+//                 report of a worker about to end, so a finished worker is
+//                 forgotten before its thread ID can be reused.
 // =================================================================
 
 /*  wdsp.cs
@@ -328,6 +331,7 @@ warren@wpratt.com
 constexpr int kWdspThreadRxMain = 1;  // a receive channel's DSP worker
 constexpr int kWdspThreadTxMain = 2;  // a transmit channel's DSP worker
 constexpr int kWdspThreadFlush  = 3;  // a channel's flush thread
+constexpr int kWdspThreadWorkerExit = 4;  // a channel's worker, about to end
 
 #ifdef HAVE_WDSP
 

@@ -10,6 +10,16 @@
 //   2026-09-23: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code (R-R3-41).
+//   2026-09-23: fix wave after the final review: with placement off or
+//               inactive, nereusd still owns thread priority and gives
+//               signal processing its raised priority without moving
+//               threads; raised priority only for a role with a core of
+//               its own while placing; a finished WDSP worker is
+//               forgotten; the first refusal of each kind is logged once
+//               at warning; raised priority is tried once at startup
+//               rather than inferred from the limit. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code
+//               (R-R3-41).
 // =================================================================
 
 #pragma once
@@ -49,7 +59,8 @@ CpuTopology readCpuTopology(const QString& cpuRoot, const QList<int>& allowed);
 /// Parses a kernel CPU list ("0-3,6-7"). Sets *ok to false on anything else.
 QList<int> parseCpuList(const QString& text, bool* ok);
 
-/// Formats a CPU list the way the kernel writes one ("0-3, 6-7").
+/// Formats a CPU list for a log line ("0-3, 6-7"). The kernel's own lists
+/// separate ranges with a comma and no space; this adds a space to read.
 QString formatCpuList(const QList<int>& cpus);
 
 /// The threads that get a core of their own, in the order they get one.
@@ -116,15 +127,28 @@ public:
     virtual qint64 currentThreadId() = 0;
     virtual bool setAffinity(qint64 threadId, const QList<int>& cpus) = 0;
     virtual bool setNice(qint64 threadId, int nice) = 0;
+    /// Plain words for the last refused call (empty when unknown).
+    virtual QString lastError() const { return {}; }
 };
 
 /// The real calls on Linux (sched_setaffinity, setpriority per thread);
 /// elsewhere every call does nothing and reports failure.
 std::unique_ptr<ThreadSchedulingApi> makeSystemThreadSchedulingApi();
 
+/// Tries `nice` on the calling thread and puts its own level back, so the
+/// startup line says what the system actually allows. True on Linux when
+/// the system accepted it; false elsewhere.
+bool canRaiseCurrentThreadPriority(int nice);
+
 /// Keeps track of the Core's signal processing threads and moves them as
-/// channels start and stop. Off (every call a no-op) until start(); the
-/// GUI never starts it.
+/// channels start and stop. Off (every call a no-op) until start() or
+/// startPriorityOnly(); the GUI never starts it.
+///
+/// Placing: each busy role gets a core of its own, and raised priority
+/// while it has one. Priority only (placement off in nereusd.conf, or not
+/// possible on this computer): no thread is moved, and each busy role gets
+/// raised priority, so signal processing never sits below spectrum and
+/// networking, which skip their own priority calls whenever this is on.
 ///
 /// Calls happen when a thread starts or stops, or a channel starts or stops,
 /// never per block. A mutex guards the registry.
@@ -138,23 +162,33 @@ public:
     /// The process-wide registry nereusd starts and WDSP reports to.
     static ThreadPlacement& instance();
 
-    /// True on Linux once instance() is placing threads. Housekeeping
-    /// threads then skip their own nice calls, and the DSP thread and the
-    /// transmit pump register here instead of asking for real-time policy.
+    /// True on Linux once instance() is started, placing threads or
+    /// managing priority only. Housekeeping threads then skip their own
+    /// nice calls, and the DSP thread and the transmit pump register here
+    /// instead of asking for real-time policy.
     static bool managesThreadPriority();
 
-    /// WDSP thread-start hook (WDSPSetThreadStartHook); forwards to
-    /// instance().onWdspThreadStarted().
+    /// WDSP thread hook (WDSPSetThreadStartHook, which also reports a
+    /// worker about to end); forwards to instance().onWdspThreadStarted().
     static void wdspThreadStartHook(int kind, int channel);
 
     /// Starts placing threads. Moves the calling thread to the housekeeping
     /// cores, so threads it creates later start there. Returns the one
-    /// startup line for the log. Does nothing (and returns the line saying
-    /// why) when the plan for `startupDemand` is inactive.
+    /// startup line for the log. When the plan for `startupDemand` is
+    /// inactive, or the system refuses the first move, it manages priority
+    /// only (startPriorityOnly) and the line says why.
     QString start(const CpuTopology& topology, const PlacementDemand& startupDemand,
                   std::unique_ptr<ThreadSchedulingApi> api, bool raisePriorityPermitted);
 
+    /// Starts managing priority only: no thread is moved. `reason` says, in
+    /// plain words, why threads are not placed. Returns the startup line.
+    QString startPriorityOnly(std::unique_ptr<ThreadSchedulingApi> api,
+                              bool raisePriorityPermitted, const QString& reason);
+
+    /// Started (placing or priority only).
     bool isActive() const noexcept { return m_active.load(std::memory_order_acquire); }
+    /// Started and moving threads between cores.
+    bool isPlacing() const;
 
     /// Called on the thread itself as it starts.
     void registerCurrentThread(ThreadRole role, int channel = -1);
@@ -169,8 +203,10 @@ public:
     /// and its active state.
     void forgetChannel(int channel);
 
-    /// A WDSP thread started (kinds as in wdsp_api.h). Workers register;
-    /// flush threads run with everything else.
+    /// A WDSP thread started or a worker is about to end (kinds as in
+    /// wdsp_api.h). Workers register, and a worker about to end is
+    /// forgotten (its ID can be reused); flush threads run with everything
+    /// else.
     void onWdspThreadStarted(int kind, int channel);
 
     /// Moves the calling thread to the first signal processing core, for
@@ -194,6 +230,10 @@ private:
     bool roleActiveLocked(ThreadRole role, int channel) const;
     void applyLocked();
     void applyOneLocked(Registered& thread, const PlacementPlan& plan);
+    QString startPriorityOnlyLocked(std::unique_ptr<ThreadSchedulingApi> api,
+                                    bool raisePriorityPermitted, const QString& reason);
+    bool setAffinityLocked(qint64 threadId, const QList<int>& cpus);
+    bool setNiceLocked(qint64 threadId, int nice);
 
     mutable QMutex m_mutex;
     std::atomic<bool> m_active{false};
@@ -201,6 +241,9 @@ private:
     PlacementPlan m_startupPlan;
     std::unique_ptr<ThreadSchedulingApi> m_api;
     bool m_raisePriority{false};
+    bool m_placing{false};             // false: priority only
+    bool m_affinityRefusalLogged{false};
+    bool m_niceRefusalLogged{false};
     QList<Registered> m_threads;
     QMap<int, bool> m_activeRx;   // channel -> active
     QMap<int, bool> m_activeTx;   // channel -> active
