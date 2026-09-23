@@ -19,6 +19,9 @@
 //               opened-device accessors for the nereus-audio-capture
 //               helper (R-R3-36). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-22: strict resolution accepts exact names only
+//               (matchNamedDevice), R-R3-36 fix wave. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -178,6 +181,21 @@ public:
     /// its preallocated scratch.  channels <= 1 is a straight copy.
     static int downmixToMono(const float* interleaved, int frames,
                              int channels, float* out, int outCapacity);
+
+    /// One direction-valid device offered to matchNamedDevice().
+    struct NamedDeviceCandidate {
+        QString name;
+        int     hostApi;
+    };
+
+    /// Which of `candidates` a configured device name resolves to, or -1.
+    /// Order: exact on the configured host API (any API when hostApiIndex
+    /// is negative), substring on it, exact on another API, substring on
+    /// another API; case-insensitive, `wanted` trimmed.  With `strict`
+    /// only the two exact steps apply: a missing "USB Mic" must not open
+    /// "USB Mic 2" (the capture helper's no-silent-switch rule, R-R3-36).
+    static int matchNamedDevice(const QVector<NamedDeviceCandidate>& candidates,
+                                const QString& wanted, int hostApiIndex, bool strict);
 
 private:
     friend class ::TstPortAudioBus;

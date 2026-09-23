@@ -6395,6 +6395,11 @@ nereus_add_test(tst_notch_hit_test)
 #   caller's preallocated real-time scratch).
 nereus_add_test(tst_port_audio_capture_resample)
 
+# R-R3-36 fix wave: strict named-input resolution accepts exact names only,
+# so a missing "USB Mic" never opens "USB Mic 2" (same or another host
+# API). Pure logic through PortAudioBus::matchNamedDevice(); no device.
+nereus_add_test(tst_port_audio_named_match)
+
 # MemoryLock stat accounting.  Callers unlock unconditionally even when
 # the lock failed (routine once RLIMIT_MEMLOCK is exhausted) and POSIX
 # munlock() succeeds on a mapped-but-unlocked range, so the counters

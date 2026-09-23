@@ -11,6 +11,9 @@
 // macOS for the same end), not as a port.  No Thetis bytes ported.
 //
 // Modification history (NereusSDR):
+//   2026-09-22: R-R3-36 fix wave: strict resolution accepts exact names
+//               only (matchNamedDevice). J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 //   2026-09-22: strict named-input resolution (setStrictInputDevice),
 //               lastOpenFailure() and opened-device accessors for the
 //               nereus-audio-capture helper (R-R3-36). J.J. Boyd
@@ -56,7 +59,8 @@ namespace {
 //      "hw:0,0" etc., which at least lets audio reach the user.
 //
 // strictNamed: when true and deviceName is non-empty, step 1 is the only
-// step; a name that matches nothing returns paNoDevice instead of falling
+// step and accepts exact names only (no substring match); a name that
+// matches nothing returns paNoDevice instead of falling
 // through to the defaults (the capture helper's "never silently switch
 // microphones" rule, R-R3-36).
 PaDeviceIndex resolveDevice(const PortAudioConfig& inCfg,
@@ -144,35 +148,19 @@ PaDeviceIndex resolveDevice(const PortAudioConfig& inCfg,
 
     // 1. Named-device match.
     if (!cfg.deviceName.isEmpty()) {
-        const QString wanted = cfg.deviceName.trimmed();
-        PaDeviceIndex exactMatch     = paNoDevice;
-        PaDeviceIndex substringMatch = paNoDevice;
-        PaDeviceIndex crossApiExact  = paNoDevice;
-        PaDeviceIndex crossApiSub    = paNoDevice;
-
+        QVector<PortAudioBus::NamedDeviceCandidate> candidates;
+        QVector<PaDeviceIndex> candidateIndex;
         for (int i = 0; i < deviceCount; ++i) {
             const PaDeviceInfo* di = Pa_GetDeviceInfo(i);
             if (!directionOk(di)) { continue; }
-            const QString name = QString::fromUtf8(di->name);
-            const bool sameApi = (cfg.hostApiIndex < 0)
-                                 || (di->hostApi == cfg.hostApiIndex);
-            const bool exact = (name.compare(wanted, Qt::CaseInsensitive) == 0);
-            const bool sub   = name.contains(wanted, Qt::CaseInsensitive);
-
-            if (sameApi && exact && exactMatch == paNoDevice) {
-                exactMatch = i;
-            } else if (sameApi && sub && substringMatch == paNoDevice) {
-                substringMatch = i;
-            } else if (!sameApi && exact && crossApiExact == paNoDevice) {
-                crossApiExact = i;
-            } else if (!sameApi && sub && crossApiSub == paNoDevice) {
-                crossApiSub = i;
-            }
+            candidates.push_back({QString::fromUtf8(di->name), di->hostApi});
+            candidateIndex.push_back(i);
         }
-        if (exactMatch     != paNoDevice) { return exactMatch; }
-        if (substringMatch != paNoDevice) { return substringMatch; }
-        if (crossApiExact  != paNoDevice) { return crossApiExact; }
-        if (crossApiSub    != paNoDevice) { return crossApiSub; }
+        const int match = PortAudioBus::matchNamedDevice(
+            candidates, cfg.deviceName, cfg.hostApiIndex, strictNamed);
+        if (match >= 0) {
+            return candidateIndex[match];
+        }
         if (strictNamed) {
             return paNoDevice;
         }
@@ -905,6 +893,46 @@ int PortAudioBus::paCallback(const void* in, void* out,
         self->m_ringWrite.store(w, std::memory_order_release);
     }
     return paContinue;
+}
+
+int PortAudioBus::matchNamedDevice(const QVector<NamedDeviceCandidate>& candidates,
+                                   const QString& wanted, int hostApiIndex, bool strict)
+{
+    const QString name = wanted.trimmed();
+    int exactMatch = -1;
+    int substringMatch = -1;
+    int crossApiExact = -1;
+    int crossApiSub = -1;
+    for (int i = 0; i < candidates.size(); ++i) {
+        const NamedDeviceCandidate& c = candidates[i];
+        const bool sameApi = hostApiIndex < 0 || c.hostApi == hostApiIndex;
+        const bool exact = c.name.compare(name, Qt::CaseInsensitive) == 0;
+        const bool sub = c.name.contains(name, Qt::CaseInsensitive);
+        if (sameApi && exact && exactMatch < 0) {
+            exactMatch = i;
+        } else if (sameApi && sub && substringMatch < 0) {
+            substringMatch = i;
+        } else if (!sameApi && exact && crossApiExact < 0) {
+            crossApiExact = i;
+        } else if (!sameApi && sub && crossApiSub < 0) {
+            crossApiSub = i;
+        }
+    }
+    if (exactMatch >= 0) {
+        return exactMatch;
+    }
+    // R-R3-36: strict resolution never substitutes a device whose name
+    // merely contains the configured one ("USB Mic 2" for "USB Mic").
+    if (!strict && substringMatch >= 0) {
+        return substringMatch;
+    }
+    if (crossApiExact >= 0) {
+        return crossApiExact;
+    }
+    if (!strict && crossApiSub >= 0) {
+        return crossApiSub;
+    }
+    return -1;
 }
 
 int PortAudioBus::downmixToMono(const float* interleaved, int frames,
