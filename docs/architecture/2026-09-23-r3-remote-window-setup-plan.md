@@ -96,7 +96,7 @@ sections A, C, E, F and "Other bug".
   `scripts/verify-no-gui-dsp-access.py` (a check that `localAudioDevices()` is
   called only from the strip helper, `AudioDevicesPage`, `AudioTxInputPage`, the
   title-bar wiring and `RemoteMediaController`),
-  `docs/architecture/remote-controls.md` (the Setup rows the change affects)
+  `docs/architecture/2026-09-20-remote-daemon-r3-verification/remote-controls.md` (the Setup rows the change affects)
 - Test: `tests/tst_remote_gui_gating.cpp` (the sweep becomes scope-aware; the
   Devices row moves to enabled), `tests/tst_settings_scope.cpp`,
   `tests/tst_master_output_widget.cpp`, an Advanced Reset case
@@ -153,7 +153,7 @@ test covers `AudioAdvancedPage`, or a new `tst_audio_advanced_page` added to
   factory and rebuild a realized page on each new snapshot, guarding re-entry),
   `src/gui/setup/SetupPage.h` (`setStationSettingsAvailable` with a do-nothing
   default, like `setTransmitPermitted`), the Mixed pages from Task 1 (their Core
-  controls follow availability), `docs/architecture/remote-controls.md`
+  controls follow availability), `docs/architecture/2026-09-20-remote-daemon-r3-verification/remote-controls.md`
 - Test: `tests/tst_remote_gui_gating.cpp` (a per-page table on a disconnected
   window, replacing the refusal expectation), `tests/tst_settings_scope.cpp` (every
   key literal on a ThisComputer page classifies as this computer's), a harness case
@@ -197,8 +197,8 @@ ctest --test-dir /Users/j.j.boyd/.codex/worktrees/nereus-r2-integration/NereusSD
   `connectionsRequested`; without it, `showRemoteConnectionPanel`, which never
   dials; the automatic open on a disconnected state stays for local models only),
   `src/gui/GuiConnectionController.cpp` (its Disconnect paths reach the same
-  signal), `tests/RemoteWindowHarness.{h,cpp}` (a hook that makes the Core report
-  its radio offline), `docs/architecture/remote-controls.md`
+  signal), `tests/fakes/RemoteWindowHarness.{h,cpp}` (a hook that makes the Core report
+  its radio offline), `docs/architecture/2026-09-20-remote-daemon-r3-verification/remote-controls.md`
 - Test: `tests/tst_remote_window_harness.cpp`,
   `tests/tst_gui_connection_controller.cpp`, `tests/tst_gui_session_coordinator.cpp`
 
