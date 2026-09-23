@@ -23,6 +23,9 @@
 //   Part A — RxChannel::onModeChanged() unit tests (no WDSP).
 //   Part B — TxChannel::onModeChanged() unit tests (no WDSP).
 //   Part C — RadioModel::rebuildDspOptionsForMode() guard-path tests.
+//   Part D - RadioModel::scheduleRemoteDspOptionsApply() (R-R3-21): a
+//            remote window's RX write re-runs the mode-change apply for
+//            each matching slice, one apply per burst.
 
 #include <QtTest/QtTest>
 #include <QSignalSpy>
@@ -33,6 +36,11 @@
 #include "core/WdspEngine.h"
 #include "core/dsp/ChannelConfig.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
+
+#include <QList>
+#include <QRegularExpression>
+#include <QPair>
 
 using namespace NereusSDR;
 
@@ -84,6 +92,15 @@ void setAppSettingsDefault()
     s.setValue("DspOptionsCacheImpulse",                 "False");
     s.setValue("DspOptionsCacheImpulseSaveRestore",      "False");
     s.setValue("DspOptionsHighResFilterCharacteristics", "False");
+}
+
+// addSlice on a model with no radio connection logs that the TX frequency
+// was not pushed (RadioModel::pushTxFrequencyFromTxSlice). Expected here, so
+// Part D tests declare it once per model that gets a slice.
+void expectNoConnectionTxPushWarning()
+{
+    QTest::ignoreMessage(QtWarningMsg,
+                         QRegularExpression(QStringLiteral("TX frequency NOT pushed: no connection yet")));
 }
 
 }  // namespace
@@ -294,6 +311,120 @@ private slots:
 
         // No emission expected when unconnected.
         QCOMPARE(spy.count(), 0);
+    }
+
+    // ── Part D: RadioModel::scheduleRemoteDspOptionsApply() (R-R3-21) ────────
+
+    // A burst of RX keys for one mode group applies once, to the slice in
+    // that group, after the coalescing window and not before.
+    void remote_rx_burst_applies_matching_slice_once()
+    {
+        RadioModel model;
+        expectNoConnectionTxPushWarning();
+        QList<QPair<int, DSPMode>> applied;
+        model.setDspOptionsApplyObserverForTest([&applied](int index, DSPMode mode) {
+            applied.append(qMakePair(index, mode));
+        });
+        SliceModel* phone = model.sliceById(model.addSlice(QStringLiteral("pan-0")));
+        SliceModel* cw = model.sliceById(model.addSlice(QStringLiteral("pan-0")));
+        QVERIFY(phone != nullptr);
+        QVERIFY(cw != nullptr);
+        phone->setDspMode(DSPMode::USB);
+        cw->setDspMode(DSPMode::CWU);
+
+        model.scheduleRemoteDspOptionsApply(QStringLiteral("DspOptionsBufferSizePhoneRx"));
+        model.scheduleRemoteDspOptionsApply(QStringLiteral("DspOptionsFilterSizePhoneRx"));
+        model.scheduleRemoteDspOptionsApply(QStringLiteral("DspOptionsFilterTypePhoneRx"));
+        QVERIFY(applied.isEmpty());
+
+        QTRY_COMPARE(applied.size(), 1);
+        QCOMPARE(applied.first().first, phone->sliceIndex());
+        QCOMPARE(applied.first().second, DSPMode::USB);
+        QTest::qWait(200);
+        QCOMPARE(applied.size(), 1);
+    }
+
+    // Keys for two groups in one burst apply once to each matching slice.
+    void remote_rx_burst_across_groups_applies_each_slice_once()
+    {
+        RadioModel model;
+        expectNoConnectionTxPushWarning();
+        QList<QPair<int, DSPMode>> applied;
+        model.setDspOptionsApplyObserverForTest([&applied](int index, DSPMode mode) {
+            applied.append(qMakePair(index, mode));
+        });
+        SliceModel* phone = model.sliceById(model.addSlice(QStringLiteral("pan-0")));
+        SliceModel* dig = model.sliceById(model.addSlice(QStringLiteral("pan-0")));
+        QVERIFY(phone != nullptr);
+        QVERIFY(dig != nullptr);
+        phone->setDspMode(DSPMode::USB);
+        dig->setDspMode(DSPMode::DIGU);
+
+        model.scheduleRemoteDspOptionsApply(QStringLiteral("DspOptionsBufferSizeDigRx"));
+        model.scheduleRemoteDspOptionsApply(QStringLiteral("DspOptionsBufferSizePhoneRx"));
+        model.scheduleRemoteDspOptionsApply(QStringLiteral("DspOptionsFilterTypeDigRx"));
+
+        QTRY_COMPARE(applied.size(), 2);
+        QTest::qWait(200);
+        QCOMPARE(applied.size(), 2);
+        QVERIFY(applied.contains(qMakePair(phone->sliceIndex(), DSPMode::USB)));
+        QVERIFY(applied.contains(qMakePair(dig->sliceIndex(), DSPMode::DIGU)));
+    }
+
+    // TX keys, other DSP > Options keys, unknown groups and unrelated keys
+    // apply nothing; neither does an RX key for a group no slice is in.
+    void remote_unrelated_keys_apply_nothing()
+    {
+        RadioModel model;
+        expectNoConnectionTxPushWarning();
+        int applied = 0;
+        model.setDspOptionsApplyObserverForTest([&applied](int, DSPMode) { ++applied; });
+        SliceModel* slice = model.sliceById(model.addSlice(QStringLiteral("pan-0")));
+        QVERIFY(slice != nullptr);
+        slice->setDspMode(DSPMode::USB);
+
+        for (const char* key : {"DspOptionsBufferSizePhoneTx",
+                                "DspOptionsFilterTypePhoneTx",
+                                "DspOptionsCacheImpulse",
+                                "DspOptionsHighResFilterCharacteristics",
+                                "DspOptionsBufferSizeAmRx",
+                                "DspOptionsRx",
+                                "DisplayFftAverage",
+                                "DspOptionsBufferSizeFmRx",
+                                "DspOptionsFilterSizeCwRx"}) {
+            model.scheduleRemoteDspOptionsApply(QString::fromLatin1(key));
+        }
+        QTest::qWait(200);
+        QCOMPARE(applied, 0);
+    }
+
+    // Local half: a remote-role model never applies, and a plain local
+    // AppSettings write (what DspOptionsPage does before its own
+    // rebuildDspOptionsForMode) schedules nothing.
+    void remote_apply_is_core_only()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        int remoteApplied = 0;
+        remote.setDspOptionsApplyObserverForTest([&remoteApplied](int, DSPMode) {
+            ++remoteApplied;
+        });
+        remote.scheduleRemoteDspOptionsApply(QStringLiteral("DspOptionsBufferSizePhoneRx"));
+
+        RadioModel local;
+        expectNoConnectionTxPushWarning();
+        int localApplied = 0;
+        local.setDspOptionsApplyObserverForTest([&localApplied](int, DSPMode) {
+            ++localApplied;
+        });
+        SliceModel* slice = local.sliceById(local.addSlice(QStringLiteral("pan-0")));
+        QVERIFY(slice != nullptr);
+        slice->setDspMode(DSPMode::USB);
+        AppSettings::instance().setValue(QStringLiteral("DspOptionsBufferSizePhoneRx"),
+                                         QStringLiteral("512"));
+
+        QTest::qWait(200);
+        QCOMPARE(remoteApplied, 0);
+        QCOMPARE(localApplied, 0);
     }
 };
 

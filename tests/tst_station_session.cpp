@@ -325,6 +325,7 @@ private slots:
     void receiveOnlyStationRefusesTransmitPropertyWrites();
     void receiveOnlyStationRefusesTransmitDspOptionsSettingsWrites();
     void receiveOnlyStationRefusesTransmitDspOptionsSettingsRemoves();
+    void acceptedReceiveDspOptionsWriteAppliesToMatchingSlices();
     void receiveOnlyPolicySurvivesRadioTeardown();
 
     // ---- Fix round 1 ----
@@ -2945,6 +2946,80 @@ void TstStationSession::receiveOnlyStationRefusesTransmitDspOptionsSettingsRemov
     QTRY_VERIFY(!stationSettings.contains(rxKey));
     QCOMPARE(rejected.count(), 1);
     QCOMPARE(stationSettings.value(txKey).toString(), QStringLiteral("1024"));
+}
+
+void TstStationSession::acceptedReceiveDspOptionsWriteAppliesToMatchingSlices()
+{
+    // R-R3-21. A DSP > Options RX write or remove from a remote window takes
+    // effect on the Core at once: the Core re-runs the mode-change apply for
+    // each slice in the key's mode group instead of waiting for the next
+    // mode change. A refused TX key, an unrelated key and a local write to
+    // the Core's own store apply nothing.
+    const QString phoneRx = QStringLiteral("DspOptionsBufferSizePhoneRx");
+    const QString cwRx = QStringLiteral("DspOptionsFilterSizeCwRx");
+    const QString phoneTx = QStringLiteral("DspOptionsBufferSizePhoneTx");
+    const QString unrelated = QStringLiteral("DspOptionsCacheImpulse");
+
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(
+        settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+    stationSettings.setValue(phoneRx, QStringLiteral("1024"));
+    stationSettings.setValue(cwRx, QStringLiteral("4096"));
+    stationSettings.setValue(phoneTx, QStringLiteral("1024"));
+
+    auto stationModel = makeStationRadioModel(1);
+    QCOMPARE(stationModel->slices().size(), 2);
+    SliceModel* phoneSlice = stationModel->slices().at(0);
+    SliceModel* cwSlice = stationModel->slices().at(1);
+    phoneSlice->setDspMode(DSPMode::USB);
+    cwSlice->setDspMode(DSPMode::CWU);
+    QList<QPair<int, DSPMode>> applied;
+    stationModel->setDspOptionsApplyObserverForTest([&applied](int index, DSPMode mode) {
+        applied.append(qMakePair(index, mode));
+    });
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    QVERIFY(stationModel->receiveOnlyStationPolicy());
+
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
+    stationEnd->linkTo(clientEnd);
+
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    client.startSession(clientEnd, server.token());
+    server.acceptTransport(stationEnd);
+    QTRY_COMPARE(completed.count(), 1);
+    QVERIFY(proxy.ready());
+
+    // Accepted RX write: one apply, to the Phone slice only.
+    proxy.setValue(phoneRx, QStringLiteral("2048"));
+    QTRY_COMPARE(stationSettings.value(phoneRx).toString(), QStringLiteral("2048"));
+    QTRY_COMPARE(applied.size(), 1);
+    QCOMPARE(applied.first(), qMakePair(phoneSlice->sliceIndex(), DSPMode::USB));
+
+    // Refused TX write and an unrelated accepted key: nothing applied.
+    QSignalSpy rejected(&proxy, &SettingsProxy::valueRejected);
+    proxy.setValue(phoneTx, QStringLiteral("2048"));
+    QTRY_COMPARE(rejected.count(), 1);
+    proxy.setValue(unrelated, QStringLiteral("True"));
+    QTRY_COMPARE(stationSettings.value(unrelated).toString(), QStringLiteral("True"));
+    QTest::qWait(200);
+    QCOMPARE(applied.size(), 1);
+
+    // Accepted RX remove: the CW slice applies its default.
+    proxy.remove(cwRx);
+    QTRY_VERIFY(!stationSettings.contains(cwRx));
+    QTRY_COMPARE(applied.size(), 2);
+    QCOMPARE(applied.at(1), qMakePair(cwSlice->sliceIndex(), DSPMode::CWU));
+
+    // Local half: the Core's own store changing is not a remote write.
+    stationSettings.setValue(phoneRx, QStringLiteral("512"));
+    QTest::qWait(200);
+    QCOMPARE(applied.size(), 2);
 }
 
 void TstStationSession::receiveOnlyPolicySurvivesRadioTeardown()

@@ -151,6 +151,7 @@
 #include <algorithm>  // std::clamp (used by computeWireDriveForTest)
 #include <atomic>     // AM Mod Monitor flags
 #include <array>      // std::array (HL2 temp averaging ring)
+#include <functional> // R-R3-21 DSP > Options apply observer (test seam)
 #include <memory>  // std::unique_ptr
 #include <optional>
 
@@ -1900,6 +1901,31 @@ public:
     // Must be called on the main thread.
     void rebuildDspOptionsForMode(DSPMode forMode);
 
+    // R-R3-21: a remote window's accepted DSP > Options RX write.
+    //
+    // The Core's StationServer calls this after it accepts a settings write
+    // or remove of a key from a remote window. RX per-mode keys
+    // (DspOptions{BufferSize,FilterSize,FilterType}{Phone,Cw,Dig,Fm}Rx)
+    // queue their mode group; every other key, TX keys included, is
+    // ignored. After kDspOptionsApplyCoalesceMs the queued groups are
+    // applied once: each slice whose current mode is in a queued group
+    // re-runs the mode-change apply (RxChannel::onModeChanged) on its own
+    // channel, so a buffer or filter change takes effect without a mode
+    // change. A burst of keys yields one apply per slice.
+    //
+    // Local operation never calls this: DspOptionsPage applies its own
+    // edits through rebuildDspOptionsForMode. No-op on a remote-role model.
+    // Must be called on the main thread.
+    void scheduleRemoteDspOptionsApply(const QString& key);
+
+    // Test-only: observe each slice apply the coalesced flush makes, as
+    // (slice index, the slice's mode). Called before the RxChannel apply,
+    // so it reports the target even when no WDSP channel exists.
+    void setDspOptionsApplyObserverForTest(std::function<void(int, DSPMode)> observer)
+    {
+        m_dspOptionsApplyObserverForTest = std::move(observer);
+    }
+
     // Phase 3Q Sub-PR-4 D.3: Hover tooltip for the TitleBar ConnectionSegment.
     // Returns a multi-line string with radio name, uptime, IP, MAC, protocol,
     // firmware, sample rate, and live throughput. Disconnected state returns a
@@ -3329,6 +3355,14 @@ private:
 
     QTimer* m_notchEditTimer{nullptr};
     QSet<int> m_pendingNotchEdits;
+
+    // R-R3-21: coalesces remote DSP > Options RX writes into one apply per
+    // slice. See scheduleRemoteDspOptionsApply.
+    void flushRemoteDspOptionsApply();
+
+    QTimer* m_dspOptionsApplyTimer{nullptr};
+    QSet<QString> m_pendingDspOptionsGroups;
+    std::function<void(int, DSPMode)> m_dspOptionsApplyObserverForTest;
 
     // The connect-time DDC seed, factored out of the wireSliceSignals
     // singleShot so it can be driven without a live connection. Commands the

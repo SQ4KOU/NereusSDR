@@ -16740,6 +16740,144 @@ void RadioModel::rebuildDspOptionsForMode(DSPMode forMode)
     }
 }
 
+// ---------------------------------------------------------------------------
+// R-R3-21: scheduleRemoteDspOptionsApply / flushRemoteDspOptionsApply
+//
+// A DSP > Options RX write from a remote window lands in the Core's
+// AppSettings through StationServer, but nothing re-read it until the next
+// mode change. This re-runs the existing mode-change apply
+// (RxChannel::onModeChanged, the same call the dspModeChanged handler in
+// wireSliceSignals makes) for each slice whose mode group the key belongs
+// to. What is applied is unchanged; only the moment is new.
+//
+// NereusSDR-original infrastructure; no Thetis source ported here.
+// ---------------------------------------------------------------------------
+
+// Coalescing window for remote DSP > Options writes. A buffer size change
+// runs SetDSPBuffsize, which waits on SetChannelState's flush handshake
+// (channel.c:259-286), so a burst of keys (one per remote combo, or a whole
+// page's worth from one settings sync) should cost one apply per slice, not
+// one per key. 50 ms follows kNotchEditCoalesceMs above, the precedent for
+// coalesced pushes into WDSP from the main thread; it is short next to the
+// time a person takes to pick the next combo.
+static constexpr int kDspOptionsApplyCoalesceMs = 50;
+
+namespace {
+
+// The DSP > Options mode group of an RX per-mode key, or an empty string for
+// any other key. Keys are DspOptions<Setting><Group>Rx as DspOptionsPage's
+// buildUI writes them and RxChannel::onModeChanged reads them.
+QString rxDspOptionsGroupForKey(const QString& key)
+{
+    static const QLatin1String kPrefix("DspOptions");
+    static const QLatin1String kSuffix("Rx");
+    if (!key.startsWith(kPrefix) || !key.endsWith(kSuffix)) {
+        return QString();
+    }
+    const QString body = key.mid(kPrefix.size(),
+                                 key.size() - kPrefix.size() - kSuffix.size());
+    static const QStringList kSettings{QStringLiteral("BufferSize"),
+                                       QStringLiteral("FilterSize"),
+                                       QStringLiteral("FilterType")};
+    static const QStringList kGroups{QStringLiteral("Phone"), QStringLiteral("Cw"),
+                                     QStringLiteral("Dig"), QStringLiteral("Fm")};
+    for (const QString& setting : kSettings) {
+        if (!body.startsWith(setting)) {
+            continue;
+        }
+        const QString group = body.mid(setting.size());
+        return kGroups.contains(group) ? group : QString();
+    }
+    return QString();
+}
+
+// The mode group a slice mode reads its DSP > Options keys from. Mirrors
+// rxModeKeyPart in RxChannel.cpp, which chooses the keys onModeChanged
+// reads; the two must agree or a write would apply to the wrong slices.
+QString rxDspOptionsGroupForMode(DSPMode mode)
+{
+    switch (mode) {
+        case DSPMode::USB:
+        case DSPMode::LSB:
+        case DSPMode::AM:
+        case DSPMode::SAM:
+        case DSPMode::DSB:
+            return QStringLiteral("Phone");
+        case DSPMode::CWU:
+        case DSPMode::CWL:
+            return QStringLiteral("Cw");
+        case DSPMode::DIGU:
+        case DSPMode::DIGL:
+        case DSPMode::SPEC:
+        case DSPMode::DRM:
+            return QStringLiteral("Dig");
+        case DSPMode::FM:
+            return QStringLiteral("Fm");
+        default:
+            return QStringLiteral("Phone");
+    }
+}
+
+}  // namespace
+
+void RadioModel::scheduleRemoteDspOptionsApply(const QString& key)
+{
+    if (!ownsLocalDsp()) {
+        return;
+    }
+    const QString group = rxDspOptionsGroupForKey(key);
+    if (group.isEmpty()) {
+        return;
+    }
+    m_pendingDspOptionsGroups.insert(group);
+
+    if (m_dspOptionsApplyTimer == nullptr) {
+        m_dspOptionsApplyTimer = new QTimer(this);
+        m_dspOptionsApplyTimer->setSingleShot(true);
+        connect(m_dspOptionsApplyTimer, &QTimer::timeout,
+                this, &RadioModel::flushRemoteDspOptionsApply);
+    }
+    // Trailing edge from the first key of a burst, not restarted by later
+    // ones: the whole burst lands in one apply, and a steady stream of
+    // writes still applies every window rather than never.
+    if (!m_dspOptionsApplyTimer->isActive()) {
+        m_dspOptionsApplyTimer->start(kDspOptionsApplyCoalesceMs);
+    }
+}
+
+void RadioModel::flushRemoteDspOptionsApply()
+{
+    if (m_pendingDspOptionsGroups.isEmpty()) {
+        return;
+    }
+    const QSet<QString> groups = m_pendingDspOptionsGroups;
+    m_pendingDspOptionsGroups.clear();
+
+    for (SliceModel* slice : std::as_const(m_slices)) {
+        if (!slice) {
+            continue;
+        }
+        const DSPMode mode = slice->dspMode();
+        if (!groups.contains(rxDspOptionsGroupForMode(mode))) {
+            continue;
+        }
+        if (m_dspOptionsApplyObserverForTest) {
+            m_dspOptionsApplyObserverForTest(slice->sliceIndex(), mode);
+        }
+        RxChannel* rxCh = m_wdspEngine ? m_wdspEngine->rxChannel(slice->sliceIndex())
+                                       : nullptr;
+        if (!rxCh) {
+            continue;
+        }
+        // Same call and the same return-code handling as the dspModeChanged
+        // handler: only an actual rebuild reports a measured time.
+        const qint64 elapsed = rxCh->onModeChanged(mode);
+        if (elapsed > 0) {
+            emit dspChangeMeasured(elapsed);
+        }
+    }
+}
+
 // Phase 3Q Sub-PR-4 D.3 — Segment hover tooltip.
 // Jitter / packet-loss / audio-backend rows omitted until those metrics
 // have real sources — no NYI placeholders per the "no NYI" rule.

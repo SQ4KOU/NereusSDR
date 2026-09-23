@@ -1141,6 +1141,12 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
         send(transport,
              SessionMessages::settingsReject(key, result.restoredValue.isValid(),
                                              result.restoredValue.toString(), result.reason));
+        return;
+    }
+    // R-R3-21: a DSP > Options RX setting takes effect now, not at the next
+    // mode change. RadioModel ignores every other key.
+    if (!m_radioModel.isNull()) {
+        m_radioModel->scheduleRemoteDspOptionsApply(key);
     }
 }
 
@@ -1177,6 +1183,11 @@ void StationServer::handleSettingsRemove(const SessionMessage& message)
         return;
     }
     m_settings.remove(key);
+    // R-R3-21: removing a DSP > Options RX setting returns it to its
+    // default, which takes effect now as a write does.
+    if (!m_radioModel.isNull()) {
+        m_radioModel->scheduleRemoteDspOptionsApply(key);
+    }
 }
 
 // ── Send helpers ─────────────────────────────────────────────────────────
