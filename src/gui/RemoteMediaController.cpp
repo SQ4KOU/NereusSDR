@@ -46,16 +46,19 @@ Q_LOGGING_CATEGORY(lcRemoteMedia, "nereus.remote.media")
 namespace {
 constexpr int kMaxEndpoints = 8;
 constexpr int kDefaultAllocationAckTimeoutMs = 10'000;
-// The derivation in RemoteMediaController.h, checked: the pinned library's
-// slowest serial failure (ICE 39.5 s, DTLS 31 s, SCTP 35 s) plus one control
-// heartbeat interval of margin.
-constexpr int kLibraryIcePacTimeoutMs = 39'500;   // libjuice agent.h:43
+// The derivation in RemoteMediaController.h, checked: one control heartbeat
+// interval for Core's description, then the pinned library's slowest serial
+// failure (ICE 39.5 s, DTLS 31 s, SCTP 35 s) for the connection.
+constexpr int kLibraryIcePacTimeoutMs = 39'500;   // libjuice agent.h:43 [@3c40a354]
 constexpr int kLibraryDtlsHandshakeFailMs = 31'000; // dtlstransport.cpp:1024-1031
 constexpr int kLibrarySctpInitFailMs = 35'000;    // sctptransport.cpp:127-142
-static_assert(RemoteMediaController::kMediaEstablishmentDeadlineMs
+static_assert(RemoteMediaController::kMediaDescriptionDeadlineMs
+                  == StationClient::kDefaultHeartbeatIntervalMs,
+              "the description stage must be one control heartbeat interval");
+static_assert(RemoteMediaController::kMediaConnectDeadlineMs
                   == kLibraryIcePacTimeoutMs + kLibraryDtlsHandshakeFailMs
-                         + kLibrarySctpInitFailMs + StationClient::kDefaultHeartbeatIntervalMs,
-              "media establishment deadline must match its derivation");
+                         + kLibrarySctpInitFailMs,
+              "the connection stage must be the library's slowest serial failure");
 // The audio status refresh, which runs only while a receiver runs or a
 // playback problem awaits recovery.
 constexpr int kAudioStatusRefreshMs = 250;
@@ -419,9 +422,12 @@ struct RemoteMediaController::Private {
     RemoteAudioStatus audioStatus;
     QTimer* audioStatusTimer = nullptr;
     bool recoveryRequested = false;
-    // R-R3-28: bounds a started media session that never becomes ready.
+    // R-R3-28: bounds a started media session that never becomes ready, in
+    // two stages: Core's description, then the connection.
     QTimer* establishTimer = nullptr;
-    int establishmentDeadlineMs = RemoteMediaController::kMediaEstablishmentDeadlineMs;
+    int descriptionDeadlineMs = RemoteMediaController::kMediaDescriptionDeadlineMs;
+    int connectDeadlineMs = RemoteMediaController::kMediaConnectDeadlineMs;
+    bool awaitingDescription = false;
     // While MediaPeer::start runs, a backend error is its refusal reason.
     bool startingPeer = false;
     QString startRefusal;
@@ -448,7 +454,8 @@ struct RemoteMediaController::Private {
 
 RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* model,
     PanadapterStack* stack, QObject* parent, MediaPeer::TransportFactory factory,
-    AllocationClock allocationClock, int allocationAckTimeoutMs, int establishmentDeadlineMs)
+    AllocationClock allocationClock, int allocationAckTimeoutMs, int descriptionDeadlineMs,
+    int connectDeadlineMs)
     : QObject(parent), d(std::make_unique<Private>())
 {
     d->client = client;
@@ -462,12 +469,16 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
     }
     d->allocationAckTimeoutMs = allocationAckTimeoutMs > 0
         ? allocationAckTimeoutMs : kDefaultAllocationAckTimeoutMs;
-    d->establishmentDeadlineMs = establishmentDeadlineMs > 0
-        ? establishmentDeadlineMs : kMediaEstablishmentDeadlineMs;
+    d->descriptionDeadlineMs = descriptionDeadlineMs > 0
+        ? descriptionDeadlineMs : kMediaDescriptionDeadlineMs;
+    d->connectDeadlineMs = connectDeadlineMs > 0
+        ? connectDeadlineMs : kMediaConnectDeadlineMs;
     d->establishTimer = new QTimer(this);
     d->establishTimer->setObjectName(QStringLiteral("remoteMediaEstablishTimer"));
     d->establishTimer->setSingleShot(true);
-    d->establishTimer->setInterval(d->establishmentDeadlineMs);
+    // Precise: a coarse timer may fire up to 5% early, which at stage two
+    // would come before the library's own slowest report.
+    d->establishTimer->setTimerType(Qt::PreciseTimer);
     connect(d->establishTimer, &QTimer::timeout, this, [this] {
         // R-R3-28: negotiation that never reaches a terminal state. Only
         // the session the timer was armed for, and only while not ready;
@@ -476,9 +487,11 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
             || d->client->sessionEpoch() != d->epoch) {
             return;
         }
-        requestRecovery(d->epoch,
-            QStringLiteral("Station media did not connect within %1 seconds")
-                .arg(QString::number(d->establishmentDeadlineMs / 1000.0)));
+        requestRecovery(d->epoch, d->awaitingDescription
+            ? QStringLiteral("Core sent no station media description within %1 seconds")
+                  .arg(QString::number(d->descriptionDeadlineMs / 1000.0))
+            : QStringLiteral("Station media did not connect within %1 seconds")
+                  .arg(QString::number(d->connectDeadlineMs / 1000.0)));
     });
     d->audio = std::make_unique<RemoteAudioReceiver>(model->audioEngine());
     d->selectedOutput = selectedSpeakerOutput();
@@ -816,6 +829,7 @@ void RemoteMediaController::refreshAudioStatus()
 void RemoteMediaController::stop()
 {
     d->establishTimer->stop();
+    d->awaitingDescription = false;
     d->ps3Generation = 0;
     d->ps3Assembler.reset(0);
     d->timer->stop();
@@ -889,6 +903,20 @@ void RemoteMediaController::requestRecovery(quint32 expectedEpoch, const QString
     emit self->recoveryRequested(expectedEpoch, reason);
 }
 
+void RemoteMediaController::settleWithoutRetry(quint32 expectedEpoch, const QString& reason)
+{
+    // R-R3-28, review I1. Media ends here for good, with no retry, and the
+    // session carries on as control only, which its handshake has already
+    // proven: the reconnect backoff starts over, so a later, unrelated drop
+    // retries at the first step. Epoch-scoped in StationClient, so a
+    // retired session's error cannot reset a newer session's schedule.
+    if (d->client) { d->client->noteMediaEstablished(expectedEpoch); }
+    const QPointer<RemoteMediaController> self(this);
+    stop();
+    if (!self) { return; }
+    emit errorOccurred(reason);
+}
+
 void RemoteMediaController::start()
 {
     // stop() reports the retired audio status, and a listener may retire
@@ -952,17 +980,14 @@ void RemoteMediaController::start()
             requestRecovery(epoch, QStringLiteral("Station media connection closed"));
         }
     });
-    const auto onPeerError = [this, current](const QString& reason) {
+    const auto onPeerError = [this, current, epoch](const QString& reason) {
         if (current()) {
             if (d->startingPeer) {
                 // Decided below, once start() says whether it refused.
                 if (d->startRefusal.isEmpty()) { d->startRefusal = reason; }
                 return;
             }
-            const QPointer<RemoteMediaController> self(this);
-            stop();
-            if (!self) { return; }
-            emit errorOccurred(reason);
+            settleWithoutRetry(epoch, reason);
         }
     };
     connect(peer, &MediaPeer::errorOccurred, this, onPeerError);
@@ -971,27 +996,44 @@ void RemoteMediaController::start()
     connect(peer, &MediaPeer::displayErrorOccurred, this, onPeerError);
     d->startingPeer = true;
     d->startRefusal.clear();
+    const QPointer<MediaPeer> startedPeer(peer);
     const bool started = peer->start(IMediaTransport::Role::Answerer, d->connectionId);
     if (!self) { return; }
     d->startingPeer = false;
     const QString startError = std::exchange(d->startRefusal, QString());
     if (!started) {
-        // R-R3-28: a backend that refuses to start is a media failure like
-        // any other, not a silent stop. Plain reason, same retry path.
-        const QString reason = QStringLiteral("Station media could not start on this computer");
-        requestRecovery(epoch, startError.isEmpty()
-            ? reason : QStringLiteral("%1: %2").arg(reason, startError));
+        // R-R3-28, amended 2026-09-23: a refusal is never a silent stop, and
+        // only a transport that could not be built is retried, through the
+        // same path as any media failure, until retries reach the backoff
+        // ceiling. Every other refusal is permanent, as is a transient one
+        // past the ceiling: stop, show the reason, keep control.
+        const QString base = QStringLiteral("Station media could not start on this computer");
+        const QString reason = startError.isEmpty()
+            ? base : QStringLiteral("%1: %2").arg(base, startError);
+        const bool transient = startedPeer
+            && startedPeer->lastStartRefusal()
+                == MediaPeer::StartRefusal::TransportConstructionFailed;
+        if (transient && !d->client->reconnectBackoffExhausted()) {
+            requestRecovery(epoch, reason);
+            return;
+        }
+        if (transient) {
+            qCWarning(lcRemoteMedia).noquote()
+                << QStringLiteral("%1; automatic retries stopped at the longest wait,"
+                                  " the connection stays up without media").arg(reason);
+        }
+        settleWithoutRetry(epoch, reason);
         return;
     }
     if (!startError.isEmpty()) {
         // Started, but reported an error on the way: handled exactly as an
         // error after start always has been.
-        stop();
-        if (!self) { return; }
-        emit errorOccurred(startError);
+        settleWithoutRetry(epoch, startError);
         return;
     }
-    d->establishTimer->start();
+    // Stage one: Core's description (receiveControl() starts stage two).
+    d->awaitingDescription = true;
+    d->establishTimer->start(d->descriptionDeadlineMs);
     send({{QStringLiteral("op"), QStringLiteral("start")}});
     if (!self) { return; }
     // A media session now exists: audio is awaited from Core.
@@ -2052,20 +2094,28 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
         return;
     }
     if (op == QLatin1String("description") || op == QLatin1String("candidate")) {
-        d->peer->acceptControl(payload);
+        const QPointer<MediaPeer> peer(d->peer);
+        const bool accepted = peer->acceptControl(payload);
+        if (accepted && op == QLatin1String("description") && d->peer == peer
+            && d->awaitingDescription && !peer->isReady()) {
+            // Stage two: Core's description is here; the connection now
+            // has the pinned library's own slowest failure report.
+            d->awaitingDescription = false;
+            d->establishTimer->start(d->connectDeadlineMs);
+        }
         return;
     }
-    if (op == QLatin1String("rejected") && payload.size() == 6
+    // Core refused this connection's media (its peer could not start, or
+    // one is already active): op, connectionId, endpointId 0, revision 0
+    // and reason, as DaemonMediaController::sendRejected() sends them.
+    if (op == QLatin1String("rejected") && payload.size() == 5
         && payload.value(QStringLiteral("endpointId")).isDouble()
         && payload.value(QStringLiteral("endpointId")).toDouble() == 0
         && payload.value(QStringLiteral("revision")).isDouble()
         && payload.value(QStringLiteral("revision")).toDouble() == 0
         && payload.value(QStringLiteral("reason")).isString()) {
         const QString reason = payload.value(QStringLiteral("reason")).toString().left(512);
-        const QPointer<RemoteMediaController> self(this);
-        stop();
-        if (!self) { return; }
-        emit errorOccurred(reason);
+        settleWithoutRetry(epoch, reason);
         return;
     }
     quint32 endpointId = 0, revision = 0;

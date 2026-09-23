@@ -1145,19 +1145,25 @@ void TstSessionLinkLoss::otherFailuresKeepTheSocketText()
              timedOut);
 }
 
-QTEST_MAIN(TstSessionLinkLoss)
 // ── R-R3-28 ──────────────────────────────────────────────────────────────
 
 namespace {
 
+/// What retryDelaysAcrossFailures() observed: the delay each retry was
+/// scheduled with and, when a round did not complete, what it waited for.
+struct RetryDelays {
+    QList<int> delays;
+    QString failure;
+};
+
 /// Drives `rounds` retry-eligible closures of a live wss session, each
 /// after a good handshake, and returns the delay each retry was scheduled
 /// with. `beforeFailure` runs on each established session first.
-QList<int> retryDelaysAcrossFailures(StationClient& client, QSignalSpy& completed,
-                                     QSignalSpy& scheduled, int rounds,
-                                     const std::function<void()>& beforeFailure = {})
+RetryDelays retryDelaysAcrossFailures(StationClient& client, QSignalSpy& completed,
+                                      QSignalSpy& scheduled, int rounds,
+                                      const std::function<void()>& beforeFailure = {})
 {
-    QList<int> delays;
+    RetryDelays result;
     for (int round = 0; round < rounds; ++round) {
         const int handshakes = completed.count();
         const int retries = scheduled.count();
@@ -1167,14 +1173,19 @@ QList<int> retryDelaysAcrossFailures(StationClient& client, QSignalSpy& complete
         client.disconnectFromStation(QStringLiteral("media peer connection failed"),
                                      /*attemptReconnect=*/true);
         if (scheduled.count() != retries + 1) {
-            return {};
+            result.failure = QStringLiteral("round %1: the closure scheduled %2 retries, not 1")
+                                 .arg(round + 1).arg(scheduled.count() - retries);
+            return result;
         }
-        delays.append(scheduled.constLast().at(1).toInt());
+        result.delays.append(scheduled.constLast().at(1).toInt());
         if (!QTest::qWaitFor([&] { return completed.count() == handshakes + 1; }, 15000)) {
-            return {};
+            result.failure = QStringLiteral("round %1: timed out after 15 s waiting for the "
+                                            "retry's handshake (%2 handshakes, expected %3)")
+                                 .arg(round + 1).arg(completed.count()).arg(handshakes + 1);
+            return result;
         }
     }
-    return delays;
+    return result;
 }
 
 } // namespace
@@ -1210,19 +1221,23 @@ void TstSessionLinkLoss::mediaSessionBackoffResetsOnlyOnceMediaIsEstablished()
     QVERIFY(client.mediaAvailable());
 
     // Three media failures after good handshakes: the schedule grows.
-    QCOMPARE(retryDelaysAcrossFailures(client, completed, scheduled, 3),
-             QList<int>({1 * kUnitMs, 2 * kUnitMs, 5 * kUnitMs}));
+    const RetryDelays grown = retryDelaysAcrossFailures(client, completed, scheduled, 3);
+    QVERIFY2(grown.failure.isEmpty(), qPrintable(grown.failure));
+    QCOMPARE(grown.delays, QList<int>({1 * kUnitMs, 2 * kUnitMs, 5 * kUnitMs}));
 
     // A late ready naming a retired session changes nothing.
     const quint32 retired = client.sessionEpoch() - 1;
-    QCOMPARE(retryDelaysAcrossFailures(client, completed, scheduled, 1,
-                                       [&] { client.noteMediaEstablished(retired); }),
-             QList<int>({10 * kUnitMs}));
+    const RetryDelays afterLateReady = retryDelaysAcrossFailures(
+        client, completed, scheduled, 1, [&] { client.noteMediaEstablished(retired); });
+    QVERIFY2(afterLateReady.failure.isEmpty(), qPrintable(afterLateReady.failure));
+    QCOMPARE(afterLateReady.delays, QList<int>({10 * kUnitMs}));
 
     // Established media on the current session starts the schedule over.
-    QCOMPARE(retryDelaysAcrossFailures(client, completed, scheduled, 1,
-                                       [&] { client.noteMediaEstablished(client.sessionEpoch()); }),
-             QList<int>({1 * kUnitMs}));
+    const RetryDelays afterReady = retryDelaysAcrossFailures(
+        client, completed, scheduled, 1,
+        [&] { client.noteMediaEstablished(client.sessionEpoch()); });
+    QVERIFY2(afterReady.failure.isEmpty(), qPrintable(afterReady.failure));
+    QCOMPARE(afterReady.delays, QList<int>({1 * kUnitMs}));
 
     // Manual Disconnect during the wait cancels the retry.
     client.disconnectFromStation(QStringLiteral("media peer connection failed"), true);
@@ -1263,10 +1278,12 @@ void TstSessionLinkLoss::sessionWithoutMediaResetsBackoffAtTheHandshake()
     QTRY_COMPARE_WITH_TIMEOUT(completed.count(), 1, 15000);
     QVERIFY(!client.mediaAvailable());
 
-    QCOMPARE(retryDelaysAcrossFailures(client, completed, scheduled, 3),
-             QList<int>({kUnitMs, kUnitMs, kUnitMs}));
+    const RetryDelays flat = retryDelaysAcrossFailures(client, completed, scheduled, 3);
+    QVERIFY2(flat.failure.isEmpty(), qPrintable(flat.failure));
+    QCOMPARE(flat.delays, QList<int>({kUnitMs, kUnitMs, kUnitMs}));
     client.disconnectFromStation(QStringLiteral("operator disconnect"));
     server.close();
 }
 
+QTEST_MAIN(TstSessionLinkLoss)
 #include "tst_session_link_loss.moc"

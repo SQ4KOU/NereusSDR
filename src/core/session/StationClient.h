@@ -441,7 +441,20 @@ public:
     /// A call naming any epoch but the current one, or made while media
     /// is unavailable, changes nothing, so a late ready from a retired
     /// peer cannot reset a newer session's schedule.
+    ///
+    /// The media layer also calls it when media ends for good WITHOUT a
+    /// retry (Core refused the start, a media error after start, or a
+    /// permanent start refusal on this computer): the session then settles
+    /// as control only, which the handshake has already proven, so a later
+    /// unrelated drop retries at the first step again. No such path
+    /// retries, so this cannot restart a fast retry loop.
     void noteMediaEstablished(quint32 expectedEpoch);
+
+    /// R-R3-28. True once an automatic retry has already waited the longest
+    /// step of the reconnect backoff (see scheduleReconnect()) since the
+    /// schedule last started over. The media layer stops retrying a
+    /// transient start refusal from here on.
+    bool reconnectBackoffExhausted() const;
 
     /// Non-zero when the station's AppSettings schema version differs from
     /// this build's. Reported, never a refusal -- see the class comment.

@@ -13,6 +13,7 @@
 #include <QThread>
 #include <QtTest>
 
+#include <stdexcept>
 #include <thread>
 
 using namespace NereusSDR;
@@ -165,6 +166,7 @@ private slots:
     void telemetryDefaultsUnsupportedAndRejectsStaleGeneration();
     void signalHandlersMayRestartOrDeletePeer();
     void realPeersExchangeQueuedControlAndDirectMedia();
+    void startRefusalsAreTyped();
 };
 
 void TestMediaPeer::terminalConnectionFailureIsTypedAndGenerationScoped()
@@ -517,6 +519,74 @@ void TestMediaPeer::realPeersExchangeQueuedControlAndDirectMedia()
                 == static_cast<quint64>(rtp.size());
     };
     QTRY_VERIFY_WITH_TIMEOUT(answerTrafficArrived(), 5000);
+}
+
+// R-R3-28, amended 2026-09-23. Only a transport that could not be built is
+// worth retrying; the controller reads which refusal it was from here.
+void TestMediaPeer::startRefusalsAreTyped()
+{
+    using Refusal = MediaPeer::StartRefusal;
+    QList<QPointer<FakeTransport>> transports;
+    bool succeeds = true;
+    MediaPeer peer(nullptr, [&](QObject* parent) -> IMediaTransport* {
+        auto* transport = new FakeTransport(parent);
+        transport->startSucceeds = succeeds;
+        transports.push_back(transport);
+        return transport;
+    });
+    QCOMPARE(peer.lastStartRefusal(), Refusal::None);
+
+    // Preconditions: a non-canonical connection id, an already started peer.
+    QVERIFY(!peer.start(IMediaTransport::Role::Answerer, QStringLiteral("not-an-id")));
+    QCOMPARE(peer.lastStartRefusal(), Refusal::Precondition);
+    QVERIFY(peer.start(IMediaTransport::Role::Answerer, QLatin1String(kConnectionA)));
+    QCOMPARE(peer.lastStartRefusal(), Refusal::None);
+    QVERIFY(!peer.start(IMediaTransport::Role::Answerer, QLatin1String(kConnectionB)));
+    QCOMPARE(peer.lastStartRefusal(), Refusal::Precondition);
+    peer.stop();
+
+    // The transport refuses without reporting an error: a precondition of
+    // its own, such as an SSRC of zero. Permanent.
+    succeeds = false;
+    QVERIFY(!peer.start(IMediaTransport::Role::Answerer, QLatin1String(kConnectionA)));
+    QCOMPARE(peer.lastStartRefusal(), Refusal::TransportRefused);
+
+    // A later successful start clears the record.
+    succeeds = true;
+    QVERIFY(peer.start(IMediaTransport::Role::Answerer, QLatin1String(kConnectionA)));
+    QCOMPARE(peer.lastStartRefusal(), Refusal::None);
+    peer.stop();
+
+    // The transport reports an error and refuses: its peer could not be
+    // built (LibDataChannelMediaTransport::start's catch). Transient.
+    class BuildFailing final : public FakeTransport {
+    public:
+        using FakeTransport::FakeTransport;
+        bool start(const StartOptions&) override
+        {
+            emit errorOccurred(QStringLiteral("could not create the peer connection"));
+            return false;
+        }
+    };
+    MediaPeer buildFailing(nullptr, [](QObject* parent) -> IMediaTransport* {
+        return new BuildFailing(parent);
+    });
+    QSignalSpy buildErrors(&buildFailing, &MediaPeer::errorOccurred);
+    QVERIFY(!buildFailing.start(IMediaTransport::Role::Answerer, QLatin1String(kConnectionA)));
+    QCOMPARE(buildFailing.lastStartRefusal(), Refusal::TransportConstructionFailed);
+    QCOMPARE(buildErrors.size(), 1);
+
+    // The factory throws: the transport could not be built. Transient.
+    MediaPeer throwing(nullptr, [](QObject*) -> IMediaTransport* {
+        throw std::runtime_error("no transport");
+    });
+    QVERIFY(!throwing.start(IMediaTransport::Role::Answerer, QLatin1String(kConnectionA)));
+    QCOMPARE(throwing.lastStartRefusal(), Refusal::TransportConstructionFailed);
+
+    // The factory returns no transport. Permanent.
+    MediaPeer empty(nullptr, [](QObject*) -> IMediaTransport* { return nullptr; });
+    QVERIFY(!empty.start(IMediaTransport::Role::Answerer, QLatin1String(kConnectionA)));
+    QCOMPARE(empty.lastStartRefusal(), Refusal::InvalidTransport);
 }
 
 QTEST_GUILESS_MAIN(TestMediaPeer)

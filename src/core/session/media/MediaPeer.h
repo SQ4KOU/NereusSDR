@@ -42,7 +42,7 @@ public:
     // audio description never advertises more (R-R3-23). An answerer sends
     // no audio and keeps the default.
     bool start(IMediaTransport::Role role, const QString& connectionId,
-               int audioTargetBitrate = OpusAudioCodecConfig{}.bitrate);
+               int audioTargetBitrate = IMediaTransport::kDefaultAudioTargetBitrate);
     void stop();
 
     bool acceptControl(const QJsonObject& control);
@@ -50,6 +50,26 @@ public:
     IMediaTransport::DisplaySendResult submitDisplay(const QByteArray& message);
     bool displayBusy() const;
     bool sendRtp(const QByteArray& packet);
+
+    /// Why the last start() returned false (R-R3-28, amended 2026-09-23).
+    /// Only TransportConstructionFailed is transient and worth a retry;
+    /// every other refusal is permanent.
+    enum class StartRefusal {
+        /// The last start() succeeded, or none has run.
+        None,
+        /// This peer is already started, or the connection id is not
+        /// canonical.
+        Precondition,
+        /// The factory returned no transport, or one on another thread.
+        InvalidTransport,
+        /// The transport refused without reporting an error: a
+        /// precondition of its own, such as an SSRC of zero.
+        TransportRefused,
+        /// The factory threw, or the transport reported an error and
+        /// refused because it could not build its peer.
+        TransportConstructionFailed,
+    };
+    StartRefusal lastStartRefusal() const;
 
     bool isReady() const;
     QString connectionId() const;

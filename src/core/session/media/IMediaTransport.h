@@ -11,8 +11,6 @@
 //
 // =================================================================
 
-#include "core/session/media/OpusAudioCodec.h"
-
 #include <QByteArray>
 #include <QObject>
 #include <QString>
@@ -43,6 +41,11 @@ public:
     };
     Q_ENUM(Role)
 
+    // OpusAudioCodecConfig's default bitrate, named here so this interface
+    // does not include the codec for one number; MediaPeer.cpp checks that
+    // the two agree.
+    static constexpr int kDefaultAudioTargetBitrate = 24000;
+
     struct StartOptions {
         Role role;
         // Per-session RTP routing identity. DTLS authenticates the peer;
@@ -52,7 +55,7 @@ public:
         // offerer's audio description never advertises a higher average
         // bitrate than this. Defaults to the encoder's own default target,
         // so a caller that names only role and SSRC keeps today's offer.
-        int audioTargetBitrate = OpusAudioCodecConfig{}.bitrate;
+        int audioTargetBitrate = kDefaultAudioTargetBitrate;
     };
 
     static constexpr qsizetype kMaxDescriptionBytes = 64 * 1024;
@@ -104,6 +107,11 @@ public:
     explicit IMediaTransport(QObject* parent = nullptr) : QObject(parent) {}
     ~IMediaTransport() override = default;
 
+    /// Returns false to refuse. A refusal that has emitted errorOccurred()
+    /// first means the backend could not be built, which is transient and
+    /// retried; a refusal without an error is a precondition (already
+    /// started, an SSRC of zero) and is permanent (R-R3-28). MediaPeer reads
+    /// the difference to type its own refusal.
     virtual bool start(const StartOptions& options) = 0;
     virtual void stop() = 0;
 

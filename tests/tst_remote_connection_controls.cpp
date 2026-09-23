@@ -43,7 +43,11 @@ using namespace NereusSDR;
 class RecoveryMediaTransport final : public IMediaTransport {
 public:
     explicit RecoveryMediaTransport(QObject* parent) : IMediaTransport(parent) {}
-    bool start(const StartOptions&) override { return true; }
+    bool start(const StartOptions&) override
+    {
+        if (errorOnStart) { emit errorOccurred(QStringLiteral("test error during start")); }
+        return true;
+    }
     void stop() override { m_ready = false; }
     bool acceptDescription(const QString&, const QString&) override { return true; }
     bool acceptCandidate(const QString&, const QString&) override { return true; }
@@ -53,9 +57,35 @@ public:
     void activate() { m_ready = true; emit ready(); }
     void closeUnexpectedly() { m_ready = false; emit closed(); }
     void failConnection(const QString& reason) { emit connectionFailed(reason); }
+    void reportError(const QString& reason) { emit errorOccurred(reason); }
+    // Starts, but reports an error on the way through start.
+    bool errorOnStart = false;
 private:
     bool m_ready = false;
 };
+
+// A transport whose peer cannot be built: it reports why and refuses to
+// start, as LibDataChannelMediaTransport::start's catch does.
+class BuildFailingMediaTransport final : public IMediaTransport {
+public:
+    explicit BuildFailingMediaTransport(QObject* parent) : IMediaTransport(parent) {}
+    bool start(const StartOptions&) override
+    {
+        emit errorOccurred(QStringLiteral("could not create the peer connection"));
+        return false;
+    }
+    void stop() override {}
+    bool acceptDescription(const QString&, const QString&) override { return true; }
+    bool acceptCandidate(const QString&, const QString&) override { return true; }
+    bool sendDisplay(const QByteArray&) override { return false; }
+    bool sendRtp(const QByteArray&) override { return false; }
+    bool isReady() const override { return false; }
+};
+
+// mediaEndedWithoutRetryResetsTheBackoff: how the media ends.
+constexpr int kCoreRejectsStart = 0;
+constexpr int kErrorAfterStart = 1;
+constexpr int kErrorDuringStart = 2;
 
 class RecordingStationLink final : public IStationLink {
 public:
@@ -593,6 +623,197 @@ private slots:
         QCOMPARE(retries.size(), 5);
         QCOMPARE(handshakes.size(), 5);
         QVERIFY(!client.isConnectionActive());
+    }
+
+    // R-R3-28, review I1. Media that ends without a retry (Core refuses the
+    // start, a media error after start, or an error reported on the way
+    // through start) leaves a control-only session that has proven itself.
+    // Its backoff must start over, so a later, unrelated control drop
+    // retries at the first step rather than where earlier media failures
+    // left the schedule.
+    void mediaEndedWithoutRetryResetsTheBackoff_data()
+    {
+        QTest::addColumn<int>("ending");
+        QTest::newRow("Core rejects the media start") << int(kCoreRejectsStart);
+        QTest::newRow("media error after start") << int(kErrorAfterStart);
+        QTest::newRow("error reported during start") << int(kErrorDuringStart);
+    }
+
+    void mediaEndedWithoutRetryResetsTheBackoff()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt SSL support is unavailable");
+        }
+        QFETCH(int, ending);
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        QVERIFY(station.addSlice(QStringLiteral("pan-0")) >= 0);
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        bool coreRefuses = false;
+        int coreStarts = 0;
+        // Core answers the media start; with coreRefuses its peer cannot
+        // start, and Core sends "rejected" for the connection.
+        DaemonMediaController core(&server, &station, nullptr,
+            [&coreRefuses, &coreStarts](QObject* owner) -> IMediaTransport* {
+                ++coreStarts;
+                return coreRefuses ? nullptr : new RecoveryMediaTransport(owner);
+            });
+        QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.lastError()));
+
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        constexpr int kUnitMs = 20;
+        client.setReconnectBackoffUnitMs(kUnitMs);
+        RemoteConnectionController controls(&client, &remote,
+            {QStringLiteral("wss://127.0.0.1:%1").arg(server.serverPort()),
+             server.token(), server.certificateFingerprint(), false});
+        QPointer<RecoveryMediaTransport> transport;
+        int built = 0;
+        bool errorOnStart = false;
+        RemoteMediaController media(&client, &remote, nullptr, nullptr,
+            [&transport, &built, &errorOnStart](QObject* owner) -> IMediaTransport* {
+                ++built;
+                transport = new RecoveryMediaTransport(owner);
+                transport->errorOnStart = errorOnStart;
+                return transport;
+            });
+        connect(&media, &RemoteMediaController::recoveryRequested,
+                &controls, &RemoteConnectionController::recoverMediaSession,
+                Qt::QueuedConnection);
+        QSignalSpy handshakes(&client, &StationClient::handshakeComplete);
+        QSignalSpy retries(&client, &StationClient::reconnectScheduled);
+        QSignalSpy errors(&media, &RemoteMediaController::errorOccurred);
+
+        // Two media failures after good handshakes climb the schedule.
+        controls.connectToStation();
+        QTRY_COMPARE_WITH_TIMEOUT(handshakes.size(), 1, 15000);
+        for (int failure = 1; failure <= 2; ++failure) {
+            QTRY_COMPARE(built, failure);
+            QVERIFY(transport);
+            transport->failConnection(QStringLiteral("media peer connection failed"));
+            QTRY_COMPARE_WITH_TIMEOUT(retries.size(), failure, 5000);
+            QTRY_COMPARE_WITH_TIMEOUT(handshakes.size(), failure + 1, 15000);
+        }
+        QCOMPARE(retries.constLast().at(1).toInt(), 2 * kUnitMs);
+
+        // The third session's media ends without a retry.
+        QString reason;
+        if (ending == kCoreRejectsStart) {
+            // Core refuses the next session's start, once this session's
+            // own start has reached Core. Retire this session's media, so
+            // the next session is the one Core refuses.
+            QTRY_COMPARE(coreStarts, 3);
+            coreRefuses = true;
+            transport->failConnection(QStringLiteral("media peer connection failed"));
+            QTRY_COMPARE_WITH_TIMEOUT(handshakes.size(), 4, 15000);
+            reason = QStringLiteral("media peer start failed");
+        } else if (ending == kErrorDuringStart) {
+            errorOnStart = true;
+            transport->failConnection(QStringLiteral("media peer connection failed"));
+            QTRY_COMPARE_WITH_TIMEOUT(handshakes.size(), 4, 15000);
+            reason = QStringLiteral("test error during start");
+        } else {
+            transport->failConnection(QStringLiteral("media peer connection failed"));
+            QTRY_COMPARE_WITH_TIMEOUT(handshakes.size(), 4, 15000);
+            QTRY_COMPARE(built, 4);
+            QVERIFY(transport);
+            reason = QStringLiteral("invalid media packet");
+            transport->reportError(reason);
+        }
+        QCOMPARE(retries.constLast().at(1).toInt(), 5 * kUnitMs);
+        QTRY_VERIFY_WITH_TIMEOUT([&] {
+            for (const auto& call : errors) {
+                if (call.at(0).toString() == reason) { return true; }
+            }
+            return false;
+        }(), 5000);
+        QCoreApplication::processEvents();
+        QCOMPARE(retries.size(), 3);
+        QVERIFY(client.isHandshakeComplete());
+
+        // A later, unrelated control drop retries at the first step.
+        client.disconnectFromStation(QStringLiteral("station link lost"), true);
+        QCOMPARE(retries.size(), 4);
+        QCOMPARE(retries.constLast().at(1).toInt(), 1 * kUnitMs);
+        controls.disconnectFromStation();
+        QVERIFY(!client.isReconnectPending());
+    }
+
+    // R-R3-28, amended 2026-09-23. A transport that cannot be built is
+    // retried, with the schedule growing, until retries reach the backoff
+    // ceiling. The next such refusal stops retrying and leaves a
+    // control-only session with the reason shown.
+    void transientStartRefusalStopsRetryingAtTheBackoffCeiling()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt SSL support is unavailable");
+        }
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        QVERIFY(station.addSlice(QStringLiteral("pan-0")) >= 0);
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.lastError()));
+
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        constexpr int kUnitMs = 10;
+        client.setReconnectBackoffUnitMs(kUnitMs);
+        RemoteConnectionController controls(&client, &remote,
+            {QStringLiteral("wss://127.0.0.1:%1").arg(server.serverPort()),
+             server.token(), server.certificateFingerprint(), false});
+        int built = 0;
+        RemoteMediaController media(&client, &remote, nullptr, nullptr,
+            [&built](QObject* owner) -> IMediaTransport* {
+                ++built;
+                return new BuildFailingMediaTransport(owner);
+            });
+        connect(&media, &RemoteMediaController::recoveryRequested,
+                &controls, &RemoteConnectionController::recoverMediaSession,
+                Qt::QueuedConnection);
+        QSignalSpy handshakes(&client, &StationClient::handshakeComplete);
+        QSignalSpy retries(&client, &StationClient::reconnectScheduled);
+        QSignalSpy errors(&media, &RemoteMediaController::errorOccurred);
+        const auto delays = [&retries] {
+            QList<int> values;
+            for (const auto& call : retries) { values.append(call.at(1).toInt()); }
+            return values;
+        };
+        const QString reason = QStringLiteral(
+            "Station media could not start on this computer: could not create the peer connection");
+
+        controls.connectToStation();
+        // Every step of the schedule once, the ceiling included, then the
+        // session after the ceiling wait keeps control and stops.
+        QTRY_COMPARE_WITH_TIMEOUT(handshakes.size(), 7, 30000);
+        QTRY_COMPARE_WITH_TIMEOUT(errors.size(), 7, 5000);
+        QTest::qWait(3 * 60 * kUnitMs);
+        QCOMPARE(delays(), QList<int>({1 * kUnitMs, 2 * kUnitMs, 5 * kUnitMs,
+                                       10 * kUnitMs, 30 * kUnitMs, 60 * kUnitMs}));
+        QCOMPARE(built, 7);
+        QCOMPARE(handshakes.size(), 7);
+        QCOMPARE(errors.constLast().at(0).toString(), reason);
+        QVERIFY(client.isHandshakeComplete());
+        QVERIFY(!client.isReconnectPending());
+
+        // That control-only session proved itself: a later drop starts over.
+        client.disconnectFromStation(QStringLiteral("station link lost"), true);
+        QCOMPARE(delays().constLast(), 1 * kUnitMs);
+        controls.disconnectFromStation();
+        QVERIFY(!client.isReconnectPending());
     }
 
     void displayedEndpointExcludesCredentials()

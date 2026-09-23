@@ -67,6 +67,7 @@ private slots:
     void offerDescribesTheRealEncoder();
     void answererAcceptsNewAndOldCoreOffers_data();
     void answererAcceptsNewAndOldCoreOffers();
+    void preconditionRefusalsReportNoError();
 
 private:
     static void wire(LibDataChannelMediaTransport& offerer,
@@ -731,6 +732,23 @@ void TestMediaTransport::answererAcceptsNewAndOldCoreOffers()
     QCOMPARE(answerErrors.count(), 0);
     offerer.stop();
     answerer.stop();
+}
+
+// R-R3-28, amended 2026-09-23. MediaPeer tells a transient refusal (the peer
+// could not be built: an error, then false) from a permanent one (false with
+// no error). The real transport's precondition refusals must stay silent.
+void TestMediaTransport::preconditionRefusalsReportNoError()
+{
+    LibDataChannelMediaTransport transport;
+    QSignalSpy errors(&transport, &IMediaTransport::errorOccurred);
+    // An SSRC of zero.
+    QVERIFY(!transport.start({IMediaTransport::Role::Answerer, 0}));
+    QCOMPARE(errors.size(), 0);
+    // Already started.
+    QVERIFY(transport.start({IMediaTransport::Role::Answerer, kTestAudioSsrc}));
+    QVERIFY(!transport.start({IMediaTransport::Role::Answerer, kTestAudioSsrc}));
+    QCOMPARE(errors.size(), 0);
+    transport.stop();
 }
 
 QTEST_GUILESS_MAIN(TestMediaTransport)

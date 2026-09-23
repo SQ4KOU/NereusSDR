@@ -10,6 +10,7 @@
 #include "core/session/media/MediaPeer.h"
 
 #include "core/session/media/LibDataChannelMediaTransport.h"
+#include "core/session/media/OpusAudioCodec.h"
 
 #include <QCryptographicHash>
 #include <QJsonValue>
@@ -22,6 +23,11 @@
 #include <utility>
 
 namespace NereusSDR {
+
+// IMediaTransport names the default audio target instead of including the
+// codec for it; the two must agree (R-R3-23).
+static_assert(IMediaTransport::kDefaultAudioTargetBitrate == OpusAudioCodecConfig{}.bitrate,
+              "the transport's default audio target must be the encoder's default");
 
 namespace {
 
@@ -111,6 +117,10 @@ struct MediaPeer::Private {
     bool started = false;
     bool remoteDescriptionAccepted = false;
     bool ready = false;
+    StartRefusal startRefusal = StartRefusal::None;
+    // While the transport's start() runs: whether it reported an error.
+    bool transportStarting = false;
+    bool transportStartError = false;
 };
 
 MediaPeer::MediaPeer(QObject* parent, TransportFactory factory)
@@ -134,7 +144,9 @@ MediaPeer::~MediaPeer()
 bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
                       int audioTargetBitrate)
 {
+    d->startRefusal = StartRefusal::None;
     if (d->started || !isCanonicalConnectionId(connectionId)) {
+        d->startRefusal = StartRefusal::Precondition;
         return false;
     }
 
@@ -142,6 +154,7 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
     try {
         transport = d->factory(this);
     } catch (...) {
+        d->startRefusal = StartRefusal::TransportConstructionFailed;
         emit errorOccurred(QStringLiteral("media transport factory failed"));
         return false;
     }
@@ -149,6 +162,7 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
         if (transport && !transport->parent()) {
             transport->deleteLater();
         }
+        d->startRefusal = StartRefusal::InvalidTransport;
         emit errorOccurred(QStringLiteral("media transport factory returned an invalid object"));
         return false;
     }
@@ -279,6 +293,9 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
     connect(transport, &IMediaTransport::errorOccurred, this,
             [self, isCurrentGeneration](const QString& message) {
                 if (isCurrentGeneration()) {
+                    if (self->d->transportStarting) {
+                        self->d->transportStartError = true;
+                    }
                     emit self->errorOccurred(message);
                 }
             });
@@ -295,16 +312,32 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
                 }
             });
 
+    d->transportStarting = true;
+    d->transportStartError = false;
     const bool backendStarted =
         transport->start({role, d->audioSsrc, audioTargetBitrate});
-    if (!self || !self->isCurrent(transport, generation)) {
+    if (!self) {
+        return false;
+    }
+    d->transportStarting = false;
+    if (!self->isCurrent(transport, generation)) {
         return false;
     }
     if (!backendStarted) {
+        // The IMediaTransport contract: a refusal that reports an error
+        // means the backend could not be built (LibDataChannelMediaTransport
+        // start()'s catch); one without an error is a precondition refusal.
+        d->startRefusal = d->transportStartError
+            ? StartRefusal::TransportConstructionFailed : StartRefusal::TransportRefused;
         stopInternal(false);
         return false;
     }
     return true;
+}
+
+MediaPeer::StartRefusal MediaPeer::lastStartRefusal() const
+{
+    return d->startRefusal;
 }
 
 void MediaPeer::stop()

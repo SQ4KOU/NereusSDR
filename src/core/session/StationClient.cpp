@@ -1037,6 +1037,24 @@ bool StationClient::isReconnectPending() const
     return m_reconnectTimer->isActive();
 }
 
+namespace {
+// scheduleReconnect()'s schedule, in units of m_reconnectBackoffUnitMs; see
+// its comment for where the numbers come from. File scope so that
+// reconnectBackoffExhausted() reads the same ceiling.
+constexpr int kReconnectBackoffSteps[] = { 1, 2, 5, 10, 30, 60 };
+constexpr int kReconnectBackoffStepCount =
+    static_cast<int>(sizeof(kReconnectBackoffSteps) / sizeof(kReconnectBackoffSteps[0]));
+} // namespace
+
+bool StationClient::reconnectBackoffExhausted() const
+{
+    // m_reconnectAttempts counts the retries scheduled since the schedule
+    // last started over; the last step is the ceiling, so once as many
+    // retries as there are steps have been scheduled, one of them waited
+    // the ceiling.
+    return m_reconnectAttempts >= kReconnectBackoffStepCount;
+}
+
 void StationClient::scheduleReconnect()
 {
     // Same schedule as PgxlConnection.cpp:30's kBackoffSec and
@@ -1049,10 +1067,6 @@ void StationClient::scheduleReconnect()
     // (production default 1000, i.e. real seconds) rather than exposed as
     // a raw ms table, so a test can shrink the whole schedule
     // proportionally with one setter instead of duplicating six numbers.
-    static constexpr int kReconnectBackoffSteps[] = { 1, 2, 5, 10, 30, 60 };
-    static constexpr int kReconnectBackoffStepCount =
-        static_cast<int>(sizeof(kReconnectBackoffSteps) / sizeof(kReconnectBackoffSteps[0]));
-
     const int idx = std::min(m_reconnectAttempts, kReconnectBackoffStepCount - 1);
     const int delayMs = kReconnectBackoffSteps[idx] * m_reconnectBackoffUnitMs;
     ++m_reconnectAttempts;
