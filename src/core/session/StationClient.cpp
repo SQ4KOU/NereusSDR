@@ -52,6 +52,7 @@
 #include "models/TunerModel.h"
 
 #include <QCryptographicHash>
+#include <QHostAddress>
 #include <QLoggingCategory>
 #include <QSslCertificate>
 #include <QSslError>
@@ -150,7 +151,63 @@ private:
     bool m_previous;
 };
 
+/// R-R3-17. True when `host` is an address literal in a private or
+/// link-local range: IPv4 10/8, 172.16/12, 192.168/16, 169.254/16; IPv6
+/// fc00::/7, fe80::/10. A host NAME is never classified: resolving it here
+/// would make a pure mapping depend on the network it is diagnosing.
+bool isLocalNetworkAddress(const QString& host)
+{
+    QString literal = host.trimmed();
+    if (literal.startsWith(QLatin1Char('[')) && literal.endsWith(QLatin1Char(']'))) {
+        literal = literal.mid(1, literal.size() - 2);
+    }
+    const QHostAddress address(literal);
+    if (address.isNull()) {
+        return false;
+    }
+    static const QList<QPair<QHostAddress, int>> kLocalSubnets = {
+        QHostAddress::parseSubnet(QStringLiteral("10.0.0.0/8")),
+        QHostAddress::parseSubnet(QStringLiteral("172.16.0.0/12")),
+        QHostAddress::parseSubnet(QStringLiteral("192.168.0.0/16")),
+        QHostAddress::parseSubnet(QStringLiteral("169.254.0.0/16")),
+        QHostAddress::parseSubnet(QStringLiteral("fc00::/7")),
+        QHostAddress::parseSubnet(QStringLiteral("fe80::/10")),
+    };
+    for (const QPair<QHostAddress, int>& subnet : kLocalSubnets) {
+        if (address.isInSubnet(subnet)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 } // namespace
+
+QString StationClient::connectionFailureReason(QAbstractSocket::SocketError error,
+                                               const QString& errorText,
+                                               const QString& host,
+                                               bool macOs)
+{
+    // Keyed on the socket error enum AND its text. Qt reports EHOSTUNREACH
+    // as NetworkError with the text "Host unreachable"; some paths carry
+    // the platform's own "No route to host". HostNotFoundError is a name
+    // lookup failure, not this case, and "Network unreachable" (also a
+    // NetworkError) means this Mac has no route at all, which Local
+    // Network privacy does not produce.
+    const bool hostUnreachable =
+        error == QAbstractSocket::NetworkError
+        && (errorText.contains(QLatin1String("Host unreachable"), Qt::CaseInsensitive)
+            || errorText.contains(QLatin1String("No route to host"), Qt::CaseInsensitive));
+    if (!macOs || !hostUnreachable || !isLocalNetworkAddress(host)) {
+        return errorText;
+    }
+    return QStringLiteral(
+               "Can't reach the Core at %1. If this Mac is on the same network as "
+               "the Core, macOS may be blocking NereusSDR from your local network: "
+               "allow it in System Settings, Privacy & Security, Local Network, "
+               "then press Connect.")
+        .arg(host);
+}
 
 StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProxy,
                              QObject* parent)
@@ -462,13 +519,15 @@ void StationClient::dialStation(const QUrl& url, const QString& token,
     });
 
     connect(socket, &QWebSocket::errorOccurred, this,
-            [this, socket, transportGuard](QAbstractSocket::SocketError) {
+            [this, socket, transportGuard, host = url.host()](QAbstractSocket::SocketError error) {
                 if (transportGuard.isNull() || transportGuard.data() != m_transport) {
                     return;
                 }
-                // First error wins -- see dialStation()'s clear above.
+                // First error wins -- see dialStation()'s clear above. The
+                // operator reason may name a recovery action (R-R3-17); the
+                // raw socket error still goes to the log below.
                 if (m_lastError.isEmpty()) {
-                    m_lastError = socket->errorString();
+                    m_lastError = connectionFailureReason(error, socket->errorString(), host);
                 }
                 qCWarning(lcStationClient)
                     << "Station connection error:" << socket->errorString();

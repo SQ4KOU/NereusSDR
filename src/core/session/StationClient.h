@@ -225,6 +225,7 @@
 //                                    Anthropic Claude Code.
 // =================================================================
 
+#include <QAbstractSocket>
 #include <QByteArray>
 #include <QHash>
 #include <QObject>
@@ -302,6 +303,25 @@ public:
     /// has since been compromised, allocate about 2 GiB in the operator's
     /// GUI. A pin is an identity check, not a promise of good behaviour.
     static constexpr quint64 kMaxIncomingMessageBytes = 8ULL * 1024ULL * 1024ULL;
+
+#ifdef Q_OS_MAC
+    static constexpr bool kBuiltForMacOs = true;
+#else
+    static constexpr bool kBuiltForMacOs = false;
+#endif
+
+    /// R-R3-17: the operator reason for a failed connect attempt. Pure, so
+    /// it is testable without a socket. `errorText` is the socket's own
+    /// error string, which is returned unchanged except in one case: on
+    /// macOS, a host-unreachable failure (NetworkError whose text reads
+    /// "Host unreachable" or "No route to host") toward a private or
+    /// link-local address literal. That is what macOS Local Network
+    /// privacy reports when it blocks the app, so the reason names the
+    /// setting to change instead. `host` is the host the operator entered.
+    static QString connectionFailureReason(QAbstractSocket::SocketError error,
+                                           const QString& errorText,
+                                           const QString& host,
+                                           bool macOs = kBuiltForMacOs);
 
     /// `radioModel` must be Role::Remote and is NOT owned. `settingsProxy`
     /// is the backend a remote-mode GUI installs via

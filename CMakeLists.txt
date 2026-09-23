@@ -1622,13 +1622,18 @@ set_target_properties(NereusSDR PROPERTIES
 # through to Add on the first build (when the key is absent).
 if(APPLE)
     set(_nereus_mic_desc "NereusSDR uses the microphone for SSB voice transmission and live mic level monitoring.")
+    # R-R3-17 / R-R3-38: without NSLocalNetworkUsageDescription macOS Local
+    # Network privacy can block connections to radios and Cores on the LAN
+    # with no prompt, surfacing only as "Host unreachable".
+    set(_nereus_lan_desc "NereusSDR connects to your radios and NereusSDR Core stations on your local network.")
     add_custom_command(TARGET NereusSDR POST_BUILD
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Frameworks"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:NereusCore>" "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Frameworks/"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:NereusSDRLib>" "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Frameworks/"
         COMMAND /bin/sh -c "/usr/libexec/PlistBuddy -c \"Set :NSMicrophoneUsageDescription '${_nereus_mic_desc}'\" \"$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Info.plist\" 2>/dev/null || /usr/libexec/PlistBuddy -c \"Add :NSMicrophoneUsageDescription string '${_nereus_mic_desc}'\" \"$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Info.plist\""
+        COMMAND /bin/sh -c "/usr/libexec/PlistBuddy -c \"Set :NSLocalNetworkUsageDescription '${_nereus_lan_desc}'\" \"$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Info.plist\" 2>/dev/null || /usr/libexec/PlistBuddy -c \"Add :NSLocalNetworkUsageDescription string '${_nereus_lan_desc}'\" \"$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Info.plist\""
         COMMAND codesign --force --deep --sign - "$<TARGET_BUNDLE_DIR:NereusSDR>"
-        COMMENT "Stage private libraries, inject NSMicrophoneUsageDescription, and re-sign bundle"
+        COMMENT "Stage private libraries, inject NSMicrophoneUsageDescription and NSLocalNetworkUsageDescription, and re-sign bundle"
         VERBATIM
     )
 endif()

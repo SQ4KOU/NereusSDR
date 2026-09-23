@@ -152,6 +152,10 @@ private slots:
     void automaticRetryReconnectsToASuccessfulHandshake();
     void operatorConnectionActivityIsIndependentOfRadioState();
 
+    // ---- R-R3-17: actionable reason for a blocked local network ----
+    void hostUnreachableOnLocalNetworkNamesTheMacOsSetting();
+    void otherFailuresKeepTheSocketText();
+
 private:
     /// One temp dir for the whole class so the RSA-3072 key pair is
     /// generated once and every later StationServer loads it back, rather
@@ -1023,6 +1027,96 @@ void TstSessionLinkLoss::automaticRetryReconnectsToASuccessfulHandshake()
     QTRY_COMPARE(stationSlice->frequency(), 21050000.0);
 
     server.close();
+}
+
+namespace {
+QString localNetworkReason(const QString& host)
+{
+    return QStringLiteral(
+               "Can't reach the Core at %1. If this Mac is on the same network as "
+               "the Core, macOS may be blocking NereusSDR from your local network: "
+               "allow it in System Settings, Privacy & Security, Local Network, "
+               "then press Connect.")
+        .arg(host);
+}
+} // namespace
+
+void TstSessionLinkLoss::hostUnreachableOnLocalNetworkNamesTheMacOsSetting()
+{
+    const QString hostUnreachable = QStringLiteral("Host unreachable");
+
+    // Private IPv4, the operator's own station address.
+    QCOMPARE(StationClient::connectionFailureReason(QAbstractSocket::NetworkError,
+                                                    hostUnreachable,
+                                                    QStringLiteral("192.168.109.106"),
+                                                    /*macOs=*/true),
+             localNetworkReason(QStringLiteral("192.168.109.106")));
+    // The other private IPv4 ranges and IPv4 link-local.
+    for (const QString& host : {QStringLiteral("10.1.2.3"), QStringLiteral("172.20.0.9"),
+                                QStringLiteral("169.254.10.20")}) {
+        QCOMPARE(StationClient::connectionFailureReason(QAbstractSocket::NetworkError,
+                                                        hostUnreachable, host, true),
+                 localNetworkReason(host));
+    }
+    // Link-local and unique-local IPv6, and the platform's own wording,
+    // matched without regard to case.
+    QCOMPARE(StationClient::connectionFailureReason(QAbstractSocket::NetworkError,
+                                                    QStringLiteral("no route to host"),
+                                                    QStringLiteral("fe80::1c2:3ff:fe04:506"),
+                                                    true),
+             localNetworkReason(QStringLiteral("fe80::1c2:3ff:fe04:506")));
+    QCOMPARE(StationClient::connectionFailureReason(QAbstractSocket::NetworkError,
+                                                    hostUnreachable,
+                                                    QStringLiteral("fd12:3456::7"), true),
+             localNetworkReason(QStringLiteral("fd12:3456::7")));
+
+    // Off macOS the same failure keeps today's text.
+    QCOMPARE(StationClient::connectionFailureReason(QAbstractSocket::NetworkError,
+                                                    hostUnreachable,
+                                                    QStringLiteral("192.168.109.106"),
+                                                    /*macOs=*/false),
+             hostUnreachable);
+}
+
+void TstSessionLinkLoss::otherFailuresKeepTheSocketText()
+{
+    const QString hostUnreachable = QStringLiteral("Host unreachable");
+
+    // A public address: Local Network privacy does not apply.
+    QCOMPARE(StationClient::connectionFailureReason(QAbstractSocket::NetworkError,
+                                                    hostUnreachable,
+                                                    QStringLiteral("8.8.8.8"), true),
+             hostUnreachable);
+    QCOMPARE(StationClient::connectionFailureReason(QAbstractSocket::NetworkError,
+                                                    hostUnreachable,
+                                                    QStringLiteral("2001:db8::1"), true),
+             hostUnreachable);
+    // Just outside 172.16/12, and a host name that is never resolved here.
+    QCOMPARE(StationClient::connectionFailureReason(QAbstractSocket::NetworkError,
+                                                    hostUnreachable,
+                                                    QStringLiteral("172.32.0.1"), true),
+             hostUnreachable);
+    QCOMPARE(StationClient::connectionFailureReason(QAbstractSocket::NetworkError,
+                                                    hostUnreachable,
+                                                    QStringLiteral("rock.local"), true),
+             hostUnreachable);
+
+    // Not host-unreachable, on a private address.
+    const QString refused = QStringLiteral("Connection refused");
+    QCOMPARE(StationClient::connectionFailureReason(QAbstractSocket::ConnectionRefusedError,
+                                                    refused,
+                                                    QStringLiteral("192.168.109.106"), true),
+             refused);
+    const QString networkUnreachable = QStringLiteral("Network unreachable");
+    QCOMPARE(StationClient::connectionFailureReason(QAbstractSocket::NetworkError,
+                                                    networkUnreachable,
+                                                    QStringLiteral("192.168.109.106"), true),
+             networkUnreachable);
+    const QString timedOut = QStringLiteral("Socket operation timed out");
+    QCOMPARE(StationClient::connectionFailureReason(QAbstractSocket::SocketTimeoutError,
+                                                    timedOut,
+                                                    QStringLiteral("10.0.0.5"), true),
+             timedOut);
 }
 
 QTEST_MAIN(TstSessionLinkLoss)
