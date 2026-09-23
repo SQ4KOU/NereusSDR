@@ -1166,13 +1166,16 @@ void SliceModel::setNnrModelSlot(int value)
 {
     // R-R3-40: choosing a model while the Core holds this receiver back is
     // the operator asking for it again, even when it is the saved model
-    // (which the equality check below would otherwise ignore).
-    if (m_nnrLimit != 0) {
-        emit nnrRetryRequested();
-    }
+    // (which the equality check in applyNnrSettings would otherwise ignore).
+    // The new choice is applied first, so clearing the limit runs it and
+    // never the choice it replaces.
+    const bool limited = m_nnrLimit != 0;
     auto requested = m_nnrSettings;
     requested.modelSlot = value;
     applyNnrSettings(requested);
+    if (limited) {
+        emit nnrRetryRequested();
+    }
 }
 
 void SliceModel::setNnrMaskFloorDb(double value)
@@ -1240,7 +1243,9 @@ void SliceModel::resetNnrTuning()
 
 void SliceModel::setNnrLimit(int limit)
 {
-    if (!isValidNnrLimit(limit) || m_nnrLimit == limit) return;
+    if (!isValidNnrLimit(limit) || m_nnrLimit == limit) {
+        return;
+    }
     m_nnrLimit = limit;
     emit nnrLimitChanged(limit);
 }

@@ -3962,13 +3962,17 @@ void RadioModel::wireNnrSettings(SliceModel* slice)
     });
     slice->setNrSelectionApplier([this, slice](NrSlot requested, QString* reason) {
         RxChannel* channel = m_wdspEngine ? m_wdspEngine->rxChannel(slice->sliceIndex()) : nullptr;
-        if (!channel) {
-            return true;
-        }
         // R-R3-40: turning NNR on or off clears a runtime limit. Cleared
         // before NNR goes on, and after it goes off, so an "off" limit never
-        // lets NNR run for a block in between.
+        // lets NNR run for a block in between. With no receiver open it is
+        // cleared at once.
         const bool limited = slice->nnrLimit() != static_cast<int>(NnrLimit::None);
+        if (!channel) {
+            if (limited) {
+                clearNnrLimit(slice);
+            }
+            return true;
+        }
         if (limited && requested == NrSlot::NNR) {
             clearNnrLimit(slice);
         }
@@ -5939,7 +5943,10 @@ void RadioModel::governNnrLoadWith(qint64 nowMs,
             }
         }
         NnrLoadGovernor::Receiver receiver;
-        receiver.nnrSelected = slice->activeNr() == NrSlot::NNR;
+        // R-R3-40: NNR is only blamed while it is actually running (the
+        // cached, lock-free readback); a receiver with NNR selected but not
+        // running is overloaded by something else.
+        receiver.nnrSelected = slice->activeNr() == NrSlot::NNR && slice->nnrRunning();
         receiver.savedModelSlot = slice->nnrModelSlot();
         receiver.limit = static_cast<NnrLimit>(slice->nnrLimit());
         receiver.load = load(sliceId);

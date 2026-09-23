@@ -43,7 +43,9 @@ public:
 
     // One receiver as the governor sees it at a check.
     struct Receiver {
-        // NNR is the operator's active noise reduction on this receiver.
+        // NNR is the operator's active noise reduction on this receiver and
+        // is running there (a receiver with NNR selected but not running is
+        // overloaded by something else).
         bool nnrSelected{false};
         // The operator's saved model (0 Standard, 1 Premium).
         int savedModelSlot{0};

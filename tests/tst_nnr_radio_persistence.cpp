@@ -341,6 +341,117 @@ private slots:
         QCOMPARE(restarted.sliceById(restartedId)->nnrLimit(), 0);
         QCOMPARE(restarted.sliceById(restartedId)->nnrModelSlot(), 1);
     }
+
+    // R-R3-40: an overloaded receiver whose NNR is selected but not running
+    // (here the saved Premium model cannot be built) is overloaded by
+    // something else, so NNR is never blamed for it.
+    void nnrSelectedButNotRunningIsNeverSteppedBack()
+    {
+        const QString mac = QStringLiteral("00:1C:2D:03:04:0B");
+        const QString prefix = "hardware/" + mac + "/slices/0/nnr/";
+        auto& settings = AppSettings::instance();
+        settings.setValue(prefix + "NnrModelSlot", 1);
+        settings.setValue(prefix + "NrActive", static_cast<int>(NrSlot::NNR));
+
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString unusable = writeUnusablePremiumModel(directory);
+        QVERIFY(!unusable.isEmpty());
+        const QByteArray encoded = QFile::encodeName(unusable);
+        SetNNRModelPathSlot(1, encoded.constData());
+        const auto restorePath = qScopeGuard([] { SetNNRModelPathSlot(1, ""); });
+
+        RadioModel model;
+        WdspEngine* engine = model.wdspEngine();
+        engine->m_initialized = true;   // friend access (NEREUS_BUILD_TESTS)
+        RadioInfo info;
+        info.macAddress = mac;
+        model.setLastRadioInfoForTest(info);
+        model.configureStreamPool(1, 1, kRateHz);
+        const int id = model.addSlice();
+        SliceModel* slice = model.sliceById(id);
+        QVERIFY(slice);
+        slice->setFrequency(14200000.0);
+        model.openRxChannelPool(1, bufferSizeForRate(kRateHz), kRateHz);
+        QVERIFY(engine->rxChannel(id));
+        QCOMPARE(slice->activeNr(), NrSlot::NNR);
+        QVERIFY(!slice->nnrRunning());
+
+        qint64 now = 0;
+        for (int check = 0; check < 40; ++check) {
+            model.governNnrLoadForTest(now, {{id, 0.95}});
+            now += NnrLoadGovernor::kNnrCheckIntervalMs;
+        }
+        QCOMPARE(slice->nnrLimit(), 0);
+    }
+
+    // R-R3-40: turning NNR off or on clears a limit even with no receiver
+    // open (disconnected), like it does with one.
+    void turningNnrOffOrOnWithoutAReceiverClearsTheLimit()
+    {
+        RadioModel model;
+        const int id = model.addSlice();
+        SliceModel* slice = model.sliceById(id);
+        QVERIFY(slice);
+        QVERIFY(!model.wdspEngine() || !model.wdspEngine()->rxChannel(id));
+        slice->setActiveNr(NrSlot::NNR);
+        QCOMPARE(slice->activeNr(), NrSlot::NNR);
+
+        slice->setNnrLimit(static_cast<int>(NnrLimit::StandardOnly));
+        slice->setActiveNr(NrSlot::Off);
+        QCOMPARE(slice->activeNr(), NrSlot::Off);
+        QCOMPARE(slice->nnrLimit(), 0);
+
+        slice->setNnrLimit(static_cast<int>(NnrLimit::Off));
+        slice->setActiveNr(NrSlot::NNR);
+        QCOMPARE(slice->activeNr(), NrSlot::NNR);
+        QCOMPARE(slice->nnrLimit(), 0);
+    }
+
+    // R-R3-40: choosing Standard while held at Standard (saved Premium) runs
+    // Standard throughout: the new choice is applied before the limit is
+    // cleared, so Premium never runs in between.
+    void choosingStandardWhileHeldAtStandardNeverRunsPremium()
+    {
+        const QString mac = QStringLiteral("00:1C:2D:03:04:0C");
+        const QString prefix = "hardware/" + mac + "/slices/0/nnr/";
+        auto& settings = AppSettings::instance();
+        settings.setValue(prefix + "NnrModelSlot", 1);
+        settings.setValue(prefix + "NrActive", static_cast<int>(NrSlot::NNR));
+
+        RadioModel model;
+        WdspEngine* engine = model.wdspEngine();
+        engine->m_initialized = true;   // friend access (NEREUS_BUILD_TESTS)
+        RadioInfo info;
+        info.macAddress = mac;
+        model.setLastRadioInfoForTest(info);
+        model.configureStreamPool(1, 1, kRateHz);
+        const int id = model.addSlice();
+        SliceModel* slice = model.sliceById(id);
+        QVERIFY(slice);
+        slice->setFrequency(14200000.0);
+        model.openRxChannelPool(1, bufferSizeForRate(kRateHz), kRateHz);
+        QVERIFY(engine->rxChannel(id));
+        QCOMPARE(slice->nnrActualModelSlot(), 1);
+
+        qint64 now = 0;
+        while (slice->nnrLimit() == 0 && now < 40 * NnrLoadGovernor::kNnrCheckIntervalMs) {
+            model.governNnrLoadForTest(now, {{id, 0.95}});
+            now += NnrLoadGovernor::kNnrCheckIntervalMs;
+        }
+        QCOMPARE(slice->nnrLimit(), static_cast<int>(NnrLimit::StandardOnly));
+        slice->setNnrAlpha(2.0);   // a locked call applies the pending limit
+        QCOMPARE(slice->nnrActualModelSlot(), 0);
+
+        QList<int> running;
+        connect(slice, &SliceModel::nnrDiagnosticsChanged, this,
+                [&running, slice] { running.append(slice->nnrActualModelSlot()); });
+        slice->setNnrModelSlot(0);
+        QCOMPARE(slice->nnrLimit(), 0);
+        QCOMPARE(slice->nnrModelSlot(), 0);
+        QCOMPARE(slice->nnrActualModelSlot(), 0);
+        QVERIFY2(!running.contains(1), "Premium ran while the operator chose Standard");
+    }
 };
 
 QTEST_MAIN(TestNnrRadioPersistence)
