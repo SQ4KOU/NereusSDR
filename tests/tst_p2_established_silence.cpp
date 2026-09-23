@@ -165,6 +165,51 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(fake.stopCount(), 1, 1000);
     }
 
+    // Fix wave M2: the wakeup reads what is waiting before judging silence,
+    // but only accepted traffic refreshes the deadline. A waiting datagram
+    // that is rejected (wrong size, wrong role, wrong sender, or a disabled
+    // wideband role) must still end in NoDataTimeout on that same wakeup.
+    void rejectedDatagramWaitingAtExpiryIsStillLoss_data()
+    {
+        QTest::addColumn<QString>("kind");
+        QTest::newRow("wrong size") << QStringLiteral("malformed");
+        QTest::newRow("wrong role") << QStringLiteral("role");
+        QTest::newRow("wrong sender") << QStringLiteral("address");
+        QTest::newRow("disabled wideband") << QStringLiteral("wideband");
+    }
+
+    void rejectedDatagramWaitingAtExpiryIsStillLoss()
+    {
+        QFETCH(QString, kind);
+        P2FakeRadio fake;
+        QVERIFY(fake.start());
+        P2RadioConnection connection;
+        configureConnection(connection, fake);
+        QVERIFY(establish(connection, fake));
+
+        QSignalSpy errorSpy(&connection, &RadioConnection::errorOccurred);
+        if (kind == QLatin1String("malformed")) {
+            fake.sendMalformedStatus();
+        } else if (kind == QLatin1String("role")) {
+            fake.sendWrongRoleStatus();
+        } else if (kind == QLatin1String("address")) {
+            QVERIFY2(fake.sendWrongAddressStatus(),
+                     "IPv6 loopback ::1 must be available for wrong-address coverage");
+        } else {
+            fake.sendWideband(0);
+        }
+        // The event loop stalls past the deadline, so the wakeup finds the
+        // rejected datagram still waiting on the socket.
+        QThread::msleep(static_cast<unsigned long>(kEstablishedTimeoutMs + 80));
+        connection.runEstablishedSilenceWakeupForTest();
+
+        QCOMPARE(connection.state(), ConnectionState::LinkLost);
+        QCOMPARE(errorSpy.count(), 1);
+        QCOMPARE(errorSpy.at(0).at(0).value<RadioConnectionError>(),
+                 RadioConnectionError::NoDataTimeout);
+        QTRY_COMPARE_WITH_TIMEOUT(fake.stopCount(), 1, 1000);
+    }
+
     void statusOnlyTrafficKeepsEstablishedLinkAlive()
     {
         P2FakeRadio fake;
