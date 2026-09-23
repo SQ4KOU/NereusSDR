@@ -507,10 +507,10 @@ void TstSessionLinkLoss::autoReconnectUsesOwnedCancellableTimerWithExponentialBa
     // 200/400/1000/2000/6000/12000 ms) so the MECHANISM -- schedule shape,
     // growth, cancellability -- can be exercised without a multi-minute
     // wait. The mechanism itself is identical to production; only the
-    // unit changes. Kept well above QTest's own polling granularity
-    // (QTRY_COMPARE_WITH_TIMEOUT below) so the "is it currently pending"
-    // checks land inside the wait window rather than racing the next
-    // scheduled attempt.
+    // unit changes. Each step below is awaited on the retry signal itself,
+    // and the unit is long enough that the "is it currently pending" checks
+    // after the third attempt run well inside its 1000 ms wait rather than
+    // racing the next scheduled attempt.
     client.setReconnectBackoffUnitMs(200);
     QCOMPARE(client.reconnectBackoffUnitMs(), 200);
 
@@ -521,22 +521,32 @@ void TstSessionLinkLoss::autoReconnectUsesOwnedCancellableTimerWithExponentialBa
     QVERIFY(client.isConnectionActive());
     QVERIFY(!activity.isEmpty());
 
-    // Fix round 1, Minor 6: no isReconnectPending() check at THIS step.
-    // QTRY_COMPARE_WITH_TIMEOUT polls roughly every 50 ms against a 200 ms
-    // window here, so under load the timer can already have fired by the
-    // time control returns from a successful poll -- a flake, not a
-    // finding. The load-bearing pending-ness assertions below are safe:
-    // they land inside the much wider 1000 ms window reached after the
-    // third scheduled attempt.
-    QTRY_COMPARE_WITH_TIMEOUT(scheduled.count(), 1, 5000);
+    // R-R3-17: wait on each retry signal itself, not a poll. The steps
+    // below used QTRY_COMPARE_WITH_TIMEOUT, which polls in 50 ms qWait
+    // slices; under load a slice could run past the next scheduled attempt
+    // (200 ms, then 400 ms) so the count jumped past the value being waited
+    // for and never read it again. QSignalSpy::wait() leaves its event loop
+    // on the emission itself, before the just-armed retry timer can fire,
+    // so every count below is read exactly once and the assertions stay as
+    // strict as before (same fix as 9982cbed for the unpinned refusal
+    // test). No isReconnectPending() check at the first step: its timer is
+    // only 200 ms, while the load-bearing pending-ness checks below land in
+    // the 1000 ms window after the third scheduled attempt.
+    const auto waitForScheduled = [&scheduled](int count) {
+        while (scheduled.count() < count) {
+            if (!scheduled.wait(5000)) { return false; }
+        }
+        return scheduled.count() == count;
+    };
+    QVERIFY2(waitForScheduled(1), "the dial to the dead port never armed retry 1");
     QCOMPARE(scheduled.at(0).at(0).toInt(), 1);
     QCOMPARE(scheduled.at(0).at(1).toInt(), 200);   // backoff step 1 * unit 200
 
-    QTRY_COMPARE_WITH_TIMEOUT(scheduled.count(), 2, 5000);
+    QVERIFY2(waitForScheduled(2), "retry 1 never armed retry 2");
     QCOMPARE(scheduled.at(1).at(0).toInt(), 2);
     QCOMPARE(scheduled.at(1).at(1).toInt(), 400);   // backoff step 2 * unit 200
 
-    QTRY_COMPARE_WITH_TIMEOUT(scheduled.count(), 3, 5000);
+    QVERIFY2(waitForScheduled(3), "retry 2 never armed retry 3");
     QCOMPARE(scheduled.at(2).at(0).toInt(), 3);
     QCOMPARE(scheduled.at(2).at(1).toInt(), 1000);  // backoff step 5 * unit 200
 
@@ -565,7 +575,8 @@ void TstSessionLinkLoss::autoReconnectUsesOwnedCancellableTimerWithExponentialBa
     // on this same client, with no relaunch or direct-radio discovery.
     client.connectToStation(deadUrl, QStringLiteral("token"), placeholderFingerprint());
     QVERIFY(client.isConnectionActive());
-    QTRY_COMPARE_WITH_TIMEOUT(scheduled.count(), scheduledAfterCancel + 1, 5000);
+    QVERIFY2(waitForScheduled(scheduledAfterCancel + 1),
+             "the explicit Connect after cancel never armed a fresh retry");
     QCOMPARE(scheduled.last().at(0).toInt(), 1);
     QCOMPARE(scheduled.last().at(1).toInt(), 200);
     client.disconnectFromStation(QStringLiteral("operator disconnect"));
