@@ -895,6 +895,7 @@ set(CORE_SOURCES
     src/core/audio/CaptureHelper.cpp
     src/core/audio/CaptureAudioBus.cpp
     src/core/audio/CaptureSupervisor.cpp
+    src/core/audio/CaptureHelperLocator.cpp
     src/core/audio/CompositeTxMicRouter.cpp
     src/core/audio/PortAudioBus.cpp
     src/core/audio/QAudioSinkAdapter.cpp
@@ -1636,8 +1637,11 @@ if(APPLE)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:NereusSDRLib>" "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Frameworks/"
         COMMAND /bin/sh -c "/usr/libexec/PlistBuddy -c \"Set :NSMicrophoneUsageDescription '${_nereus_mic_desc}'\" \"$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Info.plist\" 2>/dev/null || /usr/libexec/PlistBuddy -c \"Add :NSMicrophoneUsageDescription string '${_nereus_mic_desc}'\" \"$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Info.plist\""
         COMMAND /bin/sh -c "/usr/libexec/PlistBuddy -c \"Set :NSLocalNetworkUsageDescription '${_nereus_lan_desc}'\" \"$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Info.plist\" 2>/dev/null || /usr/libexec/PlistBuddy -c \"Add :NSLocalNetworkUsageDescription string '${_nereus_lan_desc}'\" \"$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Info.plist\""
+        COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Helpers"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:nereus-audio-capture>" "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Helpers/"
+        COMMAND codesign --force --sign - --entitlements "${CMAKE_CURRENT_SOURCE_DIR}/packaging/macos/app-entitlements.plist" "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Helpers/nereus-audio-capture"
         COMMAND codesign --force --deep --sign - "$<TARGET_BUNDLE_DIR:NereusSDR>"
-        COMMENT "Stage private libraries, inject NSMicrophoneUsageDescription and NSLocalNetworkUsageDescription, and re-sign bundle"
+        COMMENT "Stage private libraries and the capture helper, inject NSMicrophoneUsageDescription and NSLocalNetworkUsageDescription, and re-sign bundle"
         VERBATIM
     )
 endif()
@@ -1674,6 +1678,18 @@ target_link_libraries(nereusd PRIVATE NereusCore)
 # --------------------------------------------------------------------------
 add_executable(nereus-audio-capture src/capture_main.cpp)
 target_link_libraries(nereus-audio-capture PRIVATE NereusCore)
+# The desktop app always carries the helper built from the same revision.
+add_dependencies(NereusSDR nereus-audio-capture)
+if(APPLE)
+    # The macOS POST_BUILD below copies this build-tree binary into
+    # NereusSDR.app/Contents/Helpers, so its rpath must find the bundle's
+    # private libraries at @executable_path/../Frameworks first, exactly
+    # like the NereusSDR executable. The build-tree entries CMake appends
+    # after it keep the unbundled binary runnable for tests. The install
+    # rpath is set with nereusd's in the Install section below.
+    set_target_properties(nereus-audio-capture PROPERTIES
+        BUILD_RPATH "@executable_path/../Frameworks")
+endif()
 # nereus_apply_warnings(nereus-audio-capture) is applied below, after the
 # function is defined (next to nereus-media-probe).
 
@@ -1951,6 +1967,14 @@ if(WIN32)
         COMMAND ${CMAKE_COMMAND} -E copy_if_different
             "$<TARGET_FILE:rade>" "$<TARGET_FILE_DIR:NereusSDR>"
         COMMENT "Copying rade.dll to build directory")
+    # R-R3-36: the microphone capture helper is found beside NereusSDR.exe
+    # (locateCaptureHelper). Both normally build into the same directory,
+    # in which case this copy is a no-op; it keeps the layout true for any
+    # generator that separates them.
+    add_custom_command(TARGET NereusSDR POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "$<TARGET_FILE:nereus-audio-capture>" "$<TARGET_FILE_DIR:NereusSDR>"
+        COMMENT "Copying nereus-audio-capture.exe next to NereusSDR.exe")
 endif()
 
 # --------------------------------------------------------------------------
@@ -2373,11 +2397,21 @@ if(APPLE)
     set_target_properties(nereusd PROPERTIES
         INSTALL_RPATH "@executable_path/../${CMAKE_INSTALL_LIBDIR}"
     )
+    # The capture helper: bundle Frameworks first (the Helpers copy), then
+    # the nereusd component's bin + lib layout.
+    set_target_properties(nereus-audio-capture PROPERTIES
+        INSTALL_RPATH "@executable_path/../Frameworks;@executable_path/../${CMAKE_INSTALL_LIBDIR}"
+    )
 elseif(UNIX)
     file(RELATIVE_PATH NEREUS_BIN_TO_LIB
          "${CMAKE_INSTALL_FULL_BINDIR}"
          "${CMAKE_INSTALL_FULL_LIBDIR}")
     set_target_properties(nereusd PROPERTIES
+        INSTALL_RPATH "$ORIGIN/${NEREUS_BIN_TO_LIB}"
+    )
+    # The capture helper installs beside nereusd (and beside NereusSDR in
+    # the default component) and links NereusCore from the same libdir.
+    set_target_properties(nereus-audio-capture PROPERTIES
         INSTALL_RPATH "$ORIGIN/${NEREUS_BIN_TO_LIB}"
     )
 endif()
@@ -2423,6 +2457,25 @@ install(TARGETS NereusCore
 # Install the daemon with:
 #   cmake --install build --component nereusd
 install(TARGETS nereusd
+    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    COMPONENT nereusd
+    EXCLUDE_FROM_ALL
+)
+
+# nereus-audio-capture -- the microphone helper (R-R3-36). locateCaptureHelper()
+# looks for it beside its parent executable, so it installs to the same
+# bindir as each parent:
+#   - default component (not macOS, where POST_BUILD places it inside
+#     NereusSDR.app/Contents/Helpers): beside NereusSDR, so the Linux
+#     AppImage's "cmake --install" into AppDir picks it up;
+#   - nereusd component: beside nereusd for a standalone daemon.
+# Two rules for one target are deliberate; each binds its own component.
+if(NOT APPLE)
+    install(TARGETS nereus-audio-capture
+        RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    )
+endif()
+install(TARGETS nereus-audio-capture
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     COMPONENT nereusd
     EXCLUDE_FROM_ALL

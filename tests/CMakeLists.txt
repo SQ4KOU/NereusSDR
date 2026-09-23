@@ -1395,6 +1395,11 @@ nereus_add_test(tst_capture_helper_process fakes/FakeCaptureChild.cpp)
 # hanging child. No real microphone is opened.
 nereus_add_test(tst_capture_supervisor fakes/FakeCaptureChild.cpp)
 
+# R-R3-36 Task 4: locateCaptureHelper() lookup order per platform against
+# temporary directory layouts (including none present), and the
+# supervisor's default program falling back to HelperMissing.
+nereus_add_test(tst_capture_helper_locator)
+
 # ── Phase 3O Sub-Phase 12 Task 12.2 Step 0: AudioEngine speakers live-reconfig ─
 # Verifies speakersConfigChanged / headphonesConfigChanged / txInputConfigChanged
 # / vaxConfigChanged signals, mutex safety in rxBlockReady (try_lock), and

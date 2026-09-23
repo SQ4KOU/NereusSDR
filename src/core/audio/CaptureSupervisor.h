@@ -33,7 +33,7 @@ class CaptureSupervisorWorker;
 // CaptureSupervisor::Options.  Declared at namespace scope only so that it
 // can be the constructor's default argument.
 struct CaptureSupervisorOptions {
-    QString program;            // empty: locateCaptureHelper() (Task 4); until then "not configured"
+    QString program;            // empty: locateCaptureHelper(); still empty means HelperMissing
     QStringList arguments;
     int helloTimeoutMs = 3000;
     int openTimeoutMs = 10000;

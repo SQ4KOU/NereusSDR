@@ -9,6 +9,7 @@
 
 #include "core/LogCategories.h"
 #include "core/audio/CaptureAudioBus.h"
+#include "core/audio/CaptureHelperLocator.h"
 #include "core/audio/CaptureProtocol.h"
 
 #include <QDeadlineTimer>
@@ -867,6 +868,11 @@ CaptureSupervisor::CaptureSupervisor(Options options, QObject* parent)
     , m_helperPid(std::make_shared<std::atomic<qint64>>(0))
 {
     qRegisterMetaType<NereusSDR::CaptureSupervisor::Status>();
+    if (m_options.program.isEmpty()) {
+        // The installed helper beside this executable.  An empty result
+        // leaves the program unset, which demand reports as HelperMissing.
+        m_options.program = locateCaptureHelper();
+    }
     m_thread.setObjectName(QStringLiteral("CaptureSupervisor"));
     m_worker = std::make_unique<CaptureSupervisorWorker>(
         m_options, m_reader, m_helperPid, [this](const Status& status) {
