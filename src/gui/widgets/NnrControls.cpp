@@ -1,13 +1,16 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 // NereusSDR-original WDSP 2.10 NNR controls.
 // 2026-09-23: R-R3-40 runtime step-back notice and "Try again" action, by
-// J.J. Boyd (KG4VCF), with Anthropic Claude Code assistance.
+// J.J. Boyd (KG4VCF), with Anthropic Claude Code assistance. Later the same
+// day: one "try again" per model pick; the notice colour from
+// StyleConstants.
 
 #include "NnrControls.h"
 
 #include "core/AppSettings.h"
 #include "core/ConnectionState.h"
 #include "core/WdspTypes.h"
+#include "gui/StyleConstants.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -116,7 +119,8 @@ void NnrControls::buildUi(Presentation presentation)
     m_limitNotice = new QLabel(m_limitRow);
     m_limitNotice->setObjectName(QStringLiteral("nnrLimitNotice"));
     m_limitNotice->setWordWrap(true);
-    m_limitNotice->setStyleSheet(QStringLiteral("QLabel { color: #ffd166; }"));
+    m_limitNotice->setStyleSheet(QStringLiteral("QLabel { color: %1; }")
+                                     .arg(QLatin1String(Style::kAmberText)));
     m_tryAgain = new QPushButton(tr("Try again"), m_limitRow);
     m_tryAgain->setObjectName(QStringLiteral("nnrTryAgainButton"));
     m_tryAgain->setToolTip(tr("Run the saved noise reduction choice again."));
@@ -287,13 +291,21 @@ void NnrControls::buildUi(Presentation presentation)
     connect(m_model, &QComboBox::currentIndexChanged, this, [this](int index) {
         if (m_slice && index >= 0) {
             m_slice->setNnrModelSlot(m_model->itemData(index).toInt());
+            // R-R3-40: a pick signals a changed index and then an
+            // activation. This pick has asked already; the activation that
+            // follows in the same interaction must not ask again (a remote
+            // GUI would send "try again" twice).
+            m_modelPickHandled = true;
+            QMetaObject::invokeMethod(this, [this] { m_modelPickHandled = false; },
+                                      Qt::QueuedConnection);
         }
         refresh();
     });
     // Choosing the model already shown changes no index; while a step-back
     // is in force it is still the operator asking for that model again.
     connect(m_model, &QComboBox::activated, this, [this](int index) {
-        if (m_slice && index >= 0 && m_slice->nnrLimit() != 0) {
+        const bool handled = std::exchange(m_modelPickHandled, false);
+        if (!handled && m_slice && index >= 0 && m_slice->nnrLimit() != 0) {
             m_slice->setNnrModelSlot(m_model->itemData(index).toInt());
         }
         refresh();

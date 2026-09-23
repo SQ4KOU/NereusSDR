@@ -26,6 +26,7 @@
 //                 step-back reason as its tooltip, while the Core holds the
 //                 receiver below the saved NNR choice. J.J. Boyd (KG4VCF),
 //                 with AI-assisted implementation via Anthropic Claude Code.
+//                 Later the same day: its colour from StyleConstants.
 // =================================================================
 
 //=================================================================
@@ -1456,7 +1457,8 @@ void VfoWidget::buildDspTab()
     m_nnrLimitIndicator->setObjectName(QStringLiteral("vfoNnrLimitIndicator"));
     m_nnrLimitIndicator->setFixedSize(6, 6);
     m_nnrLimitIndicator->setStyleSheet(
-        QStringLiteral("QLabel { background: #ffd166; border-radius: 3px; }"));
+        QStringLiteral("QLabel { background: %1; border-radius: 3px; }")
+            .arg(QLatin1String(NereusSDR::Style::kAmberText)));
     m_nnrLimitIndicator->setAttribute(Qt::WA_TransparentForMouseEvents);
     m_nnrLimitIndicator->setVisible(false);
     dspGrid->addWidget(m_nnrLimitIndicator, 1, 3, Qt::AlignTop | Qt::AlignRight);

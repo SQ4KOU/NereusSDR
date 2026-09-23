@@ -58,6 +58,8 @@ private:
     QWidget* m_limitRow{nullptr};
     QLabel* m_limitNotice{nullptr};
     QPushButton* m_tryAgain{nullptr};
+    // R-R3-40: set while one model pick's signals are being handled.
+    bool m_modelPickHandled{false};
     QDoubleSpinBox* m_maskFloor{nullptr};
     QSlider* m_maskFloorSlider{nullptr};
     QComboBox* m_position{nullptr};

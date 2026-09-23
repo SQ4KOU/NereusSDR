@@ -1131,8 +1131,9 @@ bool RxChannel::setNnrDiagnostics(int testMode, int outputMode, QString* reason)
 
 bool RxChannel::requestNnrLimit(int limit)
 {
-    if (!NnrAdapter::requestLimit(m_channelId, limit))
+    if (!NnrAdapter::requestLimit(m_channelId, limit)) {
         return false;
+    }
     m_nnrLimit.store(limit, std::memory_order_release);
     return true;
 }
@@ -1148,8 +1149,9 @@ bool RxChannel::setActiveNr(NrSlot slot)
         // and re-applying it ran Standard while the slice showed Premium.
         // The owner (RadioModel) applies the saved choice before this call.
         const auto state = nnrDiagnostics();
-        if (!state.ready || !state.rateSupported)
+        if (!state.ready || !state.rateSupported) {
             return false;
+        }
     }
 
     // Disable NNR before changing any retained NR run flag. Readiness and

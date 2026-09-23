@@ -79,6 +79,7 @@ private slots:
     void compactAdvancedExpansionPersistsAsGuiPreference();
     void stepBackNoticeExplainsAndTryAgainAsksForTheSavedChoice();
     void stepBackIndicatorsOnTheVfoFlagAndDashboard();
+    void choosingAnotherModelAsksToTryAgainOnce();
     void remoteWindowsNameTheCoreComputer();
 };
 
@@ -170,6 +171,30 @@ void TestNnrControls::stepBackIndicatorsOnTheVfoFlagAndDashboard()
     QVERIFY(!indicator->isHidden());
     slice.setNnrLimit(static_cast<int>(NnrLimit::None));
     QVERIFY(!indicator->isHidden());
+}
+
+// R-R3-40: picking a different model while limited is one request to try
+// again, though the combo signals both a changed index and an activation.
+// With no Core to clear the limit at once (a remote GUI waits for the Core)
+// the second signal must not send a second request.
+void TestNnrControls::choosingAnotherModelAsksToTryAgainOnce()
+{
+    SliceModel slice(12);
+    slice.setNnrModelSlot(1);
+    NnrControls controls(nullptr, &slice, NnrControls::Presentation::Compact);
+    auto* model = control<QComboBox>(controls, "nnrModelCombo");
+    slice.setNnrLimit(static_cast<int>(NnrLimit::StandardOnly));
+    QSignalSpy retry(&slice, &SliceModel::nnrRetryRequested);
+
+    const int standard = model->findData(0);
+    model->setCurrentIndex(standard);   // what the popup does for a pick
+    emit model->activated(standard);
+    QCOMPARE(retry.count(), 1);
+    QCOMPARE(slice.nnrModelSlot(), 0);
+
+    QCoreApplication::processEvents();
+    emit model->activated(standard);    // the same model, a later pick
+    QCOMPARE(retry.count(), 2);
 }
 
 // R-R3-40: in a remote window (the limit arrived from the Core through the

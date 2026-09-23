@@ -131,8 +131,9 @@ bool NnrAdapter::setRunning(int channelId, bool enabled, QString* reason)
 
 bool NnrAdapter::requestLimit(int channelId, int limit)
 {
-    if (!isValidNnrLimit(limit))
+    if (!isValidNnrLimit(limit)) {
         return false;
+    }
 #ifdef HAVE_WDSP
     RequestRXANNRLimit(channelId, limit);
 #else
