@@ -37,7 +37,8 @@
 //                 NereusSDR-original; no Thetis logic.
 //   2026-09-22 : R-R3-36 fix wave by J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code. Tune and two-tone keying read at
-//                 check time (m_tuneKeyInFlight, m_generatedKeyLive).
+//                 check time (m_tuneKeyInFlight, m_generatedKeyLive);
+//                 admission also requires an open capture reader.
 //                 NereusSDR-original; no Thetis logic.
 //   2026-05-03 — Phase 4 Agent 4A of issue #167 (PA calibration safety
 //                 hotfix — K2GX field report).  Drive-slider lambda
@@ -10919,8 +10920,12 @@ bool RadioModel::generatedKeyInFlight() const
 
 bool RadioModel::pcCaptureReady() const
 {
+    // R-R3-36: the status copy is updated by a queued call, so it can say
+    // Ready for one event-loop turn after the capture thread has retired
+    // the reader. The reader's own open flag closes first.
     return m_audioEngine != nullptr
-        && m_audioEngine->captureStatus().state == CaptureSupervisor::Status::State::Ready;
+        && m_audioEngine->captureStatus().state == CaptureSupervisor::Status::State::Ready
+        && m_audioEngine->isCaptureReaderOpen();
 }
 
 // R-R3-36: losing the PC microphone while it is keyed releases MOX the

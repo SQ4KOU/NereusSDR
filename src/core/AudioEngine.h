@@ -21,6 +21,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-22 : R-R3-36 fix wave by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. isCaptureReaderOpen() for the MOX
+//                 admission check.
 //   2026-09-22 : R-R3-36 Task 5 by J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code. The engine owns a CaptureSupervisor
 //                 and reads the PC microphone through its stable reader;
@@ -333,6 +336,10 @@ public:
     // lease starts capture, releasing the last stops it); retryCapture()
     // starts a new attempt after a failure. Owner (GUI) thread only.
     CaptureSupervisor::Status captureStatus() const;
+    // True while the capture reader is open (the capture thread's own view:
+    // it opens before Ready is published and closes before a restart or a
+    // failure is). The MOX admission check requires it as well as Ready.
+    bool isCaptureReaderOpen() const;
     CaptureSupervisor::Lease acquireCaptureDemand(CaptureSupervisor::Demand demand);
     void retryCapture();
 

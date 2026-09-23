@@ -128,6 +128,9 @@ private:
     void releaseLease(quint64 id);
     bool hasLease(quint64 id) const;
     void onWorkerStatus(const Status& status);
+    // Marks the owner's status copy non-Ready before a restart is queued,
+    // so no caller sees the old Ready while the capture thread retires it.
+    void markRestarting(const QString* configuredDevice);
 
     Options m_options;
     std::shared_ptr<CaptureAudioBus> m_reader;
@@ -141,6 +144,9 @@ private:
 
     mutable QMutex m_statusMutex;
     Status m_status;
+    // A Ready for a generation below this was queued before a restart and
+    // is stale; it is dropped. Owner thread only.
+    quint32 m_readyGenerationFloor = 0;
 };
 
 } // namespace NereusSDR

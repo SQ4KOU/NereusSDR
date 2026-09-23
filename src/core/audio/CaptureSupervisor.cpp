@@ -936,6 +936,7 @@ void CaptureSupervisor::configure(const AudioDeviceConfig& config)
         return;
     }
     m_config = config;
+    markRestarting(&config.deviceName);
     CaptureSupervisorWorker* worker = m_worker.get();
     QMetaObject::invokeMethod(worker, [worker, config]() { worker->configure(config); },
                               Qt::QueuedConnection);
@@ -946,6 +947,7 @@ void CaptureSupervisor::retry()
     if (m_shutDown) {
         return;
     }
+    markRestarting(nullptr);
     CaptureSupervisorWorker* worker = m_worker.get();
     QMetaObject::invokeMethod(worker, [worker]() { worker->retry(); }, Qt::QueuedConnection);
 }
@@ -966,9 +968,44 @@ qint64 CaptureSupervisor::helperProcessId() const
     return m_helperPid->load();
 }
 
+// R-R3-36: with demand held, configure() and retry() make the capture
+// thread retire the current generation and open a new one. The owner's
+// copy would say Ready until that thread's next status arrives, so it is
+// marked Opening (for the next generation) here, before the restart is
+// queued, and published. A Ready of the old generation still in the queue
+// is dropped.
+void CaptureSupervisor::markRestarting(const QString* configuredDevice)
+{
+    if (!hasDemand()) {
+        return;
+    }
+    Status marked;
+    {
+        QMutexLocker lock(&m_statusMutex);
+        if (m_status.state != Status::State::Ready) {
+            return;
+        }
+        // The status is the next generation's: the capture thread's restart
+        // opens generation + 1 and publishes this same Opening.
+        m_readyGenerationFloor = m_status.generation + 1;
+        m_status.generation = m_readyGenerationFloor;
+        m_status.state = Status::State::Opening;
+        m_status.reason = Status::Reason::None;
+        m_status.actualDevice.clear();
+        if (configuredDevice != nullptr) {
+            m_status.configuredDevice = *configuredDevice;
+        }
+        marked = m_status;
+    }
+    emit statusChanged(marked);
+}
+
 void CaptureSupervisor::onWorkerStatus(const Status& status)
 {
     if (m_shutDown) {
+        return;
+    }
+    if (status.state == Status::State::Ready && status.generation < m_readyGenerationFloor) {
         return;
     }
     {

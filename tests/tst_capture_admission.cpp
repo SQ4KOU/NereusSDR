@@ -17,7 +17,9 @@
 
 #include <QtTest/QtTest>
 
+#include <QElapsedTimer>
 #include <QRegularExpression>
+#include <QThread>
 #include <QSignalSpy>
 
 #include <cstring>
@@ -646,6 +648,63 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!rig.mox()->isMox(), 2000);
         QTest::qWait(250);
         twoTone->setTxChannel(nullptr);
+    }
+
+    // The owner's status copy lags the capture thread by one queued call.
+    // A press right after a retry, a configuration change or a helper
+    // failure must not see the old Ready: it is refused, and a press once
+    // capture is Ready again keys.
+    void pressRightAfterRestartIsRefused_data()
+    {
+        QTest::addColumn<QString>("restart");
+        QTest::newRow("retry") << "retry";
+        QTest::newRow("configure") << "configure";
+        QTest::newRow("helper-failure") << "helper-failure";
+    }
+    void pressRightAfterRestartIsRefused()
+    {
+        QFETCH(QString, restart);
+        Rig rig(QStringLiteral("ready"));
+        QVERIFY(reachCaptureState(rig, QStringLiteral("ready")));
+        QSignalSpy rejected(rig.mox(), &MoxController::moxRejected);
+
+        if (restart == QLatin1String("retry")) {
+            rig.engine()->retryCapture();
+        } else if (restart == QLatin1String("configure")) {
+            AudioDeviceConfig cfg = rig.engine()->txInputConfig();
+            cfg.bufferSamples = cfg.bufferSamples == 1024 ? 2048 : 1024;
+            rig.engine()->setTxInputConfig(cfg);
+        } else {
+            // Wait, without running this thread's event loop, until the
+            // capture thread has retired the reader; the owner's status
+            // copy still says Ready.
+            QVERIFY(rig.engine()->isCaptureReaderOpen());
+            killProcess(rig.engine()->captureHelperProcessIdForTest());
+            QElapsedTimer waited;
+            waited.start();
+            while (rig.engine()->isCaptureReaderOpen() && waited.elapsed() < 5000) {
+                QThread::msleep(5);
+            }
+            QVERIFY(!rig.engine()->isCaptureReaderOpen());
+            QCOMPARE(rig.engine()->captureStatus().state, State::Ready);
+        }
+        // No event-loop turn between the restart and the press.
+        rig.mox()->setMox(true);
+        QCOMPARE(rejected.count(), 1);
+        QCOMPARE(rejected.at(0).at(0).toString(), kRefusal);
+        QVERIFY(!rig.mox()->isMox());
+        QCOMPARE(rig.conn.moxOnCalls, 0);
+
+        if (restart == QLatin1String("helper-failure")) {
+            QTRY_COMPARE_WITH_TIMEOUT(rig.engine()->captureStatus().state, State::Failed, 5000);
+            rig.engine()->retryCapture();
+        }
+        QTRY_COMPARE_WITH_TIMEOUT(rig.engine()->captureStatus().state, State::Ready, 8000);
+        rig.mox()->setMox(true);
+        QTest::qWait(50);
+        QVERIFY(rig.mox()->isMox());
+        QCOMPARE(rejected.count(), 1);
+        QCOMPARE(rig.conn.moxOnCalls, 1);
     }
 
     // PC-mic keying with capture Ready is admitted, and unkey is never

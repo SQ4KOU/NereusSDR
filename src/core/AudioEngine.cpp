@@ -19,6 +19,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-22 : R-R3-36 fix wave by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. isCaptureReaderOpen() for the MOX
+//                 admission check.
 //   2026-09-22 : R-R3-36 Task 5 by J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code. ensureTxInputOpen() removed: start()
 //                 opens no input. The engine owns a CaptureSupervisor built
@@ -891,6 +894,11 @@ AudioDeviceConfig AudioEngine::txInputConfig() const
 CaptureSupervisor::Status AudioEngine::captureStatus() const
 {
     return m_captureSupervisor ? m_captureSupervisor->status() : CaptureSupervisor::Status{};
+}
+
+bool AudioEngine::isCaptureReaderOpen() const
+{
+    return m_captureSupervisor != nullptr && m_captureSupervisor->reader()->isOpen();
 }
 
 CaptureSupervisor::Lease AudioEngine::acquireCaptureDemand(CaptureSupervisor::Demand demand)
