@@ -116,3 +116,58 @@ full-suite check for that task.
   `NATIVE_WINDOW` keyword; prove the listing counts and the toggle.
 - [ ] **Step 2:** Run the full off-screen trial, classify every failure as
   above, apply only justified opt-outs, update the guide; commit.
+
+## Task 2: Fix what the off-screen trial exposed
+
+Added after Task 1's full trial (745 of 748 passed). The suite must be green
+off-screen before the batch's final gate.
+
+**Requirements:** R-R3-09 (float/dock must not leak), test infrastructure.
+
+**Files:**
+- Modify: `src/gui/PanadapterStack.cpp` (release a retiring floating window
+  when rendering fails as well as after a submitted frame)
+- Modify: `tests/tst_p2_established_silence.cpp` (stop checks at lines 188 and
+  349 wait like the file's other stop checks at 110, 213 and 299)
+- Modify (cause first): `tests/tst_remote_audio_clock.cpp` and/or its
+  registration in `tests/CMakeLists.txt`
+- Test: `tests/tst_panadapter_stack_layouts.cpp` (only if a case must observe
+  the release directly)
+
+**Interfaces:**
+- Consumes: Task 1's off-screen default.
+- Produces: no new API.
+
+**Acceptance:**
+- `PanadapterStack.cpp:613` today releases a retiring floating window only on
+  the spectrum widget's `frameSubmitted`; without a GPU renderer Qt emits
+  `renderFailed` instead and the hidden window stays alive until the pan's
+  spectrum widget is destroyed. After the fix, a float/dock cycle without a GPU
+  renderer leaves no retiring window alive, and the GPU path is unchanged.
+  `tst_panadapter_stack_layouts` passes 30/30 off-screen; one native rerun of
+  just that test also passes 30/30.
+- `tst_p2_established_silence` no longer reads the fake radio's stop count
+  before the stop datagram can arrive; it passes with
+  `--repeat until-fail:10` while the machine is busy (run it alongside the full
+  trial or another heavy job and record the load).
+- `tst_remote_audio_clock`: find out why it needs about 115 s of CPU alone.
+  Keep everything it proves. Either make it cheaper with a written argument
+  that coverage is unchanged, or give its registration a cost that CTest
+  respects (for example `PROCESSORS` or `RUN_SERIAL`) and a `TIMEOUT` that fits
+  its measured duration under load, with the reason in a comment. It passes
+  in a full `-j6` run.
+- One full off-screen run of the suite passes (`ctest -j6`), with load
+  averages before and after.
+
+**Verification:** a product defect on the no-GPU path plus two test
+reliability fixes; the full run is the gate for this task.
+```sh
+cmake --build /Users/j.j.boyd/.codex/worktrees/nereus-r2-integration/NereusSDR/build-integration --target nereusd all_tests -j6
+ctest --test-dir /Users/j.j.boyd/.codex/worktrees/nereus-r2-integration/NereusSDR/build-integration -R '^(tst_panadapter_stack_layouts|tst_p2_established_silence|tst_remote_audio_clock)$' --no-tests=error --output-on-failure
+ctest --test-dir /Users/j.j.boyd/.codex/worktrees/nereus-r2-integration/NereusSDR/build-integration --output-on-failure -j6
+```
+
+**Execution note (advisory):** opus.
+
+- [ ] **Step 1:** Fix the window release and the two tests; run the three.
+- [ ] **Step 2:** Full off-screen run; commit.
