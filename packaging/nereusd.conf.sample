@@ -23,10 +23,12 @@
 # Default: (unset -- first discovered)
 radio_mac =
 
-# Hardware I/Q sample rate in Hz. Must be a rate the connected board
-# actually supports; see docs/protocols/openhpsdr-protocol2.md.
-# Default: 192000
-sample_rate_hz = 192000
+# Hardware I/Q sample rate in Hz. Leave it unset and nereusd comes back at
+# the rate last chosen for this radio (192000 until one is chosen). Setting
+# it forces that rate on every start, over the operator's choice. It must
+# be a rate the connected board actually supports; see
+# docs/protocols/openhpsdr-protocol2.md.
+# sample_rate_hz = <rate in Hz, e.g. 192000>
 
 # Number of receive slices to bring up. Must be at least 1; further
 # clamped to the connected board's own maximum (2 to 5 depending on SKU)

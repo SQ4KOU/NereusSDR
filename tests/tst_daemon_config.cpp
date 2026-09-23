@@ -30,9 +30,9 @@
 // marker); the slots here stay focused on resolveDaemonProfileArgument()'s
 // own argument-resolution contract.
 //
-// 2026-09-23: listenAddressFor() pins remote_bind "::" as dual stack, by
-// J.J. Boyd (KG4VCF), with AI-assisted implementation via Anthropic Claude
-// Code.
+// 2026-09-23: listenAddressFor() pins remote_bind "::" as dual stack, and
+// the shipped sample may no longer pin sample_rate_hz, by J.J. Boyd
+// (KG4VCF), with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -443,6 +443,22 @@ private slots:
         c.remotePort = -1;
         QVERIFY(!c.validate(&err));
         QVERIFY(!err.isEmpty());
+    }
+
+    // A Core installed from the shipped sample must come back at the rate
+    // the operator last chose for the radio. An active sample_rate_hz line
+    // is written over that saved rate at every start
+    // (DaemonApp::applyConfigToSettings), so the sample may only document it.
+    void shippedSampleLeavesTheSampleRateToTheOperator()
+    {
+        QString err;
+        const DaemonConfig c = DaemonConfig::fromFile(
+            QStringLiteral(NEREUS_SOURCE_DIR "/packaging/nereusd.conf.sample"), &err);
+        QVERIFY2(err.isEmpty(), qPrintable(err));
+        QVERIFY2(!c.sampleRateExplicit,
+                 "packaging/nereusd.conf.sample sets sample_rate_hz, which pins that "
+                 "rate over the operator's saved choice on every start");
+        QVERIFY(c.validate(&err));
     }
 
     // "::" is every address of both families; Qt alone would make it
