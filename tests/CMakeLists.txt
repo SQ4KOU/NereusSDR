@@ -1377,6 +1377,10 @@ target_compile_definitions(tst_rxapplet_att_range PRIVATE NEREUS_BUILD_TESTS)
 # combinations, and prefix independence (Speakers vs Headphones).
 nereus_add_test(tst_audio_device_config_roundtrip)
 
+# R-R3-36 Task 1: capture helper record protocol. Framing, bounded
+# incremental reader, PCM and JSON codecs, malformed-input rejections.
+nereus_add_test(tst_capture_protocol)
+
 # ── Phase 3O Sub-Phase 12 Task 12.2 Step 0: AudioEngine speakers live-reconfig ─
 # Verifies speakersConfigChanged / headphonesConfigChanged / txInputConfigChanged
 # / vaxConfigChanged signals, mutex safety in rxBlockReady (try_lock), and

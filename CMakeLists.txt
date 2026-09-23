@@ -891,6 +891,7 @@ set(CORE_SOURCES
     src/core/audio/RadeTxFilters.h
     src/core/audio/RadioMicSource.cpp
     src/core/audio/VaxTxMicSource.cpp
+    src/core/audio/CaptureProtocol.cpp
     src/core/audio/CompositeTxMicRouter.cpp
     src/core/audio/PortAudioBus.cpp
     src/core/audio/QAudioSinkAdapter.cpp
