@@ -571,7 +571,12 @@ python3 scripts/audit-wdsp-headers.py && python3 scripts/verify-thetis-headers.p
 hardware on the Rock by the controller (pending): `ps -L -o
 tid,comm,psr,cls,rtprio,ni,pcpu -p $(pidof nereusd)` shows the RX worker fixed
 on cpu 4 at nice -10, spectrum and networking on 0-3, and flat
-`se.nr_migrations`.
+`se.nr_migrations` while receiving. Expected moves (final review Minor 3,
+recorded rather than changed; `transmitKeyMovesOnTheRk3588s`): each key of
+one slice moves the RX0 worker from 4 to 0-3, the DSP thread from 5 to 4,
+the TX worker from 0-3 to 5 and the TX pump from 0-3 to 6; each unkey
+reverses them. No other thread moves. With `thread_placement = off` nothing
+moves, and the busy signal processing threads still show nice -10.
 ```sh
 cmake --build /Users/j.j.boyd/.codex/worktrees/nereus-r2-integration/NereusSDR/build-integration --target tst_thread_placement tst_wdsp_thread_hook tst_realtime_audio_priority nereusd -j6
 ctest --test-dir /Users/j.j.boyd/.codex/worktrees/nereus-r2-integration/NereusSDR/build-integration -R '^(tst_thread_placement|tst_wdsp_thread_hook|tst_realtime_audio_priority)$' --no-tests=error --output-on-failure
