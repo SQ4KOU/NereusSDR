@@ -19,6 +19,10 @@
 //                 pollSMeter() into a core-side, RadioModel-owned QTimer.
 //                 J.J. Boyd (KG4VCF), with AI-assisted transformation via
 //                 Anthropic Claude Code.
+//   2026-09-23 -- R-R3-13: link-down and no-channel slices get the -400
+//                 dBm no-reading value on all three readings. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -64,6 +68,7 @@ mw0lge@grange-lane.co.uk
 #include "core/meters/SliceMeterPump.h"
 
 #include "core/AppSettings.h"
+#include "core/ConnectionState.h"
 #include "core/RadioStatus.h"
 #include "core/RxChannel.h"
 #include "core/WdspEngine.h"
@@ -121,9 +126,35 @@ void SliceMeterPump::stop()
     m_timer.stop();
 }
 
+namespace {
+
+// R-R3-13: all three readings of one slice go to the no-reading value.
+void clearSliceReadings(SliceModel* slice)
+{
+    slice->setSignalStrengthDbm(SliceMeterPump::kNoReadingDbm);
+    slice->setSignalPeakDbm(SliceMeterPump::kNoReadingDbm);
+    slice->setSignalAverageDbm(SliceMeterPump::kNoReadingDbm);
+}
+
+} // namespace
+
 void SliceMeterPump::poll()
 {
     if (!m_radioModel) { return; }
+
+    // NereusSDR (R-R3-13): only a Connected link carries receive readings.
+    // A local LinkLost keeps the RX channels alive, so the channel alone
+    // cannot say whether a reading exists; without this the flag would
+    // hold a frozen or floor value. Same rule MainWindow applies to the
+    // container meters and the S-meter header (setLocalRxReadingAvailable
+    // fed from connectionStateChanged). Checked before the TX gate so a
+    // link that drops while keyed still clears the flags.
+    if (m_radioModel->connectionState() != ConnectionState::Connected) {
+        for (SliceModel* slice : m_radioModel->slices()) {
+            if (slice) { clearSliceReadings(slice); }
+        }
+        return;
+    }
 
     // MOX gate. RadioStatus::isTransmitting() covers MOX asserted by ANY
     // PTT source, unlike MeterPoller's own m_inTx, which is fed only by
@@ -177,11 +208,10 @@ void SliceMeterPump::poll()
         // setSliceChannels() relied on for the mechanism this replaces.
         RxChannel* ch = engine->rxChannel(slice->sliceIndex());
         if (!ch) {
-            // No channel yet (not connected, or this slice has not been
-            // bound to hardware) -- leave all readings at whatever they
-            // already hold (their constructed -140.0 defaults for a slice
-            // that has never had a channel at all) rather than writing a
-            // sentinel of this pump's own invention.
+            // No channel (this slice has not been bound to hardware): there
+            // is no reading, so show none (R-R3-13) rather than leaving a
+            // stale value or the -140.0 construction default on the flag.
+            clearSliceReadings(slice);
             continue;
         }
 

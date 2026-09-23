@@ -22,8 +22,10 @@
 //   1. SliceModel::signalStrengthDbm's shape: no WRITE, has a NOTIFY,
 //      defaults to -140.0, emits once per distinct value (bare SliceModel,
 //      no RadioModel needed).
-//   2. poll() against an UNCONNECTED RadioModel: no WDSP channel means the
-//      value stays at its constructed default; TX (RadioStatus::
+//   2. poll() with no reading to give: a link that is not Connected, or a
+//      slice with no WDSP channel, gets the -400 dBm no-reading value on
+//      all three readings (R-R3-13), including LinkLost with a live
+//      channel and its recovery to Connected; TX (RadioStatus::
 //      isTransmitting) means poll() touches nothing at all, even a slice
 //      that already holds a real reading.
 //   3. poll() against a REAL connected RxChannel (fakes/ConnectableRadioModel),
@@ -43,6 +45,10 @@
 //   2026-08-06 -- New test file for remote-daemon R2 Task 12. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-23 -- R-R3-13: no-reading cases for a link that is not
+//                 Connected and a slice with no channel. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -51,6 +57,7 @@
 
 #include <memory>
 
+#include "core/ConnectionState.h"
 #include "core/RadioStatus.h"
 #include "core/RxChannel.h"
 #include "core/WdspEngine.h"
@@ -147,12 +154,17 @@ private slots:
 
     // ── Group 2: poll() against an unconnected RadioModel ───────────────────
 
-    // Step 1: "a slice with no WDSP channel reads -140.0." A bare, never-
-    // connected Role::Local RadioModel has a real SliceMeterPump (role
-    // gate, group 4 below) but wdspEngine()->rxChannel(id) is null for
-    // every id -- poll() must skip such a slice and leave it at its
-    // constructed default rather than writing a sentinel of its own.
-    void pollLeavesSliceAtDefaultWhenNoWdspChannelExists()
+    // R-R3-13 (decided behaviour change, 2026-09-23): this test used to
+    // assert that poll() LEFT a channel-less slice at its constructed
+    // -140.0 default. That default is a floor number the flag bar draws as
+    // "-140 dBm", a reading that does not exist. The plan settles that a
+    // local flag with no reading shows "-- dBm", so poll() now writes the
+    // -400 dBm no-reading value (SliceMeterPump::kNoReadingDbm) to all
+    // three readings. A bare, never-connected Role::Local model is not
+    // Connected, so this exercises the link-down gate; the Connected
+    // no-channel branch has its own case below. Not a weakened test: the
+    // exact value is still pinned, only the decided value changed.
+    void pollWritesNoReadingWhenNotConnectedAndNoWdspChannelExists()
     {
         RadioModel model{RadioModel::Role::Local};
         SliceMeterPump* pump = model.sliceMeterPump();
@@ -163,12 +175,100 @@ private slots:
         SliceModel* slice = model.sliceById(sliceId);
         QVERIFY(slice != nullptr);
         QVERIFY(model.wdspEngine()->rxChannel(slice->sliceIndex()) == nullptr);
+        QVERIFY(model.connectionState() != ConnectionState::Connected);
 
         pump->poll();
 
-        QCOMPARE(slice->signalStrengthDbm(), -140.0);
-        QCOMPARE(slice->signalPeakDbm(), -140.0);
-        QCOMPARE(slice->signalAverageDbm(), -140.0);
+        QCOMPARE(slice->signalStrengthDbm(), SliceMeterPump::kNoReadingDbm);
+        QCOMPARE(slice->signalPeakDbm(), SliceMeterPump::kNoReadingDbm);
+        QCOMPARE(slice->signalAverageDbm(), SliceMeterPump::kNoReadingDbm);
+        QCOMPARE(SliceMeterPump::kNoReadingDbm, -400.0);
+    }
+
+    // R-R3-13: the no-channel branch on its own. The model reports
+    // Connected (test seam) but the slice still has no WDSP channel, so the
+    // link gate passes and the per-slice branch must write the no-reading
+    // value itself rather than leave a seeded stale reading in place.
+    void pollWritesNoReadingForAConnectedSliceWithNoWdspChannel()
+    {
+        RadioModel model{RadioModel::Role::Local};
+        SliceMeterPump* pump = model.sliceMeterPump();
+        QVERIFY(pump != nullptr);
+
+        const int sliceId = model.addSlice();
+        SliceModel* slice = model.sliceById(sliceId);
+        QVERIFY(slice != nullptr);
+        QVERIFY(model.wdspEngine()->rxChannel(slice->sliceIndex()) == nullptr);
+
+        slice->setSignalStrengthDbm(-73.0);
+        slice->setSignalPeakDbm(-70.0);
+        slice->setSignalAverageDbm(-75.0);
+
+        model.setConnectionStateForTest(ConnectionState::Connected);
+        pump->poll();
+
+        QCOMPARE(slice->signalStrengthDbm(), SliceMeterPump::kNoReadingDbm);
+        QCOMPARE(slice->signalPeakDbm(), SliceMeterPump::kNoReadingDbm);
+        QCOMPARE(slice->signalAverageDbm(), SliceMeterPump::kNoReadingDbm);
+    }
+
+    // R-R3-13: LinkLost with a live channel. A local LinkLost keeps the
+    // RX channels alive, so without the link gate poll() would keep
+    // publishing the channel's frozen (or floor) meter. The flag must read
+    // no reading while the link is down, even while transmitting (the link
+    // gate sits before the TX gate), and live readings must come back once
+    // the link recovers to Connected.
+    void pollWritesNoReadingOnLinkLostWithLiveChannelAndRecovers()
+    {
+        std::unique_ptr<ConnectableRadioModel> harness = ConnectableRadioModel::create();
+        QVERIFY(harness != nullptr);
+        RadioModel& model = harness->model();
+        SliceMeterPump* pump = model.sliceMeterPump();
+        QVERIFY(pump != nullptr);
+
+        SliceModel* slice = model.sliceById(0);
+        QVERIFY(slice != nullptr);
+        RxChannel* ch = model.wdspEngine()->rxChannel(slice->sliceIndex());
+        QVERIFY(ch != nullptr);
+
+        // Connected first: a real reading lands.
+        pump->poll();
+        QVERIFY(slice->signalAverageDbm() > SliceMeterPump::kNoReadingDbm);
+
+        model.setConnectionStateForTest(ConnectionState::LinkLost);
+        // The channel survives LinkLost; that is exactly why the gate is
+        // needed.
+        QVERIFY(model.wdspEngine()->rxChannel(slice->sliceIndex()) != nullptr);
+        pump->poll();
+
+        QCOMPARE(slice->signalStrengthDbm(), SliceMeterPump::kNoReadingDbm);
+        QCOMPARE(slice->signalPeakDbm(), SliceMeterPump::kNoReadingDbm);
+        QCOMPARE(slice->signalAverageDbm(), SliceMeterPump::kNoReadingDbm);
+
+        // Link down while keyed still clears: re-seed, key, poll.
+        slice->setSignalStrengthDbm(-73.0);
+        slice->setSignalPeakDbm(-70.0);
+        slice->setSignalAverageDbm(-75.0);
+        model.radioStatus().setTransmitting(true);
+        pump->poll();
+        QCOMPARE(slice->signalStrengthDbm(), SliceMeterPump::kNoReadingDbm);
+        QCOMPARE(slice->signalPeakDbm(), SliceMeterPump::kNoReadingDbm);
+        QCOMPARE(slice->signalAverageDbm(), SliceMeterPump::kNoReadingDbm);
+        model.radioStatus().setTransmitting(false);
+
+        // Recovery: Connected again publishes the live channel's readings.
+        model.setConnectionStateForTest(ConnectionState::Connected);
+        pump->poll();
+
+        const double average =
+            ch->getMeter(RxMeterType::SignalAvg) + model.rxMeterOffsetDb();
+        QCOMPARE(slice->signalStrengthDbm(), average);
+        QCOMPARE(slice->signalPeakDbm(),
+                 ch->getMeter(RxMeterType::SignalPeak) + model.rxMeterOffsetDb());
+        QCOMPARE(slice->signalAverageDbm(), average);
+        QVERIFY(slice->signalAverageDbm() > SliceMeterPump::kNoReadingDbm);
+
+        harness.reset();
     }
 
     // Step 4: "the pump stops while transmitting." RadioStatus::
@@ -178,9 +278,10 @@ private slots:
     //
     // Fix round 1 (reviewer finding): the original version of this test
     // used an UNCONNECTED model, where wdspEngine()->rxChannel(id) is
-    // already null (see pollLeavesSliceAtDefaultWhenNoWdspChannelExists()
-    // above). poll()'s no-channel branch is a `continue` that leaves the
-    // slice untouched regardless of the TX gate, so that version passed
+    // already null. At the time poll()'s no-channel branch was a
+    // `continue` that left the slice untouched regardless of the TX gate
+    // (since R-R3-13 an unconnected model gets the no-reading value
+    // instead; see the cases above), so that version passed
     // whether or not isTransmitting() was ever checked -- deleting the
     // gate, or moving it below the per-slice loop, would not have failed
     // it. This version uses a REAL connected RxChannel

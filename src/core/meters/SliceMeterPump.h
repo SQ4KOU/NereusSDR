@@ -59,6 +59,12 @@
 //                 pollSMeter() into a core-side, RadioModel-owned QTimer.
 //                 J.J. Boyd (KG4VCF), with AI-assisted transformation via
 //                 Anthropic Claude Code.
+//   2026-09-23 -- R-R3-13: poll() writes the -400 dBm no-reading value
+//                 (kNoReadingDbm) to every slice while the radio link is
+//                 not Connected, and to a slice with no WDSP channel, so
+//                 the flag shows "-- dBm" instead of a frozen or floor
+//                 value. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -121,6 +127,12 @@ public:
     // SignalPeak, the same collapse MeterPoller::pollSMeter()'s switch
     // performs; there is nothing separate for this pump to do with them.
     enum class MeterSource { SignalPeak, SignalAverage, MaxBin };
+
+    // No reading (R-R3-13, NereusSDR-native). The same -400 dBm value the
+    // slice flag's level bar, the analog S-meter and the meter items treat
+    // as "nothing to show" (they display "--"). Defined here because
+    // src/core/ may not include the GUI headers that carry their copies.
+    static constexpr double kNoReadingDbm = -400.0;
 
     explicit SliceMeterPump(RadioModel* radioModel, QObject* parent = nullptr);
     ~SliceMeterPump() override;
