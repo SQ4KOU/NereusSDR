@@ -21,9 +21,26 @@ struct RemoteAudioPlayoutPoint {
     int matcherFillFrames = 0;
     int speakerQueuedFrames = 0;
     std::optional<qint64> deviceLatencyNs;
-    /// measuredNs plus the queued frames at 48 kHz, plus the device
-    /// latency when known.
+    /// Fixed delays inside the pipeline, in frames at 48 kHz: the codec's
+    /// algorithmic delay (Opus lookahead; none for lossless) and the rate
+    /// matcher's filter delay. A sample at rtpTimestamp comes out of them
+    /// this much later than the fill and queue alone say.
+    int pipelineDelayFrames = 0;
+    /// The device callback's quantum. The speaker queue drains a callback at
+    /// a time, so the queue read at measuredNs is heard up to one callback
+    /// later than a steady drain would say, depending on where in its cycle
+    /// the callback was: half a callback is counted, and half is accuracy.
+    int callbackFrames = 0;
+    /// The clock readings taken just before and just after the queue read
+    /// were this far apart; measuredNs is their midpoint and half of it is
+    /// accuracy.
+    qint64 readWindowNs = 0;
+    /// measuredNs plus the queued frames, the pipeline delay and half a
+    /// callback at 48 kHz, plus the device latency when known.
     qint64 playoutNs() const;
+    /// How far the true playout time may lie from playoutNs(): half a
+    /// callback plus half the read window.
+    qint64 accuracyNs() const;
     bool operator==(const RemoteAudioPlayoutPoint&) const = default;
 };
 

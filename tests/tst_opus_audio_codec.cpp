@@ -357,6 +357,63 @@ private slots:
         QCOMPARE(inspected.status, OpusAudioCodecStatus::Accepted);
         QCOMPARE(inspected.payloadBytes,
                  qsizetype(encoded.packet.size() - OpusAudioCodecConfig::kRtpHeaderBytes));
+
+        // The copy-free view (minor 2) finds the same payload in place.
+        AudioRtpView view;
+        QCOMPARE(inspectAudioRtpHeader(decorated, OpusAudioCodecConfig::kPayloadType, view),
+                 OpusAudioCodecStatus::Accepted);
+        QCOMPARE(view.payloadOffset, qsizetype(OpusAudioCodecConfig::kRtpHeaderBytes + 4 + 8));
+        QCOMPARE(view.payloadBytes, inspected.payloadBytes);
+        QCOMPARE(view.ssrc, kSsrc);
+        QCOMPARE(decorated.mid(view.payloadOffset, view.payloadBytes),
+                 encoded.packet.mid(OpusAudioCodecConfig::kRtpHeaderBytes));
+        QCOMPARE(inspectAudioRtpHeader(decorated, 96, view), OpusAudioCodecStatus::MalformedRtp);
+    }
+
+    // R-R3-35 (I1): the codec delay the measured audio delay counts is the
+    // real one. A 200 Hz cosine that starts at full height mid-packet
+    // crosses half height lookaheadFrames() later after encode and decode.
+    void lookaheadIsTheDecodedDelay()
+    {
+        OpusAudioEncoder encoder;
+        OpusAudioDecoder decoder;
+        QVERIFY(encoder.isReady());
+        QVERIFY(decoder.isReady());
+        // Fs/400 + Fs/250 at 48 kHz for OPUS_APPLICATION_AUDIO.
+        QCOMPARE(encoder.lookaheadFrames(), 312);
+        QCOMPARE(opusCodecDelayFrames(), encoder.lookaheadFrames());
+        constexpr int kPackets = 10;
+        constexpr int kOnset = 5 * OpusAudioCodecConfig::kFrameSamples + 777;
+        constexpr double kAmplitude = 0.5;
+        QVector<float> decoded;
+        for (int packet = 0; packet < kPackets; ++packet) {
+            QVector<float> pcm(OpusAudioCodecConfig::kFrameSamples * OpusAudioCodecConfig::kChannels,
+                               0.0f);
+            for (int sample = 0; sample < OpusAudioCodecConfig::kFrameSamples; ++sample) {
+                const int frame = packet * OpusAudioCodecConfig::kFrameSamples + sample;
+                if (frame >= kOnset) {
+                    const double time = double(frame - kOnset) / OpusAudioCodecConfig::kSampleRate;
+                    pcm[sample * 2] = pcm[sample * 2 + 1] =
+                        float(kAmplitude * std::cos(2.0 * M_PI * 200.0 * time));
+                }
+            }
+            const auto encoded = encoder.encode(pcm, quint16(packet),
+                quint32(packet * OpusAudioCodecConfig::kFrameSamples), kSsrc);
+            QCOMPARE(encoded.status, OpusAudioCodecStatus::Accepted);
+            const auto audio = decoder.decodeRtp(encoded.packet, kSsrc);
+            QCOMPARE(audio.status, OpusAudioCodecStatus::Accepted);
+            decoded += audio.pcmInterleaved;
+        }
+        int crossing = -1;
+        for (int frame = 0; frame < decoded.size() / 2; ++frame) {
+            if (decoded.at(frame * 2) >= kAmplitude / 2.0) {
+                crossing = frame;
+                break;
+            }
+        }
+        QVERIFY(crossing > 0);
+        QVERIFY2(std::abs(crossing - kOnset - encoder.lookaheadFrames()) <= 4,
+                 qPrintable(QString::number(crossing - kOnset)));
     }
 
     void resetAndInputValidation()

@@ -10,6 +10,7 @@
 #include "core/session/media/AudioJitterBuffer.h"
 #include "core/session/media/OpusAudioCodec.h"
 #include "core/session/media/PcmAudioCodec.h"
+#include "core/session/media/RemoteAudioRateMatcher.h"
 #include "core/session/media/RemoteAudioReceiver.h"
 #include "fakes/PacedAudioBus.h"
 using namespace NereusSDR;
@@ -1362,9 +1363,16 @@ private slots:
         QVERIFY(playout.speakerQueuedFrames >= 0 && playout.speakerQueuedFrames <= 4800);
         QVERIFY(playout.matcherFillFrames >= 0);
         QCOMPARE(playout.deviceLatencyNs, std::optional<qint64>(kDeviceNs));
+        // I1: a lossless context has no codec delay; the rate matcher's
+        // filter delay is counted, and half the bus's 480-frame callback.
+        QCOMPARE(playout.pipelineDelayFrames, RemoteAudioRateMatcher::kFilterDelayFrames);
+        QCOMPARE(playout.callbackFrames, bus->callbackFrames);
+        QVERIFY(playout.readWindowNs >= 0 && playout.readWindowNs < 1'000'000'000);
         QCOMPARE(playout.playoutNs(), playout.measuredNs
-            + qint64(playout.matcherFillFrames + playout.speakerQueuedFrames)
-                * 1'000'000'000 / 48000 + kDeviceNs);
+            + (2 * qint64(playout.matcherFillFrames + playout.speakerQueuedFrames
+                          + playout.pipelineDelayFrames) + bus->callbackFrames)
+                * 1'000'000'000 / 96000 + kDeviceNs);
+        QCOMPARE(playout.accuracyNs(), qint64(5'000'000) + (playout.readWindowNs + 1) / 2);
 
         QVERIFY(telemetry.release);
         const RemoteAudioReleasePoint& release = *telemetry.release;

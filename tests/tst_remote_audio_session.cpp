@@ -34,8 +34,10 @@
 #include <QSignalSpy>
 #include <QTimer>
 #include <QTemporaryDir>
+#include <QThread>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <functional>
 #include <memory>
@@ -726,12 +728,16 @@ private slots:
 
     // R-R3-35: measured delay over the real encrypted session, with the
     // Core's clock 5 s ahead of this computer's. The station is silent,
-    // then a tone begins at a known frame; the test notes when that frame
-    // reached the station's audio tap and when this computer's paced
-    // speaker played it. The reported delay matches that heard delay within
-    // its accuracy plus the 10 ms feed and speaker quanta, so neither the
-    // 5 s offset nor half a round trip can pass for it. Muting ends the
-    // audio context and the figure with it; unmuting brings it back.
+    // then a 200 Hz cosine begins at full height on a known frame. Truth is
+    // kept on one timeline, to the sample: the station captures steadily
+    // (frame f at f / 48 kHz), and this computer's speaker plays steadily
+    // (heard frame k at the device clock's origin plus k / 48 kHz), so
+    // neither timer's lateness enters it. The heard onset is where the
+    // cosine first reaches half its height. The reported delay must match
+    // within its own accuracy plus half a millisecond, so an 8 ms miss (the
+    // Opus lookahead and the rate matcher's filter left out) fails. Muting
+    // ends the audio context and the figure with it; unmuting brings it
+    // back.
     void measuredDelayMatchesTheHeardDelay_data()
     {
         QTest::addColumn<bool>("lossless");
@@ -743,16 +749,34 @@ private slots:
     {
         QFETCH(bool, lossless);
         constexpr qint64 kCoreAheadNs = 5'000'000'000;
-        // The speaker moves 480 frames (10 ms) per step where the
-        // measurement assumes a steady drain, and a loaded machine wakes the
-        // feed and speaker timers late.
-        constexpr double kQuantaMs = 30.0;
+        // What the model leaves: where the half-height crossing falls after
+        // the codec's and the filter's reconstruction (under a frame), and
+        // the frame conventions at each end.
+        constexpr double kToleranceMs = 0.5;
+        constexpr double kOnsetAmplitude = 0.5;
+        constexpr double kOnsetHz = 200.0;
+        constexpr qint64 kNsPerFrame48 = 1'000'000; // ns per 48 frames
         Harness h;
+        // The one timeline every truth below is kept on.
+        QElapsedTimer clock;
+        clock.start();
+        const auto dueNs = [](qint64 frame) { return frame * kNsPerFrame48 / 48; };
+        // A steady radio delivers each 480-frame block when its last frame
+        // is due. While a block is fed the Core's capture clock reads that
+        // due time, so its capture stamp is the steady capture time however
+        // late the feed timer woke. Every other Core clock read, the probe
+        // times among them, is the real clock.
+        const Qt::HANDLE feeder = QThread::currentThreadId();
+        std::atomic<qint64> feedingDueNs{-1};
         RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
-        QElapsedTimer coreClock;
-        coreClock.start();
         DaemonMediaController daemonMedia(&h.server, &h.station, nullptr, {},
-            [&coreClock] { return kCoreAheadNs + coreClock.nsecsElapsed(); });
+            [&clock, &feedingDueNs, feeder] {
+                if (QThread::currentThreadId() == feeder) {
+                    const qint64 due = feedingDueNs.load();
+                    if (due >= 0) { return kCoreAheadNs + due; }
+                }
+                return kCoreAheadNs + clock.nsecsElapsed();
+            });
         const auto restoreChoice = qScopeGuard([&remoteMedia] {
             remoteMedia.setAudioProfileChoice(RemoteAudioProfile::Opus);
         });
@@ -760,49 +784,52 @@ private slots:
                                                    : RemoteAudioProfile::Opus);
         QSignalSpy remoteErrors(&remoteMedia, &RemoteMediaController::errorOccurred);
         QSignalSpy coreControls(&h.server, &StationServer::mediaControlReceived);
+        // This computer's speaker plays on the same timeline, continuously,
+        // with a 48-frame callback.
+        h.remoteBus->callbackFrames = 48;
+        h.remoteBus->setPlayClockForTesting([&clock] { return clock.nsecsElapsed(); });
+        const qint64 playOriginNs = h.remoteBus->playClockOriginNs();
 
-        QElapsedTimer clock;
-        clock.start();
         qint64 fedFrames = 0;
-        qint64 renderedFrames = 0;
-        qint64 onsetFrame = -1;     // the first tone frame, once chosen
-        qint64 onsetFedNs = -1;     // when it reached the station's tap
-        qint64 onsetHeardNs = -1;   // when this computer's speaker played it
+        qint64 onsetFrame = -1;       // the first cosine frame, once chosen
+        qint64 roughHeardFrame = -1;  // first heard frame clearly not silent
         RemoteAudioDelayReport reportAtOnset;
         QTimer source;
-        source.setInterval(5);
+        source.setInterval(2);
         source.setTimerType(Qt::PreciseTimer);
         connect(&source, &QTimer::timeout, &source, [&] {
             while (fedFrames + kFrames <= clock.nsecsElapsed() * 48 / 1'000'000) {
-                if (onsetFrame >= 0 && fedFrames >= onsetFrame) {
-                    if (fedFrames == onsetFrame) { onsetFedNs = clock.nsecsElapsed(); }
-                    h.feedMixedTone();
-                } else {
-                    const QVector<float> silence(kFrames * 2, 0.0f);
-                    h.stationAudio->rxBlockReady(h.sliceA, silence.constData(), kFrames);
-                    h.stationAudio->rxBlockReady(h.sliceB, silence.constData(), kFrames);
-                    h.stationFrames += kFrames;
+                QVector<float> a(kFrames * 2, 0.0f);
+                const QVector<float> silence(kFrames * 2, 0.0f);
+                for (int frame = 0; frame < kFrames; ++frame) {
+                    const qint64 f = fedFrames + frame;
+                    if (onsetFrame >= 0 && f >= onsetFrame) {
+                        const double t = double(f - onsetFrame) / 48000.0;
+                        a[frame * 2] = a[frame * 2 + 1] =
+                            float(kOnsetAmplitude * std::cos(2.0 * Harness::kPi * kOnsetHz * t));
+                    }
                 }
+                feedingDueNs.store(dueNs(fedFrames + kFrames));
+                h.stationAudio->rxBlockReady(h.sliceA, a.constData(), kFrames);
+                h.stationAudio->rxBlockReady(h.sliceB, silence.constData(), kFrames);
+                feedingDueNs.store(-1);
+                h.stationFrames += kFrames;
                 fedFrames += kFrames;
             }
         });
         QTimer speaker;
-        speaker.setInterval(5);
+        speaker.setInterval(2);
         speaker.setTimerType(Qt::PreciseTimer);
         connect(&speaker, &QTimer::timeout, &speaker, [&] {
-            while (renderedFrames + kFrames <= clock.nsecsElapsed() * 48 / 1'000'000) {
-                const qint64 before = h.remoteBus->heard.size();
-                h.remoteBus->render(kFrames);
-                renderedFrames += kFrames;
-                if (onsetFedNs < 0 || onsetHeardNs >= 0) { continue; }
-                for (qint64 i = before; i < h.remoteBus->heard.size(); ++i) {
-                    if (std::abs(h.remoteBus->heard.at(i)) > 0.03f) {
-                        // The sample left this computer's queue with this
-                        // step; it is heard from now.
-                        onsetHeardNs = clock.nsecsElapsed();
-                        reportAtOnset = remoteMedia.audioDelay();
-                        break;
-                    }
+            const qint64 before = h.remoteBus->heard.size() / 2;
+            if (h.remoteBus->renderDue() <= 0 || onsetFrame < 0 || roughHeardFrame >= 0) {
+                return;
+            }
+            for (qint64 k = before; k < h.remoteBus->heard.size() / 2; ++k) {
+                if (std::abs(h.remoteBus->heard.at(k * 2)) > 0.02f) {
+                    roughHeardFrame = k;
+                    reportAtOnset = remoteMedia.audioDelay();
+                    break;
                 }
             }
         });
@@ -819,34 +846,43 @@ private slots:
         // Echoes arrive and a delay is measured while silence plays.
         QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioDelay().estimate.has_value(), 5000);
         QVERIFY(remoteMedia.audioDelay().measurable);
-        QTest::qWait(1500);
+        QTest::qWait(3000);
 
-        onsetFrame = ((fedFrames / kFrames) + 20) * kFrames;
-        QTRY_VERIFY_WITH_TIMEOUT(onsetHeardNs >= 0, 5000);
+        // Mid-block, so a block boundary is not what is found.
+        onsetFrame = ((fedFrames / kFrames) + 20) * kFrames + 177;
+        QTRY_VERIFY_WITH_TIMEOUT(roughHeardFrame >= 0, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(h.remoteBus->heard.size() / 2 >= roughHeardFrame + 960, 5000);
         QVERIFY(reportAtOnset.measurable);
         QVERIFY(reportAtOnset.estimate.has_value());
         const AudioDelayEstimate& estimate = *reportAtOnset.estimate;
-        // The Core counts the last frame of a delivery as captured when the
-        // delivery arrives and earlier frames proportionally earlier; the
-        // onset frame begins a 10 ms delivery, so it was captured 10 ms
-        // before that delivery arrived.
-        const double heardMs = double(onsetHeardNs - onsetFedNs) / 1e6
-            + double(kFrames) * 1000.0 / 48000.0;
+        // The heard onset to the sample: the first frame at half the
+        // cosine's heard height.
+        float peak = 0.0f;
+        for (qint64 k = roughHeardFrame; k < roughHeardFrame + 960; ++k) {
+            peak = std::max(peak, h.remoteBus->heard.at(k * 2));
+        }
+        QVERIFY(peak > 0.1f);
+        qint64 heardFrame = roughHeardFrame;
+        while (h.remoteBus->heard.at(heardFrame * 2) < peak / 2.0f) { ++heardFrame; }
+        const double heardMs =
+            double(playOriginNs + dueNs(heardFrame) - dueNs(onsetFrame)) / 1e6;
         qInfo().noquote() << QStringLiteral(
             "%1 session: heard delay %2 ms, measured %3 ms +- %4 ms (delivery %5 ms), "
-            "device counted %6")
+            "device counted %6, speaker ran dry for %7 frames")
             .arg(lossless ? QStringLiteral("lossless") : QStringLiteral("opus"))
-            .arg(heardMs, 0, 'f', 1).arg(estimate.delayMs, 0, 'f', 1)
+            .arg(heardMs, 0, 'f', 2).arg(estimate.delayMs, 0, 'f', 2)
             .arg(estimate.boundMs, 0, 'f', 2)
             .arg(estimate.deliveryMs.value_or(-1), 0, 'f', 1)
-            .arg(estimate.includesDevice ? QStringLiteral("yes") : QStringLiteral("no"));
-        QVERIFY2(std::abs(estimate.delayMs - heardMs) <= estimate.boundMs + kQuantaMs,
+            .arg(estimate.includesDevice ? QStringLiteral("yes") : QStringLiteral("no"))
+            .arg(h.remoteBus->playedDryFramesForTesting());
+        QVERIFY2(std::abs(estimate.delayMs - heardMs) <= estimate.boundMs + kToleranceMs,
                  qPrintable(QStringLiteral("measured %1 +- %2, heard %3")
                                 .arg(estimate.delayMs).arg(estimate.boundMs).arg(heardMs)));
+        // An 8 ms miss cannot pass.
+        QVERIFY2(estimate.boundMs + kToleranceMs < 8.0, qPrintable(QString::number(estimate.boundMs)));
         // Not the Core's clock offset, and not half a loopback round trip:
         // the jitter hold alone is 80 ms.
         QVERIFY(estimate.delayMs > 60.0 && estimate.delayMs < 1000.0);
-        QVERIFY(estimate.boundMs < 20.0);
         QVERIFY(!estimate.includesDevice); // the paced test speaker reports none
         QVERIFY(estimate.deliveryMs && *estimate.deliveryMs > 0.0
                 && *estimate.deliveryMs < estimate.delayMs);

@@ -3704,7 +3704,10 @@ private slots:
         QCOMPARE(errors.count(), 1);
         QCOMPARE(errors.constFirst().at(0).toString(),
                  QStringLiteral("The network could not carry lossless audio; staying on Opus."));
-        QCOMPARE(requestedProfiles(coreControls).constLast(), QStringLiteral("opus"));
+        // The request crosses the loopback session; a loaded machine may
+        // deliver it a moment after the verdict.
+        QTRY_COMPARE_WITH_TIMEOUT(requestedProfiles(coreControls).constLast(),
+                                  QStringLiteral("opus"), 5000);
 
         // Opus plays over the same link, and the section says why.
         QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().state == State::Playing

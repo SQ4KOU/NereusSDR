@@ -225,6 +225,57 @@ private slots:
         QCOMPARE(after.underflows, 0);
     }
 
+    // R-R3-35 (I1): an input frame leaves take() kFilterDelayFrames after
+    // the ring fill that was ahead of it when it was pushed. An impulse in a
+    // lossless-sized push comes out at the varsamp FIR's centre, including
+    // across a partly returned native output block.
+    void filterDelayIsTheNamedConstant()
+    {
+        constexpr int kPacketFrames = 192;
+        RemoteAudioRateMatcher matcher;
+        QVERIFY(matcher.configure(kPacketFrames, kOutputFrames, kRingFrames));
+        qint64 pushed = 0;
+        QVector<float> out;
+        const auto push = [&](int impulseAt) {
+            QVector<float> pcm(kPacketFrames * RemoteAudioRateMatcher::kChannels, 0.0f);
+            if (impulseAt >= 0) {
+                pcm[impulseAt * 2] = 1.0f;
+                pcm[impulseAt * 2 + 1] = 1.0f;
+            }
+            QVERIFY(matcher.push(pcm));
+            pushed += kPacketFrames;
+        };
+        const auto take = [&] { out += matcher.take(); };
+        for (int packet = 0; packet < 10; ++packet) { push(-1); }
+        // Three takes leave half a native 64-frame block in the carry.
+        take(); take(); take();
+        const qint64 taken = out.size() / RemoteAudioRateMatcher::kChannels;
+        const qint64 impulseFrame = pushed + 100;
+        push(100);
+        const qint64 end = pushed;
+        const int fill = matcher.stats().ringFillFrames;
+        while (out.size() / RemoteAudioRateMatcher::kChannels < taken + fill + 400) {
+            push(-1);
+            take();
+        }
+        QCOMPARE(matcher.stats().underflows, 0);
+        QCOMPARE(matcher.stats().overflows, 0);
+        qint64 peakFrame = -1;
+        float peak = 0.0f;
+        for (qint64 frame = 0; frame < out.size() / 2; ++frame) {
+            if (std::abs(out.at(frame * 2)) > peak) {
+                peak = std::abs(out.at(frame * 2));
+                peakFrame = frame;
+            }
+        }
+        QVERIFY(peak > 0.5f);
+        // Without the filter the impulse would leave at taken + fill -
+        // (end - impulseFrame): the fill ahead of the push, less the frames
+        // pushed after it.
+        const qint64 unfiltered = taken + fill - (end - impulseFrame);
+        QCOMPARE(peakFrame - unfiltered, qint64(RemoteAudioRateMatcher::kFilterDelayFrames));
+    }
+
     void readinessAccountsForNativeOutputBlockRounding()
     {
         RemoteAudioRateMatcher matcher;

@@ -94,7 +94,9 @@ struct AudioDelayEstimate {
     /// From the Core capturing a sample to this computer playing it out,
     /// including the device's own latency only when includesDevice.
     double delayMs = 0;
-    /// The true delay lies within delayMs +- boundMs.
+    /// The true delay lies within delayMs +- boundMs: the clock offset's
+    /// bound (half the round trip plus drift) plus the playout point's own
+    /// accuracy (RemoteAudioPlayoutPoint::accuracyNs()).
     double boundMs = 0;
     bool includesDevice = false;
     /// From the Core capturing a sample to its packet leaving this

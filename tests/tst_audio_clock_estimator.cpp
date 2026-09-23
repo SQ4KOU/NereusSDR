@@ -54,6 +54,15 @@ struct Scenario {
     int speakerFrames = 0;
     std::optional<qint64> deviceNs;
     quint32 generation = 7;
+    // Fixed pipeline delay (codec and rate matcher), the device callback,
+    // where in its cycle the callback was when the queue was read (0 just
+    // after a callback, 1 just before the next), and the read window with
+    // where inside it the queue was actually read.
+    int pipelineFrames = 0;
+    int callbackFrames = 0;
+    double callbackPhase = 0.5;
+    qint64 readWindowNs = 0;
+    double readInstant = 0.5;
 };
 
 AudioDelayInputs inputsFor(const Scenario& scenario, const AudioClockEstimator& estimator,
@@ -66,16 +75,31 @@ AudioDelayInputs inputsFor(const Scenario& scenario, const AudioClockEstimator& 
     const double coreRate = 1.0 + scenario.clocks.corePpm * 1e-6;
     const qint64 playedCaptureNs = scenario.captureNs + std::llround(double(spanCoreNs) / coreRate);
     const qint64 heardNs = playedCaptureNs + scenario.delayNs;
-    const qint64 queuedNs = qint64(scenario.matcherFrames + scenario.speakerFrames) * kS / 48000
+    // The queue drains a callback at a time: the head of the queue read now
+    // leaves with the next callback, callbackPhase of a callback away.
+    const qint64 queuedNs = qint64(scenario.matcherFrames + scenario.speakerFrames
+                                   + scenario.pipelineFrames) * kS / 48000
+        + std::llround((1.0 - scenario.callbackPhase) * double(scenario.callbackFrames)
+                       * double(kS) / 48000.0)
         + scenario.deviceNs.value_or(0);
+    const qint64 readNs = heardNs - queuedNs;
+    const qint64 windowStartNs = readNs - std::llround(scenario.readInstant
+                                                       * double(scenario.readWindowNs));
     AudioDelayInputs inputs;
     inputs.offset = estimator.offset(nowNs);
     inputs.capture = AudioCaptureAnchor{scenario.generation, kAnchorRtp,
                                         scenario.clocks.core(scenario.captureNs)};
     inputs.playingGeneration = scenario.generation;
-    inputs.playout = RemoteAudioPlayoutPoint{quint32(kAnchorRtp + quint32(scenario.spanFrames)),
-                                             heardNs - queuedNs, scenario.matcherFrames,
-                                             scenario.speakerFrames, scenario.deviceNs};
+    RemoteAudioPlayoutPoint playout;
+    playout.rtpTimestamp = quint32(kAnchorRtp + quint32(scenario.spanFrames));
+    playout.measuredNs = windowStartNs + scenario.readWindowNs / 2;
+    playout.matcherFillFrames = scenario.matcherFrames;
+    playout.speakerQueuedFrames = scenario.speakerFrames;
+    playout.deviceLatencyNs = scenario.deviceNs;
+    playout.pipelineDelayFrames = scenario.pipelineFrames;
+    playout.callbackFrames = scenario.callbackFrames;
+    playout.readWindowNs = scenario.readWindowNs;
+    inputs.playout = playout;
     return inputs;
 }
 
@@ -148,6 +172,13 @@ private slots:
             scenario.matcherFrames = queued(random);
             scenario.speakerFrames = queued(random);
             if (trial % 2) { scenario.deviceNs = queued(random) * kS / 48000; }
+            // I1: the fixed pipeline delay, the callback quantum and phase,
+            // and a read window the worker may have been preempted inside.
+            scenario.pipelineFrames = std::uniform_int_distribution<int>(0, 400)(random);
+            scenario.callbackFrames = std::uniform_int_distribution<int>(0, 2048)(random);
+            scenario.callbackPhase = std::uniform_real_distribution<double>(0.0, 1.0)(random);
+            scenario.readWindowNs = std::uniform_int_distribution<qint64>(0, 20 * kMs)(random);
+            scenario.readInstant = std::uniform_real_distribution<double>(0.0, 1.0)(random);
             AudioClockEstimator estimator;
             for (int probe = 0; probe < 16; ++probe) {
                 const qint64 forward = pathMs(random) * kMs;
@@ -167,7 +198,11 @@ private slots:
                                     .arg(trial).arg(estimate->delayMs).arg(estimate->boundMs)
                                     .arg(truth)));
             QVERIFY(estimate->boundMs >= double(offset->roundTripNs) / 2.0 / double(kMs));
-            QVERIFY(estimate->boundMs <= double(offset->roundTripNs) / 2.0 / double(kMs) + 3.0);
+            const RemoteAudioPlayoutPoint point = *inputsFor(scenario, estimator, now).playout;
+            QVERIFY(estimate->boundMs >= double(offset->roundTripNs + 2 * point.accuracyNs())
+                                              / 2.0 / double(kMs));
+            QVERIFY(estimate->boundMs <= double(offset->roundTripNs) / 2.0 / double(kMs)
+                                             + double(point.accuracyNs()) / double(kMs) + 3.0);
             QCOMPARE(estimate->includesDevice, scenario.deviceNs.has_value());
             const AudioDelayDisplay shown = roundAudioDelay(estimate->delayMs, estimate->boundMs);
             QVERIFY(std::abs(double(shown.valueMs) - truth) <= double(shown.accuracyMs) + 1e-6);
@@ -289,6 +324,42 @@ private slots:
         QCOMPARE(shown.accuracyMs, qint64(2));
         shown = roundAudioDelay(40.0, 0.0);
         QCOMPARE(shown.accuracyMs, qint64(1));
+    }
+
+    // I1: the playout time counts the fixed pipeline delay and half a
+    // device callback; its accuracy is the other half callback plus half
+    // the read window, and the delay's bound carries it.
+    void playoutCountsThePipelineAndHalfACallback()
+    {
+        RemoteAudioPlayoutPoint point;
+        point.measuredNs = 1000 * kMs;
+        point.matcherFillFrames = 480;
+        point.speakerQueuedFrames = 960;
+        point.pipelineDelayFrames = 312 + 69;
+        point.callbackFrames = 480;
+        point.readWindowNs = 2 * kMs;
+        const qint64 expected = 1000 * kMs + qint64(480 + 960 + 381) * kS / 48000 + 5 * kMs;
+        QVERIFY(std::abs(point.playoutNs() - expected) <= 1);
+        QCOMPARE(point.accuracyNs(), 5 * kMs + 1 * kMs);
+        point.deviceLatencyNs = 12 * kMs;
+        QVERIFY(std::abs(point.playoutNs() - expected - 12 * kMs) <= 1);
+
+        Scenario scenario;
+        scenario.pipelineFrames = 381;
+        scenario.callbackFrames = 480;
+        scenario.readWindowNs = 2 * kMs;
+        AudioClockEstimator estimator;
+        for (int probe = 0; probe < 20; ++probe) {
+            QVERIFY(estimator.addSample(exchange(scenario.clocks, probe * kS, kMs, 0, kMs)));
+        }
+        const auto estimate = measureAudioDelay(inputsFor(scenario, estimator, 20 * kS));
+        QVERIFY(estimate);
+        // Half the 2 ms round trip, 0.1 ms of drift over the second since
+        // the last probe, plus 6 ms of playout accuracy.
+        QVERIFY2(estimate->boundMs >= 7.1 && estimate->boundMs < 7.2,
+                 qPrintable(QString::number(estimate->boundMs, 'f', 4)));
+        // Mid-cycle and mid-window: the figure is the true delay.
+        QVERIFY(std::abs(estimate->delayMs - 85.0) < 0.001);
     }
 };
 

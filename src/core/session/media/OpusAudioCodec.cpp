@@ -130,6 +130,22 @@ int audioRtpPayloadType(const QByteArray& packet)
 OpusAudioCodecStatus parseAudioRtp(const QByteArray& packet, int payloadType,
                                    AudioRtpPacket& parsed)
 {
+    AudioRtpView view;
+    const OpusAudioCodecStatus status = inspectAudioRtpHeader(packet, payloadType, view);
+    if (status != OpusAudioCodecStatus::Accepted) {
+        return status;
+    }
+    parsed.payloadType = view.payloadType;
+    parsed.sequence = view.sequence;
+    parsed.timestamp = view.timestamp;
+    parsed.ssrc = view.ssrc;
+    parsed.payload = packet.mid(view.payloadOffset, view.payloadBytes);
+    return OpusAudioCodecStatus::Accepted;
+}
+
+OpusAudioCodecStatus inspectAudioRtpHeader(const QByteArray& packet, int payloadType,
+                                           AudioRtpView& view)
+{
     if (packet.size() > OpusAudioCodecConfig::kMaxRtpPacketBytes) {
         return OpusAudioCodecStatus::Oversized;
     }
@@ -170,11 +186,12 @@ OpusAudioCodecStatus parseAudioRtp(const QByteArray& packet, int payloadType,
     if (payloadBytes <= 0 || payloadBytes > OpusAudioCodecConfig::kMaxPayloadBytes) {
         return OpusAudioCodecStatus::MalformedRtp;
     }
-    parsed.payloadType = payloadType;
-    parsed.sequence = readU16(packet, 2);
-    parsed.timestamp = readU32(packet, 4);
-    parsed.ssrc = readU32(packet, 8);
-    parsed.payload = packet.mid(headerBytes, payloadBytes);
+    view.payloadType = payloadType;
+    view.sequence = readU16(packet, 2);
+    view.timestamp = readU32(packet, 4);
+    view.ssrc = readU32(packet, 8);
+    view.payloadOffset = headerBytes;
+    view.payloadBytes = payloadBytes;
     return OpusAudioCodecStatus::Accepted;
 }
 
@@ -279,6 +296,25 @@ std::optional<OpusEncoderProfile> OpusAudioEncoder::profile() const
     profile.targetBitrate = bitrate;
     profile.audioBandwidthHz = audioBandwidthHz(m_state->bandwidth);
     return profile;
+}
+
+int OpusAudioEncoder::lookaheadFrames() const
+{
+    opus_int32 lookahead = 0;
+    if (!isReady()
+        || opus_encoder_ctl(m_state->encoder, OPUS_GET_LOOKAHEAD(&lookahead)) != OPUS_OK) {
+        return 0;
+    }
+    return std::max<opus_int32>(0, lookahead);
+}
+
+int opusCodecDelayFrames()
+{
+    // The same application, rate and channels as every encoder here;
+    // libopus's lookahead is Fs/400 plus its delay compensation for
+    // OPUS_APPLICATION_AUDIO (312 frames at 48 kHz in the pinned source).
+    static const int frames = OpusAudioEncoder{}.lookaheadFrames();
+    return frames;
 }
 
 OpusRtpEncodeResult OpusAudioEncoder::encode(const QVector<float>& pcmInterleaved,

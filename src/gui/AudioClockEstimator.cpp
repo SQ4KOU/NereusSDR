@@ -116,7 +116,9 @@ std::optional<AudioDelayEstimate> measureAudioDelay(const AudioDelayInputs& inpu
     }
     AudioDelayEstimate estimate;
     estimate.delayMs = heard->sinceNs / kNsPerMs;
-    estimate.boundMs = heard->boundNs / kNsPerMs;
+    // The clock bound, plus how far the playout time itself may be off
+    // (where the device callback was in its cycle, and the queue read).
+    estimate.boundMs = (heard->boundNs + double(playout.accuracyNs())) / kNsPerMs;
     estimate.includesDevice = playout.deviceLatencyNs.has_value();
     if (inputs.release) {
         if (const std::optional<Captured> released =

@@ -21,6 +21,10 @@
 //                 Code. stats() also reports WDSP getControlFlag()
 //                 (rmatch.h:157, rmatch.c:699-706) as controlActive, so a
 //                 caller can tell a measured ratio from the initial one.
+//   2026-09-23: J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code. kFilterDelayFrames names the varsamp FIR's delay
+//                 (varsamp.c:60-63, 122-123, 175), so the measured remote
+//                 audio delay (R-R3-35) counts it.
 // =================================================================
 //
 // === Verbatim Thetis Project Files/Source/ChannelMaster/ivac.c header ===
@@ -110,6 +114,17 @@ public:
     // second and the bounded WDSP ring at most two seconds at 48 kHz.
     static constexpr int kMaxFramesPerCall = kSampleRateHz;
     static constexpr int kMaxRingFrames = 2 * kSampleRateHz;
+    // R-R3-35: how many frames later than the ring fill ahead of it an input
+    // frame leaves take(). The resampler is a symmetric FIR over the newest
+    // rsize input frames, newest first.
+    // From Thetis Project Files/Source/wdsp/varsamp.c:60-63 [v2.10.3.15 @3759d09]:
+    // rsize = 140 at equal rates, ncoef = (rsize + 1) + (R - 1) * rsize with
+    // R = 1024 (rmatch.c:517), so the coefficient centre is h[70 * R].
+    // From varsamp.c:122-123 and 175 [v2.10.3.15 @3759d09]: output tap j
+    // (j frames old) uses h[(rsize - 1 - j) * R + R * h_offset], so the centre
+    // is j = 69 at h_offset 0 and moves by the fraction h_offset (under one
+    // frame) while the ratio is adjusted.
+    static constexpr int kFilterDelayFrames = 69;
 
     RemoteAudioRateMatcher();
     ~RemoteAudioRateMatcher();

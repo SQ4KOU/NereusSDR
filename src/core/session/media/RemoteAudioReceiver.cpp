@@ -62,18 +62,19 @@ AudioHeader inspectAudioRtp(const QByteArray& packet, quint32 ssrc, RemoteAudioP
         header.payloadBytes = opus.payloadBytes;
         return header;
     }
-    // Lossless: the payload type first, then the one L16 packet shape.
+    // Lossless: the payload type first, then the one L16 packet shape. The
+    // payload's size is read from the header, not from a copy of it.
     if (audioRtpPayloadType(packet) != PcmAudioCodecConfig::kPayloadType) { return header; }
-    AudioRtpPacket parsed;
-    if (parseAudioRtp(packet, PcmAudioCodecConfig::kPayloadType, parsed)
+    AudioRtpView view;
+    if (inspectAudioRtpHeader(packet, PcmAudioCodecConfig::kPayloadType, view)
             != OpusAudioCodecStatus::Accepted
-        || parsed.ssrc != ssrc || parsed.payload.size() != PcmAudioCodecConfig::kPayloadBytes) {
+        || view.ssrc != ssrc || view.payloadBytes != PcmAudioCodecConfig::kPayloadBytes) {
         return header;
     }
     header.accepted = true;
-    header.sequence = parsed.sequence;
-    header.timestamp = parsed.timestamp;
-    header.payloadBytes = parsed.payload.size();
+    header.sequence = view.sequence;
+    header.timestamp = view.timestamp;
+    header.payloadBytes = view.payloadBytes;
     return header;
 }
 }
@@ -152,9 +153,19 @@ struct RemoteAudioReceiver::Private {
 
 qint64 RemoteAudioPlayoutPoint::playoutNs() const
 {
-    const qint64 queuedFrames = qint64(matcherFillFrames) + qint64(speakerQueuedFrames);
-    return measuredNs + queuedFrames * 1'000'000'000 / PcmAudioCodecConfig::kSampleRate
+    // Doubled frame counts keep half a callback exact.
+    const qint64 halfFrames = 2 * (qint64(matcherFillFrames) + qint64(speakerQueuedFrames)
+                                   + qint64(pipelineDelayFrames))
+        + qint64(callbackFrames);
+    return measuredNs + halfFrames * 1'000'000'000 / (2 * PcmAudioCodecConfig::kSampleRate)
         + deviceLatencyNs.value_or(0);
+}
+
+qint64 RemoteAudioPlayoutPoint::accuracyNs() const
+{
+    return (qint64(callbackFrames) * 1'000'000'000 + 2 * PcmAudioCodecConfig::kSampleRate - 1)
+            / (2 * PcmAudioCodecConfig::kSampleRate)
+        + (readWindowNs + 1) / 2;
 }
 
 RemoteAudioReceiver::RemoteAudioReceiver(AudioEngine* engine, QObject* parent, Clock clock)
@@ -481,15 +492,22 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
             }
         };
         // R-R3-35: the end RTP time of the newest packet in the rate
-        // matcher, for the playout point.
+        // matcher, for the playout point, and the newest release not yet
+        // published. Both are published together once per wake, so the
+        // points lock is never taken per packet (250 a second lossless).
         std::optional<quint32> pushedEnd;
+        std::optional<RemoteAudioReleasePoint> unpublishedRelease;
         const auto noteReleased = [&](quint32 timestamp, bool concealed, qint64 atNs) {
             pushedEnd = timestamp + quint32(packetFrames);
             if (!concealed) {
-                std::lock_guard<std::mutex> lock(d->pointsMutex);
-                d->release = RemoteAudioReleasePoint{*pushedEnd, atNs};
+                unpublishedRelease = RemoteAudioReleasePoint{*pushedEnd, atNs};
             }
         };
+        // Fixed delays a sample passes through after the matcher fill and
+        // the speaker queue say it is heard: the codec's own delay (Opus
+        // only) and the rate matcher's filter.
+        const int pipelineDelayFrames = RemoteAudioRateMatcher::kFilterDelayFrames
+            + (lossless ? 0 : opusCodecDelayFrames());
         quint64 lastDeviceFrames = 0;
         const quint64 deviceConsumedBase = initialPacing->consumedFrames;
         quint64 telemetryDeviceFrames = deviceConsumedBase;
@@ -678,17 +696,32 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
             // The final pacing read in every playback iteration observes the
             // queue after bounded replenishment. It remains worker-only and
             // does not participate in device callback scheduling.
+            // R-R3-35: the clock is read on both sides of the queue read, so
+            // a worker preempted between them widens the accuracy instead of
+            // moving the figure.
+            const qint64 readStart = d->now();
             const auto finalPacing = d->engine->remotePlaybackPacing();
-            const qint64 measuredAt = d->now();
+            const qint64 readEnd = d->now();
             publishSpeakerQueue(finalPacing);
             // R-R3-35: the newest matched sample is heard after the matcher
             // fill and the speaker queue have played, then the device.
-            if (finalPacing && pushedEnd) {
+            if ((finalPacing && pushedEnd) || unpublishedRelease) {
                 std::lock_guard<std::mutex> lock(d->pointsMutex);
-                d->playout = RemoteAudioPlayoutPoint{*pushedEnd, measuredAt,
-                    std::max(0, stats.ringFillFrames), std::max(0, finalPacing->queuedFrames),
-                    finalPacing->deviceLatencyNs};
+                if (finalPacing && pushedEnd) {
+                    RemoteAudioPlayoutPoint point;
+                    point.rtpTimestamp = *pushedEnd;
+                    point.measuredNs = readStart + (readEnd - readStart) / 2;
+                    point.matcherFillFrames = std::max(0, stats.ringFillFrames);
+                    point.speakerQueuedFrames = std::max(0, finalPacing->queuedFrames);
+                    point.deviceLatencyNs = finalPacing->deviceLatencyNs;
+                    point.pipelineDelayFrames = pipelineDelayFrames;
+                    point.callbackFrames = std::max(0, finalPacing->callbackFrames);
+                    point.readWindowNs = readEnd - readStart;
+                    d->playout = point;
+                }
+                if (unpublishedRelease) { d->release = *unpublishedRelease; }
             }
+            unpublishedRelease.reset();
             if (stats.underflows || stats.overflows) {
                 notify(QStringLiteral("Remote audio exceeded its continuous clock buffer (%1 underflows, %2 overflows)")
                     .arg(stats.underflows).arg(stats.overflows), Fault::ClockBuffer);

@@ -74,6 +74,22 @@ int audioRtpPayloadType(const QByteArray& packet);
 OpusAudioCodecStatus parseAudioRtp(const QByteArray& packet, int payloadType,
                                    AudioRtpPacket& parsed);
 
+/// The header fields and where the payload lies, without copying it.
+struct AudioRtpView {
+    int payloadType {0};
+    quint16 sequence {0};
+    quint32 timestamp {0};
+    quint32 ssrc {0};
+    qsizetype payloadOffset {0};
+    qsizetype payloadBytes {0}; // CSRC, extension and padding bytes excluded
+};
+
+/// The same checks as parseAudioRtp, reporting the payload's place in
+/// `packet` instead of a copy, so a receiver can check a packet's shape per
+/// packet without allocating.
+OpusAudioCodecStatus inspectAudioRtpHeader(const QByteArray& packet, int payloadType,
+                                           AudioRtpView& view);
+
 /// A 12-byte RTP version 2 header (no CSRC, extension, padding or marker)
 /// followed by `payload`.
 QByteArray buildAudioRtp(int payloadType, quint16 sequence, quint32 timestamp,
@@ -141,6 +157,11 @@ public:
     /// Core announces a new audio context. Valid immediately after
     /// construction or reset(), before any encode.
     std::optional<OpusEncoderProfile> profile() const; // nullopt when !isReady()
+    /// R-R3-35: the codec's algorithmic delay in frames at 48 kHz, as libopus
+    /// reports it (OPUS_GET_LOOKAHEAD). A sample given to encode() comes out
+    /// of the decoder this many frames later on the RTP clock. 0 when
+    /// !isReady().
+    int lookaheadFrames() const;
     OpusRtpEncodeResult encode(const QVector<float>& pcmInterleaved,
                                quint16 sequence, quint32 timestamp,
                                quint32 ssrc);
@@ -150,6 +171,12 @@ private:
     struct State;
     std::unique_ptr<State> m_state;
 };
+
+/// R-R3-35: the algorithmic delay, in frames at 48 kHz, of the Opus audio
+/// the Core sends: lookaheadFrames() of an encoder built like the Core's
+/// (the delay does not depend on the bitrate). Computed once; 0 only when
+/// libopus cannot build that encoder.
+int opusCodecDelayFrames();
 
 /// RAII decoder. `decodeMissing()` is explicit packet-loss concealment; a bad
 /// RTP packet is never converted into PLC by this boundary.
