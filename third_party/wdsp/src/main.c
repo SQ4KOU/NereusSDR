@@ -24,6 +24,11 @@ warren@wpratt.com
 
 */
 
+// NereusSDR modifications (2026-09-23, J.J. Boyd KG4VCF, with Anthropic
+// Claude Code): the worker takes and releases csDSP for each block through
+// dsplock.c (WdspWorkerEnter/WdspWorkerLeave) so waiting control calls get a
+// bounded turn. Source DSP flow and all upstream attribution are retained.
+
 #include "comm.h"
 
 void wdspmain (void *pargs)
@@ -37,7 +42,7 @@ void wdspmain (void *pargs)
 	while (_InterlockedAnd (&ch[channel].run, 1))
 	{
 		WaitForSingleObject(ch[channel].iob.pd->Sem_BuffReady,INFINITE);
-		EnterCriticalSection (&ch[channel].csDSP);
+		WdspWorkerEnter (channel);
 		if (!_InterlockedAnd (&ch[channel].iob.pd->exec_bypass, 1))
 		{
 			switch (ch[channel].type)
@@ -55,7 +60,7 @@ void wdspmain (void *pargs)
 				break;
 			}
 		}
-		LeaveCriticalSection (&ch[channel].csDSP);
+		WdspWorkerLeave (channel);
 	}
 	if (hTask != 0) AvRevertMmThreadCharacteristics (hTask);
 }

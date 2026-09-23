@@ -290,6 +290,10 @@ if(TARGET wdsp_static)
         target_link_libraries(tst_linux_port_wait PRIVATE wdsp_static)
         target_compile_definitions(tst_linux_port_wait PRIVATE WDSP_STATIC_BUILD)
     endif()
+    # R-R3-39: a real RX channel with an overloaded worker still gives
+    # control calls a bounded turn at csDSP (dsplock.c).
+    # wdsp_static arrives through the core library, as for tst_wdsp_nnr.
+    nereus_add_test(tst_wdsp_dsp_turn_taking EXTRA_LABELS core)
     nereus_add_test(tst_wdsp210_cfc_compat WdspCfcProbe.c EXTRA_LABELS core)
     set_source_files_properties(WdspCfcProbe.c PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(tst_wdsp210_cfc_compat PRIVATE ${FFTW3_INCLUDE_DIRS})

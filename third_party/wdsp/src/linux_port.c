@@ -33,9 +33,17 @@ john.d.melton@googlemail.com
 //                immediately after creation so concurrent NereusSDR/Qt test
 //                processes cannot collide in the POSIX semaphore namespace.
 //                J.J. Boyd (KG4VCF), with AI assistance from OpenAI Codex.
+//   2026-09-23 - Keep this file's EnterCriticalSection definition the real
+//                platform call: comm.h now redirects WDSP lock entry to
+//                dsplock.c's WdspEnterCS, so the redirect is undefined here.
+//                J.J. Boyd (KG4VCF), with AI assistance from Anthropic
+//                Claude Code.
 
 #include "linux_port.h"
 #include "comm.h"
+
+// comm.h's redirect must not rename the platform call defined below.
+#undef EnterCriticalSection
 
 #include <errno.h>
 #include <time.h>

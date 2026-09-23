@@ -158,6 +158,11 @@
 //                 (nbp.h:96-100), the same situation as the existing
 //                 RXANBPSetShiftFrequency declaration.
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-23  WDSPSetTestBlockDelayUs declaration added by J.J. Boyd
+//                 (KG4VCF) for the R3 DSP lock turn-taking test (R-R3-39).
+//                 NereusSDR-original test seam exported from
+//                 third_party/wdsp/src/dsplock.c; no Thetis counterpart.
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 /*  wdsp.cs
@@ -308,6 +313,12 @@ void SetInputSamplerate(int channel, int samplerate);
 void SetDSPSamplerate(int channel, int samplerate);
 
 void SetOutputSamplerate(int channel, int samplerate);
+
+// Test-only (NereusSDR dsplock.c): busy-wait this many microseconds inside
+// the channel worker's csDSP section on every block, simulating an
+// overloaded DSP chain. 0 (the default) turns it off. Never call it in
+// production code.
+void WDSPSetTestBlockDelayUs(int channel, int microseconds);
 
 // ---------------------------------------------------------------------------
 // In-place filter-size / filter-type reconfigure (RXA.c / TXA.c)

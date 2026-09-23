@@ -4,7 +4,7 @@
 Compliance Plan Task 11. ``verify-thetis-headers.py --kind=wdsp`` (Task 7)
 enforces the GPLv2-or-later markers with an explicit exemption set;
 this script is the independent census that re-verifies the
-WDSP-PROVENANCE.md claim (162 full-header files + 5 exempt utilities).
+WDSP-PROVENANCE.md claim (164 full-header files + 5 exempt utilities).
 
 Use this whenever the WDSP vendored tree is re-synced from upstream to
 catch drift before the verifier's exemption set goes stale.
@@ -27,8 +27,9 @@ WDSP_SRC = REPO / "third_party" / "wdsp" / "src"
 # Pinned TAPR WDSP 2.10 plus retained Nereus extensions, audited 2026-09-22.
 # The two Nereus ABI headers have full grants; obsolete FDnoiseIQ/fastmath
 # are removed, while pinned calculus.c/.h now have upstream grants.
+# 2026-09-23: Nereus dsplock.c/.h (R-R3-39) add two full-grant files.
 EXPECTED = {
-    "gpl2-or-later": 162,
+    "gpl2-or-later": 164,
     "copyright-no-permission-block": 0,
     "no-header": 5,
 }

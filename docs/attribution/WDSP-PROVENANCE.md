@@ -17,17 +17,17 @@ and per-file dispositions are recorded in
 and its adjacent `source-manifest.csv`. The manifest was checked independently
 with zero hash mismatches.
 
-The compiled non-Windows library has an explicit list of 83 C translation
-units. It contains 77 files from the pinned WDSP 2.10 tree and six retained
-Nereus files: `linux_port.c`, `netinterface_stub.c`, `ps_sync_stub.c`,
-`rnnr.c`, `sbnr.c`, and `txgain_stub.c`. Windows removes `linux_port.c` from
+The compiled non-Windows library has an explicit list of 84 C translation
+units. It contains 77 files from the pinned WDSP 2.10 tree and seven retained
+or new Nereus files: `dsplock.c`, `linux_port.c`, `netinterface_stub.c`,
+`ps_sync_stub.c`, `rnnr.c`, `sbnr.c`, and `txgain_stub.c`. Windows removes `linux_port.c` from
 that explicit list. Upstream's dormant `snoop.c` is excluded, and its
 monolithic `wdsp.h` is not used as the application ABI. The obsolete local
 `FDnoiseIQ.c/.h` and `fastmath.h` were removed.
 
-Across the 167 current `.c` and `.h` files, 156 names come from the pinned
-tree and 11 are retained or new Nereus files. Of the pinned names, 126 remain
-byte-identical and 30 contain the reviewed integrations below. These counts
+Across the 169 current `.c` and `.h` files, 156 names come from the pinned
+tree and 13 are retained or new Nereus files. Of the pinned names, 125 remain
+byte-identical and 31 contain the reviewed integrations below. These counts
 describe source identity, not authorship: modified files retain their upstream
 notices and remain derived from WDSP.
 
@@ -61,12 +61,14 @@ upstream attribution.
 | PS3 lifecycle and ABI | `calcc.c/.h`, `iqc.c/.h`, `nurbs_spline.c` | Add durable worker/IQC stop cancellation, confirmed worker exit before frees, active-stream and quiescent correction stop paths, retained-correction availability/reapply, bounded display copies, correction-file operation generations/results, checked 256-byte paths, and bounded v2 correction parsing. |
 | POSIX/public-header portability | `extrapolate.c`, `nurbs_fit.c`, `wbfm.c`, `resample.h`, `comm.h` | Supply the audited aligned-allocation declarations, `INT_MAX` include, POSIX helper mappings, and standalone public-header spelling needed by the static macOS/Linux build. |
 | Opaque run diagnostics | `cfir.c/.h`, `emph.c/.h` | Add null-safe run readbacks so host diagnostics do not dereference pinned opaque handles. |
+| DSP lock turn-taking | `comm.h`, `main.c` | `comm.h` redirects `EnterCriticalSection` to the Nereus `dsplock.c` (`WdspEnterCS`), which recognises each channel's `csDSP` by address and counts threads waiting for it; every other lock takes the platform call unchanged. `main.c` takes and releases `csDSP` for each worker block through `WdspWorkerEnter`/`WdspWorkerLeave`, which hold off, within a bounded per-block budget, while control calls wait. Lock scheduling only; no DSP algorithm, constant or default changes (R-R3-39). |
 | Filter-resize ownership | `emph.c`, `fmd.c` | Retain the replacement filter-curve object returned after freeing the old one. Pinned `b02d5bac` discarded that return value in both coefficient-count setters, causing a use-after-free on live RX/TX filter resize. |
 
 `linux_port.c/.h` remains the existing Warren Pratt NR0V and John Melton
 G0ORX/N6LYT POSIX shim, including the preserved DL1YCF comments. Nereus retains
 its Linux initial-semaphore-count correction and macOS process-unique,
-`O_EXCL`, immediate-unlink semaphore handling. The 2.10 import adds EINTR-safe
+`O_EXCL`, immediate-unlink semaphore handling, and undefines `comm.h`'s
+`EnterCriticalSection` redirect so its definition stays the platform call. The 2.10 import adds EINTR-safe
 single waits, monotonic finite deadlines, fair wait-any behavior, explicit
 unsupported wait-all failure, event initial state, and the new WDSP mappings.
 
@@ -106,6 +108,7 @@ lineage above retained in this record and in the sync log.
 
 | File | Purpose |
 | --- | --- |
+| `dsplock.c` / `dsplock.h` | Schedules each channel's existing `csDSP` lock: waiters announce themselves, and the worker gives them a bounded turn before its next block (R-R3-39). Also exports the test-only `WDSPSetTestBlockDelayUs` seam, off by default. |
 | `netinterface_stub.c` | Supplies the small `SetADCSupply`/`LRAudioSwap` ChannelMaster-facing surface until the wider module is present. |
 | `ps_sync_stub.c` | Supplies the retained `SetPSRxIdx`/`SetPSTxIdx` routing surface. |
 | `txgain_stub.c` | Supplies the retained fixed-I/Q-gain surface. |
@@ -119,8 +122,8 @@ authorship/license text as part of the GPLv2-or-later combined
 
 ## License census
 
-The current tree contains 167 `.c`/`.h` files: 83 C sources and 84 headers.
-The header census finds 162 GPLv2-or-later files and five documented
+The current tree contains 169 `.c`/`.h` files: 84 C sources and 85 headers.
+The header census finds 164 GPLv2-or-later files and five documented
 utility headers/sources without a standalone WDSP permission block:
 
 - `fftw3.h` is the upstream FFTW public header; FFTW's provenance is tracked
@@ -165,10 +168,10 @@ replace or narrow those notices.
 
 ## Explicit native file registry
 
-These fixed repository paths register the 167 reviewed native files for the
+These fixed repository paths register the 169 reviewed native files for the
 port checker. They do not automatically register future additions. Source
-hashes were checked against the pinned column of the frozen manifest: 126
-identical, 30 documented downstream variants and 11 local files. Grouped
+hashes were checked against the pinned column of the frozen manifest: 125
+identical, 31 documented downstream variants and 13 local files. Grouped
 source descriptions above retain the detailed lineage and license context.
 
 | File | Source / lineage | Current disposition |
@@ -214,6 +217,8 @@ source descriptions above retain the detailed lineage and license context.
 | `third_party/wdsp/src/div.h` | TAPR WDSP 2.10 @b02d5bac, Source/div.h | Pinned file, byte-identical. |
 | `third_party/wdsp/src/doublepole.c` | TAPR WDSP 2.10 @b02d5bac, Source/doublepole.c | Pinned file, byte-identical. |
 | `third_party/wdsp/src/doublepole.h` | TAPR WDSP 2.10 @b02d5bac, Source/doublepole.h | Pinned file, byte-identical. |
+| `third_party/wdsp/src/dsplock.c` | Nereus-original csDSP turn-taking glue; see the glue inventory above. | Retained or new local integration; original notices preserved. |
+| `third_party/wdsp/src/dsplock.h` | Nereus-original csDSP turn-taking declarations; see the glue inventory above. | Retained or new local integration; original notices preserved. |
 | `third_party/wdsp/src/eer.c` | TAPR WDSP 2.10 @b02d5bac, Source/eer.c | Pinned file, byte-identical. |
 | `third_party/wdsp/src/eer.h` | TAPR WDSP 2.10 @b02d5bac, Source/eer.h | Pinned file, byte-identical. |
 | `third_party/wdsp/src/emnr.c` | TAPR WDSP 2.10 @b02d5bac, Source/emnr.c | Pinned file with reviewed downstream changes; see the integration inventory above. |
@@ -257,7 +262,7 @@ source descriptions above retain the detailed lineage and license context.
 | `third_party/wdsp/src/linux_port.h` | Retained POSIX port; Pratt/Melton provenance documented above. | Retained or new local integration; original notices preserved. |
 | `third_party/wdsp/src/lmath.c` | TAPR WDSP 2.10 @b02d5bac, Source/lmath.c | Pinned file, byte-identical. |
 | `third_party/wdsp/src/lmath.h` | TAPR WDSP 2.10 @b02d5bac, Source/lmath.h | Pinned file, byte-identical. |
-| `third_party/wdsp/src/main.c` | TAPR WDSP 2.10 @b02d5bac, Source/main.c | Pinned file, byte-identical. |
+| `third_party/wdsp/src/main.c` | TAPR WDSP 2.10 @b02d5bac, Source/main.c | Pinned file with reviewed downstream changes; see the integration inventory above. |
 | `third_party/wdsp/src/main.h` | TAPR WDSP 2.10 @b02d5bac, Source/main.h | Pinned file, byte-identical. |
 | `third_party/wdsp/src/matchedCW.c` | TAPR WDSP 2.10 @b02d5bac, Source/matchedCW.c | Pinned file, byte-identical. |
 | `third_party/wdsp/src/matchedCW.h` | TAPR WDSP 2.10 @b02d5bac, Source/matchedCW.h | Pinned file, byte-identical. |

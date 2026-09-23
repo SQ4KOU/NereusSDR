@@ -37,6 +37,7 @@ set(WDSP_SOURCES
     src/dexp.c
     src/div.c
     src/doublepole.c
+    src/dsplock.c
     src/eer.c
     src/emnr.c
     src/emph.c

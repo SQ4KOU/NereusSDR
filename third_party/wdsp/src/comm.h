@@ -24,6 +24,12 @@ warren@wpratt.com
 
 */
 
+// NereusSDR modifications (2026-09-23, J.J. Boyd KG4VCF, with Anthropic
+// Claude Code): EnterCriticalSection is redirected to dsplock.c's
+// WdspEnterCS so a channel's DSP worker gives waiting control calls a
+// bounded turn at csDSP; every other lock still takes the platform call.
+// Source DSP algorithms and all upstream attribution are retained.
+
 #ifdef _WIN32
 #include <Windows.h>
 #include <process.h>
@@ -34,6 +40,10 @@ warren@wpratt.com
 /* Avoid the POSIX dprintf(int, ...) symbol and prototype. */
 #define dprintf wdsp_dprintf
 #endif
+/* NereusSDR: route every WDSP lock entry through dsplock.c (see dsplock.h).
+   Files that need the platform call itself #undef this. */
+void WdspEnterCS (LPCRITICAL_SECTION cs);
+#define EnterCriticalSection(cs) WdspEnterCS(cs)
 #include <math.h>
 #include <stdint.h>
 #include <time.h>
@@ -59,6 +69,7 @@ warren@wpratt.com
 #include "dexp.h"
 #include "div.h"
 #include "doublepole.h"
+#include "dsplock.h"
 #include "eer.h"
 #include "emnr.h"
 #include "rnnr.h"
