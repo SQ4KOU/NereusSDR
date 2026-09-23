@@ -158,13 +158,13 @@ public:
     // True while Test Mic holds its capture demand.
     bool hasTestMicDemand() const { return m_testMicLease.isActive(); }
 
-protected:
-    void hideEvent(QHideEvent* event) override;
-
     // Expose Radio Mic per-family group boxes for test introspection (I.3).
     QGroupBox* hermesRadioMicGroup() const { return m_hermesGroup; }
     QGroupBox* orionRadioMicGroup()  const { return m_orionGroup; }
     QGroupBox* saturnRadioMicGroup() const { return m_saturnGroup; }
+
+protected:
+    void hideEvent(QHideEvent* event) override;
 
 private slots:
     void onMicSourceButtonToggled(int id, bool checked);
