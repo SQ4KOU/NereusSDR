@@ -434,7 +434,7 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
         return;
     }
 
-    const QHostAddress bind(cfg.remoteBind);
+    const QHostAddress bind = DaemonConfig::listenAddressFor(cfg.remoteBind);
     if (bind.isNull()) {
         qCWarning(lcApp) << "DaemonApp: remote_bind is not a valid address:"
                           << cfg.remoteBind << "- remote control not started";
@@ -526,7 +526,7 @@ void DaemonApp::attemptStationServerListen()
         return;
     }
 
-    const QHostAddress bind(m_stationListenBind);
+    const QHostAddress bind = DaemonConfig::listenAddressFor(m_stationListenBind);
     if (bind.isNull()) {
         // startStationServer validates before latching, so this is only a
         // defensive guard against future mutation. Invalid config never
