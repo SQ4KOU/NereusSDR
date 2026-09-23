@@ -612,6 +612,16 @@ void PanadapterStack::retireFloatingWindow(PanFloatingWindow* window,
         if (sw->window() != window) {
             connect(sw, &QRhiWidget::frameSubmitted, window, &QObject::deleteLater,
                     Qt::SingleShotConnection);
+            // Without a usable QRhi (no GPU, or the offscreen platform) the
+            // widget never submits a frame; Qt emits renderFailed instead.
+            // QRhiWidget::paintEvent emits it only after ensureRhi() has
+            // replaced the outgoing pointer with the new window's QRhi, which
+            // is null, and WindowAboutToChangeInternal already removed the
+            // cleanup callback from the outgoing QRhi. The widget then holds
+            // nothing of this window, so the window can go. On a working GPU
+            // path renderFailed does not fire and frameSubmitted still decides.
+            connect(sw, &QRhiWidget::renderFailed, window, &QObject::deleteLater,
+                    Qt::SingleShotConnection);
         }
         connect(sw, &QObject::destroyed, window, &QObject::deleteLater);
         return;

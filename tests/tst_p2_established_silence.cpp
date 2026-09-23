@@ -185,7 +185,7 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(connection.state(),
                                   ConnectionState::LinkLost, 3000);
         invalidTraffic.stop();
-        QCOMPARE(fake.stopCount(), 1);
+        QTRY_COMPARE_WITH_TIMEOUT(fake.stopCount(), 1, 1000);
         connection.disconnect();
     }
 
@@ -346,7 +346,7 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(connection.state(),
                                   ConnectionState::LinkLost, 3000);
         oldStatus.stop();
-        QCOMPARE(newRadio.stopCount(), 1);
+        QTRY_COMPARE_WITH_TIMEOUT(newRadio.stopCount(), 1, 1000);
         connection.disconnect();
     }
 

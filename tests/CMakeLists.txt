@@ -6968,9 +6968,15 @@ nereus_add_test(tst_audio_jitter_buffer)
 # R-R3-23 Task 2: RFC 3550 jitter and sequence accounting for one context.
 nereus_add_test(tst_rtp_reception_stats)
 nereus_add_test(tst_remote_audio_clock)
-# Two simulated hours of continuous interpolation take ~105 s in isolation;
-# allow parallel-suite scheduling headroom without shortening the drift gate.
-set_tests_properties(tst_remote_audio_clock PROPERTIES TIMEOUT 180)
+# Two simulated hours (-500 and +500 ppm) of continuous 48 kHz stereo
+# interpolation. A CPU profile puts about 94% of the time in WDSP xvarsamp,
+# the resampler under test, and about 4% in generating the input tones, so
+# the cost is the coverage itself: shortening either hour weakens the drift
+# gate. Measured 2026-09-22 on the M5 Max: 116 s alone (load 7.3), 212 s in a
+# full -j6 run (load 18.8 at start, 8.7 at end). PROCESSORS 2 makes a -jN run
+# start one fewer neighbour while this single-threaded loop runs; TIMEOUT 400
+# is about twice the loaded measurement.
+set_tests_properties(tst_remote_audio_clock PROPERTIES TIMEOUT 400 PROCESSORS 2)
 nereus_add_test(tst_daemon_audio_session fakes/LoopbackTransport.cpp)
 nereus_add_test(tst_daemon_telemetry fakes/LoopbackTransport.cpp)
 nereus_add_test(tst_remote_audio_receiver)
