@@ -1209,6 +1209,8 @@ void TstStationSession::capabilitiesAdvertiseEffectiveNotBoardLimits()
     QCOMPARE(server.buildCapabilities().remoteWidebandDisplayVersion, 0);
     QCOMPARE(server.buildCapabilities().remoteAudioStatusVersion, 0);
     QCOMPARE(StationCapabilities::fromUpdates(narrowed.toUpdates()).remoteAudioStatusVersion, 0);
+    QCOMPARE(server.buildCapabilities().spectrumGrantVersion, 0);
+    QCOMPARE(StationCapabilities::fromUpdates(narrowed.toUpdates()).spectrumGrantVersion, 0);
     server.setMediaEnabled(true);
     const auto mediaCaps = server.buildCapabilities();
     QCOMPARE(mediaCaps.remoteWidebandDisplayVersion, 1);
@@ -1217,6 +1219,9 @@ void TstStationSession::capabilitiesAdvertiseEffectiveNotBoardLimits()
     QCOMPARE(mediaCaps.remoteAudioStatusVersion, 1);
     QCOMPARE(StationCapabilities::fromUpdates(mediaCaps.toUpdates()).remoteAudioStatusVersion, 1);
     QCOMPARE(StationCapabilities::fromUpdates({}).remoteAudioStatusVersion, 0);
+    QCOMPARE(mediaCaps.spectrumGrantVersion, 1);
+    QCOMPARE(StationCapabilities::fromUpdates(mediaCaps.toUpdates()).spectrumGrantVersion, 1);
+    QCOMPARE(StationCapabilities::fromUpdates({}).spectrumGrantVersion, 0);
 }
 
 void TstStationSession::clientAppliesCapabilitiesAndDrivesConnected()

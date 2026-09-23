@@ -39,6 +39,8 @@ public:
     std::optional<RemoteAudioContextMessage> acceptedAudioContext() const; // nullopt before the first accepted context and after stop()
     /// Core and this GUI agreed the minor-8 audio-context detail.
     bool audioDetailNegotiated() const; // d->client && d->client->remoteAudioStatusAvailable()
+    /// Core and this GUI agreed the minor-9 spectrum grant report.
+    bool spectrumGrantNegotiated() const; // d->client && d->client->spectrumGrantAvailable()
     /// This computer's remote audio status. It is recomputed whenever
     /// something it depends on changes; audioStatusChanged() fires only when
     /// the value does.
@@ -70,6 +72,8 @@ private:
     bool retireSubscriptions(const QList<quint32>& endpointIds);
     void receiveAllocationResult(const QJsonObject& payload);
     void setPanStatus(const QString& panId, const QString& status);
+    QString statusWithGrant(const QString& panId, const QString& status) const;
+    void refreshPanGrantStatus(const QString& panId);
     void refreshCtunState();
     void receiveControl(const QJsonObject& payload, quint32 epoch);
     void receiveDisplay(const QByteArray& packet);

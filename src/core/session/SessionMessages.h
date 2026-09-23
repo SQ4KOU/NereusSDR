@@ -174,7 +174,7 @@ enum class SessionMessageKind {
 /// provisional. R3 swapping the codec under the same object model is a
 /// minor bump at most.
 inline constexpr quint16 kSessionProtocolMajor = 1;
-inline constexpr quint16 kSessionProtocolMinor = 8;
+inline constexpr quint16 kSessionProtocolMinor = 9;
 inline constexpr quint16 kMediaSessionProtocolMinor = 1;
 inline constexpr quint16 kRemoteCtunSessionProtocolMinor = 2;
 inline constexpr quint16 kStationTelemetrySessionProtocolMinor = 3;
@@ -189,6 +189,10 @@ inline constexpr quint16 kRemoteDisplayBudgetSessionProtocolMinor = 7;
 // The audio context carries the accepted encoder profile when audio is on and
 // the reason it is off otherwise. Minor-7 peers keep the eight-key context.
 inline constexpr quint16 kRemoteAudioStatusSessionProtocolMinor = 8;
+// The spectrum context reports what Core granted the endpoint: FFT size and
+// tier, requested and granted points, and what limited them. Minor-8 peers
+// keep the 19-key (20 with wideband) context.
+inline constexpr quint16 kRemoteSpectrumGrantSessionProtocolMinor = 9;
 inline constexpr qsizetype kMaxMediaControlBytes = 128 * 1024;
 inline constexpr qsizetype kMaxStationTelemetryBytes = 16 * 1024;
 

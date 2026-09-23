@@ -2508,6 +2508,12 @@ bool StationClient::remoteAudioStatusAvailable() const
         && m_capabilities.remoteAudioStatusVersion >= 1;
 }
 
+bool StationClient::spectrumGrantAvailable() const
+{
+    return mediaAvailable() && m_agreedMinor >= kRemoteSpectrumGrantSessionProtocolMinor
+        && m_capabilities.spectrumGrantVersion >= 1;
+}
+
 std::optional<DisplayBudgetLimits> StationClient::remoteDisplayBudgetLimits() const
 {
     if (!mediaAvailable() || m_agreedMinor < kRemoteDisplayBudgetSessionProtocolMinor

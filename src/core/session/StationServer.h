@@ -361,6 +361,9 @@ public:
     /// The session agreed minor 8 or later: audio contexts carry the encoder
     /// profile or the off reason. Minor-7 peers keep the eight-key context.
     bool remoteAudioStatusAvailable() const;
+    /// The session agreed minor 9 or later: spectrum contexts report the
+    /// grant Core made. Minor-8 peers keep the 19-key (20 with wideband) context.
+    bool spectrumGrantAvailable() const;
     bool setDisplayBudgetLimits(const DisplayBudgetLimits& limits);
     std::optional<DisplayBudgetLimits> displayBudgetLimits() const { return m_displayBudget; }
     void setDisplayBudgetEnforcementEnabled(bool enabled);

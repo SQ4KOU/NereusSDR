@@ -7007,6 +7007,8 @@ nereus_add_test(tst_remote_audio_receiver)
 nereus_add_test(tst_remote_audio_session fakes/LoopbackTransport.cpp)
 # R-R3-23: the audio-context wire codec in both negotiated shapes.
 nereus_add_test(tst_remote_audio_context)
+# R-R3-01/08: the spectrum-context wire codec in both negotiated shapes.
+nereus_add_test(tst_remote_spectrum_context)
 # R-R3-23 Task 3: the GUI's remote audio status derivation and wording.
 nereus_add_test(tst_remote_audio_status)
 

@@ -27,6 +27,7 @@
 #include "core/session/media/DaemonMediaController.h"
 #include "core/session/media/RemoteAudioContext.h"
 #include "core/session/media/RemoteAudioReceiver.h"
+#include "core/session/media/RemoteSpectrumContext.h"
 #include "core/session/media/SpectrumEndpoint.h"
 #include "core/session/media/WidebandDisplayContext.h"
 #include "core/session/PureSignalSessionFacade.h"
@@ -1874,8 +1875,23 @@ private slots:
             {QStringLiteral("wideSamples"), 0}, {QStringLiteral("minDbm"), -180},
             {QStringLiteral("maxDbm"), 0}, {QStringLiteral("fps"), 30},
             {QStringLiteral("framesPerLine"), 1},
-            {QStringLiteral("wideband"), WidebandDisplayContext{}.toJson()}};
+            {QStringLiteral("wideband"), WidebandDisplayContext{}.toJson()},
+            // Minor 9: what Core granted this endpoint.
+            {QStringLiteral("grantedFftSize"), 4096}, {QStringLiteral("grantedTier"), QStringLiteral("wide")},
+            {QStringLiteral("requestedPixels"), 128}, {QStringLiteral("grantedPixels"), 128},
+            {QStringLiteral("limit"), QStringLiteral("none")}};
+        QVERIFY(controller.spectrumGrantNegotiated());
         QJsonObject invalid = context;
+        // The minor-8 shape is refused once minor 9 is agreed.
+        for (const char* key : {"grantedFftSize", "grantedTier", "requestedPixels",
+                                "grantedPixels", "limit"}) {
+            invalid.remove(QLatin1String(key));
+        }
+        QVERIFY(server.sendMediaControl(invalid, server.mediaSessionEpoch()));
+        QTest::qWait(30);
+        media->deliver(packet);
+        QCOMPARE(frames.count(), 0);
+        invalid = context;
         invalid.insert(QStringLiteral("traceSamples"), 128.5);
         QVERIFY(server.sendMediaControl(invalid, server.mediaSessionEpoch()));
         QTest::qWait(30);
@@ -2066,6 +2082,222 @@ private slots:
         QTRY_VERIFY(retiredWidget.isNull());
         client.disconnectFromStation(QStringLiteral("test complete"));
         QVERIFY(!media || !media->active);
+    }
+
+    // R-R3-01/08: while Core reports a limited grant the pan shows one plain
+    // line; nothing for an unlimited grant, and the line goes with the
+    // endpoint.
+    void limitedGrantShowsOnePlainPanStatusLine()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::HermesLite);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        station.addSlice(QStringLiteral("pan-0"));
+        QVERIFY(!station.slices().isEmpty());
+        SliceModel* stationSlice = station.slices().first();
+        stationSlice->setStreamIndex(0);
+        stationSlice->setFrequency(14225000);
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true); // Display fixture opens no speaker.
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        PanadapterStack stack;
+        auto* applet = stack.addPanadapter(QStringLiteral("pan-0"));
+        applet->setActiveSliceIndex(stationSlice->sliceIndex());
+        auto* widget = applet->spectrumWidget();
+        widget->setDisplayWindowPreservingHistory(14225000, 24000);
+        stack.resize(600, 400);
+        stack.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&stack));
+        QPointer<DisplayTransport> media;
+        RemoteMediaController controller(&client, &remote, &stack, nullptr,
+            [&media](QObject* owner) -> IMediaTransport* {
+                media = new DisplayTransport(owner);
+                return media;
+            });
+        QSignalSpy controls(&server, &StationServer::mediaControlReceived);
+        QSignalSpy receivedControls(&client, &StationClient::mediaControlReceived);
+        auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(client.mediaAvailable());
+        QTRY_VERIFY(media);
+        media->activate();
+        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 1);
+        QVERIFY(controller.spectrumGrantNegotiated());
+        QVERIFY(!client.remoteDisplayBudgetLimits().has_value());
+        const QJsonObject subscription = lastControl(controls, QStringLiteral("subscribe"));
+        const quint32 id = quint32(subscription.value(QStringLiteral("endpointId")).toDouble());
+        QVERIFY(applet->remoteDisplayStatus().isEmpty());
+
+        SpectrumContextMessage message;
+        message.connectionId = subscription.value(QStringLiteral("connectionId")).toString();
+        message.endpointId = id;
+        message.revision = quint32(subscription.value(QStringLiteral("revision")).toDouble());
+        message.sourceStream = 0;
+        message.sourceCentreHz = 14225000;
+        message.sampleRateHz = 192000;
+        // SpectrumEndpoint's bin-aligned crop of this window (see
+        // contextMediaAndRetirementStayInAuthenticatedSession).
+        message.centreHz = 14225023.4375;
+        message.spanHz = 24046.875;
+        message.traceSamples = 128;
+        message.waterfallSamples = 128;
+        message.minDbm = -180;
+        message.maxDbm = 0;
+        message.fps = 30;
+        message.framesPerLine = 1;
+        message.wideband = WidebandDisplayContext{};
+        const auto sendGrant = [&](SpectrumLimitReason limit, bool grantShape = true) {
+            ++message.contextGeneration;
+            SpectrumContextGrant grant;
+            grant.grantedFftSize = 4096;
+            grant.requestedPixels = 600;
+            grant.grantedPixels = 128;
+            grant.limit = limit;
+            message.grant = grant;
+            const int before = countControl(receivedControls, QStringLiteral("context"));
+            QVERIFY(server.sendMediaControl(encodeRemoteSpectrumContext(message, grantShape),
+                                            server.mediaSessionEpoch()));
+            QTRY_COMPARE(countControl(receivedControls, QStringLiteral("context")), before + 1);
+        };
+        const QString sourceBins =
+            QStringLiteral("Showing 128 points: the receiver has no finer detail here");
+        const QString shared = QStringLiteral(
+            "Zoom detail limited: this receiver's spectrum is shared with another pan");
+        const QString largest = QStringLiteral("Zoom detail is at the station's maximum");
+
+        sendGrant(SpectrumLimitReason::SourceBins);
+        QTRY_COMPARE(applet->remoteDisplayStatus(), sourceBins);
+        sendGrant(SpectrumLimitReason::SharedEngine);
+        QTRY_COMPARE(applet->remoteDisplayStatus(), shared);
+        sendGrant(SpectrumLimitReason::LargestSize);
+        QTRY_COMPARE(applet->remoteDisplayStatus(), largest);
+        // No longer limited: nothing is shown, and the periodic refresh
+        // does not bring an old line back.
+        sendGrant(SpectrumLimitReason::None);
+        QTRY_VERIFY(applet->remoteDisplayStatus().isEmpty());
+        QTest::qWait(250);
+        QVERIFY(applet->remoteDisplayStatus().isEmpty());
+        sendGrant(SpectrumLimitReason::SharedEngine);
+        QTRY_COMPARE(applet->remoteDisplayStatus(), shared);
+        // A context without the grant is refused, so it cannot clear the line.
+        sendGrant(SpectrumLimitReason::None, false);
+        QTest::qWait(250);
+        QCOMPARE(applet->remoteDisplayStatus(), shared);
+
+        // The endpoint goes away with the session; so does its line.
+        client.disconnectFromStation(QStringLiteral("test complete"));
+        QTRY_VERIFY2(applet->remoteDisplayStatus().isEmpty(),
+                     qPrintable(applet->remoteDisplayStatus()));
+        QVERIFY(!media || !media->active);
+    }
+
+    // R-R3-01/09: a Core and a GUI that agree minor 8 keep today's context
+    // and keep painting; minor 9 carries the grant. Each GUI accepts only
+    // the shape it negotiated, so neither direction of a mixed pair breaks.
+    void spectrumContextShapeFollowsTheAgreedMinor_data()
+    {
+        QTest::addColumn<int>("minor");
+        QTest::newRow("minor 8") << int(kRemoteSpectrumGrantSessionProtocolMinor - 1);
+        QTest::newRow("minor 9") << int(kRemoteSpectrumGrantSessionProtocolMinor);
+    }
+
+    void spectrumContextShapeFollowsTheAgreedMinor()
+    {
+        QFETCH(int, minor);
+        const bool grantAgreed = minor >= kRemoteSpectrumGrantSessionProtocolMinor;
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        const int sliceId = station.addSlice();
+        auto* slice = station.sliceById(sliceId);
+        QVERIFY(slice);
+        const int stream = slice->streamIndex();
+        QVERIFY(stream >= 0);
+        const double centre = station.streamCentreHz(stream);
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        QPointer<DisplayTransport> sourceMedia;
+        DaemonMediaController daemon(&server, &station, nullptr,
+            [&sourceMedia](QObject* owner) -> IMediaTransport* {
+                sourceMedia = new DisplayTransport(owner);
+                return sourceMedia;
+            });
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true); // Display fixture opens no speaker.
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        PanadapterStack stack;
+        auto* applet = stack.addPanadapter(QStringLiteral("only"));
+        applet->setActiveSliceIndex(sliceId);
+        applet->spectrumWidget()->setDisplayWindowPreservingHistory(centre, 48000);
+        stack.resize(600, 400);
+        stack.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&stack));
+        QPointer<DisplayTransport> sinkMedia;
+        RemoteMediaController gui(&client, &remote, &stack, nullptr,
+            [&sinkMedia](QObject* owner) -> IMediaTransport* {
+                sinkMedia = new DisplayTransport(owner);
+                return sinkMedia;
+            });
+        QSignalSpy inbound(&client, &StationClient::mediaControlReceived);
+        QSignalSpy frames(&gui, &RemoteMediaController::displayFrameReceived);
+        // Both ends announce the row's minor, so each believes the other is
+        // a build of that minor.
+        auto* stationLink = new Test::RewritingTransport(QStringLiteral("station"),
+                                                         quint16(minor));
+        auto* clientLink = new Test::RewritingTransport(QStringLiteral("client"),
+                                                        quint16(minor));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(sourceMedia && sinkMedia);
+        QCOMPARE(client.agreedMinor(), quint16(minor));
+        QCOMPARE(server.spectrumGrantAvailable(), grantAgreed);
+        QCOMPARE(client.spectrumGrantAvailable(), grantAgreed);
+        QCOMPARE(gui.spectrumGrantNegotiated(), grantAgreed);
+        sourceMedia->other = sinkMedia;
+        sourceMedia->activate();
+        sinkMedia->activate();
+        QTRY_COMPARE(daemon.activeEndpointCount(), 1);
+        QVector<float> iq(2048);
+        for (int i = 0; i < iq.size(); i += 2) {
+            iq[i] = 0.01f * std::cos(double(i) * 0.17);
+            iq[i + 1] = 0.01f * std::sin(double(i) * 0.17);
+        }
+        const auto painted = [&] {
+            QMetaObject::invokeMethod(&station, "rawIqDataForStream", Qt::DirectConnection,
+                Q_ARG(int, stream), Q_ARG(QVector<float>, iq));
+            return frames.count() > 0
+                && !applet->spectrumWidget()->renderedPixels().isEmpty();
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(painted(), 5000);
+        QCOMPARE(countControl(inbound, QStringLiteral("rejected")), 0);
+        const QList<QJsonObject> contexts = controlsFor(inbound, QStringLiteral("context"));
+        QVERIFY(!contexts.isEmpty());
+        for (const QJsonObject& context : contexts) {
+            const bool wideband = context.contains(QStringLiteral("wideband"));
+            QCOMPARE(context.size(), (grantAgreed ? 24 : 19) + (wideband ? 1 : 0));
+            QCOMPARE(context.contains(QStringLiteral("limit")), grantAgreed);
+            QVERIFY(decodeRemoteSpectrumContext(context, grantAgreed).has_value());
+            QVERIFY(!decodeRemoteSpectrumContext(context, !grantAgreed).has_value());
+        }
+        if (!grantAgreed) {
+            // No grant was reported, so no grant line can appear.
+            QVERIFY(!applet->remoteDisplayStatus().contains(QStringLiteral("Zoom detail")));
+            QVERIFY(!applet->remoteDisplayStatus().contains(QStringLiteral("points:")));
+        }
+        client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
     // R-R3-23 (a): a real speaker loss becomes a lasting playback problem

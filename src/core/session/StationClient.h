@@ -418,6 +418,9 @@ public:
     /// Agreed minor 8 or later and advertised by Core: audio contexts carry
     /// the encoder profile or the off reason.
     bool remoteAudioStatusAvailable() const;
+    /// Agreed minor 9 or later and advertised by Core: spectrum contexts
+    /// report the grant Core made for the endpoint.
+    bool spectrumGrantAvailable() const;
     std::optional<DisplayBudgetLimits> remoteDisplayBudgetLimits() const;
     bool remotePs3DisplaySubscribed() const;
     quint32 requestPs3DisplaySubscription(bool enabled);

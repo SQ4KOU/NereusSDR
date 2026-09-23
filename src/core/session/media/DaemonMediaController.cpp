@@ -5,6 +5,7 @@
 // =================================================================
 
 #include "core/session/media/DaemonMediaController.h"
+#include "core/session/media/RemoteSpectrumContext.h"
 
 #include "core/FFTEngine.h"
 #include "core/session/StationServer.h"
@@ -1281,30 +1282,32 @@ void DaemonMediaController::sendContext(EndpointEntry& entry)
         return;
     }
     const SpectrumEndpointContext& context = entry.endpoint.context();
-    QJsonObject message{
-        {QStringLiteral("op"), QStringLiteral("context")},
-        {QStringLiteral("connectionId"), m_peer->connectionId()},
-        {QStringLiteral("endpointId"), static_cast<qint64>(context.codec.endpointId)},
-        {QStringLiteral("revision"), static_cast<qint64>(entry.revision)},
-        {QStringLiteral("contextGeneration"), static_cast<qint64>(context.codec.contextGeneration)},
-        {QStringLiteral("sourceStream"), context.source.streamIndex},
-        {QStringLiteral("sourceCentreHz"), entry.sourceCentreHz},
-        {QStringLiteral("sampleRateHz"), entry.sourceSampleRateHz},
-        {QStringLiteral("centreHz"), context.exactCentreHz},
-        {QStringLiteral("spanHz"), context.exactSpanHz},
-        {QStringLiteral("wideCentreHz"), context.wideCentreHz},
-        {QStringLiteral("wideSpanHz"), context.wideSpanHz},
-        {QStringLiteral("traceSamples"), context.codec.traceSamples},
-        {QStringLiteral("waterfallSamples"), context.codec.waterfallSamples},
-        {QStringLiteral("wideSamples"), context.codec.wideSamples},
-        {QStringLiteral("minDbm"), context.codec.minDbm},
-        {QStringLiteral("maxDbm"), context.codec.maxDbm},
-        {QStringLiteral("fps"), context.targetFps},
-        {QStringLiteral("framesPerLine"), context.framesPerLine},
-    };
+    SpectrumContextMessage contextMessage;
+    contextMessage.connectionId = m_peer->connectionId();
+    contextMessage.endpointId = context.codec.endpointId;
+    contextMessage.revision = entry.revision;
+    contextMessage.contextGeneration = context.codec.contextGeneration;
+    contextMessage.sourceStream = context.source.streamIndex;
+    contextMessage.sourceCentreHz = entry.sourceCentreHz;
+    contextMessage.sampleRateHz = entry.sourceSampleRateHz;
+    contextMessage.centreHz = context.exactCentreHz;
+    contextMessage.spanHz = context.exactSpanHz;
+    contextMessage.wideCentreHz = context.wideCentreHz;
+    contextMessage.wideSpanHz = context.wideSpanHz;
+    contextMessage.traceSamples = context.codec.traceSamples;
+    contextMessage.waterfallSamples = context.codec.waterfallSamples;
+    contextMessage.wideSamples = context.codec.wideSamples;
+    contextMessage.minDbm = context.codec.minDbm;
+    contextMessage.maxDbm = context.codec.maxDbm;
+    contextMessage.fps = context.targetFps;
+    contextMessage.framesPerLine = context.framesPerLine;
     if (entry.widebandNegotiated) {
-        message.insert(QStringLiteral("wideband"), context.wideband.toJson());
+        contextMessage.wideband = context.wideband;
     }
+    contextMessage.grant = spectrumContextGrant(entry.grant);
+    // A minor-8 peer receives exactly the context it already parses.
+    const QJsonObject message = encodeRemoteSpectrumContext(
+        contextMessage, m_server && m_server->spectrumGrantAvailable());
     // A failed send can synchronously close the session. Copy identity before
     // crossing the transport and never retain an endpoint reference across it.
     MediaPeer* const peer = m_peer.get();

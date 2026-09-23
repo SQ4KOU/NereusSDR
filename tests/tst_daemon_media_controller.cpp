@@ -27,6 +27,7 @@
 #include "core/session/media/IMediaTransport.h"
 #include "core/session/media/OpusAudioCodec.h"
 #include "core/session/media/RemoteAudioContext.h"
+#include "core/session/media/RemoteSpectrumContext.h"
 #include "core/settings/SettingsProxy.h"
 #include "fakes/LoopbackTransport.h"
 #include "models/RadioModel.h"
@@ -465,6 +466,8 @@ private slots:
     void olderPeerKeepsLegacyContextAndCannotAcquireWideband();
     void minorSevenPeerReceivesLegacyAudioContexts();
     void minorEightAudioContextsCarryEncoderOrReason();
+    void minorEightPeerReceivesTodaysSpectrumContext();
+    void minorNineSpectrumContextsReportTheGrant();
     void localCaptureDuringConnectingGetsIdentityBeforeFirstAdcRow();
     void synchronousDisplayClosureRetiresDemandAndAllowsNewPeer_data();
     void synchronousDisplayClosureRetiresDemandAndAllowsNewPeer();
@@ -1255,7 +1258,18 @@ void TstDaemonMediaController::authenticatedControlProducesContextThenDecodedDis
     harness.feedRadio();
     QTRY_VERIFY(!messageFor(controls, QStringLiteral("context"), 7).isEmpty());
     const QJsonObject context = messageFor(controls, QStringLiteral("context"), 7);
-    QCOMPARE(context.size(), 19);
+    // Minor 9: today's 19 fields plus the five grant fields.
+    QVERIFY(harness.server.spectrumGrantAvailable());
+    QVERIFY(harness.client.spectrumGrantAvailable());
+    QCOMPARE(context.size(), 24);
+    const auto reported = decodeRemoteSpectrumContext(context, true);
+    QVERIFY(reported.has_value() && reported->grant.has_value());
+    QCOMPARE(reported->grant->grantedFftSize, 1024);
+    QCOMPARE(reported->grant->grantedTier, FftTier::Wide);
+    QCOMPARE(reported->grant->requestedPixels, 128);
+    QCOMPARE(reported->grant->grantedPixels, 128);
+    QCOMPARE(reported->grant->limit, SpectrumLimitReason::None);
+    QVERIFY(!decodeRemoteSpectrumContext(context, false).has_value());
     QCOMPARE(context.value(QStringLiteral("sourceStream")).toInt(), harness.streamIndex);
     QCOMPARE(context.value(QStringLiteral("sourceCentreHz")).toDouble(),
              harness.radio.streamCentreHz(harness.streamIndex));
@@ -1524,7 +1538,8 @@ void TstDaemonMediaController::extendedPermissionFirstCaptureAndSharedEndpointLi
         return !messageFor(controls, QStringLiteral("context"), 21).isEmpty();
     })());
     auto context = messageFor(controls, QStringLiteral("context"), 21);
-    QCOMPARE(context.size(), 20);
+    QCOMPARE(context.size(), 25); // wideband and the minor-9 grant
+    QVERIFY(decodeRemoteSpectrumContext(context, true).has_value());
     auto wideband = WidebandDisplayContext::fromJson(context.value(QStringLiteral("wideband")).toObject());
     QVERIFY(wideband && wideband->available && !wideband->active);
     QCOMPARE(wideband->sourceGeneration, quint32(0));
@@ -1934,7 +1949,7 @@ void TstDaemonMediaController::minorEightAudioContextsCarryEncoderOrReason()
 
     Harness h;
     h.establishSession();
-    QCOMPARE(h.client.agreedMinor(), kRemoteAudioStatusSessionProtocolMinor);
+    QVERIFY(h.client.agreedMinor() >= kRemoteAudioStatusSessionProtocolMinor);
     QVERIFY(h.server.remoteAudioStatusAvailable());
     QVERIFY(h.client.remoteAudioStatusAvailable());
     QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
@@ -2341,6 +2356,173 @@ void TstDaemonMediaController::staleEpochAndForeignConnectionLeaveEndpointsUntou
     QCOMPARE(messageFor(controls, QStringLiteral("context"), 1)
                  .value(QStringLiteral("contextGeneration")).toInteger(),
              context.value(QStringLiteral("contextGeneration")).toInteger());
+    QVERIFY(messageFor(controls, QStringLiteral("rejected"), 1).isEmpty());
+    h.finish();
+}
+
+// R-R3-09: a GUI from before minor 9 keeps receiving exactly today's
+// spectrum context, with and without wideband, while Core still records
+// the grant it made.
+void TstDaemonMediaController::minorEightPeerReceivesTodaysSpectrumContext()
+{
+    Harness h;
+    h.enableWidebandSource();
+    auto* station = new Test::LoopbackTransport(QStringLiteral("minor8-station"), this);
+    auto* peer = new Test::LoopbackTransport(QStringLiteral("minor8-peer"), this);
+    station->linkTo(peer);
+    h.server.acceptTransport(station);
+    peer->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor, kRemoteSpectrumGrantSessionProtocolMinor - 1, 0,
+        QStringLiteral("minor-8 client"))));
+    peer->sendText(SessionMessages::encode(SessionMessages::authRequest(h.server.token())));
+    QTRY_VERIFY(h.server.mediaAvailable());
+    QVERIFY(h.server.remoteWidebandAvailable());
+    QVERIFY(!h.server.spectrumGrantAvailable());
+    const auto send = [&](const QJsonObject& payload) {
+        SessionMessage message;
+        message.kind = SessionMessageKind::MediaControl;
+        message.mediaPayload = payload;
+        peer->sendText(SessionMessages::encode(message));
+    };
+    send({{QStringLiteral("op"), QStringLiteral("start")},
+          {QStringLiteral("connectionId"), QLatin1String(kConnectionId)}});
+    QTRY_VERIFY(h.mediaTransport);
+    h.mediaTransport->becomeReady();
+    const double centre = h.radio.streamCentreHz(h.streamIndex);
+    send(subscription(81, 1, h.sliceId, centre));
+    QJsonObject extended = subscription(82, 1, h.sliceId, centre);
+    extended.insert(QStringLiteral("extendedView"), true);
+    send(extended);
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 2);
+
+    const auto contextFor = [&](quint32 endpointId) {
+        QJsonObject latest;
+        for (const QByteArray& wire : peer->received()) {
+            SessionMessage message;
+            if (SessionMessages::decode(wire, &message)
+                && message.kind == SessionMessageKind::MediaControl
+                && message.mediaPayload.value(QStringLiteral("op")) == QLatin1String("context")
+                && message.mediaPayload.value(QStringLiteral("endpointId")).toInteger()
+                    == qint64{endpointId}) {
+                latest = message.mediaPayload;
+            }
+        }
+        return latest;
+    };
+    QTRY_VERIFY(([&] {
+        h.feedRadio();
+        return !contextFor(81).isEmpty() && !contextFor(82).isEmpty();
+    })());
+
+    QStringList todaysKeys{
+        QStringLiteral("op"), QStringLiteral("connectionId"), QStringLiteral("endpointId"),
+        QStringLiteral("revision"), QStringLiteral("contextGeneration"),
+        QStringLiteral("sourceStream"), QStringLiteral("sourceCentreHz"),
+        QStringLiteral("sampleRateHz"), QStringLiteral("centreHz"), QStringLiteral("spanHz"),
+        QStringLiteral("wideCentreHz"), QStringLiteral("wideSpanHz"),
+        QStringLiteral("traceSamples"), QStringLiteral("waterfallSamples"),
+        QStringLiteral("wideSamples"), QStringLiteral("minDbm"), QStringLiteral("maxDbm"),
+        QStringLiteral("fps"), QStringLiteral("framesPerLine")};
+    QCOMPARE(todaysKeys.size(), 19);
+    for (const quint32 endpointId : {81u, 82u}) {
+        const QJsonObject context = contextFor(endpointId);
+        QStringList expected = todaysKeys;
+        if (endpointId == 82) { expected.append(QStringLiteral("wideband")); }
+        expected.sort();
+        QCOMPARE(context.keys(), expected);
+        // What a minor-8 GUI accepts, and not what a minor-9 GUI accepts.
+        const std::optional<SpectrumContextMessage> decoded =
+            decodeRemoteSpectrumContext(context, false);
+        QVERIFY(decoded.has_value());
+        QVERIFY(!decodeRemoteSpectrumContext(context, true).has_value());
+        QCOMPARE(encodeRemoteSpectrumContext(*decoded, false), context);
+        QVERIFY(h.controller.spectrumGrant(endpointId).has_value());
+    }
+    peer->closeLink(QStringLiteral("test complete"));
+}
+
+// R-R3-01/08: at minor 9 each context carries the grant Core recorded,
+// including what limited it.
+void TstDaemonMediaController::minorNineSpectrumContextsReportTheGrant()
+{
+    Harness h;
+    h.establishSession();
+    QCOMPARE(h.client.agreedMinor(), kRemoteSpectrumGrantSessionProtocolMinor);
+    QVERIFY(h.server.spectrumGrantAvailable());
+    QVERIFY(h.client.spectrumGrantAvailable());
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    h.startReadyPeer();
+    const double centre = h.radio.streamCentreHz(h.streamIndex);
+    const int largest = NereusSDR::FFTEngine::maximumFftSize();
+
+    const auto reported = [&](quint32 endpointId, quint32 revision)
+        -> std::optional<SpectrumContextGrant> {
+        const QJsonObject context = messageFor(controls, QStringLiteral("context"), endpointId);
+        if (context.value(QStringLiteral("revision")).toInteger() != qint64{revision}) {
+            return std::nullopt;
+        }
+        const std::optional<SpectrumContextMessage> decoded =
+            decodeRemoteSpectrumContext(context, true);
+        return decoded ? decoded->grant : std::nullopt;
+    };
+    const auto awaitReport = [&](quint32 endpointId, quint32 revision, int feedsPerPoll) {
+        std::optional<SpectrumContextGrant> grant;
+        // The caller verifies the result; QTRY cannot return a value.
+        const bool arrived = QTest::qWaitFor([&] {
+            for (int feed = 0; feed < feedsPerPoll; ++feed) { h.feedRadio(); }
+            grant = reported(endpointId, revision);
+            return grant.has_value();
+        }, 10000);
+        Q_UNUSED(arrived);
+        return grant;
+    };
+
+    // Alone on its engine: nothing limits it.
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(1, 1, h.sliceId, centre, QStringLiteral("wide"), 1024),
+        h.client.sessionEpoch()));
+    std::optional<SpectrumContextGrant> grant = awaitReport(1, 1, 1);
+    QVERIFY(grant.has_value());
+    QCOMPARE(grant->grantedFftSize, 1024);
+    QCOMPARE(grant->grantedTier, FftTier::Wide);
+    QCOMPARE(grant->requestedPixels, 128);
+    QCOMPARE(grant->grantedPixels, 128);
+    QCOMPARE(grant->limit, SpectrumLimitReason::None);
+    QCOMPARE(*grant, spectrumContextGrant(*h.controller.spectrumGrant(1)));
+
+    // A larger request on the Wide engine E1 uses: the shared engine stands.
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(2, 1, h.sliceId, centre, QStringLiteral("wide"), largest * 2),
+        h.client.sessionEpoch()));
+    grant = awaitReport(2, 1, 1);
+    QVERIFY(grant.has_value());
+    QCOMPARE(grant->grantedFftSize, 1024);
+    QCOMPARE(grant->limit, SpectrumLimitReason::SharedEngine);
+    QCOMPARE(*grant, spectrumContextGrant(*h.controller.spectrumGrant(2)));
+
+    // Alone on the Fine engine, above the largest size.
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(3, 1, h.sliceId, centre, QStringLiteral("fine"), largest * 2),
+        h.client.sessionEpoch()));
+    grant = awaitReport(3, 1, 64);
+    QVERIFY(grant.has_value());
+    QCOMPARE(grant->grantedFftSize, largest);
+    QCOMPARE(grant->grantedTier, FftTier::Fine);
+    QCOMPARE(grant->limit, SpectrumLimitReason::LargestSize);
+    QCOMPARE(*grant, spectrumContextGrant(*h.controller.spectrumGrant(3)));
+
+    // More points than E1's crop has source bins.
+    QJsonObject wider = tieredSubscription(1, 2, h.sliceId, centre, QStringLiteral("wide"), 1024);
+    wider.insert(QStringLiteral("pixels"), SpectrumEndpoint::kMaxPixels);
+    QVERIFY(h.client.sendMediaControl(wider, h.client.sessionEpoch()));
+    grant = awaitReport(1, 2, 1);
+    QVERIFY(grant.has_value());
+    QCOMPARE(grant->requestedPixels, SpectrumEndpoint::kMaxPixels);
+    QCOMPARE(grant->grantedPixels, 257);
+    QCOMPARE(grant->limit, SpectrumLimitReason::SourceBins);
+    QCOMPARE(messageFor(controls, QStringLiteral("context"), 1)
+                 .value(QStringLiteral("traceSamples")).toInt(), 257);
+    QCOMPARE(*grant, spectrumContextGrant(*h.controller.spectrumGrant(1)));
     QVERIFY(messageFor(controls, QStringLiteral("rejected"), 1).isEmpty());
     h.finish();
 }

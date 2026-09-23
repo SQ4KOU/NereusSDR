@@ -1246,6 +1246,13 @@ bool StationServer::remoteAudioStatusAvailable() const
         && it->agreedMinor >= kRemoteAudioStatusSessionProtocolMinor;
 }
 
+bool StationServer::spectrumGrantAvailable() const
+{
+    const auto it = m_peers.constFind(m_session);
+    return mediaAvailable() && it != m_peers.cend()
+        && it->agreedMinor >= kRemoteSpectrumGrantSessionProtocolMinor;
+}
+
 bool StationServer::displayBudgetAvailable() const
 {
     const auto it = m_peers.constFind(m_session);
@@ -1314,6 +1321,7 @@ StationCapabilities StationServer::buildCapabilities() const
     caps.remoteMediaVersion = m_mediaEnabled ? 1 : 0;
     caps.remoteWidebandDisplayVersion = m_mediaEnabled ? 1 : 0;
     caps.remoteAudioStatusVersion = m_mediaEnabled ? 1 : 0;
+    caps.spectrumGrantVersion = m_mediaEnabled ? 1 : 0;
     if (m_mediaEnabled && m_displayBudgetEnforcementEnabled && m_displayBudget) {
         caps.remoteDisplayBudgetVersion = 1;
         caps.displayBudget = m_displayBudget;

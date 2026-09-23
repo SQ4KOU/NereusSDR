@@ -112,6 +112,9 @@ struct StationCapabilities {
     /// Audio contexts carry the accepted encoder profile or the reason audio
     /// is off. Nonzero only with media; negotiated minor still gates it.
     int remoteAudioStatusVersion = 0;
+    /// Spectrum contexts report the grant Core made for the endpoint.
+    /// Nonzero only with media; negotiated minor still gates it.
+    int spectrumGrantVersion = 0;
     int remoteDisplayBudgetVersion = 0;
     std::optional<DisplayBudgetLimits> displayBudget;
     bool remotePs3DisplaySubscribed = false;

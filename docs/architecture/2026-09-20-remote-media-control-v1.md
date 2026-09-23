@@ -90,6 +90,28 @@ sourceCentreHz, sampleRateHz, centreHz, spanHz, wideCentreHz, wideSpanHz,
 traceSamples, waterfallSamples, wideSamples, minDbm, maxDbm, fps, framesPerLine
 ```
 
+A subscription that negotiated the extended view (minor 6) adds a 20th
+field, `wideband`.
+
+Session protocol minor 9 and capability `spectrumGrantVersion=1` add five
+fields reporting what Core granted the endpoint (R-R3-01, R-R3-08), so the
+context has 24 fields, or 25 with `wideband`:
+
+```text
+grantedFftSize, grantedTier, requestedPixels, grantedPixels, limit
+```
+
+`grantedFftSize` is the FFT size the endpoint's engine actually runs
+(1..262144). `grantedTier` is `wide` or `fine`. `requestedPixels` and
+`grantedPixels` are 1..4096 with granted not above requested. `limit` names
+what reduced the grant: `none`, `largest-size` (the request was above the
+largest supported FFT size), `shared` (another endpoint uses the same stream
+and tier engine, so its size stands) or `source-bins` (the crop has fewer
+source bins than the requested pixels). A minor 8 or older peer receives
+the 19- or 20-field context unchanged, and each side accepts only the shape
+it negotiated. Both sides use one codec, `RemoteSpectrumContext`. The GUI
+shows a plain status line on the pan while the grant is limited.
+
 Core configures this from the first actual frame of the current source
 generation, then sends it before encoded display. Exact sample counts clamp
 to available cropped bins. Center/span describe the accepted bin-aligned

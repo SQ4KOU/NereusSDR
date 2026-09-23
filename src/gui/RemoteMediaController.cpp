@@ -10,6 +10,7 @@
 #include "core/session/StationClient.h"
 #include "core/session/media/DisplayCodec.h"
 #include "core/session/media/DisplayBudget.h"
+#include "core/session/media/RemoteSpectrumContext.h"
 #include "core/session/media/SpectrumEndpoint.h"
 #include "core/session/media/WidebandDisplayContext.h"
 #include "gui/DssGeometry.h"
@@ -110,6 +111,37 @@ QString reportedAudioProfile(const std::optional<OpusEncoderProfile>& encoder)
         .arg(encoder->frameSamples)
         .arg(encoder->targetBitrate)
         .arg(encoder->audioBandwidthHz);
+}
+
+// The operator's line for a limited grant; empty when nothing limited it.
+QString grantStatusLine(const std::optional<SpectrumContextGrant>& grant)
+{
+    if (!grant) {
+        return {};
+    }
+    switch (grant->limit) {
+    case SpectrumLimitReason::None:
+        return {};
+    case SpectrumLimitReason::LargestSize:
+        return QStringLiteral("Zoom detail is at the station's maximum");
+    case SpectrumLimitReason::SharedEngine:
+        return QStringLiteral("Zoom detail limited: this receiver's spectrum is shared with another pan");
+    case SpectrumLimitReason::SourceBins:
+        return QStringLiteral("Showing %1 points: the receiver has no finer detail here")
+            .arg(grant->grantedPixels);
+    }
+    return {};
+}
+
+// Log wording only.
+QString grantLogLine(const SpectrumContextGrant& grant)
+{
+    return QStringLiteral("FFT %1 (%2 tier), %3 of %4 points, limit %5")
+        .arg(grant.grantedFftSize)
+        .arg(grant.grantedTier == FftTier::Fine ? QStringLiteral("fine") : QStringLiteral("wide"))
+        .arg(grant.grantedPixels)
+        .arg(grant.requestedPixels)
+        .arg(spectrumLimitReasonToWire(grant.limit));
 }
 
 bool geometryNeedsWideband(double centreHz, double spanHz,
@@ -303,6 +335,8 @@ struct RemoteMediaController::Private {
         DisplayBudgetCharge acceptedCharge;
         std::optional<Pending> pending;
         SpectrumEndpointContext context;
+        /// What Core granted, as the accepted minor-9 context reported it.
+        std::optional<SpectrumContextGrant> grant;
         double sourceCentreHz = 0;
         DisplayCodecDecoder decoder;
         qint64 lastKeyframeMs = -1000;
@@ -331,6 +365,8 @@ struct RemoteMediaController::Private {
     RemoteMediaController::AllocationClock allocationClock;
     int allocationAckTimeoutMs = kDefaultAllocationAckTimeoutMs;
     std::map<quint32, Binding> bindings;
+    // The status each pan was last given, before its grant line is added.
+    QHash<QString, QString> panBaseStatus;
     struct CtunState {
         quint64 epoch = 0;
         int requestSliceId = -1;
@@ -651,6 +687,10 @@ bool RemoteMediaController::audioDetailNegotiated() const
 {
     return d->client && d->client->remoteAudioStatusAvailable();
 }
+bool RemoteMediaController::spectrumGrantNegotiated() const
+{
+    return d->client && d->client->spectrumGrantAvailable();
+}
 RemoteAudioStatus RemoteMediaController::audioStatus() const
 {
     return d->audioStatus;
@@ -757,6 +797,13 @@ void RemoteMediaController::stop()
             if (!self) { return; }
         }
     }
+    // Endpoints retired before this point left their pans; drop any grant
+    // line they still show, keeping the rest of each pan's status.
+    for (const QString& panId : d->panBaseStatus.keys()) {
+        refreshPanGrantStatus(panId);
+        if (!self) { return; }
+    }
+    d->panBaseStatus.clear();
 }
 
 void RemoteMediaController::requestRecovery(quint32 expectedEpoch, const QString& reason)
@@ -872,12 +919,15 @@ bool RemoteMediaController::retireSubscriptions(const QList<quint32>& endpointId
             found->second.slice = nullptr;
             found->second.retiring = true;
             found->second.suspending = false;
+            const QString panId = found->second.panId;
             if (widget) {
                 widget->clearRemoteSpectrum();
                 if (!self || !widget) { return false; }
                 widget->applyRemoteCtunState(false, false);
                 if (!self) { return false; }
             }
+            refreshPanGrantStatus(panId);
+            if (!self) { return false; }
             found = d->bindings.find(id);
             if (found == d->bindings.end()) { continue; }
             if (found->second.pending) {
@@ -901,6 +951,7 @@ bool RemoteMediaController::retireSubscriptions(const QList<quint32>& endpointId
             continue;
         }
         QPointer<SpectrumWidget> widget = found->second.widget;
+        const QString panId = found->second.panId;
         // Retire local ownership before sending: a synchronous transport
         // failure can end the session and clear every binding inside send().
         d->bindings.erase(found);
@@ -910,6 +961,8 @@ bool RemoteMediaController::retireSubscriptions(const QList<quint32>& endpointId
             widget->applyRemoteCtunState(false, false);
             if (!self) { return false; }
         }
+        refreshPanGrantStatus(panId);
+        if (!self) { return false; }
         send({{QStringLiteral("op"), QStringLiteral("unsubscribe")},
               {QStringLiteral("endpointId"), double(id)}});
         if (!self || d->peer != peer || d->epoch != epoch
@@ -934,7 +987,12 @@ void RemoteMediaController::refreshSubscriptions()
             // This supported subscription mode does not indicate a display
             // failure or require operator action. Keep capability details in
             // diagnostics, and clear any status from a previous allocation.
-            applet->setRemoteDisplayStatus(QString());
+            // Only a limited grant is shown.
+            if (applet->panId().isEmpty()) {
+                applet->setRemoteDisplayStatus(QString());
+            } else {
+                setPanStatus(applet->panId(), QString());
+            }
         }
     }
     const QPointer<RemoteMediaController> self(this);
@@ -1094,12 +1152,34 @@ void RemoteMediaController::refreshSubscriptions()
 void RemoteMediaController::setPanStatus(const QString& panId, const QString& status)
 {
     if (!d->stack || panId.isEmpty()) { return; }
+    d->panBaseStatus.insert(panId, status);
     for (PanadapterApplet* applet : d->stack->allApplets()) {
         if (applet && applet->panId() == panId) {
-            applet->setRemoteDisplayStatus(status);
+            applet->setRemoteDisplayStatus(statusWithGrant(panId, status));
             return;
         }
     }
+}
+
+void RemoteMediaController::refreshPanGrantStatus(const QString& panId)
+{
+    setPanStatus(panId, d->panBaseStatus.value(panId));
+}
+
+QString RemoteMediaController::statusWithGrant(const QString& panId, const QString& status) const
+{
+    // Only a live, accepted endpoint's grant is shown: the line goes when the
+    // grant is no longer limited or the endpoint does.
+    QString line;
+    for (const auto& [id, binding] : d->bindings) {
+        if (binding.panId == panId && binding.accepted && !binding.retiring
+            && !binding.suspending) {
+            line = grantStatusLine(binding.grant);
+            if (!line.isEmpty()) { break; }
+        }
+    }
+    if (line.isEmpty()) { return status; }
+    return status.isEmpty() ? line : status + QStringLiteral("; ") + line;
 }
 
 void RemoteMediaController::refreshBudgetSubscriptions()
@@ -1927,10 +2007,13 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
     const bool widebandRequested = d->client->remoteWidebandAvailable()
         && (budgetMode ? binding.acceptedRequest : binding.observed)
                .value(QStringLiteral("extendedView")).isBool();
-    if (op != QLatin1String("context")
-        || payload.size() != (widebandRequested ? 20 : 19)
-        || binding.rejected
+    if (op != QLatin1String("context") || binding.rejected
         || revision != (budgetMode ? binding.acceptedRevision : binding.revision)) { return; }
+    // The shape the agreed minor selects, with wideband exactly when this
+    // subscription negotiated it.
+    const std::optional<SpectrumContextMessage> decoded =
+        decodeRemoteSpectrumContext(payload, spectrumGrantNegotiated());
+    if (!decoded || decoded->wideband.has_value() != widebandRequested) { return; }
     // A gesture/rebind may arrive between the outgoing request and its ACK.
     // Issue the newer request before accepting an old view over that gesture.
     if (binding.slice) {
@@ -1947,32 +2030,14 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
     }
     SpectrumEndpointContext context;
     context.codec.endpointId = endpointId;
-    double stream = 0, sourceCentre = 0, rate = 0, trace = 0, waterfall = 0, wide = 0;
-    double min = 0, max = 0, fps = 0, lines = 0;
-    if (!uint32(payload, "contextGeneration", context.codec.contextGeneration)
-        || !number(payload, "sourceStream", 0, 255, stream, true)
-        || !number(payload, "sourceCentreHz", 0, 1.0e12, sourceCentre)
-        || !number(payload, "sampleRateHz", 1, 1.0e8, rate)) { return; }
-    if (widebandRequested) {
-        const QJsonValue widebandJson = payload.value(QStringLiteral("wideband"));
-        if (!widebandJson.isObject()) { return; }
-        const auto wideband = WidebandDisplayContext::fromJson(widebandJson.toObject());
-        if (!wideband) { return; }
-        context.wideband = *wideband;
-    }
-    const double maxSpan = context.wideband.available
-        ? std::max(rate, context.wideband.adcRateHz / 2.0) : rate;
-    if (!number(payload, "centreHz", 0, 1.0e12, context.exactCentreHz)
-        || !number(payload, "spanHz", 0.000001, maxSpan, context.exactSpanHz)
-        || !number(payload, "wideCentreHz", 0, 1.0e12, context.wideCentreHz)
-        || !number(payload, "wideSpanHz", 0, rate, context.wideSpanHz)
-        || !number(payload, "traceSamples", 1, SpectrumEndpoint::kMaxPixels, trace, true)
-        || !number(payload, "waterfallSamples", 1, SpectrumEndpoint::kMaxPixels, waterfall, true)
-        || !number(payload, "wideSamples", 0, SpectrumEndpoint::kMaxWideSamples, wide, true)
-        || !number(payload, "minDbm", kMinDbmLimit, kMaxDbmLimit, min)
-        || !number(payload, "maxDbm", kMinDbmLimit, kMaxDbmLimit, max) || min >= max
-        || !number(payload, "fps", 1, 60, fps, true)
-        || !number(payload, "framesPerLine", 1, kMaxFramesPerLine, lines, true)) { return; }
+    context.codec.contextGeneration = decoded->contextGeneration;
+    if (decoded->wideband) { context.wideband = *decoded->wideband; }
+    context.exactCentreHz = decoded->centreHz;
+    context.exactSpanHz = decoded->spanHz;
+    context.wideCentreHz = decoded->wideCentreHz;
+    context.wideSpanHz = decoded->wideSpanHz;
+    const double sourceCentre = decoded->sourceCentreHz;
+    const double rate = decoded->sampleRateHz;
     if (widebandRequested) {
         const bool permission = (budgetMode ? binding.acceptedRequest : binding.observed).value(
             QStringLiteral("extendedView")).toBool();
@@ -1983,15 +2048,20 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
     }
     if (binding.accepted && !isNewerGeneration(context.codec.contextGeneration,
                                   binding.context.codec.contextGeneration)) { return; }
-    if ((wide == 0) != (context.wideSpanHz == 0)) { return; }
-    context.codec.traceSamples = quint16(trace);
-    context.codec.waterfallSamples = quint16(waterfall);
-    context.codec.wideSamples = quint16(wide);
-    context.codec.minDbm = float(min);
-    context.codec.maxDbm = float(max);
-    context.source.streamIndex = int(stream);
-    context.targetFps = int(fps);
-    context.framesPerLine = int(lines);
+    context.codec.traceSamples = quint16(decoded->traceSamples);
+    context.codec.waterfallSamples = quint16(decoded->waterfallSamples);
+    context.codec.wideSamples = quint16(decoded->wideSamples);
+    context.codec.minDbm = float(decoded->minDbm);
+    context.codec.maxDbm = float(decoded->maxDbm);
+    context.source.streamIndex = decoded->sourceStream;
+    context.targetFps = decoded->fps;
+    context.framesPerLine = decoded->framesPerLine;
+    if (decoded->grant && decoded->grant != binding.grant) {
+        qCInfo(lcRemoteMedia).noquote()
+            << QStringLiteral("Remote spectrum grant for %1: %2")
+                   .arg(binding.panId, grantLogLine(*decoded->grant));
+    }
+    binding.grant = decoded->grant;
     binding.context = context;
     binding.contextRevision = revision;
     binding.sourceCentreHz = sourceCentre;
@@ -2003,7 +2073,11 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
     const QPointer<RemoteMediaController> self(this);
     const QString connectionId = d->connectionId;
     const quint32 acceptedContextRevision = revision;
+    const QString panId = binding.panId;
     binding.widget->setRemoteSpectrumContext(context, sourceCentre, rate);
+    if (!self || d->connectionId != connectionId) { return; }
+    // Show or clear this pan's grant line now rather than on the next refresh.
+    refreshPanGrantStatus(panId);
     if (!self || d->connectionId != connectionId) { return; }
     it = d->bindings.find(endpointId);
     if (it == d->bindings.end() || it->second.contextRevision != acceptedContextRevision
