@@ -67,11 +67,55 @@ quint32 DisplayLoadGovernor::nextGeneration(const DisplayBudgetLimits& limits)
     return next == 0 ? 1 : next;
 }
 
+bool DisplayLoadGovernor::isBusy(const DisplayLoadReading& reading)
+{
+    return (reading.highestReceiverLoad && std::isfinite(*reading.highestReceiverLoad)
+            && *reading.highestReceiverLoad >= kBusyReceiverLoad)
+        || (reading.systemCpuPercent && std::isfinite(*reading.systemCpuPercent)
+            && *reading.systemCpuPercent >= kBusySystemCpuPercent);
+}
+
+std::optional<DisplayLoadReading> DisplayLoadGovernor::judgeable(const Settle& settle,
+                                                                 const DisplayLoadReading& reading)
+{
+    const bool hasCpu = reading.systemCpuPercent.has_value()
+        && std::isfinite(*reading.systemCpuPercent);
+    const auto cpuBeganBy = [&reading](qint64 pointMs) {
+        return reading.systemCpuSampleStartMs && *reading.systemCpuSampleStartMs >= pointMs;
+    };
+    if (settle.acknowledgedMs && reading.nowMs < settle.untilMs) {
+        // Acknowledged: one load interval, and one full host sample begun
+        // after the acknowledgement, measure the lowered display.
+        if (reading.nowMs < *settle.acknowledgedMs + kLoadIntervalMs
+            || (hasCpu && !cpuBeganBy(*settle.acknowledgedMs))) {
+            return std::nullopt;
+        }
+        return reading;
+    }
+    if (reading.nowMs < settle.untilMs) {
+        return std::nullopt;
+    }
+    // The cap: judged now, but never on a host sample that began before
+    // the step.
+    DisplayLoadReading judged = reading;
+    if (hasCpu && !cpuBeganBy(settle.stepMs)) {
+        judged.systemCpuPercent.reset();
+        judged.systemCpuSampleStartMs.reset();
+    }
+    return judged;
+}
+
 std::optional<DisplayLoadDecision> DisplayLoadGovernor::update(const DisplayLoadReading& reading)
 {
     m_proposal.reset();
     const qint64 nowMs = reading.nowMs;
     State next = m_state;
+    // The Core has no direct acknowledgement of a step: the app has acted
+    // on it once what it has accepted fits the lowered limits.
+    if (next.settle && !next.settle->acknowledgedMs
+        && displayChargeFits(next.limits, reading.acceptedCharge)) {
+        next.settle->acknowledgedMs = nowMs;
+    }
     const std::optional<double> pressureNow = pressure(reading);
     if (!pressureNow) {
         // No evidence of load: never a reason to cut, and a gap does not
@@ -82,6 +126,7 @@ std::optional<DisplayLoadDecision> DisplayLoadGovernor::update(const DisplayLoad
             m_calmSinceMs.reset();
         }
         if (nowMs - *m_gapSinceMs < kCalmHoldMs) {
+            m_state = std::move(next);
             return std::nullopt;
         }
         // A sustained gap counts as calm for restoring only, so a cut
@@ -101,32 +146,37 @@ std::optional<DisplayLoadDecision> DisplayLoadGovernor::update(const DisplayLoad
         && std::isfinite(*reading.highestReceiverLoad);
     const bool hasCpu = reading.systemCpuPercent.has_value()
         && std::isfinite(*reading.systemCpuPercent);
-    const bool busy = (hasLoad && *reading.highestReceiverLoad >= kBusyReceiverLoad)
-        || (hasCpu && *reading.systemCpuPercent >= kBusySystemCpuPercent);
+    const bool busy = isBusy(reading);
     const bool calm = (!hasLoad || *reading.highestReceiverLoad < kCalmReceiverLoad)
         && (!hasCpu || *reading.systemCpuPercent < kCalmSystemCpuPercent)
         && reading.lateBlocks == 0 && reading.highestInputDelayMs < kCalmInputDelayMs;
 
     if (next.settle) {
-        if (nowMs < next.settle->untilMs) {
-            // The app is still acting on the last step: judge nothing yet.
+        const std::optional<DisplayLoadReading> judged = judgeable(*next.settle, reading);
+        const std::optional<double> judgedPressure = judged ? pressure(*judged)
+                                                            : std::optional<double>{};
+        if (!judgedPressure) {
+            // The app is still acting on the last step, or its effect is not
+            // measured yet: judge nothing.
             m_busySinceMs.reset();
             m_calmSinceMs.reset();
+            m_state = std::move(next);
             return std::nullopt;
         }
-        const Settle judged = *next.settle;
+        const Settle settled = *next.settle;
         next.settle.reset();
         m_busySinceMs.reset();
         m_calmSinceMs.reset();
-        if (judged.pressureAtStep - *pressureNow < kReliefMargin && !next.previous.isEmpty()) {
+        if (settled.pressureAtStep - *judgedPressure < kReliefMargin
+            && !next.previous.isEmpty()) {
             // The step saved nothing: give the quality back and cut no more
             // until the load changes clearly.
-            next.heldPressure = *pressureNow;
+            next.heldPressure = *judgedPressure;
             return restoreStep(std::move(next));
         }
-        if (busy) {
+        if (isBusy(*judged)) {
             m_busySinceMs = nowMs;
-            return stepDown(std::move(next), reading, *pressureNow);
+            return stepDown(std::move(next), reading, *judgedPressure);
         }
     }
 
@@ -243,7 +293,7 @@ std::optional<DisplayLoadDecision> DisplayLoadGovernor::stepDown(
     }
     next.previous.append(current);
     next.limits = lowered;
-    next.settle = Settle{reading.nowMs + kSettleMs, pressureNow};
+    next.settle = Settle{reading.nowMs, reading.nowMs + kSettleMs, pressureNow, std::nullopt};
     return propose(std::move(next));
 }
 

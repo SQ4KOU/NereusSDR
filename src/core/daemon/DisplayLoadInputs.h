@@ -32,6 +32,10 @@ struct DisplayLoadInputs {
     /// The housekeeping cores only, where spectrum, encoding, Opus and
     /// sending run while thread placement is active.
     std::optional<double> housekeepingCpuPercent;
+    /// How long ago the host sample behind both CPU values began, in
+    /// milliseconds (SharedHostSampler::cpuSampleBeganMsAgo). Absent with
+    /// no CPU values.
+    std::optional<qint64> cpuSampleBeganMsAgo;
     /// The thread placement plan now in force; inactive when threads are not
     /// placed (placement off, priority only, one core, not Linux).
     PlacementPlan placement;

@@ -570,6 +570,7 @@ DisplayLoadInputs DaemonApp::gatherDisplayLoadInputs()
                                                                : QList<int>{});
         inputs.systemCpuPercent = m_hostSampler->reading().systemCpuPercent;
         inputs.housekeepingCpuPercent = m_hostSampler->governorCpuPercent();
+        inputs.cpuSampleBeganMsAgo = m_hostSampler->cpuSampleBeganMsAgo();
     }
     return inputs;
 }

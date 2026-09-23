@@ -36,6 +36,11 @@ struct DisplayLoadReading {
     /// The Core computer's CPU use since the previous host sample, 0..100.
     /// nullopt where the host cannot be measured (macOS, Windows).
     std::optional<double> systemCpuPercent;
+    /// When the host sample behind systemCpuPercent began, on nowMs's
+    /// clock. A settling step is never judged on a sample that began before
+    /// the point it waits for; without a start the sample counts as begun
+    /// too early.
+    std::optional<qint64> systemCpuSampleStartMs;
     /// Display traffic the Core has accepted now: every spectrum endpoint
     /// plus the PureSignal display when it is subscribed.
     DisplayBudgetCharge acceptedCharge;
@@ -56,10 +61,16 @@ struct DisplayLoadDecision {
 /// in between hold. Every change carries the next limits generation; the
 /// reason is CoreBusy while any step is in force.
 ///
-/// Settling: after each step down nothing more is cut for kSettleMs, long
-/// enough for the app to act on the new limits (its allocation
-/// acknowledgement timeout) plus one load interval to measure the result.
-/// Then the step is judged against the reading that caused it:
+/// Settling: after each step down nothing more is cut until the step has
+/// taken effect and been measured. The Core has no direct acknowledgement,
+/// so the step counts as acknowledged at the first reading whose accepted
+/// charge fits the lowered limits in every field (displayChargeFits). The
+/// step is then judged at the later of kLoadIntervalMs after that and the
+/// end of one full host sample begun after it (a reading without CPU has
+/// no host sample to wait for). Without an acknowledgement it is judged at
+/// kSettleMs after the step, and never on a host sample that began before
+/// the step: such a CPU value is left out of the judgement. The step is
+/// judged against the reading that caused it:
 ///  - relief of at least kReliefMargin, still busy: step again at once;
 ///  - relief of at least kReliefMargin, no longer busy: keep the step;
 ///  - less relief: the step saved nothing, so it is undone (the reason
@@ -96,8 +107,10 @@ public:
     /// (ReceiverDspLoadSampler::kSampleIntervalMs; DaemonApp checks they
     /// agree).
     static constexpr qint64 kLoadIntervalMs = 500;
-    /// Time a step down gets before it is judged: the app's allocation
-    /// acknowledgement timeout plus one load interval.
+    /// Hardware-pending tuning value: the longest a step down waits to be
+    /// judged when the app never acknowledges it, the app's allocation
+    /// acknowledgement timeout plus one load interval. An acknowledged step
+    /// is judged sooner (see Settling above).
     static constexpr qint64 kSettleMs = kDisplayAllocationAckTimeoutMs + kLoadIntervalMs;
     /// Hardware-pending tuning value: the least drop in pressure, as a
     /// fraction of the busy threshold, that counts as relief from a step.
@@ -152,8 +165,12 @@ public:
 
 private:
     struct Settle {
+        qint64 stepMs = 0;
+        /// The cap: stepMs + kSettleMs.
         qint64 untilMs = 0;
         double pressureAtStep = 0.0;
+        /// The first reading whose accepted charge fit the lowered limits.
+        std::optional<qint64> acknowledgedMs;
     };
     /// Everything a published decision changes.
     struct State {
@@ -178,6 +195,12 @@ private:
     std::optional<DisplayLoadDecision> restoreStep(State next);
     std::optional<DisplayLoadDecision> calmReading(State next, qint64 nowMs, qint64 calmStartMs);
     static quint32 nextGeneration(const DisplayBudgetLimits& limits);
+    /// The reading a settling step may be judged on now, or nullopt while
+    /// it must wait. Leaves out a CPU value from a host sample that began
+    /// before the point the judgement waits for.
+    static std::optional<DisplayLoadReading> judgeable(const Settle& settle,
+                                                       const DisplayLoadReading& reading);
+    static bool isBusy(const DisplayLoadReading& reading);
 
     DisplayBudgetLimits m_ceiling;
     State m_state;

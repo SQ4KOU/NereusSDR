@@ -229,8 +229,11 @@ private slots:
         }
         QCOMPARE(times.size(), 3);
         QCOMPARE(times.at(0), DisplayLoadGovernor::kBusyHoldMs);
-        QCOMPARE(times.at(1) - times.at(0), DisplayLoadGovernor::kSettleMs);
-        QCOMPARE(times.at(2) - times.at(1), DisplayLoadGovernor::kSettleMs);
+        // The app acts on each step at once, so each settles one reading
+        // later (the acknowledgement) plus one load interval.
+        const qint64 settled = 500 + DisplayLoadGovernor::kLoadIntervalMs;
+        QCOMPARE(times.at(1) - times.at(0), settled);
+        QCOMPARE(times.at(2) - times.at(1), settled);
         for (int i = 0; i < decisions.size(); ++i) {
             QCOMPARE(decisions.at(i).reason, DisplayBudgetReason::CoreBusy);
             QCOMPARE(decisions.at(i).limits.generation, quint32(2 + i));
@@ -240,6 +243,108 @@ private slots:
         QVERIFY(feed(governor, 60'500, 180'000,
                      responsiveLoad(governor, 0.92, 0.06)).isEmpty());
         QCOMPARE(governor.steps(), 3);
+    }
+
+    // A step is acknowledged once the accepted charge fits the lowered
+    // limits; it is then judged one load interval later, long before the
+    // cap.
+    void aQuickAcknowledgementJudgesTheStepEarly()
+    {
+        DisplayLoadGovernor governor(DisplayLoadGovernor::computedCeiling());
+        QCOMPARE(feed(governor, 0, 2'000,
+                      [](qint64 t) { return loadReading(t, 0.9); }).size(), 1);
+        const DisplayBudgetLimits lowered = governor.limits();
+        const DisplayBudgetCharge four = fourPans();
+        const DisplayBudgetCharge fitted{
+            std::min(lowered.applicationBytesPerSecond, four.applicationBytesPerSecond),
+            std::min(lowered.spectrumSampleUnitsPerSecond, four.spectrumSampleUnitsPerSecond),
+            four.messagesPerSecond};
+        QVERIFY(displayChargeFits(lowered, fitted));
+        QVERIFY(!displayChargeFits(lowered, four));
+        // Not yet acted on: nothing judged, however busy.
+        QVERIFY(!step(governor, loadReading(2'500, 0.95)));
+        QVERIFY(governor.settling());
+        // Acknowledged at 3 s; one load interval measures the result.
+        QVERIFY(!step(governor, loadReading(3'000, 0.85, fitted)));
+        QVERIFY(governor.settling());
+        // Relieved (0.9 to 0.85) and still busy: the next step at 3.5 s.
+        const auto next = step(governor, loadReading(3'500, 0.85, fitted));
+        QVERIFY(next.has_value());
+        QCOMPARE(next->reason, DisplayBudgetReason::CoreBusy);
+        QCOMPARE(governor.steps(), 2);
+        QVERIFY(3'500 < 2'000 + DisplayLoadGovernor::kSettleMs);
+    }
+
+    // The app never acts on the step: it is judged at the cap, not before.
+    void aMissingAcknowledgementWaitsForTheCap()
+    {
+        DisplayLoadGovernor governor(DisplayLoadGovernor::computedCeiling());
+        QCOMPARE(feed(governor, 0, 2'000,
+                      [](qint64 t) { return loadReading(t, 0.9); }).size(), 1);
+        // fourPans() stays above the lowered limits the whole time.
+        QVERIFY(feed(governor, 2'500, 2'000 + DisplayLoadGovernor::kSettleMs - 500,
+                     [](qint64 t) { return loadReading(t, 0.85); }).isEmpty());
+        QVERIFY(governor.settling());
+        const auto next = step(governor,
+                               loadReading(2'000 + DisplayLoadGovernor::kSettleMs, 0.85));
+        QVERIFY(next.has_value());
+        QCOMPARE(governor.steps(), 2);
+    }
+
+    // A host sample that began before the step (or its acknowledgement)
+    // measured the display before the step; the judgement never uses it.
+    void aJudgementNeverUsesAHostSampleBegunBeforeTheReduction()
+    {
+        // Host samples every 900 ms: a reading at t uses the last sample
+        // finished by t, which began 900 ms before that.
+        const auto startOfSample = [](qint64 t) { return (t / 900) * 900 - 900; };
+        DisplayLoadGovernor governor(DisplayLoadGovernor::computedCeiling());
+        const auto busy = [&](qint64 t) {
+            DisplayLoadReading reading = cpuReading(t, 95.0);
+            reading.systemCpuSampleStartMs = startOfSample(t);
+            return reading;
+        };
+        QCOMPARE(feed(governor, 0, 2'000, busy).size(), 1);
+        const DisplayBudgetLimits lowered = governor.limits();
+        const DisplayBudgetCharge four = fourPans();
+        const DisplayBudgetCharge fitted{
+            std::min(lowered.applicationBytesPerSecond, four.applicationBytesPerSecond),
+            std::min(lowered.spectrumSampleUnitsPerSecond, four.spectrumSampleUnitsPerSecond),
+            four.messagesPerSecond};
+        // Acknowledged at 2.5 s. A sample begun before then still reads
+        // 95 % (no relief): judged on it, the step would be undone.
+        const auto sample = [&](qint64 t) {
+            DisplayLoadReading reading = cpuReading(t, startOfSample(t) >= 2'500 ? 80.0 : 95.0,
+                                                    fitted);
+            reading.systemCpuSampleStartMs = startOfSample(t);
+            return reading;
+        };
+        QVERIFY(feed(governor, 2'500, 3'500, sample).isEmpty());
+        QVERIFY(governor.settling()); // 3.5 s: the latest sample began at 1.8 s.
+        // 4 s: the sample that began at 2.7 s reads 80 %, relieved and not
+        // busy, so the step stands.
+        QVERIFY(!step(governor, sample(4'000)));
+        QVERIFY(!governor.settling());
+        QCOMPARE(governor.steps(), 1);
+
+        // At the cap without an acknowledgement, a CPU value from a sample
+        // begun before the step is left out; the receiver load judges.
+        DisplayLoadGovernor capped(DisplayLoadGovernor::computedCeiling());
+        const auto both = [](qint64 t, double load, double cpu, qint64 startMs) {
+            DisplayLoadReading reading = loadReading(t, load);
+            reading.systemCpuPercent = cpu;
+            reading.systemCpuSampleStartMs = startMs;
+            return reading;
+        };
+        QCOMPARE(feed(capped, 0, 2'000,
+                      [&](qint64 t) { return both(t, 0.9, 95.0, t - 900); }).size(), 1);
+        QVERIFY(feed(capped, 2'500, 2'000 + DisplayLoadGovernor::kSettleMs - 500,
+                     [&](qint64 t) { return both(t, 0.7, 99.0, 1'000); }).isEmpty());
+        // Judged on 99 % the step would bring no relief and be undone; on
+        // the receiver load (0.9 to 0.7) it relieved and stands.
+        QVERIFY(!step(capped, both(2'000 + DisplayLoadGovernor::kSettleMs, 0.7, 99.0, 1'000)));
+        QVERIFY(!capped.settling());
+        QCOMPARE(capped.steps(), 1);
     }
 
     void aStepThatBringsNoReliefIsUndoneAndCutsStop()

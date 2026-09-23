@@ -37,6 +37,9 @@ DisplayLoadReading displayLoadReadingFrom(const DisplayLoadInputs& inputs, qint6
     }
     reading.systemCpuPercent = inputs.placement.active ? inputs.housekeepingCpuPercent
                                                        : inputs.systemCpuPercent;
+    if (reading.systemCpuPercent && inputs.cpuSampleBeganMsAgo) {
+        reading.systemCpuSampleStartMs = nowMs - std::max<qint64>(0, *inputs.cpuSampleBeganMsAgo);
+    }
     return reading;
 }
 

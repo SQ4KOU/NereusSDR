@@ -381,6 +381,40 @@ private slots:
         QCOMPARE(shared.reading().systemCpuPercent, std::optional<double>(80.0));
     }
 
+    // R-R3-40: the governor judges a settling step only on a host sample
+    // begun after the step took effect, so it needs to know when the
+    // sample behind the CPU values began. Reading it takes no sample.
+    void theCpuSampleStartIsKnown()
+    {
+        Fixture f;
+        f.standardProc();
+        qint64 now = 0;
+        SharedHostSampler shared(std::make_unique<HostTelemetrySampler>(f.root()),
+                                 [&now] { return now; });
+        shared.reading();
+        QVERIFY(!shared.cpuSampleBeganMsAgo().has_value()); // One sample: no interval.
+        now = 900;
+        shared.reading();
+        QCOMPARE(shared.cpuSampleBeganMsAgo(), std::optional<qint64>(900));
+        now = 1'300; // The cached reading stands; its interval began at 0.
+        shared.reading();
+        QCOMPARE(shared.cpuSampleBeganMsAgo(), std::optional<qint64>(1'300));
+        now = 1'800;
+        shared.reading();
+        QCOMPARE(shared.cpuSampleBeganMsAgo(), std::optional<qint64>(900));
+
+        // On the governor's clock: the reading's start is its time less the
+        // sample's age, and only where there is a CPU value.
+        DisplayLoadInputs in;
+        in.systemCpuPercent = 50.0;
+        in.cpuSampleBeganMsAgo = 900;
+        const DisplayBudgetCharge pan = spectrumDisplayCost(1024, 30, false)->charge;
+        QCOMPARE(displayLoadReadingFrom(in, 5'000, pan).systemCpuSampleStartMs,
+                 std::optional<qint64>(4'100));
+        in.systemCpuPercent.reset();
+        QVERIFY(!displayLoadReadingFrom(in, 5'000, pan).systemCpuSampleStartMs.has_value());
+    }
+
     void anOfflineWatchedCoreIsAbsent()
     {
         Fixture f;

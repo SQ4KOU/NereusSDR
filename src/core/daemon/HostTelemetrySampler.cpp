@@ -433,12 +433,21 @@ std::optional<double> SharedHostSampler::governorCpuPercent()
     return m_sampler->watchedCpuPercent();
 }
 
+std::optional<qint64> SharedHostSampler::cpuSampleBeganMsAgo() const
+{
+    if (!m_previousSampledAtMs) {
+        return std::nullopt;
+    }
+    return std::max<qint64>(0, m_clock() - *m_previousSampledAtMs);
+}
+
 StationHostTelemetry SharedHostSampler::reading()
 {
     const qint64 nowMs = m_clock();
     if (!m_sampledAtMs || nowMs < *m_sampledAtMs
         || nowMs - *m_sampledAtMs >= kMinimumIntervalMs) {
         m_cached = m_sampler->sample();
+        m_previousSampledAtMs = m_sampledAtMs;
         m_sampledAtMs = nowMs;
     }
     return m_cached;

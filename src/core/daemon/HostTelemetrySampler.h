@@ -129,12 +129,17 @@ public:
     /// Busy share of the governor's cores from the same sample as reading(),
     /// sampled now when the cached one is too old. Absent without cores.
     std::optional<double> governorCpuPercent();
+    /// How long ago, in milliseconds, the interval behind the current CPU
+    /// percentages began (the sample before the cached one), without
+    /// taking a new sample. Absent before two samples exist.
+    std::optional<qint64> cpuSampleBeganMsAgo() const;
 
 private:
     std::unique_ptr<HostTelemetrySampler> m_sampler;
     MonotonicClock m_clock;
     QElapsedTimer m_ownClock;
     std::optional<qint64> m_sampledAtMs;
+    std::optional<qint64> m_previousSampledAtMs;
     StationHostTelemetry m_cached;
 };
 
