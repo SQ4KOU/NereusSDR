@@ -52,7 +52,8 @@ struct DaemonAudioSenderTelemetry {
     qint64 captureNs = 0;
 };
 
-/// Turns bounded post-master-mix blocks into RTP packets: one Opus packet per
+/// Turns bounded post-master-mix (or, R-R3-43, one receiver's) blocks into
+/// RTP packets: one Opus packet per
 /// 1920-frame block, or (R-R3-23 lossless) ten L16 packets of 192 frames,
 /// paced by elapsed time (kLosslessPacketsPer10Ms) and never more than
 /// kMaxLosslessPacketsPerDrain in one tick.
@@ -105,6 +106,11 @@ public:
     /// begins at the next block boundary. Default Opus.
     bool setProfile(RemoteAudioProfile profile);
     RemoteAudioProfile profile() const noexcept { return m_profile; }
+    /// R-R3-43: capture one receiver's own audio instead of the master mix
+    /// (DaemonAudioSource::setSliceSource; kMasterMix is the default).
+    /// Refused while running. Blocks, packets and pacing are the same.
+    bool setSliceSource(int sliceId);
+    int sliceSource() const noexcept;
     void stop();
     bool isRunning() const noexcept;
 

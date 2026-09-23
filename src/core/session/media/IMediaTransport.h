@@ -12,6 +12,7 @@
 // =================================================================
 
 #include <QByteArray>
+#include <QList>
 #include <QObject>
 #include <QString>
 
@@ -63,7 +64,28 @@ public:
         // receives exactly today's offer. An answerer ignores it: its answer
         // follows the offer.
         bool offerLosslessAudio = false;
+        // R-R3-43 receiver audio streams: the SSRCs of up to
+        // kMaxReceiverAudioStreams further audio streams that share the one
+        // audio m-line with the main stream. An offerer declares each with
+        // its own a=ssrc line after the main one. Both roles' sendRtp()
+        // accepts the main SSRC and exactly these, and a side's receive
+        // queue holds kReceivedRtpPacketsPerStream packets for every
+        // declared stream. Empty (the default) keeps today's offer, answer
+        // and queue byte for byte. Set only for a GUI that asked for
+        // receiver audio. Zero, the main SSRC, a repeat or more than
+        // kMaxReceiverAudioStreams entries is a precondition refusal.
+        QList<quint32> receiverAudioSsrcs {};
     };
+
+    /// R-R3-43: the most receiver audio streams one media connection
+    /// declares beside the main stream.
+    static constexpr int kMaxReceiverAudioStreams = 4;
+    /// R-R3-43, R-R3-05: received RTP packets a side holds between drains,
+    /// per declared audio stream (the main stream plus each receiver
+    /// stream). Lossless audio is 250 packets/s per stream (48 kHz, 192
+    /// frames a packet), so 64 packets are 256 ms of cushion for every
+    /// stream whether one stream or five are running.
+    static constexpr int kReceivedRtpPacketsPerStream = 64;
 
     static constexpr qsizetype kMaxDescriptionBytes = 64 * 1024;
     static constexpr qsizetype kMaxCandidateBytes = 4 * 1024;

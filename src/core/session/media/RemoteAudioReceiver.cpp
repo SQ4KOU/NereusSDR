@@ -82,6 +82,8 @@ AudioHeader inspectAudioRtp(const QByteArray& packet, quint32 ssrc, RemoteAudioP
 struct RemoteAudioReceiver::Private {
     struct Packet { QByteArray bytes; quint32 timestamp; qint64 arrival; quint16 sequence; };
     AudioEngine* engine = nullptr; // owner stops/joins before engine destruction
+    // R-R3-43: set only in the PCM-sink mode, which has no engine.
+    RemoteAudioReceiver::PcmSink sink;
     std::jthread worker;
     std::mutex mutex;
     std::condition_variable wake;
@@ -187,6 +189,13 @@ RemoteAudioReceiver::RemoteAudioReceiver(AudioEngine* engine, QObject* parent, C
     d->engine = engine;
     d->clock = clock ? std::move(clock) : Clock(defaultClockNs);
 }
+RemoteAudioReceiver::RemoteAudioReceiver(PcmSinkMode mode, QObject* parent, Clock clock)
+    : QObject(parent), d(std::make_unique<Private>())
+{
+    d->sink = std::move(mode.sink);
+    d->clock = clock ? std::move(clock) : Clock(defaultClockNs);
+}
+bool RemoteAudioReceiver::isPcmSink() const { return bool(d->sink); }
 qint64 RemoteAudioReceiver::nowNs() const { return d->now(); }
 RemoteAudioReceiver::~RemoteAudioReceiver() { stop(); }
 bool RemoteAudioReceiver::isRunning() const { return d->running.load(); }
@@ -296,7 +305,8 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
 {
     stop();
     QString error;
-    if (!d->engine || !d->engine->beginRemotePlayback(&error)) {
+    // R-R3-43: a PCM sink needs no speaker.
+    if (!d->sink && (!d->engine || !d->engine->beginRemotePlayback(&error))) {
         emit errorOccurred(error.isEmpty() ? QStringLiteral("Speaker playback is unavailable") : error,
                             Fault::SpeakerOpenFailed);
         return false;
@@ -342,6 +352,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
     const quint64 generation = d->generation;
     d->worker = std::jthread([this, ssrc, firstTimestamp, generation, profile](std::stop_token stop) {
         const bool lossless = profile == RemoteAudioProfile::Lossless;
+        const bool sinkMode = bool(d->sink);
         const int packetFrames = packetFramesFor(profile);
         AudioJitterBuffer jitter(packetFrames, packetDurationNsFor(profile));
         jitter.reset(firstTimestamp);
@@ -401,7 +412,8 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
             d->reorderQueuedPackets.store(-1);
             d->running.store(false);
             const auto stats = publishMatcherStats();
-            const auto pacing = d->engine->remotePlaybackPacing();
+            const auto pacing = d->engine ? d->engine->remotePlaybackPacing()
+                                          : std::optional<IAudioBus::OutputPacing>{};
             const qint64 now = d->now();
             // Bounded, restart-only diagnostics distinguish capture/network
             // loss from a stalled consumer without logging media or secrets.
@@ -425,30 +437,40 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
                 else { emit restartRequested(detail, fault); }
             }, Qt::QueuedConnection);
         };
-        const auto initialPacing = d->engine->remotePlaybackPacing();
-        if (!initialPacing) {
-            notify(QStringLiteral("Speaker device timing is unavailable"),
-                   Fault::SpeakerTimingUnavailable, true);
-            return;
-        }
-        publishSpeakerQueue(initialPacing);
-        const int initialTarget = std::max(960, initialPacing->callbackFrames + 480);
-        if (initialTarget + 480 > initialPacing->capacityFrames) {
-            notify(QStringLiteral("Speaker callback exceeds remote playback capacity"),
-                   Fault::SpeakerCallbackTooLarge, true);
-            return;
-        }
-        // WDSP starts half full. Preserve the default 90 ms reserve when a
-        // larger selected device quantum transfers extra frames into the
-        // speaker ring at startup. This is queue sizing, not a change to the
-        // resampler feedback or its continuous interpolation.
-        const int deviceHighWater = ((initialTarget + 479) / 480) * 480;
-        const int matchRingFrames = 8640 + 2 * std::max(0, deviceHighWater - 960);
-        if ((decoder && !decoder->isReady())
-            || !matcher.configure(packetFrames, 480, matchRingFrames)) {
-            notify(QStringLiteral("Could not initialize the remote audio decoder or rate matcher"),
-                   Fault::DecoderUnavailable, true);
-            return;
+        // R-R3-43: a PCM sink has no speaker to pace it and no rate matcher.
+        const auto initialPacing = sinkMode ? std::optional<IAudioBus::OutputPacing>{}
+                                            : d->engine->remotePlaybackPacing();
+        if (sinkMode) {
+            if (decoder && !decoder->isReady()) {
+                notify(QStringLiteral("Could not initialize the remote audio decoder"),
+                       Fault::DecoderUnavailable, true);
+                return;
+            }
+        } else {
+            if (!initialPacing) {
+                notify(QStringLiteral("Speaker device timing is unavailable"),
+                       Fault::SpeakerTimingUnavailable, true);
+                return;
+            }
+            publishSpeakerQueue(initialPacing);
+            const int initialTarget = std::max(960, initialPacing->callbackFrames + 480);
+            if (initialTarget + 480 > initialPacing->capacityFrames) {
+                notify(QStringLiteral("Speaker callback exceeds remote playback capacity"),
+                       Fault::SpeakerCallbackTooLarge, true);
+                return;
+            }
+            // WDSP starts half full. Preserve the default 90 ms reserve when a
+            // larger selected device quantum transfers extra frames into the
+            // speaker ring at startup. This is queue sizing, not a change to the
+            // resampler feedback or its continuous interpolation.
+            const int deviceHighWater = ((initialTarget + 479) / 480) * 480;
+            const int matchRingFrames = 8640 + 2 * std::max(0, deviceHighWater - 960);
+            if ((decoder && !decoder->isReady())
+                || !matcher.configure(packetFrames, 480, matchRingFrames)) {
+                notify(QStringLiteral("Could not initialize the remote audio decoder or rate matcher"),
+                       Fault::DecoderUnavailable, true);
+                return;
+            }
         }
         bool playing = false;
         // Connect-time start: nothing has been released for playback yet.
@@ -523,7 +545,12 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
         const int pipelineDelayFrames = RemoteAudioRateMatcher::kFilterDelayFrames
             + codecDelayFrames;
         quint64 lastDeviceFrames = 0;
-        const quint64 deviceConsumedBase = initialPacing->consumedFrames;
+        const quint64 deviceConsumedBase = initialPacing ? initialPacing->consumedFrames : 0;
+        // R-R3-43, PCM sink: frames handed to the sink, and whether the
+        // stream has gone quiet (no admitted packet for 500 ms), so nothing
+        // more is released until a packet arrives and restarts it.
+        quint64 sinkFrames = 0;
+        bool sinkIdle = false;
         quint64 telemetryDeviceFrames = deviceConsumedBase;
         qint64 lastDeviceProgress = lastPacket;
         while (!stop.stop_requested()) {
@@ -549,6 +576,20 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
                 notify(QStringLiteral("Remote audio arrival queue exceeded its latency bound"),
                        Fault::ArrivalBurst);
                 return;
+            }
+            if (sinkIdle && !incoming.empty()) {
+                // R-R3-43: the quiet stream starts again on the earliest
+                // packet of this batch (serial order), as a fresh context
+                // would start on its first timestamp. The quiet time was
+                // heard as nothing, so it is neither a gap nor a restart.
+                quint32 anchor = incoming.front().timestamp;
+                for (const auto& packet : incoming) {
+                    if (std::bit_cast<qint32>(quint32(packet.timestamp - anchor)) < 0) {
+                        anchor = packet.timestamp;
+                    }
+                }
+                jitter.reset(anchor);
+                sinkIdle = false;
             }
             if (!released && !incoming.empty()) {
                 trimStartBacklog(incoming, startBacklog);
@@ -597,6 +638,43 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
                 d->hasArrivalJitterMs.store(true);
             }
             const qint64 now = d->now();
+            if (sinkMode) {
+                // R-R3-43: released by the jitter hold alone, so the Core's
+                // RTP clock paces the sink; at most the window per wake.
+                if (!sinkIdle && now - lastPacket > 500'000'000) {
+                    sinkIdle = true;
+                }
+                for (int i = 0; !sinkIdle && i < jitter.maxPackets(); ++i) {
+                    const auto frame = jitter.takeReady(now);
+                    if (!frame) { break; }
+                    const QVector<float> audio = decodePacket(frame->packet);
+                    if (audio.isEmpty()) {
+                        notify(QStringLiteral("Remote audio decode failed"), Fault::DecodeFailed);
+                        return;
+                    }
+                    const int frames = int(audio.size() / PcmAudioCodecConfig::kChannels);
+                    d->sink(audio.constData(), frames);
+                    if (frame->concealed()) { ++d->concealed; }
+                    else { ++d->decoded; }
+                    noteReleased(frame->timestamp, frame->concealed(), now);
+                    sinkFrames += quint64(frames);
+                    d->deviceConsumedFrames.store(sinkFrames);
+                    d->lastDeviceProgressNs.store(now);
+                    d->hasLastDeviceProgress.store(true);
+                    if (!released) {
+                        released = true;
+                        std::lock_guard<std::mutex> lock(d->mutex);
+                        d->startPhase = false;
+                    }
+                }
+                d->reorderQueuedPackets.store(jitter.queuedPackets());
+                if (unpublishedRelease) {
+                    std::lock_guard<std::mutex> lock(d->pointsMutex);
+                    d->release = *unpublishedRelease;
+                    unpublishedRelease.reset();
+                }
+                continue;
+            }
             if (now - lastPacket > 500'000'000) {
                 notify(QStringLiteral("Remote audio had no admitted/playable packets for 500 ms"),
                        Fault::NoPackets);

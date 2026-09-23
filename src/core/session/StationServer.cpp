@@ -1588,6 +1588,8 @@ StationCapabilities StationServer::buildCapabilities() const
     caps.audioProfileVersion = m_mediaEnabled ? 1 : 0;
     // R-R3-35: the Core answers audio clock probes whenever media is on.
     caps.audioClockVersion = m_mediaEnabled ? 1 : 0;
+    // R-R3-43: a receiver's own audio on its own stream, whenever media is on.
+    caps.receiverAudioVersion = m_mediaEnabled ? 1 : 0;
     const std::optional<DisplayBudgetLimits> budget = displayBudgetLimits();
     if (m_mediaEnabled && m_displayBudgetEnforcementEnabled && budget) {
         caps.remoteDisplayBudgetVersion = 1;

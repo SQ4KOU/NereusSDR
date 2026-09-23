@@ -420,6 +420,31 @@ bool refusedFor(const RemoteMediaController& controller, const PanadapterApplet*
         && (OperatorWording::isPlain(reason)
             || !applet->remoteDisplayExplanation().contains(reason));
 }
+// R-R3-43: the receiver-audio requests this GUI sent for one slice, in order.
+QList<QJsonObject> receiverRequests(const QSignalSpy& coreControls, int sliceId)
+{
+    QList<QJsonObject> requests;
+    for (const auto& call : coreControls) {
+        const QJsonObject control = call.at(0).toJsonObject();
+        if (control.value(QStringLiteral("op")) == QLatin1String("receiver-audio")
+            && control.value(QStringLiteral("sliceId")).toInt() == sliceId) {
+            requests << control;
+        }
+    }
+    return requests;
+}
+
+// R-R3-43: a receiver the status shows as receiving in `profile`.
+bool receivesIn(const RemoteMediaController& media, int sliceId, RemoteAudioProfile profile)
+{
+    for (const RemoteReceiverAudioStatus& receiver : media.audioStatus().receivers) {
+        if (receiver.sliceId == sliceId) {
+            return receiver.state == RemoteReceiverAudioStatus::State::Receiving
+                && receiver.runningProfile == profile;
+        }
+    }
+    return false;
+}
 } // namespace
 
 class TestRemoteMediaController : public QObject {
@@ -4211,6 +4236,191 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(requestedProfiles(coreControls).size() > controlsBefore, 15000);
         QCOMPARE(requestedProfiles(coreControls).at(controlsBefore), QStringLiteral("lossless"));
         QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().losslessEncoder.has_value(), 15000);
+
+        audio.stop();
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // R-R3-43 (risk E3): a receiver stream the Core retires stops with its
+    // reason, and the app plays silence: nothing asks again in a loop. A
+    // slice id that never existed is answered once. When the Core brings
+    // the slice id back, the waiting app is asked for once more, with a
+    // revision above every one sent for that id.
+    void retiredReceiverStreamStopsWithItsReasonAndDoesNotLoop()
+    {
+        Test::RemoteAudioSessionHarness h;
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
+        DaemonMediaController daemonMedia(&h.server, &h.station);
+        Test::CollectingReceiverSink app;
+        Test::CollectingReceiverSink ghost;
+        constexpr int kMadeUpSlice = 7;
+        const int sliceB = h.sliceB;
+        const auto release = qScopeGuard([&] {
+            remoteMedia.releaseReceiverAudio(sliceB, &app);
+            remoteMedia.releaseReceiverAudio(kMadeUpSlice, &ghost);
+        });
+        QSignalSpy errors(&remoteMedia, &RemoteMediaController::errorOccurred);
+        QSignalSpy coreControls(&h.server, &StationServer::mediaControlReceived);
+        PacedRemoteAudio audio(h);
+        h.connectSession();
+        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state,
+                                  RemoteAudioStatus::State::Playing, 15000);
+
+        remoteMedia.requestReceiverAudio(sliceB, &app);
+        QTRY_VERIFY_WITH_TIMEOUT(app.frames(sliceB) >= 9600, 10000);
+        QVERIFY(receivesIn(remoteMedia, sliceB, RemoteAudioProfile::Opus));
+
+        // The slice goes away at the station.
+        h.station.removeSlice(sliceB);
+        QTRY_VERIFY_WITH_TIMEOUT(!app.stops().isEmpty(), 5000);
+        QCOMPARE(app.stops().constLast(), std::make_pair(sliceB, QStringLiteral("slice-removed")));
+        QTRY_VERIFY(!remoteMedia.receiverAudioTelemetry().value(sliceB).running);
+        const int requestsAtStop = int(receiverRequests(coreControls, sliceB).size());
+        QTest::qWait(300);
+        const int framesAtStop = app.frames(sliceB);
+        // Well past the 500 ms a speaker would wait, and a retry's 1 s.
+        QTest::qWait(2000);
+        QCOMPARE(app.frames(sliceB), framesAtStop);
+        QCOMPARE(int(receiverRequests(coreControls, sliceB).size()), requestsAtStop);
+        QCOMPARE(app.stops().size(), 1);
+        const RemoteAudioStatus stopped = remoteMedia.audioStatus();
+        QCOMPARE(stopped.receivers.size(), 1);
+        QCOMPARE(stopped.receivers.constFirst().state, RemoteReceiverAudioStatus::State::Stopped);
+        QCOMPARE(stopped.receivers.constFirst().stopReason, QStringLiteral("slice-removed"));
+        const QString details = formatRemoteAudioDetails(stopped, remoteMedia.audioTelemetry(), {},
+                                                         remoteMedia.receiverAudioTelemetry());
+        QVERIFY2(details.contains(QStringLiteral(
+                     "Receiver B for apps: Stopped. This receiver is no longer on the Core.")),
+                 qPrintable(details));
+        // The speakers never noticed.
+        QCOMPARE(remoteMedia.audioStatus().state, RemoteAudioStatus::State::Playing);
+
+        // A slice id the Core never had: answered once, never asked again.
+        remoteMedia.requestReceiverAudio(kMadeUpSlice, &ghost);
+        QTRY_VERIFY_WITH_TIMEOUT(!ghost.stops().isEmpty(), 5000);
+        QCOMPARE(ghost.stops().constLast(),
+                 std::make_pair(kMadeUpSlice, QStringLiteral("slice-removed")));
+        QTest::qWait(1500);
+        QCOMPARE(receiverRequests(coreControls, kMadeUpSlice).size(), qsizetype(1));
+        QCOMPARE(ghost.frames(kMadeUpSlice), 0);
+
+        // The Core reuses the id for a new slice: the app waiting on it is
+        // asked for once, and hears the new slice.
+        const int reused = h.station.addSlice();
+        QCOMPARE(reused, sliceB);
+        h.station.sliceById(reused)->setAudioPan(0.95);
+        QTRY_VERIFY_WITH_TIMEOUT(app.frames(sliceB) >= framesAtStop + 9600, 15000);
+        QVERIFY(receivesIn(remoteMedia, sliceB, RemoteAudioProfile::Opus));
+        const QList<QJsonObject> requests = receiverRequests(coreControls, sliceB);
+        QCOMPARE(requests.size(), qsizetype(requestsAtStop + 1));
+        for (qsizetype i = 1; i < requests.size(); ++i) {
+            QVERIFY(requests.at(i).value(QStringLiteral("revision")).toInteger()
+                    > requests.at(i - 1).value(QStringLiteral("revision")).toInteger());
+        }
+        // And a release and a new request still only ever go up.
+        remoteMedia.releaseReceiverAudio(sliceB, &app);
+        remoteMedia.requestReceiverAudio(sliceB, &app);
+        QTRY_VERIFY_WITH_TIMEOUT(receiverRequests(coreControls, sliceB).size()
+                                     == requests.size() + 2, 5000);
+        const QList<QJsonObject> after = receiverRequests(coreControls, sliceB);
+        QVERIFY(!after.at(after.size() - 2).value(QStringLiteral("enabled")).toBool());
+        QVERIFY(after.constLast().value(QStringLiteral("enabled")).toBool());
+        for (qsizetype i = 1; i < after.size(); ++i) {
+            QVERIFY(after.at(i).value(QStringLiteral("revision")).toInteger()
+                    > after.at(i - 1).value(QStringLiteral("revision")).toInteger());
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(receivesIn(remoteMedia, sliceB, RemoteAudioProfile::Opus), 10000);
+        QCOMPARE(errors.count(), 0);
+
+        audio.stop();
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // R-R3-43, R-R3-23: the one link trial counts every lossless stream,
+    // here two receiver streams with the speakers muted (so the speakers'
+    // stream is not lossless at all). A link that cannot carry them fails
+    // the trial once, and one fallback moves every stream, receivers and
+    // speakers alike, to Opus with one notice.
+    void losslessTrialCountsEveryLosslessStreamAndFallsBackOnce()
+    {
+        const RestoreAudioChoice restore;
+        AppSettings::instance().setValue(
+            QLatin1String(RemoteMediaController::kAudioProfileSettingKey), QStringLiteral("Lossless"));
+        Test::RemoteAudioSessionHarness h;
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr, nullptr,
+            [](QObject* parent) -> IMediaTransport* {
+                return new CapacityLimitedTransport(parent);
+            });
+        DaemonMediaController daemonMedia(&h.server, &h.station);
+        Test::CollectingReceiverSink appA;
+        Test::CollectingReceiverSink appB;
+        const auto release = qScopeGuard([&] {
+            remoteMedia.releaseReceiverAudio(h.sliceA, &appA);
+            remoteMedia.releaseReceiverAudio(h.sliceB, &appB);
+        });
+        QSignalSpy errors(&remoteMedia, &RemoteMediaController::errorOccurred);
+        QSignalSpy coreControls(&h.server, &StationServer::mediaControlReceived);
+        auto* const trialTimer =
+            remoteMedia.findChild<QTimer*>(QStringLiteral("remoteAudioLinkTrialTimer"));
+        QVERIFY(trialTimer);
+        PacedRemoteAudio audio(h);
+        h.remote.audioEngine()->setMasterMuted(true);
+        remoteMedia.requestReceiverAudio(h.sliceA, &appA);
+        remoteMedia.requestReceiverAudio(h.sliceB, &appB);
+        h.connectSession();
+        QVERIFY(remoteMedia.receiverAudioNegotiated());
+
+        // Both ask for lossless, the one choice; the Core grants it and the
+        // trial runs although the speakers play nothing.
+        QTRY_VERIFY_WITH_TIMEOUT(!receiverRequests(coreControls, h.sliceA).isEmpty()
+                                     && !receiverRequests(coreControls, h.sliceB).isEmpty(), 15000);
+        QCOMPARE(receiverRequests(coreControls, h.sliceA).constFirst()
+                     .value(QStringLiteral("profile")).toString(), QStringLiteral("lossless"));
+        QCOMPARE(receiverRequests(coreControls, h.sliceB).constFirst()
+                     .value(QStringLiteral("profile")).toString(), QStringLiteral("lossless"));
+        QTRY_VERIFY_WITH_TIMEOUT(trialTimer->isActive(), 15000);
+        QVERIFY(!remoteMedia.acceptedAudioContext() || !remoteMedia.acceptedAudioContext()->enabled);
+
+        // The link cannot carry them: the trial fails, once.
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().qualityReason
+                                     == RemoteAudioQualityReason::NetworkTooSlow, 15000);
+        QCOMPARE(errors.count(), 1);
+        QCOMPARE(errors.constFirst().at(0).toString(),
+                 QStringLiteral("The network could not carry lossless audio; staying on Opus."));
+        // Every stream asks for Opus: both receivers and the speakers.
+        QTRY_VERIFY_WITH_TIMEOUT(
+            receiverRequests(coreControls, h.sliceA).constLast()
+                    .value(QStringLiteral("profile")).toString() == QLatin1String("opus")
+                && receiverRequests(coreControls, h.sliceB).constLast()
+                    .value(QStringLiteral("profile")).toString() == QLatin1String("opus")
+                && requestedProfiles(coreControls).constLast() == QLatin1String("opus"), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(receivesIn(remoteMedia, h.sliceA, RemoteAudioProfile::Opus)
+                                     && receivesIn(remoteMedia, h.sliceB, RemoteAudioProfile::Opus),
+                                 10000);
+        const int aFrames = appA.frames(h.sliceA);
+        const int bFrames = appB.frames(h.sliceB);
+        QTRY_VERIFY_WITH_TIMEOUT(appA.frames(h.sliceA) >= aFrames + 19200
+                                     && appB.frames(h.sliceB) >= bFrames + 19200, 10000);
+        QVERIFY(!trialTimer->isActive());
+        const QString details = formatRemoteAudioDetails(remoteMedia.audioStatus(),
+                                                         remoteMedia.audioTelemetry(), {},
+                                                         remoteMedia.receiverAudioTelemetry());
+        QCOMPARE(details.count(QStringLiteral("The network could not carry lossless audio")), 1);
+        QVERIFY2(details.contains(QStringLiteral("Receiver A for apps: Receiving, Opus")),
+                 qPrintable(details));
+        QVERIFY2(details.contains(QStringLiteral("Receiver B for apps: Receiving, Opus")),
+                 qPrintable(details));
+
+        // Opus fits: no second notice, and unmuting asks for Opus too.
+        QTest::qWait(1500);
+        QCOMPARE(errors.count(), 1);
+        h.remote.audioEngine()->setMasterMuted(false);
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().state == RemoteAudioStatus::State::Playing
+                                     && remoteMedia.audioStatus().runningProfile
+                                         == RemoteAudioProfile::Opus, 10000);
+        QCOMPARE(requestedProfiles(coreControls).constLast(), QStringLiteral("opus"));
+        QCOMPARE(errors.count(), 1);
+        QCOMPARE(remoteMedia.audioProfileChoice(), RemoteAudioProfile::Lossless);
 
         audio.stop();
         h.client.disconnectFromStation(QStringLiteral("test complete"));

@@ -20,10 +20,14 @@
 
 #include "core/AudioEngine.h"
 #include "core/IAudioBus.h"
+#include "core/RxChannel.h"
+#include "core/WdspEngine.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
 #include "fakes/FakeAudioBus.h"
+
+#include <QTemporaryDir>
 
 #include <array>
 #include <cstring>
@@ -329,6 +333,54 @@ private slots:
         h.engine->setVaxMuted(0, true);
         h.engine->setVaxMuted(5, true);
         QCOMPARE(h.engine->vaxMuted(1), false);
+    }
+    // ── 13. The tee divides by the feeding slice's own AF gain ─────────────
+    //
+    // R-R3-43 local VAX fix: AF gain is applied inside WDSP (PanelGain1),
+    // upstream of rxBlockReady, and the tee undoes it so a digital-mode app
+    // hears a level independent of the speaker slider. It must undo the AF
+    // gain of the slice that produced the block. It used to read receiver
+    // 1's (WDSP channel 0) for every slice, so slice B on VAX 1 came out at
+    // slice A's compensation.
+    void vaxTeeUsesTheFeedingSlicesOwnAfGain() {
+        Harness h = makeHarness();
+        QTemporaryDir config;
+        QVERIFY(config.isValid());
+        WdspEngine* const wdsp = h.radio->wdspEngine();
+        QVERIFY(wdsp != nullptr);
+        wdsp->setSynchronousInitForTest(true);
+        QVERIFY(wdsp->initialize(config.path()));
+
+        FakeAudioBus* vax1 = injectFakeVax(h.engine, 1);
+        FakeAudioBus* vax2 = injectFakeVax(h.engine, 2);
+        const int sliceA = h.addSlice(/*vaxChannel=*/2);
+        const int sliceB = h.addSlice(/*vaxChannel=*/1);
+        QCOMPARE(sliceA, 0);  // receiver 1: the channel the old code read
+        QVERIFY(sliceB != sliceA);
+        const auto channelFor = [wdsp](int sliceId) {
+            RxChannel* rx = wdsp->rxChannel(sliceId);
+            return rx != nullptr ? rx : wdsp->createRxChannel(sliceId, 64, 4096);
+        };
+        RxChannel* const rxA = channelFor(sliceA);
+        RxChannel* const rxB = channelFor(sliceB);
+        QVERIFY(rxA != nullptr && rxB != nullptr);
+        // Powers of two, so the compensated samples compare exactly.
+        rxA->setAfGain(0.5);
+        rxB->setAfGain(0.25);
+
+        h.engine->rxBlockReady(sliceB, kTestSamples.data(), kTestFrames);
+        QCOMPARE(vax1->pushCount(), 1);
+        const auto gotB = bufferAsFloats(vax1);
+        for (int i = 0; i < kTestStereoFloats; ++i) {
+            QCOMPARE(gotB[i], kTestSamples[i] * 4.0f);
+        }
+
+        h.engine->rxBlockReady(sliceA, kTestSamples.data(), kTestFrames);
+        QCOMPARE(vax2->pushCount(), 1);
+        const auto gotA = bufferAsFloats(vax2);
+        for (int i = 0; i < kTestStereoFloats; ++i) {
+            QCOMPARE(gotA[i], kTestSamples[i] * 2.0f);
+        }
     }
 };
 

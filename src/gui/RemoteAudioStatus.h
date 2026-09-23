@@ -17,11 +17,15 @@
 #include "core/session/media/RemoteAudioReceiver.h"
 #include "gui/AudioClockEstimator.h"
 
+#include <QHash>
+#include <QList>
 #include <QString>
 #include <QtGlobal>
 
 #include <deque>
+#include <map>
 #include <optional>
+#include <vector>
 
 namespace NereusSDR {
 
@@ -31,6 +35,25 @@ enum class RemoteAudioQualityReason {
     CoreNotAllowed,        // the Core refused: its setting denies lossless
     ConnectionUnavailable, // the Core refused: this connection did not agree it
     NetworkTooSlow,        // this computer's link trial failed
+};
+
+/// R-R3-43: one receiver's audio stream to apps on this computer (TCI,
+/// VAX), apart from the speakers' mix.
+struct RemoteReceiverAudioStatus {
+    enum class State {
+        Waiting,   // an app asked; the Core has not started it yet
+        Receiving, // the Core sends it and this computer receives it
+        Stopped,   // stopped, with stopReason
+    };
+    int sliceId = -1;
+    State state = State::Waiting;
+    /// The Core's wire reason or this computer's sentence; shown through
+    /// OperatorReasonText::forDisplay(). Set only when Stopped.
+    QString stopReason;
+    /// What the Core runs for this receiver; absent before it says.
+    std::optional<RemoteAudioProfile> runningProfile;
+    friend bool operator==(const RemoteReceiverAudioStatus&,
+                           const RemoteReceiverAudioStatus&) = default;
 };
 
 struct RemoteAudioStatus {
@@ -62,6 +85,10 @@ struct RemoteAudioStatus {
     std::optional<RemoteAudioProfile> runningProfile;
     std::optional<PcmEncoderProfile> losslessEncoder;
     std::optional<RemoteAudioQualityReason> qualityReason;
+    // R-R3-43: every receiver an app on this computer listens to, by slice
+    // id. They follow the one audio quality choice and the one link trial;
+    // the speakers' mute does not stop them.
+    QList<RemoteReceiverAudioStatus> receivers;
     friend bool operator==(const RemoteAudioStatus&, const RemoteAudioStatus&) = default;
 };
 
@@ -130,9 +157,18 @@ QString remoteAudioDelayText(const AudioDelayEstimate& estimate);
 QString remoteAudioDeliveryText(const AudioDelayEstimate& estimate);
 /// With delay.measurable and a health section, a line "Audio delay: ..."
 /// (or "Audio delay: not measured yet") follows the speaker buffer line.
+/// R-R3-43: then, for each of status.receivers, a line "Receiver B for
+/// apps: ..." with its state (and the quality it runs, or why it stopped),
+/// and while it is receiving a line with its measured arrival jitter,
+/// missing packets and gaps filled, from receiverPlayback by slice id. With
+/// no receivers the text is exactly as before.
 QString formatRemoteAudioDetails(const RemoteAudioStatus& status,
                                  const RemoteAudioReceiverTelemetry& playback,
-                                 const RemoteAudioDelayReport& delay = {});
+                                 const RemoteAudioDelayReport& delay = {},
+                                 const QHash<int, RemoteAudioReceiverTelemetry>& receiverPlayback = {});
+/// R-R3-43: the receiver line's words for one stream, e.g. "Receiving,
+/// Lossless" or "Stopped. This receiver was removed on the Core."
+QString remoteReceiverAudioStateText(const RemoteReceiverAudioStatus& receiver);
 
 /// The identity a persistent playback failure is recorded against: the
 /// session (epoch and connection), the accepted audio context it happened
@@ -192,6 +228,13 @@ public:
 
     enum class Verdict { Continue, Failed };
 
+    /// R-R3-43: one lossless stream's sample. `stream` tells the streams
+    /// apart (the speakers' mix and each receiver stream).
+    struct StreamSample {
+        int stream = 0;
+        RemoteAudioReceiverTelemetry playback;
+    };
+
     void begin(qint64 nowMs);
     void end();
     bool active() const { return m_active; }
@@ -199,6 +242,12 @@ public:
     /// generation starts from zero. Samples from a stopped receiver are
     /// ignored (the restart itself goes to noteInterruption()).
     Verdict observe(qint64 nowMs, const RemoteAudioReceiverTelemetry& playback);
+    /// R-R3-43: a sample of every lossless stream at once. Each stream's
+    /// counters are kept apart (its own generation and base) and summed
+    /// into the one window, so the trial judges the link by all the
+    /// lossless audio it carries. A stream missing from a sample is
+    /// forgotten; if it comes back it counts from zero.
+    Verdict observe(qint64 nowMs, const std::vector<StreamSample>& streams);
     /// One restart the receiver asked for because audio arrived badly.
     Verdict noteInterruption(qint64 nowMs);
     /// The loss of the last closed window, for the log; absent before one.
@@ -211,12 +260,15 @@ private:
         quint64 concealed = 0;
         quint64 played = 0;
     };
+    struct StreamBase {
+        quint64 generation = 0;
+        Counters base;
+    };
     bool m_active = false;
     qint64 m_windowStartMs = 0;
     int m_closedWindows = 0;
     int m_badWindows = 0;
-    std::optional<quint64> m_generation;
-    Counters m_base;
+    std::map<int, StreamBase> m_streams;
     Counters m_window;
     std::deque<qint64> m_interruptions;
     std::optional<double> m_lastWindowLoss;

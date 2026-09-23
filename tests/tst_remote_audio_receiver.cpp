@@ -5,6 +5,7 @@
 #include <QSignalSpy>
 #include <cmath>
 #include <chrono>
+#include <mutex>
 #include <thread>
 #include "core/AudioEngine.h"
 #include "core/session/media/AudioJitterBuffer.h"
@@ -28,6 +29,46 @@ QByteArray losslessTonePacket(int packet, quint32 ssrc)
     const PcmRtpEncodeResult encoded = PcmAudioPacketiser{}.encode(
         pcm, quint16(packet), quint32(packet) * quint32(PcmAudioCodecConfig::kPacketFrames), ssrc);
     return encoded.status == OpusAudioCodecStatus::Accepted ? encoded.packet : QByteArray{};
+}
+
+// R-R3-43: one lossless packet whose every sample is `value`, so the order a
+// sink receives is readable from the samples.
+QByteArray losslessLevelPacket(int packet, quint32 ssrc, float value)
+{
+    const QVector<float> pcm(PcmAudioCodecConfig::kPacketFrames * 2, value);
+    const PcmRtpEncodeResult encoded = PcmAudioPacketiser{}.encode(
+        pcm, quint16(packet), quint32(packet) * quint32(PcmAudioCodecConfig::kPacketFrames), ssrc);
+    return encoded.status == OpusAudioCodecStatus::Accepted ? encoded.packet : QByteArray{};
+}
+
+// R-R3-43: what a PCM sink was handed, block by block, from the worker.
+struct CollectedPcm {
+    mutable std::mutex mutex;
+    QList<QVector<float>> blocks;
+    RemoteAudioReceiver::PcmSink sink()
+    {
+        return [this](const float* pcm, int frames) {
+            std::lock_guard<std::mutex> lock(mutex);
+            blocks.append(QVector<float>(pcm, pcm + qsizetype(frames) * 2));
+        };
+    }
+    QList<QVector<float>> snapshot() const
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        return blocks;
+    }
+    qsizetype count() const
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        return blocks.size();
+    }
+};
+
+double blockRms(const QVector<float>& block)
+{
+    double sum = 0.0;
+    for (float sample : block) { sum += double(sample) * sample; }
+    return block.isEmpty() ? 0.0 : std::sqrt(sum / block.size());
 }
 } // namespace
 class TstRemoteAudioReceiver : public QObject {
@@ -1200,6 +1241,177 @@ private slots:
         QCOMPARE(receiver.profile(), RemoteAudioProfile::Opus);
         receiver.submit(losslessTonePacket(0, kSsrc));
         QCOMPARE(receiver.telemetry().rejectedHeaders, quint64(1));
+        receiver.stop();
+    }
+
+    // R-R3-43: a receiver for an app, with no speaker at all (no
+    // AudioEngine, so none can be opened). Packets reordered on the network
+    // come out in stream order, paced by their arrival (the Core's clock),
+    // and a lost packet is concealed (Opus) or silence (lossless). Nothing
+    // asks for a restart.
+    void pcmSinkPlaysInOrderWithoutASpeaker_data()
+    {
+        QTest::addColumn<bool>("lossless");
+        QTest::newRow("lossless") << true;
+        QTest::newRow("opus") << false;
+    }
+    void pcmSinkPlaysInOrderWithoutASpeaker()
+    {
+        QFETCH(bool, lossless);
+        constexpr quint32 kSsrc = 0x4e520001;
+        const int packets = lossless ? 60 : 12;
+        const int lost = lossless ? 30 : 7;
+        const int packetMs = lossless ? 4 : 40;
+        const int packetFrames = lossless ? PcmAudioCodecConfig::kPacketFrames : 1920;
+        CollectedPcm collected;
+        RemoteAudioReceiver receiver(RemoteAudioReceiver::PcmSinkMode{collected.sink()});
+        QVERIFY(receiver.isPcmSink());
+        QSignalSpy errors(&receiver, &RemoteAudioReceiver::errorOccurred);
+        QSignalSpy restarts(&receiver, &RemoteAudioReceiver::restartRequested);
+        QVERIFY(receiver.start(kSsrc, 0, lossless ? RemoteAudioProfile::Lossless
+                                                  : RemoteAudioProfile::Opus));
+        QVERIFY(receiver.isRunning());
+
+        // Each packet is louder than the last, so the order is audible.
+        const auto level = [lossless](int packet) {
+            return lossless ? float(packet + 1) / 1024.0f : 0.02f * float(packet + 1);
+        };
+        OpusAudioEncoder encoder;
+        QList<QByteArray> wire;
+        for (int packet = 0; packet < packets; ++packet) {
+            if (lossless) {
+                wire.append(losslessLevelPacket(packet, kSsrc, level(packet)));
+            } else {
+                QVector<float> pcm(3840);
+                for (int i = 0; i < 1920; ++i) {
+                    const double t = double(packet * 1920 + i) / 48000;
+                    pcm[2 * i] = pcm[2 * i + 1]
+                        = float(level(packet) * std::sin(t * 2 * 3.141592653589793 * 1000));
+                }
+                const auto encoded = encoder.encode(pcm, quint16(packet),
+                                                    quint32(packet) * 1920u, kSsrc);
+                QCOMPARE(encoded.status, OpusAudioCodecStatus::Accepted);
+                wire.append(encoded.packet);
+            }
+            QVERIFY(!wire.constLast().isEmpty());
+        }
+        // Sent at the stream's own pace; packets 3 and 4 swap on the way
+        // (3 lands a quarter packet after 4, well inside the reorder hold,
+        // not on its concealment deadline one packet later), and one packet
+        // never arrives.
+        using Clock = std::chrono::steady_clock;
+        const auto started = Clock::now();
+        const auto at = [&](int slot, int quarter = 0) {
+            return started + std::chrono::microseconds(1000 * packetMs * slot + 250 * packetMs * quarter);
+        };
+        for (int packet = 0; packet < packets; ++packet) {
+            if (packet == 3) { continue; }
+            std::this_thread::sleep_until(at(packet == 4 ? 3 : packet));
+            if (packet != lost) { receiver.submit(wire.at(packet)); }
+            if (packet == 4) {
+                std::this_thread::sleep_until(at(3, 1));
+                receiver.submit(wire.at(3));
+            }
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(collected.count() >= packets || !restarts.isEmpty()
+                                 || !errors.isEmpty(), 3000);
+        QCOMPARE(errors.count(), 0);
+        QCOMPARE(restarts.count(), 0);
+        const QList<QVector<float>> blocks = collected.snapshot();
+        QVERIFY(blocks.size() >= packets);
+        for (int packet = 0; packet < packets; ++packet) {
+            QCOMPARE(blocks.at(packet).size(), packetFrames * 2);
+        }
+        const RemoteAudioReceiverTelemetry telemetry = receiver.telemetry();
+        QCOMPARE(telemetry.missingPackets, quint64(1));
+        QCOMPARE(telemetry.decodedPackets, quint64(packets - 1));
+        QVERIFY(telemetry.concealedPackets >= 1);
+        QCOMPARE(telemetry.rejectedHeaders, quint64(0));
+        // Frames handed to the sink stand in for a speaker's progress.
+        QVERIFY(telemetry.deviceConsumedFrames >= quint64(packets) * quint64(packetFrames));
+        QVERIFY(telemetry.lastDeviceProgressAgeMs.has_value());
+        QVERIFY(!telemetry.speakerQueuedMs.has_value());
+        QVERIFY(!telemetry.driftRatio.has_value());
+        QVERIFY(!telemetry.playout.has_value());
+        QVERIFY(telemetry.release.has_value());
+        if (lossless) {
+            // Exactly the sent levels, in stream order, and the lost packet
+            // as silence.
+            for (int packet = 0; packet < packets; ++packet) {
+                const float expected = packet == lost ? 0.0f : level(packet);
+                for (float sample : blocks.at(packet)) {
+                    QVERIFY2(std::abs(sample - expected) < 1.0f / 16384.0f,
+                             qPrintable(QStringLiteral("packet %1: %2, expected %3")
+                                            .arg(packet).arg(sample).arg(expected)));
+                }
+            }
+        } else {
+            // Louder block by block, the swapped pair included, until the
+            // concealed one; Opus does not play silence for it.
+            for (int packet = 2; packet < lost; ++packet) {
+                QVERIFY2(blockRms(blocks.at(packet)) > blockRms(blocks.at(packet - 1)),
+                         qPrintable(QString::number(packet)));
+            }
+            QVERIFY(blockRms(blocks.at(lost)) > 0.0);
+        }
+        receiver.stop();
+        QVERIFY(!receiver.isRunning());
+        // Stopped means stopped: nothing more reaches the sink.
+        const qsizetype afterStop = collected.count();
+        receiver.submit(wire.constLast());
+        QTest::qWait(150);
+        QCOMPARE(collected.count(), afterStop);
+    }
+
+    // R-R3-43 (risk E3): when the Core goes quiet the sink hears silence
+    // for the 500 ms the speaker would have waited, then nothing, and it
+    // never asks for a restart, so a retired stream cannot loop. When
+    // packets come back, far ahead, it plays them on their own timestamps.
+    void pcmSinkIdlesOnSilenceAndResumesWithoutARestart()
+    {
+        constexpr quint32 kSsrc = 0x4e520002;
+        CollectedPcm collected;
+        RemoteAudioReceiver receiver(RemoteAudioReceiver::PcmSinkMode{collected.sink()});
+        QSignalSpy errors(&receiver, &RemoteAudioReceiver::errorOccurred);
+        QSignalSpy restarts(&receiver, &RemoteAudioReceiver::restartRequested);
+        QVERIFY(receiver.start(kSsrc, 0, RemoteAudioProfile::Lossless));
+        using Clock = std::chrono::steady_clock;
+        const auto sendRun = [&](int first, int count) {
+            const auto started = Clock::now();
+            for (int i = 0; i < count; ++i) {
+                std::this_thread::sleep_until(started + std::chrono::milliseconds(4 * i));
+                receiver.submit(losslessLevelPacket(first + i, kSsrc, 0.25f));
+            }
+        };
+        sendRun(0, 25);
+        QTRY_VERIFY_WITH_TIMEOUT(receiver.telemetry().decodedPackets >= 25, 2000);
+
+        // Quiet: silence, then nothing.
+        QTest::qWait(900);
+        const qsizetype idle = collected.count();
+        const quint64 concealed = receiver.telemetry().concealedPackets;
+        QVERIFY2(concealed >= 50 && concealed <= 160, qPrintable(QString::number(concealed)));
+        QTest::qWait(400);
+        QCOMPARE(collected.count(), idle);
+        QCOMPARE(receiver.telemetry().concealedPackets, concealed);
+        QCOMPARE(restarts.count(), 0);
+        QCOMPARE(errors.count(), 0);
+        QVERIFY(receiver.isRunning());
+        for (const QVector<float>& block : collected.snapshot().mid(25)) {
+            for (float sample : block) { QCOMPARE(sample, 0.0f); }
+        }
+
+        // The Core sends again, well past the reorder window.
+        sendRun(2000, 25);
+        QTRY_VERIFY_WITH_TIMEOUT(receiver.telemetry().decodedPackets >= 50
+                                 || !restarts.isEmpty(), 2000);
+        QCOMPARE(restarts.count(), 0);
+        QCOMPARE(errors.count(), 0);
+        const QList<QVector<float>> blocks = collected.snapshot();
+        QVERIFY(blocks.size() >= idle + 25);
+        for (qsizetype block = idle; block < idle + 25; ++block) {
+            QVERIFY(std::abs(blocks.at(block).constFirst() - 0.25f) < 1.0f / 16384.0f);
+        }
         receiver.stop();
     }
 

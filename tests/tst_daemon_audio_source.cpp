@@ -159,6 +159,25 @@ public:
     QSemaphore release;
 };
 
+class BlockingSliceTap final : public SliceAudioTap {
+public:
+    void consume(const float*, int, int) noexcept override
+    {
+        entered.release();
+        release.acquire();
+    }
+    void skip(int, int) noexcept override {}
+
+    QSemaphore entered;
+    QSemaphore release;
+};
+
+class IdleSliceTap final : public SliceAudioTap {
+public:
+    void consume(const float*, int, int) noexcept override {}
+    void skip(int, int) noexcept override {}
+};
+
 } // namespace
 
 class TstDaemonAudioSource : public QObject {
@@ -546,6 +565,169 @@ private slots:
         QCOMPARE(block->samplePosition, quint64{0});
         verifyStereoConstant(*block, 3.0f, -3.0f);
         QCOMPARE(source.dropCount(), std::uint64_t{0});
+    }
+
+    // R-R3-43: a slice source captures that receiver's own audio in the
+    // same 1920-frame blocks on the same grid, with nothing of the other
+    // slice and nothing of its mute.
+    void sliceSourceCapturesOnlyItsReceiverInWholeBlocks()
+    {
+        Harness harness;
+        DaemonAudioSource source;
+        source.setAudioEngine(harness.engine);
+        QCOMPARE(source.sliceSource(), DaemonAudioSource::kMasterMix);
+        QVERIFY(source.setSliceSource(harness.sliceB));
+        QCOMPARE(source.sliceSource(), harness.sliceB);
+        source.start();
+        QVERIFY(source.isRunning());
+        QCOMPARE(harness.engine->sliceAudioTapCount(), 1);
+        harness.radio.sliceById(harness.sliceB)->setMuted(true);
+
+        quint64 nextFrame = 0;
+        const QVector<float> other = stereoBlock(0.9f, 0.9f);
+        const int callbacks = 2 * DaemonAudioSource::kBlockFrames / kDspFrames;
+        for (int callback = 0; callback < callbacks; ++callback) {
+            harness.engine->rxBlockReady(harness.sliceA, other.constData(), kDspFrames);
+            feedRamp(harness.engine, harness.sliceB, nextFrame, 1);
+        }
+        for (quint64 first : {quint64{0}, quint64{DaemonAudioSource::kBlockFrames}}) {
+            const auto block = source.takeBlock();
+            QVERIFY(block.has_value());
+            QCOMPARE(block->samplePosition, first);
+            const QString mismatch = rampMismatch(*block, first);
+            QVERIFY2(mismatch.isEmpty(), qPrintable(mismatch));
+        }
+        QVERIFY(!source.takeBlock().has_value());
+        QCOMPARE(source.dropCount(), std::uint64_t{0});
+        source.stop();
+        QCOMPARE(harness.engine->sliceAudioTapCount(), 0);
+    }
+
+    // Frames the MOX gate withholds advance the slice source's position
+    // without samples: the next block starts on the original grid, and the
+    // withheld audio is not counted as a loss.
+    void sliceSourceMoxGapKeepsThePacketGrid()
+    {
+        Harness harness;
+        SliceModel* const txSlice = harness.radio.txBoundSlice();
+        QVERIFY(txSlice != nullptr);
+        const int gated = txSlice->sliceIndex();
+        DaemonAudioSource source;
+        source.setAudioEngine(harness.engine);
+        QVERIFY(source.setSliceSource(gated));
+        source.start();
+
+        quint64 nextFrame = 0;
+        feedRamp(harness.engine, gated, nextFrame, 1);
+        harness.engine->setMoxStateForTest(true);
+        feedRamp(harness.engine, gated, nextFrame, 1);
+        harness.engine->setMoxStateForTest(false);
+        feedRamp(harness.engine, gated, nextFrame,
+                 2 * DaemonAudioSource::kBlockFrames / kDspFrames);
+
+        const auto block = source.takeBlock();
+        QVERIFY(block.has_value());
+        QCOMPARE(block->samplePosition, quint64{DaemonAudioSource::kBlockFrames});
+        const QString mismatch = rampMismatch(*block, DaemonAudioSource::kBlockFrames);
+        QVERIFY2(mismatch.isEmpty(), qPrintable(mismatch));
+        QCOMPARE(source.dropCount(), std::uint64_t{0});
+    }
+
+    // The source kind is fixed while running; a slice source that finds
+    // every receiver tap slot taken stays stopped.
+    void sliceSourceRefusalsAndFullSlots()
+    {
+        Harness harness;
+        DaemonAudioSource source;
+        source.setAudioEngine(harness.engine);
+        QVERIFY(!source.setSliceSource(-2));
+        QVERIFY(source.setSliceSource(harness.sliceA));
+        source.start();
+        QVERIFY(source.isRunning());
+        QVERIFY(!source.setSliceSource(harness.sliceB));
+        QVERIFY(!source.setSliceSource(DaemonAudioSource::kMasterMix));
+        source.stop();
+        QVERIFY(source.setSliceSource(harness.sliceB));
+
+        IdleSliceTap others[AudioEngine::kMaxSliceAudioTaps];
+        for (IdleSliceTap& tap : others) {
+            QVERIFY(harness.engine->setSliceAudioTap(harness.sliceA, &tap));
+        }
+        source.start();
+        QVERIFY(!source.isRunning());
+        QVERIFY(!source.takeBlock().has_value());
+        harness.engine->clearSliceAudioTap(&others[0]);
+        source.start();
+        QVERIFY(source.isRunning());
+        source.stop();
+        for (IdleSliceTap& tap : others) {
+            harness.engine->clearSliceAudioTap(&tap);
+        }
+        QCOMPARE(harness.engine->sliceAudioTapCount(), 0);
+    }
+
+    // Starting and stopping a receiver source never costs the master-mix
+    // source a frame: its blocks stay contiguous and nothing is dropped.
+    void receiverSourceChurnLeavesTheMasterSourceContinuous()
+    {
+        Harness harness;
+        harness.engine->setSliceStreaming(harness.sliceB, false);
+        DaemonAudioSource master;
+        master.setAudioEngine(harness.engine);
+        master.start();
+        DaemonAudioSource receiver;
+        receiver.setAudioEngine(harness.engine);
+        QVERIFY(receiver.setSliceSource(harness.sliceA));
+
+        quint64 nextFrame = 0;
+        const int callbacks = 3 * DaemonAudioSource::kBlockFrames / kDspFrames;
+        for (int callback = 0; callback < callbacks; ++callback) {
+            if (callback % 5 == 0) {
+                receiver.start();
+                QVERIFY(receiver.isRunning());
+            } else if (callback % 5 == 3) {
+                receiver.stop();
+            }
+            feedRamp(harness.engine, harness.sliceA, nextFrame, 1);
+        }
+        receiver.stop();
+        for (int index = 0; index < 3; ++index) {
+            const quint64 first = quint64(index) * DaemonAudioSource::kBlockFrames;
+            const auto block = master.takeBlock();
+            QVERIFY(block.has_value());
+            QCOMPARE(block->samplePosition, first);
+            const QString mismatch = rampMismatch(*block, first);
+            QVERIFY2(mismatch.isEmpty(), qPrintable(mismatch));
+        }
+        QCOMPARE(master.dropCount(), std::uint64_t{0});
+    }
+
+    void sliceTapRetirementWaitsForAnAdmittedDspCallback()
+    {
+        Harness harness;
+        BlockingSliceTap tap;
+        QVERIFY(harness.engine->setSliceAudioTap(harness.sliceA, &tap));
+
+        const QVector<float> samples = stereoBlock(0.25f, -0.25f);
+        std::thread producer([&] {
+            harness.engine->rxBlockReady(harness.sliceA, samples.constData(), kDspFrames);
+        });
+        QVERIFY2(tap.entered.tryAcquire(1, 1000),
+                 "the DSP callback did not enter the installed slice tap");
+
+        std::atomic<bool> clearReturned{false};
+        std::thread retirement([&] {
+            harness.engine->clearSliceAudioTap(&tap);
+            clearReturned.store(true, std::memory_order_release);
+        });
+
+        QTest::qWait(25);
+        QVERIFY(!clearReturned.load(std::memory_order_acquire));
+        tap.release.release();
+        producer.join();
+        retirement.join();
+        QVERIFY(clearReturned.load(std::memory_order_acquire));
+        QCOMPARE(harness.engine->sliceAudioTapCount(), 0);
     }
 
     void tapRetirementWaitsForAnAdmittedDspCallback()

@@ -58,6 +58,10 @@ QString remoteAudioOffReasonToWire(RemoteAudioOffReason reason)
         return QStringLiteral("radio-offline");
     case RemoteAudioOffReason::EncoderUnavailable:
         return QStringLiteral("encoder-unavailable");
+    case RemoteAudioOffReason::SliceRemoved:
+        return QStringLiteral("slice-removed");
+    case RemoteAudioOffReason::ReceiverLimit:
+        return QStringLiteral("receiver-limit");
     }
     return {};
 }
@@ -72,6 +76,23 @@ std::optional<RemoteAudioOffReason> remoteAudioOffReasonFromWire(const QJsonValu
          {RemoteAudioOffReason::ClientDisabled, RemoteAudioOffReason::MediaNotReady,
           RemoteAudioOffReason::RadioOffline, RemoteAudioOffReason::EncoderUnavailable}) {
         if (wire == remoteAudioOffReasonToWire(reason)) {
+            return reason;
+        }
+    }
+    return std::nullopt;
+}
+
+std::optional<RemoteAudioOffReason> receiverAudioOffReasonFromWire(const QJsonValue& value)
+{
+    if (const std::optional<RemoteAudioOffReason> main = remoteAudioOffReasonFromWire(value)) {
+        return main;
+    }
+    if (!value.isString()) {
+        return std::nullopt;
+    }
+    for (RemoteAudioOffReason reason :
+         {RemoteAudioOffReason::SliceRemoved, RemoteAudioOffReason::ReceiverLimit}) {
+        if (value.toString() == remoteAudioOffReasonToWire(reason)) {
             return reason;
         }
     }
@@ -271,9 +292,15 @@ QJsonObject encodeRemoteAudioContext(const RemoteAudioContextMessage& message,
     return payload;
 }
 
-std::optional<RemoteAudioContextMessage> decodeRemoteAudioContext(const QJsonObject& payload,
-                                                                  bool detailNegotiated,
-                                                                  bool profileNegotiated)
+namespace {
+
+// The shared decoder. `receiver` selects the receiver-audio-context: its op,
+// one more key (sliceId, checked by the caller), ssrc 0 allowed while
+// disabled, and all six off reasons.
+std::optional<RemoteAudioContextMessage> decodeContext(const QJsonObject& payload,
+                                                       bool detailNegotiated,
+                                                       bool profileNegotiated,
+                                                       bool receiver)
 {
     profileNegotiated = profileNegotiated && detailNegotiated;
     // The profile shape adds "profile" and, beside profile opus only,
@@ -290,13 +317,20 @@ std::optional<RemoteAudioContextMessage> decodeRemoteAudioContext(const QJsonObj
     double firstTimestamp = 0.0;
     // With the key count fixed, the eight keys each present and valid means
     // the legacy shape has no other key, and the detail shape has one more.
+    const qsizetype receiverKeys = receiver ? 1 : 0;
+    // A receiver context that holds no stream id says so with ssrc 0; it
+    // can only be a disabled one.
+    const double minimumSsrc = receiver && enabled.isBool() && !enabled.toBool() ? 0.0 : 1.0;
     if (payload.size()
             != (detailNegotiated ? kDetailContextKeys : kLegacyContextKeys) + profileKeys
-        || !op.isString() || op.toString() != QLatin1String("audio-context")
+                + receiverKeys
+        || !op.isString()
+        || op.toString() != (receiver ? QLatin1String("receiver-audio-context")
+                                      : QLatin1String("audio-context"))
         || !connectionId.isString() || !enabled.isBool()
         || !integral(payload.value(QStringLiteral("revision")), 1.0, kMaxU32, revision)
         || !integral(payload.value(QStringLiteral("generation")), 1.0, kMaxU32, generation)
-        || !integral(payload.value(QStringLiteral("ssrc")), 1.0, kMaxU32, ssrc)
+        || !integral(payload.value(QStringLiteral("ssrc")), minimumSsrc, kMaxU32, ssrc)
         || !integral(payload.value(QStringLiteral("firstSequence")), 0.0, kMaxSequence,
                      firstSequence)
         || !integral(payload.value(QStringLiteral("firstTimestamp")), 0.0, kMaxU32,
@@ -348,11 +382,53 @@ std::optional<RemoteAudioContextMessage> decodeRemoteAudioContext(const QJsonObj
         if (payload.contains(QStringLiteral("encoder"))) {
             return std::nullopt;
         }
-        message.offReason = remoteAudioOffReasonFromWire(payload.value(QStringLiteral("reason")));
+        message.offReason = receiver
+            ? receiverAudioOffReasonFromWire(payload.value(QStringLiteral("reason")))
+            : remoteAudioOffReasonFromWire(payload.value(QStringLiteral("reason")));
         if (!message.offReason) {
             return std::nullopt;
         }
     }
+    return message;
+}
+
+} // namespace
+
+std::optional<RemoteAudioContextMessage> decodeRemoteAudioContext(const QJsonObject& payload,
+                                                                  bool detailNegotiated,
+                                                                  bool profileNegotiated)
+{
+    return decodeContext(payload, detailNegotiated, profileNegotiated, /*receiver=*/false);
+}
+
+QJsonObject encodeReceiverAudioContext(const RemoteReceiverAudioContextMessage& message)
+{
+    // The audio-profile shape, key for key, then this context's op and the
+    // slice it describes.
+    QJsonObject payload = encodeRemoteAudioContext(message.context, /*detailNegotiated=*/true,
+                                                   /*profileNegotiated=*/true);
+    payload.insert(QStringLiteral("op"), QStringLiteral("receiver-audio-context"));
+    payload.insert(QStringLiteral("sliceId"), static_cast<qint64>(message.sliceId));
+    return payload;
+}
+
+std::optional<RemoteReceiverAudioContextMessage> decodeReceiverAudioContext(
+    const QJsonObject& payload)
+{
+    double sliceId = 0.0;
+    if (!integral(payload.value(QStringLiteral("sliceId")), 0.0,
+                  static_cast<double>(std::numeric_limits<int>::max()), sliceId)) {
+        return std::nullopt;
+    }
+    std::optional<RemoteAudioContextMessage> context =
+        decodeContext(payload, /*detailNegotiated=*/true, /*profileNegotiated=*/true,
+                      /*receiver=*/true);
+    if (!context) {
+        return std::nullopt;
+    }
+    RemoteReceiverAudioContextMessage message;
+    message.sliceId = static_cast<int>(sliceId);
+    message.context = std::move(*context);
     return message;
 }
 

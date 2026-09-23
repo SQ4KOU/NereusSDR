@@ -726,6 +726,278 @@ private slots:
         h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
+    // R-R3-43: apps on this computer hear each receiver on its own stream,
+    // with the speakers muted. The slice-B app gets slice B's 1579 Hz, not
+    // slice A's 617 Hz, and the other way round; the speakers stay silent
+    // and the station's mix is untouched. Each stream runs only while an
+    // app listens, and releasing one leaves the other running.
+    void receiverStreamsReachAppsWhileTheSpeakersAreMuted()
+    {
+        Harness h;
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
+        DaemonMediaController daemonMedia(&h.server, &h.station);
+        Test::CollectingReceiverSink appA;
+        Test::CollectingReceiverSink appB;
+        Test::CollectingReceiverSink secondAppB;
+        const auto releaseAll = qScopeGuard([&] {
+            remoteMedia.releaseReceiverAudio(h.sliceA, &appA);
+            remoteMedia.releaseReceiverAudio(h.sliceB, &appB);
+            remoteMedia.releaseReceiverAudio(h.sliceB, &secondAppB);
+        });
+        QSignalSpy remoteErrors(&remoteMedia, &RemoteMediaController::errorOccurred);
+        QSignalSpy coreControls(&h.server, &StationServer::mediaControlReceived);
+        QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+        QTimer source;
+        source.setInterval(10);
+        source.setTimerType(Qt::PreciseTimer);
+        connect(&source, &QTimer::timeout, &source, [&h] { h.feedMixedTone(); });
+        QTimer speaker;
+        speaker.setInterval(10);
+        speaker.setTimerType(Qt::PreciseTimer);
+        connect(&speaker, &QTimer::timeout, &speaker, [&h] { h.remoteBus->render(kFrames); });
+        source.start();
+        speaker.start();
+
+        h.connectSession();
+        QVERIFY(remoteMedia.receiverAudioNegotiated());
+        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state,
+                                  RemoteAudioStatus::State::Playing, 15000);
+        const QList<QJsonObject> starts = [&] {
+            QList<QJsonObject> found;
+            for (const auto& call : coreControls) {
+                const QJsonObject control = call.at(0).toJsonObject();
+                if (control.value(QStringLiteral("op")) == QLatin1String("start")) {
+                    found << control;
+                }
+            }
+            return found;
+        }();
+        QCOMPARE(starts.size(), 1);
+        QCOMPARE(starts.constFirst().value(QStringLiteral("receiverAudioVersion")).toInteger(),
+                 qint64{1});
+
+        // Speakers muted first: nothing an app does may need them.
+        h.remote.audioEngine()->setMasterMuted(true);
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.acceptedAudioContext()
+                                     && !remoteMedia.acceptedAudioContext()->enabled, 5000);
+        const double stationPanA = h.station.sliceById(h.sliceA)->audioPan();
+        const double stationPanB = h.station.sliceById(h.sliceB)->audioPan();
+        const bool stationMutedA = h.station.sliceById(h.sliceA)->muted();
+        const bool stationMutedB = h.station.sliceById(h.sliceB)->muted();
+        const int heardAtMute = h.remoteBus->heard.size() / 2;
+
+        remoteMedia.requestReceiverAudio(h.sliceA, &appA);
+        remoteMedia.requestReceiverAudio(h.sliceB, &appB);
+        remoteMedia.requestReceiverAudio(h.sliceB, &secondAppB); // shares B's stream
+        QTRY_VERIFY_WITH_TIMEOUT(appA.frames(h.sliceA) >= 48000 && appB.frames(h.sliceB) >= 48000
+                                     && secondAppB.frames(h.sliceB) >= 48000, 15000);
+        // One request per slice, however many apps listen.
+        QList<QJsonObject> requests;
+        for (const auto& call : coreControls) {
+            const QJsonObject control = call.at(0).toJsonObject();
+            if (control.value(QStringLiteral("op")) == QLatin1String("receiver-audio")) {
+                requests << control;
+            }
+        }
+        QCOMPARE(requests.size(), 2);
+        for (const QJsonObject& request : requests) {
+            QStringList keys = request.keys();
+            keys.sort();
+            QCOMPARE(keys, (QStringList{QStringLiteral("connectionId"), QStringLiteral("enabled"),
+                                        QStringLiteral("op"), QStringLiteral("profile"),
+                                        QStringLiteral("revision"), QStringLiteral("sliceId")}));
+            QVERIFY(request.value(QStringLiteral("enabled")).toBool());
+            QCOMPARE(request.value(QStringLiteral("profile")).toString(), QStringLiteral("opus"));
+        }
+
+        // Past the codec's start, each app hears its own slice.
+        const QVector<float> b = appB.audio(h.sliceB);
+        const QVector<float> a = appA.audio(h.sliceA);
+        constexpr int kSettle = 4800;
+        for (int channel : {0, 1}) {
+            const double b1579 = Test::toneAmplitude(b, channel, Harness::kSliceBToneHz, kSettle);
+            const double b617 = Test::toneAmplitude(b, channel, Harness::kSliceAToneHz, kSettle);
+            const double a617 = Test::toneAmplitude(a, channel, Harness::kSliceAToneHz, kSettle);
+            const double a1579 = Test::toneAmplitude(a, channel, Harness::kSliceBToneHz, kSettle);
+            qInfo() << "receiver streams, channel" << channel << "B 1579/617" << b1579 << b617
+                    << "A 617/1579" << a617 << a1579;
+            QVERIFY(b1579 > 0.1);
+            QVERIFY(b1579 > 8.0 * b617);
+            QVERIFY(a617 > 0.1);
+            QVERIFY(a617 > 8.0 * a1579);
+        }
+        // Both apps on B hear the whole stream, not half each.
+        QVERIFY(std::abs(appB.frames(h.sliceB) - secondAppB.frames(h.sliceB)) <= 3840);
+        QVERIFY(appA.stops().isEmpty());
+        QVERIFY(appB.stops().isEmpty());
+
+        // The speakers stayed muted and silent, the speakers' stream stayed
+        // off, and the station's mix is as it was.
+        QCOMPARE(remoteMedia.audioStatus().state, RemoteAudioStatus::State::MutedHere);
+        QVERIFY(!remoteMedia.acceptedAudioContext()->enabled);
+        QVERIFY(channelEnergy(h.remoteBus->heard, 0, heardAtMute) < 1e-9);
+        QVERIFY(channelEnergy(h.remoteBus->heard, 1, heardAtMute) < 1e-9);
+        QCOMPARE(h.station.sliceById(h.sliceA)->audioPan(), stationPanA);
+        QCOMPARE(h.station.sliceById(h.sliceB)->audioPan(), stationPanB);
+        QCOMPARE(h.station.sliceById(h.sliceA)->muted(), stationMutedA);
+        QCOMPARE(h.station.sliceById(h.sliceB)->muted(), stationMutedB);
+        QCOMPARE(audioContexts(controls).constLast().value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("client-disabled"));
+
+        // The remote audio status names each stream, its state and health.
+        const RemoteAudioStatus status = remoteMedia.audioStatus();
+        QCOMPARE(status.receivers.size(), 2);
+        for (const RemoteReceiverAudioStatus& receiver : status.receivers) {
+            QCOMPARE(receiver.state, RemoteReceiverAudioStatus::State::Receiving);
+            QCOMPARE(receiver.runningProfile,
+                     std::optional<RemoteAudioProfile>(RemoteAudioProfile::Opus));
+        }
+        const QString details = formatRemoteAudioDetails(
+            status, remoteMedia.audioTelemetry(), remoteMedia.audioDelay(),
+            remoteMedia.receiverAudioTelemetry());
+        QVERIFY2(details.contains(QStringLiteral("Receiver A for apps: Receiving, Opus\n"
+                                                 "Receiver A: arrival jitter ")),
+                 qPrintable(details));
+        QVERIFY2(details.contains(QStringLiteral("Receiver B for apps: Receiving, Opus")),
+                 qPrintable(details));
+        QVERIFY2(details.contains(QStringLiteral(", gaps filled ")), qPrintable(details));
+
+        // One app on B leaves: B keeps running for the other.
+        remoteMedia.releaseReceiverAudio(h.sliceB, &appB);
+        const int appBFrames = appB.frames(h.sliceB);
+        const int secondBFrames = secondAppB.frames(h.sliceB);
+        QTRY_VERIFY_WITH_TIMEOUT(secondAppB.frames(h.sliceB) >= secondBFrames + 9600, 5000);
+        QCOMPARE(appB.frames(h.sliceB), appBFrames);
+        // The last app on B leaves: the Core is asked to stop B, and A plays on.
+        remoteMedia.releaseReceiverAudio(h.sliceB, &secondAppB);
+        const auto lastRequest = [&](int sliceId) {
+            QJsonObject found;
+            for (const auto& call : coreControls) {
+                const QJsonObject control = call.at(0).toJsonObject();
+                if (control.value(QStringLiteral("op")) == QLatin1String("receiver-audio")
+                    && control.value(QStringLiteral("sliceId")).toInt() == sliceId) {
+                    found = control;
+                }
+            }
+            return found;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(!lastRequest(h.sliceB).value(QStringLiteral("enabled")).toBool(),
+                                 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(daemonMedia.activeReceiverAudioStreamCount(), 1, 5000);
+        const int secondBStopped = secondAppB.frames(h.sliceB);
+        const int aFrames = appA.frames(h.sliceA);
+        QTRY_VERIFY_WITH_TIMEOUT(appA.frames(h.sliceA) >= aFrames + 9600, 5000);
+        QCOMPARE(secondAppB.frames(h.sliceB), secondBStopped);
+        QCOMPARE(remoteMedia.audioStatus().receivers.size(), 1);
+
+        // Unmuting brings the speakers back beside the app's stream.
+        h.remote.audioEngine()->setMasterMuted(false);
+        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state,
+                                  RemoteAudioStatus::State::Playing, 10000);
+        const int aBeforeUnmute = appA.frames(h.sliceA);
+        QTRY_VERIFY_WITH_TIMEOUT(appA.frames(h.sliceA) >= aBeforeUnmute + 9600, 5000);
+        QCOMPARE(remoteErrors.count(), 0);
+
+        source.stop();
+        speaker.stop();
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // R-R3-43: a Core from before receiver audio. No receiver request goes
+    // out, an app is told in plain words, and every control on the wire is
+    // exactly what this app sent such a Core before.
+    void hiddenReceiverAudioKeepsTodaysControls()
+    {
+        Harness h;
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
+        DaemonMediaController daemonMedia(&h.server, &h.station);
+        Test::CollectingReceiverSink app;
+        const auto release = qScopeGuard([&] { remoteMedia.releaseReceiverAudio(h.sliceB, &app); });
+        QSignalSpy coreControls(&h.server, &StationServer::mediaControlReceived);
+        QTimer source;
+        source.setInterval(10);
+        source.setTimerType(Qt::PreciseTimer);
+        connect(&source, &QTimer::timeout, &source, [&h] { h.feedMixedTone(); });
+        QTimer speaker;
+        speaker.setInterval(10);
+        speaker.setTimerType(Qt::PreciseTimer);
+        connect(&speaker, &QTimer::timeout, &speaker, [&h] { h.remoteBus->render(kFrames); });
+        source.start();
+        speaker.start();
+
+        // Asked before any connection: not ready yet.
+        remoteMedia.requestReceiverAudio(h.sliceB, &app);
+        QCOMPARE(app.stops().size(), 1);
+        QCOMPARE(app.stops().constLast().second, QStringLiteral("media-not-ready"));
+
+        h.hideReceiverAudio = true;
+        h.connectSession();
+        QVERIFY(remoteMedia.audioProfileNegotiated());
+        QVERIFY(!remoteMedia.receiverAudioNegotiated());
+        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state,
+                                  RemoteAudioStatus::State::Playing, 15000);
+        QTRY_VERIFY(!app.stops().isEmpty()
+                    && app.stops().constLast().second
+                        == QLatin1String(RemoteMediaController::kReceiverAudioUnavailableReason));
+        QCOMPARE(app.stops().constLast().first, h.sliceB);
+        QCOMPARE(QString::fromLatin1(RemoteMediaController::kReceiverAudioUnavailableReason),
+                 QStringLiteral("This Core cannot send a receiver's audio."));
+        // A second app on the same receiver hears the same.
+        Test::CollectingReceiverSink second;
+        remoteMedia.requestReceiverAudio(h.sliceB, &second);
+        QCOMPARE(second.stops().size(), 1);
+        QCOMPARE(second.stops().constFirst().second,
+                 QLatin1String(RemoteMediaController::kReceiverAudioUnavailableReason));
+        remoteMedia.releaseReceiverAudio(h.sliceB, &second);
+
+        // Mute and unmute send today's audio controls too.
+        h.remote.audioEngine()->setMasterMuted(true);
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.acceptedAudioContext()
+                                     && !remoteMedia.acceptedAudioContext()->enabled, 5000);
+        h.remote.audioEngine()->setMasterMuted(false);
+        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state,
+                                  RemoteAudioStatus::State::Playing, 10000);
+        QTest::qWait(300);
+
+        const QStringList startKeys{QStringLiteral("audioProfileVersion"),
+                                    QStringLiteral("connectionId"), QStringLiteral("op")};
+        const QStringList audioKeys{QStringLiteral("connectionId"), QStringLiteral("enabled"),
+                                    QStringLiteral("op"), QStringLiteral("profile"),
+                                    QStringLiteral("revision")};
+        int starts = 0;
+        int audio = 0;
+        for (const auto& call : coreControls) {
+            const QJsonObject control = call.at(0).toJsonObject();
+            const QString op = control.value(QStringLiteral("op")).toString();
+            QVERIFY2(op != QLatin1String("receiver-audio"), "no receiver request to this Core");
+            QStringList keys = control.keys();
+            keys.sort();
+            if (op == QLatin1String("start")) {
+                ++starts;
+                QCOMPARE(keys, startKeys);
+                QCOMPARE(control.value(QStringLiteral("audioProfileVersion")).toInteger(), qint64{1});
+            } else if (op == QLatin1String("audio")) {
+                ++audio;
+                QCOMPARE(keys, audioKeys);
+            }
+        }
+        QCOMPARE(starts, 1);
+        QVERIFY(audio >= 3);
+        QCOMPARE(app.frames(h.sliceB), 0);
+        QCOMPARE(daemonMedia.activeReceiverAudioStreamCount(), 0);
+        // The status says why, in the operator's words.
+        const RemoteAudioStatus status = remoteMedia.audioStatus();
+        QCOMPARE(status.receivers.size(), 1);
+        QCOMPARE(status.receivers.constFirst().state, RemoteReceiverAudioStatus::State::Stopped);
+        QVERIFY(formatRemoteAudioDetails(status, remoteMedia.audioTelemetry())
+                    .contains(QStringLiteral("Receiver B for apps: Stopped. This Core cannot send "
+                                             "a receiver's audio.")));
+
+        source.stop();
+        speaker.stop();
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
     // R-R3-35: measured delay over the real encrypted session, with the
     // Core's clock 5 s ahead of this computer's. The station is silent,
     // then a 200 Hz cosine begins at full height on a known frame. Truth is

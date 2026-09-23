@@ -21,6 +21,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-23 : R-R3-43 Task 2 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. Per-slice receiver audio taps
+//                 beside the VAX tee (SliceAudioTap, four slots); the VAX
+//                 tee undoes the feeding slice's own AF gain, not
+//                 receiver 1's.
 //   2026-09-22 : R-R3-36 fix wave by J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code. isCaptureReaderOpen() for the MOX
 //                 admission check.
@@ -157,6 +162,22 @@ public:
     virtual void consume(const float* samples, int frames, int sampleRateHz) noexcept = 0;
 };
 
+// R-R3-43: synchronous observer for one receiver's own audio, tapped at the
+// point the local VAX tee reads it: after the MOX gate, before slice mute,
+// pan, the mix and master volume. Samples arrive with the slice's AF gain
+// undone, as local VAX scales them, so the level does not follow the
+// speaker slider. `samples` is borrowed interleaved stereo float32, valid
+// only for the duration of consume(). skip() reports frames the receiver
+// produced that the MOX gate withheld, so a consumer's positions keep
+// real time. Both run on the DSP thread and must not block, allocate,
+// encode, or queue the pointer for later use.
+class SliceAudioTap {
+public:
+    virtual ~SliceAudioTap() = default;
+    virtual void consume(const float* samples, int frames, int sampleRateHz) noexcept = 0;
+    virtual void skip(int frames, int sampleRateHz) noexcept = 0;
+};
+
 // Audio engine for NereusSDR (Phase 3O VAX).
 //
 // Owns one IAudioBus per routable endpoint:
@@ -276,6 +297,19 @@ public:
     // slot, so stopping an old source cannot detach a newer source.
     void setMasterMixAudioTap(MasterMixAudioTap* tap);
     void clearMasterMixAudioTap(MasterMixAudioTap* tap);
+
+    // R-R3-43: per-slice receiver audio taps, at most kMaxSliceAudioTaps at
+    // once. Each slot has its own admission gate, so installing or removing
+    // one tap never withholds a block from another tap or from the master
+    // tap. setSliceAudioTap installs `tap` for `sliceId` (a tap already
+    // installed is moved) and returns false when every slot is taken or the
+    // arguments are invalid. clearSliceAudioTap removes `tap` wherever it is
+    // installed and returns once no callback into it is running.
+    static constexpr int kMaxSliceAudioTaps = 4;
+    bool setSliceAudioTap(int sliceId, SliceAudioTap* tap);
+    void clearSliceAudioTap(SliceAudioTap* tap);
+    /// Slots holding a tap now; diagnostics and leak checks.
+    int sliceAudioTapCount() const;
 
     // Task 1.6 — Sample-rate live-apply coordination hooks.
     //
@@ -886,6 +920,26 @@ private:
     std::atomic<bool> m_masterMixTapAdmissionClosed{false};
     std::atomic<unsigned> m_masterMixTapCallsInFlight{0};
     std::mutex m_masterMixTapControlMutex;
+
+    // R-R3-43 receiver taps: the master tap's gate, one per slot. sliceId
+    // is -1 while the slot is free; it and the tap change only while the
+    // slot's gate is closed and drained.
+    struct SliceTapSlot {
+        std::atomic<int> sliceId{-1};
+        std::atomic<SliceAudioTap*> tap{nullptr};
+        std::atomic<bool> admissionClosed{false};
+        std::atomic<unsigned> callsInFlight{0};
+    };
+    std::array<SliceTapSlot, kMaxSliceAudioTaps> m_sliceTaps;
+    std::mutex m_sliceTapControlMutex;
+    void closeAndDrainSliceTap(SliceTapSlot& slot);
+    // DSP thread. Hands each tap for `sliceId` the block with the slice's AF
+    // gain undone (afGainInverseForSlice).
+    void feedSliceTaps(int sliceId, const float* samples, int frames) noexcept;
+    void skipSliceTaps(int sliceId, int frames) noexcept;
+    // DSP thread: 1 / the slice's own AF gain (its WDSP RX channel's), or 1
+    // with no channel or an AF gain at or below 0.001.
+    float afGainInverseForSlice(int sliceId) const noexcept;
 
 #ifdef NEREUS_BUILD_TESTS
     std::function<void()> m_withdrawalPublishedHookForTest;

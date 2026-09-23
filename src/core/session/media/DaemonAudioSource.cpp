@@ -16,7 +16,7 @@
 
 namespace NereusSDR {
 
-class DaemonAudioSource::Bridge final : public MasterMixAudioTap {
+class DaemonAudioSource::Bridge final : public MasterMixAudioTap, public SliceAudioTap {
 public:
     Bridge()
         : m_captureClock([] {
@@ -136,6 +136,20 @@ public:
         m_nextFramePosition.fetch_add(static_cast<quint64>(frames),
                                       std::memory_order_relaxed);
         m_invalidIngressDrops.fetch_add(1, std::memory_order_relaxed);
+        m_discontinuity.store(true, std::memory_order_release);
+    }
+
+    // R-R3-43, slice source only: the MOX gate withheld `frames` of this
+    // receiver's audio. Reserve them without samples, as a lost ingress is
+    // reserved, so the next block keeps its true grid position and RTP shows
+    // the gap. A withheld block is not a loss, so no drop is counted.
+    void skip(int frames, int sampleRateHz) noexcept override
+    {
+        if (frames <= 0 || sampleRateHz != DaemonAudioSource::kSampleRateHz) {
+            return;
+        }
+        m_nextFramePosition.fetch_add(static_cast<quint64>(frames),
+                                      std::memory_order_relaxed);
         m_discontinuity.store(true, std::memory_order_release);
     }
 
@@ -379,6 +393,33 @@ AudioEngine* DaemonAudioSource::audioEngine() const noexcept
     return m_audioEngine.data();
 }
 
+bool DaemonAudioSource::setSliceSource(int sliceId)
+{
+    if (isRunning() || (sliceId < 0 && sliceId != kMasterMix)) {
+        return false;
+    }
+    m_sliceId = sliceId;
+    return true;
+}
+
+void DaemonAudioSource::detachFromEngine()
+{
+    if (m_audioEngine.isNull()) {
+        return;
+    }
+    // The engine's clear gates wait for an admitted borrowed-pointer call to
+    // return before this bridge's state is reset. Only this source's own
+    // kind is cleared: clearing the master tap closes its gate for a moment,
+    // and a receiver stream stopping must not cost the speakers' stream a
+    // block. setSliceSource() is refused while running, so the tap this
+    // bridge holds is always the current kind.
+    if (m_sliceId == kMasterMix) {
+        m_audioEngine->clearMasterMixAudioTap(m_bridge.get());
+    } else {
+        m_audioEngine->clearSliceAudioTap(m_bridge.get());
+    }
+}
+
 void DaemonAudioSource::start()
 {
     if (m_audioEngine.isNull()) {
@@ -387,20 +428,21 @@ void DaemonAudioSource::start()
 
     // A repeated start is another capture epoch. Detach and quiesce first so
     // no prior callback can append between the reset and the new install.
-    m_audioEngine->clearMasterMixAudioTap(m_bridge.get());
+    detachFromEngine();
     // Start/reset before publishing the bridge. AudioEngine's install gate
     // means the DSP thread cannot enter consume() until after this returns.
     m_bridge->start();
-    m_audioEngine->setMasterMixAudioTap(m_bridge.get());
+    if (m_sliceId == kMasterMix) {
+        m_audioEngine->setMasterMixAudioTap(m_bridge.get());
+    } else if (!m_audioEngine->setSliceAudioTap(m_sliceId, m_bridge.get())) {
+        // Every receiver tap slot is taken: stay stopped.
+        m_bridge->stop();
+    }
 }
 
 void DaemonAudioSource::stop()
 {
-    if (!m_audioEngine.isNull()) {
-        // The engine's clear gate waits for an admitted borrowed-pointer call
-        // to return before this bridge's state is reset.
-        m_audioEngine->clearMasterMixAudioTap(m_bridge.get());
-    }
+    detachFromEngine();
     m_bridge->stop();
 }
 

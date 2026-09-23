@@ -24,6 +24,7 @@
 #include "core/session/media/SpectrumEndpoint.h"
 #include "gui/OperatorReasonText.h"
 #include "gui/RemoteAudioStatus.h"
+#include "gui/RemoteMediaController.h"
 #include "gui/setup/FourO3APage.h"
 #include "gui/widgets/NnrControls.h"
 #include "models/RadioModel.h"
@@ -345,6 +346,66 @@ private slots:
         for (const QString& line : details.split(QLatin1Char('\n'))) {
             QVERIFY2(OperatorWording::isPlain(line), qPrintable(line));
         }
+    }
+
+    // R-R3-43: why a receiver's audio for an app stopped. Every wire
+    // reason a receiver audio context can carry reads in user words (never
+    // as sent), this computer's own reason for an older Core is plain as it
+    // is, and the remote audio status lines for receiver streams are plain.
+    void receiverAudioReasonsReadInUserWords()
+    {
+        for (RemoteAudioOffReason reason :
+             {RemoteAudioOffReason::ClientDisabled, RemoteAudioOffReason::MediaNotReady,
+              RemoteAudioOffReason::RadioOffline, RemoteAudioOffReason::EncoderUnavailable,
+              RemoteAudioOffReason::SliceRemoved, RemoteAudioOffReason::ReceiverLimit}) {
+            const QString wire = remoteAudioOffReasonToWire(reason);
+            QVERIFY(OperatorReasonText::knownReasons().contains(wire));
+            const QString sentence = OperatorReasonText::forDisplay(wire);
+            QVERIFY2(OperatorWording::isPlain(sentence), qPrintable(wire + " -> " + sentence));
+            QVERIFY2(sentence != wire, qPrintable(wire));
+        }
+        QCOMPARE(OperatorReasonText::forDisplay(QStringLiteral("slice-removed")),
+                 QStringLiteral("This receiver is no longer on the Core."));
+        QCOMPARE(OperatorReasonText::forDisplay(QStringLiteral("receiver-limit")),
+                 QStringLiteral("The Core is already sending audio for as many receivers as it "
+                                "can. Stop the audio for another receiver to hear this one."));
+        const QString older = QString::fromLatin1(RemoteMediaController::kReceiverAudioUnavailableReason);
+        QVERIFY(OperatorWording::isPlain(older));
+        QCOMPARE(OperatorReasonText::forDisplay(older), older);
+
+        RemoteAudioStatus status;
+        status.state = RemoteAudioStatus::State::MutedHere;
+        status.selectedOutput = QStringLiteral("System default");
+        RemoteReceiverAudioStatus receiving;
+        receiving.sliceId = 0;
+        receiving.state = RemoteReceiverAudioStatus::State::Receiving;
+        receiving.runningProfile = RemoteAudioProfile::Lossless;
+        RemoteReceiverAudioStatus waiting;
+        waiting.sliceId = 1;
+        RemoteReceiverAudioStatus stopped;
+        stopped.sliceId = 2;
+        stopped.state = RemoteReceiverAudioStatus::State::Stopped;
+        stopped.stopReason = QStringLiteral("receiver-limit");
+        status.receivers = {receiving, waiting, stopped};
+        RemoteAudioReceiverTelemetry measured;
+        measured.arrivalJitterMs = 2.4;
+        measured.expectedPackets = 1250;
+        measured.missingPackets = 3;
+        measured.concealedPackets = 3;
+        const QString details = formatRemoteAudioDetails(status, {}, {}, {{0, measured}});
+        QVERIFY2(details.endsWith(QStringLiteral(
+                     "Receiver A for apps: Receiving, Lossless\n"
+                     "Receiver A: arrival jitter 2\u00A0ms, missing packets 3 of 1250, gaps filled 3\n"
+                     "Receiver B for apps: Waiting for the Core\n"
+                     "Receiver C for apps: Stopped. The Core is already sending audio for as many "
+                     "receivers as it can. Stop the audio for another receiver to hear this one.")),
+                 qPrintable(details));
+        for (const QString& line : details.split(QLatin1Char('\n'))) {
+            QVERIFY2(OperatorWording::isPlain(line), qPrintable(line));
+        }
+        // With no receiver streams the section reads as before.
+        status.receivers.clear();
+        QVERIFY(!formatRemoteAudioDetails(status, {}).contains(QStringLiteral("Receiver")));
     }
 
     void nnrPanelIsInUserWords()

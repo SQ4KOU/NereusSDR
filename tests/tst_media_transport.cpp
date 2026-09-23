@@ -26,6 +26,8 @@ using namespace NereusSDR;
 namespace {
 
 constexpr quint32 kTestAudioSsrc = 0x4e523301U;
+// R-R3-43: four receiver stream SSRCs, distinct from the main one.
+const QList<quint32> kTestReceiverSsrcs{0x4e523311U, 0x4e523322U, 0x4e523333U, 0x4e523344U};
 
 // The Opus parameters every Core offered before R-R3-23, verbatim: an old
 // Core that a new GUI must still answer.
@@ -65,6 +67,75 @@ QStringList audioFormatLines(const QString& sdp)
     return lines;
 }
 
+// The a=ssrc lines of a description's audio section, in order.
+QStringList audioSsrcLines(const QString& sdp)
+{
+    QStringList lines;
+    bool inAudio = false;
+    for (const QString& line : sdp.split(QRegularExpression(QStringLiteral("\\r?\\n")))) {
+        if (line.startsWith(QLatin1String("m="))) {
+            inAudio = line.startsWith(QLatin1String("m=audio"));
+            continue;
+        }
+        if (inAudio && line.startsWith(QLatin1String("a=ssrc:"))) {
+            lines << line;
+        }
+    }
+    return lines;
+}
+
+// A description's lines with its per-run values (session id, DTLS
+// fingerprint, ICE credentials) replaced by fixed placeholders, so two runs
+// of the same code compare byte for byte everywhere else.
+QStringList stableDescriptionLines(const QString& sdp)
+{
+    static const QRegularExpression perRun(QStringLiteral(
+        "^(o=rtc |a=fingerprint:sha-256 |a=ice-ufrag:|a=ice-pwd:)\\S+"));
+    QStringList lines;
+    for (QString line : sdp.split(QStringLiteral("\r\n"))) {
+        line.replace(perRun, QStringLiteral("\\1<per-run>"));
+        lines << line;
+    }
+    return lines;
+}
+
+// A description without the a=ssrc lines of the given SSRCs: what a peer
+// that never declared them would have offered.
+QString withoutSsrcLines(const QString& sdp, const QList<quint32>& ssrcs)
+{
+    QStringList kept;
+    const QStringList lines = sdp.split(QStringLiteral("\r\n"));
+    for (const QString& line : lines) {
+        bool drop = false;
+        for (const quint32 ssrc : ssrcs) {
+            if (line.startsWith(QStringLiteral("a=ssrc:%1 ").arg(ssrc))) {
+                drop = true;
+            }
+        }
+        if (!drop) {
+            kept << line;
+        }
+    }
+    return kept.join(QStringLiteral("\r\n"));
+}
+
+// Waits, without running the Qt event loop (so the owner's drain timer
+// cannot fire), until the transport's library threads have received
+// `bytes` RTP bytes in all.
+bool waitForReceivedRtpBytes(const LibDataChannelMediaTransport& transport, quint64 bytes)
+{
+    QElapsedTimer waited;
+    waited.start();
+    while (waited.elapsed() < 5000) {
+        const std::optional<MediaTransportTelemetry> traffic = transport.telemetry();
+        if (traffic && traffic->receivedRtpBytes >= bytes) {
+            return traffic->receivedRtpBytes == bytes;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    return false;
+}
+
 // Set only in the child process that checks when SCTP settings are applied.
 constexpr const char* kFirstPeerChildVariable = "NEREUS_TST_MEDIA_TRANSPORT_FIRST_PEER";
 
@@ -95,6 +166,12 @@ private slots:
     void answerKeepsTheLosslessRtpMap_data();
     void answerKeepsTheLosslessRtpMap();
     void losslessAudioCrossesRealEncryptedLoopback();
+    void undeclaredStreamIsDeliveredByTheOneAudioLine();
+    void receiverStreamsAreDeclaredOnlyWhenAsked();
+    void declaredReceiverStreamsCrossBesideTheMainOne();
+    void receiveQueueHoldsEveryDeclaredStream_data();
+    void receiveQueueHoldsEveryDeclaredStream();
+    void receiverStreamPreconditionsRefuseSilently();
 
 private:
     static void wireExchange(LibDataChannelMediaTransport& offerer,
@@ -978,6 +1055,349 @@ void TestMediaTransport::losslessAudioCrossesRealEncryptedLoopback()
              quint64(kPackets) * quint64(PcmAudioCodecConfig::kRtpPacketBytes));
     offerer.stop();
     answerer.stop();
+}
+
+// R-R3-43, observed against the real library before anything was built on
+// it: libdatachannel v0.24.5 hands every RTP packet to the one audio track
+// when a connection has a single media line
+// (src/impl/peerconnection.cpp:562-566), whatever its SSRC and whether or not
+// any description declared it. An undeclared stream is therefore DELIVERED to
+// the transport, not dropped; refusing it is MediaPeer's job (its receive
+// filter), as it has been for the main stream. The declared-streams design
+// does not depend on this: the Core declares every receiver SSRC it may send.
+void TestMediaTransport::undeclaredStreamIsDeliveredByTheOneAudioLine()
+{
+    LibDataChannelMediaTransport offerer;
+    LibDataChannelMediaTransport answerer;
+    QString deliveredOffer;
+    connect(&offerer, &IMediaTransport::localDescription, &answerer,
+            [&answerer, &deliveredOffer](const QString& sdp, const QString& type) {
+                // The answerer never sees the receiver streams declared.
+                deliveredOffer = withoutSsrcLines(sdp, kTestReceiverSsrcs);
+                QVERIFY2(answerer.acceptDescription(deliveredOffer, type),
+                         "answerer rejected offer");
+            });
+    connect(&answerer, &IMediaTransport::localDescription, &offerer,
+            [&offerer](const QString& sdp, const QString& type) {
+                QVERIFY2(offerer.acceptDescription(sdp, type), "offerer rejected answer");
+            });
+    connect(&offerer, &IMediaTransport::localCandidate, &answerer,
+            [&answerer](const QString& candidate, const QString& mid) {
+                QVERIFY2(answerer.acceptCandidate(candidate, mid),
+                         "answerer rejected host candidate");
+            });
+    connect(&answerer, &IMediaTransport::localCandidate, &offerer,
+            [&offerer](const QString& candidate, const QString& mid) {
+                QVERIFY2(offerer.acceptCandidate(candidate, mid),
+                         "offerer rejected host candidate");
+            });
+    QSignalSpy offerReady(&offerer, &IMediaTransport::ready);
+    QSignalSpy answerReady(&answerer, &IMediaTransport::ready);
+    QSignalSpy answerErrors(&answerer, &IMediaTransport::errorOccurred);
+    QVERIFY(answerer.start({IMediaTransport::Role::Answerer, kTestAudioSsrc}));
+    IMediaTransport::StartOptions options{IMediaTransport::Role::Offerer, kTestAudioSsrc};
+    options.receiverAudioSsrcs = kTestReceiverSsrcs;
+    QVERIFY(offerer.start(options));
+    QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
+    QCOMPARE(audioSsrcLines(deliveredOffer),
+             QStringList{QStringLiteral("a=ssrc:%1 cname:nereus-mixed-stereo")
+                             .arg(kTestAudioSsrc)});
+
+    QSignalSpy rtpReceived(&answerer, &IMediaTransport::rtpReceived);
+    const QByteArray main = rtpPacket(40);
+    const QByteArray undeclared = rtpPacket(41, 15, kTestReceiverSsrcs.at(1));
+    const QByteArray mainAfter = rtpPacket(42);
+    QVERIFY(offerer.sendRtp(main));
+    QVERIFY(offerer.sendRtp(undeclared));
+    QVERIFY(offerer.sendRtp(mainAfter));
+    QTRY_COMPARE_WITH_TIMEOUT(rtpReceived.count(), 3, 5000);
+    QCOMPARE(rtpReceived.at(0).at(0).toByteArray(), main);
+    QCOMPARE(rtpReceived.at(1).at(0).toByteArray(), undeclared);
+    QCOMPARE(rtpReceived.at(2).at(0).toByteArray(), mainAfter);
+    QCOMPARE(answerErrors.count(), 0);
+    qInfo("undeclared SSRC 0x%08x: delivered by libdatachannel to the one audio track",
+          kTestReceiverSsrcs.at(1));
+    offerer.stop();
+    answerer.stop();
+}
+
+// R-R3-43: without receiver streams the offer and the answer are today's,
+// byte for byte in every audio line (m=, rtpmap, fmtp and the one a=ssrc
+// line). With them, the same audio line gains one a=ssrc line per receiver
+// stream after the main one, and nothing else changes on either side.
+void TestMediaTransport::receiverStreamsAreDeclaredOnlyWhenAsked()
+{
+    const QStringList todaysAudio{
+        QStringLiteral("m=audio 9 UDP/TLS/RTP/SAVPF 111"),
+        QStringLiteral("a=rtpmap:111 opus/48000/2"),
+        QStringLiteral("a=fmtp:111 minptime=10;maxaveragebitrate=24000;stereo=1;sprop-stereo=1"),
+    };
+    const QString todaysSsrcLine =
+        QStringLiteral("a=ssrc:%1 cname:nereus-mixed-stereo").arg(kTestAudioSsrc);
+    // Today's whole offer, per-run values aside (golden).
+    const QStringList todaysOffer{
+        QStringLiteral("v=0"),
+        QStringLiteral("o=rtc <per-run> 0 IN IP4 127.0.0.1"),
+        QStringLiteral("s=-"),
+        QStringLiteral("t=0 0"),
+        QStringLiteral("a=group:BUNDLE audio 0"),
+        QStringLiteral("a=group:LS audio"),
+        QStringLiteral("a=msid-semantic:WMS *"),
+        QStringLiteral("a=ice-options:ice2,trickle"),
+        QStringLiteral("a=fingerprint:sha-256 <per-run>"),
+        todaysAudio.at(0),
+        QStringLiteral("c=IN IP4 0.0.0.0"),
+        QStringLiteral("a=mid:audio"),
+        QStringLiteral("a=sendonly"),
+        todaysSsrcLine,
+        QStringLiteral("a=rtcp-mux"),
+        todaysAudio.at(1),
+        todaysAudio.at(2),
+        QStringLiteral("a=setup:actpass"),
+        QStringLiteral("a=ice-ufrag:<per-run>"),
+        QStringLiteral("a=ice-pwd:<per-run>"),
+        QStringLiteral("m=application 9 UDP/DTLS/SCTP webrtc-datachannel"),
+        QStringLiteral("c=IN IP4 0.0.0.0"),
+        QStringLiteral("a=mid:0"),
+        QStringLiteral("a=sendrecv"),
+        QStringLiteral("a=sctp-port:5000"),
+        QStringLiteral("a=max-message-size:65536"),
+        QStringLiteral("a=setup:actpass"),
+        QStringLiteral("a=ice-ufrag:<per-run>"),
+        QStringLiteral("a=ice-pwd:<per-run>"),
+        QString(),
+    };
+    QStringList stableAnswer[2];
+    QStringList answerSsrcLines[2];
+    QStringList answerAudio[2];
+    for (const bool receivers : {false, true}) {
+        LibDataChannelMediaTransport offerer;
+        LibDataChannelMediaTransport answerer;
+        QString offer;
+        QString answer;
+        wireExchange(offerer, answerer, &offer, &answer);
+        QSignalSpy offerReady(&offerer, &IMediaTransport::ready);
+        QSignalSpy answerReady(&answerer, &IMediaTransport::ready);
+        IMediaTransport::StartOptions answerOptions{IMediaTransport::Role::Answerer,
+                                                    kTestAudioSsrc};
+        IMediaTransport::StartOptions offerOptions{IMediaTransport::Role::Offerer,
+                                                   kTestAudioSsrc};
+        if (receivers) {
+            answerOptions.receiverAudioSsrcs = kTestReceiverSsrcs;
+            offerOptions.receiverAudioSsrcs = kTestReceiverSsrcs;
+        }
+        QVERIFY(answerer.start(answerOptions));
+        QVERIFY(offerer.start(offerOptions));
+        QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
+
+        QCOMPARE(audioFormatLines(offer), todaysAudio);
+        QCOMPARE(offer.count(QStringLiteral("m=audio")), 1);
+        if (!receivers) {
+            QCOMPARE(audioSsrcLines(offer), QStringList{todaysSsrcLine});
+            QCOMPARE(stableDescriptionLines(offer), todaysOffer);
+        } else {
+            QStringList expected{todaysSsrcLine};
+            for (qsizetype index = 0; index < kTestReceiverSsrcs.size(); ++index) {
+                expected << QStringLiteral("a=ssrc:%1 cname:nereus-receiver-%2")
+                                .arg(kTestReceiverSsrcs.at(index))
+                                .arg(index);
+            }
+            QCOMPARE(audioSsrcLines(offer), expected);
+            // Today's offer with the receiver lines after the main one.
+            QStringList withReceivers = todaysOffer;
+            withReceivers.insert(withReceivers.indexOf(todaysSsrcLine) + 1,
+                                 QStringList(expected.mid(1)).join(QStringLiteral("\r\n")));
+            QCOMPARE(stableDescriptionLines(offer).join(QStringLiteral("\r\n")),
+                     withReceivers.join(QStringLiteral("\r\n")));
+        }
+        stableAnswer[receivers ? 1 : 0] = stableDescriptionLines(answer);
+        answerSsrcLines[receivers ? 1 : 0] = audioSsrcLines(answer);
+        answerAudio[receivers ? 1 : 0] = audioFormatLines(answer);
+        offerer.stop();
+        answerer.stop();
+    }
+    // The answer does not change with the option.
+    QCOMPARE(stableAnswer[1], stableAnswer[0]);
+    QCOMPARE(answerSsrcLines[1], answerSsrcLines[0]);
+    QCOMPARE(answerAudio[1], answerAudio[0]);
+    QVERIFY(!answerAudio[0].isEmpty());
+}
+
+// R-R3-43: a declared receiver stream arrives intact and in order beside the
+// main one, lossless included; the send filter takes exactly the declared set.
+void TestMediaTransport::declaredReceiverStreamsCrossBesideTheMainOne()
+{
+    LibDataChannelMediaTransport offerer;
+    LibDataChannelMediaTransport answerer;
+    QString offer;
+    QString answer;
+    wireExchange(offerer, answerer, &offer, &answer);
+    QSignalSpy offerReady(&offerer, &IMediaTransport::ready);
+    QSignalSpy answerReady(&answerer, &IMediaTransport::ready);
+    QSignalSpy answerErrors(&answerer, &IMediaTransport::errorOccurred);
+    IMediaTransport::StartOptions answerOptions{IMediaTransport::Role::Answerer, kTestAudioSsrc};
+    answerOptions.receiverAudioSsrcs = kTestReceiverSsrcs;
+    IMediaTransport::StartOptions offerOptions{IMediaTransport::Role::Offerer, kTestAudioSsrc};
+    offerOptions.offerLosslessAudio = true;
+    offerOptions.receiverAudioSsrcs = kTestReceiverSsrcs;
+    QVERIFY(answerer.start(answerOptions));
+    QVERIFY(offerer.start(offerOptions));
+    QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
+    QVERIFY(offerer.losslessAudioNegotiated());
+
+    QList<QByteArray> received;
+    connect(&answerer, &IMediaTransport::rtpReceived, this,
+            [&received](const QByteArray& packet) { received.append(packet); });
+
+    QVector<float> block(PcmAudioCodecConfig::kBlockFrames * 2);
+    for (int index = 0; index < block.size(); ++index) {
+        block[index] = static_cast<float>(std::sin(0.02 * index)) * 0.6f;
+    }
+    const PcmAudioPacketiser packetiser;
+    const QList<QByteArray> mainPackets =
+        packetiser.packetiseBlock(block, 100, 0, kTestAudioSsrc);
+    const QList<QByteArray> receiverPackets =
+        packetiser.packetiseBlock(block, 500, 0, kTestReceiverSsrcs.at(2));
+    QList<QByteArray> sent;
+    for (qsizetype index = 0; index < mainPackets.size(); ++index) {
+        sent << mainPackets.at(index) << receiverPackets.at(index);
+    }
+    // One Opus-shaped packet on every other declared receiver stream.
+    sent << rtpPacket(7, 15, kTestReceiverSsrcs.at(0))
+         << rtpPacket(8, 15, kTestReceiverSsrcs.at(1))
+         << rtpPacket(9, 15, kTestReceiverSsrcs.at(3));
+    for (const QByteArray& packet : sent) {
+        QVERIFY(offerer.sendRtp(packet));
+    }
+    // Not declared: refused before the library.
+    QVERIFY(!offerer.sendRtp(rtpPacket(10, 15, kTestAudioSsrc + 0x100)));
+    QTRY_COMPARE_WITH_TIMEOUT(received.size(), sent.size(), 5000);
+    QCOMPARE(received, sent);
+    for (qsizetype index = 0; index < receiverPackets.size(); ++index) {
+        const PcmRtpDecodeResult decoded =
+            decodeL16Rtp(received.at(2 * index + 1), kTestReceiverSsrcs.at(2));
+        QCOMPARE(decoded.status, OpusAudioCodecStatus::Accepted);
+    }
+    QCOMPARE(answerErrors.count(), 0);
+    offerer.stop();
+    answerer.stop();
+}
+
+void TestMediaTransport::receiveQueueHoldsEveryDeclaredStream_data()
+{
+    QTest::addColumn<int>("receivers");
+    QTest::addColumn<bool>("overflow");
+    QTest::newRow("main-only") << 0 << false;
+    QTest::newRow("main-only-overflow") << 0 << true;
+    QTest::newRow("four-receivers") << 4 << false;
+    QTest::newRow("four-receivers-overflow") << 4 << true;
+}
+
+// R-R3-43, R-R3-05: the receive queue between two drains holds 256 ms of
+// lossless audio for the main stream and every declared receiver stream,
+// computed here from the lossless packet rate, and stays bounded: one packet
+// more drops the oldest. Without receiver streams it is today's queue.
+void TestMediaTransport::receiveQueueHoldsEveryDeclaredStream()
+{
+    QFETCH(int, receivers);
+    QFETCH(bool, overflow);
+    const QList<quint32> receiverSsrcs = kTestReceiverSsrcs.mid(0, receivers);
+    constexpr int kLosslessPacketsPerSecond =
+        PcmAudioCodecConfig::kSampleRate / PcmAudioCodecConfig::kPacketFrames;
+    const int streams = 1 + receivers;
+    const int cushionPackets = streams * (256 * kLosslessPacketsPerSecond / 1000);
+    QCOMPARE(cushionPackets, receivers == 0 ? 64 : 320);
+
+    LibDataChannelMediaTransport offerer;
+    LibDataChannelMediaTransport answerer;
+    QString offer;
+    QString answer;
+    wireExchange(offerer, answerer, &offer, &answer);
+    QSignalSpy offerReady(&offerer, &IMediaTransport::ready);
+    QSignalSpy answerReady(&answerer, &IMediaTransport::ready);
+    IMediaTransport::StartOptions answerOptions{IMediaTransport::Role::Answerer, kTestAudioSsrc};
+    answerOptions.receiverAudioSsrcs = receiverSsrcs;
+    IMediaTransport::StartOptions offerOptions{IMediaTransport::Role::Offerer, kTestAudioSsrc};
+    offerOptions.receiverAudioSsrcs = receiverSsrcs;
+    QVERIFY(answerer.start(answerOptions));
+    QVERIFY(offerer.start(offerOptions));
+    QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
+
+    QList<QByteArray> received;
+    connect(&answerer, &IMediaTransport::rtpReceived, this,
+            [&received](const QByteArray& packet) { received.append(packet); });
+
+    // From here the event loop does not run, so nothing drains: every packet
+    // waits in the receive queue. Streams take turns, as the Core sends them.
+    const int packets = cushionPackets + (overflow ? 1 : 0);
+    QList<QByteArray> sent;
+    quint64 bytes = 0;
+    constexpr int kChunk = 32;
+    for (int index = 0; index < packets; ++index) {
+        const quint32 ssrc = index % streams == 0 ? kTestAudioSsrc
+                                                  : receiverSsrcs.at(index % streams - 1);
+        const QByteArray packet = rtpPacket(static_cast<quint16>(index), 15, ssrc);
+        QVERIFY(offerer.sendRtp(packet));
+        sent << packet;
+        bytes += static_cast<quint64>(packet.size());
+        // Small bursts, each fully received before the next, so the host's
+        // UDP socket buffer never decides what is lost.
+        if ((index + 1) % kChunk == 0 || index + 1 == packets) {
+            QVERIFY(waitForReceivedRtpBytes(answerer, bytes));
+        }
+    }
+    QVERIFY(received.isEmpty());
+    // The first drain then finds the oldest packet older than the 80 ms
+    // timing threshold and says so once, with the packets it dropped.
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    QTest::ignoreMessage(QtWarningMsg,
+                         QRegularExpression(QStringLiteral(
+                             "^media RTP timing: .* batchPackets=%1 droppedPending=%2$")
+                                                .arg(cushionPackets)
+                                                .arg(overflow ? 1 : 0)));
+    QTRY_COMPARE_WITH_TIMEOUT(received.size(), cushionPackets, 5000);
+    QTest::qWait(20);
+    QCOMPARE(received.size(), cushionPackets);
+    QCOMPARE(received, sent.mid(overflow ? 1 : 0));
+    offerer.stop();
+    answerer.stop();
+}
+
+// R-R3-43: a receiver SSRC of zero, the main SSRC, a repeat or more than
+// four receivers is a precondition refusal: false, no error, not started.
+void TestMediaTransport::receiverStreamPreconditionsRefuseSilently()
+{
+    const QList<QList<quint32>> refused{
+        {0x11U, 0U},
+        {0x11U, kTestAudioSsrc},
+        {0x11U, 0x22U, 0x11U},
+        {0x11U, 0x22U, 0x33U, 0x44U, 0x55U},
+    };
+    for (const QList<quint32>& receivers : refused) {
+        for (const IMediaTransport::Role role :
+             {IMediaTransport::Role::Offerer, IMediaTransport::Role::Answerer}) {
+            LibDataChannelMediaTransport transport;
+            QSignalSpy errors(&transport, &IMediaTransport::errorOccurred);
+            QSignalSpy descriptions(&transport, &IMediaTransport::localDescription);
+            IMediaTransport::StartOptions options{role, kTestAudioSsrc};
+            options.receiverAudioSsrcs = receivers;
+            QVERIFY(!transport.start(options));
+            QCOMPARE(errors.size(), 0);
+            QVERIFY(!transport.telemetry().has_value());
+            QTest::qWait(10);
+            QCOMPARE(descriptions.size(), 0);
+        }
+    }
+    // Four distinct receivers are accepted.
+    LibDataChannelMediaTransport transport;
+    IMediaTransport::StartOptions options{IMediaTransport::Role::Answerer, kTestAudioSsrc};
+    options.receiverAudioSsrcs = kTestReceiverSsrcs;
+    QVERIFY(transport.start(options));
+    transport.stop();
 }
 
 QTEST_GUILESS_MAIN(TestMediaTransport)

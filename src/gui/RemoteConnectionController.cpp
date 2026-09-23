@@ -252,9 +252,11 @@ RemoteConnectionPanel::RemoteConnectionPanel(RemoteConnectionController* control
         QPointer<RemoteMediaController> guardedMedia(media);
         m_refreshAudio = [this, guardedMedia, audioDetails, retryButton, qualityChoice] {
             if (!guardedMedia) { return; }
+            // R-R3-43: and each receiver stream apps on this computer use.
             const QString text = formatRemoteAudioDetails(guardedMedia->audioStatus(),
                                                           guardedMedia->audioTelemetry(),
-                                                          guardedMedia->audioDelay());
+                                                          guardedMedia->audioDelay(),
+                                                          guardedMedia->receiverAudioTelemetry());
             const bool textChanged = audioDetails->text() != text;
             audioDetails->setText(text);
             retryButton->setEnabled(guardedMedia->audioStatus().retryAvailable);
