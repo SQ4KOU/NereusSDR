@@ -785,7 +785,8 @@ private slots:
         QSignalSpy remoteErrors(&remoteMedia, &RemoteMediaController::errorOccurred);
         QSignalSpy coreControls(&h.server, &StationServer::mediaControlReceived);
         // This computer's speaker plays on the same timeline, continuously,
-        // with a 48-frame callback.
+        // taking its queue a 48-frame callback at a time, as the callback
+        // device it reports does.
         h.remoteBus->callbackFrames = 48;
         h.remoteBus->setPlayClockForTesting([&clock] { return clock.nsecsElapsed(); });
         const qint64 playOriginNs = h.remoteBus->playClockOriginNs();

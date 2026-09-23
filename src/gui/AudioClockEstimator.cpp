@@ -115,7 +115,10 @@ std::optional<AudioDelayEstimate> measureAudioDelay(const AudioDelayInputs& inpu
         return std::nullopt;
     }
     AudioDelayEstimate estimate;
-    estimate.delayMs = heard->sinceNs / kNsPerMs;
+    // The delay of the audio heard at the reading, not of the newest sample
+    // behind it: while the rate matcher corrects, the two differ by its
+    // stretch of the audio between them.
+    estimate.delayMs = (heard->sinceNs - double(playout.matcherStretchNs())) / kNsPerMs;
     // The clock bound, plus how far the playout time itself may be off
     // (where the device callback was in its cycle, and the queue read).
     estimate.boundMs = (heard->boundNs + double(playout.accuracyNs())) / kNsPerMs;

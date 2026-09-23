@@ -20,9 +20,10 @@ public:
         const int count = int(bytes / sizeof(float));
         if (int(queue.size()) - 2 * playedAheadFramesLocked() + count > 9600) { return -1; }
         if (playClock) {
-            // The play clock has passed everything queued: the device played
-            // silence meanwhile, so these samples start now, not in the past.
-            const qint64 dry = dueFramesLocked() - playedFrames - qint64(queue.size()) / 2;
+            // The device has taken past everything queued: it played silence
+            // meanwhile, so these samples start at its next callback, not in
+            // the past.
+            const qint64 dry = takenFramesLocked() - playedFrames - qint64(queue.size()) / 2;
             if (dry > 0) {
                 queue.insert(queue.end(), std::size_t(dry * 2), 0.0f);
                 playedDryFrames += dry;
@@ -50,12 +51,15 @@ public:
                             deviceLatencyNs};
     }
     // R-R3-35 test device clock. From this call the device plays one frame
-    // every 1/48000 s of `clockNs` continuously, as hardware does: the
-    // queue and consumed count it reports follow the clock rather than the
-    // render() calls, and renderDue() moves exactly the frames played so
-    // far into `heard`. So heard frame k (counted from this call) played at
-    // playClockOriginNs() + k / 48 kHz, however late the caller's timer
-    // runs. Set before any render.
+    // every 1/48000 s of `clockNs` continuously, as hardware does, and it
+    // takes frames from the queue the way the callback device it reports
+    // does: `callbackFrames` at a time, each callback at the instant its
+    // first frame starts to play (no device latency). So the queue and
+    // consumed count it reports drop a callback at a time, following the
+    // clock rather than the render() calls, and renderDue() moves exactly
+    // the frames played so far into `heard`. Heard frame k (counted from
+    // this call) played at playClockOriginNs() + k / 48 kHz, however late
+    // the caller's timer runs. Set before any render.
     void setPlayClockForTesting(std::function<qint64()> clockNs)
     {
         std::lock_guard<std::mutex> lock(mutex);
@@ -156,9 +160,16 @@ private:
     {
         return playClock ? (playClock() - playOriginNs) * 48 / 1'000'000 : 0;
     }
-    // Frames the play clock has played that render() has not yet moved.
+    // Frames the device has taken from the queue by now: every callback up
+    // to and including the one that holds the frame now playing.
+    qint64 takenFramesLocked() const
+    {
+        const qint64 perCallback = std::max(1, callbackFrames);
+        return (dueFramesLocked() / perCallback + 1) * perCallback;
+    }
+    // Frames the device has taken that render() has not yet moved.
     int playedAheadFramesLocked() const
     {
-        return playClock ? int(std::max<qint64>(0, dueFramesLocked() - playedFrames)) : 0;
+        return playClock ? int(std::max<qint64>(0, takenFramesLocked() - playedFrames)) : 0;
     }
 };

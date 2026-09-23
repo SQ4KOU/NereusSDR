@@ -12,6 +12,7 @@
 
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <random>
 
 using namespace NereusSDR;
@@ -360,6 +361,60 @@ private slots:
                  qPrintable(QString::number(estimate->boundMs, 'f', 4)));
         // Mid-cycle and mid-window: the figure is the true delay.
         QVERIFY(std::abs(estimate->delayMs - 85.0) < 0.001);
+    }
+
+    // Follow-up item 5 (R-R3-35): while the rate matcher corrects, the audio
+    // ahead of the newest sample was made at its ratio (output frames per
+    // input frame), so the sample heard at the reading was captured
+    // play-time / ratio before the newest one, not play-time. The figure is
+    // the heard sample's delay: the newest sample's less the stretch.
+    void matcherRatioStretchIsCountedForTheHeardSample()
+    {
+        RemoteAudioPlayoutPoint point;
+        point.measuredNs = 1000 * kMs;
+        point.matcherFillFrames = 4800;
+        point.speakerQueuedFrames = 960;
+        point.pipelineDelayFrames = 312 + 69;
+        point.codecDelayFrames = 312;
+        point.callbackFrames = 48;
+        QCOMPARE(point.matcherStretchNs(), qint64(0)); // ratio 1
+        point.matcherRatio = 1.004;
+        // Made by the matcher: fill, queue, filter delay and half a callback,
+        // 4800 + 960 + 69 + 24 = 5853 frames = 121.9375 ms; the codec's 312
+        // frames lie before it.
+        const double made = 5853.0 * double(kS) / 48000.0;
+        const qint64 expected = std::llround(made * (1.0 - 1.0 / 1.004));
+        QCOMPARE(point.matcherStretchNs(), expected);
+        QVERIFY(expected > 480'000 && expected < 490'000); // about 0.486 ms
+        point.deviceLatencyNs = 10 * kMs; // the device's frames were made too
+        QCOMPARE(point.matcherStretchNs(),
+                 std::llround((made + 10.0 * double(kMs)) * (1.0 - 1.0 / 1.004)));
+        point.matcherRatio = 0.996; // slowing: the newest sample's delay is less
+        QVERIFY(point.matcherStretchNs() < 0);
+        point.matcherRatio = std::numeric_limits<double>::quiet_NaN();
+        QCOMPARE(point.matcherStretchNs(), qint64(0));
+
+        // measureAudioDelay reports the heard sample's delay.
+        Scenario scenario;
+        scenario.pipelineFrames = 381;
+        scenario.callbackFrames = 480;
+        scenario.readWindowNs = 2 * kMs;
+        AudioClockEstimator estimator;
+        for (int probe = 0; probe < 20; ++probe) {
+            QVERIFY(estimator.addSample(exchange(scenario.clocks, probe * kS, kMs, 0, kMs)));
+        }
+        AudioDelayInputs inputs = inputsFor(scenario, estimator, 20 * kS);
+        const auto steady = measureAudioDelay(inputs);
+        QVERIFY(steady);
+        RemoteAudioPlayoutPoint stretched = *inputs.playout;
+        stretched.codecDelayFrames = 312;
+        stretched.matcherRatio = 1.002;
+        inputs.playout = stretched;
+        const auto correcting = measureAudioDelay(inputs);
+        QVERIFY(correcting);
+        QVERIFY(std::abs((steady->delayMs - correcting->delayMs)
+                         - double(stretched.matcherStretchNs()) / 1e6) < 1e-6);
+        QCOMPARE(correcting->boundMs, steady->boundMs);
     }
 };
 

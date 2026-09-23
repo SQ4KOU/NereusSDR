@@ -35,6 +35,19 @@ struct RemoteAudioPlayoutPoint {
     /// were this far apart; measuredNs is their midpoint and half of it is
     /// accuracy.
     qint64 readWindowNs = 0;
+    /// Of pipelineDelayFrames, the part before the rate matcher: the codec's
+    /// delay (Opus lookahead; none for lossless). Everything else ahead of
+    /// the newest sample is audio the rate matcher has already made.
+    int codecDelayFrames = 0;
+    /// Output frames the rate matcher makes per input frame when read (WDSP
+    /// rmatch's var; 1 before its control starts). While it corrects, the
+    /// delay itself changes as the audio plays.
+    double matcherRatio = 1.0;
+    /// How much longer the newest sample's delay is than that of the sample
+    /// heard at measuredNs: the audio between them was made at matcherRatio,
+    /// so it spans 1 / matcherRatio as much capture time as play time.
+    /// Zero at a ratio of 1 (or one that is not a positive number).
+    qint64 matcherStretchNs() const;
     /// measuredNs plus the queued frames, the pipeline delay and half a
     /// callback at 48 kHz, plus the device latency when known.
     qint64 playoutNs() const;

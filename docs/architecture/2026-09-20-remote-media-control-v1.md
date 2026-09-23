@@ -220,6 +220,15 @@ with half the time the queue read took. The device's own latency is added
 when the audio backend reports it; otherwise the figure says it does not
 count the speaker device.
 
+The figure is the delay of the sample heard when the queue was read, not of
+the newest sample behind it. While the rate matcher corrects its fill, its
+ratio (output frames made per input frame, WDSP rmatch's `var`) is not 1 and
+the delay itself changes as the audio plays: the audio between the two
+samples was made at that ratio, so it spans `1 / ratio` as much capture time
+as play time. The newest sample's delay is reduced by that stretch, the
+play time the rate matcher made (everything ahead of the newest sample but
+the codec's delay) times `1 - 1 / ratio`, using the ratio at the reading.
+
 The audio enable/context lifecycle, playback buffering and adaptive session
 budget are still being implemented. Their acceptance remains open in the
 [R3 plan](2026-09-20-remote-daemon-r3-plan.md); this document does not claim

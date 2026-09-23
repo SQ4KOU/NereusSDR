@@ -7,6 +7,7 @@
 #include "core/session/media/RemoteAudioRateMatcher.h"
 #include "core/session/media/RtpReceptionStats.h"
 #include <algorithm>
+#include <cmath>
 #include <atomic>
 #include <bit>
 #include <chrono>
@@ -159,6 +160,18 @@ qint64 RemoteAudioPlayoutPoint::playoutNs() const
         + qint64(callbackFrames);
     return measuredNs + halfFrames * 1'000'000'000 / (2 * PcmAudioCodecConfig::kSampleRate)
         + deviceLatencyNs.value_or(0);
+}
+
+qint64 RemoteAudioPlayoutPoint::matcherStretchNs() const
+{
+    if (!std::isfinite(matcherRatio) || matcherRatio <= 0.0 || matcherRatio == 1.0) {
+        return 0;
+    }
+    // The play time ahead of measuredNs that the rate matcher made: all of
+    // it but the codec's delay, which lies before the matcher.
+    const qint64 madeNs = playoutNs() - measuredNs
+        - qint64(codecDelayFrames) * 1'000'000'000 / PcmAudioCodecConfig::kSampleRate;
+    return std::llround(double(std::max<qint64>(0, madeNs)) * (1.0 - 1.0 / matcherRatio));
 }
 
 qint64 RemoteAudioPlayoutPoint::accuracyNs() const
@@ -506,8 +519,9 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
         // Fixed delays a sample passes through after the matcher fill and
         // the speaker queue say it is heard: the codec's own delay (Opus
         // only) and the rate matcher's filter.
+        const int codecDelayFrames = lossless ? 0 : opusCodecDelayFrames();
         const int pipelineDelayFrames = RemoteAudioRateMatcher::kFilterDelayFrames
-            + (lossless ? 0 : opusCodecDelayFrames());
+            + codecDelayFrames;
         quint64 lastDeviceFrames = 0;
         const quint64 deviceConsumedBase = initialPacing->consumedFrames;
         quint64 telemetryDeviceFrames = deviceConsumedBase;
@@ -717,6 +731,10 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
                     point.pipelineDelayFrames = pipelineDelayFrames;
                     point.callbackFrames = std::max(0, finalPacing->callbackFrames);
                     point.readWindowNs = readEnd - readStart;
+                    // Follow-up item 5: while rmatch corrects, its ratio
+                    // is part of the delay (see matcherStretchNs).
+                    point.codecDelayFrames = codecDelayFrames;
+                    point.matcherRatio = stats.currentRatio;
                     d->playout = point;
                 }
                 if (unpublishedRelease) { d->release = *unpublishedRelease; }
