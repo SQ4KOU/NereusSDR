@@ -16,6 +16,9 @@
 //   never counting its exit, so teardown waited forever. Each teardown runs
 //   under a watchdog so that failure reports instead of hanging the test.
 // - idleWorkerExitsAtOnce covers a worker waiting for input.
+// - teardownOfAWorkerThatNeverStartedDoesNotWait covers start_thread's
+//   failure path through dsplock.c directly (a failed _beginthread cannot be
+//   forced here), then proves the channel's exit pairing is intact.
 #include <QtTest>
 
 #include <array>
@@ -24,6 +27,13 @@
 #include <thread>
 
 #include "core/wdsp_api.h"
+
+// WDSP-internal (third_party/wdsp/src/dsplock.h); the test links wdsp_static,
+// so it can drive the start-result path directly.
+extern "C" {
+void WdspWorkerStarted(int channel, int started);
+void WdspWaitWorkerExit(int channel);
+}
 
 namespace {
 
@@ -58,6 +68,9 @@ constexpr std::chrono::milliseconds kIdleSettle{100};
 // A teardown that has not returned by now is hung, not slow: the longest
 // legitimate wait in these cases is a few 60 ms blocks.
 constexpr std::chrono::milliseconds kTeardownWatchdog{5000};
+
+// A second channel id, for the never-started worker case.
+constexpr int kUnstartedChannel = 22;
 
 double msSince(Clock::time_point start)
 {
@@ -256,6 +269,28 @@ private slots:
         QVERIFY2(exitsAtReturn == exitsBefore + 1,
                  "CloseChannel returned while the worker was still inside its block");
         QVERIFY2(closeMs >= kLongBlockMinCloseMs, "CloseChannel did not wait out the long block");
+    }
+
+    void teardownOfAWorkerThatNeverStartedDoesNotWait()
+    {
+        // start_thread reports a failed _beginthread (it returns -1).
+        WdspWorkerStarted(kUnstartedChannel, 0);
+        double waitMs = 0.0;
+        const bool returned =
+            runUnderWatchdog([] { WdspWaitWorkerExit(kUnstartedChannel); }, waitMs);
+        qInfo("teardown of a channel whose worker never started took %.2f ms", waitMs);
+        QVERIFY2(returned, "teardown waited for a worker that never started");
+
+        // The skipped wait must not shift the exit pairing: a real channel
+        // on the same id still closes and counts exactly one exit.
+        OpenChannel(kUnstartedChannel, kInSize, kDspSize, kSampleRate, kSampleRate,
+                    kSampleRate, 0, 1, 0.010, 0.025, 0.000, 0.010, 0);
+        const int exitsBefore = WDSPGetTestWorkerExitCount(kUnstartedChannel);
+        double closeMs = 0.0;
+        const bool closed =
+            runUnderWatchdog([] { CloseChannel(kUnstartedChannel); }, closeMs);
+        QVERIFY2(closed, "closing the channel after a skipped wait never returned");
+        QCOMPARE(WDSPGetTestWorkerExitCount(kUnstartedChannel), exitsBefore + 1);
     }
 
     void idleWorkerExitsAtOnce()

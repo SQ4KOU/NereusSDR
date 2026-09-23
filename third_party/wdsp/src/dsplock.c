@@ -51,6 +51,9 @@ boydsoftprez@gmail.com
 // together, and never waits longer than a per-block budget. The worker holds
 // no lock while it waits, so no lock-order edge is added.
 //
+// A worker that failed to start (start_thread reports it through
+// WdspWorkerStarted) is never waited for: teardown logs one line instead.
+//
 // Teardown: pre_main_destroy used to sleep a fixed 25 ms after telling the
 // worker to stop, then free the channel's buffers and locks. A block slower
 // than that (a neural noise reduction block on a slow computer) was still
@@ -97,6 +100,10 @@ boydsoftprez@gmail.com
 //                 (TakeChannelDspIntervalMaxBlockUs) added by J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code (R-R3-40).
+//   2026-09-23 - Worker start result (WdspWorkerStarted): teardown of a
+//                 channel whose worker never started logs once and does not
+//                 wait, by J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code (R-R3-39).
 // =================================================================
 
 #include "comm.h"
@@ -132,6 +139,9 @@ static volatile long test_process_delay_us[MAX_CHANNELS];
 static volatile long worker_exits[MAX_CHANNELS];
 // Times teardown has waited for each channel's worker (control thread only).
 static volatile long worker_exit_waits[MAX_CHANNELS];
+// 1 while the channel has a started worker that teardown has not yet waited
+// for; 0 before the first build, after teardown, or when the start failed.
+static volatile long worker_started[MAX_CHANNELS];
 
 // Per-channel load counters (see WdspChannelLoad). Written only by the
 // channel's worker, read by GetChannelDspLoad from any thread.
@@ -460,12 +470,28 @@ void WdspWorkerExited (int channel)
 	}
 }
 
+void WdspWorkerStarted (int channel, int started)
+{
+	if (valid_channel (channel))
+	{
+		InterlockedExchange (&worker_started[channel], started ? 1L : 0L);
+	}
+}
+
 void WdspWaitWorkerExit (int channel)
 {
 	long expected;
 	int64_t start, next_log;
 	if (!valid_channel (channel))
 	{
+		return;
+	}
+	if (InterlockedExchange (&worker_started[channel], 0L) == 0)
+	{
+		// No worker is running for this build, so no exit will come; the
+		// exit pairing count is left as it is.
+		dprintf ("wdsp: channel %d has no DSP worker (it did not start); "
+			"teardown goes ahead without waiting\n", channel);
 		return;
 	}
 	expected = InterlockedIncrement (&worker_exit_waits[channel]);

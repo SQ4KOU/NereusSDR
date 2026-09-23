@@ -67,6 +67,10 @@ boydsoftprez@gmail.com
 //                 (TakeChannelDspIntervalMaxBlockUs) added by J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code (R-R3-40).
+//   2026-09-23 - Worker start result (WdspWorkerStarted): teardown of a
+//                 channel whose worker never started logs once and does not
+//                 wait, by J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code (R-R3-39).
 // =================================================================
 
 #ifndef _dsplock_h
@@ -84,6 +88,11 @@ void WdspWorkerLeave (int channel);
 // The channel worker calls this once, after its loop ends (main.c).
 void WdspWorkerExited (int channel);
 
+// start_thread (channel.c) reports whether it started the channel's worker
+// (started != 0). A teardown of a channel whose worker never started logs
+// one line and returns without waiting, since no exit will ever come.
+void WdspWorkerStarted (int channel, int started);
+
 // The channel worker calls this at the start of a block it processes, after
 // its exec_bypass check (main.c). It runs the test-only process delay set by
 // WDSPSetTestProcessDelayUs and otherwise returns after one relaxed load.
@@ -92,6 +101,7 @@ void WdspWorkerTestProcessDelay (int channel);
 // Channel teardown (pre_main_destroy): returns once the channel's worker has
 // left its loop. Never gives up while the worker is still inside a block;
 // writes a dprintf line for every kWorkerExitLogIntervalMs of waiting.
+// Returns at once, after one dprintf line, if the worker never started.
 void WdspWaitWorkerExit (int channel);
 
 // One channel's worker load since the process started. Every field only

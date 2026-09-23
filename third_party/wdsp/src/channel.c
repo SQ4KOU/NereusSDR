@@ -29,7 +29,9 @@ warren@wpratt.com
 // loop (dsplock.c WdspWaitWorkerExit) instead of sleeping a fixed 25 ms, so
 // no buffer is freed while a slow block is still running. It clears run and
 // sets exec_bypass while holding csDSP, so a block already under way finishes
-// normally instead of ending its worker inside dexchange. Source DSP flow and
+// normally instead of ending its worker inside dexchange. start_thread
+// reports whether the worker started (dsplock.c WdspWorkerStarted), so a
+// teardown never waits for a worker that does not exist. Source DSP flow and
 // all upstream attribution are retained.
 
 #include "comm.h"
@@ -40,6 +42,9 @@ void start_thread (int channel)
 {
 	HANDLE handle = (HANDLE) _beginthread(wdspmain, 0, (void *)(uintptr_t)channel);
 	//SetThreadPriority(handle, THREAD_PRIORITY_HIGHEST);
+	// NereusSDR: _beginthread (and wdsp_beginthread) return -1 on failure;
+	// teardown must not wait for a worker that never started.
+	WdspWorkerStarted (channel, handle != (HANDLE)-1);
 }
 
 void pre_main_build (int channel)
