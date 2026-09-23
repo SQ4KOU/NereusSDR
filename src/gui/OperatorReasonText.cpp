@@ -30,8 +30,10 @@ namespace {
 
 struct Entry {
     const char* wire;       // Byte-for-byte as sent or recorded; never reworded.
-    const char* shortLine;  // Fits a 200 px pan; nullptr where no pan shows it.
+    const char* shortLine;  // A pan's short line; nullptr where no pan shows it.
     const char* sentence;   // Why, in user words.
+    const char* shorter = nullptr;  // A shorter short line, for a narrow pan.
+    const char* panNext = nullptr;  // What happens next on a pan, when not the default.
 };
 
 // The left column is copied from where each reason is written, so a match
@@ -41,71 +43,79 @@ struct Entry {
 constexpr Entry kEntries[] = {
     // The Core's display refusals, DaemonMediaController.cpp.
     {"session display budget exceeded", "Refused: Core busy",
-     "The Core's display limit has no room left for this pan."},
+     "The Core's display limit has no room left for this pan.", "Refused"},
     {"endpoint limit reached", "Refused: pan limit",
-     "The Core is already sending as many pan displays as it can."},
+     "The Core is already sending as many pan displays as it can.", "Refused"},
     {"endpoint identifier retired", "Refused: out of date",
-     "The Core had already closed the display this request was for."},
+     "The Core had already closed the display this request was for.", "Refused"},
     {"stale revision", "Refused: out of date",
-     "A newer request for this pan had already reached the Core."},
+     "A newer request for this pan had already reached the Core.", "Refused"},
     {"incompatible source window", "Refused: out of date",
-     "The receiver's spectrum settings changed before the Core could answer."},
+     "The receiver's spectrum settings changed before the Core could answer.", "Refused"},
     {"invalid subscription", "Refused: bad request",
-     "The Core could not read this pan's display request."},
+     "The Core could not read this pan's display request.", "Refused"},
     {"invalid unsubscription", "Refused: bad request",
-     "The Core could not read the request to stop this pan's display."},
+     "The Core could not read the request to stop this pan's display.", "Refused"},
     {"requested crop is outside source coverage", "Refused: out of range",
-     "This view reaches past the frequencies the receiver covers."},
+     "This view reaches past the frequencies the receiver covers.", "Refused"},
     {kRetireReasonSourceRetune, "Refused: out of range",
-     "The receiver was retuned and no longer covers this view."},
+     "The receiver was retuned and no longer covers this view.", "Refused"},
     {"slice is unavailable", "Refused: no slice",
-     "This pan's slice is not available on the Core."},
+     "This pan's slice is not available on the Core.", "Refused"},
     {kRetireReasonSliceRemoved, "Refused: no slice",
-     "This pan's slice was removed."},
+     "This pan's slice was removed.", "Refused"},
     {kRetireReasonStreamBindingChanged, "Refused: out of date",
-     "This pan's slice moved to a different receiver."},
+     "This pan's slice moved to a different receiver.", "Refused"},
     {"source configuration rejected", "Refused: setup failed",
-     "The Core could not set up the spectrum for this receiver."},
+     "The Core could not set up the spectrum for this receiver.", "Refused"},
     {"source configuration became unavailable", "Refused: not ready",
-     "The spectrum for this receiver stopped on the Core."},
+     "The spectrum for this receiver stopped on the Core.", "Refused"},
     {"source geometry is unavailable", "Refused: not ready",
-     "The Core does not have this receiver's spectrum ready yet."},
+     "The Core does not have this receiver's spectrum ready yet.", "Refused"},
     {"wideband source is unavailable", "Refused: no wide view",
-     "The Core cannot provide the extended view right now."},
+     "The Core cannot provide the extended view right now.", "Refused"},
     {"display budget authority retired", "Refused: Core stopping",
-     "The Core was stopping its display service."},
+     "The Core was stopping its display service.", "Refused"},
     {"PureSignal display does not fit the session display budget", "Refused: Core busy",
-     "The Core's display limit has no room for the PureSignal display."},
+     "The Core's display limit has no room for the PureSignal display.", "Refused"},
     {"display source retired", "Refused: out of date",
-     "The Core had already closed this pan's display."},
+     "The Core had already closed this pan's display.", "Refused"},
     {"display production retired", "Refused: Core stopping",
-     "The Core had stopped sending pan displays."},
+     "The Core had stopped sending pan displays.", "Refused"},
 
     // Recorded by this computer, RemoteMediaController.cpp.
     {"Core refused the display allocation.", "Refused by the Core",
-     "The Core did not accept this pan's display request."},
+     "The Core did not accept this pan's display request.", "Refused"},
     {"Core refused the display release.", "Refused by the Core",
-     "The Core did not accept the request to stop this pan's display."},
+     "The Core did not accept the request to stop this pan's display.", "Refused"},
     {"Unable to send the allocation request.", "Request not sent",
-     "This computer could not send the request to the Core."},
+     "This computer could not send the request to the Core.", "Not sent"},
     {"Unable to request PureSignal display release.", "Request not sent",
-     "This computer could not send the PureSignal display request to the Core."},
+     "This computer could not send the PureSignal display request to the Core.", "Not sent"},
     {"Unable to request PureSignal display admission.", "Request not sent",
-     "This computer could not send the PureSignal display request to the Core."},
+     "This computer could not send the PureSignal display request to the Core.", "Not sent"},
 
-    // Recorded by this computer, RemoteDisplayAllocator.cpp.
+    // Recorded by this computer, RemoteDisplayAllocator.cpp. This app
+    // decided before asking the Core, and decides again whenever the Core's
+    // limits or the open pans change, so each says what changes it.
     {"Display budget limits are invalid.", "Core limits unusable",
-     "The Core reported display limits this app cannot use."},
+     "The Core reported display limits this app cannot use.", "Can't show",
+     "This app tries again when the Core reports new limits."},
     {"At most eight remote display pans are supported.", "Too many pans",
-     "The Core's display can be shown on up to eight pans at once."},
+     "This app shows the Core's display on up to eight pans at once.", nullptr,
+     "Close a pan to show this one."},
     {"Remote display pan IDs must be unique.", "Can't show this pan",
-     "Two pans could not be told apart."},
+     "Two pans could not be told apart.", "Can't show",
+     "This app tries again when a pan opens, closes or changes."},
     {"At most one remote display pan may be active.", "Can't show this pan",
-     "More than one pan was marked as the active pan."},
+     "More than one pan was marked as the active pan.", "Can't show",
+     "This app tries again when a pan opens, closes or changes."},
     {"PureSignal display reservation does not fit the display budget.", "Refused: Core busy",
-     "The Core's display limit has no room for the PureSignal display."},
+     "The Core's display limit has no room for the PureSignal display.", "Refused",
+     "Close a pan or make one smaller to make room."},
     {"Display budget cannot reserve requested display demand.", "Refused: Core busy",
-     "The Core's display limit has no room for the pan displays you have open."},
+     "The Core's display limit has no room for the pan displays you have open.", "Refused",
+     "Close a pan or make one smaller to show this one."},
 
     // Why the link to the Core ended: the Core's own reasons
     // (StationServer.cpp) and this computer's (StationClient.cpp).
@@ -285,13 +295,16 @@ struct Pattern {
     const char* shortLine;
     const char* sentence;
     const char* sample;
+    const char* shorter = nullptr;
+    const char* panNext = nullptr;
 };
 
 const Pattern kPatterns[] = {
     // RemoteDisplayAllocator.cpp words this one around the pan's name.
     {R"(^Remote display intent '.*' has an invalid range\.$)", "Can't show this pan",
      "This pan's size or update rate is out of range.",
-     "Remote display intent 'pan' has an invalid range."},
+     "Remote display intent 'pan' has an invalid range.", "Can't show",
+     "This app tries again when a pan opens, closes or changes."},
 
     // The version check, from either end (StationServer.cpp and
     // StationClient.cpp).
@@ -342,6 +355,9 @@ const Pattern kPatterns[] = {
 // or one in the Core's or this app's internal terms.
 constexpr char kGeneralSentence[] = "The reason is in the log.";
 constexpr char kGeneralShortLine[] = "Refused by the Core";
+constexpr char kGeneralShorterLine[] = "Refused";
+// What happens next on a pan the Core turned down.
+constexpr char kGeneralPanNext[] = "It asks again when you change this pan's view.";
 
 // RemoteMediaController.cpp prefixes the transport's own words with this
 // when audio and display cannot start here.
@@ -506,20 +522,42 @@ QString forDisplay(const QString& wireReason)
     return shown;
 }
 
-QString shortForDisplay(const QString& wireReason)
+QStringList shortFormsForDisplay(const QString& wireReason)
 {
-    if (const Entry* entry = find(wireReason)) {
-        if (entry->shortLine) {
-            return QString::fromLatin1(entry->shortLine);
+    const auto forms = [](const char* shortLine, const char* shorter) {
+        if (!shortLine) {
+            return QStringList{QString::fromLatin1(kGeneralShortLine),
+                               QString::fromLatin1(kGeneralShorterLine)};
         }
-        return QString::fromLatin1(kGeneralShortLine);
+        QStringList list{QString::fromLatin1(shortLine)};
+        if (shorter) {
+            list.append(QString::fromLatin1(shorter));
+        }
+        return list;
+    };
+    if (const Entry* entry = find(wireReason)) {
+        return forms(entry->shortLine, entry->shorter);
     }
     if (const Pattern* pattern = matchPattern(wireReason, nullptr)) {
-        if (pattern->shortLine) {
-            return QString::fromLatin1(pattern->shortLine);
-        }
+        return forms(pattern->shortLine, pattern->shorter);
     }
-    return QString::fromLatin1(kGeneralShortLine);
+    return forms(nullptr, nullptr);
+}
+
+QString shortForDisplay(const QString& wireReason)
+{
+    return shortFormsForDisplay(wireReason).constFirst();
+}
+
+QString panNextStep(const QString& wireReason)
+{
+    const char* next = nullptr;
+    if (const Entry* entry = find(wireReason)) {
+        next = entry->panNext;
+    } else if (const Pattern* pattern = matchPattern(wireReason, nullptr)) {
+        next = pattern->panNext;
+    }
+    return QString::fromLatin1(next ? next : kGeneralPanNext);
 }
 
 QStringList knownReasons()

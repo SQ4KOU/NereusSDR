@@ -29,6 +29,9 @@
 #include <QtTest/QtTest>
 
 #include <QMetaProperty>
+#include <QSet>
+
+#include <algorithm>
 
 #include "OperatorWording.h"
 #include "PanStatusSamples.h"
@@ -38,6 +41,7 @@
 #include "core/ReceiverManager.h"
 #include "gui/MainWindow.h"
 #include "gui/PanadapterApplet.h"
+#include "gui/SpectrumWidget.h"
 #include "gui/widgets/SpectrumStatusOverlay.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -208,21 +212,123 @@ private slots:
         QCOMPARE(overlay->toolTip(), pan.wideReason());
     }
 
-    // R-R3-37: in a pan only 200 px wide every short line is painted whole,
-    // clear of the dBm strip, and hovering gives the explanation.
+    // A pan really this narrow. The spectrum sets a 400 px minimum, so a pan
+    // docked today is never under 400 px; the fit checks lift that minimum
+    // so the pan is truly 200 px and the row is as narrow as a 200 px pan
+    // would make it (and narrower, below). Qt holds a hidden widget's
+    // resize event back, so it is delivered here, as showing the pan would.
+    static void makeNarrowable(PanadapterApplet& pan)
+    {
+        auto* spectrum = pan.findChild<SpectrumWidget*>();
+        QVERIFY(spectrum);
+        spectrum->setMinimumSize(0, 0);
+    }
+
+    static void resizePan(PanadapterApplet& pan, int width)
+    {
+        const QSize old = pan.size();
+        pan.resize(width, 300);
+        QResizeEvent event(pan.size(), old);
+        QCoreApplication::sendEvent(&pan, &event);
+    }
+
+    // R-R3-37, I1: in a pan only 200 px wide every state paints a form of
+    // its short line whole (the longest that fits, measured in the font this
+    // platform gives the row), clear of the dBm strip, and hovering gives the
+    // explanation. Set NEREUS_STATUS_WIDTHS=1 to print each measured width.
     void every_short_line_fits_a_200_px_pan()
     {
         PanadapterApplet pan(QStringLiteral("narrow"));
-        pan.resize(200, 300);
+        makeNarrowable(pan);
+        resizePan(pan, 200);
+        QCOMPARE(pan.width(), 200);
         auto* overlay = pan.findChild<SpectrumStatusOverlay*>();
         QVERIFY(overlay);
+        const bool print = qEnvironmentVariableIsSet("NEREUS_STATUS_WIDTHS");
+        QSet<QString> printed;
+        if (print) {
+            // What this platform gave the row for "monospace", 9 pt.
+            const QFontInfo info(QFont(QStringLiteral("monospace"), 9));
+            qInfo().noquote() << QStringLiteral("row font: %1, %2 px")
+                                     .arg(info.family()).arg(info.pixelSize());
+        }
+        int checked = 0;
         for (const PanDisplayState& state : PanStatusSamples::all()) {
             const PanStatusText text = buildPanStatusText(state);
             pan.setRemoteDisplayStatus(text);
             QVERIFY2(overlay->geometry().right() < pan.width(), qPrintable(text.shortLine));
-            QCOMPARE(pan.visibleRemoteDisplayStatus(), text.shortLine);
             QCOMPARE(overlay->toolTip(), text.explanation);
+            const QString painted = pan.visibleRemoteDisplayStatus();
+            if (text.shortLine.isEmpty()) {
+                QVERIFY(painted.isEmpty());
+                continue;
+            }
+            ++checked;
+            const QStringList forms = text.shortForms();
+            QVERIFY2(forms.contains(painted), qPrintable(painted));
+            const int row = overlay->remoteStatusRowWidth();
+            QVERIFY2(overlay->remoteStatusTextWidth(painted) <= row,
+                     qPrintable(QStringLiteral("%1: %2 px in a %3 px row")
+                                    .arg(painted)
+                                    .arg(overlay->remoteStatusTextWidth(painted))
+                                    .arg(row)));
+            // The longest that fits: every longer form is too wide here.
+            for (const QString& form : forms.mid(0, forms.indexOf(painted))) {
+                QVERIFY2(overlay->remoteStatusTextWidth(form) > row, qPrintable(form));
+            }
+            if (print && !printed.contains(forms.join(QLatin1Char('|')))) {
+                printed.insert(forms.join(QLatin1Char('|')));
+                QStringList widths;
+                for (const QString& form : forms) {
+                    widths << QStringLiteral("\"%1\" %2 px")
+                                  .arg(form)
+                                  .arg(overlay->remoteStatusTextWidth(form));
+                }
+                // The row is as wide as the longest form, up to what the pan
+                // leaves beside the dBm strip.
+                const int rowLimit = pan.width() - 16 - 8
+                    - pan.findChild<SpectrumWidget*>()->reservedRightEdgeWidth();
+                qInfo().noquote() << QStringLiteral("pan %1 px, row up to %2 px, paints \"%3\": %4")
+                                         .arg(pan.width())
+                                         .arg(rowLimit)
+                                         .arg(painted, widths.join(QStringLiteral(", ")));
+            }
         }
+        QVERIFY2(checked >= 200, qPrintable(QString::number(checked)));
+    }
+
+    // I1: in a pan whose row is too narrow for a state's longest form, a
+    // shorter form is painted, whole.
+    void a_narrower_pan_paints_a_shorter_form()
+    {
+        PanadapterApplet pan(QStringLiteral("narrower"));
+        makeNarrowable(pan);
+        auto* overlay = pan.findChild<SpectrumStatusOverlay*>();
+        QVERIFY(overlay);
+        int checked = 0;
+        for (const PanDisplayState& state : PanStatusSamples::all()) {
+            const PanStatusText text = buildPanStatusText(state);
+            const QStringList forms = text.shortForms();
+            if (forms.size() < 2) {
+                continue;
+            }
+            pan.setRemoteDisplayStatus(text);
+            // One pixel narrower than the longest form, and never narrower
+            // than the shortest. The pan's row is its width less the dBm
+            // strip, the 8 px gaps each side and the row's 4 px margins.
+            const int target = std::max(overlay->remoteStatusTextWidth(forms.constFirst()) - 1,
+                                        overlay->remoteStatusTextWidth(forms.constLast()));
+            resizePan(pan, target + 8 + 16
+                               + pan.findChild<SpectrumWidget*>()->reservedRightEdgeWidth());
+            QCOMPARE(overlay->remoteStatusRowWidth(), target);
+            const QString painted = pan.visibleRemoteDisplayStatus();
+            QVERIFY2(forms.indexOf(painted) >= 1,
+                     qPrintable(forms.join(QStringLiteral(" | ")) + QStringLiteral(" -> ")
+                                + painted));
+            QVERIFY2(overlay->remoteStatusTextWidth(painted) <= target, qPrintable(painted));
+            ++checked;
+        }
+        QVERIFY2(checked >= 200, qPrintable(QString::number(checked)));
     }
 
     // ── The defect: a pan painted placeholders, not its slice ─────────────

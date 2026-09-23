@@ -225,10 +225,10 @@ int PanadapterApplet::statusChainIndex() const
 void PanadapterApplet::setRemoteDisplayStatus(const PanStatusText& status)
 {
     if (!m_statusOverlay) { return; }
-    const QString before = m_statusOverlay->remoteDisplayStatus();
+    const QStringList before = m_statusOverlay->remoteDisplayForms();
     m_statusOverlay->setRemoteDisplayStatus(status);
     // Only the painted line moves the strip; a new explanation does not.
-    if (m_statusOverlay->remoteDisplayStatus() != before) {
+    if (m_statusOverlay->remoteDisplayForms() != before) {
         repositionStatusOverlay();
     }
 }

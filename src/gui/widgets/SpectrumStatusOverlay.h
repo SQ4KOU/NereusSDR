@@ -24,6 +24,10 @@
 //                                    upstream port. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  Remote display row paints the longest
+//                                    form of its short line that fits,
+//                                    never an elided one (R-R3-37).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -33,6 +37,7 @@
 #include <QChar>
 #include <QRect>
 #include <QString>
+#include <QStringList>
 
 namespace NereusSDR {
 
@@ -92,13 +97,23 @@ public:
     /// (R-R3-37). The short line is painted on a second row; empty hides the
     /// row. The explanation is the hover text.
     void setRemoteDisplayStatus(const PanStatusText& status);
+    /// The longest form of the short line.
     QString remoteDisplayStatus() const { return m_remoteDisplayStatus; }
+    /// Every form of the short line, longest first.
+    QStringList remoteDisplayForms() const { return m_remoteDisplayForms; }
     QString remoteDisplayExplanation() const { return m_remoteDisplayExplanation; }
 
-    /// The short line as the second row paints it at the current width,
-    /// elided when it does not fit. paintEvent draws exactly this, so a test
-    /// can read back whether a line fits a narrow pan.
+    /// The form the second row paints at the current width: the longest
+    /// that fits, measured in the row's font, never elided (the shortest
+    /// when none fits). paintEvent draws exactly this, so a test can read
+    /// back which form a narrow pan shows.
     QString visibleRemoteDisplayStatus() const;
+
+    /// The second row's width for text, and the width `text` takes in the
+    /// row's font rounded up: the two numbers visibleRemoteDisplayStatus
+    /// compares, so a test can show the painted form fits.
+    int remoteStatusRowWidth() const;
+    int remoteStatusTextWidth(const QString& text) const;
 
     /// The clickable badges, in the order paintEvent lays them out.
     enum class Badge { ChainTag, Tx, Wide };
@@ -154,6 +169,7 @@ private:
     bool     m_diversityActive {false};
     bool     m_psPaused {false};
     QString  m_remoteDisplayStatus;
+    QStringList m_remoteDisplayForms;
     QString  m_remoteDisplayExplanation;
     void updateStatusToolTip();
     QRect remoteStatusRect() const;

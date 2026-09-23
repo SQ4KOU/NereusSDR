@@ -156,6 +156,78 @@ private slots:
         }
     }
 
+    // I1: every short line comes with shorter forms, longest first, each
+    // plain; the last is at most a word or two so it fits a narrow pan.
+    void everyShortLineHasOrderedShorterForms()
+    {
+        int checked = 0;
+        for (const PanDisplayState& state : PanStatusSamples::all()) {
+            const PanStatusText text = buildPanStatusText(state);
+            const QStringList forms = text.shortForms();
+            if (text.shortLine.isEmpty()) {
+                QVERIFY(forms.isEmpty());
+                QVERIFY(text.shorterForms.isEmpty());
+                continue;
+            }
+            ++checked;
+            QCOMPARE(forms.constFirst(), text.shortLine);
+            for (qsizetype i = 0; i < forms.size(); ++i) {
+                QVERIFY2(OperatorWording::isPlain(forms.at(i)), qPrintable(forms.at(i)));
+                if (i > 0) {
+                    QVERIFY2(forms.at(i).size() < forms.at(i - 1).size(),
+                             qPrintable(forms.join(QStringLiteral(" | "))));
+                }
+            }
+            QVERIFY2(forms.constLast().size() <= 13,
+                     qPrintable(forms.join(QStringLiteral(" | "))));
+        }
+        QVERIFY2(checked >= 200, qPrintable(QString::number(checked)));
+    }
+
+    void namedShorterForms()
+    {
+        using Phase = PanDisplayState::Phase;
+        QCOMPARE(buildPanStatusText(showing(512, 15, 1024, 30)).shortForms(),
+                 (QStringList{QStringLiteral("Less detail: Core busy"),
+                              QStringLiteral("Less detail")}));
+        QCOMPARE(buildPanStatusText(showing(1024, 15, 1024, 30)).shortForms(),
+                 (QStringList{QStringLiteral("Slower: Core busy"), QStringLiteral("Slower")}));
+        QCOMPARE(buildPanStatusText(phase(Phase::Waiting)).shortForms(),
+                 (QStringList{QStringLiteral("Waiting for the Core"), QStringLiteral("Waiting")}));
+        PanDisplayState refused = phase(Phase::Refused);
+        refused.refusalReason = QStringLiteral("requested crop is outside source coverage");
+        QCOMPARE(buildPanStatusText(refused).shortForms(),
+                 (QStringList{QStringLiteral("Refused: out of range"),
+                              QStringLiteral("Refused")}));
+        refused.refusalReason = QStringLiteral("a reason this app has never seen");
+        QCOMPARE(buildPanStatusText(refused).shortForms(),
+                 (QStringList{QStringLiteral("Refused by the Core"), QStringLiteral("Refused")}));
+        PanDisplayState zoom;
+        zoom.zoomLimit = PanDisplayState::ZoomLimit::SourceBins;
+        zoom.zoomPoints = 16384;
+        QCOMPARE(buildPanStatusText(zoom).shortForms(),
+                 (QStringList{QStringLiteral("Showing 16384 points"),
+                              QStringLiteral("16384 points")}));
+    }
+
+    // M5: this app's own pan limit names this app and says what to do; the
+    // Core's refusals keep "asks again when you change this pan's view".
+    void thisAppsPanLimitSaysCloseAPan()
+    {
+        PanDisplayState refused = phase(PanDisplayState::Phase::Refused);
+        refused.refusalReason =
+            QStringLiteral("At most eight remote display pans are supported.");
+        const PanStatusText text = buildPanStatusText(refused);
+        QCOMPARE(text.shortLine, QStringLiteral("Too many pans"));
+        QCOMPARE(text.explanation,
+                 QStringLiteral("This pan's display request did not go through. This app "
+                                "shows the Core's display on up to eight pans at once. "
+                                "Close a pan to show this one."));
+        refused.refusalReason = QStringLiteral("session display budget exceeded");
+        QVERIFY(buildPanStatusText(refused).explanation.endsWith(
+            QStringLiteral("It asks again when you change this pan's view.")));
+    }
+
     void everyTranslationIsPlainAndNeverTheRawReason()
     {
         QStringList reasons = OperatorReasonText::knownReasons();
@@ -163,6 +235,9 @@ private slots:
         for (const QString& reason : reasons) {
             const QString sentence = OperatorReasonText::forDisplay(reason);
             const QString shortLine = OperatorReasonText::shortForDisplay(reason);
+            QCOMPARE(OperatorReasonText::shortFormsForDisplay(reason).constFirst(), shortLine);
+            QVERIFY2(OperatorWording::isPlain(OperatorReasonText::panNextStep(reason)),
+                     qPrintable(reason));
             QVERIFY2(OperatorWording::isPlain(sentence),
                      qPrintable(reason + QStringLiteral(" -> ") + sentence));
             QVERIFY2(OperatorWording::isPlain(shortLine),

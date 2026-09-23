@@ -21,10 +21,17 @@ namespace {
 
 using Phase = PanDisplayState::Phase;
 
-// Every short line must fit the status row of a 200 px pan without elision
-// (tst_pan_status_overlay checks it), so they stay near twenty characters.
-// Each reduction and pause today comes from the Core's display limit, never
-// from the network, so each one says "Core busy".
+// Each short line comes with shorter forms. The pan paints the longest form
+// that fits its row, measured in the font it paints with, and never an
+// elided one; the last form is a word or two so it fits any usable pan
+// (tst_pan_status_overlay and tst_spectrum_status_overlay check both). Each
+// reduction and pause today comes from the Core's display limit, never from
+// the network, so each one says "Core busy".
+
+PanStatusText withForms(const QStringList& forms, const QString& explanation)
+{
+    return {forms.value(0), explanation, forms.mid(1)};
+}
 
 // The pan's own display: what happened, why, and what happens next.
 PanStatusText displayText(const PanDisplayState& state)
@@ -55,50 +62,53 @@ PanStatusText displayText(const PanDisplayState& state)
             explanation += QStringLiteral(" Includes the extended view.");
         }
         if (!state.reduced()) {
-            return {QString(), explanation};
+            return {QString(), explanation, {}};
         }
-        return {state.pixels != state.requestedPixels
-                    ? QStringLiteral("Less detail: Core busy")
-                    : QStringLiteral("Slower: Core busy"),
-                explanation};
+        return withForms(state.pixels != state.requestedPixels
+                             ? QStringList{QStringLiteral("Less detail: Core busy"),
+                                           QStringLiteral("Less detail")}
+                             : QStringList{QStringLiteral("Slower: Core busy"),
+                                           QStringLiteral("Slower")},
+                         explanation);
     }
     case Phase::Waiting:
-        return {QStringLiteral("Waiting for the Core"),
-                QStringLiteral("This pan has asked the Core for its display. "
-                               "It appears as soon as the Core answers.")};
+        return withForms({QStringLiteral("Waiting for the Core"), QStringLiteral("Waiting")},
+                         QStringLiteral("This pan has asked the Core for its display. "
+                                        "It appears as soon as the Core answers."));
     case Phase::ChangingWindow:
-        return {QStringLiteral("Waiting for the Core"),
-                QStringLiteral("This receiver's spectrum settings changed, so this pan is "
-                               "asking the Core for a display that matches. The last "
-                               "picture stays until the Core answers.")};
+        return withForms({QStringLiteral("Waiting for the Core"), QStringLiteral("Waiting")},
+                         QStringLiteral("This receiver's spectrum settings changed, so this "
+                                        "pan is asking the Core for a display that matches. "
+                                        "The last picture stays until the Core answers."));
     case Phase::Stalled:
-        return {QStringLiteral("Core not answering"),
-                QStringLiteral("This pan asked the Core for its display and the answer "
-                               "is overdue. It keeps waiting, and the display comes back "
-                               "as soon as the Core answers.")};
+        return withForms({QStringLiteral("Core not answering"), QStringLiteral("No answer")},
+                         QStringLiteral("This pan asked the Core for its display and the "
+                                        "answer is overdue. It keeps waiting, and the display "
+                                        "comes back as soon as the Core answers."));
     case Phase::Paused:
         if (state.pureSignalOverLimit) {
-            return {QStringLiteral("Paused: Core busy"),
-                    QStringLiteral("The PureSignal display already running uses more than "
-                                   "the Core's current display limit, so this pan's display "
-                                   "is paused and the last picture is held. It resumes when "
-                                   "the PureSignal display closes or the limit rises.")};
+            return withForms({QStringLiteral("Paused: Core busy"), QStringLiteral("Paused")},
+                             QStringLiteral("The PureSignal display already running uses more "
+                                            "than the Core's current display limit, so this "
+                                            "pan's display is paused and the last picture is "
+                                            "held. It resumes when the PureSignal display "
+                                            "closes or the limit rises."));
         }
-        return {QStringLiteral("Paused: Core busy"),
-                QStringLiteral("The Core's display limit has no room for this pan right "
-                               "now, so the last picture is held. It resumes by itself "
-                               "when there is room, for example when another pan closes "
-                               "or gets smaller.")};
+        return withForms({QStringLiteral("Paused: Core busy"), QStringLiteral("Paused")},
+                         QStringLiteral("The Core's display limit has no room for this pan "
+                                        "right now, so the last picture is held. It resumes "
+                                        "by itself when there is room, for example when "
+                                        "another pan closes or gets smaller."));
     case Phase::Refused:
-        return {OperatorReasonText::shortForDisplay(state.refusalReason),
-                QStringLiteral("This pan's display request did not go through. %1 "
-                               "It asks again when you change this pan's view.")
-                    .arg(OperatorReasonText::forDisplay(state.refusalReason))};
+        return withForms(OperatorReasonText::shortFormsForDisplay(state.refusalReason),
+                         QStringLiteral("This pan's display request did not go through. %1 %2")
+                             .arg(OperatorReasonText::forDisplay(state.refusalReason),
+                                  OperatorReasonText::panNextStep(state.refusalReason)));
     case Phase::TooManyPans:
-        return {QStringLiteral("Too many pans"),
-                QStringLiteral("This computer is already showing the Core's display on as "
-                               "many pans as it can. This pan's display starts when another "
-                               "pan closes.")};
+        return withForms({QStringLiteral("Too many pans")},
+                         QStringLiteral("This computer is already showing the Core's display "
+                                        "on as many pans as it can. This pan's display starts "
+                                        "when another pan closes."));
     }
     return {};
 }
@@ -109,15 +119,18 @@ PanStatusText pureSignalText(const PanDisplayState& state)
     case PanDisplayState::PureSignal::Fine:
         return {};
     case PanDisplayState::PureSignal::Refused:
-        return {QStringLiteral("PureSignal: refused"),
-                QStringLiteral("The PureSignal display did not start. %1 Your pan "
-                               "displays carry on as before.")
-                    .arg(OperatorReasonText::forDisplay(state.pureSignalRefusalReason))};
+        return withForms({QStringLiteral("PureSignal: refused"), QStringLiteral("PS: refused"),
+                          QStringLiteral("Refused")},
+                         QStringLiteral("The PureSignal display did not start. %1 Your pan "
+                                        "displays carry on as before.")
+                             .arg(OperatorReasonText::forDisplay(
+                                 state.pureSignalRefusalReason)));
     case PanDisplayState::PureSignal::Stalled:
-        return {QStringLiteral("PureSignal: no answer"),
-                QStringLiteral("A change to the PureSignal display is waiting for the "
-                               "Core, and its answer is overdue. It takes effect as soon "
-                               "as the Core answers.")};
+        return withForms({QStringLiteral("PureSignal: no answer"),
+                          QStringLiteral("PS: no answer"), QStringLiteral("No answer")},
+                         QStringLiteral("A change to the PureSignal display is waiting for "
+                                        "the Core, and its answer is overdue. It takes effect "
+                                        "as soon as the Core answers."));
     }
     return {};
 }
@@ -128,20 +141,25 @@ PanStatusText zoomText(const PanDisplayState& state)
     case PanDisplayState::ZoomLimit::None:
         return {};
     case PanDisplayState::ZoomLimit::LargestSize:
-        return {QStringLiteral("Finest detail reached"),
-                QStringLiteral("You have zoomed in as far as the Core can add detail. "
-                               "Zooming in further enlarges the same points.")};
+        return withForms({QStringLiteral("Finest detail reached"),
+                          QStringLiteral("Finest detail")},
+                         QStringLiteral("You have zoomed in as far as the Core can add "
+                                        "detail. Zooming in further enlarges the same "
+                                        "points."));
     case PanDisplayState::ZoomLimit::SharedEngine:
-        return {QStringLiteral("Less detail: shared"),
-                QStringLiteral("This receiver's spectrum is shared with another pan, so "
-                               "this pan gets the detail that pan's setting gives. It gets "
-                               "its own detail when the spectrum is no longer shared.")};
+        return withForms({QStringLiteral("Less detail: shared"),
+                          QStringLiteral("Less detail")},
+                         QStringLiteral("This receiver's spectrum is shared with another "
+                                        "pan, so this pan gets the detail that pan's setting "
+                                        "gives. It gets its own detail when the spectrum is "
+                                        "no longer shared."));
     case PanDisplayState::ZoomLimit::SourceBins:
-        return {QStringLiteral("Showing %1 points").arg(state.zoomPoints),
-                QStringLiteral("The receiver has no finer detail at this zoom, so this pan "
-                               "shows %1 points stretched to fit. Zooming out brings back "
-                               "full detail.")
-                    .arg(state.zoomPoints)};
+        return withForms({QStringLiteral("Showing %1 points").arg(state.zoomPoints),
+                          QStringLiteral("%1 points").arg(state.zoomPoints)},
+                         QStringLiteral("The receiver has no finer detail at this zoom, so "
+                                        "this pan shows %1 points stretched to fit. Zooming "
+                                        "out brings back full detail.")
+                             .arg(state.zoomPoints));
     }
     return {};
 }
@@ -151,14 +169,15 @@ PanStatusText zoomText(const PanDisplayState& state)
 PanStatusText buildPanStatusText(const PanDisplayState& state)
 {
     // The pan's own display speaks first, then the PureSignal display, then
-    // the zoom detail. The short line is the first that has one; the
-    // explanation carries all of them.
+    // the zoom detail. The short line (with its shorter forms) is the first
+    // that has one; the explanation carries all of them.
     PanStatusText text;
     QStringList paragraphs;
     for (const PanStatusText& part :
          {displayText(state), pureSignalText(state), zoomText(state)}) {
         if (text.shortLine.isEmpty()) {
             text.shortLine = part.shortLine;
+            text.shorterForms = part.shorterForms;
         }
         if (!part.explanation.isEmpty()) {
             paragraphs.append(part.explanation);

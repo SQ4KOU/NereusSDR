@@ -60,16 +60,52 @@ private slots:
         QCOMPARE(overlay.toolTip(), QStringLiteral("Full quality.\nReceive preselector bypassed"));
     }
 
-    // Every short line fits a 200 px strip without elision.
+    // I1: every state paints a whole form of its short line in a 200 px
+    // strip, the longest that fits in the row's font on this platform.
     void every_short_line_fits_200_px_without_elision()
     {
         SpectrumStatusOverlay overlay;
+        int checked = 0;
         for (const PanDisplayState& state : PanStatusSamples::all()) {
             const PanStatusText text = buildPanStatusText(state);
             overlay.setRemoteDisplayStatus(text);
             overlay.resize(200, overlay.height());
-            QCOMPARE(overlay.visibleRemoteDisplayStatus(), text.shortLine);
+            const QString painted = overlay.visibleRemoteDisplayStatus();
+            if (text.shortLine.isEmpty()) {
+                QVERIFY(painted.isEmpty());
+                continue;
+            }
+            ++checked;
+            const QStringList forms = text.shortForms();
+            QVERIFY2(forms.contains(painted), qPrintable(painted));
+            QVERIFY2(overlay.remoteStatusTextWidth(painted) <= overlay.remoteStatusRowWidth(),
+                     qPrintable(painted));
+            for (const QString& form : forms.mid(0, forms.indexOf(painted))) {
+                QVERIFY2(overlay.remoteStatusTextWidth(form) > overlay.remoteStatusRowWidth(),
+                         qPrintable(form));
+            }
         }
+        QVERIFY2(checked >= 200, qPrintable(QString::number(checked)));
+    }
+
+    // I1: a row narrower than the longest form paints a shorter one, whole;
+    // one too narrow for every form paints the shortest, never an elided line.
+    void a_narrower_row_paints_a_shorter_form()
+    {
+        SpectrumStatusOverlay overlay;
+        const PanStatusText text{QStringLiteral("Refused: out of range"), QStringLiteral("Why."),
+                                 {QStringLiteral("Refused")}};
+        overlay.setRemoteDisplayStatus(text);
+        QCOMPARE(overlay.remoteDisplayForms(), text.shortForms());
+        const int longest = overlay.remoteStatusTextWidth(text.shortLine);
+        overlay.resize(longest + 8, overlay.height());
+        QCOMPARE(overlay.remoteStatusRowWidth(), longest);
+        QCOMPARE(overlay.visibleRemoteDisplayStatus(), text.shortLine);
+        overlay.resize(longest + 7, overlay.height());
+        QCOMPARE(overlay.visibleRemoteDisplayStatus(), QStringLiteral("Refused"));
+        overlay.resize(12, overlay.height());
+        QCOMPARE(overlay.visibleRemoteDisplayStatus(), QStringLiteral("Refused"));
+        QVERIFY(!overlay.visibleRemoteDisplayStatus().contains(QChar(0x2026)));
     }
 };
 

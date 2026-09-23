@@ -14,17 +14,38 @@
 // Modification history (NereusSDR):
 //   2026-09-23  J.J. Boyd / KG4VCF  Created. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  Short line in forms of decreasing
+//                                    length, so a pan paints the longest
+//                                    that fits (R-R3-37). AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 #pragma once
 
 #include <QString>
+#include <QStringList>
 
 namespace NereusSDR {
 
 /// What a pan paints and what it says on hover. Both empty: nothing to say.
+///
+/// The short line comes in forms of decreasing length: `shortLine` is the
+/// longest, `shorterForms` the rest, each shorter than the one before. A pan
+/// paints the longest form that fits its row, measured with the font it
+/// paints in, so no line is ever elided whatever font the platform supplies.
 struct PanStatusText {
     QString shortLine;
     QString explanation;
+    QStringList shorterForms;
+
+    /// Every form, longest first; empty when there is no short line.
+    QStringList shortForms() const
+    {
+        if (shortLine.isEmpty()) {
+            return {};
+        }
+        return QStringList{shortLine} + shorterForms;
+    }
+
     bool operator==(const PanStatusText&) const = default;
 };
 
@@ -81,8 +102,8 @@ struct PanDisplayState {
     bool operator==(const PanDisplayState&) const = default;
 };
 
-/// The pan's short line and hover explanation for `state`. The short line
-/// is empty at full quality.
+/// The pan's short line (in all its forms) and hover explanation for
+/// `state`. The short line is empty at full quality.
 PanStatusText buildPanStatusText(const PanDisplayState& state);
 
 } // namespace NereusSDR

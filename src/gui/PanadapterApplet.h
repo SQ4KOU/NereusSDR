@@ -153,7 +153,8 @@ public:
     void setRemoteDisplayStatus(const PanStatusText& status);
     QString remoteDisplayStatus() const;
     QString remoteDisplayExplanation() const;
-    /// The short line as painted at the pan's current width.
+    /// The short line as painted at the pan's current width: the longest
+    /// form that fits, never elided.
     QString visibleRemoteDisplayStatus() const;
 
     /// Phase 3F: light (or clear) this pan's WIDE pill.

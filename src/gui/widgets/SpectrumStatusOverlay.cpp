@@ -33,6 +33,15 @@ constexpr int kPillWidth      = 60;
 constexpr int kInterPillGap   = 4;
 constexpr int kRightPad       = 4;
 
+// The remote display row's font. Not chosen per platform: each platform
+// resolves "monospace" to its own face (DejaVu Sans Mono on Linux, a
+// proportional face on macOS), so the row measures every form in the font it
+// actually got rather than assuming a width per character.
+QFont remoteStatusFont()
+{
+    return QFont(QStringLiteral("monospace"), 9);
+}
+
 } // namespace
 
 SpectrumStatusOverlay::SpectrumStatusOverlay(QWidget* parent) : QWidget(parent)
@@ -68,8 +77,8 @@ QSize SpectrumStatusOverlay::sizeHint() const
         // Rounded up from the fractional advance, with the painter's metrics:
         // a row sized to the rounded-down integer advance elided every line
         // by its last character.
-        const QFontMetricsF metrics(QFont(QStringLiteral("monospace"), 9), this);
-        const int text = int(std::ceil(metrics.horizontalAdvance(m_remoteDisplayStatus)));
+        // Sized for the longest form; a narrower row paints a shorter one.
+        const int text = remoteStatusTextWidth(m_remoteDisplayStatus);
         w = std::max(w, std::min(360, text + kLeftMargin));
     }
     return QSize(w + kRightPad, kOverlayHeight * (m_remoteDisplayStatus.isEmpty() ? 1 : 2));
@@ -140,13 +149,21 @@ void SpectrumStatusOverlay::setPsPaused(bool paused)
 
 void SpectrumStatusOverlay::setRemoteDisplayStatus(const PanStatusText& status)
 {
-    const QString text = status.shortLine.simplified().left(512);
+    QStringList forms;
+    for (const QString& form : status.shortForms()) {
+        const QString text = form.simplified().left(512);
+        if (!text.isEmpty()) {
+            forms.append(text);
+        }
+    }
+    const QString text = forms.value(0);
     const QString explanation = status.explanation.trimmed().left(2048);
-    if (m_remoteDisplayStatus == text && m_remoteDisplayExplanation == explanation) {
+    if (m_remoteDisplayForms == forms && m_remoteDisplayExplanation == explanation) {
         return;
     }
-    const bool rowChanged = m_remoteDisplayStatus != text;
+    const bool rowChanged = m_remoteDisplayForms != forms;
     m_remoteDisplayStatus = text;
+    m_remoteDisplayForms = forms;
     m_remoteDisplayExplanation = explanation;
     updateStatusToolTip();
     if (rowChanged) {
@@ -164,11 +181,29 @@ QRect SpectrumStatusOverlay::remoteStatusRect() const
 
 QString SpectrumStatusOverlay::visibleRemoteDisplayStatus() const
 {
-    if (m_remoteDisplayStatus.isEmpty()) { return {}; }
-    // The painter's metrics: the same font on this widget's paint device.
-    const QFontMetrics metrics(QFont(QStringLiteral("monospace"), 9), this);
-    return metrics.elidedText(m_remoteDisplayStatus, Qt::ElideRight,
-                              remoteStatusRect().width());
+    if (m_remoteDisplayForms.isEmpty()) { return {}; }
+    // The longest form that fits the row, measured with the painter's font
+    // on this widget's paint device and rounded up, as sizeHint rounds.
+    // Never elided: a row too narrow for every form paints the shortest,
+    // and the hover text still says it all.
+    const int room = remoteStatusRowWidth();
+    for (const QString& form : m_remoteDisplayForms) {
+        if (remoteStatusTextWidth(form) <= room) {
+            return form;
+        }
+    }
+    return m_remoteDisplayForms.constLast();
+}
+
+int SpectrumStatusOverlay::remoteStatusRowWidth() const
+{
+    return remoteStatusRect().width();
+}
+
+int SpectrumStatusOverlay::remoteStatusTextWidth(const QString& text) const
+{
+    const QFontMetricsF metrics(remoteStatusFont(), this);
+    return int(std::ceil(metrics.horizontalAdvance(text)));
 }
 
 void SpectrumStatusOverlay::updateStatusToolTip()
@@ -251,8 +286,8 @@ void SpectrumStatusOverlay::paintEvent(QPaintEvent*)
                  QColor(0x90, 0x60, 0x00));
     }
 
-    if (!m_remoteDisplayStatus.isEmpty()) {
-        p.setFont(QFont(QStringLiteral("monospace"), 9));
+    if (!m_remoteDisplayForms.isEmpty()) {
+        p.setFont(remoteStatusFont());
         p.setPen(QColor(Style::kTitleText));
         p.drawText(remoteStatusRect(), Qt::AlignLeft | Qt::AlignVCenter,
                    visibleRemoteDisplayStatus());

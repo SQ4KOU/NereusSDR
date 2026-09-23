@@ -23,6 +23,9 @@
 //                                    shown as sent when plain; the one
 //                                    internal-term list. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  Shorter pan forms and a pan's next
+//                                    step per reason. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -38,8 +41,18 @@ namespace NereusSDR::OperatorReasonText {
 /// to the log once, raw, so the log always has it.
 QString forDisplay(const QString& wireReason);
 
-/// A short line for a narrow pan, for the same reason.
+/// A short line for a pan, for the same reason: the longest of
+/// shortFormsForDisplay().
 QString shortForDisplay(const QString& wireReason);
+
+/// Every short line for a pan, longest first; the pan paints the longest
+/// that fits. Never empty.
+QStringList shortFormsForDisplay(const QString& wireReason);
+
+/// The sentence a pan adds after the reason: what happens next, or what the
+/// user can do. The Core's refusals are asked again when the pan's view
+/// changes; this app's own limits say what lifts them.
+QString panNextStep(const QString& wireReason);
 
 /// Every reason the table knows (one example for each worded pattern), for
 /// tests that check its wording.
