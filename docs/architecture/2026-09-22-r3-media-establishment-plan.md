@@ -103,8 +103,15 @@ Read-only investigation, 2026-09-22 (line numbers at 6bf8d086):
   takes to report connection failure by itself (read it from the libjuice and
   libdatachannel sources under `build-integration/_deps`, cite file and line),
   so the library's own typed reason wins whenever it arrives.
-- A backend that refuses to start enters the same retry path with a plain
-  reason instead of stopping silently.
+- A backend that refuses to start because the transport could not be
+  constructed (an exception from the transport factory) enters the same retry
+  path with a plain reason. Permanent refusals (MediaPeer preconditions such as
+  an already started peer, a non-canonical connection id or an invalid SSRC,
+  and a factory that returns no transport) keep the stop-and-error behaviour
+  with the reason shown and control left up, as R-R3-28 exempts permanent
+  refusals. Once retries reach the backoff ceiling, a start refusal stops
+  retrying and leaves a control-only session with the reason shown.
+  (Amended 2026-09-23 after the final review.)
 - With media negotiated, the reconnect attempts reset only after media is
   established, not at the control handshake; with no media negotiated they
   reset at the handshake as today. Three consecutive media failures after
