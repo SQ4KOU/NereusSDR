@@ -53,7 +53,7 @@
 //   2026-04-28 — setMicPTT (G.5): byte 50 bit 2 (0x04, INVERTED). deskhpsdr new_protocol.c:1488-1490 [@120188f]. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-05-04 — setMicPTT renamed to setMicPTTDisabled (issue #182): direct polarity matches Thetis console.cs:19757-19766 [v2.10.3.13+501e3f51]; default MicState::micControl flipped 0x24→0x20 so PTT is enabled at firmware out of the box. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-04-28 — setMicXlr (G.6): byte 50 bit 5 (0x20), P2-only, polarity 1=XLR. deskhpsdr new_protocol.c:1500-1502 [@120188f]. MicState::micControl default updated 0x04 -> 0x24. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
-//   2026-09-22 — Established UDP silence: Thetis ChannelMaster/network.c:655-666 [v2.10.3.15]; stop/report, daemon-owned recovery.
+//   2026-09-22 - Established UDP silence: Thetis ChannelMaster/network.c:656-667 [v2.10.3.15]; stop/report, daemon-owned recovery.
 //                 J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex. Also retire incomplete wideband bursts at capture/connection changes.
 //   2026-09-23 - Established silence judged only when no datagram is waiting (R-R3-29): Thetis ChannelMaster/network.c:656-671 [v2.10.3.15].
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -572,7 +572,7 @@ void P2RadioConnection::init()
     connect(m_connectWatchdog, &QTimer::timeout, this, &P2RadioConnection::onConnectTimeout);
 
     // Thetis ReadThreadMainLoop waits up to three seconds for any inbound
-    // P2 UDP after the stream is established (network.c:655-666
+    // P2 UDP after the stream is established (network.c:656-667
     // [v2.10.3.15]). The QTimer is only the wakeup; QDeadlineTimer below is
     // the monotonic authority and the connection generation rejects stale
     // queued callbacks.
@@ -2346,7 +2346,7 @@ void P2RadioConnection::stopForEstablishedSilence()
         return;
     }
 
-    // Thetis ChannelMaster/network.c:655-666 [v2.10.3.15] sends one stop
+    // Thetis ChannelMaster/network.c:656-667 [v2.10.3.15] sends one stop
     // after three seconds with no inbound UDP and does not reconnect. Nereus
     // first retires every socket producer, then emits the stop unkeyed, closes
     // ingress, and reports one typed terminal loss to the model/daemon layer.
@@ -2408,9 +2408,10 @@ void P2RadioConnection::onKeepAliveTick()
     }
 
     // Phase 3M-1c TX pump v3: mic-frame LOS injection.
-    // Mirrors Thetis network.c:655-666 [v2.10.3.13] — when no mic
-    // datagram has arrived for kMicLosTimeoutMs, push a zero block into
-    // the TX inbound ring so the worker keeps ticking through silence.
+    // Mirrors Thetis network.c:656-667 [v2.10.3.15] (mic zero block at
+    // 662 and 665): when no mic datagram has arrived for
+    // kMicLosTimeoutMs, push a zero block into the TX inbound ring so the
+    // worker keeps ticking through silence.
     if (m_txMicSource != nullptr && m_lastMicAt.isValid()) {
         const qint64 sinceMicMs = m_lastMicAt.msecsTo(QDateTime::currentDateTimeUtc());
         if (sinceMicMs > kMicLosTimeoutMs) {
@@ -2600,7 +2601,7 @@ void P2RadioConnection::setTxMicSource(TxMicSource* src)
     // P2RadioConnection.cpp:1285 short-circuits forever — the worker
     // would block on waitForBlock(INFINITE) with no recovery.
     //
-    // Mirrors Thetis network.c:655-666 [v2.10.3.13] — WSA_WAIT_TIMEOUT
+    // Mirrors Thetis network.c:656-667 [v2.10.3.15]: WSA_WAIT_TIMEOUT
     // injects zero buffer via Inbound regardless of whether real
     // samples have been observed.
     m_lastMicAt = QDateTime::currentDateTimeUtc();

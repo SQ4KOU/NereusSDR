@@ -663,8 +663,9 @@ private slots:
         QSignalSpy recoveries(&controller, &RemoteMediaController::recoveryRequested);
         QSignalSpy errors(&controller, &RemoteMediaController::errorOccurred);
         // Started before the session, so it can only overstate the time
-        // since media started. The 20 ms allows Qt's coarse timers, which
-        // may fire up to 5% early.
+        // since media started. The establish timer is a precise timer, so
+        // it does not fire early; the 20 ms covers millisecond rounding and
+        // the gap between these clocks starting and the timer being armed.
         QElapsedTimer sinceStart;
         const auto connectSession = [&] {
             media = nullptr;

@@ -194,7 +194,7 @@ private:
     QString formatSUnits(float dbm) const;
     QString formatUv(float dbm) const;
     QString formatValue(float dbm) const;
-    QString noReadingText() const;
+    QString noReadingLabel() const;
 
     // From Thetis Common.UVfromDBM
     static double uvFromDbm(double dbm);

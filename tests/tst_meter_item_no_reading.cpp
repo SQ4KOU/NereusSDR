@@ -103,7 +103,9 @@ private slots:
         needle.setBindingId(MeterBinding::TxMic);
         needle.setUnitMode(MeterItem::MeterUnit::dBm);
         needle.setValue(-400.0);
-        QVERIFY(needle.valueReadout() != QStringLiteral("-- dBm"));
+        // A TX binding reads -400 as a number: the needle clamps to its
+        // scale minimum (S0 = -127 dBm) and shows it.
+        QCOMPARE(needle.valueReadout(), QStringLiteral("-127 dBm"));
 
         TextOverlayItem overlay;
         overlay.setBindingId(MeterBinding::TxComp);

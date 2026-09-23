@@ -103,7 +103,8 @@ struct DaemonConfig {
 
     // R-R3-23: the Opus encoder target for station audio, bit/s. Only the
     // two supported profiles are accepted (OpusAudioEncoder refuses any
-    // other; 24000 is the measured default, 48000 is not measured yet); anything else in the file logs one warning and keeps 24000.
+    // other; 24000 is the measured default, 48000 is not measured yet);
+    // anything else in the file logs one warning and keeps 24000.
     // Feeds DaemonMediaController::setAudioTargetBitrate() from
     // DaemonApp::startStationServer().
     static constexpr int kDefaultAudioBitrate = 24000;

@@ -127,6 +127,20 @@ static const QList<int> kBufferSizes = { 64, 128, 256, 512, 1024, 2048 };
 // The input card matches the TX Input page's buffer range.
 static const QList<int> kInputBufferSizes = { 64, 128, 256, 512, 1024, 2048, 4096, 8192 };
 
+// R-R3-36: an item the card adds to keep a configured value that the list
+// lacks (a device that is not present, a buffer size not offered) carries
+// this role, so the next load removes it before adding its own.
+static constexpr int kKeptEntryRole = Qt::UserRole + 1;
+
+static void removeKeptEntries(QComboBox* combo)
+{
+    for (int i = combo->count() - 1; i >= 0; --i) {
+        if (combo->itemData(i, kKeptEntryRole).toBool()) {
+            combo->removeItem(i);
+        }
+    }
+}
+
 // Compute derived milliseconds label from samples + sample rate.
 static QString bufferMs(int samples, int sampleRate)
 {
@@ -450,6 +464,7 @@ void DeviceCard::populateDeviceCombo()
 // "(platform default)" would silently switch the device on the next edit.
 void DeviceCard::selectDeviceName(const QString& name)
 {
+    removeKeptEntries(m_deviceCombo);
     int idx = 0;
     if (!name.isEmpty()) {
         idx = m_deviceCombo->findData(QVariant::fromValue(name));
@@ -458,6 +473,7 @@ void DeviceCard::selectDeviceName(const QString& name)
                 QStringLiteral("%1 (not available)").arg(name),
                 QVariant::fromValue(name));
             idx = m_deviceCombo->count() - 1;
+            m_deviceCombo->setItemData(idx, true, kKeptEntryRole);
         }
     }
     m_deviceCombo->setCurrentIndex(idx);
@@ -613,6 +629,10 @@ void DeviceCard::loadFromSettings()
 
     // Buffer size.
     if (m_bufferSizeCombo) {
+        {
+            QSignalBlocker blocker(m_bufferSizeCombo);
+            removeKeptEntries(m_bufferSizeCombo);
+        }
         int idx = m_bufferSizeCombo->findData(
             QVariant::fromValue(cfg.bufferSamples));
         if (idx < 0 && cfg.bufferSamples > 0) {
@@ -626,6 +646,7 @@ void DeviceCard::loadFromSettings()
             m_bufferSizeCombo->insertItem(
                 insertAt, QStringLiteral("%1 samples").arg(cfg.bufferSamples),
                 QVariant::fromValue(cfg.bufferSamples));
+            m_bufferSizeCombo->setItemData(insertAt, true, kKeptEntryRole);
             idx = insertAt;
         }
         m_bufferSizeCombo->setCurrentIndex(idx >= 0 ? idx : 2); // default 256

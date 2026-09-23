@@ -242,10 +242,10 @@ QString SignalTextItem::formatValue(float dbm) const
 }
 
 // ---------------------------------------------------------------------------
-// noReadingText() / valueText() / peakValueText()
+// noReadingLabel() / valueText() / peakValueText()
 // NereusSDR (R-R3-13): "--" keeps the unit each format shows today.
 // ---------------------------------------------------------------------------
-QString SignalTextItem::noReadingText() const
+QString SignalTextItem::noReadingLabel() const
 {
     switch (m_units) {
         case Units::Dbm:    return QStringLiteral("-- dBm");
@@ -257,12 +257,12 @@ QString SignalTextItem::noReadingText() const
 
 QString SignalTextItem::valueText() const
 {
-    return isNoReading(m_value) ? noReadingText() : formatValue(m_smoothedDbm);
+    return isNoReading(m_value) ? noReadingLabel() : formatValue(m_smoothedDbm);
 }
 
 QString SignalTextItem::peakValueText() const
 {
-    return isNoReading(m_value) ? noReadingText() : formatValue(m_peakDbm);
+    return isNoReading(m_value) ? noReadingLabel() : formatValue(m_peakDbm);
 }
 
 // ---------------------------------------------------------------------------

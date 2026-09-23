@@ -177,23 +177,6 @@ QString readingName(int bindingId)
 }
 
 
-// ---------------------------------------------------------------------------
-// MeterItem::formatValue — Task 3.2 unit-mode fan-out helper
-//
-// Converts a raw signal-level dBm value to the user-selected display unit.
-//
-// S:   IARU S-meter scale — S9 = -73 dBm at HF, each S unit = 6 dB.
-//      S0..S9 are shown as "S0".."S9".  Above S9: "S9+10", "S9+20" …
-//      Clamps to [0..19] to stay finite (S9+60 = S19 internally).
-//      Derived from Thetis console.cs radSReading / getMeterData dBm→S path
-//      [v2.10.3.13].
-// dBm: plain numeric — decimal flag controls .1 vs integer rounding.
-// uV:  µV at 50 Ω — V = sqrt(P * R), P = 10^(dBm/10) * 1e-3.
-//      Derived from Thetis Common.UVfromDBM which uses (dBm + 107) / 20
-//      (a -107 dBm = 1 µV at 50 Ω simplification).  The full physics formula
-//      is preserved here for accuracy; both agree to <1% across the ham-band
-//      signal range.
-// ---------------------------------------------------------------------------
 bool isReceiveSignalBinding(int bindingId)
 {
     return (bindingId >= MeterBinding::SignalPeak && bindingId <= MeterBinding::AgcAvg)
@@ -205,6 +188,23 @@ QString MeterItem::noReadingText(MeterUnit unit)
     return unit == MeterUnit::uV ? QStringLiteral("-- µV") : QStringLiteral("--");
 }
 
+// ---------------------------------------------------------------------------
+// MeterItem::formatValue: Task 3.2 unit-mode fan-out helper
+//
+// Converts a raw signal-level dBm value to the user-selected display unit.
+//
+// S:   IARU S-meter scale: S9 = -73 dBm at HF, each S unit = 6 dB.
+//      S0..S9 are shown as "S0".."S9".  Above S9: "S9+10", "S9+20" …
+//      Clamps to [0..19] to stay finite (S9+60 = S19 internally).
+//      Derived from Thetis console.cs radSReading / getMeterData dBm→S path
+//      [v2.10.3.13].
+// dBm: plain numeric; decimal flag controls .1 vs integer rounding.
+// uV:  µV at 50 Ω: V = sqrt(P * R), P = 10^(dBm/10) * 1e-3.
+//      Derived from Thetis Common.UVfromDBM which uses (dBm + 107) / 20
+//      (a -107 dBm = 1 µV at 50 Ω simplification).  The full physics formula
+//      is preserved here for accuracy; both agree to <1% across the ham-band
+//      signal range.
+// ---------------------------------------------------------------------------
 QString MeterItem::formatValue(float dBm, MeterUnit unit, bool decimal)
 {
     switch (unit) {

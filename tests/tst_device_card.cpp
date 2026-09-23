@@ -19,6 +19,7 @@
 //  10. Headphones card: enabledChanged fires when checkable toggled.
 //  12. R-R3-36: a configured device that is not present and a configured
 //      buffer size the list lacks survive an unrelated edit on the card.
+//  13. R-R3-36: reloading replaces those kept entries instead of adding more.
 //
 // Design spec:
 //   docs/architecture/2026-04-20-phase3o-subphase12-addendum.md §2.1
@@ -312,6 +313,71 @@ private slots:
         const AudioDeviceConfig saved = AudioDeviceConfig::loadFromSettings(prefix);
         QCOMPARE(saved.deviceName, missing);
         QCOMPARE(saved.bufferSamples, buffer);
+    }
+
+    // ── 13. Reloading does not pile up kept entries ───────────────────────
+    //
+    // R-R3-36: each load removes the "(not available)" device and the
+    // unlisted buffer size the previous load added before adding its own.
+
+    void reloadDropsStaleKeptEntries() {
+        const QString prefix = QStringLiteral("audio/TxInput");
+        const QString first  = QStringLiteral("NereusSDR Test Device One");
+        const QString second = QStringLiteral("NereusSDR Test Device Two");
+        auto& s = AppSettings::instance();
+        s.setValue(prefix + QStringLiteral("/DeviceName"), first);
+        s.setValue(prefix + QStringLiteral("/BufferSamples"), QStringLiteral("3000"));
+
+        DeviceCard card(prefix, DeviceCard::Role::Input, false);
+
+        QComboBox* deviceCombo = nullptr;
+        QComboBox* bufferCombo = nullptr;
+        for (QComboBox* combo : card.findChildren<QComboBox*>()) {
+            if (combo->findText(QStringLiteral("(platform default)")) >= 0) {
+                deviceCombo = combo;
+            }
+            if (combo->findText(QStringLiteral("256 samples")) >= 0) {
+                bufferCombo = combo;
+            }
+        }
+        QVERIFY(deviceCombo != nullptr);
+        QVERIFY(bufferCombo != nullptr);
+        const QString firstText  = QStringLiteral("%1 (not available)").arg(first);
+        const QString secondText = QStringLiteral("%1 (not available)").arg(second);
+        QVERIFY(deviceCombo->findText(firstText) >= 0);
+        QVERIFY(bufferCombo->findData(QVariant::fromValue(3000)) >= 0);
+        const int listedBuffers = bufferCombo->count() - 1;
+
+        // A second missing device and another unlisted size replace the first.
+        s.setValue(prefix + QStringLiteral("/DeviceName"), second);
+        s.setValue(prefix + QStringLiteral("/BufferSamples"), QStringLiteral("5000"));
+        card.loadFromSettings();
+        QCOMPARE(deviceCombo->findText(firstText), -1);
+        QCOMPARE(deviceCombo->currentText(), secondText);
+        QCOMPARE(bufferCombo->findData(QVariant::fromValue(3000)), -1);
+        QCOMPARE(bufferCombo->currentData().toInt(), 5000);
+        QCOMPARE(bufferCombo->count(), listedBuffers + 1);
+
+        // The same config again adds nothing.
+        card.loadFromSettings();
+        int unavailable = 0;
+        for (int i = 0; i < deviceCombo->count(); ++i) {
+            if (deviceCombo->itemText(i).endsWith(QStringLiteral(" (not available)"))) {
+                ++unavailable;
+            }
+        }
+        QCOMPARE(unavailable, 1);
+        QCOMPARE(bufferCombo->count(), listedBuffers + 1);
+
+        // A config the lists hold leaves no kept entry behind.
+        s.setValue(prefix + QStringLiteral("/DeviceName"), QString());
+        s.setValue(prefix + QStringLiteral("/BufferSamples"), QStringLiteral("256"));
+        card.loadFromSettings();
+        QCOMPARE(deviceCombo->findText(secondText), -1);
+        QCOMPARE(deviceCombo->currentText(), QStringLiteral("(platform default)"));
+        QCOMPARE(bufferCombo->findData(QVariant::fromValue(5000)), -1);
+        QCOMPARE(bufferCombo->count(), listedBuffers);
+        QCOMPARE(bufferCombo->currentData().toInt(), 256);
     }
 
     // The input card offers the TX Input page's larger buffers.
