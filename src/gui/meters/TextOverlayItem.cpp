@@ -14,6 +14,11 @@
 //                 (isNoMeterReading); resolvedText1() / resolvedText2()
 //                 read-only accessors. J.J. Boyd (KG4VCF), with AI-assisted
 //                 transformation via Anthropic Claude Code.
+//   2026-09-23: R-R3-13 fix wave: no reading applies only to
+//                 receive-signal bindings (isReceiveSignalBinding); a TX
+//                 meter keeps WDSP's -400 zero-power floor as a number.
+//                 J.J. Boyd (KG4VCF), with AI-assisted transformation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -105,7 +110,7 @@ QString TextOverlayItem::resolveText(const QString& templateText) const
             } else if (token == QLatin1String("VALUE")) {
                 // Base meter value with current precision.
                 // NereusSDR (R-R3-13): "--" with no reading.
-                result += isNoMeterReading(m_value)
+                result += isNoReading(m_value)
                     ? QStringLiteral("--")
                     : QString::number(m_value, 'f', precision);
             } else if (m_variables.contains(token)) {

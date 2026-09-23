@@ -18,6 +18,11 @@
 //                 NeedleItem readouts; bars and needles rest at the scale
 //                 minimum and drop their peak. J.J. Boyd (KG4VCF), with
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-23: R-R3-13 fix wave: no reading applies only to
+//                 receive-signal bindings (isReceiveSignalBinding); a TX
+//                 meter keeps WDSP's -400 zero-power floor as a number.
+//                 J.J. Boyd (KG4VCF), with AI-assisted transformation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -189,13 +194,19 @@ QString readingName(int bindingId)
 //      is preserved here for accuracy; both agree to <1% across the ham-band
 //      signal range.
 // ---------------------------------------------------------------------------
+bool isReceiveSignalBinding(int bindingId)
+{
+    return (bindingId >= MeterBinding::SignalPeak && bindingId <= MeterBinding::AgcAvg)
+        || bindingId == MeterBinding::SignalMaxBin;
+}
+
+QString MeterItem::noReadingText(MeterUnit unit)
+{
+    return unit == MeterUnit::uV ? QStringLiteral("-- µV") : QStringLiteral("--");
+}
+
 QString MeterItem::formatValue(float dBm, MeterUnit unit, bool decimal)
 {
-    // NereusSDR (R-R3-13): no reading has no number.  The dBm and S forms
-    // carry no unit here, so "--"; the uV form carries its unit.
-    if (isNoMeterReading(dBm)) {
-        return unit == MeterUnit::uV ? QStringLiteral("-- µV") : QStringLiteral("--");
-    }
     switch (unit) {
         case MeterUnit::S: {
             // IARU S-meter: S9 = -73 dBm, 6 dB/S-unit
@@ -497,7 +508,7 @@ void BarItem::setValue(double v)
     // minimum, the peak and the history trail clear (so the peak text shows
     // "--" and no stale marker remains), and the next real value starts
     // afresh from the minimum.
-    if (isNoMeterReading(v)) {
+    if (isNoReading(v)) {
         m_smoothedValue = m_minVal;
         m_peakValue = -std::numeric_limits<double>::infinity();
         m_history.clear();
@@ -538,7 +549,7 @@ void BarItem::setValue(double v)
 QString BarItem::valueText() const
 {
     // NereusSDR (R-R3-13): "--" with no reading.
-    if (isNoMeterReading(m_value) || !std::isfinite(m_smoothedValue)) {
+    if (isNoReading(m_value) || !std::isfinite(m_smoothedValue)) {
         return QStringLiteral("--");
     }
     // Task 3.2: unit-mode fan-out; signal-level bars route through
@@ -653,7 +664,7 @@ void BarItem::paint(QPainter& p, int widgetW, int widgetH)
         const QFontMetrics fm(font);
 
         if (m_showValue
-            && (std::isfinite(m_smoothedValue) || isNoMeterReading(m_value))) {
+            && (std::isfinite(m_smoothedValue) || isNoReading(m_value))) {
             p.setPen(m_fontColour);
             const QString s = valueText();
             p.drawText(rect.left() + 2,
@@ -1249,14 +1260,14 @@ bool ScaleItem::deserialize(const QString& data)
 QString TextItem::displayText() const
 {
     QString text;
-    if (m_bindingId >= 0 && isNoMeterReading(m_value)) {
+    if (isNoReading(m_value)) {
         // NereusSDR (R-R3-13): no reading shows "--" with the unit the
         // readout shows today.  A signal-level readout in S or uV mode
         // takes formatValue's no-reading form ("--" / "-- µV").
         if (m_suffix == QStringLiteral(" dBm") &&
             (m_unitMode == MeterUnit::S || m_unitMode == MeterUnit::uV))
         {
-            text = formatValue(static_cast<float>(kNoMeterReadingDbm), m_unitMode, m_showDecimal);
+            text = noReadingText(m_unitMode);
         } else {
             text = QStringLiteral("--") + m_suffix;
         }
@@ -1386,7 +1397,7 @@ void NeedleItem::setValue(double v)
     // NereusSDR (R-R3-13): no reading.  The needle rests at the scale
     // minimum (S0, or the first calibration point for a calibrated face)
     // and the peak marker clears; the readouts show "--".
-    if (isNoMeterReading(v)) {
+    if (isNoReading(v)) {
         m_smoothedDbm = m_scaleCalibration.isEmpty()
             ? kS0Dbm : m_scaleCalibration.firstKey();
         m_peakDbm = m_smoothedDbm;
@@ -1508,7 +1519,7 @@ QString NeedleItem::sUnitsText(float dbm) const
 QString NeedleItem::sUnitsReadout() const
 {
     // NereusSDR (R-R3-13): "--" with no reading.
-    if (isNoMeterReading(m_value)) {
+    if (isNoReading(m_value)) {
         return QStringLiteral("--");
     }
     return sUnitsText(m_smoothedDbm);
@@ -1518,16 +1529,15 @@ QString NeedleItem::valueReadout() const
 {
     if (m_unitMode == MeterUnit::dBm) {
         // NereusSDR (R-R3-13): "-- dBm" with no reading, as the S-meter does.
-        if (isNoMeterReading(m_value)) {
+        if (isNoReading(m_value)) {
             return QStringLiteral("-- dBm");
         }
         return QString::number(static_cast<int>(std::round(m_smoothedDbm)))
                + QStringLiteral(" dBm");
     }
-    // S / uV: route through formatValue (its no-reading form included).
-    return formatValue(isNoMeterReading(m_value) ? static_cast<float>(kNoMeterReadingDbm)
-                                                 : m_smoothedDbm,
-                       m_unitMode, m_showDecimal);
+    // S / uV: noReadingText() with no reading, formatValue() otherwise.
+    return isNoReading(m_value) ? noReadingText(m_unitMode)
+                                : formatValue(m_smoothedDbm, m_unitMode, m_showDecimal);
 }
 
 void NeedleItem::paintForLayer(QPainter& p, int widgetW, int widgetH, Layer layer)

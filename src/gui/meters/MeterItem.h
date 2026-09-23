@@ -20,6 +20,11 @@
 //                 NeedleItem show "--" and rest at the scale minimum, with
 //                 read-only text accessors for tests. J.J. Boyd (KG4VCF),
 //                 with AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-23: R-R3-13 fix wave: no reading applies only to
+//                 receive-signal bindings (isReceiveSignalBinding); a TX
+//                 meter keeps WDSP's -400 zero-power floor as a number.
+//                 J.J. Boyd (KG4VCF), with AI-assisted transformation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -149,6 +154,13 @@ inline bool isNoMeterReading(double dbm)
     return !std::isfinite(dbm) || dbm <= kNoMeterReadingDbm;
 }
 
+// Receive-signal bindings (SignalPeak..AgcAvg and SignalMaxBin): exactly the
+// bindings MeterPoller feeds the sentinel to (local poll() and remote
+// pollRemoteRxMeters()).  Only these treat -400 as no reading.  A transmit
+// meter at true zero reads exactly -400 from WDSP (meter.c floors with
+// 10 * log10(x + 1.0e-40)), which is a real reading and keeps its number.
+bool isReceiveSignalBinding(int bindingId);
+
 
 class MeterItem : public QObject {
     Q_OBJECT
@@ -170,7 +182,11 @@ public:
     // S: IARU S-meter scale — S9 = -73 dBm at HF, 6 dB per S unit.
     // dBm: plain numeric string (with or without decimal).
     // uV: microvolts at 50Ω derived from dBm.
+    // Always a number: whether a value is no reading is the item's call
+    // (isNoReading(), from its binding); noReadingText() is what it shows.
     static QString formatValue(float dBm, MeterUnit unit, bool decimal = true);
+    // No reading in the requested unit: "--" for dBm and S, "-- µV" for uV.
+    static QString noReadingText(MeterUnit unit);
 
     virtual void setUnitMode(MeterUnit u)   { m_unitMode = u; }
     MeterUnit unitMode() const              { return m_unitMode; }
@@ -193,6 +209,12 @@ public:
     void setBindingId(int id) { m_bindingId = id; }
     double value() const { return m_value; }
     virtual void setValue(double v) { m_value = v; }
+    // NereusSDR (R-R3-13): v is no reading for this item: its binding is a
+    // receive-signal binding and v is the sentinel (isNoMeterReading).
+    bool isNoReading(double v) const
+    {
+        return isReceiveSignalBinding(m_bindingId) && isNoMeterReading(v);
+    }
 
     int zOrder() const { return m_zOrder; }
     void setZOrder(int z) { m_zOrder = z; }

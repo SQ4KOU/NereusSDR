@@ -16,6 +16,11 @@
 //                 floor; valueText() / peakValueText() read-only accessors.
 //                 J.J. Boyd (KG4VCF), with AI-assisted transformation via
 //                 Anthropic Claude Code.
+//   2026-09-23: R-R3-13 fix wave: no reading applies only to
+//                 receive-signal bindings (isReceiveSignalBinding); a TX
+//                 meter keeps WDSP's -400 zero-power floor as a number.
+//                 J.J. Boyd (KG4VCF), with AI-assisted transformation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -143,7 +148,7 @@ void SignalTextItem::setValue(double v)
 
     // NereusSDR (R-R3-13): no reading.  The text shows "--" (valueText),
     // the bar falls to its -140 dBm floor and the peak hold clears.
-    if (isNoMeterReading(v)) {
+    if (isNoReading(v)) {
         m_smoothedDbm = -140.0f;
         m_peakDbm = -140.0f;
         m_peakHoldCounter = 0;
@@ -252,12 +257,12 @@ QString SignalTextItem::noReadingText() const
 
 QString SignalTextItem::valueText() const
 {
-    return isNoMeterReading(m_value) ? noReadingText() : formatValue(m_smoothedDbm);
+    return isNoReading(m_value) ? noReadingText() : formatValue(m_smoothedDbm);
 }
 
 QString SignalTextItem::peakValueText() const
 {
-    return isNoMeterReading(m_value) ? noReadingText() : formatValue(m_peakDbm);
+    return isNoReading(m_value) ? noReadingText() : formatValue(m_peakDbm);
 }
 
 // ---------------------------------------------------------------------------

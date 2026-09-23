@@ -15,6 +15,11 @@
 //                 sampleCount0() / sampleCount1() read-only accessors.
 //                 J.J. Boyd (KG4VCF), with AI-assisted transformation via
 //                 Anthropic Claude Code.
+//   2026-09-23: R-R3-13 fix wave: no reading applies only to
+//                 receive-signal bindings (isReceiveSignalBinding); a TX
+//                 meter keeps WDSP's -400 zero-power floor as a number.
+//                 J.J. Boyd (KG4VCF), with AI-assisted transformation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -127,7 +132,7 @@ void HistoryGraphItem::setValue(double v)
     MeterItem::setValue(v);
     // NereusSDR (R-R3-13): skip a no-reading sample so neither the axis
     // scale nor the line plots the -400 dBm sentinel.
-    if (isNoMeterReading(v)) {
+    if (isNoReading(v)) {
         return;
     }
     m_buf0.push(static_cast<float>(v));
@@ -139,8 +144,9 @@ void HistoryGraphItem::setValue(double v)
 // ---------------------------------------------------------------------------
 void HistoryGraphItem::setValue1(double v)
 {
-    // NereusSDR (R-R3-13): skip a no-reading sample (see setValue()).
-    if (isNoMeterReading(v)) {
+    // NereusSDR (R-R3-13): skip a no-reading sample (see setValue()); axis 1
+    // follows its own binding.
+    if (isReceiveSignalBinding(m_bindingId1) && isNoMeterReading(v)) {
         return;
     }
     m_buf1.push(static_cast<float>(v));
