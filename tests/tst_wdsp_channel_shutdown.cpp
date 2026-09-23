@@ -13,8 +13,10 @@
 //   worker goes on into dexchange and xrxa after teardown has started. They
 //   cover the path where teardown used to clear run without csDSP and the
 //   worker then left through dexchange's _endthread while holding csDSP,
-//   never counting its exit, so teardown waited forever. Each teardown runs
-//   under a watchdog so that failure reports instead of hanging the test.
+//   never counting its exit, so teardown waited forever.
+// Every teardown runs under a watchdog, so a hang reports instead of hanging
+// the test. A teardown that never returns still owns its channel, so once a
+// watchdog fires the remaining cases fail at once instead of reusing it.
 // - idleWorkerExitsAtOnce covers a worker waiting for input.
 // - teardownOfAWorkerThatNeverStartedDoesNotWait covers start_thread's
 //   failure path through dsplock.c directly (a failed _beginthread cannot be
@@ -62,6 +64,10 @@ constexpr std::chrono::milliseconds kIntoBlock{5};
 // wait it out (and log once while it does).
 constexpr int kLongBlockDelayUs = 2500000;
 constexpr double kLongBlockMinCloseMs = 2000.0;
+// That close takes about two long blocks: the pre-bypass delay runs once
+// more before the worker sees exec_bypass (about 5 s measured). Its watchdog
+// allows three.
+constexpr std::chrono::milliseconds kLongBlockWatchdog{3 * kLongBlockDelayUs / 1000};
 
 // An idle worker must exit at once. The old teardown slept a fixed 25 ms.
 // The bound is on teardown's wait for the worker alone
@@ -92,7 +98,7 @@ constexpr double kIdleExitMarginMs = 2.0;
 constexpr std::chrono::milliseconds kIdleSettle{100};
 
 // A teardown that has not returned by now is hung, not slow: the longest
-// legitimate wait in these cases is a few 60 ms blocks.
+// legitimate wait in the other cases is a few 60 ms blocks.
 constexpr std::chrono::milliseconds kTeardownWatchdog{5000};
 
 // A second channel id, for the never-started worker case.
@@ -105,6 +111,9 @@ double msSince(Clock::time_point start)
 
 // True while kChannel is open and a teardown can still run on it.
 bool g_channelOpen = false;
+// Set when a teardown did not return within the watchdog. Its thread still
+// owns the channel, so no later case may open or close it.
+bool g_teardownHung = false;
 
 void openChannel()
 {
@@ -188,21 +197,30 @@ double worstWorkerWakeupMs()
 // Runs teardown on its own thread. Returns false if it has not returned
 // within the watchdog; the channel is then left to the stuck thread.
 template <typename Teardown>
-bool runUnderWatchdog(Teardown teardown, double& elapsedMs)
+bool runUnderWatchdog(Teardown teardown, double& elapsedMs,
+                      std::chrono::milliseconds watchdog = kTeardownWatchdog)
 {
     std::packaged_task<void()> task(teardown);
     std::future<void> done = task.get_future();
     const auto start = Clock::now();
     std::thread runner(std::move(task));
-    if (done.wait_for(kTeardownWatchdog) != std::future_status::ready) {
+    if (done.wait_for(watchdog) != std::future_status::ready) {
         elapsedMs = msSince(start);
         runner.detach();
         g_channelOpen = false;
+        g_teardownHung = true;
         return false;
     }
     runner.join();
     elapsedMs = msSince(start);
     return true;
+}
+
+// CloseChannel(channel) under the watchdog.
+bool closeUnderWatchdog(int channel, double& elapsedMs,
+                        std::chrono::milliseconds watchdog = kTeardownWatchdog)
+{
+    return runUnderWatchdog([channel] { CloseChannel(channel); }, elapsedMs, watchdog);
 }
 
 } // namespace
@@ -211,6 +229,13 @@ class TestWdspChannelShutdown : public QObject {
     Q_OBJECT
 
 private slots:
+    void init()
+    {
+        if (g_teardownHung) {
+            QFAIL("An earlier teardown never returned and still owns the channel.");
+        }
+    }
+
     void cleanup()
     {
         WDSPSetTestBlockDelayUs(kChannel, 0);
@@ -218,7 +243,9 @@ private slots:
         // A case that failed before its own CloseChannel must not leave the
         // channel open for the next case's OpenChannel.
         if (g_channelOpen) {
-            CloseChannel(kChannel);
+            // The longest watchdog: the case may have left a long block running.
+            double closeMs = 0.0;
+            closeUnderWatchdog(kChannel, closeMs, kLongBlockWatchdog);
             g_channelOpen = false;
         }
     }
@@ -230,7 +257,7 @@ private slots:
 
         const int exitsBefore = WDSPGetTestWorkerExitCount(kChannel);
         double closeMs = 0.0;
-        const bool returned = runUnderWatchdog([] { CloseChannel(kChannel); }, closeMs);
+        const bool returned = closeUnderWatchdog(kChannel, closeMs);
         const int exitsAtReturn = WDSPGetTestWorkerExitCount(kChannel);
         qInfo("CloseChannel during a processed block took %.2f ms; worker exits %d -> %d",
               closeMs, exitsBefore, exitsAtReturn);
@@ -257,7 +284,8 @@ private slots:
                  "SetInputSamplerate rebuilt without the old worker leaving its loop");
 
         WDSPSetTestProcessDelayUs(kChannel, 0);
-        CloseChannel(kChannel);
+        double closeMs = 0.0;
+        QVERIFY2(closeUnderWatchdog(kChannel, closeMs), "CloseChannel never returned");
         g_channelOpen = false;
         QCOMPARE(WDSPGetTestWorkerExitCount(kChannel), exitsBefore + 2);
     }
@@ -268,10 +296,9 @@ private slots:
         putTheWorkerInsideABlock();
 
         const int exitsBefore = WDSPGetTestWorkerExitCount(kChannel);
-        const auto start = Clock::now();
-        CloseChannel(kChannel);
+        double closeMs = 0.0;
+        QVERIFY2(closeUnderWatchdog(kChannel, closeMs), "CloseChannel never returned");
         g_channelOpen = false;
-        const double closeMs = msSince(start);
         const int exitsAtReturn = WDSPGetTestWorkerExitCount(kChannel);
         qInfo("CloseChannel with a busy worker took %.2f ms; worker exits %d -> %d",
               closeMs, exitsBefore, exitsAtReturn);
@@ -285,9 +312,10 @@ private slots:
         putTheWorkerInsideABlock();
 
         const int exitsBefore = WDSPGetTestWorkerExitCount(kChannel);
-        const auto start = Clock::now();
-        SetInputSamplerate(kChannel, 2 * kSampleRate);
-        const double rebuildMs = msSince(start);
+        double rebuildMs = 0.0;
+        QVERIFY2(runUnderWatchdog([] { SetInputSamplerate(kChannel, 2 * kSampleRate); },
+                                  rebuildMs),
+                 "SetInputSamplerate never returned");
         const int exitsAtReturn = WDSPGetTestWorkerExitCount(kChannel);
         qInfo("SetInputSamplerate with a busy worker took %.2f ms; worker exits %d -> %d",
               rebuildMs, exitsBefore, exitsAtReturn);
@@ -295,7 +323,8 @@ private slots:
                  "SetInputSamplerate rebuilt while the old worker was still inside its block");
 
         WDSPSetTestBlockDelayUs(kChannel, 0);
-        CloseChannel(kChannel);
+        double closeMs = 0.0;
+        QVERIFY2(closeUnderWatchdog(kChannel, closeMs), "CloseChannel never returned");
         g_channelOpen = false;
         QCOMPARE(WDSPGetTestWorkerExitCount(kChannel), exitsBefore + 2);
     }
@@ -306,9 +335,9 @@ private slots:
         putTheWorkerInsideABlock();
 
         const int exitsBefore = WDSPGetTestWorkerExitCount(kChannel);
-        const auto start = Clock::now();
-        SetInputBuffsize(kChannel, 2 * kInSize);
-        const double rebuildMs = msSince(start);
+        double rebuildMs = 0.0;
+        QVERIFY2(runUnderWatchdog([] { SetInputBuffsize(kChannel, 2 * kInSize); }, rebuildMs),
+                 "SetInputBuffsize never returned");
         const int exitsAtReturn = WDSPGetTestWorkerExitCount(kChannel);
         qInfo("SetInputBuffsize with a busy worker took %.2f ms; worker exits %d -> %d",
               rebuildMs, exitsBefore, exitsAtReturn);
@@ -316,7 +345,8 @@ private slots:
                  "SetInputBuffsize rebuilt while the old worker was still inside its block");
 
         WDSPSetTestBlockDelayUs(kChannel, 0);
-        CloseChannel(kChannel);
+        double closeMs = 0.0;
+        QVERIFY2(closeUnderWatchdog(kChannel, closeMs), "CloseChannel never returned");
         g_channelOpen = false;
         QCOMPARE(WDSPGetTestWorkerExitCount(kChannel), exitsBefore + 2);
     }
@@ -327,10 +357,10 @@ private slots:
         putTheWorkerInsideABlock(kLongBlockDelayUs);
 
         const int exitsBefore = WDSPGetTestWorkerExitCount(kChannel);
-        const auto start = Clock::now();
-        CloseChannel(kChannel);
+        double closeMs = 0.0;
+        QVERIFY2(closeUnderWatchdog(kChannel, closeMs, kLongBlockWatchdog),
+                 "CloseChannel never returned");
         g_channelOpen = false;
-        const double closeMs = msSince(start);
         const int exitsAtReturn = WDSPGetTestWorkerExitCount(kChannel);
         qInfo("CloseChannel with a %d ms block took %.2f ms; worker exits %d -> %d",
               kLongBlockDelayUs / 1000, closeMs, exitsBefore, exitsAtReturn);
@@ -355,8 +385,7 @@ private slots:
                     kSampleRate, 0, 1, 0.010, 0.025, 0.000, 0.010, 0);
         const int exitsBefore = WDSPGetTestWorkerExitCount(kUnstartedChannel);
         double closeMs = 0.0;
-        const bool closed =
-            runUnderWatchdog([] { CloseChannel(kUnstartedChannel); }, closeMs);
+        const bool closed = closeUnderWatchdog(kUnstartedChannel, closeMs);
         QVERIFY2(closed, "closing the channel after a skipped wait never returned");
         QCOMPARE(WDSPGetTestWorkerExitCount(kUnstartedChannel), exitsBefore + 1);
     }
@@ -376,10 +405,9 @@ private slots:
             std::this_thread::sleep_for(kIdleSettle);
 
             const int exitsBefore = WDSPGetTestWorkerExitCount(kChannel);
-            const auto start = Clock::now();
-            CloseChannel(kChannel);
+            double closeMs = 0.0;
+            QVERIFY2(closeUnderWatchdog(kChannel, closeMs), "CloseChannel never returned");
             g_channelOpen = false;
-            const double closeMs = msSince(start);
             const double waitMs = WDSPGetTestLastWorkerExitWaitUs(kChannel) / 1000.0;
             qInfo("idle close %d: CloseChannel %.2f ms, its wait for the worker %.2f ms",
                   close + 1, closeMs, waitMs);
