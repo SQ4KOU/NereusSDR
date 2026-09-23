@@ -9,9 +9,26 @@
 #include "core/AudioEngine.h"
 #include "core/session/media/AudioJitterBuffer.h"
 #include "core/session/media/OpusAudioCodec.h"
+#include "core/session/media/PcmAudioCodec.h"
 #include "core/session/media/RemoteAudioReceiver.h"
 #include "fakes/PacedAudioBus.h"
 using namespace NereusSDR;
+namespace {
+// One lossless packet of the two-tone test signal: 997 Hz left, 1703 Hz
+// right, 192 frames starting at packet * 192.
+QByteArray losslessTonePacket(int packet, quint32 ssrc)
+{
+    QVector<float> pcm(PcmAudioCodecConfig::kPacketFrames * 2);
+    for (int i = 0; i < PcmAudioCodecConfig::kPacketFrames; ++i) {
+        const double t = double(packet * PcmAudioCodecConfig::kPacketFrames + i) / 48000;
+        pcm[2 * i] = float(0.2 * std::sin(t * 2 * 3.141592653589793 * 997));
+        pcm[2 * i + 1] = float(0.2 * std::sin(t * 2 * 3.141592653589793 * 1703));
+    }
+    const PcmRtpEncodeResult encoded = PcmAudioPacketiser{}.encode(
+        pcm, quint16(packet), quint32(packet) * quint32(PcmAudioCodecConfig::kPacketFrames), ssrc);
+    return encoded.status == OpusAudioCodecStatus::Accepted ? encoded.packet : QByteArray{};
+}
+} // namespace
 class TstRemoteAudioReceiver : public QObject {
     Q_OBJECT
 private slots:
@@ -243,7 +260,7 @@ private slots:
         invalid[0] = static_cast<char>(0x40);
         receiver.submit(invalid);
         receiver.submit(wrongSsrc.packet);
-        QCOMPARE(receiver.telemetry().receivedOpusPayloadBytes, quint64(0));
+        QCOMPARE(receiver.telemetry().receivedAudioPayloadBytes, quint64(0));
         QCOMPARE(receiver.telemetry().rejectedHeaders, quint64(2));
 
         QVector<QByteArray> packets;
@@ -263,7 +280,7 @@ private slots:
         const auto duplicate = inspectOpusRtp(packets.first(), 987);
         expectedBytes += quint64(duplicate.payloadBytes);
         receiver.submit(packets.first());
-        QCOMPARE(receiver.telemetry().receivedOpusPayloadBytes, expectedBytes);
+        QCOMPARE(receiver.telemetry().receivedAudioPayloadBytes, expectedBytes);
 
         QTRY_VERIFY_WITH_TIMEOUT([&] {
             const auto snapshot = receiver.telemetry();
@@ -279,10 +296,10 @@ private slots:
 
         receiver.stop();
         const auto stopped = receiver.telemetry();
-        QCOMPARE(stopped.receivedOpusPayloadBytes, expectedBytes);
+        QCOMPARE(stopped.receivedAudioPayloadBytes, expectedBytes);
         QVERIFY(!stopped.speakerQueuedMs);
         QVERIFY(receiver.start(987, 5760));
-        QCOMPARE(receiver.telemetry().receivedOpusPayloadBytes, quint64(0));
+        QCOMPARE(receiver.telemetry().receivedAudioPayloadBytes, quint64(0));
         receiver.stop();
     }
     void telemetryCountsValidPayloadBeforeIncomingQueueDrops()
@@ -315,7 +332,7 @@ private slots:
         for (int index = 0; index < kBurstPackets; ++index) {
             receiver.submit(encoded.packet);
         }
-        QCOMPARE(receiver.telemetry().receivedOpusPayloadBytes,
+        QCOMPARE(receiver.telemetry().receivedAudioPayloadBytes,
                  quint64(kBurstPackets) * quint64(inspected.payloadBytes));
         releaseGate.bus->releaseOutputPacingGateForTesting();
         receiver.stop();
@@ -920,7 +937,8 @@ private slots:
     {
         constexpr quint32 kSsrc = 845;
         constexpr int kFirst = 3;
-        constexpr int kBurst = AudioJitterBuffer::kMaxPackets + 4;
+        constexpr int kBurst = AudioJitterBuffer::windowPackets(
+            AudioJitterBuffer::kDefaultPacketDurationNs) + 4;
         OpusAudioEncoder encoder;
         const QVector<float> pcm(3840, 0.1f);
         QVector<QByteArray> packets;
@@ -1077,6 +1095,196 @@ private slots:
         QCOMPARE(receiver.rateMatcherOverflows(), 0);
     }
 
+    // R-R3-23: a lossless context plays 4 ms L16 packets through the same
+    // jitter queue, rate matcher and speaker. A lost packet is 4 ms of
+    // silence, counted as a gap; packets of the other profile are refused
+    // at the header; the stereo placement is exact.
+    void losslessPlaybackLossBecomesSilence()
+    {
+        constexpr quint32 kSsrc = 432;
+        constexpr int kLost = 60;
+        AudioEngine engine;
+        engine.setVolume(1.0f);
+        auto sink = std::make_unique<PacedAudioBus>();
+        auto* bus = sink.get();
+        engine.setSpeakersBusForTest(std::move(sink));
+        RemoteAudioReceiver receiver(&engine);
+        QSignalSpy errors(&receiver, &RemoteAudioReceiver::errorOccurred);
+        QSignalSpy restarts(&receiver, &RemoteAudioReceiver::restartRequested);
+        QVERIFY(receiver.start(kSsrc, 0, RemoteAudioProfile::Lossless));
+        QCOMPARE(receiver.profile(), RemoteAudioProfile::Lossless);
+
+        // An Opus packet is not this context's audio.
+        OpusAudioEncoder encoder;
+        const auto opus = encoder.encode(QVector<float>(3840, 0.1f), 0, 0, kSsrc);
+        QCOMPARE(opus.status, OpusAudioCodecStatus::Accepted);
+        receiver.submit(opus.packet);
+        QCOMPARE(receiver.telemetry().rejectedHeaders, quint64(1));
+
+        QTimer device;
+        device.setTimerType(Qt::PreciseTimer);
+        device.setInterval(1);
+        QElapsedTimer deviceClock;
+        deviceClock.start();
+        quint64 renderedFrames = 0;
+        connect(&device, &QTimer::timeout, this, [&] {
+            const quint64 due = quint64(deviceClock.nsecsElapsed()) * 48000 / 1'000'000'000;
+            while (due >= renderedFrames + 480) {
+                bus->render(480);
+                renderedFrames += 480;
+            }
+        });
+        device.start();
+        int packet = 0;
+        QTimer source;
+        source.setTimerType(Qt::PreciseTimer);
+        source.setInterval(1);
+        QElapsedTimer sourceClock;
+        sourceClock.start();
+        connect(&source, &QTimer::timeout, this, [&] {
+            const int duePackets = int(sourceClock.elapsed() / 4);
+            while (packet < duePackets) {
+                const QByteArray next = losslessTonePacket(packet, kSsrc);
+                if (packet != kLost) { receiver.submit(next); }
+                if (packet == 20) { receiver.submit(next); } // a duplicate is no gap
+                ++packet;
+            }
+        });
+        source.start();
+        QTRY_VERIFY_WITH_TIMEOUT(receiver.decodedPackets() >= 300 || !errors.isEmpty()
+                                 || !restarts.isEmpty(), 5000);
+        source.stop();
+        QVERIFY2(errors.isEmpty(), errors.isEmpty() ? "" : qPrintable(errors.first().first().toString()));
+        QVERIFY2(restarts.isEmpty(), restarts.isEmpty() ? "" : qPrintable(restarts.first().first().toString()));
+        const auto telemetry = receiver.telemetry();
+        QCOMPARE(telemetry.missingPackets, quint64(1));
+        QCOMPARE(telemetry.duplicatePackets, quint64(1));
+        QVERIFY(telemetry.concealedPackets >= 1);
+        QCOMPARE(telemetry.rejectedHeaders, quint64(1));
+        QVERIFY(telemetry.expectedPackets >= quint64(300));
+        // Valid lossless payload is counted: 768 bytes a packet.
+        QVERIFY(telemetry.receivedAudioPayloadBytes
+                >= telemetry.acceptedPackets * quint64(PcmAudioCodecConfig::kPayloadBytes));
+        QCOMPARE(receiver.rateMatcherUnderflows(), 0);
+        QCOMPARE(receiver.rateMatcherOverflows(), 0);
+        receiver.stop();
+        device.stop();
+
+        // Placement: each tone stays on its own side, far more cleanly than
+        // Opus allows (arrivalBurstsRemainBounded and the Opus tests use 8x).
+        const auto toneAmplitude = [&](int channel, double hz) {
+            double real = 0, imag = 0;
+            for (int i = channel; i < bus->heard.size(); i += 2) {
+                const double phase = 2 * 3.141592653589793 * hz * (i / 2) / 48000;
+                real += bus->heard[i] * std::cos(phase);
+                imag += bus->heard[i] * std::sin(phase);
+            }
+            return std::hypot(real, imag);
+        };
+        QVERIFY(toneAmplitude(0, 997) > 100 * toneAmplitude(1, 997));
+        QVERIFY(toneAmplitude(1, 1703) > 100 * toneAmplitude(0, 1703));
+        // The lost packet is heard as silence: a run of near-zero samples on
+        // both sides far longer than any zero crossing of the tones.
+        int longestQuiet = 0;
+        int quiet = 0;
+        for (int i = 0; i + 1 < bus->heard.size(); i += 2) {
+            const bool silent = std::abs(bus->heard[i]) < 0.01f && std::abs(bus->heard[i + 1]) < 0.01f;
+            quiet = silent ? quiet + 1 : 0;
+            longestQuiet = std::max(longestQuiet, quiet);
+        }
+        QVERIFY2(longestQuiet >= 100, qPrintable(QString::number(longestQuiet)));
+
+        // An Opus context refuses lossless packets at the header.
+        QVERIFY(receiver.start(kSsrc, 0));
+        QCOMPARE(receiver.profile(), RemoteAudioProfile::Opus);
+        receiver.submit(losslessTonePacket(0, kSsrc));
+        QCOMPARE(receiver.telemetry().rejectedHeaders, quint64(1));
+        receiver.stop();
+    }
+
+    // R-R3-23: the arrival queue is bounded in time, 320 ms, not in packets.
+    // A 160 ms stall of lossless packets (forty, five times the old eight-
+    // packet bound that restarted after 32 ms) plays on; a stall past 320 ms
+    // still restarts as an arrival burst.
+    void losslessStallIsBoundedInTime_data()
+    {
+        QTest::addColumn<int>("burst");
+        QTest::addColumn<bool>("restarts");
+        QTest::newRow("160 ms stall plays on") << 40 << false;
+        QTest::newRow("340 ms stall restarts") << 85 << true;
+    }
+    void losslessStallIsBoundedInTime()
+    {
+        QFETCH(int, burst);
+        QFETCH(bool, restarts);
+        constexpr quint32 kSsrc = 846;
+        constexpr int kFirst = 30;
+        AudioEngine engine;
+        engine.setVolume(1.0f);
+        auto sink = std::make_unique<PacedAudioBus>();
+        auto* bus = sink.get();
+        engine.setSpeakersBusForTest(std::move(sink));
+        RemoteAudioReceiver receiver(&engine);
+        struct ReleasePacingGate {
+            PacedAudioBus* bus;
+            ~ReleasePacingGate() { bus->releaseOutputPacingGateForTesting(); }
+        } releaseGate{bus};
+        QSignalSpy errors(&receiver, &RemoteAudioReceiver::errorOccurred);
+        QSignalSpy restartSpy(&receiver, &RemoteAudioReceiver::restartRequested);
+        QVERIFY(receiver.start(kSsrc, 0, RemoteAudioProfile::Lossless));
+
+        using Clock = std::chrono::steady_clock;
+        std::jthread device([bus](std::stop_token stop) {
+            const auto started = Clock::now();
+            quint64 callback = 1;
+            while (!stop.stop_requested()) {
+                std::this_thread::sleep_until(started + std::chrono::nanoseconds(
+                    callback * 480ull * 1'000'000'000ull / 48'000ull));
+                if (stop.stop_requested()) { break; }
+                bus->render(480);
+                ++callback;
+            }
+        });
+        // Playback begins on a steady 4 ms stream.
+        const auto firstStart = Clock::now();
+        for (int packet = 0; packet < kFirst; ++packet) {
+            std::this_thread::sleep_until(firstStart + std::chrono::milliseconds(4 * packet));
+            receiver.submit(losslessTonePacket(packet, kSsrc));
+        }
+        const auto playDeadline = Clock::now() + std::chrono::seconds(1);
+        while (receiver.decodedPackets() == 0 && Clock::now() < playDeadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        QVERIFY(receiver.decodedPackets() >= 1);
+
+        // The worker is held at its next pacing read while the whole stall's
+        // packets arrive at once.
+        bus->blockNextOutputPacingForTesting();
+        QVERIFY(bus->waitForOutputPacingGateForTesting(std::chrono::milliseconds(250)));
+        for (int packet = kFirst; packet < kFirst + burst; ++packet) {
+            receiver.submit(losslessTonePacket(packet, kSsrc));
+        }
+        bus->releaseOutputPacingGateForTesting();
+
+        if (restarts) {
+            QTRY_COMPARE_WITH_TIMEOUT(restartSpy.count(), 1, 1000);
+            QCOMPARE(restartSpy.first().at(1).value<RemoteAudioReceiver::Fault>(),
+                     RemoteAudioReceiver::Fault::ArrivalBurst);
+        } else {
+            // Every packet of the stall is played, none of it concealed and
+            // no restart, well before the 500 ms no-packet rule.
+            QTRY_VERIFY_WITH_TIMEOUT(receiver.decodedPackets() >= quint64(kFirst + burst)
+                                     || !restartSpy.isEmpty(), 400);
+            QVERIFY2(restartSpy.isEmpty(),
+                     restartSpy.isEmpty() ? "" : qPrintable(restartSpy.first().first().toString()));
+            QCOMPARE(receiver.telemetry().missingPackets, quint64(0));
+            QCOMPARE(receiver.rateMatcherOverflows(), 0);
+        }
+        device.request_stop();
+        device.join();
+        QCOMPARE(errors.count(), 0);
+        receiver.stop();
+    }
 };
 QTEST_GUILESS_MAIN(TstRemoteAudioReceiver)
 #include "tst_remote_audio_receiver.moc"

@@ -1,5 +1,6 @@
 #pragma once
 // no-port-check: NereusSDR-original remote audio lifecycle and worker wiring.
+#include "core/session/media/PcmAudioCodec.h"
 #include <QObject>
 #include <QByteArray>
 #include <memory>
@@ -29,9 +30,10 @@ struct RemoteAudioReceiverTelemetry {
     // overran the arrival bound or the jitter window. Only the newest packet
     // of such a backlog is kept; nothing counted here was ever heard.
     quint64 startDiscardedPackets = 0;
-    // Valid RTP/profile payload bytes received in this context. This counts
-    // duplicates and packets later dropped by the bounded local queue.
-    quint64 receivedOpusPayloadBytes = 0;
+    // Valid RTP/profile payload bytes received in this context, Opus or
+    // lossless (whichever the context runs). This counts duplicates and
+    // packets later dropped by the bounded local queue.
+    quint64 receivedAudioPayloadBytes = 0;
     quint64 deviceConsumedFrames = 0;
     int underflows = 0;
     int overflows = 0;
@@ -53,7 +55,8 @@ struct RemoteAudioReceiverTelemetry {
     quint64 expectedPackets = 0;
     quint64 missingPackets = 0;
     // Packets currently held in the jitter buffer for reordering, in ms
-    // (queued count x the buffer's 40 ms packet duration). Unlike the
+    // (queued count x the context's packet duration: 40 ms Opus, 4 ms
+    // lossless). Unlike the
     // fields above, this is a live gauge: unavailable before a measurement
     // and for stopped or failed contexts, like speakerQueuedMs.
     std::optional<double> reorderQueuedMs;
@@ -69,8 +72,14 @@ struct RemoteAudioReceiverTelemetry {
     std::optional<double> driftRatio;
 };
 
-// One generation of bounded RTP receive, Opus decoding and WDSP rate matching.
+// One generation of bounded RTP receive, decoding and WDSP rate matching.
 // All codec/resampler work runs off the GUI and device callback threads.
+// R-R3-23: a context runs one profile, named at start(): Opus (40 ms
+// packets, payload type 111) or lossless (L16, 4 ms packets, payload type
+// 96). submit() reads each packet's payload type and hands only the
+// context's own type to its decoder; the other type is a rejected header.
+// A lost lossless packet plays as 4 ms of silence. The jitter window and
+// the arrival bound are the same 320 ms for both profiles.
 class RemoteAudioReceiver final : public QObject {
     Q_OBJECT
 public:
@@ -86,7 +95,10 @@ public:
 
     explicit RemoteAudioReceiver(AudioEngine* engine, QObject* parent = nullptr);
     ~RemoteAudioReceiver() override;
-    bool start(quint32 ssrc, quint32 firstTimestamp);
+    bool start(quint32 ssrc, quint32 firstTimestamp,
+               RemoteAudioProfile profile = RemoteAudioProfile::Opus);
+    /// The profile of the current (or last) context.
+    RemoteAudioProfile profile() const;
     void stop();
     void submit(const QByteArray& packet);
     bool isRunning() const;

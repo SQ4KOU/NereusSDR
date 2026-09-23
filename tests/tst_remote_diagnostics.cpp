@@ -127,7 +127,7 @@ private slots:
         guiWire->observation.acceptedPayloadBytes += 4000;
         media->traffic.receivedDisplayPayloadBytes += 100000;
         media->traffic.receivedRtpBytes += 3500;
-        playback.receivedOpusPayloadBytes += 3000;
+        playback.receivedAudioPayloadBytes += 3000;
         playback.speakerQueuedMs = 20.0;
         playback.decodedPackets = 25;
         playback.concealedPackets = 2;

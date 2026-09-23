@@ -311,7 +311,7 @@ private slots:
         media->traffic.receivedRtpBytes = 10000;
         media->traffic.submittedDisplayPayloadBytes = 200;
         media->traffic.submittedRtpBytes = 300;
-        playback.receivedOpusPayloadBytes = 9000; // subset, never add twice
+        playback.receivedAudioPayloadBytes = 9000; // subset, never add twice
         controller.sampleNow();
         QCOMPARE(controller.current().coreGuiRxKbps, std::optional<double>(444.0));
         QCOMPARE(controller.current().coreGuiTxKbps, std::optional<double>(4.0));
@@ -336,14 +336,14 @@ private slots:
         // An audio restart gaps Opus but does not discard media totals.
         now += 1000;
         ++playback.generation;
-        playback.receivedOpusPayloadBytes = 0;
+        playback.receivedAudioPayloadBytes = 0;
         playback.speakerQueuedMs.reset();
         media->traffic.receivedRtpBytes += 500;
         controller.sampleNow();
         QCOMPARE(controller.current().coreGuiTotalKbps, std::optional<double>(4.0));
         QVERIFY(!controller.current().opusRxKbps);
         now += 1000;
-        playback.receivedOpusPayloadBytes = 500;
+        playback.receivedAudioPayloadBytes = 500;
         controller.sampleNow();
         QCOMPARE(controller.current().opusRxKbps, std::optional<double>(4.0));
         QVERIFY(controller.history().series(Metric::OpusPayloadRxKbps, now, 60).points.last().breakBefore);
@@ -351,7 +351,7 @@ private slots:
         // A peer replacement gaps total and Opus, with independent baselines.
         now += 1000;
         media = MediaPeerTelemetry{4, {}};
-        playback.receivedOpusPayloadBytes += 500;
+        playback.receivedAudioPayloadBytes += 500;
         controller.sampleNow();
         QVERIFY(!controller.current().coreGuiTotalKbps);
         QVERIFY(!controller.current().opusRxKbps);

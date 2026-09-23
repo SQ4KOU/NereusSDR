@@ -86,6 +86,23 @@ QByteArray packetAt(const QSignalSpy& packets, int index)
     return packets.at(index).at(0).toByteArray();
 }
 
+// Drains until `expected` packets have been emitted (or nothing more comes),
+// checking that no tick emits more than the lossless pacing cap. Returns the
+// number of ticks used.
+int drainPaced(DaemonAudioSender& sender, const QSignalSpy& packets, int expected)
+{
+    int ticks = 0;
+    while (packets.count() < expected && ticks < 1000) {
+        const int before = packets.count();
+        sender.drain();
+        ++ticks;
+        const int emitted = packets.count() - before;
+        if (emitted > DaemonAudioSender::kMaxLosslessPacketsPerDrain) { return -1; }
+        if (emitted == 0) { break; }
+    }
+    return ticks;
+}
+
 } // namespace
 
 class TstDaemonAudioSender final : public QObject {
@@ -343,8 +360,10 @@ private slots:
         constexpr quint32 firstTimestamp = 0xfffffc00U;
         QVERIFY(sender.start(kSsrc, firstSequence, firstTimestamp));
         h.feedMixed(DaemonAudioSource::kBlockFrames * 2, 0.25f, -0.25f, 0.0f, 0.0f);
-        sender.drain();
+        // Paced: three a tick, so twenty packets take seven ticks.
+        QCOMPARE(drainPaced(sender, packets, 20), 7);
         QCOMPARE(packets.count(), 20);
+        QCOMPARE(sender.pendingLosslessPackets(), 0);
 
         for (int index = 0; index < packets.count(); ++index) {
             const QByteArray packet = packetAt(packets, index);
@@ -404,7 +423,7 @@ private slots:
         sender.drain();
         QCOMPARE(packets.count(), 1);
         h.feedMixed(DaemonAudioSource::kBlockFrames, 0.20f, 0.20f, 0.0f, 0.0f);
-        sender.drain();
+        QCOMPARE(drainPaced(sender, packets, 11), 4);
         QCOMPARE(packets.count(), 11);
         const PcmRtpDecodeResult first = decodeL16Rtp(packetAt(packets, 1), kSsrc);
         QCOMPARE(first.status, OpusAudioCodecStatus::Accepted);
@@ -425,7 +444,8 @@ private slots:
     }
 
     // A recipient that stops the sender mid-block ends that block: the rest
-    // of its ten packets are never emitted.
+    // of its ten packets are never emitted, not even those already built
+    // and waiting for a later tick.
     void losslessStopFromPacketReadyEndsTheBlock()
     {
         Harness h;
@@ -437,11 +457,73 @@ private slots:
         h.feedMixed(DaemonAudioSource::kBlockFrames * 2, 0.20f, 0.20f, 0.0f, 0.0f);
         connect(&sender, &DaemonAudioSender::packetReady, &sender,
                 [&sender, &packets](const QByteArray&) {
-            if (packets.count() == 3) { sender.stop(); }
+            if (packets.count() == 2) { sender.stop(); }
         });
         sender.drain();
-        QCOMPARE(packets.count(), 3);
+        QCOMPARE(packets.count(), 2);
         QVERIFY(!sender.isRunning());
+        QCOMPARE(sender.pendingLosslessPackets(), 0);
+        sender.drain();
+        QCOMPARE(packets.count(), 2);
+    }
+
+    // Carried finding (Task 5 review): after a capture stall four blocks
+    // wait in the capture queue, which an unpaced lossless tick released as
+    // forty packets at once. Paced, every tick sends at most three, and the
+    // rest follow on later ticks: all forty, in order, none lost. Opus, one
+    // packet per block, still drains the four blocks in one tick.
+    void losslessStallIsPacedWithoutLoss()
+    {
+        Harness h;
+        h.engine->setSliceStreaming(h.sliceB, false);
+        DaemonAudioSender sender(h.engine);
+        QVERIFY(sender.setProfile(RemoteAudioProfile::Lossless));
+        QSignalSpy packets(&sender, &DaemonAudioSender::packetReady);
+        constexpr quint16 firstSequence = 100;
+        constexpr quint32 firstTimestamp = 5000;
+        QVERIFY(sender.start(kSsrc, firstSequence, firstTimestamp));
+        // The stall: four blocks captured, no tick has run.
+        h.feedMixed(DaemonAudioSource::kBlockFrames * DaemonAudioSource::kQueueBlocks,
+                    0.20f, -0.20f, 0.0f, 0.0f);
+        constexpr int kStallPackets =
+            DaemonAudioSource::kQueueBlocks * PcmAudioCodecConfig::kPacketsPerBlock;
+        static_assert(kStallPackets == 40);
+        sender.drain();
+        QCOMPARE(packets.count(), DaemonAudioSender::kMaxLosslessPacketsPerDrain);
+        // The block being sent waits in part; the other three stay captured.
+        QCOMPARE(sender.pendingLosslessPackets(),
+                 PcmAudioCodecConfig::kPacketsPerBlock - DaemonAudioSender::kMaxLosslessPacketsPerDrain);
+        QCOMPARE(sender.telemetry().consumedBlocks, std::uint64_t{1});
+        const int ticks = drainPaced(sender, packets, kStallPackets);
+        QVERIFY(ticks > 0);
+        QCOMPARE(packets.count(), kStallPackets);
+        // 1 + 13 ticks: ceil(40 / 3).
+        QCOMPARE(1 + ticks, (kStallPackets + DaemonAudioSender::kMaxLosslessPacketsPerDrain - 1)
+                                / DaemonAudioSender::kMaxLosslessPacketsPerDrain);
+        for (int index = 0; index < kStallPackets; ++index) {
+            const PcmRtpDecodeResult decoded = decodeL16Rtp(packetAt(packets, index), kSsrc);
+            QCOMPARE(decoded.status, OpusAudioCodecStatus::Accepted);
+            QCOMPARE(decoded.sequence, static_cast<quint16>(firstSequence + index));
+            QCOMPARE(decoded.timestamp, firstTimestamp + 192U * quint32(index));
+        }
+        const auto telemetry = sender.telemetry();
+        QCOMPARE(telemetry.consumedBlocks, std::uint64_t{DaemonAudioSource::kQueueBlocks});
+        QCOMPARE(telemetry.encodedPackets, std::uint64_t{kStallPackets});
+        QCOMPARE(telemetry.source.ringFullDrops, std::uint64_t{0});
+        QCOMPARE(telemetry.source.sourceDropEvents, std::uint64_t{0});
+        QCOMPARE(telemetry.lastEmittedSequence, static_cast<quint16>(firstSequence + kStallPackets - 1));
+        QCOMPARE(sender.pendingLosslessPackets(), 0);
+        sender.drain();
+        QCOMPARE(packets.count(), kStallPackets);
+
+        // Opus pacing is unchanged: the same stall leaves in one tick.
+        sender.stop();
+        QVERIFY(sender.setProfile(RemoteAudioProfile::Opus));
+        QVERIFY(sender.start(kSsrc, 1, 0));
+        h.feedMixed(DaemonAudioSource::kBlockFrames * DaemonAudioSource::kQueueBlocks,
+                    0.20f, -0.20f, 0.0f, 0.0f);
+        sender.drain();
+        QCOMPARE(packets.count(), kStallPackets + DaemonAudioSource::kQueueBlocks);
     }
 };
 

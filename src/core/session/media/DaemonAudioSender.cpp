@@ -49,6 +49,7 @@ bool DaemonAudioSender::start(quint32 ssrc, quint16 firstSequence,
     }
 
     m_encoder->reset();
+    m_pendingLossless.clear();
     m_ssrc = ssrc;
     m_nextSequence = firstSequence;
     m_baseTimestamp = firstTimestamp;
@@ -71,6 +72,7 @@ void DaemonAudioSender::stop()
     m_drainTimer.stop();
     m_running = false;
     m_ssrc = 0;
+    m_pendingLossless.clear();
     if (m_source) {
         m_source->stop();
     }
@@ -116,6 +118,10 @@ void DaemonAudioSender::drain()
         return;
     }
     const quint64 drainGeneration = m_lifecycleGeneration;
+    if (m_profile == RemoteAudioProfile::Lossless) {
+        drainLossless(drainGeneration);
+        return;
+    }
 
     for (int count = 0; count < kMaxBlocksPerDrain; ++count) {
         const std::optional<DaemonAudioBlock> block = m_source->takeBlock();
@@ -130,37 +136,68 @@ void DaemonAudioSender::drain()
         const quint32 timestamp = m_baseTimestamp
             + static_cast<quint32>(block->samplePosition);
         m_nextTimestamp = timestamp + DaemonAudioSource::kBlockFrames;
-        QList<QByteArray> packets;
-        if (m_profile == RemoteAudioProfile::Lossless) {
-            // R-R3-23: ten 192-frame packets per block, sequence +1 and
-            // timestamp +192 each, so the next block continues the clock.
-            packets = m_packetiser.packetiseBlock(block->pcmInterleaved, m_nextSequence,
-                                                  timestamp, m_ssrc);
-        } else {
-            const OpusRtpEncodeResult encoded = m_encoder->encode(
-                block->pcmInterleaved, m_nextSequence, timestamp, m_ssrc);
-            if (encoded.status == OpusAudioCodecStatus::Accepted) {
-                packets.append(encoded.packet);
-            }
-        }
-        if (packets.isEmpty()) {
+        const OpusRtpEncodeResult encoded = m_encoder->encode(
+            block->pcmInterleaved, m_nextSequence, timestamp, m_ssrc);
+        if (encoded.status != OpusAudioCodecStatus::Accepted) {
             ++m_telemetry.encodeFailures;
             continue;
         }
-        for (qsizetype index = 0; index < packets.size(); ++index) {
-            ++m_telemetry.encodedPackets;
-            m_telemetry.hasLastEmittedPacket = true;
-            m_telemetry.lastEmittedSequence = m_nextSequence;
-            m_telemetry.lastEmittedTimestamp = timestamp
-                + static_cast<quint32>(index * PcmAudioCodecConfig::kPacketFrames);
-            ++m_nextSequence;
-            emit packetReady(packets.at(index));
-            // A direct packetReady recipient may stop the sender or start a
-            // new capture epoch. Do not consume old queued PCM, or send the
-            // rest of this block, into that new epoch.
-            if (m_lifecycleGeneration != drainGeneration || !isRunning()) {
+        ++m_telemetry.encodedPackets;
+        m_telemetry.hasLastEmittedPacket = true;
+        m_telemetry.lastEmittedSequence = m_nextSequence;
+        m_telemetry.lastEmittedTimestamp = timestamp;
+        ++m_nextSequence;
+        emit packetReady(encoded.packet);
+        // A direct packetReady recipient may stop the sender or start a
+        // new capture epoch. Do not consume old queued PCM into that new
+        // epoch.
+        if (m_lifecycleGeneration != drainGeneration || !isRunning()) {
+            return;
+        }
+    }
+}
+
+void DaemonAudioSender::drainLossless(quint64 drainGeneration)
+{
+    for (int sent = 0; sent < kMaxLosslessPacketsPerDrain;) {
+        if (m_pendingLossless.isEmpty()) {
+            const std::optional<DaemonAudioBlock> block = m_source->takeBlock();
+            if (!block.has_value()) {
                 return;
             }
+            ++m_telemetry.consumedBlocks;
+            // As for Opus, the capture position is the RTP clock.
+            const quint32 timestamp = m_baseTimestamp
+                + static_cast<quint32>(block->samplePosition);
+            m_nextTimestamp = timestamp + DaemonAudioSource::kBlockFrames;
+            // R-R3-23: ten 192-frame packets per block, sequence +1 and
+            // timestamp +192 each, so the next block continues the clock.
+            // Sequence numbers are given out here, so nextSequence() is the
+            // first number after the block even while some of it waits.
+            const QList<QByteArray> packets = m_packetiser.packetiseBlock(
+                block->pcmInterleaved, m_nextSequence, timestamp, m_ssrc);
+            if (packets.isEmpty()) {
+                ++m_telemetry.encodeFailures;
+                continue;
+            }
+            for (qsizetype index = 0; index < packets.size(); ++index) {
+                m_pendingLossless.append({packets.at(index), m_nextSequence,
+                    timestamp + static_cast<quint32>(index * PcmAudioCodecConfig::kPacketFrames)});
+                ++m_nextSequence;
+                ++m_telemetry.encodedPackets;
+            }
+        }
+        const PendingPacket next = m_pendingLossless.takeFirst();
+        m_telemetry.hasLastEmittedPacket = true;
+        m_telemetry.lastEmittedSequence = next.sequence;
+        m_telemetry.lastEmittedTimestamp = next.timestamp;
+        ++sent;
+        emit packetReady(next.packet);
+        // A direct packetReady recipient may stop the sender or start a new
+        // capture epoch (which discards what is still waiting). Send nothing
+        // more of this block into that epoch.
+        if (m_lifecycleGeneration != drainGeneration || !isRunning()) {
+            return;
         }
     }
 }

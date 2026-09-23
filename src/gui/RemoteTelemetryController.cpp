@@ -265,7 +265,7 @@ void RemoteTelemetryController::sampleNow()
         && playback.generation == m_playbackBaseline->generation && elapsed > 0) {
         const auto& previous = *m_playbackBaseline;
         if (mediaContinuous) {
-            const auto opus = rate(playback.receivedOpusPayloadBytes, previous.receivedOpusPayloadBytes, elapsed);
+            const auto opus = rate(playback.receivedAudioPayloadBytes, previous.receivedAudioPayloadBytes, elapsed);
             if (opus) { m_view.opusRxKbps = *opus * 8.0 / 1000.0; }
         }
         values[index(Metric::PlaybackDecodedPacketsPerSecond)] = rate(playback.decodedPackets, previous.decodedPackets, elapsed);
