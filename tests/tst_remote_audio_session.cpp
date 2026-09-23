@@ -247,7 +247,7 @@ private slots:
         // This computer says it is playing, and names the profile Core reported.
         QTRY_COMPARE(remoteMedia.audioStatus().state, RemoteAudioStatus::State::Playing);
         QCOMPARE(remoteAudioCodecText(remoteMedia.audioStatus()),
-                 QStringLiteral("Opus stereo, 24 kbit/s target, 40 ms packets, audio up to 8 kHz"));
+                 QStringLiteral("Opus stereo, 24\u00A0kbit/s target, 40\u00A0ms packets, audio up to 8\u00A0kHz"));
 
         const double stationPanA = h.station.sliceById(h.sliceA)->audioPan();
         const double stationPanB = h.station.sliceById(h.sliceB)->audioPan();
