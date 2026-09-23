@@ -8,6 +8,8 @@
 #include "gui/widgets/DspParamPopup.h"
 #include "gui/widgets/NnrControls.h"
 #include "gui/widgets/VfoWidget.h"
+#include "gui/MainWindow.h"
+#include "OperatorWording.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -71,6 +73,7 @@ private slots:
     void resetPreservesModelAndNrSelection();
     void contextOpeningDoesNotEnableNnr();
     void refusedNrChoiceSnapsBackAndSaysWhy();
+    void refusedNrChoiceIsShownOnceWhereItWasAsked();
     void bindingStaysWithOpenerAndInvalidatesOnDestruction();
     void stationSessionChangeInvalidatesBinding();
     void diagnosticActionIsTemporaryAndRequiresReadyRuntime();
@@ -214,6 +217,62 @@ void TestNnrControls::refusedNrChoiceSnapsBackAndSaysWhy()
     QVERIFY(nr2->isChecked());
     QVERIFY(!nr3->isChecked());
     QCOMPARE(refused.count(), 2);
+}
+
+// Follow-up item 3 (R-R3-21): one refused click, one message, at the control
+// that was clicked. A choice from the DSP > NR menu is answered by the menu
+// (the text it returns for its notice) and not by the VFO flag as well; a
+// flag click is answered at the flag. Both in plain words.
+void TestNnrControls::refusedNrChoiceIsShownOnceWhereItWasAsked()
+{
+    SliceModel slice(7);
+    const QString why =
+        QStringLiteral("No NR3 model file was found on this Core, so NR3 cannot run.");
+    slice.setNrSelectionApplier([why](NrSlot requested, QString* reason) {
+        if (requested == NrSlot::NNR) {
+            if (reason) { *reason = QStringLiteral("This station session does not support NNR."); }
+            return false;
+        }
+        if (requested != NrSlot::NR3) { return true; }
+        if (reason) { *reason = why; }
+        return false;
+    });
+    VfoWidget vfo;
+    vfo.setSlice(&slice);
+    auto* nr3 = buttonWithText(vfo, QStringLiteral("NR3"));
+    QVERIFY(nr3);
+
+    // From the menu: the menu has the reason; the flag only follows.
+    const QString fromMenu = MainWindow::applyNrMenuChoice(&slice, NrSlot::NR3);
+    QCOMPARE(fromMenu, why);
+    QVERIFY(OperatorWording::isPlain(fromMenu));
+    QCOMPARE(slice.activeNr(), NrSlot::Off);
+    QVERIFY(!nr3->isChecked());
+    QVERIFY(vfo.nrRefusalForTest().isEmpty());
+
+    // A reason naming internal terms is shown in user words.
+    const QString nnr = MainWindow::applyNrMenuChoice(&slice, NrSlot::NNR);
+    QVERIFY(!nnr.isEmpty());
+    QVERIFY2(OperatorWording::isPlain(nnr), qPrintable(nnr));
+    QVERIFY(vfo.nrRefusalForTest().isEmpty());
+
+    // An accepted menu choice has nothing to say.
+    QVERIFY(MainWindow::applyNrMenuChoice(&slice, NrSlot::NR2).isEmpty());
+    QCOMPARE(slice.activeNr(), NrSlot::NR2);
+
+    // From the flag: the flag says why.
+    nr3->click();
+    QCOMPARE(slice.activeNr(), NrSlot::NR2);
+    QVERIFY(!nr3->isChecked());
+    QCOMPARE(vfo.nrRefusalForTest(), why);
+
+    // A later menu refusal does not leave the flag's old reason standing
+    // as if the flag had been refused again; the next flag click clears it.
+    auto* nr2 = buttonWithText(vfo, QStringLiteral("NR2"));
+    QVERIFY(nr2);
+    nr2->click();
+    QCOMPARE(slice.activeNr(), NrSlot::Off);
+    QVERIFY(vfo.nrRefusalForTest().isEmpty());
 }
 
 void TestNnrControls::bindingStaysWithOpenerAndInvalidatesOnDestruction()

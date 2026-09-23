@@ -2441,13 +2441,19 @@ void MainWindow::onNotchRequestRefused(const QString& reason)
 }
 
 // Fix wave I3 (R-R3-21): a noise reducer a receiver would not turn on, for
-// example NR3 on a Core with no NR3 model. The receiver is unchanged; this
-// says why, in local and remote windows alike.
-void MainWindow::onNrSelectionRefused(const QString& reason)
+// example NR3 on a Core with no NR3 model. The receiver is unchanged; the
+// menu says why, in local and remote windows alike. Follow-up item 3: only
+// for a choice made from this menu; a VFO flag click says why at the flag.
+QString MainWindow::applyNrMenuChoice(SliceModel* slice, NereusSDR::NrSlot slot)
 {
-    if (!reason.isEmpty()) {
-        showToast(OperatorReasonText::forDisplay(reason), ToastSeverity::Warning, 3000);
+    if (!slice) {
+        return {};
     }
+    slice->setActiveNr(slot);
+    if (slice->activeNr() == slot || slice->nnrLastError().isEmpty()) {
+        return {};
+    }
+    return OperatorReasonText::forDisplay(slice->nnrLastError());
 }
 
 // Repaint the status-bar TNF light. Both halves of what it shows can move
@@ -3843,17 +3849,6 @@ void MainWindow::buildUI()
     // a reconnect this loop is what re-arms it; sliceAdded has already fired.
     for (SliceModel* existing : m_radioModel->slices()) {
         wireSliceStatusOverlayTriggers(existing);
-    }
-    // Fix wave I3: every receiver's refused noise-reducer choice is shown.
-    connect(m_radioModel, &RadioModel::sliceAdded, this, [this](int sliceId) {
-        if (SliceModel* slice = m_radioModel->sliceById(sliceId)) {
-            connect(slice, &SliceModel::nrSelectionRefused, this,
-                    &MainWindow::onNrSelectionRefused, Qt::UniqueConnection);
-        }
-    });
-    for (SliceModel* existing : m_radioModel->slices()) {
-        connect(existing, &SliceModel::nrSelectionRefused, this,
-                &MainWindow::onNrSelectionRefused, Qt::UniqueConnection);
     }
 
     // Phase 3F Sub-Epic D Task 13: bind newly-created slices to a pan
@@ -7022,7 +7017,7 @@ void MainWindow::buildMenuBar()
                 this, [this, slot]() {
                     SliceModel* slice = m_radioModel->activeSlice();
                     if (!slice) { return; }
-                    slice->setActiveNr(slot);
+                    const QString refused = applyNrMenuChoice(slice, slot);
                     // Fix wave I3: a refused choice leaves the check on the
                     // reducer the receiver still runs.
                     if (slice->activeNr() != slot) {
@@ -7031,6 +7026,9 @@ void MainWindow::buildMenuBar()
                             action->setChecked(action->data().toInt()
                                                == static_cast<int>(slice->activeNr()));
                         }
+                    }
+                    if (!refused.isEmpty()) {
+                        showToast(refused, ToastSeverity::Warning, 3000);
                     }
                 });
             a->setData(static_cast<int>(slot));

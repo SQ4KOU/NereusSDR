@@ -1559,8 +1559,11 @@ void VfoWidget::buildDspTab()
                 return;
             }
             m_lastNrButton = btn;
+            m_nrRefusal.clear();
             const NereusSDR::NrSlot requested = on ? slot : NereusSDR::NrSlot::Off;
+            m_nrClickInFlight = true;
             m_slice->setActiveNr(requested);
+            m_nrClickInFlight = false;
             // Fix wave I3: a refused choice (NR3 with no model on the Core)
             // leaves the receiver as it was; the buttons follow it back.
             if (m_slice && m_slice->activeNr() != requested) {
@@ -2350,11 +2353,16 @@ void VfoWidget::onActiveNrChanged(NereusSDR::NrSlot slot)
 // asked, in the receiver's plain words.
 void VfoWidget::onNrSelectionRefused(const QString& reason)
 {
-    // A Core refusal is shown in user words; the raw text is logged.
-    m_nrRefusal = reason.isEmpty() ? reason : OperatorReasonText::forDisplay(reason);
     if (m_slice) {
         onActiveNrChanged(m_slice->activeNr());
     }
+    // Follow-up item 3: one message per refused click, at the control that
+    // was clicked. A choice made elsewhere says why there.
+    if (!m_nrClickInFlight) {
+        return;
+    }
+    // A Core refusal is shown in user words; the raw text is logged.
+    m_nrRefusal = reason.isEmpty() ? reason : OperatorReasonText::forDisplay(reason);
     QWidget* anchor = m_lastNrButton ? static_cast<QWidget*>(m_lastNrButton.data())
                                      : static_cast<QWidget*>(m_nr3Btn);
     if (anchor && anchor->isVisible() && !m_nrRefusal.isEmpty()) {

@@ -819,6 +819,10 @@ private:
     // Fix wave I3: the NR button last clicked, where a refusal is shown.
     QPointer<QPushButton> m_lastNrButton;
     QString m_nrRefusal;
+    // Follow-up item 3: set only while this flag's own NR click is being
+    // applied, so a refusal of a choice made elsewhere (the DSP menu) is
+    // not shown here as well.
+    bool m_nrClickInFlight{false};
 
     // --- X/RIT tab ---
     QPushButton*   m_ritBtn{nullptr};
