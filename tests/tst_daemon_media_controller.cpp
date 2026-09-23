@@ -580,6 +580,7 @@ private slots:
     void losslessRefusalKeepsOpusAndSaysWhy_data();
     void losslessRefusalKeepsOpusAndSaysWhy();
     void minorSevenPeerCannotAskForAnAudioProfile();
+    void startNeedsAnAudioProfileVersionOfAtLeastOne();
     void clockProbeIsAnsweredWithTheCoreClockAndCapture();
     void minorEightPeerReceivesTodaysSpectrumContext();
     void minorNinePeerReceivesTheGrant();
@@ -3092,6 +3093,28 @@ void TstDaemonMediaController::minorSevenPeerCannotAskForAnAudioProfile()
     QVERIFY(hasLegacyAudioContextShape(receivedAudioContexts(*peer).constLast()));
     QCOMPARE(h.controller.audioProfile(), RemoteAudioProfile::Opus);
     peer->closeLink(QStringLiteral("test complete"));
+}
+
+// Fix wave minor 7: the start's audioProfileVersion is the Core's advertised
+// capability, at least 1. Zero, a fraction, a negative number or a string
+// is refused and no media peer starts; version 1 is accepted.
+void TstDaemonMediaController::startNeedsAnAudioProfileVersionOfAtLeastOne()
+{
+    Harness h;
+    h.establishSession();
+    QVERIFY(h.server.remoteAudioStatusAvailable());
+    for (const QJsonValue& bad : {QJsonValue(0), QJsonValue(-1), QJsonValue(1.5),
+                                  QJsonValue(QStringLiteral("1")), QJsonValue()}) {
+        QJsonObject start = profileStart();
+        start.insert(QStringLiteral("audioProfileVersion"), bad);
+        QVERIFY(h.client.sendMediaControl(start, h.client.sessionEpoch()));
+        QTest::qWait(20);
+        QVERIFY2(!h.mediaTransport, qPrintable(QString::fromUtf8(
+            QJsonDocument(QJsonObject{{QStringLiteral("v"), bad}}).toJson(QJsonDocument::Compact))));
+    }
+    QVERIFY(h.client.sendMediaControl(profileStart(), h.client.sessionEpoch()));
+    QTRY_VERIFY(h.mediaTransport);
+    QVERIFY(h.mediaTransport->startOptions.offerLosslessAudio);
 }
 
 namespace {

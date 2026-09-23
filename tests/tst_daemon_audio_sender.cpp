@@ -7,6 +7,8 @@
 
 #include <QtTest>
 
+#include <algorithm>
+
 #include "core/AudioEngine.h"
 #include "core/session/media/DaemonAudioSender.h"
 #include "core/session/media/DaemonAudioSource.h"
@@ -500,18 +502,21 @@ private slots:
         QTest::addColumn<qint64>("tickNs");
         QTest::addColumn<int>("firstTick");
         QTest::addColumn<int>("maxTicks");
-        QTest::newRow("10 ms ticks") << qint64(10'000'000) << 3 << 14;
+        QTest::addColumn<bool>("capped");
+        QTest::newRow("10 ms ticks") << qint64(10'000'000) << 3 << 14 << false;
         // A busy Core's timer: 16 ms ticks earn 4.8 packets each, and the
         // fraction carries, so pacing still keeps ahead of the audio.
-        QTest::newRow("late 16 ms ticks") << qint64(16'000'000) << 4 << 9;
-        // One tick a second late: the cap, six, and no more.
-        QTest::newRow("one 1 s tick") << qint64(1'000'000'000) << 6 << 7;
+        QTest::newRow("late 16 ms ticks") << qint64(16'000'000) << 4 << 9 << false;
+        // One tick a second late: the cap, six, and no more. Every such
+        // tick that sends the whole cap is counted (fix wave minor 3).
+        QTest::newRow("one 1 s tick") << qint64(1'000'000'000) << 6 << 7 << true;
     }
     void losslessStallIsPacedWithoutLoss()
     {
         QFETCH(qint64, tickNs);
         QFETCH(int, firstTick);
         QFETCH(int, maxTicks);
+        QFETCH(bool, capped);
         Harness h;
         h.engine->setSliceStreaming(h.sliceB, false);
         DaemonAudioSender sender(h.engine);
@@ -561,6 +566,12 @@ private slots:
         QCOMPARE(telemetry.source.sourceDropEvents, std::uint64_t{0});
         QCOMPARE(telemetry.lastEmittedSequence, static_cast<quint16>(firstSequence + kStallPackets - 1));
         QCOMPARE(sender.pendingLosslessPackets(), 0);
+        // Only ticks that sent a full six count as held to the cap; on-time
+        // and moderately late ticks never do.
+        const auto fullTicks = std::uint64_t(std::count(perTick.cbegin(), perTick.cend(),
+            DaemonAudioSender::kMaxLosslessPacketsPerDrain));
+        QCOMPARE(telemetry.losslessCappedTicks, capped ? fullTicks : std::uint64_t{0});
+        if (capped) { QVERIFY(telemetry.losslessCappedTicks >= 6); }
         clock.nowNs += tickNs;
         sender.drain();
         QCOMPARE(packets.count(), kStallPackets);

@@ -34,6 +34,12 @@ struct DaemonAudioSenderTelemetry {
     std::uint64_t consumedBlocks = 0;
     std::uint64_t encodedPackets = 0;
     std::uint64_t encodeFailures = 0;
+    // Lossless ticks that came late enough to earn more than the per-tick
+    // cap (over 20 ms after the previous tick) and sent the whole cap,
+    // kMaxLosslessPacketsPerDrain. The Core's timer ran late with audio
+    // waiting: a slow Core, which a bad link cannot cause (the sender never
+    // waits for the network).
+    std::uint64_t losslessCappedTicks = 0;
     bool hasLastEmittedPacket = false;
     quint16 lastEmittedSequence = 0;
     quint32 lastEmittedTimestamp = 0;

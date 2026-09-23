@@ -197,6 +197,7 @@ void DaemonAudioSender::drainLossless(quint64 drainGeneration)
     constexpr qint64 kUnitsPerPacket = 10'000'000;
     constexpr qint64 kCapUnits = qint64(kMaxLosslessPacketsPerDrain) * kUnitsPerPacket;
     const qint64 earned = std::min<qint64>(elapsed, kCapUnits) * kLosslessPacketsPer10Ms;
+    const bool lateTick = earned > kCapUnits;
     m_pacingAllowanceUnits = std::min<qint64>(kCapUnits, m_pacingAllowanceUnits + earned);
     const int allowed = static_cast<int>(m_pacingAllowanceUnits / kUnitsPerPacket);
     for (int sent = 0; sent < allowed;) {
@@ -241,6 +242,13 @@ void DaemonAudioSender::drainLossless(quint64 drainGeneration)
         if (m_lifecycleGeneration != drainGeneration || !isRunning()) {
             return;
         }
+    }
+    // The tick earned more than the cap by itself (it came over 20 ms after
+    // the last) and sent the whole cap: the timer ran late with audio
+    // waiting. An on-time tick never counts, even when idle ticks have let
+    // the allowance reach the cap.
+    if (lateTick && allowed == kMaxLosslessPacketsPerDrain) {
+        ++m_telemetry.losslessCappedTicks;
     }
 }
 

@@ -833,9 +833,12 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
     quint32 audioProfileVersion = 0;
     if (declaresAudioProfile) {
         legacyShape.remove(QStringLiteral("audioProfileVersion"));
+        // A whole number, at least 1 (the first version with profiles);
+        // zero, fractions, negatives and strings are refused.
         if (!m_server || !m_server->remoteAudioStatusAvailable()
             || !exactUnsigned(control.value(QStringLiteral("audioProfileVersion")),
-                              audioProfileVersion, true)) {
+                              audioProfileVersion, /*nonzero=*/true)
+            || audioProfileVersion < 1) {
             return false;
         }
     }
@@ -2356,6 +2359,9 @@ void DaemonMediaController::maybeLogAudioDiagnostics(bool final)
         << " consumed=" << snapshot.sender.consumedBlocks
         << " encoded=" << snapshot.sender.encodedPackets
         << " encodeFailures=" << snapshot.sender.encodeFailures
+        // Lossless send ticks held to the per-tick cap with audio waiting:
+        // the Core's send timer ran late (a slow Core), not the network.
+        << " losslessCappedTicks=" << snapshot.sender.losslessCappedTicks
         << " sendAttempts=" << snapshot.sendAttempts
         << " sendAccepted=" << snapshot.sendAccepted
         << " sendRejected=" << snapshot.sendRejected
