@@ -235,42 +235,48 @@ void TestMediaTransport::stalledReceiverRefusesDisplayInsteadOfQueueing()
     const QByteArray frame(kFrameBytes, char(0x3c));
     answerer.setDisplayReceiveStalledForTest(true);
 
-    // Offer frames until the sender has refused every one for a full second.
-    int accepted = 0;
+    // Offer frames until a full second passes in which the sender took
+    // nothing: no frame went to SCTP (Sent) and none was held by the
+    // library (Queued). Either one restarts the second.
+    int sent = 0;
+    int queued = 0;
     int refused = 0;
-    QElapsedTimer sinceAccepted;
-    sinceAccepted.start();
+    QElapsedTimer sinceTaken;
+    sinceTaken.start();
     QElapsedTimer overall;
     overall.start();
-    // "Accepted" is a frame SCTP took at once, as it was before a frame the
-    // library holds was reported as taken; a held frame still counts in
-    // submittedDisplayPayloadBytes.
-    while (sinceAccepted.elapsed() < 1000 && overall.elapsed() < 60'000) {
+    while (sinceTaken.elapsed() < 1000 && overall.elapsed() < 60'000) {
         const IMediaTransport::DisplaySendResult result = offerer.submitDisplay(frame);
         if (result == IMediaTransport::DisplaySendResult::Sent) {
-            ++accepted;
-            sinceAccepted.restart();
-        } else if (result != IMediaTransport::DisplaySendResult::Queued) {
+            ++sent;
+            sinceTaken.restart();
+        } else if (result == IMediaTransport::DisplaySendResult::Queued) {
+            ++queued;
+            sinceTaken.restart();
+        } else {
             ++refused;
         }
         QTest::qWait(1);
     }
-    QVERIFY2(overall.elapsed() < 60'000, "the sender never started refusing");
-    QVERIFY(accepted > 0);
+    QVERIFY2(overall.elapsed() < 60'000, "the sender never stopped taking frames");
+    QVERIFY(sent > 0);
     QVERIFY(refused > 0);
 
-    // Everything handed to the library is either held by this sender (its
-    // SCTP send buffer plus the one message libdatachannel queues when that
-    // buffer is full) or on the stalled receiver (its SCTP receive window
-    // plus the one message blocked in the delivery callback). With
-    // libdatachannel's 1 MiB defaults this is about 2 MiB.
+    // The SCTP buffers (64 KiB send, 128 KiB receive) and the one message
+    // the library holds do not add up to a whole-path limit, so the bound
+    // is the measurement: the whole path took exactly 26 frames (243,386
+    // bytes) on every run, 2026-09-23. The margin is one frame, for when
+    // the receiver's window update lands. libdatachannel's 1 MiB defaults
+    // let about 1.4 MB pile up here.
     const quint64 submitted = offerer.telemetry()->submittedDisplayPayloadBytes;
-    const quint64 bound = quint64(IMediaTransport::kSctpSendBufferBytes)
-        + quint64(IMediaTransport::kSctpReceiveBufferBytes)
-        + 2 * quint64(kFrameBytes);
+    constexpr quint64 kMeasuredFrames = 26;
+    constexpr quint64 kMarginFrames = 1;
+    const quint64 bound = (kMeasuredFrames + kMarginFrames) * quint64(kFrameBytes);
+    QCOMPARE(submitted, quint64(sent + queued) * quint64(kFrameBytes));
     QVERIFY2(submitted <= bound,
-             qPrintable(QStringLiteral("sender held %1 bytes in %2 frames, bound %3")
-                            .arg(submitted).arg(accepted).arg(bound)));
+             qPrintable(QStringLiteral("sender took %1 bytes in %2 frames (%3 held by "
+                                       "the library), bound %4")
+                            .arg(submitted).arg(sent + queued).arg(queued).arg(bound)));
 
     // Once the receiver drains again the sender recovers, and every frame
     // that arrives is whole.

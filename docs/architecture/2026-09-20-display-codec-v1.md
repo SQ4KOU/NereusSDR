@@ -173,10 +173,16 @@ busy is offered again later (it was never sent, so this is not a resend); a
 chunk the transport refused outright abandons the rest of its snapshot. An
 error on the display channel itself counts (`transportErrors`), is logged
 once per distinct text per media peer, and is handled like a failed send;
-signalling and other media errors are logged once but not counted. With a stalled receiver the sender holds at most the send buffer plus
-one message, and the whole path at most the two buffers plus two messages
-(`tst_media_transport`; 159,137 bytes measured against a 215,330-byte bound,
-where libdatachannel's defaults let 1,376,067 bytes pile up).
+signalling and other media errors are logged once but not counted. What is
+bounded by construction: the library holds at most one display message (a
+further one is Busy), and SCTP's send buffer is set to 64 KiB and its
+receive buffer to 128 KiB. Those figures are not a whole-path limit, and
+this document does not claim one. What was measured: with a stalled
+receiver, `tst_media_transport` offers the largest spectrum frame (9,361
+bytes) until a full second passes in which nothing is taken, and the path
+took exactly 26 frames (243,386 bytes; 13 sent at once, 13 held by the
+library) on every run. The test holds it to that measurement plus one frame
+(252,747 bytes); with libdatachannel's defaults 1,376,067 bytes piled up.
 
 The GUI keeps at most 8 received display messages or 256 KiB between drains,
 dropping the oldest first. Each dropped message is counted
