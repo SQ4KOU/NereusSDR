@@ -1388,6 +1388,13 @@ nereus_add_test(tst_capture_protocol)
 # is ever requested; no real microphone is opened.
 nereus_add_test(tst_capture_helper_process fakes/FakeCaptureChild.cpp)
 
+# R-R3-36 Task 3: CaptureSupervisor and the stable CaptureAudioBus reader.
+# The test re-executes itself as the scripted fake helper
+# (--fake-capture-child <scenario>): demand leases, generations, open /
+# hello / stop deadlines, protocol errors, bounded shutdown against a
+# hanging child. No real microphone is opened.
+nereus_add_test(tst_capture_supervisor fakes/FakeCaptureChild.cpp)
+
 # ── Phase 3O Sub-Phase 12 Task 12.2 Step 0: AudioEngine speakers live-reconfig ─
 # Verifies speakersConfigChanged / headphonesConfigChanged / txInputConfigChanged
 # / vaxConfigChanged signals, mutex safety in rxBlockReady (try_lock), and
