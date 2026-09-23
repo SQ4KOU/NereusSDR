@@ -2196,9 +2196,13 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
             // is not ordered with the media channel, so the refusal can land
             // while the slice still looks unchanged here. Those are the
             // operator's own changes, not refusals: the pan goes blank and
-            // the mirrored change then retires or renews the binding.
-            const bool operatorChange = reason == QLatin1String("slice removed")
-                || reason == QLatin1String("slice stream binding changed");
+            // the mirrored change then retires or renews the binding. The
+            // wording comes from SpectrumEndpoint.h, the same constants the
+            // Core sends. A source retune (kRetireReasonSourceRetune) keeps
+            // its status line: a fixed-view pan may not re-request when the
+            // mirrored retune lands, and a blank pan needs its reason.
+            const bool operatorChange = reason == QLatin1String(kRetireReasonSliceRemoved)
+                || reason == QLatin1String(kRetireReasonStreamBindingChanged);
             binding.accepted = false;
             binding.rejected = true;
             binding.refusalReason = operatorChange ? QString()

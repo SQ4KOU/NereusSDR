@@ -30,6 +30,15 @@ inline constexpr int kMaxFramesPerLine = 10000;
 inline constexpr double kMinDbmLimit = -400.0;
 inline constexpr double kMaxDbmLimit = 100.0;
 
+/// Reasons Core sends when it retires a spectrum endpoint because of an
+/// operator change rather than refusing it (R-R3-01, R-R3-37): the slice was
+/// removed, its stream binding changed, or the slice retuned so the source no
+/// longer covers the requested crop. DaemonMediaController sends these and the
+/// window's refusal filter matches them, so one wording serves both ends.
+inline constexpr char kRetireReasonSliceRemoved[] = "slice removed";
+inline constexpr char kRetireReasonStreamBindingChanged[] = "slice stream binding changed";
+inline constexpr char kRetireReasonSourceRetune[] = "source retune no longer covers requested crop";
+
 /// Why Core granted less than a spectrum subscription asked for.
 enum class SpectrumLimitReason {
     None,

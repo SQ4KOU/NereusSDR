@@ -2753,8 +2753,9 @@ private slots:
 
         // Core retires the endpoint because the slice went or was rebound,
         // and this window has not yet seen that change: no refusal line.
-        for (const QString& operatorChange : {QStringLiteral("slice removed"),
-                                              QStringLiteral("slice stream binding changed")}) {
+        for (const QString& operatorChange :
+             {QString::fromLatin1(kRetireReasonSliceRemoved),
+              QString::fromLatin1(kRetireReasonStreamBindingChanged)}) {
             refuse(operatorChange);
             QTest::qWait(250);
             QVERIFY2(applet->remoteDisplayStatus().isEmpty(),

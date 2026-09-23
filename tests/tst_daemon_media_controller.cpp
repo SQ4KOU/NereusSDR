@@ -2008,6 +2008,7 @@ void TstDaemonMediaController::streamRemovalRetiresEndpointAndSource()
 {
     Harness harness;
     harness.establishSession();
+    QSignalSpy controls(&harness.client, &StationClient::mediaControlReceived);
     harness.startReadyPeer();
     QVERIFY(harness.spareSliceId >= 0);
     QCOMPARE(harness.radio.slices().size(), 2);
@@ -2020,6 +2021,15 @@ void TstDaemonMediaController::streamRemovalRetiresEndpointAndSource()
     harness.radio.removeSlice(harness.sliceId);
     QTRY_COMPARE(harness.controller.activeEndpointCount(), 0);
     QTRY_COMPARE(harness.controller.activeSourceCount(), 0);
+    // R-R3-01/37: the retirement carries the shared wording the window's
+    // refusal filter matches (SpectrumEndpoint.h), not a local copy. Removal
+    // unbinds the slice's stream first, so the binding reason may win.
+    QTRY_VERIFY(!messageFor(controls, QStringLiteral("rejected"), 11).isEmpty());
+    const QString retired = messageFor(controls, QStringLiteral("rejected"), 11)
+                                .value(QStringLiteral("reason")).toString();
+    QVERIFY2(retired == QLatin1String(kRetireReasonSliceRemoved)
+                 || retired == QLatin1String(kRetireReasonStreamBindingChanged),
+             qPrintable(retired));
     harness.finish();
 }
 
@@ -2587,7 +2597,11 @@ void TstDaemonMediaController::configuredAudioBitrateReachesOfferAndContext()
 // leaves, every pan held to that engine is granted its own request, not
 // only a lone survivor. Each renews once, for the new engine size; a pan on
 // another engine is not renewed, and nothing renews when a pan that holds no
-// one else back leaves.
+// one else back leaves. A neighbour on the grown engine that was never held
+// back (it asked for no more than the engine gave) renews exactly once too:
+// the engine's FFT size, and so its bin count, really changed under it. That
+// is the one renewal the "no neighbour renewal" rule allows, recorded here
+// as a decision (final review minor 2, 2026-09-23).
 void TstDaemonMediaController::sharedEngineRegrantsEverySurvivorWhenItsSizerLeaves()
 {
     Harness h;
@@ -2606,7 +2620,8 @@ void TstDaemonMediaController::sharedEngineRegrantsEverySurvivorWhenItsSizerLeav
     };
 
     // E1 sizes the "wide" engine at 1024; E2 (4096) and E3 (8192) join it
-    // and are held to 1024. E4 has an engine of its own.
+    // and are held to 1024. E4 has an engine of its own. E5 joins the wide
+    // engine asking for 1024, which it gets: it is not held back.
     QVERIFY(h.client.sendMediaControl(
         tieredSubscription(1, 1, h.sliceId, centre, QStringLiteral("wide"), 1024),
         h.client.sessionEpoch()));
@@ -2623,7 +2638,13 @@ void TstDaemonMediaController::sharedEngineRegrantsEverySurvivorWhenItsSizerLeav
         tieredSubscription(4, 1, h.sliceId, centre, QStringLiteral("fine"), 2048),
         h.client.sessionEpoch()));
     contextCount(4, 1);
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(5, 1, h.sliceId, centre, QStringLiteral("wide"), 1024),
+        h.client.sessionEpoch()));
+    contextCount(5, 1);
     settle();
+    QCOMPARE(h.controller.spectrumGrant(5)->grantedFftSize, 1024);
+    QCOMPARE(h.controller.spectrumGrant(5)->reason, SpectrumLimitReason::None);
     for (quint32 held : {2U, 3U}) {
         QCOMPARE(h.controller.spectrumGrant(held)->grantedFftSize, 1024);
         QCOMPARE(h.controller.spectrumGrant(held)->reason, SpectrumLimitReason::SharedEngine);
@@ -2633,17 +2654,26 @@ void TstDaemonMediaController::sharedEngineRegrantsEverySurvivorWhenItsSizerLeav
     const int e2Contexts = messageCount(controls, QStringLiteral("context"), 2);
     const int e3Contexts = messageCount(controls, QStringLiteral("context"), 3);
     const int e4Contexts = messageCount(controls, QStringLiteral("context"), 4);
+    const int e5Contexts = messageCount(controls, QStringLiteral("context"), 5);
 
     // E1 leaves: both pans held to its engine are re-granted. The engine
     // runs at the larger request, and neither pan is told it is shared.
     QVERIFY(h.client.sendMediaControl(unsubscription(1), h.client.sessionEpoch()));
-    QTRY_COMPARE(h.controller.activeEndpointCount(), 3);
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 4);
     contextCount(2, e2Contexts + 1);
     contextCount(3, e3Contexts + 1);
+    contextCount(5, e5Contexts + 1);
     settle();
     QCOMPARE(messageCount(controls, QStringLiteral("context"), 2), e2Contexts + 1);
     QCOMPARE(messageCount(controls, QStringLiteral("context"), 3), e3Contexts + 1);
     QCOMPARE(messageCount(controls, QStringLiteral("context"), 4), e4Contexts);
+    // E5's one renewal: the engine grew from 1024 to 8192 bins under it.
+    QCOMPARE(messageCount(controls, QStringLiteral("context"), 5), e5Contexts + 1);
+    QCOMPARE(messageFor(controls, QStringLiteral("context"), 5)
+                 .value(QStringLiteral("grantedFftSize")).toInt(), 8192);
+    QCOMPARE(messageFor(controls, QStringLiteral("context"), 5)
+                 .value(QStringLiteral("limit")).toString(), QStringLiteral("none"));
+    QCOMPARE(h.controller.spectrumGrant(5)->reason, SpectrumLimitReason::None);
     for (quint32 regranted : {2U, 3U}) {
         const QJsonObject context = messageFor(controls, QStringLiteral("context"), regranted);
         QCOMPARE(context.value(QStringLiteral("grantedFftSize")).toInt(), 8192);
@@ -2654,10 +2684,11 @@ void TstDaemonMediaController::sharedEngineRegrantsEverySurvivorWhenItsSizerLeav
 
     // E3 leaves. E2 is not held back by anyone, so nothing renews.
     QVERIFY(h.client.sendMediaControl(unsubscription(3), h.client.sessionEpoch()));
-    QTRY_COMPARE(h.controller.activeEndpointCount(), 2);
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 3);
     settle();
     QCOMPARE(messageCount(controls, QStringLiteral("context"), 2), e2Contexts + 1);
     QCOMPARE(messageCount(controls, QStringLiteral("context"), 4), e4Contexts);
+    QCOMPARE(messageCount(controls, QStringLiteral("context"), 5), e5Contexts + 1);
     QCOMPARE(h.controller.spectrumGrant(2)->reason, SpectrumLimitReason::None);
     h.finish();
 }

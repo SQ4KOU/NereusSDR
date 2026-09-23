@@ -1965,7 +1965,7 @@ void DaemonMediaController::onStreamGeometryChanged(int streamIndex, double, int
                 removeEndpoint(endpointId);
                 const QPointer<DaemonMediaController> self(this);
                 sendRejected(m_peer ? m_peer->connectionId() : QString(), endpointId, revision,
-                             QStringLiteral("source retune no longer covers requested crop"));
+                             QString::fromLatin1(kRetireReasonSourceRetune));
                 if (!self || m_peer.get() != peer || m_epoch != epoch) { return; }
             }
         }
@@ -2016,7 +2016,7 @@ void DaemonMediaController::onStreamBindingsChanged(int streamIndex, const QVect
             removeEndpoint(endpointId);
             const QPointer<DaemonMediaController> self(this);
             sendRejected(m_peer ? m_peer->connectionId() : QString(), endpointId, revision,
-                         QStringLiteral("slice stream binding changed"));
+                         QString::fromLatin1(kRetireReasonStreamBindingChanged));
             if (!self || m_peer.get() != peer || m_epoch != epoch) { return; }
         }
     }
@@ -2036,7 +2036,7 @@ void DaemonMediaController::onSliceRemoved(int sliceId)
             removeEndpoint(endpointId);
             const QPointer<DaemonMediaController> self(this);
             sendRejected(m_peer ? m_peer->connectionId() : QString(), endpointId, revision,
-                         QStringLiteral("slice removed"));
+                         QString::fromLatin1(kRetireReasonSliceRemoved));
             if (!self || m_peer.get() != peer || m_epoch != epoch) { return; }
         }
     }
