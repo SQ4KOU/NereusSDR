@@ -387,6 +387,7 @@ warren@wpratt.com
 #include <QDateTime>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QFile>
 #include <QMetaObject>
 #include <QScopeGuard>
 #include <QScopedValueRollback>
@@ -598,6 +599,17 @@ RadioModel::RadioModel(Role role, QObject* parent)
     m_dspAssets = new DspAssetService(AppSettings::instance(), role == Role::Local, this);
     connect(m_dspAssets, &DspAssetService::configurationChanged, this, [this]() {
         scheduleSettingsSave();
+    });
+    // R-R3-21: the Core owns the NR3 model. A choice applies live through
+    // rnnr.c's RNNRloadModel (it swaps the model under every NR3 instance);
+    // DspAssetService only calls this with a file that passed its trial load.
+    // A remote window never loads a model: its service ignores the loader.
+    m_dspAssets->setNr3ModelLoader([](const QString& path) {
+        qCInfo(lcDsp) << "NR3: loading rnnoise model from" << path;
+#ifdef HAVE_WDSP
+        const QByteArray encoded = QFile::encodeName(path);
+        RNNRloadModel(encoded.constData());
+#endif
     });
     m_pureSignalSettings = new PureSignalSettings(this);
     m_pureSignalFacade = new PureSignalSessionFacade(this, nullptr, this);
@@ -8023,20 +8035,14 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
 #endif
 
                     // NR3 model — global (RNNRloadModel), not per-channel.
-                    // Prefer AppSettings override; fall back to the bundled dev-path.
                     // From Thetis wdsp/rnnr.c:161-176 [v2.10.3.13]
+                    // R-R3-21: the Core's chosen NR3 asset, resolved to a
+                    // file that passed the trial load (bundled large model
+                    // by default). Nr3ModelPath is no longer read here.
                     {
-                        const QString defaultModelPath = NereusSDR::ModelPaths::rnnoiseDefaultLargeBin();
-                        const QString model = AppSettings::instance().value(
-                            QStringLiteral("Nr3ModelPath"), defaultModelPath).toString();
-                        if (!model.isEmpty()) {
-                            qCInfo(lcDsp) << "NR3: loading rnnoise model from" << model;
-#ifdef HAVE_WDSP
-                            RNNRloadModel(model.toStdString().c_str());
-#endif
-                        } else {
-                            qCWarning(lcDsp) << "NR3 model not found at expected paths;"
-                                             << "NR3 will be disabled until a model is loaded.";
+                        QString nr3Reason;
+                        if (!m_dspAssets->applyNr3Model(&nr3Reason)) {
+                            qCWarning(lcDsp) << "NR3 model not loaded:" << nr3Reason;
                         }
                     }
 

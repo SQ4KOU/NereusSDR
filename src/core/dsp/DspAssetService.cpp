@@ -4,6 +4,8 @@
 #include "DspAssetService.h"
 
 #include "core/AppSettings.h"
+#include "core/LogCategories.h"
+#include "core/ModelPaths.h"
 
 #include <QBuffer>
 #include <QCryptographicHash>
@@ -27,6 +29,11 @@ namespace {
 constexpr auto kSelection0 = "DspAssets/NnrModel0";
 constexpr auto kSelection1 = "DspAssets/NnrModel1";
 constexpr auto kRevision = "DspAssets/SelectionRevision";
+// R-R3-21: the one Core-wide NR3 model choice, and the once-only marker for
+// carrying an older install's Nr3ModelPath file into the asset store.
+constexpr auto kNr3Selection = "DspAssets/Nr3Model";
+constexpr auto kNr3LegacyImported = "DspAssets/Nr3ModelPathImported";
+constexpr auto kLegacyNr3ModelPath = "Nr3ModelPath";
 constexpr int kMaxRecords = 128;
 constexpr int kMaxPendingRequests = 128;
 constexpr int kMaxImportsPerOwner = 2;
@@ -81,8 +88,28 @@ bool exactInteger(const QVariant& value, qint64* result)
 
 qint64 kindLimit(DspAssetKind kind)
 {
-    return kind == DspAssetKind::NnrModel ? DspAssetValidation::kMaxNnrModelBytes
-                                          : DspAssetValidation::kMaxPs3CorrectionBytes;
+    return DspAssetValidation::sizeLimit(kind);
+}
+
+QString largeNr3Id() { return QString::fromLatin1(DspAssetService::kNr3BundledLargeId); }
+QString smallNr3Id() { return QString::fromLatin1(DspAssetService::kNr3BundledSmallId); }
+
+// Reads a model file with the size cap and runs the same trial load an
+// imported model gets. Used for the bundled files, which the store does not
+// hold.
+bool nr3FileUsable(const QString& path)
+{
+    if (path.isEmpty()) return false;
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) return false;
+    const QByteArray bytes = file.read(DspAssetValidation::kMaxNr3ModelBytes + 1);
+    return DspAssetValidation::validateNr3Model(bytes).accepted;
+}
+
+QString bundledNr3Name(const QString& id)
+{
+    return id == smallNr3Id() ? QObject::tr("the bundled small model")
+                              : QObject::tr("the bundled large model");
 }
 
 QJsonObject recordJson(const DspAssetRecord& record)
@@ -127,6 +154,7 @@ DspAssetService::DspAssetService(AppSettings& settings, bool local, QObject* par
     m_selected = {bundledId(0), bundledId(1)};
     m_active = m_selected;
     m_lastResolved = m_active;
+    m_nr3Selected = largeNr3Id();
     if (m_local) {
         m_store = std::make_unique<DspAssetStore>(QFileInfo(settings.filePath()).absolutePath());
         const QString saved0 = settings.value(QString::fromLatin1(kSelection0), bundledId(0)).toString();
@@ -142,6 +170,12 @@ DspAssetService::DspAssetService(AppSettings& settings, bool local, QObject* par
                                std::numeric_limits<quint32>::max()))
                          : 1;
         settings.setValue(QString::fromLatin1(kRevision), QString::number(m_revision));
+        importLegacyNr3ModelPath();
+        const QString savedNr3 = settings.value(QString::fromLatin1(kNr3Selection),
+                                                largeNr3Id()).toString();
+        if (!savedNr3.isEmpty()) m_nr3Selected = savedNr3;
+        // Status only; nothing is loaded until the Core applies it.
+        resolveNr3ModelPath();
     }
     refreshSelectionStatus();
 }
@@ -197,8 +231,10 @@ DspAssetServiceResult DspAssetService::execute(const QByteArray& verb,
         qint64 kindValue = -1;
         qint64 size = 0;
         QString label, hash, radioIdentity;
+        DspAssetKind kind = DspAssetKind::NnrModel;
         if (!exactInteger(args.value(QStringLiteral("kind")), &kindValue)
-            || (kindValue != 0 && kindValue != 1)
+            || !dspAssetKindFromInt(kindValue, &kind)
+            || (kind == DspAssetKind::Nr3Model && !nr3ModelsSupported())
             || !exactString(args.value(QStringLiteral("label")), &label)
             || label.size() > 128
             || !exactInteger(args.value(QStringLiteral("size")), &size)
@@ -206,8 +242,6 @@ DspAssetServiceResult DspAssetService::execute(const QByteArray& verb,
             || !exactString(args.value(QStringLiteral("radioIdentity")), &radioIdentity)) {
             return reject(QStringLiteral("dspAssets.beginImport field types or ranges are invalid."));
         }
-        const DspAssetKind kind = kindValue == 0 ? DspAssetKind::NnrModel
-                                                  : DspAssetKind::Ps3Correction;
         if (size <= 0 || size > kindLimit(kind))
             return reject(QStringLiteral("Advertised DSP asset size is outside the format limit."));
         static const QRegularExpression hex64(QStringLiteral("^[0-9A-Fa-f]{64}$"));
@@ -216,6 +250,8 @@ DspAssetServiceResult DspAssetService::execute(const QByteArray& verb,
         const QString normalizedRadio = AppSettings::normalizedRadioMac(radioIdentity);
         if (kind == DspAssetKind::NnrModel && !radioIdentity.isEmpty())
             return reject(QStringLiteral("NNR model imports cannot carry a radio identity."));
+        if (kind == DspAssetKind::Nr3Model && !radioIdentity.isEmpty())
+            return reject(QStringLiteral("NR3 models belong to the Core, not to one radio."));
         if (kind == DspAssetKind::Ps3Correction
             && (normalizedRadio.isEmpty() || m_radioIdentity.isEmpty()
                 || normalizedRadio != m_radioIdentity)) {
@@ -375,6 +411,18 @@ DspAssetServiceResult DspAssetService::execute(const QByteArray& verb,
                            {QStringLiteral("status"), m_status}}};
     }
 
+    if (verb == "dspAssets.selectNr3Model") {
+        if (!hasOnlyKeys(args, {"id"}))
+            return reject(QStringLiteral("dspAssets.selectNr3Model has invalid or missing fields."));
+        QString id;
+        if (!exactString(args.value(QStringLiteral("id")), &id) || id.size() > 128)
+            return reject(QStringLiteral("NR3 model selection fields are invalid."));
+        QString error;
+        if (!setNr3Selection(id, &error)) return reject(error);
+        return {true, {}, {{QStringLiteral("id"), m_nr3Selected},
+                           {QStringLiteral("status"), m_nr3Status}}};
+    }
+
     return reject(QStringLiteral("Unknown DSP asset action."));
 }
 
@@ -532,9 +580,199 @@ void DspAssetService::markNnrModelsApplied()
     emit selectionChanged();
 }
 
+bool DspAssetService::isBundledNr3Id(const QString& id)
+{
+    return id == largeNr3Id() || id == smallNr3Id();
+}
+
+QString DspAssetService::bundledNr3ModelPath(const QString& id)
+{
+    if (id == largeNr3Id()) return ModelPaths::rnnoiseDefaultLargeBin();
+    if (id == smallNr3Id()) return ModelPaths::rnnoiseDefaultSmallBin();
+    return {};
+}
+
+bool DspAssetService::nr3ModelsSupported() const
+{
+    if (!m_local) return m_remoteNr3Supported;
+#ifdef HAVE_WDSP
+    return m_store && m_store->isValid();
+#else
+    return false;
+#endif
+}
+
+void DspAssetService::setRemoteNr3ModelsSupported(bool supported)
+{
+    if (m_local || m_remoteNr3Supported == supported) return;
+    m_remoteNr3Supported = supported;
+    emit nr3SelectionChanged();
+}
+
+void DspAssetService::setNr3ModelLoader(Nr3ModelLoader loader)
+{
+    if (m_local) m_nr3Loader = std::move(loader);
+}
+
+void DspAssetService::setNr3Status(const QString& status)
+{
+    if (m_nr3Status == status) return;
+    m_nr3Status = status;
+    emit nr3SelectionChanged();
+}
+
+QString DspAssetService::resolveNr3ModelPath(QString* resolvedId, QString* reason)
+{
+    if (resolvedId) resolvedId->clear();
+    if (reason) reason->clear();
+    if (!m_local) {
+        if (reason) *reason = tr("Only the Core loads NR3 models.");
+        return {};
+    }
+
+    QString problem;
+    if (!isBundledNr3Id(m_nr3Selected)) {
+        QString error;
+        const QString path = m_store
+            ? m_store->resolvePath(m_nr3Selected, DspAssetKind::Nr3Model, {}, &error)
+            : QString();
+        if (!path.isEmpty()) {
+            if (resolvedId) *resolvedId = m_nr3Selected;
+            const QString label = m_store->label(m_nr3Selected);
+            setNr3Status(label.isEmpty() ? tr("Using an added NR3 model.")
+                                         : tr("Using the NR3 model \"%1\".").arg(label));
+            return path;
+        }
+        problem = tr("The chosen NR3 model is missing or damaged.");
+    }
+
+    // The bundled large model is the default; the small one stands in when
+    // the large file is absent or damaged, and the other way round.
+    const QStringList order = m_nr3Selected == smallNr3Id()
+        ? QStringList{smallNr3Id(), largeNr3Id()}
+        : QStringList{largeNr3Id(), smallNr3Id()};
+    for (const QString& id : order) {
+        const QString path = bundledNr3ModelPath(id);
+        if (!nr3FileUsable(path)) continue;
+        if (id != m_nr3Selected && problem.isEmpty()
+            && isBundledNr3Id(m_nr3Selected)) {
+            problem = m_nr3Selected == smallNr3Id()
+                ? tr("The bundled small model is missing from this Core.")
+                : tr("The bundled large model is missing from this Core.");
+        }
+        if (resolvedId) *resolvedId = id;
+        const QString using_ = tr("Using %1.").arg(bundledNr3Name(id));
+        setNr3Status(problem.isEmpty() ? using_ : problem + QLatin1Char(' ') + using_);
+        if (reason) *reason = problem;
+        return path;
+    }
+
+    const QString none = tr("No NR3 model file was found on this Core, so NR3 cannot run.");
+    setNr3Status(none);
+    if (reason) *reason = none;
+    return {};
+}
+
+bool DspAssetService::applyNr3Model(QString* reason)
+{
+    QString id;
+    const QString path = resolveNr3ModelPath(&id, reason);
+    // Never hand the loader "" or a file that failed the trial load: WDSP's
+    // RNNRloadModel would then leave NR3 with no model at all.
+    if (path.isEmpty()) return false;
+    if (m_nr3Loader) m_nr3Loader(path);
+    if (m_nr3Active != id) {
+        m_nr3Active = id;
+        emit nr3SelectionChanged();
+    }
+    return true;
+}
+
+bool DspAssetService::setNr3Selection(const QString& id, QString* reason)
+{
+    if (!nr3ModelsSupported()) {
+        if (reason) *reason = tr("This Core cannot change the NR3 model.");
+        return false;
+    }
+    if (isBundledNr3Id(id)) {
+        if (!nr3FileUsable(bundledNr3ModelPath(id))) {
+            if (reason) *reason = tr("That bundled NR3 model is not installed on this Core.");
+            return false;
+        }
+    } else {
+        QString error;
+        if (!m_store || m_store->resolvePath(id, DspAssetKind::Nr3Model, {}, &error).isEmpty()) {
+            if (reason) *reason = tr("That NR3 model is missing or damaged on this Core.");
+            return false;
+        }
+    }
+    if (reason) reason->clear();
+    if (m_nr3Selected == id && m_nr3Active == id) return true;
+    const bool changed = m_nr3Selected != id;
+    m_nr3Selected = id;
+    if (changed) {
+        m_settings.setValue(QString::fromLatin1(kNr3Selection), id);
+    }
+    // Live: rnnr.c's RNNRloadModel swaps the model under every NR3 instance.
+    applyNr3Model();
+    if (changed) {
+        emit nr3SelectionChanged();
+        emit configurationChanged();
+    }
+    return true;
+}
+
+void DspAssetService::importLegacyNr3ModelPath()
+{
+    if (!m_local || !m_store || !m_store->isValid()) return;
+    const QString legacy = m_settings.value(QString::fromLatin1(kLegacyNr3ModelPath)).toString();
+    if (legacy.isEmpty()
+        || m_settings.value(QString::fromLatin1(kNr3LegacyImported)).toString()
+               == QStringLiteral("True")) {
+        return;
+    }
+    // Once only, whatever the outcome: a missing or damaged old file must not
+    // be retried at every start.
+    m_settings.setValue(QString::fromLatin1(kNr3LegacyImported), QStringLiteral("True"));
+    if (m_settings.contains(QString::fromLatin1(kNr3Selection))) return;
+
+    const QString canonical = QFileInfo(legacy).canonicalFilePath();
+    for (const QString& id : {largeNr3Id(), smallNr3Id()}) {
+        const QString bundled = QFileInfo(bundledNr3ModelPath(id)).canonicalFilePath();
+        if (!canonical.isEmpty() && canonical == bundled) {
+            m_settings.setValue(QString::fromLatin1(kNr3Selection), id);
+            return;
+        }
+    }
+    QFile file(legacy);
+    if (!file.open(QIODevice::ReadOnly)) {
+        qCWarning(lcDsp) << "NR3: the older NR3 model file could not be read:" << legacy;
+        return;
+    }
+    const QByteArray bytes = file.read(DspAssetValidation::kMaxNr3ModelBytes + 1);
+    const DspAssetImportResult imported = m_store->importBytes(
+        DspAssetKind::Nr3Model, QFileInfo(legacy).completeBaseName().left(128), bytes);
+    if (!imported.accepted) {
+        qCWarning(lcDsp) << "NR3: the older NR3 model file was not imported:" << imported.error;
+        return;
+    }
+    m_settings.setValue(QString::fromLatin1(kNr3Selection), imported.record.id);
+    qCInfo(lcDsp) << "NR3: imported the older NR3 model file as" << imported.record.id;
+}
+
 bool DspAssetService::applyRemoteProperty(const QByteArray& name, const QVariant& value)
 {
     if (m_local) return false;
+    if (name == "nr3ModelAsset" || name == "nr3ModelStatus") {
+        QString text;
+        if (!exactString(value, &text)) return false;
+        QString& field = name == "nr3ModelAsset" ? m_nr3Selected : m_nr3Status;
+        if (field != text) {
+            field = text;
+            emit nr3SelectionChanged();
+        }
+        return true;
+    }
     bool changed = false;
     if (name == "nnrStandardAsset" || name == "nnrPremiumAsset") {
         QString text;

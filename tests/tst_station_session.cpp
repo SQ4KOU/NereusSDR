@@ -66,6 +66,7 @@
 #include "core/P1RadioConnection.h"
 #include "core/security/CertificateStore.h"
 #include "core/security/TokenStore.h"
+#include "core/dsp/DspAssetService.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/SessionTransport.h"
 #include "core/session/StateMirror.h"
@@ -327,6 +328,9 @@ private slots:
     void receiveOnlyStationRefusesTransmitDspOptionsSettingsRemoves();
     void acceptedReceiveDspOptionsWriteAppliesToMatchingSlices();
     void receiveOnlyPolicySurvivesRadioTeardown();
+    void nr3ModelChoiceLoadsOnceOnTheCoreAndMirrors();
+    void olderCoreLeavesTheNr3ModelUnchangeable();
+    void olderAppNr3ModelPathWriteIsRefused();
 
     // ---- Fix round 1 ----
     void reconnectSurvivesTheOldTransportClosing();
@@ -2836,6 +2840,137 @@ void TstStationSession::receiveOnlyStationRefusesTransmitPropertyWrites()
     QTRY_VERIFY(!clientTx.isMox());
     QTRY_VERIFY(!clientTx.isTune());
     QTRY_COMPARE(clientTx.power(), settledPower);
+}
+
+void TstStationSession::nr3ModelChoiceLoadsOnceOnTheCoreAndMirrors()
+{
+    // R-R3-21. A remote window chooses the Core's NR3 model with the
+    // dspAssets.selectNr3Model command; the Core loads that file once, live,
+    // and the choice and its plain-language status reach the window.
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+    auto stationModel = makeStationRadioModel(0);
+    QStringList loaded;
+    stationModel->dspAssets()->setNr3ModelLoader(
+        [&loaded](const QString& path) { loaded.append(path); });
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    QCOMPARE(server.buildCapabilities().dspAssetVersion, 2);
+
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
+    stationEnd->linkTo(clientEnd);
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    client.startSession(clientEnd, server.token());
+    server.acceptTransport(stationEnd);
+    QTRY_COMPARE(completed.count(), 1);
+
+    DspAssetService* remote = clientModel.dspAssets();
+    QTRY_VERIFY(remote->nr3ModelsSupported());
+    QTRY_COMPARE(remote->nr3ModelStatus(), stationModel->dspAssets()->nr3ModelStatus());
+
+    const QString small = QString::fromLatin1(DspAssetService::kNr3BundledSmallId);
+    QSignalSpy answered(remote, &DspAssetService::requestCompleted);
+    const quint32 request = remote->request("dspAssets.selectNr3Model",
+                                            {{QStringLiteral("id"), small}});
+    QVERIFY(request != 0);
+    QTRY_COMPARE(answered.count(), 1);
+    QCOMPARE(answered.first().at(0).toUInt(), request);
+    QVERIFY2(answered.first().at(1).toBool(), qPrintable(answered.first().at(2).toString()));
+
+    QCOMPARE(loaded, QStringList{DspAssetService::bundledNr3ModelPath(small)});
+    QCOMPARE(stationModel->dspAssets()->nr3ModelAsset(), small);
+    QTRY_COMPARE(remote->nr3ModelAsset(), small);
+    QTRY_COMPARE(remote->nr3ModelStatus(), QStringLiteral("Using the bundled small model."));
+    // The window never loads a model itself.
+    QVERIFY(!remote->applyNr3Model());
+    QCOMPARE(loaded.size(), 1);
+
+    AppSettings::instance().remove(QStringLiteral("DspAssets/Nr3Model"));
+}
+
+void TstStationSession::olderCoreLeavesTheNr3ModelUnchangeable()
+{
+    // R-R3-21. A Core advertising dspAssetVersion 1 has no NR3 models: the
+    // window reports it cannot change the model and sends no NR3 request.
+    // A version 2 Core on the same protocol minor enables it.
+    for (const int version : {1, 2}) {
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        auto* station = new LoopbackTransport(QStringLiteral("nr3-station"), this);
+        auto* peer = new LoopbackTransport(QStringLiteral("nr3-client"), this);
+        station->linkTo(peer);
+        client.startSession(peer, QStringLiteral("test-token"));
+        station->sendText(SessionMessages::encode(SessionMessages::hello(
+            kSessionProtocolMajor, kSessionProtocolMinor, 6, QStringLiteral("station"))));
+        station->sendText(SessionMessages::encode(SessionMessages::authResult(true, {}, false)));
+        StationCapabilities caps;
+        caps.propertyResultVersion = 1;
+        caps.dspAssetVersion = version;
+        station->sendText(SessionMessages::encode(SessionMessages::capabilities(caps.toUpdates())));
+        station->sendText(SessionMessages::encode(SessionMessages::snapshotComplete()));
+        QTRY_VERIFY(client.isHandshakeComplete());
+
+        DspAssetService* assets = remote.dspAssets();
+        QCOMPARE(assets->nr3ModelsSupported(), version >= 2);
+        QCOMPARE(client.remoteNr3ModelsAvailable(), version >= 2);
+        const quint32 select = assets->request(
+            "dspAssets.selectNr3Model",
+            {{QStringLiteral("id"), QString::fromLatin1(DspAssetService::kNr3BundledLargeId)}});
+        const quint32 upload = assets->request("dspAssets.beginImport", {
+            {QStringLiteral("kind"), 2}, {QStringLiteral("label"), QStringLiteral("x")},
+            {QStringLiteral("size"), qint64(1)}, {QStringLiteral("hash"), QString(64, QLatin1Char('a'))},
+            {QStringLiteral("radioIdentity"), QString()}});
+        QCOMPARE(select != 0, version >= 2);
+        QCOMPARE(upload != 0, version >= 2);
+        // The older Core's NNR requests are unaffected.
+        QVERIFY(assets->request("dspAssets.list", {}) != 0);
+    }
+}
+
+void TstStationSession::olderAppNr3ModelPathWriteIsRefused()
+{
+    // R-R3-21. An older app still writes Nr3ModelPath (a file on the app's
+    // own computer). The Core owns its NR3 models now, so the write is
+    // refused with a plain reason and the Core's value stays put.
+    const QString key = QStringLiteral("Nr3ModelPath");
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+    auto stationModel = makeStationRadioModel(0);
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
+    stationEnd->linkTo(clientEnd);
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    client.startSession(clientEnd, server.token());
+    server.acceptTransport(stationEnd);
+    QTRY_COMPARE(completed.count(), 1);
+    QVERIFY(proxy.ready());
+
+    QSignalSpy rejected(&proxy, &SettingsProxy::valueRejected);
+    QSignalSpy toast(&clientModel, &RadioModel::sliceAddRejected);
+    proxy.setValue(key, QStringLiteral("C:/Users/op/model.bin"));
+    QTRY_COMPARE(rejected.count(), 1);
+    QCOMPARE(rejected.first().at(0).toString(), key);
+    QVERIFY(!stationSettings.contains(key));
+    QCOMPARE(toast.count(), 1);
+    QCOMPARE(toast.first().at(0).toString(),
+             QStringLiteral("This Core keeps its own NR3 models. Update this app to choose one."));
+
+    proxy.remove(key);
+    QTRY_COMPARE(rejected.count(), 2);
+    QCOMPARE(toast.count(), 2);
+    QCOMPARE(toast.last().at(0).toString(),
+             QStringLiteral("This Core keeps its own NR3 models. Update this app to choose one."));
 }
 
 void TstStationSession::receiveOnlyStationRefusesTransmitDspOptionsSettingsWrites()

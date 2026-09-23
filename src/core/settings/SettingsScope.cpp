@@ -424,7 +424,9 @@ const Rule kWholeKeys[] = {
     { "CWPitch", SettingsScope::Station },
 
     // Neural-net noise-reduction model file path (NR3/rnnoise). The
-    // daemon is the process that actually loads and runs the model.
+    // daemon is the process that actually loads and runs the model. Since
+    // R-R3-21 it is also model-owned (isModelOwnedDspSettingsKey below):
+    // read only once, to import an older install's model file.
     { "Nr3ModelPath", SettingsScope::Station },
 
     // Identifies the STATION for self-spotting (POTA/PSKReporter/
@@ -495,6 +497,11 @@ bool isModelOwnedDspSettingsKey(QStringView rawKey)
     if (key.startsWith(QStringLiteral("dspassets/"))) {
         return true;
     }
+    // R-R3-21: the Core picks its NR3 model from its own asset store. An
+    // older app's raw path would name a file on the app's computer.
+    if (key == QStringLiteral("nr3modelpath")) {
+        return true;
+    }
     if (!key.startsWith(QStringLiteral("hardware/"))) {
         return false;
     }
@@ -502,6 +509,14 @@ bool isModelOwnedDspSettingsKey(QStringView rawKey)
     return (parts.size() >= 4 && parts[2] == QStringLiteral("puresignal"))
         || (parts.size() >= 6 && parts[2] == QStringLiteral("slices")
             && parts[4] == QStringLiteral("nnr"));
+}
+
+QString modelOwnedSettingsRefusal(QStringView rawKey)
+{
+    if (rawKey.compare(QLatin1String("Nr3ModelPath"), Qt::CaseInsensitive) == 0) {
+        return QStringLiteral("This Core keeps its own NR3 models. Update this app to choose one.");
+    }
+    return QStringLiteral("Use the station DSP controls; raw settings writes cannot bypass model validation.");
 }
 
 SettingsScope classifySettingsKey(QStringView rawKey)

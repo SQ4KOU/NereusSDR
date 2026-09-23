@@ -6,6 +6,9 @@
 // Modification history (NereusSDR):
 //   2026-09-21 — Created for NereusSDR by J.J. Boyd (KG4VCF), with
 //                AI-assisted implementation via OpenAI Codex.
+//   2026-09-23 - NR3 model kind and its separate manifest array added by
+//                J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include "DspAssetStore.h"
@@ -29,6 +32,13 @@ namespace NereusSDR {
 namespace {
 
 constexpr qint64 kMaxManifestBytes = 1024 * 1024;
+
+// NR3 records are kept in their own manifest array (R-R3-21). A Core built
+// before NR3 models existed reads only "assets" and rejects the WHOLE
+// manifest when it meets a kind it does not know, which would take every
+// NNR model and PureSignal correction with it after a downgrade. Keeping
+// NR3 rows out of "assets" means an older Core simply does not see them.
+constexpr auto kNr3ManifestArray = "nr3Assets";
 constexpr qsizetype kMaxLabelCharacters = 256;
 constexpr qsizetype kMaxRadioIdentityCharacters = 256;
 
@@ -90,14 +100,17 @@ DspAssetStore::DspAssetStore(const QString& stationProfileRoot)
 
 qint64 DspAssetStore::sizeLimit(DspAssetKind kind) const
 {
-    return kind == DspAssetKind::NnrModel ? DspAssetValidation::kMaxNnrModelBytes
-                                          : DspAssetValidation::kMaxPs3CorrectionBytes;
+    return DspAssetValidation::sizeLimit(kind);
 }
 
 QString DspAssetStore::assetPath(DspAssetKind kind, const QString& hashHex) const
 {
-    const QString suffix = kind == DspAssetKind::NnrModel ? QStringLiteral(".nnr")
-                                                           : QStringLiteral(".ps3");
+    QString suffix;
+    switch (kind) {
+    case DspAssetKind::NnrModel: suffix = QStringLiteral(".nnr"); break;
+    case DspAssetKind::Ps3Correction: suffix = QStringLiteral(".ps3"); break;
+    case DspAssetKind::Nr3Model: suffix = QStringLiteral(".rnn"); break;
+    }
     return QDir(m_assetsDirectory)
         .filePath(QStringLiteral("asset-%1%2").arg(hashHex.first(32), suffix));
 }
@@ -139,14 +152,24 @@ bool DspAssetStore::loadManifest()
         return false;
     }
     const QJsonObject root = document.object();
+    const QJsonValue nr3Array = root.value(QLatin1String(kNr3ManifestArray));
     if (root.value(QStringLiteral("schema")).toInt() != 1
-        || !root.value(QStringLiteral("assets")).isArray()) {
+        || !root.value(QStringLiteral("assets")).isArray()
+        || !(nr3Array.isUndefined() || nr3Array.isArray())) {
         m_lastError = QStringLiteral("Unsupported DSP asset manifest schema");
         return false;
     }
 
+    QJsonArray allRecords = root.value(QStringLiteral("assets")).toArray();
+    const qsizetype sharedRecords = allRecords.size();
+    for (const QJsonValue& value : nr3Array.toArray()) {
+        allRecords.append(value);
+    }
+
     QSet<QString> ids;
-    for (const QJsonValue& value : root.value(QStringLiteral("assets")).toArray()) {
+    qsizetype position = 0;
+    for (const QJsonValue& value : std::as_const(allRecords)) {
+        const bool inNr3Array = position++ >= sharedRecords;
         if (!value.isObject()) {
             m_lastError = QStringLiteral("DSP asset manifest contains a non-object record");
             return false;
@@ -166,7 +189,8 @@ bool DspAssetStore::loadManifest()
             || !isAssetId(record.id) || record.id != QStringLiteral("sha256:") + record.hashHex
             || ids.contains(record.id) || record.size < 0 || record.size > sizeLimit(record.kind)
             || record.label.size() > kMaxLabelCharacters
-            || record.radioIdentity.size() > kMaxRadioIdentityCharacters) {
+            || record.radioIdentity.size() > kMaxRadioIdentityCharacters
+            || inNr3Array != (record.kind == DspAssetKind::Nr3Model)) {
             m_lastError = QStringLiteral("DSP asset manifest contains an invalid record");
             return false;
         }
@@ -179,12 +203,16 @@ bool DspAssetStore::loadManifest()
 bool DspAssetStore::saveManifest(QString* error) const
 {
     QJsonArray assets;
+    QJsonArray nr3Assets;
     for (const DspAssetRecord& record : m_records) {
-        assets.append(recordToJson(record));
+        (record.kind == DspAssetKind::Nr3Model ? nr3Assets : assets).append(recordToJson(record));
     }
     QJsonObject root;
     root.insert(QStringLiteral("schema"), 1);
     root.insert(QStringLiteral("assets"), assets);
+    if (!nr3Assets.isEmpty()) {
+        root.insert(QLatin1String(kNr3ManifestArray), nr3Assets);
+    }
     const QByteArray encoded = QJsonDocument(root).toJson(QJsonDocument::Indented);
     if (encoded.size() > kMaxManifestBytes) {
         setError(error, QStringLiteral("DSP asset manifest exceeds the 1 MiB limit"));
@@ -225,6 +253,12 @@ QList<DspAssetRecord> DspAssetStore::assets() const
         record.validationError = error;
     }
     return result;
+}
+
+QString DspAssetStore::label(const QString& id) const
+{
+    const int index = recordIndex(id);
+    return index < 0 ? QString() : m_records.at(index).label;
 }
 
 bool DspAssetStore::verifyRecord(const DspAssetRecord& record, QByteArray* bytes,
@@ -299,6 +333,10 @@ DspAssetImportResult DspAssetStore::importBytes(DspAssetKind kind, const QString
     }
     if (kind == DspAssetKind::NnrModel && !radioIdentity.isEmpty()) {
         result.error = QStringLiteral("NNR model assets are station-scoped, not radio-scoped");
+        return result;
+    }
+    if (kind == DspAssetKind::Nr3Model && !radioIdentity.isEmpty()) {
+        result.error = QStringLiteral("NR3 models belong to the Core, not to one radio.");
         return result;
     }
 
@@ -404,6 +442,9 @@ QString DspAssetStore::beginImport(DspAssetKind kind, const QString& label,
     if (kind == DspAssetKind::NnrModel && !radioIdentity.isEmpty()) {
         return setError(error, QStringLiteral("NNR model assets are station-scoped, not radio-scoped"));
     }
+    if (kind == DspAssetKind::Nr3Model && !radioIdentity.isEmpty()) {
+        return setError(error, QStringLiteral("NR3 models belong to the Core, not to one radio."));
+    }
 
     const QString token = QUuid::createUuid().toString(QUuid::WithoutBraces);
     PendingImport pending;
@@ -436,9 +477,18 @@ bool DspAssetStore::appendImport(const QString& token, const QByteArray& chunk, 
         return false;
     }
     if (chunk.size() > sizeLimit(it->kind) - it->size) {
-        const QString message = it->kind == DspAssetKind::NnrModel
-            ? QStringLiteral("Staged NNR model exceeds the 64 MiB limit")
-            : QStringLiteral("Staged PS3 correction exceeds the 1 MiB limit");
+        QString message;
+        switch (it->kind) {
+        case DspAssetKind::NnrModel:
+            message = QStringLiteral("Staged NNR model exceeds the 64 MiB limit");
+            break;
+        case DspAssetKind::Ps3Correction:
+            message = QStringLiteral("Staged PS3 correction exceeds the 1 MiB limit");
+            break;
+        case DspAssetKind::Nr3Model:
+            message = QStringLiteral("The NR3 model is larger than 16 MiB.");
+            break;
+        }
         cancelImport(token);
         setError(error, message);
         return false;

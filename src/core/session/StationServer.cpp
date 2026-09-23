@@ -1159,8 +1159,11 @@ void StationServer::handleSettingsRemove(const SessionMessage& message)
     const QString key = QString::fromUtf8(message.objectKey);
     if (isModelOwnedDspSettingsKey(key)) {
         const QVariant value = m_settings.value(key);
+        const bool nr3Path =
+            key.compare(QLatin1String("Nr3ModelPath"), Qt::CaseInsensitive) == 0;
         sendToSession(SessionMessages::settingsReject(key, value.isValid(), value.toString(),
-            QStringLiteral("Use the validated DSP controls to change these settings.")));
+            nr3Path ? modelOwnedSettingsRefusal(key)
+                    : QStringLiteral("Use the validated DSP controls to change these settings.")));
         return;
     }
     // A remove would reset a DSP > Options TX setting to its default, so a
@@ -1397,7 +1400,8 @@ StationCapabilities StationServer::buildCapabilities() const
     caps.wdspCompatibilityVersion = 1;
     caps.nnrVersion = 1;
     caps.psAlgorithmVersion = 3;
-    caps.dspAssetVersion = 1;
+    // 2 (R-R3-21): NR3 models are Core assets (kind 2, selectNr3Model).
+    caps.dspAssetVersion = 2;
     caps.psDisplayVersion = m_mediaEnabled ? 1 : 0;
 #endif
 

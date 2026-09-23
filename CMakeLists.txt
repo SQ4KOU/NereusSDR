@@ -2467,6 +2467,20 @@ install(TARGETS nereusd
     EXCLUDE_FROM_ALL
 )
 
+# R-R3-21: the Core owns the NR3 model, and "Default" is the bundled
+# Default_large.bin file, never an empty path. The desktop packages carry
+# both bundled models through release.yml (AppDir share/, .app Resources/,
+# Windows models/); nereusd's component had none, so an installed daemon
+# could not load any NR3 model. ModelPaths probe #3 finds these at
+# <bindir>/../share/NereusSDR/models/rnnoise/.
+install(FILES
+        "${CMAKE_SOURCE_DIR}/third_party/rnnoise/models/Default_large.bin"
+        "${CMAKE_SOURCE_DIR}/third_party/rnnoise/models/Default_small.bin"
+    DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/NereusSDR/models/rnnoise"
+    COMPONENT nereusd
+    EXCLUDE_FROM_ALL
+)
+
 # nereus-audio-capture -- the microphone helper (R-R3-36). locateCaptureHelper()
 # looks for it beside its parent executable, so the default component
 # (not macOS, where POST_BUILD places it inside NereusSDR.app/Contents/Helpers)

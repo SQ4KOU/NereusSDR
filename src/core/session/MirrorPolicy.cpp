@@ -301,6 +301,10 @@ const MirrorPolicy::Entry kEntries[] = {
     { "DspAssetService", "nnrModelSelectionPending", MirrorDirection::Outbound },
     { "DspAssetService", "nnrModelStatus", MirrorDirection::Outbound },
     { "DspAssetService", "selectionRevision", MirrorDirection::Outbound },
+    // R-R3-21 (dspAssetVersion 2): the Core-wide NR3 model. Outbound only;
+    // a window changes it with the dspAssets.selectNr3Model command.
+    { "DspAssetService", "nr3ModelAsset", MirrorDirection::Outbound },
+    { "DspAssetService", "nr3ModelStatus", MirrorDirection::Outbound },
 
     // Normal PS3 configuration is distinct from operational arming/actions.
     { "PureSignalSettings", "autoCalEnabled", MirrorDirection::Bidirectional },

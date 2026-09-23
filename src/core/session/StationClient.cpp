@@ -868,6 +868,7 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     m_propertyWriteIds.clear();
     if (m_radioModel) {
         m_radioModel->dspAssets()->resetSession();
+        m_radioModel->dspAssets()->setRemoteNr3ModelsSupported(false);
         m_radioModel->pureSignalFacade()->resetSession();
     }
     m_linkUp = false;
@@ -1255,6 +1256,7 @@ void StationClient::onTransportText(const QByteArray& wire)
             m_radioModel->pureSignalFacade()->setRemoteCapabilities(
                 m_agreedMinor >= kDspControlSessionProtocolMinor && m_capabilities.psAlgorithmVersion == 3,
                 m_capabilities.txPermitted);
+            m_radioModel->dspAssets()->setRemoteNr3ModelsSupported(remoteNr3ModelsAvailable());
         }
         if (m_radioModel) {
             m_radioModel->setStationFilterSnapshotReady();
@@ -1448,6 +1450,8 @@ void StationClient::handleCapabilities(const SessionMessage& message)
             m_agreedMinor >= kDspControlSessionProtocolMinor && m_capabilities.psAlgorithmVersion == 3,
             m_capabilities.txPermitted);
         if (!self || m_sessionEpoch != epoch || !m_sessionActive || !m_radioModel) { return; }
+        m_radioModel->dspAssets()->setRemoteNr3ModelsSupported(remoteNr3ModelsAvailable());
+        if (!self || m_sessionEpoch != epoch || !m_sessionActive || !m_radioModel) { return; }
         m_radioModel->reportStationLinkStateChanged();
         if (!self || m_sessionEpoch != epoch || !m_sessionActive || !m_radioModel) { return; }
     }
@@ -1482,6 +1486,15 @@ void StationClient::handleCapabilities(const SessionMessage& message)
         if (!self || !self->m_handshakeComplete
             || self->m_agreedMinor < kDspControlSessionProtocolMinor
             || self->m_capabilities.dspAssetVersion < 1 || !verb.startsWith("dspAssets.")) {
+            return 0;
+        }
+        // R-R3-21: NR3 models need a dspAssetVersion 2 Core. An older Core
+        // would refuse them anyway; not sending keeps its answer predictable.
+        if (self->m_capabilities.dspAssetVersion < 2
+            && (verb == "dspAssets.selectNr3Model"
+                || (verb == "dspAssets.beginImport"
+                    && arguments.value(QStringLiteral("kind")).toLongLong()
+                           == static_cast<qlonglong>(DspAssetKind::Nr3Model)))) {
             return 0;
         }
         const auto values = dspCommandValues(arguments);
@@ -2402,6 +2415,12 @@ StationClient::CommandOutcome StationClient::requestApplyNnrModels(quint32 revis
     }
     return sendCommand("nnr.applyModelSelection", -1, {intArgument("revision", revision)},
         QStringLiteral("the NNR model reconnect"));
+}
+
+bool StationClient::remoteNr3ModelsAvailable() const
+{
+    return m_handshakeComplete && m_agreedMinor >= kDspControlSessionProtocolMinor
+        && m_capabilities.dspAssetVersion >= 2;
 }
 
 bool StationClient::nnrControlAvailable() const

@@ -32,10 +32,26 @@ class DspAssetService final : public QObject {
     Q_PROPERTY(bool nnrModelSelectionPending READ nnrModelSelectionPending NOTIFY selectionChanged)
     Q_PROPERTY(QString nnrModelStatus READ nnrModelStatus NOTIFY selectionChanged)
     Q_PROPERTY(quint32 selectionRevision READ selectionRevision NOTIFY selectionChanged)
+    // R-R3-21 (dspAssetVersion 2): the one Core-wide NR3 model. The asset is
+    // the chosen id (a bundled id or "sha256:..."); the status is plain text
+    // about the model actually loaded.
+    Q_PROPERTY(QString nr3ModelAsset READ nr3ModelAsset NOTIFY nr3SelectionChanged)
+    Q_PROPERTY(QString nr3ModelStatus READ nr3ModelStatus NOTIFY nr3SelectionChanged)
 
 public:
     using RemoteRequestHandler =
         std::function<quint32(const QByteArray&, const QVariantMap&)>;
+    // Receives a model file path that has just passed the trial load. The
+    // Core installs RNNRloadModel here; tests install a recorder.
+    using Nr3ModelLoader = std::function<void(const QString&)>;
+
+    // The two bundled rnnoise models, always selectable by these ids.
+    static constexpr const char* kNr3BundledLargeId = "bundled:nr3-large";
+    static constexpr const char* kNr3BundledSmallId = "bundled:nr3-small";
+    static bool isBundledNr3Id(const QString& id);
+    // Path of a bundled model file on this machine, or empty when the
+    // install does not carry it.
+    static QString bundledNr3ModelPath(const QString& id);
 
     explicit DspAssetService(AppSettings& settings, bool local,
                              QObject* parent = nullptr);
@@ -51,6 +67,24 @@ public:
     bool nnrModelSelectionPending() const;
     QString nnrModelStatus() const { return m_status; }
     quint32 selectionRevision() const noexcept { return m_revision; }
+
+    QString nr3ModelAsset() const { return m_nr3Selected; }
+    QString nr3ModelStatus() const { return m_nr3Status; }
+    // The id of the model last handed to the loader (local only).
+    QString activeNr3ModelAsset() const { return m_nr3Active; }
+    // Local: this build can load NR3 models. Remote: the Core advertised
+    // dspAssetVersion 2 on a session that negotiated DSP control.
+    bool nr3ModelsSupported() const;
+    void setRemoteNr3ModelsSupported(bool supported);
+    void setNr3ModelLoader(Nr3ModelLoader loader);
+    // Resolves the chosen model to a file that passed the trial load,
+    // falling back to the bundled large model and then the bundled small
+    // one. Empty only when no usable model file exists at all; the loader
+    // is never given an empty path.
+    QString resolveNr3ModelPath(QString* resolvedId = nullptr, QString* reason = nullptr);
+    // Resolves and hands the file to the loader. False (and no load) when
+    // no usable model file exists.
+    bool applyNr3Model(QString* reason = nullptr);
 
     void setRadioIdentity(const QString& mac);
     DspAssetServiceResult execute(const QByteArray& verb, const QVariantMap& args,
@@ -69,6 +103,7 @@ public:
 signals:
     void requestCompleted(quint32 id, bool accepted, QString reason, QVariantMap values);
     void selectionChanged();
+    void nr3SelectionChanged();
     void configurationChanged();
 
 private:
@@ -80,6 +115,9 @@ private:
     quint32 allocateRequestId();
     void refreshSelectionStatus();
     bool setSelection(int slot, const QString& id, QString* reason);
+    bool setNr3Selection(const QString& id, QString* reason);
+    void importLegacyNr3ModelPath();
+    void setNr3Status(const QString& status);
     DspAssetServiceResult reject(const QString& reason) const;
 
     AppSettings& m_settings;
@@ -96,6 +134,11 @@ private:
     QString m_status;
     QString m_radioIdentity;
     bool m_remotePending{false};
+    QString m_nr3Selected;
+    QString m_nr3Active;
+    QString m_nr3Status;
+    bool m_remoteNr3Supported{false};
+    Nr3ModelLoader m_nr3Loader;
 };
 
 } // namespace NereusSDR

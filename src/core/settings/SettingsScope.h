@@ -42,6 +42,7 @@
 //                                    Code.
 // =================================================================
 
+#include <QString>
 #include <QStringView>
 
 namespace NereusSDR {
@@ -82,5 +83,8 @@ SettingsScope classifySettingsKey(QStringView key);
 // Core models validate these values; the raw settings proxy may observe them
 // but cannot write/remove them around that acceptance boundary.
 bool isModelOwnedDspSettingsKey(QStringView key);
+// The reason a raw write or remove of a model-owned key is refused, in the
+// operator's words.
+QString modelOwnedSettingsRefusal(QStringView key);
 
 } // namespace NereusSDR
