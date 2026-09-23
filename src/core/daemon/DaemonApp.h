@@ -38,20 +38,13 @@
 // RadioModel::connectToRadio stamps on Slice A via setPanKey(), which is
 // exactly the pan/endpoint conflation section 9.4 calls out.
 //
-// FftEnginePool (Task 6) is listed among this task's brief-stated
-// interfaces but is NOT constructed here: Step 3's own description of
-// start() never mentions it, none of this task's tests exercise it, and
-// an FftEnginePool with no I/Q ever pushed into it is inert scaffolding
-// with no call site -- exactly what CLAUDE.md's ISpectrumSink note warns
-// against adding speculatively. Feeding real I/Q into per-stream FFT
-// engines needs a tap on RxDspWorker/ReceiverManager this task's brief
-// does not describe. Fix round 1 correction: an earlier version of this
-// comment named Task 11 (wideband FFT thread) as the natural owner of
-// that future FftEnginePool construction. Task 11's actual scope is
-// narrowly giving the wideband FFT dispatch its own QThread -- it does
-// not construct an FftEnginePool, and no task currently in the R1 plan
-// does. The deferral itself still stands; there is just no specific
-// task to point future readers at yet.
+// FftEnginePool (Task 6) is not constructed here. The daemon's display
+// FFT engines are built on demand by the media path instead:
+// m_mediaController (DaemonMediaController) owns a DaemonSpectrumSource,
+// which owns an FftEnginePool keyed by (stream, tier) and fed straight from
+// RadioModel::rawIqDataForStream once a remote subscription activates a
+// source. DaemonMediaController decides each engine's size and what every
+// endpoint is granted (R3 remote display limits plan, Task 1).
 //
 // FIX ROUND 1, FINDING 1: subscribing endpoints in m_topology is only
 // half the job -- RadioModel already unconditionally owns a live

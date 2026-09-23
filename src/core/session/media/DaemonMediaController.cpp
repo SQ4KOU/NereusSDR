@@ -156,6 +156,29 @@ bool supportedFftSize(int size)
     return validator.fftSize() == size;
 }
 
+bool powerOfTwoFftSize(int size)
+{
+    return size >= 1024 && (size & (size - 1)) == 0;
+}
+
+// Names the root cause of a reduced grant. An FFT limit outranks the pixel
+// rule because a smaller engine is what leaves fewer visible bins.
+SpectrumLimitReason grantReason(const SpectrumGrant& grant)
+{
+    const int largest = FFTEngine::maximumFftSize();
+    const int clamped = std::min(grant.requestedFftSize, largest);
+    if (grant.grantedFftSize < clamped) {
+        return SpectrumLimitReason::SharedEngine;
+    }
+    if (grant.requestedFftSize > largest && grant.grantedFftSize < grant.requestedFftSize) {
+        return SpectrumLimitReason::LargestSize;
+    }
+    if (grant.grantedPixels < grant.requestedPixels) {
+        return SpectrumLimitReason::SourceBins;
+    }
+    return SpectrumLimitReason::None;
+}
+
 bool staleOrEqualRevision(quint32 candidate, quint32 accepted)
 {
     const quint32 difference = candidate - accepted;
@@ -221,6 +244,7 @@ struct DaemonMediaController::EndpointEntry {
     double sourceSampleRateHz{0.0};
     SpectrumEndpointRequest request;
     SpectrumDisplayCost displayCost;
+    SpectrumGrant grant;
     AllocationRecord allocation;
     bool widebandNegotiated{false};
     bool widebandWanted{false};
@@ -373,6 +397,15 @@ int DaemonMediaController::activeSourceCount() const
 DaemonAudioDiagnostics DaemonMediaController::audioDiagnostics() const
 {
     return snapshotAudioDiagnostics();
+}
+
+std::optional<SpectrumGrant> DaemonMediaController::spectrumGrant(quint32 endpointId) const
+{
+    const auto it = m_endpoints.find(endpointId);
+    if (it == m_endpoints.end()) {
+        return std::nullopt;
+    }
+    return it->second.grant;
 }
 
 qint64 DaemonMediaController::displayNowNs() const
@@ -795,8 +828,9 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     if (!exactInt(control.value(QStringLiteral("sliceId")), 0, std::numeric_limits<int>::max(), sliceId)
         || !parseTier(control.value(QStringLiteral("tier")), tier)
         || !exactInt(control.value(QStringLiteral("fftSize")), 1024,
-                     FFTEngine::maximumFftSize(), fftSize)
-        || !supportedFftSize(fftSize)
+                     std::numeric_limits<int>::max(), fftSize)
+        || !powerOfTwoFftSize(fftSize)
+        || (fftSize <= FFTEngine::maximumFftSize() && !supportedFftSize(fftSize))
         || !exactInt(control.value(QStringLiteral("windowType")),
                      static_cast<int>(WindowFunction::Rectangular),
                      static_cast<int>(WindowFunction::Count) - 1, windowType)
@@ -804,28 +838,20 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
         || !finiteNumber(control.value(QStringLiteral("spanHz")), request.spanHz)
         || !exactInt(control.value(QStringLiteral("pixels")), 1, SpectrumEndpoint::kMaxPixels, pixels)
         || !exactInt(control.value(QStringLiteral("fps")), 1, 60, fps)
-        || !exactInt(control.value(QStringLiteral("framesPerLine")), 1, 65535, framesPerLine)
+        || !exactInt(control.value(QStringLiteral("framesPerLine")), 1, kMaxFramesPerLine,
+                     framesPerLine)
         || !parsePlane(control.value(QStringLiteral("trace")), request.trace)
         || !parsePlane(control.value(QStringLiteral("waterfall")), request.waterfall)
         || !finiteNumber(control.value(QStringLiteral("minDbm")), minDbm)
         || !finiteNumber(control.value(QStringLiteral("maxDbm")), maxDbm)
         || !finiteNumber(control.value(QStringLiteral("wideSpanFactor")), request.requestedWideSpanFactor)
-        || minDbm < -std::numeric_limits<float>::max()
-        || minDbm > std::numeric_limits<float>::max()
-        || maxDbm < -std::numeric_limits<float>::max()
-        || maxDbm > std::numeric_limits<float>::max()
+        || minDbm < kMinDbmLimit || minDbm > kMaxDbmLimit
+        || maxDbm < kMinDbmLimit || maxDbm > kMaxDbmLimit
         || maxDbm <= minDbm
-        || !std::isfinite(maxDbm - minDbm)
         || !validRequestedFrequencyRange(request.centreHz, request.spanHz,
                                          request.requestedWideSpanFactor)) {
         return rejectAllocation(control, endpointId, revision,
                                 QStringLiteral("invalid subscription"));
-    }
-    const auto displayCost = spectrumDisplayCost(
-        pixels, fps, request.requestedWideSpanFactor > 1.0);
-    if (!displayCost || !spectrumAdmissionFits(endpointId, displayCost->charge)) {
-        return rejectAllocation(control, endpointId, revision,
-                                QStringLiteral("session display budget exceeded"));
     }
     SliceModel* slice = m_radioModel ? m_radioModel->sliceById(sliceId) : nullptr;
     if (!slice || slice->streamIndex() < 0 || !m_radioModel->streamActive(slice->streamIndex())) {
@@ -877,14 +903,52 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
         return rejectAllocation(control, endpointId, revision,
                                 QStringLiteral("requested crop is outside source coverage"));
     }
+
+    // R-R3-01/R-R3-08: a request may size its (stream, tier) engine only
+    // while it is that engine's only subscriber. Otherwise it is granted
+    // the engine's current size, so no pan's spectrum changes to satisfy
+    // another pan's request. Sizes above the engine limit get the largest.
+    SpectrumGrant grant;
+    grant.requestedFftSize = fftSize;
+    grant.grantedTier = tier;
+    grant.requestedPixels = pixels;
+    int sharedFftSize = 0;
+    for (const auto& [otherId, other] : m_endpoints) {
+        if (otherId != endpointId && other.request.source == source) {
+            sharedFftSize = std::max(sharedFftSize, other.sourceFftSize);
+        }
+    }
+    grant.grantedFftSize = sharedFftSize > 0
+        ? sharedFftSize : std::min(fftSize, FFTEngine::maximumFftSize());
+    // The pixel grant is fixed here, where the source geometry and granted
+    // FFT size are known, and the display budget charges what is granted.
+    const bool extendedActive = widebandNegotiated && request.extendedView
+        && extendedAllowed && needsWideband(request, sourceCentreHz, sourceSampleRateHz);
+    grant.grantedPixels = SpectrumEndpoint::grantedPixels(
+        request, grant.grantedFftSize, sourceCentreHz, sourceSampleRateHz, extendedActive);
+    if (grant.grantedPixels <= 0) {
+        return rejectAllocation(control, endpointId, revision,
+                                QStringLiteral("requested crop is outside source coverage"));
+    }
+    grant.reason = grantReason(grant);
+    const auto displayCost = spectrumDisplayCost(
+        grant.grantedPixels, fps, request.requestedWideSpanFactor > 1.0);
+    if (!displayCost || !spectrumAdmissionFits(endpointId, displayCost->charge)) {
+        return rejectAllocation(control, endpointId, revision,
+                                QStringLiteral("session display budget exceeded"));
+    }
+    // The endpoint never emits more samples than its admitted charge.
+    request.pixels = grant.grantedPixels;
+
     EndpointEntry entry;
     entry.widebandNegotiated = widebandNegotiated;
     entry.revision = revision;
     entry.sliceId = sliceId;
-    entry.sourceFftSize = fftSize;
+    entry.sourceFftSize = grant.grantedFftSize;
     entry.sourceWindowType = windowType;
     entry.request = request;
     entry.displayCost = *displayCost;
+    entry.grant = grant;
     entry.allocation = {control, revision, true, false, {}};
     if (!reconcileWidebandDemand(entry)) {
         return rejectAllocation(control, endpointId, revision,
@@ -1161,6 +1225,11 @@ void DaemonMediaController::configureEndpointFromFrame(EndpointEntry& entry,
     if (!entry.endpoint.configure(entry.request, sourceContext)) {
         return;
     }
+    // The frame carries the actual engine size and geometry; record what
+    // this context really delivers.
+    entry.grant.grantedFftSize = sourceContext.fftBins;
+    entry.grant.grantedPixels = entry.endpoint.context().codec.traceSamples;
+    entry.grant.reason = grantReason(entry.grant);
     entry.encoder.reset();
     entry.sourceCentreHz = frame.centreHz;
     entry.sourceSampleRateHz = frame.sampleRateHz;

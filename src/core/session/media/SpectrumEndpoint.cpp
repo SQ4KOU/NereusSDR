@@ -127,12 +127,47 @@ bool SpectrumEndpoint::validRequest(const SpectrumEndpointRequest& request)
         && finite(request.centreHz - request.spanHz * 0.5)
         && finite(request.centreHz + request.spanHz * 0.5)
         && request.pixels > 0 && request.targetFps >= 1 && request.targetFps <= 60
-        && request.framesPerLine > 0 && validPlane(request.trace) && validPlane(request.waterfall)
+        && request.framesPerLine > 0 && request.framesPerLine <= kMaxFramesPerLine
+        && validPlane(request.trace) && validPlane(request.waterfall)
         && std::isfinite(request.minDbm) && std::isfinite(request.maxDbm)
+        && request.minDbm >= kMinDbmLimit && request.maxDbm <= kMaxDbmLimit
         && request.maxDbm > request.minDbm
         && finite(request.requestedWideSpanFactor)
         && finite(request.requestedWideSpanFactor * request.spanHz)
         && (request.requestedWideSpanFactor == 0.0 || request.requestedWideSpanFactor > 1.0);
+}
+
+int SpectrumEndpoint::grantedPixels(const SpectrumEndpointRequest& request, int fftBins,
+                                    double sourceCentreHz, double sourceSampleRateHz,
+                                    bool extendedView)
+{
+    if (request.pixels <= 0) {
+        return 0;
+    }
+    // The extended path uses the full requested RF geometry, where an empty
+    // DDC island is valid because the physical ADC owns every pixel.
+    if (extendedView) {
+        return std::min(request.pixels, kMaxPixels);
+    }
+    // A DDC-only crop cannot claim more independent samples than source bins.
+    if (fftBins <= 0 || !finite(sourceCentreHz) || !finite(sourceSampleRateHz)
+        || sourceSampleRateHz <= 0.0) {
+        return 0;
+    }
+    SpectrumEndpointSourceContext source;
+    source.fftBins = fftBins;
+    source.centreHz = sourceCentreHz;
+    source.sampleRateHz = sourceSampleRateHz;
+    if (!overlapsSource(request, source)) {
+        return 0;
+    }
+    const ReducerConfig geometry = reducerConfig(request, source, request.trace, 1);
+    const std::pair<int, int> bins = SpectrumReducer::visibleBinRange(fftBins, geometry);
+    const int count = bins.second - bins.first + 1;
+    if (count <= 0) {
+        return 0;
+    }
+    return std::min({request.pixels, count, kMaxPixels});
 }
 
 bool SpectrumEndpoint::validSourceContext(const SpectrumEndpointSourceContext& sourceContext)
@@ -163,18 +198,17 @@ bool SpectrumEndpoint::configure(const SpectrumEndpointRequest& request,
     }
     const bool extendedView = sourceContext.wideband.active;
 
-    // A DDC-only crop cannot claim more independent samples than source bins.
-    // The extended path instead uses the full requested RF geometry, where an
-    // empty DDC island is valid because the physical ADC owns every pixel.
+    // A DDC-only crop must overlap its source: a crop beside the DDC would
+    // otherwise be accepted with zero span and never paint (R-R3-09).
+    const bool hasOverlap = overlapsSource(request, sourceContext);
+    if (!extendedView && !hasOverlap) {
+        return false;
+    }
     const ReducerConfig geometry = reducerConfig(request, sourceContext, request.trace, 1);
     const std::pair<int, int> bins = SpectrumReducer::visibleBinRange(sourceContext.fftBins, geometry);
     const int count = bins.second - bins.first + 1;
-    if (!extendedView && count <= 0) {
-        return false;
-    }
-    const int pixels = extendedView
-        ? std::min(request.pixels, kMaxPixels)
-        : std::min({request.pixels, count, kMaxPixels});
+    const int pixels = grantedPixels(request, sourceContext.fftBins, sourceContext.centreHz,
+                                     sourceContext.sampleRateHz, extendedView);
     if (pixels <= 0) {
         return false;
     }
@@ -189,7 +223,6 @@ bool SpectrumEndpoint::configure(const SpectrumEndpointRequest& request,
     accepted.codec.waterfallSamples = static_cast<quint16>(pixels);
     accepted.source = request.source;
     accepted.sourceGeneration = sourceContext.sourceGeneration;
-    const bool hasOverlap = overlapsSource(request, sourceContext);
     if (extendedView) {
         accepted.exactCentreHz = request.centreHz;
         accepted.exactSpanHz = request.spanHz;

@@ -69,6 +69,10 @@ public:
     int activeEndpointCount() const;
     int activeSourceCount() const;
     DaemonAudioDiagnostics audioDiagnostics() const;
+    /// What Core granted a live spectrum endpoint: FFT size and tier after
+    /// the largest-size and shared-engine rules, and pixels after the source
+    /// bin rule (R-R3-01, R-R3-08). Empty for an unknown endpoint.
+    std::optional<SpectrumGrant> spectrumGrant(quint32 endpointId) const;
 
 private:
     struct EndpointEntry;

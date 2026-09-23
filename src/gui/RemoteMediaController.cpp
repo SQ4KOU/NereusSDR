@@ -185,7 +185,7 @@ QJsonObject requestFor(SpectrumWidget* widget, SliceModel* slice,
     }
     const int size = std::max(baseSize, fftSizeFor(target));
     const int framesPerLine = qBound(1, int(std::ceil(
-        double(widget->wfUpdatePeriodMs()) * fps / 1000.0)), 10000);
+        double(widget->wfUpdatePeriodMs()) * fps / 1000.0)), kMaxFramesPerLine);
     const double wideFactor = widget->spectrumRenderMode() == int(SpectrumRenderMode::Mode3D)
         ? dssMaxRowSpanFactor(dssShapeForAngle(0)) : 0.0;
     QJsonObject request{{QStringLiteral("sliceId"), slice->sliceIndex()},
@@ -1969,10 +1969,10 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
         || !number(payload, "traceSamples", 1, SpectrumEndpoint::kMaxPixels, trace, true)
         || !number(payload, "waterfallSamples", 1, SpectrumEndpoint::kMaxPixels, waterfall, true)
         || !number(payload, "wideSamples", 0, SpectrumEndpoint::kMaxWideSamples, wide, true)
-        || !number(payload, "minDbm", -400, 100, min)
-        || !number(payload, "maxDbm", -400, 100, max) || min >= max
+        || !number(payload, "minDbm", kMinDbmLimit, kMaxDbmLimit, min)
+        || !number(payload, "maxDbm", kMinDbmLimit, kMaxDbmLimit, max) || min >= max
         || !number(payload, "fps", 1, 60, fps, true)
-        || !number(payload, "framesPerLine", 1, 10000, lines, true)) { return; }
+        || !number(payload, "framesPerLine", 1, kMaxFramesPerLine, lines, true)) { return; }
     if (widebandRequested) {
         const bool permission = (budgetMode ? binding.acceptedRequest : binding.observed).value(
             QStringLiteral("extendedView")).toBool();

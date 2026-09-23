@@ -23,6 +23,36 @@
 
 namespace NereusSDR {
 
+/// Accepted-context limits shared by Core validation and the GUI's context
+/// parser, so a subscription Core accepts always yields a context the GUI
+/// accepts (R-R3-09).
+inline constexpr int kMaxFramesPerLine = 10000;
+inline constexpr double kMinDbmLimit = -400.0;
+inline constexpr double kMaxDbmLimit = 100.0;
+
+/// Why Core granted less than a spectrum subscription asked for.
+enum class SpectrumLimitReason {
+    None,
+    /// The requested FFT size is above the largest size the engine supports.
+    LargestSize,
+    /// Another endpoint uses the (stream, tier) engine, so its size stands.
+    SharedEngine,
+    /// The source has fewer visible bins than the requested pixels.
+    SourceBins,
+};
+
+/// What Core actually granted one spectrum endpoint (R-R3-01, R-R3-08).
+/// `reason` names the root cause of a reduction: an FFT size limit outranks
+/// the pixel rule, because a smaller engine is what leaves fewer bins.
+struct SpectrumGrant {
+    int requestedFftSize {0};
+    int grantedFftSize {0};
+    FftTier grantedTier {FftTier::Wide};
+    int requestedPixels {0};
+    int grantedPixels {0};
+    SpectrumLimitReason reason {SpectrumLimitReason::None};
+};
+
 struct SpectrumPlaneRequest {
     SpectrumDetectorMode detector {SpectrumDetectorMode::Peak};
     int averageMode {0};
@@ -76,6 +106,14 @@ class SpectrumEndpoint {
 public:
     static constexpr int kMaxPixels = 4096;
     static constexpr int kMaxWideSamples = 768;
+
+    /// The trace and waterfall sample count a request receives from a source
+    /// of `fftBins` bins: min(requested, visible bins, kMaxPixels), or
+    /// min(requested, kMaxPixels) for an active extended view, whose ADC
+    /// wings own every pixel. Zero means the crop covers no source bin.
+    static int grantedPixels(const SpectrumEndpointRequest& request, int fftBins,
+                             double sourceCentreHz, double sourceSampleRateHz,
+                             bool extendedView);
 
     /// Validates and accepts a request against an active source. This clears
     /// both reduction histories and output cadence. A failed request preserves

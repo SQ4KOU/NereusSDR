@@ -8,6 +8,9 @@
 
 #include "core/session/media/DaemonSpectrumSource.h"
 
+#include <QElapsedTimer>
+#include <QThread>
+
 #include <cmath>
 #include <limits>
 #include <numbers>
@@ -213,6 +216,62 @@ private slots:
         const auto recreated = source.takeLatest(key);
         QVERIFY(recreated.has_value());
         QVERIFY(recreated->generation > first->generation);
+    }
+
+    // Architecture design section 9.4: latest value wins at the producer.
+    // Ten frames published while the owning thread cannot run its event
+    // loop leave exactly one queued notification and one latest frame.
+    void framesProducedWhileOwnerBlockedCoalesceToLatest()
+    {
+        // fps 1 makes the FFT advance a whole buffer, so each packet below
+        // completes exactly one frame of its own tone with no overlap.
+        auto config = sourceConfig(1024, 7100000.0, 48000.0);
+        config.fft.fps = 1;
+        const MediaSourceKey key{0, FftTier::Wide};
+        constexpr int kFrames = 10;
+        const auto tone = [](int frame) { return 0.03125 * (frame + 1); };
+
+        DaemonSpectrumSource reference;
+        QVERIFY(reference.activate(key, config));
+        QTRY_VERIFY(reference.isActive(key));
+        QSignalSpy referenceFrames(&reference, &DaemonSpectrumSource::frameAvailable);
+        reference.submitIq(0, syntheticIq(1025, tone(kFrames - 1)));
+        QTRY_VERIFY(referenceFrames.count() >= 1);
+        const auto expected = reference.takeLatest(key);
+        QVERIFY(expected.has_value());
+        const int newestPeak = dominantBin(expected->binsLinear);
+        QVERIFY(newestPeak >= 0);
+
+        DaemonSpectrumSource source;
+        QVERIFY(source.activate(key, config));
+        QTRY_VERIFY(source.isActive(key));
+        QSignalSpy frames(&source, &DaemonSpectrumSource::frameAvailable);
+
+        // From here the test thread runs no events until all ten frames exist.
+        for (int frame = 0; frame < kFrames; ++frame) {
+            const quint64 before = source.completedInputHandoffs(key);
+            // The first packet also fills the empty buffer's leading sample.
+            source.submitIq(0, syntheticIq(frame == 0 ? 1025 : 1024, tone(frame)));
+            QElapsedTimer waited;
+            waited.start();
+            while (source.completedInputHandoffs(key) == before) {
+                QVERIFY2(waited.elapsed() < 5000, "engine thread did not take the packet");
+                QThread::msleep(1);
+            }
+            // Past FFTEngine's 5 ms defensive emit cap before the next frame.
+            QThread::msleep(10);
+        }
+        QCOMPARE(frames.count(), 0);
+
+        QCoreApplication::processEvents();
+        QTest::qWait(50);
+        QCOMPARE(frames.count(), 1);
+        const auto latest = source.takeLatest(key);
+        QVERIFY(latest.has_value());
+        QCOMPARE(dominantBin(latest->binsLinear), newestPeak);
+        QVERIFY(!source.takeLatest(key).has_value());
+        QTest::qWait(20);
+        QCOMPARE(frames.count(), 1);
     }
 
     void ingressIsBoundedAndReportsDroppedWholeFrames()

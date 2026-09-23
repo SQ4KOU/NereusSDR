@@ -147,6 +147,21 @@ QJsonObject subscription(quint32 endpointId, quint32 revision, int sliceId,
             {QStringLiteral("wideSpanFactor"), 0.0}};
 }
 
+QJsonObject tieredSubscription(quint32 endpointId, quint32 revision, int sliceId,
+                               double centreHz, const QString& tier, int fftSize)
+{
+    QJsonObject request = subscription(endpointId, revision, sliceId, centreHz, fftSize);
+    request.insert(QStringLiteral("tier"), tier);
+    return request;
+}
+
+QJsonObject unsubscription(quint32 endpointId)
+{
+    return {{QStringLiteral("op"), QStringLiteral("unsubscribe")},
+            {QStringLiteral("connectionId"), QLatin1String(kConnectionId)},
+            {QStringLiteral("endpointId"), static_cast<qint64>(endpointId)}};
+}
+
 int messageCount(const QSignalSpy& messages, const QString& op, quint32 endpointId)
 {
     int count = 0;
@@ -475,6 +490,11 @@ private slots:
     void replayedAllocationResultCanSynchronouslyRetireControllerState();
     void sourceRetirementPublishesZeroChargeAtLatestOperationRevision();
     void failedSourceUpdateReleasesAllocationAndCanRecover();
+    void sharedEngineKeepsOtherPanWhileNeighbourChurns();
+    void grantReportsLargestSizeSharedEngineAndSourceBins();
+    void budgetChargesGrantedPixels();
+    void outOfRangeRequestsAreRejectedAndLeaveEndpointUntouched();
+    void staleEpochAndForeignConnectionLeaveEndpointsUntouched();
 };
 
 void TstDaemonMediaController::configuredBudgetReturnsExactAllocationResultsAndRejectsOvercommit()
@@ -624,8 +644,10 @@ void TstDaemonMediaController::rapidReplacementCannotMintSpectrumBurstCredit()
     QJsonObject request = subscription(90, 1, harness.sliceId, centre);
     request.insert(QStringLiteral("pixels"), 4096);
     // Include enough source bins that the first actual frame exhausts the
-    // remaining credit needed for another worst-case preflight.
+    // remaining credit needed for another worst-case preflight. The budget
+    // charges granted pixels, so the FFT must supply all 4096 of them.
     request.insert(QStringLiteral("spanHz"), 192000.0);
+    request.insert(QStringLiteral("fftSize"), 4096);
     request.insert(QStringLiteral("fps"), 60);
 
     QVERIFY(harness.client.sendMediaControl(request, harness.client.sessionEpoch()));
@@ -787,8 +809,10 @@ void TstDaemonMediaController::failedDisplayAttemptDebitsCreditAndRecoversWithKe
     QJsonObject request = subscription(96, 1, harness.sliceId, centre);
     request.insert(QStringLiteral("pixels"), 4096);
     // Include enough source bins that the first actual frame exhausts the
-    // remaining credit needed for another worst-case preflight.
+    // remaining credit needed for another worst-case preflight. The budget
+    // charges granted pixels, so the FFT must supply all 4096 of them.
     request.insert(QStringLiteral("spanHz"), 192000.0);
+    request.insert(QStringLiteral("fftSize"), 4096);
     request.insert(QStringLiteral("fps"), 60);
     QVERIFY(harness.client.sendMediaControl(request, harness.client.sessionEpoch()));
     QTRY_VERIFY(allocationFor(controls, 96, 1).value(QStringLiteral("accepted")).toBool());
@@ -885,8 +909,10 @@ void TstDaemonMediaController::mediaPeerReplacementDoesNotMintDisplayCredit()
         97, 1, harness.sliceId, harness.radio.streamCentreHz(harness.streamIndex));
     request.insert(QStringLiteral("pixels"), 4096);
     // Include enough source bins that the first actual frame exhausts the
-    // remaining credit needed for another worst-case preflight.
+    // remaining credit needed for another worst-case preflight. The budget
+    // charges granted pixels, so the FFT must supply all 4096 of them.
     request.insert(QStringLiteral("spanHz"), 192000.0);
+    request.insert(QStringLiteral("fftSize"), 4096);
     QVERIFY(harness.client.sendMediaControl(request, harness.client.sessionEpoch()));
     QTRY_VERIFY(allocationFor(controls, 97, 1).value(QStringLiteral("accepted")).toBool());
     QTRY_VERIFY(([&] {
@@ -1054,8 +1080,10 @@ void TstDaemonMediaController::radioProductionRestartWithinEpochDoesNotMintDispl
         99, 1, harness.sliceId, harness.radio.streamCentreHz(harness.streamIndex));
     request.insert(QStringLiteral("pixels"), 4096);
     // Include enough source bins that the first actual frame exhausts the
-    // remaining credit needed for another worst-case preflight.
+    // remaining credit needed for another worst-case preflight. The budget
+    // charges granted pixels, so the FFT must supply all 4096 of them.
     request.insert(QStringLiteral("spanHz"), 192000.0);
+    request.insert(QStringLiteral("fftSize"), 4096);
     QVERIFY(harness.client.sendMediaControl(request, harness.client.sessionEpoch()));
     QTRY_VERIFY(allocationFor(controls, 99, 1).value(QStringLiteral("accepted")).toBool());
     QTRY_VERIFY(([&] {
@@ -1127,6 +1155,9 @@ void TstDaemonMediaController::sourceRetirementPublishesZeroChargeAtLatestOperat
     QTRY_VERIFY(allocationFor(controls, 101, 1).value(QStringLiteral("accepted")).toBool());
     request.insert(QStringLiteral("revision"), 2);
     request.insert(QStringLiteral("pixels"), 4096);
+    // The budget charges granted pixels: a crop reaching 30 kHz into the
+    // source grants 160 of them, over this 128-pixel budget.
+    request.insert(QStringLiteral("spanHz"), 48000.0);
     QVERIFY(harness.client.sendMediaControl(request, harness.client.sessionEpoch()));
     QTRY_VERIFY(!allocationFor(controls, 101, 2).isEmpty());
     QVERIFY(!allocationFor(controls, 101, 2).value(QStringLiteral("accepted")).toBool());
@@ -1147,6 +1178,7 @@ void TstDaemonMediaController::sourceRetirementPublishesZeroChargeAtLatestOperat
 
     request.insert(QStringLiteral("revision"), 3);
     request.insert(QStringLiteral("pixels"), 128);
+    request.insert(QStringLiteral("spanHz"), 1000.0);
     request.insert(QStringLiteral("centreHz"), centre + 50000.0);
     QVERIFY(harness.client.sendMediaControl(request, harness.client.sessionEpoch()));
     QTRY_VERIFY(allocationFor(controls, 101, 3).value(QStringLiteral("accepted")).toBool());
@@ -1990,3 +2022,325 @@ void TstDaemonMediaController::minorEightAudioContextsCarryEncoderOrReason()
 
 QTEST_MAIN(TstDaemonMediaController)
 #include "tst_daemon_media_controller.moc"
+
+// R-R3-01/R-R3-08: E1 owns a Wide engine. E2 on the same stream asks for a
+// longer Wide FFT, moves to Fine, resizes Fine and leaves. None of that may
+// renew E1's context or change the engine that feeds it.
+void TstDaemonMediaController::sharedEngineKeepsOtherPanWhileNeighbourChurns()
+{
+    Harness h;
+    h.establishSession();
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    h.startReadyPeer();
+    const double centre = h.radio.streamCentreHz(h.streamIndex);
+
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(1, 1, h.sliceId, centre, QStringLiteral("wide"), 1024),
+        h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 1);
+    QTRY_VERIFY(([&] {
+        h.feedRadio();
+        return !messageFor(controls, QStringLiteral("context"), 1).isEmpty();
+    })());
+    const QJsonObject e1 = messageFor(controls, QStringLiteral("context"), 1);
+    const qint64 e1Generation = e1.value(QStringLiteral("contextGeneration")).toInteger();
+    const double e1Span = e1.value(QStringLiteral("spanHz")).toDouble();
+
+    const auto e1Untouched = [&]() {
+        QCOMPARE(messageCount(controls, QStringLiteral("context"), 1), 1);
+        const QJsonObject latest = messageFor(controls, QStringLiteral("context"), 1);
+        QCOMPARE(latest.value(QStringLiteral("contextGeneration")).toInteger(), e1Generation);
+        QCOMPARE(latest.value(QStringLiteral("spanHz")).toDouble(), e1Span);
+    };
+    const auto waitForE2Revision = [&](int revision) {
+        QTRY_VERIFY(([&] {
+            h.feedRadio();
+            return messageFor(controls, QStringLiteral("context"), 2)
+                .value(QStringLiteral("revision")).toInt() == revision;
+        })());
+    };
+
+    // A "wide" label with a longer size cannot lengthen E1's engine.
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(2, 1, h.sliceId, centre, QStringLiteral("wide"), 4096),
+        h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 2);
+    waitForE2Revision(1);
+    // E2 shares E1's engine, so both crops cover the same bins.
+    QCOMPARE(messageFor(controls, QStringLiteral("context"), 2)
+                 .value(QStringLiteral("spanHz")).toDouble(), e1Span);
+    e1Untouched();
+
+    // E2 moves to its own Fine engine, then resizes it.
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(2, 2, h.sliceId, centre, QStringLiteral("fine"), 8192),
+        h.client.sessionEpoch()));
+    waitForE2Revision(2);
+    e1Untouched();
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(2, 3, h.sliceId, centre, QStringLiteral("fine"), 16384),
+        h.client.sessionEpoch()));
+    waitForE2Revision(3);
+    e1Untouched();
+
+    QVERIFY(h.client.sendMediaControl(unsubscription(2), h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 1);
+    QTRY_COMPARE(h.controller.activeSourceCount(), 1);
+
+    // E1 still paints from its original context after the churn: a keyframe
+    // is honoured only for the endpoint's current context generation.
+    QVERIFY(h.client.sendMediaControl({
+        {QStringLiteral("op"), QStringLiteral("keyframe")},
+        {QStringLiteral("connectionId"), QLatin1String(kConnectionId)},
+        {QStringLiteral("endpointId"), 1},
+        {QStringLiteral("contextGeneration"), e1Generation}},
+        h.client.sessionEpoch()));
+    h.mediaTransport->displays.clear();
+    QTRY_VERIFY(([&] {
+        h.feedRadio();
+        for (const QByteArray& bytes : std::as_const(h.mediaTransport->displays)) {
+            DisplayCodecDecoder fresh;
+            const DisplayCodecDecodeResult decoded = fresh.decode(bytes);
+            if (decoded.disposition == DisplayCodecDisposition::Accepted
+                && decoded.frame.context.endpointId == 1
+                && decoded.frame.context.contextGeneration
+                    == static_cast<quint32>(e1Generation)) {
+                return true;
+            }
+        }
+        return false;
+    })());
+    e1Untouched();
+    h.finish();
+}
+
+// R-R3-01/R-R3-08: the grant records what Core gave each request and why.
+void TstDaemonMediaController::grantReportsLargestSizeSharedEngineAndSourceBins()
+{
+    Harness h;
+    h.establishSession();
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    h.startReadyPeer();
+    const double centre = h.radio.streamCentreHz(h.streamIndex);
+    const int largest = NereusSDR::FFTEngine::maximumFftSize();
+
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(1, 1, h.sliceId, centre, QStringLiteral("wide"), 1024),
+        h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 1);
+    auto grant = h.controller.spectrumGrant(1);
+    QVERIFY(grant.has_value());
+    QCOMPARE(grant->requestedFftSize, 1024);
+    QCOMPARE(grant->grantedFftSize, 1024);
+    QCOMPARE(grant->grantedTier, FftTier::Wide);
+    QCOMPARE(grant->requestedPixels, 128);
+    QCOMPARE(grant->grantedPixels, 128);
+    QCOMPARE(grant->reason, SpectrumLimitReason::None);
+    QVERIFY(!h.controller.spectrumGrant(99).has_value());
+
+    // Above the largest size on an engine another pan uses: the shared
+    // engine is the limit that decides the grant.
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(2, 1, h.sliceId, centre, QStringLiteral("wide"), largest * 2),
+        h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 2);
+    grant = h.controller.spectrumGrant(2);
+    QVERIFY(grant.has_value());
+    QCOMPARE(grant->requestedFftSize, largest * 2);
+    QCOMPARE(grant->grantedFftSize, 1024);
+    QCOMPARE(grant->reason, SpectrumLimitReason::SharedEngine);
+
+    // Alone on its own Fine engine, the same request gets the largest size.
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(3, 1, h.sliceId, centre, QStringLiteral("fine"), largest * 2),
+        h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 3);
+    grant = h.controller.spectrumGrant(3);
+    QVERIFY(grant.has_value());
+    QCOMPARE(grant->grantedFftSize, largest);
+    QCOMPARE(grant->grantedTier, FftTier::Fine);
+    QCOMPARE(grant->reason, SpectrumLimitReason::LargestSize);
+
+    // More pixels than the crop has source bins: granted the visible bins,
+    // and the context carries exactly that many samples.
+    QJsonObject wider = tieredSubscription(1, 2, h.sliceId, centre,
+                                           QStringLiteral("wide"), 1024);
+    wider.insert(QStringLiteral("pixels"), SpectrumEndpoint::kMaxPixels);
+    QVERIFY(h.client.sendMediaControl(wider, h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.spectrumGrant(1)->requestedPixels, SpectrumEndpoint::kMaxPixels);
+    grant = h.controller.spectrumGrant(1);
+    QCOMPARE(grant->grantedFftSize, 1024);
+    QCOMPARE(grant->reason, SpectrumLimitReason::SourceBins);
+    // 48 kHz of a 192 kHz, 1024-bin source: 256 bins plus the inclusive edge.
+    QCOMPARE(grant->grantedPixels, 257);
+    QTRY_VERIFY(([&] {
+        h.feedRadio();
+        return messageFor(controls, QStringLiteral("context"), 1)
+            .value(QStringLiteral("revision")).toInt() == 2;
+    })());
+    QCOMPARE(messageFor(controls, QStringLiteral("context"), 1)
+                 .value(QStringLiteral("traceSamples")).toInt(), 257);
+    QCOMPARE(h.controller.spectrumGrant(1)->grantedPixels, 257);
+    h.finish();
+}
+
+// R-R3-08: the display budget charges the pixels Core grants, not the ones
+// asked for, so a request clamped by its source bins fits a tight budget.
+void TstDaemonMediaController::budgetChargesGrantedPixels()
+{
+    const SpectrumDisplayCost limit = *spectrumDisplayCost(128, 60, false);
+    Harness h(DisplayBudgetLimits{limit.charge.applicationBytesPerSecond,
+                                  limit.charge.spectrumSampleUnitsPerSecond, 7});
+    h.establishSession();
+    QVERIFY(h.server.displayBudgetAvailable());
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    h.startReadyPeer();
+
+    QJsonObject request = subscription(70, 1, h.sliceId,
+                                       h.radio.streamCentreHz(h.streamIndex));
+    request.insert(QStringLiteral("pixels"), SpectrumEndpoint::kMaxPixels);
+    request.insert(QStringLiteral("spanHz"), 18750.0); // about 100 source bins
+    QVERIFY(h.client.sendMediaControl(request, h.client.sessionEpoch()));
+    QTRY_VERIFY(!allocationFor(controls, 70, 1).isEmpty());
+    const QJsonObject result = allocationFor(controls, 70, 1);
+    QCOMPARE(result.value(QStringLiteral("accepted")).toBool(), true);
+    const auto grant = h.controller.spectrumGrant(70);
+    QVERIFY(grant.has_value());
+    QCOMPARE(grant->reason, SpectrumLimitReason::SourceBins);
+    QVERIFY(grant->grantedPixels > 0 && grant->grantedPixels < 128);
+    const SpectrumDisplayCost charged = *spectrumDisplayCost(grant->grantedPixels, 60, false);
+    QCOMPARE(result.value(QStringLiteral("spectrumSampleUnitsPerSecond")).toInteger(),
+             static_cast<qint64>(charged.charge.spectrumSampleUnitsPerSecond));
+    QCOMPARE(result.value(QStringLiteral("applicationBytesPerSecond")).toInteger(),
+             static_cast<qint64>(charged.charge.applicationBytesPerSecond));
+    h.finish();
+}
+
+// R-R3-09: Core accepts only what the GUI's context parser accepts. Every
+// refused request goes through the typed rejection path and leaves the live
+// endpoint and its source exactly as they were.
+void TstDaemonMediaController::outOfRangeRequestsAreRejectedAndLeaveEndpointUntouched()
+{
+    Harness h;
+    h.establishSession();
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    h.startReadyPeer();
+    const double centre = h.radio.streamCentreHz(h.streamIndex);
+    const QJsonObject live = subscription(1, 1, h.sliceId, centre);
+    QVERIFY(h.client.sendMediaControl(live, h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 1);
+    QTRY_VERIFY(([&] {
+        h.feedRadio();
+        return !messageFor(controls, QStringLiteral("context"), 1).isEmpty();
+    })());
+    const qint64 generation = messageFor(controls, QStringLiteral("context"), 1)
+        .value(QStringLiteral("contextGeneration")).toInteger();
+
+    const QList<std::pair<QString, QJsonValue>> invalid{
+        {QStringLiteral("framesPerLine"), kMaxFramesPerLine + 1},
+        {QStringLiteral("minDbm"), kMinDbmLimit - 1.0},
+        {QStringLiteral("maxDbm"), kMaxDbmLimit + 1.0},
+        {QStringLiteral("centreHz"), centre + 500000.0},
+        {QStringLiteral("fps"), 0},
+        {QStringLiteral("fps"), 61},
+        {QStringLiteral("pixels"), 0},
+        {QStringLiteral("pixels"), SpectrumEndpoint::kMaxPixels + 1},
+        {QStringLiteral("spanHz"), 0.0},
+        {QStringLiteral("spanHz"), -48000.0},
+        {QStringLiteral("fftSize"), 3000},
+        {QStringLiteral("fps"), QStringLiteral("60")},
+        {QStringLiteral("minDbm"), 0.0}, // equal to maxDbm
+    };
+    quint32 endpointId = 10;
+    for (const auto& [key, value] : invalid) {
+        QJsonObject bad = subscription(endpointId, 1, h.sliceId, centre);
+        bad.insert(key, value);
+        QVERIFY(h.client.sendMediaControl(bad, h.client.sessionEpoch()));
+        QTRY_VERIFY2(!messageFor(controls, QStringLiteral("rejected"), endpointId).isEmpty(),
+                     qPrintable(key));
+        QCOMPARE(h.controller.activeEndpointCount(), 1);
+        QCOMPARE(h.controller.activeSourceCount(), 1);
+        ++endpointId;
+
+        // The same bad value as a replacement of the live endpoint.
+        QJsonObject replacement = live;
+        replacement.insert(QStringLiteral("revision"), static_cast<qint64>(endpointId));
+        replacement.insert(key, value);
+        const int rejectedBefore = messageCount(controls, QStringLiteral("rejected"), 1);
+        QVERIFY(h.client.sendMediaControl(replacement, h.client.sessionEpoch()));
+        QTRY_COMPARE(messageCount(controls, QStringLiteral("rejected"), 1), rejectedBefore + 1);
+        QCOMPARE(h.controller.activeEndpointCount(), 1);
+        QCOMPARE(h.controller.spectrumGrant(1)->requestedPixels, 128);
+    }
+
+    h.feedRadio(0.1875);
+    QTest::qWait(20);
+    QCOMPARE(messageCount(controls, QStringLiteral("context"), 1), 1);
+    QCOMPARE(messageFor(controls, QStringLiteral("context"), 1)
+                 .value(QStringLiteral("contextGeneration")).toInteger(), generation);
+
+    // The limits themselves are accepted, and the GUI accepts their context.
+    QJsonObject edge = subscription(40, 1, h.sliceId, centre);
+    edge.insert(QStringLiteral("framesPerLine"), kMaxFramesPerLine);
+    edge.insert(QStringLiteral("minDbm"), kMinDbmLimit);
+    edge.insert(QStringLiteral("maxDbm"), kMaxDbmLimit);
+    QVERIFY(h.client.sendMediaControl(edge, h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 2);
+    QVERIFY(messageFor(controls, QStringLiteral("rejected"), 40).isEmpty());
+    h.finish();
+}
+
+// Ownership is pinned: a control from another epoch or a connection id that
+// is not the session's media peer never reaches the endpoints.
+void TstDaemonMediaController::staleEpochAndForeignConnectionLeaveEndpointsUntouched()
+{
+    Harness h;
+    h.establishSession();
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    h.startReadyPeer();
+    const double centre = h.radio.streamCentreHz(h.streamIndex);
+    const quint64 epoch = h.client.sessionEpoch();
+    QVERIFY(h.client.sendMediaControl(subscription(1, 1, h.sliceId, centre), epoch));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 1);
+    QTRY_VERIFY(([&] {
+        h.feedRadio();
+        return !messageFor(controls, QStringLiteral("context"), 1).isEmpty();
+    })());
+    const QJsonObject context = messageFor(controls, QStringLiteral("context"), 1);
+
+    // Delivered as the station would, but stamped with a different epoch.
+    QJsonObject replacement = subscription(1, 2, h.sliceId, centre, 4096);
+    emit h.server.mediaControlReceived(replacement, epoch + 1);
+    emit h.server.mediaControlReceived(unsubscription(1), epoch + 1);
+    emit h.server.mediaControlReceived(subscription(2, 1, h.sliceId, centre), epoch + 1);
+    if (epoch > 1) {
+        emit h.server.mediaControlReceived(unsubscription(1), epoch - 1);
+    }
+
+    // A syntactically valid connection id that is not this session's peer.
+    const QString foreign = QStringLiteral("99999999-2222-4333-8444-555555555555");
+    replacement.insert(QStringLiteral("connectionId"), foreign);
+    QVERIFY(h.client.sendMediaControl(replacement, epoch));
+    QJsonObject foreignUnsubscribe = unsubscription(1);
+    foreignUnsubscribe.insert(QStringLiteral("connectionId"), foreign);
+    QVERIFY(h.client.sendMediaControl(foreignUnsubscribe, epoch));
+    QJsonObject foreignNew = subscription(3, 1, h.sliceId, centre);
+    foreignNew.insert(QStringLiteral("connectionId"), foreign);
+    QVERIFY(h.client.sendMediaControl(foreignNew, epoch));
+
+    // Positive control: the same direct delivery with the live epoch works.
+    emit h.server.mediaControlReceived(subscription(4, 1, h.sliceId, centre), epoch);
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 2);
+    QVERIFY(!h.controller.spectrumGrant(2).has_value());
+    QVERIFY(!h.controller.spectrumGrant(3).has_value());
+    QCOMPARE(h.controller.spectrumGrant(1)->requestedFftSize, 1024);
+
+    h.feedRadio(0.1875);
+    QTest::qWait(20);
+    QCOMPARE(messageCount(controls, QStringLiteral("context"), 1), 1);
+    QCOMPARE(messageFor(controls, QStringLiteral("context"), 1)
+                 .value(QStringLiteral("contextGeneration")).toInteger(),
+             context.value(QStringLiteral("contextGeneration")).toInteger());
+    QVERIFY(messageFor(controls, QStringLiteral("rejected"), 1).isEmpty());
+    h.finish();
+}

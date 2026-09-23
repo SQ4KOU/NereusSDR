@@ -202,6 +202,16 @@ private slots:
         // A half-DDC crop includes both inclusive boundary bins under the
         // existing floor/ceil reducer contract, therefore 513, not 1024.
         QCOMPARE(clamped.context().codec.traceSamples, quint16(513));
+        // Core computes the same grant before any frame exists.
+        QCOMPARE(SpectrumEndpoint::grantedPixels(large, source.fftBins, source.centreHz,
+                                                 source.sampleRateHz, false), 513);
+        QCOMPARE(SpectrumEndpoint::grantedPixels(large, source.fftBins, source.centreHz,
+                                                 source.sampleRateHz, true),
+                 SpectrumEndpoint::kMaxPixels);
+        SpectrumEndpointRequest beside = large;
+        beside.centreHz = source.centreHz + source.sampleRateHz * 4.0;
+        QCOMPARE(SpectrumEndpoint::grantedPixels(beside, source.fftBins, source.centreHz,
+                                                 source.sampleRateHz, false), 0);
     }
 
     void cadenceAndGenerationReset()
@@ -318,11 +328,14 @@ private slots:
         QVERIFY(endpoint.configure(request(), source));
         QVERIFY(endpoint.consume(frame(source, 1'000'000'000)).has_value());
 
+        // R-R3-09: a crop beside the source is refused, and the refusal
+        // keeps the accepted endpoint painting.
+        const double acceptedSpan = endpoint.context().exactSpanHz;
         SpectrumEndpointRequest outside = request();
         outside.centreHz = source.centreHz + source.sampleRateHz * 4.0;
-        QVERIFY(endpoint.configure(outside, source));
-        QCOMPARE(endpoint.context().exactSpanHz, 0.0);
-        QVERIFY(!endpoint.consume(frame(source, 2'000'000'000)).has_value());
+        QVERIFY(!endpoint.configure(outside, source));
+        QCOMPARE(endpoint.context().exactSpanHz, acceptedSpan);
+        QVERIFY(endpoint.consume(frame(source, 2'000'000'000)).has_value());
 
         QVERIFY(endpoint.configure(request(), source));
         DaemonSpectrumFrame stale = frame(source, 3'000'000'000);
@@ -345,6 +358,21 @@ private slots:
         bad = request();
         bad.targetFps = 61;
         QVERIFY(!endpoint.configure(bad, sourceContext()));
+        bad = request();
+        bad.framesPerLine = kMaxFramesPerLine + 1;
+        QVERIFY(!endpoint.configure(bad, sourceContext()));
+        bad = request();
+        bad.minDbm = static_cast<float>(kMinDbmLimit) - 1.0f;
+        QVERIFY(!endpoint.configure(bad, sourceContext()));
+        bad = request();
+        bad.maxDbm = static_cast<float>(kMaxDbmLimit) + 1.0f;
+        QVERIFY(!endpoint.configure(bad, sourceContext()));
+        bad = request();
+        bad.framesPerLine = kMaxFramesPerLine;
+        bad.minDbm = static_cast<float>(kMinDbmLimit);
+        bad.maxDbm = static_cast<float>(kMaxDbmLimit);
+        QVERIFY(endpoint.configure(bad, sourceContext()));
+        endpoint.reset();
         bad = request();
         bad.centreHz = std::numeric_limits<double>::max();
         bad.spanHz = std::numeric_limits<double>::max();
