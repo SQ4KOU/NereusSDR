@@ -23,6 +23,10 @@ struct RemoteAudioReceiverTelemetry {
     quint64 invalidPackets = 0;
     quint64 duplicatePackets = 0;
     quint64 rejectedHeaders = 0;
+    // Packets dropped before playback began because a connect-time backlog
+    // overran the arrival bound or the jitter window. Only the newest packet
+    // of such a backlog is kept; nothing counted here was ever heard.
+    quint64 startDiscardedPackets = 0;
     // Valid RTP/profile payload bytes received in this context. This counts
     // duplicates and packets later dropped by the bounded local queue.
     quint64 receivedOpusPayloadBytes = 0;

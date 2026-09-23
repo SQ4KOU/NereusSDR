@@ -7,6 +7,7 @@
 #include "core/session/media/RtpReceptionStats.h"
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <condition_variable>
 #include <deque>
@@ -42,6 +43,7 @@ struct RemoteAudioReceiver::Private {
     std::atomic<quint64> late{0};
     std::atomic<quint64> invalid{0};
     std::atomic<quint64> duplicate{0};
+    std::atomic<quint64> startDiscarded{0};
     std::atomic<quint64> receivedOpusPayloadBytes{0};
     std::atomic<quint64> deviceConsumedFrames{0};
     // -1 is deliberately distinct from a measured empty speaker queue.
@@ -58,6 +60,11 @@ struct RemoteAudioReceiver::Private {
     std::atomic<double> arrivalJitterMs{0.0};
     std::atomic<int> reorderQueuedPackets{-1};
     bool overflow = false; // under mutex
+    // Until the first packet is released for playback, a full arrival queue
+    // drops its oldest packet instead of raising overflow. startBacklog
+    // records such a drop for the worker's next batch. Both under mutex.
+    bool startPhase = false;
+    bool startBacklog = false;
     quint32 ssrc = 0;
     quint64 generation = 0; // owner thread only
 };
@@ -93,6 +100,7 @@ RemoteAudioReceiverTelemetry RemoteAudioReceiver::telemetry() const
         snapshot.invalidPackets = d->invalid.load();
         snapshot.duplicatePackets = d->duplicate.load();
         snapshot.rejectedHeaders = d->rejectedHeaders.load();
+        snapshot.startDiscardedPackets = d->startDiscarded.load();
         snapshot.receivedOpusPayloadBytes = d->receivedOpusPayloadBytes.load();
         snapshot.deviceConsumedFrames = d->deviceConsumedFrames.load();
         snapshot.underflows = d->underflows.load();
@@ -149,6 +157,8 @@ void RemoteAudioReceiver::stop()
         std::lock_guard<std::mutex> lock(d->mutex);
         d->incoming.clear();
         d->overflow = false;
+        d->startPhase = false;
+        d->startBacklog = false;
     }
     if (d->engine) { d->engine->endRemotePlayback(); }
     d->telemetrySequence.fetch_add(1);
@@ -174,6 +184,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
     d->late.store(0);
     d->invalid.store(0);
     d->duplicate.store(0);
+    d->startDiscarded.store(0);
     d->receivedOpusPayloadBytes.store(0);
     d->deviceConsumedFrames.store(0);
     d->speakerQueuedFrames.store(-1);
@@ -187,6 +198,11 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
     d->arrivalJitterMs.store(0.0);
     d->reorderQueuedPackets.store(-1);
     d->telemetryGeneration.fetch_add(1);
+    {
+        std::lock_guard<std::mutex> lock(d->mutex);
+        d->startPhase = true;
+        d->startBacklog = false;
+    }
     d->running.store(true);
     d->telemetrySequence.fetch_add(1);
     const quint64 generation = d->generation;
@@ -236,7 +252,8 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
             const QString detail = reason + QStringLiteral(
                 " [ageMs=%1 accepted=%2 decoded=%3 plc=%4 late=%5 invalid=%6 duplicate=%7"
                 " rejectedHeaders=%8 lastPacketMs=%9 maxArrivalGapMs=%10 maxWakeGapMs=%11"
-                " jitterPackets=%12 ratio=%13 fill=%14 callback=%15 deviceQueued=%16]")
+                " jitterPackets=%12 ratio=%13 fill=%14 callback=%15 deviceQueued=%16"
+                " startDiscarded=%17]")
                 .arg((now - startedAt) / 1'000'000).arg(accepted)
                 .arg(d->decoded.load()).arg(d->concealed.load()).arg(late).arg(invalid)
                 .arg(duplicate).arg(d->rejectedHeaders.load())
@@ -244,7 +261,8 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
                 .arg(maxWakeGap / 1'000'000).arg(jitter.queuedPackets())
                 .arg(stats.currentRatio, 0, 'f', 7).arg(stats.ringFillFrames)
                 .arg(pacing ? pacing->callbackFrames : 0)
-                .arg(pacing ? pacing->queuedFrames : 0);
+                .arg(pacing ? pacing->queuedFrames : 0)
+                .arg(d->startDiscarded.load());
             QMetaObject::invokeMethod(this, [this, generation, detail, fault, fatal] {
                 if (d->generation != generation) { return; }
                 if (fatal) { emit errorOccurred(detail, fault); }
@@ -276,6 +294,52 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
             return;
         }
         bool playing = false;
+        // Connect-time start: nothing has been released for playback yet.
+        // The receiver has no starting-fill constant of its own (the jitter
+        // hold, AudioJitterBuffer::kHoldNs, is the start buffer), so a backlog
+        // keeps only its newest packet. A burst within the arrival bound and
+        // the jitter window is kept whole, as before.
+        bool released = false;
+        bool admittedAny = false;
+        const auto trimStartBacklog = [&](std::deque<Private::Packet>& batch, bool backlog) {
+            // Packets behind the anchor or off the 40 ms grid keep their
+            // normal Late/Invalid classification in insert().
+            const auto aheadOf = [&](const Private::Packet& packet) -> std::optional<qint32> {
+                const qint32 delta = std::bit_cast<qint32>(
+                    quint32(packet.timestamp - jitter.nextTimestamp()));
+                if (delta < 0 || delta % AudioJitterBuffer::kPacketFrames != 0) {
+                    return std::nullopt;
+                }
+                return delta / AudioJitterBuffer::kPacketFrames;
+            };
+            std::optional<std::size_t> newest, oldest;
+            qint32 newestAhead = -1, oldestAhead = 0;
+            std::size_t playable = 0;
+            for (std::size_t i = 0; i < batch.size(); ++i) {
+                const auto ahead = aheadOf(batch[i]);
+                if (!ahead) { continue; }
+                ++playable;
+                if (*ahead > newestAhead) { newest = i; newestAhead = *ahead; }
+                if (!oldest || *ahead < oldestAhead) { oldest = i; oldestAhead = *ahead; }
+            }
+            if (!newest) { return; }
+            if (backlog || newestAhead >= AudioJitterBuffer::kMaxPackets) {
+                // Keep only the newest packet and restart the reorder window
+                // and its loss accounting from it: the dropped packets were
+                // never heard, so they are neither a gap nor a stream break.
+                d->startDiscarded.fetch_add(quint64(jitter.queuedPackets()) + (playable - 1));
+                const quint32 anchor = batch[*newest].timestamp;
+                std::deque<Private::Packet> kept;
+                for (std::size_t i = 0; i < batch.size(); ++i) {
+                    if (i == *newest || !aheadOf(batch[i])) { kept.push_back(std::move(batch[i])); }
+                }
+                batch.swap(kept);
+                jitter.reset(anchor);
+                receptionStats.reset();
+            } else if (!admittedAny) {
+                jitter.reset(batch[*oldest].timestamp);
+            }
+        };
         quint64 lastDeviceFrames = 0;
         const quint64 deviceConsumedBase = initialPacing->consumedFrames;
         quint64 telemetryDeviceFrames = deviceConsumedBase;
@@ -283,6 +347,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
         while (!stop.stop_requested()) {
             std::deque<Private::Packet> incoming;
             bool overflow = false;
+            bool startBacklog = false;
             {
                 std::unique_lock<std::mutex> lock(d->mutex);
                 d->wake.wait_for(lock, std::chrono::milliseconds(2), [this, &stop] {
@@ -291,6 +356,8 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
                 incoming.swap(d->incoming);
                 overflow = d->overflow;
                 d->overflow = false;
+                startBacklog = d->startBacklog;
+                d->startBacklog = false;
             }
             if (stop.stop_requested()) { break; }
             const qint64 wakeAt = monotonicNs();
@@ -300,6 +367,9 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
                 notify(QStringLiteral("Remote audio arrival queue exceeded its latency bound"),
                        Fault::ArrivalBurst);
                 return;
+            }
+            if (!released && !incoming.empty()) {
+                trimStartBacklog(incoming, startBacklog);
             }
             for (const auto& packet : incoming) {
                 if (previousArrival != 0) {
@@ -314,6 +384,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
                 }
                 switch (admitted) {
                 case AudioJitterBuffer::Admission::Accepted:
+                    admittedAny = true;
                     ++accepted;
                     ++d->accepted;
                     lastPacket = packet.arrival;
@@ -371,6 +442,12 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp)
                 if (frame->concealed()) { ++d->concealed; }
                 else { ++d->decoded; }
                 playing = true;
+                if (!released) {
+                    // Playback has begun; the normal overflow rule applies.
+                    released = true;
+                    std::lock_guard<std::mutex> lock(d->mutex);
+                    d->startPhase = false;
+                }
             }
             d->reorderQueuedPackets.store(jitter.queuedPackets());
             if (!playing) {
@@ -466,8 +543,18 @@ void RemoteAudioReceiver::submit(const QByteArray& packet)
     d->receivedOpusPayloadBytes.fetch_add(quint64(header.payloadBytes));
     {
         std::lock_guard<std::mutex> lock(d->mutex);
-        if (d->incoming.size() >= AudioJitterBuffer::kMaxPackets) { d->overflow = true; }
-        else { d->incoming.push_back({packet, header.timestamp, monotonicNs(), header.sequence}); }
+        const bool full = d->incoming.size() >= AudioJitterBuffer::kMaxPackets;
+        if (full && !d->startPhase) { d->overflow = true; }
+        else {
+            if (full) {
+                // A connect-time backlog: nothing has been heard yet, so the
+                // oldest queued packet is the least useful one to keep.
+                d->incoming.pop_front();
+                ++d->startDiscarded;
+                d->startBacklog = true;
+            }
+            d->incoming.push_back({packet, header.timestamp, monotonicNs(), header.sequence});
+        }
     }
     d->wake.notify_one();
 }

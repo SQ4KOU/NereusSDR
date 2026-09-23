@@ -46,6 +46,14 @@ public:
         releaseOutputPacingGate = false;
         pacingGateEntered = false;
     }
+    // Re-arms the gate so the next pacing read, from whichever thread, blocks.
+    void blockNextOutputPacingForTesting()
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        blockOutputPacingAfterCalls = outputPacingCalls;
+        releaseOutputPacingGate = false;
+        pacingGateEntered = false;
+    }
     bool waitForOutputPacingGateForTesting(std::chrono::milliseconds timeout)
     {
         std::unique_lock<std::mutex> lock(mutex);
