@@ -27,6 +27,8 @@
 // =================================================================
 #pragma once
 
+#include "gui/PanStatusText.h"
+
 #include <QWidget>
 #include <QChar>
 #include <QRect>
@@ -86,10 +88,17 @@ public:
     void setPsPaused(bool paused);
     bool psPaused() const { return m_psPaused; }
 
-    /// Remote display observation, distinct from the radio's RF/status pills.
-    /// Empty hides the second row. The full text remains in the tooltip.
-    void setRemoteDisplayStatus(const QString& status);
+    /// Remote display observation, distinct from the radio's RF/status pills
+    /// (R-R3-37). The short line is painted on a second row; empty hides the
+    /// row. The explanation is the hover text.
+    void setRemoteDisplayStatus(const PanStatusText& status);
     QString remoteDisplayStatus() const { return m_remoteDisplayStatus; }
+    QString remoteDisplayExplanation() const { return m_remoteDisplayExplanation; }
+
+    /// The short line as the second row paints it at the current width,
+    /// elided when it does not fit. paintEvent draws exactly this, so a test
+    /// can read back whether a line fits a narrow pan.
+    QString visibleRemoteDisplayStatus() const;
 
     /// The clickable badges, in the order paintEvent lays them out.
     enum class Badge { ChainTag, Tx, Wide };
@@ -145,7 +154,9 @@ private:
     bool     m_diversityActive {false};
     bool     m_psPaused {false};
     QString  m_remoteDisplayStatus;
+    QString  m_remoteDisplayExplanation;
     void updateStatusToolTip();
+    QRect remoteStatusRect() const;
 };
 
 } // namespace NereusSDR

@@ -169,24 +169,43 @@ QString reportedAudioProfile(const RemoteAudioContextMessage& context)
         .arg(encoder->audioBandwidthHz);
 }
 
-// The operator's line for a limited grant; empty when nothing limited it.
-QString grantStatusLine(const std::optional<SpectrumContextGrant>& grant)
+// The zoom-detail limit a grant reports, for the pan's status line
+// (R-R3-37); false when nothing limited it.
+bool applyGrantLimit(PanDisplayState& state, const std::optional<SpectrumContextGrant>& grant)
 {
     if (!grant) {
-        return {};
+        return false;
     }
     switch (grant->limit) {
     case SpectrumLimitReason::None:
-        return {};
+        return false;
     case SpectrumLimitReason::LargestSize:
-        return QStringLiteral("Zoom detail is at the station's maximum");
+        state.zoomLimit = PanDisplayState::ZoomLimit::LargestSize;
+        return true;
     case SpectrumLimitReason::SharedEngine:
-        return QStringLiteral("Zoom detail limited: this receiver's spectrum is shared with another pan");
+        state.zoomLimit = PanDisplayState::ZoomLimit::SharedEngine;
+        return true;
     case SpectrumLimitReason::SourceBins:
-        return QStringLiteral("Showing %1 points: the receiver has no finer detail here")
-            .arg(grant->grantedPixels);
+        state.zoomLimit = PanDisplayState::ZoomLimit::SourceBins;
+        state.zoomPoints = grant->grantedPixels;
+        return true;
     }
-    return {};
+    return false;
+}
+
+PanDisplayState refusedState(const QString& reason)
+{
+    PanDisplayState state;
+    state.phase = PanDisplayState::Phase::Refused;
+    state.refusalReason = reason;
+    return state;
+}
+
+PanDisplayState phaseState(PanDisplayState::Phase phase)
+{
+    PanDisplayState state;
+    state.phase = phase;
+    return state;
 }
 
 // Log wording only.
@@ -428,8 +447,8 @@ struct RemoteMediaController::Private {
     RemoteMediaController::AllocationClock allocationClock;
     int allocationAckTimeoutMs = kDefaultAllocationAckTimeoutMs;
     std::map<quint32, Binding> bindings;
-    // The status each pan was last given, before its grant line is added.
-    QHash<QString, QString> panBaseStatus;
+    // The status each pan was last given, before its grant limit is added.
+    QHash<QString, PanDisplayState> panBaseStatus;
     struct CtunState {
         quint64 epoch = 0;
         int requestSliceId = -1;
@@ -695,6 +714,8 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
             d->accountedPs3 = d->client->remotePs3DisplaySubscribed();
             d->ps3Refused = enabled;
             d->ps3RefusalReason = reason.left(512);
+            qCInfo(lcRemoteMedia).noquote() << "Remote PureSignal display refused:"
+                                            << d->ps3RefusalReason;
             d->ps3RefusedGeneration = d->client->remoteDisplayBudgetLimits()
                 ? d->client->remoteDisplayBudgetLimits()->generation : 0;
             d->pendingPs3.reset();
@@ -1142,7 +1163,7 @@ void RemoteMediaController::stop()
             if (!self) { return; }
         }
         if (!panId.isEmpty()) {
-            setPanStatus(panId, QString());
+            setPanStatus(panId, PanDisplayState{});
             if (!self) { return; }
         }
     }
@@ -1409,7 +1430,7 @@ void RemoteMediaController::refreshSubscriptions()
             // diagnostics, and clear any status from a previous allocation.
             // Only a limited grant or a refusal is shown.
             if (applet->panId().isEmpty()) {
-                applet->setRemoteDisplayStatus(QString());
+                applet->setRemoteDisplayStatus(PanStatusText{});
             } else {
                 setPanStatus(applet->panId(), perPanRefusalStatus(applet->panId()));
             }
@@ -1570,16 +1591,21 @@ void RemoteMediaController::refreshSubscriptions()
     refreshCtunState();
 }
 
-void RemoteMediaController::setPanStatus(const QString& panId, const QString& status)
+void RemoteMediaController::setPanStatus(const QString& panId, const PanDisplayState& status)
 {
     if (!d->stack || panId.isEmpty()) { return; }
     d->panBaseStatus.insert(panId, status);
     for (PanadapterApplet* applet : d->stack->allApplets()) {
         if (applet && applet->panId() == panId) {
-            applet->setRemoteDisplayStatus(statusWithGrant(panId, status));
+            applet->setRemoteDisplayStatus(buildPanStatusText(statusWithGrant(panId, status)));
             return;
         }
     }
+}
+
+PanDisplayState RemoteMediaController::panDisplayState(const QString& panId) const
+{
+    return statusWithGrant(panId, d->panBaseStatus.value(panId));
 }
 
 void RemoteMediaController::refreshPanGrantStatus(const QString& panId)
@@ -1587,7 +1613,7 @@ void RemoteMediaController::refreshPanGrantStatus(const QString& panId)
     setPanStatus(panId, d->panBaseStatus.value(panId));
 }
 
-QString RemoteMediaController::perPanRefusalStatus(const QString& panId) const
+PanDisplayState RemoteMediaController::perPanRefusalStatus(const QString& panId) const
 {
     // R-R3-01/08/37: outside budget mode a refused pan keeps the budget-mode
     // line while the refused request is still the one it would send. A new
@@ -1604,26 +1630,25 @@ QString RemoteMediaController::perPanRefusalStatus(const QString& panId) const
                           d->client->remoteWidebandAvailable()) != binding.observed) {
             continue;
         }
-        return QStringLiteral("Display allocation refused: %1")
-            .arg(binding.refusalReason.left(384));
+        return refusedState(binding.refusalReason.left(384));
     }
     return {};
 }
 
-QString RemoteMediaController::statusWithGrant(const QString& panId, const QString& status) const
+PanDisplayState RemoteMediaController::statusWithGrant(const QString& panId,
+                                                      PanDisplayState status) const
 {
-    // Only a live, accepted endpoint's grant is shown: the line goes when the
-    // grant is no longer limited or the endpoint does.
-    QString line;
+    // Only a live, accepted endpoint's grant is shown: the limit goes when
+    // the grant is no longer limited or the endpoint does.
+    status.zoomLimit = PanDisplayState::ZoomLimit::None;
+    status.zoomPoints = 0;
     for (const auto& [id, binding] : d->bindings) {
         if (binding.panId == panId && binding.accepted && !binding.retiring
-            && !binding.suspending) {
-            line = grantStatusLine(binding.grant);
-            if (!line.isEmpty()) { break; }
+            && !binding.suspending && applyGrantLimit(status, binding.grant)) {
+            break;
         }
     }
-    if (line.isEmpty()) { return status; }
-    return status.isEmpty() ? line : status + QStringLiteral("; ") + line;
+    return status;
 }
 
 void RemoteMediaController::refreshBudgetSubscriptions()
@@ -1708,6 +1733,8 @@ void RemoteMediaController::refreshBudgetSubscriptions()
         if (!allocateRemoteDisplay(*limits, {}, true, &reason)) {
             d->ps3Refused = true;
             d->ps3RefusalReason = reason;
+            qCInfo(lcRemoteMedia).noquote() << "Remote PureSignal display does not fit:"
+                                            << reason;
             d->ps3RefusedGeneration = limits->generation;
         }
     }
@@ -1753,8 +1780,7 @@ void RemoteMediaController::refreshBudgetSubscriptions()
             if (found == d->bindings.end()) { continue; }
             Private::Binding& binding = found->second;
             binding.suspending = true; // Preserve the widget/history across the release.
-            setPanStatus(binding.panId,
-                         QStringLiteral("Display allocation pending: changing source window"));
+            setPanStatus(binding.panId, phaseState(PanDisplayState::Phase::ChangingWindow));
             if (!self) { return; }
             if (binding.pending) { continue; }
             ++binding.revision;
@@ -1800,12 +1826,15 @@ void RemoteMediaController::refreshBudgetSubscriptions()
         } else {
             d->cachedAllocation = allocateRemoteDisplay(
                 *limits, intents, targetPs3, &d->cachedAllocationError);
+            if (!d->cachedAllocation) {
+                qCInfo(lcRemoteMedia).noquote() << "Remote display allocation failed:"
+                                                << d->cachedAllocationError;
+            }
         }
     }
     const std::optional<RemoteDisplayAllocation>& allocation = d->cachedAllocation;
     if (!allocation) {
-        const QString status = QStringLiteral("Display allocation refused: %1")
-            .arg(d->cachedAllocationError.left(384));
+        const PanDisplayState status = refusedState(d->cachedAllocationError.left(384));
         for (const Desired& item : desired) { setPanStatus(item.panId, status); }
         return;
     }
@@ -1830,18 +1859,17 @@ void RemoteMediaController::refreshBudgetSubscriptions()
     const auto statusFor = [now](const Private::Binding& binding,
                                   const Desired& item) {
         if (binding.pending && binding.pending->timedOut) {
-            return QStringLiteral("Display allocation stalled: no Core acknowledgement");
+            return phaseState(PanDisplayState::Phase::Stalled);
         }
         if (!binding.refusalReason.isEmpty()) {
-            return QStringLiteral("Display allocation refused: %1")
-                .arg(binding.refusalReason.left(384));
+            return refusedState(binding.refusalReason.left(384));
         }
         if (binding.acceptedRevision == 0 || binding.acceptedRequest.isEmpty()) {
-            return QStringLiteral("Display allocation pending");
+            return phaseState(PanDisplayState::Phase::Waiting);
         }
-        const int pixels = binding.acceptedRequest.value(QStringLiteral("pixels")).toInt();
-        const int fps = binding.acceptedRequest.value(QStringLiteral("fps")).toInt();
-        QString status = QStringLiteral("Display target %1 px @ %2 fps").arg(pixels).arg(fps);
+        PanDisplayState status = phaseState(PanDisplayState::Phase::Showing);
+        status.pixels = binding.acceptedRequest.value(QStringLiteral("pixels")).toInt();
+        status.fps = binding.acceptedRequest.value(QStringLiteral("fps")).toInt();
         int firstRecent = 0;
         while (firstRecent < binding.receivedFrameTimesMs.size()
                && binding.receivedFrameTimesMs.at(firstRecent) < now - 2'000) {
@@ -1854,17 +1882,12 @@ void RemoteMediaController::refreshBudgetSubscriptions()
             const double received = double(recentCount - 1) * 1000.0
                 / double(binding.receivedFrameTimesMs.constLast()
                          - binding.receivedFrameTimesMs.at(firstRecent));
-            status += QStringLiteral("; received %1 fps").arg(received, 0, 'f', 1);
+            status.receivedFps = received;
         }
-        const int requestedPixels = item.original.value(QStringLiteral("pixels")).toInt();
-        const int requestedFps = item.original.value(QStringLiteral("fps")).toInt();
-        if (pixels != requestedPixels || fps != requestedFps) {
-            status += QStringLiteral(" (requested %1 px @ %2 fps; Core capacity)")
-                .arg(requestedPixels).arg(requestedFps);
-        }
-        if (binding.acceptedRequest.value(QStringLiteral("wideSpanFactor")).toDouble() > 1.0) {
-            status += QStringLiteral("; WIDE plane reserved");
-        }
+        status.requestedPixels = item.original.value(QStringLiteral("pixels")).toInt();
+        status.requestedFps = item.original.value(QStringLiteral("fps")).toInt();
+        status.extendedView =
+            binding.acceptedRequest.value(QStringLiteral("wideSpanFactor")).toDouble() > 1.0;
         return status;
     };
 
@@ -1880,13 +1903,12 @@ void RemoteMediaController::refreshBudgetSubscriptions()
             if (found != d->bindings.end()
                 && found->second.refusedIdentity == suspendIdentity) {
                 setPanStatus(item.panId,
-                    QStringLiteral("Display allocation refused: %1")
-                        .arg(found->second.refusalReason.left(384)));
+                             refusedState(found->second.refusalReason.left(384)));
                 continue;
             }
-            setPanStatus(item.panId, retainedPs3ExceedsCap
-                ? QStringLiteral("Display paused: Core capacity; accepted PureSignal reservation exceeds current cap")
-                : QStringLiteral("Display paused: Core capacity"));
+            PanDisplayState paused = phaseState(PanDisplayState::Phase::Paused);
+            paused.pureSignalOverLimit = retainedPs3ExceedsCap;
+            setPanStatus(item.panId, paused);
             if (!self) { return; }
             if (found == d->bindings.end()) { continue; }
             found->second.suspending = true;
@@ -1904,8 +1926,7 @@ void RemoteMediaController::refreshBudgetSubscriptions()
 
         if (found == d->bindings.end()) {
             if (d->bindings.size() >= kMaxEndpoints || d->nextEndpoint == 0) {
-                setPanStatus(item.panId,
-                    QStringLiteral("Display allocation stalled: endpoint ledger full"));
+                setPanStatus(item.panId, phaseState(PanDisplayState::Phase::TooManyPans));
                 continue;
             }
             const quint32 endpointId = d->nextEndpoint++;
@@ -1965,12 +1986,12 @@ void RemoteMediaController::refreshBudgetSubscriptions()
             binding.refusedIdentity.clear();
             binding.refusalReason.clear();
         }
-        QString status = statusFor(binding, item);
+        PanDisplayState status = statusFor(binding, item);
         if (d->ps3Refused && !d->ps3RefusalReason.isEmpty()) {
-            status += QStringLiteral("; PureSignal display refused: %1")
-                .arg(d->ps3RefusalReason.left(256));
+            status.pureSignal = PanDisplayState::PureSignal::Refused;
+            status.pureSignalRefusalReason = d->ps3RefusalReason.left(256);
         } else if (d->pendingPs3 && d->pendingPs3->timedOut) {
-            status += QStringLiteral("; PureSignal display allocation stalled");
+            status.pureSignal = PanDisplayState::PureSignal::Stalled;
         }
         setPanStatus(item.panId, status);
         if (!self) { return; }
@@ -2285,6 +2306,9 @@ void RemoteMediaController::receiveAllocationResult(const QJsonObject& payload)
             binding.refusedIdentity = pending.identity;
             binding.refusalReason = reason.isEmpty()
                 ? QStringLiteral("Core refused the display allocation.") : reason;
+            // The raw reason is kept for the log; the pan shows it translated.
+            qCInfo(lcRemoteMedia).noquote() << "Remote display allocation refused:"
+                                            << endpointId << binding.refusalReason;
             if (sourceRetired) {
                 const QPointer<RemoteMediaController> self(this);
                 QPointer<SpectrumWidget> widget = binding.widget;
@@ -2339,7 +2363,7 @@ void RemoteMediaController::receiveAllocationResult(const QJsonObject& payload)
                 if (!self) { return; }
             }
             if (suspended) {
-                setPanStatus(panId, QStringLiteral("Display paused: Core capacity"));
+                setPanStatus(panId, phaseState(PanDisplayState::Phase::Paused));
             }
         } else {
             if (acceptedRevision != binding.acceptedRevision
@@ -2348,6 +2372,8 @@ void RemoteMediaController::receiveAllocationResult(const QJsonObject& payload)
             binding.refusedIdentity = pending.identity;
             binding.refusalReason = reason.isEmpty()
                 ? QStringLiteral("Core refused the display release.") : reason;
+            qCInfo(lcRemoteMedia).noquote() << "Remote display release refused:"
+                                            << endpointId << binding.refusalReason;
         }
     }
     refreshSubscriptions();
@@ -2513,6 +2539,8 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
             binding.refusalReason = operatorChange ? QString()
                 : (reason.isEmpty() ? QStringLiteral("Core refused the display allocation.")
                                     : reason.left(512));
+            qCInfo(lcRemoteMedia).noquote() << "Remote display endpoint rejected:"
+                                            << endpointId << reason.left(512);
             binding.decoder.reset();
             const QPointer<RemoteMediaController> self(this);
             const QString panId = binding.panId;

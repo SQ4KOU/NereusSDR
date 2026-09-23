@@ -76,6 +76,8 @@
 
 #include <QtTest/QtTest>
 
+#include "OperatorWording.h"
+
 #include <QAction>
 #include <QApplication>
 #include <QCheckBox>
@@ -215,19 +217,6 @@ QString widgetStateOf(QWidget* root)
         }
     }
     return state.join(QLatin1Char(','));
-}
-
-// Operator strings stay plain English: no internal subsystem, roadmap or
-// capability names in a reason an operator reads.
-bool isPlainOperatorReason(const QString& reason)
-{
-    for (const char* jargon : {"DSP", "WDSP", "txPermitted", "capabilit", "R3", "R4",
-                               "handshake", "protocol", "Role"}) {
-        if (reason.contains(QLatin1String(jargon), Qt::CaseInsensitive)) {
-            return false;
-        }
-    }
-    return !reason.isEmpty();
 }
 
 } // namespace
@@ -1110,7 +1099,7 @@ private slots:
         QCOMPARE(mox->toolTip(),
                  QStringLiteral("Transmit controls are unavailable until the station "
                                 "confirms transmit permission."));
-        QVERIFY2(isPlainOperatorReason(mox->toolTip()), qPrintable(mox->toolTip()));
+        QVERIFY2(OperatorWording::isPlain(mox->toolTip()), qPrintable(mox->toolTip()));
 
         QSignalSpy moxRejected(model.moxController(), &MoxController::moxRejected);
         QSignalSpy tuneRefused(&model, &RadioModel::tuneRefused);
@@ -1260,7 +1249,7 @@ private slots:
 
         // The reason MainWindow actually passes is plain English.
         dialog.setTransmitPermitted(false);
-        QVERIFY2(isPlainOperatorReason(notice->text()), qPrintable(notice->text()));
+        QVERIFY2(OperatorWording::isPlain(notice->text()), qPrintable(notice->text()));
 
         // Local direct mode: unchanged, live, no reason shown.
         RadioModel local;
@@ -1314,7 +1303,7 @@ private slots:
         QVERIFY(!localNotice->isHidden());
         QVERIFY(txNotice->isHidden());
         const QString reason = localNotice->text();
-        QVERIFY2(isPlainOperatorReason(reason), qPrintable(reason));
+        QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
         QCOMPARE(page->toolTip(), reason);
         QTreeWidgetItem* const leaf = setupLeaf(dialog, label);
         QVERIFY(leaf != nullptr);
@@ -1425,7 +1414,7 @@ private slots:
         QVERIFY(leaf != nullptr);
         const QString reason = leaf->toolTip(0);
         QVERIFY2(reason.contains(reasonWord), qPrintable(reason));
-        QVERIFY2(isPlainOperatorReason(reason), qPrintable(reason));
+        QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
         QVERIFY(!dialog.isPageRealizedForTest(label));
 
         dialog.selectPage(label);
@@ -1491,7 +1480,7 @@ private slots:
             auto* group = page.findChild<QGroupBox*>(QLatin1String(name));
             QVERIFY2(group != nullptr, name);
             QVERIFY2(!group->isEnabled(), name);
-            QVERIFY2(isPlainOperatorReason(group->toolTip()), qPrintable(group->toolTip()));
+            QVERIFY2(OperatorWording::isPlain(group->toolTip()), qPrintable(group->toolTip()));
             // Activation reaches nothing.
             const QString before = widgetStateOf(group);
             QVERIFY2(!before.isEmpty(), name);
@@ -1529,7 +1518,7 @@ private slots:
         auto* att = applet.findChild<QWidget*>(QStringLiteral("RxAttenuatorStack"));
         QVERIFY(att != nullptr);
         QVERIFY(!att->isEnabled());
-        QVERIFY2(isPlainOperatorReason(att->toolTip()), qPrintable(att->toolTip()));
+        QVERIFY2(OperatorWording::isPlain(att->toolTip()), qPrintable(att->toolTip()));
         QVERIFY(att->toolTip().contains(QStringLiteral("attenuator")));
 
         // Activation reaches nothing: the step spin, the preamp combo and
@@ -1612,7 +1601,7 @@ private slots:
         VaxApplet remoteApplet(&remote, remote.audioEngine());
         QVERIFY(!remoteApplet.isEnabled());
         QVERIFY(remoteApplet.toolTip().contains(vaxWord));
-        QVERIFY2(isPlainOperatorReason(remoteApplet.toolTip()),
+        QVERIFY2(OperatorWording::isPlain(remoteApplet.toolTip()),
                  qPrintable(remoteApplet.toolTip()));
         VaxApplet localApplet(&local, local.audioEngine());
         QVERIFY(localApplet.isEnabled());
@@ -1723,7 +1712,7 @@ private slots:
         }
         QVERIFY(toggle != nullptr);
         QVERIFY(!toggle->isEnabled());
-        QVERIFY2(isPlainOperatorReason(toggle->toolTip()), qPrintable(toggle->toolTip()));
+        QVERIFY2(OperatorWording::isPlain(toggle->toolTip()), qPrintable(toggle->toolTip()));
         QCOMPARE(toggle->toolTip(), operateBtn->toolTip());
         toggle->trigger();
         QCOMPARE(toggles.count(), 0);
@@ -1821,7 +1810,7 @@ private slots:
         }
         dialog.setTransmitPermitted(false);
         QVERIFY(!leveler->isEnabled());
-        QVERIFY2(isPlainOperatorReason(leveler->toolTip()), qPrintable(leveler->toolTip()));
+        QVERIFY2(OperatorWording::isPlain(leveler->toolTip()), qPrintable(leveler->toolTip()));
 
         // A page built on its own for a remote model starts denied.
         AgcAlcSetupPage standalone(&remote);
@@ -1945,8 +1934,8 @@ private slots:
         QVERIFY(reset != nullptr);
         QVERIFY(!combo->isEnabled());
         QVERIFY(!reset->isEnabled());
-        QVERIFY2(isPlainOperatorReason(combo->toolTip()), qPrintable(combo->toolTip()));
-        QVERIFY2(isPlainOperatorReason(reset->toolTip()), qPrintable(reset->toolTip()));
+        QVERIFY2(OperatorWording::isPlain(combo->toolTip()), qPrintable(combo->toolTip()));
+        QVERIFY2(OperatorWording::isPlain(reset->toolTip()), qPrintable(reset->toolTip()));
 
         applet.setTransmitPermitted(false, reason);
         QCOMPARE(combo->toolTip(), reason);
@@ -2014,7 +2003,7 @@ private slots:
         QVERIFY(operateBtn != nullptr);
         QVERIFY(!operateBtn->isEnabled());
         QCOMPARE(operateBtn->toolTip(), AmpApplet::remoteUnavailableReason());
-        QVERIFY2(isPlainOperatorReason(operateBtn->toolTip()), qPrintable(operateBtn->toolTip()));
+        QVERIFY2(OperatorWording::isPlain(operateBtn->toolTip()), qPrintable(operateBtn->toolTip()));
         operateBtn->click();
         applet.clickOperateButtonForTesting();
         QCOMPARE(operate.count(), 0);
@@ -2147,7 +2136,7 @@ private slots:
             QVERIFY2(!reasons.isEmpty(), surface->metaObject()->className());
             for (const QString& reason : reasons) {
                 QCOMPARE(reason, expected);
-                QVERIFY2(isPlainOperatorReason(reason), qPrintable(reason));
+                QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
             }
         }
     }

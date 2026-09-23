@@ -4,6 +4,7 @@
 #include "core/session/media/MediaPeer.h"
 #include "core/session/media/RemoteAudioContext.h"
 #include "core/session/media/RemoteAudioReceiver.h"
+#include "gui/PanStatusText.h"
 #include "gui/RemoteAudioStatus.h"
 #include <QObject>
 #include <functional>
@@ -115,6 +116,10 @@ public:
     RemoteAudioDelayReport audioDelay() const;
     /// R-R3-35: how often a clock probe goes out while audio plays.
     static constexpr int kClockProbeIntervalMs = 1000;
+    /// R-R3-37: what the pan named `panId` was last told about its remote
+    /// display, including its zoom-detail limit. The pan paints
+    /// buildPanStatusText() of this.
+    PanDisplayState panDisplayState(const QString& panId) const;
 
 public slots:
     /// Ask Core for audio again: a new request, enabled per mute and radio
@@ -146,10 +151,10 @@ private:
     void refreshBudgetSubscriptions();
     bool retireSubscriptions(const QList<quint32>& endpointIds);
     void receiveAllocationResult(const QJsonObject& payload);
-    void setPanStatus(const QString& panId, const QString& status);
-    QString statusWithGrant(const QString& panId, const QString& status) const;
+    void setPanStatus(const QString& panId, const PanDisplayState& status);
+    PanDisplayState statusWithGrant(const QString& panId, PanDisplayState status) const;
     void refreshPanGrantStatus(const QString& panId);
-    QString perPanRefusalStatus(const QString& panId) const;
+    PanDisplayState perPanRefusalStatus(const QString& panId) const;
     void refreshCtunState();
     void receiveControl(const QJsonObject& payload, quint32 epoch);
     void receiveDisplay(const QByteArray& packet);

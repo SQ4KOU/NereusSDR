@@ -30,6 +30,9 @@
 
 #include <QMetaProperty>
 
+#include "OperatorWording.h"
+#include "PanStatusSamples.h"
+
 #include "core/AppSettings.h"
 #include "core/DdcAssignment.h"
 #include "core/ReceiverManager.h"
@@ -162,13 +165,19 @@ private slots:
         PanadapterApplet pan(QStringLiteral("remote-status"));
         pan.resize(800, 300);
         pan.setWideBpf(true, QStringLiteral("Receive preselector bypassed"));
-        pan.setRemoteDisplayStatus(QStringLiteral("Display paused: Core capacity"));
-        QCOMPARE(pan.remoteDisplayStatus(), QStringLiteral("Display paused: Core capacity"));
+        PanDisplayState paused;
+        paused.phase = PanDisplayState::Phase::Paused;
+        const PanStatusText text = buildPanStatusText(paused);
+        pan.setRemoteDisplayStatus(text);
+        QCOMPARE(pan.remoteDisplayStatus(), QStringLiteral("Paused: Core busy"));
+        QCOMPARE(pan.remoteDisplayExplanation(), text.explanation);
         auto* overlay = pan.findChild<SpectrumStatusOverlay*>();
         QVERIFY(overlay);
         QCOMPARE(overlay->height(), 44);
-        QVERIFY(overlay->toolTip().contains(pan.remoteDisplayStatus()));
+        // Hover explains in full; the painted row carries the short line.
+        QVERIFY(overlay->toolTip().contains(text.explanation));
         QVERIFY(overlay->toolTip().contains(pan.wideReason()));
+        QVERIFY(OperatorWording::isPlain(overlay->toolTip()));
 
         QSignalSpy chain(overlay, &SpectrumStatusOverlay::chainTagClicked);
         QSignalSpy wide(overlay, &SpectrumStatusOverlay::wideBadgeClicked);
@@ -197,6 +206,23 @@ private slots:
         pan.setRemoteDisplayStatus({});
         QCOMPARE(overlay->height(), 22);
         QCOMPARE(overlay->toolTip(), pan.wideReason());
+    }
+
+    // R-R3-37: in a pan only 200 px wide every short line is painted whole,
+    // clear of the dBm strip, and hovering gives the explanation.
+    void every_short_line_fits_a_200_px_pan()
+    {
+        PanadapterApplet pan(QStringLiteral("narrow"));
+        pan.resize(200, 300);
+        auto* overlay = pan.findChild<SpectrumStatusOverlay*>();
+        QVERIFY(overlay);
+        for (const PanDisplayState& state : PanStatusSamples::all()) {
+            const PanStatusText text = buildPanStatusText(state);
+            pan.setRemoteDisplayStatus(text);
+            QVERIFY2(overlay->geometry().right() < pan.width(), qPrintable(text.shortLine));
+            QCOMPARE(pan.visibleRemoteDisplayStatus(), text.shortLine);
+            QCOMPARE(overlay->toolTip(), text.explanation);
+        }
     }
 
     // ── The defect: a pan painted placeholders, not its slice ─────────────

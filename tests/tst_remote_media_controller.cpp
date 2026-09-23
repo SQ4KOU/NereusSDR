@@ -48,6 +48,7 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "fakes/LoopbackTransport.h"
+#include "OperatorWording.h"
 #include "fakes/RemoteAudioSessionHarness.h"
 
 using namespace NereusSDR;
@@ -392,6 +393,26 @@ QRegularExpression speakerTimingLostLog()
     return QRegularExpression(QStringLiteral(
         "^Remote audio playback failed: (Speaker device timing became unavailable"
         "|Could not write remote audio to the speaker device) \\[ageMs="));
+}
+
+// R-R3-37: the Core accepted this pan's display and it is being shown.
+bool showsDisplay(const RemoteMediaController& controller, const PanadapterApplet* applet)
+{
+    return controller.panDisplayState(applet->panId()).phase
+        == PanDisplayState::Phase::Showing;
+}
+
+// The pan was refused for exactly `reason`, as the Core sent it, and shows
+// that refusal in user words rather than the raw text.
+bool refusedFor(const RemoteMediaController& controller, const PanadapterApplet* applet,
+                const QString& reason)
+{
+    const PanDisplayState state = controller.panDisplayState(applet->panId());
+    return state.phase == PanDisplayState::Phase::Refused && state.refusalReason == reason
+        && !applet->remoteDisplayStatus().isEmpty()
+        && OperatorWording::isPlain(applet->remoteDisplayStatus())
+        && OperatorWording::isPlain(applet->remoteDisplayExplanation())
+        && !applet->remoteDisplayExplanation().contains(reason);
 }
 } // namespace
 
@@ -1790,7 +1811,7 @@ private slots:
         QTRY_COMPARE(countControl(inbound, QStringLiteral("allocation-result")), 2);
         const QJsonObject second = lastControl(outbound, QStringLiteral("subscribe"));
         QVERIFY(quint32(second.value(QStringLiteral("revision")).toDouble()) > firstRevision);
-        QVERIFY(applet->remoteDisplayStatus().startsWith(QStringLiteral("Display target")));
+        QVERIFY(showsDisplay(controller, applet));
 
         const QJsonObject stale{
             {QStringLiteral("op"), QStringLiteral("allocation-result")},
@@ -1815,7 +1836,7 @@ private slots:
         QVERIFY(QMetaObject::invokeMethod(subscriptionTimer, "timeout", Qt::DirectConnection));
         QCOMPARE(countControl(outbound, QStringLiteral("subscribe")), 2);
         QCOMPARE(controller.activeEndpointCount(), 1);
-        QVERIFY(applet->remoteDisplayStatus().startsWith(QStringLiteral("Display target")));
+        QVERIFY(showsDisplay(controller, applet));
     }
 
     void missingAllocationAcknowledgementStallsThenLateResultReconciles()
@@ -1881,7 +1902,9 @@ private slots:
         sinkMedia->activate();
         QTRY_COMPARE(countControl(outbound, QStringLiteral("subscribe")), 1);
         QTRY_COMPARE(stationLink->held.size(), 1);
-        QVERIFY(applet->remoteDisplayStatus().contains(QStringLiteral("pending")));
+        QCOMPARE(controller.panDisplayState(applet->panId()).phase,
+                 PanDisplayState::Phase::Waiting);
+        QCOMPARE(applet->remoteDisplayStatus(), QStringLiteral("Waiting for the Core"));
 
         QTimer* subscriptionTimer = nullptr;
         for (QTimer* timer : controller.findChildren<QTimer*>()) {
@@ -1891,11 +1914,13 @@ private slots:
         nowMs = 10'000;
         QVERIFY(QMetaObject::invokeMethod(subscriptionTimer, "timeout", Qt::DirectConnection));
         QCOMPARE(countControl(outbound, QStringLiteral("subscribe")), 1);
-        QVERIFY(applet->remoteDisplayStatus().contains(QStringLiteral("stalled")));
+        QCOMPARE(controller.panDisplayState(applet->panId()).phase,
+                 PanDisplayState::Phase::Stalled);
+        QCOMPARE(applet->remoteDisplayStatus(), QStringLiteral("Core not answering"));
         QVERIFY(client.mediaAvailable());
 
         stationLink->releaseHeld();
-        QTRY_VERIFY(applet->remoteDisplayStatus().startsWith(QStringLiteral("Display target")));
+        QTRY_VERIFY(showsDisplay(controller, applet));
         QCOMPARE(countControl(outbound, QStringLiteral("subscribe")), 1);
         QCOMPARE(controller.activeEndpointCount(), 1);
     }
@@ -1981,7 +2006,7 @@ private slots:
         stationLink->releaseHeld();
         QTRY_VERIFY([&] {
             for (PanadapterApplet* applet : stack.allApplets()) {
-                if (!applet->remoteDisplayStatus().startsWith(QStringLiteral("Display target"))) {
+                if (!showsDisplay(controller, applet)) {
                     return false;
                 }
             }
@@ -2027,9 +2052,9 @@ private slots:
         stationLink->releaseHeld();
         QTRY_VERIFY([&] {
             for (PanadapterApplet* applet : stack.allApplets()) {
-                const QString status = applet->remoteDisplayStatus();
-                if (!status.startsWith(QStringLiteral("Display target"))
-                    || status.contains(QStringLiteral("requested"))) {
+                const PanDisplayState status = controller.panDisplayState(applet->panId());
+                if (status.phase != PanDisplayState::Phase::Showing || status.reduced()
+                    || !applet->remoteDisplayStatus().isEmpty()) {
                     return false;
                 }
             }
@@ -2181,7 +2206,7 @@ private slots:
         QTRY_COMPARE(countControl(outbound, QStringLiteral("subscribe")), 1);
         QTRY_COMPARE(stationLink->held.size(), 1);
         stationLink->releaseHeld();
-        QTRY_VERIFY(applet->remoteDisplayStatus().startsWith(QStringLiteral("Display target")));
+        QTRY_VERIFY(showsDisplay(controller, applet));
 
         widget->setCenterFrequency(widget->centerFrequency() + 500);
         QTRY_COMPARE(countControl(outbound, QStringLiteral("subscribe")), 2);
@@ -2202,7 +2227,7 @@ private slots:
             {QStringLiteral("messagesPerSecond"), 0}};
         stationLink->passNextAllocationResult();
         QVERIFY(server.sendMediaControl(retired, server.mediaSessionEpoch()));
-        QTRY_VERIFY(applet->remoteDisplayStatus().contains(QStringLiteral("source retired")));
+        QTRY_VERIFY(refusedFor(controller, applet, QStringLiteral("source retired")));
         QCOMPARE(controller.activeEndpointCount(), 1);
 
         QTimer* subscriptionTimer = nullptr;
@@ -2216,7 +2241,7 @@ private slots:
         stationLink->releaseHeld();
         QCoreApplication::processEvents();
         QCOMPARE(countControl(outbound, QStringLiteral("subscribe")), subscriptions);
-        QVERIFY(applet->remoteDisplayStatus().contains(QStringLiteral("source retired")));
+        QVERIFY(refusedFor(controller, applet, QStringLiteral("source retired")));
     }
 
     void ps3EnableWaitsForReductionAndRefusalRestoresQualityWithoutRetry()
@@ -2295,7 +2320,7 @@ private slots:
         QVERIFY(original.value(QStringLiteral("pixels")).toInt() > 256
                 || original.value(QStringLiteral("fps")).toInt() > 10);
         stationLink->releaseHeld();
-        QTRY_VERIFY(applet->remoteDisplayStatus().startsWith(QStringLiteral("Display target")));
+        QTRY_VERIFY(showsDisplay(controller, applet));
 
         remote.pureSignalFacade()->setAmpViewSubscribed(true);
         QTRY_COMPARE(countControl(outbound, QStringLiteral("subscribe")), 2);
@@ -2328,10 +2353,16 @@ private slots:
         QCOMPARE(restored.value(QStringLiteral("pixels")), original.value(QStringLiteral("pixels")));
         QCOMPARE(restored.value(QStringLiteral("fps")), original.value(QStringLiteral("fps")));
         stationLink->releaseHeld();
-        QTRY_VERIFY(applet->remoteDisplayStatus().contains(QStringLiteral("test PS3 refusal")));
+        QTRY_VERIFY(controller.panDisplayState(applet->panId()).pureSignalRefusalReason
+                        .contains(QStringLiteral("test PS3 refusal")));
+        QCOMPARE(controller.panDisplayState(applet->panId()).pureSignal,
+                 PanDisplayState::PureSignal::Refused);
+        // The raw reason is logged, never shown.
+        QVERIFY(!applet->remoteDisplayExplanation().contains(QStringLiteral("test PS3 refusal")));
         // The refusal is already visible while the restored allocation's
         // queued acknowledgment is still in flight. Wait for accepted quality.
-        QTRY_VERIFY(!applet->remoteDisplayStatus().contains(QStringLiteral("requested")));
+        QTRY_VERIFY(!controller.panDisplayState(applet->panId()).reduced());
+        QTRY_COMPARE(applet->remoteDisplayStatus(), QStringLiteral("PureSignal: refused"));
         QVERIFY(!client.remotePs3DisplaySubscribed());
 
         for (int attempt = 0; attempt < 3; ++attempt) {
@@ -2741,14 +2772,13 @@ private slots:
                                             server.mediaSessionEpoch()));
             QTRY_COMPARE(countControl(receivedControls, QStringLiteral("context")), before + 1);
         };
-        const QString sourceBins =
-            QStringLiteral("Showing 128 points: the receiver has no finer detail here");
-        const QString shared = QStringLiteral(
-            "Zoom detail limited: this receiver's spectrum is shared with another pan");
-        const QString largest = QStringLiteral("Zoom detail is at the station's maximum");
+        const QString sourceBins = QStringLiteral("Showing 128 points");
+        const QString shared = QStringLiteral("Less detail: shared");
+        const QString largest = QStringLiteral("Finest detail reached");
 
         sendGrant(SpectrumLimitReason::SourceBins);
         QTRY_COMPARE(applet->remoteDisplayStatus(), sourceBins);
+        QVERIFY(OperatorWording::isPlain(applet->remoteDisplayExplanation()));
         sendGrant(SpectrumLimitReason::SharedEngine);
         QTRY_COMPARE(applet->remoteDisplayStatus(), shared);
         sendGrant(SpectrumLimitReason::LargestSize);
@@ -2837,11 +2867,13 @@ private slots:
                 {QStringLiteral("reason"), reason}}, server.mediaSessionEpoch()));
             QTRY_COMPARE(countControl(receivedControls, QStringLiteral("rejected")), before + 1);
         };
-        const QString refused =
-            QStringLiteral("Display allocation refused: requested crop is outside source coverage");
+        // Translated when shown; the Core's reason itself is unchanged.
+        const QString refused = QStringLiteral("Refused: out of range");
 
         refuse(QStringLiteral("requested crop is outside source coverage"));
         QTRY_COMPARE(applet->remoteDisplayStatus(), refused);
+        QVERIFY(refusedFor(controller, applet,
+                           QStringLiteral("requested crop is outside source coverage")));
         // The periodic refresh keeps the reason while the request stands.
         QTest::qWait(250);
         QCOMPARE(applet->remoteDisplayStatus(), refused);
@@ -2971,8 +3003,8 @@ private slots:
         }
         if (!grantAgreed) {
             // No grant was reported, so no grant line can appear.
-            QVERIFY(!applet->remoteDisplayStatus().contains(QStringLiteral("Zoom detail")));
-            QVERIFY(!applet->remoteDisplayStatus().contains(QStringLiteral("points:")));
+            QCOMPARE(gui.panDisplayState(applet->panId()).zoomLimit,
+                     PanDisplayState::ZoomLimit::None);
         }
         client.disconnectFromStation(QStringLiteral("test complete"));
     }
@@ -3117,7 +3149,7 @@ private slots:
         }
         QTRY_VERIFY2_WITH_TIMEOUT(paints(limited), qPrintable(limited->remoteDisplayStatus()),
                                   5000);
-        QVERIFY2(!limited->remoteDisplayStatus().contains(QStringLiteral("stalled")),
+        QVERIFY2(gui.panDisplayState(limited->panId()).phase != PanDisplayState::Phase::Stalled,
                  qPrintable(limited->remoteDisplayStatus()));
 
         // The limited pan really was granted fewer pixels than it asked for.
@@ -3224,7 +3256,8 @@ private slots:
                 QCOMPARE(survivorContext()->grant->limit, SpectrumLimitReason::None);
                 QTRY_VERIFY2_WITH_TIMEOUT(paints(limited),
                     qPrintable(limited->remoteDisplayStatus()), 5000);
-                QVERIFY2(!limited->remoteDisplayStatus().contains(QStringLiteral("points:")),
+                QVERIFY2(gui.panDisplayState(limited->panId()).zoomLimit
+                             == PanDisplayState::ZoomLimit::None,
                          qPrintable(limited->remoteDisplayStatus()));
             } else {
                 // Core refuses once; the refusal is not asked again.

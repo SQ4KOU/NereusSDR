@@ -1823,6 +1823,12 @@ nereus_add_test(tst_pan_wide_badge)
 # NereusSDR-original: no upstream port.
 nereus_add_test(tst_pan_status_overlay)
 
+# R-R3-37 / R-R3-21: a pan's remote display status is a short line that fits
+# a 200 px pan plus a full explanation for hover, both in user words; Core
+# reasons are translated at display time, never shown raw.
+# NereusSDR-original: no upstream port.
+nereus_add_test(tst_pan_status_text)
+
 # ── Phase 3F Sub-Epic E Task 3: per-pan status-overlay badge clicks ─────────
 # The badges paint on every pan (00ab9522 lit WIDE, 0896b4f3 drove the whole
 # overlay from live state) but MainWindow connected txBadgeClicked /

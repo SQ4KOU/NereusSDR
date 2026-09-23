@@ -1194,6 +1194,8 @@ set(GUI_SOURCES
     src/gui/RemoteMediaController.cpp
     src/gui/RemoteAudioStatus.cpp
     src/gui/RemoteDisplayAllocator.cpp
+    src/gui/PanStatusText.cpp
+    src/gui/OperatorReasonText.cpp
     src/gui/RemoteTelemetryController.cpp
     src/gui/RemoteDiagnosticsDialog.cpp
     src/gui/RemoteConnectionController.cpp

@@ -19,6 +19,7 @@
 #include <QPainter>
 #include <QRect>
 #include <algorithm>
+#include <cmath>
 
 namespace NereusSDR {
 
@@ -64,9 +65,12 @@ QSize SpectrumStatusOverlay::sizeHint() const
                   + (m_diversityActive ? 1 : 0) + (m_psPaused ? 1 : 0);
     w += lit * (kInterPillGap + kPillWidth);
     if (!m_remoteDisplayStatus.isEmpty()) {
-        const QFontMetrics metrics(QFont(QStringLiteral("monospace"), 9));
-        w = std::max(w, std::min(360, metrics.horizontalAdvance(m_remoteDisplayStatus)
-                                     + kLeftMargin));
+        // Rounded up from the fractional advance, with the painter's metrics:
+        // a row sized to the rounded-down integer advance elided every line
+        // by its last character.
+        const QFontMetricsF metrics(QFont(QStringLiteral("monospace"), 9), this);
+        const int text = int(std::ceil(metrics.horizontalAdvance(m_remoteDisplayStatus)));
+        w = std::max(w, std::min(360, text + kLeftMargin));
     }
     return QSize(w + kRightPad, kOverlayHeight * (m_remoteDisplayStatus.isEmpty() ? 1 : 2));
 }
@@ -134,20 +138,44 @@ void SpectrumStatusOverlay::setPsPaused(bool paused)
     update();
 }
 
-void SpectrumStatusOverlay::setRemoteDisplayStatus(const QString& status)
+void SpectrumStatusOverlay::setRemoteDisplayStatus(const PanStatusText& status)
 {
-    const QString text = status.simplified().left(512);
-    if (m_remoteDisplayStatus == text) { return; }
+    const QString text = status.shortLine.simplified().left(512);
+    const QString explanation = status.explanation.trimmed().left(2048);
+    if (m_remoteDisplayStatus == text && m_remoteDisplayExplanation == explanation) {
+        return;
+    }
+    const bool rowChanged = m_remoteDisplayStatus != text;
     m_remoteDisplayStatus = text;
-    setFixedHeight(kOverlayHeight * (text.isEmpty() ? 1 : 2));
+    m_remoteDisplayExplanation = explanation;
     updateStatusToolTip();
-    updateGeometry();
-    update();
+    if (rowChanged) {
+        setFixedHeight(kOverlayHeight * (text.isEmpty() ? 1 : 2));
+        updateGeometry();
+        update();
+    }
+}
+
+QRect SpectrumStatusOverlay::remoteStatusRect() const
+{
+    return QRect(kLeftMargin, kOverlayHeight,
+                 std::max(0, width() - kLeftMargin - kRightPad), kOverlayHeight);
+}
+
+QString SpectrumStatusOverlay::visibleRemoteDisplayStatus() const
+{
+    if (m_remoteDisplayStatus.isEmpty()) { return {}; }
+    // The painter's metrics: the same font on this widget's paint device.
+    const QFontMetrics metrics(QFont(QStringLiteral("monospace"), 9), this);
+    return metrics.elidedText(m_remoteDisplayStatus, Qt::ElideRight,
+                              remoteStatusRect().width());
 }
 
 void SpectrumStatusOverlay::updateStatusToolTip()
 {
-    QString text = m_remoteDisplayStatus;
+    // The hover text is the full explanation; the painted row is only its
+    // short form.
+    QString text = m_remoteDisplayExplanation;
     if (m_wideBpf && !m_wideReason.isEmpty()) {
         if (!text.isEmpty()) { text += QLatin1Char('\n'); }
         text += m_wideReason;
@@ -226,11 +254,8 @@ void SpectrumStatusOverlay::paintEvent(QPaintEvent*)
     if (!m_remoteDisplayStatus.isEmpty()) {
         p.setFont(QFont(QStringLiteral("monospace"), 9));
         p.setPen(QColor(Style::kTitleText));
-        const QRect statusRect(kLeftMargin, kOverlayHeight,
-                               std::max(0, width() - kLeftMargin - kRightPad), kOverlayHeight);
-        const QString visible = p.fontMetrics().elidedText(m_remoteDisplayStatus,
-                                                          Qt::ElideRight, statusRect.width());
-        p.drawText(statusRect, Qt::AlignLeft | Qt::AlignVCenter, visible);
+        p.drawText(remoteStatusRect(), Qt::AlignLeft | Qt::AlignVCenter,
+                   visibleRemoteDisplayStatus());
     }
 
     // NOT setMinimumWidth(x + kRightPad) any more. Growing the minimum here
