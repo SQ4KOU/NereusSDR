@@ -4,7 +4,8 @@
 //
 // no-port-check: NereusSDR-original. R-R3-23: the audio-context wire codec
 // Core and GUI share, in the minor-7 shape, the minor-8 detail shape and the
-// audio-profile shape (lossless, audioProfileVersion 1).
+// audio-profile shape (lossless, audioProfileVersion 1). R-R3-43: the
+// receiver-audio-context (receiverAudioVersion 1).
 //
 // =================================================================
 
@@ -194,6 +195,150 @@ private slots:
     {
         QFETCH(QJsonValue, value);
         QVERIFY(!remoteAudioOffReasonFromWire(value).has_value());
+        QVERIFY(!receiverAudioOffReasonFromWire(value).has_value());
+    }
+
+    // R-R3-43: two reasons belong to receiver contexts only. The main
+    // context's parser refuses them, so an audio-context carrying one is
+    // refused whole, exactly as before they existed.
+    void receiverReasonsAreReceiverOnly()
+    {
+        QCOMPARE(remoteAudioOffReasonToWire(RemoteAudioOffReason::SliceRemoved),
+                 QStringLiteral("slice-removed"));
+        QCOMPARE(remoteAudioOffReasonToWire(RemoteAudioOffReason::ReceiverLimit),
+                 QStringLiteral("receiver-limit"));
+        for (RemoteAudioOffReason reason :
+             {RemoteAudioOffReason::SliceRemoved, RemoteAudioOffReason::ReceiverLimit}) {
+            const QJsonValue wireName(remoteAudioOffReasonToWire(reason));
+            QVERIFY(!remoteAudioOffReasonFromWire(wireName).has_value());
+            QCOMPARE(receiverAudioOffReasonFromWire(wireName), std::optional{reason});
+            const QJsonObject mainContext =
+                sampleDetailDisabled(remoteAudioOffReasonToWire(reason));
+            QVERIFY(!decodeRemoteAudioContext(mainContext, true).has_value());
+            QVERIFY(!decodeRemoteAudioContext(
+                withKey(mainContext, QStringLiteral("profile"), QStringLiteral("opus")),
+                true, true).has_value());
+        }
+        for (RemoteAudioOffReason reason : kAllReasons) {
+            QCOMPARE(receiverAudioOffReasonFromWire(
+                         QJsonValue(remoteAudioOffReasonToWire(reason))),
+                     std::optional{reason});
+        }
+    }
+
+    // The receiver-audio-context golden: the audio-profile shape with op
+    // "receiver-audio-context" and sliceId, key for key and type for type.
+    void receiverContextShapeIsTheProfileShapeWithTheSlice()
+    {
+        RemoteReceiverAudioContextMessage on;
+        on.sliceId = 3;
+        on.context = sampleMessage(true);
+        on.context.profile = RemoteAudioProfile::Opus;
+        on.context.encoder = defaultProfile();
+        on.context.profileRefusal = RemoteAudioProfileRefusal::Unavailable;
+        const QJsonObject onWire = encodeReceiverAudioContext(on);
+        QCOMPARE(wire(onWire),
+                 QByteArrayLiteral("{\"connectionId\":\"11111111-2222-4333-8444-555555555555\","
+                                   "\"enabled\":true,\"encoder\":{\"audioBandwidthHz\":8000,"
+                                   "\"channels\":2,\"codec\":\"opus\",\"frameSamples\":1920,"
+                                   "\"sampleRate\":48000,\"targetBitrate\":24000},"
+                                   "\"firstSequence\":65000,\"firstTimestamp\":4294963200,"
+                                   "\"generation\":7,\"op\":\"receiver-audio-context\","
+                                   "\"profile\":\"opus\",\"profileRefusal\":\"lossless-unavailable\","
+                                   "\"revision\":41,\"sliceId\":3,\"ssrc\":1852142181}"));
+
+        RemoteReceiverAudioContextMessage lossless = on;
+        lossless.context.profile = RemoteAudioProfile::Lossless;
+        lossless.context.losslessEncoder = l16EncoderProfile();
+        lossless.context.encoder.reset();
+        lossless.context.profileRefusal.reset();
+
+        RemoteReceiverAudioContextMessage limit;
+        limit.sliceId = 0;
+        limit.context.connectionId = QString::fromLatin1(kConnectionId);
+        limit.context.revision = 2;
+        limit.context.generation = 9;
+        limit.context.offReason = RemoteAudioOffReason::ReceiverLimit;
+        limit.context.profile = RemoteAudioProfile::Lossless;
+        const QJsonObject limitWire = encodeReceiverAudioContext(limit);
+        QCOMPARE(wire(limitWire),
+                 QByteArrayLiteral("{\"connectionId\":\"11111111-2222-4333-8444-555555555555\","
+                                   "\"enabled\":false,\"firstSequence\":0,\"firstTimestamp\":0,"
+                                   "\"generation\":9,\"op\":\"receiver-audio-context\","
+                                   "\"profile\":\"lossless\",\"reason\":\"receiver-limit\","
+                                   "\"revision\":2,\"sliceId\":0,\"ssrc\":0}"));
+
+        RemoteReceiverAudioContextMessage removed = limit;
+        removed.sliceId = 1;
+        removed.context.ssrc = 0x12345678U;
+        removed.context.firstSequence = 17;
+        removed.context.firstTimestamp = 3840;
+        removed.context.offReason = RemoteAudioOffReason::SliceRemoved;
+        removed.context.profile = RemoteAudioProfile::Opus;
+
+        for (const RemoteReceiverAudioContextMessage& message : {on, lossless, limit, removed}) {
+            const QJsonObject encoded = overTheWire(encodeReceiverAudioContext(message));
+            const std::optional<RemoteReceiverAudioContextMessage> decoded =
+                decodeReceiverAudioContext(encoded);
+            QVERIFY2(decoded.has_value(), wire(encoded).constData());
+            QCOMPARE(decoded->sliceId, message.sliceId);
+            compareMessages(decoded->context, message.context);
+            QCOMPARE(decoded->context.profile,
+                     message.context.profile.value_or(RemoteAudioProfile::Opus));
+            QCOMPARE(decoded->context.losslessEncoder.has_value(),
+                     message.context.profile == RemoteAudioProfile::Lossless
+                         && message.context.enabled);
+            // Never mistaken for the main context, in any shape.
+            QVERIFY(!decodeRemoteAudioContext(encoded, false).has_value());
+            QVERIFY(!decodeRemoteAudioContext(encoded, true).has_value());
+            QVERIFY(!decodeRemoteAudioContext(encoded, true, true).has_value());
+        }
+        // And the main context is never taken for a receiver one.
+        QVERIFY(!decodeReceiverAudioContext(
+            withKey(withKey(sampleDetailEnabled(), QStringLiteral("profile"),
+                            QStringLiteral("opus")),
+                    QStringLiteral("sliceId"), 1)).has_value());
+    }
+
+    void receiverContextRejectsMismatches_data()
+    {
+        QTest::addColumn<QJsonObject>("payload");
+        RemoteReceiverAudioContextMessage on;
+        on.sliceId = 2;
+        on.context = sampleMessage(true);
+        on.context.encoder = defaultProfile();
+        const QJsonObject good = encodeReceiverAudioContext(on);
+        RemoteReceiverAudioContextMessage off;
+        off.sliceId = 2;
+        off.context = sampleMessage(false);
+        off.context.offReason = RemoteAudioOffReason::SliceRemoved;
+        const QJsonObject goodOff = encodeReceiverAudioContext(off);
+        QVERIFY(decodeReceiverAudioContext(good).has_value());
+        QVERIFY(decodeReceiverAudioContext(goodOff).has_value());
+        QVERIFY(decodeReceiverAudioContext(
+            withKey(goodOff, QStringLiteral("ssrc"), 0)).has_value());
+
+        QTest::newRow("main-op")
+            << withKey(good, QStringLiteral("op"), QStringLiteral("audio-context"));
+        QTest::newRow("missing-slice") << withoutKey(good, QStringLiteral("sliceId"));
+        QTest::newRow("negative-slice") << withKey(good, QStringLiteral("sliceId"), -1);
+        QTest::newRow("fractional-slice") << withKey(good, QStringLiteral("sliceId"), 1.5);
+        QTest::newRow("string-slice")
+            << withKey(good, QStringLiteral("sliceId"), QStringLiteral("2"));
+        QTest::newRow("missing-profile") << withoutKey(good, QStringLiteral("profile"));
+        QTest::newRow("extra-key") << withKey(good, QStringLiteral("extra"), 1);
+        QTest::newRow("enabled-with-no-stream-id")
+            << withKey(good, QStringLiteral("ssrc"), 0);
+        QTest::newRow("unknown-reason")
+            << withKey(goodOff, QStringLiteral("reason"), QStringLiteral("muted"));
+        QTest::newRow("reason-while-on")
+            << withKey(good, QStringLiteral("reason"), QStringLiteral("receiver-limit"));
+    }
+
+    void receiverContextRejectsMismatches()
+    {
+        QFETCH(QJsonObject, payload);
+        QVERIFY(!decodeReceiverAudioContext(payload).has_value());
     }
 
     void defaultEncoderProducesTheExactEncoderObject()

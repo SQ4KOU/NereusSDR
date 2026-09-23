@@ -292,6 +292,9 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
     , m_audioDiagnosticsTimer(this)
     , m_displayDiagnosticsTimer(this)
 {
+    m_receiverStreamSlice.fill(-1);
+    m_receiverNextSequence.fill(1);
+    m_receiverNextTimestamp.fill(0);
     m_displayClock.start();
     m_source.setRadioModel(radioModel);
     m_sendTimer.setInterval(kDisplaySenderIntervalMs);
@@ -829,20 +832,42 @@ void DaemonMediaController::onSessionEnded(quint64 epoch)
 
 void DaemonMediaController::onRadioConnectionStateChanged(ConnectionState state)
 {
+    // R-R3-43: the wanted receiver streams, handled after the main one.
+    QList<int> wantedReceivers;
+    for (const auto& [sliceId, stream] : m_receiverStreams) {
+        if (stream.desiredEnabled) { wantedReceivers.append(sliceId); }
+    }
     if (state != ConnectionState::Connected) {
         // Keep the accepted intent, but retire the capture bridge before any
         // display or peer lifecycle can tear down the station's audio graph.
         stopAudioCapture();
+        for (int sliceId : wantedReceivers) {
+            stopReceiverAudioCapture(m_receiverStreams.at(sliceId));
+        }
         if (m_audioRevision != 0) {
             // The client's own choice outranks the radio, as in reconcileAudio().
             sendAudioContext(false, m_audioDesiredEnabled
                                         ? RemoteAudioOffReason::RadioOffline
                                         : RemoteAudioOffReason::ClientDisabled);
         }
+        // Each wanted receiver stream keeps its stream id and intent, and
+        // resumes when the radio returns.
+        for (int sliceId : wantedReceivers) {
+            const auto it = m_receiverStreams.find(sliceId);
+            if (it != m_receiverStreams.end()) {
+                sendReceiverAudioContext(sliceId, it->second, false,
+                                         RemoteAudioOffReason::RadioOffline);
+            }
+        }
         clearProduction();
         return;
     }
     reconcileAudio();
+    for (int sliceId : wantedReceivers) {
+        if (m_receiverStreams.count(sliceId) != 0) {
+            reconcileReceiverAudio(sliceId);
+        }
+    }
 }
 
 void DaemonMediaController::onControl(const QJsonObject& control, quint64 epoch)
@@ -860,6 +885,7 @@ void DaemonMediaController::onControl(const QJsonObject& control, quint64 epoch)
     if (op == QLatin1String("unsubscribe")) { handleUnsubscribe(control); return; }
     if (op == QLatin1String("keyframe")) { handleKeyframe(control); return; }
     if (op == QLatin1String("audio")) { handleAudio(control); return; }
+    if (op == QLatin1String("receiver-audio")) { handleReceiverAudio(control); return; }
     acceptPeerControl(control);
 }
 
@@ -881,6 +907,21 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
             || !exactUnsigned(control.value(QStringLiteral("audioProfileVersion")),
                               audioProfileVersion, /*nonzero=*/true)
             || audioProfileVersion < 1) {
+            return false;
+        }
+    }
+    // R-R3-43: likewise receiverAudioVersion, the Core's advertised
+    // capability; only then does the offer declare the receiver stream ids
+    // and only then is a receiver-audio request honoured.
+    const bool declaresReceiverAudio =
+        control.contains(QStringLiteral("receiverAudioVersion"));
+    if (declaresReceiverAudio) {
+        legacyShape.remove(QStringLiteral("receiverAudioVersion"));
+        quint32 receiverAudioVersion = 0;
+        if (!m_server || !m_server->remoteAudioStatusAvailable()
+            || !exactUnsigned(control.value(QStringLiteral("receiverAudioVersion")),
+                              receiverAudioVersion, /*nonzero=*/true)
+            || receiverAudioVersion < 1) {
             return false;
         }
     }
@@ -937,16 +978,27 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
     connect(peer, &MediaPeer::ready, this, [this, peer, peerEpoch]() {
         if (m_peer.get() == peer && m_epoch == peerEpoch) {
             reconcileAudio();
+            // R-R3-43: each wanted receiver stream on its own, after the
+            // main one; neither restarts the other.
+            QList<int> wanted;
+            for (const auto& [sliceId, stream] : m_receiverStreams) {
+                if (stream.desiredEnabled) { wanted.append(sliceId); }
+            }
+            for (int sliceId : wanted) {
+                if (m_peer.get() != peer || m_epoch != peerEpoch) { return; }
+                reconcileReceiverAudio(sliceId);
+            }
         }
     });
     const bool offerLossless = declaresAudioProfile && m_audioLosslessAllowed;
     if (!peer->start(IMediaTransport::Role::Offerer, connectionId,
-                     m_audioTargetBitrate, offerLossless)) {
+                     m_audioTargetBitrate, offerLossless, declaresReceiverAudio)) {
         m_displayDiagnosticsTimer.stop();
         m_peer.reset();
         sendRejected(connectionId, 0, 0, QStringLiteral("media peer start failed"));
         return false;
     }
+    m_receiverAudioNegotiated = declaresReceiverAudio;
     return true;
 }
 
@@ -1342,6 +1394,276 @@ bool DaemonMediaController::handleAudio(const QJsonObject& control)
     return true;
 }
 
+bool DaemonMediaController::handleReceiverAudio(const QJsonObject& control)
+{
+    // An app that did not declare receiver audio at start gets nothing:
+    // its offer carries no receiver stream ids, and packets on an id it
+    // does not know would be refused and reported one by one.
+    if (!m_receiverAudioNegotiated || !m_peer) {
+        return false;
+    }
+    int sliceId = -1;
+    quint32 revision = 0;
+    const std::optional<RemoteAudioProfile> profile =
+        remoteAudioProfileFromWire(control.value(QStringLiteral("profile")));
+    if (!exactKeys(control, {"op", "connectionId", "sliceId", "revision", "enabled", "profile"})
+        || !canonicalConnectionId(control.value(QStringLiteral("connectionId")))
+        || control.value(QStringLiteral("connectionId")).toString() != m_peer->connectionId()
+        || !exactInt(control.value(QStringLiteral("sliceId")), 0,
+                     std::numeric_limits<int>::max(), sliceId)
+        || !exactUnsigned(control.value(QStringLiteral("revision")), revision, true)
+        || !control.value(QStringLiteral("enabled")).isBool() || !profile) {
+        return false;
+    }
+    const bool enabled = control.value(QStringLiteral("enabled")).toBool();
+    auto it = m_receiverStreams.find(sliceId);
+    if (it == m_receiverStreams.end()) {
+        if (!m_radioModel || m_radioModel->sliceById(sliceId) == nullptr) {
+            // No such slice: answer, but keep no entry, so requests for
+            // made-up slice ids cannot grow this map.
+            ReceiverAudioStream absent;
+            absent.revision = revision;
+            absent.requestedProfile = *profile;
+            const AdmittedAudioProfile admitted = admitProfile(*profile);
+            absent.activeProfile = admitted.active;
+            absent.profileRefusal = admitted.refusal;
+            sendReceiverAudioContext(sliceId, absent, false,
+                                     enabled ? RemoteAudioOffReason::SliceRemoved
+                                             : RemoteAudioOffReason::ClientDisabled);
+            return true;
+        }
+        it = m_receiverStreams.emplace(sliceId, ReceiverAudioStream{}).first;
+    } else if (staleOrEqualRevision(revision, it->second.revision)) {
+        return false;
+    }
+    it->second.revision = revision;
+    it->second.desiredEnabled = enabled;
+    it->second.requestedProfile = *profile;
+    reconcileReceiverAudio(sliceId);
+    return true;
+}
+
+void DaemonMediaController::reconcileReceiverAudio(int sliceId)
+{
+    const auto it = m_receiverStreams.find(sliceId);
+    if (it == m_receiverStreams.end()) {
+        return;
+    }
+    ReceiverAudioStream& stream = it->second;
+    // Only this slice's capture restarts; the main stream and every other
+    // receiver stream carry on untouched.
+    stopReceiverAudioCapture(stream);
+    std::optional<RemoteAudioOffReason> blockedBy;
+    if (!stream.desiredEnabled) {
+        blockedBy = RemoteAudioOffReason::ClientDisabled;
+    } else if (!m_radioModel || m_radioModel->sliceById(sliceId) == nullptr) {
+        stream.desiredEnabled = false;
+        blockedBy = RemoteAudioOffReason::SliceRemoved;
+    } else if (stream.streamIndex < 0) {
+        for (int index = 0; index < IMediaTransport::kMaxReceiverAudioStreams; ++index) {
+            if (m_receiverStreamSlice[static_cast<size_t>(index)] < 0) {
+                m_receiverStreamSlice[static_cast<size_t>(index)] = sliceId;
+                stream.streamIndex = index;
+                break;
+            }
+        }
+        if (stream.streamIndex < 0) {
+            // Refused, not queued: the GUI asks again once it has let a
+            // stream go.
+            stream.desiredEnabled = false;
+            blockedBy = RemoteAudioOffReason::ReceiverLimit;
+        }
+    }
+    if (!blockedBy) {
+        if (!m_radioModel->isConnected()) {
+            blockedBy = RemoteAudioOffReason::RadioOffline;
+        } else if (!m_peer || !m_peer->isReady()) {
+            blockedBy = RemoteAudioOffReason::MediaNotReady;
+        }
+    }
+    const AdmittedAudioProfile admitted = admitProfile(stream.requestedProfile);
+    stream.activeProfile = admitted.active;
+    stream.profileRefusal = admitted.refusal;
+    if (!stream.desiredEnabled) {
+        // Off for the client's own choice, a removed slice or the limit: the
+        // context names the stream id the packets stopped on (none for the
+        // limit), then the id goes free for another slice.
+        sendReceiverAudioContext(sliceId, stream, false, *blockedBy);
+        releaseReceiverStreamIndex(stream);
+        return;
+    }
+    bool actualEnabled = false;
+    if (!blockedBy) {
+        if (!stream.sender) {
+            // Opus at the main stream's setting (the Core's audio_bitrate),
+            // or lossless: the session's one quality choice.
+            OpusAudioCodecConfig codecConfig;
+            codecConfig.bitrate = m_audioTargetBitrate;
+            // Parented, so a sender retired with deleteLater() (see
+            // retireReceiverSender) is still reclaimed with this controller.
+            stream.sender = std::make_unique<DaemonAudioSender>(
+                m_radioModel->audioEngine(), codecConfig, this);
+            stream.sender->setSliceSource(sliceId);
+            stream.sender->setCaptureClock([this] { return displayNowNs(); });
+            DaemonAudioSender* const sender = stream.sender.get();
+            connect(sender, &DaemonAudioSender::packetReady, this,
+                    [this, sliceId, sender](const QByteArray& packet) {
+                onReceiverAudioPacket(sliceId, sender, packet);
+            });
+        }
+        const auto index = static_cast<size_t>(stream.streamIndex);
+        const QList<quint32> ssrcs = m_peer->receiverAudioSsrcs();
+        stream.sender->setProfile(stream.activeProfile);
+        actualEnabled = stream.streamIndex < ssrcs.size()
+            && stream.sender->start(ssrcs.at(stream.streamIndex),
+                                    m_receiverNextSequence[index],
+                                    m_receiverNextTimestamp[index]);
+        stream.sending = actualEnabled;
+        if (actualEnabled) {
+            qCInfo(lcDaemonMedia).noquote().nospace()
+                << "receiver audio for slice " << sliceId << " on stream "
+                << stream.streamIndex << ", "
+                << remoteAudioProfileToWire(stream.activeProfile)
+                << ", revision " << stream.revision;
+        }
+    }
+    sendReceiverAudioContext(sliceId, stream, actualEnabled,
+                             blockedBy.value_or(RemoteAudioOffReason::EncoderUnavailable));
+}
+
+void DaemonMediaController::stopReceiverAudioCapture(ReceiverAudioStream& stream)
+{
+    if (!stream.sender) {
+        stream.sending = false;
+        return;
+    }
+    if (stream.streamIndex >= 0 && stream.sender->isRunning()) {
+        // As the main stream: the stream id's timeline continues from here.
+        const auto index = static_cast<size_t>(stream.streamIndex);
+        m_receiverNextSequence[index] = stream.sender->nextSequence();
+        m_receiverNextTimestamp[index] = stream.sender->nextTimestamp();
+    }
+    stream.sender->stop();
+    stream.sending = false;
+}
+
+void DaemonMediaController::releaseReceiverStreamIndex(ReceiverAudioStream& stream)
+{
+    if (stream.streamIndex >= 0) {
+        m_receiverStreamSlice[static_cast<size_t>(stream.streamIndex)] = -1;
+        stream.streamIndex = -1;
+    }
+}
+
+void DaemonMediaController::sendReceiverAudioContext(int sliceId,
+                                                     const ReceiverAudioStream& stream,
+                                                     bool enabled, RemoteAudioOffReason reason)
+{
+    if (!m_peer) {
+        return;
+    }
+    const bool lossless = stream.activeProfile == RemoteAudioProfile::Lossless;
+    RemoteReceiverAudioContextMessage message;
+    message.sliceId = sliceId;
+    RemoteAudioContextMessage& context = message.context;
+    context.connectionId = m_peer->connectionId();
+    context.revision = stream.revision;
+    context.generation = nextReceiverContextGeneration();
+    context.enabled = enabled;
+    const QList<quint32> ssrcs = m_peer->receiverAudioSsrcs();
+    if (stream.streamIndex >= 0 && stream.streamIndex < ssrcs.size()) {
+        const auto index = static_cast<size_t>(stream.streamIndex);
+        context.ssrc = ssrcs.at(stream.streamIndex);
+        context.firstSequence = m_receiverNextSequence[index];
+        context.firstTimestamp = m_receiverNextTimestamp[index];
+    }
+    if (enabled && lossless && stream.sender) {
+        context.losslessEncoder = stream.sender->losslessProfile();
+    } else if (enabled && stream.sender) {
+        context.encoder = stream.sender->encoderProfile();
+    }
+    if (!enabled) {
+        context.offReason = reason;
+    }
+    context.profile = stream.activeProfile;
+    context.profileRefusal = stream.profileRefusal;
+    sendControl(encodeReceiverAudioContext(message));
+}
+
+void DaemonMediaController::onReceiverAudioPacket(int sliceId, DaemonAudioSender* sender,
+                                                  const QByteArray& packet)
+{
+    // Emitted on the sender's owner thread. The identity checks keep a
+    // stopped or retired stream from reaching a replacement peer.
+    const auto it = m_receiverStreams.find(sliceId);
+    if (it == m_receiverStreams.end() || it->second.sender.get() != sender
+        || !it->second.sending || !sender->isRunning() || m_epoch == 0 || !m_peer
+        || !m_peer->isReady() || !m_receiverAudioNegotiated) {
+        return;
+    }
+    m_peer->sendRtp(packet);
+}
+
+void DaemonMediaController::retireReceiverSender(ReceiverAudioStream& stream)
+{
+    stopReceiverAudioCapture(stream);
+    if (!stream.sender) {
+        return;
+    }
+    // Retirement can run inside the sender's own packetReady emission (a
+    // send that synchronously closes the peer ends the session), so the
+    // sender is not destroyed under its drain(): stopped here (its slice tap
+    // is already cleared, so the DSP thread no longer reaches it) and
+    // deleted from the event loop.
+    DaemonAudioSender* const sender = stream.sender.release();
+    sender->disconnect(this);
+    sender->deleteLater();
+}
+
+void DaemonMediaController::resetReceiverAudioSession()
+{
+    for (auto& [sliceId, stream] : m_receiverStreams) {
+        Q_UNUSED(sliceId);
+        retireReceiverSender(stream);
+    }
+    m_receiverStreams.clear();
+    m_receiverAudioNegotiated = false;
+    // A different media peer has different stream ids and a new timeline.
+    m_receiverStreamSlice.fill(-1);
+    m_receiverNextSequence.fill(1);
+    m_receiverNextTimestamp.fill(0);
+}
+
+quint32 DaemonMediaController::nextReceiverContextGeneration()
+{
+    ++m_nextReceiverContextGeneration;
+    if (m_nextReceiverContextGeneration == 0) {
+        ++m_nextReceiverContextGeneration;
+    }
+    return m_nextReceiverContextGeneration;
+}
+
+int DaemonMediaController::activeReceiverAudioStreamCount() const
+{
+    int count = 0;
+    for (const auto& [sliceId, stream] : m_receiverStreams) {
+        Q_UNUSED(sliceId);
+        if (stream.sending && stream.sender && stream.sender->isRunning()) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+std::optional<RemoteAudioProfile> DaemonMediaController::receiverAudioProfile(int sliceId) const
+{
+    const auto it = m_receiverStreams.find(sliceId);
+    if (it == m_receiverStreams.end() || !it->second.sending) {
+        return std::nullopt;
+    }
+    return it->second.activeProfile;
+}
+
 bool DaemonMediaController::handleClockProbe(const QJsonObject& control, qint64 receivedNs)
 {
     quint32 id = 0;
@@ -1380,26 +1702,35 @@ bool DaemonMediaController::handleClockProbe(const QJsonObject& control, qint64 
     });
 }
 
+DaemonMediaController::AdmittedAudioProfile DaemonMediaController::admitProfile(
+    RemoteAudioProfile requested) const
+{
+    AdmittedAudioProfile admitted;
+    if (requested != RemoteAudioProfile::Lossless) {
+        return admitted;
+    }
+    if (!m_audioLosslessAllowed) {
+        admitted.refusal = RemoteAudioProfileRefusal::NotAllowed;
+    } else if (m_peer && !m_peer->isReady()) {
+        // The answer that settles the formats is not in yet; audio is
+        // off as media-not-ready, and admission is decided on ready.
+        admitted.active = RemoteAudioProfile::Lossless;
+    } else if (!m_peer || !m_peer->losslessAudioNegotiated()
+               || !PcmAudioPacketiser{}.isReady()) {
+        admitted.refusal = RemoteAudioProfileRefusal::Unavailable;
+    } else {
+        admitted.active = RemoteAudioProfile::Lossless;
+    }
+    return admitted;
+}
+
 void DaemonMediaController::admitAudioProfile()
 {
     const RemoteAudioProfile previous = m_audioActiveProfile;
     const std::optional<RemoteAudioProfileRefusal> previousRefusal = m_audioProfileRefusal;
-    m_audioProfileRefusal.reset();
-    m_audioActiveProfile = RemoteAudioProfile::Opus;
-    if (m_audioRequestedProfile == RemoteAudioProfile::Lossless) {
-        if (!m_audioLosslessAllowed) {
-            m_audioProfileRefusal = RemoteAudioProfileRefusal::NotAllowed;
-        } else if (m_peer && !m_peer->isReady()) {
-            // The answer that settles the formats is not in yet; audio is
-            // off as media-not-ready, and admission is decided on ready.
-            m_audioActiveProfile = RemoteAudioProfile::Lossless;
-        } else if (!m_peer || !m_peer->losslessAudioNegotiated()
-                   || !PcmAudioPacketiser{}.isReady()) {
-            m_audioProfileRefusal = RemoteAudioProfileRefusal::Unavailable;
-        } else {
-            m_audioActiveProfile = RemoteAudioProfile::Lossless;
-        }
-    }
+    const AdmittedAudioProfile admitted = admitProfile(m_audioRequestedProfile);
+    m_audioActiveProfile = admitted.active;
+    m_audioProfileRefusal = admitted.refusal;
     if (m_audioProfileRefusal && m_audioProfileRefusal != previousRefusal) {
         qCInfo(lcDaemonMedia).noquote().nospace()
             << "lossless audio refused ("
@@ -2232,6 +2563,20 @@ void DaemonMediaController::onStreamBindingsChanged(int streamIndex, const QVect
 
 void DaemonMediaController::onSliceRemoved(int sliceId)
 {
+    // R-R3-43: the slice's receiver stream retires with its reason, and its
+    // stream id goes free. The revision stays, so a stale request stays
+    // refused.
+    const auto receiver = m_receiverStreams.find(sliceId);
+    if (receiver != m_receiverStreams.end()
+        && (receiver->second.desiredEnabled || receiver->second.streamIndex >= 0)) {
+        ReceiverAudioStream& stream = receiver->second;
+        stopReceiverAudioCapture(stream);
+        stream.desiredEnabled = false;
+        // The context names the stream id the packets stopped on.
+        sendReceiverAudioContext(sliceId, stream, false, RemoteAudioOffReason::SliceRemoved);
+        releaseReceiverStreamIndex(stream);
+        retireReceiverSender(stream);
+    }
     MediaPeer* const peer = m_peer.get();
     const quint64 epoch = m_epoch;
     for (quint32 endpointId : endpointIds()) {
@@ -2495,6 +2840,9 @@ void DaemonMediaController::clearSession()
     // Sender remains owned by this controller; stop its timer/capture while
     // the current peer is still identifiable, then retire the peer.
     resetAudioSession();
+    // R-R3-43: every receiver stream's sender and slice tap go with the
+    // session; there is no GUI left to tell.
+    resetReceiverAudioSession();
     if (m_peer) {
         logDisplayDiagnostics(true);
     }

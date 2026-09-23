@@ -23,6 +23,7 @@
 #include <QString>
 #include <QTimer>
 
+#include <array>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -115,6 +116,11 @@ public:
     bool audioLosslessAllowed() const noexcept { return m_audioLosslessAllowed; }
     /// The profile the Core's audio runs for the current peer (R-R3-23).
     RemoteAudioProfile audioProfile() const noexcept { return m_audioActiveProfile; }
+    /// R-R3-43: receiver streams sending now (enabled receiver contexts).
+    int activeReceiverAudioStreamCount() const;
+    /// R-R3-43: the profile slice `sliceId`'s receiver stream runs, or empty
+    /// while that stream is not sending.
+    std::optional<RemoteAudioProfile> receiverAudioProfile(int sliceId) const;
     DaemonDisplayDiagnostics displayDiagnostics() const;
     /// What Core granted a live spectrum endpoint: FFT size and tier after
     /// the largest-size and shared-engine rules, and pixels after the source
@@ -142,6 +148,23 @@ private:
         QString reason;
     };
     struct SourceRuntime;
+    /// R-R3-43: one slice's receiver audio request and, while it holds a
+    /// receiver stream id, the sender capturing that slice.
+    struct ReceiverAudioStream {
+        quint32 revision{0};
+        bool desiredEnabled{false};
+        RemoteAudioProfile requestedProfile{RemoteAudioProfile::Opus};
+        RemoteAudioProfile activeProfile{RemoteAudioProfile::Opus};
+        std::optional<RemoteAudioProfileRefusal> profileRefusal;
+        /// Index into MediaPeer::receiverAudioSsrcs(), or -1 with none.
+        int streamIndex{-1};
+        bool sending{false};
+        std::unique_ptr<DaemonAudioSender> sender;
+    };
+    struct AdmittedAudioProfile {
+        RemoteAudioProfile active{RemoteAudioProfile::Opus};
+        std::optional<RemoteAudioProfileRefusal> refusal;
+    };
 
     void onSessionStarted(quint64 epoch);
     void onSessionEnded(quint64 epoch);
@@ -161,6 +184,11 @@ private:
     bool handleUnsubscribe(const QJsonObject& control);
     bool handleKeyframe(const QJsonObject& control);
     bool handleAudio(const QJsonObject& control);
+    /// R-R3-43: {op:"receiver-audio", connectionId, sliceId, revision,
+    /// enabled, profile}, only from a GUI that declared receiverAudioVersion
+    /// in its start; anything else is ignored. Answered with a
+    /// receiver-audio-context; never touches the main audio context.
+    bool handleReceiverAudio(const QJsonObject& control);
     /// R-R3-35: answers {op:"clock-probe", connectionId, id, t0} with
     /// {op:"clock-echo", connectionId, id, t0, t1, t2, generation,
     /// rtpTimestamp, capturedNs}. t1 is the Core clock on entry to
@@ -224,6 +252,19 @@ private:
     /// Admits the requested profile against the Core setting and the peer's
     /// negotiated formats, setting the active profile and any refusal.
     void admitAudioProfile();
+    /// The profile rules on their own: lossless when requested, allowed by
+    /// the Core and carried by this media connection (or not yet known,
+    /// before the peer is ready); otherwise Opus and why.
+    AdmittedAudioProfile admitProfile(RemoteAudioProfile requested) const;
+    void reconcileReceiverAudio(int sliceId);
+    void stopReceiverAudioCapture(ReceiverAudioStream& stream);
+    void releaseReceiverStreamIndex(ReceiverAudioStream& stream);
+    void retireReceiverSender(ReceiverAudioStream& stream);
+    void sendReceiverAudioContext(int sliceId, const ReceiverAudioStream& stream,
+                                  bool enabled, RemoteAudioOffReason reason);
+    void onReceiverAudioPacket(int sliceId, DaemonAudioSender* sender, const QByteArray& packet);
+    void resetReceiverAudioSession();
+    quint32 nextReceiverContextGeneration();
     void recordDisplaySent(const QByteArray& spectrumFrame, bool keyframe);
     void onMediaTransportError(const QString& message);
     void onMediaPeerError(const QString& message);
@@ -250,6 +291,19 @@ private:
     RemoteAudioProfile m_audioRequestedProfile{RemoteAudioProfile::Opus};
     RemoteAudioProfile m_audioActiveProfile{RemoteAudioProfile::Opus};
     std::optional<RemoteAudioProfileRefusal> m_audioProfileRefusal;
+    // R-R3-43 receiver audio, per media peer. Requests are honoured only
+    // when the GUI declared receiverAudioVersion at start (the offer then
+    // declares the receiver stream ids). Entries outlive their streams so a
+    // stale revision stays refused; only slices that existed are entered.
+    bool m_receiverAudioNegotiated{false};
+    std::map<int, ReceiverAudioStream> m_receiverStreams;
+    /// Per receiver stream id: the slice holding it (-1 free) and the next
+    /// RTP sequence and timestamp, so each id's timeline continues across
+    /// contexts as the main stream's does.
+    std::array<int, IMediaTransport::kMaxReceiverAudioStreams> m_receiverStreamSlice{};
+    std::array<quint16, IMediaTransport::kMaxReceiverAudioStreams> m_receiverNextSequence{};
+    std::array<quint32, IMediaTransport::kMaxReceiverAudioStreams> m_receiverNextTimestamp{};
+    quint32 m_nextReceiverContextGeneration{0};
     std::map<quint32, EndpointEntry> m_endpoints;
     QMap<MediaSourceKey, SourceRuntime> m_sources;
     QTimer m_sendTimer;

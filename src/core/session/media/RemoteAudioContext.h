@@ -3,8 +3,9 @@
 // =================================================================
 // no-port-check: NereusSDR-original.  The one wire codec Core and GUI share
 // for the remote audio context, in the minor-7 and minor-8 shapes and the
-// audio-profile shape (R-R3-23, audioProfileVersion 1); it holds no session
-// identity or playback policy.
+// audio-profile shape (R-R3-23, audioProfileVersion 1), and for the
+// receiver audio context (R-R3-43, receiverAudioVersion 1); it holds no
+// session identity or playback policy.
 // =================================================================
 
 #pragma once
@@ -22,13 +23,28 @@
 namespace NereusSDR {
 
 /// Why Core is not sending audio, as a minor-8 audio context reports it.
-enum class RemoteAudioOffReason { ClientDisabled, MediaNotReady, RadioOffline, EncoderUnavailable };
+/// SliceRemoved and ReceiverLimit (R-R3-43) occur only in a
+/// receiver-audio-context, never in the main audio-context.
+enum class RemoteAudioOffReason {
+    ClientDisabled,
+    MediaNotReady,
+    RadioOffline,
+    EncoderUnavailable,
+    /// The receiver's slice is gone (removed, or never there).
+    SliceRemoved,
+    /// Core already sends kMaxReceiverAudioStreams receiver streams.
+    ReceiverLimit,
+};
 
-/// client-disabled, media-not-ready, radio-offline or encoder-unavailable.
+/// client-disabled, media-not-ready, radio-offline, encoder-unavailable,
+/// slice-removed or receiver-limit.
 QString remoteAudioOffReasonToWire(RemoteAudioOffReason reason);
-/// One of the four wire strings exactly; nullopt for any other string and
-/// for any value that is not a string.
+/// One of the four main-context wire strings exactly (not slice-removed or
+/// receiver-limit); nullopt for any other string and for any value that is
+/// not a string.
 std::optional<RemoteAudioOffReason> remoteAudioOffReasonFromWire(const QJsonValue& value);
+/// R-R3-43: any of the six wire strings, as a receiver-audio-context carries.
+std::optional<RemoteAudioOffReason> receiverAudioOffReasonFromWire(const QJsonValue& value);
 
 /// {"codec":"opus","sampleRate","channels","frameSamples","targetBitrate",
 /// "audioBandwidthHz"}, every number an integral JSON number.
@@ -113,5 +129,29 @@ QJsonObject encodeRemoteAudioContext(const RemoteAudioContextMessage& message,
 std::optional<RemoteAudioContextMessage> decodeRemoteAudioContext(const QJsonObject& payload,
                                                                   bool detailNegotiated,
                                                                   bool profileNegotiated = false);
+
+// ---- Receiver audio (R-R3-43, receiverAudioVersion 1) ----
+
+/// Core's answer to {op:"receiver-audio", connectionId, sliceId, revision,
+/// enabled, profile}: the audio-profile shape of the audio context with op
+/// "receiver-audio-context" and the slice id beside it:
+/// {op, connectionId, sliceId, revision, generation, enabled, ssrc,
+///  firstSequence, firstTimestamp, profile, encoder | reason
+///  [, profileRefusal]}.
+/// ssrc is the receiver stream id the packets carry; a disabled context
+/// that holds no receiver stream id (receiver-limit, slice-removed, or one
+/// that never started) carries ssrc, firstSequence and firstTimestamp 0.
+/// The reason may be any of the six, slice-removed and receiver-limit
+/// included. generation counts receiver contexts on their own; it is not
+/// the main audio context's generation.
+struct RemoteReceiverAudioContextMessage {
+    int sliceId = -1;
+    RemoteAudioContextMessage context;
+};
+QJsonObject encodeReceiverAudioContext(const RemoteReceiverAudioContextMessage& message);
+/// Exactly that shape; sliceId an integral 0..2147483647; otherwise as
+/// decodeRemoteAudioContext's profile shape, except the ssrc rule above.
+std::optional<RemoteReceiverAudioContextMessage> decodeReceiverAudioContext(
+    const QJsonObject& payload);
 
 } // namespace NereusSDR

@@ -158,6 +158,14 @@ struct StationCapabilities {
     /// behind real time its audio plays. Nonzero only with media. A GUI that
     /// does not see it sends no probe and shows no measured delay.
     int audioClockVersion = 0;
+    /// R-R3-43: 1 means the Core can send a receiver's own audio on its own
+    /// stream beside the speakers' mix. A GUI that sees it may add
+    /// receiverAudioVersion to its media start (the offer then declares the
+    /// receiver stream ids) and send {op:"receiver-audio", connectionId,
+    /// sliceId, revision, enabled, profile}; the Core answers each with a
+    /// receiver-audio-context. Nonzero only with media. A GUI that does not
+    /// see it sends no receiver request and gets no receiver stream.
+    int receiverAudioVersion = 0;
 
     /// The daemon's own AppSettings SettingsSchemaVersion, read by that
     /// key name from its own store. See StationClient's schema-skew check.

@@ -633,6 +633,11 @@ private slots:
     void realDisplayErrorIsCountedAndLoggedOnce();
     void displayDiagnosticsLineReportsBytesAndFragments();
     void staleEpochAndForeignConnectionLeaveEndpointsUntouched();
+    void olderAppNeverReceivesReceiverStreams();
+    void receiverStreamRunsBesideTheMainWithoutRestartingIt();
+    void staleReceiverRevisionIsIgnoredAndAFifthStreamIsRefused();
+    void receiverStreamFollowsTheSessionAudioProfile();
+    void receiverStreamRetiresOnSliceRadioAndSessionEnd();
 };
 
 void TstDaemonMediaController::configuredBudgetReturnsExactAllocationResultsAndRejectsOvercommit()
@@ -3400,10 +3405,18 @@ void TstDaemonMediaController::minorSevenPeerCannotAskForAnAudioProfile()
     send(profileStart());
     QTest::qWait(50);
     QVERIFY(!h.mediaTransport);
+    // R-R3-43: nor can it ask for receiver audio.
+    QJsonObject receiverOnly{{QStringLiteral("op"), QStringLiteral("start")},
+                             {QStringLiteral("connectionId"), QLatin1String(kConnectionId)},
+                             {QStringLiteral("receiverAudioVersion"), 1}};
+    send(receiverOnly);
+    QTest::qWait(50);
+    QVERIFY(!h.mediaTransport);
     send({{QStringLiteral("op"), QStringLiteral("start")},
           {QStringLiteral("connectionId"), QLatin1String(kConnectionId)}});
     QTRY_VERIFY(h.mediaTransport);
     QVERIFY(!h.mediaTransport->startOptions.offerLosslessAudio);
+    QVERIFY(h.mediaTransport->startOptions.receiverAudioSsrcs.isEmpty());
     h.mediaTransport->losslessNegotiated = true; // even so, never used
     h.mediaTransport->becomeReady();
 
@@ -3573,6 +3586,489 @@ void TstDaemonMediaController::clockProbeIsAnsweredWithTheCoreClockAndCapture()
     QCOMPARE(echo.value(QStringLiteral("generation")).toInteger(), qint64{0});
     QCOMPARE(echo.value(QStringLiteral("capturedNs")).toInteger(), qint64{0});
     h.finish();
+}
+
+
+namespace {
+
+// R-R3-43: the start of a GUI that understands audio profiles and asks for
+// receiver audio.
+QJsonObject receiverStart()
+{
+    QJsonObject start = profileStart();
+    start.insert(QStringLiteral("receiverAudioVersion"), 1);
+    return start;
+}
+
+QJsonObject receiverAudioControl(int sliceId, quint32 revision, bool enabled,
+                                 const QString& profile = QStringLiteral("opus"))
+{
+    return {{QStringLiteral("op"), QStringLiteral("receiver-audio")},
+            {QStringLiteral("connectionId"), QLatin1String(kConnectionId)},
+            {QStringLiteral("sliceId"), sliceId},
+            {QStringLiteral("revision"), static_cast<qint64>(revision)},
+            {QStringLiteral("enabled"), enabled},
+            {QStringLiteral("profile"), profile}};
+}
+
+QList<QJsonObject> receiverContextsIn(const QSignalSpy& controls, int sliceId = -1)
+{
+    QList<QJsonObject> found;
+    for (const auto& call : controls) {
+        const QJsonObject message = call.at(0).toJsonObject();
+        if (message.value(QStringLiteral("op")) == QLatin1String("receiver-audio-context")
+            && (sliceId < 0 || message.value(QStringLiteral("sliceId")).toInt() == sliceId)) {
+            found.append(message);
+        }
+    }
+    return found;
+}
+
+quint32 rtpSsrcOf(const QByteArray& packet)
+{
+    return qFromBigEndian<quint32>(packet.constData() + 8);
+}
+
+QList<QByteArray> packetsWithSsrc(const QList<QByteArray>& packets, quint32 ssrc)
+{
+    QList<QByteArray> found;
+    for (const QByteArray& packet : packets) {
+        if (packet.size() >= 12 && rtpSsrcOf(packet) == ssrc) {
+            found.append(packet);
+        }
+    }
+    return found;
+}
+
+// Feeds one 1920-frame block to every slice in `slices`, each its own level.
+void feedSlicesBlock(Harness& h, const QList<QPair<int, float>>& slices)
+{
+    AudioEngine* const engine = h.radio.audioEngine();
+    for (int delivered = 0; delivered < DaemonAudioSource::kBlockFrames; delivered += 64) {
+        for (const auto& [sliceId, level] : slices) {
+            const QVector<float> block(64 * 2, level);
+            engine->rxBlockReady(sliceId, block.constData(), 64);
+        }
+    }
+}
+
+} // namespace
+
+// R-R3-43 (Task 1's finding): libdatachannel hands an app every packet on
+// the one audio line, declared or not, and an app that did not ask refuses
+// each one and reports it. So an app that did not declare receiverAudioVersion
+// at start gets no receiver stream whatever it asks: no stream ids in the
+// offer, no receiver context, no packet on anything but the main id.
+void TstDaemonMediaController::olderAppNeverReceivesReceiverStreams()
+{
+    OpusAudioEncoder encoder;
+    if (!encoder.isReady()) {
+        QSKIP("Opus encoder is unavailable in this build");
+    }
+    Harness h;
+    AudioEngine* const engine = h.radio.audioEngine();
+    engine->masterMixForTest().setRampFrames(1);
+    engine->masterMixForTest().setSlewUpFrames(0);
+    engine->setSliceStreaming(h.sliceId, true);
+    engine->setSliceStreaming(h.spareSliceId, true);
+    h.establishSession();
+    // The Core advertises it with media, and a capable GUI would see it.
+    QCOMPARE(h.server.buildCapabilities().receiverAudioVersion, 1);
+    QCOMPARE(StationCapabilities::fromUpdates(
+                 h.server.buildCapabilities().toUpdates()).receiverAudioVersion, 1);
+    QCOMPARE(h.client.capabilities().receiverAudioVersion, 1);
+
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    // A start with the capability version malformed starts nothing.
+    for (const QJsonValue& bad : {QJsonValue(0), QJsonValue(1.5), QJsonValue(-1),
+                                  QJsonValue(QStringLiteral("1")), QJsonValue()}) {
+        QJsonObject start = receiverStart();
+        start.insert(QStringLiteral("receiverAudioVersion"), bad);
+        QVERIFY(h.client.sendMediaControl(start, h.client.sessionEpoch()));
+        QTest::qWait(20);
+        QVERIFY(!h.mediaTransport);
+    }
+    // Today's start: today's offer, with no receiver stream ids.
+    QVERIFY(h.client.sendMediaControl(profileStart(), h.client.sessionEpoch()));
+    QTRY_VERIFY(h.mediaTransport);
+    QVERIFY(h.mediaTransport->startOptions.receiverAudioSsrcs.isEmpty());
+    h.mediaTransport->losslessNegotiated = true;
+    h.mediaTransport->becomeReady();
+    const quint32 mainSsrc = h.mediaTransport->startOptions.localAudioSsrc;
+
+    QVERIFY(h.client.sendMediaControl(audioControl(1, true, QStringLiteral("opus")),
+                                      h.client.sessionEpoch()));
+    QTRY_COMPARE(audioContextsIn(controls).size(), 1);
+    quint32 revision = 1;
+    for (int sliceId : {h.sliceId, h.spareSliceId}) {
+        for (const QString& profile : {QStringLiteral("opus"), QStringLiteral("lossless")}) {
+            QVERIFY(h.client.sendMediaControl(
+                receiverAudioControl(sliceId, revision++, true, profile),
+                h.client.sessionEpoch()));
+        }
+    }
+    for (int block = 0; block < 3; ++block) {
+        feedSlicesBlock(h, {{h.sliceId, 0.2f}, {h.spareSliceId, 0.3f}});
+    }
+    QTRY_COMPARE(h.mediaTransport->rtpPackets.size(), 3);
+    QTest::qWait(50);
+    QVERIFY(receiverContextsIn(controls).isEmpty());
+    QCOMPARE(audioContextsIn(controls).size(), 1);
+    QCOMPARE(packetsWithSsrc(h.mediaTransport->rtpPackets, mainSsrc).size(),
+             h.mediaTransport->rtpPackets.size());
+    QCOMPARE(h.controller.activeReceiverAudioStreamCount(), 0);
+    QCOMPARE(engine->sliceAudioTapCount(), 0);
+    h.finish();
+}
+
+// A receiver stream starts, stops and restarts on its own stream id while
+// the speakers' stream runs untouched: no new main context, no gap in the
+// main stream's sequence. Turning the main stream off leaves it running.
+// Lossless, so the packets decode to exactly slice B's level.
+void TstDaemonMediaController::receiverStreamRunsBesideTheMainWithoutRestartingIt()
+{
+    Harness h;
+    AudioEngine* const engine = h.radio.audioEngine();
+    engine->masterMixForTest().setRampFrames(1);
+    engine->masterMixForTest().setSlewUpFrames(0);
+    engine->setSliceStreaming(h.sliceId, true);
+    engine->setSliceStreaming(h.spareSliceId, true);
+    h.establishSession();
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    QVERIFY(h.client.sendMediaControl(receiverStart(), h.client.sessionEpoch()));
+    QTRY_VERIFY(h.mediaTransport);
+    const QList<quint32> receiverSsrcs = MediaPeer::receiverAudioSsrcsForConnection(
+        QLatin1String(kConnectionId));
+    QCOMPARE(h.mediaTransport->startOptions.receiverAudioSsrcs, receiverSsrcs);
+    const quint32 mainSsrc = h.mediaTransport->startOptions.localAudioSsrc;
+    h.mediaTransport->losslessNegotiated = true;
+    // Asked for before the connection is ready: off, media-not-ready, and
+    // the stream id is already its own.
+    const int sliceB = h.spareSliceId;
+    QVERIFY(h.client.sendMediaControl(receiverAudioControl(sliceB, 1, true,
+                                                           QStringLiteral("lossless")),
+                                      h.client.sessionEpoch()));
+    QTRY_COMPARE(receiverContextsIn(controls).size(), 1);
+    QJsonObject context = receiverContextsIn(controls).constLast();
+    QCOMPARE(context.value(QStringLiteral("reason")).toString(),
+             QStringLiteral("media-not-ready"));
+    QCOMPARE(static_cast<quint32>(context.value(QStringLiteral("ssrc")).toInteger()),
+             receiverSsrcs.at(0));
+
+    h.mediaTransport->becomeReady();
+    QVERIFY(h.client.sendMediaControl(audioControl(1, true, QStringLiteral("lossless")),
+                                      h.client.sessionEpoch()));
+    QTRY_COMPARE(audioContextsIn(controls).size(), 1);
+    QTRY_COMPARE(receiverContextsIn(controls).size(), 2);
+    context = receiverContextsIn(controls).constLast();
+    std::optional<RemoteReceiverAudioContextMessage> decoded =
+        decodeReceiverAudioContext(context);
+    QVERIFY2(decoded.has_value(), QJsonDocument(context).toJson().constData());
+    QCOMPARE(decoded->sliceId, sliceB);
+    QVERIFY(decoded->context.enabled);
+    QCOMPARE(decoded->context.ssrc, receiverSsrcs.at(0));
+    QCOMPARE(decoded->context.firstSequence, quint16{1});
+    QCOMPARE(decoded->context.firstTimestamp, quint32{0});
+    QCOMPARE(decoded->context.profile, std::optional{RemoteAudioProfile::Lossless});
+    QCOMPARE(h.controller.activeReceiverAudioStreamCount(), 1);
+    QCOMPARE(engine->sliceAudioTapCount(), 1);
+
+    feedSlicesBlock(h, {{h.sliceId, 0.25f}, {sliceB, 0.5f}});
+    QTRY_COMPARE(packetsWithSsrc(h.mediaTransport->rtpPackets, receiverSsrcs.at(0)).size(), 10);
+    QTRY_COMPARE(packetsWithSsrc(h.mediaTransport->rtpPackets, mainSsrc).size(), 10);
+    for (const QByteArray& packet :
+         packetsWithSsrc(h.mediaTransport->rtpPackets, receiverSsrcs.at(0))) {
+        const PcmRtpDecodeResult l16 = decodeL16Rtp(packet, receiverSsrcs.at(0));
+        QCOMPARE(l16.status, OpusAudioCodecStatus::Accepted);
+        for (float sample : l16.pcmInterleaved) {
+            QVERIFY(std::abs(sample - 0.5f) < 1.0e-4f);
+        }
+    }
+
+    // Stop, then restart: two receiver contexts, the stream id's timeline
+    // continuing, and nothing at all for the main stream.
+    QVERIFY(h.client.sendMediaControl(receiverAudioControl(sliceB, 2, false,
+                                                           QStringLiteral("lossless")),
+                                      h.client.sessionEpoch()));
+    QTRY_COMPARE(receiverContextsIn(controls).size(), 3);
+    context = receiverContextsIn(controls).constLast();
+    QCOMPARE(context.value(QStringLiteral("reason")).toString(),
+             QStringLiteral("client-disabled"));
+    QCOMPARE(engine->sliceAudioTapCount(), 0);
+    feedSlicesBlock(h, {{h.sliceId, 0.25f}, {sliceB, 0.5f}});
+    QTRY_COMPARE(packetsWithSsrc(h.mediaTransport->rtpPackets, mainSsrc).size(), 20);
+    QVERIFY(h.client.sendMediaControl(receiverAudioControl(sliceB, 3, true,
+                                                           QStringLiteral("lossless")),
+                                      h.client.sessionEpoch()));
+    QTRY_COMPARE(receiverContextsIn(controls).size(), 4);
+    decoded = decodeReceiverAudioContext(receiverContextsIn(controls).constLast());
+    QVERIFY(decoded.has_value() && decoded->context.enabled);
+    QCOMPARE(decoded->context.ssrc, receiverSsrcs.at(0));
+    QCOMPARE(decoded->context.firstSequence, quint16{11});
+    QCOMPARE(decoded->context.firstTimestamp, quint32{1920});
+
+    // The main stream turns off; the receiver stream keeps flowing.
+    QVERIFY(h.client.sendMediaControl(audioControl(2, false, QStringLiteral("lossless")),
+                                      h.client.sessionEpoch()));
+    QTRY_COMPARE(audioContextsIn(controls).size(), 2);
+    feedSlicesBlock(h, {{h.sliceId, 0.25f}, {sliceB, 0.5f}});
+    QTRY_COMPARE(packetsWithSsrc(h.mediaTransport->rtpPackets, receiverSsrcs.at(0)).size(), 20);
+    QCOMPARE(receiverContextsIn(controls).size(), 4);
+
+    // One main context per main control, none from the receiver churn, and
+    // the main stream's sequence has no gap.
+    QCOMPARE(audioContextsIn(controls).size(), 2);
+    const QList<QByteArray> mainPackets =
+        packetsWithSsrc(h.mediaTransport->rtpPackets, mainSsrc);
+    for (int index = 1; index < mainPackets.size(); ++index) {
+        QCOMPARE(rtpSequence(mainPackets.at(index)),
+                 static_cast<quint16>(rtpSequence(mainPackets.at(index - 1)) + 1));
+        QCOMPARE(rtpTimestamp(mainPackets.at(index)),
+                 rtpTimestamp(mainPackets.at(index - 1)) + 192U);
+    }
+    h.finish();
+    QTRY_COMPARE(h.controller.activeReceiverAudioStreamCount(), 0);
+    QCOMPARE(engine->sliceAudioTapCount(), 0);
+}
+
+// A revision at or below the slice's last is ignored; four streams run at
+// once and a fifth is refused with receiver-limit and no stream id. The
+// refused one starts when asked again after another stream has gone.
+void TstDaemonMediaController::staleReceiverRevisionIsIgnoredAndAFifthStreamIsRefused()
+{
+    OpusAudioEncoder encoder;
+    if (!encoder.isReady()) {
+        QSKIP("Opus encoder is unavailable in this build");
+    }
+    Harness h;
+    QList<int> slices{h.sliceId, h.spareSliceId};
+    for (int added = 0; added < 3; ++added) {
+        const int sliceId = h.radio.addSlice();
+        QVERIFY(sliceId >= 0);
+        slices.append(sliceId);
+    }
+    h.establishSession();
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    QVERIFY(h.client.sendMediaControl(receiverStart(), h.client.sessionEpoch()));
+    QTRY_VERIFY(h.mediaTransport);
+    h.mediaTransport->becomeReady();
+    const QList<quint32> receiverSsrcs = h.mediaTransport->startOptions.receiverAudioSsrcs;
+    QCOMPARE(receiverSsrcs.size(), 4);
+
+    for (int index = 0; index < 4; ++index) {
+        QVERIFY(h.client.sendMediaControl(receiverAudioControl(slices.at(index), 5, true),
+                                          h.client.sessionEpoch()));
+        QTRY_COMPARE(receiverContextsIn(controls, slices.at(index)).size(), 1);
+        const QJsonObject context = receiverContextsIn(controls, slices.at(index)).constLast();
+        QVERIFY(context.value(QStringLiteral("enabled")).toBool());
+        QCOMPARE(static_cast<quint32>(context.value(QStringLiteral("ssrc")).toInteger()),
+                 receiverSsrcs.at(index));
+    }
+    QCOMPARE(h.controller.activeReceiverAudioStreamCount(), 4);
+
+    const int fifth = slices.at(4);
+    QVERIFY(h.client.sendMediaControl(receiverAudioControl(fifth, 1, true),
+                                      h.client.sessionEpoch()));
+    QTRY_COMPARE(receiverContextsIn(controls, fifth).size(), 1);
+    QJsonObject refused = receiverContextsIn(controls, fifth).constLast();
+    QVERIFY(!refused.value(QStringLiteral("enabled")).toBool());
+    QCOMPARE(refused.value(QStringLiteral("reason")).toString(),
+             QStringLiteral("receiver-limit"));
+    QCOMPARE(refused.value(QStringLiteral("ssrc")).toInteger(), qint64{0});
+    QVERIFY(decodeReceiverAudioContext(refused).has_value());
+    QCOMPARE(h.controller.activeReceiverAudioStreamCount(), 4);
+
+    // Stale or equal revisions: nothing happens, nothing is answered.
+    const int contextsBefore = receiverContextsIn(controls).size();
+    QVERIFY(h.client.sendMediaControl(receiverAudioControl(slices.at(0), 5, false),
+                                      h.client.sessionEpoch()));
+    QVERIFY(h.client.sendMediaControl(receiverAudioControl(slices.at(0), 4, false),
+                                      h.client.sessionEpoch()));
+    QVERIFY(h.client.sendMediaControl(receiverAudioControl(fifth, 1, true),
+                                      h.client.sessionEpoch()));
+    // Malformed requests are ignored too.
+    QJsonObject extra = receiverAudioControl(slices.at(1), 9, false);
+    extra.insert(QStringLiteral("extra"), 1);
+    QVERIFY(h.client.sendMediaControl(extra, h.client.sessionEpoch()));
+    QVERIFY(h.client.sendMediaControl(
+        receiverAudioControl(slices.at(1), 9, false, QStringLiteral("flac")),
+        h.client.sessionEpoch()));
+    QTest::qWait(50);
+    QCOMPARE(receiverContextsIn(controls).size(), contextsBefore);
+    QCOMPARE(h.controller.activeReceiverAudioStreamCount(), 4);
+
+    // A slice that does not exist is answered slice-removed and kept nowhere.
+    QVERIFY(h.client.sendMediaControl(receiverAudioControl(4242, 1, true),
+                                      h.client.sessionEpoch()));
+    QTRY_COMPARE(receiverContextsIn(controls, 4242).size(), 1);
+    QCOMPARE(receiverContextsIn(controls, 4242).constLast()
+                 .value(QStringLiteral("reason")).toString(),
+             QStringLiteral("slice-removed"));
+
+    // One stream lets go; the fifth asks again and takes its stream id.
+    QVERIFY(h.client.sendMediaControl(receiverAudioControl(slices.at(2), 6, false),
+                                      h.client.sessionEpoch()));
+    QTRY_COMPARE(receiverContextsIn(controls, slices.at(2)).size(), 2);
+    QVERIFY(h.client.sendMediaControl(receiverAudioControl(fifth, 2, true),
+                                      h.client.sessionEpoch()));
+    QTRY_COMPARE(receiverContextsIn(controls, fifth).size(), 2);
+    const QJsonObject granted = receiverContextsIn(controls, fifth).constLast();
+    QVERIFY(granted.value(QStringLiteral("enabled")).toBool());
+    QCOMPARE(static_cast<quint32>(granted.value(QStringLiteral("ssrc")).toInteger()),
+             receiverSsrcs.at(2));
+    QCOMPARE(h.controller.activeReceiverAudioStreamCount(), 4);
+    QCOMPARE(h.radio.audioEngine()->sliceAudioTapCount(), 4);
+    // No main context was ever sent: none was asked for.
+    QVERIFY(audioContextsIn(controls).isEmpty());
+    h.finish();
+}
+
+// A receiver stream runs the session's one quality choice: Opus at the
+// Core's configured audio bitrate (the main stream's encoder profile), or
+// lossless when asked and the rules admit it; refused lossless keeps Opus
+// and says why, as the main stream does.
+void TstDaemonMediaController::receiverStreamFollowsTheSessionAudioProfile()
+{
+    OpusAudioEncoder encoder;
+    if (!encoder.isReady()) {
+        QSKIP("Opus encoder is unavailable in this build");
+    }
+    OpusAudioCodecConfig configured;
+    configured.bitrate = 48'000;
+    const DaemonAudioSender reference(nullptr, configured);
+    QVERIFY(reference.encoderProfile().has_value());
+    const QJsonObject expectedOpus = remoteAudioEncoderToJson(*reference.encoderProfile());
+
+    for (const bool losslessNegotiated : {true, false}) {
+        Harness h;
+        h.controller.setAudioTargetBitrate(configured.bitrate);
+        h.establishSession();
+        QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+        QVERIFY(h.client.sendMediaControl(receiverStart(), h.client.sessionEpoch()));
+        QTRY_VERIFY(h.mediaTransport);
+        h.mediaTransport->losslessNegotiated = losslessNegotiated;
+        h.mediaTransport->becomeReady();
+
+        QVERIFY(h.client.sendMediaControl(audioControl(1, true, QStringLiteral("opus")),
+                                          h.client.sessionEpoch()));
+        QTRY_COMPARE(audioContextsIn(controls).size(), 1);
+        QCOMPARE(audioContextsIn(controls).constLast().value(QStringLiteral("encoder"))
+                     .toObject(), expectedOpus);
+
+        QVERIFY(h.client.sendMediaControl(receiverAudioControl(h.spareSliceId, 1, true),
+                                          h.client.sessionEpoch()));
+        QTRY_COMPARE(receiverContextsIn(controls).size(), 1);
+        QJsonObject context = receiverContextsIn(controls).constLast();
+        QCOMPARE(context.value(QStringLiteral("profile")).toString(), QStringLiteral("opus"));
+        QCOMPARE(context.value(QStringLiteral("encoder")).toObject(), expectedOpus);
+        QVERIFY(!context.contains(QStringLiteral("profileRefusal")));
+        QCOMPARE(h.controller.receiverAudioProfile(h.spareSliceId),
+                 std::optional{RemoteAudioProfile::Opus});
+
+        QVERIFY(h.client.sendMediaControl(
+            receiverAudioControl(h.spareSliceId, 2, true, QStringLiteral("lossless")),
+            h.client.sessionEpoch()));
+        QTRY_COMPARE(receiverContextsIn(controls).size(), 2);
+        context = receiverContextsIn(controls).constLast();
+        QVERIFY(context.value(QStringLiteral("enabled")).toBool());
+        if (losslessNegotiated) {
+            QCOMPARE(context.value(QStringLiteral("profile")).toString(),
+                     QStringLiteral("lossless"));
+            QCOMPARE(context.value(QStringLiteral("encoder")).toObject(),
+                     remoteAudioL16EncoderToJson(l16EncoderProfile()));
+            QCOMPARE(h.controller.receiverAudioProfile(h.spareSliceId),
+                     std::optional{RemoteAudioProfile::Lossless});
+        } else {
+            QCOMPARE(context.value(QStringLiteral("profile")).toString(),
+                     QStringLiteral("opus"));
+            QCOMPARE(context.value(QStringLiteral("profileRefusal")).toString(),
+                     QStringLiteral("lossless-unavailable"));
+            QCOMPARE(context.value(QStringLiteral("encoder")).toObject(), expectedOpus);
+        }
+        QVERIFY(decodeReceiverAudioContext(context).has_value());
+        // The main stream was not touched by either.
+        QCOMPARE(audioContextsIn(controls).size(), 1);
+        h.finish();
+    }
+
+    // The Core's own setting refuses lossless for receiver streams too.
+    Harness h;
+    h.controller.setAudioLosslessAllowed(false);
+    h.establishSession();
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    QVERIFY(h.client.sendMediaControl(receiverStart(), h.client.sessionEpoch()));
+    QTRY_VERIFY(h.mediaTransport);
+    h.mediaTransport->becomeReady();
+    QVERIFY(h.client.sendMediaControl(
+        receiverAudioControl(h.sliceId, 1, true, QStringLiteral("lossless")),
+        h.client.sessionEpoch()));
+    QTRY_COMPARE(receiverContextsIn(controls).size(), 1);
+    QCOMPARE(receiverContextsIn(controls).constLast()
+                 .value(QStringLiteral("profileRefusal")).toString(),
+             QStringLiteral("lossless-not-allowed"));
+    h.finish();
+}
+
+// Removing the slice, the radio going offline and the session ending each
+// retire the stream; the first two say why, and nothing is left behind:
+// no sender running and no slice tap in the audio engine.
+void TstDaemonMediaController::receiverStreamRetiresOnSliceRadioAndSessionEnd()
+{
+    OpusAudioEncoder encoder;
+    if (!encoder.isReady()) {
+        QSKIP("Opus encoder is unavailable in this build");
+    }
+    Harness h;
+    AudioEngine* const engine = h.radio.audioEngine();
+    h.establishSession();
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    QVERIFY(h.client.sendMediaControl(receiverStart(), h.client.sessionEpoch()));
+    QTRY_VERIFY(h.mediaTransport);
+    h.mediaTransport->becomeReady();
+    const QList<quint32> receiverSsrcs = h.mediaTransport->startOptions.receiverAudioSsrcs;
+
+    QVERIFY(h.client.sendMediaControl(receiverAudioControl(h.sliceId, 1, true),
+                                      h.client.sessionEpoch()));
+    QVERIFY(h.client.sendMediaControl(receiverAudioControl(h.spareSliceId, 1, true),
+                                      h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.activeReceiverAudioStreamCount(), 2);
+    QCOMPARE(engine->sliceAudioTapCount(), 2);
+
+    // The radio goes: both stop with radio-offline and keep their ids.
+    h.radio.setConnectionStateForTest(ConnectionState::Disconnected);
+    QTRY_COMPARE(receiverContextsIn(controls).size(), 4);
+    for (int sliceId : {h.sliceId, h.spareSliceId}) {
+        const QJsonObject off = receiverContextsIn(controls, sliceId).constLast();
+        QCOMPARE(off.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("radio-offline"));
+        QVERIFY(off.value(QStringLiteral("ssrc")).toInteger() != 0);
+    }
+    QCOMPARE(h.controller.activeReceiverAudioStreamCount(), 0);
+    QCOMPARE(engine->sliceAudioTapCount(), 0);
+    // And both come back on the same ids when it returns.
+    h.radio.setConnectionStateForTest(ConnectionState::Connected);
+    QTRY_COMPARE(receiverContextsIn(controls).size(), 6);
+    QCOMPARE(h.controller.activeReceiverAudioStreamCount(), 2);
+    QCOMPARE(static_cast<quint32>(receiverContextsIn(controls, h.sliceId).constLast()
+                                      .value(QStringLiteral("ssrc")).toInteger()),
+             receiverSsrcs.at(0));
+
+    // The slice goes: its stream stops with slice-removed; the other runs.
+    h.radio.removeSlice(h.sliceId);
+    QTRY_COMPARE(receiverContextsIn(controls, h.sliceId).size(), 4);
+    const QJsonObject removed = receiverContextsIn(controls, h.sliceId).constLast();
+    QCOMPARE(removed.value(QStringLiteral("reason")).toString(),
+             QStringLiteral("slice-removed"));
+    QVERIFY(decodeReceiverAudioContext(removed).has_value());
+    QCOMPARE(h.controller.activeReceiverAudioStreamCount(), 1);
+    QCOMPARE(engine->sliceAudioTapCount(), 1);
+    QCOMPARE(h.controller.receiverAudioProfile(h.sliceId), std::nullopt);
+
+    // The session ends: the last stream and its tap go with it.
+    h.finish();
+    QTRY_COMPARE(h.controller.activeReceiverAudioStreamCount(), 0);
+    QCOMPARE(engine->sliceAudioTapCount(), 0);
+    QTRY_COMPARE(h.controller.findChildren<DaemonAudioSender*>().size(), 0);
 }
 
 QTEST_MAIN(TstDaemonMediaController)

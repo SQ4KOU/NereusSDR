@@ -26,7 +26,7 @@ codec histories and callbacks, including deliberate silent redials.
 
 | Operation | Exact payload fields beyond `op` and `connectionId` |
 | --- | --- |
-| `start` | None; a GUI whose Core advertised `audioProfileVersion` adds `audioProfileVersion`, a whole number of at least 1 (anything else is refused and no peer starts) |
+| `start` | None; a GUI whose Core advertised `audioProfileVersion` adds `audioProfileVersion`, a whole number of at least 1 (anything else is refused and no peer starts); a GUI whose Core advertised `receiverAudioVersion` may add `receiverAudioVersion` the same way (see Receiver audio) |
 | `description` | `sdp`, `type` (`offer` or `answer`, appropriate to peer role) |
 | `candidate` | `candidate`, `mid` |
 
@@ -54,8 +54,8 @@ canonical connection UUID. A value that is zero, equal to the main SSRC or
 equal to an earlier receiver's SSRC is replaced by the next integer (modulo
 2^32) until it is none of these, so the five IDs are distinct and both peers
 derive the same set. The receiver streams are declared only when both peers
-start the media connection with receiver audio (the GUI asked for it at
-`start`; the control that asks is defined with the receiver audio operation).
+start the media connection with receiver audio (the GUI added
+`receiverAudioVersion` to its `start`; see Receiver audio).
 Then Core's offer carries, after the main stream's
 `a=ssrc:<main> cname:nereus-mixed-stereo` line, one
 `a=ssrc:<receiver n> cname:nereus-receiver-<n>` line per receiver in order,
@@ -190,6 +190,80 @@ the following attempt uses a keyframe. Dropped I/Q invalidates the FFT input
 history before post-gap samples are processed. Endpoint cadence follows an
 advancing schedule with bounded early-jitter tolerance; it does not restart
 its entire interval after each arrival or catch up with a burst after a stall.
+
+## Receiver audio (receiver-audio and receiver-audio-context)
+
+Capability `receiverAudioVersion=1` (R-R3-43) negotiates it; the session
+protocol minor is unchanged. The Core advertises version 1 whenever media is
+on. A GUI that sees it may add `receiverAudioVersion` (a whole number of at
+least 1) to its `start`; only a GUI at the audio status detail minor may, and
+a malformed value starts no peer. Only then does the offer declare the four
+receiver stream IDs (see Media peer), and only then does the Core honour a
+`receiver-audio` request. A GUI that did not declare it at `start` is never
+sent a receiver stream or a receiver context, whatever it asks: the transport
+library would deliver such packets to it and it would refuse and report each
+one. Its offer, contexts and packets are exactly as before.
+
+Each stream is one receiver's own audio: 48 kHz stereo taken where local VAX
+takes it, after the transmit gate and before the slice's mute, gain and pan,
+the mix and the speakers' volume, with that slice's AF gain undone as local
+VAX undoes it. While the transmit gate withholds the slice's audio the stream
+sends nothing and its RTP timestamps advance over the gap. A receiver stream
+runs beside the main one; starting, stopping or changing it never restarts or
+re-announces the main stream, and the main `audio` control never touches a
+receiver stream.
+
+GUI-to-Core `receiver-audio` has exactly these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `op`, `connectionId` | As every operation; the current peer's ID |
+| `sliceId` | Non-negative integer, the Core's slice ID |
+| `revision` | Nonzero uint32; per slice ID for the whole media connection, it only goes up (serial-number order, as `audio`) |
+| `enabled` | Boolean |
+| `profile` | `opus` or `lossless`, the session's one audio quality choice |
+
+The Core ignores a request with any other key, a wrong or retired
+`connectionId`, a malformed field, or a revision at or below the slice's last
+accepted one. Each accepted request, and each change of radio, media
+readiness or slice that affects a wanted stream, is answered with one
+`receiver-audio-context`: the audio-profile shape of `audio-context` with op
+`receiver-audio-context` and `sliceId` added:
+
+| Field | Meaning |
+| --- | --- |
+| `op` | `receiver-audio-context` |
+| `connectionId`, `revision`, `enabled` | As `audio-context`; `revision` is the slice's request it answers |
+| `sliceId` | The slice the stream carries |
+| `generation` | uint32 counting receiver contexts; its own count, not the main context's generation |
+| `ssrc` | The receiver stream ID the packets carry, or 0 when a disabled context holds none (`receiver-limit`, or a slice that was never there) |
+| `firstSequence`, `firstTimestamp` | Where the stream ID's RTP timeline continues; each receiver stream ID keeps one timeline for the whole media connection, as the main stream does; 0 with `ssrc` 0 |
+| `profile`, `encoder`, `profileRefusal` | As the audio-profile shape of `audio-context` |
+| `reason` | While disabled: `client-disabled`, `media-not-ready`, `radio-offline`, `encoder-unavailable`, `slice-removed` or `receiver-limit` |
+
+The profile follows the rules of the main stream: Opus at the Core's
+configured `audio_bitrate` and its audio bandwidth (the main stream's encoder
+profile), or lossless when asked, allowed by the Core's `audio_lossless`
+setting and carried by this media connection; otherwise Opus with
+`profileRefusal`. The GUI keeps every stream on the one choice, and one link
+trial covers every lossless stream.
+
+At most four receiver streams run at once, one per receiver stream ID; the
+lowest free ID is taken when a stream is wanted and kept until the stream is
+turned off, its slice goes or the session ends. A fifth request is refused
+with `receiver-limit` and `ssrc` 0 and is not queued: the GUI asks again once
+it has let a stream go. A wanted stream keeps its ID and intent while the
+radio is offline or the media connection is not ready, and resumes when both
+return. When the slice is removed its stream stops with `slice-removed`, its
+ID goes free, and its revision stays so a stale request stays refused; a
+request for a slice ID the Core does not have is answered `slice-removed`
+and remembered nowhere. When the session or the media connection ends every
+receiver stream stops with it, with no context (there is no GUI to tell).
+
+The two new reason strings, `slice-removed` and `receiver-limit`, occur only
+in `receiver-audio-context`; an `audio-context` carrying one is malformed. A
+GUI shows every reason through `OperatorReasonText` in plain words, never as
+the wire string.
 
 ## Measured audio delay (clock-probe and clock-echo)
 
