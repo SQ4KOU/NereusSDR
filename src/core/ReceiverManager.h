@@ -17,6 +17,10 @@
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code. NereusSDR-original; no Thetis
 //                 counterpart.
+//   2026-09-23 - hardwareIqDataStamped (the stamped raw hardware-DDC batch
+//                 for the external-diversity input bound, R-R3-40) by J.J.
+//                 Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code. NereusSDR-original.
 // =================================================================
 
 //=================================================================
@@ -287,6 +291,15 @@ signals:
     void iqDataForReceiverStamped(int receiverIndex,
                                   const QVector<float>& samples,
                                   qint64 enqueuedNs);
+
+    // Every hardware-DDC batch feedIqData receives, before the logical
+    // mapping, with the enqueueClockNs() time it arrived. RxDspWorker's
+    // external-diversity route consumes it through a queued connection:
+    // that route's secondary leg has no logical receiver, and the stamp lets
+    // the worker bound its input delay like any receiver's (R-R3-40).
+    void hardwareIqDataStamped(int hwReceiverIndex,
+                               const QVector<float>& samples,
+                               qint64 enqueuedNs);
 
     // Phase 3M-4 Task 6: emitted whenever ReceiverManager re-runs the
     // per-board PS DDC computation (either codec dispatch).  Carries the

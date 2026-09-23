@@ -18,7 +18,9 @@
 //   2026-09-23 - Receive input delay bound (processStampedIqBatch,
 //                 inputDelayStats, R-R3-40) by J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
-//                 NereusSDR-original; no Thetis counterpart.
+//                 NereusSDR-original; no Thetis counterpart. Later the same
+//                 day: the external-diversity legs are stamped and bounded
+//                 too (processStampedExternalDiversityIqBatch).
 // =================================================================
 
 //=================================================================
@@ -182,6 +184,17 @@ public:
     // Safe from any thread (atomics). Zeroes for an untracked index.
     InputDelayStats inputDelayStats(int receiverIndex) const;
 
+    // The external-diversity route's input (both hardware legs, stamped and
+    // bounded the same way; skipped input is counted once, on the primary
+    // leg). Safe from any thread (atomics).
+    InputDelayStats externalDiversityInputDelayStats() const;
+
+    // The input a slice actually processes: the external-diversity route's
+    // when the slice is that route's target, otherwise its stream's
+    // (inputDelayStats(streamIndex); zeroes for streamIndex < 0). Safe from
+    // any thread (atomics).
+    InputDelayStats inputDelayStatsForSlice(int sliceId, int streamIndex) const;
+
     int inSize() const { return m_inSize.load(std::memory_order_relaxed); }
     int outSize() const { return m_outSize.load(std::memory_order_relaxed); }
     double sampleRate() const { return m_sampleRate; }
@@ -237,6 +250,16 @@ public slots:
     /// once without changing the normal logical-stream fan-out.
     void processExternalDiversityIqBatch(
         int sourceStream, const QVector<float>& interleavedIQ);
+
+    /// Production entry for the diversity legs (R-R3-40): the same batch
+    /// with the ReceiverManager::enqueueClockNs() time it was queued. Applies
+    /// the input delay bound (kDspInputDelayLimitMs / kDspInputDelayResumeMs)
+    /// to the route as a whole: an episode clears both legs' queued samples
+    /// and skips both legs' batches; on resume the leg that lost less input
+    /// drops the difference, so the legs stay sample-aligned.
+    void processStampedExternalDiversityIqBatch(
+        int sourceStream, const QVector<float>& interleavedIQ,
+        qint64 enqueuedNs);
 
     /// Select the two raw source streams and the stable target slice for one
     /// WdspEngine external-diversity slot. Runs on the DSP thread through a
@@ -502,9 +525,25 @@ private:
     };
     std::array<InputDelayState, kMaxInputDelayReceivers> m_inputDelay;
 
+    // The external-diversity route's bound (R-R3-40): the same state, plus
+    // how far each leg's input advanced (samples cleared or skipped) during
+    // the current episode, and how many leading samples each leg still has
+    // to drop after it to stay aligned with the other. DSP thread only,
+    // except the InputDelayState atomics and the stats slice.
+    InputDelayState m_externalDiversityInputDelay;
+    qint64 m_externalDiversityEpisodeAdvance[2]{0, 0};
+    qint64 m_externalDiversityDropPending[2]{0, 0};
+    // Target slice of the active route for inputDelayStatsForSlice, -1 when
+    // no route is active. Written on the DSP thread, read from any thread.
+    std::atomic<int> m_externalDiversityStatsSlice{-1};
+
     // Wall-clock span of `samples` input samples on this stream, from its
     // drain size (inSize = 64 * rate / 48000, see setStreamInputChunk).
     qint64 inputSpanUs(int receiverIndex, qint64 samples) const;
+    // The same rule for a known drain size.
+    static qint64 spanUsForDrainSize(qint64 inSize, qint64 samples);
+    // Adds primary-leg samples lost in the current diversity episode.
+    void countDiversityPrimaryLoss(qint64 drainSize, qint64 samples);
 
 #ifdef NEREUS_BUILD_TESTS
     std::atomic<int> m_processingDelayUsForTest{0};
@@ -512,8 +551,10 @@ private:
 
     int externalDiversityChunkSize() const;
     void prepareExternalDiversityBuffers(int chunkSize);
+    // Appends the batch after dropping its first skipLeading samples.
     void appendExternalDiversitySamples(StreamAccum& destination,
-                                        const QVector<float>& interleavedIQ);
+                                        const QVector<float>& interleavedIQ,
+                                        int skipLeading = 0);
     void drainExternalDiversity();
     void feedExternalDiversityTarget(int samples);
     bool isExternalDiversityTarget(int sliceId) const noexcept;

@@ -19,7 +19,9 @@
 //   2026-09-23 - dspLoad() reader for the WDSP worker's per-block load
 //                 counters (R-R3-40) by J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
-//                 NereusSDR-original; no Thetis counterpart.
+//                 NereusSDR-original; no Thetis counterpart. Later the same
+//                 day: the block in progress and the per-interval longest
+//                 block (takeDspIntervalMaxBlockUs).
 // =================================================================
 
 //=================================================================
@@ -1942,9 +1944,22 @@ bool RxChannel::dspLoad(DspLoadCounters& out) const
     out.lateBlocks    = load.lateBlocks;
     out.maxBlockUs    = load.maxBlockUs;
     out.blockPeriodUs = load.blockPeriodUs;
+    out.currentBlockNs = load.currentBlockNs;
     return true;
 #else
     return false;
+#endif
+}
+
+qint64 RxChannel::takeDspIntervalMaxBlockUs() const
+{
+#ifdef HAVE_WDSP
+    if (!wdspChannelInRange()) {
+        return 0;
+    }
+    return std::max<qint64>(0, TakeChannelDspIntervalMaxBlockUs(m_channelId));
+#else
+    return 0;
 #endif
 }
 

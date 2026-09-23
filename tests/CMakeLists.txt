@@ -862,6 +862,11 @@ nereus_add_test(tst_rx_dsp_worker_multi_slice)
 # one-log-line-per-episode contract. NereusSDR-original; no WDSP needed.
 nereus_add_test(tst_rx_dsp_worker_input_delay)
 
+# R-R3-40: one periodic sampler turns each receiver's WDSP load counters into
+# a snapshot every reader shares; a stuck block reads as overloaded, an idle
+# receiver as idle. NereusSDR-original; no WDSP needed.
+nereus_add_test(tst_receiver_dsp_load_sampler)
+
 # Remote Daemon R3 R-R3-31: selecting RADE RX on slice B must leave slice A
 # on the ordinary AudioEngine path, route only B's demodulated audio to RADE,
 # and keep the already-enrolled A+B master mix producing while B is unsynced.

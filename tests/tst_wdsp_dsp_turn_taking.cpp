@@ -203,6 +203,44 @@ private slots:
         QVERIFY(after.maxBlockUs >= kLateDelayUs);
     }
 
+    // The reader sees a block that has not finished yet, and the interval
+    // maximum covers only blocks since the previous take (R-R3-40).
+    void aBlockInProgressAndTheIntervalMaximumAreVisible()
+    {
+        WDSPSetTestBlockDelayUs(kChannel, kLateDelayUs);
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        // Starts the interval this case measures.
+        QVERIFY(TakeChannelDspIntervalMaxBlockUs(kChannel) >= 0);
+
+        long long longestInProgressNs = 0;
+        const auto windowStart = Clock::now();
+        while (Clock::now() - windowStart < std::chrono::milliseconds(1000)) {
+            WdspChannelLoad sample{};
+            QCOMPARE(GetChannelDspLoad(kChannel, &sample), 0);
+            longestInProgressNs = std::max(longestInProgressNs, sample.currentBlockNs);
+            std::this_thread::sleep_for(std::chrono::milliseconds(3));
+        }
+        const long long intervalMaxUs = TakeChannelDspIntervalMaxBlockUs(kChannel);
+
+        // Short blocks now; the next interval must not carry the long ones.
+        WDSPSetTestBlockDelayUs(kChannel, kBlockDelayUs);
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        (void)TakeChannelDspIntervalMaxBlockUs(kChannel);
+        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        const long long shortIntervalMaxUs = TakeChannelDspIntervalMaxBlockUs(kChannel);
+
+        qInfo("longest block seen in progress %.1f ms; interval maximum %lld us, "
+              "then %lld us with %d us blocks",
+              longestInProgressNs / 1e6, intervalMaxUs, shortIntervalMaxUs, kBlockDelayUs);
+        QVERIFY2(longestInProgressNs >= kLateDelayUs * 1000LL / 2,
+                 "the reader never saw a block in progress");
+        QVERIFY(intervalMaxUs >= kLateDelayUs);
+        QVERIFY(shortIntervalMaxUs >= kBlockDelayUs);
+        QVERIFY2(shortIntervalMaxUs < kLateDelayUs,
+                 "the interval maximum kept a block from an earlier interval");
+        QCOMPARE(TakeChannelDspIntervalMaxBlockUs(-1), -1LL);
+    }
+
 private:
     // Runs body and returns the worker's output rate (successful fexchange2
     // outputs per second) over that time. Each worker block yields a fixed

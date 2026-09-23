@@ -62,6 +62,11 @@ boydsoftprez@gmail.com
 //                 WDSPSetTestProcessDelayUs) added by J.J. Boyd (KG4VCF),
 //                 with AI-assisted implementation via Anthropic Claude Code
 //                 (R-R3-39).
+//   2026-09-23 - Block in progress (currentBlockNs), block period published
+//                 at block start, and the per-interval longest block
+//                 (TakeChannelDspIntervalMaxBlockUs) added by J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code (R-R3-40).
 // =================================================================
 
 #ifndef _dsplock_h
@@ -91,11 +96,14 @@ void WdspWaitWorkerExit (int channel);
 
 // One channel's worker load since the process started. Every field only
 // grows except blockPeriodUs, which is the block period (dsp_size / dsp_rate)
-// of the worker's latest block (0 before its first block).
-//   blocks      - worker blocks completed
-//   busyNs      - total time the worker held csDSP for those blocks
-//   lateBlocks  - blocks that took longer than their block period
-//   maxBlockUs  - longest single block
+// of the worker's latest or current block (0 before its first block), and
+// currentBlockNs.
+//   blocks         - worker blocks completed
+//   busyNs         - total time the worker held csDSP for those blocks
+//   lateBlocks     - blocks that took longer than their block period
+//   maxBlockUs     - longest single block
+//   currentBlockNs - how long the block in progress has run so far, 0 when
+//                    the worker is not inside a block
 // src/core/wdsp_api.h declares the same struct; the guard lets a file include
 // both headers.
 #ifndef NEREUS_WDSP_CHANNEL_LOAD_DEFINED
@@ -107,6 +115,7 @@ typedef struct
 	long long lateBlocks;
 	long long maxBlockUs;
 	int blockPeriodUs;
+	long long currentBlockNs;
 } WdspChannelLoad;
 #endif
 
@@ -115,6 +124,13 @@ typedef struct
 // channel or a null out. The fields are read one by one, so a block that
 // completes during the read may be counted in some fields and not others.
 PORT int GetChannelDspLoad (int channel, WdspChannelLoad* out);
+
+// Returns the longest block (microseconds) the channel's worker completed
+// since the previous call, and starts the next interval (0 if no block
+// completed). One periodic reader owns this (NereusSDR's RadioModel load
+// sampler); a second caller would split its intervals. Returns -1 for an
+// invalid channel. Never takes csDSP.
+PORT long long TakeChannelDspIntervalMaxBlockUs (int channel);
 
 // Test-only: busy-wait this many microseconds inside the worker's locked
 // section on every block, to simulate an overloaded DSP chain. Default 0

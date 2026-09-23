@@ -19,7 +19,9 @@
 //   2026-09-23 - dspLoad() reader for the WDSP worker's per-block load
 //                 counters (R-R3-40) by J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
-//                 NereusSDR-original; no Thetis counterpart.
+//                 NereusSDR-original; no Thetis counterpart. Later the same
+//                 day: the block in progress and the per-interval longest
+//                 block (takeDspIntervalMaxBlockUs).
 // =================================================================
 
 //=================================================================
@@ -889,12 +891,21 @@ public:
         qint64 lateBlocks{0};
         qint64 maxBlockUs{0};
         int    blockPeriodUs{0};
+        // How long the block in progress has run so far; 0 when the worker
+        // is not inside a block. Not cumulative.
+        qint64 currentBlockNs{0};
     };
 
     // Reads the counters without the channel's DSP lock, so it never waits
     // for the worker; safe from any thread. Returns false (and leaves `out`
     // zeroed) when the channel id is outside WDSP's range or WDSP is absent.
     bool dspLoad(DspLoadCounters& out) const;
+
+    // The longest block the worker completed since the previous call, which
+    // starts the next interval; 0 if none completed or WDSP is absent. One
+    // periodic owner only: RadioModel's load sampler (a second caller would
+    // split its intervals). Never waits for the worker.
+    qint64 takeDspIntervalMaxBlockUs() const;
 
     // --- Per-mode DSP-Options live-apply (Task 4.2) ---
     //

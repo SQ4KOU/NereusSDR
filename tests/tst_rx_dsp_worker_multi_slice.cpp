@@ -8,6 +8,7 @@
 #include <QtTest/QtTest>
 #include <QSignalSpy>
 #include "core/P2RadioConnection.h"
+#include "core/ReceiverManager.h"
 #include "core/WdspEngine.h"
 #include "models/RadioModel.h"
 #include "models/RxDspWorker.h"
@@ -562,6 +563,88 @@ private slots:
         QCOMPARE(record.targetSlice, 7); // never positional first slice 3
         QCOMPARE(record.runStops, 1);
         QCOMPARE(record.destroys, 1);
+    }
+
+    // R-R3-40: the diversity legs are stamped and bounded like any
+    // receiver's input. An episode clears both legs and skips both legs'
+    // batches; skipped input is counted once (primary leg); on resume the
+    // leg that lost less input drops the difference so the pair stays
+    // sample-aligned. Each sample's I value is its input position, the same
+    // on both legs, so an aligned pair has equal I values.
+    void stamped_diversity_input_is_bounded_and_stays_aligned()
+    {
+        DiversityRecorder record;
+        s_diversity = &record;
+        WdspEngine engine;
+        armDiversity(engine, 4);
+
+        RxDspWorker worker;
+        worker.setEngines(&engine, nullptr);
+        worker.setBufferSizes(4, 64);
+        worker.setExternalDiversityOutputHookForTest(&captureDiversityTarget);
+        worker.setExternalDiversityRoute(0, 7, 10, 11);
+
+        auto batch = [](int first, int count, float q) {
+            QVector<float> iq;
+            for (int position = first; position < first + count; ++position) {
+                iq.append(static_cast<float>(position));
+                iq.append(q);
+            }
+            return iq;
+        };
+        auto agedMs = [](qint64 ms) {
+            return ReceiverManager::enqueueClockNs() - ms * 1'000'000;
+        };
+        auto pairedPositions = [&record]() {
+            QVector<double> primaryI, secondaryI;
+            for (int k = 0; k < record.primary.size(); k += 2) {
+                primaryI.append(record.primary[k]);
+                secondaryI.append(record.secondary[k]);
+            }
+            return std::pair{primaryI, secondaryI};
+        };
+
+        // Fresh input pairs as before.
+        worker.processStampedExternalDiversityIqBatch(10, batch(0, 4, 0.0f), agedMs(0));
+        worker.processStampedExternalDiversityIqBatch(11, batch(0, 4, 1.0f), agedMs(0));
+        QCOMPARE(record.processCalls, 1);
+        QCOMPARE(pairedPositions().first, QVector<double>({0, 1, 2, 3}));
+        QCOMPARE(pairedPositions().second, QVector<double>({0, 1, 2, 3}));
+
+        // Two primary samples wait for their partner.
+        worker.processStampedExternalDiversityIqBatch(10, batch(4, 2, 0.0f), agedMs(0));
+        // A secondary batch 600 ms late starts an episode: both legs' queued
+        // input goes, and this batch is skipped.
+        worker.processStampedExternalDiversityIqBatch(11, batch(4, 4, 1.0f), agedMs(600));
+        // Still over the resume level: skipped.
+        worker.processStampedExternalDiversityIqBatch(10, batch(6, 4, 0.0f), agedMs(300));
+        QCOMPARE(record.processCalls, 1);
+        QVERIFY(worker.externalDiversityInputDelayStats().inputDelayMs >= 300);
+
+        // Under the resume level: the episode ends with one line. The primary
+        // leg lost positions 4..9 (6 samples: 2 ms at this drain size), the
+        // secondary 4..7, so the secondary drops positions 8 and 9.
+        QTest::ignoreMessage(QtWarningMsg,
+                             "Receive processing fell behind; skipped 2 ms of input "
+                             "to catch up.");
+        worker.processStampedExternalDiversityIqBatch(11, batch(8, 4, 1.0f), agedMs(100));
+        worker.processStampedExternalDiversityIqBatch(10, batch(10, 4, 0.0f), agedMs(0));
+        worker.processStampedExternalDiversityIqBatch(11, batch(12, 4, 1.0f), agedMs(0));
+        QCOMPARE(record.processCalls, 2);
+        QCOMPARE(pairedPositions().first, QVector<double>({10, 11, 12, 13}));
+        QCOMPARE(pairedPositions().second, QVector<double>({10, 11, 12, 13}));
+
+        const RxDspWorker::InputDelayStats stats =
+            worker.externalDiversityInputDelayStats();
+        QCOMPARE(stats.droppedInputMs, 2LL);
+        QCOMPARE(stats.inputDelayMs, 0LL);
+
+        // The route's target reports the diversity input; other slices, and
+        // the target once the route is gone, report their stream's.
+        QCOMPARE(worker.inputDelayStatsForSlice(7, 0).droppedInputMs, 2LL);
+        QCOMPARE(worker.inputDelayStatsForSlice(8, 0).droppedInputMs, 0LL);
+        worker.clearExternalDiversityRoute();
+        QCOMPARE(worker.inputDelayStatsForSlice(7, 0).droppedInputMs, 0LL);
     }
 
     // Mutation caught: removing clearExternalDiversityRoute() from

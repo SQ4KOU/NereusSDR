@@ -15,6 +15,10 @@
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code. NereusSDR-original; no Thetis
 //                 counterpart.
+//   2026-09-23 - hardwareIqDataStamped (the stamped raw hardware-DDC batch
+//                 for the external-diversity input bound, R-R3-40) by J.J.
+//                 Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code. NereusSDR-original.
 // =================================================================
 
 //=================================================================
@@ -336,6 +340,10 @@ void ReceiverManager::feedIqData(int hwReceiverIndex, const QVector<float>& samp
     // the hash structure can not flip mid-lookup.  Hot-path cost: one
     // uncontended mutex acquire per packet (~100 ns) plus the existing
     // hash lookups + emit setup.
+    // R-R3-40: the external-diversity fork needs every hardware leg,
+    // mapped or not; emitting outside the routing lock keeps it short.
+    emit hardwareIqDataStamped(hwReceiverIndex, samples, enqueueClockNs());
+
     QMutexLocker locker(&m_routingMutex);
     auto it = m_hwToLogical.constFind(hwReceiverIndex);
     if (it == m_hwToLogical.constEnd()) {

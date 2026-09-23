@@ -1,0 +1,105 @@
+// =================================================================
+// src/models/ReceiverDspLoadSampler.h  (NereusSDR)
+// =================================================================
+// Turns each receiver's cumulative WDSP load counters into one snapshot per
+// sampling interval, so every reader (network telemetry, the noise-reduction
+// step-back) sees the same numbers and no reader starts or splits an
+// interval. RadioModel owns one sampler and feeds it every
+// kSampleIntervalMs; RadioModel::receiverDspLoad returns the cached result.
+//
+// no-port-check: NereusSDR-original. Measurement bookkeeping for the R3 DSP
+// overload work; no Thetis counterpart.
+//
+// Plan: docs/architecture/2026-09-23-r3-dsp-overload-plan.md, Task 5 and the
+// fix wave after it. Requirement R-R3-40.
+//
+// Modification history (NereusSDR):
+//   2026-09-23 - Created by J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
+// =================================================================
+
+#pragma once
+
+#include <QHash>
+#include <QtGlobal>
+
+#include <optional>
+
+namespace NereusSDR {
+
+// One receiver's DSP load over the latest sampling interval.
+struct ReceiverDspLoad {
+    // Mean WDSP worker block time / block period over the interval.
+    // 1.0 = cannot keep up. When the worker is still inside a block that has
+    // run longer than one block period, or finished no block while inside
+    // one, it is at least that block's time so far / block period, so a
+    // worker stuck in one long block never reads as unloaded.
+    double load{0.0};
+    // True when the worker finished no block in the interval and is not
+    // inside one: the receiver had no input to process. load is 0.0 then.
+    bool idle{false};
+    // Worker blocks longer than their block period, finished in the interval.
+    qint64 lateBlocks{0};
+    // Longest block finished in the interval, or the block still in progress
+    // if it has already run longer.
+    qint64 maxBlockUs{0};
+    // Longest single block on this receiver's WDSP channel id since the
+    // process started.
+    qint64 lifetimeMaxBlockUs{0};
+    // How long this receiver's latest I/Q batch waited before RxDspWorker
+    // processed it.
+    qint64 inputDelayMs{0};
+    // Input RxDspWorker skipped to keep that wait bounded, since the worker
+    // was created (cumulative).
+    qint64 droppedInputMs{0};
+};
+
+class ReceiverDspLoadSampler {
+public:
+    // RadioModel samples every receiver this often (main thread).
+    static constexpr int kSampleIntervalMs = 500;
+
+    // One receiver's raw readings at a sample.
+    struct Reading {
+        // Cumulative WDSP counters (RxChannel::dspLoad).
+        qint64 blocks{0};
+        qint64 busyNs{0};
+        qint64 lateBlocks{0};
+        qint64 lifetimeMaxBlockUs{0};
+        int    blockPeriodUs{0};
+        // The block in progress so far; 0 between blocks.
+        qint64 currentBlockNs{0};
+        // Longest block finished since the previous sample
+        // (RxChannel::takeDspIntervalMaxBlockUs).
+        qint64 intervalMaxBlockUs{0};
+        // RxDspWorker::inputDelayStats for the receiver's input.
+        qint64 inputDelayMs{0};
+        qint64 droppedInputMs{0};
+    };
+
+    // Replaces every snapshot with one computed from these readings, keyed
+    // by slice ID. A slice absent from `readings` loses its snapshot and its
+    // baseline. The first reading for a slice measures from the counters'
+    // start.
+    void update(const QHash<int, Reading>& readings);
+
+    // The latest snapshot for this slice, or nullopt when it had no reading
+    // at the latest update. Reading never changes anything.
+    std::optional<ReceiverDspLoad> snapshot(int sliceId) const;
+
+    void clear();
+
+private:
+    struct Baseline {
+        qint64 blocks{0};
+        qint64 busyNs{0};
+        qint64 lateBlocks{0};
+    };
+
+    static ReceiverDspLoad compute(const Reading& now, const Baseline& previous);
+
+    QHash<int, Baseline> m_baselines;
+    QHash<int, ReceiverDspLoad> m_snapshots;
+};
+
+} // namespace NereusSDR

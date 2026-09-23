@@ -1167,6 +1167,7 @@ endif()
 set(MODEL_SOURCES
     src/models/RadioModel.cpp
     src/models/RxDspWorker.cpp
+    src/models/ReceiverDspLoadSampler.cpp
     src/models/Band.cpp
     src/models/BandDefaults.cpp
     src/models/BandPlanManager.cpp

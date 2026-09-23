@@ -16,7 +16,9 @@
 //   2026-09-23 - Receive input delay bound (processStampedIqBatch,
 //                 inputDelayStats, R-R3-40) by J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
-//                 NereusSDR-original; no Thetis counterpart.
+//                 NereusSDR-original; no Thetis counterpart. Later the same
+//                 day: the external-diversity legs are stamped and bounded
+//                 too (processStampedExternalDiversityIqBatch).
 // =================================================================
 
 //=================================================================
@@ -205,6 +207,8 @@ void RxDspWorker::setExternalDiversityRoute(
         m_externalDiversityRoute = {};
         return;
     }
+    m_externalDiversityStatsSlice.store(route.targetSliceId,
+                                        std::memory_order_relaxed);
 
 #ifdef NEREUS_BUILD_TESTS
     if (m_externalDiversityRouteHookForTest) {
@@ -225,6 +229,13 @@ void RxDspWorker::clearExternalDiversityRoute()
     m_externalDiversityRoute = {};
     m_externalDiversityChunkSize = 0;
     m_externalDiversityMaxQueuedSamples = 0;
+    m_externalDiversityStatsSlice.store(-1, std::memory_order_relaxed);
+    // A new route starts aligned; an episode in progress ends with the
+    // route (its log line is not written: nothing resumed).
+    m_externalDiversityInputDelay.skipping = false;
+    m_externalDiversityInputDelay.episodeSkippedUs = 0;
+    m_externalDiversityEpisodeAdvance[0] = m_externalDiversityEpisodeAdvance[1] = 0;
+    m_externalDiversityDropPending[0] = m_externalDiversityDropPending[1] = 0;
 
 #ifdef NEREUS_BUILD_TESTS
     if (oldRoute.active() && m_externalDiversityRouteHookForTest) {
@@ -242,11 +253,17 @@ bool RxDspWorker::isExternalDiversityTarget(int sliceId) const noexcept
 }
 
 void RxDspWorker::appendExternalDiversitySamples(
-    StreamAccum& destination, const QVector<float>& interleavedIQ)
+    StreamAccum& destination, const QVector<float>& interleavedIQ,
+    int skipLeading)
 {
-    const int samples = interleavedIQ.size() / 2;
-    if (samples <= 0 || samples > kMaxSaneSamplesPerBatch
+    const int batchSamples = interleavedIQ.size() / 2;
+    if (batchSamples <= 0 || batchSamples > kMaxSaneSamplesPerBatch
         || m_externalDiversityMaxQueuedSamples <= 0) {
+        return;
+    }
+    const int first = qBound(0, skipLeading, batchSamples);
+    const int samples = batchSamples - first;
+    if (samples <= 0) {
         return;
     }
 
@@ -260,7 +277,7 @@ void RxDspWorker::appendExternalDiversitySamples(
         destination.q.remove(0, drop);
     }
 
-    for (int sample = 0; sample < samples; ++sample) {
+    for (int sample = first; sample < batchSamples; ++sample) {
         destination.i.append(interleavedIQ[2 * sample]);
         destination.q.append(interleavedIQ[2 * sample + 1]);
     }
@@ -283,6 +300,95 @@ void RxDspWorker::processExternalDiversityIqBatch(
         return;
     }
 
+    drainExternalDiversity();
+}
+
+// R-R3-40. Runs on the DSP thread. Per batch: one clock read and one relaxed
+// atomic store, as on the ordinary stream path; the only log line is written
+// once per episode, when it ends.
+// The primary leg's lost input is the route's skipped input. The episode
+// total is kept in samples and converted as a whole, so rounding each batch
+// never loses time.
+void RxDspWorker::countDiversityPrimaryLoss(qint64 drainSize, qint64 samples)
+{
+    InputDelayState& state = m_externalDiversityInputDelay;
+    const qint64 beforeUs =
+        spanUsForDrainSize(drainSize, m_externalDiversityEpisodeAdvance[0]);
+    m_externalDiversityEpisodeAdvance[0] += samples;
+    const qint64 afterUs =
+        spanUsForDrainSize(drainSize, m_externalDiversityEpisodeAdvance[0]);
+    state.episodeSkippedUs = afterUs;
+    state.droppedUs.fetch_add(afterUs - beforeUs, std::memory_order_relaxed);
+}
+
+void RxDspWorker::processStampedExternalDiversityIqBatch(
+    int sourceStream, const QVector<float>& interleavedIQ, qint64 enqueuedNs)
+{
+    if (!m_externalDiversityRoute.active()) {
+        return;
+    }
+    int leg = -1;
+    if (sourceStream == m_externalDiversityRoute.primaryStream) {
+        leg = 0;
+    } else if (sourceStream == m_externalDiversityRoute.secondaryStream) {
+        leg = 1;
+    } else {
+        return;
+    }
+    StreamAccum& primary = m_externalDiversityPrimary;
+    StreamAccum& secondary = m_externalDiversitySecondary;
+
+    InputDelayState& state = m_externalDiversityInputDelay;
+    const qint64 delayUs =
+        std::max<qint64>(0, (ReceiverManager::enqueueClockNs() - enqueuedNs) / 1000);
+    state.delayUs.store(delayUs, std::memory_order_relaxed);
+
+    const qint64 drainSize = m_externalDiversityChunkSize;
+    if (!state.skipping && delayUs > kDspInputDelayLimitMs * 1000) {
+        // Episode start: the queued samples of both legs are older than this
+        // batch and go with the skipped input. The legs' heads were aligned,
+        // so each leg's input position now moves on by what it lost.
+        state.skipping = true;
+        state.episodeSkippedUs = 0;
+        m_externalDiversityEpisodeAdvance[0] = 0;
+        m_externalDiversityEpisodeAdvance[1] = secondary.i.size();
+        m_externalDiversityDropPending[0] = m_externalDiversityDropPending[1] = 0;
+        countDiversityPrimaryLoss(drainSize, primary.i.size());
+        primary.i.clear();
+        primary.q.clear();
+        secondary.i.clear();
+        secondary.q.clear();
+    }
+
+    const qint64 batchSamples = interleavedIQ.size() / 2;
+    if (state.skipping) {
+        if (delayUs >= kDspInputDelayResumeMs * 1000) {
+            if (leg == 0) {
+                countDiversityPrimaryLoss(drainSize, batchSamples);
+            } else {
+                m_externalDiversityEpisodeAdvance[1] += batchSamples;
+            }
+            return;
+        }
+        // Resume: the leg that lost less input is behind the other by the
+        // difference; it drops that many leading samples from what arrives
+        // next, so both accumulators start at the same input position.
+        state.skipping = false;
+        const qint64 lead =
+            m_externalDiversityEpisodeAdvance[0] - m_externalDiversityEpisodeAdvance[1];
+        m_externalDiversityDropPending[0] = lead < 0 ? -lead : 0;
+        m_externalDiversityDropPending[1] = lead > 0 ? lead : 0;
+        qCWarning(lcDsp).noquote()
+            << QStringLiteral("Receive processing fell behind; skipped %1 ms "
+                              "of input to catch up.")
+                   .arg(state.episodeSkippedUs / 1000);
+        state.episodeSkippedUs = 0;
+    }
+
+    const qint64 drop = std::min(m_externalDiversityDropPending[leg], batchSamples);
+    m_externalDiversityDropPending[leg] -= drop;
+    appendExternalDiversitySamples(leg == 0 ? primary : secondary, interleavedIQ,
+                                   static_cast<int>(drop));
     drainExternalDiversity();
 }
 
@@ -492,18 +598,43 @@ RxDspWorker::InputDelayStats RxDspWorker::inputDelayStats(int receiverIndex) con
     return stats;
 }
 
-qint64 RxDspWorker::inputSpanUs(int receiverIndex, qint64 samples) const
+RxDspWorker::InputDelayStats RxDspWorker::externalDiversityInputDelayStats() const
 {
-    const auto sizeIt = m_streamInSize.find(receiverIndex);
-    const qint64 inSize = (sizeIt != m_streamInSize.end() && sizeIt->second > 0)
-                              ? sizeIt->second
-                              : m_inSize.load(std::memory_order_relaxed);
+    InputDelayStats stats;
+    stats.inputDelayMs =
+        m_externalDiversityInputDelay.delayUs.load(std::memory_order_relaxed) / 1000;
+    stats.droppedInputMs =
+        m_externalDiversityInputDelay.droppedUs.load(std::memory_order_relaxed) / 1000;
+    return stats;
+}
+
+RxDspWorker::InputDelayStats RxDspWorker::inputDelayStatsForSlice(int sliceId,
+                                                                  int streamIndex) const
+{
+    if (sliceId >= 0
+        && m_externalDiversityStatsSlice.load(std::memory_order_relaxed) == sliceId) {
+        return externalDiversityInputDelayStats();
+    }
+    return streamIndex >= 0 ? inputDelayStats(streamIndex) : InputDelayStats{};
+}
+
+qint64 RxDspWorker::spanUsForDrainSize(qint64 inSize, qint64 samples)
+{
     if (inSize <= 0 || samples <= 0) {
         return 0;
     }
     // rate = inSize * 48000 / 64, inverting the drain-size rule documented
     // on setStreamInputChunk; span = samples / rate.
     return samples * 64 * 1000000 / (inSize * 48000);
+}
+
+qint64 RxDspWorker::inputSpanUs(int receiverIndex, qint64 samples) const
+{
+    const auto sizeIt = m_streamInSize.find(receiverIndex);
+    const qint64 inSize = (sizeIt != m_streamInSize.end() && sizeIt->second > 0)
+                              ? sizeIt->second
+                              : m_inSize.load(std::memory_order_relaxed);
+    return spanUsForDrainSize(inSize, samples);
 }
 
 // R-R3-40. Runs on the DSP thread. Per batch this adds one clock read and one

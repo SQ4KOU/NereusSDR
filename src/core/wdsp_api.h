@@ -174,6 +174,12 @@
 //                 from third_party/wdsp/src/dsplock.c; no Thetis
 //                 counterpart. AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-23  WdspChannelLoad::currentBlockNs and
+//                 TakeChannelDspIntervalMaxBlockUs declarations added by
+//                 J.J. Boyd (KG4VCF) for the per-receiver load sampler
+//                 (R-R3-40). NereusSDR-original reader exported from
+//                 third_party/wdsp/src/dsplock.c; no Thetis counterpart.
+//                 AI-assisted implementation via Anthropic Claude Code.
 //   2026-09-23  WDSPSetTestProcessDelayUs declaration added by J.J. Boyd
 //                 (KG4VCF) for the R3 channel shutdown test (R-R3-39).
 //                 NereusSDR-original test seam exported from
@@ -350,7 +356,8 @@ int WDSPGetTestWorkerExitCount(int channel);
 // read without the channel's DSP lock (it never waits for the worker). Same
 // layout as WdspChannelLoad in third_party/wdsp/src/dsplock.h. Every field
 // only grows except blockPeriodUs, the block period (dsp_size / dsp_rate) of
-// the worker's latest block, 0 before its first block. Returns 0 on success,
+// the worker's latest or current block, 0 before its first block, and
+// currentBlockNs, how long the block in progress has run (0 between blocks). Returns 0 on success,
 // -1 for an invalid channel or a null out. The guard lets a file include
 // both this header and dsplock.h.
 #ifndef NEREUS_WDSP_CHANNEL_LOAD_DEFINED
@@ -361,10 +368,17 @@ typedef struct {
     long long lateBlocks;   // blocks longer than their block period
     long long maxBlockUs;   // longest single block
     int       blockPeriodUs;
+    long long currentBlockNs; // block in progress so far; 0 between blocks
 } WdspChannelLoad;
 #endif
 
 int GetChannelDspLoad(int channel, WdspChannelLoad* out);
+
+// NereusSDR dsplock.c: the longest block (microseconds) the channel's worker
+// completed since the previous call, which starts the next interval (0 if
+// none completed; -1 for an invalid channel). One periodic reader owns it:
+// RadioModel's load sampler. Never waits for the worker.
+long long TakeChannelDspIntervalMaxBlockUs(int channel);
 
 // ---------------------------------------------------------------------------
 // In-place filter-size / filter-type reconfigure (RXA.c / TXA.c)

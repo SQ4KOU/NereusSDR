@@ -628,6 +628,16 @@ RadioModel::RadioModel(Role role, QObject* parent)
     if (m_role == Role::Local) {
         m_sliceMeterPump = new SliceMeterPump(this, this);
         m_sliceMeterPump->start();
+
+        // R-R3-40: one periodic sampler owns each receiver's load interval;
+        // readers get its cached snapshot. Same pre-connect tolerance as the
+        // meter pump above: with no slices or channels a tick records
+        // nothing.
+        m_dspLoadTimer = new QTimer(this);
+        m_dspLoadTimer->setInterval(ReceiverDspLoadSampler::kSampleIntervalMs);
+        connect(m_dspLoadTimer, &QTimer::timeout,
+                this, &RadioModel::sampleReceiverDspLoad);
+        m_dspLoadTimer->start();
     }
 
     // Phase 3O: give AudioEngine a non-owning back-pointer to this model
@@ -5794,43 +5804,46 @@ SliceModel* RadioModel::sliceById(int sliceId) const
     return nullptr;
 }
 
-std::optional<ReceiverDspLoad> RadioModel::receiverDspLoad(int sliceId)
+std::optional<ReceiverDspLoad> RadioModel::receiverDspLoad(int sliceId) const
 {
-    SliceModel* slice = sliceById(sliceId);
-    RxChannel* channel = (slice && m_wdspEngine)
-                             ? m_wdspEngine->rxChannel(sliceId)
-                             : nullptr;
-    RxChannel::DspLoadCounters now;
-    if (channel == nullptr || !channel->dspLoad(now)) {
-        return std::nullopt;
-    }
+    return m_dspLoadSampler.snapshot(sliceId);
+}
 
-    DspLoadBaseline& previous = m_dspLoadBaseline[sliceId];
-    // The counters only grow for one channel id; a smaller value means the
-    // baseline belongs to something else, so measure from zero.
-    if (now.blocks < previous.blocks || now.busyNs < previous.busyNs
-        || now.lateBlocks < previous.lateBlocks) {
-        previous = DspLoadBaseline{};
+// R-R3-40. Main thread, every ReceiverDspLoadSampler::kSampleIntervalMs.
+// Reads atomics only (RxChannel::dspLoad, takeDspIntervalMaxBlockUs,
+// RxDspWorker::inputDelayStats); never waits for the DSP worker or thread.
+void RadioModel::sampleReceiverDspLoad()
+{
+    QHash<int, ReceiverDspLoadSampler::Reading> readings;
+    if (m_wdspEngine) {
+        for (SliceModel* slice : m_slices) {
+            if (slice == nullptr) {
+                continue;
+            }
+            const int sliceId = slice->sliceIndex();
+            RxChannel* channel = m_wdspEngine->rxChannel(sliceId);
+            RxChannel::DspLoadCounters counters;
+            if (channel == nullptr || !channel->dspLoad(counters)) {
+                continue;
+            }
+            ReceiverDspLoadSampler::Reading reading;
+            reading.blocks             = counters.blocks;
+            reading.busyNs             = counters.busyNs;
+            reading.lateBlocks         = counters.lateBlocks;
+            reading.lifetimeMaxBlockUs = counters.maxBlockUs;
+            reading.blockPeriodUs      = counters.blockPeriodUs;
+            reading.currentBlockNs     = counters.currentBlockNs;
+            reading.intervalMaxBlockUs = channel->takeDspIntervalMaxBlockUs();
+            if (m_dspWorker) {
+                const RxDspWorker::InputDelayStats input =
+                    m_dspWorker->inputDelayStatsForSlice(sliceId, slice->streamIndex());
+                reading.inputDelayMs   = input.inputDelayMs;
+                reading.droppedInputMs = input.droppedInputMs;
+            }
+            readings.insert(sliceId, reading);
+        }
     }
-
-    ReceiverDspLoad out;
-    const qint64 blocks = now.blocks - previous.blocks;
-    if (blocks > 0 && now.blockPeriodUs > 0) {
-        const double meanBlockNs =
-            static_cast<double>(now.busyNs - previous.busyNs) / blocks;
-        out.load = meanBlockNs / (1000.0 * now.blockPeriodUs);
-    }
-    out.lateBlocks = now.lateBlocks - previous.lateBlocks;
-    out.maxBlockUs = now.maxBlockUs;
-    previous = DspLoadBaseline{now.blocks, now.busyNs, now.lateBlocks};
-
-    if (m_dspWorker && slice->streamIndex() >= 0) {
-        const RxDspWorker::InputDelayStats input =
-            m_dspWorker->inputDelayStats(slice->streamIndex());
-        out.inputDelayMs   = input.inputDelayMs;
-        out.droppedInputMs = input.droppedInputMs;
-    }
-    return out;
+    m_dspLoadSampler.update(readings);
 }
 
 bool RadioModel::requestTxHandoffToSlice(int sliceId)
@@ -10350,10 +10363,13 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
     // External diversity needs both physical DDC legs. ReceiverManager maps
     // only the designated primary onto a logical user stream; the synchronized
     // partner deliberately has no logical receiver. Fork the raw hardware-DDC
-    // signal directly to the worker once, while leaving ReceiverManager's
-    // ordinary fan-out above unchanged for every co-hosted slice.
-    connect(m_connection, &RadioConnection::iqDataReceived,
-            m_dspWorker, &RxDspWorker::processExternalDiversityIqBatch,
+    // batch to the worker once, while leaving ReceiverManager's ordinary
+    // fan-out above unchanged for every co-hosted slice. R-R3-40: the fork is
+    // ReceiverManager's stamped copy of every hardware batch (feedIqData runs
+    // for each RadioConnection::iqDataReceived through the DirectConnection
+    // above), so the diversity input is bounded like any receiver's.
+    connect(m_receiverManager, &ReceiverManager::hardwareIqDataStamped,
+            m_dspWorker, &RxDspWorker::processStampedExternalDiversityIqBatch,
             Qt::QueuedConnection);
     m_dspThread->start();
 
