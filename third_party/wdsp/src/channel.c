@@ -27,7 +27,9 @@ warren@wpratt.com
 // NereusSDR modifications (2026-09-23, J.J. Boyd KG4VCF, with Anthropic
 // Claude Code): pre_main_destroy waits for the channel's worker to leave its
 // loop (dsplock.c WdspWaitWorkerExit) instead of sleeping a fixed 25 ms, so
-// no buffer is freed while a slow block is still running. Source DSP flow and
+// no buffer is freed while a slow block is still running. It clears run and
+// sets exec_bypass while holding csDSP, so a block already under way finishes
+// normally instead of ending its worker inside dexchange. Source DSP flow and
 // all upstream attribution are retained.
 
 #include "comm.h"
@@ -110,8 +112,13 @@ void pre_main_destroy (int channel)
 {
 	IOB a = ch[channel].iob.pc;
 	InterlockedBitTestAndReset (&ch[channel].exchange, 0);
+	// NereusSDR: clear run and set exec_bypass under csDSP, so a worker block
+	// that already passed its exec_bypass check finishes with run still set
+	// and never leaves through dexchange's _endthread holding csDSP.
+	EnterCriticalSection (&ch[channel].csDSP);
 	InterlockedBitTestAndReset (&ch[channel].run, 0);
 	InterlockedBitTestAndSet (&ch[channel].iob.pc->exec_bypass, 0);
+	LeaveCriticalSection (&ch[channel].csDSP);
 	ReleaseSemaphore (a->Sem_BuffReady, 1, 0);
 	WdspWaitWorkerExit (channel);
 }

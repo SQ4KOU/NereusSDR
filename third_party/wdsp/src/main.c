@@ -29,8 +29,9 @@ warren@wpratt.com
 // dsplock.c (WdspWorkerEnter/WdspWorkerLeave) so waiting control calls get a
 // bounded turn. After its loop ends the worker signals channel teardown
 // through dsplock.c (WdspWorkerExited), so pre_main_destroy frees nothing
-// while a block is still running. Source DSP flow and all upstream
-// attribution are retained.
+// while a block is still running. A processed block starts with dsplock.c's
+// test-only process delay (WdspWorkerTestProcessDelay; off by default).
+// Source DSP flow and all upstream attribution are retained.
 
 #include "comm.h"
 
@@ -48,6 +49,7 @@ void wdspmain (void *pargs)
 		WdspWorkerEnter (channel);
 		if (!_InterlockedAnd (&ch[channel].iob.pd->exec_bypass, 1))
 		{
+			WdspWorkerTestProcessDelay (channel);
 			switch (ch[channel].type)
 			{
 			case 0:		// rxa

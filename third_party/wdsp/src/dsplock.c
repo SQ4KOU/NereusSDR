@@ -84,6 +84,10 @@ boydsoftprez@gmail.com
 //   2026-09-23 - Per-channel block timing and GetChannelDspLoad added by
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code (R-R3-40).
+//   2026-09-23 - Test-only process delay (WdspWorkerTestProcessDelay,
+//                 WDSPSetTestProcessDelayUs) added by J.J. Boyd (KG4VCF),
+//                 with AI-assisted implementation via Anthropic Claude Code
+//                 (R-R3-39).
 // =================================================================
 
 #include "comm.h"
@@ -112,6 +116,8 @@ static volatile long dsp_waiters[MAX_CHANNELS];
 
 // Test-only per-block busy-wait, microseconds; 0 = off.
 static volatile long test_block_delay_us[MAX_CHANNELS];
+// Test-only busy-wait inside a processed block, microseconds; 0 = off.
+static volatile long test_process_delay_us[MAX_CHANNELS];
 
 // Times each channel's worker has left its loop.
 static volatile long worker_exits[MAX_CHANNELS];
@@ -299,9 +305,17 @@ static void worker_defer (int channel)
 	}
 }
 
-static void test_block_delay (int channel)
+static long load_test_process_delay (int channel)
 {
-	const long delay = load_test_block_delay (channel);
+#ifdef _WIN32
+	return test_process_delay_us[channel];
+#else
+	return __atomic_load_n (&test_process_delay_us[channel], __ATOMIC_RELAXED);
+#endif
+}
+
+static void test_busy_wait_us (long delay)
+{
 	if (delay > 0)
 	{
 		const int64_t until = dsplock_now_us () + delay;
@@ -309,6 +323,19 @@ static void test_block_delay (int channel)
 		{
 			// busy-wait: simulates DSP work while holding csDSP
 		}
+	}
+}
+
+static void test_block_delay (int channel)
+{
+	test_busy_wait_us (load_test_block_delay (channel));
+}
+
+void WdspWorkerTestProcessDelay (int channel)
+{
+	if (valid_channel (channel))
+	{
+		test_busy_wait_us (load_test_process_delay (channel));
 	}
 }
 
@@ -420,6 +447,16 @@ void WDSPSetTestBlockDelayUs (int channel, int microseconds)
 		return;
 	}
 	InterlockedExchange (&test_block_delay_us[channel], microseconds > 0 ? (long)microseconds : 0L);
+}
+
+PORT
+void WDSPSetTestProcessDelayUs (int channel, int microseconds)
+{
+	if (!valid_channel (channel))
+	{
+		return;
+	}
+	InterlockedExchange (&test_process_delay_us[channel], microseconds > 0 ? (long)microseconds : 0L);
 }
 
 PORT

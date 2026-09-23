@@ -58,6 +58,10 @@ boydsoftprez@gmail.com
 //   2026-09-23 - Per-channel block timing and GetChannelDspLoad added by
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code (R-R3-40).
+//   2026-09-23 - Test-only process delay (WdspWorkerTestProcessDelay,
+//                 WDSPSetTestProcessDelayUs) added by J.J. Boyd (KG4VCF),
+//                 with AI-assisted implementation via Anthropic Claude Code
+//                 (R-R3-39).
 // =================================================================
 
 #ifndef _dsplock_h
@@ -74,6 +78,11 @@ void WdspWorkerLeave (int channel);
 
 // The channel worker calls this once, after its loop ends (main.c).
 void WdspWorkerExited (int channel);
+
+// The channel worker calls this at the start of a block it processes, after
+// its exec_bypass check (main.c). It runs the test-only process delay set by
+// WDSPSetTestProcessDelayUs and otherwise returns after one relaxed load.
+void WdspWorkerTestProcessDelay (int channel);
 
 // Channel teardown (pre_main_destroy): returns once the channel's worker has
 // left its loop. Never gives up while the worker is still inside a block;
@@ -112,6 +121,13 @@ PORT int GetChannelDspLoad (int channel, WdspChannelLoad* out);
 // (off); when off the worker pays one relaxed load per block. Not for
 // production use.
 PORT void WDSPSetTestBlockDelayUs (int channel, int microseconds);
+
+// Test-only: like WDSPSetTestBlockDelayUs, but the busy-wait runs inside a
+// block the worker processes, after its exec_bypass check and before
+// dexchange, so a teardown that lands during the delay meets real DSP work.
+// Default 0 (off); when off the worker pays one relaxed load per processed
+// block. Not for production use.
+PORT void WDSPSetTestProcessDelayUs (int channel, int microseconds);
 
 // Test-only: how many times this channel's worker has left its loop in this
 // process. Not for production use.
