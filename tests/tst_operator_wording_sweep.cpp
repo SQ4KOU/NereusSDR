@@ -19,6 +19,8 @@
 #include <QRegularExpression>
 
 #include "OperatorWording.h"
+#include "PanStatusSamples.h"
+#include "core/dsp/NnrSettings.h"
 #include "core/session/media/SpectrumEndpoint.h"
 #include "gui/OperatorReasonText.h"
 #include "gui/RemoteAudioStatus.h"
@@ -303,6 +305,56 @@ private slots:
         for (const QString& text : closed) {
             QVERIFY2(OperatorWording::isPlain(text), qPrintable(text));
         }
+    }
+
+    // Lane B carry (R-R3-40, R-R3-08, R-R3-37): the NNR step-back wording
+    // from the DSP overload batch and the Core-busy pan wording read in user
+    // words, and a Core reason about NNR passes OperatorReasonText unchanged.
+    void nnrStepBackAndCoreBusyWordingArePlain()
+    {
+        for (NnrLimitSite site : {NnrLimitSite::ThisComputer, NnrLimitSite::CoreComputer}) {
+            for (NnrLimit limit : {NnrLimit::StandardOnly, NnrLimit::Off}) {
+                const QString text = nnrLimitExplanation(static_cast<int>(limit), site);
+                QVERIFY2(OperatorWording::isPlain(text), qPrintable(text));
+                QCOMPARE(OperatorReasonText::forDisplay(text), text);
+            }
+        }
+        QVERIFY(nnrLimitExplanation(static_cast<int>(NnrLimit::Off), NnrLimitSite::CoreComputer)
+                    .contains(QStringLiteral("The Core computer could not keep up")));
+
+        // The limit as the NNR panel and its "Try again" row show it.
+        SliceModel slice(0);
+        slice.setNnrLimit(static_cast<int>(NnrLimit::StandardOnly));
+        NnrControls full(nullptr, &slice, NnrControls::Presentation::Full);
+        const QStringList shown = shownText(full);
+        QVERIFY2(shown.contains(nnrLimitExplanation(static_cast<int>(NnrLimit::StandardOnly))),
+                 qPrintable(shown.join(QLatin1Char('|'))));
+        for (const QString& text : shown) {
+            QVERIFY2(OperatorWording::isPlain(text), qPrintable(text));
+        }
+
+        // This app's own refusal of "Try again" on an older Core.
+        const QString retry = QStringLiteral("This station cannot try noise reduction again. "
+                                             "Update the station software.");
+        QVERIFY(OperatorWording::isPlain(retry));
+        QVERIFY(OperatorWording::isPlain(OperatorReasonText::forDisplay(retry)));
+
+        // Every Core-busy pan form and explanation.
+        int busy = 0;
+        for (const PanDisplayState& state : PanStatusSamples::all()) {
+            if (state.budgetReason != DisplayBudgetReason::CoreBusy) {
+                continue;
+            }
+            ++busy;
+            const PanStatusText text = buildPanStatusText(state);
+            QVERIFY(text.shortLine.contains(QStringLiteral("Core busy")));
+            QVERIFY(text.explanation.contains(QStringLiteral("Core computer is busy")));
+            for (const QString& form : text.shortForms()) {
+                QVERIFY2(OperatorWording::isPlain(form), qPrintable(form));
+            }
+            QVERIFY2(OperatorWording::isPlain(text.explanation), qPrintable(text.explanation));
+        }
+        QCOMPARE(busy, 4);
     }
 
     // Fix wave M1: every tr() literal in the windows the R3 wording work

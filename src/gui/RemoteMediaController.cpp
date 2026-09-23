@@ -427,6 +427,9 @@ struct RemoteMediaController::Private {
         bool retiring = false;
         bool suspending = false;
         bool receivedNoiseFloor = false;
+        /// R-R3-37: when this pan began waiting for an accepted display
+        /// (allocationClock), or -1 while it has one. See kPanWaitingGraceMs.
+        qint64 waitingSinceMs = -1;
         QString refusedIdentity;
         QString refusalReason;
         QList<qint64> receivedFrameTimesMs;
@@ -1877,6 +1880,12 @@ void RemoteMediaController::refreshBudgetSubscriptions()
             return refusedState(binding.refusalReason.left(384));
         }
         if (binding.acceptedRevision == 0 || binding.acceptedRequest.isEmpty()) {
+            // R-R3-37: no "Waiting for the Core" flash while the Core
+            // answers within the grace, as it does at session start.
+            if (binding.waitingSinceMs >= 0
+                && now - binding.waitingSinceMs < kPanWaitingGraceMs) {
+                return phaseState(PanDisplayState::Phase::None);
+            }
             return phaseState(PanDisplayState::Phase::Waiting);
         }
         PanDisplayState status = phaseState(PanDisplayState::Phase::Showing);
@@ -1999,6 +2008,11 @@ void RemoteMediaController::refreshBudgetSubscriptions()
         if (!binding.refusedIdentity.isEmpty() && binding.refusedIdentity != identity) {
             binding.refusedIdentity.clear();
             binding.refusalReason.clear();
+        }
+        if (binding.acceptedRevision == 0 || binding.acceptedRequest.isEmpty()) {
+            if (binding.waitingSinceMs < 0) { binding.waitingSinceMs = now; }
+        } else {
+            binding.waitingSinceMs = -1;
         }
         PanDisplayState status = statusFor(binding, item);
         status.budgetReason = status.reduced() ? budgetReason : DisplayBudgetReason::None;

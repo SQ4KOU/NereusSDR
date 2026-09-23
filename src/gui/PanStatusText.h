@@ -18,6 +18,11 @@
 //                                    length, so a pan paints the longest
 //                                    that fits (R-R3-37). AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  Lane B carry: the Core's budget reason
+//                                    words a cut: "Core busy" when the Core
+//                                    computer is busy, "Core limit" for its
+//                                    display limit (R-R3-08, R-R3-37).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 #pragma once
 

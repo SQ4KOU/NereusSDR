@@ -1911,15 +1911,25 @@ private slots:
         sinkMedia->activate();
         QTRY_COMPARE(countControl(outbound, QStringLiteral("subscribe")), 1);
         QTRY_COMPARE(stationLink->held.size(), 1);
-        QCOMPARE(controller.panDisplayState(applet->panId()).phase,
-                 PanDisplayState::Phase::Waiting);
-        QCOMPARE(applet->remoteDisplayStatus(), QStringLiteral("Waiting for the Core"));
-
         QTimer* subscriptionTimer = nullptr;
         for (QTimer* timer : controller.findChildren<QTimer*>()) {
             if (timer->interval() == 100) { subscriptionTimer = timer; break; }
         }
         QVERIFY(subscriptionTimer);
+        // Lane B carry: inside the grace the pan says nothing yet.
+        QCOMPARE(controller.panDisplayState(applet->panId()).phase,
+                 PanDisplayState::Phase::None);
+        QVERIFY(applet->remoteDisplayStatus().isEmpty());
+        nowMs = RemoteMediaController::kPanWaitingGraceMs - 1;
+        QVERIFY(QMetaObject::invokeMethod(subscriptionTimer, "timeout", Qt::DirectConnection));
+        QVERIFY(applet->remoteDisplayStatus().isEmpty());
+        // A wait past the grace says so.
+        nowMs = RemoteMediaController::kPanWaitingGraceMs;
+        QVERIFY(QMetaObject::invokeMethod(subscriptionTimer, "timeout", Qt::DirectConnection));
+        QCOMPARE(controller.panDisplayState(applet->panId()).phase,
+                 PanDisplayState::Phase::Waiting);
+        QCOMPARE(applet->remoteDisplayStatus(), QStringLiteral("Waiting for the Core"));
+
         nowMs = 10'000;
         QVERIFY(QMetaObject::invokeMethod(subscriptionTimer, "timeout", Qt::DirectConnection));
         QCOMPARE(countControl(outbound, QStringLiteral("subscribe")), 1);
@@ -1934,6 +1944,87 @@ private slots:
                     && applet->remoteDisplayStatus().isEmpty());
         QCOMPARE(countControl(outbound, QStringLiteral("subscribe")), 1);
         QCOMPARE(controller.activeEndpointCount(), 1);
+    }
+
+    // Lane B carry (R-R3-37): at session start in budget mode, a Core that
+    // answers within kPanWaitingGraceMs never makes the pan say "Waiting
+    // for the Core"; the pan goes straight to its display, with no line.
+    void budgetModeAnsweredWithinGraceNeverSaysWaiting()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        const int sliceId = station.addSlice();
+        QVERIFY(station.sliceById(sliceId));
+        StationServer server(&station, settings, dir.path());
+        server.setMediaEnabled(true);
+        QVERIFY(server.setDisplayBudgetLimits({10'000'000, 10'000'000, 1}));
+        QPointer<DisplayTransport> sourceMedia;
+        DaemonMediaController daemon(&server, &station, nullptr,
+            [&sourceMedia](QObject* owner) -> IMediaTransport* {
+                sourceMedia = new DisplayTransport(owner);
+                return sourceMedia;
+            });
+
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        PanadapterStack stack;
+        PanadapterApplet* applet = stack.addPanadapter(QStringLiteral("pan-0"));
+        applet->setActiveSliceIndex(sliceId);
+        applet->spectrumWidget()->setDisplayWindowPreservingHistory(
+            station.streamCentreHz(station.sliceById(sliceId)->streamIndex()), 48000);
+        qint64 nowMs = 0;
+        QPointer<DisplayTransport> sinkMedia;
+        RemoteMediaController controller(&client, &remote, &stack, nullptr,
+            [&sinkMedia](QObject* owner) -> IMediaTransport* {
+                sinkMedia = new DisplayTransport(owner);
+                return sinkMedia;
+            }, [&nowMs] { return nowMs; }, 10'000);
+        QSignalSpy outbound(&server, &StationServer::mediaControlReceived);
+        auto* stationLink = new HoldingAllocationResultTransport;
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(client.remoteDisplayBudgetLimits().has_value());
+        QTRY_VERIFY(sourceMedia && sinkMedia);
+        sourceMedia->activate();
+        sinkMedia->activate();
+        QTRY_COMPARE(countControl(outbound, QStringLiteral("subscribe")), 1);
+        QTRY_COMPARE(stationLink->held.size(), 1);
+
+        QTimer* subscriptionTimer = nullptr;
+        for (QTimer* timer : controller.findChildren<QTimer*>()) {
+            if (timer->interval() == 100) { subscriptionTimer = timer; break; }
+        }
+        QVERIFY(subscriptionTimer);
+        const auto tickAt = [&](qint64 ms) {
+            nowMs = ms;
+            QVERIFY(QMetaObject::invokeMethod(subscriptionTimer, "timeout",
+                                              Qt::DirectConnection));
+            QVERIFY2(controller.panDisplayState(applet->panId()).phase
+                         != PanDisplayState::Phase::Waiting,
+                     qPrintable(QString::number(ms)));
+            QVERIFY2(applet->remoteDisplayStatus().isEmpty(),
+                     qPrintable(applet->remoteDisplayStatus()));
+        };
+        tickAt(0);
+        tickAt(RemoteMediaController::kPanWaitingGraceMs / 2);
+        tickAt(RemoteMediaController::kPanWaitingGraceMs - 1);
+
+        // The Core answers inside the grace: the display shows, no line, and
+        // later ticks never bring "Waiting" back.
+        stationLink->releaseHeld();
+        QTRY_VERIFY(showsDisplay(controller, applet));
+        QVERIFY(applet->remoteDisplayStatus().isEmpty());
+        tickAt(RemoteMediaController::kPanWaitingGraceMs);
+        tickAt(RemoteMediaController::kPanWaitingGraceMs * 3);
+        QVERIFY(showsDisplay(controller, applet));
     }
 
     void budgetFocusSwapReducesBeforeGrowthAndRestoresOnRecovery()
@@ -2025,6 +2116,24 @@ private slots:
             }
             return true;
         }());
+        // Lane B carry (R-R3-08, R-R3-37): a cut for the Core's display
+        // limit, with no busy reason from the Core, keeps the limit wording.
+        int reducedPans = 0;
+        for (PanadapterApplet* applet : stack.allApplets()) {
+            const PanDisplayState state = controller.panDisplayState(applet->panId());
+            QCOMPARE(state.budgetReason, DisplayBudgetReason::None);
+            QCOMPARE(controller.panDisplayBudgetReason(applet->panId()),
+                     DisplayBudgetReason::None);
+            if (!state.reduced()) {
+                QVERIFY(applet->remoteDisplayStatus().isEmpty());
+                continue;
+            }
+            ++reducedPans;
+            QVERIFY2(applet->remoteDisplayStatus().endsWith(QStringLiteral(": Core limit")),
+                     qPrintable(applet->remoteDisplayStatus()));
+            QVERIFY(!applet->remoteDisplayExplanation().contains(QStringLiteral("busy")));
+        }
+        QVERIFY(reducedPans > 0);
 
         const QList<QJsonObject> initial = controlsFor(outbound, QStringLiteral("subscribe"));
         const auto activeInitial = std::find_if(initial.cbegin(), initial.cend(),

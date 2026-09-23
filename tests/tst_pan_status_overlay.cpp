@@ -173,7 +173,7 @@ private slots:
         paused.phase = PanDisplayState::Phase::Paused;
         const PanStatusText text = buildPanStatusText(paused);
         pan.setRemoteDisplayStatus(text);
-        QCOMPARE(pan.remoteDisplayStatus(), QStringLiteral("Paused: Core busy"));
+        QCOMPARE(pan.remoteDisplayStatus(), QStringLiteral("Paused: Core limit"));
         QCOMPARE(pan.remoteDisplayExplanation(), text.explanation);
         auto* overlay = pan.findChild<SpectrumStatusOverlay*>();
         QVERIFY(overlay);

@@ -58,16 +58,60 @@ private slots:
                                 "the extended view."));
     }
 
+    // A cut for the Core's display limit (no reason from the Core) keeps
+    // the display-limit wording.
     void reducedQualitySaysWhatWhyAndNext()
     {
         const PanStatusText lessDetail = buildPanStatusText(showing(512, 15, 1024, 30));
-        QCOMPARE(lessDetail.shortLine, QStringLiteral("Less detail: Core busy"));
+        QCOMPARE(lessDetail.shortLine, QStringLiteral("Less detail: Core limit"));
         QVERIFY(lessDetail.explanation.contains(QStringLiteral("512 points across, 15 updates")));
         QVERIFY(lessDetail.explanation.contains(QStringLiteral("1024 points and 30 updates")));
         QVERIFY(lessDetail.explanation.contains(QStringLiteral("comes back by itself")));
+        QVERIFY(lessDetail.explanation.contains(QStringLiteral("limit on how much display")));
+        QVERIFY(!lessDetail.explanation.contains(QStringLiteral("busy")));
 
         const PanStatusText slower = buildPanStatusText(showing(1024, 15, 1024, 30));
-        QCOMPARE(slower.shortLine, QStringLiteral("Slower: Core busy"));
+        QCOMPARE(slower.shortLine, QStringLiteral("Slower: Core limit"));
+        QVERIFY(!slower.explanation.contains(QStringLiteral("busy")));
+    }
+
+    // Lane B carry (R-R3-08, R-R3-37): a cut the Core made because its
+    // computer is busy says "Core busy" in the short line and explanation.
+    void coreBusyCutSaysCoreBusy()
+    {
+        PanDisplayState lessDetail = showing(512, 15, 1024, 30);
+        lessDetail.budgetReason = DisplayBudgetReason::CoreBusy;
+        PanStatusText text = buildPanStatusText(lessDetail);
+        QCOMPARE(text.shortForms(), (QStringList{QStringLiteral("Less detail: Core busy"),
+                                                 QStringLiteral("Less detail")}));
+        QVERIFY(text.explanation.startsWith(QStringLiteral("The Core computer is busy")));
+        QVERIFY(text.explanation.contains(QStringLiteral("512 points across, 15 updates")));
+        QVERIFY(text.explanation.contains(QStringLiteral("1024 points and 30 updates")));
+        QVERIFY(text.explanation.contains(QStringLiteral("comes back by itself")));
+
+        PanDisplayState slower = showing(1024, 15, 1024, 30);
+        slower.budgetReason = DisplayBudgetReason::CoreBusy;
+        text = buildPanStatusText(slower);
+        QCOMPARE(text.shortLine, QStringLiteral("Slower: Core busy"));
+        QVERIFY(text.explanation.startsWith(QStringLiteral("The Core computer is busy")));
+
+        PanDisplayState paused = phase(PanDisplayState::Phase::Paused);
+        paused.budgetReason = DisplayBudgetReason::CoreBusy;
+        text = buildPanStatusText(paused);
+        QCOMPARE(text.shortForms(), (QStringList{QStringLiteral("Paused: Core busy"),
+                                                 QStringLiteral("Paused")}));
+        QVERIFY(text.explanation.startsWith(QStringLiteral("The Core computer is busy")));
+        paused.pureSignalOverLimit = true;
+        text = buildPanStatusText(paused);
+        QCOMPARE(text.shortLine, QStringLiteral("Paused: Core busy"));
+        QVERIFY(text.explanation.startsWith(QStringLiteral("The Core computer is busy")));
+        QVERIFY(text.explanation.contains(QStringLiteral("PureSignal")));
+
+        // At the requested quality the reason says nothing: no line.
+        PanDisplayState full = showing(1024, 30, 1024, 30);
+        full.budgetReason = DisplayBudgetReason::CoreBusy;
+        QVERIFY(buildPanStatusText(full).shortLine.isEmpty());
+        QVERIFY(!buildPanStatusText(full).explanation.contains(QStringLiteral("busy")));
     }
 
     void waitingStalledPausedAndFullHaveTheirOwnLines()
@@ -80,13 +124,13 @@ private slots:
         QCOMPARE(buildPanStatusText(phase(Phase::Stalled)).shortLine,
                  QStringLiteral("Core not answering"));
         QCOMPARE(buildPanStatusText(phase(Phase::Paused)).shortLine,
-                 QStringLiteral("Paused: Core busy"));
+                 QStringLiteral("Paused: Core limit"));
         QCOMPARE(buildPanStatusText(phase(Phase::TooManyPans)).shortLine,
                  QStringLiteral("Too many pans"));
         PanDisplayState overLimit = phase(Phase::Paused);
         overLimit.pureSignalOverLimit = true;
         const PanStatusText text = buildPanStatusText(overLimit);
-        QCOMPARE(text.shortLine, QStringLiteral("Paused: Core busy"));
+        QCOMPARE(text.shortLine, QStringLiteral("Paused: Core limit"));
         QVERIFY(text.explanation.contains(QStringLiteral("PureSignal")));
         QVERIFY(text.explanation != buildPanStatusText(phase(Phase::Paused)).explanation);
     }
@@ -126,7 +170,7 @@ private slots:
 
         state.pixels = 512;
         text = buildPanStatusText(state);
-        QCOMPARE(text.shortLine, QStringLiteral("Less detail: Core busy"));
+        QCOMPARE(text.shortLine, QStringLiteral("Less detail: Core limit"));
         QVERIFY(text.explanation.contains(QStringLiteral("shows 128 points")));
 
         PanDisplayState zoomOnly;
@@ -188,10 +232,10 @@ private slots:
     {
         using Phase = PanDisplayState::Phase;
         QCOMPARE(buildPanStatusText(showing(512, 15, 1024, 30)).shortForms(),
-                 (QStringList{QStringLiteral("Less detail: Core busy"),
+                 (QStringList{QStringLiteral("Less detail: Core limit"),
                               QStringLiteral("Less detail")}));
         QCOMPARE(buildPanStatusText(showing(1024, 15, 1024, 30)).shortForms(),
-                 (QStringList{QStringLiteral("Slower: Core busy"), QStringLiteral("Slower")}));
+                 (QStringList{QStringLiteral("Slower: Core limit"), QStringLiteral("Slower")}));
         QCOMPARE(buildPanStatusText(phase(Phase::Waiting)).shortForms(),
                  (QStringList{QStringLiteral("Waiting for the Core"), QStringLiteral("Waiting")}));
         PanDisplayState refused = phase(Phase::Refused);
@@ -271,6 +315,7 @@ private slots:
         QVERIFY(!OperatorWording::isPlain(QStringLiteral("SSRC mismatch")));
         QVERIFY(!OperatorWording::isPlain(QStringLiteral("Media peers lost")));
         QVERIFY(OperatorWording::isPlain(QStringLiteral("Paused: Core busy")));
+        QVERIFY(OperatorWording::isPlain(QStringLiteral("Paused: Core limit")));
         // Word starts only: an airplane is not a plane term.
         QVERIFY(OperatorWording::isPlain(QStringLiteral("Explanation for the airplane mode")));
     }

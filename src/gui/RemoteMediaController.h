@@ -123,6 +123,10 @@ public:
     RemoteAudioDelayReport audioDelay() const;
     /// R-R3-35: how often a clock probe goes out while audio plays.
     static constexpr int kClockProbeIntervalMs = 1000;
+    /// R-R3-37: how long a pan in budget mode may wait for the Core's first
+    /// answer before it says "Waiting for the Core". A Core that answers
+    /// within this (the usual case at session start) never flashes the line.
+    static constexpr int kPanWaitingGraceMs = 2000;
     /// R-R3-37: what the pan named `panId` was last told about its remote
     /// display, including its zoom-detail limit. The pan paints
     /// buildPanStatusText() of this.

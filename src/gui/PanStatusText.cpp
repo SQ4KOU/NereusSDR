@@ -24,9 +24,11 @@ using Phase = PanDisplayState::Phase;
 // Each short line comes with shorter forms. The pan paints the longest form
 // that fits its row, measured in the font it paints with, and never an
 // elided one; the last form is a word or two so it fits any usable pan
-// (tst_pan_status_overlay and tst_spectrum_status_overlay check both). Each
-// reduction and pause today comes from the Core's display limit, never from
-// the network, so each one says "Core busy".
+// (tst_pan_status_overlay and tst_spectrum_status_overlay check both). A
+// reduction or pause never comes from the network. When the Core says its
+// computer is busy (DisplayBudgetReason::CoreBusy) the line says "Core busy";
+// otherwise it is the Core's display limit and the line says "Core limit"
+// (R-R3-08, R-R3-37).
 
 PanStatusText withForms(const QStringList& forms, const QString& explanation)
 {
@@ -40,8 +42,17 @@ PanStatusText displayText(const PanDisplayState& state)
     case Phase::None:
         return {};
     case Phase::Showing: {
+        const bool coreBusy = state.budgetReason == DisplayBudgetReason::CoreBusy;
         QString explanation;
-        if (state.reduced()) {
+        if (state.reduced() && coreBusy) {
+            explanation = QStringLiteral(
+                "The Core computer is busy, so the Core is sending %1 points across, %2 "
+                "updates a second, instead of the %3 points and %4 updates a second this "
+                "pan asked for. That keeps its audio and receivers running smoothly. Full "
+                "quality comes back by itself when the Core has room.")
+                .arg(state.pixels).arg(state.fps)
+                .arg(state.requestedPixels).arg(state.requestedFps);
+        } else if (state.reduced()) {
             explanation = QStringLiteral(
                 "The Core is sending %1 points across, %2 updates a second, instead of "
                 "the %3 points and %4 updates a second this pan asked for. The Core has "
@@ -64,11 +75,15 @@ PanStatusText displayText(const PanDisplayState& state)
         if (!state.reduced()) {
             return {QString(), explanation, {}};
         }
-        return withForms(state.pixels != state.requestedPixels
-                             ? QStringList{QStringLiteral("Less detail: Core busy"),
-                                           QStringLiteral("Less detail")}
-                             : QStringList{QStringLiteral("Slower: Core busy"),
-                                           QStringLiteral("Slower")},
+        if (state.pixels != state.requestedPixels) {
+            return withForms({coreBusy ? QStringLiteral("Less detail: Core busy")
+                                       : QStringLiteral("Less detail: Core limit"),
+                              QStringLiteral("Less detail")},
+                             explanation);
+        }
+        return withForms({coreBusy ? QStringLiteral("Slower: Core busy")
+                                   : QStringLiteral("Slower: Core limit"),
+                          QStringLiteral("Slower")},
                          explanation);
     }
     case Phase::Waiting:
@@ -85,20 +100,41 @@ PanStatusText displayText(const PanDisplayState& state)
                          QStringLiteral("This pan asked the Core for its display and the "
                                         "answer is overdue. It keeps waiting, and the display "
                                         "comes back as soon as the Core answers."));
-    case Phase::Paused:
+    case Phase::Paused: {
+        const bool coreBusy = state.budgetReason == DisplayBudgetReason::CoreBusy;
+        const QStringList forms{coreBusy ? QStringLiteral("Paused: Core busy")
+                                         : QStringLiteral("Paused: Core limit"),
+                                QStringLiteral("Paused")};
+        if (state.pureSignalOverLimit && coreBusy) {
+            return withForms(forms,
+                             QStringLiteral("The Core computer is busy, so it lowered how much "
+                                            "display it sends, and the PureSignal display "
+                                            "already running uses more than that. This pan's "
+                                            "display is paused and the last picture is held. "
+                                            "It resumes when the PureSignal display closes or "
+                                            "the Core has room again."));
+        }
         if (state.pureSignalOverLimit) {
-            return withForms({QStringLiteral("Paused: Core busy"), QStringLiteral("Paused")},
+            return withForms(forms,
                              QStringLiteral("The PureSignal display already running uses more "
                                             "than the Core's current display limit, so this "
                                             "pan's display is paused and the last picture is "
                                             "held. It resumes when the PureSignal display "
                                             "closes or the limit rises."));
         }
-        return withForms({QStringLiteral("Paused: Core busy"), QStringLiteral("Paused")},
+        if (coreBusy) {
+            return withForms(forms,
+                             QStringLiteral("The Core computer is busy, so this pan's display "
+                                            "is paused to keep its audio and receivers running "
+                                            "smoothly, and the last picture is held. It resumes "
+                                            "by itself when the Core has room."));
+        }
+        return withForms(forms,
                          QStringLiteral("The Core's display limit has no room for this pan "
                                         "right now, so the last picture is held. It resumes "
                                         "by itself when there is room, for example when "
                                         "another pan closes or gets smaller."));
+    }
     case Phase::Refused:
         return withForms(OperatorReasonText::shortFormsForDisplay(state.refusalReason),
                          QStringLiteral("This pan's display request did not go through. %1 %2")

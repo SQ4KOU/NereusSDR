@@ -42,6 +42,13 @@ inline QList<PanDisplayState> all()
     PanDisplayState overLimit = phase(Phase::Paused);
     overLimit.pureSignalOverLimit = true;
     states << overLimit;
+    // Lane B carry (R-R3-08, R-R3-37): the same cuts when the Core says its
+    // computer is busy.
+    for (PanDisplayState busy : {showing(512, 15, 1024, 30), showing(1024, 15, 1024, 30),
+                                 phase(Phase::Paused), overLimit}) {
+        busy.budgetReason = DisplayBudgetReason::CoreBusy;
+        states << busy;
+    }
 
     QStringList reasons = OperatorReasonText::knownReasons();
     reasons << QStringLiteral("a reason this app has never seen") << QString();
