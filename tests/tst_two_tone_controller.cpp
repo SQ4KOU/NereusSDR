@@ -639,6 +639,113 @@ private slots:
         QCOMPARE(activeSpy.last().at(0).toBool(), false);
     }
 
+    // ── R-R3-36: a rejection of someone else's press is not ours ─────────
+    // Live two-tone: a later press refused by the check leaves the
+    // generator, PWR and MOX as they were.
+    void rejectedOtherPressWhileActive_keepsTwoTone()
+    {
+        TransmitModel tx;
+        tx.setTwoTonePulsed(false);
+        tx.setTwoToneFreq2Delay(0);
+        tx.setTwoToneDrivePowerSource(DrivePowerSource::Fixed);
+        tx.setTwoTonePower(10);
+        tx.setPower(75);
+
+        RecordingTxChannel tc(kTxChannelId);
+        MoxController mox;
+        mox.setTimerIntervals(0, 0, 0, 0, 0, 0);
+        bool allow = true;
+        mox.setMoxCheck([&allow]() -> BandPlanGuard::MoxCheckResult {
+            return {allow, allow ? QString() : QStringLiteral("refused")};
+        });
+        SliceModel slice;
+
+        TwoToneController ctrl;
+        ctrl.setTransmitModel(&tx);
+        ctrl.setTxChannel(&tc);
+        ctrl.setMoxController(&mox);
+        ctrl.setSliceModel(&slice);
+        ctrl.setSettleDelaysMs(0, 0);
+
+        ctrl.setActive(true);
+        QCoreApplication::processEvents();
+        QVERIFY(ctrl.isActive());
+        QVERIFY(mox.isMox());
+        QCOMPARE(tx.power(), 10);
+        QSignalSpy activeSpy(&ctrl, &TwoToneController::twoToneActiveChanged);
+        const auto runOffCount = [&tc] {
+            int n = 0;
+            for (const auto& c : tc.calls) {
+                if (c.method == QLatin1String("setTxPostGenRun") && c.arg1 == 0.0) {
+                    ++n;
+                }
+            }
+            return n;
+        };
+        const int runOff0 = runOffCount();
+
+        allow = false;
+        mox.setMox(true);
+        QCoreApplication::processEvents();
+
+        QVERIFY(ctrl.isActive());
+        QVERIFY(mox.isMox());
+        QCOMPARE(activeSpy.count(), 0);
+        QCOMPARE(tx.power(), 10);
+        QCOMPARE(runOffCount(), runOff0);
+
+        allow = true;
+        ctrl.setActive(false);
+        for (int i = 0; i < 10; ++i) QCoreApplication::processEvents();
+        QVERIFY(!ctrl.isActive());
+        QCOMPARE(tx.power(), 75);
+    }
+
+    // Inside the MOX-release settle: a refused unrelated press does not
+    // abandon the start; two-tone's own key at the end of the walk still
+    // lands.
+    void rejectedOtherPressDuringSettle_startContinues()
+    {
+        TransmitModel tx;
+        tx.setTwoTonePulsed(false);
+        tx.setTwoToneFreq2Delay(0);
+
+        RecordingTxChannel tc(kTxChannelId);
+        MoxController mox;
+        mox.setTimerIntervals(0, 0, 0, 0, 0, 0);
+        bool allow = true;
+        mox.setMoxCheck([&allow]() -> BandPlanGuard::MoxCheckResult {
+            return {allow, allow ? QString() : QStringLiteral("refused")};
+        });
+        SliceModel slice;
+
+        TwoToneController ctrl;
+        ctrl.setTransmitModel(&tx);
+        ctrl.setTxChannel(&tc);
+        ctrl.setMoxController(&mox);
+        ctrl.setSliceModel(&slice);
+        ctrl.setSettleDelaysMs(100, 0);
+
+        mox.setMox(true);
+        QCoreApplication::processEvents();
+        QVERIFY(mox.isMox());
+
+        ctrl.setActive(true);
+        QVERIFY(ctrl.isActivationInFlight());
+        QVERIFY(!mox.isMox());
+
+        allow = false;
+        mox.setMox(true);
+        QVERIFY(ctrl.isActivationInFlight());
+        allow = true;
+
+        QTRY_VERIFY_WITH_TIMEOUT(ctrl.isActive(), 2000);
+        QVERIFY(mox.isMox());
+
+        ctrl.setActive(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!ctrl.isActive(), 2000);
+    }
+
     // ── Idempotent: setActive(true) twice is safe ────────────────────────
     void setActive_idempotent_doesNotRepeat()
     {

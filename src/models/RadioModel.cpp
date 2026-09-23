@@ -40,6 +40,10 @@
 //                 check time (m_tuneKeyInFlight, m_generatedKeyLive);
 //                 admission also requires an open capture reader.
 //                 NereusSDR-original; no Thetis logic.
+//   2026-09-23 : R-R3-36 gate fix by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. The generated-key record follows
+//                 two-tone's active state as well as MOX transitions.
+//                 NereusSDR-original; no Thetis logic.
 //   2026-05-03 — Phase 4 Agent 4A of issue #167 (PA calibration safety
 //                 hotfix — K2GX field report).  Drive-slider lambda
 //                 (lines ~830) and TUNE-engagement path (lines ~4280)
@@ -1190,6 +1194,19 @@ RadioModel::RadioModel(Role role, QObject* parent)
     m_twoToneController = new TwoToneController(this);
     m_twoToneController->setTransmitModel(&m_transmitModel);
     m_twoToneController->setMoxController(m_moxController);
+
+    // R-R3-36: keep the generated-key record in step with two-tone's own
+    // state, not only with MOX transitions. Two-tone can go live on a key
+    // it did not commit (a voice key admitted inside its MOX-release
+    // settle, after which its own setMox(true) is an idempotent repeat
+    // that fires no moxChanging), so going active adopts whatever key is
+    // on. Going inactive drops the record: whatever still holds MOX then
+    // reads the PC microphone, and input loss must release it.
+    connect(m_twoToneController, &TwoToneController::twoToneActiveChanged, this,
+            [this](bool active) {
+                m_generatedKeyLive = active && m_moxController != nullptr
+                                     && m_moxController->isMox();
+            });
 
     // ── Stage C2: FilterPresetStore ───────────────────────────────────────────
     // Wraps Thetis-verbatim defaults from SliceModel::presetsForMode with a

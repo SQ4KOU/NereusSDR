@@ -650,6 +650,127 @@ private slots:
         twoTone->setTxChannel(nullptr);
     }
 
+    // A press refused while two-tone is live (here by the band plan after
+    // the VFO moves out of band) is not two-tone's key: two-tone keeps
+    // running on its own key, and input loss leaves it alone.
+    void refusedPressDuringLiveTwoToneKeepsTwoTone()
+    {
+        Rig rig(QStringLiteral("ready"));
+        rig.engine()->onMicSourceChanged(true);
+        QVERIFY(reachCaptureState(rig, QStringLiteral("ready")));
+        TwoToneController* const twoTone = rig.model->twoToneController();
+        twoTone->setTxChannel(&rig.tx);
+        twoTone->setSettleDelaysMs(0, 0);
+        twoTone->setActive(true);
+        QTest::qWait(50);
+        QVERIFY(twoTone->isActive());
+        QVERIFY(rig.mox()->isMox());
+        QSignalSpy rejected(rig.mox(), &MoxController::moxRejected);
+        QSignalSpy activeChanged(twoTone, &TwoToneController::twoToneActiveChanged);
+
+        rig.slice->setFrequency(4'500'000.0);
+        rig.mox()->setMox(true);
+        QCOMPARE(rejected.count(), 1);
+        QVERIFY(rejected.at(0).at(0).toString() != kRefusal);
+        QVERIFY(twoTone->isActive());
+        QCOMPARE(activeChanged.count(), 0);
+        QVERIFY(rig.mox()->isMox());
+
+        QSignalSpy aboutToEnd(rig.mox(), &MoxController::txAboutToEnd);
+        killProcess(rig.engine()->captureHelperProcessIdForTest());
+        QTRY_COMPARE_WITH_TIMEOUT(rig.engine()->captureStatus().state, State::Failed, 5000);
+        QTest::qWait(100);
+        QVERIFY(rig.mox()->isMox());
+        QCOMPARE(aboutToEnd.count(), 0);
+
+        rig.slice->setFrequency(14'200'000.0);
+        twoTone->setActive(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!rig.mox()->isMox(), 2000);
+        QTest::qWait(300);
+        QVERIFY(!twoTone->isActive());
+        twoTone->setTxChannel(nullptr);
+    }
+
+    // Two-tone going inactive while MOX stays keyed leaves no generated-key
+    // record behind: whatever holds the key now reads the PC microphone,
+    // so input loss releases it.
+    void twoToneInactiveWhileKeyedReleasesOnInputLoss()
+    {
+        Rig rig(QStringLiteral("ready"));
+        rig.engine()->onMicSourceChanged(true);
+        QVERIFY(reachCaptureState(rig, QStringLiteral("ready")));
+        TwoToneController* const twoTone = rig.model->twoToneController();
+        twoTone->setTxChannel(&rig.tx);
+        twoTone->setSettleDelaysMs(0, 0);
+        twoTone->setActive(true);
+        QTest::qWait(50);
+        QVERIFY(twoTone->isActive());
+        QVERIFY(rig.mox()->isMox());
+
+        // No production path stops two-tone without unkeying once its
+        // rejection handler reacts only to its own key; drive the signal
+        // directly so the record's reaction is covered on its own.
+        emit twoTone->twoToneActiveChanged(false);
+        QVERIFY(rig.mox()->isMox());
+
+        QSignalSpy aboutToEnd(rig.mox(), &MoxController::txAboutToEnd);
+        QTest::ignoreMessage(QtWarningMsg,
+                             QRegularExpression(QStringLiteral(
+                                 "^PC microphone left Ready while keyed; releasing MOX\\.")));
+        killProcess(rig.engine()->captureHelperProcessIdForTest());
+        QTRY_VERIFY_WITH_TIMEOUT(!rig.mox()->isMox(), 3000);
+        QTest::qWait(50);
+        QCOMPARE(aboutToEnd.count(), 1);
+
+        twoTone->setActive(false);
+        QTest::qWait(300);
+        twoTone->setTxChannel(nullptr);
+    }
+
+    // A voice key admitted inside two-tone's MOX-release settle becomes
+    // two-tone's key when the walk's own setMox(true) finds MOX already on
+    // (an idempotent repeat that commits nothing). Input loss then leaves
+    // the live two-tone alone.
+    void voiceKeyInSettleAdoptedByTwoToneSurvivesInputLoss()
+    {
+        Rig rig(QStringLiteral("ready"));
+        rig.engine()->onMicSourceChanged(true);
+        QVERIFY(reachCaptureState(rig, QStringLiteral("ready")));
+        TwoToneController* const twoTone = rig.model->twoToneController();
+        twoTone->setTxChannel(&rig.tx);
+        twoTone->setSettleDelaysMs(400, 0);
+
+        rig.mox()->onVoxActive(true);
+        QTest::qWait(50);
+        QVERIFY(rig.mox()->isMox());
+        twoTone->setActive(true);
+        QVERIFY(twoTone->isActivationInFlight());
+        QVERIFY(!rig.mox()->isMox());
+
+        // Voice press inside the settle, capture Ready: admitted.
+        QSignalSpy rejected(rig.mox(), &MoxController::moxRejected);
+        rig.mox()->setMox(true);
+        QVERIFY(rig.mox()->isMox());
+        QCOMPARE(rejected.count(), 0);
+
+        QTRY_VERIFY_WITH_TIMEOUT(twoTone->isActive(), 2000);
+        QVERIFY(rig.mox()->isMox());
+        QCOMPARE(rejected.count(), 0);
+
+        QSignalSpy aboutToEnd(rig.mox(), &MoxController::txAboutToEnd);
+        killProcess(rig.engine()->captureHelperProcessIdForTest());
+        QTRY_COMPARE_WITH_TIMEOUT(rig.engine()->captureStatus().state, State::Failed, 5000);
+        QTest::qWait(100);
+        QVERIFY(rig.mox()->isMox());
+        QVERIFY(twoTone->isActive());
+        QCOMPARE(aboutToEnd.count(), 0);
+
+        twoTone->setActive(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!rig.mox()->isMox(), 2000);
+        QTest::qWait(300);
+        twoTone->setTxChannel(nullptr);
+    }
+
     // The owner's status copy lags the capture thread by one queued call.
     // A press right after a retry, a configuration change or a helper
     // failure must not see the old Ready: it is refused, and a press once

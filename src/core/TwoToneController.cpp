@@ -16,6 +16,9 @@
 //   2026-09-22 : R-R3-36 fix wave by J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code. m_keyingMox scoped around the
 //                activation walk's own setMox(true). NereusSDR-original.
+//   2026-09-23 : R-R3-36 gate fix by J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code. onMoxRejected reacts only to a
+//                rejection of two-tone's own key. NereusSDR-original.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis-derived activation flow
@@ -608,8 +611,14 @@ void TwoToneController::onMoxRejected(const QString& reason)
 {
     Q_UNUSED(reason);
 
-    if (!m_activationInFlight && !m_active) {
-        // Not our request — ignore rejection.
+    // R-R3-36: act only on a rejection of the activation walk's own
+    // setMox(true). moxRejected is emitted synchronously from inside that
+    // call, so m_keyingMox is set exactly then. Any other refused press
+    // (a voice key during the MOX-release settle, or a later press while
+    // two-tone is live) is not ours: tearing down here would stop the
+    // generator and leave MOX keyed on a path that now reads the PC
+    // microphone, or abandon a start the operator did not cancel.
+    if (!m_keyingMox) {
         return;
     }
 

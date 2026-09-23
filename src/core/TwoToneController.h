@@ -276,6 +276,8 @@ private slots:
 
     // Hooked to MoxController::moxRejected so we can clean up our state
     // when the BandPlanGuard rejects the setMox(true) call we just made.
+    // R-R3-36: ignores every rejection that is not of that call
+    // (m_keyingMox), so a refused unrelated press leaves two-tone alone.
     void onMoxRejected(const QString& reason);
 
 private:
