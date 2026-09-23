@@ -2123,6 +2123,39 @@ target_link_libraries(nereus-media-probe PRIVATE NereusCore)
 nereus_apply_warnings(nereus-media-probe)
 nereus_apply_warnings(nereus-audio-capture)
 
+# NNR model cost benchmark (R-R3-40). Developer measurement tools, kept out
+# of routine builds and installs. nereus-nnr-bench links wdsp_static as the
+# application does. nereus-nnr-bench-relaxed links its own copy of nnet.c
+# compiled with relaxed floating-point options ahead of wdsp_static, so the
+# archive's nnet.c object is never pulled in. The relaxed options apply to
+# that OBJECT library only; wdsp_static and the application are unchanged.
+if(TARGET wdsp_static AND NOT WIN32)
+    add_library(wdsp_nnet_relaxed OBJECT EXCLUDE_FROM_ALL
+        third_party/wdsp/src/nnet.c)
+    target_include_directories(wdsp_nnet_relaxed PRIVATE
+        $<TARGET_PROPERTY:wdsp_static,INCLUDE_DIRECTORIES>)
+    target_compile_definitions(wdsp_nnet_relaxed PRIVATE
+        $<TARGET_PROPERTY:wdsp_static,COMPILE_DEFINITIONS>)
+    target_compile_options(wdsp_nnet_relaxed PRIVATE
+        $<TARGET_PROPERTY:wdsp_static,COMPILE_OPTIONS>
+        -fno-math-errno -fassociative-math -fno-signed-zeros -fno-trapping-math)
+
+    add_executable(nereus-nnr-bench EXCLUDE_FROM_ALL tools/nereus-nnr-bench.c)
+    add_executable(nereus-nnr-bench-relaxed EXCLUDE_FROM_ALL
+        tools/nereus-nnr-bench.c $<TARGET_OBJECTS:wdsp_nnet_relaxed>)
+    target_compile_definitions(nereus-nnr-bench-relaxed PRIVATE
+        NEREUS_NNR_BENCH_RELAXED=1)
+    # Plain C: keep the project-wide Qt code generators off these targets.
+    set_target_properties(wdsp_nnet_relaxed nereus-nnr-bench nereus-nnr-bench-relaxed
+        PROPERTIES AUTOMOC OFF AUTOUIC OFF AUTORCC OFF)
+    foreach(_nnr_bench nereus-nnr-bench nereus-nnr-bench-relaxed)
+        target_compile_definitions(${_nnr_bench} PRIVATE WDSP_STATIC_BUILD)
+        target_include_directories(${_nnr_bench} PRIVATE ${FFTW3_INCLUDE_DIRS})
+        target_link_libraries(${_nnr_bench} PRIVATE wdsp_static)
+        nereus_apply_warnings(${_nnr_bench})
+    endforeach()
+endif()
+
 if(NEREUSSDR_LTO_AVAILABLE)
     nereus_apply_core_deps(NereusCore_LTO)
     nereus_apply_gui_deps(NereusGui_LTO)
