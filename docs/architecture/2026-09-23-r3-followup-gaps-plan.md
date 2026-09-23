@@ -287,3 +287,35 @@ ctest --test-dir /Users/j.j.boyd/.codex/worktrees/nereus-r2-integration/NereusSD
 **Execution note (advisory):** opus (Thetis cite verification).
 
 - [ ] **Step 1:** Implement each item; run the commands; commit.
+
+## Task 7: Core host telemetry cleanups
+
+Added after the Core host telemetry review (verdict Ready to merge: Yes; minors).
+
+**Requirements:** R-R3-32, R-R3-33, R-R3-01 (test only).
+
+**Files:**
+- Modify: `src/gui/RemoteDiagnosticsDialog.cpp` (tooltip), `src/gui/RemoteTelemetryController.cpp`
+  (log field name), `docs/architecture/2026-09-21-core-telemetry-design.md` (version line)
+- Test: `tests/tst_remote_diagnostics.cpp`, `tests/tst_remote_telemetry.cpp`,
+  `tests/tst_host_telemetry_sampler.cpp`, `tests/tst_daemon_media_controller.cpp`
+
+**Acceptance:**
+- The temperature graph's tooltip never shows a previous Core's sensor name: with no name in the
+  current view it shows the generic tooltip (`RemoteDiagnosticsDialog.cpp` around 409); test it.
+- The soak log line names the process CPU field so it cannot be read as per-core (for example
+  `coreProcessCpuPercentOfAllCpus`); update any test that parses the line.
+- One fixture thermal zone is a symlink to a directory, as real sysfs zones are, and is discovered.
+- `minorNineSpectrumContextsReportTheGrant` is renamed to what it runs, and a raw minor-9 hello to the
+  minor-10 Core (like the minor-8 case near line 3100) proves a minor-9 peer still gets the grant.
+- The core telemetry design doc records protocol minor 10 and `stationTelemetryVersion = 2` in one line.
+
+**Verification:**
+```sh
+cmake --build /Users/j.j.boyd/.codex/worktrees/nereus-r2-integration/NereusSDR/build-integration --target tst_remote_diagnostics tst_remote_telemetry tst_host_telemetry_sampler tst_daemon_media_controller -j6
+ctest --test-dir /Users/j.j.boyd/.codex/worktrees/nereus-r2-integration/NereusSDR/build-integration -R '^(tst_remote_diagnostics|tst_remote_telemetry|tst_host_telemetry_sampler|tst_daemon_media_controller)$' --no-tests=error --output-on-failure
+```
+
+**Execution note (advisory):** opus.
+
+- [ ] **Step 1:** Implement each item with its test; run the commands; commit.
