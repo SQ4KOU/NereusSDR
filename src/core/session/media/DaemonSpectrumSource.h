@@ -87,6 +87,9 @@ public:
     quint64 droppedInputFrames(const MediaSourceKey& key) const;
     /// Number of completed engine I/Q handoffs since source activation.
     quint64 completedInputHandoffs(const MediaSourceKey& key) const;
+    /// Frames the engine published into this source's latest-frame slot,
+    /// each replacing the one before (so it can exceed frameAvailable).
+    quint64 publishedFrames(const MediaSourceKey& key) const;
 
     /// Returns and clears the one latest frame slot for key.  A slow consumer
     /// can therefore miss frames but cannot cause an output-frame backlog.

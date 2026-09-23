@@ -60,9 +60,17 @@ trace, waterfall, minDbm, maxDbm, wideSpanFactor
 half-range ordering across wrap. `sliceId` must identify a live station
 slice; Core resolves its stream, so the client cannot request an arbitrary
 DDC. `tier` is `wide` or `fine`. Up to eight endpoints are admitted, each
-requesting 1..4096 pixels and 1..60 frames/second. FFT sizes must be supported
-by FFTEngine. Shared endpoints use the largest requested FFT size/fps for
-their stream and tier; incompatible window choices are refused. A global
+requesting 1..4096 pixels and 1..60 frames/second. An FFT size is a power of
+two from 1024; a size FFTEngine supports is honoured as asked, and a larger
+one is granted FFTEngine's largest size. A request sizes its (stream, tier)
+engine only while it is that engine's only subscriber; beside another
+endpoint it is granted the engine's current size, so no pan's spectrum
+changes to satisfy another's request. When the last neighbour leaves, an
+endpoint held to a neighbour's size is granted its own. The engine runs at
+the highest frame rate its endpoints ask for, and each endpoint keeps its own
+cadence, so a rate change alone renews no endpoint. Pixels are granted as
+min(requested, visible source bins, 4096). Incompatible window choices are
+refused. A global
 window change unsubscribes all old-window endpoints before requesting any
 replacement, so shared sources can adopt the new window.
 

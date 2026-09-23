@@ -35,6 +35,7 @@ struct DaemonSpectrumSource::FrameState {
     QVector<float> pendingIq;
     quint64 inputFramesDropped{0};
     quint64 completedInputHandoffs{0};
+    quint64 publishedFrames{0};
 };
 
 struct DaemonSpectrumSource::SourceEntry {
@@ -241,6 +242,16 @@ quint64 DaemonSpectrumSource::droppedInputFrames(const MediaSourceKey& key) cons
     }
     QMutexLocker lock(&it->state->mutex);
     return it->state->inputFramesDropped;
+}
+
+quint64 DaemonSpectrumSource::publishedFrames(const MediaSourceKey& key) const
+{
+    const auto it = m_sources.constFind(key);
+    if (it == m_sources.cend()) {
+        return 0;
+    }
+    QMutexLocker lock(&it->state->mutex);
+    return it->state->publishedFrames;
 }
 
 quint64 DaemonSpectrumSource::completedInputHandoffs(const MediaSourceKey& key) const
@@ -467,6 +478,7 @@ void DaemonSpectrumSource::publishFrame(
         state->latest.windowEnb = windowEnb;
         state->latest.dbmOffset = dbmOffset;
         state->hasLatest = true;
+        ++state->publishedFrames;
         if (!state->notificationQueued) {
             state->notificationQueued = true;
             queueNotification = true;

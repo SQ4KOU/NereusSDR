@@ -262,6 +262,8 @@ private slots:
             QThread::msleep(10);
         }
         QCOMPARE(frames.count(), 0);
+        // Every packet really made its own frame; the slot kept only the last.
+        QCOMPARE(source.publishedFrames(key), quint64(kFrames));
 
         QCoreApplication::processEvents();
         QTest::qWait(50);
