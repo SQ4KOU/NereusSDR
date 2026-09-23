@@ -3,7 +3,8 @@
 // =================================================================
 //
 // no-port-check: NereusSDR-original. R-R3-23: the audio-context wire codec
-// Core and GUI share, in the minor-7 shape and the minor-8 detail shape.
+// Core and GUI share, in the minor-7 shape, the minor-8 detail shape and the
+// audio-profile shape (lossless, audioProfileVersion 1).
 //
 // =================================================================
 
@@ -563,6 +564,175 @@ private slots:
             expected.offReason.reset();
         }
         compareMessages(*received, expected);
+    }
+
+    // ---- Audio profile (R-R3-23, audioProfileVersion 1) ----
+
+    void profileWireStringsAreExact()
+    {
+        QCOMPARE(remoteAudioProfileToWire(RemoteAudioProfile::Opus), QStringLiteral("opus"));
+        QCOMPARE(remoteAudioProfileToWire(RemoteAudioProfile::Lossless),
+                 QStringLiteral("lossless"));
+        QCOMPARE(remoteAudioProfileRefusalToWire(RemoteAudioProfileRefusal::NotAllowed),
+                 QStringLiteral("lossless-not-allowed"));
+        QCOMPARE(remoteAudioProfileRefusalToWire(RemoteAudioProfileRefusal::Unavailable),
+                 QStringLiteral("lossless-unavailable"));
+        QCOMPARE(remoteAudioProfileFromWire(QStringLiteral("lossless")),
+                 std::optional{RemoteAudioProfile::Lossless});
+        for (const QJsonValue& bad : {QJsonValue(QStringLiteral("Lossless")),
+                                      QJsonValue(QStringLiteral("l16")), QJsonValue(1),
+                                      QJsonValue(true), QJsonValue()}) {
+            QVERIFY(!remoteAudioProfileFromWire(bad).has_value());
+            QVERIFY(!remoteAudioProfileRefusalFromWire(bad).has_value());
+        }
+    }
+
+    // The exact lossless encoder object Task 6 consumes.
+    void l16EncoderObjectIsExactAndStrict()
+    {
+        const QJsonObject expected{{QStringLiteral("codec"), QStringLiteral("l16")},
+                                   {QStringLiteral("sampleRate"), 48000},
+                                   {QStringLiteral("channels"), 2},
+                                   {QStringLiteral("frameSamples"), 192},
+                                   {QStringLiteral("bitsPerSample"), 16},
+                                   {QStringLiteral("payloadType"), 96}};
+        QCOMPARE(remoteAudioL16EncoderToJson(l16EncoderProfile()), expected);
+        QCOMPARE(remoteAudioL16EncoderFromJson(overTheWire(expected)),
+                 std::optional{l16EncoderProfile()});
+        QVERIFY(!remoteAudioL16EncoderFromJson(defaultEncoderJson()).has_value());
+        QVERIFY(!remoteAudioEncoderFromJson(expected).has_value());
+        for (const QString& key : expected.keys()) {
+            QVERIFY(!remoteAudioL16EncoderFromJson(withoutKey(expected, key)).has_value());
+        }
+        QVERIFY(!remoteAudioL16EncoderFromJson(
+            withKey(expected, QStringLiteral("extra"), 1)).has_value());
+        QVERIFY(!remoteAudioL16EncoderFromJson(
+            withKey(expected, QStringLiteral("frameSamples"), 1920)).has_value());
+        QVERIFY(!remoteAudioL16EncoderFromJson(
+            withKey(expected, QStringLiteral("payloadType"), 111)).has_value());
+        QVERIFY(!remoteAudioL16EncoderFromJson(
+            withKey(expected, QStringLiteral("bitsPerSample"), 16.5)).has_value());
+        QVERIFY(!remoteAudioL16EncoderFromJson(
+            withKey(expected, QStringLiteral("channels"), QStringLiteral("2"))).has_value());
+    }
+
+    // Without the profile negotiated nothing about profiles is written,
+    // whatever the message holds: an older GUI sees today's shapes (golden).
+    void profileFieldsNeverReachAnOlderGui()
+    {
+        for (bool enabled : {true, false}) {
+            RemoteAudioContextMessage message = sampleMessage(enabled);
+            message.encoder = defaultProfile();
+            message.offReason = RemoteAudioOffReason::ClientDisabled;
+            message.profile = RemoteAudioProfile::Opus;
+            message.profileRefusal = RemoteAudioProfileRefusal::NotAllowed;
+            message.losslessEncoder = l16EncoderProfile();
+            QCOMPARE(encodeRemoteAudioContext(message, false), sampleLegacy(enabled));
+            QCOMPARE(encodeRemoteAudioContext(message, false, true), sampleLegacy(enabled));
+            QCOMPARE(wire(encodeRemoteAudioContext(message, true)),
+                     wire(enabled ? sampleDetailEnabled() : sampleDetailDisabled()));
+        }
+    }
+
+    void profileShapeCarriesProfileEncoderAndRefusal()
+    {
+        const QJsonObject l16 = remoteAudioL16EncoderToJson(l16EncoderProfile());
+
+        RemoteAudioContextMessage lossless = sampleMessage(true);
+        lossless.profile = RemoteAudioProfile::Lossless;
+        lossless.losslessEncoder = l16EncoderProfile();
+        lossless.encoder = defaultProfile(); // unused when lossless
+        const QJsonObject on = encodeRemoteAudioContext(lossless, true, true);
+        QCOMPARE(on, withKey(withKey(sampleLegacy(true), QStringLiteral("encoder"), l16),
+                             QStringLiteral("profile"), QStringLiteral("lossless")));
+
+        RemoteAudioContextMessage refused = sampleMessage(true);
+        refused.profile = RemoteAudioProfile::Opus;
+        refused.encoder = defaultProfile();
+        refused.profileRefusal = RemoteAudioProfileRefusal::NotAllowed;
+        const QJsonObject opus = encodeRemoteAudioContext(refused, true, true);
+        QCOMPARE(opus, withKey(withKey(sampleDetailEnabled(), QStringLiteral("profile"),
+                                       QStringLiteral("opus")),
+                               QStringLiteral("profileRefusal"),
+                               QStringLiteral("lossless-not-allowed")));
+
+        // Absent profile encodes as opus; a refusal beside lossless is dropped.
+        RemoteAudioContextMessage plain = sampleMessage(false);
+        plain.offReason = RemoteAudioOffReason::MediaNotReady;
+        QCOMPARE(encodeRemoteAudioContext(plain, true, true),
+                 withKey(sampleDetailDisabled(QStringLiteral("media-not-ready")),
+                         QStringLiteral("profile"), QStringLiteral("opus")));
+        RemoteAudioContextMessage offLossless = plain;
+        offLossless.profile = RemoteAudioProfile::Lossless;
+        offLossless.profileRefusal = RemoteAudioProfileRefusal::Unavailable;
+        QCOMPARE(encodeRemoteAudioContext(offLossless, true, true),
+                 withKey(sampleDetailDisabled(QStringLiteral("media-not-ready")),
+                         QStringLiteral("profile"), QStringLiteral("lossless")));
+
+        // Lossless on with no packetiser profile goes out off, encoder-unavailable.
+        RemoteAudioContextMessage missing = sampleMessage(true);
+        missing.profile = RemoteAudioProfile::Lossless;
+        QCOMPARE(encodeRemoteAudioContext(missing, true, true),
+                 withKey(sampleDetailDisabled(QStringLiteral("encoder-unavailable")),
+                         QStringLiteral("profile"), QStringLiteral("lossless")));
+
+        // Every shape decodes back, and only as the profile shape.
+        for (const RemoteAudioContextMessage& message : {lossless, refused, plain, offLossless}) {
+            const QJsonObject encoded = overTheWire(encodeRemoteAudioContext(message, true, true));
+            const std::optional<RemoteAudioContextMessage> decoded =
+                decodeRemoteAudioContext(encoded, true, true);
+            QVERIFY2(decoded.has_value(), wire(encoded).constData());
+            QCOMPARE(decoded->profile, message.profile.value_or(RemoteAudioProfile::Opus));
+            QCOMPARE(decoded->enabled, message.enabled);
+            const bool isLossless = message.profile == RemoteAudioProfile::Lossless;
+            QCOMPARE(decoded->losslessEncoder.has_value(), isLossless && message.enabled);
+            QCOMPARE(decoded->encoder.has_value(), !isLossless && message.enabled);
+            QCOMPARE(decoded->profileRefusal.has_value(),
+                     !isLossless && message.profileRefusal.has_value());
+            QVERIFY(!decodeRemoteAudioContext(encoded, true).has_value());
+            QVERIFY(!decodeRemoteAudioContext(encoded, false).has_value());
+        }
+        const auto refusedDecoded =
+            decodeRemoteAudioContext(overTheWire(opus), true, true);
+        QCOMPARE(refusedDecoded->profileRefusal,
+                 std::optional{RemoteAudioProfileRefusal::NotAllowed});
+        // The older shapes are not the profile shape.
+        QVERIFY(!decodeRemoteAudioContext(sampleDetailEnabled(), true, true).has_value());
+        QVERIFY(!decodeRemoteAudioContext(sampleLegacy(true), true, true).has_value());
+        // profileNegotiated without detail is the legacy shape.
+        QVERIFY(decodeRemoteAudioContext(sampleLegacy(true), false, true).has_value());
+    }
+
+    void profileShapeRejectsMismatches_data()
+    {
+        QTest::addColumn<QJsonObject>("payload");
+        const QJsonObject l16 = remoteAudioL16EncoderToJson(l16EncoderProfile());
+        const QJsonObject losslessOn = withKey(
+            withKey(sampleLegacy(true), QStringLiteral("encoder"), l16),
+            QStringLiteral("profile"), QStringLiteral("lossless"));
+        const QJsonObject opusOn = withKey(sampleDetailEnabled(), QStringLiteral("profile"),
+                                           QStringLiteral("opus"));
+        QTest::newRow("lossless-with-opus-encoder")
+            << withKey(losslessOn, QStringLiteral("encoder"), defaultEncoderJson());
+        QTest::newRow("opus-with-l16-encoder")
+            << withKey(opusOn, QStringLiteral("encoder"), l16);
+        QTest::newRow("missing-profile") << withoutKey(opusOn, QStringLiteral("profile"));
+        QTest::newRow("unknown-profile")
+            << withKey(opusOn, QStringLiteral("profile"), QStringLiteral("flac"));
+        QTest::newRow("refusal-beside-lossless")
+            << withKey(losslessOn, QStringLiteral("profileRefusal"),
+                       QStringLiteral("lossless-not-allowed"));
+        QTest::newRow("unknown-refusal")
+            << withKey(opusOn, QStringLiteral("profileRefusal"), QStringLiteral("no"));
+        QTest::newRow("extra-key") << withKey(opusOn, QStringLiteral("extra"), 1);
+        QTest::newRow("lossless-with-reason")
+            << withKey(losslessOn, QStringLiteral("reason"), QStringLiteral("client-disabled"));
+    }
+
+    void profileShapeRejectsMismatches()
+    {
+        QFETCH(QJsonObject, payload);
+        QVERIFY(!decodeRemoteAudioContext(payload, true, true).has_value());
     }
 };
 

@@ -1,12 +1,69 @@
 #pragma once
 // no-port-check: NereusSDR-original remote audio lifecycle and worker wiring.
+#include "core/session/media/PcmAudioCodec.h"
 #include <QObject>
 #include <QByteArray>
+#include <functional>
 #include <memory>
 #include <optional>
 
 namespace NereusSDR {
 class AudioEngine;
+
+// R-R3-35: when a known RTP time will be heard. rtpTimestamp is the end of
+// the newest packet handed to the rate matcher; behind it, when the worker
+// read them at measuredNs, sat matcherFillFrames in the rate matcher and
+// speakerQueuedFrames in the speaker queue, and then the device's own
+// latency when the backend reports it. All times are the receiver clock's.
+struct RemoteAudioPlayoutPoint {
+    quint32 rtpTimestamp = 0;
+    qint64 measuredNs = 0;
+    int matcherFillFrames = 0;
+    int speakerQueuedFrames = 0;
+    std::optional<qint64> deviceLatencyNs;
+    /// Fixed delays inside the pipeline, in frames at 48 kHz: the codec's
+    /// algorithmic delay (Opus lookahead; none for lossless) and the rate
+    /// matcher's filter delay. A sample at rtpTimestamp comes out of them
+    /// this much later than the fill and queue alone say.
+    int pipelineDelayFrames = 0;
+    /// The device callback's quantum. The speaker queue drains a callback at
+    /// a time, so the queue read at measuredNs is heard up to one callback
+    /// later than a steady drain would say, depending on where in its cycle
+    /// the callback was: half a callback is counted, and half is accuracy.
+    int callbackFrames = 0;
+    /// The clock readings taken just before and just after the queue read
+    /// were this far apart; measuredNs is their midpoint and half of it is
+    /// accuracy.
+    qint64 readWindowNs = 0;
+    /// Of pipelineDelayFrames, the part before the rate matcher: the codec's
+    /// delay (Opus lookahead; none for lossless). Everything else ahead of
+    /// the newest sample is audio the rate matcher has already made.
+    int codecDelayFrames = 0;
+    /// Output frames the rate matcher makes per input frame when read (WDSP
+    /// rmatch's var; 1 before its control starts). While it corrects, the
+    /// delay itself changes as the audio plays.
+    double matcherRatio = 1.0;
+    /// How much longer the newest sample's delay is than that of the sample
+    /// heard at measuredNs: the audio between them was made at matcherRatio,
+    /// so it spans 1 / matcherRatio as much capture time as play time.
+    /// Zero at a ratio of 1 (or one that is not a positive number).
+    qint64 matcherStretchNs() const;
+    /// measuredNs plus the queued frames, the pipeline delay and half a
+    /// callback at 48 kHz, plus the device latency when known.
+    qint64 playoutNs() const;
+    /// How far the true playout time may lie from playoutNs(): half a
+    /// callback plus half the read window.
+    qint64 accuracyNs() const;
+    bool operator==(const RemoteAudioPlayoutPoint&) const = default;
+};
+
+// R-R3-35: the end RTP time of the newest received (not concealed) packet
+// released from the reorder buffer, and when it was released.
+struct RemoteAudioReleasePoint {
+    quint32 rtpTimestamp = 0;
+    qint64 releasedNs = 0;
+    bool operator==(const RemoteAudioReleasePoint&) const = default;
+};
 
 // Read-only diagnostics for one remote playback context. generation advances
 // only after a successful start. Packet counters stay available after stop for
@@ -29,9 +86,10 @@ struct RemoteAudioReceiverTelemetry {
     // overran the arrival bound or the jitter window. Only the newest packet
     // of such a backlog is kept; nothing counted here was ever heard.
     quint64 startDiscardedPackets = 0;
-    // Valid RTP/profile payload bytes received in this context. This counts
-    // duplicates and packets later dropped by the bounded local queue.
-    quint64 receivedOpusPayloadBytes = 0;
+    // Valid RTP/profile payload bytes received in this context, Opus or
+    // lossless (whichever the context runs). This counts duplicates and
+    // packets later dropped by the bounded local queue.
+    quint64 receivedAudioPayloadBytes = 0;
     quint64 deviceConsumedFrames = 0;
     int underflows = 0;
     int overflows = 0;
@@ -53,7 +111,8 @@ struct RemoteAudioReceiverTelemetry {
     quint64 expectedPackets = 0;
     quint64 missingPackets = 0;
     // Packets currently held in the jitter buffer for reordering, in ms
-    // (queued count x the buffer's 40 ms packet duration). Unlike the
+    // (queued count x the context's packet duration: 40 ms Opus, 4 ms
+    // lossless). Unlike the
     // fields above, this is a live gauge: unavailable before a measurement
     // and for stopped or failed contexts, like speakerQueuedMs.
     std::optional<double> reorderQueuedMs;
@@ -67,10 +126,21 @@ struct RemoteAudioReceiverTelemetry {
     // startup delay has passed during playback), and for stopped or failed
     // contexts.
     std::optional<double> driftRatio;
+    // R-R3-35 live gauges, like speakerQueuedMs: absent before the worker
+    // has played or released a packet in this context, and for stopped or
+    // failed contexts.
+    std::optional<RemoteAudioPlayoutPoint> playout;
+    std::optional<RemoteAudioReleasePoint> release;
 };
 
-// One generation of bounded RTP receive, Opus decoding and WDSP rate matching.
+// One generation of bounded RTP receive, decoding and WDSP rate matching.
 // All codec/resampler work runs off the GUI and device callback threads.
+// R-R3-23: a context runs one profile, named at start(): Opus (40 ms
+// packets, payload type 111) or lossless (L16, 4 ms packets, payload type
+// 96). submit() reads each packet's payload type and hands only the
+// context's own type to its decoder; the other type is a rejected header.
+// A lost lossless packet plays as 4 ms of silence. The jitter window and
+// the arrival bound are the same 320 ms for both profiles.
 class RemoteAudioReceiver final : public QObject {
     Q_OBJECT
 public:
@@ -84,9 +154,20 @@ public:
     };
     Q_ENUM(Fault)
 
-    explicit RemoteAudioReceiver(AudioEngine* engine, QObject* parent = nullptr);
+    /// Monotonic nanoseconds, never negative, callable from any thread.
+    using Clock = std::function<qint64()>;
+
+    /// `clock` (R-R3-35) stamps arrivals, playout and release times. Empty:
+    /// std::chrono::steady_clock, counted from this process's first use.
+    explicit RemoteAudioReceiver(AudioEngine* engine, QObject* parent = nullptr,
+                                 Clock clock = {});
     ~RemoteAudioReceiver() override;
-    bool start(quint32 ssrc, quint32 firstTimestamp);
+    /// The receiver clock now; the playout and release points use it.
+    qint64 nowNs() const;
+    bool start(quint32 ssrc, quint32 firstTimestamp,
+               RemoteAudioProfile profile = RemoteAudioProfile::Opus);
+    /// The profile of the current (or last) context.
+    RemoteAudioProfile profile() const;
     void stop();
     void submit(const QByteArray& packet);
     bool isRunning() const;

@@ -29,6 +29,12 @@ struct OpusAudioCodecConfig {
     int bitrate {24'000}; // the measured default; 48 kbit/s is the only alternate
 };
 
+/// The coded audio bandwidth the encoder forces for a supported target
+/// bitrate, as an Opus OPUS_BANDWIDTH_* value: 24000 bit/s codes wideband
+/// (sound up to 8 kHz), 48000 bit/s codes fullband (sound up to 20 kHz).
+/// Returns 0 for any other bitrate, which the encoder and decoder refuse.
+int bandwidthForBitrate(int bitrate);
+
 enum class OpusAudioCodecStatus {
     Accepted,
     Concealed,
@@ -39,6 +45,55 @@ enum class OpusAudioCodecStatus {
     UnexpectedSsrc,
     Oversized,
 };
+
+// ---- Profile-neutral RTP audio framing (R-R3-23) ----
+// Opus and the lossless L16 profile (PcmAudioCodec.h) share one RTP
+// boundary: the same 940-byte packet cap, the same RTP version 2 header and
+// the same CSRC, extension and padding rules. Only the payload type and the
+// payload differ, so a receiver reads the payload type first and hands the
+// packet to the matching decoder.
+
+/// One validated RTP audio packet: header fields and the payload alone.
+struct AudioRtpPacket {
+    int payloadType {0};
+    quint16 sequence {0};
+    quint32 timestamp {0};
+    quint32 ssrc {0};
+    QByteArray payload; // CSRC, extension and padding bytes excluded
+};
+
+/// The payload type of an RTP version 2 packet, or -1 when the packet is
+/// shorter than the fixed header or not version 2. Reads nothing else.
+int audioRtpPayloadType(const QByteArray& packet);
+
+/// Validates the RTP boundary for `payloadType`: at most
+/// OpusAudioCodecConfig::kMaxRtpPacketBytes (Oversized otherwise), version 2,
+/// that payload type, well-formed CSRC, extension and padding, and a
+/// non-empty payload no larger than kMaxPayloadBytes (MalformedRtp
+/// otherwise). The SSRC is reported, not checked.
+OpusAudioCodecStatus parseAudioRtp(const QByteArray& packet, int payloadType,
+                                   AudioRtpPacket& parsed);
+
+/// The header fields and where the payload lies, without copying it.
+struct AudioRtpView {
+    int payloadType {0};
+    quint16 sequence {0};
+    quint32 timestamp {0};
+    quint32 ssrc {0};
+    qsizetype payloadOffset {0};
+    qsizetype payloadBytes {0}; // CSRC, extension and padding bytes excluded
+};
+
+/// The same checks as parseAudioRtp, reporting the payload's place in
+/// `packet` instead of a copy, so a receiver can check a packet's shape per
+/// packet without allocating.
+OpusAudioCodecStatus inspectAudioRtpHeader(const QByteArray& packet, int payloadType,
+                                           AudioRtpView& view);
+
+/// A 12-byte RTP version 2 header (no CSRC, extension, padding or marker)
+/// followed by `payload`.
+QByteArray buildAudioRtp(int payloadType, quint16 sequence, quint32 timestamp,
+                         quint32 ssrc, const QByteArray& payload);
 
 struct OpusPacketInfo {
     int channels {0};
@@ -95,12 +150,18 @@ public:
 
     bool isReady() const;
     /// Sample rate and target bitrate are read back from libopus. The coded
-    /// bandwidth is the forced bandwidth the constructor configured:
+    /// bandwidth is the forced bandwidth the constructor configured from
+    /// bandwidthForBitrate():
     /// OPUS_GET_BANDWIDTH describes the last encoded frame instead, and reads
     /// FULLBAND after construction and after reset(), which is exactly when
     /// Core announces a new audio context. Valid immediately after
     /// construction or reset(), before any encode.
     std::optional<OpusEncoderProfile> profile() const; // nullopt when !isReady()
+    /// R-R3-35: the codec's algorithmic delay in frames at 48 kHz, as libopus
+    /// reports it (OPUS_GET_LOOKAHEAD). A sample given to encode() comes out
+    /// of the decoder this many frames later on the RTP clock. 0 when
+    /// !isReady().
+    int lookaheadFrames() const;
     OpusRtpEncodeResult encode(const QVector<float>& pcmInterleaved,
                                quint16 sequence, quint32 timestamp,
                                quint32 ssrc);
@@ -110,6 +171,12 @@ private:
     struct State;
     std::unique_ptr<State> m_state;
 };
+
+/// R-R3-35: the algorithmic delay, in frames at 48 kHz, of the Opus audio
+/// the Core sends: lookaheadFrames() of an encoder built like the Core's
+/// (the delay does not depend on the bitrate). Computed once; 0 only when
+/// libopus cannot build that encoder.
+int opusCodecDelayFrames();
 
 /// RAII decoder. `decodeMissing()` is explicit packet-loss concealment; a bad
 /// RTP packet is never converted into PLC by this boundary.

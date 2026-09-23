@@ -55,8 +55,8 @@ private:
 // A small modeless view of the configured Core. Full station selection and
 // pairing remain a separate surface; this view always describes the live client.
 // With a media controller, it also shows a "Remote audio" section (current
-// status, codec, output and health) and a Retry button; without one the
-// panel is unchanged.
+// status, audio quality, codec, output and health), the Opus or Lossless
+// choice and a Retry button; without one the panel is unchanged.
 class RemoteConnectionPanel final : public QDialog {
     Q_OBJECT
 public:

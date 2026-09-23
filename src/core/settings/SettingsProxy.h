@@ -167,7 +167,7 @@
 // language, since for two rounds the answer was "nobody". Task 19 was
 // named here as the owner and never did it: both accessors were read only
 // from tests, so a remote operator who changed a Setup control during an
-// outage was told the LINK dropped (MainWindow's "Station link lost"
+// outage was told the LINK dropped (MainWindow's "Link to the Core lost"
 // toast) and never that their EDIT had been thrown away -- while value()
 // went on returning the offline value, so the control itself read back as
 // applied. applySnapshot() now logs the contradicted key names at warning
@@ -451,7 +451,7 @@ signals:
     /// This exists because value() keeps returning the offline value
     /// until the snapshot lands, so the control the operator moved reads
     /// back as APPLIED the whole time -- the failure is invisible from
-    /// the widget, and "Station link lost" tells them about the link, not
+    /// the widget, and "Link to the Core lost" tells them about the link, not
     /// about their edit. MainWindow::connectToStation() hangs a toast on
     /// this; applySnapshot() also logs the key names at warning level, so
     /// the toast can stay a count and the log carries the detail.

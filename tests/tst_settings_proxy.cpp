@@ -732,7 +732,7 @@ private slots:
     //
     // keysContradictedByLastSnapshot() was written, tested, and read by
     // nothing in production: the operator was told the LINK dropped
-    // (MainWindow's "Station link lost" toast) and never that a specific
+    // (MainWindow's "Link to the Core lost" toast) and never that a specific
     // EDIT of theirs did not stick. value() keeps returning the offline
     // value, so the control reads back as applied, which is the worst
     // shape this can take. The signal below is what a GUI hangs a notice

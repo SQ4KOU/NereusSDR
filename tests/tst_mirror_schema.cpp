@@ -44,6 +44,7 @@
 #include "core/session/MirrorEnumDomain.h"
 #include "core/dsp/DspAssetService.h"
 #include "core/session/PureSignalSessionFacade.h"
+#include "models/NotchModel.h"
 #include "models/PureSignalSettings.h"
 #include "core/session/MirrorPolicy.h"
 #include "core/session/MirrorSchema.h"
@@ -852,7 +853,8 @@ private:
                  &PanadapterModel::staticMetaObject,
                  &PureSignalSettings::staticMetaObject,
                  &PureSignalSessionFacade::staticMetaObject,
-                 &DspAssetService::staticMetaObject };
+                 &DspAssetService::staticMetaObject,
+                 &NotchModel::staticMetaObject };
     }
 };
 

@@ -170,6 +170,9 @@ private:
     // nnr.setDiagnostics, nnr.resetTuning and (R-R3-40, minor 11)
     // nnr.tryAgain, each addressed to one slice ID.
     void handleNnrAction(const NereusSDR::SessionMessage& invoke);
+    // R-R3-21 / R-R3-09: notch.add / notch.move / notch.setActive /
+    // notch.delete against the Core's NotchModel.
+    void handleNotchAction(const NereusSDR::SessionMessage& invoke);
     void handlePureSignalAction(const NereusSDR::SessionMessage& invoke);
 
     void emitResult(const QByteArray& verb, quint32 commandId, bool accepted,

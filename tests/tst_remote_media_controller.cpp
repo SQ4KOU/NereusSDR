@@ -1,6 +1,8 @@
 // no-port-check: NereusSDR-original. Authenticated GUI subscription lifecycle.
 #include <QTest>
+#include <QComboBox>
 #include <QCoreApplication>
+#include <QLabel>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QRegularExpression>
@@ -23,6 +25,7 @@
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "core/settings/SettingsProxy.h"
+#include "core/settings/SettingsScope.h"
 #include "core/session/media/DisplayCodec.h"
 #include "core/session/media/DisplayBudget.h"
 #include "core/session/media/DisplayLoadGovernor.h"
@@ -36,7 +39,9 @@
 #include "core/session/Ps3DisplayCodec.h"
 #include "core/FFTEngine.h"
 #include "core/StepAttenuatorController.h"
+#include "core/session/media/LibDataChannelMediaTransport.h"
 #include "gui/RemoteAudioStatus.h"
+#include "gui/RemoteConnectionController.h"
 #include "gui/RemoteMediaController.h"
 #include "gui/PanadapterStack.h"
 #include "gui/PanadapterApplet.h"
@@ -44,6 +49,8 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "fakes/LoopbackTransport.h"
+#include "OperatorWording.h"
+#include "gui/OperatorReasonText.h"
 #include "fakes/RemoteAudioSessionHarness.h"
 
 using namespace NereusSDR;
@@ -122,6 +129,105 @@ public:
     bool sendDisplay(const QByteArray&) override { return false; }
     bool sendRtp(const QByteArray&) override { return false; }
     bool isReady() const override { return false; }
+};
+
+// R-R3-23: a network with too little room for lossless audio. This
+// computer's media transport is the real one (DTLS/SRTP over loopback), but
+// received audio beyond a fixed byte rate is lost, as on a slow link: Opus
+// (24 kbit/s) fits, lossless (about 1.6 Mbit/s) loses most of its packets.
+// Built through the MediaPeer::TransportFactory seam the GUI's controller
+// takes.
+class CapacityLimitedTransport final : public IMediaTransport {
+public:
+    // 400 kbit/s, with a burst of about five lossless packets.
+    static constexpr double kBytesPerSecond = 50'000.0;
+    static constexpr double kBurstBytes = 4'000.0;
+
+    explicit CapacityLimitedTransport(QObject* parent)
+        : IMediaTransport(parent), m_inner(new LibDataChannelMediaTransport(this))
+    {
+        connect(m_inner, &IMediaTransport::localDescription, this, &IMediaTransport::localDescription);
+        connect(m_inner, &IMediaTransport::localCandidate, this, &IMediaTransport::localCandidate);
+        connect(m_inner, &IMediaTransport::displayReceived, this, &IMediaTransport::displayReceived);
+        connect(m_inner, &IMediaTransport::ready, this, &IMediaTransport::ready);
+        connect(m_inner, &IMediaTransport::closed, this, &IMediaTransport::closed);
+        connect(m_inner, &IMediaTransport::connectionFailed, this, &IMediaTransport::connectionFailed);
+        connect(m_inner, &IMediaTransport::errorOccurred, this, &IMediaTransport::errorOccurred);
+        connect(m_inner, &IMediaTransport::displayWritable, this, &IMediaTransport::displayWritable);
+        connect(m_inner, &IMediaTransport::displayErrorOccurred,
+                this, &IMediaTransport::displayErrorOccurred);
+        connect(m_inner, &IMediaTransport::rtpReceived, this, [this](const QByteArray& packet) {
+            if (admit(packet.size())) {
+                ++passed;
+                emit rtpReceived(packet);
+            } else {
+                ++dropped;
+            }
+        });
+        m_clock.start();
+    }
+    bool start(const StartOptions& options) override { return m_inner->start(options); }
+    void stop() override { m_inner->stop(); }
+    bool acceptDescription(const QString& sdp, const QString& type) override
+    {
+        return m_inner->acceptDescription(sdp, type);
+    }
+    bool acceptCandidate(const QString& candidate, const QString& mid) override
+    {
+        return m_inner->acceptCandidate(candidate, mid);
+    }
+    bool sendDisplay(const QByteArray& message) override { return m_inner->sendDisplay(message); }
+    DisplaySendResult submitDisplay(const QByteArray& message) override
+    {
+        return m_inner->submitDisplay(message);
+    }
+    bool displayBusy() const override { return m_inner->displayBusy(); }
+    bool sendRtp(const QByteArray& packet) override { return m_inner->sendRtp(packet); }
+    bool isReady() const override { return m_inner->isReady(); }
+    bool losslessAudioNegotiated() const override { return m_inner->losslessAudioNegotiated(); }
+    std::optional<MediaTransportTelemetry> telemetry() const override { return m_inner->telemetry(); }
+
+    int passed = 0;
+    int dropped = 0;
+
+private:
+    bool admit(qsizetype bytes)
+    {
+        const qint64 now = m_clock.nsecsElapsed();
+        m_tokens = std::min(kBurstBytes,
+                            m_tokens + double(now - m_lastNs) * kBytesPerSecond / 1e9);
+        m_lastNs = now;
+        if (m_tokens < double(bytes)) { return false; }
+        m_tokens -= double(bytes);
+        return true;
+    }
+    LibDataChannelMediaTransport* m_inner;
+    QElapsedTimer m_clock;
+    qint64 m_lastNs = 0;
+    double m_tokens = kBurstBytes;
+};
+
+// The profile each audio control this GUI sent asked for, in order ("" for
+// a control without one).
+QStringList requestedProfiles(const QSignalSpy& coreControls)
+{
+    QStringList profiles;
+    for (const auto& call : coreControls) {
+        const QJsonObject control = call.at(0).toJsonObject();
+        if (control.value(QStringLiteral("op")) == QLatin1String("audio")) {
+            profiles << control.value(QStringLiteral("profile")).toString();
+        }
+    }
+    return profiles;
+}
+
+// Puts the stored remote audio choice back to Opus when a test ends.
+struct RestoreAudioChoice {
+    ~RestoreAudioChoice()
+    {
+        AppSettings::instance().setValue(
+            QLatin1String(RemoteMediaController::kAudioProfileSettingKey), QStringLiteral("Opus"));
+    }
 };
 
 QStringList g_remoteMediaMessages;
@@ -289,6 +395,30 @@ QRegularExpression speakerTimingLostLog()
     return QRegularExpression(QStringLiteral(
         "^Remote audio playback failed: (Speaker device timing became unavailable"
         "|Could not write remote audio to the speaker device) \\[ageMs="));
+}
+
+// R-R3-37: the Core accepted this pan's display and it is being shown.
+bool showsDisplay(const RemoteMediaController& controller, const PanadapterApplet* applet)
+{
+    return controller.panDisplayState(applet->panId()).phase
+        == PanDisplayState::Phase::Showing;
+}
+
+// The pan was refused for exactly `reason`, as the Core sent it, and shows
+// that refusal in user words rather than the raw text.
+bool refusedFor(const RemoteMediaController& controller, const PanadapterApplet* applet,
+                const QString& reason)
+{
+    const PanDisplayState state = controller.panDisplayState(applet->panId());
+    return state.phase == PanDisplayState::Phase::Refused && state.refusalReason == reason
+        && !applet->remoteDisplayStatus().isEmpty()
+        && OperatorWording::isPlain(applet->remoteDisplayStatus())
+        && OperatorWording::isPlain(applet->remoteDisplayExplanation())
+        // R-R3-21: the reason in user words; a reason already in user words
+        // is shown as sent, one in internal terms never is.
+        && applet->remoteDisplayExplanation().contains(OperatorReasonText::forDisplay(reason))
+        && (OperatorWording::isPlain(reason)
+            || !applet->remoteDisplayExplanation().contains(reason));
 }
 } // namespace
 
@@ -1688,6 +1818,7 @@ private slots:
         const QJsonObject second = lastControl(outbound, QStringLiteral("subscribe"));
         QVERIFY(quint32(second.value(QStringLiteral("revision")).toDouble()) > firstRevision);
         // Accepted at the requested quality: no line, as in legacy mode.
+        QVERIFY(showsDisplay(controller, applet));
         QVERIFY(applet->remoteDisplayStatus().isEmpty());
 
         const QJsonObject stale{
@@ -1713,6 +1844,7 @@ private slots:
         QVERIFY(QMetaObject::invokeMethod(subscriptionTimer, "timeout", Qt::DirectConnection));
         QCOMPARE(countControl(outbound, QStringLiteral("subscribe")), 2);
         QCOMPARE(controller.activeEndpointCount(), 1);
+        QVERIFY(showsDisplay(controller, applet));
         QVERIFY(applet->remoteDisplayStatus().isEmpty());
     }
 
@@ -1779,7 +1911,9 @@ private slots:
         sinkMedia->activate();
         QTRY_COMPARE(countControl(outbound, QStringLiteral("subscribe")), 1);
         QTRY_COMPARE(stationLink->held.size(), 1);
-        QVERIFY(applet->remoteDisplayStatus().contains(QStringLiteral("pending")));
+        QCOMPARE(controller.panDisplayState(applet->panId()).phase,
+                 PanDisplayState::Phase::Waiting);
+        QCOMPARE(applet->remoteDisplayStatus(), QStringLiteral("Waiting for the Core"));
 
         QTimer* subscriptionTimer = nullptr;
         for (QTimer* timer : controller.findChildren<QTimer*>()) {
@@ -1789,12 +1923,15 @@ private slots:
         nowMs = 10'000;
         QVERIFY(QMetaObject::invokeMethod(subscriptionTimer, "timeout", Qt::DirectConnection));
         QCOMPARE(countControl(outbound, QStringLiteral("subscribe")), 1);
-        QVERIFY(applet->remoteDisplayStatus().contains(QStringLiteral("stalled")));
+        QCOMPARE(controller.panDisplayState(applet->panId()).phase,
+                 PanDisplayState::Phase::Stalled);
+        QCOMPARE(applet->remoteDisplayStatus(), QStringLiteral("Core not answering"));
         QVERIFY(client.mediaAvailable());
 
         stationLink->releaseHeld();
         // The late result is accepted: the stalled line clears.
-        QTRY_VERIFY(applet->remoteDisplayStatus().isEmpty());
+        QTRY_VERIFY(showsDisplay(controller, applet)
+                    && applet->remoteDisplayStatus().isEmpty());
         QCOMPARE(countControl(outbound, QStringLiteral("subscribe")), 1);
         QCOMPARE(controller.activeEndpointCount(), 1);
     }
@@ -1882,8 +2019,7 @@ private slots:
         // quality shows no line.
         QTRY_VERIFY([&] {
             for (PanadapterApplet* applet : stack.allApplets()) {
-                const QString status = applet->remoteDisplayStatus();
-                if (!status.isEmpty() && !status.startsWith(QStringLiteral("Display target"))) {
+                if (!showsDisplay(controller, applet)) {
                     return false;
                 }
             }
@@ -1929,7 +2065,9 @@ private slots:
         stationLink->releaseHeld();
         QTRY_VERIFY([&] {
             for (PanadapterApplet* applet : stack.allApplets()) {
-                if (!applet->remoteDisplayStatus().isEmpty()) {
+                const PanDisplayState status = controller.panDisplayState(applet->panId());
+                if (status.phase != PanDisplayState::Phase::Showing || status.reduced()
+                    || !applet->remoteDisplayStatus().isEmpty()) {
                     return false;
                 }
             }
@@ -2054,11 +2192,16 @@ private slots:
                             != DisplayBudgetReason::None) {
                         return false;
                     }
-                } else if (!status.contains(QStringLiteral("@ 10 fps"))
-                           || !status.contains(QStringLiteral("; Core busy)"))
-                           || controller.panDisplayBudgetReason(panId)
-                               != DisplayBudgetReason::CoreBusy) {
-                    return false;
+                } else {
+                    const PanDisplayState state = controller.panDisplayState(panId);
+                    if (state.phase != PanDisplayState::Phase::Showing || state.fps != 10
+                        || !state.reduced()
+                        || state.budgetReason != DisplayBudgetReason::CoreBusy
+                        || !status.contains(QStringLiteral("Core busy"))
+                        || controller.panDisplayBudgetReason(panId)
+                            != DisplayBudgetReason::CoreBusy) {
+                        return false;
+                    }
                 }
             }
             return true;
@@ -2093,9 +2236,14 @@ private slots:
                     continue;
                 }
                 const QString status = statusOf(panId);
-                const bool atFloor = status.startsWith(QStringLiteral("Display target 256 px @ 10 fps"))
-                    && status.contains(QStringLiteral("; Core busy)"));
-                const bool paused = status == QStringLiteral("Display paused: Core busy");
+                const PanDisplayState state = controller.panDisplayState(panId);
+                const bool atFloor = state.phase == PanDisplayState::Phase::Showing
+                    && state.pixels == 256 && state.fps == 10
+                    && state.budgetReason == DisplayBudgetReason::CoreBusy
+                    && status.contains(QStringLiteral("Core busy"));
+                const bool paused = state.phase == PanDisplayState::Phase::Paused
+                    && state.budgetReason == DisplayBudgetReason::CoreBusy
+                    && status == QStringLiteral("Paused: Core busy");
                 if (!(atFloor || paused)
                     || controller.panDisplayBudgetReason(panId) != DisplayBudgetReason::CoreBusy) {
                     return false;
@@ -2125,7 +2273,8 @@ private slots:
         QVERIFY(server.setDisplayBudgetLimits(
             {deepest->applicationBytesPerSecond, deepest->spectrumSampleUnitsPerSecond, 4},
             DisplayBudgetReason::CoreBusy));
-        QTRY_VERIFY(statusOf(QStringLiteral("pan-0")).contains(QStringLiteral("; Core busy)")));
+        QTRY_VERIFY(controller.panDisplayState(QStringLiteral("pan-0")).reduced()
+                    && statusOf(QStringLiteral("pan-0")).contains(QStringLiteral("Core busy")));
         QCOMPARE(controller.panDisplayBudgetReason(QStringLiteral("pan-0")),
                  DisplayBudgetReason::CoreBusy);
         QVERIFY(backgroundsAtFloorOrPaused());
@@ -2322,7 +2471,8 @@ private slots:
         QTRY_COMPARE(countControl(outbound, QStringLiteral("subscribe")), 1);
         QTRY_COMPARE(stationLink->held.size(), 1);
         stationLink->releaseHeld();
-        QTRY_VERIFY(applet->remoteDisplayStatus().isEmpty());
+        QTRY_VERIFY(showsDisplay(controller, applet)
+                    && applet->remoteDisplayStatus().isEmpty());
 
         widget->setCenterFrequency(widget->centerFrequency() + 500);
         QTRY_COMPARE(countControl(outbound, QStringLiteral("subscribe")), 2);
@@ -2343,7 +2493,7 @@ private slots:
             {QStringLiteral("messagesPerSecond"), 0}};
         stationLink->passNextAllocationResult();
         QVERIFY(server.sendMediaControl(retired, server.mediaSessionEpoch()));
-        QTRY_VERIFY(applet->remoteDisplayStatus().contains(QStringLiteral("source retired")));
+        QTRY_VERIFY(refusedFor(controller, applet, QStringLiteral("source retired")));
         QCOMPARE(controller.activeEndpointCount(), 1);
 
         QTimer* subscriptionTimer = nullptr;
@@ -2357,7 +2507,7 @@ private slots:
         stationLink->releaseHeld();
         QCoreApplication::processEvents();
         QCOMPARE(countControl(outbound, QStringLiteral("subscribe")), subscriptions);
-        QVERIFY(applet->remoteDisplayStatus().contains(QStringLiteral("source retired")));
+        QVERIFY(refusedFor(controller, applet, QStringLiteral("source retired")));
     }
 
     void ps3EnableWaitsForReductionAndRefusalRestoresQualityWithoutRetry()
@@ -2436,7 +2586,8 @@ private slots:
         QVERIFY(original.value(QStringLiteral("pixels")).toInt() > 256
                 || original.value(QStringLiteral("fps")).toInt() > 10);
         stationLink->releaseHeld();
-        QTRY_VERIFY(applet->remoteDisplayStatus().isEmpty());
+        QTRY_VERIFY(showsDisplay(controller, applet)
+                    && applet->remoteDisplayStatus().isEmpty());
 
         remote.pureSignalFacade()->setAmpViewSubscribed(true);
         QTRY_COMPARE(countControl(outbound, QStringLiteral("subscribe")), 2);
@@ -2469,10 +2620,17 @@ private slots:
         QCOMPARE(restored.value(QStringLiteral("pixels")), original.value(QStringLiteral("pixels")));
         QCOMPARE(restored.value(QStringLiteral("fps")), original.value(QStringLiteral("fps")));
         stationLink->releaseHeld();
-        QTRY_VERIFY(applet->remoteDisplayStatus().contains(QStringLiteral("test PS3 refusal")));
+        QTRY_VERIFY(controller.panDisplayState(applet->panId()).pureSignalRefusalReason
+                        .contains(QStringLiteral("test PS3 refusal")));
+        QCOMPARE(controller.panDisplayState(applet->panId()).pureSignal,
+                 PanDisplayState::PureSignal::Refused);
+        // A reason already in user words is shown as sent (R-R3-21); the raw
+        // reason is also logged.
+        QVERIFY(applet->remoteDisplayExplanation().contains(QStringLiteral("test PS3 refusal")));
         // The refusal is already visible while the restored allocation's
         // queued acknowledgment is still in flight. Wait for accepted quality.
-        QTRY_VERIFY(!applet->remoteDisplayStatus().contains(QStringLiteral("requested")));
+        QTRY_VERIFY(!controller.panDisplayState(applet->panId()).reduced());
+        QTRY_COMPARE(applet->remoteDisplayStatus(), QStringLiteral("PureSignal: refused"));
         QVERIFY(!client.remotePs3DisplaySubscribed());
 
         for (int attempt = 0; attempt < 3; ++attempt) {
@@ -2882,14 +3040,13 @@ private slots:
                                             server.mediaSessionEpoch()));
             QTRY_COMPARE(countControl(receivedControls, QStringLiteral("context")), before + 1);
         };
-        const QString sourceBins =
-            QStringLiteral("Showing 128 points: the receiver has no finer detail here");
-        const QString shared = QStringLiteral(
-            "Zoom detail limited: this receiver's spectrum is shared with another pan");
-        const QString largest = QStringLiteral("Zoom detail is at the station's maximum");
+        const QString sourceBins = QStringLiteral("Showing 128 points");
+        const QString shared = QStringLiteral("Less detail: shared");
+        const QString largest = QStringLiteral("Finest detail reached");
 
         sendGrant(SpectrumLimitReason::SourceBins);
         QTRY_COMPARE(applet->remoteDisplayStatus(), sourceBins);
+        QVERIFY(OperatorWording::isPlain(applet->remoteDisplayExplanation()));
         sendGrant(SpectrumLimitReason::SharedEngine);
         QTRY_COMPARE(applet->remoteDisplayStatus(), shared);
         sendGrant(SpectrumLimitReason::LargestSize);
@@ -2978,11 +3135,13 @@ private slots:
                 {QStringLiteral("reason"), reason}}, server.mediaSessionEpoch()));
             QTRY_COMPARE(countControl(receivedControls, QStringLiteral("rejected")), before + 1);
         };
-        const QString refused =
-            QStringLiteral("Display allocation refused: requested crop is outside source coverage");
+        // Translated when shown; the Core's reason itself is unchanged.
+        const QString refused = QStringLiteral("Refused: out of range");
 
         refuse(QStringLiteral("requested crop is outside source coverage"));
         QTRY_COMPARE(applet->remoteDisplayStatus(), refused);
+        QVERIFY(refusedFor(controller, applet,
+                           QStringLiteral("requested crop is outside source coverage")));
         // The periodic refresh keeps the reason while the request stands.
         QTest::qWait(250);
         QCOMPARE(applet->remoteDisplayStatus(), refused);
@@ -3112,8 +3271,8 @@ private slots:
         }
         if (!grantAgreed) {
             // No grant was reported, so no grant line can appear.
-            QVERIFY(!applet->remoteDisplayStatus().contains(QStringLiteral("Zoom detail")));
-            QVERIFY(!applet->remoteDisplayStatus().contains(QStringLiteral("points:")));
+            QCOMPARE(gui.panDisplayState(applet->panId()).zoomLimit,
+                     PanDisplayState::ZoomLimit::None);
         }
         client.disconnectFromStation(QStringLiteral("test complete"));
     }
@@ -3351,7 +3510,7 @@ private slots:
         }
         QTRY_VERIFY2_WITH_TIMEOUT(paints(limited), qPrintable(limited->remoteDisplayStatus()),
                                   5000);
-        QVERIFY2(!limited->remoteDisplayStatus().contains(QStringLiteral("stalled")),
+        QVERIFY2(gui.panDisplayState(limited->panId()).phase != PanDisplayState::Phase::Stalled,
                  qPrintable(limited->remoteDisplayStatus()));
 
         // The limited pan really was granted fewer pixels than it asked for.
@@ -3458,7 +3617,8 @@ private slots:
                 QCOMPARE(survivorContext()->grant->limit, SpectrumLimitReason::None);
                 QTRY_VERIFY2_WITH_TIMEOUT(paints(limited),
                     qPrintable(limited->remoteDisplayStatus()), 5000);
-                QVERIFY2(!limited->remoteDisplayStatus().contains(QStringLiteral("points:")),
+                QVERIFY2(gui.panDisplayState(limited->panId()).zoomLimit
+                             == PanDisplayState::ZoomLimit::None,
                          qPrintable(limited->remoteDisplayStatus()));
             } else {
                 // Core refuses once; the refusal is not asked again.
@@ -3845,6 +4005,169 @@ private slots:
         h.station.setConnectionStateForTest(ConnectionState::Connected);
         QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state, State::Playing, 15000);
         QCOMPARE(errors.size(), 0);
+
+        audio.stop();
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+    // R-R3-23: the app's link trial. Lossless is chosen and the Core
+    // accepts it, but the network cannot carry it: about 5 s in, the
+    // trial returns this computer to Opus with the plain reason, and Opus
+    // plays on over the same link. The choice stays stored, and the next
+    // connection asks for lossless again.
+    void losslessFallsBackToOpusWhenTheNetworkCannotCarryIt()
+    {
+        using State = RemoteAudioStatus::State;
+        const RestoreAudioChoice restore;
+        // Chosen earlier on this computer: a new controller starts from it.
+        AppSettings::instance().setValue(
+            QLatin1String(RemoteMediaController::kAudioProfileSettingKey), QStringLiteral("Lossless"));
+        Test::RemoteAudioSessionHarness h;
+        QList<QPointer<CapacityLimitedTransport>> links;
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr, nullptr,
+            [&links](QObject* parent) -> IMediaTransport* {
+                auto* link = new CapacityLimitedTransport(parent);
+                links.append(link);
+                return link;
+            });
+        DaemonMediaController daemonMedia(&h.server, &h.station);
+        QCOMPARE(remoteMedia.audioProfileChoice(), RemoteAudioProfile::Lossless);
+        QCOMPARE(remoteMedia.audioStatus().chosenProfile, RemoteAudioProfile::Lossless);
+        // Stored on this computer: this key is never the Core's.
+        QCOMPARE(classifySettingsKey(
+                     QString::fromLatin1(RemoteMediaController::kAudioProfileSettingKey)),
+                 SettingsScope::OperatorLocal);
+        QSignalSpy errors(&remoteMedia, &RemoteMediaController::errorOccurred);
+        QSignalSpy coreControls(&h.server, &StationServer::mediaControlReceived);
+        PacedRemoteAudio audio(h);
+        h.connectSession();
+        QVERIFY(remoteMedia.audioProfileNegotiated());
+        QCOMPARE(controlsFor(coreControls, QStringLiteral("start")).constFirst()
+                     .value(QStringLiteral("audioProfileVersion")).toInteger(), qint64{1});
+
+        // The Core accepts lossless and it starts to play, badly.
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().losslessEncoder.has_value(), 15000);
+        QElapsedTimer lossless;
+        lossless.start();
+        QCOMPARE(requestedProfiles(coreControls).constFirst(), QStringLiteral("lossless"));
+        QCOMPARE(remoteMedia.audioStatus().runningProfile,
+                 std::optional<RemoteAudioProfile>(RemoteAudioProfile::Lossless));
+        QVERIFY(!remoteMedia.audioStatus().qualityReason.has_value());
+
+        // The trial decides after its first window, not before.
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().qualityReason
+                                     == RemoteAudioQualityReason::NetworkTooSlow, 12000);
+        const qint64 decidedMs = lossless.elapsed();
+        qInfo() << "lossless link trial decided after" << decidedMs << "ms; link passed"
+                << links.constLast()->passed << "dropped" << links.constLast()->dropped;
+        QVERIFY2(decidedMs >= RemoteAudioLinkTrial::kWindowMs - 1000,
+                 qPrintable(QString::number(decidedMs)));
+        QVERIFY(links.constLast()->dropped > 0);
+        QCOMPARE(errors.count(), 1);
+        QCOMPARE(errors.constFirst().at(0).toString(),
+                 QStringLiteral("The network could not carry lossless audio; staying on Opus."));
+        // The request crosses the loopback session; a loaded machine may
+        // deliver it a moment after the verdict.
+        QTRY_COMPARE_WITH_TIMEOUT(requestedProfiles(coreControls).constLast(),
+                                  QStringLiteral("opus"), 5000);
+
+        // Opus plays over the same link, and the section says why.
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().state == State::Playing
+                                     && remoteMedia.audioStatus().runningProfile
+                                         == RemoteAudioProfile::Opus, 10000);
+        RemoteAudioStatus status = remoteMedia.audioStatus();
+        QVERIFY(status.encoder.has_value());
+        QVERIFY(!status.losslessEncoder.has_value());
+        QCOMPARE(status.chosenProfile, RemoteAudioProfile::Lossless);
+        QVERIFY(formatRemoteAudioDetails(status, remoteMedia.audioTelemetry()).contains(
+            QStringLiteral("Audio quality: Opus\nThe network could not carry lossless audio; "
+                           "staying on Opus.\n")));
+        QCOMPARE(remoteMedia.audioProfileChoice(), RemoteAudioProfile::Lossless);
+        QCOMPARE(AppSettings::instance()
+                     .value(QLatin1String(RemoteMediaController::kAudioProfileSettingKey))
+                     .toString(),
+                 QStringLiteral("Lossless"));
+        // Opus fits the link: nothing more is lost once it runs.
+        const int droppedAtOpus = links.constLast()->dropped;
+        QTest::qWait(1500);
+        QCOMPARE(links.constLast()->dropped, droppedAtOpus);
+        QCOMPARE(errors.count(), 1);
+
+        // The next connection replays the stored choice.
+        const int controlsBefore = int(requestedProfiles(coreControls).size());
+        h.client.disconnectFromStation(QStringLiteral("test reconnect"));
+        QTRY_VERIFY_WITH_TIMEOUT(!h.client.mediaAvailable(), 5000);
+        QCOMPARE(remoteMedia.audioStatus().state, State::NotConnected);
+        QVERIFY(!remoteMedia.audioStatus().qualityReason.has_value());
+        h.connectSession();
+        QTRY_VERIFY_WITH_TIMEOUT(requestedProfiles(coreControls).size() > controlsBefore, 15000);
+        QCOMPARE(requestedProfiles(coreControls).at(controlsBefore), QStringLiteral("lossless"));
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().losslessEncoder.has_value(), 15000);
+
+        audio.stop();
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // R-R3-23: the Remote audio section offers Opus and Lossless. A Core
+    // whose setting denies lossless keeps Opus and the section says so in
+    // plain words; choosing Opus again clears it. Choosing is stored here
+    // and asked for at once.
+    void losslessRefusedByTheCoreKeepsOpusAndSaysWhy()
+    {
+        using State = RemoteAudioStatus::State;
+        const RestoreAudioChoice restore;
+        Test::RemoteAudioSessionHarness h;
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
+        DaemonMediaController daemonMedia(&h.server, &h.station);
+        daemonMedia.setAudioLosslessAllowed(false);
+        RemoteConnectionController controls(&h.client, &h.remote, {});
+        QSignalSpy errors(&remoteMedia, &RemoteMediaController::errorOccurred);
+        QSignalSpy coreControls(&h.server, &StationServer::mediaControlReceived);
+        PacedRemoteAudio audio(h);
+        h.connectSession();
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().state == State::Playing, 15000);
+        QVERIFY(remoteMedia.audioStatus().profileChoiceAvailable);
+        QCOMPARE(remoteMedia.audioStatus().runningProfile,
+                 std::optional<RemoteAudioProfile>(RemoteAudioProfile::Opus));
+        QCOMPARE(requestedProfiles(coreControls).constFirst(), QStringLiteral("opus"));
+
+        RemoteConnectionPanel panel(&controls, nullptr, &remoteMedia);
+        panel.show();
+        QTRY_VERIFY(panel.isVisible());
+        auto* choice = panel.findChild<QComboBox*>(QStringLiteral("remoteAudioQuality"));
+        auto* details = panel.findChild<QLabel*>(QStringLiteral("remoteAudioDetails"));
+        QVERIFY(choice && details);
+        QCOMPARE(choice->count(), 2);
+        QCOMPARE(choice->itemText(0), QStringLiteral("Opus"));
+        QCOMPARE(choice->itemText(1), QStringLiteral("Lossless"));
+        QCOMPARE(choice->currentText(), QStringLiteral("Opus"));
+        QVERIFY(details->text().contains(QStringLiteral("Audio quality: Opus\nAudio format: Opus")));
+
+        choice->setCurrentIndex(1);
+        QCOMPARE(remoteMedia.audioProfileChoice(), RemoteAudioProfile::Lossless);
+        QCOMPARE(AppSettings::instance()
+                     .value(QLatin1String(RemoteMediaController::kAudioProfileSettingKey))
+                     .toString(),
+                 QStringLiteral("Lossless"));
+        QTRY_COMPARE_WITH_TIMEOUT(requestedProfiles(coreControls).constLast(),
+                                  QStringLiteral("lossless"), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().qualityReason
+                                     == RemoteAudioQualityReason::CoreNotAllowed, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().state == State::Playing, 10000);
+        QCOMPARE(remoteMedia.audioStatus().runningProfile,
+                 std::optional<RemoteAudioProfile>(RemoteAudioProfile::Opus));
+        QTRY_VERIFY(details->text().contains(QStringLiteral(
+            "Audio quality: Opus\nThis Core does not allow lossless audio.\n")));
+        // A refusal is an answer, not a fault: no alert, no trial.
+        QCOMPARE(errors.count(), 0);
+        QVERIFY(!remoteMedia.findChild<QTimer*>(
+            QStringLiteral("remoteAudioLinkTrialTimer"))->isActive());
+
+        choice->setCurrentIndex(0);
+        QTRY_COMPARE_WITH_TIMEOUT(requestedProfiles(coreControls).constLast(),
+                                  QStringLiteral("opus"), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(!remoteMedia.audioStatus().qualityReason.has_value()
+                                     && remoteMedia.audioStatus().state == State::Playing, 10000);
+        QTRY_VERIFY(!details->text().contains(QStringLiteral("This Core")));
 
         audio.stop();
         h.client.disconnectFromStation(QStringLiteral("test complete"));

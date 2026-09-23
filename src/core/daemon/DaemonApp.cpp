@@ -480,6 +480,7 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
         m_stationServer.get(), m_radioModel.get(), this);
     // R-R3-23: before listen(), so the first peer and sender use it.
     m_mediaController->setAudioTargetBitrate(cfg.audioBitrate);
+    m_mediaController->setAudioLosslessAllowed(cfg.audioLosslessAllowed);
     // Install every source before advertising the capability. A client can
     // authenticate immediately after listen(), so there must be no window in
     // which telemetry is negotiated without a collector to publish it.

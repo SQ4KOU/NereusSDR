@@ -534,6 +534,13 @@ public:
     CommandOutcome requestFourO3AEnabled(bool enabled) override;
     CommandOutcome requestApplyNnrModels(quint32 revision) override;
     bool nnrControlAvailable() const override;
+    // R-R3-21: the Core advertised dspAssetVersion 2 on a session that
+    // negotiated DSP control, so its NR3 models can be listed and chosen.
+    bool remoteNr3ModelsAvailable() const;
+    // R-R3-21 / R-R3-09: the Core advertised notchControlVersion 1 on a
+    // session that negotiated DSP control. The window's NotchModel mirrors
+    // the Core's list and sends notch.* requests.
+    bool remoteNotchControlAvailable() const;
     CommandOutcome requestNnrDiagnostics(int sliceId, int testMode, int outputMode) override;
     /// R-R3-40: the station can clear a runtime NNR limit on request
     /// (negotiated minor 11 and NNR control).
@@ -752,6 +759,8 @@ private:
     QSet<QByteArray> m_schemaOnlyOnStation;
     QSet<QByteArray> m_schemaOnlyLocal;
     QSet<QByteArray> m_unapplied;
+    // Object keys whose deltas this session dropped (logged once each).
+    QSet<QByteArray> m_unheldDeltaKeys;
 
     QHash<QByteArray, QPointer<QObject>> m_objects;
 

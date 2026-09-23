@@ -391,8 +391,10 @@ or spectrum. Reboot/reconnect passed earlier at `daf05135`; a new reboot at
   pending. The selected libjuice backend lacks TURN/TCP and TURN/TLS; see the
   [plan's network continuity section](../2026-09-20-remote-daemon-r3-plan.md#network-decisions-carried-forward).
 - [Opus source/packet probe](opus-profile-probe.txt) and
-  [fixture source](opus-profile-probe.c): actual wideband, stereo channel count
-  and payload rate checked. This is not listening or Rock 5C CPU evidence.
+  [fixture source](opus-profile-probe.c): how high the sound reaches follows
+  the bitrate (sound up to 8 kHz at 24 kbit/s; sound up to 20 kHz at
+  48 kbit/s), and the stereo channel count and the audio data rate are
+  checked. This is not listening or Rock 5C CPU evidence.
 - Display codec: integrated target passes, including finite-extreme arithmetic,
   reconstructed-history error bounds, lost-delta recovery, malformed input and
   stale/wrapped sequence regressions.

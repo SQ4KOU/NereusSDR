@@ -1838,6 +1838,22 @@ nereus_add_test(tst_pan_wide_badge)
 # NereusSDR-original: no upstream port.
 nereus_add_test(tst_pan_status_overlay)
 
+# R-R3-37 / R-R3-21: a pan's remote display status is a short line that fits
+# a 200 px pan plus a full explanation for hover, both in user words; Core
+# reasons are translated at display time, never shown raw.
+# NereusSDR-original: no upstream port.
+nereus_add_test(tst_pan_status_text)
+
+# R-R3-17 / R-R3-21 / R-R3-23 / R-R3-35: the wording sweep. Every sentence the
+# reason table can show, the rules for a reason it does not know, the remote
+# audio words and the rewritten NNR and 4O3A controls, checked against the
+# product's one internal-term list.
+# NereusSDR-original: no upstream port.
+nereus_add_test(tst_operator_wording_sweep)
+# Fix wave M1/M7: the sweep reads the sources it checks.
+target_compile_definitions(tst_operator_wording_sweep PRIVATE
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
 # ── Phase 3F Sub-Epic E Task 3: per-pan status-overlay badge clicks ─────────
 # The badges paint on every pan (00ab9522 lit WIDE, 0896b4f3 drove the whole
 # overlay from live state) but MainWindow connected txBadgeClicked /
@@ -4473,6 +4489,8 @@ nereus_add_test(tst_audio_engine_flow_state)
 # clears counters, signal-wire safety. QTEST_MAIN — needs QApplication.
 nereus_add_test(tst_network_diagnostics_dialog)
 nereus_add_test(tst_telemetry_history)
+# R-R3-35: clock offset from probe exchanges and the measured audio delay.
+nereus_add_test(tst_audio_clock_estimator)
 nereus_add_test(tst_time_series_graph)
 nereus_add_test(tst_remote_telemetry fakes/LoopbackTransport.cpp)
 nereus_add_test(tst_remote_diagnostics fakes/LoopbackTransport.cpp)
@@ -7036,6 +7054,9 @@ nereus_add_test(tst_media_peer)
 # Remote Daemon R3, Task 5: the existing RADE-pinned Opus encodes and decodes
 # the bounded mixed-stereo RTP profile without a second codec build.
 nereus_add_test(tst_opus_audio_codec)
+# R-R3-23 lossless audio: L16 packetisation, 16-bit round trip and the
+# shared 940-byte RTP cap.
+nereus_add_test(tst_pcm_audio_codec)
 
 # Remote Daemon R3 audio source: bounded master-mix delivery and synchronous
 # tap retirement across an admitted DSP callback.

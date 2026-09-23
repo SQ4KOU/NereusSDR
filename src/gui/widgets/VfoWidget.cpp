@@ -277,6 +277,7 @@ warren@wpratt.com
 #include "NnrControls.h"
 #include "VaxChannelSelector.h"
 #include "gui/AntennaPopupBuilder.h"
+#include "gui/OperatorReasonText.h"
 #include "gui/applets/NyiOverlay.h"
 #include "core/BoardCapabilities.h"
 #include "core/SkuUiProfile.h"
@@ -304,6 +305,7 @@ warren@wpratt.com
 #include <QVariant>
 #include <QFontDatabase>
 #include <QSignalBlocker>
+#include <QToolTip>
 
 #include <cmath>
 #include <algorithm>
@@ -1570,11 +1572,21 @@ void VfoWidget::buildDspTab()
     });
     // Sub-epic C-1: NR bank left-click = setActiveNr(slot) mutual exclusion.
     auto wireNrBtnToggle = [this](QPushButton* btn, NereusSDR::NrSlot slot) {
-        connect(btn, &QPushButton::toggled, this, [this, slot](bool on) {
+        connect(btn, &QPushButton::toggled, this, [this, btn, slot](bool on) {
             if (m_updatingFromModel || !m_slice) {
                 return;
             }
-            m_slice->setActiveNr(on ? slot : NereusSDR::NrSlot::Off);
+            m_lastNrButton = btn;
+            m_nrRefusal.clear();
+            const NereusSDR::NrSlot requested = on ? slot : NereusSDR::NrSlot::Off;
+            m_nrClickInFlight = true;
+            m_slice->setActiveNr(requested);
+            m_nrClickInFlight = false;
+            // Fix wave I3: a refused choice (NR3 with no model on the Core)
+            // leaves the receiver as it was; the buttons follow it back.
+            if (m_slice && m_slice->activeNr() != requested) {
+                onActiveNrChanged(m_slice->activeNr());
+            }
         });
     };
     wireNrBtnToggle(m_nr1Btn,  NereusSDR::NrSlot::NR1);
@@ -2366,6 +2378,27 @@ void VfoWidget::onNnrLimitChanged(int limit)
     m_nnrBtn->setToolTip(reason.isEmpty() ? m_nnrToolTip : reason);
 }
 
+// Fix wave I3: say why a noise reducer did not turn on, at the button that
+// asked, in the receiver's plain words.
+void VfoWidget::onNrSelectionRefused(const QString& reason)
+{
+    if (m_slice) {
+        onActiveNrChanged(m_slice->activeNr());
+    }
+    // Follow-up item 3: one message per refused click, at the control that
+    // was clicked. A choice made elsewhere says why there.
+    if (!m_nrClickInFlight) {
+        return;
+    }
+    // A Core refusal is shown in user words; the raw text is logged.
+    m_nrRefusal = reason.isEmpty() ? reason : OperatorReasonText::forDisplay(reason);
+    QWidget* anchor = m_lastNrButton ? static_cast<QWidget*>(m_lastNrButton.data())
+                                     : static_cast<QWidget*>(m_nr3Btn);
+    if (anchor && anchor->isVisible() && !m_nrRefusal.isEmpty()) {
+        QToolTip::showText(anchor->mapToGlobal(QPoint(0, anchor->height())), m_nrRefusal, anchor);
+    }
+}
+
 void VfoWidget::setSnbEnabled(bool v)
 {
     if (m_snbToggle && m_snbToggle->isChecked() != v) {
@@ -2559,6 +2592,7 @@ void VfoWidget::setSlice(SliceModel* slice)
     if (m_slice) {
         disconnect(m_slice, &SliceModel::nnrLimitChanged,
                    this, &VfoWidget::onNnrLimitChanged);
+        disconnect(m_slice, &SliceModel::nrSelectionRefused, this, nullptr);
     }
     m_slice = QPointer<SliceModel>(slice);
     if (m_fmContainer) {
@@ -2578,6 +2612,8 @@ void VfoWidget::setSlice(SliceModel* slice)
         onActiveNrChanged(slice->activeNr());
         connect(slice, &SliceModel::nnrLimitChanged,
                 this, &VfoWidget::onNnrLimitChanged, Qt::UniqueConnection);
+        connect(slice, &SliceModel::nrSelectionRefused,
+                this, &VfoWidget::onNrSelectionRefused);
     }
     onNnrLimitChanged(slice ? slice->nnrLimit() : 0);
 

@@ -8,6 +8,7 @@
 #include "gui/ConnectionSelector.h"
 #include "gui/CoreTargetEditor.h"
 #include "gui/MainWindow.h"
+#include "gui/OperatorReasonText.h"
 #include "gui/StationLanSelection.h"
 #include "gui/RemoteConnectionController.h"
 #include "models/RadioModel.h"
@@ -211,7 +212,7 @@ void GuiConnectionController::refresh()
         const auto& advertised = endpoint.announcement;
         const QString state = exact && m_remoteControls ? m_remoteControls->statusText()
             : matches.size() > 1 ? tr("Choose a saved entry")
-            : matches.isEmpty() ? tr("Needs setup") : tr("Saved pin available");
+            : matches.isEmpty() ? tr("Needs setup") : tr("Saved, ready to connect");
         rows.append({QStringLiteral("lan:") + endpoint.key(), ConnectionTargetKind::LanCore,
             tr("%1 (advertised)").arg(advertised.coreName),
             advertised.radioConnected ? tr("%1 (advertised online)").arg(advertised.radioName)
@@ -223,7 +224,7 @@ void GuiConnectionController::refresh()
     m_selector->setDiscoveryStatus(m_lan.port() == 0
         ? tr("LAN discovery is not running. Saved and manual addresses remain available.")
         : m_lan.lastError().isEmpty() ? tr("LAN discovery is active. Verify new Cores in Core setup.")
-        : m_lan.lastError());
+        : OperatorReasonText::lanDiscoveryForDisplay(m_lan.lastError()));
     if (current.connection.isRemote() && !m_store.target(current.savedId)) {
         rows.append({QStringLiteral("current"), ConnectionTargetKind::SavedCore,
             tr("Current Core (not saved)"), m_remoteControls ? m_remoteControls->radioText() : QString(),
@@ -447,7 +448,7 @@ void GuiConnectionController::forgetTarget(const QString& key)
 void GuiConnectionController::showDetails(const QString& key)
 {
     if (key == QLatin1String("local")) {
-        m_selector->setNotice(tr("This desktop includes Core and DSP. Choose a radio under Radios on this network to operate it directly from this computer."));
+        m_selector->setNotice(tr("This computer runs its own Core and does its own signal processing. Choose a radio under Radios on this network to operate it directly from this computer."));
         return;
     }
     if (key == QLatin1String("current") || key == QStringLiteral("saved:") + m_sessions.selection().savedId) {
@@ -456,13 +457,13 @@ void GuiConnectionController::showDetails(const QString& key)
     if (key.startsWith(QLatin1String("saved:"))) {
         const auto target = m_store.target(key.mid(6));
         if (target) {
-            m_selector->setNotice(tr("Core: %1\nRadio: %2 (last known; not authenticated in this session)")
+            m_selector->setNotice(tr("Core: %1\nRadio: %2 (as of the last connection to this Core)")
                 .arg(endpointText(target->connection), target->lastRadioName.isEmpty() ? tr("unknown") : target->lastRadioName));
         }
     } else if (key.startsWith(QLatin1String("lan:"))) {
         for (const StationLanEndpoint& endpoint : m_lan.endpoints()) {
             if (key == QStringLiteral("lan:") + endpoint.key()) {
-                m_selector->setNotice(tr("Unverified LAN announcement: %1\nAddress: %2\nRadio MAC: %3\nUse saved credentials or obtain the token and certificate pin from Core setup.")
+                m_selector->setNotice(tr("Core seen on this network, not yet verified: %1\nAddress: %2\nRadio MAC: %3\nUse a saved entry for it, or get its pairing token and certificate fingerprint from Core setup.")
                     .arg(endpoint.announcement.coreName, endpointText({endpoint.url().toString(), {}, {}, false}),
                          endpoint.announcement.radioMac));
                 return;
@@ -470,7 +471,7 @@ void GuiConnectionController::showDetails(const QString& key)
         }
     } else if (key.startsWith(QLatin1String("radio:"))) {
         const QString mac = key.mid(6);
-        m_selector->setNotice(tr("Local radio: %1\nThis computer supplies the Core and DSP. Edit to inspect its saved address and model.").arg(mac));
+        m_selector->setNotice(tr("Local radio: %1\nThis computer runs the Core and does the signal processing. Edit to see its saved address and model.").arg(mac));
     }
 }
 

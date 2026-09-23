@@ -8,6 +8,7 @@
 // =================================================================
 
 #include "core/session/media/LibDataChannelMediaTransport.h"
+#include "core/session/media/PcmAudioCodec.h"
 
 #include <QDebug>
 #include <QPointer>
@@ -24,6 +25,7 @@
 #include <mutex>
 #include <string>
 #include <utility>
+#include <variant>
 #include <vector>
 
 namespace NereusSDR {
@@ -231,6 +233,28 @@ QByteArray toByteArray(const rtc::binary& data)
                       static_cast<qsizetype>(data.size()));
 }
 
+// R-R3-23: whether a description's audio m-line maps the lossless payload
+// type to L16/48000/2 (RFC 3551 L16, 48 kHz, stereo).
+bool describesLosslessAudio(const rtc::Description& description)
+{
+    for (int index = 0; index < description.mediaCount(); ++index) {
+        const auto entry = description.media(index);
+        const rtc::Description::Media* const* media =
+            std::get_if<const rtc::Description::Media*>(&entry);
+        if (media == nullptr || *media == nullptr || (*media)->mid() != kAudioMid
+            || !(*media)->hasPayloadType(PcmAudioCodecConfig::kPayloadType)) {
+            continue;
+        }
+        const rtc::Description::Media::RtpMap* map =
+            (*media)->rtpMap(PcmAudioCodecConfig::kPayloadType);
+        return QString::fromStdString(map->format).compare(
+                   QLatin1String("L16"), Qt::CaseInsensitive) == 0
+            && map->clockRate == PcmAudioCodecConfig::kSampleRate
+            && map->encParams == std::to_string(PcmAudioCodecConfig::kChannels);
+    }
+    return false;
+}
+
 quint32 rtpSsrc(const QByteArray& packet)
 {
     return (static_cast<quint32>(static_cast<quint8>(packet.at(8))) << 24)
@@ -301,6 +325,7 @@ struct LibDataChannelMediaTransport::Private {
     bool started = false;
     bool ready = false;
     bool remoteDescriptionAccepted = false;
+    bool remoteDescribesLossless = false;
     int acceptedCandidates = 0;
     std::chrono::steady_clock::time_point lastRtpTimingWarning;
 };
@@ -452,6 +477,13 @@ bool LibDataChannelMediaTransport::start(const StartOptions& options)
                 kOpusPayloadType,
                 opusOfferFormatParameters(options.audioTargetBitrate)
                     .toStdString());
+            if (options.offerLosslessAudio) {
+                // R-R3-23: the lossless profile rides the same m-line and
+                // SSRC as Opus; the payload type tells the two apart. Opus
+                // stays first, the preferred format.
+                opus.addAudioCodec(PcmAudioCodecConfig::kPayloadType,
+                                   l16RtpMapEncoding());
+            }
             opus.addSSRC(options.localAudioSsrc, "nereus-mixed-stereo");
             d->audio = d->peer->addTrack(opus);
             bindTrack(d->audio, weak);
@@ -460,6 +492,7 @@ bool LibDataChannelMediaTransport::start(const StartOptions& options)
         d->started = true;
         d->ready = false;
         d->remoteDescriptionAccepted = false;
+        d->remoteDescribesLossless = false;
         d->acceptedCandidates = 0;
         d->drainTimer->start();
 
@@ -491,6 +524,7 @@ void LibDataChannelMediaTransport::stopInternal(bool notify)
     d->ready = false;
     d->localAudioSsrc = 0;
     d->remoteDescriptionAccepted = false;
+    d->remoteDescribesLossless = false;
     d->acceptedCandidates = 0;
     d->drainTimer->stop();
 
@@ -567,8 +601,10 @@ bool LibDataChannelMediaTransport::acceptDescription(const QString& sdp,
         if (!description.candidates().empty()) {
             return false;
         }
+        const bool describesLossless = describesLosslessAudio(description);
         d->peer->setRemoteDescription(std::move(description));
         d->remoteDescriptionAccepted = true;
+        d->remoteDescribesLossless = describesLossless;
         if (d->role == Role::Answerer) {
             d->peer->setLocalDescription(rtc::Description::Type::Answer);
         }
@@ -682,6 +718,17 @@ bool LibDataChannelMediaTransport::sendRtp(const QByteArray& packet)
 bool LibDataChannelMediaTransport::isReady() const
 {
     return d->ready;
+}
+
+bool LibDataChannelMediaTransport::losslessAudioNegotiated() const
+{
+    if (!d->started || !d->peer || !d->remoteDescribesLossless) {
+        return false;
+    }
+    // Both sides, not only the remote one: the offerer's own offer, or the
+    // answer libdatachannel built from the offer.
+    const std::optional<rtc::Description> local = d->peer->localDescription();
+    return local && describesLosslessAudio(*local);
 }
 
 std::optional<MediaTransportTelemetry>

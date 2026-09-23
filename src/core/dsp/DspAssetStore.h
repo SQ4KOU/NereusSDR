@@ -56,6 +56,8 @@ public:
     QString rootDirectory() const { return m_rootDirectory; }
 
     QList<DspAssetRecord> assets() const;
+    // Manifest label for an id, without re-reading or re-validating the file.
+    QString label(const QString& id) const;
 
     DspAssetImportResult importBytes(DspAssetKind kind, const QString& label,
                                      const QByteArray& bytes,

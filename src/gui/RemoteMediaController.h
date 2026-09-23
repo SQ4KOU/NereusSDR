@@ -5,6 +5,7 @@
 #include "core/session/media/MediaPeer.h"
 #include "core/session/media/RemoteAudioContext.h"
 #include "core/session/media/RemoteAudioReceiver.h"
+#include "gui/PanStatusText.h"
 #include "gui/RemoteAudioStatus.h"
 #include <QObject>
 #include <functional>
@@ -101,11 +102,41 @@ public:
     /// budget replan with the pan's status line.
     DisplayBudgetReason panDisplayBudgetReason(const QString& panId) const;
 
+    /// R-R3-23: the AppSettings key (stored on this computer, never on the
+    /// Core) holding the remote audio choice, "Opus" or "Lossless".
+    static constexpr const char* kAudioProfileSettingKey = "RemoteAudioProfile";
+    /// The operator's remote audio choice, read from this computer's
+    /// settings at construction and replayed on every connection.
+    RemoteAudioProfile audioProfileChoice() const;
+    /// Core and this GUI can use the choice: the minor-8 audio detail and a
+    /// Core advertising audioProfileVersion 1 or later. Without it the GUI
+    /// sends exactly today's media start and audio controls.
+    bool audioProfileNegotiated() const;
+    /// R-R3-35: this Core answers audio clock probes (audioClockVersion 1 or
+    /// later). Without it no probe is sent and no delay is measured.
+    bool audioClockNegotiated() const;
+    /// R-R3-35: the measured audio delay now. measurable follows
+    /// audioClockNegotiated() while a media session exists; estimate is
+    /// present only while audio plays, echoes arrive (the newest younger
+    /// than AudioClockEstimator::kEchoStaleNs) and the Core's capture
+    /// belongs to the audio context being played.
+    RemoteAudioDelayReport audioDelay() const;
+    /// R-R3-35: how often a clock probe goes out while audio plays.
+    static constexpr int kClockProbeIntervalMs = 1000;
+    /// R-R3-37: what the pan named `panId` was last told about its remote
+    /// display, including its zoom-detail limit. The pan paints
+    /// buildPanStatusText() of this.
+    PanDisplayState panDisplayState(const QString& panId) const;
+
 public slots:
     /// Ask Core for audio again: a new request, enabled per mute and radio
     /// state like every request. A no-op without a media session or while
     /// muted on this computer. It never clears a playback problem by itself.
     void retryAudio();
+    /// Stores the choice on this computer and, with a media session, asks
+    /// Core for it at once. Choosing again also ends an earlier fallback to
+    /// Opus and starts a new link trial.
+    void setAudioProfileChoice(NereusSDR::RemoteAudioProfile profile);
 
 signals:
     void recoveryRequested(quint32 expectedEpoch, const QString& reason);
@@ -127,10 +158,10 @@ private:
     void refreshBudgetSubscriptions();
     bool retireSubscriptions(const QList<quint32>& endpointIds);
     void receiveAllocationResult(const QJsonObject& payload);
-    void setPanStatus(const QString& panId, const QString& status);
-    QString statusWithGrant(const QString& panId, const QString& status) const;
+    void setPanStatus(const QString& panId, const PanDisplayState& status);
+    PanDisplayState statusWithGrant(const QString& panId, PanDisplayState status) const;
     void refreshPanGrantStatus(const QString& panId);
-    QString perPanRefusalStatus(const QString& panId) const;
+    PanDisplayState perPanRefusalStatus(const QString& panId) const;
     void refreshCtunState();
     void receiveControl(const QJsonObject& payload, quint32 epoch);
     void receiveDisplay(const QByteArray& packet);
@@ -138,6 +169,11 @@ private:
     void requestKeyframe(quint32 endpointId);
     void requestAudio();
     void refreshAudioStatus();
+    void checkLosslessLink();
+    void fallBackToOpus(const QString& cause);
+    void sendClockProbe();
+    void reconcileClockProbe();
+    void receiveClockEcho(const QJsonObject& payload, qint64 receivedNs);
     bool send(QJsonObject payload);
 };
 } // namespace NereusSDR

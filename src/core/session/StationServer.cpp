@@ -46,6 +46,10 @@
 //                                    legacy mode. AI-assisted
 //                                    implementation via Anthropic Claude
 //                                    Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-21 / R-R3-09: the `notches`
+//                                    object, notchControlVersion 1, and the
+//                                    plain refusal of raw Notch* writes.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -61,6 +65,7 @@
 #include "core/session/StateMirror.h"
 #include "core/settings/SettingsProxyServer.h"
 #include "core/settings/SettingsScope.h"
+#include "models/NotchModel.h"
 #include "models/PanadapterModel.h"
 #include "models/PureSignalSettings.h"
 #include "core/dsp/DspAssetService.h"
@@ -832,6 +837,13 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                                "Update the station software."), {}));
             break;
         }
+        if (message.commandVerb.startsWith("notch.")
+            && it->agreedMinor < kDspControlSessionProtocolMinor) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                QStringLiteral("Update this app to change notches on this Core."), {}));
+            break;
+        }
         if ((message.commandVerb == "configureTgxl" || message.commandVerb == "disconnectTgxl")
             && it->agreedMinor < kRemoteTgxlConfigSessionProtocolMinor) {
             send(transport, SessionMessages::commandResult(
@@ -1069,6 +1081,10 @@ void StationServer::buildMirror()
     m_mirror->watch(QByteArray(kRadioKey), m_radioModel.data());
     m_mirror->watch("pureSignalSettings", m_radioModel->pureSignalSettings());
     m_mirror->watch("dspAssets", m_radioModel->dspAssets());
+    // R-R3-21 / R-R3-09 (notchControlVersion 1): the Core's notch list. An
+    // older app has no object for this key; it records the schema as skew
+    // and drops the object and its deltas, as with any newer object.
+    m_mirror->watch("notches", m_radioModel->notchModel());
     m_mirror->watch("pureSignal", m_radioModel->pureSignalFacade());
     m_mirror->watch(QByteArray(kTransmitKey), &m_radioModel->transmitModel());
     if (m_radioModel->tunerModel() != nullptr) {
@@ -1283,8 +1299,14 @@ void StationServer::handleSettingsRemove(const SessionMessage& message)
     const QString key = QString::fromUtf8(message.objectKey);
     if (isModelOwnedDspSettingsKey(key)) {
         const QVariant value = m_settings.value(key);
+        const bool nr3Path =
+            key.compare(QLatin1String("Nr3ModelPath"), Qt::CaseInsensitive) == 0;
+        // R-R3-21: the notch keys, like Nr3ModelPath, carry their own plain
+        // reason; every other model-owned key keeps its existing wire string.
+        const bool plainReason = nr3Path || isModelOwnedNotchSettingsKey(key);
         sendToSession(SessionMessages::settingsReject(key, value.isValid(), value.toString(),
-            QStringLiteral("Use the validated DSP controls to change these settings.")));
+            plainReason ? modelOwnedSettingsRefusal(key)
+                    : QStringLiteral("Use the validated DSP controls to change these settings.")));
         return;
     }
     // A remove would reset a DSP > Options TX setting to its default, so a
@@ -1560,6 +1582,12 @@ StationCapabilities StationServer::buildCapabilities() const
     caps.remoteWidebandDisplayVersion = m_mediaEnabled ? 1 : 0;
     caps.remoteAudioStatusVersion = m_mediaEnabled ? 1 : 0;
     caps.spectrumGrantVersion = m_mediaEnabled ? 1 : 0;
+    // R-R3-23: lossless audio beside Opus. Advertised with media whatever
+    // nereusd.conf audio_lossless says, so a GUI can be told plainly when
+    // the Core's own setting refuses it.
+    caps.audioProfileVersion = m_mediaEnabled ? 1 : 0;
+    // R-R3-35: the Core answers audio clock probes whenever media is on.
+    caps.audioClockVersion = m_mediaEnabled ? 1 : 0;
     const std::optional<DisplayBudgetLimits> budget = displayBudgetLimits();
     if (m_mediaEnabled && m_displayBudgetEnforcementEnabled && budget) {
         caps.remoteDisplayBudgetVersion = 1;
@@ -1578,12 +1606,17 @@ StationCapabilities StationServer::buildCapabilities() const
     caps.remoteTgxlConfigVersion = m_radioModel->stationAccessoryIdentityEnabled() ? 1 : 0;
     caps.remoteFourO3AControlVersion = m_radioModel->stationAccessoryIdentityEnabled() ? 1 : 0;
     caps.propertyResultVersion = 1;
+    // R-R3-21 / R-R3-09: the Core owns the notch list (the `notches` object
+    // and the notch.* commands). Independent of WDSP: the list lives on
+    // NotchModel whether or not channels exist.
+    caps.notchControlVersion = 1;
 #ifdef HAVE_WDSP
     caps.wdspVersion = 210;
     caps.wdspCompatibilityVersion = 1;
     caps.nnrVersion = 1;
     caps.psAlgorithmVersion = 3;
-    caps.dspAssetVersion = 1;
+    // 2 (R-R3-21): NR3 models are Core assets (kind 2, selectNr3Model).
+    caps.dspAssetVersion = 2;
     caps.psDisplayVersion = m_mediaEnabled ? 1 : 0;
 #endif
 

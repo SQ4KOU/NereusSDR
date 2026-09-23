@@ -2,13 +2,15 @@
 // src/core/session/media/RemoteAudioContext.h  (NereusSDR)
 // =================================================================
 // no-port-check: NereusSDR-original.  The one wire codec Core and GUI share
-// for the remote audio context, in both the minor-7 and minor-8 shapes; it
-// holds no session identity or playback policy.
+// for the remote audio context, in the minor-7 and minor-8 shapes and the
+// audio-profile shape (R-R3-23, audioProfileVersion 1); it holds no session
+// identity or playback policy.
 // =================================================================
 
 #pragma once
 
 #include "core/session/media/OpusAudioCodec.h"
+#include "core/session/media/PcmAudioCodec.h"
 
 #include <QJsonObject>
 #include <QJsonValue>
@@ -36,6 +38,35 @@ QJsonObject remoteAudioEncoderToJson(const OpusEncoderProfile& profile);
 /// of 6000..510000 bit/s and one of the five Opus audio bandwidths.
 std::optional<OpusEncoderProfile> remoteAudioEncoderFromJson(const QJsonValue& value);
 
+// ---- Audio profile (R-R3-23, audioProfileVersion 1) ----
+
+/// "opus" or "lossless": the `profile` a GUI asks for in its audio control
+/// and the profile Core reports it is running in the audio context.
+QString remoteAudioProfileToWire(RemoteAudioProfile profile);
+/// One of the two wire strings exactly; nullopt otherwise.
+std::optional<RemoteAudioProfile> remoteAudioProfileFromWire(const QJsonValue& value);
+
+/// Why Core runs Opus although lossless was asked for. Machine codes for
+/// the GUI to turn into plain words; never shown as they are.
+enum class RemoteAudioProfileRefusal {
+    /// The Core's own setting (nereusd.conf audio_lossless = deny).
+    NotAllowed,
+    /// This media connection cannot carry it: the lossless format was not
+    /// agreed when the connection was set up, or the packetiser is missing.
+    Unavailable,
+};
+/// lossless-not-allowed or lossless-unavailable.
+QString remoteAudioProfileRefusalToWire(RemoteAudioProfileRefusal refusal);
+std::optional<RemoteAudioProfileRefusal> remoteAudioProfileRefusalFromWire(
+    const QJsonValue& value);
+
+/// {"codec":"l16","sampleRate":48000,"channels":2,"frameSamples":192,
+/// "bitsPerSample":16,"payloadType":96}, every number an integral JSON number.
+QJsonObject remoteAudioL16EncoderToJson(const PcmEncoderProfile& profile);
+/// Accepts only that exact key set with exactly those values (the one
+/// lossless profile this build can play).
+std::optional<PcmEncoderProfile> remoteAudioL16EncoderFromJson(const QJsonValue& value);
+
 struct RemoteAudioContextMessage {
     QString connectionId;
     quint32 revision = 0;
@@ -46,6 +77,13 @@ struct RemoteAudioContextMessage {
     quint32 firstTimestamp = 0;
     std::optional<OpusEncoderProfile> encoder;     // set only when enabled and detail negotiated
     std::optional<RemoteAudioOffReason> offReason; // set only when disabled and detail negotiated
+    // The audio-profile shape only (profileNegotiated). `profile` is the one
+    // Core runs (absent means Opus when encoding); when it is Lossless and
+    // audio is on, `losslessEncoder` describes the packets and `encoder` is
+    // unused. `profileRefusal` says why lossless was asked for and not given.
+    std::optional<RemoteAudioProfile> profile;
+    std::optional<PcmEncoderProfile> losslessEncoder;
+    std::optional<RemoteAudioProfileRefusal> profileRefusal;
 };
 
 // detailNegotiated=false: exactly today's eight keys (op, connectionId,
@@ -54,15 +92,26 @@ struct RemoteAudioContextMessage {
 // detailNegotiated=true: those eight plus "encoder" (enabled) or "reason" (disabled).
 // An enabled message with no encoder is written disabled with reason
 // encoder-unavailable, the only shape a minor-8 GUI accepts for it.
+// profileNegotiated=true (only with detailNegotiated; ignored otherwise), for
+// a GUI that sent `profile` in its audio control: the detail shape plus
+// "profile" always, the "l16" encoder shape when lossless audio is on, and
+// "profileRefusal" when Opus runs because lossless was refused. With
+// profileNegotiated=false the profile fields are never written, so an older
+// GUI sees exactly the shape it parses today.
 QJsonObject encodeRemoteAudioContext(const RemoteAudioContextMessage& message,
-                                     bool detailNegotiated);
+                                     bool detailNegotiated, bool profileNegotiated = false);
 
 // Shape and field validation only (identity checks stay with the caller).
-// Accepts exactly the shape selected by detailNegotiated; nullopt otherwise.
-// Both shapes take revision, generation and ssrc as integral 1..4294967295,
+// Accepts exactly the shape selected by detailNegotiated and
+// profileNegotiated; nullopt otherwise.
+// All shapes take revision, generation and ssrc as integral 1..4294967295,
 // as the GUI's parser always has, and firstSequence 0..65535 and
-// firstTimestamp 0..4294967295.
+// firstTimestamp 0..4294967295. The profile shape also requires: "profile"
+// opus or lossless; an enabled lossless context with the "l16" encoder and
+// an enabled Opus one with the Opus encoder; "profileRefusal" only beside
+// profile opus.
 std::optional<RemoteAudioContextMessage> decodeRemoteAudioContext(const QJsonObject& payload,
-                                                                  bool detailNegotiated);
+                                                                  bool detailNegotiated,
+                                                                  bool profileNegotiated = false);
 
 } // namespace NereusSDR

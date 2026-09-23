@@ -1115,6 +1115,7 @@ set(CORE_SOURCES
     src/core/session/media/LibDataChannelMediaTransport.cpp
     src/core/session/media/MediaPeer.cpp
     src/core/session/media/OpusAudioCodec.cpp
+    src/core/session/media/PcmAudioCodec.cpp
     src/core/session/media/DisplayCodec.cpp
     src/core/session/media/DisplayBudget.cpp
     src/core/session/media/DisplayLoadGovernor.cpp
@@ -1200,6 +1201,8 @@ set(GUI_SOURCES
     src/gui/RemoteMediaController.cpp
     src/gui/RemoteAudioStatus.cpp
     src/gui/RemoteDisplayAllocator.cpp
+    src/gui/PanStatusText.cpp
+    src/gui/OperatorReasonText.cpp
     src/gui/RemoteTelemetryController.cpp
     src/gui/RemoteDiagnosticsDialog.cpp
     src/gui/RemoteConnectionController.cpp
@@ -1301,6 +1304,8 @@ set(GUI_SOURCES
     src/gui/widgets/TxBoundConfirmDialog.h
     src/gui/NetworkDiagnosticsDialog.cpp
     src/gui/NetworkDiagnosticsDialog.h
+    src/gui/AudioClockEstimator.cpp
+    src/gui/AudioClockEstimator.h
     src/gui/TelemetryHistory.cpp
     src/gui/TelemetryHistory.h
     src/gui/TimeSeriesGraphWidget.h
@@ -2503,6 +2508,20 @@ install(TARGETS NereusCore
 #   cmake --install build --component nereusd
 install(TARGETS nereusd
     RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
+    COMPONENT nereusd
+    EXCLUDE_FROM_ALL
+)
+
+# R-R3-21: the Core owns the NR3 model, and "Default" is the bundled
+# Default_large.bin file, never an empty path. The desktop packages carry
+# both bundled models through release.yml (AppDir share/, .app Resources/,
+# Windows models/); nereusd's component had none, so an installed daemon
+# could not load any NR3 model. ModelPaths probe #3 finds these at
+# <bindir>/../share/NereusSDR/models/rnnoise/.
+install(FILES
+        "${CMAKE_SOURCE_DIR}/third_party/rnnoise/models/Default_large.bin"
+        "${CMAKE_SOURCE_DIR}/third_party/rnnoise/models/Default_small.bin"
+    DESTINATION "${CMAKE_INSTALL_DATAROOTDIR}/NereusSDR/models/rnnoise"
     COMPONENT nereusd
     EXCLUDE_FROM_ALL
 )

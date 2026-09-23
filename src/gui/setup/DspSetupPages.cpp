@@ -16,6 +16,9 @@
 //   2026-09-23 - R-R3-21: AgcAlcSetupPage TX Leveler and TX ALC groups
 //                 follow the remote transmit permission. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-23 - R-R3-21 / R-R3-09: the TNF page's row commit sends a
+//                 remote window's centre and width to the Core as one move.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -970,49 +973,26 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
         fixedGainChk->setToolTip(tr("Use a fixed (rather than adaptive) input sample gain."));
         grpLay->addWidget(fixedGainChk);
 
-        // Model selector group — GLOBAL (not per-slice), stored in AppSettings
+        // Model selector group: GLOBAL (not per-slice). R-R3-21: the Core
+        // owns the NR3 model; this chooses among the Core's models (bundled
+        // large/small plus any added) in local and remote windows alike.
         QVBoxLayout* mdlGrp = makeGroup(tabLay, "RNNoise Model (Global)");
-
-        auto* modelLabel = new QLabel;
-        modelLabel->setStyleSheet("QLabel { color: #00c8ff; font-size: 12px; }");
-        {
-            const QString saved = AppSettings::instance().value("Nr3ModelPath", "").toString();
-            modelLabel->setText(saved.isEmpty() ? "Default (large)" : QFileInfo(saved).baseName());
+        auto* nr3Picker = new Nr3ModelPicker(model, model ? model->dspAssets() : nullptr);
+        if (auto* modelsBtn = nr3Picker->findChild<QPushButton*>(QStringLiteral("nr3ModelsButton"))) {
+            modelsBtn->setStyleSheet(
+                "QPushButton { background: #1a2a3a; border: 1px solid #304050; "
+                "border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 3px 10px; }"
+                "QPushButton:hover { background: #203040; }"
+                "QPushButton:pressed { background: #00b4d8; color: #0f0f1a; }");
         }
-        mdlGrp->addWidget(modelLabel);
-
-        auto* btnRow = new QHBoxLayout;
-        auto* useModelBtn = new QPushButton("Use Model...");
-        useModelBtn->setStyleSheet(
-            "QPushButton { background: #1a2a3a; border: 1px solid #304050; "
-            "border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 3px 10px; }"
-            "QPushButton:hover { background: #203040; }"
-            "QPushButton:pressed { background: #00b4d8; color: #0f0f1a; }");
-        auto* defBtn = new QPushButton("Default");
-        defBtn->setStyleSheet(useModelBtn->styleSheet());
-        btnRow->addWidget(useModelBtn);
-        btnRow->addWidget(defBtn);
-        btnRow->addStretch(1);
-        mdlGrp->addLayout(btnRow);
+        if (auto* statusLbl = nr3Picker->findChild<QLabel*>(QStringLiteral("nr3ModelStatusLabel"))) {
+            statusLbl->setStyleSheet("QLabel { color: #00c8ff; font-size: 12px; }");
+        }
+        mdlGrp->addWidget(nr3Picker);
 
         tabLay->addStretch(1);
 
-        // ── Wire NR3 controls → SliceModel / global ──────────────────────────
-        connect(useModelBtn, &QPushButton::clicked, this, [this, modelLabel]() {
-            const QString path = QFileDialog::getOpenFileName(
-                this, tr("Choose RNNoise Model"), QString(), tr("Model Files (*.bin *.rnnn);;All files (*)"));
-            if (path.isEmpty()) { return; }
-            AppSettings::instance().setValue("Nr3ModelPath", path);
-            RNNRloadModel(path.toStdString().c_str());
-            modelLabel->setText(QFileInfo(path).baseName());
-        });
-
-        connect(defBtn, &QPushButton::clicked, this, [modelLabel]() {
-            AppSettings::instance().setValue("Nr3ModelPath", "");
-            RNNRloadModel("");
-            modelLabel->setText("Default (large)");
-        });
-
+        // ── Wire NR3 controls → SliceModel ───────────────────────────────────
         if (slice) {
             connect(preRdo, &QRadioButton::toggled, slice, [slice](bool checked) {
                 if (checked) { slice->setNr3Position(NrPosition::PreAgc); }
@@ -2551,6 +2531,10 @@ void MnfSetupPage::commitRow(int notchId)
     NotchModel* nm = rm->notchModel();
     nm->setCenter(notchId, freqSpin->value());
     nm->setWidth(notchId, widthSpin->value());
+    // R-R3-21: on a remote window the two halves travel to the Core as one
+    // notch.move, sent now rather than at the end of a drag window. Nothing
+    // is held locally, so this is a no-op there.
+    nm->flushPendingMoves();
 }
 
 // ── MnfSetupPage::beginAdminEdit ──────────────────────────────────────────────

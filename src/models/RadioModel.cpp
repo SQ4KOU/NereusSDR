@@ -56,6 +56,11 @@
 //                 Later the same day: turning NNR on applies the slice's
 //                 saved NNR choice first, so the receiver never runs a
 //                 model other than the one the slice shows.
+//   2026-09-23 : R-R3-21 / R-R3-09 by J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code. The Core's notch commands (add,
+//                 move, setActive, delete) for remote windows, and a
+//                 remote window's add routed as a request.
+//                 NereusSDR-original; no Thetis logic.
 //   2026-05-03 — Phase 4 Agent 4A of issue #167 (PA calibration safety
 //                 hotfix — K2GX field report).  Drive-slider lambda
 //                 (lines ~830) and TUNE-engagement path (lines ~4280)
@@ -396,6 +401,7 @@ warren@wpratt.com
 #include <QDateTime>
 #include <QElapsedTimer>
 #include <QEventLoop>
+#include <QFile>
 #include <QMetaObject>
 #include <QScopeGuard>
 #include <QScopedValueRollback>
@@ -608,6 +614,28 @@ RadioModel::RadioModel(Role role, QObject* parent)
     connect(m_dspAssets, &DspAssetService::configurationChanged, this, [this]() {
         scheduleSettingsSave();
     });
+    // R-R3-21: the Core owns the NR3 model. A choice applies live through
+    // rnnr.c's RNNRloadModel (it swaps the model under every NR3 instance);
+    // DspAssetService only calls this with a file that passed its trial load.
+    // A remote window never loads a model: its service ignores the loader.
+    m_dspAssets->setNr3ModelLoader([](const QString& path) {
+        qCInfo(lcDsp) << "NR3: loading rnnoise model from" << path;
+#ifdef HAVE_WDSP
+        const QByteArray encoded = QFile::encodeName(path);
+        RNNRloadModel(encoded.constData());
+#endif
+    });
+    // Follow-up item 1 (R-R3-21): whenever the Core finds it has no usable
+    // NR3 model (at start, at a connect's load, or after a model choice),
+    // any slice holding NR3 turns it off with the reason, whichever came
+    // first: the saved choice, the connect or the status.
+    if (role == Role::Local) {
+        connect(m_dspAssets, &DspAssetService::nr3SelectionChanged, this, [this]() {
+            for (SliceModel* slice : std::as_const(m_slices)) {
+                turnOffNr3WithoutModel(slice);
+            }
+        });
+    }
     m_pureSignalSettings = new PureSignalSettings(this);
     m_pureSignalFacade = new PureSignalSessionFacade(this, nullptr, this);
     if (role == Role::Local) {
@@ -3961,6 +3989,15 @@ void RadioModel::wireNnrSettings(SliceModel* slice)
         return channel->nnrTuning();
     });
     slice->setNrSelectionApplier([this, slice](NrSlot requested, QString* reason) {
+        // Fix wave I3 (R-R3-21): with no usable NR3 model, WDSP's NR3 has
+        // no model and would pass audio through unchanged. Refuse turning
+        // it on, with the plain status, whether or not a channel is open.
+        if (requested == NrSlot::NR3 && m_dspAssets && !m_dspAssets->nr3Runnable()) {
+            if (reason) {
+                *reason = nr3CannotRunReason();
+            }
+            return false;
+        }
         RxChannel* channel = m_wdspEngine ? m_wdspEngine->rxChannel(slice->sliceIndex()) : nullptr;
         // R-R3-40: turning NNR on or off clears a runtime limit. Cleared
         // before NNR goes on, and after it goes off, so an "off" limit never
@@ -4008,6 +4045,29 @@ void RadioModel::wireNnrSettings(SliceModel* slice)
     // R-R3-40: "Try again", or choosing a model while limited.
     connect(slice, &SliceModel::nnrRetryRequested, this,
             [this, slice]() { clearNnrLimit(slice); });
+    // Follow-up item 1: the slice's saved choice was restored before this
+    // refusal existed, so a saved NR3 is checked again now.
+    turnOffNr3WithoutModel(slice);
+}
+
+QString RadioModel::nr3CannotRunReason() const
+{
+    return m_dspAssets->nr3ModelStatus().isEmpty()
+        ? tr("NR3 cannot run on this Core: no NR3 model file was found.")
+        : m_dspAssets->nr3ModelStatus();
+}
+
+void RadioModel::turnOffNr3WithoutModel(SliceModel* slice)
+{
+    if (!slice || role() != Role::Local || !m_dspAssets || m_dspAssets->nr3Runnable()
+        || slice->activeNr() != NrSlot::NR3) {
+        return;
+    }
+    // Off always passes the selection applier, which turns the receiver's
+    // NR3 off too when a channel is open. The reason is set after, since
+    // setActiveNr clears it.
+    slice->setActiveNr(NrSlot::Off);
+    slice->reportNnrEditResult(nr3CannotRunReason());
 }
 
 bool RadioModel::setNnrDiagnosticMode(int sliceId, int testMode, int outputMode, QString* reason)
@@ -4083,14 +4143,19 @@ void RadioModel::applyNnrStateToChannel(SliceModel* slice, RxChannel* channel)
     if (!slice || !channel) {
         return;
     }
+    // Follow-up item 1 (R-R3-21): WDSP is never asked to run NR3 without a
+    // usable NR3 model; the slice shows NR off with the reason instead.
+    turnOffNr3WithoutModel(slice);
     QString reason;
     // R-R3-40: a new or reopened channel starts with the slice's runtime
     // limit, applied by the tuning call below.
     channel->requestNnrLimit(slice->nnrLimit());
     const bool tuningAccepted = channel->setNnrTuning(slice->nnrSettings(), &reason);
+    const bool nr3Blocked = slice->activeNr() == NrSlot::NR3 && m_dspAssets
+        && !m_dspAssets->nr3Runnable();
     // A missing saved model must not enable a different model silently.
     // Retain the saved preference so the operator can repair the asset.
-    if (tuningAccepted || slice->activeNr() != NrSlot::NNR) {
+    if (!nr3Blocked && (tuningAccepted || slice->activeNr() != NrSlot::NNR)) {
         channel->setActiveNr(slice->activeNr());
     } else {
         channel->setActiveNr(NrSlot::Off);
@@ -7728,6 +7793,11 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
     m_lastRadioInfo = info;
     m_pureSignalSettings->load(info.macAddress);
     m_dspAssets->setRadioIdentity(info.macAddress);
+    // Follow-up item 1 (R-R3-21): find now whether an NR3 model file is
+    // still here (status only; nothing loads until the channels open), so
+    // a saved NR3 choice restored below is refused before any receiver
+    // could run it.
+    m_dspAssets->resolveNr3ModelPath();
     m_intentionalDisconnect = false;
 
     // Compute HardwareProfile from model override (Phase 3I-RP).
@@ -8189,20 +8259,14 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
 #endif
 
                     // NR3 model — global (RNNRloadModel), not per-channel.
-                    // Prefer AppSettings override; fall back to the bundled dev-path.
                     // From Thetis wdsp/rnnr.c:161-176 [v2.10.3.13]
+                    // R-R3-21: the Core's chosen NR3 asset, resolved to a
+                    // file that passed the trial load (bundled large model
+                    // by default). Nr3ModelPath is no longer read here.
                     {
-                        const QString defaultModelPath = NereusSDR::ModelPaths::rnnoiseDefaultLargeBin();
-                        const QString model = AppSettings::instance().value(
-                            QStringLiteral("Nr3ModelPath"), defaultModelPath).toString();
-                        if (!model.isEmpty()) {
-                            qCInfo(lcDsp) << "NR3: loading rnnoise model from" << model;
-#ifdef HAVE_WDSP
-                            RNNRloadModel(model.toStdString().c_str());
-#endif
-                        } else {
-                            qCWarning(lcDsp) << "NR3 model not found at expected paths;"
-                                             << "NR3 will be disabled until a model is loaded.";
+                        QString nr3Reason;
+                        if (!m_dspAssets->applyNr3Model(&nr3Reason)) {
+                            qCWarning(lcDsp) << "NR3 model not loaded:" << nr3Reason;
                         }
                     }
 
@@ -11355,6 +11419,14 @@ int RadioModel::addNotchForSlice(SliceModel* slice, double centerHz,
         return -1;
     }
 
+    // R-R3-21: a remote window asks the Core, which owns the list and knows
+    // the receiver's real minimum width.
+    if (m_notchModel->mirrorMode()) {
+        SliceModel* target = slice ? slice : activeSlice();
+        m_notchModel->requestAdd(target ? target->sliceIndex() : -1, centerHz, widthHz);
+        return -1;
+    }
+
     // Clamp to what THIS slice's filter can actually realise. min_notch_width
     // is 1600 / (nc / 256) * (rate / 48000) (third_party/wdsp/src/nbp.c:88),
     // so at the smaller supported filter sizes it is 400 Hz (nc 1024) or
@@ -11388,6 +11460,116 @@ void RadioModel::commitPendingNotchEdits()
     if (m_notchEditTimer) {
         m_notchEditTimer->stop();
     }
+    // R-R3-21: a remote window's drag ends with its final notch.move.
+    if (m_notchModel) {
+        m_notchModel->flushPendingMoves();
+    }
+}
+
+// ── R-R3-21 / R-R3-09: the Core's notch commands ────────────────────────────
+// NereusSDR-original. The guards and clamps are NotchModel's own (its Thetis
+// cites live there); these only resolve the notch or receiver a remote
+// window named and turn a refusal into plain words.
+
+namespace {
+const QString kUnknownNotchReason =
+    QStringLiteral("That notch is no longer on this Core.");
+const QString kNotchListBusyReason =
+    QStringLiteral("The notch list is being edited on the Core. Try again when it is done.");
+}  // namespace
+
+quint32 RadioModel::notchListRevision() const
+{
+    return m_notchModel ? m_notchModel->revision() : 0;
+}
+
+bool RadioModel::addNotchFromStation(int sliceId, double centreHz, double widthHz,
+                                     int* id, QString* reason)
+{
+    if (!m_notchModel || m_notchModel->mirrorMode()) {
+        if (reason) { *reason = QStringLiteral("This Core cannot add notches"); }
+        return false;
+    }
+    SliceModel* slice = sliceById(sliceId);
+    if (!slice) {
+        if (reason) { *reason = QStringLiteral("That receiver is not on this Core"); }
+        return false;
+    }
+    // addNotch reports every refusal through notchAddRejected before it
+    // returns; the call is synchronous, so the capture cannot outlive it.
+    QString rejection;
+    const QMetaObject::Connection conn = connect(
+        m_notchModel.get(), &NotchModel::notchAddRejected, this,
+        [&rejection](const QString& why) { rejection = why; });
+    const int added = addNotchForSlice(slice, centreHz, widthHz);
+    QObject::disconnect(conn);
+    if (added < 0) {
+        if (reason) {
+            *reason = rejection.isEmpty() ? QStringLiteral("The Core refused it") : rejection;
+        }
+        return false;
+    }
+    if (id) { *id = added; }
+    return true;
+}
+
+bool RadioModel::moveNotchFromStation(int id, double centreHz, double widthHz,
+                                      QString* reason)
+{
+    NotchModel* nm = m_notchModel.get();
+    if (!nm || nm->mirrorMode() || !nm->notchById(id)) {
+        if (reason) { *reason = kUnknownNotchReason; }
+        return false;
+    }
+    if (nm->adminBusy()) {
+        if (reason) { *reason = kNotchListBusyReason; }
+        return false;
+    }
+    // Checked whole before either half applies, so a refused move changes
+    // nothing. The rules are setCenter's and setWidth's.
+    const double centre = std::nearbyint(centreHz);
+    const double width = std::clamp(widthHz, 0.0, NotchModel::kMaxNotchWidthHz);
+    if (centre < NotchModel::kMinNotchCentreHz || centre > NotchModel::kMaxNotchCentreHz
+        || centre - width / 2 < 0 || centre + width / 2 > NotchModel::kMaxNotchCentreHz) {
+        if (reason) {
+            *reason = QStringLiteral("That notch would be outside the radio's tuning range.");
+        }
+        return false;
+    }
+    // One change: one revision, one channel update, never half a move.
+    const bool moved = nm->move(id, centre, width);
+    if (!moved && reason) {
+        *reason = QStringLiteral("The Core could not move that notch.");
+    }
+    return moved;
+}
+
+bool RadioModel::setNotchActiveFromStation(int id, bool active, QString* reason)
+{
+    NotchModel* nm = m_notchModel.get();
+    if (!nm || nm->mirrorMode() || !nm->notchById(id)) {
+        if (reason) { *reason = kUnknownNotchReason; }
+        return false;
+    }
+    if (nm->adminBusy()) {
+        if (reason) { *reason = kNotchListBusyReason; }
+        return false;
+    }
+    return nm->setActive(id, active);
+}
+
+bool RadioModel::deleteNotchFromStation(int id, QString* reason)
+{
+    NotchModel* nm = m_notchModel.get();
+    if (!nm || nm->mirrorMode() || !nm->notchById(id)) {
+        if (reason) { *reason = kUnknownNotchReason; }
+        return false;
+    }
+    if (nm->adminBusy()) {
+        if (reason) { *reason = kNotchListBusyReason; }
+        return false;
+    }
+    return nm->removeNotch(id);
 }
 
 void RadioModel::pushNotchOrigin(SliceModel* slice, RxChannel* ch,

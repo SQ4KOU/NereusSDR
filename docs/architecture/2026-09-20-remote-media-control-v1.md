@@ -26,7 +26,7 @@ codec histories and callbacks, including deliberate silent redials.
 
 | Operation | Exact payload fields beyond `op` and `connectionId` |
 | --- | --- |
-| `start` | None |
+| `start` | None; a GUI whose Core advertised `audioProfileVersion` adds `audioProfileVersion`, a whole number of at least 1 (anything else is refused and no peer starts) |
 | `description` | `sdp`, `type` (`offer` or `answer`, appropriate to peer role) |
 | `candidate` | `candidate`, `mid` |
 
@@ -166,6 +166,68 @@ the following attempt uses a keyframe. Dropped I/Q invalidates the FFT input
 history before post-gap samples are processed. Endpoint cadence follows an
 advancing schedule with bounded early-jitter tolerance; it does not restart
 its entire interval after each arrival or catch up with a burst after a stall.
+
+## Measured audio delay (clock-probe and clock-echo)
+
+Capability `audioClockVersion=1` (R-R3-35) negotiates it; the session
+protocol minor is unchanged. The Core advertises version 1 whenever media is
+on. A GUI sends probes only while audio plays to a Core that advertised it,
+one every 1000 ms (`RemoteMediaController::kClockProbeIntervalMs`); a Core
+without it is never probed and shows no delay.
+
+GUI-to-Core `clock-probe` has exactly these fields:
+
+| Field | Meaning |
+| --- | --- |
+| `op`, `connectionId` | As every operation; the current peer's ID |
+| `id` | uint32, the probe's number |
+| `t0` | Non-negative integer nanoseconds on the GUI's clock when the probe was sent |
+
+Core-to-GUI `clock-echo` has exactly nine fields:
+
+| Field | Meaning |
+| --- | --- |
+| `op`, `connectionId` | As every operation |
+| `id`, `t0` | Copied from the probe |
+| `t1` | Core clock (non-negative integer nanoseconds) when the probe arrived, read first |
+| `t2` | Core clock when the echo left, read last |
+| `generation` | The running audio context's generation, or 0 while no context is capturing |
+| `rtpTimestamp` | The RTP time at the end of the newest captured block (its timestamp plus 1920), or 0 |
+| `capturedNs` | The Core clock when that block's last frame reached the audio tap, or 0 |
+
+The Core ignores a probe with any other key, a wrong or retired
+`connectionId`, an `id` that is not a uint32, or a negative or non-integer
+`t0`. The GUI accepts an echo only as the answer to one of its last eight
+probes, matching both `id` and `t0`; `t3` is its own clock on arrival.
+
+From the echo the GUI computes the Core-minus-GUI clock offset
+`((t1 - t0) + (t2 - t3)) / 2` and the round trip `(t3 - t0) - (t2 - t1)`. Of
+the probes in the last 16 s it uses the one with the lowest round trip; half
+that round trip, plus a 100 ppm allowance for the two clocks' drift, bounds
+the offset's error. Half the round trip is shown only as accuracy, never as
+a delay. No figure is shown once the newest echo is 3 s old, while the
+echo's `generation` is 0 or is not the context this computer plays, or across
+a new audio context until its first echo arrives.
+
+The delay is the time this computer plays a sample minus the time the Core
+captured it (mapped through the offset). The play time counts, after the
+rate matcher fill and the speaker queue, the fixed delays inside the
+pipeline: the Opus codec's algorithmic delay (`OPUS_GET_LOOKAHEAD`, 312
+frames at 48 kHz, for Opus only) and the rate matcher's filter delay (69
+frames). The speaker queue drains a device callback at a time, so half a
+callback is counted and the other half is added to the accuracy, together
+with half the time the queue read took. The device's own latency is added
+when the audio backend reports it; otherwise the figure says it does not
+count the speaker device.
+
+The figure is the delay of the sample heard when the queue was read, not of
+the newest sample behind it. While the rate matcher corrects its fill, its
+ratio (output frames made per input frame, WDSP rmatch's `var`) is not 1 and
+the delay itself changes as the audio plays: the audio between the two
+samples was made at that ratio, so it spans `1 / ratio` as much capture time
+as play time. The newest sample's delay is reduced by that stretch, the
+play time the rate matcher made (everything ahead of the newest sample but
+the codec's delay) times `1 - 1 / ratio`, using the ratio at the reading.
 
 The audio enable/context lifecycle, playback buffering and adaptive session
 budget are still being implemented. Their acceptance remains open in the

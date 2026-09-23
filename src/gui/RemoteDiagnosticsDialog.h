@@ -49,12 +49,13 @@ private:
     QComboBox* m_rangeSelector{nullptr};
     QLabel* m_detailLabel{nullptr};
     TimeSeriesGraphWidget* m_totalTrafficGraph{nullptr};
-    TimeSeriesGraphWidget* m_opusTrafficGraph{nullptr};
+    TimeSeriesGraphWidget* m_audioTrafficGraph{nullptr};
     TimeSeriesGraphWidget* m_speakerBufferGraph{nullptr};
     TimeSeriesGraphWidget* m_radioLinkGraph{nullptr};
     TimeSeriesGraphWidget* m_controlPayloadGraph{nullptr};
     TimeSeriesGraphWidget* m_roundTripGraph{nullptr};
     TimeSeriesGraphWidget* m_packetAgeGraph{nullptr};
+    TimeSeriesGraphWidget* m_audioDelayGraph{nullptr};
     TimeSeriesGraphWidget* m_audioPacketsGraph{nullptr};
     TimeSeriesGraphWidget* m_sourceFramesGraph{nullptr};
     TimeSeriesGraphWidget* m_audioEventsGraph{nullptr};

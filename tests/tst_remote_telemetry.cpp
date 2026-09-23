@@ -1,5 +1,6 @@
 // no-port-check: NereusSDR-original. Remote telemetry lifecycle/presentation.
 #include <QTest>
+#include <algorithm>
 #include <QRegularExpression>
 #include <QTemporaryDir>
 #include <QTimer>
@@ -12,6 +13,7 @@
 #include "gui/RemoteMediaController.h"
 #include "gui/RemoteTelemetryController.h"
 #include "models/RadioModel.h"
+#include "OperatorWording.h"
 #include "fakes/LoopbackTransport.h"
 #include "fakes/RemoteAudioSessionHarness.h"
 
@@ -81,7 +83,8 @@ private slots:
         client.startSession(guiWire, server.token());
         QTRY_VERIFY(client.isHandshakeComplete());
         QCOMPARE(controller.current().state, RemoteTelemetryView::State::Waiting);
-        QVERIFY(controller.bannerText().contains(QStringLiteral("waiting for telemetry")));
+        QVERIFY(controller.bannerText().contains(QStringLiteral("waiting for measurements")));
+        QVERIFY2(OperatorWording::isPlain(controller.bannerText()), qPrintable(controller.bannerText()));
 
         guiWire->observation.pongRttMs = 83;
         guiWire->observation.pongAgeMs = 20000; // older than station freshness, still valid RTT
@@ -141,7 +144,7 @@ private slots:
         QVERIFY(controller.current().playbackActive);
         QCOMPARE(controller.history().rawObservationCount(Metric::RadioRxMbps), 1);
         QCOMPARE(controller.history().series(Metric::PlaybackDecodedPacketsPerSecond, now, 60).points.last().value, 25.0);
-        QVERIFY(controller.detailText().contains(QStringLiteral("excluding media")));
+        QVERIFY(controller.detailText().contains(QStringLiteral("not counting audio, display or network overhead")));
         QVERIFY(controller.detailText().contains(QStringLiteral("measured 20000 ms ago")));
         // R-R3-23 Task 4: measured values, rounded, labelled with what they
         // are, no RTP/generation words.
@@ -160,8 +163,16 @@ private slots:
         // Fix wave M1: the connect-time backlog discard is shown, and it is
         // a separate count from "admitted" (the receiver excludes it).
         QVERIFY2(controller.detailText().contains(QStringLiteral(
-                     "admitted 27, discarded before playback 62, decoded 25,")),
+                     "accepted 27, discarded before playback 62, decoded 25,")),
                  qPrintable(controller.detailText()));
+        // R-R3-21: every line of the explanation is in user words, and
+        // there are lines to check (fix wave M1).
+        QVERIFY2(controller.detailText().split(QLatin1Char('\n')).size() >= 10,
+                 qPrintable(controller.detailText()));
+        for (const QString& line : controller.detailText().split(QLatin1Char('\n'))) {
+            QVERIFY2(OperatorWording::isPlain(line), qPrintable(line));
+        }
+        QVERIFY2(OperatorWording::isPlain(controller.bannerText()), qPrintable(controller.bannerText()));
 
         // The previous context failed and restarted entirely between polls.
         // Its per-context counters have reset; the actual interruption remains.
@@ -189,7 +200,8 @@ private slots:
         QCOMPARE(controller.current().state, RemoteTelemetryView::State::Stale);
         QVERIFY(!controller.current().radio.rxMbps);
         QCOMPARE(controller.history().rawObservationCount(Metric::RadioRxMbps), 1);
-        QVERIFY(controller.bannerText().contains(QStringLiteral("telemetry stale")));
+        QVERIFY(controller.bannerText().contains(QStringLiteral("measurements out of date")));
+        QVERIFY2(OperatorWording::isPlain(controller.bannerText()), qPrintable(controller.bannerText()));
         QCOMPARE(controller.current().coreRttMs, std::optional<quint64>(83));
         guiWire->observation.pongAgeMs = 60001;
         controller.sampleNow();
@@ -302,7 +314,7 @@ private slots:
         client.startSession(gui, server.token());
         QTRY_VERIFY(client.isHandshakeComplete());
         QVERIFY(!controller.current().coreGuiTotalKbps);
-        QVERIFY(!controller.current().opusRxKbps);
+        QVERIFY(!controller.current().audioPayloadRxKbps);
 
         now += 2000; // actual elapsed time, not a presumed one-second tick
         gui->observation.receivedPayloadBytes = 1000;
@@ -311,16 +323,16 @@ private slots:
         media->traffic.receivedRtpBytes = 10000;
         media->traffic.submittedDisplayPayloadBytes = 200;
         media->traffic.submittedRtpBytes = 300;
-        playback.receivedOpusPayloadBytes = 9000; // subset, never add twice
+        playback.receivedAudioPayloadBytes = 9000; // subset, never add twice
         controller.sampleNow();
         QCOMPARE(controller.current().coreGuiRxKbps, std::optional<double>(444.0));
         QCOMPARE(controller.current().coreGuiTxKbps, std::optional<double>(4.0));
         QCOMPARE(controller.current().coreGuiTotalKbps, std::optional<double>(448.0));
-        QCOMPARE(controller.current().opusRxKbps, std::optional<double>(36.0));
+        QCOMPARE(controller.current().audioPayloadRxKbps, std::optional<double>(36.0));
         QCOMPARE(controller.current().audioRtpRxKbps, std::optional<double>(40.0));
         QVERIFY(controller.bannerText().contains(QStringLiteral("Core ↓444.0 ↑4.0 total 448.0 kbps")));
         QCOMPARE(controller.history().series(Metric::SpeakerBufferMs, now, 60).points.last().value, 25.0);
-        QVERIFY(controller.detailText().contains(QStringLiteral("End-to-end Opus latency is not measured")));
+        QVERIFY(controller.detailText().contains(QStringLiteral("End-to-end audio latency is not measured")));
         QVERIFY(controller.detailText().contains(QStringLiteral("already included in total")));
 
         now += 1000;
@@ -331,30 +343,30 @@ private slots:
         now += 1000;
         controller.sampleNow();
         QCOMPARE(controller.current().coreGuiTotalKbps, std::optional<double>(0.0));
-        QCOMPARE(controller.current().opusRxKbps, std::optional<double>(0.0));
+        QCOMPARE(controller.current().audioPayloadRxKbps, std::optional<double>(0.0));
 
         // An audio restart gaps Opus but does not discard media totals.
         now += 1000;
         ++playback.generation;
-        playback.receivedOpusPayloadBytes = 0;
+        playback.receivedAudioPayloadBytes = 0;
         playback.speakerQueuedMs.reset();
         media->traffic.receivedRtpBytes += 500;
         controller.sampleNow();
         QCOMPARE(controller.current().coreGuiTotalKbps, std::optional<double>(4.0));
-        QVERIFY(!controller.current().opusRxKbps);
+        QVERIFY(!controller.current().audioPayloadRxKbps);
         now += 1000;
-        playback.receivedOpusPayloadBytes = 500;
+        playback.receivedAudioPayloadBytes = 500;
         controller.sampleNow();
-        QCOMPARE(controller.current().opusRxKbps, std::optional<double>(4.0));
-        QVERIFY(controller.history().series(Metric::OpusPayloadRxKbps, now, 60).points.last().breakBefore);
+        QCOMPARE(controller.current().audioPayloadRxKbps, std::optional<double>(4.0));
+        QVERIFY(controller.history().series(Metric::AudioPayloadRxKbps, now, 60).points.last().breakBefore);
 
         // A peer replacement gaps total and Opus, with independent baselines.
         now += 1000;
         media = MediaPeerTelemetry{4, {}};
-        playback.receivedOpusPayloadBytes += 500;
+        playback.receivedAudioPayloadBytes += 500;
         controller.sampleNow();
         QVERIFY(!controller.current().coreGuiTotalKbps);
-        QVERIFY(!controller.current().opusRxKbps);
+        QVERIFY(!controller.current().audioPayloadRxKbps);
         now += 1000;
         controller.sampleNow();
         QCOMPARE(controller.current().coreGuiTotalKbps, std::optional<double>(0.0));
@@ -364,7 +376,7 @@ private slots:
         media.reset();
         controller.sampleNow();
         QVERIFY(!controller.current().coreGuiTotalKbps); // unknown is not control-only zero
-        QVERIFY(!controller.current().opusRxKbps);
+        QVERIFY(!controller.current().audioPayloadRxKbps);
         now += 1000;
         media = MediaPeerTelemetry{4, {}};
         controller.sampleNow();
@@ -383,7 +395,7 @@ private slots:
         QVERIFY(controller.history().series(Metric::CoreGuiTotalKbps, now, 60).points.last().breakBefore);
         client.disconnectFromStation(QStringLiteral("done"));
         QVERIFY(!controller.current().coreGuiTotalKbps);
-        QVERIFY(!controller.current().opusRxKbps);
+        QVERIFY(!controller.current().audioPayloadRxKbps);
     }
 
     // R-R3-32/33: host values reach the view and the history; absent values
@@ -597,8 +609,130 @@ private slots:
         client.startSession(gui, server.token());
         QTRY_VERIFY(client.isHandshakeComplete());
         QCOMPARE(controller.current().state, RemoteTelemetryView::State::Unsupported);
-        QVERIFY(controller.bannerText().contains(QStringLiteral("telemetry unsupported")));
+        QVERIFY(controller.bannerText().contains(QStringLiteral("measurements not offered")));
+        QVERIFY2(OperatorWording::isPlain(controller.bannerText()), qPrintable(controller.bannerText()));
         QVERIFY(!controller.current().radio.rxMbps);
+        client.disconnectFromStation(QStringLiteral("done"));
+    }
+
+    // R-R3-35: the measured audio delay. A Core that cannot measure it keeps
+    // today's sentence; one that can says "not measured yet" until a figure
+    // exists, then shows the delay with its accuracy and the delivery delay
+    // separately. Echoes stopping and a reconnect both leave gaps in the
+    // history, and the periodic diagnostics line carries the figures.
+    void measuredAudioDelayIsDescribedGraphedAndGappedAcrossReconnects()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        StationServer server(&station, settings, dir.path());
+        server.setTelemetryEnabled(true);
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        qint64 now = 10000;
+        RemoteAudioReceiverTelemetry playback;
+        playback.running = true;
+        playback.generation = 3;
+        RemoteAudioDelayReport delay;
+        DiagnosticsCapture capture;
+        RemoteTelemetryController controller(&client, nullptr, nullptr,
+            [&] { return now; }, [&] { return playback; }, {}, [&] { return delay; });
+        const auto connect = [&] {
+            auto* gui = new ObservedLoopback;
+            auto* core = new Test::LoopbackTransport(QStringLiteral("Core"));
+            gui->linkTo(core);
+            server.acceptTransport(core);
+            client.startSession(gui, server.token());
+            QTRY_VERIFY(client.isHandshakeComplete());
+        };
+        connect();
+        const QString olderCoreLine = QStringLiteral(
+            "End-to-end audio latency is not measured. Core RTT is a control round trip, "
+            "not one-way audio latency; RTT/2 is not used.");
+
+        // A Core without clock probes: exactly today's sentence.
+        controller.sampleNow();
+        QVERIFY(controller.detailText().contains(olderCoreLine));
+        QVERIFY(!controller.detailText().contains(QStringLiteral("Audio delay")));
+        QVERIFY(controller.history().series(Metric::AudioDelayMs, now, 60).points.isEmpty());
+
+        // Measurable, nothing yet.
+        delay.measurable = true;
+        now += 1000;
+        controller.sampleNow();
+        QVERIFY(!controller.detailText().contains(olderCoreLine));
+        QVERIFY(controller.detailText().contains(QStringLiteral(
+            "Audio delay: not measured yet. It needs audio playing and answers from the Core.")));
+
+        // Measured: the delay with its accuracy, the device not counted, and
+        // delivery on its own line.
+        delay.estimate = AudioDelayEstimate{85.2, 0.4, false, 62.3, 0.4};
+        now += 1000;
+        controller.sampleNow();
+        QVERIFY2(controller.detailText().contains(QStringLiteral(
+            "Audio delay: 85\u00A0ms \u00B1 1\u00A0ms, not counting the speaker device, "
+            "from the Core's audio to this computer's speaker.")),
+                 qPrintable(controller.detailText()));
+        QVERIFY(controller.detailText().contains(QStringLiteral(
+            "Delivery delay: 62\u00A0ms \u00B1 1\u00A0ms, from the Core's audio to this "
+            "computer's player, before the speaker queue.")));
+        QCOMPARE(controller.current().audioDelay, delay);
+        delay.estimate->includesDevice = true;
+        now += 1000;
+        controller.sampleNow();
+        QVERIFY(controller.detailText().contains(QStringLiteral(
+            "Audio delay: 85\u00A0ms \u00B1 1\u00A0ms, from the Core's audio")));
+        auto series = controller.history().series(Metric::AudioDelayMs, now, 60);
+        QCOMPARE(series.points.size(), 2);
+        QCOMPARE(series.points.last().value, 85.2);
+        QVERIFY(!series.points.last().breakBefore);
+        QCOMPARE(controller.history().series(Metric::AudioDelayAccuracyMs, now, 60)
+                     .points.last().value, 0.4);
+        QCOMPARE(controller.history().series(Metric::AudioDeliveryDelayMs, now, 60)
+                     .points.last().value, 62.3);
+
+        // Echoes stop: no figure, and the next one starts a new line.
+        delay.estimate.reset();
+        now += 1000;
+        controller.sampleNow();
+        QVERIFY(controller.detailText().contains(QStringLiteral("Audio delay: not measured yet.")));
+        delay.estimate = AudioDelayEstimate{90.0, 0.5, true, 60.0, 0.5};
+        now += 1000;
+        controller.sampleNow();
+        series = controller.history().series(Metric::AudioDelayMs, now, 60);
+        QCOMPARE(series.points.size(), 3);
+        QVERIFY(series.points.last().breakBefore);
+
+        // The diagnostics line, one interval after the session began.
+        now += 60000;
+        controller.sampleNow();
+        QVERIFY(!g_diagnosticsLines.isEmpty());
+        QVERIFY2(g_diagnosticsLines.constLast().contains(QStringLiteral(
+            "audioDelayMs=90.0 audioDelayAccuracyMs=0.5 audioDelayIncludesDevice=yes "
+            "deliveryDelayMs=60.0")),
+                 qPrintable(g_diagnosticsLines.constLast()));
+
+        // A reconnect: the first figure after it starts a new line.
+        const auto breaks = [](const TelemetryHistory::Series& path) {
+            return std::count_if(path.points.cbegin(), path.points.cend(),
+                                 [](const TelemetryHistory::Point& point) { return point.breakBefore; });
+        };
+        const qsizetype pointsBefore =
+            controller.history().series(Metric::AudioDelayMs, now, 120).points.size();
+        const auto breaksBefore = breaks(controller.history().series(Metric::AudioDelayMs, now, 120));
+        client.disconnectFromStation(QStringLiteral("operator disconnect"));
+        QCOMPARE(controller.current().audioDelay, RemoteAudioDelayReport{});
+        QCoreApplication::processEvents();
+        ++now;
+        connect();
+        now += 1000;
+        controller.sampleNow();
+        series = controller.history().series(Metric::AudioDelayMs, now, 120);
+        QVERIFY(series.points.size() > pointsBefore);
+        QVERIFY(series.points.at(pointsBefore).breakBefore);
+        QCOMPARE(breaks(series), breaksBefore + 1);
+        QCOMPARE(series.points.last().value, 90.0);
         client.disconnectFromStation(QStringLiteral("done"));
     }
 };

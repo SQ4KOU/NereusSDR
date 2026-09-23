@@ -5,7 +5,8 @@
 // no-port-check: NereusSDR-original. Remote daemon R3 Task 5.
 // Profile values are pinned by
 // docs/architecture/2026-09-20-remote-daemon-r3-verification/opus-profile-probe.c
-// against Opus 940d4e5af64351ca8ba8390df3f555484c567fbb.
+// against Opus 940d4e5af64351ca8ba8390df3f555484c567fbb: 24 kbit/s codes
+// wideband (8 kHz) and 48 kbit/s codes fullband (20 kHz), stereo, 40 ms.
 //
 // =================================================================
 
@@ -19,13 +20,6 @@
 
 namespace NereusSDR {
 namespace {
-
-// The one coded bandwidth this profile forces, passed to OPUS_SET_BANDWIDTH
-// and reported by OpusAudioEncoder::profile(). libopus has no getter for a
-// forced bandwidth (OPUS_GET_BANDWIDTH reports the last encoded frame), so
-// profile() reports this value and the codec tests check it against the
-// TOC bandwidth of every packet the encoder produces.
-constexpr opus_int32 kEncoderBandwidth = OPUS_BANDWIDTH_WIDEBAND;
 
 int audioBandwidthHz(opus_int32 bandwidth)
 {
@@ -47,7 +41,7 @@ int audioBandwidthHz(opus_int32 bandwidth)
 
 bool validConfig(const OpusAudioCodecConfig& config)
 {
-    return config.bitrate == 24'000 || config.bitrate == 48'000;
+    return bandwidthForBitrate(config.bitrate) != 0;
 }
 
 bool finitePcm(const QVector<float>& pcm)
@@ -85,14 +79,72 @@ quint32 readU32(const QByteArray& bytes, int offset)
         | static_cast<unsigned char>(bytes.at(offset + 3));
 }
 
-struct ParsedRtp {
-    quint16 sequence {0};
-    quint32 timestamp {0};
-    quint32 ssrc {0};
-    QByteArray payload;
-};
+OpusPacketInfo packetInfo(const QByteArray& payload)
+{
+    OpusPacketInfo info;
+    info.channels = opus_packet_get_nb_channels(
+        reinterpret_cast<const unsigned char*>(payload.constData()));
+    info.bandwidth = opus_packet_get_bandwidth(
+        reinterpret_cast<const unsigned char*>(payload.constData()));
+    info.samplesPerChannel = opus_packet_get_nb_samples(
+        reinterpret_cast<const unsigned char*>(payload.constData()), payload.size(),
+        OpusAudioCodecConfig::kSampleRate);
+    return info;
+}
 
-OpusAudioCodecStatus parseRtp(const QByteArray& packet, ParsedRtp& parsed)
+bool validPacketInfo(const OpusPacketInfo& info)
+{
+    return info.channels == OpusAudioCodecConfig::kChannels
+        && info.samplesPerChannel == OpusAudioCodecConfig::kFrameSamples
+        && info.bandwidth > OPUS_BANDWIDTH_NARROWBAND;
+}
+
+} // namespace
+
+// R-R3-23: the coded bandwidth each supported target forces, passed to
+// OPUS_SET_BANDWIDTH and reported by OpusAudioEncoder::profile(). libopus
+// has no getter for a forced bandwidth (OPUS_GET_BANDWIDTH reports the last
+// encoded frame), so profile() reports this value and the codec tests check
+// it against the TOC bandwidth of every packet the encoder produces.
+int bandwidthForBitrate(int bitrate)
+{
+    switch (bitrate) {
+    case 24'000:
+        return OPUS_BANDWIDTH_WIDEBAND;
+    case 48'000:
+        return OPUS_BANDWIDTH_FULLBAND;
+    default:
+        return 0;
+    }
+}
+
+int audioRtpPayloadType(const QByteArray& packet)
+{
+    if (packet.size() < OpusAudioCodecConfig::kRtpHeaderBytes
+        || (static_cast<quint8>(packet.at(0)) >> 6) != 2) {
+        return -1;
+    }
+    return static_cast<quint8>(packet.at(1)) & 0x7f;
+}
+
+OpusAudioCodecStatus parseAudioRtp(const QByteArray& packet, int payloadType,
+                                   AudioRtpPacket& parsed)
+{
+    AudioRtpView view;
+    const OpusAudioCodecStatus status = inspectAudioRtpHeader(packet, payloadType, view);
+    if (status != OpusAudioCodecStatus::Accepted) {
+        return status;
+    }
+    parsed.payloadType = view.payloadType;
+    parsed.sequence = view.sequence;
+    parsed.timestamp = view.timestamp;
+    parsed.ssrc = view.ssrc;
+    parsed.payload = packet.mid(view.payloadOffset, view.payloadBytes);
+    return OpusAudioCodecStatus::Accepted;
+}
+
+OpusAudioCodecStatus inspectAudioRtpHeader(const QByteArray& packet, int payloadType,
+                                           AudioRtpView& view)
 {
     if (packet.size() > OpusAudioCodecConfig::kMaxRtpPacketBytes) {
         return OpusAudioCodecStatus::Oversized;
@@ -102,7 +154,7 @@ OpusAudioCodecStatus parseRtp(const QByteArray& packet, ParsedRtp& parsed)
     }
     const quint8 first = static_cast<unsigned char>(packet.at(0));
     const quint8 second = static_cast<unsigned char>(packet.at(1));
-    if ((first >> 6) != 2 || (second & 0x7f) != OpusAudioCodecConfig::kPayloadType) {
+    if ((first >> 6) != 2 || (second & 0x7f) != payloadType) {
         return OpusAudioCodecStatus::MalformedRtp;
     }
     int headerBytes = OpusAudioCodecConfig::kRtpHeaderBytes + (first & 0x0f) * 4;
@@ -134,40 +186,34 @@ OpusAudioCodecStatus parseRtp(const QByteArray& packet, ParsedRtp& parsed)
     if (payloadBytes <= 0 || payloadBytes > OpusAudioCodecConfig::kMaxPayloadBytes) {
         return OpusAudioCodecStatus::MalformedRtp;
     }
-    parsed.sequence = readU16(packet, 2);
-    parsed.timestamp = readU32(packet, 4);
-    parsed.ssrc = readU32(packet, 8);
-    parsed.payload = packet.mid(headerBytes, payloadBytes);
+    view.payloadType = payloadType;
+    view.sequence = readU16(packet, 2);
+    view.timestamp = readU32(packet, 4);
+    view.ssrc = readU32(packet, 8);
+    view.payloadOffset = headerBytes;
+    view.payloadBytes = payloadBytes;
     return OpusAudioCodecStatus::Accepted;
 }
 
-OpusPacketInfo packetInfo(const QByteArray& payload)
+QByteArray buildAudioRtp(int payloadType, quint16 sequence, quint32 timestamp,
+                         quint32 ssrc, const QByteArray& payload)
 {
-    OpusPacketInfo info;
-    info.channels = opus_packet_get_nb_channels(
-        reinterpret_cast<const unsigned char*>(payload.constData()));
-    info.bandwidth = opus_packet_get_bandwidth(
-        reinterpret_cast<const unsigned char*>(payload.constData()));
-    info.samplesPerChannel = opus_packet_get_nb_samples(
-        reinterpret_cast<const unsigned char*>(payload.constData()), payload.size(),
-        OpusAudioCodecConfig::kSampleRate);
-    return info;
+    QByteArray packet;
+    packet.reserve(OpusAudioCodecConfig::kRtpHeaderBytes + payload.size());
+    packet.append(static_cast<char>(0x80)); // V2, no CSRC/extension/padding
+    packet.append(static_cast<char>(payloadType & 0x7f));
+    appendU16(packet, sequence);
+    appendU32(packet, timestamp);
+    appendU32(packet, ssrc);
+    packet.append(payload);
+    return packet;
 }
-
-bool validPacketInfo(const OpusPacketInfo& info)
-{
-    return info.channels == OpusAudioCodecConfig::kChannels
-        && info.samplesPerChannel == OpusAudioCodecConfig::kFrameSamples
-        && info.bandwidth > OPUS_BANDWIDTH_NARROWBAND;
-}
-
-} // namespace
 
 OpusRtpInspection inspectOpusRtp(const QByteArray& packet, quint32 expectedSsrc)
 {
     OpusRtpInspection result;
-    ParsedRtp parsed;
-    result.status = parseRtp(packet, parsed);
+    AudioRtpPacket parsed;
+    result.status = parseAudioRtp(packet, OpusAudioCodecConfig::kPayloadType, parsed);
     if (result.status != OpusAudioCodecStatus::Accepted) { return result; }
     if (parsed.ssrc != expectedSsrc) {
         result.status = OpusAudioCodecStatus::UnexpectedSsrc;
@@ -187,6 +233,7 @@ OpusRtpInspection inspectOpusRtp(const QByteArray& packet, quint32 expectedSsrc)
 struct OpusAudioEncoder::State {
     OpusEncoder* encoder {nullptr};
     OpusAudioCodecConfig config;
+    opus_int32 bandwidth {0}; // forced OPUS_BANDWIDTH_* for config.bitrate
 
     ~State() { opus_encoder_destroy(encoder); }
 };
@@ -206,12 +253,13 @@ OpusAudioEncoder::OpusAudioEncoder(const OpusAudioCodecConfig& config)
     int error = OPUS_OK;
     std::unique_ptr<State> state = std::make_unique<State>();
     state->config = config;
+    state->bandwidth = bandwidthForBitrate(config.bitrate);
     state->encoder = opus_encoder_create(OpusAudioCodecConfig::kSampleRate,
                                          OpusAudioCodecConfig::kChannels,
                                          OPUS_APPLICATION_AUDIO, &error);
     if (state->encoder == nullptr || error != OPUS_OK
         || opus_encoder_ctl(state->encoder, OPUS_SET_SIGNAL(OPUS_SIGNAL_MUSIC)) != OPUS_OK
-        || opus_encoder_ctl(state->encoder, OPUS_SET_BANDWIDTH(kEncoderBandwidth)) != OPUS_OK
+        || opus_encoder_ctl(state->encoder, OPUS_SET_BANDWIDTH(state->bandwidth)) != OPUS_OK
         || opus_encoder_ctl(state->encoder, OPUS_SET_BITRATE(config.bitrate)) != OPUS_OK
         || opus_encoder_ctl(state->encoder, OPUS_SET_VBR(1)) != OPUS_OK
         || opus_encoder_ctl(state->encoder, OPUS_SET_VBR_CONSTRAINT(1)) != OPUS_OK
@@ -246,8 +294,27 @@ std::optional<OpusEncoderProfile> OpusAudioEncoder::profile() const
     profile.channels = OpusAudioCodecConfig::kChannels;
     profile.frameSamples = OpusAudioCodecConfig::kFrameSamples;
     profile.targetBitrate = bitrate;
-    profile.audioBandwidthHz = audioBandwidthHz(kEncoderBandwidth);
+    profile.audioBandwidthHz = audioBandwidthHz(m_state->bandwidth);
     return profile;
+}
+
+int OpusAudioEncoder::lookaheadFrames() const
+{
+    opus_int32 lookahead = 0;
+    if (!isReady()
+        || opus_encoder_ctl(m_state->encoder, OPUS_GET_LOOKAHEAD(&lookahead)) != OPUS_OK) {
+        return 0;
+    }
+    return std::max<opus_int32>(0, lookahead);
+}
+
+int opusCodecDelayFrames()
+{
+    // The same application, rate and channels as every encoder here;
+    // libopus's lookahead is Fs/400 plus its delay compensation for
+    // OPUS_APPLICATION_AUDIO (312 frames at 48 kHz in the pinned source).
+    static const int frames = OpusAudioEncoder{}.lookaheadFrames();
+    return frames;
 }
 
 OpusRtpEncodeResult OpusAudioEncoder::encode(const QVector<float>& pcmInterleaved,
@@ -275,13 +342,8 @@ OpusRtpEncodeResult OpusAudioEncoder::encode(const QVector<float>& pcmInterleave
         result.status = OpusAudioCodecStatus::EncodeFailed;
         return result;
     }
-    result.packet.reserve(OpusAudioCodecConfig::kRtpHeaderBytes + encoded);
-    result.packet.append(static_cast<char>(0x80)); // V2, no CSRC/extension/padding
-    result.packet.append(static_cast<char>(OpusAudioCodecConfig::kPayloadType));
-    appendU16(result.packet, sequence);
-    appendU32(result.packet, timestamp);
-    appendU32(result.packet, ssrc);
-    result.packet.append(payload);
+    result.packet = buildAudioRtp(OpusAudioCodecConfig::kPayloadType, sequence,
+                                  timestamp, ssrc, payload);
     result.status = OpusAudioCodecStatus::Accepted;
     return result;
 }
@@ -322,8 +384,8 @@ OpusRtpDecodeResult OpusAudioDecoder::decodeRtp(const QByteArray& packet, quint3
     if (!isReady()) {
         return result;
     }
-    ParsedRtp parsed;
-    result.status = parseRtp(packet, parsed);
+    AudioRtpPacket parsed;
+    result.status = parseAudioRtp(packet, OpusAudioCodecConfig::kPayloadType, parsed);
     if (result.status != OpusAudioCodecStatus::Accepted) {
         return result;
     }

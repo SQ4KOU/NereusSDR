@@ -55,9 +55,10 @@ std::optional<double> mebibytes(std::optional<qint64> kibibytes)
 
 RemoteTelemetryController::RemoteTelemetryController(
     StationClient* client, RemoteMediaController* media, QObject* parent,
-    Clock clock, PlaybackObserver playback, TrafficObserver traffic)
+    Clock clock, PlaybackObserver playback, TrafficObserver traffic, DelayObserver delay)
     : QObject(parent), m_client(client), m_media(media),
-      m_now(std::move(clock)), m_playback(std::move(playback)), m_traffic(std::move(traffic))
+      m_now(std::move(clock)), m_playback(std::move(playback)), m_traffic(std::move(traffic)),
+      m_delay(std::move(delay))
 {
     m_clock.start();
     m_timer.setInterval(1000);
@@ -87,7 +88,7 @@ qint64 RemoteTelemetryController::nowMs() const
 
 void RemoteTelemetryController::clearSession()
 {
-    breakRange(m_history, Metric::RadioRxMbps, Metric::CoreReceiverLoadPercentSlot4);
+    breakRange(m_history, Metric::RadioRxMbps, Metric::AudioDeliveryDelayMs);
     m_station.reset();
     m_transportBaseline.reset();
     m_mediaBaseline.reset();
@@ -213,7 +214,7 @@ void RemoteTelemetryController::sampleNow()
     auto& values = observation.values;
     m_view.controlRxKbps.reset(); m_view.controlTxKbps.reset();
     m_view.coreGuiRxKbps.reset(); m_view.coreGuiTxKbps.reset();
-    m_view.coreGuiTotalKbps.reset(); m_view.opusRxKbps.reset();
+    m_view.coreGuiTotalKbps.reset(); m_view.audioPayloadRxKbps.reset();
     m_view.audioRtpRxKbps.reset();
     m_view.coreRttMs.reset(); m_view.coreRttAgeMs.reset();
     const auto transport = m_client->transportTelemetry();
@@ -275,14 +276,15 @@ void RemoteTelemetryController::sampleNow()
         && playback.lastDeviceProgressAgeMs && *playback.lastDeviceProgressAgeMs < 500;
     if (m_playbackBaseline && playback.generation != m_playbackBaseline->generation) {
         breakRange(m_history, Metric::PlaybackDecodedPacketsPerSecond, Metric::PlaybackPacketAgeMs);
-        breakRange(m_history, Metric::OpusPayloadRxKbps, Metric::SpeakerBufferMs);
+        breakRange(m_history, Metric::AudioPayloadRxKbps, Metric::SpeakerBufferMs);
+        breakRange(m_history, Metric::AudioDelayMs, Metric::AudioDeliveryDelayMs);
     }
     if (playback.running && m_playbackBaseline && m_playbackBaseline->running
         && playback.generation == m_playbackBaseline->generation && elapsed > 0) {
         const auto& previous = *m_playbackBaseline;
         if (mediaContinuous) {
-            const auto opus = rate(playback.receivedOpusPayloadBytes, previous.receivedOpusPayloadBytes, elapsed);
-            if (opus) { m_view.opusRxKbps = *opus * 8.0 / 1000.0; }
+            const auto opus = rate(playback.receivedAudioPayloadBytes, previous.receivedAudioPayloadBytes, elapsed);
+            if (opus) { m_view.audioPayloadRxKbps = *opus * 8.0 / 1000.0; }
         }
         values[index(Metric::PlaybackDecodedPacketsPerSecond)] = rate(playback.decodedPackets, previous.decodedPackets, elapsed);
         values[index(Metric::PlaybackConcealedPacketsPerSecond)] = rate(playback.concealedPackets, previous.concealedPackets, elapsed);
@@ -310,14 +312,24 @@ void RemoteTelemetryController::sampleNow()
     if (playback.running && playback.lastAdmittedPacketAgeMs) {
         values[index(Metric::PlaybackPacketAgeMs)] = double(*playback.lastAdmittedPacketAgeMs);
     }
-    values[index(Metric::OpusPayloadRxKbps)] = m_view.opusRxKbps;
+    values[index(Metric::AudioPayloadRxKbps)] = m_view.audioPayloadRxKbps;
     if (playback.running) {
         values[index(Metric::SpeakerBufferMs)] = playback.speakerQueuedMs;
+    }
+    // R-R3-35: the measured delay, only while it is measured; anything
+    // else (no echo, a new audio context, an older Core) is a gap.
+    m_view.audioDelay = m_delay ? m_delay()
+        : m_media ? m_media->audioDelay() : RemoteAudioDelayReport{};
+    if (const auto& estimate = m_view.audioDelay.estimate) {
+        values[index(Metric::AudioDelayMs)] = estimate->delayMs;
+        values[index(Metric::AudioDelayAccuracyMs)] = estimate->boundMs;
+        values[index(Metric::AudioDeliveryDelayMs)] = estimate->deliveryMs;
     }
     m_playbackBaseline = playback;
     m_lastTickMs = now;
     m_history.append(observation, mask(Metric::SessionPayloadRxKbps, Metric::SessionRttMs)
-        | mask(Metric::PlaybackDecodedPacketsPerSecond, Metric::SpeakerBufferMs));
+        | mask(Metric::PlaybackDecodedPacketsPerSecond, Metric::SpeakerBufferMs)
+        | mask(Metric::AudioDelayMs, Metric::AudioDeliveryDelayMs));
     refreshCurrent(now);
     // The first line comes one interval after the session starts, then one
     // per interval while it lasts.
@@ -362,6 +374,15 @@ void RemoteTelemetryController::logDiagnostics(qint64 now) const
            << QStringLiteral("reorderQueuedMs=%1").arg(logged(p.reorderQueuedMs))
            << QStringLiteral("driftRatio=%1").arg(logged(p.driftRatio, 9))
            << QStringLiteral("driftPpm=%1").arg(logged(driftPpm, 1))
+           << QStringLiteral("audioDelayMs=%1").arg(logged(m_view.audioDelay.estimate
+                  ? std::optional<double>(m_view.audioDelay.estimate->delayMs) : std::nullopt))
+           << QStringLiteral("audioDelayAccuracyMs=%1").arg(logged(m_view.audioDelay.estimate
+                  ? std::optional<double>(m_view.audioDelay.estimate->boundMs) : std::nullopt))
+           << QStringLiteral("audioDelayIncludesDevice=%1").arg(m_view.audioDelay.estimate
+                  ? (m_view.audioDelay.estimate->includesDevice ? QStringLiteral("yes") : QStringLiteral("no"))
+                  : QStringLiteral("not measured"))
+           << QStringLiteral("deliveryDelayMs=%1").arg(logged(m_view.audioDelay.estimate
+                  ? m_view.audioDelay.estimate->deliveryMs : std::nullopt))
            << QStringLiteral("coreTelemetryAgeMs=%1").arg(logged(m_station
                   ? std::optional<qint64>(qMax<qint64>(0, now - m_stationReceivedMs)) : std::nullopt))
            << QStringLiteral("coreSystemCpuPercent=%1").arg(logged(host.systemCpuPercent))
@@ -404,9 +425,9 @@ QString RemoteTelemetryController::bannerText() const
     QStringList parts;
     switch (m_view.state) {
     case RemoteTelemetryView::State::Disconnected: return {};
-    case RemoteTelemetryView::State::Unsupported: parts << tr("telemetry unsupported"); break;
-    case RemoteTelemetryView::State::Waiting: parts << tr("waiting for telemetry"); break;
-    case RemoteTelemetryView::State::Stale: parts << tr("telemetry stale"); break;
+    case RemoteTelemetryView::State::Unsupported: parts << tr("measurements not offered"); break;
+    case RemoteTelemetryView::State::Waiting: parts << tr("waiting for measurements"); break;
+    case RemoteTelemetryView::State::Stale: parts << tr("measurements out of date"); break;
     case RemoteTelemetryView::State::Current:
         parts << (m_view.radio.connected
             ? tr("Radio ↓%1 ↑%2 Mbps").arg(number(m_view.radio.rxMbps), number(m_view.radio.txMbps))
@@ -423,7 +444,7 @@ QString RemoteTelemetryController::bannerText() const
             .arg(rateText(m_view.coreGuiRxKbps), rateText(m_view.coreGuiTxKbps),
                  rateText(m_view.coreGuiTotalKbps), megabits ? tr("Mbps") : tr("kbps"));
     }
-    if (m_view.opusRxKbps) { parts << tr("Opus %1 kbps").arg(number(m_view.opusRxKbps)); }
+    if (m_view.audioPayloadRxKbps) { parts << tr("Audio %1 kbps").arg(number(m_view.audioPayloadRxKbps)); }
     parts << tr("Core RTT %1 ms").arg(m_view.coreRttMs ? QString::number(*m_view.coreRttMs) : QStringLiteral("—"));
     // R-R3-23: with a media controller, its own persistent status (which
     // survives a fault the receiver does not recover from by itself) is the
@@ -438,44 +459,58 @@ QString RemoteTelemetryController::bannerText() const
 
 QString RemoteTelemetryController::detailText() const
 {
-    if (m_view.state == RemoteTelemetryView::State::Disconnected) { return tr("Current telemetry unavailable while disconnected."); }
+    if (m_view.state == RemoteTelemetryView::State::Disconnected) { return tr("No current measurements while disconnected."); }
     QStringList text{bannerText()};
     if (m_view.stationAgeMs) { text << tr("Core measurements received %1 ms ago.").arg(*m_view.stationAgeMs); }
-    text << tr("Radio rates: Core ↔ radio, in Mbps. Control payload: GUI ↔ Core, excluding media and transport overhead.");
-    text << tr("Control payload RX %1 / TX %2 kbit/s").arg(number(m_view.controlRxKbps), number(m_view.controlTxKbps));
-    text << tr("GUI-observed application traffic: Core→GUI %1 / GUI→Core %2 / total %3 kbps.")
+    text << tr("Radio rates: between the Core and the radio, in Mbps. Control traffic: between this app and the Core, not counting audio, display or network overhead.");
+    text << tr("Control traffic received %1 / sent %2 kbit/s").arg(number(m_view.controlRxKbps), number(m_view.controlTxKbps));
+    text << tr("Traffic seen by this app: Core→app %1 / app→Core %2 / total %3 kbps.")
         .arg(number(m_view.coreGuiRxKbps), number(m_view.coreGuiTxKbps), number(m_view.coreGuiTotalKbps));
-    text << tr("Total includes control text, display and audio-track messages. Valid Opus payload received: %1 kbps, already included in total. Opus transmit is inactive in receive-only mode.")
-        .arg(number(m_view.opusRxKbps));
-    text << tr("Binary audio-track messages received: %1 kbps, including RTP headers and packets later dropped locally. The Opus payload subset counts validated receiver submissions, including duplicates.")
+    text << tr("Total includes control, display and audio messages. Audio content received (Opus or lossless): %1 kbps, already included in total. No audio is sent to the Core in receive-only mode.")
+        .arg(number(m_view.audioPayloadRxKbps));
+    text << tr("Audio packets received: %1 kbps, including packet headers and packets this computer later dropped. Audio content counts the sound in the packets it accepted, including duplicates.")
         .arg(number(m_view.audioRtpRxKbps));
-    text << tr("Application bytes exclude transport, encryption, VPN and network overhead. Outgoing media counts submissions to the transport, including queued or failed sends; it does not prove delivery.");
-    text << (m_view.coreRttAgeMs ? tr("Core RTT: WebSocket round trip, measured %1 ms ago.").arg(*m_view.coreRttAgeMs)
-        : tr("Core RTT: no recent pong measurement."));
+    text << tr("These counts exclude encryption, VPN and network overhead. Outgoing audio and display count what this app handed to the network, including queued or failed sends; that does not prove delivery.");
+    text << (m_view.coreRttAgeMs ? tr("Core RTT: round trip to the Core and back, measured %1 ms ago.").arg(*m_view.coreRttAgeMs)
+        : tr("Core RTT: not measured recently."));
     text << (m_view.radio.rttMs && m_view.radio.rttAgeMs
         ? tr("Radio RTT: %1 ms, measured %2 ms ago.").arg(*m_view.radio.rttMs).arg(*m_view.radio.rttAgeMs)
         : tr("Radio RTT: unavailable."));
     text << tr("RTT graphs hold the last measurement between pings; age advances independently and stale values disappear.");
-    text << tr("Core audio: %1 frames/s; encoded %2, transport accepted %3, refused %4 packets/s; source drops %5 events/s.")
+    text << tr("Core audio: %1 frames/s; encoded %2, sent %3, not sent %4 packets/s; dropped before encoding %5 events/s.")
         .arg(number(m_view.coreAudio.sourceFramesPerSecond, 0), number(m_view.coreAudio.encodedPacketsPerSecond),
              number(m_view.coreAudio.sendAcceptedPerSecond), number(m_view.coreAudio.sendRejectedPerSecond),
              number(m_view.coreAudio.sourceDropsPerSecond));
     const auto& p = m_view.playback;
-    text << tr("Client speaker buffering: %1 ms (sampled PCM ring only). This excludes network, encoder, jitter/matcher and audio-device delay.")
+    text << tr("Speaker buffering on this computer: %1 ms (audio waiting for the speaker only). This excludes network, encoder, arrival smoothing and audio-device delay.")
         .arg(number(p.running ? p.speakerQueuedMs : std::nullopt));
-    text << tr("End-to-end Opus latency is not measured. Core RTT is a control round trip, not one-way audio latency; RTT/2 is not used.");
+    // R-R3-35: a Core that answers clock probes gets the measured delay; an
+    // older one keeps exactly the line it always had.
+    const RemoteAudioDelayReport& delay = m_view.audioDelay;
+    if (!delay.measurable) {
+        text << tr("End-to-end audio latency is not measured. Core RTT is a control round trip, not one-way audio latency; RTT/2 is not used.");
+    } else if (delay.estimate) {
+        text << tr("Audio delay: %1, from the Core's audio to this computer's speaker. The \u00B1 is how accurately this computer knows the Core's clock; half the round trip is never shown as the delay.")
+            .arg(remoteAudioDelayText(*delay.estimate));
+        const QString delivery = remoteAudioDeliveryText(*delay.estimate);
+        text << (delivery.isEmpty()
+            ? tr("Delivery delay: not measured yet.")
+            : tr("Delivery delay: %1, from the Core's audio to this computer's player, before the speaker queue.").arg(delivery));
+    } else {
+        text << tr("Audio delay: not measured yet. It needs audio playing and answers from the Core.");
+    }
     // Fix wave M1: "discarded before playback" is the connect-time backlog
     // trimmed before anything was heard; the receiver keeps it out of
     // "admitted", so the two counts do not overlap.
-    text << tr("Playback context %1: admitted %2, discarded before playback %3, decoded %4, concealed %5, late %6, invalid %7, duplicate %8, rejected headers %9.")
+    text << tr("Audio stream %1: accepted %2, discarded before playback %3, decoded %4, concealed %5, late %6, invalid %7, duplicate %8, rejected headers %9.")
         .arg(p.generation).arg(p.acceptedPackets).arg(p.startDiscardedPackets)
         .arg(p.decodedPackets).arg(p.concealedPackets)
         .arg(p.latePackets).arg(p.invalidPackets).arg(p.duplicatePackets).arg(p.rejectedHeaders);
-    text << tr("Playback underflows %1 / overflows %2; device consumed %3 frames; last admitted packet %4 ms ago.")
+    text << tr("Playback underflows %1 / overflows %2; device consumed %3 frames; last accepted packet %4 ms ago.")
         .arg(p.underflows).arg(p.overflows).arg(p.deviceConsumedFrames)
         .arg(p.lastAdmittedPacketAgeMs ? QString::number(*p.lastAdmittedPacketAgeMs) : QStringLiteral("—"));
     if (p.lifetimeUnderflows && p.lifetimeOverflows) {
-        text << tr("Playback interruptions this GUI run: %1 underflows / %2 overflows, including retired audio contexts.")
+        text << tr("Playback interruptions since this app started: %1 underflows / %2 overflows, including earlier audio streams.")
             .arg(*p.lifetimeUnderflows).arg(*p.lifetimeOverflows);
     }
     // R-R3-23: each measurement labelled with what it is, not protocol jargon.
@@ -502,7 +537,7 @@ QString RemoteTelemetryController::detailText() const
         ? tr("Clock drift: %1\u00A0parts per million, the rate correction this computer applies to match the Core's audio clock.")
               .arg(qRound((*p.driftRatio - 1.0) * 1'000'000.0))
         : tr("Clock drift: not measured yet."));
-    text << tr("Transport acceptance does not prove delivery. Concealment and source drops are events, not a packet-loss percentage.");
+    text << tr("Sent does not prove delivered. Gaps filled and drops before encoding are events, not a packet-loss percentage.");
     return text.join(QLatin1Char('\n'));
 }
 } // namespace NereusSDR

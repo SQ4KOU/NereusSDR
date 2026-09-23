@@ -1257,6 +1257,10 @@ signals:
     // The operator wants the saved NNR choice back: "Try again", or choosing
     // a model while a limit is in force.
     void nnrRetryRequested();
+    // Fix wave I3: setActiveNr() was refused (for example NR3 on a Core with
+    // no NR3 model). The active reducer is unchanged; the reason is plain
+    // words for the operator.
+    void nrSelectionRefused(const QString& reason);
 
     void nr1TapsChanged(int v);
     void nr1DelayChanged(int v);

@@ -577,6 +577,38 @@ private slots:
         QCOMPARE(int(classifySettingsKey(label)), int(SettingsScope::Station));
     }
 
+    // Fix wave minor 4 (R-R3-21 / R-R3-09): the Core owns exactly the notch
+    // keys NotchModel::saveToSettings writes for its list and flags, not
+    // every key that starts with "notch". The window's display preference
+    // stays its own.
+    void modelOwnedNotchKeysAreTheExactForms_data()
+    {
+        QTest::addColumn<QString>("key");
+        QTest::addColumn<bool>("owned");
+        QTest::newRow("count") << QStringLiteral("NotchCount") << true;
+        QTest::newRow("global") << QStringLiteral("NotchGlobalEnabled") << true;
+        QTest::newRow("auto") << QStringLiteral("NotchAutoIncrease") << true;
+        QTest::newRow("centre 0") << QStringLiteral("Notch0Center") << true;
+        QTest::newRow("width 12") << QStringLiteral("Notch12Width") << true;
+        QTest::newRow("active 1023") << QStringLiteral("Notch1023Active") << true;
+        QTest::newRow("any case") << QStringLiteral("notchcount") << true;
+        QTest::newRow("visual") << QStringLiteral("NotchVisualEnabled") << false;
+        QTest::newRow("leading zero") << QStringLiteral("Notch01Center") << false;
+        QTest::newRow("no index") << QStringLiteral("NotchCenter") << false;
+        QTest::newRow("other field") << QStringLiteral("Notch0Depth") << false;
+        QTest::newRow("prefix only") << QStringLiteral("Notch") << false;
+        QTest::newRow("other notch key") << QStringLiteral("NotchFutureSetting") << false;
+        QTest::newRow("suffix") << QStringLiteral("NotchCountOld") << false;
+        QTest::newRow("sign") << QStringLiteral("Notch-1Center") << false;
+    }
+    void modelOwnedNotchKeysAreTheExactForms()
+    {
+        QFETCH(QString, key);
+        QFETCH(bool, owned);
+        QCOMPARE(isModelOwnedNotchSettingsKey(key), owned);
+        QCOMPARE(isModelOwnedDspSettingsKey(key), owned);
+    }
+
     // ---- Step 4: the completeness sweep --------------------------------
     void completenessSweep()
     {

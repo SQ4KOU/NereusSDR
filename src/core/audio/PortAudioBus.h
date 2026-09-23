@@ -262,6 +262,9 @@ private:
     std::atomic<qint64> m_outputDiscardBefore{0};
     std::atomic<quint64> m_outputConsumedFrames{0};
     std::atomic<int> m_outputCallbackFrames{0};
+    // R-R3-35: the open output stream's latency as PortAudio reports it
+    // (Pa_GetStreamInfo outputLatency), in ns; -1 when unknown or closed.
+    std::atomic<qint64> m_outputLatencyNs{-1};
 
     std::atomic<float> m_rxLevel{0.0f};
     std::atomic<float> m_txLevel{0.0f};

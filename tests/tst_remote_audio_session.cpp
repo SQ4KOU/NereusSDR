@@ -26,13 +26,18 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
+#include <QElapsedTimer>
+#include <QFile>
 #include <QPointer>
+#include <QScopeGuard>
 #include <QRegularExpression>
 #include <QSignalSpy>
 #include <QTimer>
 #include <QTemporaryDir>
+#include <QThread>
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <functional>
 #include <memory>
@@ -161,6 +166,45 @@ double toneAmplitude(const QVector<float>& samples, int channel, double hz,
     return frames > 0 ? 2.0 * std::hypot(cosine, sine) / frames : 0.0;
 }
 
+// R-R3-23: every media start and audio control this GUI sent has exactly
+// today's keys (no audioProfileVersion, no profile), and there was at least
+// one of each.
+bool onlyTodaysAudioControls(const QSignalSpy& coreControls)
+{
+    const QStringList startKeys{QStringLiteral("connectionId"), QStringLiteral("op")};
+    const QStringList audioKeys{QStringLiteral("connectionId"), QStringLiteral("enabled"),
+                                QStringLiteral("op"), QStringLiteral("revision")};
+    int starts = 0;
+    int audio = 0;
+    for (const auto& call : coreControls) {
+        const QJsonObject control = call.at(0).toJsonObject();
+        const QString op = control.value(QStringLiteral("op")).toString();
+        QStringList keys = control.keys();
+        keys.sort();
+        if (op == QLatin1String("start")) {
+            ++starts;
+            if (keys != startKeys) { return false; }
+        } else if (op == QLatin1String("audio")) {
+            ++audio;
+            if (keys != audioKeys) { return false; }
+        }
+    }
+    return starts > 0 && audio > 0;
+}
+
+// R-R3-35: the clock probes this GUI sent the Core.
+int clockProbesIn(const QSignalSpy& coreControls)
+{
+    int probes = 0;
+    for (const auto& call : coreControls) {
+        if (call.at(0).toJsonObject().value(QStringLiteral("op"))
+            == QLatin1String("clock-probe")) {
+            ++probes;
+        }
+    }
+    return probes;
+}
+
 // The shared real session: Core and GUI over DTLS/SRTP, paced GUI speaker.
 using Harness = Test::RemoteAudioSessionHarness;
 
@@ -170,6 +214,24 @@ class TstRemoteAudioSession final : public QObject {
     Q_OBJECT
 
 private slots:
+    // R-R3-23: the remote audio choice is stored in this computer's
+    // settings; keep this test's writes out of the operator's own file.
+    void initTestCase()
+    {
+        const QString profile = QStringLiteral("remote-audio-session-%1")
+                                    .arg(QCoreApplication::applicationPid());
+        AppSettings::setProfileOverride(profile);
+        QCOMPARE(AppSettings::instance().filePath(), AppSettings::resolveSettingsPath(profile));
+        AppSettings::instance().clear();
+    }
+
+    void cleanupTestCase()
+    {
+        const QString path = AppSettings::instance().filePath();
+        QFile::remove(path);
+        QFile::remove(path + QStringLiteral(".bak"));
+    }
+
     void encryptedAudioSurvivesMuteResumeAndSessionReconnect()
     {
         Harness h;
@@ -198,9 +260,19 @@ private slots:
         source.start();
         speaker.start();
 
+        // R-R3-23: a Core from before the lossless choice. This GUI sends it
+        // exactly today's media start and audio controls, and the rest of
+        // this test is today's session unchanged. R-R3-35: it also predates
+        // measured delay, so it is sent no clock probe.
+        QSignalSpy coreControls(&h.server, &StationServer::mediaControlReceived);
+        h.hideAudioProfile = true;
+        h.hideAudioClock = true;
         h.connectSession();
         QVERIFY(remoteMedia.audioDetailNegotiated());
+        QVERIFY(!remoteMedia.audioProfileNegotiated());
+        QVERIFY(!remoteMedia.audioClockNegotiated());
         QTRY_VERIFY_WITH_TIMEOUT(!latestAudioContext(controls).isEmpty(), 15000);
+        QVERIFY(onlyTodaysAudioControls(coreControls));
         const QJsonObject initial = latestAudioContext(controls);
         // Minor 8: the eight keys plus the profile Core actually encodes with.
         QCOMPARE(initial.size(), 9);
@@ -322,6 +394,14 @@ private slots:
                                  && channelEnergy(h.remoteBus->heard, 1, heardBeforeReconnect) > 0.5,
                                  15000);
         QCOMPARE(remoteErrors.count(), 0);
+        // Mute, resume and reconnect all kept today's controls.
+        QVERIFY(onlyTodaysAudioControls(coreControls));
+        QCOMPARE(clockProbesIn(coreControls), 0);
+        QVERIFY(!remoteMedia.audioDelay().measurable);
+        QVERIFY(!remoteMedia.audioDelay().estimate);
+        QVERIFY(!formatRemoteAudioDetails(remoteMedia.audioStatus(), remoteMedia.audioTelemetry(),
+                                          remoteMedia.audioDelay())
+                     .contains(QStringLiteral("Audio delay")));
         // Every accepted context carried exactly the detail its state calls for.
         QCOMPARE(accepted.signalsWithoutContext, 0);
         QVERIFY(accepted.eachReportedOnce());
@@ -444,7 +524,9 @@ private slots:
 
         // Core's first context is preceded by a forged copy in the minor-7
         // shape with a different first sequence; a minor-8 GUI must refuse
-        // it without advancing its generation.
+        // it without advancing its generation. The Core predates the
+        // lossless choice (R-R3-23), so its contexts are the minor-8 shape.
+        h.hideAudioProfile = true;
         h.connectSession(std::nullopt, [](const QJsonObject& real) {
             QJsonObject forged = real;
             forged.remove(QStringLiteral("encoder"));
@@ -510,6 +592,326 @@ private slots:
         source.stop();
         speaker.stop();
         h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+    // R-R3-23: lossless over the real encrypted session. The choice made on
+    // this computer goes with the media start and every audio request; the
+    // Core sends 4 ms L16 packets over DTLS/SRTP; this computer plays them
+    // at the full 1536 kbit/s with nothing missing, and the link trial,
+    // which watches the first 5 s and then keeps watching, lets it run. Opus
+    // comes back when chosen, and lossless is replayed on reconnect.
+    void losslessPlaysOverTheRealEncryptedSession()
+    {
+        Harness h;
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
+        DaemonMediaController daemonMedia(&h.server, &h.station);
+        const auto restoreChoice = qScopeGuard([&remoteMedia] {
+            remoteMedia.setAudioProfileChoice(RemoteAudioProfile::Opus);
+        });
+        QSignalSpy remoteErrors(&remoteMedia, &RemoteMediaController::errorOccurred);
+        QSignalSpy coreControls(&h.server, &StationServer::mediaControlReceived);
+        remoteMedia.setAudioProfileChoice(RemoteAudioProfile::Lossless);
+        QTest::ignoreMessage(QtInfoMsg, QRegularExpression(QStringLiteral(
+            "^Remote audio receiving: lossless L16 48000 Hz, 2 channels, 192-sample packets, "
+            "16-bit, payload type 96, context \\d+$")));
+
+        // The station and this computer's speaker both keep wall-clock time
+        // (timer wakeups can coalesce under load), so the measured rate is
+        // the real 48 kHz stream's.
+        QElapsedTimer clock;
+        clock.start();
+        qint64 fedFrames = 0;
+        qint64 renderedFrames = 0;
+        QTimer source;
+        source.setInterval(5);
+        source.setTimerType(Qt::PreciseTimer);
+        connect(&source, &QTimer::timeout, &source, [&] {
+            while (fedFrames + kFrames <= clock.nsecsElapsed() * 48 / 1'000'000) {
+                h.feedMixedTone();
+                fedFrames += kFrames;
+            }
+        });
+        QTimer speaker;
+        speaker.setInterval(5);
+        speaker.setTimerType(Qt::PreciseTimer);
+        connect(&speaker, &QTimer::timeout, &speaker, [&] {
+            while (renderedFrames + kFrames <= clock.nsecsElapsed() * 48 / 1'000'000) {
+                h.remoteBus->render(kFrames);
+                renderedFrames += kFrames;
+            }
+        });
+        source.start();
+        speaker.start();
+
+        h.connectSession();
+        QVERIFY(remoteMedia.audioProfileNegotiated());
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().state == RemoteAudioStatus::State::Playing
+                                     && remoteMedia.audioStatus().losslessEncoder.has_value(),
+                                 15000);
+        {
+            QList<QJsonObject> starts;
+            QStringList profiles;
+            for (const auto& call : coreControls) {
+                const QJsonObject control = call.at(0).toJsonObject();
+                if (control.value(QStringLiteral("op")) == QLatin1String("start")) {
+                    starts << control;
+                } else if (control.value(QStringLiteral("op")) == QLatin1String("audio")) {
+                    profiles << control.value(QStringLiteral("profile")).toString();
+                }
+            }
+            QCOMPARE(starts.size(), 1);
+            QCOMPARE(starts.constFirst().value(QStringLiteral("audioProfileVersion")).toInteger(),
+                     qint64{1});
+            QVERIFY(!profiles.isEmpty());
+            for (const QString& profile : profiles) { QCOMPARE(profile, QStringLiteral("lossless")); }
+        }
+        RemoteAudioStatus status = remoteMedia.audioStatus();
+        QCOMPARE(*status.losslessEncoder, l16EncoderProfile());
+        QCOMPARE(remoteAudioCodecText(status),
+                 QStringLiteral("Lossless stereo, 16-bit, 1536 kbit/s, 4 ms packets"));
+        QCOMPARE(remoteAudioQualityText(status), QStringLiteral("Lossless"));
+        QVERIFY(!status.qualityReason.has_value());
+
+        // Past the trial window, at the full rate, with nothing missing.
+        const RemoteAudioReceiverTelemetry before = remoteMedia.audioTelemetry();
+        QElapsedTimer measured;
+        measured.start();
+        QTest::qWait(int(RemoteAudioLinkTrial::kWindowMs) + 1500);
+        const RemoteAudioReceiverTelemetry after = remoteMedia.audioTelemetry();
+        const double seconds = measured.elapsed() / 1000.0;
+        QCOMPARE(after.generation, before.generation); // no restart
+        const double kbps = double(after.receivedAudioPayloadBytes
+                                   - before.receivedAudioPayloadBytes) * 8.0 / 1000.0 / seconds;
+        const quint64 decoded = after.decodedPackets - before.decodedPackets;
+        qInfo() << "lossless session:" << decoded << "packets decoded in" << seconds
+                << "s," << kbps << "kbit/s of audio, missing" << after.missingPackets
+                << "of" << after.expectedPackets << ", filled" << after.concealedPackets;
+        QVERIFY2(kbps > 1400.0 && kbps < 1700.0, qPrintable(QString::number(kbps)));
+        QVERIFY(decoded >= quint64(seconds * 250 * 0.9));
+        QCOMPARE(after.missingPackets, quint64(0));
+        QVERIFY(after.concealedPackets <= 2);
+        status = remoteMedia.audioStatus();
+        QCOMPARE(status.state, RemoteAudioStatus::State::Playing);
+        QVERIFY(status.losslessEncoder.has_value());
+        QVERIFY(!status.qualityReason.has_value());
+        QCOMPARE(remoteErrors.count(), 0);
+        // The tones stay where the station mixed them.
+        const int from = h.remoteBus->heard.size() / 2 - 48000;
+        QVERIFY(toneAmplitude(h.remoteBus->heard, 0, 617.0, from)
+                > 8.0 * toneAmplitude(h.remoteBus->heard, 1, 617.0, from));
+        QVERIFY(toneAmplitude(h.remoteBus->heard, 1, 1579.0, from)
+                > 8.0 * toneAmplitude(h.remoteBus->heard, 0, 1579.0, from));
+
+        // Back to Opus when chosen.
+        remoteMedia.setAudioProfileChoice(RemoteAudioProfile::Opus);
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().state == RemoteAudioStatus::State::Playing
+                                     && remoteMedia.audioStatus().encoder.has_value()
+                                     && !remoteMedia.audioStatus().losslessEncoder.has_value(),
+                                 10000);
+        QCOMPARE(remoteAudioQualityText(remoteMedia.audioStatus()), QStringLiteral("Opus"));
+
+        // Lossless again, then a reconnect replays it without being asked.
+        remoteMedia.setAudioProfileChoice(RemoteAudioProfile::Lossless);
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().losslessEncoder.has_value(), 10000);
+        h.client.disconnectFromStation(QStringLiteral("test reconnect"));
+        QTRY_VERIFY_WITH_TIMEOUT(!h.client.mediaAvailable(), 5000);
+        QVERIFY(!remoteMedia.audioStatus().losslessEncoder.has_value());
+        h.connectSession();
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().state == RemoteAudioStatus::State::Playing
+                                     && remoteMedia.audioStatus().losslessEncoder.has_value(),
+                                 15000);
+        QCOMPARE(remoteErrors.count(), 0);
+
+        source.stop();
+        speaker.stop();
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // R-R3-35: measured delay over the real encrypted session, with the
+    // Core's clock 5 s ahead of this computer's. The station is silent,
+    // then a 200 Hz cosine begins at full height on a known frame. Truth is
+    // kept on one timeline, to the sample: the station captures steadily
+    // (frame f at f / 48 kHz), and this computer's speaker plays steadily
+    // (heard frame k at the device clock's origin plus k / 48 kHz), so
+    // neither timer's lateness enters it. The heard onset is where the
+    // cosine first reaches half its height. The reported delay must match
+    // within its own accuracy plus half a millisecond, so an 8 ms miss (the
+    // Opus lookahead and the rate matcher's filter left out) fails. Muting
+    // ends the audio context and the figure with it; unmuting brings it
+    // back.
+    void measuredDelayMatchesTheHeardDelay_data()
+    {
+        QTest::addColumn<bool>("lossless");
+        QTest::newRow("opus") << false;
+        QTest::newRow("lossless") << true;
+    }
+
+    void measuredDelayMatchesTheHeardDelay()
+    {
+        QFETCH(bool, lossless);
+        constexpr qint64 kCoreAheadNs = 5'000'000'000;
+        // What the model leaves: where the half-height crossing falls after
+        // the codec's and the filter's reconstruction (under a frame), and
+        // the frame conventions at each end.
+        constexpr double kToleranceMs = 0.5;
+        constexpr double kOnsetAmplitude = 0.5;
+        constexpr double kOnsetHz = 200.0;
+        constexpr qint64 kNsPerFrame48 = 1'000'000; // ns per 48 frames
+        Harness h;
+        // The one timeline every truth below is kept on.
+        QElapsedTimer clock;
+        clock.start();
+        const auto dueNs = [](qint64 frame) { return frame * kNsPerFrame48 / 48; };
+        // A steady radio delivers each 480-frame block when its last frame
+        // is due. While a block is fed the Core's capture clock reads that
+        // due time, so its capture stamp is the steady capture time however
+        // late the feed timer woke. Every other Core clock read, the probe
+        // times among them, is the real clock.
+        const Qt::HANDLE feeder = QThread::currentThreadId();
+        std::atomic<qint64> feedingDueNs{-1};
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
+        DaemonMediaController daemonMedia(&h.server, &h.station, nullptr, {},
+            [&clock, &feedingDueNs, feeder] {
+                if (QThread::currentThreadId() == feeder) {
+                    const qint64 due = feedingDueNs.load();
+                    if (due >= 0) { return kCoreAheadNs + due; }
+                }
+                return kCoreAheadNs + clock.nsecsElapsed();
+            });
+        const auto restoreChoice = qScopeGuard([&remoteMedia] {
+            remoteMedia.setAudioProfileChoice(RemoteAudioProfile::Opus);
+        });
+        remoteMedia.setAudioProfileChoice(lossless ? RemoteAudioProfile::Lossless
+                                                   : RemoteAudioProfile::Opus);
+        QSignalSpy remoteErrors(&remoteMedia, &RemoteMediaController::errorOccurred);
+        QSignalSpy coreControls(&h.server, &StationServer::mediaControlReceived);
+        // This computer's speaker plays on the same timeline, continuously,
+        // taking its queue a 48-frame callback at a time, as the callback
+        // device it reports does.
+        h.remoteBus->callbackFrames = 48;
+        h.remoteBus->setPlayClockForTesting([&clock] { return clock.nsecsElapsed(); });
+        const qint64 playOriginNs = h.remoteBus->playClockOriginNs();
+
+        qint64 fedFrames = 0;
+        qint64 onsetFrame = -1;       // the first cosine frame, once chosen
+        qint64 roughHeardFrame = -1;  // first heard frame clearly not silent
+        RemoteAudioDelayReport reportAtOnset;
+        QTimer source;
+        source.setInterval(2);
+        source.setTimerType(Qt::PreciseTimer);
+        connect(&source, &QTimer::timeout, &source, [&] {
+            while (fedFrames + kFrames <= clock.nsecsElapsed() * 48 / 1'000'000) {
+                QVector<float> a(kFrames * 2, 0.0f);
+                const QVector<float> silence(kFrames * 2, 0.0f);
+                for (int frame = 0; frame < kFrames; ++frame) {
+                    const qint64 f = fedFrames + frame;
+                    if (onsetFrame >= 0 && f >= onsetFrame) {
+                        const double t = double(f - onsetFrame) / 48000.0;
+                        a[frame * 2] = a[frame * 2 + 1] =
+                            float(kOnsetAmplitude * std::cos(2.0 * Harness::kPi * kOnsetHz * t));
+                    }
+                }
+                feedingDueNs.store(dueNs(fedFrames + kFrames));
+                h.stationAudio->rxBlockReady(h.sliceA, a.constData(), kFrames);
+                h.stationAudio->rxBlockReady(h.sliceB, silence.constData(), kFrames);
+                feedingDueNs.store(-1);
+                h.stationFrames += kFrames;
+                fedFrames += kFrames;
+            }
+        });
+        QTimer speaker;
+        speaker.setInterval(2);
+        speaker.setTimerType(Qt::PreciseTimer);
+        connect(&speaker, &QTimer::timeout, &speaker, [&] {
+            const qint64 before = h.remoteBus->heard.size() / 2;
+            if (h.remoteBus->renderDue() <= 0 || onsetFrame < 0 || roughHeardFrame >= 0) {
+                return;
+            }
+            for (qint64 k = before; k < h.remoteBus->heard.size() / 2; ++k) {
+                if (std::abs(h.remoteBus->heard.at(k * 2)) > 0.02f) {
+                    roughHeardFrame = k;
+                    reportAtOnset = remoteMedia.audioDelay();
+                    break;
+                }
+            }
+        });
+        source.start();
+        speaker.start();
+
+        h.connectSession();
+        QVERIFY(remoteMedia.audioClockNegotiated());
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().state
+                                     == RemoteAudioStatus::State::Playing
+                                     && (!lossless
+                                         || remoteMedia.audioStatus().losslessEncoder.has_value()),
+                                 15000);
+        // Echoes arrive and a delay is measured while silence plays.
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioDelay().estimate.has_value(), 5000);
+        QVERIFY(remoteMedia.audioDelay().measurable);
+        QTest::qWait(3000);
+
+        // Mid-block, so a block boundary is not what is found.
+        onsetFrame = ((fedFrames / kFrames) + 20) * kFrames + 177;
+        QTRY_VERIFY_WITH_TIMEOUT(roughHeardFrame >= 0, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(h.remoteBus->heard.size() / 2 >= roughHeardFrame + 960, 5000);
+        QVERIFY(reportAtOnset.measurable);
+        QVERIFY(reportAtOnset.estimate.has_value());
+        const AudioDelayEstimate& estimate = *reportAtOnset.estimate;
+        // The heard onset to the sample: the first frame at half the
+        // cosine's heard height.
+        float peak = 0.0f;
+        for (qint64 k = roughHeardFrame; k < roughHeardFrame + 960; ++k) {
+            peak = std::max(peak, h.remoteBus->heard.at(k * 2));
+        }
+        QVERIFY(peak > 0.1f);
+        qint64 heardFrame = roughHeardFrame;
+        while (h.remoteBus->heard.at(heardFrame * 2) < peak / 2.0f) { ++heardFrame; }
+        const double heardMs =
+            double(playOriginNs + dueNs(heardFrame) - dueNs(onsetFrame)) / 1e6;
+        qInfo().noquote() << QStringLiteral(
+            "%1 session: heard delay %2 ms, measured %3 ms +- %4 ms (delivery %5 ms), "
+            "device counted %6, speaker ran dry for %7 frames")
+            .arg(lossless ? QStringLiteral("lossless") : QStringLiteral("opus"))
+            .arg(heardMs, 0, 'f', 2).arg(estimate.delayMs, 0, 'f', 2)
+            .arg(estimate.boundMs, 0, 'f', 2)
+            .arg(estimate.deliveryMs.value_or(-1), 0, 'f', 1)
+            .arg(estimate.includesDevice ? QStringLiteral("yes") : QStringLiteral("no"))
+            .arg(h.remoteBus->playedDryFramesForTesting());
+        QVERIFY2(std::abs(estimate.delayMs - heardMs) <= estimate.boundMs + kToleranceMs,
+                 qPrintable(QStringLiteral("measured %1 +- %2, heard %3")
+                                .arg(estimate.delayMs).arg(estimate.boundMs).arg(heardMs)));
+        // An 8 ms miss cannot pass.
+        QVERIFY2(estimate.boundMs + kToleranceMs < 8.0, qPrintable(QString::number(estimate.boundMs)));
+        // Not the Core's clock offset, and not half a loopback round trip:
+        // the jitter hold alone is 80 ms.
+        QVERIFY(estimate.delayMs > 60.0 && estimate.delayMs < 1000.0);
+        QVERIFY(!estimate.includesDevice); // the paced test speaker reports none
+        QVERIFY(estimate.deliveryMs && *estimate.deliveryMs > 0.0
+                && *estimate.deliveryMs < estimate.delayMs);
+        QVERIFY(remoteAudioDelayText(estimate).endsWith(
+            QStringLiteral(", not counting the speaker device")));
+
+        // The probes on the wire: exactly the documented keys.
+        QVERIFY(clockProbesIn(coreControls) >= 2);
+        for (const auto& call : coreControls) {
+            const QJsonObject control = call.at(0).toJsonObject();
+            if (control.value(QStringLiteral("op")) != QLatin1String("clock-probe")) { continue; }
+            QStringList keys = control.keys();
+            keys.sort();
+            QCOMPARE(keys, (QStringList{QStringLiteral("connectionId"), QStringLiteral("id"),
+                                        QStringLiteral("op"), QStringLiteral("t0")}));
+        }
+
+        // A new audio context: nothing until the Core reports its capture.
+        h.remote.audioEngine()->setMasterMuted(true);
+        QTRY_VERIFY_WITH_TIMEOUT(!remoteMedia.audioDelay().estimate.has_value(), 2000);
+        h.remote.audioEngine()->setMasterMuted(false);
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioDelay().estimate.has_value(), 10000);
+        QCOMPARE(remoteErrors.count(), 0);
+
+        source.stop();
+        speaker.stop();
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+        QTRY_VERIFY_WITH_TIMEOUT(!remoteMedia.audioDelay().measurable, 5000);
     }
 };
 

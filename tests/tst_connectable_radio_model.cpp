@@ -36,6 +36,7 @@
 
 #include <memory>
 
+#include "core/AppSettings.h"
 #include "core/RxChannel.h"
 #include "core/dsp/DspAssetService.h"
 #include "core/WdspEngine.h"
@@ -111,6 +112,75 @@ private slots:
         model.connectToRadioPreservingSlices(other);
         QCOMPARE(model.currentRadioMac(), harness->radioInfo().macAddress);
         QCOMPARE(model.connectionState(), ConnectionState::Connected);
+    }
+
+    // Follow-up item 1 (R-R3-21): a saved NR3 choice on a Core with no NR3
+    // model file. The slice comes up with NR off and the plain reason set,
+    // and the receiver's WDSP channel is never running NR3, whether the
+    // model was already gone when the Core started or went missing between
+    // the start and the connect (the connect's own model load is what finds
+    // it gone).
+    void savedNr3OnACoreWithNoModelComesUpOff_data()
+    {
+        QTest::addColumn<bool>("goneBeforeStart");
+        QTest::newRow("gone before the Core starts") << true;
+        QTest::newRow("gone by the connect") << false;
+    }
+
+    void savedNr3OnACoreWithNoModelComesUpOff()
+    {
+        QFETCH(bool, goneBeforeStart);
+        const QString none =
+            QStringLiteral("No NR3 model file was found on this Core, so NR3 cannot run.");
+        const QString prefix = QStringLiteral("hardware/AA:BB:CC:11:22:33/slices/0/nnr/");
+        auto& settings = AppSettings::instance();
+        const auto cleanup = qScopeGuard([&settings, prefix] {
+            DspAssetService::setBundledNr3ModelPathsForTest({});
+            for (const QString& key : settings.allKeys()) {
+                if (key.startsWith(prefix)) { settings.remove(key); }
+            }
+        });
+        settings.setValue(prefix + QStringLiteral("NrActive"), static_cast<int>(NrSlot::NR3));
+        const auto noFiles = [](const QString&) { return QString(); };
+        if (goneBeforeStart) {
+            DspAssetService::setBundledNr3ModelPathsForTest(noFiles);
+        }
+
+        QList<NrSlot> sliceHistory;
+        auto harness = ConnectableRadioModel::create(
+            10000, RadioModel::Role::Local, [&](RadioModel& model) {
+                QCOMPARE(model.dspAssets()->nr3Runnable(), goneBeforeStart ? false : true);
+                if (!goneBeforeStart) {
+                    DspAssetService::setBundledNr3ModelPathsForTest(noFiles);
+                }
+                QObject::connect(&model, &RadioModel::sliceAdded, &model,
+                                 [&model, &sliceHistory](int id) {
+                    SliceModel* slice = model.sliceById(id);
+                    sliceHistory.append(slice->activeNr());
+                    QObject::connect(slice, &SliceModel::activeNrChanged, slice,
+                                     [&sliceHistory](NrSlot slot) { sliceHistory.append(slot); });
+                });
+            });
+        QVERIFY(harness);
+        RadioModel& model = harness->model();
+        QVERIFY(!model.dspAssets()->nr3Runnable());
+        QCOMPARE(model.slices().size(), 1);
+        SliceModel* slice = model.slices().first();
+        QCOMPARE(slice->activeNr(), NrSlot::Off);
+        QCOMPARE(slice->nnrLastError(), none);
+        RxChannel* channel = model.rxChannelForSlice(slice->sliceIndex());
+        QVERIFY(channel != nullptr);
+        QCOMPARE(channel->activeNr(), NrSlot::Off);
+        // The slice never held NR3, so no receiver push could carry it.
+        QVERIFY(!sliceHistory.isEmpty());
+        QVERIFY(!sliceHistory.contains(NrSlot::NR3));
+        QCOMPARE(sliceHistory.constLast(), NrSlot::Off);
+
+        // Turning NR3 on is still refused with the same reason.
+        slice->setActiveNr(NrSlot::NR3);
+        QCOMPARE(slice->activeNr(), NrSlot::Off);
+        QCOMPARE(channel->activeNr(), NrSlot::Off);
+        QCOMPARE(slice->nnrLastError(), none);
     }
 
     // Spike: WdspEngine::setSynchronousInitForTest(true) + initialize()

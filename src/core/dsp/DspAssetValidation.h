@@ -9,6 +9,8 @@
 // Modification history (NereusSDR):
 //   2026-09-21 — Created for NereusSDR by J.J. Boyd (KG4VCF), with
 //                AI-assisted implementation via OpenAI Codex.
+//   2026-09-23 - NR3 (rnnoise) model kind added by J.J. Boyd (KG4VCF),
+//                with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -16,13 +18,19 @@
 
 namespace NereusSDR {
 
+// The integer values travel on the wire (dspAssets.beginImport "kind",
+// dspAssets.list rows) and must never be renumbered.
 enum class DspAssetKind {
-    NnrModel,
-    Ps3Correction,
+    NnrModel = 0,
+    Ps3Correction = 1,
+    // R-R3-21: rnnoise weight files for NR3 (dspAssetVersion 2).
+    Nr3Model = 2,
 };
 
 QString dspAssetKindName(DspAssetKind kind);
 bool dspAssetKindFromName(const QString& name, DspAssetKind* kind);
+// Wire integer to kind; false for any value this build does not know.
+bool dspAssetKindFromInt(qint64 value, DspAssetKind* kind);
 
 struct DspAssetValidationResult {
     bool accepted{false};
@@ -48,6 +56,9 @@ class DspAssetValidation final
 public:
     static constexpr qint64 kMaxNnrModelBytes = 64LL * 1024 * 1024;
     static constexpr qint64 kMaxPs3CorrectionBytes = 1LL * 1024 * 1024;
+    // The bundled Default_large.bin is 3.5 MB; 16 MiB leaves room for
+    // larger community models without letting a file grow without bound.
+    static constexpr qint64 kMaxNr3ModelBytes = 16LL * 1024 * 1024;
     static constexpr qint64 kTransferChunkBytes = 64LL * 1024;
     static constexpr int kMaxPs3BranchesPerCurve = 16;
     static constexpr int kMaxPs3PointsPerCurve = 1614;
@@ -55,6 +66,12 @@ public:
     static DspAssetValidationResult validate(DspAssetKind kind, const QByteArray& bytes);
     static DspAssetValidationResult validateNnrModel(const QByteArray& bytes);
     static DspAssetValidationResult validatePs3Correction(const QByteArray& bytes);
+    // Loads the bytes as an rnnoise model and builds one denoiser from it,
+    // then frees both. Runs on the caller's thread (the Core's main thread),
+    // never the audio thread, and never touches the live NR3 model.
+    static DspAssetValidationResult validateNr3Model(const QByteArray& bytes);
+
+    static qint64 sizeLimit(DspAssetKind kind);
 
     // capacityBytes includes the fixed WDSP C buffer's terminating NUL.
     static bool validateEncodedPath(const QString& path, qsizetype capacityBytes,

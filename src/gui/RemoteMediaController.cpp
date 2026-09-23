@@ -37,6 +37,7 @@
 #include <QtEndian>
 #include <algorithm>
 #include <cmath>
+#include <deque>
 #include <limits>
 #include <map>
 #include <utility>
@@ -62,6 +63,30 @@ static_assert(RemoteMediaController::kMediaConnectDeadlineMs
 // The audio status refresh, which runs only while a receiver runs or a
 // playback problem awaits recovery.
 constexpr int kAudioStatusRefreshMs = 250;
+// R-R3-23: how often the lossless link trial samples playback. Its windows
+// are RemoteAudioLinkTrial::kWindowMs long; a 1 s sample closes each within
+// a second of its end.
+constexpr int kLinkTrialSampleMs = 1000;
+// R-R3-35: probes kept awaiting their echo; an older one is forgotten.
+constexpr std::size_t kMaxPendingClockProbes = 8;
+// The receiver restarts that say audio arrived badly, which the link trial
+// counts. Speaker, decoder and clock faults are this computer's own.
+bool linkInterruption(RemoteAudioReceiver::Fault fault)
+{
+    return fault == RemoteAudioReceiver::Fault::ArrivalBurst
+        || fault == RemoteAudioReceiver::Fault::StreamGap
+        || fault == RemoteAudioReceiver::Fault::NoPackets;
+}
+
+RemoteAudioProfile storedAudioProfileChoice()
+{
+    return AppSettings::instance()
+                   .value(QLatin1String(RemoteMediaController::kAudioProfileSettingKey),
+                          QStringLiteral("Opus"))
+                   .toString()
+               == QLatin1String("Lossless")
+        ? RemoteAudioProfile::Lossless : RemoteAudioProfile::Opus;
+}
 // Speaker progress this recent means audio is playing now: the window the
 // title bar has always used.
 constexpr qint64 kPlaybackProgressWindowMs = 500;
@@ -74,6 +99,14 @@ QString selectedSpeakerOutput()
         AudioDeviceConfig::loadFromSettings(QStringLiteral("audio/Speakers"));
     return speakers.deviceName.isEmpty() ? QStringLiteral("System default")
                                          : speakers.deviceName;
+}
+
+// A clock reading in whole nanoseconds, never negative (R-R3-35).
+bool nanoseconds(const QJsonObject& object, const char* key, qint64& value)
+{
+    const QJsonValue json = object.value(QLatin1String(key));
+    value = json.isDouble() ? json.toInteger(-1) : -1;
+    return value >= 0;
 }
 
 bool number(const QJsonObject& object, const char* key, double low, double high,
@@ -112,8 +145,18 @@ bool uint64(const QJsonObject& object, const char* key, quint64 maximum,
 
 // Log wording only: the profile Core reported for this context, never a
 // profile this GUI assumes.
-QString reportedAudioProfile(const std::optional<OpusEncoderProfile>& encoder)
+QString reportedAudioProfile(const RemoteAudioContextMessage& context)
 {
+    if (const std::optional<PcmEncoderProfile>& lossless = context.losslessEncoder) {
+        return QStringLiteral("lossless L16 %1 Hz, %2 channels, %3-sample packets, "
+                              "%4-bit, payload type %5")
+            .arg(lossless->sampleRate)
+            .arg(lossless->channels)
+            .arg(lossless->frameSamples)
+            .arg(lossless->bitsPerSample)
+            .arg(lossless->payloadType);
+    }
+    const std::optional<OpusEncoderProfile>& encoder = context.encoder;
     if (!encoder) {
         return QStringLiteral("codec profile not reported by Core");
     }
@@ -126,24 +169,43 @@ QString reportedAudioProfile(const std::optional<OpusEncoderProfile>& encoder)
         .arg(encoder->audioBandwidthHz);
 }
 
-// The operator's line for a limited grant; empty when nothing limited it.
-QString grantStatusLine(const std::optional<SpectrumContextGrant>& grant)
+// The zoom-detail limit a grant reports, for the pan's status line
+// (R-R3-37); false when nothing limited it.
+bool applyGrantLimit(PanDisplayState& state, const std::optional<SpectrumContextGrant>& grant)
 {
     if (!grant) {
-        return {};
+        return false;
     }
     switch (grant->limit) {
     case SpectrumLimitReason::None:
-        return {};
+        return false;
     case SpectrumLimitReason::LargestSize:
-        return QStringLiteral("Zoom detail is at the station's maximum");
+        state.zoomLimit = PanDisplayState::ZoomLimit::LargestSize;
+        return true;
     case SpectrumLimitReason::SharedEngine:
-        return QStringLiteral("Zoom detail limited: this receiver's spectrum is shared with another pan");
+        state.zoomLimit = PanDisplayState::ZoomLimit::SharedEngine;
+        return true;
     case SpectrumLimitReason::SourceBins:
-        return QStringLiteral("Showing %1 points: the receiver has no finer detail here")
-            .arg(grant->grantedPixels);
+        state.zoomLimit = PanDisplayState::ZoomLimit::SourceBins;
+        state.zoomPoints = grant->grantedPixels;
+        return true;
     }
-    return {};
+    return false;
+}
+
+PanDisplayState refusedState(const QString& reason)
+{
+    PanDisplayState state;
+    state.phase = PanDisplayState::Phase::Refused;
+    state.refusalReason = reason;
+    return state;
+}
+
+PanDisplayState phaseState(PanDisplayState::Phase phase)
+{
+    PanDisplayState state;
+    state.phase = phase;
+    return state;
 }
 
 // Log wording only.
@@ -385,8 +447,8 @@ struct RemoteMediaController::Private {
     RemoteMediaController::AllocationClock allocationClock;
     int allocationAckTimeoutMs = kDefaultAllocationAckTimeoutMs;
     std::map<quint32, Binding> bindings;
-    // The status each pan was last given, before its grant line is added.
-    QHash<QString, QString> panBaseStatus;
+    // The status each pan was last given, before its grant limit is added.
+    QHash<QString, PanDisplayState> panBaseStatus;
     // R-R3-08/37: why each pan's display is below what it asked for, when
     // the Core said (CoreBusy); None for a pan at its requested quality.
     // The pan status builder maps it to words.
@@ -416,6 +478,24 @@ struct RemoteMediaController::Private {
     bool preparingAudio = false;
     bool audioEnabled = false;
     bool audioRetryPending = false;
+    // R-R3-23. The operator's choice, stored on this computer. Whether this
+    // media session has sent Core a `profile` (its contexts then carry the
+    // profile shape). Whether this media session's link trial failed, so
+    // Opus is asked for until the session ends or the operator chooses
+    // again. The trial itself and its 1 s sampling timer.
+    RemoteAudioProfile audioProfileChoice = RemoteAudioProfile::Opus;
+    bool audioProfileRequested = false;
+    bool losslessFallback = false;
+    RemoteAudioLinkTrial linkTrial;
+    QTimer* linkTrialTimer = nullptr;
+    // R-R3-35 measured delay, per media session: the clock offset from
+    // probe echoes, the Core's newest capture from the latest echo, the
+    // probes awaiting an echo (id, t0) and the 1 s probe timer.
+    AudioClockEstimator clockEstimator;
+    std::optional<AudioCaptureAnchor> captureAnchor;
+    std::deque<std::pair<quint32, qint64>> pendingClockProbes;
+    quint32 nextClockProbeId = 0;
+    QTimer* clockProbeTimer = nullptr;
     // A persistent local playback failure and the identity it was recorded
     // against; only matching recovery with real speaker progress clears it.
     std::optional<RemoteAudioFailure> audioFailure;
@@ -499,6 +579,16 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
     });
     d->audio = std::make_unique<RemoteAudioReceiver>(model->audioEngine());
     d->selectedOutput = selectedSpeakerOutput();
+    d->audioProfileChoice = storedAudioProfileChoice();
+    d->linkTrialTimer = new QTimer(this);
+    d->linkTrialTimer->setObjectName(QStringLiteral("remoteAudioLinkTrialTimer"));
+    d->linkTrialTimer->setInterval(kLinkTrialSampleMs);
+    connect(d->linkTrialTimer, &QTimer::timeout,
+            this, &RemoteMediaController::checkLosslessLink);
+    d->clockProbeTimer = new QTimer(this);
+    d->clockProbeTimer->setObjectName(QStringLiteral("remoteAudioClockProbeTimer"));
+    d->clockProbeTimer->setInterval(kClockProbeIntervalMs);
+    connect(d->clockProbeTimer, &QTimer::timeout, this, &RemoteMediaController::sendClockProbe);
     d->audioStatusTimer = new QTimer(this);
     d->audioStatusTimer->setObjectName(QStringLiteral("remoteAudioStatusTimer"));
     d->audioStatusTimer->setInterval(kAudioStatusRefreshMs);
@@ -521,9 +611,16 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
         if (d->peer && d->peer->isReady()) {
             ++d->audioRevision;
             if (!d->audioRevision) { ++d->audioRevision; }
-            send({{QStringLiteral("op"), QStringLiteral("audio")},
-                  {QStringLiteral("revision"), double(d->audioRevision)},
-                  {QStringLiteral("enabled"), false}});
+            QJsonObject disable{{QStringLiteral("op"), QStringLiteral("audio")},
+                                {QStringLiteral("revision"), double(d->audioRevision)},
+                                {QStringLiteral("enabled"), false}};
+            if (audioProfileNegotiated()) {
+                disable.insert(QStringLiteral("profile"), remoteAudioProfileToWire(
+                    d->audioProfileChoice == RemoteAudioProfile::Lossless && !d->losslessFallback
+                        ? RemoteAudioProfile::Lossless : RemoteAudioProfile::Opus));
+                d->audioProfileRequested = true;
+            }
+            send(disable);
             if (!self) { return; }
         }
         refreshAudioStatus();
@@ -531,9 +628,17 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
         emit errorOccurred(remoteAudioProblemText(fault));
     });
     connect(d->audio.get(), &RemoteAudioReceiver::restartRequested, this,
-            [this](const QString& reason, RemoteAudioReceiver::Fault) {
+            [this](const QString& reason, RemoteAudioReceiver::Fault fault) {
         qCWarning(lcRemoteMedia) << reason;
         d->audio->stop();
+        // R-R3-23: a lossless stream that arrives badly enough to restart
+        // counts against the link trial; failing it asks Core for Opus now.
+        if (d->linkTrial.active() && linkInterruption(fault)
+            && d->linkTrial.noteInterruption(d->clock.elapsed())
+                == RemoteAudioLinkTrial::Verdict::Failed) {
+            fallBackToOpus(QStringLiteral("receiver restarts while playing lossless audio"));
+            return;
+        }
         d->audioRestarting = true;
         if (!d->audioRetryPending) {
             d->audioRetryPending = true;
@@ -613,6 +718,8 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
             d->accountedPs3 = d->client->remotePs3DisplaySubscribed();
             d->ps3Refused = enabled;
             d->ps3RefusalReason = reason.left(512);
+            qCInfo(lcRemoteMedia).noquote() << "Remote PureSignal display refused:"
+                                            << d->ps3RefusalReason;
             d->ps3RefusedGeneration = d->client->remoteDisplayBudgetLimits()
                 ? d->client->remoteDisplayBudgetLimits()->generation : 0;
             d->pendingPs3.reset();
@@ -784,6 +891,150 @@ RemoteAudioStatus RemoteMediaController::audioStatus() const
 {
     return d->audioStatus;
 }
+RemoteAudioProfile RemoteMediaController::audioProfileChoice() const
+{
+    return d->audioProfileChoice;
+}
+bool RemoteMediaController::audioProfileNegotiated() const
+{
+    return audioDetailNegotiated() && d->client->capabilities().audioProfileVersion >= 1;
+}
+
+bool RemoteMediaController::audioClockNegotiated() const
+{
+    return d->client && d->client->mediaAvailable()
+        && d->client->capabilities().audioClockVersion >= 1;
+}
+
+RemoteAudioDelayReport RemoteMediaController::audioDelay() const
+{
+    RemoteAudioDelayReport report;
+    report.measurable = !d->peer.isNull() && audioClockNegotiated();
+    if (!report.measurable || !d->audioEnabled) {
+        return report;
+    }
+    const RemoteAudioReceiverTelemetry playback = d->audio->telemetry();
+    if (!playback.running) {
+        return report;
+    }
+    AudioDelayInputs inputs;
+    inputs.offset = d->clockEstimator.offset(d->audio->nowNs());
+    inputs.capture = d->captureAnchor;
+    inputs.playingGeneration = d->audioGeneration;
+    inputs.playout = playback.playout;
+    inputs.release = playback.release;
+    report.estimate = measureAudioDelay(inputs);
+    return report;
+}
+
+void RemoteMediaController::reconcileClockProbe()
+{
+    // R-R3-35: probe once a second while this computer plays the Core's
+    // audio, and only to a Core that answers.
+    const bool probe = d->peer && audioClockNegotiated() && d->audioEnabled
+        && d->audio->isRunning();
+    if (probe && !d->clockProbeTimer->isActive()) {
+        d->clockProbeTimer->start();
+    } else if (!probe && d->clockProbeTimer->isActive()) {
+        d->clockProbeTimer->stop();
+    }
+}
+
+void RemoteMediaController::sendClockProbe()
+{
+    if (!d->peer || !audioClockNegotiated()) {
+        return;
+    }
+    const quint32 id = ++d->nextClockProbeId;
+    const qint64 sentNs = d->audio->nowNs();
+    d->pendingClockProbes.emplace_back(id, sentNs);
+    while (d->pendingClockProbes.size() > kMaxPendingClockProbes) {
+        d->pendingClockProbes.pop_front();
+    }
+    send({{QStringLiteral("op"), QStringLiteral("clock-probe")},
+          {QStringLiteral("id"), qint64(id)},
+          {QStringLiteral("t0"), sentNs}});
+}
+
+void RemoteMediaController::receiveClockEcho(const QJsonObject& payload, qint64 receivedNs)
+{
+    double idValue = 0;
+    double generation = 0;
+    double rtpTimestamp = 0;
+    qint64 t0 = 0, t1 = 0, t2 = 0, capturedNs = 0;
+    if (payload.size() != 9
+        || !number(payload, "id", 0, std::numeric_limits<quint32>::max(), idValue, true)
+        || !nanoseconds(payload, "t0", t0) || !nanoseconds(payload, "t1", t1)
+        || !nanoseconds(payload, "t2", t2) || !nanoseconds(payload, "capturedNs", capturedNs)
+        || !number(payload, "generation", 0, std::numeric_limits<quint32>::max(), generation, true)
+        || !number(payload, "rtpTimestamp", 0, std::numeric_limits<quint32>::max(),
+                   rtpTimestamp, true)) {
+        return;
+    }
+    const quint32 id = quint32(idValue);
+    // Only an answer to a probe this session sent, with the time it sent.
+    const auto pending = std::find_if(d->pendingClockProbes.begin(), d->pendingClockProbes.end(),
+        [id](const std::pair<quint32, qint64>& probe) { return probe.first == id; });
+    if (pending == d->pendingClockProbes.end() || pending->second != t0) {
+        return;
+    }
+    d->pendingClockProbes.erase(pending);
+    if (!d->clockEstimator.addSample({t0, t1, t2, receivedNs})) {
+        return;
+    }
+    if (generation != 0) {
+        d->captureAnchor = AudioCaptureAnchor{quint32(generation), quint32(rtpTimestamp), capturedNs};
+    } else {
+        d->captureAnchor.reset();
+    }
+}
+
+void RemoteMediaController::setAudioProfileChoice(RemoteAudioProfile profile)
+{
+    const bool changed = profile != d->audioProfileChoice;
+    d->audioProfileChoice = profile;
+    AppSettings::instance().setValue(QLatin1String(kAudioProfileSettingKey),
+                                     remoteAudioProfileName(profile));
+    // Choosing again gives lossless a fresh chance on this link.
+    const bool wasFallback = std::exchange(d->losslessFallback, false);
+    d->linkTrial.end();
+    d->linkTrialTimer->stop();
+    if ((changed || wasFallback) && audioProfileNegotiated() && d->peer && d->peer->isReady()
+        && d->model && !d->model->audioEngine()->masterMuted()) {
+        requestAudio();
+        return;
+    }
+    refreshAudioStatus();
+}
+
+void RemoteMediaController::checkLosslessLink()
+{
+    if (!d->linkTrial.active()) {
+        d->linkTrialTimer->stop();
+        return;
+    }
+    if (d->linkTrial.observe(d->clock.elapsed(), d->audio->telemetry())
+        == RemoteAudioLinkTrial::Verdict::Failed) {
+        fallBackToOpus(QStringLiteral("%1% of lossless packets lost or filled in over %2 s")
+            .arg(100.0 * d->linkTrial.lastWindowLoss().value_or(0.0), 0, 'f', 1)
+            .arg(RemoteAudioLinkTrial::kWindowMs / 1000));
+    }
+}
+
+void RemoteMediaController::fallBackToOpus(const QString& cause)
+{
+    d->linkTrial.end();
+    d->linkTrialTimer->stop();
+    d->losslessFallback = true;
+    const QString text = remoteAudioQualityReasonText(RemoteAudioQualityReason::NetworkTooSlow);
+    qCInfo(lcRemoteMedia).noquote()
+        << QStringLiteral("Remote audio: lossless link trial failed (%1); asking Core for Opus")
+               .arg(cause);
+    const QPointer<RemoteMediaController> self(this);
+    requestAudio();
+    if (!self) { return; }
+    emit errorOccurred(text);
+}
 
 void RemoteMediaController::retryAudio()
 {
@@ -820,7 +1071,31 @@ void RemoteMediaController::refreshAudioStatus()
     status.retryAvailable = inputs.mediaSession && !inputs.muted
         && (status.state == RemoteAudioStatus::State::PlaybackProblem
             || status.state == RemoteAudioStatus::State::CoreCouldNotStart);
+    // R-R3-23: the choice, what Core runs, and why Lossless is not running.
+    status.chosenProfile = d->audioProfileChoice;
+    status.profileChoiceAvailable = inputs.mediaSession && audioProfileNegotiated();
+    if (const auto& context = d->acceptedAudioContext) {
+        if (context->profile) {
+            status.runningProfile = context->profile;
+        } else if (context->enabled) {
+            status.runningProfile = RemoteAudioProfile::Opus; // a Core without the choice
+        }
+        status.losslessEncoder = context->losslessEncoder;
+    }
+    if (d->audioProfileChoice == RemoteAudioProfile::Lossless && inputs.mediaSession) {
+        if (d->losslessFallback) {
+            status.qualityReason = RemoteAudioQualityReason::NetworkTooSlow;
+        } else if (!audioProfileNegotiated()) {
+            status.qualityReason = RemoteAudioQualityReason::CoreCannotSend;
+        } else if (d->acceptedAudioContext && d->acceptedAudioContext->profileRefusal) {
+            status.qualityReason =
+                *d->acceptedAudioContext->profileRefusal == RemoteAudioProfileRefusal::NotAllowed
+                ? RemoteAudioQualityReason::CoreNotAllowed
+                : RemoteAudioQualityReason::ConnectionUnavailable;
+        }
+    }
 
+    reconcileClockProbe();
     // Speaker progress and recovery are observed, not signalled, so poll
     // them while there is something to watch, and only then.
     const bool watch = playback.running || d->audioFailure.has_value();
@@ -847,6 +1122,18 @@ void RemoteMediaController::stop()
     d->audioRevision = 0;
     d->audioGeneration = 0;
     d->acceptedAudioContext.reset();
+    // The choice outlives the session and is replayed on the next one; a
+    // fallback and its trial belong to this one.
+    d->audioProfileRequested = false;
+    d->losslessFallback = false;
+    d->linkTrial.end();
+    d->linkTrialTimer->stop();
+    // R-R3-35: the clock offset and the Core's capture belong to this
+    // session; a reconnect measures afresh.
+    d->clockProbeTimer->stop();
+    d->clockEstimator.reset();
+    d->captureAnchor.reset();
+    d->pendingClockProbes.clear();
     // A playback problem belongs to its session and ends with it.
     d->audioFailure.reset();
     d->audioRestarting = false;
@@ -884,7 +1171,7 @@ void RemoteMediaController::stop()
             if (!self) { return; }
         }
         if (!panId.isEmpty()) {
-            setPanStatus(panId, QString());
+            setPanStatus(panId, PanDisplayState{});
             if (!self) { return; }
         }
     }
@@ -1043,7 +1330,13 @@ void RemoteMediaController::start()
     // Stage one: Core's description (receiveControl() starts stage two).
     d->awaitingDescription = true;
     d->establishTimer->start(d->descriptionDeadlineMs);
-    send({{QStringLiteral("op"), QStringLiteral("start")}});
+    // R-R3-23: a Core that can send lossless audio offers it only to a GUI
+    // that says it understands it; every other Core sees today's start.
+    QJsonObject startControl{{QStringLiteral("op"), QStringLiteral("start")}};
+    if (audioProfileNegotiated()) {
+        startControl.insert(QStringLiteral("audioProfileVersion"), 1);
+    }
+    send(startControl);
     if (!self) { return; }
     // A media session now exists: audio is awaited from Core.
     refreshAudioStatus();
@@ -1146,7 +1439,7 @@ void RemoteMediaController::refreshSubscriptions()
             // diagnostics, and clear any status from a previous allocation.
             // Only a limited grant or a refusal is shown.
             if (applet->panId().isEmpty()) {
-                applet->setRemoteDisplayStatus(QString());
+                applet->setRemoteDisplayStatus(PanStatusText{});
             } else {
                 setPanStatus(applet->panId(), perPanRefusalStatus(applet->panId()));
             }
@@ -1307,16 +1600,21 @@ void RemoteMediaController::refreshSubscriptions()
     refreshCtunState();
 }
 
-void RemoteMediaController::setPanStatus(const QString& panId, const QString& status)
+void RemoteMediaController::setPanStatus(const QString& panId, const PanDisplayState& status)
 {
     if (!d->stack || panId.isEmpty()) { return; }
     d->panBaseStatus.insert(panId, status);
     for (PanadapterApplet* applet : d->stack->allApplets()) {
         if (applet && applet->panId() == panId) {
-            applet->setRemoteDisplayStatus(statusWithGrant(panId, status));
+            applet->setRemoteDisplayStatus(buildPanStatusText(statusWithGrant(panId, status)));
             return;
         }
     }
+}
+
+PanDisplayState RemoteMediaController::panDisplayState(const QString& panId) const
+{
+    return statusWithGrant(panId, d->panBaseStatus.value(panId));
 }
 
 void RemoteMediaController::refreshPanGrantStatus(const QString& panId)
@@ -1324,7 +1622,7 @@ void RemoteMediaController::refreshPanGrantStatus(const QString& panId)
     setPanStatus(panId, d->panBaseStatus.value(panId));
 }
 
-QString RemoteMediaController::perPanRefusalStatus(const QString& panId) const
+PanDisplayState RemoteMediaController::perPanRefusalStatus(const QString& panId) const
 {
     // R-R3-01/08/37: outside budget mode a refused pan keeps the budget-mode
     // line while the refused request is still the one it would send. A new
@@ -1341,26 +1639,25 @@ QString RemoteMediaController::perPanRefusalStatus(const QString& panId) const
                           d->client->remoteWidebandAvailable()) != binding.observed) {
             continue;
         }
-        return QStringLiteral("Display allocation refused: %1")
-            .arg(binding.refusalReason.left(384));
+        return refusedState(binding.refusalReason.left(384));
     }
     return {};
 }
 
-QString RemoteMediaController::statusWithGrant(const QString& panId, const QString& status) const
+PanDisplayState RemoteMediaController::statusWithGrant(const QString& panId,
+                                                      PanDisplayState status) const
 {
-    // Only a live, accepted endpoint's grant is shown: the line goes when the
-    // grant is no longer limited or the endpoint does.
-    QString line;
+    // Only a live, accepted endpoint's grant is shown: the limit goes when
+    // the grant is no longer limited or the endpoint does.
+    status.zoomLimit = PanDisplayState::ZoomLimit::None;
+    status.zoomPoints = 0;
     for (const auto& [id, binding] : d->bindings) {
         if (binding.panId == panId && binding.accepted && !binding.retiring
-            && !binding.suspending) {
-            line = grantStatusLine(binding.grant);
-            if (!line.isEmpty()) { break; }
+            && !binding.suspending && applyGrantLimit(status, binding.grant)) {
+            break;
         }
     }
-    if (line.isEmpty()) { return status; }
-    return status.isEmpty() ? line : status + QStringLiteral("; ") + line;
+    return status;
 }
 
 void RemoteMediaController::refreshBudgetSubscriptions()
@@ -1445,6 +1742,8 @@ void RemoteMediaController::refreshBudgetSubscriptions()
         if (!allocateRemoteDisplay(*limits, {}, true, &reason)) {
             d->ps3Refused = true;
             d->ps3RefusalReason = reason;
+            qCInfo(lcRemoteMedia).noquote() << "Remote PureSignal display does not fit:"
+                                            << reason;
             d->ps3RefusedGeneration = limits->generation;
         }
     }
@@ -1490,8 +1789,7 @@ void RemoteMediaController::refreshBudgetSubscriptions()
             if (found == d->bindings.end()) { continue; }
             Private::Binding& binding = found->second;
             binding.suspending = true; // Preserve the widget/history across the release.
-            setPanStatus(binding.panId,
-                         QStringLiteral("Display allocation pending: changing source window"));
+            setPanStatus(binding.panId, phaseState(PanDisplayState::Phase::ChangingWindow));
             if (!self) { return; }
             if (binding.pending) { continue; }
             ++binding.revision;
@@ -1537,12 +1835,15 @@ void RemoteMediaController::refreshBudgetSubscriptions()
         } else {
             d->cachedAllocation = allocateRemoteDisplay(
                 *limits, intents, targetPs3, &d->cachedAllocationError);
+            if (!d->cachedAllocation) {
+                qCInfo(lcRemoteMedia).noquote() << "Remote display allocation failed:"
+                                                << d->cachedAllocationError;
+            }
         }
     }
     const std::optional<RemoteDisplayAllocation>& allocation = d->cachedAllocation;
     if (!allocation) {
-        const QString status = QStringLiteral("Display allocation refused: %1")
-            .arg(d->cachedAllocationError.left(384));
+        const PanDisplayState status = refusedState(d->cachedAllocationError.left(384));
         for (const Desired& item : desired) { setPanStatus(item.panId, status); }
         return;
     }
@@ -1565,26 +1866,22 @@ void RemoteMediaController::refreshBudgetSubscriptions()
     QList<quint32> eraseUnaccepted;
 
     // R-R3-08/37: a reduction the Core made because it is busy says so;
-    // any other reduction keeps the general capacity wording.
+    // any other reduction keeps the general capacity wording. The pan status
+    // builder words it from PanDisplayState::budgetReason.
     const DisplayBudgetReason budgetReason = d->client->remoteDisplayBudgetReason();
-    const QString capacityWords = budgetReason == DisplayBudgetReason::CoreBusy
-        ? QStringLiteral("Core busy") : QStringLiteral("Core capacity");
-    const auto statusFor = [now, &capacityWords](const Private::Binding& binding,
-                                                 const Desired& item, bool& reduced) {
-        reduced = false;
+    const auto statusFor = [now](const Private::Binding& binding, const Desired& item) {
         if (binding.pending && binding.pending->timedOut) {
-            return QStringLiteral("Display allocation stalled: no Core acknowledgement");
+            return phaseState(PanDisplayState::Phase::Stalled);
         }
         if (!binding.refusalReason.isEmpty()) {
-            return QStringLiteral("Display allocation refused: %1")
-                .arg(binding.refusalReason.left(384));
+            return refusedState(binding.refusalReason.left(384));
         }
         if (binding.acceptedRevision == 0 || binding.acceptedRequest.isEmpty()) {
-            return QStringLiteral("Display allocation pending");
+            return phaseState(PanDisplayState::Phase::Waiting);
         }
-        const int pixels = binding.acceptedRequest.value(QStringLiteral("pixels")).toInt();
-        const int fps = binding.acceptedRequest.value(QStringLiteral("fps")).toInt();
-        QString status = QStringLiteral("Display target %1 px @ %2 fps").arg(pixels).arg(fps);
+        PanDisplayState status = phaseState(PanDisplayState::Phase::Showing);
+        status.pixels = binding.acceptedRequest.value(QStringLiteral("pixels")).toInt();
+        status.fps = binding.acceptedRequest.value(QStringLiteral("fps")).toInt();
         int firstRecent = 0;
         while (firstRecent < binding.receivedFrameTimesMs.size()
                && binding.receivedFrameTimesMs.at(firstRecent) < now - 2'000) {
@@ -1597,22 +1894,12 @@ void RemoteMediaController::refreshBudgetSubscriptions()
             const double received = double(recentCount - 1) * 1000.0
                 / double(binding.receivedFrameTimesMs.constLast()
                          - binding.receivedFrameTimesMs.at(firstRecent));
-            status += QStringLiteral("; received %1 fps").arg(received, 0, 'f', 1);
+            status.receivedFps = received;
         }
-        const int requestedPixels = item.original.value(QStringLiteral("pixels")).toInt();
-        const int requestedFps = item.original.value(QStringLiteral("fps")).toInt();
-        if (pixels != requestedPixels || fps != requestedFps) {
-            reduced = true;
-            status += QStringLiteral(" (requested %1 px @ %2 fps; %3)")
-                .arg(requestedPixels).arg(requestedFps).arg(capacityWords);
-        } else if (!binding.pending) {
-            // R-R3-37: at the requested quality with nothing waiting, budget
-            // mode reads like legacy mode: no line.
-            return QString();
-        }
-        if (binding.acceptedRequest.value(QStringLiteral("wideSpanFactor")).toDouble() > 1.0) {
-            status += QStringLiteral("; WIDE plane reserved");
-        }
+        status.requestedPixels = item.original.value(QStringLiteral("pixels")).toInt();
+        status.requestedFps = item.original.value(QStringLiteral("fps")).toInt();
+        status.extendedView =
+            binding.acceptedRequest.value(QStringLiteral("wideSpanFactor")).toDouble() > 1.0;
         return status;
     };
 
@@ -1628,15 +1915,14 @@ void RemoteMediaController::refreshBudgetSubscriptions()
             if (found != d->bindings.end()
                 && found->second.refusedIdentity == suspendIdentity) {
                 setPanStatus(item.panId,
-                    QStringLiteral("Display allocation refused: %1")
-                        .arg(found->second.refusalReason.left(384)));
+                             refusedState(found->second.refusalReason.left(384)));
                 continue;
             }
             d->panBudgetReason.insert(item.panId, budgetReason);
-            setPanStatus(item.panId, retainedPs3ExceedsCap
-                ? QStringLiteral("Display paused: %1; accepted PureSignal reservation exceeds current cap")
-                      .arg(capacityWords)
-                : QStringLiteral("Display paused: %1").arg(capacityWords));
+            PanDisplayState paused = phaseState(PanDisplayState::Phase::Paused);
+            paused.pureSignalOverLimit = retainedPs3ExceedsCap;
+            paused.budgetReason = budgetReason;
+            setPanStatus(item.panId, paused);
             if (!self) { return; }
             if (found == d->bindings.end()) { continue; }
             found->second.suspending = true;
@@ -1654,8 +1940,7 @@ void RemoteMediaController::refreshBudgetSubscriptions()
 
         if (found == d->bindings.end()) {
             if (d->bindings.size() >= kMaxEndpoints || d->nextEndpoint == 0) {
-                setPanStatus(item.panId,
-                    QStringLiteral("Display allocation stalled: endpoint ledger full"));
+                setPanStatus(item.panId, phaseState(PanDisplayState::Phase::TooManyPans));
                 continue;
             }
             const quint32 endpointId = d->nextEndpoint++;
@@ -1715,15 +2000,14 @@ void RemoteMediaController::refreshBudgetSubscriptions()
             binding.refusedIdentity.clear();
             binding.refusalReason.clear();
         }
-        bool reduced = false;
-        QString status = statusFor(binding, item, reduced);
-        d->panBudgetReason.insert(item.panId,
-                                  reduced ? budgetReason : DisplayBudgetReason::None);
+        PanDisplayState status = statusFor(binding, item);
+        status.budgetReason = status.reduced() ? budgetReason : DisplayBudgetReason::None;
+        d->panBudgetReason.insert(item.panId, status.budgetReason);
         if (d->ps3Refused && !d->ps3RefusalReason.isEmpty()) {
-            status += QStringLiteral("; PureSignal display refused: %1")
-                .arg(d->ps3RefusalReason.left(256));
+            status.pureSignal = PanDisplayState::PureSignal::Refused;
+            status.pureSignalRefusalReason = d->ps3RefusalReason.left(256);
         } else if (d->pendingPs3 && d->pendingPs3->timedOut) {
-            status += QStringLiteral("; PureSignal display allocation stalled");
+            status.pureSignal = PanDisplayState::PureSignal::Stalled;
         }
         setPanStatus(item.panId, status);
         if (!self) { return; }
@@ -1929,9 +2213,18 @@ void RemoteMediaController::requestAudio()
     d->lastAudioRequestMs = d->clock.elapsed();
     const bool enabled = d->model->isConnected() && !d->model->audioEngine()->masterMuted();
     const QPointer<RemoteMediaController> self(this);
-    send({{QStringLiteral("op"), QStringLiteral("audio")},
-          {QStringLiteral("revision"), double(d->audioRevision)},
-          {QStringLiteral("enabled"), enabled}});
+    QJsonObject control{{QStringLiteral("op"), QStringLiteral("audio")},
+                        {QStringLiteral("revision"), double(d->audioRevision)},
+                        {QStringLiteral("enabled"), enabled}};
+    // R-R3-23: the choice, replayed with every request, only to a Core that
+    // offers it; Opus after this session's link trial failed.
+    if (audioProfileNegotiated()) {
+        control.insert(QStringLiteral("profile"), remoteAudioProfileToWire(
+            d->audioProfileChoice == RemoteAudioProfile::Lossless && !d->losslessFallback
+                ? RemoteAudioProfile::Lossless : RemoteAudioProfile::Opus));
+        d->audioProfileRequested = true;
+    }
+    send(control);
     if (!self) { return; }
     refreshAudioStatus();
 }
@@ -2029,6 +2322,9 @@ void RemoteMediaController::receiveAllocationResult(const QJsonObject& payload)
             binding.refusedIdentity = pending.identity;
             binding.refusalReason = reason.isEmpty()
                 ? QStringLiteral("Core refused the display allocation.") : reason;
+            // The raw reason is kept for the log; the pan shows it translated.
+            qCInfo(lcRemoteMedia).noquote() << "Remote display allocation refused:"
+                                            << endpointId << binding.refusalReason;
             if (sourceRetired) {
                 const QPointer<RemoteMediaController> self(this);
                 QPointer<SpectrumWidget> widget = binding.widget;
@@ -2086,9 +2382,9 @@ void RemoteMediaController::receiveAllocationResult(const QJsonObject& payload)
                 const DisplayBudgetReason reason = d->client
                     ? d->client->remoteDisplayBudgetReason() : DisplayBudgetReason::None;
                 d->panBudgetReason.insert(panId, reason);
-                setPanStatus(panId, reason == DisplayBudgetReason::CoreBusy
-                    ? QStringLiteral("Display paused: Core busy")
-                    : QStringLiteral("Display paused: Core capacity"));
+                PanDisplayState paused = phaseState(PanDisplayState::Phase::Paused);
+                paused.budgetReason = reason;
+                setPanStatus(panId, paused);
             }
         } else {
             if (acceptedRevision != binding.acceptedRevision
@@ -2097,6 +2393,8 @@ void RemoteMediaController::receiveAllocationResult(const QJsonObject& payload)
             binding.refusedIdentity = pending.identity;
             binding.refusalReason = reason.isEmpty()
                 ? QStringLiteral("Core refused the display release.") : reason;
+            qCInfo(lcRemoteMedia).noquote() << "Remote display release refused:"
+                                            << endpointId << binding.refusalReason;
         }
     }
     refreshSubscriptions();
@@ -2104,6 +2402,8 @@ void RemoteMediaController::receiveAllocationResult(const QJsonObject& payload)
 
 void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 epoch)
 {
+    // R-R3-35: a clock echo's arrival time (t3), read before anything else.
+    const qint64 receivedNs = d->audio->nowNs();
     if (!d->client || !d->client->mediaAvailable() || epoch != d->epoch
         || !d->peer || payload.value(QStringLiteral("connectionId")) != d->connectionId) { return; }
     const QString op = payload.value(QStringLiteral("op")).toString();
@@ -2111,16 +2411,24 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
         receiveAllocationResult(payload);
         return;
     }
+    if (op == QLatin1String("clock-echo")) {
+        if (audioClockNegotiated()) { receiveClockEcho(payload, receivedNs); }
+        return;
+    }
     if (op == QLatin1String("audio-context")) {
         // The shape the agreed minor selects, then this session's identity.
         // Anything refused leaves generation, playback and signals untouched.
         const std::optional<RemoteAudioContextMessage> context =
-            decodeRemoteAudioContext(payload, audioDetailNegotiated());
+            decodeRemoteAudioContext(payload, audioDetailNegotiated(),
+                                     d->audioProfileRequested);
         if (!context || context->revision != d->audioRevision
             || !isNewerGeneration(context->generation, d->audioGeneration)
             || context->ssrc != d->peer->audioSsrc()) { return; }
         d->audioGeneration = context->generation;
         d->acceptedAudioContext = context;
+        // R-R3-35: the Core's capture of the previous context no longer
+        // describes what plays; the next echo brings this one's.
+        d->captureAnchor.reset();
         // Core has answered: any automatic retry in flight is over.
         d->audioRestarting = false;
         d->audio->stop();
@@ -2131,16 +2439,30 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
         if (context->enabled && d->model
             && d->model->isConnected() && !d->model->audioEngine()->masterMuted()) {
             d->preparingAudio = true;
-            const bool started = d->audio->start(context->ssrc, context->firstTimestamp);
+            const RemoteAudioProfile profile = context->losslessEncoder
+                ? RemoteAudioProfile::Lossless : RemoteAudioProfile::Opus;
+            const bool started = d->audio->start(context->ssrc, context->firstTimestamp, profile);
             if (!self) { return; }
             d->audioEnabled = started;
             d->preparingAudio = false;
             if (d->audioEnabled) {
                 qCInfo(lcRemoteMedia).noquote()
                     << QStringLiteral("Remote audio receiving: %1, context %2")
-                           .arg(reportedAudioProfile(context->encoder))
+                           .arg(reportedAudioProfile(*context))
                            .arg(context->generation);
             }
+        }
+        // R-R3-23: the link trial runs while lossless audio plays. A
+        // restart's new lossless context continues it; anything else ends
+        // it (mute, a radio drop, Opus), and lossless later begins anew.
+        if (d->audioEnabled && context->losslessEncoder) {
+            if (!d->linkTrial.active()) {
+                d->linkTrial.begin(d->clock.elapsed());
+                d->linkTrialTimer->start();
+            }
+        } else if (d->linkTrial.active()) {
+            d->linkTrial.end();
+            d->linkTrialTimer->stop();
         }
         refreshAudioStatus();
         if (!self) { return; }
@@ -2238,6 +2560,8 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
             binding.refusalReason = operatorChange ? QString()
                 : (reason.isEmpty() ? QStringLiteral("Core refused the display allocation.")
                                     : reason.left(512));
+            qCInfo(lcRemoteMedia).noquote() << "Remote display endpoint rejected:"
+                                            << endpointId << reason.left(512);
             binding.decoder.reset();
             const QPointer<RemoteMediaController> self(this);
             const QString panId = binding.panId;

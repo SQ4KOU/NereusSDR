@@ -7,6 +7,7 @@
 // =================================================================
 
 #include "core/session/media/LibDataChannelMediaTransport.h"
+#include "core/session/media/PcmAudioCodec.h"
 
 #include <QElapsedTimer>
 #include <QPointer>
@@ -17,6 +18,7 @@
 #include <QtTest>
 
 #include <chrono>
+#include <cmath>
 #include <thread>
 
 using namespace NereusSDR;
@@ -42,6 +44,27 @@ QString opusFormatLine(const QString& sdp)
     }
     return found.size() == 1 ? found.constFirst() : QString();
 }
+// The audio section of a description: its m= line and every a=rtpmap and
+// a=fmtp line, in order. Fingerprints, ICE credentials and SSRC lines differ
+// per run; these do not, so they are the golden part of an offer.
+QStringList audioFormatLines(const QString& sdp)
+{
+    QStringList lines;
+    bool inAudio = false;
+    for (const QString& line : sdp.split(QRegularExpression(QStringLiteral("\\r?\\n")))) {
+        if (line.startsWith(QLatin1String("m="))) {
+            inAudio = line.startsWith(QLatin1String("m=audio"));
+            if (inAudio) { lines << line; }
+            continue;
+        }
+        if (inAudio && (line.startsWith(QLatin1String("a=rtpmap:"))
+                        || line.startsWith(QLatin1String("a=fmtp:")))) {
+            lines << line;
+        }
+    }
+    return lines;
+}
+
 // Set only in the child process that checks when SCTP settings are applied.
 constexpr const char* kFirstPeerChildVariable = "NEREUS_TST_MEDIA_TRANSPORT_FIRST_PEER";
 
@@ -68,8 +91,15 @@ private slots:
     void answererAcceptsNewAndOldCoreOffers_data();
     void answererAcceptsNewAndOldCoreOffers();
     void preconditionRefusalsReportNoError();
+    void losslessRtpMapIsOfferedOnlyWhenAsked();
+    void answerKeepsTheLosslessRtpMap_data();
+    void answerKeepsTheLosslessRtpMap();
+    void losslessAudioCrossesRealEncryptedLoopback();
 
 private:
+    static void wireExchange(LibDataChannelMediaTransport& offerer,
+                             LibDataChannelMediaTransport& answerer,
+                             QString* offerOut, QString* answerOut);
     static void wire(LibDataChannelMediaTransport& offerer,
                      LibDataChannelMediaTransport& answerer);
     static void startPair(LibDataChannelMediaTransport& offerer,
@@ -749,6 +779,205 @@ void TestMediaTransport::preconditionRefusalsReportNoError()
     QVERIFY(!transport.start({IMediaTransport::Role::Answerer, kTestAudioSsrc}));
     QCOMPARE(errors.size(), 0);
     transport.stop();
+}
+
+void TestMediaTransport::wireExchange(LibDataChannelMediaTransport& offerer,
+                                      LibDataChannelMediaTransport& answerer,
+                                      QString* offerOut, QString* answerOut)
+{
+    connect(&offerer, &IMediaTransport::localDescription, &answerer,
+            [&answerer, offerOut](const QString& sdp, const QString& type) {
+                *offerOut = sdp;
+                QVERIFY2(answerer.acceptDescription(sdp, type), "answerer rejected offer");
+            });
+    connect(&answerer, &IMediaTransport::localDescription, &offerer,
+            [&offerer, answerOut](const QString& sdp, const QString& type) {
+                *answerOut = sdp;
+                QVERIFY2(offerer.acceptDescription(sdp, type), "offerer rejected answer");
+            });
+    connect(&offerer, &IMediaTransport::localCandidate, &answerer,
+            [&answerer](const QString& candidate, const QString& mid) {
+                QVERIFY2(answerer.acceptCandidate(candidate, mid),
+                         "answerer rejected host candidate");
+            });
+    connect(&answerer, &IMediaTransport::localCandidate, &offerer,
+            [&offerer](const QString& candidate, const QString& mid) {
+                QVERIFY2(offerer.acceptCandidate(candidate, mid),
+                         "offerer rejected host candidate");
+            });
+}
+
+// R-R3-23: a GUI that did not ask for lossless receives exactly today's
+// audio description (golden); one that asked gets the L16 rtpmap added to
+// the same m-line, after Opus, with no fmtp of its own.
+void TestMediaTransport::losslessRtpMapIsOfferedOnlyWhenAsked()
+{
+    const QStringList todaysAudio{
+        QStringLiteral("m=audio 9 UDP/TLS/RTP/SAVPF 111"),
+        QStringLiteral("a=rtpmap:111 opus/48000/2"),
+        QStringLiteral("a=fmtp:111 minptime=10;maxaveragebitrate=24000;stereo=1;sprop-stereo=1"),
+    };
+    for (const bool lossless : {false, true}) {
+        LibDataChannelMediaTransport offerer;
+        QSignalSpy descriptions(&offerer, &IMediaTransport::localDescription);
+        IMediaTransport::StartOptions options{IMediaTransport::Role::Offerer, kTestAudioSsrc};
+        options.offerLosslessAudio = lossless;
+        QVERIFY(offerer.start(options));
+        QTRY_COMPARE_WITH_TIMEOUT(descriptions.count(), 1, 5000);
+        const QString offer = descriptions.at(0).at(0).toString();
+        if (!lossless) {
+            QCOMPARE(audioFormatLines(offer), todaysAudio);
+            QVERIFY(!offer.contains(QStringLiteral("L16"), Qt::CaseInsensitive));
+        } else {
+            // The m= line's format order is the preference: Opus first.
+            // libdatachannel writes the rtpmap lines in payload type order.
+            QCOMPARE(audioFormatLines(offer), (QStringList{
+                QStringLiteral("m=audio 9 UDP/TLS/RTP/SAVPF 111 96"),
+                QStringLiteral("a=rtpmap:96 L16/48000/2"),
+                todaysAudio.at(1), todaysAudio.at(2)}));
+        }
+        // One m=audio line either way, and nothing negotiated before an answer.
+        QCOMPARE(offer.count(QStringLiteral("m=audio")), 1);
+        QVERIFY(!offerer.losslessAudioNegotiated());
+        offerer.stop();
+    }
+}
+
+void TestMediaTransport::answerKeepsTheLosslessRtpMap_data()
+{
+    QTest::addColumn<bool>("lossless");
+    QTest::newRow("today") << false;
+    QTest::newRow("lossless") << true;
+}
+
+// Established against the real library, not assumed: libdatachannel's
+// answer to an offer carrying L16 keeps the rtpmap (it reciprocates the
+// offered media), so both ends agree lossless audio may flow. Without the
+// offer flag neither end does, and the answer is today's.
+void TestMediaTransport::answerKeepsTheLosslessRtpMap()
+{
+    QFETCH(bool, lossless);
+    LibDataChannelMediaTransport offerer;
+    LibDataChannelMediaTransport answerer;
+    QString offer;
+    QString answer;
+    wireExchange(offerer, answerer, &offer, &answer);
+    QSignalSpy offerReady(&offerer, &IMediaTransport::ready);
+    QSignalSpy answerReady(&answerer, &IMediaTransport::ready);
+    QSignalSpy answerErrors(&answerer, &IMediaTransport::errorOccurred);
+    QVERIFY(answerer.start({IMediaTransport::Role::Answerer, kTestAudioSsrc}));
+    IMediaTransport::StartOptions options{IMediaTransport::Role::Offerer, kTestAudioSsrc};
+    options.offerLosslessAudio = lossless;
+    QVERIFY(offerer.start(options));
+    QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
+
+    const QStringList answerAudio = audioFormatLines(answer);
+    QVERIFY2(!answerAudio.isEmpty(), qPrintable(answer));
+    QCOMPARE(answerAudio.contains(QStringLiteral("a=rtpmap:96 L16/48000/2")), lossless);
+    QVERIFY(answerAudio.contains(QStringLiteral("a=rtpmap:111 opus/48000/2")));
+    QVERIFY(answer.contains(QStringLiteral("a=recvonly")));
+    QCOMPARE(offerer.losslessAudioNegotiated(), lossless);
+    QCOMPARE(answerer.losslessAudioNegotiated(), lossless);
+
+    // Both payload types cross the same track.
+    QSignalSpy rtpReceived(&answerer, &IMediaTransport::rtpReceived);
+    const QByteArray opus = rtpPacket(30);
+    const QByteArray l16 = PcmAudioPacketiser{}.encode(
+        QVector<float>(PcmAudioCodecConfig::kPacketFrames * 2, 0.5f), 31, 1920,
+        kTestAudioSsrc).packet;
+    QVERIFY(offerer.sendRtp(opus));
+    QVERIFY(offerer.sendRtp(l16));
+    QTRY_COMPARE_WITH_TIMEOUT(rtpReceived.count(), 2, 5000);
+    QCOMPARE(rtpReceived.at(0).at(0).toByteArray(), opus);
+    QCOMPARE(rtpReceived.at(1).at(0).toByteArray(), l16);
+    QCOMPARE(answerErrors.count(), 0);
+    offerer.stop();
+    answerer.stop();
+    QVERIFY(!offerer.losslessAudioNegotiated());
+    QVERIFY(!answerer.losslessAudioNegotiated());
+}
+
+// R-R3-23 acceptance: real DTLS/SRTP between two real peers carries the
+// lossless stream at its own rate, 48 kHz x 2 x 16 bit = 1.536 Mbit/s of
+// payload, sent as the Core sends it: ten packets back to back per 40 ms
+// capture block. Every packet arrives intact and in order.
+void TestMediaTransport::losslessAudioCrossesRealEncryptedLoopback()
+{
+    LibDataChannelMediaTransport offerer;
+    LibDataChannelMediaTransport answerer;
+    QString offer;
+    QString answer;
+    wireExchange(offerer, answerer, &offer, &answer);
+    QSignalSpy offerReady(&offerer, &IMediaTransport::ready);
+    QSignalSpy answerReady(&answerer, &IMediaTransport::ready);
+    QVERIFY(answerer.start({IMediaTransport::Role::Answerer, kTestAudioSsrc}));
+    IMediaTransport::StartOptions options{IMediaTransport::Role::Offerer, kTestAudioSsrc};
+    options.offerLosslessAudio = true;
+    QVERIFY(offerer.start(options));
+    QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
+    QVERIFY(offerer.losslessAudioNegotiated());
+
+    QList<QByteArray> received;
+    connect(&answerer, &IMediaTransport::rtpReceived, this,
+            [&received](const QByteArray& packet) { received.append(packet); });
+
+    constexpr int kBlocks = 50; // two seconds of audio
+    constexpr int kPackets = kBlocks * PcmAudioCodecConfig::kPacketsPerBlock;
+    QVector<float> block(PcmAudioCodecConfig::kBlockFrames * 2);
+    for (int index = 0; index < block.size(); ++index) {
+        block[index] = static_cast<float>(std::sin(0.01 * index)) * 0.8f;
+    }
+    const PcmAudioPacketiser packetiser;
+    QList<QByteArray> sent;
+    int accepted = 0;
+    QElapsedTimer wall;
+    wall.start();
+    for (int b = 0; b < kBlocks; ++b) {
+        // Hold the Core's cadence: block b is due at b * 40 ms.
+        while (wall.elapsed() < b * 40) {
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+        }
+        const QList<QByteArray> packets = packetiser.packetiseBlock(
+            block, static_cast<quint16>(b * 10), static_cast<quint32>(b * 1920),
+            kTestAudioSsrc);
+        QCOMPARE(packets.size(), 10);
+        for (const QByteArray& packet : packets) {
+            sent.append(packet);
+            accepted += offerer.sendRtp(packet) ? 1 : 0;
+        }
+    }
+    const qint64 sendMs = wall.elapsed();
+    QTRY_COMPARE_WITH_TIMEOUT(received.size(), kPackets, 10000);
+    const qint64 receiveMs = wall.elapsed();
+    QCOMPARE(accepted, kPackets);
+    QCOMPARE(received, sent);
+
+    quint64 payloadBytes = 0;
+    for (const QByteArray& packet : received) {
+        const PcmRtpDecodeResult decoded = decodeL16Rtp(packet, kTestAudioSsrc);
+        QCOMPARE(decoded.status, OpusAudioCodecStatus::Accepted);
+        payloadBytes += PcmAudioCodecConfig::kPayloadBytes;
+    }
+    // Media time, from the RTP clock: exactly the lossless payload rate.
+    const double mediaSeconds = static_cast<double>(kPackets)
+        * PcmAudioCodecConfig::kPacketFrames / PcmAudioCodecConfig::kSampleRate;
+    const double payloadBitsPerSecond = payloadBytes * 8.0 / mediaSeconds;
+    QCOMPARE(payloadBitsPerSecond, 1'536'000.0);
+    // Wall time, for the record: the whole stream was carried in about its
+    // own duration.
+    const double wallMbps = payloadBytes * 8.0 / (receiveMs / 1000.0) / 1e6;
+    qInfo("lossless loopback: %d packets, %llu payload bytes, sent over %lld ms, "
+          "all received by %lld ms, %.3f Mbit/s payload by wall clock",
+          kPackets, static_cast<unsigned long long>(payloadBytes),
+          static_cast<long long>(sendMs), static_cast<long long>(receiveMs), wallMbps);
+    const std::optional<MediaTransportTelemetry> traffic = answerer.telemetry();
+    QVERIFY(traffic.has_value());
+    QCOMPARE(traffic->receivedRtpBytes,
+             quint64(kPackets) * quint64(PcmAudioCodecConfig::kRtpPacketBytes));
+    offerer.stop();
+    answerer.stop();
 }
 
 QTEST_GUILESS_MAIN(TestMediaTransport)

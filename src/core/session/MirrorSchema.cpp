@@ -59,6 +59,8 @@ const char* const kMirroredClasses[] = {
     "NereusSDR::TunerModel",
     "NereusSDR::RadioModel",
     "NereusSDR::PanadapterModel",
+    // R-R3-21 / R-R3-09 (notchControlVersion 1): the Core's notch list.
+    "NereusSDR::NotchModel",
 };
 
 // Per-property exclusions, as (class, property).

@@ -72,6 +72,7 @@ public:
     bool sendRtp(const QByteArray& packet) override;
 
     bool isReady() const override;
+    bool losslessAudioNegotiated() const override;
     std::optional<MediaTransportTelemetry> telemetry() const override;
 
     /// Test seam: while stalled, the library thread that delivers received

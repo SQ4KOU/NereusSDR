@@ -7,6 +7,7 @@
 #include "CatNetworkSetupPages.h"
 #include "gui/StyleConstants.h"
 #include "gui/LanScanDialog.h"
+#include "gui/OperatorReasonText.h"
 #include "core/AppSettings.h"
 // Remote-daemon R2 Task 20: RemoteStationPage validates its URL field with
 // the same rule src/main.cpp applies to --station, so a value the field
@@ -1393,7 +1394,9 @@ void PeripheralsPage::onConnect(int rowIdx)
         const auto outcome = active ? link->requestDisconnectTgxl()
             : link->requestConfigureTgxl(host, port);
         if (!outcome.sent && !m_statusLabels.isEmpty()) {
-            m_statusLabels[0]->setText(outcome.reason);
+            // The reason comes from the station link; shown in user words,
+            // logged raw (R-R3-21).
+            m_statusLabels[0]->setText(OperatorReasonText::forDisplay(outcome.reason));
         }
         return;
     }

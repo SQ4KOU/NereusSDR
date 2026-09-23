@@ -247,6 +247,49 @@ private slots:
     // R-R3-32/33: each Core computer value is its own series. A measured zero
     // is kept, an absent value breaks only its own line, and a sample that
     // updates only the Core values leaves the other series continuous.
+    // R-R3-35: the measured delay, its accuracy and the delivery delay are
+    // their own lines. A sample where the delay was not measured (echoes
+    // stopped, a new audio context) is a gap, never zero, and a reconnect
+    // (a new session segment) starts a new line even one second later.
+    void audioDelayMetricsGapWhenNotMeasuredAndAcrossReconnects()
+    {
+        using Metric = TelemetryHistory::Metric;
+        const std::array<Metric, 3> delay{Metric::AudioDelayMs, Metric::AudioDelayAccuracyMs,
+                                          Metric::AudioDeliveryDelayMs};
+        TelemetryHistory::MetricMask delayOnly;
+        for (const Metric metric : delay) {
+            delayOnly.set(static_cast<std::size_t>(metric));
+        }
+        const auto measured = [&](qint64 timeMs, TelemetryHistory::Segment segment,
+                                  double delayMs) {
+            TelemetryHistory::Sample result{timeMs, segment, {}};
+            result.values[static_cast<std::size_t>(Metric::AudioDelayMs)] = delayMs;
+            result.values[static_cast<std::size_t>(Metric::AudioDelayAccuracyMs)] = 0.5;
+            result.values[static_cast<std::size_t>(Metric::AudioDeliveryDelayMs)] = delayMs - 20.0;
+            return result;
+        };
+        TelemetryHistory history;
+        history.append(measured(0, 1, 85.0), delayOnly);
+        history.append(measured(1000, 1, 86.0), delayOnly);
+        history.append({2000, 1, {}}, delayOnly);           // not measured
+        history.append(measured(3000, 1, 87.0), delayOnly);
+        history.append(measured(4000, 2, 88.0), delayOnly); // reconnected
+        for (const Metric metric : delay) {
+            const auto series = history.series(metric, 4000, 60);
+            QCOMPARE(series.points.size(), 4);
+            QVERIFY(!series.points[1].breakBefore);
+            QVERIFY(series.points[2].breakBefore);
+            QVERIFY(series.points[3].breakBefore);
+        }
+        QCOMPARE(history.series(Metric::AudioDelayMs, 4000, 60).points.constLast().value, 88.0);
+        QCOMPARE(history.series(Metric::AudioDeliveryDelayMs, 4000, 60).points.constLast().value,
+                 68.0);
+        QCOMPARE(history.series(Metric::AudioDelayAccuracyMs, 4000, 60).points.constLast().value,
+                 0.5);
+        // Other metrics are untouched by these samples.
+        QVERIFY(history.series(Metric::SpeakerBufferMs, 4000, 60).points.isEmpty());
+    }
+
     void coreHostMetricsKeepZerosGapsAndTheirOwnLines()
     {
         using Metric = TelemetryHistory::Metric;

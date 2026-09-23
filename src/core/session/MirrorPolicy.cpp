@@ -308,6 +308,23 @@ const MirrorPolicy::Entry kEntries[] = {
     { "DspAssetService", "nnrModelSelectionPending", MirrorDirection::Outbound },
     { "DspAssetService", "nnrModelStatus", MirrorDirection::Outbound },
     { "DspAssetService", "selectionRevision", MirrorDirection::Outbound },
+    // R-R3-21 (dspAssetVersion 2): the Core-wide NR3 model. Outbound only;
+    // a window changes it with the dspAssets.selectNr3Model command.
+    { "DspAssetService", "nr3ModelAsset", MirrorDirection::Outbound },
+    { "DspAssetService", "nr3ModelStatus", MirrorDirection::Outbound },
+    // Fix wave I3: false when the Core has no usable NR3 model, so a window
+    // refuses turning NR3 on with nr3ModelStatus. An older Core never sends
+    // it and the window keeps its default, true.
+    { "DspAssetService", "nr3Runnable", MirrorDirection::Outbound },
+
+    // R-R3-21 / R-R3-09 (notchControlVersion 1): the Core's notch list. The
+    // list and its revision are Outbound; a window changes the list only
+    // with the notch.* commands. The master enable and auto-increase are
+    // plain two-way switches.
+    { "NotchModel", "listJson", MirrorDirection::Outbound },
+    { "NotchModel", "revision", MirrorDirection::Outbound },
+    { "NotchModel", "globalEnabled", MirrorDirection::Bidirectional },
+    { "NotchModel", "autoIncrease", MirrorDirection::Bidirectional },
 
     // Normal PS3 configuration is distinct from operational arming/actions.
     { "PureSignalSettings", "autoCalEnabled", MirrorDirection::Bidirectional },

@@ -133,6 +133,17 @@ DaemonConfig DaemonConfig::fromFile(const QString& path, QString* errorOut)
                                   << "display_adaptive must be on or off, keeping on:"
                                   << value;
             }
+        } else if (key == QLatin1String("audio_lossless")) {
+            if (value.compare(QLatin1String("allow"), Qt::CaseInsensitive) == 0) {
+                cfg.audioLosslessAllowed = true;
+            } else if (value.compare(QLatin1String("deny"), Qt::CaseInsensitive) == 0) {
+                cfg.audioLosslessAllowed = false;
+            } else {
+                cfg.audioLosslessAllowed = true;
+                qCWarning(lcApp) << "nereusd.conf" << path << "line" << lineNo
+                                  << "audio_lossless must be allow or deny, keeping allow :"
+                                  << value;
+            }
         } else if (key == QLatin1String("core_name")) {
             cfg.coreName = value;
         } else if (key == QLatin1String("remote_bind")) {

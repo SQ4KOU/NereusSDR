@@ -108,8 +108,9 @@ struct DaemonConfig {
 
     // R-R3-23: the Opus encoder target for station audio, bit/s. Only the
     // two supported profiles are accepted (OpusAudioEncoder refuses any
-    // other; 24000 is the measured default, 48000 is not measured yet);
-    // anything else in the file logs one warning and keeps 24000.
+    // other): 24000, the measured default, codes wideband sound up to 8 kHz;
+    // 48000 codes fullband sound up to 20 kHz (bandwidthForBitrate()).
+    // Anything else in the file logs one warning and keeps 24000.
     // Feeds DaemonMediaController::setAudioTargetBitrate() from
     // DaemonApp::startStationServer().
     static constexpr int kDefaultAudioBitrate = 24000;
@@ -132,6 +133,15 @@ struct DaemonConfig {
     // their largest plus PureSignal. off keeps today's behaviour exactly.
     // Anything else logs one warning and keeps on.
     bool    displayAdaptive {true};
+
+    // R-R3-23: whether a GUI may switch this Core's audio to the lossless
+    // profile (uncompressed 16-bit stereo, about 1.54 Mbit/s of audio, for
+    // digital modes). nereusd.conf `audio_lossless = allow|deny`, default
+    // allow. Any other value logs one warning and keeps allow. With deny a
+    // request is refused and Opus keeps running. Feeds
+    // DaemonMediaController::setAudioLosslessAllowed() from
+    // DaemonApp::startStationServer().
+    bool    audioLosslessAllowed {true};
 
     // Optional measured limits, supplied as a pair. A malformed explicit
     // value becomes zero so validate() fails instead of disabling the cap.

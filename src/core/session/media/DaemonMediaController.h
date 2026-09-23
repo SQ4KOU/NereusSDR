@@ -84,6 +84,10 @@ QString daemonDisplayDiagnosticsLine(const DaemonDisplayDiagnostics& diagnostics
 class DaemonMediaController final : public QObject {
     Q_OBJECT
 public:
+    /// Monotonic nanoseconds, never negative. Besides display pacing it is
+    /// the Core's audio clock (R-R3-35): clock-echo times and the capture
+    /// times of audio blocks, which the DSP thread reads, so an injected
+    /// clock must be safe to call from any thread.
     using MonotonicClock = std::function<qint64()>;
     explicit DaemonMediaController(StationServer* server, RadioModel* radioModel,
                                    QObject* parent = nullptr,
@@ -102,6 +106,15 @@ public:
     /// Default is the encoder's own default target.
     void setAudioTargetBitrate(int bitsPerSecond);
     int audioTargetBitrate() const noexcept { return m_audioTargetBitrate; }
+    /// R-R3-23: whether a GUI may switch audio to the lossless profile
+    /// (nereusd.conf audio_lossless; default allow). With false a request
+    /// is refused as lossless-not-allowed and Opus keeps running, and no
+    /// media offer carries the lossless format. Applies to the next media
+    /// peer and request.
+    void setAudioLosslessAllowed(bool allowed) { m_audioLosslessAllowed = allowed; }
+    bool audioLosslessAllowed() const noexcept { return m_audioLosslessAllowed; }
+    /// The profile the Core's audio runs for the current peer (R-R3-23).
+    RemoteAudioProfile audioProfile() const noexcept { return m_audioActiveProfile; }
     DaemonDisplayDiagnostics displayDiagnostics() const;
     /// What Core granted a live spectrum endpoint: FFT size and tier after
     /// the largest-size and shared-engine rules, and pixels after the source
@@ -148,6 +161,14 @@ private:
     bool handleUnsubscribe(const QJsonObject& control);
     bool handleKeyframe(const QJsonObject& control);
     bool handleAudio(const QJsonObject& control);
+    /// R-R3-35: answers {op:"clock-probe", connectionId, id, t0} with
+    /// {op:"clock-echo", connectionId, id, t0, t1, t2, generation,
+    /// rtpTimestamp, capturedNs}. t1 is the Core clock on entry to
+    /// onControl(), t2 just before the reply. generation is the running
+    /// audio context and rtpTimestamp/capturedNs the newest captured block's
+    /// end (DaemonAudioSenderTelemetry::captureTimestamp/captureNs); all
+    /// three are 0 when no audio context is capturing.
+    bool handleClockProbe(const QJsonObject& control, qint64 receivedNs);
     bool acceptPeerControl(const QJsonObject& control);
 
     void clearSession();
@@ -200,6 +221,9 @@ private:
     void maybeLogAudioDiagnostics(bool final);
     DaemonAudioDiagnostics snapshotAudioDiagnostics() const;
     void resetAudioSession();
+    /// Admits the requested profile against the Core setting and the peer's
+    /// negotiated formats, setting the active profile and any refusal.
+    void admitAudioProfile();
     void recordDisplaySent(const QByteArray& spectrumFrame, bool keyframe);
     void onMediaTransportError(const QString& message);
     void onMediaPeerError(const QString& message);
@@ -218,6 +242,14 @@ private:
     std::unique_ptr<MediaPeer> m_peer;
     std::unique_ptr<DaemonAudioSender> m_audioSender;
     int m_audioTargetBitrate{OpusAudioCodecConfig{}.bitrate};
+    // R-R3-23 lossless audio, per media peer. The GUI declares it understands
+    // the profile in its media start (the offer then carries L16) and in its
+    // audio control (contexts then carry the profile shape).
+    bool m_audioLosslessAllowed{true};
+    bool m_audioProfileNegotiated{false};
+    RemoteAudioProfile m_audioRequestedProfile{RemoteAudioProfile::Opus};
+    RemoteAudioProfile m_audioActiveProfile{RemoteAudioProfile::Opus};
+    std::optional<RemoteAudioProfileRefusal> m_audioProfileRefusal;
     std::map<quint32, EndpointEntry> m_endpoints;
     QMap<MediaSourceKey, SourceRuntime> m_sources;
     QTimer m_sendTimer;

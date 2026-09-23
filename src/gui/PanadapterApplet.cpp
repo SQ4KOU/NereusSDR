@@ -222,16 +222,30 @@ int PanadapterApplet::statusChainIndex() const
     return m_statusOverlay ? m_statusOverlay->chainIndex() : 0;
 }
 
-void PanadapterApplet::setRemoteDisplayStatus(const QString& status)
+void PanadapterApplet::setRemoteDisplayStatus(const PanStatusText& status)
 {
-    if (!m_statusOverlay || m_statusOverlay->remoteDisplayStatus() == status) { return; }
+    if (!m_statusOverlay) { return; }
+    const QStringList before = m_statusOverlay->remoteDisplayForms();
     m_statusOverlay->setRemoteDisplayStatus(status);
-    repositionStatusOverlay();
+    // Only the painted line moves the strip; a new explanation does not.
+    if (m_statusOverlay->remoteDisplayForms() != before) {
+        repositionStatusOverlay();
+    }
 }
 
 QString PanadapterApplet::remoteDisplayStatus() const
 {
     return m_statusOverlay ? m_statusOverlay->remoteDisplayStatus() : QString();
+}
+
+QString PanadapterApplet::remoteDisplayExplanation() const
+{
+    return m_statusOverlay ? m_statusOverlay->remoteDisplayExplanation() : QString();
+}
+
+QString PanadapterApplet::visibleRemoteDisplayStatus() const
+{
+    return m_statusOverlay ? m_statusOverlay->visibleRemoteDisplayStatus() : QString();
 }
 
 // Phase 3F: WIDE pill forwarder. Kept separate from updateStatusOverlay

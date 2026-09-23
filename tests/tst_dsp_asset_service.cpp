@@ -7,9 +7,13 @@
 #include "core/dsp/DspAssetService.h"
 
 #include <QCryptographicHash>
+#include <QScopeGuard>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonObject>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 
@@ -28,10 +32,11 @@ QByteArray standardModel()
                       qsizetype(nnr_model_0_size));
 }
 
-QVariantMap beginArgs(const QByteArray& bytes, const QString& label = QStringLiteral("standard"))
+QVariantMap beginArgs(const QByteArray& bytes, const QString& label = QStringLiteral("standard"),
+                      int kind = 0)
 {
     return {
-        {QStringLiteral("kind"), 0},
+        {QStringLiteral("kind"), kind},
         {QStringLiteral("label"), label},
         {QStringLiteral("size"), qint64(bytes.size())},
         {QStringLiteral("hash"), QString::fromLatin1(
@@ -41,9 +46,11 @@ QVariantMap beginArgs(const QByteArray& bytes, const QString& label = QStringLit
 }
 
 DspAssetServiceResult upload(DspAssetService& service, const QByteArray& bytes,
-                             const QString& owner)
+                             const QString& owner, int kind = 0,
+                             const QString& label = QStringLiteral("standard"))
 {
-    const auto begun = service.execute("dspAssets.beginImport", beginArgs(bytes), owner);
+    const auto begun = service.execute("dspAssets.beginImport", beginArgs(bytes, label, kind),
+                                       owner);
     if (!begun.accepted) return begun;
     const QString transferId = begun.values.value(QStringLiteral("transferId")).toString();
     for (qsizetype offset = 0; offset < bytes.size(); offset += DspAssetStore::kTransferChunkBytes) {
@@ -59,6 +66,19 @@ DspAssetServiceResult upload(DspAssetService& service, const QByteArray& bytes,
                            {{QStringLiteral("transferId"), transferId}}, owner);
 }
 
+QByteArray readFile(const QString& path)
+{
+    QFile file(path);
+    return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+}
+
+QString bundledSmallPath() { return QFINDTESTDATA("../third_party/rnnoise/models/Default_small.bin"); }
+
+QString largeId() { return QString::fromLatin1(DspAssetService::kNr3BundledLargeId); }
+QString smallId() { return QString::fromLatin1(DspAssetService::kNr3BundledSmallId); }
+
+constexpr int kNr3Kind = 2;
+
 } // namespace
 
 class TestDspAssetService final : public QObject
@@ -73,6 +93,13 @@ private slots:
     void transfersEnforceOwnerOffsetSizeHashAndCancellation();
     void exportReturnsBoundedCanonicalChunks();
     void remoteRequestsRetireAndNeverOpenLocalStore();
+    void nr3DefaultIsTheBundledLargeFileNeverEmpty();
+    void nr3ImportSelectAndLiveApplyThroughCommands();
+    void nr3DamagedSelectionFallsBackToBundledFile();
+    void nr3CommandsRequireExactShapes();
+    void nr3LegacyPathImportsOnce();
+    void nr3RemoteServiceMirrorsAndNeverLoads();
+    void nr3CannotRunWithoutAnyModelFile();
 };
 
 void TestDspAssetService::defaultsAndQueuedLocalRequest()
@@ -306,6 +333,314 @@ void TestDspAssetService::remoteRequestsRetireAndNeverOpenLocalStore()
     QVERIFY(!QFileInfo::exists(QFileInfo(settingsPath).absolutePath()
                                + QStringLiteral("/dsp-assets")));
     QVERIFY(!settings.contains(QStringLiteral("DspAssets/NnrModel0")));
+}
+
+void TestDspAssetService::nr3DefaultIsTheBundledLargeFileNeverEmpty()
+{
+    // Red first (R-R3-21). Before this change the Setup "Default" button
+    // stored Nr3ModelPath = "" and the Core read it at connect with
+    // value("Nr3ModelPath", <bundled path>). A stored empty string wins
+    // over the fallback, so the Core skipped RNNRloadModel and NR3 stayed
+    // on rnnr.c's NULL model (built-in weights are compiled out,
+    // third_party/rnnoise/CMakeLists.txt). This reproduces that read:
+    QTemporaryDir directory;
+    AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+    settings.setValue(QStringLiteral("Nr3ModelPath"), QString());
+    const QString legacyRead = settings.value(QStringLiteral("Nr3ModelPath"),
+                                              QStringLiteral("/bundled/Default_large.bin")).toString();
+    QVERIFY(legacyRead.isEmpty()); // today's "Default": nothing loaded
+
+    // The Core now resolves "Default" to the bundled file itself.
+    DspAssetService service(settings, true);
+    QCOMPARE(service.nr3ModelAsset(), largeId());
+    QVERIFY(service.nr3ModelsSupported());
+    QStringList loaded;
+    service.setNr3ModelLoader([&](const QString& path) { loaded.append(path); });
+    QString resolvedId;
+    const QString path = service.resolveNr3ModelPath(&resolvedId);
+    QVERIFY(!path.isEmpty());
+    QCOMPARE(resolvedId, largeId());
+    QVERIFY(path.endsWith(QStringLiteral("Default_large.bin")));
+    QCOMPARE(path, DspAssetService::bundledNr3ModelPath(largeId()));
+    QVERIFY(service.applyNr3Model());
+    QCOMPARE(loaded, QStringList{path});
+    QCOMPARE(service.activeNr3ModelAsset(), largeId());
+    QCOMPARE(service.nr3ModelStatus(), QStringLiteral("Using the bundled large model."));
+    // Nr3ModelPath "" was not an import request.
+    QVERIFY(service.store()->assets().isEmpty());
+}
+
+void TestDspAssetService::nr3ImportSelectAndLiveApplyThroughCommands()
+{
+    QTemporaryDir directory;
+    AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+    DspAssetService service(settings, true);
+    QStringList loaded;
+    service.setNr3ModelLoader([&](const QString& path) { loaded.append(path); });
+    QSignalSpy changed(&service, &DspAssetService::nr3SelectionChanged);
+
+    const QByteArray bytes = readFile(bundledSmallPath());
+    QVERIFY(!bytes.isEmpty());
+    const auto imported = upload(service, bytes, QStringLiteral("alice"), kNr3Kind,
+                                 QStringLiteral("Quiet band"));
+    QVERIFY2(imported.accepted, qPrintable(imported.reason));
+    QCOMPARE(imported.values.value(QStringLiteral("kind")).toInt(), kNr3Kind);
+    const QString id = imported.values.value(QStringLiteral("id")).toString();
+    QVERIFY(loaded.isEmpty()); // importing never changes the model
+
+    const auto listed = service.execute("dspAssets.list", {}, QStringLiteral("alice"));
+    QVERIFY(listed.accepted);
+    const QJsonArray rows = QJsonDocument::fromJson(
+        listed.values.value(QStringLiteral("assets")).toString().toUtf8()).array();
+    QCOMPARE(rows.size(), 1);
+    QCOMPARE(rows.first().toObject().value(QStringLiteral("kind")).toInt(), kNr3Kind);
+    QVERIFY(rows.first().toObject().value(QStringLiteral("valid")).toBool());
+
+    const auto selected = service.execute("dspAssets.selectNr3Model",
+                                          {{QStringLiteral("id"), id}}, QStringLiteral("alice"));
+    QVERIFY2(selected.accepted, qPrintable(selected.reason));
+    QCOMPARE(service.nr3ModelAsset(), id);
+    QCOMPARE(service.activeNr3ModelAsset(), id);
+    QCOMPARE(loaded.size(), 1);
+    QCOMPARE(readFile(loaded.first()), bytes);
+    QCOMPARE(settings.value(QStringLiteral("DspAssets/Nr3Model")).toString(), id);
+    QCOMPARE(service.nr3ModelStatus(), QStringLiteral("Using the NR3 model \"Quiet band\"."));
+    QVERIFY(changed.count() > 0);
+
+    // Selecting the same model again loads nothing.
+    QVERIFY(service.execute("dspAssets.selectNr3Model", {{QStringLiteral("id"), id}},
+                            QStringLiteral("alice")).accepted);
+    QCOMPARE(loaded.size(), 1);
+
+    // The bundled small model is always selectable by id.
+    QVERIFY(service.execute("dspAssets.selectNr3Model", {{QStringLiteral("id"), smallId()}},
+                            QStringLiteral("alice")).accepted);
+    QCOMPARE(loaded.size(), 2);
+    QCOMPARE(loaded.last(), DspAssetService::bundledNr3ModelPath(smallId()));
+    QCOMPARE(service.nr3ModelStatus(), QStringLiteral("Using the bundled small model."));
+
+    // An unknown id, or an NNR model's id, is refused and changes nothing.
+    const auto nnr = upload(service, standardModel(), QStringLiteral("alice"));
+    QVERIFY2(nnr.accepted, qPrintable(nnr.reason));
+    for (const QString& bad : {nnr.values.value(QStringLiteral("id")).toString(),
+                               QStringLiteral("sha256:") + QString(64, QLatin1Char('b')),
+                               QStringLiteral("bundled:0")}) {
+        const auto refused = service.execute("dspAssets.selectNr3Model",
+                                             {{QStringLiteral("id"), bad}},
+                                             QStringLiteral("alice"));
+        QVERIFY(!refused.accepted);
+        QCOMPARE(refused.reason, QStringLiteral("That NR3 model is missing or damaged on this Core."));
+    }
+    QCOMPARE(service.nr3ModelAsset(), smallId());
+    QCOMPARE(loaded.size(), 2);
+
+    // A restart keeps the choice.
+    DspAssetService restarted(settings, true);
+    QCOMPARE(restarted.nr3ModelAsset(), smallId());
+}
+
+void TestDspAssetService::nr3DamagedSelectionFallsBackToBundledFile()
+{
+    QTemporaryDir directory;
+    AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+    DspAssetService service(settings, true);
+    QStringList loaded;
+    service.setNr3ModelLoader([&](const QString& path) { loaded.append(path); });
+    const auto imported = upload(service, readFile(bundledSmallPath()), QStringLiteral("alice"),
+                                 kNr3Kind, QStringLiteral("Custom"));
+    QVERIFY2(imported.accepted, qPrintable(imported.reason));
+    const QString id = imported.values.value(QStringLiteral("id")).toString();
+    QVERIFY(service.execute("dspAssets.selectNr3Model", {{QStringLiteral("id"), id}},
+                            QStringLiteral("alice")).accepted);
+    QCOMPARE(loaded.size(), 1);
+
+    // Damage the stored file behind the store's back.
+    QFile stored(loaded.first());
+    QVERIFY(stored.open(QIODevice::ReadWrite));
+    QVERIFY(stored.seek(100));
+    QCOMPARE(stored.write("XXXX", 4), qint64(4));
+    stored.close();
+
+    QString reason;
+    QVERIFY(service.applyNr3Model(&reason));
+    QCOMPARE(loaded.size(), 2);
+    QVERIFY(!loaded.last().isEmpty());
+    QCOMPARE(loaded.last(), DspAssetService::bundledNr3ModelPath(largeId()));
+    QCOMPARE(service.nr3ModelAsset(), id); // the choice is kept for repair
+    QCOMPARE(service.activeNr3ModelAsset(), largeId());
+    QCOMPARE(service.nr3ModelStatus(),
+             QStringLiteral("The chosen NR3 model is missing or damaged. Using the bundled large model."));
+    for (const QString& path : std::as_const(loaded)) {
+        QVERIFY(!path.isEmpty());
+    }
+}
+
+void TestDspAssetService::nr3CommandsRequireExactShapes()
+{
+    QTemporaryDir directory;
+    AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+    DspAssetService service(settings, true);
+    const QByteArray bytes = readFile(bundledSmallPath());
+
+    QVERIFY(!service.execute("dspAssets.selectNr3Model", {}, QStringLiteral("o")).accepted);
+    QVERIFY(!service.execute("dspAssets.selectNr3Model",
+        {{QStringLiteral("id"), 2}}, QStringLiteral("o")).accepted);
+    QVERIFY(!service.execute("dspAssets.selectNr3Model",
+        {{QStringLiteral("id"), largeId()}, {QStringLiteral("slot"), 0}}, QStringLiteral("o")).accepted);
+    QVERIFY(!service.execute("dspAssets.beginImport", beginArgs(bytes, QStringLiteral("x"), 3),
+                             QStringLiteral("o")).accepted);
+    QVariantMap scoped = beginArgs(bytes, QStringLiteral("x"), kNr3Kind);
+    scoped.insert(QStringLiteral("radioIdentity"), QStringLiteral("AA:BB:CC:DD:EE:FF"));
+    const auto scopedResult = service.execute("dspAssets.beginImport", scoped, QStringLiteral("o"));
+    QVERIFY(!scopedResult.accepted);
+    QCOMPARE(scopedResult.reason, QStringLiteral("NR3 models belong to the Core, not to one radio."));
+    QVariantMap oversized = beginArgs(bytes, QStringLiteral("x"), kNr3Kind);
+    oversized.insert(QStringLiteral("size"), DspAssetValidation::kMaxNr3ModelBytes + 1);
+    QVERIFY(!service.execute("dspAssets.beginImport", oversized, QStringLiteral("o")).accepted);
+
+    // Junk with the right size and hash reaches the trial load and is
+    // refused with a plain reason; nothing is stored.
+    QByteArray junk(8192, '\x11');
+    junk.replace(0, 4, "DNNw");
+    const auto refused = upload(service, junk, QStringLiteral("o"), kNr3Kind);
+    QVERIFY(!refused.accepted);
+    QCOMPARE(refused.reason, QStringLiteral("This file is not an NR3 model this Core can use."));
+    QVERIFY(service.store()->assets().isEmpty());
+}
+
+void TestDspAssetService::nr3LegacyPathImportsOnce()
+{
+    QTemporaryDir directory;
+    const QByteArray bytes = readFile(bundledSmallPath());
+    const QString legacy = directory.filePath(QStringLiteral("My Model.bin"));
+    {
+        QFile file(legacy);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        QCOMPARE(file.write(bytes), qint64(bytes.size()));
+    }
+    AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+    settings.setValue(QStringLiteral("Nr3ModelPath"), legacy);
+
+    QString importedId;
+    {
+        QTest::ignoreMessage(QtInfoMsg,
+            QRegularExpression(QStringLiteral("^NR3: imported the older NR3 model file as")));
+        DspAssetService service(settings, true);
+        importedId = service.nr3ModelAsset();
+        QVERIFY(importedId.startsWith(QStringLiteral("sha256:")));
+        const auto records = service.store()->assets();
+        QCOMPARE(records.size(), 1);
+        QCOMPARE(records.first().kind, DspAssetKind::Nr3Model);
+        QCOMPARE(records.first().label, QStringLiteral("My Model"));
+        QCOMPARE(settings.value(QStringLiteral("DspAssets/Nr3ModelPathImported")).toString(),
+                 QStringLiteral("True"));
+        QStringList loaded;
+        service.setNr3ModelLoader([&](const QString& path) { loaded.append(path); });
+        QVERIFY(service.applyNr3Model());
+        QCOMPARE(readFile(loaded.value(0)), bytes);
+    }
+
+    // Once only: a later path, even a valid one, is not imported again, and
+    // the operator's choice since then is kept.
+    settings.setValue(QStringLiteral("Nr3ModelPath"),
+                      DspAssetService::bundledNr3ModelPath(largeId()));
+    settings.setValue(QStringLiteral("DspAssets/Nr3Model"), smallId());
+    DspAssetService again(settings, true);
+    QCOMPARE(again.store()->assets().size(), 1);
+    QCOMPARE(again.nr3ModelAsset(), smallId());
+
+    // A damaged older file is tried once and leaves the bundled default.
+    QTemporaryDir other;
+    const QString damaged = other.filePath(QStringLiteral("broken.bin"));
+    {
+        QFile file(damaged);
+        QVERIFY(file.open(QIODevice::WriteOnly));
+        file.write("DNNw not really a model");
+    }
+    AppSettings fresh(other.filePath(QStringLiteral("station.settings")));
+    fresh.setValue(QStringLiteral("Nr3ModelPath"), damaged);
+    QTest::ignoreMessage(QtWarningMsg,
+        "NR3: the older NR3 model file was not imported: \"This file is not an NR3 model.\"");
+    DspAssetService withDamaged(fresh, true);
+    QCOMPARE(withDamaged.nr3ModelAsset(), largeId());
+    QVERIFY(withDamaged.store()->assets().isEmpty());
+    QCOMPARE(fresh.value(QStringLiteral("DspAssets/Nr3ModelPathImported")).toString(),
+             QStringLiteral("True"));
+}
+
+void TestDspAssetService::nr3RemoteServiceMirrorsAndNeverLoads()
+{
+    QTemporaryDir directory;
+    AppSettings settings(directory.filePath(QStringLiteral("client.settings")));
+    settings.setValue(QStringLiteral("Nr3ModelPath"), bundledSmallPath());
+    DspAssetService service(settings, false);
+    QVERIFY(!service.nr3ModelsSupported());
+    QCOMPARE(service.nr3ModelAsset(), largeId());
+    int loads = 0;
+    service.setNr3ModelLoader([&](const QString&) { ++loads; });
+    QVERIFY(!service.applyNr3Model());
+    QCOMPARE(loads, 0);
+    QVERIFY(!settings.contains(QStringLiteral("DspAssets/Nr3ModelPathImported")));
+
+    QSignalSpy changed(&service, &DspAssetService::nr3SelectionChanged);
+    service.setRemoteNr3ModelsSupported(true);
+    QVERIFY(service.nr3ModelsSupported());
+    QCOMPARE(changed.count(), 1);
+    QVERIFY(service.applyRemoteProperty("nr3ModelAsset", smallId()));
+    QVERIFY(service.applyRemoteProperty("nr3ModelStatus", QStringLiteral("Using the bundled small model.")));
+    QVERIFY(!service.applyRemoteProperty("nr3ModelAsset", 7));
+    QCOMPARE(service.nr3ModelAsset(), smallId());
+    QCOMPARE(service.nr3ModelStatus(), QStringLiteral("Using the bundled small model."));
+    QCOMPARE(changed.count(), 3);
+    QVERIFY(!service.execute("dspAssets.selectNr3Model", {{QStringLiteral("id"), largeId()}},
+                             QStringLiteral("o")).accepted);
+}
+
+// Fix wave I3: with no usable NR3 model file at all, the Core says NR3
+// cannot run (nr3Runnable false, with the plain status) and loads nothing;
+// once a file is usable again it can. A window mirrors the flag, and reads
+// true until a Core says otherwise, so an older Core changes nothing.
+void TestDspAssetService::nr3CannotRunWithoutAnyModelFile()
+{
+    QTemporaryDir directory;
+    AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+    DspAssetService::setBundledNr3ModelPathsForTest(
+        [](const QString&) { return QString(); });
+    const auto restore = qScopeGuard([] { DspAssetService::setBundledNr3ModelPathsForTest({}); });
+    DspAssetService service(settings, true);
+    QVERIFY(!service.nr3Runnable());
+    const QString none = QStringLiteral("No NR3 model file was found on this Core, so NR3 cannot run.");
+    QCOMPARE(service.nr3ModelStatus(), none);
+    int loads = 0;
+    service.setNr3ModelLoader([&](const QString&) { ++loads; });
+    QString reason;
+    QVERIFY(!service.applyNr3Model(&reason));
+    QCOMPARE(reason, none);
+    QCOMPARE(loads, 0);
+    QVERIFY(!service.nr3Runnable());
+
+    QSignalSpy changed(&service, &DspAssetService::nr3SelectionChanged);
+    DspAssetService::setBundledNr3ModelPathsForTest({});
+    QVERIFY(service.applyNr3Model(&reason));
+    QVERIFY(service.nr3Runnable());
+    QCOMPARE(loads, 1);
+    QVERIFY(changed.count() >= 1);
+    QCOMPARE(service.nr3ModelStatus(), QStringLiteral("Using the bundled large model."));
+
+    DspAssetService remote(settings, false);
+    QVERIFY(remote.nr3Runnable());
+    QSignalSpy remoteChanged(&remote, &DspAssetService::nr3SelectionChanged);
+    QVERIFY(remote.applyRemoteProperty("nr3Runnable", false));
+    QVERIFY(!remote.nr3Runnable());
+    QCOMPARE(remoteChanged.count(), 1);
+    QVERIFY(!remote.applyRemoteProperty("nr3Runnable", QStringLiteral("false")));
+    QVERIFY(!remote.applyRemoteProperty("nr3Runnable", 0));
+    QVERIFY(!remote.nr3Runnable());
+    QVERIFY(remote.applyRemoteProperty("nr3Runnable", true));
+    QVERIFY(remote.nr3Runnable());
+    // A remote service keeps its own value when a local call tries.
+    QVERIFY(!service.applyRemoteProperty("nr3Runnable", false));
+    QVERIFY(service.nr3Runnable());
 }
 
 QTEST_GUILESS_MAIN(TestDspAssetService)

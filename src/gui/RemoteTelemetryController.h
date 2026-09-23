@@ -1,6 +1,7 @@
 #pragma once
 // no-port-check: NereusSDR-original. Observational Core/GUI telemetry adapter.
 #include "gui/TelemetryHistory.h"
+#include "gui/RemoteAudioStatus.h"
 #include "core/session/StationTelemetry.h"
 #include "core/session/SessionTransport.h"
 #include "core/session/media/RemoteAudioReceiver.h"
@@ -23,7 +24,7 @@ struct RemoteTelemetryView {
     StationAudioTelemetry coreAudio;
     std::optional<double> controlRxKbps, controlTxKbps;
     std::optional<double> coreGuiRxKbps, coreGuiTxKbps, coreGuiTotalKbps;
-    std::optional<double> opusRxKbps, audioRtpRxKbps;
+    std::optional<double> audioPayloadRxKbps, audioRtpRxKbps;
     std::optional<quint64> coreRttMs;
     std::optional<qint64> coreRttAgeMs;
     RemoteAudioReceiverTelemetry playback;
@@ -37,6 +38,10 @@ struct RemoteTelemetryView {
     // whether this session's Core has sent the receivers section (R-R3-40).
     std::optional<QVector<StationReceiverTelemetry>> coreReceivers;
     bool coreReceiversReported = false;
+    // R-R3-35: the measured audio delay at the latest sample. measurable is
+    // false for a Core that does not answer clock probes, and the text then
+    // reads as before.
+    RemoteAudioDelayReport audioDelay;
 };
 
 // All methods run on the GUI thread. Collection continues while the dialog is
@@ -47,10 +52,11 @@ public:
     using Clock = std::function<qint64()>;
     using PlaybackObserver = std::function<RemoteAudioReceiverTelemetry()>;
     using TrafficObserver = std::function<std::optional<MediaPeerTelemetry>()>;
+    using DelayObserver = std::function<RemoteAudioDelayReport()>;
     RemoteTelemetryController(StationClient* client, RemoteMediaController* media,
                               QObject* parent = nullptr,
                               Clock clock = {}, PlaybackObserver playback = {},
-                              TrafficObserver traffic = {});
+                              TrafficObserver traffic = {}, DelayObserver delay = {});
     const RemoteTelemetryView& current() const { return m_view; }
     const TelemetryHistory& history() const { return m_history; }
     qint64 nowMs() const;
@@ -70,6 +76,7 @@ private:
     Clock m_now;
     PlaybackObserver m_playback;
     TrafficObserver m_traffic;
+    DelayObserver m_delay;
     QTimer m_timer;
     TelemetryHistory m_history;
     RemoteTelemetryView m_view;

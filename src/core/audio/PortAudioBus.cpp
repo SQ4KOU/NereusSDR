@@ -11,6 +11,10 @@
 // macOS for the same end), not as a port.  No Thetis bytes ported.
 //
 // Modification history (NereusSDR):
+//   2026-09-23: R-R3-35 outputPacing() reports the stream's output latency
+//               (Pa_GetStreamInfo) so remote audio delay can include the
+//               device. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 //   2026-09-22: R-R3-36 fix wave: strict resolution accepts exact names
 //               only (matchNamedDevice). J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
@@ -281,6 +285,7 @@ bool PortAudioBus::open(const AudioFormat& format) {
     m_outputDiscardBefore.store(0, std::memory_order_relaxed);
     m_outputConsumedFrames.store(0, std::memory_order_relaxed);
     m_outputCallbackFrames.store(0, std::memory_order_relaxed);
+    m_outputLatencyNs.store(-1, std::memory_order_relaxed);
     m_lastOutL = 0.0f;
     m_lastOutR = 0.0f;
     m_crossfadeFramesRem = 0;
@@ -467,6 +472,18 @@ bool PortAudioBus::open(const AudioFormat& format) {
     // Defensive null-check on host-API lookup. With a device handed back
     // by Pa_GetDefault{Output,Input}Device this should never be null, but
     // keep the backend name well-defined if it ever is.
+    // R-R3-35: the output latency PortAudio reports for this stream, from a
+    // buffer the callback fills to the device output. A zero or missing
+    // value is treated as unknown rather than as no delay.
+    if (wantOutput) {
+        const PaStreamInfo* streamInfo = Pa_GetStreamInfo(m_stream);
+        const double latencySeconds = streamInfo != nullptr ? streamInfo->outputLatency : 0.0;
+        m_outputLatencyNs.store(std::isfinite(latencySeconds) && latencySeconds > 0.0
+                                    ? static_cast<qint64>(std::llround(latencySeconds * 1e9))
+                                    : qint64{-1},
+                                std::memory_order_release);
+    }
+
     const PaHostApiInfo* hai = Pa_GetHostApiInfo(di->hostApi);
     if (hai != nullptr && hai->name != nullptr) {
         m_backendName = QString::fromUtf8(hai->name);
@@ -610,6 +627,10 @@ std::optional<IAudioBus::OutputPacing> PortAudioBus::outputPacing() const
     pacing.capacityFrames = static_cast<int>(ringSamples / channels);
     pacing.callbackFrames = std::max(m_cfg.bufferSamples,
         m_outputCallbackFrames.load(std::memory_order_acquire));
+    if (const qint64 latencyNs = m_outputLatencyNs.load(std::memory_order_acquire);
+        latencyNs > 0) {
+        pacing.deviceLatencyNs = latencyNs;
+    }
     return pacing;
 }
 

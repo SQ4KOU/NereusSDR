@@ -33,13 +33,14 @@ private slots:
         AudioJitterBuffer queue;
         const quint32 base = 0xfffffe00u;
         queue.reset(base);
-        for (int i = 0; i < AudioJitterBuffer::kMaxPackets; ++i) {
+        QCOMPARE(queue.maxPackets(), 8);
+        for (int i = 0; i < queue.maxPackets(); ++i) {
             QCOMPARE(queue.insert("frame", base + i * 1920u, i * 40'000'000LL),
                      Admission::Accepted);
         }
-        QCOMPARE(queue.queuedPackets(), AudioJitterBuffer::kMaxPackets);
+        QCOMPARE(queue.queuedPackets(), queue.maxPackets());
         QCOMPARE(queue.insert("too far", base + 8 * 1920u, 0), Admission::OutsideWindow);
-        for (int i = 0; i < AudioJitterBuffer::kMaxPackets; ++i) {
+        for (int i = 0; i < queue.maxPackets(); ++i) {
             const auto frame = queue.takeReady(80'000'000 + i * 40'000'000LL);
             QVERIFY(frame && !frame->concealed());
             QCOMPARE(frame->timestamp, base + i * 1920u);
@@ -52,26 +53,40 @@ private slots:
     void arrivalClockIsPreserved_data()
     {
         QTest::addColumn<int>("ppm");
-        QTest::newRow("fast producer") << 500;
-        QTest::newRow("slow producer") << -500;
+        QTest::addColumn<int>("packetFrames");
+        QTest::addColumn<int>("packets");
+        QTest::addColumn<int>("peakLow");
+        QTest::addColumn<int>("peakHigh");
+        // The 80 ms hold is two or three 40 ms Opus packets, and twenty or
+        // twenty-one 4 ms lossless packets.
+        QTest::newRow("fast producer") << 500 << 1920 << 90000 << 2 << 3;
+        QTest::newRow("slow producer") << -500 << 1920 << 90000 << 2 << 3;
+        QTest::newRow("lossless fast producer") << 500 << 192 << 150000 << 20 << 21;
+        QTest::newRow("lossless slow producer") << -500 << 192 << 150000 << 20 << 21;
     }
     void arrivalClockIsPreserved()
     {
         QFETCH(int, ppm);
-        AudioJitterBuffer queue;
+        QFETCH(int, packetFrames);
+        QFETCH(int, packets);
+        QFETCH(int, peakLow);
+        QFETCH(int, peakHigh);
+        AudioJitterBuffer queue(packetFrames, qint64(packetFrames) * 1'000'000'000 / 48'000);
         queue.reset(0);
-        // One simulated hour with independent producer timing. Every block
-        // remains held for 80 ms; timing does not converge to a local 40 ms
-        // timer and concealment does not substitute for valid early/late data.
-        const double packetNs = 40'000'000.0 / (1.0 + ppm / 1'000'000.0);
+        // Independent producer timing (one simulated hour of Opus, ten
+        // minutes of lossless). Every packet remains held for 80 ms; timing
+        // does not converge to a local packet-period timer and concealment
+        // does not substitute for valid early/late data.
+        const double packetNs = (packetFrames * 1'000'000'000.0 / 48'000.0)
+            / (1.0 + ppm / 1'000'000.0);
         int produced = 0;
         int consumed = 0;
         int peakQueued = 0;
-        while (consumed < 90000) {
+        while (consumed < packets) {
             const qint64 due = qRound64(consumed * packetNs) + AudioJitterBuffer::kHoldNs;
             const qint64 arrival = qRound64(produced * packetNs);
-            if (produced < 90000 && arrival <= due) {
-                QCOMPARE(queue.insert("audio", quint32(produced) * 1920u, arrival),
+            if (produced < packets && arrival <= due) {
+                QCOMPARE(queue.insert("audio", quint32(produced) * quint32(packetFrames), arrival),
                          Admission::Accepted);
                 ++produced;
                 peakQueued = qMax(peakQueued, queue.queuedPackets());
@@ -79,12 +94,13 @@ private slots:
                 QVERIFY(!queue.takeReady(due - 1));
                 const auto frame = queue.takeReady(due);
                 QVERIFY(frame && !frame->concealed());
-                QCOMPARE(frame->timestamp, quint32(consumed) * 1920u);
+                QCOMPARE(frame->timestamp, quint32(consumed) * quint32(packetFrames));
                 ++consumed;
             }
         }
-        QCOMPARE(produced, 90000);
-        QVERIFY(peakQueued >= 2 && peakQueued <= 3);
+        QCOMPARE(produced, packets);
+        QVERIFY2(peakQueued >= peakLow && peakQueued <= peakHigh,
+                 qPrintable(QString::number(peakQueued)));
         QCOMPARE(queue.queuedPackets(), 0);
     }
     void demandReleaseRequiresExactPresentPacket()
@@ -164,6 +180,51 @@ private slots:
         QVERIFY(normalFuture && demandFuture);
         QCOMPARE(normalFuture->packet, QByteArray("after gap"));
         QCOMPARE(demandFuture->packet, QByteArray("after gap"));
+    }
+    // R-R3-23: the lossless shape. 192-frame, 4 ms packets on their own
+    // grid; the window is the same 320 ms, so 80 packets rather than the
+    // eight that used to stall a lossless stream after 32 ms.
+    void losslessShapeKeepsTheWindowInTime()
+    {
+        AudioJitterBuffer queue(192, 4'000'000);
+        QCOMPARE(queue.packetFrames(), 192);
+        QCOMPARE(queue.packetDurationNs(), qint64(4'000'000));
+        QCOMPARE(queue.maxPackets(), 80);
+        QCOMPARE(AudioJitterBuffer::windowPackets(4'000'000), 80);
+        QCOMPARE(AudioJitterBuffer::windowPackets(40'000'000), 8);
+        queue.reset(1000);
+        QCOMPARE(queue.insert("off grid", 1000 + 96, 0), Admission::Invalid);
+        QCOMPARE(queue.insert("next opus block", 1000 + 1920, 0), Admission::Accepted);
+        QCOMPARE(queue.insert("last in window", 1000 + 79 * 192, 0), Admission::Accepted);
+        QCOMPARE(queue.insert("beyond window", 1000 + 80 * 192, 0), Admission::OutsideWindow);
+        QCOMPARE(queue.insert("late", 1000 - 192, 0), Admission::Late);
+
+        // A lost packet is one 4 ms interval, at the anchor of the next
+        // queued packet (arrival + hold - distance x 4 ms).
+        queue.reset(0);
+        QCOMPARE(queue.insert("first", 0, 0), Admission::Accepted);
+        QCOMPARE(queue.insert("third", 384, 8'000'000), Admission::Accepted);
+        QVERIFY(!queue.takeReady(79'999'999));
+        QCOMPARE(queue.takeReady(80'000'000)->packet, QByteArray("first"));
+        QVERIFY(!queue.takeReady(83'999'999));
+        const auto missing = queue.takeReady(84'000'000);
+        QVERIFY(missing && missing->concealed());
+        QCOMPARE(missing->timestamp, quint32(192));
+        QVERIFY(!queue.takeReady(87'999'999));
+        QCOMPARE(queue.takeReady(88'000'000)->packet, QByteArray("third"));
+        // An empty queue conceals one packet every 4 ms after the last one.
+        QVERIFY(!queue.takeReady(91'999'999));
+        const auto next = queue.takeReady(92'000'000);
+        QVERIFY(next && next->concealed());
+        QCOMPARE(next->timestamp, quint32(576));
+        QCOMPARE(queue.nextTimestamp(), quint32(768));
+    }
+    void invalidShapeKeepsTheOpusDefault()
+    {
+        const AudioJitterBuffer defaulted(0, 0);
+        QCOMPARE(defaulted.packetFrames(), AudioJitterBuffer::kDefaultPacketFrames);
+        QCOMPARE(defaulted.packetDurationNs(), AudioJitterBuffer::kDefaultPacketDurationNs);
+        QCOMPARE(defaulted.maxPackets(), 8);
     }
 };
 QTEST_APPLESS_MAIN(TstAudioJitterBuffer)

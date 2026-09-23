@@ -81,6 +81,7 @@ mw0lge@grange-lane.co.uk
 
 #include "AmpViewWindow.h"
 #include "DspAssetDialog.h"
+#include "OperatorReasonText.h"
 #include "StyleConstants.h"
 #include "core/AppSettings.h"
 #include "core/PureSignal.h"
@@ -777,7 +778,8 @@ void PsForm::wireToPureSignal()
                 [this](const QString& reason) {
             syncAcceptedSettings();
             if (m_lblActionStatus) {
-                m_lblActionStatus->setText(tr("Setting rejected: %1").arg(reason));
+                m_lblActionStatus->setText(tr("Setting rejected: %1")
+                                                .arg(OperatorReasonText::forDisplay(reason)));
             }
         });
     }
@@ -831,7 +833,7 @@ quint32 PsForm::requestAction(Ps3Action action, const QVariantMap& arguments)
     if (!operationId) {
         const QString reason = m_facade->lastActionError();
         m_lblActionStatus->setText(reason.isEmpty()
-            ? tr("PureSignal refused the action.") : reason);
+            ? tr("PureSignal refused the action.") : OperatorReasonText::forDisplay(reason));
         syncFromPureSignal();
         return 0;
     }
@@ -855,7 +857,8 @@ void PsForm::onActionResult(quint32 operationId, Ps3ActionPhase phase,
     }
     QString text = tr("Action %1 %2.").arg(operationId).arg(phaseText);
     if (!reason.isEmpty()) {
-        text += QStringLiteral(" ") + reason;
+        // The Core's reason, in user words; the raw text is logged.
+        text += QStringLiteral(" ") + OperatorReasonText::forDisplay(reason);
     }
     const QString assetId = values.value(QStringLiteral("assetId")).toString();
     if (!assetId.isEmpty()) {
@@ -872,7 +875,7 @@ void PsForm::onSessionInvalidated()
 {
     m_pendingActions.clear();
     if (m_lblActionStatus) {
-        m_lblActionStatus->setText(tr("Station session changed; pending actions were retired."));
+        m_lblActionStatus->setText(tr("The connection to the Core changed; actions still waiting were cancelled."));
     }
     refreshFacadeStatus();
 }

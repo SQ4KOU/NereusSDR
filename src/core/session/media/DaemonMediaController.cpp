@@ -847,11 +847,14 @@ void DaemonMediaController::onRadioConnectionStateChanged(ConnectionState state)
 
 void DaemonMediaController::onControl(const QJsonObject& control, quint64 epoch)
 {
+    // R-R3-35: a clock probe's arrival time (t1), read before anything else.
+    const qint64 receivedNs = displayNowNs();
     if (!m_server || !m_server->mediaAvailable() || epoch == 0 || epoch != m_epoch
         || !control.value(QStringLiteral("op")).isString()) {
         return;
     }
     const QString op = control.value(QStringLiteral("op")).toString();
+    if (op == QLatin1String("clock-probe")) { handleClockProbe(control, receivedNs); return; }
     if (op == QLatin1String("start")) { handleStart(control); return; }
     if (op == QLatin1String("subscribe")) { handleSubscribe(control); return; }
     if (op == QLatin1String("unsubscribe")) { handleUnsubscribe(control); return; }
@@ -862,7 +865,26 @@ void DaemonMediaController::onControl(const QJsonObject& control, quint64 epoch)
 
 bool DaemonMediaController::handleStart(const QJsonObject& control)
 {
-    if (!exactKeys(control, {"op", "connectionId"})
+    // R-R3-23: a GUI that understands the lossless profile adds
+    // audioProfileVersion (the Core's advertised capability) to its start,
+    // and only then does the offer carry the L16 format. Every other GUI
+    // sends today's two keys and gets today's offer.
+    QJsonObject legacyShape = control;
+    const bool declaresAudioProfile =
+        control.contains(QStringLiteral("audioProfileVersion"));
+    quint32 audioProfileVersion = 0;
+    if (declaresAudioProfile) {
+        legacyShape.remove(QStringLiteral("audioProfileVersion"));
+        // A whole number, at least 1 (the first version with profiles);
+        // zero, fractions, negatives and strings are refused.
+        if (!m_server || !m_server->remoteAudioStatusAvailable()
+            || !exactUnsigned(control.value(QStringLiteral("audioProfileVersion")),
+                              audioProfileVersion, /*nonzero=*/true)
+            || audioProfileVersion < 1) {
+            return false;
+        }
+    }
+    if (!exactKeys(legacyShape, {"op", "connectionId"})
         || !canonicalConnectionId(control.value(QStringLiteral("connectionId")))) {
         return false;
     }
@@ -917,8 +939,9 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
             reconcileAudio();
         }
     });
+    const bool offerLossless = declaresAudioProfile && m_audioLosslessAllowed;
     if (!peer->start(IMediaTransport::Role::Offerer, connectionId,
-                     m_audioTargetBitrate)) {
+                     m_audioTargetBitrate, offerLossless)) {
         m_displayDiagnosticsTimer.stop();
         m_peer.reset();
         sendRejected(connectionId, 0, 0, QStringLiteral("media peer start failed"));
@@ -1286,7 +1309,18 @@ bool DaemonMediaController::handleKeyframe(const QJsonObject& control)
 bool DaemonMediaController::handleAudio(const QJsonObject& control)
 {
     quint32 revision = 0;
-    if (!exactKeys(control, {"op", "connectionId", "revision", "enabled"})
+    // R-R3-23: `profile` ("opus" or "lossless") only from a GUI the Core can
+    // answer in the profile shape, which needs the minor-8 detail.
+    const bool hasProfile = control.contains(QStringLiteral("profile"));
+    std::optional<RemoteAudioProfile> requestedProfile;
+    if (hasProfile) {
+        requestedProfile = remoteAudioProfileFromWire(control.value(QStringLiteral("profile")));
+    }
+    if (!(hasProfile ? exactKeys(control, {"op", "connectionId", "revision", "enabled",
+                                           "profile"})
+                     : exactKeys(control, {"op", "connectionId", "revision", "enabled"}))
+        || (hasProfile && (!requestedProfile || !m_server
+                           || !m_server->remoteAudioStatusAvailable()))
         || !m_peer
         || !canonicalConnectionId(control.value(QStringLiteral("connectionId")))
         || control.value(QStringLiteral("connectionId")).toString() != m_peer->connectionId()
@@ -1298,10 +1332,87 @@ bool DaemonMediaController::handleAudio(const QJsonObject& control)
 
     m_audioRevision = revision;
     m_audioDesiredEnabled = control.value(QStringLiteral("enabled")).toBool();
+    if (hasProfile) {
+        m_audioProfileNegotiated = true;
+        m_audioRequestedProfile = *requestedProfile;
+    }
     // An accepted control is a fresh audio context even if it leaves actual
     // capture unavailable pending peer readiness or station reconnect.
     reconcileAudio();
     return true;
+}
+
+bool DaemonMediaController::handleClockProbe(const QJsonObject& control, qint64 receivedNs)
+{
+    quint32 id = 0;
+    const QJsonValue t0 = control.value(QStringLiteral("t0"));
+    const qint64 sentNs = t0.isDouble() ? t0.toInteger(-1) : -1;
+    if (!exactKeys(control, {"op", "connectionId", "id", "t0"}) || !m_peer
+        || !canonicalConnectionId(control.value(QStringLiteral("connectionId")))
+        || control.value(QStringLiteral("connectionId")).toString() != m_peer->connectionId()
+        || !exactUnsigned(control.value(QStringLiteral("id")), id) || sentNs < 0) {
+        return false;
+    }
+    // The newest captured block of the running audio context, so the GUI
+    // can map what it plays onto this clock. Nothing while audio is off.
+    qint64 generation = 0;
+    qint64 rtpTimestamp = 0;
+    qint64 capturedNs = 0;
+    if (m_audioDiagnostics.activeContext && m_audioSender && m_audioSender->isRunning()) {
+        const DaemonAudioSenderTelemetry sender = m_audioSender->telemetry();
+        if (sender.hasCaptureStamp) {
+            generation = m_audioDiagnostics.contextGeneration;
+            rtpTimestamp = sender.captureTimestamp;
+            capturedNs = sender.captureNs;
+        }
+    }
+    return sendControl({
+        {QStringLiteral("op"), QStringLiteral("clock-echo")},
+        {QStringLiteral("connectionId"), m_peer->connectionId()},
+        {QStringLiteral("id"), static_cast<qint64>(id)},
+        {QStringLiteral("t0"), sentNs},
+        {QStringLiteral("t1"), receivedNs},
+        {QStringLiteral("generation"), generation},
+        {QStringLiteral("rtpTimestamp"), rtpTimestamp},
+        {QStringLiteral("capturedNs"), capturedNs},
+        // Last, just before the reply leaves.
+        {QStringLiteral("t2"), displayNowNs()},
+    });
+}
+
+void DaemonMediaController::admitAudioProfile()
+{
+    const RemoteAudioProfile previous = m_audioActiveProfile;
+    const std::optional<RemoteAudioProfileRefusal> previousRefusal = m_audioProfileRefusal;
+    m_audioProfileRefusal.reset();
+    m_audioActiveProfile = RemoteAudioProfile::Opus;
+    if (m_audioRequestedProfile == RemoteAudioProfile::Lossless) {
+        if (!m_audioLosslessAllowed) {
+            m_audioProfileRefusal = RemoteAudioProfileRefusal::NotAllowed;
+        } else if (m_peer && !m_peer->isReady()) {
+            // The answer that settles the formats is not in yet; audio is
+            // off as media-not-ready, and admission is decided on ready.
+            m_audioActiveProfile = RemoteAudioProfile::Lossless;
+        } else if (!m_peer || !m_peer->losslessAudioNegotiated()
+                   || !PcmAudioPacketiser{}.isReady()) {
+            m_audioProfileRefusal = RemoteAudioProfileRefusal::Unavailable;
+        } else {
+            m_audioActiveProfile = RemoteAudioProfile::Lossless;
+        }
+    }
+    if (m_audioProfileRefusal && m_audioProfileRefusal != previousRefusal) {
+        qCInfo(lcDaemonMedia).noquote().nospace()
+            << "lossless audio refused ("
+            << remoteAudioProfileRefusalToWire(*m_audioProfileRefusal)
+            << (*m_audioProfileRefusal == RemoteAudioProfileRefusal::NotAllowed
+                    ? ": nereusd.conf audio_lossless = deny"
+                    : ": the media description carries no L16/48000/2 rtpmap")
+            << "); Opus keeps running, revision " << m_audioRevision;
+    } else if (m_audioActiveProfile != previous) {
+        qCInfo(lcDaemonMedia).noquote().nospace()
+            << "audio profile " << remoteAudioProfileToWire(m_audioActiveProfile)
+            << ", revision " << m_audioRevision;
+    }
 }
 
 void DaemonMediaController::onSourceFrame(MediaSourceKey key)
@@ -2157,12 +2268,18 @@ void DaemonMediaController::reconcileAudio()
     }
     const bool shouldRun = !blockedBy.has_value();
     bool actualEnabled = false;
+    // Capture is stopped above, so queued audio of the old profile is gone
+    // and a new profile starts at the next capture block (R-R3-23).
+    admitAudioProfile();
     if (shouldRun) {
         if (!m_audioSender) {
             OpusAudioCodecConfig codecConfig;
             codecConfig.bitrate = m_audioTargetBitrate;
             m_audioSender = std::make_unique<DaemonAudioSender>(
                 m_radioModel->audioEngine(), codecConfig);
+            // R-R3-35: capture times on the clock clock-echo reports. The
+            // sender stops its DSP tap before this controller goes away.
+            m_audioSender->setCaptureClock([this] { return displayNowNs(); });
             DaemonAudioSender* const sender = m_audioSender.get();
             connect(sender, &DaemonAudioSender::packetReady, this,
                     [this, sender](const QByteArray& packet) {
@@ -2201,6 +2318,7 @@ void DaemonMediaController::reconcileAudio()
                 }
             });
         }
+        m_audioSender->setProfile(m_audioActiveProfile);
         actualEnabled = m_audioSender->start(m_peer->audioSsrc(), m_audioNextSequence,
                                               m_audioNextTimestamp);
         if (actualEnabled) {
@@ -2236,8 +2354,11 @@ void DaemonMediaController::sendAudioContext(bool enabled, RemoteAudioOffReason 
         return;
     }
     const bool detailNegotiated = m_server && m_server->remoteAudioStatusAvailable();
+    const bool profileNegotiated = detailNegotiated && m_audioProfileNegotiated;
+    const bool lossless = m_audioActiveProfile == RemoteAudioProfile::Lossless;
     if (enabled && detailNegotiated
-        && !(m_audioSender && m_audioSender->encoderProfile())) {
+        && !(m_audioSender && (lossless ? m_audioSender->profileReady()
+                                        : m_audioSender->encoderProfile().has_value()))) {
         // A minor-8 GUI refuses an enabled context without its encoder
         // profile. With no profile to report, stop the sender so no RTP
         // flows under the context and say plainly why audio is off.
@@ -2257,15 +2378,20 @@ void DaemonMediaController::sendAudioContext(bool enabled, RemoteAudioOffReason 
     message.ssrc = m_peer->audioSsrc();
     message.firstSequence = m_audioNextSequence;
     message.firstTimestamp = m_audioNextTimestamp;
-    if (enabled) {
+    if (enabled && lossless) {
+        message.losslessEncoder = m_audioSender->losslessProfile();
+    } else if (enabled) {
         // A started sender always has a ready encoder, so this is the
         // profile the context's packets are coded with.
         message.encoder = m_audioSender ? m_audioSender->encoderProfile() : std::nullopt;
     } else {
         message.offReason = reason;
     }
-    // A minor-7 peer gets exactly the eight keys it has always parsed.
-    sendControl(encodeRemoteAudioContext(message, detailNegotiated));
+    message.profile = m_audioActiveProfile;
+    message.profileRefusal = m_audioProfileRefusal;
+    // A minor-7 peer gets exactly the eight keys it has always parsed, and a
+    // GUI that never sent `profile` exactly the minor-8 shape.
+    sendControl(encodeRemoteAudioContext(message, detailNegotiated, profileNegotiated));
 }
 
 DaemonAudioDiagnostics DaemonMediaController::snapshotAudioDiagnostics() const
@@ -2330,6 +2456,9 @@ void DaemonMediaController::maybeLogAudioDiagnostics(bool final)
         << " consumed=" << snapshot.sender.consumedBlocks
         << " encoded=" << snapshot.sender.encodedPackets
         << " encodeFailures=" << snapshot.sender.encodeFailures
+        // Lossless send ticks held to the per-tick cap with audio waiting:
+        // the Core's send timer ran late (a slow Core), not the network.
+        << " losslessCappedTicks=" << snapshot.sender.losslessCappedTicks
         << " sendAttempts=" << snapshot.sendAttempts
         << " sendAccepted=" << snapshot.sendAccepted
         << " sendRejected=" << snapshot.sendRejected
@@ -2346,6 +2475,10 @@ void DaemonMediaController::resetAudioSession()
     stopAudioCapture();
     m_audioDesiredEnabled = false;
     m_audioRevision = 0;
+    m_audioProfileNegotiated = false;
+    m_audioRequestedProfile = RemoteAudioProfile::Opus;
+    m_audioActiveProfile = RemoteAudioProfile::Opus;
+    m_audioProfileRefusal.reset();
     // A different MediaPeer has a different SSRC identity, so it may start
     // a new RTP timeline. Existing peers always retain the saved values.
     m_audioNextSequence = 1;

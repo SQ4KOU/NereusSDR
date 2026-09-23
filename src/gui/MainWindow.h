@@ -88,6 +88,7 @@
 // Remote-daemon R2 Task 20: by value in the constructor overload and in
 // m_station below, so it cannot be forward-declared.
 #include "core/session/RemoteStationOptions.h"
+#include "core/WdspTypes.h"
 
 class QProgressDialog;
 class QSplitter;
@@ -244,6 +245,11 @@ public:
     // call sites use these same helpers so stable-ID lookup cannot diverge
     // between the test and the UI signal path.
     static SliceModel* sliceForAddedIdForTest(RadioModel* model, int sliceId);
+    // Follow-up item 3 (R-R3-21): the DSP > NR menu's choice for a slice.
+    // Returns the reason to show, in user words, when the slice refused it
+    // (empty when accepted). The menu is the one place a menu refusal is
+    // shown; a VFO flag click shows its own.
+    static QString applyNrMenuChoice(SliceModel* slice, NereusSDR::NrSlot slot);
     static void applyAntennaChangeForTest(RadioModel* model, int sliceId,
                                           const QString& antennaName);
     // Production composition seam: flags remain per-slice while the RX
@@ -448,6 +454,10 @@ private slots:
     /// TNF: surface a rejected add. Without this a +TNF press inside the
     /// 10 Hz dedupe window is silently ignored and the button reads as dead.
     void onNotchAddRejected(const QString& reason);
+    /// R-R3-21: the Core refused a remote window's notch move, toggle or
+    /// delete. The reason is already a plain sentence.
+    void onNotchRequestRefused(const QString& reason);
+    // Fix wave I3: a receiver refused a noise reducer (NR3 with no model).
 
     /// TNF: repaint the status-bar light from NotchModel. Driven by every
     /// signal that can change either half of what it shows.

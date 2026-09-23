@@ -486,6 +486,8 @@ public:
     // flag's close button" without this. Exposed read-only, same pattern as
     // the SNR-row seams below.
     QPushButton* closeButtonForTest() const { return m_closeBtn; }
+    // Fix wave I3: the last refused noise-reducer choice this flag showed.
+    QString nrRefusalForTest() const { return m_nrRefusal; }
 
     int sliceIndex() const { return m_sliceIndex; }
 
@@ -636,6 +638,7 @@ private:
 
     // --- NR bank helpers (Sub-epic C-1, Tasks 14-15) ---
     void onActiveNrChanged(NereusSDR::NrSlot slot);
+    void onNrSelectionRefused(const QString& reason);
     void showNr1Popup(const QPoint& globalPos);
     void showNr2Popup(const QPoint& globalPos);
     void showNr3Popup(const QPoint& globalPos);
@@ -821,6 +824,13 @@ private:
 
     // --- Slice coupling (for mode container binding only) ---
     QPointer<SliceModel> m_slice;
+    // Fix wave I3: the NR button last clicked, where a refusal is shown.
+    QPointer<QPushButton> m_lastNrButton;
+    QString m_nrRefusal;
+    // Follow-up item 3: set only while this flag's own NR click is being
+    // applied, so a refusal of a choice made elsewhere (the DSP menu) is
+    // not shown here as well.
+    bool m_nrClickInFlight{false};
 
     // --- X/RIT tab ---
     QPushButton*   m_ritBtn{nullptr};

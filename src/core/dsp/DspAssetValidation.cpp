@@ -16,6 +16,11 @@
 // Modification history (NereusSDR):
 //   2026-09-21 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                (KG4VCF), with AI-assisted transformation via OpenAI Codex.
+//   2026-09-23 - NR3 (rnnoise) model validator added by J.J. Boyd (KG4VCF),
+//                with AI-assisted implementation via Anthropic Claude Code.
+//                NereusSDR-original: it calls the public rnnoise API
+//                (rnnoise_model_from_buffer, rnnoise_create) and ports no
+//                upstream logic.
 // =================================================================
 
 /*  nnio.c
@@ -100,6 +105,10 @@ warren@pratt.one
 
 #include <QCryptographicHash>
 #include <QHash>
+
+#ifdef HAVE_WDSP
+#include "rnnoise.h"
+#endif
 #include <QSet>
 #include <QVector>
 
@@ -374,6 +383,8 @@ QString dspAssetKindName(DspAssetKind kind)
         return QStringLiteral("nnr-model");
     case DspAssetKind::Ps3Correction:
         return QStringLiteral("ps3-correction");
+    case DspAssetKind::Nr3Model:
+        return QStringLiteral("nr3-model");
     }
     return {};
 }
@@ -391,14 +402,104 @@ bool dspAssetKindFromName(const QString& name, DspAssetKind* kind)
         *kind = DspAssetKind::Ps3Correction;
         return true;
     }
+    if (name == QStringLiteral("nr3-model")) {
+        *kind = DspAssetKind::Nr3Model;
+        return true;
+    }
     return false;
+}
+
+bool dspAssetKindFromInt(qint64 value, DspAssetKind* kind)
+{
+    switch (value) {
+    case static_cast<qint64>(DspAssetKind::NnrModel):
+    case static_cast<qint64>(DspAssetKind::Ps3Correction):
+    case static_cast<qint64>(DspAssetKind::Nr3Model):
+        if (kind) {
+            *kind = static_cast<DspAssetKind>(value);
+        }
+        return true;
+    default:
+        return false;
+    }
+}
+
+qint64 DspAssetValidation::sizeLimit(DspAssetKind kind)
+{
+    switch (kind) {
+    case DspAssetKind::NnrModel:
+        return kMaxNnrModelBytes;
+    case DspAssetKind::Ps3Correction:
+        return kMaxPs3CorrectionBytes;
+    case DspAssetKind::Nr3Model:
+        return kMaxNr3ModelBytes;
+    }
+    return 0;
 }
 
 DspAssetValidationResult DspAssetValidation::validate(DspAssetKind kind,
                                                        const QByteArray& bytes)
 {
-    return kind == DspAssetKind::NnrModel ? validateNnrModel(bytes)
-                                           : validatePs3Correction(bytes);
+    switch (kind) {
+    case DspAssetKind::NnrModel:
+        return validateNnrModel(bytes);
+    case DspAssetKind::Ps3Correction:
+        return validatePs3Correction(bytes);
+    case DspAssetKind::Nr3Model:
+        return validateNr3Model(bytes);
+    }
+    return rejected(kind, bytes, QStringLiteral("Unknown model type."));
+}
+
+DspAssetValidationResult DspAssetValidation::validateNr3Model(const QByteArray& bytes)
+{
+    const DspAssetKind kind = DspAssetKind::Nr3Model;
+    if (bytes.size() > kMaxNr3ModelBytes) {
+        return rejected(kind, bytes, QStringLiteral("The NR3 model is larger than 16 MiB."));
+    }
+    // Every rnnoise weight file is a run of 64-byte-headed records, and the
+    // first record header starts with the "DNNw" tag (rnnoise nnet.h
+    // WeightHead). Checking it first gives a clear answer for an ordinary
+    // file picked by mistake before rnnoise sees the bytes at all.
+    constexpr qsizetype kRecordHeaderBytes = 64;
+    if (bytes.size() < kRecordHeaderBytes || !bytes.startsWith("DNNw")) {
+        return rejected(kind, bytes, QStringLiteral("This file is not an NR3 model."));
+    }
+#ifdef HAVE_WDSP
+    // rnnoise_model_from_buffer borrows the bytes; they outlive both calls.
+    RNNModel* model = rnnoise_model_from_buffer(bytes.constData(), int(bytes.size()));
+    if (!model) {
+        return rejected(kind, bytes, QStringLiteral("There was not enough memory to check the NR3 model."));
+    }
+    // rnnoise_create parses every record with bounds checks and then checks
+    // each layer's name and size against the layer sizes NR3 is built with;
+    // it returns NULL when any of that fails.
+    DenoiseState* trial = rnnoise_create(model);
+    const bool usable = trial != nullptr;
+    if (trial) {
+        rnnoise_destroy(trial);
+    }
+    rnnoise_model_free(model);
+    if (!usable) {
+        return rejected(kind, bytes,
+                        QStringLiteral("This file is not an NR3 model this Core can use."));
+    }
+
+    const quint32 firstVersion = readU32(bytes, 4);
+
+    DspAssetValidationResult result;
+    result.accepted = true;
+    result.kind = kind;
+    result.format = QStringLiteral("RNNoise");
+    result.version = int(std::min<quint32>(firstVersion, quint32(std::numeric_limits<int>::max())));
+    result.compatibility = QStringLiteral("NR3");
+    result.size = bytes.size();
+    result.hashHex = QString::fromLatin1(
+        QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex());
+    return result;
+#else
+    return rejected(kind, bytes, QStringLiteral("This Core was built without NR3."));
+#endif
 }
 
 DspAssetValidationResult DspAssetValidation::validateNnrModel(const QByteArray& bytes)

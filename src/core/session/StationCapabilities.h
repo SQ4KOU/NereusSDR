@@ -141,6 +141,23 @@ struct StationCapabilities {
     int propertyResultVersion = 0;
     int dspAssetVersion = 0;
     int psDisplayVersion = 0;
+    /// R-R3-21 / R-R3-09: the Core owns the notch list, mirrors it as the
+    /// `notches` object and takes notch.add / notch.move / notch.setActive
+    /// / notch.delete. 0 means a window keeps today's settings-based notches.
+    int notchControlVersion = 0;
+    /// R-R3-23: 1 means the Core can send lossless audio (uncompressed
+    /// 16-bit stereo, L16) beside Opus. A GUI that sees it may add
+    /// audioProfileVersion to its media start (the offer then carries the
+    /// L16 format) and `profile` to its audio control; the audio context
+    /// then reports the profile running and any refusal. Nonzero only with
+    /// media; the Core's audio_lossless setting may still refuse.
+    int audioProfileVersion = 0;
+    /// R-R3-35: 1 means the Core answers the media control
+    /// {op:"clock-probe", id, t0} with {op:"clock-echo", id, t0, t1, t2,
+    /// generation, rtpTimestamp, capturedNs}, so a GUI can measure how far
+    /// behind real time its audio plays. Nonzero only with media. A GUI that
+    /// does not see it sends no probe and shows no measured delay.
+    int audioClockVersion = 0;
 
     /// The daemon's own AppSettings SettingsSchemaVersion, read by that
     /// key name from its own store. See StationClient's schema-skew check.

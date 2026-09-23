@@ -41,6 +41,10 @@
 //                                    limit arrives as SliceModel nnrLimit,
 //                                    and the operator's retry is sent as
 //                                    nnr.tryAgain, both from minor 11.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-21 / R-R3-09: the window's
+//                                    NotchModel mirrors a notchControlVersion
+//                                    Core's list and sends notch.* requests.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -51,6 +55,7 @@
 #include "core/session/ObjectRegistry.h"
 #include "core/session/SessionTransport.h"
 #include "core/settings/SettingsProxy.h"
+#include "models/NotchModel.h"
 #include "models/PanadapterModel.h"
 #include "models/PureSignalSettings.h"
 #include "core/dsp/DspAssetService.h"
@@ -753,6 +758,7 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
     m_schemaOnlyOnStation.clear();
     m_schemaOnlyLocal.clear();
     m_unapplied.clear();
+    m_unheldDeltaKeys.clear();
     m_pendingStationSchemas.clear();
 
     const quint32 epoch = m_sessionEpoch;
@@ -879,7 +885,13 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     m_propertyWriteIds.clear();
     if (m_radioModel) {
         m_radioModel->dspAssets()->resetSession();
+        m_radioModel->dspAssets()->setRemoteNr3ModelsSupported(false);
         m_radioModel->pureSignalFacade()->resetSession();
+        // The window keeps the Core's last notch list; unanswered requests
+        // and held edits belong to the retired session.
+        if (m_radioModel->notchModel()) {
+            m_radioModel->notchModel()->resetSession();
+        }
     }
     m_linkUp = false;
     m_heartbeatTimer->stop();
@@ -1271,6 +1283,7 @@ void StationClient::onTransportText(const QByteArray& wire)
             m_radioModel->pureSignalFacade()->setRemoteCapabilities(
                 m_agreedMinor >= kDspControlSessionProtocolMinor && m_capabilities.psAlgorithmVersion == 3,
                 m_capabilities.txPermitted);
+            m_radioModel->dspAssets()->setRemoteNr3ModelsSupported(remoteNr3ModelsAvailable());
         }
         if (m_radioModel) {
             m_radioModel->setStationFilterSnapshotReady();
@@ -1467,6 +1480,8 @@ void StationClient::handleCapabilities(const SessionMessage& message)
             m_agreedMinor >= kDspControlSessionProtocolMinor && m_capabilities.psAlgorithmVersion == 3,
             m_capabilities.txPermitted);
         if (!self || m_sessionEpoch != epoch || !m_sessionActive || !m_radioModel) { return; }
+        m_radioModel->dspAssets()->setRemoteNr3ModelsSupported(remoteNr3ModelsAvailable());
+        if (!self || m_sessionEpoch != epoch || !m_sessionActive || !m_radioModel) { return; }
         m_radioModel->reportStationLinkStateChanged();
         if (!self || m_sessionEpoch != epoch || !m_sessionActive || !m_radioModel) { return; }
     }
@@ -1503,11 +1518,48 @@ void StationClient::handleCapabilities(const SessionMessage& message)
             || self->m_capabilities.dspAssetVersion < 1 || !verb.startsWith("dspAssets.")) {
             return 0;
         }
+        // R-R3-21: NR3 models need a dspAssetVersion 2 Core. An older Core
+        // would refuse them anyway; not sending keeps its answer predictable.
+        if (self->m_capabilities.dspAssetVersion < 2
+            && (verb == "dspAssets.selectNr3Model"
+                || (verb == "dspAssets.beginImport"
+                    && arguments.value(QStringLiteral("kind")).toLongLong()
+                           == static_cast<qlonglong>(DspAssetKind::Nr3Model)))) {
+            return 0;
+        }
         const auto values = dspCommandValues(arguments);
         return values ? self->invokeCommand(verb, *values) : 0;
     });
     m_objects.insert("pureSignalSettings", m_radioModel->pureSignalSettings());
     watchForOutbound("pureSignalSettings", m_radioModel->pureSignalSettings());
+
+    // R-R3-21 / R-R3-09: a Core with notchControlVersion owns the notch
+    // list. The window mirrors it and asks for every change; it never
+    // writes or restores the Core's Notch* settings. Against an older Core
+    // nothing changes: the key is not registered, so its object (if any)
+    // is dropped, and the model keeps today's settings path.
+    if (NotchModel* notches = m_radioModel->notchModel()) {
+        const bool mirrored = m_agreedMinor >= kDspControlSessionProtocolMinor
+            && m_capabilities.notchControlVersion >= 1;
+        if (mirrored) {
+            notches->setMirrorMode(true);
+            notches->setRemoteRequestHandler(
+                [self](const QByteArray& verb, const QVariantMap& arguments) -> quint32 {
+                if (!self || !self->remoteNotchControlAvailable() || !verb.startsWith("notch.")) {
+                    return 0;
+                }
+                const auto values = dspCommandValues(arguments);
+                return values ? self->invokeCommand(verb, *values) : 0;
+            });
+            m_objects.insert("notches", notches);
+            watchForOutbound("notches", notches);
+        } else {
+            m_objects.remove("notches");
+            m_outboundMirror->unwatch("notches");
+            notches->setRemoteRequestHandler({});
+            notches->setMirrorMode(false);
+        }
+    }
 
     const QByteArray transmitKey(kTransmitKey);
     m_objects.insert(transmitKey, &m_radioModel->transmitModel());
@@ -1872,8 +1924,13 @@ void StationClient::handleDelta(const SessionMessage& message)
 {
     QObject* target = m_objects.value(message.objectKey).data();
     if (target == nullptr) {
-        qCWarning(lcStationClient) << "Delta for an object this client does not hold:"
-                                   << message.objectKey;
+        // Once per object per session: a newer Core's object this client
+        // does not hold (notches on an older app) changes often.
+        if (!m_unheldDeltaKeys.contains(message.objectKey)) {
+            m_unheldDeltaKeys.insert(message.objectKey);
+            qCWarning(lcStationClient) << "Delta for an object this client does not hold:"
+                                       << message.objectKey;
+        }
         return;
     }
     QList<MirrorUpdate> current;
@@ -2099,6 +2156,10 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
         auto* assets = qobject_cast<DspAssetService*>(target);
         return assets && assets->applyRemoteProperty(propertyName, native);
     }
+    if (className == "NotchModel") {
+        auto* notches = qobject_cast<NotchModel*>(target);
+        return notches && notches->applyRemoteProperty(propertyName, native);
+    }
     if (className == "PureSignalSettings") {
         auto* settings = qobject_cast<PureSignalSettings*>(target);
         return settings && settings->applyStationDiagnostic(propertyName, native);
@@ -2190,11 +2251,26 @@ void StationClient::watchForOutbound(const QByteArray& objectKey, QObject* objec
             return std::nullopt;
         });
         slice->setNrSelectionApplier([owner](NrSlot requested, QString* reason) {
-            if (requested != NrSlot::NNR || (owner && (owner->m_applyingInbound || owner->nnrControlAvailable()))) {
+            if (owner && owner->m_applyingInbound) {
                 return true;
             }
-            if (reason) { *reason = QStringLiteral("This station session does not support NNR."); }
-            return false;
+            if (requested == NrSlot::NNR && !(owner && owner->nnrControlAvailable())) {
+                if (reason) { *reason = QStringLiteral("This station session does not support NNR."); }
+                return false;
+            }
+            // Fix wave I3 (R-R3-21): the Core said it has no usable NR3
+            // model (mirrored nr3Runnable), so NR3 cannot run there.
+            DspAssetService* assets = owner && owner->m_radioModel
+                ? owner->m_radioModel->dspAssets() : nullptr;
+            if (requested == NrSlot::NR3 && assets && !assets->nr3Runnable()) {
+                if (reason) {
+                    *reason = assets->nr3ModelStatus().isEmpty()
+                        ? QStringLiteral("NR3 cannot run on this Core: no NR3 model file was found.")
+                        : assets->nr3ModelStatus();
+                }
+                return false;
+            }
+            return true;
         });
         // R-R3-40: the operator's retry goes to the station. A station
         // echo (choosing the model the station reports) is not a retry.
@@ -2436,6 +2512,18 @@ StationClient::CommandOutcome StationClient::requestApplyNnrModels(quint32 revis
         QStringLiteral("the NNR model reconnect"));
 }
 
+bool StationClient::remoteNr3ModelsAvailable() const
+{
+    return m_handshakeComplete && m_agreedMinor >= kDspControlSessionProtocolMinor
+        && m_capabilities.dspAssetVersion >= 2;
+}
+
+bool StationClient::remoteNotchControlAvailable() const
+{
+    return m_handshakeComplete && m_agreedMinor >= kDspControlSessionProtocolMinor
+        && m_capabilities.notchControlVersion >= 1;
+}
+
 bool StationClient::nnrControlAvailable() const
 {
     return propertyResultsAvailable() && m_capabilities.nnrVersion > 0;
@@ -2485,6 +2573,13 @@ StationClient::CommandOutcome StationClient::requestFourO3AEnabled(bool enabled)
 
 void StationClient::handleCommandResult(const SessionMessage& message)
 {
+    // R-R3-21: the app shows a refusal in user words (OperatorReasonText),
+    // so the Core's own text is kept here, each time, as it arrived.
+    if (!message.accepted) {
+        qCInfo(lcStationClient).noquote()
+            << "Station refused" << QString::fromUtf8(message.commandVerb)
+            << "command" << message.commandId << ":" << message.reason;
+    }
     if (message.commandVerb == "ps3.subscribeDisplay" && m_pendingPs3Display
         && m_pendingPs3Display->first == message.commandId) {
         const bool enabled = m_pendingPs3Display->second;
@@ -2518,8 +2613,11 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         }
     }
 
+    // notch.* refusals are shown by NotchModel itself (notchAddRejected /
+    // notchRequestRefused), in the words the window uses for a local one.
     if (!message.accepted && !m_radioModel.isNull()
-        && !message.commandVerb.startsWith("ps3.") && !message.commandVerb.startsWith("dspAssets.")) {
+        && !message.commandVerb.startsWith("ps3.") && !message.commandVerb.startsWith("dspAssets.")
+        && !message.commandVerb.startsWith("notch.")) {
         // The station's OWN reason, relayed verbatim. Wording a refusal
         // here instead would put this client's guess in front of an
         // operator for a decision the daemon made -- and on a bench that
@@ -2568,6 +2666,11 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         }
     }
 
+    if (message.commandVerb.startsWith("notch.") && m_radioModel && m_radioModel->notchModel()) {
+        const auto values = dspCommandValues(message.updates);
+        m_radioModel->notchModel()->receiveRemoteResult(message.commandId, message.commandVerb,
+            message.accepted, message.reason, values.value_or(QVariantMap{}));
+    }
     if (message.commandVerb.startsWith("dspAssets.") && m_radioModel) {
         if (const auto values = dspCommandValues(message.updates)) {
             m_radioModel->dspAssets()->receiveRemoteResult(message.commandId, message.commandVerb,

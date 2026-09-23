@@ -296,7 +296,7 @@ SettingsApplyResult SettingsProxyServer::applyInboundWrite(const QString& key, c
 {
     if (isModelOwnedDspSettingsKey(key)) {
         SettingsApplyResult result;
-        result.reason = QStringLiteral("Use the station DSP controls; raw settings writes cannot bypass model validation.");
+        result.reason = modelOwnedSettingsRefusal(key);
         result.restoredValue = m_appSettings.value(key);
         return result;
     }

@@ -7,6 +7,9 @@
 #include <QBuffer>
 #include <QDir>
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTemporaryDir>
 
 using namespace NereusSDR;
@@ -19,6 +22,25 @@ class TestDspAssetStore : public QObject
     {
         const QString path = QFINDTESTDATA("fixtures/dsp/ps3-v2-source-writer.txt");
         QFile file(path);
+        if (!file.open(QIODevice::ReadOnly)) {
+            return {};
+        }
+        return file.readAll();
+    }
+
+    struct PsCorrectionFixture {
+        bool accepted{false};
+    };
+    PsCorrectionFixture importCorrection(DspAssetStore& store) const
+    {
+        return {store.importBytes(DspAssetKind::Ps3Correction, QStringLiteral("correction"),
+                                  validCorrection(), QStringLiteral("radio:alpha")).accepted};
+    }
+
+    // The bundled rnnoise model the desktop app and nereusd both ship.
+    QByteArray bundledSmallNr3Model() const
+    {
+        QFile file(QFINDTESTDATA("../third_party/rnnoise/models/Default_small.bin"));
         if (!file.open(QIODevice::ReadOnly)) {
             return {};
         }
@@ -151,6 +173,101 @@ private slots:
         QVERIFY(restarted.isValid());
         const QDir staging(root.path() + QStringLiteral("/dsp-assets/staging"));
         QCOMPARE(staging.entryList({QStringLiteral("*.part")}, QDir::Files | QDir::Hidden).size(), 0);
+    }
+
+    // R-R3-21: NR3 models are a third asset kind with the same import,
+    // list, resolve, export and restart path as the other two, and the
+    // trial load accepts the bundled model.
+    void nr3ModelImportsListsResolvesExportsAndRestarts()
+    {
+        QTemporaryDir root;
+        QVERIFY(root.isValid());
+        const QByteArray bytes = bundledSmallNr3Model();
+        QVERIFY(!bytes.isEmpty());
+        QVERIFY(bytes.size() <= DspAssetValidation::kMaxNr3ModelBytes);
+        QCOMPARE(DspAssetValidation::sizeLimit(DspAssetKind::Nr3Model),
+                 qint64(16) * 1024 * 1024);
+
+        DspAssetStore store(root.path());
+        QVERIFY2(store.isValid(), qPrintable(store.lastError()));
+        const DspAssetImportResult imported = store.importBytes(
+            DspAssetKind::Nr3Model, QStringLiteral("Small voice"), bytes);
+        QVERIFY2(imported.accepted, qPrintable(imported.error));
+        QCOMPARE(imported.record.kind, DspAssetKind::Nr3Model);
+        QCOMPARE(imported.record.format, QStringLiteral("RNNoise"));
+        QCOMPARE(static_cast<int>(imported.record.kind), 2);
+        QCOMPARE(store.label(imported.record.id), QStringLiteral("Small voice"));
+
+        QString error;
+        QVERIFY(store.resolvePath(imported.record.id, DspAssetKind::NnrModel, {}, &error).isEmpty());
+        const QString path = store.resolvePath(imported.record.id, DspAssetKind::Nr3Model, {}, &error);
+        QVERIFY2(!path.isEmpty(), qPrintable(error));
+        QVERIFY(path.endsWith(QStringLiteral(".rnn")));
+
+        QBuffer exported;
+        QVERIFY(exported.open(QIODevice::WriteOnly));
+        QVERIFY2(store.exportAsset(imported.record.id, &exported, &error), qPrintable(error));
+        QCOMPARE(exported.data(), bytes);
+
+        // Its own manifest array: a Core built before NR3 models reads only
+        // "assets" and would reject the whole manifest on an unknown kind.
+        const PsCorrectionFixture correction = importCorrection(store);
+        QVERIFY(correction.accepted);
+        QFile manifest(root.path() + QStringLiteral("/dsp-assets/assets.json"));
+        QVERIFY(manifest.open(QIODevice::ReadOnly));
+        const QJsonObject object = QJsonDocument::fromJson(manifest.readAll()).object();
+        const QJsonArray shared = object.value(QStringLiteral("assets")).toArray();
+        const QJsonArray nr3 = object.value(QStringLiteral("nr3Assets")).toArray();
+        QCOMPARE(shared.size(), 1);
+        QCOMPARE(shared.first().toObject().value(QStringLiteral("kind")).toString(),
+                 QStringLiteral("ps3-correction"));
+        QCOMPARE(nr3.size(), 1);
+        QCOMPARE(nr3.first().toObject().value(QStringLiteral("kind")).toString(),
+                 QStringLiteral("nr3-model"));
+
+        DspAssetStore restarted(root.path());
+        QVERIFY2(restarted.isValid(), qPrintable(restarted.lastError()));
+        QCOMPARE(restarted.assets().size(), 2);
+        QVERIFY(!restarted.resolvePath(imported.record.id, DspAssetKind::Nr3Model, {}, &error)
+                     .isEmpty());
+    }
+
+    void nr3ModelTrialLoadRejectsJunkWithPlainReasons()
+    {
+        const QByteArray model = bundledSmallNr3Model();
+        QVERIFY(!model.isEmpty());
+        QVERIFY(DspAssetValidation::validateNr3Model(model).accepted);
+
+        const auto text = DspAssetValidation::validateNr3Model(
+            QByteArrayLiteral("This is a text file, not a model at all, honestly.............."));
+        QVERIFY(!text.accepted);
+        QCOMPARE(text.error, QStringLiteral("This file is not an NR3 model."));
+
+        // Right tag, wrong contents: only the trial load can tell.
+        QByteArray tagged(4096, '\x5a');
+        tagged.replace(0, 4, "DNNw");
+        const auto junk = DspAssetValidation::validateNr3Model(tagged);
+        QVERIFY(!junk.accepted);
+        QCOMPARE(junk.error, QStringLiteral("This file is not an NR3 model this Core can use."));
+
+        const auto truncated = DspAssetValidation::validateNr3Model(model.first(model.size() / 2));
+        QVERIFY(!truncated.accepted);
+        QCOMPARE(truncated.error, QStringLiteral("This file is not an NR3 model this Core can use."));
+
+        QByteArray oversized(DspAssetValidation::kMaxNr3ModelBytes + 1, '\0');
+        oversized.replace(0, 4, "DNNw");
+        const auto large = DspAssetValidation::validateNr3Model(oversized);
+        QVERIFY(!large.accepted);
+        QCOMPARE(large.error, QStringLiteral("The NR3 model is larger than 16 MiB."));
+
+        QTemporaryDir root;
+        DspAssetStore store(root.path());
+        QVERIFY(!store.importBytes(DspAssetKind::Nr3Model, QStringLiteral("junk"), tagged).accepted);
+        const DspAssetImportResult scoped = store.importBytes(
+            DspAssetKind::Nr3Model, QStringLiteral("scoped"), model, QStringLiteral("radio:alpha"));
+        QVERIFY(!scoped.accepted);
+        QCOMPARE(scoped.error, QStringLiteral("NR3 models belong to the Core, not to one radio."));
+        QCOMPARE(store.assets().size(), 0);
     }
 
     void validatesFixedWdspPathCapacitiesInEncodedBytes()

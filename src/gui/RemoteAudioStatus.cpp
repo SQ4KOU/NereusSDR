@@ -9,6 +9,9 @@
 
 #include <QStringList>
 
+#include <algorithm>
+#include <utility>
+
 namespace NereusSDR {
 
 RemoteAudioStatus::State deriveRemoteAudioState(const RemoteAudioStatusInputs& in)
@@ -127,23 +130,42 @@ QString remoteAudioProblemText(RemoteAudioReceiver::Fault fault)
     return {};
 }
 
+namespace {
+QString channelWords(int channels)
+{
+    if (channels == 2) {
+        return QStringLiteral("stereo");
+    }
+    if (channels == 1) {
+        return QStringLiteral("mono");
+    }
+    return QStringLiteral("%1\u00A0channels").arg(channels);
+}
+} // namespace
+
 QString remoteAudioCodecText(const RemoteAudioStatus& status)
 {
     if (!status.detailNegotiated) {
         return QStringLiteral("Not reported by this Core");
     }
+    if (status.losslessEncoder) {
+        const PcmEncoderProfile& lossless = *status.losslessEncoder;
+        const qint64 packetMs = lossless.sampleRate > 0
+            ? qint64(lossless.frameSamples) * 1000 / lossless.sampleRate : 0;
+        const qint64 kbps = qint64(lossless.sampleRate) * lossless.channels
+            * lossless.bitsPerSample / 1000;
+        // U+00A0 between each number and its unit keeps them on one line.
+        return QStringLiteral("Lossless %1, %2-bit, %3\u00A0kbit/s, %4\u00A0ms packets")
+            .arg(channelWords(lossless.channels))
+            .arg(lossless.bitsPerSample)
+            .arg(kbps)
+            .arg(packetMs);
+    }
     if (!status.encoder) {
         return QStringLiteral("Audio is off");
     }
     const OpusEncoderProfile& profile = *status.encoder;
-    QString channels;
-    if (profile.channels == 2) {
-        channels = QStringLiteral("stereo");
-    } else if (profile.channels == 1) {
-        channels = QStringLiteral("mono");
-    } else {
-        channels = QStringLiteral("%1\u00A0channels").arg(profile.channels);
-    }
+    const QString channels = channelWords(profile.channels);
     const qint64 packetMs = profile.sampleRate > 0
         ? qint64(profile.frameSamples) * 1000 / profile.sampleRate : 0;
     // A target, not measured traffic: constrained VBR spends less on quiet audio.
@@ -155,8 +177,57 @@ QString remoteAudioCodecText(const RemoteAudioStatus& status)
         .arg(profile.audioBandwidthHz / 1000);
 }
 
+QString remoteAudioProfileName(RemoteAudioProfile profile)
+{
+    return profile == RemoteAudioProfile::Lossless ? QStringLiteral("Lossless")
+                                                   : QStringLiteral("Opus");
+}
+
+QString remoteAudioQualityReasonText(RemoteAudioQualityReason reason)
+{
+    switch (reason) {
+    case RemoteAudioQualityReason::CoreCannotSend:
+        return QStringLiteral("This Core cannot send lossless audio.");
+    case RemoteAudioQualityReason::CoreNotAllowed:
+        return QStringLiteral("This Core does not allow lossless audio.");
+    case RemoteAudioQualityReason::ConnectionUnavailable:
+        return QStringLiteral("This connection could not set up lossless audio; staying on Opus.");
+    case RemoteAudioQualityReason::NetworkTooSlow:
+        return QStringLiteral("The network could not carry lossless audio; staying on Opus.");
+    }
+    return {};
+}
+
+QString remoteAudioQualityText(const RemoteAudioStatus& status)
+{
+    if (status.runningProfile) {
+        return remoteAudioProfileName(*status.runningProfile);
+    }
+    return QStringLiteral("%1 (chosen)").arg(remoteAudioProfileName(status.chosenProfile));
+}
+
+QString remoteAudioDelayText(const AudioDelayEstimate& estimate)
+{
+    const AudioDelayDisplay shown = roundAudioDelay(estimate.delayMs, estimate.boundMs);
+    // U+00A0 between each number and its unit keeps them on one line.
+    const QString text = QStringLiteral("%1\u00A0ms \u00B1 %2\u00A0ms")
+                             .arg(shown.valueMs).arg(shown.accuracyMs);
+    return estimate.includesDevice ? text
+                                   : text + QStringLiteral(", not counting the speaker device");
+}
+
+QString remoteAudioDeliveryText(const AudioDelayEstimate& estimate)
+{
+    if (!estimate.deliveryMs || !estimate.deliveryBoundMs) {
+        return {};
+    }
+    const AudioDelayDisplay shown = roundAudioDelay(*estimate.deliveryMs, *estimate.deliveryBoundMs);
+    return QStringLiteral("%1\u00A0ms \u00B1 %2\u00A0ms").arg(shown.valueMs).arg(shown.accuracyMs);
+}
+
 QString formatRemoteAudioDetails(const RemoteAudioStatus& status,
-                                 const RemoteAudioReceiverTelemetry& playback)
+                                 const RemoteAudioReceiverTelemetry& playback,
+                                 const RemoteAudioDelayReport& delay)
 {
     using State = RemoteAudioStatus::State;
     QStringList lines;
@@ -164,7 +235,13 @@ QString formatRemoteAudioDetails(const RemoteAudioStatus& status,
     if (status.problem) {
         lines << QStringLiteral("Problem: %1").arg(remoteAudioProblemText(*status.problem));
     }
-    lines << QStringLiteral("Codec: %1").arg(remoteAudioCodecText(status));
+    if (status.profileChoiceAvailable || status.chosenProfile == RemoteAudioProfile::Lossless) {
+        lines << QStringLiteral("Audio quality: %1").arg(remoteAudioQualityText(status));
+        if (status.qualityReason) {
+            lines << remoteAudioQualityReasonText(*status.qualityReason);
+        }
+    }
+    lines << QStringLiteral("Audio format: %1").arg(remoteAudioCodecText(status));
     lines << QStringLiteral("Output: %1 (selected)").arg(status.selectedOutput);
 
     const bool showHealth = status.state != State::NotConnected
@@ -183,6 +260,12 @@ QString formatRemoteAudioDetails(const RemoteAudioStatus& status,
             ? QStringLiteral("Speaker buffer: %1\u00A0ms on this computer")
                   .arg(qRound(*playback.speakerQueuedMs))
             : QStringLiteral("Speaker buffer: not measured yet"));
+        // R-R3-35: only a Core that answers clock probes adds this line.
+        if (delay.measurable) {
+            lines << (delay.estimate
+                ? QStringLiteral("Audio delay: %1").arg(remoteAudioDelayText(*delay.estimate))
+                : QStringLiteral("Audio delay: not measured yet"));
+        }
     }
     return lines.join(QLatin1Char('\n'));
 }
@@ -196,6 +279,84 @@ bool remoteAudioFailureRecovered(const RemoteAudioFailure& failure, quint32 epoc
         && context && isNewerGeneration(context->generation, failure.contextGeneration)
         && playback.running && playback.generation > failure.receiverGeneration
         && playback.deviceConsumedFrames > 0;
+}
+
+void RemoteAudioLinkTrial::begin(qint64 nowMs)
+{
+    *this = RemoteAudioLinkTrial{};
+    m_active = true;
+    m_windowStartMs = nowMs;
+}
+
+void RemoteAudioLinkTrial::end()
+{
+    *this = RemoteAudioLinkTrial{};
+}
+
+RemoteAudioLinkTrial::Verdict RemoteAudioLinkTrial::observe(
+    qint64 nowMs, const RemoteAudioReceiverTelemetry& playback)
+{
+    if (!m_active) {
+        return Verdict::Continue;
+    }
+    if (playback.running) {
+        if (m_generation != playback.generation) {
+            // A fresh receiver counts from zero.
+            m_generation = playback.generation;
+            m_base = {};
+        }
+        const Counters now{playback.expectedPackets, playback.missingPackets,
+                           playback.concealedPackets,
+                           playback.decodedPackets + playback.concealedPackets};
+        const auto grow = [](quint64 value, quint64 base) {
+            return value > base ? value - base : 0;
+        };
+        m_window.expected += grow(now.expected, m_base.expected);
+        m_window.missing += grow(now.missing, m_base.missing);
+        m_window.concealed += grow(now.concealed, m_base.concealed);
+        m_window.played += grow(now.played, m_base.played);
+        m_base = now;
+    }
+    if (nowMs - m_windowStartMs < kWindowMs) {
+        return Verdict::Continue;
+    }
+    const Counters window = std::exchange(m_window, Counters{});
+    m_windowStartMs = nowMs;
+    if (window.expected == 0 && window.played == 0) {
+        // Nothing played this window (between contexts): no verdict on it.
+        return Verdict::Continue;
+    }
+    const double missing = window.expected > 0
+        ? double(window.missing) / double(window.expected) : 0.0;
+    const double concealed = window.played > 0
+        ? double(window.concealed) / double(window.played) : 0.0;
+    const double loss = std::max(missing, concealed);
+    m_lastWindowLoss = loss;
+    const bool first = m_closedWindows == 0;
+    ++m_closedWindows;
+    if (first) {
+        return loss > kTrialLossLimit ? Verdict::Failed : Verdict::Continue;
+    }
+    m_badWindows = loss > kSustainedLossLimit ? m_badWindows + 1 : 0;
+    return m_badWindows >= kSustainedWindows ? Verdict::Failed : Verdict::Continue;
+}
+
+RemoteAudioLinkTrial::Verdict RemoteAudioLinkTrial::noteInterruption(qint64 nowMs)
+{
+    if (!m_active) {
+        return Verdict::Continue;
+    }
+    if (m_closedWindows == 0) {
+        m_interruptions.push_back(nowMs);
+        return int(m_interruptions.size()) >= kTrialRestartLimit ? Verdict::Failed
+                                                                 : Verdict::Continue;
+    }
+    while (!m_interruptions.empty() && nowMs - m_interruptions.front() >= kRestartSpanMs) {
+        m_interruptions.pop_front();
+    }
+    m_interruptions.push_back(nowMs);
+    return int(m_interruptions.size()) >= kSustainedRestartLimit ? Verdict::Failed
+                                                                 : Verdict::Continue;
 }
 
 } // namespace NereusSDR

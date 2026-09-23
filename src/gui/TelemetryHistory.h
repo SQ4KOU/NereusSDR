@@ -22,6 +22,9 @@
 //   2026-09-23 -- R-R3-40: one processing-load metric per receiver slot
 //                 by J.J. Boyd (KG4VCF), with AI-assisted implementation
 //                 via Anthropic Claude Code.
+//   2026-09-23 -- R-R3-35/33: measured audio delay, its accuracy and the
+//                 delivery delay by J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -61,7 +64,7 @@ public:
         CoreGuiTxKbps,
         CoreGuiTotalKbps,
         AudioRtpRxKbps,
-        OpusPayloadRxKbps,
+        AudioPayloadRxKbps,
         SpeakerBufferMs,
         // The Core computer's own load (R-R3-32, R-R3-33). Memory is stored
         // in MiB; each value is absent when the Core did not measure it.
@@ -78,6 +81,13 @@ public:
         CoreReceiverLoadPercentSlot2,
         CoreReceiverLoadPercentSlot3,
         CoreReceiverLoadPercentSlot4,
+        // R-R3-35: the measured audio delay (Core capture to playout here),
+        // its accuracy (the +- half-width, never a delay) and the delivery
+        // delay (Core capture to leaving the reorder buffer). Absent while
+        // not measured.
+        AudioDelayMs,
+        AudioDelayAccuracyMs,
+        AudioDeliveryDelayMs,
         Count,
     };
 

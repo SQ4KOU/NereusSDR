@@ -19,6 +19,7 @@
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "core/settings/SettingsProxy.h"
+#include "OperatorWording.h"
 #include "fakes/LoopbackTransport.h"
 #include "gui/RemoteDiagnosticsDialog.h"
 #include "gui/RemoteTelemetryController.h"
@@ -72,7 +73,8 @@ private slots:
         QTRY_VERIFY(dialog.controller() == nullptr);
         auto* detail = dialog.findChild<QLabel*>(QStringLiteral("remoteDiagnosticsDetail"));
         QVERIFY(detail);
-        QVERIFY(detail->text().contains(QStringLiteral("unavailable")));
+        QVERIFY(detail->text().contains(QStringLiteral("not available")));
+        QVERIFY(OperatorWording::isPlain(detail->text()));
     }
 
     void authenticatedTelemetryDrivesVisibleProductionGraphs()
@@ -127,7 +129,7 @@ private slots:
         guiWire->observation.acceptedPayloadBytes += 4000;
         media->traffic.receivedDisplayPayloadBytes += 100000;
         media->traffic.receivedRtpBytes += 3500;
-        playback.receivedOpusPayloadBytes += 3000;
+        playback.receivedAudioPayloadBytes += 3000;
         playback.speakerQueuedMs = 20.0;
         playback.decodedPackets = 25;
         playback.concealedPackets = 2;
@@ -144,12 +146,12 @@ private slots:
         auto* totalGraph = dynamic_cast<TimeSeriesGraphWidget*>(dialog.findChild<QWidget*>(
             QStringLiteral("remoteTotalTrafficGraph")));
         auto* opusGraph = dynamic_cast<TimeSeriesGraphWidget*>(dialog.findChild<QWidget*>(
-            QStringLiteral("remoteOpusTrafficGraph")));
+            QStringLiteral("remoteAudioTrafficGraph")));
         auto* bufferGraph = dynamic_cast<TimeSeriesGraphWidget*>(dialog.findChild<QWidget*>(
             QStringLiteral("remoteSpeakerBufferGraph")));
         QVERIFY(totalGraph && opusGraph && bufferGraph);
         const auto* total = namedSeries(totalGraph, QStringLiteral("Total"));
-        const auto* opus = namedSeries(opusGraph, QStringLiteral("Opus payload"));
+        const auto* opus = namedSeries(opusGraph, QStringLiteral("Audio content"));
         const auto* buffer = namedSeries(bufferGraph, QStringLiteral("Speaker buffer"));
         QVERIFY(total && opus && buffer);
         QCOMPARE(total->unitSuffix, QStringLiteral(" kbps"));
@@ -159,7 +161,11 @@ private slots:
         QCOMPARE(opus->points.last().y(), 24.0);
         QCOMPARE(namedSeries(opusGraph, QStringLiteral("Audio packets"))->points.last().y(), 28.0);
         QCOMPARE(buffer->points.last().y(), 20.0);
-        QVERIFY(totalGraph->toolTip().contains(QStringLiteral("Opus is included")));
+        // R-R3-23: audio traffic is named for what it is, Opus or lossless.
+        QVERIFY(totalGraph->toolTip().contains(QStringLiteral("audio included whether Opus or lossless")));
+        QVERIFY(opusGraph->toolTip().contains(QStringLiteral("Opus or lossless")));
+        QVERIFY(!opusGraph->toolTip().contains(QStringLiteral("RTP")));
+        QVERIFY(!opusGraph->toolTip().contains(QStringLiteral("payload")));
         QVERIFY(bufferGraph->toolTip().contains(QStringLiteral("Excludes network")));
         auto* radioGraph = dynamic_cast<TimeSeriesGraphWidget*>(dialog.findChild<QWidget*>(
             QStringLiteral("remoteRadioLinkGraph")));
@@ -188,8 +194,8 @@ private slots:
         QCOMPARE(radioRx->points.constLast().y(), 12.5);
         QCOMPARE(radioTx->points.constLast().y(), 0.1);
 
-        const auto* controlRx = namedSeries(controlGraph, QStringLiteral("Control RX"));
-        const auto* controlTx = namedSeries(controlGraph, QStringLiteral("Control TX"));
+        const auto* controlRx = namedSeries(controlGraph, QStringLiteral("Control received"));
+        const auto* controlTx = namedSeries(controlGraph, QStringLiteral("Control sent"));
         QVERIFY(controlRx && controlTx);
         QVERIFY(!controlRx->points.isEmpty() && !controlTx->points.isEmpty());
         QCOMPARE(controlRx->unitSuffix, QStringLiteral(" kbit/s"));
@@ -205,6 +211,36 @@ private slots:
         QCOMPARE(coreRtt->points.constLast().y(), 83.0);
         QVERIFY(rttGraph->toolTip().contains(QStringLiteral("hold the last measurement")));
 
+        // R-R3-21: every series name, graph explanation and detail line the
+        // window shows is in user words.
+        int graphs = 0;
+        int seriesChecked = 0;
+        int graphTips = 0;
+        for (QWidget* widget : dialog.findChildren<QWidget*>()) {
+            const auto* graph = dynamic_cast<const TimeSeriesGraphWidget*>(widget);
+            if (!graph) { continue; }
+            ++graphs;
+            for (const TimeSeriesGraphWidget::Series& series : graph->series()) {
+                QVERIFY2(OperatorWording::isPlain(series.label), qPrintable(series.label));
+                ++seriesChecked;
+            }
+            if (!graph->toolTip().isEmpty()) {
+                QVERIFY2(OperatorWording::isPlain(graph->toolTip()), qPrintable(graph->toolTip()));
+                ++graphTips;
+            }
+        }
+        // Never passes on nothing (fix wave M1).
+        QVERIFY2(graphs >= 4, qPrintable(QString::number(graphs)));
+        QVERIFY2(seriesChecked >= 8, qPrintable(QString::number(seriesChecked)));
+        QVERIFY2(graphTips >= 2, qPrintable(QString::number(graphTips)));
+        const auto* detailLabel = dialog.findChild<QLabel*>(QStringLiteral("remoteDiagnosticsDetail"));
+        QVERIFY(detailLabel);
+        const QStringList detailLines = detailLabel->text().split(QLatin1Char('\n'));
+        QVERIFY2(detailLines.size() >= 10, qPrintable(detailLabel->text()));
+        for (const QString& line : detailLines) {
+            QVERIFY2(OperatorWording::isPlain(line), qPrintable(line));
+        }
+
         const QPixmap rendered = dialog.grab();
         QVERIFY(!rendered.isNull());
 
@@ -216,8 +252,8 @@ private slots:
         QVERIFY(total);
         QCOMPARE(total->unitSuffix, QStringLiteral(" Mbps"));
         QCOMPARE(total->points.last().y(), 1.6);
-        QCOMPARE(namedSeries(totalGraph, QStringLiteral("Core → GUI received"))->unitSuffix, total->unitSuffix);
-        QCOMPARE(namedSeries(totalGraph, QStringLiteral("GUI → Core outgoing"))->unitSuffix, total->unitSuffix);
+        QCOMPARE(namedSeries(totalGraph, QStringLiteral("Core → app received"))->unitSuffix, total->unitSuffix);
+        QCOMPARE(namedSeries(totalGraph, QStringLiteral("App → Core outgoing"))->unitSuffix, total->unitSuffix);
 
         client.disconnectFromStation(QStringLiteral("test reconnect"));
         QCoreApplication::processEvents();
@@ -522,6 +558,81 @@ private slots:
         refresh();
         QVERIFY(!label->isHidden());
         QVERIFY(graph->isHidden());
+        client.disconnectFromStation(QStringLiteral("done"));
+    }
+
+    // R-R3-35: the Round trip tab graphs the measured audio delay, its
+    // delivery part and its accuracy, each labelled as what it is; the
+    // tooltip says the accuracy is not a delay. A reconnect leaves a gap,
+    // and the detail text shows the figure.
+    void audioDelayGraphShowsTheMeasuredDelayAndGapsOnReconnect()
+    {
+        QTemporaryDir directory;
+        AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        StationServer server(&station, settings, directory.path());
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        qint64 now = 10000;
+        RemoteAudioReceiverTelemetry playback;
+        playback.running = true;
+        playback.generation = 2;
+        RemoteAudioDelayReport delay;
+        delay.measurable = true;
+        RemoteTelemetryController controller(&client, nullptr, nullptr,
+            [&] { return now; }, [&] { return playback; }, {}, [&] { return delay; });
+        const auto connect = [&] {
+            auto* gui = new ObservedLoopback;
+            auto* core = new Test::LoopbackTransport(QStringLiteral("Core"));
+            gui->linkTo(core);
+            server.acceptTransport(core);
+            client.startSession(gui, server.token());
+            QTRY_VERIFY(client.isHandshakeComplete());
+        };
+        connect();
+        delay.estimate = AudioDelayEstimate{85.2, 0.6, false, 61.0, 0.6};
+        now += 1000;
+        controller.sampleNow();
+        delay.estimate = AudioDelayEstimate{86.0, 0.5, false, 62.0, 0.5};
+        now += 1000;
+        controller.sampleNow();
+
+        RemoteDiagnosticsDialog dialog(&controller);
+        dialog.show();
+        QTRY_VERIFY(dialog.isVisible());
+        auto* selector = dialog.findChild<QComboBox*>(QStringLiteral("remoteDiagnosticsRange"));
+        QVERIFY(selector);
+        selector->setCurrentIndex(selector->findData(60));
+        auto* graph = dynamic_cast<TimeSeriesGraphWidget*>(dialog.findChild<QWidget*>(
+            QStringLiteral("remoteAudioDelayGraph")));
+        QVERIFY(graph);
+        const auto* delayed = namedSeries(graph, QStringLiteral("Audio delay"));
+        const auto* delivery = namedSeries(graph, QStringLiteral("Delivery"));
+        const auto* accuracy = namedSeries(graph, QString::fromUtf8("Accuracy (\u00B1)"));
+        QVERIFY(delayed && delivery && accuracy);
+        QCOMPARE(delayed->unitSuffix, QStringLiteral(" ms"));
+        QCOMPARE(delayed->points.constLast().y(), 86.0);
+        QCOMPARE(delivery->points.constLast().y(), 62.0);
+        QCOMPARE(accuracy->points.constLast().y(), 0.5);
+        QVERIFY(graph->toolTip().contains(QStringLiteral("not a delay")));
+        auto* detail = dialog.findChild<QLabel*>(QStringLiteral("remoteDiagnosticsDetail"));
+        QVERIFY(detail);
+        QVERIFY2(detail->text().contains(QString::fromUtf8(
+            "Audio delay: 86\u00A0ms \u00B1 1\u00A0ms, not counting the speaker device")),
+                 qPrintable(detail->text()));
+
+        client.disconnectFromStation(QStringLiteral("test reconnect"));
+        QCoreApplication::processEvents();
+        ++now;
+        connect();
+        now += 1000;
+        controller.sampleNow();
+        QVERIFY(QMetaObject::invokeMethod(&dialog, "refresh", Qt::DirectConnection));
+        delayed = namedSeries(graph, QStringLiteral("Audio delay"));
+        QVERIFY(delayed && delayed->points.size() >= 3);
+        // The first figure after the reconnect starts a new line.
+        QVERIFY(delayed->breakBefore.at(2));
         client.disconnectFromStation(QStringLiteral("done"));
     }
 };

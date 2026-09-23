@@ -10,6 +10,7 @@
 #include "core/AppSettings.h"
 #include "core/ConnectionState.h"
 #include "core/WdspTypes.h"
+#include "gui/OperatorReasonText.h"
 #include "gui/StyleConstants.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -218,7 +219,7 @@ void NnrControls::buildUi(Presentation presentation)
 
     auto* diagnostics = new QGroupBox(tr("Diagnostics"), this);
     auto* diagnosticLayout = new QVBoxLayout(diagnostics);
-    m_sessionBadge = new QLabel(tr("SESSION ONLY — resets when the station session changes"), diagnostics);
+    m_sessionBadge = new QLabel(tr("TEMPORARY: resets when this app reconnects to the Core"), diagnostics);
     m_sessionBadge->setObjectName(QStringLiteral("nnrSessionOnlyBadge"));
     m_sessionBadge->setStyleSheet(QStringLiteral(
         "QLabel { color: #ffd166; background: #302810; border: 1px solid #806820;"
@@ -254,7 +255,7 @@ void NnrControls::buildUi(Presentation presentation)
         2, tr("Diagnostic filter: keep the lower half of the network bins and zero the upper half."),
         Qt::ToolTipRole);
     m_testMode->setToolTip(
-        tr("Temporary NNR processing mode for this station session."));
+        tr("Temporary NNR processing mode until this app reconnects to the Core."));
     m_outputMode = new QComboBox(diagnostics);
     m_outputMode->setObjectName(QStringLiteral("nnrOutputModeCombo"));
     m_outputMode->addItem(tr("Duplicate I/Q"), 0);
@@ -265,8 +266,8 @@ void NnrControls::buildUi(Presentation presentation)
     m_outputMode->setItemData(
         1, tr("Write the NNR result to I and write zero to Q."), Qt::ToolTipRole);
     m_outputMode->setToolTip(
-        tr("Temporary output mapping for this station session."));
-    m_applyDiagnostic = new QPushButton(tr("Apply for session"), diagnostics);
+        tr("Temporary output mapping until this app reconnects to the Core."));
+    m_applyDiagnostic = new QPushButton(tr("Apply until reconnect"), diagnostics);
     m_applyDiagnostic->setObjectName(QStringLiteral("nnrApplyDiagnosticButton"));
     diagnosticActions->addWidget(m_testMode);
     diagnosticActions->addWidget(m_outputMode);
@@ -428,11 +429,11 @@ void NnrControls::setInteractive(bool enabled)
 void NnrControls::refresh()
 {
     if (!m_slice) {
-        m_runtime->setText(tr("binding closed"));
+        m_runtime->setText(tr("closed"));
         m_models->setText(QStringLiteral("—"));
         m_rateLatency->setText(QStringLiteral("—"));
         m_source->setText(QStringLiteral("—"));
-        m_status->setText(tr("Reopen NNR controls for the current station session."));
+        m_status->setText(tr("Reopen NNR controls to see this receiver again."));
         m_limitRow->setVisible(false);
         return;
     }
@@ -478,7 +479,7 @@ void NnrControls::refresh()
                           .arg(yesNo(m_slice->nnrStandardAvailable()),
                                yesNo(m_slice->nnrPremiumAvailable()))
                           .arg(m_slice->nnrActualModelSlot()));
-    m_rateLatency->setText(tr("DSP %1 Hz / network %2 Hz (%3) · %4 samples · %5 ms")
+    m_rateLatency->setText(tr("NNR processing %1 Hz / model %2 Hz (%3) · %4 samples · %5 ms")
                                .arg(m_slice->nnrDspRateHz())
                                .arg(m_slice->nnrNetworkRateHz())
                                .arg(m_slice->nnrRateSupported() ? tr("supported") : tr("unsupported"))
@@ -489,8 +490,12 @@ void NnrControls::refresh()
     const QString profiling = m_slice->nnrProfilingAvailable()
         ? tr("Profiling available. ")
         : tr("Profiling unavailable in this build. ");
-    m_status->setText(profiling + (!m_slice->nnrLastError().isEmpty()
-        ? m_slice->nnrLastError() : m_slice->nnrStatus()));
+    // A refusal or status from the Core is shown in user words; the raw
+    // text is logged (R-R3-21).
+    const QString detail = !m_slice->nnrLastError().isEmpty()
+        ? m_slice->nnrLastError() : m_slice->nnrStatus();
+    m_status->setText(profiling
+        + (detail.isEmpty() ? detail : OperatorReasonText::forDisplay(detail)));
     setComboData(m_testMode, m_slice->nnrTestMode());
     setComboData(m_outputMode, m_slice->nnrOutputMode());
     m_applyDiagnostic->setEnabled(m_slice->nnrReady());
