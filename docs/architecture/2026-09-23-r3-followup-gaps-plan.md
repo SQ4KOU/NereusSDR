@@ -319,3 +319,45 @@ ctest --test-dir /Users/j.j.boyd/.codex/worktrees/nereus-r2-integration/NereusSD
 **Execution note (advisory):** opus.
 
 - [ ] **Step 1:** Implement each item with its test; run the commands; commit.
+
+## Task 8: Cleanups from the follow-up review
+
+Added after the follow-up batch review (verdict Ready to merge: Yes; minors).
+
+**Requirements:** R-R3-01, R-R3-09, R-R3-21, R-R3-37.
+
+**Files:**
+- Modify: a core header shared by `src/core/session/media/DaemonMediaController.cpp` and
+  `src/gui/RemoteMediaController.cpp` (retirement reason constants), `src/models/RadioModel.cpp`
+  (teardown releases a manual MOX; mode-group mapping reuse), `src/core/RxChannel.{h,cpp}` (export the
+  mode-group helper if that is the cleanest single source), `src/gui/setup/DspOptionsPage.cpp`,
+  `docs/architecture/2026-09-20-remote-daemon-r3-verification/remote-controls.md`
+- Test: `tests/tst_remote_media_controller.cpp`, `tests/tst_daemon_media_controller.cpp`,
+  `tests/tst_radio_model_set_tune.cpp`, `tests/tst_tx_applet_tune_state.cpp`
+
+**Acceptance:**
+- The Core's "slice removed" and "slice stream binding changed" retirement reasons (and "source retune no
+  longer covers requested crop" if the window treats it the same way) come from named constants in one core
+  header used by both the Core's senders and the window's filter; the window test builds its payload from the
+  same constants.
+- `sharedEngineRegrantsEverySurvivorWhenItsSizerLeaves` gains a non-held neighbour on the grown engine with its
+  one expected renewal (a real bin-count change), recording the decision.
+- A disconnect during Tune leaves the TUNE button reading "TUNE": `teardownConnection` releases a manual MOX
+  through the normal Tune-off path before it clears the tuning state; a test covers disconnect mid-Tune. If a
+  refused key leaves `PttMode::Manual` set, clear it on the refusal path with its test (say what Thetis does if
+  the change touches ported logic; source-first rules apply).
+- The control matrix records that the Core applies accepted RX DSP Options writes and removes after the 50 ms
+  coalesce (hardware S1 pending) and lists the remove-refusal and apply tests.
+- One mode-group mapping serves RadioModel, RxChannel and DspOptionsPage (or a test pins the three copies
+  equal if a shared helper would cross the core/GUI boundary); the unused raw `new QApplication` in
+  `tests/tst_tx_applet_tune_state.cpp` is removed.
+
+**Verification:**
+```sh
+cmake --build /Users/j.j.boyd/.codex/worktrees/nereus-r2-integration/NereusSDR/build-integration --target tst_remote_media_controller tst_daemon_media_controller tst_radio_model_set_tune tst_tx_applet_tune_state tst_dsp_options_per_mode_apply tst_capture_admission -j6
+ctest --test-dir /Users/j.j.boyd/.codex/worktrees/nereus-r2-integration/NereusSDR/build-integration -R '^(tst_remote_media_controller|tst_daemon_media_controller|tst_radio_model_set_tune|tst_tx_applet_tune_state|tst_dsp_options_per_mode_apply|tst_capture_admission)$' --no-tests=error --output-on-failure
+```
+
+**Execution note (advisory):** opus (touches the Tune path).
+
+- [ ] **Step 1:** Implement each item with its test; run the commands; commit.
