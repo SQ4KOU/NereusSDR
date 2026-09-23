@@ -171,8 +171,9 @@ by name, detach a parent native-opener thread, or call Pa_Terminate across one.
 
 Build `nereus-audio-capture` from the same revision as its parent. On macOS,
 stage it in the app's Helpers directory with correct private-library resolution;
-sign nested content before the containing bundle. Install it alongside nereusd
-for a standalone daemon and package it with the desktop on Linux/Windows.
+sign nested content before the containing bundle. Package it with the desktop
+on Linux/Windows. The nereusd install component carries no helper, since the
+daemon never opens a microphone.
 
 Permission identity must be observed for the signed application and its helper,
 including deny/retry behavior. Apple documents the input entitlement and usage

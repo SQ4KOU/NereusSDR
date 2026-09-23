@@ -512,8 +512,9 @@ R-R3-10 (self-contained desktop).
   bundle passes. `otool -L` of the copied helper shows only system,
   Qt and `@rpath` NereusCore dependencies that resolve inside the bundle.
 - Linux: a default-component `install(TARGETS nereus-audio-capture RUNTIME
-  DESTINATION ${CMAKE_INSTALL_BINDIR})` so the AppImage includes it, and the
-  same binary installed by the `nereusd` component beside `nereusd`.
+  DESTINATION ${CMAKE_INSTALL_BINDIR})` so the AppImage includes it. The
+  `nereusd` install component carries no helper: the daemon never opens a
+  microphone and a daemon-only build does not produce the helper.
 - Windows: POST_BUILD copy next to `NereusSDR.exe`; `release.yml` copies it
   into `deploy\` with the same `Test-Path` failure guard as `rade.dll`.
 - `release.yml` macOS signs `Contents/Helpers/nereus-audio-capture` with the

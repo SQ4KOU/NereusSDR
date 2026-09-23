@@ -2464,23 +2464,22 @@ install(TARGETS nereusd
 )
 
 # nereus-audio-capture -- the microphone helper (R-R3-36). locateCaptureHelper()
-# looks for it beside its parent executable, so it installs to the same
-# bindir as each parent:
-#   - default component (not macOS, where POST_BUILD places it inside
-#     NereusSDR.app/Contents/Helpers): beside NereusSDR, so the Linux
-#     AppImage's "cmake --install" into AppDir picks it up;
-#   - nereusd component: beside nereusd for a standalone daemon.
-# Two rules for one target are deliberate; each binds its own component.
+# looks for it beside its parent executable, so the default component
+# (not macOS, where POST_BUILD places it inside NereusSDR.app/Contents/Helpers)
+# installs it beside NereusSDR, and the Linux AppImage's "cmake --install"
+# into AppDir picks it up.
+#
+# The nereusd component deliberately carries no helper. The daemon never
+# opens a microphone (DaemonApp calls setPcCaptureAllowed(false)), nereusd
+# does not depend on the helper target, and a daemon-only build
+# ("cmake --build --target nereusd") never produces the binary, so an
+# install rule here would make "cmake --install --component nereusd" fail
+# and would ship a microphone helper the daemon cannot use.
 if(NOT APPLE)
     install(TARGETS nereus-audio-capture
         RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
     )
 endif()
-install(TARGETS nereus-audio-capture
-    RUNTIME DESTINATION ${CMAKE_INSTALL_BINDIR}
-    COMPONENT nereusd
-    EXCLUDE_FROM_ALL
-)
 
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     # Ask pkg-config for systemd's own vendor unit directory when
