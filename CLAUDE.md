@@ -587,6 +587,7 @@ preferences. OpenHPSDR radios don't store per-slice state.
 | [2026-08-02-bottom-banner-and-pan-menu-design.md](docs/architecture/2026-08-02-bottom-banner-and-pan-menu-design.md) | Bottom Banner Cleanup + AetherSDR-Shaped Pan Menu design spec: single `ChromeBarController` layout authority replacing 3 competing responsive systems, 9-layout pan menu thumbnail grid | **Complete (pending PR merge)** |
 | [2026-08-02-bottom-banner-and-pan-menu-plan.md](docs/architecture/2026-08-02-bottom-banner-and-pan-menu-plan.md) | Bottom Banner Cleanup + Pan Menu: 14-task implementation plan (Phase A ChromeBarController + fold ladder, Phase B pan-menu thumbnail grid) plus a final fix wave closing the merge-blocking audit findings | **Complete (14/14 tasks + fix wave; pending PR merge)** |
 | [2026-08-02-bottom-banner-and-pan-menu-verification/README.md](docs/architecture/2026-08-02-bottom-banner-and-pan-menu-verification/README.md) | Bottom Banner + Pan Menu: 7-row bench verification matrix | Matrix drafted (pending live G2 + HL2 hardware) |
+| [2026-09-23-iphone-app-design.md](docs/architecture/2026-09-23-iphone-app-design.md) | NereusSDR for iPhone and iPad: native Swift client of the remote station (`nereusd`), receive and transmit in the first App Store release; 34 decisions, R-IOS-01 to R-IOS-29, every screen pictured from the confirmed mockup board | Spec drafted (pending JJ review) |
 
 ### Protocol Reference (`docs/protocols/`)
 
