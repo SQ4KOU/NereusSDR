@@ -333,6 +333,8 @@ private slots:
     void receiveOnlyPolicySurvivesRadioTeardown();
     void nr3ModelChoiceLoadsOnceOnTheCoreAndMirrors();
     void nr3CannotRunIsRefusedOnTheCoreAndInTheWindow();
+    void savedNr3OnACoreWithNoModelShowsOffInTheWindow();
+    void nr3CannotRunEndsWithTheSession();
     void olderCoreLeavesTheNr3ModelUnchangeable();
     void olderAppNr3ModelPathWriteIsRefused();
     void remoteNotchEditKeepsTheCoresWholeList();
@@ -2927,6 +2929,101 @@ void TstStationSession::nr3CannotRunIsRefusedOnTheCoreAndInTheWindow()
     windowSlice->setActiveNr(NrSlot::Off);
     QTRY_COMPARE(coreSlice->activeNr(), NrSlot::Off);
     AppSettings::instance().remove(QStringLiteral("DspAssets/Nr3Model"));
+}
+
+void TstStationSession::savedNr3OnACoreWithNoModelShowsOffInTheWindow()
+{
+    // Follow-up item 1 (R-R3-21). NR3 was saved on for the radio, then the
+    // Core lost its NR3 model files. The Core's slice comes up with NR off
+    // and the reason set, and a window attaching to it shows NR off.
+    DspAssetService::setBundledNr3ModelPathsForTest([](const QString&) { return QString(); });
+    const QString prefix = QStringLiteral("hardware/AA:BB:CC:DD:EE:01/slices/0/nnr/");
+    const auto cleanup = qScopeGuard([prefix] {
+        DspAssetService::setBundledNr3ModelPathsForTest({});
+        auto& settings = AppSettings::instance();
+        for (const QString& key : settings.allKeys()) {
+            if (key.startsWith(prefix)) { settings.remove(key); }
+        }
+    });
+    AppSettings::instance().setValue(prefix + QStringLiteral("NrActive"),
+                                     static_cast<int>(NrSlot::NR3));
+    const QString none =
+        QStringLiteral("No NR3 model file was found on this Core, so NR3 cannot run.");
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+    auto stationModel = makeStationRadioModel(0);
+    SliceModel* coreSlice = stationModel->slices().constFirst();
+    QCOMPARE(coreSlice->activeNr(), NrSlot::Off);
+    QCOMPARE(coreSlice->nnrLastError(), none);
+
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
+    stationEnd->linkTo(clientEnd);
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    client.startSession(clientEnd, server.token());
+    server.acceptTransport(stationEnd);
+    QTRY_COMPARE(completed.count(), 1);
+    QTRY_VERIFY(!clientModel.slices().isEmpty());
+    SliceModel* windowSlice = clientModel.slices().constFirst();
+    QCOMPARE(windowSlice->activeNr(), NrSlot::Off);
+    QTRY_VERIFY(!clientModel.dspAssets()->nr3Runnable());
+    QCOMPARE(coreSlice->activeNr(), NrSlot::Off);
+    client.disconnectFromStation(QStringLiteral("test complete"));
+}
+
+void TstStationSession::nr3CannotRunEndsWithTheSession()
+{
+    // Follow-up item 2 (R-R3-21). A window learned from one Core that NR3
+    // cannot run there. When that session ends and the window attaches to
+    // an older Core, which never reports whether NR3 can run, the window
+    // does not carry the first Core's refusal over.
+    DspAssetService::setBundledNr3ModelPathsForTest([](const QString&) { return QString(); });
+    const auto restorePaths = qScopeGuard([] {
+        DspAssetService::setBundledNr3ModelPathsForTest({});
+    });
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+    auto stationModel = makeStationRadioModel(0);
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
+    stationEnd->linkTo(clientEnd);
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    client.startSession(clientEnd, server.token());
+    server.acceptTransport(stationEnd);
+    QTRY_COMPARE(completed.count(), 1);
+    DspAssetService* window = clientModel.dspAssets();
+    QTRY_VERIFY(!window->nr3Runnable());
+    QVERIFY(!window->nr3ModelStatus().isEmpty());
+    client.disconnectFromStation(QStringLiteral("first Core done"));
+    QTRY_VERIFY(!client.isHandshakeComplete());
+
+    // A second connection, to an older Core that never sends nr3Runnable.
+    auto* olderStation = new LoopbackTransport(QStringLiteral("older-station"), this);
+    auto* olderPeer = new LoopbackTransport(QStringLiteral("older-client"), this);
+    olderStation->linkTo(olderPeer);
+    client.startSession(olderPeer, QStringLiteral("test-token"));
+    olderStation->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor, kSessionProtocolMinor, 6, QStringLiteral("station"))));
+    olderStation->sendText(SessionMessages::encode(SessionMessages::authResult(true, {}, false)));
+    StationCapabilities caps;
+    caps.propertyResultVersion = 1;
+    caps.dspAssetVersion = 2;
+    olderStation->sendText(SessionMessages::encode(SessionMessages::capabilities(caps.toUpdates())));
+    olderStation->sendText(SessionMessages::encode(SessionMessages::snapshotComplete()));
+    QTRY_VERIFY(client.isHandshakeComplete());
+    QVERIFY(window->nr3Runnable());
+    QVERIFY(window->nr3ModelStatus().isEmpty());
+    client.disconnectFromStation(QStringLiteral("test complete"));
 }
 
 void TstStationSession::nr3ModelChoiceLoadsOnceOnTheCoreAndMirrors()

@@ -491,6 +491,13 @@ void DspAssetService::resetSession()
     }
     m_imports.clear();
     m_pendingRequests.clear();
+    // Follow-up item 2 (R-R3-21): a window's copy of whether the Core can
+    // run NR3, and why, belongs to that Core's session. The next Core says
+    // again; an older one never says, and NR3 is then not refused here.
+    if (!m_local) {
+        setNr3Runnable(true);
+        setNr3Status({});
+    }
 }
 
 void DspAssetService::cancelOwner(const QString& owner)

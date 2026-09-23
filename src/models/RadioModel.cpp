@@ -616,6 +616,17 @@ RadioModel::RadioModel(Role role, QObject* parent)
         RNNRloadModel(encoded.constData());
 #endif
     });
+    // Follow-up item 1 (R-R3-21): whenever the Core finds it has no usable
+    // NR3 model (at start, at a connect's load, or after a model choice),
+    // any slice holding NR3 turns it off with the reason, whichever came
+    // first: the saved choice, the connect or the status.
+    if (role == Role::Local) {
+        connect(m_dspAssets, &DspAssetService::nr3SelectionChanged, this, [this]() {
+            for (SliceModel* slice : std::as_const(m_slices)) {
+                turnOffNr3WithoutModel(slice);
+            }
+        });
+    }
     m_pureSignalSettings = new PureSignalSettings(this);
     m_pureSignalFacade = new PureSignalSessionFacade(this, nullptr, this);
     if (role == Role::Local) {
@@ -3958,9 +3969,7 @@ void RadioModel::wireNnrSettings(SliceModel* slice)
         // it on, with the plain status, whether or not a channel is open.
         if (requested == NrSlot::NR3 && m_dspAssets && !m_dspAssets->nr3Runnable()) {
             if (reason) {
-                *reason = m_dspAssets->nr3ModelStatus().isEmpty()
-                    ? tr("NR3 cannot run on this Core: no NR3 model file was found.")
-                    : m_dspAssets->nr3ModelStatus();
+                *reason = nr3CannotRunReason();
             }
             return false;
         }
@@ -3986,6 +3995,29 @@ void RadioModel::wireNnrSettings(SliceModel* slice)
     });
     connect(slice, &SliceModel::activeNrChanged, this,
             [this, slice](NrSlot) { scheduleSettingsSave(slice); });
+    // Follow-up item 1: the slice's saved choice was restored before this
+    // refusal existed, so a saved NR3 is checked again now.
+    turnOffNr3WithoutModel(slice);
+}
+
+QString RadioModel::nr3CannotRunReason() const
+{
+    return m_dspAssets->nr3ModelStatus().isEmpty()
+        ? tr("NR3 cannot run on this Core: no NR3 model file was found.")
+        : m_dspAssets->nr3ModelStatus();
+}
+
+void RadioModel::turnOffNr3WithoutModel(SliceModel* slice)
+{
+    if (!slice || role() != Role::Local || !m_dspAssets || m_dspAssets->nr3Runnable()
+        || slice->activeNr() != NrSlot::NR3) {
+        return;
+    }
+    // Off always passes the selection applier, which turns the receiver's
+    // NR3 off too when a channel is open. The reason is set after, since
+    // setActiveNr clears it.
+    slice->setActiveNr(NrSlot::Off);
+    slice->reportNnrEditResult(nr3CannotRunReason());
 }
 
 bool RadioModel::setNnrDiagnosticMode(int sliceId, int testMode, int outputMode, QString* reason)
@@ -4061,11 +4093,16 @@ void RadioModel::applyNnrStateToChannel(SliceModel* slice, RxChannel* channel)
     if (!slice || !channel) {
         return;
     }
+    // Follow-up item 1 (R-R3-21): WDSP is never asked to run NR3 without a
+    // usable NR3 model; the slice shows NR off with the reason instead.
+    turnOffNr3WithoutModel(slice);
     QString reason;
     const bool tuningAccepted = channel->setNnrTuning(slice->nnrSettings(), &reason);
+    const bool nr3Blocked = slice->activeNr() == NrSlot::NR3 && m_dspAssets
+        && !m_dspAssets->nr3Runnable();
     // A missing saved model must not enable a different model silently.
     // Retain the saved preference so the operator can repair the asset.
-    if (tuningAccepted || slice->activeNr() != NrSlot::NNR) {
+    if (!nr3Blocked && (tuningAccepted || slice->activeNr() != NrSlot::NNR)) {
         channel->setActiveNr(slice->activeNr());
     } else {
         channel->setActiveNr(NrSlot::Off);
@@ -7590,6 +7627,11 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
     m_lastRadioInfo = info;
     m_pureSignalSettings->load(info.macAddress);
     m_dspAssets->setRadioIdentity(info.macAddress);
+    // Follow-up item 1 (R-R3-21): find now whether an NR3 model file is
+    // still here (status only; nothing loads until the channels open), so
+    // a saved NR3 choice restored below is refused before any receiver
+    // could run it.
+    m_dspAssets->resolveNr3ModelPath();
     m_intentionalDisconnect = false;
 
     // Compute HardwareProfile from model override (Phase 3I-RP).

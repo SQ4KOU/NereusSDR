@@ -3492,6 +3492,11 @@ private:
     void scheduleSettingsSave(SliceModel* slice = nullptr);
     void wireNnrSettings(SliceModel* slice);
     void applyNnrStateToChannel(SliceModel* slice, RxChannel* channel);
+    // Follow-up item 1 (R-R3-21): the plain reason NR3 cannot run here, and
+    // the rule that a slice never holds NR3 while this Core has no usable
+    // NR3 model (NR off, the reason set). Local role only.
+    QString nr3CannotRunReason() const;
+    void turnOffNr3WithoutModel(SliceModel* slice);
 
 public:
     // Force-run any pending coalesced slice save synchronously. Call this
