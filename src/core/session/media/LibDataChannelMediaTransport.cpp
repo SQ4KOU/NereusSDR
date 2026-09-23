@@ -272,13 +272,19 @@ MediaSctpSettingsRecord mediaSctpSettingsRecord()
 
 QString opusOfferFormatParameters(int targetBitrate)
 {
-    // RFC 7587 section 6.1: sprop-stereo says what this sender sends
-    // (stereo); stereo, useinbandfec and maxaveragebitrate say what the
-    // receiver of the description prefers. The Core's offer is send-only,
-    // so those three are kept honest rather than aspirational: stereo is
-    // what the GUI decodes, useinbandfec is omitted (default 0) because
-    // OpusAudioEncoder sets OPUS_SET_INBAND_FEC(0), and maxaveragebitrate
-    // is the configured encoder target, never a higher ceiling (R-R3-23).
+    // RFC 7587 section 6.1: stereo, useinbandfec, maxaveragebitrate and
+    // minptime describe what the AUTHOR of the description (here the Core)
+    // prefers to RECEIVE; only the sprop-* parameters describe what the
+    // author sends (sprop-stereo=1: the Core sends stereo). The Core's
+    // offer is send-only and it receives no audio, so the receive
+    // preferences are set to mirror what it sends, never aspirational:
+    // stereo, useinbandfec omitted (default 0, as OpusAudioEncoder sets
+    // OPUS_SET_INBAND_FEC(0)), and maxaveragebitrate equal to the
+    // configured encoder target (R-R3-23). The encoder itself is reported to
+    // the GUI by the minor-8 audio context, not by this line. Tying the
+    // receive preferences to the send target must be revisited when the
+    // m-line becomes sendrecv (TX audio, R4): then they describe what the
+    // Core really wants to receive.
     return QStringLiteral("minptime=10;maxaveragebitrate=%1;stereo=1;sprop-stereo=1")
         .arg(targetBitrate);
 }

@@ -102,8 +102,8 @@ struct DaemonConfig {
     QString remoteBind {QStringLiteral("127.0.0.1")};
 
     // R-R3-23: the Opus encoder target for station audio, bit/s. Only the
-    // two measured profiles are accepted (OpusAudioEncoder refuses any
-    // other); anything else in the file logs one warning and keeps 24000.
+    // two supported profiles are accepted (OpusAudioEncoder refuses any
+    // other; 24000 is the measured default, 48000 is not measured yet); anything else in the file logs one warning and keeps 24000.
     // Feeds DaemonMediaController::setAudioTargetBitrate() from
     // DaemonApp::startStationServer().
     static constexpr int kDefaultAudioBitrate = 24000;

@@ -35,10 +35,15 @@ struct MediaSctpSettingsRecord {
 MediaSctpSettingsRecord mediaSctpSettingsRecord();
 
 /// The Opus a=fmtp parameters a send-only offer carries for an encoder
-/// running at `targetBitrate` bit/s (R-R3-23). They describe the encoder the
-/// Core really runs: stereo, 10 ms minimum packet time, no in-band FEC (the
-/// encoder has it off, so useinbandfec is left at its RFC 7587 default of 0)
-/// and an average bitrate ceiling equal to the configured target.
+/// running at `targetBitrate` bit/s (R-R3-23). Under RFC 7587 section 6.1
+/// only sprop-stereo describes what the offer's author sends (stereo);
+/// stereo, useinbandfec, maxaveragebitrate and minptime describe what the
+/// author prefers to receive. The Core receives no audio, so those mirror
+/// its encoder rather than claim more: stereo, 10 ms minimum packet time,
+/// useinbandfec left at its default of 0 (the encoder has FEC off) and an
+/// average bitrate equal to the configured target. The encoder is reported
+/// by the minor-8 audio context. Revisit when the m-line becomes sendrecv
+/// (TX audio, R4).
 QString opusOfferFormatParameters(int targetBitrate);
 
 class LibDataChannelMediaTransport final : public IMediaTransport {
