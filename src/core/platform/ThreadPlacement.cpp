@@ -714,9 +714,10 @@ void ThreadPlacement::applyOneLocked(Registered& thread, const PlacementPlan& pl
         if (cpus != thread.appliedCpus && setAffinityLocked(thread.threadId, cpus)) {
             thread.appliedCpus = cpus;
         }
-        // A role left without a core of its own shares the housekeeping
-        // cores; raised there, it would crowd spectrum and networking.
-        raised = cpu >= 0;
+        // A role left without a core of its own (none free, or the move
+        // was refused) shares the housekeeping cores; raised there, it
+        // would crowd spectrum and networking.
+        raised = cpu >= 0 && thread.appliedCpus == cpus;
     }
     if (m_raisePriority) {
         const int nice = raised ? kDspNice : 0;

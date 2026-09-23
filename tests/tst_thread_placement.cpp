@@ -779,6 +779,33 @@ private slots:
         QCOMPARE(lastNice(calls, 101), 0);
     }
 
+    void aRefusedMoveIsNotRaised()
+    {
+        // Minor 2: a role whose move to its core is refused stays on the
+        // housekeeping cores, so it is not raised either.
+        SysfsFixture f;
+        layOutRk3588s(f);
+        QList<Call> calls;
+        qint64 current = 1;
+        auto api = std::make_unique<RecordingApi>(&calls, &current);
+        api->refuseCpus = {4};
+        ThreadPlacement placement;
+        WarningCatcher catcher;   // the one expected refusal warning
+        placement.start(f.read(), demand({0}, true), std::move(api), true);
+        current = 200;
+        placement.registerCurrentThread(ThreadRole::DspThread);
+        QCOMPARE(lastCpus(calls, 200), QList<int>{4});   // asked, refused
+        QCOMPARE(lastNice(calls, 200), 0);
+        // RX0 activates and takes 4 (refused); the DSP thread moves to 5.
+        current = 101;
+        placement.onWdspThreadStarted(kWdspThreadRxMain, 0);
+        placement.setChannelActive(ThreadRole::RxWorker, 0, true);
+        QCOMPARE(lastNice(calls, 101), 0);
+        QCOMPARE(lastCpus(calls, 200), QList<int>{5});
+        QCOMPARE(lastNice(calls, 200), kDspNice);
+        QCOMPARE(catcher.warnings().size(), 1);
+    }
+
     void transmitKeyMovesOnTheRk3588s()
     {
         // Minor 3 (recorded, not changed): the order of dedicated cores is
