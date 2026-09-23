@@ -73,6 +73,7 @@
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "core/settings/SettingsProxy.h"
+#include "core/meters/SliceMeterPump.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -124,6 +125,18 @@ std::unique_ptr<RadioModel> makeStationRadioModel(int extraSlices)
         model->addSlice(QStringLiteral("pan-0"));
     }
     return model;
+}
+
+/// makeStationRadioModel() reports Connected but builds no WDSP channels, so
+/// the model's own SliceMeterPump writes the no-reading value to every slice
+/// on each poll (R-R3-13, SliceMeterPump::poll's no-channel branch). A test
+/// that feeds slice readings by hand stops it first so the value it sets is
+/// the value the mirror carries.
+void stopSliceMeterPump(RadioModel* model)
+{
+    SliceMeterPump* pump = model->sliceMeterPump();
+    QVERIFY(pump != nullptr);
+    pump->stop();
 }
 
 SessionMessage decodeOrFail(const QByteArray& wire)
@@ -311,6 +324,7 @@ private slots:
     void receiveOnlyStationBlocksRemoteBandRecall();
     void receiveOnlyStationRefusesTransmitPropertyWrites();
     void receiveOnlyStationRefusesTransmitDspOptionsSettingsWrites();
+    void receiveOnlyStationRefusesTransmitDspOptionsSettingsRemoves();
     void receiveOnlyPolicySurvivesRadioTeardown();
 
     // ---- Fix round 1 ----
@@ -1965,6 +1979,10 @@ void TstStationSession::mirrorRoundTripsSliceStateAndDoesNotEcho()
     // The per-slice S-meter reaches the client. SliceModel::
     // signalStrengthDbm has no Q_PROPERTY WRITE, so this only works
     // through the applyMirroredValue hook task 12 built for exactly this.
+    // This station has no WDSP channel, so its SliceMeterPump would
+    // overwrite every reading with the no-reading value (R-R3-13) before
+    // the mirror carries it. Stop it: these setters stand in for the pump.
+    stopSliceMeterPump(stationModel.get());
     stationSlice->setSignalStrengthDbm(-73.0);
     QTRY_COMPARE(clientSlice->signalStrengthDbm(), -73.0);
     stationSlice->setSignalPeakDbm(-61.0);
@@ -2586,6 +2604,9 @@ void TstStationSession::tunerPropertiesHydrateWithoutClientCommands()
     SliceModel* stationSlice = stationModel->slices().first();
     SliceModel* clientSlice = clientModel.sliceById(stationSlice->sliceIndex());
     QVERIFY(clientSlice != nullptr);
+    // No WDSP channel on this station: stop the pump that would write the
+    // no-reading value over the reading this setter stands in for (R-R3-13).
+    stopSliceMeterPump(stationModel.get());
     stationSlice->setSignalStrengthDbm(-91.0);
     QTRY_COMPARE(clientSlice->signalStrengthDbm(), -91.0);
     QVERIFY(!client.unappliedProperties().contains(
@@ -2867,6 +2888,61 @@ void TstStationSession::receiveOnlyStationRefusesTransmitDspOptionsSettingsWrite
 
     proxy.setValue(rxKey, QStringLiteral("2048"));
     QTRY_COMPARE(stationSettings.value(rxKey).toString(), QStringLiteral("2048"));
+    QCOMPARE(rejected.count(), 1);
+    QCOMPARE(stationSettings.value(txKey).toString(), QStringLiteral("1024"));
+}
+
+void TstStationSession::receiveOnlyStationRefusesTransmitDspOptionsSettingsRemoves()
+{
+    // R-R3-21. A remove resets a DSP > Options TX setting to its default,
+    // so a receive-only Core refuses it exactly as it refuses a write to
+    // the same key, and hands its own value back so the remote cache
+    // settles on it. Removing a receive DSP option is still allowed.
+    const QString txKey = QStringLiteral("DspOptionsBufferSizePhoneTx");
+    const QString rxKey = QStringLiteral("DspOptionsBufferSizePhoneRx");
+
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(
+        settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+    stationSettings.setValue(txKey, QStringLiteral("1024"));
+    stationSettings.setValue(rxKey, QStringLiteral("1024"));
+
+    auto stationModel = makeStationRadioModel(0);
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    QVERIFY(stationModel->receiveOnlyStationPolicy());
+
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
+    stationEnd->linkTo(clientEnd);
+
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    client.startSession(clientEnd, server.token());
+    server.acceptTransport(stationEnd);
+    QTRY_COMPARE(completed.count(), 1);
+    QVERIFY(proxy.ready());
+    QCOMPARE(proxy.value(txKey, QString()).toString(), QStringLiteral("1024"));
+
+    QSignalSpy rejected(&proxy, &SettingsProxy::valueRejected);
+    QSignalSpy toast(&clientModel, &RadioModel::sliceAddRejected);
+    proxy.remove(txKey);
+    QVERIFY(!proxy.contains(txKey));
+    QTRY_COMPARE(rejected.count(), 1);
+    QCOMPARE(rejected.first().at(0).toString(), txKey);
+    QCOMPARE(rejected.first().at(1).toString(), QStringLiteral("1024"));
+    QVERIFY(stationSettings.contains(txKey));
+    QCOMPARE(stationSettings.value(txKey).toString(), QStringLiteral("1024"));
+    QCOMPARE(proxy.value(txKey, QString()).toString(), QStringLiteral("1024"));
+    QCOMPARE(toast.count(), 1);
+    QCOMPARE(toast.first().at(0).toString(),
+             QStringLiteral("Transmit configuration is unavailable on this receive-only station."));
+
+    proxy.remove(rxKey);
+    QTRY_VERIFY(!stationSettings.contains(rxKey));
     QCOMPARE(rejected.count(), 1);
     QCOMPARE(stationSettings.value(txKey).toString(), QStringLiteral("1024"));
 }

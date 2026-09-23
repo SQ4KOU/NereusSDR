@@ -1153,6 +1153,18 @@ void StationServer::handleSettingsRemove(const SessionMessage& message)
             QStringLiteral("Use the validated DSP controls to change these settings.")));
         return;
     }
+    // A remove would reset a DSP > Options TX setting to its default, so a
+    // receive-only Core refuses it exactly as it refuses a write to the same
+    // key (handleSettingsWrite above) and hands back its own value (R-R3-21).
+    if (isTransmitDspOptionsKey(key) && !m_radioModel.isNull()
+        && m_radioModel->receiveOnlyStationPolicy()) {
+        const QString reason = QString::fromLatin1(kReceiveOnlyTransmitReason);
+        const QVariant restored = m_settings.value(key);
+        qCWarning(lcStation) << "Refused remote settings remove" << key << ":" << reason;
+        sendToSession(SessionMessages::settingsReject(key, restored.isValid(),
+                                                      restored.toString(), reason));
+        return;
+    }
     // SettingsProxyServer has no remove path of its own: AppSettings::
     // remove() fires the same Task 13 change hook a setValue() does, so
     // the broadcast that reaches every client is produced by the same
