@@ -145,7 +145,7 @@ void RemoteDiagnosticsDialog::buildUi()
     QWidget* connection = buildTab(tr("Connection"));
     m_totalTrafficGraph = addGraph(connection, tr("Total Core ↔ GUI application traffic"), tr(" kbps"));
     m_totalTrafficGraph->setObjectName(QStringLiteral("remoteTotalTrafficGraph"));
-    m_totalTrafficGraph->setToolTip(tr("Control, display and RTP observed at the GUI. Opus is included. Excludes transport, encryption, VPN and network overhead; outgoing media counts submissions, not confirmed delivery."));
+    m_totalTrafficGraph->setToolTip(tr("Control, display and audio traffic seen at this computer, audio included whether Opus or lossless. Excludes transport, encryption, VPN and network overhead; outgoing media counts submissions, not confirmed delivery."));
     m_radioLinkGraph = addGraph(connection, tr("Radio link throughput"), tr(" Mbps"));
     m_radioLinkGraph->setObjectName(QStringLiteral("remoteRadioLinkGraph"));
     m_controlPayloadGraph = addGraph(connection, tr("Control payload throughput"), tr(" kbit/s"));
@@ -164,9 +164,9 @@ void RemoteDiagnosticsDialog::buildUi()
     tabs->addTab(roundTrip, tr("Round trip / buffering"));
 
     QWidget* audio = buildTab(tr("Audio"));
-    m_opusTrafficGraph = addGraph(audio, tr("Opus audio traffic received at GUI"), tr(" kbps"));
-    m_opusTrafficGraph->setObjectName(QStringLiteral("remoteOpusTrafficGraph"));
-    m_opusTrafficGraph->setToolTip(tr("Audio packets count binary audio-track messages, including RTP headers; valid Opus payload excludes headers. Both are subsets of total traffic. Transport/network overhead is excluded. Opus transmit is inactive in receive-only mode."));
+    m_audioTrafficGraph = addGraph(audio, tr("Audio traffic received at this computer"), tr(" kbps"));
+    m_audioTrafficGraph->setObjectName(QStringLiteral("remoteAudioTrafficGraph"));
+    m_audioTrafficGraph->setToolTip(tr("Audio packets counts every audio packet received, with its packet header. Audio content is the sound alone, Opus or lossless, whichever the Core is sending. Both are part of the total traffic. Network overhead is excluded. No audio is sent to the Core in receive-only mode."));
     m_audioPacketsGraph = addGraph(audio, tr("Audio packet activity"), tr(" packets/s"));
     m_audioPacketsGraph->setObjectName(QStringLiteral("remoteAudioPacketsGraph"));
     m_sourceFramesGraph = addGraph(audio, tr("Core source frames"), tr(" frames/s"));
@@ -304,9 +304,9 @@ void RemoteDiagnosticsDialog::refreshGraphs()
         {Metric::CoreGuiTxKbps, "GUI → Core outgoing", "#5fff8a", trafficUnit},
         {Metric::CoreGuiTotalKbps, "Total", "#ffd700", trafficUnit},
     }, megabits ? 0.001 : 1.0);
-    setGraph(m_opusTrafficGraph, history, nowMs, m_rangeSeconds, {
+    setGraph(m_audioTrafficGraph, history, nowMs, m_rangeSeconds, {
         {Metric::AudioRtpRxKbps, "Audio packets", "#00b4d8", " kbps"},
-        {Metric::OpusPayloadRxKbps, "Opus payload", "#5fa8ff", " kbps"},
+        {Metric::AudioPayloadRxKbps, "Audio content", "#5fa8ff", " kbps"},
     });
     setGraph(m_speakerBufferGraph, history, nowMs, m_rangeSeconds, {
         {Metric::SpeakerBufferMs, "Speaker buffer", "#5fff8a", " ms"},

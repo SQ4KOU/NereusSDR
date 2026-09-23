@@ -15,6 +15,11 @@
 // tst_remote_media_controller can drive the same real session. Both files
 // also share the readable printer for the GUI's remote audio state.
 //
+// R-R3-23 lossless: hideAudioProfile makes the Core look like one from
+// before the lossless profile (its capabilities carry no
+// audioProfileVersion), so tests can prove such a Core sees exactly the
+// behaviour it did.
+//
 // =================================================================
 
 #include "core/AppSettings.h"
@@ -22,6 +27,7 @@
 #include "core/HpsdrModel.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationClient.h"
+#include "core/session/StationCapabilities.h"
 #include "core/session/StationServer.h"
 #include "core/settings/SettingsProxy.h"
 #include "gui/RemoteAudioStatus.h"
@@ -81,9 +87,18 @@ public:
     void sendText(const QByteArray& wire) override
     {
         const bool mayRewrite = (m_helloMinor && wire.contains("\"hello\""))
-            || (forgeNextAudioContext && wire.contains("\"audio-context\""));
+            || (forgeNextAudioContext && wire.contains("\"audio-context\""))
+            || (hideAudioProfile && wire.contains("\"capabilities\""));
         SessionMessage message;
         if (mayRewrite && SessionMessages::decode(wire, &message)) {
+            if (hideAudioProfile && message.kind == SessionMessageKind::Capabilities) {
+                StationCapabilities capabilities = StationCapabilities::fromUpdates(message.updates);
+                capabilities.audioProfileVersion = 0;
+                ++hiddenAudioProfiles;
+                LoopbackTransport::sendText(SessionMessages::encode(
+                    SessionMessages::capabilities(capabilities.toUpdates())));
+                return;
+            }
             if (m_helloMinor && message.kind == SessionMessageKind::Hello) {
                 ++rewrittenHellos;
                 LoopbackTransport::sendText(SessionMessages::encode(SessionMessages::hello(
@@ -106,7 +121,9 @@ public:
 
     int rewrittenHellos = 0;
     int forgedContexts = 0;
+    int hiddenAudioProfiles = 0;
     Forge forgeNextAudioContext;
+    bool hideAudioProfile = false;
 
 private:
     std::optional<quint16> m_helloMinor;
@@ -168,6 +185,7 @@ struct RemoteAudioSessionHarness {
         auto* station = new RewritingTransport(QStringLiteral("station"), helloMinor);
         auto* clientEnd = new RewritingTransport(QStringLiteral("client"), helloMinor);
         station->forgeNextAudioContext = std::move(forgeFirstContext);
+        station->hideAudioProfile = hideAudioProfile;
         stationLink = station;
         station->linkTo(clientEnd);
         client.startSession(clientEnd, server.token());
@@ -178,7 +196,16 @@ struct RemoteAudioSessionHarness {
             QCOMPARE(clientEnd->rewrittenHellos, 1);
             QCOMPARE(client.agreedMinor(), *helloMinor);
         }
+        if (hideAudioProfile) {
+            // On a reconnect the server can still report media from the
+            // session being replaced; wait for this link's capabilities.
+            QTRY_VERIFY(station->hiddenAudioProfiles >= 1 && client.isHandshakeComplete());
+            QCOMPARE(client.capabilities().audioProfileVersion, 0);
+        }
     }
+
+    // Set before connectSession(): the Core appears to predate lossless.
+    bool hideAudioProfile = false;
 
     QPointer<RewritingTransport> stationLink;
 

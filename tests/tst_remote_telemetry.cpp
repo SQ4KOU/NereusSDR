@@ -302,7 +302,7 @@ private slots:
         client.startSession(gui, server.token());
         QTRY_VERIFY(client.isHandshakeComplete());
         QVERIFY(!controller.current().coreGuiTotalKbps);
-        QVERIFY(!controller.current().opusRxKbps);
+        QVERIFY(!controller.current().audioPayloadRxKbps);
 
         now += 2000; // actual elapsed time, not a presumed one-second tick
         gui->observation.receivedPayloadBytes = 1000;
@@ -316,11 +316,11 @@ private slots:
         QCOMPARE(controller.current().coreGuiRxKbps, std::optional<double>(444.0));
         QCOMPARE(controller.current().coreGuiTxKbps, std::optional<double>(4.0));
         QCOMPARE(controller.current().coreGuiTotalKbps, std::optional<double>(448.0));
-        QCOMPARE(controller.current().opusRxKbps, std::optional<double>(36.0));
+        QCOMPARE(controller.current().audioPayloadRxKbps, std::optional<double>(36.0));
         QCOMPARE(controller.current().audioRtpRxKbps, std::optional<double>(40.0));
         QVERIFY(controller.bannerText().contains(QStringLiteral("Core ↓444.0 ↑4.0 total 448.0 kbps")));
         QCOMPARE(controller.history().series(Metric::SpeakerBufferMs, now, 60).points.last().value, 25.0);
-        QVERIFY(controller.detailText().contains(QStringLiteral("End-to-end Opus latency is not measured")));
+        QVERIFY(controller.detailText().contains(QStringLiteral("End-to-end audio latency is not measured")));
         QVERIFY(controller.detailText().contains(QStringLiteral("already included in total")));
 
         now += 1000;
@@ -331,7 +331,7 @@ private slots:
         now += 1000;
         controller.sampleNow();
         QCOMPARE(controller.current().coreGuiTotalKbps, std::optional<double>(0.0));
-        QCOMPARE(controller.current().opusRxKbps, std::optional<double>(0.0));
+        QCOMPARE(controller.current().audioPayloadRxKbps, std::optional<double>(0.0));
 
         // An audio restart gaps Opus but does not discard media totals.
         now += 1000;
@@ -341,12 +341,12 @@ private slots:
         media->traffic.receivedRtpBytes += 500;
         controller.sampleNow();
         QCOMPARE(controller.current().coreGuiTotalKbps, std::optional<double>(4.0));
-        QVERIFY(!controller.current().opusRxKbps);
+        QVERIFY(!controller.current().audioPayloadRxKbps);
         now += 1000;
         playback.receivedAudioPayloadBytes = 500;
         controller.sampleNow();
-        QCOMPARE(controller.current().opusRxKbps, std::optional<double>(4.0));
-        QVERIFY(controller.history().series(Metric::OpusPayloadRxKbps, now, 60).points.last().breakBefore);
+        QCOMPARE(controller.current().audioPayloadRxKbps, std::optional<double>(4.0));
+        QVERIFY(controller.history().series(Metric::AudioPayloadRxKbps, now, 60).points.last().breakBefore);
 
         // A peer replacement gaps total and Opus, with independent baselines.
         now += 1000;
@@ -354,7 +354,7 @@ private slots:
         playback.receivedAudioPayloadBytes += 500;
         controller.sampleNow();
         QVERIFY(!controller.current().coreGuiTotalKbps);
-        QVERIFY(!controller.current().opusRxKbps);
+        QVERIFY(!controller.current().audioPayloadRxKbps);
         now += 1000;
         controller.sampleNow();
         QCOMPARE(controller.current().coreGuiTotalKbps, std::optional<double>(0.0));
@@ -364,7 +364,7 @@ private slots:
         media.reset();
         controller.sampleNow();
         QVERIFY(!controller.current().coreGuiTotalKbps); // unknown is not control-only zero
-        QVERIFY(!controller.current().opusRxKbps);
+        QVERIFY(!controller.current().audioPayloadRxKbps);
         now += 1000;
         media = MediaPeerTelemetry{4, {}};
         controller.sampleNow();
@@ -383,7 +383,7 @@ private slots:
         QVERIFY(controller.history().series(Metric::CoreGuiTotalKbps, now, 60).points.last().breakBefore);
         client.disconnectFromStation(QStringLiteral("done"));
         QVERIFY(!controller.current().coreGuiTotalKbps);
-        QVERIFY(!controller.current().opusRxKbps);
+        QVERIFY(!controller.current().audioPayloadRxKbps);
     }
 
     // R-R3-32/33: host values reach the view and the history; absent values

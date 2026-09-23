@@ -16,6 +16,7 @@
 #include <QTimer>
 
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -40,7 +41,8 @@ struct DaemonAudioSenderTelemetry {
 
 /// Turns bounded post-master-mix blocks into RTP packets: one Opus packet per
 /// 1920-frame block, or (R-R3-23 lossless) ten L16 packets of 192 frames,
-/// paced at most kMaxLosslessPacketsPerDrain per tick.
+/// paced by elapsed time (kLosslessPacketsPer10Ms) and never more than
+/// kMaxLosslessPacketsPerDrain in one tick.
 ///
 /// Capture stays in DaemonAudioSource's DSP-safe bridge.  This QObject runs
 /// the encoder only on its owning control thread, through a 10 ms precise
@@ -54,15 +56,24 @@ public:
     static constexpr int kDrainIntervalMs = 10;
     static constexpr int kMaxBlocksPerDrain = 4;
     /// R-R3-23 lossless pacing. The steady stream is 250 packets/s, 2.5 per
-    /// 10 ms tick; three per tick leaves 20% headroom to catch up after a
-    /// stall, and caps what one tick puts on the wire at 3 x 780 bytes
-    /// instead of the up to 40 packets (four queued blocks) an unpaced tick
-    /// released after a capture stall. Packets past the cap wait, in order
-    /// and without loss, for later ticks; the next block is taken from the
-    /// bounded capture queue only once the previous block has left. A new
+    /// 10 ms. Sending is allowed at three packets per 10 ms of elapsed time
+    /// (300 packets/s), which leaves 20% headroom to catch up after a stall.
+    /// The allowance follows the clock, not the tick count, because a timer
+    /// tick may come late on a busy Core: a 16 ms tick earns 4.8 packets,
+    /// and the fraction carries to the next tick, so pacing never falls
+    /// behind the 250 packets/s the audio needs.
+    static constexpr int kLosslessPacketsPer10Ms = 3;
+    /// The most one tick may put on the wire, however late it is or however
+    /// much is queued: 6 x 780 bytes, where an unpaced tick released up to
+    /// 40 packets (four queued blocks) after a capture stall. Unused
+    /// allowance never grows beyond it. Packets past the allowance wait, in
+    /// order and without loss, for later ticks; the next block leaves the
+    /// bounded capture queue only once the previous block has gone. A new
     /// capture epoch (stop, then start) discards what is still waiting, as
     /// it discards queued capture. Opus is not paced: one packet per block.
-    static constexpr int kMaxLosslessPacketsPerDrain = 3;
+    static constexpr int kMaxLosslessPacketsPerDrain = 6;
+    /// Monotonic nanoseconds for the lossless pacing allowance.
+    using PacingClock = std::function<qint64()>;
 
     explicit DaemonAudioSender(AudioEngine* audioEngine, QObject* parent = nullptr);
     /// Encodes with `codecConfig` (R-R3-23: the Core's configured
@@ -106,6 +117,9 @@ public:
     /// Lossless packets built and not yet emitted (at most one block's ten
     /// less those already sent). Always zero for Opus.
     int pendingLosslessPackets() const noexcept { return int(m_pendingLossless.size()); }
+    /// Test seam: the clock the lossless allowance reads. Takes effect at
+    /// the next start(). Default: a monotonic QElapsedTimer.
+    void setPacingClockForTest(PacingClock clock);
 
 signals:
     void packetReady(const QByteArray& packet);
@@ -122,6 +136,11 @@ private:
     std::unique_ptr<OpusAudioEncoder> m_encoder;
     PcmAudioPacketiser m_packetiser;
     QList<PendingPacket> m_pendingLossless;
+    PacingClock m_pacingClock;
+    qint64 m_lastPacingNs{0};
+    // The allowance in 1e-7 packet units (one packet is 10'000'000), so the
+    // fraction a late tick earns carries to the next tick exactly.
+    qint64 m_pacingAllowanceUnits{0};
     RemoteAudioProfile m_profile{RemoteAudioProfile::Opus};
     QTimer m_drainTimer;
     quint32 m_ssrc{0};

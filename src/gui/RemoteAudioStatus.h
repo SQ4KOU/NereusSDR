@@ -5,21 +5,32 @@
 // status (R-R3-23): the status value, the pure state derivation, the rule
 // that clears a recorded playback failure, and the plain-English wording
 // the Core connection panel and title bar show.  It owns no session,
-// device, receiver or timer; RemoteMediaController feeds it.
+// device, receiver or timer; RemoteMediaController feeds it.  It also holds
+// the lossless link trial's rule (RemoteAudioLinkTrial), as pure logic.
 // =================================================================
 
 #pragma once
 
 #include "core/session/media/OpusAudioCodec.h"
+#include "core/session/media/PcmAudioCodec.h"
 #include "core/session/media/RemoteAudioContext.h"
 #include "core/session/media/RemoteAudioReceiver.h"
 
 #include <QString>
 #include <QtGlobal>
 
+#include <deque>
 #include <optional>
 
 namespace NereusSDR {
+
+/// R-R3-23: why the Core runs Opus although this computer chose Lossless.
+enum class RemoteAudioQualityReason {
+    CoreCannotSend,        // the Core has no lossless audio (an older Core)
+    CoreNotAllowed,        // the Core refused: its setting denies lossless
+    ConnectionUnavailable, // the Core refused: this connection did not agree it
+    NetworkTooSlow,        // this computer's link trial failed
+};
 
 struct RemoteAudioStatus {
     enum class State {
@@ -39,6 +50,17 @@ struct RemoteAudioStatus {
     QString selectedOutput;                      // selected speakers device name, "System default" when default
     std::optional<RemoteAudioReceiver::Fault> problem; // persistent local fault
     bool retryAvailable = false;
+    // R-R3-23 audio quality. chosenProfile is the operator's choice, stored
+    // on this computer. profileChoiceAvailable: this Core and this computer
+    // agreed the lossless profile. runningProfile is what the Core reports
+    // it runs (Opus for a Core that reports no profile); absent before the
+    // first accepted context. losslessEncoder is set only while lossless
+    // audio is on. qualityReason says why Lossless was chosen and Opus runs.
+    RemoteAudioProfile chosenProfile = RemoteAudioProfile::Opus;
+    bool profileChoiceAvailable = false;
+    std::optional<RemoteAudioProfile> runningProfile;
+    std::optional<PcmEncoderProfile> losslessEncoder;
+    std::optional<RemoteAudioQualityReason> qualityReason;
     friend bool operator==(const RemoteAudioStatus&, const RemoteAudioStatus&) = default;
 };
 
@@ -67,11 +89,22 @@ QString remoteAudioBannerWord(RemoteAudioStatus::State state); // title bar word
 QString remoteAudioProblemText(RemoteAudioReceiver::Fault fault);
 /// Core's reported encoder settings, labelled as a target; "Not reported by
 /// this Core" when the detail was not negotiated, and "Audio is off" when it
-/// was but the current context carries no encoder.
+/// was but the current context carries no encoder. Lossless reads "Lossless
+/// stereo, 16-bit, 1536 kbit/s, 4 ms packets".
 QString remoteAudioCodecText(const RemoteAudioStatus& status);
+/// "Opus" or "Lossless".
+QString remoteAudioProfileName(RemoteAudioProfile profile);
+/// The operator's sentence for a quality reason, e.g. "This Core does not
+/// allow lossless audio."
+QString remoteAudioQualityReasonText(RemoteAudioQualityReason reason);
+/// The "Audio quality" value: the profile the Core runs, or, before it
+/// reports one, the choice with "(chosen)".
+QString remoteAudioQualityText(const RemoteAudioStatus& status);
 
 /// The Core connection panel's "Remote audio" section, one line per item
 /// joined with '\n': headline, problem (only when status.problem is set),
+/// the audio quality and its reason (only when the Core offers the choice
+/// or Lossless was chosen, so an older Core's section reads as before),
 /// codec, output, then four measurement lines (arrival jitter, missing
 /// packets, gaps filled, speaker buffer) each showing "not measured yet" (or
 /// "none received yet" for missing packets) until playback has a value. The
@@ -101,5 +134,72 @@ bool remoteAudioFailureRecovered(const RemoteAudioFailure& failure, quint32 epoc
                                  const QString& connectionId,
                                  const std::optional<RemoteAudioContextMessage>& context,
                                  const RemoteAudioReceiverTelemetry& playback);
+
+/// R-R3-23: this computer's own check that the network carries lossless
+/// audio, owned by the app because the Core cannot see what arrives here.
+/// Lossless is about 1.6 Mbit/s at 250 packets a second, where Opus is 24
+/// to 48 kbit/s at 25; a link that cannot carry it loses packets (each one
+/// 4 ms of silence), and a queue that cannot drain restarts. Opus, whose
+/// concealment hides isolated loss and whose rate fits almost any link,
+/// is the better sound on such a link.
+///
+/// The trial begins when lossless playback begins. Its first window closes
+/// after kWindowMs; later windows follow back to back while lossless plays.
+/// Loss in a window is the larger of missing packets over expected packets
+/// and filled gaps over played packets.
+class RemoteAudioLinkTrial {
+public:
+    /// About 5 s: some 1250 lossless packets, enough that 2% (25 packets) is
+    /// a real pattern and not one unlucky burst, yet short enough that an
+    /// unusable link falls back before the operator gives up on it.
+    static constexpr qint64 kWindowMs = 5'000;
+    /// The first window fails above 2% loss: 25 gaps of 4 ms in 5 s, one
+    /// every 200 ms, which is audible and costs digital-mode decodes the
+    /// lossless choice was meant to win.
+    static constexpr double kTrialLossLimit = 0.02;
+    /// After that, only sustained loss fails: every one of three windows in
+    /// a row (15 s) above 1%. One bad window, a passing burst of other
+    /// traffic, never forces Opus on a link that carries lossless otherwise.
+    static constexpr double kSustainedLossLimit = 0.01;
+    static constexpr int kSustainedWindows = 3;
+    /// Interruptions the receiver restarts from (an arrival burst, a stream
+    /// gap, no packets): any one during the first window fails it, because a
+    /// link that needs a restart within 5 s cannot carry the stream; later,
+    /// the second within kRestartSpanMs fails, one being a passing event.
+    static constexpr int kTrialRestartLimit = 1;
+    static constexpr int kSustainedRestartLimit = 2;
+    static constexpr qint64 kRestartSpanMs = 60'000;
+
+    enum class Verdict { Continue, Failed };
+
+    void begin(qint64 nowMs);
+    void end();
+    bool active() const { return m_active; }
+    /// A playback sample. Counters are per receiver generation; a new
+    /// generation starts from zero. Samples from a stopped receiver are
+    /// ignored (the restart itself goes to noteInterruption()).
+    Verdict observe(qint64 nowMs, const RemoteAudioReceiverTelemetry& playback);
+    /// One restart the receiver asked for because audio arrived badly.
+    Verdict noteInterruption(qint64 nowMs);
+    /// The loss of the last closed window, for the log; absent before one.
+    std::optional<double> lastWindowLoss() const { return m_lastWindowLoss; }
+
+private:
+    struct Counters {
+        quint64 expected = 0;
+        quint64 missing = 0;
+        quint64 concealed = 0;
+        quint64 played = 0;
+    };
+    bool m_active = false;
+    qint64 m_windowStartMs = 0;
+    int m_closedWindows = 0;
+    int m_badWindows = 0;
+    std::optional<quint64> m_generation;
+    Counters m_base;
+    Counters m_window;
+    std::deque<qint64> m_interruptions;
+    std::optional<double> m_lastWindowLoss;
+};
 
 } // namespace NereusSDR

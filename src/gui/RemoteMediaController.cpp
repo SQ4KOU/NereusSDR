@@ -62,6 +62,28 @@ static_assert(RemoteMediaController::kMediaConnectDeadlineMs
 // The audio status refresh, which runs only while a receiver runs or a
 // playback problem awaits recovery.
 constexpr int kAudioStatusRefreshMs = 250;
+// R-R3-23: how often the lossless link trial samples playback. Its windows
+// are RemoteAudioLinkTrial::kWindowMs long; a 1 s sample closes each within
+// a second of its end.
+constexpr int kLinkTrialSampleMs = 1000;
+// The receiver restarts that say audio arrived badly, which the link trial
+// counts. Speaker, decoder and clock faults are this computer's own.
+bool linkInterruption(RemoteAudioReceiver::Fault fault)
+{
+    return fault == RemoteAudioReceiver::Fault::ArrivalBurst
+        || fault == RemoteAudioReceiver::Fault::StreamGap
+        || fault == RemoteAudioReceiver::Fault::NoPackets;
+}
+
+RemoteAudioProfile storedAudioProfileChoice()
+{
+    return AppSettings::instance()
+                   .value(QLatin1String(RemoteMediaController::kAudioProfileSettingKey),
+                          QStringLiteral("Opus"))
+                   .toString()
+               == QLatin1String("Lossless")
+        ? RemoteAudioProfile::Lossless : RemoteAudioProfile::Opus;
+}
 // Speaker progress this recent means audio is playing now: the window the
 // title bar has always used.
 constexpr qint64 kPlaybackProgressWindowMs = 500;
@@ -112,8 +134,18 @@ bool uint64(const QJsonObject& object, const char* key, quint64 maximum,
 
 // Log wording only: the profile Core reported for this context, never a
 // profile this GUI assumes.
-QString reportedAudioProfile(const std::optional<OpusEncoderProfile>& encoder)
+QString reportedAudioProfile(const RemoteAudioContextMessage& context)
 {
+    if (const std::optional<PcmEncoderProfile>& lossless = context.losslessEncoder) {
+        return QStringLiteral("lossless L16 %1 Hz, %2 channels, %3-sample packets, "
+                              "%4-bit, payload type %5")
+            .arg(lossless->sampleRate)
+            .arg(lossless->channels)
+            .arg(lossless->frameSamples)
+            .arg(lossless->bitsPerSample)
+            .arg(lossless->payloadType);
+    }
+    const std::optional<OpusEncoderProfile>& encoder = context.encoder;
     if (!encoder) {
         return QStringLiteral("codec profile not reported by Core");
     }
@@ -412,6 +444,16 @@ struct RemoteMediaController::Private {
     bool preparingAudio = false;
     bool audioEnabled = false;
     bool audioRetryPending = false;
+    // R-R3-23. The operator's choice, stored on this computer. Whether this
+    // media session has sent Core a `profile` (its contexts then carry the
+    // profile shape). Whether this media session's link trial failed, so
+    // Opus is asked for until the session ends or the operator chooses
+    // again. The trial itself and its 1 s sampling timer.
+    RemoteAudioProfile audioProfileChoice = RemoteAudioProfile::Opus;
+    bool audioProfileRequested = false;
+    bool losslessFallback = false;
+    RemoteAudioLinkTrial linkTrial;
+    QTimer* linkTrialTimer = nullptr;
     // A persistent local playback failure and the identity it was recorded
     // against; only matching recovery with real speaker progress clears it.
     std::optional<RemoteAudioFailure> audioFailure;
@@ -495,6 +537,12 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
     });
     d->audio = std::make_unique<RemoteAudioReceiver>(model->audioEngine());
     d->selectedOutput = selectedSpeakerOutput();
+    d->audioProfileChoice = storedAudioProfileChoice();
+    d->linkTrialTimer = new QTimer(this);
+    d->linkTrialTimer->setObjectName(QStringLiteral("remoteAudioLinkTrialTimer"));
+    d->linkTrialTimer->setInterval(kLinkTrialSampleMs);
+    connect(d->linkTrialTimer, &QTimer::timeout,
+            this, &RemoteMediaController::checkLosslessLink);
     d->audioStatusTimer = new QTimer(this);
     d->audioStatusTimer->setObjectName(QStringLiteral("remoteAudioStatusTimer"));
     d->audioStatusTimer->setInterval(kAudioStatusRefreshMs);
@@ -517,9 +565,16 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
         if (d->peer && d->peer->isReady()) {
             ++d->audioRevision;
             if (!d->audioRevision) { ++d->audioRevision; }
-            send({{QStringLiteral("op"), QStringLiteral("audio")},
-                  {QStringLiteral("revision"), double(d->audioRevision)},
-                  {QStringLiteral("enabled"), false}});
+            QJsonObject disable{{QStringLiteral("op"), QStringLiteral("audio")},
+                                {QStringLiteral("revision"), double(d->audioRevision)},
+                                {QStringLiteral("enabled"), false}};
+            if (audioProfileNegotiated()) {
+                disable.insert(QStringLiteral("profile"), remoteAudioProfileToWire(
+                    d->audioProfileChoice == RemoteAudioProfile::Lossless && !d->losslessFallback
+                        ? RemoteAudioProfile::Lossless : RemoteAudioProfile::Opus));
+                d->audioProfileRequested = true;
+            }
+            send(disable);
             if (!self) { return; }
         }
         refreshAudioStatus();
@@ -527,9 +582,17 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
         emit errorOccurred(remoteAudioProblemText(fault));
     });
     connect(d->audio.get(), &RemoteAudioReceiver::restartRequested, this,
-            [this](const QString& reason, RemoteAudioReceiver::Fault) {
+            [this](const QString& reason, RemoteAudioReceiver::Fault fault) {
         qCWarning(lcRemoteMedia) << reason;
         d->audio->stop();
+        // R-R3-23: a lossless stream that arrives badly enough to restart
+        // counts against the link trial; failing it asks Core for Opus now.
+        if (d->linkTrial.active() && linkInterruption(fault)
+            && d->linkTrial.noteInterruption(d->clock.elapsed())
+                == RemoteAudioLinkTrial::Verdict::Failed) {
+            fallBackToOpus(QStringLiteral("receiver restarts while playing lossless audio"));
+            return;
+        }
         d->audioRestarting = true;
         if (!d->audioRetryPending) {
             d->audioRetryPending = true;
@@ -776,6 +839,61 @@ RemoteAudioStatus RemoteMediaController::audioStatus() const
 {
     return d->audioStatus;
 }
+RemoteAudioProfile RemoteMediaController::audioProfileChoice() const
+{
+    return d->audioProfileChoice;
+}
+bool RemoteMediaController::audioProfileNegotiated() const
+{
+    return audioDetailNegotiated() && d->client->capabilities().audioProfileVersion >= 1;
+}
+
+void RemoteMediaController::setAudioProfileChoice(RemoteAudioProfile profile)
+{
+    const bool changed = profile != d->audioProfileChoice;
+    d->audioProfileChoice = profile;
+    AppSettings::instance().setValue(QLatin1String(kAudioProfileSettingKey),
+                                     remoteAudioProfileName(profile));
+    // Choosing again gives lossless a fresh chance on this link.
+    const bool wasFallback = std::exchange(d->losslessFallback, false);
+    d->linkTrial.end();
+    d->linkTrialTimer->stop();
+    if ((changed || wasFallback) && audioProfileNegotiated() && d->peer && d->peer->isReady()
+        && d->model && !d->model->audioEngine()->masterMuted()) {
+        requestAudio();
+        return;
+    }
+    refreshAudioStatus();
+}
+
+void RemoteMediaController::checkLosslessLink()
+{
+    if (!d->linkTrial.active()) {
+        d->linkTrialTimer->stop();
+        return;
+    }
+    if (d->linkTrial.observe(d->clock.elapsed(), d->audio->telemetry())
+        == RemoteAudioLinkTrial::Verdict::Failed) {
+        fallBackToOpus(QStringLiteral("%1% of lossless packets lost or filled in over %2 s")
+            .arg(100.0 * d->linkTrial.lastWindowLoss().value_or(0.0), 0, 'f', 1)
+            .arg(RemoteAudioLinkTrial::kWindowMs / 1000));
+    }
+}
+
+void RemoteMediaController::fallBackToOpus(const QString& cause)
+{
+    d->linkTrial.end();
+    d->linkTrialTimer->stop();
+    d->losslessFallback = true;
+    const QString text = remoteAudioQualityReasonText(RemoteAudioQualityReason::NetworkTooSlow);
+    qCInfo(lcRemoteMedia).noquote()
+        << QStringLiteral("Remote audio: lossless link trial failed (%1); asking Core for Opus")
+               .arg(cause);
+    const QPointer<RemoteMediaController> self(this);
+    requestAudio();
+    if (!self) { return; }
+    emit errorOccurred(text);
+}
 
 void RemoteMediaController::retryAudio()
 {
@@ -812,6 +930,29 @@ void RemoteMediaController::refreshAudioStatus()
     status.retryAvailable = inputs.mediaSession && !inputs.muted
         && (status.state == RemoteAudioStatus::State::PlaybackProblem
             || status.state == RemoteAudioStatus::State::CoreCouldNotStart);
+    // R-R3-23: the choice, what Core runs, and why Lossless is not running.
+    status.chosenProfile = d->audioProfileChoice;
+    status.profileChoiceAvailable = inputs.mediaSession && audioProfileNegotiated();
+    if (const auto& context = d->acceptedAudioContext) {
+        if (context->profile) {
+            status.runningProfile = context->profile;
+        } else if (context->enabled) {
+            status.runningProfile = RemoteAudioProfile::Opus; // a Core without the choice
+        }
+        status.losslessEncoder = context->losslessEncoder;
+    }
+    if (d->audioProfileChoice == RemoteAudioProfile::Lossless && inputs.mediaSession) {
+        if (d->losslessFallback) {
+            status.qualityReason = RemoteAudioQualityReason::NetworkTooSlow;
+        } else if (!audioProfileNegotiated()) {
+            status.qualityReason = RemoteAudioQualityReason::CoreCannotSend;
+        } else if (d->acceptedAudioContext && d->acceptedAudioContext->profileRefusal) {
+            status.qualityReason =
+                *d->acceptedAudioContext->profileRefusal == RemoteAudioProfileRefusal::NotAllowed
+                ? RemoteAudioQualityReason::CoreNotAllowed
+                : RemoteAudioQualityReason::ConnectionUnavailable;
+        }
+    }
 
     // Speaker progress and recovery are observed, not signalled, so poll
     // them while there is something to watch, and only then.
@@ -839,6 +980,12 @@ void RemoteMediaController::stop()
     d->audioRevision = 0;
     d->audioGeneration = 0;
     d->acceptedAudioContext.reset();
+    // The choice outlives the session and is replayed on the next one; a
+    // fallback and its trial belong to this one.
+    d->audioProfileRequested = false;
+    d->losslessFallback = false;
+    d->linkTrial.end();
+    d->linkTrialTimer->stop();
     // A playback problem belongs to its session and ends with it.
     d->audioFailure.reset();
     d->audioRestarting = false;
@@ -1034,7 +1181,13 @@ void RemoteMediaController::start()
     // Stage one: Core's description (receiveControl() starts stage two).
     d->awaitingDescription = true;
     d->establishTimer->start(d->descriptionDeadlineMs);
-    send({{QStringLiteral("op"), QStringLiteral("start")}});
+    // R-R3-23: a Core that can send lossless audio offers it only to a GUI
+    // that says it understands it; every other Core sees today's start.
+    QJsonObject startControl{{QStringLiteral("op"), QStringLiteral("start")}};
+    if (audioProfileNegotiated()) {
+        startControl.insert(QStringLiteral("audioProfileVersion"), 1);
+    }
+    send(startControl);
     if (!self) { return; }
     // A media session now exists: audio is awaited from Core.
     refreshAudioStatus();
@@ -1904,9 +2057,18 @@ void RemoteMediaController::requestAudio()
     d->lastAudioRequestMs = d->clock.elapsed();
     const bool enabled = d->model->isConnected() && !d->model->audioEngine()->masterMuted();
     const QPointer<RemoteMediaController> self(this);
-    send({{QStringLiteral("op"), QStringLiteral("audio")},
-          {QStringLiteral("revision"), double(d->audioRevision)},
-          {QStringLiteral("enabled"), enabled}});
+    QJsonObject control{{QStringLiteral("op"), QStringLiteral("audio")},
+                        {QStringLiteral("revision"), double(d->audioRevision)},
+                        {QStringLiteral("enabled"), enabled}};
+    // R-R3-23: the choice, replayed with every request, only to a Core that
+    // offers it; Opus after this session's link trial failed.
+    if (audioProfileNegotiated()) {
+        control.insert(QStringLiteral("profile"), remoteAudioProfileToWire(
+            d->audioProfileChoice == RemoteAudioProfile::Lossless && !d->losslessFallback
+                ? RemoteAudioProfile::Lossless : RemoteAudioProfile::Opus));
+        d->audioProfileRequested = true;
+    }
+    send(control);
     if (!self) { return; }
     refreshAudioStatus();
 }
@@ -2085,7 +2247,8 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
         // The shape the agreed minor selects, then this session's identity.
         // Anything refused leaves generation, playback and signals untouched.
         const std::optional<RemoteAudioContextMessage> context =
-            decodeRemoteAudioContext(payload, audioDetailNegotiated());
+            decodeRemoteAudioContext(payload, audioDetailNegotiated(),
+                                     d->audioProfileRequested);
         if (!context || context->revision != d->audioRevision
             || !isNewerGeneration(context->generation, d->audioGeneration)
             || context->ssrc != d->peer->audioSsrc()) { return; }
@@ -2101,16 +2264,30 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
         if (context->enabled && d->model
             && d->model->isConnected() && !d->model->audioEngine()->masterMuted()) {
             d->preparingAudio = true;
-            const bool started = d->audio->start(context->ssrc, context->firstTimestamp);
+            const RemoteAudioProfile profile = context->losslessEncoder
+                ? RemoteAudioProfile::Lossless : RemoteAudioProfile::Opus;
+            const bool started = d->audio->start(context->ssrc, context->firstTimestamp, profile);
             if (!self) { return; }
             d->audioEnabled = started;
             d->preparingAudio = false;
             if (d->audioEnabled) {
                 qCInfo(lcRemoteMedia).noquote()
                     << QStringLiteral("Remote audio receiving: %1, context %2")
-                           .arg(reportedAudioProfile(context->encoder))
+                           .arg(reportedAudioProfile(*context))
                            .arg(context->generation);
             }
+        }
+        // R-R3-23: the link trial runs while lossless audio plays. A
+        // restart's new lossless context continues it; anything else ends
+        // it (mute, a radio drop, Opus), and lossless later begins anew.
+        if (d->audioEnabled && context->losslessEncoder) {
+            if (!d->linkTrial.active()) {
+                d->linkTrial.begin(d->clock.elapsed());
+                d->linkTrialTimer->start();
+            }
+        } else if (d->linkTrial.active()) {
+            d->linkTrial.end();
+            d->linkTrialTimer->stop();
         }
         refreshAudioStatus();
         if (!self) { return; }

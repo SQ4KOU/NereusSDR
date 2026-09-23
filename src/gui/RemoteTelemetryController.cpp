@@ -197,7 +197,7 @@ void RemoteTelemetryController::sampleNow()
     auto& values = observation.values;
     m_view.controlRxKbps.reset(); m_view.controlTxKbps.reset();
     m_view.coreGuiRxKbps.reset(); m_view.coreGuiTxKbps.reset();
-    m_view.coreGuiTotalKbps.reset(); m_view.opusRxKbps.reset();
+    m_view.coreGuiTotalKbps.reset(); m_view.audioPayloadRxKbps.reset();
     m_view.audioRtpRxKbps.reset();
     m_view.coreRttMs.reset(); m_view.coreRttAgeMs.reset();
     const auto transport = m_client->transportTelemetry();
@@ -259,14 +259,14 @@ void RemoteTelemetryController::sampleNow()
         && playback.lastDeviceProgressAgeMs && *playback.lastDeviceProgressAgeMs < 500;
     if (m_playbackBaseline && playback.generation != m_playbackBaseline->generation) {
         breakRange(m_history, Metric::PlaybackDecodedPacketsPerSecond, Metric::PlaybackPacketAgeMs);
-        breakRange(m_history, Metric::OpusPayloadRxKbps, Metric::SpeakerBufferMs);
+        breakRange(m_history, Metric::AudioPayloadRxKbps, Metric::SpeakerBufferMs);
     }
     if (playback.running && m_playbackBaseline && m_playbackBaseline->running
         && playback.generation == m_playbackBaseline->generation && elapsed > 0) {
         const auto& previous = *m_playbackBaseline;
         if (mediaContinuous) {
             const auto opus = rate(playback.receivedAudioPayloadBytes, previous.receivedAudioPayloadBytes, elapsed);
-            if (opus) { m_view.opusRxKbps = *opus * 8.0 / 1000.0; }
+            if (opus) { m_view.audioPayloadRxKbps = *opus * 8.0 / 1000.0; }
         }
         values[index(Metric::PlaybackDecodedPacketsPerSecond)] = rate(playback.decodedPackets, previous.decodedPackets, elapsed);
         values[index(Metric::PlaybackConcealedPacketsPerSecond)] = rate(playback.concealedPackets, previous.concealedPackets, elapsed);
@@ -294,7 +294,7 @@ void RemoteTelemetryController::sampleNow()
     if (playback.running && playback.lastAdmittedPacketAgeMs) {
         values[index(Metric::PlaybackPacketAgeMs)] = double(*playback.lastAdmittedPacketAgeMs);
     }
-    values[index(Metric::OpusPayloadRxKbps)] = m_view.opusRxKbps;
+    values[index(Metric::AudioPayloadRxKbps)] = m_view.audioPayloadRxKbps;
     if (playback.running) {
         values[index(Metric::SpeakerBufferMs)] = playback.speakerQueuedMs;
     }
@@ -387,7 +387,7 @@ QString RemoteTelemetryController::bannerText() const
             .arg(rateText(m_view.coreGuiRxKbps), rateText(m_view.coreGuiTxKbps),
                  rateText(m_view.coreGuiTotalKbps), megabits ? tr("Mbps") : tr("kbps"));
     }
-    if (m_view.opusRxKbps) { parts << tr("Opus %1 kbps").arg(number(m_view.opusRxKbps)); }
+    if (m_view.audioPayloadRxKbps) { parts << tr("Audio %1 kbps").arg(number(m_view.audioPayloadRxKbps)); }
     parts << tr("Core RTT %1 ms").arg(m_view.coreRttMs ? QString::number(*m_view.coreRttMs) : QStringLiteral("—"));
     // R-R3-23: with a media controller, its own persistent status (which
     // survives a fault the receiver does not recover from by itself) is the
@@ -409,9 +409,9 @@ QString RemoteTelemetryController::detailText() const
     text << tr("Control payload RX %1 / TX %2 kbit/s").arg(number(m_view.controlRxKbps), number(m_view.controlTxKbps));
     text << tr("GUI-observed application traffic: Core→GUI %1 / GUI→Core %2 / total %3 kbps.")
         .arg(number(m_view.coreGuiRxKbps), number(m_view.coreGuiTxKbps), number(m_view.coreGuiTotalKbps));
-    text << tr("Total includes control text, display and audio-track messages. Valid Opus payload received: %1 kbps, already included in total. Opus transmit is inactive in receive-only mode.")
-        .arg(number(m_view.opusRxKbps));
-    text << tr("Binary audio-track messages received: %1 kbps, including RTP headers and packets later dropped locally. The Opus payload subset counts validated receiver submissions, including duplicates.")
+    text << tr("Total includes control text, display and audio-track messages. Valid audio content received (Opus or lossless): %1 kbps, already included in total. Audio transmit is inactive in receive-only mode.")
+        .arg(number(m_view.audioPayloadRxKbps));
+    text << tr("Binary audio-track messages received: %1 kbps, including RTP headers and packets later dropped locally. The audio content subset counts validated receiver submissions, including duplicates.")
         .arg(number(m_view.audioRtpRxKbps));
     text << tr("Application bytes exclude transport, encryption, VPN and network overhead. Outgoing media counts submissions to the transport, including queued or failed sends; it does not prove delivery.");
     text << (m_view.coreRttAgeMs ? tr("Core RTT: WebSocket round trip, measured %1 ms ago.").arg(*m_view.coreRttAgeMs)
@@ -427,7 +427,7 @@ QString RemoteTelemetryController::detailText() const
     const auto& p = m_view.playback;
     text << tr("Client speaker buffering: %1 ms (sampled PCM ring only). This excludes network, encoder, jitter/matcher and audio-device delay.")
         .arg(number(p.running ? p.speakerQueuedMs : std::nullopt));
-    text << tr("End-to-end Opus latency is not measured. Core RTT is a control round trip, not one-way audio latency; RTT/2 is not used.");
+    text << tr("End-to-end audio latency is not measured. Core RTT is a control round trip, not one-way audio latency; RTT/2 is not used.");
     // Fix wave M1: "discarded before playback" is the connect-time backlog
     // trimmed before anything was heard; the receiver keeps it out of
     // "admitted", so the two counts do not overlap.

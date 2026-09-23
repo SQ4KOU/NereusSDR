@@ -144,12 +144,12 @@ private slots:
         auto* totalGraph = dynamic_cast<TimeSeriesGraphWidget*>(dialog.findChild<QWidget*>(
             QStringLiteral("remoteTotalTrafficGraph")));
         auto* opusGraph = dynamic_cast<TimeSeriesGraphWidget*>(dialog.findChild<QWidget*>(
-            QStringLiteral("remoteOpusTrafficGraph")));
+            QStringLiteral("remoteAudioTrafficGraph")));
         auto* bufferGraph = dynamic_cast<TimeSeriesGraphWidget*>(dialog.findChild<QWidget*>(
             QStringLiteral("remoteSpeakerBufferGraph")));
         QVERIFY(totalGraph && opusGraph && bufferGraph);
         const auto* total = namedSeries(totalGraph, QStringLiteral("Total"));
-        const auto* opus = namedSeries(opusGraph, QStringLiteral("Opus payload"));
+        const auto* opus = namedSeries(opusGraph, QStringLiteral("Audio content"));
         const auto* buffer = namedSeries(bufferGraph, QStringLiteral("Speaker buffer"));
         QVERIFY(total && opus && buffer);
         QCOMPARE(total->unitSuffix, QStringLiteral(" kbps"));
@@ -159,7 +159,11 @@ private slots:
         QCOMPARE(opus->points.last().y(), 24.0);
         QCOMPARE(namedSeries(opusGraph, QStringLiteral("Audio packets"))->points.last().y(), 28.0);
         QCOMPARE(buffer->points.last().y(), 20.0);
-        QVERIFY(totalGraph->toolTip().contains(QStringLiteral("Opus is included")));
+        // R-R3-23: audio traffic is named for what it is, Opus or lossless.
+        QVERIFY(totalGraph->toolTip().contains(QStringLiteral("audio included whether Opus or lossless")));
+        QVERIFY(opusGraph->toolTip().contains(QStringLiteral("Opus or lossless")));
+        QVERIFY(!opusGraph->toolTip().contains(QStringLiteral("RTP")));
+        QVERIFY(!opusGraph->toolTip().contains(QStringLiteral("payload")));
         QVERIFY(bufferGraph->toolTip().contains(QStringLiteral("Excludes network")));
         auto* radioGraph = dynamic_cast<TimeSeriesGraphWidget*>(dialog.findChild<QWidget*>(
             QStringLiteral("remoteRadioLinkGraph")));

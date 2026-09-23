@@ -58,7 +58,7 @@ public:
         CoreGuiTxKbps,
         CoreGuiTotalKbps,
         AudioRtpRxKbps,
-        OpusPayloadRxKbps,
+        AudioPayloadRxKbps,
         SpeakerBufferMs,
         // The Core computer's own load (R-R3-32, R-R3-33). Memory is stored
         // in MiB; each value is absent when the Core did not measure it.

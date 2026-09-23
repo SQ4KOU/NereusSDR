@@ -19,6 +19,7 @@
 #include <QJsonObject>
 #include <QRegularExpression>
 
+#include <cmath>
 #include <limits>
 #include <optional>
 
@@ -453,6 +454,249 @@ private slots:
         changed = base;
         changed.retryAvailable = true;
         QVERIFY(!(changed == base));
+        changed = base;
+        changed.chosenProfile = RemoteAudioProfile::Lossless;
+        QVERIFY(!(changed == base));
+        changed = base;
+        changed.profileChoiceAvailable = true;
+        QVERIFY(!(changed == base));
+        changed = base;
+        changed.runningProfile = RemoteAudioProfile::Opus;
+        QVERIFY(!(changed == base));
+        changed = base;
+        changed.losslessEncoder = l16EncoderProfile();
+        QVERIFY(!(changed == base));
+        changed = base;
+        changed.qualityReason = RemoteAudioQualityReason::NetworkTooSlow;
+        QVERIFY(!(changed == base));
+    }
+
+    // R-R3-23: the section shows the audio quality the Core runs, or the
+    // choice before it reports one, and says why in plain words when
+    // Lossless was chosen and Opus runs. An older Core with Opus chosen
+    // shows no quality line at all (the exact texts above).
+    void qualityLinesShowWhatRunsAndWhy()
+    {
+        RemoteAudioStatus status;
+        status.state = State::Playing;
+        status.detailNegotiated = true;
+        status.selectedOutput = QStringLiteral("System default");
+        status.chosenProfile = RemoteAudioProfile::Lossless;
+        status.profileChoiceAvailable = true;
+        status.runningProfile = RemoteAudioProfile::Lossless;
+        status.losslessEncoder = l16EncoderProfile();
+        const RemoteAudioReceiverTelemetry playback;
+        QCOMPARE(formatRemoteAudioDetails(status, playback), QStringLiteral(
+            "Remote audio: Playing\n"
+            "Audio quality: Lossless\n"
+            "Codec: Lossless stereo, 16-bit, 1536\u00A0kbit/s, 4\u00A0ms packets\n"
+            "Output: System default (selected)\n"
+            "Arrival jitter: not measured yet\n"
+            "Missing packets: none received yet\n"
+            "Gaps filled: 0\n"
+            "Speaker buffer: not measured yet"));
+
+        // Refused by the Core's own setting: Opus runs, and it says why.
+        status.runningProfile = RemoteAudioProfile::Opus;
+        status.losslessEncoder.reset();
+        status.encoder = defaultProfile();
+        status.qualityReason = RemoteAudioQualityReason::CoreNotAllowed;
+        QVERIFY(formatRemoteAudioDetails(status, playback).startsWith(QStringLiteral(
+            "Remote audio: Playing\n"
+            "Audio quality: Opus\n"
+            "This Core does not allow lossless audio.\n"
+            "Codec: Opus stereo, 24\u00A0kbit/s target")));
+
+        // The link trial failed.
+        status.qualityReason = RemoteAudioQualityReason::NetworkTooSlow;
+        QVERIFY(formatRemoteAudioDetails(status, playback).contains(QStringLiteral(
+            "Audio quality: Opus\n"
+            "The network could not carry lossless audio; staying on Opus.\n")));
+
+        // Before the Core reports what it runs: the choice.
+        status.runningProfile.reset();
+        status.qualityReason.reset();
+        QVERIFY(formatRemoteAudioDetails(status, playback).contains(
+            QStringLiteral("Audio quality: Lossless (chosen)\n")));
+
+        // An older Core with Lossless chosen: the choice shows, and why it
+        // cannot be had.
+        status.profileChoiceAvailable = false;
+        status.runningProfile = RemoteAudioProfile::Opus;
+        status.qualityReason = RemoteAudioQualityReason::CoreCannotSend;
+        QVERIFY(formatRemoteAudioDetails(status, playback).contains(QStringLiteral(
+            "Audio quality: Opus\nThis Core cannot send lossless audio.\n")));
+
+        QCOMPARE(remoteAudioProfileName(RemoteAudioProfile::Opus), QStringLiteral("Opus"));
+        QCOMPARE(remoteAudioProfileName(RemoteAudioProfile::Lossless), QStringLiteral("Lossless"));
+        QCOMPARE(remoteAudioQualityReasonText(RemoteAudioQualityReason::ConnectionUnavailable),
+                 QStringLiteral("This connection could not set up lossless audio; staying on Opus."));
+    }
+
+    // Everything the quality choice puts in front of the operator stays in
+    // user words: no wire or engineering terms.
+    void qualityWordingCarriesNoInternalTerms()
+    {
+        static const QRegularExpression forbidden(
+            QStringLiteral("\\bRTP\\b|\\bPCM\\b|\\bL16\\b|payload|codec|SSRC|\\bpeer\\b|"
+                           "protocol|session|capabilit|revision|generation|minor|refus"),
+            QRegularExpression::CaseInsensitiveOption);
+        QStringList words;
+        for (const RemoteAudioQualityReason reason :
+             {RemoteAudioQualityReason::CoreCannotSend, RemoteAudioQualityReason::CoreNotAllowed,
+              RemoteAudioQualityReason::ConnectionUnavailable,
+              RemoteAudioQualityReason::NetworkTooSlow}) {
+            words << remoteAudioQualityReasonText(reason);
+        }
+        RemoteAudioStatus status;
+        status.detailNegotiated = true;
+        status.losslessEncoder = l16EncoderProfile();
+        words << remoteAudioCodecText(status) << remoteAudioQualityText(status);
+        status.runningProfile = RemoteAudioProfile::Lossless;
+        words << remoteAudioQualityText(status);
+        for (const QString& text : words) {
+            QVERIFY(!text.isEmpty());
+            QVERIFY2(!forbidden.match(text).hasMatch(), qPrintable(text));
+            QVERIFY2(!text.contains(QChar(0x2014)), qPrintable(text));
+        }
+    }
+
+    // R-R3-23 link trial: the rule, sample by sample. Each window is
+    // RemoteAudioLinkTrial::kWindowMs; 250 packets a second is lossless.
+    void linkTrialConstantsAreTheDocumentedOnes()
+    {
+        QCOMPARE(RemoteAudioLinkTrial::kWindowMs, qint64(5'000));
+        QCOMPARE(RemoteAudioLinkTrial::kTrialLossLimit, 0.02);
+        QCOMPARE(RemoteAudioLinkTrial::kSustainedLossLimit, 0.01);
+        QCOMPARE(RemoteAudioLinkTrial::kSustainedWindows, 3);
+        QCOMPARE(RemoteAudioLinkTrial::kTrialRestartLimit, 1);
+        QCOMPARE(RemoteAudioLinkTrial::kSustainedRestartLimit, 2);
+        QCOMPARE(RemoteAudioLinkTrial::kRestartSpanMs, qint64(60'000));
+    }
+    void linkTrialFirstWindowFailsAboveTwoPercent_data()
+    {
+        QTest::addColumn<int>("lostPerMille");
+        QTest::addColumn<bool>("fails");
+        QTest::newRow("clean") << 0 << false;
+        QTest::newRow("1.5% passes") << 15 << false;
+        QTest::newRow("2.0% passes") << 20 << false;
+        QTest::newRow("3.0% fails") << 30 << true;
+    }
+    void linkTrialFirstWindowFailsAboveTwoPercent()
+    {
+        QFETCH(int, lostPerMille);
+        QFETCH(bool, fails);
+        using Verdict = RemoteAudioLinkTrial::Verdict;
+        RemoteAudioLinkTrial trial;
+        QVERIFY(!trial.active());
+        trial.begin(1'000);
+        QVERIFY(trial.active());
+        RemoteAudioReceiverTelemetry playback;
+        playback.running = true;
+        playback.generation = 1;
+        // One sample a second, 250 packets each, a steady share missing and
+        // filled in.
+        Verdict verdict = Verdict::Continue;
+        for (int second = 1; second <= 5; ++second) {
+            playback.expectedPackets = quint64(250 * second);
+            playback.missingPackets = quint64(250 * second * lostPerMille / 1000);
+            playback.concealedPackets = playback.missingPackets;
+            playback.decodedPackets = playback.expectedPackets - playback.missingPackets;
+            verdict = trial.observe(1'000 + second * 1'000, playback);
+            if (second < 5) { QCOMPARE(verdict, Verdict::Continue); }
+        }
+        QCOMPARE(verdict, fails ? Verdict::Failed : Verdict::Continue);
+        QVERIFY(trial.lastWindowLoss().has_value());
+        // Whole packets: 1.5% of 1250 is 18 lost, 1.44%.
+        QVERIFY(std::abs(*trial.lastWindowLoss() * 1000 - lostPerMille) < 1.0);
+    }
+    void linkTrialLaterFailsOnlyOnSustainedLoss()
+    {
+        using Verdict = RemoteAudioLinkTrial::Verdict;
+        RemoteAudioLinkTrial trial;
+        trial.begin(0);
+        RemoteAudioReceiverTelemetry playback;
+        playback.running = true;
+        playback.generation = 7;
+        qint64 now = 0;
+        // Each call closes one 5 s window with `lost` of 1250 packets lost.
+        const auto window = [&](quint64 lost) {
+            playback.expectedPackets += 1250;
+            playback.missingPackets += lost;
+            playback.concealedPackets += lost;
+            playback.decodedPackets += 1250 - lost;
+            now += RemoteAudioLinkTrial::kWindowMs;
+            return trial.observe(now, playback);
+        };
+        QCOMPARE(window(0), Verdict::Continue);   // the trial window passes
+        QCOMPARE(window(19), Verdict::Continue);  // 1.5%: one bad window
+        QCOMPARE(window(19), Verdict::Continue);  // two
+        QCOMPARE(window(5), Verdict::Continue);   // 0.4%: the run resets
+        QCOMPARE(window(19), Verdict::Continue);
+        QCOMPARE(window(19), Verdict::Continue);
+        QCOMPARE(window(19), Verdict::Failed);    // three in a row
+
+        // A burst above the trial limit in one later window is not enough.
+        trial.begin(0);
+        now = 0;
+        playback = {};
+        playback.running = true;
+        playback.generation = 8;
+        QCOMPARE(window(0), Verdict::Continue);
+        QCOMPARE(window(100), Verdict::Continue); // 8% once
+        QCOMPARE(window(0), Verdict::Continue);
+    }
+    void linkTrialCountsInterruptions()
+    {
+        using Verdict = RemoteAudioLinkTrial::Verdict;
+        RemoteAudioLinkTrial idle;
+        QCOMPARE(idle.noteInterruption(0), Verdict::Continue); // not running
+
+        RemoteAudioLinkTrial first;
+        first.begin(0);
+        QCOMPARE(first.noteInterruption(2'000), Verdict::Failed); // in the trial window
+
+        RemoteAudioLinkTrial later;
+        later.begin(0);
+        RemoteAudioReceiverTelemetry playback;
+        playback.running = true;
+        playback.generation = 1;
+        playback.expectedPackets = 1250;
+        playback.decodedPackets = 1250;
+        QCOMPARE(later.observe(5'000, playback), Verdict::Continue);
+        QCOMPARE(later.noteInterruption(10'000), Verdict::Continue);
+        QCOMPARE(later.noteInterruption(71'000), Verdict::Continue); // 61 s apart
+        QCOMPARE(later.noteInterruption(100'000), Verdict::Failed);  // second within 60 s
+        later.end();
+        QVERIFY(!later.active());
+    }
+    void linkTrialFollowsReceiverGenerations()
+    {
+        using Verdict = RemoteAudioLinkTrial::Verdict;
+        RemoteAudioLinkTrial trial;
+        trial.begin(0);
+        RemoteAudioReceiverTelemetry playback;
+        playback.running = true;
+        playback.generation = 3;
+        playback.expectedPackets = 600;
+        playback.decodedPackets = 600;
+        QCOMPARE(trial.observe(2'000, playback), Verdict::Continue);
+        // A restart: the new receiver counts from zero. Its counters are
+        // smaller than the old ones, which must not read as loss or wrap.
+        RemoteAudioReceiverTelemetry stopped;
+        QCOMPARE(trial.observe(2'500, stopped), Verdict::Continue); // ignored
+        playback.generation = 4;
+        playback.expectedPackets = 650;
+        playback.decodedPackets = 650;
+        QCOMPARE(trial.observe(5'000, playback), Verdict::Continue);
+        QVERIFY(trial.lastWindowLoss().has_value());
+        QCOMPARE(*trial.lastWindowLoss(), 0.0);
+
+        // A window in which nothing played gives no verdict at all.
+        RemoteAudioLinkTrial quiet;
+        quiet.begin(0);
+        QCOMPARE(quiet.observe(6'000, stopped), Verdict::Continue);
+        QVERIFY(!quiet.lastWindowLoss().has_value());
     }
 
     void failureClearsOnlyOnMatchingRecovery()

@@ -94,11 +94,26 @@ public:
     /// the value does.
     RemoteAudioStatus audioStatus() const;
 
+    /// R-R3-23: the AppSettings key (stored on this computer, never on the
+    /// Core) holding the remote audio choice, "Opus" or "Lossless".
+    static constexpr const char* kAudioProfileSettingKey = "RemoteAudioProfile";
+    /// The operator's remote audio choice, read from this computer's
+    /// settings at construction and replayed on every connection.
+    RemoteAudioProfile audioProfileChoice() const;
+    /// Core and this GUI can use the choice: the minor-8 audio detail and a
+    /// Core advertising audioProfileVersion 1 or later. Without it the GUI
+    /// sends exactly today's media start and audio controls.
+    bool audioProfileNegotiated() const;
+
 public slots:
     /// Ask Core for audio again: a new request, enabled per mute and radio
     /// state like every request. A no-op without a media session or while
     /// muted on this computer. It never clears a playback problem by itself.
     void retryAudio();
+    /// Stores the choice on this computer and, with a media session, asks
+    /// Core for it at once. Choosing again also ends an earlier fallback to
+    /// Opus and starts a new link trial.
+    void setAudioProfileChoice(NereusSDR::RemoteAudioProfile profile);
 
 signals:
     void recoveryRequested(quint32 expectedEpoch, const QString& reason);
@@ -131,6 +146,8 @@ private:
     void requestKeyframe(quint32 endpointId);
     void requestAudio();
     void refreshAudioStatus();
+    void checkLosslessLink();
+    void fallBackToOpus(const QString& cause);
     bool send(QJsonObject payload);
 };
 } // namespace NereusSDR

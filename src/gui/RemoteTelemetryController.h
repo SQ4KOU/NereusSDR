@@ -23,7 +23,7 @@ struct RemoteTelemetryView {
     StationAudioTelemetry coreAudio;
     std::optional<double> controlRxKbps, controlTxKbps;
     std::optional<double> coreGuiRxKbps, coreGuiTxKbps, coreGuiTotalKbps;
-    std::optional<double> opusRxKbps, audioRtpRxKbps;
+    std::optional<double> audioPayloadRxKbps, audioRtpRxKbps;
     std::optional<quint64> coreRttMs;
     std::optional<qint64> coreRttAgeMs;
     RemoteAudioReceiverTelemetry playback;

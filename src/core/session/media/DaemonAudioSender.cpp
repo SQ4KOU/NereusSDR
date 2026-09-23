@@ -8,6 +8,9 @@
 #include "core/session/media/DaemonAudioSource.h"
 #include "core/session/media/OpusAudioCodec.h"
 
+#include <QElapsedTimer>
+
+#include <algorithm>
 #include <memory>
 
 namespace NereusSDR {
@@ -28,6 +31,10 @@ DaemonAudioSender::DaemonAudioSender(AudioEngine* audioEngine,
     , m_encoder(std::make_unique<OpusAudioEncoder>(codecConfig))
 {
     m_source->setAudioEngine(audioEngine);
+    m_pacingClock = [clock = std::make_shared<QElapsedTimer>()] {
+        if (!clock->isValid()) { clock->start(); }
+        return clock->nsecsElapsed();
+    };
     m_drainTimer.setInterval(kDrainIntervalMs);
     m_drainTimer.setTimerType(Qt::PreciseTimer);
     connect(&m_drainTimer, &QTimer::timeout, this, &DaemonAudioSender::drain);
@@ -50,6 +57,8 @@ bool DaemonAudioSender::start(quint32 ssrc, quint16 firstSequence,
 
     m_encoder->reset();
     m_pendingLossless.clear();
+    m_lastPacingNs = m_pacingClock();
+    m_pacingAllowanceUnits = 0;
     m_ssrc = ssrc;
     m_nextSequence = firstSequence;
     m_baseTimestamp = firstTimestamp;
@@ -90,6 +99,11 @@ bool DaemonAudioSender::setProfile(RemoteAudioProfile profile)
     }
     m_profile = profile;
     return true;
+}
+
+void DaemonAudioSender::setPacingClockForTest(PacingClock clock)
+{
+    if (clock) { m_pacingClock = std::move(clock); }
 }
 
 bool DaemonAudioSender::profileReady() const
@@ -159,7 +173,20 @@ void DaemonAudioSender::drain()
 
 void DaemonAudioSender::drainLossless(quint64 drainGeneration)
 {
-    for (int sent = 0; sent < kMaxLosslessPacketsPerDrain;) {
+    // The allowance this tick has earned since the last one, capped.
+    const qint64 now = m_pacingClock();
+    const qint64 elapsed = std::max<qint64>(0, now - m_lastPacingNs);
+    m_lastPacingNs = now;
+    // Whole numbers: one packet is 10 ms (1e7 ns) of allowance per
+    // kLosslessPacketsPer10Ms, so each elapsed nanosecond earns that many
+    // units and a packet costs 1e7. Bounded well inside qint64: the cap is
+    // applied to each tick and a tick's elapsed time is added only up to it.
+    constexpr qint64 kUnitsPerPacket = 10'000'000;
+    constexpr qint64 kCapUnits = qint64(kMaxLosslessPacketsPerDrain) * kUnitsPerPacket;
+    const qint64 earned = std::min<qint64>(elapsed, kCapUnits) * kLosslessPacketsPer10Ms;
+    m_pacingAllowanceUnits = std::min<qint64>(kCapUnits, m_pacingAllowanceUnits + earned);
+    const int allowed = static_cast<int>(m_pacingAllowanceUnits / kUnitsPerPacket);
+    for (int sent = 0; sent < allowed;) {
         if (m_pendingLossless.isEmpty()) {
             const std::optional<DaemonAudioBlock> block = m_source->takeBlock();
             if (!block.has_value()) {
@@ -192,6 +219,7 @@ void DaemonAudioSender::drainLossless(quint64 drainGeneration)
         m_telemetry.lastEmittedSequence = next.sequence;
         m_telemetry.lastEmittedTimestamp = next.timestamp;
         ++sent;
+        m_pacingAllowanceUnits -= kUnitsPerPacket;
         emit packetReady(next.packet);
         // A direct packetReady recipient may stop the sender or start a new
         // capture epoch (which discards what is still waiting). Send nothing

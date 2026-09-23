@@ -1,6 +1,8 @@
 // no-port-check: NereusSDR-original. Authenticated GUI subscription lifecycle.
 #include <QTest>
+#include <QComboBox>
 #include <QCoreApplication>
+#include <QLabel>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QRegularExpression>
@@ -23,6 +25,7 @@
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "core/settings/SettingsProxy.h"
+#include "core/settings/SettingsScope.h"
 #include "core/session/media/DisplayCodec.h"
 #include "core/session/media/DisplayBudget.h"
 #include "core/session/media/DaemonMediaController.h"
@@ -35,7 +38,9 @@
 #include "core/session/Ps3DisplayCodec.h"
 #include "core/FFTEngine.h"
 #include "core/StepAttenuatorController.h"
+#include "core/session/media/LibDataChannelMediaTransport.h"
 #include "gui/RemoteAudioStatus.h"
+#include "gui/RemoteConnectionController.h"
 #include "gui/RemoteMediaController.h"
 #include "gui/PanadapterStack.h"
 #include "gui/PanadapterApplet.h"
@@ -121,6 +126,105 @@ public:
     bool sendDisplay(const QByteArray&) override { return false; }
     bool sendRtp(const QByteArray&) override { return false; }
     bool isReady() const override { return false; }
+};
+
+// R-R3-23: a network with too little room for lossless audio. This
+// computer's media transport is the real one (DTLS/SRTP over loopback), but
+// received audio beyond a fixed byte rate is lost, as on a slow link: Opus
+// (24 kbit/s) fits, lossless (about 1.6 Mbit/s) loses most of its packets.
+// Built through the MediaPeer::TransportFactory seam the GUI's controller
+// takes.
+class CapacityLimitedTransport final : public IMediaTransport {
+public:
+    // 400 kbit/s, with a burst of about five lossless packets.
+    static constexpr double kBytesPerSecond = 50'000.0;
+    static constexpr double kBurstBytes = 4'000.0;
+
+    explicit CapacityLimitedTransport(QObject* parent)
+        : IMediaTransport(parent), m_inner(new LibDataChannelMediaTransport(this))
+    {
+        connect(m_inner, &IMediaTransport::localDescription, this, &IMediaTransport::localDescription);
+        connect(m_inner, &IMediaTransport::localCandidate, this, &IMediaTransport::localCandidate);
+        connect(m_inner, &IMediaTransport::displayReceived, this, &IMediaTransport::displayReceived);
+        connect(m_inner, &IMediaTransport::ready, this, &IMediaTransport::ready);
+        connect(m_inner, &IMediaTransport::closed, this, &IMediaTransport::closed);
+        connect(m_inner, &IMediaTransport::connectionFailed, this, &IMediaTransport::connectionFailed);
+        connect(m_inner, &IMediaTransport::errorOccurred, this, &IMediaTransport::errorOccurred);
+        connect(m_inner, &IMediaTransport::displayWritable, this, &IMediaTransport::displayWritable);
+        connect(m_inner, &IMediaTransport::displayErrorOccurred,
+                this, &IMediaTransport::displayErrorOccurred);
+        connect(m_inner, &IMediaTransport::rtpReceived, this, [this](const QByteArray& packet) {
+            if (admit(packet.size())) {
+                ++passed;
+                emit rtpReceived(packet);
+            } else {
+                ++dropped;
+            }
+        });
+        m_clock.start();
+    }
+    bool start(const StartOptions& options) override { return m_inner->start(options); }
+    void stop() override { m_inner->stop(); }
+    bool acceptDescription(const QString& sdp, const QString& type) override
+    {
+        return m_inner->acceptDescription(sdp, type);
+    }
+    bool acceptCandidate(const QString& candidate, const QString& mid) override
+    {
+        return m_inner->acceptCandidate(candidate, mid);
+    }
+    bool sendDisplay(const QByteArray& message) override { return m_inner->sendDisplay(message); }
+    DisplaySendResult submitDisplay(const QByteArray& message) override
+    {
+        return m_inner->submitDisplay(message);
+    }
+    bool displayBusy() const override { return m_inner->displayBusy(); }
+    bool sendRtp(const QByteArray& packet) override { return m_inner->sendRtp(packet); }
+    bool isReady() const override { return m_inner->isReady(); }
+    bool losslessAudioNegotiated() const override { return m_inner->losslessAudioNegotiated(); }
+    std::optional<MediaTransportTelemetry> telemetry() const override { return m_inner->telemetry(); }
+
+    int passed = 0;
+    int dropped = 0;
+
+private:
+    bool admit(qsizetype bytes)
+    {
+        const qint64 now = m_clock.nsecsElapsed();
+        m_tokens = std::min(kBurstBytes,
+                            m_tokens + double(now - m_lastNs) * kBytesPerSecond / 1e9);
+        m_lastNs = now;
+        if (m_tokens < double(bytes)) { return false; }
+        m_tokens -= double(bytes);
+        return true;
+    }
+    LibDataChannelMediaTransport* m_inner;
+    QElapsedTimer m_clock;
+    qint64 m_lastNs = 0;
+    double m_tokens = kBurstBytes;
+};
+
+// The profile each audio control this GUI sent asked for, in order ("" for
+// a control without one).
+QStringList requestedProfiles(const QSignalSpy& coreControls)
+{
+    QStringList profiles;
+    for (const auto& call : coreControls) {
+        const QJsonObject control = call.at(0).toJsonObject();
+        if (control.value(QStringLiteral("op")) == QLatin1String("audio")) {
+            profiles << control.value(QStringLiteral("profile")).toString();
+        }
+    }
+    return profiles;
+}
+
+// Puts the stored remote audio choice back to Opus when a test ends.
+struct RestoreAudioChoice {
+    ~RestoreAudioChoice()
+    {
+        AppSettings::instance().setValue(
+            QLatin1String(RemoteMediaController::kAudioProfileSettingKey), QStringLiteral("Opus"));
+    }
 };
 
 QStringList g_remoteMediaMessages;
@@ -3507,6 +3611,166 @@ private slots:
         h.station.setConnectionStateForTest(ConnectionState::Connected);
         QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state, State::Playing, 15000);
         QCOMPARE(errors.size(), 0);
+
+        audio.stop();
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+    // R-R3-23: the app's link trial. Lossless is chosen and the Core
+    // accepts it, but the network cannot carry it: about 5 s in, the
+    // trial returns this computer to Opus with the plain reason, and Opus
+    // plays on over the same link. The choice stays stored, and the next
+    // connection asks for lossless again.
+    void losslessFallsBackToOpusWhenTheNetworkCannotCarryIt()
+    {
+        using State = RemoteAudioStatus::State;
+        const RestoreAudioChoice restore;
+        // Chosen earlier on this computer: a new controller starts from it.
+        AppSettings::instance().setValue(
+            QLatin1String(RemoteMediaController::kAudioProfileSettingKey), QStringLiteral("Lossless"));
+        Test::RemoteAudioSessionHarness h;
+        QList<QPointer<CapacityLimitedTransport>> links;
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr, nullptr,
+            [&links](QObject* parent) -> IMediaTransport* {
+                auto* link = new CapacityLimitedTransport(parent);
+                links.append(link);
+                return link;
+            });
+        DaemonMediaController daemonMedia(&h.server, &h.station);
+        QCOMPARE(remoteMedia.audioProfileChoice(), RemoteAudioProfile::Lossless);
+        QCOMPARE(remoteMedia.audioStatus().chosenProfile, RemoteAudioProfile::Lossless);
+        // Stored on this computer: this key is never the Core's.
+        QCOMPARE(classifySettingsKey(
+                     QString::fromLatin1(RemoteMediaController::kAudioProfileSettingKey)),
+                 SettingsScope::OperatorLocal);
+        QSignalSpy errors(&remoteMedia, &RemoteMediaController::errorOccurred);
+        QSignalSpy coreControls(&h.server, &StationServer::mediaControlReceived);
+        PacedRemoteAudio audio(h);
+        h.connectSession();
+        QVERIFY(remoteMedia.audioProfileNegotiated());
+        QCOMPARE(controlsFor(coreControls, QStringLiteral("start")).constFirst()
+                     .value(QStringLiteral("audioProfileVersion")).toInteger(), qint64{1});
+
+        // The Core accepts lossless and it starts to play, badly.
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().losslessEncoder.has_value(), 15000);
+        QElapsedTimer lossless;
+        lossless.start();
+        QCOMPARE(requestedProfiles(coreControls).constFirst(), QStringLiteral("lossless"));
+        QCOMPARE(remoteMedia.audioStatus().runningProfile,
+                 std::optional<RemoteAudioProfile>(RemoteAudioProfile::Lossless));
+        QVERIFY(!remoteMedia.audioStatus().qualityReason.has_value());
+
+        // The trial decides after its first window, not before.
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().qualityReason
+                                     == RemoteAudioQualityReason::NetworkTooSlow, 12000);
+        const qint64 decidedMs = lossless.elapsed();
+        qInfo() << "lossless link trial decided after" << decidedMs << "ms; link passed"
+                << links.constLast()->passed << "dropped" << links.constLast()->dropped;
+        QVERIFY2(decidedMs >= RemoteAudioLinkTrial::kWindowMs - 1000,
+                 qPrintable(QString::number(decidedMs)));
+        QVERIFY(links.constLast()->dropped > 0);
+        QCOMPARE(errors.count(), 1);
+        QCOMPARE(errors.constFirst().at(0).toString(),
+                 QStringLiteral("The network could not carry lossless audio; staying on Opus."));
+        QCOMPARE(requestedProfiles(coreControls).constLast(), QStringLiteral("opus"));
+
+        // Opus plays over the same link, and the section says why.
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().state == State::Playing
+                                     && remoteMedia.audioStatus().runningProfile
+                                         == RemoteAudioProfile::Opus, 10000);
+        RemoteAudioStatus status = remoteMedia.audioStatus();
+        QVERIFY(status.encoder.has_value());
+        QVERIFY(!status.losslessEncoder.has_value());
+        QCOMPARE(status.chosenProfile, RemoteAudioProfile::Lossless);
+        QVERIFY(formatRemoteAudioDetails(status, remoteMedia.audioTelemetry()).contains(
+            QStringLiteral("Audio quality: Opus\nThe network could not carry lossless audio; "
+                           "staying on Opus.\n")));
+        QCOMPARE(remoteMedia.audioProfileChoice(), RemoteAudioProfile::Lossless);
+        QCOMPARE(AppSettings::instance()
+                     .value(QLatin1String(RemoteMediaController::kAudioProfileSettingKey))
+                     .toString(),
+                 QStringLiteral("Lossless"));
+        // Opus fits the link: nothing more is lost once it runs.
+        const int droppedAtOpus = links.constLast()->dropped;
+        QTest::qWait(1500);
+        QCOMPARE(links.constLast()->dropped, droppedAtOpus);
+        QCOMPARE(errors.count(), 1);
+
+        // The next connection replays the stored choice.
+        const int controlsBefore = int(requestedProfiles(coreControls).size());
+        h.client.disconnectFromStation(QStringLiteral("test reconnect"));
+        QTRY_VERIFY_WITH_TIMEOUT(!h.client.mediaAvailable(), 5000);
+        QCOMPARE(remoteMedia.audioStatus().state, State::NotConnected);
+        QVERIFY(!remoteMedia.audioStatus().qualityReason.has_value());
+        h.connectSession();
+        QTRY_VERIFY_WITH_TIMEOUT(requestedProfiles(coreControls).size() > controlsBefore, 15000);
+        QCOMPARE(requestedProfiles(coreControls).at(controlsBefore), QStringLiteral("lossless"));
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().losslessEncoder.has_value(), 15000);
+
+        audio.stop();
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // R-R3-23: the Remote audio section offers Opus and Lossless. A Core
+    // whose setting denies lossless keeps Opus and the section says so in
+    // plain words; choosing Opus again clears it. Choosing is stored here
+    // and asked for at once.
+    void losslessRefusedByTheCoreKeepsOpusAndSaysWhy()
+    {
+        using State = RemoteAudioStatus::State;
+        const RestoreAudioChoice restore;
+        Test::RemoteAudioSessionHarness h;
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
+        DaemonMediaController daemonMedia(&h.server, &h.station);
+        daemonMedia.setAudioLosslessAllowed(false);
+        RemoteConnectionController controls(&h.client, &h.remote, {});
+        QSignalSpy errors(&remoteMedia, &RemoteMediaController::errorOccurred);
+        QSignalSpy coreControls(&h.server, &StationServer::mediaControlReceived);
+        PacedRemoteAudio audio(h);
+        h.connectSession();
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().state == State::Playing, 15000);
+        QVERIFY(remoteMedia.audioStatus().profileChoiceAvailable);
+        QCOMPARE(remoteMedia.audioStatus().runningProfile,
+                 std::optional<RemoteAudioProfile>(RemoteAudioProfile::Opus));
+        QCOMPARE(requestedProfiles(coreControls).constFirst(), QStringLiteral("opus"));
+
+        RemoteConnectionPanel panel(&controls, nullptr, &remoteMedia);
+        panel.show();
+        QTRY_VERIFY(panel.isVisible());
+        auto* choice = panel.findChild<QComboBox*>(QStringLiteral("remoteAudioQuality"));
+        auto* details = panel.findChild<QLabel*>(QStringLiteral("remoteAudioDetails"));
+        QVERIFY(choice && details);
+        QCOMPARE(choice->count(), 2);
+        QCOMPARE(choice->itemText(0), QStringLiteral("Opus"));
+        QCOMPARE(choice->itemText(1), QStringLiteral("Lossless"));
+        QCOMPARE(choice->currentText(), QStringLiteral("Opus"));
+        QVERIFY(details->text().contains(QStringLiteral("Audio quality: Opus\nCodec: Opus")));
+
+        choice->setCurrentIndex(1);
+        QCOMPARE(remoteMedia.audioProfileChoice(), RemoteAudioProfile::Lossless);
+        QCOMPARE(AppSettings::instance()
+                     .value(QLatin1String(RemoteMediaController::kAudioProfileSettingKey))
+                     .toString(),
+                 QStringLiteral("Lossless"));
+        QTRY_COMPARE_WITH_TIMEOUT(requestedProfiles(coreControls).constLast(),
+                                  QStringLiteral("lossless"), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().qualityReason
+                                     == RemoteAudioQualityReason::CoreNotAllowed, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.audioStatus().state == State::Playing, 10000);
+        QCOMPARE(remoteMedia.audioStatus().runningProfile,
+                 std::optional<RemoteAudioProfile>(RemoteAudioProfile::Opus));
+        QTRY_VERIFY(details->text().contains(QStringLiteral(
+            "Audio quality: Opus\nThis Core does not allow lossless audio.\n")));
+        // A refusal is an answer, not a fault: no alert, no trial.
+        QCOMPARE(errors.count(), 0);
+        QVERIFY(!remoteMedia.findChild<QTimer*>(
+            QStringLiteral("remoteAudioLinkTrialTimer"))->isActive());
+
+        choice->setCurrentIndex(0);
+        QTRY_COMPARE_WITH_TIMEOUT(requestedProfiles(coreControls).constLast(),
+                                  QStringLiteral("opus"), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(!remoteMedia.audioStatus().qualityReason.has_value()
+                                     && remoteMedia.audioStatus().state == State::Playing, 10000);
+        QTRY_VERIFY(!details->text().contains(QStringLiteral("This Core")));
 
         audio.stop();
         h.client.disconnectFromStation(QStringLiteral("test complete"));
