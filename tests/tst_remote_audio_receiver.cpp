@@ -7,6 +7,7 @@
 #include <chrono>
 #include <thread>
 #include "core/AudioEngine.h"
+#include "core/session/media/AudioJitterBuffer.h"
 #include "core/session/media/OpusAudioCodec.h"
 #include "core/session/media/RemoteAudioReceiver.h"
 #include "fakes/PacedAudioBus.h"
@@ -819,6 +820,83 @@ private slots:
         QCOMPARE(telemetry.expectedPackets, quint64(1 + kFollowing));
         QCOMPARE(receiver.rateMatcherUnderflows(), 0);
         QCOMPARE(receiver.rateMatcherOverflows(), 0);
+    }
+
+    // Fix wave, Important 3: once playback has begun the start phase is over
+    // and the normal overflow rule applies again. A burst larger than the
+    // arrival queue after the first decoded packet must request a restart
+    // (Fault::ArrivalBurst), not be silently trimmed as a connect backlog.
+    void burstAfterPlaybackStartsStillRestarts()
+    {
+        constexpr quint32 kSsrc = 845;
+        constexpr int kFirst = 3;
+        constexpr int kBurst = AudioJitterBuffer::kMaxPackets + 4;
+        OpusAudioEncoder encoder;
+        const QVector<float> pcm(3840, 0.1f);
+        QVector<QByteArray> packets;
+        for (int packet = 0; packet < kFirst + kBurst; ++packet) {
+            const auto encoded = encoder.encode(
+                pcm, quint16(packet), quint32(packet) * 1920u, kSsrc);
+            QCOMPARE(encoded.status, OpusAudioCodecStatus::Accepted);
+            packets.append(encoded.packet);
+        }
+
+        AudioEngine engine;
+        engine.setVolume(1.0f);
+        auto sink = std::make_unique<PacedAudioBus>();
+        auto* bus = sink.get();
+        engine.setSpeakersBusForTest(std::move(sink));
+        RemoteAudioReceiver receiver(&engine);
+        struct ReleasePacingGate {
+            PacedAudioBus* bus;
+            ~ReleasePacingGate() { bus->releaseOutputPacingGateForTesting(); }
+        } releaseGate{bus};
+        QSignalSpy errors(&receiver, &RemoteAudioReceiver::errorOccurred);
+        QSignalSpy restarts(&receiver, &RemoteAudioReceiver::restartRequested);
+        QVERIFY(receiver.start(kSsrc, 0));
+
+        using Clock = std::chrono::steady_clock;
+        std::jthread device([bus](std::stop_token stop) {
+            const auto started = Clock::now();
+            quint64 callback = 1;
+            while (!stop.stop_requested()) {
+                std::this_thread::sleep_until(started + std::chrono::nanoseconds(
+                    callback * 480ull * 1'000'000'000ull / 48'000ull));
+                if (stop.stop_requested()) { break; }
+                bus->render(480);
+                ++callback;
+            }
+        });
+        for (int packet = 0; packet < kFirst; ++packet) {
+            receiver.submit(packets.at(packet));
+        }
+        const auto playDeadline = Clock::now() + std::chrono::seconds(1);
+        while (receiver.decodedPackets() == 0 && Clock::now() < playDeadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        QVERIFY(receiver.decodedPackets() >= 1);
+        const quint64 startDiscarded = receiver.telemetry().startDiscardedPackets;
+
+        // Hold the worker at its next pacing read so the whole burst lands
+        // in the arrival queue before it can drain any of it.
+        bus->blockNextOutputPacingForTesting();
+        QVERIFY(bus->waitForOutputPacingGateForTesting(std::chrono::milliseconds(250)));
+        for (int packet = kFirst; packet < kFirst + kBurst; ++packet) {
+            receiver.submit(packets.at(packet));
+        }
+        bus->releaseOutputPacingGateForTesting();
+
+        QTRY_COMPARE_WITH_TIMEOUT(restarts.count(), 1, 1000);
+        device.request_stop();
+        device.join();
+        const QString reason = restarts.first().at(0).toString();
+        QVERIFY2(reason.contains(QStringLiteral("arrival queue exceeded its latency bound")),
+                 qPrintable(reason));
+        QCOMPARE(restarts.first().at(1).value<RemoteAudioReceiver::Fault>(),
+                 RemoteAudioReceiver::Fault::ArrivalBurst);
+        QCOMPARE(receiver.telemetry().startDiscardedPackets, startDiscarded);
+        QCOMPARE(errors.count(), 0);
+        receiver.stop();
     }
 
     // A backlog paced just slowly enough for the worker to keep up never
