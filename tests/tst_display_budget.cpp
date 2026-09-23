@@ -333,6 +333,75 @@ private slots:
                           << " effective=100 earned=100";
     }
 
+    // R-R3-37 (final review, the ceiling run): under a budget with room to
+    // spare, spectrum is paced to the budget, not to the admitted charge. The
+    // app's plan for eight wide 4096-pixel pans under the Core's computed
+    // ceiling is 200 frames a second, one per 5 ms sender tick; ticks that
+    // come 0.5 ms early or late must still each carry a frame, as they do
+    // without a budget.
+    void spectrumIsPacedToTheBudgetNotTheAdmittedCharge()
+    {
+        const SpectrumDisplayCost active = cost(DisplayCodecEncoder::kMaxSamplesPerPlane, 60, true);
+        const SpectrumDisplayCost background
+            = cost(DisplayCodecEncoder::kMaxSamplesPerPlane, 20, true);
+        QList<DisplayBudgetCharge> plan{active.charge};
+        QList<DisplayBudgetCharge> ceilingCharges{ps3DisplayCharge()};
+        for (int pan = 0; pan < 8; ++pan) {
+            if (pan > 0) { plan.append(background.charge); }
+            ceilingCharges.append(active.charge);
+        }
+        const DisplayBudgetCharge charge = *sumDisplayCharges(plan);
+        QCOMPARE(charge.messagesPerSecond, kDisplaySenderMessagesPerSecond);
+        const DisplayBudgetCharge ceilingCharge = *sumDisplayCharges(ceilingCharges);
+        const DisplayBudgetLimits ceiling = limits(ceilingCharge.applicationBytesPerSecond,
+                                                   ceilingCharge.spectrumSampleUnitsPerSecond);
+        QVERIFY(displayChargeFits(ceiling, charge));
+
+        const auto sendsInOneSecond = [&](const DisplayBudgetLimits& budget) {
+            DisplayBudgetPacer pacer;
+            if (!pacer.beginSession(11, budget, 0) || !pacer.update(budget, charge, false, 0)) {
+                return -1;
+            }
+            int sent = 0;
+            qint64 now = 0;
+            for (int tick = 0; tick < 200; ++tick) {
+                now += tick % 2 == 0 ? 4'500'000 : 5'500'000;
+                if (pacer.spendSpectrum(active.maximumFrameBytes,
+                                        active.maximumFrameSampleUnits, now)) {
+                    ++sent;
+                }
+            }
+            return sent;
+        };
+        // Every tick carries a frame under the ceiling.
+        QCOMPARE(sendsInOneSecond(ceiling), 200);
+        // A budget equal to the charge still binds: an early tick has not
+        // earned a whole frame yet.
+        const int atCharge = sendsInOneSecond(
+            limits(charge.applicationBytesPerSecond, charge.spectrumSampleUnitsPerSecond));
+        QVERIFY2(atCharge < 200, qPrintable(QString::number(atCharge)));
+
+        // PureSignal's display keeps its share: spectrum may use the budget
+        // less PureSignal's bytes, and no more.
+        const SpectrumDisplayCost small = cost(128, 10, false);
+        const quint64 room = 4 * quint64(kMaximumSpectrumDisplayFrameBytes);
+        const DisplayBudgetLimits withPs3
+            = limits(ps3DisplayCharge().applicationBytesPerSecond + room,
+                     kDisplayBudgetJsonSafePositiveLimit);
+        DisplayBudgetPacer pacer;
+        QVERIFY(pacer.beginSession(12, withPs3, 0));
+        QVERIFY(pacer.update(withPs3, small.charge, true, 0));
+        quint64 spent = 0;
+        for (qint64 now = 0; now <= 1'000'000'000; now += 1'000'000) {
+            if (pacer.spendSpectrum(kMaximumSpectrumDisplayFrameBytes, 1, now)) {
+                spent += kMaximumSpectrumDisplayFrameBytes;
+            }
+        }
+        // One burst plus one second at the room left beside PureSignal.
+        QVERIFY(spent > small.charge.applicationBytesPerSecond);
+        QVERIFY(spent <= room + kMaximumSpectrumDisplayFrameBytes);
+    }
+
     void longIdleOverflowSaturatesPortablyAtExactBoundary()
     {
         constexpr quint64 kHighRate = 2'000'000'001ULL;

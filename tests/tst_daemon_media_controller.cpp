@@ -31,6 +31,7 @@
 #include "core/session/media/RemoteAudioContext.h"
 #include "core/session/media/RemoteSpectrumContext.h"
 #include "core/settings/SettingsProxy.h"
+#include "gui/RemoteDisplayAllocator.h"
 #include "fakes/LoopbackTransport.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -391,6 +392,9 @@ struct Harness {
     std::function<IMediaTransport*(QObject*)> realTransport;
     QPointer<ClosingControlTransport> stationTransport;
     qint64 nowNs{0};
+    // A run in real time paces displays on the wall clock instead of nowNs.
+    bool realClock{false};
+    QElapsedTimer realTimer;
     QPointer<QTimer> manualSender;
     DaemonMediaController controller;
     int sliceId{-1};
@@ -406,9 +410,10 @@ struct Harness {
                          mediaTransport = new FakeTransport(parent);
                          return mediaTransport;
                      },
-                     [this] { return nowNs; })
+                     [this] { return realClock ? realTimer.nsecsElapsed() : nowNs; })
     {
         Q_ASSERT(directory.isValid());
+        realTimer.start();
         radio.setBoardForTest(HPSDRHW::Saturn);
         radio.configureStreamPool(/*userDdcCount=*/5, /*maxSlices=*/5,
                                   /*defaultRateHz=*/192000);
@@ -568,6 +573,7 @@ private slots:
     void ps3PinsCurrentMultipartFrameAndPromotesOnlyLatest();
     void runtimeCapDecreaseAllowsOnlyComponentwiseReductions();
     void coreBusyLowersThenRestoresTheBudget();
+    void eightWidePansAtTheCeilingMatchLegacyFrameRate();
     void failedDisplayAttemptDebitsCreditAndRecoversWithKeyframe();
     void exhaustedDisplayCreditDoesNotBlockAudioRtp();
     void mediaPeerReplacementDoesNotMintDisplayCredit();
@@ -987,6 +993,135 @@ void TstDaemonMediaController::coreBusyLowersThenRestoresTheBudget()
     QTRY_VERIFY(allocationFor(controls, 97, 4).value(QStringLiteral("accepted")).toBool());
     QCOMPARE(harness.controller.acceptedDisplayCharge(), requested);
     harness.finish();
+}
+
+// Final review, unverified item: at the computed ceiling, eight pans at
+// 4096 px, 60 fps with the wide plane receive what legacy mode (no budget)
+// receives. Real time: the FFT source, the endpoints' cadence and the 5 ms
+// sender all run on their own clocks, as in nereusd. Budget mode sends what
+// the app plans under the ceiling (RemoteDisplayAllocator), legacy mode what
+// the pans ask for.
+void TstDaemonMediaController::eightWidePansAtTheCeilingMatchLegacyFrameRate()
+{
+    // Eight seconds of wall clock whose numbers follow the computer's load,
+    // so it runs on request (NEREUS_DISPLAY_CEILING_RUN=1) and reports them.
+    if (qEnvironmentVariableIntValue("NEREUS_DISPLAY_CEILING_RUN") != 1) {
+        QSKIP("A real-time measurement; set NEREUS_DISPLAY_CEILING_RUN=1 to run it.");
+    }
+    constexpr int kPans = 8;
+    constexpr int kPixels = 4096;
+    constexpr int kFps = 60;
+    constexpr qint64 kWarmupMs = 1'000;
+    constexpr qint64 kMeasureMs = 3'000;
+    struct Run {
+        QList<int> fps;       // what each endpoint subscribed at (0: paused)
+        QList<double> received;
+        double total = 0.0;
+        int admitted = 0;
+    };
+    const auto run = [&](bool budget) -> Run {
+        Run result;
+        const DisplayBudgetLimits ceiling = DisplayLoadGovernor::computedCeiling();
+        Harness h(budget ? std::optional<DisplayBudgetLimits>(ceiling) : std::nullopt);
+        h.realClock = true;
+        h.establishSession();
+        QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+        h.startReadyPeer();
+        QList<RemoteDisplayIntent> intents;
+        for (int pan = 0; pan < kPans; ++pan) {
+            intents.append({QStringLiteral("pan-%1").arg(pan), kPixels, kFps, true, 20, pan == 0});
+        }
+        QList<int> pixels(kPans, kPixels);
+        QList<int> framesPerLine(kPans, 1);
+        result.fps = QList<int>(kPans, kFps);
+        if (budget) {
+            QString error;
+            const auto allocation = allocateRemoteDisplay(ceiling, intents, false, &error);
+            if (!allocation) {
+                qWarning() << "allocation failed:" << error;
+                return result;
+            }
+            for (const RemoteDisplayQuality& quality : allocation->pans) {
+                const int pan = quality.panId.mid(4).toInt();
+                result.fps[pan] = quality.suspended ? 0 : quality.fps;
+                pixels[pan] = quality.pixels;
+                framesPerLine[pan] = quality.framesPerLine;
+            }
+        }
+        const double centre = h.radio.streamCentreHz(h.streamIndex);
+        for (int pan = 0; pan < kPans; ++pan) {
+            if (result.fps.at(pan) == 0) { continue; }
+            QJsonObject request = subscription(quint32(pan + 1), 1, h.sliceId, centre, kPixels);
+            request.insert(QStringLiteral("pixels"), pixels.at(pan));
+            request.insert(QStringLiteral("fps"), result.fps.at(pan));
+            request.insert(QStringLiteral("spanHz"), 192000.0);
+            request.insert(QStringLiteral("wideSpanFactor"), 2.0);
+            request.insert(QStringLiteral("framesPerLine"), framesPerLine.at(pan));
+            [&] { QVERIFY(h.client.sendMediaControl(request, h.client.sessionEpoch())); }();
+        }
+        const int admitted = int(std::count_if(result.fps.cbegin(), result.fps.cend(),
+                                               [](int fps) { return fps > 0; }));
+        QElapsedTimer waited;
+        waited.start();
+        while (h.controller.activeEndpointCount() != admitted && waited.elapsed() < 10'000) {
+            QTest::qWait(10);
+        }
+        result.admitted = h.controller.activeEndpointCount();
+        // 192 kHz in real time: 960 complex samples every 5 ms.
+        const QVector<float> iq = syntheticIq(960, 0.125);
+        QTimer feeder;
+        feeder.setTimerType(Qt::PreciseTimer);
+        feeder.setInterval(5);
+        QObject::connect(&feeder, &QTimer::timeout, &h.radio, [&h, &iq] {
+            QMetaObject::invokeMethod(&h.radio, "rawIqDataForStream", Qt::DirectConnection,
+                                      Q_ARG(int, h.streamIndex), Q_ARG(QVector<float>, iq));
+        });
+        // An event loop, not QTest::qWait, which sleeps between its passes
+        // and would slow the 5 ms feeder and sender with it.
+        const auto runFor = [](qint64 ms) {
+            QEventLoop loop;
+            QTimer::singleShot(std::chrono::milliseconds(ms), &loop, &QEventLoop::quit);
+            loop.exec();
+        };
+        feeder.start();
+        runFor(kWarmupMs);
+        const qsizetype first = h.mediaTransport->displays.size();
+        QElapsedTimer measured;
+        measured.start();
+        runFor(kMeasureMs);
+        const double seconds = double(measured.elapsed()) / 1000.0;
+        feeder.stop();
+        QList<int> counts(kPans, 0);
+        for (qsizetype i = first; i < h.mediaTransport->displays.size(); ++i) {
+            const QByteArray& bytes = h.mediaTransport->displays.at(i);
+            if (bytes.size() < 12) { continue; }
+            const quint32 endpoint = qFromBigEndian<quint32>(bytes.constData() + 8);
+            if (endpoint >= 1 && endpoint <= quint32(kPans)) { ++counts[int(endpoint - 1)]; }
+        }
+        for (int pan = 0; pan < kPans; ++pan) {
+            result.received.append(double(counts.at(pan)) / seconds);
+            result.total += result.received.constLast();
+        }
+        h.finish();
+        return result;
+    };
+    const Run legacy = run(false);
+    const Run budget = run(true);
+    QCOMPARE(legacy.admitted, kPans);
+    QCOMPARE(budget.admitted, kPans);
+    QCOMPARE(legacy.received.size(), kPans);
+    QCOMPARE(budget.received.size(), kPans);
+    const auto line = [](const Run& r) {
+        QStringList parts;
+        for (int pan = 0; pan < r.received.size(); ++pan) {
+            parts.append(QStringLiteral("%1/%2").arg(r.received.at(pan), 0, 'f', 1)
+                             .arg(r.fps.at(pan)));
+        }
+        return QStringLiteral("%1 admitted, total %2 fps; received/subscribed per pan: %3")
+            .arg(r.admitted).arg(r.total, 0, 'f', 1).arg(parts.join(QStringLiteral(", ")));
+    };
+    qInfo().noquote() << "legacy:" << line(legacy);
+    qInfo().noquote() << "ceiling:" << line(budget);
 }
 
 void TstDaemonMediaController::failedDisplayAttemptDebitsCreditAndRecoversWithKeyframe()

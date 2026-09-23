@@ -260,11 +260,20 @@ bool DisplayBudgetPacer::update(DisplayBudgetLimits limits, DisplayBudgetCharge 
     m_spectrumActive = !zeroCharge(spectrumCharge);
     m_ps3Active = ps3Enabled;
     m_globalBytes.rate = limits.applicationBytesPerSecond;
-    m_spectrumBytes.rate = m_spectrumActive ? spectrumCharge.applicationBytesPerSecond : 0;
-    m_spectrumSamples.rate = m_spectrumActive
-        ? std::min(spectrumCharge.spectrumSampleUnitsPerSecond,
-                   limits.spectrumSampleUnitsPerSecond)
-        : 0;
+    // R-R3-37 (final review, the ceiling run): spectrum is paced to the
+    // budget, less what PureSignal's display holds, not to the charge the
+    // endpoints were admitted at. Pacing to the admitted charge with a
+    // one-frame burst refilled exactly one frame per 5 ms sender tick at the
+    // computed ceiling, so a tick that came early lost its frame and eight
+    // wide pans received about three quarters of what legacy mode sends.
+    // The budget still holds: every class stays within the limits, and the
+    // endpoints' own cadence keeps each to its admitted frame rate.
+    const quint64 ps3Reserve = m_ps3Active ? ps3Charge.applicationBytesPerSecond : 0;
+    const quint64 spectrumByteRoom = limits.applicationBytesPerSecond > ps3Reserve
+        ? limits.applicationBytesPerSecond - ps3Reserve : 0;
+    m_spectrumBytes.rate = m_spectrumActive
+        ? std::max(spectrumCharge.applicationBytesPerSecond, spectrumByteRoom) : 0;
+    m_spectrumSamples.rate = m_spectrumActive ? limits.spectrumSampleUnitsPerSecond : 0;
     m_ps3Bytes.rate = m_ps3Active ? ps3Charge.applicationBytesPerSecond : 0;
     return true;
 }
