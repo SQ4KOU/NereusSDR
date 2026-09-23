@@ -5,6 +5,8 @@
 #include "core/dsp/DspAssetValidation.h"
 
 #include <QDialog>
+#include <QPair>
+#include <QWidget>
 #include <QList>
 #include <QPointer>
 #include <QVariantMap>
@@ -26,8 +28,8 @@ namespace NereusSDR {
 class DspAssetService;
 class RadioModel;
 
-// Modeless manager for station-owned NNR models or PureSignal v2 correction
-// files. All station operations cross DspAssetService's typed request boundary;
+// Modeless manager for station-owned NNR models, NR3 models or PureSignal v2
+// correction files. All station operations cross DspAssetService's typed request boundary;
 // paths and file handles stay in this GUI process.
 class DspAssetDialog final : public QDialog
 {
@@ -151,6 +153,47 @@ private:
 
     int m_selectingSlot{-1};
     QString m_lastAcceptedSelection[2];
+};
+
+// R-R3-21: the NR3 tab's model chooser. Lists the Core's NR3 models (the two
+// bundled ones plus any added), selects one with dspAssets.selectNr3Model,
+// and opens the NR3 model manager. The same request path serves the local
+// window and a remote one; against a Core without NR3 models it says so and
+// stays disabled.
+class Nr3ModelPicker final : public QWidget
+{
+    Q_OBJECT
+
+public:
+    explicit Nr3ModelPicker(RadioModel* radio, DspAssetService* service,
+                            QWidget* parent = nullptr);
+
+    // Asks the Core for its model list again.
+    void refresh();
+
+signals:
+    void selectionFinished(bool accepted, QString reason);
+
+private:
+    void onRequestCompleted(quint32 id, bool accepted, const QString& reason,
+                            const QVariantMap& values);
+    void populate();
+    void updateState();
+    void selectModel(int index);
+    void openModels();
+
+    QPointer<RadioModel> m_radio;
+    QPointer<DspAssetService> m_service;
+    QComboBox* m_combo{nullptr};
+    QPushButton* m_modelsButton{nullptr};
+    QLabel* m_status{nullptr};
+    quint32 m_listRequest{0};
+    quint32 m_selectRequest{0};
+    bool m_populating{false};
+    bool m_wasSupported{false};
+    QString m_selectFailure;
+    QList<QPair<QString, QString>> m_models; // id, label
+    QPointer<DspAssetDialog> m_dialog;
 };
 
 } // namespace NereusSDR

@@ -98,6 +98,29 @@ bool captureIfRequested(QWidget& widget, const QString& fileName)
     return widget.grab().save(QDir(directory).filePath(fileName), "PNG");
 }
 
+QByteArray bundledSmallNr3()
+{
+    QFile file(QFINDTESTDATA("../third_party/rnnoise/models/Default_small.bin"));
+    return file.open(QIODevice::ReadOnly) ? file.readAll() : QByteArray();
+}
+
+QStringList tableText(const QTableWidget* table)
+{
+    QStringList cells;
+    for (int row = 0; row < table->rowCount(); ++row)
+        for (int column = 0; column < table->columnCount(); ++column)
+            cells.append(table->item(row, column) ? table->item(row, column)->text() : QString());
+    return cells;
+}
+
+QStringList comboItems(const QComboBox* combo)
+{
+    QStringList items;
+    for (int i = 0; i < combo->count(); ++i)
+        items.append(combo->itemText(i) + QLatin1Char('|') + combo->itemData(i).toString());
+    return items;
+}
+
 } // namespace
 
 class TestDspAssetDialog final : public QObject
@@ -112,6 +135,10 @@ private slots:
     void importingDoesNotApplyOrReconnect();
     void restoreEmitsOnlySelectedCorrectionIdentity();
     void geometryAndCollapsedDetailsRoundTrip();
+    void nr3DialogImportsAndListsOnlyNr3Models();
+    void nnrDialogSkipsNr3RowsGolden();
+    void nr3PickerLocalSelectsAndLoads();
+    void nr3PickerRemoteUsesCommandsAndOlderCoreWording();
 };
 
 void TestDspAssetDialog::importAndVerifiedExportUseBoundedServiceRequests()
@@ -313,6 +340,197 @@ void TestDspAssetDialog::geometryAndCollapsedDetailsRoundTrip()
     } else {
         settings.remove(detailsKey);
     }
+}
+
+void TestDspAssetDialog::nr3DialogImportsAndListsOnlyNr3Models()
+{
+    QTemporaryDir directory;
+    AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+    DspAssetService service(settings, true);
+    QVERIFY(upload(service, DspAssetKind::NnrModel, standardModel(),
+                   QStringLiteral("NNR only")).accepted);
+
+    DspAssetDialog dialog(nullptr, &service, DspAssetKind::Nr3Model);
+    QCOMPARE(dialog.windowTitle(), QStringLiteral("NR3 Models"));
+    QVERIFY(!dialog.findChild<QPushButton*>(QStringLiteral("applyNnrAssetsButton")));
+    QVERIFY(!dialog.findChild<QPushButton*>(QStringLiteral("restoreCorrectionAssetButton")));
+    QVERIFY(!dialog.findChild<QComboBox*>(QStringLiteral("nnrStandardAssetCombo")));
+    QSignalSpy operations(&dialog, &DspAssetDialog::operationFinished);
+    auto* table = dialog.findChild<QTableWidget*>(QStringLiteral("dspAssetTable"));
+    QVERIFY(table);
+    QTRY_VERIFY(dialog.findChild<QPushButton*>(QStringLiteral("dspAssetImportButton"))->isEnabled());
+    QCOMPARE(table->rowCount(), 0);
+
+    const QByteArray bytes = bundledSmallNr3();
+    QVERIFY(!bytes.isEmpty());
+    const QString source = writeFile(directory.filePath(QStringLiteral("voice.bin")), bytes);
+    const int before = operations.size();
+    QVERIFY(dialog.importFile(source, QStringLiteral("Voice")));
+    QTRY_VERIFY_WITH_TIMEOUT(hasSuccessfulSignal(operations, before), 15000);
+    QTRY_COMPARE_WITH_TIMEOUT(table->rowCount(), 1, 15000);
+    QCOMPARE(table->item(0, 0)->text(), QStringLiteral("Voice"));
+    QCOMPARE(table->item(0, 1)->text(), QStringLiteral("RNNoise"));
+    // Importing is not choosing.
+    QCOMPARE(service.nr3ModelAsset(), QString::fromLatin1(DspAssetService::kNr3BundledLargeId));
+    QVERIFY2(captureIfRequested(dialog, QStringLiteral("dsp-assets-nr3.png")),
+             "Could not save opt-in NR3 asset manager capture");
+
+    const QString junk = writeFile(directory.filePath(QStringLiteral("junk.bin")),
+                                   QByteArrayLiteral("this is a text file, not an NR3 model at all, really."));
+    const int beforeJunk = operations.size();
+    QVERIFY(dialog.importFile(junk, QStringLiteral("Junk")));
+    QTRY_VERIFY_WITH_TIMEOUT(operations.size() > beforeJunk && !operations.last().at(0).toBool(), 5000);
+    QCOMPARE(operations.last().at(1).toString(), QStringLiteral("This file is not an NR3 model."));
+    QTRY_COMPARE(table->rowCount(), 1);
+}
+
+void TestDspAssetDialog::nnrDialogSkipsNr3RowsGolden()
+{
+    // A window that manages NNR models sees exactly what it saw before NR3
+    // models existed, whatever NR3 rows the Core also lists.
+    QTemporaryDir plainDirectory;
+    AppSettings plainSettings(plainDirectory.filePath(QStringLiteral("station.settings")));
+    DspAssetService plain(plainSettings, true);
+    QVERIFY(upload(plain, DspAssetKind::NnrModel, standardModel(), QStringLiteral("NNR")).accepted);
+
+    QTemporaryDir mixedDirectory;
+    AppSettings mixedSettings(mixedDirectory.filePath(QStringLiteral("station.settings")));
+    DspAssetService mixed(mixedSettings, true);
+    QVERIFY(upload(mixed, DspAssetKind::NnrModel, standardModel(), QStringLiteral("NNR")).accepted);
+    QVERIFY(upload(mixed, DspAssetKind::Nr3Model, bundledSmallNr3(), QStringLiteral("NR3")).accepted);
+
+    DspAssetDialog golden(nullptr, &plain, DspAssetKind::NnrModel);
+    DspAssetDialog withNr3(nullptr, &mixed, DspAssetKind::NnrModel);
+    auto* goldenTable = golden.findChild<QTableWidget*>(QStringLiteral("dspAssetTable"));
+    auto* mixedTable = withNr3.findChild<QTableWidget*>(QStringLiteral("dspAssetTable"));
+    QTRY_COMPARE(goldenTable->rowCount(), 1);
+    QTRY_COMPARE(mixedTable->rowCount(), 1);
+    QCOMPARE(tableText(mixedTable), tableText(goldenTable));
+    for (const char* name : {"nnrStandardAssetCombo", "nnrPremiumAssetCombo"}) {
+        const QString objectName = QString::fromLatin1(name);
+        QCOMPARE(comboItems(withNr3.findChild<QComboBox*>(objectName)),
+                 comboItems(golden.findChild<QComboBox*>(objectName)));
+    }
+}
+
+void TestDspAssetDialog::nr3PickerLocalSelectsAndLoads()
+{
+    QTemporaryDir directory;
+    AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+    DspAssetService service(settings, true);
+    QStringList loaded;
+    service.setNr3ModelLoader([&](const QString& path) { loaded.append(path); });
+    const auto imported = upload(service, DspAssetKind::Nr3Model, bundledSmallNr3(),
+                                 QStringLiteral("Quiet"));
+    QVERIFY2(imported.accepted, qPrintable(imported.reason));
+    QVERIFY(upload(service, DspAssetKind::NnrModel, standardModel(), QStringLiteral("NNR")).accepted);
+
+    Nr3ModelPicker picker(nullptr, &service);
+    auto* combo = picker.findChild<QComboBox*>(QStringLiteral("nr3ModelCombo"));
+    auto* models = picker.findChild<QPushButton*>(QStringLiteral("nr3ModelsButton"));
+    auto* status = picker.findChild<QLabel*>(QStringLiteral("nr3ModelStatusLabel"));
+    QVERIFY(combo && models && status);
+    QTRY_COMPARE(combo->count(), 3); // bundled large, bundled small, "Quiet"; no NNR row
+    QCOMPARE(combo->itemText(0), QStringLiteral("Bundled large model"));
+    QCOMPARE(combo->itemText(1), QStringLiteral("Bundled small model"));
+    QCOMPARE(combo->itemText(2), QStringLiteral("Quiet"));
+    QCOMPARE(combo->currentIndex(), 0);
+    QVERIFY(combo->isEnabled() && models->isEnabled());
+    QCOMPARE(status->text(), QStringLiteral("Using the bundled large model."));
+
+    QSignalSpy finished(&picker, &Nr3ModelPicker::selectionFinished);
+    combo->setCurrentIndex(2);
+    QVERIFY(QMetaObject::invokeMethod(combo, "activated", Qt::DirectConnection, Q_ARG(int, 2)));
+    QTRY_COMPARE(finished.count(), 1);
+    QVERIFY(finished.first().at(0).toBool());
+    QCOMPARE(loaded.size(), 1);
+    QCOMPARE(service.nr3ModelAsset(), imported.values.value(QStringLiteral("id")).toString());
+    QCOMPARE(status->text(), QStringLiteral("Using the NR3 model \"Quiet\"."));
+    QCOMPARE(combo->currentIndex(), 2);
+}
+
+void TestDspAssetDialog::nr3PickerRemoteUsesCommandsAndOlderCoreWording()
+{
+    QTemporaryDir directory;
+    AppSettings settings(directory.filePath(QStringLiteral("client.settings")));
+    DspAssetService service(settings, false);
+    QList<QPair<QByteArray, QVariantMap>> sent;
+    quint32 nextId = 100;
+    service.setRemoteRequestHandler([&](const QByteArray& verb, const QVariantMap& args) {
+        sent.append({verb, args});
+        return ++nextId;
+    });
+
+    // Against an older Core: disabled, says so, sends nothing.
+    Nr3ModelPicker picker(nullptr, &service);
+    auto* combo = picker.findChild<QComboBox*>(QStringLiteral("nr3ModelCombo"));
+    auto* models = picker.findChild<QPushButton*>(QStringLiteral("nr3ModelsButton"));
+    auto* status = picker.findChild<QLabel*>(QStringLiteral("nr3ModelStatusLabel"));
+    QVERIFY(combo && models && status);
+    QVERIFY(!combo->isEnabled());
+    QVERIFY(!models->isEnabled());
+    QCOMPARE(status->text(), QStringLiteral("This Core cannot change the NR3 model."));
+    QVERIFY(sent.isEmpty());
+    DspAssetDialog olderDialog(nullptr, &service, DspAssetKind::Nr3Model);
+    QVERIFY(!olderDialog.findChild<QPushButton*>(QStringLiteral("dspAssetImportButton"))->isEnabled());
+    QCOMPARE(olderDialog.findChild<QLabel*>(QStringLiteral("dspAssetOperationStatus"))->text(),
+             QStringLiteral("This Core cannot change the NR3 model."));
+    QVERIFY(sent.isEmpty());
+
+    // A Core with NR3 models: the list arrives over the wire.
+    service.setRemoteNr3ModelsSupported(true);
+    service.applyRemoteProperty("nr3ModelStatus", QStringLiteral("Using the bundled large model."));
+    QVERIFY(!sent.isEmpty());
+    const int pickerList = [&] {
+        for (int i = 0; i < sent.size(); ++i)
+            if (sent.at(i).first == "dspAssets.list") return i;
+        return -1;
+    }();
+    QVERIFY(pickerList >= 0);
+    const QString rows = QStringLiteral(
+        "[{\"id\":\"sha256:%1\",\"kind\":2,\"label\":\"Remote NR3\",\"valid\":true,\"size\":10},"
+        "{\"id\":\"sha256:%2\",\"kind\":0,\"label\":\"NNR row\",\"valid\":true,\"size\":10},"
+        "{\"id\":\"sha256:%3\",\"kind\":7,\"label\":\"Future row\",\"valid\":true,\"size\":10}]")
+        .arg(QString(64, QLatin1Char('1')), QString(64, QLatin1Char('2')),
+             QString(64, QLatin1Char('3')));
+    // Answer every list request that is outstanding (the picker's and the
+    // dialog's).
+    for (int i = 0; i < sent.size(); ++i) {
+        if (sent.at(i).first == "dspAssets.list") {
+            service.receiveRemoteResult(101 + i, "dspAssets.list", true, {},
+                                        {{QStringLiteral("assets"), rows}});
+        }
+    }
+    QTRY_COMPARE(combo->count(), 3);
+    QCOMPARE(combo->itemText(2), QStringLiteral("Remote NR3"));
+    QVERIFY(combo->isEnabled() && models->isEnabled());
+    QCOMPARE(status->text(), QStringLiteral("Using the bundled large model."));
+    auto* olderTable = olderDialog.findChild<QTableWidget*>(QStringLiteral("dspAssetTable"));
+    QTRY_COMPARE(olderTable->rowCount(), 1); // unknown and other kinds skipped
+
+    const int before = sent.size();
+    combo->setCurrentIndex(1);
+    QVERIFY(QMetaObject::invokeMethod(combo, "activated", Qt::DirectConnection, Q_ARG(int, 1)));
+    QCOMPARE(sent.size(), before + 1);
+    QCOMPARE(sent.last().first, QByteArrayLiteral("dspAssets.selectNr3Model"));
+    QCOMPARE(sent.last().second, (QVariantMap{{QStringLiteral("id"),
+                                  QString::fromLatin1(DspAssetService::kNr3BundledSmallId)}}));
+    QVERIFY(!combo->isEnabled()); // waiting for the Core
+
+    // The Core refuses: the reason is shown and the Core's choice stays.
+    QSignalSpy finished(&picker, &Nr3ModelPicker::selectionFinished);
+    QVERIFY(service.receiveRemoteResult(101 + before, "dspAssets.selectNr3Model", false,
+                                        QStringLiteral("That bundled NR3 model is not installed on this Core."),
+                                        {}));
+    QCOMPARE(finished.count(), 1);
+    QCOMPARE(status->text(), QStringLiteral("That bundled NR3 model is not installed on this Core."));
+    QCOMPARE(combo->currentIndex(), 0);
+    QVERIFY(combo->isEnabled());
+
+    // The session ends: back to the older-Core wording.
+    service.setRemoteNr3ModelsSupported(false);
+    QVERIFY(!combo->isEnabled());
+    QCOMPARE(status->text(), QStringLiteral("This Core cannot change the NR3 model."));
 }
 
 QTEST_MAIN(TestDspAssetDialog)

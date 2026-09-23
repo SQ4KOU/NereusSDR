@@ -125,8 +125,11 @@ DspAssetDialog::DspAssetDialog(RadioModel* radio, DspAssetService* service,
     : QDialog(parent), m_radio(radio), m_service(service), m_kind(kind)
 {
     setObjectName(QStringLiteral("dspAssetDialog"));
-    setWindowTitle(kind == DspAssetKind::NnrModel
-                       ? tr("NNR Model Assets") : tr("PureSignal Correction Assets"));
+    switch (kind) {
+    case DspAssetKind::NnrModel: setWindowTitle(tr("NNR Model Assets")); break;
+    case DspAssetKind::Ps3Correction: setWindowTitle(tr("PureSignal Correction Assets")); break;
+    case DspAssetKind::Nr3Model: setWindowTitle(tr("NR3 Models")); break;
+    }
     setModal(false);
     setAttribute(Qt::WA_DeleteOnClose, false);
     setMinimumSize(560, 420);
@@ -146,6 +149,20 @@ DspAssetDialog::DspAssetDialog(RadioModel* radio, DspAssetService* service,
         connect(m_service, &DspAssetService::selectionChanged, this, [this] {
             updateSelectionSummary();
         });
+        if (m_kind == DspAssetKind::Nr3Model) {
+            // A remote window learns the Core's NR3 support once the session
+            // is up; list the models the moment it does.
+            connect(m_service, &DspAssetService::nr3SelectionChanged, this, [this] {
+                const bool supported = m_service && m_service->nr3ModelsSupported();
+                if (supported && m_assets.isEmpty() && m_requestId == 0) {
+                    requestList();
+                } else if (!supported) {
+                    abortOperation(true);
+                    showError(tr("This Core cannot change the NR3 model."));
+                }
+                updateButtons();
+            });
+        }
         connect(m_service, &QObject::destroyed, this, [this] {
             abortOperation(false);
             showError(tr("The station asset service is no longer available."));
@@ -162,6 +179,11 @@ DspAssetDialog::DspAssetDialog(RadioModel* radio, DspAssetService* service,
 
     if (!m_service) {
         showError(tr("DSP asset management is not available for this station."));
+        updateButtons();
+        return;
+    }
+    if (m_kind == DspAssetKind::Nr3Model && !m_service->nr3ModelsSupported()) {
+        showError(tr("This Core cannot change the NR3 model."));
         updateButtons();
         return;
     }
@@ -263,7 +285,7 @@ void DspAssetDialog::buildUi()
         m_applyButton->setObjectName(QStringLiteral("applyNnrAssetsButton"));
         buttons->addWidget(m_applyButton);
         connect(m_applyButton, &QPushButton::clicked, this, &DspAssetDialog::applyNnrModels);
-    } else {
+    } else if (m_kind == DspAssetKind::Ps3Correction) {
         m_restoreButton = new QPushButton(tr("Restore selected"), this);
         m_restoreButton->setObjectName(QStringLiteral("restoreCorrectionAssetButton"));
         buttons->addWidget(m_restoreButton);
@@ -307,9 +329,12 @@ void DspAssetDialog::buildUi()
 
 QString DspAssetDialog::settingsPrefix() const
 {
-    return m_kind == DspAssetKind::NnrModel
-               ? QStringLiteral("DspAssetDialog/NnrModel")
-               : QStringLiteral("DspAssetDialog/Ps3Correction");
+    switch (m_kind) {
+    case DspAssetKind::NnrModel: return QStringLiteral("DspAssetDialog/NnrModel");
+    case DspAssetKind::Ps3Correction: return QStringLiteral("DspAssetDialog/Ps3Correction");
+    case DspAssetKind::Nr3Model: return QStringLiteral("DspAssetDialog/Nr3Model");
+    }
+    return QStringLiteral("DspAssetDialog/NnrModel");
 }
 
 void DspAssetDialog::restoreUiState()
@@ -375,8 +400,7 @@ void DspAssetDialog::saveUiState() const
 
 qint64 DspAssetDialog::kindSizeLimit() const
 {
-    return m_kind == DspAssetKind::NnrModel ? DspAssetValidation::kMaxNnrModelBytes
-                                             : DspAssetValidation::kMaxPs3CorrectionBytes;
+    return DspAssetValidation::sizeLimit(m_kind);
 }
 
 QString DspAssetDialog::currentRadioIdentity() const
@@ -563,7 +587,8 @@ QString DspAssetDialog::selectedAssetId() const
 
 void DspAssetDialog::updateButtons()
 {
-    const bool available = m_service && m_operation == Operation::Idle && m_requestId == 0;
+    const bool available = m_service && m_operation == Operation::Idle && m_requestId == 0
+        && (m_kind != DspAssetKind::Nr3Model || m_service->nr3ModelsSupported());
     const bool hasSelection = !selectedAssetId().isEmpty();
     if (m_importButton) {
         m_importButton->setEnabled(available);
@@ -666,7 +691,11 @@ bool DspAssetDialog::importFile(const QString& path, const QString& label)
                            {QStringLiteral("label"), m_importLabel},
                            {QStringLiteral("size"), m_importSize},
                            {QStringLiteral("hash"), m_importHash},
-                           {QStringLiteral("radioIdentity"), radioIdentity}};
+                           // Only a PureSignal correction belongs to one
+                           // radio; models are refused with an identity.
+                           {QStringLiteral("radioIdentity"),
+                            m_kind == DspAssetKind::Ps3Correction ? radioIdentity
+                                                                  : QString()}};
     if (!beginRequest(Operation::BeginImport, "dspAssets.beginImport", args)) {
         m_importFile.reset();
         return false;
@@ -920,9 +949,18 @@ void DspAssetDialog::handleSelectionReply(bool accepted, const QString& reason,
 
 void DspAssetDialog::chooseImportFile()
 {
-    const QString filter = m_kind == DspAssetKind::NnrModel
-                               ? tr("WDSP neural models (*.bin *.nn);;All files (*)")
-                               : tr("PureSignal v2 corrections (*.txt *.ps3);;All files (*)");
+    QString filter;
+    switch (m_kind) {
+    case DspAssetKind::NnrModel:
+        filter = tr("WDSP neural models (*.bin *.nn);;All files (*)");
+        break;
+    case DspAssetKind::Ps3Correction:
+        filter = tr("PureSignal v2 corrections (*.txt *.ps3);;All files (*)");
+        break;
+    case DspAssetKind::Nr3Model:
+        filter = tr("NR3 models (*.bin *.rnnn);;All files (*)");
+        break;
+    }
     const QString path = QFileDialog::getOpenFileName(this, tr("Import DSP asset"), {}, filter);
     if (path.isEmpty()) {
         return;
@@ -946,8 +984,8 @@ void DspAssetDialog::chooseExportFile()
     if (id.isEmpty()) {
         return;
     }
-    const QString suffix = m_kind == DspAssetKind::NnrModel ? QStringLiteral(".bin")
-                                                             : QStringLiteral(".txt");
+    const QString suffix = m_kind == DspAssetKind::Ps3Correction ? QStringLiteral(".txt")
+                                                                  : QStringLiteral(".bin");
     QString suggested;
     const int row = m_table->currentRow();
     if (row >= 0 && row < m_assets.size()) {
@@ -1040,6 +1078,199 @@ void DspAssetDialog::closeEvent(QCloseEvent* event)
     saveUiState();
     m_closing = false;
     event->accept();
+}
+
+// ── Nr3ModelPicker (R-R3-21) ─────────────────────────────────────────────
+
+Nr3ModelPicker::Nr3ModelPicker(RadioModel* radio, DspAssetService* service, QWidget* parent)
+    : QWidget(parent), m_radio(radio), m_service(service)
+{
+    setObjectName(QStringLiteral("nr3ModelPicker"));
+    auto* root = new QVBoxLayout(this);
+    root->setContentsMargins(0, 0, 0, 0);
+
+    auto* row = new QHBoxLayout();
+    m_combo = new QComboBox(this);
+    m_combo->setObjectName(QStringLiteral("nr3ModelCombo"));
+    m_combo->setToolTip(tr("The NR3 model the Core uses for every receiver."));
+    m_modelsButton = new QPushButton(tr("Models…"), this);
+    m_modelsButton->setObjectName(QStringLiteral("nr3ModelsButton"));
+    m_modelsButton->setToolTip(tr("Add, save or review the Core's NR3 models."));
+    row->addWidget(m_combo, 1);
+    row->addWidget(m_modelsButton);
+    root->addLayout(row);
+
+    m_status = new QLabel(this);
+    m_status->setObjectName(QStringLiteral("nr3ModelStatusLabel"));
+    m_status->setWordWrap(true);
+    root->addWidget(m_status);
+
+    connect(m_combo, qOverload<int>(&QComboBox::activated), this,
+            &Nr3ModelPicker::selectModel);
+    connect(m_modelsButton, &QPushButton::clicked, this, &Nr3ModelPicker::openModels);
+    if (m_service) {
+        connect(m_service, &DspAssetService::requestCompleted, this,
+                &Nr3ModelPicker::onRequestCompleted);
+        connect(m_service, &DspAssetService::nr3SelectionChanged, this, [this] {
+            const bool supported = m_service && m_service->nr3ModelsSupported();
+            if (supported && !m_wasSupported) {
+                refresh();
+            }
+            if (!supported) {
+                // A retired session's answers never arrive.
+                m_listRequest = 0;
+                m_selectRequest = 0;
+            }
+            m_wasSupported = supported;
+            populate();
+        });
+    }
+    m_wasSupported = m_service && m_service->nr3ModelsSupported();
+    populate();
+    refresh();
+}
+
+void Nr3ModelPicker::refresh()
+{
+    if (!m_service || !m_service->nr3ModelsSupported() || m_listRequest != 0) {
+        updateState();
+        return;
+    }
+    m_listRequest = m_service->request("dspAssets.list", {});
+    if (m_listRequest == 0) {
+        m_status->setText(tr("The NR3 model list could not be loaded right now."));
+    }
+    updateState();
+}
+
+void Nr3ModelPicker::onRequestCompleted(quint32 id, bool accepted, const QString& reason,
+                                        const QVariantMap& values)
+{
+    if (id == 0) {
+        return;
+    }
+    if (id == m_listRequest) {
+        m_listRequest = 0;
+        QString json;
+        if (accepted && isExactString(values.value(QStringLiteral("assets")), &json)
+            && json.toUtf8().size() <= kMaximumListJsonBytes) {
+            const QJsonDocument document = QJsonDocument::fromJson(json.toUtf8());
+            QList<QPair<QString, QString>> models;
+            if (document.isArray() && document.array().size() <= kMaximumRows) {
+                for (const QJsonValue& value : document.array()) {
+                    const QJsonObject object = value.toObject();
+                    // Other kinds, and anything this build cannot read, are
+                    // skipped rather than guessed at.
+                    if (object.value(QStringLiteral("kind")).toInt(-1)
+                            != static_cast<int>(DspAssetKind::Nr3Model)
+                        || !object.value(QStringLiteral("valid")).toBool(false)) {
+                        continue;
+                    }
+                    const QString assetId = object.value(QStringLiteral("id")).toString();
+                    if (assetId.isEmpty() || assetId.size() > 128) {
+                        continue;
+                    }
+                    models.append({assetId, object.value(QStringLiteral("label")).toString()});
+                }
+            }
+            m_models = std::move(models);
+        }
+        populate();
+        return;
+    }
+    if (id == m_selectRequest) {
+        m_selectRequest = 0;
+        m_selectFailure = accepted ? QString()
+            : (reason.isEmpty() ? tr("The Core did not change the NR3 model.") : reason);
+        populate();
+        emit selectionFinished(accepted, m_selectFailure);
+    }
+}
+
+void Nr3ModelPicker::populate()
+{
+    m_populating = true;
+    {
+        const QSignalBlocker blocker(m_combo);
+        m_combo->clear();
+        m_combo->addItem(tr("Bundled large model"),
+                         QString::fromLatin1(DspAssetService::kNr3BundledLargeId));
+        m_combo->addItem(tr("Bundled small model"),
+                         QString::fromLatin1(DspAssetService::kNr3BundledSmallId));
+        for (const auto& model : std::as_const(m_models)) {
+            m_combo->addItem(model.second.isEmpty() ? shortId(model.first) : model.second,
+                             model.first);
+        }
+        const QString selected = m_service ? m_service->nr3ModelAsset() : QString();
+        int index = m_combo->findData(selected);
+        if (index < 0 && !selected.isEmpty()) {
+            m_combo->addItem(tr("Missing model"), selected);
+            index = m_combo->count() - 1;
+        }
+        m_combo->setCurrentIndex(qMax(0, index));
+    }
+    m_populating = false;
+    updateState();
+}
+
+void Nr3ModelPicker::updateState()
+{
+    const bool supported = m_service && m_service->nr3ModelsSupported();
+    const bool idle = m_selectRequest == 0;
+    m_combo->setEnabled(supported && idle);
+    m_modelsButton->setEnabled(supported);
+    if (!supported) {
+        m_status->setText(tr("This Core cannot change the NR3 model."));
+    } else if (!m_selectFailure.isEmpty()) {
+        m_status->setText(m_selectFailure);
+    } else if (!idle) {
+        m_status->setText(tr("Changing the NR3 model…"));
+    } else {
+        m_status->setText(m_service->nr3ModelStatus());
+    }
+}
+
+void Nr3ModelPicker::selectModel(int index)
+{
+    if (m_populating || !m_service || !m_service->nr3ModelsSupported()
+        || m_selectRequest != 0 || index < 0) {
+        return;
+    }
+    const QString id = m_combo->itemData(index).toString();
+    if (id.isEmpty() || id == m_service->nr3ModelAsset()) {
+        return;
+    }
+    m_selectFailure.clear();
+    m_selectRequest = m_service->request("dspAssets.selectNr3Model",
+                                         {{QStringLiteral("id"), id}});
+    if (m_selectRequest == 0) {
+        m_selectFailure = tr("The NR3 model could not be changed right now.");
+        populate();
+        emit selectionFinished(false, m_selectFailure);
+        return;
+    }
+    updateState();
+}
+
+void Nr3ModelPicker::openModels()
+{
+    if (!m_service) {
+        return;
+    }
+    if (!m_dialog) {
+        m_dialog = new DspAssetDialog(m_radio, m_service, DspAssetKind::Nr3Model, window());
+        m_dialog->setAttribute(Qt::WA_DeleteOnClose);
+        // An added model becomes choosable here without reopening Setup.
+        connect(m_dialog, &DspAssetDialog::operationFinished, this,
+                [this](bool accepted, const QString&) {
+            if (accepted) {
+                refresh();
+            }
+        });
+    }
+    m_dialog->show();
+    m_dialog->raise();
+    m_dialog->activateWindow();
 }
 
 } // namespace NereusSDR
