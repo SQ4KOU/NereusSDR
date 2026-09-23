@@ -699,15 +699,36 @@ private slots:
 
         if (endsFailed) {
             // Retry from the Devices page starts a new attempt for the same
-            // demand, and both Retry buttons disable at once.
+            // demand. Every failing scenario fails again, so wait for the
+            // retried generation's own Failed before Test Mic is released.
             const quint32 failedGeneration = engine->captureStatus().generation;
             devRetry->click();
-            QTRY_VERIFY_WITH_TIMEOUT(engine->captureStatus().generation > failedGeneration, 3000);
-            QTRY_VERIFY(engine->captureStatus().state != CaptureState::Failed
-                        || engine->captureStatus().generation > failedGeneration);
-        }
+            QTRY_VERIFY_WITH_TIMEOUT(engine->captureStatus().state == CaptureState::Failed
+                                         && engine->captureStatus().generation > failedGeneration,
+                                     5000);
+            const CaptureSupervisor::Status retriedFailure = engine->captureStatus();
 
-        txPage.testMicButton()->setChecked(false);
+            // Failure before release. The capture design (item 8 of
+            // docs/architecture/2026-09-22-optional-microphone-capture-design.md)
+            // keeps a failure visible until an explicit retry, a device
+            // change or a new eligible session; releasing demand is none of
+            // those, so Stop Test leaves the failure and Retry on screen.
+            txPage.testMicButton()->setChecked(false);
+            QVERIFY(!txPage.hasTestMicDemand());
+            QTRY_COMPARE_WITH_TIMEOUT(engine->captureHelperProcessIdForTest(), qint64(0), 5000);
+            QTest::qWait(300);
+            QCOMPARE(engine->captureStatus(), retriedFailure);
+            QCOMPARE(txLabel->text(), captureStatusText(retriedFailure));
+            QVERIFY(txLabel->text() != QStringLiteral("Microphone not in use"));
+            QCOMPARE(devLabel->text(), txLabel->text());
+            QVERIFY(txRetry->isEnabled());
+            QVERIFY(devRetry->isEnabled());
+
+            // An explicit Retry with no demand clears the failure.
+            txRetry->click();
+        } else {
+            txPage.testMicButton()->setChecked(false);
+        }
         QTRY_COMPARE_WITH_TIMEOUT(engine->captureStatus().state, CaptureState::Closed, 5000);
         QTRY_COMPARE(txLabel->text(), QStringLiteral("Microphone not in use"));
         QTRY_COMPARE(devLabel->text(), QStringLiteral("Microphone not in use"));
@@ -716,7 +737,12 @@ private slots:
         QVERIFY2(retryRuleHeld, qPrintable(shown.join(QStringLiteral(" | "))));
     }
 
-    // Retry is wired on the TX Input page too.
+    // Retry is wired on the TX Input page too. Covers both orders of a
+    // failure and the release of the last demand. The capture design (item 8
+    // of docs/architecture/2026-09-22-optional-microphone-capture-design.md)
+    // keeps a failure visible until an explicit retry, a device change or a
+    // new eligible session, so releasing after a failure leaves it on screen,
+    // while a failure that arrives after the release is ignored.
     void retry_fromTxPage_startsNewAttempt()
     {
         RadioModel model;
@@ -724,17 +750,57 @@ private slots:
         useFakeHelper(model, QStringLiteral("malformed"));
         AudioEngine* engine = model.audioEngine();
         AudioTxInputPage page(&model);
+        QLabel* label = statusLabelOf(&page);
+        QPushButton* retry = retryButtonOf(&page);
 
         page.testMicButton()->setChecked(true);
         QTRY_COMPARE_WITH_TIMEOUT(engine->captureStatus().state, CaptureState::Failed, 5000);
-        QTRY_VERIFY(retryButtonOf(&page)->isEnabled());
-        const quint32 failedGeneration = engine->captureStatus().generation;
+        QTRY_VERIFY(retry->isEnabled());
+        const quint32 firstFailure = engine->captureStatus().generation;
 
-        retryButtonOf(&page)->click();
-        QTRY_VERIFY_WITH_TIMEOUT(engine->captureStatus().generation > failedGeneration, 3000);
+        // Failure before release: Retry opens a new generation, which the
+        // malformed helper fails too; only then is Test Mic switched off.
+        retry->click();
+        QTRY_VERIFY_WITH_TIMEOUT(engine->captureStatus().state == CaptureState::Failed
+                                     && engine->captureStatus().generation > firstFailure,
+                                 5000);
+        const CaptureSupervisor::Status failedBeforeRelease = engine->captureStatus();
+        page.testMicButton()->setChecked(false);
+        QTRY_COMPARE_WITH_TIMEOUT(engine->captureHelperProcessIdForTest(), qint64(0), 5000);
+        QTest::qWait(300);
+        QCOMPARE(engine->captureStatus(), failedBeforeRelease);
+        QCOMPARE(label->text(), QStringLiteral("Microphone support stopped unexpectedly."));
+        QVERIFY(retry->isEnabled());
 
+        // A new Test Mic demand is a new attempt; it fails the same way.
+        page.testMicButton()->setChecked(true);
+        QTRY_VERIFY_WITH_TIMEOUT(engine->captureStatus().state == CaptureState::Failed
+                                     && engine->captureStatus().generation
+                                            > failedBeforeRelease.generation,
+                                 5000);
+        const quint32 lastFailure = engine->captureStatus().generation;
+
+        // Failure after release: Retry and Stop Test in the same turn queue
+        // the new attempt and the release to the capture thread back to back,
+        // so the release reaches it before the new helper has started and
+        // written its malformed record. That late failure must be ignored.
+        QList<CaptureSupervisor::Status> seen;
+        QObject recorderScope;
+        connect(engine, &AudioEngine::captureStatusChanged, &recorderScope,
+                [&seen](const CaptureSupervisor::Status& status) { seen << status; });
+        retry->click();
         page.testMicButton()->setChecked(false);
         QTRY_COMPARE_WITH_TIMEOUT(engine->captureStatus().state, CaptureState::Closed, 5000);
+        QTRY_COMPARE_WITH_TIMEOUT(engine->captureHelperProcessIdForTest(), qint64(0), 5000);
+        QTest::qWait(300);
+        QCOMPARE(engine->captureStatus().state, CaptureState::Closed);
+        QVERIFY(engine->captureStatus().generation > lastFailure);
+        for (const CaptureSupervisor::Status& status : seen) {
+            QVERIFY2(!(status.state == CaptureState::Failed && status.generation > lastFailure),
+                     "a failure from the released attempt was published");
+        }
+        QCOMPARE(label->text(), QStringLiteral("Microphone not in use"));
+        QVERIFY(!retry->isEnabled());
     }
 
     // ── 20. One config across both pages and TransmitModel ────────────────────
