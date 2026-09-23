@@ -19,9 +19,14 @@ namespace {
 std::atomic<bool> g_threadPriorityRefusedWarned{false};
 } // namespace
 
+bool claimThreadPriorityRefusedWarning()
+{
+    return !g_threadPriorityRefusedWarned.exchange(true);
+}
+
 bool noteThreadPriorityRefused()
 {
-    if (g_threadPriorityRefusedWarned.exchange(true)) {
+    if (!claimThreadPriorityRefusedWarning()) {
         return false;
     }
     qCWarning(lcRtAudio).noquote()

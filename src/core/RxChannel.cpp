@@ -261,6 +261,7 @@ warren@wpratt.com
 #include "SampleRateCatalog.h"  // bufferSizeForRate() — for setSampleRate()
 #include "WdspEngine.h"
 #include "wdsp_api.h"
+#include "platform/ThreadPlacement.h"
 #include "dsp/NnrAdapter.h"
 
 #include <QElapsedTimer>
@@ -1805,6 +1806,11 @@ void RxChannel::setActive(bool active)
 #ifdef HAVE_WDSP
     // state=1 on, state=0 off; dmode=0 for no drain, dmode=1 for drain
     SetChannelState(m_channelId, active ? 1 : 0, active ? 0 : 1);
+
+    // R-R3-41: nereusd gives an active receive worker a fast core of its own
+    // and returns it when the channel stops (no-op in the GUI).
+    ThreadPlacement::instance().setChannelActive(ThreadRole::RxWorker,
+                                                 m_channelId, active);
 
     // wdsp/rxa.c:538 [v2.10.3.14] seeds the audio panel with gain1 = 4.0
     // (+12 dB).  Push our cached m_afGain once the channel is alive so the

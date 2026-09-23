@@ -79,6 +79,7 @@
 #include "core/WdspEngine.h"
 #include "core/Resampler.h"
 #include "core/audio/RealtimeAudioPriority.h"
+#include "core/platform/ThreadPlacement.h"
 
 #include <algorithm>
 #include <chrono>
@@ -114,6 +115,14 @@ void RxDspWorker::onThreadStarted()
     // pthread_set_qos_class_self_np and os_workgroup_join (macOS)
     // as well as pthread_setschedparam (Linux) and
     // AvSetMmThreadCharacteristics (Windows).
+    //
+    // R-R3-41: in nereusd on Linux, thread placement owns this thread's
+    // core and priority (nice, never a real-time policy); see
+    // ThreadPlacement.h.
+    if (ThreadPlacement::managesThreadPriority()) {
+        ThreadPlacement::instance().registerCurrentThread(ThreadRole::DspThread);
+        return;
+    }
     if (m_audioPrioToken != nullptr) {
         // Defensive: started() should fire only once per thread
         // lifecycle.  If it fires twice (e.g. a future requeue path),
@@ -125,6 +134,9 @@ void RxDspWorker::onThreadStarted()
 
 void RxDspWorker::onThreadFinished()
 {
+    if (ThreadPlacement::managesThreadPriority()) {
+        ThreadPlacement::instance().deregisterCurrentThread();
+    }
     // Released on the DSP thread before it exits.  Required for
     // os_workgroup_leave to match the join on the correct thread.
     leaveAudioThreadPriority(m_audioPrioToken);

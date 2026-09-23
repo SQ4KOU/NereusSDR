@@ -37,6 +37,8 @@
 //   2026-08-02: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-23: thread_placement key (R-R3-41). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -110,6 +112,14 @@ struct DaemonConfig {
     static constexpr int kDefaultAudioBitrate = 24000;
     static constexpr int kHighAudioBitrate = 48000;
     int     audioBitrate {kDefaultAudioBitrate};
+
+    // R-R3-41: thread_placement = auto (default) runs each busy signal
+    // processing thread on a fast core of its own, chosen from the kernel's
+    // CPU capacity data, and keeps every other thread off those cores
+    // (src/core/platform/ThreadPlacement.h, Linux only). off leaves every
+    // thread free to run on any core. Anything else logs one warning and
+    // keeps auto. Feeds startDaemonThreadPlacement() in server_main.cpp.
+    bool    threadPlacement {true};
 
     // Optional measured limits, supplied as a pair. A malformed explicit
     // value becomes zero so validate() fails instead of disabling the cap.

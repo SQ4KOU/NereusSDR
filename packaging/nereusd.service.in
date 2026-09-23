@@ -173,6 +173,26 @@ UMask=0077
 # footprint smaller.
 LimitRTPRIO=99
 
+# --- Signal processing priority (R-R3-41) --------------------------------
+# With thread_placement = auto (nereusd.conf, the default), nereusd no
+# longer asks for SCHED_FIFO on Linux: each busy signal processing thread
+# (a receive or transmit WDSP worker, the DSP thread, the transmit pump)
+# gets a fast core of its own and nice -10 (kDspNice in
+# src/core/platform/ThreadPlacement.h). A real-time policy is refused to a
+# systemd service anyway on a kernel with CONFIG_RT_GROUP_SCHED and the
+# cgroup v2 cpu controller (the Rock's 6.1 kernel: every such request
+# returns EPERM), and a never-sleeping real-time thread would starve its
+# core's kernel threads. LimitRTPRIO above stays for thread_placement = off,
+# where the DSP thread still asks for SCHED_FIFO.
+#
+# systemd's LimitNICE= takes either a raw RLIMIT_NICE value (0..40, no sign)
+# or, with a leading "+" or "-", a nice level (-20..19). "-10" is the nice
+# level form and sets RLIMIT_NICE to 30 (20 - (-10)), which lets an
+# unprivileged thread lower its nice level to -10 and no further. Without
+# it the limit is 0 and nereusd logs at startup that raising signal
+# processing priority is not permitted.
+LimitNICE=-10
+
 # --- Shutdown ------------------------------------------------------------
 # A normal timeout, not a large one: the SIGTERM-during-cold-wisdom hang
 # this daemon used to have is fixed in code (R1 Task 10 fix round 1 -- see

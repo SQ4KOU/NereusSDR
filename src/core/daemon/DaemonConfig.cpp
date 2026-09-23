@@ -111,6 +111,17 @@ DaemonConfig DaemonConfig::fromFile(const QString& path, QString* errorOut)
                                   << "audio_bitrate must be 24000 or 48000, keeping"
                                   << cfg.audioBitrate << ":" << value;
             }
+        } else if (key == QLatin1String("thread_placement")) {
+            if (value == QLatin1String("auto")) {
+                cfg.threadPlacement = true;
+            } else if (value == QLatin1String("off")) {
+                cfg.threadPlacement = false;
+            } else {
+                cfg.threadPlacement = true;
+                qCWarning(lcApp) << "nereusd.conf" << path << "line" << lineNo
+                                  << "thread_placement must be auto or off, keeping auto:"
+                                  << value;
+            }
         } else if (key == QLatin1String("core_name")) {
             cfg.coreName = value;
         } else if (key == QLatin1String("remote_bind")) {

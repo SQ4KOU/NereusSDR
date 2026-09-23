@@ -195,6 +195,12 @@
 //                 NereusSDR-original export from the NereusSDR-modified
 //                 third_party/wdsp/src/nnr.c; no Thetis counterpart.
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-23  WDSPSetThreadStartHook declaration and the thread kinds it
+//                 reports added by J.J. Boyd (KG4VCF) for placing DSP
+//                 threads on the fastest cores (R-R3-41). NereusSDR-original
+//                 export from third_party/wdsp/src/linux_port.c (not built
+//                 on Windows); no Thetis counterpart. AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 /*  wdsp.cs
@@ -316,6 +322,13 @@ warren@wpratt.com
 #  define NEREUS_STDCALL
 #endif
 
+// Thread kinds WDSPSetThreadStartHook reports; the same values as the
+// WDSP_THREAD_* enum in third_party/wdsp/src/linux_port.h. Defined outside
+// the HAVE_WDSP guard so code that only receives them builds without WDSP.
+constexpr int kWdspThreadRxMain = 1;  // a receive channel's DSP worker
+constexpr int kWdspThreadTxMain = 2;  // a transmit channel's DSP worker
+constexpr int kWdspThreadFlush  = 3;  // a channel's flush thread
+
 #ifdef HAVE_WDSP
 
 extern "C" {
@@ -395,6 +408,14 @@ int GetChannelDspLoad(int channel, WdspChannelLoad* out);
 // none completed; -1 for an invalid channel). One periodic reader owns it:
 // RadioModel's load sampler. Never waits for the worker.
 long long TakeChannelDspIntervalMaxBlockUs(int channel);
+
+#if !defined(_WIN32) && !defined(Q_OS_WIN)
+// NereusSDR linux_port.c: install (or, with nullptr, remove) a function each
+// channel worker and flush thread calls once on itself as it starts, before
+// its start routine, with its kind (kWdspThread* above) and channel. Not
+// built on Windows, where WDSP starts threads with the platform _beginthread.
+void WDSPSetThreadStartHook(void (*hook)(int kind, int channel));
+#endif
 
 // ---------------------------------------------------------------------------
 // In-place filter-size / filter-type reconfigure (RXA.c / TXA.c)

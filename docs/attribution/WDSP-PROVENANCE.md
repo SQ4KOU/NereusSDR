@@ -70,7 +70,18 @@ upstream attribution.
 G0ORX/N6LYT POSIX shim, including the preserved DL1YCF comments. Nereus retains
 its Linux initial-semaphore-count correction and macOS process-unique,
 `O_EXCL`, immediate-unlink semaphore handling, and undefines `comm.h`'s
-`EnterCriticalSection` redirect so its definition stays the platform call. The 2.10 import adds EINTR-safe
+`EnterCriticalSection` redirect so its definition stays the platform call.
+`wdsp_beginthread` now starts each thread through a small trampoline in
+`linux_port.c` that runs on the new thread: it names the thread after its job
+(`WDSP rx0`, `WDSP tx5`, `WDSP flush0`, otherwise `WDSP`; upstream named every
+thread `WDSP` from the creating thread and skipped naming on macOS), gives a
+channel worker user-interactive QoS on macOS, and calls the application's hook,
+set through the exported `WDSPSetThreadStartHook` declared in `linux_port.h`,
+once for each channel worker (`wdspmain`, reported as receive or transmit by
+the channel's type) and flush thread (`flushChannel`) before the start routine
+runs. nereusd uses the hook to place signal processing threads on the fastest
+cores (R-R3-41). Thread start only; no DSP algorithm, constant or default
+changes, and Windows (which removes `linux_port.c`) is unchanged. The 2.10 import adds EINTR-safe
 single waits, monotonic finite deadlines, fair wait-any behavior, explicit
 unsupported wait-all failure, event initial state, and the new WDSP mappings.
 
@@ -260,8 +271,8 @@ source descriptions above retain the detailed lineage and license context.
 | `third_party/wdsp/src/iobuffs.h` | TAPR WDSP 2.10 @b02d5bac, Source/iobuffs.h | Pinned file, byte-identical. |
 | `third_party/wdsp/src/iqc.c` | TAPR WDSP 2.10 @b02d5bac, Source/iqc.c | Pinned file with reviewed downstream changes; see the integration inventory above. |
 | `third_party/wdsp/src/iqc.h` | TAPR WDSP 2.10 @b02d5bac, Source/iqc.h | Pinned file with reviewed downstream changes; see the integration inventory above. |
-| `third_party/wdsp/src/linux_port.c` | Retained POSIX port; Pratt/Melton provenance and downstream semaphore changes documented above. | Retained or new local integration; original notices preserved. |
-| `third_party/wdsp/src/linux_port.h` | Retained POSIX port; Pratt/Melton provenance documented above. | Retained or new local integration; original notices preserved. |
+| `third_party/wdsp/src/linux_port.c` | Retained POSIX port; Pratt/Melton provenance, downstream semaphore changes and the thread-start trampoline and hook (R-R3-41) documented above. | Retained or new local integration; original notices preserved. |
+| `third_party/wdsp/src/linux_port.h` | Retained POSIX port; Pratt/Melton provenance and the `WDSPSetThreadStartHook` declaration and thread kinds (R-R3-41) documented above. | Retained or new local integration; original notices preserved. |
 | `third_party/wdsp/src/lmath.c` | TAPR WDSP 2.10 @b02d5bac, Source/lmath.c | Pinned file, byte-identical. |
 | `third_party/wdsp/src/lmath.h` | TAPR WDSP 2.10 @b02d5bac, Source/lmath.h | Pinned file, byte-identical. |
 | `third_party/wdsp/src/main.c` | TAPR WDSP 2.10 @b02d5bac, Source/main.c | Pinned file with reviewed downstream changes; see the integration inventory above. |

@@ -38,6 +38,15 @@ john.d.melton@googlemail.com
 //                dsplock.c's WdspEnterCS, so the redirect is undefined here.
 //                J.J. Boyd (KG4VCF), with AI assistance from Anthropic
 //                Claude Code.
+//   2026-09-23 - wdsp_beginthread starts each thread through a small
+//                trampoline that names it on itself ("WDSP rx0",
+//                "WDSP tx5", "WDSP flush0"; plain "WDSP" otherwise), gives a
+//                channel worker user-interactive QoS on macOS, and calls the
+//                application's thread-start hook (WDSPSetThreadStartHook)
+//                for channel workers and flush threads before the start
+//                routine runs (R-R3-41). Thread start only; no DSP change.
+//                J.J. Boyd (KG4VCF), with AI assistance from Anthropic
+//                Claude Code.
 
 #include "linux_port.h"
 #include "comm.h"
@@ -47,6 +56,9 @@ john.d.melton@googlemail.com
 
 #include <errno.h>
 #include <time.h>
+#ifdef __APPLE__
+#include <pthread/qos.h>
+#endif
 
 /********************************************************************************************************
 *													*
@@ -245,10 +257,65 @@ void LinuxResetEvent(sem_t* sem) {
 	while (sem_trywait(sem) == 0) { }
 }
 
+// NereusSDR: the application's thread-start hook (0 = none). Written by
+// WDSPSetThreadStartHook, read once by each new thread.
+static void (*wdsp_thread_start_hook)(int kind, int channel) = 0;
+
+PORT void WDSPSetThreadStartHook (void (*hook)(int kind, int channel))
+{
+	__atomic_store_n(&wdsp_thread_start_hook, hook, __ATOMIC_RELEASE);
+}
+
+// NereusSDR: what a new thread needs to run its start routine.
+struct wdsp_thread_start {
+	void (*start_address)(void *);
+	void *arglist;
+};
+
+// NereusSDR: runs first on every thread wdsp_beginthread starts. It names
+// the thread after its job, raises a channel worker's QoS on macOS and
+// reports channel workers and flush threads to the application's hook, then
+// runs the start routine exactly as before.
+static void *wdsp_thread_trampoline(void *p)
+{
+	struct wdsp_thread_start start = *(struct wdsp_thread_start *)p;
+	int kind = 0;
+	int channel = -1;
+	char name[16];
+	void (*hook)(int, int);
+
+	free(p);
+	if (start.start_address == wdspmain) {
+		channel = (int)(uintptr_t)start.arglist;
+		kind = ch[channel].type == 1 ? WDSP_THREAD_TX_MAIN : WDSP_THREAD_RX_MAIN;
+		snprintf(name, sizeof(name), "WDSP %s%d",
+			kind == WDSP_THREAD_TX_MAIN ? "tx" : "rx", channel);
+	} else if (start.start_address == flushChannel) {
+		channel = (int)(uintptr_t)start.arglist;
+		kind = WDSP_THREAD_FLUSH;
+		snprintf(name, sizeof(name), "WDSP flush%d", channel);
+	} else {
+		snprintf(name, sizeof(name), "WDSP");
+	}
+#ifdef __APPLE__
+	pthread_setname_np(name);
+	if (kind == WDSP_THREAD_RX_MAIN || kind == WDSP_THREAD_TX_MAIN)
+		pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
+#else
+	pthread_setname_np(pthread_self(), name);
+#endif
+	hook = __atomic_load_n(&wdsp_thread_start_hook, __ATOMIC_ACQUIRE);
+	if (hook != 0 && kind != 0)
+		hook(kind, channel);
+	start.start_address(start.arglist);
+	return 0;
+}
+
 HANDLE wdsp_beginthread( void( __cdecl *start_address )( void * ), unsigned stack_size, void *arglist) {
 	pthread_t threadid;
 	pthread_attr_t  attr;
 	int rc = 0;
+	struct wdsp_thread_start *start;
 
 	if (rc = pthread_attr_init(&attr)) {
  	    return (HANDLE)-1;
@@ -263,17 +330,26 @@ HANDLE wdsp_beginthread( void( __cdecl *start_address )( void * ), unsigned stac
         if( rc = pthread_attr_setdetachstate(&attr,PTHREAD_CREATE_DETACHED)) {
             return (HANDLE)-1;
         }
+
+	// NereusSDR: the new thread names and reports itself in
+	// wdsp_thread_trampoline, which frees this.
+	start = malloc(sizeof(*start));
+	if (start == 0) {
+	    return (HANDLE)-1;
+	}
+	start->start_address = start_address;
+	start->arglist = arglist;
      
-	if (rc = pthread_create(&threadid, &attr, (void*(*)(void*))start_address, arglist)) {
+	if (rc = pthread_create(&threadid, &attr, wdsp_thread_trampoline, start)) {
+	     free(start);
 	     return (HANDLE)-1;
 	}
 
         //pthread_attr_destroy(&attr);
-#ifndef __APPLE__
 	// DL1YCF: this function does not exist on MacOS. You can only name the
         //         current thread.
-        rc=pthread_setname_np(threadid, "WDSP");
-#endif
+	// NereusSDR: every platform now names the thread on itself, in
+	// wdsp_thread_trampoline, so the name reflects the thread's job.
 
 	return (HANDLE)threadid;
 

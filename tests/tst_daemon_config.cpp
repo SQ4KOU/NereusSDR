@@ -187,6 +187,8 @@ private slots:
             QStringLiteral("spectrum_sample_units_per_second"),
             // R-R3-23: reaches DaemonMediaController::setAudioTargetBitrate().
             QStringLiteral("audio_bitrate"),
+            // R-R3-41: reaches startDaemonThreadPlacement() in server_main.
+            QStringLiteral("thread_placement"),
         };
 
         // Each documented key parses without an "unknown key" complaint.
@@ -204,7 +206,8 @@ private slots:
                 "core_name = Rock 5C\n"
                 "display_application_bytes_per_second = 2400000\n"
                 "spectrum_sample_units_per_second = 1800000\n"
-                "audio_bitrate = 48000\n");
+                "audio_bitrate = 48000\n"
+                "thread_placement = off\n");
         f.flush();
         QString err;
         const DaemonConfig c = DaemonConfig::fromFile(f.fileName(), &err);
@@ -217,6 +220,7 @@ private slots:
         QCOMPARE(c.remoteBind, QStringLiteral("0.0.0.0"));
         QCOMPARE(c.coreName, QStringLiteral("Rock 5C"));
         QCOMPARE(c.audioBitrate, 48000);
+        QCOMPARE(c.threadPlacement, false);
         const std::optional<DisplayBudgetLimits> limits = c.displayBudgetLimits();
         QVERIFY(limits.has_value());
         QCOMPARE(limits->applicationBytesPerSecond, quint64(2400000));
@@ -300,6 +304,41 @@ private slots:
         QVERIFY2(err.isEmpty(), qPrintable(err));
         QCOMPARE(c.audioBitrate, expected);
         QVERIFY(c.validate(&err));
+    }
+
+    // R-R3-41: thread_placement is auto (the default) or off; any other
+    // value logs one warning and keeps auto.
+    void threadPlacementAcceptsAutoOrOff_data()
+    {
+        QTest::addColumn<QByteArray>("text");
+        QTest::addColumn<bool>("expected");
+        QTest::addColumn<bool>("warns");
+        QTest::newRow("missing") << QByteArray("slice_count = 1\n") << true << false;
+        QTest::newRow("auto") << QByteArray("thread_placement = auto\n") << true << false;
+        QTest::newRow("off") << QByteArray("thread_placement = off\n") << false << false;
+        QTest::newRow("words") << QByteArray("thread_placement = yes\n") << true << true;
+        QTest::newRow("off-then-bad")
+            << QByteArray("thread_placement = off\nthread_placement = on\n") << true << true;
+    }
+
+    void threadPlacementAcceptsAutoOrOff()
+    {
+        QFETCH(QByteArray, text);
+        QFETCH(bool, expected);
+        QFETCH(bool, warns);
+        QTemporaryFile f;
+        QVERIFY(f.open());
+        f.write(text);
+        f.flush();
+        if (warns) {
+            QTest::ignoreMessage(QtWarningMsg,
+                QRegularExpression(QStringLiteral("thread_placement must be auto or off, keeping auto")));
+        }
+        QTest::failOnWarning(QRegularExpression(QStringLiteral(".*")));
+        QString err;
+        const DaemonConfig c = DaemonConfig::fromFile(f.fileName(), &err);
+        QVERIFY2(err.isEmpty(), qPrintable(err));
+        QCOMPARE(c.threadPlacement, expected);
     }
 
     void validateRefusesAnUnsupportedAudioBitrate()

@@ -105,6 +105,7 @@
 #include "TxChannel.h"
 #include "audio/RealtimeAudioPriority.h"
 #include "audio/TxMicSource.h"
+#include "platform/ThreadPlacement.h"
 
 #include <QCoreApplication>
 #include <QLoggingCategory>
@@ -392,7 +393,16 @@ void TxWorkerThread::run()
     // pass during active TX can preempt the mic-feeder loop and produce
     // audible glitches on the air -- the same failure mode RX-side
     // elevation fixed for the receiver path.
-    AudioPriorityToken* txAudioPrio = elevateAudioThreadPriority();
+    //
+    // R-R3-41: in nereusd on Linux, thread placement owns this thread's
+    // core (a fast one while transmitting) and priority instead.
+    const bool placed = ThreadPlacement::managesThreadPriority();
+    AudioPriorityToken* txAudioPrio = nullptr;
+    if (placed) {
+        ThreadPlacement::instance().registerCurrentThread(ThreadRole::TxWorkerThread);
+    } else {
+        txAudioPrio = elevateAudioThreadPriority();
+    }
 
     while (m_micSource && m_micSource->isRunning()) {
         // INFINITE wait — mirrors `WaitForSingleObject(..., INFINITE)`.
@@ -465,6 +475,9 @@ void TxWorkerThread::run()
     // Mirrors RxDspWorker::onThreadFinished's leaveAudioThreadPriority.
     leaveAudioThreadPriority(txAudioPrio);
     txAudioPrio = nullptr;
+    if (placed) {
+        ThreadPlacement::instance().deregisterCurrentThread();
+    }
 
     qCInfo(lcTxWorker) << "run: worker thread loop exited";
 }

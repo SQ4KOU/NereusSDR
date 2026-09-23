@@ -26,6 +26,11 @@
 //                 AI-assisted transformation via Anthropic Claude Code.
 //   2026-09-22 — Correct TX wrapper/DEXP teardown lifetime and upstream close
 //                 ordering. J.J. Boyd (KG4VCF), assisted by OpenAI Codex.
+//   2026-09-23 - nereusd thread placement (R-R3-41): the WDSP thread-start
+//                 hook is installed when placement is on, the wisdom thread
+//                 plans on a fast core, and each closed channel's threads
+//                 are forgotten. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 /*  cmaster.c
@@ -64,6 +69,7 @@ warren@wpratt.com
 #include "AppSettings.h"
 #include "LogCategories.h"
 #include "wdsp_api.h"
+#include "core/platform/ThreadPlacement.h"
 
 #include <QDir>
 #include <QElapsedTimer>
@@ -193,6 +199,13 @@ bool WdspEngine::initialize(const QString& configDir)
         return false;
     }
     m_initializationInProgress = true;
+#ifndef Q_OS_WIN
+    // R-R3-41: nereusd places each channel's worker as it starts. Installed
+    // before any channel opens; the GUI never turns placement on.
+    if (ThreadPlacement::instance().isActive()) {
+        WDSPSetThreadStartHook(&ThreadPlacement::wdspThreadStartHook);
+    }
+#endif
     // Empty explicitly selects embedded weights, avoiding upstream's default
     // search in the working directory. Both process-global paths are fixed
     // before finishInitialization can open even a feedback receiver.
@@ -259,6 +272,9 @@ bool WdspEngine::initialize(const QString& configDir)
                   << "needsGeneration=" << needsGeneration;
 
     auto* wisdomThread = QThread::create([configPath]() {
+        // FFTW times its plans on the core it runs on; with placement on
+        // (nereusd), plan on the core signal processing will use.
+        ThreadPlacement::instance().placeCurrentThreadOnFastCore();
         WDSPwisdom(const_cast<char*>(configPath.constData()));
     });
     wisdomThread->setObjectName(QStringLiteral("WisdomThread"));
@@ -543,6 +559,8 @@ void WdspEngine::destroyRxChannel(int channelId)
 
     // Close the WDSP channel
     CloseChannel(channelId);
+    // Its worker and flush threads are gone; their IDs may be reused.
+    ThreadPlacement::instance().forgetChannel(channelId);
 #endif
 
     m_rxChannels.erase(it);
@@ -814,6 +832,7 @@ qint64 WdspEngine::rebuildRxChannel(int channelId, const ChannelConfig& cfg)
 
     // Close the old WDSP channel.
     CloseChannel(channelId);
+    ThreadPlacement::instance().forgetChannel(channelId);
 #endif
 
     // Destroy the old RxChannel C++ wrapper (runs ~NbFamily, ~DeepFilterFilter, etc.).
@@ -1333,6 +1352,7 @@ void WdspEngine::destroyTxChannel(int channelId)
     // From Thetis cmaster.c:265-267 [v2.10.3.15]: destroy_xmtr closes
     // the channel BEFORE destroying its DEXP module.
     CloseChannel(channelId);
+    ThreadPlacement::instance().forgetChannel(channelId);
     destroy_dexp(channelId);
     // destroy_dexp frees the object but does not clear WDSP's lookup slot.
     // Native wrapper guards use a null slot to recognize absent DEXP.
@@ -1428,6 +1448,7 @@ void WdspEngine::closePsFeedbackChannel()
     // (mirrors destroyRxChannel pattern at WdspEngine.cpp:381).
     SetChannelState(kPsFeedbackChannelId, 0, 1);
     CloseChannel(kPsFeedbackChannelId);
+    ThreadPlacement::instance().forgetChannel(kPsFeedbackChannelId);
     qCInfo(lcDsp) << "Closed PS feedback RX channel" << kPsFeedbackChannelId;
 #endif
 
@@ -1476,6 +1497,7 @@ qint64 WdspEngine::rebuildTxChannel(int channelId, const ChannelConfig& cfg)
 
     // Close the old WDSP TX channel.
     CloseChannel(channelId);
+    ThreadPlacement::instance().forgetChannel(channelId);
 #endif
 
     // Destroy the old TxChannel C++ wrapper.

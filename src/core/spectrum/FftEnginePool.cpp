@@ -31,6 +31,7 @@
 #include "core/spectrum/FftEnginePool.h"
 
 #include "core/audio/RealtimeAudioPriority.h"
+#include "core/platform/ThreadPlacement.h"
 
 #include <QThread>
 #include <QtGlobal>
@@ -167,7 +168,11 @@ FFTEngine* FftEnginePool::createEngine(const FftSourceKey& key,
         // connection using stream 0's engine as context for the whole
         // (then-implicitly-one) shared thread.
         connect(thread, &QThread::started, engine, []() {
-            elevateLatencyCriticalThreadPriority();
+            // R-R3-41: nereusd's placement keeps spectrum work on the
+            // housekeeping cores and skips the nice call there.
+            if (!ThreadPlacement::managesThreadPriority()) {
+                elevateLatencyCriticalThreadPriority();
+            }
         });
         thread->start();
     }

@@ -103,6 +103,9 @@
 //               Claude Code.
 //   2026-09-20: make termination signal handling allocation-free.
 //               J.J. Boyd (KG4VCF), with AI assistance via OpenAI Codex.
+//   2026-09-23: place signal processing threads on the fastest cores
+//               before any other thread starts (R-R3-41). J.J. Boyd
+//               (KG4VCF), with AI assistance via Anthropic Claude Code.
 // =================================================================
 
 #include "core/AppSettings.h"
@@ -112,6 +115,7 @@
 #include "core/RadioConnection.h"
 #include "core/daemon/DaemonApp.h"
 #include "core/daemon/DaemonConfig.h"
+#include "core/platform/ThreadPlacement.h"
 
 #include <QCommandLineOption>
 #include <QCommandLineParser>
@@ -248,6 +252,12 @@ int main(int argc, char* argv[])
         qCCritical(NereusSDR::lcApp) << "invalid config:" << err;
         return 2;
     }
+
+    // R-R3-41: settings are initialised and no other thread exists yet, so
+    // this moves the main thread to the housekeeping cores and every thread
+    // started from now on (WDSP, networking, spectrum, libdatachannel)
+    // starts there. Only signal processing threads move to their own cores.
+    NereusSDR::startDaemonThreadPlacement(cfg.threadPlacement, cfg.sliceCount);
 
     // "requested" on both counts, deliberately. Neither value is final
     // here: sliceCount is clamped to the connected board's maxSlices by

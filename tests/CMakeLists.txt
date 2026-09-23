@@ -297,6 +297,11 @@ if(TARGET wdsp_static)
     # R-R3-39: channel teardown and rebuilds wait for a slow DSP worker to
     # leave its loop before freeing its memory (dsplock.c).
     nereus_add_test(tst_wdsp_channel_shutdown EXTRA_LABELS core)
+    if(NOT WIN32)
+        # R-R3-41: linux_port.c's thread-start hook fires once per channel
+        # worker and flush thread, on that thread, with its kind and channel.
+        nereus_add_test(tst_wdsp_thread_hook EXTRA_LABELS core)
+    endif()
     nereus_add_test(tst_wdsp210_cfc_compat WdspCfcProbe.c EXTRA_LABELS core)
     set_source_files_properties(WdspCfcProbe.c PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(tst_wdsp210_cfc_compat PRIVATE ${FFTW3_INCLUDE_DIRS})
@@ -6866,6 +6871,9 @@ nereus_add_test(tst_receive_slice_seed)
 nereus_add_test(tst_p2_established_silence fakes/P2FakeRadio.cpp)
 target_compile_definitions(tst_p2_established_silence PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_realtime_audio_priority)
+# R-R3-41: nereusd's signal processing thread placement (fixture topologies,
+# the registry against a recording fake, and a Linux-only smoke test).
+nereus_add_test(tst_thread_placement EXTRA_LABELS core)
 nereus_add_test(tst_daemon_radio_recovery fakes/P1FakeRadio.cpp fakes/P2FakeRadio.cpp)
 target_compile_definitions(tst_daemon_radio_recovery PRIVATE NEREUS_BUILD_TESTS)
 

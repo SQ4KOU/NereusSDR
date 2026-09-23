@@ -105,6 +105,12 @@ void elevateLatencyCriticalThreadPriority();
 // platform; production callers are the Linux elevation paths.
 bool noteThreadPriorityRefused();
 
+// Mark the once-only warning as given without logging it, for a caller that
+// has just told the operator the same thing in its own words (nereusd's
+// thread placement startup line). Returns true only if no warning had been
+// logged or claimed yet. Thread-safe.
+bool claimThreadPriorityRefusedWarning();
+
 // Test seam: forget that the warning was logged.
 void resetThreadPriorityRefusedForTest();
 

@@ -337,6 +337,7 @@ warren@wpratt.com
 #include "RadioConnection.h"
 #include "TxMicRouter.h"
 #include "WdspEngine.h"  // for rebuild() delegate to WdspEngine::rebuildTxChannel()
+#include "platform/ThreadPlacement.h"
 
 #include <QElapsedTimer>
 
@@ -1047,6 +1048,9 @@ void TxChannel::setRunning(bool on)
         // From Thetis console.cs:29595 [v2.10.3.13] — RX→TX transition:
         //   WDSP.SetChannelState(WDSP.id(1, 0), 1, 0);
         SetChannelState(m_channelId, 1, 0);   // channel.c:259 [v2.10.3.13]
+        // R-R3-41: nereusd gives the busy transmit worker a fast core.
+        ThreadPlacement::instance().setChannelActive(ThreadRole::TxWorker,
+                                                     m_channelId, true);
     } else {
         // 3M-3a-iii Task 18: if VOX-listening is on, leave the WDSP TXA
         // channel running so the DEXP detector keeps receiving fexchange0
@@ -1063,6 +1067,8 @@ void TxChannel::setRunning(bool on)
             //   WDSP.SetChannelState(WDSP.id(1, 0), 0, 1);   // turn off, drain
             //   (preceded by: Thread.Sleep(space_mox_delay); // default 0 // from PSDR MW0LGE [console.cs:29603])
             SetChannelState(m_channelId, 0, 1);   // channel.c:259 [v2.10.3.13]
+            ThreadPlacement::instance().setChannelActive(ThreadRole::TxWorker,
+                                                         m_channelId, false);
 
             // Drop CFIR after channel drain so no residual samples process
             // through it on the next RX→TX engagement (P2 will re-arm above).
@@ -1126,12 +1132,17 @@ void TxChannel::setVoxListening(bool on)
             const int cfirRun = (proto == 2) ? 1 : 0;
             SetTXACFIRRun(m_channelId, cfirRun);
             SetChannelState(m_channelId, 1, 0);
+            // R-R3-41: VOX listening keeps the transmit worker busy too.
+            ThreadPlacement::instance().setChannelActive(ThreadRole::TxWorker,
+                                                         m_channelId, true);
         }
     } else {
         // Leaving vox-listening AND MOX is also off: drop the WDSP
         // TXA channel state (matches setRunning(false) path).
         if (!actualRunning) {
             SetChannelState(m_channelId, 0, 1);
+            ThreadPlacement::instance().setChannelActive(ThreadRole::TxWorker,
+                                                         m_channelId, false);
             SetTXACFIRRun(m_channelId, 0);
         }
         // If MOX is on (m_running=true), leave WDSP state alone —

@@ -290,6 +290,7 @@ warren@wpratt.com
 #include "core/AmModulationAnalyzer.h"
 #include "BandDefaults.h"
 #include "RxDspWorker.h"
+#include "core/platform/ThreadPlacement.h"
 #include "core/FFTEngine.h"
 // 3M-1a G.1: TX-side integration — MoxController + TxChannel view.
 // TxMicRouter is already included via RadioModel.h (for std::unique_ptr destructor).
@@ -10148,8 +10149,14 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
     // connect thread missed packet wake-ups long enough to drop frames.
     // Bumped to USER_INTERACTIVE so it sits in the same scheduling
     // class as the audio + GUI threads.
+    // R-R3-41: nereusd's placement keeps networking on the housekeeping
+    // cores and skips the nice call there.
     connect(m_connThread, &QThread::started, m_connection,
-            []() { NereusSDR::elevateLatencyCriticalThreadPriority(); });
+            []() {
+                if (!NereusSDR::ThreadPlacement::managesThreadPriority()) {
+                    NereusSDR::elevateLatencyCriticalThreadPriority();
+                }
+            });
 
     m_connThread->start();
 

@@ -3,6 +3,13 @@
 // cross-platform shim macro tweaks documented in the modification
 // history below; not a Thetis port, attribution already lives in the
 // preserved header copyright block.
+//
+// NereusSDR modification history:
+//   2026-09-23 - Declare the thread-start hook (WDSPSetThreadStartHook) and
+//                the thread kinds it reports, so the application can name,
+//                place and prioritise each channel's worker and flush
+//                threads as they start (R-R3-41). J.J. Boyd (KG4VCF), with
+//                AI assistance from Anthropic Claude Code.
 
 /*  linux_port.h
 
@@ -142,6 +149,22 @@ void LinuxSetEvent(sem_t* sem);
 void LinuxResetEvent(sem_t* sem);
 
 HANDLE wdsp_beginthread( void( __cdecl *start_address )( void * ), unsigned stack_size, void *arglist);
+
+// NereusSDR: the kinds of WDSP thread wdsp_beginthread reports to the
+// thread-start hook. A channel's worker (wdspmain) is reported by the
+// channel's type (1 = TX, anything else = RX); flushChannel is the channel's
+// flush thread. Other WDSP threads are named but not reported. Macros, like
+// the rest of this header, because it has no include guard.
+#define WDSP_THREAD_RX_MAIN 1
+#define WDSP_THREAD_TX_MAIN 2
+#define WDSP_THREAD_FLUSH 3
+
+// NereusSDR: install (or, with 0, remove) a function each reported WDSP
+// thread calls once on itself, before its start routine runs, with its kind
+// and channel. The hook runs on the new thread; it must not wait for the
+// thread that created it. Not built on Windows, where WDSP threads start
+// through the platform _beginthread.
+void WDSPSetThreadStartHook (void (*hook)(int kind, int channel));
 
 void _endthread();
 
