@@ -44,6 +44,7 @@
 // =================================================================
 
 #include <QtTest/QtTest>
+#include "OperatorWording.h"
 #include "core/AppSettings.h"
 
 #include <QCheckBox>
@@ -475,7 +476,10 @@ private slots:
         form.findChild<QPushButton*>(QStringLiteral("btnPSCalibrate"))->click();
         facade->receiveRemoteActionResult(91, "ps3.single", Ps3ActionPhase::Pending, {}, {});
         facade->resetSession();
-        QVERIFY(status->text().contains(QStringLiteral("session"), Qt::CaseInsensitive));
+        // R-R3-21 wording plan: the retirement is said in user words.
+        QVERIFY2(status->text().contains(QStringLiteral("connection to the Core changed")),
+                 qPrintable(status->text()));
+        QVERIFY(OperatorWording::isPlain(status->text()));
     }
 
     // ── Test 12: Save button gating on correctionsBeingApplied ──────────────

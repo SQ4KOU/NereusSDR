@@ -679,7 +679,12 @@ private slots:
             "stationTelemetryVersion", "remoteTgxlConfigVersion",
             "remoteFourO3AControlVersion", "wdspVersion", "wdspCompatibilityVersion",
             "nnrVersion", "psAlgorithmVersion", "propertyResultVersion", "dspAssetVersion",
-            "psDisplayVersion", "settingsSchemaVersion",
+            "psDisplayVersion",
+            // Lane B's per-feature versions (R-R3-21 notches, R-R3-23
+            // lossless audio, R-R3-35 audio clock) go to every GUI whatever
+            // its minor, so they are part of today's shape too.
+            "notchControlVersion", "audioProfileVersion", "audioClockVersion",
+            "settingsSchemaVersion",
             "displayApplicationBytesPerSecond", "spectrumSampleUnitsPerSecond",
             "displayBudgetGeneration", "remotePs3DisplaySubscribed",
         };
