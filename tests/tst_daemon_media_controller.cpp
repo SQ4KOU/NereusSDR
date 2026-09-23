@@ -34,6 +34,7 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
+#include <QDeadlineTimer>
 #include <QElapsedTimer>
 #include <QJsonDocument>
 #include <QPointer>
@@ -452,11 +453,18 @@ struct Harness {
         stationLink->linkTo(clientLink);
         client.startSession(clientLink, server.token());
         server.acceptTransport(stationLink);
-        QTRY_VERIFY(server.mediaAvailable());
+        // Both ends, not just Core's. Core counts the session ready once it
+        // has sent the snapshot-complete marker; the GUI end is ready only
+        // once that queued marker has reached it, which a loaded machine can
+        // leave for a later event-loop pass. Until then
+        // StationClient::sendMediaControl() refuses every message.
+        QTRY_VERIFY(server.mediaAvailable() && client.mediaAvailable());
     }
 
     void startReadyPeer()
     {
+        // The exact condition sendMediaControl() checks before it sends.
+        QTRY_VERIFY(client.mediaAvailable());
         QVERIFY(client.sendMediaControl({
             {QStringLiteral("op"), QStringLiteral("start")},
             {QStringLiteral("connectionId"), QLatin1String(kConnectionId)}},
@@ -1528,6 +1536,60 @@ void TstDaemonMediaController::spectrumAndPs3ShareALaggingWindowAndBothProgress(
             && !messageFor(controls, QStringLiteral("context"), 64).isEmpty();
     })());
 
+    // Each cycle's send ticks run only once Core holds a spectrum frame it
+    // will send. A fixed wait for the FFT worker is outrun on a loaded
+    // machine: a frame that lands after the ticks goes out a cycle late,
+    // and the endpoint's 60 fps schedule then drops the next cycle's frame
+    // as too close behind it. So before the ticks, in order:
+    //  - more than two output periods have passed since the last ticks,
+    //    so a frame produced from here on is due (every frame Core has sent
+    //    was produced before those ticks);
+    //  - a frame published after that is in every active source's slot;
+    //  - frameAvailable has been emitted for that source since. Core takes
+    //    the source's latest frame inside that emit, on this thread.
+    // The I/Q is fed again on each poll until all three hold. One deadline
+    // covers every cycle, so a passing run stays well inside the binary's
+    // 120 s ctest TIMEOUT however the waits add up.
+    auto* source = harness.controller.findChild<DaemonSpectrumSource*>();
+    QVERIFY(source);
+    constexpr qint64 kOutputPeriodMs = 1000 / 60 + 1;
+    const QDeadlineTimer cyclesDeadline(60'000);
+    QElapsedTimer sinceTicks;
+    sinceTicks.start();
+    const auto feedDueFrame = [&](double cyclesPerSample) {
+        if (!QTest::qWaitFor([&] { return sinceTicks.elapsed() > 2 * kOutputPeriodMs; },
+                             cyclesDeadline)) {
+            return false;
+        }
+        const QList<MediaSourceKey> keys = source->activeSources();
+        if (keys.isEmpty()) { return false; }
+        QMap<MediaSourceKey, quint64> publishedBefore;
+        for (const MediaSourceKey& key : keys) {
+            publishedBefore.insert(key, source->publishedFrames(key));
+        }
+        QSet<int> published; // indexes into keys
+        QSet<int> taken;
+        QSignalSpy emitted(source, &DaemonSpectrumSource::frameAvailable);
+        return QTest::qWaitFor([&] {
+            // An emit counts only once the newer frame was already seen:
+            // one seen earlier may have handed Core an older frame.
+            for (const QList<QVariant>& call : emitted) {
+                const int index = keys.indexOf(call.at(0).value<MediaSourceKey>());
+                if (published.contains(index)) { taken.insert(index); }
+            }
+            emitted.clear();
+            for (int index = 0; index < keys.size(); ++index) {
+                if (source->publishedFrames(keys.at(index))
+                    > publishedBefore.value(keys.at(index))) {
+                    published.insert(index);
+                }
+            }
+            if (taken.size() == keys.size()) { return true; }
+            harness.feedRadio(cyclesPerSample);
+            return false;
+        }, cyclesDeadline);
+    };
+
     PureSignalSessionFacade* facade = harness.radio.pureSignalFacade();
     facade->setRemoteAmpViewSubscribed(true);
     const quint64 generation = facade->displayGeneration();
@@ -1542,12 +1604,13 @@ void TstDaemonMediaController::spectrumAndPs3ShareALaggingWindowAndBothProgress(
     QList<int> ps3PerCycle;
     for (int cycle = 0; cycle < kCycles; ++cycle) {
         harness.nowNs += 50'000'000;
-        harness.feedRadio(0.125 + 0.0078125 * (cycle % 16));
-        QTest::qWait(20); // the FFT worker hands its frame back
+        QVERIFY2(feedDueFrame(0.125 + 0.0078125 * (cycle % 16)),
+                 qPrintable(QStringLiteral("no due spectrum frame in cycle %1").arg(cycle)));
         // Keep a newer snapshot waiting, so one is always in flight.
         facade->displaySnapshotReady(maximumPs3Snapshot(generation, ++sequence));
         const QList<QByteArray> before = harness.mediaTransport->displays;
         for (int tick = 0; tick < kTicksPerCycle; ++tick) { harness.sendDisplayTick(); }
+        sinceTicks.restart();
         harness.mediaTransport->acknowledgeDisplayWindow();
         QCoreApplication::processEvents();
         const QList<QByteArray> sent = harness.mediaTransport->displays.mid(before.size());
@@ -1597,10 +1660,12 @@ void TstDaemonMediaController::spectrumAndPs3ShareALaggingWindowAndBothProgress(
     constexpr int kAloneCycles = 6;
     for (int cycle = 0; cycle < kAloneCycles; ++cycle) {
         harness.nowNs += 50'000'000;
-        harness.feedRadio(0.25 + 0.0078125 * cycle);
-        QTest::qWait(20);
+        QVERIFY2(feedDueFrame(0.25 + 0.0078125 * cycle),
+                 qPrintable(QStringLiteral("no due spectrum frame alone in cycle %1")
+                                .arg(cycle)));
         const qsizetype before = harness.mediaTransport->displays.size();
         for (int tick = 0; tick < kTicksPerCycle; ++tick) { harness.sendDisplayTick(); }
+        sinceTicks.restart();
         harness.mediaTransport->acknowledgeDisplayWindow();
         QCoreApplication::processEvents();
         spectrumAlone += displayMessageCount(
