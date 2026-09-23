@@ -162,7 +162,7 @@ visible and are not listed.
 | DSP > CFC | **Transmit (gated here)** | `TransmitModel` phase rotator, CFC, CESSB; opens the TX CFC editor | `tst_remote_gui_gating` (`remoteTransmitOnlySetupLeavesFollowThePermission`) |
 | DSP > TNF | Station-backed setting, not applied live (F1) | `NotchModel`, `addNotchForSlice` | see F1 |
 | DSP > Filter Presets | GUI-local | `FilterPresetStore` (`filters/...`, OperatorLocal); buttons then write `SliceModel::setFilter` | n/a |
-| DSP > Options | Station-backed settings, local apply (F2); high-resolution graph unavailable; the nine TX combos **Transmit (gated here)** | `DspOptions*` keys; `rebuildDspOptionsForMode` is local-only; FIR graph checkbox disabled remotely; `DspOptionsPage::setTransmitPermitted` gates the SSB/AM, FM and Digital TX buffer, filter size and filter type combos; the receive-only Core refuses `DspOptions*Tx` settings writes with the TransmitModel refusal reason (`StationServer::handleSettingsWrite`) and still accepts the RX keys | `tst_remote_gui_gating` (high-resolution cases, `remoteDspOptionsTransmitCombosFollowThePermission`), `tst_station_session` (`receiveOnlyStationRefusesTransmitDspOptionsSettingsWrites`); hardware pending (S1) |
+| DSP > Options | Station-backed settings, applied on the Core (F2); high-resolution graph unavailable; the nine TX combos **Transmit (gated here)** | `DspOptions*` keys; the Core applies an accepted RX write or remove to every slice whose mode group reads that key, once per 50 ms coalesce window (`RadioModel::scheduleRemoteDspOptionsApply`, `kDspOptionsApplyCoalesceMs`), with no mode change; the window's own `rebuildDspOptionsForMode` stays local; FIR graph checkbox disabled remotely; `DspOptionsPage::setTransmitPermitted` gates the SSB/AM, FM and Digital TX buffer, filter size and filter type combos; the receive-only Core refuses `DspOptions*Tx` settings writes and removes with the TransmitModel refusal reason (`StationServer::handleSettingsWrite`, `handleSettingsRemove`) and still accepts the RX keys | `tst_remote_gui_gating` (high-resolution cases, `remoteDspOptionsTransmitCombosFollowThePermission`), `tst_station_session` (`receiveOnlyStationRefusesTransmitDspOptionsSettingsWrites`, `receiveOnlyStationRefusesTransmitDspOptionsSettingsRemoves`, `acceptedReceiveDspOptionsWriteAppliesToMatchingSlices`), `tst_dsp_options_per_mode_apply` (`remote_rx_burst_applies_matching_slice_once`, `remote_rx_burst_across_groups_applies_each_slice_once`, `remote_unrelated_keys_apply_nothing`, `remote_apply_is_core_only`, `mode_group_mapping_is_pinned`); hardware pending (S1) |
 | Display > Spectrum Defaults, Spectrum Peaks, Waterfall Defaults, Grid & Scales, Multimeter, 3D View | GUI-local display; `DisplayFft*`, `DisplaySpectrumFps`, `MultimeterDelayMs` are Station keys; grid dB writes the mirrored `PanadapterModel` | `SpectrumWidget`, `FFTEngine`, `MeterPoller` setters | `tst_remote_fft_production`, `tst_remote_spectrum_render`; hardware pending (S1) |
 | Display > RX2 Display | Placeholder | all controls disabled | n/a |
 | Display > TX Display | GUI-local display of TX; TxAnalyzer absent remotely, setters null-guarded | `SpectrumWidget` TX setters | n/a |
@@ -225,11 +225,19 @@ suites listed in the verification line, pass unchanged.
   channels to apply them to, so the notch is drawn remotely and not applied
   until the Core restarts. TNF is a receive function, so it is not disabled
   here; it needs a Core-side live apply or a mirrored notch object.
-- **F2, settings written to the Core with a local-only apply.** The NR3 model
-  selector writes `Nr3ModelPath` and calls `RNNRloadModel()` in this
-  process; DSP > Options buffer and filter combos write `DspOptions*` and
-  call the local `rebuildDspOptionsForMode()`. Whether the Core applies
-  either before its next restart is **hardware pending (S1)**.
+- **F2, settings written to the Core; DSP > Options now applied there.** The
+  NR3 model selector writes `Nr3ModelPath` and calls `RNNRloadModel()` in
+  this process; whether the Core applies it before its next restart is
+  **hardware pending (S1)**. DSP > Options buffer and filter combos write
+  `DspOptions*` (and call the window's local `rebuildDspOptionsForMode()`).
+  The Core applies each accepted RX write or remove to the slices whose mode
+  group reads the key, after a 50 ms coalesce and without a mode change
+  (R-R3-21); a remove of a `DspOptions*Tx` key is refused on the
+  receive-only Core like a write. Covered by `tst_station_session`
+  (`acceptedReceiveDspOptionsWriteAppliesToMatchingSlices`,
+  `receiveOnlyStationRefusesTransmitDspOptionsSettingsRemoves`) and
+  `tst_dsp_options_per_mode_apply` (the `remote_*` cases); the audible
+  effect on a live Core is **hardware pending (S1)**.
 - **F3, closed in the fix wave.** DSP > AGC/ALC TX Leveler and TX ALC
   groups and the DSP > Options TX buffer/filter combos were not
   transmit-gated. The TX Leveler and ALC setters are not mirrored

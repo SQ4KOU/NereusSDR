@@ -221,6 +221,15 @@ namespace NereusSDR {
 
 class WdspEngine;  // forward declaration for rebuild()
 
+// The DSP > Options mode group a slice mode reads its per-mode keys from:
+// "Phone" (USB, LSB, AM, SAM, DSB), "Cw" (CWU, CWL), "Dig" (DIGU, DIGL,
+// SPEC, DRM) or "Fm" (FM); any other mode reads "Phone". It is the <Group>
+// in DspOptions<Setting><Group>Rx. RxChannel::onModeChanged, RadioModel's
+// remote DSP Options apply and DspOptionsPage's live-apply gate all use this
+// one mapping, so a write always applies to the slices that read it
+// (R-R3-21). NereusSDR-original, design Section 4B.
+QString dspOptionsModeGroup(DSPMode mode);
+
 // Per-receiver WDSP channel wrapper.
 //
 // Owns one WDSP RX channel and provides Qt property access to DSP

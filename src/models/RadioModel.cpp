@@ -16821,33 +16821,6 @@ QString rxDspOptionsGroupForKey(const QString& key)
     return QString();
 }
 
-// The mode group a slice mode reads its DSP > Options keys from. Mirrors
-// rxModeKeyPart in RxChannel.cpp, which chooses the keys onModeChanged
-// reads; the two must agree or a write would apply to the wrong slices.
-QString rxDspOptionsGroupForMode(DSPMode mode)
-{
-    switch (mode) {
-        case DSPMode::USB:
-        case DSPMode::LSB:
-        case DSPMode::AM:
-        case DSPMode::SAM:
-        case DSPMode::DSB:
-            return QStringLiteral("Phone");
-        case DSPMode::CWU:
-        case DSPMode::CWL:
-            return QStringLiteral("Cw");
-        case DSPMode::DIGU:
-        case DSPMode::DIGL:
-        case DSPMode::SPEC:
-        case DSPMode::DRM:
-            return QStringLiteral("Dig");
-        case DSPMode::FM:
-            return QStringLiteral("Fm");
-        default:
-            return QStringLiteral("Phone");
-    }
-}
-
 }  // namespace
 
 void RadioModel::scheduleRemoteDspOptionsApply(const QString& key)
@@ -16888,7 +16861,8 @@ void RadioModel::flushRemoteDspOptionsApply()
             continue;
         }
         const DSPMode mode = slice->dspMode();
-        if (!groups.contains(rxDspOptionsGroupForMode(mode))) {
+        // Same mapping RxChannel::onModeChanged reads its keys by.
+        if (!groups.contains(dspOptionsModeGroup(mode))) {
             continue;
         }
         if (m_dspOptionsApplyObserverForTest) {

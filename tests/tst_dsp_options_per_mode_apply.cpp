@@ -426,6 +426,35 @@ private slots:
         QCOMPARE(remoteApplied, 0);
         QCOMPARE(localApplied, 0);
     }
+
+    // The one mode-group mapping RxChannel, RadioModel's remote apply and
+    // DspOptionsPage's live-apply gate share (core/RxChannel.h).
+    void mode_group_mapping_is_pinned_data()
+    {
+        QTest::addColumn<int>("mode");
+        QTest::addColumn<QString>("group");
+        const QList<QPair<DSPMode, QString>> rows{
+            {DSPMode::USB, QStringLiteral("Phone")}, {DSPMode::LSB, QStringLiteral("Phone")},
+            {DSPMode::AM, QStringLiteral("Phone")},  {DSPMode::SAM, QStringLiteral("Phone")},
+            {DSPMode::DSB, QStringLiteral("Phone")}, {DSPMode::CWU, QStringLiteral("Cw")},
+            {DSPMode::CWL, QStringLiteral("Cw")},    {DSPMode::DIGU, QStringLiteral("Dig")},
+            {DSPMode::DIGL, QStringLiteral("Dig")},  {DSPMode::SPEC, QStringLiteral("Dig")},
+            {DSPMode::DRM, QStringLiteral("Dig")},   {DSPMode::FM, QStringLiteral("Fm")},
+            {DSPMode::RADE_U, QStringLiteral("Phone")},
+            {DSPMode::RADE_L, QStringLiteral("Phone")},
+        };
+        for (const auto& [mode, group] : rows) {
+            QTest::newRow(qPrintable(QString::number(static_cast<int>(mode))))
+                << static_cast<int>(mode) << group;
+        }
+    }
+
+    void mode_group_mapping_is_pinned()
+    {
+        QFETCH(int, mode);
+        QFETCH(QString, group);
+        QCOMPARE(dspOptionsModeGroup(static_cast<DSPMode>(mode)), group);
+    }
 };
 
 QTEST_MAIN(TestDspOptionsPerModeApply)

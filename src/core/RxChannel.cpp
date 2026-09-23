@@ -2334,14 +2334,13 @@ qint64 RxChannel::rebuild(WdspEngine& engine, const ChannelConfig& cfg)
 // NereusSDR-original — no Thetis source ported; the per-mode key naming
 // mirrors the DspOptionsPage AppSettings keys (design Section 4B).
 
-namespace {
-
 // Maps DSPMode to the DspOptions key suffix used in AppSettings.
-// From design Section 4B — Phone covers SSB/AM/SAM/DSB, CW covers
-// CWU/CWL, Dig covers DIGU/DIGL/DSB/SPEC/DRM, FM covers FM.
+// From design Section 4B: Phone covers SSB/AM/SAM/DSB, CW covers
+// CWU/CWL, Dig covers DIGU/DIGL/SPEC/DRM, FM covers FM.
 //
-// NereusSDR-original helper — no Thetis source ported.
-QString rxModeKeyPart(DSPMode mode)
+// NereusSDR-original helper, no Thetis source ported. Declared in
+// RxChannel.h so RadioModel and DspOptionsPage share this one mapping.
+QString dspOptionsModeGroup(DSPMode mode)
 {
     switch (mode) {
         case DSPMode::USB:
@@ -2365,8 +2364,6 @@ QString rxModeKeyPart(DSPMode mode)
     }
 }
 
-}  // namespace
-
 qint64 RxChannel::onModeChanged(DSPMode newMode)
 {
     // Engine guard: no engine attached → return 0 (no rebuild possible).
@@ -2377,7 +2374,7 @@ qint64 RxChannel::onModeChanged(DSPMode newMode)
     }
 
     auto& s = AppSettings::instance();
-    const QString modeKey = rxModeKeyPart(newMode);
+    const QString modeKey = dspOptionsModeGroup(newMode);
 
     // Read per-mode RX-side DSP settings — Thetis-faithful split keys
     // post schema-v5 (radio.cs:519-574 [v2.10.3.13] DSPRX persists

@@ -232,32 +232,11 @@ namespace {
 
 // Returns true if actualMode belongs to the same DSP-Options mode group as
 // comboMode. Only the group membership matters for the live-apply gate.
+// Uses dspOptionsModeGroup (core/RxChannel.h), the mapping RxChannel reads
+// its per-mode keys by, so the gate cannot disagree with the keys applied.
 bool modeGroupMatches(DSPMode actualMode, DSPMode comboMode)
 {
-    // Map each to its key-part suffix, then compare.
-    auto keyPart = [](DSPMode m) -> int {
-        switch (m) {
-            case DSPMode::USB:
-            case DSPMode::LSB:
-            case DSPMode::AM:
-            case DSPMode::SAM:
-            case DSPMode::DSB:
-                return 0;  // Phone
-            case DSPMode::CWU:
-            case DSPMode::CWL:
-                return 1;  // Cw
-            case DSPMode::DIGU:
-            case DSPMode::DIGL:
-            case DSPMode::SPEC:
-            case DSPMode::DRM:
-                return 2;  // Dig
-            case DSPMode::FM:
-                return 3;  // Fm
-            default:
-                return 0;  // Phone
-        }
-    };
-    return keyPart(actualMode) == keyPart(comboMode);
+    return dspOptionsModeGroup(actualMode) == dspOptionsModeGroup(comboMode);
 }
 
 }  // namespace (anon, Task 4.2 helpers)
