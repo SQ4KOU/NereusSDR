@@ -73,9 +73,12 @@ SliceStreamAllocator::Placement SliceStreamAllocator::joinStream(
     Placement placement;
     if (streamIndex < 0 || streamIndex >= m_streams.size()
         || !windowContains(m_streams.at(streamIndex), frequencyHz)) {
+        // Plain operator wording (R-R3-34); U+00A0 keeps the number and its
+        // unit on one line.
         placement.reason = QStringLiteral(
-            "The saved frequency is outside this pan's receiver window (stream %1). "
-            "Retune it into that window or place it on a separate pan.").arg(streamIndex);
+            "The radio receiver this panadapter uses does not cover %1\u00A0MHz. "
+            "Retune into its range, or give this receiver a panadapter of its own.")
+            .arg(QString::number(frequencyHz / 1.0e6, 'f', 4));
         return placement;
     }
     placement.outcome = Outcome::JoinedExisting;

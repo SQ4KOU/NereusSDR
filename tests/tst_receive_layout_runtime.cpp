@@ -327,7 +327,7 @@ private slots:
             QVERIFY(app.start(configWithCount(1)));
             QCOMPARE(model(app)->receiveLayoutRestoreState(), QStringLiteral("degraded"));
             QCOMPARE(model(app)->receiveLayoutRestoreMessage(),
-                     QStringLiteral("Receiver C (10.1000 MHz AM) could not be restored "
+                     QStringLiteral("Receiver C (10.1000\u00A0MHz AM) could not be restored "
                                     "because this radio supports only receivers A and B. "
                                     "Your saved layout is kept."));
             QVERIFY(model(app)->sliceById(0) != nullptr);
@@ -360,6 +360,20 @@ private slots:
                               "than one receiver in RADE mode and does not say which one "
                               "plays RADE audio. The configured receivers are used "
                               "instead. Your saved layout is kept.");
+        QTest::newRow("RADE audio receiver out of range")
+            << QStringLiteral("\"radeRxOwnerId\":2")
+            << QStringLiteral("\"radeRxOwnerId\":5")
+            << QStringLiteral("The saved receive layout could not be loaded. It is "
+                              "damaged or was written by a different version of this "
+                              "program. The configured receivers are used instead. "
+                              "Your saved layout is kept.");
+        QTest::newRow("RADE audio receiver not in RADE mode")
+            << QStringLiteral("\"dspMode\":13")
+            << QStringLiteral("\"dspMode\":1")
+            << QStringLiteral("The saved receive layout could not be loaded. The "
+                              "receiver it names for RADE audio is not in RADE mode. "
+                              "The configured receivers are used instead. Your saved "
+                              "layout is kept.");
     }
 
     void refusedLayoutReasonsReachTheOperatorInPlainWords()
@@ -448,7 +462,7 @@ private slots:
         QVERIFY(!radio->sliceById(4));
         QCOMPARE(radio->receiveLayoutRestoreState(), QStringLiteral("degraded"));
         QCOMPARE(radio->receiveLayoutRestoreMessage(),
-                 QStringLiteral("Receiver E (14.2950 MHz USB) could not be restored because "
+                 QStringLiteral("Receiver E (14.2950\u00A0MHz USB) could not be restored because "
                                 "all of the radio's receivers are in use. Add it again with "
                                 "+RX after closing another receiver. Your saved layout is kept."));
         radio->sliceById(0)->setFrequency(14296000);
@@ -518,7 +532,7 @@ private slots:
         QVERIFY(radio->sliceById(0)->streamIndex() != radio->sliceById(2)->streamIndex());
         QCOMPARE(radio->receiveLayoutRestoreState(), QStringLiteral("degraded"));
         QCOMPARE(radio->receiveLayoutRestoreMessage(),
-                 QStringLiteral("Receiver E (7.2010 MHz LSB) could not be restored because "
+                 QStringLiteral("Receiver E (7.2010\u00A0MHz LSB) could not be restored because "
                                 "all of the radio's receivers are in use. Add it again with "
                                 "+RX after closing another receiver. Your saved layout is kept."));
         app.stop();
@@ -546,7 +560,7 @@ private slots:
         QVERIFY(!radio->sliceById(1));
         QCOMPARE(radio->receiveLayoutRestoreState(), QStringLiteral("degraded"));
         QCOMPARE(radio->receiveLayoutRestoreMessage(),
-                 QStringLiteral("Receiver B (7.2276 MHz RADE-U) could not be restored because "
+                 QStringLiteral("Receiver B (7.2276\u00A0MHz RADE-U) could not be restored because "
                                 "all of the radio's receivers are in use. Add it again with "
                                 "+RX after closing another receiver. RADE audio from receiver "
                                 "B stays off until that receiver is back. Your saved layout "
@@ -600,7 +614,7 @@ private slots:
         QVERIFY(!radio->receiveLayoutOverridesConfiguredCount());
         QCOMPARE(radio->receiveLayoutRestoreState(), QStringLiteral("fallback"));
         QCOMPARE(radio->receiveLayoutRestoreMessage(),
-                 QStringLiteral("Receiver E (7.2000 MHz LSB) could not be restored because "
+                 QStringLiteral("Receiver E (7.2000\u00A0MHz LSB) could not be restored because "
                                 "this radio supports only receivers A and B. Your saved layout "
                                 "is kept."));
         QVERIFY(radio->sliceById(0));
@@ -633,6 +647,23 @@ private slots:
         QCOMPARE(saved.slices.size(), 2);
         QCOMPARE(saved.slices.at(1).id, 2);
         QCOMPARE(saved.slices.at(1).frequencyHz, 7225000.0);
+    }
+
+    // R-R3-34: a live layout the store refuses to save reaches the operator
+    // as a plain sentence, not the store's "pan key" reason.
+    void unsavableLivePanadapterIsRefusedInPlainWords()
+    {
+        QVERIFY(saveLayout(kMacA, twoReceiverLayout()));
+        DaemonApp app;
+        app.primeBoardForTest(HPSDRHW::HermesLite, kMacA);
+        QVERIFY(app.start(configWithCount(1)));
+        RadioModel* radio = model(app);
+        radio->sliceById(2)->setPanKey(QStringLiteral("pan-01"));
+        radio->flushPendingSettingsSave();
+        QCOMPARE(radio->settingsSaveError(),
+                 QStringLiteral("Your receivers were not saved. It places a receiver "
+                                "on a panadapter this program does not recognize."));
+        app.stop();
     }
 };
 

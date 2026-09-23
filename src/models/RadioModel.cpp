@@ -4394,6 +4394,10 @@ QString plainReceiveLayoutProblem(const QString& reason)
     const auto has = [&reason](const char* text) {
         return reason.contains(QLatin1String(text), Qt::CaseInsensitive);
     };
+    const auto damaged = [] {
+        return RadioModel::tr("It is damaged or was written by a different "
+                              "version of this program.");
+    };
     if (has("duplicate slice ID")) {
         static const QRegularExpression idPattern(QStringLiteral("slice ID (\\d+)"));
         const QRegularExpressionMatch match = idPattern.match(reason);
@@ -4424,7 +4428,12 @@ QString plainReceiveLayoutProblem(const QString& reason)
         return RadioModel::tr("It has more than one receiver in RADE mode and "
                               "does not say which one plays RADE audio.");
     }
-    if (has("RADE receive owner")) {
+    // An owner ID outside the receiver range is a damaged record, not a
+    // receiver in the wrong mode.
+    if (has("invalid RADE receive owner")) {
+        return damaged();
+    }
+    if (has("not a RADE slice")) {
         return RadioModel::tr("The receiver it names for RADE audio is not in "
                               "RADE mode.");
     }
@@ -4435,8 +4444,7 @@ QString plainReceiveLayoutProblem(const QString& reason)
         return RadioModel::tr("The radio has not identified itself yet.");
     }
     if (has("JSON") || has("schema") || has("invalid slice")) {
-        return RadioModel::tr("It is damaged or was written by a different "
-                              "version of this program.");
+        return damaged();
     }
     return {};
 }
@@ -4539,10 +4547,10 @@ void RadioModel::bindReceiveLayoutSlices()
         const QString mhz = QString::number(slice->frequency() / 1.0e6, 'f', 4);
         const QString mode = SliceModel::modeName(slice->dspMode());
         refusals.append(idSupported
-            ? tr("Receiver %1 (%2 MHz %3) could not be restored because all of the "
+            ? tr("Receiver %1 (%2\u00A0MHz %3) could not be restored because all of the "
                  "radio's receivers are in use. Add it again with +RX after closing "
                  "another receiver.").arg(letter, mhz, mode)
-            : tr("Receiver %1 (%2 MHz %3) could not be restored because this radio "
+            : tr("Receiver %1 (%2\u00A0MHz %3) could not be restored because this radio "
                  "supports only %4.").arg(letter, mhz, mode, supportedReceivers(channelLimit)));
         if (m_restoredRadeReceiveOwner == id) {
             refusals.append(radeAudioAwaitsReceiver(id));

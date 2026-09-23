@@ -144,7 +144,11 @@ private slots:
                 info.macAddress, "receiveLayout").toString();
             model->removeSlice(2);
             model->flushPendingSettingsSave();
-            QVERIFY(!model->settingsSaveError().isEmpty());
+            QCOMPARE(model->settingsSaveError(),
+                     QStringLiteral("Your receivers were not saved because it is not "
+                                    "clear which receiver should play RADE audio. "
+                                    "Select RADE mode again on the receiver you want "
+                                    "to hear."));
             QCOMPARE(AppSettings::instance().hardwareValue(info.macAddress,
                        "receiveLayout").toString(), previous);
             // An explicit ordinary receive mode resolves the invalid live

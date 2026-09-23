@@ -151,6 +151,24 @@ private slots:
         QVERIFY(!r.reason.contains(QStringLiteral("DDC")));
     }
 
+    // R-R3-34: joining a panadapter's receiver that does not cover the
+    // frequency is refused in plain words; U+00A0 keeps "7.1500" and "MHz"
+    // together.
+    void joining_a_receiver_that_does_not_cover_the_frequency_is_refused_plainly()
+    {
+        SliceStreamAllocator alloc;
+        alloc.configure(5, 5);
+        alloc.activateStream(0, 14200000.0, 192000);
+
+        const auto r = alloc.joinStream(0, 7150000.0);
+
+        QCOMPARE(r.outcome, SliceStreamAllocator::Outcome::Rejected);
+        QCOMPARE(r.reason,
+                 QStringLiteral("The radio receiver this panadapter uses does not "
+                                "cover 7.1500\u00A0MHz. Retune into its range, or give "
+                                "this receiver a panadapter of its own."));
+    }
+
     void retune_inside_the_window_only_moves_the_shift()
     {
         SliceStreamAllocator alloc;
