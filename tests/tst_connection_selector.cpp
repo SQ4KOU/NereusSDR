@@ -62,6 +62,7 @@ private slots:
     void editorValidatesAndPreservesSecrets();
     void editorCancelHasNoAcceptance();
     void controlsRemainReadableAndReachable();
+    void rowSelectionNeverResizesTheWindow();
 };
 
 void ConnectionSelectorTest::selectionRefreshIsStableAndDoesNotConnect()
@@ -291,6 +292,98 @@ void ConnectionSelectorTest::controlsRemainReadableAndReachable()
         QCoreApplication::processEvents();
         QVERIFY(editor.grab().save(captures + QStringLiteral("/core-setup.png")));
     }
+}
+
+// R-R3-17: seen natively as 820x572 growing to 1156x710 when a row with
+// more action buttons was selected. Showing a hidden button raised the
+// dialog's minimum width and Qt enlarged the window to fit. The window must
+// open wide enough for the full row of nine and then keep its size whichever
+// row is selected, with hidden buttons still hidden rather than disabled.
+void ConnectionSelectorTest::rowSelectionNeverResizesTheWindow()
+{
+    qApp->setStyle(QStyleFactory::create(QStringLiteral("Fusion")));
+    applyDarkPalette(*qApp);
+    applyAppBaselineQss(*qApp);
+    ConnectionSelector selector;
+    // "Details" only; then Connect + Edit + Forget + Details.
+    const ConnectionTargetRow detailsOnly{QStringLiteral("local"), ConnectionTargetKind::LocalRadio,
+        QStringLiteral("This computer's Core"), QStringLiteral("Choose a local radio"),
+        QStringLiteral("This computer"), QStringLiteral("Available"), false, false, false};
+    selector.setTargets({detailsOnly, savedRow()});
+    selector.setCurrentConnection(QStringLiteral("Not connected"), QString(), false, false);
+    selector.show();
+    QCoreApplication::processEvents();
+    const QSize opened = selector.size();
+    // A size that only holds because this platform's buttons happen to fit
+    // 820 is not enough: the minimum itself must not move with the row.
+    const QSize openedMinimum = selector.minimumSize();
+    QVERIFY(opened.width() >= openedMinimum.width());
+
+    const auto visibleButtons = [&selector] {
+        int count = 0;
+        for (QPushButton* button : selector.findChildren<QPushButton*>()) {
+            if (button->isVisible()) { ++count; }
+        }
+        return count;
+    };
+    const auto assertRowFits = [&selector] {
+        QList<QRect> rectangles;
+        for (QPushButton* button : selector.findChildren<QPushButton*>()) {
+            if (!button->isVisible()) { continue; }
+            const QRect bounds(button->mapTo(&selector, QPoint()), button->size());
+            QVERIFY2(selector.rect().contains(bounds), qPrintable(button->text()));
+            QVERIFY2(button->width() >= button->sizeHint().width(), qPrintable(button->text()));
+            for (const QRect& previous : rectangles) { QVERIFY(!previous.intersects(bounds)); }
+            rectangles.append(bounds);
+        }
+    };
+    // Nothing selected: the five row actions are hidden, not disabled.
+    QCOMPARE(visibleButtons(), 4);
+
+    selector.setSelectedKey(detailsOnly.key);
+    QCoreApplication::processEvents();
+    QCOMPARE(visibleButtons(), 5);
+    QCOMPARE(selector.size(), opened);
+    QCOMPARE(selector.minimumSize(), openedMinimum);
+
+    selector.setSelectedKey(savedRow().key);
+    QCoreApplication::processEvents();
+    QCOMPARE(visibleButtons(), 8);
+    QCOMPARE(selector.size(), opened);
+    QCOMPARE(selector.minimumSize(), openedMinimum);
+
+    // All nine, with the wider "Cancel retry" caption, still fit the
+    // window as it opened.
+    selector.setCurrentConnection(QStringLiteral("Retrying Core (attempt 3)"),
+        QStringLiteral("Core: 192.168.109.106:4433\nRadio state unavailable\n"
+                       "Retry delay: 4 s. Disconnect cancels automatic retries."), true, true);
+    QCoreApplication::processEvents();
+    QCOMPARE(visibleButtons(), 9);
+    QCOMPARE(selector.size(), opened);
+    QCOMPARE(selector.minimumSize(), openedMinimum);
+    assertRowFits();
+
+    // Detail text longer than the area scrolls or wraps inside it.
+    QStringList longDetails;
+    for (int line = 1; line <= 12; ++line) {
+        longDetails.append(QStringLiteral("Detail line %1 describing the Core connection at length "
+                                          "so that it cannot fit on one line of the window.").arg(line));
+    }
+    selector.setCurrentConnection(QStringLiteral("Core connected"), longDetails.join(QLatin1Char('\n')),
+                                  true, false);
+    QCoreApplication::processEvents();
+    QCOMPARE(selector.size(), opened);
+    QCOMPARE(selector.minimumSize(), openedMinimum);
+
+    selector.setSelectedKey(detailsOnly.key);
+    QCoreApplication::processEvents();
+    QCOMPARE(selector.size(), opened);
+    QCOMPARE(selector.minimumSize(), openedMinimum);
+    selector.setSelectedKey(QString());
+    QCoreApplication::processEvents();
+    QCOMPARE(selector.size(), opened);
+    QCOMPARE(selector.minimumSize(), openedMinimum);
+    assertRowFits();
 }
 
 QTEST_MAIN(ConnectionSelectorTest)

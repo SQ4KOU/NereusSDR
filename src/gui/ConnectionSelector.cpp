@@ -13,9 +13,12 @@
 #include <QHeaderView>
 #include <QLabel>
 #include <QPushButton>
+#include <QScrollArea>
 #include <QTreeWidget>
 #include <QTreeWidgetItem>
 #include <QVBoxLayout>
+
+#include <algorithm>
 
 namespace NereusSDR {
 namespace {
@@ -70,18 +73,42 @@ ConnectionSelector::ConnectionSelector(QWidget* parent)
 
     auto* currentGroup = new QGroupBox(tr("Current connection"), this);
     auto* currentLayout = new QVBoxLayout(currentGroup);
-    m_currentSummaryLabel = new QLabel(currentGroup);
+    // R-R3-17: the connection text changes while the window is open (a retry
+    // adds lines, a long address wraps). It scrolls inside a fixed area so
+    // the window never grows to fit it. Room for the summary plus four
+    // detail lines, which covers the retry text without a scroll bar.
+    auto* currentScroll = new QScrollArea(currentGroup);
+    currentScroll->setObjectName(QStringLiteral("connectionSelectorCurrentScroll"));
+    currentScroll->setFrameShape(QFrame::NoFrame);
+    currentScroll->setWidgetResizable(true);
+    currentScroll->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    auto* currentText = new QWidget(currentScroll);
+    auto* currentTextLayout = new QVBoxLayout(currentText);
+    currentTextLayout->setContentsMargins(0, 0, 0, 0);
+    m_currentSummaryLabel = new QLabel(currentText);
     m_currentSummaryLabel->setObjectName(QStringLiteral("connectionSelectorCurrentSummary"));
     configurePlainTextLabel(m_currentSummaryLabel);
-    m_currentDetailsLabel = new QLabel(currentGroup);
+    m_currentDetailsLabel = new QLabel(currentText);
     m_currentDetailsLabel->setObjectName(QStringLiteral("connectionSelectorCurrentDetails"));
     configurePlainTextLabel(m_currentDetailsLabel);
     m_currentDetailsLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    currentLayout->addWidget(m_currentSummaryLabel);
-    currentLayout->addWidget(m_currentDetailsLabel);
+    currentTextLayout->addWidget(m_currentSummaryLabel);
+    currentTextLayout->addWidget(m_currentDetailsLabel);
+    currentTextLayout->addStretch();
+    currentScroll->setWidget(currentText);
+    currentScroll->setFixedHeight(5 * m_currentDetailsLabel->fontMetrics().lineSpacing()
+                                  + currentTextLayout->spacing());
+    currentLayout->addWidget(currentScroll);
     layout->addWidget(currentGroup);
 
-    auto* actionLayout = new QHBoxLayout();
+    // R-R3-17: the row actions show and hide with the selected row. Measured
+    // with all nine shown (and the wider of the Disconnect captions), the row
+    // keeps that width as its minimum, so showing a hidden button never
+    // raises the window's minimum width and makes Qt enlarge the window.
+    auto* actionRow = new QWidget(this);
+    actionRow->setObjectName(QStringLiteral("connectionSelectorActions"));
+    auto* actionLayout = new QHBoxLayout(actionRow);
+    actionLayout->setContentsMargins(0, 0, 0, 0);
     m_addCoreButton = makeButton(tr("Add Core…"), QStringLiteral("connectionSelectorAddCore"));
     m_addRadioButton = makeButton(tr("Add Radio…"), QStringLiteral("connectionSelectorAddRadio"));
     m_scanButton = makeButton(tr("Scan"), QStringLiteral("connectionSelectorScan"));
@@ -102,7 +129,17 @@ ConnectionSelector::ConnectionSelector(QWidget* parent)
     actionLayout->addWidget(m_disconnectButton);
     actionLayout->addWidget(m_connectButton);
     actionLayout->addWidget(closeButton);
-    layout->addLayout(actionLayout);
+    layout->addWidget(actionRow);
+
+    // Every button is still unhidden here (setTargets() below applies the
+    // first selection), so the layout's size hint covers the full row.
+    int fullRowWidth = 0;
+    for (const QString& caption : {tr("Cancel retry"), tr("Disconnect")}) {
+        m_disconnectButton->setText(caption);
+        actionLayout->invalidate();
+        fullRowWidth = std::max(fullRowWidth, actionLayout->sizeHint().width());
+    }
+    actionRow->setMinimumWidth(fullRowWidth);
 
     connect(m_targetTree, &QTreeWidget::currentItemChanged, this,
             [this](QTreeWidgetItem*, QTreeWidgetItem*) { updateActions(); });
@@ -136,7 +173,9 @@ ConnectionSelector::ConnectionSelector(QWidget* parent)
 
     setTargets({});
     setCurrentConnection({}, {}, false, false);
-    resize(820, 540);
+    // Open at least as wide as the full action row needs (native button
+    // metrics can exceed 820), never narrower.
+    resize(std::max(820, minimumSizeHint().width()), std::max(540, minimumSizeHint().height()));
 }
 
 void ConnectionSelector::setTargets(const QList<ConnectionTargetRow>& targets)

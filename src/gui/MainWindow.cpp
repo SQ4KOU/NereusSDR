@@ -1091,6 +1091,7 @@ void MainWindow::ensureRemoteSession()
 
         connect(m_stationClient, &StationClient::handshakeComplete, this, [this]() {
             qCInfo(lcConnection) << "Station handshake complete:" << m_remoteConnection->endpointText();
+            clearStationLinkToastMemory();
             showToast(tr("Connected to station %1").arg(m_remoteConnection->endpointText()),
                       ToastSeverity::Info, 3000);
         });
@@ -1122,11 +1123,33 @@ void MainWindow::ensureRemoteSession()
                 return;
             }
             qCWarning(lcConnection) << "Station session ended:" << reason;
+            // R-R3-17: a redial that keeps failing reports the same reason
+            // at every backoff step, up to once a minute for as long as the
+            // Core stays away. The reason is already shown persistently
+            // (Connections window, Core panel, title bar), so toast it once
+            // per distinct reason, the same way m_lastReceiveLayoutWarning
+            // holds the receive layout notice to once.
+            if (m_stationLinkLostSeen && reason == m_lastStationLinkLostReason) {
+                return;
+            }
+            m_stationLinkLostSeen = true;
+            m_lastStationLinkLostReason = reason;
             showToast(tr("Station link lost: %1").arg(reason),
                       ToastSeverity::Warning, 5000);
         });
         connect(m_stationClient, &StationClient::reconnectScheduled, this,
                 [this](int attempt, int delayMs) {
+            // Same rule as the link-lost toast above, keyed on the reason
+            // that made this retry necessary: the first retry after a new
+            // reason is announced, the later ones for that reason are not.
+            // sessionEnded() is emitted before reconnectScheduled(), so the
+            // reason recorded above is the one this retry answers.
+            if (m_reconnectToastSeen
+                && m_lastReconnectToastReason == m_lastStationLinkLostReason) {
+                return;
+            }
+            m_reconnectToastSeen = true;
+            m_lastReconnectToastReason = m_lastStationLinkLostReason;
             showToast(tr("Reconnecting to station (attempt %1) in %2 s")
                           .arg(attempt).arg((delayMs + 999) / 1000),
                       ToastSeverity::Info, 3000);
@@ -1171,7 +1194,16 @@ void MainWindow::disconnectFromStation()
     m_stationDisconnectRequested = true;
     m_remoteConnection->disconnectFromStation();
     m_stationDisconnectRequested = false;
+    clearStationLinkToastMemory();
     showToast(tr("Disconnected from Core station"), ToastSeverity::Info, 3000);
+}
+
+void MainWindow::clearStationLinkToastMemory()
+{
+    m_stationLinkLostSeen = false;
+    m_lastStationLinkLostReason.clear();
+    m_reconnectToastSeen = false;
+    m_lastReconnectToastReason.clear();
 }
 
 void MainWindow::connectionRequestedByOperator()

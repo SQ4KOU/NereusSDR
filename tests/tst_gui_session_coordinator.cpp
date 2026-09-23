@@ -28,6 +28,20 @@ StationStartupSelection core(const QString& id, quint16 port = 4433)
 {
     return {{QStringLiteral("ws://127.0.0.1:%1").arg(port), {}, {}, true}, id};
 }
+
+int toastsStartingWith(MainWindow* window, const QString& prefix)
+{
+    int count = 0;
+    for (StatusToast* toast : window->findChildren<StatusToast*>()) {
+        if (toast->message().startsWith(prefix)) { ++count; }
+    }
+    return count;
+}
+
+void dismissToasts(MainWindow* window)
+{
+    qDeleteAll(window->findChildren<StatusToast*>());
+}
 }
 
 class TestGuiSessionCoordinator : public QObject {
@@ -261,6 +275,78 @@ private slots:
                  QStringLiteral("4096"));
         QVERIFY(!secondClient->isReconnectPending());
         QVERIFY(!sessions.window()->radioModel()->isConnected()); // Core online, radio offline.
+        sessions.shutdown();
+    }
+
+    // R-R3-17: a redial that keeps failing reports the same reason at every
+    // backoff step, up to once a minute. The reason stays on screen in the
+    // Connections window, Core panel and title bar, so the toasts announce
+    // each distinct reason once. Toasts are dismissed between steps so a
+    // repeat is counted as a new toast rather than merged into a live one.
+    void linkLossToastsOncePerDistinctReason()
+    {
+        QTemporaryDir stationDir;
+        AppSettings stationSettings(stationDir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        StationServer server(&station, stationSettings, stationDir.path());
+        QWebSocketServer listener(QStringLiteral("A"), QWebSocketServer::NonSecureMode);
+        QVERIFY(listener.listen(QHostAddress::LocalHost, 0));
+        connect(&listener, &QWebSocketServer::newConnection, &server, [&] {
+            server.acceptTransport(new WebSocketTransport(listener.nextPendingConnection(),
+                StationServer::kMaxIncomingMessageBytes));
+        });
+        auto a = core(QStringLiteral("a"), listener.serverPort());
+        a.connection.token = server.token();
+        GuiSessionCoordinator sessions;
+        QVERIFY(sessions.replace(a, true));
+        MainWindow* window = sessions.window();
+        StationClient* client = window->findChild<StationClient*>();
+        QVERIFY(client);
+        QTRY_VERIFY(client->isHandshakeComplete());
+        const QString lost = QStringLiteral("Station link lost: ");
+        const QString retry = QStringLiteral("Reconnecting to station");
+        const auto failure = [&](const QString& reason, int attempt) {
+            dismissToasts(window);
+            emit client->sessionEnded(reason);
+            emit client->reconnectScheduled(attempt, 1000 * attempt);
+        };
+
+        failure(QStringLiteral("Remote host closed"), 1);
+        QCOMPARE(toastsStartingWith(window, lost), 1);
+        QCOMPARE(toastsStartingWith(window, retry), 1);
+        // The same reason again, as each backoff step reports it: silent.
+        failure(QStringLiteral("Remote host closed"), 2);
+        QCOMPARE(toastsStartingWith(window, lost), 0);
+        QCOMPARE(toastsStartingWith(window, retry), 0);
+        failure(QStringLiteral("Remote host closed"), 3);
+        QCOMPARE(toastsStartingWith(window, lost), 0);
+        QCOMPARE(toastsStartingWith(window, retry), 0);
+        // A different reason is news.
+        failure(QStringLiteral("Connection refused"), 4);
+        QCOMPARE(toastsStartingWith(window, lost), 1);
+        QCOMPARE(toastsStartingWith(window, retry), 1);
+
+        // The real path with the remembered reason stays silent too, and
+        // its retry reaches the live Core, whose handshake clears the memory.
+        dismissToasts(window);
+        client->setReconnectBackoffUnitMs(50);
+        client->disconnectFromStation(QStringLiteral("Connection refused"), true);
+        QVERIFY(client->isReconnectPending());
+        QCOMPARE(toastsStartingWith(window, lost), 0);
+        QCOMPARE(toastsStartingWith(window, retry), 0);
+        QTRY_VERIFY(client->isHandshakeComplete());
+        failure(QStringLiteral("Connection refused"), 1);
+        QCOMPARE(toastsStartingWith(window, lost), 1);
+        QCOMPARE(toastsStartingWith(window, retry), 1);
+
+        // An operator disconnect clears it as well, without a toast of its own.
+        dismissToasts(window);
+        QVERIFY(QMetaObject::invokeMethod(window, "disconnectFromStation", Qt::DirectConnection));
+        QVERIFY(!client->isConnectionActive());
+        QCOMPARE(toastsStartingWith(window, lost), 0);
+        failure(QStringLiteral("Connection refused"), 1);
+        QCOMPARE(toastsStartingWith(window, lost), 1);
+        QCOMPARE(toastsStartingWith(window, retry), 1);
         sessions.shutdown();
     }
 

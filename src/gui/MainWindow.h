@@ -888,7 +888,17 @@ private:
     class RemoteTelemetryController* m_remoteTelemetry{nullptr};
     class RemoteConnectionController* m_remoteConnection{nullptr};
     class RemoteConnectionPanel* m_remoteConnectionPanel{nullptr};
+    /// R-R3-17: forget which link-lost reason was last toasted.
+    void clearStationLinkToastMemory();
     QString m_lastReceiveLayoutWarning;
+    // R-R3-17: a failing redial repeats the same reason every backoff step
+    // (up to once a minute). Toast each distinct reason once; the Connections
+    // window, Core panel and title bar keep showing it persistently. Cleared
+    // by a completed handshake or an operator disconnect.
+    QString m_lastStationLinkLostReason;
+    QString m_lastReconnectToastReason;
+    bool m_stationLinkLostSeen{false};
+    bool m_reconnectToastSeen{false};
     bool m_stationDisconnectRequested{false};
     bool m_initialConnectionStarted{false};
     bool m_retiringSession{false};
