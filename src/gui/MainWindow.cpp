@@ -5574,6 +5574,14 @@ void MainWindow::buildUI()
                 showToast(toast, ToastSeverity::Warning, 10000);
             }
         }, Qt::QueuedConnection);
+        // Each connect is told its own closures, even one worded exactly as
+        // the last connect's.
+        connect(m_radioModel, &RadioModel::connectionStateChanged, this,
+                [this](ConnectionState state) {
+            if (state == ConnectionState::Disconnected) {
+                m_receiveLayoutNotices.forget();
+            }
+        });
     }
     // L1 (R-R3-47, R-R3-22, R-R3-48): the Core refused an accessory request
     // (amp, tuner, RF-Kit, interlock, fault history, station TCI). Its own

@@ -4692,6 +4692,9 @@ private:
     bool m_receiveLayoutPendingAdmission{false};
     bool m_receiveLayoutManaged{false};
     bool m_receiveLayoutOverridesCount{false};
+    // Slice ids the saved layout hydrated, until admission completes: a
+    // slice refused at admission is "restored" only if its id is here.
+    QSet<int> m_receiveLayoutHydratedIds;
     // Slices closed at connect because the board cannot host their ids,
     // for the one run of admission that reports them. Kept so a later
     // admission step does not report an accepted restore over it.

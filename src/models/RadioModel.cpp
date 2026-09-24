@@ -5674,7 +5674,10 @@ void RadioModel::bindReceiveLayoutSlices()
                                        WdspEngine::kMaxSliceChannels);
     // Slices that came from a saved layout are "restored"; slices a window
     // added while the Core waited for its radio were never saved, so they
-    // are "closed" and no saved layout is claimed to be kept for them.
+    // are "closed". Fix wave 1, M2: decided per slice, from the ids the saved
+    // layout hydrated, so a window's own slice is never called restored
+    // beside a saved layout, and one refused only because every receiver is
+    // busy is called closed when nothing was saved.
     const bool fromSavedLayout = m_receiveLayoutOverridesCount;
     // The saved layout records each slice's pan, not which slices shared a
     // receiver, so startup places slices exactly as recovery does
@@ -5714,8 +5717,13 @@ void RadioModel::bindReceiveLayoutSlices()
         const QString letter(slice->sliceLetter());
         const QString mhz = QString::number(slice->frequency() / 1.0e6, 'f', 4);
         const QString mode = SliceModel::modeName(slice->dspMode());
-        if (!idSupported && !fromSavedLayout) {
+        const bool restoredSlice = fromSavedLayout && m_receiveLayoutHydratedIds.contains(id);
+        if (!restoredSlice && !idSupported) {
             refusals.append(closedSliceSentence(slice, channelLimit));
+        } else if (!restoredSlice) {
+            refusals.append(tr("Receiver %1 (%2\u00A0MHz %3) was closed because all of the "
+                               "radio's receivers are in use. Add it again with +RX after "
+                               "closing another receiver.").arg(letter, mhz, mode));
         } else {
             refusals.append(idSupported
                 ? tr("Receiver %1 (%2\u00A0MHz %3) could not be restored because all of the "
@@ -7712,6 +7720,8 @@ void RadioModel::removeSliceImpl(int sliceId, bool persist)
     if (m_slices.size() == 1) {
         return;
     }
+    // A later slice on this id was not restored from the saved layout.
+    m_receiveLayoutHydratedIds.remove(sliceId);
 
     // External diversity has one stable source owner: Slice A (id 0). Stop
     // while that object and its worker route are still intact, before list
@@ -8960,6 +8970,16 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
     // could run it.
     m_dspAssets->resolveNr3ModelPath();
     m_intentionalDisconnect = false;
+
+    // Fix wave 1, M3 (R-R3-34): in a window with no saved-layout management
+    // the receive-layout status carries only the slices one connect closed
+    // (closeSlicesPastChannelLimit). Clear the last connect's, so it does
+    // not linger past the connection it described, and a closure this
+    // connect repeats word for word is still reported (the status would
+    // otherwise not change, and the window would hear nothing).
+    if (!m_receiveLayoutManaged) {
+        setReceiveLayoutRestoreStatus(QString(), QString());
+    }
 
     // Compute HardwareProfile from model override (Phase 3I-RP).
     //
@@ -15154,15 +15174,27 @@ void RadioModel::completeReceiveLayoutStartup()
             return slice && slice->streamIndex() >= 0;
         });
     if (!allBound) {
-        m_receiveLayoutProtected = true;
         QStringList notes = reportedRestoreSentences(m_receiveLayoutRestoreMessage);
         if (notes.isEmpty() && !m_sliceClosureNotice.isEmpty()) {
             notes.append(m_sliceClosureNotice);
         }
         notes.append(tr("Some receivers did not start; check the radio."));
-        setReceiveLayoutRestoreStatus(QStringLiteral("fallback"), withKeptLayout(notes));
+        // Fix wave 1, M1: a saved layout is kept (and saves held back) only
+        // when there is one: loaded (m_receiveLayoutOverridesCount) or found
+        // and protected. With none, blocking saves would only lose the
+        // receivers that did start, and nothing saved is there to keep; the
+        // notice rides m_sliceClosureNotice so the accepted-restore report
+        // below does not replace it.
+        if (m_receiveLayoutOverridesCount || m_receiveLayoutProtected) {
+            m_receiveLayoutProtected = true;
+            setReceiveLayoutRestoreStatus(QStringLiteral("fallback"), withKeptLayout(notes));
+        } else {
+            m_sliceClosureNotice = notes.join(QLatin1Char(' '));
+            setReceiveLayoutRestoreStatus(QStringLiteral("fallback"), m_sliceClosureNotice);
+        }
     }
     m_receiveLayoutPendingAdmission = false;
+    m_receiveLayoutHydratedIds.clear();
     const QString closureNotice = std::exchange(m_sliceClosureNotice, QString());
     if (m_receiveLayoutProtected) {
         return;
@@ -15311,6 +15343,10 @@ bool RadioModel::hydrateReceiveLayout(const QString& radioMac,
         }
     }
     m_slices = restored;
+    m_receiveLayoutHydratedIds.clear();
+    for (const ReceiveSliceState& state : layout.slices) {
+        m_receiveLayoutHydratedIds.insert(state.id);
+    }
     // Descriptor order is authoritative, so an unchanged active identity can
     // still have a different list position. Publish the final pair together.
     if (!m_activeSlice || !m_slices.contains(m_activeSlice)) {

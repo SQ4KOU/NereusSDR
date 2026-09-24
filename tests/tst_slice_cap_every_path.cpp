@@ -430,64 +430,109 @@ private slots:
 
     void windowReconnectingToASmallerBoardClosesSlicesItCannotHost()
     {
-        // A local window (no saved-layout management) holding four slices
-        // connects to a two-slice HermesII. Before the fix the extra slices
-        // stayed, bound to a stream, with no WDSP channel behind their ids.
-        QList<int> added;
-        // The local window's notice (MainWindow's local receive-layout
-        // connection): the same toast the remote window shows, fed from the
-        // same status signal.
+        // A local window (no saved-layout management) runs four slices on a
+        // Hermes Lite 2, disconnects, and reconnects to a two-slice
+        // HermesII. Before Task 1 the extra slices stayed, bound to a
+        // stream, with no WDSP channel behind their ids.
+        //
+        // Fix wave 1, M5: a real disconnect and reconnect to the smaller
+        // board, and the slices kept are asserted running, not merely
+        // present. M3: the window's notice memory is cleared on disconnect
+        // (MainWindow's local wiring), so the same closure on a later
+        // reconnect is toasted again.
         ReceiveLayoutNotices notices;
         QStringList toasts;
         QObject receiver;
-        double freqC = 0.0;
-        double freqD = 0.0;
-        DSPMode modeC = DSPMode::USB;
-        DSPMode modeD = DSPMode::USB;
+        const auto wireLocalWindow = [&](RadioModel& model) {
+            // MainWindow's local receive-layout connections: the same toast
+            // the remote window shows, fed from the same status signal, and
+            // the notice memory forgotten when the radio disconnects.
+            QObject::connect(&model, &RadioModel::receiveLayoutRestoreStatusChanged,
+                             &receiver, [&] {
+                const QString toast = notices.toastFor(
+                    model.receiveLayoutRestoreState(),
+                    model.receiveLayoutRestoreMessage(), /*viaCore*/ false);
+                if (!toast.isEmpty()) {
+                    toasts.append(toast);
+                }
+            });
+            QObject::connect(&model, &RadioModel::connectionStateChanged, &receiver,
+                             [&](ConnectionState state) {
+                if (state == ConnectionState::Disconnected) {
+                    notices.forget();
+                }
+            });
+        };
         auto connected = ConnectableRadioModel::create(
-            10000, RadioModel::Role::Local,
-            [&](RadioModel& model) {
-                QObject::connect(&model, &RadioModel::receiveLayoutRestoreStatusChanged,
-                                 &receiver, [&] {
-                    const QString toast = notices.toastFor(
-                        model.receiveLayoutRestoreState(),
-                        model.receiveLayoutRestoreMessage(), /*viaCore*/ false);
-                    if (!toast.isEmpty()) {
-                        toasts.append(toast);
-                    }
-                });
-                for (int i = 0; i < 4; ++i) {
-                    added.append(model.addSlice());
-                }
-                if (model.sliceById(3)) {
-                    freqC = model.sliceById(2)->frequency();
-                    modeC = model.sliceById(2)->dspMode();
-                    freqD = model.sliceById(3)->frequency();
-                    modeD = model.sliceById(3)->dspMode();
-                }
-            },
-            HPSDRHW::HermesII);
-        QCOMPARE(added, (QList<int>{0, 1, 2, 3}));
+            10000, RadioModel::Role::Local, wireLocalWindow, HPSDRHW::HermesLite);
         QVERIFY(connected);
         RadioModel& model = connected->model();
-        QCOMPARE(model.maxSlices(), 2);
+        QCOMPARE(model.maxSlices(), 5);
 
-        QCOMPARE(model.slices().size(), 2);
-        QVERIFY(model.sliceById(2) == nullptr);
-        QVERIFY(model.sliceById(3) == nullptr);
-        for (int id : {0, 1}) {
-            SliceModel* slice = model.sliceById(id);
-            QVERIFY(slice);
-            QVERIFY(slice->streamIndex() >= 0);
-            QVERIFY(model.wdspEngine()->rxChannel(id) != nullptr);
-        }
+        const double freqC = 14'225'000.0;
+        const double freqD = 7'150'000.0;
+        const DSPMode modeC = DSPMode::USB;
+        const DSPMode modeD = DSPMode::LSB;
+        const auto fillToFourSlices = [&] {
+            while (model.slices().size() < 4) {
+                if (model.addSlice() < 0) {
+                    return false;
+                }
+            }
+            model.sliceById(2)->setFrequency(freqC);
+            model.sliceById(2)->setDspMode(modeC);
+            model.sliceById(3)->setFrequency(freqD);
+            model.sliceById(3)->setDspMode(modeD);
+            return true;
+        };
+        const auto reconnectAs = [&](HPSDRHW board) {
+            model.disconnectFromRadio();
+            if (!QTest::qWaitFor([&] {
+                    return model.connectionState() == ConnectionState::Disconnected;
+                }, 10000)) {
+                return false;
+            }
+            RadioInfo info = connected->radioInfo();
+            info.boardType = board;
+            model.connectToRadio(info);
+            return QTest::qWaitFor([&] {
+                return model.connectionState() == ConnectionState::Connected;
+            }, 10000);
+        };
         const QString expected = closedSentence(QLatin1Char('C'), freqC, modeC)
             + QLatin1Char(' ') + closedSentence(QLatin1Char('D'), freqD, modeD);
-        QCOMPARE(model.receiveLayoutRestoreState(), QStringLiteral("degraded"));
-        QCOMPARE(model.receiveLayoutRestoreMessage(), expected);
-        // R-R3-34: the closure is not silent in a window with no Core. One
-        // toast, the message as written (no pointer to a Core panel).
-        QCOMPARE(toasts, QStringList{expected});
+
+        for (int round = 1; round <= 2; ++round) {
+            QVERIFY2(fillToFourSlices(), qPrintable(QString::number(round)));
+            QCOMPARE(model.slices().size(), 4);
+
+            QVERIFY2(reconnectAs(HPSDRHW::HermesII), qPrintable(QString::number(round)));
+            QCOMPARE(model.maxSlices(), 2);
+            QCOMPARE(model.slices().size(), 2);
+            QVERIFY(model.sliceById(2) == nullptr);
+            QVERIFY(model.sliceById(3) == nullptr);
+            for (int id : {0, 1}) {
+                SliceModel* slice = model.sliceById(id);
+                QVERIFY(slice);
+                QVERIFY(slice->streamIndex() >= 0);
+                RxChannel* channel = model.wdspEngine()->rxChannel(id);
+                QVERIFY2(channel && channel->isActive(),
+                         qPrintable(QStringLiteral("round %1, slice %2").arg(round).arg(id)));
+            }
+            QCOMPARE(model.receiveLayoutRestoreState(), QStringLiteral("degraded"));
+            QCOMPARE(model.receiveLayoutRestoreMessage(), expected);
+            // R-R3-34: the closure is not silent in a window with no Core,
+            // and M3: each reconnect's closure is its own toast, the
+            // message as written (no pointer to a Core panel).
+            QTRY_COMPARE(toasts.size(), round);
+            QCOMPARE(toasts.last(), expected);
+
+            if (round == 1) {
+                // Back to the larger board for the second round.
+                QVERIFY(reconnectAs(HPSDRHW::HermesLite));
+                QCOMPARE(model.maxSlices(), 5);
+            }
+        }
     }
 
     void receiveLayoutNoticeIsTheSameToastLocallyAndThroughACore()
@@ -499,6 +544,9 @@ private slots:
         QVERIFY(local.toastFor(QStringLiteral("pending"), QStringLiteral("x"), false).isEmpty());
         QVERIFY(local.toastFor(QStringLiteral("accepted"), QString(), false).isEmpty());
         QCOMPARE(local.toastFor(QStringLiteral("degraded"), message, false), message); // again
+        QVERIFY(local.toastFor(QStringLiteral("degraded"), message, false).isEmpty());
+        local.forget(); // the radio disconnected: the next closure is news
+        QCOMPARE(local.toastFor(QStringLiteral("degraded"), message, false), message);
         ReceiveLayoutNotices remote;
         QCOMPARE(remote.toastFor(QStringLiteral("fallback"), message, true),
                  message + QStringLiteral(" Details remain in Core connection."));
