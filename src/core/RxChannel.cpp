@@ -297,6 +297,7 @@ extern "C" {
 
 namespace NereusSDR {
 
+#ifdef HAVE_WDSP
 namespace {
 // Task 8: a quiet-NaN bit pattern processIq leaves in the first output
 // sample of a stopping channel's exchange. fexchange2 overwrites it whenever
@@ -304,6 +305,7 @@ namespace {
 // compared as bits, so no floating-point mode can change the test.
 constexpr quint32 kStopSentinelBits = 0x7fc0beefu;
 } // namespace
+#endif
 
 RxChannel::RxChannel(int channelId, int bufferSize, int sampleRate,
                      QObject* parent)
