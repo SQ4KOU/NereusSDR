@@ -27,8 +27,8 @@
 //                Task E3's 250 ms m_bwTimer — reuses HermesLiteBandwidthMonitor
 //                ep6/ep2/throttle accessors.
 //   2026-09-24 - R-R3-46: the N2ADR switch applies only its receive half
-//                without the transmit permission. J.J. Boyd (KG4VCF), AI-
-//                assisted via Anthropic Claude Code.
+//                without the transmit permission, and its tooltip says so.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim mi0bot Console/setup.cs header (lines 1-50) ===
@@ -141,6 +141,9 @@ public:
     // is receive-only) the N2ADR switch applies only its receive half; the
     // transmit OC pins stay the Core's. Always permitted locally.
     void setTransmitPermitted(bool permitted, const QString& reason);
+    /// The N2ADR switch's tooltip line while transmit is not permitted.
+    static QString receiveOnlyN2adrNote();
+    QString n2adrToolTipForTest() const;
 
     // Phase 3P-H Task 5c test seams.
     // Register-table poll interval, in ms.  Matches spec §13 "register state

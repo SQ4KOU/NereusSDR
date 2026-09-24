@@ -25,6 +25,7 @@
 #include "core/accessories/N2adrPreset.h"
 #include "gui/setup/hardware/Hl2IoBoardTab.h"
 #include "models/RadioModel.h"
+#include "OperatorWording.h"
 
 using namespace NereusSDR;
 
@@ -303,6 +304,9 @@ private slots:
         OcMatrix& oc = model.ocMatrixMutable();
         oc.setPin(Band::Band20m, 0, /*tx=*/true, true);
         tab.setTransmitPermitted(false, QStringLiteral("Transmit is not available here."));
+        // The switch says it moves the receive filters only.
+        QVERIFY(tab.n2adrToolTipForTest().contains(Hl2IoBoardTab::receiveOnlyN2adrNote()));
+        QVERIFY(OperatorWording::isPlain(Hl2IoBoardTab::receiveOnlyN2adrNote()));
         tab.triggerN2adrToggleForTest(true);
         QVERIFY(oc.pinEnabled(Band::Band40m, 2, /*tx=*/false));
         QVERIFY(oc.pinEnabled(Band::Band20m, 0, /*tx=*/true));
@@ -310,6 +314,7 @@ private slots:
 
         // Permitted again: the whole preset, as locally.
         tab.setTransmitPermitted(true, {});
+        QVERIFY(!tab.n2adrToolTipForTest().contains(Hl2IoBoardTab::receiveOnlyN2adrNote()));
         tab.triggerN2adrToggleForTest(true);
         QVERIFY(oc.pinEnabled(Band::Band40m, 2, /*tx=*/true));
         QVERIFY(!oc.pinEnabled(Band::Band20m, 0, /*tx=*/true));

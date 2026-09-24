@@ -346,8 +346,11 @@ if(TARGET wdsp_static)
         # frame-like load (one long block in 12) reads its CPU share and
         # never trips the NNR step-back; a real overload still does. Needs
         # the thread-start hook for the worker's CPU clock, so not on
-        # Windows. Real time, about 45 s.
+        # Windows. Real time, about 45 s. RUN_SERIAL (R-R3-40): it measures
+        # the worker's real processor time, so ctest never runs it beside
+        # another test that would take that processor away.
         nereus_add_test(tst_receiver_dsp_load_frames EXTRA_LABELS core)
+        set_tests_properties(tst_receiver_dsp_load_frames PROPERTIES RUN_SERIAL TRUE)
     endif()
     nereus_add_test(tst_wdsp210_cfc_compat WdspCfcProbe.c EXTRA_LABELS core)
     set_source_files_properties(WdspCfcProbe.c PROPERTIES SKIP_PRECOMPILE_HEADERS ON)

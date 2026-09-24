@@ -23,8 +23,8 @@
 //                 Probe goes through RadioModel (the Core's verb remotely). J.J.
 //                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - R-R3-46: the N2ADR switch applies only its receive half
-//                without the transmit permission. J.J. Boyd (KG4VCF), AI-
-//                assisted via Anthropic Claude Code.
+//                without the transmit permission, and its tooltip says so.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // --- From Console/setup.cs ---
@@ -976,6 +976,29 @@ void Hl2IoBoardTab::setTransmitPermitted(bool permitted, const QString& reason)
 {
     Q_UNUSED(reason);  // the switch stays usable: its receive half applies
     m_transmitPermitted = permitted;
+    // Say so on the switch: without transmit it moves only the receive
+    // filters (applyN2adrMatrix).
+    if (m_n2adrFilter) {
+        static const char* const kOwnTip = "nereusN2adrOwnToolTip";
+        if (!m_n2adrFilter->property(kOwnTip).isValid()) {
+            m_n2adrFilter->setProperty(kOwnTip, m_n2adrFilter->toolTip());
+        }
+        const QString own = m_n2adrFilter->property(kOwnTip).toString();
+        const QString note = receiveOnlyN2adrNote();
+        m_n2adrFilter->setToolTip(permitted ? own
+                                            : (own.isEmpty() ? note : own + QLatin1Char('\n') + note));
+    }
+}
+
+QString Hl2IoBoardTab::receiveOnlyN2adrNote()
+{
+    return tr("In a remote window this switches the receive filters only; the transmit "
+              "filters follow once remote transmit is available.");
+}
+
+QString Hl2IoBoardTab::n2adrToolTipForTest() const
+{
+    return m_n2adrFilter ? m_n2adrFilter->toolTip() : QString();
 }
 
 void Hl2IoBoardTab::onProbeClicked()
