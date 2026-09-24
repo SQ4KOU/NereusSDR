@@ -466,6 +466,18 @@ struct RemoteMediaController::Private {
         quint32 rejectedContext = 0;
     };
     QHash<int, CtunState> ctunStreams;
+    // R-R3-18/21: one C-Tune centre request in flight per stream. A gesture
+    // runs at mouse or wheel rate; the Core answers each request, and while
+    // one is out the newest wanted centre waits here. A refusal drops it, so
+    // a refused gesture cannot keep asking.
+    struct CentreRequest {
+        quint64 epoch = 0;
+        bool inFlight = false;
+        bool hasQueued = false;
+        int queuedSliceId = -1;
+        double queuedHz = 0.0;
+    };
+    QHash<int, CentreRequest> centreRequests;
     QString connectionId;
     quint32 epoch = 0;
     quint32 nextEndpoint = 1;
@@ -804,6 +816,7 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
             QList<quint32> endpoints;
             for (const auto& [id, binding] : d->bindings) { endpoints.append(id); }
             d->ctunStreams.clear();
+            d->centreRequests.clear();
             retireSubscriptions(endpoints);
         });
     }
@@ -837,39 +850,8 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
             }
             refreshCtunState();
         });
-    connect(client, &StationClient::streamCentreFinished, this,
-        [this](int sliceId, quint64 epoch, bool accepted) {
-            if (accepted || !d->model) { return; }
-            SliceModel* slice = d->model->sliceById(sliceId);
-            if (!slice || slice->streamEpoch() != epoch) { return; }
-            const QPointer<RemoteMediaController> self(this);
-            QList<quint32> endpointIds;
-            for (const auto& [id, binding] : d->bindings) { endpointIds.append(id); }
-            for (quint32 id : endpointIds) {
-                auto found = d->bindings.find(id);
-                if (found == d->bindings.end()) { continue; }
-                Private::Binding& binding = found->second;
-                if (!binding.widget || !binding.slice
-                    || binding.slice->streamIndex() != slice->streamIndex()
-                    || binding.slice->streamEpoch() != epoch
-                    || binding.sourceCentreHz <= 0) { continue; }
-                // A drag is optimistic view movement. A refused hardware move
-                // must return to the last accepted Core source, without
-                // emitting another gesture or retaining its in-flight crop.
-                QPointer<SpectrumWidget> widget = binding.widget;
-                const double sourceCentreHz = binding.sourceCentreHz;
-                const double bandwidth = widget->bandwidth();
-                widget->setDisplayWindowPreservingHistory(sourceCentreHz, bandwidth);
-                if (!self || !widget) { return; }
-                widget->setDdcCenterFrequency(sourceCentreHz);
-                if (!self || !widget) { return; }
-                widget->invalidateRemoteSpectrumFrame();
-                if (!self) { return; }
-                found = d->bindings.find(id);
-                if (found != d->bindings.end()) { found->second.observed = {}; }
-            }
-            refreshSubscriptions();
-        });
+    connect(client, &StationClient::streamCentreFinished,
+            this, &RemoteMediaController::finishCentreRequest);
     connect(client, &QObject::destroyed, this, &RemoteMediaController::stop);
     connect(model, &RadioModel::connectionStateChanged, this, [this](ConnectionState state) {
         if (state != ConnectionState::Connected) {
@@ -879,6 +861,7 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
             QList<quint32> endpoints;
             for (const auto& [id, binding] : d->bindings) { endpoints.append(id); }
             d->ctunStreams.clear();
+            d->centreRequests.clear();
             if (!retireSubscriptions(endpoints)) { return; }
             requestAudio();
         } else {
@@ -1299,6 +1282,7 @@ void RemoteMediaController::stop()
     }
     d->bindings.clear();
     d->ctunStreams.clear();
+    d->centreRequests.clear();
     const QPointer<RemoteMediaController> self(this);
     if (!d->destroying) {
         for (int sliceId : interrupted) {
@@ -1737,10 +1721,7 @@ void RemoteMediaController::refreshSubscriptions()
                         || !current->second.widget
                         || !current->second.widget->ctunEnabled() || !d->model
                         || !d->client || !d->client->remoteCtunAvailable()) { return; }
-                    SliceModel* slice = currentSliceForPan(
-                        d->model, d->stack, current->second.widget);
-                    if (!slice || slice->streamIndex() < 0) { return; }
-                    d->model->requestStreamCentre(slice->sliceIndex(), std::round(centreHz));
+                    requestCentreFromGesture(id, centreHz);
             });
             widget->clearRemoteSpectrum();
             if (!current() || !widget) { return; }
@@ -2169,11 +2150,7 @@ void RemoteMediaController::refreshBudgetSubscriptions()
                         || !current->second.widget || !current->second.widget->ctunEnabled()
                         || !d->model || !d->client
                         || !d->client->remoteCtunAvailable()) { return; }
-                    SliceModel* slice = currentSliceForPan(
-                        d->model, d->stack, current->second.widget);
-                    if (slice && slice->streamIndex() >= 0) {
-                        d->model->requestStreamCentre(slice->sliceIndex(), std::round(centreHz));
-                    }
+                    requestCentreFromGesture(endpointId, centreHz);
                 });
             sw->invalidateRemoteSpectrumFrame();
             if (!self || !sw) { return; }
@@ -2321,6 +2298,87 @@ void RemoteMediaController::refreshBudgetSubscriptions()
     }
 }
 
+void RemoteMediaController::requestCentreFromGesture(quint32 endpointId, double centreHz)
+{
+    auto current = d->bindings.find(endpointId);
+    if (current == d->bindings.end() || !current->second.widget || !d->model) { return; }
+    SpectrumWidget* const widget = current->second.widget;
+    SliceModel* slice = currentSliceForPan(d->model, d->stack, widget);
+    if (!slice || slice->streamIndex() < 0) { return; }
+    const int stream = slice->streamIndex();
+    // R-R3-18/19: a zoom re-centres the view on the VFO. With other
+    // receivers on this stream the Core keeps its window where it is (it
+    // refuses a centre that would drop one of them), so the zoom stays a
+    // view change. On a stream of its own the VFO is always a valid centre,
+    // and the Core follows the zoom as before.
+    if (widget->isZoomRecentring() && d->model->slicesOnStream(stream).size() > 1) {
+        return;
+    }
+    auto& request = d->centreRequests[stream];
+    if (request.epoch != slice->streamEpoch()) {
+        request = {};
+        request.epoch = slice->streamEpoch();
+    }
+    const double wantedHz = std::round(centreHz);
+    if (request.inFlight) {
+        request.hasQueued = true;
+        request.queuedSliceId = slice->sliceIndex();
+        request.queuedHz = wantedHz;
+        return;
+    }
+    request.inFlight = d->model->requestStreamCentre(slice->sliceIndex(), wantedHz);
+}
+
+void RemoteMediaController::finishCentreRequest(int sliceId, quint64 streamEpoch, bool accepted)
+{
+    if (!d->model) { return; }
+    SliceModel* slice = d->model->sliceById(sliceId);
+    if (!slice || slice->streamIndex() < 0) { return; }
+    const int stream = slice->streamIndex();
+    auto request = d->centreRequests.find(stream);
+    if (request != d->centreRequests.end() && request->epoch == streamEpoch) {
+        request->inFlight = false;
+        if (accepted && request->hasQueued && slice->streamEpoch() == streamEpoch) {
+            // The gesture moved on while the Core answered: ask for where
+            // it is now, once.
+            const int queuedSliceId = request->queuedSliceId;
+            const double queuedHz = request->queuedHz;
+            request->hasQueued = false;
+            request->inFlight = d->model->requestStreamCentre(queuedSliceId, queuedHz);
+            return;
+        }
+        request->hasQueued = false;
+    }
+    if (accepted || slice->streamEpoch() != streamEpoch) { return; }
+    const QPointer<RemoteMediaController> self(this);
+    QList<quint32> endpointIds;
+    for (const auto& [id, binding] : d->bindings) { endpointIds.append(id); }
+    for (quint32 id : endpointIds) {
+        auto found = d->bindings.find(id);
+        if (found == d->bindings.end()) { continue; }
+        Private::Binding& binding = found->second;
+        if (!binding.widget || !binding.slice
+            || binding.slice->streamIndex() != stream
+            || binding.slice->streamEpoch() != streamEpoch
+            || binding.sourceCentreHz <= 0) { continue; }
+        // A drag is optimistic view movement. A refused hardware move
+        // returns the view to the last accepted Core source and ends that
+        // drag, so the rest of the gesture neither asks again nor moves the
+        // view away from what the Core is sending. The current plane is
+        // kept: the view's own move retires it when the geometry changes,
+        // and the subscription observer follows the restored window.
+        QPointer<SpectrumWidget> widget = binding.widget;
+        const double sourceCentreHz = binding.sourceCentreHz;
+        widget->endPanDrag();
+        if (!self || !widget) { return; }
+        widget->setDisplayWindowPreservingHistory(sourceCentreHz, widget->bandwidth());
+        if (!self || !widget) { return; }
+        widget->setDdcCenterFrequency(sourceCentreHz);
+        if (!self) { return; }
+    }
+    refreshSubscriptions();
+}
+
 void RemoteMediaController::refreshCtunState()
 {
     if (!d->model || !d->client || !d->stack) { return; }
@@ -2331,6 +2389,10 @@ void RemoteMediaController::refreshCtunState()
     }
     for (auto it = d->ctunStreams.begin(); it != d->ctunStreams.end();) {
         if (!occupied.contains(it.key())) { it = d->ctunStreams.erase(it); }
+        else { ++it; }
+    }
+    for (auto it = d->centreRequests.begin(); it != d->centreRequests.end();) {
+        if (!occupied.contains(it.key())) { it = d->centreRequests.erase(it); }
         else { ++it; }
     }
     QList<quint32> endpointIds;
