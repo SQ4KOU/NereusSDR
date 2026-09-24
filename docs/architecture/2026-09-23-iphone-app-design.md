@@ -2,7 +2,9 @@
 
 Status: **Approved** by JJ (KG4VCF) on 2026-09-23 ("onward"); D35 to D43
 were added while planning, each his call; he changed D38 later that day and set
-D43's wording rule on 2026-09-24. Every decision in §3 is JJ's.
+D43's wording rule on 2026-09-24. On 2026-09-24 he also replaced one device at a
+time with several devices at once (§3.9, D44 to D57), which replaces D21 and
+carries D22 forward. Every decision in §3 is JJ's.
 Plan: [2026-09-23-iphone-app-plan.md](2026-09-23-iphone-app-plan.md)
 Branch: `claude/nereussdr-iphone-app-5fb988`
 
@@ -105,8 +107,8 @@ Every row is a call JJ made, one question at a time, on a rendered mockup.
 | --- | --- | --- | --- |
 | D19 | A Core is required: no demo mode. | The app is a console for a real station. | "Try it without a Core" with a sample band. |
 | D20 | The station runs from **a switch in the desktop app**, on a new Remote Access page under CAT & Network. It keeps running after the app closes and can start with the computer. | No second install for the common case. | A separate station install. |
-| D21 | **Ask before taking over.** Connecting to a station another device is using names that device and asks first. A device reclaiming its own dropped session is not asked. | A second person at home is not thrown off silently. Amends remote design §7.1 (§4.5). | Preempt at once. |
-| D22 | **Taking over may cut a transmission off.** "Unkey and take over" unkeys the other device first. | A transmission left running at home can be stopped from anywhere. | Wait until it unkeys. |
+| D21 | ~~**Ask before taking over.** Connecting to a station another device is using names that device and asks first. A device reclaiming its own dropped session is not asked.~~ **Replaced on 2026-09-24 by §3.9:** a second device connects alongside the first (D44); asking before taking a place applies to a fifth device (D55); reclaiming keeps its rule (D56). | A second person at home is not thrown off silently. Amends remote design §7.1 (§4.5). | Preempt at once. |
+| D22 | **Taking over may cut a transmission off.** "Unkey and take over" unkeys the other device first. Carried into §3.9 on 2026-09-24: taking transmit (D51), or a place (D55), from a device on the air unkeys it first. | A transmission left running at home can be stopped from anywhere. | Wait until it unkeys. |
 | D23 | **The app keeps the older link too.** Every app release still speaks the link one major version back; only a station two majors behind is refused. Features the Core can't do yet are greyed "Needs a newer Core". | An App Store update must never lock the operator out. Amends remote design §7.0 (§4.4). | A station self-update triggered from the phone; updating at the station only. |
 
 ### 3.5 Away from the app
@@ -145,7 +147,7 @@ session on 2026-09-24.
 
 | # | Decision | Why | Rejected |
 | --- | --- | --- | --- |
-| D35 | **The desktop's station switch hands over.** While NereusSDR is open it runs the station itself and serves the phone; when it closes, a background station (`nereusd`) takes over the radio and keeps serving; when it opens again it takes the radio back. While the app is open, the operator at the desktop and a phone can both operate, as when standing at the radio with the phone in hand. | The desktop keeps working exactly as it does today, which remote design §5 requires; the loopback end state needs every control mirrored first. | The desktop as a client of a background station whenever the switch is on. |
+| D35 | **The desktop's station switch hands over.** While NereusSDR is open it runs the station itself and serves the phone; when it closes, a background station (`nereusd`) takes over the radio and keeps serving; when it opens again it takes the radio back. While the app is open, the operator at the desktop and a phone can both operate, as when standing at the radio with the phone in hand. With §3.9 the desktop's own window takes part as one of the devices on its Core, owning its own slices and taking transmit by the same rules; the Core/GUI session's design for several devices says how it counts toward the four. | The desktop keeps working exactly as it does today, which remote design §5 requires; the loopback end state needs every control mirrored first. | The desktop as a client of a background station whenever the switch is on. |
 | D36 | **The station also advertises itself over Bonjour (DNS-SD)**, alongside its existing announcement, and the phone finds stations that way. | iOS only lets an app receive custom multicast with a special permission Apple grants on request, and a refusal would block the release. Amends pairing design §6. | Asking Apple for the multicast permission. |
 | D37 | **The pairing code's key exchange uses a published library on both ends:** SPAKE2+EE (BSD-2-Clause) on libsodium (ISC). | Homemade cryptography is how security bugs get in. | Writing the exchange on the cryptography already shipped (OpenSSL, Mbed TLS). |
 | D38 | **The rendezvous and relay run on the website's server**, the one that serves nereussdr.com, at `rv.nereussdr.com`. The rendezvous's WebSocket rides behind the website's web server by host name; coturn takes UDP 3478 and 443; a web-only fallback that needs its own TLS listener on TCP 443 needs a splitter by TLS name or a second address, which the fallback measurement weighs. | No new machine to run, and `rv.nereussdr.com` and the R5 bench already point there. JJ's call on 2026-09-23, matching his 2026-09-22 answer to the Core/GUI session. | A second small server of its own (recommended, for keeping relay traffic and the website apart). |
@@ -154,6 +156,35 @@ session on 2026-09-24.
 | D41 | **An item the desktop has not built appears on the phone once it exists.** The phone keeps the desktop's order and names for tools, Radio tab items and Setup pages, and leaves out any the station does not offer yet; each appears by itself, in its place, when it is built. VAX and antenna selection are built and working, so VAX Audio and Antenna Setup are on the phone from the start even though their desktop menu entries are not finished. | App Review rejects apps that show placeholder or "coming soon" items. JJ: "show each once it exists however vax, antenna selection are there and working". | Greyed items as on the desktop; building every missing desktop feature in this plan. |
 | D42 | **MIDI Mapping and Macro Buttons are dropped for now.** | Neither exists on the desktop and nothing defined what they would do. JJ: "drop these for now". | Building a first version now; drawing them on the board first. |
 | D43 | **On screen, the NereusSDR computer you connect to, update and pair with is "the Core".** "Station" appears on screen only in its ham sense: your station, the station callsign, the station's network. This document's prose, code identifiers, wire names and the link document keep "station". | One name for the same computer on the desktop and the phone, while "station" keeps the meaning hams give it. JJ's rule, given to the Core/GUI session on 2026-09-24. | "Station" for both. |
+
+
+### 3.9 Several devices at once
+
+On 2026-09-24 JJ asked for several devices on one Core at the same time, in place
+of one device taking the Core over: "since we have a computer running there,
+whether it be single board or core combined, it makes sense to me to be able to
+have both clients connected." He settled the model one question at a time, then
+kept the drawn screens (§5.8) with the details they needed, marked below as drawn
+details. The station half (the session model, who owns what, the arbitration, and
+the admission rules that replace link §12.4) is the Core/GUI session's design
+document; §4.5 says what the phone needs from it.
+
+| # | Decision | Why | Rejected |
+| --- | --- | --- | --- |
+| D44 | **Up to four devices on one Core at the same time**, each with its own session. | JJ's call. | As many as the radio has slices (recommended); two at a time. |
+| D45 | **Each device owns its slices and pans.** The Core hands receivers out from the radio's pool; only the owning device tunes, changes or closes its slices. | Two operators never fight over one VFO. | Everyone shares every slice. |
+| D46 | **Other devices' slices show on the band as labelled, read-only markers:** a dashed line in that slice's colour, a label at the foot of the spectrum with the owning device's name, and no flag. A tap on the label says whose slice it is and that only that device can tune it. | You see who is where before you tune onto them. | Only your own slices. |
+| D47 | **Slice letters are shared across the Core.** A slice has one letter on every device, handed out from one pool as receivers are. | Two operators can say "slice B" and mean the same one. A drawn detail. | |
+| D48 | **Two devices may share one receiver when their slices fit its window.** | JJ's call: the radio's receivers go further. | Each device gets its own receiver (recommended). |
+| D49 | **When no receiver is free, a device takes one after confirming.** It sees which device has each receiver and what it is doing, and picks one; that device's slice on it closes, and that device is told who took the receiver and when, with Take it back, which asks the same question the other way. | D21's rule, per receiver. | Asking the other device first; never taking, only naming who holds them. |
+| D50 | **Moving a pan whose receiver another device shares asks first**, naming that device. Once confirmed, that device's slice moves to a free receiver, or closes if none is free, and that device is told. | The same rule as other shared changes (D53). | The pan stays put while shared. |
+| D51 | **One device holds transmit, and its operator is the control operator.** Every device shows who has it: the PTT button names the device (a drawn detail) and TX marks its slice. Another device takes transmit after confirming; the holder is told, with Take it back. If the holder is on the air, the button reads "Unkey and take over" in red and the Core unkeys it first. | One transmitter, one control operator. | Whoever keys first; only the device that connected first. |
+| D52 | **The radio's own PTT takes transmit**: a mic, a footswitch, or an app on the Core's computer. The press is the confirmation; the holder is told, with Take it back, and a holder on the air is unkeyed first. | The operator at the radio is never locked out by a device elsewhere. | Ignoring it while a device holds transmit; keying for the holder. |
+| D53 | **Any device may change a setting every device hears** (sample rate, preamp and attenuator, antennas, PureSignal, the amp and the tuner), but a change that would disturb another device's slices asks first and names that device, which is told afterwards. | JJ's call. | Only the device holding transmit (recommended); any device, with everyone told and nobody asked. |
+| D54 | **When the devices together ask for more display and audio than the Core can send, the device with transmit keeps its full band and sound**; the others share what is left, their frame rates dropping first, with a "Sharing" chip on the band while it lasts (a drawn detail). | The control operator's band and sound come first. | Equal shares; first connected first. |
+| D55 | **A fifth device takes one's place after confirming.** It lists the four connected (name, how long, listening on what or transmitting, when last active), starting on the one idle longest (a drawn detail). The device whose place is taken is told who took it and when, with Take it back; a device on the air is unkeyed first. | Four is the limit, and nobody is locked out for good. | Refusing the fifth, naming who is connected. |
+| D56 | **A device coming back to its own dropped session is not asked.** It gets its slices back, and transmit only if nobody took it meanwhile (a drawn detail). | D21's reclaim rule kept: a phone that lost its link is never locked out of its own transmitter, and never snatches transmit back from someone who took it properly. | |
+| D57 | **Setup, Devices lists the devices connected now** apart from the devices only paired, each with its slice letters and bands, and TX on the one with transmit. | Who is on the Core, at a glance. | |
 
 ---
 
@@ -226,29 +257,47 @@ apart, naming both versions. Both ends advertise the majors they support and
 agree on the highest they share. The conformance suite runs at every major
 either end supports (R-IOS-01, R-IOS-16).
 
-### 4.5 Sessions and takeover (D21, D22)
+### 4.5 Several devices at once (§3.9)
 
-Remote design §7.1: one operator, one session; a second authenticated
-connection preempts at once, the displaced session is told why, and MOX drops
-across the transition. This spec amends it for a **different** device:
+Remote design §7.1 has one operator and one session, and a second authenticated
+connection preempts the first. §3.9 replaces that: up to four paired devices hold
+sessions on one Core at the same time. The station half (the session model, who
+owns which slice, pan and receiver, the arbitration of transmit, receivers and
+shared settings, and the admission rules that replace link §12.4) is the Core/GUI
+session's design document for several devices. What the phone needs from it:
 
-1. After authentication, and before anything is preempted, the station tells a
-   connecting device who holds the session: that device's name, how long it has
-   been connected, when it was last used, where it is connected from if known,
-   and whether it is listening or transmitting (with the TX clock).
-2. The connecting device shows the question (§5.3) and preempts only when the
-   operator confirms.
-3. If the holder is transmitting, the confirmation reads "Unkey and take over"
-   in red, and the station unkeys the holder through R4's unkey-confirmed gate
-   before the new session is admitted.
-4. **A device reclaiming its own dropped session (the same device key) is not
-   asked.** This keeps §7.1's reason intact: a phone that lost its link is
-   never locked out of its own transmitter.
-5. The displaced device is told who took over and when; its settings stay on
-   the station, and "Take it back" asks the same question the other way.
-
-Only paired devices ever learn who holds a session, because the report comes
-after authentication.
+1. **Who is on the Core:** every connected device's name, how long it has been
+   connected, when it was last active, and what it is doing (listening on which
+   slices, or transmitting, with the TX clock). The phone shows it on Setup,
+   Devices (D57) and in a fifth device's list (D55). Only paired devices ever see
+   it, because it comes after authentication.
+2. **Whose each slice is:** every slice carries its owning device and its letter
+   from the Core's one pool (D47). The phone draws its own slices with flags and
+   the others as read-only markers (D46), and never sends a change to a slice it
+   doesn't own; the Core refuses one anyway.
+3. **Who has transmit:** the holder's device name and whether it is on the air,
+   sent to every session (D51). Taking transmit is a confirmed request; when the
+   holder is on the air the Core unkeys it through R4's unkey-confirmed gate
+   before transmit moves. The radio's own PTT takes transmit with no request
+   (D52).
+4. **Receivers:** which device's slices each receiver carries, so the phone can
+   offer a receiver to take (D49) and name whose slice a pan move reaches (D50).
+   Before the operator confirms either, the Core says what happens to the other
+   device's slice: it moves to a free receiver, or it closes.
+5. **Shared settings:** before a change that would disturb another device's
+   slices, the Core says which devices and slices it reaches, so the phone can ask
+   (D53).
+6. **Notices:** a device is told who took its receiver, transmit or place, and
+   when, and who changed a shared setting that reaches its slices, with Take it
+   back where D49, D51, D52 and D55 give one.
+7. **Capacity:** when the Core cuts a device's display or audio to fit (D54), it
+   tells that device the frame rate it gets, and the phone shows the "Sharing"
+   chip.
+8. **A fifth device and reclaiming:** with four connected, a fifth device takes
+   one's place only when its operator confirms (D55), and a device on the air is
+   unkeyed first. A device coming back to its own dropped session (the same device
+   key) takes it back without asking and gets transmit back only if nobody took it
+   meanwhile (D56).
 
 ### 4.6 Transmit safety
 
@@ -272,7 +321,9 @@ is new except the time-out's default.
    transmitting, with the island (D25).
 7. **After a reconnect, transmit stays off** until the operator taps PTT. It
    never resumes by itself.
-8. **Taking over unkeys the other device first** (D22).
+8. **One device holds transmit** (D51). Taking transmit, or a place, from a
+   device on the air unkeys it first (D22, D51, D55), and the radio's own PTT
+   takes transmit the same way (D52).
 
 ### 4.7 Background, battery and data
 
@@ -468,7 +519,6 @@ the pass (D34). Pictures are in `2026-09-23-iphone-app-design/`.
 ![First launch](2026-09-23-iphone-app-design/06-first-launch.jpg)
 ![Connecting](2026-09-23-iphone-app-design/07-connecting.jpg)
 ![The station's side](2026-09-23-iphone-app-design/08-station-side.jpg)
-![The takeover question](2026-09-23-iphone-app-design/09-takeover.jpg)
 ![When things aren't right](2026-09-23-iphone-app-design/10-trouble.jpg)
 
 1. **Welcome:** one picture of radio, Core and phone ("Your station, from
@@ -497,12 +547,14 @@ the pass (D34). Pictures are in `2026-09-23-iphone-app-design/`.
 11. **A small box** shows its code on a status page any browser on the network
     can open, which changes nothing, and in its console log for claiming over
     SSH. Only the console or an already-paired device can reopen pairing.
-12. **The takeover question** names the other device, how long it has been
-    connected, when it was last used, and whether it is listening or
-    transmitting.
-13. A phone taking back its own dropped session is not asked. The device that
-    loses the session is told who took it and when; its band stops; Take it
-    back asks the same question the other way.
+12. **Another device on the Core** no longer brings a question: up to four
+    connect side by side (§5.8). The question comes for a fifth device, which
+    names the four, how long each has been connected, when each was last used,
+    and whether each is listening or transmitting.
+13. A phone taking back its own dropped session is not asked; it gets its
+    slices back, and transmit only if nobody took it meanwhile. The device whose
+    place is taken is told who took it and when; its band stops; Take it back
+    asks the same question the other way.
 14. **Five trouble screens,** each naming its cause, so the operator knows
     whether to walk to the radio, the Core or the phone:
     * The radio is off: the Core answers but can't hear the radio; the
@@ -658,6 +710,53 @@ the pass (D34). Pictures are in `2026-09-23-iphone-app-design/`.
     station stays listed while the phone is away. Miles and kHz are set per
     phone. Distance and heading stay blank until a grid square is set.
 
+### 5.8 Several devices at once
+
+![Several devices at once](2026-09-23-iphone-app-design/22-several-devices.jpg)
+
+On every screen here this phone has slice A on 40 m; the MacBook at the shack has
+slices B (sharing this phone's receiver) and D, and has transmit; the iPad has
+slice C on 20 m.
+
+1. **Another device's slice** on the band: a dashed line in its colour, a label
+   at the foot of the spectrum with the device's name, and TX on the label while
+   it has transmit; no flag. A tap on the label opens a note: whose slice, where,
+   and that only that device can tune it or close it.
+2. **PTT names the holder** while another device has transmit ("PTT" over
+   "MacBook", in muted red), and this phone's own TX badges are off.
+3. **Taking transmit:** a tap on PTT asks first, naming the device and what it is
+   doing; after Take transmit, PTT keys as usual.
+4. **While it's on the air:** the band shows the other device's transmission, PTT
+   turns red with its name, and the button reads "Unkey and take over" in red
+   beside the TX clock.
+5. **Transmit taken from you:** a notice with who and when, and Take it back.
+6. **Taken at the radio:** the radio's own PTT took transmit; PTT names the
+   radio; Take it back.
+7. **When the Core runs short:** a "Sharing · 12 fps" chip and a one-time notice
+   that the device with transmit keeps its full band and sound.
+8. **Every receiver in use:** to listen where no receiver reaches, pick a
+   receiver to take from a list of who has each one and what they are doing.
+9. **Your receiver taken:** RECEIVER TAKEN over the band, with who and when;
+   slice A closed with its frequency and settings kept; Take it back. The
+   connection stays up.
+10. **Moving a shared receiver:** going to another band names the device that
+    shares the receiver and says what happens to its slice ("Go to 20 m" or
+    "Stay on 40 m").
+11. **Shared settings:** a change that reaches another device's slices names that
+    device, shows the change (the attenuator on ADC 1 from 0 dB to 20 dB), and
+    asks.
+12. **Told afterwards:** the other device gets a note of who changed what, and
+    when; there is nothing to answer.
+13. **Setup, Devices:** Connected now, with each device's slice letters and
+    bands, TX on the one with transmit, and Revoke; then Paired. "Up to four
+    devices can be connected at once."
+14. **A fifth device:** "Four devices are on KG4VCF/shack", the four with what
+    each is doing, starting on the one idle longest; picking the one on the air
+    turns the button red ("Unkey and take the MacBook's place").
+15. **Your own session:** after a lost link the phone comes back without asking.
+16. **The device whose place was taken** (an iPad): TAKEN OVER, with who and
+    when; its slices and settings kept on the Core; Take it back.
+
 ---
 
 ## 6. Requirements
@@ -665,7 +764,7 @@ the pass (D34). Pictures are in `2026-09-23-iphone-app-design/`.
 IDs `R-IOS-nn` are new with this spec, stable, and never renumbered; a withdrawn
 one is marked, not deleted. It relies on R-R3-06, R-R3-08, R-R3-13, R-R3-22,
 R-R3-23 and R-R3-25 as the R3 plan defines them, and amends remote design §7.0
-(D23) and §7.1 (D21, D22).
+(D23) and §7.1 (§3.9, which replaced D21 on 2026-09-24).
 
 Evidence layers:
 
@@ -686,8 +785,8 @@ Hardware evidence stays **pending** until a device or the bench shows it.
 | ID | Requirement | Owner | Evidence |
 | --- | --- | --- | --- |
 | R-IOS-01 | A written, versioned specification of the link (framing, handshake, snapshot, messages, capabilities, version rules) and a conformance suite the station and the app both run. | Station, before R4 | Software: the suite passes on the station and in the app, at both majors the app speaks. |
-| R-IOS-02 | The session holder report of §4.5: after authentication and before preempting, the station tells a connecting device who holds the session and preempts only on confirmation; the same device reclaiming its own session is admitted without asking. | Station, R4 | Software: session tests for ask, confirm, cancel and silent reclaim. Integration: two devices. |
-| R-IOS-03 | "Unkey and take over": a confirmed takeover of a transmitting session unkeys it through the unkey-confirmed gate before the new session is admitted to transmit. | Station, R4 | Software. Bench: the holder keyed on air, the taker confirms, the carrier stops before the handover. |
+| R-IOS-02 | Several sessions at once (§3.9, §4.5 items 1 to 3 and 8; amended 2026-09-24 from the one-holder report): up to four paired devices, each owning its slices and pans; one pool of slice letters; receivers from the radio's pool, shared when slices fit a window; who is on the Core, whose each slice is and who has transmit, sent to every session; a fifth device takes a place only on its operator's confirmation; a device reclaiming its own session is admitted without asking and gets transmit back only if nobody took it. | Station, R4, per the Core/GUI session's design for several devices | Software: session tests for four devices, ownership refusals, the letter pool, shared receivers, the fifth device and silent reclaim. Integration: four devices on one Core. |
+| R-IOS-03 | "Unkey and take over" (amended 2026-09-24): taking transmit (D51) or a place (D55) from a device on the air unkeys it through the unkey-confirmed gate before transmit or the place moves; the radio's own PTT takes transmit, unkeying a holder on the air first (D52). | Station, R4 | Software. Bench: the holder keyed on air, the taker confirms, the carrier stops before transmit moves; the radio's PTT pressed while a phone holds transmit. |
 | R-IOS-04 | A remote transmit time-out: a station setting, on by default at 180 seconds for sessions from paired remote devices (30 seconds to 30 minutes, or off), off by default for the desktop at the station as in Thetis. When it fires the station drops MOX and TUNE and tells the client why; the time remaining is part of the transmit state the client sees. From Thetis `TimeOutTimerManager.cs` and `setup.designer.cs` `udMoxToTSeconds` (180, range 30 to 1800) and `chkToTMox` (off) [v2.10.3.15]. | Station, R4 (remote design §12.2) | Software: the timer, the reason and the remaining time. Bench: it fires on air at the setting. |
 | R-IOS-05 | Transmit-coupled accessory commands through the station: the amp's OPERATE and STANDBY; the tuner's TUNE, OPERATE, BYPASS and antenna; the RF2K-S's OPERATE, STANDBY and antenna. The TX interlock is enforced at the station and every refusal carries its reason. | Station, R4 (R-R3-25) | Software. Bench: Power Genius XL and Tuner Genius XL; RF2K-S when one is available. |
 | R-IOS-06 | The station advertises the values it owns and the phone shows (§4.10): the mode list, filter presets per mode, the tune-step list, AGC ranges, meter ranges and the board's capabilities. | Station, R3 follow-on | Software: the snapshot carries them; the phone builds its controls from them for an ANAN-G2 and a Hermes Lite 2. |
@@ -695,6 +794,8 @@ Hardware evidence stays **pending** until a device or the bench shows it.
 | R-IOS-08 | Pairing, devices and revocation per the pairing design: one tap on the LAN, the code from anywhere, the window open while unclaimed with no timer, reopening from the console or a paired device, revoke dropping a live session, the station-key backup prompt, and the code on a small box's status page and console. | Station, R5 and R6 | Software. Integration: pair on the LAN, pair by code through the relay, revoke mid-session. |
 | R-IOS-09 | The higher audio quality is offered only when the station advertises a measured profile for it (R-R3-23); otherwise the phone greys it. | Station, R3 | Integration. |
 | R-IOS-10 | Sound only: with every display endpoint disabled, audio and the card's readings keep flowing (R-R3-08, R-R3-13). | Station, R3 | Integration: traffic drops to audio and telemetry, and the card's reading keeps moving. |
+| R-IOS-30 | Asked changes and notices (§4.5 items 4 to 6, D49, D50, D53): taking a receiver, moving a shared receiver, and a shared setting that would disturb another device's slices are confirmed requests; the Core says beforehand which devices and slices they reach and what happens to them; every affected device is told who, what and when, with Take it back where §3.9 gives one. | Station, R4, per the Core/GUI session's design for several devices | Software: each request confirmed and cancelled, and each notice. Integration: two devices. |
+| R-IOS-31 | Capacity (D54): when the sessions together ask for more display and audio than the Core can send, the transmit holder keeps its full display and audio, the others' frame rates drop first, and each slowed session is told the rate it gets. | Station, R3 follow-on | Software: the allocation with four sessions. Measurement: four devices over a constrained uplink. |
 
 ### 6.2 The app
 
@@ -706,7 +807,7 @@ Hardware evidence stays **pending** until a device or the bench shows it.
 | R-IOS-14 | Locked and in other apps (§5.5 items 1 to 5): locking unkeys; the screen stays awake while keyed; switching apps keeps transmitting with the island; the card as drawn; sound only; the eight-hour last message. | Device: a real iPhone locked, switched and left eight hours. Bench: transmission stops on lock and continues across an app switch. |
 | R-IOS-15 | Hardware PTT through Apple's Push to Talk (§5.5 items 6 to 8): headset button, Bluetooth PTT button, Action button; keying a locked phone; "Keyed by headset". | Device and Bench, with each button. |
 | R-IOS-16 | Connecting (§5.3): first launch, the Local Network question, pairing three ways, the microphone asked after pairing, the station list, link lost and back on the air, the five trouble screens; the version rules of §4.4. | Integration: each failure induced against a real station, including a station one major back and one two majors back. Device: the permission prompts. |
-| R-IOS-17 | The takeover screens of §5.3 items 12 and 13. | Integration: two devices, listening and transmitting. |
+| R-IOS-17 | The several-devices screens of §5.8 and §5.3 items 12 and 13 (amended 2026-09-24 from the takeover screens). | Integration: four devices on one Core, listening and transmitting, with a fifth device and the radio's own PTT. Device: screenshots compared against the board. |
 | R-IOS-18 | Tabs and Setup (§5.2): Modes, Tools, Radio, the Setup tree with its tags, Devices; controls in both places (D15). | Software: each control writes to its owner (station or phone). Integration: a station setting changed on the phone shows on the desktop. |
 | R-IOS-19 | Accessories on the phone (§5.4 items 1 to 5): the three pages, the TX panel controls, the interlock refusal with "Operate amp". | Bench with the devices. |
 | R-IOS-20 | Audio on the phone (§5.4 items 6 to 10): routes, the iPhone microphone by default, the band muted while talking, MON in headphones only, voice processing off, the quality choice, the speaker's route menu. | Device: every route, including AirPods; no feedback on the speaker while keyed. Bench: on-air audio shaped by the station's processing. |
@@ -750,8 +851,12 @@ the air as R3, R4 and R5 land.
 | Versions two majors apart | Refuses, naming both | "The Core needs updating", naming both |
 | An older Core | Negotiates down | Connects; greys "Needs a newer Core" |
 | The phone is offline | Unkeys if it was keyed (watchdog) | Waits for a network; says the Core has already unkeyed |
-| Another device holds the session | Reports the holder (R-IOS-02) | The takeover question |
-| Taken over | Admits the other device | The band stops; who and when; Take it back |
+| Four devices are connected | Lists them (R-IOS-02) | The fifth device's question (§5.8) |
+| This device's place is taken | Admits the fifth device, unkeying this one first if it was on the air | The band stops; who and when; Take it back |
+| Transmit taken, by a device or the radio's own PTT | Moves transmit, unkeying the holder first if on the air (R-IOS-03) | PTT names the new holder; a notice with Take it back |
+| This device's receiver taken | Closes the slice on it and keeps its settings (R-IOS-30) | RECEIVER TAKEN; who and when; Take it back |
+| A shared setting changed by another device | Applies it and tells the devices it reaches (R-IOS-30) | A note of who changed what |
+| The Core runs short of room | Keeps the transmit holder whole and slows the rest (R-IOS-31) | The "Sharing" chip |
 | Transmit refused (interlock, amp in STANDBY, PA protection) | Refuses with a reason | Red explanation, with the fix where there is one |
 | The time-out fires | Drops MOX, gives the reason | Amber notice; PTT back to Tap |
 | A call or Siri interrupts | Unkeyed by the phone's request | Unkeys; audio resumes afterwards |
@@ -767,12 +872,14 @@ the air as R3, R4 and R5 land.
 * **Software on every change:** the app's unit tests and the station's ctest,
   run offscreen.
 * **Integration:** the app against a real `nereusd` on a LAN and through the
-  relay, including a station one major behind and one two majors behind.
+  relay, including a station one major behind and one two majors behind, and
+  four devices on one Core with a fifth trying to connect.
 * **Device matrix:** two iPhone sizes (one with the Action button), an 11-inch
   iPad, AirPods, a Bluetooth PTT button, both orientations, locked and
   unlocked, and an eight-hour session.
 * **Bench, on air:** keying from the phone; lock, app switch and a call during a
-  transmission; the time-out firing; takeover of a transmitting session; the
+  transmission; the time-out firing; taking transmit, and a place, from a device
+  on the air, and the radio's own PTT taking transmit from a phone; the
   remote design's watchdog test (the link severed mid-transmission on each relay
   rung) rerun with the phone as the client; the amp and tuner commands.
 * **Measurement:** data per mode per hour on Wi-Fi and cellular, battery per
@@ -794,6 +901,10 @@ Each has an owner and the moment it is settled.
   unclaimed: R6.
 * **The app's structure and minimum iOS version** (§4.12): proposed in this
   spec; JJ rules on them in his review.
+* **The station's design for several devices** (the session model, ownership,
+  arbitration, and admission replacing link §12.4): the Core/GUI session writes
+  it and the phone session reviews it; §4.5, R-IOS-02, R-IOS-03, R-IOS-30 and
+  R-IOS-31 take their wire form from it.
 
 ---
 
@@ -811,7 +922,7 @@ The pictures, one per board section, in `2026-09-23-iphone-app-design/`:
 | `06-first-launch.jpg` | First launch | §5.3 |
 | `07-connecting.jpg` | Connecting | §5.3 |
 | `08-station-side.jpg` | The station's side | §5.3 |
-| `09-takeover.jpg` | The takeover question | §5.3 |
+| `09-takeover.jpg` | The takeover question (replaced on 2026-09-24 by `22`; kept for the record) | §3.4 D21 |
 | `10-trouble.jpg` | When things aren't right | §5.3 |
 | `11-amps-and-tuner.jpg` | Amps and tuner | §5.4 |
 | `12-audio-and-data.jpg` | Audio and data use | §5.4 |
@@ -824,6 +935,7 @@ The pictures, one per board section, in `2026-09-23-iphone-app-design/`:
 | `19-ipad-upright.jpg` | iPad held upright | §5.6 |
 | `20-spot-hub.jpg` | Spot Hub on the phone | §5.7 |
 | `21-freedv-reporter.jpg` | FreeDV Reporter | §5.7 |
+| `22-several-devices.jpg` | Several devices at once | §5.8 |
 
 `board.html` in the same folder is the whole interactive board: the knobs
 turn, the PTT keys, the flags fold, and the lock-screen states step through.
