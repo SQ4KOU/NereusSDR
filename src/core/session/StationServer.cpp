@@ -73,6 +73,11 @@
 //                                    at minor 11, and the plain refusal of a
 //                                    write to either. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46 fix wave: a receive-only Core
+//                                    refuses raw writes and removes of the
+//                                    transmit-side hardware keys
+//                                    (isTransmitHardwareKey). AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -272,6 +277,68 @@ bool isTransmitDspOptionsKey(const QString& key)
 {
     return key.startsWith(QLatin1String("DspOptions"))
         && key.endsWith(QLatin1String("Tx"));
+}
+
+// R-R3-46 / R-R3-21: the transmit side of the Hardware Config and PA pages.
+// Since the Core's hardware apply step reloads oc/, cal/ and hl2/ into its
+// live controllers (RadioModel::scheduleRemoteHardwareApply), a raw write
+// of one of these would reach the radio's transmit path, so a receive-only
+// Core refuses them as it refuses TransmitModel writes. Covered:
+//   hardware/<mac>/oc/tx/...            OC transmit pins (OcMatrix)
+//   hardware/<mac>/oc/actions/...       OC pin transmit actions (OcMatrix)
+//   hardware/<mac>/cal/{txDisplayOffset,paSens,paOffset}  (CalibrationController)
+//   hardware/<mac>/paCalibration/...    PA forward-power table (CalibrationController)
+//                                       and the Calibration tab's own copies of
+//                                       its transmit fields (paCalibration/cal/...)
+//   hardware/<mac>/hl2/{pttHangMs,txLatencyMs}            (Hl2OptionsModel)
+//   hardware/<mac>/tx/...               TransmitModel, User Dig Out, mic profiles
+//   hardware/<mac>/pa/...               PA profiles (PaProfileManager)
+//   hardware/<mac>/powerByBand/..., tunePowerByBand/...   (TransmitModel)
+//   any .../oc/extPa/...                the external PA group (OcOutputsHfTab)
+bool isTransmitHardwareKey(const QString& rawKey)
+{
+    const QString key = rawKey.toLower();
+    if (!key.startsWith(QLatin1String("hardware/"))) {
+        return false;
+    }
+    const QStringList parts = key.split(QLatin1Char('/'));
+    for (int i = 1; i + 1 < parts.size(); ++i) {
+        if (parts[i] == QLatin1String("oc") && parts[i + 1] == QLatin1String("extpa")) {
+            return true;
+        }
+    }
+    if (parts.size() < 4) {
+        return false;
+    }
+    const QString& area = parts[2];
+    const QString& item = parts[3];
+    if (area == QLatin1String("oc")) {
+        return item == QLatin1String("tx") || item == QLatin1String("actions");
+    }
+    if (area == QLatin1String("cal")) {
+        return item == QLatin1String("txdisplayoffset") || item == QLatin1String("pasens")
+            || item == QLatin1String("paoffset");
+    }
+    if (area == QLatin1String("pacalibration")) {
+        if (item != QLatin1String("cal")) {
+            return true;
+        }
+        const QString field = parts.size() > 4 ? parts[4] : QString();
+        return field == QLatin1String("txdisplayoffset") || field == QLatin1String("pasens")
+            || field == QLatin1String("paoffset") || field == QLatin1String("padefaultrestored")
+            || field == QLatin1String("logvoltsamps");
+    }
+    if (area == QLatin1String("hl2")) {
+        return item == QLatin1String("ptthangms") || item == QLatin1String("txlatencyms");
+    }
+    return area == QLatin1String("tx") || area == QLatin1String("pa")
+        || area == QLatin1String("powerbyband") || area == QLatin1String("tunepowerbyband");
+}
+
+// Every settings key a receive-only Core refuses as transmit configuration.
+bool isReceiveOnlyRefusedKey(const QString& key)
+{
+    return isTransmitDspOptionsKey(key) || isTransmitHardwareKey(key);
 }
 
 QByteArray panKey(int index)
@@ -1396,8 +1463,9 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
     const QString key = QString::fromUtf8(message.objectKey);
     // A receive-only Core refuses DSP > Options TX writes exactly as it
     // refuses direct TransmitModel writes (handlePropertyWrite above), and
-    // hands back its own value so the remote combo settles on it.
-    if (isTransmitDspOptionsKey(key) && !m_radioModel.isNull()
+    // hands back its own value so the remote combo settles on it. R-R3-46:
+    // so it does for the transmit side of Hardware Config and the PA pages.
+    if (isReceiveOnlyRefusedKey(key) && !m_radioModel.isNull()
         && m_radioModel->receiveOnlyStationPolicy()) {
         const QString reason = QString::fromLatin1(kReceiveOnlyTransmitReason);
         const QVariant restored = m_settings.value(key);
@@ -1448,7 +1516,8 @@ void StationServer::handleSettingsRemove(const SessionMessage& message)
     // A remove would reset a DSP > Options TX setting to its default, so a
     // receive-only Core refuses it exactly as it refuses a write to the same
     // key (handleSettingsWrite above) and hands back its own value (R-R3-21).
-    if (isTransmitDspOptionsKey(key) && !m_radioModel.isNull()
+    // R-R3-46: the same for a transmit-side hardware key.
+    if (isReceiveOnlyRefusedKey(key) && !m_radioModel.isNull()
         && m_radioModel->receiveOnlyStationPolicy()) {
         const QString reason = QString::fromLatin1(kReceiveOnlyTransmitReason);
         const QVariant restored = m_settings.value(key);

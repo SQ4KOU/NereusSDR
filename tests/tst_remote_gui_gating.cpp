@@ -167,6 +167,7 @@
 #include "gui/setup/DspSetupPages.h"
 #include "gui/setup/GeneralOptionsPage.h"
 #include "gui/setup/HardwarePage.h"
+#include "gui/setup/hardware/Hl2OptionsTab.h"
 #include "gui/setup/TransmitSetupPages.h"
 #include "gui/setup/hardware/AntennaAlexAntennaControlTab.h"
 #include "core/accessories/AlexAntennaFacade.h"
@@ -2349,9 +2350,15 @@ private slots:
             QVERIFY2(box != nullptr, qPrintable(title));
             QVERIFY2(box->isEnabled(), qPrintable(title));
         }
+        // The HL2's TX buffer latency and PTT hang are transmit settings
+        // too (a receive-only Core refuses their keys).
+        auto* hl2Options = hardware->findChild<Hl2OptionsTab*>();
+        QVERIFY(hl2Options != nullptr);
+        QVERIFY(!hl2Options->transmitTimingsEnabledForTest());
 
         // A Core that permits transmit lifts it.
         dialog.setTransmitPermitted(true);
+        QVERIFY(hl2Options->transmitTimingsEnabledForTest());
         QVERIFY(antennas->txGridForTest()->isEnabled());
         QVERIFY(group(QStringLiteral("User Dig Out"))->isEnabled());
         QVERIFY(group(QStringLiteral("TX Display Cal"))->toolTip().isEmpty());
@@ -2371,6 +2378,7 @@ private slots:
         auto* localAntennas = localHardware->findChild<AntennaAlexAntennaControlTab*>();
         QVERIFY(localAntennas->txGridForTest()->isEnabled());
         QVERIFY(localAntennas->blockTxAnt2ForTest()->isEnabled());
+        QVERIFY(localHardware->findChild<Hl2OptionsTab*>()->transmitTimingsEnabledForTest());
     }
 
     // R-R3-46 (carried from the remote window Setup re-review): with the

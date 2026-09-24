@@ -39,6 +39,7 @@ private slots:
     void setPaCurrentSensitivity_emitsChanged();
     void setPaCurrentOffset_emitsChanged();
     void persistence_roundTrip();
+    void saveWritesOnlyChangedKeys();
     void coreReloadsTheCalibrationAWindowSaved();
 };
 
@@ -270,6 +271,41 @@ void TstCalibrationController::coreReloadsTheCalibrationAWindowSaved()
     remote.scheduleRemoteHardwareApply(base + QStringLiteral("freqFactor"));
     QTest::qWait(120);
     QVERIFY(reloads.isEmpty());
+}
+
+void TstCalibrationController::saveWritesOnlyChangedKeys()
+{
+    // R-R3-46. The Calibration tab saves after every edit. In a remote
+    // window every key it writes goes to the Core, and a receive-only Core
+    // refuses the transmit ones, so a receive calibration edit writes only
+    // the key that changed; what load() reads back is unchanged.
+    const QString mac = QStringLiteral("00:11:22:33:44:AB");
+    NereusSDR::AppSettings& s = NereusSDR::AppSettings::instance();
+    s.clearHardwareValues(mac);
+    const auto clean = qScopeGuard([&s, mac] { s.clearHardwareValues(mac); });
+    const QString base = QStringLiteral("hardware/%1/cal/").arg(mac);
+
+    NereusSDR::CalibrationController ctrl;
+    ctrl.setMacAddress(mac);
+    ctrl.load();
+    ctrl.setFreqCorrectionFactor(1.000004);
+    ctrl.save();
+    QCOMPARE(s.value(base + QStringLiteral("freqFactor")).toString(),
+             QStringLiteral("1.000004"));
+    for (const QString& key : {QStringLiteral("txDisplayOffset"), QStringLiteral("paSens"),
+                               QStringLiteral("paOffset"), QStringLiteral("levelOffset")}) {
+        QVERIFY2(!s.contains(base + key), qPrintable(key));
+    }
+    QVERIFY(!s.contains(QStringLiteral("hardware/%1/paCalibration/boardClass").arg(mac)));
+
+    // A changed transmit value is still saved, and reads back.
+    ctrl.setTxDisplayOffsetDb(0.5);
+    ctrl.save();
+    NereusSDR::CalibrationController reader;
+    reader.setMacAddress(mac);
+    reader.load();
+    QCOMPARE(reader.freqCorrectionFactor(), 1.000004);
+    QCOMPARE(reader.txDisplayOffsetDb(), 0.5);
 }
 
 QTEST_MAIN(TstCalibrationController)

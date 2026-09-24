@@ -382,6 +382,7 @@ private slots:
     void appRawAntennaSettingsWritesAreRefused();
     void hardwareWritesForAnotherRadioAreRefused();
     void coreAppliesHardwareConfigWritesLive();
+    void receiveOnlyCoreRefusesTransmitHardwareKeys();
     void ioBoardProbeIsAskedOfTheCore();
     void hardwareConfigRx1RateGoesToTheCoresFirstReceiver();
 
@@ -5868,6 +5869,116 @@ void TstStationSession::coreAppliesHardwareConfigWritesLive()
                       QStringLiteral("True"));
     QTest::qWait(150);
     QVERIFY(reloads.isEmpty());
+}
+
+void TstStationSession::receiveOnlyCoreRefusesTransmitHardwareKeys()
+{
+    // R-R3-46 / R-R3-21 (transmit safety). The Core's hardware apply step
+    // reloads oc/, cal/ and hl2/ into its live controllers, so a raw write
+    // of a transmit-side hardware key would reach the radio's transmit
+    // path. A receive-only Core refuses every such key, write and remove,
+    // with the transmit reason: its saved value and its live controller
+    // stay as they were, and nothing is reloaded.
+    AppSettings& settings = AppSettings::instance();
+    settings.clearHardwareValues(kHardwareMac);
+    const QStringList globalKeys{QStringLiteral("hardware/oc/extPa/model"),
+                                 QStringLiteral("hardware/oc/extPa/biasDelayMs")};
+    for (const QString& key : globalKeys) {
+        settings.remove(key);
+    }
+    const auto cleanSettings = qScopeGuard([&settings, globalKeys] {
+        settings.clearHardwareValues(kHardwareMac);
+        for (const QString& key : globalKeys) {
+            settings.remove(key);
+        }
+    });
+    HardwareSession s;
+    joinHardwareWindow(s, settings, this, m_securityDir.path());
+    const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
+    if (QTest::currentTestFailed()) { return; }
+    QVERIFY(s.core->receiveOnlyStationPolicy());
+    QStringList reloads;
+    s.core->setHardwareApplyObserverForTest([&reloads](const QString& name) { reloads << name; });
+    QSignalSpy rejected(s.proxy.get(), &SettingsProxy::valueRejected);
+    QSignalSpy toast(s.window.get(), &RadioModel::sliceAddRejected);
+    const QString reason =
+        QStringLiteral("Transmit configuration is unavailable on this receive-only station.");
+
+    const QString mac = kHardwareMac;
+    const auto hw = [&mac](const QString& rest) {
+        return QStringLiteral("hardware/%1/%2").arg(mac, rest);
+    };
+    const OcMatrix& oc = s.core->ocMatrix();
+    const CalibrationController& cal = s.core->calibrationController();
+    const Hl2OptionsModel& hl2 = s.core->hl2Options();
+    const OcMatrix::TXPinAction action1 = oc.pinAction(0);
+    const double txDisplay = cal.txDisplayOffsetDb();
+    const double paSens = cal.paCurrentSensitivity();
+    const double paOffset = cal.paCurrentOffset();
+    const PaCalProfile paTable = cal.paCalProfile();
+    const int pttHang = hl2.pttHangMs();
+    const int txLatency = hl2.txLatencyMs();
+    QVERIFY(!oc.pinEnabled(Band::Band40m, 2, /*tx=*/true));
+
+    // One key of each class, with a value its controller would take.
+    const QList<QPair<QString, QString>> writes{
+        {hw(QStringLiteral("oc/tx/40m/pin3")), QStringLiteral("True")},
+        {hw(QStringLiteral("oc/actions/pin1/action")), QStringLiteral("tune")},
+        {hw(QStringLiteral("cal/txDisplayOffset")), QStringLiteral("7.5")},
+        {hw(QStringLiteral("cal/paSens")), QStringLiteral("3.25")},
+        {hw(QStringLiteral("cal/paOffset")), QStringLiteral("1.5")},
+        {hw(QStringLiteral("paCalibration/boardClass")), QStringLiteral("2")},
+        {hw(QStringLiteral("paCalibration/calPoint1")), QStringLiteral("123")},
+        {hw(QStringLiteral("paCalibration/cal/paSens")), QStringLiteral("3.25")},
+        {hw(QStringLiteral("hl2/pttHangMs")), QStringLiteral("30")},
+        {hw(QStringLiteral("hl2/txLatencyMs")), QStringLiteral("40")},
+        {hw(QStringLiteral("tx/UserDigOut")), QStringLiteral("15")},
+        {hw(QStringLiteral("pa/profile/active")), QStringLiteral("Custom")},
+        {hw(QStringLiteral("powerByBand/40m")), QStringLiteral("100")},
+        {hw(QStringLiteral("tunePowerByBand/40m")), QStringLiteral("100")},
+        {hw(QStringLiteral("ocOutputs/hardware/oc/extPa/model")), QStringLiteral("2")},
+        {QStringLiteral("hardware/oc/extPa/model"), QStringLiteral("2")},
+        {QStringLiteral("hardware/oc/extPa/biasDelayMs"), QStringLiteral("50")},
+    };
+    int expected = 0;
+    for (const auto& [key, value] : writes) {
+        s.proxy->setValue(key, value);
+        ++expected;
+        QTRY_COMPARE_WITH_TIMEOUT(rejected.count(), expected, 2000);
+        QCOMPARE(rejected.last().at(0).toString(), key);
+        QVERIFY2(!settings.contains(key), qPrintable(key));
+        QCOMPARE(toast.last().at(0).toString(), reason);
+    }
+
+    // A remove of a transmit key the Core already holds keeps it.
+    const QString held = hw(QStringLiteral("oc/tx/20m/pin1"));
+    settings.setValue(held, QStringLiteral("True"));
+    s.proxy->remove(held);
+    ++expected;
+    QTRY_COMPARE(rejected.count(), expected);
+    QCOMPARE(rejected.last().at(0).toString(), held);
+    QCOMPARE(rejected.last().at(1).toString(), QStringLiteral("True"));
+    QCOMPARE(settings.value(held).toString(), QStringLiteral("True"));
+
+    // Nothing reached the Core's controllers.
+    QTest::qWait(150);
+    QVERIFY2(reloads.isEmpty(), qPrintable(reloads.join(QLatin1Char(','))));
+    QVERIFY(!oc.pinEnabled(Band::Band40m, 2, /*tx=*/true));
+    QCOMPARE(oc.pinAction(0), action1);
+    QCOMPARE(cal.txDisplayOffsetDb(), txDisplay);
+    QCOMPARE(cal.paCurrentSensitivity(), paSens);
+    QCOMPARE(cal.paCurrentOffset(), paOffset);
+    QCOMPARE(cal.paCalProfile().boardClass, paTable.boardClass);
+    QVERIFY(cal.paCalProfile().watts == paTable.watts);
+    QCOMPARE(hl2.pttHangMs(), pttHang);
+    QCOMPARE(hl2.txLatencyMs(), txLatency);
+
+    // The receive side is still the window's to change.
+    s.proxy->setValue(hw(QStringLiteral("oc/rx/40m/pin3")), QStringLiteral("True"));
+    QTRY_VERIFY(oc.pinEnabled(Band::Band40m, 2, /*tx=*/false));
+    s.proxy->setValue(hw(QStringLiteral("cal/freqFactor")), QStringLiteral("1.000002"));
+    QTRY_COMPARE(cal.freqCorrectionFactor(), 1.000002);
+    QCOMPARE(rejected.count(), expected);
 }
 
 void TstStationSession::ioBoardProbeIsAskedOfTheCore()
