@@ -145,7 +145,16 @@
 //                FlexRadio beacon follows the 4O3A switch (updateFlexBeacon).
 //                NereusSDR-original; no Thetis logic. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
-//   2026-09-24 - R-R3-47/22: accessorySettings. J.J. Boyd (KG4VCF), AI: Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: the amp's and tuner's own settings for
+//                a window (`accessorySettings`, AccessorySettingsModel; the
+//                nine ...ForStation requests; accessoryRequestRefused).
+//                NereusSDR-original; no Thetis logic. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 fix wave: Reset amp error for a window
+//                (resetRfKitErrorForStation) and a window's RF-Kit
+//                auto-reconnect and poll interval applied at once.
+//                NereusSDR-original; no Thetis logic. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================

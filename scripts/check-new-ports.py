@@ -50,6 +50,9 @@ import subprocess
 import sys
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from header_block import header_text  # noqa: E402
+
 REPO = Path(__file__).resolve().parent.parent
 PROVENANCE = REPO / "docs" / "attribution" / "THETIS-PROVENANCE.md"
 WDSP_PROVENANCE = REPO / "docs" / "attribution" / "WDSP-PROVENANCE.md"
@@ -65,8 +68,8 @@ FULL_TREE = (
 # Markdown all skipped automatically.
 EXTENSIONS = {".cpp", ".h", ".c", ".cc", ".hpp", ".hxx"}
 
-# Header window used to detect the per-file skip markers.
-HEADER_WINDOW = 160
+# The per-file skip markers are read from the leading comment block
+# (scripts/header_block.py: the whole block, never less than 160 lines).
 
 OPT_OUT_MARKER = "Independently implemented from"
 NO_PORT_CHECK_MARKER = "no-port-check:"
@@ -337,7 +340,7 @@ def check_file(rel, listed, diff_lines=None, text=None):
         except Exception:
             return []
 
-    head = "\n".join(text.splitlines()[:HEADER_WINDOW])
+    head = header_text(text, Path(rel).suffix)
     if OPT_OUT_MARKER in head:
         return []
     if NO_PORT_CHECK_MARKER in head:
