@@ -109,6 +109,7 @@ mw0lge@grange-lane.co.uk
 
 #include <array>
 #include <optional>
+#include <vector>
 
 namespace NereusSDR {
 
@@ -129,11 +130,18 @@ public:
     // it replaces (TciRateLimitMsgsPerSec) is dropped by settings schema v8.
     static constexpr const char* kSettingKey = "TciRateLimitMs";
 
-    // Which gate a TCI line belongs to, or none for every other line.
-    // vfo and if go with the VFO gate, dds with the centre gate,
+    // Which gate a TCI line belongs to on its own, or none for every other
+    // line. vfo and if go with the VFO gate, dds with the centre gate,
     // tx_frequency and tx_frequency_thetis with the TX frequency gate
-    // (Thetis VFOdata thread, TCIServer.cs:1371-1400 [v2.10.3.15]).
+    // (Thetis VFOdata thread, TCIServer.cs:1371-1400 [v2.10.3.15]). An if
+    // line's gate also depends on the line before it; see gatesOf.
     static std::optional<Gate> gateOf(const QString& frame);
+
+    // The gate of each line of one tick. As gateOf, except that an if line
+    // straight after a dds line for the same receiver belongs to that
+    // centre event and so to the centre gate, as Thetis sends a centre
+    // change's dds and if together (TCIServer.cs:1378-1382 [v2.10.3.15]).
+    static std::vector<std::optional<Gate>> gatesOf(const QStringList& frames);
 
     // The wire key a waiting frame is kept under: the command plus the
     // receiver (and channel for vfo / if), so a newer value replaces an
@@ -142,7 +150,9 @@ public:
 
     // Clamped to kMinGapMs..kMaxGapMs. A change starts every gate afresh,
     // as Thetis does by starting a new server (TCIServer.cs:6666-6668
-    // [v2.10.3.15]); frames already waiting keep their due time.
+    // [v2.10.3.15]). Lines already waiting move to the new due time: the
+    // gate's last immediate send plus the new gap, or the next drain tick
+    // if that is already past, so a changed gap applies at once.
     void setGapMs(int ms);
     int gapMs() const { return m_gapMs; }
 
@@ -164,6 +174,9 @@ private:
     struct GateState {
         // Thetis Stopwatch: when the last immediate send restarted it.
         std::optional<qint64> restartedAtMs;
+        // The last immediate send, kept when setGapMs starts the gate
+        // afresh, so waiting lines can be moved to the new gap.
+        std::optional<qint64> lastSentAtMs;
         // Thetis one-shot Timer: when the waiting lines go.
         std::optional<qint64> dueAtMs;
         // Waiting lines, latest per key, in first-arrival order.

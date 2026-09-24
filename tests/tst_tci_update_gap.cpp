@@ -224,6 +224,63 @@ private slots:
         QVERIFY(!gap.hasWaiting());
     }
 
+    // Thetis sends a centre change's dds and its if together under the
+    // centre gate (TCIServer.cs:1378-1382 [v2.10.3.15]), and a VFO change's
+    // if and vfo under the VFO gate. So while the VFO gate is waiting, a
+    // centre change still sends its dds and if at once, and the if a VFO
+    // change made still waits with its vfo.
+    void aCentreChangeSendsItsDdsAndIfTogether()
+    {
+        TciUpdateGap gap;  // 100 ms
+        const QString vfoIf = QStringLiteral("if:0,0,-300;");
+        QCOMPARE(gap.offer({vfoIf, vfoLine(0, 1)}, 0).size(), 2);
+        QVERIFY(gap.offer({QStringLiteral("if:0,0,-200;"), vfoLine(0, 2)}, 10).isEmpty());
+
+        const QStringList centre = {QStringLiteral("dds:0,14000000;"),
+                                    QStringLiteral("if:0,0,-100;")};
+        QCOMPARE(gap.offer(centre, 20), centre);
+
+        QCOMPARE(gap.takeDue(110),
+                 (QStringList{QStringLiteral("if:0,0,-200;"), vfoLine(0, 2)}));
+        QVERIFY(!gap.hasWaiting());
+
+        const auto gates = TciUpdateGap::gatesOf(
+            {QStringLiteral("dds:1,7000000;"), QStringLiteral("if:1,0,5;"),
+             QStringLiteral("if:0,0,5;")});
+        QCOMPARE(gates.size(), std::size_t(3));
+        QCOMPARE(gates[0], std::optional(TciUpdateGap::Gate::Centre));
+        QCOMPARE(gates[1], std::optional(TciUpdateGap::Gate::Centre));
+        QCOMPARE(gates[2], std::optional(TciUpdateGap::Gate::Vfo));
+    }
+
+    // A changed gap reaches lines already waiting: they move to the last
+    // send plus the new gap, or go on the next tick if that is past.
+    void aShorterGapSendsWaitingLinesSooner()
+    {
+        TciUpdateGap gap;  // 100 ms
+        QCOMPARE(gap.offer({vfoLine(0, 1)}, 0).size(), 1);
+        QVERIFY(gap.offer({vfoLine(0, 2)}, 30).isEmpty());   // due at 130
+        gap.setGapMs(50);                                      // now due at 50
+        QVERIFY(gap.takeDue(49).isEmpty());
+        QCOMPARE(gap.takeDue(50), QStringList{vfoLine(0, 2)});
+
+        QCOMPARE(gap.offer({vfoLine(0, 3)}, 60).size(), 1);
+        QVERIFY(gap.offer({vfoLine(0, 4)}, 70).isEmpty());    // due at 120
+        gap.setGapMs(5);                                       // 65 is already past
+        QCOMPARE(gap.takeDue(75), QStringList{vfoLine(0, 4)});
+    }
+
+    void aLongerGapHoldsWaitingLinesLonger()
+    {
+        TciUpdateGap gap;  // 100 ms
+        QCOMPARE(gap.offer({vfoLine(0, 1)}, 0).size(), 1);
+        QVERIFY(gap.offer({vfoLine(0, 2)}, 30).isEmpty());   // due at 130
+        gap.setGapMs(300);                                     // now due at 300
+        QVERIFY(gap.takeDue(130).isEmpty());
+        QVERIFY(gap.takeDue(299).isEmpty());
+        QCOMPARE(gap.takeDue(300), QStringList{vfoLine(0, 2)});
+    }
+
 #ifdef HAVE_WEBSOCKETS
     void serverReadsTheGapAtStartAndChangesItLive()
     {

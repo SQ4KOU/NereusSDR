@@ -59,6 +59,7 @@ mw0lge@grange-lane.co.uk
 #include "TciUpdateGap.h"
 
 #include <algorithm>
+#include <vector>
 
 namespace NereusSDR {
 
@@ -108,6 +109,40 @@ std::optional<TciUpdateGap::Gate> TciUpdateGap::gateOf(const QString& frame)
     return std::nullopt;
 }
 
+std::vector<std::optional<TciUpdateGap::Gate>> TciUpdateGap::gatesOf(const QStringList& frames)
+{
+    // The event that made an if line decides its gate. From Thetis
+    // TCIServer.cs:1378-1382 [v2.10.3.15], a centre event sends its dds and
+    // then its if, both under CentreChange's gate:
+    //   if (vfoData.cen)
+    //   {
+    //       sendDDS(vfoData.rx, (long)(vfoData.centreMHz * 1e6));
+    //       if (vfoData.sendIF) sendIF(vfoData.rx, vfoData.chan, (int)vfoData.offsetHz);
+    //   }
+    // while a VFO event sends if then vfo under VFOChange's gate
+    // (TCIServer.cs:1397-1398 [v2.10.3.15]). A tick keeps the order the
+    // lines were made in (TciVfoCoalescer drains in first-arrival order), so
+    // an if line straight after a dds line for the same receiver came from
+    // that centre event; any other if line came from a VFO event.
+    std::vector<std::optional<Gate>> gates;
+    gates.reserve(static_cast<std::size_t>(frames.size()));
+    for (qsizetype i = 0; i < frames.size(); ++i) {
+        std::optional<Gate> gate = gateOf(frames.at(i));
+        if (gate == Gate::Vfo && i > 0
+            && commandOf(frames.at(i)) == QLatin1String("if")
+            && commandOf(frames.at(i - 1)) == QLatin1String("dds")) {
+            const QStringList ifArgs = argsOf(frames.at(i));
+            const QStringList ddsArgs = argsOf(frames.at(i - 1));
+            if (!ifArgs.isEmpty() && !ddsArgs.isEmpty()
+                && ifArgs.at(0).trimmed() == ddsArgs.at(0).trimmed()) {
+                gate = Gate::Centre;
+            }
+        }
+        gates.push_back(gate);
+    }
+    return gates;
+}
+
 QString TciUpdateGap::keyOf(const QString& frame)
 {
     const QString cmd = commandOf(frame);
@@ -126,6 +161,12 @@ void TciUpdateGap::setGapMs(int ms)
 {
     m_gapMs = std::clamp(ms, kMinGapMs, kMaxGapMs);
     for (GateState& gate : m_gates) {
+        // Lines already waiting take the new gap too, measured from the
+        // gate's last immediate send, the point Thetis's stopwatch measures
+        // from. A due time already past goes on the next drain tick.
+        if (gate.dueAtMs.has_value() && gate.lastSentAtMs.has_value()) {
+            gate.dueAtMs = *gate.lastSentAtMs + m_gapMs;
+        }
         gate.restartedAtMs.reset();
     }
 }
@@ -147,13 +188,14 @@ QStringList TciUpdateGap::releaseWaiting(GateState& gate, const QStringList& ski
 QStringList TciUpdateGap::offer(const QStringList& frames, qint64 nowMs)
 {
     // Which gates this tick carries, and the keys it carries for each.
+    const std::vector<std::optional<Gate>> gates = gatesOf(frames);
     std::array<bool, kGateCount> present{};
     std::array<QStringList, kGateCount> keys;
-    for (const QString& frame : frames) {
-        if (const auto gate = gateOf(frame)) {
+    for (qsizetype i = 0; i < frames.size(); ++i) {
+        if (const auto gate = gates[static_cast<std::size_t>(i)]) {
             const int g = static_cast<int>(*gate);
             present[g] = true;
-            keys[g] << keyOf(frame);
+            keys[g] << keyOf(frames.at(i));
         }
     }
 
@@ -183,6 +225,7 @@ QStringList TciUpdateGap::offer(const QStringList& frames, qint64 nowMs)
             if (m_gapMs > 0) {
                 gate.restartedAtMs = nowMs;
             }
+            gate.lastSentAtMs = nowMs;
         } else {
             // From Thetis TCIServer.cs:6436-6439 [v2.10.3.15]: wait
             // m_nRateLimit ms from this event.
@@ -192,8 +235,9 @@ QStringList TciUpdateGap::offer(const QStringList& frames, qint64 nowMs)
 
     QStringList out;
     std::array<bool, kGateCount> releasedEmitted{};
-    for (const QString& frame : frames) {
-        const auto gate = gateOf(frame);
+    for (qsizetype i = 0; i < frames.size(); ++i) {
+        const QString& frame = frames.at(i);
+        const auto gate = gates[static_cast<std::size_t>(i)];
         if (!gate) {
             out << frame;
             continue;
