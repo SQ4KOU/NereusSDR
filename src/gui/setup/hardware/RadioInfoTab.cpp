@@ -15,6 +15,9 @@
 //                 Anthropic Claude Code.
 //   2026-09-24 - R-R3-49: the disabled RX2 sample rate combo is removed.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49, R-R3-21: the one remaining rate is labelled
+//                 "Sample rate (Hz):" (no RX1/RX2 words). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -140,7 +143,7 @@ RadioInfoTab::RadioInfoTab(RadioModel* model, QWidget* parent)
     // The underlying RadioModel::setActiveRxCountLive coordinator stays
     // wired and re-exposes when Phase 3F multi-panadapter lands.
 
-    paramForm->addRow(tr("RX1 sample rate (Hz):"), m_sampleRateRx1Combo);
+    paramForm->addRow(tr("Sample rate (Hz):"), m_sampleRateRx1Combo);
 
     outerLayout->addWidget(paramGroup);
 
