@@ -391,6 +391,30 @@ private slots:
         QCOMPARE(copy.rxSource(), 4);
     }
 
+    // Fix wave M5 (R-R3-49, R-R3-21): a receiver value outside slices A to
+    // D (0, or above 4, from a hand-edited or damaged layout) loads as the
+    // nearest slice, so the title and the buttons' reason name a slice.
+    void outOfRangeSavedReceiverLoadsAsTheNearestSlice()
+    {
+        const QList<QPair<QString, int>> cases{
+            {QStringLiteral("0"), 1}, {QStringLiteral("-3"), 1},
+            {QStringLiteral("5"), 4}, {QStringLiteral("27"), 4}};
+        for (const auto& [saved, slice] : cases) {
+            ContainerWidget source;
+            QStringList fields = source.serialize().split(QLatin1Char('|'));
+            fields[1] = saved;
+            ContainerWidget c;
+            QVERIFY2(c.deserialize(fields.join(QLatin1Char('|'))), qPrintable(saved));
+            QCOMPARE(c.rxSource(), slice);
+            bool titled = false;
+            for (QLabel* label : c.findChildren<QLabel*>()) {
+                if (label->text() == ContainerWidget::sliceNameForRxSource(slice)) { titled = true; }
+                QVERIFY2(label->text() != QStringLiteral("Slice"), qPrintable(saved));
+            }
+            QVERIFY2(titled, qPrintable(saved));
+        }
+    }
+
     // A layout saved today with every function button visible loads with
     // the buttons that have no feature not drawn, and saving it keeps
     // their saved visibility unchanged.

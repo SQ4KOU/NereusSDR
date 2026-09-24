@@ -18,6 +18,9 @@
 //                 1..4, so a saved RX1 / RX2 reads as slice A / B), and an
 //                 unavailable button's reason is relayed. J.J. Boyd (KG4VCF),
 //                 with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 / R-R3-21 fix wave: kFirstRxSource / kLastRxSource
+//                 (slices A to D). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*  ucMeter.cs
@@ -197,6 +200,9 @@ public:
     void setRxSource(int rx);
     static int sliceIdForRxSource(int rx) { return rx - 1; }
     static QString sliceNameForRxSource(int rx);
+    // The receiver sources a container offers: slices A (1) to D (4).
+    static constexpr int kFirstRxSource = 1;
+    static constexpr int kLastRxSource = 4;
 
     // --- Dock Mode ---
     DockMode dockMode() const { return m_dockMode; }

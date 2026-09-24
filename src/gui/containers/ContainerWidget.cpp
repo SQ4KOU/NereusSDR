@@ -14,6 +14,9 @@
 //                 1..4, so a saved RX1 / RX2 reads as slice A / B), and an
 //                 unavailable button's reason is relayed. J.J. Boyd (KG4VCF),
 //                 with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 / R-R3-21 fix wave: a saved receiver value is
+//                 clamped to slices A to D on load. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  ucMeter.cs
@@ -882,7 +885,10 @@ bool ContainerWidget::deserialize(const QString& data)
     bool ok = false;
     int rx = p[1].toInt(&ok);
     if (!ok) { return false; }
-    setRxSource(rx);
+    // R-R3-49 / R-R3-21 (fix wave M5): slices A to D are 1..4. A value
+    // outside them (a hand-edited or damaged layout) loads as the nearest
+    // slice, so the title and the buttons' reasons always name one.
+    setRxSource(std::clamp(rx, kFirstRxSource, kLastRxSource));
 
     int x = p[2].toInt(&ok); if (!ok) { return false; }
     int y = p[3].toInt(&ok); if (!ok) { return false; }
