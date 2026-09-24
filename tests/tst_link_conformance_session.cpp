@@ -894,6 +894,14 @@ void TstLinkConformanceSession::refusalsOfOutboundWritesArePlain()
 
 void TstLinkConformanceSession::alteredFixturesFailReadably()
 {
+    // A number the DSP measures matches within its stated tolerance only.
+    LinkFixtures::Captures none;
+    QVERIFY(LinkFixtures::match(QStringLiteral("$within:1:-399.02"), -399.5, &none).isEmpty());
+    const QString outside = LinkFixtures::match(QStringLiteral("$within:1:-399.02"), -401.0, &none);
+    QVERIFY2(outside.contains(QStringLiteral("within 1 of -399.02")), qPrintable(outside));
+    QVERIFY(!LinkFixtures::match(QStringLiteral("$within:1:-399.02"), QStringLiteral("x"), &none)
+                 .isEmpty());
+
     // A value the station sends, changed: the failure names the step, the
     // path inside the message and what the station really sent.
     QJsonObject changed = fixture(QStringLiteral("session-wrong-token"));

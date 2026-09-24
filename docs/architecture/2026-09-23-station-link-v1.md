@@ -1539,6 +1539,10 @@ a JSON string:
 | `"$ref:<name>"` | the value recorded under `<name>`, compared the same way | yes | yes, filled with the recorded value |
 | `"$within:<t>:<v>"` | a number no further than `<t>` from `<v>` (both in JSON number syntax, `<t>` at least 0) | yes | no |
 
+A number the station's DSP measures is written `"$within:<t>:<v>"`, with
+the tolerance stated, never `"$any"`; a counter whose value depends on
+timing is `"$int"`, not pinned.
+
 Matching is by value: objects must have the same keys and arrays the same
 length; numbers compare by value, so `1` and `1.0` are equal. A name is
 recorded once per fixture run; a later placeholder with the same name
@@ -1702,7 +1706,7 @@ same on every machine.
 
 | Fixture | What it holds the station to |
 | --- | --- |
-| `connect-connectable` | The whole connect sequence to `snapshot.complete` on a connected radio with one slice, every message in full |
+| `connect-connectable` | The whole connect sequence to `snapshot.complete` on a connected radio with one slice, every message in full, except: PureSignal's `statusJson` (`"$string"`, it carries a capture time) and `displayGeneration` (`"$int"`, a counter whose value depends on timing), and the slice's `signalStrengthDbm`, `signalPeakDbm` and `signalAverageDbm`, which the receiver measures: `"$within:1:-399.02"`, within 1 dB |
 | `wrong-token` | `auth.result` refused, `retryable` false, then the close |
 | `lockout` | After five wrong tokens from other clients, the right token is refused as rate limited, `retryable` true |
 | `major-refused` | An older app's `hello` (no `majors`) with major 2 gets `session.end` "This station runs link version 1 and this app runs version 2. Update the station.", `retryable` false |

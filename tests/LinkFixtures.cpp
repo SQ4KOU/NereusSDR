@@ -473,9 +473,9 @@ QString LinkFixtures::match(const QJsonValue& expected, const QJsonValue& actual
                 return QStringLiteral("%1: %2 is not $within:<tolerance>:<value>").arg(path, text);
             }
             if (!actual.isDouble() || std::abs(actual.toDouble() - centre) > tolerance) {
+                const QStringList written = text.mid(8).split(QLatin1Char(':'));
                 return QStringLiteral("%1: expected a number within %2 of %3, got %4")
-                    .arg(path, QString::number(tolerance, 'g', 17),
-                         QString::number(centre, 'g', 17), shown(actual));
+                    .arg(path, written.at(0), written.at(1), shown(actual));
             }
             return QString();
         }
