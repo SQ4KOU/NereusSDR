@@ -5434,6 +5434,13 @@ void MainWindow::buildUI()
         // A remote window's refusal is the Core's text; shown in user words.
         showToast(OperatorReasonText::forDisplay(reason), ToastSeverity::Warning, 4000);
     });
+    // L1 (R-R3-47, R-R3-22, R-R3-48): the Core refused an accessory request
+    // (amp, tuner, RF-Kit, interlock, fault history, station TCI). Its own
+    // route, so a slice-only listener never hears it; the same toast.
+    connect(m_radioModel, &RadioModel::accessoryRequestRefused, this,
+            [this](const QString&, const QString& reason) {
+        showToast(OperatorReasonText::forDisplay(reason), ToastSeverity::Warning, 4000);
+    });
 
     // Phase 3F Sub-Epic I closeout, defect F4.
     //

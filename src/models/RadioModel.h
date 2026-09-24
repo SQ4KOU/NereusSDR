@@ -541,10 +541,12 @@ public:
     /// click does nothing and nothing says why.
     void reportStationSliceCommandRejected(const QString& reason);
 
-    /// R-R3-47 / R-R3-22: the Core refused a request for one of its
-    /// accessories' own settings (`device` "pgxl" or "tgxl"), with its own
-    /// reason. Role::Remote only. Routed to accessoryRequestRefused, which
-    /// the Advanced pages show, and not to the slice toast.
+    /// R-R3-47 / R-R3-22 / R-R3-48: the Core refused an accessory request,
+    /// with its own reason. `device` says what it was about: "pgxl",
+    /// "tgxl", "rfkit", "interlock", "tci", "4o3a", or for a fault history
+    /// the device it names ("faults" for any other). Role::Remote only.
+    /// Routed to accessoryRequestRefused, which MainWindow toasts and the
+    /// pages that sent the request show, never to the slice toast.
     void reportStationAccessoryRefusal(const QString& device, const QString& reason);
 
     /// The station refused a sample-rate change, with its own reason.

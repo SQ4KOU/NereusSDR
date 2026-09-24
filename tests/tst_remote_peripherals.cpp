@@ -97,6 +97,7 @@
 #include "core/StationTciController.h"
 #include "core/TciServer.h"
 #include "core/TciSwitch.h"
+#include "gui/OperatorReasonText.h"
 #include "models/TunerModel.h"
 
 #include "fakes/LoopbackTransport.h"
@@ -382,6 +383,7 @@ private slots:
     void remoteWindowChangesTheAmpsOwnSettingsThroughTheCore();
     void remoteWindowChangesTheTunersOwnSettingsThroughTheCore();
     void olderCoreLeavesTheDeviceSettingsSayingWhy();
+    void accessoryRefusalsNeverReachTheSliceToast();
 };
 
 void RemotePeripheralsTest::remoteParentPageExposesOnlyStationBackedControls()
@@ -1638,11 +1640,15 @@ void RemotePeripheralsTest::remoteWindowChangesTheInterlockOnTheCore()
     QVERIFY(station.txInterlockPolicy()->swrGateEnabled());
     QTRY_COMPARE(cw.window.txInterlockPolicy()->graceMs(), 1250);
 
-    // A request the Core cannot take: nothing changes; the window says why.
-    QSignalSpy refused(&cw.window, &RadioModel::sliceAddRejected);
+    // A request the Core cannot take: nothing changes; the window says why,
+    // as an accessory refusal (L1), never as a slice one.
+    QSignalSpy sliceToast(&cw.window, &RadioModel::sliceAddRejected);
+    QSignalSpy refused(&cw.window, &RadioModel::accessoryRequestRefused);
     QVERIFY(cw.client.requestTxInterlockPolicy(1, 99999, false, 2.0).sent);
     QTRY_COMPARE(refused.count(), 1);
-    QVERIFY(OperatorWording::isPlain(refused.first().first().toString()));
+    QCOMPARE(refused.first().at(0).toString(), QStringLiteral("interlock"));
+    QVERIFY(OperatorWording::isPlain(refused.first().at(1).toString()));
+    QCOMPARE(sliceToast.count(), 0);
     QCOMPARE(station.txInterlockPolicy()->mode(), TxInterlockPolicy::Block);
     QCOMPARE(page.modeComboForTesting()->currentIndex(), 2);
 
@@ -1833,8 +1839,14 @@ void RemotePeripheralsTest::remoteWindowChangesTheAmpsOwnSettingsThroughTheCore(
         }
         QCOMPARE(asked.size(), askedBefore);
         QTest::qWait(100);
-        QCOMPARE(amp.commands.size(), remoteBefore);
-        QCOMPARE(localAmp.commands.size(), localBefore);
+        for (int i = remoteBefore; i < amp.commands.size(); ++i) {
+            QVERIFY2(!amp.commands.at(i).startsWith(QStringLiteral("ifconf address")),
+                     qPrintable(amp.commands.at(i)));
+        }
+        for (int i = localBefore; i < localAmp.commands.size(); ++i) {
+            QVERIFY2(!localAmp.commands.at(i).startsWith(QStringLiteral("ifconf address")),
+                     qPrintable(localAmp.commands.at(i)));
+        }
     }
 
     // ---- The same clicks on both pages reach the amps as the same commands.
@@ -2019,8 +2031,14 @@ void RemotePeripheralsTest::remoteWindowChangesTheTunersOwnSettingsThroughTheCor
         }
         QCOMPARE(asked.size(), askedBefore);
         QTest::qWait(100);
-        QCOMPARE(tuner.commands.size(), remoteBefore);
-        QCOMPARE(localTuner.commands.size(), localBefore);
+        for (int i = remoteBefore; i < tuner.commands.size(); ++i) {
+            QVERIFY2(!tuner.commands.at(i).startsWith(QStringLiteral("ifconf address")),
+                     qPrintable(tuner.commands.at(i)));
+        }
+        for (int i = localBefore; i < localTuner.commands.size(); ++i) {
+            QVERIFY2(!localTuner.commands.at(i).startsWith(QStringLiteral("ifconf address")),
+                     qPrintable(localTuner.commands.at(i)));
+        }
     }
 
     const int remoteMark = tuner.commands.size();
@@ -2132,6 +2150,42 @@ void RemotePeripheralsTest::olderCoreLeavesTheDeviceSettingsSayingWhy()
     const IStationLink::CommandOutcome outcome = link.requestPgxlSaveAndRestart();
     QVERIFY(!outcome.sent);
     QVERIFY(OperatorWording::isPlain(outcome.reason));
+}
+
+// L1 (R-R3-47, R-R3-22, R-R3-48): the Core's refusals of the accessory
+// requests reach the window as accessory refusals, keyed by what they were
+// about, and never as a slice refusal.
+void RemotePeripheralsTest::accessoryRefusalsNeverReachTheSliceToast()
+{
+    AppSettings::instance().clear();
+    CoreAndWindow cw;
+    LoopbackTransport* stationEnd = cw.connect(this);
+    QTRY_VERIFY(cw.client.accessoryDataAvailable());
+    QTRY_VERIFY(cw.client.pgxlDeviceSettingsAvailable());
+    QSignalSpy sliceToast(&cw.window, &RadioModel::sliceAddRejected);
+    QSignalSpy refused(&cw.window, &RadioModel::accessoryRequestRefused);
+
+    struct Case { const char* device; std::function<IStationLink::CommandOutcome()> send; };
+    StationClient& c = cw.client;
+    const QList<Case> cases{
+        {"pgxl", [&] { return c.requestPgxlPowerCap(true, 5); }},
+        {"pgxl", [&] { return c.requestPgxlName(QStringLiteral("Amp")); }},   // no amp on the Core
+        {"tgxl", [&] { return c.requestTgxlSaveAndRestart(); }},                 // no tuner
+        {"interlock", [&] { return c.requestTxInterlockPolicy(9, 0, false, 2.0); }},
+        {"faults", [&] { return c.requestClearAccessoryFaults(QStringLiteral("amp")); }},
+    };
+    for (const Case& one : cases) {
+        refused.clear();
+        QVERIFY(one.send().sent);
+        QTRY_COMPARE(refused.count(), 1);
+        QCOMPARE(refused.first().at(0).toString(), QString::fromLatin1(one.device));
+        QVERIFY(OperatorWording::isPlain(
+            OperatorReasonText::forDisplay(refused.first().at(1).toString())));
+    }
+    QTest::qWait(50);
+    QCOMPARE(sliceToast.count(), 0);
+    stationEnd->closeLink(QStringLiteral("test done"));
+    AppSettings::instance().clear();
 }
 
 QTEST_MAIN(RemotePeripheralsTest)

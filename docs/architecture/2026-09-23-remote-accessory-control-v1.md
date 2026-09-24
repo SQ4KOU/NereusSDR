@@ -670,6 +670,14 @@ from release to release, because older apps compare some of it exactly; an
 app shows it through its own user-word translation and keeps the raw text in
 its log.
 
+The desktop app shows the Core's refusal of any accessory command in this
+document (the Power Genius, Tuner Genius and RF-Kit commands, the
+interlock, output limit and fault history commands, `setStationTci` and
+`setFourO3AEnabled`) as an accessory notice, never as a slice notice; the
+page that sent it (the Advanced pages, the interlock page) also shows it
+and keeps the Core's values. An unrelated slice refusal does not touch
+those pages.
+
 Property writes:
 
 | Write | Reason |

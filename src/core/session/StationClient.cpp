@@ -85,6 +85,11 @@
 //                 and the amp's and tuner's own settings requests); their
 //                 refusals go to the Advanced pages, not the slice toast.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22 / R-R3-48: every accessory request's
+//                 refusal (Power Genius, Tuner Genius, RF-Kit, interlock,
+//                 fault history, station TCI, 4O3A switch) goes to
+//                 accessoryRequestRefused, never the slice toast. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -2634,12 +2639,45 @@ MirrorUpdate doubleArgument(const QByteArray& name, double value)
 
 // R-R3-47 / R-R3-22: the amp's and tuner's own settings verbs, whose
 // refusals the Advanced pages show (RadioModel::accessoryRequestRefused).
-bool isAccessoryDeviceSettingsVerb(const QByteArray& verb)
+// L1 (R-R3-47, R-R3-22, R-R3-48): what an accessory request the Core
+// refused was about, for RadioModel::accessoryRequestRefused; empty for
+// every other verb. "pgxl" and "tgxl" (the amp's and tuner's connection,
+// output limit and own settings), "rfkit", "interlock", "tci" (the
+// station TCI server), "4o3a" (the 4O3A switch) and, for a fault history,
+// the device it names ("faults" for any other).
+QString accessoryRefusalDevice(const QByteArray& verb, const QString& faultsDevice)
 {
-    return verb == "setPgxlName" || verb == "setPgxlHardware" || verb == "setPgxlNetwork"
-        || verb == "savePgxlSettings" || verb == "readPgxlSettings" || verb == "setTgxlName"
-        || verb == "setTgxlNetwork" || verb == "saveTgxlSettings"
-        || verb == "readTgxlSettings";
+    if (verb == "setPgxlName" || verb == "setPgxlHardware" || verb == "setPgxlNetwork"
+        || verb == "savePgxlSettings" || verb == "readPgxlSettings"
+        || verb == "setPgxlPowerCap" || verb == "configurePgxl" || verb == "disconnectPgxl"
+        || verb == "setPgxlConnectionSettings") {
+        return QStringLiteral("pgxl");
+    }
+    if (verb == "setTgxlName" || verb == "setTgxlNetwork" || verb == "saveTgxlSettings"
+        || verb == "readTgxlSettings" || verb == "configureTgxl" || verb == "disconnectTgxl") {
+        return QStringLiteral("tgxl");
+    }
+    if (verb == "configureRfKit" || verb == "disconnectRfKit" || verb == "setRfKitEnabled"
+) {
+        return QStringLiteral("rfkit");
+    }
+    if (verb == "setTxInterlockPolicy") {
+        return QStringLiteral("interlock");
+    }
+    if (verb == "setStationTci") {
+        return QStringLiteral("tci");
+    }
+    if (verb == "setFourO3AEnabled") {
+        return QStringLiteral("4o3a");
+    }
+    if (verb == "clearAccessoryFaults") {
+        if (faultsDevice == QLatin1String("pgxl") || faultsDevice == QLatin1String("tgxl")
+            || faultsDevice == QLatin1String("rfkit")) {
+            return faultsDevice;
+        }
+        return QStringLiteral("faults");
+    }
+    return {};
 }
 
 } // namespace
@@ -2662,7 +2700,16 @@ StationClient::CommandOutcome StationClient::sendCommand(const QByteArray& verb,
                 .arg(action)
         };
     }
-    PendingCommand pending{ verb, sliceId };
+    PendingCommand pending;
+    pending.verb = verb;
+    pending.sliceId = sliceId;
+    if (verb == "clearAccessoryFaults") {
+        for (const MirrorUpdate& argument : arguments) {
+            if (argument.name == "device") {
+                pending.faultsDevice = argument.value.toString();
+            }
+        }
+    }
     if ((verb == "requestStreamCtunPinned" || verb == "requestStreamCentre")
         && !m_radioModel.isNull()) {
         if (SliceModel* slice = m_radioModel->sliceById(sliceId)) {
@@ -3146,11 +3193,13 @@ void StationClient::handleCommandResult(const SessionMessage& message)
             }
         } else if (pending.verb == "requestSliceSampleRate") {
             m_radioModel->reportStationRetuneRejected(pending.sliceId, reason);
-        } else if (isAccessoryDeviceSettingsVerb(pending.verb)) {
-            // R-R3-47 / R-R3-22: the Advanced page that sent it shows it.
-            m_radioModel->reportStationAccessoryRefusal(
-                pending.verb.contains("Pgxl") ? QStringLiteral("pgxl") : QStringLiteral("tgxl"),
-                reason);
+        } else if (const QString device = accessoryRefusalDevice(pending.verb,
+                                                                 pending.faultsDevice);
+                   !device.isEmpty()) {
+            // L1 (R-R3-47, R-R3-22, R-R3-48): an accessory refusal has its
+            // own route (the pages that sent it show it; MainWindow says
+            // it), never the slice one.
+            m_radioModel->reportStationAccessoryRefusal(device, reason);
         } else {
             m_radioModel->reportStationSliceCommandRejected(reason);
         }

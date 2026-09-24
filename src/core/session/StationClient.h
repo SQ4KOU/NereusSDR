@@ -894,6 +894,8 @@ private:
         int sliceId = -1;
         quint64 streamEpoch = 0;
         bool requestedPin = false;
+        // clearAccessoryFaults: which device's history (L1 routing).
+        QString faultsDevice;
     };
     QHash<quint32, PendingCommand> m_pendingCommands;
     std::optional<QPair<quint32, bool>> m_pendingPs3Display;

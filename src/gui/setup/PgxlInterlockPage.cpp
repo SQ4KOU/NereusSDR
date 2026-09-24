@@ -48,8 +48,14 @@ PgxlInterlockPage::PgxlInterlockPage(RadioModel* model, QWidget* parent)
     if (isRemote()) {
         connect(m_model, &RadioModel::stationLinkStateChanged,
                 this, &PgxlInterlockPage::refreshRemoteAvailability);
-        // A change the Core refused leaves the Core's policy on the page.
-        connect(m_model, &RadioModel::sliceAddRejected, this, &PgxlInterlockPage::loadFromPolicy);
+        // A change the Core refused leaves the Core's policy on the page
+        // (only the interlock's refusals; never an unrelated one).
+        connect(m_model, &RadioModel::accessoryRequestRefused, this,
+                [this](const QString& device, const QString&) {
+            if (device == QLatin1String("interlock")) {
+                loadFromPolicy();
+            }
+        });
         refreshRemoteAvailability();
     }
 }

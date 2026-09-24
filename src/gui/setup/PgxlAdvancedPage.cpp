@@ -700,13 +700,13 @@ void PgxlAdvancedPage::buildRemoteSections(QVBoxLayout* topLay)
     connect(m_model->accessoryDataModel(), &AccessoryDataModel::powerCapChanged,
             this, &PgxlAdvancedPage::refreshRemote);
     connect(m_model, &RadioModel::stationLinkStateChanged, this, &PgxlAdvancedPage::refreshRemote);
-    // A change the Core refused leaves the Core's limit on the page.
-    connect(m_model, &RadioModel::sliceAddRejected, this, &PgxlAdvancedPage::refreshRemote);
-    // A request for the amp's own settings the Core refused: the Core's
-    // values stay and its words show here.
+    // A Power Genius request the Core refused (its output limit, or the
+    // amp's own settings): the Core's values stay and its words show here.
+    // Only the amp's refusals; never an unrelated one.
     connect(m_model, &RadioModel::accessoryRequestRefused, this,
             [this](const QString& device, const QString& reason) {
         if (device == QLatin1String("pgxl")) {
+            refreshRemote();
             showRemoteOutcome(false, reason);
         }
     });
