@@ -418,7 +418,7 @@ networking that could expose or strand the station, or the transmit boundary): 4
 14, 15, 15b, 17, 18, 25, 26, 27, 27a, 28, 28a, 29, 29a, 30, 31, 32, 33, 34, 35, 36, 37, 38, 41, 42, 45, 47, 48,
 54, 64, 65, 71, 73, 74, 75, 77, 78. JJ decides whether any of them gets one. For the six phone tasks among them
 (27a, 28a, 29a, 54, 64, 65) he decided on 2026-09-24: each gets its own independent
-review as soon as it is finished. For the station tasks he decided the same day, through
+review as soon as it is finished; later that day he decided the same for 15 and 15b. For the station tasks he decided the same day, through
 the Core/GUI session: one independent review per group, each when its group finishes:
 identity and pairing (12, 13, 14, 16, 17, 18); remote access (26 to 29); remote
 transmit's safety net (30 to 38, before any real on-air test); several devices at once
