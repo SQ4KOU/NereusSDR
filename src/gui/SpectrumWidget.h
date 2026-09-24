@@ -190,8 +190,9 @@ mw0lge@grange-lane.co.uk
 
 #include <optional>
 
-#include "spectrum/ActivePeakHoldTrace.h"
-#include "spectrum/PeakBlobDetector.h"
+#include "core/spectrum/ActivePeakHoldTrace.h"
+#include "core/spectrum/DisplayFollowers.h"
+#include "core/spectrum/PeakBlobDetector.h"
 #include "core/spectrum/SpectrumAvenger.h"
 #include "core/spectrum/SpectrumReducer.h"
 
@@ -631,7 +632,7 @@ public:
     /// TX bins land around -50 dBm) — without this, the 0.05 alpha
     /// follower takes ~3 s to converge and the waterfall saturates solid
     /// red in the meantime.
-    void resetWaterfallAgc() { m_wfAgcPrimed = false; }
+    void resetWaterfallAgc() { m_wfLevels.resetAgc(); }
 
     /// Clear the spectrum + waterfall avenger accumulators.  Use on bin-source
     /// changes that are abrupt enough that fading from the previous source's
@@ -786,7 +787,7 @@ public:
     // NoiseFloorTracker runs from live FFT frames; this seam drives
     // dssFloorDbm() directly so the floor-anchoring math is testable
     // without standing up the noise-floor pipeline.
-    void setMeasuredNoiseFloorForTest(float dbm) { m_nfLerpAverage = dbm; }
+    void setMeasuredNoiseFloorForTest(float dbm) { m_noiseFloor.setLerpAverage(dbm); }
     // updateSpectrumLinear() is the only production writer of
     // m_lastFullBinsDbm (see its definition); this seam drives
     // buildDssWideRow()'s production call path (via pushDssRow()) without
@@ -982,7 +983,7 @@ public:
     // average is still settling.  Caller (MainWindow) sets on band/freq
     // change and clears after attack-time elapses.
     void setNoiseFloorFastAttack(bool on);
-    bool noiseFloorFastAttack() const { return m_noiseFloorFastAttack; }
+    bool noiseFloorFastAttack() const { return m_noiseFloor.fastAttack(); }
 
     // NF colour customisation — From Thetis display.cs:2316/2329 [v2.10.3.13]:
     //   noisefloor_color      = Color.Red     (line + box)
@@ -1706,7 +1707,8 @@ public:
     // Visual-notch test seams (design section 8.3). Read-only views into the
     // state updateSpectrumLinear rebuilds each frame, so the section 11 test
     // can pin the measurement-routing contract without a paint cycle.
-    float nfFftBinAverageForTest() const { return m_nfFftBinAverage; }
+    float nfFftBinAverageForTest() const { return m_noiseFloor.fftBinAverage(); }
+    float nfLerpAverageForTest() const { return m_noiseFloor.lerpAverage(); }
     const QVector<float>& undentedPixelsForTest() const {
         return measurementPixels();
     }
@@ -2535,10 +2537,9 @@ private:
     static constexpr int kDssFallbackMaxW = 1024;   // 3DSS surface texture/image caps
     static constexpr int kDssFallbackMaxH = 512;
 
-    // AGC rolling envelope (tracked across waterfall rows).
-    float m_wfAgcRunMin{0.0f};
-    float m_wfAgcRunMax{0.0f};
-    bool  m_wfAgcPrimed{false};
+    // AGC rolling envelope (tracked across waterfall rows), in
+    // core/spectrum/DisplayFollowers since iPhone app Task 20.
+    WaterfallLevelFollower m_wfLevels;
 
     // Rate-limit waterfall pushes per m_wfUpdatePeriodMs.
     qint64 m_wfLastPushMs{0};
@@ -2869,19 +2870,13 @@ private:
     // Updated each spectrum frame in processNoiseFloor() after
     // updateSpectrumLinear finalises m_renderedPixels.  paintNoiseFloorOverlay
     // uses m_nfLerpAverage for line/box Y and m_nfFftBinAverage for actual Y.
-    float m_nfFftBinAverage{-200.0f};
-    float m_nfLerpAverage{-200.0f};
-
-    // From Thetis display.cs:4638 [v2.10.3.13] m_fAttackTimeInMSForRX1=2000.
-    float m_nfAttackTimeMs{2000.0f};
-
-    // From Thetis display.cs:5775 + 5783 [v2.10.3.13]:
-    //   _NFsensitivity = 3 (default), clamped to [0, 19] in setter.
-    // requireSamples = (int)(width * (sensitivity / 20)) — with default 3
-    // that's ~15% of pixels, achievable on any normal band.  Higher values
-    // make the estimate harder to converge; values >= 20 make it unreachable
-    // (requireSamples > width) and fftBinAverage perpetually drifts to +200.
-    int m_nfSensitivity{3};
+    // The estimates, the attack time (Thetis display.cs:4638 [v2.10.3.13]
+    // m_fAttackTimeInMSForRX1=2000), the sensitivity (display.cs:5775 +
+    // 5783, _NFsensitivity = 3) and the fast-attack flag (display.cs:917-927
+    // m_bFastAttackNoiseFloorRX1, set on band change / freq jump / MOX
+    // transition, cleared per display.cs:5904-5908) live in
+    // core/spectrum/DisplayFollowers since iPhone app Task 20.
+    NoiseFloorFollower m_noiseFloor;
 
     // Operator-tunable NF shift — From Thetis display.cs:5763 [v2.10.3.13]:
     //   private static float _fNFshiftDBM = 0;
@@ -2889,16 +2884,6 @@ private:
     // display.cs:5771).  Applied to both lerp and actual values per
     // display.cs:5400 + 5403.
     float m_nfShiftDbm{0.0f};
-
-    // Fast-attack flag — From Thetis display.cs:917-927 [v2.10.3.13]
-    // m_bFastAttackNoiseFloorRX1.  Set on band change / freq jump / MOX
-    // transition.  Auto-clear is now Thetis-faithful: gated on
-    // |fftBinAverage - lerpAverage| < 1.0 AND elapsed > kFastAttackMinMs
-    // (display.cs:5904-5908) — the convergence check is what tells Thetis
-    // the smoothed estimate has settled to the new band.
-    bool   m_noiseFloorFastAttack{false};
-    qint64 m_nfLastFastAttackMs{0};
-    static constexpr qint64 kFastAttackMinMs = 1000;  // display.cs:5906 Math.Max(1000, ...)
 
     // ---- NF-aware grid (Task 2.9) ----
     // From Thetis console.cs:46025-46085 [v2.10.3.13] GridMinFollowsNFRX1,

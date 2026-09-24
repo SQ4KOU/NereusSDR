@@ -4898,6 +4898,12 @@ nereus_add_test(tst_active_peak_hold)
 # Uses QTEST_APPLESS_MAIN (no QApplication, WDSP-free, pure data logic).
 nereus_add_test(tst_peak_blob_detector)
 
+# iPhone app Task 20 (R-IOS-27): the noise floor, waterfall levels,
+# normalise, averaging constant, calibration range and blob passband moved
+# from SpectrumWidget into core/spectrum/DisplayFollowers. Links the Core
+# alone, as nereusd does, to prove they stand without the GUI.
+nereus_add_test(tst_display_followers CORE_ONLY)
+
 # ── Task 2.3: Spectrum Defaults overlay group + decimation wire-up ──────────
 # Tests for SpectrumWidget overlay setters (ShowMHzOnCursor / ShowBinWidth /
 # ShowNoiseFloor / DispNormalize / ShowPeakValueOverlay) and FFTEngine

@@ -1031,6 +1031,13 @@ set(CORE_SOURCES
     # iPhone app Task 19 (R-IOS-06): the waterfall palettes, moved from
     # SpectrumWidget so the Core's catalogue can send them to an app.
     src/core/spectrum/WaterfallPalettes.cpp
+    # iPhone app Task 20 (R-IOS-27): the display computations the desktop's
+    # SpectrumWidget runs, moved here so the Core runs the same code for an
+    # app's display: peak blobs, active peak hold, and DisplayFollowers
+    # (noise floor, waterfall levels, normalise, averaging constant).
+    src/core/spectrum/ActivePeakHoldTrace.cpp
+    src/core/spectrum/PeakBlobDetector.cpp
+    src/core/spectrum/DisplayFollowers.cpp
     # R1 Task 6: per-stream FFTEngine pool extracted from
     # MainWindow::createFftEngineForStream / m_fftEngines / m_fftThread.
     # Owns engine lifecycle, the four global display AppSettings-sourced
@@ -1341,8 +1348,6 @@ set(GUI_SOURCES
     src/gui/SupportDialog.cpp
     src/gui/AboutDialog.cpp
     src/gui/VaxFirstRunDialog.cpp
-    src/gui/spectrum/ActivePeakHoldTrace.cpp
-    src/gui/spectrum/PeakBlobDetector.cpp
     src/gui/SpectrumWidget.cpp
     src/gui/PanadapterApplet.cpp
     src/gui/PanadapterStack.cpp
