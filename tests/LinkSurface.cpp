@@ -16,6 +16,11 @@
 //                                    surface capture. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 2 (R-IOS-01): the
+//                                    station TCI server's class and
+//                                    object after the RF-Kit merge.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -70,6 +75,7 @@
 #include "models/RadioModel.h"
 #include "models/RfKitModel.h"
 #include "models/SliceModel.h"
+#include "models/StationTciModel.h"
 #include "models/TransmitModel.h"
 #include "models/TunerModel.h"
 
@@ -280,8 +286,9 @@ QJsonObject captureMirrorClasses()
 // minor-gated object is sent. The station model is tst_station_session's
 // (makeStationRadioModel) set up as DaemonApp sets up a Core, so every
 // object a Core can offer is there: the accessory identity
-// (enableStationAccessoryIdentity, for `amplifier` and `rfkit`) and a step
-// attenuator controller (for `stepAtt`; `alexAntennas` and `ioBoard` bind
+// (enableStationAccessoryIdentity, for `amplifier` and `rfkit`), the
+// station TCI server (enableStationTci, for `stationTci`; it stays off, so
+// nothing listens) and a step attenuator controller (for `stepAtt`; `alexAntennas` and `ioBoard` bind
 // to a Local model's own controllers). One panadapter as well: StationServer
 // watches every pan the model holds, though nereusd itself adds none.
 QJsonArray captureObjectKeys()
@@ -300,6 +307,7 @@ QJsonArray captureObjectKeys()
     auto model = std::make_unique<RadioModel>();
     const auto unbind = qScopeGuard([&model] { model->setStepAttController(nullptr); });
     model->enableStationAccessoryIdentity();
+    model->enableStationTci(QStringLiteral("127.0.0.1"));
     model->setStepAttController(stepAtt.get());
     model->setBoardForTest(HPSDRHW::HermesLite);
     RadioInfo info;
@@ -1085,7 +1093,8 @@ QList<const QMetaObject*> LinkSurface::mirroredMetaObjects()
             &AlexAntennaFacade::staticMetaObject,
             &IoBoardHl2Facade::staticMetaObject,
             &AmplifierModel::staticMetaObject,
-            &RfKitModel::staticMetaObject};
+            &RfKitModel::staticMetaObject,
+            &StationTciModel::staticMetaObject};
 }
 
 QJsonObject LinkSurface::capture()

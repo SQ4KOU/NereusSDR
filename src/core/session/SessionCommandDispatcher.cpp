@@ -57,6 +57,10 @@
 //                                    setStationTci for the station's TCI
 //                                    server. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 2 (R-IOS-01): the
+//                                    RF-Kit and station TCI verbs in
+//                                    verbSpecs(). AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -242,6 +246,8 @@ QString notRepresentableReason(const QByteArray& name)
 //   configure/disconnectTgxl remoteTgxlConfigAvailable()
 //   setFourO3AEnabled      remoteFourO3AControlAvailable()
 //   *Pgxl*                 remotePgxlControlAvailable() (version 2)
+//   *RfKit*                remoteRfKitControlAvailable() (version 2)
+//   setStationTci          stationTciAvailable() (version 1)
 //   requestIoBoardProbe    remoteHardwareConfigAvailable() (version 2)
 //   setAlexRxAntenna       radioHardwareVersion 3 (requestAlexRxAntenna)
 //   nnr.*                  nnrControlAvailable(); nnr.tryAgain adds
@@ -290,6 +296,16 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
         {"setPgxlConnectionSettings",
          {arg("autoReconnect", kBool), arg("keepaliveSec", kInt), arg("pingSec", kInt)},
          "remotePgxlControlVersion", 2, kRadioIdentitySessionProtocolMinor},
+        // The Core's RF-Kit RF2K-S and the station TCI server (R-R3-47,
+        // R-R3-48).
+        {"configureRfKit", {arg("host", kUtf8), arg("port", kInt)},
+         "remoteRfKitControlVersion", 2, kRadioIdentitySessionProtocolMinor},
+        {"disconnectRfKit", {}, "remoteRfKitControlVersion", 2,
+         kRadioIdentitySessionProtocolMinor},
+        {"setRfKitEnabled", {arg("enabled", kBool)}, "remoteRfKitControlVersion", 2,
+         kRadioIdentitySessionProtocolMinor},
+        {"setStationTci", {arg("enabled", kBool), arg("port", kInt)}, "stationTciVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
         // The Core's radio hardware (R-R3-46).
         {"requestIoBoardProbe", {}, "radioHardwareVersion", 2,
          kRadioIdentitySessionProtocolMinor},

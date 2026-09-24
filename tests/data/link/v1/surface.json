@@ -175,6 +175,10 @@
         {
             "kind": "i64",
             "name": "remoteRfKitControlVersion"
+        },
+        {
+            "kind": "i64",
+            "name": "stationTciVersion"
         }
     ],
     "commands": [
@@ -371,6 +375,63 @@
             "capabilityVersion": 2,
             "minMinor": 11,
             "verb": "setPgxlConnectionSettings"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "host",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "port",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteRfKitControlVersion",
+            "capabilityVersion": 2,
+            "minMinor": 11,
+            "verb": "configureRfKit"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "remoteRfKitControlVersion",
+            "capabilityVersion": 2,
+            "minMinor": 11,
+            "verb": "disconnectRfKit"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "bool",
+                    "name": "enabled",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteRfKitControlVersion",
+            "capabilityVersion": 2,
+            "minMinor": 11,
+            "verb": "setRfKitEnabled"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "bool",
+                    "name": "enabled",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "port",
+                    "optional": false
+                }
+            ],
+            "capability": "stationTciVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "setStationTci"
         },
         {
             "arguments": [
@@ -1679,6 +1740,18 @@
                     "kind": "utf8",
                     "name": "efficiencyText",
                     "ordinal": 18
+                },
+                {
+                    "direction": "outbound",
+                    "enumValues": [
+                        0,
+                        1,
+                        2,
+                        3
+                    ],
+                    "kind": "enum",
+                    "name": "bandFollow",
+                    "ordinal": 19
                 }
             ]
         },
@@ -1961,7 +2034,7 @@
                     "ordinal": 6
                 },
                 {
-                    "direction": "bidirectional",
+                    "direction": "outbound",
                     "kind": "bool",
                     "name": "rfKitEnabled",
                     "ordinal": 7
@@ -2141,6 +2214,103 @@
                     "kind": "f64",
                     "name": "currentA",
                     "ordinal": 15
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "operationalInterface",
+                    "ordinal": 16
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "antennaPresentMask",
+                    "ordinal": 17
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "antennaDisabledMask",
+                    "ordinal": 18
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "activeAntennaNumber",
+                    "ordinal": 19
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "activeAntennaExternal",
+                    "ordinal": 20
+                },
+                {
+                    "direction": "outbound",
+                    "enumValues": [
+                        0,
+                        1,
+                        2,
+                        3,
+                        4
+                    ],
+                    "kind": "enum",
+                    "name": "tunerMode",
+                    "ordinal": 21
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "tunerSetup",
+                    "ordinal": 22
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "tunerInductanceNh",
+                    "ordinal": 23
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "tunerCapacitancePf",
+                    "ordinal": 24
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "tunerFrequencyKhz",
+                    "ordinal": 25
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "tunerSegmentKhz",
+                    "ordinal": 26
+                },
+                {
+                    "direction": "outbound",
+                    "enumValues": [
+                        0,
+                        1,
+                        2,
+                        3
+                    ],
+                    "kind": "enum",
+                    "name": "bandFollow",
+                    "ordinal": 27
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "bandFollowAddress",
+                    "ordinal": 28
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "bandFollowPort",
+                    "ordinal": 29
                 }
             ]
         },
@@ -3122,6 +3292,40 @@
                 }
             ]
         },
+        "StationTciModel": {
+            "properties": [
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "enabled",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "port",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "listening",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "stationAddress",
+                    "ordinal": 3
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "error",
+                    "ordinal": 4
+                }
+            ]
+        },
         "StepAttenuatorFacade": {
             "properties": [
                 {
@@ -3501,6 +3705,10 @@
             "key": "rfkit"
         },
         {
+            "class": "StationTciModel",
+            "key": "stationTci"
+        },
+        {
             "class": "PanadapterModel",
             "key": "pan:<i>"
         },
@@ -3613,6 +3821,7 @@
             "PGXL_",
             "TGXL_",
             "RfKit_",
+            "StationTci_",
             "DxCluster",
             "Rbn",
             "Pota",
