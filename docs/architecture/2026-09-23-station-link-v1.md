@@ -1333,7 +1333,8 @@ Four command groups need a sentence beyond the table:
   command left for the tuner; the tuner's report arrives on the `tuner`
   object (`antennaA`, `isOperate`, `isBypass`). They key nothing, so a
   receive-only Core takes them, but each is refused while the radio is on
-  the air (MOX, TUNE or two-tone), with no tuner admitted, and for the
+  the air (MOX, TUNE or two-tone, or the hand-back to receive after MOX),
+  with no tuner admitted, and for the
   antenna on a tuner with no antenna switch or a port outside 1 to 3.
   The reasons are in
   [remote accessory control version 1](2026-09-23-remote-accessory-control-v1.md).

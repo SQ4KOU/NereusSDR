@@ -8,11 +8,17 @@
 // refused while the radio is on the air, with no tuner, with no antenna
 // switch or a port outside 1 to 3. J.J. Boyd (KG4VCF), AI-assisted via
 // Anthropic Claude Code.
+// 2026-09-24: R-R3-49 fix wave: also refused while the Core's MoxController
+// is keyed by a hardware PTT or the two-tone test, and through its TX to RX
+// handover. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include <QtTest/QtTest>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include "core/AppSettings.h"
 #include "core/LanDiscovery.h"
+#include "core/MoxController.h"
+#include "core/TwoToneController.h"
+#include "core/TxChannel.h"
 #include "models/AccessorySettingsModel.h"
 #include "models/RadioModel.h"
 #include "models/TunerModel.h"
@@ -648,6 +654,59 @@ private slots:
             model.transmitModel().setMox(false);
             model.transmitModel().setTune(false);
         }
+
+        // The Core's own MoxController: a hardware PTT press, the two-tone
+        // test, and the TX to RX handover. Today's Core is receive-only and
+        // its MOX pre-check refuses every key; lifting it stands in for a
+        // Core that can transmit, and the keys go through the real paths.
+        MoxController* const mox = model.moxController();
+        QVERIFY(mox);
+        mox->setMoxCheck({});
+        const auto expectRefused = [&] {
+            QVERIFY(!model.setTgxlAntennaForStation(2, &reason));
+            QCOMPARE(reason, onAir);
+            QVERIFY(!model.setTgxlOperateForStation(true, &reason));
+            QCOMPARE(reason, onAir);
+            QVERIFY(!model.setTgxlBypassForStation(true, &reason));
+            QCOMPARE(reason, onAir);
+        };
+        // Hardware PTT (the radio's own PTT input).
+        mox->onMicPttFromRadio(true);
+        QVERIFY(mox->isMox());
+        QVERIFY(!model.transmitModel().isMox());
+        expectRefused();
+        if (QTest::currentTestFailed()) { return; }
+        mox->onMicPttFromRadio(false);
+        QTRY_VERIFY(mox->state() == MoxState::Rx);
+        // Two-tone, keyed by its controller through the same MoxController.
+        {
+            TxChannel tx(/*channelId=*/1);
+            TwoToneController* const twoTone = model.twoToneController();
+            QVERIFY(twoTone);
+            twoTone->setTxChannel(&tx);
+            twoTone->setSettleDelaysMs(0, 0);
+            twoTone->setActive(true);
+            QTRY_VERIFY(twoTone->isActive());
+            expectRefused();
+        if (QTest::currentTestFailed()) { return; }
+            twoTone->setActive(false);
+            QTRY_VERIFY(!twoTone->isActive());
+            QTRY_VERIFY(mox->state() == MoxState::Rx);
+            twoTone->setTxChannel(nullptr);
+        }
+        // The TX to RX handover: MOX is already off but the controller is
+        // still walking back to receive, so a switch still waits.
+        mox->setTimerIntervals(0, 0, 0, /*keyUpMs=*/300, /*pttOutMs=*/300, 0);
+        mox->setMox(true);
+        QTRY_VERIFY(mox->state() == MoxState::Tx);
+        mox->setMox(false);
+        QVERIFY(!mox->isMox());
+        QVERIFY(mox->state() != MoxState::Rx);
+        QVERIFY(model.isTransmitting());
+        expectRefused();
+        if (QTest::currentTestFailed()) { return; }
+        QTRY_VERIFY_WITH_TIMEOUT(mox->state() == MoxState::Rx, 2000);
+        QVERIFY(!model.isTransmitting());
         QTest::qWait(50);
         QVERIFY(!switchingSent());
 

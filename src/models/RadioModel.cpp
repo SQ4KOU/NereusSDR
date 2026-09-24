@@ -179,6 +179,10 @@
 //                from MoxController (moxChanging, stateChanged,
 //                moxStateChanged), Core to window. NereusSDR-original.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 fix wave: the Tuner Genius refusal also holds
+//                while MoxController is not back in Rx (the TX to RX
+//                handover). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 //=================================================================
@@ -3736,8 +3740,11 @@ bool RadioModel::stationTgxlControlAllowed(QString* reason) const
 {
     if (m_role != Role::Local || !m_stationTgxl) { return refuseNoStationDevice(reason); }
     // On the air: MOX (the controller's or the transmit model's), TUNE, or
-    // the two-tone test.
+    // the two-tone test. The controller's MOX flag clears as its TX to RX
+    // handover starts (about 30 ms of TxToRxInFlight and TxToRxFlush), so
+    // a switch also waits until the controller is back in Rx.
     const bool onAir = mox() || m_transmitModel.isMox() || isTune() || m_transmitModel.isTune()
+        || (m_moxController && m_moxController->state() != MoxState::Rx)
         || (m_twoToneController && m_twoToneController->isActive());
     if (onAir) {
         if (reason) { *reason = QStringLiteral("The radio is on the air. Try again when it stops."); }

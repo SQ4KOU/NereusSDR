@@ -233,7 +233,9 @@ follow the tuner's report on this object (`antennaA`, `isOperate`,
 `isBypass`), never the click. None of them keys a transmitter or starts a
 tune, so a receive-only Core takes them (operator ruling of 2026-09-24).
 Each waits while the radio is on the air (operator decision D60): the Core
-refuses it while its MOX, TUNE or two-tone test is on, and a window
+refuses it while its MOX (from any source, a hardware PTT included), TUNE
+or two-tone test is on, and until its MOX controller has finished handing
+back to receive (about 30 ms after MOX clears), and a window
 disables its buttons with the reason while the Core reports the radio
 keyed (`transmitting` on the `radio` object, below), TUNE on the
 `transmit` object or the two-tone test on `pureSignal`. TUNE (the
@@ -855,7 +857,7 @@ Commands:
 | `setTgxlOperate` with other arguments | "The request to put the Tuner Genius in operate or standby was not understood." |
 | `setTgxlBypass` with other arguments | "The request to bypass the Tuner Genius was not understood." |
 | `setTgxlAntenna` with a port outside 1 to 3 | "Choose Tuner Genius antenna 1, 2 or 3." |
-| `setTgxlAntenna`, `setTgxlOperate`, `setTgxlBypass` while the radio is on the air (MOX, TUNE or two-tone) | "The radio is on the air. Try again when it stops." |
+| `setTgxlAntenna`, `setTgxlOperate`, `setTgxlBypass` while the radio is on the air (MOX, TUNE or two-tone, or the hand-back to receive after MOX) | "The radio is on the air. Try again when it stops." |
 | `setTgxlAntenna`, `setTgxlOperate`, `setTgxlBypass` while the Core has not admitted a tuner | "The Core is not connected to the Tuner Genius." |
 | `setTgxlAntenna` on a tuner with no antenna switch | "This Tuner Genius has no antenna switch." |
 | `setTgxlAntenna`, `setTgxlOperate`, `setTgxlBypass` from an app whose Core lacks `remoteTgxlControlVersion` 2 (the app's own words, nothing sent) | "This Core does not let this app switch the Tuner Genius. Updating the Core may help." |
@@ -1382,8 +1384,11 @@ rewrite the fixtures, and update this document in the same commit.
   receive-only Core; refused with nothing sent on a Core that does not own
   its accessories, with no tuner admitted (and before admission), with a
   port outside 1 to 3, on a tuner with no antenna switch, and while the
-  Core's MOX or TUNE is on; the model reports the tuner's answer, not the
-  request.
+  Core's MOX or TUNE is on: the transmit model's latches, a hardware PTT
+  press and the two-tone test through the Core's MOX controller, and its
+  TX to RX handover after MOX clears (the Core's receive-only MOX
+  pre-check lifted to stand in for a Core that can transmit); the model
+  reports the tuner's answer, not the request.
 - `tst_station_accessory_state` (R-R3-49): `remoteTgxlControlVersion` 2;
   the three commands refused below minor 11, on a non-owning Core, with no
   tuner, on the air, malformed and out of range, in plain words.
