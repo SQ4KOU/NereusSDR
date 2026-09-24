@@ -2,6 +2,7 @@
 // configuration persistence and non-actuating hydration.
 
 #include <QtTest>
+#include <QRegularExpression>
 
 #include "core/AppSettings.h"
 #include "models/PureSignalSettings.h"
@@ -106,6 +107,10 @@ void TestPs3SettingsPersistence::corruptFieldsFallBackIndependentlyAndRemainVisi
     app.setValue(prefix + QStringLiteral("RequestedTxDelayNs"), QStringLiteral("bogus"));
     app.setValue(prefix + QStringLiteral("HardwarePeakOverride"), 0.37);
     app.setValue(prefix + QStringLiteral("HardwarePeakOverrideEnabled"), true);
+    // Which settings fell back goes to the log; the notice an app may show
+    // as sent is plain words (iPhone app Part A fix wave, R-IOS-01).
+    QTest::ignoreMessage(QtInfoMsg, QRegularExpression(QStringLiteral(
+        "Saved PureSignal settings not used.*MoxDelaySeconds.*RequestedTxDelayNs")));
     QVERIFY(settings.load());
 
     QCOMPARE(settings.moxDelaySeconds(), 0.1);
@@ -113,8 +118,9 @@ void TestPs3SettingsPersistence::corruptFieldsFallBackIndependentlyAndRemainVisi
     QCOMPARE(settings.requestedTxDelayNs(), 150.0);
     QCOMPARE(settings.hardwarePeakOverrideEnabled(), true);
     QCOMPARE(settings.hardwarePeakOverride(), 0.37);
-    QVERIFY(settings.lastLoadError().contains(QStringLiteral("MoxDelaySeconds")));
-    QVERIFY(settings.lastLoadError().contains(QStringLiteral("RequestedTxDelayNs")));
+    QCOMPARE(settings.lastLoadError(),
+             QStringLiteral("Some saved PureSignal settings could not be used, so their "
+                            "defaults are in use."));
 }
 
 void TestPs3SettingsPersistence::loadingDesiredAutomaticIntentEmitsNoConfigurationWrite()
