@@ -379,10 +379,16 @@ private slots:
         QTRY_VERIFY(!remoteMedia.acceptedAudioContext().has_value());
         const int heardBeforeReconnect = h.remoteBus->heard.size() / 2;
         h.connectSession();
+        // The new session's first context can be off (media-not-ready) until
+        // its media peer is ready; Core then sends the enabled one
+        // (DaemonMediaController's MediaPeer::ready handler reconciles audio).
+        // Wait for that enabled context, not just the new connection.
         QTRY_VERIFY_WITH_TIMEOUT(!latestAudioContext(controls).isEmpty()
                                  && latestAudioContext(controls)
                                         .value(QStringLiteral("connectionId")).toString()
-                                        != initialConnection, 15000);
+                                        != initialConnection
+                                 && latestAudioContext(controls)
+                                        .value(QStringLiteral("enabled")).toBool(), 15000);
         const QJsonObject reconnected = latestAudioContext(controls);
         QVERIFY(reconnected.value(QStringLiteral("enabled")).toBool());
         QVERIFY(reconnected.value(QStringLiteral("ssrc")) != initial.value(QStringLiteral("ssrc")));
