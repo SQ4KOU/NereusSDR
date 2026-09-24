@@ -1815,6 +1815,28 @@ void RemotePeripheralsTest::remoteWindowChangesTheAmpsOwnSettingsThroughTheCore(
     // The local page reads the amp's settings when it connects.
     QVERIFY(localAmp.waitFor(QStringLiteral("ifconf read")) >= 0);
 
+    // I5: DHCP off with no address is not sent from either page, and the
+    // remote page asks nothing; both say why in the same words.
+    {
+        const int remoteBefore = amp.commands.size();
+        const int localBefore = localAmp.commands.size();
+        const qsizetype askedBefore = asked.size();
+        for (PgxlAdvancedPage* p : {&page, &localPage}) {
+            p->dhcpCheckForTesting()->setChecked(false);
+            p->ipEditForTesting()->clear();
+            p->netmaskEditForTesting()->clear();
+            p->gatewayEditForTesting()->clear();
+            p->applyNetworkButtonForTesting()->click();
+            QCOMPARE(p->networkProblemForTesting(),
+                     QStringLiteral("Without DHCP, enter an address and a netmask."));
+            QVERIFY(OperatorWording::isPlain(p->networkProblemForTesting()));
+        }
+        QCOMPARE(asked.size(), askedBefore);
+        QTest::qWait(100);
+        QCOMPARE(amp.commands.size(), remoteBefore);
+        QCOMPARE(localAmp.commands.size(), localBefore);
+    }
+
     // ---- The same clicks on both pages reach the amps as the same commands.
     const int remoteMark = amp.commands.size();
     const int localMark = localAmp.commands.size();
@@ -1978,6 +2000,28 @@ void RemotePeripheralsTest::remoteWindowChangesTheTunersOwnSettingsThroughTheCor
     QVERIFY(localTuner.accept());
     localTuner.send(QStringLiteral("V1.2.17"));
     QVERIFY(localTuner.waitFor(QStringLiteral("ifconf read")) >= 0);
+
+    // I5: DHCP off with no address is not sent from either page, and the
+    // remote page asks nothing; both say why in the same words.
+    {
+        const int remoteBefore = tuner.commands.size();
+        const int localBefore = localTuner.commands.size();
+        const qsizetype askedBefore = asked.size();
+        for (TgxlAdvancedPage* p : {&page, &localPage}) {
+            p->dhcpCheckForTesting()->setChecked(false);
+            p->ipEditForTesting()->clear();
+            p->netmaskEditForTesting()->clear();
+            p->gatewayEditForTesting()->clear();
+            p->applyNetworkButtonForTesting()->click();
+            QCOMPARE(p->networkProblemForTesting(),
+                     QStringLiteral("Without DHCP, enter an address and a netmask."));
+            QVERIFY(OperatorWording::isPlain(p->networkProblemForTesting()));
+        }
+        QCOMPARE(asked.size(), askedBefore);
+        QTest::qWait(100);
+        QCOMPARE(tuner.commands.size(), remoteBefore);
+        QCOMPARE(localTuner.commands.size(), localBefore);
+    }
 
     const int remoteMark = tuner.commands.size();
     const int localMark = localTuner.commands.size();

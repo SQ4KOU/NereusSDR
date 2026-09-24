@@ -9,12 +9,16 @@
 // Modification history (NereusSDR):
 //   2026-09-24  J.J. Boyd / KG4VCF  Created (R-R3-47, R-R3-22). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  A fixed network setting needs an address
+//                                    and a netmask (R-R3-47). AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/StationDeviceSettings.h"
 
 #include "core/AppSettings.h"
 
+#include <QHostAddress>
 #include <QRegularExpression>
 
 namespace NereusSDR {
@@ -66,6 +70,45 @@ QString StationDeviceSettings::settingsPrefix() const
 bool StationDeviceSettings::validNetworkField(const QString& text)
 {
     return text.isEmpty() || addressPattern().match(text).hasMatch();
+}
+
+QString StationDeviceSettings::networkProblem(bool dhcp, const QString& inputAddress,
+                                              const QString& inputNetmask,
+                                              const QString& inputGateway)
+{
+    const QString address = inputAddress.trimmed();
+    const QString netmask = inputNetmask.trimmed();
+    const QString gateway = inputGateway.trimmed();
+    if (!validNetworkField(address) || !validNetworkField(netmask)
+        || !validNetworkField(gateway)) {
+        return QStringLiteral("Enter each address as four numbers from 0 to 255 "
+                              "separated by dots.");
+    }
+    if (dhcp) {
+        return {};
+    }
+    if (address.isEmpty() || netmask.isEmpty()) {
+        return QStringLiteral("Without DHCP, enter an address and a netmask.");
+    }
+    const quint32 mask = QHostAddress(netmask).toIPv4Address();
+    // A netmask is ones, then zeros (255.255.255.0), and not all zeros.
+    if (mask == 0 || ((~mask) & ((~mask) + 1u)) != 0) {
+        return QStringLiteral("Enter a netmask such as 255.255.255.0.");
+    }
+    const QHostAddress host(address);
+    const quint32 ip = host.toIPv4Address();
+    if (ip == 0 || host.isLoopback() || host.isMulticast() || ip == 0xFFFFFFFFu
+        || (ip >> 24) >= 240u) {
+        return QStringLiteral("Enter an address the device can use on your network.");
+    }
+    if (!gateway.isEmpty()) {
+        const quint32 gw = QHostAddress(gateway).toIPv4Address();
+        if ((gw & mask) != (ip & mask) || gw == ip) {
+            return QStringLiteral("Enter a gateway on the same network as the address, "
+                                  "or leave it empty.");
+        }
+    }
+    return {};
 }
 
 AccessorySettingsModel::Device StationDeviceSettings::current() const
@@ -223,11 +266,11 @@ bool StationDeviceSettings::setNetwork(bool dhcp, const QString& inputAddress,
     const QString address = inputAddress.trimmed();
     const QString netmask = inputNetmask.trimmed();
     const QString gateway = inputGateway.trimmed();
-    if (!validNetworkField(address) || !validNetworkField(netmask)
-        || !validNetworkField(gateway)) {
+    // I5: the Core is the only gate for every app that sends this.
+    const QString problem = networkProblem(dhcp, address, netmask, gateway);
+    if (!problem.isEmpty()) {
         if (reason) {
-            *reason = QStringLiteral("Enter each address as four numbers from 0 to 255 "
-                                     "separated by dots.");
+            *reason = problem;
         }
         return false;
     }

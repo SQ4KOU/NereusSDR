@@ -89,6 +89,7 @@ public:
     QCheckBox* pairAttemptCheckForTesting() const { return m_pairAttemptCheckbox; }
     QString firmwareTextForTesting() const;
     QString deviceAnswerForTesting() const;
+    QString networkProblemForTesting() const;
     /// Answer the page's confirmations instead of showing them; `ask`
     /// receives the title and the words the dialog would show.
     void setConfirmationForTesting(std::function<bool(const QString&, const QString&)> ask)
@@ -191,6 +192,8 @@ private:
     QLineEdit* m_netmaskEdit{nullptr};
     QLineEdit* m_gatewayEdit{nullptr};
     QPushButton* m_applyIfconfBtn{nullptr};
+    // I5: why a network setting was not sent (both windows), else hidden.
+    QLabel*      m_networkProblem{nullptr};
 
     // Pairing section (5.6.4).
     // 2026-05-22 menu cleanup: was QComboBox with 3 entries (flexradio /

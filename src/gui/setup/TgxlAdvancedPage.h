@@ -93,6 +93,7 @@ public:
     QString firmwareTextForTesting() const;
     QString variantTextForTesting() const;
     QString deviceAnswerForTesting() const;
+    QString networkProblemForTesting() const;
     /// Answer the page's confirmations instead of showing them; `ask`
     /// receives the title and the words the dialog would show.
     void setConfirmationForTesting(std::function<bool(const QString&, const QString&)> ask)
@@ -193,6 +194,8 @@ private:
     QLineEdit*   m_netmaskEdit{nullptr};
     QLineEdit*   m_gatewayEdit{nullptr};
     QPushButton* m_applyIfconfBtn{nullptr};
+    // I5: why a network setting was not sent (both windows), else hidden.
+    QLabel*      m_networkProblem{nullptr};
 
     // Tune memory section (5.7.4)
     QTableView* m_tuneMemTable{nullptr};

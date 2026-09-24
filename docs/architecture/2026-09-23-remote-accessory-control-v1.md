@@ -651,7 +651,7 @@ the Core took the request (see "Accepted is not connected").
 | `clearAccessoryFaults` | `device` (utf8: `pgxl`, `tgxl` or `rfkit`) | minor 11, `accessoryDataVersion` 1 | Empties that device's fault history on the Core (and in its settings) |
 | `setPgxlName` | `name` (utf8; no line breaks or tabs; trimmed) | minor 11, `remotePgxlControlVersion` 3 | Sends the amp its new name (see "The `accessorySettings` object") and saves it on the Core |
 | `setPgxlHardware` | exactly one of `biasMode` (utf8: `ClassA`, `ClassAB`), `fanMode` (utf8: `Auto`, `Quiet`, `Continuous`), `ledIntensity` (i64, 0 to 100) | minor 11, `remotePgxlControlVersion` 3 | Sends the amp that one hardware setting and saves it on the Core. The amp applies it after Save & Reboot |
-| `setPgxlNetwork`, `setTgxlNetwork` | `dhcp` (bool), `address`, `netmask`, `gateway` (utf8: empty, or four numbers from 0 to 255 separated by dots) | minor 11, `remotePgxlControlVersion` 3 / `remoteTgxlControlVersion` 1 | Sends the device its network settings |
+| `setPgxlNetwork`, `setTgxlNetwork` | `dhcp` (bool), `address`, `netmask`, `gateway` (utf8: empty, or four numbers from 0 to 255 separated by dots; with `dhcp` false, `address` and `netmask` are required and `gateway` is empty or on the address's network) | minor 11, `remotePgxlControlVersion` 3 / `remoteTgxlControlVersion` 1 | Sends the device its network settings |
 | `savePgxlSettings`, `saveTgxlSettings` | none | minor 11, `remotePgxlControlVersion` 3 / `remoteTgxlControlVersion` 1 | Sends `save`: the device keeps its settings and restarts (about 20 seconds offline; the Core reconnects as for any drop) |
 | `readPgxlSettings`, `readTgxlSettings` | none | minor 11, `remotePgxlControlVersion` 3 / `remoteTgxlControlVersion` 1 | Revert: asks the device for its settings and network settings |
 | `setTgxlName` | `name` (as `setPgxlName`) | minor 11, `remoteTgxlControlVersion` 1 | Sends the tuner its new name and saves it on the Core |
@@ -729,6 +729,10 @@ Commands:
 | `setPgxlHardware` out of range | "Choose Class A or Class AB.", "Choose Auto, Quiet or Continuous." or "Choose an LED brightness from 0 to 100." |
 | `setPgxlNetwork`, `setTgxlNetwork` with other arguments | "The request to change the Power Genius network settings was not understood." (or Tuner Genius) |
 | `setPgxlNetwork`, `setTgxlNetwork` with an address that is not four numbers from 0 to 255 | "Enter each address as four numbers from 0 to 255 separated by dots." |
+| `setPgxlNetwork`, `setTgxlNetwork` with `dhcp` false and no address or no netmask | "Without DHCP, enter an address and a netmask." |
+| `setPgxlNetwork`, `setTgxlNetwork` with `dhcp` false and a netmask that is not ones then zeros (or is all zeros) | "Enter a netmask such as 255.255.255.0." |
+| `setPgxlNetwork`, `setTgxlNetwork` with `dhcp` false and an address a device cannot use (0.0.0.0, 127.x, multicast, 240 and above, 255.255.255.255) | "Enter an address the device can use on your network." |
+| `setPgxlNetwork`, `setTgxlNetwork` with `dhcp` false and a gateway off the address's network (or equal to it) | "Enter a gateway on the same network as the address, or leave it empty." |
 | `savePgxlSettings`, `saveTgxlSettings` with arguments | "The request to save and restart the Power Genius was not understood." (or Tuner Genius) |
 | `readPgxlSettings`, `readTgxlSettings` with arguments | "The request to read the Power Genius settings was not understood." (or Tuner Genius) |
 | `setFourO3AEnabled` below minor 4 | "Remote 4O3A control requires a newer station protocol." |
@@ -741,6 +745,11 @@ Commands:
 | `configureTgxl` with a bad address | "Enter a valid TGXL IP address or hostname and TCP port 1–65535." |
 | `setFourO3AEnabled` with no radio | "Connect Core to a radio before changing its 4O3A integration." |
 | Any refusal without its own reason | "TGXL configuration was refused", "TGXL disconnect was refused", "4O3A master change was refused", "PGXL configuration was refused", "PGXL disconnect was refused", "PGXL settings change was refused", "The Core did not set up the RF-Kit amplifier.", "The Core did not disconnect the RF-Kit amplifier.", "The Core did not change its RF-Kit amplifier switch.", "The Core did not change its TCI server.", "The Core did not change the transmit interlock.", "The Core did not change the Power Genius output limit.", "The Core did not clear the fault history." |
+
+The Core checks every network request itself: it is the only gate for the
+iPhone app and other apps, whatever a window asks first. A local window's
+Advanced page and a remote window's page make the same check before they
+ask or send, and show the same words under the Network section.
 
 The desktop app does not send a command its Core did not offer. It shows
 "The station does not support remote TGXL configuration.", "The station

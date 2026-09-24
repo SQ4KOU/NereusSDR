@@ -101,6 +101,14 @@ public:
     /// page's validator).
     static bool validNetworkField(const QString& text);
 
+    /// I5: what is wrong with a network setting, in plain words, or empty
+    /// when it may be sent. With DHCP off the device needs an address it
+    /// can use and a netmask; a gateway, when given, must be on the same
+    /// network as the address. The Core checks every request (it is the
+    /// only gate for other apps); the local pages check the same way.
+    static QString networkProblem(bool dhcp, const QString& address, const QString& netmask,
+                                  const QString& gateway);
+
 private:
     enum class Kind { Name, Bias, Fan, Led, Network, Save, ReadSetup, ReadNetwork };
     struct Pending {

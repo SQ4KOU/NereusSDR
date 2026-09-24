@@ -500,6 +500,12 @@ private slots:
         QCOMPARE(AppSettings::instance().value(QStringLiteral("TGXL_Nickname")).toString(),
                  QStringLiteral("Shack Tuner"));
 
+        // I5: DHCP off with no address or netmask is refused on the Core
+        // and nothing reaches the tuner.
+        const qsizetype sentBefore = frames.count();
+        QVERIFY(!model.setTgxlNetworkForStation(false, QString(), QString(), QString(), &reason));
+        QCOMPARE(reason, QStringLiteral("Without DHCP, enter an address and a netmask."));
+        QCOMPARE(frames.count(), sentBefore);
         QVERIFY(model.setTgxlNetworkForStation(true, QString(), QString(), QString(), &reason));
         seq = waitFor(QStringLiteral("ifconf address= netmask= gateway= dhcp=true"));
         QVERIFY(seq != 0);

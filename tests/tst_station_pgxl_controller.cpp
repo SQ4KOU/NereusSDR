@@ -13,6 +13,7 @@
 // amp's answers and values published on AccessorySettingsModel. J.J. Boyd
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include <QtTest/QtTest>
+#include "OperatorWording.h"
 #include <QPointer>
 #include <QRegularExpression>
 #include <QTcpServer>
@@ -375,6 +376,27 @@ private slots:
                                         "separated by dots."));
         QVERIFY(!model.setPgxlNameForStation(QStringLiteral("Amp\nstatus"), &reason));
         QCOMPARE(reason, QStringLiteral("Enter a name without line breaks or tabs."));
+        // I5: DHCP off needs an address and a netmask; a gateway, when
+        // given, on the same network. The Core is the gate for every app.
+        QVERIFY(!model.setPgxlNetworkForStation(false, QString(), QString(), QString(), &reason));
+        QCOMPARE(reason, QStringLiteral("Without DHCP, enter an address and a netmask."));
+        QVERIFY(!model.setPgxlNetworkForStation(false, QStringLiteral("192.168.1.50"), QString(),
+                                                QString(), &reason));
+        QCOMPARE(reason, QStringLiteral("Without DHCP, enter an address and a netmask."));
+        QVERIFY(!model.setPgxlNetworkForStation(false, QStringLiteral("192.168.1.50"),
+                                                QStringLiteral("255.0.255.0"), QString(),
+                                                &reason));
+        QCOMPARE(reason, QStringLiteral("Enter a netmask such as 255.255.255.0."));
+        QVERIFY(!model.setPgxlNetworkForStation(false, QStringLiteral("0.0.0.0"),
+                                                QStringLiteral("255.255.255.0"), QString(),
+                                                &reason));
+        QCOMPARE(reason, QStringLiteral("Enter an address the device can use on your network."));
+        QVERIFY(!model.setPgxlNetworkForStation(false, QStringLiteral("192.168.1.50"),
+                                                QStringLiteral("255.255.255.0"),
+                                                QStringLiteral("10.0.0.1"), &reason));
+        QCOMPARE(reason, QStringLiteral("Enter a gateway on the same network as the address, "
+                                        "or leave it empty."));
+        QVERIFY(OperatorWording::isPlain(reason));
         QCOMPARE(frames.count(), sentBefore);
 
         // Network: `ifconf address= netmask= gateway= dhcp=`.

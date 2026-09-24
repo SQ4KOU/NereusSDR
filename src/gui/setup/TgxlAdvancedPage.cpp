@@ -63,6 +63,7 @@
 #include "../../core/AppSettings.h"
 #include "../../core/ConnectionDiagnostics.h"
 #include "../../core/FaultLog.h"
+#include "../../core/StationDeviceSettings.h"
 #include "../../core/TgxlConnection.h"
 #include "../../core/TuneMemoryStore.h"
 #include "../../models/Band.h"
@@ -565,6 +566,13 @@ void TgxlAdvancedPage::buildNetworkSection(QVBoxLayout* topLay)
     warnLabel->setStyleSheet(QStringLiteral("color: #e8c01e;"));
     lay->addWidget(warnLabel);
 
+    // I5: a fixed setting without an address, a netmask or a usable
+    // gateway is not sent; the reason shows here.
+    m_networkProblem = new QLabel;
+    m_networkProblem->setWordWrap(true);
+    m_networkProblem->setVisible(false);
+    lay->addWidget(m_networkProblem);
+
     m_applyIfconfBtn = new QPushButton(QStringLiteral("Apply Network Settings"));
     auto* btnRow = new QHBoxLayout;
     btnRow->addStretch();
@@ -896,6 +904,12 @@ QString TgxlAdvancedPage::variantTextForTesting() const
     return m_variantLabel ? m_variantLabel->text() : QString();
 }
 
+QString TgxlAdvancedPage::networkProblemForTesting() const
+{
+    return m_networkProblem && !m_networkProblem->isHidden() ? m_networkProblem->text()
+                                                             : QString();
+}
+
 QString TgxlAdvancedPage::deviceAnswerForTesting() const
 {
     return m_deviceAnswer ? m_deviceAnswer->text() : QString();
@@ -1193,6 +1207,15 @@ void TgxlAdvancedPage::onDhcpToggled(bool checked)
 
 void TgxlAdvancedPage::onApplyIfconf()
 {
+    // I5: the same check the Core makes, before anything is asked or sent.
+    const QString problem = StationDeviceSettings::networkProblem(
+        m_dhcpCheck->isChecked(), m_ipEdit->text(), m_netmaskEdit->text(),
+        m_gatewayEdit->text());
+    m_networkProblem->setText(problem);
+    m_networkProblem->setVisible(!problem.isEmpty());
+    if (!problem.isEmpty()) {
+        return;
+    }
     if (isRemote()) {
         // R-R3-47 / R-R3-22: new network settings can take the tuner off the
         // Core's network, so the window asks first, in the Network
