@@ -58,10 +58,10 @@ HardwareDdcRoutingPage::HardwareDdcRoutingPage(RadioModel* model, QWidget* paren
     auto* groupLayout = qobject_cast<QVBoxLayout*>(group->layout());
 
     auto* intro = new QLabel(
-        QStringLiteral("By default, NereusSDR picks the radio receiver (DDC) for "
-                       "each slice from its band and sample rate. Pick one here "
-                       "to pin a receiver to a slice or an ADC. Both columns "
-                       "start at (auto); your picks are saved for each radio."),
+        QStringLiteral("NereusSDR picks the radio receiver (DDC) for each slice "
+                       "from its band and sample rate. The choices below are "
+                       "saved for each radio, but they do not change which "
+                       "receiver or ADC serves a slice yet."),
         group);
     intro->setWordWrap(true);
     if (groupLayout) {
