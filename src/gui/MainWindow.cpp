@@ -35,6 +35,9 @@
 //                 passband Shift-click, and the RADE applet for its
 //                 profile combo and Reset vocoder. AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-46: Radio > Protocol Info shows
+//                 the Core's radio in a remote window. AI-assisted
+//                 implementation via Anthropic Claude Code.
 //   2026-09-22 — J.J. Boyd (KG4VCF). Invoke the Aether-derived pan-stack
 //                 shutdown before QWidget destroys its graphics backend.
 //                 AI-assisted integration via OpenAI Codex.
@@ -6785,10 +6788,17 @@ void MainWindow::buildMenuBar()
             // Remote-daemon R2: isConnected() is storage-backed and true on
             // a remote client, whose connection() is permanently null, so
             // the second half of this test is load-bearing and not merely
-            // defensive. applyRemoteRoleGating() disables this QAction on a
-            // remote model, which masks the crash today -- but the mask is
-            // an enablement, and QAction::trigger() ignores enablement.
-            // The gate is not the guard.
+            // defensive. A remote model never reaches it (the branch just
+            // below), and applyRemoteRoleGating() only enables this QAction
+            // once the Core has described its radio -- but QAction::trigger()
+            // ignores enablement. The gate is not the guard.
+            if (!m_radioModel->ownsLocalDsp()) {
+                // R-R3-46: a remote window shows the Core's radio, from
+                // what the Core reported. Same five lines as local mode;
+                // anything an older Core does not report says so.
+                showCoreRadioInfo();
+                return;
+            }
             if (!m_radioModel->isConnected() || !m_radioModel->connection()) {
                 return;
             }
@@ -10345,16 +10355,43 @@ void MainWindow::applyRemoteRoleGating()
                 : tr("Unavailable: this window was started for one Core with "
                      "--station, so the radio list cannot change it."));
     }
-    // Protocol Info dereferences connection()->radioInfo() unguarded, so it
-    // is not merely useless here, it is a crash.
+    // R-R3-46: Protocol Info shows the Core's radio (showCoreRadioInfo(),
+    // never connection(), which a remote model does not have) once the
+    // Core has described it.
     if (m_actProtocolInfo != nullptr) {
-        m_actProtocolInfo->setEnabled(false);
-        // Fix round 1: was the one gated action with no explanation while
-        // the other three carried one.
-        m_actProtocolInfo->setToolTip(
-            tr("Unavailable: the radio's details are on the Core, "
-               "not in this window."));
+        const bool described = m_stationClient != nullptr
+            && m_stationClient->isHandshakeComplete();
+        m_actProtocolInfo->setEnabled(described);
+        m_actProtocolInfo->setToolTip(described
+            ? tr("Show the Core's radio: its name, firmware, MAC and network address")
+            : tr("Unavailable until this window is connected to the Core."));
     }
+}
+
+// R-R3-46: Radio > Protocol Info in a remote window. The radio is the Core's,
+// as its capabilities describe it; the lines match local mode's dialog.
+void MainWindow::showCoreRadioInfo()
+{
+    if (m_radioModel == nullptr || m_stationClient == nullptr
+        || !m_stationClient->isHandshakeComplete()) {
+        return;
+    }
+    const StationCapabilities& caps = m_stationClient->capabilities();
+    const RadioInfo& info = m_radioModel->currentRadioInfo();
+    const QString notReported = tr("not reported by the Core");
+    const QString name = !caps.stationName.isEmpty() ? caps.stationName
+        : (!m_radioModel->model().isEmpty() ? m_radioModel->model() : notReported);
+    const QString proto = caps.radioProtocol == 2 ? QStringLiteral("P2")
+        : caps.radioProtocol == 1 ? QStringLiteral("P1") : notReported;
+    const QString firmware = info.firmwareVersion > 0
+        ? QString::number(info.firmwareVersion)
+        : (!caps.firmwareVersion.isEmpty() ? caps.firmwareVersion : notReported);
+    const QString mac = info.macAddress.isEmpty() ? notReported : info.macAddress;
+    const QString address = info.address.isNull() ? notReported : info.address.toString();
+    const QString msg =
+        QStringLiteral("Radio:    %1\nProtocol: %2\nFirmware: %3\nMAC:      %4\nIP:       %5")
+            .arg(name, proto, firmware, mac, address);
+    QMessageBox::information(this, QStringLiteral("Protocol Info"), msg);
 }
 
 // Phase 3Q Sub-PR-4 D.2 — right-click context menu on the TitleBar

@@ -235,6 +235,9 @@ public:
     // Test-only: returns the item count in the preamp combo at construction.
     // Phase 3P-C Step 3: verifies per-board populate from BoardCapabilities.
     int preampComboItemCountForTest() const;
+    // R-R3-46: the preamp items shown, and the S-ATT minimum.
+    QStringList preampComboLabelsForTest() const;
+    int stepAttMinForTest() const;
 
     // Test-only: returns antenna number (1/2/3) shown by each button.
     // Phase 3P-F Task 4: verifies per-band wiring to AlexController.
@@ -268,6 +271,9 @@ private:
     // Phase 3P-F Task 4: read AlexController per-band assignments and push
     // them into SliceModel so the antenna buttons reflect the active band.
     void populateAntennaButtons(NereusSDR::Band band);
+    // R-R3-46: preamp items and S-ATT range for the Core's board (remote).
+    void rebuildPreampAndAttRangeForBoard(NereusSDR::HPSDRHW board, bool alexFilters,
+                                          int minDb);
 
     static QString formatFilterWidth(int low, int high);
 

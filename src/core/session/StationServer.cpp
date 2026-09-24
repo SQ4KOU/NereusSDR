@@ -50,12 +50,16 @@
 //                                    object, notchControlVersion 1, and the
 //                                    plain refusal of raw Notch* writes.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46: hpsdrModel, radioProtocol and
+//                                    radioAddress for a peer at minor 11.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
 
 #include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
+#include "core/HardwareProfile.h"
 #include "core/dsp/NnrSettings.h"
 #include "core/security/CertificateStore.h"
 #include "core/security/TokenStore.h"
@@ -1562,6 +1566,27 @@ StationCapabilities StationServer::buildCapabilities() const
     caps.macAddress = m_radioModel->currentRadioMac();
     caps.board = board.board;
     caps.radioConnected = m_radioModel->isConnected();
+
+    // R-R3-46: which radio, how the Core talks to it, and where it is, for a
+    // window that negotiated them; an older one gets today's descriptor.
+    // The model is the Core's own profile (an operator's model choice
+    // included). With no radio yet the profile has no row and the model is
+    // not reported; with no radio ever selected neither is the rest.
+    {
+        const auto peer = m_peers.constFind(m_session);
+        if (peer != m_peers.cend()
+            && peer->agreedMinor >= kRadioIdentitySessionProtocolMinor) {
+            caps.radioIdentityEntries = true;
+            const HardwareProfile& profile = m_radioModel->hardwareProfile();
+            caps.hpsdrModel = profile.caps != nullptr ? profile.model : HPSDRModel::FIRST;
+            const RadioInfo& radio = m_radioModel->currentRadioInfo();
+            if (!radio.macAddress.isEmpty()) {
+                caps.radioProtocol = static_cast<int>(radio.protocol);
+                caps.radioAddress = radio.address.isNull() ? QString()
+                                                           : radio.address.toString();
+            }
+        }
+    }
 
     caps.boardMaxSlices = board.maxSlices > 0 ? board.maxSlices : 1;
     caps.userDdcCount = board.userDdcCount;

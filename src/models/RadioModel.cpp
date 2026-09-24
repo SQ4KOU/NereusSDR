@@ -396,6 +396,7 @@ warren@wpratt.com
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <tuple>
 
 #include <QCryptographicHash>
 #include <QDateTime>
@@ -2376,6 +2377,12 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // same callstack inside onConnectionStateChanged).
     connect(this, &RadioModel::currentRadioChanged, this,
             [this](const NereusSDR::RadioInfo& info) {
+        // R-R3-46: a remote model emits this for the Core's radio too. Its
+        // transmit slice is the Core's, mirrored; restoring a saved one here
+        // would hand off a slice the Core never moved.
+        if (m_role == Role::Remote) {
+            return;
+        }
         if (m_txSliceArbiter) {
             m_txSliceArbiter->setMacAddress(info.macAddress);
             m_txSliceArbiter->load();
@@ -3543,19 +3550,47 @@ void RadioModel::applyStationCapabilities(const NereusSDR::StationCapabilities& 
     m_model = caps.radioModelName;
     m_version = caps.firmwareVersion;
 
+    // R-R3-46: what a listener of currentRadioChanged would see differently.
+    const auto identityOf = [this]() {
+        return std::make_tuple(m_lastRadioInfo.macAddress, m_lastRadioInfo.boardType,
+                               m_lastRadioInfo.name, m_lastRadioInfo.firmwareVersion,
+                               m_lastRadioInfo.protocol, m_lastRadioInfo.address,
+                               m_hardwareProfile.model, m_hardwareProfile.effectiveBoard,
+                               m_hardwareProfile.caps);
+    };
+    const auto identityBefore = identityOf();
+
     // The MAC is what scopes every hardware/<mac>/ settings read, so it has
     // to be the STATION's radio rather than anything this client saw.
     m_lastRadioInfo.macAddress = caps.macAddress;
     m_lastRadioInfo.boardType = caps.board;
     m_lastRadioInfo.name = caps.stationName;
+    // R-R3-46: the rest of the stored radio info, so Protocol Info, Radio
+    // Info and every currentRadioChanged listener read the Core's radio.
+    // The Core sends its firmware as the number a local connect shows.
+    bool firmwareOk = false;
+    const int firmware = caps.firmwareVersion.trimmed().toInt(&firmwareOk);
+    m_lastRadioInfo.firmwareVersion = firmwareOk && firmware > 0 ? firmware : 0;
+    if (caps.radioProtocol == 2) {
+        m_lastRadioInfo.protocol = ProtocolVersion::Protocol2;
+    } else {
+        // 1, or not reported: RadioInfo's own default.
+        m_lastRadioInfo.protocol = ProtocolVersion::Protocol1;
+    }
+    m_lastRadioInfo.address = caps.radioAddress.isEmpty()
+        ? QHostAddress() : QHostAddress(caps.radioAddress);
 
     // Board type drives boardCapabilities(), which 14 GUI sites read for
-    // slider ranges, antenna counts and preamp tables. Routed through the
-    // same profileForModel(defaultModelForBoard(...)) pair connectToRadio()
-    // uses, so a remote client resolves the identical HardwareProfile a
-    // local one would for the same board.
-    m_hardwareProfile = ::NereusSDR::profileForModel(
-        ::NereusSDR::defaultModelForBoard(caps.board));
+    // slider ranges, antenna counts and preamp tables. R-R3-46: the Core's
+    // own model wins when it matches the board (an ANAN-8000DLE or ANAN-G2
+    // 1K keeps its row); otherwise the same defaultModelForBoard() a local
+    // connect uses picks it; and a Core with no radio (Unknown board) gives
+    // Unknown, never Hermes.
+    m_hardwareProfile = ::NereusSDR::profileForStation(caps.board, caps.hpsdrModel);
+    // As a local connect does before its currentRadioChanged: display units
+    // and clamps that depend on the model (HL2) read it from here.
+    m_transmitModel.setHpsdrModel(m_hardwareProfile.model);
+    const bool identityMoved = identityOf() != identityBefore;
 
     m_stationMaxSlices = caps.effectiveMaxSlices > 0 ? caps.effectiveMaxSlices : 1;
     m_stationUserDdcCount = caps.userDdcCount;
@@ -3570,6 +3605,15 @@ void RadioModel::applyStationCapabilities(const NereusSDR::StationCapabilities& 
     // sites the stale ones.
     setConnectionState(caps.radioConnected ? ConnectionState::Connected
                                            : ConnectionState::Disconnected);
+
+    // R-R3-46: then the radio itself, once per change of identity, as a
+    // local connect emits it after Connected with the profile already set.
+    // Every listener reads the settled profile and state. A resent
+    // descriptor for the same radio (a slice-limit change, a transmit
+    // permission) wakes nothing.
+    if (identityMoved) {
+        emit currentRadioChanged(m_lastRadioInfo);
+    }
 }
 
 void RadioModel::setStationConnectionState(ConnectionState s)

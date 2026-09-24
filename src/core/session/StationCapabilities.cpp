@@ -11,11 +11,16 @@
 //                                    descriptor codec. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46: hpsdrModel, radioProtocol and
+//                                    radioAddress entries. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
 
 #include "core/BoardCapabilities.h"
+#include <QHostAddress>
 #include <QSet>
 #include <limits>
 
@@ -90,6 +95,13 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
             updates.append(stringEntry("displayBudgetReason",
                                        displayBudgetReasonWireName(*displayBudgetReason)));
         }
+    }
+    // R-R3-46: last, so an app that negotiated them sees today's descriptor
+    // followed by the three, and one that did not sees today's descriptor.
+    if (radioIdentityEntries) {
+        updates.append(intEntry("hpsdrModel", static_cast<qint64>(hpsdrModel)));
+        updates.append(intEntry("radioProtocol", radioProtocol));
+        updates.append(stringEntry("radioAddress", radioAddress));
     }
     return updates;
 }
@@ -233,6 +245,31 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
             else if (u.name == "audioClockVersion") caps.audioClockVersion = version;
             else if (u.name == "receiverAudioVersion") caps.receiverAudioVersion = version;
             else caps.psDisplayVersion = version;
+        } else if (u.name == "hpsdrModel") {
+            // R-R3-46. A model this build has never heard of (a newer Core's
+            // SKU) reads as not reported, so the window falls back to the
+            // board alone rather than holding an enum value no switch here
+            // handles.
+            caps.radioIdentityEntries = true;
+            if (u.kind == MirrorWireKind::Int64 && u.value.typeId() == QMetaType::LongLong) {
+                const qlonglong raw = u.value.toLongLong();
+                caps.hpsdrModel = raw > static_cast<qlonglong>(HPSDRModel::FIRST)
+                        && raw < static_cast<qlonglong>(HPSDRModel::LAST)
+                    ? static_cast<HPSDRModel>(raw) : HPSDRModel::FIRST;
+            }
+        } else if (u.name == "radioProtocol") {
+            caps.radioIdentityEntries = true;
+            if (u.kind == MirrorWireKind::Int64 && u.value.typeId() == QMetaType::LongLong) {
+                const qlonglong raw = u.value.toLongLong();
+                caps.radioProtocol = raw == 1 || raw == 2 ? static_cast<int>(raw) : 0;
+            }
+        } else if (u.name == "radioAddress") {
+            caps.radioIdentityEntries = true;
+            if (u.kind == MirrorWireKind::Utf8 && u.value.typeId() == QMetaType::QString) {
+                // Only an address: anything else is not shown as one.
+                const QString text = u.value.toString().trimmed();
+                caps.radioAddress = QHostAddress(text).isNull() ? QString() : text;
+            }
         } else if (u.name == "settingsSchemaVersion") {
             caps.settingsSchemaVersion = static_cast<qint32>(u.value.toLongLong());
         }

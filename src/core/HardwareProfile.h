@@ -11,6 +11,9 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-23: profileForStation() added for remote windows (R-R3-46),
+//                 NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*  clsHardwareSpecific.cs
@@ -90,6 +93,16 @@ HardwareProfile profileForModel(HPSDRModel model);
 
 // Return the default (auto-guessed) HPSDRModel for a discovered board byte.
 HPSDRModel defaultModelForBoard(HPSDRHW board);
+
+// R-R3-46 (NereusSDR-original, remote windows only): the profile a remote
+// window uses for the Core's radio. The Core's reported model wins when its
+// own profile resolves to the reported board, so an ANAN-8000DLE or
+// ANAN-G2 1K keeps its row instead of the first model on its board. With no
+// usable model the board decides through defaultModelForBoard(), except that
+// an Unknown board (the Core has no radio) gives the Unknown profile
+// (model FIRST, the Unknown capability row), never Hermes. Local connects do
+// not use this: defaultModelForBoard() is unchanged for them.
+HardwareProfile profileForStation(HPSDRHW board, HPSDRModel reportedModel);
 
 // Return the list of HPSDRModel values compatible with a discovered board byte.
 // From Thetis NetworkIO.cs:164-171

@@ -21,6 +21,9 @@
 //                 negotiated transmit permission. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-23 - R-R3-46: in a remote window the preamp items and S-ATT
+//                 range follow the Core's board. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1387,6 +1390,37 @@ void RxApplet::setBoardCapabilities(const BoardCapabilities& caps)
 
     // B3: store caps for AntennaPopupBuilder (popup lambdas read this).
     m_popupCaps = caps;
+
+    // R-R3-46: a remote window has no radio connection of its own, so
+    // connectSlice()'s per-board rebuild below never runs there; the Core's
+    // radio arrives through here instead. Same tables as that rebuild
+    // (Thetis console.cs:40755 SetComboPreampForHPSDR, setup.cs:15765
+    // [v2.10.3.13]), keyed by the Core's board. Local mode is unchanged:
+    // its rebuild stays with the connection.
+    if (m_model && !m_model->ownsLocalDsp()) {
+        rebuildPreampAndAttRangeForBoard(caps.board, caps.hasAlexFilters,
+                                         caps.attenuator.minDb);
+    }
+}
+
+// R-R3-46: the preamp items and the S-ATT range for one board, keeping the
+// current preamp choice when the new board offers it.
+void RxApplet::rebuildPreampAndAttRangeForBoard(HPSDRHW board, bool alexFilters, int minDb)
+{
+    if (m_preampCombo) {
+        const QVariant current = m_preampCombo->currentData();
+        QSignalBlocker blk(m_preampCombo);
+        m_preampCombo->clear();
+        for (const auto& item : BoardCapsTable::preampItemsForBoard(board, alexFilters)) {
+            m_preampCombo->addItem(QString::fromLatin1(item.label), item.modeInt);
+        }
+        const int keep = current.isValid() ? m_preampCombo->findData(current) : -1;
+        m_preampCombo->setCurrentIndex(keep >= 0 ? keep : 0);
+    }
+    if (m_stepAttSpin) {
+        QSignalBlocker blk(m_stepAttSpin);
+        m_stepAttSpin->setRange(minDb, BoardCapsTable::stepAttMaxDb(board, alexFilters));
+    }
 }
 
 // B3: per-SKU UI overlay for antenna popup — mirrors VfoWidget::setHpsdrSku.
@@ -1879,6 +1913,20 @@ int RxApplet::visibleOvlBadgeCountForTest() const
 int RxApplet::preampComboItemCountForTest() const
 {
     return m_preampCombo ? m_preampCombo->count() : -1;
+}
+
+QStringList RxApplet::preampComboLabelsForTest() const
+{
+    QStringList labels;
+    for (int i = 0; m_preampCombo && i < m_preampCombo->count(); ++i) {
+        labels.append(m_preampCombo->itemText(i));
+    }
+    return labels;
+}
+
+int RxApplet::stepAttMinForTest() const
+{
+    return m_stepAttSpin ? m_stepAttSpin->minimum() : -1;
 }
 
 // Phase 3P-F Task 4: parse ANT<n> label from the button text and return n.

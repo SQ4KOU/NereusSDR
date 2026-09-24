@@ -86,6 +86,10 @@
 //                 Presets, Spectrum Peaks, Waterfall Defaults, 3D View and
 //                 Export / Import are ThisComputer. J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-23: R-R3-46 / R-R3-10. The PA pages follow the transmit
+//                 permission with its reason; a remote window shows them
+//                 for a Core radio that has them. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "SetupDialog.h"
@@ -1033,11 +1037,16 @@ void SetupDialog::buildTree()
     // #272 / #301: each PA factory re-applies the live BoardCapabilities to
     // its own page, because applyPaVisibility() ran in the ctor (or on an
     // earlier currentRadioChanged) while the page pointer was still null.
+    //
+    // R-R3-46 / R-R3-10: the three are transmit settings. A remote window
+    // now knows the Core's radio, so they are shown for a radio that has
+    // them, and follow the transmit permission with its reason until remote
+    // transmit arrives (requiresTransmit). Local mode is always permitted.
     m_paGainItem = registerPage(m_paCategoryItem, "PA Gain", SetupScope::Core, [this]() -> QWidget* {
         m_paGainPage = new PaGainByBandPage(m_model);
         m_paGainPage->applyCapabilityVisibility(capsForModel(m_model));
         return m_paGainPage;
-    });
+    }, /*requiresTransmit=*/true);
 
     m_paWattMeterItem = registerPage(m_paCategoryItem, "Watt Meter", SetupScope::Core,
                                      [this]() -> QWidget* {
@@ -1067,13 +1076,13 @@ void SetupDialog::buildTree()
                     }
                 });
         return m_paWattMeterPage;
-    });
+    }, /*requiresTransmit=*/true);
 
     m_paValuesItem = registerPage(m_paCategoryItem, "PA Values", SetupScope::Core, [this]() -> QWidget* {
         m_paValuesPage = new PaValuesPage(m_model);
         m_paValuesPage->applyCapabilityVisibility(capsForModel(m_model));
         return m_paValuesPage;
-    });
+    }, /*requiresTransmit=*/true);
 
     // Cache the registry index so the Watt Meter cross-wire above can realize
     // the PA Values page without a label lookup on every button press.

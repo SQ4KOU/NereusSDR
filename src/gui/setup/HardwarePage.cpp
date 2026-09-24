@@ -10,6 +10,9 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-23 - R-R3-46: in a remote window the tabs show the Core's
+//                 radio; edits stay off the Core's raw hardware keys.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -162,6 +165,11 @@ HardwarePage::HardwarePage(RadioModel* model, QWidget* parent)
         // now. Otherwise we'd show empty fields until the next reconnect.
         if (m_model->isConnected() && m_model->connection()) {
             onCurrentRadioChanged(m_model->connection()->radioInfo());
+        } else if (!m_model->ownsLocalDsp()
+                   && !m_model->currentRadioInfo().macAddress.isEmpty()) {
+            // R-R3-46: a remote window has no connection of its own; the
+            // Core's radio is the model's stored radio info.
+            onCurrentRadioChanged(m_model->currentRadioInfo());
         }
     }
 }
@@ -190,6 +198,12 @@ void HardwarePage::onTabSettingChanged(const QString& tabKey,
                                         const QVariant& value)
 {
     if (m_currentMac.isEmpty()) { return; } // no radio connected yet
+    // R-R3-46: in a remote window the tabs now show the Core's radio, but
+    // the Core applies hardware changes through its own controllers, never
+    // raw hardware/<mac>/ keys its teardown save would overwrite. Until that
+    // path exists an edit here is dropped, as it was while these tabs had no
+    // MAC (the page is also disabled with its reason).
+    if (m_model && !m_model->ownsLocalDsp()) { return; }
 
     // The tab emits keys like "radioInfo/sampleRate"; strip the leading tabKey/
     // prefix if already included, or compose it.

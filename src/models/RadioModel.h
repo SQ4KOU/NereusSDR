@@ -393,6 +393,15 @@ public:
     /// is powered off or unreachable) applies identity and limits but
     /// leaves the state Disconnected: every slice control a Connected
     /// client offers would otherwise reach a RadioModel that cannot act.
+    ///
+    /// R-R3-46: the stored radio info (MAC, board, name, firmware, and the
+    /// Core's protocol and address when it reports them) and the hardware
+    /// profile follow the Core's radio: the Core's own model wins when it
+    /// matches the board (so an ANAN-8000DLE or ANAN-G2 1K keeps its own
+    /// row), an unknown board resolves to Unknown and never to Hermes
+    /// (profileForStation()). currentRadioChanged is emitted once per
+    /// identity change, after the profile is set and after the connection
+    /// state, as a local connect emits it after Connected.
     void applyStationCapabilities(const NereusSDR::StationCapabilities& caps);
 
     /// Drive the connection lifecycle from the session directly. Task 18
@@ -1806,6 +1815,12 @@ public:
                                            const QVariant& value);
 
     const HardwareProfile& hardwareProfile() const { return m_hardwareProfile; }
+
+    /// The radio this model is (or was last) connected to: a local model's
+    /// discovered radio, or on a Role::Remote model the Core's radio as its
+    /// capabilities describe it (R-R3-46). Kept across a disconnect, like
+    /// the MAC it carries. The same value currentRadioChanged carries.
+    const NereusSDR::RadioInfo& currentRadioInfo() const { return m_lastRadioInfo; }
 
     // Returns the BoardCapabilities for the current (or last) board.
     // Falls back to the Unknown board caps when no radio has ever connected.

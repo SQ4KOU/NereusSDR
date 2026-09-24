@@ -559,6 +559,10 @@ private slots:
     /// change; a reachable Core need not have its radio connected.
     void applyRemoteRoleGating();
 
+    /// R-R3-46: Radio > Protocol Info in a remote window, from the Core's
+    /// description of its radio (name, P1/P2, firmware, MAC, address).
+    void showCoreRadioInfo();
+
     /// Reuse one StationClient/media controller to dial the configured Core.
     void connectToStation();
     void disconnectFromStation();

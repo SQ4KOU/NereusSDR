@@ -717,6 +717,8 @@ private slots:
             } else {
                 QList<QByteArray> withReason = golden;
                 withReason.append("displayBudgetReason");
+                // R-R3-46: the Core's radio, same unreleased step, last.
+                withReason.append({"hpsdrModel", "radioProtocol", "radioAddress"});
                 QCOMPARE(names, withReason);
                 const int reason = updateIndex(last.updates,
                                                QByteArrayLiteral("displayBudgetReason"));
@@ -735,14 +737,20 @@ private slots:
         QByteArray currentPublished;
         capture(kDisplayBudgetReasonSessionProtocolMinor, &currentInitial, &currentPublished);
 
-        // Byte for byte: the minor-11 descriptor with its reason entry
-        // removed is exactly what the older GUI got.
+        // Byte for byte: the minor-11 descriptor with its reason entry (and
+        // R-R3-46's three radio entries) removed is exactly what the older
+        // GUI got.
         for (const auto& [older, current] : {std::pair{olderInitial, currentInitial},
                                              std::pair{olderPublished, currentPublished}}) {
             SessionMessage decoded;
             QVERIFY(SessionMessages::decode(current, &decoded));
             QList<MirrorUpdate> stripped = decoded.updates;
             stripped.removeAt(updateIndex(stripped, QByteArrayLiteral("displayBudgetReason")));
+            for (const QByteArray& name : {QByteArrayLiteral("hpsdrModel"),
+                                           QByteArrayLiteral("radioProtocol"),
+                                           QByteArrayLiteral("radioAddress")}) {
+                stripped.removeAt(updateIndex(stripped, name));
+            }
             QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)), older);
             QVERIFY(!older.contains("displayBudgetReason"));
         }

@@ -39,6 +39,7 @@
 #include <QStackedWidget>
 #include <QLoggingCategory>
 #include <QMenu>
+#include <QMessageBox>
 #include <QPointer>
 #include <QPushButton>
 #include <QSignalSpy>
@@ -49,6 +50,8 @@
 #include "OperatorWording.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#include "core/BoardCapabilities.h"
+#include "core/SkuUiProfile.h"
 #include "core/session/StationCapabilities.h"
 #include "core/session/StationClient.h"
 #include "gui/MainWindow.h"
@@ -57,7 +60,10 @@
 #include "gui/SpectrumWidget.h"
 #include "gui/TitleBar.h"
 #include "gui/applets/RadeApplet.h"
+#include "gui/applets/RxApplet.h"
 #include "gui/setup/DeviceCard.h"
+#include "gui/setup/HardwarePage.h"
+#include "gui/widgets/VfoWidget.h"
 #include "gui/widgets/StationBlock.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -190,6 +196,53 @@ QComboBox* deviceCardBufferCombo(DeviceCard* card)
 }
 
 const QString kStationReason = QStringLiteral("Connect to the Core to change these.");
+
+// R-R3-46: triggers Radio > Protocol Info and returns the text of the
+// dialog it opens (closing it), or an empty string when none opened.
+QString protocolInfoText(RemoteWindowHarness& h)
+{
+    QAction* info = h.menuAction(QStringLiteral("&Radio"), QStringLiteral("&Protocol Info"));
+    if (!info || !info->isEnabled()) { return {}; }
+    QString text;
+    QTimer poll;
+    poll.setInterval(10);
+    QObject::connect(&poll, &QTimer::timeout, &poll, [&] {
+        auto* box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget());
+        if (!box) { return; }
+        poll.stop();
+        text = box->text();
+        box->accept();
+    });
+    poll.start();
+    info->trigger();
+    poll.stop();
+    return text;
+}
+
+QStringList preampLabelsFor(HPSDRHW board)
+{
+    const BoardCapabilities& caps = BoardCapsTable::forBoard(board);
+    QStringList labels;
+    for (const auto& item : BoardCapsTable::preampItemsForBoard(board, caps.hasAlexFilters)) {
+        labels.append(QString::fromLatin1(item.label));
+    }
+    return labels;
+}
+
+StationCapabilities coreRadio(RemoteWindowHarness& h, HPSDRHW board, HPSDRModel model,
+                              const QString& mac)
+{
+    StationCapabilities caps = h.server().buildCapabilities();
+    caps.board = board;
+    caps.macAddress = mac;
+    caps.radioConnected = true;
+    caps.firmwareVersion = QStringLiteral("27");
+    caps.radioIdentityEntries = true;
+    caps.hpsdrModel = model;
+    caps.radioProtocol = 2;
+    caps.radioAddress = QStringLiteral("192.168.1.50");
+    return caps;
+}
 
 QStringList sliceIds(const RadioModel& model)
 {
@@ -843,6 +896,123 @@ private slots:
         QTest::qWait(kSettleMs);
         QCOMPARE(superseded.size(), 0);
         QCOMPARE(h.acceptedConnections(), 1);
+    }
+
+    // R-R3-46: the window follows the Core's radio. A Saturn ANAN-G2 1K
+    // brings its preamp items and attenuator range to the RX applet, its
+    // antenna labels to the VFO flag and its tabs to Hardware Config;
+    // Protocol Info shows P2 and the radio's address; a Core whose radio is
+    // offline gives Unknown, not Hermes; an older Core still shows what it
+    // has.
+    void windowFollowsTheCoresRadio()
+    {
+        RemoteWindowHarness h;
+        QVERIFY(h.start());
+        QVERIFY(connectFromRadioMenu(h));
+        RadioModel* const windowModel = h.remoteModel();
+        QVERIFY(windowModel);
+        auto* rx = h.window()->findChild<RxApplet*>();
+        QVERIFY(rx);
+
+        // First a radio whose items and range differ from the G2 1K's.
+        h.pushCapabilities(coreRadio(h, HPSDRHW::Angelia, HPSDRModel::ANAN100D,
+                                     QStringLiteral("AA:BB:CC:DD:EE:10")));
+        QTRY_COMPARE(rx->preampComboLabelsForTest(), preampLabelsFor(HPSDRHW::Angelia));
+        const int angeliaMax = BoardCapsTable::stepAttMaxDb(
+            HPSDRHW::Angelia, BoardCapsTable::forBoard(HPSDRHW::Angelia).hasAlexFilters);
+        QCOMPARE(rx->stepAttMaxForTest(), angeliaMax);
+        QVERIFY(preampLabelsFor(HPSDRHW::Angelia) != preampLabelsFor(HPSDRHW::Saturn));
+
+        h.pushCapabilities(coreRadio(h, HPSDRHW::Saturn, HPSDRModel::ANAN_G2_1K,
+                                     QStringLiteral("AA:BB:CC:DD:EE:46")));
+        QTRY_COMPARE(rx->preampComboLabelsForTest(), preampLabelsFor(HPSDRHW::Saturn));
+        const int saturnMax = BoardCapsTable::stepAttMaxDb(
+            HPSDRHW::Saturn, BoardCapsTable::forBoard(HPSDRHW::Saturn).hasAlexFilters);
+        QVERIFY(saturnMax != angeliaMax);
+        QCOMPARE(rx->stepAttMaxForTest(), saturnMax);
+        QCOMPARE(rx->stepAttMinForTest(),
+                 BoardCapsTable::forBoard(HPSDRHW::Saturn).attenuator.minDb);
+        QCOMPARE(windowModel->hardwareProfile().model, HPSDRModel::ANAN_G2_1K);
+
+        const auto expectedLabels = [](HPSDRModel sku) {
+            const auto labels = skuUiProfileFor(sku).rxOnlyLabels;
+            return QStringList(labels.cbegin(), labels.cend());
+        };
+        const QList<VfoWidget*> flags = h.window()->findChildren<VfoWidget*>();
+        QVERIFY(!flags.isEmpty());
+        for (VfoWidget* flag : flags) {
+            QCOMPARE(flag->rxOnlyAntennaLabelsForTest(), expectedLabels(HPSDRModel::ANAN_G2_1K));
+        }
+        QVERIFY(expectedLabels(HPSDRModel::ANAN_G2_1K) != expectedLabels(HPSDRModel::HERMES));
+
+        // Hardware Config shows the Saturn's tabs, then follows a change.
+        SetupDialog* dialog = openSettings(h);
+        QVERIFY(dialog);
+        QVERIFY(showSetupLeaf(dialog, QStringLiteral("Hardware Config")));
+        auto* hardware = dialog->findChild<HardwarePage*>();
+        QVERIFY(hardware);
+        const BoardCapabilities& saturn = BoardCapsTable::forBoard(HPSDRHW::Saturn);
+        QCOMPARE(hardware->isTabVisibleForTest(HardwarePage::Tab::AntennaAlex),
+                 saturn.hasAlexFilters);
+        QCOMPARE(hardware->isTabVisibleForTest(HardwarePage::Tab::Diversity),
+                 saturn.hasDiversityReceiver);
+        QVERIFY(!hardware->isTabVisibleForTest(HardwarePage::Tab::Hl2Options));
+        QCOMPARE(hardware->tabTextForTest(HardwarePage::Tab::OcOutputs),
+                 QStringLiteral("OC Outputs"));
+        StationCapabilities hl2 = coreRadio(h, HPSDRHW::HermesLite, HPSDRModel::HERMESLITE,
+                                            QStringLiteral("AA:BB:CC:DD:EE:02"));
+        hl2.radioProtocol = 1;
+        h.pushCapabilities(hl2);
+        QTRY_VERIFY(hardware->isTabVisibleForTest(HardwarePage::Tab::Hl2Options));
+        QCOMPARE(hardware->tabTextForTest(HardwarePage::Tab::OcOutputs),
+                 QStringLiteral("Hermes Lite Control"));
+        dialog->close();
+
+        // Protocol Info shows the Core's radio.
+        h.pushCapabilities(coreRadio(h, HPSDRHW::Saturn, HPSDRModel::ANAN_G2_1K,
+                                     QStringLiteral("AA:BB:CC:DD:EE:46")));
+        QTRY_COMPARE(windowModel->currentRadioInfo().macAddress,
+                     QStringLiteral("AA:BB:CC:DD:EE:46"));
+        QAction* info = h.menuAction(QStringLiteral("&Radio"), QStringLiteral("&Protocol Info"));
+        QVERIFY(info);
+        QVERIFY(info->isEnabled());
+        QVERIFY(OperatorWording::isPlain(info->toolTip()));
+        const QString shown = protocolInfoText(h);
+        QVERIFY2(shown.contains(QStringLiteral("Protocol: P2")), qPrintable(shown));
+        QVERIFY2(shown.contains(QStringLiteral("192.168.1.50")), qPrintable(shown));
+        QVERIFY2(shown.contains(QStringLiteral("AA:BB:CC:DD:EE:46")), qPrintable(shown));
+        QVERIFY2(shown.contains(QStringLiteral("Firmware: 27")), qPrintable(shown));
+
+        // A Core whose radio is offline: Unknown, never Hermes.
+        StationCapabilities offline = h.server().buildCapabilities();
+        offline.board = HPSDRHW::Unknown;
+        offline.macAddress.clear();
+        offline.radioConnected = false;
+        offline.radioIdentityEntries = true;
+        offline.hpsdrModel = HPSDRModel::FIRST;
+        offline.radioProtocol = 0;
+        offline.radioAddress.clear();
+        h.pushCapabilities(offline);
+        QTRY_COMPARE(h.client()->capabilities().board, HPSDRHW::Unknown);
+        QCOMPARE(windowModel->hardwareProfile().model, HPSDRModel::FIRST);
+        QCOMPARE(windowModel->boardCapabilities().board, HPSDRHW::Unknown);
+
+        // An older Core (none of the three entries): Protocol Info shows
+        // what it has and says what it does not.
+        StationCapabilities older = coreRadio(h, HPSDRHW::Saturn, HPSDRModel::FIRST,
+                                              QStringLiteral("AA:BB:CC:DD:EE:46"));
+        older.radioIdentityEntries = false;
+        older.radioProtocol = 0;
+        older.radioAddress.clear();
+        h.pushCapabilities(older);
+        QTRY_COMPARE(windowModel->hardwareProfile().model, HPSDRModel::ANAN_G2);
+        QVERIFY(info->isEnabled());
+        const QString partial = protocolInfoText(h);
+        QVERIFY2(partial.contains(QStringLiteral("AA:BB:CC:DD:EE:46")), qPrintable(partial));
+        QVERIFY2(partial.contains(QStringLiteral("not reported by the Core")),
+                 qPrintable(partial));
+        QVERIFY(OperatorWording::isPlain(QStringLiteral("not reported by the Core")));
+        QVERIFY(h.client()->isHandshakeComplete());
     }
 
     // R-R3-21: a capability change from the Core re-gates the window on the

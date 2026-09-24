@@ -65,6 +65,7 @@
 #include "core/AppSettings.h"
 #include "core/ConnectionState.h"
 #include "core/CoreInit.h"
+#include "core/HardwareProfile.h"
 #include "core/MoxController.h"
 #include "core/P1RadioConnection.h"
 #include "core/security/CertificateStore.h"
@@ -355,6 +356,12 @@ private slots:
     void appNotchSettingsWritesAreRefused();
     void olderCoreKeepsTodaysNotchBehaviour();
     void olderAppIgnoresTheNotchesObjectGolden();
+
+    // ---- R-R3-46: the window knows the Core's radio ----
+    void radioIdentityEntriesRoundTrip();
+    void coreSendsRadioIdentityOnlyFromMinorEleven();
+    void remoteModelResolvesTheCoresRadio();
+    void remoteModelSignalsOncePerIdentityChange();
 
     // ---- Fix round 1 ----
     void reconnectSurvivesTheOldTransportClosing();
@@ -5072,6 +5079,258 @@ void TstStationSession::failedInitialConnectReportsPromptly()
     // And exactly once, however many socket errors and closes unwind.
     QTest::qWait(300);
     QCOMPARE(ended.count(), 1);
+}
+
+// ---- R-R3-46: the window knows the Core's radio ---------------------------
+
+namespace {
+
+int updateIndexOf(const QList<MirrorUpdate>& updates, const QByteArray& name)
+{
+    for (qsizetype i = 0; i < updates.size(); ++i) {
+        if (updates.at(i).name == name) { return int(i); }
+    }
+    return -1;
+}
+
+StationCapabilities g21kCaps()
+{
+    StationCapabilities caps;
+    caps.stationName = QStringLiteral("Bench G2 1K");
+    caps.radioModelName = QStringLiteral("ANAN-G2");
+    caps.firmwareVersion = QStringLiteral("27");
+    caps.macAddress = QStringLiteral("AA:BB:CC:DD:EE:46");
+    caps.board = HPSDRHW::Saturn;
+    caps.radioConnected = true;
+    caps.radioIdentityEntries = true;
+    caps.hpsdrModel = HPSDRModel::ANAN_G2_1K;
+    caps.radioProtocol = 2;
+    caps.radioAddress = QStringLiteral("192.168.1.50");
+    return caps;
+}
+
+} // namespace
+
+void TstStationSession::radioIdentityEntriesRoundTrip()
+{
+    // The three entries travel last and together, and come back as sent.
+    const StationCapabilities sent = g21kCaps();
+    const QList<MirrorUpdate> updates = sent.toUpdates();
+    const int model = updateIndexOf(updates, "hpsdrModel");
+    QCOMPARE(model, int(updates.size()) - 3);
+    QCOMPARE(updateIndexOf(updates, "radioProtocol"), model + 1);
+    QCOMPARE(updateIndexOf(updates, "radioAddress"), model + 2);
+    const StationCapabilities received = StationCapabilities::fromUpdates(updates);
+    QVERIFY(received.radioIdentityEntries);
+    QCOMPARE(received.hpsdrModel, HPSDRModel::ANAN_G2_1K);
+    QCOMPARE(received.radioProtocol, 2);
+    QCOMPARE(received.radioAddress, QStringLiteral("192.168.1.50"));
+
+    // Not negotiated: none of the three is on the wire, and an absent entry
+    // reads as not reported.
+    StationCapabilities older = sent;
+    older.radioIdentityEntries = false;
+    const QList<MirrorUpdate> olderUpdates = older.toUpdates();
+    for (const char* name : {"hpsdrModel", "radioProtocol", "radioAddress"}) {
+        QCOMPARE(updateIndexOf(olderUpdates, name), -1);
+    }
+    const StationCapabilities fromOlder = StationCapabilities::fromUpdates(olderUpdates);
+    QVERIFY(!fromOlder.radioIdentityEntries);
+    QCOMPARE(fromOlder.hpsdrModel, HPSDRModel::FIRST);
+    QCOMPARE(fromOlder.radioProtocol, 0);
+    QVERIFY(fromOlder.radioAddress.isEmpty());
+
+    // Values this build cannot use read as not reported, never as a guess.
+    QList<MirrorUpdate> odd = olderUpdates;
+    odd.append(MirrorUpdate{0, "hpsdrModel", MirrorWireKind::Int64, QVariant(qlonglong(99))});
+    odd.append(MirrorUpdate{0, "radioProtocol", MirrorWireKind::Int64, QVariant(qlonglong(7))});
+    odd.append(MirrorUpdate{0, "radioAddress", MirrorWireKind::Utf8,
+                            QVariant(QStringLiteral("not an address"))});
+    const StationCapabilities fromOdd = StationCapabilities::fromUpdates(odd);
+    QVERIFY(fromOdd.radioIdentityEntries);
+    QCOMPARE(fromOdd.hpsdrModel, HPSDRModel::FIRST);
+    QCOMPARE(fromOdd.radioProtocol, 0);
+    QVERIFY(fromOdd.radioAddress.isEmpty());
+}
+
+void TstStationSession::coreSendsRadioIdentityOnlyFromMinorEleven()
+{
+    // The Core describes its own radio (its model choice included) to an app
+    // at minor 11; a minor-10 app gets exactly the descriptor it had.
+    const auto capture = [this](quint16 minor) {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("identity.settings")));
+        auto model = std::make_unique<RadioModel>();
+        model->setHpsdrModelForTest(HPSDRModel::ANAN_G2_1K);
+        RadioInfo info;
+        info.macAddress = QStringLiteral("AA:BB:CC:DD:EE:46");
+        info.name = QStringLiteral("Bench G2 1K");
+        info.boardType = HPSDRHW::Saturn;
+        info.protocol = ProtocolVersion::Protocol2;
+        info.address = QHostAddress(QStringLiteral("192.168.1.50"));
+        model->setLastRadioInfoForTest(info);
+        model->setConnectionStateForTest(ConnectionState::Connected);
+        StationServer server(model.get(), settings, m_securityDir.path());
+        auto* station = new LoopbackTransport(QStringLiteral("identity-station"), this);
+        auto* peer = new LoopbackTransport(QStringLiteral("identity-peer"), this);
+        station->linkTo(peer);
+        server.acceptTransport(station);
+        peer->sendText(SessionMessages::encode(SessionMessages::hello(
+            kSessionProtocolMajor, minor, 6, QStringLiteral("identity-app"))));
+        peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
+        QList<MirrorUpdate> updates;
+        [&] {
+            QTRY_VERIFY([&] {
+                for (const QByteArray& wire : peer->received()) {
+                    const SessionMessage m = decodeOrFail(wire);
+                    if (m.kind == SessionMessageKind::Capabilities) {
+                        updates = m.updates;
+                        return true;
+                    }
+                }
+                return false;
+            }());
+        }();
+        return updates;
+    };
+
+    const QList<MirrorUpdate> current = capture(kRadioIdentitySessionProtocolMinor);
+    const StationCapabilities caps = StationCapabilities::fromUpdates(current);
+    QVERIFY(caps.radioIdentityEntries);
+    QCOMPARE(caps.board, HPSDRHW::Saturn);
+    QCOMPARE(caps.hpsdrModel, HPSDRModel::ANAN_G2_1K);
+    QCOMPARE(caps.radioProtocol, 2);
+    QCOMPARE(caps.radioAddress, QStringLiteral("192.168.1.50"));
+
+    const QList<MirrorUpdate> older = capture(quint16(kRadioIdentitySessionProtocolMinor - 1));
+    QVERIFY(!older.isEmpty());
+    for (const char* name : {"hpsdrModel", "radioProtocol", "radioAddress"}) {
+        QCOMPARE(updateIndexOf(older, name), -1);
+    }
+    // Byte for byte: the minor-11 descriptor without the three (and the
+    // display budget reason, which is not sent here) is the minor-10 one.
+    QList<MirrorUpdate> stripped = current;
+    for (const char* name : {"hpsdrModel", "radioProtocol", "radioAddress"}) {
+        stripped.removeAt(updateIndexOf(stripped, name));
+    }
+    QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)),
+             SessionMessages::encode(SessionMessages::capabilities(older)));
+
+    // A Core that has never had a radio reports no model and nothing else.
+    QTemporaryDir dir;
+    AppSettings settings(dir.filePath(QStringLiteral("no-radio.settings")));
+    RadioModel noRadio;
+    StationServer server(&noRadio, settings, m_securityDir.path());
+    const StationCapabilities none = server.buildCapabilities();
+    QCOMPARE(none.board, HPSDRHW::Unknown);
+    QCOMPARE(none.hpsdrModel, HPSDRModel::FIRST);
+    QCOMPARE(none.radioProtocol, 0);
+    QVERIFY(none.radioAddress.isEmpty());
+}
+
+void TstStationSession::remoteModelResolvesTheCoresRadio()
+{
+    RadioModel remote(RadioModel::Role::Remote);
+
+    // The Core's model wins when it matches the board.
+    remote.applyStationCapabilities(g21kCaps());
+    QCOMPARE(remote.hardwareProfile().model, HPSDRModel::ANAN_G2_1K);
+    QCOMPARE(remote.boardCapabilities().board, HPSDRHW::Saturn);
+    QCOMPARE(remote.currentRadioInfo().protocol, ProtocolVersion::Protocol2);
+    QCOMPARE(remote.currentRadioInfo().address, QHostAddress(QStringLiteral("192.168.1.50")));
+    QCOMPARE(remote.currentRadioInfo().firmwareVersion, 27);
+    QCOMPARE(remote.currentRadioInfo().macAddress, QStringLiteral("AA:BB:CC:DD:EE:46"));
+    QCOMPARE(remote.currentRadioInfo().boardType, HPSDRHW::Saturn);
+    QCOMPARE(remote.transmitModel().hpsdrModel(), HPSDRModel::ANAN_G2_1K);
+
+    // ANAN-8000DLE keeps its own row on an OrionMKII board.
+    StationCapabilities dle = g21kCaps();
+    dle.board = HPSDRHW::OrionMKII;
+    dle.hpsdrModel = HPSDRModel::ANAN8000D;
+    remote.applyStationCapabilities(dle);
+    QCOMPARE(remote.hardwareProfile().model, HPSDRModel::ANAN8000D);
+
+    // A model that does not match the board is not trusted: the board picks.
+    StationCapabilities mismatch = dle;
+    mismatch.hpsdrModel = HPSDRModel::ANAN_G2_1K;
+    remote.applyStationCapabilities(mismatch);
+    QCOMPARE(remote.hardwareProfile().model, defaultModelForBoard(HPSDRHW::OrionMKII));
+
+    // An older Core (no entries): the board picks, as before.
+    StationCapabilities older = g21kCaps();
+    older.radioIdentityEntries = false;
+    older.hpsdrModel = HPSDRModel::FIRST;
+    older.radioProtocol = 0;
+    older.radioAddress.clear();
+    remote.applyStationCapabilities(
+        StationCapabilities::fromUpdates(older.toUpdates()));
+    QCOMPARE(remote.hardwareProfile().model, HPSDRModel::ANAN_G2);
+    QVERIFY(remote.currentRadioInfo().address.isNull());
+
+    // A Core whose radio is offline and unknown gives Unknown, not Hermes,
+    // whatever model it sends.
+    StationCapabilities offline;
+    offline.stationName = QStringLiteral("Core");
+    offline.radioIdentityEntries = true;
+    offline.hpsdrModel = HPSDRModel::HERMES;
+    remote.applyStationCapabilities(offline);
+    QCOMPARE(remote.hardwareProfile().model, HPSDRModel::FIRST);
+    QCOMPARE(remote.hardwareProfile().effectiveBoard, HPSDRHW::Unknown);
+    QCOMPARE(remote.boardCapabilities().board, HPSDRHW::Unknown);
+    QVERIFY(!remote.boardCapabilities().hasPaProfile);
+    QVERIFY(!remote.isConnected());
+
+    // Local mode unchanged: an unknown board still resolves as it always
+    // has, and a local model ignores a descriptor.
+    QCOMPARE(defaultModelForBoard(HPSDRHW::Unknown), HPSDRModel::HERMES);
+    RadioModel local;
+    local.setHpsdrModelForTest(HPSDRModel::ANAN7000D);
+    local.applyStationCapabilities(g21kCaps());
+    QCOMPARE(local.hardwareProfile().model, HPSDRModel::ANAN7000D);
+}
+
+void TstStationSession::remoteModelSignalsOncePerIdentityChange()
+{
+    RadioModel remote(RadioModel::Role::Remote);
+    QSignalSpy radio(&remote, &RadioModel::currentRadioChanged);
+    HPSDRModel modelAtSignal = HPSDRModel::LAST;
+    bool connectedAtSignal = false;
+    connect(&remote, &RadioModel::currentRadioChanged, this,
+            [&](const RadioInfo& info) {
+        // After the profile and the state, like a local connect.
+        modelAtSignal = remote.hardwareProfile().model;
+        connectedAtSignal = remote.isConnected();
+        QCOMPARE(info.macAddress, remote.currentRadioInfo().macAddress);
+    });
+
+    remote.applyStationCapabilities(g21kCaps());
+    QCOMPARE(radio.count(), 1);
+    QCOMPARE(modelAtSignal, HPSDRModel::ANAN_G2_1K);
+    QVERIFY(connectedAtSignal);
+    QCOMPARE(radio.first().first().value<RadioInfo>().protocol, ProtocolVersion::Protocol2);
+
+    // The same radio again, or a change that is not the radio's: nothing.
+    remote.applyStationCapabilities(g21kCaps());
+    StationCapabilities granted = g21kCaps();
+    granted.txPermitted = true;
+    granted.effectiveMaxSlices = 2;
+    remote.applyStationCapabilities(granted);
+    QCOMPARE(radio.count(), 1);
+
+    // A different radio: once.
+    StationCapabilities hl2 = g21kCaps();
+    hl2.board = HPSDRHW::HermesLite;
+    hl2.hpsdrModel = HPSDRModel::HERMESLITE;
+    hl2.radioProtocol = 1;
+    hl2.macAddress = QStringLiteral("AA:BB:CC:DD:EE:02");
+    remote.applyStationCapabilities(hl2);
+    QCOMPARE(radio.count(), 2);
+    QCOMPARE(modelAtSignal, HPSDRModel::HERMESLITE);
+
+    // A new address for the same radio is an identity change too.
+    hl2.radioAddress = QStringLiteral("192.168.1.51");
+    remote.applyStationCapabilities(hl2);
+    QCOMPARE(radio.count(), 3);
 }
 
 QTEST_MAIN(TstStationSession)

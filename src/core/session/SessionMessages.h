@@ -210,6 +210,11 @@ inline constexpr quint16 kNnrLimitSessionProtocolMinor = 11;
 // Core's ceiling (displayBudgetReason: the Core computer is busy). Same
 // unreleased step. Minor-10 peers receive exactly the five budget fields.
 inline constexpr quint16 kDisplayBudgetReasonSessionProtocolMinor = 11;
+// R-R3-46: the capability descriptor names the Core's radio model
+// (hpsdrModel), how it talks to the radio (radioProtocol) and the radio's
+// LAN address (radioAddress). Same unreleased step. Minor-10 peers receive
+// exactly the descriptor they were built for.
+inline constexpr quint16 kRadioIdentitySessionProtocolMinor = 11;
 inline constexpr qsizetype kMaxMediaControlBytes = 128 * 1024;
 
 // R-R3-16/17: how long either end waits for the connect sequence to finish

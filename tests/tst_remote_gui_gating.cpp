@@ -80,6 +80,10 @@
 //                 with a plain reason in a remote session. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-23 -- R-R3-46 / R-R3-10: with the Core's radio known, the PA
+//                 pages are shown and follow the transmit permission.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -126,6 +130,7 @@
 #include "core/WdspTypes.h"
 #include "core/session/RemoteStationOptions.h"
 #include "core/session/SessionTransport.h"
+#include "core/session/StationCapabilities.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "core/settings/ISettingsBackend.h"
@@ -2260,6 +2265,82 @@ private slots:
         }
         QVERIFY(pa != nullptr);
         QVERIFY(pa->isHidden());
+    }
+
+    // R-R3-46 / R-R3-10: with the Core's radio known (a Saturn ANAN-G2 1K,
+    // which has PA settings) the PA pages are shown, and each follows the
+    // transmit permission with its reason until remote transmit.
+    void remotePaPagesFollowTheTransmitPermission()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        StationCapabilities caps;
+        caps.stationName = QStringLiteral("Bench G2 1K");
+        caps.macAddress = QStringLiteral("AA:BB:CC:DD:EE:46");
+        caps.board = HPSDRHW::Saturn;
+        caps.radioConnected = true;
+        caps.radioIdentityEntries = true;
+        caps.hpsdrModel = HPSDRModel::ANAN_G2_1K;
+        caps.radioProtocol = 2;
+        remote.applyStationCapabilities(caps);
+        QCOMPARE(remote.hardwareProfile().model, HPSDRModel::ANAN_G2_1K);
+        QVERIFY(remote.boardCapabilities().hasPaProfile);
+
+        SetupDialog dialog(&remote);
+        auto* tree = dialog.findChild<QTreeWidget*>();
+        QVERIFY(tree != nullptr);
+        QTreeWidgetItem* pa = nullptr;
+        for (int i = 0; i < tree->topLevelItemCount(); ++i) {
+            if (tree->topLevelItem(i)->text(0) == QStringLiteral("PA")) {
+                pa = tree->topLevelItem(i);
+            }
+        }
+        QVERIFY(pa != nullptr);
+        QVERIFY(!pa->isHidden());
+
+        const QString transmitReason = QStringLiteral(
+            "Remote transmit controls are not available from this Core yet.");
+        auto* const notice = dialog.findChild<QLabel*>(
+            QStringLiteral("setupTransmitUnavailable"));
+        QVERIFY(notice != nullptr);
+        for (const QString& label : {QStringLiteral("PA Gain"), QStringLiteral("Watt Meter"),
+                                     QStringLiteral("PA Values")}) {
+            QTreeWidgetItem* const leaf = setupLeaf(dialog, label);
+            QVERIFY2(leaf != nullptr, qPrintable(label));
+            QVERIFY2(!leaf->isHidden(), qPrintable(label));
+            QCOMPARE(leaf->toolTip(0), transmitReason);
+            QVERIFY(OperatorWording::isPlain(leaf->toolTip(0)));
+            dialog.selectPage(label);
+            QWidget* const page = dialog.realizedPageForTest(label);
+            QVERIFY2(page != nullptr, qPrintable(label));
+            QVERIFY2(!page->isEnabled(), qPrintable(label));
+            QCOMPARE(page->toolTip(), transmitReason);
+            QVERIFY2(!notice->isHidden(), qPrintable(label));
+            QCOMPARE(notice->text(), transmitReason);
+        }
+
+        // A Core that permits transmit lifts the transmit reason.
+        dialog.setTransmitPermitted(true);
+        for (const QString& label : {QStringLiteral("PA Gain"), QStringLiteral("Watt Meter"),
+                                     QStringLiteral("PA Values")}) {
+            QVERIFY2(setupLeaf(dialog, label)->toolTip(0) != transmitReason, qPrintable(label));
+        }
+
+        // Local direct mode: the same radio's PA pages are live, no reason.
+        RadioModel local;
+        local.setHpsdrModelForTest(HPSDRModel::ANAN_G2_1K);
+        SetupDialog localDialog(&local);
+        for (const QString& label : {QStringLiteral("PA Gain"), QStringLiteral("Watt Meter"),
+                                     QStringLiteral("PA Values")}) {
+            QTreeWidgetItem* const leaf = setupLeaf(localDialog, label);
+            QVERIFY2(leaf != nullptr, qPrintable(label));
+            QVERIFY2(leaf->toolTip(0).isEmpty(), qPrintable(label));
+            localDialog.selectPage(label);
+            QWidget* const page = localDialog.realizedPageForTest(label);
+            QVERIFY2(page != nullptr, qPrintable(label));
+            QVERIFY2(page->isEnabled(), qPrintable(label));
+        }
+        QVERIFY(localDialog.findChild<QLabel*>(
+                    QStringLiteral("setupTransmitUnavailable"))->isHidden());
     }
 
     // General > Options keeps its Region and Options groups; only the two
