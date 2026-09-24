@@ -136,7 +136,13 @@ function(nereus_add_test name)
     # platform cannot provide (native menu bar, Retina pixel ratio, a
     # Cocoa view, GPU rendering). It keeps the native platform even when
     # NEREUS_TESTS_OFFSCREEN is ON and gets the `native-window` label.
-    cmake_parse_arguments(_nat "NATIVE_WINDOW" "" "EXTRA_LABELS" ${ARGN})
+    #
+    # CORE_ONLY links NereusCore alone, the way nereusd does, instead of
+    # NereusSDRLib. Use it for a test that must prove the Core stands on
+    # its own on every platform: macOS keeps every linked dylib loaded, so
+    # a test linked to NereusSDRLib there cannot see what GCC's default
+    # --as-needed drops on Linux (R-R3-10).
+    cmake_parse_arguments(_nat "NATIVE_WINDOW;CORE_ONLY" "" "EXTRA_LABELS" ${ARGN})
     set(_extra_sources ${_nat_UNPARSED_ARGUMENTS})
 
     # Sharding gate — when this test's hash bucket doesn't match the
@@ -189,7 +195,11 @@ function(nereus_add_test name)
     # this file from a global property each nereus_add_test() call
     # appends to.
     add_executable(${name} EXCLUDE_FROM_ALL ${name}.cpp $<TARGET_OBJECTS:nereus_test_sandbox> ${_extra_sources})
-    target_link_libraries(${name} PRIVATE NereusSDRLib Qt6::Test)
+    if(_nat_CORE_ONLY)
+        target_link_libraries(${name} PRIVATE NereusCore Qt6::Test)
+    else()
+        target_link_libraries(${name} PRIVATE NereusSDRLib Qt6::Test)
+    endif()
     set_property(GLOBAL APPEND PROPERTY NEREUS_ALL_TESTS ${name})
 
     # Reuse the NereusCore precompiled header (CMakeLists.txt §PCH).
@@ -2258,7 +2268,12 @@ nereus_add_test(tst_antenna_labels)
 #   - setActivePlan() emits planChanged, ignores unknown names
 #   - segments() / spots() reflect the active plan
 #   - Default plan after loadPlans() is "ARRL (US)" (no AppSettings key)
-nereus_add_test(tst_bandplan_manager)
+# R-R3-10 / R-R3-21: CORE_ONLY, so the test is the Core-only program nereusd
+# is. It proves the band plans come from NereusCore (the GUI resources are
+# absent) and that the loaded set is byte-for-byte resources/bandplans.
+nereus_add_test(tst_bandplan_manager CORE_ONLY)
+target_compile_definitions(tst_bandplan_manager PRIVATE
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # ── Phase 3G RX Epic sub-epic E: waterfall scrollback math helpers ──────────
 # Pure-arithmetic checks for the capacity-clamp + age→row formulas used by

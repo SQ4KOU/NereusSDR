@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <QtTest>
+#include <QDir>
+#include <QFile>
+#include <QLoggingCategory>
 #include <QSignalSpy>
 
 #include "models/BandPlan.h"
@@ -31,11 +34,18 @@ private slots:
 
     // Default selection
     void loadPlans_defaultsToArrlUs();
+
+    // R-R3-10 / R-R3-21: a Core-only program loads the full set
+    void coreOnlyLink_hasNoGuiResources();
+    void coreOnlyLink_bandPlansMatchSourceFiles();
 };
 
 void TestBandPlanManager::initTestCase()
 {
     // Resource init runs at static-init time; nothing to do here.
+    // loadPlans() logs its count once per call (the nereusd start-up
+    // proof, R-R3-10); keep that line out of the per-case output.
+    QLoggingCategory::setFilterRules(QStringLiteral("nereussdr.bandplan.info=false"));
 }
 
 void TestBandPlanManager::segment_defaultIsEmpty()
@@ -136,6 +146,43 @@ void TestBandPlanManager::loadPlans_defaultsToArrlUs()
     mgr.loadPlans();
     QVERIFY(!mgr.activePlanName().isEmpty());
     QVERIFY(!mgr.segments().isEmpty());
+}
+
+// This binary links NereusCore alone (CORE_ONLY in tests/CMakeLists.txt),
+// like nereusd. The GUI library's resources must therefore be absent: if
+// they were present, a passing band-plan load could still be coming from
+// NereusSDRLib, which a Linux --as-needed link drops.
+void TestBandPlanManager::coreOnlyLink_hasNoGuiResources()
+{
+    QVERIFY(!QFile::exists(QStringLiteral(":/icons/NereusSDR.png")));
+    QVERIFY(!QFile::exists(QStringLiteral(":/meters/ananMM.png")));
+}
+
+// The Core carries exactly the band plans the app always shipped: every
+// file in resources/bandplans, under the same name, with the same bytes,
+// and nothing else.
+void TestBandPlanManager::coreOnlyLink_bandPlansMatchSourceFiles()
+{
+    const QDir srcDir(QStringLiteral(NEREUS_SOURCE_DIR "/resources/bandplans"));
+    const QStringList srcFiles =
+        srcDir.entryList({QStringLiteral("*.json")}, QDir::Files, QDir::Name);
+    const QStringList resFiles = QDir(QStringLiteral(":/bandplans"))
+        .entryList({QStringLiteral("*.json")}, QDir::Files, QDir::Name);
+
+    QCOMPARE(srcFiles.size(), 5);
+    QCOMPARE(resFiles, srcFiles);
+
+    for (const QString& name : srcFiles) {
+        QFile src(srcDir.filePath(name));
+        QFile res(QStringLiteral(":/bandplans/") + name);
+        QVERIFY2(src.open(QIODevice::ReadOnly), qPrintable(name));
+        QVERIFY2(res.open(QIODevice::ReadOnly), qPrintable(name));
+        QVERIFY2(res.readAll() == src.readAll(), qPrintable(name));
+    }
+
+    BandPlanManager mgr;
+    mgr.loadPlans();
+    QCOMPARE(mgr.availablePlans().size(), srcFiles.size());
 }
 
 QTEST_MAIN(TestBandPlanManager)

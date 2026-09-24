@@ -1491,6 +1491,17 @@ set(GUI_SOURCES
 # --------------------------------------------------------------------------
 qt_add_resources(RESOURCES resources.qrc)
 
+# R-R3-10 / R-R3-21: the band plans belong to the Core, not the GUI.
+# BandPlanManager (a NereusCore source, called from RadioModel) reads
+# :/bandplans, so the files are compiled into NereusCore. While they sat in
+# resources.qrc on NereusSDRLib, any program that used only Core symbols
+# (nereusd, and tst_bandplan_manager once GCC's default --as-needed dropped
+# the unused GUI library) loaded no band plans at all. The app still sees
+# the same five files: it loads NereusCore too. BandPlanManager.cpp also
+# calls Q_INIT_RESOURCE(bandplans) so the resource stays reachable from a
+# Core-only link of any kind.
+qt_add_resources(CORE_RESOURCES resources/bandplans.qrc)
+
 # --------------------------------------------------------------------------
 # App icon (per-platform) — from main (PR #11)
 # --------------------------------------------------------------------------
@@ -1524,6 +1535,7 @@ endif()
 add_library(NereusCore SHARED
     ${CORE_SOURCES}
     ${MODEL_SOURCES}
+    ${CORE_RESOURCES}
 )
 
 add_library(NereusSDRLib SHARED
@@ -1560,6 +1572,7 @@ if(NEREUSSDR_LTO_AVAILABLE)
     add_library(NereusCore_LTO OBJECT
         ${CORE_SOURCES}
         ${MODEL_SOURCES}
+        ${CORE_RESOURCES}
     )
     add_library(NereusGui_LTO OBJECT
         ${GUI_SOURCES}
