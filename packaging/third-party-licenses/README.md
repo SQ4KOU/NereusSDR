@@ -18,7 +18,7 @@ directory alongside NereusSDR's own `LICENSE`.
 | r8brain-free-src 5c44bebe | sample rate conversion for RADE transmit audio | MIT | `r8brain.txt`, `r8brain-notices.txt` | `r8brain.txt` |
 | libspecbleach 0.2.0 (41d3f583) | NR4 noise reduction | LGPL-2.1-or-later | `libspecbleach.txt` | `LGPLv2.1.txt` |
 | rnnoise 70f1d256 | NR3 noise reduction and its two bundled models | BSD-3-Clause | `rnnoise.txt`, `rnnoise-notices.txt` | `rnnoise.txt` |
-| DeepFilterNet d375b2d8 | DFNR noise reduction library and its bundled model | Apache-2.0 OR MIT | `deepfilternet.txt` | `deepfilternet-apache.txt`, `deepfilternet-mit.txt` |
+| DeepFilterNet d375b2d8 | DFNR noise reduction library and its bundled model | Apache-2.0 OR MIT | `deepfilternet.txt`, `deepfilternet-crates.txt` | `deepfilternet-apache.txt`, `deepfilternet-mit.txt` |
 | PortAudio v19.7.0 | audio device input and output | MIT | `portaudio.txt`, `portaudio-notices.txt` | `portaudio.txt` |
 | nlohmann json 55f93686 | JSON parsing for libdatachannel | MIT | `nlohmann-json.txt` | `nlohmann-json.txt` |
 | zlib v1.3.1 (Windows builds) | compression for stored equaliser settings | Zlib | `zlib.txt` | `zlib.txt` |
@@ -56,7 +56,7 @@ directory, or when a text file here is named by no row.
 | r8brain-free-src | `third_party/r8brain` | 5c44bebe9c477d47b1dc7037fcaae2794ff2b4e1 | desktop packages and the Core | `r8brain.txt`, `r8brain-notices.txt` |
 | libspecbleach | `third_party/libspecbleach`, FetchContent `libspecbleach_upstream` | 41d3f58310391e05ecfb8b7c9efb62ea2ba8ef05 (v0.2.0) | desktop packages and the Core | `libspecbleach.txt` |
 | rnnoise | `third_party/rnnoise`, FetchContent `rnnoise_upstream` | 70f1d256acd4b34a572f999a05c87bf00b67730d | desktop packages and the Core (models too) | `rnnoise.txt`, `rnnoise-notices.txt` |
-| DeepFilterNet | `third_party/deepfilter`, built or downloaded by `setup-deepfilter.sh` and `setup-deepfilter.ps1` | d375b2d8309e0935d165700c91da9de862a99c31 | desktop packages, and the Core when its build has the library | `deepfilternet.txt` |
+| DeepFilterNet | `third_party/deepfilter`, built or downloaded by `setup-deepfilter.sh` and `setup-deepfilter.ps1` | d375b2d8309e0935d165700c91da9de862a99c31 | desktop packages, and the Core when its build has the library | `deepfilternet.txt`, `deepfilternet-crates.txt` |
 | PortAudio | FetchContent `portaudio` | v19.7.0 | desktop packages and the Core | `portaudio.txt`, `portaudio-notices.txt` |
 | zlib | FetchContent `zlib` on Windows; the system library elsewhere | v1.3.1 on Windows | Windows packages | `zlib.txt` |
 | libdatachannel | FetchContent `nereus_libdatachannel` | v0.24.5 | desktop packages and the Core | `libdatachannel.txt`, `libdatachannel-notices.txt` |
@@ -105,9 +105,14 @@ audio driver) have not been surveyed yet.
 DeepFilterNet's library is compiled from Rust crates, each under its own
 licence. When `setup-deepfilter.sh` or `setup-deepfilter.ps1` builds the
 library from source, it also writes `deepfilternet-crates.txt` here with
-`scripts/collect-crate-notices.py`: every crate compiled into the library,
-its version, its licence expression and its licence and notice files,
-copied byte for byte.
+`scripts/collect-crate-notices.py`: every crate compiled into the library
+on any platform, its version, its licence expression and its licence and
+notice files, copied byte for byte. The file names the DeepFilterNet
+commit it was generated from, and `scripts/check-third-party-licenses.py`
+fails when that differs from `third_party/deepfilter/COMMIT`, because a
+prebuilt download never rewrites it. Two crates, crunchy 0.2.2 and
+realfft 3.3.0, declare MIT in their manifests but carry no licence file
+in their sources, so their entries have only the licence expression.
 
 ## Opus model data
 
@@ -218,6 +223,7 @@ the §6(b) fallback.
 - `libjuice-notices.txt` notices in the libjuice sources NereusSDR compiles
 - `usrsctp-notices.txt` notices in the usrsctp sources NereusSDR compiles
 - `libsrtp-notices.txt` notices in the libsrtp sources NereusSDR compiles
+- `deepfilternet-crates.txt` licences and notices of the Rust crates in the DeepFilterNet library
 
 This directory is installed to:
 
