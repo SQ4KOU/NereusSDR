@@ -401,7 +401,7 @@ TunerModel::StationConnectionState state(TunerModel::ConnectionPhase phase,
 QAction* connectionToggle(QMenu* menu)
 {
     for (QAction* a : menu->actions()) {
-        if (a->text() == QStringLiteral("Reconnect") || a->text() == QStringLiteral("Disconnect")
+        if (a->text() == QStringLiteral("Connect") || a->text() == QStringLiteral("Disconnect")
             || a->text() == QStringLiteral("Cancel")) {
             return a;
         }
@@ -917,9 +917,9 @@ void RemotePeripheralsTest::remoteAppletsConnectAndDisconnectThroughTheCore()
     {
         std::unique_ptr<QMenu> ampMenu(amp.buildContextMenuForTesting());
         std::unique_ptr<QMenu> rfKitMenu(rfKit.buildContextMenuForTesting());
-        checkToggle(ampMenu.get(), QStringLiteral("Reconnect"), false,
+        checkToggle(ampMenu.get(), QStringLiteral("Connect"), false,
                     QStringLiteral("Waiting for the Core to connect."));
-        checkToggle(rfKitMenu.get(), QStringLiteral("Reconnect"), false,
+        checkToggle(rfKitMenu.get(), QStringLiteral("Connect"), false,
                     QStringLiteral("Waiting for the Core to connect."));
     }
     QVERIFY(amp.connectionLineTextForTesting().isEmpty());
@@ -932,9 +932,9 @@ void RemotePeripheralsTest::remoteAppletsConnectAndDisconnectThroughTheCore()
     {
         std::unique_ptr<QMenu> ampMenu(amp.buildContextMenuForTesting());
         std::unique_ptr<QMenu> rfKitMenu(rfKit.buildContextMenuForTesting());
-        checkToggle(ampMenu.get(), QStringLiteral("Reconnect"), false,
+        checkToggle(ampMenu.get(), QStringLiteral("Connect"), false,
                     QStringLiteral("This Core does not offer Power Genius XL control to this app."));
-        checkToggle(rfKitMenu.get(), QStringLiteral("Reconnect"), false,
+        checkToggle(rfKitMenu.get(), QStringLiteral("Connect"), false,
                     QStringLiteral("This Core does not offer RF-Kit amplifier setup to this app."));
         connectionToggle(ampMenu.get())->trigger();
         connectionToggle(rfKitMenu.get())->trigger();
@@ -955,13 +955,13 @@ void RemotePeripheralsTest::remoteAppletsConnectAndDisconnectThroughTheCore()
     {
         std::unique_ptr<QMenu> ampMenu(amp.buildContextMenuForTesting());
         std::unique_ptr<QMenu> rfKitMenu(rfKit.buildContextMenuForTesting());
-        checkToggle(ampMenu.get(), QStringLiteral("Reconnect"), false,
+        checkToggle(ampMenu.get(), QStringLiteral("Connect"), false,
                     QStringLiteral("Enter the Power Genius address in Setup first."));
-        checkToggle(rfKitMenu.get(), QStringLiteral("Reconnect"), false,
+        checkToggle(rfKitMenu.get(), QStringLiteral("Connect"), false,
                     QStringLiteral("Enter the RF-Kit amplifier's address in Setup first."));
     }
 
-    // Reconnect asks the Core to dial its saved address.
+    // Connect asks the Core to dial its saved address.
     model.amplifierModel()->setStationConnectionState(
         state(TunerModel::ConnectionPhase::Disconnected, QStringLiteral("192.0.2.40"), 9008));
     model.rfKitModel()->setStationConnectionState(
@@ -969,8 +969,8 @@ void RemotePeripheralsTest::remoteAppletsConnectAndDisconnectThroughTheCore()
     {
         std::unique_ptr<QMenu> ampMenu(amp.buildContextMenuForTesting());
         std::unique_ptr<QMenu> rfKitMenu(rfKit.buildContextMenuForTesting());
-        checkToggle(ampMenu.get(), QStringLiteral("Reconnect"), true, QString());
-        checkToggle(rfKitMenu.get(), QStringLiteral("Reconnect"), true, QString());
+        checkToggle(ampMenu.get(), QStringLiteral("Connect"), true, QString());
+        checkToggle(rfKitMenu.get(), QStringLiteral("Connect"), true, QString());
         connectionToggle(ampMenu.get())->trigger();
         connectionToggle(rfKitMenu.get())->trigger();
     }
@@ -1104,8 +1104,8 @@ void RemotePeripheralsTest::remoteAppletsConnectAndDisconnectThroughTheCore()
     {
         std::unique_ptr<QMenu> ampMenu(localAmp.buildContextMenuForTesting());
         std::unique_ptr<QMenu> rfKitMenu(localRfKit.buildContextMenuForTesting());
-        checkToggle(ampMenu.get(), QStringLiteral("Reconnect"), true, QString());
-        checkToggle(rfKitMenu.get(), QStringLiteral("Reconnect"), true, QString());
+        checkToggle(ampMenu.get(), QStringLiteral("Connect"), true, QString());
+        checkToggle(rfKitMenu.get(), QStringLiteral("Connect"), true, QString());
         connectionToggle(ampMenu.get())->trigger();
         connectionToggle(rfKitMenu.get())->trigger();
     }
@@ -1331,7 +1331,7 @@ void RemotePeripheralsTest::remoteWindowSetsUpThePgxlThroughTheCore()
         std::unique_ptr<QMenu> menu(applet.buildContextMenuForTesting());
         QAction* toggle = connectionToggle(menu.get());
         QVERIFY(toggle && toggle->isEnabled());
-        QCOMPARE(toggle->text(), QStringLiteral("Reconnect"));
+        QCOMPARE(toggle->text(), QStringLiteral("Connect"));
         toggle->trigger();
     }
     QTRY_VERIFY(amp.hasPendingConnections());   // the Core dials its saved address
@@ -1547,7 +1547,7 @@ void RemotePeripheralsTest::remoteWindowSetsUpTheRfKitThroughTheCore()
         std::unique_ptr<QMenu> menu(applet.buildContextMenuForTesting());
         QAction* toggle = connectionToggle(menu.get());
         QVERIFY(toggle && toggle->isEnabled());
-        QCOMPARE(toggle->text(), QStringLiteral("Reconnect"));
+        QCOMPARE(toggle->text(), QStringLiteral("Connect"));
         toggle->trigger();
     }
     QTRY_COMPARE_WITH_TIMEOUT(window.rfKitModel()->connectionPhase(),
@@ -1572,7 +1572,7 @@ void RemotePeripheralsTest::remoteWindowSetsUpTheRfKitThroughTheCore()
         std::unique_ptr<QMenu> menu(applet.buildContextMenuForTesting());
         QAction* toggle = connectionToggle(menu.get());
         QVERIFY(toggle && toggle->isEnabled());
-        QCOMPARE(toggle->text(), QStringLiteral("Reconnect"));
+        QCOMPARE(toggle->text(), QStringLiteral("Connect"));
         toggle->trigger();
     }
     QTRY_COMPARE(applet.connectionLineTextForTesting(),

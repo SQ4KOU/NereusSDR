@@ -193,7 +193,7 @@ AmpApplet::AmpApplet(RadioModel* model, QWidget* parent)
     vbox->addWidget(m_staleLabel);
 
     // R-R3-22: a remote window's line for the Core's connection to the amp
-    // and the reason a Disconnect or Reconnect was not taken.
+    // and the reason a Disconnect or Connect was not taken.
     m_connectionLabel = new QLabel(root);
     m_connectionLabel->setObjectName(QStringLiteral("ampConnectionLabel"));
     m_connectionLabel->setTextFormat(Qt::PlainText);
@@ -272,13 +272,13 @@ bool AmpApplet::stationConnectionActive(TunerModel::ConnectionPhase phase)
 
 // R-R3-22 fix wave: the remote toggle's words, as the Peripherals row
 // says them: Disconnect when connected, Cancel while the Core is still
-// trying (the same command cancels the attempt), Reconnect otherwise.
+// trying (the same command cancels the attempt), Connect otherwise.
 QString AmpApplet::stationConnectionToggleText(TunerModel::ConnectionPhase phase)
 {
     if (phase == TunerModel::ConnectionPhase::Connected) {
         return tr("Disconnect");
     }
-    return stationConnectionActive(phase) ? tr("Cancel") : tr("Reconnect");
+    return stationConnectionActive(phase) ? tr("Cancel") : tr("Connect");
 }
 
 bool AmpApplet::isRemoteWindow() const
@@ -312,7 +312,7 @@ void AmpApplet::updateConnectionLine()
     m_connectionLabel->setVisible(true);
 }
 
-// R-R3-22: the Core answered the applet's own Disconnect or Reconnect: a
+// R-R3-22: the Core answered the applet's own Disconnect or Connect: a
 // refusal shows its reason; either way the request is no longer waiting.
 // Other Power Genius requests (the Setup pages') show where they were sent.
 void AmpApplet::onStationCommandFinished(quint32 commandId, bool accepted,
@@ -508,7 +508,7 @@ void AmpApplet::setPgxlConnected(bool connected)
 // Menu structure per design doc ss5.9:
 //   Open PGXL Advanced...        -> navigationRequested("pgxlAdvanced")
 //   (separator)
-//   Disconnect / Reconnect        -> connectionToggleRequested()
+//   Disconnect / Connect        -> connectionToggleRequested()
 //   Copy diagnostics to clipboard -> diagnosticsCopyRequested()
 void AmpApplet::contextMenuEvent(QContextMenuEvent* ev)
 {
@@ -529,18 +529,18 @@ QMenu* AmpApplet::buildContextMenu(QObject* menuParent)
 
     menu->addSeparator();
 
-    // Disconnect or Reconnect depending on current state
+    // Disconnect or Connect depending on current state
     if (!isRemoteWindow()) {
         const QString toggleLabel = m_pgxlConnected
             ? QStringLiteral("Disconnect")
-            : QStringLiteral("Reconnect");
+            : QStringLiteral("Connect");
         auto* toggleAction = menu->addAction(toggleLabel);
         connect(toggleAction, &QAction::triggered, this, [this]() {
             emit connectionToggleRequested();
         });
     } else {
         // R-R3-22 / R-R3-47: the Core owns the amp's connection. Disconnect
-        // (or cancel an attempt) and Reconnect to its saved address go to
+        // (or cancel an attempt) and Connect to its saved address go to
         // the Core; nothing here opens a connection of this computer's own.
         const bool active = m_amp && stationConnectionActive(m_amp->connectionPhase());
         auto* toggleAction = menu->addAction(stationConnectionToggleText(

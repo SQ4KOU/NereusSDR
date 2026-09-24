@@ -752,7 +752,7 @@ void TunerApplet::setTgxlConnected(bool connected)
 //   Recall tune memory for current (ant,band) -> apply stored positions (if any)
 //   Clear tune memory for current (ant,band)  -> m_tuneStore->clear(ant, band)
 //   (separator)
-//   Disconnect / Reconnect                    -> connectionToggleRequested()
+//   Disconnect / Connect                    -> connectionToggleRequested()
 //   Copy diagnostics to clipboard             -> diagnosticsCopyRequested()
 void TunerApplet::contextMenuEvent(QContextMenuEvent* ev)
 {
@@ -851,7 +851,7 @@ QMenu* TunerApplet::buildContextMenu(QObject* menuParent)
         }
     } else {
         const QString toggleLabel = m_tgxlConnected
-            ? QStringLiteral("Disconnect") : QStringLiteral("Reconnect");
+            ? QStringLiteral("Disconnect") : QStringLiteral("Connect");
         auto* toggleAction = menu->addAction(toggleLabel);
         connect(toggleAction, &QAction::triggered, this, [this]() {
             emit connectionToggleRequested();

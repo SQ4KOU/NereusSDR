@@ -67,7 +67,7 @@ class TunerModel;
 //   Recall tune memory for current (ant,band) -> apply stored relay positions
 //   Clear tune memory for current (ant,band)  -> m_tuneStore->clear(ant,band)
 //   (separator)
-//   Disconnect / Reconnect                    -> connectionToggleRequested()
+//   Disconnect / Connect                    -> connectionToggleRequested()
 //   Copy diagnostics to clipboard             -> diagnosticsCopyRequested()
 //
 // From AetherSDR src/gui/TunerApplet.h [@0cd4559]
@@ -139,7 +139,7 @@ signals:
     // pageKey is "tgxlAdvanced"; MainWindow::openSetup() is the handler.
     void navigationRequested(const QString& pageKey);
 
-    // Emitted when "Disconnect" / "Reconnect" is triggered.
+    // Emitted when "Disconnect" / "Connect" is triggered.
     void connectionToggleRequested();
 
     // Emitted when "Copy diagnostics to clipboard" is triggered.
@@ -262,7 +262,7 @@ private:
     int  m_lastC1{0};
     int  m_lastL{0};
     int  m_lastC2{0};
-    // TGXL connected state for Disconnect/Reconnect label.
+    // TGXL connected state for Disconnect/Connect label.
     bool m_tgxlConnected{false};
     bool m_transmitPermitted{true};
     QString m_transmitPermissionReason;

@@ -57,7 +57,7 @@ class RadioModel;
 // Right-click context menu (Phase 3P-II Phase 4 Task 88):
 //   Open PGXL Advanced...        -> navigationRequested("pgxlAdvanced")
 //   (separator)
-//   Disconnect / Reconnect        -> connectionToggleRequested()
+//   Disconnect / Connect        -> connectionToggleRequested()
 //   Copy diagnostics to clipboard -> diagnosticsCopyRequested()
 //
 // From AetherSDR src/gui/AmpApplet.h [@0cd4559]
@@ -91,7 +91,7 @@ public:
     static bool stationConnectionActive(TunerModel::ConnectionPhase phase);
     // R-R3-22 fix wave: the remote toggle's words for a phase, as the
     // Peripherals row says them: Disconnect when connected, Cancel while
-    // the Core is still trying, Reconnect otherwise.
+    // the Core is still trying, Connect otherwise.
     static QString stationConnectionToggleText(TunerModel::ConnectionPhase phase);
 
     // Test seams (R-R3-47).
@@ -120,7 +120,7 @@ signals:
     // pageKey is "pgxlAdvanced"; MainWindow::openSetup() is the handler.
     void navigationRequested(const QString& pageKey);
 
-    // Emitted when "Disconnect" / "Reconnect" is triggered in a local
+    // Emitted when "Disconnect" / "Connect" is triggered in a local
     // window. MainWindow should call pgxlConnection()->disconnectFromPgxl()
     // or reconnect depending on current state. A remote window asks the
     // Core itself and does not emit this (R-R3-22).
@@ -148,7 +148,7 @@ public slots:
     bool isTransmitting() const { return m_isTransmitting; }
 
     // Phase 3P-II Phase 4 Task 88: update the connected flag so the
-    // context menu shows "Disconnect" vs "Reconnect" appropriately.
+    // context menu shows "Disconnect" vs "Connect" appropriately.
     void setPgxlConnected(bool connected);
 
 protected:
@@ -161,14 +161,14 @@ private slots:
     // R-R3-47: a remote window says when its readings are not live.
     void updateStationState();
     // R-R3-22: a remote window's connection line: the Core's phase, or the
-    // plain reason its last Disconnect or Reconnect was not taken.
+    // plain reason its last Disconnect or Connect was not taken.
     void updateConnectionLine();
     // R-R3-22 fix wave: the Core's answer to a command, by id; only the
-    // applet's own Disconnect or Reconnect (m_pendingCommandId) is shown.
+    // applet's own Disconnect or Connect (m_pendingCommandId) is shown.
     void onStationCommandFinished(quint32 commandId, bool accepted, const QString& reason);
 
 private:
-    // R-R3-22: a remote window's Disconnect or Reconnect, sent to the Core.
+    // R-R3-22: a remote window's Disconnect or Connect, sent to the Core.
     void requestRemoteConnectionToggle();
     bool isRemoteWindow() const;
 

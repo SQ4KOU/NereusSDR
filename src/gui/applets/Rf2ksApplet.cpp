@@ -230,7 +230,7 @@ Rf2ksApplet::Rf2ksApplet(RadioModel* model, QWidget* parent)
     root->addWidget(m_staleLabel);
 
     // R-R3-22: a remote window's line for the Core's connection to the amp
-    // and the reason a Disconnect or Reconnect was not taken.
+    // and the reason a Disconnect or Connect was not taken.
     m_connectionLabel = new QLabel(this);
     m_connectionLabel->setObjectName(QStringLiteral("rfKitConnectionLabel"));
     m_connectionLabel->setTextFormat(Qt::PlainText);
@@ -373,7 +373,7 @@ void Rf2ksApplet::updateConnectionLine()
     m_connectionLabel->setVisible(true);
 }
 
-// R-R3-22: the Core answered the applet's own Disconnect or Reconnect: a
+// R-R3-22: the Core answered the applet's own Disconnect or Connect: a
 // refusal shows its reason; either way the request is no longer waiting.
 // The RF-Kit page's requests show on the page.
 void Rf2ksApplet::onStationCommandFinished(quint32 commandId, bool accepted,
@@ -640,7 +640,7 @@ QMenu* Rf2ksApplet::buildContextMenu(QObject* menuParent)
     auto* disco = menu->addAction(remote
         ? AmpApplet::stationConnectionToggleText(
               m_rfKit ? m_rfKit->connectionPhase() : TunerModel::ConnectionPhase::Disabled)
-        : (active ? QStringLiteral("Disconnect") : QStringLiteral("Reconnect")));
+        : (active ? QStringLiteral("Disconnect") : QStringLiteral("Connect")));
     auto* diag  = menu->addAction(QStringLiteral("Copy diagnostics to clipboard"));
 
     connect(openAdv, &QAction::triggered, this, [this] {
