@@ -76,6 +76,7 @@ public:
     QString stationLineForTesting() const;
     bool switchOnForTesting() const;
     int portForTesting() const;
+    QSpinBox* portSpinForTesting() const { return m_portSpin; }
 
 signals:
     // Emitted when the operator toggles the Enable TCI Server checkbox.

@@ -396,6 +396,7 @@ private slots:
     void upgradeKeepsTciOnTheCoresComputer();
     void coresStoredSwitchWinsOverTheLink();
     void connectRuleReadsTheCurrentCore();
+    void tciPortIsSentWhenEditingFinishes();
     // R-R3-47 / R-R3-22
     void remoteWindowShowsTheCoresRecords();
     void remoteWindowChangesTheInterlockOnTheCore();
@@ -2711,6 +2712,27 @@ void RemotePeripheralsTest::refusalClaimsEndWithTheLink()
     window.reportStationLinkStateChanged();
     window.reportStationAccessoryRefusal(QStringLiteral("rfkit"), QStringLiteral("No."), 8);
     QVERIFY(!refused.last().at(2).toBool());     // the claim ended with the link
+}
+
+// Rework follow-up 5 (R-R3-48): typing a TCI port sends it (to this
+// window's server and the Core's) once, when editing finishes, not for
+// every keystroke.
+void RemotePeripheralsTest::tciPortIsSentWhenEditingFinishes()
+{
+    AppSettings::instance().clear();
+    CatTciServerPage page;
+    page.show();
+    QSpinBox* spin = page.portSpinForTesting();
+    QVERIFY(spin);
+    QSignalSpy sent(&page, &CatTciServerPage::tciServerBindOrPortChanged);
+    spin->setFocus();
+    spin->selectAll();
+    QTest::keyClicks(spin, QStringLiteral("50002"));
+    QCOMPARE(sent.count(), 0);
+    QTest::keyClick(spin, Qt::Key_Return);
+    QTRY_COMPARE(sent.count(), 1);
+    QCOMPARE(sent.first().at(1).toUInt(), 50002u);
+    AppSettings::instance().clear();
 }
 
 QTEST_MAIN(RemotePeripheralsTest)

@@ -224,6 +224,10 @@ void CatTciServerPage::buildServerGroup()
     m_portSpin = new QSpinBox(group);
     m_portSpin->setStyleSheet(QString::fromLatin1(Style::kSpinBoxStyle));
     m_portSpin->setRange(1024, 65535);
+    // Rework follow-up 5 (R-R3-48): the port is sent (to this window's
+    // server and the Core's) when editing finishes (Enter, focus leaving,
+    // the arrows), not for every keystroke.
+    m_portSpin->setKeyboardTracking(false);
     m_portSpin->setToolTip(tr("TCP port the TCI WebSocket server listens on (1024–65535). "
                                "Default is 50001. Requires server restart to take effect."));
     m_portSpin->setValue(
