@@ -131,6 +131,14 @@
 //                rfKitEnabled Core to window, and the Core's station TCI
 //                server (enableStationTci, setStationTciForStation). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: the Core's accessory records and
+//                settings (`accessoryData`, StationAccessoryData): Tuner
+//                Genius and RF-Kit faults recorded, connection counters
+//                owned here, the interlock, power-cap and fault-history
+//                commands, a window's setting changes applied at once, and
+//                a remote window fed from the Core's copy. NereusSDR-
+//                original; no Thetis logic. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -453,6 +461,9 @@ warren@wpratt.com
 #include "models/AmplifierModel.h"
 #include "models/RfKitModel.h"
 #include "models/StationTciModel.h"
+#include "models/AccessoryDataModel.h"
+#include "core/StationAccessoryData.h"
+#include "core/ConnectionDiagnostics.h"
 
 #include <algorithm>
 #include <cmath>
@@ -1414,6 +1425,76 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // instance is provided now so TgxlAdvancedPage can use the shared log.
     m_pgxlFaultLog = new FaultLog(QStringLiteral("PGXL_FaultHistory"), this);
     m_tgxlFaultLog = new FaultLog(QStringLiteral("TGXL_FaultHistory"), this);
+    // R-R3-47: the RF-Kit's faults, and (on the Core) the Tuner Genius's
+    // through StationTgxlController (enableStationAccessoryIdentity).
+    m_rfkitFaultLog = new FaultLog(QStringLiteral("RfKit_FaultHistory"), this);
+
+    // R-R3-47 / R-R3-22: the connection counters and the Core's accessory
+    // records and settings (`accessoryData`). A Local model (the Core, or a
+    // local window in process) counts on its own connections and keeps the
+    // object current; a Remote model's hold the Core's values and feed the
+    // same fault logs, counters, policy and tune memory its pages read.
+    m_pgxlDiagnostics = new ConnectionDiagnostics(this);
+    m_tgxlDiagnostics = new ConnectionDiagnostics(this);
+    m_accessoryDataModel = new AccessoryDataModel(this);
+    if (m_role == Role::Local) {
+        m_pgxlDiagnostics->bindTo(m_pgxlConnection);
+        m_tgxlDiagnostics->bindTo(m_tgxlConnection);
+        StationAccessoryData::Sources sources;
+        sources.pgxlFaults = m_pgxlFaultLog;
+        sources.tgxlFaults = m_tgxlFaultLog;
+        sources.rfkitFaults = m_rfkitFaultLog;
+        sources.pgxlDiagnostics = m_pgxlDiagnostics;
+        sources.tgxlDiagnostics = m_tgxlDiagnostics;
+        sources.interlock = m_txInterlockPolicy;
+        sources.tuneMemory = m_tuneMemoryStore;
+        m_stationAccessoryData = new StationAccessoryData(m_accessoryDataModel, sources, this);
+        // The power-cap alert, computed where the amp is (was
+        // MainWindow::onAmpMetersForPowerCap).
+        connect(this, &RadioModel::ampMetersChanged, m_stationAccessoryData,
+                [this](float fwd, float /*swr*/) {
+            m_stationAccessoryData->onForwardPower(static_cast<double>(fwd));
+        });
+        // The RF-Kit's faults, in plain words (Rf2ksConnection says what
+        // happened; its link and identity reasons are already plain).
+        connect(m_rfKitConnection.get(), &Rf2ksConnection::faultObserved, this,
+                [this](const QString& kind, const QString& detail) {
+            if (kind == QLatin1String("link") || kind == QLatin1String("identity")) {
+                m_rfkitFaultLog->captureNotice(kind, detail, QString());
+            } else if (kind == QLatin1String("interface")) {
+                m_rfkitFaultLog->captureNotice(
+                    kind,
+                    QStringLiteral("The RF-Kit amplifier reported a problem with how it "
+                                   "follows the radio."),
+                    detail);
+            } else {
+                m_rfkitFaultLog->captureNotice(
+                    kind, QStringLiteral("The RF-Kit amplifier reported a problem."), detail);
+            }
+        });
+    } else {
+        AccessoryDataModel* data = m_accessoryDataModel;
+        connect(data, &AccessoryDataModel::faultsChanged, this, [this, data] {
+            m_pgxlFaultLog->applyMirroredJson(data->pgxlFaults());
+            m_tgxlFaultLog->applyMirroredJson(data->tgxlFaults());
+            m_rfkitFaultLog->applyMirroredJson(data->rfkitFaults());
+        });
+        connect(data, &AccessoryDataModel::pgxlDiagnosticsChanged, this, [this, data] {
+            m_pgxlDiagnostics->applyMirroredCounters(data->pgxlDiagnostics());
+        });
+        connect(data, &AccessoryDataModel::tgxlDiagnosticsChanged, this, [this, data] {
+            m_tgxlDiagnostics->applyMirroredCounters(data->tgxlDiagnostics());
+        });
+        connect(data, &AccessoryDataModel::interlockChanged, this, [this, data] {
+            m_txInterlockPolicy->applyMirrored(
+                static_cast<TxInterlockPolicy::Mode>(static_cast<int>(data->interlockMode())),
+                data->interlockGraceMs(), data->interlockSwrGateEnabled(),
+                static_cast<float>(data->interlockSwrGateMax()));
+        });
+        connect(data, &AccessoryDataModel::tuneMemoryChanged, this, [this, data] {
+            m_tuneMemoryStore->applyMirroredJson(data->tuneMemory());
+        });
+    }
 
     // FlexRadio UDP 4992 discovery beacon.
     // Constructed once; configured in connectToRadio() once the radio MAC is
@@ -3284,6 +3365,11 @@ void RadioModel::enableStationAccessoryIdentity()
     if (m_role != Role::Local || m_stationTgxl) { return; }
     m_stationTgxl = new StationTgxlController(m_tgxlConnection, m_tunerModel, this);
     m_stationTgxl->cancel(!fourO3AEnabled());
+    // R-R3-47: the Tuner Genius's faults, recorded on the Core.
+    connect(m_stationTgxl, &StationTgxlController::faultObserved, this,
+            [this](const QString& kind, const QString& text, const QString& detail) {
+        m_tgxlFaultLog->captureNotice(kind, text, detail);
+    });
     // R-R3-47: the Power Genius, likewise identified before it is admitted
     // (and so before onPgxlConnected pairs it).
     m_stationPgxl = new StationPgxlController(m_pgxlConnection, m_amplifierModel, this);
@@ -3321,6 +3407,47 @@ bool RadioModel::setStationTciForStation(bool enabled, int port, QString* reason
         return false;
     }
     return m_stationTci->setEnabled(enabled, port, reason);
+}
+
+// ---------------------------------------------------------------------------
+// R-R3-47 / R-R3-22: the Core's accessory records and settings
+// (accessoryDataVersion 1). NereusSDR-original; no Thetis logic.
+// ---------------------------------------------------------------------------
+
+bool RadioModel::setTxInterlockPolicyForStation(int mode, int graceMs, bool swrGateEnabled,
+                                                double swrGateMax, QString* reason)
+{
+    if (m_role != Role::Local || !m_stationAccessoryData) {
+        if (reason) { *reason = QStringLiteral("Station accessory configuration is unavailable."); }
+        return false;
+    }
+    return m_stationAccessoryData->setInterlockPolicy(mode, graceMs, swrGateEnabled, swrGateMax,
+                                                      reason);
+}
+
+bool RadioModel::setPgxlPowerCapForStation(bool enabled, int watts, QString* reason)
+{
+    if (m_role != Role::Local || !m_stationAccessoryData) {
+        if (reason) { *reason = QStringLiteral("Station accessory configuration is unavailable."); }
+        return false;
+    }
+    return m_stationAccessoryData->setPowerCap(enabled, watts, reason);
+}
+
+bool RadioModel::clearAccessoryFaultsForStation(const QString& device, QString* reason)
+{
+    if (m_role != Role::Local || !m_stationAccessoryData) {
+        if (reason) { *reason = QStringLiteral("Station accessory configuration is unavailable."); }
+        return false;
+    }
+    return m_stationAccessoryData->clearFaults(device, reason);
+}
+
+void RadioModel::applyRemoteAccessorySetting(const QString& key)
+{
+    if (m_role == Role::Local && m_stationAccessoryData) {
+        m_stationAccessoryData->applySetting(key);
+    }
 }
 
 namespace {

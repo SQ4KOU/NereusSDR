@@ -2,6 +2,8 @@
 // Captured wire contract: captures/flex-tgxl-direct-NOTES.md:67-93;
 // discovery aliases and admission policy: remote-daemon-r3-plan, task 4d.
 // J.J. Boyd (KG4VCF), September 2026; AI-assisted via OpenAI Codex.
+// 2026-09-24: R-R3-47 / R-R3-22: faultObserved. J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
 #include "core/StationTgxlController.h"
 #include "core/LanDiscovery.h"
 #include <QHostAddress>
@@ -37,6 +39,9 @@ StationTgxlController::StationTgxlController(TgxlConnection* connection,
     });
     connect(connection, &TgxlConnection::disconnected, this, [this] {
         if (!m_running) { return; }
+        // R-R3-47: an operator's disconnect or cancel clears m_running
+        // first, so a drop here is the tuner going away.
+        const bool wasConnected = m_state.phase == Phase::Connected;
         stopDiscovery();
         m_attempt = 0;
         if (m_connection && m_connection->reconnectPending()) {
@@ -46,17 +51,29 @@ StationTgxlController::StationTgxlController(TgxlConnection* connection,
             m_state.phase = Phase::Disconnected;
         }
         m_state.peerAddress.clear();
+        QPointer<StationTgxlController> self(this);
         publish();
+        if (self && wasConnected) {
+            emit faultObserved(QStringLiteral("link"),
+                               QStringLiteral("The Tuner Genius stopped answering."), QString());
+        }
     });
     connect(connection, &TgxlConnection::connectionFailed, this,
             [this](const QString& reason) {
         if (!m_running) { return; }
         stopDiscovery();
         m_attempt = 0;
+        const bool newError = m_state.phase != Phase::Error || m_state.error != reason;
         m_state.phase = Phase::Error;
         m_state.error = reason;
         m_state.peerAddress.clear();
+        QPointer<StationTgxlController> self(this);
         publish();
+        if (self && newError) {
+            emit faultObserved(QStringLiteral("connection"),
+                               QStringLiteral("The Core could not connect to the Tuner Genius."),
+                               reason);
+        }
     });
     connect(connection, &TgxlConnection::reconnectAttempt, this, [this](int, int) {
         if (!m_running) { return; }

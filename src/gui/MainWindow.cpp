@@ -106,6 +106,11 @@
 //                the local RF-Kit band follow, the remote RF-Kit applet's
 //                Disconnect or Reconnect through the Core. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: the power-cap alert is the Core's
+//                (StationAccessoryData, in process for a local window)
+//                and shown from `accessoryData` in every window; a remote
+//                window's antenna names follow the Core's. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -344,6 +349,7 @@ warren@wpratt.com
 #include "core/FFTRouter.h"
 #include "StyleConstants.h"
 #include "models/RadioModel.h"
+#include "models/AccessoryDataModel.h"
 #include "models/SliceModel.h"
 #include "widgets/VfoWidget.h"
 #include "widgets/RxDashboard.h"
@@ -6264,8 +6270,12 @@ void MainWindow::populateDefaultMeter()
     // Fires a 5-second status-bar toast when peak forward power exceeds the
     // cap configured in Setup -> Peripherals -> PGXL Advanced -> Hardware.
     // De-bounced: one toast per exceedance event (re-arms below cap).
-    connect(m_radioModel, &RadioModel::ampMetersChanged,
-            this, &MainWindow::onAmpMetersForPowerCap);
+    // R-R3-47 / R-R3-22: the alert is computed where the amp is (the Core,
+    // or this window's own model in process) and shown from the
+    // `accessoryData` object, so every connected window sees it.
+    m_powerCapAlertSeen = m_radioModel->accessoryDataModel()->powerCapAlertCount();
+    connect(m_radioModel->accessoryDataModel(), &AccessoryDataModel::powerCapChanged,
+            this, &MainWindow::onPowerCapAlertChanged);
 
     // Phase 3P-II review fix C2: surface TX interlock decisions to the
     // operator via 5-second status-bar toasts.  Without these connections
@@ -6699,6 +6709,26 @@ void MainWindow::populateDefaultMeter()
                 diag += QStringLiteral("(connection unavailable)\n");
             }
             QGuiApplication::clipboard()->setText(diag);
+        });
+    }
+
+    // R-R3-47 / R-R3-22: a remote window's antenna names are the Core's.
+    if (m_radioModel->role() == RadioModel::Role::Remote) {
+        connect(m_radioModel->accessoryDataModel(), &AccessoryDataModel::labelsChanged, this,
+                [this] {
+            const AccessoryDataModel* data = m_radioModel->accessoryDataModel();
+            const QStringList tgxl = data->tgxlAntennaLabels();
+            if (m_tunerApplet) {
+                for (int i = 0; i < tgxl.size(); ++i) {
+                    m_tunerApplet->onAntennaLabelChanged(i + 1, tgxl.at(i));
+                }
+            }
+            const QStringList rfkit = data->rfkitAntennaLabels();
+            if (m_rfKitApplet) {
+                for (int i = 0; i < rfkit.size(); ++i) {
+                    m_rfKitApplet->setAntennaLabel(i + 1, rfkit.at(i));
+                }
+            }
         });
     }
 
@@ -9789,7 +9819,7 @@ void MainWindow::openDiversityDialog()
 
 // Phase 3P-II Phase 4 Task 97: PGXL power cap soft-alert toast.
 //
-// Fires a 5-second QStatusBar toast when peak forward power exceeds the
+// Fires a 5-second toast when peak forward power exceeds the
 // operator-configured PGXL cap.  De-bounced: one toast per exceedance event
 // (re-armed when fwd drops back below the cap threshold so a subsequent
 // exceedance fires a fresh toast).
@@ -9798,37 +9828,24 @@ void MainWindow::openDiversityDialog()
 //   docs/architecture/2026-05-18-pgxl-tgxl-and-analog-smeter-plan.md
 //   Task 97 / design ss5.6.2 "TX power cap: soft alert only".
 //
-// Keys:
-//   PGXL_PowerCapEnabled  -- "True"/"False", default "False"
-//   PGXL_PowerCapW        -- int watts, default 1500
-//
-// Connected to RadioModel::ampMetersChanged in buildUI() near Task 43.
-void MainWindow::onAmpMetersForPowerCap(float fwd, float /*swr*/)
+// R-R3-47 / R-R3-22: the rule (PGXL_PowerCapEnabled, PGXL_PowerCapW,
+// one alert per exceedance) moved to StationAccessoryData::onForwardPower,
+// which runs where the amp is. The window shows the alert when the
+// object's alert count moves while the output is over the limit; the count
+// it saw when the object first arrived is not an alert of its own.
+void MainWindow::onPowerCapAlertChanged()
 {
-    const bool enabled = AppSettings::instance()
-        .value(QStringLiteral("PGXL_PowerCapEnabled"), QStringLiteral("False"))
-        .toString() == QStringLiteral("True");
-    if (!enabled) {
-        m_powerCapToastShown = false;   // keep re-arm state sane if feature toggled
+    const AccessoryDataModel* data = m_radioModel->accessoryDataModel();
+    const qint64 count = data->powerCapAlertCount();
+    if (count == m_powerCapAlertSeen) {
         return;
     }
-
-    const float capW = AppSettings::instance()
-        .value(QStringLiteral("PGXL_PowerCapW"), 1500).toFloat();
-
-    if (fwd <= capW) {
-        m_powerCapToastShown = false;   // re-arm: fwd is back below cap
+    const bool fresh = count > m_powerCapAlertSeen;
+    m_powerCapAlertSeen = count;
+    if (!fresh || !data->powerCapExceeded() || data->powerCapAlertText().isEmpty()) {
         return;
     }
-
-    if (m_powerCapToastShown) { return; }   // de-bounce: already toasted this exceedance
-    m_powerCapToastShown = true;
-
-    const QString msg = QStringLiteral("PGXL power %1 W exceeds cap %2 W")
-        .arg(static_cast<int>(fwd))
-        .arg(static_cast<int>(capW));
-    showToast(msg, ToastSeverity::Error, 5000);
-    qCWarning(lcMeter) << msg;
+    showToast(data->powerCapAlertText(), ToastSeverity::Error, 5000);
 }
 
 // ── Phase 3P-II review fix C2: TX interlock warning/denial toasts ────────────

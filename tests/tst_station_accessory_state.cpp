@@ -6,6 +6,12 @@
 // an older app are offered, the read-only refusal, and the control
 // document's fixtures (tests/fixtures/accessories). J.J. Boyd (KG4VCF),
 // AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-47 / R-R3-22 accessory records and settings
+// (`accessoryData`, accessoryDataVersion 1): offered to current apps only
+// and read-only, its fixture, the interlock enum, the Tuner Genius faults
+// the Core records (a live connection dropping, an attempt ending at an
+// error, never an operator's disconnect), and the power-cap alert the Core
+// raises. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include <QtTest/QtTest>
 #include <QFile>
 #include <QJsonArray>
@@ -23,11 +29,19 @@
 #include "core/PgxlConnection.h"
 #include "core/PgxlStatusGauges.h"
 #include "core/Rf2ksConnection.h"
+#include "core/ConnectionDiagnostics.h"
+#include "core/FaultLog.h"
+#include "core/StationAccessoryData.h"
+#include "core/TgxlConnection.h"
+#include "core/TuneMemoryStore.h"
+#include "core/TxInterlockPolicy.h"
+#include "OperatorWording.h"
 #include "core/TxSliceArbiter.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StateMirror.h"
 #include "core/session/StationCapabilities.h"
 #include "core/session/StationServer.h"
+#include "models/AccessoryDataModel.h"
 #include "models/AmplifierModel.h"
 #include "models/RadioModel.h"
 #include "models/RfKitModel.h"
@@ -168,7 +182,9 @@ bool snapshotDone(const LoopbackTransport* peer)
 bool namesAccessory(const SessionMessage& m)
 {
     return m.objectKey == "amplifier" || m.objectKey == "rfkit"
-        || m.className == "AmplifierModel" || m.className == "RfKitModel";
+        || m.objectKey == "accessoryData"
+        || m.className == "AmplifierModel" || m.className == "RfKitModel"
+        || m.className == "AccessoryDataModel";
 }
 
 } // namespace
@@ -573,12 +589,17 @@ private slots:
                 peer->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
                     "rfkit",
                     {MirrorUpdate{0, "operate", MirrorWireKind::Bool, QVariant(true)}}, 8)));
+                // R-R3-47: the accessory records change only by command.
+                peer->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+                    "accessoryData",
+                    {MirrorUpdate{0, "interlockMode", MirrorWireKind::Enum,
+                                  QVariant(qlonglong(2))}}, 9)));
                 QTRY_VERIFY([&] {
                     int results = 0;
                     for (const SessionMessage& m : receivedMessages(peer)) {
                         results += m.kind == SessionMessageKind::PropertyResult ? 1 : 0;
                     }
-                    return results == 2;
+                    return results == 3;
                 }());
             }
             *out = receivedMessages(peer);
@@ -589,17 +610,21 @@ private slots:
         StationCapabilities caps;
         bool sawAmplifier = false;
         bool sawRfKit = false;
+        bool sawAccessoryData = false;
         QStringList refusals;
         for (const SessionMessage& m : current) {
             if (m.kind == SessionMessageKind::Capabilities) {
                 caps = StationCapabilities::fromUpdates(m.updates);
-                QCOMPARE(m.updates.at(m.updates.size() - 3).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 4).name,
                          QByteArrayLiteral("remotePgxlControlVersion"));
-                QCOMPARE(m.updates.at(m.updates.size() - 2).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 3).name,
                          QByteArrayLiteral("remoteRfKitControlVersion"));
-                // R-R3-48: the station TCI server's version travels last.
-                QCOMPARE(m.updates.constLast().name,
+                // R-R3-48: then the station TCI server's version.
+                QCOMPARE(m.updates.at(m.updates.size() - 2).name,
                          QByteArrayLiteral("stationTciVersion"));
+                // R-R3-47: the accessory records' version travels last.
+                QCOMPARE(m.updates.constLast().name,
+                         QByteArrayLiteral("accessoryDataVersion"));
             }
             if (m.kind == SessionMessageKind::ObjectCreate && m.objectKey == "amplifier") {
                 sawAmplifier = true;
@@ -617,6 +642,10 @@ private slots:
             if (m.kind == SessionMessageKind::ObjectCreate && m.objectKey == "rfkit") {
                 sawRfKit = true;
             }
+            if (m.kind == SessionMessageKind::ObjectCreate && m.objectKey == "accessoryData") {
+                sawAccessoryData = true;
+                QCOMPARE(m.className, QByteArrayLiteral("AccessoryDataModel"));
+            }
             if (m.kind == SessionMessageKind::PropertyResult) {
                 QCOMPARE(m.propertyResults.size(), 1);
                 QVERIFY(!m.propertyResults.first().accepted);
@@ -627,13 +656,17 @@ private slots:
         QCOMPARE(caps.remotePgxlControlVersion, 2);
         // R-R3-47: 2 once the Core's RF-Kit commands are offered (Task 3).
         QCOMPARE(caps.remoteRfKitControlVersion, 2);
+        // R-R3-47: the accessory records and settings (Task 4).
+        QCOMPARE(caps.accessoryDataVersion, 1);
         QVERIFY(sawAmplifier);
         QVERIFY(sawRfKit);
+        QVERIFY(sawAccessoryData);
         refusals.sort();
         // R-R3-25 / R-R3-47: the Core is receive-only (StationServer sets
         // it), so the amp's `operate` gets the receive-only reason.
         QStringList expected{AmplifierModel::receiveOnlyOperateReason(),
-                             RfKitModel::readOnlyReason()};
+                             RfKitModel::readOnlyReason(),
+                             AccessoryDataModel::readOnlyReason()};
         expected.sort();
         QCOMPARE(refusals, expected);
 
@@ -646,6 +679,7 @@ private slots:
                 QVERIFY(u.name != "remotePgxlControlVersion");
                 QVERIFY(u.name != "remoteRfKitControlVersion");
                 QVERIFY(u.name != "stationTciVersion");
+                QVERIFY(u.name != "accessoryDataVersion");
             }
         }
 
@@ -658,6 +692,7 @@ private slots:
                 const StationCapabilities c = StationCapabilities::fromUpdates(m.updates);
                 QCOMPARE(c.remotePgxlControlVersion, 0);
                 QCOMPARE(c.remoteRfKitControlVersion, 0);
+                QCOMPARE(c.accessoryDataVersion, 0);
             }
         }
     }
@@ -809,6 +844,8 @@ private slots:
         // R-R3-47 / R-R3-48: band follow and the RF-Kit tuner's mode.
         check("bandFollow", QMetaEnum::fromType<TunerModel::BandFollow>());
         check("rfkitTunerMode", QMetaEnum::fromType<RfKitModel::TunerMode>());
+        // R-R3-47 / R-R3-22: the interlock mode on `accessoryData`.
+        check("interlockMode", QMetaEnum::fromType<AccessoryDataModel::InterlockMode>());
         const QJsonObject reasons = root.value(QLatin1String("refusals")).toObject();
         QCOMPARE(reasons.value(QLatin1String("amplifierReadOnly")).toString(),
                  AmplifierModel::readOnlyReason());
@@ -816,6 +853,245 @@ private slots:
                  RfKitModel::readOnlyReason());
         QCOMPARE(reasons.value(QLatin1String("stationTciReadOnly")).toString(),
                  StationTciModel::readOnlyReason());
+        QCOMPARE(reasons.value(QLatin1String("accessoryDataReadOnly")).toString(),
+                 AccessoryDataModel::readOnlyReason());
+    }
+
+    // R-R3-47 / R-R3-22: the accessoryData fixture is what the Core sends:
+    // a Power Genius fault, the interlock policy, the output limit, a tune
+    // memory and antenna names at attach; then a Tuner Genius fault, the
+    // output going over the limit, and the amp's counters.
+    void accessoryDataFixtureIsWhatTheCoreSends()
+    {
+        auto& s = AppSettings::instance();
+        s.setValue(QStringLiteral("PGXL_TxInterlockMode"), QStringLiteral("Block"));
+        s.setValue(QStringLiteral("PGXL_TxInterlockGraceMs"), 2000);
+        s.setValue(QStringLiteral("PGXL_TxSwrGate"), QStringLiteral("True"));
+        s.setValue(QStringLiteral("PGXL_TxSwrGateMax"), QStringLiteral("2.5"));
+        s.setValue(QStringLiteral("PGXL_PowerCapEnabled"), QStringLiteral("True"));
+        s.setValue(QStringLiteral("PGXL_PowerCapW"), 1500);
+        s.setValue(QStringLiteral("TGXL_AutoTuneMemoryRecall"), QStringLiteral("True"));
+        s.setValue(QStringLiteral("TGXL_Ant1_Label"), QStringLiteral("80 m dipole"));
+        s.setValue(QStringLiteral("RfKit_Ant2_Label"), QStringLiteral("Beam"));
+
+        FaultLog pgxl(QStringLiteral("PGXL_FaultHistory"));
+        FaultLog tgxl(QStringLiteral("TGXL_FaultHistory"));
+        FaultLog rfkit(QStringLiteral("RfKit_FaultHistory"));
+        // The captured fault line's readings (kPgxlFault): SWR 2.85 is
+        // above 2.5, so the likely cause is high SWR.
+        pgxl.capture(FaultEvent{1790000000000, QStringLiteral("FAULT"), 1820.0f, 2.85f, 78.0f,
+                                FaultLog::likelyCauseFor(1820.0f, 2.85f, 78.0f)});
+        TuneMemoryStore memory;
+        memory.store(TuneMemory{1, Band::Band20m, 120, 45, 200, 1790000000000});
+        TxInterlockPolicy policy;
+        ConnectionDiagnostics pgxlDiag;
+        ConnectionDiagnostics tgxlDiag;
+        AccessoryDataModel data;
+        StationAccessoryData::Sources sources;
+        sources.pgxlFaults = &pgxl;
+        sources.tgxlFaults = &tgxl;
+        sources.rfkitFaults = &rfkit;
+        sources.pgxlDiagnostics = &pgxlDiag;
+        sources.tgxlDiagnostics = &tgxlDiag;
+        sources.interlock = &policy;
+        sources.tuneMemory = &memory;
+        StationAccessoryData core(&data, sources);
+
+        MirrorRecorder recorder("accessoryData", &data);
+        FaultEvent link{1790000060000, QStringLiteral("link"), 0.0f, 0.0f, 0.0f, QString()};
+        link.text = QStringLiteral("The Tuner Genius stopped answering.");
+        tgxl.capture(link);
+        recorder.flush();
+        core.onForwardPower(1600.0);
+        recorder.flush();
+        ConnectionDiagnostics::Counters counters;
+        counters.connectedSinceMs = 1790000000000;
+        counters.lastRttMs = 12;
+        counters.reconnectCount = 1;
+        counters.framesIn = 42;
+        counters.framesOut = 40;
+        counters.bytesIn = 2048;
+        counters.bytesOut = 1024;
+        counters.lastFrameMs = 1790000059000;
+        pgxlDiag.applyMirroredCounters(counters);
+        recorder.flush();
+        QString why;
+        QVERIFY2(matchesFixture(QStringLiteral("accessoryData.jsonl"), recorder.text(), &why),
+                 qPrintable(why));
+
+        QFile file(fixturePath(QStringLiteral("accessoryData.jsonl")));
+        QVERIFY(file.open(QIODevice::ReadOnly));
+        const QList<SessionMessage> messages = decodeLines(file.readAll());
+        QCOMPARE(messages.size(), 6);
+        AccessoryDataModel window;
+        for (const SessionMessage& m : messages) {
+            for (const MirrorUpdate& u : m.updates) {
+                QVERIFY2(window.applyStationValue(u.name, u.value), u.name.constData());
+            }
+        }
+        QCOMPARE(window.faultRevision(), data.faultRevision());
+        QCOMPARE(window.interlockMode(), AccessoryDataModel::InterlockMode::Block);
+        QCOMPARE(window.interlockGraceMs(), 2000);
+        QVERIFY(window.interlockSwrGateEnabled());
+        QCOMPARE(window.interlockSwrGateMax(), 2.5);
+        QVERIFY(window.powerCapEnabled());
+        QCOMPARE(window.powerCapW(), 1500);
+        QVERIFY(window.powerCapExceeded());
+        QCOMPARE(window.powerCapAlertCount(), 1);
+        QCOMPARE(window.powerCapAlertText(),
+                 QStringLiteral("Power Genius output 1600 W is above the 1500 W limit."));
+        QVERIFY(OperatorWording::isPlain(window.powerCapAlertText()));
+        QCOMPARE(window.pgxlReconnectCount(), 1);
+        QCOMPARE(window.pgxlBytesIn(), 2048);
+        QCOMPARE(window.tgxlAntenna1Label(), QStringLiteral("80 m dipole"));
+        QCOMPARE(window.rfkitAntenna2Label(), QStringLiteral("Beam"));
+        QVERIFY(window.autoTuneMemoryRecall());
+        const QVector<TuneMemory> memories = TuneMemoryStore::fromJson(window.tuneMemory());
+        QCOMPARE(memories.size(), 1);
+        QCOMPARE(memories.first().band, Band::Band20m);
+        QCOMPARE(memories.first().l, 45);
+        FaultLog windowPgxl(QStringLiteral("PGXL_FaultHistory_Window"));
+        FaultLog windowTgxl(QStringLiteral("TGXL_FaultHistory_Window"));
+        windowPgxl.applyMirroredJson(window.pgxlFaults());
+        windowTgxl.applyMirroredJson(window.tgxlFaults());
+        QCOMPARE(windowPgxl.events().size(), 1);
+        QCOMPARE(windowPgxl.events().first().text,
+                 QStringLiteral("The Power Genius reported a fault. Likely cause: high SWR."));
+        QCOMPARE(windowTgxl.events().first().device, QStringLiteral("tgxl"));
+        QCOMPARE(windowTgxl.events().first().whenMs, 1790000060000);
+    }
+
+    // R-R3-47: the Core records the Tuner Genius's faults: a live
+    // connection dropping, and an attempt ending at an error. An operator's
+    // disconnect is not a fault.
+    void coreRecordsTunerGeniusFaults()
+    {
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost, 0));
+        RadioModel model;
+        model.enableStationAccessoryIdentity();
+        model.setReceiveOnlyStationPolicy(true);
+        RadioInfo radio;
+        radio.macAddress = QStringLiteral("aa:bb:cc:dd:ee:47");
+        model.setLastRadioInfoForTest(radio);
+        model.setConnectionStateForTest(ConnectionState::Connected);
+        model.setPeripheralValue(QStringLiteral("FourO3A_Enabled"), QStringLiteral("True"));
+        model.tgxlConnection()->testSetReconnectBackoffUnitMs(60000);
+        const auto infoSequence = [](const QSignalSpy& frames) {
+            const QRegularExpression rx(QStringLiteral("^C(\\d+)\\|info$"));
+            for (const auto& args : frames) {
+                const auto match = rx.match(args.first().toString());
+                if (match.hasMatch()) { return match.captured(1).toUInt(); }
+            }
+            return 0u;
+        };
+        const auto admit = [&](const QString& product, const QString& serial) -> QTcpSocket* {
+            QSignalSpy frames(model.tgxlConnection(), &TgxlConnection::testFrameWrittenForTesting);
+            QString reason;
+            if (!model.configureTgxlForStation(QStringLiteral("127.0.0.1"), server.serverPort(),
+                                               &reason)) {
+                return nullptr;
+            }
+            if (!QTest::qWaitFor([&] { return server.hasPendingConnections(); }, 2000)) {
+                return nullptr;
+            }
+            QTcpSocket* peer = server.nextPendingConnection();
+            peer->write("V1.2.17\n");
+            peer->flush();
+            if (!QTest::qWaitFor([&] { return infoSequence(frames) != 0; }, 2000)) {
+                return nullptr;
+            }
+            peer->write(QStringLiteral("R%1|0|info serial=241288-1 version=1.2.17 "
+                                       "nickname=Tuner_Genius_XL 3way=1\n")
+                            .arg(infoSequence(frames)).toUtf8());
+            peer->flush();
+            if (!QTest::qWaitFor([&] {
+                    return !model.tgxlConnection()->identityInfo().serial.isEmpty(); }, 2000)) {
+                return nullptr;
+            }
+            auto* discovery = model.findChild<LanDiscovery*>();
+            if (discovery == nullptr) { return nullptr; }
+            discovery->injectDatagramForTesting(
+                QStringLiteral("%1 ip=127.0.0.1 v=1.2.17 serial=%2 nickname=Tuner_Genius_XL")
+                    .arg(product, serial), server.serverPort());
+            return peer;
+        };
+
+        // Admitted, then an operator's disconnect: no fault.
+        QTcpSocket* peer = admit(QStringLiteral("TunerGeniusXL"), QStringLiteral("241288-1"));
+        QVERIFY(peer);
+        QTRY_COMPARE(model.tunerModel()->connectionPhase(), TunerModel::ConnectionPhase::Connected);
+        QString reason;
+        QVERIFY(model.disconnectTgxlForStation(&reason));
+        QCoreApplication::processEvents();
+        QVERIFY(model.tgxlFaultLog()->events().isEmpty());
+        const qint64 revision = model.accessoryDataModel()->faultRevision();
+
+        // Admitted, then the tuner goes away: one fault, in plain words.
+        peer = admit(QStringLiteral("TunerGeniusXL"), QStringLiteral("241288-1"));
+        QVERIFY(peer);
+        QTRY_COMPARE(model.tunerModel()->connectionPhase(), TunerModel::ConnectionPhase::Connected);
+        peer->disconnectFromHost();
+        QTRY_COMPARE(model.tgxlFaultLog()->events().size(), 1);
+        FaultEvent ev = model.tgxlFaultLog()->events().first();
+        QCOMPARE(ev.device, QStringLiteral("tgxl"));
+        QCOMPARE(ev.state, QStringLiteral("link"));
+        QCOMPARE(ev.text, QStringLiteral("The Tuner Genius stopped answering."));
+        QVERIFY(ev.whenMs > 0);
+        QVERIFY(model.accessoryDataModel()->faultRevision() > revision);
+        QVERIFY(model.accessoryDataModel()->tgxlFaults().contains(ev.text));
+        QVERIFY(model.disconnectTgxlForStation(&reason));
+
+        // Something else answers at the address: the attempt ends at an
+        // error, recorded once with what the Core found.
+        peer = admit(QStringLiteral("PowerGeniusXL"), QStringLiteral("241288-1"));
+        QVERIFY(peer);
+        QTRY_COMPARE(model.tgxlFaultLog()->events().size(), 2);
+        ev = model.tgxlFaultLog()->events().first();
+        QCOMPARE(ev.state, QStringLiteral("connection"));
+        QCOMPARE(ev.text, QStringLiteral("The Core could not connect to the Tuner Genius."));
+        QVERIFY(ev.detail.contains(QStringLiteral("PowerGeniusXL")));
+        QVERIFY(OperatorWording::isPlain(ev.text));
+        QVERIFY(model.disconnectTgxlForStation(&reason));
+    }
+
+    // R-R3-47 / R-R3-22: the Core raises the power-cap alert from the amp's
+    // own readings, once per time over the limit, as MainWindow did.
+    void coreRaisesThePowerCapAlert()
+    {
+        RadioModel core;
+        AccessoryDataModel* data = core.accessoryDataModel();
+        QString reason;
+        QVERIFY(!core.setPgxlPowerCapForStation(true, 50, &reason));
+        QVERIFY(OperatorWording::isPlain(reason));
+        QVERIFY(!core.setPgxlPowerCapForStation(true, 2001, &reason));
+        // Off: no alert however high.
+        core.pgxlConnection()->injectLineForTesting(QString::fromLatin1(kPgxlTransmit));
+        QCOMPARE(data->powerCapAlertCount(), 0);
+
+        QVERIFY(core.setPgxlPowerCapForStation(true, 800, &reason));
+        QVERIFY(data->powerCapEnabled());
+        QCOMPARE(data->powerCapW(), 800);
+        QCOMPARE(AppSettings::instance().value(QStringLiteral("PGXL_PowerCapW")).toInt(), 800);
+        core.pgxlConnection()->injectLineForTesting(QString::fromLatin1(kPgxlTransmit));   // 1000 W
+        QCOMPARE(data->powerCapAlertCount(), 1);
+        QVERIFY(data->powerCapExceeded());
+        QCOMPARE(data->powerCapAlertText(),
+                 QStringLiteral("Power Genius output 1000 W is above the 800 W limit."));
+        core.pgxlConnection()->injectLineForTesting(QString::fromLatin1(kPgxlTransmit));
+        QCOMPARE(data->powerCapAlertCount(), 1);   // one alert per time over
+        core.pgxlConnection()->injectLineForTesting(
+            QStringLiteral("S0|status state=TRANSMIT_A peakfwd=50.0 swr=-24.5"));   // 100 W
+        QVERIFY(!data->powerCapExceeded());
+        core.pgxlConnection()->injectLineForTesting(QString::fromLatin1(kPgxlTransmit));
+        QCOMPARE(data->powerCapAlertCount(), 2);
+
+        // A window that writes the limit through the settings reaches it too.
+        AppSettings::instance().setValue(QStringLiteral("PGXL_PowerCapEnabled"),
+                                         QStringLiteral("False"));
+        core.applyRemoteAccessorySetting(QStringLiteral("PGXL_PowerCapEnabled"));
+        QVERIFY(!data->powerCapEnabled());
+        QVERIFY(!data->powerCapExceeded());
     }
 };
 QTEST_GUILESS_MAIN(StationAccessoryStateTest)

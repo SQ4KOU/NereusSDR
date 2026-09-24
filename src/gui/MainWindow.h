@@ -708,11 +708,9 @@ private slots:
     void onContainerFrequencyStep(int64_t deltaHz);
 
     // Phase 3P-II Phase 4 Task 97: soft-alert toast when peak forward power
-    // exceeds the PGXL cap.  Connected to RadioModel::ampMetersChanged.
-    // De-bounced: only one toast per exceedance event (re-arms when fwd drops
-    // back below cap).  Uses QStatusBar::showMessage (5-second duration).
-    // Guards: PGXL_PowerCapEnabled == "True" and fwd > PGXL_PowerCapW.
-    void onAmpMetersForPowerCap(float fwd, float swr);
+    // exceeds the PGXL cap. R-R3-47 / R-R3-22: the Core computes the alert
+    // (StationAccessoryData); this shows it from `accessoryData`.
+    void onPowerCapAlertChanged();
 
     // Phase 3P-II review fix C2: show TX interlock warning/denial on the
     // status bar so bench rows 28/29/31 are visible to the operator.
@@ -1473,10 +1471,9 @@ private:
     // Text is "TGXL" / "TGXL OPER" / "TGXL BYPS" / "TGXL SBY".
     QLabel* m_tgxlChip{nullptr};
 
-    // Phase 3P-II Phase 4 Task 97: de-bounce flag for power cap soft-alert
-    // toast.  Set true when the toast fires; reset false when fwd drops back
-    // below the cap so a new exceedance event re-arms.
-    bool m_powerCapToastShown{false};
+    // Phase 3P-II Phase 4 Task 97 / R-R3-47: the power-cap alert count this
+    // window has already shown (the Core de-bounces; see onPowerCapAlertChanged).
+    qint64 m_powerCapAlertSeen{0};
 };
 
 } // namespace NereusSDR

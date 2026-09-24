@@ -9,6 +9,17 @@
 // Design reference: docs/architecture/2026-05-18-pgxl-tgxl-and-analog-smeter-design.md §4.7
 //
 // AI tooling: Anthropic Claude Code.
+//
+// Modification history (NereusSDR):
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: every record names
+//                                    its device and carries plain words
+//                                    (text) and what the device said
+//                                    (detail); Tuner Genius and RF-Kit
+//                                    faults recorded as notices; the list
+//                                    as JSON for the Core's mirrored
+//                                    `accessoryData` object, and a remote
+//                                    window's copy fed from it.
+//                                    AI-assisted via Anthropic Claude Code.
 
 #pragma once
 
@@ -27,6 +38,13 @@ struct FaultEvent {
     float   swrAtFault;      // SWR at fault transition
     float   tempAtFaultC;    // temperature (Celsius) at fault transition
     QString likelyCause;     // heuristic: "SWR trip", "Overtemp", "Drive too high", "Unknown"
+    // R-R3-47: "pgxl", "tgxl" or "rfkit" (from the log's settings key when
+    // left empty), the fault in plain words for a user (built from the
+    // state and likely cause when left empty), and what the device or its
+    // connection said, as sent (may be empty).
+    QString device{};
+    QString text{};
+    QString detail{};
 };
 
 /// Ring buffer of the last 10 fault events for a single device, keyed by an
@@ -109,6 +127,36 @@ public:
     /// recorded at fault time. Priority order: SWR -> temp -> fwd -> unknown.
     /// No instance state is needed, so this is a static helper.
     static QString likelyCauseFor(float fwd, float swr, float temp);
+
+    // ------------------------------------------------------------------
+    // R-R3-47 / R-R3-22: the Core owns every accessory's faults and every
+    // window shows them without a reconnect.
+    // ------------------------------------------------------------------
+
+    /// "pgxl", "tgxl" or "rfkit" for this log's settings key.
+    QString deviceId() const { return deviceIdForKey(m_deviceKey); }
+    static QString deviceIdForKey(const QString& deviceKey);
+
+    /// A fault in plain words. PGXL fault states read "The Power Genius
+    /// reported a fault." plus the likely cause; other states are the
+    /// connection notices below and carry their own text.
+    static QString plainTextFor(const QString& device, const QString& state,
+                                const QString& likelyCause);
+
+    /// Record a fault that has no power readings (a Tuner Genius or RF-Kit
+    /// link, identity or interface problem). `state` names the kind
+    /// ("link", "identity", "interface", "connection"), `text` is plain
+    /// words, `detail` what the device or connection said.
+    void captureNotice(const QString& state, const QString& text, const QString& detail);
+
+    /// The list as the compact JSON array the settings key and the Core's
+    /// `accessoryData` object carry (newest first).
+    QString toJson() const;
+    static QVector<FaultEvent> eventsFromJson(const QString& json, const QString& device);
+
+    /// A remote window: the Core's list arriving. Replaces the list and
+    /// emits changed(); never saves (the Core keeps the history).
+    void applyMirroredJson(const QString& json);
 
 signals:
     void changed();

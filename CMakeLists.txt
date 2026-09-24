@@ -952,6 +952,9 @@ set(CORE_SOURCES
     src/core/FaultLog.cpp
     src/core/TuneMemoryStore.cpp
     src/core/TxInterlockPolicy.cpp
+    # R-R3-47 / R-R3-22: the Core's accessory records and settings
+    src/core/StationAccessoryData.cpp
+    src/models/AccessoryDataModel.cpp
     # FlexRadio UDP 4992 discovery beacon (PGXL/TGXL auto-detect)
     src/core/FlexRadioDiscoveryBroadcaster.cpp
     # Multi-homed-host source-IP picker (PGXL/TGXL/broadcaster per-peer

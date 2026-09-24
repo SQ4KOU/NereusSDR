@@ -441,6 +441,8 @@ public:
     bool remotePgxlControlAvailable() const override;
     // R-R3-47 / R-R3-48: see IStationLink.
     bool remoteRfKitControlAvailable() const override;
+    // R-R3-47 / R-R3-22: see IStationLink.
+    bool accessoryDataAvailable() const override;
     bool stationTciAvailable() const override;
     bool coreServesTciOnThisComputer() const override;
     /// Test seam: whether the Core counts as on this computer (a session
@@ -555,6 +557,10 @@ public:
     CommandOutcome requestDisconnectRfKit() override;
     CommandOutcome requestRfKitEnabled(bool enabled) override;
     CommandOutcome requestStationTci(bool enabled, quint16 port) override;
+    CommandOutcome requestTxInterlockPolicy(int mode, int graceMs, bool swrGateEnabled,
+                                            double swrGateMax) override;
+    CommandOutcome requestPgxlPowerCap(bool enabled, int watts) override;
+    CommandOutcome requestClearAccessoryFaults(const QString& device) override;
     CommandOutcome requestApplyNnrModels(quint32 revision) override;
     bool nnrControlAvailable() const override;
     // R-R3-21: the Core advertised dspAssetVersion 2 on a session that

@@ -106,6 +106,13 @@
 //                                    read-only `stationTci` object and the
 //                                    setStationTci verb. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: accessoryDataVersion
+//                                    1 with the read-only `accessoryData`
+//                                    object and the setTxInterlockPolicy,
+//                                    setPgxlPowerCap and clearAccessoryFaults
+//                                    verbs; a window's accessory setting
+//                                    write reaches the Core's live objects.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -138,6 +145,7 @@
 #include "models/AmplifierModel.h"
 #include "models/RfKitModel.h"
 #include "models/StationTciModel.h"
+#include "models/AccessoryDataModel.h"
 #include "models/TunerModel.h"
 
 #include <QLoggingCategory>
@@ -314,6 +322,18 @@ bool isStationTciMessage(const SessionMessage& message)
     return message.objectKey == kStationTciKey
         || (message.kind == SessionMessageKind::Schema
             && message.className == "StationTciModel");
+}
+
+// R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core's accessory records
+// and settings, read-only, for a peer at kRadioIdentitySessionProtocolMinor
+// on a Core that owns its accessories.
+constexpr const char* kAccessoryDataKey = "accessoryData";
+
+bool isAccessoryDataMessage(const SessionMessage& message)
+{
+    return message.objectKey == kAccessoryDataKey
+        || (message.kind == SessionMessageKind::Schema
+            && message.className == "AccessoryDataModel");
 }
 
 // R-R3-47: why a raw write of the RF-Kit switch is refused. A current app
@@ -1104,6 +1124,21 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                     : QStringLiteral("This Core has no TCI server for the station."), {}));
             break;
         }
+        // R-R3-47 / R-R3-22: the accessory record verbs came with
+        // accessoryDataVersion 1, in the same minor-11 block.
+        if ((message.commandVerb == "setTxInterlockPolicy"
+             || message.commandVerb == "setPgxlPowerCap"
+             || message.commandVerb == "clearAccessoryFaults")
+            && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || accessoryDataVersion() < 1)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                    ? QStringLiteral("Update this app to change the station's amplifier and "
+                                     "tuner settings on this Core.")
+                    : QStringLiteral("Station accessory configuration is unavailable."), {}));
+            break;
+        }
         if ((message.commandVerb == "configureTgxl" || message.commandVerb == "disconnectTgxl")
             && it->agreedMinor < kRemoteTgxlConfigSessionProtocolMinor) {
             send(transport, SessionMessages::commandResult(
@@ -1367,6 +1402,10 @@ void StationServer::buildMirror()
     // R-R3-48 (stationTciVersion 1): the Core's station TCI server.
     // Sent only to a peer at minor 11 on a Core that runs one.
     m_mirror->watch(QByteArray(kStationTciKey), m_radioModel->stationTciModel());
+    // R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core's accessory
+    // records and settings. Sent only to a peer at minor 11 on a Core that
+    // owns its accessories.
+    m_mirror->watch(QByteArray(kAccessoryDataKey), m_radioModel->accessoryDataModel());
     const QList<PanadapterModel*> pans = m_radioModel->panadapters();
     for (int i = 0; i < pans.size(); ++i) {
         m_mirror->watch(panKey(i), pans.at(i));
@@ -1478,6 +1517,9 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
     } else if (message.objectKey == kStationTciKey) {
         // R-R3-48: the switch changes only through setStationTci.
         stepAttRefusal = StationTciModel::readOnlyReason();
+    } else if (message.objectKey == kAccessoryDataKey) {
+        // R-R3-47: changed only through its commands.
+        stepAttRefusal = AccessoryDataModel::readOnlyReason();
     }
     // R-R3-47: the RF-Kit switch is the Core's, changed by setRfKitEnabled.
     const bool radioWrite = message.objectKey == QByteArray(kRadioKey);
@@ -1637,6 +1679,10 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
     if (!m_radioModel.isNull()) {
         m_radioModel->scheduleRemoteDspOptionsApply(key);
         m_radioModel->scheduleRemoteHardwareApply(key);
+        // R-R3-47 / R-R3-22: an accessory setting (interlock, output limit,
+        // tune memory, antenna names, a fault history) reaches the Core's
+        // live objects now, not at the next restart.
+        m_radioModel->applyRemoteAccessorySetting(key);
     }
 }
 
@@ -1693,10 +1739,11 @@ void StationServer::handleSettingsRemove(const SessionMessage& message)
     m_settings.remove(key);
     // R-R3-21: removing a DSP > Options RX setting returns it to its
     // default, which takes effect now as a write does. R-R3-46: so does a
-    // Hardware Config setting.
+    // Hardware Config setting. R-R3-47: and an accessory setting.
     if (!m_radioModel.isNull()) {
         m_radioModel->scheduleRemoteDspOptionsApply(key);
         m_radioModel->scheduleRemoteHardwareApply(key);
+        m_radioModel->applyRemoteAccessorySetting(key);
     }
 }
 
@@ -1746,6 +1793,12 @@ void StationServer::sendToSession(const SessionMessage& message)
         // R-R3-48: nor the station TCI object without a station server.
         if (isStationTciMessage(message)
             && (minor < kRadioIdentitySessionProtocolMinor || stationTciVersion() < 1)) {
+            return;
+        }
+        // R-R3-47 / R-R3-22: nor the accessory records to an older app, or
+        // from a Core that does not own its accessories.
+        if (isAccessoryDataMessage(message)
+            && (minor < kRadioIdentitySessionProtocolMinor || accessoryDataVersion() < 1)) {
             return;
         }
         if (!needsNnrFit(message, minor)) {
@@ -1952,6 +2005,13 @@ int StationServer::stationTciVersion() const
     return !m_radioModel.isNull() && m_radioModel->stationTciController() != nullptr ? 1 : 0;
 }
 
+int StationServer::accessoryDataVersion() const
+{
+    return accessoryStatusVersion() >= 1 && !m_radioModel.isNull()
+            && m_radioModel->stationAccessoryData() != nullptr
+        ? 1 : 0;
+}
+
 int StationServer::radioHardwareVersion() const
 {
     if (m_radioModel.isNull() || !m_radioModel->stepAttFacade()->isBound()) {
@@ -2009,6 +2069,8 @@ StationCapabilities StationServer::buildCapabilities() const
             caps.remoteRfKitControlVersion = rfKitControlVersion();
             // R-R3-48: the Core's own station TCI server.
             caps.stationTciVersion = stationTciVersion();
+            // R-R3-47 / R-R3-22: the Core's accessory records and settings.
+            caps.accessoryDataVersion = accessoryDataVersion();
             const HardwareProfile& profile = m_radioModel->hardwareProfile();
             caps.hpsdrModel = profile.caps != nullptr ? profile.model : HPSDRModel::FIRST;
             const RadioInfo& radio = m_radioModel->currentRadioInfo();

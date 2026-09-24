@@ -11,6 +11,17 @@
 //   sections 5.6.1 through 5.6.6 and footer.
 //
 // AI tooling: Anthropic Claude Code.
+//
+// Modification history (NereusSDR):
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: the counters are the
+//                                    model's (the Core's in a remote
+//                                    window); in a remote window the page is
+//                                    a view of the Core's output limit,
+//                                    counters and fault history plus its
+//                                    commands (setPgxlPowerCap,
+//                                    clearAccessoryFaults); each fault row
+//                                    carries its plain words. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include "PgxlAdvancedPage.h"
@@ -43,7 +54,11 @@
 #include "../../core/ConnectionDiagnostics.h"
 #include "../../core/FaultLog.h"
 #include "../../core/PgxlConnection.h"
+#include "../../core/session/IStationLink.h"
+#include "../../core/StationAccessoryData.h"
+#include "../../models/AccessoryDataModel.h"
 #include "../../models/RadioModel.h"
+#include "../OperatorReasonText.h"
 #include "../PgxlSaveRebootDialog.h"
 
 namespace NereusSDR {
@@ -99,7 +114,8 @@ public:
 
     QVariant data(const QModelIndex& index, int role = Qt::DisplayRole) const override
     {
-        if (!index.isValid() || role != Qt::DisplayRole) {
+        if (!index.isValid()
+            || (role != Qt::DisplayRole && role != Qt::ToolTipRole)) {
             return QVariant();
         }
         const auto events = m_faultLog->events();
@@ -107,6 +123,10 @@ public:
             return QVariant();
         }
         const FaultEvent& ev = events.at(index.row());
+        // R-R3-47: every row says what happened in plain words.
+        if (role == Qt::ToolTipRole) {
+            return ev.text;
+        }
         switch (index.column()) {
         case 0: {
             QDateTime dt = QDateTime::fromMSecsSinceEpoch(ev.whenMs);
@@ -139,7 +159,10 @@ private:
 PgxlAdvancedPage::PgxlAdvancedPage(RadioModel* model, QWidget* parent)
     : QWidget(parent)
     , m_model(model)
-    , m_diagnostics(new ConnectionDiagnostics(this))
+    // R-R3-47 / R-R3-22: the model's counters (bound to its own connection
+    // in a local window, the Core's in a remote one); a local instance only
+    // when the page is built without a model (unit tests).
+    , m_diagnostics(model ? model->pgxlDiagnostics() : new ConnectionDiagnostics(this))
     // Phase 3P-II Phase 4 Task 94: FaultLog is now owned by RadioModel (shared instance).
     // Use m_model->pgxlFaultLog() when m_model is non-null; fall back to a local instance
     // (same key) when m_model is null (unit-test construction without a live RadioModel).
@@ -164,6 +187,19 @@ PgxlAdvancedPage::PgxlAdvancedPage(RadioModel* model, QWidget* parent)
     topLay->setContentsMargins(12, 12, 12, 12);
     topLay->setSpacing(16);
 
+    if (isRemote()) {
+        // R-R3-47 / R-R3-22: the Core's output limit, counters and fault
+        // history. The amp's own settings (name, hardware, network,
+        // pairing) are read and written over a connection to the amp, which
+        // a remote window never opens.
+        buildRemoteSections(topLay);
+        topLay->addStretch();
+        connect(m_diagnostics, &ConnectionDiagnostics::changed,
+                this, &PgxlAdvancedPage::onDiagnosticsChanged);
+        onDiagnosticsChanged();
+        return;
+    }
+
     buildIdentitySection(topLay);
     buildHardwareSection(topLay);
     buildNetworkSection(topLay);
@@ -187,14 +223,14 @@ PgxlAdvancedPage::PgxlAdvancedPage(RadioModel* model, QWidget* parent)
                     this, &PgxlAdvancedPage::onSetupResponse);
             connect(pgxl, &PgxlConnection::ifconfResponse,
                     this, &PgxlAdvancedPage::onIfconfResponse);
-
-            // Bind diagnostics helper to the PGXL connection
-            m_diagnostics->bindTo(pgxl);
+            // R-R3-47: RadioModel binds its counters to this connection
+            // for its whole life (StationAccessoryData publishes them).
         }
     }
 
     connect(m_diagnostics, &ConnectionDiagnostics::changed,
             this, &PgxlAdvancedPage::onDiagnosticsChanged);
+    onDiagnosticsChanged();
 
     // Initial UI state
     updateConnectionUi(m_model && m_model->pgxlConnection()
@@ -555,8 +591,128 @@ void PgxlAdvancedPage::buildFaultHistorySection(QVBoxLayout* topLay)
     topLay->addWidget(box);
 
     connect(clearAllBtn, &QPushButton::clicked, this, [this]() {
+        // R-R3-47: a remote window asks the Core, which keeps the history.
+        if (isRemote()) {
+            IStationLink* link = m_model->stationLink();
+            const IStationLink::CommandOutcome outcome = link
+                ? link->requestClearAccessoryFaults(QStringLiteral("pgxl"))
+                : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+            if (!outcome.sent && m_remoteNote) {
+                m_remoteNote->setText(OperatorReasonText::forDisplay(outcome.reason));
+            }
+            return;
+        }
         m_faultLog->clear();
     });
+    m_clearFaultsBtn = clearAllBtn;
+}
+
+// ---------------------------------------------------------------------------
+// R-R3-47 / R-R3-22: a remote window's view of the Core
+// ---------------------------------------------------------------------------
+
+bool PgxlAdvancedPage::isRemote() const
+{
+    return m_model && m_model->role() == RadioModel::Role::Remote;
+}
+
+bool PgxlAdvancedPage::remoteDataAvailable() const
+{
+    const IStationLink* link = isRemote() ? m_model->stationLink() : nullptr;
+    return link && link->accessoryDataAvailable();
+}
+
+void PgxlAdvancedPage::buildRemoteSections(QVBoxLayout* topLay)
+{
+    m_remoteNote = new QLabel;
+    m_remoteNote->setObjectName(QStringLiteral("pgxlAdvancedRemoteNote"));
+    m_remoteNote->setWordWrap(true);
+    topLay->addWidget(m_remoteNote);
+
+    auto* box = new QGroupBox(tr("TX Power Cap"));
+    auto* lay = new QHBoxLayout(box);
+    m_powerCapCheck = new QCheckBox(tr("Enable soft cap:"));
+    m_powerCapSpin = new QSpinBox;
+    m_powerCapSpin->setRange(StationAccessoryData::kPowerCapMinW,
+                             StationAccessoryData::kPowerCapMaxW);
+    m_powerCapSpin->setSuffix(QStringLiteral(" W"));
+    m_powerCapSpin->setKeyboardTracking(false);
+    m_powerCapSpin->setToolTip(tr("The Core shows an alert in every window when the Power "
+                                  "Genius output goes above this."));
+    lay->addWidget(m_powerCapCheck);
+    lay->addWidget(m_powerCapSpin);
+    lay->addStretch();
+    topLay->addWidget(box);
+
+    buildDiagnosticsSection(topLay);
+    buildFaultHistorySection(topLay);
+
+    connect(m_powerCapCheck, &QCheckBox::toggled, this, &PgxlAdvancedPage::onPowerCapToggled);
+    connect(m_powerCapSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, &PgxlAdvancedPage::onPowerCapWattsChanged);
+    connect(m_model->accessoryDataModel(), &AccessoryDataModel::powerCapChanged,
+            this, &PgxlAdvancedPage::refreshRemote);
+    connect(m_model, &RadioModel::stationLinkStateChanged, this, &PgxlAdvancedPage::refreshRemote);
+    // A change the Core refused leaves the Core's limit on the page.
+    connect(m_model, &RadioModel::sliceAddRejected, this, &PgxlAdvancedPage::refreshRemote);
+    refreshRemote();
+}
+
+void PgxlAdvancedPage::refreshRemote()
+{
+    if (!isRemote()) {
+        return;
+    }
+    const bool available = remoteDataAvailable();
+    const AccessoryDataModel* data = m_model->accessoryDataModel();
+    m_updatingFromDevice = true;
+    m_powerCapCheck->setChecked(data->powerCapEnabled());
+    m_powerCapSpin->setValue(data->powerCapW());
+    m_updatingFromDevice = false;
+    m_powerCapCheck->setEnabled(available);
+    m_powerCapSpin->setEnabled(available && data->powerCapEnabled());
+    if (m_clearFaultsBtn) {
+        m_clearFaultsBtn->setEnabled(available);
+    }
+    m_remoteNote->setText(available
+        ? tr("The Core keeps these for the station's Power Genius. Changes here take effect "
+             "there and show in every window.")
+        : tr("This Core does not share its Power Genius records with this app. Updating the "
+             "Core may help."));
+}
+
+void PgxlAdvancedPage::sendRemotePowerCap()
+{
+    IStationLink* link = m_model->stationLink();
+    const IStationLink::CommandOutcome outcome = link
+        ? link->requestPgxlPowerCap(m_powerCapCheck->isChecked(), m_powerCapSpin->value())
+        : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+    if (!outcome.sent) {
+        refreshRemote();
+        m_remoteNote->setText(OperatorReasonText::forDisplay(outcome.reason));
+    }
+}
+
+int PgxlAdvancedPage::faultRowCountForTesting() const
+{
+    return m_faultTableModel ? m_faultTableModel->rowCount() : 0;
+}
+
+QString PgxlAdvancedPage::faultTextForTesting(int row) const
+{
+    return m_faultTableModel
+        ? m_faultTableModel->data(m_faultTableModel->index(row, 0), Qt::ToolTipRole).toString()
+        : QString();
+}
+
+QString PgxlAdvancedPage::reconnectCountTextForTesting() const
+{
+    return m_reconnectCountLabel ? m_reconnectCountLabel->text() : QString();
+}
+
+QString PgxlAdvancedPage::remoteNoteForTesting() const
+{
+    return m_remoteNote ? m_remoteNote->text() : QString();
 }
 
 void PgxlAdvancedPage::buildFooter(QVBoxLayout* topLay)
@@ -810,6 +966,10 @@ void PgxlAdvancedPage::onPowerCapToggled(bool checked)
         return;
     }
     m_powerCapSpin->setEnabled(checked);
+    if (isRemote()) {
+        sendRemotePowerCap();
+        return;
+    }
     auto& s = AppSettings::instance();
     s.setValue(QStringLiteral("PGXL_PowerCapEnabled"),
                checked ? QStringLiteral("True") : QStringLiteral("False"));
@@ -819,6 +979,10 @@ void PgxlAdvancedPage::onPowerCapToggled(bool checked)
 void PgxlAdvancedPage::onPowerCapWattsChanged(int watts)
 {
     if (m_updatingFromDevice) {
+        return;
+    }
+    if (isRemote()) {
+        sendRemotePowerCap();
         return;
     }
     auto& s = AppSettings::instance();

@@ -33,6 +33,9 @@
 //      execution window. A count assertion turns a routine feature
 //      commit into a mysterious failure; a membership assertion names
 //      the property that needs a MirrorPolicy entry.
+//
+// 2026-09-24: R-R3-47 / R-R3-22: AccessoryDataModel joins the mirrored
+// list. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -61,6 +64,7 @@
 #include "models/AmplifierModel.h"
 #include "models/RfKitModel.h"
 #include "models/StationTciModel.h"
+#include "models/AccessoryDataModel.h"
 
 using namespace NereusSDR;
 
@@ -866,7 +870,9 @@ private:
                  &IoBoardHl2Facade::staticMetaObject,
                  &AmplifierModel::staticMetaObject,
                  &RfKitModel::staticMetaObject,
-                 &StationTciModel::staticMetaObject };
+                 &StationTciModel::staticMetaObject,
+                 // R-R3-47 / R-R3-22: the Core's accessory records.
+                 &AccessoryDataModel::staticMetaObject };
     }
 };
 

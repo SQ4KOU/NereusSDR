@@ -53,6 +53,10 @@
 //                                    setStationTci for the station's TCI
 //                                    server. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: setTxInterlockPolicy,
+//                                    setPgxlPowerCap and clearAccessoryFaults
+//                                    (accessoryDataVersion 1). AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -361,6 +365,12 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleSetRfKitEnabled(invoke);
     } else if (invoke.commandVerb == "setStationTci") {
         handleSetStationTci(invoke);
+    } else if (invoke.commandVerb == "setTxInterlockPolicy") {
+        handleSetTxInterlockPolicy(invoke);
+    } else if (invoke.commandVerb == "setPgxlPowerCap") {
+        handleSetPgxlPowerCap(invoke);
+    } else if (invoke.commandVerb == "clearAccessoryFaults") {
+        handleClearAccessoryFaults(invoke);
     } else if (invoke.commandVerb == "requestIoBoardProbe") {
         handleRequestIoBoardProbe(invoke);
     } else if (invoke.commandVerb == "setAlexRxAntenna") {
@@ -1081,6 +1091,89 @@ void SessionCommandDispatcher::handleSetStationTci(const SessionMessage& invoke)
     if (!m_radioModel->setStationTciForStation(enabled.toBool(), port, &reason)) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    reason.isEmpty() ? QStringLiteral("The Core did not change its TCI server.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-47 / R-R3-22 (accessoryDataVersion 1): the transmit interlock policy.
+// The Core applies it and mirrors it back on `accessoryData`; its
+// enforcement stays on the Core and a change keys nothing.
+void SessionCommandDispatcher::handleSetTxInterlockPolicy(const SessionMessage& invoke)
+{
+    int mode = -1;
+    int graceMs = -1;
+    QVariant gate;
+    double gateMax = 0.0;
+    if (!hasExactlyArguments(invoke.arguments,
+                             { "mode", "graceMs", "swrGateEnabled", "swrGateMax" })
+        || !hasWireKind(invoke.arguments, "mode", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "mode", &mode) != ArgumentStatus::Ok
+        || !hasWireKind(invoke.arguments, "graceMs", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "graceMs", &graceMs) != ArgumentStatus::Ok
+        || !findArgument(invoke.arguments, "swrGateEnabled", &gate)
+        || gate.typeId() != QMetaType::Bool
+        || !hasWireKind(invoke.arguments, "swrGateMax", MirrorWireKind::Float64)
+        || !findFiniteDoubleArgument(invoke.arguments, "swrGateMax", &gateMax)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The request to change the transmit interlock was not "
+                                  "understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setTxInterlockPolicyForStation(mode, graceMs, gate.toBool(), gateMax,
+                                                      &reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not change the transmit "
+                                                     "interlock.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-47 / R-R3-22: the Power Genius output limit that raises the alert.
+void SessionCommandDispatcher::handleSetPgxlPowerCap(const SessionMessage& invoke)
+{
+    QVariant enabled;
+    int watts = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "enabled", "watts" })
+        || !findArgument(invoke.arguments, "enabled", &enabled)
+        || enabled.typeId() != QMetaType::Bool
+        || !hasWireKind(invoke.arguments, "watts", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "watts", &watts) != ArgumentStatus::Ok) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The request to change the Power Genius output limit was "
+                                  "not understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setPgxlPowerCapForStation(enabled.toBool(), watts, &reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not change the Power Genius "
+                                                     "output limit.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-47 / R-R3-22: one device's fault history, cleared on the Core.
+void SessionCommandDispatcher::handleClearAccessoryFaults(const SessionMessage& invoke)
+{
+    QString device;
+    if (!hasExactlyArguments(invoke.arguments, { "device" })
+        || !findUtf8Argument(invoke.arguments, "device", &device)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The request to clear the fault history was not understood."),
+                   {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->clearAccessoryFaultsForStation(device, &reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not clear the fault history.")
                                     : reason, {});
         return;
     }

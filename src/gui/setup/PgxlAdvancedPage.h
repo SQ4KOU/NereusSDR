@@ -16,6 +16,13 @@
 //   sections 5.6.1 through 5.6.6 and footer.
 //
 // AI tooling: Anthropic Claude Code.
+//
+// Modification history (NereusSDR):
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: RadioModel's counters;
+//                                    a remote window's view of the Core's
+//                                    output limit, counters and fault
+//                                    history with its commands. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -50,6 +57,15 @@ class PgxlAdvancedPage : public QWidget {
 public:
     explicit PgxlAdvancedPage(RadioModel* model, QWidget* parent = nullptr);
     ~PgxlAdvancedPage() override;
+
+    // Test seams (R-R3-47).
+    int faultRowCountForTesting() const;
+    QString faultTextForTesting(int row) const;
+    QString reconnectCountTextForTesting() const;
+    QString remoteNoteForTesting() const;
+    QCheckBox* powerCapCheckForTesting() const { return m_powerCapCheck; }
+    QSpinBox* powerCapSpinForTesting() const { return m_powerCapSpin; }
+    QPushButton* clearFaultsButtonForTesting() const { return m_clearFaultsBtn; }
 
 private slots:
     void onPgxlConnected();
@@ -87,6 +103,13 @@ private:
     void buildFaultHistorySection(QVBoxLayout* topLay);
     void buildFooter(QVBoxLayout* topLay);
 
+    // R-R3-47 / R-R3-22: a remote window.
+    bool isRemote() const;
+    bool remoteDataAvailable() const;
+    void buildRemoteSections(QVBoxLayout* topLay);
+    void refreshRemote();
+    void sendRemotePowerCap();
+
     // Helpers
     void setPendingState(bool pending);
     void updateConnectionUi(bool connected);
@@ -96,7 +119,9 @@ private:
 
     // -------------------------------------------------------
     RadioModel*            m_model{nullptr};
-    ConnectionDiagnostics* m_diagnostics{nullptr};   // owned by this
+    // R-R3-47: RadioModel's (non-owning) when the page has a model; owned
+    // by this only without one.
+    ConnectionDiagnostics* m_diagnostics{nullptr};
     // Phase 3P-II Phase 4 Task 94: non-owning when m_model != nullptr (RadioModel owns
     // the shared instance); falls back to a local QWidget-parented instance in tests.
     FaultLog*              m_faultLog{nullptr};
@@ -156,6 +181,10 @@ private:
 
     // Fault history section (5.6.6)
     QTableView* m_faultTable{nullptr};
+
+    // R-R3-47: remote window only.
+    QLabel*      m_remoteNote{nullptr};
+    QPushButton* m_clearFaultsBtn{nullptr};
 
     // Footer
     QPushButton* m_revertBtn{nullptr};

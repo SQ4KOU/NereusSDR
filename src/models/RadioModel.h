@@ -60,6 +60,12 @@
 //                stationTciModel() / stationTciController(), rfKitEnabled
 //                read-only. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: the Core's accessory records and
+//                settings (`accessoryData`): RF-Kit fault log, the model's
+//                own connection counters, the interlock, power-cap and
+//                fault-history commands, and a window's setting changes
+//                reaching the Core's live objects. NereusSDR-original.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -290,6 +296,9 @@ class StationTciModel;
 class RfKitBandFollow;
 class AmplifierModel;
 class RfKitModel;
+class AccessoryDataModel;
+class StationAccessoryData;
+class ConnectionDiagnostics;
 
 // RadioModel is the central data model for a connected radio.
 // It owns the RadioConnection (on a worker thread), ReceiverManager,
@@ -1914,6 +1923,36 @@ public:
     // Fault History tables reflect live captures.
     FaultLog* pgxlFaultLog() { return m_pgxlFaultLog; }
     FaultLog* tgxlFaultLog() { return m_tgxlFaultLog; }
+    // R-R3-47: the RF-Kit's faults (a lost link, a refused identity, an
+    // interface error), key RfKit_FaultHistory.
+    FaultLog* rfkitFaultLog() { return m_rfkitFaultLog; }
+
+    // R-R3-47 / R-R3-22: the Power Genius and Tuner Genius connection
+    // counters. A Local model's are bound to its own connections for its
+    // whole life; a Remote model's hold the Core's counters. Non-null
+    // from construction.
+    ConnectionDiagnostics* pgxlDiagnostics() const { return m_pgxlDiagnostics; }
+    ConnectionDiagnostics* tgxlDiagnostics() const { return m_tgxlDiagnostics; }
+
+    // R-R3-47 / R-R3-22: the Core's accessory records and settings, as the
+    // Core mirrors them (`accessoryData`). Non-null from construction. A
+    // Local model keeps it current (StationAccessoryData); a Remote model
+    // holds the Core's values and feeds them into its fault logs, counters,
+    // interlock policy and tune memory so the pages show the Core's.
+    AccessoryDataModel* accessoryDataModel() const { return m_accessoryDataModel; }
+    // nullptr in a Remote model.
+    StationAccessoryData* stationAccessoryData() const { return m_stationAccessoryData; }
+
+    // R-R3-47 / R-R3-22: the three commands (accessoryDataVersion 1). The
+    // policy's enforcement stays in MoxController; a change keys nothing.
+    bool setTxInterlockPolicyForStation(int mode, int graceMs, bool swrGateEnabled,
+                                        double swrGateMax, QString* reason);
+    bool setPgxlPowerCapForStation(bool enabled, int watts, QString* reason);
+    bool clearAccessoryFaultsForStation(const QString& device, QString* reason);
+    /// A window changed a station setting (StationServer, after the write
+    /// is stored): the Core's interlock policy, output limit, tune memory,
+    /// antenna names and fault logs follow it at once. Other keys ignored.
+    void applyRemoteAccessorySetting(const QString& key);
 
     // Phase 3G-9b: one-shot profile that sets the 7 smooth-default recipe
     // values on SpectrumWidget. Called from the constructor exactly once
@@ -5099,6 +5138,12 @@ private:
     // Shared (non-owning) with PgxlAdvancedPage and TgxlAdvancedPage.
     FaultLog* m_pgxlFaultLog{nullptr};
     FaultLog* m_tgxlFaultLog{nullptr};
+    // R-R3-47 / R-R3-22: see the accessors.
+    FaultLog* m_rfkitFaultLog{nullptr};
+    ConnectionDiagnostics* m_pgxlDiagnostics{nullptr};
+    ConnectionDiagnostics* m_tgxlDiagnostics{nullptr};
+    AccessoryDataModel* m_accessoryDataModel{nullptr};
+    StationAccessoryData* m_stationAccessoryData{nullptr};
 
     // Phase 3P-II Phase 4 Task 94: last known PGXL state string.
     // Tracks "previous state" so we capture only on FAULT *transitions*

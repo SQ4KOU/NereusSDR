@@ -25,6 +25,9 @@
 //   2026-09-24 - R-R3-48: stationTciVersion, last in the
 //                minor-11 block. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-47 / R-R3-22: accessoryDataVersion, last in the
+//                minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
@@ -117,8 +120,10 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         // R-R3-47 / R-R3-22: the Core's amplifier and RF-Kit status objects.
         updates.append(intEntry("remotePgxlControlVersion", remotePgxlControlVersion));
         updates.append(intEntry("remoteRfKitControlVersion", remoteRfKitControlVersion));
-        // R-R3-48: the Core's station TCI server, last.
+        // R-R3-48: the Core's station TCI server.
         updates.append(intEntry("stationTciVersion", stationTciVersion));
+        // R-R3-47 / R-R3-22: the Core's accessory records and settings, last.
+        updates.append(intEntry("accessoryDataVersion", accessoryDataVersion));
     }
     return updates;
 }
@@ -298,7 +303,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
             }
         } else if (u.name == "remotePgxlControlVersion"
                    || u.name == "remoteRfKitControlVersion"
-                   || u.name == "stationTciVersion") {
+                   || u.name == "stationTciVersion"
+                   || u.name == "accessoryDataVersion") {
             // R-R3-47 / R-R3-22 / R-R3-48: sent in the same block as the
             // four above.
             caps.radioIdentityEntries = true;
@@ -309,8 +315,10 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.remotePgxlControlVersion = version;
                 } else if (u.name == "remoteRfKitControlVersion") {
                     caps.remoteRfKitControlVersion = version;
-                } else {
+                } else if (u.name == "stationTciVersion") {
                     caps.stationTciVersion = version;
+                } else {
+                    caps.accessoryDataVersion = version;
                 }
             }
         } else if (u.name == "settingsSchemaVersion") {
