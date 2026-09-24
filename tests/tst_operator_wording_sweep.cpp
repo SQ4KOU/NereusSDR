@@ -552,7 +552,12 @@ private slots:
         for (const char* line :
              {"Unavailable: this window was started for one Core with --station, so the radio "
               "list cannot change it.",
-              "Unavailable: the radio's details are on the Core, not in this window.",
+              // R-R3-46: Protocol Info shows the Core's radio once this
+              // window is connected, and says so until then.
+              "Unavailable until this window is connected to the Core.",
+              "Show the Core's radio: its name, firmware, MAC and network address",
+              // R-R3-46 / R-R3-21: the attenuator rows before a Core is there.
+              "Connect to the Core to change the attenuator and preamp.",
               "Wait until this window has the Core's settings before changing the pan layout.",
               "Link to the Core lost: %1", "Audio and display: %1"}) {
             QVERIFY2(mainWindow.contains(QLatin1String(line)), line);

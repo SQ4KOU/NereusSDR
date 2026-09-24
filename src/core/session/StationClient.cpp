@@ -49,6 +49,10 @@
 //                                    radioHardwareVersion Core's `stepAtt`
 //                                    object; its edits pass an edit gate.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-21: why the window's
+//                                    attenuator edits cannot reach the
+//                                    Core, for the window's controls.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -1576,8 +1580,9 @@ void StationClient::handleCapabilities(const SessionMessage& message)
             const bool allowed = self
                 && (self->m_applyingInbound || self->remoteRadioHardwareAvailable());
             if (!allowed && reason) {
-                *reason = QStringLiteral("This Core cannot change its radio's attenuator for this "
-                                         "app. Updating the Core may help.");
+                *reason = self ? self->radioHardwareUnavailableReason()
+                               : QStringLiteral("Connect to the Core to change the attenuator "
+                                                "and preamp.");
             }
             return allowed;
         });
@@ -2562,6 +2567,18 @@ bool StationClient::remoteRadioHardwareAvailable() const
 {
     return propertyResultsAvailable() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
         && m_capabilities.radioHardwareVersion >= 1;
+}
+
+QString StationClient::radioHardwareUnavailableReason() const
+{
+    if (remoteRadioHardwareAvailable()) {
+        return {};
+    }
+    if (!m_handshakeComplete) {
+        return QStringLiteral("Connect to the Core to change the attenuator and preamp.");
+    }
+    return QStringLiteral("This Core cannot change its radio's attenuator for this "
+                          "app. Updating the Core may help.");
 }
 
 bool StationClient::nnrControlAvailable() const

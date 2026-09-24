@@ -13,6 +13,9 @@
 // Modification history (NereusSDR):
 //   2026-09-23  J.J. Boyd / KG4VCF  Created. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  A remote window's availability
+//                                    (R-R3-46, R-R3-21). AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/StepAttenuatorFacade.h"
@@ -58,6 +61,7 @@ QString timeSettleReason()
 StepAttenuatorFacade::StepAttenuatorFacade(RadioModel* radio, QObject* parent)
     : QObject(parent)
     , m_radio(radio)
+    , m_windowReason(QStringLiteral("Connect to the Core to change the attenuator and preamp."))
 {
 }
 
@@ -96,6 +100,17 @@ void StepAttenuatorFacade::bindController(StepAttenuatorController* controller)
     follow(&C::adcLinkedChanged);
     follow(&C::settingsReloaded);
     refresh();
+}
+
+void StepAttenuatorFacade::setWindowAvailability(bool available, const QString& reason)
+{
+    const QString kept = available ? QString() : reason;
+    if (m_windowAvailable == available && m_windowReason == kept) {
+        return;
+    }
+    m_windowAvailable = available;
+    m_windowReason = kept;
+    emit windowAvailabilityChanged(available);
 }
 
 StepAttenuatorController* StepAttenuatorFacade::controller() const

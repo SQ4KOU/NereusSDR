@@ -28,13 +28,25 @@
 //                                    opens on a disconnected window.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  R3 remote radio hardware plan, Task 3
+//                                    (R-R3-46, R-R3-21): the window's
+//                                    attenuator, preamp, auto-attenuate
+//                                    and overload controls use the Core's
+//                                    `stepAtt` object; an older Core
+//                                    leaves them disabled with its
+//                                    reason. AI-assisted transformation
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
 
 #include <QAction>
 #include <QApplication>
+#include <QCheckBox>
 #include <QComboBox>
+#include <QGraphicsOpacityEffect>
+#include <QGroupBox>
+#include <QSpinBox>
 #include <QLabel>
 #include <QStackedWidget>
 #include <QLoggingCategory>
@@ -52,9 +64,12 @@
 #include "core/AudioEngine.h"
 #include "core/BoardCapabilities.h"
 #include "core/SkuUiProfile.h"
+#include "core/StepAttenuatorController.h"
+#include "core/StepAttenuatorFacade.h"
 #include "core/session/StationCapabilities.h"
 #include "core/session/StationClient.h"
 #include "gui/MainWindow.h"
+#include "gui/OperatorReasonText.h"
 #include "gui/RemoteConnectionController.h"
 #include "gui/SetupDialog.h"
 #include "gui/SpectrumWidget.h"
@@ -62,6 +77,7 @@
 #include "gui/applets/RadeApplet.h"
 #include "gui/applets/RxApplet.h"
 #include "gui/setup/DeviceCard.h"
+#include "gui/setup/GeneralOptionsPage.h"
 #include "gui/setup/HardwarePage.h"
 #include "gui/widgets/VfoWidget.h"
 #include "gui/widgets/StationBlock.h"
@@ -896,6 +912,133 @@ private slots:
         QTest::qWait(kSettleMs);
         QCOMPARE(superseded.size(), 0);
         QCOMPARE(h.acceptedConnections(), 1);
+    }
+
+    // R-R3-46 / R-R3-21: a Core whose controller stands behind its
+    // `stepAtt` object (radioHardwareVersion 1). The window's RX applet row
+    // and Setup's Step Attenuator and Auto Attenuate groups are enabled and
+    // show the Core's settled values; a change made in either round-trips
+    // through the Core's controller; a change on the Core reaches both; the
+    // overload alarm lights on the Core's overload report.
+    void attenuatorControlsUseTheCoresObject()
+    {
+        StepAttenuatorController coreAtt;
+        coreAtt.setTickTimerEnabled(false);
+        coreAtt.setStepAttEnabled(true);
+        coreAtt.setAttenuation(12);
+        RemoteWindowHarness h;
+        h.station().setStepAttController(&coreAtt);
+        QVERIFY(h.start());
+        QVERIFY(connectFromRadioMenu(h));
+        QVERIFY(h.client()->remoteRadioHardwareAvailable());
+
+        auto* rx = h.window()->findChild<RxApplet*>();
+        QVERIFY(rx);
+        auto* att = rx->findChild<QWidget*>(QStringLiteral("RxAttenuatorStack"));
+        QVERIFY(att);
+        auto* spin = att->findChild<QSpinBox*>();
+        QVERIFY(spin);
+        QTRY_VERIFY(att->isEnabled());
+        QVERIFY(att->toolTip().isEmpty());
+        QTRY_COMPARE(spin->value(), 12);
+        QCOMPARE(spin->maximum(), coreAtt.maxAttenuation());
+        QCOMPARE(rx->attLabelTextForTest(), QStringLiteral("S-ATT"));
+
+        // The window's change reaches the Core's controller.
+        spin->setValue(18);
+        QTRY_COMPARE(coreAtt.attenuatorDb(), 18);
+
+        // Setup > General > Options shows the Core's values too.
+        SetupDialog* dialog = openSettings(h);
+        QVERIFY(dialog);
+        dialog->selectPage(QStringLiteral("Options"));
+        GeneralOptionsPage* page = nullptr;
+        QTRY_VERIFY((page = dialog->findChild<GeneralOptionsPage*>()) != nullptr);
+        auto* stepGroup = page->findChild<QGroupBox*>(QStringLiteral("grpStepAttenuator"));
+        auto* autoGroup = page->findChild<QGroupBox*>(QStringLiteral("grpAutoAttRx1"));
+        QVERIFY(stepGroup && autoGroup);
+        QVERIFY(stepGroup->isEnabled());
+        QVERIFY(autoGroup->isEnabled());
+        auto* pageSpin = stepGroup->findChild<QSpinBox*>();
+        QVERIFY(pageSpin);
+        QCOMPARE(pageSpin->value(), 18);
+
+        // A change on the Core reaches both.
+        coreAtt.setAttenuation(7);
+        QTRY_COMPARE(spin->value(), 7);
+        QTRY_COMPARE(pageSpin->value(), 7);
+
+        // Auto-attenuate, from Setup, round-trips through the Core.
+        QCheckBox* autoEnable = nullptr;
+        for (QCheckBox* box : autoGroup->findChildren<QCheckBox*>()) {
+            if (box->text() == QStringLiteral("Enable")) { autoEnable = box; }
+        }
+        QVERIFY(autoEnable);
+        QVERIFY(!coreAtt.autoAttEnabled());
+        autoEnable->click();
+        QTRY_VERIFY(coreAtt.autoAttEnabled());
+        QTRY_COMPARE(rx->attLabelTextForTest(), QStringLiteral("A-ATT"));
+
+        // The preamp: turning the step attenuator off on the Core shows the
+        // combo, and the window's choice reaches the Core.
+        coreAtt.setStepAttEnabled(false);
+        QTRY_COMPARE(rx->attLabelTextForTest(), QStringLiteral("ATT"));
+        auto* combo = att->findChild<QComboBox*>();
+        QVERIFY(combo);
+        if (combo->count() > 1) {
+            const int other = combo->currentIndex() == 0 ? 1 : 0;
+            combo->setCurrentIndex(other);
+            QTRY_COMPARE(static_cast<int>(coreAtt.preampMode()), combo->itemData(other).toInt());
+        }
+
+        // The overload alarm lights on the Core's report.
+        auto* badge = h.window()->findChild<QWidget*>(QStringLiteral("adcOvlBadge"));
+        QVERIFY(badge);
+        const auto opacity = [badge] {
+            auto* fx = qobject_cast<QGraphicsOpacityEffect*>(badge->graphicsEffect());
+            return fx ? fx->opacity() : 1.0;
+        };
+        QVERIFY(opacity() < 0.5);
+        coreAtt.onAdcOverflow(0);
+        coreAtt.tick();
+        QTRY_COMPARE(opacity(), 1.0);
+        QVERIFY(badge->toolTip().contains(QStringLiteral("ADC0: overload")));
+
+        h.station().setStepAttController(nullptr);
+    }
+
+    // R-R3-46 / R-R3-21: a Core that does not offer its attenuator
+    // (radioHardwareVersion 0) leaves the window's rows disabled, with the
+    // plain reason through OperatorReasonText, and a click changes nothing.
+    void olderCoreLeavesAttenuatorControlsDisabledWithAReason()
+    {
+        RemoteWindowHarness h;
+        QVERIFY(h.start());
+        QVERIFY(connectFromRadioMenu(h));
+        QVERIFY(!h.client()->remoteRadioHardwareAvailable());
+        const QString reason =
+            OperatorReasonText::forDisplay(h.client()->radioHardwareUnavailableReason());
+        QVERIFY(!reason.isEmpty());
+        QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+
+        auto* rx = h.window()->findChild<RxApplet*>();
+        QVERIFY(rx);
+        auto* att = rx->findChild<QWidget*>(QStringLiteral("RxAttenuatorStack"));
+        QVERIFY(att);
+        QTRY_COMPARE(att->toolTip(), reason);
+        QVERIFY(!att->isEnabled());
+
+        SetupDialog* dialog = openSettings(h);
+        QVERIFY(dialog);
+        dialog->selectPage(QStringLiteral("Options"));
+        GeneralOptionsPage* page = nullptr;
+        QTRY_VERIFY((page = dialog->findChild<GeneralOptionsPage*>()) != nullptr);
+        for (const char* name : {"grpStepAttenuator", "grpAutoAttRx1"}) {
+            auto* group = page->findChild<QGroupBox*>(QLatin1String(name));
+            QVERIFY2(group, name);
+            QVERIFY2(!group->isEnabled(), name);
+            QCOMPARE(group->toolTip(), reason);
+        }
     }
 
     // R-R3-46: the window follows the Core's radio. A Saturn ANAN-G2 1K

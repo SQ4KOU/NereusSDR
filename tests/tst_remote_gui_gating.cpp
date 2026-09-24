@@ -84,6 +84,11 @@
 //                 pages are shown and follow the transmit permission.
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-23 -- R-R3-46 / R-R3-21: the attenuator rows show and write
+//                 the Core's `stepAtt` object while the Core takes the
+//                 window's edits, and give the object's plain reason
+//                 otherwise. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -127,6 +132,7 @@
 #include "core/MicProfileManager.h"
 #include "core/MoxController.h"
 #include "core/RadioDiscovery.h"
+#include "core/StepAttenuatorFacade.h"
 #include "core/WdspTypes.h"
 #include "core/session/RemoteStationOptions.h"
 #include "core/session/SessionTransport.h"
@@ -139,6 +145,7 @@
 #include "gui/ConnectionPanel.h"
 #include "gui/GuiSessionCoordinator.h"
 #include "gui/MainWindow.h"
+#include "gui/OperatorReasonText.h"
 #include "gui/SetupDialog.h"
 #include "gui/StationStartupSelection.h"
 #include "gui/SpectrumOverlayPanel.h"
@@ -2344,8 +2351,8 @@ private slots:
     }
 
     // General > Options keeps its Region and Options groups; only the two
-    // attenuator groups, which drive the unwired local step attenuator,
-    // are unavailable.
+    // attenuator groups, which write the Core's attenuator, are unavailable
+    // while no Core takes this window's edits.
     void remoteGeneralOptionsDisablesOnlyTheAttenuatorGroups()
     {
         RadioModel remote(RadioModel::Role::Remote);
@@ -2426,6 +2433,102 @@ private slots:
         QVERIFY(localAtt != nullptr);
         QVERIFY(localAtt->isEnabled());
         QVERIFY(localAtt->toolTip().isEmpty());
+    }
+
+    // R-R3-46 / R-R3-21: with a Core that takes this window's attenuator
+    // edits, the RX applet's row and Setup's two groups are enabled, show
+    // the Core's values and write the Core's `stepAtt` object. An older
+    // Core's plain reason (through OperatorReasonText) disables them again.
+    void remoteAttenuatorRowsFollowTheCoresObject()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        RxApplet applet(nullptr, &remote);
+        GeneralOptionsPage page(&remote);
+        StepAttenuatorFacade* stepAtt = remote.stepAttFacade();
+        QVERIFY(stepAtt != nullptr);
+        QVERIFY(!stepAtt->isBound());
+        auto* att = applet.findChild<QWidget*>(QStringLiteral("RxAttenuatorStack"));
+        auto* spin = att->findChild<QSpinBox*>();
+        auto* combo = att->findChild<QComboBox*>();
+        auto* stepGroup = page.findChild<QGroupBox*>(QStringLiteral("grpStepAttenuator"));
+        auto* autoGroup = page.findChild<QGroupBox*>(QStringLiteral("grpAutoAttRx1"));
+        QVERIFY(att && spin && combo && stepGroup && autoGroup);
+
+        // An older Core: the rows stay disabled with its reason, in user words.
+        const QString older = OperatorReasonText::forDisplay(QStringLiteral(
+            "This Core cannot change its radio's attenuator for this app. Updating the Core may "
+            "help."));
+        QVERIFY(OperatorWording::isPlain(older));
+        stepAtt->setWindowAvailability(false, older);
+        for (QWidget* w : {static_cast<QWidget*>(att), static_cast<QWidget*>(stepGroup),
+                           static_cast<QWidget*>(autoGroup)}) {
+            QVERIFY(!w->isEnabled());
+            QCOMPARE(w->toolTip(), older);
+        }
+
+        // A supporting Core: its values arrive, then the rows open.
+        stepAtt->applyRemoteProperty("minDb", 0);
+        stepAtt->applyRemoteProperty("maxDb", 61);
+        stepAtt->setEnabled(true);
+        stepAtt->setAttenuationDb(20);
+        stepAtt->setAutoAttUndoDelayMs(7000);
+        stepAtt->setWindowAvailability(true, QString());
+        for (QWidget* w : {static_cast<QWidget*>(att), static_cast<QWidget*>(stepGroup),
+                           static_cast<QWidget*>(autoGroup)}) {
+            QVERIFY(w->isEnabled());
+            QVERIFY(w->toolTip().isEmpty());
+        }
+        QCOMPARE(applet.attLabelTextForTest(), QStringLiteral("S-ATT"));
+        QCOMPARE(spin->maximum(), 61);
+        QCOMPARE(spin->value(), 20);
+        QCheckBox* pageStepEnable = nullptr;
+        for (QCheckBox* box : stepGroup->findChildren<QCheckBox*>()) {
+            if (box->text() == QStringLiteral("RX1 Enable")) { pageStepEnable = box; }
+        }
+        QVERIFY(pageStepEnable != nullptr);
+        QVERIFY(pageStepEnable->isChecked());
+        const QList<QSpinBox*> pageSpins = stepGroup->findChildren<QSpinBox*>();
+        QVERIFY(!pageSpins.isEmpty());
+        QCOMPARE(pageSpins.first()->value(), 20);
+        QCOMPARE(pageSpins.first()->maximum(), 61);
+
+        // The Core moves: every row follows.
+        stepAtt->setAttenuationDb(33);
+        QCOMPARE(spin->value(), 33);
+        QCOMPARE(pageSpins.first()->value(), 33);
+
+        // The window's edits go to the Core's object.
+        spin->setValue(12);
+        QCOMPARE(stepAtt->attenuationDb(), 12);
+        QCOMPARE(pageSpins.first()->value(), 12);
+        pageSpins.first()->setValue(15);
+        QCOMPARE(stepAtt->attenuationDb(), 15);
+        QCOMPARE(spin->value(), 15);
+        stepAtt->setEnabled(false);
+        QCOMPARE(applet.attLabelTextForTest(), QStringLiteral("ATT"));
+        if (combo->count() > 1) {
+            combo->setCurrentIndex(1);
+            QCOMPARE(stepAtt->preampMode(), combo->itemData(1).toInt());
+        }
+        QCheckBox* autoEnable = nullptr;
+        for (QCheckBox* box : autoGroup->findChildren<QCheckBox*>()) {
+            if (box->text() == QStringLiteral("Enable")) { autoEnable = box; }
+        }
+        QVERIFY(autoEnable != nullptr);
+        autoEnable->click();
+        QVERIFY(stepAtt->autoAttEnabled());
+        QCOMPARE(applet.attLabelTextForTest(), QStringLiteral("ATT"));
+        auto* hold = autoGroup->findChild<QSpinBox*>();
+        QVERIFY(hold != nullptr);
+        QCOMPARE(hold->value(), 7);
+        hold->setValue(9);
+        QCOMPARE(stepAtt->autoAttUndoDelayMs(), 9000);
+
+        // The link goes: the rows close again, with the reason they are given.
+        stepAtt->setWindowAvailability(false, older);
+        QVERIFY(!att->isEnabled());
+        QVERIFY(!stepGroup->isEnabled());
+        QCOMPARE(att->toolTip(), older);
     }
 
     // The RX applet's XIT row offsets the transmit frequency, so it takes

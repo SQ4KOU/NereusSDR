@@ -2,13 +2,18 @@
 // matches Thetis SetComboPreampForHPSDR console.cs:40755-40825 [@501e3f5]
 // per board, and that RxApplet.preampComboItemCountForTest() reflects those
 // per-board counts at construction time. Phase 3P-C Step 2 + Step 3.
+// R-R3-46 / R-R3-21 (2026-09-23): in a remote window the combo shows and
+// writes the Core's preamp mode (the `stepAtt` object).
 
 #include <QtTest/QtTest>
 #include <QApplication>
+#include <QComboBox>
+#include <QStackedWidget>
 
 #include "core/BoardCapabilities.h"
 #include "core/HpsdrModel.h"
 #include "core/StepAttenuatorController.h"
+#include "core/StepAttenuatorFacade.h"
 #include "gui/applets/RxApplet.h"
 #include "models/RadioModel.h"
 
@@ -209,6 +214,28 @@ private slots:
         model.setBoardForTest(HPSDRHW::OrionMKII);
         RxApplet applet(nullptr, &model);
         QCOMPARE(applet.preampComboItemCountForTest(), 4);
+    }
+
+    void rxapplet_remote_combo_shows_and_writes_the_cores_preamp()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.setBoardForTest(HPSDRHW::Hermes);
+        RxApplet applet(nullptr, &remote);
+        auto* stack = applet.findChild<QStackedWidget*>(QStringLiteral("RxAttenuatorStack"));
+        QVERIFY(stack != nullptr);
+        auto* combo = stack->findChild<QComboBox*>();
+        QVERIFY(combo != nullptr);
+        QCOMPARE(combo->count(), 7);
+        StepAttenuatorFacade* stepAtt = remote.stepAttFacade();
+        stepAtt->setWindowAvailability(true, QString());
+        QVERIFY(combo->isEnabled());
+
+        // The Core's mode is shown...
+        stepAtt->setPreampMode(combo->itemData(3).toInt());
+        QCOMPARE(combo->currentIndex(), 3);
+        // ...and the window's choice is written to the Core's object.
+        combo->setCurrentIndex(5);
+        QCOMPARE(stepAtt->preampMode(), combo->itemData(5).toInt());
     }
 };
 

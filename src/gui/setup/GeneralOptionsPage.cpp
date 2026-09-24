@@ -18,6 +18,12 @@
 //                 while a remote window does not have the Core's settings.
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-23 - R-R3-46 / R-R3-21: in a remote window the Step Attenuator
+//                 and Auto Attenuate groups show and write the Core's
+//                 `stepAtt` object, enabled while the Core takes the
+//                 window's edits and otherwise disabled with its plain
+//                 reason. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -72,6 +78,7 @@
 #include "core/BoardCapabilities.h"
 #include "core/PureSignal.h"
 #include "core/StepAttenuatorController.h"
+#include "core/StepAttenuatorFacade.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -133,7 +140,10 @@ GeneralOptionsPage::GeneralOptionsPage(RadioModel* model, QWidget* parent)
     : SetupPage(QStringLiteral("Options"), model, parent)
 {
     NereusSDR::Style::applyDarkPageStyle(this);
-    m_ctrl = model ? model->stepAttController() : nullptr;
+    // R-R3-46: a remote window has no attenuator of its own; its groups
+    // follow the Core's (the mirrored `stepAtt` object).
+    m_stepAtt = (model && !model->ownsLocalDsp()) ? model->stepAttFacade() : nullptr;
+    m_ctrl = (model && !m_stepAtt) ? model->stepAttController() : nullptr;
 
     buildHardwareConfigGroup();
     buildOptionsGroup();
@@ -175,20 +185,14 @@ GeneralOptionsPage::GeneralOptionsPage(RadioModel* model, QWidget* parent)
         initFromController();
     }
 
-    // R-R3-21: on a remote-station model the step attenuator controller is
-    // never wired to a radio connection (MainWindow wires it only for a
-    // local connection) and nothing reports the station's attenuator back,
-    // so these two groups would accept input and move nothing. The
-    // Hardware Configuration and Options groups are left as they are.
-    if (model && !model->ownsLocalDsp()) {
-        const QString reason = tr(
-            "The attenuator and preamp cannot be changed from a remote window yet.");
-        for (const char* name : {"grpStepAttenuator", "grpAutoAttRx1", "grpAutoAttRx2"}) {
-            if (auto* group = findChild<QGroupBox*>(QLatin1String(name))) {
-                group->setEnabled(false);
-                group->setToolTip(reason);
-            }
-        }
+    // R-R3-46 / R-R3-21: a remote window shows the Core's values and is
+    // usable only while the Core takes its edits; until then the two
+    // groups are disabled with the object's plain reason. The Hardware
+    // Configuration and Options groups are left as they are.
+    if (m_stepAtt) {
+        connectFacade();
+        syncFromFacade();
+        applyRadioHardwareAvailability();
     }
 }
 
@@ -561,6 +565,8 @@ void GeneralOptionsPage::buildStepAttGroup()
         m_spnRx1StepAttValue->setEnabled(on);
         if (m_ctrl) {
             m_ctrl->setStepAttEnabled(on);
+        } else if (m_stepAtt) {
+            m_stepAtt->setEnabled(on);
         }
     });
 
@@ -572,6 +578,8 @@ void GeneralOptionsPage::buildStepAttGroup()
     connect(m_spnRx1StepAttValue, &QSpinBox::valueChanged, this, [this](int dB) {
         if (m_ctrl) {
             m_ctrl->setAttenuation(dB, 0);
+        } else if (m_stepAtt) {
+            m_stepAtt->setAttenuationDb(dB);
         }
     });
 
@@ -668,6 +676,28 @@ void GeneralOptionsPage::buildAutoAttGroup()
                     m_ctrl->setAutoAttHoldSeconds(static_cast<double>(sec));
                 } else {
                     m_ctrl->setAutoUndoDelaySec(sec);
+                }
+            });
+        }
+
+        // R-R3-46: a remote window writes the Core's object (RX1 only, as
+        // the controller behind it is). The times are whole seconds, carried
+        // in ms: Classic's undo delay, Adaptive's hold.
+        if (m_stepAtt && rx == 0) {
+            connect(chkEnable, &QCheckBox::toggled, this, [this](bool on) {
+                m_stepAtt->setAutoAttEnabled(on);
+            });
+            connect(cmbMode, &QComboBox::currentIndexChanged, this, [this](int idx) {
+                m_stepAtt->setAutoAttMode(idx);
+            });
+            connect(chkUndo, &QCheckBox::toggled, this, [this](bool on) {
+                m_stepAtt->setAutoAttUndo(on);
+            });
+            connect(spnHold, &QSpinBox::valueChanged, this, [this, cmbMode](int sec) {
+                if (cmbMode->currentIndex() == static_cast<int>(AutoAttMode::Adaptive)) {
+                    m_stepAtt->setAutoAttHoldMs(sec * 1000);
+                } else {
+                    m_stepAtt->setAutoAttUndoDelayMs(sec * 1000);
                 }
             });
         }
@@ -822,6 +852,10 @@ void GeneralOptionsPage::initFromController()
 
 void GeneralOptionsPage::syncFromModel()
 {
+    if (m_stepAtt) {
+        syncFromFacade();
+        return;
+    }
     if (!m_ctrl) {
         return;
     }
@@ -847,6 +881,89 @@ void GeneralOptionsPage::syncFromModel()
     m_cmbAutoAttRx1Mode->setEnabled(autoOn);
     m_chkAutoAttUndoRx1->setEnabled(autoOn);
     m_spnAutoAttHoldRx1->setEnabled(autoOn && m_chkAutoAttUndoRx1->isChecked());
+}
+
+// ---------------------------------------------------------------------------
+// R-R3-46 / R-R3-21: a remote window's groups and the Core's `stepAtt` object
+// ---------------------------------------------------------------------------
+
+void GeneralOptionsPage::connectFacade()
+{
+    Q_ASSERT(m_stepAtt);
+    using F = StepAttenuatorFacade;
+    for (auto signal : {&F::enabledChanged, &F::autoAttEnabledChanged,
+                        &F::autoAttUndoChanged, &F::adcLinkedChanged}) {
+        connect(m_stepAtt, signal, this, [this](bool) { syncFromFacade(); });
+    }
+    for (auto signal : {&F::attenuationDbChanged, &F::autoAttModeChanged,
+                        &F::autoAttUndoDelayMsChanged, &F::autoAttHoldMsChanged,
+                        &F::minDbChanged, &F::maxDbChanged}) {
+        connect(m_stepAtt, signal, this, [this](int) { syncFromFacade(); });
+    }
+    connect(m_stepAtt, &F::windowAvailabilityChanged,
+            this, [this](bool) { applyRadioHardwareAvailability(); });
+}
+
+// The same widget state initFromController() gives a local window, read from
+// the Core's values, with signals blocked so the read writes nothing back.
+void GeneralOptionsPage::syncFromFacade()
+{
+    if (!m_stepAtt) {
+        return;
+    }
+    const bool stepOn = m_stepAtt->enabled();
+    {
+        QSignalBlocker blk(m_spnRx1StepAttValue);
+        m_spnRx1StepAttValue->setRange(m_stepAtt->minDb(), m_stepAtt->maxDb());
+        m_spnRx1StepAttValue->setValue(m_stepAtt->attenuationDb());
+    }
+    {
+        QSignalBlocker blk(m_chkRx1StepAttEnable);
+        m_chkRx1StepAttEnable->setChecked(stepOn);
+    }
+    m_spnRx1StepAttValue->setEnabled(stepOn);
+    m_lblAdcLinked->setVisible(m_stepAtt->adcLinked());
+
+    const bool isAdaptive = m_stepAtt->autoAttMode() == static_cast<int>(AutoAttMode::Adaptive);
+    {
+        QSignalBlocker blk(m_chkAutoAttRx1);
+        m_chkAutoAttRx1->setChecked(m_stepAtt->autoAttEnabled());
+    }
+    {
+        QSignalBlocker blk(m_cmbAutoAttRx1Mode);
+        m_cmbAutoAttRx1Mode->setCurrentIndex(isAdaptive ? static_cast<int>(AutoAttMode::Adaptive)
+                                                        : static_cast<int>(AutoAttMode::Classic));
+    }
+    {
+        QSignalBlocker blk(m_chkAutoAttUndoRx1);
+        m_chkAutoAttUndoRx1->setChecked(m_stepAtt->autoAttUndo());
+        m_chkAutoAttUndoRx1->setText(isAdaptive ? QStringLiteral("Decay")
+                                                : QStringLiteral("Undo"));
+    }
+    {
+        QSignalBlocker blk(m_spnAutoAttHoldRx1);
+        m_spnAutoAttHoldRx1->setValue(
+            (isAdaptive ? m_stepAtt->autoAttHoldMs() : m_stepAtt->autoAttUndoDelayMs()) / 1000);
+    }
+    const bool autoOn = m_stepAtt->autoAttEnabled();
+    m_cmbAutoAttRx1Mode->setEnabled(autoOn);
+    m_chkAutoAttUndoRx1->setEnabled(autoOn);
+    m_spnAutoAttHoldRx1->setEnabled(autoOn && m_chkAutoAttUndoRx1->isChecked());
+}
+
+void GeneralOptionsPage::applyRadioHardwareAvailability()
+{
+    if (!m_stepAtt) {
+        return;
+    }
+    const bool available = m_stepAtt->windowAvailable();
+    const QString reason = available ? QString() : m_stepAtt->windowUnavailableReason();
+    for (const char* name : {"grpStepAttenuator", "grpAutoAttRx1", "grpAutoAttRx2"}) {
+        if (auto* group = findChild<QGroupBox*>(QLatin1String(name))) {
+            group->setEnabled(available);
+            group->setToolTip(reason);
+        }
+    }
 }
 
 } // namespace NereusSDR

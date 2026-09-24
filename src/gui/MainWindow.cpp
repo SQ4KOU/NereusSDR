@@ -38,6 +38,12 @@
 //   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-46: Radio > Protocol Info shows
 //                 the Core's radio in a remote window. AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-23 - J.J. Boyd (KG4VCF). R-R3-46 / R-R3-21: a remote window's
+//                 attenuator controls follow the Core's `stepAtt` object
+//                 while the Core offers it, the Core's refusals of an
+//                 attenuator edit are shown in user words, and the
+//                 overload alarm lights on the Core's overload report.
+//                 AI-assisted implementation via Anthropic Claude Code.
 //   2026-09-22 — J.J. Boyd (KG4VCF). Invoke the Aether-derived pan-stack
 //                 shutdown before QWidget destroys its graphics backend.
 //                 AI-assisted integration via OpenAI Codex.
@@ -311,6 +317,9 @@ warren@wpratt.com
 #include "core/NbFamily.h"
 #include "core/ClarityController.h"
 #include "core/StepAttenuatorController.h"
+#include "core/StepAttenuatorFacade.h"
+
+#include <array>
 #include "core/MoxController.h"  // 3M-1a G.1: F.2 connect (hardwareFlipped → onMoxHardwareFlipped)
 #include "core/NoiseFloorTracker.h"
 #include "core/BoardCapabilities.h"
@@ -1151,6 +1160,23 @@ void MainWindow::ensureRemoteSession()
         connect(m_remoteMedia, &RemoteMediaController::recoveryRequested,
                 m_remoteConnection, &RemoteConnectionController::recoverMediaSession,
                 Qt::QueuedConnection);
+
+        // R-R3-46 / R-R3-21: an attenuator edit the Core kept at another
+        // value (its radio's range, a mode the radio does not offer), or
+        // that this window could not send, says why in user words.
+        connect(m_stationClient, &StationClient::propertyWriteCompleted, this,
+                [this](const QByteArray& objectKey, const QByteArray&, quint32,
+                       bool accepted, const QString& reason) {
+            if (objectKey == "stepAtt" && !accepted && !reason.isEmpty()) {
+                showToast(OperatorReasonText::forDisplay(reason), ToastSeverity::Warning, 4000);
+            }
+        });
+        if (StepAttenuatorFacade* stepAtt = m_radioModel->stepAttFacade()) {
+            connect(stepAtt, &StepAttenuatorFacade::editRejected, this,
+                    [this](const QString& reason) {
+                showToast(OperatorReasonText::forDisplay(reason), ToastSeverity::Warning, 4000);
+            });
+        }
 
         connect(m_stationClient, &StationClient::handshakeComplete, this, [this]() {
             qCInfo(lcConnection) << "Station handshake complete:" << m_remoteConnection->endpointText();
@@ -8597,8 +8623,9 @@ void MainWindow::buildStatusBar()
         // group's own required width (finding routed from Task A6).
     });
 
-    connect(m_stepAttController, &StepAttenuatorController::overloadStatusChanged,
-            this, [this](int /*adc*/, OverloadLevel /*level*/) {
+    // R-R3-46 / R-R3-21: the alarm for a set of per-ADC levels, from this
+    // window's controller (local) or the Core's report (remote, below).
+    const auto showAdcOverload = [this](const std::array<OverloadLevel, 3>& levels) {
         // Thetis adc_names table — console.cs:21323 [@501e3f5]
         static const char* const kAdcNames[3] = { "ADC0", "ADC1", "ADC2" };
 
@@ -8610,7 +8637,7 @@ void MainWindow::buildStatusBar()
         QString shownAdcs;
         QString tip;
         for (int i = 0; i < 3; ++i) {
-            const OverloadLevel lvl = m_stepAttController->overloadLevel(i);
+            const OverloadLevel lvl = levels[static_cast<std::size_t>(i)];
             if (lvl == OverloadLevel::None) { continue; }
             if (lvl == OverloadLevel::Red) { anyRed = true; }
             if (!shownAdcs.isEmpty()) { shownAdcs += QStringLiteral("/"); }
@@ -8640,7 +8667,31 @@ void MainWindow::buildStatusBar()
         // Restart auto-hide — Thetis: _warningTimer.Stop(); .Start();
         // (ucInfoBar.cs:927+932 [@501e3f5]).
         m_adcOvlHideTimer->start();
+    };
+    connect(m_stepAttController, &StepAttenuatorController::overloadStatusChanged,
+            this, [this, showAdcOverload](int /*adc*/, OverloadLevel /*level*/) {
+        showAdcOverload({m_stepAttController->overloadLevel(0),
+                         m_stepAttController->overloadLevel(1),
+                         m_stepAttController->overloadLevel(2)});
     });
+    // A remote window's controller has no radio. The alarm follows the
+    // Core's overload report instead: the `stepAtt` object's ADC0 and ADC1
+    // levels (0 none, 1 yellow, 2 red), which change when the Core's own
+    // levels do, as the controller's signal above does.
+    if (!m_radioModel->ownsLocalDsp()) {
+        if (StepAttenuatorFacade* stepAtt = m_radioModel->stepAttFacade()) {
+            const auto fromWire = [](int level) {
+                return level >= 2 ? OverloadLevel::Red
+                     : level == 1 ? OverloadLevel::Yellow : OverloadLevel::None;
+            };
+            const auto fromCore = [stepAtt, fromWire, showAdcOverload](int) {
+                showAdcOverload({fromWire(stepAtt->overloadAdc0()),
+                                 fromWire(stepAtt->overloadAdc1()), OverloadLevel::None});
+            };
+            connect(stepAtt, &StepAttenuatorFacade::overloadAdc0Changed, this, fromCore);
+            connect(stepAtt, &StepAttenuatorFacade::overloadAdc1Changed, this, fromCore);
+        }
+    }
 
     // ── sub-PR-8: Canonical TX StatusBadge ───────────────────────────────
     // Solid red (Variant::Tx) when MoxController emits moxStateChanged(true).
@@ -10354,6 +10405,18 @@ void MainWindow::applyRemoteRoleGating()
                 ? tr("Choose a Core/radio pair or a radio for this computer")
                 : tr("Unavailable: this window was started for one Core with "
                      "--station, so the radio list cannot change it."));
+    }
+    // R-R3-46 / R-R3-21: the attenuator, preamp and auto-attenuate
+    // controls (RX applet, Setup > General > Options) follow the Core's
+    // `stepAtt` object; they are usable only while the Core takes this
+    // window's edits, and otherwise say why in user words.
+    if (StepAttenuatorFacade* stepAtt = m_radioModel->stepAttFacade()) {
+        const bool hardware = m_stationClient != nullptr
+            && m_stationClient->remoteRadioHardwareAvailable();
+        stepAtt->setWindowAvailability(hardware, hardware ? QString()
+            : m_stationClient != nullptr
+                ? OperatorReasonText::forDisplay(m_stationClient->radioHardwareUnavailableReason())
+                : tr("Connect to the Core to change the attenuator and preamp."));
     }
     // R-R3-46: Protocol Info shows the Core's radio (showCoreRadioInfo(),
     // never connection(), which a remote model does not have) once the

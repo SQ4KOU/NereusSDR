@@ -24,6 +24,12 @@
 //   2026-09-23 - R-R3-46: in a remote window the preamp items and S-ATT
 //                 range follow the Core's board. J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-23 - R-R3-46 / R-R3-21: in a remote window the ATT/S-ATT row,
+//                 the preamp combo and the RX1 preamp toggle show and write
+//                 the Core's `stepAtt` object, enabled while the Core takes
+//                 the window's edits and otherwise disabled with its plain
+//                 reason. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -137,6 +143,7 @@
 #include "gui/AntennaPopupBuilder.h"
 #include "core/RadioConnection.h"
 #include "core/StepAttenuatorController.h"
+#include "core/StepAttenuatorFacade.h"
 #include "core/accessories/AlexController.h"
 #include "gui/ComboStyle.h"
 #include "gui/StyleConstants.h"
@@ -218,23 +225,118 @@ RxApplet::RxApplet(SliceModel* slice, RadioModel* model, QWidget* parent)
         setTransmitPermitted(false);
     }
 
-    // R-R3-21: on a remote-station model the step attenuator controller is
-    // never wired to a radio connection (MainWindow only wires it when a
-    // local connection exists), the RX1 preamp toggle casts the absent
-    // local connection, and nothing reports the station's own attenuator
-    // back. The row would accept input and move nothing, so it says so.
+    // R-R3-46 / R-R3-21: a remote window has no attenuator of its own. The
+    // row shows and writes the Core's (the mirrored `stepAtt` object), and
+    // is usable only while the Core takes its edits; until then it is
+    // disabled with the object's plain reason.
     if (m_model && !m_model->ownsLocalDsp()) {
-        const QString reason = tr(
-            "The attenuator and preamp cannot be changed from a remote window yet.");
-        for (QWidget* w : {static_cast<QWidget*>(m_attStack),
-                           static_cast<QWidget*>(m_attLabel),
-                           static_cast<QWidget*>(m_rx1PreampToggle)}) {
-            if (w) {
-                w->setEnabled(false);
-                w->setToolTip(reason);
-            }
+        wireRemoteStepAtt();
+    }
+}
+
+namespace {
+
+// The ATT/S-ATT/A-ATT label for a remote window: the same labels
+// connectSlice() gives a local one (mi0bot-Thetis console.cs:21342-21365
+// [v2.10.3.13-beta2] AutoAttRX1 setter, widened to every board there).
+QString remoteAttLabelText(bool stepOn, bool autoOn)
+{
+    if (!stepOn) {
+        return QStringLiteral("ATT");
+    }
+    return autoOn ? QStringLiteral("A-ATT") : QStringLiteral("S-ATT");
+}
+
+} // namespace
+
+void RxApplet::wireRemoteStepAtt()
+{
+    StepAttenuatorFacade* stepAtt = m_model ? m_model->stepAttFacade() : nullptr;
+    if (!stepAtt) {
+        return;
+    }
+    // The window's edits: each is a property write the Core applies through
+    // its own controller; the value it settles on comes back below.
+    connect(m_stepAttSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, [stepAtt](int dB) { stepAtt->setAttenuationDb(dB); });
+    connect(m_preampCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this, stepAtt](int idx) {
+        if (idx < 0) { return; }  // guard during clear/repopulate
+        stepAtt->setPreampMode(m_preampCombo->itemData(idx).toInt());
+    });
+
+    // The Core's values.
+    for (auto signal : {&StepAttenuatorFacade::enabledChanged,
+                        &StepAttenuatorFacade::autoAttEnabledChanged,
+                        &StepAttenuatorFacade::rx1PreampChanged}) {
+        connect(stepAtt, signal, this, [this](bool) { showRemoteStepAttValues(); });
+    }
+    for (auto signal : {&StepAttenuatorFacade::attenuationDbChanged,
+                        &StepAttenuatorFacade::preampModeChanged,
+                        &StepAttenuatorFacade::minDbChanged,
+                        &StepAttenuatorFacade::maxDbChanged}) {
+        connect(stepAtt, signal, this, [this](int) { showRemoteStepAttValues(); });
+    }
+    connect(stepAtt, &StepAttenuatorFacade::windowAvailabilityChanged,
+            this, [this](bool) { applyRemoteStepAttAvailability(); });
+
+    showRemoteStepAttValues();
+    applyRemoteStepAttAvailability();
+}
+
+void RxApplet::showRemoteStepAttValues()
+{
+    StepAttenuatorFacade* stepAtt = m_model ? m_model->stepAttFacade() : nullptr;
+    if (!stepAtt) {
+        return;
+    }
+    // The Core's range is its own radio's; it is shown once the Core offers
+    // the attenuator (before that the board table from setBoardCapabilities
+    // stands).
+    if (stepAtt->windowAvailable() && m_stepAttSpin) {
+        QSignalBlocker blk(m_stepAttSpin);
+        m_stepAttSpin->setRange(stepAtt->minDb(), stepAtt->maxDb());
+    }
+    if (m_stepAttSpin) {
+        QSignalBlocker blk(m_stepAttSpin);
+        m_stepAttSpin->setValue(stepAtt->attenuationDb());
+    }
+    if (m_preampCombo) {
+        const int at = m_preampCombo->findData(stepAtt->preampMode());
+        if (at >= 0) {
+            QSignalBlocker blk(m_preampCombo);
+            m_preampCombo->setCurrentIndex(at);
         }
     }
+    if (m_rx1PreampToggle) {
+        QSignalBlocker blk(m_rx1PreampToggle);
+        m_rx1PreampToggle->setChecked(stepAtt->rx1Preamp());
+    }
+    if (m_attLabel) {
+        m_attLabel->setText(remoteAttLabelText(stepAtt->enabled(), stepAtt->autoAttEnabled()));
+    }
+    if (m_attStack) {
+        m_attStack->setCurrentIndex(stepAtt->enabled() ? 1 : 0);
+    }
+}
+
+void RxApplet::applyRemoteStepAttAvailability()
+{
+    StepAttenuatorFacade* stepAtt = m_model ? m_model->stepAttFacade() : nullptr;
+    if (!stepAtt) {
+        return;
+    }
+    const bool available = stepAtt->windowAvailable();
+    const QString tip = available ? QString() : stepAtt->windowUnavailableReason();
+    for (QWidget* w : {static_cast<QWidget*>(m_attStack),
+                       static_cast<QWidget*>(m_attLabel),
+                       static_cast<QWidget*>(m_rx1PreampToggle)}) {
+        if (w) {
+            w->setEnabled(available);
+            w->setToolTip(tip);
+        }
+    }
+    showRemoteStepAttValues();
 }
 
 void RxApplet::buildUi()
@@ -1011,6 +1113,14 @@ void RxApplet::buildUi()
             // which routes to CodecContext.p2Rx1Preamp → byte 1403 bit 1.
             connect(m_rx1PreampToggle, &QCheckBox::toggled, this, [this](bool on) {
                 if (!m_model) { return; }
+                // R-R3-46: a remote window has no connection of its own;
+                // the toggle writes the Core's `stepAtt` object instead.
+                if (!m_model->ownsLocalDsp()) {
+                    if (StepAttenuatorFacade* stepAtt = m_model->stepAttFacade()) {
+                        stepAtt->setRx1Preamp(on);
+                    }
+                    return;
+                }
                 auto* conn = qobject_cast<class P2RadioConnection*>(m_model->connection());
                 if (!conn) { return; }
                 // P2RadioConnection lives on m_connThread.  Dispatch onto its
@@ -1400,6 +1510,9 @@ void RxApplet::setBoardCapabilities(const BoardCapabilities& caps)
     if (m_model && !m_model->ownsLocalDsp()) {
         rebuildPreampAndAttRangeForBoard(caps.board, caps.hasAlexFilters,
                                          caps.attenuator.minDb);
+        // R-R3-46 / R-R3-21: then the Core's own range and values, once it
+        // offers its attenuator (the rebuild may have reset the combo).
+        showRemoteStepAttValues();
     }
 }
 
@@ -1652,8 +1765,10 @@ void RxApplet::connectSlice(SliceModel* s)
     // Thetis parity (2026-04-22). NB state is managed via VFO flag chkNB,
     // Setup → DSP → NB/SNB, and the DSP menu bar — not here.
 
-    // ATT/S-ATT — wire to StepAttenuatorController if available
-    auto* attCtrl = m_model ? m_model->stepAttController() : nullptr;
+    // ATT/S-ATT: wire to StepAttenuatorController if available.
+    // R-R3-46: a remote window's row follows the Core's `stepAtt` object
+    // instead (wireRemoteStepAtt); its own controller has no radio.
+    auto* attCtrl = m_model && m_model->ownsLocalDsp() ? m_model->stepAttController() : nullptr;
     if (attCtrl) {
         // Populate preamp combo from board capabilities when radio is connected.
         // From Thetis console.cs:40755 SetComboPreampForHPSDR().

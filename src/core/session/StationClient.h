@@ -545,6 +545,10 @@ public:
     // session at minor 11 with property results. The window's `stepAtt`
     // edits reach the Core's step attenuator and preamp.
     bool remoteRadioHardwareAvailable() const;
+    /// Why the window's attenuator and preamp edits cannot reach the Core,
+    /// in plain words: not connected yet, or a Core that does not offer
+    /// them. Empty while remoteRadioHardwareAvailable().
+    QString radioHardwareUnavailableReason() const;
     CommandOutcome requestNnrDiagnostics(int sliceId, int testMode, int outputMode) override;
     /// R-R3-40: the station can clear a runtime NNR limit on request
     /// (negotiated minor 11 and NNR control).

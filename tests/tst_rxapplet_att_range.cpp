@@ -8,10 +8,14 @@
 // RxApplet sets the spinbox range in buildUi() using
 // m_model->boardCapabilities().attenuator.maxDb so the correct ceiling
 // is in place from widget creation, before any radio connection occurs.
+//
+// R-R3-46 / R-R3-21 (2026-09-23): in a remote window the range is the one
+// the Core reports for its own radio, once the Core offers its attenuator.
 
 #include <QtTest/QtTest>
 #include <QApplication>
 
+#include "core/StepAttenuatorFacade.h"
 #include "gui/applets/RxApplet.h"
 #include "models/RadioModel.h"
 
@@ -50,6 +54,29 @@ private slots:
         RadioModel model;
         model.setBoardForTest(HPSDRHW::Hermes);
         RxApplet applet(nullptr, &model);
+        QCOMPARE(applet.stepAttMaxForTest(), 31);
+    }
+
+    // A remote window: the board table stands until the Core offers its
+    // attenuator, then the range is the Core's (Hermes with Alex: 0..61,
+    // Thetis setup.cs:15773-15786 [v2.10.3.13] via stepAttMaxDb on the Core).
+    void remote_slider_range_is_the_cores()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.setBoardForTest(HPSDRHW::Hermes);
+        RxApplet applet(nullptr, &remote);
+        StepAttenuatorFacade* stepAtt = remote.stepAttFacade();
+        stepAtt->applyRemoteProperty("minDb", 0);
+        stepAtt->applyRemoteProperty("maxDb", 61);
+        QCOMPARE(applet.stepAttMaxForTest(), 31);
+        stepAtt->setWindowAvailability(true, QString());
+        QCOMPARE(applet.stepAttMinForTest(), 0);
+        QCOMPARE(applet.stepAttMaxForTest(), 61);
+
+        // An HL2 Core reports its signed range.
+        stepAtt->applyRemoteProperty("minDb", -28);
+        stepAtt->applyRemoteProperty("maxDb", 31);
+        QCOMPARE(applet.stepAttMinForTest(), -28);
         QCOMPARE(applet.stepAttMaxForTest(), 31);
     }
 };

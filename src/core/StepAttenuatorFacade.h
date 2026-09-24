@@ -28,6 +28,11 @@
 // Modification history (NereusSDR):
 //   2026-09-23  J.J. Boyd / KG4VCF  Created. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-23  J.J. Boyd / KG4VCF  A remote window's availability (can
+//                                    its edits reach the Core, and if not
+//                                    why) for the RX applet and Setup
+//                                    (R-R3-46, R-R3-21). AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -87,6 +92,14 @@ public:
 
     void setEditGate(EditGate gate) { m_editGate = std::move(gate); }
 
+    /// A remote window: whether its edits can reach the Core now and, when
+    /// they cannot, why, in plain words. MainWindow sets it from the session
+    /// (R-R3-46, R-R3-21); the RX applet and Setup follow it. Starts
+    /// unavailable, with the "connect to the Core" reason.
+    void setWindowAvailability(bool available, const QString& reason);
+    bool windowAvailable() const { return m_windowAvailable; }
+    QString windowUnavailableReason() const { return m_windowReason; }
+
     /// Why the last edit of `property` settled on another value; empty when
     /// it was taken as asked or was never edited.
     QString settleReason(const QByteArray& property) const;
@@ -140,6 +153,8 @@ signals:
     void adcLinkedChanged(bool linked);
     /// An edit the gate refused, with its plain reason.
     void editRejected(const QString& reason);
+    /// setWindowAvailability() changed the availability or its reason.
+    void windowAvailabilityChanged(bool available);
 
 private:
     struct Values {
@@ -172,6 +187,8 @@ private:
     QPointer<StepAttenuatorController> m_controller;
     QList<QMetaObject::Connection> m_controllerConnections;
     EditGate m_editGate;
+    bool m_windowAvailable{false};
+    QString m_windowReason;
     QHash<QByteArray, QString> m_settleReasons;
     Values m_values;
 };

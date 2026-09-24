@@ -16,6 +16,9 @@
 //                 Claude Code.
 //                 Structural pattern follows AetherSDR (ten9876/AetherSDR,
 //                 GPLv3).
+//   2026-09-23 - R-R3-46 / R-R3-21: in a remote window the attenuator row
+//                 follows the Core's `stepAtt` object. J.J. Boyd (KG4VCF),
+//                 with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -274,6 +277,14 @@ private:
     // R-R3-46: preamp items and S-ATT range for the Core's board (remote).
     void rebuildPreampAndAttRangeForBoard(NereusSDR::HPSDRHW board, bool alexFilters,
                                           int minDb);
+    // R-R3-46 / R-R3-21: a remote window's ATT/S-ATT row, preamp combo and
+    // RX1 preamp toggle follow the Core's `stepAtt` object and write to it.
+    void wireRemoteStepAtt();
+    // Enables the row while the Core takes its edits; otherwise disables it
+    // with the plain reason the object carries.
+    void applyRemoteStepAttAvailability();
+    // Shows the object's values in the row (signals blocked).
+    void showRemoteStepAttValues();
 
     static QString formatFilterWidth(int low, int high);
 
