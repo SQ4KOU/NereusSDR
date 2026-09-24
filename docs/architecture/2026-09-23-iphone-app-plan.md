@@ -405,16 +405,17 @@ order as the station tasks they consume land, except for the first usable build 
 iPhone connects to the Pi 4 Core with the Hermes Lite 2 over the Pi's public IPv6
 address, pairs by code, shows the band and plays the sound. The phone tasks on that path
 run first, in this order, as the station tasks they need land: 51, 55a (which needs no
-station work), 15, 52, 53, 54a, 56a, then the check on his iPhone, 56b. Their station path is Part C (12 to 16) in
+station work), 15, 15b, 52, 53, 54a, 56a, then the check on his iPhone, 56b. Their station path is Part C (12 to 16) in
 integration, then 19 and 20; the Core/GUI session puts the build on the Pi 4 with JJ's
 go-ahead, and JJ reads the pairing code there himself. Finding Cores by Bonjour (16a)
-joins the path when its station half is in. The transmit and remote halves (54, 55, 56,
-27a to 29a) follow, and everything stays in the first release (D5): the order changes,
-not the scope.
+joins the path when its station half is in. Several devices on the phone (56c) follows
+as soon as the station's several-devices tasks are in, before transmit. The transmit and
+remote halves (54, 55, 56, 27a to 29a) follow, and everything stays in the first release
+(D5): the order changes, not the scope.
 
 **Tasks flagged for an earlier independent review** (they touch authorisation, secrets,
 networking that could expose or strand the station, or the transmit boundary): 4, 12, 13,
-14, 17, 18, 25, 26, 27, 27a, 28, 28a, 29, 29a, 30, 31, 32, 33, 34, 35, 36, 37, 38, 41, 42, 45, 47, 48,
+14, 15, 15b, 17, 18, 25, 26, 27, 27a, 28, 28a, 29, 29a, 30, 31, 32, 33, 34, 35, 36, 37, 38, 41, 42, 45, 47, 48,
 54, 64, 65, 71, 73, 74, 75, 77, 78. JJ decides whether any of them gets one. For the six phone tasks among them
 (27a, 28a, 29a, 54, 64, 65) he decided on 2026-09-24: each gets its own independent
 review as soon as it is finished. For the station tasks he decided the same day, through
@@ -1729,74 +1730,286 @@ flag for earlier review. Requires Tasks 12 and 13.
 - [ ] **Step 2:** The exchange, the messages, LAN mode, the peer helper, fixtures and
       the document.
 
-## Task 15: The app's identity and pairing
+## Task 15: The app's link after Part C, and signing in with its device key
 
 **Runs in:** the phone session, on `claude/iphone-app` (a phone task).
 
-**Requirements:** R-IOS-08 (the app's half), R-IOS-16 (pairing three ways), spec §5.3
-items 3 and 7.
+**Requirements:** R-IOS-08 (the app's half: a device key and device sign-in), R-IOS-01
+(the conformance suite as Part C leaves it), D65 (the device's name), D67 (the key and
+the paired Cores survive a reinstall), link sections 3.4 and 3.5, 5.1, 12.4 and 16 as Part
+C leaves them.
 
 **Files:**
-- Create (vendored through `vendor-sources.sh`, rows in `ios/THIRD-PARTY.md`):
-  `ios/NereusKit/Sources/CSodium/` (the same libsodium tag as Task 14),
-  `ios/NereusKit/Sources/CSpake2EE/` (the same spake2-ee commit)
-- Create: `ios/NereusKit/Sources/NereusLink/DeviceIdentity.swift`,
-  `DeviceKeyAuthenticator.swift`, `PairedStationStore.swift`, `PairingClient.swift`,
-  `PairingCodeText.swift`, `Resources/pairing-words-v1.txt`
-- Create: `ios/NereusKit/Tests/NereusLinkTests/PairingInteropTests.swift`,
-  `DeviceKeyAuthenticatorTests.swift`, `PairingCodeTextTests.swift`,
-  `PairedStationStoreTests.swift`
-- Modify: `ios/scripts/interop-test.sh` (builds and runs `nereus_pairing_peer` too),
-  `ios/NereusKit/Package.swift`, `scripts/verify-ios-provenance.py` (the word list copy
-  must equal `resources/pairing-words-v1.txt`),
-  `ios/NereusKit/Sources/NereusLink/LinkFeatures.swift` (`deviceAuth: 1`, so the
-  station accepts the device key in `auth.request`)
+- Step 0: merge the integration branch once Part C (Tasks 12, 13, 14 and 16, with the
+  group review's fix round) is in it. `tests/CMakeLists.txt` conflicts (the media offerer
+  and the pairing peer): keep both.
+- Modify: `ios/NereusKit/Sources/NereusLink/LinkMessage.swift`, `LinkCodec.swift`,
+  `StationSession.swift`, `StationTrust.swift`, `WebSocketLinkTransport.swift`,
+  `Refusal.swift`, `StationAuthenticator.swift`, `LinkFeatures.swift` (`deviceAuth: 1`)
+- Create: `ios/NereusKit/Sources/NereusLink/DeviceIdentity.swift` (the `DeviceKeyStore`
+  protocol and its three stores), `DeviceKeyAuthenticator.swift`,
+  `PairedStationStore.swift`, `PairedStation.swift`, `Base64URL.swift`, `P256Wire.swift`
+  (SubjectPublicKeyInfo DER and raw signatures)
+- Modify: `ios/NereusKit/Tests/LinkTestSupport/FixturePlaceholders.swift`,
+  `ios/NereusKit/Tests/LinkSessionTestSupport/SessionFixturePlayer.swift`,
+  `ios/NereusKit/Sources/NereusKitTesting/FakeStation.swift`, the mirror test support
+  (`MirrorTestSupport.swift`), and the count and fixture tests
+  (`LinkConformanceControlTests.swift`, `LinkConformanceSessionTests.swift`,
+  `MirrorConformanceTests.swift`, `DisplayFrameDecoderTests.swift`,
+  `StationSessionTests.swift`)
+- Create: `ios/NereusKit/Tests/NereusLinkTests/DeviceKeyAuthenticatorTests.swift`,
+  `DeviceIdentityTests.swift`, `PairedStationStoreTests.swift`, `Base64URLTests.swift`
 
 **Interfaces:**
-- Consumes: `StationSession`, `StationAuthenticator` (Task 8); the wire values above.
+- Consumes: `StationSession`, `StationAuthenticator`, `LinkTransport` and its factory seam
+  (Task 8); the fixtures and the link document as Part C leaves them (the station's shape
+  rules are in `src/core/session/SessionMessages.cpp` on the merged tree).
 - Produces:
-  - `protocol DeviceKeyStore: Sendable` with `SecureEnclaveKeyStore` (on a device with a
-    Secure Enclave), `KeychainKeyStore` (a software key in the Keychain elsewhere) and
-    `InMemoryKeyStore` (tests); `DeviceIdentity.load(store:)` returns the device's
-    P-256 key, creating it once.
-  - `struct DeviceKeyAuthenticator: StationAuthenticator` building `auth.request` with
-    `device {id, publicKey, name, kind, signature}` and verifying the station's
-    `certBinding` against the connection's certificate before signing.
-  - `struct PairedStation: Codable { var identityKey: Data; var label: String; var endpoints: [StationEndpoint]; var lastPath: String? }`
-    and `PairedStationStore` (file in Application Support, protected with
-    `.completeUntilFirstUserAuthentication`).
-  - `actor PairingClient` with `func pairOnThisNetwork(endpoint:) async throws -> PairedStation`
-    and `func pair(code: String, via: PairingCarrier) async throws -> PairedStation`,
-    where `PairingCarrier` is `.direct(StationEndpoint)` now and `.rendezvous(server:nameplate:)`
-    from Task 27a.
-  - `enum PairingCodeText { static func normalise(_:) -> String?; static func suggestions(forPrefix:) -> [String] }`
-    rejecting a code whose words are not in the list before it is sent, so a typing
-    mistake never burns the code.
-  - A successful pairing ends the pairing connection (Task 14): `pairOnThisNetwork` and
-    `pair(code:via:)` return the `PairedStation` once the Core has confirmed it, and the
-    caller then connects through the normal path, signing in with the device key.
+  - The codec reads and writes the new kinds, in the station's directions: the client
+    sends `pair.start`, `pair.spake`, `pair.confirm` and `pair.fail`; the station sends
+    `pair.accept`, `pair.spake`, `pair.confirm` and `pair.fail`. `hello` gains `identity
+    {publicKey, certBinding}` and `challenge`; `auth.request` gains `device {id,
+    publicKey, name, kind, signature}` with the optional `shortName`; `auth.result` and
+    `session.end` gain `code`. It checks shapes as the station does (an `identity` object
+    of two strings; a non-empty `challenge`; a `device` of five strings plus the optional
+    one; `pair.start`'s `mode` `lan` or `code`; `pair.spake`'s `step` 0 to 3 and a
+    non-empty `data`; a non-empty `box`; `pair.fail`'s `reason` and `retryAfterMs` 0 to
+    2147483647), with no base64url or length checks: the fixtures' stand-ins are literal
+    strings. It ignores keys it doesn't know (`session.end`'s `takenOverBy`,
+    `takenOverById` and `secondsAgo`; `devices` entries' `shortName`; the rest).
+  - `StationTrust.identity(publicKey:)` holds the Core's 91-byte SubjectPublicKeyInfo DER.
+    Under it the transport accepts any certificate and reports its SHA-256; the session
+    checks that `hello.identity.publicKey` is the trusted key and that `certBinding`
+    verifies over `"NereusSDR cert-binding v1\n"` (26 bytes) followed by the certificate's
+    SHA-256, and otherwise ends with the client-side `identityChanged` and "This Core is
+    not the one this app paired with. Pair with it again.", having sent nothing. A paired
+    Core whose `hello` has no `identity` ends the same way.
+  - A pairing trust for Task 15b: no pin and no identity, any certificate accepted, its
+    SHA-256 reported.
+  - `protocol DeviceKeyStore: Sendable` with `SecureEnclaveKeyStore` (a device with a
+    Secure Enclave), `KeychainKeyStore` (a software key where there is none) and
+    `InMemoryKeyStore` (tests); `DeviceIdentity.load(store:)` creates the P-256 key once.
+    Per D67 the key (for the Secure Enclave, its data representation) and the paired
+    Cores live in the Keychain with `kSecAttrAccessibleAfterFirstUnlockThisDeviceOnly`,
+    so deleting and reinstalling the app keeps them.
+  - `struct PairedStation: Codable { var identityKey: Data; var label: String; var endpoints: [StationEndpoint]; var lastPath: String? }`,
+    `identityKey` the 91-byte SPKI; `PairedStationStore` in the Keychain (D67).
+  - `struct DeviceKeyAuthenticator: StationAuthenticator`: it signs only when the Core's
+    `hello` declares `features.deviceAuth` 1 or more and its `challenge` decodes to 32
+    bytes. It signs `"NereusSDR device-auth v1\n"` (25 bytes), then the challenge (32),
+    the certificate's SHA-256, the SHA-256 of the Core's SPKI and the SHA-256 of the
+    device's SPKI (153 bytes in all), with ECDSA P-256 over SHA-256 as raw r‖s (64
+    bytes), and sends `token` `""` with `device {id, publicKey, name, kind, signature,
+    shortName}`. `id` is base64url of the SPKI's SHA-256 (43 characters). base64url is
+    strict: no padding, the URL alphabet only, unused bits zero.
+  - The device's `name` is the one the operator confirmed at pairing (D65), not blank, at
+    most 64 bytes of UTF-8, with no Cc, Cf, Zl or Zp characters; `kind` is `phone` on an
+    iPhone and `tablet` on an iPad; `shortName` is the model, "iPhone" or "iPad" (at most
+    32 bytes; the Core numbers duplicates).
+  - `Refusal` carries the link's end `code`: `takenOver`, `linkVersion`,
+    `pairingRequired`, `wrongToken`, `deviceNotPaired`, `deviceProofFailed`,
+    `deviceRemoved`, `identityChanged` (client-side only), `protocolError`; a code it
+    doesn't know is kept as text.
+  - `LinkFeatures.app` gains `deviceAuth: 1`, which brings the phone Task 13's `devices`
+    object (with `pairingCode` when signed in by key; the app never logs it). The app never
+    declares `pairing`.
 
 **Acceptance:**
-- The interop test pairs with `nereus_pairing_peer`: the right code yields a
-  `PairedStation` whose identity key matches the peer's; a wrong code yields a thrown
-  `PairingError.wrongCode(retryAfter:)`; LAN mode against an unclaimed peer succeeds.
-- After pairing, `StationSession` with `StationTrust.identity` connects to a station
-  presenting that identity and a certificate whose binding verifies, and refuses one
-  whose binding does not, before sending anything.
-- `normalise("7 Anvil  harbor")` is `"7-anvil-harbor"`; `normalise("7-anvil-harbour")`
-  is nil (not a list word) and `suggestions(forPrefix: "harb")` includes `"harbor"`.
-- On macOS the key store used in tests is `InMemoryKeyStore`; the Secure Enclave path is
-  exercised on a device in Task 56b's check on JJ's iPhone.
+- After the merge every suite passes against Part C's fixtures, with the counts recounted
+  at the merge (on lane B: 51 control fixtures, 11 client kinds and 20 station kinds; 44
+  session fixtures, 28 of them the app's; 7 NSDC vectors; plus whatever the catalogue work
+  brings in the same merge). Every control fixture round-trips, the new ones included.
+- The runners (the session player, FakeStation and the mirror support share one fill):
+  every station `hello` carries a run-time P-256 test identity whose `certBinding` signs
+  the digest the scripted transport reports; `challenge` is 32 fresh random bytes,
+  base64url, recorded as `challenge` when the fixture writes `"$capture:challenge"`;
+  `"$device:signed"` is checked, not filled (five strings, `id` the fingerprint of
+  `publicKey`, a canonical 91-byte P-256 key, the signature verifying over this
+  connection's transcript); a fixture whose `auth.request` carries a `device` block signs
+  in with the device key under `.identity` trust, the rest by token under certificate
+  trust. `device-sign-in`, `device-not-paired` and `pairing-required` pass on the app's
+  side, and the station-only fixtures stay filtered by `runs`.
+- A Core presenting another identity, or a binding that doesn't verify, is refused before
+  anything is sent, with `identityChanged` and its text.
+- The authenticator refuses to sign without `deviceAuth` in the Core's `hello`, or with a
+  challenge that isn't 32 bytes.
+- The key made once is the key used at every later sign-in, including after the store
+  object is created again (the Keychain store is tested where the platform allows; the
+  in-memory store otherwise).
 
-**Verification:** authorisation, cryptography across two implementations: integration.
-`ios/scripts/swift-test.sh --filter 'NereusLinkTests'` and `ios/scripts/interop-test.sh`.
+**Verification:** authorisation and cryptography: tests first. `ios/scripts/swift-test.sh`
+with no filter on both toolchains, `ios/scripts/interop-test.sh`,
+`python3 scripts/verify-ios-provenance.py`, `python3 -m pytest -q tests/compliance`, and the
+simulator test run (`ios/scripts/generate-project.sh && xcodebuild -project ios/NereusSDR.xcodeproj -scheme NereusSDR -destination 'platform=iOS Simulator,name=iPhone 17' test`).
+Device (Task 56b): the Secure Enclave key on a real iPhone.
 
-**Execution note (advisory):** opus. Secrets (the device key never leaves its store;
-nothing logs it). Requires Tasks 8 and 14.
+**Execution note (advisory):** opus. Secrets: the device key never leaves its store, and
+nothing logs it or the pairing code. Requires Part C (Tasks 12, 13, 14 and 16, with its fix
+round) in the integration branch. On the listening path.
 
-- [ ] **Step 1:** Vendor libsodium and spake2-ee; the word list copy and code text.
-- [ ] **Step 2:** Device identity, the authenticator, the paired-station store and the
-      pairing client with the interop tests.
+- [ ] **Step 0:** Merge the integration branch with Part C.
+- [ ] **Step 1:** The codec, the trust modes and the end codes, with the suites green.
+- [ ] **Step 2:** The device key, its stores, the authenticator and the runners.
+
+## Task 15b: Pairing in the app
+
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
+
+**Requirements:** R-IOS-08 (pairing: one tap on the Core's network, a code from
+anywhere), R-IOS-16 (pairing three ways; the code text), spec §5.3 items 3 and 7, D37
+(SPAKE2+EE on libsodium), D65, D67, link section 3.6.
+
+**Files:**
+- Create, vendored through `ios/scripts/vendor-sources.sh` (two new cases; the verify loop
+  in `ios/scripts/swift-test.sh` gains `libsodium` and `spake2ee`), with rows in
+  `ios/THIRD-PARTY.md`:
+  - `ios/NereusKit/Sources/CSodium/`: libsodium's release archive, only its `.c` and `.h`
+    files (SwiftPM would compile the archive's x86 `.S` files); `sodium/version.h`
+    written from `builds/msvc/version.h` (the archive ships only `version.h.in`); the
+    Apple defines from `cmake/NereusPairing.cmake`; the whole library, not the minimal
+    build (spake2-ee uses the ed25519 core functions); a module map exposing `sodium.h`
+    only.
+  - `ios/NereusKit/Sources/CSpake2EE/`: `src/crypto_spake.c`, `src/crypto_spake.h`,
+    `src/pushpop.h` and `LICENSE`, with a shim header target like `COpusShim`, since
+    `crypto_spake.h` uses `size_t` with no includes.
+- Create: `ios/NereusKit/Sources/NereusLink/PairingCodeText.swift`,
+  `Resources/pairing-words-v1.txt` (a copy of `resources/pairing-words-v1.txt`),
+  `SpakeExchange.swift` (the device's role, and the Core's role for tests),
+  `PairingBox.swift`, `PairingClient.swift`, `PairingCarrier.swift`, `PairingError.swift`
+- Modify: `ios/NereusKit/Package.swift` (`CSodium` and `CSpake2EE`, NereusLink depending
+  on them, the word list as a NereusLink resource),
+  `ios/NereusKit/Sources/NereusKitTesting/FakeStation.swift` (pairing by code and one tap,
+  and device-key checks), `ios/scripts/interop-test.sh` (builds `nereus_pairing_peer` with
+  `cmake --build build --target nereus_pairing_peer`, exports `NEREUS_PAIRING_PEER`, and
+  runs `'MediaPeerInteropTests|PairingInteropTests'`), `.github/workflows/ios.yml`
+  (trigger paths: `tests/tools/nereus_pairing_peer.cpp`, `src/core/security/**`,
+  `cmake/NereusPairing.cmake`, `resources/pairing-words-v1.txt`),
+  `scripts/verify-ios-provenance.py` (the word list copy equals the original; a library's
+  `-notices` text is shown with its licence) with cases in
+  `tests/compliance/test_verify_ios_provenance.py`,
+  `ios/NereusApp/Resources/Licenses.json` (libsodium and spake2-ee, with
+  `packaging/third-party-licenses/libsodium-notices.txt`'s notices, among them Colin
+  Percival's on `sha256_cp` and `sha512_cp`, which are always compiled; the Task 10
+  libraries with `-notices` files get theirs the same way) and `LicenseNoticeTests`
+- Create: `ios/NereusKit/Tests/NereusLinkTests/PairingCodeTextTests.swift`,
+  `SpakeExchangeTests.swift`, `PairingBoxTests.swift`, `PairingClientTests.swift`,
+  `PairingInteropTests.swift` (macOS only, enabled when `NEREUS_PAIRING_PEER` is set),
+  `CorePairingSignInTests.swift` (macOS only, against a real `nereusd`)
+
+**Interfaces:**
+- Consumes: the codec, the pairing trust, `DeviceIdentity`, `DeviceKeyAuthenticator`,
+  `PairedStation` and `PairedStationStore` (Task 15); `LinkTransport` and its factory seam
+  (Task 8).
+- Produces:
+  - `actor PairingClient` on its own connection over `LinkTransport` (it can't reuse
+    `StationSession`, which signs in straight after `hello`), with
+    `func pairOnThisNetwork(endpoint:) async throws -> PairedStation` and
+    `func pair(code: String, via: PairingCarrier) async throws -> PairedStation`, where
+    `PairingCarrier` is `.direct(StationEndpoint)` now and `.rendezvous(server:nameplate:)`
+    from Task 27a. It checks `features.pairing` 1 or more in the Core's `hello` before
+    `pair.start`; validates the device's name before `pair.start` and puts the same name
+    and kind in its box; checks step 0 with `crypto_spake_validate_public_data` before
+    hashing the code and closes without step 1 when it fails; sends `pair.fail` only after
+    its own step 3 fails; parses the Core's box (never compares bytes; `label` may be
+    empty) and checks that its identity equals the `hello`'s and its binding verifies over
+    the certificate's SHA-256. Success is `pair.accept` or the Core's `pair.confirm`, then
+    the close; a refusal is `pair.fail`, then the close; a `session.end` or a bare close
+    is a failure. A `pair.*` send on a signed-in session is refused locally (a
+    `LinkSendError` case), since the Core would end the connection. After success the
+    caller connects the normal way and signs in with the device key.
+  - `enum PairingError`: `notACode`; `cannotPair` (the Core didn't declare pairing);
+    `weakHashSettings` (step 0 failed its check); `wrongCode(retryAfter:reason:)`;
+    `refused(reason:retryAfter:)` (the Core's reason, shown as sent, including a closed
+    pairing window: a reopened window closes after 10 minutes, and every window closes
+    after 5 consecutive failed codes, reopened only from the Core's console or a paired
+    device); `identityMismatch`; `ended(reason:)`.
+  - `enum PairingCodeText { static func normalise(_:) -> String?; static func suggestions(forPrefix:) -> [String] }`:
+    lowercase; split on runs of anything outside ASCII `[a-z0-9]`; exactly three parts;
+    the number all digits, at most 9 of them, value 1 to 999999, with leading zeros
+    dropped (`"007-anvil-harbor"` is `"7-anvil-harbor"`); both words in the list. A code
+    whose words aren't in the list is caught before anything is sent, so a typing slip
+    never burns it.
+
+**Exact values:**
+- libsodium 1.0.22, tag `1.0.22-RELEASE`,
+  `https://github.com/jedisct1/libsodium/releases/download/1.0.22-RELEASE/libsodium-1.0.22.tar.gz`,
+  SHA-256 `adbdd8f16149e81ac6078a03aca6fc03b592b89ef7b5ed83841c086191be3349` (2008529
+  bytes), top directory `libsodium-1.0.22`, ISC; its `LICENSE` equals
+  `packaging/third-party-licenses/libsodium.txt`.
+- spake2-ee `fd3ea61f27a75ff63b0f192c9e619b5a494d048e`,
+  `https://codeload.github.com/jedisct1/spake2-ee/tar.gz/fd3ea61f27a75ff63b0f192c9e619b5a494d048e`,
+  SHA-256 `20d63587c1191b952e98b9a4d8bd557c8a6c4f6bfbac0b9fb77b28854c244bb6`,
+  BSD-2-Clause; its `LICENSE` equals `packaging/third-party-licenses/spake2-ee.txt`.
+- SPAKE2+EE: client identity `"nereussdr-device-v1"` (19 bytes) and server identity
+  `"nereussdr-station-v1"` (20 bytes), with no trailing NUL; the password is the
+  normalised code as UTF-8; `crypto_pwhash_alg_default()` (2, Argon2id),
+  `crypto_pwhash_OPSLIMIT_INTERACTIVE` (2), `crypto_pwhash_MEMLIMIT_INTERACTIVE`
+  (67108864); `sodium_init()` first. The device calls
+  `crypto_spake_validate_public_data(pd, alg_default, OPSLIMIT_INTERACTIVE, MEMLIMIT_INTERACTIVE)`,
+  `crypto_spake_step1(&st, r1, pd, pw, len)` and
+  `crypto_spake_step3(&st, r3, &keys, cid, 19, sid, 20, r2)`. Step 0 is 36 bytes
+  (version u16 LE 0x0001, algorithm u16 LE, opslimit u64 LE, memlimit u64 LE, a 16-byte
+  salt); step 1 32; step 2 64; step 3 32; each shared key 32.
+- Order, code mode: the Core's `hello`; the device's `hello`; `pair.start {mode: "code"}`;
+  `pair.spake` step 0 (the Core), 1 (the device), 2 (the Core), 3 (the device); the
+  device's `pair.confirm`; the Core's `pair.confirm`; the close. A wrong code: instead of
+  step 3 the device sends `pair.fail {reason, retryAfterMs: 0}`, the Core answers with its
+  `pair.fail` and the wait, then closes. One tap: the two `hello`s, `pair.start {mode:
+  "lan"}`, `pair.accept {identity {publicKey, certBinding}, label}`, the close. No
+  `session.end` in any of them.
+- Boxes: 24 random nonce bytes, then the `crypto_aead_xchacha20poly1305_ietf` ciphertext
+  with its 16-byte tag, no additional data, from libsodium (CryptoKit's ChaChaPoly uses a
+  12-byte nonce and won't interoperate). The device seals `{"publicKey","name","kind"}`
+  with `client_sk`, its `publicKey` exactly the text `pair.start` sent; the Core seals
+  `{"identity":{"certBinding","publicKey"},"label"}` with `server_sk` (Qt compact JSON,
+  keys sorted).
+- Waits: `pair.fail`'s `retryAfterMs` 0 to 2147483647; the first burned code waits 5000
+  ms, doubling up to 300000; "Another device is pairing" waits 5000 ms.
+- The word list, `resources/pairing-words-v1.txt`: 256 lines of `[a-z]{4,7}`, LF with a
+  trailing LF, sorted, 1697 bytes, SHA-256
+  `dd319f6966664521e3a1253ad98d6b548e8a7b28ccef1d864d990f91a7513054`; `anvil` and
+  `harbor` are in it, `harbour` is not.
+- `nereus_pairing_peer`: one JSON message per line each way; first line
+  `{"type":"peer.ready","code":"…","certSha256":"<base64url>"}`, last line
+  `{"type":"peer.done","paired":bool,"devices":n}`, then exit 0; options `--lan-deny`,
+  `--address <ip>` (default 127.0.0.1) and `--claimed`; the end of standard input ends
+  the connection. The test transport reports the decoded `certSha256` as the connection's
+  certificate digest and turns `peer.done` into its closed event. The peer prints no
+  identity key of its own: the Core's key is the `hello`'s `identity.publicKey`.
+
+**Acceptance:**
+- Against `nereus_pairing_peer`, the station's own five cases:
+  (1) code pairing: the identity equals the `hello`'s, the binding verifies against
+  `peer.ready.certSha256`, and `peer.done` says paired with 1 device;
+  (2) a wrong code (the first word swapped for the next word in the list): the Core's
+  `pair.fail` asks for 5000 ms, and the peer is not paired;
+  (3) one tap succeeds;
+  (4) one tap refused, in three runs: `--claimed`, `--lan-deny`, `--address 192.0.2.7`;
+  (5) `--claimed`, then code pairing: 2 devices.
+  No test message prints the scratch code.
+- Against a real `nereusd` with a scratch profile and config: the test reads the code
+  with `nereusd pairing show` against that config (the code never goes to standard output
+  or a log), pairs by code over real TLS, then signs in with the device key, the Core
+  checking the signature.
+- `normalise` and `suggestions` pass the station's own table
+  (`tests/tst_pairing_code.cpp:187-214` on the merged tree) plus
+  `normalise("7 Anvil  harbor") == "7-anvil-harbor"`, `normalise("007-anvil-harbor") == "7-anvil-harbor"`,
+  `normalise("7-anvil-harbour") == nil` and `suggestions(forPrefix: "harb")` containing
+  `"harbor"`.
+- FakeStation pairs by code and by one tap, and checks the device key at sign-in.
+- The licences screen lists nine libraries, each with its notices.
+
+**Verification:** authorisation and cryptography across two implementations:
+integration. `ios/scripts/swift-test.sh` on both toolchains, `ios/scripts/interop-test.sh`,
+`python3 scripts/verify-ios-provenance.py`, `python3 -m pytest -q tests/compliance`, and the
+simulator test run.
+
+**Execution note (advisory):** opus. Secrets: the code and the keys never reach a log or a
+test message. Requires Task 15. On the listening path.
+
+- [ ] **Step 1:** Vendor libsodium and spake2-ee; the word list and the code text.
+- [ ] **Step 2:** The exchange, the boxes, the pairing client and FakeStation's pairing.
+- [ ] **Step 3:** The interop cases, the real-`nereusd` test and the licences.
 
 ## Task 16: Finding stations: the announcement and Bonjour
 
@@ -1891,7 +2104,8 @@ Network question, "Found it", the station list), pairing design §6.
 
 **Interfaces:**
 - Consumes: the Bonjour service type and TXT keys (Task 16; the link document's
-  Discovery section is the authority), `StationEndpoint` (Task 8).
+  Discovery section is the authority), the TXT record's optional `devices` count (0 to 4,
+  Task 71), `StationEndpoint` (Task 8), `PairingClient.pairOnThisNetwork` (Task 15b).
 - Produces:
   - `actor StationBrowser` using `NWBrowser(for: .bonjourWithTXTRecord(type: "_nereus-station._tcp", domain: nil), using: .tcp)`,
     publishing `[FoundStation]` with `claimed`, `pairing`, `label`, `identityPrefix`, and
@@ -1899,7 +2113,9 @@ Network question, "Found it", the station list), pairing design §6.
   - In `ConnectionFlow`: the Local Network question (asked once, by starting the
     browser), Found it (the one-tap claim of an unclaimed Core on this network, then
     straight on to the band as Task 56a's pairing does), and your Cores listing the
-    unclaimed Cores on this network after the paired ones (Cores only, never radios).
+    unclaimed Cores on this network after the paired ones (Cores only, never radios), a
+    Core with devices on it saying how many ("4 devices on it") when its record carries
+    the count.
 
 **Acceptance:**
 - `StationBrowserTests` parses TXT records into `FoundStation` values, including
@@ -1916,7 +2132,7 @@ Device (controller, pending until observed): a phone on the Pi 4's network lists
 Core and claims it in one tap.
 
 **Execution note (advisory):** opus. Networking (local browse only). Requires Tasks 8,
-16 and 56a. On the listening path, joining it when Task 16's station half is in.
+15b, 16 and 56a. On the listening path, joining it when Task 16's station half is in.
 
 - [ ] **Step 1:** The browser and its tests.
 
@@ -3044,7 +3260,10 @@ seamless; switchable off), remote design §12.1 (no path change while keyed).
     address (IPv6 first, IPv4 250 ms later), the rendezvous introduction with ICE, and,
     when the station allows the relay, the chosen floor; the first session to reach
     `snapshot.complete` wins and the others stop; `ConnectionAttempt` records what each
-    rung did.
+    rung did. It signs in on one path only (the several-devices design's ruling 4.9, Task
+    71): `auth.request` goes only on the first path whose `hello` arrives, and the others
+    close before signing in on any of them, since two signed-in paths would replace each
+    other.
   - Upgrades as Task 29 defines them: a second peer connection; control moved
     make-before-break beneath the session through the in-band barrier, with no close,
     re-authentication, snapshot or preemption; media received on both across the
@@ -6223,8 +6442,9 @@ plan strip on, ARRL by default).
   `hz(forX:)`, `y(forDbm:)`; `BandRenderer.draw(frame:history:overlays:into:)`; the
   endpoint width requested equals the view's width in pixels (1 to 4096).
   - `DisplayQualityAllocator` (in NereusMedia), the phone's half of the display budget:
-    when the Core's budget or an `allocation-result` says the requested display doesn't
-    fit, it follows the budget design's agreed quality policy
+    when the Core's budget (with several devices, this device's share, Task 76) or an
+    `allocation-result` says the requested display doesn't fit, it follows the budget
+    design's agreed quality policy
     (`docs/architecture/2026-09-22-session-display-budget-design.md`, "Agreed GUI quality
     policy"): background frame rate first, then background pixels, then the active
     band's frame rate and pixels, never below `min(requestedPixels, 256)` by
@@ -6232,7 +6452,8 @@ plan strip on, ARRL by default).
     reason, keeps the band's slice and sound, and marks the frozen band as paused. It
     recomputes on every focus, layout, geometry or limit change, so quality comes back
     when there's room. The frame rate it settles on is what the Sharing chip shows (Task
-    54).
+    54), and `displayBudgetReason` (`sharedConnection` or `sharedProcessing`, Task 76)
+    picks the chip note's first words.
 
 **Acceptance:**
 - Geometry round trips: `hz(forX: x(forHz: f)) == f` within one hertz across the span;
@@ -6285,6 +6506,9 @@ devices' slices on the band (D46, D47) are Task 56's.
     where each placement is `.full(rect)` or `.folded(rect)`: every slice keeps its full
     flag unless it would land on another flag, and then folds to a one-line tag (letter,
     frequency, TX badge); the active slice is always full.
+  - The flag's TX badge is lit only while the slice's `txSlice` is true, which the Core
+    sets only while this device holds transmit (Task 77); with nobody holding transmit no
+    slice shows TX.
   - `SliceMarkers.style(for:selected:)`: the selected slice's centre line, triangle and
     passband edges in its own colour; the others with a darker line and triangle and grey
     edges; the selected marker drawn on top; the shaded passband in the operator's
@@ -6402,19 +6626,33 @@ taking it, having it taken, the radio's own PTT, the "Sharing" chip).
     RF power, SWR and "Mic level" gauges on the waterfall (mic scale -40 to +10 dB,
     yellow from -10, red from 0, each title inside its bar); a red TX pill with the clock
     and Stop in every tab's title bar.
-  - While another device has transmit, `PttController` is `.heldElsewhere(device:
+  - While another device has transmit (`txState`'s holder fields, Task 77:
+    `holderShortName`, `holderSource`, `holderAway`, `holderTransferring`, `keyed`,
+    `keyedForSeconds`, `holderEpoch`), `PttController` is `.heldElsewhere(device:
     onAir:)`: the PTT reads "PTT" (or "TX" while that device is on the air) over the
-    device's short name, in muted red (full red with a ring while it is on the air), and
-    this phone's slices show no TX badge. A tap asks first: the Take transmit sheet names
-    the device, how long it has been connected, when it was last active and what it is
-    doing; while it is on the air the sheet shows its TX clock and the button reads
-    "Unkey and take over" in red. Confirmed, the phone sends the station's take-transmit
-    request (as the rewritten Task 41 names it); keying needs a second tap, as always.
-  - Notices on the band: "<device> took transmit at <time>" with Take it back (which
-    opens the same sheet); "The radio's own PTT took transmit at <time>" with Take it
-    back; and, when the Core cuts this device's display to fit (D54), a "Sharing ·
-    <n> fps" chip with a one-time note that the device with transmit keeps its full band
-    and sound.
+    holder's short name ("Radio" after the radio's own PTT), in muted red (full red with a
+    ring while it is on the air), and this phone's slices show no TX badge. A tap asks
+    first: the Take transmit sheet names the device, how long it has been connected, when
+    it was last active and what it is doing; while it is on the air the sheet shows its TX
+    clock and the button reads "Unkey and take over" in red. Confirmed, the phone sends
+    `tx.take {holderEpoch, shownKeyed}` (Task 77); if the Core answers with a
+    `confirm.request` instead (the holder changed or went on the air), the sheet shows it
+    again. Keying needs a second tap, as always. A tap when nobody holds transmit takes it
+    and keys (D63).
+  - The states in between (spec §5.9 items 1 to 3): a holder that's away (`holderAway`)
+    greys its label and its take asks without the red button ("Take transmit from the
+    MacBook?"); while `holderTransferring` is true, or this phone's take is on its way, PTT
+    waits with a turning ring and "Wait"; while the radio's own mic transmits on this
+    phone's slice (`holderSource` `radioPtt`, `txSliceId`), that slice's flag says ON AIR,
+    its frequency greys, and a tuning write is refused with the on-air reason until the
+    press ends.
+  - Notices on the band (`notice`, Task 77): "<device> took transmit at <time>" with Take
+    it back (which opens the same sheet), and "while you were away" when it happened
+    during this phone's grace; "The radio's own PTT took transmit at <time>" with Take it
+    back; and, when this device's display is slowed (D54), a "Sharing · <n> fps" chip with
+    a note in the words kept on board v51: "The Core's connection is full." or "The Core is
+    busy." (`displayBudgetReason`), then "<device> has transmit, so it keeps its full band
+    and sound." when a device holds transmit, or "The devices share it" otherwise.
 
 **Acceptance:**
 - PTT: one tap keys (sends `tx.key {trigger:"screen"}`), a second unkeys; a refusal shows
@@ -6444,9 +6682,7 @@ screenshots. `ios/scripts/swift-test.sh --filter PttControllerTests` and the sim
 test run. Bench: Task 70 (keying on air from the phone).
 
 **Execution note (advisory):** opus. The phone's transmit control: flag for earlier
-review. Requires Tasks 39, 40, 42, 53 and 54a, and the station's several-devices tasks
-(Task 41 as rewritten), whose request and report names this task's interfaces take when
-they land.
+review. Requires Tasks 34, 39, 40, 42, 53, 54a and 77.
 
 - [ ] **Step 1:** The PTT state machine and keepalive with tests.
 - [ ] **Step 2:** The TX panel, the keyed view and the pills with screenshots.
@@ -6476,6 +6712,12 @@ and 10, JJ's listening-first order (2026-09-24).
 **Acceptance:**
 - An interruption (the test posts `AVAudioSession.interruptionNotification`) with
   `.began` pauses playback and `.ended` resumes it.
+- When headphones or AirPods disconnect (a route change with `.oldDeviceUnavailable` from
+  a headphone or Bluetooth output), the sound pauses rather than moving to the speaker,
+  with "Sound paused: your headphones disconnected. Tap to play on the speaker.", and
+  plays on the speaker only after the tap (JJ, 2026-09-24).
+- A media services reset rebuilds the session and the engine and resumes playback if it
+  was playing; activating the session doesn't block the main thread.
 - `RouteMenu` lists the speaker, the earpiece and AirPods when connected, marks the
   current one, and a choice changes the output route (tested against the session
   controller's route policy).
@@ -6556,8 +6798,8 @@ IPv6 address (2026-09-24).
 - Create: `ios/NereusApp/Tests/ConnectionFlowTests.swift`
 
 **Interfaces:**
-- Consumes: `PairingClient` with `PairingCarrier.direct`, `DeviceKeyAuthenticator` and
-  `PairedStationStore` (Task 15), `StationSession`, its refusals and `ReconnectPolicy`
+- Consumes: `PairingClient` with `PairingCarrier.direct` (Task 15b), `DeviceKeyAuthenticator`
+  and `PairedStationStore` (Task 15), `StationSession`, its refusals and `ReconnectPolicy`
   (Task 8), `AppModel` (Task 51), `MainScreen` (Task 54a).
 - Produces: `ConnectionFlow`, the state machine behind the screens: welcome, a typed
   address, code entry (validated against the word list), the microphone question right
@@ -6591,8 +6833,9 @@ IPv6 address (2026-09-24).
 **Verification:** authorisation flows: the flow tests on the simulator first;
 screenshots. Device: Task 56b.
 
-**Execution note (advisory):** opus. Authorisation flows. Requires Tasks 15, 51 and 54a.
-On the listening path. Finding a Core on this network and the one-tap claim come with
+**Execution note (advisory):** opus. Authorisation flows. Requires Tasks 15, 15b, 51 and
+54a. On the listening path. The pairing screen's name field follows D65: filled in with the
+phone's own name when Apple has granted the entitlement, "iPhone" or "iPad" otherwise. Finding a Core on this network and the one-tap claim come with
 Task 16a; the relay and the several-devices screens with Task 56.
 
 - [ ] **Step 1:** `ConnectionFlow` with its tests.
@@ -6644,96 +6887,139 @@ device and a Core box: only the controller or JJ acts on them.
 - [ ] **Step 1:** Signing and the install.
 - [ ] **Step 2:** The rows, observed with JJ and recorded.
 
-## Task 56: Connecting from anywhere, and the several-devices screens
+## Task 56c: Several devices on the phone
 
 **Runs in:** the phone session, on `claude/iphone-app` (a phone task).
 
-**Requirements:** R-IOS-16 (§5.3 item 14's Core-not-answering screen listing this Wi-Fi,
-direct and relay; pairing by code through the relay), R-IOS-17 (§5.3 items 12 and 13, and
-§5.8 items 1 and 8 to 16), R-IOS-08 (pairing through the relay), D22, D44 to D64 (D21 was
-replaced by §3.9).
+**Requirements:** R-IOS-17 (§5.8 items 1 and 8 to 16, §5.9 items 4 to 6 and 8 to 13, §5.3
+items 12 and 13), R-IOS-30, D44 to D50, D53, D55 to D57, D59, D61, D62, D64 and D66, the
+several-devices design (`2026-09-24-several-devices-on-one-core-design.md`) sections 4, 5,
+6, 7 and 10. Transmit's side of several devices (taking transmit, the radio's PTT, a holder
+that's away, transmit on its way, a slice held by the radio's mic) is Task 54's.
 
 **Files:**
-- Create: `ios/NereusApp/Connect/SetUpAStationScreen.swift`, `FifthDeviceSheet.swift`,
-  `PlaceTakenScreen.swift`, `ios/NereusApp/Shared/TakeReceiverSheet.swift`,
-  `MoveSharedReceiverSheet.swift`, `SharedChangeSheet.swift`, `ReceiverTakenOverlay.swift`,
-  `SharedNotice.swift`, `ios/NereusKit/Sources/NereusBand/ForeignSliceMarkers.swift`,
-  `ios/NereusApp/Band/ForeignSliceLabel.swift`
-- Modify: `ios/NereusApp/Connect/ConnectionFlow.swift`, `TroubleScreens.swift` (Task
-  56a's), `ios/NereusKit/Sources/NereusLink/LinkFeatures.swift` (`sessionHolder: 1`)
+- Create: `ios/NereusApp/Connect/FifthDeviceSheet.swift`, `PlaceTakenScreen.swift`,
+  `ios/NereusApp/Shared/TakeReceiverSheet.swift`, `MoveSharedReceiverSheet.swift`,
+  `SharedChangeSheet.swift`, `ReceiverTakenOverlay.swift`, `NoticeBanner.swift`,
+  `ios/NereusKit/Sources/NereusBand/ForeignSliceMarkers.swift`,
+  `ios/NereusApp/Band/ForeignSliceLabel.swift`,
+  `ios/NereusKit/Sources/NereusMirror/SeveralDevices.swift` (the reports: `session.held`,
+  `confirm.request`, `notice`, `marker:` and `connectedDevices`)
+- Modify: `ios/NereusApp/Connect/ConnectionFlow.swift` (Task 56a's),
+  `ios/NereusKit/Sources/NereusLink/LinkMessage.swift`, `LinkCodec.swift` (the new kinds),
+  `LinkFeatures.swift` (`sessionHolder: 1`)
+- Test: `ios/NereusKit/Tests/NereusMirrorTests/SeveralDevicesTests.swift`,
+  `ios/NereusApp/Tests/ConnectionFlowTests.swift`,
+  `ios/NereusKit/Tests/NereusBandTests/ForeignSliceMarkersTests.swift`
+
+**Interfaces:**
+- Consumes: Task 41 (`session.held {devices, revision, placeTaken, placeFreed}` and
+  `session.takeover {deviceId, revision}`), Task 71 (the admission rules, the ends
+  `takenOver`, `coreFull` and `sameDevice`, `connectedDevices`), Task 72 (a mirror view per
+  device), Task 73 (`marker:<id>`: `ownerDeviceId`, `ownerName`, `ownerShortName`,
+  `ownerKind`, `ownerAway`, the letter, `streamIndex`, `txSlice`), Task 74
+  (`confirm.request` kinds `takeReceiver` and `panMove`), Task 75 (`sharedSetting`), and
+  the verbs `confirm.proceed {id, choice}`, `confirm.cancel {id}` and
+  `notice.takeBack {id}`; `notice {id, kind, reason, secondsAgo, takeBack, byDeviceId,
+  byName, byShortName, byKind, bySource, slices, change}`. The design's section 10 is the
+  wire. From Task 56a: `ConnectionFlow`; from Task 53: the flags and gestures; from Task
+  54a: the band screen.
+- Produces:
+  - The app declares `sessionHolder: 1` beside `deviceAuth: 1` in its `hello`, so the Core
+    admits it as a device that answers `session.held`, draws markers and handles
+    confirmations and notices.
+  - `ForeignSliceMarkers` and `ForeignSliceLabel`: a slice another device owns draws a
+    dashed centre line in its letter's colour, a hollow triangle, dashed grey passband
+    edges with no fill, and a label at the foot of the spectrum with its letter and
+    `ownerShortName`, TX while `txSlice` is true, and "away" (greyed) while `ownerAway`;
+    a tap on the label opens a note with whose slice it is, its frequency and mode, and
+    "Only the <owner> can tune it or close it". It is never tuned from this device.
+  - The fifth-device sheet from `session.held`: the devices idle longest first, the
+    choice starting on the first replaceable one, a device that's away first and marked
+    so; picking one on the air turns the button red ("Unkey and take <device>'s place");
+    Cancel answers `session.takeover` with an empty `deviceId`. With `placeFreed` the
+    sheet is headed "Your place went to another device" and says the phone was away more
+    than 3 minutes. The place-taken screen from `session.end` `takenOver` (who and when,
+    from `takenOverBy` and `secondsAgo`), whose Take it back asks the fifth-device
+    question for `takenOverById`.
+  - The confirmation sheets from `confirm.request`: take a receiver (each receiver with
+    its device, slice, when last active, and `takeable` and `why`; the button names the
+    device), move a shared receiver ("Go to <band>" and "Stay on <band>", naming the
+    device and what happens to its slice), and a shared change (the setting from and to,
+    and the devices and slices it reaches, each with its `effect`). Confirm sends
+    `confirm.proceed`, Cancel `confirm.cancel`; the proceed's result carries the readback
+    the controls show.
+  - `NoticeBanner` for every `notice` kind the Core sends to a device that isn't
+    transmitting, with the words kept on board v51 (spec §5.9 items 6 and 8 to 13): back
+    within 3 minutes, back after 3 minutes (`graceEnded`), a slice that couldn't come
+    back (`slicesNotRestored`), the antenna kept (`antennaKept`), a shared setting changed
+    by another device, a receiver taken (the RECEIVER TAKEN overlay, whose Take it back
+    sends `notice.takeBack`); a time of day from `secondsAgo` by the phone's own clock.
+  - Once a confirmation is open, a drag sends only its final value; the fifth device's
+    sheet closes when the Core admits the phone while it is showing; each device has one
+    name everywhere (the Core numbers duplicates).
+
+**Acceptance:**
+- Against `FakeStation` playing a Core with other devices (the design's section 14.2
+  fixtures the app runs, and scripted sessions for the rest): the phone declares
+  `sessionHolder: 1`; another device's slice draws as the foreign style (a render test
+  samples the dashed line, the hollow triangle and the unfilled passband), its label
+  centred on its line and kept inside the band; no write for it is ever sent.
+- A full Core's `session.held` shows the sheet starting on the replaceable device idle
+  longest, an away device first; choosing the one on the air shows the red button;
+  Cancel sends `session.takeover` with an empty `deviceId`.
+- Each confirmation sheet shows exactly what `confirm.request` names; Confirm sends
+  `confirm.proceed` with the chosen receiver's index where there is a choice, Cancel sends
+  `confirm.cancel`, and nothing changes on the phone until the Core's answer.
+- Each §5.9 notice appears for its `notice` kind with its drawn words.
+- Screenshots of every screen against `22-several-devices.jpg` and
+  `23-several-devices-states-and-notices.jpg`.
+
+**Verification:** the flow and render tests on the simulator; screenshots. Device (JJ,
+pending until observed): the phone and the desktop on one Core (Task 70).
+
+**Execution note (advisory):** opus. Requires Tasks 41 and 71 to 75 (station), and 15,
+53, 54a and 56a. It runs once those station tasks are in the integration branch, before
+transmit and remote access.
+
+- [ ] **Step 1:** The reports, the declaration and the markers, with tests.
+- [ ] **Step 2:** The fifth device, the confirmations and the notices, with screenshots.
+
+## Task 56: Connecting from anywhere
+
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
+
+**Requirements:** R-IOS-16 (§5.3 items 5, 6 and 14 as they reach beyond one network: Set
+up a Core, the Core-not-answering screen listing this Wi-Fi, direct and relay; pairing by
+code through the relay), R-IOS-08 (pairing through the relay), D22.
+
+**Files:**
+- Create: `ios/NereusApp/Connect/SetUpAStationScreen.swift`
+- Modify: `ios/NereusApp/Connect/ConnectionFlow.swift`, `TroubleScreens.swift`,
+  `YourStationsScreen.swift` (Task 56a's and 16a's)
 - Modify: `ios/NereusApp/Tests/ConnectionFlowTests.swift`
 
 **Interfaces:**
-- Consumes: `StationBrowser` (Task 16a), `PairingClient` (Tasks 15, 27a), `PathRacer`
-  and the attempt record (Tasks 27a, 29a), `StationSession` refusals (Task 8), and the
-  station's several-devices reports and requests (Task 41 as the Core/GUI session
-  rewrites it: who is on the Core, receivers and whose slices they carry, the effects a
-  shared change or a pan move would have, the notices), whose names this task's
-  interfaces take when they land.
-- Produces: `ConnectionFlow` (Task 56a's) gains the rungs that reach a Core from anywhere
-  (the path race and its attempt record), pairing by code through the rendezvous, Set up a
-  Core, a Core with devices on it saying how many in your Cores, the fifth device's
-  question, link lost while keyed, and place taken. From this task on the app declares
-  `sessionHolder: 1` in its `hello` (or the name the station's design gives it), so the
-  station sends it the several-devices reports.
-  - Other devices' slices on the band (D46, D47): `ForeignSliceMarkers` and
-    `ForeignSliceLabel`. A slice another device owns (its owner and its Core-wide letter
-    come from the mirror, as the station's design names them) draws a dashed centre line
-    in its colour, a hollow triangle, dashed grey passband edges with no fill, and a label
-    at the foot of the spectrum with its letter and the owning device's short name, plus
-    TX while that device holds transmit; it has no flag and is never tuned from this
-    device.
-  - The several-devices sheets and notices, shared by every tab: Take a receiver (D49:
-    each receiver in use with the device and slice on it and when last active; the
-    button names the device), Move a shared receiver (D50: the device sharing it and
-    what happens to its slice; "Go to <band>" and "Stay on <band>"), a shared change
-    (D53: the setting, from and to, and the devices and slices it reaches), the
-    receiver-taken overlay with Take it back, and the note a device gets when another
-    changes a shared setting.
+- Consumes: `PathRacer` and the attempt record (Tasks 27a, 29a), `PairingClient` with
+  `.rendezvous(server:nameplate:)` (Tasks 15b, 27a), `ConnectionFlow` (Task 56a).
+- Produces: `ConnectionFlow` gains the rungs that reach a Core from anywhere (the path race
+  and its attempt record), pairing by code through the rendezvous, Set up a Core, and link
+  lost while keyed ("The Core stops transmitting on its own when the link goes.").
 
 **Acceptance:**
-- The Core-not-answering screen lists what was tried (this Wi-Fi, direct, relay) and
-  what to check; this phone offline also says the Core has already unkeyed when it was
-  keyed.
-- A slice another device owns draws as the foreign style (render test sampling the
-  dashed line, the hollow triangle and the unfilled passband); its label sits at the
-  foot of the spectrum, centred on its line and kept inside the band; a tap on the label
-  opens a note with whose slice it is, its frequency and mode, and "Only <device> can
-  tune it or close it"; a drag or tap on the band never moves it, and no write for it is
-  ever sent.
-- Once a confirmation question is open, a drag sends only its final value; the fifth
-  device's sheet closes when the Core admits the device while the question is showing;
-  each device shows one name everywhere (Devices, markers, sheets), as the Core numbers
-  duplicate names.
-- A second, third or fourth device connects with no question. A fifth device's
-  question lists the four connected (name, how long, listening on what or transmitting,
-  when last active), starting on the one idle longest; picking one on the air turns the
-  button red ("Unkey and take <device>'s place"); cancelling connects nothing. A reclaim
-  of this phone's own session never shows it, and brings transmit back only when the Core
-  says nobody took it. The device whose place is taken shows who and when, stops the
-  band, and Take it back asks the fifth-device question the other way.
-- Taking a receiver, moving a shared receiver and a shared change go to the Core first,
-  which applies nothing and asks for confirmation, naming the devices and slices the change
-  reaches; the sheet shows exactly those. Confirm tells the Core to go ahead; Cancel tells
-  it to drop the change, and nothing is applied (the station's design for several devices
-  names both answers). A receiver taken from this phone shows
-  RECEIVER TAKEN with who and when, keeps the connection, and Take it back opens the
-  Take a receiver sheet for that receiver.
-- Pairing by code through the rendezvous connects straight away through the normal
-  path, as Task 56a's direct pairing does.
-- Screenshots of every new screen against `07-connecting.jpg`, `10-trouble.jpg` and
-  `22-several-devices.jpg`.
+- The Core-not-answering screen lists what was tried (this Wi-Fi, direct, relay) and what
+  to check; this phone offline also says the Core has already unkeyed when it was keyed.
+- Pairing by code through the rendezvous connects straight away through the normal path,
+  as Task 56a's direct pairing does.
+- Screenshots of every new screen against `07-connecting.jpg` and `10-trouble.jpg`.
 
 **Verification:** the flow tests on the simulator; screenshots; device (JJ, pending until
-observed): pairing by code through the relay; two devices on one Core.
+observed): pairing by code through the relay.
 
-**Execution note (advisory):** opus. Authorisation flows. Requires Tasks 16a, 27a, 29a,
-41 (as the Core/GUI session rewrites it for several devices), 53, 54 and 56a. Before
-dispatch, the states the board doesn't draw yet (a holder that's away, changing hands,
-away markers and entries, a slice frozen while the radio's own PTT is keyed) are drawn
-and JJ has approved them (the several-devices design review, finding 12).
+**Execution note (advisory):** opus. Authorisation flows. Requires Tasks 15b, 16a, 27a,
+29a, 54 and 56a.
 
-- [ ] **Step 1:** `ConnectionFlow` with its tests.
+- [ ] **Step 1:** The remote rungs in `ConnectionFlow` with its tests.
 - [ ] **Step 2:** The screens and screenshots.
 
 ## Task 57: The Modes tab
@@ -6804,7 +7090,10 @@ Touch section and the dial (R-IOS-12), PTT buttons and the transmit time-out gro
 
 **Interfaces:**
 - Consumes: the Setup description (Tasks 43 to 46), the settings proxy (Task 9), the
-  devices object and verbs (Tasks 13, 14), `PhoneSettings` (Task 51).
+  devices object and verbs (Tasks 13, 14), `connectedDevices` (Task 71: each entry's
+  `name`, `shortName`, `kind`, `state`, `holdsTransmit`, `listeningOn`,
+  `connectedForSeconds`, `awayForSeconds`, `hostsCore` and `revocable`; Tasks 73, 34 and
+  77 fill the slices and the holder), `PhoneSettings` (Task 51).
 - Produces: Devices first, then the desktop's categories in order, each marked Core,
   This phone or Both (spec §5.2 item 6 table); Core pages rendered from the Core's
   description, which leaves out pages the desktop has not built (D41), so each appears
@@ -6834,7 +7123,10 @@ Touch section and the dial (R-IOS-12), PTT buttons and the transmit time-out gro
   verb); a station-scoped change made on the phone arrives at `FakeStation` and, in the
   integration check, shows on the desktop.
 - Revoke of another device sends `devices.revoke`; revoking this phone returns to the
-  station list.
+  station list; a refused revoke (the last paired device while no token is active; a
+  computer enrolled through the token while it is still active) shows the Core's reason.
+  Revoke is hidden where `revocable` is false and on this phone's own entry; a device
+  that's away shows an amber dot and "away for <n> minutes" (spec §5.9 item 4).
 - Screenshots of the tree, one described page per category, Devices and each This phone
   page against `05-tabs.jpg`, `15-hardware-ptt.jpg`, `16-long-sessions.jpg`,
   `17-transmit-time-out.jpg`, `12-audio-and-data.jpg` and `22-several-devices.jpg`
@@ -6843,7 +7135,8 @@ Touch section and the dial (R-IOS-12), PTT buttons and the transmit time-out gro
 **Verification:** rendering and binding tests; screenshots; integration (JJ, pending
 until observed).
 
-**Execution note (advisory):** opus. Requires Tasks 13, 14, 43 to 46 and 51.
+**Execution note (advisory):** opus. Requires Tasks 13, 14, 43 to 46 and 51, and for
+Connected now Tasks 34, 71, 73 and 77.
 
 - [ ] **Step 1:** The description model and the generic page renderer with tests.
 - [ ] **Step 2:** Devices and the This phone pages; screenshots.
@@ -7075,7 +7368,8 @@ message), R-IOS-21 (the time left in the island), D24, D25, spec §4.7.
 - Create: `ios/NereusApp/Tests/LiveActivityControllerTests.swift`
 
 **Interfaces:**
-- Consumes: `txState` (Task 39), the slice and link state, `PttController` (Task 54).
+- Consumes: `txState` (Task 39) with its holder fields (Task 77: who has transmit, and
+  `keyedForSeconds` for the clock), the slice and link state, `PttController` (Task 54).
 - Produces: `StationActivityAttributes.ContentState` holding station name, link state,
   slice A frequency and signal level, mute, keyed with its clock, forward power, SWR,
   time-out remaining, and a message; `LiveActivityController` starting the activity when
@@ -7382,8 +7676,11 @@ client.
 15. The station killed (`kill -9 nereusd`) and its Ethernet pulled while keyed from the
     phone: each radio's own watchdog stops the carrier, timed on an ANAN-G2 and an HL2.
 16. PureSignal calibrating and correcting while keyed from the phone on the ANAN-G2.
-17. TCI transmit from an app on the operator's computer through a remote window, and
-    from a station device through the station's own TCI server.
+17. TCI transmit from an app on the operator's computer through its NereusSDR window,
+    while that window holds transmit, and refused with the window's reason while another
+    device holds it (D58); on a Core with no window, no app transmits.
+19. The several-devices design's bench rows (its section 14.3), with the phone as one of
+    the devices.
 18. A 30-minute keyed session from the phone (time-out set to off for the run) with no
     false starvation from clock drift.
 

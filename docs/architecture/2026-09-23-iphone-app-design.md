@@ -199,6 +199,12 @@ needs from it, and that design's sections 10.2 to 10.9 give the wire.
 | D66 | **An older NereusSDR window finding no room is turned away, saying why**: with four devices on, or no receiver free for its slice, it is refused, retryable, with "The Core is full. Update NereusSDR to take a device's place, or try again later." Nobody already connected is disturbed. | An older window can't show the fifth-device question (D55), and letting it past the limit would break D44. Narrows D55 and D59 for older windows. | Letting it in over the limit. |
 | D67 | **Deleting and reinstalling the app keeps its pairings.** The phone keeps its device key and its list of paired Cores (their identity keys, labels and addresses) in the iPhone's secure storage (the Keychain), which survives deleting the app; after reinstalling it connects as before. | Otherwise the key would survive and the list would not, and a reinstalled phone would be stuck: the Core says it's already paired while the phone has forgotten the Core. It also keeps a Core from gaining a second entry for the same phone. | Starting fresh: a new key, pairing again as a new device, the old entry left on each Core until someone removes it. |
 
+### 3.10 Decided while building
+
+| # | Decision | Why | Rejected |
+| --- | --- | --- | --- |
+| D68 | **When headphones or AirPods disconnect, the band's sound pauses** with "Sound paused: your headphones disconnected. Tap to play on the speaker.", and plays on the speaker only after that tap. The band keeps showing. | Apple's convention for audio apps: the radio never suddenly plays out loud wherever the operator is. JJ, 2026-09-24. | Keeping on playing through the speaker. |
+
 ---
 
 ## 4. Architecture
