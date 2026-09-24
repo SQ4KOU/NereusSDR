@@ -206,7 +206,7 @@ constexpr Entry kEntries[] = {
     // Requests the Core turned down: StationServer.cpp (an app too old for
     // the request) and SessionCommandDispatcher.cpp.
     {"Update this app to set up the Tuner Genius XL on this Core.", nullptr,
-     "Update this app to set up the TGXL on this Core."},
+     "Update this app to set up the Tuner Genius on this Core."},
 
     // Settings the Core kept as they were, StationServer.cpp and
     // SettingsScope.cpp.
@@ -395,7 +395,7 @@ constexpr Entry kOlderCoreEntries[] = {
      "The Core is refusing pairing tokens for a while after too many wrong ones. "
      "This app tries again shortly."},
     {"Remote TGXL configuration requires a newer station protocol.", nullptr,
-     "Update this app to set up the TGXL on this Core."},
+     "Update this app to set up the Tuner Genius on this Core."},
     {"Duplicate property in one write.", nullptr,
      "The Core could not read this change."},
     {"Use the station DSP controls; raw settings writes cannot bypass model validation.", nullptr,

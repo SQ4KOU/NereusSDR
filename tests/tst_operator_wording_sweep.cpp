@@ -293,6 +293,21 @@ private slots:
         }
     }
 
+    void everyTranslationNamesTheDevicesInWords()
+    {
+        // The operator knows the Tuner Genius and the Power Genius by
+        // those names, not by their model codes.
+        static const QRegularExpression code(QStringLiteral("\\b[TP]GXL\\b"));
+        for (const QString& reason : OperatorReasonText::knownReasons()) {
+            const QString sentence = OperatorReasonText::forDisplay(reason);
+            QVERIFY2(!code.match(sentence).hasMatch(),
+                     qPrintable(reason + QStringLiteral(" -> ") + sentence));
+        }
+        QCOMPARE(OperatorReasonText::forDisplay(QStringLiteral(
+                     "Update this app to set up the Tuner Genius XL on this Core.")),
+                 QStringLiteral("Update this app to set up the Tuner Genius on this Core."));
+    }
+
     void anUnknownReasonInUserWordsIsShownAsSent()
     {
         const QString plain = QStringLiteral("Connection refused");
